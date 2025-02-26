@@ -12,4 +12,4 @@ if (WIN32)
     target_link_libraries(${TARGET} PRIVATE ws2_32)
 endif()
 
-install(TARGETS ${TARGET} RUNTIME)
+install(TARGETS ${TARGET} RUNTIME DESTINATION bin)
