@@ -9,6 +9,7 @@ import io.github.ggerganov.whispercpp.params.WhisperContextParams;
 import io.github.ggerganov.whispercpp.params.WhisperFullParams;
 
 public interface WhisperCppJnaLibrary extends Library {
+
     WhisperCppJnaLibrary instance = Native.load("whisper", WhisperCppJnaLibrary.class);
 
     String whisper_print_system_info();
