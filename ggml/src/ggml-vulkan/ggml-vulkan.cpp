@@ -353,6 +353,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_flash_attn_f32_f16_D112[GGML_TYPE_COUNT][2][2][2];
     vk_pipeline pipeline_flash_attn_f32_f16_D128[GGML_TYPE_COUNT][2][2][2];
     vk_pipeline pipeline_flash_attn_f32_f16_D256[GGML_TYPE_COUNT][2][2][2];
+    vk_pipeline pipeline_flash_attn_split_k_reduce;
 
     std::unordered_map<std::string, vk_pipeline_ref> pipelines;
     std::unordered_map<std::string, uint64_t> pipeline_descriptor_set_requirements;
@@ -504,6 +505,8 @@ struct vk_flash_attn_push_constants {
     float m1;
 
     uint32_t gqa_ratio;
+    uint32_t split_kv;
+    uint32_t k_num;
 };
 
 struct vk_op_push_constants {
@@ -1476,7 +1479,7 @@ static std::array<uint32_t, 2> fa_rows_cols(uint32_t D, uint32_t clamp, ggml_typ
 
     // small rows, large cols
     if (small_rows) {
-        return {flash_attention_num_small_rows, 128};
+        return {flash_attention_num_small_rows, 64};
     }
     // small cols to reduce register count
     if (ggml_is_quantized(type) || D == 256) {
@@ -2332,6 +2335,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_get_rows_f32[GGML_TYPE_IQ4_NL],  "get_rows_iq4_nl_f32",  get_rows_iq4_nl_f32_len,  get_rows_iq4_nl_f32_data,  "main", 3, sizeof(vk_op_binary_push_constants), {1024, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_matmul_split_k_reduce, "split_k_reduce", split_k_reduce_len, split_k_reduce_data, "main", 2, 2 * sizeof(uint32_t), {256 * 4, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_flash_attn_split_k_reduce, "fa_split_k_reduce", fa_split_k_reduce_len, fa_split_k_reduce_data, "main", 2, 3 * sizeof(uint32_t), {1, 1, 1}, {}, 1, true);
     ggml_vk_create_pipeline(device, device->pipeline_quantize_q8_1, "quantize_q8_1", quantize_q8_1_len, quantize_q8_1_data, "main", 2, 1 * sizeof(uint32_t), {32 * device->subgroup_size / 8, 1, 1}, { device->subgroup_size }, 1);
 
     for (uint32_t i = 0; i < p021_max_gqa_ratio; ++i) {
@@ -5479,9 +5483,38 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         workgroups_y /= N;
     }
 
+    uint32_t split_kv = KV;
+    uint32_t split_k = 1;
+
+    if (gqa_ratio > 1 && ctx->device->shader_core_count > 0) {
+        GGML_ASSERT(workgroups_x == 1);
+        // Try to run two workgroups per SM.
+        split_k = ctx->device->shader_core_count * 2 / workgroups_y;
+        if (split_k > 1) {
+            // Try to evenly split KV into split_k chunks, but it needs to be a multiple
+            // of "align", so recompute split_k based on that.
+            split_kv = ROUNDUP_POW2(KV / split_k, pipelines[1]->align);
+            split_k = CEIL_DIV(KV, split_kv);
+            workgroups_x = split_k;
+        }
+    }
+
+    // Reserve space for split_k temporaries. For each split, we need to store the O matrix (D x ne1)
+    // and the per-row m and L values (ne1 rows).
+    const uint64_t split_k_size = split_k > 1 ? (D * ne1 * sizeof(float) + ne1 * sizeof(float) * 2) * split_k : 0;
+    if (split_k_size > ctx->device->max_memory_allocation_size) {
+        GGML_ABORT("Requested preallocation size is too large");
+    }
+    if (ctx->prealloc_size_split_k < split_k_size) {
+        ctx->prealloc_size_split_k = split_k_size;
+    }
+
     if (dryrun) {
         // Request descriptor sets
         ggml_pipeline_request_descriptor_sets(ctx->device, pipeline, 1);
+        if (split_k > 1) {
+            ggml_pipeline_request_descriptor_sets(ctx->device, ctx->device->pipeline_flash_attn_split_k_reduce, 1);
+        }
         return;
     }
 
@@ -5501,8 +5534,6 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     const uint32_t n_head_log2 = 1u << (uint32_t) floorf(log2f((float) n_head_kv));
     const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
     const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
-
-    ggml_vk_sync_buffers(subctx);
 
     vk_buffer d_Q = nullptr, d_K = nullptr, d_V = nullptr, d_D = nullptr, d_M = nullptr;
     size_t q_buf_offset = 0, k_buf_offset = 0, v_buf_offset = 0, d_buf_offset = 0, m_buf_offset = 0;
@@ -5568,16 +5599,45 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
                                               v_stride, (uint32_t)nbv2, (uint32_t)nbv3,
                                               nbm1,
                                               scale, max_bias, logit_softcap,
-                                              mask != nullptr, n_head_log2, m0, m1, gqa_ratio };
-    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
-                                {
-                                    vk_subbuffer{d_Q, q_buf_offset, VK_WHOLE_SIZE},
-                                    vk_subbuffer{d_K, k_buf_offset, VK_WHOLE_SIZE},
-                                    vk_subbuffer{d_V, v_buf_offset, VK_WHOLE_SIZE},
-                                    vk_subbuffer{d_M, m_buf_offset, VK_WHOLE_SIZE},
-                                    vk_subbuffer{d_D, d_buf_offset, VK_WHOLE_SIZE},
-                                },
-                                sizeof(vk_flash_attn_push_constants), &pc, { workgroups_x, workgroups_y, workgroups_z });
+                                              mask != nullptr, n_head_log2, m0, m1,
+                                              gqa_ratio, split_kv, split_k };
+
+    ggml_vk_sync_buffers(subctx);
+
+    if (split_k > 1) {
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
+                                    {
+                                        vk_subbuffer{d_Q, q_buf_offset, VK_WHOLE_SIZE},
+                                        vk_subbuffer{d_K, k_buf_offset, VK_WHOLE_SIZE},
+                                        vk_subbuffer{d_V, v_buf_offset, VK_WHOLE_SIZE},
+                                        vk_subbuffer{d_M, m_buf_offset, VK_WHOLE_SIZE},
+                                        vk_subbuffer{ctx->prealloc_split_k, 0, VK_WHOLE_SIZE},
+                                    },
+                                    // We only use split_k when group query attention is enabled, which means
+                                    // there's no more than one tile of rows (i.e. workgroups_x would have been
+                                    // one). We reuse workgroups_x to mean the number of splits, so we need to
+                                    // cancel out the divide by wg_denoms[0].
+                                    sizeof(vk_flash_attn_push_constants), &pc, { workgroups_x * pipeline->wg_denoms[0], workgroups_y, workgroups_z });
+
+        ggml_vk_sync_buffers(subctx);
+        const std::array<uint32_t, 3> pc2 = { D, (uint32_t)ne1, split_k };
+        ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_flash_attn_split_k_reduce,
+                                    {
+                                        vk_subbuffer{ctx->prealloc_split_k, 0, VK_WHOLE_SIZE},
+                                        vk_subbuffer{d_D, d_buf_offset, VK_WHOLE_SIZE},
+                                    },
+                                    pc2.size() * uint32_t{sizeof(uint32_t)}, pc2.data(), { (uint32_t)ne1, 1, 1 });
+    } else {
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
+                                    {
+                                        vk_subbuffer{d_Q, q_buf_offset, VK_WHOLE_SIZE},
+                                        vk_subbuffer{d_K, k_buf_offset, VK_WHOLE_SIZE},
+                                        vk_subbuffer{d_V, v_buf_offset, VK_WHOLE_SIZE},
+                                        vk_subbuffer{d_M, m_buf_offset, VK_WHOLE_SIZE},
+                                        vk_subbuffer{d_D, d_buf_offset, VK_WHOLE_SIZE},
+                                    },
+                                    sizeof(vk_flash_attn_push_constants), &pc, { workgroups_x, workgroups_y, workgroups_z });
+    }
 }
 
 static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, ggml_tensor * dst, ggml_op op) {
