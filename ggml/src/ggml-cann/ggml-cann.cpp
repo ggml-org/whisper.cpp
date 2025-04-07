@@ -803,7 +803,7 @@ static enum ggml_status ggml_backend_cann_buffer_init_tensor(
         return GGML_STATUS_SUCCESS;
     }
 
-    // TODO: can backend doesn't support quantized yet. Just leave the code
+    // TODO: cann backend doesn't support quantized yet. Just leave the code
     // here.
     if (ggml_is_quantized(tensor->type)) {
         // Initialize padding to 0 to avoid possible NaN values
