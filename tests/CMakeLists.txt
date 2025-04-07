@@ -1,3 +1,6 @@
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 if (EMSCRIPTEN)
     #
     # test-whisper-js
@@ -85,3 +88,18 @@ if (WHISPER_FFMPEG)
     set_tests_properties(${TEST_TARGET} PROPERTIES LABELS "tiny;mp3")
 endif()
 
+# VAD test tests VAD in isolation
+set(VAD_TEST test-vad)
+add_executable(${VAD_TEST} ${VAD_TEST}.cpp)
+target_include_directories(${VAD_TEST} PRIVATE ../include ../ggml/include ../examples)
+target_link_libraries(${VAD_TEST} PRIVATE common)
+add_test(NAME ${VAD_TEST} COMMAND ${VAD_TEST})
+set_tests_properties(${VAD_TEST} PROPERTIES LABELS "unit")
+
+# VAD test full uses whisper_full with VAD enabled
+set(VAD_TEST test-vad-full)
+add_executable(${VAD_TEST} ${VAD_TEST}.cpp)
+target_include_directories(${VAD_TEST} PRIVATE ../include ../ggml/include ../examples)
+target_link_libraries(${VAD_TEST} PRIVATE common)
+add_test(NAME ${VAD_TEST} COMMAND ${VAD_TEST})
+set_tests_properties(${VAD_TARGET} PROPERTIES LABELS "base;en")

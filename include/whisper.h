@@ -570,6 +570,17 @@ extern "C" {
         size_t                           n_grammar_rules;
         size_t                           i_start_rule;
         float                            grammar_penalty;
+
+        // Voice Activity Detection (VAD) params
+        bool         vad;                         // Enable VAD
+        const char * vad_model_path;              // Path to VAD model
+        float        vad_threshold;               // Probability threshold to consider as speech.
+        int          vad_min_speech_duration_ms;  // Min duration for a valid speech segment.
+        int          vad_min_silence_duration_ms; // Min silence duration to consider speech as ended.
+        float        vad_max_speech_duration_s;   // Max duration of a speech segment before forcing a break.
+        int          vad_speech_pad_ms;           // Padding added before and after speech segments.
+        int          vad_window_size_samples;     // Number of audio samples in each probability window.
+        float        vad_samples_overlap;         // Overlap in seconds when copying audio samples from speech segment.
     };
 
     // NOTE: this function allocates memory, and it is the responsibility of the caller to free the pointer - see whisper_free_context_params & whisper_free_params()
@@ -651,6 +662,77 @@ extern "C" {
     // Get the probability of the specified token in the specified segment
     WHISPER_API float whisper_full_get_token_p           (struct whisper_context * ctx, int i_segment, int i_token);
     WHISPER_API float whisper_full_get_token_p_from_state(struct whisper_state * state, int i_segment, int i_token);
+
+    // Voice Activity Detection (VAD)
+    struct whisper_vad_context;
+    struct whisper_vad_state;
+
+    struct whisper_vad_params {
+        float threshold;               // Probability threshold to consider as speech.
+        int   min_speech_duration_ms;  // Min duration for a valid speech segment.
+        int   min_silence_duration_ms; // Min silence duration to consider speech as ended.
+        float max_speech_duration_s;   // Max duration of a speech segment before forcing a new segment.
+        int   speech_pad_ms;           // Padding added before and after speech segments.
+        int   window_size_samples;     // Number of audio samples in each probability window.
+        float samples_overlap;         // Overlap in seconds when copying audio samples from speech segment.
+    };
+    WHISPER_API struct whisper_vad_params  whisper_vad_default_params(void);
+    WHISPER_API struct whisper_vad_params  whisper_vad_params_from(struct whisper_full_params wparams);
+
+    struct whisper_vad_context_params {
+        int   n_threads;  // The number of threads to use for processing.
+        bool  use_gpu;
+        int   gpu_device;  // CUDA device
+    };
+    WHISPER_API struct whisper_vad_context_params whisper_vad_default_context_params(void);
+
+    WHISPER_API struct whisper_vad_state * whisper_vad_init_state(struct whisper_vad_context * ctx);
+
+    WHISPER_API struct whisper_vad_context * whisper_vad_init_from_file_with_params(
+        const char * path_model,
+        const struct whisper_vad_context_params params);
+
+    WHISPER_API struct whisper_vad_context * whisper_vad_init_from_file_with_params_no_state(
+        const char * path_model,
+        const struct whisper_vad_context_params params);
+
+    WHISPER_API struct whisper_vad_context * whisper_vad_init_with_params_no_state(struct whisper_model_loader * loader,
+            struct whisper_vad_context_params params);
+
+    struct whisper_vad_speech {
+        int     n_probs;
+        float * probs;
+    };
+
+    WHISPER_API struct whisper_vad_speech whisper_vad_detect_speech(
+            struct whisper_vad_context * vctx,
+            const float * samples, int n_samples);
+
+    struct whisper_vad_segment {
+        float start; // Start time in seconds
+        float end;   // End time in seconds
+    };
+
+    struct whisper_vad_timestamps {
+        int n_segments;
+        struct whisper_vad_segment * segments;
+    };
+
+    WHISPER_API struct whisper_vad_timestamps whisper_vad_detect_speech_timestamps(
+            struct whisper_vad_context * vctx,
+            struct whisper_vad_params params,
+            const float * samples, int n_samples);
+
+    WHISPER_API struct whisper_vad_timestamps whisper_vad_timestamps_from_probs(
+            struct whisper_vad_context * vctx,
+            struct whisper_vad_params params,
+            struct whisper_vad_speech * probs);
+
+    WHISPER_API void whisper_vad_free           (struct whisper_vad_context    * ctx);
+    WHISPER_API void whisper_vad_free_state     (struct whisper_vad_state      * state);
+    WHISPER_API void whisper_vad_free_params    (struct whisper_vad_params     * params);
+    WHISPER_API void whisper_vad_free_speech    (struct whisper_vad_speech     * speech);
+    WHISPER_API void whisper_vad_free_timestamps(struct whisper_vad_timestamps * timestamps);
 
     ////////////////////////////////////////////////////////////////////////////
 
