@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 #include <cstring>
 
@@ -379,15 +380,7 @@ static void whisper_print_segment_callback(struct whisper_context * ctx, struct 
     }
 }
 
-static bool output_txt(struct whisper_context * ctx, const char * fname, const whisper_params & params, std::vector<std::vector<float>> pcmf32s) {
-    std::ofstream fout(fname);
-    if (!fout.is_open()) {
-        fprintf(stderr, "%s: failed to open '%s' for writing\n", __func__, fname);
-        return false;
-    }
-
-    fprintf(stderr, "%s: saving output to '%s'\n", __func__, fname);
-
+static void output_txt(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, std::vector<std::vector<float>> pcmf32s) {
     const int n_segments = whisper_full_n_segments(ctx);
     for (int i = 0; i < n_segments; ++i) {
         const char * text = whisper_full_get_segment_text(ctx, i);
@@ -402,19 +395,9 @@ static bool output_txt(struct whisper_context * ctx, const char * fname, const w
 
         fout << speaker << text << "\n";
     }
-
-    return true;
 }
 
-static bool output_vtt(struct whisper_context * ctx, const char * fname, const whisper_params & params, std::vector<std::vector<float>> pcmf32s) {
-    std::ofstream fout(fname);
-    if (!fout.is_open()) {
-        fprintf(stderr, "%s: failed to open '%s' for writing\n", __func__, fname);
-        return false;
-    }
-
-    fprintf(stderr, "%s: saving output to '%s'\n", __func__, fname);
-
+static void output_vtt(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, std::vector<std::vector<float>> pcmf32s) {
     fout << "WEBVTT\n\n";
 
     const int n_segments = whisper_full_n_segments(ctx);
@@ -434,19 +417,9 @@ static bool output_vtt(struct whisper_context * ctx, const char * fname, const w
         fout << to_timestamp(t0) << " --> " << to_timestamp(t1) << "\n";
         fout << speaker << text << "\n\n";
     }
-
-    return true;
 }
 
-static bool output_srt(struct whisper_context * ctx, const char * fname, const whisper_params & params, std::vector<std::vector<float>> pcmf32s) {
-    std::ofstream fout(fname);
-    if (!fout.is_open()) {
-        fprintf(stderr, "%s: failed to open '%s' for writing\n", __func__, fname);
-        return false;
-    }
-
-    fprintf(stderr, "%s: saving output to '%s'\n", __func__, fname);
-
+static void output_srt(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, std::vector<std::vector<float>> pcmf32s) {
     const int n_segments = whisper_full_n_segments(ctx);
     for (int i = 0; i < n_segments; ++i) {
         const char * text = whisper_full_get_segment_text(ctx, i);
@@ -463,8 +436,6 @@ static bool output_srt(struct whisper_context * ctx, const char * fname, const w
         fout << to_timestamp(t0, true) << " --> " << to_timestamp(t1, true) << "\n";
         fout << speaker << text << "\n\n";
     }
-
-    return true;
 }
 
 static char * escape_double_quotes_and_backslashes(const char * str) {
@@ -530,15 +501,7 @@ static char * escape_double_quotes_in_csv(const char * str) {
     return escaped;
 }
 
-static bool output_csv(struct whisper_context * ctx, const char * fname, const whisper_params & params, std::vector<std::vector<float>> pcmf32s) {
-    std::ofstream fout(fname);
-    if (!fout.is_open()) {
-        fprintf(stderr, "%s: failed to open '%s' for writing\n", __func__, fname);
-        return false;
-    }
-
-    fprintf(stderr, "%s: saving output to '%s'\n", __func__, fname);
-
+static void output_csv(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, std::vector<std::vector<float>> pcmf32s) {
     const int n_segments = whisper_full_n_segments(ctx);
     fout << "start,end,";
     if (params.diarize && pcmf32s.size() == 2)
@@ -561,14 +524,9 @@ static bool output_csv(struct whisper_context * ctx, const char * fname, const w
         }
         fout << "\"" << text_escaped << "\"\n";
     }
-
-    return true;
 }
 
-static bool output_score(struct whisper_context * ctx, const char * fname, const whisper_params & /*params*/, std::vector<std::vector<float>> /*pcmf32s*/) {
-    std::ofstream fout(fname);
-    fprintf(stderr, "%s: saving output to '%s'\n", __func__, fname);
-
+static void output_score(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & /*params*/, std::vector<std::vector<float>> /*pcmf32s*/) {
     const int n_segments = whisper_full_n_segments(ctx);
     // fprintf(stderr,"segments: %d\n",n_segments);
     for (int i = 0; i < n_segments; ++i) {
@@ -581,16 +539,14 @@ static bool output_score(struct whisper_context * ctx, const char * fname, const
             // fprintf(stderr,"token: %s %f\n",token,probability);
 	    }
     }
-    return true;
 }
 
-static bool output_json(
+static void output_json(
              struct whisper_context * ctx,
-                         const char * fname,
+                      std::ofstream & fout,
                const whisper_params & params,
-    std::vector<std::vector<float>>   pcmf32s,
-                               bool   full) {
-    std::ofstream fout(fname);
+    std::vector<std::vector<float>>   pcmf32s) {
+    const bool full = params.output_jsn_full;
     int indent = 0;
 
     auto doindent = [&]() {
@@ -670,12 +626,6 @@ static bool output_json(
         end_obj(end);
     };
 
-    if (!fout.is_open()) {
-        fprintf(stderr, "%s: failed to open '%s' for writing\n", __func__, fname);
-        return false;
-    }
-
-    fprintf(stderr, "%s: saving output to '%s'\n", __func__, fname);
     start_obj(nullptr);
         value_s("systeminfo", whisper_print_system_info(), false);
         start_obj("model");
@@ -749,17 +699,12 @@ static bool output_json(
 
         end_arr(true);
     end_obj(true);
-    return true;
 }
 
 // karaoke video generation
 // outputs a bash script that uses ffmpeg to generate a video with the subtitles
 // TODO: font parameter adjustments
-static bool output_wts(struct whisper_context * ctx, const char * fname, const char * fname_inp, const whisper_params & params, float t_sec, std::vector<std::vector<float>> pcmf32s) {
-    std::ofstream fout(fname);
-
-    fprintf(stderr, "%s: saving output to '%s'\n", __func__, fname);
-
+static bool output_wts(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, std::vector<std::vector<float>> pcmf32s, const char * fname_inp, float t_sec, const char * fname_out) {
     static const char * font = params.font_path.c_str();
 
     std::ifstream fin(font);
@@ -875,20 +820,12 @@ static bool output_wts(struct whisper_context * ctx, const char * fname, const c
 
     fout.close();
 
-    fprintf(stderr, "%s: run 'source %s' to generate karaoke video\n", __func__, fname);
+    fprintf(stderr, "# %s: run 'source %s' to generate karaoke video\n", __func__, fname_out);
 
     return true;
 }
 
-static bool output_lrc(struct whisper_context * ctx, const char * fname, const whisper_params & params, std::vector<std::vector<float>> pcmf32s) {
-    std::ofstream fout(fname);
-    if (!fout.is_open()) {
-        fprintf(stderr, "%s: failed to open '%s' for writing\n", __func__, fname);
-        return false;
-    }
-
-    fprintf(stderr, "%s: saving output to '%s'\n", __func__, fname);
-
+static void output_lrc(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, std::vector<std::vector<float>> pcmf32s) {
     fout << "[by:whisper.cpp]\n";
 
     const int n_segments = whisper_full_n_segments(ctx);
@@ -916,8 +853,6 @@ static bool output_lrc(struct whisper_context * ctx, const char * fname, const w
 
         fout <<  '[' << timestamp_lrc << ']' << speaker << text << "\n";
     }
-
-    return true;
 }
 
 
@@ -1066,8 +1001,52 @@ int main(int argc, char ** argv) {
     }
 
     for (int f = 0; f < (int) params.fname_inp.size(); ++f) {
-        const auto fname_inp = params.fname_inp[f];
-		const auto fname_out = f < (int) params.fname_out.size() && !params.fname_out[f].empty() ? params.fname_out[f] : params.fname_inp[f];
+        const auto & fname_inp = params.fname_inp[f];
+        struct fout_factory {
+            std::string fname_out;
+            const size_t basename_length;
+            const bool is_stdout;
+            bool used_stdout;
+            decltype(whisper_print_segment_callback) * const print_segment_callback;
+            std::ofstream fout;
+
+            fout_factory (const std::string & fname_out_, const std::string & fname_inp, whisper_params & params) :
+                    fname_out{!fname_out_.empty() ? fname_out_ : fname_inp},
+                    basename_length{fname_out.size()},
+                    is_stdout{fname_out == "-"},
+                    used_stdout{},
+                    print_segment_callback{is_stdout ? nullptr : whisper_print_segment_callback} {
+                if (!print_segment_callback) {
+                    params.print_progress = false;
+                }
+            }
+
+            bool open(const char * ext, const char * function) {
+                if (is_stdout) {
+                    if (std::exchange(used_stdout, true)) {
+                        fprintf(stderr, "warning: Not appending multiple file formats to stdout\n");
+                        return false;
+                    }
+#ifdef _WIN32
+                    fout = std::ofstream{"CON"};
+#else
+                    fout = std::ofstream{"/dev/stdout"};
+#endif
+                    // Not using fprintf stderr here because it might equal stdout
+                    // Also assuming /dev is mounted
+                    return true;
+                }
+                fname_out.resize(basename_length);
+                fname_out += ext;
+                fout = std::ofstream{fname_out};
+                if (!fout.is_open()) {
+                    fprintf(stderr, "%s: failed to open '%s' for writing\n", __func__, fname_out.c_str());
+                    return false;
+                }
+                fprintf(stderr, "%s: saving output to '%s'\n", function, fname_out.c_str());
+                return true;
+            }
+        } fout_factory{f < (int) params.fname_out.size() ? params.fname_out[f] : "", fname_inp, params};
 
         std::vector<float> pcmf32;               // mono-channel F32 PCM
         std::vector<std::vector<float>> pcmf32s; // stereo-channel F32 PCM
@@ -1172,7 +1151,7 @@ int main(int argc, char ** argv) {
 
             // this callback is called on each new segment
             if (!wparams.print_realtime) {
-                wparams.new_segment_callback           = whisper_print_segment_callback;
+                wparams.new_segment_callback           = fout_factory.print_segment_callback;
                 wparams.new_segment_callback_user_data = &user_data;
             }
 
@@ -1214,54 +1193,26 @@ int main(int argc, char ** argv) {
 
         // output stuff
         {
-            printf("\n");
+            // macros to stringify function name
+#define output_func(func, ext, param, ...) if (param && fout_factory.open(ext, #func)) {\
+    func(ctx, fout_factory.fout, params, __VA_ARGS__); \
+}
+#define output_ext(ext, ...) output_func(output_##ext, "." #ext, params.output_##ext, __VA_ARGS__)
 
-            // output to text file
-            if (params.output_txt) {
-                const auto fname_txt = fname_out + ".txt";
-                output_txt(ctx, fname_txt.c_str(), params, pcmf32s);
-            }
+            output_ext(txt, pcmf32s);
+            output_ext(vtt, pcmf32s);
+            output_ext(srt, pcmf32s);
+            output_ext(wts, pcmf32s, fname_inp.c_str(), float(pcmf32.size() + 1000)/WHISPER_SAMPLE_RATE, fout_factory.fname_out.c_str());
+            output_ext(csv, pcmf32s);
+            output_func(output_json, ".json", params.output_jsn, pcmf32s);
+            output_ext(lrc, pcmf32s);
+            output_func(output_score, ".score.txt", params.log_score, pcmf32s);
 
-            // output to VTT file
-            if (params.output_vtt) {
-                const auto fname_vtt = fname_out + ".vtt";
-                output_vtt(ctx, fname_vtt.c_str(), params, pcmf32s);
-            }
+#undef output_ext
+#undef output_func
 
-            // output to SRT file
-            if (params.output_srt) {
-                const auto fname_srt = fname_out + ".srt";
-                output_srt(ctx, fname_srt.c_str(), params, pcmf32s);
-            }
-
-            // output to WTS file
-            if (params.output_wts) {
-                const auto fname_wts = fname_out + ".wts";
-                output_wts(ctx, fname_wts.c_str(), fname_inp.c_str(), params, float(pcmf32.size() + 1000)/WHISPER_SAMPLE_RATE, pcmf32s);
-            }
-
-            // output to CSV file
-            if (params.output_csv) {
-                const auto fname_csv = fname_out + ".csv";
-                output_csv(ctx, fname_csv.c_str(), params, pcmf32s);
-            }
-
-            // output to JSON file
-            if (params.output_jsn) {
-                const auto fname_jsn = fname_out + ".json";
-                output_json(ctx, fname_jsn.c_str(), params, pcmf32s, params.output_jsn_full);
-            }
-
-            // output to LRC file
-            if (params.output_lrc) {
-                const auto fname_lrc = fname_out + ".lrc";
-                output_lrc(ctx, fname_lrc.c_str(), params, pcmf32s);
-            }
-
-            // output to score file
-            if (params.log_score) {
-                const auto fname_score = fname_out + ".score.txt";
-                output_score(ctx, fname_score.c_str(), params, pcmf32s);
+            if (fout_factory.is_stdout && !fout_factory.used_stdout) {
+                fprintf(stderr, "warning: '--output-file -' used without any other '--output-*'");
             }
         }
     }
