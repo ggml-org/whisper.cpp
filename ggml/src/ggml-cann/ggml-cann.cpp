@@ -2087,6 +2087,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 return false;
             }
 
+            if(!ggml_is_contiguous(op->src[0])){
+                return false;
+            }
             return true;
         }
         case GGML_OP_UPSCALE: {
