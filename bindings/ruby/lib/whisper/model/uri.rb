@@ -53,7 +53,7 @@ module Whisper
           http.request request do |response|
             case response
             when Net::HTTPNotModified
-            # noop
+              # noop
             when Net::HTTPOK
               download response
             when Net::HTTPRedirection
@@ -68,7 +68,7 @@ module Whisper
       rescue => err
         if cache_path.exist?
           warn err
-        # Use cache file
+          # Use cache file
         else
           raise
         end
