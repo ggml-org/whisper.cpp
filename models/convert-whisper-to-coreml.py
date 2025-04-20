@@ -254,11 +254,10 @@ def convert_encoder(hparams, model, quantize=False):
 
     model = ct.convert(
         traced_model,
-        convert_to="neuralnetwork",
+        convert_to="mlprogram",
         inputs=[ct.TensorType(name="logmel_data", shape=input_shape)],
         outputs=[ct.TensorType(name="output")],
         compute_units=ct.ComputeUnit.ALL,
-        skip_model_load=True,
     )
 
     if quantize:
@@ -279,12 +278,11 @@ def convert_decoder(hparams, model, quantize=False):
 
     model = ct.convert(
         traced_model,
-        convert_to="neuralnetwork",
+        convert_to="mlprogram",
         inputs=[
             ct.TensorType(name="token_data", shape=tokens_shape, dtype=int),
             ct.TensorType(name="audio_data", shape=audio_shape)
         ],
-        skip_model_load=True,
     )
 
     if quantize:
