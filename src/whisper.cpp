@@ -4520,7 +4520,7 @@ static ggml_backend_buffer_type_t select_weight_buft(const whisper_vad_hparams &
     return nullptr;
 }
 
-static ggml_tensor * whisper_vad_build_stft_layer(ggml_context* ctx0,
+static ggml_tensor * whisper_vad_build_stft_layer(ggml_context * ctx0,
         const whisper_vad_model & model, ggml_tensor * cur) {
     // Apply reflective padding to the input tensor
     ggml_tensor * padded = ggml_pad_reflect_1d(ctx0, cur, 64, 64);
@@ -4548,7 +4548,7 @@ static ggml_tensor * whisper_vad_build_stft_layer(ggml_context* ctx0,
     return magnitude;
 }
 
-static ggml_tensor * whisper_vad_build_encoder_layer(ggml_context* ctx0,
+static ggml_tensor * whisper_vad_build_encoder_layer(ggml_context * ctx0,
         const whisper_vad_model & model, ggml_tensor * cur) {
     // First Conv1D: expands to 128 channels.
     cur = ggml_conv_1d(ctx0, model.encoder_0_weight, cur, 1, 1, 1);
@@ -4573,7 +4573,7 @@ static ggml_tensor * whisper_vad_build_encoder_layer(ggml_context* ctx0,
     return cur;
 }
 
-static ggml_tensor * whisper_vad_build_lstm_layer(ggml_context* ctx0,
+static ggml_tensor * whisper_vad_build_lstm_layer(ggml_context * ctx0,
         const whisper_vad_context & vctx, ggml_tensor * cur, ggml_cgraph * gf) {
     const whisper_vad_model & model = vctx.model;
     const int hdim = model.hparams.lstm_hidden_size;
