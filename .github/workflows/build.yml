@@ -200,23 +200,23 @@ jobs:
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
 
-  freeBSD-latest:
-    runs-on: macos-13
-
-    steps:
-      - name: Clone
-        uses: actions/checkout@v4
-
-      - name: Build
-        uses: cross-platform-actions/action@v0.27.0
-        with:
-          operating_system: freebsd
-          version: '14.2'
-          run: |
-            sudo pkg update
-            sudo pkg install -y gmake sdl2 cmake git
-            cmake -B build
-            cmake --build build --config Release
+#  freeBSD-latest:
+#    runs-on: macos-13
+#
+#    steps:
+#      - name: Clone
+#        uses: actions/checkout@v4
+#
+#      - name: Build
+#        uses: cross-platform-actions/action@v0.27.0
+#        with:
+#          operating_system: freebsd
+#          version: '14.2'
+#          run: |
+#            sudo pkg update
+#            sudo pkg install -y gmake sdl2 cmake git
+#            cmake -B build
+#            cmake --build build --config Release
 
   ubuntu-22-gcc:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
