@@ -100,10 +100,24 @@ endif()
 
 # whisper
 
+set(WHISPER_LIBRARY_SOURCES
+    ../include/whisper.h
+    whisper-arch.h
+    whisper.cpp
+    )
+    
+if(BINDINGS_FLAT)
+    message(STATUS "Adding FLAT Whisper binding extras")
+
+    set(FLAT_WHISPER_SOURCES
+       whisper-flat.cpp
+       )
+       
+    list(APPEND WHISPER_LIBRARY_SOURCES ${FLAT_WHISPER_SOURCES})
+endif()
+
 add_library(whisper
-            ../include/whisper.h
-            whisper-arch.h
-            whisper.cpp
+            ${WHISPER_LIBRARY_SOURCES}
             )
 
 # Set the version numbers

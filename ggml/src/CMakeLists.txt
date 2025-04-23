@@ -208,8 +208,22 @@ if (GGML_BACKEND_DL)
     target_compile_definitions(ggml-base PUBLIC GGML_BACKEND_DL)
 endif()
 
+set(GGML_LIBRARY_SOURCES
+    ggml-backend-reg.cpp)
+    
+if(BINDINGS_FLAT)
+    message(STATUS "Adding FLAT GGML binding extras")
+
+    set(FLAT_GGML_SOURCES
+       ggml-flat.cpp
+       )
+       
+    list(APPEND GGML_LIBRARY_SOURCES ${FLAT_GGML_SOURCES})
+endif()
+
 add_library(ggml
-            ggml-backend-reg.cpp)
+            ${GGML_LIBRARY_SOURCES}
+            )
 
 target_link_libraries(ggml PUBLIC ggml-base)
 

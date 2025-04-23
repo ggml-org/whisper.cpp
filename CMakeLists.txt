@@ -70,6 +70,9 @@ option(WHISPER_ALL_WARNINGS_3RD_PARTY "whisper: enable all compiler warnings in 
 option(WHISPER_FATAL_WARNINGS  "whisper: enable -Werror flag"               OFF)
 option(WHISPER_USE_SYSTEM_GGML "whisper: use system-installed GGML library" OFF)
 
+# flat bindings
+option(BINDINGS_FLAT "Add extra flat definitions to Whisper + GGML" OFF)
+
 # sanitizers
 option(WHISPER_SANITIZE_THREAD    "whisper: enable thread sanitizer"    OFF)
 option(WHISPER_SANITIZE_ADDRESS   "whisper: enable address sanitizer"   OFF)
