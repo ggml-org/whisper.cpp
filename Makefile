@@ -4,7 +4,7 @@
 
 .PHONY: build
 build:
-	cmake -B build
+	cmake -B build -DGGML_CUDA=$(GGML_CUDA) -DGGML_MUSA=$(GGML_MUSA)
 	cmake --build build --config Release
 
 # download a few audio samples into folder "./samples":
@@ -41,7 +41,7 @@ samples:
 
 tiny.en tiny base.en base small.en small medium.en medium large-v1 large-v2 large-v3 large-v3-turbo:
 	bash ./models/download-ggml-model.sh $@
-	cmake -B build
+	cmake -B build -DGGML_CUDA=$(GGML_CUDA) -DGGML_MUSA=$(GGML_MUSA)
 	cmake --build build --config Release
 	@echo ""
 	@echo "==============================================="
