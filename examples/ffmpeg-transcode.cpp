@@ -309,7 +309,7 @@ static int decode_audio(struct audio_buffer *audio_buf, s16 **data, int *size)
 	av_frame_free(&frame);
 	swr_free(&swr);
     //avio_context_free(); // todo?
-	avcodec_close(codec);
+	avcodec_free_context(&codec);
 	avformat_close_input(&fmt_ctx);
 	avformat_free_context(fmt_ctx);
 
