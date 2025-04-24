@@ -32,3 +32,15 @@
 void whisper_flat_backend_load_all(void) {
     ggml_backend_load_all();
 }
+
+const char * whisper_flat_get_system_info_json(void) {
+    return whisper_get_system_info_json();
+}
+
+struct whisper_state * whisper_flat_get_state_from_context(struct whisper_context * ctx) {
+    return whisper_get_state_from_context(ctx);
+}
+
+struct whisper_timings * whisper_flat_get_timings_with_state(struct whisper_state * state) {
+    return whisper_get_timings_with_state(state);
+}

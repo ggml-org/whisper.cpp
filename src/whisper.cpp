@@ -7550,3 +7550,77 @@ static void whisper_log_callback_default(ggml_log_level level, const char * text
     fputs(text, stderr);
     fflush(stderr);
 }
+
+// whisper_get_system_info_json
+// Returns system info as json, useful for language bindings
+// NOTE : While testing features->value always returned an int.
+//        Even though ints are invariably returned they may be
+//        some values that return other types.
+//        This function returns everything quoted (i.e. as a string)
+//        and leaves type-casting to the caller.
+//        This also removes the unlikely but plausible state of
+//        a string being returned unquoted (thus invalidating JSON)
+
+const char * whisper_get_system_info_json(void) {
+    static std::string s;
+
+    s  = "{";
+    s += "\"WHISPER\":{";
+    s += "\"COREML\":\""    + std::to_string(whisper_has_coreml())     + "\",";
+    s += "\"OPENVINO\":\""  + std::to_string(whisper_has_openvino())   + "\"}";
+
+    for (size_t i = 0; i < ggml_backend_reg_count(); i++) {
+        auto * reg = ggml_backend_reg_get(i);
+        auto * get_features_fn = (ggml_backend_get_features_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_get_features");
+        if (get_features_fn) {
+            ggml_backend_feature * features = get_features_fn(reg);
+            s += ",\"";
+            s += ggml_backend_reg_name(reg);
+            s += "\":{";
+            auto first = true;
+            for (; features->name; features++) {
+                if(first) {
+                    first = false;
+                } else {
+                    s += ",";
+                }
+                s += "\"";
+                s += features->name;
+                s += "\":\"";
+                s += features->value;
+                s += "\"";
+            }
+            s += "}";
+        }
+    }
+    s += "}";
+
+    return s.c_str();
+}
+
+// whisper_get_state_from_context
+// Returns state from supplied context pointer
+// This is mainly a helper for non-C++ language bindings as whisper_context
+// has embedded C++ specific types (e.g. maps and vectors)
+struct whisper_state * whisper_get_state_from_context(struct whisper_context * ctx) {
+    if (!ctx->state) {
+        return nullptr;
+    }
+
+    return ctx->state;
+}
+
+// whisper_get_timings_with_state
+// Just a version of whisper_get_timings that takes state as a parameter
+struct whisper_timings * whisper_get_timings_with_state(struct whisper_state * state) {
+    if (state == nullptr) {
+        return nullptr;
+    }
+    whisper_timings * timings = new whisper_timings;
+    timings->sample_ms = 1e-3f * state->t_sample_us / std::max(1, state->n_sample);
+    timings->encode_ms = 1e-3f * state->t_encode_us / std::max(1, state->n_encode);
+    timings->decode_ms = 1e-3f * state->t_decode_us / std::max(1, state->n_decode);
+    timings->batchd_ms = 1e-3f * state->t_batchd_us / std::max(1, state->n_batchd);
+    timings->prompt_ms = 1e-3f * state->t_prompt_us / std::max(1, state->n_prompt);
+    return timings;
+}
