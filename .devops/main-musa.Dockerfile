@@ -9,15 +9,13 @@ ARG BASE_MUSA_RUN_CONTAINER=mthreads/musa:${MUSA_VERSION}-runtime-ubuntu${UBUNTU
 FROM ${BASE_MUSA_DEV_CONTAINER} AS build
 WORKDIR /app
 
-# Enable muBLAS
-ENV GGML_MUSA=1
-
 RUN apt-get update && \
     apt-get install -y build-essential libsdl2-dev wget cmake git \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 COPY .. .
-RUN make base.en
+# Enable muBLAS
+RUN make base.en CMAKE_ARGS="-DGGML_MUSA=1"
 
 FROM ${BASE_MUSA_RUN_CONTAINER} AS runtime
 WORKDIR /app
