@@ -142,6 +142,7 @@ class Options
     bool "GGML_RV_ZFH"
     pending "GGML_SCCACHE_FOUND"
     string "GGML_SCHED_MAX_COPIES"
+    bool "GGML_SSE42"
     ignored "GGML_STATIC"
     bool "GGML_SYCL"
     string "GGML_SYCL_DEVICE_ARCH"
