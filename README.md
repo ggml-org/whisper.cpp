@@ -432,16 +432,16 @@ We have two Docker images available for this project:
 # download model and persist it in a local folder
 docker run -it --rm \
   -v path/to/models:/models \
-  whisper.cpp:main "./models/download-ggml-model.sh base /models"
+  ghcr.io/ggerganov/whisper.cpp:main "./models/download-ggml-model.sh base /models"
 # transcribe an audio file
 docker run -it --rm \
   -v path/to/models:/models \
   -v path/to/audios:/audios \
-  whisper.cpp:main "./main -m /models/ggml-base.bin -f /audios/jfk.wav"
+  ghcr.io/ggerganov/whisper.cpp:main "./main -m /models/ggml-base.bin -f /audios/jfk.wav"
 # transcribe an audio file in samples folder
 docker run -it --rm \
   -v path/to/models:/models \
-  whisper.cpp:main "./main -m /models/ggml-base.bin -f ./samples/jfk.wav"
+  ghcr.io/ggerganov/whisper.cpp:main "./main -m /models/ggml-base.bin -f ./samples/jfk.wav"
 ```
 
 ## Installing with Conan
