@@ -23,6 +23,7 @@ High-performance inference of [OpenAI's Whisper](https://github.com/openai/whisp
 - [Efficient GPU support for NVIDIA](#nvidia-gpu-support)
 - [OpenVINO Support](#openvino-support)
 - [Ascend NPU Support](#ascend-npu-support)
+- [Moore Threads GPU Support](#moore-threads-gpu-support)
 - [C-style API](https://github.com/ggml-org/whisper.cpp/blob/master/include/whisper.h)
 
 Supported platforms:
@@ -381,6 +382,25 @@ Run the inference examples as usual, for example:
 - If you have trouble with Ascend NPU device, please create a issue with **[CANN]** prefix/tag.
 - If you run successfully with your Ascend NPU device, please help update the table `Verified devices`.
 
+## Moore Threads GPU support
+
+With Moore Threads cards the processing of the models is done efficiently on the GPU via muBLAS and custom MUSA kernels.
+First, make sure you have installed `MUSA SDK rc3.1.1`: https://developer.mthreads.com/sdk/download/musa?equipment=&os=&driverVersion=&version=rc3.1.1
+
+Now build `whisper.cpp` with MUSA support:
+
+```
+cmake -B build -DGGML_MUSA=1
+cmake --build build -j --config Release
+```
+
+or specify the architecture for your Moore Threads GPU. For example, if you have a MTT S80 GPU, you can specify the architecture as follows:
+
+```
+cmake -B build -DGGML_MUSA=1 -DMUSA_ARCHITECTURES="21"
+cmake --build build -j --config Release
+```
+
 ## FFmpeg support (Linux only)
 
 If you want to support more audio formats (such as Opus and AAC), you can turn on the `WHISPER_FFMPEG` build flag to enable FFmpeg integration.
@@ -425,6 +445,7 @@ We have two Docker images available for this project:
 
 1. `ghcr.io/ggml-org/whisper.cpp:main`: This image includes the main executable file as well as `curl` and `ffmpeg`. (platforms: `linux/amd64`, `linux/arm64`)
 2. `ghcr.io/ggml-org/whisper.cpp:main-cuda`: Same as `main` but compiled with CUDA support. (platforms: `linux/amd64`)
+3. `ghcr.io/ggml-org/whisper.cpp:main-musa`: Same as `main` but compiled with MUSA support. (platforms: `linux/amd64`)
 
 ### Usage
 
@@ -437,11 +458,11 @@ docker run -it --rm \
 docker run -it --rm \
   -v path/to/models:/models \
   -v path/to/audios:/audios \
-  whisper.cpp:main "./main -m /models/ggml-base.bin -f /audios/jfk.wav"
+  whisper.cpp:main "whisper-cli -m /models/ggml-base.bin -f /audios/jfk.wav"
 # transcribe an audio file in samples folder
 docker run -it --rm \
   -v path/to/models:/models \
-  whisper.cpp:main "./main -m /models/ggml-base.bin -f ./samples/jfk.wav"
+  whisper.cpp:main "whisper-cli -m /models/ggml-base.bin -f ./samples/jfk.wav"
 ```
 
 ## Installing with Conan
