@@ -111,6 +111,48 @@ class TestCallback < TestBase
     assert_equal 100, last
   end
 
+  def test_encoder_begin_callback
+    i = 0
+    @params.encoder_begin_callback = ->(context, state, user_data) {
+      i += 1
+    }
+    @whisper.transcribe(@audio, @params)
+    assert i > 0
+  end
+
+  def test_encoder_begin_callback_abort
+    logs = []
+    Whisper.log_set -> (level, buffer, user_data) {
+      logs << buffer if level == Whisper::LOG_LEVEL_ERROR
+    }, logs
+    @params.encoder_begin_callback = ->(context, state, user_data) {
+      return false
+    }
+    @whisper.transcribe(@audio, @params)
+    assert_match(/encoder_begin_callback returned false - aborting/, logs.join)
+    Whisper.log_set ->(level, buffer, user_data) {}, nil
+  end
+
+  def test_encoder_begin_callback_user_data
+    udata = Object.new
+    @params.encoder_begin_callback_user_data = udata
+    yielded = nil
+    @params.encoder_begin_callback = ->(context, state, user_data) {
+      yielded = user_data
+    }
+    @whisper.transcribe(@audio, @params)
+    assert_same udata, yielded
+  end
+
+  def test_on_encoder_begin
+    i = 0
+    @params.on_encoder_begin do
+      i += 1
+    end
+    @whisper.transcribe(@audio, @params)
+    assert i > 0
+  end
+
   def test_abort_callback
     i = 0
     @params.abort_callback = ->(user_data) {
