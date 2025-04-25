@@ -135,6 +135,22 @@ if (NOT TARGET ggml)
         add_library(ggml ALIAS ggml::ggml)
     else()
         add_subdirectory(ggml)
+        if(WIN32)
+            # The following adds a _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR macro and is a workaround for
+            # the Windows C++ standard library which does not support constexpr mutexes.
+            # From the release notes://github.com/microsoft/STL/wiki/Changelog
+            #  Disable constexpr mutex constructor on Windows
+            #  Fixed mutex's constructor to be constexpr. #3824 #4000 #4339
+            #  Note: Programs that aren't following the documented restrictions on binary compatibility may encounter
+            #  null dereferences in mutex machinery. You must follow this rule:
+            #  When you mix binaries built by different supported versions of the toolset, the Redistributable version
+            #  must be at least as new as the latest toolset used by any app component.
+            #  You can define _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR as an escape hatch.
+            #
+            # Specifically to whisper.cpp this would cause a crash when using the Java bindings.
+            # resulting in a Invalid memory access error.
+            target_compile_definitions(ggml-base PRIVATE _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
+        endif()
     endif()
     # ... otherwise assume ggml is added by a parent CMakeLists.txt
 endif()
