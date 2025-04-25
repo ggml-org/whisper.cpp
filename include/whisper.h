@@ -673,6 +673,7 @@ extern "C" {
     const char * whisper_get_system_info_json(void);
     struct whisper_state * whisper_get_state_from_context(struct whisper_context * ctx);
     struct whisper_timings * whisper_get_timings_with_state(struct whisper_state * state);
+    ggml_backend_t whisper_get_preferred_backend(struct whisper_state * state);
     
 #ifdef __cplusplus
 }

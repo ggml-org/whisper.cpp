@@ -7630,3 +7630,11 @@ struct whisper_timings * whisper_get_timings_with_state(struct whisper_state * s
     timings->prompt_ms = 1e-3f * state->t_prompt_us / std::max(1, state->n_prompt);
     return timings;
 }
+
+ggml_backend_t whisper_get_preferred_backend(struct whisper_state * state) {
+    if (state->backends.empty()) {
+        return nullptr;
+    }
+    
+    return state->backends[0];
+}

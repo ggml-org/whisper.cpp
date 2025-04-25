@@ -44,3 +44,7 @@ struct whisper_state * whisper_flat_get_state_from_context(struct whisper_contex
 struct whisper_timings * whisper_flat_get_timings_with_state(struct whisper_state * state) {
     return whisper_get_timings_with_state(state);
 }
+
+ggml_backend_t whisper_flat_get_preferred_backend(struct whisper_state * state) {
+    return whisper_get_preferred_backend(state);
+}

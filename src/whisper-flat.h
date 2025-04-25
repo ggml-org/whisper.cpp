@@ -24,6 +24,7 @@ extern "C" {
     WHISPER_FLAT_API struct whisper_timings * whisper_flat_get_timings_with_state(struct whisper_state * state);
     WHISPER_FLAT_API struct whisper_state * whisper_flat_get_state_from_context(struct whisper_context * ctx);
     WHISPER_FLAT_API const char * whisper_flat_get_system_info_json(void);
+    WHISPER_FLAT_API ggml_backend_t whisper_flat_get_preferred_backend(struct whisper_state * state);
 
 #ifdef __cplusplus
 }
