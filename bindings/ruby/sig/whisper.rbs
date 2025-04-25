@@ -7,6 +7,7 @@ module Whisper
   type log_callback = ^(Integer level, String message, Object user_data) -> void
   type new_segment_callback = ^(Whisper::Context, void, Integer n_new, Object user_data) -> void
   type progress_callback = ^(Whisper::Context, void, Integer progress, Object user_data) -> void
+  type encoder_begin_callback = ^(Whisper::Context, void, Object user_data) -> void
   type abort_callback = ^(Whisper::Context, void, Object user_data) -> boolish
 
   LOG_LEVEL_NONE: Integer
@@ -146,6 +147,8 @@ module Whisper
       ?new_segment_callback_user_data: Object,
       ?progress_callback: progress_callback,
       ?progress_callback_user_data: Object,
+      ?encoder_begin_callback: encoder_begin_callback,
+      ?encoder_begin_callback_user_data: Object,
       ?abort_callback: abort_callback,
       ?abort_callback_user_data: Object
     ) -> instance
@@ -306,6 +309,18 @@ module Whisper
 
     def progress_callback_user_data: () -> Object
 
+    # Sets encoder begin callback, called when the encoder starts.
+    #
+    def encoder_begin_callback=: (encoder_begin_callback) -> encoder_begin_callback
+
+    def encoder_begin_callback: () -> (encoder_begin_callback | nil)
+
+    # Sets user data passed to the last argument of encoder begin callback.
+    #
+    def encoder_begin_callback_user_data=: (Object) -> Object
+
+    def encoder_begin_callback_user_data: () -> Object
+
     # Sets abort callback, called to check if the process should be aborted.
     #
     #   params.abort_callback = ->(user_data) {
@@ -334,6 +349,10 @@ module Whisper
     # Hook called on progress update. Yields each progress Integer between 0 and 100.
     #
     def on_progress: { (Integer progress) -> void } -> void
+
+    # Hook called on encoder starts.
+    #
+    def on_encoder_begin: { () -> void } -> void
 
     # Call block to determine whether abort or not. Return +true+ when you want to abort.
     #
