@@ -26,7 +26,7 @@
   rb_define_method(cParams, #param_name, ruby_whisper_params_get_ ## param_name, 0); \
   rb_define_method(cParams, #param_name "=", ruby_whisper_params_set_ ## param_name, 1);
 
-#define RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT 30
+#define RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT 32
 
 extern VALUE cParams;
 
@@ -63,6 +63,8 @@ static ID id_new_segment_callback;
 static ID id_new_segment_callback_user_data;
 static ID id_progress_callback;
 static ID id_progress_callback_user_data;
+static ID id_encoder_begin_callback;
+static ID id_encoder_begin_callback_user_data;
 static ID id_abort_callback;
 static ID id_abort_callback_user_data;
 
@@ -126,6 +128,33 @@ static void progress_callback(struct whisper_context *ctx, struct whisper_state 
   }
 }
 
+static bool encoder_begin_callback(struct whisper_context *ctx, struct whisper_state *state, void *user_data) {
+  const ruby_whisper_callback_container *container = (ruby_whisper_callback_container *)user_data;
+  bool is_aborted = false;
+  VALUE result;
+
+  // Currently, doesn't support state because
+  // those require to resolve GC-related problems.
+  if (!NIL_P(container->callback)) {
+    result = rb_funcall(container->callback, id_call, 3, *container->context, Qnil, container->user_data);
+    if (result == Qfalse) {
+      is_aborted = true;
+    }
+  }
+  const long callbacks_len = RARRAY_LEN(container->callbacks);
+  if (0 == callbacks_len) {
+    return !is_aborted;
+  }
+  for (int j = 0; j < callbacks_len; j++) {
+    VALUE cb = rb_ary_entry(container->callbacks, j);
+    result = rb_funcall(cb, id_call, 0);
+    if (result == Qfalse) {
+      is_aborted = true;
+    }
+  }
+  return !is_aborted;
+}
+
 static bool abort_callback(void * user_data) {
   const ruby_whisper_callback_container *container = (ruby_whisper_callback_container *)user_data;
   if (!NIL_P(container->callback)) {
@@ -161,6 +190,12 @@ void register_callbacks(ruby_whisper_params * rwp, VALUE * context) {
     rwp->params.progress_callback_user_data = rwp->progress_callback_container;
   }
 
+  if (!NIL_P(rwp->encoder_begin_callback_container->callback) || 0 != RARRAY_LEN(rwp->encoder_begin_callback_container->callbacks)) {
+    rwp->encoder_begin_callback_container->context = context;
+    rwp->params.encoder_begin_callback = encoder_begin_callback;
+    rwp->params.encoder_begin_callback_user_data = rwp->encoder_begin_callback_container;
+  }
+
   if (!NIL_P(rwp->abort_callback_container->callback) || 0 != RARRAY_LEN(rwp->abort_callback_container->callbacks)) {
     rwp->abort_callback_container->context = context;
     rwp->params.abort_callback = abort_callback;
@@ -173,6 +208,7 @@ rb_whisper_params_mark(ruby_whisper_params *rwp)
 {
   rb_whisper_callbcack_container_mark(rwp->new_segment_callback_container);
   rb_whisper_callbcack_container_mark(rwp->progress_callback_container);
+  rb_whisper_callbcack_container_mark(rwp->encoder_begin_callback_container);
   rb_whisper_callbcack_container_mark(rwp->abort_callback_container);
 }
 
@@ -198,6 +234,7 @@ ruby_whisper_params_allocate(VALUE klass)
   rwp->diarize = false;
   rwp->new_segment_callback_container = rb_whisper_callback_container_allocate();
   rwp->progress_callback_container = rb_whisper_callback_container_allocate();
+  rwp->encoder_begin_callback_container = rb_whisper_callback_container_allocate();
   rwp->abort_callback_container = rb_whisper_callback_container_allocate();
   return Data_Wrap_Struct(klass, rb_whisper_params_mark, rb_whisper_params_free, rwp);
 }
@@ -849,6 +886,57 @@ ruby_whisper_params_set_progress_callback_user_data(VALUE self, VALUE value)
   rwp->progress_callback_container->user_data = value;
   return value;
 }
+
+static VALUE
+ruby_whisper_params_get_encoder_begin_callback(VALUE self)
+{
+  ruby_whisper_params *rwp;
+  Data_Get_Struct(self, ruby_whisper_params, rwp);
+  return rwp->encoder_begin_callback_container->callback;
+}
+
+/*
+ * Sets encoder begin callback, called when the encoder starts.
+ *
+ *   params.encoder_begin_callback = ->(context, _, user_data) {
+ *     # ...
+ *   }
+ *
+ * call-seq:
+ *   encoder_begin_callback = callback -> callback
+ */
+static VALUE
+ruby_whisper_params_set_encoder_begin_callback(VALUE self, VALUE value)
+{
+  ruby_whisper_params *rwp;
+  Data_Get_Struct(self, ruby_whisper_params, rwp);
+  rwp->encoder_begin_callback_container->callback = value;
+  return value;
+}
+
+static VALUE
+ruby_whisper_params_get_encoder_begin_callback_user_data(VALUE self)
+{
+  ruby_whisper_params *rwp;
+  Data_Get_Struct(self, ruby_whisper_params, rwp);
+  return rwp->encoder_begin_callback_container->user_data;
+}
+
+/*
+ * Sets user data passed to the last argument of encoder begin callback.
+ *
+ * call-seq:
+ *   encoder_begin_callback_user_data = user_data -> use_data
+ */
+static VALUE
+ruby_whisper_params_set_encoder_begin_callback_user_data(VALUE self, VALUE value)
+{
+  ruby_whisper_params *rwp;
+  Data_Get_Struct(self, ruby_whisper_params, rwp);
+  rwp->encoder_begin_callback_container->user_data = value;
+  return value;
+}
+
 static VALUE
 ruby_whisper_params_get_abort_callback(VALUE self)
 {
@@ -958,6 +1046,8 @@ ruby_whisper_params_initialize(int argc, VALUE *argv, VALUE self)
       SET_PARAM_IF_SAME(new_segment_callback_user_data)
       SET_PARAM_IF_SAME(progress_callback)
       SET_PARAM_IF_SAME(progress_callback_user_data)
+      SET_PARAM_IF_SAME(encoder_begin_callback)
+      SET_PARAM_IF_SAME(encoder_begin_callback_user_data)
       SET_PARAM_IF_SAME(abort_callback)
       SET_PARAM_IF_SAME(abort_callback_user_data)
     }
@@ -1005,6 +1095,26 @@ ruby_whisper_params_on_progress(VALUE self)
   Data_Get_Struct(self, ruby_whisper_params, rws);
   const VALUE blk = rb_block_proc();
   rb_ary_push(rws->progress_callback_container->callbacks, blk);
+  return Qnil;
+}
+
+/*
+ * Hook called when the encoder starts.
+ *
+ *   whisper.on_encoder_begin do
+ *     # ...
+ *   end
+ *
+ * call-seq:
+ *   on_encoder_begin { ... }
+ */
+static VALUE
+ruby_whisper_params_on_encoder_begin(VALUE self)
+{
+  ruby_whisper_params *rws;
+  Data_Get_Struct(self, ruby_whisper_params, rws);
+  const VALUE blk = rb_block_proc();
+  rb_ary_push(rws->encoder_begin_callback_container->callbacks, blk);
   return Qnil;
 }
 
@@ -1068,10 +1178,13 @@ init_ruby_whisper_params(VALUE *mWhisper)
   DEFINE_PARAM(new_segment_callback_user_data, 25)
   DEFINE_PARAM(progress_callback, 26)
   DEFINE_PARAM(progress_callback_user_data, 27)
-  DEFINE_PARAM(abort_callback, 28)
-  DEFINE_PARAM(abort_callback_user_data, 29)
+  DEFINE_PARAM(encoder_begin_callback, 28)
+  DEFINE_PARAM(encoder_begin_callback_user_data, 29)
+  DEFINE_PARAM(abort_callback, 30)
+  DEFINE_PARAM(abort_callback_user_data, 31)
 
   rb_define_method(cParams, "on_new_segment", ruby_whisper_params_on_new_segment, 0);
   rb_define_method(cParams, "on_progress", ruby_whisper_params_on_progress, 0);
+  rb_define_method(cParams, "on_encoder_begin", ruby_whisper_params_on_encoder_begin, 0);
   rb_define_method(cParams, "abort_on", ruby_whisper_params_abort_on, 0);
 }
