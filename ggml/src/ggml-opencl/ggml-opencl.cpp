@@ -2,9 +2,11 @@
 #define CL_USE_DEPRECATED_OPENCL_1_2_APIS
 
 // suppress warnings in CL headers for GCC and Clang
-#pragma GCC diagnostic ignored "-Woverlength-strings"
-#ifdef __clang__
-#pragma GCC diagnostic ignored "-Wgnu-anonymous-struct"
+#ifndef _MSC_VER
+    #pragma GCC diagnostic ignored "-Woverlength-strings"
+    #ifdef __clang__
+    #pragma GCC diagnostic ignored "-Wgnu-anonymous-struct"
+    #endif
 #endif
 
 #include "ggml-opencl.h"
