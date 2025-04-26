@@ -561,6 +561,7 @@ jobs:
         run: >
           cmake -S . -B ./build -A ${{ matrix.arch }}
           -DCMAKE_BUILD_TYPE=${{ matrix.build }}
+          -DBUILD_SHARED_LIBS=ON
           -DWHISPER_SDL2=${{ matrix.sdl2 }}
 
       - name: Build
@@ -572,11 +573,36 @@ jobs:
         if: matrix.sdl2 == 'ON'
         run: copy "$env:SDL2_DIR/../lib/${{ matrix.s2arc }}/SDL2.dll" build/bin/${{ matrix.build }}
 
-      - name: Upload dll
+      - name: Upload SDL2.dll
+        if: matrix.sdl2 == 'ON'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.jnaPath }}_whisper.dll
+          name: ${{ matrix.s2arc }}_SDL2.dll
+          path: build/bin/${{ matrix.build }}/SDL2.dll
+
+      - name: Upload whisper dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper_${{ matrix.arch }}.dll
           path: build/bin/${{ matrix.build }}/whisper.dll
+
+      - name: Upload ggml dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: ggml_${{ matrix.arch }}.dll
+          path: build/bin/${{ matrix.build }}/ggml.dll
+
+      - name: Upload ggml base dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: ggml_base_${{ matrix.arch }}.dll
+          path: build/bin/${{ matrix.build }}/ggml-base.dll
+
+      - name: Upload ggml cpu dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: ggml_cpu_${{ matrix.arch }}.dll
+          path: build/bin/${{ matrix.build }}/ggml-cpu.dll
 
       - name: Upload binaries
         if: matrix.sdl2 == 'ON'
@@ -996,49 +1022,99 @@ jobs:
           chmod +x ./gradlew
           ./gradlew assembleRelease
 
-# TODO: disabled because of following fail: https://github.com/ggerganov/whisper.cpp/actions/runs/9686220096/job/26735899598
-#  java:
-#    needs: [ 'windows' ]
-#    runs-on: windows-latest
-#    steps:
-#      - uses: actions/checkout@v4
-#
-#      - name: Install Java
-#        uses: actions/setup-java@v4
-#        with:
-#          distribution: zulu
-#          java-version: 20
-#
-#      - name: Download Windows lib
-#        uses: actions/download-artifact@v4
-#        with:
-#          name: win32-x86-64_whisper.dll
-#          path: bindings/java/build/generated/resources/main/win32-x86-64
-#
-#      - name: Build
-#        run: |
-#          models\download-ggml-model.cmd tiny.en
-#          cd bindings/java
-#          chmod +x ./gradlew
-#          ./gradlew build
-#
-#      - name: Upload jar
-#        uses: actions/upload-artifact@v4
-#        with:
-#          name: whispercpp.jar
-#          path: bindings/java/build/libs/whispercpp-*.jar
-#
-#      - name: Publish package
-#        if: ${{ github.ref == 'refs/heads/master' }}
-#        uses: gradle/gradle-build-action@v2.4.2
-#        with:
-#          arguments: publish
-#          build-root-directory: bindings/java
-#        env:
-#          MAVEN_USERNAME: ${{ secrets.JIRA_USER }}
-#          MAVEN_PASSWORD: ${{ secrets.JIRA_PASS }}
-#          PGP_SECRET: ${{ secrets.GPG_PRIVATE_KEY }}
-#          PGP_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+  bindings-java:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    needs: ['windows']
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 20
+
+      - name: Download Whisper Windows lib
+        uses: actions/download-artifact@v4
+        with:
+          name: whisper_x64.dll
+
+      - name: Download GGML Windows lib
+        uses: actions/download-artifact@v4
+        with:
+          name: ggml_x64.dll
+
+      - name: Download GGML Base Windows lib
+        uses: actions/download-artifact@v4
+        with:
+          name: ggml_base_x64.dll
+
+      - name: Download GGML CPU Windows lib
+        uses: actions/download-artifact@v4
+        with:
+          name: ggml_cpu_x64.dll
+
+      - name: Download SDL2.dll
+        uses: actions/download-artifact@v4
+        with:
+          name: x64_SDL2.dll
+
+      - name: List downloaded files
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path "." -Recurse -Filter "*.dll"
+
+      - name: Move DLL to correct location
+        shell: pwsh
+        run: |
+          New-Item -Path "build\bin\Release" -ItemType Directory -Force
+
+          Copy-Item -Path "whisper.dll" -Destination "build\bin\Release\whisper.dll" -Force
+          Write-Host "Copied whisper.dll to build\bin\Release\whisper.dll directory"
+
+          Copy-Item -Path "ggml.dll" -Destination "build\bin\Release\ggml.dll" -Force
+          Write-Host "Copied ggml.dll to build\bin\Release\ggml.dll directory"
+
+          Copy-Item -Path "ggml-base.dll" -Destination "build\bin\Release\ggml-base.dll" -Force
+          Write-Host "Copied ggml-base.dll to build\bin\Release\ggml-base.dll directory"
+
+          Copy-Item -Path "ggml-cpu.dll" -Destination "build\bin\Release\ggml-cpu.dll" -Force
+          Write-Host "Copied ggml-cpu.dll to build\bin\Release\ggml-cpu.dll directory"
+
+          Copy-Item -Path "SDL2.dll" -Destination "build\bin\Release\SDL2.dll" -Force
+          Write-Host "Copied SDL2.dll to build\bin\Release\SDL2.dll directory"
+
+      - name: List build release files
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path "build\Release" -Recurse -Filter "*.dll"
+
+      - name: Build
+        run: |
+          models\download-ggml-model.cmd tiny.en models/
+          cd bindings/java
+          chmod +x ./gradlew
+          ./gradlew build --info
+
+      - name: Upload jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: whispercpp.jar
+          path: bindings/java/build/libs/whispercpp-*.jar
+
+      - name: Publish package
+        if: ${{ github.ref == 'refs/heads/master' }}
+        uses: gradle/gradle-build-action@v2.4.2
+        with:
+          arguments: publish
+          build-root-directory: bindings/java
+        env:
+          MAVEN_USERNAME: ${{ secrets.JIRA_USER }}
+          MAVEN_PASSWORD: ${{ secrets.JIRA_PASS }}
+          PGP_SECRET: ${{ secrets.GPG_PRIVATE_KEY }}
+          PGP_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
 
   quantize:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
