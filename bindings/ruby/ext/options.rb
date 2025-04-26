@@ -114,7 +114,6 @@ class Options
     bool "GGML_HIP_GRAPHS"
     bool "GGML_HIP_NO_VMM"
     bool "GGML_HIP_ROCWMMA_FATTN"
-    bool "GGML_HIP_UMA"
     ignored "GGML_INCLUDE_INSTALL_DIR"
     bool "GGML_KOMPUTE"
     bool "GGML_LASX"

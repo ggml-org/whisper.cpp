@@ -6,9 +6,9 @@ class TestBase < Test::Unit::TestCase
   AUDIO = File.join(__dir__, "..", "..", "..", "samples", "jfk.wav")
 
   class << self
-    attr_reader :whisper
+    def whisper
+      return @whisper if @whisper
 
-    def startup
       @whisper = Whisper::Context.new("base.en")
       params = Whisper::Params.new
       params.print_timestamps = false
