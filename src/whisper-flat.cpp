@@ -48,3 +48,11 @@ struct whisper_timings * whisper_flat_get_timings_with_state(struct whisper_stat
 ggml_backend_t whisper_flat_get_preferred_backend(struct whisper_state * state) {
     return whisper_get_preferred_backend(state);
 }
+
+ggml_backend_t whisper_flat_get_indexed_backend(struct whisper_state* state, int i) {
+    return whisper_get_indexed_backend(state, i);
+}
+
+size_t whisper_flat_get_backend_count(struct whisper_state* state) {
+    return whisper_get_backend_count(state);
+}
