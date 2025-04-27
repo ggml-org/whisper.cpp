@@ -1,5 +1,5 @@
 #include "whisper.h"
-#if defined(GGML_BACKEND_DL) and defined(BINDINGS_FLAT)
+#if defined(GGML_BACKEND_DL) or defined(BINDINGS_FLAT)
 #include "whisper-flat.h"
 #endif
 
@@ -64,7 +64,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
 static int whisper_bench_full(const whisper_params & params) {
     // whisper init
 
-    #if defined(GGML_BACKEND_DL) and defined(BINDINGS_FLAT)
+    #if defined(GGML_BACKEND_DL) or defined(BINDINGS_FLAT)
     whisper_flat_backend_load_all();
     #endif
 
