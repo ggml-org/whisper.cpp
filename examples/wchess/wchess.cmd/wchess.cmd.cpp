@@ -7,6 +7,9 @@
 
 #include "WChess.h"
 #include "common-sdl.h"
+#if defined(GGML_BACKEND_DL) and defined(BINDINGS_FLAT)
+#include "whisper-flat.h"
+#endif
 #include <iostream>
 
 #include <memory>
@@ -181,6 +184,10 @@ int main(int argc, char ** argv) {
     }
 
     // whisper init
+
+    #if defined(GGML_BACKEND_DL) and defined(BINDINGS_FLAT)
+    whisper_flat_backend_load_all();
+    #endif
 
     struct whisper_context_params cparams = whisper_context_default_params();
 
