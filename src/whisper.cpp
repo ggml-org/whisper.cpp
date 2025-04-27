@@ -7639,7 +7639,7 @@ ggml_backend_t whisper_get_preferred_backend(struct whisper_state * state) {
     return state->backends[0];
 }
 
-ggml_backend_t whisper_get_indexed_backend(struct whisper_state* state, int i) {
+ggml_backend_t whisper_get_indexed_backend(struct whisper_state* state, size_t i) {
     if (state->backends.empty()) {
         return nullptr;
     }
