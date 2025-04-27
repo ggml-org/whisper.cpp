@@ -6,7 +6,7 @@
 #include "common.h"
 #include "common-whisper.h"
 #include "whisper.h"
-#if defined(GGML_BACKEND_DL) and defined(BINDINGS_FLAT)
+#if defined(GGML_BACKEND_DL) or defined(BINDINGS_FLAT)
 #include "whisper-flat.h"
 #endif
 
@@ -158,7 +158,7 @@ int main(int argc, char ** argv) {
         exit(0);
     }
 
-    #if defined(GGML_BACKEND_DL) and defined(BINDINGS_FLAT)
+    #if defined(GGML_BACKEND_DL) or defined(BINDINGS_FLAT)
     whisper_flat_backend_load_all();
     #endif
 
