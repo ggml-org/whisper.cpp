@@ -4501,7 +4501,7 @@ static void whisper_grammar_advance_stack(
         std::vector<std::vector<const whisper_grammar_element *>> & new_stacks) {
 
     if (stack.empty()) {
-        new_stacks.push_back(stack);
+        new_stacks.emplace_back();
         return;
     }
 
