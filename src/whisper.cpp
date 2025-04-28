@@ -1323,6 +1323,9 @@ static ggml_backend_t whisper_backend_init_gpu(const whisper_context_params & pa
     if (params.use_gpu) {
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             ggml_backend_dev_t dev_cur = ggml_backend_dev_get(i);
+            if(dev_cur == nullptr) {
+                continue;
+            }
             if (ggml_backend_dev_type(dev_cur) == GGML_BACKEND_DEVICE_TYPE_GPU) {
                 if (cnt == 0 || cnt == params.gpu_device) {
                     dev = dev_cur;
@@ -1361,6 +1364,9 @@ static std::vector<ggml_backend_t> whisper_backend_init(const whisper_context_pa
     // ACCEL backends
     for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        if(dev == nullptr) {
+            continue;
+        }
         if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
             WHISPER_LOG_INFO("%s: using %s backend\n", __func__, ggml_backend_dev_name(dev));
             ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
@@ -1392,6 +1398,9 @@ static buft_list_t make_buft_list(whisper_context_params & params) {
         int cnt = 0;
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+            if(dev == nullptr) {
+                continue;
+            }
             if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
                 if (cnt == 0 || cnt == params.gpu_device) {
                     auto * buft = ggml_backend_dev_buffer_type(dev);
