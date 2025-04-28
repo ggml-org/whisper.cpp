@@ -114,6 +114,7 @@ if(BINDINGS_FLAT)
        )
        
     list(APPEND WHISPER_LIBRARY_SOURCES ${FLAT_WHISPER_SOURCES})
+    set(WHISPER_EXTRA_FLAGS ${WHISPER_EXTRA_FLAGS} -DBINDINGS_FLAT)
 endif()
 
 add_library(whisper

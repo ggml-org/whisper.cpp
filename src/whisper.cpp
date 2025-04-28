@@ -208,7 +208,7 @@ static bool ggml_graph_compute_helper(
     return t;
 }
 
-#if !defined(BINDINGS_FLAT)
+#ifndef BINDINGS_FLAT
 static void whisper_load_backends() {
     static std::once_flag flag;
     std::call_once(flag, []() {
@@ -1313,7 +1313,7 @@ static size_t aheads_masks_nbytes(struct whisper_aheads_masks & aheads_masks) {
 static ggml_backend_t whisper_backend_init_gpu(const whisper_context_params & params) {
     ggml_log_set(g_state.log_callback, g_state.log_callback_user_data);
 
-    #if !defined(BINDINGS_FLAT)
+    #ifndef BINDINGS_FLAT
     whisper_load_backends();
     #endif
     
@@ -4323,7 +4323,7 @@ static int whisper_has_openvino(void) {
 const char * whisper_print_system_info(void) {
     static std::string s;
 
-    #if !defined(BINDINGS_FLAT)
+    #ifndef BINDINGS_FLAT
     whisper_load_backends();
     #endif
 
@@ -6780,7 +6780,7 @@ WHISPER_API int whisper_bench_ggml_mul_mat(int n_threads) {
 }
 
 WHISPER_API const char * whisper_bench_ggml_mul_mat_str(int n_threads) {
-    #if !defined(BINDINGS_FLAT)
+    #ifndef BINDINGS_FLAT
     whisper_load_backends();
     #endif
 

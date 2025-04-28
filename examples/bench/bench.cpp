@@ -65,7 +65,8 @@ static int whisper_bench_full(const whisper_params & params) {
     // whisper init
 
     #if defined(GGML_BACKEND_DL) or defined(BINDINGS_FLAT)
-    whisper_flat_backend_load_all();
+    //whisper_flat_backend_load_all();
+    ggml_backend_try_load_best("cpu", nullptr);
     #endif
 
     struct whisper_context_params cparams = whisper_context_default_params();
