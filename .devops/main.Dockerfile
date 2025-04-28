@@ -16,4 +16,5 @@ RUN apt-get update && \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 COPY --from=build /app /app
+ENV PATH=/app/build/bin:$PATH
 ENTRYPOINT [ "bash", "-c" ]

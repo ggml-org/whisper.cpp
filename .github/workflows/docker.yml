@@ -18,6 +18,7 @@ jobs:
       matrix:
         config:
           - { tag: "main", dockerfile: ".devops/main.Dockerfile", platform: "linux/amd64" }
+          - { tag: "main-musa", dockerfile: ".devops/main-musa.Dockerfile", platform: "linux/amd64" }
           #TODO: the cuda image keeps failing - disable for now
           #      https://github.com/ggerganov/whisper.cpp/actions/runs/11019444428/job/30602020339
           #- { tag: "main-cuda", dockerfile: ".devops/main-cuda.Dockerfile", platform: "linux/amd64" }

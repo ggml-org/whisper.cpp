@@ -12,9 +12,12 @@ if (WHISPER_SDL2)
         llama-context.cpp
         llama-cparams.cpp
         llama-grammar.cpp
+        llama-graph.cpp
         llama-hparams.cpp
         llama-impl.cpp
+        llama-io.cpp
         llama-kv-cache.cpp
+        llama-memory.cpp
         llama-mmap.cpp
         llama-model-loader.cpp
         llama-model.cpp

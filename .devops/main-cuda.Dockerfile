@@ -13,8 +13,6 @@ WORKDIR /app
 ARG CUDA_DOCKER_ARCH=all
 # Set nvcc architecture
 ENV CUDA_DOCKER_ARCH=${CUDA_DOCKER_ARCH}
-# Enable cuBLAS
-ENV GGML_CUDA=1
 
 RUN apt-get update && \
     apt-get install -y build-essential libsdl2-dev wget cmake git \
@@ -25,7 +23,8 @@ ENV CUDA_MAIN_VERSION=12.3
 ENV LD_LIBRARY_PATH /usr/local/cuda-${CUDA_MAIN_VERSION}/compat:$LD_LIBRARY_PATH
 
 COPY .. .
-RUN make base.en
+# Enable cuBLAS
+RUN make base.en CMAKE_ARGS="-DGGML_CUDA=1"
 
 FROM ${BASE_CUDA_RUN_CONTAINER} AS runtime
 ENV CUDA_MAIN_VERSION=12.3
@@ -37,4 +36,5 @@ RUN apt-get update && \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 COPY --from=build /app /app
+ENV PATH=/app/build/bin:$PATH
 ENTRYPOINT [ "bash", "-c" ]
