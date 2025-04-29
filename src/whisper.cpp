@@ -3732,10 +3732,10 @@ struct whisper_context * whisper_init_with_params_no_state(struct whisper_model_
         params.dtw_token_timestamps = false;
     }
 
-    WHISPER_LOG_INFO("%s: use gpu    = %d (size : %d)\n", __func__, params.use_gpu, sizeof(params.use_gpu));
-    WHISPER_LOG_INFO("%s: flash attn = %d (size : %d)\n", __func__, params.flash_attn, sizeof(params.flash_attn));
-    WHISPER_LOG_INFO("%s: gpu_device = %d (size : %d)\n", __func__, params.gpu_device, sizeof(params.gpu_device));
-    WHISPER_LOG_INFO("%s: dtw        = %d (size : %d)\n", __func__, params.dtw_token_timestamps, sizeof(params.dtw_token_timestamps));
+    WHISPER_LOG_INFO("%s: use gpu    = %d\n", __func__, params.use_gpu);
+    WHISPER_LOG_INFO("%s: flash attn = %d\n", __func__, params.flash_attn);
+    WHISPER_LOG_INFO("%s: gpu_device = %d\n", __func__, params.gpu_device);
+    WHISPER_LOG_INFO("%s: dtw        = %d\n", __func__, params.dtw_token_timestamps);
     WHISPER_LOG_INFO("%s: devices    = %zu\n", __func__, ggml_backend_dev_count());
     WHISPER_LOG_INFO("%s: backends   = %zu\n", __func__, ggml_backend_reg_count());
 
