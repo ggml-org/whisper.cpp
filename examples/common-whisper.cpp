@@ -26,10 +26,6 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 
-#if defined(_MSC_VER)
-#pragma warning(disable: 4244 4267) // possible loss of data
-#endif
-
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>

@@ -19,10 +19,6 @@
 #include <windows.h>
 #endif
 
-#if defined(_MSC_VER)
-#pragma warning(disable: 4244 4267) // possible loss of data
-#endif
-
 // helper function to replace substrings
 static void replace_all(std::string & s, const std::string & search, const std::string & replace) {
     for (size_t pos = 0; ; pos += replace.length()) {

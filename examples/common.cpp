@@ -10,10 +10,6 @@
 #include <regex>
 #include <sstream>
 
-#if defined(_MSC_VER)
-#pragma warning(disable: 4244 4267) // possible loss of data
-#endif
-
 // Function to check if the next argument exists
 static std::string get_next_arg(int& i, int argc, char** argv, const std::string& flag, gpt_params& params) {
     if (i + 1 < argc && argv[i + 1][0] != '-') {
