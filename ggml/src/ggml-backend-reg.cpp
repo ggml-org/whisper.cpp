@@ -591,6 +591,6 @@ ggml_backend_reg_t ggml_backend_try_load_best(const char * name, const char * di
 #else
     bool silent = false;
 #endif
-
+    fprintf(stderr, "Performing ggml_backend_try_load_best(%s)\n", name);
     return ggml_backend_load_best(name, silent, dir_path);
 }
