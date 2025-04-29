@@ -7566,6 +7566,7 @@ static void whisper_log_callback_default(ggml_log_level level, const char * text
     fflush(stderr);
 }
 
+#ifdef BINDINGS_FLAT
 // whisper_get_system_info_json
 // Returns system info as json, useful for language bindings
 // NOTE : While testing features->value always returned an int.
@@ -7625,19 +7626,26 @@ struct whisper_state * whisper_get_state_from_context(struct whisper_context * c
     return ctx->state;
 }
 
-// whisper_get_timings_with_state
-// Just a version of whisper_get_timings that takes state as a parameter
-struct whisper_timings * whisper_get_timings_with_state(struct whisper_state * state) {
+// whisper_get_activity_with_state
+// As the data is in a c++ specific struct
+struct whisper_activity * whisper_get_activity_with_state(struct whisper_state * state) {
     if (state == nullptr) {
         return nullptr;
     }
-    whisper_timings * timings = new whisper_timings;
-    timings->sample_ms = 1e-3f * state->t_sample_us / std::max(1, state->n_sample);
-    timings->encode_ms = 1e-3f * state->t_encode_us / std::max(1, state->n_encode);
-    timings->decode_ms = 1e-3f * state->t_decode_us / std::max(1, state->n_decode);
-    timings->batchd_ms = 1e-3f * state->t_batchd_us / std::max(1, state->n_batchd);
-    timings->prompt_ms = 1e-3f * state->t_prompt_us / std::max(1, state->n_prompt);
-    return timings;
+    whisper_activity * activity = new whisper_activity;
+
+    activity->sample_ms = 1e-3f * state->t_sample_us / std::max(1, state->n_sample);
+    activity->encode_ms = 1e-3f * state->t_encode_us / std::max(1, state->n_encode);
+    activity->decode_ms = 1e-3f * state->t_decode_us / std::max(1, state->n_decode);
+    activity->batchd_ms = 1e-3f * state->t_batchd_us / std::max(1, state->n_batchd);
+    activity->prompt_ms = 1e-3f * state->t_prompt_us / std::max(1, state->n_prompt);
+    activity->n_sample = state->n_sample;
+    activity->n_encode = state->n_encode;
+    activity->n_decode = state->n_decode;
+    activity->n_batchd = state->n_batchd;
+    activity->n_prompt = state->n_prompt;
+
+    return activity;
 }
 
 ggml_backend_t whisper_get_preferred_backend(struct whisper_state * state) {
@@ -7661,3 +7669,4 @@ ggml_backend_t whisper_get_indexed_backend(struct whisper_state* state, size_t i
 size_t whisper_get_backend_count(struct whisper_state* state) {
     return state->backends.size();
 }
+#endif

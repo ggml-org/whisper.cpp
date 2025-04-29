@@ -670,12 +670,27 @@ extern "C" {
     WHISPER_API float whisper_full_get_segment_no_speech_prob_from_state(struct whisper_state * state, int i_segment);
 
     // For whisper-flat.cpp to expose
+    #ifdef BINDINGS_FLAT
+    struct whisper_activity {
+        float sample_ms;
+        float encode_ms;
+        float decode_ms;
+        float batchd_ms;
+        float prompt_ms;
+        int32_t n_sample = 0; // number of tokens sampled
+        int32_t n_encode = 0; // number of encoder calls
+        int32_t n_decode = 0; // number of decoder calls with n_tokens == 1  (text-generation)
+        int32_t n_batchd = 0; // number of decoder calls with n_tokens <  16 (batch decoding)
+        int32_t n_prompt = 0; // number of decoder calls with n_tokens >  1  (prompt encoding)
+    };
+
     const char * whisper_get_system_info_json(void);
     struct whisper_state * whisper_get_state_from_context(struct whisper_context * ctx);
-    struct whisper_timings * whisper_get_timings_with_state(struct whisper_state * state);
+    struct whisper_activity * whisper_get_activity_with_state(struct whisper_state * state);
     ggml_backend_t whisper_get_preferred_backend(struct whisper_state * state);
     ggml_backend_t whisper_get_indexed_backend(struct whisper_state* state, size_t i);
     size_t whisper_get_backend_count(struct whisper_state* state);
+    #endif
 
 #ifdef __cplusplus
 }

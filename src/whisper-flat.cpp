@@ -29,6 +29,7 @@
 
 #include "whisper-flat.h"
 
+#ifdef BINDINGS_FLAT
 void whisper_flat_backend_load_all(void) {
     ggml_backend_load_all();
 }
@@ -41,8 +42,8 @@ struct whisper_state * whisper_flat_get_state_from_context(struct whisper_contex
     return whisper_get_state_from_context(ctx);
 }
 
-struct whisper_timings * whisper_flat_get_timings_with_state(struct whisper_state * state) {
-    return whisper_get_timings_with_state(state);
+struct whisper_activity * whisper_flat_get_activity_with_state(struct whisper_state * state) {
+    return whisper_get_activity_with_state(state);
 }
 
 ggml_backend_t whisper_flat_get_preferred_backend(struct whisper_state * state) {
@@ -56,3 +57,4 @@ ggml_backend_t whisper_flat_get_indexed_backend(struct whisper_state* state, siz
 size_t whisper_flat_get_backend_count(struct whisper_state* state) {
     return whisper_get_backend_count(state);
 }
+#endif
