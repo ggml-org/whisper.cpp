@@ -214,26 +214,22 @@ if (WHISPER_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
-if(MSVC)
+if (MSVC)
     set(MSVC_WARNING_FLAGS
-		/wd4101  # Unreferenced local variable
-		/wd4005  # Macro redefinition
-		/wd4267  # Conversion from 'size_t' to a smaller type, possible loss of data
-		/wd4244  # Conversion from one type to another type, possible loss of data
-		/wd4267  # Duplicate of 4267 above - you might want to remove this duplicate
-		/wd4305  # Truncation from 'type1' to 'type2' (often double to float)
-		/wd4996  # Function or variable may be unsafe/deprecated
+        /wd4101  # Unreferenced local variable
+        /wd4005  # Macro redefinition
+        /wd4065  # switch statement contains 'default' but no 'case' labels
+        /wd4267  # Conversion from 'size_t' to a smaller type, possible loss of data
+        /wd4244  # Conversion from one type to another type, possible loss of ata
+        /wd4805  # Unsafe mix of type
+        /wd4305  # Truncation from 'type1' to 'type2' (often double to float)
+        /wd4996  # Function or variable may be unsafe/deprecated
     )
     function(disable_msvc_warnings target_name)
         target_compile_options(${target_name} PRIVATE ${MSVC_WARNING_FLAGS})
     endfunction()
 
-    disable_msvc_warnings(ggml-base)
-    disable_msvc_warnings(ggml)
-    disable_msvc_warnings(ggml-cpu)
-
     if (WHISPER_BUILD_EXAMPLES)
-        message(STATUS "Disabling MSVC warnings for examples")
         disable_msvc_warnings(common)
         disable_msvc_warnings(common-sdl)
         disable_msvc_warnings(lsp)
