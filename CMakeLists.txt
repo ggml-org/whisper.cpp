@@ -226,7 +226,9 @@ if (MSVC)
         /wd4996  # Function or variable may be unsafe/deprecated
     )
     function(disable_msvc_warnings target_name)
-        target_compile_options(${target_name} PRIVATE ${MSVC_WARNING_FLAGS})
+        if(TARGET ${target_name})
+            target_compile_options(${target_name} PRIVATE ${MSVC_WARNING_FLAGS})
+        endif()
     endfunction()
 
     if (WHISPER_BUILD_EXAMPLES)
