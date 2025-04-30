@@ -48,10 +48,10 @@ tiny.en tiny base.en base small.en small medium.en medium large-v1 large-v2 larg
 	@echo "Running $@ on all samples in ./samples ..."
 	@echo "==============================================="
 	@echo ""
-	@for f in samples/*$(.flac .mp3 .ogg .wav); do \
+	@for f in samples/*.{flac,mp3,ogg,wav}; do \
 		echo "----------------------------------------------" ; \
 		echo "[+] Running $@ on $$f ... (run 'ffplay $$f' to listen)" ; \
-	    echo "----------------------------------------------" ; \
+		echo "----------------------------------------------" ; \
 		echo "" ; \
 		./build/bin/whisper-cli -m models/ggml-$@.bin -f $$f ; \
 		echo "" ; \
