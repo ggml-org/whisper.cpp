@@ -22,7 +22,7 @@ extern "C" {
 #endif
 
     #ifdef GGML_BINDINGS_FLAT
-    GGML_FLAT_API void ggml_flat_test(void);
+    GGML_FLAT_API ggml_backend_reg_t ggml_backend_try_load_best(const char * name, const char * dir_path);
     #endif
 
 #ifdef  __cplusplus

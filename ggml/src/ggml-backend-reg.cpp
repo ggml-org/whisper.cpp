@@ -24,6 +24,10 @@
 #    include <unistd.h>
 #endif
 
+#ifdef GGML_BINDINGS_FLAT
+#include "ggml-flat.h"
+#endif
+
 // Backend registry
 #ifdef GGML_USE_CPU
 #include "ggml-cpu.h"
@@ -585,8 +589,9 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     }
 }
 
+#if defined(GGML_BINDINGS_FLAT)
 ggml_backend_reg_t ggml_backend_try_load_best(const char * name, const char * dir_path) {
-#ifdef NDEBUG
+#ifdef defined(NDEBUG)
     bool silent = true;
 #else
     bool silent = false;
@@ -594,3 +599,4 @@ ggml_backend_reg_t ggml_backend_try_load_best(const char * name, const char * di
     fprintf(stderr, "Performing ggml_backend_try_load_best(%s)\n", name);
     return ggml_backend_load_best(name, silent, dir_path);
 }
+#endif

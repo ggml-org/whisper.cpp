@@ -30,10 +30,9 @@
 #include "ggml-flat.h"
 
 #ifdef GGML_BINDINGS_FLAT
-  void ggml_flat_test(void) {
-  }
-#endif
+//    ggml_backend_reg_t ggml_backend_try_load_best(const char * name, const char * dir_path);
 
+#endif
 
 
 
