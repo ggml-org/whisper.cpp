@@ -1,7 +1,6 @@
 #include "whisper.h"
 #ifdef BINDINGS_FLAT
 #include "whisper-flat.h"
-#include "../ggml/src/ggml-flat.h"
 #endif
 
 #include <cstdio>
