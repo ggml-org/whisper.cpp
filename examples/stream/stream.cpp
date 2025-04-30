@@ -6,7 +6,7 @@
 #include "common.h"
 #include "common-whisper.h"
 #include "whisper.h"
-#ifdef GGML_BINDINGS_FLAT
+#ifdef BINDINGS_FLAT
 #include "whisper-flat.h"
 #endif
 
@@ -158,7 +158,7 @@ int main(int argc, char ** argv) {
         exit(0);
     }
 
-    #ifdef GGML_BINDINGS_FLAT
+    #ifdef BINDINGS_FLAT
     whisper_flat_backend_load_all();
     #endif
 

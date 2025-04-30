@@ -2,7 +2,7 @@
 #include "common-whisper.h"
 
 #include "whisper.h"
-#ifdef GGML_BINDINGS_FLAT
+#ifdef BINDINGS_FLAT
 #include "whisper-flat.h"
 #endif
 #include "httplib.h"
@@ -547,7 +547,7 @@ int main(int argc, char ** argv) {
         check_ffmpeg_availibility();
     }
     // whisper init
-    #ifdef GGML_BINDINGS_FLAT
+    #ifdef BINDINGS_FLAT
     whisper_flat_backend_load_all();
     #endif
 

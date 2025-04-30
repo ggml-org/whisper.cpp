@@ -91,6 +91,12 @@ target_include_directories(json_cpp INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # examples
 
+if(BINDINGS_FLAT)
+    message(STATUS "Adding FLAT binding to examples")
+    add_compile_options(-DBINDINGS_FLAT)
+endif()
+
+
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 if (EMSCRIPTEN)

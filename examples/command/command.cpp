@@ -9,7 +9,7 @@
 #include "common-sdl.h"
 #include "common.h"
 #include "whisper.h"
-#ifdef GGML_BINDINGS_FLAT
+#ifdef BINDINGS_FLAT
 #include "whisper-flat.h"
 #endif
 #include "grammar-parser.h"
@@ -695,7 +695,7 @@ int main(int argc, char ** argv) {
 
     // whisper init
 
-    #ifdef GGML_BINDINGS_FLAT
+    #ifdef BINDINGS_FLAT
     whisper_flat_backend_load_all();
     #endif
 

@@ -217,8 +217,8 @@ if(BINDINGS_FLAT)
     set(FLAT_GGML_SOURCES
        ggml-flat.cpp
        )
-       
     list(APPEND GGML_LIBRARY_SOURCES ${FLAT_GGML_SOURCES})
+    add_compile_options(-DGGML_BINDINGS_FLAT)
 endif()
 
 add_library(ggml

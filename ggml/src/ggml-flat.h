@@ -21,7 +21,9 @@
 extern "C" {
 #endif
 
-
+    #ifdef GGML_BINDINGS_FLAT
+    GGML_FLAT_API void ggml_flat_test(void);
+    #endif
 
 #ifdef  __cplusplus
 }

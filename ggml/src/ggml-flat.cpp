@@ -29,6 +29,10 @@
 
 #include "ggml-flat.h"
 
+#ifdef GGML_BINDINGS_FLAT
+  void ggml_flat_test(void) {
+  }
+#endif
 
 
 
