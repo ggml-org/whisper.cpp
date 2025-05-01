@@ -589,13 +589,9 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     }
 }
 
-#if defined(GGML_BINDINGS_FLAT)
+#ifdef GGML_BINDINGS_FLAT
 ggml_backend_reg_t ggml_backend_try_load_best(const char * name, const char * dir_path) {
-#ifdef defined(NDEBUG)
     bool silent = true;
-#else
-    bool silent = false;
-#endif
     fprintf(stderr, "Performing ggml_backend_try_load_best(%s)\n", name);
     return ggml_backend_load_best(name, silent, dir_path);
 }
