@@ -118,18 +118,7 @@ class TestWhisper < TestBase
     dev = StringIO.new("")
     $stderr = dev
     Whisper::Context.new("base.en")
-
-    # Filter out any lines starting with "Downloading" or containing only dots.
-    # The reason for this is that I think the recent migration to Huggingface
-    # Xet might have changed the downloading behavior. There is now a redirect
-    # to a different URL, which causes the download to be retried even if the
-    # file is already downloaded.
-    # TODO(danbev) Remove this when a proper fix is in place.
-    filtered_output = dev.string.lines.reject do |line|
-      line.start_with?("Downloading") || line.strip =~ /^\.+$/
-    end.join
-
-    assert_empty filtered_output, "Expected no output, but got: #{filtered_output.inspect}"
+    assert_empty dev.string
   ensure
     $stderr = stderr
   end
