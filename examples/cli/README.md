@@ -6,7 +6,7 @@ It can be used as a reference for using the `whisper.cpp` library in other proje
 ```
 ./build/bin/whisper-cli -h
 
-usage: ./build-pkg/bin/whisper-cli [options] file0 file1 ...
+usage: ./build/bin/whisper-cli [options] file0 file1 ...
 supported audio formats: flac, mp3, ogg, wav
 
 options:
