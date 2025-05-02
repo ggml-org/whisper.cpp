@@ -6,7 +6,8 @@ It can be used as a reference for using the `whisper.cpp` library in other proje
 ```
 ./build/bin/whisper-cli -h
 
-usage: ./build-pkg/bin/whisper-cli [options] file0.wav file1.wav ...
+usage: ./build/bin/whisper-cli [options] file0 file1 ...
+supported audio formats: flac, mp3, ogg, wav
 
 options:
   -h,        --help              [default] show this help message and exit
@@ -24,6 +25,7 @@ options:
   -wt N,     --word-thold N      [0.01   ] word timestamp probability threshold
   -et N,     --entropy-thold N   [2.40   ] entropy threshold for decoder fail
   -lpt N,    --logprob-thold N   [-1.00  ] log probability threshold for decoder fail
+  -nth N,    --no-speech-thold N [0.60   ] no speech threshold
   -tp,       --temperature N     [0.00   ] The sampling temperature, between 0 and 1
   -tpi,      --temperature-inc N [0.20   ] The increment of temperature, between 0 and 1
   -debug,    --debug-mode        [false  ] enable debug mode (eg. dump log_mel)
@@ -50,12 +52,13 @@ options:
   -dl,       --detect-language   [false  ] exit after automatically detecting language
              --prompt PROMPT     [       ] initial prompt (max n_text_ctx/2 tokens)
   -m FNAME,  --model FNAME       [models/ggml-base.en.bin] model path
-  -f FNAME,  --file FNAME        [       ] input WAV file path
+  -f FNAME,  --file FNAME        [       ] input audio file path
   -oved D,   --ov-e-device DNAME [CPU    ] the OpenVINO device used for encode inference
   -dtw MODEL --dtw MODEL         [       ] compute token-level timestamps
   -ls,       --log-score         [false  ] log best decoder scores of tokens
   -ng,       --no-gpu            [false  ] disable GPU
   -fa,       --flash-attn        [false  ] flash attention
+  -sns,      --suppress-nst      [false  ] suppress non-speech tokens
   --suppress-regex REGEX         [       ] regular expression matching tokens to suppress
   --grammar GRAMMAR              [       ] GBNF grammar to guide decoding
   --grammar-rule RULE            [       ] top-level GBNF grammar rule name

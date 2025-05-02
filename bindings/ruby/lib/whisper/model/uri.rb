@@ -55,6 +55,8 @@ module Whisper
             when Net::HTTPNotModified
               # noop
             when Net::HTTPOK
+              return if !response.key?("last-modified") && cache_path.exist?
+
               download response
             when Net::HTTPRedirection
               request URI(response["location"]), headers
