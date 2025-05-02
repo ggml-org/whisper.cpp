@@ -109,6 +109,9 @@ struct dl_handle_deleter {
 
 static dl_handle * dl_load_library(const fs::path & path) {
     // suppress error dialogs for missing DLLs
+    #ifdef GGML_BINDINGS_FLAT // sbdbg
+    fprintf(stderr, "dl_load_library()%s",path.wstring().c_str()); // sbdbg
+    #endif // sbdbg
     DWORD old_mode = SetErrorMode(SEM_FAILCRITICALERRORS);
     SetErrorMode(old_mode | SEM_FAILCRITICALERRORS);
 
