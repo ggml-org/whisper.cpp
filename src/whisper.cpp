@@ -952,6 +952,15 @@ struct whisper_state {
 
     // [EXPERIMENTAL] speed-up techniques
     int32_t exp_n_audio_ctx = 0; // 0 - use default
+
+    struct vad_segment_info {
+        float orig_start;
+        float orig_end;
+        float vad_start;
+        float vad_end;
+    };
+    std::vector<vad_segment_info> vad_segments;
+    bool has_vad_segments = false;
 };
 
 struct whisper_context {
@@ -6699,6 +6708,10 @@ int whisper_full_with_state(
         struct whisper_vad_timestamps timestamps = whisper_vad_detect_speech_timestamps(vctx, vad_params, samples, n_samples);
 
         if (timestamps.n_segments > 0) {
+            state->has_vad_segments = true;
+            ctx->state->vad_segments.clear();
+            ctx->state->vad_segments.reserve(timestamps.n_segments);
+
             WHISPER_LOG_INFO("%s: detected %d speech segments\n", __func__, timestamps.n_segments);
             float overlap_seconds = params.vad_samples_overlap;
             int overlap_samples = overlap_seconds * WHISPER_SAMPLE_RATE;
@@ -6748,6 +6761,19 @@ int whisper_full_with_state(
                 int segment_length = segment_end_samples - segment_start_samples;
 
                 if (segment_length > 0) {
+                    whisper_state::vad_segment_info segment;
+
+                    segment.orig_start = timestamps.segments[i].start;
+                    segment.orig_end = timestamps.segments[i].end;
+
+                    segment.vad_start = offset / (float)WHISPER_SAMPLE_RATE;
+                    segment.vad_end =  (offset + segment_length) / (float)WHISPER_SAMPLE_RATE;
+
+
+                    WHISPER_LOG_INFO("%s: vad_segment_info: orig_start: %.2f, orig_end: %.2f, vad_start: %.2f, vad_end: %.2f\n",
+                        __func__, segment.orig_start, segment.orig_end, segment.vad_start, segment.vad_end);
+                    ctx->state->vad_segments.push_back(segment);
+
                     // Copy this speech segment
                     memcpy(filtered_samples + offset, samples + segment_start_samples, segment_length * sizeof(float));
                     offset += segment_length;
@@ -7822,19 +7848,132 @@ int whisper_full_lang_id(struct whisper_context * ctx) {
 }
 
 int64_t whisper_full_get_segment_t0_from_state(struct whisper_state * state, int i_segment) {
-    return state->result_all[i_segment].t0;
+    // If VAD wasn't used, return the original timestamp
+    if (!state->has_vad_segments || state->vad_segments.empty()) {
+        return state->result_all[i_segment].t0;
+    }
+
+    // For the first segment, always start at 0
+    if (i_segment == 0) {
+        return 0;
+    }
+
+    // Get the start timestamp produced by whisper_full. whisper_full processes
+    // only the speech segments in this case so we need to map these timestamps
+    // back to the original audio.
+    float t0 = state->result_all[i_segment].t0 / 100.0f;
+
+    // Find which VAD segment this timestamp belongs.
+    for (size_t i = 0; i < state->vad_segments.size(); i++) {
+        const auto& segment = state->vad_segments[i];
+
+        // Check if the timestamp falls within this segment.
+        if (t0 >= segment.vad_start && t0 <= segment.vad_end) {
+            float proportion = 0.0f;
+            if (segment.vad_end > segment.vad_start) {
+                proportion = (t0 - segment.vad_start) / (segment.vad_end - segment.vad_start);
+            }
+            float orig_t0 = segment.orig_start + proportion * (segment.orig_end - segment.orig_start);
+            return (int64_t)(orig_t0 * 100);
+        }
+    }
+
+    // Check if the timestamp falls between two segments.
+    for (size_t i = 0; i < state->vad_segments.size() - 1; i++) {
+        const auto & curr = state->vad_segments[i];
+        const auto & next = state->vad_segments[i + 1];
+
+        if (t0 > curr.vad_end && t0 < next.vad_start) {
+            // Calculate how far we are through the gap as a proportion
+            float gap_proportion = 0.0f;
+            if (next.vad_start > curr.vad_end) {
+                gap_proportion = (t0 - curr.vad_end) / (next.vad_start - curr.vad_end);
+            }
+            float orig_t0 = curr.orig_end + gap_proportion * (next.orig_start - curr.orig_end);
+            return (int64_t)(orig_t0 * 100);
+        }
+    }
+
+    // Handle the case where the timestamp is after the last segment.
+    if (t0 > state->vad_segments.back().vad_end) {
+        // For timestamps after the last segment, add the extra time to the end of the last segment
+        const auto& last = state->vad_segments.back();
+        // Calculate how far beyond the last segment
+        float extra_time = t0 - last.vad_end;
+        // Add this extra time to the original end time
+        float orig_t0 = last.orig_end + extra_time;
+        return (int64_t)(orig_t0 * 100);
+    }
+
+    WHISPER_LOG_WARN("%s: Could not map t0 = %f to a VAD segment\n", __func__, t0);
+    return t0;
 }
 
 int64_t whisper_full_get_segment_t0(struct whisper_context * ctx, int i_segment) {
-    return ctx->state->result_all[i_segment].t0;
+    return whisper_full_get_segment_t0_from_state(ctx->state, i_segment);
 }
 
 int64_t whisper_full_get_segment_t1_from_state(struct whisper_state * state, int i_segment) {
-    return state->result_all[i_segment].t1;
+    // If VAD wasn't used, return the original timestamp
+    if (!state->has_vad_segments || state->vad_segments.empty()) {
+        return state->result_all[i_segment].t1;
+    }
+
+    // Get the end timestamp produced by whisper_full. whisper_full processes
+    // only the speech segments in this case so we need to map these timestamps
+    // back to the original audio.
+    float t1 = state->result_all[i_segment].t1 / 100.0f;
+
+    // Find which VAD segment this timestamp belongs.
+    for (size_t i = 0; i < state->vad_segments.size(); i++) {
+        const auto& segment = state->vad_segments[i];
+
+        // Check if the timestamp falls within this segment.
+        if (t1 >= segment.vad_start && t1 <= segment.vad_end) {
+            // Calculate the proportion through the filtered segment.
+            float proportion = 0.0f;
+            if (segment.vad_end > segment.vad_start) {
+                proportion = (t1 - segment.vad_start) / (segment.vad_end - segment.vad_start);
+            }
+            float orig_t1 = segment.orig_start + proportion * (segment.orig_end - segment.orig_start);
+            return (int64_t)(orig_t1 * 100);
+        }
+    }
+
+    // Check if the timestamp falls between two segments.
+    for (size_t i = 0; i < state->vad_segments.size() - 1; i++) {
+        const auto & curr = state->vad_segments[i];
+        const auto & next = state->vad_segments[i + 1];
+
+        if (t1 > curr.vad_end && t1 < next.vad_start) {
+            // Calculate how far we are through the gap as a proportion
+            float gap_proportion = 0.0f;
+            if (next.vad_start > curr.vad_end) {
+                gap_proportion = (t1 - curr.vad_end) / (next.vad_start - curr.vad_end);
+            }
+            // Map to the corresponding position in the original gap
+            float orig_t1 = curr.orig_end + gap_proportion * (next.orig_start - curr.orig_end);
+            return (int64_t)(orig_t1 * 100);
+        }
+    }
+
+    // Handle the case where the timestamp is after the last segment
+    if (t1 > state->vad_segments.back().vad_end) {
+        // For the last segment, use the end of the last VAD segment
+        const auto& last = state->vad_segments.back();
+        // Calculate how far beyond the last segment
+        float extra_time = t1 - last.vad_end;
+        // Add this extra time to the original end time
+        float orig_t1 = last.orig_end + extra_time;
+        return (int64_t)(orig_t1 * 100);
+    }
+
+    WHISPER_LOG_WARN("%s: Could not map t1 = %f to a VAD segment\n", __func__, t1);
+    return t1;
 }
 
 int64_t whisper_full_get_segment_t1(struct whisper_context * ctx, int i_segment) {
-    return ctx->state->result_all[i_segment].t1;
+    return whisper_full_get_segment_t1_from_state(ctx->state, i_segment);
 }
 
 bool whisper_full_get_segment_speaker_turn_next_from_state(struct whisper_state * state, int i_segment) {

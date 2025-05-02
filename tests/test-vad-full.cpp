@@ -41,10 +41,14 @@ int main() {
 
     const int n_segments = whisper_full_n_segments(wctx);
     assert(n_segments == 2);
+
     assert(strcmp("And so my fellow Americans ask not what you country can do for you.",
            whisper_full_get_segment_text(wctx, 0)));
     assert(strcmp("Ask what you can do for your country.",
            whisper_full_get_segment_text(wctx, 1)));
+
+    assert(whisper_full_get_segment_t0(wctx, 0) == 0);
+    assert(whisper_full_get_segment_t1(wctx, 1) == 1047);
 
     whisper_free(wctx);
 
