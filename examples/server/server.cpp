@@ -549,6 +549,7 @@ int main(int argc, char ** argv) {
     }
     // whisper init
     #ifdef BINDINGS_FLAT
+    fprintf(stderr, "+++ BINDINGS_FLAT +++\n");
     whisper_flat_backend_load_all();
     #endif
 

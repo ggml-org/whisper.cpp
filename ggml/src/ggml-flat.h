@@ -1,6 +1,7 @@
 #pragma once
 
 #ifdef BINDINGS_FLAT
+#define GGML_BINDINGS_FLAT
 #endif
 
 #ifdef GGML_SHARED
