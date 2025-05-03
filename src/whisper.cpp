@@ -6793,8 +6793,10 @@ int whisper_full_with_state(
 
             if (whisper_pcm_to_mel_with_state(ctx, state, filtered_samples, filtered_n_samples, params.n_threads) != 0) {
                 WHISPER_LOG_ERROR("%s: failed to compute log mel spectrogram\n", __func__);
+                free(filtered_samples);
                 return -2;
             }
+            free(filtered_samples);
         } else {
             WHISPER_LOG_INFO("%s: VAD: No speech detected in audio\n", __func__);
             // Abort processing if there is not audio detected?
