@@ -27,7 +27,7 @@ int main() {
             whisper_model_path.c_str(),
             cparams);
 
-    struct whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    struct whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
     wparams.vad                         = true;
     wparams.vad_model_path              = vad_model_path.c_str();
     wparams.vad_threshold               = 0.5f;
@@ -40,15 +40,13 @@ int main() {
     assert(whisper_full_parallel(wctx, wparams, pcmf32.data(), pcmf32.size(), 1) == 0);
 
     const int n_segments = whisper_full_n_segments(wctx);
-    assert(n_segments == 2);
+    assert(n_segments == 1);
 
-    assert(strcmp("And so my fellow Americans ask not what you country can do for you.",
-           whisper_full_get_segment_text(wctx, 0)));
-    assert(strcmp("Ask what you can do for your country.",
-           whisper_full_get_segment_text(wctx, 1)));
-
+    assert(strcmp(" And so my fellow Americans, ask not what your country can do for you,"
+                  " ask what you can do for your country.",
+           whisper_full_get_segment_text(wctx, 0)) == 0);
     assert(whisper_full_get_segment_t0(wctx, 0) == 0);
-    assert(whisper_full_get_segment_t1(wctx, 1) == 1047);
+    assert(whisper_full_get_segment_t1(wctx, 0) == 1049);
 
     whisper_free(wctx);
 
