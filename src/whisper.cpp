@@ -4875,12 +4875,15 @@ struct whisper_vad_context * whisper_vad_init_with_params_no_state(struct whispe
     buft_list_t buft_list = make_buft_list(wparams);
 
     auto create_tensor = [&](vad_tensor type, ggml_tensor * meta) -> ggml_tensor * {
+        /* TODO: Should GPU backend be used for VAD processing?
         ggml_op op = VAD_TENSOR_OPS.at(type);
         ggml_backend_buffer_type_t buft = select_weight_buft(hparams, meta, op, buft_list);
         if (!buft) {
             throw std::runtime_error(format("failed to find a compatible buffer type for tensor %s", VAD_TENSOR_NAMES.at(type)));
         }
-
+        */
+        // Only use CPU backend for now.
+        ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
         ggml_context * ctx = get_ctx(buft);
         ggml_tensor * tensor = ggml_dup_tensor(ctx, meta);
         model.tensors[VAD_TENSOR_NAMES.at(type)] = tensor;
