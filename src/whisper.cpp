@@ -7879,6 +7879,9 @@ int64_t whisper_full_get_segment_t0_from_state(struct whisper_state * state, int
     float t0 = state->result_all[i_segment].t0 / 100.0f;
 
     // Find which VAD segment this timestamp belongs.
+    // TODO(danbev) This could be optimized by using a binary search if the number
+    // of segments exceed a certain limit. Also we might be able to assume that
+    // the access pattern is sequential and optimized for that too.
     for (size_t i = 0; i < state->vad_segments.size(); i++) {
         const auto& segment = state->vad_segments[i];
 
@@ -7940,6 +7943,9 @@ int64_t whisper_full_get_segment_t1_from_state(struct whisper_state * state, int
     float t1 = state->result_all[i_segment].t1 / 100.0f;
 
     // Find which VAD segment this timestamp belongs.
+    // TODO(danbev) This could be optimized by using a binary search if the number
+    // of segments exceed a certain limit. Also we might be able to assume that
+    // the access pattern is sequential and optimized for that too.
     for (size_t i = 0; i < state->vad_segments.size(); i++) {
         const auto& segment = state->vad_segments[i];
 
