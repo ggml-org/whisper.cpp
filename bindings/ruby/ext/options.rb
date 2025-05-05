@@ -61,6 +61,7 @@ class Options
 
   def configure
     filepath "ACCELERATE_FRAMEWORK"
+    ignored "BINDINGS_FLAT"
     ignored "BUILD_SHARED_LIBS"
     ignored "BUILD_TESTING"
     ignored "CMAKE_BUILD_TYPE"
@@ -83,6 +84,7 @@ class Options
     bool "GGML_AVX_VNNI"
     ignored "GGML_BACKEND_DL"
     ignored "GGML_BIN_INSTALL_DIR"
+    ignored "GGML_BINDINGS_FLAT"
     bool "GGML_BLAS"
     string "GGML_BLAS_VENDOR"
     bool "GGML_BMI2"
