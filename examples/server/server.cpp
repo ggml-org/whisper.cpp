@@ -17,10 +17,6 @@
 #include <thread>
 #include <vector>
 
-#if defined(_MSC_VER)
-#pragma warning(disable: 4244 4267) // possible loss of data
-#endif
-
 using namespace httplib;
 using json = nlohmann::ordered_json;
 
@@ -851,33 +847,25 @@ int main(int argc, char ** argv) {
                 wparams.progress_callback_user_data = &user_data;
             }
 
-            // examples for abort mechanism
-            // in examples below, we do not abort the processing, but we could if the flag is set to true
-
-            // the callback is called before every encoder run - if it returns false, the processing is aborted
-            {
-                static bool is_aborted = false; // NOTE: this should be atomic to avoid data race
-
-                wparams.encoder_begin_callback = [](struct whisper_context * /*ctx*/, struct whisper_state * /*state*/, void * user_data) {
-                    bool is_aborted = *(bool*)user_data;
-                    return !is_aborted;
-                };
-                wparams.encoder_begin_callback_user_data = &is_aborted;
-            }
-
-            // the callback is called before every computation - if it returns true, the computation is aborted
-            {
-                static bool is_aborted = false; // NOTE: this should be atomic to avoid data race
-
-                wparams.abort_callback = [](void * user_data) {
-                    bool is_aborted = *(bool*)user_data;
-                    return is_aborted;
-                };
-                wparams.abort_callback_user_data = &is_aborted;
-            }
+            // tell whisper to abort if the HTTP connection closed
+            wparams.abort_callback = [](void *user_data) {
+                // user_data is a pointer to our Request
+                auto req_ptr = static_cast<const httplib::Request*>(user_data);
+                return req_ptr->is_connection_closed();
+            };
+            wparams.abort_callback_user_data = (void*)&req;
 
             if (whisper_full_parallel(ctx, wparams, pcmf32.data(), pcmf32.size(), params.n_processors) != 0) {
+                // handle failure or early abort
+                if (req.is_connection_closed()) {
+                    // log client disconnect
+                    fprintf(stderr, "client disconnected, aborted processing\n");
+                    res.status = 499; // Client Closed Request (nginx convention)
+                    res.set_content("{\"error\":\"client disconnected\"}", "application/json");
+                    return;
+                }
                 fprintf(stderr, "%s: failed to process audio\n", argv[0]);
+                res.status = 500; // Internal Server Error
                 const std::string error_resp = "{\"error\":\"failed to process audio\"}";
                 res.set_content(error_resp, "application/json");
                 return;

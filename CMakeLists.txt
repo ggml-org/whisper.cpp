@@ -236,6 +236,7 @@ if (MSVC)
     endfunction()
 
     if (WHISPER_BUILD_EXAMPLES)
+        disable_msvc_warnings(whisper)
         disable_msvc_warnings(common)
         disable_msvc_warnings(common-sdl)
         disable_msvc_warnings(lsp)
