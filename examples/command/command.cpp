@@ -336,6 +336,15 @@ static int process_command_list(struct whisper_context * ctx, audio_async &audio
 
     std::vector<float> pcmf32_cur;
     std::vector<float> pcmf32_prompt;
+    FILE *out_stream = NULL;
+    if (!params.fname_out.empty()) {
+      out_stream = fopen(params.fname_out.c_str(), "a");
+      if (out_stream == NULL) {
+        fprintf(stderr, "%s: error: opening of \"%s\" failed!\n", __func__, params.fname_out.c_str());
+        perror(NULL);
+        return 5;
+      }
+    }
 
     // main loop
     while (is_running) {
@@ -450,6 +459,11 @@ static int process_command_list(struct whisper_context * ctx, audio_async &audio
                             "\033[1m", allowed_commands[index].c_str(), "\033[0m", prob,
                             (int) std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count());
                     fprintf(stdout, "\n");
+
+                    if (out_stream != NULL) {
+                        fprintf(out_stream, "%f\t%s\n", prob, allowed_commands[index].c_str());
+                        fflush(out_stream);
+                    }
                 }
             }
 
@@ -457,6 +471,9 @@ static int process_command_list(struct whisper_context * ctx, audio_async &audio
         }
     }
 
+    if (out_stream != NULL) {
+        fclose(out_stream);
+    }
     return 0;
 }
 
@@ -558,6 +575,15 @@ static int process_general_transcription(struct whisper_context * ctx, audio_asy
 
     std::vector<float> pcmf32_cur;
     std::vector<float> pcmf32_prompt;
+    FILE *out_stream = NULL;
+    if (!params.fname_out.empty()) {
+      out_stream = fopen(params.fname_out.c_str(), "a");
+      if (out_stream == NULL) {
+        fprintf(stderr, "%s: error: opening of \"%s\" failed!\n", __func__, params.fname_out.c_str());
+        perror(NULL);
+        return 1;
+      }
+    }
 
     std::string k_prompt = "Ok Whisper, start listening for commands.";
     if (!params.prompt.empty()) {
@@ -664,6 +690,10 @@ static int process_general_transcription(struct whisper_context * ctx, audio_asy
                         const std::string command = ::trim(txt.substr(best_len));
 
                         fprintf(stdout, "%s: Command '%s%s%s', (t = %d ms)\n", __func__, "\033[1m", command.c_str(), "\033[0m", (int) t_ms);
+                        if (out_stream != NULL) {
+                          fprintf(out_stream, "%f\t%s\n", p/100.0, command.c_str());
+                          fflush(out_stream);
+                        }
                     }
 
                     fprintf(stdout, "\n");
@@ -673,6 +703,10 @@ static int process_general_transcription(struct whisper_context * ctx, audio_asy
             }
         }
     }
+    if (out_stream != NULL) {
+        fclose(out_stream);
+    }
+
 
     return 0;
 }
