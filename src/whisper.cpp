@@ -7881,7 +7881,7 @@ int64_t whisper_full_get_segment_t0_from_state(struct whisper_state * state, int
     // of segments exceed a certain limit. Also we might be able to assume that
     // the access pattern is sequential and optimized for that too.
     for (size_t i = 0; i < state->vad_segments.size(); i++) {
-        const auto& segment = state->vad_segments[i];
+        const auto & segment = state->vad_segments[i];
 
         // Check if the timestamp falls within this segment.
         if (t0 >= segment.vad_start && t0 <= segment.vad_end) {
