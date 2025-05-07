@@ -6,7 +6,7 @@
 #include "common.h"
 #include "common-whisper.h"
 #include "whisper.h"
-#ifdef BINDINGS_FLAT
+#ifdef WHISPER_BINDINGS_FLAT
 #include "whisper-flat.h"
 #include "../ggml/src/ggml-flat.h"
 #endif
@@ -159,8 +159,8 @@ int main(int argc, char ** argv) {
         exit(0);
     }
 
-    #ifdef BINDINGS_FLAT
-    fprintf(stderr, "+++ BINDINGS_FLAT +++\n");
+    #ifdef WHISPER_BINDINGS_FLAT
+    fprintf(stderr, "+++ WHISPER_BINDINGS_FLAT +++\n");
     if(params.use_gpu) {
         whisper_flat_backend_load_all();
     } else {

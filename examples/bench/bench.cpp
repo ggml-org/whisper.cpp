@@ -1,5 +1,5 @@
 #include "whisper.h"
-#ifdef BINDINGS_FLAT
+#ifdef WHISPER_BINDINGS_FLAT
 #include "whisper-flat.h"
 #include "../ggml/src/ggml-flat.h"
 #endif
@@ -65,8 +65,8 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
 static int whisper_bench_full(const whisper_params & params) {
     // whisper init
 
-    #ifdef BINDINGS_FLAT
-    fprintf(stderr, "+++ BINDINGS_FLAT +++\n");
+    #ifdef WHISPER_BINDINGS_FLAT
+    fprintf(stderr, "+++ WHISPER_BINDINGS_FLAT +++\n");
     if(params.use_gpu) {
         whisper_flat_backend_load_all();
     } else {

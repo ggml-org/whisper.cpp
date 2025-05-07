@@ -211,7 +211,7 @@ endif()
 set(GGML_LIBRARY_SOURCES
     ggml-backend-reg.cpp)
     
-if(BINDINGS_FLAT)
+if(WHISPER_BINDINGS_FLAT)
     message(STATUS "Adding FLAT GGML binding extras")
 
     set(FLAT_GGML_SOURCES

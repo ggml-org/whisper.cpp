@@ -61,7 +61,6 @@ class Options
 
   def configure
     filepath "ACCELERATE_FRAMEWORK"
-    ignored "BINDINGS_FLAT"
     ignored "BUILD_SHARED_LIBS"
     ignored "BUILD_TESTING"
     ignored "CMAKE_BUILD_TYPE"
@@ -167,6 +166,7 @@ class Options
     bool "WHISPER_ALL_WARNINGS"
     bool "WHISPER_ALL_WARNINGS_3RD_PARTY"
     ignored "WHISPER_BIN_INSTALL_DIR"
+    ignored "WHISPER_BINDINGS_FLAT"
     ignored "WHISPER_BUILD_EXAMPLES"
     ignored "WHISPER_BUILD_SERVER"
     ignored"WHISPER_BUILD_TESTS"

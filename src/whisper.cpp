@@ -204,7 +204,7 @@ static bool ggml_graph_compute_helper(
     return t;
 }
 
-#ifndef BINDINGS_FLAT
+#ifndef WHISPER_BINDINGS_FLAT
 static void whisper_load_backends() {
     static std::once_flag flag;
     std::call_once(flag, []() {
@@ -1309,7 +1309,7 @@ static size_t aheads_masks_nbytes(struct whisper_aheads_masks & aheads_masks) {
 static ggml_backend_t whisper_backend_init_gpu(const whisper_context_params & params) {
     ggml_log_set(g_state.log_callback, g_state.log_callback_user_data);
 
-    #ifndef BINDINGS_FLAT
+    #ifndef WHISPER_BINDINGS_FLAT
     whisper_load_backends();
     #endif
     
@@ -4328,7 +4328,7 @@ static int whisper_has_openvino(void) {
 const char * whisper_print_system_info(void) {
     static std::string s;
 
-    #ifndef BINDINGS_FLAT
+    #ifndef WHISPER_BINDINGS_FLAT
     whisper_load_backends();
     #endif
 
@@ -6785,7 +6785,7 @@ WHISPER_API int whisper_bench_ggml_mul_mat(int n_threads) {
 }
 
 WHISPER_API const char * whisper_bench_ggml_mul_mat_str(int n_threads) {
-    #ifndef BINDINGS_FLAT
+    #ifndef WHISPER_BINDINGS_FLAT
     whisper_load_backends();
     #endif
 
@@ -7562,7 +7562,15 @@ static void whisper_log_callback_default(ggml_log_level level, const char * text
     fflush(stderr);
 }
 
-#ifdef BINDINGS_FLAT
+#ifdef WHISPER_BINDINGS_FLAT
+// The optional WHISPER_BINDINGS_FLAT code is of limited use for most
+// developers. The intended audience is those who are binding to
+// another language. 
+// C++ specific constructs such as, but not limited to, std:vector 
+// are used frequently but unavailable to non-C++ developers. 
+// As such it is placed at the end of source in recognition of its 
+// limited appeal
+
 // whisper_get_system_info_json
 // Returns system info as json, useful for language bindings
 // NOTE : While testing features->value always returned an int.
@@ -7614,6 +7622,9 @@ const char * whisper_get_system_info_json(void) {
 // Returns state from supplied context pointer
 // This is mainly a helper for non-C++ language bindings as whisper_context
 // has embedded C++ specific types (e.g. maps and vectors)
+// The returned whisper_state value can be treated as a an opaque object
+// that need merely be 'plugged-in' to the following and other existing
+// functions to obtain relevant information or functionality
 struct whisper_state * whisper_get_state_from_context(struct whisper_context * ctx) {
     if (!ctx->state) {
         return nullptr;

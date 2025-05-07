@@ -2,7 +2,7 @@
 #include "common-whisper.h"
 
 #include "whisper.h"
-#ifdef BINDINGS_FLAT
+#ifdef WHISPER_BINDINGS_FLAT
 #include "whisper-flat.h"
 #endif
 #include "httplib.h"
@@ -544,9 +544,13 @@ int main(int argc, char ** argv) {
         check_ffmpeg_availibility();
     }
     // whisper init
-    #ifdef BINDINGS_FLAT
-    fprintf(stderr, "+++ BINDINGS_FLAT +++\n");
-    whisper_flat_backend_load_all();
+    #ifdef WHISPER_BINDINGS_FLAT
+    fprintf(stderr, "+++ WHISPER_BINDINGS_FLAT +++\n");
+    if(params.use_gpu) {
+        whisper_flat_backend_load_all();
+    } else {
+        ggml_backend_try_load_best("cpu", nullptr);
+    }
     #endif
 
     struct whisper_context_params cparams = whisper_context_default_params();

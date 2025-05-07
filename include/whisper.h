@@ -670,7 +670,7 @@ extern "C" {
     WHISPER_API float whisper_full_get_segment_no_speech_prob_from_state(struct whisper_state * state, int i_segment);
 
     // For whisper-flat.cpp to expose
-    #ifdef BINDINGS_FLAT
+    #ifdef WHISPER_BINDINGS_FLAT
     struct whisper_activity {
         float sample_ms;
         float encode_ms;

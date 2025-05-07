@@ -91,9 +91,9 @@ target_include_directories(json_cpp INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # examples
 
-if(BINDINGS_FLAT)
+if(WHISPER_BINDINGS_FLAT)
     message(STATUS "Adding FLAT binding to examples")
-    add_compile_options(-DBINDINGS_FLAT)
+    add_compile_options(-DWHISPER_BINDINGS_FLAT)
 endif()
 
 

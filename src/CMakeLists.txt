@@ -106,7 +106,7 @@ set(WHISPER_LIBRARY_SOURCES
     whisper.cpp
     )
     
-if(BINDINGS_FLAT)
+if(WHISPER_BINDINGS_FLAT)
     message(STATUS "Adding FLAT Whisper binding extras")
 
     set(FLAT_WHISPER_SOURCES
@@ -114,7 +114,7 @@ if(BINDINGS_FLAT)
        )
        
     list(APPEND WHISPER_LIBRARY_SOURCES ${FLAT_WHISPER_SOURCES})
-    set(WHISPER_EXTRA_FLAGS ${WHISPER_EXTRA_FLAGS} -DBINDINGS_FLAT)
+    set(WHISPER_EXTRA_FLAGS ${WHISPER_EXTRA_FLAGS} -DWHISPER_BINDINGS_FLAT)
 endif()
 
 add_library(whisper

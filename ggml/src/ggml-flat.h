@@ -1,6 +1,6 @@
 #pragma once
 
-#ifdef BINDINGS_FLAT
+#ifdef WHISPER_BINDINGS_FLAT
 #define GGML_BINDINGS_FLAT
 #endif
 
