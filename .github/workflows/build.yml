@@ -964,7 +964,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           path: whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip
-          name: whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework
+          name: whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip
 
   android:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
