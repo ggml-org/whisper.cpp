@@ -4581,7 +4581,6 @@ static ggml_tensor * whisper_vad_build_lstm_layer(ggml_context * ctx0,
         const whisper_vad_context & vctx, ggml_tensor * cur, ggml_cgraph * gf) {
     const whisper_vad_model & model = vctx.model;
     const int hdim = model.hparams.lstm_hidden_size;
-    const int hdim_bytes = hdim * sizeof(float);
 
     struct ggml_tensor * x_t = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
 
@@ -4605,18 +4604,19 @@ static ggml_tensor * whisper_vad_build_lstm_layer(ggml_context * ctx0,
 
     // Create add operation to get preactivations for all gates.
     struct ggml_tensor * out_gate = ggml_add(ctx0, inp_gate, hid_gate);
+    const size_t hdim_size = ggml_row_size(out_gate->type, hdim);
 
     // Create sigmoid for input gate (using the first 128 bytes from the preactivations).
-    struct ggml_tensor * i_t = ggml_sigmoid(ctx0, ggml_view_1d(ctx0, out_gate, hdim, 0 * hdim_bytes));
+    struct ggml_tensor * i_t = ggml_sigmoid(ctx0, ggml_view_1d(ctx0, out_gate, hdim, 0 * hdim_size));
 
     // Create sigmoid for the forget gate (using the second 128 bytes from the preactivations).
-    struct ggml_tensor * f_t = ggml_sigmoid(ctx0, ggml_view_1d(ctx0, out_gate, hdim, 1 * hdim_bytes));
+    struct ggml_tensor * f_t = ggml_sigmoid(ctx0, ggml_view_1d(ctx0, out_gate, hdim, 1 * hdim_size));
 
     // Create sigmoid for the cell gate (using the third 128 bytes from the preactivations).
-    struct ggml_tensor * g_t = ggml_tanh(ctx0, ggml_view_1d(ctx0, out_gate, hdim, 2 * hdim_bytes));
+    struct ggml_tensor * g_t = ggml_tanh(ctx0, ggml_view_1d(ctx0, out_gate, hdim, 2 * hdim_size));
 
     // Create sigmoid for the output gate (using the fourth 128 bytes from the preactivations).
-    struct ggml_tensor * o_t = ggml_sigmoid(ctx0, ggml_view_1d(ctx0, out_gate, hdim, 3 * hdim_bytes));
+    struct ggml_tensor * o_t = ggml_sigmoid(ctx0, ggml_view_1d(ctx0, out_gate, hdim, 3 * hdim_size));
 
     // Update cell state
     struct ggml_tensor * c_out = ggml_add(ctx0,
