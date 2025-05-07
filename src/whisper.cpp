@@ -6802,7 +6802,7 @@ int whisper_full_with_state(
     std::unique_ptr<float, decltype(&free)> vad_samples(nullptr, free);
 
     if (params.vad) {
-        WHISPER_LOG_INFO("%s: VAD is enabled, processing speach segments only\n", __func__);
+        WHISPER_LOG_INFO("%s: VAD is enabled, processing speech segments only\n", __func__);
         float * raw_vad_samples = nullptr;
         int vad_n_samples;
         if (!whisper_vad(ctx, state, params, samples, n_samples, &raw_vad_samples, vad_n_samples)) {
