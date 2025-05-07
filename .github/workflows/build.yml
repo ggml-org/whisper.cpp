@@ -1120,11 +1120,16 @@ jobs:
           chmod +x ./gradlew
           ./gradlew build --info
 
+      - name: Pack jar artifacts
+        shell: pwsh
+        run: |
+              Compress-Archive -Path "bindings/java/build/libs/whispercpp-*.jar" -DestinationPath "whispercpp.jar.zip"
+
       - name: Upload jar
         uses: actions/upload-artifact@v4
         with:
-          name: whispercpp.jar
-          path: bindings/java/build/libs/whispercpp-*.jar
+          name: whispercpp.jar.zip
+          path: whispercpp.jar.zip
 
 #      - name: Publish package
 #        if: ${{ github.ref == 'refs/heads/master' }}
