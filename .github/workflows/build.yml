@@ -604,12 +604,19 @@ jobs:
           name: ggml_cpu_${{ matrix.arch }}.dll
           path: build/bin/${{ matrix.build }}/ggml-cpu.dll
 
+      - name: Pack bin artifacts
+        shell: pwsh
+        run: |
+              Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-bin-${{ matrix.arch }}.zip"
+
       - name: Upload binaries
-        if: matrix.sdl2 == 'ON'
+        if: matrix.sdl2 == 'ON' && ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
+                github.event.inputs.create_release == 'true' ||
+                github.event.inputs.pre_release_tag != '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: whisper-bin-${{ matrix.arch }}
-          path: build/bin/${{ matrix.build }}
+          name: whisper-bin-${{ matrix.arch }}.zip
+          path: whisper-bin-${{ matrix.arch }}.zip
 
   windows-blas:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
@@ -679,12 +686,19 @@ jobs:
         if: matrix.sdl2 == 'ON'
         run: copy "$env:SDL2_DIR/../lib/${{ matrix.s2arc }}/SDL2.dll" build/bin/${{ matrix.build }}
 
+      - name: Pack bin artifacts
+        shell: pwsh
+        run: |
+              Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-blas-bin-${{ matrix.arch }}.zip"
+
       - name: Upload binaries
-        if: matrix.blas == 'ON' && matrix.sdl2 == 'ON'
+        if: matrix.blas == 'ON' && matrix.sdl2 == 'ON' && ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
+                github.event.inputs.create_release == 'true' ||
+                github.event.inputs.pre_release_tag != '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: whisper-blas-bin-${{ matrix.arch }}
-          path: build/bin/${{ matrix.build }}
+          name: whisper-blas-bin-${{ matrix.arch }}.zip
+          path: whisper-blas-bin-${{ matrix.arch }}.zip
 
   windows-cublas:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
@@ -874,11 +888,19 @@ jobs:
         if: matrix.sdl2 == 'ON'
         run: copy "$env:SDL2_DIR/../lib/${{ matrix.arch }}/SDL2.dll" build/bin/${{ matrix.build }}
 
+      - name: Pack bin artifacts
+        shell: pwsh
+        run: |
+              Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip"
+
       - name: Upload binaries
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
+                github.event.inputs.create_release == 'true' ||
+                github.event.inputs.pre_release_tag != '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}
-          path: build/bin/${{ matrix.build }}
+          name: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
+          path: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
 
   emscripten:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
@@ -1140,6 +1162,9 @@ jobs:
     needs:
       - determine-tag
       - ios-xcode-build
+      - windows
+      - windows-blas
+      - windows-cublas
 
     steps:
       - name: Clone
