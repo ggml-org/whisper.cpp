@@ -4582,7 +4582,7 @@ static ggml_tensor * whisper_vad_build_lstm_layer(ggml_context * ctx0,
     const whisper_vad_model & model = vctx.model;
     const int hdim = model.hparams.lstm_hidden_size;
 
-    struct ggml_tensor * x_t = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
+    struct ggml_tensor * x_t = ggml_transpose(ctx0, cur);
 
     // Hidden state from previous time step.
     struct ggml_tensor * h_in = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, hdim);
