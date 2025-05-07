@@ -4534,15 +4534,10 @@ static ggml_tensor * whisper_vad_build_stft_layer(ggml_context * ctx0,
     // Apply reflective padding to the input tensor
     ggml_tensor * padded = ggml_pad_reflect_1d(ctx0, cur, 64, 64);
 
-    // Perform the Short-Time Fourier Transform (STFT) convolution operation.
-    // We need the stft tensor to be in {256, 1, 258}
-    // 256 frequency bins (output), 1 channel (input), and 258 is kernel size.
-    struct ggml_tensor * stft_reshaped = ggml_reshape_3d(ctx0, model.stft_forward_basis,
-            model.stft_forward_basis->ne[2], model.stft_forward_basis->ne[1], model.stft_forward_basis->ne[0]);
-    struct ggml_tensor* stft = ggml_conv_1d(ctx0, stft_reshaped, padded, model.hparams.lstm_input_size, 0, 1);
+    struct ggml_tensor * stft = ggml_conv_1d(ctx0, model.stft_forward_basis, padded, model.hparams.lstm_input_size, 0, 1);
 
     // Calculate cutoff for real/imaginary parts
-    int cutoff = model.stft_forward_basis->ne[2] / 2 + 1;
+    int cutoff = model.stft_forward_basis->ne[2] / 2;
 
     // Extract real part (first half of the STFT output).
     struct ggml_tensor * real_part = ggml_view_2d(ctx0, stft, 4, cutoff, stft->nb[1], 0);
@@ -4904,7 +4899,7 @@ struct whisper_vad_context * whisper_vad_init_with_params_no_state(struct whispe
 
         // SFTF precomputed basis matrix
         model.stft_forward_basis = create_tensor(VAD_TENSOR_STFT_BASIS,
-            ggml_new_tensor_3d(ctx, GGML_TYPE_F16, 258, 1, 256));
+            ggml_new_tensor_3d(ctx, GGML_TYPE_F16, 256, 1, 258));
 
         model.encoder_0_weight = create_tensor(VAD_TENSOR_ENC_0_WEIGHT,
             ggml_new_tensor_3d(

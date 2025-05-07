@@ -129,7 +129,7 @@ def convert_silero_vad(output_path, print_tensors=True):
                 # Ensure it has the expected shape
                 print(f"STFT tensor original shape: {data.shape}")
                 n_dims = 3
-                tensor_shape = [data.shape[0], data.shape[1], data.shape[2]]
+                tensor_shape = [data.shape[2], data.shape[1], data.shape[0]]
                 is_conv_weight = True
             else:
                 # For other tensors, we can use standard processing
