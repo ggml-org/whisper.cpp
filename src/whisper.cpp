@@ -6683,6 +6683,7 @@ static bool whisper_vad(
             std::vector<float> &  filtered_samples,
                            int &  filtered_n_samples) {
     WHISPER_LOG_INFO("%s: VAD is enabled, processing speach segments only\n", __func__);
+    filtered_n_samples = 0;
     struct whisper_vad_context_params vad_ctx_params = whisper_vad_default_context_params();
     struct whisper_vad_context * vctx = whisper_vad_init_from_file_with_params(params.vad_model_path, vad_ctx_params);
     if (vctx == nullptr) {
@@ -6702,7 +6703,6 @@ static bool whisper_vad(
         float overlap_seconds = params.vad_samples_overlap;
         int overlap_samples = overlap_seconds * WHISPER_SAMPLE_RATE;
 
-        filtered_n_samples = 0;
         for (int i = 0; i < timestamps.n_segments; i++) {
             int segment_start_samples = timestamps.segments[i].start * WHISPER_SAMPLE_RATE;
             int segment_end_samples   = timestamps.segments[i].end   * WHISPER_SAMPLE_RATE;
