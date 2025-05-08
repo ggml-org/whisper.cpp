@@ -4414,6 +4414,9 @@ struct whisper_vad_model {
 struct whisper_vad_state {
     std::vector<ggml_backend_t> backends;
 
+    struct ggml_tensor * h_state;
+    struct ggml_tensor * c_state;
+
     whisper_sched sched;
 };
 
@@ -4584,22 +4587,12 @@ static ggml_tensor * whisper_vad_build_lstm_layer(ggml_context * ctx0,
 
     struct ggml_tensor * x_t = ggml_transpose(ctx0, cur);
 
-    // Hidden state from previous time step.
-    struct ggml_tensor * h_in = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, hdim);
-    ggml_set_name(h_in, "h_in");
-    ggml_set_input(h_in);
-
-    // Cell state from all previous time steps.
-    struct ggml_tensor * c_in = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, hdim);
-    ggml_set_name(c_in, "c_in");
-    ggml_set_input(c_in);
-
     // Create operations using the input-to-hidden weights.
     struct ggml_tensor * inp_gate = ggml_mul_mat(ctx0, model.lstm_ih_weight, x_t);
     inp_gate = ggml_add(ctx0, inp_gate, model.lstm_ih_bias);
 
     // Create operations using the hidden-to-hidden weights.
-    struct ggml_tensor * hid_gate = ggml_mul_mat(ctx0, model.lstm_hh_weight, h_in);
+    struct ggml_tensor * hid_gate = ggml_mul_mat(ctx0, model.lstm_hh_weight, vctx.state->h_state);
     hid_gate = ggml_add(ctx0, hid_gate, model.lstm_hh_bias);
 
     // Create add operation to get preactivations for all gates.
@@ -4620,26 +4613,22 @@ static ggml_tensor * whisper_vad_build_lstm_layer(ggml_context * ctx0,
 
     // Update cell state
     struct ggml_tensor * c_out = ggml_add(ctx0,
-        ggml_mul(ctx0, f_t, c_in),
+        ggml_mul(ctx0, f_t, vctx.state->c_state),
         ggml_mul(ctx0, i_t, g_t));
-    ggml_set_output(c_out);
-    ggml_set_name(c_out, "c_out");
-    ggml_build_forward_expand(gf, c_out);
+    ggml_build_forward_expand(gf, ggml_cpy(ctx0, c_out, vctx.state->c_state));
 
     // Update hidden state
     struct ggml_tensor * out = ggml_mul(ctx0, o_t, ggml_tanh(ctx0, c_out));
-    ggml_set_output(out);
-    ggml_set_name(out, "h_out");
+    ggml_build_forward_expand(gf, ggml_cpy(ctx0, out, vctx.state->h_state));
     return out;
 }
 
-static struct ggml_cgraph * whisper_vad_build_graph(whisper_vad_context & vctx,
-        whisper_vad_state & vstate) {
+static struct ggml_cgraph * whisper_vad_build_graph(whisper_vad_context & vctx) {
     const auto & model   = vctx.model;
 
     struct ggml_init_params params = {
-        /*.mem_size   =*/ vstate.sched.meta.size(),
-        /*.mem_buffer =*/ vstate.sched.meta.data(),
+        /*.mem_size   =*/ vctx.state->sched.meta.size(),
+        /*.mem_buffer =*/ vctx.state->sched.meta.data(),
         /*.no_alloc   =*/ true,
     };
 
@@ -4677,12 +4666,13 @@ static struct ggml_cgraph * whisper_vad_build_graph(whisper_vad_context & vctx,
     return gf;
 }
 
-struct whisper_vad_state * whisper_vad_init_state(whisper_vad_context * ctx) {
+struct whisper_vad_state * whisper_vad_init_state(whisper_vad_context * vctx) {
     whisper_vad_state * state = new whisper_vad_state;
+    vctx->state = state;
 
     auto whisper_context_params = whisper_context_default_params();
-    whisper_context_params.use_gpu = ctx->params.use_gpu;
-    whisper_context_params.gpu_device = ctx->params.gpu_device;
+    whisper_context_params.use_gpu = vctx->params.use_gpu;
+    whisper_context_params.gpu_device = vctx->params.gpu_device;
     state->backends = whisper_backend_init(whisper_context_params);
     if (state->backends.empty()) {
         WHISPER_LOG_ERROR("%s: whisper_backend_init() failed\n", __func__);
@@ -4690,10 +4680,30 @@ struct whisper_vad_state * whisper_vad_init_state(whisper_vad_context * ctx) {
         return nullptr;
     }
 
+    int32_t lstm_hidden_size = vctx->model.hparams.lstm_hidden_size;
+    struct ggml_init_params params = {
+        /*.mem_size   =*/ size_t(2u*lstm_hidden_size*ggml_tensor_overhead()),
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context * ctx = ggml_init(params);
+    if (!ctx) {
+        WHISPER_LOG_ERROR("%s: failed to init LSTM state ggml context\n", __func__);
+        return nullptr;
+    }
+
+    // LSTM Hidden state
+    state->h_state = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, lstm_hidden_size);
+    ggml_set_name(state->h_state, "h_state");
+
+    // LSTM Cell state
+    state->c_state = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, lstm_hidden_size);
+    ggml_set_name(state->c_state, "c_state");
+
     {
         bool ok = whisper_sched_graph_init(state->sched, state->backends,
                 [&]() {
-                    return whisper_vad_build_graph(*ctx, *state);
+                    return whisper_vad_build_graph(*vctx);
                 });
 
         if (!ok) {
@@ -4715,7 +4725,7 @@ struct whisper_vad_context * whisper_vad_init_from_file_with_params(
         return nullptr;
     }
 
-    ctx->state = whisper_vad_init_state(ctx);
+    whisper_vad_init_state(ctx);
     if (!ctx->state) {
         whisper_vad_free(ctx);
         return nullptr;
@@ -5088,7 +5098,6 @@ struct whisper_vad_context * whisper_vad_init_with_params_no_state(struct whispe
 struct whisper_vad_speech whisper_vad_detect_speech(struct whisper_vad_context * vctx,
                                                     const float * pcmf32,
                                                     int n_samples) {
-    const int hidden_dim = vctx->model.hparams.lstm_hidden_size;
     int n_chunks = n_samples / vctx->n_window;
     if (n_samples % vctx->n_window != 0) {
         n_chunks += 1;  // Add one more chunk for remaining samples.
@@ -5098,7 +5107,7 @@ struct whisper_vad_speech whisper_vad_detect_speech(struct whisper_vad_context *
     WHISPER_LOG_INFO("%s: detecting speech in %d samples\n", __func__, n_samples);
     WHISPER_LOG_INFO("%s: n_chunks: %d\n", __func__, n_chunks);
 
-    ggml_cgraph * gf = whisper_vad_build_graph(*vctx, *vctx->state);
+    ggml_cgraph * gf = whisper_vad_build_graph(*vctx);
 
     if (!ggml_backend_sched_alloc_graph(sched, gf)) {
         WHISPER_LOG_ERROR("%s: failed to allocate the compute buffer\n", __func__);
@@ -5106,20 +5115,12 @@ struct whisper_vad_speech whisper_vad_detect_speech(struct whisper_vad_context *
     }
 
     struct ggml_tensor * frame = ggml_graph_get_tensor(gf, "frame");
-    struct ggml_tensor * c_out = ggml_graph_get_tensor(gf, "c_out");
-    struct ggml_tensor * h_out = ggml_graph_get_tensor(gf, "h_out");
-    struct ggml_tensor * c_in  = ggml_graph_get_tensor(gf, "c_in");
-    struct ggml_tensor * h_in  = ggml_graph_get_tensor(gf, "h_in");
     struct ggml_tensor * prob  = ggml_graph_get_tensor(gf, "prob");
-
-    ggml_set_zero(c_out);
-    ggml_set_zero(h_out);
     ggml_set_zero(prob);
-    ggml_set_zero(c_in);
-    ggml_set_zero(h_in);
 
-    std::vector<float> h_state(hidden_dim, 0.0f);
-    std::vector<float> c_state(hidden_dim, 0.0f);
+    // Reset LSTM hidden/cell states
+    ggml_set_zero(vctx->state->h_state);
+    ggml_set_zero(vctx->state->c_state);
 
     float * probs= new float[n_chunks];
     WHISPER_LOG_INFO("%s: props size: %u\n", __func__, n_chunks);
@@ -5152,17 +5153,10 @@ struct whisper_vad_speech whisper_vad_detect_speech(struct whisper_vad_context *
         // Set the frame tensor data with the samples.
         ggml_backend_tensor_set(frame, window.data(), 0, ggml_nelements(frame) * sizeof(float));
 
-        ggml_backend_tensor_set(h_in, h_state.data(), 0, hidden_dim * sizeof(float));
-        ggml_backend_tensor_set(c_in, c_state.data(), 0, hidden_dim * sizeof(float));
-
         if (!ggml_graph_compute_helper(sched, gf, vctx->n_threads)) {
             WHISPER_LOG_ERROR("%s: failed to compute VAD graph\n", __func__);
             break;
         }
-
-        // Update the LSTM states
-        ggml_backend_tensor_get(h_out, h_state.data(), 0, hidden_dim * sizeof(float));
-        ggml_backend_tensor_get(c_out, c_state.data(), 0, hidden_dim * sizeof(float));
 
         // Get the probability for this chunk.
         ggml_backend_tensor_get(prob, &probs[i], 0, sizeof(float));
