@@ -13,7 +13,6 @@
 #include <cstdio>
 #include <string>
 #include <thread>
-#include <utility>
 #include <vector>
 #include <cstring>
 
@@ -1032,10 +1031,12 @@ int main(int argc, char ** argv) {
 
             bool open(const char * ext, const char * function) {
                 if (is_stdout) {
-                    if (std::exchange(used_stdout, true)) {
+                    if (used_stdout) {
                         fprintf(stderr, "warning: Not appending multiple file formats to stdout\n");
                         return false;
                     }
+
+                    used_stdout = true;
 #ifdef _WIN32
                     fout = std::ofstream{"CON"};
 #else
@@ -1045,6 +1046,7 @@ int main(int argc, char ** argv) {
                     // Also assuming /dev is mounted
                     return true;
                 }
+
                 fname_out.resize(basename_length);
                 fname_out += ext;
                 fout = std::ofstream{fname_out};
