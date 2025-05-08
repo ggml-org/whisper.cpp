@@ -4372,7 +4372,7 @@ struct whisper_vad_model {
     std::string version;
     whisper_vad_hparams hparams;
 
-    struct ggml_tensor * stft_forward_basis; // [256, 258]
+    struct ggml_tensor * stft_forward_basis; // [256, 1, 258]
 
     // Encoder tensors - 4 convolutional layers
     struct ggml_tensor * encoder_0_weight;  // [3, 129, 128]
@@ -4424,8 +4424,6 @@ struct whisper_vad_context {
     int     n_window;
     int     n_context;
     int     n_threads;
-    bool    use_gpu;
-    int     gpu_device;
 
     whisper_vad_model model;
     whisper_vad_state * state = nullptr;
@@ -4438,7 +4436,9 @@ struct whisper_vad_context {
 struct whisper_vad_context_params whisper_vad_default_context_params(void) {
     whisper_vad_context_params result = {
         /*.n_thread                = */ 4,
-        /*.use_gpu                 = */ true,
+        // TODO(danbev) Default to true when CUDA GPU support is working:
+        // https://github.com/ggml-org/whisper.cpp/pull/3065#issuecomment-2858583911
+        /*.use_gpu                 = */ false,
         /*.gpu_device              = */ 0,
     };
     return result;
@@ -4680,7 +4680,10 @@ static struct ggml_cgraph * whisper_vad_build_graph(whisper_vad_context & vctx,
 struct whisper_vad_state * whisper_vad_init_state(whisper_vad_context * ctx) {
     whisper_vad_state * state = new whisper_vad_state;
 
-    state->backends = whisper_backend_init(ctx->params);
+    auto whisper_context_params = whisper_context_default_params();
+    whisper_context_params.use_gpu = ctx->params.use_gpu;
+    whisper_context_params.gpu_device = ctx->params.gpu_device;
+    state->backends = whisper_backend_init(whisper_context_params);
     if (state->backends.empty()) {
         WHISPER_LOG_ERROR("%s: whisper_backend_init() failed\n", __func__);
         whisper_vad_free_state(state);
@@ -4777,6 +4780,8 @@ struct whisper_vad_context * whisper_vad_init_with_params_no_state(struct whispe
 
     whisper_vad_context * vctx = new whisper_vad_context;
     vctx->n_threads = params.n_threads;
+    vctx->params.use_gpu = params.use_gpu;
+    vctx->params.gpu_device = params.gpu_device;
 
     auto & model = vctx->model;
     auto & hparams = model.hparams;
@@ -4870,15 +4875,11 @@ struct whisper_vad_context * whisper_vad_init_with_params_no_state(struct whispe
     buft_list_t buft_list = make_buft_list(wparams);
 
     auto create_tensor = [&](vad_tensor type, ggml_tensor * meta) -> ggml_tensor * {
-        /* TODO: Should GPU backend be used for VAD processing?
         ggml_op op = VAD_TENSOR_OPS.at(type);
         ggml_backend_buffer_type_t buft = select_weight_buft(hparams, meta, op, buft_list);
         if (!buft) {
             throw std::runtime_error(format("failed to find a compatible buffer type for tensor %s", VAD_TENSOR_NAMES.at(type)));
         }
-        */
-        // Only use CPU backend for now.
-        ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
         ggml_context * ctx = get_ctx(buft);
         ggml_tensor * tensor = ggml_dup_tensor(ctx, meta);
         model.tensors[VAD_TENSOR_NAMES.at(type)] = tensor;
