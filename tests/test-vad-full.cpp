@@ -45,7 +45,7 @@ int main() {
     assert(strcmp(" And so my fellow Americans, ask not what your country can do for you,"
                   " ask what you can do for your country.",
            whisper_full_get_segment_text(wctx, 0)) == 0);
-    assert(whisper_full_get_segment_t0(wctx, 0) == 0);
+    assert(whisper_full_get_segment_t0(wctx, 0) == 29);
     assert(whisper_full_get_segment_t1(wctx, 0) == 1049);
 
     whisper_free(wctx);

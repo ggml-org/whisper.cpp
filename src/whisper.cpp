@@ -7861,11 +7861,6 @@ int64_t whisper_full_get_segment_t0_from_state(struct whisper_state * state, int
         return state->result_all[i_segment].t0;
     }
 
-    // For the first segment, always start at 0
-    if (i_segment == 0) {
-        return 0;
-    }
-
     // Get the start timestamp produced by whisper_full. whisper_full processes
     // only the speech segments in this case so we need to map these timestamps
     // back to the original audio.
