@@ -206,10 +206,12 @@ static bool ggml_graph_compute_helper(
 
 #ifndef WHISPER_BINDINGS_FLAT
 static void whisper_load_backends() {
+#ifdef GGML_BACKEND_DL
     static std::once_flag flag;
     std::call_once(flag, []() {
         ggml_backend_load_all();
     });
+#endif
 }
 #endif
 

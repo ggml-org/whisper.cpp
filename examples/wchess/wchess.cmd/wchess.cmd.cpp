@@ -9,6 +9,7 @@
 #include "common-sdl.h"
 #ifdef WHISPER_BINDINGS_FLAT
 #include "whisper-flat.h"
+#include "../ggml/src/ggml-flat.h"
 #endif
 #include <iostream>
 

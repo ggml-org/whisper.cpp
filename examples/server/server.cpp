@@ -4,6 +4,7 @@
 #include "whisper.h"
 #ifdef WHISPER_BINDINGS_FLAT
 #include "whisper-flat.h"
+#include "../ggml/src/ggml-flat.h"
 #endif
 #include "httplib.h"
 #include "json.hpp"
