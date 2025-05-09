@@ -4425,6 +4425,8 @@ struct whisper_vad_state {
     std::vector<uint8_t> ctx_buf;
 
     whisper_sched sched;
+
+    std::vector<float> probs;
 };
 
 struct whisper_vad_context {
@@ -5128,8 +5130,7 @@ struct whisper_vad_speech whisper_vad_detect_speech(struct whisper_vad_context *
     // Reset LSTM hidden/cell states
     ggml_backend_buffer_clear(vctx->state->buffer, 0);
 
-    // TODO: move to vad state and change to std::vector<float>
-    float * probs = new float[n_chunks];
+    vctx->state->probs.resize(n_chunks);
     WHISPER_LOG_INFO("%s: props size: %u\n", __func__, n_chunks);
 
     std::vector<float> window(vctx->n_window, 0.0f);
@@ -5182,7 +5183,7 @@ struct whisper_vad_speech whisper_vad_detect_speech(struct whisper_vad_context *
         }
 
         // Get the probability for this chunk.
-        ggml_backend_tensor_get(prob, &probs[i], 0, sizeof(float));
+        ggml_backend_tensor_get(prob, &vctx->state->probs[i], 0, sizeof(float));
 
         //WHISPER_LOG_DEBUG("chunk %d: p = %7.3f\n", i, probs[i]);
     }
@@ -5193,7 +5194,7 @@ struct whisper_vad_speech whisper_vad_detect_speech(struct whisper_vad_context *
 
     struct whisper_vad_speech speech = {
         /* n_probs = */ n_chunks,
-        /* probs   = */ probs,
+        /* probs   = */ vctx->state->probs.data(),
     };
 
     return speech;
@@ -5548,7 +5549,6 @@ void whisper_vad_free_params(whisper_vad_params * params) {
 }
 
 void whisper_vad_free_speech(whisper_vad_speech * speech) {
-    delete[] speech->probs;
     speech->probs = nullptr;
     speech->n_probs = 0;
 }
