@@ -6756,7 +6756,6 @@ static bool whisper_vad(
                         __func__, (float)filtered_n_samples / WHISPER_SAMPLE_RATE);
 
         try {
-            filtered_samples.reserve(total_samples_needed);
             filtered_samples.resize(total_samples_needed);
         } catch (const std::bad_alloc & /* e */) {
             WHISPER_LOG_ERROR("%s: failed to allocate memory for filtered samples\n", __func__);
