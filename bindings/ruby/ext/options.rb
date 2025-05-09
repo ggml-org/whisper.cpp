@@ -168,7 +168,7 @@ class Options
     ignored "WHISPER_BUILD_EXAMPLES"
     ignored "WHISPER_BUILD_SERVER"
     ignored"WHISPER_BUILD_TESTS"
-    bool "WHISPER_CCACHE"
+    bool "GGML_CCACHE"
     bool "WHISPER_COREML"
     bool "WHISPER_COREML_ALLOW_FALLBACK"
     ignored "WHISPER_CURL"
