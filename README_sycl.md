@@ -16,13 +16,13 @@
 
 ## Background
 
-SYCL is a higher-level programming model to improve programming productivity on various hardware accelerators—such as CPUs, GPUs, and FPGAs. It is a single-source embedded domain-specific language based on pure C++17.
+SYCL is a higher-level programming model to improve programming productivity on various hardware acceleratorsâ€”such as CPUs, GPUs, and FPGAs. It is a single-source embedded domain-specific language based on pure C++17.
 
 oneAPI is a specification that is open and standards-based, supporting multiple architecture types including but not limited to GPU, CPU, and FPGA. The spec has both direct programming and API-based programming paradigms.
 
 Intel uses the SYCL as direct programming language to support CPU, GPUs and FPGAs.
 
-To avoid  re-inventing the wheel, this code refers other code paths in llama.cpp (like OpenBLAS, cuBLAS, CLBlast). We use a open-source tool [SYCLomatic](https://github.com/oneapi-src/SYCLomatic) (Commercial release [Intel® DPC++ Compatibility Tool](https://www.intel.com/content/www/us/en/developer/tools/oneapi/dpc-compatibility-tool.html)) migrate to SYCL.
+To avoid  re-inventing the wheel, this code refers other code paths in llama.cpp (like OpenBLAS, cuBLAS, CLBlast). We use a open-source tool [SYCLomatic](https://github.com/oneapi-src/SYCLomatic) (Commercial release [IntelÂ® DPC++ Compatibility Tool](https://www.intel.com/content/www/us/en/developer/tools/oneapi/dpc-compatibility-tool.html)) migrate to SYCL.
 
 The whisper.cpp for SYCL is used to support Intel GPUs.
 
@@ -84,10 +84,10 @@ Platform #0: Intel(R) OpenCL HD Graphics
  `-- Device #0: Intel(R) Iris(R) Xe Graphics [0x9a49]
 ```
 
-2. Install Intel® oneAPI Base toolkit.
+2. Install IntelÂ® oneAPI Base toolkit.
 
 
-a. Please follow the procedure in [Get the Intel® oneAPI Base Toolkit ](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html).
+a. Please follow the procedure in [Get the IntelÂ® oneAPI Base Toolkit ](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html).
 
 Recommend to install to default folder: **/opt/intel/oneapi**.
 
@@ -120,10 +120,10 @@ cd build
 source /opt/intel/oneapi/setvars.sh
 
 #for FP16
-#cmake .. -DWHISPER_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DWHISPER_SYCL_F16=ON 
+#cmake .. -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON 
 
 #for FP32
-cmake .. -DWHISPER_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
+cmake .. -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
 
 #build example/main only
 #cmake --build . --config Release --target main
@@ -214,8 +214,8 @@ Using device **0** (Intel(R) Arc(TM) A770 Graphics) as main device
 
 |Name|Value|Function|
 |-|-|-|
-|WHISPER_SYCL|ON (mandatory)|Enable build with SYCL code path. <br>For FP32/FP16, WHISPER_SYCL=ON is mandatory.|
-|WHISPER_SYCL_F16|ON (optional)|Enable FP16 build with SYCL code path.For FP32, do not set it.|
+|GGML_SYCL|ON (mandatory)|Enable build with SYCL code path. <br>For FP32/FP16, GGML_SYCL=ON is mandatory.|
+|GGML_SYCL_F16|ON (optional)|Enable FP16 build with SYCL code path.For FP32, do not set it.|
 |CMAKE_C_COMPILER|icx|Use icx compiler for SYCL code path|
 |CMAKE_CXX_COMPILER|icpx|use icpx for SYCL code path|
 
