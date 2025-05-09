@@ -19,9 +19,7 @@ void assert_default_params(const struct whisper_vad_params & params) {
 
 void assert_default_context_params(const struct whisper_vad_context_params & params) {
     assert(params.n_threads == 4);
-    // TODO(danbev) Updated this check one CUDA GPU support is stable and the
-    // default changed to true.
-    assert(params.use_gpu == false);
+    assert(params.use_gpu == true);
     assert(params.gpu_device == 0);
 }
 
