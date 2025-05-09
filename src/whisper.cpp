@@ -166,7 +166,6 @@ static bool ggml_graph_compute_helper(
                          int   n_threads,
          ggml_abort_callback   abort_callback,
                         void * abort_callback_data) {
-
     ggml_backend_ptr backend { ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr) };
 
     auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get()));
@@ -187,8 +186,8 @@ static bool ggml_graph_compute_helper(
 static bool ggml_graph_compute_helper(
       ggml_backend_sched_t   sched,
         struct ggml_cgraph * graph,
-                       int   n_threads) {
-
+                       int   n_threads,
+                      bool   sched_reset = true) {
     for (int i = 0; i < ggml_backend_sched_get_n_backends(sched); ++i) {
         ggml_backend_t backend = ggml_backend_sched_get_backend(sched, i);
         ggml_backend_dev_t dev = ggml_backend_get_device(backend);
@@ -200,8 +199,12 @@ static bool ggml_graph_compute_helper(
         }
     }
 
-    bool t = ggml_backend_sched_graph_compute(sched, graph) == GGML_STATUS_SUCCESS;
-    ggml_backend_sched_reset(sched);
+    const bool t = (ggml_backend_sched_graph_compute(sched, graph) == GGML_STATUS_SUCCESS);
+
+    if (!t || sched_reset) {
+        ggml_backend_sched_reset(sched);
+    }
+
     return t;
 }
 
@@ -4417,6 +4420,10 @@ struct whisper_vad_state {
     struct ggml_tensor * h_state;
     struct ggml_tensor * c_state;
 
+    ggml_backend_buffer_t buffer = nullptr;
+
+    std::vector<uint8_t> ctx_buf;
+
     whisper_sched sched;
 };
 
@@ -4439,9 +4446,7 @@ struct whisper_vad_context {
 struct whisper_vad_context_params whisper_vad_default_context_params(void) {
     whisper_vad_context_params result = {
         /*.n_thread                = */ 4,
-        // TODO(danbev) Default to true when CUDA GPU support is working:
-        // https://github.com/ggml-org/whisper.cpp/pull/3065#issuecomment-2858583911
-        /*.use_gpu                 = */ false,
+        /*.use_gpu                 = */ true,
         /*.gpu_device              = */ 0,
     };
     return result;
@@ -4597,6 +4602,7 @@ static ggml_tensor * whisper_vad_build_lstm_layer(ggml_context * ctx0,
 
     // Create add operation to get preactivations for all gates.
     struct ggml_tensor * out_gate = ggml_add(ctx0, inp_gate, hid_gate);
+
     const size_t hdim_size = ggml_row_size(out_gate->type, hdim);
 
     // Create sigmoid for input gate (using the first 128 bytes from the preactivations).
@@ -4619,12 +4625,13 @@ static ggml_tensor * whisper_vad_build_lstm_layer(ggml_context * ctx0,
 
     // Update hidden state
     struct ggml_tensor * out = ggml_mul(ctx0, o_t, ggml_tanh(ctx0, c_out));
-    ggml_build_forward_expand(gf, ggml_cpy(ctx0, out, vctx.state->h_state));
+    ggml_build_forward_expand(gf, ggml_cpy(ctx0, out,   vctx.state->h_state));
+
     return out;
 }
 
 static struct ggml_cgraph * whisper_vad_build_graph(whisper_vad_context & vctx) {
-    const auto & model   = vctx.model;
+    const auto & model = vctx.model;
 
     struct ggml_init_params params = {
         /*.mem_size   =*/ vctx.state->sched.meta.size(),
@@ -4673,6 +4680,7 @@ struct whisper_vad_state * whisper_vad_init_state(whisper_vad_context * vctx) {
     auto whisper_context_params = whisper_context_default_params();
     whisper_context_params.use_gpu = vctx->params.use_gpu;
     whisper_context_params.gpu_device = vctx->params.gpu_device;
+
     state->backends = whisper_backend_init(whisper_context_params);
     if (state->backends.empty()) {
         WHISPER_LOG_ERROR("%s: whisper_backend_init() failed\n", __func__);
@@ -4680,15 +4688,20 @@ struct whisper_vad_state * whisper_vad_init_state(whisper_vad_context * vctx) {
         return nullptr;
     }
 
-    int32_t lstm_hidden_size = vctx->model.hparams.lstm_hidden_size;
+    const int32_t lstm_hidden_size = vctx->model.hparams.lstm_hidden_size;
+
+    state->ctx_buf.resize(2u*ggml_tensor_overhead());
+
     struct ggml_init_params params = {
-        /*.mem_size   =*/ size_t(2u*lstm_hidden_size*ggml_tensor_overhead()),
-        /*.mem_buffer =*/ NULL,
+        /*.mem_size   =*/ state->ctx_buf.size(),
+        /*.mem_buffer =*/ state->ctx_buf.data(),
         /*.no_alloc   =*/ true,
     };
+
     ggml_context * ctx = ggml_init(params);
     if (!ctx) {
         WHISPER_LOG_ERROR("%s: failed to init LSTM state ggml context\n", __func__);
+        whisper_vad_free_state(state);
         return nullptr;
     }
 
@@ -4699,6 +4712,13 @@ struct whisper_vad_state * whisper_vad_init_state(whisper_vad_context * vctx) {
     // LSTM Cell state
     state->c_state = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, lstm_hidden_size);
     ggml_set_name(state->c_state, "c_state");
+
+    state->buffer = ggml_backend_alloc_ctx_tensors(ctx, state->backends[0]);
+    if (!state->buffer) {
+        WHISPER_LOG_ERROR("%s: failed to allocate memory for the VAD state\n", __func__);
+        whisper_vad_free_state(state);
+        return nullptr;
+    }
 
     {
         bool ok = whisper_sched_graph_init(state->sched, state->backends,
@@ -5102,10 +5122,19 @@ struct whisper_vad_speech whisper_vad_detect_speech(struct whisper_vad_context *
     if (n_samples % vctx->n_window != 0) {
         n_chunks += 1;  // Add one more chunk for remaining samples.
     }
-    auto & sched = vctx->state->sched.sched;
-
     WHISPER_LOG_INFO("%s: detecting speech in %d samples\n", __func__, n_samples);
     WHISPER_LOG_INFO("%s: n_chunks: %d\n", __func__, n_chunks);
+
+    // Reset LSTM hidden/cell states
+    ggml_backend_buffer_clear(vctx->state->buffer, 0);
+
+    // TODO: move to vad state and change to std::vector<float>
+    float * probs = new float[n_chunks];
+    WHISPER_LOG_INFO("%s: props size: %u\n", __func__, n_chunks);
+
+    std::vector<float> window(vctx->n_window, 0.0f);
+
+    auto & sched = vctx->state->sched.sched;
 
     ggml_cgraph * gf = whisper_vad_build_graph(*vctx);
 
@@ -5116,19 +5145,13 @@ struct whisper_vad_speech whisper_vad_detect_speech(struct whisper_vad_context *
 
     struct ggml_tensor * frame = ggml_graph_get_tensor(gf, "frame");
     struct ggml_tensor * prob  = ggml_graph_get_tensor(gf, "prob");
-    ggml_set_zero(prob);
 
-    // Reset LSTM hidden/cell states
-    ggml_set_zero(vctx->state->h_state);
-    ggml_set_zero(vctx->state->c_state);
-
-    float * probs= new float[n_chunks];
-    WHISPER_LOG_INFO("%s: props size: %u\n", __func__, n_chunks);
-
-    std::vector<float> window(vctx->n_window, 0.0f);
+    // we are going to reuse the graph multiple times for each chunk
+    // TODO: measure time and print timing information for this step
     for (int i = 0; i < n_chunks; i++) {
         int start_idx = i * vctx->n_window;
         int end_idx = std::min(start_idx + vctx->n_window, n_samples);
+
         int chunk_len = end_idx - start_idx;
 
         if (chunk_len < vctx->n_window) {
@@ -5146,14 +5169,14 @@ struct whisper_vad_speech whisper_vad_detect_speech(struct whisper_vad_context *
         } else {
             // Copy current frame samples to the window.
             int samples_to_copy = std::min(end_idx - start_idx, vctx->n_window);
-            std::copy(pcmf32 + start_idx, pcmf32 + start_idx + samples_to_copy,
-                 window.begin());
+            std::copy(pcmf32 + start_idx, pcmf32 + start_idx + samples_to_copy, window.begin());
         }
 
         // Set the frame tensor data with the samples.
         ggml_backend_tensor_set(frame, window.data(), 0, ggml_nelements(frame) * sizeof(float));
 
-        if (!ggml_graph_compute_helper(sched, gf, vctx->n_threads)) {
+        // do not reset the scheduler - we will reuse the graph in the next chunk
+        if (!ggml_graph_compute_helper(sched, gf, vctx->n_threads, false)) {
             WHISPER_LOG_ERROR("%s: failed to compute VAD graph\n", __func__);
             break;
         }
@@ -5161,13 +5184,18 @@ struct whisper_vad_speech whisper_vad_detect_speech(struct whisper_vad_context *
         // Get the probability for this chunk.
         ggml_backend_tensor_get(prob, &probs[i], 0, sizeof(float));
 
+        //WHISPER_LOG_DEBUG("chunk %d: p = %7.3f\n", i, probs[i]);
     }
+
+    ggml_backend_sched_reset(sched);
+
     WHISPER_LOG_INFO("%s: finished processing %d samples\n", __func__, n_samples);
 
     struct whisper_vad_speech speech = {
         /* n_probs = */ n_chunks,
         /* probs   = */ probs,
     };
+
     return speech;
 }
 
