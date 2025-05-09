@@ -32,7 +32,7 @@ set_target_properties(${TARGET} PROPERTIES LINK_FLAGS " \
     -s INITIAL_MEMORY=1024MB \
     -s TOTAL_MEMORY=1024MB \
     -s FORCE_FILESYSTEM=1 \
-    -s EXPORTED_RUNTIME_METHODS=\"['print', 'printErr', 'ccall', 'cwrap']\" \
+    -s EXPORTED_RUNTIME_METHODS=\"['print', 'printErr', 'ccall', 'cwrap', 'HEAPU8']]\" \
     ${EXTRA_FLAGS} \
     ")
 
