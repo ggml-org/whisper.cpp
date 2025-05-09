@@ -4415,6 +4415,7 @@ struct whisper_vad_model {
 };
 
 struct whisper_vad_state {
+    int64_t t_vad_us = 0;
     std::vector<ggml_backend_t> backends;
 
     struct ggml_tensor * h_state;
@@ -5149,6 +5150,7 @@ struct whisper_vad_speech whisper_vad_detect_speech(struct whisper_vad_context *
 
     // we are going to reuse the graph multiple times for each chunk
     // TODO: measure time and print timing information for this step
+    const int64_t t_start_vad_us = ggml_time_us();
     for (int i = 0; i < n_chunks; i++) {
         int start_idx = i * vctx->n_window;
         int end_idx = std::min(start_idx + vctx->n_window, n_samples);
@@ -5187,10 +5189,10 @@ struct whisper_vad_speech whisper_vad_detect_speech(struct whisper_vad_context *
 
         //WHISPER_LOG_DEBUG("chunk %d: p = %7.3f\n", i, probs[i]);
     }
+    vctx->state->t_vad_us += ggml_time_us() - t_start_vad_us;
+    WHISPER_LOG_INFO("%s: vad time = %.2f ms processing %d samples\n", __func__, 1e-3f * vctx->state->t_vad_us, n_samples);
 
     ggml_backend_sched_reset(sched);
-
-    WHISPER_LOG_INFO("%s: finished processing %d samples\n", __func__, n_samples);
 
     struct whisper_vad_speech speech = {
         /* n_probs = */ n_chunks,
