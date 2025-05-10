@@ -80,7 +80,6 @@ int main() {
     // Test speech timestamps (uses speech probabilities from above)
     struct whisper_vad_timestamps timestamps = test_detect_timestamps(vctx, params, &speech);
 
-    whisper_vad_free_speech(&speech);
     whisper_vad_free_timestamps(&timestamps);
     whisper_vad_free(vctx);
 

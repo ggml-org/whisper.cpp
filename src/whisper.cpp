@@ -5206,9 +5206,10 @@ struct whisper_vad_speech whisper_vad_detect_speech(
     return speech;
 }
 
-struct whisper_vad_timestamps whisper_vad_timestamps_from_probs(whisper_vad_context * vctx,
-                                                      whisper_vad_params params,
-                                                      struct whisper_vad_speech * speech) {
+struct whisper_vad_timestamps whisper_vad_timestamps_from_probs(
+        whisper_vad_context * vctx,
+        whisper_vad_params    params,
+        whisper_vad_speech  * speech) {
     GGML_UNUSED(vctx);
     WHISPER_LOG_INFO("%s: detecting speech timestamps using %d probabilities\n", __func__, speech->n_probs);
     int     n_probs                 = speech->n_probs;
@@ -5555,11 +5556,6 @@ void whisper_vad_free_params(whisper_vad_params * params) {
     if (params) {
         delete params;
     }
-}
-
-void whisper_vad_free_speech(whisper_vad_speech * speech) {
-    speech->probs = nullptr;
-    speech->n_probs = 0;
 }
 
 void whisper_vad_free_timestamps(whisper_vad_timestamps * timestamps) {

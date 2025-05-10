@@ -586,6 +586,7 @@ extern "C" {
     // NOTE: this function allocates memory, and it is the responsibility of the caller to free the pointer - see whisper_free_context_params & whisper_free_params()
     WHISPER_API struct whisper_context_params * whisper_context_default_params_by_ref(void);
     WHISPER_API struct whisper_context_params   whisper_context_default_params       (void);
+
     WHISPER_API struct whisper_full_params * whisper_full_default_params_by_ref(enum whisper_sampling_strategy strategy);
     WHISPER_API struct whisper_full_params   whisper_full_default_params       (enum whisper_sampling_strategy strategy);
 
@@ -663,7 +664,10 @@ extern "C" {
     WHISPER_API float whisper_full_get_token_p           (struct whisper_context * ctx, int i_segment, int i_token);
     WHISPER_API float whisper_full_get_token_p_from_state(struct whisper_state * state, int i_segment, int i_token);
 
+    //
     // Voice Activity Detection (VAD)
+    //
+
     struct whisper_vad_context;
     struct whisper_vad_state;
 
@@ -676,27 +680,30 @@ extern "C" {
         int   window_size_samples;     // Number of audio samples in each probability window.
         float samples_overlap;         // Overlap in seconds when copying audio samples from speech segment.
     };
-    WHISPER_API struct whisper_vad_params  whisper_vad_default_params(void);
-    WHISPER_API struct whisper_vad_params  whisper_vad_params_from(struct whisper_full_params wparams);
+
+    WHISPER_API struct whisper_vad_params whisper_vad_default_params(void);
+    WHISPER_API struct whisper_vad_params whisper_vad_params_from(struct whisper_full_params wparams);
 
     struct whisper_vad_context_params {
         int   n_threads;  // The number of threads to use for processing.
         bool  use_gpu;
         int   gpu_device; // CUDA device
     };
+
     WHISPER_API struct whisper_vad_context_params whisper_vad_default_context_params(void);
 
     WHISPER_API struct whisper_vad_state * whisper_vad_init_state(struct whisper_vad_context * ctx);
 
     WHISPER_API struct whisper_vad_context * whisper_vad_init_from_file_with_params(
-        const char * path_model,
-        const struct whisper_vad_context_params params);
+            const char * path_model,
+            const struct whisper_vad_context_params params);
 
     WHISPER_API struct whisper_vad_context * whisper_vad_init_from_file_with_params_no_state(
-        const char * path_model,
-        const struct whisper_vad_context_params params);
+            const char * path_model,
+            const struct whisper_vad_context_params params);
 
-    WHISPER_API struct whisper_vad_context * whisper_vad_init_with_params_no_state(struct whisper_model_loader * loader,
+    WHISPER_API struct whisper_vad_context * whisper_vad_init_with_params_no_state(
+            struct whisper_model_loader * loader,
             struct whisper_vad_context_params params);
 
     struct whisper_vad_speech {
@@ -706,7 +713,8 @@ extern "C" {
 
     WHISPER_API struct whisper_vad_speech whisper_vad_detect_speech(
             struct whisper_vad_context * vctx,
-            const float * samples, int n_samples);
+            const float * samples,
+            int n_samples);
 
     struct whisper_vad_segment {
         float start; // Start time in seconds
@@ -721,7 +729,8 @@ extern "C" {
     WHISPER_API struct whisper_vad_timestamps whisper_vad_detect_speech_timestamps(
             struct whisper_vad_context * vctx,
             struct whisper_vad_params params,
-            const float * samples, int n_samples);
+            const float * samples,
+            int n_samples);
 
     WHISPER_API struct whisper_vad_timestamps whisper_vad_timestamps_from_probs(
             struct whisper_vad_context * vctx,
@@ -731,7 +740,6 @@ extern "C" {
     WHISPER_API void whisper_vad_free           (struct whisper_vad_context    * ctx);
     WHISPER_API void whisper_vad_free_state     (struct whisper_vad_state      * state);
     WHISPER_API void whisper_vad_free_params    (struct whisper_vad_params     * params);
-    WHISPER_API void whisper_vad_free_speech    (struct whisper_vad_speech     * speech);
     WHISPER_API void whisper_vad_free_timestamps(struct whisper_vad_timestamps * timestamps);
 
     ////////////////////////////////////////////////////////////////////////////
