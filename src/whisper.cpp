@@ -5120,9 +5120,10 @@ struct whisper_vad_context * whisper_vad_init_with_params_no_state(struct whispe
     return vctx;
 }
 
-struct whisper_vad_speech whisper_vad_detect_speech(struct whisper_vad_context * vctx,
-                                                    const float * pcmf32,
-                                                    int n_samples) {
+struct whisper_vad_speech whisper_vad_detect_speech(
+        struct whisper_vad_context * vctx,
+        const float * pcmf32,
+        int n_samples) {
     int n_chunks = n_samples / vctx->n_window;
     if (n_samples % vctx->n_window != 0) {
         n_chunks += 1;  // Add one more chunk for remaining samples.
@@ -6711,15 +6712,16 @@ static void whisper_sequence_score(
 }
 
 static bool whisper_vad(
-        struct whisper_context *  ctx,
-          struct whisper_state *  state,
-    struct whisper_full_params    params,
-                   const float *  samples,
-                           int    n_samples,
-            std::vector<float> &  filtered_samples,
-                           int &  filtered_n_samples) {
+        struct whisper_context * ctx,
+          struct whisper_state * state,
+    struct whisper_full_params   params,
+                   const float * samples,
+                           int   n_samples,
+            std::vector<float> & filtered_samples,
+                           int & filtered_n_samples) {
     WHISPER_LOG_INFO("%s: VAD is enabled, processing speach segments only\n", __func__);
     filtered_n_samples = 0;
+
     struct whisper_vad_context_params vad_ctx_params = whisper_vad_default_context_params();
     struct whisper_vad_context * vctx = whisper_vad_init_from_file_with_params(params.vad_model_path, vad_ctx_params);
     if (vctx == nullptr) {
@@ -6727,7 +6729,7 @@ static bool whisper_vad(
         return false;
     }
 
-    struct whisper_vad_params vad_params     = whisper_vad_params_from(params);
+    struct whisper_vad_params     vad_params = whisper_vad_params_from(params);
     struct whisper_vad_timestamps timestamps = whisper_vad_detect_speech_timestamps(vctx, vad_params, samples, n_samples);
 
     if (timestamps.n_segments > 0) {
@@ -6775,7 +6777,7 @@ static bool whisper_vad(
         int offset = 0;
         for (int i = 0; i < timestamps.n_segments; i++) {
             int segment_start_samples = timestamps.segments[i].start * WHISPER_SAMPLE_RATE;
-            int segment_end_samples = timestamps.segments[i].end * WHISPER_SAMPLE_RATE;
+            int segment_end_samples   = timestamps.segments[i].end   * WHISPER_SAMPLE_RATE;
 
             if (i < timestamps.n_segments - 1) {
                 segment_end_samples += overlap_samples;
@@ -6789,11 +6791,10 @@ static bool whisper_vad(
                 whisper_state::vad_segment_info segment;
 
                 segment.orig_start = timestamps.segments[i].start;
-                segment.orig_end = timestamps.segments[i].end;
+                segment.orig_end   = timestamps.segments[i].end;
 
                 segment.vad_start = offset / (float)WHISPER_SAMPLE_RATE;
-                segment.vad_end =  (offset + segment_length) / (float)WHISPER_SAMPLE_RATE;
-
+                segment.vad_end   = (offset + segment_length) / (float)WHISPER_SAMPLE_RATE;
 
                 WHISPER_LOG_INFO("%s: vad_segment_info: orig_start: %.2f, orig_end: %.2f, vad_start: %.2f, vad_end: %.2f\n",
                     __func__, segment.orig_start, segment.orig_end, segment.vad_start, segment.vad_end);
@@ -6811,10 +6812,12 @@ static bool whisper_vad(
                 }
             }
         }
+
         filtered_n_samples = offset;
         WHISPER_LOG_INFO("%s: Reduced audio from %d to %d samples (%.1f%% reduction)\n",
                         __func__, n_samples, filtered_n_samples, 100.0f * (1.0f - (float)filtered_n_samples / n_samples));
     }
+
     return true;
 }
 
