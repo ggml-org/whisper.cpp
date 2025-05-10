@@ -710,11 +710,6 @@ extern "C" {
             const float * samples,
             int n_samples);
 
-    struct whisper_vad_segment {
-        float start; // Start time in seconds
-        float end;   // End time in seconds
-    };
-
     struct whisper_vad_timestamps;
 
     WHISPER_API struct whisper_vad_timestamps * whisper_vad_timestamps_from_probs(

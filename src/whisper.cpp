@@ -4430,6 +4430,11 @@ struct whisper_vad_state {
     std::vector<float> probs;
 };
 
+struct whisper_vad_segment {
+    float start; // Start time in seconds
+    float end;   // End time in seconds
+};
+
 struct whisper_vad_timestamps {
     int n_segments;
     struct whisper_vad_segment * segments;
