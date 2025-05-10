@@ -716,6 +716,7 @@ extern "C" {
         float end;   // End time in seconds
     };
 
+    // TODO: rework into a oblique struct and access segments through API functions
     struct whisper_vad_timestamps {
         int n_segments;
         struct whisper_vad_segment * segments;

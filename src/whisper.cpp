@@ -5240,52 +5240,20 @@ struct whisper_vad_timestamps whisper_vad_timestamps_from_probs(
         neg_threshold = 0.01f;
     }
 
-    typedef struct {
+    struct speech_segment_t {
         int start;
         int end;
-    } speech_segment_t;
+    };
 
-    // Allocate initial memory for speech segments.
-    int speech_capacity = 16;
-    speech_segment_t * speeches = (speech_segment_t*)malloc(speech_capacity * sizeof(speech_segment_t));
-    if (!speeches) {
-        WHISPER_LOG_ERROR("%s: failed to allocate memory for temporary segments\n", __func__);
-        return { 0, nullptr };
-    }
-    // Initialize all segments
-    for (int i = 0; i < speech_capacity; i++) {
-        speeches[i].start = 0;
-        speeches[i].end = 0;
-    }
+    std::vector<speech_segment_t> speeches;
+    speeches.reserve(256);
 
     bool is_speech_segment = false;
-    int  speech_count      = 0;
     int  temp_end          = 0;
     int  prev_end          = 0;
     int  next_start        = 0;
     int  curr_speech_start = 0;
     bool has_curr_speech   = false;
-
-    auto resize_speeches = [&]() -> bool {
-        if (speech_count >= speech_capacity) {
-            speech_capacity *= 2;
-            speech_segment_t* new_speeches = (speech_segment_t*)realloc(speeches,
-                                              speech_capacity * sizeof(speech_segment_t));
-            if (!new_speeches) {
-                WHISPER_LOG_ERROR("%s: failed to reallocate memory for speech segments\n", __func__);
-                free(speeches);
-                return false;
-            }
-            speeches = new_speeches;
-
-            // Initialize new memory
-            for (int j = speech_count; j < speech_capacity; j++) {
-                speeches[j].start = 0;
-                speeches[j].end = 0;
-            }
-        }
-        return true;
-    };
 
     for (int i = 0; i < n_probs; i++) {
         float curr_prob   = probs[i];
@@ -5310,15 +5278,7 @@ struct whisper_vad_timestamps whisper_vad_timestamps_from_probs(
         // Handle maximum speech duration
         if (is_speech_segment && (curr_sample - curr_speech_start) > max_speech_samples) {
             if (prev_end) {
-                // Check if we need to increase capacity
-                if (!resize_speeches()) {
-                    return { 0, nullptr };
-                }
-
-                // Add segment ending at previously detected silence
-                speeches[speech_count].start = curr_speech_start;
-                speeches[speech_count].end = prev_end;
-                speech_count++;
+                speeches.push_back({ curr_speech_start, prev_end });
                 has_curr_speech = true;
 
                 if (next_start < prev_end) {  // Previously reached silence and is still not speech
@@ -5329,14 +5289,7 @@ struct whisper_vad_timestamps whisper_vad_timestamps_from_probs(
                 }
                 prev_end = next_start = temp_end = 0;
             } else {
-                // No silence detected, force end the segment
-                if (!resize_speeches()) {
-                    return { 0, nullptr };
-                }
-
-                speeches[speech_count].start = curr_speech_start;
-                speeches[speech_count].end = curr_sample;
-                speech_count++;
+                speeches.push_back({ curr_speech_start, curr_sample });
 
                 prev_end = next_start = temp_end = 0;
                 is_speech_segment = false;
@@ -5362,14 +5315,7 @@ struct whisper_vad_timestamps whisper_vad_timestamps_from_probs(
             } else {
                 // End the segment if it's long enough
                 if ((temp_end - curr_speech_start) > min_speech_samples) {
-                    // Check if we need to increase capacity
-                    if (!resize_speeches()) {
-                        return { 0, nullptr };
-                    }
-
-                    speeches[speech_count].start = curr_speech_start;
-                    speeches[speech_count].end = temp_end;
-                    speech_count++;
+                    speeches.push_back({ curr_speech_start, temp_end });
                 }
 
                 prev_end = next_start = temp_end = 0;
@@ -5382,20 +5328,13 @@ struct whisper_vad_timestamps whisper_vad_timestamps_from_probs(
 
     // Handle the case if we're still in a speech segment at the end
     if (has_curr_speech && (audio_length_samples - curr_speech_start) > min_speech_samples) {
-        // Check if we need to increase capacity
-        if (!resize_speeches()) {
-            return { 0, nullptr };
-        }
-
-        speeches[speech_count].start = curr_speech_start;
-        speeches[speech_count].end = audio_length_samples;
-        speech_count++;
+        speeches.push_back({ curr_speech_start, audio_length_samples });
     }
 
     // Merge adjacent segments with small gaps in between (post-processing)
-    if (speech_count > 1) {
+    if (speeches.size() > 1) {
         int merged_count = 0;
-        for (int i = 0; i < speech_count - 1; i++) {
+        for (int i = 0; i < (int) speeches.size() - 1; i++) {
             // Define maximum gap allowed for merging (e.g., 200ms converted to samples)
             int max_merge_gap_samples = sample_rate * 200 / 1000;
 
@@ -5403,62 +5342,50 @@ struct whisper_vad_timestamps whisper_vad_timestamps_from_probs(
             if (speeches[i+1].start - speeches[i].end < max_merge_gap_samples) {
                 // Merge by extending current segment to the end of next segment
                 speeches[i].end = speeches[i+1].end;
+                speeches.erase(speeches.begin() + i + 1);
 
-                // Shift all subsequent segments back by one
-                for (int j = i+1; j < speech_count - 1; j++) {
-                    speeches[j] = speeches[j+1];
-                }
-
-                // Reduce count and check this position again
-                speech_count--;
                 i--;
                 merged_count++;
             }
         }
         WHISPER_LOG_INFO("%s: Merged %d adjacent segments, now have %d segments\n",
-                         __func__, merged_count, speech_count);
+                         __func__, merged_count, (int) speeches.size());
     }
 
     // Double-check for minimum speech duration
-    for (int i = 0; i < speech_count; i++) {
+    for (int i = 0; i < (int) speeches.size(); i++) {
         if (speeches[i].end - speeches[i].start < min_speech_samples) {
             WHISPER_LOG_INFO("%s: Removing segment %d (too short: %d samples)\n",
                             __func__, i, speeches[i].end - speeches[i].start);
 
-            // Remove this segment by shifting all subsequent segments
-            for (int j = i; j < speech_count - 1; j++) {
-                speeches[j] = speeches[j+1];
-            }
-
-            // Reduce count and recheck current position
-            speech_count--;
+            speeches.erase(speeches.begin() + i);
             i--;
         }
     }
 
-    WHISPER_LOG_INFO("%s: Final speech segments after filtering: %d\n", __func__, speech_count);
+    WHISPER_LOG_INFO("%s: Final speech segments after filtering: %d\n", __func__, (int) speeches.size());
 
     // Allocate final segments
     struct whisper_vad_segment * segments = NULL;
-    if (speech_count > 0) {
-        segments = (struct whisper_vad_segment*) malloc(speech_count * sizeof(struct whisper_vad_segment));
+    if (speeches.size() > 0) {
+        segments = (struct whisper_vad_segment *) malloc(speeches.size() * sizeof(struct whisper_vad_segment));
         if (!segments) {
             WHISPER_LOG_ERROR("%s: failed to allocate memory for final segments\n", __func__);
-            free(speeches);
             return { 0, nullptr };
         }
     }
 
     // Apply padding to segments and copy to final segments
-    for (int i = 0; i < speech_count; i++) {
+    for (int i = 0; i < (int) speeches.size(); i++) {
         // Apply padding to the start of the first segment
         if (i == 0) {
-            speeches[i].start = (speeches[i].start > speech_pad_samples) ?
-                                (speeches[i].start - speech_pad_samples) : 0;
+            speeches[i].start =
+                (speeches[i].start > speech_pad_samples) ?
+                (speeches[i].start - speech_pad_samples) : 0;
         }
 
         // Handle spacing between segments
-        if (i < speech_count - 1) {
+        if (i < (int) speeches.size() - 1) {
             int silence_duration = speeches[i+1].start - speeches[i].end;
 
             if (silence_duration < 2 * speech_pad_samples) {
@@ -5491,11 +5418,8 @@ struct whisper_vad_timestamps whisper_vad_timestamps_from_probs(
                         __func__, i, segments[i].start, segments[i].end, segments[i].end - segments[i].start);
     }
 
-    // Free temporary segments
-    free(speeches);
-
     struct whisper_vad_timestamps timestamps = {
-        /* n_segments = */ speech_count,
+        /* n_segments = */ (int) speeches.size(),
         /* segments   = */ segments,
     };
 
@@ -5541,7 +5465,8 @@ void whisper_vad_free_state(whisper_vad_state * state) {
 }
 
 void whisper_vad_free_timestamps(whisper_vad_timestamps * timestamps) {
-    delete timestamps->segments;
+    free(timestamps->segments);
+
     timestamps->segments = nullptr;
     timestamps->n_segments = 0;
 }
