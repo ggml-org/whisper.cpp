@@ -1166,19 +1166,18 @@ int main(int argc, char ** argv) {
 
             wparams.suppress_nst     = params.suppress_nst;
 
-            wparams.vad                         = params.vad;
-            wparams.vad_model_path              = params.vad_model.c_str();
-            wparams.vad_threshold               = params.vad_threshold;
-            wparams.vad_min_speech_duration_ms  = params.vad_min_speech_duration_ms;
-            wparams.vad_min_silence_duration_ms = params.vad_min_silence_duration_ms;
-            wparams.vad_max_speech_duration_s   = params.vad_max_speech_duration_s;
-            wparams.vad_speech_pad_ms           = params.vad_speech_pad_ms;
-            wparams.vad_window_size_samples     = params.vad_window_size_samples;
-            wparams.vad_samples_overlap         = params.vad_samples_overlap;
+            wparams.vad            = params.vad;
+            wparams.vad_model_path = params.vad_model.c_str();
+
+            wparams.vad_params.threshold               = params.vad_threshold;
+            wparams.vad_params.min_speech_duration_ms  = params.vad_min_speech_duration_ms;
+            wparams.vad_params.min_silence_duration_ms = params.vad_min_silence_duration_ms;
+            wparams.vad_params.max_speech_duration_s   = params.vad_max_speech_duration_s;
+            wparams.vad_params.speech_pad_ms           = params.vad_speech_pad_ms;
+            wparams.vad_params.window_size_samples     = params.vad_window_size_samples;
+            wparams.vad_params.samples_overlap         = params.vad_samples_overlap;
 
             whisper_print_user_data user_data = { &params, &pcmf32s, 0 };
-
-
 
             const auto & grammar_parsed = params.grammar_parsed;
             auto grammar_rules = grammar_parsed.c_rules();

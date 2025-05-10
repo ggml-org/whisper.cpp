@@ -28,14 +28,15 @@ int main() {
             cparams);
 
     struct whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
-    wparams.vad                         = true;
-    wparams.vad_model_path              = vad_model_path.c_str();
-    wparams.vad_threshold               = 0.5f;
-    wparams.vad_min_speech_duration_ms  = 250;
-    wparams.vad_min_silence_duration_ms = 100;
-    wparams.vad_max_speech_duration_s   = FLT_MAX;
-    wparams.vad_speech_pad_ms           = 30;
-    wparams.vad_window_size_samples     = 512;
+    wparams.vad            = true;
+    wparams.vad_model_path = vad_model_path.c_str();
+
+    wparams.vad_params.threshold               = 0.5f;
+    wparams.vad_params.min_speech_duration_ms  = 250;
+    wparams.vad_params.min_silence_duration_ms = 100;
+    wparams.vad_params.max_speech_duration_s   = FLT_MAX;
+    wparams.vad_params.speech_pad_ms           = 30;
+    wparams.vad_params.window_size_samples     = 512;
 
     assert(whisper_full_parallel(wctx, wparams, pcmf32.data(), pcmf32.size(), 1) == 0);
 

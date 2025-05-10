@@ -4449,7 +4449,7 @@ struct whisper_vad_context {
 struct whisper_vad_context_params whisper_vad_default_context_params(void) {
     whisper_vad_context_params result = {
         /*.n_thread                = */ 4,
-        /*.use_gpu                 = */ true,
+        /*.use_gpu                 = */ false,
         /*.gpu_device              = */ 0,
     };
     return result;
@@ -4464,19 +4464,6 @@ struct whisper_vad_params whisper_vad_default_params(void) {
         /* speech_pad_ms           = */ 30,
         /* window_size_samples     = */ 512,
         /* samples_overlap         = */ 0.1,
-    };
-    return result;
-}
-
-struct whisper_vad_params whisper_vad_params_from(struct whisper_full_params wparams) {
-    whisper_vad_params result = {
-        /* threshold               = */ wparams.vad_threshold,
-        /* min_speech_duration_ms  = */ wparams.vad_min_speech_duration_ms,
-        /* min_silence_duration_ms = */ wparams.vad_min_silence_duration_ms,
-        /* max_speech_duration_s   = */ wparams.vad_max_speech_duration_s,
-        /* speech_pad_ms           = */ wparams.vad_speech_pad_ms,
-        /* window_size_samples     = */ wparams.vad_window_size_samples,
-        /* samples_overlap         = */ wparams.vad_samples_overlap,
     };
     return result;
 }
@@ -5552,12 +5539,6 @@ void whisper_vad_free_state(whisper_vad_state * state) {
     }
 }
 
-void whisper_vad_free_params(whisper_vad_params * params) {
-    if (params) {
-        delete params;
-    }
-}
-
 void whisper_vad_free_timestamps(whisper_vad_timestamps * timestamps) {
     delete timestamps->segments;
     timestamps->segments = nullptr;
@@ -6001,7 +5982,6 @@ struct whisper_full_params * whisper_full_default_params_by_ref(enum whisper_sam
 }
 
 struct whisper_full_params whisper_full_default_params(enum whisper_sampling_strategy strategy) {
-    auto vparams = whisper_vad_default_params();
     struct whisper_full_params result = {
         /*.strategy          =*/ strategy,
 
@@ -6084,13 +6064,8 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
 
         /*.vad                         =*/ false,
         /*.vad_model_path              =*/ nullptr,
-        /* vad_threshold               =*/ vparams.threshold,
-        /* vad_min_speech_duration_ms  =*/ vparams.min_speech_duration_ms,
-        /* vad_min_silence_duration_ms =*/ vparams.min_silence_duration_ms,
-        /* vad_max_speech_duration_s   =*/ vparams.max_speech_duration_s,
-        /* vad_speech_pad_ms           =*/ vparams.speech_pad_ms,
-        /* vad_window_size_samples     =*/ vparams.window_size_samples,
-        /* vad_samples_overlap         =*/ vparams.samples_overlap,
+
+        /* vad_params =*/ whisper_vad_default_params(),
     };
 
     switch (strategy) {
@@ -6725,8 +6700,9 @@ static bool whisper_vad(
         return false;
     }
 
-    struct whisper_vad_params     vad_params = whisper_vad_params_from(params);
-    struct whisper_vad_timestamps timestamps = whisper_vad_detect_speech_timestamps(vctx, vad_params, samples, n_samples);
+    const whisper_vad_params & vad_params = params.vad_params;
+
+    whisper_vad_timestamps timestamps = whisper_vad_detect_speech_timestamps(vctx, vad_params, samples, n_samples);
 
     if (timestamps.n_segments > 0) {
         state->has_vad_segments = true;
@@ -6734,7 +6710,7 @@ static bool whisper_vad(
         ctx->state->vad_segments.reserve(timestamps.n_segments);
 
         WHISPER_LOG_INFO("%s: detected %d speech segments\n", __func__, timestamps.n_segments);
-        float overlap_seconds = params.vad_samples_overlap;
+        float overlap_seconds = vad_params.samples_overlap;
         int overlap_samples = overlap_seconds * WHISPER_SAMPLE_RATE;
 
         for (int i = 0; i < timestamps.n_segments; i++) {
