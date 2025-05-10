@@ -35,17 +35,17 @@ struct whisper_vad_speech test_detect_speech(
     return speech;
 }
 
-struct whisper_vad_timestamps test_detect_timestamps(
+struct whisper_vad_timestamps * test_detect_timestamps(
         struct whisper_vad_context * vctx,
         struct whisper_vad_params params,
         struct whisper_vad_speech * speech) {
-    struct whisper_vad_timestamps timestamps = whisper_vad_timestamps_from_probs(params, speech);
-    assert(timestamps.n_segments == 5);
-    assert(timestamps.segments != nullptr);
+    struct whisper_vad_timestamps * timestamps = whisper_vad_timestamps_from_probs(params, speech);
+    assert(whisper_vad_timestamps_n_segments(timestamps) == 5);
 
-    for (int i = 0; i < timestamps.n_segments; ++i) {
-        printf("VAD segment %d: start = %.2f, end = %.2f\n",
-               i, timestamps.segments[i].start, timestamps.segments[i].end);
+    for (int i = 0; i < whisper_vad_timestamps_n_segments(timestamps); ++i) {
+        printf("VAD segment %d: start = %.2f, end = %.2f\n", i,
+               whisper_vad_timestamps_get_segment_t0(timestamps, i),
+               whisper_vad_timestamps_get_segment_t1(timestamps, i));
     }
 
     return timestamps;
@@ -78,9 +78,9 @@ int main() {
     struct whisper_vad_speech speech = test_detect_speech(vctx, params, pcmf32.data(), pcmf32.size());
 
     // Test speech timestamps (uses speech probabilities from above)
-    struct whisper_vad_timestamps timestamps = test_detect_timestamps(vctx, params, &speech);
+    struct whisper_vad_timestamps * timestamps = test_detect_timestamps(vctx, params, &speech);
 
-    whisper_vad_free_timestamps(&timestamps);
+    whisper_vad_free_timestamps(timestamps);
     whisper_vad_free(vctx);
 
     return 0;
