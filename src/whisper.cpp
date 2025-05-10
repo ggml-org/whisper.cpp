@@ -5388,10 +5388,11 @@ struct whisper_vad_timestamps * whisper_vad_timestamps_from_probs(
     WHISPER_LOG_INFO("%s: Final speech segments after filtering: %d\n", __func__, (int) speeches.size());
 
     // Allocate final segments
-    struct whisper_vad_segment * segments = NULL;
+    std::vector<whisper_vad_segment> segments;
     if (speeches.size() > 0) {
-        segments = (struct whisper_vad_segment *) malloc(speeches.size() * sizeof(struct whisper_vad_segment));
-        if (!segments) {
+        try {
+            segments.resize(speeches.size());
+        } catch (const std::bad_alloc &) {
             WHISPER_LOG_ERROR("%s: failed to allocate memory for final segments\n", __func__);
             return nullptr;
         }
@@ -5446,7 +5447,7 @@ struct whisper_vad_timestamps * whisper_vad_timestamps_from_probs(
         return nullptr;
     }
     timestamps->n_segments = (int) speeches.size();
-    timestamps->segments.assign(segments, segments + timestamps->n_segments);
+    timestamps->segments = std::move(segments);
     return timestamps;
 }
 
