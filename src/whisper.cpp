@@ -5119,7 +5119,7 @@ struct whisper_vad_context * whisper_vad_init_with_params_no_state(struct whispe
 
 struct whisper_vad_probs whisper_vad_detect_speech(
         struct whisper_vad_context * vctx,
-        const float * pcmf32,
+        const float * samples,
         int n_samples) {
     int n_chunks = n_samples / vctx->n_window;
     if (n_samples % vctx->n_window != 0) {
@@ -5161,7 +5161,7 @@ struct whisper_vad_probs whisper_vad_detect_speech(
         if (chunk_len < vctx->n_window) {
             WHISPER_LOG_INFO("%s: chunk_len: %d < n_window: %d\n", __func__, chunk_len, vctx->n_window);
             std::vector<float> partial_chunk(vctx->n_window, 0.0f);
-            std::copy(pcmf32 + idx_start, pcmf32 + idx_end, partial_chunk.begin());
+            std::copy(samples + idx_start, samples + idx_end, partial_chunk.begin());
 
             // Copy the zero-padded chunk to the window.
             const int samples_to_copy_max = vctx->n_window;
@@ -5173,7 +5173,7 @@ struct whisper_vad_probs whisper_vad_detect_speech(
         } else {
             // Copy current frame samples to the window.
             const int samples_to_copy = std::min(idx_end - idx_start, vctx->n_window);
-            std::copy(pcmf32 + idx_start, pcmf32 + idx_start + samples_to_copy, window.begin());
+            std::copy(samples + idx_start, samples + idx_start + samples_to_copy, window.begin());
         }
 
         // Set the frame tensor data with the samples.
@@ -5454,10 +5454,10 @@ struct whisper_vad_timestamps * whisper_vad_timestamps_from_probs(
 struct whisper_vad_timestamps * whisper_vad_timestamps_from_samples(
         whisper_vad_context * vctx,
         whisper_vad_params params,
-        const float * pcmf32,
+        const float * samples,
         int n_samples) {
     WHISPER_LOG_INFO("%s: detecting speech timestamps in %d samples\n", __func__, n_samples);
-    auto probs = whisper_vad_detect_speech(vctx, pcmf32, n_samples);
+    auto probs = whisper_vad_detect_speech(vctx, samples, n_samples);
     return whisper_vad_timestamps_from_probs(params, &probs);
 }
 
