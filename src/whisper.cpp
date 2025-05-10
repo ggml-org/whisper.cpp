@@ -4437,7 +4437,7 @@ struct whisper_vad_segment {
 
 struct whisper_vad_timestamps {
     int n_segments;
-    struct whisper_vad_segment * segments;
+    std::vector<whisper_vad_segment> segments;
 };
 
 struct whisper_vad_context {
@@ -5440,12 +5440,13 @@ struct whisper_vad_timestamps * whisper_vad_timestamps_from_probs(
                         __func__, i, segments[i].start, segments[i].end, segments[i].end - segments[i].start);
     }
 
-    whisper_vad_timestamps * timestamps = (whisper_vad_timestamps *) malloc(sizeof(whisper_vad_timestamps));
+    whisper_vad_timestamps * timestamps = new whisper_vad_timestamps;
     if (timestamps == NULL) {
+        WHISPER_LOG_ERROR("%s: failed to allocate memory for whisper_vad_timstamps\n", __func__);
         return nullptr;
     }
     timestamps->n_segments = (int) speeches.size();
-    timestamps->segments = segments;
+    timestamps->segments.assign(segments, segments + timestamps->n_segments);
     return timestamps;
 }
 
@@ -5488,10 +5489,9 @@ void whisper_vad_free_state(whisper_vad_state * state) {
 }
 
 void whisper_vad_free_timestamps(whisper_vad_timestamps * timestamps) {
-    free(timestamps->segments);
-
-    timestamps->segments = nullptr;
-    timestamps->n_segments = 0;
+    if (timestamps) {
+        delete timestamps;
+    }
 }
 
 //////////////////////////////////
