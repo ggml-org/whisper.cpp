@@ -682,7 +682,7 @@ extern "C" {
     struct whisper_vad_context_params {
         int   n_threads;  // The number of threads to use for processing.
         bool  use_gpu;
-        int   gpu_device;  // CUDA device
+        int   gpu_device; // CUDA device
     };
     WHISPER_API struct whisper_vad_context_params whisper_vad_default_context_params(void);
 

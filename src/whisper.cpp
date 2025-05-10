@@ -4681,7 +4681,9 @@ struct whisper_vad_state * whisper_vad_init_state(whisper_vad_context * vctx) {
     vctx->state = state;
 
     auto whisper_context_params = whisper_context_default_params();
-    whisper_context_params.use_gpu = vctx->params.use_gpu;
+    // TODO: GPU VAD is forced disabled until the performance is improved
+    //whisper_context_params.use_gpu    = vctx->params.use_gpu;
+    whisper_context_params.use_gpu    = false;
     whisper_context_params.gpu_device = vctx->params.gpu_device;
 
     state->backends = whisper_backend_init(whisper_context_params);
