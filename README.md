@@ -266,7 +266,7 @@ This can result in significant speedup in encoder performance. Here are the inst
 
 - Build `whisper.cpp` with OpenVINO support:
 
-  Download OpenVINO package from [release page](https://github.com/openvinotoolkit/openvino/releases). The recommended version to use is [2023.0.0](https://github.com/openvinotoolkit/openvino/releases/tag/2023.0.0).
+  Download OpenVINO package from [release page](https://github.com/openvinotoolkit/openvino/releases). The recommended version to use is [2024.6.0](https://github.com/openvinotoolkit/openvino/releases/tag/2024.6.0). Ready to use Binaries of the required libraries can be found in the [OpenVino Archives](https://storage.openvinotoolkit.org/repositories/openvino/packages/2024.6/)
 
   After downloading & extracting package onto your development system, set up required environment by sourcing setupvars script. For example:
 
