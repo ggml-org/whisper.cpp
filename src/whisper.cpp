@@ -5151,30 +5151,30 @@ struct whisper_vad_speech whisper_vad_detect_speech(struct whisper_vad_context *
     struct ggml_tensor * prob  = ggml_graph_get_tensor(gf, "prob");
 
     // we are going to reuse the graph multiple times for each chunk
-    // TODO: measure time and print timing information for this step
     const int64_t t_start_vad_us = ggml_time_us();
-    for (int i = 0; i < n_chunks; i++) {
-        int start_idx = i * vctx->n_window;
-        int end_idx = std::min(start_idx + vctx->n_window, n_samples);
 
-        int chunk_len = end_idx - start_idx;
+    for (int i = 0; i < n_chunks; i++) {
+        const int idx_start = i * vctx->n_window;
+        const int idx_end = std::min(idx_start + vctx->n_window, n_samples);
+
+        const int chunk_len = idx_end - idx_start;
 
         if (chunk_len < vctx->n_window) {
             WHISPER_LOG_INFO("%s: chunk_len: %d < n_window: %d\n", __func__, chunk_len, vctx->n_window);
             std::vector<float> partial_chunk(vctx->n_window, 0.0f);
-            std::copy(pcmf32 + start_idx, pcmf32 + end_idx, partial_chunk.begin());
+            std::copy(pcmf32 + idx_start, pcmf32 + idx_end, partial_chunk.begin());
 
             // Copy the zero-padded chunk to the window.
-            int max_samples_to_copy = vctx->n_window;
-            int actual_samples_to_copy = std::min(max_samples_to_copy, (int)partial_chunk.size());
-            std::copy(partial_chunk.begin(), partial_chunk.begin() + actual_samples_to_copy, window.begin());
-            if (actual_samples_to_copy < max_samples_to_copy) {
-                std::fill(window.begin() + actual_samples_to_copy, window.end(), 0.0f);
+            const int samples_to_copy_max = vctx->n_window;
+            const int samples_to_copy_cur = std::min(samples_to_copy_max, (int)partial_chunk.size());
+            std::copy(partial_chunk.begin(), partial_chunk.begin() + samples_to_copy_cur, window.begin());
+            if (samples_to_copy_cur < samples_to_copy_max) {
+                std::fill(window.begin() + samples_to_copy_cur, window.end(), 0.0f);
             }
         } else {
             // Copy current frame samples to the window.
-            int samples_to_copy = std::min(end_idx - start_idx, vctx->n_window);
-            std::copy(pcmf32 + start_idx, pcmf32 + start_idx + samples_to_copy, window.begin());
+            const int samples_to_copy = std::min(idx_end - idx_start, vctx->n_window);
+            std::copy(pcmf32 + idx_start, pcmf32 + idx_start + samples_to_copy, window.begin());
         }
 
         // Set the frame tensor data with the samples.
@@ -5191,6 +5191,7 @@ struct whisper_vad_speech whisper_vad_detect_speech(struct whisper_vad_context *
 
         //WHISPER_LOG_DEBUG("chunk %d: p = %7.3f\n", i, probs[i]);
     }
+
     vctx->state->t_vad_us += ggml_time_us() - t_start_vad_us;
     WHISPER_LOG_INFO("%s: vad time = %.2f ms processing %d samples\n", __func__, 1e-3f * vctx->state->t_vad_us, n_samples);
 
@@ -5203,7 +5204,6 @@ struct whisper_vad_speech whisper_vad_detect_speech(struct whisper_vad_context *
 
     return speech;
 }
-
 
 struct whisper_vad_timestamps whisper_vad_timestamps_from_probs(whisper_vad_context * vctx,
                                                       whisper_vad_params params,
@@ -5243,7 +5243,7 @@ struct whisper_vad_timestamps whisper_vad_timestamps_from_probs(whisper_vad_cont
     // max_speech_samples is reached. The value 98 was taken from the original
     // silaro-vad python implementation:
     //https://github.com/snakers4/silero-vad/blob/0dd45f0bcd7271463c234f3bae5ad25181f9df8b/src/silero_vad/utils_vad.py#L291
-    int     min_silence_samples_at_max_speech = sample_rate * 98 / 1000;
+    int min_silence_samples_at_max_speech = sample_rate * 98 / 1000;
 
     // Calculate lower threshold for detecting end of speech segments.
     float neg_threshold = threshold - 0.15f;
@@ -5475,24 +5475,28 @@ struct whisper_vad_timestamps whisper_vad_timestamps_from_probs(whisper_vad_cont
             if (silence_duration < 2 * speech_pad_samples) {
                 // If segments are close, split the difference
                 speeches[i].end += silence_duration / 2;
-                speeches[i+1].start = (speeches[i+1].start > silence_duration / 2) ?
-                                    (speeches[i+1].start - silence_duration / 2) : 0;
+                speeches[i+1].start =
+                    (speeches[i+1].start > silence_duration / 2) ?
+                    (speeches[i+1].start - silence_duration / 2) : 0;
             } else {
                 // Otherwise, apply full padding to both
-                speeches[i].end = (speeches[i].end + speech_pad_samples < audio_length_samples) ?
-                                (speeches[i].end + speech_pad_samples) : audio_length_samples;
-                speeches[i+1].start = (speeches[i+1].start > speech_pad_samples) ?
-                                    (speeches[i+1].start - speech_pad_samples) : 0;
+                speeches[i].end =
+                    (speeches[i].end + speech_pad_samples < audio_length_samples) ?
+                    (speeches[i].end + speech_pad_samples) : audio_length_samples;
+                speeches[i+1].start =
+                    (speeches[i+1].start > speech_pad_samples) ?
+                    (speeches[i+1].start - speech_pad_samples) : 0;
             }
         } else {
             // Apply padding to the end of the last segment
-            speeches[i].end = (speeches[i].end + speech_pad_samples < audio_length_samples) ?
-                            (speeches[i].end + speech_pad_samples) : audio_length_samples;
+            speeches[i].end =
+                (speeches[i].end + speech_pad_samples < audio_length_samples) ?
+                (speeches[i].end + speech_pad_samples) : audio_length_samples;
         }
 
         // Convert from samples to seconds and copy to final segments
         segments[i].start = (float)speeches[i].start / sample_rate;
-        segments[i].end = (float)speeches[i].end / sample_rate;
+        segments[i].end   = (float)speeches[i].end   / sample_rate;
 
         WHISPER_LOG_INFO("%s: VAD segment %d: start = %.2f, end = %.2f (duration: %.2f)\n",
                         __func__, i, segments[i].start, segments[i].end, segments[i].end - segments[i].start);
