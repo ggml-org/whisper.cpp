@@ -5112,7 +5112,7 @@ struct whisper_vad_context * whisper_vad_init_with_params_no_state(struct whispe
     return vctx;
 }
 
-struct whisper_vad_speech whisper_vad_detect_speech(
+struct whisper_vad_probs whisper_vad_detect_speech(
         struct whisper_vad_context * vctx,
         const float * pcmf32,
         int n_samples) {
@@ -5191,7 +5191,7 @@ struct whisper_vad_speech whisper_vad_detect_speech(
 
     ggml_backend_sched_reset(sched);
 
-    struct whisper_vad_speech speech = {
+    struct whisper_vad_probs speech = {
         /* n_probs = */ n_chunks,
         /* probs   = */ vctx->state->probs.data(),
     };
@@ -5213,11 +5213,11 @@ float whisper_vad_timestamps_get_segment_t1(struct whisper_vad_timestamps * time
 
 struct whisper_vad_timestamps * whisper_vad_timestamps_from_probs(
         whisper_vad_params   params,
-        whisper_vad_speech * speech) {
-    WHISPER_LOG_INFO("%s: detecting speech timestamps using %d probabilities\n", __func__, speech->n_probs);
+        whisper_vad_probs *  vad_probs) {
+    WHISPER_LOG_INFO("%s: detecting speech timestamps using %d probabilities\n", __func__, vad_probs->n_probs);
 
-    int     n_probs                 = speech->n_probs;
-    float * probs                   = speech->probs;
+    int     n_probs                 = vad_probs->n_probs;
+    float * probs                   = vad_probs->probs;
     float   threshold               = params.threshold;
     int     min_speech_duration_ms  = params.min_speech_duration_ms;
     int     min_silence_duration_ms = params.min_silence_duration_ms;
