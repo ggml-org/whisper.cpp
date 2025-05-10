@@ -39,7 +39,7 @@ class TestPackage < TestBase
   def test_build_options
     options = BuildOptions::Options.new
     assert_empty options.missing_options
-    if ENV["TEST_EXTRA_OPTIONS"]
+    if ENV["TEST_EXTRA_OPTIONS"] == "1"
       assert_empty options.extra_options
     end
   end
