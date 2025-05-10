@@ -26,5 +26,10 @@ to the server's HTTP path:
 ```
 # copy the produced page to your HTTP path
 cp bin/stream.wasm/*       /path/to/html/
+cp bin/libstream.js        /path/to/html/
 cp bin/libstream.worker.js /path/to/html/
 ```
+
+> 📝 **Note:** As of Emscripten 3.1.58 (April 2024), separate worker.js files are no
+> longer generated and the worker is embedded in the main JS file. So the worker
+> file will not be geneated for versions later than `3.1.58`.
