@@ -5115,6 +5115,7 @@ struct whisper_vad_speech whisper_vad_detect_speech(
     if (n_samples % vctx->n_window != 0) {
         n_chunks += 1;  // Add one more chunk for remaining samples.
     }
+
     WHISPER_LOG_INFO("%s: detecting speech in %d samples\n", __func__, n_samples);
     WHISPER_LOG_INFO("%s: n_chunks: %d\n", __func__, n_chunks);
 
@@ -5194,11 +5195,10 @@ struct whisper_vad_speech whisper_vad_detect_speech(
 }
 
 struct whisper_vad_timestamps whisper_vad_timestamps_from_probs(
-        whisper_vad_context * vctx,
-        whisper_vad_params    params,
-        whisper_vad_speech  * speech) {
-    GGML_UNUSED(vctx);
+        whisper_vad_params   params,
+        whisper_vad_speech * speech) {
     WHISPER_LOG_INFO("%s: detecting speech timestamps using %d probabilities\n", __func__, speech->n_probs);
+
     int     n_probs                 = speech->n_probs;
     float * probs                   = speech->probs;
     float   threshold               = params.threshold;
@@ -5258,13 +5258,13 @@ struct whisper_vad_timestamps whisper_vad_timestamps_from_probs(
         speeches[i].end = 0;
     }
 
-    bool is_speech_segment    = false;
-    int  speech_count         = 0;
-    int  temp_end             = 0;
-    int  prev_end             = 0;
-    int  next_start           = 0;
-    int  curr_speech_start    = 0;
-    bool has_curr_speech      = false;
+    bool is_speech_segment = false;
+    int  speech_count      = 0;
+    int  temp_end          = 0;
+    int  prev_end          = 0;
+    int  next_start        = 0;
+    int  curr_speech_start = 0;
+    bool has_curr_speech   = false;
 
     auto resize_speeches = [&]() -> bool {
         if (speech_count >= speech_capacity) {
@@ -5502,13 +5502,14 @@ struct whisper_vad_timestamps whisper_vad_timestamps_from_probs(
     return timestamps;
 }
 
-struct whisper_vad_timestamps whisper_vad_detect_speech_timestamps(whisper_vad_context * vctx,
-                                                      whisper_vad_params params,
-                                                      const float * pcmf32,
-                                                      int n_samples) {
+struct whisper_vad_timestamps whisper_vad_detect_speech_timestamps(
+        whisper_vad_context * vctx,
+        whisper_vad_params params,
+        const float * pcmf32,
+        int n_samples) {
     WHISPER_LOG_INFO("%s: detecting speech timestamps in %d samples\n", __func__, n_samples);
     auto probs = whisper_vad_detect_speech(vctx, pcmf32, n_samples);
-    return whisper_vad_timestamps_from_probs(vctx, params, &probs);
+    return whisper_vad_timestamps_from_probs(params, &probs);
 }
 
 void whisper_vad_free(whisper_vad_context * ctx) {

@@ -39,7 +39,7 @@ struct whisper_vad_timestamps test_detect_timestamps(
         struct whisper_vad_context * vctx,
         struct whisper_vad_params params,
         struct whisper_vad_speech * speech) {
-    struct whisper_vad_timestamps timestamps = whisper_vad_timestamps_from_probs(vctx, params, speech);
+    struct whisper_vad_timestamps timestamps = whisper_vad_timestamps_from_probs(params, speech);
     assert(timestamps.n_segments == 5);
     assert(timestamps.segments != nullptr);
 

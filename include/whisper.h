@@ -729,7 +729,6 @@ extern "C" {
             int n_samples);
 
     WHISPER_API struct whisper_vad_timestamps whisper_vad_timestamps_from_probs(
-            struct whisper_vad_context * vctx,
             struct whisper_vad_params params,
             struct whisper_vad_speech * probs);
 
