@@ -710,24 +710,24 @@ extern "C" {
             const float * samples,
             int n_samples);
 
-    struct whisper_vad_timestamps;
+    struct whisper_vad_segments;
 
-    WHISPER_API struct whisper_vad_timestamps * whisper_vad_timestamps_from_probs(
+    WHISPER_API struct whisper_vad_segments * whisper_vad_segments_from_probs(
             struct whisper_vad_params params,
             struct whisper_vad_probs * probs);
 
-    WHISPER_API struct whisper_vad_timestamps * whisper_vad_timestamps_from_samples(
+    WHISPER_API struct whisper_vad_segments * whisper_vad_segments_from_samples(
             struct whisper_vad_context * vctx,
             struct whisper_vad_params params,
             const float * samples,
             int n_samples);
 
-    WHISPER_API int whisper_vad_timestamps_n_segments(struct whisper_vad_timestamps * timestamps);
+    WHISPER_API int whisper_vad_segments_n_segments(struct whisper_vad_segments * segments);
 
-    WHISPER_API float whisper_vad_timestamps_get_segment_t0(struct whisper_vad_timestamps * timestamps, int i_segment);
-    WHISPER_API float whisper_vad_timestamps_get_segment_t1(struct whisper_vad_timestamps * timestamps, int i_segment);
+    WHISPER_API float whisper_vad_segments_get_segment_t0(struct whisper_vad_segments * segments, int i_segment);
+    WHISPER_API float whisper_vad_segments_get_segment_t1(struct whisper_vad_segments * segments, int i_segment);
 
-    WHISPER_API void whisper_vad_free_timestamps(struct whisper_vad_timestamps * timestamps);
+    WHISPER_API void whisper_vad_free_segments(struct whisper_vad_segments * segments);
     WHISPER_API void whisper_vad_free_state     (struct whisper_vad_state      * state);
     WHISPER_API void whisper_vad_free           (struct whisper_vad_context    * ctx);
 

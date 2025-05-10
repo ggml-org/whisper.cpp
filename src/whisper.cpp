@@ -4435,7 +4435,7 @@ struct whisper_vad_segment {
     float end;   // End time in seconds
 };
 
-struct whisper_vad_timestamps {
+struct whisper_vad_segments {
     std::vector<whisper_vad_segment> segments;
 };
 
@@ -5203,19 +5203,19 @@ struct whisper_vad_probs whisper_vad_detect_speech(
     return speech;
 }
 
-int whisper_vad_timestamps_n_segments(struct whisper_vad_timestamps * timestamps) {
+int whisper_vad_segments_n_segments(struct whisper_vad_segments * timestamps) {
     return timestamps->segments.size();
 }
 
-float whisper_vad_timestamps_get_segment_t0(struct whisper_vad_timestamps * timestamps, int i_segment) {
+float whisper_vad_segments_get_segment_t0(struct whisper_vad_segments * timestamps, int i_segment) {
     return timestamps->segments[i_segment].start;
 }
 
-float whisper_vad_timestamps_get_segment_t1(struct whisper_vad_timestamps * timestamps, int i_segment) {
+float whisper_vad_segments_get_segment_t1(struct whisper_vad_segments * timestamps, int i_segment) {
     return timestamps->segments[i_segment].end;
 }
 
-struct whisper_vad_timestamps * whisper_vad_timestamps_from_probs(
+struct whisper_vad_segments * whisper_vad_segments_from_probs(
         whisper_vad_params   params,
         whisper_vad_probs *  vad_probs) {
     WHISPER_LOG_INFO("%s: detecting speech timestamps using %d probabilities\n", __func__, vad_probs->n_probs);
@@ -5440,23 +5440,23 @@ struct whisper_vad_timestamps * whisper_vad_timestamps_from_probs(
                         __func__, i, segments[i].start, segments[i].end, segments[i].end - segments[i].start);
     }
 
-    whisper_vad_timestamps * timestamps = new whisper_vad_timestamps;
-    if (timestamps == NULL) {
-        WHISPER_LOG_ERROR("%s: failed to allocate memory for whisper_vad_timstamps\n", __func__);
+    whisper_vad_segments * vad_segments = new whisper_vad_segments;
+    if (vad_segments == NULL) {
+        WHISPER_LOG_ERROR("%s: failed to allocate memory for whisper_vad_segments\n", __func__);
         return nullptr;
     }
-    timestamps->segments = std::move(segments);
-    return timestamps;
+    vad_segments->segments = std::move(segments);
+    return vad_segments;
 }
 
-struct whisper_vad_timestamps * whisper_vad_timestamps_from_samples(
+struct whisper_vad_segments * whisper_vad_segments_from_samples(
         whisper_vad_context * vctx,
         whisper_vad_params params,
         const float * samples,
         int n_samples) {
     WHISPER_LOG_INFO("%s: detecting speech timestamps in %d samples\n", __func__, n_samples);
     auto probs = whisper_vad_detect_speech(vctx, samples, n_samples);
-    return whisper_vad_timestamps_from_probs(params, &probs);
+    return whisper_vad_segments_from_probs(params, &probs);
 }
 
 void whisper_vad_free(whisper_vad_context * ctx) {
@@ -5487,7 +5487,7 @@ void whisper_vad_free_state(whisper_vad_state * state) {
     }
 }
 
-void whisper_vad_free_timestamps(whisper_vad_timestamps * timestamps) {
+void whisper_vad_free_segments(whisper_vad_segments * timestamps) {
     if (timestamps) {
         delete timestamps;
     }
@@ -6650,36 +6650,36 @@ static bool whisper_vad(
 
     const whisper_vad_params & vad_params = params.vad_params;
 
-    whisper_vad_timestamps * timestamps = whisper_vad_timestamps_from_samples(vctx, vad_params, samples, n_samples);
+    whisper_vad_segments * vad_segments = whisper_vad_segments_from_samples(vctx, vad_params, samples, n_samples);
 
-    if (timestamps->segments.size() > 0) {
+    if (vad_segments->segments.size() > 0) {
         state->has_vad_segments = true;
         ctx->state->vad_segments.clear();
-        ctx->state->vad_segments.reserve(timestamps->segments.size());
+        ctx->state->vad_segments.reserve(vad_segments->segments.size());
 
-        WHISPER_LOG_INFO("%s: detected %d speech segments\n", __func__, (int)timestamps->segments.size());
+        WHISPER_LOG_INFO("%s: detected %d speech segments\n", __func__, (int)vad_segments->segments.size());
         float overlap_seconds = vad_params.samples_overlap;
         int overlap_samples = overlap_seconds * WHISPER_SAMPLE_RATE;
 
-        for (int i = 0; i < (int)timestamps->segments.size(); i++) {
-            int segment_start_samples = timestamps->segments[i].start * WHISPER_SAMPLE_RATE;
-            int segment_end_samples   = timestamps->segments[i].end   * WHISPER_SAMPLE_RATE;
+        for (int i = 0; i < (int)vad_segments->segments.size(); i++) {
+            int segment_start_samples = vad_segments->segments[i].start * WHISPER_SAMPLE_RATE;
+            int segment_end_samples   = vad_segments->segments[i].end   * WHISPER_SAMPLE_RATE;
 
-            if (i < (int)timestamps->segments.size() - 1) {
+            if (i < (int)vad_segments->segments.size() - 1) {
                 segment_end_samples += overlap_samples;
             }
             segment_end_samples = std::min(segment_end_samples, n_samples - 1);
             filtered_n_samples  += (segment_end_samples - segment_start_samples);
 
             WHISPER_LOG_INFO("%s: Including segment %d: %.2f - %.2f (duration: %.2f)\n",
-                __func__, i, timestamps->segments[i].start,
-                timestamps->segments[i].end + (i < (int)timestamps->segments.size() - 1 ? overlap_seconds : 0),
-                (timestamps->segments[i].end - timestamps->segments[i].start) +
-                (i < (int)timestamps->segments.size() - 1 ? overlap_seconds : 0));
+                __func__, i, vad_segments->segments[i].start,
+                vad_segments->segments[i].end + (i < (int)vad_segments->segments.size() - 1 ? overlap_seconds : 0),
+                (vad_segments->segments[i].end - vad_segments->segments[i].start) +
+                (i < (int)vad_segments->segments.size() - 1 ? overlap_seconds : 0));
         }
 
         int silence_samples = 0.1 * WHISPER_SAMPLE_RATE;
-        int total_silence_samples = (timestamps->segments.size() > 1) ? (timestamps->segments.size() - 1) * silence_samples : 0;
+        int total_silence_samples = (vad_segments->segments.size() > 1) ? (vad_segments->segments.size() - 1) * silence_samples : 0;
         int total_samples_needed = filtered_n_samples + total_silence_samples;
 
         WHISPER_LOG_INFO("%s: total duration of speech segments: %.2f seconds\n",
@@ -6689,17 +6689,17 @@ static bool whisper_vad(
             filtered_samples.resize(total_samples_needed);
         } catch (const std::bad_alloc & /* e */) {
             WHISPER_LOG_ERROR("%s: failed to allocate memory for filtered samples\n", __func__);
-            whisper_vad_free_timestamps(timestamps);
+            whisper_vad_free_segments(vad_segments);
             whisper_vad_free(vctx);
             return false;
         }
 
         int offset = 0;
-        for (int i = 0; i < (int)timestamps->segments.size(); i++) {
-            int segment_start_samples = timestamps->segments[i].start * WHISPER_SAMPLE_RATE;
-            int segment_end_samples   = timestamps->segments[i].end   * WHISPER_SAMPLE_RATE;
+        for (int i = 0; i < (int)vad_segments->segments.size(); i++) {
+            int segment_start_samples = vad_segments->segments[i].start * WHISPER_SAMPLE_RATE;
+            int segment_end_samples   = vad_segments->segments[i].end   * WHISPER_SAMPLE_RATE;
 
-            if (i < (int)timestamps->segments.size() - 1) {
+            if (i < (int)vad_segments->segments.size() - 1) {
                 segment_end_samples += overlap_samples;
             }
 
@@ -6710,8 +6710,8 @@ static bool whisper_vad(
             if (segment_length > 0) {
                 whisper_state::vad_segment_info segment;
 
-                segment.orig_start = timestamps->segments[i].start;
-                segment.orig_end   = timestamps->segments[i].end;
+                segment.orig_start = vad_segments->segments[i].start;
+                segment.orig_end   = vad_segments->segments[i].end;
 
                 segment.vad_start = offset / (float)WHISPER_SAMPLE_RATE;
                 segment.vad_end   = (offset + segment_length) / (float)WHISPER_SAMPLE_RATE;
@@ -6725,7 +6725,7 @@ static bool whisper_vad(
                 offset += segment_length;
 
                 // Add silence after this segment (except after the last segment)
-                if (i < (int)timestamps->segments.size() - 1) {
+                if (i < (int)vad_segments->segments.size() - 1) {
                     // Fill with zeros (silence)
                     memset(filtered_samples.data() + offset, 0, silence_samples * sizeof(float));
                     offset += silence_samples;
