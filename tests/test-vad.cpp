@@ -23,23 +23,20 @@ void assert_default_context_params(const struct whisper_vad_context_params & par
     assert(params.gpu_device == 0);
 }
 
-struct whisper_vad_probs test_detect_speech(
+void test_detect_speech(
         struct whisper_vad_context * vctx,
         struct whisper_vad_params params,
         const float * pcmf32,
         int n_samples) {
-    struct whisper_vad_probs vad_probs = whisper_vad_detect_speech(vctx, pcmf32, n_samples);
-    assert(vad_probs.n_probs == 344);
-    assert(vad_probs.probs != nullptr);
-
-    return vad_probs;
+    assert(whisper_vad_detect_speech(vctx, pcmf32, n_samples));
+    assert(whisper_vad_n_probs(vctx) == 344);
+    assert(whisper_vad_probs(vctx) != nullptr);
 }
 
 struct whisper_vad_segments * test_detect_timestamps(
         struct whisper_vad_context * vctx,
-        struct whisper_vad_params params,
-        struct whisper_vad_probs * probs) {
-    struct whisper_vad_segments * timestamps = whisper_vad_segments_from_probs(params, probs);
+        struct whisper_vad_params params) {
+    struct whisper_vad_segments * timestamps = whisper_vad_segments_from_probs(vctx, params);
     assert(whisper_vad_segments_n_segments(timestamps) == 5);
 
     for (int i = 0; i < whisper_vad_segments_n_segments(timestamps); ++i) {
@@ -75,10 +72,10 @@ int main() {
     assert_default_params(params);
 
     // Test speech probabilites
-    struct whisper_vad_probs probs = test_detect_speech(vctx, params, pcmf32.data(), pcmf32.size());
+    test_detect_speech(vctx, params, pcmf32.data(), pcmf32.size());
 
     // Test speech timestamps (uses speech probabilities from above)
-    struct whisper_vad_segments * timestamps = test_detect_timestamps(vctx, params, &probs);
+    struct whisper_vad_segments * timestamps = test_detect_timestamps(vctx, params);
 
     whisper_vad_free_segments(timestamps);
     whisper_vad_free(vctx);

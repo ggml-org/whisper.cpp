@@ -700,21 +700,20 @@ extern "C" {
             struct whisper_model_loader * loader,
             struct whisper_vad_context_params params);
 
-    struct whisper_vad_probs {
-        int     n_probs;
-        float * probs;
-    };
 
-    WHISPER_API struct whisper_vad_probs whisper_vad_detect_speech(
+    WHISPER_API bool whisper_vad_detect_speech(
             struct whisper_vad_context * vctx,
             const float * samples,
             int n_samples);
 
+    WHISPER_API int     whisper_vad_n_probs(struct whisper_vad_context * vctx);
+    WHISPER_API float * whisper_vad_probs  (struct whisper_vad_context * vctx);
+
     struct whisper_vad_segments;
 
     WHISPER_API struct whisper_vad_segments * whisper_vad_segments_from_probs(
-            struct whisper_vad_params params,
-            struct whisper_vad_probs * probs);
+            struct whisper_vad_context * vctx,
+            struct whisper_vad_params params);
 
     WHISPER_API struct whisper_vad_segments * whisper_vad_segments_from_samples(
             struct whisper_vad_context * vctx,

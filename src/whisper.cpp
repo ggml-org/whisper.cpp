@@ -5116,7 +5116,7 @@ struct whisper_vad_context * whisper_vad_init_with_params_no_state(struct whispe
     return vctx;
 }
 
-struct whisper_vad_probs whisper_vad_detect_speech(
+bool whisper_vad_detect_speech(
         struct whisper_vad_context * vctx,
         const float * samples,
         int n_samples) {
@@ -5142,7 +5142,7 @@ struct whisper_vad_probs whisper_vad_detect_speech(
 
     if (!ggml_backend_sched_alloc_graph(sched, gf)) {
         WHISPER_LOG_ERROR("%s: failed to allocate the compute buffer\n", __func__);
-        return {};
+        return false;
     }
 
     struct ggml_tensor * frame = ggml_graph_get_tensor(gf, "frame");
@@ -5195,12 +5195,7 @@ struct whisper_vad_probs whisper_vad_detect_speech(
 
     ggml_backend_sched_reset(sched);
 
-    struct whisper_vad_probs speech = {
-        /* n_probs = */ n_chunks,
-        /* probs   = */ vctx->state->probs.data(),
-    };
-
-    return speech;
+    return true;
 }
 
 int whisper_vad_segments_n_segments(struct whisper_vad_segments * timestamps) {
@@ -5215,13 +5210,21 @@ float whisper_vad_segments_get_segment_t1(struct whisper_vad_segments * timestam
     return timestamps->segments[i_segment].end;
 }
 
-struct whisper_vad_segments * whisper_vad_segments_from_probs(
-        whisper_vad_params   params,
-        whisper_vad_probs *  vad_probs) {
-    WHISPER_LOG_INFO("%s: detecting speech timestamps using %d probabilities\n", __func__, vad_probs->n_probs);
+int whisper_vad_n_probs(struct whisper_vad_context * vctx) {
+    return vctx->state->probs.size();
+}
 
-    int     n_probs                 = vad_probs->n_probs;
-    float * probs                   = vad_probs->probs;
+float * whisper_vad_probs(struct whisper_vad_context * vctx) {
+    return vctx->state->probs.data();
+}
+
+struct whisper_vad_segments * whisper_vad_segments_from_probs(
+        struct whisper_vad_context *  vctx,
+                whisper_vad_params    params) {
+    WHISPER_LOG_INFO("%s: detecting speech timestamps using %d probabilities\n", __func__, whisper_vad_n_probs(vctx));
+
+    int     n_probs                 = whisper_vad_n_probs(vctx);
+    float * probs                   = whisper_vad_probs(vctx);
     float   threshold               = params.threshold;
     int     min_speech_duration_ms  = params.min_speech_duration_ms;
     int     min_silence_duration_ms = params.min_silence_duration_ms;
@@ -5455,8 +5458,11 @@ struct whisper_vad_segments * whisper_vad_segments_from_samples(
         const float * samples,
         int n_samples) {
     WHISPER_LOG_INFO("%s: detecting speech timestamps in %d samples\n", __func__, n_samples);
-    auto probs = whisper_vad_detect_speech(vctx, samples, n_samples);
-    return whisper_vad_segments_from_probs(params, &probs);
+    if (!whisper_vad_detect_speech(vctx, samples, n_samples)) {
+        WHISPER_LOG_ERROR("%s: failed to detect speech\n", __func__);
+        return nullptr;
+    }
+    return whisper_vad_segments_from_probs(vctx, params);
 }
 
 void whisper_vad_free(whisper_vad_context * ctx) {
