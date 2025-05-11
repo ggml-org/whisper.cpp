@@ -674,7 +674,6 @@ extern "C" {
     //
 
     struct whisper_vad_context;
-    struct whisper_vad_state;
 
     WHISPER_API struct whisper_vad_params whisper_vad_default_params(void);
 
@@ -686,25 +685,13 @@ extern "C" {
 
     WHISPER_API struct whisper_vad_context_params whisper_vad_default_context_params(void);
 
-    WHISPER_API struct whisper_vad_state * whisper_vad_init_state(struct whisper_vad_context * ctx);
-
-    WHISPER_API struct whisper_vad_context * whisper_vad_init_from_file_with_params(
-            const char * path_model,
-            const struct whisper_vad_context_params params);
-
-    WHISPER_API struct whisper_vad_context * whisper_vad_init_from_file_with_params_no_state(
-            const char * path_model,
-            const struct whisper_vad_context_params params);
-
-    WHISPER_API struct whisper_vad_context * whisper_vad_init_with_params_no_state(
-            struct whisper_model_loader * loader,
-            struct whisper_vad_context_params params);
-
+    WHISPER_API struct whisper_vad_context * whisper_vad_init_from_file_with_params(const char * path_model,              struct whisper_vad_context_params params);
+    WHISPER_API struct whisper_vad_context * whisper_vad_init_with_params          (struct whisper_model_loader * loader, struct whisper_vad_context_params params);
 
     WHISPER_API bool whisper_vad_detect_speech(
             struct whisper_vad_context * vctx,
-            const float * samples,
-            int n_samples);
+                           const float * samples,
+                                   int   n_samples);
 
     WHISPER_API int     whisper_vad_n_probs(struct whisper_vad_context * vctx);
     WHISPER_API float * whisper_vad_probs  (struct whisper_vad_context * vctx);
@@ -713,22 +700,21 @@ extern "C" {
 
     WHISPER_API struct whisper_vad_segments * whisper_vad_segments_from_probs(
             struct whisper_vad_context * vctx,
-            struct whisper_vad_params params);
+             struct whisper_vad_params   params);
 
     WHISPER_API struct whisper_vad_segments * whisper_vad_segments_from_samples(
             struct whisper_vad_context * vctx,
-            struct whisper_vad_params params,
-            const float * samples,
-            int n_samples);
+            struct whisper_vad_params    params,
+                           const float * samples,
+                                   int   n_samples);
 
     WHISPER_API int whisper_vad_segments_n_segments(struct whisper_vad_segments * segments);
 
     WHISPER_API float whisper_vad_segments_get_segment_t0(struct whisper_vad_segments * segments, int i_segment);
     WHISPER_API float whisper_vad_segments_get_segment_t1(struct whisper_vad_segments * segments, int i_segment);
 
-    WHISPER_API void whisper_vad_free_segments(struct whisper_vad_segments * segments);
-    WHISPER_API void whisper_vad_free_state     (struct whisper_vad_state      * state);
-    WHISPER_API void whisper_vad_free           (struct whisper_vad_context    * ctx);
+    WHISPER_API void whisper_vad_free_segments (struct whisper_vad_segments * segments);
+    WHISPER_API void whisper_vad_free          (struct whisper_vad_context    * ctx);
 
     ////////////////////////////////////////////////////////////////////////////
 
