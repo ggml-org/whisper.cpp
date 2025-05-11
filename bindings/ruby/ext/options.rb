@@ -53,7 +53,7 @@ class Options
   end
 
   def extra_options
-    @options.keys + @pending_options - @ignored_options -
+    @options.keys + @pending_options + @ignored_options -
       cmake_options.collect {|name, type, value| name}
   end
 
