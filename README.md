@@ -758,16 +758,17 @@ $ (venv) pip install silero-vad
 $ (venv) $ python models/convert-silero-vad-to-ggml.py --output models/silero.bin
 Saving GGML Silero-VAD model to models/silero-v5.1.2-ggml.bin
 ```
-And it can the be used with whisper as follows:
+And it can then be used with whisper as follows:
 ```console
 $ ./build/bin/whisper-cli \
    --file ./samples/jfk.wav \
    --model ./models/ggml-base.en.bin \
    --vad \
-   --vad-model ./models/for-tests-silero-v5.1.2-ggml.bin
+   --vad-model ./models/silero-v5.1.2-ggml.bin
 ```
 
 #### VAD Options
+
 * --vad-threshold: Threshold probability for speech detection. A probability
 for a speech segment/frame above this threshold will be considered as speech.
 
