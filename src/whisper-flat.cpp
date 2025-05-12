@@ -16,6 +16,10 @@ struct whisper_state * whisper_flat_get_state_from_context(struct whisper_contex
     return whisper_get_state_from_context(ctx);
 }
 
+void whisper_flat_set_context_state(struct whisper_context * ctx, struct whisper_state * state) {
+    whisper_set_context_state(ctx, state);
+}
+
 struct whisper_activity * whisper_flat_get_activity_with_state(struct whisper_state * state) {
     return whisper_get_activity_with_state(state);
 }

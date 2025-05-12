@@ -7635,6 +7635,10 @@ struct whisper_state * whisper_get_state_from_context(struct whisper_context * c
     return ctx->state;
 }
 
+void whisper_set_context_state(struct whisper_context * ctx, struct whisper_state * state) {
+    ctx->state = state;
+}
+
 // whisper_get_activity_with_state
 // As the data is in a c++ specific struct
 struct whisper_activity * whisper_get_activity_with_state(struct whisper_state * state) {

@@ -686,6 +686,7 @@ extern "C" {
 
     const char * whisper_get_system_info_json(void);
     struct whisper_state * whisper_get_state_from_context(struct whisper_context * ctx);
+    void whisper_set_context_state(struct whisper_context * ctx, struct whisper_state * state);
     struct whisper_activity * whisper_get_activity_with_state(struct whisper_state * state);
     ggml_backend_t whisper_get_preferred_backend(struct whisper_state * state);
     ggml_backend_t whisper_get_indexed_backend(struct whisper_state* state, size_t i);

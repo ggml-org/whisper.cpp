@@ -24,6 +24,7 @@ extern "C" {
     WHISPER_FLAT_API void whisper_flat_backend_load_all(void);
     WHISPER_FLAT_API struct whisper_activity * whisper_flat_get_activity_with_state(struct whisper_state * state);
     WHISPER_FLAT_API struct whisper_state * whisper_flat_get_state_from_context(struct whisper_context * ctx);
+    WHISPER_FLAT_API void whisper_flat_set_context_state(struct whisper_context * ctx, struct whisper_state * state);
     WHISPER_FLAT_API const char * whisper_flat_get_system_info_json(void);
     WHISPER_FLAT_API ggml_backend_t whisper_flat_get_preferred_backend(struct whisper_state * state);
     WHISPER_FLAT_API ggml_backend_t whisper_flat_get_indexed_backend(struct whisper_state* state, size_t i);
