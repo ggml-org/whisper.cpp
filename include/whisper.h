@@ -699,7 +699,7 @@ extern "C" {
 
     WHISPER_API struct whisper_vad_segments * whisper_vad_segments_from_probs(
             struct whisper_vad_context * vctx,
-             struct whisper_vad_params   params);
+            struct whisper_vad_params    params);
 
     WHISPER_API struct whisper_vad_segments * whisper_vad_segments_from_samples(
             struct whisper_vad_context * vctx,
@@ -712,8 +712,8 @@ extern "C" {
     WHISPER_API float whisper_vad_segments_get_segment_t0(struct whisper_vad_segments * segments, int i_segment);
     WHISPER_API float whisper_vad_segments_get_segment_t1(struct whisper_vad_segments * segments, int i_segment);
 
-    WHISPER_API void whisper_vad_free_segments (struct whisper_vad_segments * segments);
-    WHISPER_API void whisper_vad_free          (struct whisper_vad_context    * ctx);
+    WHISPER_API void whisper_vad_free_segments(struct whisper_vad_segments * segments);
+    WHISPER_API void whisper_vad_free         (struct whisper_vad_context  * ctx);
 
     ////////////////////////////////////////////////////////////////////////////
 
