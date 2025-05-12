@@ -1081,6 +1081,9 @@ int main(int argc, char ** argv) {
                     params.tinydiarize ? "tdrz = 1, " : "",
                     params.no_timestamps ? 0 : 1);
 
+            if (params.print_colors) {
+                fprintf(stderr, "%s: color scheme: red (low confidence), yellow (medium), green (high confidence)\n", __func__);
+            }
             fprintf(stderr, "\n");
         }
 
