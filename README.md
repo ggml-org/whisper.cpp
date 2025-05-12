@@ -599,7 +599,7 @@ main: processing './samples/a13.wav' (480000 samples, 30.0 sec), 4 threads, 1 pr
 ## Karaoke-style movie generation (experimental)
 
 The [whisper-cli](examples/cli) example provides support for output of karaoke-style movies, where the
-currently pronounced word is highlighted. Use the `-wts` argument and run the generated bash script.
+currently pronounced word is highlighted. Use the `-owts` argument and run the generated bash script.
 This requires to have `ffmpeg` installed.
 
 Here are a few _"typical"_ examples:
