@@ -284,8 +284,8 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  -vmsd N,   --vad-max-speech-duration-s   N [%-7s] VAD max speech duration (auto-split longer)\n",      params.vad_max_speech_duration_s == FLT_MAX ?
                                                                                                                                   std::string("FLT_MAX").c_str() :
                                                                                                                                   std::to_string(params.vad_max_speech_duration_s).c_str());
-    fprintf(stderr, "  -vp N,     --vad_speech_pad_ms           N [%-7d] VAD speech padding (extend segments)\n",             params.vad_speech_pad_ms);
-    fprintf(stderr, "  -vo N,     --vad_samples_overlap         N [%-7.2f] VAD samples overlap (seconds between segments)\n", params.vad_samples_overlap);
+    fprintf(stderr, "  -vp N,     --vad-speech-pad-ms           N [%-7d] VAD speech padding (extend segments)\n",             params.vad_speech_pad_ms);
+    fprintf(stderr, "  -vo N,     --vad-samples-overlap         N [%-7.2f] VAD samples overlap (seconds between segments)\n", params.vad_samples_overlap);
     fprintf(stderr, "\n");
 }
 
