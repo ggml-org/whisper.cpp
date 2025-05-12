@@ -13,7 +13,6 @@ void assert_default_params(const struct whisper_vad_params & params) {
     assert(params.threshold == 0.5);
     assert(params.min_speech_duration_ms == 250);
     assert(params.min_silence_duration_ms == 100);
-    assert(params.window_size_samples == 512);
     assert(params.samples_overlap == 0.1f);
 }
 

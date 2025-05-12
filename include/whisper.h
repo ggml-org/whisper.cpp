@@ -195,7 +195,6 @@ extern "C" {
         int   min_silence_duration_ms; // Min silence duration to consider speech as ended.
         float max_speech_duration_s;   // Max duration of a speech segment before forcing a new segment.
         int   speech_pad_ms;           // Padding added before and after speech segments.
-        int   window_size_samples;     // Number of audio samples in each probability window.
         float samples_overlap;         // Overlap in seconds when copying audio samples from speech segment.
     } whisper_vad_params;
 

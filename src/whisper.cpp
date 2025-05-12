@@ -4459,7 +4459,6 @@ struct whisper_vad_params whisper_vad_default_params(void) {
         /* min_silence_duration_ms = */ 100,
         /* max_speech_duration_s   = */ FLT_MAX,
         /* speech_pad_ms           = */ 30,
-        /* window_size_samples     = */ 512,
         /* samples_overlap         = */ 0.1,
     };
     return result;
@@ -5204,10 +5203,10 @@ struct whisper_vad_segments * whisper_vad_segments_from_probs(
     int     min_silence_duration_ms = params.min_silence_duration_ms;
     float   max_speech_duration_s   = params.max_speech_duration_s;
     int     speech_pad_ms           = params.speech_pad_ms;
-    int     window_size_samples     = params.window_size_samples;
+    int     n_window                = vctx->n_window;
     int     sample_rate             = WHISPER_SAMPLE_RATE;
     int     min_silence_samples     = sample_rate * min_silence_duration_ms / 1000;
-    int     audio_length_samples    = n_probs * window_size_samples;
+    int     audio_length_samples    = n_probs * n_window;
 
     // Min number of samples to be considered valid speech.
     int     min_speech_samples      = sample_rate * min_speech_duration_ms / 1000;
@@ -5219,7 +5218,7 @@ struct whisper_vad_segments * whisper_vad_segments_from_probs(
     if (max_speech_duration_s > 100000.0f) {
         max_speech_samples = INT_MAX / 2;
     } else {
-        int64_t temp = (int64_t)sample_rate * (int64_t)(max_speech_duration_s) - window_size_samples - 2 * speech_pad_samples;
+        int64_t temp = (int64_t)sample_rate * (int64_t)(max_speech_duration_s) - n_window - 2 * speech_pad_samples;
         max_speech_samples = (temp > INT_MAX) ? INT_MAX / 2 : (int)temp;
         if (max_speech_samples < 0) {
             max_speech_samples = INT_MAX / 2;
@@ -5255,7 +5254,7 @@ struct whisper_vad_segments * whisper_vad_segments_from_probs(
 
     for (int i = 0; i < n_probs; i++) {
         float curr_prob   = probs[i];
-        int   curr_sample = window_size_samples * i;
+        int   curr_sample = n_window * i;
 
         // Reset temp_end when we get back to speech
         if ((curr_prob >= threshold) && temp_end) {

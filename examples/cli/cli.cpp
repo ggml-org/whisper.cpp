@@ -107,7 +107,6 @@ struct whisper_params {
     int         vad_min_silence_duration_ms = 100;
     float       vad_max_speech_duration_s = FLT_MAX;
     int         vad_speech_pad_ms = 30;
-    int         vad_window_size_samples = 512;
     float       vad_samples_overlap = 0.1f;
 };
 
@@ -205,7 +204,6 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-vsd"  || arg == "--vad-min-silence-duration-ms") { params.vad_min_speech_duration_ms  = std::stoi(ARGV_NEXT); }
         else if (arg == "-vmsd" || arg == "--vad-max-speech-duration-s")   { params.vad_max_speech_duration_s   = std::stof(ARGV_NEXT); }
         else if (arg == "-vp"   || arg == "--vad-speech-pad-ms")           { params.vad_speech_pad_ms           = std::stoi(ARGV_NEXT); }
-        else if (arg == "-vs"   || arg == "--vad-window-size-samples")     { params.vad_window_size_samples     = std::stoi(ARGV_NEXT); }
         else if (arg == "-vo"   || arg == "--vad-samples-overlap")         { params.vad_samples_overlap         = std::stof(ARGV_NEXT); }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
@@ -281,7 +279,6 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  -v,        --vad                           [%-7s] enable Voice Activity Detection (VAD)\n",  params.vad ? "true" : "false");
     fprintf(stderr, "  -vm FNAME, --vad-model FNAME               [%-7s] VAD model path\n",                         params.vad_model.c_str());
     fprintf(stderr, "  -vt N,     --vad-threshold N               [%-7.2f] VAD threshold for speech recognition\n", params.vad_threshold);
-    fprintf(stderr, "  -vs N,     --vad-window-size-samples     N [%-7d] VAD window size\n",                        params.vad_window_size_samples);
     fprintf(stderr, "  -vspd N,   --vad-min-speech-duration-ms  N [%-7d] VAD min speech duration\n",                params.vad_min_speech_duration_ms);
     fprintf(stderr, "  -vsd N,    --vad-min-silence-duration-ms N [%-7d] VAD min silence duration\n",               params.vad_min_silence_duration_ms);
     fprintf(stderr, "  -vmsd N,   --vad-max-speech-duration-s   N [%-7s] VAD max speech duration\n",                params.vad_max_speech_duration_s == FLT_MAX ?
@@ -1174,7 +1171,6 @@ int main(int argc, char ** argv) {
             wparams.vad_params.min_silence_duration_ms = params.vad_min_silence_duration_ms;
             wparams.vad_params.max_speech_duration_s   = params.vad_max_speech_duration_s;
             wparams.vad_params.speech_pad_ms           = params.vad_speech_pad_ms;
-            wparams.vad_params.window_size_samples     = params.vad_window_size_samples;
             wparams.vad_params.samples_overlap         = params.vad_samples_overlap;
 
             whisper_print_user_data user_data = { &params, &pcmf32s, 0 };
