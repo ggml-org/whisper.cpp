@@ -35,8 +35,6 @@
 #include <thread>
 #include <vector>
 
-// dummy
-
 #if defined(WHISPER_BIG_ENDIAN)
 template<typename T>
 static T byteswap(T value) {
