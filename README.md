@@ -784,10 +784,10 @@ periods will be ignored and included as part of the speech.
 longer than this will be automatically split into multiple segments at silence
 points exceeding 98ms to prevent excessively long segments.
 
-* --vad_speech_pad_ms: Speech padding in milliseconds. Adds this amount of padding
+* --vad-speech-pad-ms: Speech padding in milliseconds. Adds this amount of padding
 before and after each detected speech segment to avoid cutting off speech edges.
 
-* --vad_samples_overlap: Amount of audio to extend from each speech segment into
+* --vad-samples-overlap: Amount of audio to extend from each speech segment into
 the next one, in seconds (e.g., 0.10 = 100ms overlap). This ensures speech isn't
 cut off abruptly between segments when they're concatenated together.
 
