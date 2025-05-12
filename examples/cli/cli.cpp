@@ -276,16 +276,16 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  --grammar-penalty N            [%-7.1f] scales down logits of nongrammar tokens\n",      params.grammar_penalty);
     // Voice Activity Detection (VAD) parameters
     fprintf(stderr, "\nVoice Activity Detection (VAD) options:\n");
-    fprintf(stderr, "  -v,        --vad                           [%-7s] enable Voice Activity Detection (VAD)\n",  params.vad ? "true" : "false");
-    fprintf(stderr, "  -vm FNAME, --vad-model FNAME               [%-7s] VAD model path\n",                         params.vad_model.c_str());
-    fprintf(stderr, "  -vt N,     --vad-threshold N               [%-7.2f] VAD threshold for speech recognition\n", params.vad_threshold);
-    fprintf(stderr, "  -vspd N,   --vad-min-speech-duration-ms  N [%-7d] VAD min speech duration\n",                params.vad_min_speech_duration_ms);
-    fprintf(stderr, "  -vsd N,    --vad-min-silence-duration-ms N [%-7d] VAD min silence duration\n",               params.vad_min_silence_duration_ms);
-    fprintf(stderr, "  -vmsd N,   --vad-max-speech-duration-s   N [%-7s] VAD max speech duration\n",                params.vad_max_speech_duration_s == FLT_MAX ?
-                                                                                                                    std::string("FLT_MAX").c_str() :
-                                                                                                                    std::to_string(params.vad_max_speech_duration_s).c_str());
-    fprintf(stderr, "  -vp N,     --vad_speech_pad_ms           N [%-7d] VAD speech padding\n",                     params.vad_speech_pad_ms);
-    fprintf(stderr, "  -vo N,     --vad_samples_overlap         N [%-7.2f] VAD samples overlap size\n",             params.vad_samples_overlap);
+    fprintf(stderr, "  -v,        --vad                           [%-7s] enable Voice Activity Detection (VAD)\n",            params.vad ? "true" : "false");
+    fprintf(stderr, "  -vm FNAME, --vad-model FNAME               [%-7s] VAD model path\n",                                   params.vad_model.c_str());
+    fprintf(stderr, "  -vt N,     --vad-threshold N               [%-7.2f] VAD threshold for speech recognition\n",           params.vad_threshold);
+    fprintf(stderr, "  -vspd N,   --vad-min-speech-duration-ms  N [%-7d] VAD min speech duration (0.0-1.0)\n",                params.vad_min_speech_duration_ms);
+    fprintf(stderr, "  -vsd N,    --vad-min-silence-duration-ms N [%-7d] VAD min silence duration (to split segments)\n",      params.vad_min_silence_duration_ms);
+    fprintf(stderr, "  -vmsd N,   --vad-max-speech-duration-s   N [%-7s] VAD max speech duration (auto-split longer)\n",      params.vad_max_speech_duration_s == FLT_MAX ?
+                                                                                                                                  std::string("FLT_MAX").c_str() :
+                                                                                                                                  std::to_string(params.vad_max_speech_duration_s).c_str());
+    fprintf(stderr, "  -vp N,     --vad_speech_pad_ms           N [%-7d] VAD speech padding (extend segments)\n",             params.vad_speech_pad_ms);
+    fprintf(stderr, "  -vo N,     --vad_samples_overlap         N [%-7.2f] VAD samples overlap (seconds between segments)\n", params.vad_samples_overlap);
     fprintf(stderr, "\n");
 }
 
