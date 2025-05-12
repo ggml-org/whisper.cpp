@@ -283,7 +283,7 @@ static std::string set_xterm256_foreground(int r, int g, int b) {
 }
 
 // Lowest is red, middle is yellow, highest is green. Color scheme from
-// Paul Tol; it is colorblind friendly https://personal.sron.nl/~pault/
+// Paul Tol; it is colorblind friendly https://sronpersonalpages.nl/~pault
 const std::vector<std::string> k_colors = {
     set_xterm256_foreground(220,   5,  12),
     set_xterm256_foreground(232,  96,  28),
