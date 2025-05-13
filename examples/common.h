@@ -294,6 +294,26 @@ const std::vector<std::string> k_colors = {
     set_xterm256_foreground( 78, 178, 101),
 };
 
+// ANSI formatting codes
+static std::string set_inverse() {
+    return "\033[7m";
+}
+
+static std::string set_underline() {
+    return "\033[4m";
+}
+
+static std::string set_dim() {
+    return "\033[2m";
+}
+
+// Style scheme for different confidence levels
+const std::vector<std::string> k_styles = {
+    set_inverse(),   // Low confidence - inverse (highlighted)
+    set_underline(), // Medium confidence - underlined
+    set_dim(),       // High confidence - dim
+};
+
 //
 // Other utils
 //
