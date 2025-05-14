@@ -11,6 +11,9 @@ struct whisper_params {
     int32_t what = 0; // what to benchmark: 0 - whisper encoder, 1 - memcpy, 2 - ggml_mul_mat
 
     std::string model = "models/ggml-base.en.bin";
+    std::string coreml_dir = "";
+    std::string openvino_dir = "";
+    bool disable_coreml = false;
 
     bool use_gpu    = true;
     bool flash_attn = false;
@@ -28,7 +31,10 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         }
         else if (arg == "-t"  || arg == "--threads")    { params.n_threads  = std::stoi(argv[++i]); }
         else if (arg == "-m"  || arg == "--model")      { params.model      = argv[++i]; }
+        else if (arg == "-l"  || arg == "--coreml")     { params.coreml_dir = argv[++i]; }
+        else if (arg == "-v"  || arg == "--openvino")   { params.openvino_dir = argv[++i]; }
         else if (arg == "-w"  || arg == "--what")       { params.what       = atoi(argv[++i]); }
+        else if (arg == "-ml" || arg == "--disable-coreml") { params.disable_coreml = true; }
         else if (arg == "-ng" || arg == "--no-gpu")     { params.use_gpu    = false; }
         else if (arg == "-fa" || arg == "--flash-attn") { params.flash_attn = true; }
         else {
@@ -55,7 +61,14 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "                           %-7s  2 - ggml_mul_mat\n",                            "");
     fprintf(stderr, "  -ng,      --no-gpu      [%-7s] disable GPU\n",                                 params.use_gpu ? "false" : "true");
     fprintf(stderr, "  -fa,      --flash-attn  [%-7s] enable flash attention\n",                      params.flash_attn ? "true" : "false");
+    fprintf(stderr, "  -ml,      --disable-coreml     disable CoreML\n");
+    fprintf(stderr, "  -l        --coreml             Set CoreML Directory\n");
+    fprintf(stderr, "  -v        --openvino           Set OpenVINO Directory\n");
     fprintf(stderr, "\n");
+}
+
+static char * string_to_ptr(const std::string s) {
+    return strdup(s.c_str());
 }
 
 static int whisper_bench_full(const whisper_params & params) {
@@ -65,7 +78,10 @@ static int whisper_bench_full(const whisper_params & params) {
 
     cparams.use_gpu    = params.use_gpu;
     cparams.flash_attn = params.flash_attn;
-
+    cparams.path_openvino = string_to_ptr(params.openvino_dir);
+    cparams.path_coreml = string_to_ptr(params.coreml_dir);
+    cparams.disable_coreml = params.disable_coreml;
+    
     struct whisper_context * ctx = whisper_init_from_file_with_params(params.model.c_str(), cparams);
 
     {

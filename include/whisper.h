@@ -125,6 +125,12 @@ extern "C" {
         int dtw_n_top;
         struct whisper_aheads dtw_aheads;
 
+        // Allow coreml + openvino files to have their own directories
+        // Purposely not ifdef'd
+        char * path_coreml;
+        char * path_openvino;
+        bool disable_coreml;
+
         size_t dtw_mem_size; // TODO: remove
     };
 

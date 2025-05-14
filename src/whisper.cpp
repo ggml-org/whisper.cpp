@@ -35,6 +35,9 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <sys/stat.h> // For data_file_exists
+
+#define NDEBUG
 
 #if defined(WHISPER_BIG_ENDIAN)
 template<typename T>
@@ -979,6 +982,9 @@ struct whisper_context {
     whisper_state * state = nullptr;
 
     std::string path_model; // populated by whisper_init_from_file_with_params()
+
+    std::string path_coreml; // populated by whisper_init_from_file_with_params()
+    std::string path_openvino; // populated by whisper_init_from_file_with_params()
 };
 
 struct whisper_global {
@@ -3341,9 +3347,56 @@ static std::vector<whisper_vocab::id> tokenize(const whisper_vocab & vocab, cons
 // interface implementation
 //
 
+static bool data_file_exists (const char * filename) {
+  struct stat   buffer;   
+  return (stat (filename, &buffer) == 0);
+}
+
+static std::string replace_extra_data_directory(std::string path_bin, std::string replacement_path, bool must_exist = true) {
+    std::string new_path = replacement_path;
+    std::string file_part = path_bin;
+    
+    // Check  replacement_path actually exists
+    if(must_exist && !data_file_exists(new_path.c_str())) {
+        #ifdef NDEBUG
+        fprintf(stderr, "Trying to replace with non-existant path %s returning passed path %s\n", replacement_path.c_str(), path_bin.c_str());
+        #endif
+        return path_bin;
+    }
+    
+    // Win 10/11 accepts both slashes while Linux/Mac only uses /
+    auto pos = file_part.find_last_of("/\\");
+    if (pos != std::string::npos) {
+        file_part = file_part.substr(pos + 1, std::string::npos);
+    }
+    
+
+    pos = new_path.find_last_of("/\\");
+
+    // Append trailing slash if required
+    if(pos < new_path.length() - 1) {
+    #ifdef _WIN32
+      new_path = new_path + "\\";
+    #else
+      new_path = new_path + "/";
+    #endif
+    }
+    
+    new_path = new_path + file_part;
+    
+    if(must_exist && !data_file_exists(new_path.c_str())) {
+        #ifdef NDEBUG
+        fprintf(stderr, "Error replacing path %s returning passed path %s\n", replacement_path.c_str(), path_bin.c_str());
+        #endif
+        return path_bin;
+    }
+
+    return new_path;
+}
+
 #ifdef WHISPER_USE_COREML
 // replace .bin with -encoder.mlmodelc
-static std::string whisper_get_coreml_path_encoder(std::string path_bin) {
+static std::string whisper_get_coreml_path_encoder(std::string path_bin, std::string path_coreml) {
     auto pos = path_bin.rfind('.');
     if (pos != std::string::npos) {
         path_bin = path_bin.substr(0, pos);
@@ -3360,13 +3413,18 @@ static std::string whisper_get_coreml_path_encoder(std::string path_bin) {
 
     path_bin += "-encoder.mlmodelc";
 
+    if(!path_coreml.empty()) {
+        path_bin = replace_extra_data_directory(path_bin, path_coreml);
+        fprintf(stderr, "Replacement CoreML path %s\n", path_bin.c_str());
+    }
+    
     return path_bin;
 }
 #endif
 
 #ifdef WHISPER_USE_OPENVINO
 // replace .bin with-encoder-openvino.xml
-static std::string whisper_openvino_get_path_encoder(std::string path_bin) {
+static std::string whisper_openvino_get_path_encoder(std::string path_bin, std::string path_openvino) {
     auto pos = path_bin.rfind('.');
     if (pos != std::string::npos) {
         path_bin = path_bin.substr(0, pos);
@@ -3374,16 +3432,27 @@ static std::string whisper_openvino_get_path_encoder(std::string path_bin) {
 
     path_bin += "-encoder-openvino.xml";
 
+    if(!path_openvino.empty()) {
+        path_bin = replace_extra_data_directory(path_bin, path_openvino);
+        fprintf(stderr, "Replacement OpenVINO path %s\n", path_bin.c_str());
+    }
+    
     return path_bin;
 }
 
-static std::string whisper_openvino_get_path_cache(std::string path_bin) {
+static std::string whisper_openvino_get_path_cache(std::string path_bin, std::string path_openvino) {
     auto pos = path_bin.rfind('.');
     if (pos != std::string::npos) {
         path_bin = path_bin.substr(0, pos);
     }
 
     path_bin += "-encoder-openvino-cache";
+
+    if(!path_openvino.empty()) {
+        // This path doesn't have to exist as it may be created
+        path_bin = replace_extra_data_directory(path_bin, path_openvino, false);
+        fprintf(stderr, "Replacement OpenVINO cache path %s\n", path_bin.c_str());
+    }
 
     return path_bin;
 }
@@ -3456,20 +3525,22 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
     }
 
 #ifdef WHISPER_USE_COREML
-    const auto path_coreml = whisper_get_coreml_path_encoder(ctx->path_model);
+    if(!ctx->params.disable_coreml) {
+        const auto path_coreml = whisper_get_coreml_path_encoder(ctx->path_model, ctx->params.path_coreml);
 
-    WHISPER_LOG_INFO("%s: loading Core ML model from '%s'\n", __func__, path_coreml.c_str());
-    WHISPER_LOG_INFO("%s: first run on a device may take a while ...\n", __func__);
+        WHISPER_LOG_INFO("%s: loading Core ML model from '%s'\n", __func__, path_coreml.c_str());
+        WHISPER_LOG_INFO("%s: first run on a device may take a while ...\n", __func__);
 
-    state->ctx_coreml = whisper_coreml_init(path_coreml.c_str());
-    if (!state->ctx_coreml) {
-        WHISPER_LOG_ERROR("%s: failed to load Core ML model from '%s'\n", __func__, path_coreml.c_str());
+        state->ctx_coreml = whisper_coreml_init(path_coreml.c_str());
+        if (!state->ctx_coreml) {
+            WHISPER_LOG_ERROR("%s: failed to load Core ML model from '%s'\n", __func__, path_coreml.c_str());
 #ifndef WHISPER_COREML_ALLOW_FALLBACK
-        whisper_free_state(state);
-        return nullptr;
+            whisper_free_state(state);
+            return nullptr;
 #endif
-    } else {
-        WHISPER_LOG_INFO("%s: Core ML model loaded\n", __func__);
+        } else {
+            WHISPER_LOG_INFO("%s: Core ML model loaded\n", __func__);
+        }
     }
 #endif
 
@@ -3585,17 +3656,17 @@ int whisper_ctx_init_openvino_encoder_with_state(
     std::string path_encoder;
     if (!model_path) {
         //if model_path is not set, attempt to find it in the same directory as ggml-<model>.bin model
-        path_encoder = whisper_openvino_get_path_encoder(ctx->path_model);
+        path_encoder = whisper_openvino_get_path_encoder(ctx->path_model, ctx->params.path_openvino);
     } else {
-        path_encoder = model_path;
+        path_encoder = replace_extra_data_directory(model_path, ctx->params.path_openvino);
     }
 
     std::string path_cache;
     if (!cache_dir) {
         //if cache_dir is not set, set it as a dir residing next to ggml-<model>.bin
-        path_cache = whisper_openvino_get_path_cache(ctx->path_model);
+        path_cache = whisper_openvino_get_path_cache(ctx->path_model, ctx->params.path_openvino);
     } else {
-        path_cache = cache_dir;
+        path_cache = replace_extra_data_directory(cache_dir, ctx->params.path_openvino);
     }
 
     WHISPER_LOG_INFO("%s: loading OpenVINO model from '%s'\n", __func__, path_encoder.c_str());
@@ -3634,10 +3705,16 @@ struct whisper_context_params whisper_context_default_params() {
             /*.n_heads          =*/ 0,
             /*.heads            =*/ NULL,
         },
+        /*.path_coreml          =*/ nullptr,
+        /*.path_openvino        =*/ nullptr,
+        /*.disable_coreml       =*/ false,
         /*.dtw_mem_size         =*/ 1024*1024*128,
     };
     return result;
 }
+
+//    std::string path_coreml; // populated by whisper_init_from_file_with_params()
+//    std::string path_openvino; // populated by whisper_init_from_file_with_params()
 
 struct whisper_context * whisper_init_from_file_with_params_no_state(const char * path_model, struct whisper_context_params params) {
     WHISPER_LOG_INFO("%s: loading model from '%s'\n", __func__, path_model);

@@ -90,6 +90,10 @@ struct whisper_params {
     // A regular expression that matches tokens to suppress
     std::string suppress_regex;
 
+    std::string openvino_directory = "";
+    std::string coreml_directory = "";
+    bool disable_coreml = false;
+
     std::string openvino_encode_device = "CPU";
 
     std::string dtw = "";
@@ -186,6 +190,9 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (                  arg == "--prompt")          { params.prompt          = ARGV_NEXT; }
         else if (arg == "-m"    || arg == "--model")           { params.model           = ARGV_NEXT; }
         else if (arg == "-f"    || arg == "--file")            { params.fname_inp.emplace_back(ARGV_NEXT); }
+        else if (arg == "-dov"  || arg == "--ov-directory")    { params.openvino_directory = ARGV_NEXT; }
+        else if (arg == "-docml"|| arg == "--ocml-directory")  { params.coreml_directory = ARGV_NEXT; }
+        else if (arg == "-noml" || arg == "--disable-coreml")  { params.disable_coreml  = true; }
         else if (arg == "-oved" || arg == "--ov-e-device")     { params.openvino_encode_device = ARGV_NEXT; }
         else if (arg == "-dtw"  || arg == "--dtw")             { params.dtw             = ARGV_NEXT; }
         else if (arg == "-ls"   || arg == "--log-score")       { params.log_score       = true; }
@@ -265,6 +272,8 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  -m FNAME,  --model FNAME       [%-7s] model path\n",                                     params.model.c_str());
     fprintf(stderr, "  -f FNAME,  --file FNAME        [%-7s] input audio file path\n",                            "");
     fprintf(stderr, "  -oved D,   --ov-e-device DNAME [%-7s] the OpenVINO device used for encode inference\n",  params.openvino_encode_device.c_str());
+    fprintf(stderr, "  -dov DN,   --ov-directory DN   [%-7s] the OpenVINO directory path\n",                    params.openvino_directory.c_str());
+    fprintf(stderr, "  -nlml,     --disable-coreml           Disable CoreML\n",                                 params.disable_coreml ? "true" : "false");
     fprintf(stderr, "  -dtw MODEL --dtw MODEL         [%-7s] compute token-level timestamps\n",                 params.dtw.c_str());
     fprintf(stderr, "  -ls,       --log-score         [%-7s] log best decoder scores of tokens\n",              params.log_score?"true":"false");
     fprintf(stderr, "  -ng,       --no-gpu            [%-7s] disable GPU\n",                                    params.use_gpu ? "false" : "true");
@@ -883,6 +892,10 @@ static void output_lrc(struct whisper_context * ctx, std::ofstream & fout, const
 }
 
 
+static char * string_to_ptr(const std::string s) {
+    return strdup(s.c_str());
+}
+
 static void cb_log_disable(enum ggml_log_level , const char * , void * ) { }
 
 int main(int argc, char ** argv) {
@@ -970,7 +983,10 @@ int main(int argc, char ** argv) {
 
     cparams.use_gpu    = params.use_gpu;
     cparams.flash_attn = params.flash_attn;
-
+    cparams.path_coreml = string_to_ptr(params.coreml_directory);
+    cparams.path_openvino = string_to_ptr(params.openvino_directory);
+    cparams.disable_coreml = params.disable_coreml;
+    
     if (!params.dtw.empty()) {
         cparams.dtw_token_timestamps = true;
         cparams.dtw_aheads_preset = WHISPER_AHEADS_NONE;
