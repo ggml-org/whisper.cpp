@@ -907,6 +907,8 @@ int main(int argc, char ** argv) {
 #endif
 
     whisper_params params;
+    char * sptr1 = nullptr;
+    char * sptr2 = nullptr;
 
     // If the only argument starts with "@", read arguments line-by-line
     // from the given file.
@@ -983,8 +985,10 @@ int main(int argc, char ** argv) {
 
     cparams.use_gpu    = params.use_gpu;
     cparams.flash_attn = params.flash_attn;
-    cparams.path_coreml = string_to_ptr(params.coreml_directory);
-    cparams.path_openvino = string_to_ptr(params.openvino_directory);
+    sptr1 = string_to_ptr(params.coreml_directory);
+    cparams.path_coreml = sptr1;
+    sptr2 = string_to_ptr(params.openvino_directory);
+    cparams.path_openvino = sptr2;
     cparams.disable_coreml = params.disable_coreml;
     
     if (!params.dtw.empty()) {
@@ -1279,6 +1283,9 @@ int main(int argc, char ** argv) {
     if (!params.no_prints) {
         whisper_print_timings(ctx);
     }
+    free(sptr2);
+    free(sptr1);
+    
     whisper_free(ctx);
 
     return 0;

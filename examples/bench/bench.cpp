@@ -61,7 +61,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "                           %-7s  2 - ggml_mul_mat\n",                            "");
     fprintf(stderr, "  -ng,      --no-gpu      [%-7s] disable GPU\n",                                 params.use_gpu ? "false" : "true");
     fprintf(stderr, "  -fa,      --flash-attn  [%-7s] enable flash attention\n",                      params.flash_attn ? "true" : "false");
-    fprintf(stderr, "  -ml,      --disable-ml  [%-7s] disable CoreML\n");
+    fprintf(stderr, "  -ml,      --disable-ml  [%-7s] disable CoreML\n",                              params.disable_coreml ? "true" : "false");
     fprintf(stderr, "  -l        --coreml      [%-7s] Set CoreML Directory\n",                        params.coreml_dir.c_str());
     fprintf(stderr, "  -v        --openvino    [%-7s] Set OpenVINO Directory\n",                      params.openvino_dir.c_str());
     fprintf(stderr, "\n");
@@ -75,11 +75,15 @@ static int whisper_bench_full(const whisper_params & params) {
     // whisper init
 
     struct whisper_context_params cparams = whisper_context_default_params();
+    char * sptr1 = nullptr;
+    char * sptr2 = nullptr;
 
     cparams.use_gpu    = params.use_gpu;
     cparams.flash_attn = params.flash_attn;
-    cparams.path_openvino = string_to_ptr(params.openvino_dir);
-    cparams.path_coreml = string_to_ptr(params.coreml_dir);
+    sptr1 = string_to_ptr(params.coreml_dir);
+    cparams.path_openvino = sptr1;
+    sptr2 = string_to_ptr(params.openvino_dir);
+    cparams.path_coreml = sptr2;
     cparams.disable_coreml = params.disable_coreml;
     
     struct whisper_context * ctx = whisper_init_from_file_with_params(params.model.c_str(), cparams);
@@ -154,6 +158,8 @@ static int whisper_bench_full(const whisper_params & params) {
     }
 
     whisper_print_timings(ctx);
+    free(sptr2);
+    free(sptr1);
     whisper_free(ctx);
 
     fprintf(stderr, "\n");
