@@ -3707,9 +3707,6 @@ struct whisper_context_params whisper_context_default_params() {
     return result;
 }
 
-//    std::string path_coreml; // populated by whisper_init_from_file_with_params()
-//    std::string path_openvino; // populated by whisper_init_from_file_with_params()
-
 struct whisper_context * whisper_init_from_file_with_params_no_state(const char * path_model, struct whisper_context_params params) {
     WHISPER_LOG_INFO("%s: loading model from '%s'\n", __func__, path_model);
 #ifdef _MSC_VER

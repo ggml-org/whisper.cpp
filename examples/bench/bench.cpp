@@ -34,7 +34,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-l"  || arg == "--coreml")     { params.coreml_dir = argv[++i]; }
         else if (arg == "-v"  || arg == "--openvino")   { params.openvino_dir = argv[++i]; }
         else if (arg == "-w"  || arg == "--what")       { params.what       = atoi(argv[++i]); }
-        else if (arg == "-ml" || arg == "--disable-coreml") { params.disable_coreml = true; }
+        else if (arg == "-ml" || arg == "--disable-ml") { params.disable_coreml = true; }
         else if (arg == "-ng" || arg == "--no-gpu")     { params.use_gpu    = false; }
         else if (arg == "-fa" || arg == "--flash-attn") { params.flash_attn = true; }
         else {
@@ -61,9 +61,9 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "                           %-7s  2 - ggml_mul_mat\n",                            "");
     fprintf(stderr, "  -ng,      --no-gpu      [%-7s] disable GPU\n",                                 params.use_gpu ? "false" : "true");
     fprintf(stderr, "  -fa,      --flash-attn  [%-7s] enable flash attention\n",                      params.flash_attn ? "true" : "false");
-    fprintf(stderr, "  -ml,      --disable-coreml     disable CoreML\n");
-    fprintf(stderr, "  -l        --coreml             Set CoreML Directory\n");
-    fprintf(stderr, "  -v        --openvino           Set OpenVINO Directory\n");
+    fprintf(stderr, "  -ml,      --disable-ml  [%-7s] disable CoreML\n");
+    fprintf(stderr, "  -l        --coreml      [%-7s] Set CoreML Directory\n",                        params.coreml_dir.c_str());
+    fprintf(stderr, "  -v        --openvino    [%-7s] Set OpenVINO Directory\n",                      params.openvino_dir.c_str());
     fprintf(stderr, "\n");
 }
 
