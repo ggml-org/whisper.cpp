@@ -37,8 +37,6 @@
 #include <vector>
 #include <sys/stat.h> // For data_file_exists
 
-#define NDEBUG
-
 #if defined(WHISPER_BIG_ENDIAN)
 template<typename T>
 static T byteswap(T value) {
@@ -3358,9 +3356,7 @@ static std::string replace_extra_data_directory(std::string path_bin, std::strin
     
     // Check  replacement_path actually exists
     if(must_exist && !data_file_exists(new_path.c_str())) {
-        #ifdef NDEBUG
         fprintf(stderr, "Trying to replace with non-existant path %s returning passed path %s\n", replacement_path.c_str(), path_bin.c_str());
-        #endif
         return path_bin;
     }
     
@@ -3385,9 +3381,7 @@ static std::string replace_extra_data_directory(std::string path_bin, std::strin
     new_path = new_path + file_part;
     
     if(must_exist && !data_file_exists(new_path.c_str())) {
-        #ifdef NDEBUG
         fprintf(stderr, "Error replacing path %s returning passed path %s\n", replacement_path.c_str(), path_bin.c_str());
-        #endif
         return path_bin;
     }
 

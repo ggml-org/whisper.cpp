@@ -273,7 +273,8 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  -f FNAME,  --file FNAME        [%-7s] input audio file path\n",                            "");
     fprintf(stderr, "  -oved D,   --ov-e-device DNAME [%-7s] the OpenVINO device used for encode inference\n",  params.openvino_encode_device.c_str());
     fprintf(stderr, "  -dov DN,   --ov-directory DN   [%-7s] the OpenVINO directory path\n",                    params.openvino_directory.c_str());
-    fprintf(stderr, "  -nlml,     --disable-coreml           Disable CoreML\n",                                 params.disable_coreml ? "true" : "false");
+    fprintf(stderr, "  -nlml,     --disable-coreml    [%-7s] Disable CoreML\n",                                 params.disable_coreml ? "true" : "false");
+    fprintf(stderr, "  -nlml,     --disable-coreml    [%-7s] Disable CoreML\n",                                 params.disable_coreml ? "true" : "false");
     fprintf(stderr, "  -dtw MODEL --dtw MODEL         [%-7s] compute token-level timestamps\n",                 params.dtw.c_str());
     fprintf(stderr, "  -ls,       --log-score         [%-7s] log best decoder scores of tokens\n",              params.log_score?"true":"false");
     fprintf(stderr, "  -ng,       --no-gpu            [%-7s] disable GPU\n",                                    params.use_gpu ? "false" : "true");
