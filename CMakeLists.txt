@@ -53,7 +53,13 @@ else()
     endif()
 endif()
 
+### SBDBG ###
 option(BUILD_SHARED_LIBS "build shared libraries" ${BUILD_SHARED_LIBS_DEFAULT})
+option(WHISPER_BACKEND_DL "build backends as dynamic libraries (requires BUILD_SHARED_LIBS)" OFF)
+if(WHISPER_BACKEND_DL)
+    SET(GGML_BACKEND_DL ${WHISPER_BACKEND_DL})
+endif()
+### SBDBG ###
 
 #
 # option list
@@ -167,6 +173,10 @@ include(CMakePackageConfigHelpers)
 set(WHISPER_BUILD_NUMBER        ${BUILD_NUMBER})
 set(WHISPER_BUILD_COMMIT        ${BUILD_COMMIT})
 set(WHISPER_INSTALL_VERSION     ${CMAKE_PROJECT_VERSION})
+
+### SBDBG ###
+MESSAGE(STATUS "Whisper Library Version = ${CMAKE_PROJECT_VERSION}, WHISPER_BACKEND_DL = ${WHISPER_BACKEND_DL}, GGML_BACKEND_DL = ${GGML_BACKEND_DL}")
+### SBDBG ###
 
 set(WHISPER_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of header  files")
 set(WHISPER_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
