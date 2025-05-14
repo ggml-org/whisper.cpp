@@ -139,6 +139,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -nth N,    --no-speech-thold N [%-7.2f] no speech threshold\n",   params.no_speech_thold);
     fprintf(stderr, "  -nc,       --no-context        [%-7s] do not use previous audio context\n", params.no_context ? "true" : "false");
     fprintf(stderr, "  -ng,       --no-gpu            [%-7s] do not use gpu\n", params.use_gpu ? "false" : "true");
+    fprintf(stderr, "  -fa,       --flash-attn        [%-7s] flash attention\n", params.flash_attn ? "true" : "false");
     fprintf(stderr, "\n");
 }
 
