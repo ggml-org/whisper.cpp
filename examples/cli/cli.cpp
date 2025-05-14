@@ -390,11 +390,12 @@ static void whisper_print_segment_callback(struct whisper_context * ctx, struct 
                 printf("%s%s%s%s", speaker.c_str(), k_colors[col].c_str(), text, "\033[0m");
             }
         } else if (params.print_confidence) {
-            const int n_tokens = whisper_full_n_tokens(ctx, i);
-            for (int j = 0; j < n_tokens; ++j) {
-                const whisper_token id = whisper_full_get_token_id(ctx, i, j);
-                if (id >= whisper_token_eot(ctx)) {
-                    continue;
+            for (int j = 0; j < whisper_full_n_tokens(ctx, i); ++j) {
+                if (params.print_special == false) {
+                    const whisper_token id = whisper_full_get_token_id(ctx, i, j);
+                    if (id >= whisper_token_eot(ctx)) {
+                        continue;
+                    }
                 }
 
                 const char * text = whisper_full_get_token_text(ctx, i, j);
