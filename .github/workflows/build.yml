@@ -1253,3 +1253,23 @@ jobs:
           source venv/bin/activate
           pip install ane_transformers openai-whisper coremltools
           ./models/generate-coreml-model.sh ${{ env.MODEL_NAME }}
+
+  vad:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        shell: bash
+        run: |
+          cmake -B build
+          cmake --build build --config Release
+
+      - name: Test
+        shell: bash
+        run: |
+          ctest -R ^test-vad$ --test-dir build --output-on-failure -VV
