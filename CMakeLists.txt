@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5) # for add_link_options and implicit target directories.
+cmake_minimum_required(VERSION 3.5...4.0.2) # for add_link_options and implicit target directories.
 project("whisper.cpp" C CXX)
 project("whisper.cpp" VERSION 1.7.5)
 include(CheckIncludeFileCXX)
@@ -17,7 +17,6 @@ endif()
 
 # Add path to modules
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
-
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
@@ -53,11 +52,38 @@ else()
     endif()
 endif()
 
-### SBDBG ###
 option(BUILD_SHARED_LIBS "build shared libraries" ${BUILD_SHARED_LIBS_DEFAULT})
-option(WHISPER_BACKEND_DL "build backends as dynamic libraries (requires BUILD_SHARED_LIBS)" OFF)
+
+### SBDBG ###
+if (POLICY CMP0077)
+  cmake_policy(SET CMP0077 NEW)
+endif()
+SET(GGML_BACKEND_DL OFF)
+SET(GGML_CPU_ALL_VARIANTS OFF)
+SET(WHISPER_BINDINGS_FLAT OFF)
+SET(WHISPER_SDL2 OFF)
+
+option(WHISPER_BACKEND_DL "build backends as dynamic libraries" OFF)
 if(WHISPER_BACKEND_DL)
-    SET(GGML_BACKEND_DL ${WHISPER_BACKEND_DL})
+    SET(GGML_BACKEND_DL ON)
+    SET(BUILD_SHARED_LIBS ON)
+    SET(GGML_CPU_ALL_VARIANTS ON)
+    SET(WHISPER_BINDINGS_FLAT ON)
+    SET(WHISPER_SDL2 ON)
+
+    MESSAGE(STATUS "")
+    MESSAGE(STATUS "")
+    MESSAGE(STATUS "Whisper Library Version = ${CMAKE_PROJECT_VERSION} with")
+    MESSAGE(STATUS "                          WHISPER_BINDING_FLAT  = ${WHISPER_BINDING_FLAT}")
+    MESSAGE(STATUS "                          WHISPER_BACKEND_DL    = ${WHISPER_BACKEND_DL}")
+    MESSAGE(STATUS "                          BUILD_SHARED_LIBS     = ${BUILD_SHARED_LIBS}")
+    MESSAGE(STATUS "                          GGML_BACKEND_DL       = ${GGML_BACKEND_DL}")
+    MESSAGE(STATUS "                          GGML_CPU_ALL_VARIANTS = ${GGML_CPU_ALL_VARIANTS}")
+    MESSAGE(STATUS "                          WHISPER_SDL2          = ${WHISPER_SDL2}")
+    MESSAGE(STATUS "")
+    MESSAGE(STATUS "")
+else()
+    MESSAGE(STATUS "============================= Bollocks =============================")
 endif()
 ### SBDBG ###
 
@@ -74,7 +100,7 @@ option(WHISPER_FATAL_WARNINGS  "whisper: enable -Werror flag"               OFF)
 option(WHISPER_USE_SYSTEM_GGML "whisper: use system-installed GGML library" OFF)
 
 # flat bindings
-option(WHISPER_BINDINGS_FLAT   "Add extra flat definitions to Whisper + GGML" OFF)
+option(WHISPER_BINDINGS_FLAT   "Add extra flat definitions to Whisper + GGML" ${WHISPER_BINDINGS_FLAT})
 option(GGML_BINDINGS_FLAT      "Add extra flat definitions to Examples" ${WHISPER_BINDINGS_FLAT})
 
 # sanitizers
@@ -89,7 +115,7 @@ option(WHISPER_BUILD_SERVER   "whisper: build server example" ${WHISPER_STANDALO
 
 # 3rd party libs
 option(WHISPER_CURL "whisper: use libcurl to download model from an URL" OFF)
-option(WHISPER_SDL2 "whisper: support for libSDL2" OFF)
+option(WHISPER_SDL2 "whisper: support for libSDL2" ${WHISPER_SDL2})
 
 if (CMAKE_SYSTEM_NAME MATCHES "Linux")
     option(WHISPER_FFMPEG "whisper: support building and linking with ffmpeg libs (avcodec, swresample, ...)" OFF)
@@ -173,10 +199,6 @@ include(CMakePackageConfigHelpers)
 set(WHISPER_BUILD_NUMBER        ${BUILD_NUMBER})
 set(WHISPER_BUILD_COMMIT        ${BUILD_COMMIT})
 set(WHISPER_INSTALL_VERSION     ${CMAKE_PROJECT_VERSION})
-
-### SBDBG ###
-MESSAGE(STATUS "Whisper Library Version = ${CMAKE_PROJECT_VERSION}, WHISPER_BACKEND_DL = ${WHISPER_BACKEND_DL}, GGML_BACKEND_DL = ${GGML_BACKEND_DL}")
-### SBDBG ###
 
 set(WHISPER_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of header  files")
 set(WHISPER_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
