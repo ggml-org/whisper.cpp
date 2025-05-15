@@ -6735,6 +6735,9 @@ int whisper_full_with_state(
             WHISPER_LOG_ERROR("%s: failed to compute VAD\n", __func__);
             return -1;
         }
+        if (vad_n_samples == 0) {
+            return 0;
+        }
         process_samples = vad_samples.data();
         n_process_samples = vad_n_samples;
     }
