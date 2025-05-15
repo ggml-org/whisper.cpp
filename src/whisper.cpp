@@ -954,6 +954,8 @@ struct whisper_state {
     // [EXPERIMENTAL] speed-up techniques
     int32_t exp_n_audio_ctx = 0; // 0 - use default
 
+    whisper_vad_context * vad_context = nullptr;
+
     struct vad_segment_info {
         float orig_start;
         float orig_end;
@@ -6613,12 +6615,16 @@ static bool whisper_vad(
     WHISPER_LOG_INFO("%s: VAD is enabled, processing speach segments only\n", __func__);
     filtered_n_samples = 0;
 
-    struct whisper_vad_context_params vad_ctx_params = whisper_vad_default_context_params();
-    struct whisper_vad_context * vctx = whisper_vad_init_from_file_with_params(params.vad_model_path, vad_ctx_params);
-    if (vctx == nullptr) {
-        WHISPER_LOG_ERROR("%s: failed to initialize VAD context\n", __func__);
-        return false;
+    if (state->vad_context == nullptr) {
+        struct whisper_vad_context_params vad_ctx_params = whisper_vad_default_context_params();
+        struct whisper_vad_context * vctx = whisper_vad_init_from_file_with_params(params.vad_model_path, vad_ctx_params);
+        if (vctx == nullptr) {
+            WHISPER_LOG_ERROR("%s: failed to initialize VAD context\n", __func__);
+            return false;
+        }
+        state->vad_context = vctx;
     }
+    auto vctx = state->vad_context;
 
     const whisper_vad_params & vad_params = params.vad_params;
 
