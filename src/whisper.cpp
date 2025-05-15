@@ -3855,6 +3855,11 @@ void whisper_free_state(struct whisper_state * state) {
         // [EXPERIMENTAL] Token-level timestamps with DTW
         aheads_masks_free(state->aheads_masks);
 
+        if (state->vad_context != nullptr) {
+            whisper_vad_free(state->vad_context);
+            state->vad_context = nullptr;
+        }
+
         delete state;
     }
 }
