@@ -44,6 +44,7 @@ struct whisper_params {
     int32_t progress_step = 5;
     int32_t max_context   = -1;
     int32_t max_len       = 0;
+    int32_t cpu           = 0;
     int32_t best_of       = whisper_full_default_params(WHISPER_SAMPLING_GREEDY).greedy.best_of;
     int32_t beam_size     = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH).beam_search.beam_size;
     int32_t audio_ctx     = 0;
@@ -72,6 +73,8 @@ struct whisper_params {
     bool output_jsn_full = false;
     bool output_lrc      = false;
     bool no_prints       = false;
+    bool no_openvino     = false;
+    bool no_openblas     = false;
     bool print_special   = false;
     bool print_colors    = false;
     bool print_confidence= false;
@@ -79,6 +82,8 @@ struct whisper_params {
     bool no_timestamps   = false;
     bool log_score       = false;
     bool use_gpu         = true;
+    bool use_cuda        = false;
+    bool use_vulkan      = false;
     bool flash_attn      = false;
     bool suppress_nst    = false;
 
@@ -156,6 +161,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-d"    || arg == "--duration")        { params.duration_ms     = std::stoi(ARGV_NEXT); }
         else if (arg == "-mc"   || arg == "--max-context")     { params.max_context     = std::stoi(ARGV_NEXT); }
         else if (arg == "-ml"   || arg == "--max-len")         { params.max_len         = std::stoi(ARGV_NEXT); }
+        else if (arg == "-cpu"  || arg == "--use-cpu")         { params.cpu             = std::stoi(ARGV_NEXT); }
         else if (arg == "-bo"   || arg == "--best-of")         { params.best_of         = std::stoi(ARGV_NEXT); }
         else if (arg == "-bs"   || arg == "--beam-size")       { params.beam_size       = std::stoi(ARGV_NEXT); }
         else if (arg == "-ac"   || arg == "--audio-ctx")       { params.audio_ctx       = std::stoi(ARGV_NEXT); }
@@ -182,6 +188,8 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-ojf"  || arg == "--output-json-full"){ params.output_jsn_full = params.output_jsn = true; }
         else if (arg == "-of"   || arg == "--output-file")     { params.fname_out.emplace_back(ARGV_NEXT); }
         else if (arg == "-np"   || arg == "--no-prints")       { params.no_prints       = true; }
+        else if (arg == "-nov"  || arg == "--no-openvino")     { params.no_openvino     = true; }
+        else if (arg == "-nob"  || arg == "--no-blas")         { params.no_openblas     = true; }
         else if (arg == "-ps"   || arg == "--print-special")   { params.print_special   = true; }
         else if (arg == "-pc"   || arg == "--print-colors")    { params.print_colors    = true; }
         else if (                  arg == "--print-confidence"){ params.print_confidence= true; }
@@ -196,6 +204,8 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-dtw"  || arg == "--dtw")             { params.dtw             = ARGV_NEXT; }
         else if (arg == "-ls"   || arg == "--log-score")       { params.log_score       = true; }
         else if (arg == "-ng"   || arg == "--no-gpu")          { params.use_gpu         = false; }
+        else if (arg == "-cuda" || arg == "--use-cuda")        { params.use_cuda        = true; }
+        else if (arg == "-vk"   || arg == "--use-vulkan")      { params.use_vulkan      = true; }
         else if (arg == "-fa"   || arg == "--flash-attn")      { params.flash_attn      = true; }
         else if (arg == "-sns"  || arg == "--suppress-nst")    { params.suppress_nst    = true; }
         else if (                  arg == "--suppress-regex")  { params.suppress_regex  = ARGV_NEXT; }
@@ -237,6 +247,7 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  -ml N,     --max-len N         [%-7d] maximum segment length in characters\n",           params.max_len);
     fprintf(stderr, "  -sow,      --split-on-word     [%-7s] split on word rather than on token\n",             params.split_on_word ? "true" : "false");
     fprintf(stderr, "  -bo N,     --best-of N         [%-7d] number of best candidates to keep\n",              params.best_of);
+    fprintf(stderr, "  -cpu N,    --use-cpu N         [%-7d] Use Specific CPU (7=highest, 0=best)\n",           params.cpu);
     fprintf(stderr, "  -bs N,     --beam-size N       [%-7d] beam size for beam search\n",                      params.beam_size);
     fprintf(stderr, "  -ac N,     --audio-ctx N       [%-7d] audio context size (0 - all)\n",                   params.audio_ctx);
     fprintf(stderr, "  -wt N,     --word-thold N      [%-7.2f] word timestamp probability threshold\n",         params.word_thold);
@@ -261,6 +272,8 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  -ojf,      --output-json-full  [%-7s] include more information in the JSON file\n",      params.output_jsn_full ? "true" : "false");
     fprintf(stderr, "  -of FNAME, --output-file FNAME [%-7s] output file path (without file extension)\n",      "");
     fprintf(stderr, "  -np,       --no-prints         [%-7s] do not print anything other than the results\n",   params.no_prints ? "true" : "false");
+    fprintf(stderr, "  -nov,      --no-openvino       [%-7s] do not use OpenVINO\n",                            params.no_openvino ? "true" : "false");
+    fprintf(stderr, "  -nob,      --no-blas           [%-7s] do not use OpenBlas\n",                            params.no_openblas ? "true" : "false");
     fprintf(stderr, "  -ps,       --print-special     [%-7s] print special tokens\n",                           params.print_special ? "true" : "false");
     fprintf(stderr, "  -pc,       --print-colors      [%-7s] print colors\n",                                   params.print_colors ? "true" : "false");
     fprintf(stderr, "             --print-confidence  [%-7s] print confidence\n",                               params.print_confidence ? "true" : "false");
@@ -275,6 +288,8 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  -dtw MODEL --dtw MODEL         [%-7s] compute token-level timestamps\n",                 params.dtw.c_str());
     fprintf(stderr, "  -ls,       --log-score         [%-7s] log best decoder scores of tokens\n",              params.log_score?"true":"false");
     fprintf(stderr, "  -ng,       --no-gpu            [%-7s] disable GPU\n",                                    params.use_gpu ? "false" : "true");
+    fprintf(stderr, "  -cuda,     --use-cuda          [%-7s] Use CUDA\n",                                       params.use_cuda ? "false" : "true");
+    fprintf(stderr, "  -vk,       --use-vulkan        [%-7s] Use Vulkan\n",                                     params.use_vulkan ? "false" : "true");
     fprintf(stderr, "  -fa,       --flash-attn        [%-7s] flash attention\n",                                params.flash_attn ? "true" : "false");
     fprintf(stderr, "  -sns,      --suppress-nst      [%-7s] suppress non-speech tokens\n",                     params.suppress_nst ? "true" : "false");
     fprintf(stderr, "  --suppress-regex REGEX         [%-7s] regular expression matching tokens to suppress\n", params.suppress_regex.c_str());
@@ -416,7 +431,9 @@ static void whisper_print_segment_callback(struct whisper_context * ctx, struct 
         } else {
             const char * text = whisper_full_get_segment_text(ctx, i);
 
-            printf("%s%s", speaker.c_str(), text);
+            if (!params.no_timestamps) {
+                printf("%s%s", speaker.c_str(), text);
+            }
         }
 
         if (params.tinydiarize) {
@@ -912,6 +929,25 @@ static void output_lrc(struct whisper_context * ctx, std::ofstream & fout, const
 
 static void cb_log_disable(enum ggml_log_level , const char * , void * ) { }
 
+static bool backend_tryload(const char * driver) {
+    if(ggml_backend_try_load_best(driver, nullptr) == nullptr) {
+        fprintf(stderr, "Driver loading for \"%s\" failed\n", driver);
+        return false;
+    }
+    return true;
+}
+
+static bool backend_trycpu(const char * driver) {
+    if(!backend_tryload(driver)) {
+        if(!backend_tryload("cpu")) {
+            fprintf(stderr, "No CPU : Can't proceed\n");
+            exit(-1);
+        }
+        return false;
+    }
+    return true;
+}
+
 int main(int argc, char ** argv) {
 #if defined(_WIN32)
     // Set the console output code page to UTF-8, while command line arguments
@@ -998,7 +1034,34 @@ int main(int argc, char ** argv) {
     if(params.use_gpu) {
         whisper_flat_backend_load_all();
     } else {
-        ggml_backend_try_load_best("cpu", nullptr);
+        if(params.use_cuda) {
+            backend_tryload("cuda");
+            params.use_gpu = true;
+        }
+        if(params.use_vulkan) {
+            backend_tryload("vulkan");
+            params.use_gpu = true;
+        }
+        if(!params.no_openblas) {
+            backend_tryload("blas");
+        }
+        if(params.cpu == 7) {
+            backend_trycpu("cpu-alderlake");
+        } else if(params.cpu == 6) {
+            backend_trycpu("cpu-icelake");
+        } else if(params.cpu == 5) {
+            backend_trycpu("cpu-skylakex");
+        } else if(params.cpu == 4) {
+            backend_trycpu("cpu-haswell");
+        } else if(params.cpu == 3) {
+            backend_trycpu("cpu-sandybridge");
+        } else if(params.cpu == 2) {
+            backend_trycpu("cpu-sse42");
+        } else if(params.cpu == 1) {
+            backend_trycpu("cpu-x64");
+        } else {
+            backend_trycpu("cpu");
+        }
     }
     #endif
 
@@ -1030,7 +1093,10 @@ int main(int argc, char ** argv) {
         }
     }
 
-    struct whisper_context * ctx = whisper_init_from_file_with_params(params.model.c_str(), cparams);
+//    struct whisper_context * ctx = whisper_init_from_file_with_params(params.model.c_str(), cparams);
+    struct whisper_context * ctx = whisper_init_from_file_with_params_no_state(params.model.c_str(), cparams);
+    auto state = whisper_init_state(ctx);
+    whisper_flat_set_context_state(ctx, state);
 
     if (ctx == nullptr) {
         fprintf(stderr, "error: failed to initialize whisper context\n");
@@ -1038,7 +1104,9 @@ int main(int argc, char ** argv) {
     }
 
     // initialize openvino encoder. this has no effect on whisper.cpp builds that don't have OpenVINO configured
-    whisper_ctx_init_openvino_encoder(ctx, nullptr, params.openvino_encode_device.c_str(), nullptr);
+    if(!params.no_openvino) {
+        whisper_ctx_init_openvino_encoder(ctx, nullptr, params.openvino_encode_device.c_str(), nullptr);
+    }
 
     if (!params.grammar.empty()) {
         auto & grammar = params.grammar_parsed;

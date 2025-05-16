@@ -62,6 +62,14 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "\n");
 }
 
+static bool backend_tryload(const char * driver) {
+    if(ggml_backend_try_load_best(driver, nullptr) == nullptr) {
+        fprintf(stderr, "Driver loading for \"%s\" failed\n", driver);
+        return false;
+    }
+    return true;
+}
+
 static int whisper_bench_full(const whisper_params & params) {
     // whisper init
 
@@ -70,7 +78,13 @@ static int whisper_bench_full(const whisper_params & params) {
     if(params.use_gpu) {
         whisper_flat_backend_load_all();
     } else {
-        ggml_backend_try_load_best("cpu", nullptr);
+        // backend_tryload("blas");
+        if(!backend_tryload("cpu")) {
+            if(!backend_tryload("cpu")) {
+                fprintf(stderr, "No CPU : Can't proceed\n");
+                return -1;
+            }
+        }
     }
     #endif
 
