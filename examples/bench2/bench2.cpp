@@ -62,6 +62,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "\n");
 }
 
+#ifdef WHISPER_BINDINGS_FLAT
 static bool backend_tryload(const char * driver) {
     if(ggml_backend_try_load_best(driver, nullptr) == nullptr) {
         fprintf(stderr, "Driver loading for \"%s\" failed\n", driver);
@@ -70,11 +71,26 @@ static bool backend_tryload(const char * driver) {
     return true;
 }
 
+static bool backend_trycpu(const char * driver) {
+    if(!backend_tryload(driver)) {
+        if(!backend_tryload("cpu")) {
+            fprintf(stderr, "No CPU : Can't proceed\n");
+            exit(-1);
+        }
+        return false;
+    }
+    return true;
+}
+#endif
+
 static int whisper_bench_full(const whisper_params & params) {
     // whisper init
 
+    bool using_bindings_flat = false;
+    
     #ifdef WHISPER_BINDINGS_FLAT
     fprintf(stderr, "+++ WHISPER_BINDINGS_FLAT +++\n");
+    using_bindings_flat = true;
     if(params.use_gpu) {
         whisper_flat_backend_load_all();
     } else {
@@ -93,9 +109,21 @@ static int whisper_bench_full(const whisper_params & params) {
     cparams.use_gpu    = params.use_gpu;
     cparams.flash_attn = params.flash_attn;
 
-    struct whisper_context * ctx = whisper_init_from_file_with_params_no_state(params.model.c_str(), cparams);
-    auto state = whisper_init_state(ctx);
-    whisper_flat_set_context_state(ctx, state);
+    #ifndef WHISPER_BINDINGS_FLAT
+    struct whisper_context * ctx = whisper_init_from_file_with_params(params.model.c_str(), cparams);
+    #else
+    // Not really necessary - more for testing WHISPER_BINDINGS_FLAT
+    // Would work the same by always doing the (implied) with state
+    struct whisper_context * ctx;
+    
+    if(!using_bindings_flat) {
+        ctx = whisper_init_from_file_with_params(params.model.c_str(), cparams);
+    } else {
+        ctx = whisper_init_from_file_with_params_no_state(params.model.c_str(), cparams);
+        auto state = whisper_init_state(ctx);
+        whisper_flat_set_context_state(ctx, state);
+    }
+    #endif
 
     {
         fprintf(stderr, "\n");

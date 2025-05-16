@@ -73,8 +73,6 @@ struct whisper_params {
     bool output_jsn_full = false;
     bool output_lrc      = false;
     bool no_prints       = false;
-    bool no_openvino     = false;
-    bool no_openblas     = false;
     bool print_special   = false;
     bool print_colors    = false;
     bool print_confidence= false;
@@ -82,6 +80,8 @@ struct whisper_params {
     bool no_timestamps   = false;
     bool log_score       = false;
     bool use_gpu         = true;
+    bool openvino        = false;
+    bool openblas        = false;
     bool use_cuda        = false;
     bool use_vulkan      = false;
     bool flash_attn      = false;
@@ -188,8 +188,8 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-ojf"  || arg == "--output-json-full"){ params.output_jsn_full = params.output_jsn = true; }
         else if (arg == "-of"   || arg == "--output-file")     { params.fname_out.emplace_back(ARGV_NEXT); }
         else if (arg == "-np"   || arg == "--no-prints")       { params.no_prints       = true; }
-        else if (arg == "-nov"  || arg == "--no-openvino")     { params.no_openvino     = true; }
-        else if (arg == "-nob"  || arg == "--no-blas")         { params.no_openblas     = true; }
+        else if (arg == "-openvino")                           { params.openvino        = true; }
+        else if (arg == "-blas")                               { params.openblas        = true; }
         else if (arg == "-ps"   || arg == "--print-special")   { params.print_special   = true; }
         else if (arg == "-pc"   || arg == "--print-colors")    { params.print_colors    = true; }
         else if (                  arg == "--print-confidence"){ params.print_confidence= true; }
@@ -204,8 +204,8 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-dtw"  || arg == "--dtw")             { params.dtw             = ARGV_NEXT; }
         else if (arg == "-ls"   || arg == "--log-score")       { params.log_score       = true; }
         else if (arg == "-ng"   || arg == "--no-gpu")          { params.use_gpu         = false; }
-        else if (arg == "-cuda" || arg == "--use-cuda")        { params.use_cuda        = true; }
-        else if (arg == "-vk"   || arg == "--use-vulkan")      { params.use_vulkan      = true; }
+        else if (arg == "-cuda" || arg == "--nvidia")          { params.use_cuda        = true; }
+        else if (arg == "-vk"   || arg == "--vulkan")          { params.use_vulkan      = true; }
         else if (arg == "-fa"   || arg == "--flash-attn")      { params.flash_attn      = true; }
         else if (arg == "-sns"  || arg == "--suppress-nst")    { params.suppress_nst    = true; }
         else if (                  arg == "--suppress-regex")  { params.suppress_regex  = ARGV_NEXT; }
@@ -272,8 +272,8 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  -ojf,      --output-json-full  [%-7s] include more information in the JSON file\n",      params.output_jsn_full ? "true" : "false");
     fprintf(stderr, "  -of FNAME, --output-file FNAME [%-7s] output file path (without file extension)\n",      "");
     fprintf(stderr, "  -np,       --no-prints         [%-7s] do not print anything other than the results\n",   params.no_prints ? "true" : "false");
-    fprintf(stderr, "  -nov,      --no-openvino       [%-7s] do not use OpenVINO\n",                            params.no_openvino ? "true" : "false");
-    fprintf(stderr, "  -nob,      --no-blas           [%-7s] do not use OpenBlas\n",                            params.no_openblas ? "true" : "false");
+    fprintf(stderr, "  -openvino                      [%-7s] Use OpenVINO\n",                                   params.openvino ? "true" : "false");
+    fprintf(stderr, "  -blas                          [%-7s] Use OpenBlas\n",                                   params.openblas ? "true" : "false");
     fprintf(stderr, "  -ps,       --print-special     [%-7s] print special tokens\n",                           params.print_special ? "true" : "false");
     fprintf(stderr, "  -pc,       --print-colors      [%-7s] print colors\n",                                   params.print_colors ? "true" : "false");
     fprintf(stderr, "             --print-confidence  [%-7s] print confidence\n",                               params.print_confidence ? "true" : "false");
@@ -288,8 +288,8 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  -dtw MODEL --dtw MODEL         [%-7s] compute token-level timestamps\n",                 params.dtw.c_str());
     fprintf(stderr, "  -ls,       --log-score         [%-7s] log best decoder scores of tokens\n",              params.log_score?"true":"false");
     fprintf(stderr, "  -ng,       --no-gpu            [%-7s] disable GPU\n",                                    params.use_gpu ? "false" : "true");
-    fprintf(stderr, "  -cuda,     --use-cuda          [%-7s] Use CUDA\n",                                       params.use_cuda ? "false" : "true");
-    fprintf(stderr, "  -vk,       --use-vulkan        [%-7s] Use Vulkan\n",                                     params.use_vulkan ? "false" : "true");
+    fprintf(stderr, "  -cuda      --nvidia            [%-7s] Use CUDA\n",                                       params.use_cuda ? "false" : "true");
+    fprintf(stderr, "  -vk        --vulkan            [%-7s] Use Vulkan\n",                                     params.use_vulkan ? "false" : "true");
     fprintf(stderr, "  -fa,       --flash-attn        [%-7s] flash attention\n",                                params.flash_attn ? "true" : "false");
     fprintf(stderr, "  -sns,      --suppress-nst      [%-7s] suppress non-speech tokens\n",                     params.suppress_nst ? "true" : "false");
     fprintf(stderr, "  --suppress-regex REGEX         [%-7s] regular expression matching tokens to suppress\n", params.suppress_regex.c_str());
@@ -929,6 +929,7 @@ static void output_lrc(struct whisper_context * ctx, std::ofstream & fout, const
 
 static void cb_log_disable(enum ggml_log_level , const char * , void * ) { }
 
+#ifdef WHISPER_BINDINGS_FLAT
 static bool backend_tryload(const char * driver) {
     if(ggml_backend_try_load_best(driver, nullptr) == nullptr) {
         fprintf(stderr, "Driver loading for \"%s\" failed\n", driver);
@@ -947,6 +948,7 @@ static bool backend_trycpu(const char * driver) {
     }
     return true;
 }
+#endif
 
 int main(int argc, char ** argv) {
 #if defined(_WIN32)
@@ -1029,20 +1031,25 @@ int main(int argc, char ** argv) {
 
     // whisper init
 
+    bool using_bindings_flat = false;
+    
     #ifdef WHISPER_BINDINGS_FLAT
     fprintf(stderr, "+++ WHISPER_BINDINGS_FLAT +++\n");
+    using_bindings_flat = true;
     if(params.use_gpu) {
         whisper_flat_backend_load_all();
     } else {
         if(params.use_cuda) {
-            backend_tryload("cuda");
-            params.use_gpu = true;
+            if(backend_tryload("cuda")) {
+                params.use_gpu = true;
+            }
         }
         if(params.use_vulkan) {
-            backend_tryload("vulkan");
-            params.use_gpu = true;
+            if(backend_tryload("vulkan")) {
+                params.use_gpu = true;
+            }
         }
-        if(!params.no_openblas) {
+        if(params.openblas) {
             backend_tryload("blas");
         }
         if(params.cpu == 7) {
@@ -1093,18 +1100,29 @@ int main(int argc, char ** argv) {
         }
     }
 
-//    struct whisper_context * ctx = whisper_init_from_file_with_params(params.model.c_str(), cparams);
-    struct whisper_context * ctx = whisper_init_from_file_with_params_no_state(params.model.c_str(), cparams);
-    auto state = whisper_init_state(ctx);
-    whisper_flat_set_context_state(ctx, state);
-
+    #ifndef WHISPER_BINDINGS_FLAT
+    struct whisper_context * ctx = whisper_init_from_file_with_params(params.model.c_str(), cparams);
+    #else
+    // Not really necessary - more for testing WHISPER_BINDINGS_FLAT
+    // Would work the same by always doing the (implied) with state
+    struct whisper_context * ctx;
+    
+    if(!using_bindings_flat) {
+        ctx = whisper_init_from_file_with_params(params.model.c_str(), cparams);
+    } else {
+        ctx = whisper_init_from_file_with_params_no_state(params.model.c_str(), cparams);
+        auto state = whisper_init_state(ctx);
+        whisper_flat_set_context_state(ctx, state);
+    }
+    #endif
+    
     if (ctx == nullptr) {
         fprintf(stderr, "error: failed to initialize whisper context\n");
         return 3;
     }
 
     // initialize openvino encoder. this has no effect on whisper.cpp builds that don't have OpenVINO configured
-    if(!params.no_openvino) {
+    if(params.openvino) {
         whisper_ctx_init_openvino_encoder(ctx, nullptr, params.openvino_encode_device.c_str(), nullptr);
     }
 
