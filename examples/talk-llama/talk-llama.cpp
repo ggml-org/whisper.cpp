@@ -615,7 +615,7 @@ int main(int argc, char ** argv) {
                 }
 
                 // remove all characters, except for letters, numbers, punctuation and ':', '\'', '-', ' '
-                text_heard = std::regex_replace(text_heard, std::regex("[^a-zA-Z0-9\\.,\\?!\\s\\:\\'\\-]"), "");
+                text_heard = std::regex_replace(text_heard, std::regex("[^a-zA-Z0-9åäöÅÄÖ\\.,\\?!\\s\\:\\'\\-]"), "");
 
                 // take first line
                 text_heard = text_heard.substr(0, text_heard.find_first_of('\n'));
