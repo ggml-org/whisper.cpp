@@ -164,7 +164,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -ngl N,   --n-gpu-layers N [%-7d] number of layers to store in VRAM\n",           params.n_gpu_layers);
     fprintf(stderr, "  --seed N                   [%-7d] seed sampling\n",                               params.seed);
     fprintf(stderr, "  --top-k N                  [%-7d] top-k sampling (0 = disabled)\n",               params.top_k);
-    fprintf(stderr, "  --min_keep N               [%-7d] minimum number of tokens to keep\n",            params.min_keep);
+    fprintf(stderr, "  --min-keep N               [%-7d] minimum number of tokens to keep\n",            params.min_keep);
     fprintf(stderr, "  --top-p N                  [%-7.2f] top-p sampling\n",                            params.top_p);
     fprintf(stderr, "  --min-p N                  [%-7.2f] min-p sampling\n",                            params.min_p);
     fprintf(stderr, "  --temp N                   [%-7.2f] temperature\n",                               params.temp);
