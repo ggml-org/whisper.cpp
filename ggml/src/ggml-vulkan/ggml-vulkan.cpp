@@ -5872,7 +5872,14 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     vk_pipeline *pipelines;
     bool small_rows = N <= get_fa_num_small_rows(path);
 
+    // coopmat1 does not actually support "small rows" (it needs 16 rows).
+    // So use scalar instead.
     if (small_rows && path == FA_COOPMAT1) {
+        path = FA_SCALAR;
+    }
+
+    // scalar is faster than coopmat2 when N==1
+    if (N == 1 && path == FA_COOPMAT2) {
         path = FA_SCALAR;
     }
 
