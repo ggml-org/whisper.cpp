@@ -161,9 +161,9 @@ int main(int argc, char ** argv) {
     const int n_samples_keep = (1e-3*params.keep_ms  )*WHISPER_SAMPLE_RATE;
     const int n_samples_30s  = (1e-3*30000.0         )*WHISPER_SAMPLE_RATE;
 
-    const int n_new_line = !params.vad ? std::max(1, params.length_ms / params.step_ms - 1) : 1; // number of steps to print new line
-    params.no_timestamps  = !params.vad;
-    params.no_context    |= params.vad;
+    const int n_new_line = std::max(1, params.length_ms / params.step_ms - 1); // number of steps to print new line
+    //params.no_timestamps  = !params.vad;
+    //params.no_context    |= params.vad;
     params.max_tokens     = 0;
 
     // init audio
@@ -217,12 +217,7 @@ int main(int argc, char ** argv) {
                 params.translate ? "translate" : "transcribe",
                 params.no_timestamps ? 0 : 1);
 
-        if (!params.vad) {
-            fprintf(stderr, "%s: n_new_line = %d, no_context = %d\n", __func__, n_new_line, params.no_context);
-        } else {
-            fprintf(stderr, "%s: using VAD, will transcribe on speech activity\n", __func__);
-        }
-
+        fprintf(stderr, "%s: n_new_line = %d, no_context = %d\n", __func__, n_new_line, params.no_context);
         fprintf(stderr, "\n");
     }
 
@@ -270,74 +265,44 @@ int main(int argc, char ** argv) {
 
         // process new audio
 
-        if (!params.vad) {
-            while (true) {
-                // handle Ctrl + C
-                is_running = sdl_poll_events();
-                if (!is_running) {
-                    break;
-                }
-                audio.get(params.step_ms, pcmf32_new);
-
-                if ((int) pcmf32_new.size() > 2*n_samples_step) {
-                    fprintf(stderr, "\n\n%s: WARNING: cannot process audio fast enough, dropping audio ...\n\n", __func__);
-                    audio.clear();
-                    continue;
-                }
-
-                if ((int) pcmf32_new.size() >= n_samples_step) {
-                    audio.clear();
-                    break;
-                }
-
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        while (true) {
+            // handle Ctrl + C
+            is_running = sdl_poll_events();
+            if (!is_running) {
+                break;
             }
+            audio.get(params.step_ms, pcmf32_new);
 
-            const int n_samples_new = pcmf32_new.size();
-
-            // take up to params.length_ms audio from previous iteration
-            const int n_samples_take = std::min((int) pcmf32_old.size(), std::max(0, n_samples_keep + n_samples_len - n_samples_new));
-
-            //fprintf(stdout, "processing: take = %d, new = %d, old = %d\n", n_samples_take, n_samples_new, (int) pcmf32_old.size());
-
-            pcmf32.resize(n_samples_new + n_samples_take);
-
-            for (int i = 0; i < n_samples_take; i++) {
-                pcmf32[i] = pcmf32_old[pcmf32_old.size() - n_samples_take + i];
-            }
-
-            memcpy(pcmf32.data() + n_samples_take, pcmf32_new.data(), n_samples_new*sizeof(float));
-
-            pcmf32_old = pcmf32;
-        } else {
-            const auto t_now  = std::chrono::high_resolution_clock::now();
-            const auto t_diff = std::chrono::duration_cast<std::chrono::milliseconds>(t_now - t_last).count();
-
-            if (t_diff < params.step_ms) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(params.step_ms));
+            if ((int) pcmf32_new.size() > 2*n_samples_step) {
+                fprintf(stderr, "\n\n%s: WARNING: cannot process audio fast enough, dropping audio ...\n\n", __func__);
+                audio.clear();
                 continue;
             }
 
-            // Get new audio for this step
-            audio.get(params.step_ms, pcmf32_new);
-
-            // Calculate how much old audio to keep
-            const int n_samples_new = pcmf32_new.size();
-            const int n_samples_take = std::min((int) pcmf32_old.size(), std::max(0, n_samples_keep + n_samples_len - n_samples_new));
-
-            // Combine old + new audio with overlap
-            pcmf32.resize(n_samples_new + n_samples_take);
-
-            // Copy kept portion from previous iteration
-            for (int i = 0; i < n_samples_take; i++) {
-                pcmf32[i] = pcmf32_old[pcmf32_old.size() - n_samples_take + i];
+            if ((int) pcmf32_new.size() >= n_samples_step) {
+                audio.clear();
+                break;
             }
 
-            // Append new audio
-            memcpy(pcmf32.data() + n_samples_take, pcmf32_new.data(), n_samples_new * sizeof(float));
-
-            t_last = t_now;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+
+        const int n_samples_new = pcmf32_new.size();
+
+        // take up to params.length_ms audio from previous iteration
+        const int n_samples_take = std::min((int) pcmf32_old.size(), std::max(0, n_samples_keep + n_samples_len - n_samples_new));
+
+        //fprintf(stdout, "processing: take = %d, new = %d, old = %d\n", n_samples_take, n_samples_new, (int) pcmf32_old.size());
+
+        pcmf32.resize(n_samples_new + n_samples_take);
+
+        for (int i = 0; i < n_samples_take; i++) {
+            pcmf32[i] = pcmf32_old[pcmf32_old.size() - n_samples_take + i];
+        }
+
+        memcpy(pcmf32.data() + n_samples_take, pcmf32_new.data(), n_samples_new*sizeof(float));
+
+        pcmf32_old = pcmf32;
 
         // run the inference
         {
@@ -381,14 +346,12 @@ int main(int argc, char ** argv) {
 
             // print result;
             {
-                if (!params.vad) {
-                    printf("\33[2K\r");
+                printf("\33[2K\r");
 
-                    // print long empty line to clear the previous line
-                    printf("%s", std::string(100, ' ').c_str());
+                // print long empty line to clear the previous line
+                printf("%s", std::string(100, ' ').c_str());
 
-                    printf("\33[2K\r");
-                }
+                printf("\33[2K\r");
 
                 const int n_segments = whisper_full_n_segments(ctx);
                 for (int i = 0; i < n_segments; ++i) {
@@ -430,7 +393,7 @@ int main(int argc, char ** argv) {
 
             ++n_iter;
 
-            if (!params.vad && (n_iter % n_new_line) == 0) {
+            if ((n_iter % n_new_line) == 0) {
                 printf("\n");
 
                 // keep part of the audio for next iteration to try to mitigate word boundary issues
