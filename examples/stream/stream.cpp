@@ -152,7 +152,13 @@ int main(int argc, char ** argv) {
         whisper_log_set([](enum ggml_log_level, const char*, void*) { }, NULL);
     }
 
-    params.keep_ms   = std::min(params.keep_ms,   params.step_ms);
+    if (params.vad) {
+        // For VAD, ensure at least vad_keep_ms of context
+        params.keep_ms = std::max(params.keep_ms, 500);
+    } else {
+        params.keep_ms = std::min(params.keep_ms, params.step_ms);
+    }
+
     params.length_ms = std::max(params.length_ms, params.step_ms);
 
 
