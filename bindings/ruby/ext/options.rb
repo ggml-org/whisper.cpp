@@ -149,6 +149,7 @@ class Options
     bool "GGML_SYCL_F16"
     bool "GGML_SYCL_GRAPH"
     string "GGML_SYCL_TARGET"
+    bool "GGML_SYCL_DNN"
     bool "GGML_VULKAN"
     bool "GGML_VULKAN_CHECK_RESULTS"
     bool "GGML_VULKAN_DEBUG"
