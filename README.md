@@ -35,7 +35,7 @@ Supported platforms:
 - [x] [Java](bindings/java/README.md)
 - [x] Linux / [FreeBSD](https://github.com/ggml-org/whisper.cpp/issues/56#issuecomment-1350920264)
 - [x] [WebAssembly](examples/whisper.wasm)
-- [x] Windows ([MSVC](https://github.com/ggml-org/whisper.cpp/blob/master/.github/workflows/build.yml#L117-L144) and [MinGW](https://github.com/ggml-org/whisper.cpp/issues/168)]
+- [x] Windows ([MSVC](https://github.com/ggml-org/whisper.cpp/blob/master/.github/workflows/build.yml#L117-L144) and [MinGW](https://github.com/ggml-org/whisper.cpp/issues/168))
 - [x] [Raspberry Pi](https://github.com/ggml-org/whisper.cpp/discussions/166)
 - [x] [Docker](https://github.com/ggml-org/whisper.cpp/pkgs/container/whisper.cpp)
 
