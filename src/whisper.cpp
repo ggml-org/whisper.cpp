@@ -8397,12 +8397,6 @@ static void whisper_exp_compute_token_level_timestamps(
 
         const int64_t tt = t_beg + 2*(token.tid - whisper_token_beg(&ctx));
 
-        tokens[j].id    = token.id;
-        tokens[j].tid   = token.tid;
-        tokens[j].p     = token.p;
-        tokens[j].pt    = token.pt;
-        tokens[j].ptsum = token.ptsum;
-
         tokens[j].vlen = voice_length(whisper_token_to_str(&ctx, token.id));
 
         if (token.pt > thold_pt && token.ptsum > thold_ptsum && token.tid > tid_last && tt <= t1) {
