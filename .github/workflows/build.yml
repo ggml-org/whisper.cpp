@@ -703,7 +703,7 @@ jobs:
                 github.event.inputs.pre_release_tag != '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: whisper-blas-bin-${{ matrix.arch }}.zip
+          name: whisper-blas-bin-${{ matrix.arch }}
           path: whisper-blas-bin-${{ matrix.arch }}.zip
 
   windows-cublas:
