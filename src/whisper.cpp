@@ -869,8 +869,8 @@ struct whisper_aheads_masks {
 };
 
 struct vad_time_mapping {
-    uint64_t processed_time;  // Time in processed (VAD) audio
-    uint64_t original_time;   // Corresponding time in original audio
+    int64_t processed_time;  // Time in processed (VAD) audio
+    int64_t original_time;   // Corresponding time in original audio
 };
 
 struct whisper_state {
@@ -962,10 +962,10 @@ struct whisper_state {
     whisper_vad_context * vad_context = nullptr;
 
     struct vad_segment_info {
-        uint64_t orig_start;
-        uint64_t orig_end;
-        uint64_t vad_start;
-        uint64_t vad_end;
+        int64_t orig_start;
+        int64_t orig_end;
+        int64_t vad_start;
+        int64_t vad_end;
     };
     std::vector<vad_segment_info> vad_segments;
     bool has_vad_segments = false;
@@ -4428,8 +4428,8 @@ struct whisper_vad_model {
 };
 
 struct whisper_vad_segment {
-    uint64_t start;
-    uint64_t end;
+    int64_t start;
+    int64_t end;
 };
 
 struct whisper_vad_segments {
@@ -5422,8 +5422,8 @@ struct whisper_vad_segments * whisper_vad_segments_from_probs(
         }
 
         // Convert from samples to seconds and copy to final segments
-        segments[i].start = (uint64_t)((speeches[i].start / (double)sample_rate) * 100.0 + 0.5);
-        segments[i].end   = (uint64_t)((speeches[i].end / (double)sample_rate) * 100.0 + 0.5);
+        segments[i].start = (int64_t)((speeches[i].start / (double)sample_rate) * 100.0 + 0.5);
+        segments[i].end   = (int64_t)((speeches[i].end / (double)sample_rate) * 100.0 + 0.5);
 
         WHISPER_LOG_INFO("%s: VAD segment %d: start = %.2f, end = %.2f (duration: %.2f)\n",
                         __func__, i, segments[i].start/100.0, segments[i].end/100.0, (segments[i].end - segments[i].start)/100.0);
@@ -6712,8 +6712,8 @@ static bool whisper_vad(
                 segment.orig_start = vad_segments->data[i].start;
                 segment.orig_end   = vad_segments->data[i].end;
 
-                segment.vad_start = (uint64_t)((offset / (double)WHISPER_SAMPLE_RATE) * 100.0 + 0.5);
-                segment.vad_end   = (uint64_t)(((offset + segment_length) / (double)WHISPER_SAMPLE_RATE) * 100.0 + 0.5);
+                segment.vad_start = (int64_t)((offset / (double)WHISPER_SAMPLE_RATE) * 100.0 + 0.5);
+                segment.vad_end   = (int64_t)(((offset + segment_length) / (double)WHISPER_SAMPLE_RATE) * 100.0 + 0.5);
 
                 // Add segment boundaries to mapping table
                 vad_time_mapping start_mapping = {segment.vad_start, segment.orig_start};
@@ -6723,22 +6723,22 @@ static bool whisper_vad(
                 state->vad_mapping_table.push_back(end_mapping);
 
                 // Add intermediate points for longer segments to improve interpolation accuracy
-                const uint64_t min_segment_length = 100; // 1 second
-                const uint64_t point_interval = 20;     // Add a point every 200ms
+                const int64_t min_segment_length = 100; // 1 second
+                const int64_t point_interval = 20;     // Add a point every 200ms
 
                 if (segment.vad_end - segment.vad_start > min_segment_length) {
-                    uint64_t segment_duration = segment.vad_end - segment.vad_start;
+                    int64_t segment_duration = segment.vad_end - segment.vad_start;
                     int num_points = (int)(segment_duration / point_interval) - 1;
 
                     for (int j = 1; j <= num_points; j++) {
-                        uint64_t vad_time = segment.vad_start + j * point_interval;
+                        int64_t vad_time = segment.vad_start + j * point_interval;
 
                         if (vad_time >= segment.vad_end) continue;
 
-                        uint64_t vad_elapsed = vad_time - segment.vad_start;
-                        uint64_t vad_total = segment.vad_end - segment.vad_start;
-                        uint64_t orig_total = segment.orig_end - segment.orig_start;
-                        uint64_t orig_time = segment.orig_start + (vad_elapsed * orig_total) / vad_total;
+                        int64_t vad_elapsed = vad_time - segment.vad_start;
+                        int64_t vad_total = segment.vad_end - segment.vad_start;
+                        int64_t orig_total = segment.orig_end - segment.orig_start;
+                        int64_t orig_time = segment.orig_start + (vad_elapsed * orig_total) / vad_total;
 
                         vad_time_mapping intermediate_mapping = {vad_time, orig_time};
                         state->vad_mapping_table.push_back(intermediate_mapping);
@@ -6756,11 +6756,11 @@ static bool whisper_vad(
                 // Add silence after this segment (except after the last segment)
                 if (i < (int)vad_segments->data.size() - 1) {
                     // Calculate the start and end time of the silence gap in processed audio
-                    uint64_t silence_start_vad = (uint64_t)((offset / (double)WHISPER_SAMPLE_RATE) * 100.0 + 0.5);
-                    uint64_t silence_end_vad = (uint64_t)(((offset + silence_samples) / (double)WHISPER_SAMPLE_RATE) * 100.0 + 0.5);
+                    int64_t silence_start_vad = (int64_t)((offset / (double)WHISPER_SAMPLE_RATE) * 100.0 + 0.5);
+                    int64_t silence_end_vad = (int64_t)(((offset + silence_samples) / (double)WHISPER_SAMPLE_RATE) * 100.0 + 0.5);
                     // Calculate the corresponding original times
-                    uint64_t orig_silence_start = segment.orig_end;
-                    uint64_t orig_silence_end = vad_segments->data[i+1].start;
+                    int64_t orig_silence_start = segment.orig_end;
+                    int64_t orig_silence_end = vad_segments->data[i+1].start;
 
                     // Add mapping points for silence boundaries
                     state->vad_mapping_table.push_back({silence_start_vad, orig_silence_start});
@@ -7874,7 +7874,7 @@ int whisper_full_lang_id(struct whisper_context * ctx) {
     return ctx->state->lang_id;
 }
 
-static uint64_t map_processed_to_original_time(uint64_t processed_time, const std::vector<vad_time_mapping>& mapping_table) {
+static int64_t map_processed_to_original_time(int64_t processed_time, const std::vector<vad_time_mapping>& mapping_table) {
     if (mapping_table.empty()) {
         return processed_time;
     }
@@ -7890,7 +7890,7 @@ static uint64_t map_processed_to_original_time(uint64_t processed_time, const st
     // Binary search over the time map that finds the first entry that has a
     // processed time greater than or equal to the current processed time.
     auto upper = std::lower_bound(mapping_table.begin(), mapping_table.end(), processed_time,
-        [](const vad_time_mapping& entry, uint64_t time) {
+        [](const vad_time_mapping& entry, int64_t time) {
             return entry.processed_time < time;
         }
     );
@@ -7903,9 +7903,9 @@ static uint64_t map_processed_to_original_time(uint64_t processed_time, const st
     // Need to interpolate between two points
     auto lower = upper - 1;
 
-    uint64_t processed_diff = upper->processed_time - lower->processed_time;
-    uint64_t original_diff = upper->original_time - lower->original_time;
-    uint64_t offset = processed_time - lower->processed_time;
+    int64_t processed_diff = upper->processed_time - lower->processed_time;
+    int64_t original_diff = upper->original_time - lower->original_time;
+    int64_t offset = processed_time - lower->processed_time;
 
     if (processed_diff == 0) {
         return lower->original_time;
@@ -7924,7 +7924,7 @@ int64_t whisper_full_get_segment_t0_from_state(struct whisper_state* state, int 
     }
 
     // Get the processed timestamp
-    uint64_t t0 = state->result_all[i_segment].t0;
+    int64_t t0 = state->result_all[i_segment].t0;
 
     // Map to original time using the mapping table
     return map_processed_to_original_time(t0, state->vad_mapping_table);
@@ -7939,16 +7939,16 @@ int64_t whisper_full_get_segment_t1_from_state(struct whisper_state* state, int 
     }
 
     // Get the processed timestamp
-    uint64_t t1 = state->result_all[i_segment].t1;
+    int64_t t1 = state->result_all[i_segment].t1;
 
     // Map to original time using the mapping table
-    uint64_t orig_t1 = map_processed_to_original_time(t1, state->vad_mapping_table);
+    int64_t orig_t1 = map_processed_to_original_time(t1, state->vad_mapping_table);
 
     // Get the corresponding t0 for this segment
-    uint64_t orig_t0 = whisper_full_get_segment_t0_from_state(state, i_segment);
+    int64_t orig_t0 = whisper_full_get_segment_t0_from_state(state, i_segment);
 
     // Ensure minimum duration to prevent zero-length segments
-    const uint64_t min_duration = 10; // 10ms minimum
+    const int64_t min_duration = 10; // 10ms minimum
     if (orig_t1 - orig_t0 < min_duration) {
         orig_t1 = orig_t0 + min_duration;
     }
