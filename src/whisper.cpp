@@ -962,10 +962,10 @@ struct whisper_state {
     whisper_vad_context * vad_context = nullptr;
 
     struct vad_segment_info {
-        double orig_start;
-        double orig_end;
-        double vad_start;
-        double vad_end;
+        uint64_t orig_start;
+        uint64_t orig_end;
+        uint64_t vad_start;
+        uint64_t vad_end;
     };
     std::vector<vad_segment_info> vad_segments;
     bool has_vad_segments = false;
@@ -4428,8 +4428,8 @@ struct whisper_vad_model {
 };
 
 struct whisper_vad_segment {
-    double start; // Start time in seconds
-    double end;   // End time in seconds
+    uint64_t start;
+    uint64_t end;
 };
 
 struct whisper_vad_segments {
@@ -5422,11 +5422,11 @@ struct whisper_vad_segments * whisper_vad_segments_from_probs(
         }
 
         // Convert from samples to seconds and copy to final segments
-        segments[i].start = (float)speeches[i].start / sample_rate;
-        segments[i].end   = (float)speeches[i].end   / sample_rate;
+        segments[i].start = (uint64_t)((speeches[i].start / (double)sample_rate) * 100.0 + 0.5);
+        segments[i].end   = (uint64_t)((speeches[i].end / (double)sample_rate) * 100.0 + 0.5);
 
         WHISPER_LOG_INFO("%s: VAD segment %d: start = %.2f, end = %.2f (duration: %.2f)\n",
-                        __func__, i, segments[i].start, segments[i].end, segments[i].end - segments[i].start);
+                        __func__, i, segments[i].start/100.0, segments[i].end/100.0, (segments[i].end - segments[i].start)/100.0);
     }
 
     whisper_vad_segments * vad_segments = new whisper_vad_segments;
@@ -6662,8 +6662,8 @@ static bool whisper_vad(
         int overlap_samples = overlap_seconds * WHISPER_SAMPLE_RATE;
 
         for (int i = 0; i < (int)vad_segments->data.size(); i++) {
-            int segment_start_samples = vad_segments->data[i].start * WHISPER_SAMPLE_RATE;
-            int segment_end_samples   = vad_segments->data[i].end   * WHISPER_SAMPLE_RATE;
+            int segment_start_samples = (vad_segments->data[i].start/100.0) * WHISPER_SAMPLE_RATE;
+            int segment_end_samples   = (vad_segments->data[i].end/100.0)   * WHISPER_SAMPLE_RATE;
 
             if (i < (int)vad_segments->data.size() - 1) {
                 segment_end_samples += overlap_samples;
@@ -6672,9 +6672,9 @@ static bool whisper_vad(
             filtered_n_samples  += (segment_end_samples - segment_start_samples);
 
             WHISPER_LOG_INFO("%s: Including segment %d: %.2f - %.2f (duration: %.2f)\n",
-                __func__, i, vad_segments->data[i].start,
-                vad_segments->data[i].end + (i < (int)vad_segments->data.size() - 1 ? overlap_seconds : 0),
-                (vad_segments->data[i].end - vad_segments->data[i].start) +
+                __func__, i, vad_segments->data[i].start/100.0,
+                (vad_segments->data[i].end/100.0 + (i < (int)vad_segments->data.size() - 1 ? overlap_seconds : 0)),
+                (vad_segments->data[i].end - vad_segments->data[i].start)/100.0 +
                 (i < (int)vad_segments->data.size() - 1 ? overlap_seconds : 0));
         }
 
@@ -6696,8 +6696,8 @@ static bool whisper_vad(
 
         int offset = 0;
         for (int i = 0; i < (int)vad_segments->data.size(); i++) {
-            int segment_start_samples = vad_segments->data[i].start * WHISPER_SAMPLE_RATE;
-            int segment_end_samples   = vad_segments->data[i].end   * WHISPER_SAMPLE_RATE;
+            int segment_start_samples = (vad_segments->data[i].start/100.0) * WHISPER_SAMPLE_RATE;
+            int segment_end_samples   = (vad_segments->data[i].end/100.0)   * WHISPER_SAMPLE_RATE;
 
             if (i < (int)vad_segments->data.size() - 1) {
                 segment_end_samples += overlap_samples;
@@ -6712,39 +6712,41 @@ static bool whisper_vad(
                 segment.orig_start = vad_segments->data[i].start;
                 segment.orig_end   = vad_segments->data[i].end;
 
-                segment.vad_start = offset / (double)WHISPER_SAMPLE_RATE;
-                segment.vad_end   = (offset + segment_length) / (double)WHISPER_SAMPLE_RATE;
+                segment.vad_start = (uint64_t)((offset / (double)WHISPER_SAMPLE_RATE) * 100.0 + 0.5);
+                segment.vad_end   = (uint64_t)(((offset + segment_length) / (double)WHISPER_SAMPLE_RATE) * 100.0 + 0.5);
 
                 // Add segment boundaries to mapping table
-                vad_time_mapping start_mapping = {(uint64_t)(segment.vad_start * 100.0 + 0.5), (uint64_t)(segment.orig_start * 100.0 + 0.5)};
-                vad_time_mapping end_mapping = {(uint64_t)(segment.vad_end * 100.0 + 0.5), (uint64_t)(segment.orig_end * 100.0 + 0.5)};
+                vad_time_mapping start_mapping = {segment.vad_start, segment.orig_start};
+                vad_time_mapping end_mapping = {segment.vad_end, segment.orig_end};
 
                 state->vad_mapping_table.push_back(start_mapping);
                 state->vad_mapping_table.push_back(end_mapping);
 
                 // Add intermediate points for longer segments to improve interpolation accuracy
-                const double min_segment_length = 1.0; // 1 second
-                const double point_interval = 0.2;     // Add a point every 200ms
+                const uint64_t min_segment_length = 100; // 1 second
+                const uint64_t point_interval = 20;     // Add a point every 200ms
 
                 if (segment.vad_end - segment.vad_start > min_segment_length) {
-                    double segment_duration = segment.vad_end - segment.vad_start;
+                    uint64_t segment_duration = segment.vad_end - segment.vad_start;
                     int num_points = (int)(segment_duration / point_interval) - 1;
 
                     for (int j = 1; j <= num_points; j++) {
-                        double vad_time = segment.vad_start + j * point_interval;
+                        uint64_t vad_time = segment.vad_start + j * point_interval;
 
                         if (vad_time >= segment.vad_end) continue;
 
-                        double proportion = (vad_time - segment.vad_start) / (segment.vad_end - segment.vad_start);
-                        double orig_time = segment.orig_start + proportion * (segment.orig_end - segment.orig_start);
+                        uint64_t vad_elapsed = vad_time - segment.vad_start;
+                        uint64_t vad_total = segment.vad_end - segment.vad_start;
+                        uint64_t orig_total = segment.orig_end - segment.orig_start;
+                        uint64_t orig_time = segment.orig_start + (vad_elapsed * orig_total) / vad_total;
 
-                        vad_time_mapping intermediate_mapping = {(uint64_t)(vad_time * 100.0 + 0.5), (uint64_t)(orig_time * 100.0 + 0.5)};
+                        vad_time_mapping intermediate_mapping = {vad_time, orig_time};
                         state->vad_mapping_table.push_back(intermediate_mapping);
                     }
                 }
 
                 WHISPER_LOG_INFO("%s: vad_segment_info: orig_start: %.2f, orig_end: %.2f, vad_start: %.2f, vad_end: %.2f\n",
-                    __func__, segment.orig_start, segment.orig_end, segment.vad_start, segment.vad_end);
+                    __func__, segment.orig_start/100.0, segment.orig_end/100.0, segment.vad_start/100.0, segment.vad_end/100.0);
                 ctx->state->vad_segments.push_back(segment);
 
                 // Copy this speech segment
@@ -6754,16 +6756,15 @@ static bool whisper_vad(
                 // Add silence after this segment (except after the last segment)
                 if (i < (int)vad_segments->data.size() - 1) {
                     // Calculate the start and end time of the silence gap in processed audio
-                    double silence_start_vad = offset / (double)WHISPER_SAMPLE_RATE;
-                    double silence_end_vad = (offset + silence_samples) / (double)WHISPER_SAMPLE_RATE;
-
+                    uint64_t silence_start_vad = (uint64_t)((offset / (double)WHISPER_SAMPLE_RATE) * 100.0 + 0.5);
+                    uint64_t silence_end_vad = (uint64_t)(((offset + silence_samples) / (double)WHISPER_SAMPLE_RATE) * 100.0 + 0.5);
                     // Calculate the corresponding original times
-                    double orig_silence_start = segment.orig_end;
-                    double orig_silence_end = vad_segments->data[i+1].start;
+                    uint64_t orig_silence_start = segment.orig_end;
+                    uint64_t orig_silence_end = vad_segments->data[i+1].start;
 
                     // Add mapping points for silence boundaries
-                    state->vad_mapping_table.push_back({(uint64_t)(silence_start_vad * 100.0 + 0.5),(uint64_t)(orig_silence_start * 100.0 + 0.5)});
-                    state->vad_mapping_table.push_back({(uint64_t)(silence_end_vad * 100.0 + 0.5),(uint64_t)(orig_silence_end * 100.0 + 0.5)});
+                    state->vad_mapping_table.push_back({silence_start_vad, orig_silence_start});
+                    state->vad_mapping_table.push_back({silence_end_vad, orig_silence_end});
 
                     // Fill with zeros (silence)
                     memset(filtered_samples.data() + offset, 0, silence_samples * sizeof(float));
