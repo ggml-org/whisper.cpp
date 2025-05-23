@@ -52,6 +52,32 @@ ruby_whisper_allocate(VALUE klass)
   return Data_Wrap_Struct(klass, rb_whisper_mark, rb_whisper_free, rw);
 }
 
+VALUE
+ruby_whisper_normalize_model_path(VALUE model_path)
+{
+  VALUE pre_converted_models = rb_funcall(cModel, id_pre_converted_models, 0);
+  VALUE pre_converted_model = rb_hash_aref(pre_converted_models, model_path);
+  if (!NIL_P(pre_converted_model)) {
+    model_path = pre_converted_model;
+  }
+  else if (TYPE(model_path) == T_STRING) {
+    const char * model_path_str = StringValueCStr(model_path);
+    if (strncmp("http://", model_path_str, 7) == 0 || strncmp("https://", model_path_str, 8) == 0) {
+      VALUE uri_class = rb_const_get(cModel, id_URI);
+      model_path = rb_class_new_instance(1, &model_path, uri_class);
+    }
+  }
+  else if (rb_obj_is_kind_of(model_path, rb_path2class("URI::HTTP"))) {
+    VALUE uri_class = rb_const_get(cModel, id_URI);
+    model_path = rb_class_new_instance(1, &model_path, uri_class);
+  }
+  if (rb_respond_to(model_path, id_to_path)) {
+    model_path = rb_funcall(model_path, id_to_path, 0);
+  }
+
+  return model_path;
+}
+
 /*
  * call-seq:
  *   new("base.en") -> Whisper::Context
@@ -68,25 +94,7 @@ ruby_whisper_initialize(int argc, VALUE *argv, VALUE self)
   rb_scan_args(argc, argv, "01", &whisper_model_file_path);
   Data_Get_Struct(self, ruby_whisper, rw);
 
-  VALUE pre_converted_models = rb_funcall(cModel, id_pre_converted_models, 0);
-  VALUE pre_converted_model = rb_hash_aref(pre_converted_models, whisper_model_file_path);
-  if (!NIL_P(pre_converted_model)) {
-    whisper_model_file_path = pre_converted_model;
-  }
-  if (TYPE(whisper_model_file_path) == T_STRING) {
-    const char * whisper_model_file_path_str = StringValueCStr(whisper_model_file_path);
-    if (strncmp("http://", whisper_model_file_path_str, 7) == 0 || strncmp("https://", whisper_model_file_path_str, 8) == 0) {
-      VALUE uri_class = rb_const_get(cModel, id_URI);
-      whisper_model_file_path = rb_class_new_instance(1, &whisper_model_file_path, uri_class);
-    }
-  }
-  if (rb_obj_is_kind_of(whisper_model_file_path, rb_path2class("URI::HTTP"))) {
-    VALUE uri_class = rb_const_get(cModel, id_URI);
-    whisper_model_file_path = rb_class_new_instance(1, &whisper_model_file_path, uri_class);
-  }
-  if (rb_respond_to(whisper_model_file_path, id_to_path)) {
-    whisper_model_file_path = rb_funcall(whisper_model_file_path, id_to_path, 0);
-  }
+  whisper_model_file_path = ruby_whisper_normalize_model_path(whisper_model_file_path);
   if (!rb_respond_to(whisper_model_file_path, id_to_s)) {
     rb_raise(rb_eRuntimeError, "Expected file path to model to initialize Whisper::Context");
   }
