@@ -1,0 +1,6 @@
+# This is the minimal set of dependencies we need to compute
+# WER score. Read Section 3.2. of the original paper
+# (https://arxiv.org/abs/2212.04356) for more contexts.
+jiwer
+regex
+more-itertools
