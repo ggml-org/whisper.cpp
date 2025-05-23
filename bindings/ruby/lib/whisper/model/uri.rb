@@ -165,6 +165,12 @@ module Whisper
       models[name] = URI.new("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-#{name}.bin")
     }
 
+    %w[
+      silero-v5.1.2
+    ].each do |name|
+      @pre_converted_models[name] = URI.new("https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-#{name}.bin")
+    end
+
     class << self
       attr_reader :pre_converted_models
     end
