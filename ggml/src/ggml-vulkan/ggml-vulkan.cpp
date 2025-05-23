@@ -2804,23 +2804,29 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 pipeline_robustness = true;
             } else if (strcmp("VK_EXT_subgroup_size_control", properties.extensionName) == 0) {
                 device->subgroup_size_control = true;
+#if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
             } else if (strcmp("VK_KHR_cooperative_matrix", properties.extensionName) == 0 &&
                        !getenv("GGML_VK_DISABLE_COOPMAT")) {
                 device->coopmat_support = true;
                 device->coopmat_m = 0;
                 device->coopmat_n = 0;
                 device->coopmat_k = 0;
+#endif
+#if defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
             } else if (strcmp("VK_NV_cooperative_matrix2", properties.extensionName) == 0 &&
                        !getenv("GGML_VK_DISABLE_COOPMAT2")) {
                 coopmat2_support = true;
+#endif
 #if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
             } else if (strcmp("VK_KHR_shader_integer_dot_product", properties.extensionName) == 0 &&
                        !getenv("GGML_VK_DISABLE_INTEGER_DOT_PRODUCT")) {
                 device->integer_dot_product = true;
 #endif
+#if defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
             } else if (strcmp("VK_KHR_shader_bfloat16", properties.extensionName) == 0 &&
                        !getenv("GGML_VK_DISABLE_BFLOAT16")) {
                 bfloat16_support = true;
+#endif
             }
         }
 
