@@ -733,7 +733,7 @@ let package = Package(
 )
 ```
 
-### Voice Activity Detection (VAD)
+## Voice Activity Detection (VAD)
 Support for Voice Activity Detection (VAD) can be enabled using the `--vad`
 argument to `whisper-cli`. In addition to this option a VAD model is also
 required.
@@ -747,7 +747,7 @@ transcription process.
 
 The following VAD models are currently supported:
 
-#### Silero-VAD
+### Silero-VAD
 [Silero-vad](https://github.com/snakers4/silero-vad) is a lightweight VAD model
 written in Python that is fast and accurate.
 
@@ -792,7 +792,7 @@ $ ./build/bin/whisper-cli \
    --vad-model ./models/silero-v5.1.2-ggml.bin
 ```
 
-#### VAD Options
+### VAD Options
 
 * --vad-threshold: Threshold probability for speech detection. A probability
 for a speech segment/frame above this threshold will be considered as speech.
