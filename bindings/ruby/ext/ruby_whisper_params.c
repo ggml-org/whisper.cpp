@@ -26,7 +26,7 @@
   rb_define_method(cParams, #param_name, ruby_whisper_params_get_ ## param_name, 0); \
   rb_define_method(cParams, #param_name "=", ruby_whisper_params_set_ ## param_name, 1);
 
-#define RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT 32
+#define RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT 35
 
 extern VALUE cParams;
 
@@ -67,6 +67,9 @@ static ID id_encoder_begin_callback;
 static ID id_encoder_begin_callback_user_data;
 static ID id_abort_callback;
 static ID id_abort_callback_user_data;
+static ID id_vad;
+static ID id_vad_model_path;
+static ID id_vad_params;
 
 static void
 rb_whisper_callbcack_container_mark(ruby_whisper_callback_container *rwc)
@@ -210,6 +213,7 @@ rb_whisper_params_mark(ruby_whisper_params *rwp)
   rb_whisper_callbcack_container_mark(rwp->progress_callback_container);
   rb_whisper_callbcack_container_mark(rwp->encoder_begin_callback_container);
   rb_whisper_callbcack_container_mark(rwp->abort_callback_container);
+  rb_gc_mark(rwp->vad_params);
 }
 
 void
@@ -984,6 +988,70 @@ ruby_whisper_params_set_abort_callback_user_data(VALUE self, VALUE value)
   return value;
 }
 
+/*
+ * call-seq:
+ *   vad = use_vad -> use_vad
+ */
+static VALUE
+ruby_whisper_params_get_vad(VALUE self)
+{
+  BOOL_PARAMS_GETTER(self, vad)
+}
+
+static VALUE
+ruby_whisper_params_set_vad(VALUE self, VALUE value)
+{
+  BOOL_PARAMS_SETTER(self, vad, value)
+}
+
+/*
+ * call-seq:
+ *   vad_model_path = model_path -> model_path
+ */
+static VALUE
+ruby_whisper_params_set_vad_model_path(VALUE self, VALUE value)
+{
+  ruby_whisper_params *rwp;
+  Data_Get_Struct(self, ruby_whisper_params, rwp);
+  if (NIL_P(value)) {
+    rwp->params.vad_model_path = NULL;
+    return value;
+  }
+  VALUE path = ruby_whisper_normalize_model_path(value);
+  rwp->params.vad_model_path = StringValueCStr(path);
+  return value;
+}
+
+static VALUE
+ruby_whisper_params_get_vad_model_path(VALUE self)
+{
+  ruby_whisper_params *rwp;
+  Data_Get_Struct(self, ruby_whisper_params, rwp);
+  return rwp->params.vad_model_path == NULL ? Qnil : rb_str_new2(rwp->params.vad_model_path);
+}
+
+/*
+ * call-seq:
+ *   vad_params = params -> params
+ */
+static VALUE
+ruby_whisper_params_set_vad_params(VALUE self, VALUE value)
+{
+  ruby_whisper_params *rwp;
+  Data_Get_Struct(self, ruby_whisper_params, rwp);
+  rwp->vad_params = value;
+  return value;
+}
+
+static VALUE
+ruby_whisper_params_get_vad_params(VALUE self)
+{
+  ruby_whisper_params *rwp;
+  Data_Get_Struct(self, ruby_whisper_params, rwp);
+  VALUE value = rwp->vad_params;
+  return value == NULL ? Qnil : value;
+}
+
 #define SET_PARAM_IF_SAME(param_name) \
   if (id == id_ ## param_name) { \
     ruby_whisper_params_set_ ## param_name(self, value); \
@@ -993,7 +1061,6 @@ ruby_whisper_params_set_abort_callback_user_data(VALUE self, VALUE value)
 static VALUE
 ruby_whisper_params_initialize(int argc, VALUE *argv, VALUE self)
 {
-
   VALUE kw_hash;
   VALUE values[RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT] = {Qundef};
   VALUE value;
@@ -1001,13 +1068,15 @@ ruby_whisper_params_initialize(int argc, VALUE *argv, VALUE self)
   ID id;
   int i;
 
+  Data_Get_Struct(self, ruby_whisper_params, rwp);
+
   rb_scan_args_kw(RB_SCAN_ARGS_KEYWORDS, argc, argv, ":", &kw_hash);
   if (NIL_P(kw_hash)) {
+    rwp->vad_params = Qnil;
     return self;
   }
 
   rb_get_kwargs(kw_hash, param_names, 0, RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT, values);
-  Data_Get_Struct(self, ruby_whisper_params, rwp);
 
   for (i = 0; i < RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT; i++) {
     id = param_names[i];
@@ -1050,6 +1119,9 @@ ruby_whisper_params_initialize(int argc, VALUE *argv, VALUE self)
       SET_PARAM_IF_SAME(encoder_begin_callback_user_data)
       SET_PARAM_IF_SAME(abort_callback)
       SET_PARAM_IF_SAME(abort_callback_user_data)
+      SET_PARAM_IF_SAME(vad)
+      SET_PARAM_IF_SAME(vad_model_path)
+      SET_PARAM_IF_SAME(vad_params)
     }
   }
 
@@ -1182,6 +1254,9 @@ init_ruby_whisper_params(VALUE *mWhisper)
   DEFINE_PARAM(encoder_begin_callback_user_data, 29)
   DEFINE_PARAM(abort_callback, 30)
   DEFINE_PARAM(abort_callback_user_data, 31)
+  DEFINE_PARAM(vad, 32)
+  DEFINE_PARAM(vad_model_path, 33)
+  DEFINE_PARAM(vad_params, 34)
 
   rb_define_method(cParams, "on_new_segment", ruby_whisper_params_on_new_segment, 0);
   rb_define_method(cParams, "on_progress", ruby_whisper_params_on_progress, 0);
