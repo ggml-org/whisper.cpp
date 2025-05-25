@@ -62,7 +62,7 @@ struct whisper_params {
     int32_t n_gpu_layers = 999;
     int32_t seed = 0;
     int32_t top_k = 5;
-    size_t min_keep = 1;
+    int32_t min_keep = 1;
     float top_p = 0.80f;
     float min_p = 0.01f;
     float temp  = 0.30f;
