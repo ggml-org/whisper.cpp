@@ -35,7 +35,7 @@ Supported platforms:
 - [x] [Java](bindings/java/README.md)
 - [x] Linux / [FreeBSD](https://github.com/ggml-org/whisper.cpp/issues/56#issuecomment-1350920264)
 - [x] [WebAssembly](examples/whisper.wasm)
-- [x] Windows ([MSVC](https://github.com/ggml-org/whisper.cpp/blob/master/.github/workflows/build.yml#L117-L144) and [MinGW](https://github.com/ggml-org/whisper.cpp/issues/168)]
+- [x] Windows ([MSVC](https://github.com/ggml-org/whisper.cpp/blob/master/.github/workflows/build.yml#L117-L144) and [MinGW](https://github.com/ggml-org/whisper.cpp/issues/168))
 - [x] [Raspberry Pi](https://github.com/ggml-org/whisper.cpp/discussions/166)
 - [x] [Docker](https://github.com/ggml-org/whisper.cpp/pkgs/container/whisper.cpp)
 
@@ -733,7 +733,7 @@ let package = Package(
 )
 ```
 
-### Voice Activity Detection (VAD)
+## Voice Activity Detection (VAD)
 Support for Voice Activity Detection (VAD) can be enabled using the `--vad`
 argument to `whisper-cli`. In addition to this option a VAD model is also
 required.
@@ -747,11 +747,36 @@ transcription process.
 
 The following VAD models are currently supported:
 
-#### Silero-VAD
+### Silero-VAD
 [Silero-vad](https://github.com/snakers4/silero-vad) is a lightweight VAD model
 written in Python that is fast and accurate.
 
-This model can be converted to ggml using the following command:
+Models can be downloaded by running the following command on Linux or MacOS:
+```console
+$ ./models/download-vad-model.sh silero-v5.1.2
+Downloading ggml model silero-v5.1.2 from 'https://huggingface.co/ggml-org/whisper-vad' ...
+ggml-silero-v5.1.2.bin        100%[==============================================>] 864.35K  --.-KB/s    in 0.04s
+Done! Model 'silero-v5.1.2' saved in '/path/models/ggml-silero-v5.1.2.bin'
+You can now use it like this:
+
+  $ ./build/bin/whisper-cli -vm /path/models/ggml-silero-v5.1.2.bin --vad -f samples/jfk.wav -m models/ggml-base.en.bin
+
+```
+And the following command on Windows:
+```console
+> .\models\download-vad-model.cmd silero-v5.1.2
+Downloading vad model silero-v5.1.2...
+Done! Model silero-v5.1.2 saved in C:\Users\danie\work\ai\whisper.cpp\ggml-silero-v5.1.2.bin
+You can now use it like this:
+
+C:\path\build\bin\Release\whisper-cli.exe -vm C:\path\ggml-silero-v5.1.2.bin --vad -m models/ggml-base.en.bin -f samples\jfk.wav
+
+```
+
+To see a list of all available models, run the above commands without any
+arguments.
+
+This model can be also be converted manually to ggml using the following command:
 ```console
 $ python3 -m venv venv && source venv/bin/activate
 $ (venv) pip install silero-vad
@@ -767,7 +792,7 @@ $ ./build/bin/whisper-cli \
    --vad-model ./models/silero-v5.1.2-ggml.bin
 ```
 
-#### VAD Options
+### VAD Options
 
 * --vad-threshold: Threshold probability for speech detection. A probability
 for a speech segment/frame above this threshold will be considered as speech.

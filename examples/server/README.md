@@ -67,3 +67,35 @@ curl 127.0.0.1:8080/load \
 -H "Content-Type: multipart/form-data" \
 -F model="<path-to-model-file>"
 ```
+
+## Load testing with k6
+
+> **Note:** Install [k6](https://k6.io/docs/get-started/installation/) before running the benchmark script.
+
+You can benchmark the Whisper server using the provided bench.js script with [k6](https://k6.io/). This script sends concurrent multipart requests to the /inference endpoint and is fully configurable via environment variables.
+
+**Example usage:**
+
+```
+k6 run bench.js \
+  --env FILE_PATH=/absolute/path/to/samples/jfk.wav \
+  --env BASE_URL=http://127.0.0.1:8080 \
+  --env ENDPOINT=/inference \
+  --env CONCURRENCY=4 \
+  --env TEMPERATURE=0.0 \
+  --env TEMPERATURE_INC=0.2 \
+  --env RESPONSE_FORMAT=json
+```
+
+**Environment variables:**
+- `FILE_PATH`: Path to the audio file to send (must be absolute or relative to the k6 working directory)
+- `BASE_URL`: Server base URL (default: `http://127.0.0.1:8080`)
+- `ENDPOINT`: API endpoint (default: `/inference`)
+- `CONCURRENCY`: Number of concurrent requests (default: 4)
+- `TEMPERATURE`: Decoding temperature (default: 0.0)
+- `TEMPERATURE_INC`: Temperature increment (default: 0.2)
+- `RESPONSE_FORMAT`: Response format (default: `json`)
+
+**Note:**
+- The server must be running and accessible at the specified `BASE_URL` and `ENDPOINT`.
+- The script is located in the same directory as this README: `bench.js`.
