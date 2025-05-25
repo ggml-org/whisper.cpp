@@ -32,6 +32,7 @@ extern VALUE cParams;
 
 extern ID id_call;
 
+extern VALUE ruby_whisper_normalize_model_path(VALUE model_path);
 extern VALUE rb_whisper_segment_initialize(VALUE context, int index);
 
 static ID param_names[RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT];
