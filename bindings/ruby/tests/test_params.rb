@@ -229,9 +229,13 @@ class TestParams < TestBase
   end
 
   def test_vad_params
-    assert_nil @params.vad_params;
-    @params.vad_params = Whisper::VAD::Params.new
     assert_kind_of Whisper::VAD::Params, @params.vad_params
+    default_params = @params.vad_params
+    assert_same default_params, @params.vad_params
+    assert_equal 0.5, default_params.threshold
+    new_params = Whisper::VAD::Params.new
+    @params.vad_params = new_params
+    assert_same new_params, @params.vad_params
   end
 
   def test_new_with_kw_args
