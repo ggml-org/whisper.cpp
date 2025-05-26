@@ -425,6 +425,15 @@ module Whisper
 
   module VAD
     class Params
+      def self.new: (
+        ?threshold: Float,
+        ?min_speech_duration_ms: Integer,
+        ?min_silence_duration_ms: Integer,
+        ?max_speech_duration_s: Float,
+        ?speech_pad_ms: Integer,
+        ?samples_overlap: Float
+      ) -> instance
+
       # Probability threshold to consider as speech.
       #
       def threshold=: (Float) -> Float
