@@ -17,6 +17,7 @@ const whisperParams = {
   comma_in_time: false,
   translate: true,
   no_timestamps: false,
+  detect_language: false,
   audio_ctx: 0,
   max_len: 0,
   progress_callback: (progress) => {
@@ -31,6 +32,8 @@ const params = Object.fromEntries(
       const [key, value] = item.slice(2).split("=");
       if (key === "audio_ctx") {
         whisperParams[key] = parseInt(value);
+      } else if (key === "detect_language") {
+        whisperParams[key] = value === "true";
       } else {
         whisperParams[key] = value;
       }
