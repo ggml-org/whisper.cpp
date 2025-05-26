@@ -183,7 +183,7 @@ static bool abort_callback(void * user_data) {
   return false;
 }
 
-void register_callbacks(ruby_whisper_params * rwp, VALUE * context) {
+static void register_callbacks(ruby_whisper_params * rwp, VALUE * context) {
   if (!NIL_P(rwp->new_segment_callback_container->callback) || 0 != RARRAY_LEN(rwp->new_segment_callback_container->callbacks)) {
     rwp->new_segment_callback_container->context = context;
     rwp->params.new_segment_callback = new_segment_callback;
@@ -207,6 +207,12 @@ void register_callbacks(ruby_whisper_params * rwp, VALUE * context) {
     rwp->params.abort_callback = abort_callback;
     rwp->params.abort_callback_user_data = rwp->abort_callback_container;
   }
+}
+
+void
+prepare_transcription(ruby_whisper_params *rwp, VALUE *context)
+{
+  register_callbacks(rwp, context);
 }
 
 void

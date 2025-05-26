@@ -12,7 +12,7 @@ extern ID id_to_s;
 extern ID id_call;
 
 extern void
-register_callbacks(ruby_whisper_params * rwp, VALUE * self);
+prepare_transcription(ruby_whisper_params * rwp, VALUE * self);
 
 /*
  * transcribe a single file
@@ -61,7 +61,7 @@ ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self) {
   //   rwp->params.encoder_begin_callback_user_data = &is_aborted;
   // }
 
-  register_callbacks(rwp, &self);
+  prepare_transcription(rwp, &self);
 
   if (whisper_full_parallel(rw->context, rwp->params, pcmf32.data(), pcmf32.size(), 1) != 0) {
     fprintf(stderr, "failed to process audio\n");

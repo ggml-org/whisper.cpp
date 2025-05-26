@@ -19,7 +19,7 @@ extern VALUE cModel;
 extern VALUE ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self);
 extern VALUE rb_whisper_model_initialize(VALUE context);
 extern VALUE rb_whisper_segment_initialize(VALUE context, int index);
-extern void register_callbacks(ruby_whisper_params *rwp, VALUE *context);
+extern void prepare_transcription(ruby_whisper_params *rwp, VALUE *context);
 
 static void
 ruby_whisper_free(ruby_whisper *rw)
@@ -304,7 +304,7 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
       }
     }
   }
-  register_callbacks(rwp, &self);
+  prepare_transcription(rwp, &self);
   const int result = whisper_full(rw->context, rwp->params, c_samples, n_samples);
   if (0 == result) {
     return self;
@@ -395,7 +395,7 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
       }
     }
   }
-  register_callbacks(rwp, &self);
+  prepare_transcription(rwp, &self);
   const int result = whisper_full_parallel(rw->context, rwp->params, c_samples, n_samples, n_processors);
   if (0 == result) {
     return self;
