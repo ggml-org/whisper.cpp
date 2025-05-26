@@ -223,11 +223,56 @@ ruby_whisper_vad_params_equal(VALUE self, VALUE other)
   return Qtrue;
 }
 
+#define SET_PARAM_IF_SAME(param_name) \
+  if (id == id_ ## param_name) { \
+    ruby_whisper_vad_params_set_ ## param_name(self, value); \
+    continue; \
+  }
+
+VALUE
+ruby_whisper_vad_params_initialize(int argc, VALUE *argv, VALUE self)
+{
+  VALUE kw_hash;
+  VALUE values[NUM_PARAMS] = {Qundef};
+  VALUE value;
+  ruby_whisper_vad_params *rwvp;
+  ID id;
+  int i;
+
+  TypedData_Get_Struct(self, ruby_whisper_vad_params, &ruby_whisper_vad_params_type, rwvp);
+
+  rb_scan_args_kw(RB_SCAN_ARGS_KEYWORDS, argc, argv, ":", &kw_hash);
+  if (NIL_P(kw_hash)) {
+    return self;
+  }
+
+  rb_get_kwargs(kw_hash, param_names, 0, NUM_PARAMS, values);
+
+  for (i = 0; i < NUM_PARAMS; i++) {
+    id= param_names[i];
+    value = values[i];
+    if (value == Qundef) {
+      continue;
+    }
+    SET_PARAM_IF_SAME(threshold)
+    SET_PARAM_IF_SAME(min_speech_duration_ms)
+    SET_PARAM_IF_SAME(min_silence_duration_ms)
+    SET_PARAM_IF_SAME(max_speech_duration_s)
+    SET_PARAM_IF_SAME(speech_pad_ms)
+    SET_PARAM_IF_SAME(samples_overlap)
+  }
+
+  return self;
+}
+
+#undef SET_PARAM_IF_SAME
+
 void
 init_ruby_whisper_vad_params(VALUE *mVAD)
 {
   cVADParams = rb_define_class_under(*mVAD, "Params", rb_cObject);
   rb_define_alloc_func(cVADParams, ruby_whisper_vad_params_s_allocate);
+  rb_define_method(cVADParams, "initialize", ruby_whisper_vad_params_initialize, -1);
 
   DEFINE_PARAM(threshold, 0)
   DEFINE_PARAM(min_speech_duration_ms, 1)
