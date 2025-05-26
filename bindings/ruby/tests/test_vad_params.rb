@@ -53,4 +53,8 @@ class TestVADParams < TestBase
     @params.samples_overlap = 0.5
     assert_in_delta @params.samples_overlap, 0.5
   end
+
+  def test_equal
+    assert_equal @params, Whisper::VAD::Params.new
+  end
 end
