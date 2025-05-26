@@ -111,6 +111,41 @@ See [models][] page for details.
 
 Currently, whisper.cpp accepts only 16-bit WAV files.
 
+### Voice Activity Detection (VAD) ###
+
+Support for Voice Activity Detection (VAD) can be enabled by setting `Whisper::Params`'s `vad` argument to `true` and specifying VAD model:
+
+```ruby
+Whisper::Params.new(
+  vad: true,
+  vad_model_path: "silero-v5.1.2",
+  # other arguments...
+)
+```
+
+When you pass the model name (`"silero-v5.1.2"`) or URI (`https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin`), it will be downloaded automatically.
+Currently, "silero-v5.1.2" is registered as pre-converted model like ASR models. You also specify file path or URI of model.
+
+If you need configure VAD behavior, pass params for that:
+
+```ruby
+Whisper::Params.new(
+  vad: true,
+  vad_model_path: "silero-v5.1.2",
+  vad_params: Whisper::VAD::Params.new(
+    threshold: 1.0, # defaults to 0.5
+    min_speech_duration_ms: 500, # defaults to 250
+    min_silence_duration_ms: 200, # defaults to 100
+    max_speech_duration_s: 30000, # default is FLT_MAX,
+    speech_pad_ms: 50, # defaults to 30
+    samples_overlap: 0.5 # defaults to 0.1
+  ),
+  # other arguments...
+)
+```
+
+For details on VAD, see [whisper.cpp's README](https://github.com/ggml-org/whisper.cpp?tab=readme-ov-file#voice-activity-detection-vad).
+
 API
 ---
 
