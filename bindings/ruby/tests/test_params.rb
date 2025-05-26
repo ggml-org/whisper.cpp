@@ -269,7 +269,7 @@ class TestParams < TestBase
             in [:vad_model_path, *]
               Whisper::Model.pre_converted_models["silero-v5.1.2"].to_path
             in [:vad_params, *]
-              Whisper::VADParams.new
+              Whisper::VAD::Params.new
             end
     params = Whisper::Params.new(param => value)
     if Float === value
