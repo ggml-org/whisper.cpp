@@ -82,7 +82,7 @@ void whisper_print_segment_callback(struct whisper_context * ctx, struct whisper
             t1 = whisper_full_get_segment_t1(ctx, i);
         }
 
-        if (!params.no_timestamps) {
+        if (!params.no_timestamps && !params.no_prints) {
             printf("[%s --> %s]  ", to_timestamp(t0).c_str(), to_timestamp(t1).c_str());
         }
 
@@ -113,12 +113,14 @@ void whisper_print_segment_callback(struct whisper_context * ctx, struct whisper
 
         // colorful print bug
         //
-        const char * text = whisper_full_get_segment_text(ctx, i);
-        printf("%s%s", speaker.c_str(), text);
+        if (!params.no_prints) {
+            const char * text = whisper_full_get_segment_text(ctx, i);
+            printf("%s%s", speaker.c_str(), text);
+        }
 
 
         // with timestamps or speakers: each segment on new line
-        if (!params.no_timestamps || params.diarize) {
+        if ((!params.no_timestamps || params.diarize) && !params.no_prints) {
             printf("\n");
         }
 
