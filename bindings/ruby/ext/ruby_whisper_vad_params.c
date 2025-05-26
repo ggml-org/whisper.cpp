@@ -1,6 +1,14 @@
 #include <ruby.h>
 #include "ruby_whisper.h"
 
+#define DEFINE_PARAM(param_name, nth) \
+  id_ ## param_name = rb_intern(#param_name); \
+  param_names[nth] = id_ ## param_name; \
+  rb_define_method(cVADParams, #param_name, ruby_whisper_vad_params_get_ ## param_name, 0); \
+  rb_define_method(cVADParams, #param_name "=", ruby_whisper_vad_params_set_ ## param_name, 1);
+
+#define NUM_PARAMS 6
+
 extern VALUE cVADParams;
 
 static size_t
@@ -13,6 +21,14 @@ ruby_whisper_vad_params_memsize(const void *p)
   }
   return size;
 }
+
+static ID param_names[NUM_PARAMS];
+static ID id_threshold;
+static ID id_min_speech_duration_ms;
+static ID id_min_silence_duration_ms;
+static ID id_max_speech_duration_s;
+static ID id_speech_pad_ms;
+static ID id_samples_overlap;
 
 const rb_data_type_t ruby_whisper_vad_params_type = {
   "ruby_whisper_vad_params",
@@ -213,17 +229,15 @@ init_ruby_whisper_vad_params(VALUE *mVAD)
   cVADParams = rb_define_class_under(*mVAD, "Params", rb_cObject);
   rb_define_alloc_func(cVADParams, ruby_whisper_vad_params_s_allocate);
 
-  rb_define_method(cVADParams, "threshold=", ruby_whisper_vad_params_set_threashold, 1);
-  rb_define_method(cVADParams, "threshold", ruby_whisper_vad_params_get_threashold, 0);
-  rb_define_method(cVADParams, "min_speech_duration_ms=", ruby_whisper_vad_params_set_min_speech_duration_ms, 1);
-  rb_define_method(cVADParams, "min_speech_duration_ms", ruby_whisper_vad_params_get_min_speech_duration_ms, 0);
-  rb_define_method(cVADParams, "min_silence_duration_ms=", ruby_whisper_vad_params_set_min_silence_duration_ms, 1);
-  rb_define_method(cVADParams, "min_silence_duration_ms", ruby_whisper_vad_params_get_min_silence_duration_ms, 0);
-  rb_define_method(cVADParams, "max_speech_duration_s=", ruby_whisper_vad_params_set_max_speech_duration_s, 1);
-  rb_define_method(cVADParams, "max_speech_duration_s", ruby_whisper_vad_params_get_max_speech_duration_s, 0);
-  rb_define_method(cVADParams, "speech_pad_ms=", ruby_whisper_vad_params_set_speech_pad_ms, 1);
-  rb_define_method(cVADParams, "speech_pad_ms", ruby_whisper_vad_params_get_speech_pad_ms, 0);
-  rb_define_method(cVADParams, "samples_overlap=", ruby_whisper_vad_params_set_samples_overlap, 1);
-  rb_define_method(cVADParams, "samples_overlap", ruby_whisper_vad_params_get_samples_overlap, 0);
+  DEFINE_PARAM(threshold, 0)
+  DEFINE_PARAM(min_speech_duration_ms, 1)
+  DEFINE_PARAM(min_silence_duration_ms, 2)
+  DEFINE_PARAM(max_speech_duration_s, 3)
+  DEFINE_PARAM(speech_pad_ms, 4)
+  DEFINE_PARAM(samples_overlap, 5)
+
   rb_define_method(cVADParams, "==", ruby_whisper_vad_params_equal, 1);
 }
+
+#undef DEFINE_PARAM
+#undef NUM_PARAMS

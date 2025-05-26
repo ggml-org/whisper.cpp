@@ -459,6 +459,7 @@ module Whisper
       def samples_overlap=: (Float) -> Float
 
       def samples_overlap: () -> Float
+      def ==: (Params) -> (true | false)
     end
   end
 
