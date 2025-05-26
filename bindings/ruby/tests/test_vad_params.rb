@@ -1,6 +1,15 @@
 require_relative "helper"
 
 class TestVADParams < TestBase
+  PARAM_NAMES = [
+    :threshold,
+    :min_speech_duration_ms,
+    :min_silence_duration_ms,
+    :max_speech_duration_s,
+    :speech_pad_ms,
+    :samples_overlap
+  ]
+
   def setup
     @params = Whisper::VAD::Params.new
   end
@@ -56,5 +65,39 @@ class TestVADParams < TestBase
 
   def test_equal
     assert_equal @params, Whisper::VAD::Params.new
+  end
+
+  def test_new_with_kw_args
+    params = Whisper::VAD::Params.new(threshold: 0.7)
+    assert_in_delta params.threshold, 0.7
+    assert_equal 250, params.min_speech_duration_ms
+  end
+
+  def test_new_with_kw_args_non_existent
+    assert_raise ArgumentError do
+      Whisper::VAD::Params.new(non_existent: "value")
+    end
+  end
+
+  data(PARAM_NAMES.collect {|param| [param, param]}.to_h)
+  def test_new_with_kw_args_default_values(param)
+    default_value = @params.send(param)
+    value = default_value + 1
+    params = Whisper::VAD::Params.new(param => value)
+    if Float === value
+      assert_in_delta value, params.send(param)
+    else
+      assert_equal value, params.send(param)
+    end
+
+    PARAM_NAMES.reject {|name| name == param}.each do |name|
+      expected = @params.send(name)
+      actual = params.send(name)
+      if Float === expected
+        assert_in_delta expected, actual
+      else
+        assert_equal expected, actual
+      end
+    end
   end
 end
