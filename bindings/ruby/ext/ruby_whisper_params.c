@@ -29,11 +29,13 @@
 #define RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT 35
 
 extern VALUE cParams;
+extern VALUE cVADParams;
 
 extern ID id_call;
 
 extern VALUE ruby_whisper_normalize_model_path(VALUE model_path);
 extern VALUE rb_whisper_segment_initialize(VALUE context, int index);
+extern const rb_data_type_t ruby_whisper_vad_params_type;
 
 static ID param_names[RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT];
 static ID id_language;
@@ -237,6 +239,7 @@ ruby_whisper_params_allocate(VALUE klass)
   rwp = ALLOC(ruby_whisper_params);
   rwp->params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
   rwp->diarize = false;
+  rwp->vad_params = TypedData_Wrap_Struct(cVADParams, &ruby_whisper_vad_params_type, (void *)&rwp->params.vad_params);
   rwp->new_segment_callback_container = rb_whisper_callback_container_allocate();
   rwp->progress_callback_container = rb_whisper_callback_container_allocate();
   rwp->encoder_begin_callback_container = rb_whisper_callback_container_allocate();
@@ -1039,7 +1042,10 @@ static VALUE
 ruby_whisper_params_set_vad_params(VALUE self, VALUE value)
 {
   ruby_whisper_params *rwp;
+  ruby_whisper_vad_params *rwvp;
   Data_Get_Struct(self, ruby_whisper_params, rwp);
+  TypedData_Get_Struct(value, ruby_whisper_vad_params, &ruby_whisper_vad_params_type, rwvp);
+  rwp->params.vad_params = rwvp->params;
   rwp->vad_params = value;
   return value;
 }
@@ -1049,8 +1055,7 @@ ruby_whisper_params_get_vad_params(VALUE self)
 {
   ruby_whisper_params *rwp;
   Data_Get_Struct(self, ruby_whisper_params, rwp);
-  VALUE value = rwp->vad_params;
-  return value == NULL ? Qnil : value;
+  return rwp->vad_params;
 }
 
 #define SET_PARAM_IF_SAME(param_name) \
@@ -1069,15 +1074,13 @@ ruby_whisper_params_initialize(int argc, VALUE *argv, VALUE self)
   ID id;
   int i;
 
-  Data_Get_Struct(self, ruby_whisper_params, rwp);
-
   rb_scan_args_kw(RB_SCAN_ARGS_KEYWORDS, argc, argv, ":", &kw_hash);
   if (NIL_P(kw_hash)) {
-    rwp->vad_params = Qnil;
     return self;
   }
 
   rb_get_kwargs(kw_hash, param_names, 0, RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT, values);
+  Data_Get_Struct(self, ruby_whisper_params, rwp);
 
   for (i = 0; i < RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT; i++) {
     id = param_names[i];

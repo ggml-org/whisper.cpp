@@ -14,7 +14,7 @@ ruby_whisper_vad_params_memsize(const void *p)
   return size;
 }
 
-static const rb_data_type_t ruby_whisper_vad_params_type = {
+const rb_data_type_t ruby_whisper_vad_params_type = {
   "ruby_whisper_vad_params",
   {0, 0, ruby_whisper_vad_params_memsize,},
   0, 0,
