@@ -17,6 +17,7 @@ const whisperParamsMock = {
   comma_in_time: false,
   translate: true,
   no_timestamps: false,
+  detect_language: false,
   audio_ctx: 0,
   max_len: 0,
   prompt: "",
