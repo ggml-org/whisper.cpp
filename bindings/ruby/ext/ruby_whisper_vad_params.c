@@ -168,6 +168,45 @@ ruby_whisper_vad_params_get_samples_overlap(VALUE self)
   return DBL2NUM(rwvp->params.samples_overlap);
 }
 
+static VALUE
+ruby_whisper_vad_params_equal(VALUE self, VALUE other)
+{
+  ruby_whisper_vad_params *rwvp1;
+  ruby_whisper_vad_params *rwvp2;
+
+  if (self == other) {
+    return Qtrue;
+  }
+
+  if (!rb_obj_is_kind_of(other, cVADParams)) {
+    return Qfalse;
+  }
+
+  TypedData_Get_Struct(self, ruby_whisper_vad_params, &ruby_whisper_vad_params_type, rwvp1);
+  TypedData_Get_Struct(other, ruby_whisper_vad_params, &ruby_whisper_vad_params_type, rwvp2);
+
+  if (rwvp1->params.threshold != rwvp2->params.threshold) {
+    return Qfalse;
+  }
+  if (rwvp1->params.min_speech_duration_ms != rwvp2->params.min_speech_duration_ms) {
+    return Qfalse;
+  }
+  if (rwvp1->params.min_silence_duration_ms != rwvp2->params.min_silence_duration_ms) {
+    return Qfalse;
+  }
+  if (rwvp1->params.max_speech_duration_s != rwvp2->params.max_speech_duration_s) {
+    return Qfalse;
+  }
+  if (rwvp1->params.speech_pad_ms != rwvp2->params.speech_pad_ms) {
+    return Qfalse;
+  }
+  if (rwvp1->params.samples_overlap != rwvp2->params.samples_overlap) {
+    return Qfalse;
+  }
+
+  return Qtrue;
+}
+
 void
 init_ruby_whisper_vad_params(VALUE *mVAD)
 {
@@ -186,4 +225,5 @@ init_ruby_whisper_vad_params(VALUE *mVAD)
   rb_define_method(cVADParams, "speech_pad_ms", ruby_whisper_vad_params_get_speech_pad_ms, 0);
   rb_define_method(cVADParams, "samples_overlap=", ruby_whisper_vad_params_set_samples_overlap, 1);
   rb_define_method(cVADParams, "samples_overlap", ruby_whisper_vad_params_get_samples_overlap, 0);
+  rb_define_method(cVADParams, "==", ruby_whisper_vad_params_equal, 1);
 }
