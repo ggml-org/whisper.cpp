@@ -230,6 +230,8 @@ class TestParams < TestBase
 
   def test_vad_params
     assert_nil @params.vad_params;
+    @params.vad_params = Whisper::VAD::Params.new
+    assert_kind_of Whisper::VAD::Params, @params.vad_params
   end
 
   def test_new_with_kw_args
