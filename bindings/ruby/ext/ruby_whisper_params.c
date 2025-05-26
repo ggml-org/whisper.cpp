@@ -209,10 +209,18 @@ static void register_callbacks(ruby_whisper_params * rwp, VALUE * context) {
   }
 }
 
+static void set_vad_params(ruby_whisper_params *rwp)
+{
+  ruby_whisper_vad_params * rwvp;
+  TypedData_Get_Struct(rwp->vad_params, ruby_whisper_vad_params, &ruby_whisper_vad_params_type, rwvp);
+  rwp->params.vad_params = rwvp->params;
+}
+
 void
 prepare_transcription(ruby_whisper_params *rwp, VALUE *context)
 {
   register_callbacks(rwp, context);
+  set_vad_params(rwp);
 }
 
 void
@@ -1048,10 +1056,7 @@ static VALUE
 ruby_whisper_params_set_vad_params(VALUE self, VALUE value)
 {
   ruby_whisper_params *rwp;
-  ruby_whisper_vad_params *rwvp;
   Data_Get_Struct(self, ruby_whisper_params, rwp);
-  TypedData_Get_Struct(value, ruby_whisper_vad_params, &ruby_whisper_vad_params_type, rwvp);
-  rwp->params.vad_params = rwvp->params;
   rwp->vad_params = value;
   return value;
 }
