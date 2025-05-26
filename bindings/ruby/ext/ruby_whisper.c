@@ -3,6 +3,7 @@
 #include "ruby_whisper.h"
 
 VALUE mWhisper;
+VALUE mVAD;
 VALUE cContext;
 VALUE cParams;
 VALUE cVADParams;
@@ -32,7 +33,7 @@ extern void init_ruby_whisper_params(VALUE *mWhisper);
 extern void init_ruby_whisper_error(VALUE *mWhisper);
 extern void init_ruby_whisper_segment(VALUE *mWhisper, VALUE *cSegment);
 extern void init_ruby_whisper_model(VALUE *mWhisper);
-extern void init_ruby_whisper_vad_params(VALUE *mWhisper);
+extern void init_ruby_whisper_vad_params(VALUE *mVAD);
 extern void register_callbacks(ruby_whisper_params *rwp, VALUE *context);
 
 /*
@@ -141,6 +142,7 @@ void Init_whisper() {
   id_pre_converted_models = rb_intern("pre_converted_models");
 
   mWhisper = rb_define_module("Whisper");
+  mVAD = rb_define_module_under(mWhisper, "VAD");
 
   rb_define_const(mWhisper, "LOG_LEVEL_NONE", INT2NUM(GGML_LOG_LEVEL_NONE));
   rb_define_const(mWhisper, "LOG_LEVEL_INFO", INT2NUM(GGML_LOG_LEVEL_INFO));
@@ -161,7 +163,7 @@ void Init_whisper() {
   init_ruby_whisper_error(&mWhisper);
   init_ruby_whisper_segment(&mWhisper, &cContext);
   init_ruby_whisper_model(&mWhisper);
-  init_ruby_whisper_vad_params(&mWhisper);
+  init_ruby_whisper_vad_params(&mVAD);
 
   rb_require("whisper/model/uri");
 }
