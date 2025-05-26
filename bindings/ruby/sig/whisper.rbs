@@ -352,8 +352,8 @@ module Whisper
 
     def vad_model_path: () -> (String | nil)
 
-    def vad_params=: (Whisper::VAD::Params | nil) -> Whisper::VAD::Params
-    def vad_params: () -> (Whisper::VAD::Params | nil)
+    def vad_params=: (Whisper::VAD::Params) -> Whisper::VAD::Params
+    def vad_params: () -> (Whisper::VAD::Params)
 
     # Hook called on new segment. Yields each Whisper::Segment.
     #
