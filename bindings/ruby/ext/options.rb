@@ -160,6 +160,7 @@ class Options
     bool "GGML_VULKAN_SHADER_DEBUG_INFO"
     pending "GGML_VULKAN_VALIDATE"
     bool "GGML_VXE"
+    bool "GGML_XTHEADVECTOR"
     filepath "GIT_EXE"
     filepath "MATH_LIBRARY"
     filepath "METALKIT_FRAMEWORK"
