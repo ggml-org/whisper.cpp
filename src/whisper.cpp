@@ -6819,27 +6819,9 @@ int whisper_full_with_state(
 
     result_all.clear();
 
-    const float * process_samples = samples;
-    int n_process_samples = n_samples;
-    std::vector<float> vad_samples;
-
-    if (params.vad) {
-        WHISPER_LOG_INFO("%s: VAD is enabled, processing speech segments only\n", __func__);
-        int vad_n_samples;
-        if (!whisper_vad(ctx, state, params, samples, n_samples, vad_samples, vad_n_samples)) {
-            WHISPER_LOG_ERROR("%s: failed to compute VAD\n", __func__);
-            return -1;
-        }
-        if (vad_n_samples == 0) {
-            return 0;
-        }
-        process_samples = vad_samples.data();
-        n_process_samples = vad_n_samples;
-    }
-
-    if (n_process_samples > 0) {
+    if (n_samples > 0) {
         // compute log mel spectrogram
-        if (whisper_pcm_to_mel_with_state(ctx, state, process_samples, n_process_samples, params.n_threads) != 0) {
+        if (whisper_pcm_to_mel_with_state(ctx, state, samples, n_samples, params.n_threads) != 0) {
             WHISPER_LOG_ERROR("%s: failed to compute log mel spectrogram\n", __func__);
             return -2;
         }
@@ -7749,6 +7731,21 @@ int whisper_full(
     struct whisper_full_params   params,
                    const float * samples,
                            int   n_samples) {
+
+    std::vector<float> vad_samples;
+    if (params.vad) {
+        WHISPER_LOG_INFO("%s: VAD is enabled, processing speech segments only\n", __func__);
+        int vad_n_samples;
+        if (!whisper_vad(ctx, ctx->state, params, samples, n_samples, vad_samples, vad_n_samples)) {
+            WHISPER_LOG_ERROR("%s: failed to compute VAD\n", __func__);
+            return -1;
+        }
+        if (vad_n_samples == 0) {
+            return 0;
+        }
+        samples = vad_samples.data();
+        n_samples = vad_n_samples;
+    }
     return whisper_full_with_state(ctx, ctx->state, params, samples, n_samples);
 }
 
@@ -7758,8 +7755,24 @@ int whisper_full_parallel(
         const float * samples,
         int n_samples,
         int n_processors) {
+
     if (n_processors == 1) {
         return whisper_full(ctx, params, samples, n_samples);
+    }
+
+    std::vector<float> vad_samples;
+    if (params.vad) {
+        WHISPER_LOG_INFO("%s: VAD is enabled, processing speech segments only\n", __func__);
+        int vad_n_samples;
+        if (!whisper_vad(ctx, ctx->state, params, samples, n_samples, vad_samples, vad_n_samples)) {
+            WHISPER_LOG_ERROR("%s: failed to compute VAD\n", __func__);
+            return -1;
+        }
+        if (vad_n_samples == 0) {
+            return 0;
+        }
+        samples = vad_samples.data();
+        n_samples = vad_n_samples;
     }
     int ret = 0;
 
