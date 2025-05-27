@@ -3,11 +3,30 @@
 
 extern VALUE cModel;
 
-static void rb_whisper_model_mark(ruby_whisper_model *rwm) {
+static void rb_whisper_model_mark(void *p) {
+  ruby_whisper_model *rwm = (ruby_whisper_model *)p;
   if (rwm->context) {
     rb_gc_mark(rwm->context);
   }
 }
+
+static size_t
+ruby_whisper_model_memsize(const void *p)
+{
+  ruby_whisper_model *rwm = (const ruby_whisper_model *)p;
+  size_t size = sizeof(rwm);
+  if (!rwm) {
+    return 0;
+  }
+  return size;
+}
+
+static const rb_data_type_t rb_whisper_model_type = {
+  "ruby_whisper_model",
+  {rb_whisper_model_mark, RUBY_DEFAULT_FREE, ruby_whisper_model_memsize,},
+  0, 0,
+  0
+};
 
 static VALUE ruby_whisper_model_allocate(VALUE klass) {
   ruby_whisper_model *rwm;
