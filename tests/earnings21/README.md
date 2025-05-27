@@ -49,7 +49,7 @@ whisper.cpp on Earnings-21 corpus.
 
 ## How-to guides
 
-### How to change the inferece parameters
+### How to change the inference parameters
 
 Create `eval.conf` and override variables.
 
@@ -73,19 +73,15 @@ EARNINGS21_EVAL10 = yes
 
 ### How to run the benchmark test using VAD
 
-Run the following commend in the project root directory to prepare the
-VAD model:
+First, you need to download a VAD model:
 
 ```
-$ python3 -m venv venv
-$ . venv/bin/activate
-$ pip install silero-vad
-$ python models/convert-silero-vad-to-ggml.py --output models/silero.bin
+$ # Execute the commands below in the project root dir.
+$ ./models/download-vad-model.sh silero-v5.1.2
 ```
 
-Change the directory to `tests/earnings21`. Create `eval.conf` with the
-following content:
+Create `eval.conf` with the following content:
 
 ```
-WHISPER_FLAGS = --no-prints --language en --output-txt --vad --vad-model ../../models/silero-v5.1.2-ggml.bin
+WHISPER_FLAGS = --no-prints --language en --output-txt --vad --vad-model ../../models/ggml-silero-v5.1.2.bin
 ```
