@@ -224,8 +224,9 @@ prepare_transcription(ruby_whisper_params *rwp, VALUE *context)
 }
 
 void
-rb_whisper_params_mark(ruby_whisper_params *rwp)
+rb_whisper_params_mark(void *p)
 {
+  ruby_whisper_params *rwp = (ruby_whisper_params *)p;
   rb_whisper_callbcack_container_mark(rwp->new_segment_callback_container);
   rb_whisper_callbcack_container_mark(rwp->progress_callback_container);
   rb_whisper_callbcack_container_mark(rwp->encoder_begin_callback_container);
@@ -239,12 +240,32 @@ ruby_whisper_params_free(ruby_whisper_params *rwp)
 }
 
 void
-rb_whisper_params_free(ruby_whisper_params *rwp)
+rb_whisper_params_free(void *p)
 {
+  ruby_whisper_params *rwp = (ruby_whisper_params *)p;
   // How to free user_data and callback only when not referred to by others?
   ruby_whisper_params_free(rwp);
   free(rwp);
 }
+
+static size_t
+ruby_whisper_params_memsize(const void *p)
+{
+  ruby_whisper_params *rwp = (const ruby_whisper_params *)p;
+
+  return sizeof(ruby_whisper_params) + sizeof(rwp->params) + sizeof(rwp->vad_params);
+}
+
+const rb_data_type_t ruby_whisper_params_type = {
+  "ruby_whisper_params",
+  {
+    rb_whisper_params_mark,
+    rb_whisper_params_free,
+    ruby_whisper_params_memsize,
+  },
+  0, 0,
+  0
+};
 
 static VALUE
 ruby_whisper_params_allocate(VALUE klass)
