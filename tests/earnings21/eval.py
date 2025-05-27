@@ -4,6 +4,15 @@ import glob
 import jiwer
 from normalizers import EnglishTextNormalizer
 
+def decode_hypothesis(b):
+    try:
+        # Depending on platforms, Whisper can emit a left double quotation
+        # mark (0x93), which is Microsoft's extension to ASCII. See #3185
+        # for the background.
+        return b.decode('windows-1252')
+    except UnicodeDecodeError:
+        return b.decode('utf-8', errors='ignore')
+
 def get_reference():
     ref = {}
     for path in glob.glob("speech-datasets/earnings21/transcripts/nlp_references/*.nlp"):
@@ -20,8 +29,8 @@ def get_reference():
 def get_hypothesis():
     hyp = {}
     for path in glob.glob("speech-datasets/earnings21/media/*.mp3.txt"):
-        with open(path, errors='ignore') as fp:
-            text = fp.read().strip()
+        with open(path, 'rb') as fp:
+            text = decode_hypothesis(fp.read()).strip()
         code = os.path.basename(path).replace(".mp3.txt", "")
         hyp[code] = text
     return hyp
