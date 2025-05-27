@@ -86,7 +86,7 @@ if(WHISPER_BACKEND_DL)
     MESSAGE(STATUS "")
     MESSAGE(STATUS "")
 else()
-    MESSAGE(STATUS "============================= Bollocks =============================")
+    MESSAGE(STATUS "============================= Skipping WHISPER_BACKEND_DL =============================")
 endif()
 ### SBDBG ###
 

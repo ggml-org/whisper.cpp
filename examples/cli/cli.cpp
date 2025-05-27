@@ -1052,7 +1052,11 @@ int main(int argc, char ** argv) {
         if(params.openblas) {
             backend_tryload("blas");
         }
-        if(params.cpu == 7) {
+        if(params.cpu == 9) {
+            backend_trycpu("cpu-zen5");
+        } else if(params.cpu == 8) {
+            backend_trycpu("cpu-zen4");
+        } else if(params.cpu == 7) {
             backend_trycpu("cpu-alderlake");
         } else if(params.cpu == 6) {
             backend_trycpu("cpu-icelake");

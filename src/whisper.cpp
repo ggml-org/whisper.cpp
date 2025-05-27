@@ -4294,7 +4294,7 @@ void whisper_print_timings(struct whisper_context * ctx) {
         const int32_t n_batchd = std::max(1, ctx->state->n_batchd);
         const int32_t n_prompt = std::max(1, ctx->state->n_prompt);
 
-        WHISPER_LOG_INFO("%s:     fallbacks =  %3d p / %3d h\n", __func__, ctx->state->n_fail_p, ctx->state->n_fail_h);
+        WHISPER_LOG_INFO("%s:     fallbacks = %3d p / %3d h\n", __func__, ctx->state->n_fail_p, ctx->state->n_fail_h);
         WHISPER_LOG_INFO("%s:      mel time = %9.2f ms\n", __func__, ctx->state->t_mel_us / 1000.0f);
         WHISPER_LOG_INFO("%s:   sample time = %9.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_sample_us, n_sample, 1e-3f * ctx->state->t_sample_us / n_sample);
         WHISPER_LOG_INFO("%s:   encode time = %9.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_encode_us, n_encode, 1e-3f * ctx->state->t_encode_us / n_encode);
@@ -4302,7 +4302,7 @@ void whisper_print_timings(struct whisper_context * ctx) {
         WHISPER_LOG_INFO("%s:   batchd time = %9.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_batchd_us, n_batchd, 1e-3f * ctx->state->t_batchd_us / n_batchd);
         WHISPER_LOG_INFO("%s:   prompt time = %9.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_prompt_us, n_prompt, 1e-3f * ctx->state->t_prompt_us / n_prompt);
     }
-    WHISPER_LOG_INFO("%s:    total time = %9.3f s\n", __func__, (t_end_us - ctx->t_start_us)/(1000.0f * 1000.0f));
+    WHISPER_LOG_INFO("%s:    total time =  %9.3f s\n", __func__, (t_end_us - ctx->t_start_us)/(1000.0f * 1000.0f));
 }
 
 void whisper_reset_timings(struct whisper_context * ctx) {
