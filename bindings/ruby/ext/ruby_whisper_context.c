@@ -67,9 +67,9 @@ static VALUE
 ruby_whisper_allocate(VALUE klass)
 {
   ruby_whisper *rw;
-  rw = ALLOC(ruby_whisper);
+  VALUE obj = TypedData_Make_Struct(klass, ruby_whisper, &ruby_whisper_type, rw);
   rw->context = NULL;
-  return Data_Wrap_Struct(klass, rb_whisper_mark, rb_whisper_free, rw);
+  return obj;
 }
 
 VALUE
@@ -112,7 +112,7 @@ ruby_whisper_initialize(int argc, VALUE *argv, VALUE self)
 
   // TODO: we can support init from buffer here too maybe another ruby object to expose
   rb_scan_args(argc, argv, "01", &whisper_model_file_path);
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
 
   whisper_model_file_path = ruby_whisper_normalize_model_path(whisper_model_file_path);
   if (!rb_respond_to(whisper_model_file_path, id_to_s)) {
@@ -132,7 +132,7 @@ ruby_whisper_initialize(int argc, VALUE *argv, VALUE self)
 VALUE ruby_whisper_model_n_vocab(VALUE self)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   return INT2NUM(whisper_model_n_vocab(rw->context));
 }
 
@@ -143,7 +143,7 @@ VALUE ruby_whisper_model_n_vocab(VALUE self)
 VALUE ruby_whisper_model_n_audio_ctx(VALUE self)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   return INT2NUM(whisper_model_n_audio_ctx(rw->context));
 }
 
@@ -154,7 +154,7 @@ VALUE ruby_whisper_model_n_audio_ctx(VALUE self)
 VALUE ruby_whisper_model_n_audio_state(VALUE self)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   return INT2NUM(whisper_model_n_audio_state(rw->context));
 }
 
@@ -165,7 +165,7 @@ VALUE ruby_whisper_model_n_audio_state(VALUE self)
 VALUE ruby_whisper_model_n_audio_head(VALUE self)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   return INT2NUM(whisper_model_n_audio_head(rw->context));
 }
 
@@ -176,7 +176,7 @@ VALUE ruby_whisper_model_n_audio_head(VALUE self)
 VALUE ruby_whisper_model_n_audio_layer(VALUE self)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   return INT2NUM(whisper_model_n_audio_layer(rw->context));
 }
 
@@ -187,7 +187,7 @@ VALUE ruby_whisper_model_n_audio_layer(VALUE self)
 VALUE ruby_whisper_model_n_text_ctx(VALUE self)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   return INT2NUM(whisper_model_n_text_ctx(rw->context));
 }
 
@@ -198,7 +198,7 @@ VALUE ruby_whisper_model_n_text_ctx(VALUE self)
 VALUE ruby_whisper_model_n_text_state(VALUE self)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   return INT2NUM(whisper_model_n_text_state(rw->context));
 }
 
@@ -209,7 +209,7 @@ VALUE ruby_whisper_model_n_text_state(VALUE self)
 VALUE ruby_whisper_model_n_text_head(VALUE self)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   return INT2NUM(whisper_model_n_text_head(rw->context));
 }
 
@@ -220,7 +220,7 @@ VALUE ruby_whisper_model_n_text_head(VALUE self)
 VALUE ruby_whisper_model_n_text_layer(VALUE self)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   return INT2NUM(whisper_model_n_text_layer(rw->context));
 }
 
@@ -231,7 +231,7 @@ VALUE ruby_whisper_model_n_text_layer(VALUE self)
 VALUE ruby_whisper_model_n_mels(VALUE self)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   return INT2NUM(whisper_model_n_mels(rw->context));
 }
 
@@ -242,7 +242,7 @@ VALUE ruby_whisper_model_n_mels(VALUE self)
 VALUE ruby_whisper_model_ftype(VALUE self)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   return INT2NUM(whisper_model_ftype(rw->context));
 }
 
@@ -253,7 +253,7 @@ VALUE ruby_whisper_model_ftype(VALUE self)
 VALUE ruby_whisper_model_type(VALUE self)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   return rb_str_new2(whisper_model_type_readable(rw->context));
 }
 
@@ -276,7 +276,7 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
 
   ruby_whisper *rw;
   ruby_whisper_params *rwp;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   VALUE params = argv[0];
   TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
   VALUE samples = argv[1];
@@ -355,7 +355,7 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
 
   ruby_whisper *rw;
   ruby_whisper_params *rwp;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   VALUE params = argv[0];
   TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
   VALUE samples = argv[1];
@@ -434,7 +434,7 @@ static VALUE
 ruby_whisper_full_n_segments(VALUE self)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   return INT2NUM(whisper_full_n_segments(rw->context));
 }
 
@@ -448,7 +448,7 @@ static VALUE
 ruby_whisper_full_lang_id(VALUE self)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   return INT2NUM(whisper_full_lang_id(rw->context));
 }
 
@@ -473,7 +473,7 @@ static VALUE
 ruby_whisper_full_get_segment_t0(VALUE self, VALUE i_segment)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   const int c_i_segment = ruby_whisper_full_check_segment_index(rw, i_segment);
   const int64_t t0 = whisper_full_get_segment_t0(rw->context, c_i_segment);
   return INT2NUM(t0);
@@ -491,7 +491,7 @@ static VALUE
 ruby_whisper_full_get_segment_t1(VALUE self, VALUE i_segment)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   const int c_i_segment = ruby_whisper_full_check_segment_index(rw, i_segment);
   const int64_t t1 = whisper_full_get_segment_t1(rw->context, c_i_segment);
   return INT2NUM(t1);
@@ -509,7 +509,7 @@ static VALUE
 ruby_whisper_full_get_segment_speaker_turn_next(VALUE self, VALUE i_segment)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   const int c_i_segment = ruby_whisper_full_check_segment_index(rw, i_segment);
   const bool speaker_turn_next = whisper_full_get_segment_speaker_turn_next(rw->context, c_i_segment);
   return speaker_turn_next ? Qtrue : Qfalse;
@@ -527,7 +527,7 @@ static VALUE
 ruby_whisper_full_get_segment_text(VALUE self, VALUE i_segment)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   const int c_i_segment = ruby_whisper_full_check_segment_index(rw, i_segment);
   const char * text = whisper_full_get_segment_text(rw->context, c_i_segment);
   return rb_str_new2(text);
@@ -541,7 +541,7 @@ static VALUE
 ruby_whisper_full_get_segment_no_speech_prob(VALUE self, VALUE i_segment)
 {
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   const int c_i_segment = ruby_whisper_full_check_segment_index(rw, i_segment);
   const float no_speech_prob = whisper_full_get_segment_no_speech_prob(rw->context, c_i_segment);
   return DBL2NUM(no_speech_prob);
@@ -582,7 +582,7 @@ ruby_whisper_each_segment(VALUE self)
   }
 
   ruby_whisper *rw;
-  Data_Get_Struct(self, ruby_whisper, rw);
+  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
 
   const int n_segments = whisper_full_n_segments(rw->context);
   for (int i = 0; i < n_segments; ++i) {

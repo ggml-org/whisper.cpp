@@ -1,6 +1,8 @@
 #include <ruby.h>
 #include "ruby_whisper.h"
 
+extern const rb_data_type_t ruby_whisper_type;
+
 extern VALUE cSegment;
 
 static void
@@ -58,7 +60,7 @@ ruby_whisper_segment_get_start_time(VALUE self)
   ruby_whisper_segment *rws;
   TypedData_Get_Struct(self, ruby_whisper_segment, &ruby_whisper_segment_type, rws);
   ruby_whisper *rw;
-  Data_Get_Struct(rws->context, ruby_whisper, rw);
+  TypedData_Get_Struct(rws->context, ruby_whisper, &ruby_whisper_type, rw);
   const int64_t t0 = whisper_full_get_segment_t0(rw->context, rws->index);
   // able to multiply 10 without overflow because to_timestamp() in whisper.cpp does it
   return INT2NUM(t0 * 10);
@@ -76,7 +78,7 @@ ruby_whisper_segment_get_end_time(VALUE self)
   ruby_whisper_segment *rws;
   TypedData_Get_Struct(self, ruby_whisper_segment, &ruby_whisper_segment_type, rws);
   ruby_whisper *rw;
-  Data_Get_Struct(rws->context, ruby_whisper, rw);
+  TypedData_Get_Struct(rws->context, ruby_whisper, &ruby_whisper_type, rw);
   const int64_t t1 = whisper_full_get_segment_t1(rw->context, rws->index);
   // able to multiply 10 without overflow because to_timestamp() in whisper.cpp does it
   return INT2NUM(t1 * 10);
@@ -94,7 +96,7 @@ ruby_whisper_segment_get_speaker_turn_next(VALUE self)
   ruby_whisper_segment *rws;
   TypedData_Get_Struct(self, ruby_whisper_segment, &ruby_whisper_segment_type, rws);
   ruby_whisper *rw;
-  Data_Get_Struct(rws->context, ruby_whisper, rw);
+  TypedData_Get_Struct(rws->context, ruby_whisper, &ruby_whisper_type, rw);
   return whisper_full_get_segment_speaker_turn_next(rw->context, rws->index) ? Qtrue : Qfalse;
 }
 
@@ -108,7 +110,7 @@ ruby_whisper_segment_get_text(VALUE self)
   ruby_whisper_segment *rws;
   TypedData_Get_Struct(self, ruby_whisper_segment, &ruby_whisper_segment_type, rws);
   ruby_whisper *rw;
-  Data_Get_Struct(rws->context, ruby_whisper, rw);
+  TypedData_Get_Struct(rws->context, ruby_whisper, &ruby_whisper_type, rw);
   const char * text = whisper_full_get_segment_text(rw->context, rws->index);
   return rb_str_new2(text);
 }
@@ -123,7 +125,7 @@ ruby_whisper_segment_get_no_speech_prob(VALUE self)
   ruby_whisper_segment *rws;
   TypedData_Get_Struct(self, ruby_whisper_segment, &ruby_whisper_segment_type, rws);
   ruby_whisper *rw;
-  Data_Get_Struct(rws->context, ruby_whisper, rw);
+  TypedData_Get_Struct(rws->context, ruby_whisper, &ruby_whisper_type, rw);
   return DBL2NUM(whisper_full_get_segment_no_speech_prob(rw->context, rws->index));
 }
 
