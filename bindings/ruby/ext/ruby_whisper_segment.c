@@ -4,10 +4,29 @@
 extern VALUE cSegment;
 
 static void
-rb_whisper_segment_mark(ruby_whisper_segment *rws)
+rb_whisper_segment_mark(void *p)
 {
+  ruby_whisper_segment *rws = (ruby_whisper_segment *)p;
   rb_gc_mark(rws->context);
 }
+
+static size_t
+ruby_whisper_segment_memsize(const void *p)
+{
+  ruby_whisper_segment *rws = (const ruby_whisper_segment *)p;
+  size_t size = sizeof(rws);
+  if (!rws) {
+    return 0;
+  }
+  return size;
+}
+
+static const rb_data_type_t ruby_whisper_segment_type = {
+  "ruby_whisper_segment",
+  {rb_whisper_segment_mark, RUBY_DEFAULT_FREE, ruby_whisper_segment_memsize,},
+  0, 0,
+  0
+};
 
 VALUE
 ruby_whisper_segment_allocate(VALUE klass)
