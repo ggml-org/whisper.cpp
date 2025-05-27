@@ -158,6 +158,11 @@ whisper_option_depr(WARNING     WHISPER_SYCL                GGML_SYCL)
 whisper_option_depr(WARNING     WHISPER_SYCL_F16            GGML_SYCL_F16)
 whisper_option_depr(WARNING     WHISPER_CCACHE              GGML_CCACHE)
 
+if (GGML_CUDA AND NOT MSVC)
+    #GGML_CUDA enabled, add the necessary compile options -Wno-deprecated-gpu-targets
+    add_compile_options(-Wno-deprecated-gpu-targets)
+endif()
+
 #
 # build the library
 #
@@ -280,5 +285,6 @@ if (MSVC)
         disable_msvc_warnings(whisper-talk-llama)
         disable_msvc_warnings(whisper-bench)
         disable_msvc_warnings(quantize)
+        disable_msvc_warnings(vad-speech-segments)
     endif()
 endif()

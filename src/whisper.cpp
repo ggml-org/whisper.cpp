@@ -956,6 +956,8 @@ struct whisper_state {
     // [EXPERIMENTAL] speed-up techniques
     int32_t exp_n_audio_ctx = 0; // 0 - use default
 
+    whisper_vad_context * vad_context = nullptr;
+
     struct vad_segment_info {
         float orig_start;
         float orig_end;
@@ -3866,6 +3868,11 @@ void whisper_free_state(struct whisper_state * state) {
         // [EXPERIMENTAL] Token-level timestamps with DTW
         aheads_masks_free(state->aheads_masks);
 
+        if (state->vad_context != nullptr) {
+            whisper_vad_free(state->vad_context);
+            state->vad_context = nullptr;
+        }
+
         delete state;
     }
 }
@@ -6628,12 +6635,16 @@ static bool whisper_vad(
     WHISPER_LOG_INFO("%s: VAD is enabled, processing speach segments only\n", __func__);
     filtered_n_samples = 0;
 
-    struct whisper_vad_context_params vad_ctx_params = whisper_vad_default_context_params();
-    struct whisper_vad_context * vctx = whisper_vad_init_from_file_with_params(params.vad_model_path, vad_ctx_params);
-    if (vctx == nullptr) {
-        WHISPER_LOG_ERROR("%s: failed to initialize VAD context\n", __func__);
-        return false;
+    if (state->vad_context == nullptr) {
+        struct whisper_vad_context_params vad_ctx_params = whisper_vad_default_context_params();
+        struct whisper_vad_context * vctx = whisper_vad_init_from_file_with_params(params.vad_model_path, vad_ctx_params);
+        if (vctx == nullptr) {
+            WHISPER_LOG_ERROR("%s: failed to initialize VAD context\n", __func__);
+            return false;
+        }
+        state->vad_context = vctx;
     }
+    auto vctx = state->vad_context;
 
     const whisper_vad_params & vad_params = params.vad_params;
 
@@ -6749,6 +6760,9 @@ int whisper_full_with_state(
         if (!whisper_vad(ctx, state, params, samples, n_samples, vad_samples, vad_n_samples)) {
             WHISPER_LOG_ERROR("%s: failed to compute VAD\n", __func__);
             return -1;
+        }
+        if (vad_n_samples == 0) {
+            return 0;
         }
         process_samples = vad_samples.data();
         n_process_samples = vad_n_samples;
@@ -8399,12 +8413,6 @@ static void whisper_exp_compute_token_level_timestamps(
         }
 
         const int64_t tt = t_beg + 2*(token.tid - whisper_token_beg(&ctx));
-
-        tokens[j].id    = token.id;
-        tokens[j].tid   = token.tid;
-        tokens[j].p     = token.p;
-        tokens[j].pt    = token.pt;
-        tokens[j].ptsum = token.ptsum;
 
         tokens[j].vlen = voice_length(whisper_token_to_str(&ctx, token.id));
 

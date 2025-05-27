@@ -629,11 +629,14 @@ jobs:
         arch: [Win32, x64]
         blas: [ON]
         sdl2: [ON]
+        blasver: [0.3.29]
         include:
           - arch: Win32
             s2arc: x86
+            blasfile: x86
           - arch: x64
             s2arc: x64
+            blasfile: x64_64
           - sdl2: ON
             s2ver: 2.28.5
 
@@ -654,7 +657,8 @@ jobs:
       - name: Install OpenBLAS and pkgconfiglite
         if: matrix.blas == 'ON'
         run: |
-          vcpkg install --triplet=${{ matrix.s2arc }}-windows openblas
+          Invoke-WebRequest "https://github.com/OpenMathLib/OpenBLAS/releases/download/v${{matrix.blasver}}/OpenBLAS-${{matrix.blasver}}_${{matrix.blasfile}}.zip" -OutFile "OpenBLAS-${{matrix.blasver}}.zip"
+          Expand-Archive "OpenBLAS-${{matrix.blasver}}.zip" -DestinationPath "OpenBLAS-${{matrix.blasver}}"
           choco install pkgconfiglite
 
       - name: Fetch SDL2 and set SDL2_DIR
@@ -671,6 +675,8 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ matrix.build }}
           -DGGML_BLAS=${{ matrix.blas }}
           -DGGML_BLAS_VENDOR=OpenBLAS
+          -DBLAS_LIBRARIES="$env:GITHUB_WORKSPACE/OpenBLAS-${{matrix.blasver}}/lib/libopenblas.lib"
+          -DBLAS_INCLUDE_DIRS="$env:GITHUB_WORKSPACE/OpenBLAS-${{matrix.blasver}}/include"
           -DWHISPER_SDL2=${{ matrix.sdl2 }}
 
       - name: Build
@@ -680,16 +686,11 @@ jobs:
 
       - name: Copy openblas.dll
         if: matrix.blas == 'ON'
-        run: copy "C:/vcpkg/packages/openblas_${{ matrix.s2arc }}-windows/bin/openblas.dll" build/bin/${{ matrix.build }}
+        run: copy "$env:GITHUB_WORKSPACE/OpenBLAS-${{matrix.blasver}}/bin/libopenblas.dll" build/bin/${{ matrix.build }}
 
       - name: Copy SDL2.dll
         if: matrix.sdl2 == 'ON'
         run: copy "$env:SDL2_DIR/../lib/${{ matrix.s2arc }}/SDL2.dll" build/bin/${{ matrix.build }}
-
-      - name: Pack bin artifacts
-        shell: pwsh
-        run: |
-              Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-blas-bin-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
         if: matrix.blas == 'ON' && matrix.sdl2 == 'ON' && ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
@@ -698,7 +699,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: whisper-blas-bin-${{ matrix.arch }}.zip
-          path: whisper-blas-bin-${{ matrix.arch }}.zip
+          path: "build/bin/${{ matrix.build }}/**"
 
   windows-cublas:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
