@@ -4,7 +4,9 @@
 extern VALUE cModel;
 
 static void rb_whisper_model_mark(ruby_whisper_model *rwm) {
-  rb_gc_mark(rwm->context);
+  if (rwm->context) {
+    rb_gc_mark(rwm->context);
+  }
 }
 
 static VALUE ruby_whisper_model_allocate(VALUE klass) {
