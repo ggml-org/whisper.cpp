@@ -20,7 +20,7 @@ def get_reference():
 def get_hypothesis():
     hyp = {}
     for path in glob.glob("speech-datasets/earnings21/media/*.mp3.txt"):
-        with open(path) as fp:
+        with open(path, errors='ignore') as fp:
             text = fp.read().strip()
         code = os.path.basename(path).replace(".mp3.txt", "")
         hyp[code] = text
