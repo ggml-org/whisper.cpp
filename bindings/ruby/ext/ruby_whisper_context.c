@@ -16,6 +16,7 @@ extern VALUE cContext;
 extern VALUE eError;
 extern VALUE cModel;
 
+extern const rb_data_type_t ruby_whisper_params_type;
 extern VALUE ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self);
 extern VALUE rb_whisper_model_initialize(VALUE context);
 extern VALUE rb_whisper_segment_initialize(VALUE context, int index);
@@ -258,7 +259,7 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
   ruby_whisper_params *rwp;
   Data_Get_Struct(self, ruby_whisper, rw);
   VALUE params = argv[0];
-  Data_Get_Struct(params, ruby_whisper_params, rwp);
+  TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
   VALUE samples = argv[1];
   int n_samples;
   rb_memory_view_t view;
@@ -337,7 +338,7 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
   ruby_whisper_params *rwp;
   Data_Get_Struct(self, ruby_whisper, rw);
   VALUE params = argv[0];
-  Data_Get_Struct(params, ruby_whisper_params, rwp);
+  TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
   VALUE samples = argv[1];
   int n_samples;
   int n_processors;

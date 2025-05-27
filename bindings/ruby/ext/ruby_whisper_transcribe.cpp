@@ -8,6 +8,8 @@
 extern "C" {
 #endif
 
+extern const rb_data_type_t ruby_whisper_params_type;
+
 extern ID id_to_s;
 extern ID id_call;
 
@@ -35,7 +37,7 @@ ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self) {
 
   rb_scan_args(argc, argv, "02&", &wave_file_path, &params, &blk);
   Data_Get_Struct(self, ruby_whisper, rw);
-  Data_Get_Struct(params, ruby_whisper_params, rwp);
+  TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
 
   if (!rb_respond_to(wave_file_path, id_to_s)) {
     rb_raise(rb_eRuntimeError, "Expected file path to wave file");
