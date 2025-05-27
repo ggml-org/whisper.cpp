@@ -38,11 +38,30 @@ rb_whisper_mark(ruby_whisper *rw)
 }
 
 void
-rb_whisper_free(ruby_whisper *rw)
+rb_whisper_free(void *p)
 {
+  ruby_whisper *rw = (ruby_whisper *)p;
   ruby_whisper_free(rw);
   free(rw);
 }
+
+static size_t
+ruby_whisper_memsize(const void *p)
+{
+  ruby_whisper *rw = (const ruby_whisper *)p;
+  size_t size = sizeof(rw);
+  if (!rw) {
+    return 0;
+  }
+  return size;
+}
+
+const rb_data_type_t ruby_whisper_type = {
+  "ruby_whisper",
+  {0, rb_whisper_free, ruby_whisper_memsize,},
+  0, 0,
+  0
+};
 
 static VALUE
 ruby_whisper_allocate(VALUE klass)
