@@ -48,7 +48,7 @@ rb_whisper_free(void *p)
 static size_t
 ruby_whisper_memsize(const void *p)
 {
-  ruby_whisper *rw = (const ruby_whisper *)p;
+  const ruby_whisper *rw = (const ruby_whisper *)p;
   size_t size = sizeof(rw);
   if (!rw) {
     return 0;

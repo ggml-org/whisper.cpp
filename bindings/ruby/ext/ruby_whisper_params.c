@@ -251,7 +251,7 @@ rb_whisper_params_free(void *p)
 static size_t
 ruby_whisper_params_memsize(const void *p)
 {
-  ruby_whisper_params *rwp = (const ruby_whisper_params *)p;
+  const ruby_whisper_params *rwp = (const ruby_whisper_params *)p;
 
   return sizeof(ruby_whisper_params) + sizeof(rwp->params) + sizeof(rwp->vad_params);
 }

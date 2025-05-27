@@ -15,7 +15,7 @@ static void rb_whisper_model_mark(void *p) {
 static size_t
 ruby_whisper_model_memsize(const void *p)
 {
-  ruby_whisper_model *rwm = (const ruby_whisper_model *)p;
+  const ruby_whisper_model *rwm = (const ruby_whisper_model *)p;
   size_t size = sizeof(rwm);
   if (!rwm) {
     return 0;

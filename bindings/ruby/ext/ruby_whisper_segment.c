@@ -15,7 +15,7 @@ rb_whisper_segment_mark(void *p)
 static size_t
 ruby_whisper_segment_memsize(const void *p)
 {
-  ruby_whisper_segment *rws = (const ruby_whisper_segment *)p;
+  const ruby_whisper_segment *rws = (const ruby_whisper_segment *)p;
   size_t size = sizeof(rws);
   if (!rws) {
     return 0;
