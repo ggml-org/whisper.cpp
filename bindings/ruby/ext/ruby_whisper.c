@@ -119,16 +119,6 @@ static VALUE ruby_whisper_s_log_set(VALUE self, VALUE log_callback, VALUE user_d
   return Qnil;
 }
 
-static void rb_whisper_model_mark(ruby_whisper_model *rwm) {
-  rb_gc_mark(rwm->context);
-}
-
-static VALUE ruby_whisper_model_allocate(VALUE klass) {
-  ruby_whisper_model *rwm;
-  rwm = ALLOC(ruby_whisper_model);
-  return Data_Wrap_Struct(klass, rb_whisper_model_mark, RUBY_DEFAULT_FREE, rwm);
-}
-
 void Init_whisper() {
   id_to_s = rb_intern("to_s");
   id_call = rb_intern("call");
