@@ -116,6 +116,8 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
 }
 
 int main(int argc, char ** argv) {
+    ggml_backend_load_all();
+
     whisper_params params;
 
     if (whisper_params_parse(argc, argv, params) == false) {

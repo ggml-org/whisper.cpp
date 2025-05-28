@@ -291,6 +291,8 @@ The transcript only includes text, it does not include markup like HTML and Mark
 {0}{4})";
 
 int main(int argc, char ** argv) {
+    ggml_backend_load_all();
+
     whisper_params params;
 
     if (whisper_params_parse(argc, argv, params) == false) {

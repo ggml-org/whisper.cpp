@@ -909,6 +909,8 @@ static void output_lrc(struct whisper_context * ctx, std::ofstream & fout, const
 static void cb_log_disable(enum ggml_log_level , const char * , void * ) { }
 
 int main(int argc, char ** argv) {
+    ggml_backend_load_all();
+
 #if defined(_WIN32)
     // Set the console output code page to UTF-8, while command line arguments
     // are still encoded in the system's code page. In this way, we can print
@@ -988,7 +990,6 @@ int main(int argc, char ** argv) {
     }
 
     // whisper init
-
     struct whisper_context_params cparams = whisper_context_default_params();
 
     cparams.use_gpu    = params.use_gpu;

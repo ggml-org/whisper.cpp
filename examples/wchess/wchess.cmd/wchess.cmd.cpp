@@ -168,6 +168,8 @@ bool get_audio(std::vector<float> & pcmf32_cur) {
 }
 
 int main(int argc, char ** argv) {
+    ggml_backend_load_all();
+
     whisper_params params;
 
     if (whisper_params_parse(argc, argv, params) == false) {

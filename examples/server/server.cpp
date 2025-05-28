@@ -516,6 +516,8 @@ void get_req_parameters(const Request & req, whisper_params & params)
 }  // namespace
 
 int main(int argc, char ** argv) {
+    ggml_backend_load_all();
+
     whisper_params params;
     server_params sparams;
 
