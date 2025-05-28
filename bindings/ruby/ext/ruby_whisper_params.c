@@ -77,6 +77,8 @@ static ID id_vad_params;
 static void
 rb_whisper_callbcack_container_mark(ruby_whisper_callback_container *rwc)
 {
+  if (rwc == NULL) return;
+
   rb_gc_mark(rwc->user_data);
   rb_gc_mark(rwc->callback);
   rb_gc_mark(rwc->callbacks);
