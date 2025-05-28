@@ -6632,10 +6632,9 @@ static bool whisper_vad(
     struct whisper_full_params   params,
                    const float * samples,
                            int   n_samples,
-            std::vector<float> & filtered_samples,
-                           int & filtered_n_samples) {
+            std::vector<float> & filtered_samples) {
     WHISPER_LOG_INFO("%s: VAD is enabled, processing speech segments only\n", __func__);
-    filtered_n_samples = 0;
+    int filtered_n_samples = 0;
 
     // Clear any existing mapping table
     state->vad_mapping_table.clear();
@@ -7735,16 +7734,15 @@ int whisper_full(
     std::vector<float> vad_samples;
     if (params.vad) {
         WHISPER_LOG_INFO("%s: VAD is enabled, processing speech segments only\n", __func__);
-        int vad_n_samples;
-        if (!whisper_vad(ctx, ctx->state, params, samples, n_samples, vad_samples, vad_n_samples)) {
+        if (!whisper_vad(ctx, ctx->state, params, samples, n_samples, vad_samples)) {
             WHISPER_LOG_ERROR("%s: failed to compute VAD\n", __func__);
             return -1;
         }
-        if (vad_n_samples == 0) {
+        if (vad_samples.empty()) {
             return 0;
         }
         samples = vad_samples.data();
-        n_samples = vad_n_samples;
+        n_samples = vad_samples.size();
     }
     return whisper_full_with_state(ctx, ctx->state, params, samples, n_samples);
 }
@@ -7763,16 +7761,15 @@ int whisper_full_parallel(
     std::vector<float> vad_samples;
     if (params.vad) {
         WHISPER_LOG_INFO("%s: VAD is enabled, processing speech segments only\n", __func__);
-        int vad_n_samples;
-        if (!whisper_vad(ctx, ctx->state, params, samples, n_samples, vad_samples, vad_n_samples)) {
+        if (!whisper_vad(ctx, ctx->state, params, samples, n_samples, vad_samples)) {
             WHISPER_LOG_ERROR("%s: failed to compute VAD\n", __func__);
             return -1;
         }
-        if (vad_n_samples == 0) {
+        if (vad_samples.empty()) {
             return 0;
         }
         samples = vad_samples.data();
-        n_samples = vad_n_samples;
+        n_samples = vad_samples.size();
     }
     int ret = 0;
 
