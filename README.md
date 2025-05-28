@@ -386,7 +386,7 @@ Run the inference examples as usual, for example:
 ## Moore Threads GPU support
 
 With Moore Threads cards the processing of the models is done efficiently on the GPU via muBLAS and custom MUSA kernels.
-First, make sure you have installed `MUSA SDK rc3.1.1`: https://developer.mthreads.com/sdk/download/musa?equipment=&os=&driverVersion=&version=rc3.1.1
+First, make sure you have installed `MUSA SDK rc4.0.1`: https://developer.mthreads.com/sdk/download/musa?equipment=&os=&driverVersion=&version=rc4.0.1
 
 Now build `whisper.cpp` with MUSA support:
 

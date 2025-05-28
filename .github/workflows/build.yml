@@ -692,6 +692,11 @@ jobs:
         if: matrix.sdl2 == 'ON'
         run: copy "$env:SDL2_DIR/../lib/${{ matrix.s2arc }}/SDL2.dll" build/bin/${{ matrix.build }}
 
+      - name: Pack bin artifacts
+        shell: pwsh
+        run: |
+              Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-blas-bin-${{ matrix.arch }}.zip"
+
       - name: Upload binaries
         if: matrix.blas == 'ON' && matrix.sdl2 == 'ON' && ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
                 github.event.inputs.create_release == 'true' ||
@@ -699,7 +704,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: whisper-blas-bin-${{ matrix.arch }}.zip
-          path: "build/bin/${{ matrix.build }}/**"
+          path: whisper-blas-bin-${{ matrix.arch }}.zip
 
   windows-cublas:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
