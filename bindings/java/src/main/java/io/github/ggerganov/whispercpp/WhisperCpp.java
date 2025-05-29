@@ -168,22 +168,25 @@ public class WhisperCpp implements AutoCloseable {
         return str.toString().trim();
     }
 
-    public List<WhisperSegment> fullTranscribeWithTime(WhisperFullParams whisperParams, float[] audioData) throws IOException {
+    /**
+     * Full transcribe with time list.
+     *
+     * @param whisperParams the whisper params
+     * @param audioData     the audio data
+     * @return the list
+     * @throws IOException the io exception
+     */
+    public List<WhisperSegment> fullTranscribeWithTime(WhisperFullParams.ByValue whisperParams, float[] audioData) throws IOException {
         if (ctx == null) {
             throw new IllegalStateException("Model not initialised");
         }
 
-        WhisperFullParams.ByValue valueParams = new WhisperFullParams.ByValue(
-            lib.whisper_full_default_params_by_ref(WhisperSamplingStrategy.WHISPER_SAMPLING_BEAM_SEARCH.ordinal()));
-        valueParams.read();
-
-        if (lib.whisper_full(ctx, valueParams, audioData, audioData.length) != 0) {
+        if (lib.whisper_full(ctx, whisperParams, audioData, audioData.length) != 0) {
             throw new IOException("Failed to process audio");
         }
 
         int nSegments = lib.whisper_full_n_segments(ctx);
         List<WhisperSegment> segments= new ArrayList<>(nSegments);
-
 
         for (int i = 0; i < nSegments; i++) {
             long t0 = lib.whisper_full_get_segment_t0(ctx, i);
