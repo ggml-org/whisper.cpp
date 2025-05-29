@@ -18,12 +18,10 @@ class TestPackage < TestBase
     end
 
     def test_install
-      match_data = `rake -Tbuild`.match(/(whispercpp-(.+)\.gem)/)
-      filename = match_data[1]
-      version = match_data[2]
+      gemspec = Gem::Specification.load("whispercpp.gemspec")
       Dir.mktmpdir do |dir|
-        system "gem", "install", "--install-dir", dir.shellescape, "--no-document", "pkg/#{filename.shellescape}", exception: true
-        assert_installed dir, version
+        system "gem", "install", "--install-dir", dir.shellescape, "--no-document", "pkg/#{gemspec.file_name.shellescape}", exception: true
+        assert_installed dir, gemspec.version
       end
     end
 
