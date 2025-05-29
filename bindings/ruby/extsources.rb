@@ -1,5 +1,6 @@
 ignored_dirs = %w[
   .devops
+  ci
   examples/wchess/wchess.wasm
   examples/whisper.android
   examples/whisper.android.java
@@ -17,18 +18,18 @@ ignored_files = %w[
   README_sycl.md
   .gitignore
   .gitmodules
+  .dockerignore
   whisper.nvim
   twitch.sh
   yt-wsp.sh
+  close-issue.yml
 ]
 
 EXTSOURCES =
   `git ls-files -z ../..`.split("\x0")
-    .select {|file|
-      basename = File.basename(file)
-
-      ignored_dirs.all? {|dir| !file.start_with?("../../#{dir}")} &&
-        !ignored_files.include?(basename) &&
-        (file.start_with?("../..") || file.start_with?("../javascript")) &&
-        (!file.start_with?("../../.github/") || basename == "bindings-ruby.yml")
+    .reject {|file|
+      ignored_dirs.any? {|dir| file.start_with?("../../#{dir}")} ||
+        ignored_files.include?(File.basename(file)) ||
+        (!file.start_with?("../..") && !file.start_with?("../javascript")) ||
+        file.start_with?("../../.github/")
     }
