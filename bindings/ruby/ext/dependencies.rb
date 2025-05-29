@@ -20,7 +20,9 @@ class Dependencies
   end
 
   def generate_dot
-    system @cmake, "-S", "sources", "-B", "build", "--graphviz", dot_path, "-D", "BUILD_SHARED_LIBS=OFF", @options.to_s, exception: true
+    args = ["-S", "sources", "-B", "build", "--graphviz", dot_path, "-D", "BUILD_SHARED_LIBS=OFF"]
+    args << @options.to_s unless @options.to_s.empty?
+    system @cmake, *args, exception: true
   end
 
   def parse_dot
