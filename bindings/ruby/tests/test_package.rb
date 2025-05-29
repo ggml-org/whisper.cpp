@@ -18,12 +18,10 @@ class TestPackage < TestBase
     end
 
     def test_install
-      match_data = `rake -Tbuild`.match(/(whispercpp-(.+)\.gem)/)
-      filename = match_data[1]
-      version = match_data[2]
+      gemspec = Gem::Specification.load("whispercpp.gemspec")
       Dir.mktmpdir do |dir|
-        system "gem", "install", "--install-dir", dir.shellescape, "--no-document", "pkg/#{filename.shellescape}", exception: true
-        assert_installed dir, version
+        system "gem", "install", "--install-dir", dir.shellescape, "--no-document", "pkg/#{gemspec.file_name.shellescape}", exception: true
+        assert_installed dir, gemspec.version
       end
     end
 
@@ -33,14 +31,6 @@ class TestPackage < TestBase
       assert_path_exist File.join(dir, "gems/whispercpp-#{version}/lib", "whisper.#{RbConfig::CONFIG["DLEXT"]}")
       assert_path_exist File.join(dir, "gems/whispercpp-#{version}/LICENSE")
       assert_path_not_exist File.join(dir, "gems/whispercpp-#{version}/ext/build")
-    end
-  end
-
-  def test_build_options
-    options = BuildOptions::Options.new
-    assert_empty options.missing_options
-    if ENV["TEST_EXTRA_OPTIONS"] == "1"
-      assert_empty options.extra_options
     end
   end
 end

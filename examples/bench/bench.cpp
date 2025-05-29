@@ -1,8 +1,4 @@
 #include "whisper.h"
-#ifdef WHISPER_BINDINGS_FLAT
-#include "whisper-flat.h"
-#include "../ggml/src/ggml-flat.h"
-#endif
 
 #include <cstdio>
 #include <cstring>
@@ -64,15 +60,6 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
 
 static int whisper_bench_full(const whisper_params & params) {
     // whisper init
-
-    #ifdef WHISPER_BINDINGS_FLAT
-    fprintf(stderr, "+++ WHISPER_BINDINGS_FLAT +++\n");
-    if(params.use_gpu) {
-        whisper_flat_backend_load_all();
-    } else {
-        ggml_backend_try_load_best("cpu", nullptr);
-    }
-    #endif
 
     struct whisper_context_params cparams = whisper_context_default_params();
 
@@ -169,6 +156,8 @@ static int whisper_bench_full(const whisper_params & params) {
 }
 
 int main(int argc, char ** argv) {
+    ggml_backend_load_all();
+
     whisper_params params;
 
     if (whisper_params_parse(argc, argv, params) == false) {

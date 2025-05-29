@@ -424,6 +424,8 @@ static void process_loop(struct whisper_context * ctx, audio_async &audio, const
 }
 
 int main(int argc, char ** argv) {
+    ggml_backend_load_all();
+
     whisper_params params;
     if (whisper_params_parse(argc, argv, params) == false) {
         return 1;

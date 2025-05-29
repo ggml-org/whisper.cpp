@@ -21,15 +21,4 @@ class TestBase < Test::Unit::TestCase
   def whisper
     self.class.whisper
   end
-
-  module BuildOptions
-    load "ext/options.rb", self
-    Options.include self
-
-    def enable_config(name)
-    end
-
-    def arg_config(name)
-    end
-  end
 end

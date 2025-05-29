@@ -3,8 +3,8 @@ require_relative "extsources"
 Gem::Specification.new do |s|
   s.name    = "whispercpp"
   s.authors = ["Georgi Gerganov", "Todd A. Fisher"]
-  s.version = '1.3.2'
-  s.date    = '2025-05-11'
+  s.version = '1.3.3'
+  s.date    = '2025-05-29'
   s.description = %q{High-performance inference of OpenAI's Whisper automatic speech recognition (ASR) model via Ruby}
   s.email   = 'todd.fisher@gmail.com'
   s.extra_rdoc_files = ['LICENSE', 'README.md']

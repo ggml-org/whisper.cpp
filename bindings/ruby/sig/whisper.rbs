@@ -150,7 +150,10 @@ module Whisper
       ?encoder_begin_callback: encoder_begin_callback,
       ?encoder_begin_callback_user_data: Object,
       ?abort_callback: abort_callback,
-      ?abort_callback_user_data: Object
+      ?abort_callback_user_data: Object,
+      ?vad: boolish,
+      ?vad_model_path: path | URI,
+      ?vad_params: Whisper::VAD::Params
     ) -> instance
 
     # params.language = "auto" | "en", etc...
@@ -338,6 +341,20 @@ module Whisper
 
     def abort_callback_user_data: () -> Object
 
+    # Enable VAD
+    #
+    def vad=: (boolish) -> boolish
+
+    def vad: () -> (true | false)
+
+    # Path to the VAD model
+    def vad_model_path=: (path | URI | nil) -> (path | URI | nil)
+
+    def vad_model_path: () -> (String | nil)
+
+    def vad_params=: (Whisper::VAD::Params) -> Whisper::VAD::Params
+    def vad_params: () -> (Whisper::VAD::Params)
+
     # Hook called on new segment. Yields each Whisper::Segment.
     #
     #   whisper.on_new_segment do |segment|
@@ -404,6 +421,55 @@ module Whisper
 
     def text: () -> String
     def no_speech_prob: () -> Float
+  end
+
+  module VAD
+    class Params
+      def self.new: (
+        ?threshold: Float,
+        ?min_speech_duration_ms: Integer,
+        ?min_silence_duration_ms: Integer,
+        ?max_speech_duration_s: Float,
+        ?speech_pad_ms: Integer,
+        ?samples_overlap: Float
+      ) -> instance
+
+      # Probability threshold to consider as speech.
+      #
+      def threshold=: (Float) -> Float
+
+      def threshold: () -> Float
+
+      # Min duration for a valid speech segment.
+      #
+      def min_speech_duration_ms=: (Integer) -> Integer
+
+      def min_speech_duration_ms: () -> Integer
+
+      # Min silence duration to consider speech as ended.
+      #
+      def min_silence_duration_ms=: (Integer) -> Integer
+
+      def min_silence_duration_ms: () -> Integer
+
+      # Max duration of a speech segment before forcing a new segment.
+      def max_speech_duration_s=: (Float) -> Float
+
+      def max_speech_duration_s: () -> Float
+
+      # Padding added before and after speech segments.
+      #
+      def speech_pad_ms=: (Integer) -> Integer
+
+      def speech_pad_ms: () -> Integer
+
+      # Overlap in seconds when copying audio samples from speech segment.
+      #
+      def samples_overlap=: (Float) -> Float
+
+      def samples_overlap: () -> Float
+      def ==: (Params) -> (true | false)
+    end
   end
 
   class Error < StandardError

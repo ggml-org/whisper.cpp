@@ -1,5 +1,10 @@
+require "pathname"
+
+root = Pathname("..")/".."
 ignored_dirs = %w[
   .devops
+  .github
+  ci
   examples/wchess/wchess.wasm
   examples/whisper.android
   examples/whisper.android.java
@@ -9,7 +14,7 @@ ignored_dirs = %w[
   models
   samples
   scripts
-]
+].collect {|dir| root/dir}
 ignored_files = %w[
   AUTHORS
   Makefile
@@ -17,18 +22,19 @@ ignored_files = %w[
   README_sycl.md
   .gitignore
   .gitmodules
+  .dockerignore
   whisper.nvim
   twitch.sh
   yt-wsp.sh
+  close-issue.yml
 ]
 
 EXTSOURCES =
-  `git ls-files -z ../..`.split("\x0")
-    .select {|file|
-      basename = File.basename(file)
-
-      ignored_dirs.all? {|dir| !file.start_with?("../../#{dir}")} &&
-        !ignored_files.include?(basename) &&
-        (file.start_with?("../..") || file.start_with?("../javascript")) &&
-        (!file.start_with?("../../.github/") || basename == "bindings-ruby.yml")
+  `git ls-files -z #{root}`.split("\x0")
+    .collect {|file| Pathname(file)}
+    .reject {|file|
+      ignored_dirs.any? {|dir| file.descend.any? {|desc| desc == dir}} ||
+        ignored_files.include?(file.basename.to_path) ||
+        (file.descend.to_a[1] != root && file.descend.to_a[1] != Pathname("..")/"javascript")
     }
+    .collect(&:to_path)

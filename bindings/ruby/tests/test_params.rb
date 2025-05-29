@@ -32,6 +32,9 @@ class TestParams < TestBase
     :progress_callback_user_data,
     :abort_callback,
     :abort_callback_user_data,
+    :vad,
+    :vad_model_path,
+    :vad_params,
   ]
 
   def setup
@@ -191,6 +194,50 @@ class TestParams < TestBase
     assert_in_delta 0.2, @params.no_speech_thold
   end
 
+  def test_vad
+    assert_false @params.vad
+    @params.vad = true
+    assert_true @params.vad
+  end
+
+  def test_vad_model_path
+    assert_nil @params.vad_model_path
+    @params.vad_model_path = "silero-v5.1.2"
+    assert_equal Whisper::Model.pre_converted_models["silero-v5.1.2"].to_path, @params.vad_model_path
+  end
+
+  def test_vad_model_path_with_nil
+    @params.vad_model_path = "silero-v5.1.2"
+    @params.vad_model_path = nil
+    assert_nil @params.vad_model_path
+  end
+
+  def test_vad_model_path_with_invalid
+    assert_raise TypeError do
+      @params.vad_model_path = Object.new
+    end
+  end
+
+  def test_vad_model_path_with_URI_string
+    @params.vad_model_path = "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin"
+    assert_equal @params.vad_model_path, Whisper::Model.pre_converted_models["silero-v5.1.2"].to_path
+  end
+
+  def test_vad_model_path_with_URI
+    @params.vad_model_path = URI("https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin")
+    assert_equal @params.vad_model_path, Whisper::Model.pre_converted_models["silero-v5.1.2"].to_path
+  end
+
+  def test_vad_params
+    assert_kind_of Whisper::VAD::Params, @params.vad_params
+    default_params = @params.vad_params
+    assert_same default_params, @params.vad_params
+    assert_equal 0.5, default_params.threshold
+    new_params = Whisper::VAD::Params.new
+    @params.vad_params = new_params
+    assert_same new_params, @params.vad_params
+  end
+
   def test_new_with_kw_args
     params = Whisper::Params.new(language: "es")
     assert_equal "es", params.language
@@ -225,6 +272,10 @@ class TestParams < TestBase
               proc {}
             in [/_user_data\Z/, *]
               Object.new
+            in [:vad_model_path, *]
+              Whisper::Model.pre_converted_models["silero-v5.1.2"].to_path
+            in [:vad_params, *]
+              Whisper::VAD::Params.new
             end
     params = Whisper::Params.new(param => value)
     if Float === value

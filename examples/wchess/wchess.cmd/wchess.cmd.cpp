@@ -7,10 +7,6 @@
 
 #include "WChess.h"
 #include "common-sdl.h"
-#ifdef WHISPER_BINDINGS_FLAT
-#include "whisper-flat.h"
-#include "../ggml/src/ggml-flat.h"
-#endif
 #include <iostream>
 
 #include <memory>
@@ -172,6 +168,8 @@ bool get_audio(std::vector<float> & pcmf32_cur) {
 }
 
 int main(int argc, char ** argv) {
+    ggml_backend_load_all();
+
     whisper_params params;
 
     if (whisper_params_parse(argc, argv, params) == false) {
@@ -185,15 +183,6 @@ int main(int argc, char ** argv) {
     }
 
     // whisper init
-
-    #ifdef WHISPER_BINDINGS_FLAT
-    fprintf(stderr, "+++ WHISPER_BINDINGS_FLAT +++\n");
-    if(params.use_gpu) {
-        whisper_flat_backend_load_all();
-    } else {
-        ggml_backend_try_load_best("cpu", nullptr);
-    }
-    #endif
 
     struct whisper_context_params cparams = whisper_context_default_params();
 

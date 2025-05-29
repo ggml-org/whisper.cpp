@@ -83,6 +83,8 @@ static bool vad_params_parse(int argc, char ** argv, cli_params & params) {
 static void cb_log_disable(enum ggml_log_level , const char * , void * ) { }
 
 int main(int argc, char ** argv) {
+    ggml_backend_load_all();
+
     cli_params cli_params;
 
     if (!vad_params_parse(argc, argv, cli_params)) {

@@ -2,10 +2,6 @@
 #include "common-whisper.h"
 
 #include "whisper.h"
-#ifdef WHISPER_BINDINGS_FLAT
-#include "whisper-flat.h"
-#include "../ggml/src/ggml-flat.h"
-#endif
 #include "httplib.h"
 #include "json.hpp"
 
@@ -520,6 +516,8 @@ void get_req_parameters(const Request & req, whisper_params & params)
 }  // namespace
 
 int main(int argc, char ** argv) {
+    ggml_backend_load_all();
+
     whisper_params params;
     server_params sparams;
 
@@ -546,15 +544,6 @@ int main(int argc, char ** argv) {
         check_ffmpeg_availibility();
     }
     // whisper init
-    #ifdef WHISPER_BINDINGS_FLAT
-    fprintf(stderr, "+++ WHISPER_BINDINGS_FLAT +++\n");
-    if(params.use_gpu) {
-        whisper_flat_backend_load_all();
-    } else {
-        ggml_backend_try_load_best("cpu", nullptr);
-    }
-    #endif
-
     struct whisper_context_params cparams = whisper_context_default_params();
 
     cparams.use_gpu    = params.use_gpu;
