@@ -1,5 +1,6 @@
 class Options
-  def initialize
+  def initialize(cmake="cmake")
+    @cmake = cmake
     @options = {}
     @pending_options = []
     @ignored_options = []
@@ -32,7 +33,7 @@ class Options
 
     output = nil
     Dir.chdir __dir__ do
-      output = `cmake -S sources -B build -L`
+      output = `#{@cmake.shellescape} -S sources -B build -L`
     end
     started = false
     @cmake_options = output.lines.filter_map {|line|

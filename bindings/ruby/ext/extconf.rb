@@ -3,7 +3,7 @@ require_relative "options"
 require_relative "dependencies"
 
 cmake = find_executable("cmake") || abort
-options = Options.new
+options = Options.new(cmake)
 have_library("gomp") rescue nil
 libs = Dependencies.new(cmake, options)
 
