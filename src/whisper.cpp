@@ -7891,7 +7891,7 @@ int whisper_full_lang_id(struct whisper_context * ctx) {
     return ctx->state->lang_id;
 }
 
-static int64_t map_processed_to_original_time(int64_t processed_time, const std::vector<vad_time_mapping>& mapping_table) {
+static int64_t map_processed_to_original_time(int64_t processed_time, const std::vector<vad_time_mapping> & mapping_table) {
     if (mapping_table.empty()) {
         return processed_time;
     }
@@ -7907,7 +7907,7 @@ static int64_t map_processed_to_original_time(int64_t processed_time, const std:
     // Binary search over the time map that finds the first entry that has a
     // processed time greater than or equal to the current processed time.
     auto upper = std::lower_bound(mapping_table.begin(), mapping_table.end(), processed_time,
-        [](const vad_time_mapping& entry, int64_t time) {
+        [](const vad_time_mapping & entry, int64_t time) {
             return entry.processed_time < time;
         }
     );
@@ -7933,7 +7933,7 @@ static int64_t map_processed_to_original_time(int64_t processed_time, const std:
 }
 
 // Function to get the starting timestamp of a segment
-int64_t whisper_full_get_segment_t0_from_state(struct whisper_state* state, int i_segment) {
+int64_t whisper_full_get_segment_t0_from_state(struct whisper_state * state, int i_segment) {
     // If VAD wasn't used, return the original timestamp
     if (!state->has_vad_segments || state->vad_mapping_table.empty()) {
         return state->result_all[i_segment].t0;
@@ -7947,7 +7947,7 @@ int64_t whisper_full_get_segment_t0_from_state(struct whisper_state* state, int 
 }
 
 // Function to get the ending timestamp of a segment
-int64_t whisper_full_get_segment_t1_from_state(struct whisper_state* state, int i_segment) {
+int64_t whisper_full_get_segment_t1_from_state(struct whisper_state * state, int i_segment) {
     // If VAD wasn't used, return the original timestamp
     if (!state->has_vad_segments || state->vad_mapping_table.empty()) {
         return state->result_all[i_segment].t1;
