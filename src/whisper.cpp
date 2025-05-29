@@ -971,7 +971,6 @@ struct whisper_state {
     bool has_vad_segments = false;
 
     std::vector<vad_time_mapping> vad_mapping_table;
-    bool vad_mapping_table_initialized = false;
 };
 
 struct whisper_context {
@@ -6638,7 +6637,7 @@ static bool whisper_vad(
 
     // Clear any existing mapping table
     state->vad_mapping_table.clear();
-    state->vad_mapping_table_initialized = false;
+    state->has_vad_segments = false;
 
     if (state->vad_context == nullptr) {
         struct whisper_vad_context_params vad_ctx_params = whisper_vad_default_context_params();
@@ -6663,7 +6662,6 @@ static bool whisper_vad(
         // Initialize the time mapping table
         state->vad_mapping_table.clear();
         state->vad_mapping_table.reserve(vad_segments->data.size() * 4);
-        state->vad_mapping_table_initialized = true;
 
         WHISPER_LOG_INFO("%s: detected %d speech segments\n", __func__, (int)vad_segments->data.size());
         float overlap_seconds = vad_params.samples_overlap;
@@ -7937,8 +7935,7 @@ static int64_t map_processed_to_original_time(int64_t processed_time, const std:
 // Function to get the starting timestamp of a segment
 int64_t whisper_full_get_segment_t0_from_state(struct whisper_state* state, int i_segment) {
     // If VAD wasn't used, return the original timestamp
-    if (!state->has_vad_segments || !state->vad_mapping_table_initialized ||
-        state->vad_mapping_table.empty()) {
+    if (!state->has_vad_segments || state->vad_mapping_table.empty()) {
         return state->result_all[i_segment].t0;
     }
 
@@ -7952,8 +7949,7 @@ int64_t whisper_full_get_segment_t0_from_state(struct whisper_state* state, int 
 // Function to get the ending timestamp of a segment
 int64_t whisper_full_get_segment_t1_from_state(struct whisper_state* state, int i_segment) {
     // If VAD wasn't used, return the original timestamp
-    if (!state->has_vad_segments || !state->vad_mapping_table_initialized ||
-        state->vad_mapping_table.empty()) {
+    if (!state->has_vad_segments || state->vad_mapping_table.empty()) {
         return state->result_all[i_segment].t1;
     }
 
