@@ -249,7 +249,7 @@ ruby_whisper_vad_params_initialize(int argc, VALUE *argv, VALUE self)
   rb_get_kwargs(kw_hash, param_names, 0, NUM_PARAMS, values);
 
   for (i = 0; i < NUM_PARAMS; i++) {
-    id= param_names[i];
+    id = param_names[i];
     value = values[i];
     if (value == Qundef) {
       continue;
