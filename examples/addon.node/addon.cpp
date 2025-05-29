@@ -129,6 +129,11 @@ void whisper_print_segment_callback(struct whisper_context * ctx, struct whisper
 
 void cb_log_disable(enum ggml_log_level, const char *, void *) {}
 
+struct whisper_result {
+    std::vector<std::vector<std::string>> segments;
+    std::string language;
+};
+
 class ProgressWorker : public Napi::AsyncWorker {
  public:
     ProgressWorker(Napi::Function& callback, whisper_params params, Napi::Function progress_callback, Napi::Env env)
@@ -162,19 +167,24 @@ class ProgressWorker : public Napi::AsyncWorker {
 
         if (params.detect_language) {
             Napi::Object resultObj = Napi::Object::New(Env());
-            resultObj.Set("language", Napi::String::New(Env(), result[0][0]));
+            resultObj.Set("language", Napi::String::New(Env(), result.language));
             Callback().Call({Env().Null(), resultObj});
-        } else {
-            Napi::Object res = Napi::Array::New(Env(), result.size());
-            for (uint64_t i = 0; i < result.size(); ++i) {
-                Napi::Object tmp = Napi::Array::New(Env(), 3);
-                for (uint64_t j = 0; j < 3; ++j) {
-                    tmp[j] = Napi::String::New(Env(), result[i][j]);
-                }
-                res[i] = tmp;
-            }
-            Callback().Call({Env().Null(), res});
         }
+
+        Napi::Object returnObj = Napi::Object::New(Env());
+        if (!result.language.empty()) {
+            returnObj.Set("language", Napi::String::New(Env(), result.language));
+        }
+        Napi::Array transcriptionArray = Napi::Array::New(Env(), result.segments.size());
+        for (uint64_t i = 0; i < result.segments.size(); ++i) {
+            Napi::Object tmp = Napi::Array::New(Env(), 3);
+            for (uint64_t j = 0; j < 3; ++j) {
+                tmp[j] = Napi::String::New(Env(), result.segments[i][j]);
+            }
+            transcriptionArray[i] = tmp;
+         }
+         returnObj.Set("transcription", transcriptionArray);
+         Callback().Call({Env().Null(), returnObj});
     }
 
     // Progress callback function - using thread-safe function
@@ -191,12 +201,12 @@ class ProgressWorker : public Napi::AsyncWorker {
 
  private:
     whisper_params params;
-    std::vector<std::vector<std::string>> result;
+    whisper_result result;
     Napi::Env env;
     Napi::ThreadSafeFunction tsfn;
 
     // Custom run function with progress callback support
-    int run_with_progress(whisper_params &params, std::vector<std::vector<std::string>> &result) {
+    int run_with_progress(whisper_params &params, whisper_result & result) {
         if (params.no_prints) {
             whisper_log_set(cb_log_disable, NULL);
         }
@@ -339,21 +349,20 @@ class ProgressWorker : public Napi::AsyncWorker {
             }
         }
 
-        if (params.detect_language) {
-            result.resize(1);
-            result[0].emplace_back(whisper_lang_str(whisper_full_lang_id(ctx)));
-        } else {
-            const int n_segments = whisper_full_n_segments(ctx);
-            result.resize(n_segments);
-            for (int i = 0; i < n_segments; ++i) {
-                const char * text = whisper_full_get_segment_text(ctx, i);
-                const int64_t t0 = whisper_full_get_segment_t0(ctx, i);
-                const int64_t t1 = whisper_full_get_segment_t1(ctx, i);
+        if (params.detect_language || params.language == "auto") {
+            result.language = whisper_lang_str(whisper_full_lang_id(ctx));
+        }
+        const int n_segments = whisper_full_n_segments(ctx);
+        result.segments.resize(n_segments);
 
-                result[i].emplace_back(to_timestamp(t0, params.comma_in_time));
-                result[i].emplace_back(to_timestamp(t1, params.comma_in_time));
-                result[i].emplace_back(text);
-            }
+        for (int i = 0; i < n_segments; ++i) {
+            const char * text = whisper_full_get_segment_text(ctx, i);
+            const int64_t t0 = whisper_full_get_segment_t0(ctx, i);
+            const int64_t t1 = whisper_full_get_segment_t1(ctx, i);
+
+            result.segments[i].emplace_back(to_timestamp(t0, params.comma_in_time));
+            result.segments[i].emplace_back(to_timestamp(t1, params.comma_in_time));
+            result.segments[i].emplace_back(text);
         }
 
         whisper_print_timings(ctx);
