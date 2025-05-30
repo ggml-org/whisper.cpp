@@ -293,13 +293,20 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
     // Should check when samples.respond_to?(:length)?
   } else {
     if (TYPE(samples) == T_ARRAY) {
-      n_samples = RARRAY_LEN(samples);
+      if (RARRAY_LEN(samples) > INT_MAX) {
+        rb_raise(rb_eArgError, "samples are too long");
+      }
+      n_samples = (int)RARRAY_LEN(samples);
     } else if (memory_view_available_p) {
       if (!rb_memory_view_get(samples, &view, RUBY_MEMORY_VIEW_SIMPLE)) {
         view.obj = Qnil;
         rb_raise(rb_eArgError, "unable to get a memory view");
       }
-      n_samples = view.byte_size / view.item_size;
+      ssize_t n_samples_size = view.byte_size / view.item_size;
+      if (n_samples_size > INT_MAX) {
+        rb_raise(rb_eArgError, "samples are too long");
+      }
+      n_samples = (int)n_samples_size;
     } else if (rb_respond_to(samples, id_length)) {
       n_samples = NUM2INT(rb_funcall(samples, id_length, 0));
     } else {
@@ -387,10 +394,17 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
       view.obj = Qnil;
       rb_raise(rb_eArgError, "unable to get a memory view");
     }
-    n_samples = view.byte_size / view.item_size;
+    ssize_t n_samples_size = view.byte_size / view.item_size;
+    if (n_samples_size > INT_MAX) {
+      rb_raise(rb_eArgError, "samples are too long");
+    }
+    n_samples = (int)n_samples_size;
   } else {
     if (TYPE(samples) == T_ARRAY) {
-      n_samples = RARRAY_LEN(samples);
+      if (RARRAY_LEN(samples) > INT_MAX) {
+        rb_raise(rb_eArgError, "samples are too long");
+      }
+      n_samples = (int)RARRAY_LEN(samples);
     } else if (rb_respond_to(samples, id_length)) {
       n_samples = NUM2INT(rb_funcall(samples, id_length, 0));
     } else {
@@ -476,7 +490,7 @@ ruby_whisper_full_get_segment_t0(VALUE self, VALUE i_segment)
   TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   const int c_i_segment = ruby_whisper_full_check_segment_index(rw, i_segment);
   const int64_t t0 = whisper_full_get_segment_t0(rw->context, c_i_segment);
-  return INT2NUM(t0);
+  return LONG2NUM(t0);
 }
 
 /*
@@ -494,7 +508,7 @@ ruby_whisper_full_get_segment_t1(VALUE self, VALUE i_segment)
   TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   const int c_i_segment = ruby_whisper_full_check_segment_index(rw, i_segment);
   const int64_t t1 = whisper_full_get_segment_t1(rw->context, c_i_segment);
-  return INT2NUM(t1);
+  return LONG2NUM(t1);
 }
 
 /*
