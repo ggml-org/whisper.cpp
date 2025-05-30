@@ -17,6 +17,7 @@ const whisperParamsMock = {
   comma_in_time: false,
   translate: true,
   no_timestamps: false,
+  detect_language: false,
   audio_ctx: 0,
   max_len: 0,
   prompt: "",
@@ -30,8 +31,9 @@ const whisperParamsMock = {
 describe("Run whisper.node", () => {
     test("it should receive a non-empty value", async () => {
         let result = await whisperAsync(whisperParamsMock);
+      console.log(result);
 
-        expect(result.length).toBeGreaterThan(0);
+        expect(result['transcription'].length).toBeGreaterThan(0);
     }, 10000);
 });
 
