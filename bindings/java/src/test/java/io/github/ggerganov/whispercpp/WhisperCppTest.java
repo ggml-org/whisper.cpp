@@ -118,7 +118,7 @@ class WhisperCppTest {
         float[] floats = new float[b.length / 2];
 
         //WhisperFullParams params = whisper.getFullDefaultParams(WhisperSamplingStrategy.WHISPER_SAMPLING_GREEDY);
-        WhisperFullParams params = whisper.getFullDefaultParams(WhisperSamplingStrategy.WHISPER_SAMPLING_BEAM_SEARCH);
+        WhisperFullParams.ByValue params = whisper.getFullDefaultParams(WhisperSamplingStrategy.WHISPER_SAMPLING_BEAM_SEARCH);
         params.setProgressCallback((ctx, state, progress, user_data) -> System.out.println("progress: " + progress));
         params.print_progress = CBool.FALSE;
         //params.initial_prompt = "and so my fellow Americans um, like";
