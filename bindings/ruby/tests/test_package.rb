@@ -25,6 +25,20 @@ class TestPackage < TestBase
       end
     end
 
+    def test_install_with_coreml
+      omit_unless RUBY_PLATFORM.match?(/darwin/) do
+        gemspec = Gem::Specification.load("whispercpp.gemspec")
+        Dir.mktmpdir do |dir|
+          system "gem", "install", "--install-dir", dir.shellescape, "--no-document", "pkg/#{gemspec.file_name.shellescape}", "--", "--enable-whisper-coreml", exception: true
+          assert_installed dir, gemspec.version
+          assert_nothing_raised do
+            libdir = File.join(dir, "gems", "#{gemspec.name}-#{gemspec.version}", "lib")
+            system "ruby", "-I", libdir, "-r", "whisper", "-e", "Whisper::Context.new('tiny')", exception: true
+          end
+        end
+      end
+    end
+
     private
 
     def assert_installed(dir, version)
