@@ -85,6 +85,14 @@ static VALUE ruby_whisper_s_lang_str_full(VALUE self, VALUE id) {
   return rb_str_new2(str_full);
 }
 
+/*
+ * call-seq:
+ *   system_info_str -> String
+ */
+static VALUE ruby_whisper_s_system_info_str(VALUE self) {
+  return rb_str_new2(whisper_print_system_info());
+}
+
 static VALUE ruby_whisper_s_finalize_log_callback(VALUE self, VALUE id) {
   is_log_callback_finalized = true;
   return Qnil;
@@ -149,6 +157,7 @@ void Init_whisper() {
   rb_define_singleton_method(mWhisper, "lang_id", ruby_whisper_s_lang_id, 1);
   rb_define_singleton_method(mWhisper, "lang_str", ruby_whisper_s_lang_str, 1);
   rb_define_singleton_method(mWhisper, "lang_str_full", ruby_whisper_s_lang_str_full, 1);
+  rb_define_singleton_method(mWhisper, "system_info_str", ruby_whisper_s_system_info_str, 0);
   rb_define_singleton_method(mWhisper, "log_set", ruby_whisper_s_log_set, 2);
   rb_define_private_method(rb_singleton_class(mWhisper), "finalize_log_callback", ruby_whisper_s_finalize_log_callback, 1);
 
