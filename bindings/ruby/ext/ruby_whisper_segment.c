@@ -38,7 +38,7 @@ ruby_whisper_segment_allocate(VALUE klass)
 }
 
 VALUE
-rb_whisper_segment_initialize(VALUE context, int index)
+rb_whisper_segment_s_new(VALUE context, int index)
 {
   ruby_whisper_segment *rws;
   const VALUE segment = ruby_whisper_segment_allocate(cSegment);
@@ -63,7 +63,7 @@ ruby_whisper_segment_get_start_time(VALUE self)
   TypedData_Get_Struct(rws->context, ruby_whisper, &ruby_whisper_type, rw);
   const int64_t t0 = whisper_full_get_segment_t0(rw->context, rws->index);
   // able to multiply 10 without overflow because to_timestamp() in whisper.cpp does it
-  return INT2NUM(t0 * 10);
+  return LONG2NUM(t0 * 10);
 }
 
 /*
@@ -81,7 +81,7 @@ ruby_whisper_segment_get_end_time(VALUE self)
   TypedData_Get_Struct(rws->context, ruby_whisper, &ruby_whisper_type, rw);
   const int64_t t1 = whisper_full_get_segment_t1(rw->context, rws->index);
   // able to multiply 10 without overflow because to_timestamp() in whisper.cpp does it
-  return INT2NUM(t1 * 10);
+  return LONG2NUM(t1 * 10);
 }
 
 /*

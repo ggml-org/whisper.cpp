@@ -11,6 +11,8 @@ extern ID id_new;
 extern ID id_to_path;
 extern ID id_URI;
 extern ID id_pre_converted_models;
+extern ID id_coreml_compiled_models;
+extern ID id_cache;
 
 extern VALUE cContext;
 extern VALUE eError;
@@ -18,8 +20,8 @@ extern VALUE cModel;
 
 extern const rb_data_type_t ruby_whisper_params_type;
 extern VALUE ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self);
-extern VALUE rb_whisper_model_initialize(VALUE context);
-extern VALUE rb_whisper_segment_initialize(VALUE context, int index);
+extern VALUE rb_whisper_model_s_new(VALUE context);
+extern VALUE rb_whisper_segment_s_new(VALUE context, int index);
 extern void prepare_transcription(ruby_whisper_params *rwp, VALUE *context);
 
 static void
@@ -53,6 +55,9 @@ ruby_whisper_memsize(const void *p)
   if (!rw) {
     return 0;
   }
+  if (rw->context) {
+    size += sizeof(rw->context);
+  }
   return size;
 }
 
@@ -79,6 +84,13 @@ ruby_whisper_normalize_model_path(VALUE model_path)
   VALUE pre_converted_model = rb_hash_aref(pre_converted_models, model_path);
   if (!NIL_P(pre_converted_model)) {
     model_path = pre_converted_model;
+#ifdef RUBY_WHISPER_USE_COREML
+    VALUE coreml_converted_models = rb_funcall(cModel, id_coreml_compiled_models, 0);
+    VALUE coreml_converted_model = rb_hash_aref(coreml_converted_models, pre_converted_model);
+    if (!NIL_P(coreml_converted_model)) {
+      rb_funcall(coreml_converted_model, id_cache, 0);
+    }
+#endif
   }
   else if (TYPE(model_path) == T_STRING) {
     const char * model_path_str = StringValueCStr(model_path);
@@ -293,13 +305,20 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
     // Should check when samples.respond_to?(:length)?
   } else {
     if (TYPE(samples) == T_ARRAY) {
-      n_samples = RARRAY_LEN(samples);
+      if (RARRAY_LEN(samples) > INT_MAX) {
+        rb_raise(rb_eArgError, "samples are too long");
+      }
+      n_samples = (int)RARRAY_LEN(samples);
     } else if (memory_view_available_p) {
       if (!rb_memory_view_get(samples, &view, RUBY_MEMORY_VIEW_SIMPLE)) {
         view.obj = Qnil;
         rb_raise(rb_eArgError, "unable to get a memory view");
       }
-      n_samples = view.byte_size / view.item_size;
+      ssize_t n_samples_size = view.byte_size / view.item_size;
+      if (n_samples_size > INT_MAX) {
+        rb_raise(rb_eArgError, "samples are too long");
+      }
+      n_samples = (int)n_samples_size;
     } else if (rb_respond_to(samples, id_length)) {
       n_samples = NUM2INT(rb_funcall(samples, id_length, 0));
     } else {
@@ -387,10 +406,17 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
       view.obj = Qnil;
       rb_raise(rb_eArgError, "unable to get a memory view");
     }
-    n_samples = view.byte_size / view.item_size;
+    ssize_t n_samples_size = view.byte_size / view.item_size;
+    if (n_samples_size > INT_MAX) {
+      rb_raise(rb_eArgError, "samples are too long");
+    }
+    n_samples = (int)n_samples_size;
   } else {
     if (TYPE(samples) == T_ARRAY) {
-      n_samples = RARRAY_LEN(samples);
+      if (RARRAY_LEN(samples) > INT_MAX) {
+        rb_raise(rb_eArgError, "samples are too long");
+      }
+      n_samples = (int)RARRAY_LEN(samples);
     } else if (rb_respond_to(samples, id_length)) {
       n_samples = NUM2INT(rb_funcall(samples, id_length, 0));
     } else {
@@ -476,7 +502,7 @@ ruby_whisper_full_get_segment_t0(VALUE self, VALUE i_segment)
   TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   const int c_i_segment = ruby_whisper_full_check_segment_index(rw, i_segment);
   const int64_t t0 = whisper_full_get_segment_t0(rw->context, c_i_segment);
-  return INT2NUM(t0);
+  return LONG2NUM(t0);
 }
 
 /*
@@ -494,7 +520,7 @@ ruby_whisper_full_get_segment_t1(VALUE self, VALUE i_segment)
   TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   const int c_i_segment = ruby_whisper_full_check_segment_index(rw, i_segment);
   const int64_t t1 = whisper_full_get_segment_t1(rw->context, c_i_segment);
-  return INT2NUM(t1);
+  return LONG2NUM(t1);
 }
 
 /*
@@ -552,7 +578,7 @@ ruby_whisper_full_get_segment_no_speech_prob(VALUE self, VALUE i_segment)
 static VALUE
 ruby_whisper_full_get_segment(VALUE self, VALUE i_segment)
 {
-  return rb_whisper_segment_initialize(self, NUM2INT(i_segment));
+  return rb_whisper_segment_s_new(self, NUM2INT(i_segment));
 }
 
 /*
@@ -586,7 +612,7 @@ ruby_whisper_each_segment(VALUE self)
 
   const int n_segments = whisper_full_n_segments(rw->context);
   for (int i = 0; i < n_segments; ++i) {
-    rb_yield(rb_whisper_segment_initialize(self, i));
+    rb_yield(rb_whisper_segment_s_new(self, i));
   }
 
   return self;
@@ -599,7 +625,7 @@ ruby_whisper_each_segment(VALUE self)
 static VALUE
 ruby_whisper_get_model(VALUE self)
 {
-  return rb_whisper_model_initialize(self);
+  return rb_whisper_model_s_new(self);
 }
 
 void

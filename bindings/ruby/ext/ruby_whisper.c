@@ -22,6 +22,8 @@ ID id_new;
 ID id_to_path;
 ID id_URI;
 ID id_pre_converted_models;
+ID id_coreml_compiled_models;
+ID id_cache;
 
 static bool is_log_callback_finalized = false;
 
@@ -83,6 +85,14 @@ static VALUE ruby_whisper_s_lang_str_full(VALUE self, VALUE id) {
   return rb_str_new2(str_full);
 }
 
+/*
+ * call-seq:
+ *   system_info_str -> String
+ */
+static VALUE ruby_whisper_s_system_info_str(VALUE self) {
+  return rb_str_new2(whisper_print_system_info());
+}
+
 static VALUE ruby_whisper_s_finalize_log_callback(VALUE self, VALUE id) {
   is_log_callback_finalized = true;
   return Qnil;
@@ -130,6 +140,8 @@ void Init_whisper() {
   id_to_path = rb_intern("to_path");
   id_URI = rb_intern("URI");
   id_pre_converted_models = rb_intern("pre_converted_models");
+  id_coreml_compiled_models = rb_intern("coreml_compiled_models");
+  id_cache = rb_intern("cache");
 
   mWhisper = rb_define_module("Whisper");
   mVAD = rb_define_module_under(mWhisper, "VAD");
@@ -145,6 +157,7 @@ void Init_whisper() {
   rb_define_singleton_method(mWhisper, "lang_id", ruby_whisper_s_lang_id, 1);
   rb_define_singleton_method(mWhisper, "lang_str", ruby_whisper_s_lang_str, 1);
   rb_define_singleton_method(mWhisper, "lang_str_full", ruby_whisper_s_lang_str_full, 1);
+  rb_define_singleton_method(mWhisper, "system_info_str", ruby_whisper_s_system_info_str, 0);
   rb_define_singleton_method(mWhisper, "log_set", ruby_whisper_s_log_set, 2);
   rb_define_private_method(rb_singleton_class(mWhisper), "finalize_log_callback", ruby_whisper_s_finalize_log_callback, 1);
 

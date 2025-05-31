@@ -94,6 +94,10 @@ class TestWhisper < TestBase
     end
   end
 
+  def test_system_info_str
+    assert_match /\AWHISPER : COREML = \d | OPENVINO = \d |/, Whisper.system_info_str
+  end
+
   def test_log_set
     user_data = Object.new
     logs = []

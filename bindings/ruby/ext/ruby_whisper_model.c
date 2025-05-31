@@ -35,7 +35,7 @@ static VALUE ruby_whisper_model_allocate(VALUE klass) {
   return TypedData_Make_Struct(klass, ruby_whisper_model, &rb_whisper_model_type, rwm);
 }
 
-VALUE rb_whisper_model_initialize(VALUE context) {
+VALUE rb_whisper_model_s_new(VALUE context) {
   ruby_whisper_model *rwm;
   const VALUE model = ruby_whisper_model_allocate(cModel);
   TypedData_Get_Struct(model, ruby_whisper_model, &rb_whisper_model_type, rwm);
