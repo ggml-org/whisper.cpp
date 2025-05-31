@@ -11,6 +11,8 @@ extern ID id_new;
 extern ID id_to_path;
 extern ID id_URI;
 extern ID id_pre_converted_models;
+extern ID id_coreml_compiled_models;
+extern ID id_cache;
 
 extern VALUE cContext;
 extern VALUE eError;
@@ -82,6 +84,13 @@ ruby_whisper_normalize_model_path(VALUE model_path)
   VALUE pre_converted_model = rb_hash_aref(pre_converted_models, model_path);
   if (!NIL_P(pre_converted_model)) {
     model_path = pre_converted_model;
+#ifdef RUBY_WHISPER_USE_COREML
+    VALUE coreml_converted_models = rb_funcall(cModel, id_coreml_compiled_models, 0);
+    VALUE coreml_converted_model = rb_hash_aref(coreml_converted_models, pre_converted_model);
+    if (!NIL_P(coreml_converted_model)) {
+      rb_funcall(coreml_converted_model, id_cache, 0);
+    }
+#endif
   }
   else if (TYPE(model_path) == T_STRING) {
     const char * model_path_str = StringValueCStr(model_path);
