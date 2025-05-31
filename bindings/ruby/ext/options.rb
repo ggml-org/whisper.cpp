@@ -42,6 +42,17 @@ class Options
       value = type == "BOOL" ? enable_config(option) : arg_config("--#{option}")
       @options[name] = [type, value]
     end
+
+    configure_coreml
+  end
+
+  def configure_coreml
+    use_coreml = if @options["WHISPER_COREML"][1].nil?
+                   cmake_options["WHISPER_COREML"][1]
+                 else
+                   @options["WHISPER_COREML"][1]
+                 end
+    $CPPFLAGS << " -DRUBY_WHISPER_USE_COREML" if use_coreml
   end
 
   def option_name(name)
