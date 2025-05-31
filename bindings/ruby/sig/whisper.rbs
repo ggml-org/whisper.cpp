@@ -386,6 +386,7 @@ module Whisper
 
   class Model
     def self.pre_converted_models: () -> Hash[String, Model::URI]
+    def self.coreml_compiled_models: () -> Hash[Model::URI, Model::ZipURI]
     def self.new: () -> instance
     def n_vocab: () -> Integer
     def n_audio_ctx: () -> Integer
