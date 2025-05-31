@@ -130,6 +130,44 @@ module Whisper
       end
     end
 
+    class ZipURI < URI
+      def cache
+        zip_path = Pathname(super)
+        dest = unzipped_path
+        return if dest.exist? && dest.mtime >= zip_path.mtime
+        escaping dest do
+          system "unzip", "-q", "-d", zip_path.dirname.to_path, zip_path.to_path, exception: true
+        end
+        zip_path.to_path
+      end
+
+      def clear_cache
+        super
+        unzipped_path.rmtree if unzipped_path.exist?
+      end
+
+      private
+
+      def unzipped_path
+        cache_path.sub_ext("")
+      end
+
+      def escaping(path)
+        escaped = Pathname("#{path}.removing")
+        if path.exist?
+          escaped.rmtree if escaped.exist?
+          path.rename escaped
+        end
+        yield
+      ensure
+        if path.exist?
+          escaped.rmtree if escaped.exist?
+        else
+          escaped.rename path if escaped.exist?
+        end
+      end
+    end
+
     @pre_converted_models = %w[
       tiny
       tiny.en
