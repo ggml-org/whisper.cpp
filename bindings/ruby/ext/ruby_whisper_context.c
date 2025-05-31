@@ -53,6 +53,9 @@ ruby_whisper_memsize(const void *p)
   if (!rw) {
     return 0;
   }
+  if (rw->context) {
+    size += sizeof(rw->context);
+  }
   return size;
 }
 
