@@ -405,6 +405,11 @@ module Whisper
       def to_path: -> String
       def clear_cache: -> void
     end
+
+    class ZipURI < URI
+      def cache: () -> String
+      def clear_cache: () -> void
+    end
   end
 
   class Segment
