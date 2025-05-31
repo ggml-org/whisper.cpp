@@ -38,7 +38,7 @@ ruby_whisper_segment_allocate(VALUE klass)
 }
 
 VALUE
-rb_whisper_segment_initialize(VALUE context, int index)
+rb_whisper_segment_s_new(VALUE context, int index)
 {
   ruby_whisper_segment *rws;
   const VALUE segment = ruby_whisper_segment_allocate(cSegment);

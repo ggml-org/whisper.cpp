@@ -18,8 +18,8 @@ extern VALUE cModel;
 
 extern const rb_data_type_t ruby_whisper_params_type;
 extern VALUE ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self);
-extern VALUE rb_whisper_model_initialize(VALUE context);
-extern VALUE rb_whisper_segment_initialize(VALUE context, int index);
+extern VALUE rb_whisper_model_s_new(VALUE context);
+extern VALUE rb_whisper_segment_s_new(VALUE context, int index);
 extern void prepare_transcription(ruby_whisper_params *rwp, VALUE *context);
 
 static void
@@ -569,7 +569,7 @@ ruby_whisper_full_get_segment_no_speech_prob(VALUE self, VALUE i_segment)
 static VALUE
 ruby_whisper_full_get_segment(VALUE self, VALUE i_segment)
 {
-  return rb_whisper_segment_initialize(self, NUM2INT(i_segment));
+  return rb_whisper_segment_s_new(self, NUM2INT(i_segment));
 }
 
 /*
@@ -603,7 +603,7 @@ ruby_whisper_each_segment(VALUE self)
 
   const int n_segments = whisper_full_n_segments(rw->context);
   for (int i = 0; i < n_segments; ++i) {
-    rb_yield(rb_whisper_segment_initialize(self, i));
+    rb_yield(rb_whisper_segment_s_new(self, i));
   }
 
   return self;
@@ -616,7 +616,7 @@ ruby_whisper_each_segment(VALUE self)
 static VALUE
 ruby_whisper_get_model(VALUE self)
 {
-  return rb_whisper_model_initialize(self);
+  return rb_whisper_model_s_new(self);
 }
 
 void

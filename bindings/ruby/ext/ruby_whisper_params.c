@@ -34,7 +34,7 @@ extern VALUE cVADParams;
 extern ID id_call;
 
 extern VALUE ruby_whisper_normalize_model_path(VALUE model_path);
-extern VALUE rb_whisper_segment_initialize(VALUE context, int index);
+extern VALUE rb_whisper_segment_s_new(VALUE context, int index);
 extern const rb_data_type_t ruby_whisper_vad_params_type;
 
 static ID param_names[RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT];
@@ -110,7 +110,7 @@ static void new_segment_callback(struct whisper_context *ctx, struct whisper_sta
   const int n_segments = whisper_full_n_segments_from_state(state);
   for (int i = n_new; i > 0; i--) {
     int i_segment = n_segments - i;
-    VALUE segment = rb_whisper_segment_initialize(*container->context, i_segment);
+    VALUE segment = rb_whisper_segment_s_new(*container->context, i_segment);
     for (int j = 0; j < callbacks_len; j++) {
       VALUE cb = rb_ary_entry(container->callbacks, j);
       rb_funcall(cb, id_call, 1, segment);
