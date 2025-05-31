@@ -106,4 +106,13 @@ class TestModel < TestBase
     assert_equal 1, model.ftype
     assert_equal "base", model.type
   end
+
+  def test_coreml_model_auto_download
+    uri = Whisper::Model.coreml_compiled_models[Whisper::Model.pre_converted_models["tiny"]]
+    model_path = Pathname(uri.to_path).sub_ext("")
+    model_path.rmtree if model_path.exist?
+
+    uri.cache
+    assert_path_exist model_path
+  end
 end
