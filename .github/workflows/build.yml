@@ -101,6 +101,10 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
+            export DEBIAN_FRONTEND=noninteractive
+            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
             apt update
             apt install -y build-essential libsdl2-dev cmake git
             cmake -B build
@@ -129,6 +133,10 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
+            export DEBIAN_FRONTEND=noninteractive
+            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
             apt update
             apt install -y build-essential libsdl2-dev cmake git
             cmake -B build -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8-a
@@ -157,6 +165,10 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
+            export DEBIAN_FRONTEND=noninteractive
+            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
             apt update
             apt install -y build-essential libsdl2-dev cmake git
             cmake -B build -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv7-a+fp
@@ -242,6 +254,10 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
+            export DEBIAN_FRONTEND=noninteractive
+            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
             apt update
             apt install -y build-essential cmake libsdl2-dev git
             cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }}
@@ -272,6 +288,10 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
+            export DEBIAN_FRONTEND=noninteractive
+            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
             apt update
             apt install -y build-essential cmake libsdl2-dev git
             cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8-a
@@ -302,6 +322,10 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
+            export DEBIAN_FRONTEND=noninteractive
+            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
             apt update
             apt install -y build-essential cmake libsdl2-dev git
             cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv7-a+fp
@@ -335,6 +359,10 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
+            export DEBIAN_FRONTEND=noninteractive
+            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
             apt update
             apt install -y clang build-essential cmake libsdl2-dev git
             cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
@@ -365,6 +393,10 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
+            export DEBIAN_FRONTEND=noninteractive
+            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
             apt update
             apt install -y build-essential cmake git
             cmake . -DCMAKE_BUILD_TYPE=Debug \
