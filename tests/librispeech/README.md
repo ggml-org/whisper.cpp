@@ -48,7 +48,7 @@ performance of whisper.cpp on LibriSpeech corpus.
 
 ## How-to guides
 
-### How to change the inferece parameters
+### How to change the inference parameters
 
 Create `eval.conf` and override variables.
 
