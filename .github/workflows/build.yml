@@ -101,6 +101,7 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
+            export DEBIAN_FRONTEND=noninteractive
 
             apt-get update
             apt-get install -y ca-certificates
@@ -137,6 +138,15 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
+
+            export DEBIAN_FRONTEND=noninteractive
+
+            apt-get update
+            apt-get install -y ca-certificates
+
+            # Switch to HTTPS mirrors
+            sed -i "s|http://archive.ubuntu.com|https://archive.ubuntu.com|g" /etc/apt/sources.list
+            sed -i "s|http://security.ubuntu.com|https://security.ubuntu.com|g" /etc/apt/sources.list
             apt update
             apt install -y build-essential libsdl2-dev cmake git
             cmake -B build -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8-a
@@ -165,6 +175,15 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
+            export DEBIAN_FRONTEND=noninteractive
+
+            apt-get update
+            apt-get install -y ca-certificates
+
+            # Switch to HTTPS mirrors
+            sed -i "s|http://archive.ubuntu.com|https://archive.ubuntu.com|g" /etc/apt/sources.list
+            sed -i "s|http://security.ubuntu.com|https://security.ubuntu.com|g" /etc/apt/sources.list
+
             apt update
             apt install -y build-essential libsdl2-dev cmake git
             cmake -B build -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv7-a+fp
@@ -250,6 +269,14 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
+            export DEBIAN_FRONTEND=noninteractive
+
+            apt-get update
+            apt-get install -y ca-certificates
+
+            # Switch to HTTPS mirrors
+            sed -i "s|http://archive.ubuntu.com|https://archive.ubuntu.com|g" /etc/apt/sources.list
+            sed -i "s|http://security.ubuntu.com|https://security.ubuntu.com|g" /etc/apt/sources.list
             apt update
             apt install -y build-essential cmake libsdl2-dev git
             cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }}
@@ -280,6 +307,14 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
+            export DEBIAN_FRONTEND=noninteractive
+
+            apt-get update
+            apt-get install -y ca-certificates
+
+            # Switch to HTTPS mirrors
+            sed -i "s|http://archive.ubuntu.com|https://archive.ubuntu.com|g" /etc/apt/sources.list
+            sed -i "s|http://security.ubuntu.com|https://security.ubuntu.com|g" /etc/apt/sources.list
             apt update
             apt install -y build-essential cmake libsdl2-dev git
             cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8-a
@@ -310,6 +345,15 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
+            export DEBIAN_FRONTEND=noninteractive
+
+            apt-get update
+            apt-get install -y ca-certificates
+
+            # Switch to HTTPS mirrors
+            sed -i "s|http://archive.ubuntu.com|https://archive.ubuntu.com|g" /etc/apt/sources.list
+            sed -i "s|http://security.ubuntu.com|https://security.ubuntu.com|g" /etc/apt/sources.list
+
             apt update
             apt install -y build-essential cmake libsdl2-dev git
             cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv7-a+fp
@@ -343,6 +387,15 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
+            export DEBIAN_FRONTEND=noninteractive
+
+            apt-get update
+            apt-get install -y ca-certificates
+
+            # Switch to HTTPS mirrors
+            sed -i "s|http://archive.ubuntu.com|https://archive.ubuntu.com|g" /etc/apt/sources.list
+            sed -i "s|http://security.ubuntu.com|https://security.ubuntu.com|g" /etc/apt/sources.list
+
             apt update
             apt install -y clang build-essential cmake libsdl2-dev git
             cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
@@ -373,6 +426,15 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
+            export DEBIAN_FRONTEND=noninteractive
+
+            apt-get update
+            apt-get install -y ca-certificates
+
+            # Switch to HTTPS mirrors
+            sed -i "s|http://archive.ubuntu.com|https://archive.ubuntu.com|g" /etc/apt/sources.list
+            sed -i "s|http://security.ubuntu.com|https://security.ubuntu.com|g" /etc/apt/sources.list
+
             apt update
             apt install -y build-essential cmake git
             cmake . -DCMAKE_BUILD_TYPE=Debug \
