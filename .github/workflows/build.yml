@@ -137,6 +137,10 @@ jobs:
             sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
             sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
 
+            apt-get update
+            apt-get install -y ca-certificates
+            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
+
             apt update
             apt install -y build-essential libsdl2-dev cmake git
             cmake -B build -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8-a
@@ -168,6 +172,10 @@ jobs:
             export DEBIAN_FRONTEND=noninteractive
             sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
             sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
+            apt-get update
+            apt-get install -y ca-certificates
+            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
 
             apt update
             apt install -y build-essential libsdl2-dev cmake git
@@ -292,6 +300,10 @@ jobs:
             sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
             sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
 
+            apt-get update
+            apt-get install -y ca-certificates
+            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
+
             apt update
             apt install -y build-essential cmake libsdl2-dev git
             cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8-a
@@ -325,6 +337,10 @@ jobs:
             export DEBIAN_FRONTEND=noninteractive
             sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
             sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
+            apt-get update
+            apt-get install -y ca-certificates
+            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
 
             apt update
             apt install -y build-essential cmake libsdl2-dev git
@@ -362,6 +378,10 @@ jobs:
             export DEBIAN_FRONTEND=noninteractive
             sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
             sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
+            apt-get update
+            apt-get install -y ca-certificates
+            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
 
             apt update
             apt install -y clang build-essential cmake libsdl2-dev git
