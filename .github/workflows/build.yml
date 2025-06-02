@@ -101,6 +101,11 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
+
+            # Switch to HTTPS mirrors
+            sed -i "s|http://archive.ubuntu.com|https://archive.ubuntu.com|g" /etc/apt/sources.list
+            sed -i "s|http://security.ubuntu.com|https://security.ubuntu.com|g" /etc/apt/sources.list
+
             apt update
             apt install -y build-essential libsdl2-dev cmake git
             cmake -B build
