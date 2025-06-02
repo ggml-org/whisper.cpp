@@ -318,7 +318,8 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 execute_process(COMMAND bash -c "prtconf |grep 'Implementation' | head -n 1" OUTPUT_VARIABLE POWER10_M)
             endif()
 
-            string(REGEX MATCHALL "POWER *([0-9]+)" MATCHED_STRING "${POWER10_M}")
+            string(TOUPPER "${POWER10_M}" POWER10_M_UPPER)
+            string(REGEX MATCHALL "POWER *([0-9]+)" MATCHED_STRING "${POWER10_M_UPPER}")
             string(REGEX REPLACE "POWER *([0-9]+)" "\\1" EXTRACTED_NUMBER "${MATCHED_STRING}")
 
             if (EXTRACTED_NUMBER GREATER_EQUAL 10)
