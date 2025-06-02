@@ -102,6 +102,9 @@ jobs:
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
 
+            apt-get update
+            apt-get install -y ca-certificates
+
             # Switch to HTTPS mirrors
             sed -i "s|http://archive.ubuntu.com|https://archive.ubuntu.com|g" /etc/apt/sources.list
             sed -i "s|http://security.ubuntu.com|https://security.ubuntu.com|g" /etc/apt/sources.list
