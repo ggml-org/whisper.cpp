@@ -167,13 +167,13 @@ API
 
 ### Transcription ###
 
-By default, `Whisper::Context#transcribe` works in parallel. You can make it work in single thread by passing `parallel: false`:
+By default, `Whisper::Context#transcribe` works in a single thread. You can make it work in parallel by passing `n_processors` option:
 
 ```ruby
-whisper.transcribe("path/to/audio.wav", params, parallel: false)
+whisper.transcribe("path/to/audio.wav", params, n_processors: Etc.nprocessors)
 ```
 
-Occasionally, transcription might be low accuracy when it works in parallel. Use `parallel: false` in such a case.
+Note that transcription occasionally might be low accuracy when it works in parallel.
 
 ### Segments ###
 
