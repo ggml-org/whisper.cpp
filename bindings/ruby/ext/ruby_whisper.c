@@ -24,7 +24,7 @@ ID id_URI;
 ID id_pre_converted_models;
 ID id_coreml_compiled_models;
 ID id_cache;
-ID id_parallel;
+ID id_n_processors;
 
 static bool is_log_callback_finalized = false;
 
@@ -143,7 +143,7 @@ void Init_whisper() {
   id_pre_converted_models = rb_intern("pre_converted_models");
   id_coreml_compiled_models = rb_intern("coreml_compiled_models");
   id_cache = rb_intern("cache");
-  id_parallel = rb_intern("parallel");
+  id_n_processors = rb_intern("n_processors");
 
   mWhisper = rb_define_module("Whisper");
   mVAD = rb_define_module_under(mWhisper, "VAD");

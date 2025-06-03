@@ -13,7 +13,7 @@ extern ID id_URI;
 extern ID id_pre_converted_models;
 extern ID id_coreml_compiled_models;
 extern ID id_cache;
-extern ID id_parallel;
+extern ID id_n_processors;
 
 extern VALUE cContext;
 extern VALUE eError;
@@ -636,7 +636,7 @@ init_ruby_whisper_context(VALUE *mWhisper)
 {
   cContext = rb_define_class_under(*mWhisper, "Context", rb_cObject);
 
-  transcribe_option_names[0] = id_parallel;
+  transcribe_option_names[0] = id_n_processors;
 
   rb_define_alloc_func(cContext, ruby_whisper_allocate);
   rb_define_method(cContext, "initialize", ruby_whisper_initialize, -1);

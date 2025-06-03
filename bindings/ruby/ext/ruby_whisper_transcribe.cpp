@@ -41,7 +41,7 @@ ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self) {
   rb_scan_args_kw(RB_SCAN_ARGS_LAST_HASH_KEYWORDS, argc, argv, "2:&", &wave_file_path, &params, &kws, &blk);
   rb_get_kwargs(kws, transcribe_option_names, 0, 1, opts);
 
-  bool parallel = !(NIL_P(opts[0]) || opts[0] == Qfalse);
+  int n_processors = opts[0] == Qundef ? 1 : NUM2INT(opts[0]);
 
   TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
@@ -72,13 +72,8 @@ ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self) {
 
   prepare_transcription(rwp, &self);
 
-  int result;
-  if (parallel) {
-    result = whisper_full_parallel(rw->context, rwp->params, pcmf32.data(), pcmf32.size(), 1);
-  } else {
-    result = whisper_full(rw->context, rwp->params, pcmf32.data(), pcmf32.size());
-  }
-  if (result != 0) {
+  if (whisper_full_parallel(rw->context, rwp->params, pcmf32.data(), pcmf32.size(), n_processors) != 0) {
+    fprintf(stderr, "failed to process audio\n");
     return self;
   }
   const int n_segments = whisper_full_n_segments(rw->context);
