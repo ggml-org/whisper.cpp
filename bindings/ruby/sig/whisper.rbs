@@ -36,8 +36,8 @@ module Whisper
     #       puts text
     #     end
     #
-    def transcribe: (string, Params, ?parallel: boolish) -> self
-                  | (string, Params, ?parallel: boolish) { (String) -> void } -> self
+    def transcribe: (string, Params, ?n_processors: Integer) -> self
+                  | (string, Params, ?n_processors: Integer) { (String) -> void } -> self
 
     def model_n_vocab: () -> Integer
     def model_n_audio_ctx: () -> Integer
