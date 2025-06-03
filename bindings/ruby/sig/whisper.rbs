@@ -30,11 +30,11 @@ module Whisper
     # transcribe a single file
     # can emit to a block results
     #
-    #   params = Whisper::Params.new
-    #   params.duration = 60_000
-    #   whisper.transcribe "path/to/audio.wav", params do |text|
-    #     puts text
-    #   end
+    #     params = Whisper::Params.new
+    #     params.duration = 60_000
+    #     whisper.transcribe "path/to/audio.wav", params do |text|
+    #       puts text
+    #     end
     #
     def transcribe: (string, Params) -> self
                   | (string, Params) { (String) -> void } -> self
@@ -50,16 +50,16 @@ module Whisper
 
     # Yields each Whisper::Segment:
     #
-    #   whisper.transcribe("path/to/audio.wav", params)
-    #   whisper.each_segment do |segment|
-    #     puts segment.text
-    #   end
+    #     whisper.transcribe("path/to/audio.wav", params)
+    #     whisper.each_segment do |segment|
+    #       puts segment.text
+    #     end
     #
     # Returns an Enumerator if no block given:
     #
-    #   whisper.transcribe("path/to/audio.wav", params)
-    #   enum = whisper.each_segment
-    #   enum.to_a # => [#<Whisper::Segment>, ...]
+    #     whisper.transcribe("path/to/audio.wav", params)
+    #     enum = whisper.each_segment
+    #     enum.to_a # => [#<Whisper::Segment>, ...]
     #
     def each_segment: { (Segment) -> void } -> void
                     | () -> Enumerator[Segment]
@@ -74,25 +74,25 @@ module Whisper
 
     # Start time of a segment indexed by +segment_index+ in centiseconds (10 times milliseconds).
     #
-    #   full_get_segment_t0(3) # => 1668 (16680 ms)
+    #     full_get_segment_t0(3) # => 1668 (16680 ms)
     #
     def full_get_segment_t0: (Integer) -> Integer
 
     # End time of a segment indexed by +segment_index+ in centiseconds (10 times milliseconds).
     #
-    #   full_get_segment_t1(3) # => 1668 (16680 ms)
+    #     full_get_segment_t1(3) # => 1668 (16680 ms)
     #
     def full_get_segment_t1: (Integer) -> Integer
 
     # Whether the next segment indexed by +segment_index+ is predicated as a speaker turn.
     #
-    #   full_get_segment_speacker_turn_next(3) # => true
+    #     full_get_segment_speacker_turn_next(3) # => true
     #
     def full_get_segment_speaker_turn_next: (Integer) -> (true | false)
 
     # Text of a segment indexed by +segment_index+.
     #
-    #   full_get_segment_text(3) # => "ask not what your country can do for you, ..."
+    #     full_get_segment_text(3) # => "ask not what your country can do for you, ..."
     #
     def full_get_segment_text: (Integer) -> String
 
@@ -282,9 +282,9 @@ module Whisper
 
     # Sets new segment callback, called for every newly generated text segment.
     #
-    #   params.new_segment_callback = ->(context, _, n_new, user_data) {
-    #     # ...
-    #   }
+    #     params.new_segment_callback = ->(context, _, n_new, user_data) {
+    #       # ...
+    #     }
     #
     def new_segment_callback=: (new_segment_callback) -> new_segment_callback
     def new_segment_callback: () -> (new_segment_callback | nil)
@@ -297,9 +297,9 @@ module Whisper
 
     # Sets progress callback, called on each progress update.
     #
-    #   params.new_segment_callback = ->(context, _, progress, user_data) {
-    #     # ...
-    #   }
+    #     params.new_segment_callback = ->(context, _, progress, user_data) {
+    #       # ...
+    #     }
     #
     # +progress+ is an Integer between 0 and 100.
     #
@@ -327,9 +327,9 @@ module Whisper
 
     # Sets abort callback, called to check if the process should be aborted.
     #
-    #   params.abort_callback = ->(user_data) {
-    #     # ...
-    #   }
+    #     params.abort_callback = ->(user_data) {
+    #       # ...
+    #     }
     #
     #
     def abort_callback=: (abort_callback) -> abort_callback
@@ -358,9 +358,9 @@ module Whisper
 
     # Hook called on new segment. Yields each Whisper::Segment.
     #
-    #   whisper.on_new_segment do |segment|
-    #     # ...
-    #   end
+    #     whisper.on_new_segment do |segment|
+    #       # ...
+    #     end
     #
     def on_new_segment: { (Segment) -> void } -> void
 
@@ -374,13 +374,13 @@ module Whisper
 
     # Call block to determine whether abort or not. Return +true+ when you want to abort.
     #
-    #   params.abort_on do
-    #     if some_condition
-    #       true # abort
-    #     else
-    #       false # continue
+    #     params.abort_on do
+    #       if some_condition
+    #         true # abort
+    #       else
+    #         false # continue
+    #       end
     #     end
-    #   end
     #
     def abort_on: { (Object user_data) -> boolish } -> void
   end
