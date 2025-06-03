@@ -87,9 +87,8 @@ ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self) {
     const char * text = whisper_full_get_segment_text(rw->context, i);
     output = rb_str_concat(output, rb_str_new2(text));
   }
-  VALUE idCall = id_call;
   if (blk != Qnil) {
-    rb_funcall(blk, idCall, 1, output);
+    rb_funcall(blk, id_call, 1, output);
   }
   return self;
 }
