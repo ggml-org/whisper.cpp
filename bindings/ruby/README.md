@@ -299,6 +299,11 @@ First call of `rake test` builds an extension and downloads a model for testing.
 
 If something seems wrong on build, running `rake clean` solves some cases.
 
+### Need help ###
+
+* Windows support
+* Refinement of C/C++ code, especially memory management
+
 License
 -------
 
