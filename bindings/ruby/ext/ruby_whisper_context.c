@@ -13,6 +13,7 @@ extern ID id_URI;
 extern ID id_pre_converted_models;
 extern ID id_coreml_compiled_models;
 extern ID id_cache;
+extern ID id_parallel;
 
 extern VALUE cContext;
 extern VALUE eError;
@@ -23,6 +24,8 @@ extern VALUE ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self);
 extern VALUE rb_whisper_model_s_new(VALUE context);
 extern VALUE rb_whisper_segment_s_new(VALUE context, int index);
 extern void prepare_transcription(ruby_whisper_params *rwp, VALUE *context);
+
+ID transcribe_option_names[1];
 
 static void
 ruby_whisper_free(ruby_whisper *rw)
@@ -632,6 +635,8 @@ void
 init_ruby_whisper_context(VALUE *mWhisper)
 {
   cContext = rb_define_class_under(*mWhisper, "Context", rb_cObject);
+
+  transcribe_option_names[0] = id_parallel;
 
   rb_define_alloc_func(cContext, ruby_whisper_allocate);
   rb_define_method(cContext, "initialize", ruby_whisper_initialize, -1);

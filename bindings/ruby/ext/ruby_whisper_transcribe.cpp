@@ -13,6 +13,7 @@ extern const rb_data_type_t ruby_whisper_params_type;
 
 extern ID id_to_s;
 extern ID id_call;
+extern ID transcribe_option_names[1];
 
 extern void
 prepare_transcription(ruby_whisper_params * rwp, VALUE * self);
@@ -34,9 +35,14 @@ VALUE
 ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self) {
   ruby_whisper *rw;
   ruby_whisper_params *rwp;
-  VALUE wave_file_path, blk, params;
+  VALUE wave_file_path, blk, params, kws;
+  VALUE opts[1];
 
-  rb_scan_args(argc, argv, "02&", &wave_file_path, &params, &blk);
+  rb_scan_args_kw(RB_SCAN_ARGS_LAST_HASH_KEYWORDS, argc, argv, "2:&", &wave_file_path, &params, &kws, &blk);
+  rb_get_kwargs(kws, transcribe_option_names, 0, 1, opts);
+
+  bool parallel = !(NIL_P(opts[0]) || opts[0] == Qfalse);
+
   TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
   TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
 
@@ -66,8 +72,13 @@ ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self) {
 
   prepare_transcription(rwp, &self);
 
-  if (whisper_full_parallel(rw->context, rwp->params, pcmf32.data(), pcmf32.size(), 1) != 0) {
-    fprintf(stderr, "failed to process audio\n");
+  int result;
+  if (parallel) {
+    result = whisper_full_parallel(rw->context, rwp->params, pcmf32.data(), pcmf32.size(), 1);
+  } else {
+    result = whisper_full(rw->context, rwp->params, pcmf32.data(), pcmf32.size());
+  }
+  if (result != 0) {
     return self;
   }
   const int n_segments = whisper_full_n_segments(rw->context);
