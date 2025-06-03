@@ -70,17 +70,6 @@ end
 
 Some models are prepared up-front:
 
-```ruby
-base_en = Whisper::Model.pre_converted_models["base.en"]
-whisper = Whisper::Context.new(base_en)
-```
-
-At first time you use a model, it is downloaded automatically. After that, downloaded cached file is used. To clear cache, call `#clear_cache`:
-
-```ruby
-Whisper::Model.pre_converted_models["base"].clear_cache
-```
-
 You also can use shorthand for pre-converted models:
 
 ```ruby
@@ -103,6 +92,19 @@ puts Whisper::Model.pre_converted_models.keys
 # base-q8_0
 #   :
 #   :
+```
+
+You can also retrieve each model:
+
+```ruby
+base_en = Whisper::Model.pre_converted_models["base.en"]
+whisper = Whisper::Context.new(base_en)
+```
+
+At first time you use a model, it is downloaded automatically. After that, downloaded cached file is used. To clear cache, call `#clear_cache`:
+
+```ruby
+Whisper::Model.pre_converted_models["base"].clear_cache
 ```
 
 You can also use local model files you prepared:
