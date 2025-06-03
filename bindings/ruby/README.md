@@ -165,6 +165,16 @@ For details on VAD, see [whisper.cpp's README](https://github.com/ggml-org/whisp
 API
 ---
 
+### Transcription ###
+
+By default, `Whisper::Context#transcribe` works in parallel. You can make it work in single thread by passing `parallel: false`:
+
+```ruby
+whisper.transcribe("path/to/audio.wav", params, parallel: false)
+```
+
+Occasionally, transcription might be low accuracy when it works in parallel. Use `parallel: false` in such a case.
+
 ### Segments ###
 
 Once `Whisper::Context#transcribe` called, you can retrieve segments by `#each_segment`:
