@@ -67,17 +67,15 @@ file LIB_FILE => [SO_FILE, "lib"] do |t|
 end
 CLEAN.include LIB_FILE
 
-Rake::TestTask.new do |t|
-  t.test_files = FileList["tests/test_*.rb"]
-end
+Rake::TestTask.new
 
-TEST_MEMORY_VIEW = "tests/jfk_reader/jfk_reader.#{RbConfig::CONFIG['DLEXT']}"
-file TEST_MEMORY_VIEW => "tests/jfk_reader/jfk_reader.c" do |t|
-  chdir "tests/jfk_reader" do
+TEST_MEMORY_VIEW = "test/jfk_reader/jfk_reader.#{RbConfig::CONFIG['DLEXT']}"
+file TEST_MEMORY_VIEW => "test/jfk_reader/jfk_reader.c" do |t|
+  chdir "test/jfk_reader" do
     ruby "extconf.rb"
     sh "make"
   end
 end
-CLEAN.include "tests/jfk_reader/jfk_reader.{o,#{RbConfig::CONFIG['DLEXT']}}"
+CLEAN.include "test/jfk_reader/jfk_reader.{o,#{RbConfig::CONFIG['DLEXT']}}"
 
 task test: [LIB_FILE, TEST_MEMORY_VIEW]
