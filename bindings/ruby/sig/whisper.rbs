@@ -25,7 +25,7 @@ module Whisper
   def self.system_info_str: () -> String
 
   class Context
-    def self.new: (path | ::URI::HTTP) -> instance
+    def self.new: (String | path | ::URI::HTTP) -> instance
 
     # transcribe a single file
     # can emit to a block results
