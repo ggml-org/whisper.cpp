@@ -57,6 +57,7 @@ static struct whisper_full_params whisper_full_default_params_cb(struct whisper_
 	params.progress_callback_user_data = (void*)(ctx);
 	return params;
 }
+
 */
 import "C"
 
@@ -69,6 +70,7 @@ type (
 	TokenData        C.struct_whisper_token_data
 	SamplingStrategy C.enum_whisper_sampling_strategy
 	Params           C.struct_whisper_full_params
+	ContextParams    C.struct_whisper_whisper_context_params
 )
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -99,9 +101,14 @@ var (
 
 // Allocates all memory needed for the model and loads the model from the given file.
 // Returns NULL on failure.
-func Whisper_init(path string) *Context {
+func Whisper_init(path string, flashAttn, disableLog bool) *Context {
 	cPath := C.CString(path)
 	defer C.free(unsafe.Pointer(cPath))
+	if disableLog{
+		C.whisper_log_disable()
+	}
+	params := C.whisper_context_default_params()
+	params.flash_attn = toBool(flashAttn)
 	if ctx := C.whisper_init_from_file_with_params(cPath, C.whisper_context_default_params()); ctx != nil {
 		return (*Context)(ctx)
 	} else {
