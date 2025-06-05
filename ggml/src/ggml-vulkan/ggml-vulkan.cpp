@@ -196,6 +196,7 @@ enum vk_device_architecture {
     AMD_RDNA1,
     AMD_RDNA2,
     AMD_RDNA3,
+    INTEL_XE2,
 };
 
 static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& device) {
@@ -245,6 +246,34 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
                 return vk_device_architecture::AMD_RDNA3;
             }
             return vk_device_architecture::AMD_RDNA2;
+        }
+    } else if (props.vendorID == VK_VENDOR_ID_INTEL) {
+        const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
+
+        bool subgroup_size_control = false;
+
+        for (const auto& properties : ext_props) {
+            if (strcmp("VK_EXT_subgroup_size_control", properties.extensionName) == 0) {
+                subgroup_size_control = true;
+            }
+        }
+
+        if (!subgroup_size_control) {
+            return vk_device_architecture::OTHER;
+        }
+
+        vk::PhysicalDeviceProperties2 props2;
+        vk::PhysicalDeviceSubgroupSizeControlPropertiesEXT subgroup_size_control_props;
+
+        props2.pNext = &subgroup_size_control_props;
+        device.getProperties2(&props2);
+
+        if (subgroup_size_control_props.minSubgroupSize == 16) {
+            // Xe2 architecture uses SIMD16 while previous Xe and Gen architecture uses SIMD8.
+            // Minimum subgroup size matches the SIMD width so we distinguish architecture by checking this value.
+            // https://www.intel.com/content/www/us/en/content-details/824434/2024-intel-tech-tour-xe2-and-lunar-lake-s-gpu.html
+            // https://www.intel.com/content/www/us/en/docs/oneapi/optimization-guide-gpu/2025-0/intel-xe-gpu-architecture.html
+            return vk_device_architecture::INTEL_XE2;
         }
     }
     return vk_device_architecture::OTHER;
@@ -10263,8 +10292,9 @@ static bool ggml_vk_instance_portability_enumeration_ext_available(const std::ve
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch) {
     switch (props.vendorID) {
     case VK_VENDOR_ID_INTEL:
-        // Intel drivers don't support coopmat properly yet
-        return false;
+        // Only allowing Xe2 GPU at the moment since Xe2 GPU can gain significant performance boost,
+        // while some older hardware (ex. Arc A770) has performance regressions
+        return arch == vk_device_architecture::INTEL_XE2;
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
             // Workaround for AMD proprietary driver reporting support on all GPUs
