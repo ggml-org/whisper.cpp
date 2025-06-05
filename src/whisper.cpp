@@ -8325,10 +8325,6 @@ WHISPER_API const char * whisper_bench_ggml_mul_mat_str(int n_threads) {
 // token-level timestamps
 //
 
-static int timestamp_to_sample(int64_t t, int n_samples) {
-    return std::max(0, std::min((int) n_samples - 1, (int) ((t*WHISPER_SAMPLE_RATE)/100)));
-}
-
 static int64_t sample_to_timestamp(int i_sample) {
     return (100ll*i_sample)/WHISPER_SAMPLE_RATE;
 }
@@ -8376,6 +8372,18 @@ static std::vector<float> get_signal_energy(const float * signal, int n_samples,
     }
 
     return result;
+}
+
+static int timestamp_to_sample(int64_t t, int64_t segment_t0, int n_samples) {
+    // Convert absolute timestamp to segment-relative timestamp
+    int64_t relative_t = t - segment_t0;
+    int sample = (int)((relative_t * WHISPER_SAMPLE_RATE) / 100);
+    return std::max(0, std::min(n_samples - 1, sample));
+}
+
+static int64_t sample_to_timestamp(int i_sample, int64_t segment_t0) {
+    int64_t relative_timestamp = (100ll * i_sample) / WHISPER_SAMPLE_RATE;
+    return relative_timestamp + segment_t0;
 }
 
 static void whisper_exp_compute_token_level_timestamps(
@@ -8518,8 +8526,8 @@ static void whisper_exp_compute_token_level_timestamps(
                 continue;
             }
 
-            int s0 = timestamp_to_sample(tokens[j].t0, n_samples);
-            int s1 = timestamp_to_sample(tokens[j].t1, n_samples);
+            int s0 = timestamp_to_sample(tokens[j].t0, segment.t0, n_samples);
+            int s1 = timestamp_to_sample(tokens[j].t1, segment.t0, n_samples);
 
             const int ss0 = std::max(s0 - hw, 0);
             const int ss1 = std::min(s1 + hw, n_samples);
@@ -8540,7 +8548,7 @@ static void whisper_exp_compute_token_level_timestamps(
                     while (k > 0 && state.energy[k] > thold) {
                         k--;
                     }
-                    tokens[j].t0 = sample_to_timestamp(k);
+                    tokens[j].t0 = sample_to_timestamp(k, segment.t0);
                     if (tokens[j].t0 < tokens[j - 1].t1) {
                         tokens[j].t0 = tokens[j - 1].t1;
                     } else {
@@ -8551,7 +8559,7 @@ static void whisper_exp_compute_token_level_timestamps(
                         k++;
                     }
                     s0 = k;
-                    tokens[j].t0 = sample_to_timestamp(k);
+                    tokens[j].t0 = sample_to_timestamp(k, segment.t0);
                 }
             }
 
@@ -8561,7 +8569,7 @@ static void whisper_exp_compute_token_level_timestamps(
                     while (k < n_samples - 1 && state.energy[k] > thold) {
                         k++;
                     }
-                    tokens[j].t1 = sample_to_timestamp(k);
+                    tokens[j].t1 = sample_to_timestamp(k, segment.t0);
                     if (j < n - 1 && tokens[j].t1 > tokens[j + 1].t0) {
                         tokens[j].t1 = tokens[j + 1].t0;
                     } else {
@@ -8572,7 +8580,7 @@ static void whisper_exp_compute_token_level_timestamps(
                         k--;
                     }
                     s1 = k;
-                    tokens[j].t1 = sample_to_timestamp(k);
+                    tokens[j].t1 = sample_to_timestamp(k, segment.t0);
                 }
             }
         }
