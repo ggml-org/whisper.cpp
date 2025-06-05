@@ -8394,8 +8394,6 @@ static void whisper_exp_compute_token_level_timestamps(
         return;
     }
 
-    const int64_t t0 = segment.t0;
-    const int64_t t1 = segment.t1;
 
     const int n = tokens.size();
 
@@ -8404,8 +8402,8 @@ static void whisper_exp_compute_token_level_timestamps(
     }
 
     if (n == 1) {
-        tokens[0].t0 = t0;
-        tokens[0].t1 = t1;
+        tokens[0].t0 = segment.t0;
+        tokens[0].t1 = segment.t1;
 
         return;
     }
@@ -8413,6 +8411,16 @@ static void whisper_exp_compute_token_level_timestamps(
     auto & t_beg    = state.t_beg;
     auto & t_last   = state.t_last;
     auto & tid_last = state.tid_last;
+
+    if (segment.t0 == 0 && n >= 3 &&
+        tokens[1].tid == whisper_token_beg(&ctx) &&
+        tokens[2].tid >= whisper_token_beg(&ctx)) {
+        segment.t0 = t_beg + 2*(tokens[2].tid - whisper_token_beg(&ctx));
+        WHISPER_LOG_INFO("%s: audio samples skipped, setting segment.t0 to %d\n", __func__, (int)segment.t0);
+    }
+
+    const int64_t t0 = segment.t0;
+    const int64_t t1 = segment.t1;
 
     for (int j = 0; j < n; ++j) {
         auto & token = tokens[j];
