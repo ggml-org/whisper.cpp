@@ -664,7 +664,7 @@ init_ruby_whisper_context(VALUE *mWhisper)
   rb_define_method(cContext, "full", ruby_whisper_full, -1);
   rb_define_method(cContext, "full_parallel", ruby_whisper_full_parallel, -1);
 
-  // High leve
+  // High level
   rb_define_method(cContext, "full_get_segment", ruby_whisper_full_get_segment, 1);
   rb_define_method(cContext, "each_segment", ruby_whisper_each_segment, 0);
 
