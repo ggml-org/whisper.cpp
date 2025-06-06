@@ -10,20 +10,10 @@ More info is available in [issue #10](https://github.com/ggerganov/whisper.cpp/i
 
 https://user-images.githubusercontent.com/1991296/194935793-76afede7-cfa8-48d8-a80f-28ba83be7d09.mp4
 
-## Sliding window mode with VAD
+## VAD support
 
-Setting the `--step` argument to `0` enables the sliding window mode:
-
-```bash
- ./build/bin/whisper-stream -m ./models/ggml-base.en.bin -t 6 --step 0 --length 30000 -vth 0.6
-```
-
-In this mode, the tool will transcribe only after some speech activity is detected. A very
-basic VAD detector is used, but in theory a more sophisticated approach can be added. The
-`-vth` argument determines the VAD threshold - higher values will make it detect silence more often.
-It's best to tune it to the specific use case, but a value around `0.6` should be OK in general.
-When silence is detected, it will transcribe the last `--length` milliseconds of audio and output
-a transcription block that is suitable for parsing.
+VAD support can be enabled by specifying the `--vad` and optionally a `--vad-model` (by default
+`models/for-tests-silero-v5.1.2-ggml.bin` will be used).
 
 ## Building
 
