@@ -8420,11 +8420,14 @@ static void whisper_exp_compute_token_level_timestamps(
     auto & t_last   = state.t_last;
     auto & tid_last = state.tid_last;
 
-    if (segment.t0 == 0 && n >= 3 &&
+    // Check if first segment has skipped audio (multiple timestamp tokens after [_BEG_])
+    if (segment.t0 == 0 && n >= 4 &&
         tokens[1].tid == whisper_token_beg(&ctx) &&
-        tokens[2].tid >= whisper_token_beg(&ctx)) {
+        tokens[2].tid >= whisper_token_beg(&ctx) &&
+        tokens[3].tid >= tokens[2].tid) {
+
         segment.t0 = t_beg + 2*(tokens[2].tid - whisper_token_beg(&ctx));
-        WHISPER_LOG_INFO("%s: audio samples skipped, setting segment.t0 to %d\n", __func__, (int)segment.t0);
+        WHISPER_LOG_INFO("%s: detected skipped audio sequence, setting segment.t0 to %d\n", __func__, (int)segment.t0);
     }
 
     const int64_t t0 = segment.t0;
