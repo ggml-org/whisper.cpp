@@ -6,6 +6,7 @@ module Whisper
       ">" => "&gt;",
     }
     SRT_ESCAPES_RE = Regexp.union(SRT_ESCAPES.keys)
+    private_constant :SRT_ESCAPES, :SRT_ESCAPES_RE
 
     def to_srt_cue
       "#{srt_start_time} --> #{srt_end_time}\n#{srt_text}\n"
