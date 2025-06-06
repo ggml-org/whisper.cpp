@@ -76,15 +76,16 @@ ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self) {
     fprintf(stderr, "failed to process audio\n");
     return self;
   }
+  if (NIL_P(blk)) {
+    return self;
+  }
   const int n_segments = whisper_full_n_segments(rw->context);
   VALUE output = rb_str_new2("");
   for (int i = 0; i < n_segments; ++i) {
     const char * text = whisper_full_get_segment_text(rw->context, i);
     output = rb_str_concat(output, rb_str_new2(text));
   }
-  if (blk != Qnil) {
-    rb_funcall(blk, id_call, 1, output);
-  }
+  rb_funcall(blk, id_call, 1, output);
   return self;
 }
 #ifdef __cplusplus
