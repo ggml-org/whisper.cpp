@@ -245,4 +245,48 @@ class TestWhisper < TestBase
       assert_match(/for your country/i, text)
     end
   end
+
+  def test_to_srt
+    whisper = Whisper::Context.new("base.en")
+    whisper.transcribe AUDIO, @params
+
+    lines = whisper.to_srt.lines
+    assert_match /\A\d+\n/, lines[0]
+    assert_match /\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}\n/, lines[1]
+    assert_match /ask not what your country can do for you, ask what you can do for your country/, lines[2]
+  end
+
+  def test_to_webvtt
+    whisper = Whisper::Context.new("base.en")
+    whisper.transcribe AUDIO, @params
+
+    lines = whisper.to_webvtt.lines
+    assert_equal "WEBVTT\n", lines[0]
+    assert_equal "\n", lines[1]
+    assert_match /\A\d+\n/, lines[2]
+    assert_match /\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}\n/, lines[3]
+    assert_match /ask not what your country can do for you, ask what you can do for your country/, lines[4]
+  end
+
+  sub_test_case "Format needs escape" do
+    def setup
+      @whisper = Whisper::Context.new("base.en")
+      @whisper.transcribe AUDIO, Whisper::Params.new
+      segment = @whisper.each_segment.first
+      segment.define_singleton_method :text do
+        "& so my fellow Americans --> ask not what your country can do for you <-- ask what you can do for your country."
+      end
+      @whisper.define_singleton_method :each_segment do
+        Enumerator.new(3) {|yielder| 3.times {yielder << segment}}
+      end
+    end
+
+    def test_to_srt_escape
+      assert_equal "&amp; so my fellow Americans --&gt; ask not what your country can do for you &lt;-- ask what you can do for your country.\n", @whisper.to_srt.lines[2]
+    end
+
+    def test_to_webvtt_escape
+      assert_equal "&amp; so my fellow Americans --&gt; ask not what your country can do for you &lt;-- ask what you can do for your country.\n", @whisper.to_webvtt.lines[4]
+    end
+  end
 end
