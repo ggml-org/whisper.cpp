@@ -162,6 +162,32 @@ Whisper::Params.new(
 
 For details on VAD, see [whisper.cpp's README](https://github.com/ggml-org/whisper.cpp?tab=readme-ov-file#voice-activity-detection-vad).
 
+### Output ###
+
+whispercpp supports SRT and WebVTT output:
+
+```ruby
+puts whisper.transcribe("path/to/audio.wav", Whisper::Params.new).to_webvtt
+# =>
+WEBVTT
+
+1
+00:00:00.000 --> 00:00:03.860
+ My thought I have nobody by a beauty and will as you poured.
+
+2
+00:00:03.860 --> 00:00:09.840
+ Mr. Rochester is sub in that so-don't find simplest, and devoted about, to let might in
+
+3
+00:00:09.840 --> 00:00:09.940
+ a
+
+```
+
+You may call `#to_srt`, too
+
+
 API
 ---
 
