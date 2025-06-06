@@ -170,5 +170,7 @@ void Init_whisper() {
   init_ruby_whisper_model(&mWhisper);
   init_ruby_whisper_vad_params(&mVAD);
 
+  rb_require("whisper/context");
+  rb_require("whisper/segment");
   rb_require("whisper/model/uri");
 }
