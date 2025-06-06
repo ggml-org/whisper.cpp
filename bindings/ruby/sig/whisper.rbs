@@ -116,6 +116,9 @@ module Whisper
     def full_parallel: (Params, Array[Float], ?Integer n_samples) -> self
                      | (Params, _Samples, ?Integer n_samples) -> self
                      | (Params, _Samples, ?Integer? n_samples, Integer n_processors) -> self
+
+    def to_srt: () -> String
+    def to_webvtt: () -> String
   end
 
   class Params
@@ -428,6 +431,8 @@ module Whisper
 
     def text: () -> String
     def no_speech_prob: () -> Float
+    def to_srt_cue: () -> String
+    def to_webvtt_cue: () -> String
   end
 
   module VAD
