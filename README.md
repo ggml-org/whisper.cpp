@@ -731,7 +731,37 @@ let package = Package(
         )
     ]
 )
-```
+
+Follow these steps to try the spotlight‑style transcription overlay using the
+optimized **Turbo** model on macOS:
+
+1. Clone the repository and build the XCFramework:
+
+   ```bash
+   git clone https://github.com/ggml-org/whisper.cpp.git
+   cd whisper.cpp
+   ./build-xcframework.sh
+   ```
+
+   The script places `whisper.xcframework` inside the `build` folder.
+
+2. Open the `examples/WhisperSpotlight` package in Xcode:
+
+   ```bash
+   open examples/WhisperSpotlight/Package.swift
+   ```
+
+3. In Xcode, add the generated `whisper.xcframework` to the
+   **WhisperSpotlight** target (File → Add Files to “WhisperSpotlight” …).
+
+4. Build and run the app. On first launch it will download the
+   `ggml-large-v3-turbo.bin` model (~1.6 GB) into
+   `~/Library/Application Support/WhisperSpotlight/`.
+
+5. Press **Option‑Space** to toggle the overlay. Speak while the window shows
+   “Listening”. Once transcription finishes, the recognized text is copied to the
+   clipboard and briefly shown on screen.
+
 
 ## Voice Activity Detection (VAD)
 Support for Voice Activity Detection (VAD) can be enabled using the `--vad`
@@ -831,6 +861,7 @@ Some of the examples are even ported to run in the browser using WebAssembly. Ch
 | [whisper-talk-llama](examples/talk-llama)           |                                       | Talk with a LLaMA bot                                                                                                           |
 | [whisper.objc](examples/whisper.objc)               |                                       | iOS mobile application using whisper.cpp                                                                                        |
 | [whisper.swiftui](examples/whisper.swiftui)         |                                       | SwiftUI iOS / macOS application using whisper.cpp                                                                               |
+| [WhisperSpotlight](examples/WhisperSpotlight)       |                   | macOS overlay with global hotkey for speech transcription                                                                     |
 | [whisper.android](examples/whisper.android)         |                                       | Android mobile application using whisper.cpp                                                                                    |
 | [whisper.nvim](examples/whisper.nvim)               |                                       | Speech-to-text plugin for Neovim                                                                                                |
 | [generate-karaoke.sh](examples/generate-karaoke.sh) |                                       | Helper script to easily [generate a karaoke video](https://youtu.be/uj7hVta4blM) of raw audio capture                           |
