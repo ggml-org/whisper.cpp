@@ -1,5 +1,5 @@
 import Foundation
-import UIKit
+import AppKit
 import whisper
 
 enum WhisperError: Error {
@@ -122,8 +122,8 @@ actor WhisperContext {
 
         whisper_print_timings(context)
 
-        let deviceModel = await UIDevice.current.model
-        let systemName = await UIDevice.current.systemName
+        let deviceModel = Host.current().localizedName ?? "Mac"
+        let systemName = ProcessInfo.processInfo.operatingSystemVersionString
         let systemInfo = self.systemInfo()
         let timings: whisper_timings = whisper_get_timings(context).pointee
         let encodeMs = String(format: "%.2f", timings.encode_ms)
