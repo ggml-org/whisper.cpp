@@ -81,7 +81,7 @@ struct ggml_compute_params {
 #define ggml_vld1q_u32(w,x,y,z) { (w), (x), (y), (z) }
 #endif // _MSC_VER
 
-#if !defined(__aarch64__)
+#if !defined(__aarch64__) && !defined(_MSC_VER)
 
 // 32-bit ARM compatibility
 
