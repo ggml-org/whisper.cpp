@@ -222,7 +222,7 @@ whisper
       ed: format_time(segment.end_time),
       text: segment.text
     }
-    line << " (speaker turned)" if segment.speaker_next_turn?
+    line << " (speaker turned)" if segment.speaker_turn_next?
     puts line
   end
 
@@ -238,7 +238,7 @@ params.on_new_segment do |segment|
     ed: format_time(segment.end_time),
     text: segment.text
   }
-  line << " (speaker turned)" if segment.speaker_next_turn?
+  line << " (speaker turned)" if segment.speaker_turn_next?
   puts line
 end
 

@@ -137,7 +137,7 @@ init_ruby_whisper_segment(VALUE *mWhisper, VALUE *cContext)
   rb_define_alloc_func(cSegment, ruby_whisper_segment_allocate);
   rb_define_method(cSegment, "start_time", ruby_whisper_segment_get_start_time, 0);
   rb_define_method(cSegment, "end_time", ruby_whisper_segment_get_end_time, 0);
-  rb_define_method(cSegment, "speaker_next_turn?", ruby_whisper_segment_get_speaker_turn_next, 0);
+  rb_define_method(cSegment, "speaker_turn_next?", ruby_whisper_segment_get_speaker_turn_next, 0);
   rb_define_method(cSegment, "text", ruby_whisper_segment_get_text, 0);
   rb_define_method(cSegment, "no_speech_prob", ruby_whisper_segment_get_no_speech_prob, 0);
 }

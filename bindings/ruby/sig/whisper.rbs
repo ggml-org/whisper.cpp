@@ -427,7 +427,7 @@ module Whisper
     def end_time: () -> Integer
 
     # Whether the next segment is predicted as a speaker turn.
-    def speaker_next_turn?: () -> (true | false)
+    def speaker_turn_next?: () -> (true | false)
 
     def text: () -> String
     def no_speech_prob: () -> Float
