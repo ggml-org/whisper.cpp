@@ -1,6 +1,15 @@
 #include <ruby.h>
 #include "ruby_whisper.h"
 
+#define N_KEY_NAMES 5
+
+static VALUE sym_start_time;
+static VALUE sym_end_time;
+static VALUE sym_text;
+static VALUE sym_no_speech_prob;
+static VALUE sym_speaker_turn_next;
+static VALUE key_names;
+
 extern const rb_data_type_t ruby_whisper_type;
 
 extern VALUE cSegment;
@@ -129,10 +138,77 @@ ruby_whisper_segment_get_no_speech_prob(VALUE self)
   return DBL2NUM(whisper_full_get_segment_no_speech_prob(rw->context, rws->index));
 }
 
+/*
+ * call-seq:
+ *   deconstruct_keys(keys) -> hash
+ *
+ *  Possible keys: :start_time, :end_time, :text, :no_speech_prob, :speaker_turn_next
+ *
+ *   whisper.each_segment do |segment|
+ *     segment => {start_time:, end_time:, text:, no_speech_prob:, speaker_turn_next:}
+ *
+ *     puts "[#{start_time} --> #{end_time}] #{text} (no speech prob: #{no_speech_prob}#{speaker_turn_next ? ', speaker turns next' : ''})"
+ *   end
+ */
+static VALUE
+ruby_whisper_segment_deconstruct_keys(VALUE self, VALUE keys)
+{
+  ruby_whisper_segment *rws;
+  TypedData_Get_Struct(self, ruby_whisper_segment, &ruby_whisper_segment_type, rws);
+  ruby_whisper *rw;
+  TypedData_Get_Struct(rws->context, ruby_whisper, &ruby_whisper_type, rw);
+
+  VALUE hash = rb_hash_new();
+  long n_keys;
+  if (NIL_P(keys)) {
+    keys = key_names;
+    n_keys = N_KEY_NAMES;
+  } else {
+    n_keys = RARRAY_LEN(keys);
+    if (n_keys > N_KEY_NAMES) {
+      return hash;
+    }
+  }
+  for (int i = 0; i < n_keys; i++) {
+    VALUE key = rb_ary_entry(keys, i);
+    if (key == sym_start_time) {
+      rb_hash_aset(hash, key, ruby_whisper_segment_get_start_time(self));
+    }
+    if (key == sym_end_time) {
+      rb_hash_aset(hash, key, ruby_whisper_segment_get_end_time(self));
+    }
+    if (key == sym_text) {
+      rb_hash_aset(hash, key, ruby_whisper_segment_get_text(self));
+    }
+    if (key == sym_no_speech_prob) {
+      rb_hash_aset(hash, key, ruby_whisper_segment_get_no_speech_prob(self));
+    }
+    if (key == sym_speaker_turn_next) {
+      rb_hash_aset(hash, key, ruby_whisper_segment_get_speaker_turn_next(self));
+    }
+  }
+
+  return hash;
+}
+
 void
 init_ruby_whisper_segment(VALUE *mWhisper, VALUE *cContext)
 {
   cSegment  = rb_define_class_under(*mWhisper, "Segment", rb_cObject);
+
+  sym_start_time = ID2SYM(rb_intern("start_time"));
+  sym_end_time = ID2SYM(rb_intern("end_time"));
+  sym_text = ID2SYM(rb_intern("text"));
+  sym_no_speech_prob = ID2SYM(rb_intern("no_speech_prob"));
+  sym_speaker_turn_next = ID2SYM(rb_intern("speaker_turn_next"));
+  key_names = rb_ary_new3(
+    N_KEY_NAMES,
+    sym_start_time,
+    sym_end_time,
+    sym_text,
+    sym_no_speech_prob,
+    sym_speaker_turn_next
+  );
 
   rb_define_alloc_func(cSegment, ruby_whisper_segment_allocate);
   rb_define_method(cSegment, "start_time", ruby_whisper_segment_get_start_time, 0);
@@ -140,4 +216,5 @@ init_ruby_whisper_segment(VALUE *mWhisper, VALUE *cContext)
   rb_define_method(cSegment, "speaker_turn_next?", ruby_whisper_segment_get_speaker_turn_next, 0);
   rb_define_method(cSegment, "text", ruby_whisper_segment_get_text, 0);
   rb_define_method(cSegment, "no_speech_prob", ruby_whisper_segment_get_no_speech_prob, 0);
+  rb_define_method(cSegment, "deconstruct_keys", ruby_whisper_segment_deconstruct_keys, 1);
 }
