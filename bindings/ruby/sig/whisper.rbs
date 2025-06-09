@@ -418,6 +418,14 @@ module Whisper
   end
 
   class Segment
+    type deconstructed_keys = {
+      start_time: (Integer | nil),
+      end_time: (Integer | nil),
+      text: (String | nil),
+      no_speech_prob: (Float | nil),
+      speaker_turn_next: (true | false | nil)
+    }
+
     # Start time in milliseconds.
     #
     def start_time: () -> Integer
@@ -433,6 +441,15 @@ module Whisper
     def no_speech_prob: () -> Float
     def to_srt_cue: () -> String
     def to_webvtt_cue: () -> String
+
+    #  Possible keys: :start_time, :end_time, :text, :no_speech_prob, :speaker_turn_next
+    #
+    #      whisper.each_segment do |segment|
+    #        segment => {start_time:, end_time:, text:, no_speech_prob:, speaker_turn_next:}
+    #
+    #        puts "[#{start_time} --> #{end_time}] #{text} (no speech prob: #{no_speech_prob}#{speaker_turn_next ? ', speaker turns next' : ''})"
+    #      end
+    def deconstruct_keys: (Array[:start_time | :end_time | :text | :no_speech_prob | :speaker_turn_next] | nil) -> deconstructed_keys
   end
 
   module VAD
