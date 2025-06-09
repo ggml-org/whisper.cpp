@@ -71,4 +71,66 @@ class TestSegment < TestBase
     end
     whisper.transcribe(AUDIO, params)
   end
+
+  def test_pattern_matching
+    segment = whisper.each_segment.first
+    segment => {start_time:, end_time:, text:, no_speech_prob:, speaker_turn_next:}
+
+    assert_equal segment.start_time, start_time
+    assert_equal segment.end_time, end_time
+    assert_equal segment.text, text
+    assert_equal segment.no_speech_prob, no_speech_prob
+    assert_equal segment.speaker_turn_next?, speaker_turn_next
+  end
+
+  def test_pattern_matching_partial
+    segment = whisper.each_segment.first
+    segment => {start_time:, end_time:, text:}
+
+    assert_equal segment.start_time, start_time
+    assert_equal segment.end_time, end_time
+    assert_equal segment.text, text
+  end
+
+  def test_deconstruct_keys
+    segment = whisper.each_segment.first
+    expected = {
+      start_time: segment.start_time,
+      end_time: segment.end_time,
+      text: segment.text,
+      no_speech_prob: segment.no_speech_prob,
+      speaker_turn_next: segment.speaker_turn_next?
+    }
+    assert_equal expected, segment.deconstruct_keys([:start_time, :end_time, :text, :no_speech_prob, :speaker_turn_next])
+  end
+
+  def test_deconstruct_keys_non_existent
+    omit "Undefined behavior"
+
+    segment = whisper.each_segment.first
+
+    assert_equal({}, segment.deconstruct_keys([:non_existent]))
+  end
+
+  def test_deconstruct_keys_too_many_keys
+    omit "Undefined behavior"
+
+    segment = whisper.each_segment.first
+
+    assert_equal({}, segment.deconstruct_keys([:start_time, :end_time, :text, :no_speech_prob, :speaker_turn_next, :extra_key]))
+  end
+
+  def test_deconstruct_keys_includes_non_existent_keys_not_too_many
+    omit "Undefined behavior"
+
+    segment = whisper.each_segment.first
+
+    expected = {
+      start_time: segment.start_time,
+      end_time: segment.end_time,
+      text: segment.text,
+      no_speech_prob: segment.no_speech_prob
+    }
+    assert_equal(expected, segment.deconstruct_keys([:start_time, :end_time, :text, :no_speech_prob, :non_existent]))
+  end
 end
