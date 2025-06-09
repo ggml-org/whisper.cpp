@@ -113,7 +113,7 @@ class TestWhisper < TestBase
   end
 
   def test_system_info_str
-    assert_match /\AWHISPER : COREML = \d | OPENVINO = \d |/, Whisper.system_info_str
+    assert_match(/\AWHISPER : COREML = \d | OPENVINO = \d |/, Whisper.system_info_str)
   end
 
   def test_log_set
@@ -251,9 +251,9 @@ class TestWhisper < TestBase
     whisper.transcribe AUDIO, @params
 
     lines = whisper.to_srt.lines
-    assert_match /\A\d+\n/, lines[0]
-    assert_match /\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}\n/, lines[1]
-    assert_match /ask not what your country can do for you, ask what you can do for your country/, lines[2]
+    assert_match(/\A\d+\n/, lines[0])
+    assert_match(/\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}\n/, lines[1])
+    assert_match(/ask not what your country can do for you, ask what you can do for your country/, lines[2])
   end
 
   def test_to_webvtt
@@ -263,9 +263,9 @@ class TestWhisper < TestBase
     lines = whisper.to_webvtt.lines
     assert_equal "WEBVTT\n", lines[0]
     assert_equal "\n", lines[1]
-    assert_match /\A\d+\n/, lines[2]
-    assert_match /\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}\n/, lines[3]
-    assert_match /ask not what your country can do for you, ask what you can do for your country/, lines[4]
+    assert_match(/\A\d+\n/, lines[2])
+    assert_match(/\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}\n/, lines[3])
+    assert_match(/ask not what your country can do for you, ask what you can do for your country/, lines[4])
   end
 
   sub_test_case "Format needs escape" do
