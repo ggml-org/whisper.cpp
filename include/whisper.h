@@ -707,6 +707,14 @@ extern "C" {
                            const float * samples,
                                    int   n_samples);
 
+    WHISPER_API bool whisper_vad(
+                struct whisper_context  * ctx,
+            struct whisper_full_params    params,
+                           const float  * samples,
+                                   int    n_samples,
+                                 float ** vad_samples,
+                                   int  * n_vad_samples);
+
     WHISPER_API int whisper_vad_segments_n_segments(struct whisper_vad_segments * segments);
 
     WHISPER_API float whisper_vad_segments_get_segment_t0(struct whisper_vad_segments * segments, int i_segment);
