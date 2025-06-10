@@ -18,8 +18,7 @@ class Dependencies
     tsort.filter_map {|node|
       label, shape = @nodes[node]
       if shape == @static_lib_shape
-        clean_label = label.gsub(/\\n\([^)]+\)/, '').gsub(/[^a-zA-Z0-9_-]/, '-')
-        clean_label
+        label.gsub(/\\n\([^)]+\)/, '')
       else
         nil
       end
