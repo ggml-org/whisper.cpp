@@ -1,6 +1,7 @@
 #include "llama-kv-cache-recurrent.h"
 
 #include "llama-impl.h"
+#include "llama-io.h"
 #include "llama-batch.h"
 #include "llama-model.h"
 
@@ -116,18 +117,21 @@ llama_kv_cache_recurrent::llama_kv_cache_recurrent(
     }
 }
 
-void llama_kv_cache_recurrent::clear() {
+void llama_kv_cache_recurrent::clear(bool data) {
     for (int32_t i = 0; i < (int32_t) size; ++i) {
         cells[i].pos = -1;
         cells[i].seq_id.clear();
         cells[i].src = -1;
         cells[i].tail = -1;
     }
+
     head = 0;
     used = 0;
 
-    for (auto & buf : bufs) {
-        ggml_backend_buffer_clear(buf.get(), 0);
+    if (data) {
+        for (auto & buf : bufs) {
+            ggml_backend_buffer_clear(buf.get(), 0);
+        }
     }
 }
 
@@ -386,6 +390,13 @@ llama_memory_state_ptr llama_kv_cache_recurrent::init_full() {
     return std::make_unique<llama_kv_cache_recurrent_state>(LLAMA_MEMORY_STATUS_SUCCESS, this);
 }
 
+llama_memory_state_ptr llama_kv_cache_recurrent::init_update(llama_context * lctx, bool optimize) {
+    GGML_UNUSED(lctx);
+    GGML_UNUSED(optimize);
+
+    return std::make_unique<llama_kv_cache_recurrent_state>(LLAMA_MEMORY_STATUS_NO_UPDATE);
+}
+
 bool llama_kv_cache_recurrent::prepare(const std::vector<llama_ubatch> & ubatches) {
     // simply remember the full state because it is very small for this type of cache
     // TODO: optimize
@@ -417,17 +428,6 @@ bool llama_kv_cache_recurrent::prepare(const std::vector<llama_ubatch> & ubatche
     head = org_head;
 
     return success;
-}
-
-bool llama_kv_cache_recurrent::update(llama_context & lctx) {
-    GGML_UNUSED(lctx);
-    // noop
-    return false;
-}
-
-void llama_kv_cache_recurrent::defrag_sched(float thold) {
-    GGML_UNUSED(thold);
-    // noop
 }
 
 bool llama_kv_cache_recurrent::find_slot(const llama_ubatch & ubatch) {
@@ -726,7 +726,7 @@ void llama_kv_cache_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq
 
     if (!res) {
         if (seq_id == -1) {
-            clear();
+            clear(true);
         } else {
             seq_rm(seq_id, -1, -1);
         }
@@ -883,7 +883,7 @@ bool llama_kv_cache_recurrent::state_read_meta(llama_io_read_i & io, uint32_t ce
             return false;
         }
 
-        clear();
+        clear(true);
 
         for (uint32_t i = 0; i < cell_count; ++i) {
             kv_cell & cell = cells[i];

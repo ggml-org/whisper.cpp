@@ -17,7 +17,7 @@ struct ggml_tensor;
 struct llama_ubatch;
 struct llama_cparams;
 
-class llama_memory_state_i;
+struct llama_memory_state_i;
 
 class llama_kv_cache_unified_state;
 class llama_kv_cache_unified_iswa_state;
@@ -36,6 +36,7 @@ enum llm_ffn_op_type {
     LLM_FFN_RELU,
     LLM_FFN_RELU_SQR,
     LLM_FFN_SWIGLU,
+    LLM_FFN_GEGLU,
 };
 
 enum llm_ffn_gate_type {
