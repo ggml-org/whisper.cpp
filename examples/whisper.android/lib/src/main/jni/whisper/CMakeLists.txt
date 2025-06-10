@@ -28,10 +28,10 @@ if (NOT GGML_HOME)
         ${WHISPER_LIB_DIR}/ggml/src/ggml-threading.cpp
         ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/ggml-cpu.c
         ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/ggml-cpu.cpp
-        ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/ggml-cpu-aarch64.cpp
-        ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/ggml-cpu-hbm.cpp
-        ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/ggml-cpu-quants.c
-        ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/ggml-cpu-traits.cpp
+        ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/repack.cpp
+        ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/hbm.cpp
+        ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/quants.c
+        ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/traits.cpp
         ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/unary-ops.cpp
         ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/binary-ops.cpp
         ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/vec.cpp
