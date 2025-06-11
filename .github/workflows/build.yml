@@ -761,7 +761,7 @@ jobs:
   windows-cublas:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
             github.event.inputs.run_type == 'full-ci' }}
-    runs-on: windows-2019
+    runs-on: windows-2022
     strategy:
       matrix:
         build: [Release]
