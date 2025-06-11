@@ -931,7 +931,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=${{ matrix.build }} ^
             -DGGML_CUDA=${{ matrix.cublas }} ^
             -DWHISPER_SDL2=${{ matrix.sdl2 }} ^
-            -DSDL2_DIR="%SDL2_DIR%"
+            -DSDL2_DIR="%SDL2_DIR%" ^
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config ${{ matrix.build }} -j %NUMBER_OF_PROCESSORS%
 
