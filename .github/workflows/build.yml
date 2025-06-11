@@ -763,12 +763,13 @@ jobs:
             github.event.inputs.run_type == 'full-ci' }}
     runs-on: windows-2022
     strategy:
+      fail-fast: false
       matrix:
         build: [Release]
         arch: [x64]
         cublas: [ON]
         sdl2: [ON]
-        cuda-toolkit: [12.2.0, 11.8.0]
+        cuda-toolkit: [12.4.0, 11.8.0]
         include:
           - arch: x64
             sdl2: ON
@@ -844,23 +845,23 @@ jobs:
           echo "CUDA_PATH=$CUDA_TOOLKIT_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           echo "CUDA_PATH_V11_8=$CUDA_TOOLKIT_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
         
-      - name: Install Cuda Toolkit 12.2.0
-        if: ${{ matrix.cuda-toolkit == '12.2.0' }}
+      - name: Install Cuda Toolkit 12.4.0
+        if: ${{ matrix.cuda-toolkit == '12.4.0' }}
         run: |
           $CUDA_VERSION = ${{ matrix.cuda-toolkit }}
           $CUDA_TOOLKIT_DIR = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v$CUDA_VERSION"
           $CUDA_DOWNLOAD = "https://developer.download.nvidia.com/compute/cuda/redist"
 
           # Components versions
-          $CUDART_VER   = "12.2.140"
-          $NVCC_VER     = "12.2.140"
-          $NVRTC_VER    = "12.2.140"
-          $CUBLAS_VER   = "12.2.5.6"
-          $NVTX_VER     = "12.2.140"
-          $PROFILER_VER = "12.2.140"
-          $VS_VER       = "12.2.140"
-          $NVPROF_VER   = "12.2.142"
-          $CCCL_VER     = "12.2.140"
+          $CUDART_VER   = "12.4.127"
+          $NVCC_VER     = "12.4.131"
+          $NVRTC_VER    = "12.4.127"
+          $CUBLAS_VER   = "12.4.5.8"
+          $NVTX_VER     = "12.4.127"
+          $PROFILER_VER = "12.4.127"
+          $VS_VER       = "12.4.127"
+          $NVPROF_VER   = "12.4.128"
+          $CCCL_VER     = "12.4.127"
 
           # Create the directory where the CUDA Toolkit will be installed
           mkdir -p $CUDA_TOOLKIT_DIR
