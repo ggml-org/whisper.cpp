@@ -42,9 +42,6 @@ std::wstring convert_to_wstring(const std::string & input);
 
 void gpt_split_words(std::string str, std::vector<std::string>& words);
 
-// load the tokens from encoder.json
-bool gpt_vocab_init(const std::string & fname, gpt_vocab & vocab);
-
 // sample next token given probabilities for each embedding
 //
 //   - consider only the top K tokens

@@ -168,25 +168,6 @@ static std::map<std::string, std::vector<gpt_vocab::id>> extract_tests_from_file
     return tests;
 }
 
-bool gpt_vocab_init(const std::string & fname, gpt_vocab & vocab) {
-    printf("%s: loading vocab from '%s'\n", __func__, fname.c_str());
-
-    vocab.token_to_id = ::json_parse(fname);
-
-    for (const auto & kv : vocab.token_to_id) {
-        vocab.id_to_token[kv.second] = kv.first;
-    }
-
-    printf("%s: vocab size = %d\n", __func__, (int) vocab.token_to_id.size());
-
-    // print the vocabulary
-    //for (auto kv : vocab.token_to_id) {
-    //    printf("'%s' -> %d\n", kv.first.data(), kv.second);
-    //}
-
-    return true;
-}
-
 gpt_vocab::id gpt_sample_top_k_top_p(
         const gpt_vocab & vocab,
         const float * logits,
