@@ -33,9 +33,6 @@ struct gpt_vocab {
     void add_special_token(const std::string & token);
 };
 
-// poor-man's JSON parsing
-std::map<std::string, int32_t> json_parse(const std::string & fname);
-
 // sample next token given probabilities for each embedding
 //
 //   - consider only the top K tokens
