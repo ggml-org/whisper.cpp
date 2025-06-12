@@ -120,41 +120,6 @@ std::map<std::string, int32_t> json_parse(const std::string & fname) {
     return result;
 }
 
-static std::vector<gpt_vocab::id> parse_tokens_from_string(const std::string& input, char delimiter) {
-    std::vector<gpt_vocab::id> output;
-    std::stringstream ss(input);
-    std::string token;
-
-    while (std::getline(ss, token, delimiter)) {
-        output.push_back(std::stoi(token));
-    }
-
-    return output;
-}
-
-static std::map<std::string, std::vector<gpt_vocab::id>> extract_tests_from_file(const std::string & fpath_test){
-    if (fpath_test.empty()){
-        fprintf(stderr, "%s : No test file found.\n", __func__);
-        return std::map<std::string, std::vector<gpt_vocab::id>>();
-    }
-
-    std::map<std::string, std::vector<gpt_vocab::id>> tests;
-
-    auto fin = std::ifstream(fpath_test, std::ios_base::in);
-    const char * delimeter = " => ";
-    const char del_tok = ',';
-    std::string line;
-    while (std::getline(fin, line)) {
-        size_t delimiterPos = line.find(delimeter);
-        if (delimiterPos != std::string::npos) {
-            std::string text = line.substr(0, delimiterPos);
-            std::string s_tokens = line.substr(delimiterPos + std::strlen(delimeter));
-            tests[text] = parse_tokens_from_string(s_tokens, del_tok);
-        }
-    }
-    return tests;
-}
-
 gpt_vocab::id gpt_sample_top_k_top_p(
         const gpt_vocab & vocab,
         const float * logits,
