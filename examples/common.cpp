@@ -120,19 +120,6 @@ std::map<std::string, int32_t> json_parse(const std::string & fname) {
     return result;
 }
 
-void gpt_split_words(std::string str, std::vector<std::string>& words) {
-    const std::string pattern = R"('s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^\s[:alpha:][:digit:]]+|\s+(?!\S)|\s+)";
-    const std::regex re(pattern);
-    std::smatch m;
-
-    while (std::regex_search(str, m, re)) {
-        for (auto x : m) {
-            words.push_back(x);
-        }
-        str = m.suffix();
-    }
-}
-
 static std::vector<gpt_vocab::id> parse_tokens_from_string(const std::string& input, char delimiter) {
     std::vector<gpt_vocab::id> output;
     std::stringstream ss(input);
