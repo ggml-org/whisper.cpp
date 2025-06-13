@@ -78,8 +78,6 @@ while read c; do
         src/ggml-vulkan/* \
         include/ggml*.h \
         include/gguf*.h \
-        examples/common.h \
-        examples/common.cpp \
         examples/common-ggml.h \
         examples/common-ggml.cpp \
         LICENSE \
