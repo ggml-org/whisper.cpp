@@ -23,6 +23,7 @@ options:
   -sow,      --split-on-word     [false  ] split on word rather than on token
   -bo N,     --best-of N         [2      ] number of best candidates to keep
   -bs N,     --beam-size N       [-1     ] beam size for beam search
+  -ac N,     --audio-ctx N       [0      ] audio context size (0 - all)
   -wt N,     --word-thold N      [0.01   ] word timestamp probability threshold
   -et N,     --entropy-thold N   [2.40   ] entropy threshold for decoder fail
   -lpt N,    --logprob-thold N   [-1.00  ] log probability threshold for decoder fail
@@ -41,9 +42,28 @@ options:
              --prompt PROMPT     [       ] initial prompt
   -m FNAME,  --model FNAME       [models/ggml-base.en.bin] model path
   -oved D,   --ov-e-device DNAME [CPU    ] the OpenVINO device used for encode inference
+  -dtw MODEL --dtw MODEL         [       ] compute token-level timestamps
   --host HOST,                   [127.0.0.1] Hostname/ip-adress for the server
   --port PORT,                   [8080   ] Port number for the server
+  --public PATH,                 [examples/server/public] Path to the public folder
+  --request-path PATH,           [       ] Request path for all requests
+  --inference-path PATH,         [/inference] Inference path for all requests
   --convert,                     [false  ] Convert audio to WAV, requires ffmpeg on the server
+  -sns,      --suppress-nst      [false  ] suppress non-speech tokens
+  -nth N,    --no-speech-thold N [0.60   ] no speech threshold
+  -nc,       --no-context        [false  ] do not use previous audio context
+  -ng,       --no-gpu            [false  ] do not use gpu
+  -fa,       --flash-attn        [false  ] flash attention
+
+Voice Activity Detection (VAD) options:
+             --vad                           [false  ] enable Voice Activity Detection (VAD)
+  -vm FNAME, --vad-model FNAME               [       ] VAD model path
+  -vt N,     --vad-threshold N               [0.50   ] VAD threshold for speech recognition
+  -vspd N,   --vad-min-speech-duration-ms  N [250    ] VAD min speech duration (0.0-1.0)
+  -vsd N,    --vad-min-silence-duration-ms N [100    ] VAD min silence duration (to split segments)
+  -vmsd N,   --vad-max-speech-duration-s   N [FLT_MAX] VAD max speech duration (auto-split longer)
+  -vp N,     --vad-speech-pad-ms           N [30     ] VAD speech padding (extend segments)
+  -vo N,     --vad-samples-overlap         N [0.10   ] VAD samples overlap (seconds between segments)
 ```
 
 > [!WARNING]
