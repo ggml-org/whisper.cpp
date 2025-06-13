@@ -103,3 +103,11 @@ target_include_directories(${VAD_TEST} PRIVATE ../include ../ggml/include ../exa
 target_link_libraries(${VAD_TEST} PRIVATE common)
 add_test(NAME ${VAD_TEST} COMMAND ${VAD_TEST})
 set_tests_properties(${VAD_TARGET} PROPERTIES LABELS "base;en")
+
+# MCP Handler test
+set(MCP_TEST test-mcp)
+add_executable(${MCP_TEST} ${MCP_TEST}.cpp ../examples/mcp/stdio-client.cpp)
+target_include_directories(${MCP_TEST} PRIVATE ../include ../ggml/include ../examples ../examples/mcp)
+target_link_libraries(${MCP_TEST} PRIVATE common)
+add_test(NAME ${MCP_TEST} COMMAND ${MCP_TEST})
+set_tests_properties(${MCP_TEST} PROPERTIES LABELS "unit")
