@@ -37,10 +37,21 @@ struct whisper_params {
     bool save_audio    = false; // save audio to wav file
     bool use_gpu       = true;
     bool flash_attn    = false;
+    bool no_prints     = false;
 
     std::string language  = "en";
     std::string model     = "models/ggml-base.en.bin";
     std::string fname_out;
+
+     // Voice Activity Detection (VAD) parameters
+    bool        vad                         = false;
+    std::string vad_model                   = "models/for-tests-silero-v5.1.2-ggml.bin";
+    float       vad_threshold               = 0.5f;
+    int         vad_min_speech_duration_ms  = 250;
+    int         vad_min_silence_duration_ms = 100;
+    float       vad_max_speech_duration_s   = FLT_MAX;
+    int         vad_speech_pad_ms           = 30;
+    float       vad_samples_overlap         = 0.1f;
 };
 
 void whisper_print_usage(int argc, char ** argv, const whisper_params & params);
@@ -61,8 +72,6 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-mt"   || arg == "--max-tokens")    { params.max_tokens    = std::stoi(argv[++i]); }
         else if (arg == "-ac"   || arg == "--audio-ctx")     { params.audio_ctx     = std::stoi(argv[++i]); }
         else if (arg == "-bs"   || arg == "--beam-size")     { params.beam_size     = std::stoi(argv[++i]); }
-        else if (arg == "-vth"  || arg == "--vad-thold")     { params.vad_thold     = std::stof(argv[++i]); }
-        else if (arg == "-fth"  || arg == "--freq-thold")    { params.freq_thold    = std::stof(argv[++i]); }
         else if (arg == "-tr"   || arg == "--translate")     { params.translate     = true; }
         else if (arg == "-nf"   || arg == "--no-fallback")   { params.no_fallback   = true; }
         else if (arg == "-ps"   || arg == "--print-special") { params.print_special = true; }
@@ -74,7 +83,16 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-sa"   || arg == "--save-audio")    { params.save_audio    = true; }
         else if (arg == "-ng"   || arg == "--no-gpu")        { params.use_gpu       = false; }
         else if (arg == "-fa"   || arg == "--flash-attn")    { params.flash_attn    = true; }
-
+        else if (arg == "-np"   || arg == "--no-prints")     { params.no_prints     = true; }
+        // Voice Activity Detection (VAD)
+        else if (                  arg == "--vad")                         { params.vad                         = true; }
+        else if (arg == "-vm"   || arg == "--vad-model")                   { params.vad_model                   = argv[++i]; }
+        else if (arg == "-vt"   || arg == "--vad-threshold")               { params.vad_threshold               = std::stof(argv[++i]); }
+        else if (arg == "-vsd"  || arg == "--vad-min-speech-duration-ms")  { params.vad_min_speech_duration_ms  = std::stoi(argv[++i]); }
+        else if (                  arg == "--vad-min-silence-duration-ms") { params.vad_min_speech_duration_ms  = std::stoi(argv[++i]); }
+        else if (arg == "-vmsd" || arg == "--vad-max-speech-duration-s")   { params.vad_max_speech_duration_s   = std::stof(argv[++i]); }
+        else if (arg == "-vp"   || arg == "--vad-speech-pad-ms")           { params.vad_speech_pad_ms           = std::stoi(argv[++i]); }
+        else if (arg == "-vo"   || arg == "--vad-samples-overlap")         { params.vad_samples_overlap         = std::stof(argv[++i]); }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             whisper_print_usage(argc, argv, params);
@@ -99,8 +117,6 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -mt N,    --max-tokens N  [%-7d] maximum number of tokens per audio chunk\n",       params.max_tokens);
     fprintf(stderr, "  -ac N,    --audio-ctx N   [%-7d] audio context size (0 - all)\n",                   params.audio_ctx);
     fprintf(stderr, "  -bs N,    --beam-size N   [%-7d] beam size for beam search\n",                      params.beam_size);
-    fprintf(stderr, "  -vth N,   --vad-thold N   [%-7.2f] voice activity detection threshold\n",           params.vad_thold);
-    fprintf(stderr, "  -fth N,   --freq-thold N  [%-7.2f] high-pass frequency cutoff\n",                   params.freq_thold);
     fprintf(stderr, "  -tr,      --translate     [%-7s] translate from source language to english\n",      params.translate ? "true" : "false");
     fprintf(stderr, "  -nf,      --no-fallback   [%-7s] do not use temperature fallback while decoding\n", params.no_fallback ? "true" : "false");
     fprintf(stderr, "  -ps,      --print-special [%-7s] print special tokens\n",                           params.print_special ? "true" : "false");
@@ -112,6 +128,19 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -sa,      --save-audio    [%-7s] save the recorded audio to a file\n",              params.save_audio ? "true" : "false");
     fprintf(stderr, "  -ng,      --no-gpu        [%-7s] disable GPU inference\n",                          params.use_gpu ? "false" : "true");
     fprintf(stderr, "  -fa,      --flash-attn    [%-7s] flash attention during inference\n",               params.flash_attn ? "true" : "false");
+    fprintf(stderr, "  -np,      --no-prints     [%-7s] do not print anything other than the results\n",   params.no_prints ? "true" : "false");
+    // Voice Activity Detection (VAD) parameters
+    fprintf(stderr, "\nVoice Activity Detection (VAD) options:\n");
+    fprintf(stderr, "             --vad                           [%-7s] enable Voice Activity Detection (VAD)\n",            params.vad ? "true" : "false");
+    fprintf(stderr, "  -vm FNAME, --vad-model FNAME               [%-7s] VAD model path\n",                                   params.vad_model.c_str());
+    fprintf(stderr, "  -vt N,     --vad-threshold N               [%-7.2f] VAD threshold for speech recognition\n",           params.vad_threshold);
+    fprintf(stderr, "  -vspd N,   --vad-min-speech-duration-ms  N [%-7d] VAD min speech duration (0.0-1.0)\n",                params.vad_min_speech_duration_ms);
+    fprintf(stderr, "  -vsd N,    --vad-min-silence-duration-ms N [%-7d] VAD min silence duration (to split segments)\n",     params.vad_min_silence_duration_ms);
+    fprintf(stderr, "  -vmsd N,   --vad-max-speech-duration-s   N [%-7s] VAD max speech duration (auto-split longer)\n",      params.vad_max_speech_duration_s == FLT_MAX ?
+                                                                                                                                  std::string("FLT_MAX").c_str() :
+                                                                                                                                  std::to_string(params.vad_max_speech_duration_s).c_str());
+    fprintf(stderr, "  -vp N,     --vad-speech-pad-ms           N [%-7d] VAD speech padding (extend segments)\n",             params.vad_speech_pad_ms);
+    fprintf(stderr, "  -vo N,     --vad-samples-overlap         N [%-7.2f] VAD samples overlap (seconds between segments)\n", params.vad_samples_overlap);
     fprintf(stderr, "\n");
 }
 
@@ -124,6 +153,17 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    if (params.no_prints) {
+        whisper_log_set([](enum ggml_log_level, const char*, void*) { }, NULL);
+    }
+
+    if (params.vad) {
+        // For VAD, ensure at least 500 of context
+        params.keep_ms = std::max(params.keep_ms, 500);
+    } else {
+        params.keep_ms = std::min(params.keep_ms, params.step_ms);
+    }
+
     params.keep_ms   = std::min(params.keep_ms,   params.step_ms);
     params.length_ms = std::max(params.length_ms, params.step_ms);
 
@@ -132,7 +172,7 @@ int main(int argc, char ** argv) {
     const int n_samples_keep = (1e-3*params.keep_ms  )*WHISPER_SAMPLE_RATE;
     const int n_samples_30s  = (1e-3*30000.0         )*WHISPER_SAMPLE_RATE;
 
-    const bool use_vad = n_samples_step <= 0; // sliding window mode uses VAD
+    const bool use_vad = params.vad;
 
     const int n_new_line = !use_vad ? std::max(1, params.length_ms / params.step_ms - 1) : 1; // number of steps to print new line
 
@@ -242,6 +282,30 @@ int main(int argc, char ** argv) {
             break;
         }
 
+        whisper_full_params wparams = whisper_full_default_params(params.beam_size > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
+
+        wparams.print_progress   = false;
+        wparams.print_special    = params.print_special;
+        wparams.print_realtime   = false;
+        wparams.print_timestamps = !params.no_timestamps;
+        wparams.translate        = params.translate;
+        wparams.single_segment   = !use_vad;
+        wparams.max_tokens       = params.max_tokens;
+        wparams.language         = params.language.c_str();
+        wparams.n_threads        = params.n_threads;
+        wparams.beam_search.beam_size = params.beam_size;
+
+        wparams.audio_ctx        = params.audio_ctx;
+
+        wparams.tdrz_enable      = params.tinydiarize; // [TDRZ]
+
+        // disable temperature fallback
+        //wparams.temperature_inc  = -1.0f;
+        wparams.temperature_inc  = params.no_fallback ? 0.0f : wparams.temperature_inc;
+
+        wparams.prompt_tokens    = params.no_context ? nullptr : prompt_tokens.data();
+        wparams.prompt_n_tokens  = params.no_context ? 0       : prompt_tokens.size();
+
         // process new audio
 
         if (!use_vad) {
@@ -295,8 +359,26 @@ int main(int argc, char ** argv) {
 
             audio.get(2000, pcmf32_new);
 
-            if (::vad_simple(pcmf32_new, WHISPER_SAMPLE_RATE, 1000, params.vad_thold, params.freq_thold, false)) {
-                audio.get(params.length_ms, pcmf32);
+            whisper_full_params wvparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+            wvparams.vad                                = params.vad;
+            wvparams.vad_model_path                     = params.vad_model.c_str();
+            wvparams.vad_params.threshold               = params.vad_threshold;
+            wvparams.vad_params.min_speech_duration_ms  = params.vad_min_speech_duration_ms;
+            wvparams.vad_params.min_silence_duration_ms = params.vad_min_silence_duration_ms;
+            wvparams.vad_params.max_speech_duration_s   = params.vad_max_speech_duration_s;
+            wvparams.vad_params.speech_pad_ms           = params.vad_speech_pad_ms;
+            wvparams.vad_params.samples_overlap         = params.vad_samples_overlap;
+
+            float * vad_samples;
+            int     n_vad_samples;
+            if (whisper_vad(ctx, wvparams, pcmf32_new.data(), pcmf32_new.size(), &vad_samples, &n_vad_samples)) {
+                if (n_vad_samples == 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
+
+                pcmf32.assign(vad_samples, vad_samples + n_vad_samples);
+                free(vad_samples);
             } else {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
@@ -308,30 +390,6 @@ int main(int argc, char ** argv) {
 
         // run the inference
         {
-            whisper_full_params wparams = whisper_full_default_params(params.beam_size > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
-
-            wparams.print_progress   = false;
-            wparams.print_special    = params.print_special;
-            wparams.print_realtime   = false;
-            wparams.print_timestamps = !params.no_timestamps;
-            wparams.translate        = params.translate;
-            wparams.single_segment   = !use_vad;
-            wparams.max_tokens       = params.max_tokens;
-            wparams.language         = params.language.c_str();
-            wparams.n_threads        = params.n_threads;
-            wparams.beam_search.beam_size = params.beam_size;
-
-            wparams.audio_ctx        = params.audio_ctx;
-
-            wparams.tdrz_enable      = params.tinydiarize; // [TDRZ]
-
-            // disable temperature fallback
-            //wparams.temperature_inc  = -1.0f;
-            wparams.temperature_inc  = params.no_fallback ? 0.0f : wparams.temperature_inc;
-
-            wparams.prompt_tokens    = params.no_context ? nullptr : prompt_tokens.data();
-            wparams.prompt_n_tokens  = params.no_context ? 0       : prompt_tokens.size();
-
             if (whisper_full(ctx, wparams, pcmf32.data(), pcmf32.size()) != 0) {
                 fprintf(stderr, "%s: failed to process audio\n", argv[0]);
                 return 6;

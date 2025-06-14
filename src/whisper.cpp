@@ -6792,6 +6792,38 @@ static bool whisper_vad(
     return true;
 }
 
+bool whisper_vad(
+        struct whisper_context  * ctx,
+    struct whisper_full_params    params,
+                   const float  * samples,
+                           int    n_samples,
+                         float ** vad_samples,
+                           int  * n_vad_samples) {
+
+    std::vector<float> filtered_samples;
+
+    if (!whisper_vad(ctx, ctx->state, params, samples, n_samples, filtered_samples)) {
+        WHISPER_LOG_ERROR("%s: VAD processing failed\n", __func__);
+        return false;
+    }
+
+    *n_vad_samples = filtered_samples.size();
+
+    if (filtered_samples.size() == 0) {
+        *vad_samples = nullptr;  // No speech detected
+        return true;
+    }
+
+    *vad_samples = (float*)malloc(filtered_samples.size() * sizeof(float));
+    if (!*vad_samples) {
+        WHISPER_LOG_ERROR("%s: VAD processing failed to allocate filtered_samples\n", __func__);
+        return false;
+    }
+
+    std::memcpy(*vad_samples, filtered_samples.data(), filtered_samples.size() * sizeof(float));
+    return true;
+}
+
 int whisper_full_with_state(
         struct whisper_context * ctx,
           struct whisper_state * state,
