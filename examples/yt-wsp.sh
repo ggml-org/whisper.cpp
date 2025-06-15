@@ -33,7 +33,7 @@
 #   git clone https://github.com/ggml-org/whisper.cpp
 #   cd whisper.cpp
 #   make
-#   ./examples/yt-wsp.sh https://www.youtube.com/watch?v=1234567890
+#   ./examples/yt-wsp.sh https://www.youtube.com/watch?v=1234567890 <model>
 #
 
 set -Eeuo pipefail
@@ -49,7 +49,7 @@ SCRIPT_DIR="${SCRIPT_PATH%/*}"
 # note: unless a multilingual model is specified, WHISPER_LANG will be ignored
 # and the video will be transcribed as if the audio were in the English language
 ################################################################################
-MODEL_PATH="${MODEL_PATH:-${SCRIPT_DIR}/../models/ggml-base.en.bin}"
+MODEL_PATH="${MODEL_PATH:-${SCRIPT_DIR}/../models/$2}"
 
 ################################################################################
 # Where to find the whisper.cpp executable.  default to the examples directory
