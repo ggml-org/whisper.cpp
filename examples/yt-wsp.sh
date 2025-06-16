@@ -33,7 +33,7 @@
 #   git clone https://github.com/ggml-org/whisper.cpp
 #   cd whisper.cpp
 #   make
-#   MODEL_PATH=<model> WHISPER_EXECUTABLE=<path_to_whisper-cli> WHISPER_LANG=en WHISPER_LANG=en WHISPER_THREAD_COUNT=<threads> ./examples/yt-wsp.sh https://www.youtube.com/watch?v=1234567890
+#   ./examples/yt-wsp.sh https://www.youtube.com/watch?v=1234567890
 #
 
 set -Eeuo pipefail
