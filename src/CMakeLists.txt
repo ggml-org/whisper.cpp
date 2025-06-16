@@ -58,6 +58,7 @@ if (WHISPER_COREML)
     set(TARGET whisper.coreml)
 
     add_library(${TARGET}
+        coreml/whisper-compat.m
         coreml/whisper-encoder.h
         coreml/whisper-encoder.mm
         coreml/whisper-encoder-impl.h
@@ -76,6 +77,7 @@ if (WHISPER_COREML)
         COMPILE_FLAGS "-fobjc-arc"
         XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC YES
         )
+
     set_target_properties(${TARGET} PROPERTIES FOLDER "libs")
 endif()
 

@@ -8,6 +8,7 @@
 #error This file must be compiled with automatic reference counting enabled (-fobjc-arc)
 #endif
 
+#import "whisper-compat.h"
 #import "whisper-decoder-impl.h"
 
 @implementation whisper_decoder_implInput
