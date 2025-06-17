@@ -7724,6 +7724,7 @@ int whisper_full(
             return -1;
         }
         if (vad_samples.empty()) {
+            ctx->state->result_all.clear();
             return 0;
         }
         samples = vad_samples.data();
