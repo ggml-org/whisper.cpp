@@ -112,13 +112,20 @@ bool read_audio_data(const std::string & fname, std::vector<float>& pcmf32, std:
     }
 
     if (stereo) {
-		pcmf32s.resize(2);
-		pcmf32s[0].resize(frame_count);
-		pcmf32s[1].resize(frame_count);
-		for (uint64_t i = 0; i < frame_count; i++) {
-			pcmf32s[0][i] = pcmf32[2*i];
-			pcmf32s[1][i] = pcmf32[2*i + 1];
-		}
+        std::vector<float> stereo_data = pcmf32;
+        pcmf32.resize(frame_count);
+
+        for (uint64_t i = 0; i < frame_count; i++) {
+            pcmf32[i] = (stereo_data[2*i] + stereo_data[2*i + 1]);
+        }
+
+        pcmf32s.resize(2);
+        pcmf32s[0].resize(frame_count);
+        pcmf32s[1].resize(frame_count);
+        for (uint64_t i = 0; i < frame_count; i++) {
+            pcmf32s[0][i] = stereo_data[2*i];
+            pcmf32s[1][i] = stereo_data[2*i + 1];
+        }
     }
 
     ma_decoder_uninit(&decoder);
