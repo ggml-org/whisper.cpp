@@ -43,7 +43,29 @@ class Options
       @options[name] = [type, value]
     end
 
+    configure_accelerate
+    configure_metal
     configure_coreml
+  end
+
+  # See ggml/src/ggml-cpu/CMakeLists.txt
+  def configure_accelerate
+    use_accelerate = if @options["GGML_ACCELERATE"][1].nil?
+                       cmake_options["GGML_ACCELERATE"][1]
+                     else
+                       @options["GGML_ACCELERATE"][1]
+                     end
+    $LDFLAGS << " -framework Accelerate" if use_accelerate
+  end
+
+  # See ggml/src/ggml-metal/CMakeLists.txt
+  def configure_metal
+    use_metal = if @options["GGML_METAL"][1].nil?
+                  cmake_options["GGML_METAL"][1]
+                else
+                  @options["GGML_METAL"][1]
+                end
+    $LDFLAGS << " -framework Foundation -framework Metal -framework MetalKit" if use_metal
   end
 
   def configure_coreml
