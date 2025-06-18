@@ -50,34 +50,27 @@ class Options
 
   # See ggml/src/ggml-cpu/CMakeLists.txt
   def configure_accelerate
-    use_accelerate = if @options["GGML_ACCELERATE"][1].nil?
-                       cmake_options["GGML_ACCELERATE"][1]
-                     else
-                       @options["GGML_ACCELERATE"][1]
-                     end
-    $LDFLAGS << " -framework Accelerate" if use_accelerate
+    $LDFLAGS << " -framework Accelerate" if enabled?("GGML_ACCELERATE")
   end
 
   # See ggml/src/ggml-metal/CMakeLists.txt
   def configure_metal
-    use_metal = if @options["GGML_METAL"][1].nil?
-                  cmake_options["GGML_METAL"][1]
-                else
-                  @options["GGML_METAL"][1]
-                end
-    $LDFLAGS << " -framework Foundation -framework Metal -framework MetalKit" if use_metal
+    $LDFLAGS << " -framework Foundation -framework Metal -framework MetalKit" if enabled?("GGML_METAL")
   end
 
   def configure_coreml
-    use_coreml = if @options["WHISPER_COREML"][1].nil?
-                   cmake_options["WHISPER_COREML"][1]
-                 else
-                   @options["WHISPER_COREML"][1]
-                 end
-    $CPPFLAGS << " -DRUBY_WHISPER_USE_COREML" if use_coreml
+    $CPPFLAGS << " -DRUBY_WHISPER_USE_COREML" if enabled?("WHISPER_COREML")
   end
 
   def option_name(name)
     name.downcase.gsub("_", "-")
+  end
+
+  def enabled?(option)
+    if @options[option][1].nil?
+      cmake_options[option][1]
+    else
+      @options[option][1]
+    end
   end
 end
