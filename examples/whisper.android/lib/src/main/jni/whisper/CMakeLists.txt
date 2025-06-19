@@ -37,7 +37,6 @@ if (NOT GGML_HOME)
         ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/arch/arm/quants.c
         ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/arch/arm/repack.cpp
         ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/quants.c
-
         )
 endif()
 
