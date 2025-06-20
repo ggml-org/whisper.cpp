@@ -50,7 +50,9 @@ class Options
 
   # See ggml/src/ggml-cpu/CMakeLists.txt
   def configure_accelerate
-    $LDFLAGS << " -framework Accelerate" if enabled?("GGML_ACCELERATE")
+    if RUBY_PLATFORM.match?(/darwin/) && enabled?("GGML_ACCELERATE")
+      $LDFLAGS << " -framework Accelerate"
+    end
   end
 
   # See ggml/src/ggml-metal/CMakeLists.txt
