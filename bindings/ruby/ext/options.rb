@@ -58,8 +58,12 @@ class Options
     $LDFLAGS << " -framework Foundation -framework Metal -framework MetalKit" if enabled?("GGML_METAL")
   end
 
+  # See src/CmakeLists.txt
   def configure_coreml
-    $CPPFLAGS << " -DRUBY_WHISPER_USE_COREML" if enabled?("WHISPER_COREML")
+    if enabled?("WHISPER_COREML")
+      $LDFLAGS << " -framework Foundation -framework CoreML"
+      $CPPFLAGS << " -DRUBY_WHISPER_USE_COREML"
+    end
   end
 
   def option_name(name)
