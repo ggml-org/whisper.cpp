@@ -8932,6 +8932,12 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
     ggml_free(gctx);
 }
 
+static void cb_log_disable(enum ggml_log_level , const char * , void * ) { }
+
+void whisper_log_disable() {
+    whisper_log_set(cb_log_disable, NULL);
+}
+
 void whisper_log_set(ggml_log_callback log_callback, void * user_data) {
     g_state.log_callback = log_callback ? log_callback : whisper_log_callback_default;
     g_state.log_callback_user_data = user_data;

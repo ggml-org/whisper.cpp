@@ -23,11 +23,11 @@ var _ Model = (*model)(nil)
 ///////////////////////////////////////////////////////////////////////////////
 // LIFECYCLE
 
-func New(path string) (Model, error) {
+func New(path string, flashAttn, disableLog bool) (Model, error) {
 	model := new(model)
 	if _, err := os.Stat(path); err != nil {
 		return nil, err
-	} else if ctx := whisper.Whisper_init(path); ctx == nil {
+	} else if ctx := whisper.Whisper_init(path, flashAttn, disableLog); ctx == nil {
 		return nil, ErrUnableToLoadModel
 	} else {
 		model.ctx = ctx
