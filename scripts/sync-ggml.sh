@@ -26,8 +26,6 @@ cp -rpv ../ggml/src/ggml-vulkan/*  ./ggml/src/ggml-vulkan/
 cp -rpv ../ggml/include/ggml*.h ./ggml/include/
 cp -rpv ../ggml/include/gguf*.h ./ggml/include/
 
-cp -rpv ../ggml/examples/common.h        ./examples/common.h
-cp -rpv ../ggml/examples/common.cpp      ./examples/common.cpp
 cp -rpv ../ggml/examples/common-ggml.h   ./examples/common-ggml.h
 cp -rpv ../ggml/examples/common-ggml.cpp ./examples/common-ggml.cpp
 
