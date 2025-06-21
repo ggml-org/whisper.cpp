@@ -6,3 +6,4 @@ ext/ggml/
 ext/include/
 ext/scripts/
 ext/src/
+test/fixtures/

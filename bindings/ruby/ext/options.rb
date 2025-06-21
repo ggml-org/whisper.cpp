@@ -43,19 +43,40 @@ class Options
       @options[name] = [type, value]
     end
 
+    configure_accelerate
+    configure_metal
     configure_coreml
   end
 
+  # See ggml/src/ggml-cpu/CMakeLists.txt
+  def configure_accelerate
+    if RUBY_PLATFORM.match?(/darwin/) && enabled?("GGML_ACCELERATE")
+      $LDFLAGS << " -framework Accelerate"
+    end
+  end
+
+  # See ggml/src/ggml-metal/CMakeLists.txt
+  def configure_metal
+    $LDFLAGS << " -framework Foundation -framework Metal -framework MetalKit" if enabled?("GGML_METAL")
+  end
+
+  # See src/CmakeLists.txt
   def configure_coreml
-    use_coreml = if @options["WHISPER_COREML"][1].nil?
-                   cmake_options["WHISPER_COREML"][1]
-                 else
-                   @options["WHISPER_COREML"][1]
-                 end
-    $CPPFLAGS << " -DRUBY_WHISPER_USE_COREML" if use_coreml
+    if enabled?("WHISPER_COREML")
+      $LDFLAGS << " -framework Foundation -framework CoreML"
+      $CPPFLAGS << " -DRUBY_WHISPER_USE_COREML"
+    end
   end
 
   def option_name(name)
     name.downcase.gsub("_", "-")
+  end
+
+  def enabled?(option)
+    if @options[option][1].nil?
+      cmake_options[option][1]
+    else
+      @options[option][1]
+    end
   end
 end

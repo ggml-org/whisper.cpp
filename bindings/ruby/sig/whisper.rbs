@@ -412,7 +412,7 @@ module Whisper
     end
 
     class ZipURI < URI
-      def cache: () -> String
+      def cache: () -> Pathname
       def clear_cache: () -> void
     end
   end

@@ -132,13 +132,13 @@ module Whisper
 
     class ZipURI < URI
       def cache
-        zip_path = Pathname(super)
+        zip_path = super
         dest = unzipped_path
         return if dest.exist? && dest.mtime >= zip_path.mtime
         escaping dest do
           system "unzip", "-q", "-d", zip_path.dirname.to_path, zip_path.to_path, exception: true
         end
-        zip_path.to_path
+        zip_path
       end
 
       def clear_cache
