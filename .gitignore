@@ -50,6 +50,8 @@ extra/bench-gg.txt
 models/*.mlmodel
 models/*.mlmodelc
 models/*.mlpackage
+models/*-encoder-openvino.xml
+models/*-encoder-openvino-cache/
 bindings/java/.gradle/
 bindings/java/.idea/
 .idea/
