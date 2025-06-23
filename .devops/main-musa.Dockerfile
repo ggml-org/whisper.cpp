@@ -26,6 +26,11 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/* /var/tmp/*
 
-COPY --from=build /app /app
-ENV PATH=/app/build/bin:$PATH
+#COPY --from=build /app /app
+COPY --from=build /app/build/bin /app/bin
+COPY --from=build /app/models /app/models
+COPY --from=build /app/samples /app/samples
+RUN du -sh /app/*
+RUN find /app -type f -size +100M
+ENV PATH=/app/bin:$PATH
 ENTRYPOINT [ "bash", "-c" ]
