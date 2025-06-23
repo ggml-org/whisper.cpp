@@ -18,6 +18,12 @@ COPY .. .
 # Enable muBLAS
 RUN make base.en CMAKE_ARGS="-DGGML_MUSA=1"
 
+RUN find /app/build -name "*.o" -delete && \
+    find /app/build -name "*.a" -delete && \
+    rm -rf /app/build/CMakeFiles && \
+    rm -rf /app/build/cmake_install.cmake && \
+    rm -rf /app/build/_deps
+
 FROM ${BASE_MUSA_RUN_CONTAINER} AS runtime
 WORKDIR /app
 
@@ -26,11 +32,8 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/* /var/tmp/*
 
-#COPY --from=build /app /app
-COPY --from=build /app/build/bin /app/bin
-COPY --from=build /app/models /app/models
-COPY --from=build /app/samples /app/samples
+COPY --from=build /app /app
 RUN du -sh /app/*
 RUN find /app -type f -size +100M
-ENV PATH=/app/bin:$PATH
+ENV PATH=/app/build/bin:$PATH
 ENTRYPOINT [ "bash", "-c" ]
