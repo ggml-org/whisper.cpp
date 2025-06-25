@@ -80,7 +80,7 @@ Now build the [whisper-cli](examples/cli) example and transcribe an audio file l
 ```bash
 # build the project
 cmake -B build
-cmake --build build --config Release
+cmake --build build -j --config Release
 
 # transcribe an audio file
 ./build/bin/whisper-cli -f samples/jfk.wav
@@ -149,7 +149,7 @@ standard cmake setup with:
 ```bash
 # build with GGML_BLAS defined
 cmake -B build -DGGML_BLAS=1
-cmake --build build --config Release
+cmake --build build -j --config Release
 ./build/bin/whisper-cli [ .. etc .. ]
 ```
 
@@ -163,7 +163,7 @@ Here are the steps for creating and using a quantized model:
 ```bash
 # quantize a model with Q5_0 method
 cmake -B build
-cmake --build build --config Release
+cmake --build build -j --config Release
 ./build/bin/quantize models/ggml-base.en.bin models/ggml-base.en-q5_0.bin q5_0
 
 # run the examples as usual, specifying the quantized model file
@@ -489,7 +489,7 @@ You will need to have [sdl2](https://wiki.libsdl.org/SDL2/Installation) installe
 
 ```bash
 cmake -B build -DWHISPER_SDL2=ON
-cmake --build build --config Release
+cmake --build build -j --config Release
 ./build/bin/whisper-stream -m ./models/ggml-base.en.bin -t 8 --step 500 --length 5000
 ```
 
