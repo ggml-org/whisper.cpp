@@ -61,9 +61,6 @@
 #define m512i(p) (__m512i)(p)
 #endif
 
-// precomputed f32 table for f16 (256 KB) (ggml-impl.h)
-float ggml_table_f32_f16[1 << 16];
-
 #if defined(__linux__) || \
     defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || \
     (defined(__APPLE__) && !TARGET_OS_TV && !TARGET_OS_WATCH)
@@ -1421,14 +1418,6 @@ struct ggml_context * ggml_init(struct ggml_init_params params) {
     if (is_first_call) {
         // initialize time system (required on Windows)
         ggml_time_init();
-
-        for (int i = 0; i < (1 << 16); ++i) {
-            union {
-                uint16_t u16;
-                ggml_fp16_t fp16;
-            } u = {i};
-            ggml_table_f32_f16[i] = GGML_COMPUTE_FP16_TO_FP32(u.fp16);
-        }
 
         is_first_call = false;
     }
