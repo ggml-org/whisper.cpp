@@ -67,6 +67,10 @@ static int whisper_bench_full(const whisper_params & params) {
     cparams.flash_attn = params.flash_attn;
 
     struct whisper_context * ctx = whisper_init_from_file_with_params(params.model.c_str(), cparams);
+    if (ctx == nullptr) {
+        fprintf(stderr, "error: failed to initialize whisper context\n");
+        return 2;
+    }
 
     {
         fprintf(stderr, "\n");
