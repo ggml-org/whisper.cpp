@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - master
+    tags:
+      - 'v*'
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
@@ -62,8 +64,11 @@ jobs:
           echo "BRANCH_NAME: ${{ env.BRANCH_NAME }}"
           echo "CUSTOM_TAG: $CUSTOM_TAG"
 
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "Using pushed tag name"
+            TAG_NAME="${{ github.ref_name }}"
           # Use custom tag if provided
-          if [[ -n "$CUSTOM_TAG" ]]; then
+          elif [[ -n "$CUSTOM_TAG" ]]; then
             echo "Using custom tag"
             TAG_NAME="${CUSTOM_TAG}"
           elif [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
@@ -1226,7 +1231,8 @@ jobs:
           ./build/bin/quantize models/ggml-tiny.en.bin models/ggml-tiny.en-q4_0.bin q4_0
 
   release:
-    if: ${{ github.event.inputs.create_release == 'true' || github.event.inputs.pre_release_tag != '' }}
+    if: ${{ github.event.inputs.create_release == 'true' || github.event.inputs.pre_release_tag != '' || startsWith(github.ref, 'refs/tags/v') }}
+
 
     runs-on: ubuntu-latest
 
