@@ -72,6 +72,16 @@ class TestSegment < TestBase
     whisper.transcribe(AUDIO, params)
   end
 
+  def test_transcription_after_segment_retrieved
+    params = Whisper::Params.new
+    segment = whisper.each_segment.first
+    assert_match(/ask not what your country can do for you, ask what you can do for your country/, segment.text)
+
+    whisper.transcribe(AUDIO, Whisper::Params.new(offset: 5000))
+    assert_not_match(/ask not what your country can do for you, ask what you can do for your country/, segment.text)
+    assert_match(/what you can do for your country/i, segment.text)
+  end
+
   def test_pattern_matching
     segment = whisper.each_segment.first
     segment => {start_time:, end_time:, text:, no_speech_prob:, speaker_turn_next:}
