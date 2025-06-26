@@ -1277,6 +1277,7 @@ jobs:
         with:
           tag_name: ${{ needs.determine-tag.outputs.tag_name }}
           prerelease: ${{ github.event.inputs.pre_release_tag != '' }}
+          draft: true
 
       - name: Upload release
         id: upload_release
