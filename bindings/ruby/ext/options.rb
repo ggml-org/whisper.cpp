@@ -64,7 +64,7 @@ class Options
   def configure_coreml
     if enabled?("WHISPER_COREML")
       $LDFLAGS << " -framework Foundation -framework CoreML"
-      $CPPFLAGS << " -DRUBY_WHISPER_USE_COREML"
+      $defs << "-DRUBY_WHISPER_USE_COREML"
     end
   end
 
