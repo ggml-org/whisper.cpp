@@ -148,6 +148,7 @@ void Init_whisper() {
   mWhisper = rb_define_module("Whisper");
   mVAD = rb_define_module_under(mWhisper, "VAD");
 
+  rb_define_const(mWhisper, "VERSION", rb_str_new2(whisper_version()));
   rb_define_const(mWhisper, "LOG_LEVEL_NONE", INT2NUM(GGML_LOG_LEVEL_NONE));
   rb_define_const(mWhisper, "LOG_LEVEL_INFO", INT2NUM(GGML_LOG_LEVEL_INFO));
   rb_define_const(mWhisper, "LOG_LEVEL_WARN", INT2NUM(GGML_LOG_LEVEL_WARN));
