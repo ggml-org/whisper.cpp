@@ -8938,6 +8938,10 @@ void whisper_log_set(ggml_log_callback log_callback, void * user_data) {
     ggml_log_set(g_state.log_callback, g_state.log_callback_user_data);
 }
 
+const char * whisper_version(void) {
+    return WHISPER_VERSION;
+}
+
 GGML_ATTRIBUTE_FORMAT(2, 3)
 static void whisper_log_internal(ggml_log_level level, const char * format, ...) {
     va_list args;

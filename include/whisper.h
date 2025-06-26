@@ -198,6 +198,8 @@ extern "C" {
         float samples_overlap;         // Overlap in seconds when copying audio samples from speech segment.
     } whisper_vad_params;
 
+    WHISPER_API const char * whisper_version(void);
+
     // Various functions for loading a ggml whisper model.
     // Allocate (almost) all memory needed for the model.
     // Return NULL on failure
