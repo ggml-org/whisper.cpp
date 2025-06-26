@@ -116,6 +116,10 @@ class TestWhisper < TestBase
     assert_match(/\AWHISPER : COREML = \d | OPENVINO = \d |/, Whisper.system_info_str)
   end
 
+  def test_version
+    assert_kind_of String, Whisper::VERSION
+  end
+
   def test_log_set
     user_data = Object.new
     logs = []
