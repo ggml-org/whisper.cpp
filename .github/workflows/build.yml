@@ -43,6 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag_name: ${{ steps.tag.outputs.name }}
+      should_release: ${{ steps.tag.outputs.should_release }}
 
     steps:
       - name: Checkout with full history
@@ -57,6 +58,7 @@ jobs:
           BUILD_NUMBER=$(git rev-list --count HEAD)
           SHORT_HASH=$(git rev-parse --short=7 HEAD)
           CUSTOM_TAG="${{ github.event.inputs.pre_release_tag }}"
+          SHOULD_RELEASE="false"
 
           echo "Raw values:"
           echo "BUILD_NUMBER: $BUILD_NUMBER"
@@ -67,21 +69,31 @@ jobs:
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
             echo "Using pushed tag name"
             TAG_NAME="${{ github.ref_name }}"
-          # Use custom tag if provided
+            SHOULD_RELEASE="true"
           elif [[ -n "$CUSTOM_TAG" ]]; then
             echo "Using custom tag"
             TAG_NAME="${CUSTOM_TAG}"
+            SHOULD_RELEASE="true"
+          elif [[ "${{ github.event.inputs.create_release }}" == "true" ]]; then
+            echo "Manual release requested"
+            SHOULD_RELEASE="true"
+            TAG_NAME="b${BUILD_NUMBER}"
           elif [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
             echo "Using master branch format"
             TAG_NAME="b${BUILD_NUMBER}"
+            SHOULD_RELEASE="false"
           else
             echo "Using non-master branch format"
             SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
             TAG_NAME="${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}"
+            SHOULD_RELEASE="false"
           fi
 
           echo "Final tag name: $TAG_NAME"
+          echo "Should release: $SHOULD_RELEASE"
           echo "name=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "should_release=$SHOULD_RELEASE" >> $GITHUB_OUTPUT
+
 
   ubuntu-22:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
@@ -584,6 +596,7 @@ jobs:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
             github.event.inputs.run_type == 'full-ci' }}
     runs-on: windows-latest
+    needs: determine-tag
 
     strategy:
       matrix:
@@ -667,9 +680,7 @@ jobs:
               Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-bin-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
-        if: matrix.sdl2 == 'ON' && ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
-                github.event.inputs.create_release == 'true' ||
-                github.event.inputs.pre_release_tag != '' }}
+        if: matrix.sdl2 == 'ON' && ${{ needs.determine-tag.outputs.should_release }}
         uses: actions/upload-artifact@v4
         with:
           name: whisper-bin-${{ matrix.arch }}.zip
@@ -755,9 +766,7 @@ jobs:
               Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-blas-bin-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
-        if: matrix.blas == 'ON' && matrix.sdl2 == 'ON' && ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
-                github.event.inputs.create_release == 'true' ||
-                github.event.inputs.pre_release_tag != '' }}
+        if: matrix.blas == 'ON' && matrix.sdl2 == 'ON' && ${{ needs.determine-tag.outputs.should_release }}
         uses: actions/upload-artifact@v4
         with:
           name: whisper-blas-bin-${{ matrix.arch }}.zip
@@ -767,6 +776,7 @@ jobs:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
             github.event.inputs.run_type == 'full-ci' }}
     runs-on: windows-2022
+    needs: determine-tag
     strategy:
       fail-fast: false
       matrix:
@@ -965,9 +975,7 @@ jobs:
               Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
-        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
-                github.event.inputs.create_release == 'true' ||
-                github.event.inputs.pre_release_tag != '' }}
+        if: ${{ needs.determine-tag.outputs.should_release }}
         uses: actions/upload-artifact@v4
         with:
           name: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
@@ -1044,16 +1052,11 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
-                github.event.inputs.create_release == 'true' ||
-                github.event.inputs.pre_release_tag != '' }}
         run: |
           zip --symlinks -r whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip build-apple/whisper.xcframework
 
       - name: Upload artifacts
-        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
-                github.event.inputs.create_release == 'true' ||
-                github.event.inputs.pre_release_tag != '' }}
+        if: ${{ needs.determine-tag.outputs.should_release }}
         uses: actions/upload-artifact@v4
         with:
           path: whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip
@@ -1233,7 +1236,6 @@ jobs:
   release:
     if: ${{ github.event.inputs.create_release == 'true' || github.event.inputs.pre_release_tag != '' || startsWith(github.ref, 'refs/tags/v') }}
 
-
     runs-on: ubuntu-latest
 
     needs:
@@ -1301,7 +1303,8 @@ jobs:
   coreml-base-en:
     if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
             github.event.inputs.create_release == 'true' ||
-            github.event.inputs.pre_release_tag != '' }}
+            github.event.inputs.pre_release_tag != '' ||
+            startsWith(github.ref, 'refs/tags/v') }}
     runs-on: macos-latest
     needs: determine-tag
 
