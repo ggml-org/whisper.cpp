@@ -42,6 +42,21 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Free up disk space
+        run: |
+          sudo apt-get remove -y '^dotnet-.*' '^llvm-.*' '^mysql-.*' '^postgresql-.*'
+          sudo apt-get autoremove -y
+          sudo apt-get autoclean
+
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+          docker system prune -af
+
+          df -h
+
       - name: Generate tags
         id: tags
         run: |
