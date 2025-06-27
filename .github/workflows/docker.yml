@@ -15,6 +15,7 @@ jobs:
     env:
       COMMIT_SHA: ${{ github.sha }}
     strategy:
+      fail-fast: false
       matrix:
         config:
           - { tag: "main", dockerfile: ".devops/main.Dockerfile", platform: "linux/amd64" }
