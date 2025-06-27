@@ -1437,26 +1437,39 @@ static bool weight_buft_supported(const whisper_hparams & hparams, ggml_tensor *
         // GPU and default CPU backend support all operators
         op_supported = true;
     } else {
+        ggml_init_params params = {
+            /*.mem_size   =*/ 2 * ggml_tensor_overhead(),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+
+        ggml_context_ptr ctx_ptr { ggml_init(params) };
+        if (!ctx_ptr) {
+            throw std::runtime_error("failed to create ggml context");
+        }
+        ggml_context * ctx = ctx_ptr.get();
+
+        ggml_tensor * op_tensor = nullptr;
+
+        int64_t n_ctx = hparams.n_audio_ctx;
+
         switch (op) {
-            // The current extra_buffer_type implementations only support GGML_OP_MUL_MAT
+            // The current extra_buffer_type implementations only support GGML_OP_MUL_MAT & GGML_OP_GET_ROWS (repacked - q4_K)
             case GGML_OP_MUL_MAT: {
-                ggml_init_params params = {
-                    /*.mem_size   =*/ 2 * ggml_tensor_overhead(),
-                    /*.mem_buffer =*/ nullptr,
-                    /*.no_alloc   =*/ true,
-                };
-
-                ggml_context_ptr ctx_ptr { ggml_init(params) };
-                if (!ctx_ptr) {
-                    throw std::runtime_error("failed to create ggml context");
-                }
-                ggml_context * ctx = ctx_ptr.get();
-
-                ggml_tensor * op_tensor = nullptr;
-
-                int64_t n_ctx = hparams.n_audio_ctx;
                 ggml_tensor * b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, w->ne[0], n_ctx, w->ne[2], w->ne[3]);
                 op_tensor = ggml_mul_mat(ctx, w, b);
+
+                // create a temporary dummy buffer for the weight so that supports_op can check the buffer type
+                GGML_ASSERT(w->buffer == nullptr);
+                w->buffer = ggml_backend_buft_alloc_buffer(buft, 0);
+                op_supported = ggml_backend_dev_supports_op(dev, op_tensor);
+                ggml_backend_buffer_free(w->buffer);
+                w->buffer = nullptr;
+                break;
+            }
+            case GGML_OP_GET_ROWS: {
+                ggml_tensor * b = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_ctx);
+                op_tensor = ggml_get_rows(ctx, w, b);
 
                 // create a temporary dummy buffer for the weight so that supports_op can check the buffer type
                 GGML_ASSERT(w->buffer == nullptr);
