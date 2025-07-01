@@ -362,42 +362,47 @@ llama_pos llama_memory_recurrent::seq_pos_max(llama_seq_id seq_id) const {
     return result;
 }
 
-llama_memory_state_ptr llama_memory_recurrent::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {
-    std::vector<llama_ubatch> ubatches;
+llama_memory_context_ptr llama_memory_recurrent::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {
+    do {
+        balloc.split_reset();
 
-    while (true) {
-        llama_ubatch ubatch;
+        std::vector<llama_ubatch> ubatches;
+        while (true) {
+            llama_ubatch ubatch;
 
-        if (embd_all) {
-            // if all tokens are output, split by sequence
-            ubatch = balloc.split_seq(n_ubatch);
-        } else {
-            ubatch = balloc.split_equal(n_ubatch);
+            if (embd_all) {
+                // if all tokens are output, split by sequence
+                ubatch = balloc.split_seq(n_ubatch);
+            } else {
+                ubatch = balloc.split_equal(n_ubatch);
+            }
+
+            if (ubatch.n_tokens == 0) {
+                break;
+            }
+
+            ubatches.push_back(std::move(ubatch)); // NOLINT
         }
 
-        if (ubatch.n_tokens == 0) {
+        if (!prepare(ubatches)) {
             break;
         }
 
-        ubatches.push_back(std::move(ubatch)); // NOLINT
-    }
+        return std::make_unique<llama_memory_recurrent_context>(this, std::move(ubatches));
+    } while (false);
 
-    if (!prepare(ubatches)) {
-        return std::make_unique<llama_memory_recurrent_state>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
-    }
-
-    return std::make_unique<llama_memory_recurrent_state>(this, std::move(ubatches));
+    return std::make_unique<llama_memory_recurrent_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
 }
 
-llama_memory_state_ptr llama_memory_recurrent::init_full() {
-    return std::make_unique<llama_memory_recurrent_state>(this);
+llama_memory_context_ptr llama_memory_recurrent::init_full() {
+    return std::make_unique<llama_memory_recurrent_context>(this);
 }
 
-llama_memory_state_ptr llama_memory_recurrent::init_update(llama_context * lctx, bool optimize) {
+llama_memory_context_ptr llama_memory_recurrent::init_update(llama_context * lctx, bool optimize) {
     GGML_UNUSED(lctx);
     GGML_UNUSED(optimize);
 
-    return std::make_unique<llama_memory_recurrent_state>(LLAMA_MEMORY_STATUS_NO_UPDATE);
+    return std::make_unique<llama_memory_recurrent_context>(LLAMA_MEMORY_STATUS_NO_UPDATE);
 }
 
 bool llama_memory_recurrent::prepare(const std::vector<llama_ubatch> & ubatches) {
@@ -1040,22 +1045,22 @@ bool llama_memory_recurrent::state_read_data(llama_io_read_i & io, uint32_t cell
 }
 
 //
-// llama_memory_recurrent_state
+// llama_memory_recurrent_context
 //
 
-llama_memory_recurrent_state::llama_memory_recurrent_state(llama_memory_status status) : status(status) {}
+llama_memory_recurrent_context::llama_memory_recurrent_context(llama_memory_status status) : status(status) {}
 
-llama_memory_recurrent_state::llama_memory_recurrent_state(
+llama_memory_recurrent_context::llama_memory_recurrent_context(
         llama_memory_recurrent * mem) : status(LLAMA_MEMORY_STATUS_SUCCESS), mem(mem), is_full(true) {
 }
 
-llama_memory_recurrent_state::llama_memory_recurrent_state(
+llama_memory_recurrent_context::llama_memory_recurrent_context(
         llama_memory_recurrent * mem,
         std::vector<llama_ubatch> ubatches) : status(LLAMA_MEMORY_STATUS_SUCCESS), mem(mem), ubatches(std::move(ubatches)) {}
 
-llama_memory_recurrent_state::~llama_memory_recurrent_state() = default;
+llama_memory_recurrent_context::~llama_memory_recurrent_context() = default;
 
-bool llama_memory_recurrent_state::next() {
+bool llama_memory_recurrent_context::next() {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
     if (++i_next >= ubatches.size()) {
@@ -1065,48 +1070,56 @@ bool llama_memory_recurrent_state::next() {
     return true;
 }
 
-bool llama_memory_recurrent_state::apply() {
-    assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+bool llama_memory_recurrent_context::apply() {
+    assert(!llama_memory_status_is_fail(status));
+
+    // no ubatches -> this is an update
+    if (ubatches.empty()) {
+        // recurrent cache never performs updates
+        assert(status == LLAMA_MEMORY_STATUS_NO_UPDATE);
+
+        return true;
+    }
 
     mem->find_slot(ubatches[i_next]);
 
     return true;
 }
 
-llama_memory_status llama_memory_recurrent_state::get_status() const {
+llama_memory_status llama_memory_recurrent_context::get_status() const {
     return status;
 }
 
-const llama_ubatch & llama_memory_recurrent_state::get_ubatch() const {
+const llama_ubatch & llama_memory_recurrent_context::get_ubatch() const {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
     return ubatches[i_next];
 }
 
-uint32_t llama_memory_recurrent_state::get_n_rs() const {
+uint32_t llama_memory_recurrent_context::get_n_rs() const {
     return is_full ? mem->size : mem->n;
 }
 
-uint32_t llama_memory_recurrent_state::get_head() const {
+uint32_t llama_memory_recurrent_context::get_head() const {
     return is_full ? 0 : mem->head;
 }
 
-int32_t llama_memory_recurrent_state::get_rs_z() const {
+int32_t llama_memory_recurrent_context::get_rs_z() const {
     return is_full ? 0 : mem->rs_z;
 }
 
-uint32_t llama_memory_recurrent_state::get_size() const {
+uint32_t llama_memory_recurrent_context::get_size() const {
     return mem->size;
 }
 
-ggml_tensor * llama_memory_recurrent_state::get_r_l(int32_t il) const {
+ggml_tensor * llama_memory_recurrent_context::get_r_l(int32_t il) const {
     return mem->r_l[il];
 }
 
-ggml_tensor * llama_memory_recurrent_state::get_s_l(int32_t il) const {
+ggml_tensor * llama_memory_recurrent_context::get_s_l(int32_t il) const {
     return mem->s_l[il];
 }
 
-int32_t llama_memory_recurrent_state::s_copy(int i) const {
+int32_t llama_memory_recurrent_context::s_copy(int i) const {
     return  mem->cells[i + mem->head].src0;
 }
