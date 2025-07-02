@@ -2,8 +2,13 @@ import http from 'k6/http'
 import { check } from 'k6'
 
 export let options = {
-  vus: parseInt(__ENV.CONCURRENCY) || 4,
-  iterations: parseInt(__ENV.CONCURRENCY) || 4,
+  scenarios: {
+    load_test: {
+      executor: 'constant-vus',
+      vus: parseInt(__ENV.CONCURRENCY) || 8,
+      duration: '1m',
+    },
+  },
 }
 
 const filePath        = __ENV.FILE_PATH
