@@ -10339,6 +10339,12 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                         return false;
                 }
             } break;
+        case GGML_OP_SET_ROWS:
+            {
+                // TODO: add support
+                // ref: https://github.com/ggml-org/llama.cpp/pull/14274
+                return false;
+            } break;
         case GGML_OP_CONT:
         case GGML_OP_CPY:
         case GGML_OP_DUP:
