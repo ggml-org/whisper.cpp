@@ -674,7 +674,10 @@ int main(int argc, char ** argv) {
         if (params.dtw == "large.v3") {
             cparams.dtw_aheads_preset = WHISPER_AHEADS_LARGE_V3;
         }
-
+        if (params.dtw == "large.v3.turbo") { 
+            cparams.dtw_aheads_preset = WHISPER_AHEADS_LARGE_V3_TURBO;
+        }
+        
         if (cparams.dtw_aheads_preset == WHISPER_AHEADS_NONE) {
             fprintf(stderr, "error: unknown DTW preset '%s'\n", params.dtw.c_str());
             return 3;
