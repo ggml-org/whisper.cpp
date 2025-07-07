@@ -493,13 +493,14 @@ extern "C" {
         int duration_ms;        // audio duration to process in ms
 
         bool translate;
-        bool no_context;        // do not use past transcription (if any) as initial prompt for the decoder
-        bool no_timestamps;     // do not generate timestamps
-        bool single_segment;    // force single segment output (useful for streaming)
-        bool print_special;     // print special tokens (e.g. <SOT>, <EOT>, <BEG>, etc.)
-        bool print_progress;    // print progress information
-        bool print_realtime;    // print results from within whisper.cpp (avoid it, use callback instead)
-        bool print_timestamps;  // print timestamps for each text segment when printing realtime
+        bool no_context;           // do not use past transcription (if any) as initial prompt for the decoder
+        bool carry_initial_prompt; // carry the initial prompt to the next call
+        bool no_timestamps;        // do not generate timestamps
+        bool single_segment;       // force single segment output (useful for streaming)
+        bool print_special;        // print special tokens (e.g. <SOT>, <EOT>, <BEG>, etc.)
+        bool print_progress;       // print progress information
+        bool print_realtime;       // print results from within whisper.cpp (avoid it, use callback instead)
+        bool print_timestamps;     // print timestamps for each text segment when printing realtime
 
         // [EXPERIMENTAL] token-level timestamps
         bool  token_timestamps; // enable token-level timestamps
