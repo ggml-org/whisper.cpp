@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Mic to WebSocket</title>
+</head>
+<body>
+    <button id="startBtn">Start Mic</button>
+    <div id="status"></div>
+
+    <script>
+        const startBtn = document.getElementById('startBtn');
+        const statusDiv = document.getElementById('status');
+        let isRecording = false;
+        let socket;
+
+        startBtn.addEventListener('click', async () => {
+            if (!isRecording) {
+                try {
+                    socket = new WebSocket('ws://192.168.2.109:9002');
+                    
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+			const audioContext = new AudioContext({sampleRate: 16000});
+                    const source = audioContext.createMediaStreamSource(stream);
+                    
+                    const processor = audioContext.createScriptProcessor(1024, 1, 1);
+                    
+                    source.connect(processor);
+                    processor.connect(audioContext.destination);
+                    function floatTo16BitPCM(input) {
+			    const output = new Int16Array(input.length);
+			    for (let i = 0; i < input.length; i++) {
+				output[i] = Math.max(-1, Math.min(1, input[i])) * 0x7FFF;
+			    }
+			    return output;
+			}
+                    processor.onaudioprocess = (e) => {
+                        const input = e.inputBuffer.getChannelData(0);
+    			const int16Data = floatTo16BitPCM(input);
+                        
+                        if (socket.readyState === WebSocket.OPEN) {
+                            socket.send(int16Data.buffer);
+                        }
+                    };
+                    
+                    statusDiv.textContent = 'Recording...';
+                    startBtn.textContent = 'Stop';
+                    isRecording = true;
+                } catch (err) {
+                    console.error('Error accessing microphone:', err);
+                    statusDiv.textContent = 'Error accessing microphone';
+                }
+            } else {
+                if (socket) socket.close();
+                statusDiv.textContent = 'Stopped';
+                startBtn.textContent = 'Start Mic';
+                isRecording = false;
+            }
+        });
+    </script>
+</body>
+</html>
