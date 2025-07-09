@@ -1,4 +1,4 @@
-`#include "whisper.h"
+#include "whisper.h"
 #include "whisper-arch.h"
 
 #include "ggml.h"
