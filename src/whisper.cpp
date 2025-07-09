@@ -1,4 +1,4 @@
-#include "whisper.h"
+`#include "whisper.h"
 #include "whisper-arch.h"
 
 #include "ggml.h"
@@ -1326,6 +1326,10 @@ static ggml_backend_t whisper_backend_init_gpu(const whisper_context_params & pa
     if (params.use_gpu) {
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             ggml_backend_dev_t dev_cur = ggml_backend_dev_get(i);
+            // Prevent null pointer being used in following code
+            if(dev_cur == nullptr) {
+                continue;
+            }
             if (ggml_backend_dev_type(dev_cur) == GGML_BACKEND_DEVICE_TYPE_GPU) {
                 if (cnt == 0 || cnt == params.gpu_device) {
                     dev = dev_cur;
@@ -1364,6 +1368,10 @@ static std::vector<ggml_backend_t> whisper_backend_init(const whisper_context_pa
     // ACCEL backends
     for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        // Prevent null pointer being used in following code
+        if(dev == nullptr) {
+            continue;
+        }
         if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
             WHISPER_LOG_INFO("%s: using %s backend\n", __func__, ggml_backend_dev_name(dev));
             ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
@@ -1395,6 +1403,10 @@ static buft_list_t make_buft_list(whisper_context_params & params) {
         int cnt = 0;
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+            // Prevent null pointer being used in following code
+            if(dev == nullptr) {
+                continue;
+            }
             if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
                 if (cnt == 0 || cnt == params.gpu_device) {
                     auto * buft = ggml_backend_dev_buffer_type(dev);
@@ -1412,20 +1424,23 @@ static buft_list_t make_buft_list(whisper_context_params & params) {
 
     // CPU Extra
     auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-    auto * cpu_reg = ggml_backend_dev_backend_reg(cpu_dev);
-    auto get_extra_bufts_fn = (ggml_backend_dev_get_extra_bufts_t)
-        ggml_backend_reg_get_proc_address(cpu_reg, "ggml_backend_dev_get_extra_bufts");
-    if (get_extra_bufts_fn) {
-        ggml_backend_buffer_type_t * extra_bufts = get_extra_bufts_fn(cpu_dev);
-        while (extra_bufts && *extra_bufts) {
-            buft_list.emplace_back(cpu_dev, *extra_bufts);
-            ++extra_bufts;
+    // Prevent null pointer being used in following code
+    if(cpu_dev != nullptr) {
+        auto * cpu_reg = ggml_backend_dev_backend_reg(cpu_dev);
+        auto get_extra_bufts_fn = (ggml_backend_dev_get_extra_bufts_t)
+            ggml_backend_reg_get_proc_address(cpu_reg, "ggml_backend_dev_get_extra_bufts");
+        if (get_extra_bufts_fn) {
+            ggml_backend_buffer_type_t * extra_bufts = get_extra_bufts_fn(cpu_dev);
+            while (extra_bufts && *extra_bufts) {
+                buft_list.emplace_back(cpu_dev, *extra_bufts);
+                ++extra_bufts;
+            }
         }
+
+        // CPU
+        buft_list.emplace_back(cpu_dev, ggml_backend_cpu_buffer_type());
     }
-
-    // CPU
-    buft_list.emplace_back(cpu_dev, ggml_backend_cpu_buffer_type());
-
+    
     return buft_list;
 }
 
@@ -1728,6 +1743,12 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
 
     // Create a list of available bufts, in priority order
     buft_list_t buft_list = make_buft_list(wctx.params);
+    // Under rare circumstances it may not be possible to build a buft_list
+    // This can occur, for example, is all backends fail
+    if (buft_list.empty()) {
+        WHISPER_LOG_ERROR("%s: Failed to find a create a list of available bufts - possibly all backends failed\n", __func__);
+        return false;
+    }
 
     auto create_tensor = [&](asr_tensor type, asr_system system, ggml_tensor * meta, int layer = 0) -> ggml_tensor * {
         ggml_op op = ASR_TENSOR_INFO.at(type);
