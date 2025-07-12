@@ -2,7 +2,7 @@
 
 Benchmark the performance of whisper.cpp in the browser using WebAssembly
 
-Link: https://ggerganov.github.io/whisper.cpp/bench.wasm
+Link: https://ggml.ai/whisper.cpp/bench.wasm/
 
 Terminal version: [examples/bench](/examples/bench)
 
