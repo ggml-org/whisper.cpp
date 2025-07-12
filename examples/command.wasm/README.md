@@ -3,7 +3,7 @@
 This is a basic Voice Assistant example that accepts voice commands from the microphone.
 It runs in fully in the browser via WebAseembly.
 
-Online demo: https://ggerganov.github.io/whisper.cpp/command.wasm
+Online demo: https://ggml.ai/whisper.cpp/command.wasm/
 
 Terminal version: [examples/command](/examples/command)
 

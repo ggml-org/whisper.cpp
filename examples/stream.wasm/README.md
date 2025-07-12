@@ -2,7 +2,7 @@
 
 Real-time transcription in the browser using WebAssembly
 
-Online demo: https://whisper.ggerganov.com/stream/
+Online demo: https://ggml.ai/whisper.cpp/stream.wasm/
 
 ## Build instructions
 

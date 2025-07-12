@@ -22,7 +22,7 @@ audio is limited to 120 seconds.
 
 ## Live demo
 
-Link: https://ggerganov.github.io/whisper.cpp/
+Link: https://ggml.ai/whisper.cpp/
 
 ![image](https://user-images.githubusercontent.com/1991296/197348344-1a7fead8-3dae-4922-8b06-df223a206603.png)
 
