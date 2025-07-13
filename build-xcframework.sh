@@ -15,6 +15,7 @@ GGML_METAL_EMBED_LIBRARY=ON
 GGML_BLAS_DEFAULT=ON
 GGML_METAL_USE_BF16=ON
 GGML_OPENMP=OFF
+BUILD_STATIC_XCFRAMEWORK=OFF
 
 COMMON_C_FLAGS="-Wno-macro-redefined -Wno-shorten-64-to-32 -Wno-unused-command-line-argument -g"
 COMMON_CXX_FLAGS="-Wno-macro-redefined -Wno-shorten-64-to-32 -Wno-unused-command-line-argument -g"
@@ -327,6 +328,15 @@ combine_static_libraries() {
         arch_flags+=" -arch $arch"
     done
 
+    
+    if [[ "${BUILD_STATIC_XCFRAMEWORK}" == "ON" ]]; then
+        echo "Packaging static framework for ${platform}."
+        mkdir -p "$(dirname "${base_dir}/${output_lib}")"
+        cp "${temp_dir}/combined.a" "${base_dir}/${output_lib}"
+        rm -rf "${temp_dir}"
+        return
+    fi
+
     # Create dynamic library
     echo "Creating dynamic library for ${platform}."
     xcrun -sdk $sdk clang++ -dynamiclib \
@@ -529,6 +539,20 @@ combine_static_libraries "build-tvos-device" "Release-appletvos" "tvos" "false"
 
 # Create XCFramework with correct debug symbols paths
 echo "Creating XCFramework..."
+
+    if [[ "${BUILD_STATIC_XCFRAMEWORK}" == "ON" ]]; then
+        xcodebuild -create-xcframework \
+            -framework $(pwd)/build-ios-sim/framework/whisper.framework \
+            -framework $(pwd)/build-ios-device/framework/whisper.framework \
+            -framework $(pwd)/build-macos/framework/whisper.framework \
+            -framework $(pwd)/build-visionos/framework/whisper.framework \
+            -framework $(pwd)/build-visionos-sim/framework/whisper.framework \
+            -framework $(pwd)/build-tvos-device/framework/whisper.framework \
+            -framework $(pwd)/build-tvos-sim/framework/whisper.framework \
+            -output $(pwd)/build-apple/whisper.xcframework
+        exit 0
+    fi 
+
 xcodebuild -create-xcframework \
     -framework $(pwd)/build-ios-sim/framework/whisper.framework \
     -debug-symbols $(pwd)/build-ios-sim/dSYMs/whisper.dSYM \
