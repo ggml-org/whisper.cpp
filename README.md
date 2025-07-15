@@ -55,6 +55,9 @@ On Apple Silicon, the inference runs fully on the GPU via Metal:
 
 https://github.com/ggml-org/whisper.cpp/assets/1991296/c82e8f86-60dc-49f2-b048-d2fdbd6b5225
 
+## Envitoment(OS)
+Linux(or WSL), MacOS
+
 ## Quick start
 
 First clone the repository:
@@ -73,6 +76,10 @@ Then, download one of the Whisper [models](models/README.md) converted in [`ggml
 
 ```bash
 sh ./models/download-ggml-model.sh base.en
+```
+You need have C++ compile First:
+```bash
+sudo apt install build-essential  # Installs g++, gcc, make, etc.
 ```
 
 Now build the [whisper-cli](examples/cli) example and transcribe an audio file like this:
