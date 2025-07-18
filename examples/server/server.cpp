@@ -104,6 +104,7 @@ struct whisper_params {
     bool flash_attn      = false;
     bool suppress_nst    = false;
     bool no_context      = false;
+    bool language_probabilities = true;
 
     std::string language        = "en";
     std::string prompt          = "";
@@ -178,6 +179,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -nc,       --no-context        [%-7s] do not use previous audio context\n", params.no_context ? "true" : "false");
     fprintf(stderr, "  -ng,       --no-gpu            [%-7s] do not use gpu\n", params.use_gpu ? "false" : "true");
     fprintf(stderr, "  -fa,       --flash-attn        [%-7s] flash attention\n", params.flash_attn ? "true" : "false");
+    fprintf(stderr, "  -lp,       --language-probabilities [%-7s] include language probabilities in verbose_json output\n", params.language_probabilities ? "true" : "false");
     // Voice Activity Detection (VAD) parameters
     fprintf(stderr, "\nVoice Activity Detection (VAD) options:\n");
     fprintf(stderr, "             --vad                           [%-7s] enable Voice Activity Detection (VAD)\n",            params.vad ? "true" : "false");
@@ -237,6 +239,7 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params, serve
         else if (arg == "-sns"  || arg == "--suppress-nst")    { params.suppress_nst    = true; }
         else if (arg == "-nth"  || arg == "--no-speech-thold") { params.no_speech_thold = std::stof(argv[++i]); }
         else if (arg == "-nc"   || arg == "--no-context")      { params.no_context      = true; }
+        else if (arg == "-lp" || arg == "--language-probabilities") { params.language_probabilities = true; }
 
         // server params
         else if (                  arg == "--port")            { sparams.port        = std::stoi(argv[++i]); }
@@ -255,6 +258,7 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params, serve
         else if (arg == "-vmsd" || arg == "--vad-max-speech-duration-s")   { params.vad_max_speech_duration_s   = std::stof(argv[++i]); }
         else if (arg == "-vp"   || arg == "--vad-speech-pad-ms")           { params.vad_speech_pad_ms           = std::stoi(argv[++i]); }
         else if (arg == "-vo"   || arg == "--vad-samples-overlap")         { params.vad_samples_overlap         = std::stof(argv[++i]); }
+        else if (arg == "--language-probabilities") { params.language_probabilities = true; }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             whisper_print_usage(argc, argv, params, sparams);
@@ -598,6 +602,10 @@ void get_req_parameters(const Request & req, whisper_params & params)
     if (req.has_file("vad_samples_overlap"))
     {
         params.vad_samples_overlap = std::stof(req.get_file_value("vad_samples_overlap").content);
+    }
+    if (req.has_file("language_probabilities"))
+    {
+        params.language_probabilities = parse_str_to_bool(req.get_file_value("language_probabilities").content);
     }
 }
 
@@ -1024,25 +1032,32 @@ int main(int argc, char ** argv) {
         } else if (params.response_format == vjson_format) {
             /* try to match openai/whisper's Python format */
             std::string results = output_str(ctx, params, pcmf32s); 
-            // Get language probabilities
-            std::vector<float> lang_probs(whisper_lang_max_id() + 1, 0.0f);
-            const auto detected_lang_id = whisper_lang_auto_detect(ctx, 0, params.n_threads, lang_probs.data());
+            
             json jres = json{
                 {"task", params.translate ? "translate" : "transcribe"},
                 {"language", whisper_lang_str_full(whisper_full_lang_id(ctx))},
                 {"duration", float(pcmf32.size())/WHISPER_SAMPLE_RATE},
                 {"text", results},
-                {"segments", json::array()},
-                {"detected_language", whisper_lang_str_full(detected_lang_id)},
-                {"detected_language_probability", lang_probs[detected_lang_id]},
-                {"language_probabilities", json::object()}
+                {"segments", json::array()}
             };
-            // Add all language probabilities
-            for (int i = 0; i <= whisper_lang_max_id(); ++i) {
-                if (lang_probs[i] > 0.001f) { // Only include non-negligible probabilities
-                    jres["language_probabilities"][whisper_lang_str(i)] = lang_probs[i];
+            
+            // Only compute language probabilities if requested (expensive operation)
+            if (params.language_probabilities) {
+                std::vector<float> lang_probs(whisper_lang_max_id() + 1, 0.0f);
+                const auto detected_lang_id = whisper_lang_auto_detect(ctx, 0, params.n_threads, lang_probs.data());
+                
+                jres["detected_language"] = whisper_lang_str_full(detected_lang_id);
+                jres["detected_language_probability"] = lang_probs[detected_lang_id];
+                jres["language_probabilities"] = json::object();
+                
+                // Add all language probabilities
+                for (int i = 0; i <= whisper_lang_max_id(); ++i) {
+                    if (lang_probs[i] > 0.001f) { // Only include non-negligible probabilities
+                        jres["language_probabilities"][whisper_lang_str(i)] = lang_probs[i];
+                    }
                 }
             }
+            
             const int n_segments = whisper_full_n_segments(ctx);
             for (int i = 0; i < n_segments; ++i)
             {
