@@ -116,7 +116,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -sa,      --save-audio    [%-7s] save the recorded audio to a file\n",              params.save_audio ? "true" : "false");
     fprintf(stderr, "  -ng,      --no-gpu        [%-7s] disable GPU inference\n",                          params.use_gpu ? "false" : "true");
     fprintf(stderr, "  -fa,      --flash-attn    [%-7s] flash attention during inference\n",               params.flash_attn ? "true" : "false");
-    fprintf(stderr, "            --pausable      [%-7s] allow stdin commands p,n (PAUSE)/(RESUME)\n",      params.pausable ? "true" : "false");
+    fprintf(stderr, "  -p,       --pausable      [%-7s] allow stdin commands p,n (PAUSE)/(RESUME)\n",      params.pausable ? "true" : "false");
     fprintf(stderr, "\n");
 }
 
