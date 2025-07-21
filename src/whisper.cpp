@@ -1327,7 +1327,7 @@ static ggml_backend_t whisper_backend_init_gpu(const whisper_context_params & pa
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             ggml_backend_dev_t dev_cur = ggml_backend_dev_get(i);
             // Prevent null pointer being used in following code
-            if(dev_cur == nullptr) {
+            if (dev_cur == nullptr) {
                 continue;
             }
             if (ggml_backend_dev_type(dev_cur) == GGML_BACKEND_DEVICE_TYPE_GPU) {
@@ -1369,7 +1369,7 @@ static std::vector<ggml_backend_t> whisper_backend_init(const whisper_context_pa
     for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
         // Prevent null pointer being used in following code
-        if(dev == nullptr) {
+        if (dev == nullptr) {
             continue;
         }
         if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
@@ -1404,7 +1404,7 @@ static buft_list_t make_buft_list(whisper_context_params & params) {
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);
             // Prevent null pointer being used in following code
-            if(dev == nullptr) {
+            if (dev == nullptr) {
                 continue;
             }
             if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
@@ -1425,7 +1425,7 @@ static buft_list_t make_buft_list(whisper_context_params & params) {
     // CPU Extra
     auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     // Prevent null pointer being used in following code
-    if(cpu_dev != nullptr) {
+    if (cpu_dev != nullptr) {
         auto * cpu_reg = ggml_backend_dev_backend_reg(cpu_dev);
         auto get_extra_bufts_fn = (ggml_backend_dev_get_extra_bufts_t)
             ggml_backend_reg_get_proc_address(cpu_reg, "ggml_backend_dev_get_extra_bufts");
