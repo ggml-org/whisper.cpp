@@ -540,18 +540,18 @@ combine_static_libraries "build-tvos-device" "Release-appletvos" "tvos" "false"
 # Create XCFramework with correct debug symbols paths
 echo "Creating XCFramework..."
 
-    if [[ "${BUILD_STATIC_XCFRAMEWORK}" == "ON" ]]; then
-        xcodebuild -create-xcframework \
-            -framework $(pwd)/build-ios-sim/framework/whisper.framework \
-            -framework $(pwd)/build-ios-device/framework/whisper.framework \
-            -framework $(pwd)/build-macos/framework/whisper.framework \
-            -framework $(pwd)/build-visionos/framework/whisper.framework \
-            -framework $(pwd)/build-visionos-sim/framework/whisper.framework \
-            -framework $(pwd)/build-tvos-device/framework/whisper.framework \
-            -framework $(pwd)/build-tvos-sim/framework/whisper.framework \
-            -output $(pwd)/build-apple/whisper.xcframework
-        exit 0
-    fi 
+if [[ "${BUILD_STATIC_XCFRAMEWORK}" == "ON" ]]; then
+    xcodebuild -create-xcframework \
+        -framework $(pwd)/build-ios-sim/framework/whisper.framework \
+        -framework $(pwd)/build-ios-device/framework/whisper.framework \
+        -framework $(pwd)/build-macos/framework/whisper.framework \
+        -framework $(pwd)/build-visionos/framework/whisper.framework \
+        -framework $(pwd)/build-visionos-sim/framework/whisper.framework \
+        -framework $(pwd)/build-tvos-device/framework/whisper.framework \
+        -framework $(pwd)/build-tvos-sim/framework/whisper.framework \
+        -output $(pwd)/build-apple/whisper.xcframework
+    exit 0
+fi 
 
 xcodebuild -create-xcframework \
     -framework $(pwd)/build-ios-sim/framework/whisper.framework \
