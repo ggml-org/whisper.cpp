@@ -6,6 +6,25 @@ on:
       - master
     tags:
       - 'v*'
+    paths: ['.github/workflows/build.yml',
+            '**/CMakeLists.txt',
+            '**/Makefile',
+            '**/*.mk',
+            '**/*.cmake',
+            '**/*.in',
+            '**/*.h',
+            '**/*.hpp',
+            '**/*.c',
+            '**/*.cpp',
+            '**/*.cu',
+            '**/*.cuh',
+            '**/*.cl',
+            '**/*.swift',
+            '**/*.m',
+            '**/*.mm',
+            '**/*.metal',
+            '**/*.comp',
+            '**/*.java']
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
