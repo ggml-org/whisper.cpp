@@ -328,7 +328,7 @@ combine_static_libraries() {
         arch_flags+=" -arch $arch"
     done
 
-    
+
     if [[ "${BUILD_STATIC_XCFRAMEWORK}" == "ON" ]]; then
         echo "Packaging static framework for ${platform}."
         mkdir -p "$(dirname "${base_dir}/${output_lib}")"
@@ -551,7 +551,7 @@ if [[ "${BUILD_STATIC_XCFRAMEWORK}" == "ON" ]]; then
         -framework $(pwd)/build-tvos-sim/framework/whisper.framework \
         -output $(pwd)/build-apple/whisper.xcframework
     exit 0
-fi 
+fi
 
 xcodebuild -create-xcframework \
     -framework $(pwd)/build-ios-sim/framework/whisper.framework \
