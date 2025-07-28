@@ -129,6 +129,31 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
     std::thread reader(reader_thread, client_fd, std::ref(rb));
 
     std::vector<float> pcmf32_old;
+    // Capture the *entire* audio stream so we can run a final full-context
+    // transcription once the user stops speaking.  This guarantees that the
+    // final output covers the *whole* utterance (even >60 s) instead of only
+    // whatever fit into the rolling 10-s window used for partial updates.
+    std::vector<float> pcmf32_all;
+    // Accumulated transcript across all iterations
+    std::string transcript_accum;
+
+    auto merge_into_accum = [&](const std::string & part){
+        // Append part to transcript_accum, removing any overlap prefix
+        if (transcript_accum.empty()) {
+            transcript_accum = part;
+            return;
+        }
+        // Find the maximum overlap between end of accum and beginning of part
+        size_t max_overlap = std::min(transcript_accum.size(), part.size());
+        size_t overlap = 0;
+        for (size_t len = max_overlap; len > 0; --len) {
+            if (transcript_accum.compare(transcript_accum.size() - len, len, part, 0, len) == 0) {
+                overlap = len;
+                break;
+            }
+        }
+        transcript_accum += part.substr(overlap);
+    };
 
     auto send_json = [&](const std::string & type, const std::string & text){
         std::string line = std::string("{\"type\":\"") + type + "\",\"text\":\"" + text + "\"}\n";
@@ -152,6 +177,12 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
         std::copy(pcmf32_new.begin(), pcmf32_new.end(), pcmf32_cur.begin() + n_samples_take);
         pcmf32_old = pcmf32_cur;
 
+        // ------------------------------------------------------------------
+        // Append *new* samples (no overlap) to the cumulative buffer so we
+        // have the raw audio for a high-fidelity final pass later.
+        // ------------------------------------------------------------------
+        pcmf32_all.insert(pcmf32_all.end(), pcmf32_new.begin(), pcmf32_new.end());
+
         whisper_full_params wparams = whisper_full_default_params(beam_size > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
         wparams.print_progress   = false;
         wparams.print_realtime   = false;
@@ -160,18 +191,30 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
         wparams.n_threads        = n_threads;
         wparams.beam_search.beam_size = beam_size;
 
-        if (whisper_full(ctx, wparams, pcmf32_cur.data(), pcmf32_cur.size()) != 0) {
-            std::cerr << "whisper_full() failed" << std::endl;
-            break;
-        }
-
-        send_json("partial", collect_segments(ctx));
+        whisper_full(ctx, wparams, pcmf32_cur.data(), pcmf32_cur.size());
+        std::string part = collect_segments(ctx);
+        merge_into_accum(part);
+        send_json("partial", part);
     }
 
     // flush leftovers
     {
-        std::vector<float> rest; rb.pop_all(rest);
-        if (!rest.empty()) {
+        std::vector<float> pcmf32_new;
+        rb.pop_all(pcmf32_new);
+
+        if (!pcmf32_new.empty()) {
+            const int n_samples_new  = pcmf32_new.size();
+            const int n_samples_take = std::min((int)pcmf32_old.size(), std::max(0, n_samples_keep + n_samples_len - n_samples_new));
+
+            std::vector<float> pcmf32_cur(n_samples_new + n_samples_take);
+            if (n_samples_take) {
+                std::copy(pcmf32_old.end() - n_samples_take, pcmf32_old.end(), pcmf32_cur.begin());
+            }
+            std::copy(pcmf32_new.begin(), pcmf32_new.end(), pcmf32_cur.begin() + n_samples_take);
+
+            // Add the leftover samples to the cumulative buffer as well.
+            pcmf32_all.insert(pcmf32_all.end(), pcmf32_new.begin(), pcmf32_new.end());
+
             whisper_full_params wparams = whisper_full_default_params(beam_size > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
             wparams.print_progress = false;
             wparams.print_realtime = false;
@@ -179,11 +222,37 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
             wparams.max_tokens = 0;
             wparams.n_threads = n_threads;
             wparams.beam_search.beam_size = beam_size;
-            whisper_full(ctx, wparams, rest.data(), rest.size());
+            if (whisper_full(ctx, wparams, pcmf32_cur.data(), pcmf32_cur.size()) != 0) {
+                std::cerr << "whisper_full() failed on final flush" << std::endl;
+            }
         }
     }
 
-    send_json("final", collect_segments(ctx));
+    // ------------------------------------------------------------------
+    // FINAL PASS – transcribe the *full* audio for maximum accuracy
+    // ------------------------------------------------------------------
+
+    std::string final_transcript;
+    if (!pcmf32_all.empty()) {
+        whisper_full_params wparams_final = whisper_full_default_params(beam_size > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
+        wparams_final.print_progress   = false;
+        wparams_final.print_realtime   = false;
+        wparams_final.print_timestamps = false;
+        wparams_final.max_tokens       = 0;
+        wparams_final.n_threads        = n_threads;
+        wparams_final.beam_search.beam_size = beam_size;
+
+        if (whisper_full(ctx, wparams_final, pcmf32_all.data(), pcmf32_all.size()) != 0) {
+            std::cerr << "whisper_full() failed on full-audio pass" << std::endl;
+        }
+
+        final_transcript = collect_segments(ctx);
+    } else {
+        // Fallback to whatever we accumulated during streaming (should not happen)
+        final_transcript = transcript_accum;
+    }
+
+    send_json("final", final_transcript);
 
     reader.join();
     ::shutdown(client_fd, SHUT_RDWR);
