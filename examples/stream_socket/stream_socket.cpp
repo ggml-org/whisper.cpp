@@ -15,6 +15,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <iomanip>
+#include <sstream>
 
 // Very small helper: write all bytes, handling short writes
 static bool write_all(int fd, const void * data, size_t len) {
@@ -71,9 +73,12 @@ private:
     std::condition_variable  m_cv;
 };
 
+// Forward declaration of abort callback
+static bool whisper_should_abort(void * user_data);
+
 // ---------- Audio reader thread ----------------------------------------------------
 
-void reader_thread(int client_fd, pcm_ring_buffer & rb) {
+void reader_thread(int client_fd, pcm_ring_buffer & rb, std::atomic<bool> * abort_flag) {
     constexpr size_t BUF_SZ = 4096;
     std::vector<int16_t> buf(BUF_SZ / sizeof(int16_t));
 
@@ -87,6 +92,11 @@ void reader_thread(int client_fd, pcm_ring_buffer & rb) {
             f32[i] = static_cast<float>(buf[i]) / 32768.0f;
         }
         rb.push(f32.data(), f32.size());
+    }
+
+    // Signal main thread to cancel any ongoing whisper_full() calls
+    if (abort_flag) {
+        abort_flag->store(true);
     }
 
     rb.mark_finished();
@@ -104,6 +114,24 @@ static std::string collect_segments(struct whisper_context * ctx) {
     return out;
 }
 
+// ---------- Helper: timestamped logging ---------------------------------------
+static void log_ts(const std::string & msg) {
+    using namespace std::chrono;
+    auto now = system_clock::now();
+    auto now_c = system_clock::to_time_t(now);
+    auto ms   = duration_cast<milliseconds>(now.time_since_epoch()) % 1000;
+    std::tm tm_now;
+#if defined(_MSC_VER)
+    localtime_s(&tm_now, &now_c);
+#else
+    localtime_r(&now_c, &tm_now);
+#endif
+    std::ostringstream oss;
+    oss << std::put_time(&tm_now, "%H:%M:%S") << '.' << std::setfill('0') << std::setw(3) << ms.count()
+        << " " << msg;
+    std::cerr << oss.str() << std::endl;
+}
+
 // -----------------------------------------------------------------------------
 // Global config (tuned via CLI in main)
 static int32_t g_step_ms   = 700;   // emit partials every 0.5 s
@@ -114,6 +142,9 @@ static int32_t g_keep_ms   = 200;   // overlap between windows
 
 void process_connection(int client_fd, struct whisper_context * ctx) {
     // whisper params (could expose CLI later)
+    // Abort flag shared between reader_thread and whisper abort callback
+    std::atomic<bool> abort_requested(false);
+
     const int32_t step_ms   = g_step_ms;
     const int32_t length_ms = g_length_ms;
     const int32_t keep_ms   = g_keep_ms;
@@ -126,7 +157,7 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
     const int n_samples_keep = keep_ms   * WHISPER_SAMPLE_RATE / 1000;
 
     pcm_ring_buffer rb;
-    std::thread reader(reader_thread, client_fd, std::ref(rb));
+    std::thread reader(reader_thread, client_fd, std::ref(rb), &abort_requested);
 
     std::vector<float> pcmf32_old;
     // Capture the *entire* audio stream so we can run a final full-context
@@ -160,6 +191,7 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
         write_all(client_fd, line.data(), line.size());
     };
 
+    log_ts("Mic started / connection opened");
     // processing loop
     while (true) {
         std::vector<float> pcmf32_new;
@@ -167,6 +199,13 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
         if (popped == 0) {
             if (rb.finished()) break;
             continue;
+        }
+
+        // If the audio stream has finished, skip further partial inference and jump to final pass.
+        if (rb.finished()) {
+            // Still append the last batch of samples to the cumulative buffer so the final pass sees them.
+            pcmf32_all.insert(pcmf32_all.end(), pcmf32_new.begin(), pcmf32_new.end());
+            break;
         }
 
         const int n_samples_new  = pcmf32_new.size();
@@ -191,11 +230,20 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
         wparams.n_threads        = n_threads;
         wparams.beam_search.beam_size = beam_size;
 
+        // Set abort callback so we can cancel this inference if recording stops
+        wparams.abort_callback = whisper_should_abort;
+        wparams.abort_callback_user_data = &abort_requested;
+        abort_requested.store(false); // reset for this inference
+
+        auto t_start = std::chrono::steady_clock::now();
         whisper_full(ctx, wparams, pcmf32_cur.data(), pcmf32_cur.size());
+        auto t_end   = std::chrono::steady_clock::now();
+        auto dur_ms  = std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count();
         std::string part = collect_segments(ctx);
         merge_into_accum(part);
         send_json("partial", part);
-    }
+        log_ts(std::string("[PART] transcription time: ") + std::to_string(dur_ms) + " ms");
+        }
 
     // flush leftovers
     {
@@ -215,6 +263,8 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
 
     std::string final_transcript;
     if (!pcmf32_all.empty()) {
+        abort_requested.store(false); // ensure final pass is not aborted
+        auto t_start = std::chrono::steady_clock::now();
         whisper_full_params wparams_final = whisper_full_default_params(beam_size > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
         wparams_final.print_progress   = false;
         wparams_final.print_realtime   = false;
@@ -223,11 +273,17 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
         wparams_final.n_threads        = n_threads;
         wparams_final.beam_search.beam_size = beam_size;
 
+        // No abort callback for final pass (fully process)
+        wparams_final.abort_callback = nullptr;
+        wparams_final.abort_callback_user_data = nullptr;
+
         if (whisper_full(ctx, wparams_final, pcmf32_all.data(), pcmf32_all.size()) != 0) {
             std::cerr << "whisper_full() failed on full-audio pass" << std::endl;
         }
-
+        auto t_end   = std::chrono::steady_clock::now();
+        auto dur_ms  = std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count();
         final_transcript = collect_segments(ctx);
+        log_ts(std::string("[FINAL] transcription time: ") + std::to_string(dur_ms) + " ms");
     } else {
         // Fallback to whatever we accumulated during streaming (should not happen)
         final_transcript = transcript_accum;
@@ -235,9 +291,17 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
 
     send_json("final", final_transcript);
 
+    log_ts("Mic ended / connection closed");
+
     reader.join();
     ::shutdown(client_fd, SHUT_RDWR);
     ::close(client_fd);
+}
+
+// ---------- ggml abort callback -----------------------------------------------------
+static bool whisper_should_abort(void * user_data) {
+    const std::atomic<bool> * flag = static_cast<const std::atomic<bool> *>(user_data);
+    return flag && flag->load();
 }
 
 // ---------- Main ------------------------------------------------------------------
