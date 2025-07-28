@@ -106,8 +106,8 @@ static std::string collect_segments(struct whisper_context * ctx) {
 
 // -----------------------------------------------------------------------------
 // Global config (tuned via CLI in main)
-static int32_t g_step_ms   = 500;   // emit partials every 0.5 s
-static int32_t g_length_ms = 10000; // 10-s rolling window fed to Whisper
+static int32_t g_step_ms   = 700;   // emit partials every 0.5 s
+static int32_t g_length_ms = 30000; // 10-s rolling window fed to Whisper
 static int32_t g_keep_ms   = 200;   // overlap between windows
 
 // ---------- Main per-connection handler -------------------------------------------
@@ -203,28 +203,9 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
         rb.pop_all(pcmf32_new);
 
         if (!pcmf32_new.empty()) {
-            const int n_samples_new  = pcmf32_new.size();
-            const int n_samples_take = std::min((int)pcmf32_old.size(), std::max(0, n_samples_keep + n_samples_len - n_samples_new));
-
-            std::vector<float> pcmf32_cur(n_samples_new + n_samples_take);
-            if (n_samples_take) {
-                std::copy(pcmf32_old.end() - n_samples_take, pcmf32_old.end(), pcmf32_cur.begin());
-            }
-            std::copy(pcmf32_new.begin(), pcmf32_new.end(), pcmf32_cur.begin() + n_samples_take);
-
-            // Add the leftover samples to the cumulative buffer as well.
+            // Just add the leftover samples to the cumulative buffer for the final pass.
+            // Skip the redundant whisper processing since the final pass will handle everything.
             pcmf32_all.insert(pcmf32_all.end(), pcmf32_new.begin(), pcmf32_new.end());
-
-            whisper_full_params wparams = whisper_full_default_params(beam_size > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
-            wparams.print_progress = false;
-            wparams.print_realtime = false;
-            wparams.print_timestamps = false;
-            wparams.max_tokens = 0;
-            wparams.n_threads = n_threads;
-            wparams.beam_search.beam_size = beam_size;
-            if (whisper_full(ctx, wparams, pcmf32_cur.data(), pcmf32_cur.size()) != 0) {
-                std::cerr << "whisper_full() failed on final flush" << std::endl;
-            }
         }
     }
 
