@@ -276,8 +276,8 @@ int main(int argc, char ** argv) {
         if (params.pausable) {
             int st = control_state.exchange(0);
             if (st == 1 && !is_paused) {
-                audio.pause();
                 audio.clear();
+                audio.pause();
 
                 params.no_context = true;
 
@@ -288,8 +288,8 @@ int main(int argc, char ** argv) {
                 is_paused = true;
                 whisper_reset_timings(ctx);
             } else if (st == 2 && is_paused) {
-                audio.clear();
                 audio.resume();
+                audio.clear();
                 whisper_reset_timings(ctx);
                 is_paused = false;
                 t_last = std::chrono::high_resolution_clock::now();
