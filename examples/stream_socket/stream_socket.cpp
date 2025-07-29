@@ -151,7 +151,7 @@ static void log_ts(const std::string & msg) {
 // -----------------------------------------------------------------------------
 // Global config (tuned via CLI in main)
 static int32_t g_step_ms   = 500;   // emit partials every 0.5 s
-static int32_t g_length_ms = 30000; // 10-s rolling window fed to Whisper
+static int32_t g_length_ms = 15000; // 10-s rolling window fed to Whisper
 static int32_t g_keep_ms   = 200;   // overlap between windows
 
 // When true, suppress incremental partial transcriptions and only run a final
@@ -426,7 +426,8 @@ int main(int argc, char ** argv) {
     std::cerr << "[whisper-socket] loading model " << model_path << " …" << std::endl;
 
     whisper_context_params cparams = whisper_context_default_params();
-    cparams.use_gpu = true;
+    cparams.use_gpu  = true;
+    cparams.flash_attn = true;
     struct whisper_context * ctx = whisper_init_from_file_with_params(model_path, cparams);
     if (!ctx) {
         std::cerr << "failed to load model" << std::endl;
