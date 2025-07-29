@@ -154,6 +154,10 @@ static int32_t g_step_ms   = 500;   // emit partials every 0.5 s
 static int32_t g_length_ms = 30000; // 10-s rolling window fed to Whisper
 static int32_t g_keep_ms   = 200;   // overlap between windows
 
+// When true, suppress incremental partial transcriptions and only run a final
+// full-context whisper pass after the audio stream ends (set via --no-stream).
+static bool    g_no_stream = false;
+
 // Adaptive-scheduler & safety-net ---------------------------------------------
 static const int32_t MIN_STEP_MS   = 400;   // lower bound for real-time feel
 static const int32_t MAX_STEP_MS   = 2000;  // upper bound – keeps latency bounded
@@ -252,38 +256,40 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
         // ------------------------------------------------------------------
         pcmf32_all.insert(pcmf32_all.end(), pcmf32_new.begin(), pcmf32_new.end());
 
-        whisper_full_params wparams = whisper_full_default_params(beam_size > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
-        wparams.print_progress   = false;
-        wparams.print_realtime   = false;
-        wparams.print_timestamps = false;
-        wparams.max_tokens       = 0;
-        wparams.n_threads        = n_threads;
-        wparams.beam_search.beam_size = beam_size;
+        if (!g_no_stream) {
+            whisper_full_params wparams = whisper_full_default_params(beam_size > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
+            wparams.print_progress   = false;
+            wparams.print_realtime   = false;
+            wparams.print_timestamps = false;
+            wparams.max_tokens       = 0;
+            wparams.n_threads        = n_threads;
+            wparams.beam_search.beam_size = beam_size;
 
-        // Set abort callback so we can cancel this inference if recording stops
-        wparams.abort_callback = whisper_should_abort;
-        wparams.abort_callback_user_data = &abort_requested;
-        abort_requested.store(false); // reset for this inference
+            // Set abort callback so we can cancel this inference if recording stops
+            wparams.abort_callback = whisper_should_abort;
+            wparams.abort_callback_user_data = &abort_requested;
+            abort_requested.store(false); // reset for this inference
 
-        auto t_start = std::chrono::steady_clock::now();
-        whisper_full(ctx, wparams, pcmf32_cur.data(), pcmf32_cur.size());
-        auto t_end   = std::chrono::steady_clock::now();
-        auto dur_ms  = std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count();
-        std::string part = collect_segments(ctx);
-        merge_into_accum(part);
-        send_json("partial", part);
-        log_ts(std::string("[PART] transcription time: ") + std::to_string(dur_ms) + " ms");
+            auto t_start = std::chrono::steady_clock::now();
+            whisper_full(ctx, wparams, pcmf32_cur.data(), pcmf32_cur.size());
+            auto t_end   = std::chrono::steady_clock::now();
+            auto dur_ms  = std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count();
+            std::string part = collect_segments(ctx);
+            merge_into_accum(part);
+            send_json("partial", part);
+            log_ts(std::string("[PART] transcription time: ") + std::to_string(dur_ms) + " ms");
 
-        // ------------------------------------------------------------------
-        // Adaptive step: update EWMA and derive next step_ms within bounds
-        // ------------------------------------------------------------------
-        avg_ms = (1.0f - EWMA_ALPHA) * avg_ms + EWMA_ALPHA * (float)dur_ms;
+            // ------------------------------------------------------------------
+            // Adaptive step: update EWMA and derive next step_ms within bounds
+            // ------------------------------------------------------------------
+            avg_ms = (1.0f - EWMA_ALPHA) * avg_ms + EWMA_ALPHA * (float)dur_ms;
 
-        // Manual clamp (C++11 compatible) – avoids std::clamp dependency
-        int32_t new_step = int(avg_ms * SAFETY_FACTOR);
-        if (new_step < MIN_STEP_MS) new_step = MIN_STEP_MS;
-        if (new_step > MAX_STEP_MS) new_step = MAX_STEP_MS;
-        step_ms = new_step;
+            // Manual clamp (C++11 compatible) – avoids std::clamp dependency
+            int32_t new_step = int(avg_ms * SAFETY_FACTOR);
+            if (new_step < MIN_STEP_MS) new_step = MIN_STEP_MS;
+            if (new_step > MAX_STEP_MS) new_step = MAX_STEP_MS;
+            step_ms = new_step;
+        }
 
         // ------------------------------------------------------------------
         // Ring-buffer cap – discard oldest audio if backlog exceeds threshold
@@ -368,6 +374,13 @@ int main(int argc, char ** argv) {
             g_length_ms = std::atoi(argv[i + 1]);
         } else if (std::strcmp(argv[i], "--keep") == 0) {
             g_keep_ms = std::atoi(argv[i + 1]);
+        }
+    }
+
+    // Independent scan for flag-style options (no additional parameter)
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--no-stream") == 0) {
+            g_no_stream = true;
         }
     }
 
