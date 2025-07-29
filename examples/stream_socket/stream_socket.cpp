@@ -66,6 +66,22 @@ public:
         return m_finished && m_buf.empty();
     }
 
+    // Drop the first n samples (no-op if fewer are present)
+    void drop(size_t n) {
+        std::lock_guard<std::mutex> lock(m_mtx);
+        if (n >= m_buf.size()) {
+            m_buf.clear();
+        } else {
+            m_buf.erase(m_buf.begin(), m_buf.begin() + n);
+        }
+    }
+
+    // Current buffered duration in milliseconds
+    size_t duration_ms() const {
+        std::lock_guard<std::mutex> lock(m_mtx);
+        return (m_buf.size() * 1000) / WHISPER_SAMPLE_RATE;
+    }
+
 private:
     std::vector<float>       m_buf;
     bool                     m_finished = false;
@@ -134,9 +150,18 @@ static void log_ts(const std::string & msg) {
 
 // -----------------------------------------------------------------------------
 // Global config (tuned via CLI in main)
-static int32_t g_step_ms   = 700;   // emit partials every 0.5 s
+static int32_t g_step_ms   = 500;   // emit partials every 0.5 s
 static int32_t g_length_ms = 30000; // 10-s rolling window fed to Whisper
 static int32_t g_keep_ms   = 200;   // overlap between windows
+
+// Adaptive-scheduler & safety-net ---------------------------------------------
+static const int32_t MIN_STEP_MS   = 400;   // lower bound for real-time feel
+static const int32_t MAX_STEP_MS   = 2000;  // upper bound – keeps latency bounded
+static const float   EWMA_ALPHA    = 0.30f; // smoothing for running average
+static const float   SAFETY_FACTOR = 1.10f; // 10 % head-room between passes
+
+// Ring-buffer hard cap (discard oldest audio when exceeded)
+static const int32_t RING_CAP_MS   = 20000; // never queue more than 20 s
 
 // ---------- Main per-connection handler -------------------------------------------
 
@@ -145,14 +170,16 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
     // Abort flag shared between reader_thread and whisper abort callback
     std::atomic<bool> abort_requested(false);
 
-    const int32_t step_ms   = g_step_ms;
+    int32_t step_ms   = g_step_ms; // mutable for adaptive scheduling
     const int32_t length_ms = g_length_ms;
     const int32_t keep_ms   = g_keep_ms;
 
     int32_t n_threads = std::min(4, (int32_t)std::thread::hardware_concurrency());
     int32_t beam_size = -1;
 
-    const int n_samples_step = step_ms   * WHISPER_SAMPLE_RATE / 1000;
+    // Adaptive scheduler state
+    float   avg_ms   = (float)step_ms; // initialise EWMA
+
     const int n_samples_len  = length_ms * WHISPER_SAMPLE_RATE / 1000;
     const int n_samples_keep = keep_ms   * WHISPER_SAMPLE_RATE / 1000;
 
@@ -194,6 +221,9 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
     log_ts("Mic started / connection opened");
     // processing loop
     while (true) {
+        // Compute step size and pop corresponding samples from the ring buffer
+        const int n_samples_step = step_ms * WHISPER_SAMPLE_RATE / 1000;
+
         std::vector<float> pcmf32_new;
         size_t popped = rb.pop(n_samples_step, pcmf32_new);
         if (popped == 0) {
@@ -243,6 +273,24 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
         merge_into_accum(part);
         send_json("partial", part);
         log_ts(std::string("[PART] transcription time: ") + std::to_string(dur_ms) + " ms");
+
+        // ------------------------------------------------------------------
+        // Adaptive step: update EWMA and derive next step_ms within bounds
+        // ------------------------------------------------------------------
+        avg_ms = (1.0f - EWMA_ALPHA) * avg_ms + EWMA_ALPHA * (float)dur_ms;
+
+        // Manual clamp (C++11 compatible) – avoids std::clamp dependency
+        int32_t new_step = int(avg_ms * SAFETY_FACTOR);
+        if (new_step < MIN_STEP_MS) new_step = MIN_STEP_MS;
+        if (new_step > MAX_STEP_MS) new_step = MAX_STEP_MS;
+        step_ms = new_step;
+
+        // ------------------------------------------------------------------
+        // Ring-buffer cap – discard oldest audio if backlog exceeds threshold
+        // ------------------------------------------------------------------
+        while (rb.duration_ms() > RING_CAP_MS) {
+            rb.drop(n_samples_step);
+        }
         }
 
     // flush leftovers
