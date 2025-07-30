@@ -2432,6 +2432,8 @@ static bool whisper_encode_internal(
                 return false;
             }
         } else {
+            ggml_backend_sched_reset(sched);
+
 #if defined(WHISPER_USE_COREML)
             whisper_coreml_encode(wstate.ctx_coreml, mel->ne[0], mel->ne[1], (float *) mel->data, (float *) wstate.embd_enc->data);
 #elif defined(WHISPER_USE_OPENVINO)
