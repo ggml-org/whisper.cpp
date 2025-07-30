@@ -17,6 +17,8 @@
 #include <vector>
 #include <iomanip>
 #include <sstream>
+#include <fcntl.h> // For fcntl
+#include <errno.h> // For errno
 
 // Very small helper: write all bytes, handling short writes
 static bool write_all(int fd, const void * data, size_t len) {
@@ -148,10 +150,18 @@ static void log_ts(const std::string & msg) {
     std::cerr << oss.str() << std::endl;
 }
 
+// ---------- Helper: create app-aware whisper prompt -----------------------------
+static std::string create_whisper_prompt(const std::string & app_name) {
+    if (app_name.empty()) {
+        return "";
+    }
+    return "The user is currently using " + app_name + " on macOS. Here is their voice transcribed command that will be parsed for either direct transcription, keyboard shortcuts, code, or terminal commands: ";
+}
+
 // -----------------------------------------------------------------------------
 // Global config (tuned via CLI in main)
 static int32_t g_step_ms   = 500;   // emit partials every 0.5 s
-static int32_t g_length_ms = 15000; // 10-s rolling window fed to Whisper
+static int32_t g_length_ms = 10000; // 10-s rolling window fed to Whisper
 static int32_t g_keep_ms   = 200;   // overlap between windows
 
 // When true, suppress incremental partial transcriptions and only run a final
@@ -187,7 +197,111 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
     const int n_samples_len  = length_ms * WHISPER_SAMPLE_RATE / 1000;
     const int n_samples_keep = keep_ms   * WHISPER_SAMPLE_RATE / 1000;
 
+    // This buffer must be created before the header read block, so we can
+    // forward any audio data that might be received along with the header.
     pcm_ring_buffer rb;
+
+    // ------------------------------------------------------------------
+    // Optional JSON header with app context – read line before audio
+    // ------------------------------------------------------------------
+    std::string app_context;
+    {
+        // Set socket to non-blocking to poll for header
+        int flags = fcntl(client_fd, F_GETFL, 0);
+        fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
+
+        const int MAX_WAIT_MS = 100;
+        int waited_ms = 0;
+        std::string line_buffer;
+        bool done_reading_header = false;
+
+        while (!done_reading_header && waited_ms < MAX_WAIT_MS) {
+            char buf[1024];
+            ssize_t n = ::read(client_fd, buf, sizeof(buf));
+
+            if (n > 0) {
+                line_buffer.append(buf, n);
+                size_t nl_pos = line_buffer.find('\n');
+
+                if (nl_pos != std::string::npos) {
+                    std::string header_line = line_buffer.substr(0, nl_pos);
+                    std::string audio_part  = line_buffer.substr(nl_pos + 1);
+
+                    // Log the exact header received for debugging
+                    std::cerr << "[whisper-socket] Raw header: " << header_line << std::endl;
+
+                    // Remove spaces for prefix check
+                    std::string header_no_spaces;
+                    for (char c : header_line) {
+                        if (c != ' ') {
+                            header_no_spaces += c;
+                        }
+                    }
+
+                    // Check for app context header
+                    if (header_no_spaces.find("{\"type\":\"app_context\"") == 0) {
+                        size_t pos = header_no_spaces.find("\"app\":\"");
+                        if (pos != std::string::npos) {
+                            pos += 7; // skip "app":"
+                            size_t end = header_no_spaces.find('"', pos);
+                            if (end != std::string::npos) {
+                                app_context = header_no_spaces.substr(pos, end - pos);
+                            }
+                        }
+                    }
+
+                    // Any data after the newline is audio - push to ring buffer
+                    if (!audio_part.empty()) {
+                        if (audio_part.size() % sizeof(int16_t) == 0) {
+                            size_t n_samples = audio_part.size() / sizeof(int16_t);
+                            std::vector<float> f32(n_samples);
+                            const int16_t* pcm_data = reinterpret_cast<const int16_t*>(audio_part.data());
+                            for (size_t i = 0; i < n_samples; ++i) {
+                                f32[i] = static_cast<float>(pcm_data[i]) / 32768.0f;
+                            }
+                            rb.push(f32.data(), f32.size());
+                        }
+                    }
+                    done_reading_header = true;
+                }
+            } else if (n == 0) {
+                // EOF
+                done_reading_header = true;
+            } else { // n < 0
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    // No data available, wait a bit
+                    usleep(5000); // 5ms
+                    waited_ms += 5;
+                } else {
+                    // A real error occurred
+                    done_reading_header = true;
+                }
+            }
+        }
+        
+        // If we timed out, treat anything in the buffer as audio
+        if (!done_reading_header && !line_buffer.empty()) {
+             if (line_buffer.size() % sizeof(int16_t) == 0) {
+                size_t n_samples = line_buffer.size() / sizeof(int16_t);
+                std::vector<float> f32(n_samples);
+                const int16_t* pcm_data = reinterpret_cast<const int16_t*>(line_buffer.data());
+                for (size_t i = 0; i < n_samples; ++i) {
+                    f32[i] = static_cast<float>(pcm_data[i]) / 32768.0f;
+                }
+                rb.push(f32.data(), f32.size());
+            }
+        }
+
+        // Restore socket to blocking mode for the reader thread
+        fcntl(client_fd, F_SETFL, flags);
+
+        if (app_context.empty()) {
+            std::cerr << "[whisper-socket] No app context received, using default prompt" << std::endl;
+        } else {
+            std::cerr << "[whisper-socket] App context: " << app_context << std::endl;
+        }
+    }
+
     std::thread reader(reader_thread, client_fd, std::ref(rb), &abort_requested);
 
     std::vector<float> pcmf32_old;
@@ -220,6 +334,10 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
     auto send_json = [&](const std::string & type, const std::string & text){
         std::string line = std::string("{\"type\":\"") + type + "\",\"text\":\"" + text + "\"}\n";
         write_all(client_fd, line.data(), line.size());
+        // Also print the transcribed text locally for both partial and final results
+        if (!text.empty()) {
+            log_ts("[" + type + "] " + text);
+        }
     };
 
     log_ts("Mic started / connection opened");
@@ -264,6 +382,16 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
             wparams.max_tokens       = 0;
             wparams.n_threads        = n_threads;
             wparams.beam_search.beam_size = beam_size;
+
+            // Set app-aware initial prompt for better transcription
+            std::string prompt = create_whisper_prompt(app_context);
+            wparams.initial_prompt = prompt.empty() ? nullptr : prompt.c_str();
+            
+            if (wparams.initial_prompt) {
+                std::cerr << "[whisper-socket] Using prompt: \"" << wparams.initial_prompt << "\"" << std::endl;
+            } else {
+                std::cerr << "[whisper-socket] Using no initial prompt" << std::endl;
+            }
 
             // Set abort callback so we can cancel this inference if recording stops
             wparams.abort_callback = whisper_should_abort;
@@ -326,6 +454,16 @@ void process_connection(int client_fd, struct whisper_context * ctx) {
         wparams_final.max_tokens       = 0;
         wparams_final.n_threads        = n_threads;
         wparams_final.beam_search.beam_size = beam_size;
+
+        // Set app-aware initial prompt for better transcription
+        std::string prompt = create_whisper_prompt(app_context);
+        wparams_final.initial_prompt = prompt.empty() ? nullptr : prompt.c_str();
+        
+        if (wparams_final.initial_prompt) {
+            std::cerr << "[whisper-socket] Final pass using prompt: \"" << wparams_final.initial_prompt << "\"" << std::endl;
+        } else {
+            std::cerr << "[whisper-socket] Final pass using no initial prompt" << std::endl;
+        }
 
         // No abort callback for final pass (fully process)
         wparams_final.abort_callback = nullptr;
