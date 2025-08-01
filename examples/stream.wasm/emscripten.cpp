@@ -53,7 +53,7 @@ void stream_main(size_t index, const std::string & lang) {
     // disable temperature fallback
     wparams.temperature_inc  = -1.0f;
 
-    wparams.language         = is_multilingual ? strdup(lang.c_str()) : "en";
+    wparams.language         = is_multilingual ? lang.c_str() : "en";
 
     printf("stream: using %d threads\n", wparams.n_threads);
 
