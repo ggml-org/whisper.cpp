@@ -135,6 +135,7 @@ module Whisper
       ?suppress_blank: boolish,
       ?suppress_nst: boolish,
       ?token_timestamps: boolish,
+      ?max_len: Integer,
       ?split_on_word: boolish,
       ?initial_prompt: string | nil,
       ?diarize: boolish,
@@ -221,6 +222,12 @@ module Whisper
     # If true, enables token-level timestamps.
     #
     def token_timestamps: () -> (true | false)
+
+    def max_len=: (Integer) -> Integer
+
+    # max segment length in characters.
+    #
+    def max_len: () -> Integer
 
     def split_on_word=: (boolish) -> boolish
 

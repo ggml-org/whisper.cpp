@@ -26,7 +26,7 @@
   rb_define_method(cParams, #param_name, ruby_whisper_params_get_ ## param_name, 0); \
   rb_define_method(cParams, #param_name "=", ruby_whisper_params_set_ ## param_name, 1);
 
-#define RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT 35
+#define RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT 36
 
 extern VALUE cParams;
 extern VALUE cVADParams;
@@ -49,6 +49,7 @@ static ID id_print_timestamps;
 static ID id_suppress_blank;
 static ID id_suppress_nst;
 static ID id_token_timestamps;
+static ID id_max_len;
 static ID id_split_on_word;
 static ID id_initial_prompt;
 static ID id_diarize;
@@ -514,6 +515,33 @@ ruby_whisper_params_set_token_timestamps(VALUE self, VALUE value)
 {
   BOOL_PARAMS_SETTER(self, token_timestamps, value)
 }
+
+/*
+ * max segment length in characters.
+ *
+ * call-seq:
+ *   max_len -> Integer
+ */
+static VALUE
+ruby_whisper_params_get_max_len(VALUE self)
+{
+  ruby_whisper_params *rwp;
+  TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
+  return INT2NUM(rwp->params.max_len);
+}
+/*
+ * call-seq:
+ *   max_len = length -> length
+ */
+static VALUE
+ruby_whisper_params_set_max_len(VALUE self, VALUE value)
+{
+  ruby_whisper_params *rwp;
+  TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
+  rwp->params.max_len = NUM2INT(value);
+  return value;
+}
+
 /*
  * If true, split on word rather than on token (when used with max_len).
  *
@@ -1137,6 +1165,7 @@ ruby_whisper_params_initialize(int argc, VALUE *argv, VALUE self)
       SET_PARAM_IF_SAME(suppress_blank)
       SET_PARAM_IF_SAME(suppress_nst)
       SET_PARAM_IF_SAME(token_timestamps)
+      SET_PARAM_IF_SAME(max_len)
       SET_PARAM_IF_SAME(split_on_word)
       SET_PARAM_IF_SAME(initial_prompt)
       SET_PARAM_IF_SAME(offset)
@@ -1271,6 +1300,7 @@ init_ruby_whisper_params(VALUE *mWhisper)
   DEFINE_PARAM(suppress_blank, 8)
   DEFINE_PARAM(suppress_nst, 9)
   DEFINE_PARAM(token_timestamps, 10)
+  DEFINE_PARAM(max_len, 35)
   DEFINE_PARAM(split_on_word, 11)
   DEFINE_PARAM(initial_prompt, 12)
   DEFINE_PARAM(diarize, 13)
