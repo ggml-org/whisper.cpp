@@ -4193,15 +4193,9 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
             {
-                struct ggml_tensor * a;
-                struct ggml_tensor * b;
-                if (op->op == GGML_OP_MUL_MAT) {
-                    a = op->src[0];
-                    b = op->src[1];
-                } else {
-                    a = op->src[2];
-                    b = op->src[1];
-                }
+                struct ggml_tensor * a = op->src[0];
+                struct ggml_tensor * b = op->src[1];
+
                 if (a->ne[3] != b->ne[3]) {
                     return false;
                 }
@@ -4216,7 +4210,9 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                     }
                 }
                 ggml_type src0_type = op->src[0]->type;
-                if (src0_type == GGML_TYPE_BF16) {
+                if (src0_type == GGML_TYPE_BF16 || src0_type == GGML_TYPE_MXFP4) {
+                    // TODO: support MXFP4
+                    // FIXME: keep a list of supported types to avoid breaking the backend when a new type is added
                     return false;
                 }
                 return true;
@@ -4359,6 +4355,10 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_SOFT_MAX:
             // TODO: support batching
             if (op->src[0]->ne[3] != 1) {
+                return false;
+            }
+            // TODO: support attention sinks [TAG_ATTN_SINKS]
+            if (op->src[2]) {
                 return false;
             }
             // TODO: support broadcast
