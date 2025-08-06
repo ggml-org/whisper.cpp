@@ -13,6 +13,7 @@ class TestParams < TestBase
     :suppress_blank,
     :suppress_nst,
     :token_timestamps,
+    :max_len,
     :split_on_word,
     :initial_prompt,
     :diarize,
@@ -137,6 +138,13 @@ class TestParams < TestBase
     assert @params.token_timestamps
     @params.token_timestamps = false
     assert !@params.token_timestamps
+  end
+
+  def test_max_len
+    @params.max_len = 42
+    assert_equal @params.max_len, 42
+    @params.max_len = 0
+    assert_equal @params.max_len, 0
   end
 
   def test_split_on_word
