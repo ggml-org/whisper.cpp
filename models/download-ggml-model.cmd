@@ -74,7 +74,7 @@ if exist "%models_path%\\ggml-%model%.bin" (
   echo Model %model% already exists. Skipping download.
   goto :eof
 )
-@echo %model% | @findstr tdrz
+echo %model% | findstr tdrz
 if %ERRORLEVEL% neq 0 (
  PowerShell -NoProfile -ExecutionPolicy Bypass -Command "Start-BitsTransfer -Source https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-%model%.bin -Destination \"%models_path%\\ggml-%model%.bin\""
 ) else (
