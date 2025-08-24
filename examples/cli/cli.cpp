@@ -1,3 +1,5 @@
+#include <filesystem>
+#include <algorithm>   
 #include "common.h"
 #include "common-whisper.h"
 
@@ -1051,6 +1053,7 @@ int main(int argc, char ** argv) {
         }
     }
 
+    bool processed_any = false;
     for (int f = 0; f < (int) params.fname_inp.size(); ++f) {
         const auto & fname_inp = params.fname_inp[f];
         struct fout_factory {
@@ -1105,10 +1108,43 @@ int main(int argc, char ** argv) {
         std::vector<float> pcmf32;               // mono-channel F32 PCM
         std::vector<std::vector<float>> pcmf32s; // stereo-channel F32 PCM
 
-        if (!::read_audio_data(fname_inp, pcmf32, pcmf32s, params.diarize)) {
-            fprintf(stderr, "error: failed to read audio file '%s'\n", fname_inp.c_str());
-            continue;
-        }
+        std::string ext;
+if (fname_inp != "-") {
+    try {
+        ext = std::filesystem::path(fname_inp).extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c){ return std::tolower(c); });
+    } catch (...) {
+        // ignore; let the decoder try
+    }
+}
+
+auto ext_supported = [](const std::string &e) {
+    // keep in sync with usage: "supported audio formats: flac, mp3, ogg, wav"
+    return e == ".wav" || e == ".mp3" || e == ".flac" || e == ".ogg";
+};
+
+if (fname_inp != "-" && !ext.empty() && !ext_supported(ext)) {
+    fprintf(stderr,
+        "error: unsupported audio extension '%s' for '%s'.\n"
+        "supported: flac, mp3, ogg, wav.\n"
+        "hint: convert with ffmpeg, e.g.:\n"
+        "      ffmpeg -i \"%s\" -ar 16000 -ac 1 -c:a pcm_s16le out.wav\n",
+        ext.c_str(), fname_inp.c_str(), fname_inp.c_str());
+    continue;
+}
+
+// Try to read/decode the audio. If it fails, give an actionable hint.
+if (!::read_audio_data(fname_inp, pcmf32, pcmf32s, params.diarize)) {
+    std::string det = ext.empty() ? "" : (" (detected extension: " + ext + ")");
+    fprintf(stderr,
+        "error: failed to decode audio from '%s'%s.\n"
+        "Make sure the file is not corrupted and has one of: flac, mp3, ogg, wav.\n"
+        "If you still hit this, convert to a standard WAV with:\n"
+        "  ffmpeg -i \"%s\" -ar 16000 -ac 1 -c:a pcm_s16le out.wav\n",
+        fname_inp.c_str(), det.c_str(), fname_inp.c_str());
+    continue;
+}
 
         if (!whisper_is_multilingual(ctx)) {
             if (params.language != "en" || params.translate) {
@@ -1258,6 +1294,8 @@ int main(int argc, char ** argv) {
                 fprintf(stderr, "%s: failed to process audio\n", argv[0]);
                 return 10;
             }
+            processed_any = true;
+
         }
 
         // output stuff
@@ -1286,7 +1324,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    if (!params.no_prints) {
+    if (processed_any && !params.no_prints) {
         whisper_print_timings(ctx);
     }
     whisper_free(ctx);
