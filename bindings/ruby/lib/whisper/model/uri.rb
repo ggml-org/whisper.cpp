@@ -94,7 +94,7 @@ module Whisper
       end
 
       def show_progress(current, size)
-        progress_rate_available = size && $stderr.tty?
+        progress_rate_available = size && $stderr.tty? && $stderr.winsize[1] >= line.size
 
         unless @prev
           @prev = Time.now
