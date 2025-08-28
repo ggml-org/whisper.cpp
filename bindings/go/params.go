@@ -47,6 +47,10 @@ func (p *Params) SetPrintTimestamps(v bool) {
 	p.print_timestamps = toBool(v)
 }
 
+func (p *Params) SetCarryInitialPrompt(v bool) {
+	p.carry_initial_prompt = toBool(v)
+}
+
 // Set language id
 func (p *Params) SetLanguage(lang int) error {
 	if lang == -1 {
