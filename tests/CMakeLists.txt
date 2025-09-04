@@ -93,6 +93,9 @@ set(VAD_TEST test-vad)
 add_executable(${VAD_TEST} ${VAD_TEST}.cpp)
 target_include_directories(${VAD_TEST} PRIVATE ../include ../ggml/include ../examples)
 target_link_libraries(${VAD_TEST} PRIVATE common)
+target_compile_definitions(${VAD_TEST} PRIVATE
+    VAD_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-silero-v5.1.2-ggml.bin"
+    SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
 add_test(NAME ${VAD_TEST} COMMAND ${VAD_TEST})
 set_tests_properties(${VAD_TEST} PROPERTIES LABELS "unit")
 
@@ -101,5 +104,9 @@ set(VAD_TEST test-vad-full)
 add_executable(${VAD_TEST} ${VAD_TEST}.cpp)
 target_include_directories(${VAD_TEST} PRIVATE ../include ../ggml/include ../examples)
 target_link_libraries(${VAD_TEST} PRIVATE common)
+target_compile_definitions(${VAD_TEST} PRIVATE
+    WHISPER_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/ggml-base.en.bin"
+    VAD_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-silero-v5.1.2-ggml.bin"
+    SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
 add_test(NAME ${VAD_TEST} COMMAND ${VAD_TEST})
-set_tests_properties(${VAD_TARGET} PROPERTIES LABELS "base;en")
+set_tests_properties(${VAD_TEST} PROPERTIES LABELS "base;en")

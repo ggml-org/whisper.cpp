@@ -13,9 +13,9 @@
 #include <cassert>
 
 int main() {
-    std::string whisper_model_path = "../../models/ggml-base.en.bin";
-    std::string vad_model_path     = "../../models/for-tests-silero-v5.1.2-ggml.bin";
-    std::string sample_path        = "../../samples/jfk.wav";
+    std::string whisper_model_path = WHISPER_MODEL_PATH;
+    std::string vad_model_path     = VAD_MODEL_PATH;
+    std::string sample_path        = SAMPLE_PATH;
 
     // Load the sample audio file
     std::vector<float> pcmf32;
