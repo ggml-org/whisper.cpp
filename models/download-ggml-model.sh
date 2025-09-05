@@ -119,12 +119,12 @@ fi
 
 if [ -x "$(command -v wget2)" ]; then
     wget2 --no-config --progress bar -O ggml-"$model".bin $src/$pfx-"$model".bin
-elif [ -x "$(command -v wget)" ]; then
-    wget --no-config --quiet --show-progress -O ggml-"$model".bin $src/$pfx-"$model".bin
 elif [ -x "$(command -v curl)" ]; then
     curl -L --output ggml-"$model".bin $src/$pfx-"$model".bin
+elif [ -x "$(command -v wget)" ]; then
+    wget --no-config --quiet --show-progress -O ggml-"$model".bin $src/$pfx-"$model".bin
 else
-    printf "Either wget or curl is required to download models.\n"
+    printf "Either wget2, curl, or wget is required to download models.\n"
     exit 1
 fi
 
