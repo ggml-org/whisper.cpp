@@ -241,7 +241,8 @@ jobs:
       - name: Dependencies
         run: |
           brew update
-          brew install sdl2 cmake
+          cmake --version
+          brew install sdl2
 
       - name: Build
         run: |
