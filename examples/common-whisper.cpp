@@ -74,6 +74,8 @@ bool read_audio_data(const std::string & fname, std::vector<float>& pcmf32, std:
     }
     else if (((result = ma_decoder_init_file(fname.c_str(), &decoder_config, &decoder)) != MA_SUCCESS)) {
 #if defined(WHISPER_FFMPEG)
+        fprintf(stderr, "warning: failed to read audio data from file: %s\n", ma_result_description(result));
+
 		if (ffmpeg_decode_audio(fname, audio_data) != 0) {
 			fprintf(stderr, "error: failed to ffmpeg decode '%s'\n", fname.c_str());
 
@@ -86,11 +88,9 @@ bool read_audio_data(const std::string & fname, std::vector<float>& pcmf32, std:
 			return false;
 		}
 #else
-		if ((result = ma_decoder_init_memory(fname.c_str(), fname.size(), &decoder_config, &decoder)) != MA_SUCCESS) {
-			fprintf(stderr, "error: failed to read audio data as wav (%s)\n", ma_result_description(result));
+        fprintf(stderr, "error: failed to read audio data from file (%s)\n", ma_result_description(result));
 
-			return false;
-		}
+        return false;
 #endif
     }
 
