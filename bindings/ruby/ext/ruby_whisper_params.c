@@ -26,7 +26,7 @@
   rb_define_method(cParams, #param_name, ruby_whisper_params_get_ ## param_name, 0); \
   rb_define_method(cParams, #param_name "=", ruby_whisper_params_set_ ## param_name, 1);
 
-#define RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT 36
+#define RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT 37
 
 extern VALUE cParams;
 extern VALUE cVADParams;
@@ -46,6 +46,7 @@ static ID id_print_special;
 static ID id_print_progress;
 static ID id_print_realtime;
 static ID id_print_timestamps;
+static ID id_carry_initial_prompt;
 static ID id_suppress_blank;
 static ID id_suppress_nst;
 static ID id_token_timestamps;
@@ -454,6 +455,26 @@ static VALUE
 ruby_whisper_params_get_print_timestamps(VALUE self)
 {
   BOOL_PARAMS_GETTER(self, print_timestamps)
+}
+
+/*
+ *  call-seq:
+ *    carry_initial_prompt -> true or false
+ */
+static VALUE
+ruby_whisper_params_get_carry_initial_prompt(VALUE self)
+{
+  BOOL_PARAMS_GETTER(self, carry_initial_prompt)
+}
+
+/*
+ *  call-seq:
+ *    carry_initial_prompt = bool -> bool
+ */
+static VALUE
+ruby_whisper_params_set_carry_initial_prompt(VALUE self, VALUE value)
+{
+  BOOL_PARAMS_SETTER(self, carry_initial_prompt, value)
 }
 /*
  * call-seq:
@@ -1168,6 +1189,7 @@ ruby_whisper_params_initialize(int argc, VALUE *argv, VALUE self)
       SET_PARAM_IF_SAME(max_len)
       SET_PARAM_IF_SAME(split_on_word)
       SET_PARAM_IF_SAME(initial_prompt)
+      SET_PARAM_IF_SAME(carry_initial_prompt)
       SET_PARAM_IF_SAME(offset)
       SET_PARAM_IF_SAME(duration)
       SET_PARAM_IF_SAME(max_text_tokens)
@@ -1303,6 +1325,7 @@ init_ruby_whisper_params(VALUE *mWhisper)
   DEFINE_PARAM(max_len, 11)
   DEFINE_PARAM(split_on_word, 12)
   DEFINE_PARAM(initial_prompt, 13)
+  DEFINE_PARAM(carry_initial_prompt, 36)
   DEFINE_PARAM(diarize, 14)
   DEFINE_PARAM(offset, 15)
   DEFINE_PARAM(duration, 16)

@@ -138,6 +138,7 @@ module Whisper
       ?max_len: Integer,
       ?split_on_word: boolish,
       ?initial_prompt: string | nil,
+      ?carry_initial_prompt: boolish,
       ?diarize: boolish,
       ?offset: Integer,
       ?duration: Integer,
@@ -236,6 +237,7 @@ module Whisper
     def split_on_word: () -> (true | false)
 
     def initial_prompt=: (_ToS) -> _ToS
+    def carry_initial_prompt=: (boolish) -> boolish
 
     # Tokens to provide to the whisper decoder as initial prompt
     # these are prepended to any existing text context from a previous call
@@ -243,6 +245,7 @@ module Whisper
     # Maximum of whisper_n_text_ctx()/2 tokens are used (typically 224).
     #
     def initial_prompt: () -> (String | nil)
+    def carry_initial_prompt: () -> (true | false)
 
     def diarize=: (boolish) -> boolish
 
