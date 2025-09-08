@@ -47,9 +47,6 @@ func (p *Params) SetPrintTimestamps(v bool) {
 	p.print_timestamps = toBool(v)
 }
 
-func (p *Params) SetCarryInitialPrompt(v bool) {
-	p.carry_initial_prompt = toBool(v)
-}
 
 // Set language id
 func (p *Params) SetLanguage(lang int) error {
@@ -150,6 +147,10 @@ func (p *Params) SetInitialPrompt(prompt string) {
 	p.initial_prompt = C.CString(prompt)
 }
 
+func (p *Params) SetCarryInitialPrompt(v bool) {
+	p.carry_initial_prompt = toBool(v)
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // PRIVATE METHODS
 
@@ -202,6 +203,9 @@ func (p *Params) String() string {
 	}
 	if p.token_timestamps {
 		str += " token_timestamps"
+	}
+	if p.carry_initial_prompt {
+		str += " carry_initial_prompt"
 	}
 
 	return str + ">"
