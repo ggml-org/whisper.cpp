@@ -1,3 +1,5 @@
+#include <filesystem>
+#include <algorithm>   
 #include "common.h"
 #include "common-whisper.h"
 
@@ -29,6 +31,37 @@ static void replace_all(std::string & s, const std::string & search, const std::
         s.insert(pos, replace);
     }
 }
+//  helper: validate input file extension 
+static bool validate_audio_extension(const std::string & fname_inp) {
+    if (fname_inp == "-") return true; // allow stdin
+
+    std::string ext;
+    try {
+        ext = std::filesystem::path(fname_inp).extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c){ return std::tolower(c); });
+    } catch (...) {
+        // if path parsing fails, let the decoder try anyway
+        return true;
+    }
+
+    auto ext_supported = [](const std::string &e) {
+        // keep in sync with usage text
+        return e == ".wav" || e == ".mp3" || e == ".flac" || e == ".ogg";
+    };
+
+    if (!ext.empty() && !ext_supported(ext)) {
+        fprintf(stderr,
+            "error: unsupported audio extension '%s' for '%s'.\n"
+            "supported: flac, mp3, ogg, wav.\n"
+            "hint: convert with ffmpeg, e.g.:\n"
+            "      ffmpeg -i \"%s\" -ar 16000 -ac 1 -c:a pcm_s16le out.wav\n",
+            ext.c_str(), fname_inp.c_str(), fname_inp.c_str());
+        return false;
+    }
+    return true;
+}
+
 
 // command-line parameters
 struct whisper_params {
@@ -1051,8 +1084,13 @@ int main(int argc, char ** argv) {
         }
     }
 
+    bool processed_any = false;
     for (int f = 0; f < (int) params.fname_inp.size(); ++f) {
         const auto & fname_inp = params.fname_inp[f];
+            if (!validate_audio_extension(fname_inp)) {
+        continue;
+    }
+
         struct fout_factory {
             std::string fname_out;
             const size_t basename_length;
@@ -1105,10 +1143,15 @@ int main(int argc, char ** argv) {
         std::vector<float> pcmf32;               // mono-channel F32 PCM
         std::vector<std::vector<float>> pcmf32s; // stereo-channel F32 PCM
 
-        if (!::read_audio_data(fname_inp, pcmf32, pcmf32s, params.diarize)) {
-            fprintf(stderr, "error: failed to read audio file '%s'\n", fname_inp.c_str());
-            continue;
-        }
+if (!::read_audio_data(fname_inp, pcmf32, pcmf32s, params.diarize)) {
+    fprintf(stderr,
+        "error: failed to decode audio from '%s'.\n"
+        "Make sure the file is not corrupted and has one of: flac, mp3, ogg, wav.\n"
+        "If you still hit this, convert to a standard WAV with:\n"
+        "  ffmpeg -i \"%s\" -ar 16000 -ac 1 -c:a pcm_s16le out.wav\n",
+        fname_inp.c_str(), fname_inp.c_str());
+    continue;
+}
 
         if (!whisper_is_multilingual(ctx)) {
             if (params.language != "en" || params.translate) {
@@ -1258,6 +1301,8 @@ int main(int argc, char ** argv) {
                 fprintf(stderr, "%s: failed to process audio\n", argv[0]);
                 return 10;
             }
+            processed_any = true;
+
         }
 
         // output stuff
@@ -1286,7 +1331,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    if (!params.no_prints) {
+    if (processed_any && !params.no_prints) {
         whisper_print_timings(ctx);
     }
     whisper_free(ctx);
