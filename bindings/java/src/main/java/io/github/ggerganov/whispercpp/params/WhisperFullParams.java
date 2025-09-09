@@ -333,7 +333,7 @@ public class WhisperFullParams extends Structure {
 
     @Override
     protected List<String> getFieldOrder() {
-    return Arrays.asList("strategy", "n_threads", "n_max_text_ctx",
+        return Arrays.asList("strategy", "n_threads", "n_max_text_ctx",
                 "offset_ms", "duration_ms", "translate", "no_context",
                 "no_timestamps", "single_segment", "print_special",
                 "print_progress", "print_realtime", "print_timestamps",

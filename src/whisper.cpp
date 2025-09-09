@@ -7093,8 +7093,12 @@ int whisper_full_with_state(
                 prompt.clear();
 
                 // if we have already generated some text, use it as a prompt to condition the next generation
-        if (( (!prompt_past.empty()) || (params.carry_initial_prompt && !initial_prompt_tokens.empty() && !first_iter_with_prompt) )
-            && t_cur < 0.5f && params.n_max_text_ctx > 0) {
+                const bool has_past_text = !prompt_past.empty();
+                const bool carrying_initial_prompt_now = params.carry_initial_prompt && !initial_prompt_tokens.empty() && !first_iter_with_prompt;
+                // We only condition on previous text at lower temperatures and when a context limit is set
+                const bool allow_conditioning = (t_cur < 0.5f) && (params.n_max_text_ctx > 0);
+
+                if ((has_past_text || carrying_initial_prompt_now) && allow_conditioning) {
                     int max_ctx_half = std::min(params.n_max_text_ctx, whisper_n_text_ctx(ctx)/2);
                     prompt = { whisper_token_prev(ctx) };
                     if (params.carry_initial_prompt) {
