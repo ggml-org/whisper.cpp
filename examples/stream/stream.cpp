@@ -38,6 +38,8 @@ struct whisper_params {
     bool use_gpu       = true;
     bool flash_attn    = false;
 
+    std::string openvino_encode_device = "CPU";
+
     std::string language  = "en";
     std::string model     = "models/ggml-base.en.bin";
     std::string fname_out;
@@ -74,6 +76,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-sa"   || arg == "--save-audio")    { params.save_audio    = true; }
         else if (arg == "-ng"   || arg == "--no-gpu")        { params.use_gpu       = false; }
         else if (arg == "-fa"   || arg == "--flash-attn")    { params.flash_attn    = true; }
+        else if (arg == "-oved" || arg == "--ov-e-device")   { params.openvino_encode_device = argv[++i]; }
 
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
@@ -167,6 +170,9 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "error: failed to initialize whisper context\n");
         return 2;
     }
+
+    // initialize openvino encoder. this has no effect on whisper.cpp builds that don't have OpenVINO configured
+    whisper_ctx_init_openvino_encoder(ctx, nullptr, params.openvino_encode_device.c_str(), nullptr);
 
     std::vector<float> pcmf32    (n_samples_30s, 0.0f);
     std::vector<float> pcmf32_old;
