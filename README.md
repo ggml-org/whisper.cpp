@@ -332,7 +332,7 @@ cmake --build build -j --config Release
 
 ## Vulkan GPU support
 Cross-vendor solution which allows you to accelerate workload on your GPU.
-First, make sure your graphics card driver provides support for Vulkan API.
+First, make sure your graphics card driver provides support for Vulkan API. Then, if you use Linux, install the Vulkan-Headers package for your distro, if you don't have the Vulkan SDK installed.
 
 Now build `whisper.cpp` with Vulkan support:
 ```
