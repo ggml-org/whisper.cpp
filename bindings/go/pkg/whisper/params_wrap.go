@@ -13,7 +13,11 @@ type parameters struct {
 	p *whisper.Params
 }
 
-func newParameters(p *whisper.Params) Parameters { return &parameters{p: p} }
+func newParameters(whisperParams *whisper.Params) Parameters {
+	return &parameters{
+		p: whisperParams,
+	}
+}
 
 func (w *parameters) SetTranslate(v bool)              { w.p.SetTranslate(v) }
 func (w *parameters) SetSplitOnWord(v bool)            { w.p.SetSplitOnWord(v) }
@@ -32,6 +36,24 @@ func (w *parameters) SetEntropyThold(t float32)        { w.p.SetEntropyThold(t) 
 func (w *parameters) SetInitialPrompt(prompt string)   { w.p.SetInitialPrompt(prompt) }
 func (w *parameters) SetTemperature(t float32)         { w.p.SetTemperature(t) }
 func (w *parameters) SetTemperatureFallback(t float32) { w.p.SetTemperatureFallback(t) }
+func (w *parameters) SetNoContext(v bool)              { w.p.SetNoContext(v) }
+func (w *parameters) SetPrintSpecial(v bool)           { w.p.SetPrintSpecial(v) }
+func (w *parameters) SetPrintProgress(v bool)          { w.p.SetPrintProgress(v) }
+func (w *parameters) SetPrintRealtime(v bool)          { w.p.SetPrintRealtime(v) }
+func (w *parameters) SetPrintTimestamps(v bool)        { w.p.SetPrintTimestamps(v) }
+
+// Diarization (tinydiarize)
+func (w *parameters) SetDiarize(v bool) { w.p.SetDiarize(v) }
+
+// Voice Activity Detection (VAD)
+func (w *parameters) SetVAD(v bool)                    { w.p.SetVAD(v) }
+func (w *parameters) SetVADModelPath(p string)         { w.p.SetVADModelPath(p) }
+func (w *parameters) SetVADThreshold(t float32)        { w.p.SetVADThreshold(t) }
+func (w *parameters) SetVADMinSpeechMs(ms int)         { w.p.SetVADMinSpeechMs(ms) }
+func (w *parameters) SetVADMinSilenceMs(ms int)        { w.p.SetVADMinSilenceMs(ms) }
+func (w *parameters) SetVADMaxSpeechSec(s float32)     { w.p.SetVADMaxSpeechSec(s) }
+func (w *parameters) SetVADSpeechPadMs(ms int)         { w.p.SetVADSpeechPadMs(ms) }
+func (w *parameters) SetVADSamplesOverlap(sec float32) { w.p.SetVADSamplesOverlap(sec) }
 
 func (w *parameters) SetLanguage(lang string) error {
 	if lang == "auto" {
@@ -62,7 +84,7 @@ func (w *parameters) Threads() int {
 	return w.p.Threads()
 }
 
-func (w *parameters) WhisperParams() *whisper.Params {
+func (w *parameters) UnsafeParams() *whisper.Params {
 	return w.p
 }
 

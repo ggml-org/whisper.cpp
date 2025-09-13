@@ -17,7 +17,7 @@ func TestSetLanguage(t *testing.T) {
 	model, err := whisper.New(ModelPath)
 	assert.NoError(err)
 	assert.NotNil(model)
-	defer model.Close()
+	defer func() { _ = model.Close() }()
 
 	context, err := model.NewContext()
 	assert.NoError(err)
@@ -35,7 +35,7 @@ func TestContextModelIsMultilingual(t *testing.T) {
 	model, err := whisper.New(ModelPath)
 	assert.NoError(err)
 	assert.NotNil(model)
-	defer model.Close()
+	defer func() { _ = model.Close() }()
 
 	context, err := model.NewContext()
 	assert.NoError(err)
@@ -54,7 +54,7 @@ func TestLanguage(t *testing.T) {
 	model, err := whisper.New(ModelPath)
 	assert.NoError(err)
 	assert.NotNil(model)
-	defer model.Close()
+	defer func() { _ = model.Close() }()
 
 	context, err := model.NewContext()
 	assert.NoError(err)
@@ -72,7 +72,7 @@ func TestProcess(t *testing.T) {
 
 	fh, err := os.Open(SamplePath)
 	assert.NoError(err)
-	defer fh.Close()
+	defer func() { _ = fh.Close() }()
 
 	// Decode the WAV file - load the full buffer
 	dec := wav.NewDecoder(fh)
@@ -85,7 +85,7 @@ func TestProcess(t *testing.T) {
 	model, err := whisper.New(ModelPath)
 	assert.NoError(err)
 	assert.NotNil(model)
-	defer model.Close()
+	defer func() { _ = model.Close() }()
 
 	context, err := model.NewContext()
 	assert.NoError(err)
@@ -99,7 +99,7 @@ func TestDetectedLanguage(t *testing.T) {
 
 	fh, err := os.Open(SamplePath)
 	assert.NoError(err)
-	defer fh.Close()
+	defer func() { _ = fh.Close() }()
 
 	// Decode the WAV file - load the full buffer
 	dec := wav.NewDecoder(fh)
@@ -112,7 +112,7 @@ func TestDetectedLanguage(t *testing.T) {
 	model, err := whisper.New(ModelPath)
 	assert.NoError(err)
 	assert.NotNil(model)
-	defer model.Close()
+	defer func() { _ = model.Close() }()
 
 	context, err := model.NewContext()
 	assert.NoError(err)
@@ -139,7 +139,7 @@ func TestContext_ConcurrentProcessing(t *testing.T) {
 
 	fh, err := os.Open(SamplePath)
 	assert.NoError(err)
-	defer fh.Close()
+	defer func() { _ = fh.Close() }()
 
 	dec := wav.NewDecoder(fh)
 	buf, err := dec.FullPCMBuffer()
@@ -150,12 +150,12 @@ func TestContext_ConcurrentProcessing(t *testing.T) {
 	model, err := whisper.New(ModelPath)
 	assert.NoError(err)
 	assert.NotNil(model)
-	defer model.Close()
+	defer func() { _ = model.Close() }()
 
 	ctx, err := model.NewContext()
 	assert.NoError(err)
 	assert.NotNil(ctx)
-	defer ctx.Close()
+	defer func() { _ = ctx.Close() }()
 
 	err = ctx.Process(data, nil, nil, nil)
 	assert.NoError(err)
@@ -179,7 +179,7 @@ func TestContext_Parallel_DifferentInputs(t *testing.T) {
 
 	fh, err := os.Open(SamplePath)
 	assert.NoError(err)
-	defer fh.Close()
+	defer func() { _ = fh.Close() }()
 
 	dec := wav.NewDecoder(fh)
 	buf, err := dec.FullPCMBuffer()
@@ -195,14 +195,14 @@ func TestContext_Parallel_DifferentInputs(t *testing.T) {
 	model, err := whisper.New(ModelPath)
 	assert.NoError(err)
 	assert.NotNil(model)
-	defer model.Close()
+	defer func() { _ = model.Close() }()
 
 	ctx1, err := model.NewContext()
 	assert.NoError(err)
-	defer ctx1.Close()
+	defer func() { _ = ctx1.Close() }()
 	ctx2, err := model.NewContext()
 	assert.NoError(err)
-	defer ctx2.Close()
+	defer func() { _ = ctx2.Close() }()
 
 	// Run in parallel - each context has isolated whisper_state
 	var wg sync.WaitGroup
@@ -258,7 +258,7 @@ func TestContext_Close(t *testing.T) {
 	model, err := whisper.New(ModelPath)
 	assert.NoError(err)
 	assert.NotNil(model)
-	defer model.Close()
+	defer func() { _ = model.Close() }()
 
 	ctx, err := model.NewContext()
 	assert.NoError(err)
@@ -293,4 +293,83 @@ func Test_Close_Context_of_Closed_Model(t *testing.T) {
 
 	require.NoError(t, model.Close())
 	require.NoError(t, ctx.Close())
+}
+
+func TestContext_VAD_And_Diarization_Params_DoNotPanic(t *testing.T) {
+	assert := assert.New(t)
+
+	if _, err := os.Stat(ModelPath); os.IsNotExist(err) {
+		t.Skip("Skipping test, model not found:", ModelPath)
+	}
+	if _, err := os.Stat(SamplePath); os.IsNotExist(err) {
+		t.Skip("Skipping test, sample not found:", SamplePath)
+	}
+
+	fh, err := os.Open(SamplePath)
+	assert.NoError(err)
+	defer func() { _ = fh.Close() }()
+
+	dec := wav.NewDecoder(fh)
+	buf, err := dec.FullPCMBuffer()
+	assert.NoError(err)
+	assert.Equal(uint16(1), dec.NumChans)
+	data := buf.AsFloat32Buffer().Data
+
+	model, err := whisper.New(ModelPath)
+	assert.NoError(err)
+	defer func() { _ = model.Close() }()
+
+	ctx, err := model.NewContext()
+	assert.NoError(err)
+	defer func() { _ = ctx.Close() }()
+
+	p := ctx.Params()
+	p.SetDiarize(true)
+	p.SetVAD(true)
+	p.SetVADThreshold(0.5)
+	p.SetVADMinSpeechMs(200)
+	p.SetVADMinSilenceMs(100)
+	p.SetVADMaxSpeechSec(10)
+	p.SetVADSpeechPadMs(30)
+	p.SetVADSamplesOverlap(0.02)
+
+	err = ctx.Process(data, nil, nil, nil)
+	assert.NoError(err)
+}
+
+func TestContext_SpeakerTurnNext_Field_Present(t *testing.T) {
+	assert := assert.New(t)
+
+	if _, err := os.Stat(ModelPath); os.IsNotExist(err) {
+		t.Skip("Skipping test, model not found:", ModelPath)
+	}
+	if _, err := os.Stat(SamplePath); os.IsNotExist(err) {
+		t.Skip("Skipping test, sample not found:", SamplePath)
+	}
+
+	fh, err := os.Open(SamplePath)
+	assert.NoError(err)
+	defer func() { _ = fh.Close() }()
+
+	dec := wav.NewDecoder(fh)
+	buf, err := dec.FullPCMBuffer()
+	assert.NoError(err)
+	assert.Equal(uint16(1), dec.NumChans)
+	data := buf.AsFloat32Buffer().Data
+
+	model, err := whisper.New(ModelPath)
+	assert.NoError(err)
+	defer func() { _ = model.Close() }()
+
+	ctx, err := model.NewContext()
+	assert.NoError(err)
+	defer func() { _ = ctx.Close() }()
+
+	err = ctx.Process(data, nil, nil, nil)
+	assert.NoError(err)
+
+	seg, err := ctx.NextSegment()
+	assert.NoError(err)
+	t.Logf("SpeakerTurnNext: %v", seg.SpeakerTurnNext)
+	_ = seg.SpeakerTurnNext // ensure field exists and is readable
 }

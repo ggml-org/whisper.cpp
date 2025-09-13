@@ -48,6 +48,8 @@ type TokenIdentifier interface {
 	IsText(Token) (bool, error)
 }
 
+type ParamsConfigure func(Parameters)
+
 // Model is the interface to a whisper model. Create a new model with the
 // function whisper.New(string)
 type Model interface {
@@ -55,6 +57,11 @@ type Model interface {
 
 	// Return a new speech-to-text context.
 	NewContext() (Context, error)
+
+	NewParams(
+		sampling SamplingStrategy,
+		configure ParamsConfigure,
+	) (Parameters, error)
 
 	// Return true if the model is multilingual.
 	IsMultilingual() bool
@@ -94,6 +101,25 @@ type Parameters interface {
 	SetEntropyThold(t float32)
 	SetInitialPrompt(prompt string)
 
+	SetNoContext(bool)
+	SetPrintSpecial(bool)
+	SetPrintProgress(bool)
+	SetPrintRealtime(bool)
+	SetPrintTimestamps(bool)
+
+	// Diarization (tinydiarize)
+	SetDiarize(bool)
+
+	// Voice Activity Detection (VAD)
+	SetVAD(bool)
+	SetVADModelPath(string)
+	SetVADThreshold(float32)
+	SetVADMinSpeechMs(int)
+	SetVADMinSilenceMs(int)
+	SetVADMaxSpeechSec(float32)
+	SetVADSpeechPadMs(int)
+	SetVADSamplesOverlap(float32)
+
 	// Set the temperature
 	SetTemperature(t float32)
 
@@ -108,7 +134,8 @@ type Parameters interface {
 	// Getter methods
 	Language() string
 	Threads() int
-	WhisperParams() *whisper.Params
+
+	UnsafeParams() *whisper.Params
 }
 
 // Context is the speech recognition context.
@@ -231,6 +258,9 @@ type Segment struct {
 
 	// The tokens of the segment.
 	Tokens []Token
+
+	// True if the next segment is predicted as a speaker turn (tinydiarize)
+	SpeakerTurnNext bool
 }
 
 // Token is a text or special token

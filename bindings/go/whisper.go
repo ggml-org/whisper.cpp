@@ -533,6 +533,11 @@ func (ctx *Context) Whisper_get_logits_from_state(state *State) []float32 {
 	return (*[1 << 30]float32)(unsafe.Pointer(C.whisper_get_logits_from_state((*C.struct_whisper_state)(state))))[:ctx.Whisper_n_vocab()]
 }
 
+// Get whether the next segment is predicted as a speaker turn (tinydiarize)
+func (ctx *Context) Whisper_full_get_segment_speaker_turn_next_from_state(state *State, segment int) bool {
+	return bool(C.whisper_full_get_segment_speaker_turn_next_from_state((*C.struct_whisper_state)(state), C.int(segment)))
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // CALLBACKS
 

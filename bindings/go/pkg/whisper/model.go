@@ -3,7 +3,6 @@ package whisper
 import (
 	"fmt"
 	"os"
-	"runtime"
 
 	// Bindings
 	whisper "github.com/ggerganov/whisper.cpp/bindings/go"
@@ -88,24 +87,72 @@ func (model *model) Languages() []string {
 // NewContext creates a new speech-to-text context.
 // Each context is backed by an isolated whisper_state for safe concurrent processing.
 func (model *model) NewContext() (Context, error) {
-	ctx, err := model.ctx.UnsafeContext()
+	// Create new context with default params
+	params, err := model.newParams(SAMPLING_GREEDY, nil)
 	if err != nil {
-		return nil, ErrModelClosed
+		return nil, err
 	}
 
-	// Create new context with default params
-	params := ctx.Whisper_full_default_params(whisper.SAMPLING_GREEDY)
+	// Return new context (now state-backed)
+	return newContext(
+		model,
+		params,
+	)
+}
 
+func (model *model) NewParams(
+	sampling SamplingStrategy,
+	configure ParamsConfigure,
+) (Parameters, error) {
+	return model.newParams(sampling, nil)
+}
+
+// NewContextWithParams creates a new speech-to-text context and allows
+// callers to customize the decoding parameters before the state is used.
+// The resulting Context is backed by an isolated whisper_state for safe
+// concurrent processing.
+func (model *model) NewContextWithParams(
+	sampling SamplingStrategy,
+	configure ParamsConfigure,
+) (Context, error) {
+	params, err := model.newParams(sampling, configure)
+	if err != nil {
+		return nil, err
+	}
+
+	return newContext(
+		model,
+		params,
+	)
+}
+
+func defaultParamsConfigure(params Parameters) {
 	params.SetTranslate(false)
 	params.SetPrintSpecial(false)
 	params.SetPrintProgress(false)
 	params.SetPrintRealtime(false)
 	params.SetPrintTimestamps(false)
-	params.SetThreads(runtime.NumCPU())
-	params.SetNoContext(true)
+}
 
-	// Return new context (now state-backed)
-	return newContext(model, params)
+func (m *model) newParams(
+	sampling SamplingStrategy,
+	configure ParamsConfigure,
+) (Parameters, error) {
+	ctx, err := m.ctx.UnsafeContext()
+	if err != nil {
+		return nil, ErrModelClosed
+	}
+
+	p := ctx.Whisper_full_default_params(whisper.SamplingStrategy(sampling))
+	safeParams := newParameters(&p)
+
+	defaultParamsConfigure(safeParams)
+
+	if configure != nil {
+		configure(safeParams)
+	}
+
+	return safeParams, nil
 }
 
 // PrintTimings prints the model performance timings to stdout.

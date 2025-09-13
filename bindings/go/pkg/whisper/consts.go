@@ -28,3 +28,10 @@ const SampleRate = whisper.SampleRate
 
 // SampleBits is the number of bytes per sample.
 const SampleBits = whisper.SampleBits
+
+type SamplingStrategy whisper.SamplingStrategy
+
+const (
+	SAMPLING_GREEDY      SamplingStrategy = SamplingStrategy(whisper.SAMPLING_GREEDY)
+	SAMPLING_BEAM_SEARCH SamplingStrategy = SamplingStrategy(whisper.SAMPLING_BEAM_SEARCH)
+)

@@ -19,11 +19,11 @@ type context struct {
 	Parameters
 }
 
-func newContext(model Model, params whisper.Params) (Context, error) {
+func newContext(model Model, params Parameters) (Context, error) {
 	c := new(context)
 	c.model = model
 
-	c.params = newParameters(&params)
+	c.params = params
 	c.Parameters = c.params
 
 	// allocate isolated state per context
@@ -132,7 +132,7 @@ func (context *context) Process(
 		context.params.SetSingleSegment(true)
 	}
 
-	lowLevelParams := context.params.WhisperParams()
+	lowLevelParams := context.params.UnsafeParams()
 	if lowLevelParams == nil {
 		return fmt.Errorf("lowLevelParams is nil: %w", ErrInternalAppError)
 	}
@@ -249,11 +249,12 @@ func (context *context) IsLANG(t Token, lang string) bool {
 // State-backed helper functions
 func toSegmentFromState(ctx *whisper.Context, st *whisper.State, n int) Segment {
 	return Segment{
-		Num:    n,
-		Text:   strings.TrimSpace(ctx.Whisper_full_get_segment_text_from_state(st, n)),
-		Start:  time.Duration(ctx.Whisper_full_get_segment_t0_from_state(st, n)) * time.Millisecond * 10,
-		End:    time.Duration(ctx.Whisper_full_get_segment_t1_from_state(st, n)) * time.Millisecond * 10,
-		Tokens: toTokensFromState(ctx, st, n),
+		Num:             n,
+		Text:            strings.TrimSpace(ctx.Whisper_full_get_segment_text_from_state(st, n)),
+		Start:           time.Duration(ctx.Whisper_full_get_segment_t0_from_state(st, n)) * time.Millisecond * 10,
+		End:             time.Duration(ctx.Whisper_full_get_segment_t1_from_state(st, n)) * time.Millisecond * 10,
+		Tokens:          toTokensFromState(ctx, st, n),
+		SpeakerTurnNext: ctx.Whisper_full_get_segment_speaker_turn_next_from_state(st, n),
 	}
 }
 
