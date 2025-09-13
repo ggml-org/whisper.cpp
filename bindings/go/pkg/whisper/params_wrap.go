@@ -1,62 +1,92 @@
 package whisper
 
 import (
+	"runtime"
 	"time"
 
 	// Bindings
 	whisper "github.com/ggerganov/whisper.cpp/bindings/go"
 )
 
-// parameters is a high-level wrapper that implements the Parameters interface
+// Parameters is a high-level wrapper that implements the Parameters interface
 // and delegates to the underlying low-level whisper.Params.
-type parameters struct {
+type Parameters struct {
 	p *whisper.Params
 }
 
-func newParameters(whisperParams *whisper.Params) *parameters {
-	return &parameters{
-		p: whisperParams,
-	}
+func defaultParamsConfigure(params *Parameters) {
+	params.SetTranslate(false)
+	params.SetPrintSpecial(false)
+	params.SetPrintProgress(false)
+	params.SetPrintRealtime(false)
+	params.SetPrintTimestamps(false)
+	// Default behavior backward compatibility
+	params.SetThreads(uint(runtime.NumCPU()))
+	params.SetNoContext(true)
 }
 
-func (w *parameters) SetTranslate(v bool)              { w.p.SetTranslate(v) }
-func (w *parameters) SetSplitOnWord(v bool)            { w.p.SetSplitOnWord(v) }
-func (w *parameters) SetThreads(v uint)                { w.p.SetThreads(int(v)) }
-func (w *parameters) SetOffset(d time.Duration)        { w.p.SetOffset(int(d.Milliseconds())) }
-func (w *parameters) SetDuration(d time.Duration)      { w.p.SetDuration(int(d.Milliseconds())) }
-func (w *parameters) SetTokenThreshold(t float32)      { w.p.SetTokenThreshold(t) }
-func (w *parameters) SetTokenSumThreshold(t float32)   { w.p.SetTokenSumThreshold(t) }
-func (w *parameters) SetMaxSegmentLength(n uint)       { w.p.SetMaxSegmentLength(int(n)) }
-func (w *parameters) SetTokenTimestamps(b bool)        { w.p.SetTokenTimestamps(b) }
-func (w *parameters) SetMaxTokensPerSegment(n uint)    { w.p.SetMaxTokensPerSegment(int(n)) }
-func (w *parameters) SetAudioCtx(n uint)               { w.p.SetAudioCtx(int(n)) }
-func (w *parameters) SetMaxContext(n int)              { w.p.SetMaxContext(n) }
-func (w *parameters) SetBeamSize(n int)                { w.p.SetBeamSize(n) }
-func (w *parameters) SetEntropyThold(t float32)        { w.p.SetEntropyThold(t) }
-func (w *parameters) SetInitialPrompt(prompt string)   { w.p.SetInitialPrompt(prompt) }
-func (w *parameters) SetTemperature(t float32)         { w.p.SetTemperature(t) }
-func (w *parameters) SetTemperatureFallback(t float32) { w.p.SetTemperatureFallback(t) }
-func (w *parameters) SetNoContext(v bool)              { w.p.SetNoContext(v) }
-func (w *parameters) SetPrintSpecial(v bool)           { w.p.SetPrintSpecial(v) }
-func (w *parameters) SetPrintProgress(v bool)          { w.p.SetPrintProgress(v) }
-func (w *parameters) SetPrintRealtime(v bool)          { w.p.SetPrintRealtime(v) }
-func (w *parameters) SetPrintTimestamps(v bool)        { w.p.SetPrintTimestamps(v) }
-func (w *parameters) SetDebugMode(v bool)              { w.p.SetDebugMode(v) }
+func NewParameters(
+	model *model,
+	sampling SamplingStrategy,
+	configure ParamsConfigure,
+) (*Parameters, error) {
+	ctx, err := model.ctx.unsafeContext()
+	if err != nil {
+		return nil, ErrModelClosed
+	}
+
+	p := ctx.Whisper_full_default_params(whisper.SamplingStrategy(sampling))
+	safeParams := &Parameters{
+		p: &p,
+	}
+
+	defaultParamsConfigure(safeParams)
+
+	if configure != nil {
+		configure(safeParams)
+	}
+
+	return safeParams, nil
+}
+
+func (w *Parameters) SetTranslate(v bool)              { w.p.SetTranslate(v) }
+func (w *Parameters) SetSplitOnWord(v bool)            { w.p.SetSplitOnWord(v) }
+func (w *Parameters) SetThreads(v uint)                { w.p.SetThreads(int(v)) }
+func (w *Parameters) SetOffset(d time.Duration)        { w.p.SetOffset(int(d.Milliseconds())) }
+func (w *Parameters) SetDuration(d time.Duration)      { w.p.SetDuration(int(d.Milliseconds())) }
+func (w *Parameters) SetTokenThreshold(t float32)      { w.p.SetTokenThreshold(t) }
+func (w *Parameters) SetTokenSumThreshold(t float32)   { w.p.SetTokenSumThreshold(t) }
+func (w *Parameters) SetMaxSegmentLength(n uint)       { w.p.SetMaxSegmentLength(int(n)) }
+func (w *Parameters) SetTokenTimestamps(b bool)        { w.p.SetTokenTimestamps(b) }
+func (w *Parameters) SetMaxTokensPerSegment(n uint)    { w.p.SetMaxTokensPerSegment(int(n)) }
+func (w *Parameters) SetAudioCtx(n uint)               { w.p.SetAudioCtx(int(n)) }
+func (w *Parameters) SetMaxContext(n int)              { w.p.SetMaxContext(n) }
+func (w *Parameters) SetBeamSize(n int)                { w.p.SetBeamSize(n) }
+func (w *Parameters) SetEntropyThold(t float32)        { w.p.SetEntropyThold(t) }
+func (w *Parameters) SetInitialPrompt(prompt string)   { w.p.SetInitialPrompt(prompt) }
+func (w *Parameters) SetTemperature(t float32)         { w.p.SetTemperature(t) }
+func (w *Parameters) SetTemperatureFallback(t float32) { w.p.SetTemperatureFallback(t) }
+func (w *Parameters) SetNoContext(v bool)              { w.p.SetNoContext(v) }
+func (w *Parameters) SetPrintSpecial(v bool)           { w.p.SetPrintSpecial(v) }
+func (w *Parameters) SetPrintProgress(v bool)          { w.p.SetPrintProgress(v) }
+func (w *Parameters) SetPrintRealtime(v bool)          { w.p.SetPrintRealtime(v) }
+func (w *Parameters) SetPrintTimestamps(v bool)        { w.p.SetPrintTimestamps(v) }
+func (w *Parameters) SetDebugMode(v bool)              { w.p.SetDebugMode(v) }
 
 // Diarization (tinydiarize)
-func (w *parameters) SetDiarize(v bool) { w.p.SetDiarize(v) }
+func (w *Parameters) SetDiarize(v bool) { w.p.SetDiarize(v) }
 
 // Voice Activity Detection (VAD)
-func (w *parameters) SetVAD(v bool)                    { w.p.SetVAD(v) }
-func (w *parameters) SetVADModelPath(p string)         { w.p.SetVADModelPath(p) }
-func (w *parameters) SetVADThreshold(t float32)        { w.p.SetVADThreshold(t) }
-func (w *parameters) SetVADMinSpeechMs(ms int)         { w.p.SetVADMinSpeechMs(ms) }
-func (w *parameters) SetVADMinSilenceMs(ms int)        { w.p.SetVADMinSilenceMs(ms) }
-func (w *parameters) SetVADMaxSpeechSec(s float32)     { w.p.SetVADMaxSpeechSec(s) }
-func (w *parameters) SetVADSpeechPadMs(ms int)         { w.p.SetVADSpeechPadMs(ms) }
-func (w *parameters) SetVADSamplesOverlap(sec float32) { w.p.SetVADSamplesOverlap(sec) }
+func (w *Parameters) SetVAD(v bool)                    { w.p.SetVAD(v) }
+func (w *Parameters) SetVADModelPath(p string)         { w.p.SetVADModelPath(p) }
+func (w *Parameters) SetVADThreshold(t float32)        { w.p.SetVADThreshold(t) }
+func (w *Parameters) SetVADMinSpeechMs(ms int)         { w.p.SetVADMinSpeechMs(ms) }
+func (w *Parameters) SetVADMinSilenceMs(ms int)        { w.p.SetVADMinSilenceMs(ms) }
+func (w *Parameters) SetVADMaxSpeechSec(s float32)     { w.p.SetVADMaxSpeechSec(s) }
+func (w *Parameters) SetVADSpeechPadMs(ms int)         { w.p.SetVADSpeechPadMs(ms) }
+func (w *Parameters) SetVADSamplesOverlap(sec float32) { w.p.SetVADSamplesOverlap(sec) }
 
-func (w *parameters) SetLanguage(lang string) error {
+func (w *Parameters) SetLanguage(lang string) error {
 	if lang == "auto" {
 		return w.p.SetLanguage(-1)
 	}
@@ -67,12 +97,12 @@ func (w *parameters) SetLanguage(lang string) error {
 	return w.p.SetLanguage(id)
 }
 
-func (w *parameters) SetSingleSegment(v bool) {
+func (w *Parameters) SetSingleSegment(v bool) {
 	w.p.SetSingleSegment(v)
 }
 
 // Getter methods for Parameters interface
-func (w *parameters) Language() string {
+func (w *Parameters) Language() string {
 	id := w.p.Language()
 	if id == -1 {
 		return "auto"
@@ -81,12 +111,10 @@ func (w *parameters) Language() string {
 	return whisper.Whisper_lang_str(id)
 }
 
-func (w *parameters) Threads() int {
+func (w *Parameters) Threads() int {
 	return w.p.Threads()
 }
 
-func (w *parameters) unsafeParams() (*whisper.Params, error) {
+func (w *Parameters) unsafeParams() (*whisper.Params, error) {
 	return w.p, nil
 }
-
-var _ Parameters = &parameters{}

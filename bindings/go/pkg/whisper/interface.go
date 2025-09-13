@@ -46,33 +46,18 @@ type TokenIdentifier interface {
 	IsText(Token) (bool, error)
 }
 
-type ParamsConfigure func(Parameters)
+type ParamsConfigure func(*Parameters)
 
 // Model is the interface to a whisper model. Create a new model with the
 // function whisper.New(string)
+// Deprecated: Use NewModel implementation struct instead of relying on this interface
 type Model interface {
 	io.Closer
 
 	// Return a new speech-to-text context.
 	// It may return an error is the model is not loaded or closed
+	// Deprecated: Use NewContext implementation struct instead of relying on this interface
 	NewContext() (Context, error)
-
-	// Return a new parameters wrapper
-	// sampling is the sampling strategy to use
-	// configure is the function to configure the parameters
-	// It may return an error is the model is not loaded or closed
-	NewParams(
-		sampling SamplingStrategy,
-		configure ParamsConfigure,
-	) (Parameters, error)
-
-	// Return a new speech-to-text context configured via the provided function
-	// and sampling strategy. The context is backed by an isolated whisper_state.
-	// It may return an error is the model is not loaded or closed
-	NewContextWithParams(
-		sampling SamplingStrategy,
-		configure ParamsConfigure,
-	) (Context, error)
 
 	// Return true if the model is multilingual.
 	// It returns false if the model is not loaded or closed
@@ -87,73 +72,65 @@ type Model interface {
 
 	// Reset model performance timing counters
 	ResetTimings()
-
-	// WhisperContext returns the memory-safe whisper context wrapper of the raw whisper context
-	// You may need to use this to get the raw whisper context
-	// Ot check that the model's context is not closed
-	WhisperContext() WhisperContext
-
-	// Token identifier
-	TokenIdentifier() TokenIdentifier
 }
 
-// Parameters configures decode / processing behavior
-type Parameters interface {
-	SetTranslate(bool)
-	SetSplitOnWord(bool)
-	SetThreads(uint)
-	SetOffset(time.Duration)
-	SetDuration(time.Duration)
-	SetTokenThreshold(float32)
-	SetTokenSumThreshold(float32)
-	SetMaxSegmentLength(uint)
-	SetTokenTimestamps(bool)
-	SetMaxTokensPerSegment(uint)
-	SetAudioCtx(uint)
-	SetMaxContext(n int)
-	SetBeamSize(n int)
-	SetEntropyThold(t float32)
-	SetInitialPrompt(prompt string)
+// // Parameters configures decode / processing behavior
+// type Parameters interface {
+// 	SetTranslate(bool)
+// 	SetSplitOnWord(bool)
+// 	SetThreads(uint)
+// 	SetOffset(time.Duration)
+// 	SetDuration(time.Duration)
+// 	SetTokenThreshold(float32)
+// 	SetTokenSumThreshold(float32)
+// 	SetMaxSegmentLength(uint)
+// 	SetTokenTimestamps(bool)
+// 	SetMaxTokensPerSegment(uint)
+// 	SetAudioCtx(uint)
+// 	SetMaxContext(n int)
+// 	SetBeamSize(n int)
+// 	SetEntropyThold(t float32)
+// 	SetInitialPrompt(prompt string)
 
-	SetNoContext(bool)
-	SetPrintSpecial(bool)
-	SetPrintProgress(bool)
-	SetPrintRealtime(bool)
-	SetPrintTimestamps(bool)
+// 	SetNoContext(bool)
+// 	SetPrintSpecial(bool)
+// 	SetPrintProgress(bool)
+// 	SetPrintRealtime(bool)
+// 	SetPrintTimestamps(bool)
 
-	// Enable extra debug info (e.g., dump log_mel)
-	SetDebugMode(bool)
-	// Diarization (tinydiarize)
-	SetDiarize(bool)
+// 	// Enable extra debug info (e.g., dump log_mel)
+// 	SetDebugMode(bool)
+// 	// Diarization (tinydiarize)
+// 	SetDiarize(bool)
 
-	// Voice Activity Detection (VAD)
-	SetVAD(bool)
-	SetVADModelPath(string)
-	SetVADThreshold(float32)
-	SetVADMinSpeechMs(int)
-	SetVADMinSilenceMs(int)
-	SetVADMaxSpeechSec(float32)
-	SetVADSpeechPadMs(int)
-	SetVADSamplesOverlap(float32)
+// 	// Voice Activity Detection (VAD)
+// 	SetVAD(bool)
+// 	SetVADModelPath(string)
+// 	SetVADThreshold(float32)
+// 	SetVADMinSpeechMs(int)
+// 	SetVADMinSilenceMs(int)
+// 	SetVADMaxSpeechSec(float32)
+// 	SetVADSpeechPadMs(int)
+// 	SetVADSamplesOverlap(float32)
 
-	// Set the temperature
-	SetTemperature(t float32)
+// 	// Set the temperature
+// 	SetTemperature(t float32)
 
-	// Set the fallback temperature incrementation
-	// Pass -1.0 to disable this feature
-	SetTemperatureFallback(t float32)
+// 	// Set the fallback temperature incrementation
+// 	// Pass -1.0 to disable this feature
+// 	SetTemperatureFallback(t float32)
 
-	// Set the language
-	// If the model is not multilingual, this will return an error
-	SetLanguage(string) error
+// 	// Set the language
+// 	// If the model is not multilingual, this will return an error
+// 	SetLanguage(string) error
 
-	// Set single segment mode
-	SetSingleSegment(bool)
+// 	// Set single segment mode
+// 	SetSingleSegment(bool)
 
-	// Getter methods
-	Language() string
-	Threads() int
-}
+// 	// Getter methods
+// 	Language() string
+// 	Threads() int
+// }
 
 // Context is the speech recognition context.
 type Context interface {
@@ -217,9 +194,6 @@ type Context interface {
 	// Deprecated: Use Params().Language() instead
 	Language() string
 
-	// Return the model that the context is backed by
-	Model() Model
-
 	// Deprecated: Use Model().IsMultilingual() instead
 	IsMultilingual() bool
 
@@ -269,9 +243,6 @@ type Context interface {
 
 	// SystemInfo returns the system information
 	SystemInfo() string
-
-	// Params returns a high-level parameters wrapper - preferred method
-	Params() Parameters
 }
 
 // Segment is the text result of a speech recognition.

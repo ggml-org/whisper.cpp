@@ -325,11 +325,11 @@ func TestContext_VAD_And_Diarization_Params_DoNotPanic(t *testing.T) {
 	assert.Equal(uint16(1), dec.NumChans)
 	data := buf.AsFloat32Buffer().Data
 
-	model, err := whisper.New(ModelPath)
+	model, err := whisper.NewModel(ModelPath)
 	assert.NoError(err)
 	defer func() { _ = model.Close() }()
 
-	ctx, err := model.NewContext()
+	ctx, err := whisper.NewContext(model, nil)
 	assert.NoError(err)
 	defer func() { _ = ctx.Close() }()
 
@@ -358,12 +358,11 @@ func TestDiarization_TwoSpeakers_Boundaries(t *testing.T) {
 	require.NoError(t, err)
 	data := buf.AsFloat32Buffer().Data
 
-	model, err := whisper.New(ModelTinydiarizePath)
+	model, err := whisper.NewModel(ModelTinydiarizePath)
 	require.NoError(t, err)
 	defer func() { _ = model.Close() }()
 
-	// diarize ON with beam search and tighter segmentation
-	ctxOn, err := model.NewContextWithParams(whisper.SAMPLING_GREEDY, func(p whisper.Parameters) {
+	params, err := whisper.NewParameters(model, whisper.SAMPLING_GREEDY, func(p *whisper.Parameters) {
 		p.SetDiarize(true)
 		p.SetVAD(false)
 		p.SetSplitOnWord(true)
@@ -371,6 +370,10 @@ func TestDiarization_TwoSpeakers_Boundaries(t *testing.T) {
 		p.SetMaxTokensPerSegment(64)
 		p.SetTokenTimestamps(true)
 	})
+	require.NoError(t, err)
+
+	// diarize ON with beam search and tighter segmentation
+	ctxOn, err := whisper.NewContext(model, params)
 	require.NoError(t, err)
 	defer func() { _ = ctxOn.Close() }()
 
@@ -389,15 +392,7 @@ func TestDiarization_TwoSpeakers_Boundaries(t *testing.T) {
 	require.Greater(t, turnsOn, 0, "expected speaker turn boundaries with diarization enabled")
 
 	// diarize OFF baseline with same segmentation and beam
-	ctxOff, err := model.NewContextWithParams(whisper.SAMPLING_BEAM_SEARCH, func(p whisper.Parameters) {
-		p.SetBeamSize(3)
-		p.SetDiarize(false)
-		p.SetVAD(false)
-		p.SetSplitOnWord(true)
-		p.SetMaxSegmentLength(40)
-		p.SetMaxTokensPerSegment(64)
-		p.SetTokenTimestamps(true)
-	})
+	ctxOff, err := whisper.NewContext(model, params)
 	require.NoError(t, err)
 	defer func() { _ = ctxOff.Close() }()
 

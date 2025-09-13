@@ -12,19 +12,17 @@ import (
 )
 
 type context struct {
-	n      int
-	model  *model
-	st     WhisperState
-	params *parameters
-	Parameters
+	n     int
+	model *model
+	st    WhisperState
+	*Parameters
 }
 
-func newContext(model *model, params *parameters) (Context, error) {
+func NewContext(model *model, params *Parameters) (*context, error) {
 	c := new(context)
 	c.model = model
 
-	c.params = params
-	c.Parameters = c.params
+	c.Parameters = params
 
 	// allocate isolated state per context
 	ctx, err := model.whisperContext().unsafeContext()
@@ -68,8 +66,8 @@ func (context *context) Close() error {
 }
 
 // Params returns a high-level parameters wrapper
-func (context *context) Params() Parameters {
-	return context.params
+func (context *context) Params() *Parameters {
+	return context.Parameters
 }
 
 // ResetTimings resets the model performance timing counters.
@@ -87,7 +85,7 @@ func (context *context) PrintTimings() {
 // SystemInfo returns the system information
 func (context *context) SystemInfo() string {
 	return fmt.Sprintf("system_info: n_threads = %d / %d | %s\n",
-		context.params.Threads(),
+		context.Parameters.Threads(),
 		runtime.NumCPU(),
 		whisper.Whisper_print_system_info(),
 	)
@@ -129,10 +127,10 @@ func (context *context) Process(
 
 	// If the callback is defined then we force on single_segment mode
 	if callNewSegment != nil {
-		context.params.SetSingleSegment(true)
+		context.Parameters.SetSingleSegment(true)
 	}
 
-	lowLevelParams, err := context.params.unsafeParams()
+	lowLevelParams, err := context.Parameters.unsafeParams()
 	if err != nil {
 		return err
 	}
@@ -242,7 +240,7 @@ func (context *context) SetLanguage(lang string) error {
 		return ErrModelNotMultilingual
 	}
 
-	return context.params.SetLanguage(lang)
+	return context.Parameters.SetLanguage(lang)
 }
 
 // Deprecated: Use Model.IsLANG() instead - token checking is model-specific.
