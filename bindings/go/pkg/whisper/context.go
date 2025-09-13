@@ -12,10 +12,10 @@ import (
 )
 
 type context struct {
-	n     int
-	model *model
-	st    *whisperState
-	*Parameters
+	n      int
+	model  *model
+	st     *whisperState
+	params *Parameters
 }
 
 func NewContext(model *model, params *Parameters) (*context, error) {
@@ -29,8 +29,7 @@ func NewContext(model *model, params *Parameters) (*context, error) {
 
 	c := new(context)
 	c.model = model
-
-	c.Parameters = params
+	c.params = params
 
 	// allocate isolated state per context
 	ctx, err := model.whisperContext().unsafeContext()
@@ -75,7 +74,7 @@ func (context *context) Close() error {
 
 // Params returns a high-level parameters wrapper
 func (context *context) Params() *Parameters {
-	return context.Parameters
+	return context.params
 }
 
 // ResetTimings resets the model performance timing counters.
@@ -93,7 +92,7 @@ func (context *context) PrintTimings() {
 // SystemInfo returns the system information
 func (context *context) SystemInfo() string {
 	return fmt.Sprintf("system_info: n_threads = %d / %d | %s\n",
-		context.Parameters.Threads(),
+		context.params.Threads(),
 		runtime.NumCPU(),
 		whisper.Whisper_print_system_info(),
 	)
@@ -135,10 +134,10 @@ func (context *context) Process(
 
 	// If the callback is defined then we force on single_segment mode
 	if callNewSegment != nil {
-		context.Parameters.SetSingleSegment(true)
+		context.params.SetSingleSegment(true)
 	}
 
-	lowLevelParams, err := context.Parameters.unsafeParams()
+	lowLevelParams, err := context.params.unsafeParams()
 	if err != nil {
 		return err
 	}
@@ -248,7 +247,7 @@ func (context *context) SetLanguage(lang string) error {
 		return ErrModelNotMultilingual
 	}
 
-	return context.Parameters.SetLanguage(lang)
+	return context.params.SetLanguage(lang)
 }
 
 // Deprecated: Use Model.IsLANG() instead - token checking is model-specific.
@@ -288,6 +287,112 @@ func toTokensFromState(ctx *whisper.Context, st *whisper.State, n int) []Token {
 
 func (context *context) Model() Model {
 	return context.model
+}
+
+// Deprecated: Use Params().Language() instead
+func (context *context) Language() string {
+	return context.params.Language()
+}
+
+// Deprecated: Use Params().SetAudioCtx() instead
+func (context *context) SetAudioCtx(n uint) {
+	context.params.SetAudioCtx(n)
+}
+
+// SetBeamSize implements Context.
+// Deprecated: Use Params().SetBeamSize() instead
+func (context *context) SetBeamSize(v int) {
+	context.params.SetBeamSize(v)
+}
+
+// SetDuration implements Context.
+// Deprecated: Use Params().SetDuration() instead
+func (context *context) SetDuration(v time.Duration) {
+	context.params.SetDuration(v)
+}
+
+// SetEntropyThold implements Context.
+// Deprecated: Use Params().SetEntropyThold() instead
+func (context *context) SetEntropyThold(v float32) {
+	context.params.SetEntropyThold(v)
+}
+
+// SetInitialPrompt implements Context.
+// Deprecated: Use Params().SetInitialPrompt() instead
+func (context *context) SetInitialPrompt(v string) {
+	context.params.SetInitialPrompt(v)
+}
+
+// SetMaxContext implements Context.
+// Deprecated: Use Params().SetMaxContext() instead
+func (context *context) SetMaxContext(v int) {
+	context.params.SetMaxContext(v)
+}
+
+// SetMaxSegmentLength implements Context.
+// Deprecated: Use Params().SetMaxSegmentLength() instead
+func (context *context) SetMaxSegmentLength(v uint) {
+	context.params.SetMaxSegmentLength(v)
+}
+
+// SetMaxTokensPerSegment implements Context.
+// Deprecated: Use Params().SetMaxTokensPerSegment() instead
+func (context *context) SetMaxTokensPerSegment(v uint) {
+	context.params.SetMaxTokensPerSegment(v)
+}
+
+// SetOffset implements Context.
+// Deprecated: Use Params().SetOffset() instead
+func (context *context) SetOffset(v time.Duration) {
+	context.params.SetOffset(v)
+}
+
+// SetSplitOnWord implements Context.
+// Deprecated: Use Params().SetSplitOnWord() instead
+func (context *context) SetSplitOnWord(v bool) {
+	context.params.SetSplitOnWord(v)
+}
+
+// SetTemperature implements Context.
+// Deprecated: Use Params().SetTemperature() instead
+func (context *context) SetTemperature(v float32) {
+	context.params.SetTemperature(v)
+}
+
+// SetTemperatureFallback implements Context.
+// Deprecated: Use Params().SetTemperatureFallback() instead
+func (context *context) SetTemperatureFallback(v float32) {
+	context.params.SetTemperatureFallback(v)
+}
+
+// SetThreads implements Context.
+// Deprecated: Use Params().SetThreads() instead
+func (context *context) SetThreads(v uint) {
+	context.params.SetThreads(v)
+}
+
+// SetTokenSumThreshold implements Context.
+// Deprecated: Use Params().SetTokenSumThreshold() instead
+func (context *context) SetTokenSumThreshold(v float32) {
+	context.params.SetTokenSumThreshold(v)
+}
+
+// SetTokenThreshold implements Context.
+// Deprecated: Use Params().SetTokenThreshold() instead
+func (context *context) SetTokenThreshold(v float32) {
+	context.params.SetTokenThreshold(v)
+}
+
+// SetTokenTimestamps implements Context.
+// Deprecated: Use Params().SetTokenTimestamps() instead
+func (context *context) SetTokenTimestamps(v bool) {
+	context.params.SetTokenTimestamps(v)
+}
+
+// SetTranslate implements Context.
+// Deprecated: Use Params().SetTranslate() instead
+func (context *context) SetTranslate(v bool) {
+	context.params.SetTranslate(v)
 }
 
 var _ Context = (*context)(nil)
