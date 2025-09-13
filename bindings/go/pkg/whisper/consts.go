@@ -11,13 +11,16 @@ import (
 // ERRORS
 
 var (
-	ErrUnableToLoadModel    = errors.New("unable to load model")
-	ErrInternalAppError     = errors.New("internal application error")
+	ErrUnableToLoadModel = errors.New("unable to load model")
+
+	// Deprecated: Use ErrModelClosed instead for checking the model is closed error
+	ErrInternalAppError = errors.New("internal application error")
+
 	ErrProcessingFailed     = errors.New("processing failed")
 	ErrUnsupportedLanguage  = errors.New("unsupported language")
 	ErrModelNotMultilingual = errors.New("model is not multilingual")
 	ErrUnableToCreateState  = errors.New("unable to create state")
-	ErrModelClosed          = errors.New("model has been closed")
+	ErrModelClosed          = errors.Join(errors.New("model has been closed"), ErrInternalAppError)
 )
 
 ///////////////////////////////////////////////////////////////////////////////

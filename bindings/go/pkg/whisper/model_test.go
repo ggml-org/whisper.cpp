@@ -49,6 +49,20 @@ func TestNewContext(t *testing.T) {
 	assert.NotNil(context)
 }
 
+func TestNewContext_ClosedModel(t *testing.T) {
+	assert := assert.New(t)
+
+	model, err := whisper.New(ModelPath)
+	assert.NoError(err)
+	assert.NotNil(model)
+	assert.NoError(model.Close())
+
+	context, err := model.NewContext()
+	assert.ErrorIs(err, whisper.ErrInternalAppError)
+	assert.ErrorIs(err, whisper.ErrModelClosed)
+	assert.Nil(context)
+}
+
 func TestIsMultilingual(t *testing.T) {
 	assert := assert.New(t)
 

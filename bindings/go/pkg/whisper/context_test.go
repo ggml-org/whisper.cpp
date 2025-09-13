@@ -273,8 +273,17 @@ func TestContext_Close(t *testing.T) {
 	err = ctx.Process([]float32{0.1, 0.2, 0.3}, nil, nil, nil)
 	require.ErrorIs(t, err, whisper.ErrModelClosed)
 
+	// TODO: remove this logic after deprecating the ErrInternalAppError
+	require.ErrorIs(t, err, whisper.ErrInternalAppError)
+
 	lang := ctx.DetectedLanguage()
 	require.Empty(t, lang)
+
+	_, err = ctx.NextSegment()
+	assert.ErrorIs(err, whisper.ErrModelClosed)
+
+	// TODO: remove this logic after deprecating the ErrInternalAppError
+	assert.ErrorIs(err, whisper.ErrInternalAppError)
 
 	// Multiple closes should be safe
 	err = ctx.Close()

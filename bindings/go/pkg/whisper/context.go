@@ -233,6 +233,11 @@ func (context *context) IsNOT(t Token) bool {
 }
 
 func (context *context) SetLanguage(lang string) error {
+	if context.model.whisperContext().IsClosed() {
+		// TODO: remove this logic after deprecating the ErrInternalAppError
+		return ErrModelClosed
+	}
+
 	if !context.model.IsMultilingual() {
 		return ErrModelNotMultilingual
 	}
