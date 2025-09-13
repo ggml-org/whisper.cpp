@@ -285,10 +285,6 @@ func toTokensFromState(ctx *whisper.Context, st *whisper.State, n int) []Token {
 	return result
 }
 
-func (context *context) Model() Model {
-	return context.model
-}
-
 // Deprecated: Use Params().Language() instead
 func (context *context) Language() string {
 	return context.params.Language()
