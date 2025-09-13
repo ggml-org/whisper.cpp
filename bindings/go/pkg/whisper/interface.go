@@ -39,13 +39,6 @@ type Model interface {
 
 	// Return all languages supported.
 	Languages() []string
-
-	// Model performance timing methods
-	// Print model performance timings to stdout
-	PrintTimings()
-
-	// Reset model performance timing counters
-	ResetTimings()
 }
 
 // Context is the speech recognition context.
