@@ -3,8 +3,6 @@ package whisper
 import (
 	"io"
 	"time"
-
-	whisper "github.com/ggerganov/whisper.cpp/bindings/go"
 )
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -56,8 +54,13 @@ type Model interface {
 	io.Closer
 
 	// Return a new speech-to-text context.
+	// It may return an error is the model is not loaded or closed
 	NewContext() (Context, error)
 
+	// Return a new parameters wrapper
+	// sampling is the sampling strategy to use
+	// configure is the function to configure the parameters
+	// It may return an error is the model is not loaded or closed
 	NewParams(
 		sampling SamplingStrategy,
 		configure ParamsConfigure,
@@ -65,9 +68,14 @@ type Model interface {
 
 	// Return a new speech-to-text context configured via the provided function
 	// and sampling strategy. The context is backed by an isolated whisper_state.
-	NewContextWithParams(sampling SamplingStrategy, configure ParamsConfigure) (Context, error)
+	// It may return an error is the model is not loaded or closed
+	NewContextWithParams(
+		sampling SamplingStrategy,
+		configure ParamsConfigure,
+	) (Context, error)
 
 	// Return true if the model is multilingual.
+	// It returns false if the model is not loaded or closed
 	IsMultilingual() bool
 
 	// Return all languages supported.
@@ -81,6 +89,8 @@ type Model interface {
 	ResetTimings()
 
 	// WhisperContext returns the memory-safe whisper context wrapper of the raw whisper context
+	// You may need to use this to get the raw whisper context
+	// Ot check that the model's context is not closed
 	WhisperContext() WhisperContext
 
 	// Token identifier
@@ -113,7 +123,6 @@ type Parameters interface {
 
 	// Enable extra debug info (e.g., dump log_mel)
 	SetDebugMode(bool)
-
 	// Diarization (tinydiarize)
 	SetDiarize(bool)
 
@@ -133,6 +142,9 @@ type Parameters interface {
 	// Set the fallback temperature incrementation
 	// Pass -1.0 to disable this feature
 	SetTemperatureFallback(t float32)
+
+	// Set the language
+	// If the model is not multilingual, this will return an error
 	SetLanguage(string) error
 
 	// Set single segment mode
@@ -141,34 +153,39 @@ type Parameters interface {
 	// Getter methods
 	Language() string
 	Threads() int
-
-	UnsafeParams() *whisper.Params
 }
 
 // Context is the speech recognition context.
 type Context interface {
 	io.Closer
+
 	// Deprecated: Use Params().SetLanguage() instead
 	SetLanguage(string) error
 
 	// Deprecated: Use Params().SetTranslate() instead
 	SetTranslate(bool)
+
 	// Deprecated: Use Params().SetSplitOnWord() instead
 	SetSplitOnWord(bool)
+
 	// Deprecated: Use Params().SetThreads() instead
 	SetThreads(uint)
 
 	// Deprecated: Use Params().SetOffset() instead
 	SetOffset(time.Duration)
+
 	// Deprecated: Use Params().SetDuration() instead
 	SetDuration(time.Duration)
+
 	// Deprecated: Use Params().SetTokenThreshold() instead
 	SetTokenThreshold(float32)
 
 	// Deprecated: Use Params().SetTokenSumThreshold() instead
 	SetTokenSumThreshold(float32)
 	// Deprecated: Use Params().SetMaxSegmentLength() instead
+
 	SetMaxSegmentLength(uint)
+
 	// Deprecated: Use Params().SetTokenTimestamps() instead
 	SetTokenTimestamps(bool)
 
@@ -200,7 +217,10 @@ type Context interface {
 	// Deprecated: Use Params().Language() instead
 	Language() string
 
-	// Return true if the model is multilingual.
+	// Return the model that the context is backed by
+	Model() Model
+
+	// Deprecated: Use Model().IsMultilingual() instead
 	IsMultilingual() bool
 
 	// Get detected language
@@ -215,37 +235,39 @@ type Context interface {
 	// is reached, when io.EOF is returned.
 	NextSegment() (Segment, error)
 
-	// Deprecated token methods - use Model.IsBEG(), Model.IsSOT(), etc. instead
-	// Deprecated: Use Model.IsBEG() instead
+	// Deprecated: Use Model().TokenIdentifier().IsBEG() instead
 	IsBEG(Token) bool
 
-	// Deprecated: Use Model.IsSOT() instead
+	// Deprecated: Use Model().TokenIdentifier().IsSOT() instead
 	IsSOT(Token) bool
 
-	// Deprecated: Use Model.IsEOT() instead
+	// Deprecated: Use Model().TokenIdentifier().IsEOT() instead
 	IsEOT(Token) bool
 
-	// Deprecated: Use Model.IsPREV() instead
+	// Deprecated: Use Model().TokenIdentifier().IsPREV() instead
 	IsPREV(Token) bool
 
-	// Deprecated: Use Model.IsSOLM() instead
+	// Deprecated: Use Model().TokenIdentifier().IsSOLM() instead
 	IsSOLM(Token) bool
 
-	// Deprecated: Use Model.IsNOT() instead
+	// Deprecated: Use Model().TokenIdentifier().IsNOT() instead
 	IsNOT(Token) bool
 
-	// Deprecated: Use Model.IsLANG() instead
+	// Deprecated: Use Model().TokenIdentifier().IsLANG() instead
 	IsLANG(Token, string) bool
 
-	// Deprecated: Use Model.IsText() instead
+	// Deprecated: Use Model().TokenIdentifier().IsText() instead
 	IsText(Token) bool
 
-	// Deprecated: Use Model.PrintTimings() instead - these are model-level performance metrics
+	// Deprecated: Use Model().PrintTimings() instead
+	// these are model-level performance metrics
 	PrintTimings()
 
-	// Deprecated: Use Model.ResetTimings() instead - these are model-level performance metrics
+	// Deprecated: Use Model().ResetTimings() instead
+	// these are model-level performance metrics
 	ResetTimings()
 
+	// SystemInfo returns the system information
 	SystemInfo() string
 
 	// Params returns a high-level parameters wrapper - preferred method
@@ -267,13 +289,22 @@ type Segment struct {
 	Tokens []Token
 
 	// True if the next segment is predicted as a speaker turn (tinydiarize)
+	// It works only with the diarization supporting models (like small.en-tdrz.bin) with the diarization enabled
+	// using Parameters.SetDiarize(true)
 	SpeakerTurnNext bool
 }
 
 // Token is a text or special token
 type Token struct {
-	Id         int
-	Text       string
-	P          float32
+	// ID of the token
+	Id int
+
+	// Text of the token
+	Text string
+
+	// Probability of the token
+	P float32
+
+	// Timestamp of the token
 	Start, End time.Duration
 }

@@ -3,7 +3,6 @@ package whisper
 import (
 	"fmt"
 	"io"
-	"log"
 	"runtime"
 	"strings"
 	"time"
@@ -14,13 +13,13 @@ import (
 
 type context struct {
 	n      int
-	model  Model
+	model  *model
 	st     WhisperState
-	params Parameters
+	params *parameters
 	Parameters
 }
 
-func newContext(model Model, params Parameters) (Context, error) {
+func newContext(model *model, params *parameters) (Context, error) {
 	c := new(context)
 	c.model = model
 
@@ -28,7 +27,7 @@ func newContext(model Model, params Parameters) (Context, error) {
 	c.Parameters = c.params
 
 	// allocate isolated state per context
-	ctx, err := model.WhisperContext().UnsafeContext()
+	ctx, err := model.whisperContext().unsafeContext()
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +45,7 @@ func newContext(model Model, params Parameters) (Context, error) {
 
 // DetectedLanguage returns the detected language for the current context data
 func (context *context) DetectedLanguage() string {
-	ctx, err := context.model.WhisperContext().UnsafeContext()
+	ctx, err := context.model.whisperContext().unsafeContext()
 	if err != nil {
 		return ""
 	}
@@ -98,7 +97,7 @@ func (context *context) SystemInfo() string {
 // Make sure to call whisper_pcm_to_mel() or whisper_set_mel() first.
 // Returns the probabilities of all languages for this context's state.
 func (context *context) WhisperLangAutoDetect(offset_ms int, n_threads int) ([]float32, error) {
-	ctx, err := context.model.WhisperContext().UnsafeContext()
+	ctx, err := context.model.whisperContext().unsafeContext()
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +122,7 @@ func (context *context) Process(
 	callNewSegment SegmentCallback,
 	callProgress ProgressCallback,
 ) error {
-	ctx, err := context.model.WhisperContext().UnsafeContext()
+	ctx, err := context.model.whisperContext().unsafeContext()
 	if err != nil {
 		return err
 	}
@@ -133,12 +132,10 @@ func (context *context) Process(
 		context.params.SetSingleSegment(true)
 	}
 
-	lowLevelParams := context.params.UnsafeParams()
-	if lowLevelParams == nil {
-		return fmt.Errorf("lowLevelParams is nil: %w", ErrInternalAppError)
+	lowLevelParams, err := context.params.unsafeParams()
+	if err != nil {
+		return err
 	}
-
-	log.Println("lowLevelParams", lowLevelParams)
 
 	st, err := context.st.UnsafeState()
 	if err != nil {
@@ -168,7 +165,7 @@ func (context *context) Process(
 
 // NextSegment returns the next segment from the context buffer
 func (context *context) NextSegment() (Segment, error) {
-	ctx, err := context.model.WhisperContext().UnsafeContext()
+	ctx, err := context.model.whisperContext().unsafeContext()
 	if err != nil {
 		return Segment{}, err
 	}
@@ -277,3 +274,9 @@ func toTokensFromState(ctx *whisper.Context, st *whisper.State, n int) []Token {
 
 	return result
 }
+
+func (context *context) Model() Model {
+	return context.model
+}
+
+var _ Context = (*context)(nil)

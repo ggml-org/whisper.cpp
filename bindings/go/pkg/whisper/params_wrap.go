@@ -13,7 +13,7 @@ type parameters struct {
 	p *whisper.Params
 }
 
-func newParameters(whisperParams *whisper.Params) Parameters {
+func newParameters(whisperParams *whisper.Params) *parameters {
 	return &parameters{
 		p: whisperParams,
 	}
@@ -85,8 +85,8 @@ func (w *parameters) Threads() int {
 	return w.p.Threads()
 }
 
-func (w *parameters) UnsafeParams() *whisper.Params {
-	return w.p
+func (w *parameters) unsafeParams() (*whisper.Params, error) {
+	return w.p, nil
 }
 
 var _ Parameters = &parameters{}

@@ -41,6 +41,10 @@ func (model *model) WhisperContext() WhisperContext {
 	return model.ctx
 }
 
+func (model *model) whisperContext() *whisperCtx {
+	return model.ctx
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // STRINGIFY
 
@@ -58,7 +62,7 @@ func (model *model) String() string {
 
 // Return true if model is multilingual (language and translation options are supported)
 func (model *model) IsMultilingual() bool {
-	ctx, err := model.ctx.UnsafeContext()
+	ctx, err := model.ctx.unsafeContext()
 	if err != nil {
 		return false
 	}
@@ -68,7 +72,7 @@ func (model *model) IsMultilingual() bool {
 
 // Return all recognized languages. Initially it is set to auto-detect
 func (model *model) Languages() []string {
-	ctx, err := model.ctx.UnsafeContext()
+	ctx, err := model.ctx.unsafeContext()
 	if err != nil {
 		return nil
 	}
@@ -137,8 +141,8 @@ func defaultParamsConfigure(params Parameters) {
 func (m *model) newParams(
 	sampling SamplingStrategy,
 	configure ParamsConfigure,
-) (Parameters, error) {
-	ctx, err := m.ctx.UnsafeContext()
+) (*parameters, error) {
+	ctx, err := m.ctx.unsafeContext()
 	if err != nil {
 		return nil, ErrModelClosed
 	}
@@ -157,7 +161,7 @@ func (m *model) newParams(
 
 // PrintTimings prints the model performance timings to stdout.
 func (model *model) PrintTimings() {
-	ctx, err := model.ctx.UnsafeContext()
+	ctx, err := model.ctx.unsafeContext()
 	if err != nil {
 		return
 	}
@@ -167,7 +171,7 @@ func (model *model) PrintTimings() {
 
 // ResetTimings resets the model performance timing counters.
 func (model *model) ResetTimings() {
-	ctx, err := model.ctx.UnsafeContext()
+	ctx, err := model.ctx.unsafeContext()
 	if err != nil {
 		return
 	}

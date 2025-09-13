@@ -14,7 +14,7 @@ func newTokenIdentifier(whisperContext *whisperCtx) *tokenIdentifier {
 
 // Token type checking methods (model-specific vocabulary)
 func (ti *tokenIdentifier) IsBEG(t Token) (bool, error) {
-	ctx, err := ti.ctx.UnsafeContext()
+	ctx, err := ti.ctx.unsafeContext()
 	if err != nil {
 		return false, err
 	}
@@ -23,7 +23,7 @@ func (ti *tokenIdentifier) IsBEG(t Token) (bool, error) {
 }
 
 func (ti *tokenIdentifier) IsEOT(t Token) (bool, error) {
-	ctx, err := ti.ctx.UnsafeContext()
+	ctx, err := ti.ctx.unsafeContext()
 	if err != nil {
 		return false, err
 	}
@@ -32,7 +32,7 @@ func (ti *tokenIdentifier) IsEOT(t Token) (bool, error) {
 }
 
 func (ti *tokenIdentifier) IsSOT(t Token) (bool, error) {
-	ctx, err := ti.ctx.UnsafeContext()
+	ctx, err := ti.ctx.unsafeContext()
 	if err != nil {
 		return false, err
 	}
@@ -41,7 +41,7 @@ func (ti *tokenIdentifier) IsSOT(t Token) (bool, error) {
 }
 
 func (ti *tokenIdentifier) IsPREV(t Token) (bool, error) {
-	ctx, err := ti.ctx.UnsafeContext()
+	ctx, err := ti.ctx.unsafeContext()
 	if err != nil {
 		return false, err
 	}
@@ -50,7 +50,7 @@ func (ti *tokenIdentifier) IsPREV(t Token) (bool, error) {
 }
 
 func (ti *tokenIdentifier) IsSOLM(t Token) (bool, error) {
-	ctx, err := ti.ctx.UnsafeContext()
+	ctx, err := ti.ctx.unsafeContext()
 	if err != nil {
 		return false, err
 	}
@@ -59,7 +59,7 @@ func (ti *tokenIdentifier) IsSOLM(t Token) (bool, error) {
 }
 
 func (ti *tokenIdentifier) IsNOT(t Token) (bool, error) {
-	ctx, err := ti.ctx.UnsafeContext()
+	ctx, err := ti.ctx.unsafeContext()
 	if err != nil {
 		return false, err
 	}
@@ -68,7 +68,7 @@ func (ti *tokenIdentifier) IsNOT(t Token) (bool, error) {
 }
 
 func (ti *tokenIdentifier) IsLANG(t Token, lang string) (bool, error) {
-	ctx, err := ti.ctx.UnsafeContext()
+	ctx, err := ti.ctx.unsafeContext()
 	if err != nil {
 		return false, err
 	}
@@ -90,7 +90,7 @@ func (ti *tokenIdentifier) IsText(t Token) (bool, error) {
 		return false, nil
 	}
 
-	ctx, err := ti.ctx.UnsafeContext()
+	ctx, err := ti.ctx.unsafeContext()
 	if err != nil {
 		return false, err
 	}

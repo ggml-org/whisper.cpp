@@ -8,9 +8,6 @@ type WhisperContext interface {
 
 	// IsClosed returns true if the whisper context is closed
 	IsClosed() bool
-
-	// UnsafeContext returns the raw whisper context
-	UnsafeContext() (*whisper.Context, error)
 }
 
 type whisperCtx struct {
@@ -38,7 +35,7 @@ func (ctx *whisperCtx) IsClosed() bool {
 	return ctx.ctx == nil
 }
 
-func (ctx *whisperCtx) UnsafeContext() (*whisper.Context, error) {
+func (ctx *whisperCtx) unsafeContext() (*whisper.Context, error) {
 	if ctx.IsClosed() {
 		return nil, ErrModelClosed
 	}
