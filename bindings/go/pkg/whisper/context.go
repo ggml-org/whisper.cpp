@@ -11,160 +11,77 @@ import (
 	whisper "github.com/ggerganov/whisper.cpp/bindings/go"
 )
 
-///////////////////////////////////////////////////////////////////////////////
-// TYPES
-
 type context struct {
 	n      int
-	model  *model
-	params whisper.Params
+	model  Model
+	st     WhisperState
+	params Parameters
+	Parameters
 }
 
-///////////////////////////////////////////////////////////////////////////////
-// LIFECYCLE
+func newContext(model Model, params whisper.Params) (Context, error) {
+	c := new(context)
+	c.model = model
 
-func newContext(model *model, params whisper.Params) (Context, error) {
-	context := new(context)
-	context.model = model
-	context.params = params
+	c.params = newParameters(&params)
+	c.Parameters = c.params
+
+	// allocate isolated state per context
+	ctx, err := model.WhisperContext().UnsafeContext()
+	if err != nil {
+		return nil, err
+	}
+
+	st := ctx.Whisper_init_state()
+	if st == nil {
+		return nil, ErrUnableToCreateState
+	}
+
+	c.st = newWhisperState(st)
 
 	// Return success
-	return context, nil
+	return c, nil
 }
 
-///////////////////////////////////////////////////////////////////////////////
-// PUBLIC METHODS
-
-// Set the language to use for speech recognition.
-func (context *context) SetLanguage(lang string) error {
-	if context.model.ctx == nil {
-		return ErrInternalAppError
-	}
-	if !context.model.IsMultilingual() {
-		return ErrModelNotMultilingual
-	}
-
-	if lang == "auto" {
-		context.params.SetLanguage(-1)
-	} else if id := context.model.ctx.Whisper_lang_id(lang); id < 0 {
-		return ErrUnsupportedLanguage
-	} else if err := context.params.SetLanguage(id); err != nil {
-		return err
-	}
-	// Return success
-	return nil
-}
-
-func (context *context) IsMultilingual() bool {
-	return context.model.IsMultilingual()
-}
-
-// Get language
-func (context *context) Language() string {
-	id := context.params.Language()
-	if id == -1 {
-		return "auto"
-	}
-	return whisper.Whisper_lang_str(context.params.Language())
-}
-
+// DetectedLanguage returns the detected language for the current context data
 func (context *context) DetectedLanguage() string {
-	return whisper.Whisper_lang_str(context.model.ctx.Whisper_full_lang_id())
+	ctx, err := context.model.WhisperContext().UnsafeContext()
+	if err != nil {
+		return ""
+	}
+
+	st, err := context.st.UnsafeState()
+	if err != nil {
+		return ""
+	}
+
+	return whisper.Whisper_lang_str(
+		ctx.Whisper_full_lang_id_from_state(
+			st,
+		),
+	)
 }
 
-// Set translate flag
-func (context *context) SetTranslate(v bool) {
-	context.params.SetTranslate(v)
+// Close frees the whisper state and marks the context as closed.
+func (context *context) Close() error {
+	return context.st.Close()
 }
 
-func (context *context) SetSplitOnWord(v bool) {
-	context.params.SetSplitOnWord(v)
+// Params returns a high-level parameters wrapper
+func (context *context) Params() Parameters {
+	return context.params
 }
 
-// Set number of threads to use
-func (context *context) SetThreads(v uint) {
-	context.params.SetThreads(int(v))
-}
-
-// Set time offset
-func (context *context) SetOffset(v time.Duration) {
-	context.params.SetOffset(int(v.Milliseconds()))
-}
-
-// Set duration of audio to process
-func (context *context) SetDuration(v time.Duration) {
-	context.params.SetDuration(int(v.Milliseconds()))
-}
-
-// Set timestamp token probability threshold (~0.01)
-func (context *context) SetTokenThreshold(t float32) {
-	context.params.SetTokenThreshold(t)
-}
-
-// Set timestamp token sum probability threshold (~0.01)
-func (context *context) SetTokenSumThreshold(t float32) {
-	context.params.SetTokenSumThreshold(t)
-}
-
-// Set max segment length in characters
-func (context *context) SetMaxSegmentLength(n uint) {
-	context.params.SetMaxSegmentLength(int(n))
-}
-
-// Set token timestamps flag
-func (context *context) SetTokenTimestamps(b bool) {
-	context.params.SetTokenTimestamps(b)
-}
-
-// Set max tokens per segment (0 = no limit)
-func (context *context) SetMaxTokensPerSegment(n uint) {
-	context.params.SetMaxTokensPerSegment(int(n))
-}
-
-// Set audio encoder context
-func (context *context) SetAudioCtx(n uint) {
-	context.params.SetAudioCtx(int(n))
-}
-
-// Set maximum number of text context tokens to store
-func (context *context) SetMaxContext(n int) {
-	context.params.SetMaxContext(n)
-}
-
-// Set Beam Size
-func (context *context) SetBeamSize(n int) {
-	context.params.SetBeamSize(n)
-}
-
-// Set Entropy threshold
-func (context *context) SetEntropyThold(t float32) {
-	context.params.SetEntropyThold(t)
-}
-
-// Set Temperature
-func (context *context) SetTemperature(t float32) {
-	context.params.SetTemperature(t)
-}
-
-// Set the fallback temperature incrementation
-// Pass -1.0 to disable this feature
-func (context *context) SetTemperatureFallback(t float32) {
-	context.params.SetTemperatureFallback(t)
-}
-
-// Set initial prompt
-func (context *context) SetInitialPrompt(prompt string) {
-	context.params.SetInitialPrompt(prompt)
-}
-
-// ResetTimings resets the mode timings. Should be called before processing
+// ResetTimings resets the model performance timing counters.
+// Deprecated: Use Model.ResetTimings() instead - these are model-level performance metrics.
 func (context *context) ResetTimings() {
-	context.model.ctx.Whisper_reset_timings()
+	context.model.ResetTimings()
 }
 
-// PrintTimings prints the model timings to stdout.
+// PrintTimings prints the model performance timings to stdout.
+// Deprecated: Use Model.PrintTimings() instead - these are model-level performance metrics.
 func (context *context) PrintTimings() {
-	context.model.ctx.Whisper_print_timings()
+	context.model.PrintTimings()
 }
 
 // SystemInfo returns the system information
@@ -178,12 +95,23 @@ func (context *context) SystemInfo() string {
 
 // Use mel data at offset_ms to try and auto-detect the spoken language
 // Make sure to call whisper_pcm_to_mel() or whisper_set_mel() first.
-// Returns the probabilities of all languages.
+// Returns the probabilities of all languages for this context's state.
 func (context *context) WhisperLangAutoDetect(offset_ms int, n_threads int) ([]float32, error) {
-	langProbs, err := context.model.ctx.Whisper_lang_auto_detect(offset_ms, n_threads)
+	ctx, err := context.model.WhisperContext().UnsafeContext()
 	if err != nil {
 		return nil, err
 	}
+
+	st, err := context.st.UnsafeState()
+	if err != nil {
+		return nil, err
+	}
+
+	langProbs, err := ctx.Whisper_lang_auto_detect_with_state(st, offset_ms, n_threads)
+	if err != nil {
+		return nil, err
+	}
+
 	return langProbs, nil
 }
 
@@ -194,36 +122,33 @@ func (context *context) Process(
 	callNewSegment SegmentCallback,
 	callProgress ProgressCallback,
 ) error {
-	if context.model.ctx == nil {
-		return ErrInternalAppError
+	ctx, err := context.model.WhisperContext().UnsafeContext()
+	if err != nil {
+		return err
 	}
+
 	// If the callback is defined then we force on single_segment mode
 	if callNewSegment != nil {
 		context.params.SetSingleSegment(true)
 	}
 
-	// We don't do parallel processing at the moment
-	processors := 0
-	if processors > 1 {
-		if err := context.model.ctx.Whisper_full_parallel(context.params, data, processors, callEncoderBegin,
-			func(new int) {
-				if callNewSegment != nil {
-					num_segments := context.model.ctx.Whisper_full_n_segments()
-					s0 := num_segments - new
-					for i := s0; i < num_segments; i++ {
-						callNewSegment(toSegment(context.model.ctx, i))
-					}
-				}
-			}); err != nil {
-			return err
-		}
-	} else if err := context.model.ctx.Whisper_full(context.params, data, callEncoderBegin,
+	lowLevelParams := context.params.WhisperParams()
+	if lowLevelParams == nil {
+		return fmt.Errorf("lowLevelParams is nil: %w", ErrInternalAppError)
+	}
+
+	st, err := context.st.UnsafeState()
+	if err != nil {
+		return err
+	}
+
+	if err := ctx.Whisper_full_with_state(st, *lowLevelParams, data, callEncoderBegin,
 		func(new int) {
 			if callNewSegment != nil {
-				num_segments := context.model.ctx.Whisper_full_n_segments()
+				num_segments := ctx.Whisper_full_n_segments_from_state(st)
 				s0 := num_segments - new
 				for i := s0; i < num_segments; i++ {
-					callNewSegment(toSegment(context.model.ctx, i))
+					callNewSegment(toSegmentFromState(ctx, st, i))
 				}
 			}
 		}, func(progress int) {
@@ -240,94 +165,111 @@ func (context *context) Process(
 
 // NextSegment returns the next segment from the context buffer
 func (context *context) NextSegment() (Segment, error) {
-	if context.model.ctx == nil {
-		return Segment{}, ErrInternalAppError
+	ctx, err := context.model.WhisperContext().UnsafeContext()
+	if err != nil {
+		return Segment{}, err
 	}
-	if context.n >= context.model.ctx.Whisper_full_n_segments() {
+
+	st, err := context.st.UnsafeState()
+	if err != nil {
+		return Segment{}, err
+	}
+
+	if context.n >= ctx.Whisper_full_n_segments_from_state(st) {
 		return Segment{}, io.EOF
 	}
-	result := toSegment(context.model.ctx, context.n)
+
+	result := toSegmentFromState(ctx, st, context.n)
 	context.n++
+
 	return result, nil
 }
 
-///////////////////////////////////////////////////////////////////////////////
-// PRIVATE METHODS
+func (context *context) IsMultilingual() bool {
+	return context.model.IsMultilingual()
+}
 
-func toSegment(ctx *whisper.Context, n int) Segment {
+// Token helpers
+// Deprecated: Use Model.IsText() instead - token checking is model-specific.
+func (context *context) IsText(t Token) bool {
+	result, _ := context.model.TokenIdentifier().IsText(t)
+	return result
+}
+
+// Deprecated: Use Model.IsBEG() instead - token checking is model-specific.
+func (context *context) IsBEG(t Token) bool {
+	result, _ := context.model.TokenIdentifier().IsBEG(t)
+	return result
+}
+
+// Deprecated: Use Model.IsSOT() instead - token checking is model-specific.
+func (context *context) IsSOT(t Token) bool {
+	result, _ := context.model.TokenIdentifier().IsSOT(t)
+	return result
+}
+
+// Deprecated: Use Model.IsEOT() instead - token checking is model-specific.
+func (context *context) IsEOT(t Token) bool {
+	result, _ := context.model.TokenIdentifier().IsEOT(t)
+	return result
+}
+
+// Deprecated: Use Model.IsPREV() instead - token checking is model-specific.
+func (context *context) IsPREV(t Token) bool {
+	result, _ := context.model.TokenIdentifier().IsPREV(t)
+	return result
+}
+
+// Deprecated: Use Model.IsSOLM() instead - token checking is model-specific.
+func (context *context) IsSOLM(t Token) bool {
+	result, _ := context.model.TokenIdentifier().IsSOLM(t)
+	return result
+}
+
+// Deprecated: Use Model.IsNOT() instead - token checking is model-specific.
+func (context *context) IsNOT(t Token) bool {
+	result, _ := context.model.TokenIdentifier().IsNOT(t)
+	return result
+}
+
+func (context *context) SetLanguage(lang string) error {
+	if !context.model.IsMultilingual() {
+		return ErrModelNotMultilingual
+	}
+
+	return context.params.SetLanguage(lang)
+}
+
+// Deprecated: Use Model.IsLANG() instead - token checking is model-specific.
+func (context *context) IsLANG(t Token, lang string) bool {
+	result, _ := context.model.TokenIdentifier().IsLANG(t, lang)
+	return result
+}
+
+// State-backed helper functions
+func toSegmentFromState(ctx *whisper.Context, st *whisper.State, n int) Segment {
 	return Segment{
 		Num:    n,
-		Text:   strings.TrimSpace(ctx.Whisper_full_get_segment_text(n)),
-		Start:  time.Duration(ctx.Whisper_full_get_segment_t0(n)) * time.Millisecond * 10,
-		End:    time.Duration(ctx.Whisper_full_get_segment_t1(n)) * time.Millisecond * 10,
-		Tokens: toTokens(ctx, n),
+		Text:   strings.TrimSpace(ctx.Whisper_full_get_segment_text_from_state(st, n)),
+		Start:  time.Duration(ctx.Whisper_full_get_segment_t0_from_state(st, n)) * time.Millisecond * 10,
+		End:    time.Duration(ctx.Whisper_full_get_segment_t1_from_state(st, n)) * time.Millisecond * 10,
+		Tokens: toTokensFromState(ctx, st, n),
 	}
 }
 
-func toTokens(ctx *whisper.Context, n int) []Token {
-	result := make([]Token, ctx.Whisper_full_n_tokens(n))
-	for i := 0; i < len(result); i++ {
-		data := ctx.Whisper_full_get_token_data(n, i)
+func toTokensFromState(ctx *whisper.Context, st *whisper.State, n int) []Token {
+	result := make([]Token, ctx.Whisper_full_n_tokens_from_state(st, n))
 
+	for i := 0; i < len(result); i++ {
+		data := ctx.Whisper_full_get_token_data_from_state(st, n, i)
 		result[i] = Token{
-			Id:    int(ctx.Whisper_full_get_token_id(n, i)),
-			Text:  ctx.Whisper_full_get_token_text(n, i),
-			P:     ctx.Whisper_full_get_token_p(n, i),
+			Id:    int(ctx.Whisper_full_get_token_id_from_state(st, n, i)),
+			Text:  ctx.Whisper_full_get_token_text_from_state(st, n, i),
+			P:     ctx.Whisper_full_get_token_p_from_state(st, n, i),
 			Start: time.Duration(data.T0()) * time.Millisecond * 10,
 			End:   time.Duration(data.T1()) * time.Millisecond * 10,
 		}
 	}
+
 	return result
-}
-
-// Token helpers
-func (context *context) IsText(t Token) bool {
-	switch {
-	case context.IsBEG(t):
-		return false
-	case context.IsSOT(t):
-		return false
-	case whisper.Token(t.Id) >= context.model.ctx.Whisper_token_eot():
-		return false
-	case context.IsPREV(t):
-		return false
-	case context.IsSOLM(t):
-		return false
-	case context.IsNOT(t):
-		return false
-	default:
-		return true
-	}
-}
-
-func (context *context) IsBEG(t Token) bool {
-	return whisper.Token(t.Id) == context.model.ctx.Whisper_token_beg()
-}
-
-func (context *context) IsSOT(t Token) bool {
-	return whisper.Token(t.Id) == context.model.ctx.Whisper_token_sot()
-}
-
-func (context *context) IsEOT(t Token) bool {
-	return whisper.Token(t.Id) == context.model.ctx.Whisper_token_eot()
-}
-
-func (context *context) IsPREV(t Token) bool {
-	return whisper.Token(t.Id) == context.model.ctx.Whisper_token_prev()
-}
-
-func (context *context) IsSOLM(t Token) bool {
-	return whisper.Token(t.Id) == context.model.ctx.Whisper_token_solm()
-}
-
-func (context *context) IsNOT(t Token) bool {
-	return whisper.Token(t.Id) == context.model.ctx.Whisper_token_not()
-}
-
-func (context *context) IsLANG(t Token, lang string) bool {
-	if id := context.model.ctx.Whisper_lang_id(lang); id >= 0 {
-		return whisper.Token(t.Id) == context.model.ctx.Whisper_token_lang(id)
-	} else {
-		return false
-	}
 }

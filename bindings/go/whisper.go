@@ -232,6 +232,10 @@ func (ctx *Context) Whisper_lang_id(lang string) int {
 	return int(C.whisper_lang_id(C.CString(lang)))
 }
 
+func Whisper_lang_id_str(lang string) int {
+	return int(C.whisper_lang_id(C.CString(lang)))
+}
+
 // Largest language id (i.e. number of available languages - 1)
 func Whisper_lang_max_id() int {
 	return int(C.whisper_lang_max_id())

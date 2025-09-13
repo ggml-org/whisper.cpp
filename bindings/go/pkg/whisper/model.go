@@ -9,19 +9,14 @@ import (
 	whisper "github.com/ggerganov/whisper.cpp/bindings/go"
 )
 
-///////////////////////////////////////////////////////////////////////////////
-// TYPES
-
 type model struct {
-	path string
-	ctx  *whisper.Context
+	path            string
+	ctx             *whisperCtx
+	tokenIdentifier *tokenIdentifier
 }
 
 // Make sure model adheres to the interface
 var _ Model = (*model)(nil)
-
-///////////////////////////////////////////////////////////////////////////////
-// LIFECYCLE
 
 func New(path string) (Model, error) {
 	model := new(model)
@@ -30,7 +25,8 @@ func New(path string) (Model, error) {
 	} else if ctx := whisper.Whisper_init(path); ctx == nil {
 		return nil, ErrUnableToLoadModel
 	} else {
-		model.ctx = ctx
+		model.ctx = newWhisperCtx(ctx)
+		model.tokenIdentifier = newTokenIdentifier(model.ctx)
 		model.path = path
 	}
 
@@ -39,15 +35,11 @@ func New(path string) (Model, error) {
 }
 
 func (model *model) Close() error {
-	if model.ctx != nil {
-		model.ctx.Whisper_free()
-	}
+	return model.ctx.Close()
+}
 
-	// Release resources
-	model.ctx = nil
-
-	// Return success
-	return nil
+func (model *model) WhisperContext() WhisperContext {
+	return model.ctx
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -58,6 +50,7 @@ func (model *model) String() string {
 	if model.ctx != nil {
 		str += fmt.Sprintf(" model=%q", model.path)
 	}
+
 	return str + ">"
 }
 
@@ -66,28 +59,43 @@ func (model *model) String() string {
 
 // Return true if model is multilingual (language and translation options are supported)
 func (model *model) IsMultilingual() bool {
-	return model.ctx.Whisper_is_multilingual() != 0
+	ctx, err := model.ctx.UnsafeContext()
+	if err != nil {
+		return false
+	}
+
+	return ctx.Whisper_is_multilingual() != 0
 }
 
 // Return all recognized languages. Initially it is set to auto-detect
 func (model *model) Languages() []string {
+	ctx, err := model.ctx.UnsafeContext()
+	if err != nil {
+		return nil
+	}
+
 	result := make([]string, 0, whisper.Whisper_lang_max_id())
 	for i := 0; i < whisper.Whisper_lang_max_id(); i++ {
 		str := whisper.Whisper_lang_str(i)
-		if model.ctx.Whisper_lang_id(str) >= 0 {
+		if ctx.Whisper_lang_id(str) >= 0 {
 			result = append(result, str)
 		}
 	}
+
 	return result
 }
 
+// NewContext creates a new speech-to-text context.
+// Each context is backed by an isolated whisper_state for safe concurrent processing.
 func (model *model) NewContext() (Context, error) {
-	if model.ctx == nil {
-		return nil, ErrInternalAppError
+	ctx, err := model.ctx.UnsafeContext()
+	if err != nil {
+		return nil, ErrModelClosed
 	}
 
-	// Create new context
-	params := model.ctx.Whisper_full_default_params(whisper.SAMPLING_GREEDY)
+	// Create new context with default params
+	params := ctx.Whisper_full_default_params(whisper.SAMPLING_GREEDY)
+
 	params.SetTranslate(false)
 	params.SetPrintSpecial(false)
 	params.SetPrintProgress(false)
@@ -96,22 +104,31 @@ func (model *model) NewContext() (Context, error) {
 	params.SetThreads(runtime.NumCPU())
 	params.SetNoContext(true)
 
-	// Return new context
+	// Return new context (now state-backed)
 	return newContext(model, params)
 }
 
-// NewState returns a new per-request state sharing the loaded model
-func (model *model) NewState() (State, error) {
-	if model.ctx == nil {
-		return nil, ErrInternalAppError
+// PrintTimings prints the model performance timings to stdout.
+func (model *model) PrintTimings() {
+	ctx, err := model.ctx.UnsafeContext()
+	if err != nil {
+		return
 	}
-	params := model.ctx.Whisper_full_default_params(whisper.SAMPLING_GREEDY)
-	params.SetTranslate(false)
-	params.SetPrintSpecial(false)
-	params.SetPrintProgress(false)
-	params.SetPrintRealtime(false)
-	params.SetPrintTimestamps(false)
-	params.SetThreads(runtime.NumCPU())
-	params.SetNoContext(true)
-	return newState(model, params)
+
+	ctx.Whisper_print_timings()
+}
+
+// ResetTimings resets the model performance timing counters.
+func (model *model) ResetTimings() {
+	ctx, err := model.ctx.UnsafeContext()
+	if err != nil {
+		return
+	}
+
+	ctx.Whisper_reset_timings()
+}
+
+// WhisperContext returns the low-level whisper context, or error if the model is closed.
+func (model *model) TokenIdentifier() TokenIdentifier {
+	return model.tokenIdentifier
 }

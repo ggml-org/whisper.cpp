@@ -17,6 +17,7 @@ var (
 	ErrUnsupportedLanguage  = errors.New("unsupported language")
 	ErrModelNotMultilingual = errors.New("model is not multilingual")
 	ErrUnableToCreateState  = errors.New("unable to create state")
+	ErrModelClosed          = errors.New("model has been closed")
 )
 
 ///////////////////////////////////////////////////////////////////////////////

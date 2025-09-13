@@ -3,6 +3,8 @@ package whisper
 import (
 	"io"
 	"time"
+
+	whisper "github.com/ggerganov/whisper.cpp/bindings/go"
 )
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -20,6 +22,32 @@ type ProgressCallback func(int)
 // continue processing. It is called during the Process function
 type EncoderBeginCallback func() bool
 
+type TokenIdentifier interface {
+	// Test for "begin" token
+	IsBEG(Token) (bool, error)
+
+	// Test for "start of transcription" token
+	IsSOT(Token) (bool, error)
+
+	// Test for "end of transcription" token
+	IsEOT(Token) (bool, error)
+
+	// Test for "start of prev" token
+	IsPREV(Token) (bool, error)
+
+	// Test for "start of lm" token
+	IsSOLM(Token) (bool, error)
+
+	// Test for "no timestamps" token
+	IsNOT(Token) (bool, error)
+
+	// Test for token associated with a specific language
+	IsLANG(Token, string) (bool, error)
+
+	// Test for text token
+	IsText(Token) (bool, error)
+}
+
 // Model is the interface to a whisper model. Create a new model with the
 // function whisper.New(string)
 type Model interface {
@@ -33,32 +61,116 @@ type Model interface {
 
 	// Return all languages supported.
 	Languages() []string
+
+	// Model performance timing methods
+	// Print model performance timings to stdout
+	PrintTimings()
+
+	// Reset model performance timing counters
+	ResetTimings()
+
+	// WhisperContext returns the memory-safe whisper context wrapper of the raw whisper context
+	WhisperContext() WhisperContext
+
+	// Token identifier
+	TokenIdentifier() TokenIdentifier
+}
+
+// Parameters configures decode / processing behavior
+type Parameters interface {
+	SetTranslate(bool)
+	SetSplitOnWord(bool)
+	SetThreads(uint)
+	SetOffset(time.Duration)
+	SetDuration(time.Duration)
+	SetTokenThreshold(float32)
+	SetTokenSumThreshold(float32)
+	SetMaxSegmentLength(uint)
+	SetTokenTimestamps(bool)
+	SetMaxTokensPerSegment(uint)
+	SetAudioCtx(uint)
+	SetMaxContext(n int)
+	SetBeamSize(n int)
+	SetEntropyThold(t float32)
+	SetInitialPrompt(prompt string)
+
+	// Set the temperature
+	SetTemperature(t float32)
+
+	// Set the fallback temperature incrementation
+	// Pass -1.0 to disable this feature
+	SetTemperatureFallback(t float32)
+	SetLanguage(string) error
+
+	// Set single segment mode
+	SetSingleSegment(bool)
+
+	// Getter methods
+	Language() string
+	Threads() int
+	WhisperParams() *whisper.Params
 }
 
 // Context is the speech recognition context.
 type Context interface {
-	SetLanguage(string) error // Set the language to use for speech recognition, use "auto" for auto detect language.
-	SetTranslate(bool)        // Set translate flag
-	IsMultilingual() bool     // Return true if the model is multilingual.
-	Language() string         // Get language
-	DetectedLanguage() string // Get detected language
+	io.Closer
+	// Deprecated: Use Params().SetLanguage() instead
+	SetLanguage(string) error
 
-	SetOffset(time.Duration)          // Set offset
-	SetDuration(time.Duration)        // Set duration
-	SetThreads(uint)                  // Set number of threads to use
-	SetSplitOnWord(bool)              // Set split on word flag
-	SetTokenThreshold(float32)        // Set timestamp token probability threshold
-	SetTokenSumThreshold(float32)     // Set timestamp token sum probability threshold
-	SetMaxSegmentLength(uint)         // Set max segment length in characters
-	SetTokenTimestamps(bool)          // Set token timestamps flag
-	SetMaxTokensPerSegment(uint)      // Set max tokens per segment (0 = no limit)
-	SetAudioCtx(uint)                 // Set audio encoder context
-	SetMaxContext(n int)              // Set maximum number of text context tokens to store
-	SetBeamSize(n int)                // Set Beam Size
-	SetEntropyThold(t float32)        // Set Entropy threshold
-	SetInitialPrompt(prompt string)   // Set initial prompt
-	SetTemperature(t float32)         // Set temperature
-	SetTemperatureFallback(t float32) // Set temperature incrementation
+	// Deprecated: Use Params().SetTranslate() instead
+	SetTranslate(bool)
+	// Deprecated: Use Params().SetSplitOnWord() instead
+	SetSplitOnWord(bool)
+	// Deprecated: Use Params().SetThreads() instead
+	SetThreads(uint)
+
+	// Deprecated: Use Params().SetOffset() instead
+	SetOffset(time.Duration)
+	// Deprecated: Use Params().SetDuration() instead
+	SetDuration(time.Duration)
+	// Deprecated: Use Params().SetTokenThreshold() instead
+	SetTokenThreshold(float32)
+
+	// Deprecated: Use Params().SetTokenSumThreshold() instead
+	SetTokenSumThreshold(float32)
+	// Deprecated: Use Params().SetMaxSegmentLength() instead
+	SetMaxSegmentLength(uint)
+	// Deprecated: Use Params().SetTokenTimestamps() instead
+	SetTokenTimestamps(bool)
+
+	// Deprecated: Use Params().SetMaxTokensPerSegment() instead
+	SetMaxTokensPerSegment(uint)
+
+	// Deprecated: Use Params().SetAudioCtx() instead
+	SetAudioCtx(uint)
+
+	// Deprecated: Use Params().SetMaxContext() instead
+	SetMaxContext(int)
+
+	// Deprecated: Use Params().SetBeamSize() instead
+	SetBeamSize(int)
+
+	// Deprecated: Use Params().SetEntropyThold() instead
+	SetEntropyThold(float32)
+
+	// Deprecated: Use Params().SetTemperature() instead
+	SetTemperature(float32)
+
+	// Deprecated: Use Params().SetTemperatureFallback() instead
+	SetTemperatureFallback(float32)
+
+	// Deprecated: Use Params().SetInitialPrompt() instead
+	SetInitialPrompt(string)
+
+	// Get language of the context parameters
+	// Deprecated: Use Params().Language() instead
+	Language() string
+
+	// Return true if the model is multilingual.
+	IsMultilingual() bool
+
+	// Get detected language
+	DetectedLanguage() string
 
 	// Process mono audio data and return any errors.
 	// If defined, newly generated segments are passed to the
@@ -69,29 +181,41 @@ type Context interface {
 	// is reached, when io.EOF is returned.
 	NextSegment() (Segment, error)
 
-	IsBEG(Token) bool          // Test for "begin" token
-	IsSOT(Token) bool          // Test for "start of transcription" token
-	IsEOT(Token) bool          // Test for "end of transcription" token
-	IsPREV(Token) bool         // Test for "start of prev" token
-	IsSOLM(Token) bool         // Test for "start of lm" token
-	IsNOT(Token) bool          // Test for "No timestamps" token
-	IsLANG(Token, string) bool // Test for token associated with a specific language
-	IsText(Token) bool         // Test for text token
+	// Deprecated token methods - use Model.IsBEG(), Model.IsSOT(), etc. instead
+	// Deprecated: Use Model.IsBEG() instead
+	IsBEG(Token) bool
 
-	// Timings
+	// Deprecated: Use Model.IsSOT() instead
+	IsSOT(Token) bool
+
+	// Deprecated: Use Model.IsEOT() instead
+	IsEOT(Token) bool
+
+	// Deprecated: Use Model.IsPREV() instead
+	IsPREV(Token) bool
+
+	// Deprecated: Use Model.IsSOLM() instead
+	IsSOLM(Token) bool
+
+	// Deprecated: Use Model.IsNOT() instead
+	IsNOT(Token) bool
+
+	// Deprecated: Use Model.IsLANG() instead
+	IsLANG(Token, string) bool
+
+	// Deprecated: Use Model.IsText() instead
+	IsText(Token) bool
+
+	// Deprecated: Use Model.PrintTimings() instead - these are model-level performance metrics
 	PrintTimings()
+
+	// Deprecated: Use Model.ResetTimings() instead - these are model-level performance metrics
 	ResetTimings()
 
 	SystemInfo() string
-}
 
-// State is a per-request speech recognition state which shares the loaded model
-// but isolates recognition results. It embeds Context, so any state-specific
-// methods can be added later without breaking existing API.
-type State interface {
-	io.Closer
-
-	Context
+	// Params returns a high-level parameters wrapper - preferred method
+	Params() Parameters
 }
 
 // Segment is the text result of a speech recognition.
