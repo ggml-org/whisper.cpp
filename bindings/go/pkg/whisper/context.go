@@ -3,6 +3,7 @@ package whisper
 import (
 	"fmt"
 	"io"
+	"log"
 	"runtime"
 	"strings"
 	"time"
@@ -136,6 +137,8 @@ func (context *context) Process(
 	if lowLevelParams == nil {
 		return fmt.Errorf("lowLevelParams is nil: %w", ErrInternalAppError)
 	}
+
+	log.Println("lowLevelParams", lowLevelParams)
 
 	st, err := context.st.UnsafeState()
 	if err != nil {

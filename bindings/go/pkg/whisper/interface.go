@@ -63,6 +63,10 @@ type Model interface {
 		configure ParamsConfigure,
 	) (Parameters, error)
 
+	// Return a new speech-to-text context configured via the provided function
+	// and sampling strategy. The context is backed by an isolated whisper_state.
+	NewContextWithParams(sampling SamplingStrategy, configure ParamsConfigure) (Context, error)
+
 	// Return true if the model is multilingual.
 	IsMultilingual() bool
 
@@ -106,6 +110,9 @@ type Parameters interface {
 	SetPrintProgress(bool)
 	SetPrintRealtime(bool)
 	SetPrintTimestamps(bool)
+
+	// Enable extra debug info (e.g., dump log_mel)
+	SetDebugMode(bool)
 
 	// Diarization (tinydiarize)
 	SetDiarize(bool)

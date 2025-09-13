@@ -1,6 +1,7 @@
 package whisper_test
 
 import (
+	"io"
 	"os"
 	"sync"
 	"testing"
@@ -335,6 +336,76 @@ func TestContext_VAD_And_Diarization_Params_DoNotPanic(t *testing.T) {
 
 	err = ctx.Process(data, nil, nil, nil)
 	assert.NoError(err)
+}
+
+func TestDiarization_TwoSpeakers_Boundaries(t *testing.T) {
+	fh, err := os.Open(MultiSpeakerSamplePath)
+	require.NoError(t, err)
+	defer func() { _ = fh.Close() }()
+
+	dec := wav.NewDecoder(fh)
+	buf, err := dec.FullPCMBuffer()
+	assert.Equal(t, uint16(1), dec.NumChans)
+	require.NoError(t, err)
+	data := buf.AsFloat32Buffer().Data
+
+	model, err := whisper.New(ModelTinydiarizePath)
+	require.NoError(t, err)
+	defer func() { _ = model.Close() }()
+
+	// diarize ON with beam search and tighter segmentation
+	ctxOn, err := model.NewContextWithParams(whisper.SAMPLING_GREEDY, func(p whisper.Parameters) {
+		p.SetDiarize(true)
+		p.SetVAD(false)
+		p.SetSplitOnWord(true)
+		p.SetMaxSegmentLength(1)
+		p.SetMaxTokensPerSegment(64)
+		p.SetTokenTimestamps(true)
+	})
+	require.NoError(t, err)
+	defer func() { _ = ctxOn.Close() }()
+
+	require.NoError(t, ctxOn.Process(data, nil, nil, nil))
+	var turnsOn int
+	for {
+		seg, err := ctxOn.NextSegment()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		if seg.SpeakerTurnNext {
+			turnsOn++
+		}
+	}
+	require.Greater(t, turnsOn, 0, "expected speaker turn boundaries with diarization enabled")
+
+	// diarize OFF baseline with same segmentation and beam
+	ctxOff, err := model.NewContextWithParams(whisper.SAMPLING_BEAM_SEARCH, func(p whisper.Parameters) {
+		p.SetBeamSize(3)
+		p.SetDiarize(false)
+		p.SetVAD(false)
+		p.SetSplitOnWord(true)
+		p.SetMaxSegmentLength(40)
+		p.SetMaxTokensPerSegment(64)
+		p.SetTokenTimestamps(true)
+	})
+	require.NoError(t, err)
+	defer func() { _ = ctxOff.Close() }()
+
+	require.NoError(t, ctxOff.Process(data, nil, nil, nil))
+	var turnsOff int
+	for {
+		seg, err := ctxOff.NextSegment()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		if seg.SpeakerTurnNext {
+			turnsOff++
+		}
+	}
+
+	require.GreaterOrEqual(t, turnsOn, turnsOff, "diarization should not reduce turn boundaries")
 }
 
 func TestContext_SpeakerTurnNext_Field_Present(t *testing.T) {

@@ -41,6 +41,7 @@ func (w *parameters) SetPrintSpecial(v bool)           { w.p.SetPrintSpecial(v) 
 func (w *parameters) SetPrintProgress(v bool)          { w.p.SetPrintProgress(v) }
 func (w *parameters) SetPrintRealtime(v bool)          { w.p.SetPrintRealtime(v) }
 func (w *parameters) SetPrintTimestamps(v bool)        { w.p.SetPrintTimestamps(v) }
+func (w *parameters) SetDebugMode(v bool)              { w.p.SetDebugMode(v) }
 
 // Diarization (tinydiarize)
 func (w *parameters) SetDiarize(v bool) { w.p.SetDiarize(v) }

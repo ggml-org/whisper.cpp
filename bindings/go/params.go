@@ -47,6 +47,11 @@ func (p *Params) SetPrintTimestamps(v bool) {
 	p.print_timestamps = toBool(v)
 }
 
+// Enable extra debug information
+func (p *Params) SetDebugMode(v bool) {
+	p.debug_mode = toBool(v)
+}
+
 // Enable tinydiarize speaker turn detection
 func (p *Params) SetDiarize(v bool) {
 	p.tdrz_enable = toBool(v)
