@@ -14,11 +14,19 @@ import (
 type context struct {
 	n     int
 	model *model
-	st    WhisperState
+	st    *whisperState
 	*Parameters
 }
 
 func NewContext(model *model, params *Parameters) (*context, error) {
+	if model == nil {
+		return nil, errModelRequired
+	}
+
+	if params == nil {
+		return nil, errParametersRequired
+	}
+
 	c := new(context)
 	c.model = model
 
@@ -32,7 +40,7 @@ func NewContext(model *model, params *Parameters) (*context, error) {
 
 	st := ctx.Whisper_init_state()
 	if st == nil {
-		return nil, ErrUnableToCreateState
+		return nil, errUnableToCreateState
 	}
 
 	c.st = newWhisperState(st)
@@ -48,7 +56,7 @@ func (context *context) DetectedLanguage() string {
 		return ""
 	}
 
-	st, err := context.st.UnsafeState()
+	st, err := context.st.unsafeState()
 	if err != nil {
 		return ""
 	}
@@ -62,7 +70,7 @@ func (context *context) DetectedLanguage() string {
 
 // Close frees the whisper state and marks the context as closed.
 func (context *context) Close() error {
-	return context.st.Close()
+	return context.st.close()
 }
 
 // Params returns a high-level parameters wrapper
@@ -100,7 +108,7 @@ func (context *context) WhisperLangAutoDetect(offset_ms int, n_threads int) ([]f
 		return nil, err
 	}
 
-	st, err := context.st.UnsafeState()
+	st, err := context.st.unsafeState()
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +143,7 @@ func (context *context) Process(
 		return err
 	}
 
-	st, err := context.st.UnsafeState()
+	st, err := context.st.unsafeState()
 	if err != nil {
 		return err
 	}
@@ -168,7 +176,7 @@ func (context *context) NextSegment() (Segment, error) {
 		return Segment{}, err
 	}
 
-	st, err := context.st.UnsafeState()
+	st, err := context.st.unsafeState()
 	if err != nil {
 		return Segment{}, err
 	}
@@ -190,48 +198,48 @@ func (context *context) IsMultilingual() bool {
 // Token helpers
 // Deprecated: Use Model.IsText() instead - token checking is model-specific.
 func (context *context) IsText(t Token) bool {
-	result, _ := context.model.TokenIdentifier().IsText(t)
+	result, _ := context.model.tokenIdentifier().IsText(t)
 	return result
 }
 
 // Deprecated: Use Model.IsBEG() instead - token checking is model-specific.
 func (context *context) IsBEG(t Token) bool {
-	result, _ := context.model.TokenIdentifier().IsBEG(t)
+	result, _ := context.model.tokenIdentifier().IsBEG(t)
 	return result
 }
 
 // Deprecated: Use Model.IsSOT() instead - token checking is model-specific.
 func (context *context) IsSOT(t Token) bool {
-	result, _ := context.model.TokenIdentifier().IsSOT(t)
+	result, _ := context.model.tokenIdentifier().IsSOT(t)
 	return result
 }
 
 // Deprecated: Use Model.IsEOT() instead - token checking is model-specific.
 func (context *context) IsEOT(t Token) bool {
-	result, _ := context.model.TokenIdentifier().IsEOT(t)
+	result, _ := context.model.tokenIdentifier().IsEOT(t)
 	return result
 }
 
 // Deprecated: Use Model.IsPREV() instead - token checking is model-specific.
 func (context *context) IsPREV(t Token) bool {
-	result, _ := context.model.TokenIdentifier().IsPREV(t)
+	result, _ := context.model.tokenIdentifier().IsPREV(t)
 	return result
 }
 
 // Deprecated: Use Model.IsSOLM() instead - token checking is model-specific.
 func (context *context) IsSOLM(t Token) bool {
-	result, _ := context.model.TokenIdentifier().IsSOLM(t)
+	result, _ := context.model.tokenIdentifier().IsSOLM(t)
 	return result
 }
 
 // Deprecated: Use Model.IsNOT() instead - token checking is model-specific.
 func (context *context) IsNOT(t Token) bool {
-	result, _ := context.model.TokenIdentifier().IsNOT(t)
+	result, _ := context.model.tokenIdentifier().IsNOT(t)
 	return result
 }
 
 func (context *context) SetLanguage(lang string) error {
-	if context.model.whisperContext().IsClosed() {
+	if context.model.whisperContext().isClosed() {
 		// TODO: remove this logic after deprecating the ErrInternalAppError
 		return ErrModelClosed
 	}
@@ -245,7 +253,7 @@ func (context *context) SetLanguage(lang string) error {
 
 // Deprecated: Use Model.IsLANG() instead - token checking is model-specific.
 func (context *context) IsLANG(t Token, lang string) bool {
-	result, _ := context.model.TokenIdentifier().IsLANG(t, lang)
+	result, _ := context.model.tokenIdentifier().IsLANG(t, lang)
 	return result
 }
 

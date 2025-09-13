@@ -329,7 +329,11 @@ func TestContext_VAD_And_Diarization_Params_DoNotPanic(t *testing.T) {
 	assert.NoError(err)
 	defer func() { _ = model.Close() }()
 
-	ctx, err := whisper.NewContext(model, nil)
+	params, err := whisper.NewParameters(model, whisper.SAMPLING_GREEDY, nil)
+	assert.NoError(err)
+	assert.NotNil(params)
+
+	ctx, err := whisper.NewContext(model, params)
 	assert.NoError(err)
 	defer func() { _ = ctx.Close() }()
 

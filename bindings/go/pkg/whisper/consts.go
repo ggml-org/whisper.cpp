@@ -19,8 +19,12 @@ var (
 	ErrProcessingFailed     = errors.New("processing failed")
 	ErrUnsupportedLanguage  = errors.New("unsupported language")
 	ErrModelNotMultilingual = errors.New("model is not multilingual")
-	ErrUnableToCreateState  = errors.New("unable to create state")
 	ErrModelClosed          = errors.Join(errors.New("model has been closed"), ErrInternalAppError)
+
+	// Private errors
+	errParametersRequired  = errors.New("parameters are required")
+	errModelRequired       = errors.New("model is required")
+	errUnableToCreateState = errors.New("unable to create state")
 )
 
 ///////////////////////////////////////////////////////////////////////////////

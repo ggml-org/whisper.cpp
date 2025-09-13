@@ -2,14 +2,6 @@ package whisper
 
 import whisper "github.com/ggerganov/whisper.cpp/bindings/go"
 
-type WhisperContext interface {
-	// Close closes the whisper context
-	Close() error
-
-	// IsClosed returns true if the whisper context is closed
-	IsClosed() bool
-}
-
 type whisperCtx struct {
 	ctx *whisper.Context
 }
@@ -20,7 +12,7 @@ func newWhisperCtx(ctx *whisper.Context) *whisperCtx {
 	}
 }
 
-func (ctx *whisperCtx) Close() error {
+func (ctx *whisperCtx) close() error {
 	if ctx.ctx == nil {
 		return nil
 	}
@@ -31,16 +23,14 @@ func (ctx *whisperCtx) Close() error {
 	return nil
 }
 
-func (ctx *whisperCtx) IsClosed() bool {
+func (ctx *whisperCtx) isClosed() bool {
 	return ctx.ctx == nil
 }
 
 func (ctx *whisperCtx) unsafeContext() (*whisper.Context, error) {
-	if ctx.IsClosed() {
+	if ctx.isClosed() {
 		return nil, ErrModelClosed
 	}
 
 	return ctx.ctx, nil
 }
-
-var _ WhisperContext = (*whisperCtx)(nil)

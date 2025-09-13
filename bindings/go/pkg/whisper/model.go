@@ -9,9 +9,9 @@ import (
 )
 
 type model struct {
-	path            string
-	ctx             *whisperCtx
-	tokenIdentifier *tokenIdentifier
+	path  string
+	ctx   *whisperCtx
+	tokId *tokenIdentifier
 }
 
 // Make sure model adheres to the interface
@@ -33,7 +33,7 @@ func NewModel(
 		return nil, ErrUnableToLoadModel
 	} else {
 		model.ctx = newWhisperCtx(ctx)
-		model.tokenIdentifier = newTokenIdentifier(model.ctx)
+		model.tokId = newTokenIdentifier(model.ctx)
 		model.path = path
 	}
 
@@ -42,19 +42,12 @@ func NewModel(
 }
 
 func (model *model) Close() error {
-	return model.ctx.Close()
-}
-
-func (model *model) WhisperContext() WhisperContext {
-	return model.ctx
+	return model.ctx.close()
 }
 
 func (model *model) whisperContext() *whisperCtx {
 	return model.ctx
 }
-
-///////////////////////////////////////////////////////////////////////////////
-// STRINGIFY
 
 func (model *model) String() string {
 	str := "<whisper.model"
@@ -64,9 +57,6 @@ func (model *model) String() string {
 
 	return str + ">"
 }
-
-///////////////////////////////////////////////////////////////////////////////
-// PUBLIC METHODS
 
 // Return true if model is multilingual (language and translation options are supported)
 func (model *model) IsMultilingual() bool {
@@ -132,7 +122,6 @@ func (model *model) ResetTimings() {
 	ctx.Whisper_reset_timings()
 }
 
-// WhisperContext returns the low-level whisper context, or error if the model is closed.
-func (model *model) TokenIdentifier() TokenIdentifier {
-	return model.tokenIdentifier
+func (model *model) tokenIdentifier() *tokenIdentifier {
+	return model.tokId
 }

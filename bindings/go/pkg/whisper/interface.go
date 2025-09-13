@@ -20,32 +20,6 @@ type ProgressCallback func(int)
 // continue processing. It is called during the Process function
 type EncoderBeginCallback func() bool
 
-type TokenIdentifier interface {
-	// Test for "begin" token
-	IsBEG(Token) (bool, error)
-
-	// Test for "start of transcription" token
-	IsSOT(Token) (bool, error)
-
-	// Test for "end of transcription" token
-	IsEOT(Token) (bool, error)
-
-	// Test for "start of prev" token
-	IsPREV(Token) (bool, error)
-
-	// Test for "start of lm" token
-	IsSOLM(Token) (bool, error)
-
-	// Test for "no timestamps" token
-	IsNOT(Token) (bool, error)
-
-	// Test for token associated with a specific language
-	IsLANG(Token, string) (bool, error)
-
-	// Test for text token
-	IsText(Token) (bool, error)
-}
-
 type ParamsConfigure func(*Parameters)
 
 // Model is the interface to a whisper model. Create a new model with the
@@ -74,65 +48,8 @@ type Model interface {
 	ResetTimings()
 }
 
-// // Parameters configures decode / processing behavior
-// type Parameters interface {
-// 	SetTranslate(bool)
-// 	SetSplitOnWord(bool)
-// 	SetThreads(uint)
-// 	SetOffset(time.Duration)
-// 	SetDuration(time.Duration)
-// 	SetTokenThreshold(float32)
-// 	SetTokenSumThreshold(float32)
-// 	SetMaxSegmentLength(uint)
-// 	SetTokenTimestamps(bool)
-// 	SetMaxTokensPerSegment(uint)
-// 	SetAudioCtx(uint)
-// 	SetMaxContext(n int)
-// 	SetBeamSize(n int)
-// 	SetEntropyThold(t float32)
-// 	SetInitialPrompt(prompt string)
-
-// 	SetNoContext(bool)
-// 	SetPrintSpecial(bool)
-// 	SetPrintProgress(bool)
-// 	SetPrintRealtime(bool)
-// 	SetPrintTimestamps(bool)
-
-// 	// Enable extra debug info (e.g., dump log_mel)
-// 	SetDebugMode(bool)
-// 	// Diarization (tinydiarize)
-// 	SetDiarize(bool)
-
-// 	// Voice Activity Detection (VAD)
-// 	SetVAD(bool)
-// 	SetVADModelPath(string)
-// 	SetVADThreshold(float32)
-// 	SetVADMinSpeechMs(int)
-// 	SetVADMinSilenceMs(int)
-// 	SetVADMaxSpeechSec(float32)
-// 	SetVADSpeechPadMs(int)
-// 	SetVADSamplesOverlap(float32)
-
-// 	// Set the temperature
-// 	SetTemperature(t float32)
-
-// 	// Set the fallback temperature incrementation
-// 	// Pass -1.0 to disable this feature
-// 	SetTemperatureFallback(t float32)
-
-// 	// Set the language
-// 	// If the model is not multilingual, this will return an error
-// 	SetLanguage(string) error
-
-// 	// Set single segment mode
-// 	SetSingleSegment(bool)
-
-// 	// Getter methods
-// 	Language() string
-// 	Threads() int
-// }
-
 // Context is the speech recognition context.
+// Deprecated: Use NewContext implementation struct instead of relying on this interface
 type Context interface {
 	io.Closer
 

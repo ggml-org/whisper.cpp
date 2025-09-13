@@ -2,22 +2,17 @@ package whisper
 
 import whisper "github.com/ggerganov/whisper.cpp/bindings/go"
 
-type WhisperState interface {
-	Close() error
-	UnsafeState() (*whisper.State, error)
-}
-
 type whisperState struct {
 	state *whisper.State
 }
 
-func newWhisperState(state *whisper.State) WhisperState {
+func newWhisperState(state *whisper.State) *whisperState {
 	return &whisperState{
 		state: state,
 	}
 }
 
-func (s *whisperState) Close() error {
+func (s *whisperState) close() error {
 	if s.state == nil {
 		return nil
 	}
@@ -28,7 +23,7 @@ func (s *whisperState) Close() error {
 	return nil
 }
 
-func (s *whisperState) UnsafeState() (*whisper.State, error) {
+func (s *whisperState) unsafeState() (*whisper.State, error) {
 	if s.state == nil {
 		return nil, ErrModelClosed
 	}

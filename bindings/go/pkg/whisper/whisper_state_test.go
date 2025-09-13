@@ -14,13 +14,13 @@ const testModelPathState = "../../models/ggml-small.en.bin"
 func TestWhisperState_NilWrapper(t *testing.T) {
 	ws := newWhisperState(nil)
 
-	state, err := ws.UnsafeState()
+	state, err := ws.unsafeState()
 	assert.Nil(t, state)
 	require.ErrorIs(t, err, ErrModelClosed)
 
-	require.NoError(t, ws.Close())
+	require.NoError(t, ws.close())
 	// idempotent
-	require.NoError(t, ws.Close())
+	require.NoError(t, ws.close())
 }
 
 func TestWhisperState_Lifecycle(t *testing.T) {
@@ -37,17 +37,17 @@ func TestWhisperState_Lifecycle(t *testing.T) {
 
 	ws := newWhisperState(state)
 
-	got, err := ws.UnsafeState()
+	got, err := ws.unsafeState()
 	require.NoError(t, err)
 	require.NotNil(t, got)
 
 	// close frees underlying state and marks closed
-	require.NoError(t, ws.Close())
+	require.NoError(t, ws.close())
 
-	got, err = ws.UnsafeState()
+	got, err = ws.unsafeState()
 	assert.Nil(t, got)
 	require.ErrorIs(t, err, ErrModelClosed)
 
 	// idempotent
-	require.NoError(t, ws.Close())
+	require.NoError(t, ws.close())
 }
