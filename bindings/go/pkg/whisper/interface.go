@@ -85,6 +85,15 @@ type Context interface {
 	SystemInfo() string
 }
 
+// State is a per-request speech recognition state which shares the loaded model
+// but isolates recognition results. It embeds Context, so any state-specific
+// methods can be added later without breaking existing API.
+type State interface {
+	io.Closer
+
+	Context
+}
+
 // Segment is the text result of a speech recognition.
 type Segment struct {
 	// Segment Number

@@ -1,8 +1,10 @@
 package whisper_test
 
 import (
+	"errors"
 	"os"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,7 +41,7 @@ func Test_Whisper_001(t *testing.T) {
 	// Open samples
 	fh, err := os.Open(SamplePath)
 	assert.NoError(err)
-	defer fh.Close()
+	defer func() { _ = fh.Close() }()
 
 	// Read samples
 	d := wav.NewDecoder(fh)
@@ -89,7 +91,7 @@ func Test_Whisper_003(t *testing.T) {
 	// Open samples
 	fh, err := os.Open(SamplePath)
 	assert.NoError(err)
-	defer fh.Close()
+	defer func() { _ = fh.Close() }()
 
 	// Read samples
 	d := wav.NewDecoder(fh)
@@ -109,5 +111,159 @@ func Test_Whisper_003(t *testing.T) {
 	assert.NoError(err)
 	for i, p := range languages {
 		t.Logf("%s: %f", whisper.Whisper_lang_str(i), p)
+	}
+}
+
+func Test_Whisper_State_Init_Free(t *testing.T) {
+	assert := assert.New(t)
+	if _, err := os.Stat(ModelPath); os.IsNotExist(err) {
+		t.Skip("Skipping test, model not found:", ModelPath)
+	}
+
+	ctx := whisper.Whisper_init(ModelPath)
+	assert.NotNil(ctx)
+	defer ctx.Whisper_free()
+
+	state := ctx.Whisper_init_state()
+	assert.NotNil(state)
+	state.Whisper_free_state()
+}
+
+func Test_Whisper_Full_With_State(t *testing.T) {
+	assert := assert.New(t)
+	if _, err := os.Stat(ModelPath); os.IsNotExist(err) {
+		t.Skip("Skipping test, model not found:", ModelPath)
+	}
+	if _, err := os.Stat(SamplePath); os.IsNotExist(err) {
+		t.Skip("Skipping test, sample not found:", SamplePath)
+	}
+
+	// Open samples
+	fh, err := os.Open(SamplePath)
+	assert.NoError(err)
+	defer func() { _ = fh.Close() }()
+
+	// Read samples
+	d := wav.NewDecoder(fh)
+	buf, err := d.FullPCMBuffer()
+	assert.NoError(err)
+	data := buf.AsFloat32Buffer().Data
+
+	ctx := whisper.Whisper_init(ModelPath)
+	assert.NotNil(ctx)
+	defer ctx.Whisper_free()
+
+	state := ctx.Whisper_init_state()
+	assert.NotNil(state)
+	defer state.Whisper_free_state()
+
+	params := ctx.Whisper_full_default_params(whisper.SAMPLING_GREEDY)
+	// Run using state
+	err = ctx.Whisper_full_with_state(state, params, data, nil, nil, nil)
+	assert.NoError(err)
+
+	// Validate results are stored in state
+	nSegments := ctx.Whisper_full_n_segments_from_state(state)
+	assert.GreaterOrEqual(nSegments, 1)
+	text := ctx.Whisper_full_get_segment_text_from_state(state, 0)
+	assert.NotEmpty(text)
+}
+
+func Test_Whisper_Lang_Auto_Detect_With_State(t *testing.T) {
+	assert := assert.New(t)
+	if _, err := os.Stat(ModelPath); os.IsNotExist(err) {
+		t.Skip("Skipping test, model not found:", ModelPath)
+	}
+	if _, err := os.Stat(SamplePath); os.IsNotExist(err) {
+		t.Skip("Skipping test, sample not found:", SamplePath)
+	}
+
+	// Open samples
+	fh, err := os.Open(SamplePath)
+	assert.NoError(err)
+	defer func() { _ = fh.Close() }()
+
+	// Read samples
+	d := wav.NewDecoder(fh)
+	buf, err := d.FullPCMBuffer()
+	assert.NoError(err)
+	data := buf.AsFloat32Buffer().Data
+
+	ctx := whisper.Whisper_init(ModelPath)
+	assert.NotNil(ctx)
+	defer ctx.Whisper_free()
+
+	state := ctx.Whisper_init_state()
+	assert.NotNil(state)
+	defer state.Whisper_free_state()
+
+	threads := runtime.NumCPU()
+	// Prepare mel into state then detect
+	assert.NoError(ctx.Whisper_pcm_to_mel_with_state(state, data, threads))
+	probs, err := ctx.Whisper_lang_auto_detect_with_state(state, 0, threads)
+	assert.NoError(err)
+	assert.Equal(whisper.Whisper_lang_max_id()+1, len(probs))
+}
+
+func Test_Whisper_Concurrent_With_State(t *testing.T) {
+	assert := assert.New(t)
+	if _, err := os.Stat(ModelPath); os.IsNotExist(err) {
+		t.Skip("Skipping test, model not found:", ModelPath)
+	}
+	if _, err := os.Stat(SamplePath); os.IsNotExist(err) {
+		t.Skip("Skipping test, sample not found:", SamplePath)
+	}
+
+	// Load audio once
+	fh, err := os.Open(SamplePath)
+	assert.NoError(err)
+	defer func() { _ = fh.Close() }()
+	dec := wav.NewDecoder(fh)
+	buf, err := dec.FullPCMBuffer()
+	assert.NoError(err)
+	data := buf.AsFloat32Buffer().Data
+
+	ctx := whisper.Whisper_init(ModelPath)
+	assert.NotNil(ctx)
+	defer ctx.Whisper_free()
+
+	// Each goroutine has its own state
+	state1 := ctx.Whisper_init_state()
+	state2 := ctx.Whisper_init_state()
+	assert.NotNil(state1)
+	assert.NotNil(state2)
+	defer state1.Whisper_free_state()
+	defer state2.Whisper_free_state()
+
+	params := ctx.Whisper_full_default_params(whisper.SAMPLING_GREEDY)
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex // guard calls into shared ctx, per upstream note not thread-safe for same context
+	errs := make(chan error, 2)
+
+	worker := func(state *whisper.State) {
+		defer wg.Done()
+		mu.Lock()
+		err := ctx.Whisper_full_with_state(state, params, data, nil, nil, nil)
+		if err == nil {
+			n := ctx.Whisper_full_n_segments_from_state(state)
+			if n <= 0 {
+				err = errors.New("no segments")
+			} else {
+				_ = ctx.Whisper_full_get_segment_text_from_state(state, 0)
+			}
+		}
+		mu.Unlock()
+		errs <- err
+	}
+
+	wg.Add(2)
+	go worker(state1)
+	go worker(state2)
+	wg.Wait()
+	close(errs)
+
+	for e := range errs {
+		assert.NoError(e)
 	}
 }

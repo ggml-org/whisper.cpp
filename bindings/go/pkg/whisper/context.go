@@ -20,9 +20,6 @@ type context struct {
 	params whisper.Params
 }
 
-// Make sure context adheres to the interface
-var _ Context = (*context)(nil)
-
 ///////////////////////////////////////////////////////////////////////////////
 // LIFECYCLE
 
@@ -241,7 +238,7 @@ func (context *context) Process(
 	return nil
 }
 
-// Return the next segment of tokens
+// NextSegment returns the next segment from the context buffer
 func (context *context) NextSegment() (Segment, error) {
 	if context.model.ctx == nil {
 		return Segment{}, ErrInternalAppError
@@ -249,74 +246,9 @@ func (context *context) NextSegment() (Segment, error) {
 	if context.n >= context.model.ctx.Whisper_full_n_segments() {
 		return Segment{}, io.EOF
 	}
-
-	// Populate result
 	result := toSegment(context.model.ctx, context.n)
-
-	// Increment the cursor
 	context.n++
-
-	// Return success
 	return result, nil
-}
-
-// Test for text tokens
-func (context *context) IsText(t Token) bool {
-	switch {
-	case context.IsBEG(t):
-		return false
-	case context.IsSOT(t):
-		return false
-	case whisper.Token(t.Id) >= context.model.ctx.Whisper_token_eot():
-		return false
-	case context.IsPREV(t):
-		return false
-	case context.IsSOLM(t):
-		return false
-	case context.IsNOT(t):
-		return false
-	default:
-		return true
-	}
-}
-
-// Test for "begin" token
-func (context *context) IsBEG(t Token) bool {
-	return whisper.Token(t.Id) == context.model.ctx.Whisper_token_beg()
-}
-
-// Test for "start of transcription" token
-func (context *context) IsSOT(t Token) bool {
-	return whisper.Token(t.Id) == context.model.ctx.Whisper_token_sot()
-}
-
-// Test for "end of transcription" token
-func (context *context) IsEOT(t Token) bool {
-	return whisper.Token(t.Id) == context.model.ctx.Whisper_token_eot()
-}
-
-// Test for "start of prev" token
-func (context *context) IsPREV(t Token) bool {
-	return whisper.Token(t.Id) == context.model.ctx.Whisper_token_prev()
-}
-
-// Test for "start of lm" token
-func (context *context) IsSOLM(t Token) bool {
-	return whisper.Token(t.Id) == context.model.ctx.Whisper_token_solm()
-}
-
-// Test for "No timestamps" token
-func (context *context) IsNOT(t Token) bool {
-	return whisper.Token(t.Id) == context.model.ctx.Whisper_token_not()
-}
-
-// Test for token associated with a specific language
-func (context *context) IsLANG(t Token, lang string) bool {
-	if id := context.model.ctx.Whisper_lang_id(lang); id >= 0 {
-		return whisper.Token(t.Id) == context.model.ctx.Whisper_token_lang(id)
-	} else {
-		return false
-	}
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -346,4 +278,56 @@ func toTokens(ctx *whisper.Context, n int) []Token {
 		}
 	}
 	return result
+}
+
+// Token helpers
+func (context *context) IsText(t Token) bool {
+	switch {
+	case context.IsBEG(t):
+		return false
+	case context.IsSOT(t):
+		return false
+	case whisper.Token(t.Id) >= context.model.ctx.Whisper_token_eot():
+		return false
+	case context.IsPREV(t):
+		return false
+	case context.IsSOLM(t):
+		return false
+	case context.IsNOT(t):
+		return false
+	default:
+		return true
+	}
+}
+
+func (context *context) IsBEG(t Token) bool {
+	return whisper.Token(t.Id) == context.model.ctx.Whisper_token_beg()
+}
+
+func (context *context) IsSOT(t Token) bool {
+	return whisper.Token(t.Id) == context.model.ctx.Whisper_token_sot()
+}
+
+func (context *context) IsEOT(t Token) bool {
+	return whisper.Token(t.Id) == context.model.ctx.Whisper_token_eot()
+}
+
+func (context *context) IsPREV(t Token) bool {
+	return whisper.Token(t.Id) == context.model.ctx.Whisper_token_prev()
+}
+
+func (context *context) IsSOLM(t Token) bool {
+	return whisper.Token(t.Id) == context.model.ctx.Whisper_token_solm()
+}
+
+func (context *context) IsNOT(t Token) bool {
+	return whisper.Token(t.Id) == context.model.ctx.Whisper_token_not()
+}
+
+func (context *context) IsLANG(t Token, lang string) bool {
+	if id := context.model.ctx.Whisper_lang_id(lang); id >= 0 {
+		return whisper.Token(t.Id) == context.model.ctx.Whisper_token_lang(id)
+	} else {
+		return false
+	}
 }

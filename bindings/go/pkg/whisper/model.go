@@ -99,3 +99,19 @@ func (model *model) NewContext() (Context, error) {
 	// Return new context
 	return newContext(model, params)
 }
+
+// NewState returns a new per-request state sharing the loaded model
+func (model *model) NewState() (State, error) {
+	if model.ctx == nil {
+		return nil, ErrInternalAppError
+	}
+	params := model.ctx.Whisper_full_default_params(whisper.SAMPLING_GREEDY)
+	params.SetTranslate(false)
+	params.SetPrintSpecial(false)
+	params.SetPrintProgress(false)
+	params.SetPrintRealtime(false)
+	params.SetPrintTimestamps(false)
+	params.SetThreads(runtime.NumCPU())
+	params.SetNoContext(true)
+	return newState(model, params)
+}
