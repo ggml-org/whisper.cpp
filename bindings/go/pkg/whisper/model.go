@@ -8,32 +8,32 @@ import (
 	whisper "github.com/ggerganov/whisper.cpp/bindings/go"
 )
 
-type model struct {
+type ModelContext struct {
 	path  string
-	ctx   *whisperCtx
+	ca    *ctxAccessor
 	tokId *tokenIdentifier
 }
 
 // Make sure model adheres to the interface
-var _ Model = (*model)(nil)
+var _ Model = (*ModelContext)(nil)
 
-// Deprecated: Use NewModel instead
+// Deprecated: Use NewModelContext instead
 func New(path string) (Model, error) {
-	return NewModel(path)
+	return NewModelContext(path)
 }
 
-// NewModel creates a new model without initializing the context
-func NewModel(
+// NewModelContext creates a new model context
+func NewModelContext(
 	path string,
-) (*model, error) {
-	model := new(model)
+) (*ModelContext, error) {
+	model := new(ModelContext)
 	if _, err := os.Stat(path); err != nil {
 		return nil, err
 	} else if ctx := whisper.Whisper_init(path); ctx == nil {
 		return nil, ErrUnableToLoadModel
 	} else {
-		model.ctx = newWhisperCtx(ctx)
-		model.tokId = newTokenIdentifier(model.ctx)
+		model.ca = newCtxAccessor(ctx)
+		model.tokId = newTokenIdentifier(model.ca)
 		model.path = path
 	}
 
@@ -41,17 +41,17 @@ func NewModel(
 	return model, nil
 }
 
-func (model *model) Close() error {
-	return model.ctx.close()
+func (model *ModelContext) Close() error {
+	return model.ca.close()
 }
 
-func (model *model) whisperContext() *whisperCtx {
-	return model.ctx
+func (model *ModelContext) ctxAccessor() *ctxAccessor {
+	return model.ca
 }
 
-func (model *model) String() string {
+func (model *ModelContext) String() string {
 	str := "<whisper.model"
-	if model.ctx != nil {
+	if model.ca != nil {
 		str += fmt.Sprintf(" model=%q", model.path)
 	}
 
@@ -59,8 +59,8 @@ func (model *model) String() string {
 }
 
 // Return true if model is multilingual (language and translation options are supported)
-func (model *model) IsMultilingual() bool {
-	ctx, err := model.ctx.unsafeContext()
+func (model *ModelContext) IsMultilingual() bool {
+	ctx, err := model.ca.context()
 	if err != nil {
 		return false
 	}
@@ -69,8 +69,8 @@ func (model *model) IsMultilingual() bool {
 }
 
 // Return all recognized languages. Initially it is set to auto-detect
-func (model *model) Languages() []string {
-	ctx, err := model.ctx.unsafeContext()
+func (model *ModelContext) Languages() []string {
+	ctx, err := model.ca.context()
 	if err != nil {
 		return nil
 	}
@@ -88,7 +88,7 @@ func (model *model) Languages() []string {
 
 // NewContext creates a new speech-to-text context.
 // Each context is backed by an isolated whisper_state for safe concurrent processing.
-func (model *model) NewContext() (Context, error) {
+func (model *ModelContext) NewContext() (Context, error) {
 	// Create new context with default params
 	params, err := NewParameters(model, SAMPLING_GREEDY, nil)
 	if err != nil {
@@ -96,15 +96,15 @@ func (model *model) NewContext() (Context, error) {
 	}
 
 	// Return new context (now state-backed)
-	return NewContext(
+	return NewStatefulContext(
 		model,
 		params,
 	)
 }
 
 // PrintTimings prints the model performance timings to stdout.
-func (model *model) PrintTimings() {
-	ctx, err := model.ctx.unsafeContext()
+func (model *ModelContext) PrintTimings() {
+	ctx, err := model.ca.context()
 	if err != nil {
 		return
 	}
@@ -113,8 +113,8 @@ func (model *model) PrintTimings() {
 }
 
 // ResetTimings resets the model performance timing counters.
-func (model *model) ResetTimings() {
-	ctx, err := model.ctx.unsafeContext()
+func (model *ModelContext) ResetTimings() {
+	ctx, err := model.ca.context()
 	if err != nil {
 		return
 	}
@@ -122,6 +122,6 @@ func (model *model) ResetTimings() {
 	ctx.Whisper_reset_timings()
 }
 
-func (model *model) tokenIdentifier() *tokenIdentifier {
+func (model *ModelContext) tokenIdentifier() *tokenIdentifier {
 	return model.tokId
 }

@@ -12,11 +12,11 @@ import (
 const testModelPathCtx = "../../models/ggml-small.en.bin"
 
 func TestWhisperCtx_NilWrapper(t *testing.T) {
-	wctx := newWhisperCtx(nil)
+	wctx := newCtxAccessor(nil)
 
 	assert.True(t, wctx.isClosed())
 
-	raw, err := wctx.unsafeContext()
+	raw, err := wctx.context()
 	assert.Nil(t, raw)
 	require.ErrorIs(t, err, ErrModelClosed)
 
@@ -33,10 +33,10 @@ func TestWhisperCtx_Lifecycle(t *testing.T) {
 	raw := w.Whisper_init(testModelPathCtx)
 	require.NotNil(t, raw)
 
-	wctx := newWhisperCtx(raw)
+	wctx := newCtxAccessor(raw)
 	assert.False(t, wctx.isClosed())
 
-	got, err := wctx.unsafeContext()
+	got, err := wctx.context()
 	require.NoError(t, err)
 	require.NotNil(t, got)
 
@@ -44,7 +44,7 @@ func TestWhisperCtx_Lifecycle(t *testing.T) {
 	require.NoError(t, wctx.close())
 	assert.True(t, wctx.isClosed())
 
-	got, err = wctx.unsafeContext()
+	got, err = wctx.context()
 	assert.Nil(t, got)
 	require.ErrorIs(t, err, ErrModelClosed)
 
@@ -62,13 +62,13 @@ func TestWhisperCtx_FromModelLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, modelNew)
 
-	model := modelNew.(*model)
+	model := modelNew.(*ModelContext)
 
-	wc := model.whisperContext()
+	wc := model.ctxAccessor()
 	require.NotNil(t, wc)
 
 	// Should be usable before model.Close
-	raw, err := wc.unsafeContext()
+	raw, err := wc.context()
 	require.NoError(t, err)
 	require.NotNil(t, raw)
 
@@ -76,7 +76,7 @@ func TestWhisperCtx_FromModelLifecycle(t *testing.T) {
 	require.NoError(t, model.Close())
 
 	assert.True(t, wc.isClosed())
-	raw, err = wc.unsafeContext()
+	raw, err = wc.context()
 	assert.Nil(t, raw)
 	require.ErrorIs(t, err, ErrModelClosed)
 

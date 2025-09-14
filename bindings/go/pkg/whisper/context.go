@@ -11,14 +11,15 @@ import (
 	whisper "github.com/ggerganov/whisper.cpp/bindings/go"
 )
 
-type context struct {
+type StatefulContext struct {
 	n      int
-	model  *model
+	model  *ModelContext
 	st     *whisperState
 	params *Parameters
 }
 
-func NewContext(model *model, params *Parameters) (*context, error) {
+// NewStatefulContext creates a new stateful context
+func NewStatefulContext(model *ModelContext, params *Parameters) (*StatefulContext, error) {
 	if model == nil {
 		return nil, errModelRequired
 	}
@@ -27,12 +28,12 @@ func NewContext(model *model, params *Parameters) (*context, error) {
 		return nil, errParametersRequired
 	}
 
-	c := new(context)
+	c := new(StatefulContext)
 	c.model = model
 	c.params = params
 
 	// allocate isolated state per context
-	ctx, err := model.whisperContext().unsafeContext()
+	ctx, err := model.ctxAccessor().context()
 	if err != nil {
 		return nil, err
 	}
@@ -49,8 +50,8 @@ func NewContext(model *model, params *Parameters) (*context, error) {
 }
 
 // DetectedLanguage returns the detected language for the current context data
-func (context *context) DetectedLanguage() string {
-	ctx, err := context.model.whisperContext().unsafeContext()
+func (context *StatefulContext) DetectedLanguage() string {
+	ctx, err := context.model.ctxAccessor().context()
 	if err != nil {
 		return ""
 	}
@@ -68,29 +69,29 @@ func (context *context) DetectedLanguage() string {
 }
 
 // Close frees the whisper state and marks the context as closed.
-func (context *context) Close() error {
+func (context *StatefulContext) Close() error {
 	return context.st.close()
 }
 
 // Params returns a high-level parameters wrapper
-func (context *context) Params() *Parameters {
+func (context *StatefulContext) Params() *Parameters {
 	return context.params
 }
 
 // ResetTimings resets the model performance timing counters.
 // Deprecated: Use Model.ResetTimings() instead - these are model-level performance metrics.
-func (context *context) ResetTimings() {
+func (context *StatefulContext) ResetTimings() {
 	context.model.ResetTimings()
 }
 
 // PrintTimings prints the model performance timings to stdout.
 // Deprecated: Use Model.PrintTimings() instead - these are model-level performance metrics.
-func (context *context) PrintTimings() {
+func (context *StatefulContext) PrintTimings() {
 	context.model.PrintTimings()
 }
 
 // SystemInfo returns the system information
-func (context *context) SystemInfo() string {
+func (context *StatefulContext) SystemInfo() string {
 	return fmt.Sprintf("system_info: n_threads = %d / %d | %s\n",
 		context.params.Threads(),
 		runtime.NumCPU(),
@@ -101,8 +102,8 @@ func (context *context) SystemInfo() string {
 // Use mel data at offset_ms to try and auto-detect the spoken language
 // Make sure to call whisper_pcm_to_mel() or whisper_set_mel() first.
 // Returns the probabilities of all languages for this context's state.
-func (context *context) WhisperLangAutoDetect(offset_ms int, n_threads int) ([]float32, error) {
-	ctx, err := context.model.whisperContext().unsafeContext()
+func (context *StatefulContext) WhisperLangAutoDetect(offset_ms int, n_threads int) ([]float32, error) {
+	ctx, err := context.model.ctxAccessor().context()
 	if err != nil {
 		return nil, err
 	}
@@ -121,13 +122,13 @@ func (context *context) WhisperLangAutoDetect(offset_ms int, n_threads int) ([]f
 }
 
 // Process new sample data and return any errors
-func (context *context) Process(
+func (context *StatefulContext) Process(
 	data []float32,
 	callEncoderBegin EncoderBeginCallback,
 	callNewSegment SegmentCallback,
 	callProgress ProgressCallback,
 ) error {
-	ctx, err := context.model.whisperContext().unsafeContext()
+	ctx, err := context.model.ctxAccessor().context()
 	if err != nil {
 		return err
 	}
@@ -169,8 +170,8 @@ func (context *context) Process(
 }
 
 // NextSegment returns the next segment from the context buffer
-func (context *context) NextSegment() (Segment, error) {
-	ctx, err := context.model.whisperContext().unsafeContext()
+func (context *StatefulContext) NextSegment() (Segment, error) {
+	ctx, err := context.model.ctxAccessor().context()
 	if err != nil {
 		return Segment{}, err
 	}
@@ -190,55 +191,55 @@ func (context *context) NextSegment() (Segment, error) {
 	return result, nil
 }
 
-func (context *context) IsMultilingual() bool {
+func (context *StatefulContext) IsMultilingual() bool {
 	return context.model.IsMultilingual()
 }
 
 // Token helpers
 // Deprecated: Use Model.IsText() instead - token checking is model-specific.
-func (context *context) IsText(t Token) bool {
+func (context *StatefulContext) IsText(t Token) bool {
 	result, _ := context.model.tokenIdentifier().IsText(t)
 	return result
 }
 
 // Deprecated: Use Model.IsBEG() instead - token checking is model-specific.
-func (context *context) IsBEG(t Token) bool {
+func (context *StatefulContext) IsBEG(t Token) bool {
 	result, _ := context.model.tokenIdentifier().IsBEG(t)
 	return result
 }
 
 // Deprecated: Use Model.IsSOT() instead - token checking is model-specific.
-func (context *context) IsSOT(t Token) bool {
+func (context *StatefulContext) IsSOT(t Token) bool {
 	result, _ := context.model.tokenIdentifier().IsSOT(t)
 	return result
 }
 
 // Deprecated: Use Model.IsEOT() instead - token checking is model-specific.
-func (context *context) IsEOT(t Token) bool {
+func (context *StatefulContext) IsEOT(t Token) bool {
 	result, _ := context.model.tokenIdentifier().IsEOT(t)
 	return result
 }
 
 // Deprecated: Use Model.IsPREV() instead - token checking is model-specific.
-func (context *context) IsPREV(t Token) bool {
+func (context *StatefulContext) IsPREV(t Token) bool {
 	result, _ := context.model.tokenIdentifier().IsPREV(t)
 	return result
 }
 
 // Deprecated: Use Model.IsSOLM() instead - token checking is model-specific.
-func (context *context) IsSOLM(t Token) bool {
+func (context *StatefulContext) IsSOLM(t Token) bool {
 	result, _ := context.model.tokenIdentifier().IsSOLM(t)
 	return result
 }
 
 // Deprecated: Use Model.IsNOT() instead - token checking is model-specific.
-func (context *context) IsNOT(t Token) bool {
+func (context *StatefulContext) IsNOT(t Token) bool {
 	result, _ := context.model.tokenIdentifier().IsNOT(t)
 	return result
 }
 
-func (context *context) SetLanguage(lang string) error {
-	if context.model.whisperContext().isClosed() {
+func (context *StatefulContext) SetLanguage(lang string) error {
+	if context.model.ctxAccessor().isClosed() {
 		// TODO: remove this logic after deprecating the ErrInternalAppError
 		return ErrModelClosed
 	}
@@ -251,7 +252,7 @@ func (context *context) SetLanguage(lang string) error {
 }
 
 // Deprecated: Use Model.IsLANG() instead - token checking is model-specific.
-func (context *context) IsLANG(t Token, lang string) bool {
+func (context *StatefulContext) IsLANG(t Token, lang string) bool {
 	result, _ := context.model.tokenIdentifier().IsLANG(t, lang)
 	return result
 }
@@ -286,109 +287,109 @@ func toTokensFromState(ctx *whisper.Context, st *whisper.State, n int) []Token {
 }
 
 // Deprecated: Use Params().Language() instead
-func (context *context) Language() string {
+func (context *StatefulContext) Language() string {
 	return context.params.Language()
 }
 
 // Deprecated: Use Params().SetAudioCtx() instead
-func (context *context) SetAudioCtx(n uint) {
+func (context *StatefulContext) SetAudioCtx(n uint) {
 	context.params.SetAudioCtx(n)
 }
 
 // SetBeamSize implements Context.
 // Deprecated: Use Params().SetBeamSize() instead
-func (context *context) SetBeamSize(v int) {
+func (context *StatefulContext) SetBeamSize(v int) {
 	context.params.SetBeamSize(v)
 }
 
 // SetDuration implements Context.
 // Deprecated: Use Params().SetDuration() instead
-func (context *context) SetDuration(v time.Duration) {
+func (context *StatefulContext) SetDuration(v time.Duration) {
 	context.params.SetDuration(v)
 }
 
 // SetEntropyThold implements Context.
 // Deprecated: Use Params().SetEntropyThold() instead
-func (context *context) SetEntropyThold(v float32) {
+func (context *StatefulContext) SetEntropyThold(v float32) {
 	context.params.SetEntropyThold(v)
 }
 
 // SetInitialPrompt implements Context.
 // Deprecated: Use Params().SetInitialPrompt() instead
-func (context *context) SetInitialPrompt(v string) {
+func (context *StatefulContext) SetInitialPrompt(v string) {
 	context.params.SetInitialPrompt(v)
 }
 
 // SetMaxContext implements Context.
 // Deprecated: Use Params().SetMaxContext() instead
-func (context *context) SetMaxContext(v int) {
+func (context *StatefulContext) SetMaxContext(v int) {
 	context.params.SetMaxContext(v)
 }
 
 // SetMaxSegmentLength implements Context.
 // Deprecated: Use Params().SetMaxSegmentLength() instead
-func (context *context) SetMaxSegmentLength(v uint) {
+func (context *StatefulContext) SetMaxSegmentLength(v uint) {
 	context.params.SetMaxSegmentLength(v)
 }
 
 // SetMaxTokensPerSegment implements Context.
 // Deprecated: Use Params().SetMaxTokensPerSegment() instead
-func (context *context) SetMaxTokensPerSegment(v uint) {
+func (context *StatefulContext) SetMaxTokensPerSegment(v uint) {
 	context.params.SetMaxTokensPerSegment(v)
 }
 
 // SetOffset implements Context.
 // Deprecated: Use Params().SetOffset() instead
-func (context *context) SetOffset(v time.Duration) {
+func (context *StatefulContext) SetOffset(v time.Duration) {
 	context.params.SetOffset(v)
 }
 
 // SetSplitOnWord implements Context.
 // Deprecated: Use Params().SetSplitOnWord() instead
-func (context *context) SetSplitOnWord(v bool) {
+func (context *StatefulContext) SetSplitOnWord(v bool) {
 	context.params.SetSplitOnWord(v)
 }
 
 // SetTemperature implements Context.
 // Deprecated: Use Params().SetTemperature() instead
-func (context *context) SetTemperature(v float32) {
+func (context *StatefulContext) SetTemperature(v float32) {
 	context.params.SetTemperature(v)
 }
 
 // SetTemperatureFallback implements Context.
 // Deprecated: Use Params().SetTemperatureFallback() instead
-func (context *context) SetTemperatureFallback(v float32) {
+func (context *StatefulContext) SetTemperatureFallback(v float32) {
 	context.params.SetTemperatureFallback(v)
 }
 
 // SetThreads implements Context.
 // Deprecated: Use Params().SetThreads() instead
-func (context *context) SetThreads(v uint) {
+func (context *StatefulContext) SetThreads(v uint) {
 	context.params.SetThreads(v)
 }
 
 // SetTokenSumThreshold implements Context.
 // Deprecated: Use Params().SetTokenSumThreshold() instead
-func (context *context) SetTokenSumThreshold(v float32) {
+func (context *StatefulContext) SetTokenSumThreshold(v float32) {
 	context.params.SetTokenSumThreshold(v)
 }
 
 // SetTokenThreshold implements Context.
 // Deprecated: Use Params().SetTokenThreshold() instead
-func (context *context) SetTokenThreshold(v float32) {
+func (context *StatefulContext) SetTokenThreshold(v float32) {
 	context.params.SetTokenThreshold(v)
 }
 
 // SetTokenTimestamps implements Context.
 // Deprecated: Use Params().SetTokenTimestamps() instead
-func (context *context) SetTokenTimestamps(v bool) {
+func (context *StatefulContext) SetTokenTimestamps(v bool) {
 	context.params.SetTokenTimestamps(v)
 }
 
 // SetTranslate implements Context.
 // Deprecated: Use Params().SetTranslate() instead
-func (context *context) SetTranslate(v bool) {
+func (context *StatefulContext) SetTranslate(v bool) {
 	context.params.SetTranslate(v)
 }
 
-var _ Context = (*context)(nil)
+var _ Context = (*StatefulContext)(nil)

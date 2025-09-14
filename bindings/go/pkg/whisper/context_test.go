@@ -325,7 +325,7 @@ func TestContext_VAD_And_Diarization_Params_DoNotPanic(t *testing.T) {
 	assert.Equal(uint16(1), dec.NumChans)
 	data := buf.AsFloat32Buffer().Data
 
-	model, err := whisper.NewModel(ModelPath)
+	model, err := whisper.NewModelContext(ModelPath)
 	assert.NoError(err)
 	defer func() { _ = model.Close() }()
 
@@ -333,7 +333,7 @@ func TestContext_VAD_And_Diarization_Params_DoNotPanic(t *testing.T) {
 	assert.NoError(err)
 	assert.NotNil(params)
 
-	ctx, err := whisper.NewContext(model, params)
+	ctx, err := whisper.NewStatefulContext(model, params)
 	assert.NoError(err)
 	defer func() { _ = ctx.Close() }()
 
@@ -362,7 +362,7 @@ func TestDiarization_TwoSpeakers_Boundaries(t *testing.T) {
 	require.NoError(t, err)
 	data := buf.AsFloat32Buffer().Data
 
-	model, err := whisper.NewModel(ModelTinydiarizePath)
+	model, err := whisper.NewModelContext(ModelTinydiarizePath)
 	require.NoError(t, err)
 	defer func() { _ = model.Close() }()
 
@@ -377,7 +377,7 @@ func TestDiarization_TwoSpeakers_Boundaries(t *testing.T) {
 	require.NoError(t, err)
 
 	// diarize ON with beam search and tighter segmentation
-	ctxOn, err := whisper.NewContext(model, params)
+	ctxOn, err := whisper.NewStatefulContext(model, params)
 	require.NoError(t, err)
 	defer func() { _ = ctxOn.Close() }()
 
@@ -396,7 +396,7 @@ func TestDiarization_TwoSpeakers_Boundaries(t *testing.T) {
 	require.Greater(t, turnsOn, 0, "expected speaker turn boundaries with diarization enabled")
 
 	// diarize OFF baseline with same segmentation and beam
-	ctxOff, err := whisper.NewContext(model, params)
+	ctxOff, err := whisper.NewStatefulContext(model, params)
 	require.NoError(t, err)
 	defer func() { _ = ctxOff.Close() }()
 

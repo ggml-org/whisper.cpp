@@ -2,17 +2,17 @@ package whisper
 
 import whisper "github.com/ggerganov/whisper.cpp/bindings/go"
 
-type whisperCtx struct {
+type ctxAccessor struct {
 	ctx *whisper.Context
 }
 
-func newWhisperCtx(ctx *whisper.Context) *whisperCtx {
-	return &whisperCtx{
+func newCtxAccessor(ctx *whisper.Context) *ctxAccessor {
+	return &ctxAccessor{
 		ctx: ctx,
 	}
 }
 
-func (ctx *whisperCtx) close() error {
+func (ctx *ctxAccessor) close() error {
 	if ctx.ctx == nil {
 		return nil
 	}
@@ -23,11 +23,11 @@ func (ctx *whisperCtx) close() error {
 	return nil
 }
 
-func (ctx *whisperCtx) isClosed() bool {
+func (ctx *ctxAccessor) isClosed() bool {
 	return ctx.ctx == nil
 }
 
-func (ctx *whisperCtx) unsafeContext() (*whisper.Context, error) {
+func (ctx *ctxAccessor) context() (*whisper.Context, error) {
 	if ctx.isClosed() {
 		return nil, ErrModelClosed
 	}

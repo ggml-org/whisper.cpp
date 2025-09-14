@@ -26,11 +26,11 @@ func defaultParamsConfigure(params *Parameters) {
 }
 
 func NewParameters(
-	model *model,
+	model *ModelContext,
 	sampling SamplingStrategy,
 	configure ParamsConfigure,
 ) (*Parameters, error) {
-	ctx, err := model.ctx.unsafeContext()
+	ctx, err := model.ca.context()
 	if err != nil {
 		return nil, ErrModelClosed
 	}
