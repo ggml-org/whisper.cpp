@@ -71,6 +71,7 @@ type (
 	TokenData        C.struct_whisper_token_data
 	SamplingStrategy C.enum_whisper_sampling_strategy
 	Params           C.struct_whisper_full_params
+	ContextParams    C.struct_whisper_context_params
 )
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -101,10 +102,14 @@ var (
 
 // Allocates all memory needed for the model and loads the model from the given file.
 // Returns NULL on failure.
-func Whisper_init(path string) *Context {
+func Whisper_init(path string, options ...contextParamsOption) *Context {
 	cPath := C.CString(path)
 	defer C.free(unsafe.Pointer(cPath))
-	if ctx := C.whisper_init_from_file_with_params(cPath, C.whisper_context_default_params()); ctx != nil {
+	params := ContextParams(C.whisper_context_default_params())
+	for _, o := range options {
+		o.apply(&params)
+	}
+	if ctx := C.whisper_init_from_file_with_params(cPath, (C.struct_whisper_context_params)(params)); ctx != nil {
 		return (*Context)(ctx)
 	} else {
 		return nil
