@@ -1,0 +1,111 @@
+name: Test
+on: 
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      cmake_build_type:
+        required: false
+        default: Debug
+        type: choice
+        options:
+          - Debug
+          - Release
+
+env:
+  MODEL_URL: https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin
+  MODEL_FILENAME: ggml-tiny.bin
+  AUDIO_URL: https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav
+  AUDIO_FILENAME: jfk.wav
+  CMAKE_BUILD_TYPE: Debug
+
+jobs:
+    test:
+        permissions:
+            contents: write
+        strategy:
+            fail-fast: false
+            matrix:
+              include:
+                # macOS
+
+                - platform: "macos-latest"
+                  name: "MacOS (Arm) - aarch64"
+                  cmake-args: "-DGGML_CCACHE=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=${{ inputs.cmake_build_type }} -DGGML_STATIC=ON"
+      
+                # Linux
+                - platform: "ubuntu-24.04"
+                  name: "Ubuntu 24.04 - x86_64"
+                  cmake-args: "-DGGML_CCACHE=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=${{ inputs.cmake_build_type }} -DGGML_STATIC=ON"
+
+                - platform: "ubuntu-24.04"
+                  name: "Ubuntu 24.04 - x86_64 - Vulkan"
+                  cmake-args: "-DGGML_VULKAN=ON -DGGML_CCACHE=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=${{ inputs.cmake_build_type }} -DGGML_STATIC=ON"
+      
+                # Windows
+                - platform: "windows-latest"
+                  name: "Windows - x86_64"
+                  cmake-args: "-DGGML_CCACHE=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=${{ inputs.cmake_build_type }} -DGGML_STATIC=ON"
+
+                - platform: "windows-latest"
+                  name: "Windows - x86_64 - Vulkan"
+                  cmake-args: "-DGGML_VULKAN=ON -DGGML_CCACHE=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=${{ inputs.cmake_build_type }} -DGGML_STATIC=ON"
+
+        runs-on: ${{ matrix.platform }}
+        name: ${{ matrix.name }}
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Set default env variables
+              run: |
+                echo "CMAKE_BUILD_TYPE=${{ inputs.cmake_build_type || 'Debug' }}" >> $GITHUB_ENV
+
+            - name: Prepare Vulkan SDK for Windows
+              run: |
+                C:\msys64\usr\bin\wget.exe https://sdk.lunarg.com/sdk/download/1.3.290.0/windows/VulkanSDK-1.3.290.0-Installer.exe -O vulkan.exe
+                .\vulkan.exe --root C:\vulkan --accept-licenses --default-answer --confirm-command install
+                echo "VULKAN_SDK=C:\vulkan" >> $env:GITHUB_ENV
+                Copy-Item -Path "C:\vulkan\Bin\*.dll" -Destination "." -Recurse
+
+                # Add Vulkan runtime DLL to PATH
+                C:\msys64\usr\bin\wget https://sdk.lunarg.com/sdk/download/1.3.290.0/windows/VulkanRT-1.3.290.0-Components.zip -O vulkan_components.exe
+                7z x vulkan_components.exe
+                echo "$pwd\VulkanRT-1.3.290.0-Components\x64" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+              if: ${{ contains(matrix.platform, 'windows') && contains(matrix.cmake-args, 'DGGML_VULKAN=ON') }}
+
+            - name: Prepare Vulkan SDK for Linux
+              run: |
+                wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
+                sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-noble.list http://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list
+                sudo apt update
+                sudo apt install vulkan-sdk -y
+                sudo apt-get install -y mesa-vulkan-drivers
+              if: ${{ contains(matrix.platform, 'ubuntu') && contains(matrix.cmake-args, 'DGGML_VULKAN=ON') }}
+
+            - name: Download assets on Windows
+              if: contains(matrix.platform, 'windows')
+              run: |
+                C:\msys64\usr\bin\wget.exe ${{ env.MODEL_URL }}
+                C:\msys64\usr\bin\wget.exe ${{ env.AUDIO_URL }}
+        
+            - name: Download assets on Linux
+              if: contains(matrix.platform, 'windows') == false
+              run: |
+                wget ${{ env.MODEL_URL }}
+                wget ${{ env.AUDIO_URL }}
+
+            - name: Build
+              run: |
+                cmake -B build ${{ matrix.cmake-args }}
+                cmake --build build --target main --config ${{ env.CMAKE_BUILD_TYPE }}
+
+            - name: Test Windows
+              if: contains(matrix.platform, 'windows')
+              run: |
+                .\build\bin\${{ env.CMAKE_BUILD_TYPE }}\main -m ${{ env.MODEL_FILENAME }} -f ${{ env.AUDIO_FILENAME }}
+
+            - name: Test Unix
+              if: ${{ contains(matrix.platform, 'ubuntu') || contains(matrix.platform, 'macos') }}
+              run: |
+                  ./build/bin/main -m ${{ env.MODEL_FILENAME }} -f ${{ env.AUDIO_FILENAME }}
