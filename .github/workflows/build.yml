@@ -378,16 +378,30 @@ jobs:
           docker run --platform ${{ matrix.arch }} --rm \
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
+            # Robust apt setup with mirror fallback
             set -e
             export DEBIAN_FRONTEND=noninteractive
-            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-
-            apt-get update
+            echo "Acquire::Retries \"3\";" > /etc/apt/apt.conf.d/80-retries
+            echo "Acquire::http::Timeout \"10\";" > /etc/apt/apt.conf.d/80-timeout
+            echo "Acquire::https::Timeout \"10\";" >> /etc/apt/apt.conf.d/80-timeout
+            for mirror in mirrors.kernel.org mirror.pit.teraswitch.com archive.ubuntu.com; do
+                echo "Trying mirror: $mirror"
+                sed -i "s|archive.ubuntu.com|$mirror|g" /etc/apt/sources.list
+                sed -i "s|security.ubuntu.com|$mirror|g" /etc/apt/sources.list
+                if apt-get update; then echo "Using: $mirror"; break; else
+                    echo "Failed: $mirror"; sed -i "s|$mirror|archive.ubuntu.com|g" /etc/apt/sources.list; fi
+            done
             apt-get install -y ca-certificates
-            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
+            if echo "${{ matrix.arch }}" | grep -q arm; then
+                for pm in mirrors.kernel.org mirror.pit.teraswitch.com ports.ubuntu.com; do
+                    url="http://$pm"; echo "Trying ports: $url"
+                    sed -i "s|http://ports.ubuntu.com|$url|g" /etc/apt/sources.list
+                    if apt-get update; then echo "Using ports: $url"; break; else
+                        sed -i "s|$url|http://ports.ubuntu.com|g" /etc/apt/sources.list; fi
+                done
+            fi
 
-            apt update
+            # Install packages and build
             apt install -y build-essential cmake libsdl2-dev git
             cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8-a
             make
@@ -416,16 +430,30 @@ jobs:
           docker run --platform ${{ matrix.arch }} --rm \
             -v ${{ github.workspace }}:/workspace \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
+            # Robust apt setup with mirror fallback
             set -e
             export DEBIAN_FRONTEND=noninteractive
-            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-
-            apt-get update
+            echo "Acquire::Retries \"3\";" > /etc/apt/apt.conf.d/80-retries
+            echo "Acquire::http::Timeout \"10\";" > /etc/apt/apt.conf.d/80-timeout
+            echo "Acquire::https::Timeout \"10\";" >> /etc/apt/apt.conf.d/80-timeout
+            for mirror in mirrors.kernel.org mirror.pit.teraswitch.com archive.ubuntu.com; do
+                echo "Trying mirror: $mirror"
+                sed -i "s|archive.ubuntu.com|$mirror|g" /etc/apt/sources.list
+                sed -i "s|security.ubuntu.com|$mirror|g" /etc/apt/sources.list
+                if apt-get update; then echo "Using: $mirror"; break; else
+                    echo "Failed: $mirror"; sed -i "s|$mirror|archive.ubuntu.com|g" /etc/apt/sources.list; fi
+            done
             apt-get install -y ca-certificates
-            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
+            if echo "${{ matrix.arch }}" | grep -q arm; then
+                for pm in mirrors.kernel.org mirror.pit.teraswitch.com ports.ubuntu.com; do
+                    url="http://$pm"; echo "Trying ports: $url"
+                    sed -i "s|http://ports.ubuntu.com|$url|g" /etc/apt/sources.list
+                    if apt-get update; then echo "Using ports: $url"; break; else
+                        sed -i "s|$url|http://ports.ubuntu.com|g" /etc/apt/sources.list; fi
+                done
+            fi
 
-            apt update
+            # Install packages and build
             apt install -y build-essential cmake libsdl2-dev git
             cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv7-a+fp
             make
