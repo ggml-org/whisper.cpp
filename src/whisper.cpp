@@ -6802,23 +6802,12 @@ static bool whisper_vad(
 }
 
 int whisper_full_with_state(
-        struct whisper_context * ctx,
-          struct whisper_state * state,
-    struct whisper_full_params   params,
-                   const float * samples,
-                           int   n_samples) {
-    // clear old results
-    auto & result_all = state->result_all;
-
-    result_all.clear();
-
-    if (n_samples > 0) {
-        // compute log mel spectrogram
-        if (whisper_pcm_to_mel_with_state(ctx, state, samples, n_samples, params.n_threads) != 0) {
-            WHISPER_LOG_ERROR("%s: failed to compute log mel spectrogram\n", __func__);
-            return -2;
-        }
-    }
+    struct whisper_context *ctx,
+    struct whisper_state *state,
+    struct whisper_full_params params,
+    const float *samples,
+    int n_samples)
+{
 
     std::vector<float> vad_samples;
     if (params.vad)
@@ -6836,6 +6825,21 @@ int whisper_full_with_state(
         }
         samples = vad_samples.data();
         n_samples = vad_samples.size();
+    }
+
+    // clear old results
+    auto &result_all = state->result_all;
+
+    result_all.clear();
+
+    if (n_samples > 0)
+    {
+        // compute log mel spectrogram
+        if (whisper_pcm_to_mel_with_state(ctx, state, samples, n_samples, params.n_threads) != 0)
+        {
+            WHISPER_LOG_ERROR("%s: failed to compute log mel spectrogram\n", __func__);
+            return -2;
+        }
     }
 
     // auto-detect language if not specified
