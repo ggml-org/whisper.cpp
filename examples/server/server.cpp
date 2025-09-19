@@ -306,6 +306,14 @@ std::string generate_temp_filename(const std::string &prefix, const std::string 
     return ss.str();
 }
 
+std::string write_audio_to_temp_file(const MultipartFormData &audio_file, const std::string &extension) {
+    const std::string temp_filename = generate_temp_filename("whisper-server", extension);
+    std::ofstream temp_file{temp_filename, std::ios::binary};
+    temp_file << audio_file.content;
+    temp_file.close();
+    return temp_filename;
+}
+
 bool convert_to_wav(const std::string & temp_filename, std::string & error_resp) {
     std::ostringstream cmd_stream;
     std::string converted_filename_temp = temp_filename + "_temp.wav";
@@ -820,10 +828,7 @@ int main(int argc, char ** argv) {
         if (sparams.ffmpeg_converter) {
             // if file is not wav, convert to wav
             // write to temporary file
-            const std::string temp_filename = generate_temp_filename("whisper-server", ".wav");
-            std::ofstream temp_file{temp_filename, std::ios::binary};
-            temp_file << audio_file.content;
-            temp_file.close();
+            const std::string temp_filename = write_audio_to_temp_file(audio_file, ".wav");
 
             std::string error_resp = "{\"error\":\"Failed to execute ffmpeg command.\"}";
             const bool is_converted = convert_to_wav(temp_filename, error_resp);
@@ -844,13 +849,18 @@ int main(int argc, char ** argv) {
             // remove temp file
             std::remove(temp_filename.c_str());
         } else {
-            if (!::read_audio_data(audio_file.content, pcmf32, pcmf32s, params.diarize))
+            // Save to temporary file
+            const std::string temp_filename = write_audio_to_temp_file(audio_file, ".tmp");
+
+            if (!::read_audio_data(temp_filename, pcmf32, pcmf32s, params.diarize))
             {
                 fprintf(stderr, "error: failed to read audio data\n");
                 const std::string error_resp = "{\"error\":\"failed to read audio data\"}";
                 res.set_content(error_resp, "application/json");
+                std::remove(temp_filename.c_str());
                 return;
             }
+            std::remove(temp_filename.c_str());
         }
 
         printf("Successfully loaded %s\n", filename.c_str());
