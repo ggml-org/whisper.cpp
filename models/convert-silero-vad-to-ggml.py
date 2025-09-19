@@ -20,7 +20,7 @@ def convert_silero_vad(output_path, print_tensors=True):
             cleaned_dict[clean_key] = value
 
     base, ext = os.path.splitext(output_path)
-    output_file = f"{base}-v{silero_version}-ggml{ext}"
+    output_file = f"ggml-{base}-v{silero_version}{ext}"
     print(f"Saving GGML Silero-VAD model to {output_file}")
 
     print("\nTensor info for debugging:")
