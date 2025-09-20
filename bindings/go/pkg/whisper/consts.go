@@ -20,6 +20,7 @@ var (
 	ErrUnsupportedLanguage  = errors.New("unsupported language")
 	ErrModelNotMultilingual = errors.New("model is not multilingual")
 	ErrModelClosed          = errors.Join(errors.New("model has been closed"), ErrInternalAppError)
+	ErrStatelessBusy        = errors.New("stateless context is busy; concurrent processing not supported")
 
 	// Private errors
 	errParametersRequired  = errors.New("parameters are required")

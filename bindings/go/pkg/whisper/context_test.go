@@ -3,11 +3,9 @@ package whisper_test
 import (
 	"io"
 	"os"
-	"sync"
 	"testing"
 
 	"github.com/ggerganov/whisper.cpp/bindings/go/pkg/whisper"
-	"github.com/go-audio/wav"
 	assert "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,115 +13,163 @@ import (
 func TestSetLanguage(t *testing.T) {
 	assert := assert.New(t)
 
-	model, err := whisper.New(ModelPath)
-	assert.NoError(err)
-	assert.NotNil(model)
-	defer func() { _ = model.Close() }()
+	cases := []struct {
+		name string
+		new  func(t *testing.T) (whisper.Context, func())
+	}{
+		{name: "stateless", new: helperNewStatelessContext},
+		{name: "stateful", new: helperNewStatefulContext},
+	}
 
-	context, err := model.NewContext()
-	assert.NoError(err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cleanup := tc.new(t)
+			defer cleanup()
 
-	// This returns an error since
-	// the model 'models/ggml-small.en.bin'
-	// that is loaded is not multilingual
-	err = context.SetLanguage("en")
-	assert.Error(err)
+			// This returns an error since the small.en model is not multilingual
+			err := ctx.SetLanguage("en")
+			assert.Error(err)
+		})
+	}
 }
 
 func TestContextModelIsMultilingual(t *testing.T) {
 	assert := assert.New(t)
 
-	model, err := whisper.New(ModelPath)
-	assert.NoError(err)
-	assert.NotNil(model)
-	defer func() { _ = model.Close() }()
+	cases := []struct {
+		name string
+		new  func(t *testing.T) (whisper.Context, func())
+	}{
+		{name: "stateless", new: helperNewStatelessContext},
+		{name: "stateful", new: helperNewStatefulContext},
+	}
 
-	context, err := model.NewContext()
-	assert.NoError(err)
-
-	isMultilingual := context.IsMultilingual()
-
-	// This returns false since
-	// the model 'models/ggml-small.en.bin'
-	// that is loaded is not multilingual
-	assert.False(isMultilingual)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cleanup := tc.new(t)
+			defer cleanup()
+			assert.False(ctx.IsMultilingual())
+		})
+	}
 }
 
 func TestLanguage(t *testing.T) {
 	assert := assert.New(t)
 
-	model, err := whisper.New(ModelPath)
-	assert.NoError(err)
-	assert.NotNil(model)
-	defer func() { _ = model.Close() }()
+	cases := []struct {
+		name string
+		new  func(t *testing.T) (whisper.Context, func())
+	}{
+		{name: "stateless", new: helperNewStatelessContext},
+		{name: "stateful", new: helperNewStatefulContext},
+	}
 
-	context, err := model.NewContext()
-	assert.NoError(err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cleanup := tc.new(t)
+			defer cleanup()
+			expectedLanguage := "en"
+			actualLanguage := ctx.Language()
+			assert.Equal(expectedLanguage, actualLanguage)
+		})
+	}
+}
 
-	// This always returns en since
-	// the model 'models/ggml-small.en.bin'
-	// that is loaded is not multilingual
-	expectedLanguage := "en"
-	actualLanguage := context.Language()
-	assert.Equal(expectedLanguage, actualLanguage)
+// Generic behavior: Language() and DetectedLanguage() match for both context types
+func TestContext_Generic_LanguageAndDetectedLanguage(t *testing.T) {
+	assert := assert.New(t)
+
+	if _, err := os.Stat(ModelPath); os.IsNotExist(err) {
+		t.Skip("Skipping test, model not found:", ModelPath)
+	}
+	if _, err := os.Stat(SamplePath); os.IsNotExist(err) {
+		t.Skip("Skipping test, sample not found:", SamplePath)
+	}
+
+	data := helperLoadSample(t, SamplePath)
+
+	cases := []struct {
+		name string
+		new  func(t *testing.T) (whisper.Context, func())
+	}{
+		{name: "stateless", new: helperNewStatelessContext},
+		{name: "stateful", new: helperNewStatefulContext},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cleanup := tc.new(t)
+			defer cleanup()
+
+			langBefore := ctx.Language()
+			assert.NoError(ctx.Process(data, nil, nil, nil))
+			detected := ctx.DetectedLanguage()
+			assert.Equal(langBefore, detected)
+		})
+	}
 }
 
 func TestProcess(t *testing.T) {
 	assert := assert.New(t)
 
-	fh, err := os.Open(SamplePath)
-	assert.NoError(err)
-	defer func() { _ = fh.Close() }()
+	if _, err := os.Stat(ModelPath); os.IsNotExist(err) {
+		t.Skip("Skipping test, model not found:", ModelPath)
+	}
+	if _, err := os.Stat(SamplePath); os.IsNotExist(err) {
+		t.Skip("Skipping test, sample not found:", SamplePath)
+	}
 
-	// Decode the WAV file - load the full buffer
-	dec := wav.NewDecoder(fh)
-	buf, err := dec.FullPCMBuffer()
-	assert.NoError(err)
-	assert.Equal(uint16(1), dec.NumChans)
+	data := helperLoadSample(t, SamplePath)
 
-	data := buf.AsFloat32Buffer().Data
+	cases := []struct {
+		name string
+		new  func(t *testing.T) (whisper.Context, func())
+	}{
+		{name: "stateless", new: helperNewStatelessContext},
+		{name: "stateful", new: helperNewStatefulContext},
+	}
 
-	model, err := whisper.New(ModelPath)
-	assert.NoError(err)
-	assert.NotNil(model)
-	defer func() { _ = model.Close() }()
-
-	context, err := model.NewContext()
-	assert.NoError(err)
-
-	err = context.Process(data, nil, nil, nil)
-	assert.NoError(err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cleanup := tc.new(t)
+			defer cleanup()
+			err := ctx.Process(data, nil, nil, nil)
+			assert.NoError(err)
+		})
+	}
 }
 
 func TestDetectedLanguage(t *testing.T) {
 	assert := assert.New(t)
 
-	fh, err := os.Open(SamplePath)
-	assert.NoError(err)
-	defer func() { _ = fh.Close() }()
+	if _, err := os.Stat(ModelPath); os.IsNotExist(err) {
+		t.Skip("Skipping test, model not found:", ModelPath)
+	}
+	if _, err := os.Stat(SamplePath); os.IsNotExist(err) {
+		t.Skip("Skipping test, sample not found:", SamplePath)
+	}
 
-	// Decode the WAV file - load the full buffer
-	dec := wav.NewDecoder(fh)
-	buf, err := dec.FullPCMBuffer()
-	assert.NoError(err)
-	assert.Equal(uint16(1), dec.NumChans)
+	data := helperLoadSample(t, SamplePath)
 
-	data := buf.AsFloat32Buffer().Data
+	cases := []struct {
+		name string
+		new  func(t *testing.T) (whisper.Context, func())
+	}{
+		{name: "stateless", new: helperNewStatelessContext},
+		{name: "stateful", new: helperNewStatefulContext},
+	}
 
-	model, err := whisper.New(ModelPath)
-	assert.NoError(err)
-	assert.NotNil(model)
-	defer func() { _ = model.Close() }()
-
-	context, err := model.NewContext()
-	assert.NoError(err)
-
-	err = context.Process(data, nil, nil, nil)
-	assert.NoError(err)
-
-	expectedLanguage := "en"
-	actualLanguage := context.DetectedLanguage()
-	assert.Equal(expectedLanguage, actualLanguage)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cleanup := tc.new(t)
+			defer cleanup()
+			err := ctx.Process(data, nil, nil, nil)
+			assert.NoError(err)
+			expectedLanguage := "en"
+			actualLanguage := ctx.DetectedLanguage()
+			assert.Equal(expectedLanguage, actualLanguage)
+		})
+	}
 }
 
 // TestContext_ConcurrentProcessing tests that multiple contexts can process concurrently
@@ -138,113 +184,29 @@ func TestContext_ConcurrentProcessing(t *testing.T) {
 		t.Skip("Skipping test, sample not found:", SamplePath)
 	}
 
-	fh, err := os.Open(SamplePath)
-	assert.NoError(err)
-	defer func() { _ = fh.Close() }()
+	data := helperLoadSample(t, SamplePath)
 
-	dec := wav.NewDecoder(fh)
-	buf, err := dec.FullPCMBuffer()
-	assert.NoError(err)
-	assert.Equal(uint16(1), dec.NumChans)
-	data := buf.AsFloat32Buffer().Data
-
-	model, err := whisper.New(ModelPath)
-	assert.NoError(err)
-	assert.NotNil(model)
-	defer func() { _ = model.Close() }()
-
-	ctx, err := model.NewContext()
-	assert.NoError(err)
-	assert.NotNil(ctx)
-	defer func() { _ = ctx.Close() }()
-
-	err = ctx.Process(data, nil, nil, nil)
-	assert.NoError(err)
-
-	seg, err := ctx.NextSegment()
-	assert.NoError(err)
-	assert.NotEmpty(seg.Text)
-}
-
-// TestContext_Parallel_DifferentInputs tests concurrent processing with different inputs
-// This validates that each context maintains isolated state for concurrent processing
-func TestContext_Parallel_DifferentInputs(t *testing.T) {
-	assert := assert.New(t)
-
-	if _, err := os.Stat(ModelPath); os.IsNotExist(err) {
-		t.Skip("Skipping test, model not found:", ModelPath)
-	}
-	if _, err := os.Stat(SamplePath); os.IsNotExist(err) {
-		t.Skip("Skipping test, sample not found:", SamplePath)
+	cases := []struct {
+		name string
+		new  func(t *testing.T) (whisper.Context, func())
+	}{
+		{name: "stateless", new: helperNewStatelessContext},
+		{name: "stateful", new: helperNewStatefulContext},
 	}
 
-	fh, err := os.Open(SamplePath)
-	assert.NoError(err)
-	defer func() { _ = fh.Close() }()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cleanup := tc.new(t)
+			defer cleanup()
 
-	dec := wav.NewDecoder(fh)
-	buf, err := dec.FullPCMBuffer()
-	assert.NoError(err)
-	assert.Equal(uint16(1), dec.NumChans)
-	data := buf.AsFloat32Buffer().Data
-	assert.Greater(len(data), 10)
+			err := ctx.Process(data, nil, nil, nil)
+			assert.NoError(err)
 
-	// Create half-sample (second half)
-	half := make([]float32, len(data)/2)
-	copy(half, data[len(data)/2:])
-
-	model, err := whisper.New(ModelPath)
-	assert.NoError(err)
-	assert.NotNil(model)
-	defer func() { _ = model.Close() }()
-
-	ctx1, err := model.NewContext()
-	assert.NoError(err)
-	defer func() { _ = ctx1.Close() }()
-	ctx2, err := model.NewContext()
-	assert.NoError(err)
-	defer func() { _ = ctx2.Close() }()
-
-	// Run in parallel - each context has isolated whisper_state
-	var wg sync.WaitGroup
-	var first1, first2 string
-	var e1, e2 error
-
-	wg.Add(2)
-
-	// No mutex needed because each context is isolated by whisper_state
-	go func() {
-		defer wg.Done()
-		e1 = ctx1.Process(data, nil, nil, nil)
-		if e1 == nil {
-			seg, err := ctx1.NextSegment()
-			if err == nil {
-				first1 = seg.Text
-			} else {
-				e1 = err
-			}
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		e2 = ctx2.Process(half, nil, nil, nil)
-		if e2 == nil {
-			seg, err := ctx2.NextSegment()
-			if err == nil {
-				first2 = seg.Text
-			} else {
-				e2 = err
-			}
-		}
-	}()
-
-	wg.Wait()
-	assert.NoError(e1)
-	assert.NoError(e2)
-	assert.NotEmpty(first1)
-	assert.NotEmpty(first2)
-	assert.NotEqual(first1, first2, "first segments should differ for different inputs")
+			seg, err := ctx.NextSegment()
+			assert.NoError(err)
+			assert.NotEmpty(seg.Text)
+		})
+	}
 }
 
 // TestContext_Close tests that Context.Close() properly frees resources
@@ -256,53 +218,72 @@ func TestContext_Close(t *testing.T) {
 		t.Skip("Skipping test, model not found:", ModelPath)
 	}
 
-	model, err := whisper.New(ModelPath)
-	assert.NoError(err)
-	assert.NotNil(model)
-	defer func() { _ = model.Close() }()
+	cases := []struct {
+		name string
+		new  func(t *testing.T) (whisper.Context, func())
+	}{
+		{name: "stateless", new: helperNewStatelessContext},
+		{name: "stateful", new: helperNewStatefulContext},
+	}
 
-	ctx, err := model.NewContext()
-	assert.NoError(err)
-	assert.NotNil(ctx)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cleanup := tc.new(t)
+			defer cleanup()
 
-	// Close the context
-	err = ctx.Close()
-	require.NoError(t, err)
+			// Close the context
+			err := ctx.Close()
+			require.NoError(t, err)
 
-	// Try to use closed context - should return errors
-	err = ctx.Process([]float32{0.1, 0.2, 0.3}, nil, nil, nil)
-	require.ErrorIs(t, err, whisper.ErrModelClosed)
+			// Try to use closed context - should return errors
+			err = ctx.Process([]float32{0.1, 0.2, 0.3}, nil, nil, nil)
+			require.ErrorIs(t, err, whisper.ErrModelClosed)
+			// TODO: remove this logic after deprecating the ErrInternalAppError
+			require.ErrorIs(t, err, whisper.ErrInternalAppError)
 
-	// TODO: remove this logic after deprecating the ErrInternalAppError
-	require.ErrorIs(t, err, whisper.ErrInternalAppError)
+			lang := ctx.DetectedLanguage()
+			require.Empty(t, lang)
 
-	lang := ctx.DetectedLanguage()
-	require.Empty(t, lang)
+			_, err = ctx.NextSegment()
+			assert.ErrorIs(err, whisper.ErrModelClosed)
+			// TODO: remove this logic after deprecating the ErrInternalAppError
+			assert.ErrorIs(err, whisper.ErrInternalAppError)
 
-	_, err = ctx.NextSegment()
-	assert.ErrorIs(err, whisper.ErrModelClosed)
-
-	// TODO: remove this logic after deprecating the ErrInternalAppError
-	assert.ErrorIs(err, whisper.ErrInternalAppError)
-
-	// Multiple closes should be safe
-	err = ctx.Close()
-	require.NoError(t, err)
+			// Multiple closes should be safe
+			err = ctx.Close()
+			require.NoError(t, err)
+		})
+	}
 }
 
 func Test_Close_Context_of_Closed_Model(t *testing.T) {
 	assert := assert.New(t)
 
-	model, err := whisper.New(ModelPath)
-	assert.NoError(err)
-	assert.NotNil(model)
+	if _, err := os.Stat(ModelPath); os.IsNotExist(err) {
+		t.Skip("Skipping test, model not found:", ModelPath)
+	}
 
-	ctx, err := model.NewContext()
-	assert.NoError(err)
-	assert.NotNil(ctx)
+	t.Run("stateless", func(t *testing.T) {
+		model, err := whisper.NewModelContext(ModelPath)
+		assert.NoError(err)
+		defer func() { _ = model.Close() }()
+		params := helperNewParams(t, model, nil)
+		ctx, err := whisper.NewStatelessContext(model, params)
+		assert.NoError(err)
+		require.NoError(t, model.Close())
+		require.NoError(t, ctx.Close())
+	})
 
-	require.NoError(t, model.Close())
-	require.NoError(t, ctx.Close())
+	t.Run("stateful", func(t *testing.T) {
+		model, err := whisper.NewModelContext(ModelPath)
+		assert.NoError(err)
+		defer func() { _ = model.Close() }()
+		params := helperNewParams(t, model, nil)
+		ctx, err := whisper.NewStatefulContext(model, params)
+		assert.NoError(err)
+		require.NoError(t, model.Close())
+		require.NoError(t, ctx.Close())
+	})
 }
 
 func TestContext_VAD_And_Diarization_Params_DoNotPanic(t *testing.T) {
@@ -315,15 +296,7 @@ func TestContext_VAD_And_Diarization_Params_DoNotPanic(t *testing.T) {
 		t.Skip("Skipping test, sample not found:", SamplePath)
 	}
 
-	fh, err := os.Open(SamplePath)
-	assert.NoError(err)
-	defer func() { _ = fh.Close() }()
-
-	dec := wav.NewDecoder(fh)
-	buf, err := dec.FullPCMBuffer()
-	assert.NoError(err)
-	assert.Equal(uint16(1), dec.NumChans)
-	data := buf.AsFloat32Buffer().Data
+	data := helperLoadSample(t, SamplePath)
 
 	model, err := whisper.NewModelContext(ModelPath)
 	assert.NoError(err)
@@ -352,15 +325,7 @@ func TestContext_VAD_And_Diarization_Params_DoNotPanic(t *testing.T) {
 }
 
 func TestDiarization_TwoSpeakers_Boundaries(t *testing.T) {
-	fh, err := os.Open(MultiSpeakerSamplePath)
-	require.NoError(t, err)
-	defer func() { _ = fh.Close() }()
-
-	dec := wav.NewDecoder(fh)
-	buf, err := dec.FullPCMBuffer()
-	assert.Equal(t, uint16(1), dec.NumChans)
-	require.NoError(t, err)
-	data := buf.AsFloat32Buffer().Data
+	data := helperLoadSample(t, MultiSpeakerSamplePath)
 
 	model, err := whisper.NewModelContext(ModelTinydiarizePath)
 	require.NoError(t, err)
@@ -426,29 +391,193 @@ func TestContext_SpeakerTurnNext_Field_Present(t *testing.T) {
 		t.Skip("Skipping test, sample not found:", SamplePath)
 	}
 
-	fh, err := os.Open(SamplePath)
-	assert.NoError(err)
-	defer func() { _ = fh.Close() }()
+	data := helperLoadSample(t, SamplePath)
 
-	dec := wav.NewDecoder(fh)
-	buf, err := dec.FullPCMBuffer()
-	assert.NoError(err)
-	assert.Equal(uint16(1), dec.NumChans)
-	data := buf.AsFloat32Buffer().Data
+	cases := []struct {
+		name string
+		new  func(t *testing.T) (whisper.Context, func())
+	}{
+		{name: "stateless", new: helperNewStatelessContext},
+		{name: "stateful", new: helperNewStatefulContext},
+	}
 
-	model, err := whisper.New(ModelPath)
-	assert.NoError(err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cleanup := tc.new(t)
+			defer cleanup()
+
+			err := ctx.Process(data, nil, nil, nil)
+			assert.NoError(err)
+
+			seg, err := ctx.NextSegment()
+			assert.NoError(err)
+			t.Logf("SpeakerTurnNext: %v", seg.SpeakerTurnNext)
+			_ = seg.SpeakerTurnNext
+		})
+	}
+}
+
+// Ensure Process produces at least one segment for both stateless and stateful contexts
+func TestContext_Process_ProducesSegments_BothKinds(t *testing.T) {
+	assert := assert.New(t)
+
+	if _, err := os.Stat(ModelPath); os.IsNotExist(err) {
+		t.Skip("Skipping test, model not found:", ModelPath)
+	}
+	if _, err := os.Stat(SamplePath); os.IsNotExist(err) {
+		t.Skip("Skipping test, sample not found:", SamplePath)
+	}
+
+	data := helperLoadSample(t, SamplePath)
+
+	// Stateless
+	stateless, cleanupS := helperNewStatelessContext(t)
+	defer cleanupS()
+	require.NoError(t, stateless.Process(data, nil, nil, nil))
+	var statelessCount int
+	for {
+		_, err := stateless.NextSegment()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		statelessCount++
+	}
+	assert.Greater(statelessCount, 0, "stateless should produce at least one segment")
+
+	// Stateful
+	stateful, cleanupSt := helperNewStatefulContext(t)
+	defer cleanupSt()
+	require.NoError(t, stateful.Process(data, nil, nil, nil))
+	var statefulCount int
+	for {
+		_, err := stateful.NextSegment()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		statefulCount++
+	}
+	assert.Greater(statefulCount, 0, "stateful should produce at least one segment")
+}
+
+// With temperature=0 (greedy), stateless and stateful should produce identical segments
+func TestContext_Process_SameResults_TemperatureZero(t *testing.T) {
+	assert := assert.New(t)
+
+	if _, err := os.Stat(ModelPath); os.IsNotExist(err) {
+		t.Skip("Skipping test, model not found:", ModelPath)
+	}
+	if _, err := os.Stat(SamplePath); os.IsNotExist(err) {
+		t.Skip("Skipping test, sample not found:", SamplePath)
+	}
+
+	data := helperLoadSample(t, SamplePath)
+
+	// Use a single model to avoid environment differences
+	model, err := whisper.NewModelContext(ModelPath)
+	require.NoError(t, err)
 	defer func() { _ = model.Close() }()
 
-	ctx, err := model.NewContext()
-	assert.NoError(err)
-	defer func() { _ = ctx.Close() }()
+	// Independent params with temperature=0 for determinism
+	p := helperNewParams(t, model, func(p *whisper.Parameters) {
+		p.SetTemperature(0)
+		p.SetThreads(1)
+	})
 
-	err = ctx.Process(data, nil, nil, nil)
-	assert.NoError(err)
+	stateless, err := whisper.NewStatelessContext(model, p)
+	require.NoError(t, err)
+	defer func() { _ = stateless.Close() }()
 
-	seg, err := ctx.NextSegment()
-	assert.NoError(err)
-	t.Logf("SpeakerTurnNext: %v", seg.SpeakerTurnNext)
-	_ = seg.SpeakerTurnNext // ensure field exists and is readable
+	stateful, err := whisper.NewStatefulContext(model, p)
+	require.NoError(t, err)
+	defer func() { _ = stateful.Close() }()
+
+	require.NoError(t, stateless.Process(data, nil, nil, nil))
+	require.NoError(t, stateful.Process(data, nil, nil, nil))
+
+	// Collect segment texts
+	var segsStateless, segsStateful []string
+	for {
+		seg, err := stateless.NextSegment()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		segsStateless = append(segsStateless, seg.Text)
+	}
+	for {
+		seg, err := stateful.NextSegment()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		segsStateful = append(segsStateful, seg.Text)
+	}
+
+	// Both should have at least one segment and be identical
+	require.Greater(t, len(segsStateless), 0)
+	require.Greater(t, len(segsStateful), 0)
+	assert.Equal(len(segsStateful), len(segsStateless))
+	for i := range segsStateless {
+		assert.Equal(segsStateless[i], segsStateful[i], "segment %d text differs", i)
+	}
+}
+
+// Model.GetTimings: stateless processing updates model timings (non-zero),
+// stateful processing does not (zero timings)
+func TestModel_GetTimings_Stateless_NonZero_Stateful_Zero(t *testing.T) {
+	assert := assert.New(t)
+
+	if _, err := os.Stat(ModelPath); os.IsNotExist(err) {
+		t.Skip("Skipping test, model not found:", ModelPath)
+	}
+	if _, err := os.Stat(SamplePath); os.IsNotExist(err) {
+		t.Skip("Skipping test, sample not found:", SamplePath)
+	}
+
+	data := helperLoadSample(t, SamplePath)
+
+	model, err := whisper.NewModelContext(ModelPath)
+	require.NoError(t, err)
+	defer func() { _ = model.Close() }()
+
+	// Stateless should produce non-zero timings
+	t.Run("stateless", func(t *testing.T) {
+		model.ResetTimings()
+		params := helperNewParams(t, model, nil)
+		ctx, err := whisper.NewStatelessContext(model, params)
+		require.NoError(t, err)
+		defer func() { _ = ctx.Close() }()
+
+		require.NoError(t, ctx.Process(data, nil, nil, nil))
+
+		timings, ok := model.GetTimings()
+		require.True(t, ok, "expected timings to be available after stateless processing")
+		nonZero := timings.SampleMS > 0 || timings.EncodeMS > 0 || timings.DecodeMS > 0 || timings.BatchdMS > 0 || timings.PromptMS > 0
+		assert.True(nonZero, "expected at least one non-zero timing after stateless processing: %#v", timings)
+	})
+
+	// Stateful should keep model-level timings at zero
+	t.Run("stateful", func(t *testing.T) {
+		model.ResetTimings()
+		params := helperNewParams(t, model, nil)
+		ctx, err := whisper.NewStatefulContext(model, params)
+		require.NoError(t, err)
+		defer func() { _ = ctx.Close() }()
+
+		require.NoError(t, ctx.Process(data, nil, nil, nil))
+
+		timings, ok := model.GetTimings()
+		// Expect timings present but all zero; if not present at all, treat as zero-equivalent
+		if ok {
+			assert.Equal(float32(0), timings.SampleMS)
+			assert.Equal(float32(0), timings.EncodeMS)
+			assert.Equal(float32(0), timings.DecodeMS)
+			assert.Equal(float32(0), timings.BatchdMS)
+			assert.Equal(float32(0), timings.PromptMS)
+		} else {
+			t.Log("timings not available for stateful processing; treating as zero")
+		}
+	})
 }

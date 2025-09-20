@@ -15,6 +15,7 @@ import (
 #cgo darwin LDFLAGS: -lggml-metal -lggml-blas
 #cgo darwin LDFLAGS: -framework Accelerate -framework Metal -framework Foundation -framework CoreGraphics
 #include <whisper.h>
+#include <ggml.h>
 #include <stdlib.h>
 
 extern void callNewSegment(void* user_data, int new);
@@ -60,6 +61,22 @@ static struct whisper_full_params whisper_full_default_params_cb(struct whisper_
 	params.progress_callback_user_data = (void*)(ctx);
 	return params;
 }
+
+// Disable all C-side logging (whisper.cpp and ggml)
+static void go_cb_log_disable(enum ggml_log_level level, const char * text, void * user_data) {
+    (void) level; (void) text; (void) user_data;
+}
+
+static void whisper_log_disable_all(void) {
+    ggml_log_set(go_cb_log_disable, NULL);
+    whisper_log_set(go_cb_log_disable, NULL);
+}
+
+// Enable default logging (stdout) for whisper.cpp and ggml
+static void whisper_log_enable_default(void) {
+    ggml_log_set(NULL, NULL);
+    whisper_log_set(NULL, NULL);
+}
 */
 import "C"
 
@@ -73,6 +90,8 @@ type (
 	TokenData        C.struct_whisper_token_data
 	SamplingStrategy C.enum_whisper_sampling_strategy
 	Params           C.struct_whisper_full_params
+	Timings          C.struct_whisper_timings
+	ContextParams    C.struct_whisper_context_params
 )
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -98,6 +117,12 @@ var (
 	ErrInvalidLanguage  = errors.New("invalid language")
 )
 
+// DisableLogs disables all logging coming from the C libraries (whisper.cpp and ggml).
+// Call once early in program startup if you want to silence device/backend prints.
+func DisableLogs() {
+	C.whisper_log_disable_all()
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // PUBLIC METHODS
 
@@ -107,6 +132,36 @@ func Whisper_init(path string) *Context {
 	cPath := C.CString(path)
 	defer C.free(unsafe.Pointer(cPath))
 	if ctx := C.whisper_init_from_file_with_params(cPath, C.whisper_context_default_params()); ctx != nil {
+		return (*Context)(ctx)
+	} else {
+		return nil
+	}
+}
+
+// Whisper_context_default_params returns default model context params
+func Whisper_context_default_params() ContextParams {
+	return ContextParams(C.whisper_context_default_params())
+}
+
+// SetUseGPU enables or disables GPU acceleration on the model context (if available)
+func (p *ContextParams) SetUseGPU(v bool) {
+	if v {
+		p.use_gpu = C.bool(true)
+	} else {
+		p.use_gpu = C.bool(false)
+	}
+}
+
+// SetGPUDevice selects the GPU device index for the model context (CUDA)
+func (p *ContextParams) SetGPUDevice(n int) {
+	p.gpu_device = C.int(n)
+}
+
+// Whisper_init_with_params allocates and initializes a model using custom context params
+func Whisper_init_with_params(path string, params ContextParams) *Context {
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+	if ctx := C.whisper_init_from_file_with_params(cPath, (C.struct_whisper_context_params)(params)); ctx != nil {
 		return (*Context)(ctx)
 	} else {
 		return nil
@@ -353,6 +408,32 @@ func (ctx *Context) Whisper_print_timings() {
 // Performance information
 func (ctx *Context) Whisper_reset_timings() {
 	C.whisper_reset_timings((*C.struct_whisper_context)(ctx))
+}
+
+// TimingsGo is a Go-friendly copy of whisper_timings
+type TimingsGo struct {
+	SampleMS float32
+	EncodeMS float32
+	DecodeMS float32
+	BatchdMS float32
+	PromptMS float32
+}
+
+// Whisper_get_timings_go retrieves timing counters and converts them to TimingsGo
+func (ctx *Context) Whisper_get_timings_go() (TimingsGo, bool) {
+	t := C.whisper_get_timings((*C.struct_whisper_context)(ctx))
+	if t == nil {
+		return TimingsGo{}, false
+	}
+	// The C struct is 5 consecutive floats; reinterpret and copy
+	arr := (*[5]C.float)(unsafe.Pointer(t))
+	return TimingsGo{
+		SampleMS: float32(arr[0]),
+		EncodeMS: float32(arr[1]),
+		DecodeMS: float32(arr[2]),
+		BatchdMS: float32(arr[3]),
+		PromptMS: float32(arr[4]),
+	}, true
 }
 
 // Print system information

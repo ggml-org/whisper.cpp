@@ -46,6 +46,13 @@ endif
 
 examples: $(EXAMPLES_DIR)
 
+benchmark: model-small whisper modtidy
+ifeq ($(UNAME_S),Darwin)
+	@C_INCLUDE_PATH=${INCLUDE_PATH} LIBRARY_PATH=${LIBRARY_PATH} GGML_METAL_PATH_RESOURCES=${GGML_METAL_PATH_RESOURCES} go test -ldflags "-extldflags '$(EXT_LDFLAGS)'" -bench=BenchmarkContextProcess -benchmem -run '^$$' ./pkg/whisper/...
+else
+	@C_INCLUDE_PATH=${INCLUDE_PATH} LIBRARY_PATH=${LIBRARY_PATH} go test -benchmem -run '^$$' ./pkg/whisper/...
+endif
+
 model-small: mkdir examples/go-model-download
 	@${BUILD_DIR}/go-model-download -out models ggml-small.en.bin
 

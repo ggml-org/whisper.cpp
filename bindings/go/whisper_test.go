@@ -19,6 +19,11 @@ const (
 	SamplePath = "samples/jfk.wav"
 )
 
+func TestMain(m *testing.M) {
+	whisper.DisableLogs()
+	os.Exit(m.Run())
+}
+
 func Test_Whisper_000(t *testing.T) {
 	assert := assert.New(t)
 	if _, err := os.Stat(ModelPath); os.IsNotExist(err) {

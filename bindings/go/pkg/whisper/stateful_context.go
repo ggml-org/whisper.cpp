@@ -392,4 +392,6 @@ func (context *StatefulContext) SetTranslate(v bool) {
 	context.params.SetTranslate(v)
 }
 
+// Make stateful context compatible with the old deprecated interface for
+// the simple migration into multi-threaded processing.
 var _ Context = (*StatefulContext)(nil)
