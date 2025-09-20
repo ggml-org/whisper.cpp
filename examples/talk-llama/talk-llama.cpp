@@ -340,9 +340,10 @@ int main(int argc, char ** argv) {
     llama_context_params lcparams = llama_context_default_params();
 
     // tune these to your liking
-    lcparams.n_ctx      = 2048;
-    lcparams.n_threads  = params.n_threads;
-    lcparams.flash_attn = params.flash_attn;
+    lcparams.n_ctx     = 2048;
+    lcparams.n_threads = params.n_threads;
+
+    lcparams.flash_attn_type = params.flash_attn ? LLAMA_FLASH_ATTN_TYPE_AUTO : LLAMA_FLASH_ATTN_TYPE_DISABLED;
 
     struct llama_context * ctx_llama = llama_init_from_model(model_llama, lcparams);
 
