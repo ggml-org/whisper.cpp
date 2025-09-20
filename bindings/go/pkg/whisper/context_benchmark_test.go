@@ -2,6 +2,7 @@ package whisper_test
 
 import (
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"runtime"
@@ -12,6 +13,38 @@ import (
 	"github.com/go-audio/audio"
 	wav "github.com/go-audio/wav"
 )
+
+func processAndExtractSegmentsSequentially(ctx whisper.Context, samples []float32) ([]whisper.Segment, error) {
+	if err := ctx.Process(samples, nil, nil, nil); err != nil {
+		return nil, err
+	}
+
+	var segments []whisper.Segment
+	for {
+		seg, err := ctx.NextSegment()
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			return nil, err
+		}
+
+		segments = append(segments, seg)
+	}
+
+	return segments, nil
+}
+
+func processAndExtractSegmentsWithCallback(ctx whisper.Context, samples []float32) ([]whisper.Segment, error) {
+	segments := make([]whisper.Segment, 0)
+
+	if err := ctx.Process(samples, nil, func(seg whisper.Segment) {
+		segments = append(segments, seg)
+	}, nil); err != nil {
+		return nil, err
+	}
+
+	return segments, nil
+}
 
 // benchProcessVariants runs the common benchmark matrix across context kinds,
 // thread sets, and callback modes, for given samples. If singleIteration is true
@@ -87,18 +120,23 @@ func benchProcessVariants(
 
 					b.ResetTimer()
 					for i := 0; i < iters; i++ {
-						if printTimings {
-							model.ResetTimings()
-						}
+						model.ResetTimings()
 						start := time.Now()
-						if err := ctx.Process(samples, nil, nil, nil); err != nil {
-							b.Fatalf("process: %v", err)
+
+						segments, err := processAndExtractSegmentsSequentially(ctx, samples)
+						if err != nil {
+							b.Fatalf("process and extract segments sequentially: %v", err)
 						}
+
+						b.Logf("segments: %+v", segments)
+
+						elapsed := time.Since(start)
+
 						if printTimings {
-							elapsed := time.Since(start)
 							model.PrintTimings()
-							b.ReportMetric(float64(elapsed.Milliseconds()), "ms_process")
 						}
+
+						b.ReportMetric(float64(elapsed.Milliseconds()), "ms_process")
 					}
 				})
 
@@ -120,14 +158,22 @@ func benchProcessVariants(
 					b.ResetTimer()
 					for i := 0; i < iters; i++ {
 						start := time.Now()
+						model.ResetTimings()
+
 						// Passing a segment callback forces single-segment mode and exercises token extraction
-						if err := ctx.Process(samples, nil, func(seg whisper.Segment) {}, nil); err != nil {
+						segments, err := processAndExtractSegmentsWithCallback(ctx, samples)
+						if err != nil {
 							b.Fatalf("process with callback: %v", err)
 						}
+
+						b.Logf("segments: %+v", segments)
+
+						elapsed := time.Since(start)
 						if printTimings {
-							elapsed := time.Since(start)
-							b.ReportMetric(float64(elapsed.Milliseconds()), "ms_process")
+							model.PrintTimings()
 						}
+
+						b.ReportMetric(float64(elapsed.Milliseconds()), "ms_process")
 					}
 				})
 			}

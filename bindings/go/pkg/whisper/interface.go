@@ -1,6 +1,7 @@
 package whisper
 
 import (
+	"fmt"
 	"io"
 	"time"
 )
@@ -173,6 +174,11 @@ type Segment struct {
 	// It works only with the diarization supporting models (like small.en-tdrz.bin) with the diarization enabled
 	// using Parameters.SetDiarize(true)
 	SpeakerTurnNext bool
+}
+
+func (s Segment) String() string {
+	// foramt: [00:01:39.000 --> 00:01:50.000]   And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.
+	return fmt.Sprintf("[%s --> %s] %s", s.Start.Truncate(time.Millisecond), s.End.Truncate(time.Millisecond), s.Text)
 }
 
 // Token is a text or special token
