@@ -207,35 +207,11 @@ make examples
 # optionally: ./build/go-model-download -out models
 ```
 
-### Run CPU benchmarks
+### Run benchmarks
 
 ```bash
 cd bindings/go/pkg/whisper
-go test -bench=ContextProcessCPU -benchmem -run=^$ .
-go test -bench=ContextProcessBigCPU -benchmem -run=^$ .
-# or run all
-go test -bench=. -benchmem -run=^$ .
-```
-
-### Run GPU benchmarks
-
-GPU runs toggle `UseGPU` in model params. Ensure your build has GPU backends enabled:
-
-- CUDA: build the C libs with CUDA
-
-```bash
-cd bindings/go
-GGML_CUDA=1 make whisper
-```
-
-- macOS Metal: supported by default in the build flags on Darwin.
-
-Then run:
-
-```bash
-cd bindings/go/pkg/whisper
-go test -bench=ContextProcessGPU -benchmem -run=^$ .
-go test -bench=ContextProcessBigGPU -benchmem -run=^$ .
+make benchmark
 ```
 
 ### What the benchmarks measure
