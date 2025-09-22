@@ -20,6 +20,10 @@ fun MainScreen(viewModel: MainScreenViewModel) {
         canTranscribe = viewModel.canTranscribe,
         isRecording = viewModel.isRecording,
         messageLog = viewModel.dataLog,
+        currentTranscript = viewModel.currentTranscript,
+        storageLocation = viewModel.getStorageLocation(),
+        csvLocation = viewModel.getCsvLocation(),
+        isStorageAccessible = viewModel.isStorageAccessible(),
         onBenchmarkTapped = viewModel::benchmark,
         onTranscribeSampleTapped = viewModel::transcribeSample,
         onRecordTapped = viewModel::toggleRecord
@@ -32,6 +36,10 @@ private fun MainScreen(
     canTranscribe: Boolean,
     isRecording: Boolean,
     messageLog: String,
+    currentTranscript: String,
+    storageLocation: String,
+    csvLocation: String,
+    isStorageAccessible: Boolean,
     onBenchmarkTapped: () -> Unit,
     onTranscribeSampleTapped: () -> Unit,
     onRecordTapped: () -> Unit
@@ -59,6 +67,76 @@ private fun MainScreen(
                     onClick = onRecordTapped
                 )
             }
+            
+            // Current transcript display
+            if (currentTranscript.isNotEmpty()) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp)
+                    ) {
+                        Text(
+                            text = "Current Transcript:",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        SelectionContainer {
+                            Text(
+                                text = currentTranscript,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                }
+            }
+            
+            // Storage information
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    Text(
+                        text = "Storage Information (Downloads):",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    Row {
+                        Text(
+                            text = "Status: ",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            text = if (isStorageAccessible) "✓ Accessible" else "✗ Not accessible",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isStorageAccessible) 
+                                MaterialTheme.colorScheme.primary 
+                            else 
+                                MaterialTheme.colorScheme.error
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Audio files: $storageLocation",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "CSV log: $csvLocation",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+            
             MessageLog(messageLog)
         }
     }

@@ -193,6 +193,55 @@ Java_com_whispercpp_whisper_WhisperLib_00024Companion_fullTranscribe(
     (*env)->ReleaseFloatArrayElements(env, audio_data, audio_data_arr, JNI_ABORT);
 }
 
+JNIEXPORT void JNICALL
+Java_com_whispercpp_whisper_WhisperLib_00024Companion_fullTranscribeWithPrompt(
+        JNIEnv *env, jobject thiz, jlong context_ptr, jint num_threads, jfloatArray audio_data, jstring prompt) {
+    UNUSED(thiz);
+    struct whisper_context *context = (struct whisper_context *) context_ptr;
+    jfloat *audio_data_arr = (*env)->GetFloatArrayElements(env, audio_data, NULL);
+    const jsize audio_data_length = (*env)->GetArrayLength(env, audio_data);
+
+    // Get the prompt string from Java
+    const char *prompt_chars = NULL;
+    if (prompt != NULL) {
+        prompt_chars = (*env)->GetStringUTFChars(env, prompt, NULL);
+    }
+
+    // The below adapted from the Objective-C iOS sample
+    struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    params.print_realtime = true;
+    params.print_progress = false;
+    params.print_timestamps = true;
+    params.print_special = false;
+    params.translate = false;
+    params.language = "en";
+    params.n_threads = num_threads;
+    params.offset_ms = 0;
+    params.no_context = true;
+    params.single_segment = false;
+    
+    // Set the prompt if provided
+    if (prompt_chars != NULL) {
+        params.initial_prompt = prompt_chars;
+        LOGI("Using prompt: %s", prompt_chars);
+    }
+
+    whisper_reset_timings(context);
+
+    LOGI("About to run whisper_full with prompt");
+    if (whisper_full(context, params, audio_data_arr, audio_data_length) != 0) {
+        LOGI("Failed to run the model");
+    } else {
+        whisper_print_timings(context);
+    }
+    
+    // Release resources
+    (*env)->ReleaseFloatArrayElements(env, audio_data, audio_data_arr, JNI_ABORT);
+    if (prompt_chars != NULL) {
+        (*env)->ReleaseStringUTFChars(env, prompt, prompt_chars);
+    }
+}
+
 JNIEXPORT jint JNICALL
 Java_com_whispercpp_whisper_WhisperLib_00024Companion_getTextSegmentCount(
         JNIEnv *env, jobject thiz, jlong context_ptr) {
