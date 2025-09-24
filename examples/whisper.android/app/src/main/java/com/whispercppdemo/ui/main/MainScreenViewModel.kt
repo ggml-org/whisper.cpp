@@ -35,7 +35,7 @@ import java.nio.ByteOrder
 private const val LOG_TAG = "MainScreenViewModel"
 
 // Prompt to improve short command recognition
-private const val PROMPT = "Watch voice commands, Start Running, stop, start, record, play, pause, resume, next, previous, open, left, right, go, back, help, exit, alarm, timer, stopwatch, set alarm, set timer 5 min, start stopwatch, stop timer, reset stopwatch, pause timer, resume timer, call mom, call dad, call john, call alex, call sister, call brother, call wife, call husband, call best friend, mute, unmute, volume up, volume down, brightness up, brightness down, increase, decrease, dim, silence, music, song, track, weather today, weather tomorrow, forecast, rain, snow, air quality, steps today, steps this week, weekly steps, sleep score, sleep score yesterday, sleep score last week, heart rate today, weekly heart rate, calories today, calories yesterday, spo2 today, spo2 yesterday, stress alert, set stress 80%, set heart rate high 120, set heart rate low 50, set spo2 low 90, set distance goal 5 km, set steps goal 10000, set calories goal 2000, update sleep goal 8 hours, hiking, running, walking, treadmill, swimming, rowing, yoga, meditation, cycling, indoor cycling, strength training, workout start, workout stop, workout pause, open weather, open spo2, measure spo2, show trend, weekly trend, last week, yesterday, today, tomorrow, DND, enable DND, disable DND, AOD on, AOD off, raise to wake on, raise to wake off, vibration on, vibration off"
+private const val PROMPT = "Watch voice commands, Start Running, stop, start, record, play, pause, resume, next, previous, open, left, right, go, back, help, exit, set an, alarm, timer, stopwatch, set an alarm, set alarm, set timer 5 min, start stopwatch, stop timer, reset stopwatch, pause timer, resume timer, call mom, call dad, call john, call alex, call sister, call brother, call wife, call husband, call shreya, call best friend, mute, unmute, volume up, volume down, brightness up, brightness down, increase, decrease, dim, silence, music, song, track, weather today, weather tomorrow, forecast, rain, snow, air quality, steps today, steps this week, weekly steps, sleep score, sleep score yesterday, sleep score last week, heart rate today, weekly heart rate, calories today, calories yesterday, spo2 today, spo2 yesterday, stress alert, set stress 80%, set heart rate high 120, set heart rate low 50, set spo2 low 90, set distance goal 5 km, set steps goal 10000, set calories goal 2000, update sleep goal 8 hours, hiking, running, walking, treadmill, swimming, rowing, yoga, meditation, cycling, indoor cycling, strength training, workout start, workout stop, workout pause, open weather, open spo2, measure spo2, show trend, weekly trend, last week, yesterday, today, tomorrow, DND, enable DND, disable DND, AOD on, AOD off, raise to wake on, raise to wake off, vibration on, vibration off"
 
 class MainScreenViewModel(private val application: Application) : AndroidViewModel(application) {
     var canTranscribe by mutableStateOf(false)
@@ -252,10 +252,34 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
     }
 
     private suspend fun copyAssets() = withContext(Dispatchers.IO) {
+        // Clean and recreate directories to ensure fresh copy
+        if (modelsPath.exists()) {
+            modelsPath.deleteRecursively()
+        }
+        if (samplesPath.exists()) {
+            samplesPath.deleteRecursively()
+        }
+        
         modelsPath.mkdirs()
         samplesPath.mkdirs()
+        
+        Log.d(LOG_TAG, "Copying models to: ${modelsPath.absolutePath}")
+        Log.d(LOG_TAG, "Copying samples to: ${samplesPath.absolutePath}")
+        
         application.copyData("models", modelsPath, ::printMessage)
         application.copyData("samples", samplesPath, ::printMessage)
+        
+        // Log what was actually copied
+        Log.d(LOG_TAG, "Models copied:")
+        modelsPath.listFiles()?.forEach { file ->
+            Log.d(LOG_TAG, "  - ${file.name} (${file.length()} bytes)")
+        }
+        
+        Log.d(LOG_TAG, "Samples copied:")
+        samplesPath.listFiles()?.forEach { file ->
+            Log.d(LOG_TAG, "  - ${file.name} (${file.length()} bytes)")
+        }
+        
         printMessage("All data copied to working directory.\n")
     }
 
@@ -303,7 +327,34 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
     }
 
     private suspend fun getFirstSample(): File = withContext(Dispatchers.IO) {
-        samplesPath.listFiles()!!.first()
+        val files = samplesPath.listFiles()
+        Log.d(LOG_TAG, "Available sample files in ${samplesPath.absolutePath}:")
+        files?.forEach { file ->
+            Log.d(LOG_TAG, "  - ${file.name} (${file.length()} bytes, exists: ${file.exists()})")
+        }
+        
+        // Look for samples_jfk.wav specifically first
+        val samplesJfkFile = files?.find { it.name.equals("samples_jfk.wav", ignoreCase = true) }
+        if (samplesJfkFile != null && samplesJfkFile.exists()) {
+            Log.d(LOG_TAG, "Selected samples_jfk.wav: ${samplesJfkFile.absolutePath}")
+            return@withContext samplesJfkFile
+        }
+        
+        // Look for any file containing "jfk" in the name
+        val jfkFile = files?.find { it.name.contains("jfk", ignoreCase = true) }
+        if (jfkFile != null && jfkFile.exists()) {
+            Log.d(LOG_TAG, "Selected JFK sample: ${jfkFile.absolutePath}")
+            return@withContext jfkFile
+        }
+        
+        // Fall back to first available wav file
+        val firstFile = files?.firstOrNull { it.isFile && it.name.endsWith(".wav", ignoreCase = true) }
+        if (firstFile != null && firstFile.exists()) {
+            Log.d(LOG_TAG, "Selected first sample: ${firstFile.absolutePath}")
+            return@withContext firstFile
+        }
+        
+        throw IllegalStateException("No sample files found in ${samplesPath.absolutePath}")
     }
 
     private suspend fun readAudioSamples(file: File): FloatArray = withContext(Dispatchers.IO) {
@@ -331,6 +382,8 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
         canTranscribe = false
 
         try {
+            printMessage("Processing file: ${file.name} (${file.absolutePath})\n")
+            printMessage("File exists: ${file.exists()}, Size: ${file.length()} bytes\n")
             printMessage("Reading wave samples... ")
             val data = readAudioSamples(file)
             printMessage("${data.size / (16000 / 1000)} ms\n")
@@ -341,7 +394,7 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
             printMessage("Done ($elapsed ms): \n$text\n")
         } catch (e: Exception) {
             Log.w(LOG_TAG, e)
-            printMessage("${e.localizedMessage}\n")
+            printMessage("Error transcribing ${file.name}: ${e.localizedMessage}\n")
         }
 
         canTranscribe = true
@@ -478,13 +531,26 @@ private suspend fun Context.copyData(
         val assetPath = "$assetDirName/$name"
         Log.v(LOG_TAG, "Processing $assetPath...")
         val destination = File(destDir, name)
+        
+        // Always copy fresh - delete existing file if it exists
+        if (destination.exists()) {
+            destination.delete()
+            Log.v(LOG_TAG, "Deleted existing file: $destination")
+        }
+        
         Log.v(LOG_TAG, "Copying $assetPath to $destination...")
         printMessage("Copying $name...\n")
-        assets.open(assetPath).use { input ->
-            destination.outputStream().use { output ->
-                input.copyTo(output)
+        
+        try {
+            assets.open(assetPath).use { input ->
+                destination.outputStream().use { output ->
+                    input.copyTo(output)
+                }
             }
+            Log.v(LOG_TAG, "Successfully copied $assetPath to $destination (${destination.length()} bytes)")
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "Failed to copy $assetPath to $destination", e)
+            printMessage("Error copying $name: ${e.localizedMessage}\n")
         }
-        Log.v(LOG_TAG, "Copied $assetPath to $destination")
     }
 }
