@@ -54,6 +54,10 @@ dependencies {
     implementation "com.google.accompanist:accompanist-permissions:0.28.0"
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.2'
 
+    // TensorFlow Lite for Intent Classification - Using stable older version for compatibility
+    implementation 'org.tensorflow:tensorflow-lite:2.12.0'
+    implementation 'org.tensorflow:tensorflow-lite-support:0.4.3'
+
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
