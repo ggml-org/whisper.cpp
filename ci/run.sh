@@ -24,9 +24,9 @@ mkdir -p "$2"
 OUT=$(realpath "$1")
 MNT=$(realpath "$2")
 
-rm -f "$OUT/*.log"
-rm -f "$OUT/*.exit"
-rm -f "$OUT/*.md"
+rm -vf $OUT/*.log
+rm -vf $OUT/*.exit
+rm -vf $OUT/*.md
 
 sd=`dirname $0`
 cd $sd/../
@@ -270,6 +270,8 @@ function gg_run_bench {
         printf "| %16s | %13s | %3s | %3s | %7s | %7s | %7s | %7s | %7s |\n" "---" "---" "---" "---" "---" "---" "---" "---" "---"
     } | tee -a $OUT/${ci}-models-table.log
 
+    res=0
+
     # run benchmark for each model
     for model in "${MODELS[@]}"; do
         echo "Benchmarking model: $model"
@@ -320,8 +322,11 @@ function gg_run_bench {
                 | tee -a $OUT/${ci}-models-table.log
         else
             echo "Benchmark failed for model: $model" | tee -a $OUT/${ci}-bench-errors.log
+            res=1
         fi
     done
+
+    return $res
 }
 
 function gg_sum_bench {
@@ -368,5 +373,7 @@ test $ret -eq 0 && gg_run ctest debug
 test $ret -eq 0 && gg_run ctest release
 
 test $ret -eq 0 && gg_run bench
+
+cat $OUT/README.md
 
 exit $ret
