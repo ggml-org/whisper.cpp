@@ -207,18 +207,23 @@ Java_com_whispercpp_whisper_WhisperLib_00024Companion_fullTranscribeWithPrompt(
         prompt_chars = (*env)->GetStringUTFChars(env, prompt, NULL);
     }
 
-    // The below adapted from the Objective-C iOS sample
+    // Optimized parameters for faster real-time transcription
     struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    params.print_realtime = true;
+    params.print_realtime = false;  // Disable real-time printing for speed
     params.print_progress = false;
-    params.print_timestamps = true;
+    params.print_timestamps = false;  // Disable timestamps for speed (we handle timing in Java)
     params.print_special = false;
     params.translate = false;
     params.language = "en";
-    params.n_threads = num_threads;
+    params.n_threads = num_threads > 4 ? 4 : num_threads;  // Limit threads to 4 for optimal mobile performance
     params.offset_ms = 0;
-    params.no_context = true;
-    params.single_segment = false;
+    params.no_context = false;  // Enable context for better longer command recognition
+    params.single_segment = true;  // Force single segment for short commands - major speed boost
+    params.audio_ctx = 512;  // Increased audio context for longer commands (balance of speed vs accuracy)
+    params.suppress_blank = true;  // Skip blank segments
+    params.suppress_nst = true;  // Suppress non-speech tokens for commands
+    params.temperature = 0.0f;    // Greedy decoding for maximum speed
+    params.max_len = 150;          // Increased length limit for longer commands
     
     // Set the prompt if provided
     if (prompt_chars != NULL) {

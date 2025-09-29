@@ -35,7 +35,7 @@ import java.nio.ByteOrder
 private const val LOG_TAG = "MainScreenViewModel"
 
 // Prompt to improve short command recognition
-private const val PROMPT = "Watch voice commands, Start Running, stop, start, record, play, pause, resume, next, previous, open, left, right, go, back, help, exit, set an, alarm, timer, stopwatch, set an alarm, set alarm, set timer 5 min, start stopwatch, stop timer, reset stopwatch, pause timer, resume timer, call mom, call dad, call john, call alex, call sister, call brother, call wife, call husband, call shreya, call best friend, mute, unmute, volume up, volume down, brightness up, brightness down, increase, decrease, dim, silence, music, song, track, weather today, weather tomorrow, forecast, rain, snow, air quality, steps today, steps this week, weekly steps, sleep score, sleep score yesterday, sleep score last week, heart rate today, weekly heart rate, calories today, calories yesterday, spo2 today, spo2 yesterday, stress alert, set stress 80%, set heart rate high 120, set heart rate low 50, set spo2 low 90, set distance goal 5 km, set steps goal 10000, set calories goal 2000, update sleep goal 8 hours, hiking, running, walking, treadmill, swimming, rowing, yoga, meditation, cycling, indoor cycling, strength training, workout start, workout stop, workout pause, open weather, open spo2, measure spo2, show trend, weekly trend, last week, yesterday, today, tomorrow, DND, enable DND, disable DND, AOD on, AOD off, raise to wake on, raise to wake off, vibration on, vibration off"
+private const val PROMPT = "Voice commands, Start Running, stop, start, record, play, pause, resume, next, previous, open, left, right, go, back, help, exit, set an, alarm, timer, stopwatch, set an alarm, set alarm, set timer 5 min, start stopwatch, stop timer, reset stopwatch, pause timer, resume timer, call mom, call dad, call john, call alex, call sister, call brother, call wife, call husband, call shreya, call best friend, mute, unmute, volume up, volume down, brightness up, brightness down, increase, decrease, dim, silence, music, song, track, what's the weather today, weather tomorrow, forecast, rain, snow, air quality, steps today, steps this week, weekly steps, sleep score, sleep score yesterday, sleep score last week, what is my heart rate today, weekly heart rate, how much calories today, calories yesterday, spo2 level today, spo2 yesterday, stress alert, set stress 80%, set heart rate high 120, set heart rate low 50, set spo2 low 90, set distance goal 5 km, set steps goal 10000, set calories goal 2000, update sleep goal 8 hours, hiking, running, walking, treadmill, swimming, rowing, yoga, meditation, cycling, indoor cycling, strength training, workout start, workout stop, workout pause, open weather, open spo2, measure spo2, show trend, weekly trend, last week, yesterday, today, tomorrow, DND, enable DND, disable DND, AOD on, AOD off, raise to wake on, raise to wake off, vibration on, vibration off"
 
 class MainScreenViewModel(private val application: Application) : AndroidViewModel(application) {
     var canTranscribe by mutableStateOf(false)
@@ -66,6 +66,8 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
     // For real-time transcription
     private val audioRecorder = AudioStreamRecorder()
     var currentTranscript by mutableStateOf("")
+        private set
+    var transcriptionTime by mutableStateOf("")
         private set
     private var isProcessing by mutableStateOf(false)
         private set
@@ -147,6 +149,11 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
     private fun generateTimestamp(): String {
         val dateFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss-SSS", Locale.getDefault())
         return dateFormat.format(Date())
+    }
+
+    private fun getCurrentTimeString(): String {
+        val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+        return timeFormat.format(Date())
     }
 
     private suspend fun saveAudioToFile(audioData: FloatArray, timestamp: String): File? = withContext(Dispatchers.IO) {
@@ -422,6 +429,7 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
         stopPlayback()
         isRecording = true
         currentTranscript = "Listening..."
+        transcriptionTime = ""
         isProcessing = true
         
         // Generate timestamp for this recording session
@@ -437,9 +445,14 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
                                 // Clear previous transcript since we're processing a new command
                                 withContext(Dispatchers.Main) {
                                     currentTranscript = "Processing..."
+                                    transcriptionTime = ""
                                 }
                                 
+                                // Measure transcription time
+                                val transcriptionStart = System.currentTimeMillis()
                                 val result = context.transcribeData(audioChunk, printTimestamp = false, prompt = PROMPT)
+                                val transcriptionElapsed = System.currentTimeMillis() - transcriptionStart
+                                
                                 if (result.isNotBlank()) {
                                     val timestamp = currentRecordingTimestamp ?: generateTimestamp()
                                     
@@ -449,7 +462,9 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
                                     withContext(Dispatchers.Main) {
                                         // Replace transcript with new result since it's a command
                                         currentTranscript = result.trim()
+                                        transcriptionTime = "Transcribed in ${transcriptionElapsed}ms at ${getCurrentTimeString()}"
                                         printMessage("Command detected: $result\n")
+                                        printMessage("Transcription time: ${transcriptionElapsed}ms\n")
                                         printMessage("Saved to: ${audioFile?.name}\n")
                                     }
                                     

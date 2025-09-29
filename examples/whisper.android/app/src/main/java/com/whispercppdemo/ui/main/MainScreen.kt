@@ -21,6 +21,7 @@ fun MainScreen(viewModel: MainScreenViewModel) {
         isRecording = viewModel.isRecording,
         messageLog = viewModel.dataLog,
         currentTranscript = viewModel.currentTranscript,
+        transcriptionTime = viewModel.transcriptionTime,
         storageLocation = viewModel.getStorageLocation(),
         csvLocation = viewModel.getCsvLocation(),
         isStorageAccessible = viewModel.isStorageAccessible(),
@@ -37,6 +38,7 @@ private fun MainScreen(
     isRecording: Boolean,
     messageLog: String,
     currentTranscript: String,
+    transcriptionTime: String,
     storageLocation: String,
     csvLocation: String,
     isStorageAccessible: Boolean,
@@ -87,6 +89,15 @@ private fun MainScreen(
                             Text(
                                 text = currentTranscript,
                                 style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        
+                        if (transcriptionTime.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = transcriptionTime,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
