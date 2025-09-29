@@ -99,7 +99,15 @@ static int whisper_bench_full(const whisper_params & params) {
     }
 
     // text-generation heat
-    if (int ret = whisper_decode(ctx, tokens, 1, 256, params.n_threads) != 0) {
+    for (int i = 0; i < 256; i++) {
+        if (int ret = whisper_decode(ctx, tokens, 1, i, params.n_threads) != 0) {
+            fprintf(stderr, "error: failed to decode: %d\n", ret);
+            return 4;
+        }
+    }
+
+    // batched heat
+    if (int ret = whisper_decode(ctx, tokens, 5, 0, params.n_threads) != 0) {
         fprintf(stderr, "error: failed to decode: %d\n", ret);
         return 4;
     }
