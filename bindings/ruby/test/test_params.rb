@@ -16,6 +16,7 @@ class TestParams < TestBase
     :max_len,
     :split_on_word,
     :initial_prompt,
+    :carry_initial_prompt,
     :diarize,
     :offset,
     :duration,
@@ -117,6 +118,13 @@ class TestParams < TestBase
     assert @params.print_timestamps
     @params.print_timestamps = false
     assert !@params.print_timestamps
+  end
+
+  def test_carry_initial_prompt
+    @params.carry_initial_prompt = true
+    assert @params.carry_initial_prompt
+    @params.carry_initial_prompt = false
+    assert !@params.carry_initial_prompt
   end
 
   def test_suppress_blank
