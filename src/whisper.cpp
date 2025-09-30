@@ -3592,7 +3592,7 @@ int whisper_ctx_init_openvino_encoder(
 struct whisper_context_params whisper_context_default_params() {
     struct whisper_context_params result = {
         /*.use_gpu              =*/ true,
-        /*.flash_attn           =*/ false,
+        /*.flash_attn           =*/ true,
         /*.gpu_device           =*/ 0,
 
         /*.dtw_token_timestamps =*/ false,

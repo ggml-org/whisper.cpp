@@ -101,7 +101,7 @@ struct whisper_params {
     bool print_progress  = false;
     bool no_timestamps   = false;
     bool use_gpu         = true;
-    bool flash_attn      = false;
+    bool flash_attn      = true;
     bool suppress_nst    = false;
     bool no_context      = false;
     bool no_language_probabilities = false;
@@ -178,7 +178,8 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -nth N,    --no-speech-thold N [%-7.2f] no speech threshold\n",   params.no_speech_thold);
     fprintf(stderr, "  -nc,       --no-context        [%-7s] do not use previous audio context\n", params.no_context ? "true" : "false");
     fprintf(stderr, "  -ng,       --no-gpu            [%-7s] do not use gpu\n", params.use_gpu ? "false" : "true");
-    fprintf(stderr, "  -fa,       --flash-attn        [%-7s] flash attention\n", params.flash_attn ? "true" : "false");
+    fprintf(stderr, "  -fa,       --flash-attn        [%-7s] enable flash attention\n", params.flash_attn ? "true" : "false");
+    fprintf(stderr, "  -nfa,      --no-flash-attn     [%-7s] disable flash attention\n", params.flash_attn ? "false" : "true");
     fprintf(stderr, "  -nlp,      --no-language-probabilities [%-7s] exclude language probabilities from verbose_json output\n", params.no_language_probabilities ? "true" : "false");
     // Voice Activity Detection (VAD) parameters
     fprintf(stderr, "\nVoice Activity Detection (VAD) options:\n");
@@ -236,6 +237,7 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params, serve
         else if (arg == "-dtw"  || arg == "--dtw")             { params.dtw             = argv[++i]; }
         else if (arg == "-ng"   || arg == "--no-gpu")          { params.use_gpu         = false; }
         else if (arg == "-fa"   || arg == "--flash-attn")      { params.flash_attn      = true; }
+        else if (arg == "-nfa"  || arg == "--no-flash-attn")   { params.flash_attn      = false; }
         else if (arg == "-sns"  || arg == "--suppress-nst")    { params.suppress_nst    = true; }
         else if (arg == "-nth"  || arg == "--no-speech-thold") { params.no_speech_thold = std::stof(argv[++i]); }
         else if (arg == "-nc"   || arg == "--no-context")      { params.no_context      = true; }
