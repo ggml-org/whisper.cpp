@@ -67,6 +67,12 @@ jobs:
           cp ${build_dir}/stream.wasm/{index.html,stream.js,helpers.js} ${target_dir}
           cp ${build_dir}/libstream.js ${target_dir}
 
+          # wchess.wasm
+          target_dir=staging/wchess.wasm
+          mkdir -p ${target_dir}
+          cp -r ${build_dir}/wchess.wasm/{index.html,css,img,js} ${target_dir}
+          cp ${build_dir}/wchess.wasm.js ${target_dir}
+
           # whisper.wasm (this will be the main example page)
           target_dir=staging
           mkdir -p ${target_dir}
