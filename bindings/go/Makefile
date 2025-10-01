@@ -46,8 +46,18 @@ endif
 
 examples: $(EXAMPLES_DIR)
 
+benchmark: model-small whisper modtidy
+ifeq ($(UNAME_S),Darwin)
+	@C_INCLUDE_PATH=${INCLUDE_PATH} LIBRARY_PATH=${LIBRARY_PATH} GGML_METAL_PATH_RESOURCES=${GGML_METAL_PATH_RESOURCES} go test -ldflags "-extldflags '$(EXT_LDFLAGS)'" -bench=BenchmarkContextProcess -benchmem -run '^$$' ./pkg/whisper/...
+else
+	@C_INCLUDE_PATH=${INCLUDE_PATH} LIBRARY_PATH=${LIBRARY_PATH} go test -benchmem -run '^$$' ./pkg/whisper/...
+endif
+
 model-small: mkdir examples/go-model-download
 	@${BUILD_DIR}/go-model-download -out models ggml-small.en.bin
+
+model-small-tdrz: mkdir examples/go-model-download
+	@${BUILD_DIR}/go-model-download -out models ggml-small.en-tdrz.bin
 
 $(EXAMPLES_DIR): mkdir whisper modtidy
 	@echo Build example $(notdir $@)
@@ -56,6 +66,14 @@ ifeq ($(UNAME_S),Darwin)
 else
 	@C_INCLUDE_PATH=${INCLUDE_PATH} LIBRARY_PATH=${LIBRARY_PATH} go build ${BUILD_FLAGS} -o ${BUILD_DIR}/$(notdir $@) ./$@
 endif
+
+.PHONY: samples
+samples:
+	@echo "Downloading samples..."
+	@mkdir -p samples
+	@wget --quiet --show-progress -O samples/a13.mp3 https://upload.wikimedia.org/wikipedia/commons/transcoded/6/6f/Apollo13-wehaveaproblem.ogg/Apollo13-wehaveaproblem.ogg.mp3
+	@ffmpeg -loglevel -0 -y -i samples/a13.mp3 -ar 16000 -ac 1 -c:a pcm_s16le -ss 00:00:00 -to 00:00:30 samples/a13.wav
+	@rm samples/a13.mp3
 
 mkdir:
 	@echo Mkdir ${BUILD_DIR}
