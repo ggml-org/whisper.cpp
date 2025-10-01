@@ -30,7 +30,7 @@ class TestWhisper < TestBase
   end
 
   def test_transcribe_n_processors
-    @whisper = Whisper::Context.new("base.en")
+    @whisper = Whisper::Context.new("base.en", flash_attn: false)
     params  = Whisper::Params.new
 
     @whisper.transcribe(AUDIO, params, n_processors: 4) {|text|
