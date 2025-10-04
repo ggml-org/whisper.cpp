@@ -5421,6 +5421,9 @@ struct whisper_vad_segments * whisper_vad_segments_from_samples(
 
 void whisper_vad_free(whisper_vad_context * ctx) {
     if (ctx) {
+        if (ctx->buffer) {
+            ggml_backend_buffer_free(ctx->buffer);
+        }
         for (ggml_context * context : ctx->model.ctxs) {
             ggml_free(context);
         }
