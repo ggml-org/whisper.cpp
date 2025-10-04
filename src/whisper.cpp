@@ -5434,7 +5434,12 @@ void whisper_vad_free(whisper_vad_context * ctx) {
         for (auto & backend : ctx->backends) {
             ggml_backend_free(backend);
         }
+
         ggml_free(ctx->ctx);
+
+        delete[] ctx->model.hparams.encoder_in_channels;
+        delete[] ctx->model.hparams.encoder_out_channels;
+        delete[] ctx->model.hparams.kernel_sizes;
 
         delete ctx;
     }
