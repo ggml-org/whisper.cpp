@@ -4694,6 +4694,7 @@ static bool whisper_vad_init_context(whisper_vad_context * vctx) {
 
         WHISPER_LOG_INFO("%s: compute buffer (VAD)   = %7.2f MB\n", __func__, whisper_sched_size(vctx->sched) / 1e6);
     }
+    ggml_free(ctx);
 
     return true;
 }
