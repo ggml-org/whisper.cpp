@@ -4402,7 +4402,6 @@ struct whisper_vad_context {
     std::vector<ggml_backend_t> backends;
     ggml_backend_buffer_t       buffer = nullptr;
     whisper_context_params      params;
-    ggml_context *              ctx = nullptr;
     std::vector<uint8_t>        ctx_buf;
     whisper_sched               sched;
 
@@ -4662,21 +4661,21 @@ static bool whisper_vad_init_context(whisper_vad_context * vctx) {
         /*.no_alloc   =*/ true,
     };
 
-    vctx->ctx = ggml_init(params);
-    if (!vctx->ctx) {
+    ggml_context * ctx = ggml_init(params);
+    if (!ctx) {
         WHISPER_LOG_ERROR("%s: failed to init LSTM state ggml context\n", __func__);
         return false;
     }
 
     // LSTM Hidden state
-    vctx->h_state = ggml_new_tensor_1d(vctx->ctx, GGML_TYPE_F32, lstm_hidden_size);
+    vctx->h_state = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, lstm_hidden_size);
     ggml_set_name(vctx->h_state, "h_state");
 
     // LSTM Cell state
-    vctx->c_state = ggml_new_tensor_1d(vctx->ctx, GGML_TYPE_F32, lstm_hidden_size);
+    vctx->c_state = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, lstm_hidden_size);
     ggml_set_name(vctx->c_state, "c_state");
 
-    vctx->buffer = ggml_backend_alloc_ctx_tensors(vctx->ctx, vctx->backends[0]);
+    vctx->buffer = ggml_backend_alloc_ctx_tensors(ctx, vctx->backends[0]);
     if (!vctx->buffer) {
         WHISPER_LOG_ERROR("%s: failed to allocate memory for the VAD state\n", __func__);
         return false;
@@ -5437,8 +5436,6 @@ void whisper_vad_free(whisper_vad_context * ctx) {
         for (auto & backend : ctx->backends) {
             ggml_backend_free(backend);
         }
-
-        ggml_free(ctx->ctx);
 
         delete[] ctx->model.hparams.encoder_in_channels;
         delete[] ctx->model.hparams.encoder_out_channels;
