@@ -4676,6 +4676,7 @@ static bool whisper_vad_init_context(whisper_vad_context * vctx) {
     ggml_set_name(vctx->c_state, "c_state");
 
     vctx->buffer = ggml_backend_alloc_ctx_tensors(ctx, vctx->backends[0]);
+    ggml_free(ctx);
     if (!vctx->buffer) {
         WHISPER_LOG_ERROR("%s: failed to allocate memory for the VAD state\n", __func__);
         return false;
@@ -4694,7 +4695,6 @@ static bool whisper_vad_init_context(whisper_vad_context * vctx) {
 
         WHISPER_LOG_INFO("%s: compute buffer (VAD)   = %7.2f MB\n", __func__, whisper_sched_size(vctx->sched) / 1e6);
     }
-    ggml_free(ctx);
 
     return true;
 }
