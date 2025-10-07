@@ -7,7 +7,7 @@ import (
 	"time"
 
 	// Packages
-	whisper "github.com/ggerganov/whisper.cpp/bindings/go"
+	whisper "github.com/ggml-org/whisper.cpp/bindings/go"
 	wav "github.com/go-audio/wav"
 	assert "github.com/stretchr/testify/assert"
 )
