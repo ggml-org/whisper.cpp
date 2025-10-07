@@ -3592,7 +3592,7 @@ int whisper_ctx_init_openvino_encoder(
 struct whisper_context_params whisper_context_default_params() {
     struct whisper_context_params result = {
         /*.use_gpu              =*/ true,
-        /*.flash_attn           =*/ false,
+        /*.flash_attn           =*/ true,
         /*.gpu_device           =*/ 0,
 
         /*.dtw_token_timestamps =*/ false,
@@ -4676,6 +4676,7 @@ static bool whisper_vad_init_context(whisper_vad_context * vctx) {
     ggml_set_name(vctx->c_state, "c_state");
 
     vctx->buffer = ggml_backend_alloc_ctx_tensors(ctx, vctx->backends[0]);
+    ggml_free(ctx);
     if (!vctx->buffer) {
         WHISPER_LOG_ERROR("%s: failed to allocate memory for the VAD state\n", __func__);
         return false;
@@ -5420,6 +5421,9 @@ struct whisper_vad_segments * whisper_vad_segments_from_samples(
 
 void whisper_vad_free(whisper_vad_context * ctx) {
     if (ctx) {
+        if (ctx->buffer) {
+            ggml_backend_buffer_free(ctx->buffer);
+        }
         for (ggml_context * context : ctx->model.ctxs) {
             ggml_free(context);
         }
@@ -5434,6 +5438,9 @@ void whisper_vad_free(whisper_vad_context * ctx) {
             ggml_backend_free(backend);
         }
 
+        delete[] ctx->model.hparams.encoder_in_channels;
+        delete[] ctx->model.hparams.encoder_out_channels;
+        delete[] ctx->model.hparams.kernel_sizes;
 
         delete ctx;
     }

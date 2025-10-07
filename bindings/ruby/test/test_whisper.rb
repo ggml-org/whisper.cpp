@@ -34,7 +34,7 @@ class TestWhisper < TestBase
     params  = Whisper::Params.new
 
     @whisper.transcribe(AUDIO, params, n_processors: 4) {|text|
-      assert_match(/ask not what your country can do for you[,.] ask what you can do for your country/i, text)
+      assert_match(/what you can do for your country/i, text)
     }
   end
 

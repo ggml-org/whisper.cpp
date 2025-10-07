@@ -66,7 +66,7 @@ struct whisper_params {
     float top_p = 0.80f;
     float min_p = 0.01f;
     float temp  = 0.30f;
-    
+
     float vad_thold  = 0.6f;
     float freq_thold = 100.0f;
 
@@ -76,7 +76,7 @@ struct whisper_params {
     bool no_timestamps  = true;
     bool verbose_prompt = false;
     bool use_gpu        = true;
-    bool flash_attn     = false;
+    bool flash_attn     = true;
 
     std::string person      = "Georgi";
     std::string bot_name    = "LLaMA";
@@ -122,6 +122,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-vp"  || arg == "--verbose-prompt") { params.verbose_prompt = true; }
         else if (arg == "-ng"  || arg == "--no-gpu")         { params.use_gpu        = false; }
         else if (arg == "-fa"  || arg == "--flash-attn")     { params.flash_attn     = true; }
+        else if (arg == "-nfa" || arg == "--no-flash-attn")  { params.flash_attn     = false; }
         else if (arg == "-p"   || arg == "--person")         { params.person         = argv[++i]; }
         else if (arg == "-bn"   || arg == "--bot-name")      { params.bot_name       = argv[++i]; }
         else if (arg == "--session")                         { params.path_session   = argv[++i]; }
@@ -175,7 +176,8 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -pe,      --print-energy   [%-7s] print sound energy (for debugging)\n",          params.print_energy ? "true" : "false");
     fprintf(stderr, "  -vp,      --verbose-prompt [%-7s] print prompt at start\n",                       params.verbose_prompt ? "true" : "false");
     fprintf(stderr, "  -ng,      --no-gpu         [%-7s] disable GPU\n",                                 params.use_gpu ? "false" : "true");
-    fprintf(stderr, "  -fa,      --flash-attn     [%-7s] flash attention\n",                             params.flash_attn ? "true" : "false");
+    fprintf(stderr, "  -fa,      --flash-attn     [%-7s] enable flash attention\n",                      params.flash_attn ? "true" : "false");
+    fprintf(stderr, "  -nfa,     --no-flash-attn  [%-7s] disable flash attention\n",                     params.flash_attn ? "false" : "true");
     fprintf(stderr, "  -p NAME,  --person NAME    [%-7s] person name (for prompt selection)\n",          params.person.c_str());
     fprintf(stderr, "  -bn NAME, --bot-name NAME  [%-7s] bot name (to display)\n",                       params.bot_name.c_str());
     fprintf(stderr, "  -w TEXT,  --wake-command T [%-7s] wake-up command to listen for\n",               params.wake_cmd.c_str());
