@@ -334,7 +334,7 @@ func toSegment(ctx *whisper.Context, n int) Segment {
 
 func toTokens(ctx *whisper.Context, n int) []Token {
 	result := make([]Token, ctx.Whisper_full_n_tokens(n))
-	for i := 0; i < len(result); i++ {
+	for i := range result {
 		data := ctx.Whisper_full_get_token_data(n, i)
 
 		result[i] = Token{

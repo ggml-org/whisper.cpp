@@ -58,7 +58,7 @@ func Test_Whisper_001(t *testing.T) {
 	// Print out tokens
 	num_segments := ctx.Whisper_full_n_segments()
 	assert.GreaterOrEqual(num_segments, 1)
-	for i := 0; i < num_segments; i++ {
+	for i := range num_segments {
 		str := ctx.Whisper_full_get_segment_text(i)
 		assert.NotEmpty(str)
 		t0 := time.Duration(ctx.Whisper_full_get_segment_t0(i)) * time.Millisecond
