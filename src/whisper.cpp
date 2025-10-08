@@ -7582,12 +7582,12 @@ int whisper_full_with_state(
 
             //WHISPER_LOG_DEBUG("prompt_init.size() = %d, prompt.size() = %d, result_len = %d, seek_delta = %d\n", prompt_init.size(), prompt.size(), result_len, seek_delta);
 
-            if (!params.carry_initial_prompt) {
-                prompt_past1.clear();
-                if (!prompt.empty() && prompt.front() == whisper_token_prev(ctx)) {
-                    prompt_past1.insert(prompt_past1.end(), prompt.begin() + 1, prompt.end() - prompt_init.size());
-                }
+            // update prompt_past1
+            prompt_past1.clear();
+            if (!prompt.empty() && prompt.front() == whisper_token_prev(ctx)) {
+                prompt_past1.insert(prompt_past1.end(), prompt.begin() + 1, prompt.end() - prompt_init.size());
             }
+
             if (!is_no_speech) {
                 for (int i = 0; i < result_len; ++i) {
                     prompt_past1.push_back(tokens_cur[i].id);
