@@ -24,9 +24,9 @@ mkdir -p "$2"
 OUT=$(realpath "$1")
 MNT=$(realpath "$2")
 
-rm -f "$OUT/*.log"
-rm -f "$OUT/*.exit"
-rm -f "$OUT/*.md"
+rm -vf $OUT/*.log
+rm -vf $OUT/*.exit
+rm -vf $OUT/*.md
 
 sd=`dirname $0`
 cd $sd/../
@@ -50,8 +50,35 @@ fi
 
 CMAKE_EXTRA="-DWHISPER_FATAL_WARNINGS=ON"
 
+if [ ! -z ${GG_BUILD_METAL} ]; then
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=ON"
+fi
+
 if [ ! -z ${GG_BUILD_CUDA} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=native"
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_CUDA=ON"
+
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d '.')
+        if [[ -n "$CUDA_ARCH" && "$CUDA_ARCH" =~ ^[0-9]+$ ]]; then
+            CMAKE_EXTRA="${CMAKE_EXTRA} -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCH}"
+        else
+            echo "Warning: Using fallback CUDA architectures"
+            CMAKE_EXTRA="${CMAKE_EXTRA} -DCMAKE_CUDA_ARCHITECTURES=61;70;75;80;86;89"
+        fi
+    else
+        echo "Error: nvidia-smi not found, cannot build with CUDA"
+        exit 1
+    fi
+fi
+
+if [ ! -z ${GG_BUILD_ROCM} ]; then
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_HIP=ON"
+    if [ -z ${GG_BUILD_AMDGPU_TARGETS} ]; then
+        echo "Missing GG_BUILD_AMDGPU_TARGETS, please set it to your GPU architecture (e.g. gfx90a, gfx1100, etc.)"
+        exit 1
+    fi
+
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DAMDGPU_TARGETS=${GG_BUILD_AMDGPU_TARGETS}"
 fi
 
 if [ ! -z ${GG_BUILD_SYCL} ]; then
@@ -60,28 +87,38 @@ if [ ! -z ${GG_BUILD_SYCL} ]; then
         echo "source /opt/intel/oneapi/setvars.sh"
         exit 1
     fi
-
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON"
-fi
-
-if [ ! -z ${GG_BUILD_OPENVINO} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DWHISPER_OPENVINO=ON"
-fi
-
-if [ ! -z ${GG_BUILD_METAL} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=ON"
+    # Use only main GPU
+    export ONEAPI_DEVICE_SELECTOR="level_zero:0"
+    # Enable sysman for correct memory reporting
+    export ZES_ENABLE_SYSMAN=1
+    # to circumvent precision issues on CPY operations
+    export SYCL_PROGRAM_COMPILE_OPTIONS="-cl-fp32-correctly-rounded-divide-sqrt"
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_SYCL=1 -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON"
 fi
 
 if [ ! -z ${GG_BUILD_VULKAN} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_VULKAN=ON"
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_VULKAN=1"
+
+    # if on Mac, disable METAL
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=OFF -DGGML_BLAS=OFF"
+    fi
+
 fi
 
-if [ ! -z ${GG_BUILD_BLAS} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_BLAS=ON"
+if [ ! -z ${GG_BUILD_WEBGPU} ]; then
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_WEBGPU=1"
 fi
 
-if [ ! -z ${GG_BUILD_COREML} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DWHISPER_COREML=ON"
+if [ ! -z ${GG_BUILD_MUSA} ]; then
+    # Use qy1 by default (MTT S80)
+    MUSA_ARCH=${MUSA_ARCH:-21}
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_MUSA=ON -DMUSA_ARCHITECTURES=${MUSA_ARCH}"
+fi
+
+if [ ! -z ${GG_BUILD_NO_SVE} ]; then
+    # arm 9 and newer enables sve by default, adjust these flags depending on the cpu used
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.5-a+fp16+i8mm"
 fi
 
 ## helpers
@@ -178,7 +215,7 @@ function gg_run_ctest {
     mode=$2
 
     cd ${SRC}
-    
+
     rm -rf build-ci-${mode} && mkdir build-ci-${mode} && cd build-ci-${mode}
 
     set -e
@@ -209,7 +246,7 @@ function gg_run_bench {
     cd ${SRC}
 
     # set flash attention flag if enabled
-    fattn=""
+    fattn="-nfa"
     if [ "$BENCH_FLASH_ATTN" -eq 1 ]; then
         fattn="-fa"
     fi
@@ -219,7 +256,7 @@ function gg_run_bench {
         echo "Running memcpy benchmark"
         (time ./build-ci-release/bin/whisper-bench -w 1 -t $BENCH_N_THREADS 2>&1) | tee -a $OUT/${ci}-memcpy.log
         gg_check_last_command_status "$OUT/${ci}-memcpy.exit" "memcpy benchmark"
-        
+
         echo "Running ggml_mul_mat benchmark with $BENCH_N_THREADS threads"
         (time ./build-ci-release/bin/whisper-bench -w 2 -t $BENCH_N_THREADS 2>&1) | tee -a $OUT/${ci}-mul_mat.log
         gg_check_last_command_status "$OUT/${ci}-mul_mat.exit" "ggml_mul_mat benchmark"
@@ -232,6 +269,8 @@ function gg_run_bench {
         printf "| %16s | %13s | %3s | %3s | %7s | %7s | %7s | %7s | %7s |\n" "Config" "Model" "Th" "FA" "Enc." "Dec." "Bch5" "PP" "Commit"
         printf "| %16s | %13s | %3s | %3s | %7s | %7s | %7s | %7s | %7s |\n" "---" "---" "---" "---" "---" "---" "---" "---" "---"
     } | tee -a $OUT/${ci}-models-table.log
+
+    res=0
 
     # run benchmark for each model
     for model in "${MODELS[@]}"; do
@@ -283,8 +322,11 @@ function gg_run_bench {
                 | tee -a $OUT/${ci}-models-table.log
         else
             echo "Benchmark failed for model: $model" | tee -a $OUT/${ci}-bench-errors.log
+            res=1
         fi
     done
+
+    return $res
 }
 
 function gg_sum_bench {
@@ -326,11 +368,12 @@ ret=0
 for model in "${MODELS[@]}"; do
     test $ret -eq 0 && gg_download_model ${model}
 done
-if [ -z ${GG_BUILD_SYCL}]; then
-    test $ret -eq 0 && gg_run ctest debug
-fi
+
+test $ret -eq 0 && gg_run ctest debug
 test $ret -eq 0 && gg_run ctest release
 
 test $ret -eq 0 && gg_run bench
+
+cat $OUT/README.md
 
 exit $ret

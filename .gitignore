@@ -15,6 +15,7 @@
 build/
 build-*/
 build_*/
+tmp/
 
 # SPM
 .build/
