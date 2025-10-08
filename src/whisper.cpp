@@ -6893,6 +6893,8 @@ int whisper_full_with_state(
     // prepare prompt
     {
         std::vector<whisper_token> prompt_tokens;
+
+        // tokenize the initial prompt
         if (!params.prompt_tokens && params.initial_prompt) {
             prompt_tokens.resize(1024);
             int n_needed = whisper_tokenize(ctx, params.initial_prompt, prompt_tokens.data(), prompt_tokens.size());
@@ -6907,10 +6909,13 @@ int whisper_full_with_state(
         if (params.prompt_tokens && params.prompt_n_tokens > 0) {
             if (params.carry_initial_prompt) {
                 if (prompt_past0.empty()) {
-                    prompt_past0.insert(prompt_past0.end(), params.prompt_tokens, params.prompt_tokens + params.prompt_n_tokens);
+                    prompt_past0.assign(params.prompt_tokens, params.prompt_tokens + params.prompt_n_tokens);
                 }
             } else {
-                prompt_past1.insert(prompt_past1.end(), params.prompt_tokens, params.prompt_tokens + params.prompt_n_tokens);
+                for (int i = 0; i < params.prompt_n_tokens; ++i) {
+                    prompt_past1.push_back(params.prompt_tokens[i]);
+                }
+                std::rotate(prompt_past1.begin(), prompt_past1.end() - params.prompt_n_tokens, prompt_past1.end());
             }
         }
     }
@@ -6968,7 +6973,6 @@ int whisper_full_with_state(
     std::vector<beam_candidate> beam_candidates;
 
     // main loop
-    bool first_history_iter = true; // track first decode iteration for carry_initial_prompt logic
     while (true) {
         if (params.progress_callback) {
             const int progress_cur = (100*(seek - seek_start))/(seek_end - seek_start);
@@ -7063,39 +7067,37 @@ int whisper_full_with_state(
                     t_cur < WHISPER_HISTORY_CONDITIONING_TEMP_CUTOFF) {
 
                     const bool have_dynamic = !prompt_past1.empty();
-                    const bool can_carry_static = params.carry_initial_prompt && !prompt_past0.empty() && !first_history_iter;
+                    const bool can_carry_static = params.carry_initial_prompt && !prompt_past0.empty() && seek != seek_start;
 
-                    if (have_dynamic || can_carry_static) {
-                        int max_ctx_half = std::min(params.n_max_text_ctx, whisper_n_text_ctx(ctx)/2);
-                        if (max_ctx_half > 0) {
-                            // Always start with previous token marker to connect continuity
-                            prompt.push_back(whisper_token_prev(ctx));
+                    int max_ctx_half = std::min(params.n_max_text_ctx, whisper_n_text_ctx(ctx)/2);
+                    if (max_ctx_half > 0 && (have_dynamic || can_carry_static)) {
+                        // Always start with previous token marker to connect continuity
+                        prompt.push_back(whisper_token_prev(ctx));
 
-                            if (can_carry_static) {
-                                // Budget includes the prev token; we already consumed 1 slot.
-                                int budget = max_ctx_half; // total allowed (including prev)
+                        if (can_carry_static) {
+                            // Budget includes the prev token; we already consumed 1 slot.
+                            int budget = max_ctx_half; // total allowed (including prev)
 
-                                // Take as many static tokens as fit (reserving at least the prev token already placed)
-                                int take_static = std::min(budget - 1, (int) prompt_past0.size());
-                                if (take_static > 0) {
-                                    auto start0 = take_static < (int) prompt_past0.size() ? prompt_past0.end() - take_static : prompt_past0.begin();
-                                    prompt.insert(prompt.end(), start0, prompt_past0.end());
+                            // Take as many static tokens as fit (reserving at least the prev token already placed)
+                            int take_static = std::min(budget - 1, (int) prompt_past0.size());
+                            if (take_static > 0) {
+                                auto start0 = take_static < (int) prompt_past0.size() ? prompt_past0.end() - take_static : prompt_past0.begin();
+                                prompt.insert(prompt.end(), start0, prompt_past0.end());
+                            }
+
+                            // Remaining budget for dynamic tail
+                            int remaining = budget - take_static;
+                            if (remaining > 0) {
+                                int take_dynamic = std::min(remaining, (int) prompt_past1.size());
+                                if (take_dynamic > 0) {
+                                    prompt.insert(prompt.end(), prompt_past1.end() - take_dynamic, prompt_past1.end());
                                 }
-
-                                // Remaining budget for dynamic tail
-                                int remaining = budget - take_static;
-                                if (remaining > 0) {
-                                    int take_dynamic = std::min(remaining, (int) prompt_past1.size());
-                                    if (take_dynamic > 0) {
-                                        prompt.insert(prompt.end(), prompt_past1.end() - take_dynamic, prompt_past1.end());
-                                    }
-                                }
-                            } else {
-                                // Dynamic only path
-                                int n_take = std::min(max_ctx_half, (int) prompt_past1.size());
-                                if (n_take > 0) {
-                                    prompt.insert(prompt.end(), prompt_past1.end() - n_take, prompt_past1.end());
-                                }
+                            }
+                        } else {
+                            // Dynamic only path
+                            int n_take = std::min(max_ctx_half, (int) prompt_past1.size());
+                            if (n_take > 0) {
+                                prompt.insert(prompt.end(), prompt_past1.end() - n_take, prompt_past1.end());
                             }
                         }
                     }
@@ -7103,9 +7105,6 @@ int whisper_full_with_state(
 
                 // init new transcription with sot, language (opt) and task tokens
                 prompt.insert(prompt.end(), prompt_init.begin(), prompt_init.end());
-
-                // mark first iteration done
-                first_history_iter = false;
 
                 // print the prompt
                 WHISPER_LOG_DEBUG("\n\n");
@@ -7586,8 +7585,7 @@ int whisper_full_with_state(
             if (!params.carry_initial_prompt) {
                 prompt_past1.clear();
                 if (!prompt.empty() && prompt.front() == whisper_token_prev(ctx)) {
-                    auto start_it = prompt.begin() + 1;
-                    prompt_past1.insert(prompt_past1.end(), start_it, prompt.end() - prompt_init.size());
+                    prompt_past1.insert(prompt_past1.end(), prompt.begin() + 1, prompt.end() - prompt_init.size());
                 }
             }
             if (!is_no_speech) {
