@@ -6620,6 +6620,9 @@ static bool whisper_vad(
 
     whisper_vad_segments * vad_segments = whisper_vad_segments_from_samples(vctx, vad_params, samples, n_samples);
 
+    if(!vad_segments)
+        return false;
+
     if (vad_segments->data.size() > 0) {
         state->has_vad_segments = true;
         ctx->state->vad_segments.clear();
@@ -6662,7 +6665,6 @@ static bool whisper_vad(
         } catch (const std::bad_alloc & /* e */) {
             WHISPER_LOG_ERROR("%s: failed to allocate memory for filtered samples\n", __func__);
             whisper_vad_free_segments(vad_segments);
-            whisper_vad_free(vctx);
             return false;
         }
 
@@ -6768,6 +6770,7 @@ static bool whisper_vad(
                         __func__, n_samples, filtered_n_samples, 100.0f * (1.0f - (float)filtered_n_samples / n_samples));
     }
 
+    whisper_vad_free_segments(vad_segments);
     return true;
 }
 
