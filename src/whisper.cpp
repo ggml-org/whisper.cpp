@@ -14,6 +14,8 @@
 #include "openvino/whisper-openvino-encoder.h"
 #endif
 
+#include <termcolor/termcolor.hpp>
+
 #include <atomic>
 #include <algorithm>
 #include <cassert>
@@ -22,11 +24,13 @@
 #include <cmath>
 #include <climits>
 #include <codecvt>
+#include <cstdint>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <functional>
+#include <iostream>
 #include <map>
 #include <mutex>
 #include <random>
@@ -1841,6 +1845,10 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
 
             size_t size_main = ggml_backend_buffer_get_size(buf);
             WHISPER_LOG_INFO("%s: %12s total size = %8.2f MB\n", __func__, ggml_backend_buffer_name(buf), size_main / 1e6);
+        } else {
+            WHISPER_LOG_ERROR("%s: failed to allocate backend buffer for %s\n", __func__, ggml_backend_buft_name(buft));
+            WHISPER_LOG_ERROR("%s: not enough memory available - try using a smaller model or reducing GPU usage\n", __func__);
+            return false;
         }
     }
 
@@ -4970,6 +4978,10 @@ struct whisper_vad_context * whisper_vad_init_with_params(
 
             size_t size_main = ggml_backend_buffer_get_size(buf);
             WHISPER_LOG_INFO("%s: %12s total size = %8.2f MB\n", __func__, ggml_backend_buffer_name(buf), size_main / 1e6);
+        } else {
+            WHISPER_LOG_ERROR("%s: failed to allocate backend buffer for %s\n", __func__, ggml_backend_buft_name(buft));
+            WHISPER_LOG_ERROR("%s: not enough memory available - try using a smaller model or reducing GPU usage\n", __func__);
+            return nullptr;
         }
     }
 
@@ -8976,13 +8988,27 @@ static void whisper_log_internal(ggml_log_level level, const char * format, ...)
 }
 
 static void whisper_log_callback_default(ggml_log_level level, const char * text, void * user_data) {
-    (void) level;
     (void) user_data;
 #ifndef WHISPER_DEBUG
     if (level == GGML_LOG_LEVEL_DEBUG) {
         return;
     }
 #endif
-    fputs(text, stderr);
+    
+    // Apply colors based on log level
+    switch (level) {
+        case GGML_LOG_LEVEL_ERROR:
+            std::cerr << termcolor::red << text << termcolor::reset;
+            break;
+        case GGML_LOG_LEVEL_WARN:
+            std::cerr << termcolor::yellow << text << termcolor::reset;
+            break;
+        case GGML_LOG_LEVEL_INFO:
+            std::cerr << termcolor::cyan << text << termcolor::reset;
+            break;
+        default:
+            fputs(text, stderr);
+            break;
+    }
     fflush(stderr);
 }

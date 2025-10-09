@@ -126,6 +126,7 @@ if (WHISPER_EXTRA_FLAGS)
 endif()
 
 target_link_libraries(whisper PUBLIC ggml)
+target_link_libraries(whisper PRIVATE termcolor::termcolor)
 
 if (WHISPER_COREML)
     target_link_libraries(whisper PRIVATE whisper.coreml)

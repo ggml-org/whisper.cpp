@@ -5,13 +5,17 @@
 #include "grammar-parser.h"
 
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <cstdio>
+#include <iostream>
 #include <string>
 #include <thread>
 #include <vector>
 #include <cstring>
 #include <cfloat>
+
+#include <termcolor/termcolor.hpp>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -77,6 +81,7 @@ struct whisper_params {
     bool use_gpu         = true;
     bool flash_attn      = true;
     bool suppress_nst    = false;
+    bool verbose         = false;
 
     std::string language  = "en";
     std::string prompt;
@@ -208,6 +213,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-vmsd" || arg == "--vad-max-speech-duration-s")   { params.vad_max_speech_duration_s   = std::stof(ARGV_NEXT); }
         else if (arg == "-vp"   || arg == "--vad-speech-pad-ms")           { params.vad_speech_pad_ms           = std::stoi(ARGV_NEXT); }
         else if (arg == "-vo"   || arg == "--vad-samples-overlap")         { params.vad_samples_overlap         = std::stof(ARGV_NEXT); }
+        else if (arg == "-v"    || arg == "--verbose")                     { params.verbose                     = true; }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             whisper_print_usage(argc, argv, params);
@@ -258,6 +264,7 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  -ojf,      --output-json-full  [%-7s] include more information in the JSON file\n",      params.output_jsn_full ? "true" : "false");
     fprintf(stderr, "  -of FNAME, --output-file FNAME [%-7s] output file path (without file extension)\n",      "");
     fprintf(stderr, "  -np,       --no-prints         [%-7s] do not print anything other than the results\n",   params.no_prints ? "true" : "false");
+    fprintf(stderr, "  -v,        --verbose           [%-7s] enable verbose output (show INFO level messages)\n",  params.verbose ? "true" : "false");
     fprintf(stderr, "  -ps,       --print-special     [%-7s] print special tokens\n",                           params.print_special ? "true" : "false");
     fprintf(stderr, "  -pc,       --print-colors      [%-7s] print colors\n",                                   params.print_colors ? "true" : "false");
     fprintf(stderr, "             --print-confidence  [%-7s] print confidence\n",                               params.print_confidence ? "true" : "false");
@@ -910,6 +917,41 @@ static void output_lrc(struct whisper_context * ctx, std::ofstream & fout, const
 
 static void cb_log_disable(enum ggml_log_level , const char * , void * ) { }
 
+// Custom log callback that filters INFO messages based on verbose flag
+struct log_filter_data {
+    bool verbose;
+};
+
+static void cb_log_filter(enum ggml_log_level level, const char * text, void * user_data) {
+    log_filter_data * data = (log_filter_data *) user_data;
+    
+    // Apply colors based on log level (same as whisper.cpp default callback)
+    switch (level) {
+        case GGML_LOG_LEVEL_ERROR:
+            std::cerr << termcolor::red << text << termcolor::reset;
+            break;
+        case GGML_LOG_LEVEL_WARN:
+            std::cerr << termcolor::yellow << text << termcolor::reset;
+            break;
+        case GGML_LOG_LEVEL_INFO:
+            // Show info messages only if verbose is enabled
+            if (data->verbose) {
+                std::cerr << termcolor::cyan << text << termcolor::reset;
+            }
+            break;
+        case GGML_LOG_LEVEL_DEBUG:
+            // Show debug messages only in debug mode
+            #ifdef WHISPER_DEBUG
+            std::cerr << text;
+            #endif
+            break;
+        default:
+            std::cerr << text;
+            break;
+    }
+    std::cerr.flush();
+}
+
 int main(int argc, char ** argv) {
     ggml_backend_load_all();
 
@@ -987,8 +1029,15 @@ int main(int argc, char ** argv) {
         exit(0);
     }
 
+    // Setup logging based on flags
+    static log_filter_data log_data;
+    log_data.verbose = params.verbose;
+    
     if (params.no_prints) {
         whisper_log_set(cb_log_disable, NULL);
+    } else {
+        // Use custom log filter to control INFO messages
+        whisper_log_set(cb_log_filter, &log_data);
     }
 
     // whisper init
@@ -1046,7 +1095,8 @@ int main(int argc, char ** argv) {
         if (grammar.rules.empty()) {
             fprintf(stderr, "error: failed to parse grammar \"%s\"\n", params.grammar.c_str());
             return 4;
-        } else {
+        } else if (params.verbose) {
+            // Only print grammar in verbose mode
             fprintf(stderr, "%s: grammar:\n", __func__);
             grammar_parser::print_grammar(stderr, grammar);
             fprintf(stderr, "\n");
@@ -1123,8 +1173,8 @@ int main(int argc, char ** argv) {
             params.language = "auto";
         }
 
-        if (!params.no_prints) {
-            // print system information
+        if (!params.no_prints && params.verbose) {
+            // print system information (only in verbose mode)
             fprintf(stderr, "\n");
             fprintf(stderr, "system_info: n_threads = %d / %d | %s\n",
                     params.n_threads*params.n_processors, std::thread::hardware_concurrency(), whisper_print_system_info());
@@ -1260,6 +1310,12 @@ int main(int argc, char ** argv) {
                 fprintf(stderr, "%s: failed to process audio\n", argv[0]);
                 return 10;
             }
+            
+            // Add newline after transcription output for clean formatting
+            if (!params.no_prints) {
+                printf("\n");
+                fflush(stdout);
+            }
         }
 
         // output stuff
@@ -1288,7 +1344,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    if (!params.no_prints) {
+    if (!params.no_prints && params.verbose) {
         whisper_print_timings(ctx);
     }
     whisper_free(ctx);
