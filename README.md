@@ -336,7 +336,7 @@ First, make sure your graphics card driver provides support for Vulkan API.
 
 Now build `whisper.cpp` with Vulkan support:
 ```
-cmake -B build -DGGML_VULKAN=1
+cmake -B build -DGGML_VULKAN=1 -DWHISPER_SDL2=ON
 cmake --build build -j --config Release
 ```
 
