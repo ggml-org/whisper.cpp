@@ -7067,24 +7067,21 @@ int whisper_full_with_state(
                     const bool can_take0 = params.carry_initial_prompt && !prompt_past0.empty() && seek != seek_start;
                     const bool can_take1 = !prompt_past1.empty();
 
-                    int max_ctx_half = std::min(params.n_max_text_ctx, whisper_n_text_ctx(ctx) / 2);
+                    const int max_ctx_half = std::min(params.n_max_text_ctx, whisper_n_text_ctx(ctx) / 2);
                     if (max_ctx_half > 0 && (can_take0 || can_take1)) {
                         // Always start with previous token marker to connect continuity
                         prompt.push_back(whisper_token_prev(ctx));
 
+                        // Take static tokens (initial prompt) first, up to budget minus the prev token
                         int n_take0 = 0;
                         if (can_take0) {
                             n_take0 = std::min<int>(max_ctx_half - 1, prompt_past0.size());
-                            if (n_take0 > 0) {
-                                auto start0 = n_take0 < (int)prompt_past0.size() ? prompt_past0.end() - n_take0 : prompt_past0.begin();
-                                prompt.insert(prompt.end(), start0, prompt_past0.end());
-                            }
+                            prompt.insert(prompt.end(), prompt_past0.end() - n_take0, prompt_past0.end());
                         }
 
-                        int n_take1 = std::min<int>(max_ctx_half - n_take0 - 1, prompt_past1.size());
-                        if (n_take1 > 0) {
-                            prompt.insert(prompt.end(), prompt_past1.end() - n_take1, prompt_past1.end());
-                        }
+                        // Fill remaining budget with dynamic tokens (rolling context)
+                        const int n_take1 = std::min<int>(max_ctx_half - n_take0 - 1, prompt_past1.size());
+                        prompt.insert(prompt.end(), prompt_past1.end() - n_take1, prompt_past1.end());
                     }
                 }
 
