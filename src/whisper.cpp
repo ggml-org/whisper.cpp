@@ -6806,6 +6806,13 @@ int whisper_full_with_state(
         params.language = whisper_lang_str(lang_id);
 
         WHISPER_LOG_INFO("%s: auto-detected language: %s (p = %f)\n", __func__, params.language, probs[whisper_lang_id(params.language)]);
+        for (const auto & kv : g_lang) {
+            const float prob = probs[kv.second.first];
+            WHISPER_LOG_INFO("%s: language prob: %s (p = %f)\n",
+                             __func__,
+                             kv.first.c_str(),
+                             prob);
+        }
         if (params.detect_language) {
             return 0;
         }
