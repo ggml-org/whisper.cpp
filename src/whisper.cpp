@@ -7064,7 +7064,7 @@ int whisper_full_with_state(
                 prompt.clear();
 
                 if (params.n_max_text_ctx > 0 && t_cur < WHISPER_HISTORY_CONDITIONING_TEMP_CUTOFF) {
-                    const bool can_take0 = params.carry_initial_prompt && !prompt_past0.empty() && seek != seek_start;
+                    const bool can_take0 = params.carry_initial_prompt && !prompt_past0.empty();
                     const bool can_take1 = !prompt_past1.empty();
 
                     const int max_ctx_half = std::min(params.n_max_text_ctx, whisper_n_text_ctx(ctx) / 2);
