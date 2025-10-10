@@ -6890,6 +6890,9 @@ int whisper_full_with_state(
         prompt_past1.clear();
     }
 
+    // calculate the maximum context budget for prompt history
+    const int max_prompt_ctx = std::min(params.n_max_text_ctx, whisper_n_text_ctx(ctx)/2);
+
     // prepare prompt
     {
         std::vector<whisper_token> prompt_tokens;
@@ -6909,7 +6912,15 @@ int whisper_full_with_state(
         if (params.prompt_tokens && params.prompt_n_tokens > 0) {
             if (params.carry_initial_prompt) {
                 if (prompt_past0.empty()) {
-                    prompt_past0.assign(params.prompt_tokens, params.prompt_tokens + params.prompt_n_tokens);
+                    const int max_tokens = std::max(1, max_prompt_ctx - 1);
+
+                    if (params.prompt_n_tokens > max_tokens) {
+                        WHISPER_LOG_WARN("%s: initial prompt is too long (%d tokens), will use only the last %d tokens\n",
+                                        __func__, params.prompt_n_tokens, max_tokens);
+                    }
+
+                    const int n_tokens = std::min(params.prompt_n_tokens, max_tokens);
+                    prompt_past0.assign(params.prompt_tokens + (params.prompt_n_tokens - n_tokens), params.prompt_tokens + params.prompt_n_tokens);
                 }
             } else {
                 for (int i = 0; i < params.prompt_n_tokens; ++i) {
@@ -7068,20 +7079,19 @@ int whisper_full_with_state(
                     const bool can_take0 = params.carry_initial_prompt && !prompt_past0.empty();
                     const bool can_take1 = !prompt_past1.empty();
 
-                    const int max_ctx_half = std::min(params.n_max_text_ctx, whisper_n_text_ctx(ctx) / 2);
-                    if (max_ctx_half > 0 && (can_take0 || can_take1)) {
+                    if (max_prompt_ctx > 0 && (can_take0 || can_take1)) {
                         // Always start with previous token marker to connect continuity
                         prompt.push_back(whisper_token_prev(ctx));
 
                         // Take static tokens (initial prompt) first, up to budget minus the prev token
                         int n_take0 = 0;
                         if (can_take0) {
-                            n_take0 = std::min<int>(max_ctx_half - 1, prompt_past0.size());
+                            n_take0 = std::min<int>(max_prompt_ctx - 1, prompt_past0.size());
                             prompt.insert(prompt.end(), prompt_past0.end() - n_take0, prompt_past0.end());
                         }
 
                         // Fill remaining budget with dynamic tokens (rolling context)
-                        const int n_take1 = std::min<int>(max_ctx_half - n_take0 - 1, prompt_past1.size());
+                        const int n_take1 = std::min<int>(max_prompt_ctx - n_take0 - 1, prompt_past1.size());
                         prompt.insert(prompt.end(), prompt_past1.end() - n_take1, prompt_past1.end());
                     }
                 }
