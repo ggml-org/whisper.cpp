@@ -7083,10 +7083,10 @@ int whisper_full_with_state(
                         // Always start with previous token marker to connect continuity
                         prompt.push_back(whisper_token_prev(ctx));
 
-                        // Take static tokens (initial prompt) first, up to budget minus the prev token
+                        // Take static tokens (initial prompt) first
                         int n_take0 = 0;
                         if (can_take0) {
-                            n_take0 = std::min<int>(max_prompt_ctx - 1, prompt_past0.size());
+                            n_take0 = prompt_past0.size();
                             prompt.insert(prompt.end(), prompt_past0.end() - n_take0, prompt_past0.end());
                         }
 
