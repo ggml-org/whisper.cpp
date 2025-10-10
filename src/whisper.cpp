@@ -6805,7 +6805,7 @@ int whisper_full_with_state(
         state->lang_id = lang_id;
         params.language = whisper_lang_str(lang_id);
 
-        WHISPER_LOG_INFO("%s: auto-detected language: %s (p = %f)\n", __func__, params.language, probs[whisper_lang_id(params.language)]);
+        WHISPER_LOG_INFO("%s: auto-detected language: %s (p = %f)\n", __func__, params.language, probs[lang_id]);
         const auto & sorted_logits_id = state->decoders[0].logits_id;
         for (const auto & prob : sorted_logits_id) {
             const auto lang_id = prob.second;
