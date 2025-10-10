@@ -7063,42 +7063,27 @@ int whisper_full_with_state(
             {
                 prompt.clear();
 
-                if (params.n_max_text_ctx > 0 &&
-                    t_cur < WHISPER_HISTORY_CONDITIONING_TEMP_CUTOFF) {
+                if (params.n_max_text_ctx > 0 && t_cur < WHISPER_HISTORY_CONDITIONING_TEMP_CUTOFF) {
+                    const bool can_take0 = params.carry_initial_prompt && !prompt_past0.empty() && seek != seek_start;
+                    const bool can_take1 = !prompt_past1.empty();
 
-                    const bool have_dynamic = !prompt_past1.empty();
-                    const bool can_carry_static = params.carry_initial_prompt && !prompt_past0.empty() && seek != seek_start;
-
-                    int max_ctx_half = std::min(params.n_max_text_ctx, whisper_n_text_ctx(ctx)/2);
-                    if (max_ctx_half > 0 && (have_dynamic || can_carry_static)) {
+                    int max_ctx_half = std::min(params.n_max_text_ctx, whisper_n_text_ctx(ctx) / 2);
+                    if (max_ctx_half > 0 && (can_take0 || can_take1)) {
                         // Always start with previous token marker to connect continuity
                         prompt.push_back(whisper_token_prev(ctx));
 
-                        if (can_carry_static) {
-                            // Budget includes the prev token; we already consumed 1 slot.
-                            int budget = max_ctx_half; // total allowed (including prev)
-
-                            // Take as many static tokens as fit (reserving at least the prev token already placed)
-                            int take_static = std::min(budget - 1, (int) prompt_past0.size());
-                            if (take_static > 0) {
-                                auto start0 = take_static < (int) prompt_past0.size() ? prompt_past0.end() - take_static : prompt_past0.begin();
+                        int n_take0 = 0;
+                        if (can_take0) {
+                            n_take0 = std::min<int>(max_ctx_half - 1, prompt_past0.size());
+                            if (n_take0 > 0) {
+                                auto start0 = n_take0 < (int)prompt_past0.size() ? prompt_past0.end() - n_take0 : prompt_past0.begin();
                                 prompt.insert(prompt.end(), start0, prompt_past0.end());
                             }
+                        }
 
-                            // Remaining budget for dynamic tail
-                            int remaining = budget - take_static;
-                            if (remaining > 0) {
-                                int take_dynamic = std::min(remaining, (int) prompt_past1.size());
-                                if (take_dynamic > 0) {
-                                    prompt.insert(prompt.end(), prompt_past1.end() - take_dynamic, prompt_past1.end());
-                                }
-                            }
-                        } else {
-                            // Dynamic only path
-                            int n_take = std::min(max_ctx_half, (int) prompt_past1.size());
-                            if (n_take > 0) {
-                                prompt.insert(prompt.end(), prompt_past1.end() - n_take, prompt_past1.end());
-                            }
+                        int n_take1 = std::min<int>(max_ctx_half - n_take0 - 1, prompt_past1.size());
+                        if (n_take1 > 0) {
+                            prompt.insert(prompt.end(), prompt_past1.end() - n_take1, prompt_past1.end());
                         }
                     }
                 }
