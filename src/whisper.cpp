@@ -7002,6 +7002,7 @@ int whisper_full_with_state(
         // if there is a very short audio segment left to process, we remove any past prompt since it tends
         // to confuse the decoder and often make it repeat or hallucinate stuff
         if (seek > seek_start && seek + 500 >= seek_end) {
+            prompt_past0.clear();
             prompt_past1.clear();
         }
 
