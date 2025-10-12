@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <fstream>
 #include <string>
+#include <cctype>
 #include <thread>
 #include <vector>
 
@@ -37,6 +38,7 @@ struct whisper_params {
     bool save_audio    = false; // save audio to wav file
     bool use_gpu       = true;
     bool flash_attn    = true;
+    bool file_on_new_line = false;
 
     std::string language  = "en";
     std::string model     = "models/ggml-base.en.bin";
@@ -44,6 +46,14 @@ struct whisper_params {
 };
 
 void whisper_print_usage(int argc, char ** argv, const whisper_params & params);
+
+static std::string trim_copy(const std::string & s) {
+    size_t b = 0;
+    while (b < s.size() && std::isspace(static_cast<unsigned char>(s[b]))) b++;
+    size_t e = s.size();
+    while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1]))) e--;
+    return s.substr(b, e - b);
+}
 
 static bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
     for (int i = 1; i < argc; i++) {
@@ -70,6 +80,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-l"    || arg == "--language")      { params.language      = argv[++i]; }
         else if (arg == "-m"    || arg == "--model")         { params.model         = argv[++i]; }
         else if (arg == "-f"    || arg == "--file")          { params.fname_out     = argv[++i]; }
+        else if (                  arg == "--file-on-newline"){ params.file_on_new_line = true; }
         else if (arg == "-tdrz" || arg == "--tinydiarize")   { params.tinydiarize   = true; }
         else if (arg == "-sa"   || arg == "--save-audio")    { params.save_audio    = true; }
         else if (arg == "-ng"   || arg == "--no-gpu")        { params.use_gpu       = false; }
@@ -109,6 +120,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -l LANG,  --language LANG [%-7s] spoken language\n",                                params.language.c_str());
     fprintf(stderr, "  -m FNAME, --model FNAME   [%-7s] model path\n",                                     params.model.c_str());
     fprintf(stderr, "  -f FNAME, --file FNAME    [%-7s] text output file name\n",                          params.fname_out.c_str());
+    fprintf(stderr, "            --file-on-newline [%-7s] write to file only when newline is printed\n",  params.file_on_new_line ? "true" : "false");
     fprintf(stderr, "  -tdrz,    --tinydiarize   [%-7s] enable tinydiarize (requires a tdrz model)\n",     params.tinydiarize ? "true" : "false");
     fprintf(stderr, "  -sa,      --save-audio    [%-7s] save the recorded audio to a file\n",              params.save_audio ? "true" : "false");
     fprintf(stderr, "  -ng,      --no-gpu        [%-7s] disable GPU inference\n",                          params.use_gpu ? "false" : "true");
@@ -211,6 +223,8 @@ int main(int argc, char ** argv) {
     bool is_running = true;
 
     std::ofstream fout;
+    std::string file_buffer;
+    std::string last_flushed_output;
     if (params.fname_out.length() > 0) {
         fout.open(params.fname_out);
         if (!fout.is_open()) {
@@ -345,6 +359,11 @@ int main(int argc, char ** argv) {
 
             // print result;
             {
+                const bool capture_iteration = params.fname_out.length() > 0 && params.file_on_new_line;
+                if (capture_iteration) {
+                    file_buffer.clear();
+                }
+
                 if (!use_vad) {
                     printf("\33[2K\r");
 
@@ -370,7 +389,11 @@ int main(int argc, char ** argv) {
                         fflush(stdout);
 
                         if (params.fname_out.length() > 0) {
-                            fout << text;
+                            if (capture_iteration) {
+                                file_buffer += text;
+                            } else {
+                                fout << text;
+                            }
                         }
                     } else {
                         const int64_t t0 = whisper_full_get_segment_t0(ctx, i);
@@ -388,13 +411,21 @@ int main(int argc, char ** argv) {
                         fflush(stdout);
 
                         if (params.fname_out.length() > 0) {
-                            fout << output;
+                            if (capture_iteration) {
+                                file_buffer += output;
+                            } else {
+                                fout << output;
+                            }
                         }
                     }
                 }
 
                 if (params.fname_out.length() > 0) {
-                    fout << std::endl;
+                    if (capture_iteration) {
+                        file_buffer.push_back('\n');
+                    } else {
+                        fout << std::endl;
+                    }
                 }
 
                 if (use_vad) {
@@ -404,6 +435,27 @@ int main(int argc, char ** argv) {
             }
 
             ++n_iter;
+
+            if (params.file_on_new_line && params.fname_out.length() > 0) {
+                if (use_vad || (!use_vad && (n_iter % n_new_line) == 0)) {
+                    if (!file_buffer.empty()) {
+                        const std::string candidate = file_buffer;
+                        // compute incremental suffix compared to last flushed snapshot
+                        size_t lcp = 0;
+                        const size_t maxcp = std::min(candidate.size(), last_flushed_output.size());
+                        while (lcp < maxcp && candidate[lcp] == last_flushed_output[lcp]) {
+                            ++lcp;
+                        }
+                        const std::string to_append = candidate.substr(lcp);
+                        if (!trim_copy(to_append).empty()) {
+                            fout << to_append;
+                            fout.flush();
+                        }
+                        last_flushed_output = candidate;
+                        file_buffer.clear();
+                    }
+                }
+            }
 
             if (!use_vad && (n_iter % n_new_line) == 0) {
                 printf("\n");
@@ -429,6 +481,22 @@ int main(int argc, char ** argv) {
     }
 
     audio.pause();
+
+    if (params.file_on_new_line && params.fname_out.length() > 0 && !file_buffer.empty()) {
+        const std::string candidate = file_buffer;
+        size_t lcp = 0;
+        const size_t maxcp = std::min(candidate.size(), last_flushed_output.size());
+        while (lcp < maxcp && candidate[lcp] == last_flushed_output[lcp]) {
+            ++lcp;
+        }
+        const std::string to_append = candidate.substr(lcp);
+        if (!trim_copy(to_append).empty()) {
+            fout << to_append;
+            fout.flush();
+        }
+        last_flushed_output = candidate;
+        file_buffer.clear();
+    }
 
     whisper_print_timings(ctx);
     whisper_free(ctx);
