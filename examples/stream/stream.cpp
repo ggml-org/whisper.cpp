@@ -38,7 +38,7 @@ struct whisper_params {
     bool save_audio    = false; // save audio to wav file
     bool use_gpu       = true;
     bool flash_attn    = true;
-    bool file_on_new_line = false;
+    int  file_mode     = 0; // 0=raw, 1=newline, 2=diff
 
     std::string language  = "en";
     std::string model     = "models/ggml-base.en.bin";
@@ -70,6 +70,23 @@ static std::vector<std::string> split_lines_keep_nl(const std::string & s) {
     return lines;
 }
 
+static int file_mode_from_string(const std::string & mode) {
+    if (mode == "raw")     return 0;
+    if (mode == "newline") return 1;
+    if (mode == "diff")    return 2;
+    fprintf(stderr, "error: unknown --file-mode '%s' (expected: raw|newline|diff)\n", mode.c_str());
+    exit(1);
+}
+
+static const char * file_mode_to_cstr(int mode) {
+    switch (mode) {
+        case 0: return "raw";
+        case 1: return "newline";
+        case 2: return "diff";
+        default: return "raw";
+    }
+}
+
 static bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -95,7 +112,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-l"    || arg == "--language")      { params.language      = argv[++i]; }
         else if (arg == "-m"    || arg == "--model")         { params.model         = argv[++i]; }
         else if (arg == "-f"    || arg == "--file")          { params.fname_out     = argv[++i]; }
-        else if (                  arg == "--file-on-newline"){ params.file_on_new_line = true; }
+        else if (                  arg == "--file-mode")      { params.file_mode = file_mode_from_string(argv[++i]); }
         else if (arg == "-tdrz" || arg == "--tinydiarize")   { params.tinydiarize   = true; }
         else if (arg == "-sa"   || arg == "--save-audio")    { params.save_audio    = true; }
         else if (arg == "-ng"   || arg == "--no-gpu")        { params.use_gpu       = false; }
@@ -135,7 +152,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -l LANG,  --language LANG [%-7s] spoken language\n",                                params.language.c_str());
     fprintf(stderr, "  -m FNAME, --model FNAME   [%-7s] model path\n",                                     params.model.c_str());
     fprintf(stderr, "  -f FNAME, --file FNAME    [%-7s] text output file name\n",                          params.fname_out.c_str());
-    fprintf(stderr, "            --file-on-newline [%-7s] write to file only when newline is printed\n",  params.file_on_new_line ? "true" : "false");
+    fprintf(stderr, "            --file-mode MODE [%-7s] file write mode: raw|newline|diff (default raw)\n", file_mode_to_cstr(params.file_mode));
     fprintf(stderr, "  -tdrz,    --tinydiarize   [%-7s] enable tinydiarize (requires a tdrz model)\n",     params.tinydiarize ? "true" : "false");
     fprintf(stderr, "  -sa,      --save-audio    [%-7s] save the recorded audio to a file\n",              params.save_audio ? "true" : "false");
     fprintf(stderr, "  -ng,      --no-gpu        [%-7s] disable GPU inference\n",                          params.use_gpu ? "false" : "true");
@@ -262,7 +279,7 @@ int main(int argc, char ** argv) {
     printf("[Start speaking]\n");
     if (params.fname_out.length() > 0) {
         // Mirror the start signal into the file for parity with stdout
-        if (params.file_on_new_line) {
+        if (params.file_mode != 0) {
             last_flushed_output += std::string("[Start speaking]\n");
         }
         fout << "[Start speaking]\n";
@@ -382,7 +399,7 @@ int main(int argc, char ** argv) {
 
             // print result;
             {
-                const bool capture_iteration = params.fname_out.length() > 0 && params.file_on_new_line;
+                const bool capture_iteration = params.fname_out.length() > 0 && (params.file_mode != 0);
                 if (capture_iteration) {
                     file_buffer.clear();
                 }
@@ -459,30 +476,32 @@ int main(int argc, char ** argv) {
 
             ++n_iter;
 
-            if (params.file_on_new_line && params.fname_out.length() > 0) {
+            if ((params.file_mode != 0) && params.fname_out.length() > 0) {
                 if (use_vad || (!use_vad && (n_iter % n_new_line) == 0)) {
                     if (!file_buffer.empty()) {
                         const std::string candidate = file_buffer;
-                        // line-based incremental append to avoid partial token corruption
-                        const auto cand_lines = split_lines_keep_nl(candidate);
-                        const auto last_lines = split_lines_keep_nl(last_flushed_output);
-                        size_t i = 0;
-                        while (i < cand_lines.size() && i < last_lines.size() && cand_lines[i] == last_lines[i]) {
-                            ++i;
-                        }
-                        // Append remaining complete lines
-                        bool wrote_any = false;
-                        for (; i < cand_lines.size(); ++i) {
-                            const auto & ln = cand_lines[i];
-                            if (!trim_copy(ln).empty()) {
-                                fout << ln;
-                                wrote_any = true;
-                            } else {
-                                // still mirror whitespace-only to preserve structure if already writing
-                                if (wrote_any) fout << ln;
+                        if (params.file_mode == 2) { // diff
+                            const auto cand_lines = split_lines_keep_nl(candidate);
+                            const auto last_lines = split_lines_keep_nl(last_flushed_output);
+                            size_t i = 0;
+                            while (i < cand_lines.size() && i < last_lines.size() && cand_lines[i] == last_lines[i]) {
+                                ++i;
                             }
+                            bool wrote_any = false;
+                            for (; i < cand_lines.size(); ++i) {
+                                const auto & ln = cand_lines[i];
+                                if (!trim_copy(ln).empty()) {
+                                    fout << ln;
+                                    wrote_any = true;
+                                } else {
+                                    if (wrote_any) fout << ln;
+                                }
+                            }
+                            if (wrote_any) fout.flush();
+                        } else { // newline
+                            fout << candidate;
+                            fout.flush();
                         }
-                        if (wrote_any) fout.flush();
                         last_flushed_output = candidate;
                         file_buffer.clear();
                     }
@@ -514,25 +533,30 @@ int main(int argc, char ** argv) {
 
     audio.pause();
 
-    if (params.file_on_new_line && params.fname_out.length() > 0 && !file_buffer.empty()) {
+    if ((params.file_mode != 0) && params.fname_out.length() > 0 && !file_buffer.empty()) {
         const std::string candidate = file_buffer;
-        const auto cand_lines = split_lines_keep_nl(candidate);
-        const auto last_lines = split_lines_keep_nl(last_flushed_output);
-        size_t i = 0;
-        while (i < cand_lines.size() && i < last_lines.size() && cand_lines[i] == last_lines[i]) {
-            ++i;
-        }
-        bool wrote_any = false;
-        for (; i < cand_lines.size(); ++i) {
-            const auto & ln = cand_lines[i];
-            if (!trim_copy(ln).empty()) {
-                fout << ln;
-                wrote_any = true;
-            } else {
-                if (wrote_any) fout << ln;
+        if (params.file_mode == 2) { // diff
+            const auto cand_lines = split_lines_keep_nl(candidate);
+            const auto last_lines = split_lines_keep_nl(last_flushed_output);
+            size_t i = 0;
+            while (i < cand_lines.size() && i < last_lines.size() && cand_lines[i] == last_lines[i]) {
+                ++i;
             }
+            bool wrote_any = false;
+            for (; i < cand_lines.size(); ++i) {
+                const auto & ln = cand_lines[i];
+                if (!trim_copy(ln).empty()) {
+                    fout << ln;
+                    wrote_any = true;
+                } else {
+                    if (wrote_any) fout << ln;
+                }
+            }
+            if (wrote_any) fout.flush();
+        } else { // newline
+            fout << candidate;
+            fout.flush();
         }
-        if (wrote_any) fout.flush();
         last_flushed_output = candidate;
         file_buffer.clear();
     }
