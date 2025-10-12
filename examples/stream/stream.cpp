@@ -371,8 +371,7 @@ int main(int argc, char ** argv) {
 
             // print result;
             {
-                const bool capture_iteration = params.fname_out.length() > 0 && (params.file_mode != 0);
-                if (capture_iteration) {
+                if (params.fname_out.length() > 0 && (params.file_mode != 0)) {
                     file_buffer.clear();
                 }
 
@@ -401,7 +400,7 @@ int main(int argc, char ** argv) {
                         fflush(stdout);
 
                         if (params.fname_out.length() > 0) {
-                            if (capture_iteration) {
+                            if (params.file_mode != 0) {
                                 file_buffer += text;
                             } else {
                                 fout << text;
@@ -423,7 +422,7 @@ int main(int argc, char ** argv) {
                         fflush(stdout);
 
                         if (params.fname_out.length() > 0) {
-                            if (capture_iteration) {
+                            if (params.file_mode != 0) {
                                 file_buffer += output;
                             } else {
                                 fout << output;
@@ -433,7 +432,7 @@ int main(int argc, char ** argv) {
                 }
 
                 if (params.fname_out.length() > 0) {
-                    if (capture_iteration) {
+                    if (params.file_mode != 0) {
                         file_buffer.push_back('\n');
                     } else {
                         fout << std::endl;
