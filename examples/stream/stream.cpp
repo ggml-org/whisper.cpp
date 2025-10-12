@@ -55,6 +55,21 @@ static std::string trim_copy(const std::string & s) {
     return s.substr(b, e - b);
 }
 
+static std::vector<std::string> split_lines_keep_nl(const std::string & s) {
+    std::vector<std::string> lines;
+    size_t start = 0;
+    while (start < s.size()) {
+        size_t pos = s.find('\n', start);
+        if (pos == std::string::npos) {
+            lines.emplace_back(s.substr(start));
+            break;
+        }
+        lines.emplace_back(s.substr(start, pos - start + 1));
+        start = pos + 1;
+    }
+    return lines;
+}
+
 static bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -245,6 +260,14 @@ int main(int argc, char ** argv) {
         wavWriter.open(filename, WHISPER_SAMPLE_RATE, 16, 1);
     }
     printf("[Start speaking]\n");
+    if (params.fname_out.length() > 0) {
+        // Mirror the start signal into the file for parity with stdout
+        if (params.file_on_new_line) {
+            last_flushed_output += std::string("[Start speaking]\n");
+        }
+        fout << "[Start speaking]\n";
+        fout.flush();
+    }
     fflush(stdout);
 
     auto t_last  = std::chrono::high_resolution_clock::now();
@@ -440,17 +463,26 @@ int main(int argc, char ** argv) {
                 if (use_vad || (!use_vad && (n_iter % n_new_line) == 0)) {
                     if (!file_buffer.empty()) {
                         const std::string candidate = file_buffer;
-                        // compute incremental suffix compared to last flushed snapshot
-                        size_t lcp = 0;
-                        const size_t maxcp = std::min(candidate.size(), last_flushed_output.size());
-                        while (lcp < maxcp && candidate[lcp] == last_flushed_output[lcp]) {
-                            ++lcp;
+                        // line-based incremental append to avoid partial token corruption
+                        const auto cand_lines = split_lines_keep_nl(candidate);
+                        const auto last_lines = split_lines_keep_nl(last_flushed_output);
+                        size_t i = 0;
+                        while (i < cand_lines.size() && i < last_lines.size() && cand_lines[i] == last_lines[i]) {
+                            ++i;
                         }
-                        const std::string to_append = candidate.substr(lcp);
-                        if (!trim_copy(to_append).empty()) {
-                            fout << to_append;
-                            fout.flush();
+                        // Append remaining complete lines
+                        bool wrote_any = false;
+                        for (; i < cand_lines.size(); ++i) {
+                            const auto & ln = cand_lines[i];
+                            if (!trim_copy(ln).empty()) {
+                                fout << ln;
+                                wrote_any = true;
+                            } else {
+                                // still mirror whitespace-only to preserve structure if already writing
+                                if (wrote_any) fout << ln;
+                            }
                         }
+                        if (wrote_any) fout.flush();
                         last_flushed_output = candidate;
                         file_buffer.clear();
                     }
@@ -484,16 +516,23 @@ int main(int argc, char ** argv) {
 
     if (params.file_on_new_line && params.fname_out.length() > 0 && !file_buffer.empty()) {
         const std::string candidate = file_buffer;
-        size_t lcp = 0;
-        const size_t maxcp = std::min(candidate.size(), last_flushed_output.size());
-        while (lcp < maxcp && candidate[lcp] == last_flushed_output[lcp]) {
-            ++lcp;
+        const auto cand_lines = split_lines_keep_nl(candidate);
+        const auto last_lines = split_lines_keep_nl(last_flushed_output);
+        size_t i = 0;
+        while (i < cand_lines.size() && i < last_lines.size() && cand_lines[i] == last_lines[i]) {
+            ++i;
         }
-        const std::string to_append = candidate.substr(lcp);
-        if (!trim_copy(to_append).empty()) {
-            fout << to_append;
-            fout.flush();
+        bool wrote_any = false;
+        for (; i < cand_lines.size(); ++i) {
+            const auto & ln = cand_lines[i];
+            if (!trim_copy(ln).empty()) {
+                fout << ln;
+                wrote_any = true;
+            } else {
+                if (wrote_any) fout << ln;
+            }
         }
+        if (wrote_any) fout.flush();
         last_flushed_output = candidate;
         file_buffer.clear();
     }
