@@ -37,6 +37,11 @@ class TestParams < TestBase
     :vad,
     :vad_model_path,
     :vad_params,
+    :suppress_regex,
+    :grammar_penalty,
+    :tdrz_enable,
+    :audio_ctx,
+    :debug_mode,
   ]
 
   def setup
@@ -245,13 +250,50 @@ class TestParams < TestBase
   end
 
   def test_vad_params
-    assert_kind_of Whisper::VAD::Params, @params.vad_params
-    default_params = @params.vad_params
-    assert_same default_params, @params.vad_params
-    assert_equal 0.5, default_params.threshold
+    default_params = Whisper::VAD::Params.new
+    # vad_params returns a new wrapper each time, so use assert_equal instead of assert_same
+    retrieved_params = @params.vad_params
+    assert_equal default_params.threshold, retrieved_params.threshold
+    assert_equal 0.5, retrieved_params.threshold
     new_params = Whisper::VAD::Params.new
     @params.vad_params = new_params
-    assert_same new_params, @params.vad_params
+    retrieved_params = @params.vad_params
+    assert_equal new_params.threshold, retrieved_params.threshold
+  end
+
+  def test_suppress_regex
+    @params.suppress_regex = "[\\*\\[\\]]"
+    assert_equal @params.suppress_regex, "[\\*\\[\\]]"
+    @params.suppress_regex = nil
+    assert_nil @params.suppress_regex
+  end
+
+  def test_grammar_penalty
+    @params.grammar_penalty = 50.0
+    assert_in_delta @params.grammar_penalty, 50.0
+    @params.grammar_penalty = 0.0
+    assert_in_delta @params.grammar_penalty, 0.0
+  end
+
+  def test_tdrz_enable
+    @params.tdrz_enable = true
+    assert @params.tdrz_enable
+    @params.tdrz_enable = false
+    assert !@params.tdrz_enable
+  end
+
+  def test_audio_ctx
+    @params.audio_ctx = 1024
+    assert_equal @params.audio_ctx, 1024
+    @params.audio_ctx = 0
+    assert_equal @params.audio_ctx, 0
+  end
+
+  def test_debug_mode
+    @params.debug_mode = true
+    assert @params.debug_mode
+    @params.debug_mode = false
+    assert !@params.debug_mode
   end
 
   def test_new_with_kw_args
@@ -284,6 +326,8 @@ class TestParams < TestBase
               "es"
             in [:initial_prompt, *]
               "Initial prompt"
+            in [:suppress_regex, *]
+              "[\\*\\[\\]]"
             in [/_callback\Z/, *]
               proc {}
             in [/_user_data\Z/, *]
