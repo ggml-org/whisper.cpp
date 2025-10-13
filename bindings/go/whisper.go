@@ -461,12 +461,18 @@ func Whisper_vad_default_context_params() C.struct_whisper_vad_context_params {
 	return C.whisper_vad_default_context_params()
 }
 
-// Initialize VAD context from file
+// Initialize VAD context from file with default parameters
 func Whisper_vad_init_from_file(path string) *VADContext {
+	params := Whisper_vad_default_context_params()
+	return Whisper_vad_init_from_file_with_params_struct(path, params)
+}
+
+// Initialize VAD context from file with struct parameters
+func Whisper_vad_init_from_file_with_params_struct(path string, params C.struct_whisper_vad_context_params) *VADContext {
 	cPath := C.CString(path)
 	defer C.free(unsafe.Pointer(cPath))
 
-	if vctx := C.whisper_vad_init_from_file(cPath); vctx != nil {
+	if vctx := C.whisper_vad_init_from_file_with_params(cPath, params); vctx != nil {
 		return (*VADContext)(vctx)
 	}
 	return nil
@@ -474,18 +480,12 @@ func Whisper_vad_init_from_file(path string) *VADContext {
 
 // Initialize VAD context from file with parameters
 func Whisper_vad_init_from_file_with_params(path string, nThreads int, useGPU bool, gpuDevice int) *VADContext {
-	cPath := C.CString(path)
-	defer C.free(unsafe.Pointer(cPath))
-
 	var cparams C.struct_whisper_vad_context_params
 	cparams.n_threads = C.int(nThreads)
 	cparams.use_gpu = C.bool(useGPU)
 	cparams.gpu_device = C.int(gpuDevice)
 
-	if vctx := C.whisper_vad_init_from_file_with_params(cPath, cparams); vctx != nil {
-		return (*VADContext)(vctx)
-	}
-	return nil
+	return Whisper_vad_init_from_file_with_params_struct(path, cparams)
 }
 
 // Free VAD context
