@@ -463,9 +463,8 @@ ggml_float ggml_vec_cvar_f32(const int n, float * y, const float * x, const floa
 #endif
     for (; i < n; ++i) {
         float val = x[i] - mean;
-        val *= val;
-        sum += (ggml_float)val;
         y[i] = val;
+        sum += (ggml_float)(val*val);
     }
     return sum/n;
 }
