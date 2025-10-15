@@ -73,7 +73,6 @@ class TestSegment < TestBase
   end
 
   def test_transcription_after_segment_retrieved
-    params = Whisper::Params.new
     segment = whisper.each_segment.first
     assert_match(/ask not what your country can do for you, ask what you can do for your country/, segment.text)
 
