@@ -103,7 +103,7 @@ struct whisper_params {
     bool use_gpu         = true;
     bool flash_attn      = true;
     bool suppress_nst    = false;
-    bool no_context      = false;
+    bool no_context      = true;
     bool no_language_probabilities = false;
 
     std::string language        = "en";
@@ -176,7 +176,6 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  --convert,                     [%-7s] Convert audio to WAV, requires ffmpeg on the server\n", sparams.ffmpeg_converter ? "true" : "false");
     fprintf(stderr, "  -sns,      --suppress-nst      [%-7s] suppress non-speech tokens\n", params.suppress_nst ? "true" : "false");
     fprintf(stderr, "  -nth N,    --no-speech-thold N [%-7.2f] no speech threshold\n",   params.no_speech_thold);
-    fprintf(stderr, "  -nc,       --no-context        [%-7s] do not use previous audio context\n", params.no_context ? "true" : "false");
     fprintf(stderr, "  -ng,       --no-gpu            [%-7s] do not use gpu\n", params.use_gpu ? "false" : "true");
     fprintf(stderr, "  -fa,       --flash-attn        [%-7s] enable flash attention\n", params.flash_attn ? "true" : "false");
     fprintf(stderr, "  -nfa,      --no-flash-attn     [%-7s] disable flash attention\n", params.flash_attn ? "false" : "true");
@@ -240,7 +239,6 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params, serve
         else if (arg == "-nfa"  || arg == "--no-flash-attn")   { params.flash_attn      = false; }
         else if (arg == "-sns"  || arg == "--suppress-nst")    { params.suppress_nst    = true; }
         else if (arg == "-nth"  || arg == "--no-speech-thold") { params.no_speech_thold = std::stof(argv[++i]); }
-        else if (arg == "-nc"   || arg == "--no-context")      { params.no_context      = true; }
         else if (arg == "-nlp"  || arg == "--no-language-probabilities") { params.no_language_probabilities = true; }
 
         // server params
@@ -571,10 +569,6 @@ void get_req_parameters(const Request & req, whisper_params & params)
     if (req.has_file("suppress_nst"))
     {
         params.suppress_nst = parse_str_to_bool(req.get_file_value("suppress_nst").content);
-    }
-    if (req.has_file("no_context"))
-    {
-        params.no_context = parse_str_to_bool(req.get_file_value("no_context").content);
     }
     if (req.has_file("vad"))
     {
