@@ -671,6 +671,13 @@ extern "C" {
     WHISPER_API float whisper_full_get_token_p           (struct whisper_context * ctx, int i_segment, int i_token);
     WHISPER_API float whisper_full_get_token_p_from_state(struct whisper_state * state, int i_segment, int i_token);
 
+    // Get the start and end time of the specified token
+    WHISPER_API int64_t whisper_full_get_token_t0(struct whisper_context* ctx, int i_segment, int i_token);
+    WHISPER_API int64_t whisper_full_get_token_t0_from_state(struct whisper_state* state, struct whisper_token_data* token);
+
+    WHISPER_API int64_t whisper_full_get_token_t1(struct whisper_context* ctx, int i_segment, int i_token);
+    WHISPER_API int64_t whisper_full_get_token_t1_from_state(struct whisper_state* state, struct whisper_token_data* token);
+ 
     //
     // Voice Activity Detection (VAD)
     //
