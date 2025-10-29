@@ -55,6 +55,44 @@ On Apple Silicon, the inference runs fully on the GPU via Metal:
 
 https://github.com/ggml-org/whisper.cpp/assets/1991296/c82e8f86-60dc-49f2-b048-d2fdbd6b5225
 
+## Table of contents
+
+- [Quick start](#quick-start)
+- [More audio samples](#more-audio-samples)
+- [Memory usage](#memory-usage)
+- [POWER VSX Intrinsics](#power-vsx-intrinsics)
+- [Quantization](#quantization)
+- [Core ML support](#core-ml-support)
+- [OpenVINO support](#openvino-support)
+- [NVIDIA GPU support](#nvidia-gpu-support)
+- [Vulkan GPU support](#vulkan-gpu-support)
+- [BLAS CPU support via OpenBLAS](#blas-cpu-support-via-openblas)
+- [Ascend NPU support](#ascend-npu-support)
+- [Moore Threads GPU support](#moore-threads-gpu-support)
+- [FFmpeg support (Linux only)](#ffmpeg-support-linux-only)
+- [Docker](#docker)
+  - [Prerequisites](#prerequisites)
+  - [Images](#images)
+  - [Usage](#usage)
+- [Installing with Conan](#installing-with-conan)
+- [Limitations](#limitations)
+- [Real-time audio input example](#real-time-audio-input-example)
+- [Confidence color-coding](#confidence-color-coding)
+- [Controlling the length of the generated text segments (experimental)](#controlling-the-length-of-the-generated-text-segments-experimental)
+- [Word-level timestamp (experimental)](#word-level-timestamp-experimental)
+- [Speaker segmentation via tinydiarize (experimental)](#speaker-segmentation-via-tinydiarize-experimental)
+- [Karaoke-style movie generation (experimental)](#karaoke-style-movie-generation-experimental)
+- [Video comparison of different models](#video-comparison-of-different-models)
+- [Benchmarks](#benchmarks)
+- [`ggml` format](#ggml-format)
+- [Bindings](#bindings)
+- [XCFramework](#xcframework)
+- [Voice Activity Detection (VAD)](#voice-activity-detection-vad)
+  - [Silero-VAD](#silero-vad)
+  - [VAD Options](#vad-options)
+- [Examples](#examples)
+- [Discussions](#discussions)
+
 ## Quick start
 
 First clone the repository:
@@ -771,7 +809,7 @@ Downloading vad model silero-v5.1.2...
 Done! Model silero-v5.1.2 saved in C:\Users\danie\work\ai\whisper.cpp\ggml-silero-v5.1.2.bin
 You can now use it like this:
 
-C:\path\build\bin\Release\whisper-cli.exe -vm C:\path\ggml-silero-v5.1.2.bin --vad -m models/ggml-base.en.bin -f samples\jfk.wav
+C:\path\build\bin\Release\whisper-cli.exe -vm C:\path\ggml-silero-v5.1.2.bin --vad -m models\ggml-base.en.bin -f samples\jfk.wav
 
 ```
 
