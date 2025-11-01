@@ -18,6 +18,16 @@ endif()
 # Add path to modules
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
 
+# Add termcolor for colored terminal output
+include(FetchContent)
+FetchContent_Declare(
+    termcolor
+    GIT_REPOSITORY https://github.com/ikalnytskyi/termcolor.git
+    GIT_TAG        v2.1.0
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(termcolor)
+
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
