@@ -19,7 +19,7 @@ fi
 
 fattn=""
 if [ -z "$3" ] || [ "$3" -eq 0 ]; then
-    fattn=""
+    fattn="-nfa"
 else
     fattn="-fa"
 fi

@@ -5,6 +5,7 @@
 #include "grammar-parser.h"
 
 #include <cmath>
+#include <algorithm>
 #include <fstream>
 #include <cstdio>
 #include <string>
@@ -77,6 +78,7 @@ struct whisper_params {
     bool use_gpu         = true;
     bool flash_attn      = true;
     bool suppress_nst    = false;
+    bool carry_initial_prompt = false;
 
     std::string language  = "en";
     std::string prompt;
@@ -145,66 +147,67 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
             exit(0);
         }
         #define ARGV_NEXT (((i + 1) < argc) ? argv[++i] : requires_value_error(arg))
-        else if (arg == "-t"    || arg == "--threads")         { params.n_threads       = std::stoi(ARGV_NEXT); }
-        else if (arg == "-p"    || arg == "--processors")      { params.n_processors    = std::stoi(ARGV_NEXT); }
-        else if (arg == "-ot"   || arg == "--offset-t")        { params.offset_t_ms     = std::stoi(ARGV_NEXT); }
-        else if (arg == "-on"   || arg == "--offset-n")        { params.offset_n        = std::stoi(ARGV_NEXT); }
-        else if (arg == "-d"    || arg == "--duration")        { params.duration_ms     = std::stoi(ARGV_NEXT); }
-        else if (arg == "-mc"   || arg == "--max-context")     { params.max_context     = std::stoi(ARGV_NEXT); }
-        else if (arg == "-ml"   || arg == "--max-len")         { params.max_len         = std::stoi(ARGV_NEXT); }
-        else if (arg == "-bo"   || arg == "--best-of")         { params.best_of         = std::stoi(ARGV_NEXT); }
-        else if (arg == "-bs"   || arg == "--beam-size")       { params.beam_size       = std::stoi(ARGV_NEXT); }
-        else if (arg == "-ac"   || arg == "--audio-ctx")       { params.audio_ctx       = std::stoi(ARGV_NEXT); }
-        else if (arg == "-wt"   || arg == "--word-thold")      { params.word_thold      = std::stof(ARGV_NEXT); }
-        else if (arg == "-et"   || arg == "--entropy-thold")   { params.entropy_thold   = std::stof(ARGV_NEXT); }
-        else if (arg == "-lpt"  || arg == "--logprob-thold")   { params.logprob_thold   = std::stof(ARGV_NEXT); }
-        else if (arg == "-nth"  || arg == "--no-speech-thold") { params.no_speech_thold = std::stof(ARGV_NEXT); }
-        else if (arg == "-tp"   || arg == "--temperature")     { params.temperature     = std::stof(ARGV_NEXT); }
-        else if (arg == "-tpi"  || arg == "--temperature-inc") { params.temperature_inc = std::stof(ARGV_NEXT); }
-        else if (arg == "-debug"|| arg == "--debug-mode")      { params.debug_mode      = true; }
-        else if (arg == "-tr"   || arg == "--translate")       { params.translate       = true; }
-        else if (arg == "-di"   || arg == "--diarize")         { params.diarize         = true; }
-        else if (arg == "-tdrz" || arg == "--tinydiarize")     { params.tinydiarize     = true; }
-        else if (arg == "-sow"  || arg == "--split-on-word")   { params.split_on_word   = true; }
-        else if (arg == "-nf"   || arg == "--no-fallback")     { params.no_fallback     = true; }
-        else if (arg == "-otxt" || arg == "--output-txt")      { params.output_txt      = true; }
-        else if (arg == "-ovtt" || arg == "--output-vtt")      { params.output_vtt      = true; }
-        else if (arg == "-osrt" || arg == "--output-srt")      { params.output_srt      = true; }
-        else if (arg == "-owts" || arg == "--output-words")    { params.output_wts      = true; }
-        else if (arg == "-olrc" || arg == "--output-lrc")      { params.output_lrc      = true; }
-        else if (arg == "-fp"   || arg == "--font-path")       { params.font_path       = ARGV_NEXT; }
-        else if (arg == "-ocsv" || arg == "--output-csv")      { params.output_csv      = true; }
-        else if (arg == "-oj"   || arg == "--output-json")     { params.output_jsn      = true; }
-        else if (arg == "-ojf"  || arg == "--output-json-full"){ params.output_jsn_full = params.output_jsn = true; }
-        else if (arg == "-of"   || arg == "--output-file")     { params.fname_out.emplace_back(ARGV_NEXT); }
-        else if (arg == "-np"   || arg == "--no-prints")       { params.no_prints       = true; }
-        else if (arg == "-ps"   || arg == "--print-special")   { params.print_special   = true; }
-        else if (arg == "-pc"   || arg == "--print-colors")    { params.print_colors    = true; }
-        else if (                  arg == "--print-confidence"){ params.print_confidence= true; }
-        else if (arg == "-pp"   || arg == "--print-progress")  { params.print_progress  = true; }
-        else if (arg == "-nt"   || arg == "--no-timestamps")   { params.no_timestamps   = true; }
-        else if (arg == "-l"    || arg == "--language")        { params.language        = whisper_param_turn_lowercase(ARGV_NEXT); }
-        else if (arg == "-dl"   || arg == "--detect-language") { params.detect_language = true; }
-        else if (                  arg == "--prompt")          { params.prompt          = ARGV_NEXT; }
-        else if (arg == "-m"    || arg == "--model")           { params.model           = ARGV_NEXT; }
-        else if (arg == "-f"    || arg == "--file")            { params.fname_inp.emplace_back(ARGV_NEXT); }
-        else if (arg == "-oved" || arg == "--ov-e-device")     { params.openvino_encode_device = ARGV_NEXT; }
-        else if (arg == "-dtw"  || arg == "--dtw")             { params.dtw             = ARGV_NEXT; }
-        else if (arg == "-ls"   || arg == "--log-score")       { params.log_score       = true; }
-        else if (arg == "-ng"   || arg == "--no-gpu")          { params.use_gpu         = false; }
-        else if (arg == "-fa"   || arg == "--flash-attn")      { params.flash_attn      = true; }
-        else if (arg == "-nfa"  || arg == "--no-flash-attn")   { params.flash_attn      = false; }
-        else if (arg == "-sns"  || arg == "--suppress-nst")    { params.suppress_nst    = true; }
-        else if (                  arg == "--suppress-regex")  { params.suppress_regex  = ARGV_NEXT; }
-        else if (                  arg == "--grammar")         { params.grammar         = ARGV_NEXT; }
-        else if (                  arg == "--grammar-rule")    { params.grammar_rule    = ARGV_NEXT; }
-        else if (                  arg == "--grammar-penalty") { params.grammar_penalty = std::stof(ARGV_NEXT); }
+        else if (arg == "-t"    || arg == "--threads")              { params.n_threads       = std::stoi(ARGV_NEXT); }
+        else if (arg == "-p"    || arg == "--processors")           { params.n_processors    = std::stoi(ARGV_NEXT); }
+        else if (arg == "-ot"   || arg == "--offset-t")             { params.offset_t_ms     = std::stoi(ARGV_NEXT); }
+        else if (arg == "-on"   || arg == "--offset-n")             { params.offset_n        = std::stoi(ARGV_NEXT); }
+        else if (arg == "-d"    || arg == "--duration")             { params.duration_ms     = std::stoi(ARGV_NEXT); }
+        else if (arg == "-mc"   || arg == "--max-context")          { params.max_context     = std::stoi(ARGV_NEXT); }
+        else if (arg == "-ml"   || arg == "--max-len")              { params.max_len         = std::stoi(ARGV_NEXT); }
+        else if (arg == "-bo"   || arg == "--best-of")              { params.best_of         = std::stoi(ARGV_NEXT); }
+        else if (arg == "-bs"   || arg == "--beam-size")            { params.beam_size       = std::stoi(ARGV_NEXT); }
+        else if (arg == "-ac"   || arg == "--audio-ctx")            { params.audio_ctx       = std::stoi(ARGV_NEXT); }
+        else if (arg == "-wt"   || arg == "--word-thold")           { params.word_thold      = std::stof(ARGV_NEXT); }
+        else if (arg == "-et"   || arg == "--entropy-thold")        { params.entropy_thold   = std::stof(ARGV_NEXT); }
+        else if (arg == "-lpt"  || arg == "--logprob-thold")        { params.logprob_thold   = std::stof(ARGV_NEXT); }
+        else if (arg == "-nth"  || arg == "--no-speech-thold")      { params.no_speech_thold = std::stof(ARGV_NEXT); }
+        else if (arg == "-tp"   || arg == "--temperature")          { params.temperature     = std::stof(ARGV_NEXT); }
+        else if (arg == "-tpi"  || arg == "--temperature-inc")      { params.temperature_inc = std::stof(ARGV_NEXT); }
+        else if (arg == "-debug"|| arg == "--debug-mode")           { params.debug_mode      = true; }
+        else if (arg == "-tr"   || arg == "--translate")            { params.translate       = true; }
+        else if (arg == "-di"   || arg == "--diarize")              { params.diarize         = true; }
+        else if (arg == "-tdrz" || arg == "--tinydiarize")          { params.tinydiarize     = true; }
+        else if (arg == "-sow"  || arg == "--split-on-word")        { params.split_on_word   = true; }
+        else if (arg == "-nf"   || arg == "--no-fallback")          { params.no_fallback     = true; }
+        else if (arg == "-otxt" || arg == "--output-txt")           { params.output_txt      = true; }
+        else if (arg == "-ovtt" || arg == "--output-vtt")           { params.output_vtt      = true; }
+        else if (arg == "-osrt" || arg == "--output-srt")           { params.output_srt      = true; }
+        else if (arg == "-owts" || arg == "--output-words")         { params.output_wts      = true; }
+        else if (arg == "-olrc" || arg == "--output-lrc")           { params.output_lrc      = true; }
+        else if (arg == "-fp"   || arg == "--font-path")            { params.font_path       = ARGV_NEXT; }
+        else if (arg == "-ocsv" || arg == "--output-csv")           { params.output_csv      = true; }
+        else if (arg == "-oj"   || arg == "--output-json")          { params.output_jsn      = true; }
+        else if (arg == "-ojf"  || arg == "--output-json-full")     { params.output_jsn_full = params.output_jsn = true; }
+        else if (arg == "-of"   || arg == "--output-file")          { params.fname_out.emplace_back(ARGV_NEXT); }
+        else if (arg == "-np"   || arg == "--no-prints")            { params.no_prints       = true; }
+        else if (arg == "-ps"   || arg == "--print-special")        { params.print_special   = true; }
+        else if (arg == "-pc"   || arg == "--print-colors")         { params.print_colors    = true; }
+        else if (                  arg == "--print-confidence")     { params.print_confidence= true; }
+        else if (arg == "-pp"   || arg == "--print-progress")       { params.print_progress  = true; }
+        else if (arg == "-nt"   || arg == "--no-timestamps")        { params.no_timestamps   = true; }
+        else if (arg == "-l"    || arg == "--language")             { params.language        = whisper_param_turn_lowercase(ARGV_NEXT); }
+        else if (arg == "-dl"   || arg == "--detect-language")      { params.detect_language = true; }
+        else if (                  arg == "--prompt")               { params.prompt          = ARGV_NEXT; }
+        else if (                  arg == "--carry-initial-prompt") { params.carry_initial_prompt = true; }
+        else if (arg == "-m"    || arg == "--model")                { params.model           = ARGV_NEXT; }
+        else if (arg == "-f"    || arg == "--file")                 { params.fname_inp.emplace_back(ARGV_NEXT); }
+        else if (arg == "-oved" || arg == "--ov-e-device")          { params.openvino_encode_device = ARGV_NEXT; }
+        else if (arg == "-dtw"  || arg == "--dtw")                  { params.dtw             = ARGV_NEXT; }
+        else if (arg == "-ls"   || arg == "--log-score")            { params.log_score       = true; }
+        else if (arg == "-ng"   || arg == "--no-gpu")               { params.use_gpu         = false; }
+        else if (arg == "-fa"   || arg == "--flash-attn")           { params.flash_attn      = true; }
+        else if (arg == "-nfa"  || arg == "--no-flash-attn")        { params.flash_attn      = false; }
+        else if (arg == "-sns"  || arg == "--suppress-nst")         { params.suppress_nst    = true; }
+        else if (                  arg == "--suppress-regex")       { params.suppress_regex  = ARGV_NEXT; }
+        else if (                  arg == "--grammar")              { params.grammar         = ARGV_NEXT; }
+        else if (                  arg == "--grammar-rule")         { params.grammar_rule    = ARGV_NEXT; }
+        else if (                  arg == "--grammar-penalty")      { params.grammar_penalty = std::stof(ARGV_NEXT); }
         // Voice Activity Detection (VAD)
         else if (                  arg == "--vad")                         { params.vad                         = true; }
         else if (arg == "-vm"   || arg == "--vad-model")                   { params.vad_model                   = ARGV_NEXT; }
         else if (arg == "-vt"   || arg == "--vad-threshold")               { params.vad_threshold               = std::stof(ARGV_NEXT); }
         else if (arg == "-vspd" || arg == "--vad-min-speech-duration-ms")  { params.vad_min_speech_duration_ms  = std::stoi(ARGV_NEXT); }
-        else if (arg == "-vsd"  || arg == "--vad-min-silence-duration-ms") { params.vad_min_speech_duration_ms  = std::stoi(ARGV_NEXT); }
+        else if (arg == "-vsd"  || arg == "--vad-min-silence-duration-ms") { params.vad_min_silence_duration_ms = std::stoi(ARGV_NEXT); }
         else if (arg == "-vmsd" || arg == "--vad-max-speech-duration-s")   { params.vad_max_speech_duration_s   = std::stof(ARGV_NEXT); }
         else if (arg == "-vp"   || arg == "--vad-speech-pad-ms")           { params.vad_speech_pad_ms           = std::stoi(ARGV_NEXT); }
         else if (arg == "-vo"   || arg == "--vad-samples-overlap")         { params.vad_samples_overlap         = std::stof(ARGV_NEXT); }
@@ -224,61 +227,62 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "supported audio formats: flac, mp3, ogg, wav\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "options:\n");
-    fprintf(stderr, "  -h,        --help              [default] show this help message and exit\n");
-    fprintf(stderr, "  -t N,      --threads N         [%-7d] number of threads to use during computation\n",    params.n_threads);
-    fprintf(stderr, "  -p N,      --processors N      [%-7d] number of processors to use during computation\n", params.n_processors);
-    fprintf(stderr, "  -ot N,     --offset-t N        [%-7d] time offset in milliseconds\n",                    params.offset_t_ms);
-    fprintf(stderr, "  -on N,     --offset-n N        [%-7d] segment index offset\n",                           params.offset_n);
-    fprintf(stderr, "  -d  N,     --duration N        [%-7d] duration of audio to process in milliseconds\n",   params.duration_ms);
-    fprintf(stderr, "  -mc N,     --max-context N     [%-7d] maximum number of text context tokens to store\n", params.max_context);
-    fprintf(stderr, "  -ml N,     --max-len N         [%-7d] maximum segment length in characters\n",           params.max_len);
-    fprintf(stderr, "  -sow,      --split-on-word     [%-7s] split on word rather than on token\n",             params.split_on_word ? "true" : "false");
-    fprintf(stderr, "  -bo N,     --best-of N         [%-7d] number of best candidates to keep\n",              params.best_of);
-    fprintf(stderr, "  -bs N,     --beam-size N       [%-7d] beam size for beam search\n",                      params.beam_size);
-    fprintf(stderr, "  -ac N,     --audio-ctx N       [%-7d] audio context size (0 - all)\n",                   params.audio_ctx);
-    fprintf(stderr, "  -wt N,     --word-thold N      [%-7.2f] word timestamp probability threshold\n",         params.word_thold);
-    fprintf(stderr, "  -et N,     --entropy-thold N   [%-7.2f] entropy threshold for decoder fail\n",           params.entropy_thold);
-    fprintf(stderr, "  -lpt N,    --logprob-thold N   [%-7.2f] log probability threshold for decoder fail\n",   params.logprob_thold);
-    fprintf(stderr, "  -nth N,    --no-speech-thold N [%-7.2f] no speech threshold\n",                          params.no_speech_thold);
-    fprintf(stderr, "  -tp,       --temperature N     [%-7.2f] The sampling temperature, between 0 and 1\n",    params.temperature);
-    fprintf(stderr, "  -tpi,      --temperature-inc N [%-7.2f] The increment of temperature, between 0 and 1\n",params.temperature_inc);
-    fprintf(stderr, "  -debug,    --debug-mode        [%-7s] enable debug mode (eg. dump log_mel)\n",           params.debug_mode ? "true" : "false");
-    fprintf(stderr, "  -tr,       --translate         [%-7s] translate from source language to english\n",      params.translate ? "true" : "false");
-    fprintf(stderr, "  -di,       --diarize           [%-7s] stereo audio diarization\n",                       params.diarize ? "true" : "false");
-    fprintf(stderr, "  -tdrz,     --tinydiarize       [%-7s] enable tinydiarize (requires a tdrz model)\n",     params.tinydiarize ? "true" : "false");
-    fprintf(stderr, "  -nf,       --no-fallback       [%-7s] do not use temperature fallback while decoding\n", params.no_fallback ? "true" : "false");
-    fprintf(stderr, "  -otxt,     --output-txt        [%-7s] output result in a text file\n",                   params.output_txt ? "true" : "false");
-    fprintf(stderr, "  -ovtt,     --output-vtt        [%-7s] output result in a vtt file\n",                    params.output_vtt ? "true" : "false");
-    fprintf(stderr, "  -osrt,     --output-srt        [%-7s] output result in a srt file\n",                    params.output_srt ? "true" : "false");
-    fprintf(stderr, "  -olrc,     --output-lrc        [%-7s] output result in a lrc file\n",                    params.output_lrc ? "true" : "false");
-    fprintf(stderr, "  -owts,     --output-words      [%-7s] output script for generating karaoke video\n",     params.output_wts ? "true" : "false");
-    fprintf(stderr, "  -fp,       --font-path         [%-7s] path to a monospace font for karaoke video\n",     params.font_path.c_str());
-    fprintf(stderr, "  -ocsv,     --output-csv        [%-7s] output result in a CSV file\n",                    params.output_csv ? "true" : "false");
-    fprintf(stderr, "  -oj,       --output-json       [%-7s] output result in a JSON file\n",                   params.output_jsn ? "true" : "false");
-    fprintf(stderr, "  -ojf,      --output-json-full  [%-7s] include more information in the JSON file\n",      params.output_jsn_full ? "true" : "false");
-    fprintf(stderr, "  -of FNAME, --output-file FNAME [%-7s] output file path (without file extension)\n",      "");
-    fprintf(stderr, "  -np,       --no-prints         [%-7s] do not print anything other than the results\n",   params.no_prints ? "true" : "false");
-    fprintf(stderr, "  -ps,       --print-special     [%-7s] print special tokens\n",                           params.print_special ? "true" : "false");
-    fprintf(stderr, "  -pc,       --print-colors      [%-7s] print colors\n",                                   params.print_colors ? "true" : "false");
-    fprintf(stderr, "             --print-confidence  [%-7s] print confidence\n",                               params.print_confidence ? "true" : "false");
-    fprintf(stderr, "  -pp,       --print-progress    [%-7s] print progress\n",                                 params.print_progress ? "true" : "false");
-    fprintf(stderr, "  -nt,       --no-timestamps     [%-7s] do not print timestamps\n",                        params.no_timestamps ? "true" : "false");
-    fprintf(stderr, "  -l LANG,   --language LANG     [%-7s] spoken language ('auto' for auto-detect)\n",       params.language.c_str());
-    fprintf(stderr, "  -dl,       --detect-language   [%-7s] exit after automatically detecting language\n",    params.detect_language ? "true" : "false");
-    fprintf(stderr, "             --prompt PROMPT     [%-7s] initial prompt (max n_text_ctx/2 tokens)\n",       params.prompt.c_str());
-    fprintf(stderr, "  -m FNAME,  --model FNAME       [%-7s] model path\n",                                     params.model.c_str());
-    fprintf(stderr, "  -f FNAME,  --file FNAME        [%-7s] input audio file path\n",                            "");
-    fprintf(stderr, "  -oved D,   --ov-e-device DNAME [%-7s] the OpenVINO device used for encode inference\n",  params.openvino_encode_device.c_str());
-    fprintf(stderr, "  -dtw MODEL --dtw MODEL         [%-7s] compute token-level timestamps\n",                 params.dtw.c_str());
-    fprintf(stderr, "  -ls,       --log-score         [%-7s] log best decoder scores of tokens\n",              params.log_score?"true":"false");
-    fprintf(stderr, "  -ng,       --no-gpu            [%-7s] disable GPU\n",                                    params.use_gpu ? "false" : "true");
-    fprintf(stderr, "  -fa,       --flash-attn        [%-7s] enable flash attention\n",                         params.flash_attn ? "true" : "false");
-    fprintf(stderr, "  -nfa,      --no-flash-attn     [%-7s] disable flash attention\n",                        params.flash_attn ? "false" : "true");
-    fprintf(stderr, "  -sns,      --suppress-nst      [%-7s] suppress non-speech tokens\n",                     params.suppress_nst ? "true" : "false");
-    fprintf(stderr, "  --suppress-regex REGEX         [%-7s] regular expression matching tokens to suppress\n", params.suppress_regex.c_str());
-    fprintf(stderr, "  --grammar GRAMMAR              [%-7s] GBNF grammar to guide decoding\n",                 params.grammar.c_str());
-    fprintf(stderr, "  --grammar-rule RULE            [%-7s] top-level GBNF grammar rule name\n",               params.grammar_rule.c_str());
-    fprintf(stderr, "  --grammar-penalty N            [%-7.1f] scales down logits of nongrammar tokens\n",      params.grammar_penalty);
+    fprintf(stderr, "  -h,        --help                 [default] show this help message and exit\n");
+    fprintf(stderr, "  -t N,      --threads N            [%-7d] number of threads to use during computation\n",    params.n_threads);
+    fprintf(stderr, "  -p N,      --processors N         [%-7d] number of processors to use during computation\n", params.n_processors);
+    fprintf(stderr, "  -ot N,     --offset-t N           [%-7d] time offset in milliseconds\n",                    params.offset_t_ms);
+    fprintf(stderr, "  -on N,     --offset-n N           [%-7d] segment index offset\n",                           params.offset_n);
+    fprintf(stderr, "  -d  N,     --duration N           [%-7d] duration of audio to process in milliseconds\n",   params.duration_ms);
+    fprintf(stderr, "  -mc N,     --max-context N        [%-7d] maximum number of text context tokens to store\n", params.max_context);
+    fprintf(stderr, "  -ml N,     --max-len N            [%-7d] maximum segment length in characters\n",           params.max_len);
+    fprintf(stderr, "  -sow,      --split-on-word        [%-7s] split on word rather than on token\n",             params.split_on_word ? "true" : "false");
+    fprintf(stderr, "  -bo N,     --best-of N            [%-7d] number of best candidates to keep\n",              params.best_of);
+    fprintf(stderr, "  -bs N,     --beam-size N          [%-7d] beam size for beam search\n",                      params.beam_size);
+    fprintf(stderr, "  -ac N,     --audio-ctx N          [%-7d] audio context size (0 - all)\n",                   params.audio_ctx);
+    fprintf(stderr, "  -wt N,     --word-thold N         [%-7.2f] word timestamp probability threshold\n",         params.word_thold);
+    fprintf(stderr, "  -et N,     --entropy-thold N      [%-7.2f] entropy threshold for decoder fail\n",           params.entropy_thold);
+    fprintf(stderr, "  -lpt N,    --logprob-thold N      [%-7.2f] log probability threshold for decoder fail\n",   params.logprob_thold);
+    fprintf(stderr, "  -nth N,    --no-speech-thold N    [%-7.2f] no speech threshold\n",                          params.no_speech_thold);
+    fprintf(stderr, "  -tp,       --temperature N        [%-7.2f] The sampling temperature, between 0 and 1\n",    params.temperature);
+    fprintf(stderr, "  -tpi,      --temperature-inc N    [%-7.2f] The increment of temperature, between 0 and 1\n",params.temperature_inc);
+    fprintf(stderr, "  -debug,    --debug-mode           [%-7s] enable debug mode (eg. dump log_mel)\n",           params.debug_mode ? "true" : "false");
+    fprintf(stderr, "  -tr,       --translate            [%-7s] translate from source language to english\n",      params.translate ? "true" : "false");
+    fprintf(stderr, "  -di,       --diarize              [%-7s] stereo audio diarization\n",                       params.diarize ? "true" : "false");
+    fprintf(stderr, "  -tdrz,     --tinydiarize          [%-7s] enable tinydiarize (requires a tdrz model)\n",     params.tinydiarize ? "true" : "false");
+    fprintf(stderr, "  -nf,       --no-fallback          [%-7s] do not use temperature fallback while decoding\n", params.no_fallback ? "true" : "false");
+    fprintf(stderr, "  -otxt,     --output-txt           [%-7s] output result in a text file\n",                   params.output_txt ? "true" : "false");
+    fprintf(stderr, "  -ovtt,     --output-vtt           [%-7s] output result in a vtt file\n",                    params.output_vtt ? "true" : "false");
+    fprintf(stderr, "  -osrt,     --output-srt           [%-7s] output result in a srt file\n",                    params.output_srt ? "true" : "false");
+    fprintf(stderr, "  -olrc,     --output-lrc           [%-7s] output result in a lrc file\n",                    params.output_lrc ? "true" : "false");
+    fprintf(stderr, "  -owts,     --output-words         [%-7s] output script for generating karaoke video\n",     params.output_wts ? "true" : "false");
+    fprintf(stderr, "  -fp,       --font-path            [%-7s] path to a monospace font for karaoke video\n",     params.font_path.c_str());
+    fprintf(stderr, "  -ocsv,     --output-csv           [%-7s] output result in a CSV file\n",                    params.output_csv ? "true" : "false");
+    fprintf(stderr, "  -oj,       --output-json          [%-7s] output result in a JSON file\n",                   params.output_jsn ? "true" : "false");
+    fprintf(stderr, "  -ojf,      --output-json-full     [%-7s] include more information in the JSON file\n",      params.output_jsn_full ? "true" : "false");
+    fprintf(stderr, "  -of FNAME, --output-file FNAME    [%-7s] output file path (without file extension)\n",      "");
+    fprintf(stderr, "  -np,       --no-prints            [%-7s] do not print anything other than the results\n",   params.no_prints ? "true" : "false");
+    fprintf(stderr, "  -ps,       --print-special        [%-7s] print special tokens\n",                           params.print_special ? "true" : "false");
+    fprintf(stderr, "  -pc,       --print-colors         [%-7s] print colors\n",                                   params.print_colors ? "true" : "false");
+    fprintf(stderr, "             --print-confidence     [%-7s] print confidence\n",                               params.print_confidence ? "true" : "false");
+    fprintf(stderr, "  -pp,       --print-progress       [%-7s] print progress\n",                                 params.print_progress ? "true" : "false");
+    fprintf(stderr, "  -nt,       --no-timestamps        [%-7s] do not print timestamps\n",                        params.no_timestamps ? "true" : "false");
+    fprintf(stderr, "  -l LANG,   --language LANG        [%-7s] spoken language ('auto' for auto-detect)\n",       params.language.c_str());
+    fprintf(stderr, "  -dl,       --detect-language      [%-7s] exit after automatically detecting language\n",    params.detect_language ? "true" : "false");
+    fprintf(stderr, "             --prompt PROMPT        [%-7s] initial prompt (max n_text_ctx/2 tokens)\n",       params.prompt.c_str());
+    fprintf(stderr, "             --carry-initial-prompt [%-7s] always prepend initial prompt\n",                  params.carry_initial_prompt ? "true" : "false");
+    fprintf(stderr, "  -m FNAME,  --model FNAME          [%-7s] model path\n",                                     params.model.c_str());
+    fprintf(stderr, "  -f FNAME,  --file FNAME           [%-7s] input audio file path\n",                          "");
+    fprintf(stderr, "  -oved D,   --ov-e-device DNAME    [%-7s] the OpenVINO device used for encode inference\n",  params.openvino_encode_device.c_str());
+    fprintf(stderr, "  -dtw MODEL --dtw MODEL            [%-7s] compute token-level timestamps\n",                 params.dtw.c_str());
+    fprintf(stderr, "  -ls,       --log-score            [%-7s] log best decoder scores of tokens\n",              params.log_score?"true":"false");
+    fprintf(stderr, "  -ng,       --no-gpu               [%-7s] disable GPU\n",                                    params.use_gpu ? "false" : "true");
+    fprintf(stderr, "  -fa,       --flash-attn           [%-7s] enable flash attention\n",                         params.flash_attn ? "true" : "false");
+    fprintf(stderr, "  -nfa,      --no-flash-attn        [%-7s] disable flash attention\n",                        params.flash_attn ? "false" : "true");
+    fprintf(stderr, "  -sns,      --suppress-nst         [%-7s] suppress non-speech tokens\n",                     params.suppress_nst ? "true" : "false");
+    fprintf(stderr, "  --suppress-regex REGEX            [%-7s] regular expression matching tokens to suppress\n", params.suppress_regex.c_str());
+    fprintf(stderr, "  --grammar GRAMMAR                 [%-7s] GBNF grammar to guide decoding\n",                 params.grammar.c_str());
+    fprintf(stderr, "  --grammar-rule RULE               [%-7s] top-level GBNF grammar rule name\n",               params.grammar_rule.c_str());
+    fprintf(stderr, "  --grammar-penalty N               [%-7.1f] scales down logits of nongrammar tokens\n",      params.grammar_penalty);
     // Voice Activity Detection (VAD) parameters
     fprintf(stderr, "\nVoice Activity Detection (VAD) options:\n");
     fprintf(stderr, "             --vad                           [%-7s] enable Voice Activity Detection (VAD)\n",            params.vad ? "true" : "false");
@@ -387,7 +391,11 @@ static void whisper_print_segment_callback(struct whisper_context * ctx, struct 
                 const char * text = whisper_full_get_token_text(ctx, i, j);
                 const float  p    = whisper_full_get_token_p   (ctx, i, j);
 
-                const int col = std::max(0, std::min((int) k_colors.size() - 1, (int) (std::pow(p, 3)*float(k_colors.size()))));
+                const int n_colors = (int) k_colors.size();
+                int raw_col = (int) (std::pow(p, 3)*float(n_colors));
+                if (raw_col < 0) raw_col = 0;
+                if (raw_col > n_colors - 1) raw_col = n_colors - 1;
+                const int col = raw_col;
 
                 printf("%s%s%s%s", speaker.c_str(), k_colors[col].c_str(), text, "\033[0m");
             }
@@ -1178,7 +1186,8 @@ int main(int argc, char ** argv) {
 
             wparams.suppress_regex   = params.suppress_regex.empty() ? nullptr : params.suppress_regex.c_str();
 
-            wparams.initial_prompt   = params.prompt.c_str();
+            wparams.initial_prompt       = params.prompt.c_str();
+            wparams.carry_initial_prompt = params.carry_initial_prompt;
 
             wparams.greedy.best_of        = params.best_of;
             wparams.beam_search.beam_size = params.beam_size;

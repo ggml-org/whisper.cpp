@@ -2,7 +2,7 @@
 
 Voice-controlled chess using Whisper
 
-Online demo: https://ggml.ai/whisper.cpp/
+Online demo: https://ggml.ai/whisper.cpp/wchess.wasm/
 
 https://github.com/ggerganov/whisper.cpp/assets/1991296/c2b2f03c-9684-49f3-8106-357d2d4e67fa
 

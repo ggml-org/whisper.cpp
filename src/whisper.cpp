@@ -21,20 +21,22 @@
 #define _USE_MATH_DEFINES
 #include <cmath>
 #include <climits>
-#include <codecvt>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <functional>
 #include <map>
-#include <mutex>
 #include <random>
 #include <regex>
 #include <set>
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifdef _MSC_VER
+#include <codecvt>
+#endif
 
 #if defined(WHISPER_BIG_ENDIAN)
 template <typename T>
@@ -163,6 +165,10 @@ static void whisper_log_callback_default(ggml_log_level level, const char *text,
     } while (0)
 
 #define WHISPER_MAX_DECODERS 8
+
+// temperature below which we condition on past text history
+static constexpr float WHISPER_HISTORY_CONDITIONING_TEMP_CUTOFF = 0.5f;
+
 #define WHISPER_MAX_NODES 4096
 
 static std::string format(const char *fmt, ...)
@@ -1269,7 +1275,10 @@ struct whisper_state
     std::vector<float> logits;
 
     std::vector<whisper_segment> result_all;
-    std::vector<whisper_token> prompt_past;
+
+    // prompt history split into static prefix (prompt_past0) and dynamic rolling context (prompt_past1)
+    std::vector<whisper_token> prompt_past0; // static carried initial prompt (if enabled)
+    std::vector<whisper_token> prompt_past1; // dynamic context from decoded output
 
     int lang_id = 0; // english by default
 
@@ -1752,7 +1761,7 @@ static ggml_backend_t whisper_backend_init_gpu(const whisper_context_params &par
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i)
         {
             ggml_backend_dev_t dev_cur = ggml_backend_dev_get(i);
-            if (ggml_backend_dev_type(dev_cur) == GGML_BACKEND_DEVICE_TYPE_GPU)
+            if (ggml_backend_dev_type(dev_cur) == GGML_BACKEND_DEVICE_TYPE_GPU || ggml_backend_dev_type(dev_cur) == GGML_BACKEND_DEVICE_TYPE_IGPU)
             {
                 if (cnt == params.gpu_device)
                 {
@@ -1835,7 +1844,7 @@ static buft_list_t make_buft_list(whisper_context_params &params)
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i)
         {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-            if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU)
+            if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU || ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_IGPU)
             {
                 if (cnt == params.gpu_device)
                 {
@@ -1880,6 +1889,7 @@ static bool weight_buft_supported(const whisper_hparams &hparams, ggml_tensor *w
     bool op_supported = true;
 
     if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU ||
+        ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_IGPU ||
         (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU && buft == ggml_backend_cpu_buffer_type()))
     {
         // GPU and default CPU backend support all operators
@@ -5295,6 +5305,7 @@ static bool weight_buft_supported(const whisper_vad_hparams &hparams, ggml_tenso
     bool op_supported = true;
 
     if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU ||
+        ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_IGPU ||
         (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU && buft == ggml_backend_cpu_buffer_type()))
     {
         // GPU and default CPU backend support all operators
@@ -5542,6 +5553,7 @@ static bool whisper_vad_init_context(whisper_vad_context *vctx)
     ggml_set_name(vctx->c_state, "c_state");
 
     vctx->buffer = ggml_backend_alloc_ctx_tensors(ctx, vctx->backends[0]);
+    ggml_free(ctx);
     if (!vctx->buffer)
     {
         WHISPER_LOG_ERROR("%s: failed to allocate memory for the VAD state\n", __func__);
@@ -6367,6 +6379,10 @@ void whisper_vad_free(whisper_vad_context *ctx)
 {
     if (ctx)
     {
+        if (ctx->buffer)
+        {
+            ggml_backend_buffer_free(ctx->buffer);
+        }
         for (ggml_context *context : ctx->model.ctxs)
         {
             ggml_free(context);
@@ -6383,6 +6399,10 @@ void whisper_vad_free(whisper_vad_context *ctx)
         {
             ggml_backend_free(backend);
         }
+
+        delete[] ctx->model.hparams.encoder_in_channels;
+        delete[] ctx->model.hparams.encoder_out_channels;
+        delete[] ctx->model.hparams.kernel_sizes;
 
         delete ctx;
     }
@@ -6946,9 +6966,10 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
 
         /* suppress_regex    =*/nullptr,
 
-        /*.initial_prompt    =*/nullptr,
-        /*.prompt_tokens     =*/nullptr,
-        /*.prompt_n_tokens   =*/0,
+        /*.initial_prompt       =*/nullptr,
+        /*.carry_initial_prompt =*/false,
+        /*.prompt_tokens        =*/nullptr,
+        /*.prompt_n_tokens      =*/0,
 
         /*.language          =*/"en",
         /*.detect_language   =*/false,
@@ -7760,6 +7781,11 @@ static bool whisper_vad(
 
     whisper_vad_segments *vad_segments = whisper_vad_segments_from_samples(vctx, vad_params, samples, n_samples);
 
+    if (!vad_segments)
+    {
+        return false;
+    }
+
     if (vad_segments->data.size() > 0)
     {
         state->has_vad_segments = true;
@@ -7808,7 +7834,6 @@ static bool whisper_vad(
         {
             WHISPER_LOG_ERROR("%s: failed to allocate memory for filtered samples\n", __func__);
             whisper_vad_free_segments(vad_segments);
-            whisper_vad_free(vctx);
             return false;
         }
 
@@ -7924,6 +7949,7 @@ static bool whisper_vad(
                          __func__, n_samples, filtered_n_samples, 100.0f * (1.0f - (float)filtered_n_samples / n_samples));
     }
 
+    whisper_vad_free_segments(vad_segments);
     return true;
 }
 
@@ -8050,18 +8076,23 @@ int whisper_full_with_state(
         decoder.rng = std::mt19937(j);
     }
 
-    // the accumulated text context so far
-    auto &prompt_past = state->prompt_past;
+    // the accumulated text context split into static (prompt_past0) and dynamic (prompt_past1)
+    auto &prompt_past0 = state->prompt_past0;
+    auto &prompt_past1 = state->prompt_past1;
     if (params.no_context)
     {
-        prompt_past.clear();
+        prompt_past0.clear();
+        prompt_past1.clear();
     }
+
+    // calculate the maximum context budget for prompt history
+    const int max_prompt_ctx = std::min(params.n_max_text_ctx, whisper_n_text_ctx(ctx) / 2);
 
     // prepare prompt
     {
         std::vector<whisper_token> prompt_tokens;
 
-        // initial prompt
+        // tokenize the initial prompt
         if (!params.prompt_tokens && params.initial_prompt)
         {
             prompt_tokens.resize(1024);
@@ -8075,16 +8106,32 @@ int whisper_full_with_state(
             params.prompt_tokens = prompt_tokens.data();
             params.prompt_n_tokens = prompt_tokens.size();
         }
-
-        // prepend the prompt tokens to the prompt_past
         if (params.prompt_tokens && params.prompt_n_tokens > 0)
         {
-            // parse tokens from the pointer
-            for (int i = 0; i < params.prompt_n_tokens; i++)
+            if (params.carry_initial_prompt)
             {
-                prompt_past.push_back(params.prompt_tokens[i]);
+                if (prompt_past0.empty())
+                {
+                    const int max_tokens = std::max(1, max_prompt_ctx - 1);
+
+                    if (params.prompt_n_tokens > max_tokens)
+                    {
+                        WHISPER_LOG_WARN("%s: initial prompt is too long (%d tokens), will use only the last %d tokens\n",
+                                         __func__, params.prompt_n_tokens, max_tokens);
+                    }
+
+                    const int n_tokens = std::min(params.prompt_n_tokens, max_tokens);
+                    prompt_past0.assign(params.prompt_tokens + (params.prompt_n_tokens - n_tokens), params.prompt_tokens + params.prompt_n_tokens);
+                }
             }
-            std::rotate(prompt_past.begin(), prompt_past.end() - params.prompt_n_tokens, prompt_past.end());
+            else
+            {
+                for (int i = 0; i < params.prompt_n_tokens; ++i)
+                {
+                    prompt_past1.push_back(params.prompt_tokens[i]);
+                }
+                std::rotate(prompt_past1.begin(), prompt_past1.end() - params.prompt_n_tokens, prompt_past1.end());
+            }
         }
     }
 
@@ -8187,7 +8234,8 @@ int whisper_full_with_state(
         // to confuse the decoder and often make it repeat or hallucinate stuff
         if (seek > seek_start && seek + 500 >= seek_end)
         {
-            prompt_past.clear();
+            prompt_past0.clear();
+            prompt_past1.clear();
         }
 
         int best_decoder_id = 0;
@@ -8260,13 +8308,28 @@ int whisper_full_with_state(
             {
                 prompt.clear();
 
-                // if we have already generated some text, use it as a prompt to condition the next generation
-                if (!prompt_past.empty() && t_cur < 0.5f && params.n_max_text_ctx > 0)
+                if (params.n_max_text_ctx > 0 && t_cur < WHISPER_HISTORY_CONDITIONING_TEMP_CUTOFF)
                 {
-                    int n_take = std::min(std::min(params.n_max_text_ctx, whisper_n_text_ctx(ctx) / 2), int(prompt_past.size()));
+                    const bool can_take0 = params.carry_initial_prompt && !prompt_past0.empty();
+                    const bool can_take1 = !prompt_past1.empty();
 
-                    prompt = {whisper_token_prev(ctx)};
-                    prompt.insert(prompt.begin() + 1, prompt_past.end() - n_take, prompt_past.end());
+                    if (max_prompt_ctx > 0 && (can_take0 || can_take1))
+                    {
+                        // Always start with previous token marker to connect continuity
+                        prompt.push_back(whisper_token_prev(ctx));
+
+                        // Take static tokens (initial prompt) first
+                        int n_take0 = 0;
+                        if (can_take0)
+                        {
+                            n_take0 = prompt_past0.size();
+                            prompt.insert(prompt.end(), prompt_past0.end() - n_take0, prompt_past0.end());
+                        }
+
+                        // Fill remaining budget with dynamic tokens (rolling context)
+                        const int n_take1 = std::min<int>(max_prompt_ctx - n_take0 - 1, prompt_past1.size());
+                        prompt.insert(prompt.end(), prompt_past1.end() - n_take1, prompt_past1.end());
+                    }
                 }
 
                 // init new transcription with sot, language (opt) and task tokens
@@ -8823,16 +8886,20 @@ int whisper_full_with_state(
 
             // WHISPER_LOG_DEBUG("prompt_init.size() = %d, prompt.size() = %d, result_len = %d, seek_delta = %d\n", prompt_init.size(), prompt.size(), result_len, seek_delta);
 
-            // update prompt_past
-            prompt_past.clear();
-            if (prompt.front() == whisper_token_prev(ctx))
+            // update prompt_past1
+            prompt_past1.clear();
+            if (!params.carry_initial_prompt && !prompt.empty() && prompt.front() == whisper_token_prev(ctx))
             {
-                prompt_past.insert(prompt_past.end(), prompt.begin() + 1, prompt.end() - prompt_init.size());
+                prompt_past1.insert(prompt_past1.end(), prompt.begin() + 1, prompt.end() - prompt_init.size());
             }
 
-            for (int i = 0; i < result_len && !is_no_speech; ++i)
+            // Add newly decoded tokens to the rolling context
+            if (!is_no_speech)
             {
-                prompt_past.push_back(tokens_cur[i].id);
+                for (int i = 0; i < result_len; ++i)
+                {
+                    prompt_past1.push_back(tokens_cur[i].id);
+                }
             }
 
             if (!tokens_cur.empty() && ctx->model.n_loaded > 0 && !is_no_speech)

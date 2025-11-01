@@ -246,7 +246,7 @@ function gg_run_bench {
     cd ${SRC}
 
     # set flash attention flag if enabled
-    fattn=""
+    fattn="-nfa"
     if [ "$BENCH_FLASH_ATTN" -eq 1 ]; then
         fattn="-fa"
     fi
