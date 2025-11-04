@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en-us">
+    <head>
+        <title>bench : Benchmark whisper.cpp performance in the browser</title>
+
+        <style>
+            #output {
+                width: 100%;
+                height: 100%;
+                margin: 0 auto;
+                margin-top: 10px;
+                border-left: 0px;
+                border-right: 0px;
+                padding-left: 0px;
+                padding-right: 0px;
+                display: block;
+                background-color: black;
+                color: white;
+                font-size: 10px;
+                font-family: 'Lucida Console', Monaco, monospace;
+                outline: none;
+                white-space: pre;
+                overflow-wrap: normal;
+                overflow-x: scroll;
+            }
+        </style>
+        <script src="../coi-serviceworker.js"></script>
+        <link rel="icon" href="data:,">
+    </head>
+    <body>
+        <div id="main-container">
+            <b>bench : Benchmark whisper.cpp performance in the browser</b>
+
+            <br><br>
+
+            You can find more about this project on <a href="https://github.com/ggerganov/whisper.cpp/tree/master/examples/bench.wasm">GitHub</a>.
+
+            <br><br>
+
+            <b>More examples:</b>
+                <a href="../">main</a> |
+                <a href="../bench.wasm/">bench</a> |
+                <a href="../stream.wasm">stream</a> |
+                <a href="../command.wasm/">command</a> |
+
+            <br><br>
+
+            <hr>
+
+            Select the model you would like to use and click the "Bench" button.<br>
+            The results will be displayed in the textarea below.
+
+            <br><br>
+
+            <div id="model-whisper">
+                Whisper model: <span id="model-whisper-status"></span>
+                <button id="fetch-whisper-tiny-en"  onclick="loadWhisper('tiny.en')">tiny.en (75 MB)</button>
+                <button id="fetch-whisper-base-en"  onclick="loadWhisper('base.en')">base.en (142 MB)</button>
+                <button id="fetch-whisper-small-en" onclick="loadWhisper('small.en')">small.en (466 MB)</button>
+                <input type="file" id="whisper-file" name="file" onchange="loadFile(event, 'whisper.bin')" />
+                <br><br>
+                Quantized models:<br><br>
+                <button id="fetch-whisper-tiny-en-q5_1"   onclick="loadWhisper('tiny-en-q5_1')">tiny.en (Q5_1, 31 MB)</button>
+                <button id="fetch-whisper-base-en-q5_1"   onclick="loadWhisper('base-en-q5_1')">base.en (Q5_1, 57 MB)</button>
+                <button id="fetch-whisper-small-en-q5_1"  onclick="loadWhisper('small-en-q5_1')">small.en (Q5_1, 182 MB)</button>
+                <button id="fetch-whisper-medium-en-q5_0" onclick="loadWhisper('medium-en-q5_0')">medium.en (Q5_0, 515 MB)</button>
+                <button id="fetch-whisper-large-q5_0"     onclick="loadWhisper('large-q5_0')">large (Q5_0, 1030 MB)</button>
+                <span id="fetch-whisper-progress"></span>
+            </div>
+
+            <br>
+
+            <div id="input">
+                <button id="bench" onclick="onBench()" disabled>Bench</button>
+                <button id="clear" onclick="clearCache()">Clear Cache</button>
+            </div>
+
+            <hr>
+
+            Debug output:
+            <textarea id="output" rows="20"></textarea>
+
+            <br>
+
+            <b>Troubleshooting</b>
+
+            <br><br>
+
+            The page does some heavy computations, so make sure:
+
+            <ul>
+                <li>To use a modern web browser (e.g. Chrome, Firefox)</li>
+                <li>To use a fast desktop or laptop computer (i.e. not a mobile phone)</li>
+                <li>Your browser supports WASM <a href="https://webassembly.org/roadmap/">Fixed-width SIMD</a></li>
+            </ul>
+
+            <div class="cell-version">
+                <span>
+                    |
+                    Build time: <span class="nav-link">@GIT_DATE@</span> |
+                    Commit hash: <a class="nav-link" href="https://github.com/ggerganov/whisper.cpp/commit/@GIT_SHA1@">@GIT_SHA1@</a> |
+                    Commit subject: <span class="nav-link">@GIT_COMMIT_SUBJECT@</span> |
+                    <a class="nav-link" href="https://github.com/ggerganov/whisper.cpp/tree/master/examples/bench.wasm">Source Code</a> |
+                </span>
+            </div>
+        </div>
+
+        <script type="text/javascript" src="helpers.js"></script>
+        <script type='text/javascript'>
+            // the bench instance
+            var instance = null;
+
+            // model name
+            var model_whisper = null;
+
+            var Module = {
+                print: printTextarea,
+                printErr: printTextarea,
+                setStatus: function(text) {
+                    printTextarea('js: ' + text);
+                },
+                monitorRunDependencies: function(left) {
+                },
+                preRun: function() {
+                    printTextarea('js: Preparing ...');
+                },
+                postRun: function() {
+                    printTextarea('js: Initialized successfully!');
+                }
+            };
+
+            //
+            // fetch models
+            //
+
+            let dbVersion = 1
+            let dbName    = 'whisper.ggerganov.com';
+            let indexedDB = window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB
+
+            function storeFS(fname, buf) {
+                // write to WASM file using FS_createDataFile
+                // if the file exists, delete it
+                try {
+                    Module.FS_unlink(fname);
+                } catch (e) {
+                    // ignore
+                }
+
+                Module.FS_createDataFile("/", fname, buf, true, true);
+
+                printTextarea('storeFS: stored model: ' + fname + ' size: ' + buf.length);
+
+                model_whisper = fname;
+
+                document.getElementById('model-whisper-status').innerHTML = 'loaded "' + model_whisper + '"!';
+
+                if (model_whisper != null) {
+                    document.getElementById('bench').disabled = false;
+                }
+            }
+
+            function loadFile(event, fname) {
+                var file = event.target.files[0] || null;
+                if (file == null) {
+                    return;
+                }
+
+                printTextarea("loadFile: loading model: " + file.name + ", size: " + file.size + " bytes");
+                printTextarea('loadFile: please wait ...');
+
+                var reader = new FileReader();
+                reader.onload = function(event) {
+                    var buf = new Uint8Array(reader.result);
+                    storeFS(fname, buf);
+                }
+                reader.readAsArrayBuffer(file);
+
+                document.getElementById('fetch-whisper-tiny-en').style.display = 'none';
+                document.getElementById('fetch-whisper-base-en').style.display = 'none';
+                document.getElementById('fetch-whisper-small-en').style.display = 'none';
+
+                document.getElementById('fetch-whisper-tiny-en-q5_1'  ).style.display = 'none';
+                document.getElementById('fetch-whisper-base-en-q5_1'  ).style.display = 'none';
+                document.getElementById('fetch-whisper-small-en-q5_1' ).style.display = 'none';
+                document.getElementById('fetch-whisper-medium-en-q5_0').style.display = 'none';
+                document.getElementById('fetch-whisper-large-q5_0'    ).style.display = 'none';
+
+                document.getElementById('whisper-file'         ).style.display = 'none';
+                document.getElementById('model-whisper-status' ).innerHTML = 'loaded model: ' + file.name;
+            }
+
+            function loadWhisper(model) {
+                let urls = {
+                    'tiny.en': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin',
+                    'base.en': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin',
+                    'small.en': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin',
+
+                    'tiny-en-q5_1':  'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en-q5_1.bin',
+                    'base-en-q5_1':  'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q5_1.bin',
+                    'small-en-q5_1': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en-q5_1.bin',
+                    'medium-en-q5_0':'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en-q5_0.bin',
+                    'large-q5_0':    'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-q5_0.bin',
+                };
+
+                let sizes = {
+                    'tiny.en': 75,
+                    'base.en': 142,
+                    'small.en': 466,
+
+                    'tiny-en-q5_1':   31,
+                    'base-en-q5_1':   57,
+                    'small-en-q5_1':  182,
+                    'medium-en-q5_0': 515,
+                    'large-q5_0':     1030,
+                };
+
+                let url     = urls[model];
+                let dst     = 'whisper.bin';
+                let size_mb = sizes[model];
+
+                document.getElementById('fetch-whisper-tiny-en').style.display  = 'none';
+                document.getElementById('fetch-whisper-base-en').style.display  = 'none';
+                document.getElementById('fetch-whisper-small-en').style.display = 'none';
+
+                document.getElementById('fetch-whisper-tiny-en-q5_1'  ).style.display = 'none';
+                document.getElementById('fetch-whisper-base-en-q5_1'  ).style.display = 'none';
+                document.getElementById('fetch-whisper-small-en-q5_1' ).style.display = 'none';
+                document.getElementById('fetch-whisper-medium-en-q5_0').style.display = 'none';
+                document.getElementById('fetch-whisper-large-q5_0'    ).style.display = 'none';
+
+                document.getElementById('whisper-file'        ).style.display = 'none';
+                document.getElementById('model-whisper-status').innerHTML = 'loading "' + model + '" ... ';
+
+                cbProgress = function(p) {
+                    let el = document.getElementById('fetch-whisper-progress');
+                    el.innerHTML = Math.round(100*p) + '%';
+                };
+
+                cbCancel = function() {
+                    var el;
+                    el = document.getElementById('fetch-whisper-tiny-en');  if (el) el.style.display = 'inline-block';
+                    el = document.getElementById('fetch-whisper-base-en');  if (el) el.style.display = 'inline-block';
+                    el = document.getElementById('fetch-whisper-small-en'); if (el) el.style.display = 'inline-block';
+
+                    el = document.getElementById('fetch-whisper-tiny-en-q5_1'  ); if (el) el.style.display = 'inline-block';
+                    el = document.getElementById('fetch-whisper-base-en-q5_1'  ); if (el) el.style.display = 'inline-block';
+                    el = document.getElementById('fetch-whisper-small-en-q5_1' ); if (el) el.style.display = 'inline-block';
+                    el = document.getElementById('fetch-whisper-medium-en-q5_0'); if (el) el.style.display = 'inline-block';
+                    el = document.getElementById('fetch-whisper-large-q5_0'    ); if (el) el.style.display = 'inline-block';
+
+                    el = document.getElementById('whisper-file'        ); if (el) el.style.display = 'inline-block';
+                    el = document.getElementById('model-whisper-status'); if (el) el.innerHTML = '';
+                };
+
+                loadRemote(url, dst, size_mb, cbProgress, storeFS, cbCancel, printTextarea);
+            }
+
+            //
+            // main
+            //
+
+            function onBench() {
+                if (instance) {
+                    Module.free(instance);
+                }
+
+                instance = Module.init('whisper.bin');
+
+                if (instance) {
+                    printTextarea("js: whisper initialized, instance: " + instance);
+                }
+
+                document.getElementById('bench').disabled = true;
+
+                if (!instance) {
+                    printTextarea("js: failed to initialize whisper");
+                    return;
+                }
+            }
+
+        </script>
+        <script type="text/javascript" src="bench.js"></script>
+    </body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "name": "addon.node",
+  "version": "0.0.0",
+  "description": "",
+  "main": "index.js",
+  "author": "Qanhe Chen",
+  "license": "MIT",
+  "scripts": {
+    "test": "jest"
+  },
+  "devDependencies": {
+    "cmake-js": "^7.1.1",
+    "jest": "^29.4.0",
+    "node-addon-api": "^5.0.0"
+  }
+}

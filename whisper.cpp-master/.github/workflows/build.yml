@@ -1,0 +1,1370 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*'
+    paths: ['.github/workflows/build.yml',
+            '**/CMakeLists.txt',
+            '**/Makefile',
+            '**/*.mk',
+            '**/*.cmake',
+            '**/*.in',
+            '**/*.h',
+            '**/*.hpp',
+            '**/*.c',
+            '**/*.cpp',
+            '**/*.cu',
+            '**/*.cuh',
+            '**/*.cl',
+            '**/*.swift',
+            '**/*.m',
+            '**/*.mm',
+            '**/*.metal',
+            '**/*.comp',
+            '**/*.java']
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create new release'
+        required: true
+        type: boolean
+      pre_release_tag:
+        description: 'Pre-release tag name'
+        required: false
+        type: string
+      run_type:
+        description: 'Workflow type to run'
+        required: true
+        type: choice
+        options:
+          - full-ci
+          - release-only
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write  # for creating release
+
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+  ubuntu_image: "ubuntu:22.04"
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+
+jobs:
+  determine-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.tag.outputs.name }}
+      should_release: ${{ steps.tag.outputs.should_release }}
+
+    steps:
+      - name: Checkout with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag name
+        id: tag
+        shell: bash
+        run: |
+          BUILD_NUMBER=$(git rev-list --count HEAD)
+          SHORT_HASH=$(git rev-parse --short=7 HEAD)
+          CUSTOM_TAG="${{ github.event.inputs.pre_release_tag }}"
+          SHOULD_RELEASE="false"
+
+          echo "Raw values:"
+          echo "BUILD_NUMBER: $BUILD_NUMBER"
+          echo "SHORT_HASH: $SHORT_HASH"
+          echo "BRANCH_NAME: ${{ env.BRANCH_NAME }}"
+          echo "CUSTOM_TAG: $CUSTOM_TAG"
+
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "Using pushed tag name"
+            TAG_NAME="${{ github.ref_name }}"
+            SHOULD_RELEASE="true"
+          elif [[ -n "$CUSTOM_TAG" ]]; then
+            echo "Using custom tag"
+            TAG_NAME="${CUSTOM_TAG}"
+            SHOULD_RELEASE="true"
+          elif [[ "${{ github.event.inputs.create_release }}" == "true" ]]; then
+            echo "Manual release requested"
+            SHOULD_RELEASE="true"
+            TAG_NAME="b${BUILD_NUMBER}"
+          elif [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
+            echo "Using master branch format"
+            TAG_NAME="b${BUILD_NUMBER}"
+            SHOULD_RELEASE="false"
+          else
+            echo "Using non-master branch format"
+            SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
+            TAG_NAME="${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}"
+            SHOULD_RELEASE="false"
+          fi
+
+          echo "Final tag name: $TAG_NAME"
+          echo "Should release: $SHOULD_RELEASE"
+          echo "name=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "should_release=$SHOULD_RELEASE" >> $GITHUB_OUTPUT
+
+
+  ubuntu-22:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-22.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [linux/amd64, linux/ppc64le]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build ${{ matrix.arch }}
+        run: |
+          docker run --platform ${{ matrix.arch }} --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
+            apt update
+            apt install -y build-essential libsdl2-dev cmake git
+            cmake -B build
+            cmake --build build --config Release -j $(nproc)'
+
+  ubuntu-22-arm64:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-22.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [linux/arm64]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build ${{ matrix.arch }}
+        run: |
+          docker run --platform ${{ matrix.arch }} --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
+            apt-get update
+            apt-get install -y ca-certificates
+            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
+
+            apt update
+            apt install -y build-essential libsdl2-dev cmake git
+            cmake -B build -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8-a
+            cmake --build build --config Release -j $(nproc)'
+
+  ubuntu-22-arm-v7:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-22.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [linux/arm/v7]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build ${{ matrix.arch }}
+        run: |
+          docker run --platform ${{ matrix.arch }} --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
+            apt-get update
+            apt-get install -y ca-certificates
+            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
+
+            apt update
+            apt install -y build-essential libsdl2-dev cmake git
+            cmake -B build -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv7-a+fp
+            cmake --build build --config Release -j $(nproc)'
+
+  macOS-latest:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: macOS-latest
+
+    strategy:
+      matrix:
+        destination: ['generic/platform=macOS', 'generic/platform=iOS', 'generic/platform=tvOS']
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: macOS-latest-swift
+          evict-old-files: 1d
+
+      - name: Dependencies
+        run: |
+          brew update
+          brew install sdl2 cmake
+
+      - name: Build
+        run: |
+          sysctl -a
+          cmake -B build -G Xcode \
+            -DGGML_METAL_USE_BF16=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DWHISPER_BUILD_EXAMPLES=OFF \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_SERVER=OFF \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+
+
+#  freeBSD-latest:
+#    runs-on: macos-13
+#
+#    steps:
+#      - name: Clone
+#        uses: actions/checkout@v4
+#
+#      - name: Build
+#        uses: cross-platform-actions/action@v0.27.0
+#        with:
+#          operating_system: freebsd
+#          version: '14.2'
+#          run: |
+#            sudo pkg update
+#            sudo pkg install -y gmake sdl2 cmake git
+#            cmake -B build
+#            cmake --build build --config Release
+
+  ubuntu-22-gcc:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-22.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [Debug, Release]
+        arch: [linux/amd64, linux/ppc64le]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build ${{ matrix.arch }}
+        run: |
+          docker run --platform ${{ matrix.arch }} --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
+            apt update
+            apt install -y build-essential cmake libsdl2-dev git
+            cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }}
+            make
+            ctest -L gh --output-on-failure'
+
+  ubuntu-22-gcc-arm64:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-22.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [Debug, Release]
+        arch: [linux/arm64]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build ${{ matrix.arch }}
+        run: |
+          docker run --platform ${{ matrix.arch }} --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
+            apt-get update
+            apt-get install -y ca-certificates
+            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
+
+            apt update
+            apt install -y build-essential cmake libsdl2-dev git
+            cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8-a
+            make
+            ctest -L gh --output-on-failure'
+
+  ubuntu-22-gcc-arm-v7:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-22.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [Debug, Release]
+        arch: [linux/arm/v7]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build ${{ matrix.arch }}
+        run: |
+          docker run --platform ${{ matrix.arch }} --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
+            apt-get update
+            apt-get install -y ca-certificates
+            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
+
+            apt update
+            apt install -y build-essential cmake libsdl2-dev git
+            cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv7-a+fp
+            make
+            ctest -L gh --output-on-failure'
+
+  ubuntu-22-clang:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-22.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [Debug, Release]
+        #arch: [linux/amd64, linux/arm64, linux/arm/v7, linux/ppc64le]
+        # TODO: arm/v7 disabled due to clang bug
+        #       https://github.com/ggerganov/whisper.cpp/actions/runs/9657764109/job/26637633042?pr=2256#step:4:1990
+        arch: [linux/amd64, linux/arm64, linux/ppc64le]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build ${{ matrix.arch }}
+        run: |
+          docker run --platform ${{ matrix.arch }} --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
+            apt-get update
+            apt-get install -y ca-certificates
+            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
+
+            apt update
+            apt install -y clang build-essential cmake libsdl2-dev git
+            cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
+            make
+            ctest -L gh --output-on-failure'
+
+  ubuntu-22-gcc-sanitized:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-22.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [ADDRESS, THREAD, UNDEFINED]
+        arch: [linux/amd64]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build ${{ matrix.arch }}
+        run: |
+          docker run --platform ${{ matrix.arch }} --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
+            apt update
+            apt install -y build-essential cmake git
+            cmake . -DCMAKE_BUILD_TYPE=Debug \
+              -DWHISPER_SANITIZE_${{ matrix.sanitizer }}=ON \
+              -DGGML_OPENMP=OFF
+            make
+            ctest -L gh --output-on-failure'
+
+  ubuntu-22-cmake-sycl:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-22.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        dwhisper_sycl: [ON]
+        dcmake_c_compiler: [icx]
+        dcmake_cxx_compiler: [icpx]
+        arch: [linux/amd64, linux/arm64, linux/arm/v7, linux/ppc64le]
+
+    continue-on-error: true
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: add oneAPI to apt
+        shell: bash
+        run: |
+          cd /tmp
+          wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
+          sudo apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
+          rm GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
+          sudo add-apt-repository "deb https://apt.repos.intel.com/oneapi all main"
+
+      - name: install oneAPI dpcpp compiler
+        shell: bash
+        run: |
+          sudo apt update
+          sudo apt install intel-oneapi-compiler-dpcpp-cpp git
+
+      - name: install oneAPI MKL library
+        shell: bash
+        run: |
+          sudo apt install intel-oneapi-mkl-devel git
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        id: cmake_build
+        run: |
+          source /opt/intel/oneapi/setvars.sh
+          mkdir build
+          cd build
+          cmake -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx ..
+          cmake --build . --config Release -j $(nproc)
+
+  ubuntu-22-cmake-sycl-fp16:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-22.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        dwhisper_sycl: [ON]
+        dcmake_c_compiler: [icx]
+        dcmake_cxx_compiler: [icpx]
+        arch: [linux/amd64, linux/arm64, linux/arm/v7, linux/ppc64le]
+
+    continue-on-error: true
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: add oneAPI to apt
+        shell: bash
+        run: |
+          cd /tmp
+          wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
+          sudo apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
+          rm GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
+          sudo add-apt-repository "deb https://apt.repos.intel.com/oneapi all main"
+
+      - name: install oneAPI dpcpp compiler
+        shell: bash
+        run: |
+          sudo apt update
+          sudo apt install intel-oneapi-compiler-dpcpp-cpp git
+
+      - name: install oneAPI MKL library
+        shell: bash
+        run: |
+          sudo apt install intel-oneapi-mkl-devel
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        id: cmake_build
+        run: |
+          source /opt/intel/oneapi/setvars.sh
+          mkdir build
+          cd build
+          cmake -DGGML_SYCL_F16=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx ..
+          cmake --build . --config Release -j $(nproc)
+
+  windows-msys2:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { sys: UCRT64,  env: ucrt-x86_64,  build: Release }
+          - { sys: CLANG64, env: clang-x86_64, build: Release }
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Setup ${{ matrix.sys }}
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          msystem: ${{matrix.sys}}
+          install: >-
+            base-devel
+            git
+            mingw-w64-${{matrix.env}}-toolchain
+            mingw-w64-${{matrix.env}}-cmake
+            mingw-w64-${{matrix.env}}-SDL2
+            mingw-w64-${{matrix.env}}-openblas
+
+      - name: Build using CMake
+        shell: msys2 {0}
+        run: |
+            cmake -B build -DWHISPER_SDL2=ON
+            cmake --build build --config ${{ matrix.build }} -j $(nproc)
+
+      - name: Clean after building using CMake
+        shell: msys2 {0}
+        run: |
+            rm -rf build
+
+      - name: Build using CMake w/ OpenBLAS
+        shell: msys2 {0}
+        run: |
+            cmake -B build -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS
+            cmake --build build --config ${{ matrix.build }} -j $(nproc)
+
+  windows:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: windows-latest
+    needs: determine-tag
+
+    strategy:
+      matrix:
+        build: [Release]
+        arch: [Win32, x64]
+        sdl2: [ON]
+        include:
+          - arch: Win32
+            s2arc: x86
+            jnaPath: win32-x86
+          - arch: x64
+            s2arc: x64
+            jnaPath: win32-x86-64
+          - sdl2: ON
+            s2ver: 2.28.5
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Fetch SDL2 and set SDL2_DIR
+        if: matrix.sdl2 == 'ON'
+        run: |
+          C:/msys64/usr/bin/wget.exe -qO sdl2.zip https://github.com/libsdl-org/SDL/releases/download/release-${{ matrix.s2ver }}/SDL2-devel-${{ matrix.s2ver }}-VC.zip
+          7z x sdl2.zip
+          echo "SDL2_DIR=$env:GITHUB_WORKSPACE/SDL2-${{ matrix.s2ver }}/cmake" >> $env:GITHUB_ENV
+
+      - name: Configure
+        run: >
+          cmake -S . -B ./build -A ${{ matrix.arch }}
+          -DCMAKE_BUILD_TYPE=${{ matrix.build }}
+          -DBUILD_SHARED_LIBS=ON
+          -DWHISPER_SDL2=${{ matrix.sdl2 }}
+
+      - name: Build
+        run: |
+          cd ./build
+          msbuild ALL_BUILD.vcxproj -t:build -p:configuration=${{ matrix.build }} -p:platform=${{ matrix.arch }}
+
+      - name: Copy SDL2.dll
+        if: matrix.sdl2 == 'ON'
+        run: copy "$env:SDL2_DIR/../lib/${{ matrix.s2arc }}/SDL2.dll" build/bin/${{ matrix.build }}
+
+      - name: Upload SDL2.dll
+        if: matrix.sdl2 == 'ON'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.s2arc }}_SDL2.dll
+          path: build/bin/${{ matrix.build }}/SDL2.dll
+
+      - name: Upload whisper dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper_${{ matrix.arch }}.dll
+          path: build/bin/${{ matrix.build }}/whisper.dll
+
+      - name: Upload ggml dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: ggml_${{ matrix.arch }}.dll
+          path: build/bin/${{ matrix.build }}/ggml.dll
+
+      - name: Upload ggml base dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: ggml_base_${{ matrix.arch }}.dll
+          path: build/bin/${{ matrix.build }}/ggml-base.dll
+
+      - name: Upload ggml cpu dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: ggml_cpu_${{ matrix.arch }}.dll
+          path: build/bin/${{ matrix.build }}/ggml-cpu.dll
+
+      - name: Pack bin artifacts
+        shell: pwsh
+        run: |
+              Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-bin-${{ matrix.arch }}.zip"
+
+      - name: Upload binaries
+        if: matrix.sdl2 == 'ON' && ${{ needs.determine-tag.outputs.should_release }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-bin-${{ matrix.arch }}.zip
+          path: whisper-bin-${{ matrix.arch }}.zip
+
+  windows-blas:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: windows-latest
+
+    strategy:
+      matrix:
+        build: [Release]
+        arch: [Win32, x64]
+        blas: [ON]
+        sdl2: [ON]
+        blasver: [0.3.29]
+        include:
+          - arch: Win32
+            s2arc: x86
+            blasfile: x86
+          - arch: x64
+            s2arc: x64
+            blasfile: x64_64
+          - sdl2: ON
+            s2ver: 2.28.5
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Install OpenBLAS and pkgconfiglite
+        if: matrix.blas == 'ON'
+        run: |
+          Invoke-WebRequest "https://github.com/OpenMathLib/OpenBLAS/releases/download/v${{matrix.blasver}}/OpenBLAS-${{matrix.blasver}}_${{matrix.blasfile}}.zip" -OutFile "OpenBLAS-${{matrix.blasver}}.zip"
+          Expand-Archive "OpenBLAS-${{matrix.blasver}}.zip" -DestinationPath "OpenBLAS-${{matrix.blasver}}"
+          choco install pkgconfiglite
+
+      - name: Fetch SDL2 and set SDL2_DIR
+        if: matrix.sdl2 == 'ON'
+        run: |
+          C:/msys64/usr/bin/wget.exe -qO sdl2.zip https://github.com/libsdl-org/SDL/releases/download/release-${{ matrix.s2ver }}/SDL2-devel-${{ matrix.s2ver }}-VC.zip
+          7z x sdl2.zip
+          echo "SDL2_DIR=$env:GITHUB_WORKSPACE/SDL2-${{ matrix.s2ver }}/cmake" >> $env:GITHUB_ENV
+
+      - name: Configure
+        run: >
+          cmake -S . -B ./build -A ${{ matrix.arch }}
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DCMAKE_BUILD_TYPE=${{ matrix.build }}
+          -DGGML_BLAS=${{ matrix.blas }}
+          -DGGML_BLAS_VENDOR=OpenBLAS
+          -DBLAS_LIBRARIES="$env:GITHUB_WORKSPACE/OpenBLAS-${{matrix.blasver}}/lib/libopenblas.lib"
+          -DBLAS_INCLUDE_DIRS="$env:GITHUB_WORKSPACE/OpenBLAS-${{matrix.blasver}}/include"
+          -DWHISPER_SDL2=${{ matrix.sdl2 }}
+
+      - name: Build
+        run: |
+          cd ./build
+          msbuild ALL_BUILD.vcxproj -t:build -p:configuration=${{ matrix.build }} -p:platform=${{ matrix.arch }}
+
+      - name: Copy openblas.dll
+        if: matrix.blas == 'ON'
+        run: copy "$env:GITHUB_WORKSPACE/OpenBLAS-${{matrix.blasver}}/bin/libopenblas.dll" build/bin/${{ matrix.build }}
+
+      - name: Copy SDL2.dll
+        if: matrix.sdl2 == 'ON'
+        run: copy "$env:SDL2_DIR/../lib/${{ matrix.s2arc }}/SDL2.dll" build/bin/${{ matrix.build }}
+
+      - name: Pack bin artifacts
+        shell: pwsh
+        run: |
+              Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-blas-bin-${{ matrix.arch }}.zip"
+
+      - name: Upload binaries
+        if: matrix.blas == 'ON' && matrix.sdl2 == 'ON' && ${{ needs.determine-tag.outputs.should_release }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-blas-bin-${{ matrix.arch }}.zip
+          path: whisper-blas-bin-${{ matrix.arch }}.zip
+
+  windows-cublas:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: windows-2022
+    needs: determine-tag
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [Release]
+        arch: [x64]
+        cublas: [ON]
+        sdl2: [ON]
+        cuda-toolkit: [12.4.0, 11.8.0]
+        include:
+          - arch: x64
+            sdl2: ON
+            sdl2_ver: 2.28.5
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v4
+
+      - name: Install Ninja
+        id: install_ninja
+        run: |
+          choco install ninja
+
+      - name: Install ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ${{ github.job }}-${{ matrix.cuda-toolkit }}-${{ matrix.build }}
+          variant: sccache
+          evict-old-files: 5d
+
+      - name: Install Cuda Toolkit 11.8.0
+        if: ${{ matrix.cuda-toolkit == '11.8.0' }}
+        run: |
+          $CUDA_VERSION = ${{ matrix.cuda-toolkit }}
+          $CUDA_TOOLKIT_DIR = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v$CUDA_VERSION"
+          $CUDA_DOWNLOAD = "https://developer.download.nvidia.com/compute/cuda/redist"
+
+          # Components versions
+          $CUDART_VER = "11.8.89"
+          $NVCC_VER   = "11.8.89"
+          $NVRTC_VER  = "11.8.89"
+          $CUBLAS_VER = "11.8.1.74"
+          $NVTX_VER   = "11.8.86"
+          $VS_VER     = "11.8.86"
+          $NVPROF_VER = "11.8.87"
+          $CCCL_VER   = "11.8.89"
+
+          # Create the directory where the CUDA Toolkit will be installed
+          mkdir -p $CUDA_TOOLKIT_DIR
+
+          # Install unzip to extract the downloaded files
+          choco install unzip -y
+
+          # Download all the required components
+          curl -O "$CUDA_DOWNLOAD/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-${CUDART_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-${NVCC_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/cuda_nvrtc/windows-x86_64/cuda_nvrtc-windows-x86_64-${NVRTC_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/libcublas/windows-x86_64/libcublas-windows-x86_64-${CUBLAS_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/cuda_nvtx/windows-x86_64/cuda_nvtx-windows-x86_64-${NVTX_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/visual_studio_integration/windows-x86_64/visual_studio_integration-windows-x86_64-${VS_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/cuda_nvprof/windows-x86_64/cuda_nvprof-windows-x86_64-${NVPROF_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-${CCCL_VER}-archive.zip"
+
+          # Extract all the downloaded files to the CUDA Toolkit directory
+          unzip '*.zip' -d $CUDA_TOOLKIT_DIR
+
+          # Copy all the extracted files to the main CUDA Toolkit directory
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_cudart-windows-x86_64-${CUDART_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_nvcc-windows-x86_64-${NVCC_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_nvrtc-windows-x86_64-${NVRTC_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\libcublas-windows-x86_64-${CUBLAS_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_nvtx-windows-x86_64-${NVTX_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_nvprof-windows-x86_64-${NVPROF_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_cccl-windows-x86_64-${CCCL_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\visual_studio_integration-windows-x86_64-${VS_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+
+          # Visual Studio integration
+          xcopy "$CUDA_TOOLKIT_DIR\visual_studio_integration-windows-x86_64-${VS_VER}-archive\visual_studio_integration\MSBuildExtensions\*" "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Microsoft\VC\v170\BuildCustomizations" /E /I /H /Y
+
+          # Set environment variables
+          echo "$CUDA_TOOLKIT_DIR\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "$CUDA_TOOLKIT_DIR\libnvvp" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "CUDA_PATH=$CUDA_TOOLKIT_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          echo "CUDA_PATH_V11_8=$CUDA_TOOLKIT_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        
+      - name: Install Cuda Toolkit 12.4.0
+        if: ${{ matrix.cuda-toolkit == '12.4.0' }}
+        run: |
+          $CUDA_VERSION = ${{ matrix.cuda-toolkit }}
+          $CUDA_TOOLKIT_DIR = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v$CUDA_VERSION"
+          $CUDA_DOWNLOAD = "https://developer.download.nvidia.com/compute/cuda/redist"
+
+          # Components versions
+          $CUDART_VER   = "12.4.127"
+          $NVCC_VER     = "12.4.131"
+          $NVRTC_VER    = "12.4.127"
+          $CUBLAS_VER   = "12.4.5.8"
+          $NVTX_VER     = "12.4.127"
+          $PROFILER_VER = "12.4.127"
+          $VS_VER       = "12.4.127"
+          $NVPROF_VER   = "12.4.128"
+          $CCCL_VER     = "12.4.127"
+
+          # Create the directory where the CUDA Toolkit will be installed
+          mkdir -p $CUDA_TOOLKIT_DIR
+
+          # Install unzip to extract the downloaded files
+          choco install unzip -y
+
+          # Download all the required components
+          curl -O "$CUDA_DOWNLOAD/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-${CUDART_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-${NVCC_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/cuda_nvrtc/windows-x86_64/cuda_nvrtc-windows-x86_64-${NVRTC_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/libcublas/windows-x86_64/libcublas-windows-x86_64-${CUBLAS_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/cuda_nvtx/windows-x86_64/cuda_nvtx-windows-x86_64-${NVTX_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/cuda_profiler_api/windows-x86_64/cuda_profiler_api-windows-x86_64-${PROFILER_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/visual_studio_integration/windows-x86_64/visual_studio_integration-windows-x86_64-${VS_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/cuda_nvprof/windows-x86_64/cuda_nvprof-windows-x86_64-${NVPROF_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-${CCCL_VER}-archive.zip"
+
+          # Extract all the downloaded files to the CUDA Toolkit directory
+          unzip -q '*.zip' -d $CUDA_TOOLKIT_DIR
+
+          # Copy all the extracted files to the main CUDA Toolkit directory
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_cudart-windows-x86_64-${CUDART_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_nvcc-windows-x86_64-${NVCC_VER}-archive\*"     "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_nvrtc-windows-x86_64-${NVRTC_VER}-archive\*"   "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\libcublas-windows-x86_64-${CUBLAS_VER}-archive\*"   "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_nvtx-windows-x86_64-${NVTX_VER}-archive\*"     "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_nvprof-windows-x86_64-${NVPROF_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_cccl-windows-x86_64-${CCCL_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_profiler_api-windows-x86_64-${PROFILER_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\visual_studio_integration-windows-x86_64-${VS_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+
+          # Visual Studio integration
+          xcopy "$CUDA_TOOLKIT_DIR\visual_studio_integration-windows-x86_64-${VS_VER}-archive\visual_studio_integration\MSBuildExtensions\*" "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Microsoft\VC\v170\BuildCustomizations" /E /I /H /Y
+
+          # Set environment variables
+          echo "$CUDA_TOOLKIT_DIR\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "$CUDA_TOOLKIT_DIR\libnvvp" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "CUDA_PATH=$CUDA_TOOLKIT_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          echo "CUDA_PATH_V12_2=$CUDA_TOOLKIT_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Install 7-Zip
+        run: choco install 7zip -y
+
+      - name: Fetch SDL2 and set SDL2_DIR
+        if: matrix.sdl2 == 'ON'
+        run: |
+          Invoke-WebRequest -Uri https://github.com/libsdl-org/SDL/releases/download/release-${{ matrix.sdl2_ver }}/SDL2-devel-${{ matrix.sdl2_ver }}-VC.zip -OutFile sdl2.zip
+          7z x sdl2.zip
+          echo "SDL2_DIR=${{ github.workspace }}\SDL2-${{ matrix.sdl2_ver }}\cmake" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "${{ github.workspace }}\SDL2-${{ matrix.sdl2_ver }}\cmake" > SDL2_PATH.txt
+
+      - name: Install cmake
+        run: choco install cmake
+
+      - name: Build Project
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --version
+          where cmake
+          if "${{ matrix.cuda-toolkit }}" == "11.8.0" (
+            set CUDA_FLAGS=-allow-unsupported-compiler -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR
+          ) else (
+            set CUDA_FLAGS=
+          )
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -DCMAKE_BUILD_TYPE=${{ matrix.build }} ^
+            -DGGML_CUDA=${{ matrix.cublas }} ^
+            -DWHISPER_SDL2=${{ matrix.sdl2 }} ^
+            -DSDL2_DIR="%SDL2_DIR%" ^
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ^
+            -DCMAKE_CUDA_FLAGS="%CUDA_FLAGS%"
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build build --config ${{ matrix.build }} -j %NUMBER_OF_PROCESSORS%
+
+      - name: Check sccache status after build
+        run: |
+          sccache --show-stats
+
+      - name: Copy CUDA DLLs
+        run: |
+          Get-ChildItem "$env:CUDA_PATH\bin\" -Filter "*.dll" |
+          Copy-Item -Destination "build/bin/${{ matrix.build }}"
+
+      - name: Copy SDL2.dll
+        if: matrix.sdl2 == 'ON'
+        run: copy "$env:SDL2_DIR/../lib/${{ matrix.arch }}/SDL2.dll" build/bin/${{ matrix.build }}
+
+      - name: Pack bin artifacts
+        shell: pwsh
+        run: |
+              Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip"
+
+      - name: Upload binaries
+        if: ${{ needs.determine-tag.outputs.should_release }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
+          path: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
+
+  emscripten:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-22.04
+
+    strategy:
+      matrix:
+        build: [Release]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Setup emsdk
+        uses: mymindstorm/setup-emsdk@v14
+
+      - name: Verify
+        run: emcc -v
+
+      - name: Build
+        run: |
+          emcmake cmake . -DCMAKE_BUILD_TYPE=${{ matrix.build }}
+          make
+
+  ios-xcode-build:
+    runs-on: macos-latest
+    needs: determine-tag
+
+    strategy:
+      matrix:
+        build: [Release]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          cp models/for-tests-ggml-base.en.bin models/ggml-base.en.bin
+          mkdir models/ggml-base.en-encoder.mlmodelc
+
+      - name: Build
+        id: cmake_build
+        run: |
+          sysctl -a
+          mkdir build
+          cd build
+          cmake -G Xcode .. \
+            -DGGML_METAL_USE_BF16=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DWHISPER_BUILD_EXAMPLES=OFF \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_SERVER=OFF \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
+          cmake --build . --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
+
+      - name: xcodebuild for swift package
+        id: xcodebuild
+        run: |
+          ./build-xcframework.sh
+
+      - name: Build objc example
+        run: xcodebuild -project examples/whisper.objc/whisper.objc.xcodeproj -scheme whisper.objc -configuration ${{ matrix.build }} -sdk iphoneos CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO FRAMEWORK_FOLDER_PATH=./build-ios build
+
+      - name: Build swiftui example
+        run: xcodebuild -project examples/whisper.swiftui/whisper.swiftui.xcodeproj -scheme WhisperCppDemo -configuration ${{ matrix.build }} -sdk iphoneos CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -destination 'generic/platform=iOS' FRAMEWORK_FOLDER_PATH=./build-ios build
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          zip --symlinks -r whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip build-apple/whisper.xcframework
+
+      - name: Upload artifacts
+        if: ${{ needs.determine-tag.outputs.should_release }}
+        uses: actions/upload-artifact@v4
+        with:
+          path: whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip
+          name: whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip
+
+  android:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+        with:
+          path: whisper
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 21
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build
+        run: |
+          cd whisper/examples/whisper.android
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Build with external ggml
+        run: |
+          export PATH_TO_GGML=$PWD/ggml
+          cd whisper/examples/whisper.android
+          ./gradlew assembleRelease --no-daemon
+
+  android_java:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 9.0
+
+      - name: Build
+        run: |
+          cd examples/whisper.android.java
+          chmod +x ./gradlew
+          ./gradlew assembleRelease
+
+  bindings-java:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    needs: ['windows']
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 20
+
+      - name: Download Whisper Windows lib
+        uses: actions/download-artifact@v4
+        with:
+          name: whisper_x64.dll
+
+      - name: Download GGML Windows lib
+        uses: actions/download-artifact@v4
+        with:
+          name: ggml_x64.dll
+
+      - name: Download GGML Base Windows lib
+        uses: actions/download-artifact@v4
+        with:
+          name: ggml_base_x64.dll
+
+      - name: Download GGML CPU Windows lib
+        uses: actions/download-artifact@v4
+        with:
+          name: ggml_cpu_x64.dll
+
+      - name: Download SDL2.dll
+        uses: actions/download-artifact@v4
+        with:
+          name: x64_SDL2.dll
+
+      - name: List downloaded files
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path "." -Recurse -Filter "*.dll"
+
+      - name: Move DLL to correct location
+        shell: pwsh
+        run: |
+          New-Item -Path "build\bin\Release" -ItemType Directory -Force
+
+          Copy-Item -Path "whisper.dll" -Destination "build\bin\Release\whisper.dll" -Force
+          Write-Host "Copied whisper.dll to build\bin\Release\whisper.dll directory"
+
+          Copy-Item -Path "ggml.dll" -Destination "build\bin\Release\ggml.dll" -Force
+          Write-Host "Copied ggml.dll to build\bin\Release\ggml.dll directory"
+
+          Copy-Item -Path "ggml-base.dll" -Destination "build\bin\Release\ggml-base.dll" -Force
+          Write-Host "Copied ggml-base.dll to build\bin\Release\ggml-base.dll directory"
+
+          Copy-Item -Path "ggml-cpu.dll" -Destination "build\bin\Release\ggml-cpu.dll" -Force
+          Write-Host "Copied ggml-cpu.dll to build\bin\Release\ggml-cpu.dll directory"
+
+          Copy-Item -Path "SDL2.dll" -Destination "build\bin\Release\SDL2.dll" -Force
+          Write-Host "Copied SDL2.dll to build\bin\Release\SDL2.dll directory"
+
+      - name: List build release files
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path "build\Release" -Recurse -Filter "*.dll"
+
+      - name: Build
+        run: |
+          models\download-ggml-model.cmd tiny.en models/
+          cd bindings/java
+          chmod +x ./gradlew
+          ./gradlew build --info
+
+      - name: Pack jar artifacts
+        shell: pwsh
+        run: |
+              Compress-Archive -Path "bindings/java/build/libs/whispercpp-*.jar" -DestinationPath "whispercpp.jar.zip"
+
+      - name: Upload jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: whispercpp.jar.zip
+          path: whispercpp.jar.zip
+
+#      - name: Publish package
+#        if: ${{ github.ref == 'refs/heads/master' }}
+#        uses: gradle/gradle-build-action@v2.4.2
+#        with:
+#          arguments: publish
+#          build-root-directory: bindings/java
+#        env:
+#          MAVEN_USERNAME: ${{ secrets.JIRA_USER }}
+#          MAVEN_PASSWORD: ${{ secrets.JIRA_PASS }}
+#          PGP_SECRET: ${{ secrets.GPG_PRIVATE_KEY }}
+#          PGP_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+
+  quantize:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Test quantize
+        run: |
+          ./models/download-ggml-model.sh tiny.en
+          cmake -B build
+          cmake --build build --config Release
+          ./build/bin/quantize models/ggml-tiny.en.bin models/ggml-tiny.en-q4_0.bin q4_0
+
+  release:
+    if: ${{ github.event.inputs.create_release == 'true' || github.event.inputs.pre_release_tag != '' || startsWith(github.ref, 'refs/tags/v') }}
+
+    runs-on: ubuntu-latest
+
+    needs:
+      - determine-tag
+      - ios-xcode-build
+      - windows
+      - windows-blas
+      - windows-cublas
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: release
+          evict-old-files: 1d
+
+      # Downloads all the artifacts from the previous jobs
+      - name: Download artifacts
+        id: download-artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifact
+
+      - name: Move artifacts
+        id: move_artifacts
+        run: mkdir -p ./artifact/release && mv ./artifact/*/*.zip ./artifact/release
+
+      - name: Create release
+        id: create_release
+        uses: ggml-org/action-create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ needs.determine-tag.outputs.tag_name }}
+          prerelease: ${{ github.event.inputs.pre_release_tag != '' }}
+          draft: true
+
+      - name: Upload release
+        id: upload_release
+        uses: actions/github-script@v3
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            const path = require('path');
+            const fs = require('fs');
+            const release_id = '${{ steps.create_release.outputs.id }}';
+            for (let file of await fs.readdirSync('./artifact/release')) {
+              if (path.extname(file) === '.zip') {
+                console.log('uploadReleaseAsset', file);
+                await github.repos.uploadReleaseAsset({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  release_id: release_id,
+                  name: file,
+                  data: await fs.readFileSync(`./artifact/release/${file}`)
+                });
+              }
+            }
+
+  coreml-base-en:
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
+            github.event.inputs.create_release == 'true' ||
+            github.event.inputs.pre_release_tag != '' ||
+            startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: macos-latest
+    needs: determine-tag
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set environment variables
+        id: set_vars
+        run: |
+          echo "MODEL_NAME=base.en" >> $GITHUB_ENV
+          echo "GEN_MODEL_NAME=whisper-${{ needs.determine-tag.outputs.tag_name }}-ggml-base.en-encoder.mlmodelc" >> $GITHUB_ENV
+
+      - name: Download model
+        run: |
+          ./models/download-ggml-model.sh ${{ env.MODEL_NAME }}
+
+      - name: Generate CoreML model
+        run: |
+          python3.11 -m venv venv
+          source venv/bin/activate
+          pip install ane_transformers openai-whisper coremltools
+          ./models/generate-coreml-model.sh ${{ env.MODEL_NAME }}
+
+  vad:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        shell: bash
+        run: |
+          cmake -B build
+          cmake --build build --config Release
+
+      - name: Test
+        shell: bash
+        run: |
+          ctest -R ^test-vad$ --test-dir build --output-on-failure -VV

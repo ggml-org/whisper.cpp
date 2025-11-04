@@ -1,0 +1,286 @@
+## M1 Pro (old 22c96b4)
+
+make -j && ./scripts/bench-all.sh 8
+
+Running memcpy benchmark
+
+memcpy:   39.10 GB/s (heat-up)
+memcpy:   44.75 GB/s ( 1 thread)
+memcpy:   44.78 GB/s ( 1 thread)
+memcpy:   44.97 GB/s ( 2 thread)
+memcpy:   48.04 GB/s ( 3 thread)
+memcpy:   50.55 GB/s ( 4 thread)
+memcpy:   55.20 GB/s ( 5 thread)
+memcpy:   65.60 GB/s ( 6 thread)
+memcpy:   70.64 GB/s ( 7 thread)
+memcpy:   73.34 GB/s ( 8 thread)
+sum:    -5120002535.000000
+
+
+make -j && ./scripts/bench-all.sh 1 0 0
+
+Running ggml_mul_mat benchmark with 1 threads
+
+  64 x   64: Q4_0   237.1 GFLOPS (128 runs) | Q4_1   168.6 GFLOPS (128 runs)
+  64 x   64: Q5_0   136.4 GFLOPS (128 runs) | Q5_1   135.6 GFLOPS (128 runs) | Q8_0   243.1 GFLOPS (128 runs)
+  64 x   64: F16    140.4 GFLOPS (128 runs) | F32    316.6 GFLOPS (128 runs)
+ 128 x  128: Q4_0   496.6 GFLOPS (128 runs) | Q4_1   348.6 GFLOPS (128 runs)
+ 128 x  128: Q5_0   273.2 GFLOPS (128 runs) | Q5_1   274.1 GFLOPS (128 runs) | Q8_0   505.1 GFLOPS (128 runs)
+ 128 x  128: F16    300.4 GFLOPS (128 runs) | F32    653.9 GFLOPS (128 runs)
+ 256 x  256: Q4_0   791.7 GFLOPS (128 runs) | Q4_1   615.3 GFLOPS (128 runs)
+ 256 x  256: Q5_0   651.0 GFLOPS (128 runs) | Q5_1   674.7 GFLOPS (128 runs) | Q8_0   803.1 GFLOPS (128 runs)
+ 256 x  256: F16    869.6 GFLOPS (128 runs) | F32    957.2 GFLOPS (128 runs)
+ 512 x  512: Q4_0   973.3 GFLOPS (128 runs) | Q4_1   897.9 GFLOPS (128 runs)
+ 512 x  512: Q5_0  1078.8 GFLOPS (128 runs) | Q5_1   998.4 GFLOPS (128 runs) | Q8_0   752.4 GFLOPS (128 runs)
+ 512 x  512: F16    892.5 GFLOPS (128 runs) | F32   1399.6 GFLOPS (128 runs)
+1024 x 1024: Q4_0  1402.7 GFLOPS (128 runs) | Q4_1  1218.5 GFLOPS (128 runs)
+1024 x 1024: Q5_0  1444.8 GFLOPS (128 runs) | Q5_1  1444.7 GFLOPS (128 runs) | Q8_0  1395.7 GFLOPS (128 runs)
+1024 x 1024: F16   1524.1 GFLOPS (128 runs) | F32   1726.6 GFLOPS (128 runs)
+2048 x 2048: Q4_0  1479.4 GFLOPS ( 87 runs) | Q4_1  1378.5 GFLOPS ( 81 runs)
+2048 x 2048: Q5_0  1454.6 GFLOPS ( 85 runs) | Q5_1  1462.9 GFLOPS ( 86 runs) | Q8_0  1483.2 GFLOPS ( 87 runs)
+2048 x 2048: F16   1488.0 GFLOPS ( 87 runs) | F32   1538.2 GFLOPS ( 90 runs)
+4096 x 4096: Q4_0  1509.7 GFLOPS ( 11 runs) | Q4_1  1433.0 GFLOPS ( 11 runs)
+4096 x 4096: Q5_0  1422.4 GFLOPS ( 11 runs) | Q5_1  1437.0 GFLOPS ( 11 runs) | Q8_0  1523.0 GFLOPS ( 12 runs)
+4096 x 4096: F16   1551.3 GFLOPS ( 12 runs) | F32   1451.0 GFLOPS ( 11 runs)
+
+|    CPU | Config |         Model |  Th |  FA |    Enc. |    Dec. |    Bch5 |      PP |  Commit |
+|    --- |    --- |           --- | --- | --- |     --- |     --- |     --- |     --- |     --- |
+| M1 Pro |  METAL |          tiny |   1 |   0 |   39.21 |    1.74 |    0.61 |    0.04 | 22c96b4 |
+| M1 Pro |  METAL |          base |   1 |   0 |   70.76 |    2.60 |    0.93 |    0.06 | 22c96b4 |
+| M1 Pro |  METAL |         small |   1 |   0 |  217.28 |    6.42 |    2.14 |    0.17 | 22c96b4 |
+| M1 Pro |  METAL |        medium |   1 |   0 |  596.74 |   14.43 |    4.75 |    0.45 | 22c96b4 |
+
+
+make -j && ./scripts/bench-all.sh 1 1 1
+
+|    CPU | Config |         Model |  Th |  FA |    Enc. |    Dec. |    Bch5 |      PP |  Commit |
+|    --- |    --- |           --- | --- | --- |     --- |     --- |     --- |     --- |     --- |
+| M1 Pro |  METAL |          tiny |   1 |   1 |   30.77 |    1.59 |    0.54 |    0.03 | 22c96b4 |
+| M1 Pro |  METAL |          base |   1 |   1 |   60.42 |    2.29 |    0.81 |    0.05 | 22c96b4 |
+| M1 Pro |  METAL |         small |   1 |   1 |  183.82 |    5.12 |    1.81 |    0.14 | 22c96b4 |
+| M1 Pro |  METAL |        medium |   1 |   1 |  517.92 |   11.60 |    4.01 |    0.38 | 22c96b4 |
+
+
+## M2 Ultra
+
+make -j && ./scripts/bench-all.sh 8
+
+Running memcpy benchmark
+
+memcpy:   48.01 GB/s (heat-up)
+memcpy:   56.00 GB/s ( 1 thread)
+memcpy:   56.20 GB/s ( 1 thread)
+memcpy:  102.69 GB/s ( 2 thread)
+memcpy:  140.32 GB/s ( 3 thread)
+memcpy:  179.04 GB/s ( 4 thread)
+memcpy:  159.61 GB/s ( 5 thread)
+memcpy:  159.02 GB/s ( 6 thread)
+memcpy:  180.29 GB/s ( 7 thread)
+memcpy:  198.10 GB/s ( 8 thread)
+sum:    -5119999345.000000
+
+
+make -j && ./scripts/bench-all.sh 1
+
+Running ggml_mul_mat benchmark with 1 threads
+
+  64 x   64: Q4_0    37.7 GFLOPS (128 runs) | Q4_1    36.0 GFLOPS (128 runs)
+  64 x   64: Q5_0    20.1 GFLOPS (128 runs) | Q5_1    19.8 GFLOPS (128 runs) | Q8_0    39.5 GFLOPS (128 runs)
+  64 x   64: F16     29.9 GFLOPS (128 runs) | F32     22.6 GFLOPS (128 runs)
+ 128 x  128: Q4_0    71.0 GFLOPS (128 runs) | Q4_1    62.2 GFLOPS (128 runs)
+ 128 x  128: Q5_0    33.4 GFLOPS (128 runs) | Q5_1    31.6 GFLOPS (128 runs) | Q8_0    79.8 GFLOPS (128 runs)
+ 128 x  128: F16     52.4 GFLOPS (128 runs) | F32     32.7 GFLOPS (128 runs)
+ 256 x  256: Q4_0    88.6 GFLOPS (128 runs) | Q4_1    77.2 GFLOPS (128 runs)
+ 256 x  256: Q5_0    40.3 GFLOPS (128 runs) | Q5_1    36.8 GFLOPS (128 runs) | Q8_0   102.5 GFLOPS (128 runs)
+ 256 x  256: F16     64.6 GFLOPS (128 runs) | F32     36.4 GFLOPS (128 runs)
+ 512 x  512: Q4_0    94.7 GFLOPS (128 runs) | Q4_1    83.6 GFLOPS (128 runs)
+ 512 x  512: Q5_0    45.9 GFLOPS (128 runs) | Q5_1    41.3 GFLOPS (128 runs) | Q8_0   112.8 GFLOPS (128 runs)
+ 512 x  512: F16     72.3 GFLOPS (128 runs) | F32     37.7 GFLOPS (128 runs)
+1024 x 1024: Q4_0    98.9 GFLOPS ( 47 runs) | Q4_1    88.2 GFLOPS ( 42 runs)
+1024 x 1024: Q5_0    49.0 GFLOPS ( 23 runs) | Q5_1    43.9 GFLOPS ( 21 runs) | Q8_0   121.0 GFLOPS ( 57 runs)
+1024 x 1024: F16     72.6 GFLOPS ( 34 runs) | F32     36.0 GFLOPS ( 17 runs)
+2048 x 2048: Q4_0   101.3 GFLOPS (  6 runs) | Q4_1    90.0 GFLOPS (  6 runs)
+2048 x 2048: Q5_0    50.8 GFLOPS (  3 runs) | Q5_1    45.3 GFLOPS (  3 runs) | Q8_0   124.1 GFLOPS (  8 runs)
+2048 x 2048: F16     70.7 GFLOPS (  5 runs) | F32     30.4 GFLOPS (  3 runs)
+4096 x 4096: Q4_0   101.7 GFLOPS (  3 runs) | Q4_1    90.3 GFLOPS (  3 runs)
+4096 x 4096: Q5_0    52.2 GFLOPS (  3 runs) | Q5_1    45.7 GFLOPS (  3 runs) | Q8_0   123.0 GFLOPS (  3 runs)
+4096 x 4096: F16     60.3 GFLOPS (  3 runs) | F32     29.8 GFLOPS (  3 runs)
+
+
+make -j && ./scripts/bench-all.sh 1 1 0
+
+|      CPU | Config |         Model |  Th |  FA |    Enc. |    Dec. |    Bch5 |      PP |  Commit |
+|      --- |    --- |           --- | --- | --- |     --- |     --- |     --- |     --- |     --- |
+| M2 ULTRA |  METAL |          tiny |   1 |   0 |   10.15 |    1.20 |    0.36 |    0.01 | dc8dda60 |
+| M2 ULTRA |  METAL |     tiny-q5_0 |   1 |   0 |   10.21 |    1.15 |    0.39 |    0.01 | dc8dda60 |
+| M2 ULTRA |  METAL |     tiny-q5_1 |   1 |   0 |    9.26 |    1.15 |    0.38 |    0.01 | dc8dda60 |
+| M2 ULTRA |  METAL |     tiny-q8_0 |   1 |   0 |    9.00 |    1.12 |    0.37 |    0.01 | dc8dda60 |
+| M2 ULTRA |  METAL |          base |   1 |   0 |   15.77 |    1.73 |    0.45 |    0.02 | dc8dda60 |
+| M2 ULTRA |  METAL |     base-q5_0 |   1 |   0 |   16.90 |    1.63 |    0.44 |    0.02 | dc8dda60 |
+| M2 ULTRA |  METAL |     base-q5_1 |   1 |   0 |   16.93 |    1.64 |    0.44 |    0.02 | dc8dda60 |
+| M2 ULTRA |  METAL |     base-q8_0 |   1 |   0 |   16.13 |    1.63 |    0.43 |    0.02 | dc8dda60 |
+| M2 ULTRA |  METAL |         small |   1 |   0 |   45.15 |    3.45 |    0.92 |    0.05 | dc8dda60 |
+| M2 ULTRA |  METAL |    small-q5_0 |   1 |   0 |   50.63 |    3.36 |    0.94 |    0.06 | dc8dda60 |
+| M2 ULTRA |  METAL |    small-q5_1 |   1 |   0 |   50.56 |    3.36 |    0.94 |    0.06 | dc8dda60 |
+| M2 ULTRA |  METAL |    small-q8_0 |   1 |   0 |   47.52 |    3.20 |    0.92 |    0.05 | dc8dda60 |
+| M2 ULTRA |  METAL |        medium |   1 |   0 |  122.55 |    7.38 |    1.95 |    0.12 | dc8dda60 |
+| M2 ULTRA |  METAL |   medium-q5_0 |   1 |   0 |  140.61 |    6.73 |    2.02 |    0.14 | dc8dda60 |
+| M2 ULTRA |  METAL |   medium-q5_1 |   1 |   0 |  140.48 |    6.76 |    2.04 |    0.14 | dc8dda60 |
+| M2 ULTRA |  METAL |   medium-q8_0 |   1 |   0 |  131.00 |    6.57 |    1.96 |    0.13 | dc8dda60 |
+| M2 ULTRA |  METAL |    medium-dis |   1 |   0 |  110.85 |    1.00 |    0.24 |    0.02 | dc8dda60 |
+| M2 ULTRA |  METAL |      large-v2 |   1 |   0 |  222.28 |   10.96 |    3.03 |    0.21 | dc8dda60 |
+| M2 ULTRA |  METAL | large-v2-q5_0 |   1 |   0 |  258.64 |    9.79 |    3.04 |    0.25 | dc8dda60 |
+| M2 ULTRA |  METAL | large-v2-q5_1 |   1 |   0 |  258.32 |    9.87 |    3.05 |    0.24 | dc8dda60 |
+| M2 ULTRA |  METAL | large-v2-q8_0 |   1 |   0 |  236.55 |    9.61 |    2.87 |    0.23 | dc8dda60 |
+| M2 ULTRA |  METAL |  large-v2-dis |   1 |   0 |  199.84 |    1.14 |    0.27 |    0.02 | dc8dda60 |
+| M2 ULTRA |  METAL | large-v3-turbo |   1 |   0 |  201.52 |    1.77 |    0.45 |    0.03 | dc8dda60 |
+| M2 ULTRA |  METAL | large-v3-turbo-q5_0 |   1 |   0 |  233.14 |    1.56 |    0.47 |    0.04 | dc8dda60 |
+| M2 ULTRA |  METAL | large-v3-turbo-q8_0 |   1 |   0 |  214.23 |    1.53 |    0.44 |    0.04 | dc8dda60 |
+
+make -j && ./scripts/bench-all.sh 1 1 1
+
+|      CPU | Config |         Model |  Th |  FA |    Enc. |    Dec. |    Bch5 |      PP |  Commit |
+|      --- |    --- |           --- | --- | --- |     --- |     --- |     --- |     --- |     --- |
+| M2 ULTRA |  METAL |          tiny |   1 |   1 |    7.72 |    1.05 |    0.32 |    0.01 | dc8dda60 |
+| M2 ULTRA |  METAL |     tiny-q5_0 |   1 |   1 |    8.20 |    0.98 |    0.31 |    0.01 | dc8dda60 |
+| M2 ULTRA |  METAL |     tiny-q5_1 |   1 |   1 |    8.13 |    0.99 |    0.31 |    0.01 | dc8dda60 |
+| M2 ULTRA |  METAL |     tiny-q8_0 |   1 |   1 |    7.96 |    0.93 |    0.30 |    0.01 | dc8dda60 |
+| M2 ULTRA |  METAL |          base |   1 |   1 |   13.52 |    1.39 |    0.35 |    0.02 | dc8dda60 |
+| M2 ULTRA |  METAL |     base-q5_0 |   1 |   1 |   14.88 |    1.31 |    0.34 |    0.02 | dc8dda60 |
+| M2 ULTRA |  METAL |     base-q5_1 |   1 |   1 |   14.76 |    1.33 |    0.34 |    0.02 | dc8dda60 |
+| M2 ULTRA |  METAL |     base-q8_0 |   1 |   1 |   14.04 |    1.28 |    0.34 |    0.02 | dc8dda60 |
+| M2 ULTRA |  METAL |         small |   1 |   1 |   38.78 |    2.72 |    0.67 |    0.04 | dc8dda60 |
+| M2 ULTRA |  METAL |    small-q5_0 |   1 |   1 |   44.01 |    2.64 |    0.69 |    0.05 | dc8dda60 |
+| M2 ULTRA |  METAL |    small-q5_1 |   1 |   1 |   44.02 |    2.66 |    0.69 |    0.05 | dc8dda60 |
+| M2 ULTRA |  METAL |    small-q8_0 |   1 |   1 |   40.79 |    2.49 |    0.67 |    0.05 | dc8dda60 |
+| M2 ULTRA |  METAL |        medium |   1 |   1 |  104.48 |    5.57 |    1.61 |    0.10 | dc8dda60 |
+| M2 ULTRA |  METAL |   medium-q5_0 |   1 |   1 |  122.24 |    5.00 |    1.58 |    0.12 | dc8dda60 |
+| M2 ULTRA |  METAL |   medium-q5_1 |   1 |   1 |  121.99 |    5.02 |    1.59 |    0.12 | dc8dda60 |
+| M2 ULTRA |  METAL |   medium-q8_0 |   1 |   1 |  111.68 |    4.99 |    1.52 |    0.11 | dc8dda60 |
+| M2 ULTRA |  METAL |    medium-dis |   1 |   1 |   93.23 |    0.87 |    0.21 |    0.01 | dc8dda60 |
+| M2 ULTRA |  METAL |      large-v2 |   1 |   1 |  189.82 |    8.36 |    2.35 |    0.19 | dc8dda60 |
+| M2 ULTRA |  METAL | large-v2-q5_0 |   1 |   1 |  225.73 |    7.34 |    2.40 |    0.22 | dc8dda60 |
+| M2 ULTRA |  METAL | large-v2-q5_1 |   1 |   1 |  225.88 |    7.60 |    2.40 |    0.22 | dc8dda60 |
+| M2 ULTRA |  METAL | large-v2-q8_0 |   1 |   1 |  203.55 |    7.32 |    2.26 |    0.20 | dc8dda60 |
+| M2 ULTRA |  METAL |  large-v2-dis |   1 |   1 |  168.20 |    0.98 |    0.24 |    0.02 | dc8dda60 |
+| M2 ULTRA |  METAL | large-v3-turbo |   1 |   1 |  170.22 |    1.46 |    0.37 |    0.03 | dc8dda60 |
+| M2 ULTRA |  METAL | large-v3-turbo-q5_0 |   1 |   1 |  201.88 |    1.27 |    0.38 |    0.04 | dc8dda60 |
+| M2 ULTRA |  METAL | large-v3-turbo-q8_0 |   1 |   1 |  182.37 |    1.24 |    0.36 |    0.03 | dc8dda60 |
+
+
+## M4 Max
+
+make -j && ./scripts/bench-all.sh 8
+
+Running memcpy benchmark
+
+memcpy:   57.23 GB/s (heat-up)
+memcpy:   68.85 GB/s ( 1 thread)
+memcpy:   70.00 GB/s ( 1 thread)
+memcpy:  104.83 GB/s ( 2 thread)
+memcpy:  124.54 GB/s ( 3 thread)
+memcpy:  144.30 GB/s ( 4 thread)
+memcpy:  141.24 GB/s ( 5 thread)
+memcpy:  147.03 GB/s ( 6 thread)
+memcpy:  147.18 GB/s ( 7 thread)
+memcpy:  149.83 GB/s ( 8 thread)
+sum:    -5120001475.000000
+
+
+make -j && ./scripts/bench-all.sh 1
+
+Running ggml_mul_mat benchmark with 1 threads
+
+  64 x   64: Q4_0    49.6 GFLOPS (128 runs) | Q4_1    46.8 GFLOPS (128 runs)
+  64 x   64: Q5_0    28.1 GFLOPS (128 runs) | Q5_1    26.8 GFLOPS (128 runs) | Q8_0    52.3 GFLOPS (128 runs)
+  64 x   64: F16     38.1 GFLOPS (128 runs) | F32     26.0 GFLOPS (128 runs)
+ 128 x  128: Q4_0    87.6 GFLOPS (128 runs) | Q4_1    79.9 GFLOPS (128 runs)
+ 128 x  128: Q5_0    44.7 GFLOPS (128 runs) | Q5_1    41.6 GFLOPS (128 runs) | Q8_0    98.9 GFLOPS (128 runs)
+ 128 x  128: F16     64.1 GFLOPS (128 runs) | F32     35.4 GFLOPS (128 runs)
+ 256 x  256: Q4_0   104.2 GFLOPS (128 runs) | Q4_1    92.3 GFLOPS (128 runs)
+ 256 x  256: Q5_0    57.3 GFLOPS (128 runs) | Q5_1    51.5 GFLOPS (128 runs) | Q8_0   127.7 GFLOPS (128 runs)
+ 256 x  256: F16     71.4 GFLOPS (128 runs) | F32     40.6 GFLOPS (128 runs)
+ 512 x  512: Q4_0   109.5 GFLOPS (128 runs) | Q4_1    98.0 GFLOPS (128 runs)
+ 512 x  512: Q5_0    62.4 GFLOPS (128 runs) | Q5_1    54.6 GFLOPS (128 runs) | Q8_0   135.0 GFLOPS (128 runs)
+ 512 x  512: F16     82.6 GFLOPS (128 runs) | F32     44.6 GFLOPS (128 runs)
+1024 x 1024: Q4_0   112.1 GFLOPS ( 53 runs) | Q4_1   100.9 GFLOPS ( 47 runs)
+1024 x 1024: Q5_0    65.4 GFLOPS ( 31 runs) | Q5_1    56.7 GFLOPS ( 27 runs) | Q8_0   140.9 GFLOPS ( 66 runs)
+1024 x 1024: F16     88.0 GFLOPS ( 41 runs) | F32     43.4 GFLOPS ( 21 runs)
+2048 x 2048: Q4_0   113.4 GFLOPS (  7 runs) | Q4_1   102.0 GFLOPS (  6 runs)
+2048 x 2048: Q5_0    67.1 GFLOPS (  4 runs) | Q5_1    57.7 GFLOPS (  4 runs) | Q8_0   142.7 GFLOPS (  9 runs)
+2048 x 2048: F16     84.6 GFLOPS (  5 runs) | F32     37.5 GFLOPS (  3 runs)
+4096 x 4096: Q4_0   113.8 GFLOPS (  3 runs) | Q4_1   102.0 GFLOPS (  3 runs)
+4096 x 4096: Q5_0    67.7 GFLOPS (  3 runs) | Q5_1    58.0 GFLOPS (  3 runs) | Q8_0   142.9 GFLOPS (  3 runs)
+4096 x 4096: F16     73.7 GFLOPS (  3 runs) | F32     36.1 GFLOPS (  3 runs)
+
+
+make -j && ./scripts/bench-all.sh 1 1 0
+
+|    CPU |  Config |         Model |  Th |  FA |    Enc. |    Dec. |    Bch5 |      PP |  Commit |
+|    --- |     --- |           --- | --- | --- |     --- |     --- |     --- |     --- |     --- |
+| M4 Max |   METAL |          tiny |   1 |   0 |   12.83 |    0.94 |    0.30 |    0.01 | dc8dda60 |
+| M4 Max |   METAL |     tiny-q8_0 |   1 |   0 |   12.95 |    0.80 |    0.31 |    0.01 | dc8dda60 |
+| M4 Max |   METAL |          base |   1 |   0 |   23.54 |    1.37 |    0.33 |    0.02 | dc8dda60 |
+| M4 Max |   METAL |     base-q8_0 |   1 |   0 |   24.14 |    1.24 |    0.33 |    0.02 | dc8dda60 |
+| M4 Max |   METAL |         small |   1 |   0 |   71.59 |    3.02 |    0.71 |    0.06 | dc8dda60 |
+| M4 Max |   METAL |    small-q8_0 |   1 |   0 |   73.34 |    2.65 |    0.72 |    0.06 | dc8dda60 |
+| M4 Max |   METAL |        medium |   1 |   0 |  208.53 |    7.02 |    1.58 |    0.16 | dc8dda60 |
+| M4 Max |   METAL |   medium-q8_0 |   1 |   0 |  212.87 |    6.00 |    1.58 |    0.17 | dc8dda60 |
+| M4 Max |   METAL |      large-v2 |   1 |   0 |  379.84 |   11.47 |    2.52 |    0.29 | dc8dda60 |
+| M4 Max |   METAL | large-v2-q8_0 |   1 |   0 |  390.45 |    9.19 |    2.48 |    0.29 | dc8dda60 |
+| M4 Max |   METAL | large-v3-turbo |   1 |   0 |  345.74 |    1.99 |    0.44 |    0.05 | dc8dda60 |
+
+
+make -j && ./scripts/bench-all.sh 1 1 1
+
+|    CPU |  Config |         Model |  Th |  FA |    Enc. |    Dec. |    Bch5 |      PP |  Commit |
+|    --- |     --- |           --- | --- | --- |     --- |     --- |     --- |     --- |     --- |
+| M4 Max |   METAL |          tiny |   1 |   1 |   11.70 |    0.74 |    0.23 |    0.01 | dc8dda60 |
+| M4 Max |   METAL |     tiny-q8_0 |   1 |   1 |   12.36 |    0.67 |    0.23 |    0.01 | dc8dda60 |
+| M4 Max |   METAL |          base |   1 |   1 |   21.76 |    1.12 |    0.25 |    0.02 | dc8dda60 |
+| M4 Max |   METAL |     base-q8_0 |   1 |   1 |   22.60 |    0.94 |    0.26 |    0.02 | dc8dda60 |
+| M4 Max |   METAL |         small |   1 |   1 |   67.26 |    2.27 |    0.50 |    0.06 | dc8dda60 |
+| M4 Max |   METAL |    small-q8_0 |   1 |   1 |   68.67 |    1.93 |    0.53 |    0.06 | dc8dda60 |
+| M4 Max |   METAL |        medium |   1 |   1 |  193.58 |    5.31 |    1.20 |    0.16 | dc8dda60 |
+| M4 Max |   METAL |   medium-q8_0 |   1 |   1 |  198.60 |    4.31 |    1.21 |    0.16 | dc8dda60 |
+| M4 Max |   METAL |      large-v2 |   1 |   1 |  357.54 |    8.73 |    1.99 |    0.27 | dc8dda60 |
+| M4 Max |   METAL | large-v2-q8_0 |   1 |   1 |  363.98 |    6.43 |    1.99 |    0.28 | dc8dda60 |
+| M4 Max |   METAL | large-v3-turbo |   1 |   1 |  322.32 |    1.66 |    0.37 |    0.05 | dc8dda60 |
+
+
+# V100
+
+GGML_CUDA=1 make -j && ./scripts/bench-all.sh 8 1 0
+
+|  GPU |    Config |         Model |  Th |  FA |    Enc. |    Dec. |    Bch5 |      PP |  Commit |
+|  --- |       --- |           --- | --- | --- |     --- |     --- |     --- |     --- |     --- |
+| V100 | AVX2 CUDA |          tiny |   8 |   0 |    5.99 |    1.01 |    0.30 |    0.01 | dc8dda60 |
+| V100 | AVX2 CUDA |     tiny-q5_1 |   8 |   0 |    6.07 |    1.00 |    0.26 |    0.01 | dc8dda60 |
+| V100 | AVX2 CUDA |          base |   8 |   0 |   10.96 |    1.44 |    0.43 |    0.02 | dc8dda60 |
+| V100 | AVX2 CUDA |     base-q5_1 |   8 |   0 |   11.11 |    1.41 |    0.37 |    0.02 | dc8dda60 |
+| V100 | AVX2 CUDA |         small |   8 |   0 |   31.04 |    2.84 |    0.86 |    0.04 | dc8dda60 |
+| V100 | AVX2 CUDA |    small-q5_1 |   8 |   0 |   31.69 |    2.82 |    0.71 |    0.04 | dc8dda60 |
+| V100 | AVX2 CUDA |        medium |   8 |   0 |   83.95 |    6.05 |    1.82 |    0.09 | dc8dda60 |
+| V100 | AVX2 CUDA |   medium-q5_0 |   8 |   0 |   85.86 |    5.58 |    1.45 |    0.10 | dc8dda60 |
+| V100 | AVX2 CUDA |      large-v2 |   8 |   0 |  138.50 |    8.70 |    2.71 |    0.15 | dc8dda60 |
+| V100 | AVX2 CUDA | large-v2-q5_0 |   8 |   0 |  142.31 |    7.82 |    2.03 |    0.16 | dc8dda60 |
+| V100 | AVX2 CUDA | large-v3-turbo |   8 |   0 |  128.39 |    1.42 |    0.44 |    0.02 | dc8dda60 |
+| V100 | AVX2 CUDA | large-v3-turbo-q5_0 |   8 |   0 |  131.24 |    1.17 |    0.33 |    0.03 | dc8dda60 |
+
+
+GGML_CUDA=1 make -j && ./scripts/bench-all.sh 8 1 1
+
+|  GPU |    Config |         Model |  Th |  FA |    Enc. |    Dec. |    Bch5 |      PP |  Commit |
+|  --- |       --- |           --- | --- | --- |     --- |     --- |     --- |     --- |     --- |
+| V100 | AVX2 CUDA |          tiny |   8 |   1 |    4.85 |    0.97 |    0.26 |    0.01 | dc8dda60 |
+| V100 | AVX2 CUDA |     tiny-q5_1 |   8 |   1 |    4.97 |    0.89 |    0.19 |    0.01 | dc8dda60 |
+| V100 | AVX2 CUDA |          base |   8 |   1 |    7.23 |    1.28 |    0.35 |    0.02 | dc8dda60 |
+| V100 | AVX2 CUDA |     base-q5_1 |   8 |   1 |    7.38 |    1.24 |    0.26 |    0.02 | dc8dda60 |
+| V100 | AVX2 CUDA |         small |   8 |   1 |   20.87 |    2.44 |    0.71 |    0.03 | dc8dda60 |
+| V100 | AVX2 CUDA |    small-q5_1 |   8 |   1 |   19.80 |    2.35 |    0.51 |    0.03 | dc8dda60 |
+| V100 | AVX2 CUDA |        medium |   8 |   1 |   54.56 |    5.31 |    1.46 |    0.06 | dc8dda60 |
+| V100 | AVX2 CUDA |   medium-q5_0 |   8 |   1 |   56.09 |    4.67 |    1.05 |    0.07 | dc8dda60 |
+| V100 | AVX2 CUDA |      large-v2 |   8 |   1 |   87.05 |    7.65 |    2.16 |    0.10 | dc8dda60 |
+| V100 | AVX2 CUDA | large-v2-q5_0 |   8 |   1 |   94.65 |    6.60 |    1.47 |    0.11 | dc8dda60 |
+| V100 | AVX2 CUDA | large-v3-turbo |   8 |   1 |   76.46 |    1.29 |    0.37 |    0.02 | dc8dda60 |
+| V100 | AVX2 CUDA | large-v3-turbo-q5_0 |   8 |   1 |   79.62 |    1.03 |    0.23 |    0.02 | dc8dda60 |

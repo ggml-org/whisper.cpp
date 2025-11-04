@@ -1,0 +1,159 @@
+plugins {
+    id 'java'
+    id 'java-library'
+    id 'maven-publish'
+    id 'signing'
+}
+
+archivesBaseName = 'whispercpp'
+group = 'io.github.ggerganov'
+version = '1.4.0'
+
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+
+sourceSets {
+    main {
+        resources {
+            srcDirs = ['src/main/resources', 'build/generated/resources/main']
+        }
+    }
+    test {
+        runtimeClasspath += files('build/generated/resources/main')
+    }
+}
+
+tasks.register('copyLibwhisperDynlib', Copy) {
+    from '../../build/src'
+    include 'libwhisper.dylib'
+    into 'build/generated/resources/main'
+}
+
+tasks.register('copyLibwhisperSo', Copy) {
+    from '../../build/src'
+    include 'libwhisper.so'
+    into 'build/generated/resources/main'
+}
+
+tasks.register('copyWhisperDLL', Copy) {
+    from '../../build/bin/Release'
+    include 'whisper.dll'
+    into 'build/generated/resources/main'
+}
+
+tasks.register('copyGGML_BASE_DLL', Copy) {
+    from '../../build/bin/Release'
+    include 'ggml-base.dll'
+    into 'build/generated/resources/main'
+}
+
+tasks.register('copyGGML_DLL', Copy) {
+    from '../../build/bin/Release'
+    include 'ggml.dll'
+    into 'build/generated/resources/main'
+}
+
+tasks.register('copyGGML_CPU_DLL', Copy) {
+    from '../../build/bin/Release'
+    include 'ggml-cpu.dll'
+    into 'build/generated/resources/main'
+}
+
+tasks.register('copyLibs') {
+    dependsOn copyLibwhisperDynlib, copyLibwhisperSo, copyWhisperDLL, copyGGML_BASE_DLL, copyGGML_DLL, copyGGML_CPU_DLL
+}
+
+test {
+    systemProperty 'jna.library.path', project.file('build/generated/resources/main').absolutePath
+}
+
+java {
+    withSourcesJar()
+    withJavadocJar()
+}
+
+sourcesJar() {
+    dependsOn copyLibs
+}
+
+jar {
+    dependsOn copyLibs
+    exclude '**/whisper_java.exp', '**/whisper_java.lib'
+}
+
+javadoc {
+    options.addStringOption('Xdoclint:none', '-quiet')
+}
+
+tasks.withType(Test) {
+    useJUnitPlatform()
+}
+
+test.dependsOn copyLibs
+processResources.dependsOn copyLibs
+
+dependencies {
+    implementation "net.java.dev.jna:jna:5.13.0"
+    testImplementation "org.junit.jupiter:junit-jupiter:5.9.2"
+    testImplementation "org.assertj:assertj-core:3.24.2"
+}
+
+repositories {
+    mavenCentral()
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            artifactId = 'whispercpp'
+            from components.java
+            pom {
+                name = 'whispercpp'
+                description = "Java JNA bindings for OpenAI's Whisper model, implemented in C/C++"
+                url = 'https://github.com/ggerganov/whisper.cpp'
+                licenses {
+                    license {
+                        name = 'MIT licence'
+                        url = 'https://raw.githubusercontent.com/ggerganov/whisper.cpp/master/LICENSE'
+                    }
+                }
+                developers {
+                    developer {
+                        id = 'ggerganov'
+                        name = 'Georgi Gerganov'
+                        email = 'ggerganov@gmail.com'
+                    }
+                    developer {
+                        id = 'nalbion'
+                        name = 'Nicholas Albion'
+                        email = 'nalbion@yahoo.com'
+                    }
+                }
+                scm {
+                    connection = 'scm:git:git://github.com/ggerganov/whisper.cpp.git'
+                    url = 'https://github.com/ggerganov/whisper.cpp'
+                }
+            }
+        }
+    }
+
+    repositories {
+        maven {
+            def releasesRepoUrl = 'https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/'
+            def snapshotsRepoUrl = 'https://s01.oss.sonatype.org/content/repositories/snapshots/'
+            url = version.endsWith('-SNAPSHOT') ? snapshotsRepoUrl : releasesRepoUrl
+            credentials {
+                username = System.getenv("MAVEN_USERNAME")
+                password = System.getenv("MAVEN_PASSWORD")
+            }
+        }
+    }
+}
+
+signing {
+    def signingKey = System.getenv("PGP_SECRET")
+    def signingPassword = System.getenv("PGP_PASSPHRASE")
+    useInMemoryPgpKeys(signingKey, signingPassword)
+    sign publishing.publications.mavenJava
+}

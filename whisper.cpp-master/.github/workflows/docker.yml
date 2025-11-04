@@ -1,0 +1,76 @@
+name: Publish Docker image
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+jobs:
+  push_to_registry:
+    name: Push Docker image to Docker Hub
+    if: github.event.pull_request.draft == false
+
+    runs-on: ubuntu-22.04
+    env:
+      COMMIT_SHA: ${{ github.sha }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - { tag: "main", dockerfile: ".devops/main.Dockerfile", platform: "linux/amd64" }
+          - { tag: "main-musa", dockerfile: ".devops/main-musa.Dockerfile", platform: "linux/amd64" }
+          - { tag: "main-intel", dockerfile: ".devops/main-intel.Dockerfile", platform: "linux/amd64" }
+          - { tag: "main-cuda", dockerfile: ".devops/main-cuda.Dockerfile", platform: "linux/amd64" }
+
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          image: tonistiigi/binfmt:qemu-v7.0.0-28
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Free up disk space
+        run: |
+          sudo apt-get remove -y '^dotnet-.*' '^llvm-.*' '^mysql-.*' '^postgresql-.*'
+          sudo apt-get autoremove -y
+          sudo apt-get autoclean
+
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+          docker system prune -af
+
+          df -h
+
+      - name: Generate tags
+        id: tags
+        run: |
+          TAGS="ghcr.io/${{ github.repository }}:${{ matrix.config.tag }}"
+          if [ "${{ github.event_name }}" == "push" ]; then
+            TAGS="$TAGS,ghcr.io/${{ github.repository }}:${{ matrix.config.tag }}-${{ env.COMMIT_SHA }}"
+          fi
+          echo "tags=$TAGS" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image (tagged)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' }}
+          platforms: ${{ matrix.config.platform }}
+          tags: ${{ steps.tags.outputs.tags }}
+          file: ${{ matrix.config.dockerfile }}

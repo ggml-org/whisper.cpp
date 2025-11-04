@@ -1,0 +1,2 @@
+openvino-dev[pytorch,onnx]
+openai-whisper

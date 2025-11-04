@@ -1,0 +1,58 @@
+plugins {
+  id 'com.android.application'
+}
+
+android {
+  compileSdkVersion 31
+  buildToolsVersion '30.0.3'
+
+  defaultConfig {
+    applicationId "com.litongjava.whisper.android.java"
+    minSdkVersion 21
+    targetSdkVersion 31
+    versionCode 1
+    versionName "1.0"
+
+    testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    externalNativeBuild {
+      cmake {
+        cppFlags ""
+      }
+    }
+    ndk {
+      abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64'
+    }
+  }
+
+  buildTypes {
+    release {
+      signingConfig signingConfigs.debug
+      minifyEnabled true
+      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+    }
+  }
+  externalNativeBuild {
+    cmake {
+      path "src/main/jni/whisper/CMakeLists.txt"
+    }
+  }
+  ndkVersion "25.2.9519653"
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_1_8
+    targetCompatibility JavaVersion.VERSION_1_8
+  }
+}
+
+dependencies {
+  implementation 'androidx.appcompat:appcompat:1.1.0'
+  implementation 'com.google.android.material:material:1.1.0'
+  implementation 'androidx.constraintlayout:constraintlayout:1.1.3'
+  testImplementation 'junit:junit:4.+'
+  androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+  androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+
+  //litongjava
+  implementation 'com.litongjava:android-view-inject:1.0'
+  implementation 'com.litongjava:jfinal-aop:1.0.1'
+  implementation 'com.litongjava:litongjava-android-utils:1.0.0'
+}

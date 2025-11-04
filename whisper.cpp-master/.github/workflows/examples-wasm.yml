@@ -1,0 +1,91 @@
+name: Examples WASM
+on:
+  push:
+    branches: ["master"]
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy-wasm-github-pages:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Setup emsdk
+        uses: mymindstorm/setup-emsdk@v14
+
+      - name: Build WASM Examples
+        # Enable for real build later in whisper.cpp
+        run: |
+          mkdir -p build-em && cd build-em
+          emcmake cmake .. -DCMAKE_BUILD_TYPE=Release
+          make -j
+
+      - name: Create staging directory
+        run: mkdir -p staging
+
+      - name: Create .nojekyll file in staging directory
+        run: touch staging/.nojekyll
+
+      - name: Copy application files
+        run: |
+          build_dir=build-em/bin
+
+          ls ${build_dir}
+
+          # command.wasm
+          target_dir=staging/command.wasm
+          mkdir -p ${target_dir}
+          cp ${build_dir}/command.wasm/{index.html,command.js,helpers.js} ${target_dir}
+          cp ${build_dir}/libcommand.js ${target_dir}
+
+          # bench.wasm
+          target_dir=staging/bench.wasm
+          mkdir -p ${target_dir}
+          cp ${build_dir}/bench.wasm/{index.html,bench.js,helpers.js} ${target_dir}
+          cp ${build_dir}/libbench.js ${target_dir}
+
+          # stream.wasm
+          target_dir=staging/stream.wasm
+          mkdir -p ${target_dir}
+          cp ${build_dir}/stream.wasm/{index.html,stream.js,helpers.js} ${target_dir}
+          cp ${build_dir}/libstream.js ${target_dir}
+
+          # whisper.wasm (this will be the main example page)
+          target_dir=staging
+          mkdir -p ${target_dir}
+          cp ${build_dir}/whisper.wasm/{index.html,main.js,helpers.js} ${target_dir}
+          cp ${build_dir}/libmain.js ${target_dir}
+
+          # Copy Cross-Origin Isolation service worker
+          cp -v examples/coi-serviceworker.js staging/
+
+      - name: List files in staging directory (for debugging)
+        run: |
+          echo "Files in staging directory:"
+          find staging -type f | sort
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./staging
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

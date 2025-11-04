@@ -1,0 +1,6 @@
+tensorflow>=2.15.0
+scikit-learn>=1.3.0
+sentence-transformers>=2.2.0
+numpy>=1.21.0
+transformers>=4.30.0
+torch>=2.0.0
