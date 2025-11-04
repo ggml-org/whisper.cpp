@@ -23,18 +23,13 @@ data class IntentResult(
 class IntentClassifier(private val context: Context) {
     
     private var intentClassifier: Interpreter? = null
-    private var vocabulary: Map<String, Int> = emptyMap()
+    private var hfTokenizer: HFTokenizer? = null
     private var intentMapping: Map<Int, String> = emptyMap()
-    private var specialTokens: Map<String, Int> = emptyMap()
     private var isInitialized = false
     private val slotExtractor = SlotExtractor()
     
     companion object {
         private const val MAX_SEQUENCE_LENGTH = 256  // Updated to match your model
-        private const val CLS_TOKEN = "[CLS]"
-        private const val SEP_TOKEN = "[SEP]"
-        private const val PAD_TOKEN = "[PAD]"
-        private const val UNK_TOKEN = "[UNK]"
     }
     
     suspend fun initialize(): Boolean {
@@ -44,9 +39,8 @@ class IntentClassifier(private val context: Context) {
             // Load metadata
             loadMetadata()
             
-            // Load vocabulary and special tokens
-            loadVocabulary()
-            loadSpecialTokens()
+            // Load HuggingFace tokenizer
+            loadHFTokenizer()
             
             // Load the complete TFLite model (end-to-end)
             loadIntentClassifier()
@@ -76,32 +70,17 @@ class IntentClassifier(private val context: Context) {
         Log.d(LOG_TAG, "📋 Loaded ${intentMapping.size} intent mappings")
     }
     
-    private fun loadVocabulary() {
-        val vocabText = context.assets.open("tokenizer/vocab.txt").bufferedReader().use { it.readText() }
-        val tempVocabulary = mutableMapOf<String, Int>()
-        
-        vocabText.lines().forEachIndexed { index, line ->
-            val token = line.trim()
-            if (token.isNotEmpty()) {
-                tempVocabulary[token] = index
-            }
+    private fun loadHFTokenizer() {
+        // Load tokenizer.json file as bytes
+        val tokenizerBytes = context.assets.open("tokenizer/tokenizer.json").use { inputStream ->
+            inputStream.readBytes()
         }
         
-        vocabulary = tempVocabulary
-        Log.d(LOG_TAG, "📝 Loaded vocabulary with ${vocabulary.size} tokens")
+        // Initialize HuggingFace tokenizer
+        hfTokenizer = HFTokenizer(tokenizerBytes)
+        Log.d(LOG_TAG, "🤗 HuggingFace tokenizer loaded successfully")
     }
-    
-    private fun loadSpecialTokens() {
-        val tempSpecialTokens = mutableMapOf<String, Int>()
-        tempSpecialTokens[CLS_TOKEN] = vocabulary[CLS_TOKEN] ?: 101
-        tempSpecialTokens[SEP_TOKEN] = vocabulary[SEP_TOKEN] ?: 102
-        tempSpecialTokens[PAD_TOKEN] = vocabulary[PAD_TOKEN] ?: 0
-        tempSpecialTokens[UNK_TOKEN] = vocabulary[UNK_TOKEN] ?: 100
-        
-        specialTokens = tempSpecialTokens
-        Log.d(LOG_TAG, "🎯 Loaded special tokens: $specialTokens")
-    }
-    
+
     private fun loadIntentClassifier() {
         val model = loadModelFile("intent_classifier.tflite")
         intentClassifier = Interpreter(model)
@@ -193,40 +172,24 @@ class IntentClassifier(private val context: Context) {
     }
     
     private fun tokenizeText(text: String): Pair<IntArray, IntArray> {
-        // Preprocess text (lowercase, basic cleaning)
-        val processedText = text.lowercase(Locale.getDefault()).trim()
+        // Use HuggingFace tokenizer for proper BERT WordPiece tokenization
+        val result = hfTokenizer!!.tokenize(text)
         
-        // Basic BERT-like tokenization
-        val tokens = mutableListOf<String>()
-        tokens.add(CLS_TOKEN)  // Add [CLS] token at the beginning
+        // Ensure the sequences are exactly MAX_SEQUENCE_LENGTH
+        val inputIds = IntArray(MAX_SEQUENCE_LENGTH)
+        val attentionMask = IntArray(MAX_SEQUENCE_LENGTH)
         
-        // Simple word tokenization (you might want to implement subword tokenization)
-        val words = processedText.split("\\s+".toRegex())
-        for (word in words) {
-            if (word.isNotEmpty()) {
-                // Simple tokenization - can be improved with subword tokenization
-                val cleanWord = word.replace(Regex("[^a-zA-Z0-9]"), "")
-                if (cleanWord.isNotEmpty()) {
-                    tokens.add(cleanWord)
-                }
-            }
+        // Copy tokens up to MAX_SEQUENCE_LENGTH, padding or truncating as needed
+        val tokenCount = minOf(result.ids.size, MAX_SEQUENCE_LENGTH)
+        for (i in 0 until tokenCount) {
+            inputIds[i] = result.ids[i].toInt()
+            attentionMask[i] = result.attentionMask[i].toInt()
         }
         
-        tokens.add(SEP_TOKEN)  // Add [SEP] token at the end
-        
-        // Convert tokens to IDs
-        val inputIds = IntArray(MAX_SEQUENCE_LENGTH) { specialTokens[PAD_TOKEN] ?: 0 }
-        val attentionMask = IntArray(MAX_SEQUENCE_LENGTH) { 0 }
-        
-        val maxTokens = minOf(tokens.size, MAX_SEQUENCE_LENGTH)
-        for (i in 0 until maxTokens) {
-            val token = tokens[i]
-            inputIds[i] = vocabulary[token] ?: specialTokens[UNK_TOKEN] ?: 100
-            attentionMask[i] = 1
-        }
-        
-        Log.d(LOG_TAG, "🔤 Tokenized '${processedText}' -> ${tokens.take(10).joinToString()}")
-        Log.d(LOG_TAG, "🔤 Token count: ${tokens.size}, Valid tokens: ${attentionMask.sum()}")
+        // The rest remain as 0 (padding)
+        Log.d(LOG_TAG, "🔤 HF Tokenized '${text.take(50)}${if(text.length > 50) "..." else ""}' -> ${tokenCount} tokens")
+        Log.d(LOG_TAG, "🔤 First 10 input_ids: ${inputIds.take(10).joinToString()}")
+        Log.d(LOG_TAG, "🔤 Valid tokens: ${attentionMask.sum()}")
         
         return Pair(inputIds, attentionMask)
     }
@@ -265,6 +228,7 @@ class IntentClassifier(private val context: Context) {
     
     fun close() {
         intentClassifier?.close()
+        hfTokenizer?.close()
         isInitialized = false
         Log.d(LOG_TAG, "🔒 Intent classifier closed")
     }

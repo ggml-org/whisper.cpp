@@ -1,0 +1,29 @@
+# Android NDK Configuration for Windows
+[target.aarch64-linux-android]
+linker = "C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android21-clang.cmd"
+
+[target.armv7-linux-androideabi]
+linker = "C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/armv7a-linux-androideabi21-clang.cmd"
+
+[target.i686-linux-android]
+linker = "C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/i686-linux-android21-clang.cmd"
+
+[target.x86_64-linux-android]
+linker = "C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/x86_64-linux-android21-clang.cmd"
+
+[env]
+AR_aarch64-linux-android="C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
+CC_aarch64-linux-android="C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android21-clang.cmd"
+CXX_aarch64-linux-android="C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android21-clang++.cmd"
+
+AR_armv7-linux-androideabi="C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
+CC_armv7-linux-androideabi="C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/armv7a-linux-androideabi21-clang.cmd"
+CXX_armv7-linux-androideabi="C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/armv7a-linux-androideabi21-clang++.cmd"
+
+AR_i686-linux-android="C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
+CC_i686-linux-android="C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/i686-linux-android21-clang.cmd"
+CXX_i686-linux-android="C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/i686-linux-android21-clang++.cmd"
+
+AR_x86_64-linux-android="C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe"
+CC_x86_64-linux-android="C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/x86_64-linux-android21-clang.cmd"
+CXX_x86_64-linux-android="C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/x86_64-linux-android21-clang++.cmd"

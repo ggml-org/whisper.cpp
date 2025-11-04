@@ -1,0 +1,35 @@
+cargo:rerun-if-env-changed=RUSTONIG_DYNAMIC_LIBONIG
+cargo:rerun-if-env-changed=RUSTONIG_STATIC_LIBONIG
+cargo:rerun-if-env-changed=RUSTONIG_SYSTEM_LIBONIG
+OUT_DIR = Some(C:\Users\tanmay.pawar\Downloads\tokenizer trainer\whisper-cpp-intent-classifier\rs-hf-tokenizer\target\i686-linux-android\release\build\onig_sys-4b1498091bf23358\out)
+OPT_LEVEL = Some(3)
+TARGET = Some(i686-linux-android)
+CARGO_ENCODED_RUSTFLAGS = Some()
+HOST = Some(x86_64-pc-windows-msvc)
+cargo:rerun-if-env-changed=CC_i686-linux-android
+CC_i686-linux-android = Some(C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/i686-linux-android21-clang.cmd)
+RUSTC_WRAPPER = None
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+DEBUG = Some(false)
+cargo:rerun-if-env-changed=CFLAGS
+CFLAGS = None
+cargo:rerun-if-env-changed=TARGET_CFLAGS
+TARGET_CFLAGS = None
+cargo:rerun-if-env-changed=CFLAGS_i686_linux_android
+CFLAGS_i686_linux_android = None
+cargo:rerun-if-env-changed=CFLAGS_i686-linux-android
+CFLAGS_i686-linux-android = None
+cargo:rerun-if-env-changed=AR_i686-linux-android
+AR_i686-linux-android = Some(C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe)
+cargo:rerun-if-env-changed=ARFLAGS
+ARFLAGS = None
+cargo:rerun-if-env-changed=TARGET_ARFLAGS
+TARGET_ARFLAGS = None
+cargo:rerun-if-env-changed=ARFLAGS_i686_linux_android
+ARFLAGS_i686_linux_android = None
+cargo:rerun-if-env-changed=ARFLAGS_i686-linux-android
+ARFLAGS_i686-linux-android = None
+cargo:rustc-link-lib=static=onig
+cargo:rustc-link-search=native=C:\Users\tanmay.pawar\Downloads\tokenizer trainer\whisper-cpp-intent-classifier\rs-hf-tokenizer\target\i686-linux-android\release\build\onig_sys-4b1498091bf23358\out

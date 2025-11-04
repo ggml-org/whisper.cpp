@@ -1,0 +1,35 @@
+cargo:rerun-if-env-changed=RUSTONIG_DYNAMIC_LIBONIG
+cargo:rerun-if-env-changed=RUSTONIG_STATIC_LIBONIG
+cargo:rerun-if-env-changed=RUSTONIG_SYSTEM_LIBONIG
+OUT_DIR = Some(C:\Users\tanmay.pawar\Downloads\tokenizer trainer\whisper-cpp-intent-classifier\rs-hf-tokenizer\target\armv7-linux-androideabi\release\build\onig_sys-9c7c41423feaf54c\out)
+OPT_LEVEL = Some(3)
+TARGET = Some(armv7-linux-androideabi)
+CARGO_ENCODED_RUSTFLAGS = Some()
+HOST = Some(x86_64-pc-windows-msvc)
+cargo:rerun-if-env-changed=CC_armv7-linux-androideabi
+CC_armv7-linux-androideabi = Some(C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/armv7a-linux-androideabi21-clang.cmd)
+RUSTC_WRAPPER = None
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+DEBUG = Some(false)
+cargo:rerun-if-env-changed=CFLAGS
+CFLAGS = None
+cargo:rerun-if-env-changed=TARGET_CFLAGS
+TARGET_CFLAGS = None
+cargo:rerun-if-env-changed=CFLAGS_armv7_linux_androideabi
+CFLAGS_armv7_linux_androideabi = None
+cargo:rerun-if-env-changed=CFLAGS_armv7-linux-androideabi
+CFLAGS_armv7-linux-androideabi = None
+cargo:rerun-if-env-changed=AR_armv7-linux-androideabi
+AR_armv7-linux-androideabi = Some(C:/Users/tanmay.pawar/AppData/Local/Android/Sdk/ndk/25.2.9519653/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-ar.exe)
+cargo:rerun-if-env-changed=ARFLAGS
+ARFLAGS = None
+cargo:rerun-if-env-changed=TARGET_ARFLAGS
+TARGET_ARFLAGS = None
+cargo:rerun-if-env-changed=ARFLAGS_armv7_linux_androideabi
+ARFLAGS_armv7_linux_androideabi = None
+cargo:rerun-if-env-changed=ARFLAGS_armv7-linux-androideabi
+ARFLAGS_armv7-linux-androideabi = None
+cargo:rustc-link-lib=static=onig
+cargo:rustc-link-search=native=C:\Users\tanmay.pawar\Downloads\tokenizer trainer\whisper-cpp-intent-classifier\rs-hf-tokenizer\target\armv7-linux-androideabi\release\build\onig_sys-9c7c41423feaf54c\out
