@@ -21,10 +21,10 @@ class AudioStreamRecorder {
         private const val SAMPLE_RATE = 16000 // Required by Whisper
         private const val CHANNELS = AudioFormat.CHANNEL_IN_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_FLOAT
-        private const val BUFFER_SIZE_MS = 2000 // Reduced to 2 seconds for faster processing
+        private const val BUFFER_SIZE_MS = 3000 // Reduced to 2 seconds for faster processing
         private const val CHUNK_SIZE_MS = 200 // Reduced to 200ms chunks for better responsiveness
         private const val MIN_AUDIO_LEVEL = 0.01f // Minimum audio level to consider as speech
-        private const val MAX_AUDIO_LENGTH_MS = 3000 // Reduced to 3 seconds for faster processing
+        private const val MAX_AUDIO_LENGTH_MS = 5000 // Reduced to 3 seconds for faster processing
     }
 
     private var audioRecord: AudioRecord? = null
@@ -88,8 +88,8 @@ class AudioStreamRecorder {
                     val minCommandLength = (SAMPLE_RATE * 0.8f).toInt() // Minimum 0.8 seconds (faster response)
                     val idealCommandLength = (SAMPLE_RATE * 1.5f).toInt() // Prefer 1.5+ seconds for accuracy
                     if (hasVoice && (accumulatorPos >= accumulator.size || 
-                                   (silenceFrames >= 1 && accumulatorPos >= minCommandLength) ||  // Faster response with 1 silence frame
-                                   (silenceFrames >= 1 && accumulatorPos >= idealCommandLength))) {
+                                   (silenceFrames >= 3 && accumulatorPos >= minCommandLength) ||  // Wait for 5 silence frames before processing
+                                   (silenceFrames >= 3 && accumulatorPos >= idealCommandLength))) {
                         emit(accumulator.copyOfRange(0, accumulatorPos))
                         accumulatorPos = 0
                         hasVoice = false

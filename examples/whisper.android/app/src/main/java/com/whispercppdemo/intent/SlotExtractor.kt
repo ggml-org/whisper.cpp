@@ -16,21 +16,59 @@ data class SlotExtractionResult(
 class SlotExtractor {
     
     private val intentSlotTemplates = mapOf(
-        "QueryPoint" to listOf("metric", "time_ref", "unit"),
-        "SetGoal" to listOf("metric", "target", "unit"),
-        "SetThreshold" to listOf("metric", "threshold", "type", "unit"),
-        "TimerStopwatch" to listOf("tool", "action", "value"),
+        "QueryPoint" to listOf("metric"),  // time_ref and unit can have defaults
+        "SetGoal" to listOf("metric", "target"),  // unit can be inferred
+        "SetThreshold" to listOf("metric", "threshold", "type"),  // unit can be inferred
+        "TimerStopwatch" to listOf("tool", "action"),  // value only required for "set timer X min"
         "ToggleFeature" to listOf("feature", "state"),
-        "LogEvent" to listOf("event_type", "value", "unit"),
+        "LogEvent" to listOf("event_type"),  // value, unit, time_ref can have defaults
         "StartActivity" to listOf("activity_type"),
         "StopActivity" to listOf("activity_type"),
-        "OpenApp" to listOf("app", "action", "target"),
-        "PhoneAction" to listOf("action", "contact"),
-        "MediaAction" to listOf("action", "target"),
-        "WeatherQuery" to listOf("location", "attribute"),
-        "QueryTrend" to listOf("metric", "period", "unit"),
-        "IrrelevantInput" to listOf("message")
+        "OpenApp" to listOf("app"),  // action and target can have defaults
+        "PhoneAction" to listOf("contact"), //no need of action
+        "MediaAction" to listOf("action"),  // target can be optional for some actions
+        "WeatherQuery" to listOf("location"),  // attribute can default to general weather
+        "QueryTrend" to listOf("metric"),  // period and unit can have defaults
+        "IrrelevantInput" to emptyList()  // No required slots for irrelevant input
     )
+    
+    fun getRequiredSlots(intent: String): List<String> {
+        return intentSlotTemplates[intent] ?: emptyList()
+    }
+    
+    // Special method to check if slots are adequate for the specific action within an intent
+    fun areRequiredSlotsSatisfied(intent: String, slots: Map<String, Any>, text: String): Boolean {
+        val baseRequiredSlots = getRequiredSlots(intent)
+        
+        // Check if all base required slots are present
+        if (!baseRequiredSlots.all { slots.containsKey(it) }) {
+            return false
+        }
+        
+        // Special case handling for TimerStopwatch - value required only for "set timer" 
+        if (intent == "TimerStopwatch") {
+            val action = slots["action"] as? String
+            val tool = slots["tool"] as? String
+            
+            // If setting a timer, value is required
+            if ((action == "set" || action == "start") && tool == "timer") {
+                if (!slots.containsKey("value")) {
+                    return false
+                }
+            }
+        }
+        
+        // Special case for SetGoal and SetThreshold - target/threshold must be meaningful
+        if (intent == "SetGoal" && slots["target"] == null) {
+            return false
+        }
+        
+        if (intent == "SetThreshold" && slots["threshold"] == null) {
+            return false
+        }
+        
+        return true
+    }
     
     // Synonym mappings based on Python implementation
     private val metricSynonyms = mapOf(
@@ -219,7 +257,7 @@ class SlotExtractor {
         "kcal" to Regex("\\b(?:kcal|calories?|calorie|cal|cals|kilocalories?|kilocalorie|food\\s+calories?|dietary\\s+calories?|energy|k\\.?cal)\\b", RegexOption.IGNORE_CASE),
         "hours" to Regex("\\b(?:hours?|hrs?|hr|h|hour\\s+duration|h\\.?r\\.?s?\\.?)\\b", RegexOption.IGNORE_CASE),
         "minutes" to Regex("\\b(?:min|mins|minute|minutes|minute\\s+duration|min\\.?s?\\.?)\\b", RegexOption.IGNORE_CASE),
-        "percent" to Regex("\\b(?:percent|%|percentage|pct|pc|per\\s+cent|percentile)\\b", RegexOption.IGNORE_CASE),
+        "percent" to Regex("\\b(?:percent|%|percentage|pct|pc|per\\s+cent|percentile|blood oxygen|spo2|sp2|spO2)\\b", RegexOption.IGNORE_CASE),
         "count" to Regex("\\b(?:steps?|step\\s+count|footsteps?|foot\\s+steps?|paces?|strides?|walk\\s+count|walking\\s+count|number\\s+of\\s+steps?|total\\s+steps?|step\\s+total)\\b", RegexOption.IGNORE_CASE),
         "meters" to Regex("\\b(?:meters?|metres?|m|meter\\s+distance|metre\\s+distance|m\\.?)\\b", RegexOption.IGNORE_CASE),
         "feet" to Regex("\\b(?:feet|foot|ft|f\\.?t\\.?|')\\b", RegexOption.IGNORE_CASE),
@@ -375,9 +413,37 @@ class SlotExtractor {
 
             "yesterday" to "\\byesterday\\b(?!\\s+(?:night|evening|morning|afternoon))|\\blast\\s+day\\b|\\bprevious\\s+day\\b|\\bday\\s+before\\b|\\b1\\s+day\\s+ago\\b|\\bone\\s+day\\s+ago\\b|\\ba\\s+day\\s+ago\\b|\\bthe\\s+day\\s+before\\b|\\bprior\\s+day\\b|\\bthe\\s+previous\\s+day\\b|\\b24\\s+hours\\s+ago\\b|\\byesterdays?\\b|\\bthe\\s+other\\s+day\\b|\\bday\\s+prior\\b|\\bthe\\s+last\\s+day\\b|\\bpast\\s+day\\b|\\bthe\\s+preceding\\s+day\\b|\\bmost\\s+recent\\s+day\\b|\\bjust\\s+yesterday\\b|\\bonly\\s+yesterday\\b|\\bback\\s+yesterday\\b|\\byesterday\\s+morning\\b|\\byesterday\\s+am\\b|\\bmorning\\s+yesterday\\b|\\byesterday\\s+in\\s+the\\s+morning\\b|\\byesterday\\s+early\\b|\\byesterday\\s+at\\s+dawn\\b|\\bearly\\s+yesterday\\b|\\byesterday\\s+daybreak\\b|\\byesterday\\s+sunrise\\b|\\byesterday\\s+first\\s+thing\\b|\\byesterday\\s+afternoon\\b|\\byesterday\\s+pm\\b|\\bafternoon\\s+yesterday\\b|\\byesterday\\s+in\\s+the\\s+afternoon\\b|\\byesterday\\s+midday\\b|\\byesterday\\s+noon\\b|\\byesterday\\s+lunchtime\\b|\\byesterday\\s+mid[\\s-]?day\\b|\\byesterday\\s+evening\\b|\\bevening\\s+yesterday\\b|\\byesterday\\s+in\\s+the\\s+evening\\b|\\byesterday\\s+at\\s+night\\b|\\blate\\s+yesterday\\b|\\byesterday\\s+dusk\\b|\\byesterday\\s+twilight\\b|\\byesterday\\s+sundown\\b|\\byesterday\\s+nightfall\\b",
 
-            "today" to "\\btoday\\b|\\bnow\\b|\\bcurrently\\b|\\bthis\\s+day\\b|\\bright\\s+now\\b|\\bat\\s+present\\b|\\bso\\s+far\\s+today\\b|\\btodays?\\b|\\bcurrent\\s+day\\b|\\bas\\s+of\\s+today\\b|\\btill\\s+now\\b|\\bup\\s+to\\s+now\\b|\\bat\\s+(?:the\\s+)?moment\\b|\\bpresently\\b|\\bat\\s+this\\s+time\\b|\\bthis\\s+very\\s+day\\b|\\bthe\\s+present\\s+day\\b|\\bfor\\s+today\\b|\\bon\\s+this\\s+day\\b|\\bsince\\s+midnight\\b|\\bso\\s+far\\b|\\buntil\\s+now\\b|\\bas\\s+of\\s+now\\b|\\bthis\\s+afternoon\\b|\\bafternoon\\b|\\bthis\\s+pm\\b|\\btoday\\s+afternoon\\b|\\bin\\s+the\\s+afternoon\\b|\\bafter\\s+noon\\b|\\bmidday\\b|\\bmid[\\s-]?day\\b|\\bnoon\\b|\\blunchtime\\b|\\blater\\s+today\\b|\\bthis\\s+evening\\s+(?:so\\s+far)?\\b|\\bthis\\s+evening\\b|\\bevening\\b|\\btonight\\b|\\bthis\\s+night\\b|\\btoday\\s+evening\\b|\\bin\\s+the\\s+evening\\b|\\bafter\\s+work\\b|\\bend\\s+of\\s+(?:the\\s+)?day\\b|\\bdusk\\b|\\btwilight\\b|\\bsundown\\b|\\bsunset\\b|\\bnightfall\\b|\\bafter\\s+dark\\b|\\blater\\s+tonight\\b",
+            "now" to "\\bnow\\b|\\bright\\s+now\\b|\\bat\\s+(?:this\\s+)?moment\\b|\\bthis\\s+instant\\b|\\bimmediately\\b|\\binstantly\\b|\\bright\\s+away\\b|\\bright\\s+at\\s+this\\s+moment\\b|\\bat\\s+the\\s+current\\s+time\\b|\\bthis\\s+very\\s+moment\\b|\\bcurrent\\s+time\\b|\\bthe\\s+present\\s+moment\\b|\\bright\\s+here\\b|\\bright\\s+at\\s+this\\s+instant\\b",
+
+            "today" to "\\btoday\\b(?!\\s+(?:morning|afternoon|evening|night))|\\bcurrently\\b|\\bthis\\s+day\\b|\\bat\\s+present\\b|\\bso\\s+far\\s+today\\b|\\btodays?\\b|\\bcurrent\\s+day\\b|\\bas\\s+of\\s+today\\b|\\btill\\s+now\\b|\\bup\\s+to\\s+now\\b|\\bpresently\\b|\\bat\\s+this\\s+time\\b|\\bthis\\s+very\\s+day\\b|\\bthe\\s+present\\s+day\\b|\\bfor\\s+today\\b|\\bon\\s+this\\s+day\\b|\\bsince\\s+midnight\\b|\\bso\\s+far\\b|\\buntil\\s+now\\b|\\bas\\s+of\\s+now\\b|\\blater\\s+today\\b|\\bend\\s+of\\s+(?:the\\s+)?day\\b",
 
             "last week" to "\\blast\\s+week\\b|\\bpast\\s+week\\b|\\bprevious\\s+week\\b|\\bthe\\s+week\\s+before\\b|\\bprior\\s+week\\b|\\b1\\s+week\\s+ago\\b|\\bone\\s+week\\s+ago\\b|\\ba\\s+week\\s+ago\\b|\\bweek\\s+prior\\b|\\bthe\\s+last\\s+week\\b|\\bthe\\s+past\\s+week\\b|\\bthe\\s+previous\\s+week\\b|\\b7\\s+days\\s+ago\\b|\\blast\\s+weeks?\\b|\\bthe\\s+preceding\\s+week\\b|\\bmost\\s+recent\\s+week\\b|\\blatest\\s+week\\b|\\bformer\\s+week\\b|\\bearlier\\s+week\\b|\\bthe\\s+other\\s+week\\b|\\bduring\\s+last\\s+week\\b|\\bthroughout\\s+last\\s+week\\b|\\bover\\s+last\\s+week\\b|\\bback\\s+last\\s+week\\b",
+
+            "tomorrow" to "\\btomorrow\\b|\\bnext\\s+day\\b|\\bthe\\s+day\\s+after\\b|\\bday\\s+after\\b|\\btomorrow\\s+morning\\b|\\btomorrow\\s+afternoon\\b|\\btomorrow\\s+evening\\b|\\btomorrow\\s+night\\b|\\bcoming\\s+day\\b|\\bupcoming\\s+day\\b|\\bfuture\\s+day\\b|\\bthe\\s+following\\s+day\\b|\\b24\\s+hours\\s+from\\s+now\\b|\\bin\\s+24\\s+hours\\b|\\bby\\s+tomorrow\\b|\\btill\\s+tomorrow\\b|\\buntil\\s+tomorrow\\b",
+
+            "this morning" to "\\bthis\\s+morning\\b|\\bmorning\\b(?!\\s+(?:yesterday|tomorrow|next|last|this\\s+(?:afternoon|evening|week|month|year)))|\\bearly\\s+today\\b|\\btoday\\s+morning\\b|\\bin\\s+the\\s+morning\\b|\\bthis\\s+am\\b|\\bearly\\s+hours\\b|\\bdawn\\b|\\bsunrise\\b|\\bdaybreak\\b|\\bfirst\\s+thing\\b|\\bright\\s+after\\s+waking\\b|\\bupon\\s+waking\\b|\\bsince\\s+waking\\b",
+
+            "this afternoon" to "\\bthis\\s+afternoon\\b|\\bafternoon\\b(?!\\s+(?:yesterday|tomorrow|next|last|this\\s+(?:morning|evening|week|month|year)))|\\btoday\\s+afternoon\\b|\\bin\\s+the\\s+afternoon\\b|\\bthis\\s+pm\\b|\\bafter\\s+noon\\b|\\bmidday\\b|\\bmid[\\s-]?day\\b|\\bnoon\\b|\\blunchtime\\b|\\blate\\s+morning\\b|\\bearly\\s+afternoon\\b",
+
+            "this evening" to "\\bthis\\s+evening\\b|\\bevening\\b(?!\\s+(?:yesterday|tomorrow|next|last|this\\s+(?:morning|afternoon|week|month|year)))|\\btonight\\b|\\btoday\\s+evening\\b|\\bin\\s+the\\s+evening\\b|\\blater\\s+today\\b|\\bend\\s+of\\s+day\\b|\\bafter\\s+work\\b|\\bdusk\\b|\\btwilight\\b|\\bsundown\\b|\\bsunset\\b|\\bnightfall\\b|\\bafter\\s+dark\\b",
+
+            "this week" to "\\bthis\\s+week\\b|\\bcurrent\\s+week\\b|\\bweek\\s+so\\s+far\\b|\\btill\\s+now\\s+this\\s+week\\b|\\bup\\s+to\\s+now\\s+this\\s+week\\b|\\bweekly\\s+total\\b|\\bweek\\s+to\\s+date\\b|\\bthis\\s+weeks?\\b|\\bongoing\\s+week\\b|\\bpresent\\s+week\\b|\\bwithin\\s+this\\s+week\\b|\\bduring\\s+this\\s+week\\b|\\bthroughout\\s+this\\s+week\\b|\\bover\\s+this\\s+week\\b",
+
+            "this month" to "\\bthis\\s+month\\b|\\bcurrent\\s+month\\b|\\bmonth\\s+so\\s+far\\b|\\btill\\s+now\\s+this\\s+month\\b|\\bup\\s+to\\s+now\\s+this\\s+month\\b|\\bmonthly\\s+total\\b|\\bmonth\\s+to\\s+date\\b|\\bthis\\s+months?\\b|\\bongoing\\s+month\\b|\\bpresent\\s+month\\b|\\bwithin\\s+this\\s+month\\b|\\bduring\\s+this\\s+month\\b|\\bthroughout\\s+this\\s+month\\b|\\bover\\s+this\\s+month\\b",
+
+            "last month" to "\\blast\\s+month\\b|\\bpast\\s+month\\b|\\bprevious\\s+month\\b|\\bthe\\s+month\\s+before\\b|\\bprior\\s+month\\b|\\b1\\s+month\\s+ago\\b|\\bone\\s+month\\s+ago\\b|\\ba\\s+month\\s+ago\\b|\\bmonth\\s+prior\\b|\\bthe\\s+last\\s+month\\b|\\bthe\\s+past\\s+month\\b|\\bthe\\s+previous\\s+month\\b|\\blast\\s+months?\\b|\\bthe\\s+preceding\\s+month\\b|\\bmost\\s+recent\\s+month\\b|\\blatest\\s+month\\b|\\bformer\\s+month\\b|\\bearlier\\s+month\\b|\\bthe\\s+other\\s+month\\b|\\bduring\\s+last\\s+month\\b|\\bthroughout\\s+last\\s+month\\b|\\bover\\s+last\\s+month\\b|\\bback\\s+last\\s+month\\b",
+
+            "next week" to "\\bnext\\s+week\\b|\\bcoming\\s+week\\b|\\bupcoming\\s+week\\b|\\bfollowing\\s+week\\b|\\bweek\\s+ahead\\b|\\bthe\\s+next\\s+7\\s+days\\b|\\bin\\s+a\\s+week\\b|\\ba\\s+week\\s+from\\s+now\\b|\\b7\\s+days\\s+from\\s+now\\b|\\bnext\\s+weeks?\\b|\\bfuture\\s+week\\b|\\bforthcoming\\s+week\\b",
+
+            "next month" to "\\bnext\\s+month\\b|\\bcoming\\s+month\\b|\\bupcoming\\s+month\\b|\\bfollowing\\s+month\\b|\\bmonth\\s+ahead\\b|\\bthe\\s+next\\s+30\\s+days\\b|\\bin\\s+a\\s+month\\b|\\ba\\s+month\\s+from\\s+now\\b|\\b30\\s+days\\s+from\\s+now\\b|\\bnext\\s+months?\\b|\\bfuture\\s+month\\b|\\bforthcoming\\s+month\\b",
+
+            "recently" to "\\brecently\\b|\\blately\\b|\\bof\\s+late\\b|\\bin\\s+recent\\s+times\\b|\\bthese\\s+days\\b|\\bthe\\s+past\\s+few\\s+days\\b|\\bthe\\s+last\\s+few\\s+days\\b|\\brecent\\s+days\\b|\\bjust\\s+recently\\b|\\bnot\\s+long\\s+ago\\b|\\ba\\s+short\\s+while\\s+ago\\b|\\bwithin\\s+the\\s+past\\s+few\\s+days\\b|\\bover\\s+the\\s+past\\s+few\\s+days\\b",
+
+            "all time" to "\\ball\\s+time\\b|\\ball-time\\b|\\bever\\b|\\ball\\s+history\\b|\\bsince\\s+(?:the\\s+)?beginning\\b|\\bfrom\\s+(?:the\\s+)?start\\b|\\bthroughout\\s+history\\b|\\blifetime\\b|\\ball\\s+my\\s+life\\b|\\bsince\\s+I\\s+(?:started|begun|began)\\b|\\bfrom\\s+day\\s+one\\b|\\bsince\\s+inception\\b|\\ball\\s+records\\b|\\ball\\s+data\\b|\\bcomplete\\s+history\\b|\\bfull\\s+history\\b",
+
+            "this year" to "\\bthis\\s+year\\b|\\bcurrent\\s+year\\b|\\byear\\s+so\\s+far\\b|\\btill\\s+now\\s+this\\s+year\\b|\\bup\\s+to\\s+now\\s+this\\s+year\\b|\\byearly\\s+total\\b|\\byear\\s+to\\s+date\\b|\\bthis\\s+years?\\b|\\bongoing\\s+year\\b|\\bpresent\\s+year\\b|\\bwithin\\s+this\\s+year\\b|\\bduring\\s+this\\s+year\\b|\\bthroughout\\s+this\\s+year\\b|\\bover\\s+this\\s+year\\b",
+
+            "last year" to "\\blast\\s+year\\b|\\bpast\\s+year\\b|\\bprevious\\s+year\\b|\\bthe\\s+year\\s+before\\b|\\bprior\\s+year\\b|\\b1\\s+year\\s+ago\\b|\\bone\\s+year\\s+ago\\b|\\ba\\s+year\\s+ago\\b|\\byear\\s+prior\\b|\\bthe\\s+last\\s+year\\b|\\bthe\\s+past\\s+year\\b|\\bthe\\s+previous\\s+year\\b|\\blast\\s+years?\\b|\\bthe\\s+preceding\\s+year\\b|\\bmost\\s+recent\\s+year\\b|\\blatest\\s+year\\b|\\bformer\\s+year\\b|\\bearlier\\s+year\\b|\\bthe\\s+other\\s+year\\b|\\bduring\\s+last\\s+year\\b|\\bthroughout\\s+last\\s+year\\b|\\bover\\s+last\\s+year\\b|\\bback\\s+last\\s+year\\b"
         )
         for ((timeRef, pattern) in timePatterns) {
             if (text.contains(pattern.toRegex())) {
@@ -412,7 +478,13 @@ class SlotExtractor {
         // Try context-based unit inference first
         when {
             heartRateUnitRegex.containsMatchIn(text) -> return "bpm"
-            weightUnitRegex.containsMatchIn(text) -> return "kg"
+            stressRegex.containsMatchIn(text) -> return "score"
+            oxygenRegex.containsMatchIn(text) -> return "percent"
+            sleepRegex.containsMatchIn(text) -> return "hours"
+            sleepQualityRegex.containsMatchIn(text) -> return "score"
+            distanceRegex.containsMatchIn(text) -> return "distance"
+            caloriesRegex.containsMatchIn(text) -> return "kcal"
+            walkingMovementRegex.containsMatchIn(text) -> return "distance"
             stepsUnitRegex.containsMatchIn(text) -> return "count"
         }
         
@@ -474,76 +546,76 @@ class SlotExtractor {
     
     private fun extractTarget(text: String): Int? {
         val goalPatterns = listOf(
-        // Goal/Target/Aim patterns - expanded
-        "\\b(?:goal|target|aim|objective|plan|intention|aspiration|ambition|desire|want|wish|hope)\\s*(?:is|of|to|for|at)?\\s*(?:be|reach|hit|achieve|get|make|do)?\\s*(\\d+(?:\\.\\d+)?)\\b",
+            // Goal/Target/Aim patterns - expanded
+            "\\b(?:goal|target|aim|objective|plan|intention|aspiration|ambition|desire|want|wish|hope)\\s*(?:is|of|to|for|at)?\\s*(?:be|reach|hit|achieve|get|make|do)?\\s*(\\d+(?:\\.\\d+)?)\\b",
+            
+            // Set/Change/Update patterns - expanded
+            "\\b(?:set|change|update|modify|adjust|edit|configure|make|establish|create|define|specify)\\s*(?:my|the)?\\s*(?:goal|target|aim|objective)?\\s*(?:to|at|as|for)?\\s*(\\d+(?:\\.\\d+)?)\\b",
+            
+            // Action + number + unit pattern - expanded
+            "\\b(?:reach|hit|achieve|attain|get|get\\s+to|make|do|complete|finish|accomplish|meet)\\s*(\\d+(?:\\.\\d+)?)\\s*(?:steps?|kg|kgs|kilogram|kilograms|pounds?|lbs?|km|kms|kilometer|kilometers|miles?|hours?|hrs?|minutes?|mins?|calories?|kcal|bpm)\\b",
+            
+            // Number + unit pattern - expanded
+            "\\b(\\d+(?:\\.\\d+)?)\\s*(?:steps?|kg|kgs|kilogram|kilograms|pounds?|lbs?|lb|km|kms|kilometer|kilometers|kilometre|kilometres|miles?|mi|hours?|hrs?|hr|h|minutes?|mins?|min|m|calories?|kcal|cal|cals|bpm|beats?|meter|meters|metre|metres|feet|foot|ft)\\b",
+            
+            // "I want to" patterns - NEW
+            "\\b(?:I|i)\\s+(?:want|wanna|need|must|should|have\\s+to|got\\s+to|gotta)\\s+(?:to\\s+)?(?:reach|hit|get|do|achieve|make|walk|run|burn|lose|gain|sleep)\\s*(?:to|at)?\\s*(\\d+(?:\\.\\d+)?)\\b",
+            
+            // "Trying to" patterns - NEW
+            "\\b(?:trying|attempting|aiming|working|striving|shooting|going)\\s+(?:to|for)\\s+(?:reach|hit|get|do|achieve|make)?\\s*(\\d+(?:\\.\\d+)?)\\b",
+            
+            // Daily/Weekly goal patterns - NEW
+            "\\b(?:daily|weekly|monthly|per\\s+day|each\\s+day|every\\s+day)\\s+(?:goal|target|aim|objective)?\\s*(?:is|of|to)?\\s*(\\d+(?:\\.\\d+)?)\\b",
+            
+            // Increase/Decrease to patterns - NEW
+            "\\b(?:increase|raise|boost|bump|up|improve|decrease|reduce|lower|drop|cut|bring\\s+down)\\s+(?:to|by)?\\s*(\\d+(?:\\.\\d+)?)\\b",
+            
+            // Minimum/Maximum patterns - NEW
+            "\\b(?:at\\s+least|minimum\\s+of|no\\s+less\\s+than|minimum|min)\\s*(\\d+(?:\\.\\d+)?)\\b",
+            
+            // "Need to be" patterns - NEW
+            "\\b(?:need|needs)\\s+to\\s+(?:be|reach|hit|get)\\s*(?:at|to)?\\s*(\\d+(?:\\.\\d+)?)\\b",
+            
+            // Suggestion patterns - NEW
+            "\\b(?:suggest|recommend|advise|tell\\s+me|remind\\s+me|notify\\s+me).*?(?:when|if|at)\\s*(\\d+(?:\\.\\d+)?)\\b",
+            
+            // Limit patterns - NEW
+            "\\b(?:limit|cap|max|maximum|ceiling|upper\\s+limit)\\s*(?:of|to|at|is)?\\s*(\\d+(?:\\.\\d+)?)\\b",
+            
+            // Challenge patterns - NEW
+            "\\b(?:challenge|dare|bet|see\\s+if).*?(?:to\\s+)?(?:reach|hit|do|get|make)\\s*(\\d+(?:\\.\\d+)?)\\b",
+            
+            // "X or more/less" patterns - NEW
+            "\\b(\\d+(?:\\.\\d+)?)\\s+(?:or\\s+(?:more|above|over|higher|greater|less|below|under|lower|fewer))\\b",
+            
+            // Alert/Notify patterns - NEW
+            "\\b(?:alert|notify|tell|remind|ping|warn|let\\s+me\\s+know).*?(?:when|if|at|after|once).*?(\\d+(?:\\.\\d+)?)\\b",
+            
+            // Threshold patterns - NEW
+            "\\b(?:threshold|cutoff|mark|milestone|benchmark)\\s*(?:of|at|is)?\\s*(\\d+(?:\\.\\d+)?)\\b",
+            
+            // "Should be" patterns - NEW
+            "\\b(?:should|must|ought\\s+to|supposed\\s+to)\\s+(?:be|reach|hit|get)\\s*(?:at|to)?\\s*(\\d+(?:\\.\\d+)?)\\b",
+            
+            // Track patterns - NEW
+            "\\b(?:track|monitor|watch|follow|check).*?(?:until|till|to|up\\s+to)\\s*(\\d+(?:\\.\\d+)?)\\b"
+        )
         
-        // Set/Change/Update patterns - expanded
-        "\\b(?:set|change|update|modify|adjust|edit|configure|make|establish|create|define|specify)\\s*(?:my|the)?\\s*(?:goal|target|aim|objective)?\\s*(?:to|at|as|for)?\\s*(\\d+(?:\\.\\d+)?)\\b",
-        
-        // Action + number + unit pattern - expanded
-        "\\b(?:reach|hit|achieve|attain|get|get\\s+to|make|do|complete|finish|accomplish|meet)\\s*(\\d+(?:\\.\\d+)?)\\s*(?:steps?|kg|kgs|kilogram|kilograms|pounds?|lbs?|km|kms|kilometer|kilometers|miles?|hours?|hrs?|minutes?|mins?|calories?|kcal|bpm)\\b",
-        
-        // Number + unit pattern - expanded
-        "\\b(\\d+(?:\\.\\d+)?)\\s*(?:steps?|kg|kgs|kilogram|kilograms|pounds?|lbs?|lb|km|kms|kilometer|kilometers|kilometre|kilometres|miles?|mi|hours?|hrs?|hr|h|minutes?|mins?|min|m|calories?|kcal|cal|cals|bpm|beats?|meter|meters|metre|metres|feet|foot|ft)\\b",
-        
-        // "I want to" patterns - NEW
-        "\\b(?:I|i)\\s+(?:want|wanna|need|must|should|have\\s+to|got\\s+to|gotta)\\s+(?:to\\s+)?(?:reach|hit|get|do|achieve|make|walk|run|burn|lose|gain|sleep)\\s*(?:to|at)?\\s*(\\d+(?:\\.\\d+)?)\\b",
-        
-        // "Trying to" patterns - NEW
-        "\\b(?:trying|attempting|aiming|working|striving|shooting|going)\\s+(?:to|for)\\s+(?:reach|hit|get|do|achieve|make)?\\s*(\\d+(?:\\.\\d+)?)\\b",
-        
-        // Daily/Weekly goal patterns - NEW
-        "\\b(?:daily|weekly|monthly|per\\s+day|each\\s+day|every\\s+day)\\s+(?:goal|target|aim|objective)?\\s*(?:is|of|to)?\\s*(\\d+(?:\\.\\d+)?)\\b",
-        
-        // Increase/Decrease to patterns - NEW
-        "\\b(?:increase|raise|boost|bump|up|improve|decrease|reduce|lower|drop|cut|bring\\s+down)\\s+(?:to|by)?\\s*(\\d+(?:\\.\\d+)?)\\b",
-        
-        // Minimum/Maximum patterns - NEW
-        "\\b(?:at\\s+least|minimum\\s+of|no\\s+less\\s+than|minimum|min)\\s*(\\d+(?:\\.\\d+)?)\\b",
-        
-        // "Need to be" patterns - NEW
-        "\\b(?:need|needs)\\s+to\\s+(?:be|reach|hit|get)\\s*(?:at|to)?\\s*(\\d+(?:\\.\\d+)?)\\b",
-        
-        // Suggestion patterns - NEW
-        "\\b(?:suggest|recommend|advise|tell\\s+me|remind\\s+me|notify\\s+me).*?(?:when|if|at)\\s*(\\d+(?:\\.\\d+)?)\\b",
-        
-        // Limit patterns - NEW
-        "\\b(?:limit|cap|max|maximum|ceiling|upper\\s+limit)\\s*(?:of|to|at|is)?\\s*(\\d+(?:\\.\\d+)?)\\b",
-        
-        // Challenge patterns - NEW
-        "\\b(?:challenge|dare|bet|see\\s+if).*?(?:to\\s+)?(?:reach|hit|do|get|make)\\s*(\\d+(?:\\.\\d+)?)\\b",
-        
-        // "X or more/less" patterns - NEW
-        "\\b(\\d+(?:\\.\\d+)?)\\s+(?:or\\s+(?:more|above|over|higher|greater|less|below|under|lower|fewer))\\b",
-        
-        // Alert/Notify patterns - NEW
-        "\\b(?:alert|notify|tell|remind|ping|warn|let\\s+me\\s+know).*?(?:when|if|at|after|once).*?(\\d+(?:\\.\\d+)?)\\b",
-        
-        // Threshold patterns - NEW
-        "\\b(?:threshold|cutoff|mark|milestone|benchmark)\\s*(?:of|at|is)?\\s*(\\d+(?:\\.\\d+)?)\\b",
-        
-        // "Should be" patterns - NEW
-        "\\b(?:should|must|ought\\s+to|supposed\\s+to)\\s+(?:be|reach|hit|get)\\s*(?:at|to)?\\s*(\\d+(?:\\.\\d+)?)\\b",
-        
-        // Track patterns - NEW
-        "\\b(?:track|monitor|watch|follow|check).*?(?:until|till|to|up\\s+to)\\s*(\\d+(?:\\.\\d+)?)\\b"
-    )
-    
-    // Try each pattern
-    for (pattern in goalPatterns) {
-        val match = pattern.toRegex(RegexOption.IGNORE_CASE).find(text)
-        if (match != null && match.groupValues.size > 1) {
-            val value = match.groupValues[1].toDoubleOrNull()?.toInt()
-            if (value != null && value > 0) {
-                return value
+        // Try each pattern
+        for (pattern in goalPatterns) {
+            val match = pattern.toRegex(RegexOption.IGNORE_CASE).find(text)
+            if (match != null && match.groupValues.size > 1) {
+                val value = match.groupValues[1].toDoubleOrNull()?.toInt()
+                if (value != null && value > 0) {
+                    return value
+                }
             }
         }
-    }
     
-    // Fallback: extract any number from the text
-    val numbers = "\\b(\\d+(?:\\.\\d+)?)\\b".toRegex().findAll(text)
-    return numbers.firstOrNull()?.groupValues?.get(1)?.toDoubleOrNull()?.toInt()
-}
+        // Fallback: extract any number from the text
+        val numbers = "\\b(\\d+(?:\\.\\d+)?)\\b".toRegex().findAll(text)
+        return numbers.firstOrNull()?.groupValues?.get(1)?.toDoubleOrNull()?.toInt()
+    }
     
     private fun extractValue(text: String, intent: String): Any? {
         return when (intent) {
@@ -775,10 +847,148 @@ class SlotExtractor {
             "check" to "\\b(?:check|checking|verify|verifying|examine|look|looking|see|review|inspect|assess|evaluate|monitor|watch|observe|scan|browse|view|find\\s+out|tell\\s+me|show\\s+me|let\\s+me\\s+see|give\\s+me|what'?s|how'?s|any)\\b",
             
             "measure" to "\\b(?:measure|measuring|measured|test|testing|tested|record|recording|recorded|track|tracking|log|logging|logged|take|capture|monitor|scan|read|reading|sample|collect|gauge|assess|evaluate)\\b",
+
+            "play" to "\\b(?:play|playing|played|resume|resuming|resumed|continue|continuing|continued|unpause|unpausing|unpaused|start\\s+playing|begin\\s+playing|kick\\s+off|fire\\s+up|roll|rolling|spun|spin|spinning)\\b",
+
+            "pause" to "\\b(?:pause|pausing|paused|hold|holding|held|freeze|freezing|frozen|stop\\s+temporarily|suspend|suspended|suspending|halt\\s+temporarily|break|breaking|broke|interrupt|interrupting|interrupted)\\b",
+
+            "increase" to "\\b(?:increase|increased|increasing|up|higher|raise|raised|raising|boost|boosted|boosting|amplify|amplified|amplifying|enhance|enhanced|enhancing|elevate|elevated|elevating|pump\\s+up|turn\\s+up|crank\\s+up|ramp\\s+up|scale\\s+up|step\\s+up|jack\\s+up|bump\\s+up|push\\s+up|bring\\s+up|make\\s+it\\s+higher|louder|brighter|stronger|more|maximize|max\\s+out|intensify)\\b",
+
+            "decrease" to "\\b(?:decrease|decreased|decreasing|down|lower|lowered|lowering|reduce|reduced|reducing|diminish|diminished|diminishing|lessen|lessened|lessening|drop|dropped|dropping|cut|cutting|turn\\s+down|bring\\s+down|scale\\s+down|step\\s+down|tone\\s+down|dial\\s+down|wind\\s+down|ramp\\s+down|make\\s+it\\s+lower|quieter|dimmer|weaker|less|minimize|min\\s+out|soften)\\b",
+
+            "skip_next" to "\\b(?:skip\\s+(?:forward|next|ahead)|next\\s+(?:track|song|chapter|episode|video|clip)|forward\\s+(?:to\\s+next|one)|advance\\s+(?:to\\s+next|one)|go\\s+(?:to\\s+next|forward\\s+one)|jump\\s+(?:to\\s+next|forward)|fast\\s+forward\\s+(?:to\\s+next|one)|move\\s+(?:to\\s+next|forward)|switch\\s+(?:to\\s+next|forward))\\b",
+
+            "skip_previous" to "\\b(?:skip\\s+(?:back|previous|backward)|previous\\s+(?:track|song|chapter|episode|video|clip)|back\\s+(?:to\\s+previous|one)|go\\s+(?:to\\s+previous|back\\s+one)|jump\\s+(?:to\\s+previous|back)|rewind\\s+(?:to\\s+previous|one)|move\\s+(?:to\\s+previous|back)|switch\\s+(?:to\\s+previous|back)|restart\\s+(?:track|song|current))\\b",
+
+            "fast_forward" to "\\b(?:fast\\s+forward|speed\\s+up|forward\\s+(?:quickly|fast)|accelerate\\s+(?:playback|forward)|rush\\s+forward|zoom\\s+forward|hurry\\s+forward|quick\\s+forward|rapid\\s+forward|expedite\\s+forward|double\\s+speed|triple\\s+speed|increase\\s+speed)\\b",
+
+            "rewind" to "\\b(?:rewind|rewinding|rewound|fast\\s+backward|reverse\\s+(?:quickly|fast)|back\\s+up|go\\s+back|reverse\\s+playback|backward\\s+(?:quickly|fast)|retreat|retreating|retreated|regress|regressing|regressed|slow\\s+reverse|reverse\\s+slowly)\\b",
+
+            "seek" to "\\b(?:seek|seeking|sought|jump\\s+to|go\\s+to|move\\s+to|navigate\\s+to|position\\s+to|scrub\\s+to|advance\\s+to|retreat\\s+to|set\\s+position|change\\s+position|adjust\\s+position|locate\\s+to|find\\s+position|progress\\s+to)\\b",
+
+            "mute" to "\\b(?:mute|muting|muted|silence|silencing|silenced|quiet|quieting|quieted|turn\\s+off\\s+sound|disable\\s+sound|kill\\s+sound|cut\\s+sound|no\\s+sound|sound\\s+off|audio\\s+off|volume\\s+off|silent\\s+mode)\\b",
+
+            "unmute" to "\\b(?:unmute|unmuting|unmuted|unsilence|unsilencing|unsilenced|unquiet|unquieting|unquieted|turn\\s+on\\s+sound|enable\\s+sound|restore\\s+sound|bring\\s+back\\s+sound|sound\\s+on|audio\\s+on|volume\\s+on|exit\\s+silent\\s+mode)\\b",
+
+            "fullscreen" to "\\b(?:full\\s+screen|fullscreen|full-screen|maximize|maximizing|maximized|expand|expanding|expanded|enlarge|enlarging|enlarged|stretch|stretching|stretched|fill\\s+screen|screen\\s+fill|wide\\s+screen|cinema\\s+mode|theater\\s+mode|immersive\\s+mode)\\b",
+
+            "captions" to "\\b(?:caption|captions|subtitle|subtitles|closed\\s+caption|closed\\s+captions|cc|cc'?s|text|texts|transcript|transcripts|sub|subs|overlay|overlays|dialogue|dialogues|speech\\s+text|spoken\\s+text|audio\\s+description)\\b",
+
+            "speed" to "\\b(?:speed|speeding|sped|playback\\s+speed|play\\s+speed|rate|rates|pace|pacing|paced|tempo|tempos|tempoing|tempoed|rhythm|rhythms|rhythmical|velocity|velocities|quickness|quicknesses|rapidity|rapidities)\\b",
+
+            "shuffle" to "\\b(?:shuffle|shuffling|shuffled|random|randomize|randomizing|randomized|mix|mixing|mixed|scramble|scrambling|scrambled|jumble|jumbling|jumbled|disorder|disordering|disordered|rearrange|rearranging|rearranged)\\b",
+
+            "repeat" to "\\b(?:repeat|repeating|repeated|loop|looping|looped|cycle|cycling|cycled|replay|replaying|replayed|encore|encoring|encored|again|repeat\\s+mode|loop\\s+mode|continuous\\s+play|infinite\\s+play)\\b"
         )
         
         // Sort actions by pattern specificity (longer patterns first for better matching)
         val sortedActions = actions.entries.sortedByDescending { it.value.length }
+        
+        for ((action, pattern) in sortedActions) {
+            if (text.contains(pattern.toRegex(RegexOption.IGNORE_CASE))) {
+                return action
+            }
+        }
+        
+        return null
+    }
+
+    private fun extractTimerAction(text: String): String? {
+        val timerActions = mapOf(
+            "set" to "\\b(?:set|setup|set\\s+up|configure|configuration|adjust|adjustment|change|modify|edit|customize|establish|define|specify|determine|fix|assign|allocate|program|preset|input|enter|put\\s+in|make\\s+it|arrange|organize|prepare)\\b",
+            
+            "start" to "\\b(?:start|started|starting|begin|began|beginning|initiate|initiated|initiating|launch|launched|launching|commence|commencing|kick\\s+off|fire\\s+up|boot\\s+up|power\\s+on|turn\\s+on|switch\\s+on|activate|enable|engage|trigger|run|execute|go|let'?s\\s+go|get\\s+going|get\\s+started)\\b",
+            
+            "stop" to "\\b(?:stop|stopped|stopping|end|ended|ending|finish|finished|finishing|terminate|terminated|terminating|cease|halt|pause|paused|pausing|kill|abort|cancel|cancelled|canceling|quit|exit|close|shut\\s+down|power\\s+off|turn\\s+off|switch\\s+off|deactivate|disable|disengage|cut\\s+off)\\b"
+        )
+        
+        // Sort actions by pattern specificity (longer patterns first for better matching)
+        val sortedActions = timerActions.entries.sortedByDescending { it.value.length }
+        
+        for ((action, pattern) in sortedActions) {
+            if (text.contains(pattern.toRegex(RegexOption.IGNORE_CASE))) {
+                return action
+            }
+        }
+        
+        return null
+    }
+
+    private fun extractMediaAction(text: String): String? {
+        val mediaActions = mapOf(
+            "play" to "\\b(?:play|playing|played|resume|resuming|resumed|continue|continuing|continued|unpause|unpausing|unpaused|start\\s+playing|begin\\s+playing|kick\\s+off|fire\\s+up|roll|rolling|spun|spin|spinning)\\b",
+
+            "pause" to "\\b(?:pause|pausing|paused|hold|holding|held|freeze|freezing|frozen|stop\\s+temporarily|suspend|suspended|suspending|halt\\s+temporarily|break|breaking|broke|interrupt|interrupting|interrupted)\\b",
+
+            "stop" to "\\b(?:stop|stopped|stopping|end|ended|ending|finish|finished|finishing|terminate|terminated|terminating|cease|halt|kill|abort|cancel|cancelled|canceling|quit|exit|close|shut\\s+down|power\\s+off|turn\\s+off|switch\\s+off|deactivate|disable|disengage|cut\\s+off)\\b",
+
+            "skip_next" to "\\b(?:skip\\s+(?:forward|next|ahead)|next\\s+(?:track|song|chapter|episode|video|clip)|forward\\s+(?:to\\s+next|one)|advance\\s+(?:to\\s+next|one)|go\\s+(?:to\\s+next|forward\\s+one)|jump\\s+(?:to\\s+next|forward)|fast\\s+forward\\s+(?:to\\s+next|one)|move\\s+(?:to\\s+next|forward)|switch\\s+(?:to\\s+next|forward))\\b",
+
+            "skip_previous" to "\\b(?:skip\\s+(?:back|previous|backward)|previous\\s+(?:track|song|chapter|episode|video|clip)|back\\s+(?:to\\s+previous|one)|go\\s+(?:to\\s+previous|back\\s+one)|jump\\s+(?:to\\s+previous|back)|rewind\\s+(?:to\\s+previous|one)|move\\s+(?:to\\s+previous|back)|switch\\s+(?:to\\s+previous|back)|restart\\s+(?:track|song|current))\\b",
+
+            "fast_forward" to "\\b(?:fast\\s+forward|speed\\s+up|forward\\s+(?:quickly|fast)|accelerate\\s+(?:playback|forward)|rush\\s+forward|zoom\\s+forward|hurry\\s+forward|quick\\s+forward|rapid\\s+forward|expedite\\s+forward|double\\s+speed|triple\\s+speed|increase\\s+speed)\\b",
+
+            "rewind" to "\\b(?:rewind|rewinding|rewound|fast\\s+backward|reverse\\s+(?:quickly|fast)|back\\s+up|go\\s+back|reverse\\s+playback|backward\\s+(?:quickly|fast)|retreat|retreating|retreated|regress|regressing|regressed|slow\\s+reverse|reverse\\s+slowly)\\b",
+
+            "seek" to "\\b(?:seek|seeking|sought|jump\\s+to|go\\s+to|move\\s+to|navigate\\s+to|position\\s+to|scrub\\s+to|advance\\s+to|retreat\\s+to|set\\s+position|change\\s+position|adjust\\s+position|locate\\s+to|find\\s+position|progress\\s+to)\\b",
+
+            "mute" to "\\b(?:mute|muting|muted|silence|silencing|silenced|quiet|quieting|quieted|turn\\s+off\\s+sound|disable\\s+sound|kill\\s+sound|cut\\s+sound|no\\s+sound|sound\\s+off|audio\\s+off|volume\\s+off|silent\\s+mode)\\b",
+
+            "unmute" to "\\b(?:unmute|unmuting|unmuted|unsilence|unsilencing|unsilenced|unquiet|unquieting|unquieted|turn\\s+on\\s+sound|enable\\s+sound|restore\\s+sound|bring\\s+back\\s+sound|sound\\s+on|audio\\s+on|volume\\s+on|exit\\s+silent\\s+mode)\\b",
+
+            "fullscreen" to "\\b(?:full\\s+screen|fullscreen|full-screen|maximize|maximizing|maximized|expand|expanding|expanded|enlarge|enlarging|enlarged|stretch|stretching|stretched|fill\\s+screen|screen\\s+fill|wide\\s+screen|cinema\\s+mode|theater\\s+mode|immersive\\s+mode)\\b",
+
+            "captions" to "\\b(?:caption|captions|subtitle|subtitles|closed\\s+caption|closed\\s+captions|cc|cc'?s|text|texts|transcript|transcripts|sub|subs|overlay|overlays|dialogue|dialogues|speech\\s+text|spoken\\s+text|audio\\s+description)\\b",
+
+            "speed" to "\\b(?:speed|speeding|sped|playback\\s+speed|play\\s+speed|rate|rates|pace|pacing|paced|tempo|tempos|tempoing|tempoed|rhythm|rhythms|rhythmical|velocity|velocities|quickness|quicknesses|rapidity|rapidities)\\b",
+
+            "shuffle" to "\\b(?:shuffle|shuffling|shuffled|random|randomize|randomizing|randomized|mix|mixing|mixed|scramble|scrambling|scrambled|jumble|jumbling|jumbled|disorder|disordering|disordered|rearrange|rearranging|rearranged)\\b",
+
+            "repeat" to "\\b(?:repeat|repeating|repeated|loop|looping|looped|cycle|cycling|cycled|replay|replaying|replayed|encore|encoring|encored|again|repeat\\s+mode|loop\\s+mode|continuous\\s+play|infinite\\s+play)\\b",
+
+            "increase" to "\\b(?:increase|increased|increasing|up|higher|raise|raised|raising|boost|boosted|boosting|amplify|amplified|amplifying|enhance|enhanced|enhancing|elevate|elevated|elevating|pump\\s+up|turn\\s+up|crank\\s+up|ramp\\s+up|scale\\s+up|step\\s+up|jack\\s+up|bump\\s+up|push\\s+up|bring\\s+up|make\\s+it\\s+higher|louder|brighter|stronger|more|maximize|max\\s+out|intensify)\\b",
+
+            "decrease" to "\\b(?:decrease|decreased|decreasing|down|lower|lowered|lowering|reduce|reduced|reducing|diminish|diminished|diminishing|lessen|lessened|lessening|drop|dropped|dropping|cut|cutting|turn\\s+down|bring\\s+down|scale\\s+down|step\\s+down|tone\\s+down|dial\\s+down|wind\\s+down|ramp\\s+down|make\\s+it\\s+lower|quieter|dimmer|weaker|less|minimize|min\\s+out|soften)\\b"
+        )
+        
+        // Sort actions by pattern specificity (longer patterns first for better matching)
+        val sortedActions = mediaActions.entries.sortedByDescending { it.value.length }
+        
+        for ((action, pattern) in sortedActions) {
+            if (text.contains(pattern.toRegex(RegexOption.IGNORE_CASE))) {
+                return action
+            }
+        }
+        
+        return null
+    }
+
+    private fun extractAppAction(text: String): String? {
+        val appActions = mapOf(
+            "open" to "\\b(?:open|opened|opening|launch|launched|launching|start|show|display|view|access|load|bring\\s+up|pull\\s+up|fire\\s+up|boot|go\\s+to|navigate\\s+to|switch\\s+to|take\\s+me\\s+to)\\b"
+        )
+        
+        // Sort actions by pattern specificity (longer patterns first for better matching)
+        val sortedActions = appActions.entries.sortedByDescending { it.value.length }
+        
+        for ((action, pattern) in sortedActions) {
+            if (text.contains(pattern.toRegex(RegexOption.IGNORE_CASE))) {
+                return action
+            }
+        }
+        
+        return null
+    }
+
+    private fun extractPhoneAction(text: String): String? {
+        val phoneActions = mapOf(
+            "call" to "\\b(?:call|calling|phone|dial|dialing|ring|ringing|contact|reach|reach\\s+out|get\\s+in\\s+touch|give\\s+a\\s+call|make\\s+a\\s+call|place\\s+a\\s+call|telephone|buzz|video\\s+call|voice\\s+call|facetime)\\b",
+            
+            "message" to "\\b(?:message|messaging|text|texting|sms|send|sending|sent|write|compose|type|drop\\s+a\\s+message|send\\s+a\\s+text|shoot\\s+a\\s+message|ping|dm|direct\\s+message|whatsapp|imessage|chat|msg)\\b"
+        )
+        
+        // Sort actions by pattern specificity (longer patterns first for better matching)
+        val sortedActions = phoneActions.entries.sortedByDescending { it.value.length }
         
         for ((action, pattern) in sortedActions) {
             if (text.contains(pattern.toRegex(RegexOption.IGNORE_CASE))) {
@@ -868,26 +1078,62 @@ class SlotExtractor {
         )
 
         for ((contact, pattern) in contacts) {
-            if (text.contains(pattern.toRegex())) {
+            if (text.contains(pattern.toRegex(RegexOption.IGNORE_CASE))) {
                 return contact
             }
         }
 
+        // Special case: check for emergency services first
+        val emergencyServices = mapOf(
+            "police" to "\\b(?:police|cops?|law\\s+enforcement|911|emergency|authorities)\\b",
+            "ambulance" to "\\b(?:ambulance|paramedics?|medical\\s+emergency|hospital\\s+emergency)\\b",
+            "fire department" to "\\b(?:fire\\s+department|fire\\s+brigade|firefighters?)\\b"
+        )
+        
+        for ((service, pattern) in emergencyServices) {
+            if (text.contains(pattern.toRegex(RegexOption.IGNORE_CASE))) {
+                return service
+            }
+        }
+
         // If no hardcoded contact found, try to extract any name after phone action keywords
-        val phoneActionPattern = "(?:call|calling|phone|dial|dialing|ring|ringing|contact|reach|reach\\s+out|get\\s+in\\s+touch|give\\s+a\\s+call|make\\s+a\\s+call|place\\s+a\\s+call|telephone|buzz|video\\s+call|voice\\s+call|facetime|message|messaging|text|texting|sms|send|sending|sent|write|compose|type|drop\\s+a\\s+message|send\\s+a\\s+text|shoot\\s+a\\s+message|ping|dm|direct\\s+message|whatsapp|imessage|chat|msg)\\s+(.+?)(?:\\s|$|\\.|\\?|!)"
-        val regex = phoneActionPattern.toRegex(RegexOption.IGNORE_CASE)
+        val phoneActionPatterns = listOf(
+            // Pattern 1: Standard action + contact (handles "call suraj india")
+            "(?:call|calling|phone|dial|dialing|ring|ringing|contact|reach|reach\\s+out|give\\s+a\\s+call|make\\s+a\\s+call|place\\s+a\\s+call|telephone|buzz|video\\s+call|voice\\s+call|facetime)\\s+(.+?)(?:\\s*$|\\s+(?:now|please|right\\s+now|immediately|asap|urgently)\\s*$)",
+            
+            // Pattern 2: Messaging actions + contact
+            "(?:message|messaging|text|texting|sms|send|sending|write|compose|type|drop\\s+a\\s+message|send\\s+a\\s+text|shoot\\s+a\\s+message|ping|dm|direct\\s+message|whatsapp|imessage|chat|msg)\\s+(.+?)(?:\\s*$|\\s+(?:now|please|right\\s+now|immediately|asap|urgently)\\s*$)",
+            
+            // Pattern 3: "get in touch with X" format
+            "(?:get\\s+in\\s+touch\\s+with|reach\\s+out\\s+to|contact)\\s+(.+?)(?:\\s*$|\\s+(?:now|please|right\\s+now|immediately|asap|urgently)\\s*$)"
+        )
 
-        val match = regex.find(text)
-        if (match != null && match.groupValues.size > 1) {
-            val extractedName = match.groupValues[1].trim()
-            // Clean up the extracted name (remove common stop words and punctuation)
-            val cleanedName = extractedName
-                .replace(Regex("^(to|my|the|a|an)\\s+", RegexOption.IGNORE_CASE), "")
-                .replace(Regex("[^a-zA-Z\\s]"), "")
-                .trim()
+        for (pattern in phoneActionPatterns) {
+            val regex = pattern.toRegex(RegexOption.IGNORE_CASE)
+            val match = regex.find(text)
+            if (match != null && match.groupValues.size > 1) {
+                val extractedName = match.groupValues[1].trim()
+                
+                // Clean up the extracted name (remove common stop words and punctuation at the beginning)
+                val cleanedName = extractedName
+                    .replace(Regex("^(?:to|my|the|a|an)\\s+", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("\\s+(?:please|now|right\\s+now|immediately|asap|urgently)$", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("[^a-zA-Z\\s]"), "")
+                    .trim()
 
-            if (cleanedName.isNotEmpty() && cleanedName.length > 1) {
-                return cleanedName
+                // Additional validation: make sure it's not just common words
+                val commonWords = setOf(
+                    "the", "a", "an", "to", "my", "please", "now", "today", "tomorrow", "here", "there",
+                    "this", "that", "these", "those", "is", "are", "was", "were", "be", "been", "being",
+                    "have", "has", "had", "do", "does", "did", "will", "would", "could", "should", "can",
+                    "may", "might", "must", "shall", "and", "or"
+                )
+                if (cleanedName.isNotEmpty() && 
+                    cleanedName.length > 1 && 
+                    !commonWords.contains(cleanedName.toLowerCase()) &&
+                    !cleanedName.matches(Regex("^\\d+$"))) { // Not just numbers
+                    return cleanedName
+                }
             }
         }
 
@@ -895,6 +1141,7 @@ class SlotExtractor {
     }
     
     private fun extractLocation(text: String): String? {
+        // First check for hardcoded locations
         val locations = mapOf(
             "london" to "\\b(?:london|uk|england)\\b",
             "bangalore" to "\\b(?:bangalore|bengaluru|blr)\\b",
@@ -905,6 +1152,23 @@ class SlotExtractor {
         for ((location, pattern) in locations) {
             if (text.contains(pattern.toRegex())) {
                 return location
+            }
+        }
+
+        // Try to extract location after weather-related keywords
+        val weatherPattern = "(?:weather|forecast|temperature|climate|conditions)\\s+(.+?)(?:\\s|$|\\.|\\?|!)"
+        val regex = weatherPattern.toRegex(RegexOption.IGNORE_CASE)
+        val match = regex.find(text)
+        if (match != null && match.groupValues.size > 1) {
+            val potentialLocation = match.groupValues[1].trim()
+            // Clean up the extracted location (remove common stop words and punctuation)
+            val cleanedLocation = potentialLocation
+                .replace(Regex("^(in|at|for|of|the|a|an)\\s+", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("[^a-zA-Z\\s]"), "")
+                .trim()
+            
+            if (cleanedLocation.isNotEmpty() && cleanedLocation != "now" && cleanedLocation != "today" && cleanedLocation != "tomorrow") {
+                return cleanedLocation
             }
         }
         
@@ -979,158 +1243,232 @@ class SlotExtractor {
     }
     
     private fun addContextualSlots(text: String, intent: String, slots: MutableMap<String, Any>) {
-        // For QueryPoint intent, try to infer missing metric
-        if (intent == "QueryPoint" && !slots.containsKey("metric")) {
-            val inferredMetric = inferMetricFromContext(text)
-            if (inferredMetric != null) {
-                slots["metric"] = inferredMetric
+        when (intent) {
+            "QueryPoint" -> {
+                if (!slots.containsKey("metric")) {
+                    val inferredMetric = inferMetricFromContext(text)
+                    if (inferredMetric != null) {
+                        slots["metric"] = inferredMetric
+                    }
+                }
+                if (!slots.containsKey("time_ref")) {
+                    val timeRef = extractTimeRef(text) ?: "today"
+                    slots["time_ref"] = timeRef
+                }
+                if (!slots.containsKey("unit")) {
+                    val unit = extractUnit(text)
+                    if (unit != null) {
+                        slots["unit"] = unit
+                    }
+                }
+                if (!slots.containsKey("qualifier")) {
+                    // Qualifier not required. if needed, use extractQualifier function
+                }
             }
-        }
-        
-        // Add qualifier if detected but not extracted
-        if (intent == "QueryPoint" && !slots.containsKey("qualifier")) {
-            val qualifier = extractQualifier(text)
-            if (qualifier != null) {
-                slots["qualifier"] = qualifier
+            "SetGoal" -> {
+                if (!slots.containsKey("metric")) {
+                    val inferredMetric = inferMetricFromContext(text)
+                    if (inferredMetric != null) {
+                        slots["metric"] = inferredMetric
+                    }
+                }
+                if (!slots.containsKey("target")) {
+                    val target = extractTarget(text)
+                    if (target != null) {
+                        slots["target"] = target
+                    }
+                }
+                if (!slots.containsKey("unit")) {
+                    val unit = extractUnit(text)
+                    if (unit != null) {
+                        slots["unit"] = unit
+                    }
+                }
+                if (!slots.containsKey("period")) {
+                    val period = extractPeriod(text) ?: "daily"
+                    slots["period"] = period
+                }
             }
-        }
-        
-        // For QueryMetrics intent, add missing time reference
-        if (intent == "QueryMetrics" && !slots.containsKey("time_ref")) {
-            val timeRef = extractTimeRef(text) ?: "today"
-            slots["time_ref"] = timeRef
-        }
-        
-        // For QueryMetrics intent, add qualifier if missing
-        if (intent == "QueryMetrics" && !slots.containsKey("qualifier")) {
-            val qualifier = extractQualifier(text)
-            if (qualifier != null) {
-                slots["qualifier"] = qualifier
+            "SetThreshold" -> {
+                if (!slots.containsKey("metric")) {
+                    val inferredMetric = inferMetricFromContext(text)
+                    if (inferredMetric != null) {
+                        slots["metric"] = inferredMetric
+                    }
+                }
+                if (!slots.containsKey("threshold")) {
+                    val threshold = extractThreshold(text)
+                    if (threshold != null) {
+                        slots["threshold"] = threshold
+                    }
+                }
+                if (!slots.containsKey("type")) {
+                    val type = extractType(text)
+                    if (type != null) {
+                        slots["type"] = type
+                    }
+                }
+                if (!slots.containsKey("unit")) {
+                    val unit = extractUnit(text)
+                    if (unit != null) {
+                        slots["unit"] = unit
+                    }
+                }
             }
-        }
-        
-        // For SetGoal intent, infer metric if missing
-        if (intent == "SetGoal" && !slots.containsKey("metric")) {
-            val inferredMetric = inferMetricFromContext(text)
-            if (inferredMetric != null) {
-                slots["metric"] = inferredMetric
+            "TimerStopwatch" -> {
+                if (!slots.containsKey("tool")) {
+                    val tool = extractTool(text)
+                    if (tool != null) {
+                        slots["tool"] = tool
+                    }
+                }
+                if (!slots.containsKey("action")) {
+                    val action = extractTimerAction(text)
+                    if (action != null) {
+                        slots["action"] = action
+                    }
+                }
+                if (!slots.containsKey("value")) {
+                    val value = extractValue(text, intent)
+                    if (value != null) {
+                        slots["value"] = value
+                    }
+                }
             }
-        }
-        
-        // For SetGoal intent, add period if missing (default to daily)
-        if (intent == "SetGoal" && !slots.containsKey("period")) {
-            val period = extractPeriod(text) ?: "daily"
-            slots["period"] = period
-        }
-        
-        // For LogEvent intent, add time reference if missing
-        if (intent == "LogEvent" && !slots.containsKey("time_ref")) {
-            val timeRef = extractTimeRef(text) ?: "today"
-            slots["time_ref"] = timeRef
-        }
-        
-        // For LogEvent intent, infer event type if missing
-        if (intent == "LogEvent" && !slots.containsKey("event_type")) {
-            val eventType = extractEventType(text)
-            if (eventType != null) {
-                slots["event_type"] = eventType
+            "ToggleFeature" -> {
+                if (!slots.containsKey("feature")) {
+                    val feature = extractFeature(text)
+                    if (feature != null) {
+                        slots["feature"] = feature
+                    }
+                }
+                if (!slots.containsKey("state")) {
+                    val state = extractState(text)
+                    if (state != null) {
+                        slots["state"] = state
+                    }
+                }
             }
-        }
-        
-        // For ControlDevice intent, add feature if missing
-        if (intent == "ControlDevice" && !slots.containsKey("feature")) {
-            val feature = extractFeature(text)
-            if (feature != null) {
-                slots["feature"] = feature
+            "LogEvent" -> {
+                if (!slots.containsKey("event_type")) {
+                    val eventType = extractEventType(text)
+                    if (eventType != null) {
+                        slots["event_type"] = eventType
+                    }
+                }
+                if (!slots.containsKey("value")) {
+                    val value = extractValue(text, intent)
+                    if (value != null) {
+                        slots["value"] = value
+                    }
+                }
+                if (!slots.containsKey("unit")) {
+                    val unit = extractUnit(text)
+                    if (unit != null) {
+                        slots["unit"] = unit
+                    }
+                }
+                if (!slots.containsKey("time_ref")) {
+                    val timeRef = extractTimeRef(text) ?: "today"
+                    slots["time_ref"] = timeRef
+                }
             }
-        }
-        
-        // For ControlDevice intent, add state if missing
-        if (intent == "ControlDevice" && !slots.containsKey("state")) {
-            val state = extractState(text)
-            if (state != null) {
-                slots["state"] = state
+            "StartActivity", "StopActivity" -> {
+                if (!slots.containsKey("activity_type")) {
+                    val activityType = extractActivityType(text)
+                    if (activityType != null) {
+                        slots["activity_type"] = activityType
+                    }
+                }
+                if (!slots.containsKey("time_ref")) {
+                    slots["time_ref"] = "today"
+                }
             }
-        }
-        
-        // For StartActivity intent, add activity type if missing
-        if (intent == "StartActivity" && !slots.containsKey("activity_type")) {
-            val activityType = extractActivityType(text)
-            if (activityType != null) {
-                slots["activity_type"] = activityType
+            "OpenApp" -> {
+                if (!slots.containsKey("app")) {
+                    val app = extractApp(text)
+                    if (app != null) {
+                        slots["app"] = app
+                    }
+                }
+                if (!slots.containsKey("action")) {
+                    val action = extractAppAction(text)
+                    if (action != null) {
+                        slots["action"] = action
+                    }
+                }
+                if (!slots.containsKey("target")) {
+                    // Target might be the same as app or something, but for now leave it
+                }
             }
-        }
-        
-        // For StartActivity intent, default time reference to "today"
-        if (intent == "StartActivity" && !slots.containsKey("time_ref")) {
-            slots["time_ref"] = "today"
-        }
-        
-        // For TimerStopwatch intent, add tool type if missing
-        if (intent == "TimerStopwatch" && !slots.containsKey("tool")) {
-            val tool = extractTool(text)
-            if (tool != null) {
-                slots["tool"] = tool
+            "PhoneAction" -> {
+                if (!slots.containsKey("action")) {
+                    val action = extractPhoneAction(text)
+                    if (action != null) {
+                        slots["action"] = action
+                    }
+                }
+                if (!slots.containsKey("contact")) {
+                    val contact = extractContact(text)
+                    if (contact != null) {
+                        slots["contact"] = contact
+                    }
+                }
             }
-        }
-        
-        // For TimerStopwatch intent, add action if missing
-        if (intent == "TimerStopwatch" && !slots.containsKey("action")) {
-            val action = extractAction(text)
-            if (action != null) {
-                slots["action"] = action
+            "MediaAction" -> {
+                if (!slots.containsKey("action")) {
+                    val action = extractMediaAction(text)
+                    if (action != null) {
+                        slots["action"] = action
+                    }
+                }
+                if (!slots.containsKey("target")) {
+                    // Target could be media type, but for now leave it
+                }
+                if (!slots.containsKey("state")) {
+                    val state = extractState(text)
+                    if (state != null) {
+                        slots["state"] = state
+                    }
+                }
             }
-        }
-        
-        // For OpenApp intent, add app if missing
-        if (intent == "OpenApp" && !slots.containsKey("app")) {
-            val app = extractApp(text)
-            if (app != null) {
-                slots["app"] = app
+            "WeatherQuery" -> {
+                if (!slots.containsKey("location")) {
+                    val location = extractLocation(text)
+                    if (location != null) {
+                        slots["location"] = location
+                    }
+                }
+                if (!slots.containsKey("attribute")) {
+                    val attribute = extractAttribute(text)
+                    if (attribute != null) {
+                        slots["attribute"] = attribute
+                    }
+                }
+                if (!slots.containsKey("time_ref")) {
+                    val timeRef = extractTimeRef(text) ?: "today"
+                    slots["time_ref"] = timeRef
+                }
             }
-        }
-        
-        // For WeatherQuery intent, add attribute if missing
-        if (intent == "WeatherQuery" && !slots.containsKey("attribute")) {
-            val attribute = extractAttribute(text)
-            if (attribute != null) {
-                slots["attribute"] = attribute
-            }
-        }
-        
-        // For WeatherQuery intent, add time reference if missing (default to today)
-        if (intent == "WeatherQuery" && !slots.containsKey("time_ref")) {
-            val timeRef = extractTimeRef(text) ?: "today"
-            slots["time_ref"] = timeRef
-        }
-        
-        // For CompareMetrics intent, add time references if missing
-        if (intent == "CompareMetrics" && !slots.containsKey("time_ref_1")) {
-            slots["time_ref_1"] = "today"
-        }
-        if (intent == "CompareMetrics" && !slots.containsKey("time_ref_2")) {
-            slots["time_ref_2"] = "yesterday"
-        }
-        
-        // For CompareMetrics intent, add metric if missing
-        if (intent == "CompareMetrics" && !slots.containsKey("metric")) {
-            val inferredMetric = inferMetricFromContext(text)
-            if (inferredMetric != null) {
-                slots["metric"] = inferredMetric
-            }
-        }
-        
-        // For Notification intent, add period if missing (default to daily)
-        if (intent == "Notification" && !slots.containsKey("period")) {
-            val period = extractPeriod(text) ?: "daily"
-            slots["period"] = period
-        }
-        
-        // For Notification intent, add type if missing
-        if (intent == "Notification" && !slots.containsKey("type")) {
-            val type = extractType(text)
-            if (type != null) {
-                slots["type"] = type
+            "QueryTrend" -> {
+                if (!slots.containsKey("metric")) {
+                    val inferredMetric = inferMetricFromContext(text)
+                    if (inferredMetric != null) {
+                        slots["metric"] = inferredMetric
+                    }
+                }
+                if (!slots.containsKey("period")) {
+                    val period = extractPeriod(text)
+                    if (period != null) {
+                        slots["period"] = period
+                    }
+                }
+                if (!slots.containsKey("unit")) {
+                    val unit = extractUnit(text)
+                    if (unit != null) {
+                        slots["unit"] = unit
+                    }
+                }
             }
         }
     }

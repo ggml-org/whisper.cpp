@@ -123,7 +123,7 @@ private fun MainScreen(
                         modifier = Modifier.padding(16.dp)
                     ) {
                         Text(
-                            text = "🎯 Intent Classification:",
+                            text = "Intent Classification:",
                             style = MaterialTheme.typography.titleSmall
                         )
                         Spacer(modifier = Modifier.height(8.dp))

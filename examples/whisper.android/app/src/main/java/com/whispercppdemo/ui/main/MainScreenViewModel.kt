@@ -582,12 +582,25 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
                                             val slotResult = slotExtractor.extractSlots(result.trim(), intentResult)
                                             val slotsJson = JSONObject(slotResult.slots).toString()
                                             
-                                            // Save files with intent and slots information
-                                            val audioFile = saveAudioToFile(audioChunk, timestamp)
-                                            audioFile?.let { file ->
-                                                saveToCsv(timestamp, file.name, result.trim(), intentResult, slotsJson)
+                                            // Check if required slots are satisfied for this specific intent and text
+                                            val hasRequiredSlots = slotExtractor.areRequiredSlotsSatisfied(intentResult, slotResult.slots, result.trim())
+                                            
+                                            if (!hasRequiredSlots) {
                                                 withContext(Dispatchers.Main) {
-                                                    printMessage("Saved to: ${file.name}\n")
+                                                    currentIntent = "Sorry, couldn't get you, please try again"
+                                                    intentConfidence = 0f
+                                                    intentSlots = emptyMap()
+                                                    intentProcessingTime = ""
+                                                    printMessage("Sorry, couldn't get you, please try again\n")
+                                                }
+                                            } else {
+                                                // Save files with intent and slots information
+                                                val audioFile = saveAudioToFile(audioChunk, timestamp)
+                                                audioFile?.let { file ->
+                                                    saveToCsv(timestamp, file.name, result.trim(), intentResult, slotsJson)
+                                                    withContext(Dispatchers.Main) {
+                                                        printMessage("Saved to: ${file.name}\n")
+                                                    }
                                                 }
                                             }
                                         } catch (e: Exception) {
