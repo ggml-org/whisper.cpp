@@ -22,6 +22,7 @@ import com.whispercppdemo.recorder.AudioStreamRecorder
 import com.whispercppdemo.recorder.Recorder
 import com.whispercppdemo.intent.IntentClassifier
 import com.whispercppdemo.intent.IntentResult
+import com.whispercppdemo.intent.SlotExtractor
 import com.whispercpp.whisper.WhisperContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.flow
 import java.io.File
 import java.io.FileOutputStream
 import java.io.FileWriter
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
 import java.nio.ByteBuffer
@@ -54,6 +56,7 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
     private var recorder: Recorder = Recorder()
     private var whisperContext: WhisperContext? = null
     private var intentClassifier: IntentClassifier? = null
+    private val slotExtractor = SlotExtractor()
     private var mediaPlayer: MediaPlayer? = null
     private var recordedFile: File? = null
     private var currentRecordingTimestamp: String? = null
@@ -151,7 +154,7 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
     private suspend fun initializeCsvFile() = withContext(Dispatchers.IO) {
         try {
             FileWriter(csvFile).use { writer ->
-                writer.append("timestamp,audio_filename,transcription,intent\n")
+                writer.append("timestamp,audio_filename,transcription,intent,slots\n")
             }
             Log.d(LOG_TAG, "Initialized CSV file: ${csvFile.absolutePath}")
         } catch (e: Exception) {
@@ -234,15 +237,16 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
         )
     }
 
-    private suspend fun saveToCsv(timestamp: String, audioFilename: String, transcription: String, intent: String) = withContext(Dispatchers.IO) {
+    private suspend fun saveToCsv(timestamp: String, audioFilename: String, transcription: String, intent: String, slots: String) = withContext(Dispatchers.IO) {
         try {
             FileWriter(csvFile, true).use { writer ->
-                // Escape any commas or quotes in the transcription and intent
+                // Escape any commas or quotes in the transcription, intent, and slots
                 val escapedTranscription = transcription.replace("\"", "\"\"")
                 val escapedIntent = intent.replace("\"", "\"\"")
-                writer.append("$timestamp,\"$audioFilename\",\"$escapedTranscription\",\"$escapedIntent\"\n")
+                val escapedSlots = slots.replace("\"", "\"\"")
+                writer.append("$timestamp,\"$audioFilename\",\"$escapedTranscription\",\"$escapedIntent\",\"$escapedSlots\"\n")
             }
-            Log.d(LOG_TAG, "Saved to CSV: $audioFilename -> $transcription -> $intent")
+            Log.d(LOG_TAG, "Saved to CSV: $audioFilename -> $transcription -> $intent -> $slots")
         } catch (e: Exception) {
             Log.e(LOG_TAG, "Error saving to CSV", e)
         }
@@ -574,10 +578,14 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
                                             // Classify intent first
                                             val intentResult = classifyIntentFromTranscript(result.trim())
                                             
-                                            // Save files with intent information
+                                            // Extract slots
+                                            val slotResult = slotExtractor.extractSlots(result.trim(), intentResult)
+                                            val slotsJson = JSONObject(slotResult.slots).toString()
+                                            
+                                            // Save files with intent and slots information
                                             val audioFile = saveAudioToFile(audioChunk, timestamp)
                                             audioFile?.let { file ->
-                                                saveToCsv(timestamp, file.name, result.trim(), intentResult)
+                                                saveToCsv(timestamp, file.name, result.trim(), intentResult, slotsJson)
                                                 withContext(Dispatchers.Main) {
                                                     printMessage("Saved to: ${file.name}\n")
                                                 }
