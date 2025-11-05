@@ -1,0 +1,10 @@
+C:\Users\tanmay.pawar\Downloads\tokenizer trainer\whisper-cpp-intent-classifier\rs-hf-tokenizer\target\aarch64-linux-android\release\deps\log-3d04513d799d7739.d: C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\log-0.4.28\src\lib.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\log-0.4.28\src\macros.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\log-0.4.28\src\serde.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\log-0.4.28\src\__private_api.rs
+
+C:\Users\tanmay.pawar\Downloads\tokenizer trainer\whisper-cpp-intent-classifier\rs-hf-tokenizer\target\aarch64-linux-android\release\deps\liblog-3d04513d799d7739.rlib: C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\log-0.4.28\src\lib.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\log-0.4.28\src\macros.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\log-0.4.28\src\serde.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\log-0.4.28\src\__private_api.rs
+
+C:\Users\tanmay.pawar\Downloads\tokenizer trainer\whisper-cpp-intent-classifier\rs-hf-tokenizer\target\aarch64-linux-android\release\deps\liblog-3d04513d799d7739.rmeta: C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\log-0.4.28\src\lib.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\log-0.4.28\src\macros.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\log-0.4.28\src\serde.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\log-0.4.28\src\__private_api.rs
+
+C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\log-0.4.28\src\lib.rs:
+C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\log-0.4.28\src\macros.rs:
+C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\log-0.4.28\src\serde.rs:
+C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\log-0.4.28\src\__private_api.rs:

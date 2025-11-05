@@ -1,0 +1,1 @@
+C:\Users\tanmay.pawar\Downloads\tokenizer\ trainer\whisper-cpp-intent-classifier\rs-hf-tokenizer\target\x86_64-linux-android\release\libhftokenizer.so: C:\Users\tanmay.pawar\Downloads\tokenizer\ trainer\whisper-cpp-intent-classifier\rs-hf-tokenizer\src\lib.rs

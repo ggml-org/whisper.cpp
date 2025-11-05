@@ -1,0 +1,22 @@
+name: Bindings Tests (Go)
+on:
+  push:
+    paths:
+      - bindings/go/**
+      - whisper.h
+  pull_request:
+    paths:
+      - bindings/go/**
+      - whisper.h
+
+jobs:
+  ubuntu-22:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '^1.23'
+      - uses: actions/checkout@v4
+      - run: |
+          cd bindings/go
+          make test

@@ -1,0 +1,26 @@
+{
+  "name": "whisper.cpp",
+  "version": "1.7.6",
+  "description": "Whisper speech recognition",
+  "main": "whisper.js",
+  "scripts": {
+    "test": "echo \"todo: add tests\" && exit 0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ggerganov/whisper.cpp"
+  },
+  "keywords": [
+    "openai",
+    "whisper",
+    "speech-to-text",
+    "speech-recognition",
+    "transformer"
+  ],
+  "author": "Georgi Gerganov",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/ggerganov/whisper.cpp/issues"
+  },
+  "homepage": "https://github.com/ggerganov/whisper.cpp#readme"
+}

@@ -1,0 +1,567 @@
+
+Search
+Write
+Sign up
+
+Sign in
+
+
+
+ProAndroidDev
+ProAndroidDev
+The latest posts from Android Professionals and Google Developer Experts.
+
+Follow publication
+
+From Python To Android: HF Sentence Transformers (Embeddings)
+Bring all-MiniLM-L2-V6 sentence embeddings to Android with ONNX and Rust
+Shubham Panchal
+Shubham Panchal
+
+Follow
+10 min read
+·
+Jun 30, 2024
+27
+
+
+2
+
+
+
+Press enter or click to view image in full size
+
+Photo by John Tuesday on Unsplash
+A while ago, I developed an Android app, Android-Doc-QA which is an instance of on-device RAG for PDF/DOCX documents. It used ObjectBox as a vector database, Gemini Cloud API as a LLM and Mediapipe’s Text Embedder as an embedding provider.
+
+For RAG applications to perform well, having a good embedding model that performs a text to vector/embedding transformation is crucial. The embeddings must capture the semantics of the text as they are used to find the most similar chunks (text subsequences from the documents given) from the database through a vector search. Chunks that are most similar to the query serve as context to the LLM and go in the prompt directly.
+
+From my experience in testing the app, Mediapipe’s Text Embedder that uses Google’s Universal Sentence Encoder was not good enough to understand the semantics of the text/chunk or the query and felt more like a text search matching word occurrences rather than understanding the true meaning of the sentences. Moreover, the size of the embeddings was 100 that felt less when compared to models from HuggingFace sentence-transformers.
+
+The all-MiniLM-L6-V2 model from sentence-transformers seemed powerful from the RAG applications that I built in Python. It had an embedding size of 384, which can theoretically capture more information than an embedding of size 100. I wanted to use this model in my Android, but I couldn’t find any clear implementation doing so.
+
+In this blog, I’ll share my thoughts on how I solved the problem on bringing the all-MiniLM-L6-V2 to an Android app and build an Android library and demo app for the same,
+
+
+An app demonstrating the power of sentence-embeddings in Android. Test device: Samsung M13, armeabi-v7a (32-bit) with 4GB RAM
+Here’s the GitHub repository for the library and demo app:
+
+GitHub - shubham0204/Sentence-Embeddings-Android: Embeddings from sentence-transformers in Android…
+Embeddings from sentence-transformers in Android! Uses all-MiniLM-L6-V2 model currently …
+github.com
+
+Approach
+In order to execute any ML model on Android, it is good to have the model converted to the ONNX or TensorFlow Lite format. For ONNX, Microsoft provides onnxruntime the TensorFlow team provides an Android library to execute TFLite models. Both of these libraries are well-documented and have numerous examples for models operating on different modalities.
+
+Solving Model Execution — ONNX
+In our case, the sentence-transformers team has already provided an ONNX version of theall-MiniLM-L6-V2 model in their HuggingFace repository. With onnxruntime ‘s Python package, we can load the ONNX model and check its input/output shapes, data-types and tensor-names,
+
+import onnxruntime as ort
+
+# Download ONNX model from
+# https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/blob/main/onnx/model.onnx
+session = ort.InferenceSession("model.onnx")
+print( [ x.shape for x in session.get_inputs() ] )
+print( [ x.name for x in session.get_inputs() ] )
+print( [ x.type for x in session.get_inputs() ] )
+print( [ x.shape for x in session.get_outputs() ] )
+print( [ x.name for x in session.get_outputs() ] )
+print( [ x.type for x in session.get_outputs() ] )
+[['batch_size', 'sequence_length'], ['batch_size', 'sequence_length']]
+['input_ids', 'attention_mask']
+['tensor(int64)', 'tensor(int64)']
+[['batch_size', 'sequence_length', 384], ['batch_size', 384]]
+['token_embeddings', 'sentence_embedding']
+['tensor(float)', 'tensor(float)']
+The onnxruntime library similar to the one above, is also built for Android apps and hosted on Maven Central. In Android, we can load this model, provide the input_ids , attention_mask and get the sentence_embedding as an output. Hence, we have solved the core model execution problem with onnxruntime as its solution.
+
+The model does not take a string or sequence of characters as input directly. Rather, it accepts input_ids which is a sequence of integers representing the tokens derived from the text corpus during training. Each transformer model on HuggingFace comes with a tokenizer.json file that defines the type of the tokenizer, token to id map and other text-processing parameters. Replicating and building a tokenizer that can perform operations following tokenizer.json outside of Python (in Android) was a challenge that had to solved to get input_ids and attention_mask required for the executing the ONNX model.
+
+Solving Tokenization — Rust and JNI
+The source code of HuggingFace Tokenizers is written in Rust with Python bindings available. Moreover, we can use tokenizers as a crate in our own Rust project and read tokenizer.json to create an appropriate tokenizer for the model in consideration. Here’s a simple example that loads tokenizer.json from theall-MiniLM-L6-v2 repository and encodes a sentence,
+
+use tokenizers::tokenizer::Tokenizer;
+
+fn main() {
+    let sent_bert_tokenizer = Tokenizer::from_file("hf-tokenizer/tokenizer.json").unwrap();
+    let encoding = sent_bert_tokenizer.encode("what is the population of london", true).unwrap();
+    let ids: Vec<i64> = encoding.get_ids().iter().map(|id| *id as i64).collect();
+    let attention_mask: Vec<i64> = encoding
+        .get_attention_mask()
+        .iter()
+        .map(|x| *x as i64)
+        .collect();
+    
+    println!( "{:?}" , ids ) ;
+    println!( "{:?}" , attention_mask ) ;
+}
+[101, 2054, 2003, 1996, 2313, 1997, 2414, 102, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+[1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+Rust supports compilation to Android-based targets and can build a dynamic/static C library also. Similar to C/C++, we can make use of JNI (Java Native Interface) in Rust and expose functions that interact with the Tokenizer in Rust. Java/Kotlin classes can declare these functions as native / external and search for their implementations in dynamic libraries (shared objects, .so ) we’ll build from the Rust source code.
+
+Get Shubham Panchal’s stories in your inbox
+Join Medium for free to get updates from this writer.
+
+Enter your email
+Subscribe
+This Rust-Java interface will help us access the Rust-based Tokenizer from Android and we will be able to tokenize a String and obtain input_ids and attention_mask for the ONNX model.
+
+JNI and Rust Library
+To start building the Rust source code, we add tokenizers , jniand serde_json as dependencies in our crate and modify the crate_type to cdylib (C dynamic library),
+
+[dependencies]
+tokenizers = "0.19.1"
+jni = { version = "0.21.1" }
+serde = { version = "1.0.192" , features = ["derive"] }
+serde_json = "1.0.108"
+onig = "6.4.0"
+
+[lib]
+crate-type = ["cdylib"]
+name = "hftokenizer"
+Next in src/lib.rs , with JNI we define functions that create and destroy the tokenizer instance and which use the instance to tokenize the given text. By instance, we mean a pointer/address that references the Tokenizer object in memory. The pointer will be represented with a Box in Rust and as a Long in Kotlin. The first function, createTokenizer , takes the file-bytes of tokenizer.json and returns the instance pointer,
+
+use jni::objects::{JByteArray, JClass, JString, ReleaseMode};
+use jni::sys::{jbyteArray, jlong};
+use jni::JNIEnv;
+use serde::Serialize;
+use serde_json;
+use tokenizers::Tokenizer;
+
+#[no_mangle]
+pub extern "C" fn Java_com_ml_shubham0204_sentence_1embeddings_HFTokenizer_createTokenizer<'a>(
+    mut env: JNIEnv<'a>,
+    _: JClass<'a>,
+    tokenizer_bytes: JByteArray<'a>,
+) -> jlong {
+    let tokenizer_bytes_rs: Vec<u8> = env
+        .get_array_elements(&tokenizer_bytes, ReleaseMode::CopyBack)
+        .expect("Could not read tokenizer_bytes")
+        .into();
+    Box::into_raw(Box::new(Tokenizer::from_bytes(&tokenizer_bytes_rs))) as jlong
+}
+Next, the tokenize function accepts an instance pointer and a text, returning a JSON string contains the ids and attention_mask ,
+
+#[no_mangle]
+pub extern "C" fn Java_com_ml_shubham0204_sentence_1embeddings_HFTokenizer_tokenize<'a>(
+    mut env: JNIEnv<'a>,
+    _: JClass<'a>,
+    tokenizer_ptr: jlong,
+    text: JString<'a>,
+) -> JString<'a> {
+    let tokenizer = unsafe { &mut *(tokenizer_ptr as *mut Tokenizer) };
+    let text: String = env
+        .get_string(&text)
+        .expect("Could not convert text to Rust String")
+        .into();
+    let encoding = tokenizer.encode(text, true).expect("Could not encode text");
+    let result = TokenizationResult {
+        ids: encoding.get_ids().to_vec(),
+        attention_mask: encoding.get_attention_mask().to_vec(),
+    };
+    let result_json_str =
+        serde_json::to_string(&result).expect("Could not convert tokenization result to JSON");
+    env.new_string(result_json_str)
+        .expect("Could not convert result_json_str to jstring")
+}
+Last, we define a deleteTokenizer function which allows Rust to deallocate the instance of the Tokenizer ,
+
+#[no_mangle]
+pub extern "C" fn Java_com_ml_shubham0204_sentence_1embeddings_HFTokenizer_deleteTokenizer(
+    _: JNIEnv,
+    _: JClass,
+    tokenizer_ptr: jlong
+) {
+    let _ptr = unsafe { Box::from_raw(tokenizer_ptr as *mut Tokenizer) };
+    // _ptr is not referred further, hence it will be deallocated
+    // as its reference-count becomes zero
+}
+To compile a dynamic library for Android architectures, we add the necessary toolchains with rustup ,
+
+$> rustup target add aarch64-linux-android 
+$> rustup target add armv7-linux-androideabi 
+$> rustup target add i686-linux-android
+$> rustup target add x86_64-linux-android
+We also need to add paths for clang and clang++ compilers from Android NDK in .cargo/config.toml . Crates like onig require these compilers to build C/C++ code on which they depend. Paths to the linker for each architecture also have to be included.
+
+[target.aarch64-linux-android]
+linker = "~/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang"
+
+[target.armv7-linux-androideabi]
+linker = "~/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi33-clang"
+
+[target.i686-linux-android]
+linker = "~/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android33-clang"
+
+[target.x86_64-linux-android]
+linker = "~/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android33-clang"
+
+[env]
+AR_aarch64-linux-android="~/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+CC_aarch64-linux-android="~/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang"
+CXX_aarch64-linux-android="~/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang++"
+
+AR_armv7-linux-androideabi="~/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+CC_armv7-linux-androideabi="~/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi33-clang"
+CXX_armv7-linux-androideabi="~/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi33-clang++"
+
+AR_i686-linux-android="~/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+CC_i686-linux-android="~/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android33-clang"
+CXX_i686-linux-android="~/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android33-clang++"
+
+AR_x86_64-linux-android="~/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+CC_x86_64-linux-android="~/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android33-clang"
+CXX_x86_64-linux-android="~/android-ndk-r26d/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android33-clang++"
+We have completed our build setup for Android now. We execute cargo run now, passing --release and --target flags for each architecture,
+
+$> cargo build --release --target armv7-linux-androideabi
+$> cargo build --release --target aarch64-linux-android
+$> cargo build --release --target i686-linux-android
+$> cargo build --release --target x86_64-linux-android
+The .so dynamic libraries can be found in the path target/<architecture>/release/libhftokenizer.so .
+
+You can view the Rust source code here,
+
+GitHub - shubham0204/Sentence-Embeddings-Android at libs
+Embeddings from sentence-transformers in Android! Uses all-MiniLM-L6-V2 model currently - GitHub …
+github.com
+
+Android Library
+Once we’ve built the dynamic libraries from our Rust code, we add them to our library module in the following paths: sentence_embeddings/src/main/jniLibs/<architecture>/libhftokenizer.so where <architecture> will be x86 , x86_64 , armeabi-v7a and arm64-v8a .
+
+Next, we create a Kotlin class HFTokenizer that declares the JNI functions and holds an instancePtr , an address/pointer that references the Tokenizer instance created by library and returned by create_tokenizer ,
+
+import org.json.JSONObject
+
+class HFTokenizer(tokenizerBytes: ByteArray) {
+
+    data class Result(
+        val ids: LongArray = longArrayOf(),
+        val attentionMask: LongArray = longArrayOf()
+    )
+
+    private val tokenizerPtr: Long = createTokenizer(tokenizerBytes)
+
+    fun tokenize(
+        text: String
+    ): Result {
+        val output = tokenize(tokenizerPtr, text)
+        // Deserialize the string
+        // and read `ids` and `attention_mask` as LongArray
+        val jsonObject = JSONObject(output)
+        val idsArray = jsonObject.getJSONArray("ids")
+        val ids = LongArray(idsArray.length())
+        for (i in 0 until idsArray.length()) {
+            ids[i] = (idsArray.get(i) as Int).toLong()
+        }
+        val attentionMaskArray = jsonObject.getJSONArray("attention_mask")
+        val attentionMask = LongArray(attentionMaskArray.length())
+        for (i in 0 until attentionMaskArray.length()) {
+            attentionMask[i] = (attentionMaskArray.get(i) as Int).toLong()
+        }
+        return Result(ids, attentionMask)
+    }
+
+    fun close() {
+        deleteTokenizer(tokenizerPtr)
+    }
+
+    // Given the bytes of the file `tokenizer.json`,
+    // return a pointer
+    private external fun createTokenizer(
+        tokenizerBytes: ByteArray
+    ): Long
+
+    // Given the pointer to `Tokenizer` and the text,
+    // return `ids` and `attention_mask` in JSON format
+    private external fun tokenize(
+        tokenizerPtr: Long,
+        text: String
+    ): String
+
+    // Pass the `tokenizerPtr` which is then deallocated 
+    // by the library
+    private external fun deleteTokenizer(
+        tokenizerPtr: Long
+    )
+
+    companion object {
+        init {
+            System.loadLibrary("hftokenizer")
+        }
+    }
+}
+The externaltokenize method will return a String that contains ids and attention_mask encoded in JSON. We deserialize the string, reading arrays with keys ids and attention_mask as LongArray and pack them in a data class Result.
+
+Next, we create the SentenceEmbedding class that uses onnxruntime to execute the model and use HFTokenizer to tokenize the given text,
+
+package com.ml.shubham0204.sentence_embeddings
+
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
+import ai.onnxruntime.providers.NNAPIFlags
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.nio.LongBuffer
+import java.util.EnumSet
+
+class SentenceEmbedding {
+
+    private lateinit var hfTokenizer: HFTokenizer
+    private lateinit var ortEnvironment: OrtEnvironment
+    private lateinit var ortSession: OrtSession
+
+    suspend fun init(
+        modelBytes: ByteArray,
+        tokenizerBytes: ByteArray,
+        useFP16: Boolean = false,
+        useXNNPack: Boolean = false
+    ) = withContext(Dispatchers.IO) {
+        // Initialize HFTokenizer and OrtSession
+        hfTokenizer = HFTokenizer(tokenizerBytes)
+        ortEnvironment = OrtEnvironment.getEnvironment()
+        val options = OrtSession.SessionOptions().apply{
+            if (useFP16) {
+                addNnapi(EnumSet.of(NNAPIFlags.USE_FP16, NNAPIFlags.CPU_DISABLED))
+            }
+            if (useXNNPack) {
+                addXnnpack(mapOf(
+                    "intra_op_num_threads" to "2"
+                ))
+            }
+        }
+        ortSession = ortEnvironment.createSession(modelBytes,options)
+    }
+
+    suspend fun encode(
+        sentence: String
+    ): FloatArray = withContext(Dispatchers.IO) {
+        val result = hfTokenizer.tokenize(sentence)
+        // Create input tensors for `ids` and `attention_mask`
+        val idsTensor =
+            OnnxTensor.createTensor(
+                ortEnvironment,
+                LongBuffer.wrap(result.ids),
+                longArrayOf(1, result.ids.size.toLong()),
+            )
+        val attentionMaskTensor =
+            OnnxTensor.createTensor(
+                ortEnvironment,
+                LongBuffer.wrap(result.attentionMask),
+                longArrayOf(1, result.attentionMask.size.toLong()),
+            )
+        val outputs =
+            ortSession.run(mapOf("input_ids" to idsTensor, "attention_mask" to attentionMaskTensor))
+        val embeddingTensor = outputs.get("sentence_embedding").get() as OnnxTensor
+        return@withContext embeddingTensor.floatBuffer.array()
+    }
+}
+The library can then be distributed through Maven Central or Jitpack and sentence embeddings can be obtained by the use of the SentenceEmbedding class.
+
+Extended Resources
+You may find additional blogs on compiling Rust for Android apps, the process being very similar to that for C/C++ with CMake,
+
+Building and Deploying a Rust library on Android
+Following on from the last post on getting a Rust library building on iOS, we're now going to deploy the same library…
+mozilla.github.io
+
+Compiling Rust libraries for Android apps: a deep dive
+In a previous blog post, I mentioned how to use CPU-specific instructions in Rust to speed up the Shamir's Secret…
+gendignoux.com
+
+These are some helpful resources using onnxruntime in Android,
+
+Mobile image recognition on Android
+Build an Android image recognition application with ONNX Runtime
+onnxruntime.ai
+
+Deploying Scikit-Learn Models In Android Apps With ONNX
+Using scikit-learn models to perform inference in Android apps
+towardsdatascience.com
+
+Conclusion
+I’m an on-device ML enthusiast and developing ML apps on Android is my passion. If you would like to view on-device ML projects, ahead here,
+
+shubham0204 - Overview
+Developing Open-Source ML Systems for Android, Python and Rust - shubham0204
+github.com
+
+Do check out my website and share your thoughts on this story. Keep learning and have a nice day ahead!
+
+Android App Development
+Android
+Machine Learning
+NLP
+Artificial Intelligence
+27
+
+
+2
+
+
+ProAndroidDev
+Published in ProAndroidDev
+84K followers
+·
+Last published 3 days ago
+The latest posts from Android Professionals and Google Developer Experts.
+
+
+Follow
+Shubham Panchal
+Written by Shubham Panchal
+1.6K followers
+·
+90 following
+Android developer, ML and Math enthusiast. Exploring low-level programming and backend development
+
+
+Follow
+
+Responses (2)
+
+Write a response
+
+What are your thoughts?
+
+Cancel
+Respond
+See all responses
+More from Shubham Panchal and ProAndroidDev
+Using C/C++ in Android: A Comprehensive Guide For Beginners
+ProAndroidDev
+In
+
+ProAndroidDev
+
+by
+
+Shubham Panchal
+
+Using C/C++ in Android: A Comprehensive Guide For Beginners
+Understanding C/C++ compilation, toolchains and JNI
+Jan 9, 2024
+387
+6
+Reducing Unnecessary Recompositions: 3 Practical Optimization Techniques for Jetpack Compose
+ProAndroidDev
+In
+
+ProAndroidDev
+
+by
+
+yunho lee
+
+Reducing Unnecessary Recompositions: 3 Practical Optimization Techniques for Jetpack Compose
+This guide explains how to reliably eliminate unnecessary recompositions.
+Sep 24
+272
+2
+Understanding retain{} internals: A Scope-based State Preservation in Jetpack Compose
+ProAndroidDev
+In
+
+ProAndroidDev
+
+by
+
+Jaewoong Eum
+
+Understanding retain{} internals: A Scope-based State Preservation in Jetpack Compose
+Jetpack Compose is a modern Android UI development with its declarative approach and powerful state management primitives. While remember{}…
+Oct 15
+219
+2
+llama.cpp: Writing A Simple C++ Inference Program for GGUF LLM Models
+TDS Archive
+In
+
+TDS Archive
+
+by
+
+Shubham Panchal
+
+llama.cpp: Writing A Simple C++ Inference Program for GGUF LLM Models
+Exploring llama.cpp internals and a basic chat program flow
+Jan 14
+47
+2
+See all from Shubham Panchal
+See all from ProAndroidDev
+Recommended from Medium
+Native vs Cross-Platform: App Size and Performance Comparison
+Riyas Pullur
+Riyas Pullur
+
+Native vs Cross-Platform: App Size and Performance Comparison
+When deciding between native development (Kotlin/Swift) and cross-platform frameworks like Flutter, React Native, or KMM (Kotlin…
+
+Jul 17
+Advanced Game Rendering Enhancement Through GPU API Hooking: A Modern C++ Approach for Android…
+Allen Kuo (kwyshell)
+Allen Kuo (kwyshell)
+
+Advanced Game Rendering Enhancement Through GPU API Hooking: A Modern C++ Approach for Android…
+In the pursuit of pushing the visual fidelity of Android games beyond their defaults, I set out to investigate if we could intercept and…
+Oct 1
+Jetpack Compose Animation Unpacked: AnimatedVisibility vs. AnimatedContent Live Demo!
+Level Up Coding
+In
+
+Level Up Coding
+
+by
+
+Rafa
+
+Jetpack Compose Animation Unpacked: AnimatedVisibility vs. AnimatedContent Live Demo!
+Jetpack Compose provides powerful tools to build beautiful, animated UIs. Among the most frequently used are AnimatedVisibility and…
+
+Jun 29
+7
+🔋 Background Execution in Android (2025): The Only Guide You Need
+CodeWithParas
+CodeWithParas
+
+🔋 Background Execution in Android (2025): The Only Guide You Need
+Confused between IntentService, JobScheduler, and WorkManager?  You're not alone — Android’s background execution model has changed…
+Jun 24
+3
+Functional Programming in Kotlin: What Developers Get Right (and Wrong)
+Jamshidbek Boynazarov
+Jamshidbek Boynazarov
+
+Functional Programming in Kotlin: What Developers Get Right (and Wrong)
+Have you ever refactored a clunky imperative loop into a sleek chain of map and filter operations in Kotlin, only to step back and realize…
+
+Sep 25
+Understanding Change Data Capture (CDC): The Backbone of Real-Time Data Systems
+Ben Meehan
+Ben Meehan
+
+Understanding Change Data Capture (CDC): The Backbone of Real-Time Data Systems
+Modern software systems generate and consume massive volumes of data at every moment from financial transactions and IoT sensor readings to…
+2d ago
+See more recommendations
+Help
+
+Status
+
+About
+
+Careers
+
+Press
+
+Blog
+
+Privacy
+
+Rules
+
+Terms
+
+Text to speech

@@ -1,0 +1,9 @@
+Makefile
+whisper.so
+whisper.bundle
+whisper.dll
+*.o
+*.a
+sources/*
+!sources/CMakeGraphVizOptions.cmake
+mkmf.log

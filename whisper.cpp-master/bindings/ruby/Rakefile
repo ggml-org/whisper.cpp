@@ -1,0 +1,96 @@
+require 'rake/clean'
+require "bundler/gem_tasks"
+require "rake/testtask"
+require_relative "extsources"
+
+SOURCES_DIR = "ext/sources"
+
+SOURCES = FileList[]
+
+EXTSOURCES.each do |src|
+  basename = src.pathmap("%f")
+  dest = basename == "LICENSE" ? basename
+                               : src.pathmap("%{\\.\\./\\.\\.,#{SOURCES_DIR}}p")
+                                    .pathmap("%{\\.\\./javascript,#{SOURCES_DIR}/bindings/javascript}p")
+  dir = dest.pathmap("%d")
+  file src
+  directory dir
+  file dest => [src, dir] do |t|
+    cp t.source, t.name
+  end
+  SOURCES.include dest
+end
+
+CLEAN.include SOURCES
+
+SRC = FileList["ext/*.{c,cpp,h}"]
+
+task build: SOURCES
+
+directory "pkg"
+CLOBBER.include "pkg"
+
+LIB_NAME = "whisper".ext(RbConfig::CONFIG["DLEXT"])
+SO_FILE = File.join("ext", LIB_NAME)
+LIB_FILE = File.join("lib", LIB_NAME)
+
+file "ext/Makefile" => SRC + ["ext/extconf.rb"] + SOURCES do |t|
+  chdir "ext" do
+    ruby "extconf.rb"
+  end
+end
+if File.exist? "ext/Makefile"
+  task :make_clean do
+    cd "ext" do
+      sh "make", "clean"
+    end
+  end
+  task clean: :make_clean
+  task :make_distclean do
+    cd "ext" do
+      sh "make", "distclean"
+    end
+  end
+  task clobber: :make_distclean
+end
+
+file SO_FILE => "ext/Makefile" do |t|
+  chdir "ext" do
+    sh "make"
+  end
+end
+CLEAN.include SO_FILE
+
+directory "lib"
+file LIB_FILE => [SO_FILE, "lib"] do |t|
+  copy t.source, t.name
+end
+CLEAN.include LIB_FILE
+
+Rake::TestTask.new
+
+TEST_FIXTURE_AUDIO = "test/fixtures/jfk.wav"
+TEST_FIXTURE_AUDIO_SRC = File.expand_path(File.join(__dir__, "..", "..", "samples", "jfk.wav"))
+TEST_FIXTURE_AUDIO_DIR = TEST_FIXTURE_AUDIO.pathmap("%d")
+directory TEST_FIXTURE_AUDIO_DIR
+if File.exist? TEST_FIXTURE_AUDIO_SRC
+  file TEST_FIXTURE_AUDIO => [TEST_FIXTURE_AUDIO_SRC, TEST_FIXTURE_AUDIO_DIR] do |t|
+    symlink t.source, t.name
+  end
+else
+  require "open-uri"
+  file TEST_FIXTURE_AUDIO => TEST_FIXTURE_AUDIO_DIR do |t|
+    File.write t.name, URI("https://github.com/ggml-org/whisper.cpp/raw/refs/heads/master/samples/jfk.wav").read
+  end
+end
+
+TEST_MEMORY_VIEW = "test/jfk_reader/jfk_reader.#{RbConfig::CONFIG['DLEXT']}"
+file TEST_MEMORY_VIEW => "test/jfk_reader/jfk_reader.c" do |t|
+  chdir "test/jfk_reader" do
+    ruby "extconf.rb"
+    sh "make"
+  end
+end
+CLEAN.include TEST_MEMORY_VIEW
+
+task test: [LIB_FILE, TEST_MEMORY_VIEW, TEST_FIXTURE_AUDIO]

@@ -1,0 +1,21 @@
+name: Bindings Tests (Ruby)
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  ubuntu-22:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: bindings/ruby
+    steps:
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+      - uses: actions/checkout@v4
+      - run: rake test
