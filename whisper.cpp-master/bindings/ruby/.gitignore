@@ -1,9 +1,0 @@
-LICENSE
-pkg/
-lib/whisper.*
-ext/examples/
-ext/ggml/
-ext/include/
-ext/scripts/
-ext/src/
-test/fixtures/

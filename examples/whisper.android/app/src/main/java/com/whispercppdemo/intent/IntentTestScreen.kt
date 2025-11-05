@@ -41,12 +41,12 @@ fun IntentTestScreen(
                 modifier = Modifier.padding(16.dp)
             ) {
                 Text(
-                    text = "🎯 Intent Classification Test",
+                    text = "Intent Classification Test",
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "Test the TensorFlow Lite intent classifier with your voice commands",
+                    text = "Test the intent classifier with your commands",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                 )
@@ -149,7 +149,7 @@ private fun InputSection(viewModel: IntentTestViewModel) {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                text = "💬 Enter Text to Classify",
+                text = "Enter Text to Classify",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Medium
             )
@@ -207,7 +207,7 @@ private fun ExampleCommands(viewModel: IntentTestViewModel) {
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
-                text = "📝 Example Commands",
+                text = "Example Commands",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Medium
             )
@@ -259,7 +259,7 @@ private fun ResultsSection(viewModel: IntentTestViewModel) {
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = "🎯 Classification Result",
+                    text = "Classification Result",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Medium
                 )
@@ -289,7 +289,7 @@ private fun ResultsSection(viewModel: IntentTestViewModel) {
                     Divider()
                     
                     Text(
-                        text = "🏷️ Extracted Slots:",
+                        text = "Extracted Slots:",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium
                     )
@@ -387,7 +387,7 @@ private fun AvailableIntents(intents: List<String>) {
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
-                text = "🏷️ Available Intents (${intents.size})",
+                text = "Available Intents (${intents.size})",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Medium
             )

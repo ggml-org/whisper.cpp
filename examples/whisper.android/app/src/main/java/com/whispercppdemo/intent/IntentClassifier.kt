@@ -8,6 +8,7 @@ import java.io.FileInputStream
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 import java.util.*
+import kotlin.math.exp
 
 private const val LOG_TAG = "IntentClassifier"
 
@@ -21,16 +22,14 @@ data class IntentResult(
 
 class IntentClassifier(private val context: Context) {
     
-    private var sentenceEncoder: Interpreter? = null
     private var intentClassifier: Interpreter? = null
-    private var vocabulary: Map<String, Int> = emptyMap()
+    private var hfTokenizer: HFTokenizer? = null
     private var intentMapping: Map<Int, String> = emptyMap()
     private var isInitialized = false
-    private val slotExtractor = SlotExtractor()  // Add slot extractor
+    private val slotExtractor = SlotExtractor()
     
     companion object {
-        private const val MAX_SEQUENCE_LENGTH = 32
-        private const val EMBEDDING_DIM = 384
+        private const val MAX_SEQUENCE_LENGTH = 256  // Updated to match your model
     }
     
     suspend fun initialize(): Boolean {
@@ -40,11 +39,10 @@ class IntentClassifier(private val context: Context) {
             // Load metadata
             loadMetadata()
             
-            // Load vocabulary
-            loadVocabulary()
+            // Load HuggingFace tokenizer
+            loadHFTokenizer()
             
-            // Load TFLite models
-            loadSentenceEncoder()
+            // Load the complete TFLite model (end-to-end)
             loadIntentClassifier()
             
             isInitialized = true
@@ -72,37 +70,36 @@ class IntentClassifier(private val context: Context) {
         Log.d(LOG_TAG, "📋 Loaded ${intentMapping.size} intent mappings")
     }
     
-    private fun loadVocabulary() {
-        val vocabularyJson = context.assets.open("vocabulary.json").bufferedReader().use { it.readText() }
-        val vocabObject = JSONObject(vocabularyJson)
-        
-        val tempVocabulary = mutableMapOf<String, Int>()
-        vocabObject.keys().forEach { word ->
-            tempVocabulary[word] = vocabObject.getInt(word)
+    private fun loadHFTokenizer() {
+        // Load tokenizer.json file as bytes
+        val tokenizerBytes = context.assets.open("tokenizer/tokenizer.json").use { inputStream ->
+            inputStream.readBytes()
         }
         
-        vocabulary = tempVocabulary
-        Log.d(LOG_TAG, "📝 Loaded vocabulary with ${vocabulary.size} words")
+        // Initialize HuggingFace tokenizer
+        hfTokenizer = HFTokenizer(tokenizerBytes)
+        Log.d(LOG_TAG, "🤗 HuggingFace tokenizer loaded successfully")
     }
-    
-    private fun loadSentenceEncoder() {
-        val model = loadModelFile("lightweight_sentence_encoder.tflite")
-        sentenceEncoder = Interpreter(model)
-        
-        val inputShape = sentenceEncoder!!.getInputTensor(0).shape()
-        val outputShape = sentenceEncoder!!.getOutputTensor(0).shape()
-        
-        Log.d(LOG_TAG, "🔤 Sentence encoder loaded - Input: ${inputShape.contentToString()}, Output: ${outputShape.contentToString()}")
-    }
-    
+
     private fun loadIntentClassifier() {
         val model = loadModelFile("intent_classifier.tflite")
         intentClassifier = Interpreter(model)
         
-        val inputShape = intentClassifier!!.getInputTensor(0).shape()
-        val outputShape = intentClassifier!!.getOutputTensor(0).shape()
+        val inputDetails = intentClassifier!!.inputTensorCount
+        val outputDetails = intentClassifier!!.outputTensorCount
         
-        Log.d(LOG_TAG, "🎯 Intent classifier loaded - Input: ${inputShape.contentToString()}, Output: ${outputShape.contentToString()}")
+        Log.d(LOG_TAG, "🎯 Complete intent classifier loaded - Inputs: $inputDetails, Outputs: $outputDetails")
+        
+        // Log input/output shapes
+        for (i in 0 until inputDetails) {
+            val shape = intentClassifier!!.getInputTensor(i).shape()
+            Log.d(LOG_TAG, "  Input $i shape: ${shape.contentToString()}")
+        }
+        
+        for (i in 0 until outputDetails) {
+            val shape = intentClassifier!!.getOutputTensor(i).shape()
+            Log.d(LOG_TAG, "  Output $i shape: ${shape.contentToString()}")
+        }
     }
     
     private fun loadModelFile(fileName: String): MappedByteBuffer {
@@ -123,19 +120,19 @@ class IntentClassifier(private val context: Context) {
         return try {
             Log.d(LOG_TAG, "🔍 Classifying: '$text'")
             
-            // Step 1: Convert text to embeddings
-            val embeddings = textToEmbeddings(text)
-            Log.d(LOG_TAG, "📊 Generated embeddings: ${embeddings.size} dimensions")
+            // Step 1: Tokenize text using BERT tokenizer
+            val tokenization = tokenizeText(text)
+            val inputIds = tokenization.first
+            val attentionMask = tokenization.second
             
-            // Check if embeddings are all zeros (from dummy encoder)
-            val isAllZeros = embeddings.all { it == 0f }
-            val nonZeroCount = embeddings.count { it != 0f }
-            Log.d(LOG_TAG, "🔍 Embedding analysis: isAllZeros=$isAllZeros, nonZeroCount=$nonZeroCount")
+            Log.d(LOG_TAG, "📊 Tokenized - InputIds: ${inputIds.take(10).joinToString()}")
+            Log.d(LOG_TAG, "📊 AttentionMask: ${attentionMask.take(10).joinToString()}")
             
-            // Step 2: Classify intent using embeddings
-            val probabilities = classifyWithEmbeddings(embeddings)
+            // Step 2: Run the complete end-to-end model
+            val logits = runCompleteModel(inputIds, attentionMask)
             
-            // Step 3: Get best prediction
+            // Step 3: Apply softmax and get predictions
+            val probabilities = softmax(logits)
             val bestIndex = probabilities.indices.maxByOrNull { probabilities[it] } ?: 0
             val bestIntent = intentMapping[bestIndex] ?: "Unknown"
             val confidence = probabilities[bestIndex]
@@ -148,8 +145,15 @@ class IntentClassifier(private val context: Context) {
             }
             
             Log.d(LOG_TAG, "✅ Final result: $bestIntent (confidence: ${"%.3f".format(confidence)})")
-            Log.d(LOG_TAG, "🔍 Intent mapping check - bestIndex: $bestIndex, mapping size: ${intentMapping.size}")
-            Log.d(LOG_TAG, "🔍 Expected for zero embeddings: OpenApp (from Python test)")
+            
+            // Log top 3 predictions
+            val sortedIndices = probabilities.indices.sortedByDescending { probabilities[it] }
+            Log.d(LOG_TAG, "🏆 Top 3 predictions:")
+            sortedIndices.take(3).forEach { index ->
+                val intent = intentMapping[index] ?: "Unknown_$index"
+                val prob = probabilities[index]
+                Log.d(LOG_TAG, "  ${intent}: ${"%.3f".format(prob)}")
+            }
             
             // Step 4: Extract slots for the predicted intent
             val slotResult = slotExtractor.extractSlots(text, bestIntent)
@@ -165,74 +169,57 @@ class IntentClassifier(private val context: Context) {
             Log.e(LOG_TAG, "❌ Error classifying intent", e)
             null
         }
-    }    private fun textToEmbeddings(text: String): FloatArray {
-        // Preprocess text
-        val processedText = text.lowercase(Locale.getDefault()).trim()
-        val words = processedText.split("\\s+".toRegex())
-        
-        Log.d(LOG_TAG, "🔤 Original text: '$text'")
-        Log.d(LOG_TAG, "🔤 Processed text: '$processedText'")
-        Log.d(LOG_TAG, "🔤 Words: ${words.joinToString(", ")}")
-        
-        // Convert to token sequence
-        val tokenSequence = FloatArray(MAX_SEQUENCE_LENGTH) { 0f }  // Changed to FloatArray
-        
-        var knownWords = 0
-        words.take(MAX_SEQUENCE_LENGTH).forEachIndexed { index, word ->
-            val tokenId = vocabulary[word] ?: 0
-            tokenSequence[index] = tokenId.toFloat()  // Convert to float
-            if (tokenId != 0) knownWords++
-            Log.d(LOG_TAG, "🔤 Word '$word' -> token $tokenId")
-        }
-        
-        Log.d(LOG_TAG, "🔤 Known words: $knownWords/${words.size} (${if (words.isNotEmpty()) (knownWords * 100 / words.size) else 0}%)")
-        Log.d(LOG_TAG, "🔤 Token sequence: ${tokenSequence.take(10).joinToString { "%.0f".format(it) }}")
-        
-        // Run sentence encoder with float input
-        val inputArray = Array(1) { tokenSequence }
-        val outputArray = Array(1) { FloatArray(EMBEDDING_DIM) }
-        
-        sentenceEncoder!!.run(inputArray, outputArray)
-        
-        val embeddings = outputArray[0]
-        
-        // Log embedding statistics for debugging
-        val mean = embeddings.average().toFloat()
-        val std = kotlin.math.sqrt(embeddings.map { (it - mean) * (it - mean) }.average()).toFloat()
-        val min = embeddings.minOrNull() ?: 0f
-        val max = embeddings.maxOrNull() ?: 0f
-        
-        Log.d(LOG_TAG, "📊 Embedding stats: mean=${"%.6f".format(mean)}, std=${"%.6f".format(std)}, range=[${"%.3f".format(min)}, ${"%.3f".format(max)}]")
-        Log.d(LOG_TAG, "📊 First 10 embedding values: ${embeddings.take(10).map { "%.3f".format(it) }.joinToString()}")
-        
-        return embeddings
     }
     
-    private fun classifyWithEmbeddings(embeddings: FloatArray): FloatArray {
-        val inputArray = Array(1) { embeddings }
+    private fun tokenizeText(text: String): Pair<IntArray, IntArray> {
+        // Use HuggingFace tokenizer for proper BERT WordPiece tokenization
+        val result = hfTokenizer!!.tokenize(text)
+        
+        // Ensure the sequences are exactly MAX_SEQUENCE_LENGTH
+        val inputIds = IntArray(MAX_SEQUENCE_LENGTH)
+        val attentionMask = IntArray(MAX_SEQUENCE_LENGTH)
+        
+        // Copy tokens up to MAX_SEQUENCE_LENGTH, padding or truncating as needed
+        val tokenCount = minOf(result.ids.size, MAX_SEQUENCE_LENGTH)
+        for (i in 0 until tokenCount) {
+            inputIds[i] = result.ids[i].toInt()
+            attentionMask[i] = result.attentionMask[i].toInt()
+        }
+        
+        // The rest remain as 0 (padding)
+        Log.d(LOG_TAG, "🔤 HF Tokenized '${text.take(50)}${if(text.length > 50) "..." else ""}' -> ${tokenCount} tokens")
+        Log.d(LOG_TAG, "🔤 First 10 input_ids: ${inputIds.take(10).joinToString()}")
+        Log.d(LOG_TAG, "🔤 Valid tokens: ${attentionMask.sum()}")
+        
+        return Pair(inputIds, attentionMask)
+    }
+    
+    private fun runCompleteModel(inputIds: IntArray, attentionMask: IntArray): FloatArray {
+        // Prepare inputs for TFLite model
+        val inputIdsArray = Array(1) { inputIds }
+        val attentionMaskArray = Array(1) { attentionMask }
+        
+        // Prepare output
         val outputArray = Array(1) { FloatArray(intentMapping.size) }
         
-        intentClassifier!!.run(inputArray, outputArray)
+        // Run inference
+        val inputs = arrayOf(inputIdsArray, attentionMaskArray)
+        val outputs = mapOf(0 to outputArray)
         
-        val probabilities = outputArray[0]
+        intentClassifier!!.runForMultipleInputsOutputs(inputs, outputs)
         
-        // Log detailed probability information
-        Log.d(LOG_TAG, "🎯 Raw predictions:")
-        probabilities.forEachIndexed { index, prob ->
-            val intent = intentMapping[index] ?: "Unknown_$index"
-            Log.d(LOG_TAG, "  $index. $intent: ${"%.3f".format(prob)}")
-        }
+        val logits = outputArray[0]
         
-        // Find top 3 predictions
-        val sortedIndices = probabilities.indices.sortedByDescending { probabilities[it] }
-        Log.d(LOG_TAG, "🏆 Top 3 predictions:")
-        sortedIndices.take(3).forEach { index ->
-            val intent = intentMapping[index] ?: "Unknown_$index"
-            val prob = probabilities[index]
-            Log.d(LOG_TAG, "  ${intent}: ${"%.3f".format(prob)}")
-        }
+        Log.d(LOG_TAG, "🎯 Model output logits: ${logits.take(5).map { "%.3f".format(it) }.joinToString()}")
         
-        return probabilities
+        return logits
+    }
+    
+    private fun softmax(logits: FloatArray): FloatArray {
+        val maxLogit = logits.maxOrNull() ?: 0f
+        val expValues = logits.map { exp(it - maxLogit) }
+        val sumExp = expValues.sum()
+        return expValues.map { (it / sumExp).toFloat() }.toFloatArray()
     }
     
     fun getIntentList(): List<String> {
@@ -240,8 +227,8 @@ class IntentClassifier(private val context: Context) {
     }
     
     fun close() {
-        sentenceEncoder?.close()
         intentClassifier?.close()
+        hfTokenizer?.close()
         isInitialized = false
         Log.d(LOG_TAG, "🔒 Intent classifier closed")
     }

@@ -6,6 +6,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -22,11 +23,13 @@ fun MainScreen(viewModel: MainScreenViewModel) {
         messageLog = viewModel.dataLog,
         currentTranscript = viewModel.currentTranscript,
         transcriptionTime = viewModel.transcriptionTime,
+        currentIntent = viewModel.currentIntent,
+        intentConfidence = viewModel.intentConfidence,
+        intentSlots = viewModel.intentSlots,
+        intentProcessingTime = viewModel.intentProcessingTime,
         storageLocation = viewModel.getStorageLocation(),
         csvLocation = viewModel.getCsvLocation(),
         isStorageAccessible = viewModel.isStorageAccessible(),
-        onBenchmarkTapped = viewModel::benchmark,
-        onTranscribeSampleTapped = viewModel::transcribeSample,
         onRecordTapped = viewModel::toggleRecord
     )
 }
@@ -39,11 +42,13 @@ private fun MainScreen(
     messageLog: String,
     currentTranscript: String,
     transcriptionTime: String,
+    currentIntent: String,
+    intentConfidence: Float,
+    intentSlots: Map<String, Any>,
+    intentProcessingTime: String,
     storageLocation: String,
     csvLocation: String,
     isStorageAccessible: Boolean,
-    onBenchmarkTapped: () -> Unit,
-    onTranscribeSampleTapped: () -> Unit,
     onRecordTapped: () -> Unit
 ) {
     Scaffold(
@@ -58,11 +63,11 @@ private fun MainScreen(
                 .padding(innerPadding)
                 .padding(16.dp)
         ) {
-            Column(verticalArrangement = Arrangement.SpaceBetween) {
-                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                    BenchmarkButton(enabled = canTranscribe, onClick = onBenchmarkTapped)
-                    TranscribeSampleButton(enabled = canTranscribe, onClick = onTranscribeSampleTapped)
-                }
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.SpaceBetween,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
                 RecordButton(
                     enabled = canTranscribe,
                     isRecording = isRecording,
@@ -98,6 +103,88 @@ private fun MainScreen(
                                 text = transcriptionTime,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+            
+            // Intent classification results
+            if (currentIntent.isNotEmpty()) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp)
+                    ) {
+                        Text(
+                            text = "🎯 Intent Classification:",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = currentIntent,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            
+                            Text(
+                                text = "${(intentConfidence * 100).toInt()}%",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (intentConfidence > 0.7f) {
+                                    MaterialTheme.colorScheme.primary
+                                } else if (intentConfidence > 0.5f) {
+                                    MaterialTheme.colorScheme.secondary
+                                } else {
+                                    MaterialTheme.colorScheme.error
+                                }
+                            )
+                        }
+                        
+                        if (intentSlots.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Slots:",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            
+                            intentSlots.forEach { (key, value) ->
+                                Row(
+                                    modifier = Modifier.padding(vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "$key: ",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                                    )
+                                    Text(
+                                        text = value.toString(),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                }
+                            }
+                        }
+                        
+                        if (intentProcessingTime.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = intentProcessingTime,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
                             )
                         }
                     }
@@ -185,19 +272,26 @@ private fun RecordButton(enabled: Boolean, isRecording: Boolean, onClick: () -> 
             }
         }
     )
-    Button(onClick = {
-        if (micPermissionState.status.isGranted) {
-            onClick()
-        } else {
-            micPermissionState.launchPermissionRequest()
-        }
-     }, enabled = enabled) {
-        Text(
-            if (isRecording) {
-                "Stop recording"
+    Button(
+        onClick = {
+            if (micPermissionState.status.isGranted) {
+                onClick()
             } else {
-                "Start recording"
+                micPermissionState.launchPermissionRequest()
             }
+        },
+        enabled = enabled,
+        modifier = Modifier
+            .width(300.dp)
+            .height(56.dp)
+    ) {
+        Text(
+            text = if (isRecording) {
+                "Stop"
+            } else {
+                "Start"
+            },
+            style = MaterialTheme.typography.titleMedium
         )
     }
 }

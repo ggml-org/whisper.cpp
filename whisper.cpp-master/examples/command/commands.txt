@@ -1,9 +1,0 @@
-enable
-disable
-cat
-dog
-apple
-red
-blue
-green
-lightblue

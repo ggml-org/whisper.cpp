@@ -13,7 +13,7 @@ import com.whispercppdemo.intent.IntentTestScreen
 import com.whispercppdemo.intent.IntentTestViewModel
 import com.whispercppdemo.ui.main.MainScreen
 import com.whispercppdemo.ui.main.MainScreenViewModel
-import com.whispercppdemo.ui.theme.WhisperCppDemoTheme
+import com.whispercppdemo.ui.theme.AppTheme
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainScreenViewModel by viewModels {
@@ -23,7 +23,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            WhisperCppDemoTheme {
+            AppTheme {
                 WhisperAppWithTabs(viewModel)
             }
         }
@@ -36,8 +36,8 @@ fun WhisperAppWithTabs(mainViewModel: MainScreenViewModel) {
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     
     val tabs = listOf(
-        "🎤 Whisper",
-        "🎯 Intent Test"
+        "ASR & Intent",
+        "Intent Test"
     )
     
     Column(

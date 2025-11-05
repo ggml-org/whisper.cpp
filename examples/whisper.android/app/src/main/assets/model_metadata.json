@@ -1,11 +1,13 @@
 {
   "model_info": {
-    "created_date": "2025-09-29",
-    "framework": "tensorflow_lite_ultra_compatible",
-    "input_dimension": 384,
+    "created_date": "2025-11-03",
+    "framework": "tensorflow_lite_int8_quantized",
+    "max_sequence_length": 256,
     "num_intents": 13,
-    "model_type": "ultra_compatible_intent_classification",
-    "compatibility": "android_ultra_compatible"
+    "model_type": "complete_end_to_end_bert_intent_classification",
+    "compatibility": "android_int8_quantized",
+    "model_version": "2.19.0",
+    "quantization": "dynamic_int8"
   },
   "intent_mapping": {
     "0": "LogEvent",
@@ -36,5 +38,16 @@
     "TimerStopwatch",
     "ToggleFeature",
     "WeatherQuery"
-  ]
+  ],
+  "tokenizer_info": {
+    "model_type": "bert",
+    "max_length": 256,
+    "padding": "max_length",
+    "truncation": true,
+    "do_lower_case": true,
+    "cls_token": "[CLS]",
+    "sep_token": "[SEP]", 
+    "pad_token": "[PAD]",
+    "unk_token": "[UNK]"
+  }
 }

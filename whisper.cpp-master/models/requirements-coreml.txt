@@ -1,4 +1,0 @@
-torch
-coremltools
-openai-whisper
-ane_transformers
