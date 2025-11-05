@@ -21,10 +21,10 @@ class AudioStreamRecorder {
         private const val SAMPLE_RATE = 16000 // Required by Whisper
         private const val CHANNELS = AudioFormat.CHANNEL_IN_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_FLOAT
-        private const val BUFFER_SIZE_MS = 6000 // Increased to 6 seconds for longer commands
-        private const val CHUNK_SIZE_MS = 500 // Keep 500ms chunks for good responsiveness
+        private const val BUFFER_SIZE_MS = 2000 // Reduced to 2 seconds for faster processing
+        private const val CHUNK_SIZE_MS = 200 // Reduced to 200ms chunks for better responsiveness
         private const val MIN_AUDIO_LEVEL = 0.01f // Minimum audio level to consider as speech
-        private const val MAX_AUDIO_LENGTH_MS = 8000 // Increased to 8 seconds for longer commands
+        private const val MAX_AUDIO_LENGTH_MS = 3000 // Reduced to 3 seconds for faster processing
     }
 
     private var audioRecord: AudioRecord? = null
@@ -85,10 +85,10 @@ class AudioStreamRecorder {
                     }
                     
                     // Emit when we have substantial audio: either max buffer, sufficient silence, or good command length
-                    val minCommandLength = (SAMPLE_RATE * 1.5f).toInt() // Minimum 1.5 seconds
-                    val idealCommandLength = (SAMPLE_RATE * 3.0f).toInt() // Prefer 3+ seconds for better accuracy
+                    val minCommandLength = (SAMPLE_RATE * 0.8f).toInt() // Minimum 0.8 seconds (faster response)
+                    val idealCommandLength = (SAMPLE_RATE * 1.5f).toInt() // Prefer 1.5+ seconds for accuracy
                     if (hasVoice && (accumulatorPos >= accumulator.size || 
-                                   (silenceFrames >= 2 && accumulatorPos >= minCommandLength) ||  // Increased silence frames for longer commands
+                                   (silenceFrames >= 1 && accumulatorPos >= minCommandLength) ||  // Faster response with 1 silence frame
                                    (silenceFrames >= 1 && accumulatorPos >= idealCommandLength))) {
                         emit(accumulator.copyOfRange(0, accumulatorPos))
                         accumulatorPos = 0

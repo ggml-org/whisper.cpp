@@ -20,6 +20,8 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.whispercppdemo.media.decodeWaveFile
 import com.whispercppdemo.recorder.AudioStreamRecorder
 import com.whispercppdemo.recorder.Recorder
+import com.whispercppdemo.intent.IntentClassifier
+import com.whispercppdemo.intent.IntentResult
 import com.whispercpp.whisper.WhisperContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
@@ -51,6 +53,7 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
     private val csvFile = File(recordingsPath, "transcriptions.csv")
     private var recorder: Recorder = Recorder()
     private var whisperContext: WhisperContext? = null
+    private var intentClassifier: IntentClassifier? = null
     private var mediaPlayer: MediaPlayer? = null
     private var recordedFile: File? = null
     private var currentRecordingTimestamp: String? = null
@@ -70,6 +73,16 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
     var transcriptionTime by mutableStateOf("")
         private set
     private var isProcessing by mutableStateOf(false)
+        private set
+        
+    // For intent classification results
+    var currentIntent by mutableStateOf("")
+        private set
+    var intentConfidence by mutableStateOf(0f)
+        private set
+    var intentSlots by mutableStateOf<Map<String, Any>>(emptyMap())
+        private set
+    var intentProcessingTime by mutableStateOf("")
         private set
 
     init {
@@ -138,7 +151,7 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
     private suspend fun initializeCsvFile() = withContext(Dispatchers.IO) {
         try {
             FileWriter(csvFile).use { writer ->
-                writer.append("timestamp,audio_filename,transcription\n")
+                writer.append("timestamp,audio_filename,transcription,intent\n")
             }
             Log.d(LOG_TAG, "Initialized CSV file: ${csvFile.absolutePath}")
         } catch (e: Exception) {
@@ -221,14 +234,15 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
         )
     }
 
-    private suspend fun saveToCsv(timestamp: String, audioFilename: String, transcription: String) = withContext(Dispatchers.IO) {
+    private suspend fun saveToCsv(timestamp: String, audioFilename: String, transcription: String, intent: String) = withContext(Dispatchers.IO) {
         try {
             FileWriter(csvFile, true).use { writer ->
-                // Escape any commas or quotes in the transcription
+                // Escape any commas or quotes in the transcription and intent
                 val escapedTranscription = transcription.replace("\"", "\"\"")
-                writer.append("$timestamp,\"$audioFilename\",\"$escapedTranscription\"\n")
+                val escapedIntent = intent.replace("\"", "\"\"")
+                writer.append("$timestamp,\"$audioFilename\",\"$escapedTranscription\",\"$escapedIntent\"\n")
             }
-            Log.d(LOG_TAG, "Saved to CSV: $audioFilename -> $transcription")
+            Log.d(LOG_TAG, "Saved to CSV: $audioFilename -> $transcription -> $intent")
         } catch (e: Exception) {
             Log.e(LOG_TAG, "Error saving to CSV", e)
         }
@@ -245,7 +259,9 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
             copyAssets()
             Log.d(LOG_TAG, "Assets copied successfully. Loading base model...")
             loadBaseModel()
-            Log.d(LOG_TAG, "Base model loaded successfully")
+            Log.d(LOG_TAG, "Base model loaded successfully. Initializing intent classifier...")
+            loadIntentClassifier()
+            Log.d(LOG_TAG, "Intent classifier initialized successfully")
             canTranscribe = true
         } catch (e: Exception) {
             Log.e(LOG_TAG, "Error during initialization", e)
@@ -307,6 +323,26 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
         } else {
             Log.e(LOG_TAG, "No models found in assets/models directory")
             throw IllegalStateException("No models found in assets/models directory")
+        }
+    }
+    
+    private suspend fun loadIntentClassifier() = withContext(Dispatchers.IO) {
+        printMessage("Loading intent classifier...\n")
+        try {
+            intentClassifier = IntentClassifier(application)
+            val success = intentClassifier!!.initialize()
+            if (success) {
+                printMessage("Intent classifier loaded successfully.\n")
+                Log.d(LOG_TAG, "Intent classifier initialized successfully")
+            } else {
+                printMessage("Failed to initialize intent classifier.\n")
+                Log.e(LOG_TAG, "Failed to initialize intent classifier")
+                intentClassifier = null
+            }
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "Error loading intent classifier", e)
+            printMessage("Error loading intent classifier: ${e.localizedMessage}\n")
+            intentClassifier = null
         }
     }
 
@@ -399,12 +435,75 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
             val text = whisperContext?.transcribeData(data, printTimestamp = true, prompt = PROMPT)
             val elapsed = System.currentTimeMillis() - start
             printMessage("Done ($elapsed ms): \n$text\n")
+            
+            // Classify intent if text is not null and not empty (run asynchronously)
+            text?.let { transcript ->
+                if (transcript.isNotBlank()) {
+                    viewModelScope.launch {
+                        classifyIntentFromTranscript(transcript)
+                    }
+                }
+            }
         } catch (e: Exception) {
             Log.w(LOG_TAG, e)
             printMessage("Error transcribing ${file.name}: ${e.localizedMessage}\n")
         }
 
         canTranscribe = true
+    }
+    
+    private suspend fun classifyIntentFromTranscript(transcript: String): String = withContext(Dispatchers.Default) {
+        try {
+            val classificationStart = System.currentTimeMillis()
+            val result = intentClassifier?.classifyIntent(transcript)
+            val classificationElapsed = System.currentTimeMillis() - classificationStart
+            
+            withContext(Dispatchers.Main) {
+                if (result != null) {
+                    // Handle irrelevant input specially
+                    if (result.intent == "IrrelevantInput") {
+                        currentIntent = result.slots["message"] as? String ?: "Sorry, please say again"
+                        intentConfidence = result.confidence
+                        intentSlots = emptyMap()  // Don't show slots for irrelevant input
+                        intentProcessingTime = "Intent classified in ${classificationElapsed}ms"
+                        
+                        Log.d(LOG_TAG, "Irrelevant input detected: ${"%.3f".format(result.confidence)}")
+                        printMessage("Irrelevant input detected\n")
+                        return@withContext "IrrelevantInput"
+                    } else {
+                        currentIntent = result.intent
+                        intentConfidence = result.confidence
+                        intentSlots = result.slots
+                        intentProcessingTime = "Intent classified in ${classificationElapsed}ms"
+                        
+                        Log.d(LOG_TAG, "Intent classified: ${result.intent} (confidence: ${"%.3f".format(result.confidence)})")
+                        printMessage("Intent: ${result.intent} (${"%.1f".format(result.confidence * 100)}% confidence)\n")
+                        
+                        if (result.slots.isNotEmpty()) {
+                            printMessage("Slots: ${result.slots}\n")
+                        }
+                        return@withContext result.intent
+                    }
+                } else {
+                    currentIntent = "Classification failed"
+                    intentConfidence = 0f
+                    intentSlots = emptyMap()
+                    intentProcessingTime = "Classification failed"
+                    printMessage("Intent classification failed\n")
+                    return@withContext "Classification failed"
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "Error classifying intent", e)
+            withContext(Dispatchers.Main) {
+                currentIntent = "Error"
+                intentConfidence = 0f
+                intentSlots = emptyMap()
+                intentProcessingTime = "Error: ${e.localizedMessage}"
+                printMessage("Intent classification error: ${e.localizedMessage}\n")
+            }
+            return@withContext "Error"
+        }
     }
 
     private val processingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -430,6 +529,11 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
         isRecording = true
         currentTranscript = "Listening..."
         transcriptionTime = ""
+        // Clear previous intent results
+        currentIntent = ""
+        intentConfidence = 0f
+        intentSlots = emptyMap()
+        intentProcessingTime = ""
         isProcessing = true
         
         // Generate timestamp for this recording session
@@ -456,21 +560,31 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
                                 if (result.isNotBlank()) {
                                     val timestamp = currentRecordingTimestamp ?: generateTimestamp()
                                     
-                                    // Save audio file
-                                    val audioFile = saveAudioToFile(audioChunk, timestamp)
-                                    
                                     withContext(Dispatchers.Main) {
                                         // Replace transcript with new result since it's a command
                                         currentTranscript = result.trim()
                                         transcriptionTime = "Transcribed in ${transcriptionElapsed}ms at ${getCurrentTimeString()}"
                                         printMessage("Command detected: $result\n")
                                         printMessage("Transcription time: ${transcriptionElapsed}ms\n")
-                                        printMessage("Saved to: ${audioFile?.name}\n")
                                     }
                                     
-                                    // Save to CSV
-                                    audioFile?.let { file ->
-                                        saveToCsv(timestamp, file.name, result.trim())
+                                    // Classify intent for the transcribed text and save to CSV
+                                    launch {
+                                        try {
+                                            // Classify intent first
+                                            val intentResult = classifyIntentFromTranscript(result.trim())
+                                            
+                                            // Save files with intent information
+                                            val audioFile = saveAudioToFile(audioChunk, timestamp)
+                                            audioFile?.let { file ->
+                                                saveToCsv(timestamp, file.name, result.trim(), intentResult)
+                                                withContext(Dispatchers.Main) {
+                                                    printMessage("Saved to: ${file.name}\n")
+                                                }
+                                            }
+                                        } catch (e: Exception) {
+                                            Log.e(LOG_TAG, "Error saving files", e)
+                                        }
                                     }
                                 }
                             } catch (e: Exception) {
@@ -525,6 +639,8 @@ class MainScreenViewModel(private val application: Application) : AndroidViewMod
                 cleanup()
                 whisperContext?.release()
                 whisperContext = null
+                intentClassifier?.close()
+                intentClassifier = null
                 stopPlayback()
             } catch (e: Exception) {
                 Log.e(LOG_TAG, "Error during cleanup", e)
