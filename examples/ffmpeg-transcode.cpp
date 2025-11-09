@@ -22,8 +22,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-// #include <unistd.h>
-// #include <sys/mman.h>
 
 extern "C" {
 #include <libavutil/opt.h>
