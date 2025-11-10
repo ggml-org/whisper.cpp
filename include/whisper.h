@@ -545,6 +545,10 @@ extern "C" {
         float logprob_thold;
         float no_speech_thold;
 
+        // RNG seed for reproducible sampling (when temperature > 0)
+        // Each decoder will use seed + decoder_index to ensure unique seeds
+        int32_t seed;
+
         struct {
             int best_of;    // ref: https://github.com/openai/whisper/blob/f82bc59f5ea234d4b97fb2860842ed38519f7e65/whisper/transcribe.py#L264
         } greedy;
