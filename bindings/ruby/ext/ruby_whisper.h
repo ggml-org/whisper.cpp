@@ -29,6 +29,10 @@ typedef struct {
 } ruby_whisper_vad_params;
 
 typedef struct {
+  struct whisper_vad_context *context;
+} ruby_whisper_vad_context;
+
+typedef struct {
   VALUE context;
   int index;
 } ruby_whisper_segment;
