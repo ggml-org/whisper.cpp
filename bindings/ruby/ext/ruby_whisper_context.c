@@ -117,23 +117,61 @@ ruby_whisper_normalize_model_path(VALUE model_path)
  * call-seq:
  *   new("base.en") -> Whisper::Context
  *   new("path/to/model.bin") -> Whisper::Context
+ *   new("path/to/model.bin", use_gpu: true, flash_attn: true) -> Whisper::Context
  *   new(Whisper::Model::URI.new("https://example.net/uri/of/model.bin")) -> Whisper::Context
+ *
+ * Initialize a new Whisper context with optional parameters:
+ *   use_gpu: Enable GPU acceleration (default: true)
+ *   flash_attn: Enable flash attention (default: true)
+ *   gpu_device: GPU device to use (default: 0)
+ *   dtw_token_timestamps: Enable DTW token-level timestamps (default: false)
+ *   dtw_aheads_preset: DTW attention heads preset (default: WHISPER_AHEADS_NONE)
  */
 static VALUE
 ruby_whisper_initialize(int argc, VALUE *argv, VALUE self)
 {
   ruby_whisper *rw;
-  VALUE whisper_model_file_path;
+  VALUE whisper_model_file_path, options;
 
-  // TODO: we can support init from buffer here too maybe another ruby object to expose
-  rb_scan_args(argc, argv, "01", &whisper_model_file_path);
+  rb_scan_args(argc, argv, "01:", &whisper_model_file_path, &options);
   TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
 
   whisper_model_file_path = ruby_whisper_normalize_model_path(whisper_model_file_path);
   if (!rb_respond_to(whisper_model_file_path, id_to_s)) {
     rb_raise(rb_eRuntimeError, "Expected file path to model to initialize Whisper::Context");
   }
-  rw->context = whisper_init_from_file_with_params(StringValueCStr(whisper_model_file_path), whisper_context_default_params());
+
+  // Build context params from options
+  struct whisper_context_params cparams = whisper_context_default_params();
+
+  if (!NIL_P(options)) {
+    VALUE use_gpu = rb_hash_aref(options, ID2SYM(rb_intern("use_gpu")));
+    if (!NIL_P(use_gpu)) {
+      cparams.use_gpu = RTEST(use_gpu);
+    }
+
+    VALUE flash_attn = rb_hash_aref(options, ID2SYM(rb_intern("flash_attn")));
+    if (!NIL_P(flash_attn)) {
+      cparams.flash_attn = RTEST(flash_attn);
+    }
+
+    VALUE gpu_device = rb_hash_aref(options, ID2SYM(rb_intern("gpu_device")));
+    if (!NIL_P(gpu_device)) {
+      cparams.gpu_device = NUM2INT(gpu_device);
+    }
+
+    VALUE dtw_token_timestamps = rb_hash_aref(options, ID2SYM(rb_intern("dtw_token_timestamps")));
+    if (!NIL_P(dtw_token_timestamps)) {
+      cparams.dtw_token_timestamps = RTEST(dtw_token_timestamps);
+    }
+
+    VALUE dtw_aheads_preset = rb_hash_aref(options, ID2SYM(rb_intern("dtw_aheads_preset")));
+    if (!NIL_P(dtw_aheads_preset)) {
+      cparams.dtw_aheads_preset = NUM2INT(dtw_aheads_preset);
+    }
+  }
+
+  rw->context = whisper_init_from_file_with_params(StringValueCStr(whisper_model_file_path), cparams);
   if (rw->context == NULL) {
     rb_raise(rb_eRuntimeError, "error: failed to initialize whisper context");
   }
