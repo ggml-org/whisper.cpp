@@ -31,6 +31,8 @@ class TestVADContext < TestBase
     segment => {start_time:, end_time:}
     assert_equal segment.start_time, start_time
     assert_equal segment.end_time, end_time
+
+    assert_equal 5, segments.length
   end
 
   def test_invalid_model_type
