@@ -38,6 +38,10 @@ typedef struct {
 } ruby_whisper_model;
 
 typedef struct {
+  struct whisper_vad_segments *segments;
+} ruby_whisper_vad_segments;
+
+typedef struct {
   VALUE segments;
   int index;
 } ruby_whisper_vad_segment;
