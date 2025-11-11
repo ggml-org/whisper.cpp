@@ -1,7 +1,9 @@
 #include <ruby.h>
 #include "ruby_whisper.h"
 
-VALUE cVADSegment;
+extern VALUE cVADSegment;
+
+extern const rb_data_type_t ruby_whisper_vad_segments_type;
 
 static void
 rb_whisper_vad_segment_mark(void *p)
@@ -49,9 +51,37 @@ rb_whisper_vad_segment_s_new(VALUE segments, int index)
   return segment;
 }
 
+VALUE
+ruby_whisper_vad_segment_get_start_time(VALUE self)
+{
+  ruby_whisper_vad_segment *rwvs;
+  ruby_whisper_vad_segments *rwvss;
+  float t0;
+
+  TypedData_Get_Struct(self, ruby_whisper_vad_segment, &ruby_whisper_vad_segment_type, rwvs);
+  TypedData_Get_Struct(rwvs->segments, ruby_whisper_vad_segments, &ruby_whisper_vad_segments_type, rwvss);
+  t0 = whisper_vad_segments_get_segment_t0(rwvss->segments, rwvs->index);
+  return DBL2NUM(t0 * 10);
+}
+
+VALUE
+ruby_whisper_vad_segment_get_end_time(VALUE self)
+{
+  ruby_whisper_vad_segment *rwvs;
+  ruby_whisper_vad_segments *rwvss;
+  float t1;
+
+  TypedData_Get_Struct(self, ruby_whisper_vad_segment, &ruby_whisper_vad_segment_type, rwvs);
+  TypedData_Get_Struct(rwvs->segments, ruby_whisper_vad_segments, &ruby_whisper_vad_segments_type, rwvss);
+  t1 = whisper_vad_segments_get_segment_t1(rwvss->segments, rwvs->index);
+  return DBL2NUM(t1 * 10);
+}
+
 void
 init_ruby_whisper_vad_segment(VALUE *mVAD)
 {
   cVADSegment = rb_define_class_under(*mVAD, "Segment", rb_cObject);
   rb_define_alloc_func(cVADSegment, ruby_whisper_vad_segment_s_allocate);
+  rb_define_method(cVADSegment, "start_time", ruby_whisper_vad_segment_get_start_time, 0);
+  rb_define_method(cVADSegment, "end_time", ruby_whisper_vad_segment_get_end_time, 0);
 }
