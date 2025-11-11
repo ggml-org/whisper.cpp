@@ -521,6 +521,7 @@ module Whisper
 
       def each: { (Segment) -> void } -> void
               | () -> Enumerator[Segment]
+      def length: -> Integer
     end
 
     class Segment
