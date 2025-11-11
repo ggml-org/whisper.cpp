@@ -5,6 +5,7 @@ extern ID id_to_s;
 
 extern VALUE cVADContext;
 
+extern VALUE ruby_whisper_vad_detect(VALUE self, VALUE file_path, VALUE params);
 extern VALUE ruby_whisper_normalize_model_path(VALUE model_path);
 
 static size_t
@@ -73,4 +74,5 @@ void init_ruby_whisper_vad_context(VALUE *mVAD)
   cVADContext = rb_define_class_under(*mVAD, "Context", rb_cObject);
   rb_define_alloc_func(cVADContext, ruby_whisper_vad_context_s_allocate);
   rb_define_method(cVADContext, "initialize", ruby_whisper_vad_context_initialize, 1);
+  rb_define_method(cVADContext, "detect", ruby_whisper_vad_detect, 2);
 }

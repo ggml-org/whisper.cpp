@@ -2,6 +2,7 @@
 #include "ruby_whisper.h"
 
 VALUE cVADSegments;
+extern VALUE cVADSegments;
 
 static size_t
 ruby_whisper_vad_segments_memsize(const void *p)

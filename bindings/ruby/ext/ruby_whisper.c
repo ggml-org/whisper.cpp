@@ -8,6 +8,7 @@ VALUE cContext;
 VALUE cParams;
 VALUE cVADContext;
 VALUE cVADParams;
+VALUE cVADSegments;
 VALUE eError;
 
 VALUE cSegment;
