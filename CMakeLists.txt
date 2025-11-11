@@ -99,6 +99,33 @@ set(GGML_SANITIZE_UNDEFINED ${WHISPER_SANITIZE_UNDEFINED})
 set(GGML_ALL_WARNINGS       ${WHISPER_ALL_WARNINGS})
 set(GGML_FATAL_WARNINGS     ${WHISPER_FATAL_WARNINGS})
 
+# -------------------- KUNPENG / ARM64 friendly defaults --------------------
+# This block provides a safe default -march for Huawei Kunpeng 920 (aarch64)
+# and allows users to override via -DWHISPER_ARM_MARCH=... when running cmake.
+# Kunpeng 920 (ARMv8.2-A) typically supports: dotprod, crc, crypto, fp16
+# but does NOT support jscvt / fcma; avoid enabling those.
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "aarch64")
+# If user didn't set a custom march, choose a conservative default compatible with Kunpeng 920
+if (NOT DEFINED WHISPER_ARM_MARCH)
+set(WHISPER_ARM_MARCH "armv8.2-a+dotprod+crc+crypto+fp16fml" CACHE STRING "ARM march to use for building on ARM64 (Kunpeng-friendly default)")
+endif()
+
+# Allow opt-out: user can explicitly pass -DWHISPER_ARM_MARCH="native" or other value
+if (NOT WHISPER_ARM_MARCH STREQUAL "")
+# Only append march flags if they are not already present in CMAKE_C_FLAGS/CXX_FLAGS
+string(FIND "${CMAKE_C_FLAGS}" "-march" _found_c)
+if (_found_c EQUAL -1)
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=${WHISPER_ARM_MARCH}")
+endif()
+string(FIND "${CMAKE_CXX_FLAGS}" "-march" _found_cxx)
+if (_found_cxx EQUAL -1)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=${WHISPER_ARM_MARCH}")
+endif()
+
+endif()
+endif()
+# ---------------------------------------------------------------------------
+
 # transition helpers
 function (whisper_option_depr TYPE OLD NEW)
     if (${OLD})
