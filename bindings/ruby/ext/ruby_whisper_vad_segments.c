@@ -22,7 +22,7 @@ ruby_whisper_vad_segments_memsize(const void *p)
   return size;
 }
 
-void
+static void
 ruby_whisper_vad_segments_free(void *p)
 {
   ruby_whisper_vad_segments *rwvss = (ruby_whisper_vad_segments *)p;
@@ -40,13 +40,26 @@ const rb_data_type_t ruby_whisper_vad_segments_type = {
   0
 };
 
-VALUE
+static VALUE
 ruby_whisper_vad_segments_s_allocate(VALUE klass)
 {
   ruby_whisper_vad_segments *rwvss;
   VALUE obj = TypedData_Make_Struct(klass, ruby_whisper_vad_segments, &ruby_whisper_vad_segments_type, rwvss);
   rwvss->segments = NULL;
   return obj;
+}
+
+VALUE
+ruby_whisper_vad_segments_s_init(struct whisper_vad_segments *segments)
+{
+  VALUE rb_segments;
+  ruby_whisper_vad_segments *rwvss;
+
+  rb_segments = ruby_whisper_vad_segments_s_allocate(cVADSegments);
+  TypedData_Get_Struct(rb_segments, ruby_whisper_vad_segments, &ruby_whisper_vad_segments_type, rwvss);
+  rwvss->segments = segments;
+
+  return rb_segments;
 }
 
 static VALUE
