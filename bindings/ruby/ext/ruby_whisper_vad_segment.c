@@ -43,7 +43,10 @@ static VALUE
 ruby_whisper_vad_segment_s_allocate(VALUE klass)
 {
   ruby_whisper_vad_segment *rwvs;
-  return TypedData_Make_Struct(klass, ruby_whisper_vad_segment, &ruby_whisper_vad_segment_type, rwvs);
+  VALUE obj = TypedData_Make_Struct(klass, ruby_whisper_vad_segment, &ruby_whisper_vad_segment_type, rwvs);
+  rwvs->segments = Qnil;
+  rwvs->index = -1;
+  return obj;
 }
 
 VALUE
