@@ -40,4 +40,11 @@ class TestVADContext < TestBase
       Whisper::VAD::Context.new(Object.new)
     end
   end
+
+  def test_allocate
+    vad = Whisper::VAD::Context.allocate
+    assert_raise do
+      vad.detect(AUDIO, Whisper::VAD::Params.new)
+    end
+  end
 end
