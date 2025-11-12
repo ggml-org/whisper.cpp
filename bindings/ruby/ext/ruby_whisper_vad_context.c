@@ -56,9 +56,6 @@ ruby_whisper_vad_context_initialize(VALUE self, VALUE model_path)
   struct whisper_vad_context *context;
 
   model_path = ruby_whisper_normalize_model_path(model_path);
-  if (!rb_respond_to(model_path, id_to_s)) {
-    rb_raise(rb_eRuntimeError, "Expected file path to model to initialize Whisper::VAD::Context");
-  }
   context = whisper_vad_init_from_file_with_params(StringValueCStr(model_path), whisper_vad_default_context_params());
   if (context == NULL) {
     rb_raise(rb_eRuntimeError, "Failed to initialize whisper VAD context");
