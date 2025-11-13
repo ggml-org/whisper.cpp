@@ -362,6 +362,7 @@ First, check if your Ascend NPU device is supported:
 | Ascend NPU                    | Status  |
 |:-----------------------------:|:-------:|
 | Atlas 300T A2                 | Support |
+| Atlas 300I Duo                | Support |
 
 Then, make sure you have installed [`CANN toolkit`](https://www.hiascend.com/en/software/cann/community) . The lasted version of CANN is recommanded.
 
