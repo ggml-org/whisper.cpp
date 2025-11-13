@@ -5,43 +5,6 @@ whispercpp
 
 Ruby bindings for [whisper.cpp][], an interface of automatic speech recognition model.
 
-Installation
-------------
-
-Install the gem and add to the application's Gemfile by executing:
-
-    $ bundle add whispercpp
-
-If bundler is not being used to manage dependencies, install the gem by executing:
-
-    $ gem install whispercpp
-
-You can pass build options for whisper.cpp, for instance:
-
-    $ bundle config build.whispercpp --enable-ggml-cuda
-
-or,
-
-    $ gem install whispercpp -- --enable-ggml-cuda
-
-See whisper.cpp's [README](https://github.com/ggml-org/whisper.cpp/blob/master/README.md) for available options. You need convert options present the README to Ruby-style options, for example:
-
-Boolean options:
-
-* `-DGGML_BLAS=1` -> `--enable-ggml-blas`
-* `-DWHISER_COREML=OFF` -> `--disable-whisper-coreml`
-
-Argument options:
-
-* `-DGGML_CUDA_COMPRESSION_MODE=size` -> `--ggml-cuda-compression-mode=size`
-
-Combination:
-
-* `-DGGML_CUDA=1 -DCMAKE_CUDA_ARCHITECTURES="86"` -> `--enable-ggml-cuda --cmake_cuda-architectures="86"`
-
-For boolean options like `GGML_CUDA`, the README says `-DGGML_CUDA=1`. You need strip `-D`, prepend `--enable-` for `1` or `ON` (`--disable-` for `0` or `OFF`) and make it kebab-case: `--enable-ggml-cuda`.  
-For options which require arguments like `CMAKE_CUDA_ARCHITECTURES`, the README says `-DCMAKE_CUDA_ARCHITECTURES="86"`. You need strip `-D`, prepend `--`, make it kebab-case, append `=` and append argument: `--cmake-cuda-architectures="86"`.
-
 Usage
 -----
 
@@ -187,6 +150,42 @@ WEBVTT
 
 You may call `#to_srt`, too
 
+Installation
+------------
+
+Install the gem and add to the application's Gemfile by executing:
+
+    $ bundle add whispercpp
+
+If bundler is not being used to manage dependencies, install the gem by executing:
+
+    $ gem install whispercpp
+
+You can pass build options for whisper.cpp, for instance:
+
+    $ bundle config build.whispercpp --enable-ggml-cuda
+
+or,
+
+    $ gem install whispercpp -- --enable-ggml-cuda
+
+See whisper.cpp's [README](https://github.com/ggml-org/whisper.cpp/blob/master/README.md) for available options. You need convert options present the README to Ruby-style options, for example:
+
+Boolean options:
+
+* `-DGGML_BLAS=1` -> `--enable-ggml-blas`
+* `-DWHISER_COREML=OFF` -> `--disable-whisper-coreml`
+
+Argument options:
+
+* `-DGGML_CUDA_COMPRESSION_MODE=size` -> `--ggml-cuda-compression-mode=size`
+
+Combination:
+
+* `-DGGML_CUDA=1 -DCMAKE_CUDA_ARCHITECTURES="86"` -> `--enable-ggml-cuda --cmake_cuda-architectures="86"`
+
+For boolean options like `GGML_CUDA`, the README says `-DGGML_CUDA=1`. You need strip `-D`, prepend `--enable-` for `1` or `ON` (`--disable-` for `0` or `OFF`) and make it kebab-case: `--enable-ggml-cuda`.  
+For options which require arguments like `CMAKE_CUDA_ARCHITECTURES`, the README says `-DCMAKE_CUDA_ARCHITECTURES="86"`. You need strip `-D`, prepend `--`, make it kebab-case, append `=` and append argument: `--cmake-cuda-architectures="86"`.
 
 API
 ---
