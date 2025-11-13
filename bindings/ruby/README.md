@@ -170,7 +170,7 @@ or,
 
     $ gem install whispercpp -- --enable-ggml-cuda
 
-See whisper.cpp's [README](https://github.com/ggml-org/whisper.cpp/blob/master/README.md) for available options. You need convert options present the README to Ruby-style options, for example:
+See whisper.cpp's [README](https://github.com/ggml-org/whisper.cpp/blob/master/README.md) for available options. You need convert options present in the README to Ruby-style options, for example:
 
 Boolean options:
 
