@@ -149,6 +149,13 @@ class TestWhisper < TestBase
     $stderr = stderr
   end
 
+  def test_access_attribute_without_initialization
+    whisper = Whisper::Context.allocate
+    assert_raise do
+      whisper.model_type
+    end
+  end
+
   sub_test_case "full" do
     def setup
       super
