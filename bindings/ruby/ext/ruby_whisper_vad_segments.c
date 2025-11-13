@@ -74,10 +74,7 @@ ruby_whisper_vad_segments_each(VALUE self)
     return rb_funcall(self, id_to_enum, 1, method_name);
   }
 
-  TypedData_Get_Struct(self, ruby_whisper_vad_segments, &ruby_whisper_vad_segments_type, rwvss);
-  if (rwvss->segments == NULL) {
-    rb_raise(rb_eRuntimeError, "Doesn't have reference to segments internally");
-  }
+  GetVADSegments(self, rwvss);
   n_segments = whisper_vad_segments_n_segments(rwvss->segments);
   for (i = 0; i < n_segments; ++i) {
     rb_yield(rb_whisper_vad_segment_s_new(self, i));
@@ -92,10 +89,7 @@ ruby_whisper_vad_segments_get_length(VALUE self)
   ruby_whisper_vad_segments *rwvss;
   int n_segments;
 
-  TypedData_Get_Struct(self, ruby_whisper_vad_segments, &ruby_whisper_vad_segments_type, rwvss);
-  if (rwvss->segments == NULL) {
-    rb_raise(rb_eRuntimeError, "Doesn't have reference to segments internally");
-  }
+  GetVADSegments(self, rwvss);
   n_segments = whisper_vad_segments_n_segments(rwvss->segments);
 
   return INT2NUM(n_segments);
