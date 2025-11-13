@@ -50,4 +50,11 @@ typedef struct {
   struct whisper_vad_context *context;
 } ruby_whisper_vad_context;
 
+#define GetContext(obj, rw) do { \
+  TypedData_Get_Struct((obj), ruby_whisper, &ruby_whisper_type, (rw)); \
+  if ((rw)->context == NULL) { \
+    rb_raise(rb_eRuntimeError, "Not initialized"); \
+  } \
+} while (0)
+
 #endif

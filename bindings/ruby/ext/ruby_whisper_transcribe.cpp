@@ -43,7 +43,7 @@ ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self) {
 
   int n_processors = opts[0] == Qundef ? 1 : NUM2INT(opts[0]);
 
-  TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
+  GetContext(self, rw);
   TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
 
   if (!rb_respond_to(wave_file_path, id_to_s)) {
