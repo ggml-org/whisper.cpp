@@ -81,7 +81,8 @@ Or, you can download model files:
 ```ruby
 whisper = Whisper::Context.new("https://example.net/uri/of/your/model.bin")
 # Or
-whisper = Whisper::Context.new(URI("https://example.net/uri/of/your/model.bin"))
+uri = URI("https://example.net/uri/of/your/model.bin")
+whisper = Whisper::Context.new(uri)
 ```
 
 See [models][] page for details.
