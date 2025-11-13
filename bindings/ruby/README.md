@@ -20,7 +20,8 @@ params = Whisper::Params.new(
   max_text_tokens: 300,
   translate: true,
   print_timestamps: false,
-  initial_prompt: "Initial prompt here."
+  initial_prompt: "Initial prompt here.",
+  carry_initial_prompt: true
 )
 
 whisper.transcribe("path/to/audio.wav", params) do |whole_text|
