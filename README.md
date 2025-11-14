@@ -783,7 +783,7 @@ This model can be also be converted manually to ggml using the following command
 $ python3 -m venv venv && source venv/bin/activate
 $ (venv) pip install silero-vad
 $ (venv) $ python models/convert-silero-vad-to-ggml.py --output models/silero.bin
-Saving GGML Silero-VAD model to models/silero-v5.1.2-ggml.bin
+Saving GGML Silero-VAD model to models/ggml-silero-v5.1.2.bin
 ```
 And it can then be used with whisper as follows:
 ```console
@@ -791,7 +791,7 @@ $ ./build/bin/whisper-cli \
    --file ./samples/jfk.wav \
    --model ./models/ggml-base.en.bin \
    --vad \
-   --vad-model ./models/silero-v5.1.2-ggml.bin
+   --vad-model ./models/ggml-silero-v5.1.2.bin
 ```
 
 ### VAD Options
