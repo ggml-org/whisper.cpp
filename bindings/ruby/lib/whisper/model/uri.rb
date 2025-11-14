@@ -182,7 +182,6 @@ module Whisper
       base-q8_0
       small
       small.en
-      small.en-tdrz
       small-q5_1
       small.en-q5_1
       small-q8_0
@@ -203,6 +202,12 @@ module Whisper
     ].each_with_object({}) {|name, models|
       models[name] = URI.new("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-#{name}.bin")
     }
+
+    %w[
+      small.en-tdrz
+    ].each do |name|
+      @pre_converted_models[name] = URI.new("https://huggingface.co/akashmjn/tinydiarize-whisper.cpp/resolve/main/ggml-#{name}.bin")
+    end
 
     %w[
       silero-v5.1.2
