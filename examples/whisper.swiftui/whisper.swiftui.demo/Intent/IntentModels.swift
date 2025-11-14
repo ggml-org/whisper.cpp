@@ -27,7 +27,7 @@ struct SlotExtractionResult {
 
 enum IntentClassificationError: Error {
     case modelNotLoaded
-    case vocabularyNotLoaded
+    case tokenizerNotLoaded
     case metadataNotLoaded
     case invalidInput
     case predictionFailed
@@ -35,15 +35,15 @@ enum IntentClassificationError: Error {
     var localizedDescription: String {
         switch self {
         case .modelNotLoaded:
-            return "TensorFlow Lite model not loaded"
-        case .vocabularyNotLoaded:
-            return "Vocabulary not loaded"
+            return "Failed to load intent_classifier.tflite"
+        case .tokenizerNotLoaded:
+            return "Failed to load tokenizer/tokenizer.json"
         case .metadataNotLoaded:
-            return "Model metadata not loaded"
+            return "Failed to load label_encoder.json"
         case .invalidInput:
             return "Invalid input text"
         case .predictionFailed:
-            return "Intent prediction failed"
+            return "Failed to run model prediction"
         }
     }
 }

@@ -798,6 +798,8 @@ class SlotExtractor {
             "brightness" to "\\b(?:brightness|screen\\s+brightness|display\\s+brightness|luminosity|backlight|screen\\s+light|light\\s+level|dim|dimness|brighten|darken|auto\\s+brightness|adaptive\\s+brightness|brightness\\s+level|screen\\s+intensity|display\\s+intensity|illumination|glow|radiance)\\b",
             
             "volume" to "\\b(?:volume|sound\\s+level|sound\\s+volume|audio\\s+level|audio\\s+volume|loudness|loud|quiet|soft|sound|audio|speaker\\s+volume|media\\s+volume|ringtone\\s+volume|notification\\s+volume|alarm\\s+volume|call\\s+volume|ringer|sound\\s+output|audio\\s+output|volume\\s+level)\\b",
+
+            "torch" to "\\b(?:torch|flashlight|flash\\s+light|led\\s+light|led\\s+torch|camera\\s+flash|light|lamp|lantern|beam|illumination|bright\\s+light|phone\\s+light|mobile\\s+light|emergency\\s+light|torch\\s+light|strobe|strobe\\s+light|spotlight|searchlight|headlight|flash\\s+lamp|portable\\s+light|hand\\s+light|led\\s+flash|camera\\s+light|phone\\s+torch|device\\s+light|built-in\\s+light|integrated\\s+light)\\b"
         )
         
         // Try to match features in order of specificity (more specific patterns first)
@@ -965,7 +967,11 @@ class SlotExtractor {
 
     private fun extractAppAction(text: String): String? {
         val appActions = mapOf(
-            "open" to "\\b(?:open|opened|opening|launch|launched|launching|start|show|display|view|access|load|bring\\s+up|pull\\s+up|fire\\s+up|boot|go\\s+to|navigate\\s+to|switch\\s+to|take\\s+me\\s+to)\\b"
+            "open" to "\\b(?:open|opened|opening|launch|launched|launching|start|show|display|view|access|load|bring\\s+up|pull\\s+up|fire\\s+up|boot|go\\s+to|navigate\\s+to|switch\\s+to|take\\s+me\\s+to|turn\\s+on|on|enable|enabled|activate|activated|power\\s+on|switch\\s+on)\\b",
+
+            "increase" to "\\b(?:increase|increased|increasing|up|higher|raise|raised|raising|boost|boosted|boosting|amplify|amplified|amplifying|enhance|enhanced|enhancing|elevate|elevated|elevating|pump\\s+up|turn\\s+up|crank\\s+up|ramp\\s+up|scale\\s+up|step\\s+up|jack\\s+up|bump\\s+up|push\\s+up|bring\\s+up|make\\s+it\\s+higher|louder|brighter|stronger|more|maximize|max\\s+out|intensify)\\b",
+
+            "decrease" to "\\b(?:decrease|decreased|decreasing|down|lower|lowered|lowering|reduce|reduced|reducing|diminish|diminished|diminishing|lessen|lessened|lessening|drop|dropped|dropping|cut|cutting|turn\\s+down|bring\\s+down|scale\\s+down|step\\s+down|tone\\s+down|dial\\s+down|wind\\s+down|ramp\\s+down|make\\s+it\\s+lower|quieter|dimmer|weaker|less|minimize|min\\s+out|soften)\\b"
         )
         
         // Sort actions by pattern specificity (longer patterns first for better matching)
@@ -1053,7 +1059,9 @@ class SlotExtractor {
             
             "blood oxygen" to "\\b(?:blood\\s+oxygen|oxygen|o2|spo2|sp\\s+o2|oxygen\\s+saturation|oxygen\\s+level|oxygen\\s+levels|blood\\s+o2|oxygen\\s+sat|o2\\s+sat|o2\\s+level|o2\\s+saturation|pulse\\s+ox|pulse\\s+oximetry|oximeter|oxygen\\s+reading|oxygen\\s+sensor|saturation|sat|blood\\s+oxygen\\s+level|arterial\\s+oxygen|respiratory|respiration|breathing|breath|lung\\s+function|oxygenation|hypoxia|oxygen\\s+content)\\b",
             
-            "stress" to "\\b(?:stress|stressed|stressful|stress\\s+level|stress\\s+score|stress\\s+index|anxiety|anxious|worried|worry|worrying|tension|tense|pressure|pressured|strain|strained|overwhelm|overwhelmed|nervous|nervousness|burnout|burnt\\s+out|mental\\s+stress|emotional\\s+stress|psychological\\s+stress|chronic\\s+stress|acute\\s+stress|relaxation|relax|calm|calmness|peace|peaceful|tranquil|serene|zen|mindfulness)\\b"
+            "stress" to "\\b(?:stress|stressed|stressful|stress\\s+level|stress\\s+score|stress\\s+index|anxiety|anxious|worried|worry|worrying|tension|tense|pressure|pressured|strain|strained|overwhelm|overwhelmed|nervous|nervousness|burnout|burnt\\s+out|mental\\s+stress|emotional\\s+stress|psychological\\s+stress|chronic\\s+stress|acute\\s+stress|relaxation|relax|calm|calmness|peace|peaceful|tranquil|serene|zen|mindfulness)\\b",
+
+            "brightness" to "\\b(?:brightness|bright|brighter|brighten|brightening|screen\\s+brightness|display\\s+brightness|luminosity|luminance|backlight|screen\\s+light|light\\s+level|dim|dimmer|dimming|dimness|darken|darker|darkening|auto\\s+brightness|adaptive\\s+brightness|brightness\\s+level|screen\\s+intensity|display\\s+intensity|illumination|illuminate|glow|glowing|radiance|light\\s+output|ambient\\s+light|screen\\s+glow|visibility|contrast|gamma|exposure|luminous)\\b"
         )
         
         // Sort by pattern length for more specific matching
@@ -1098,14 +1106,17 @@ class SlotExtractor {
 
         // If no hardcoded contact found, try to extract any name after phone action keywords
         val phoneActionPatterns = listOf(
-            // Pattern 1: Standard action + contact (handles "call suraj india")
-            "(?:call|calling|phone|dial|dialing|ring|ringing|contact|reach|reach\\s+out|give\\s+a\\s+call|make\\s+a\\s+call|place\\s+a\\s+call|telephone|buzz|video\\s+call|voice\\s+call|facetime)\\s+(.+?)(?:\\s*$|\\s+(?:now|please|right\\s+now|immediately|asap|urgently)\\s*$)",
+            // Pattern 1: Standard action + optional modifiers + contact (handles "call back rahul india")
+            "(?:call|calling|phone|dial|dialing|ring|ringing|contact|reach|reach\\s+out|give\\s+a\\s+call|make\\s+a\\s+call|place\\s+a\\s+call|telephone|buzz|video\\s+call|voice\\s+call|facetime)\\s+(?:back\\s+)?(.+?)(?:\\s*$|\\s+(?:now|please|right\\s+now|immediately|asap|urgently)\\s*$)",
             
             // Pattern 2: Messaging actions + contact
             "(?:message|messaging|text|texting|sms|send|sending|write|compose|type|drop\\s+a\\s+message|send\\s+a\\s+text|shoot\\s+a\\s+message|ping|dm|direct\\s+message|whatsapp|imessage|chat|msg)\\s+(.+?)(?:\\s*$|\\s+(?:now|please|right\\s+now|immediately|asap|urgently)\\s*$)",
             
             // Pattern 3: "get in touch with X" format
-            "(?:get\\s+in\\s+touch\\s+with|reach\\s+out\\s+to|contact)\\s+(.+?)(?:\\s*$|\\s+(?:now|please|right\\s+now|immediately|asap|urgently)\\s*$)"
+            "(?:get\\s+in\\s+touch\\s+with|reach\\s+out\\s+to|contact)\\s+(.+?)(?:\\s*$|\\s+(?:now|please|right\\s+now|immediately|asap|urgently)\\s*$)",
+            
+            // Pattern 4: "call back" specific pattern
+            "(?:call\\s+back|ring\\s+back|phone\\s+back)\\s+(.+?)(?:\\s*$|\\s+(?:now|please|right\\s+now|immediately|asap|urgently)\\s*$)"
         )
 
         for (pattern in phoneActionPatterns) {
@@ -1113,6 +1124,12 @@ class SlotExtractor {
             val match = regex.find(text)
             if (match != null && match.groupValues.size > 1) {
                 val extractedName = match.groupValues[1].trim()
+                
+                // Check if the extracted text is a phone number
+                val phoneNumberPattern = "\\b\\d{10,15}\\b".toRegex()
+                if (phoneNumberPattern.matches(extractedName)) {
+                    return extractedName // Return the phone number directly
+                }
                 
                 // Clean up the extracted name (remove common stop words and punctuation at the beginning)
                 val cleanedName = extractedName
@@ -1133,6 +1150,32 @@ class SlotExtractor {
                     !commonWords.contains(cleanedName.toLowerCase()) &&
                     !cleanedName.matches(Regex("^\\d+$"))) { // Not just numbers
                     return cleanedName
+                }
+            }
+        }
+
+        // Additional pattern specifically for phone numbers with common formats
+        val phoneNumberPatterns = listOf(
+            // Pattern for standalone phone numbers (10-15 digits) - updated to handle "back" modifier
+            "(?:call|calling|phone|dial|dialing|ring|ringing|contact|reach|message|messaging|text|texting|sms)\\s+(?:back\\s+)?(\\d{10,15})\\b",
+            
+            // Pattern for phone numbers with separators (spaces, hyphens, dots)
+            "(?:call|calling|phone|dial|dialing|ring|ringing|contact|reach|message|messaging|text|texting|sms)\\s+(?:back\\s+)?(\\d{3,4}[\\s\\-\\.]{0,1}\\d{3,4}[\\s\\-\\.]{0,1}\\d{4,6})\\b",
+            
+            // Pattern for phone numbers with country codes (+91, +1, etc.)
+            "(?:call|calling|phone|dial|dialing|ring|ringing|contact|reach|message|messaging|text|texting|sms)\\s+(?:back\\s+)?(?:\\+\\d{1,3}[\\s\\-\\.]{0,1})?([\\d\\s\\-\\.]{10,20})\\b"
+        )
+
+        for (pattern in phoneNumberPatterns) {
+            val regex = pattern.toRegex(RegexOption.IGNORE_CASE)
+            val match = regex.find(text)
+            if (match != null && match.groupValues.size > 1) {
+                val extractedNumber = match.groupValues[1].trim()
+                // Clean the number by removing separators and keeping only digits
+                val cleanedNumber = extractedNumber.replace(Regex("[^\\d]"), "")
+                // Validate that it's a reasonable phone number length (10-15 digits)
+                if (cleanedNumber.length in 10..15) {
+                    return cleanedNumber
                 }
             }
         }

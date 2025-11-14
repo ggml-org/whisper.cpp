@@ -1,0 +1,47 @@
+{
+  "classes": [
+    "LogEvent",
+    "MediaAction",
+    "OpenApp",
+    "PhoneAction",
+    "QueryPoint",
+    "QueryTrend",
+    "SetGoal",
+    "SetThreshold",
+    "StartActivity",
+    "StopActivity",
+    "TimerStopwatch",
+    "ToggleFeature",
+    "WeatherQuery"
+  ],
+  "label_to_intent": {
+    "0": "LogEvent",
+    "1": "MediaAction",
+    "2": "OpenApp",
+    "3": "PhoneAction",
+    "4": "QueryPoint",
+    "5": "QueryTrend",
+    "6": "SetGoal",
+    "7": "SetThreshold",
+    "8": "StartActivity",
+    "9": "StopActivity",
+    "10": "TimerStopwatch",
+    "11": "ToggleFeature",
+    "12": "WeatherQuery"
+  },
+  "intent_to_label": {
+    "LogEvent": 0,
+    "MediaAction": 1,
+    "OpenApp": 2,
+    "PhoneAction": 3,
+    "QueryPoint": 4,
+    "QueryTrend": 5,
+    "SetGoal": 6,
+    "SetThreshold": 7,
+    "StartActivity": 8,
+    "StopActivity": 9,
+    "TimerStopwatch": 10,
+    "ToggleFeature": 11,
+    "WeatherQuery": 12
+  }
+}
