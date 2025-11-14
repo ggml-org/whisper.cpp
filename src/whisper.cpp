@@ -5962,6 +5962,8 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
         /*.logprob_thold     =*/ -1.0f,
         /*.no_speech_thold   =*/  0.6f,
 
+        /*.seed              =*/  0,
+
         /*.greedy            =*/ {
             /*.best_of   =*/ -1,
         },
@@ -6884,6 +6886,9 @@ int whisper_full_with_state(
     }
 
     // TAGS: WHISPER_DECODER_INIT
+    // Initialize first decoder's RNG with seed
+    state->decoders[0].rng = std::mt19937(params.seed);
+
     for (int j = 1; j < n_decoders; j++) {
         auto & decoder = state->decoders[j];
 
@@ -6894,7 +6899,7 @@ int whisper_full_with_state(
         decoder.logprobs.resize(ctx->vocab.n_vocab);
         decoder.logits_id.reserve(ctx->model.hparams.n_vocab);
 
-        decoder.rng = std::mt19937(j);
+        decoder.rng = std::mt19937(params.seed + j);
     }
 
     // the accumulated text context so far
