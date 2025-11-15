@@ -16,7 +16,7 @@ data class SlotExtractionResult(
 class SlotExtractor {
     
     private val intentSlotTemplates = mapOf(
-        "QueryPoint" to listOf("metric"),  // time_ref and unit can have defaults
+        "QueryPoint" to listOf("metric"),  // time_ref, unit, and identifier can have defaults
         "SetGoal" to listOf("metric", "target"),  // unit can be inferred
         "SetThreshold" to listOf("metric", "threshold", "type"),  // unit can be inferred
         "TimerStopwatch" to listOf("tool", "action"),  // value only required for "set timer X min"
@@ -324,6 +324,7 @@ class SlotExtractor {
             "time_ref" -> extractTimeRef(originalText)
             "unit" -> extractUnit(originalText)
             "qualifier" -> extractQualifier(originalText)
+            "identifier" -> extractIdentifier(originalText)
             "threshold" -> extractThreshold(originalText)
             "target" -> extractTarget(originalText)
             "value" -> extractValue(originalText, intent)
@@ -474,6 +475,25 @@ class SlotExtractor {
         return "today"
     }
     
+    private fun extractIdentifier(text: String): String? {
+        val identifierPatterns = mapOf(
+            "minimum" to "\\b(?:minimum|min|lowest|least|bottom|smallest|bare minimum|minimal|minimally|rock bottom|floor|base|baseline|low point|lower|tiniest|fewest|less|lesser|reduced|at least|no less than|starting from|beginning at|from|low|lows|worst|slowest|minimum value|min value|floor value|bottom line|rock-bottom|absolute minimum|very least|bare min)\\b",
+            
+            "maximum" to "\\b(?:maximum|max|highest|most|peak|top|largest|biggest|maximal|maximally|ceiling|upper limit|high point|higher|greatest|best|record|all time high|at most|no more than|up to|limit|cap|high|highs|fastest|extreme|topmost|ultimate|max value|maximum value|ceiling value|top line|all-time high|absolute maximum|very most|max out)\\b",
+            
+            "average" to "\\b(?:average|avg|mean|typical|normal|averaged|averaging|median|mid|middle|midpoint|central|moderate|standard|regular|usual|common|ordinary|per day|daily average|on average|typically|normally|generally|approximately|around|about|roughly|average value|mean value|avg value|in average|on avg|medium|middling|fair)\\b"
+        )
+        
+        for ((identifier, pattern) in identifierPatterns) {
+            if (text.contains(pattern.toRegex(RegexOption.IGNORE_CASE))) {
+                return identifier
+            }
+        }
+        
+        // Default to average if no specific identifier is found
+        return "average"
+    }
+    
     private fun extractUnit(text: String): String? {
         // Try context-based unit inference first
         when {
@@ -617,6 +637,198 @@ class SlotExtractor {
         return numbers.firstOrNull()?.groupValues?.get(1)?.toDoubleOrNull()?.toInt()
     }
     
+    /**
+     * Normalizes various time formats to 24-hour HH:MM format
+     * Examples:
+     * - "730" -> "07:30"
+     * - "730 pm" -> "19:30"
+     * - "1030 pm" -> "22:30"
+     * - "2230" -> "22:30"
+     * - "7:30 am" -> "07:30"
+     * - "5 30 pm" -> "17:30"
+     * - "5.30 am" -> "05:30"
+     * - "12:00 pm" -> "12:00"
+     * - "12:00 am" -> "00:00"
+     */
+    private fun normalizeTimeFormat(timeString: String): String {
+        val cleanTime = timeString.trim().lowercase()
+        
+        // Pattern for times like "730", "1030", "2230" (3-4 digits) without AM/PM
+        val fourDigitPattern = "^(\\d{3,4})$".toRegex()
+        fourDigitPattern.find(cleanTime)?.let { match ->
+            val digits = match.groupValues[1]
+            return when (digits.length) {
+                3 -> {
+                    // e.g., "730" -> "07:30"
+                    val hour = digits.substring(0, 1)
+                    val minute = digits.substring(1, 3)
+                    String.format("%02d:%s", hour.toInt(), minute)
+                }
+                4 -> {
+                    // e.g., "2230" -> "22:30"
+                    val hour = digits.substring(0, 2)
+                    val minute = digits.substring(2, 4)
+                    "$hour:$minute"
+                }
+                else -> timeString
+            }
+        }
+        
+        // Pattern for times like "730 pm", "1030 am" (digits + space + am/pm)
+        val amPmPattern = "^(\\d{1,4})\\s*(am|pm)$".toRegex()
+        amPmPattern.find(cleanTime)?.let { match ->
+            val timeDigits = match.groupValues[1]
+            val amPm = match.groupValues[2]
+            
+            var hour = 0
+            var minute = 0
+            
+            when (timeDigits.length) {
+                1, 2 -> {
+                    // e.g., "7 pm" -> hour = 7, minute = 0
+                    hour = timeDigits.toInt()
+                    minute = 0
+                }
+                3 -> {
+                    // e.g., "730 pm" -> hour = 7, minute = 30
+                    hour = timeDigits.substring(0, 1).toInt()
+                    minute = timeDigits.substring(1, 3).toInt()
+                }
+                4 -> {
+                    // e.g., "1030 pm" -> hour = 10, minute = 30
+                    hour = timeDigits.substring(0, 2).toInt()
+                    minute = timeDigits.substring(2, 4).toInt()
+                }
+            }
+            
+            // Convert to 24-hour format
+            when {
+                amPm == "pm" && hour != 12 -> hour += 12
+                amPm == "am" && hour == 12 -> hour = 0
+            }
+            
+            return String.format("%02d:%02d", hour, minute)
+        }
+        
+        // Pattern for "5 30 pm" or "5.30 am" format (hour [space|dot] minute am/pm)
+        val hourMinuteAmPmPattern = "^(\\d{1,2})[\\s.]+?(\\d{1,2})\\s*(am|pm)$".toRegex()
+        hourMinuteAmPmPattern.find(cleanTime)?.let { match ->
+            var hour = match.groupValues[1].toInt()
+            val minute = match.groupValues[2].toInt()
+            val amPm = match.groupValues[3]
+            
+            // Validate hour and minute ranges
+            if (hour > 12 || minute >= 60) {
+                return timeString // Return original if invalid
+            }
+            
+            // Convert to 24-hour format
+            when {
+                amPm == "pm" && hour != 12 -> hour += 12
+                amPm == "am" && hour == 12 -> hour = 0
+            }
+            
+            return String.format("%02d:%02d", hour, minute)
+        }
+        
+        // Pattern for times with colon like "7:30 pm", "10:30 am"
+        val colonAmPmPattern = "^(\\d{1,2}):(\\d{2})\\s*(am|pm)$".toRegex()
+        colonAmPmPattern.find(cleanTime)?.let { match ->
+            var hour = match.groupValues[1].toInt()
+            val minute = match.groupValues[2].toInt()
+            val amPm = match.groupValues[3]
+            
+            // Convert to 24-hour format
+            when {
+                amPm == "pm" && hour != 12 -> hour += 12
+                amPm == "am" && hour == 12 -> hour = 0
+            }
+            
+            return String.format("%02d:%02d", hour, minute)
+        }
+        
+        // Pattern for 24-hour format like "22:30", "07:30"
+        val twentyFourHourPattern = "^(\\d{1,2}):(\\d{2})$".toRegex()
+        twentyFourHourPattern.find(cleanTime)?.let { match ->
+            val hour = match.groupValues[1].toInt()
+            val minute = match.groupValues[2].toInt()
+            return String.format("%02d:%02d", hour, minute)
+        }
+        
+        // Return original string if no pattern matches
+        return timeString
+    }
+    
+    /**
+     * Normalizes timer duration to seconds
+     * Examples:
+     * - "5 min" -> 300 (seconds)
+     * - "2 hr" -> 7200 (seconds)
+     * - "1 hour 30 minutes" -> 5400 (seconds)
+     * - "45 sec" -> 45 (seconds)
+     * - "1:30" -> 90 (seconds, interpreted as MM:SS)
+     * - "2:30:45" -> 9045 (seconds, HH:MM:SS)
+     */
+    private fun normalizeTimerDuration(text: String, matchedValue: String): Int {
+        val cleanText = text.lowercase()
+        
+        // Check for combined duration patterns first
+        
+        // "1 hour 30 minutes 45 seconds" pattern
+        val fullPattern = "(\\d+)\\s*(?:hours?|hrs?|hr|h)\\s*(?:and\\s+)?(\\d+)\\s*(?:minutes?|mins?|min|m)\\s*(?:and\\s+)?(\\d+)\\s*(?:seconds?|secs?|sec|s)".toRegex(RegexOption.IGNORE_CASE)
+        fullPattern.find(cleanText)?.let { match ->
+            val hours = match.groupValues[1].toIntOrNull() ?: 0
+            val minutes = match.groupValues[2].toIntOrNull() ?: 0
+            val seconds = match.groupValues[3].toIntOrNull() ?: 0
+            return hours * 3600 + minutes * 60 + seconds
+        }
+        
+        // "1 hour 30 minutes" or "2h 45m" pattern
+        val hourMinutePattern = "(\\d+)\\s*(?:hours?|hrs?|hr|h)\\s*(?:and\\s+)?(\\d+)\\s*(?:minutes?|mins?|min|m)".toRegex(RegexOption.IGNORE_CASE)
+        hourMinutePattern.find(cleanText)?.let { match ->
+            val hours = match.groupValues[1].toIntOrNull() ?: 0
+            val minutes = match.groupValues[2].toIntOrNull() ?: 0
+            return hours * 3600 + minutes * 60
+        }
+        
+        // "30 minutes 45 seconds" or "30m 45s" pattern
+        val minuteSecondPattern = "(\\d+)\\s*(?:minutes?|mins?|min|m)\\s*(?:and\\s+)?(\\d+)\\s*(?:seconds?|secs?|sec|s)".toRegex(RegexOption.IGNORE_CASE)
+        minuteSecondPattern.find(cleanText)?.let { match ->
+            val minutes = match.groupValues[1].toIntOrNull() ?: 0
+            val seconds = match.groupValues[2].toIntOrNull() ?: 0
+            return minutes * 60 + seconds
+        }
+        
+        // Check for time format patterns (MM:SS or HH:MM:SS)
+        
+        // HH:MM:SS format
+        val hhMmSsPattern = "^(\\d+):(\\d+):(\\d+)$".toRegex()
+        hhMmSsPattern.find(matchedValue.trim())?.let { match ->
+            val hours = match.groupValues[1].toIntOrNull() ?: 0
+            val minutes = match.groupValues[2].toIntOrNull() ?: 0
+            val seconds = match.groupValues[3].toIntOrNull() ?: 0
+            return hours * 3600 + minutes * 60 + seconds
+        }
+        
+        // MM:SS format (assuming minutes:seconds for timer)
+        val mmSsPattern = "^(\\d+):(\\d+)$".toRegex()
+        mmSsPattern.find(matchedValue.trim())?.let { match ->
+            val minutes = match.groupValues[1].toIntOrNull() ?: 0
+            val seconds = match.groupValues[2].toIntOrNull() ?: 0
+            return minutes * 60 + seconds
+        }
+        
+        // Check for single unit patterns
+        val value = matchedValue.replace(Regex("[^\\d.]"), "").toDoubleOrNull() ?: return 0
+        
+        return when {
+            cleanText.contains(Regex("\\b(?:hours?|hrs?|hr|h)\\b")) -> (value * 3600).toInt()
+            cleanText.contains(Regex("\\b(?:minutes?|mins?|min|m)\\b")) -> (value * 60).toInt()
+            cleanText.contains(Regex("\\b(?:seconds?|secs?|sec|s)\\b")) -> value.toInt()
+            else -> value.toInt() // Default to treating as seconds if no unit specified
+        }
+    }
+    
     private fun extractValue(text: String, intent: String): Any? {
         return when (intent) {
             "LogEvent" -> {
@@ -627,51 +839,95 @@ class SlotExtractor {
             }
             
             "TimerStopwatch" -> {
+                // Determine if this is a timer (duration) or alarm (specific time) context
+                val isTimerContext = text.contains(Regex("\\b(?:timer|stopwatch|countdown|count\\s+down)\\b", RegexOption.IGNORE_CASE))
+                val isAlarmContext = text.contains(Regex("\\b(?:alarm|wake|remind|alert)\\b", RegexOption.IGNORE_CASE))
+                
                 val timePatterns = listOf(
-                    // Time with AM/PM - expanded
-                    "\\b(\\d{1,2}(?::\\d{2})?(?:\\s*[ap]\\.?m\\.?))\\b",
+                    // Space/dot separated time with AM/PM - highest priority for "5 30 pm", "10.30 am" format
+                    "\\b(\\d{1,2}[\\s.]+?\\d{1,2}\\s*[ap]\\.?m\\.?)\\b",
                     
-                    // Hours patterns - expanded
-                    "\\b(\\d+(?:\\.\\d+)?)\\s*(?:hours?|hrs?|hr|h|hour)\\b",
+                    // Time with AM/PM - capture full time including AM/PM
+                    "\\b(\\d{1,2}(?::\\d{2})?\\s*[ap]\\.?m\\.?)\\b",
+                    "\\b(\\d{3,4}\\s*[ap]\\.?m\\.?)\\b", // For "1030 pm" format  
                     
-                    // Minutes patterns - expanded
-                    "\\b(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|m)\\b",
+                    // Duration patterns for timers
+                    "\\b(\\d+(?:\\.\\d+)?)\\s*(?:hours?|hrs?|hr|h)\\b",
+                    "\\b(\\d+(?:\\.\\d+)?)\\s*(?:minutes?|mins?|min|m)\\b",
+                    "\\b(\\d+(?:\\.\\d+)?)\\s*(?:seconds?|secs?|sec|s)\\b",
                     
-                    // Seconds patterns - NEW
-                    "\\b(\\d+(?:\\.\\d+)?)\\s*(?:sec|secs|second|seconds|s)\\b",
-                    
-                    // Combined time patterns - NEW
+                    // Combined time patterns
                     "\\b(\\d+)\\s*(?:h|hr|hours?)\\s*(?:and\\s+)?(\\d+)\\s*(?:m|min|minutes?)\\b",
                     "\\b(\\d+)\\s*(?:m|min|minutes?)\\s*(?:and\\s+)?(\\d+)\\s*(?:s|sec|seconds?)\\b",
                     "\\b(\\d+):(\\d+):(\\d+)\\b", // HH:MM:SS format
                     "\\b(\\d+):(\\d+)\\b", // MM:SS or HH:MM format
                     
-                    // Duration keywords - NEW
+                    // Duration keywords
                     "\\b(?:for|during|lasting|takes?)\\s+(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
                     
-                    // Timer-specific patterns - NEW
+                    // Timer-specific patterns
                     "\\b(?:set|start|begin|run|timer|stopwatch)\\s*(?:for|to|at)?\\s*(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
                     
-                    // Alarm-specific patterns - NEW
-                    "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{1,2}(?::\\d{2})?(?:\\s*[ap]\\.?m\\.?)?)\\b",
+                    // Alarm-specific patterns - capture full time with AM/PM (prioritize space-separated)
+                    "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{1,2}[\\s.]+?\\d{1,2}\\s*[ap]\\.?m\\.?)\\b",
+                    "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{1,2}(?::\\d{2})?\\s*[ap]\\.?m\\.?)\\b",
+                    "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{3,4}\\s*[ap]\\.?m\\.?)\\b",
                     
-                    // "In X time" patterns - NEW
+                    // "In X time" patterns
                     "\\b(?:in|after|within)\\s+(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
                     
-                    // Countdown patterns - NEW
-                    "\\b(?:countdown|count\\s+down)\\s*(?:from|for)?\\s*(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b"
+                    // Countdown patterns
+                    "\\b(?:countdown|count\\s+down)\\s*(?:from|for)?\\s*(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
+                    
+                    // Direct time patterns for alarm setting - capture full time with AM/PM (prioritize space-separated)
+                    "\\b(?:set|create|make).*?(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}[\\s.]+?\\d{1,2}\\s*(?:am|pm))\\b",
+                    "\\b(?:set|create|make).*?(?:alarm|wake).*?(?:for|at)\\s*(\\d{3,4}\\s*(?:am|pm))\\b",
+                    "\\b(?:set|create|make).*?(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm))\\b",
+                    "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}[\\s.]+?\\d{1,2}\\s*(?:am|pm))\\b",
+                    "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{3,4}\\s*(?:am|pm))\\b",
+                    "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm))\\b",
+                    
+                    // Standalone numeric patterns for alarm context (no AM/PM)
+                    "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{3,4})\\b",
+                    "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}(?::\\d{2})?)\\b"
                 )
                 
                 for (pattern in timePatterns) {
                     val match = pattern.toRegex(RegexOption.IGNORE_CASE).find(text)
                     if (match != null && match.groupValues.size > 1) {
-                        // Handle combined time formats (e.g., "1h 30m" or "1:30")
-                        if (match.groupValues.size > 2 && match.groupValues[2].isNotEmpty()) {
-                            val hours = match.groupValues[1].toIntOrNull() ?: 0
-                            val minutes = match.groupValues[2].toIntOrNull() ?: 0
-                            return (hours * 60 + minutes).toString() // Return total minutes
+                        
+                        // Handle combined time formats for duration (e.g., "1h 30m" or "1:30")
+                        if (match.groupValues.size > 2 && match.groupValues[2].isNotEmpty() && 
+                            !text.contains(Regex("\\b(?:am|pm)\\b", RegexOption.IGNORE_CASE))) {
+                            
+                            if (isTimerContext) {
+                                // For timers, convert combined duration to seconds
+                                return normalizeTimerDuration(text, match.value)
+                            } else {
+                                // For other contexts, return total minutes as before
+                                val hours = match.groupValues[1].toIntOrNull() ?: 0
+                                val minutes = match.groupValues[2].toIntOrNull() ?: 0
+                                return (hours * 60 + minutes).toString()
+                            }
                         }
-                        return match.groupValues[1]
+                        
+                        val timeValue = match.groupValues[1]
+                        
+                        // Check if this is a time format (contains AM/PM or looks like time in alarm context)
+                        val containsAmPm = timeValue.contains(Regex("\\b(?:am|pm)\\b", RegexOption.IGNORE_CASE))
+                        val containsSpaceOrDot = timeValue.contains(Regex("[\\s.]\\d"))
+                        val looksLikeTime = timeValue.matches(Regex("\\d{3,4}")) || timeValue.contains(":") || containsSpaceOrDot
+                        
+                        if (containsAmPm || (isAlarmContext && looksLikeTime)) {
+                            // This is an alarm time, normalize to HH:MM format
+                            return normalizeTimeFormat(timeValue)
+                        } else if (isTimerContext) {
+                            // This is a timer duration, convert to seconds
+                            return normalizeTimerDuration(text, match.value)
+                        }
+                        
+                        // Return the time value for other cases
+                        return timeValue
                     }
                 }
                 
@@ -817,10 +1073,10 @@ class SlotExtractor {
     private fun extractState(text: String): String? {
         return when {
             // ON state - expanded with 20+ variations
-            text.contains("\\b(?:turn\\s+on|enable|enabled|enabling|activate|activated|activating|switch\\s+on|start|started|starting|power\\s+on|boot|boot\\s+up|fire\\s+up|launch|open|unmute|unmuted|resume|allow|permit|engage|engaged|engaging|set\\s+on|put\\s+on|make\\s+it\\s+on|get\\s+it\\s+on|bring\\s+up|wake\\s+up|light\\s+up|flip\\s+on)\\b".toRegex(RegexOption.IGNORE_CASE)) -> "on"
+            text.contains("\\b(?:turn\\s+on|enable|enabled|enabling|activate|activated|activating|switch\\s+on|start|started|starting|power\\s+on|boot|boot\\s+up|fire\\s+up|launch|open|unmute|unmuted|resume|allow|permit|engage|engaged|engaging|set\\s+on|put\\s+on|make\\s+it\\s+on|get\\s+it\\s+on|bring\\s+up|wake\\s+up|light\\s+up|flip\\s+on|on)\\b".toRegex(RegexOption.IGNORE_CASE)) -> "on"
             
             // OFF state - expanded with 20+ variations
-            text.contains("\\b(?:turn\\s+off|disable|disabled|disabling|deactivate|deactivated|deactivating|switch\\s+off|stop|stopped|stopping|shut\\s+off|shut\\s+down|power\\s+off|kill|close|mute|muted|pause|paused|block|deny|disengage|disengaged|disengaging|set\\s+off|put\\s+off|make\\s+it\\s+off|get\\s+it\\s+off|bring\\s+down|sleep|suspend|flip\\s+off|cut\\s+off)\\b".toRegex(RegexOption.IGNORE_CASE)) -> "off"
+            text.contains("\\b(?:turn\\s+off|disable|disabled|disabling|deactivate|deactivated|deactivating|switch\\s+off|stop|stopped|stopping|shut\\s+off|shut\\s+down|power\\s+off|kill|close|mute|muted|pause|paused|block|deny|disengage|disengaged|disengaging|set\\s+off|put\\s+off|make\\s+it\\s+off|get\\s+it\\s+off|bring\\s+down|sleep|suspend|flip\\s+off|cut\\s+off|off)\\b".toRegex(RegexOption.IGNORE_CASE)) -> "off"
             
             // INCREASE state - expanded with 20+ variations
             text.contains("\\b(?:increase|increased|increasing|up|higher|raise|raised|raising|boost|boosted|boosting|amplify|amplified|amplifying|enhance|enhanced|enhancing|elevate|elevated|elevating|pump\\s+up|turn\\s+up|crank\\s+up|ramp\\s+up|scale\\s+up|step\\s+up|jack\\s+up|bump\\s+up|push\\s+up|bring\\s+up|make\\s+it\\s+higher|louder|brighter|stronger|more|maximize|max\\s+out|intensify)\\b".toRegex(RegexOption.IGNORE_CASE)) -> "increase"
@@ -897,7 +1153,7 @@ class SlotExtractor {
 
     private fun extractTimerAction(text: String): String? {
         val timerActions = mapOf(
-            "set" to "\\b(?:set|setup|set\\s+up|configure|configuration|adjust|adjustment|change|modify|edit|customize|establish|define|specify|determine|fix|assign|allocate|program|preset|input|enter|put\\s+in|make\\s+it|arrange|organize|prepare)\\b",
+            "set" to "\\b(?:set|setup|set\\s+up|configure|configuration|adjust|adjustment|change|modify|edit|customize|establish|define|specify|determine|fix|assign|allocate|program|preset|input|enter|put\\s+in|make\\s+it|arrange|organize|prepare|setting)\\b",
             
             "start" to "\\b(?:start|started|starting|begin|began|beginning|initiate|initiated|initiating|launch|launched|launching|commence|commencing|kick\\s+off|fire\\s+up|boot\\s+up|power\\s+on|turn\\s+on|switch\\s+on|activate|enable|engage|trigger|run|execute|go|let'?s\\s+go|get\\s+going|get\\s+started)\\b",
             
@@ -1057,7 +1313,7 @@ class SlotExtractor {
             
             "heart rate" to "\\b(?:heart\\s+rate|heartrate|heart\\s+beat|heartbeat|pulse|pulse\\s+rate|bpm|beats\\s+per\\s+minute|cardiac|cardiac\\s+rate|heart\\s+rhythm|resting\\s+heart\\s+rate|rhr|max\\s+heart\\s+rate|maximum\\s+heart\\s+rate|heart\\s+health|cardiovascular|cardio|ticker|heart\\s+monitor|heart\\s+sensor|hr|beat|beats|beating|palpitation|palpitations|tachycardia|bradycardia|heart\\s+zone|target\\s+heart\\s+rate|recovery\\s+heart\\s+rate)\\b",
             
-            "blood oxygen" to "\\b(?:blood\\s+oxygen|oxygen|o2|spo2|sp\\s+o2|oxygen\\s+saturation|oxygen\\s+level|oxygen\\s+levels|blood\\s+o2|oxygen\\s+sat|o2\\s+sat|o2\\s+level|o2\\s+saturation|pulse\\s+ox|pulse\\s+oximetry|oximeter|oxygen\\s+reading|oxygen\\s+sensor|saturation|sat|blood\\s+oxygen\\s+level|arterial\\s+oxygen|respiratory|respiration|breathing|breath|lung\\s+function|oxygenation|hypoxia|oxygen\\s+content)\\b",
+            "blood oxygen" to "\\b(?:blood\\s+oxygen|oxygen|o2|spo2|sp\\s+o2|oxygen\\s+saturation|oxygen\\s+level|oxygen\\s+levels|blood\\s+o2|oxygen\\s+sat|o2\\s+sat|o2\\s+level|o2\\s+saturation|pulse\\s+ox|pulse\\s+oximetry|oximeter|oxygen\\s+reading|oxygen\\s+sensor|saturation|sat|blood\\s+oxygen\\s+level|arterial\\s+oxygen|respiratory|respiration|breathing|breath|lung\\s+function|oxygenation|hypoxia|oxygen\\s+content|sp2|SP2)\\b",
             
             "stress" to "\\b(?:stress|stressed|stressful|stress\\s+level|stress\\s+score|stress\\s+index|anxiety|anxious|worried|worry|worrying|tension|tense|pressure|pressured|strain|strained|overwhelm|overwhelmed|nervous|nervousness|burnout|burnt\\s+out|mental\\s+stress|emotional\\s+stress|psychological\\s+stress|chronic\\s+stress|acute\\s+stress|relaxation|relax|calm|calmness|peace|peaceful|tranquil|serene|zen|mindfulness)\\b",
 
@@ -1306,6 +1562,10 @@ class SlotExtractor {
                 }
                 if (!slots.containsKey("qualifier")) {
                     // Qualifier not required. if needed, use extractQualifier function
+                }
+                if (!slots.containsKey("identifier")) {
+                    val identifier = extractIdentifier(text) ?: "average"
+                    slots["identifier"] = identifier
                 }
             }
             "SetGoal" -> {
