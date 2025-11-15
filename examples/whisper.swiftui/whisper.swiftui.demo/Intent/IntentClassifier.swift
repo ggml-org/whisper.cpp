@@ -1,41 +1,63 @@
 import Foundation
 import TensorFlowLite
 import os.log
+import Transformers
 
-// MARK: - HFTokenizer Support
+// MARK: - BERT Tokenizer Support
 
 struct TokenizationResult {
     let ids: [Int]
     let attentionMask: [Int]
 }
 
-class HFTokenizer {
-    private let tokenizerData: Data
+class BERTTokenizer {
+    private var tokenizer: any Tokenizer
+    private let maxLength: Int
     
-    init(_ data: Data) {
-        self.tokenizerData = data
+    init(tokenizerPath: String, maxLength: Int = 256) async throws {
+        self.maxLength = maxLength
+        // Load BERT tokenizer using swift-transformers API
+        self.tokenizer = try await AutoTokenizer.from(pretrained: tokenizerPath)
     }
     
-    func tokenize(_ text: String) -> TokenizationResult {
-        // This is a simplified implementation
-        // In a real implementation, you would use a proper HuggingFace tokenizer library
-        // For now, we'll implement basic tokenization
+    func tokenize(_ text: String) async throws -> TokenizationResult {
+        // Use swift-transformers tokenizer.encode method to get proper BERT tokens
+        let tokens = try tokenizer.encode(text: text)
         
-        let words = text.lowercased().components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-        var ids: [Int] = [101] // [CLS] token
-        var attentionMask: [Int] = [1]
+        // Handle BERT tokenization: [CLS] + tokens + [SEP] + padding
+        var inputIds = [Int]()
         
-        for word in words {
-            // Simple hash-based token ID generation (replace with proper tokenizer)
-            let tokenId = abs(word.hashValue) % 30000 + 1000
-            ids.append(tokenId)
-            attentionMask.append(1)
+        // Add [CLS] token if not already present
+        if tokens.first != 101 {  // 101 is [CLS] token ID for BERT
+            inputIds.append(101)
         }
         
-        ids.append(102) // [SEP] token
-        attentionMask.append(1)
+        // Add the encoded tokens
+        inputIds.append(contentsOf: tokens)
         
-        return TokenizationResult(ids: ids, attentionMask: attentionMask)
+        // Add [SEP] token if not already present  
+        if tokens.last != 102 {  // 102 is [SEP] token ID for BERT
+            inputIds.append(102)
+        }
+        
+        // Truncate or pad to maxLength
+        if inputIds.count > maxLength {
+            inputIds = Array(inputIds.prefix(maxLength - 1)) + [102]  // Ensure [SEP] at end
+        }
+        
+        // Create attention mask (1 for real tokens, 0 for padding)
+        var attentionMask = Array(repeating: 1, count: inputIds.count)
+        
+        // Pad with zeros if needed
+        while inputIds.count < maxLength {
+            inputIds.append(0)      // [PAD] token
+            attentionMask.append(0) // No attention for padding
+        }
+        
+        return TokenizationResult(
+            ids: inputIds,
+            attentionMask: attentionMask
+        )
     }
     
     func close() {
@@ -56,8 +78,8 @@ class IntentClassifier: ObservableObject {
     @Published var errorMessage: String?
     
     private var intentClassifier: Interpreter?
-    private var hfTokenizer: HFTokenizer?
-    private var intentMapping: [Int: String] = [:]
+    private var bertTokenizer: BERTTokenizer?
+    private var intentMapping: [Int: String] = []
     private let slotExtractor = SlotExtractor()
     
     // MARK: - Initialization
@@ -66,27 +88,60 @@ class IntentClassifier: ObservableObject {
         do {
             Self.logger.info("Initializing Intent Classifier...")
             
-            // Load label encoder (replaces metadata)
-            try await loadLabelEncoder()
+            // Debug bundle info
+            Self.logger.info("Bundle main path: \(Bundle.main.bundlePath)")
+            Self.logger.info("Bundle resource path: \(Bundle.main.resourcePath ?? "nil")")
             
-            // Load HuggingFace tokenizer
-            try await loadHFTokenizer()
+            // List all bundle resources for debugging
+            if let resourcePath = Bundle.main.resourcePath {
+                do {
+                    let resourceContents = try FileManager.default.contentsOfDirectory(atPath: resourcePath)
+                    Self.logger.info("Bundle resources: \(resourceContents)")
+                } catch {
+                    Self.logger.error("Could not list bundle resources: \(error)")
+                }
+            }
+            
+            // Load label encoder (replaces metadata)
+            do {
+                try await loadLabelEncoder()
+                Self.logger.info("✅ Label encoder loaded successfully")
+            } catch {
+                Self.logger.error("❌ Failed to load label encoder: \(error)")
+                throw error
+            }
+            
+            // Load BERT tokenizer
+            do {
+                try await loadBERTTokenizer()
+                Self.logger.info("✅ BERT tokenizer loaded successfully")
+            } catch {
+                Self.logger.error("❌ Failed to load BERT tokenizer: \(error)")
+                throw error
+            }
             
             // Load the complete TFLite model (end-to-end)
-            try await loadIntentClassifier()
+            do {
+                try await loadIntentClassifier()
+                Self.logger.info("✅ TensorFlow Lite model loaded successfully")
+            } catch {
+                Self.logger.error("❌ Failed to load TFLite model: \(error)")
+                throw error
+            }
             
             await MainActor.run {
                 self.isInitialized = true
                 self.errorMessage = nil
             }
             
-            Self.logger.info("Intent Classifier initialized successfully")
+            Self.logger.info("✅ Intent Classifier initialized successfully")
             return true
             
         } catch {
-            Self.logger.error("Failed to initialize Intent Classifier: \(error.localizedDescription)")
+            let errorMsg = "Intent Classifier initialization failed: \(error.localizedDescription)"
+            Self.logger.error("\(errorMsg)")
             await MainActor.run {
-                self.errorMessage = error.localizedDescription
+                self.errorMessage = errorMsg
                 self.isInitialized = false
             }
             return false
@@ -96,63 +151,190 @@ class IntentClassifier: ObservableObject {
     // MARK: - Model Loading
     
     private func loadLabelEncoder() async throws {
-        guard let path = Bundle.main.path(forResource: "label_encoder", ofType: "json"),
-              let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let labelToIntentDict = json["label_to_intent"] as? [String: String] else {
+        Self.logger.info("Loading label encoder...")
+        
+        // Try multiple bundle resource loading approaches
+        var url: URL?
+        
+        // Approach 1: Standard bundle resource
+        url = Bundle.main.url(forResource: "label_encoder", withExtension: "json")
+        
+        // Approach 2: Try in Resources subdirectory
+        if url == nil {
+            url = Bundle.main.url(forResource: "label_encoder", withExtension: "json", subdirectory: "Resources")
+        }
+        
+        // Approach 3: Try direct path if bundle is not working
+        if url == nil {
+            if let resourcePath = Bundle.main.resourcePath {
+                let directPath = "\(resourcePath)/label_encoder.json"
+                if FileManager.default.fileExists(atPath: directPath) {
+                    url = URL(fileURLWithPath: directPath)
+                }
+            }
+        }
+        
+        guard let finalUrl = url else {
+            Self.logger.error("Could not find label_encoder.json in bundle")
+            Self.logger.error("Bundle path: \(Bundle.main.bundlePath)")
+            Self.logger.error("Resource path: \(Bundle.main.resourcePath ?? "nil")")
             throw IntentClassificationError.metadataNotLoaded
         }
         
-        var tempIntentMapping: [Int: String] = [:]
-        for (key, value) in labelToIntentDict {
-            if let intKey = Int(key) {
-                tempIntentMapping[intKey] = value
+        Self.logger.info("Found label_encoder.json at: \(finalUrl.path)")
+        
+        do {
+            let data = try Data(contentsOf: finalUrl)
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            
+            // Handle both label_to_intent and intent_to_label like Python test code
+            guard let labelToIntentDict = json?["label_to_intent"] as? [String: String] else {
+                Self.logger.error("label_to_intent dictionary not found in JSON")
+                throw IntentClassificationError.metadataNotLoaded
+            }
+            
+            // Also verify intent_to_label exists (for completeness)
+            if let intentToLabelDict = json?["intent_to_label"] as? [String: Int] {
+                Self.logger.info("Found intent_to_label mapping with \(intentToLabelDict.count) entries")
+            }
+            
+            // Get classes array for validation
+            if let classes = json?["classes"] as? [String] {
+                Self.logger.info("Total classes: \(classes.count)")
+                Self.logger.info("Classes: \(classes.joined(separator: ", "))")
+            }
+            
+            var tempIntentMapping: [Int: String] = [:]
+            for (key, value) in labelToIntentDict {
+                if let intKey = Int(key) {
+                    tempIntentMapping[intKey] = value
+                }
+            }
+            
+            self.intentMapping = tempIntentMapping
+            Self.logger.info("Loaded \(intentMapping.count) intent mappings from label_encoder.json")
+            
+        } catch {
+            Self.logger.error("Error loading label_encoder.json: \(error.localizedDescription)")
+            throw IntentClassificationError.metadataNotLoaded
+        }
+    }
+    
+    private func loadBERTTokenizer() async throws {
+        Self.logger.info("Loading BERT tokenizer...")
+        
+        // Try to find tokenizer directory in bundle
+        var tokenizerPath: String?
+        
+        // Approach 1: Check Resources/tokenizer subdirectory
+        if let resourcePath = Bundle.main.resourcePath {
+            let directPath = "\(resourcePath)/tokenizer"
+            if FileManager.default.fileExists(atPath: directPath) {
+                tokenizerPath = directPath
             }
         }
         
-        self.intentMapping = tempIntentMapping
-        Self.logger.info("Loaded \(intentMapping.count) intent mappings from label_encoder.json")
-    }
-    
-    private func loadHFTokenizer() async throws {
-        // Load tokenizer.json file from tokenizer folder
-        guard let path = Bundle.main.path(forResource: "tokenizer/tokenizer", ofType: "json"),
-              let tokenizerData = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+        // Approach 2: Check if tokenizer subdirectory exists directly
+        if tokenizerPath == nil {
+            if let bundlePath = Bundle.main.url(forResource: "tokenizer", withExtension: nil, subdirectory: "Resources") {
+                tokenizerPath = bundlePath.path
+            }
+        }
+        
+        // Approach 3: Try tokenizer subdirectory directly
+        if tokenizerPath == nil {
+            if let bundlePath = Bundle.main.url(forResource: "tokenizer", withExtension: nil) {
+                tokenizerPath = bundlePath.path
+            }
+        }
+        
+        guard let finalTokenizerPath = tokenizerPath else {
+            Self.logger.error("Could not find tokenizer directory in bundle")
+            Self.logger.error("Bundle path: \(Bundle.main.bundlePath)")
+            Self.logger.error("Resource path: \(Bundle.main.resourcePath ?? "nil")")
             throw IntentClassificationError.tokenizerNotLoaded
         }
         
-        // Initialize HuggingFace tokenizer
-        self.hfTokenizer = HFTokenizer(tokenizerData)
-        Self.logger.info("HuggingFace tokenizer loaded from tokenizer/tokenizer.json")
+        Self.logger.info("Found tokenizer directory at: \(finalTokenizerPath)")
+        
+        do {
+            // Initialize BERT tokenizer exactly like Python: AutoTokenizer.from_pretrained('./tokenizer')
+            self.bertTokenizer = try await BERTTokenizer(
+                tokenizerPath: finalTokenizerPath,
+                maxLength: Self.maxSequenceLength
+            )
+            Self.logger.info("✓ BERT tokenizer loaded from \(finalTokenizerPath)")
+            Self.logger.info("  Max sequence length: \(Self.maxSequenceLength)")
+            
+        } catch {
+            Self.logger.error("Error loading BERT tokenizer: \(error.localizedDescription)")
+            throw IntentClassificationError.tokenizerNotLoaded
+        }
     }
     
     private func loadIntentClassifier() async throws {
-        guard let modelPath = Bundle.main.path(forResource: "intent_classifier", ofType: "tflite") else {
+        Self.logger.info("Loading TensorFlow Lite model...")
+        
+        // Try multiple bundle resource loading approaches
+        var url: URL?
+        
+        // Approach 1: Standard bundle resource
+        url = Bundle.main.url(forResource: "intent_classifier", withExtension: "tflite")
+        
+        // Approach 2: Try in Resources subdirectory
+        if url == nil {
+            url = Bundle.main.url(forResource: "intent_classifier", withExtension: "tflite", subdirectory: "Resources")
+        }
+        
+        // Approach 3: Try direct path if bundle is not working
+        if url == nil {
+            if let resourcePath = Bundle.main.resourcePath {
+                let directPath = "\(resourcePath)/intent_classifier.tflite"
+                if FileManager.default.fileExists(atPath: directPath) {
+                    url = URL(fileURLWithPath: directPath)
+                }
+            }
+        }
+        
+        guard let finalUrl = url else {
+            Self.logger.error("Could not find intent_classifier.tflite in bundle")
+            Self.logger.error("Bundle path: \(Bundle.main.bundlePath)")
+            Self.logger.error("Resource path: \(Bundle.main.resourcePath ?? "nil")")
             throw IntentClassificationError.modelNotLoaded
         }
         
-        var options = Interpreter.Options()
-        options.threadCount = 2
+        Self.logger.info("Found intent_classifier.tflite at: \(finalUrl.path)")
         
-        self.intentClassifier = try Interpreter(modelPath: modelPath, options: options)
-        try self.intentClassifier?.allocateTensors()
-        
-        let inputDetails = intentClassifier?.inputTensorCount ?? 0
-        let outputDetails = intentClassifier?.outputTensorCount ?? 0
-        
-        Self.logger.info("Complete intent classifier loaded - Inputs: \(inputDetails), Outputs: \(outputDetails)")
-        
-        // Log input/output shapes
-        for i in 0..<inputDetails {
-            if let shape = try? intentClassifier?.input(at: i).shape {
-                Self.logger.info("  Input \(i) shape: \(shape)")
+        do {
+            var options = Interpreter.Options()
+            options.threadCount = 2
+            
+            self.intentClassifier = try Interpreter(modelPath: finalUrl.path, options: options)
+            try self.intentClassifier?.allocateTensors()
+            
+            let inputDetails = intentClassifier?.inputTensorCount ?? 0
+            let outputDetails = intentClassifier?.outputTensorCount ?? 0
+            
+            Self.logger.info("✓ Complete TFLite model loaded successfully!")
+            
+            // Log input/output details like Python test code
+            for i in 0..<inputDetails {
+                if let shape = try? intentClassifier?.input(at: i).shape {
+                    Self.logger.info("  Input \(i): Shape: \(shape)")
+                }
             }
-        }
-        
-        for i in 0..<outputDetails {
-            if let shape = try? intentClassifier?.output(at: i).shape {
-                Self.logger.info("  Output \(i) shape: \(shape)")
+            
+            for i in 0..<outputDetails {
+                if let shape = try? intentClassifier?.output(at: i).shape {
+                    Self.logger.info("  Output \(i): Shape: \(shape)")
+                }
             }
+            
+            Self.logger.info("\nThis is a single end-to-end model: Text → Intent")
+            
+        } catch {
+            Self.logger.error("Error loading TensorFlow Lite model: \(error.localizedDescription)")
+            throw IntentClassificationError.modelNotLoaded
         }
     }
     
@@ -187,14 +369,15 @@ class IntentClassifier: ObservableObject {
             let bestIntent = intentMapping[bestIndex] ?? "Unknown"
             let confidence = probabilities[bestIndex]
             
+            Self.logger.info("Prediction: \(bestIntent) (label: \(bestIndex))")
+            Self.logger.info("Confidence: \(String(format: "%.4f", confidence))")
+            
             // Create probability map for all intents
             var allProbabilities: [String: Float] = [:]
             for (index, probability) in probabilities.enumerated() {
                 let intent = intentMapping[index] ?? "Unknown_\(index)"
                 allProbabilities[intent] = probability
             }
-            
-            Self.logger.info("Final result: \(bestIntent) (confidence: \(String(format: "%.3f", confidence)))")
             
             // Log top 3 predictions
             let sortedIndices = probabilities.enumerated().sorted { $0.element > $1.element }.map { $0.offset }
@@ -226,31 +409,33 @@ class IntentClassifier: ObservableObject {
     // MARK: - Text Processing
     
     private func tokenizeText(_ text: String) async throws -> (inputIds: [Int32], attentionMask: [Int32]) {
-        // Use HuggingFace tokenizer for proper BERT WordPiece tokenization
-        guard let tokenizer = hfTokenizer else {
+        // Use BERT tokenizer for proper WordPiece tokenization
+        guard let tokenizer = bertTokenizer else {
             throw IntentClassificationError.tokenizerNotLoaded
         }
         
-        let result = tokenizer.tokenize(text)
+        let result = try await tokenizer.tokenize(text)
         
-        // Ensure the sequences are exactly maxSequenceLength
-        var inputIds = Array(repeating: Int32(0), count: Self.maxSequenceLength)
-        var attentionMask = Array(repeating: Int32(0), count: Self.maxSequenceLength)
+        // Convert to Int32 arrays for TensorFlow Lite
+        let inputIds = result.ids.map { Int32($0) }
+        let attentionMask = result.attentionMask.map { Int32($0) }
         
-        // Copy tokens up to maxSequenceLength, padding or truncating as needed
-        let tokenCount = min(result.ids.count, Self.maxSequenceLength)
-        for i in 0..<tokenCount {
-            inputIds[i] = Int32(result.ids[i])
-            attentionMask[i] = Int32(result.attentionMask[i])
+        // Ensure arrays are exactly maxSequenceLength
+        var paddedInputIds = Array(repeating: Int32(0), count: Self.maxSequenceLength)
+        var paddedAttentionMask = Array(repeating: Int32(0), count: Self.maxSequenceLength)
+        
+        let copyCount = min(inputIds.count, Self.maxSequenceLength)
+        for i in 0..<copyCount {
+            paddedInputIds[i] = inputIds[i]
+            paddedAttentionMask[i] = attentionMask[i]
         }
         
-        // The rest remain as 0 (padding)
         let textPreview = text.count > 50 ? String(text.prefix(50)) + "..." : text
-        Self.logger.info("HF Tokenized '\(textPreview)' -> \(tokenCount) tokens")
-        Self.logger.info("First 10 input_ids: \(Array(inputIds.prefix(10)).map { String($0) }.joined(separator: ", "))")
-        Self.logger.info("Valid tokens: \(attentionMask.reduce(0, +))")
+        Self.logger.info("Tokenized '\(textPreview)' -> \(copyCount) tokens (seq_len=\(Self.maxSequenceLength))")
+        Self.logger.info("Input IDs: [\(Array(paddedInputIds.prefix(5)).map { String($0) }.joined(separator: ", "))...]")
+        Self.logger.info("Attention: [\(Array(paddedAttentionMask.prefix(5)).map { String($0) }.joined(separator: ", "))...] (sum=\(paddedAttentionMask.reduce(0, +)))")
         
-        return (inputIds: inputIds, attentionMask: attentionMask)
+        return (inputIds: paddedInputIds, attentionMask: paddedAttentionMask)
     }
     
     private func runCompleteModel(inputIds: [Int32], attentionMask: [Int32]) async throws -> [Float] {
@@ -271,14 +456,14 @@ class IntentClassifier: ObservableObject {
             Array(bytes.bindMemory(to: Float.self))
         }
         
-        Self.logger.info("Model output logits: \(Array(logits.prefix(5)).map { String(format: "%.3f", $0) }.joined(separator: ", "))")
+        Self.logger.info("Model logits: [\(Array(logits.prefix(3)).map { String(format: "%.3f", $0) }.joined(separator: ", "))...] (\(logits.count) classes)")
         
         return logits
     }
     
     private func softmax(_ logits: [Float]) -> [Float] {
-        let maxLogit = logits.max() ?? 0.0
-        let expValues = logits.map { exp($0 - maxLogit) }
+        // Implement exactly like Python: np.exp(logits) / np.sum(np.exp(logits))
+        let expValues = logits.map { exp($0) }
         let sumExp = expValues.reduce(0, +)
         return expValues.map { $0 / sumExp }
     }
@@ -291,8 +476,8 @@ class IntentClassifier: ObservableObject {
     
     func cleanup() {
         intentClassifier = nil
-        hfTokenizer?.close()
-        hfTokenizer = nil
+        bertTokenizer?.close()
+        bertTokenizer = nil
         isInitialized = false
         Self.logger.info("Intent classifier cleaned up")
     }

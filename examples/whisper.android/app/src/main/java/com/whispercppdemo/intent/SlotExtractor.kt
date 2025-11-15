@@ -642,13 +642,17 @@ class SlotExtractor {
      * Examples:
      * - "730" -> "07:30"
      * - "730 pm" -> "19:30"
+     * - "730 p.m." -> "19:30"
+     * - "730 p m" -> "19:30"
      * - "1030 pm" -> "22:30"
      * - "2230" -> "22:30"
      * - "7:30 am" -> "07:30"
+     * - "7:30 a.m." -> "07:30"
      * - "5 30 pm" -> "17:30"
-     * - "5.30 am" -> "05:30"
+     * - "5.30 a.m" -> "05:30"
      * - "12:00 pm" -> "12:00"
      * - "12:00 am" -> "00:00"
+     * Supports AM/PM formats: am, pm, a.m., p.m., a.m, p.m, a m, p m
      */
     private fun normalizeTimeFormat(timeString: String): String {
         val cleanTime = timeString.trim().lowercase()
@@ -675,10 +679,12 @@ class SlotExtractor {
         }
         
         // Pattern for times like "730 pm", "1030 am" (digits + space + am/pm)
-        val amPmPattern = "^(\\d{1,4})\\s*(am|pm)$".toRegex()
+        // Supports: am, pm, a.m., p.m., a.m, p.m, a m, p m
+        val amPmPattern = "^(\\d{1,4})\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?))$".toRegex()
         amPmPattern.find(cleanTime)?.let { match ->
             val timeDigits = match.groupValues[1]
-            val amPm = match.groupValues[2]
+            val amPmText = match.value.substring(timeDigits.length).trim()
+            val amPm = if (amPmText.startsWith("a")) "am" else "pm"
             
             var hour = 0
             var minute = 0
@@ -711,11 +717,13 @@ class SlotExtractor {
         }
         
         // Pattern for "5 30 pm" or "5.30 am" format (hour [space|dot] minute am/pm)
-        val hourMinuteAmPmPattern = "^(\\d{1,2})[\\s.]+?(\\d{1,2})\\s*(am|pm)$".toRegex()
+        // Supports: am, pm, a.m., p.m., a.m, p.m, a m, p m
+        val hourMinuteAmPmPattern = "^(\\d{1,2})[\\s.]+?(\\d{1,2})\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?))$".toRegex()
         hourMinuteAmPmPattern.find(cleanTime)?.let { match ->
             var hour = match.groupValues[1].toInt()
             val minute = match.groupValues[2].toInt()
-            val amPm = match.groupValues[3]
+            val amPmText = match.value.substring(match.value.lastIndexOf(minute.toString()) + minute.toString().length).trim()
+            val amPm = if (amPmText.startsWith("a")) "am" else "pm"
             
             // Validate hour and minute ranges
             if (hour > 12 || minute >= 60) {
@@ -732,11 +740,13 @@ class SlotExtractor {
         }
         
         // Pattern for times with colon like "7:30 pm", "10:30 am"
-        val colonAmPmPattern = "^(\\d{1,2}):(\\d{2})\\s*(am|pm)$".toRegex()
+        // Supports: am, pm, a.m., p.m., a.m, p.m, a m, p m
+        val colonAmPmPattern = "^(\\d{1,2}):(\\d{2})\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?))$".toRegex()
         colonAmPmPattern.find(cleanTime)?.let { match ->
             var hour = match.groupValues[1].toInt()
             val minute = match.groupValues[2].toInt()
-            val amPm = match.groupValues[3]
+            val amPmText = match.value.substring(match.value.indexOf(":") + 3).trim()
+            val amPm = if (amPmText.startsWith("a")) "am" else "pm"
             
             // Convert to 24-hour format
             when {
