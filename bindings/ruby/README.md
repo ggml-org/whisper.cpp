@@ -324,6 +324,22 @@ whisper
 
 The second argument `samples` may be an array, an object with `length` and `each` method, or a MemoryView. If you can prepare audio data as C array and export it as a MemoryView, whispercpp accepts and works with it with zero copy.
 
+Using VAD separately from ASR
+-----------------------------
+
+VAD feature itself is useful. You can use it separately from ASR:
+
+```ruby
+vad = Whisper::VAD::Context.new("silero-v5.1.2")
+vad
+  .detect("path/to/audio.wav", Whisper::VAD::Params.new)
+  .each_with_index do |segment, index|
+    segment => {start_time: st, end_time: ed} # `Segment` responds to `#deconstruct_keys`
+
+    puts "[%{nth}: %{st} --> %{ed}]" % {nth: index + 1, st:, ed:}
+  end
+```
+
 Development
 -----------
 
