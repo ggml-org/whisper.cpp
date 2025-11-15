@@ -1,0 +1,10 @@
+C:\Users\tanmay.pawar\Downloads\tokenizer trainer\whisper-cpp-intent-classifier\rs-hf-tokenizer\target\armv7-linux-androideabi\release\deps\esaxx_rs-4275d0a627dfd6df.d: C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\esaxx-rs-0.1.10\src\lib.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\esaxx-rs-0.1.10\src\esa.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\esaxx-rs-0.1.10\src\sais.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\esaxx-rs-0.1.10\src\types.rs
+
+C:\Users\tanmay.pawar\Downloads\tokenizer trainer\whisper-cpp-intent-classifier\rs-hf-tokenizer\target\armv7-linux-androideabi\release\deps\libesaxx_rs-4275d0a627dfd6df.rlib: C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\esaxx-rs-0.1.10\src\lib.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\esaxx-rs-0.1.10\src\esa.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\esaxx-rs-0.1.10\src\sais.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\esaxx-rs-0.1.10\src\types.rs
+
+C:\Users\tanmay.pawar\Downloads\tokenizer trainer\whisper-cpp-intent-classifier\rs-hf-tokenizer\target\armv7-linux-androideabi\release\deps\libesaxx_rs-4275d0a627dfd6df.rmeta: C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\esaxx-rs-0.1.10\src\lib.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\esaxx-rs-0.1.10\src\esa.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\esaxx-rs-0.1.10\src\sais.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\esaxx-rs-0.1.10\src\types.rs
+
+C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\esaxx-rs-0.1.10\src\lib.rs:
+C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\esaxx-rs-0.1.10\src\esa.rs:
+C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\esaxx-rs-0.1.10\src\sais.rs:
+C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\esaxx-rs-0.1.10\src\types.rs:

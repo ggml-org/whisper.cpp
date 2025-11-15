@@ -1,0 +1,40 @@
+{
+  "model_info": {
+    "created_date": "2025-09-29",
+    "framework": "tensorflow_lite_minimal",
+    "input_dimension": 384,
+    "num_intents": 13,
+    "model_type": "minimal_with_dummy_encoder",
+    "compatibility": "android_debug"
+  },
+  "intent_mapping": {
+    "0": "LogEvent",
+    "1": "MediaAction",
+    "2": "OpenApp",
+    "3": "PhoneAction",
+    "4": "QueryPoint",
+    "5": "QueryTrend",
+    "6": "SetGoal",
+    "7": "SetThreshold",
+    "8": "StartActivity",
+    "9": "StopActivity",
+    "10": "TimerStopwatch",
+    "11": "ToggleFeature",
+    "12": "WeatherQuery"
+  },
+  "intents": [
+    "LogEvent",
+    "MediaAction",
+    "OpenApp",
+    "PhoneAction",
+    "QueryPoint",
+    "QueryTrend",
+    "SetGoal",
+    "SetThreshold",
+    "StartActivity",
+    "StopActivity",
+    "TimerStopwatch",
+    "ToggleFeature",
+    "WeatherQuery"
+  ]
+}
