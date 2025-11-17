@@ -72,7 +72,7 @@ Copy your **Whisper model `.bin` file** into that folder.
 
 ### 🧪 Test with Client
 
-Edit `client.py` and set your server IP address, then run:
+Edit `we_client.py` and set your server IP address, then run:
 
 ```bash
 python3 client.py
