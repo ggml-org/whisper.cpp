@@ -72,10 +72,10 @@ Copy your **Whisper model `.bin` file** into that folder.
 
 ### 🧪 Test with Client
 
-Edit `we_client.py` and set your server IP address, then run:
+Edit `ws_client.py` and set your server IP address, then run:
 
 ```bash
-python3 client.py
+python3 ws_client.py
 ```
 
 You can change the number of clients and chunk size:
