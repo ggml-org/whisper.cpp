@@ -134,20 +134,20 @@ Support for Voice Activity Detection (VAD) can be enabled by setting `Whisper::P
 ```ruby
 Whisper::Params.new(
   vad: true,
-  vad_model_path: "silero-v5.1.2",
+  vad_model_path: "silero-v6.2.0",
   # other arguments...
 )
 ```
 
-When you pass the model name (`"silero-v5.1.2"`) or URI (`https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin`), it will be downloaded automatically.
-Currently, "silero-v5.1.2" is registered as pre-converted model like ASR models. You also specify file path or URI of model.
+When you pass the model name (`"silero-v6.2.0"`) or URI (`https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin`), it will be downloaded automatically.
+Currently, "silero-v6.2.0" is registered as pre-converted model like ASR models. You also specify file path or URI of model.
 
 If you need configure VAD behavior, pass params for that:
 
 ```ruby
 Whisper::Params.new(
   vad: true,
-  vad_model_path: "silero-v5.1.2",
+  vad_model_path: "silero-v6.2.0",
   vad_params: Whisper::VAD::Params.new(
     threshold: 1.0, # defaults to 0.5
     min_speech_duration_ms: 500, # defaults to 250
@@ -330,7 +330,7 @@ Using VAD separately from ASR
 VAD feature itself is useful. You can use it separately from ASR:
 
 ```ruby
-vad = Whisper::VAD::Context.new("silero-v5.1.2")
+vad = Whisper::VAD::Context.new("silero-v6.2.0")
 vad
   .detect("path/to/audio.wav", Whisper::VAD::Params.new)
   .each_with_index do |segment, index|
