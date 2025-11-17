@@ -2,12 +2,12 @@ require_relative "helper"
 
 class TestVADContext < TestBase
   def test_initialize
-    context = Whisper::VAD::Context.new("silero-v5.1.2")
+    context = Whisper::VAD::Context.new("silero-v6.2.0")
     assert_instance_of Whisper::VAD::Context, context
   end
 
   def test_detect
-    context = Whisper::VAD::Context.new("silero-v5.1.2")
+    context = Whisper::VAD::Context.new("silero-v6.2.0")
     segments = context.detect(AUDIO, Whisper::VAD::Params.new)
     assert_instance_of Whisper::VAD::Segments, segments
 
@@ -32,7 +32,7 @@ class TestVADContext < TestBase
     assert_equal segment.start_time, start_time
     assert_equal segment.end_time, end_time
 
-    assert_equal 5, segments.length
+    assert_equal 4, segments.length
   end
 
   def test_invalid_model_type
