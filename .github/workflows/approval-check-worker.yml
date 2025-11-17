@@ -1,0 +1,51 @@
+name: Approval Check Worker
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  run-when-command:
+    if: >
+      github.event.issue.pull_request != null &&
+      (contains(github.event.comment.body, '/review') || contains(github.event.comment.body, 'review'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      statuses: write
+
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
+      sha: ${{ steps.pr.outputs.sha }}
+
+    steps:
+      - name: Get latest PR head SHA
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = context.payload.issue.number;
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            core.setOutput('number', String(prNumber));
+            core.setOutput('sha', pr.head.sha);
+
+  check-approvals:
+    needs: run-when-command
+    if: ${{ always() && needs.run-when-command.result == 'success' }}
+    permissions:
+      contents: write
+      pull-requests: write
+      statuses: write
+      issues: write
+    uses: tetherto/qvac-devops/.github/workflows/approval-check-worker.yml@v1.1.1
+    secrets: inherit
+    with:
+      pr_number: ${{ fromJSON(needs.run-when-command.outputs.number) }}
+      pr_sha: ${{ needs.run-when-command.outputs.sha }}
