@@ -58,32 +58,6 @@ cd /home/ubuntu/whisper.cpp/models
 
 Copy your **Whisper model `.bin` file** into that folder.
 
----
-
-## 🎧 WS Streaming API
-
-### 🔹 Endpoints
-
-| Method | Endpoint  | Description                  |
-| :----- | :-------- | :--------------------------- |
-| `WS`   | `/stream` | WebSocket streaming endpoint |
-
----
-
-### 🧪 Test with Client
-
-Edit `ws_client.py` and set your server IP address, then run:
-
-```bash
-python3 ws_client.py
-```
-
-You can change the number of clients and chunk size:
-
-```python
-CONCURRENT_CLIENTS = 1
-CHUNK_SECONDS = 0.2
-```
 
 ---
 
@@ -269,6 +243,32 @@ sudo ln -s /etc/nginx/sites-available/whisper /etc/nginx/sites-enabled/whisper
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
+---
+
+## 🎧 WS Streaming API
+
+### 🔹 Endpoints
+
+| Method | Endpoint  | Description                  |
+| :----- | :-------- | :--------------------------- |
+| `WS`   | `/stream` | WebSocket streaming endpoint |
+
+---
+
+### 🧪 Test with Client
+
+Edit `ws_client.py` and set your server IP address, then run:
+
+```bash
+python3 ws_client.py
+```
+
+You can change the number of clients and chunk size:
+
+```python
+CONCURRENT_CLIENTS = 1
+CHUNK_SECONDS = 0.2
+```
 ---
 
 > 💡 **Tip:** Keep the model checkpoint on a fast NVMe SSD for optimal inference performance.
