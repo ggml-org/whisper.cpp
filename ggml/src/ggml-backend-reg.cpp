@@ -57,10 +57,6 @@
 #include "ggml-opencl.h"
 #endif
 
-#ifdef GGML_USE_HEXAGON
-#include "ggml-hexagon.h"
-#endif
-
 #ifdef GGML_USE_BLAS
 #include "ggml-blas.h"
 #endif
@@ -202,9 +198,6 @@ struct ggml_backend_registry {
 #endif
 #ifdef GGML_USE_OPENCL
         register_backend(ggml_backend_opencl_reg());
-#endif
-#ifdef GGML_USE_HEXAGON
-        register_backend(ggml_backend_hexagon_reg());
 #endif
 #ifdef GGML_USE_CANN
         register_backend(ggml_backend_cann_reg());
@@ -605,7 +598,6 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     ggml_backend_load_best("sycl", silent, dir_path);
     ggml_backend_load_best("vulkan", silent, dir_path);
     ggml_backend_load_best("opencl", silent, dir_path);
-    ggml_backend_load_best("hexagon", silent, dir_path);
     ggml_backend_load_best("musa", silent, dir_path);
     ggml_backend_load_best("cpu", silent, dir_path);
     // check the environment variable GGML_BACKEND_PATH to load an out-of-tree backend

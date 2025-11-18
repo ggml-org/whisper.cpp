@@ -226,23 +226,16 @@ static struct buffer_address ggml_dyn_tallocr_alloc(struct ggml_dyn_tallocr * al
     }
 
     if (best_fit_block == -1) {
-        // no suitable block found, try the last block (this may grow a chunks size)
-        int64_t best_reuse = INT64_MIN;
+        // no suitable block found, try the last block (this will grow a chunks size)
         for (int c = 0; c < alloc->n_chunks; ++c) {
             struct tallocr_chunk * chunk = alloc->chunks[c];
             if (chunk->n_free_blocks > 0) {
                 struct free_block * block = &chunk->free_blocks[chunk->n_free_blocks - 1];
                 max_avail = MAX(max_avail, block->size);
-                int64_t reuse_factor = chunk->max_size - block->offset - size;
-                // reuse_factor < 0 : amount of extra memory that needs to be allocated
-                // reuse_factor = 0 : allocated free space exactly matches tensor size
-                // reuse_factor > 0 : superfluous memory that will remain unused
-                bool better_reuse = best_reuse < 0 && reuse_factor > best_reuse;
-                bool better_fit = reuse_factor >= 0 && reuse_factor < best_reuse;
-                if (block->size >= size && (better_reuse || better_fit)) {
+                if (block->size >= size) {
                     best_fit_chunk = c;
                     best_fit_block = chunk->n_free_blocks - 1;
-                    best_reuse = reuse_factor;
+                    break;
                 }
             }
         }
@@ -275,7 +268,7 @@ static struct buffer_address ggml_dyn_tallocr_alloc(struct ggml_dyn_tallocr * al
 #ifdef GGML_ALLOCATOR_DEBUG
     add_allocated_tensor(alloc, addr, tensor);
     size_t cur_max = addr.offset + size;
-    if (cur_max > chunk->max_size) {
+    if (cur_max > alloc->max_size[addr.chunk]) {
         // sort allocated_tensors by chunk/offset
         for (int i = 0; i < 1024; i++) {
             for (int j = i + 1; j < 1024; j++) {

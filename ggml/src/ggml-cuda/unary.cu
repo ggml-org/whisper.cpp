@@ -18,7 +18,10 @@ static __device__ __forceinline__ float op_step(float x) {
 }
 
 static __device__ __forceinline__ float op_gelu(float x) {
-    return ggml_cuda_op_gelu_single(x);
+    const float GELU_COEF_A    = 0.044715f;
+    const float SQRT_2_OVER_PI = 0.79788456080286535587989211986876f;
+
+    return 0.5f*x*(1.0f + tanhf(SQRT_2_OVER_PI*x*(1.0f + GELU_COEF_A*x*x)));
 }
 
 static __device__ __forceinline__ float op_gelu_erf(float x) {
@@ -34,7 +37,7 @@ static __device__ __forceinline__ float op_gelu_quick(float x) {
 }
 
 static __device__ __forceinline__ float op_silu(float x) {
-    return ggml_cuda_op_silu_single(x);
+    return x / (1.0f + expf(-x));
 }
 
 static __device__ __forceinline__ float op_tanh(float x) {
@@ -83,22 +86,6 @@ static __device__ __forceinline__ float op_log(float x) {
 
 static __device__ __forceinline__ float op_elu(float x) {
     return (x > 0.f) ? x : expm1f(x);
-}
-
-static __device__ __forceinline__ float op_floor(float x) {
-    return floorf(x);
-}
-
-static __device__ __forceinline__ float op_ceil(float x) {
-    return ceilf(x);
-}
-
-static __device__ __forceinline__ float op_round(float x) {
-    return round(x);
-}
-
-static __device__ __forceinline__ float op_trunc(float x) {
-    return trunc(x);
 }
 
 template <float (*op)(float), typename T>
@@ -217,22 +204,6 @@ void ggml_cuda_op_log(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 void ggml_cuda_op_elu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary<op_elu>(ctx, dst);
 }
-
-void ggml_cuda_op_floor(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    ggml_cuda_op_unary<op_floor>(ctx, dst);
-}
-
-void ggml_cuda_op_ceil(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    ggml_cuda_op_unary<op_ceil>(ctx, dst);
-}
-
-void ggml_cuda_op_round(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    ggml_cuda_op_unary<op_round>(ctx, dst);
-}
-
-void ggml_cuda_op_trunc(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    ggml_cuda_op_unary<op_trunc>(ctx, dst);
-}
 /* gated ops */
 
 template <float (*op)(float), typename T>
@@ -346,8 +317,13 @@ static __global__ void swiglu_oai_kernel(const T * x, const T * g, T * dst, cons
 
     float xi = x[j0];
     float gi = g[j1];
+    xi = fminf(xi, limit);
+    gi = fmaxf(fminf(gi, limit), -limit);
 
-    dst[i] = ggml_cuda_op_swiglu_oai_single(xi, gi, alpha, limit);
+    float out_glu = xi / (1.0f + expf(-xi * alpha));
+    out_glu = out_glu * (1.0f + gi);
+
+    dst[i] = out_glu;
 }
 
 template <typename T>

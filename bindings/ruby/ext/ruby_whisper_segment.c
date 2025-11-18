@@ -29,9 +29,6 @@ ruby_whisper_segment_memsize(const void *p)
   if (!rws) {
     return 0;
   }
-  if (rws->index) {
-    size += sizeof(rws->index);
-  }
   return size;
 }
 

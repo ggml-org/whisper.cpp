@@ -45,6 +45,7 @@ struct whisper_params {
     bool use_gpu = true;
     bool print_timestamps = false; 
 
+    // --- REVERTED --- (Removed keep_ms)
     int32_t step_ms = 400;   // How often to process audio
     int32_t max_tokens = 0;   
     int32_t beam_size = -1;   
@@ -65,6 +66,8 @@ class session : public std::enable_shared_from_this<session> {
     whisper_params app_params_;        // Copy of app params
     std::atomic<bool> processing_{false}; // Ensure only one inference runs at a time
 
+    // --- REVERTED ---
+    // Back to your original (accurate) buffering logic
     std::vector<float> pcmf32_new_;       // Buffer for newly received audio samples
     std::vector<float> pcmf32_processed_; // Buffer passed to whisper_full (grows)
     int n_samples_step_;                  // Samples per processing step
@@ -76,7 +79,7 @@ public:
     {
         std::cerr << "[" << std::this_thread::get_id() << "] Session constructor entered." << std::endl;
 
-
+        // --- REVERTED ---
         n_samples_step_ = (1e-3 * app_params_.step_ms) * INPUT_SAMPLE_RATE;
         std::cerr << "[" << std::this_thread::get_id() << "] step_ms: " << app_params_.step_ms << " (" << n_samples_step_ << " samples)" << std::endl;
 
@@ -155,6 +158,7 @@ public:
             beast::bind_front_handler(&session::on_read, shared_from_this()));
     }
 
+    // --- REVERTED ---
     void on_read(beast::error_code ec, std::size_t bytes_transferred) {
          std::cerr << "[" << std::this_thread::get_id() << "] Session::on_read() entered. Error code: " << ec.message() << ", Bytes: " << bytes_transferred << std::endl;
         boost::ignore_unused(bytes_transferred);
@@ -191,6 +195,7 @@ public:
                  std::cerr << "[" << std::this_thread::get_id() << "] Added " << n_samples << " samples to pcmf32_new_. New total: " << pcmf32_new_.size() << std::endl;
             }
 
+            // --- REVERTED --- Trigger processing logic from your original code
             bool expect_processing = false;
             if (!processing_.load() && (!pcmf32_new_.empty() || !pcmf32_processed_.empty()) && (pcmf32_new_.size() >= n_samples_step_ || is_final_chunk)) {
                 expect_processing = true;
@@ -235,6 +240,7 @@ public:
         }
     }
 
+    // --- REVERTED ---
     void process_audio(bool is_final) {
         if (!ctx_) {
             std::cerr << "[" << std::this_thread::get_id() << "] Error: Whisper context is null during processing." << std::endl;
@@ -480,6 +486,7 @@ int main(int argc, char* argv[]) {
     return EXIT_SUCCESS;
 }
 
+// --- REVERTED --- Updated parsing function
 bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
      for (int i = 1; i < argc; i++) {
          std::string arg = argv[i];
@@ -510,6 +517,7 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
      return true;
 }
 
+// --- REVERTED --- Updated usage function
 void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & params) {
       fprintf(stderr, "\nusage: %s [options]\n\n", argv[0]);
       fprintf(stderr, "options:\n");
