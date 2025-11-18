@@ -17,7 +17,7 @@ class SlotExtractor {
     private let intentSlotTemplates: [String: [String]] = [
         "QueryPoint": ["metric"],  // time_ref, unit, and identifier can have defaults
         "SetGoal": ["metric", "target"],  // unit can be inferred
-        "SetThreshold": ["metric", "threshold", "type"],  // unit can be inferred
+        "SetThreshold": ["metric", "threshold"],  // unit can be inferred
         "TimerStopwatch": ["tool", "action"],  // value only required for "set timer X min"
         "ToggleFeature": ["feature", "state"],
         "LogEvent": ["event_type"],  // value, unit, time_ref can have defaults
@@ -291,6 +291,38 @@ class SlotExtractor {
             }
         }
         
+        // Special handling for SetThreshold: combine type into metric
+        if intent == "SetThreshold" {
+            if let type = extractSingleSlot(processedText: processedText, originalText: textLower, slotName: "type", intent: intent) as? String,
+               let metric = slots["metric"] as? String {
+                // Set unit based on base metric before combining
+                if slots["unit"] == nil {
+                    switch metric {
+                    case "steps":
+                        slots["unit"] = "count"
+                    case "distance":
+                        slots["unit"] = "km"
+                    case "calories":
+                        slots["unit"] = "kcal"
+                    case "heart rate":
+                        slots["unit"] = "bpm"
+                    case "sleep":
+                        slots["unit"] = "hours"
+                    case "weight":
+                        slots["unit"] = "kg"
+                    case "spo2":
+                        slots["unit"] = "percent"
+                    case "stress":
+                        slots["unit"] = "score"
+                    default:
+                        break
+                    }
+                }
+                slots["metric"] = "\(type) \(metric)"
+                // Self.logger.info("  ✓ Combined metric: \(slots["metric"]!)")
+            }
+        }
+        
         // Add contextual slots
         addContextualSlots(text: textLower, intent: intent, slots: &slots)
         
@@ -300,12 +332,10 @@ class SlotExtractor {
         Self.logger.info("🎯 Final slots: \(slots) (confidence: \(String(format: "%.2f", confidence)))")
         
         return SlotExtractionResult(slots: slots, confidence: confidence)
-    }
-    
-    private func preprocessText(_ text: String) -> String {
+    }    private func preprocessText(_ text: String) -> String {
         var processed = text
         
-        // Normalize common variations (from Kotlin implementation)
+        // Normalize common variations (from Python implementation)
         processed = processed.replacingOccurrences(of: "\\bhow\\s+much\\s+did\\s+i\\s+walk", with: "walking distance", options: .regularExpression)
         processed = processed.replacingOccurrences(of: "\\bhow\\s+many\\s+steps", with: "steps", options: .regularExpression)
         processed = processed.replacingOccurrences(of: "\\bhow\\s+far\\s+did\\s+i\\s+walk", with: "walking distance", options: .regularExpression)
@@ -369,7 +399,6 @@ class SlotExtractor {
         // Direct synonym matching on processed text first
         for (metric, pattern) in synonymPatterns {
             if pattern.numberOfMatches(in: processedText, options: [], range: NSRange(location: 0, length: processedText.count)) > 0 {
-                Self.logger.info("  📏 Found metric '\(metric)' via synonym pattern in processed text")
                 return metric
             }
         }
@@ -377,7 +406,6 @@ class SlotExtractor {
         // Fallback to original text
         for (metric, pattern) in synonymPatterns {
             if pattern.numberOfMatches(in: originalText, options: [], range: NSRange(location: 0, length: originalText.count)) > 0 {
-                Self.logger.info("  📏 Found metric '\(metric)' via synonym pattern in original text")
                 return metric
             }
         }
@@ -426,27 +454,39 @@ class SlotExtractor {
         let timePatterns: [String: String] = [
             "last night": "\\blast\\s+night\\b|\\bduring\\s+(?:the\\s+)?night\\b|\\bovernight\\b|\\bnight\\s+time\\b|\\bnighttime\\b|\\bat\\s+night\\b|\\bthrough(?:out)?\\s+(?:the\\s+)?night\\b|\\ball\\s+night\\b|\\bpast\\s+night\\b|\\bprevious\\s+night\\b|\\bthe\\s+other\\s+night\\b|\\blast\\s+evening\\b|\\byesterday\\s+night\\b|\\byesterday\\s+evening\\b|\\blate\\s+yesterday\\b|\\bafter\\s+dark\\b|\\bwhile\\s+(?:I\\s+)?sleep(?:ing)?\\b|\\bduring\\s+(?:my\\s+)?sleep\\b|\\bsleep(?:ing)?\\s+(?:hours|time|period)\\b|\\bin\\s+bed\\b|\\bwhilst\\s+asleep\\b|\\bwhen\\s+(?:I\\s+)?(?:was\\s+)?asleep\\b|\\bbedtime\\b",
             
-            "yesterday": "\\byesterday\\b(?!\\s+(?:night|evening))|\\blast\\s+day\\b|\\bprevious\\s+day\\b|\\bday\\s+before\\b|\\b1\\s+day\\s+ago\\b|\\bone\\s+day\\s+ago\\b|\\ba\\s+day\\s+ago\\b|\\bthe\\s+day\\s+before\\b|\\bprior\\s+day\\b|\\bthe\\s+previous\\s+day\\b|\\b24\\s+hours\\s+ago\\b|\\byesterdays\\b|\\byesterday's\\b|\\bthe\\s+other\\s+day\\b|\\bday\\s+prior\\b|\\bthe\\s+last\\s+day\\b|\\bpast\\s+day\\b|\\bthe\\s+day\\s+that\\s+was\\b|\\bthe\\s+preceding\\s+day\\b|\\bmost\\s+recent\\s+day\\b|\\bthe\\s+latest\\s+day\\b|\\bjust\\s+yesterday\\b|\\bonly\\s+yesterday\\b|\\bback\\s+yesterday\\b",
+            "yesterday": "\\byesterday\\b(?!\\s+(?:night|evening|morning|afternoon))|\\blast\\s+day\\b|\\bprevious\\s+day\\b|\\bday\\s+before\\b|\\b1\\s+day\\s+ago\\b|\\bone\\s+day\\s+ago\\b|\\ba\\s+day\\s+ago\\b|\\bthe\\s+day\\s+before\\b|\\bprior\\s+day\\b|\\bthe\\s+previous\\s+day\\b|\\b24\\s+hours\\s+ago\\b|\\byesterdays?\\b|\\bthe\\s+other\\s+day\\b|\\bday\\s+prior\\b|\\bthe\\s+last\\s+day\\b|\\bpast\\s+day\\b|\\bthe\\s+preceding\\s+day\\b|\\bmost\\s+recent\\s+day\\b|\\bjust\\s+yesterday\\b|\\bonly\\s+yesterday\\b|\\bback\\s+yesterday\\b|\\byesterday\\s+morning\\b|\\byesterday\\s+am\\b|\\bmorning\\s+yesterday\\b|\\byesterday\\s+in\\s+the\\s+morning\\b|\\byesterday\\s+early\\b|\\byesterday\\s+at\\s+dawn\\b|\\bearly\\s+yesterday\\b|\\byesterday\\s+daybreak\\b|\\byesterday\\s+sunrise\\b|\\byesterday\\s+first\\s+thing\\b|\\byesterday\\s+afternoon\\b|\\byesterday\\s+pm\\b|\\bafternoon\\s+yesterday\\b|\\byesterday\\s+in\\s+the\\s+afternoon\\b|\\byesterday\\s+midday\\b|\\byesterday\\s+noon\\b|\\byesterday\\s+lunchtime\\b|\\byesterday\\s+mid[\\s-]?day\\b|\\byesterday\\s+evening\\b|\\bevening\\s+yesterday\\b|\\byesterday\\s+in\\s+the\\s+evening\\b|\\byesterday\\s+at\\s+night\\b|\\blate\\s+yesterday\\b|\\byesterday\\s+dusk\\b|\\byesterday\\s+twilight\\b|\\byesterday\\s+sundown\\b|\\byesterday\\s+nightfall\\b",
             
-            "yesterday morning": "\\byesterday\\s+morning\\b|\\bmorning\\s+yesterday\\b|\\byesterday\\s+am\\b|\\byesterday\\s+in\\s+the\\s+morning\\b|\\bthe\\s+morning\\s+yesterday\\b|\\bearly\\s+yesterday\\b|\\byesterday\\s+early\\b|\\byesterday\\s+dawn\\b|\\byesterday\\s+daybreak\\b|\\byesterday\\s+sunrise\\b|\\byesterday\\s+before\\s+noon\\b",
+            "now": "\\bnow\\b|\\bright\\s+now\\b|\\bat\\s+(?:this\\s+)?moment\\b|\\bthis\\s+instant\\b|\\bimmediately\\b|\\binstantly\\b|\\bright\\s+away\\b|\\bright\\s+at\\s+this\\s+moment\\b|\\bat\\s+the\\s+current\\s+time\\b|\\bthis\\s+very\\s+moment\\b|\\bcurrent\\s+time\\b|\\bthe\\s+present\\s+moment\\b|\\bright\\s+here\\b|\\bright\\s+at\\s+this\\s+instant\\b",
             
-            "yesterday afternoon": "\\byesterday\\s+afternoon\\b|\\bafternoon\\s+yesterday\\b|\\byesterday\\s+pm\\b|\\byesterday\\s+in\\s+the\\s+afternoon\\b|\\bthe\\s+afternoon\\s+yesterday\\b|\\byesterday\\s+after\\s+noon\\b|\\byesterday\\s+midday\\b|\\byesterday\\s+mid-day\\b|\\byesterday\\s+noon\\b|\\byesterday\\s+lunch\\s+time\\b",
+            "today": "\\btoday\\b(?!\\s+(?:morning|afternoon|evening|night))|\\bcurrently\\b|\\bthis\\s+day\\b|\\bat\\s+present\\b|\\bso\\s+far\\s+today\\b|\\btodays?\\b|\\bcurrent\\s+day\\b|\\bas\\s+of\\s+today\\b|\\btill\\s+now\\b|\\bup\\s+to\\s+now\\b|\\bpresently\\b|\\bat\\s+this\\s+time\\b|\\bthis\\s+very\\s+day\\b|\\bthe\\s+present\\s+day\\b|\\bfor\\s+today\\b|\\bon\\s+this\\s+day\\b|\\bsince\\s+midnight\\b|\\bso\\s+far\\b|\\buntil\\s+now\\b|\\bas\\s+of\\s+now\\b|\\blater\\s+today\\b|\\bend\\s+of\\s+(?:the\\s+)?day\\b",
             
-            "yesterday evening": "\\byesterday\\s+evening\\b|\\bevening\\s+yesterday\\b|\\byesterday\\s+in\\s+the\\s+evening\\b|\\bthe\\s+evening\\s+yesterday\\b|\\byesterday\\s+at\\s+night\\b|\\byesterday\\s+dusk\\b|\\byesterday\\s+twilight\\b|\\byesterday\\s+sunset\\b|\\byesterday\\s+after\\s+dark\\b|\\blast\\s+evening\\b",
+            "last week": "\\blast\\s+week\\b|\\bpast\\s+week\\b|\\bprevious\\s+week\\b|\\bthe\\s+week\\s+before\\b|\\bprior\\s+week\\b|\\b1\\s+week\\s+ago\\b|\\bone\\s+week\\s+ago\\b|\\ba\\s+week\\s+ago\\b|\\bweek\\s+prior\\b|\\bthe\\s+last\\s+week\\b|\\bthe\\s+past\\s+week\\b|\\bthe\\s+previous\\s+week\\b|\\b7\\s+days\\s+ago\\b|\\blast\\s+weeks?\\b|\\bthe\\s+preceding\\s+week\\b|\\bmost\\s+recent\\s+week\\b|\\blatest\\s+week\\b|\\bformer\\s+week\\b|\\bearlier\\s+week\\b|\\bthe\\s+other\\s+week\\b|\\bduring\\s+last\\s+week\\b|\\bthroughout\\s+last\\s+week\\b|\\bover\\s+last\\s+week\\b|\\bback\\s+last\\s+week\\b",
             
-            "today": "\\btoday\\b|\\bnow\\b|\\bcurrently\\b|\\bthis\\s+day\\b|\\bpresent\\b|\\bright\\s+now\\b|\\bat\\s+present\\b|\\bso\\s+far\\s+today\\b|\\btoday's\\b|\\bcurrent\\s+day\\b|\\bas\\s+of\\s+today\\b|\\btill\\s+now\\b|\\bup\\s+to\\s+now\\b|\\bat\\s+the\\s+moment\\b|\\bpresently\\b|\\bat\\s+this\\s+time\\b|\\bthis\\s+very\\s+day\\b|\\bthe\\s+present\\s+day\\b|\\bnowadays\\b|\\bin\\s+the\\s+present\\b|\\bfor\\s+today\\b|\\bon\\s+this\\s+day\\b|\\btodays\\b|\\bsince\\s+midnight\\b",
+            "tomorrow": "\\btomorrow\\b|\\bnext\\s+day\\b|\\bthe\\s+day\\s+after\\b|\\bday\\s+after\\b|\\btomorrow\\s+morning\\b|\\btomorrow\\s+afternoon\\b|\\btomorrow\\s+evening\\b|\\btomorrow\\s+night\\b|\\bcoming\\s+day\\b|\\bupcoming\\s+day\\b|\\bfuture\\s+day\\b|\\bthe\\s+following\\s+day\\b|\\b24\\s+hours\\s+from\\s+now\\b|\\bin\\s+24\\s+hours\\b|\\bby\\s+tomorrow\\b|\\btill\\s+tomorrow\\b|\\buntil\\s+tomorrow\\b",
             
-            "this morning": "\\bthis\\s+morning\\b|\\bmorning\\b|\\bam\\b|\\bearly\\s+today\\b|\\bearlier\\s+today\\b|\\bthis\\s+am\\b|\\btoday\\s+morning\\b|\\bin\\s+the\\s+morning\\b|\\bmorning\\s+time\\b|\\bmornings\\b|\\bearly\\s+hours\\b|\\bbefore\\s+noon\\b|\\bdawn\\b|\\bdaybreak\\b|\\bsunrise\\b|\\bfirst\\s+thing\\b|\\bearly\\s+on\\b|\\bat\\s+dawn\\b|\\bmorning\\s+hours\\b|\\bstart\\s+of\\s+day\\b|\\bbeginning\\s+of\\s+day\\b|\\bwaking\\s+hours\\b|\\bafter\\s+waking\\b|\\bupon\\s+waking\\b|\\bsince\\s+waking\\b",
+            "this morning": "\\bthis\\s+morning\\b|\\bmorning\\b(?!\\s+(?:yesterday|tomorrow|next|last|this\\s+(?:afternoon|evening|week|month|year)))|\\bearly\\s+today\\b|\\btoday\\s+morning\\b|\\bin\\s+the\\s+morning\\b|\\bthis\\s+am\\b|\\bearly\\s+hours\\b|\\bdawn\\b|\\bsunrise\\b|\\bdaybreak\\b|\\bfirst\\s+thing\\b|\\bright\\s+after\\s+waking\\b|\\bupon\\s+waking\\b|\\bsince\\s+waking\\b",
             
-            "this afternoon": "\\bthis\\s+afternoon\\b|\\bafternoon\\b|\\bpm\\b|\\bafter\\s+noon\\b|\\bmidday\\b|\\bmid-day\\b|\\bnoon\\s+time\\b|\\blunch\\s+time\\b|\\bpost\\s+meridiem\\b|\\bin\\s+the\\s+afternoon\\b|\\bafternoon\\s+time\\b|\\bafternoons\\b|\\bmid\\s+day\\b|\\bafter\\s+lunch\\b|\\bthis\\s+pm\\b|\\btoday\\s+afternoon\\b",
+            "this afternoon": "\\bthis\\s+afternoon\\b|\\bafternoon\\b(?!\\s+(?:yesterday|tomorrow|next|last|this\\s+(?:morning|evening|week|month|year)))|\\btoday\\s+afternoon\\b|\\bin\\s+the\\s+afternoon\\b|\\bthis\\s+pm\\b|\\bafter\\s+noon\\b|\\bmidday\\b|\\bmid[\\s-]?day\\b|\\bnoon\\b|\\blunchtime\\b|\\blate\\s+morning\\b|\\bearly\\s+afternoon\\b",
             
-            "this evening": "\\bthis\\s+evening\\b|\\bevening\\b|\\btonight\\b|\\bat\\s+night\\b|\\bdusk\\b|\\btwilight\\b|\\bsunset\\b|\\bafter\\s+dark\\b|\\bnightfall\\b|\\bin\\s+the\\s+evening\\b|\\bevening\\s+time\\b|\\bevenings\\b|\\bthis\\s+night\\b|\\btoday\\s+evening\\b|\\btoday\\s+night\\b|\\blate\\s+today\\b|\\bend\\s+of\\s+day\\b",
+            "this evening": "\\bthis\\s+evening\\b|\\bevening\\b(?!\\s+(?:yesterday|tomorrow|next|last|this\\s+(?:morning|afternoon|week|month|year)))|\\btonight\\b|\\btoday\\s+evening\\b|\\bin\\s+the\\s+evening\\b|\\blater\\s+today\\b|\\bend\\s+of\\s+day\\b|\\bafter\\s+work\\b|\\bdusk\\b|\\btwilight\\b|\\bsundown\\b|\\bsunset\\b|\\bnightfall\\b|\\bafter\\s+dark\\b",
             
-            "this week": "\\bthis\\s+week\\b|\\bcurrent\\s+week\\b|\\bweekly\\b|\\bso\\s+far\\s+this\\s+week\\b|\\bweek\\s+to\\s+date\\b|\\bwtd\\b|\\bthe\\s+week\\b|\\bpresent\\s+week\\b|\\bthe\\s+current\\s+week\\b|\\bin\\s+this\\s+week\\b|\\bfor\\s+the\\s+week\\b|\\bthroughout\\s+the\\s+week\\b|\\bduring\\s+the\\s+week\\b|\\bover\\s+the\\s+week\\b|\\b7\\s+days\\b|\\bpast\\s+7\\s+days\\b|\\blast\\s+7\\s+days\\b|\\bthese\\s+7\\s+days\\b|\\bthis\\s+weeks\\b|\\bthis\\s+week's\\b|\\bsince\\s+monday\\b|\\bweek\\s+so\\s+far\\b|\\btill\\s+now\\s+this\\s+week\\b|\\bup\\s+to\\s+now\\s+this\\s+week\\b|\\bweekly\\s+total\\b",
+            "this week": "\\bthis\\s+week\\b|\\bcurrent\\s+week\\b|\\bweek\\s+so\\s+far\\b|\\btill\\s+now\\s+this\\s+week\\b|\\bup\\s+to\\s+now\\s+this\\s+week\\b|\\bweekly\\s+total\\b|\\bweek\\s+to\\s+date\\b|\\bthis\\s+weeks?\\b|\\bongoing\\s+week\\b|\\bpresent\\s+week\\b|\\bwithin\\s+this\\s+week\\b|\\bduring\\s+this\\s+week\\b|\\bthroughout\\s+this\\s+week\\b|\\bover\\s+this\\s+week\\b",
             
-            "last week": "\\blast\\s+week\\b|\\bpast\\s+week\\b|\\bprevious\\s+week\\b|\\bthe\\s+week\\s+before\\b|\\bprior\\s+week\\b|\\b1\\s+week\\s+ago\\b|\\bone\\s+week\\s+ago\\b|\\ba\\s+week\\s+ago\\b|\\bweek\\s+prior\\b|\\bthe\\s+last\\s+week\\b|\\bthe\\s+past\\s+week\\b|\\bthe\\s+previous\\s+week\\b|\\b7\\s+days\\s+ago\\b|\\blast\\s+weeks\\b|\\blast\\s+week's\\b|\\bthe\\s+preceding\\s+week\\b|\\bmost\\s+recent\\s+week\\b|\\blatest\\s+week\\b|\\bformer\\s+week\\b|\\bearlier\\s+week\\b|\\bthe\\s+other\\s+week\\b|\\bback\\s+last\\s+week\\b|\\bduring\\s+last\\s+week\\b|\\bthroughout\\s+last\\s+week\\b|\\bover\\s+last\\s+week\\b",
+            "this month": "\\bthis\\s+month\\b|\\bcurrent\\s+month\\b|\\bmonth\\s+so\\s+far\\b|\\btill\\s+now\\s+this\\s+month\\b|\\bup\\s+to\\s+now\\s+this\\s+month\\b|\\bmonthly\\s+total\\b|\\bmonth\\s+to\\s+date\\b|\\bthis\\s+months?\\b|\\bongoing\\s+month\\b|\\bpresent\\s+month\\b|\\bwithin\\s+this\\s+month\\b|\\bduring\\s+this\\s+month\\b|\\bthroughout\\s+this\\s+month\\b|\\bover\\s+this\\s+month\\b",
             
-            "this month": "\\bthis\\s+month\\b|\\bcurrent\\s+month\\b|\\bmonthly\\b|\\bso\\s+far\\s+this\\s+month\\b|\\bmonth\\s+to\\s+date\\b|\\bmtd\\b|\\bthe\\s+month\\b|\\bpresent\\s+month\\b|\\bthe\\s+current\\s+month\\b|\\bin\\s+this\\s+month\\b|\\bfor\\s+the\\s+month\\b|\\bthroughout\\s+the\\s+month\\b|\\bduring\\s+the\\s+month\\b|\\bover\\s+the\\s+month\\b|\\b30\\s+days\\b|\\bpast\\s+30\\s+days\\b|\\blast\\s+30\\s+days\\b|\\bthese\\s+30\\s+days\\b|\\bthis\\s+months\\b|\\bthis\\s+month's\\b|\\bsince\\s+the\\s+1st\\b|\\bmonth\\s+so\\s+far\\b|\\btill\\s+now\\s+this\\s+month\\b|\\bup\\s+to\\s+now\\s+this\\s+month\\b|\\bmonthly\\s+total\\b"
+            "last month": "\\blast\\s+month\\b|\\bpast\\s+month\\b|\\bprevious\\s+month\\b|\\bthe\\s+month\\s+before\\b|\\bprior\\s+month\\b|\\b1\\s+month\\s+ago\\b|\\bone\\s+month\\s+ago\\b|\\ba\\s+month\\s+ago\\b|\\bmonth\\s+prior\\b|\\bthe\\s+last\\s+month\\b|\\bthe\\s+past\\s+month\\b|\\bthe\\s+previous\\s+month\\b|\\blast\\s+months?\\b|\\bthe\\s+preceding\\s+month\\b|\\bmost\\s+recent\\s+month\\b|\\blatest\\s+month\\b|\\bformer\\s+month\\b|\\bearlier\\s+month\\b|\\bthe\\s+other\\s+month\\b|\\bduring\\s+last\\s+month\\b|\\bthroughout\\s+last\\s+month\\b|\\bover\\s+last\\s+month\\b|\\bback\\s+last\\s+month\\b",
+            
+            "next week": "\\bnext\\s+week\\b|\\bcoming\\s+week\\b|\\bupcoming\\s+week\\b|\\bfollowing\\s+week\\b|\\bweek\\s+ahead\\b|\\bthe\\s+next\\s+7\\s+days\\b|\\bin\\s+a\\s+week\\b|\\ba\\s+week\\s+from\\s+now\\b|\\b7\\s+days\\s+from\\s+now\\b|\\bnext\\s+weeks?\\b|\\bfuture\\s+week\\b|\\bforthcoming\\s+week\\b",
+            
+            "next month": "\\bnext\\s+month\\b|\\bcoming\\s+month\\b|\\bupcoming\\s+month\\b|\\bfollowing\\s+month\\b|\\bmonth\\s+ahead\\b|\\bthe\\s+next\\s+30\\s+days\\b|\\bin\\s+a\\s+month\\b|\\ba\\s+month\\s+from\\s+now\\b|\\b30\\s+days\\s+from\\s+now\\b|\\bnext\\s+months?\\b|\\bfuture\\s+month\\b|\\bforthcoming\\s+month\\b",
+            
+            "recently": "\\brecently\\b|\\blately\\b|\\bof\\s+late\\b|\\bin\\s+recent\\s+times\\b|\\bthese\\s+days\\b|\\bthe\\s+past\\s+few\\s+days\\b|\\bthe\\s+last\\s+few\\s+days\\b|\\brecent\\s+days\\b|\\bjust\\s+recently\\b|\\bnot\\s+long\\s+ago\\b|\\ba\\s+short\\s+while\\s+ago\\b|\\bwithin\\s+the\\s+past\\s+few\\s+days\\b|\\bover\\s+the\\s+past\\s+few\\s+days\\b",
+            
+            "all time": "\\ball\\s+time\\b|\\ball-time\\b|\\bever\\b|\\ball\\s+history\\b|\\bsince\\s+(?:the\\s+)?beginning\\b|\\bfrom\\s+(?:the\\s+)?start\\b|\\bthroughout\\s+history\\b|\\blifetime\\b|\\ball\\s+my\\s+life\\b|\\bsince\\s+I\\s+(?:started|begun|began)\\b|\\bfrom\\s+day\\s+one\\b|\\bsince\\s+inception\\b|\\ball\\s+records\\b|\\ball\\s+data\\b|\\bcomplete\\s+history\\b|\\bfull\\s+history\\b",
+            
+            "this year": "\\bthis\\s+year\\b|\\bcurrent\\s+year\\b|\\byear\\s+so\\s+far\\b|\\btill\\s+now\\s+this\\s+year\\b|\\bup\\s+to\\s+now\\s+this\\s+year\\b|\\byearly\\s+total\\b|\\byear\\s+to\\s+date\\b|\\bthis\\s+years?\\b|\\bongoing\\s+year\\b|\\bpresent\\s+year\\b|\\bwithin\\s+this\\s+year\\b|\\bduring\\s+this\\s+year\\b|\\bthroughout\\s+this\\s+year\\b|\\bover\\s+this\\s+year\\b",
+            
+            "last year": "\\blast\\s+year\\b|\\bpast\\s+year\\b|\\bprevious\\s+year\\b|\\bthe\\s+year\\s+before\\b|\\bprior\\s+year\\b|\\b1\\s+year\\s+ago\\b|\\bone\\s+year\\s+ago\\b|\\ba\\s+year\\s+ago\\b|\\byear\\s+prior\\b|\\bthe\\s+last\\s+year\\b|\\bthe\\s+past\\s+year\\b|\\bthe\\s+previous\\s+year\\b|\\blast\\s+years?\\b|\\bthe\\s+preceding\\s+year\\b|\\bmost\\s+recent\\s+year\\b|\\blatest\\s+year\\b|\\bformer\\s+year\\b|\\bearlier\\s+year\\b|\\bthe\\s+other\\s+year\\b|\\bduring\\s+last\\s+year\\b|\\bthroughout\\s+last\\s+year\\b|\\bover\\s+last\\s+year\\b|\\bback\\s+last\\s+year\\b"
         ]
         
         for (timeRef, pattern) in timePatterns {
@@ -460,10 +500,10 @@ class SlotExtractor {
     
     private func extractQualifier(text: String) -> String? {
         let qualifierPatterns: [String: String] = [
-            "minimum": "\\b(?:minimum|min|lowest|least|bottom|bare minimum|minimal|minimally|rock bottom|floor|base|baseline|low point|lower|smallest|tiniest|fewest|less|lesser|reduced|at least|no less than|starting from|beginning at|from|low|lows|worst|slowest)\\b",
-            "maximum": "\\b(?:maximum|max|highest|most|peak|top|maximal|maximally|ceiling|upper limit|high point|higher|greatest|largest|biggest|best|record|all time high|at most|no more than|up to|limit|cap|high|highs|fastest|extreme|topmost|ultimate)\\b",
-            "average": "\\b(?:average|avg|mean|typical|normal|averaged|averaging|median|mid|middle|midpoint|central|moderate|standard|regular|usual|common|ordinary|per day|daily average|on average|typically|normally|generally|approximately|around|about|roughly)\\b",
-            "total": "\\b(?:total|sum|overall|complete|entire|totaled|totaling|all|all time|full|whole|combined|cumulative|aggregate|collectively|together|in total|altogether|grand total|summation|net|gross|comprehensive|accumulated|compilation|tally|count|running total)\\b"
+            "minimum": "\\b(?:minimum|min|lowest|least|bottom|smallest|bare minimum|minimal|minimally|rock bottom|floor|base|baseline|low point|lower|tiniest|fewest|less|lesser|reduced|at least|no less than|starting from|beginning at|from|low|lows|worst|slowest|minimum value|min value|floor value|bottom line|rock-bottom|absolute minimum|very least|bare min)\\b",
+            "maximum": "\\b(?:maximum|max|highest|most|peak|top|largest|biggest|maximal|maximally|ceiling|upper limit|high point|higher|greatest|best|record|all time high|at most|no more than|up to|limit|cap|high|highs|fastest|extreme|topmost|ultimate|max value|maximum value|ceiling value|top line|all-time high|absolute maximum|very most|max out)\\b",
+            "average": "\\b(?:average|avg|mean|typical|normal|averaged|averaging|median|mid|middle|midpoint|central|moderate|standard|regular|usual|common|ordinary|per day|daily average|on average|typically|normally|generally|approximately|around|about|roughly|average value|mean value|avg value|in average|on avg|medium|middling|fair)\\b",
+            "total": "\\b(?:total|sum|overall|complete|entire|all|totaled|totaling|all time|full|whole|combined|cumulative|aggregate|collectively|together|in total|altogether|grand total|summation|net|gross|comprehensive|accumulated|compilation|tally|count|running total|total value|sum total|total amount|cumulative total|overall total|combined total|full total|net total)\\b"
         ]
         
         for (qualifier, pattern) in qualifierPatterns {
@@ -499,6 +539,34 @@ class SlotExtractor {
             return "bpm"
         }
         
+        if stressRegex.numberOfMatches(in: text, options: [], range: NSRange(location: 0, length: text.count)) > 0 {
+            return "score"
+        }
+        
+        if oxygenRegex.numberOfMatches(in: text, options: [], range: NSRange(location: 0, length: text.count)) > 0 {
+            return "percent"
+        }
+        
+        if sleepRegex.numberOfMatches(in: text, options: [], range: NSRange(location: 0, length: text.count)) > 0 {
+            return "hours"
+        }
+        
+        if sleepQualityRegex.numberOfMatches(in: text, options: [], range: NSRange(location: 0, length: text.count)) > 0 {
+            return "score"
+        }
+        
+        if distanceRegex.numberOfMatches(in: text, options: [], range: NSRange(location: 0, length: text.count)) > 0 {
+            return "distance"
+        }
+        
+        if caloriesRegex.numberOfMatches(in: text, options: [], range: NSRange(location: 0, length: text.count)) > 0 {
+            return "kcal"
+        }
+        
+        if walkingMovementRegex.numberOfMatches(in: text, options: [], range: NSRange(location: 0, length: text.count)) > 0 {
+            return "distance"
+        }
+        
         if weightUnitRegex.numberOfMatches(in: text, options: [], range: NSRange(location: 0, length: text.count)) > 0 {
             return "kg"
         }
@@ -521,19 +589,16 @@ class SlotExtractor {
     private func extractThreshold(text: String) -> Int? {
         // Look for numbers in context
         let numberPatterns = [
-            "\\b(\\d+(?:\\.\\d+)?)\\s*(?:bpm|kg|km|miles?|percent|%|hours?|minutes?|calories?|kcal|steps?|pounds?|lbs?)\\b",
-            "\\b(?:above|over|exceeds?|higher\\s+than|more\\s+than|greater\\s+than|beyond|surpass|surpasses|surpassed|passing|exceed|exceeding|exceeded|cross|crosses|crossed|crossing|top|tops|topped|topping|beat|beats|beaten|beating)\\s+(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(?:below|under|less\\s+than|lower\\s+than|beneath|underneath|drop|drops|dropped|dropping|fall|falls|fell|falling|decrease|decreases|decreased|decreasing|reduce|reduces|reduced|reducing|decline|declines|declined|declining|go\\s+down|goes\\s+down|went\\s+down|going\\s+down)\\s+(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(?:when|if|whenever|once|after|before|upon|as\\s+soon\\s+as|the\\s+moment|the\\s+instant|immediately\\s+when|right\\s+when|just\\s+when|exactly\\s+when).*?(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(?:reaches?|reached|reaching|gets?\\s+to|got\\s+to|getting\\s+to|arrives?\\s+at|arrived\\s+at|arriving\\s+at|hits?|hit|hitting|touches?|touched|touching|meets?|met|meeting|achieves?|achieved|achieving|attains?|attained|attaining)\\s+(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(?:threshold|limit|cap|ceiling|maximum|max|minimum|min|floor|baseline|target|goal|aim|objective|mark|point|level|value|number|figure|amount|quantity|measurement|reading).*?(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(\\d+(?:\\.\\d+)?).*?(?:threshold|limit|cap|ceiling|maximum|max|minimum|min|floor|baseline|target|goal|aim|objective|mark|point|level|value|number|figure|amount|quantity|measurement|reading)\\b",
-            "\\b(?:set|setting|configured|configure|define|defined|defining|establish|established|establishing|create|created|creating|make|made|making|put|putting|place|placed|placing|fix|fixed|fixing|determine|determined|determining|specify|specified|specifying).*?(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(\\d+(?:\\.\\d+)?).*?(?:set|setting|configured|configure|define|defined|defining|establish|established|establishing|create|created|creating|make|made|making|put|putting|place|placed|placing|fix|fixed|fixing|determine|determined|determining|specify|specified|specifying)\\b",
-            "\\b(?:warn|warning|warned|alert|alerts|alerted|alerting|notify|notifies|notified|notifying|inform|informs|informed|informing|tell|tells|told|telling|remind|reminds|reminded|reminding).*?(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(\\d+(?:\\.\\d+)?).*?(?:warn|warning|warned|alert|alerts|alerted|alerting|notify|notifies|notified|notifying|inform|informs|informed|informing|tell|tells|told|telling|remind|reminds|reminded|reminding)\\b",
-            "\\b(?:trigger|triggers|triggered|triggering|activate|activates|activated|activating|start|starts|started|starting|begin|begins|began|beginning|initiate|initiates|initiated|initiating|launch|launches|launched|launching|fire|fires|fired|firing).*?(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(\\d+(?:\\.\\d+)?).*?(?:trigger|triggers|triggered|triggering|activate|activates|activated|activating|start|starts|started|starting|begin|begins|began|beginning|initiate|initiates|initiated|initiating|launch|launches|launched|launching|fire|fires|fired|firing)\\b"
+            "\\b(\\d+(?:\\.\\d+)?)\\s*(?:bpm|beats?\\s+per\\s+minute|kg|kgs|kilogram|kilograms|pounds?|lbs?|lb|km|kms|kilometer|kilometers|kilometre|kilometres|miles?|mi|meter|meters|metre|metres|m|feet|foot|ft|percent|%|percentage|hours?|hrs?|hr|h|minutes?|mins?|min|seconds?|secs?|sec|s|kcal|calories?|cal|cals|steps?|grams?|g|liters?|litres?|l|ltr)\\b",
+            "\\b(?:above|over|exceeds?|exceeded|exceeding|higher\\s+than|more\\s+than|greater\\s+than|beyond|past|upwards?\\s+of|in\\s+excess\\s+of|surpass(?:es|ed|ing)?|top(?:s|ped|ping)?|beat(?:s|ing)?|outperform(?:s|ed|ing)?|at\\s+least|minimum\\s+of|no\\s+less\\s+than|starting\\s+from|from|upward\\s+of)\\s+(\\d+(?:\\.\\d+)?)\\b",
+            "\\b(?:below|under|less\\s+than|lower\\s+than|fewer\\s+than|beneath|short\\s+of|shy\\s+of|down\\s+to|up\\s+to|no\\s+more\\s+than|at\\s+most|maximum\\s+of|capped\\s+at|limited\\s+to|within|not\\s+exceeding|doesn'?t\\s+exceed|under\\s+the|below\\s+the|inferior\\s+to)\\s+(\\d+(?:\\.\\d+)?)\\b",
+            "\\b(?:around|about|approximately|roughly|nearly|close\\s+to|near|almost|circa|approx\\.?|~|somewhere\\s+around|in\\s+the\\s+region\\s+of|in\\s+the\\s+ballpark\\s+of|give\\s+or\\s+take|or\\s+so|ish)\\s+(\\d+(?:\\.\\d+)?)\\b",
+            "\\b(?:between|from)\\s+(\\d+(?:\\.\\d+)?)\\s+(?:to|and|through|-|–)\\s+(\\d+(?:\\.\\d+)?)\\b",
+            "\\b(?:exactly|precisely|just|only|specifically|right\\s+at|dead\\s+on|on\\s+the\\s+dot|bang\\s+on|spot\\s+on)\\s+(\\d+(?:\\.\\d+)?)\\b",
+            "\\b(\\d+(?:\\.\\d+)?)\\s+(?:or\\s+(?:more|less|above|below|over|under|higher|lower|greater|fewer)?)\\b",
+            "\\b(?:increased?|decreased?|dropped?|rose|raised?|fell|climbed?|went\\s+up|went\\s+down|gained?|lost)\\s+(?:by|to)?\\s+(\\d+(?:\\.\\d+)?)\\b",
+            "\\b(?:target|goal|aim|objective|hit|reach(?:ed)?|achieve(?:d)?|attain(?:ed)?|get\\s+to|make\\s+it\\s+to)\\s+(\\d+(?:\\.\\d+)?)\\b",
+            "\\b(\\d+(?:\\.\\d+)?)\\s+(?:steps?|calories?|hours?|minutes?|kg|pounds?|km|miles?|bpm|percent)\\b"
         ]
         
         for pattern in numberPatterns {
@@ -565,30 +630,17 @@ class SlotExtractor {
     
     private func extractTarget(text: String) -> Int? {
         let goalPatterns = [
-            "\\b(?:goal|target|aim|objective|purpose|intention|plan|ambition|aspiration|desire|want|wish|hope|dream|vision|mission).*?(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(\\d+(?:\\.\\d+)?).*?(?:goal|target|aim|objective|purpose|intention|plan|ambition|aspiration|desire|want|wish|hope|dream|vision|mission)\\b",
-            "\\b(?:set|setting|change|changing|update|updating|modify|modifying|alter|altering|adjust|adjusting|configure|configuring|establish|establishing|create|creating|make|making|put|putting|place|placing|fix|fixing|determine|determining|specify|specifying|define|defining).*?(?:to|at|for|as|with|into|onto|upon|on|in)\\s*(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(?:to|at|for|as|with|into|onto|upon|on|in)\\s*(\\d+(?:\\.\\d+)?).*?(?:set|setting|change|changing|update|updating|modify|modifying|alter|altering|adjust|adjusting|configure|configuring|establish|establishing|create|creating|make|making|put|putting|place|placing|fix|fixing|determine|determining|specify|specifying|define|defining)\\b",
-            "\\b(\\d+(?:\\.\\d+)?)\\s*(?:steps?|step\\s+count|footsteps?|foot\\s+steps?|paces?|strides?|walk\\s+count|walking\\s+count|number\\s+of\\s+steps?|total\\s+steps?|step\\s+total)\\b",
-            "\\b(?:steps?|step\\s+count|footsteps?|foot\\s+steps?|paces?|strides?|walk\\s+count|walking\\s+count|number\\s+of\\s+steps?|total\\s+steps?|step\\s+total).*?(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(\\d+(?:\\.\\d+)?)\\s*(?:kg|kgs|kilogram|kilograms|kilogramme|kilogrammes|kilo|kilos|k\\.?g\\.?|pounds?|lbs?|lb|pound\\s+weight|#|lbs\\s+weight|lb\\s+weight|grams?|grammes?|g|gm|gms|g\\.?m?\\.?s?\\.?|stone|ounces?|ounce|oz)\\b",
-            "\\b(?:kg|kgs|kilogram|kilograms|kilogramme|kilogrammes|kilo|kilos|k\\.?g\\.?|pounds?|lbs?|lb|pound\\s+weight|#|lbs\\s+weight|lb\\s+weight|grams?|grammes?|g|gm|gms|g\\.?m?\\.?s?\\.?|stone|ounces?|ounce|oz).*?(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(\\d+(?:\\.\\d+)?)\\s*(?:km|kms|kilometer|kilometers|kilometre|kilometres|k\\.?m\\.?|klick|klicks|miles?|mi|mile\\s+distance|mi\\.?|statute\\s+miles?|meters?|metres?|m|meter\\s+distance|metre\\s+distance|m\\.?|feet|foot|ft|f\\.?t\\.?|')\\b",
-            "\\b(?:km|kms|kilometer|kilometers|kilometre|kilometres|k\\.?m\\.?|klick|klicks|miles?|mi|mile\\s+distance|mi\\.?|statute\\s+miles?|meters?|metres?|m|meter\\s+distance|metre\\s+distance|m\\.?|feet|foot|ft|f\\.?t\\.?|').*?(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(\\d+(?:\\.\\d+)?)\\s*(?:hours?|hrs?|hr|h|hour\\s+duration|h\\.?r\\.?s?\\.?|minutes?|mins?|min|minute\\s+duration|min\\.?s?\\.?|seconds?|secs?|sec|s|second\\s+duration|s\\.?e?c?\\.?s?\\.?)\\b",
-            "\\b(?:hours?|hrs?|hr|h|hour\\s+duration|h\\.?r\\.?s?\\.?|minutes?|mins?|min|minute\\s+duration|min\\.?s?\\.?|seconds?|secs?|sec|s|second\\s+duration|s\\.?e?c?\\.?s?\\.?).*?(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(\\d+(?:\\.\\d+)?)\\s*(?:kcal|calories?|calorie|cal|cals|kilocalories?|kilocalorie|food\\s+calories?|dietary\\s+calories?|energy|k\\.?cal)\\b",
-            "\\b(?:kcal|calories?|calorie|cal|cals|kilocalories?|kilocalorie|food\\s+calories?|dietary\\s+calories?|energy|k\\.?cal).*?(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(\\d+(?:\\.\\d+)?)\\s*(?:bpm|beats?\\s+per\\s+minute|heart\\s+rate|pulse\\s+rate|hr|heartbeat|heart\\s+beat|pulse|cardiac\\s+rate|beat\\s+rate|rhythm|heart\\s+rhythm|cardiac\\s+rhythm)\\b",
-            "\\b(?:bpm|beats?\\s+per\\s+minute|heart\\s+rate|pulse\\s+rate|hr|heartbeat|heart\\s+beat|pulse|cardiac\\s+rate|beat\\s+rate|rhythm|heart\\s+rhythm|cardiac\\s+rhythm).*?(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(\\d+(?:\\.\\d+)?)\\s*(?:percent|%|percentage|pct|pc|per\\s+cent|percentile|blood\\s+oxygen|spo2|sp2|spO2)\\b",
-            "\\b(?:percent|%|percentage|pct|pc|per\\s+cent|percentile|blood\\s+oxygen|spo2|sp2|spO2).*?(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(?:reach|reaching|reached|get|getting|got|achieve|achieving|achieved|attain|attaining|attained|hit|hitting|meet|meeting|met|arrive|arriving|arrived|touch|touching|touched|obtain|obtaining|obtained|acquire|acquiring|acquired|gain|gaining|gained|earn|earning|earned|secure|securing|secured|accomplish|accomplishing|accomplished|complete|completing|completed|finish|finishing|finished).*?(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(\\d+(?:\\.\\d+)?).*?(?:reach|reaching|reached|get|getting|got|achieve|achieving|achieved|attain|attaining|attained|hit|hitting|meet|meeting|met|arrive|arriving|arrived|touch|touching|touched|obtain|obtaining|obtained|acquire|acquiring|acquired|gain|gaining|gained|earn|earning|earned|secure|securing|secured|accomplish|accomplishing|accomplished|complete|completing|completed|finish|finishing|finished)\\b",
-            "\\b(?:want|wanting|wanted|need|needing|needed|require|requiring|required|expect|expecting|expected|hope|hoping|hoped|wish|wishing|wished|desire|desiring|desired|aim\\s+for|aiming\\s+for|aimed\\s+for|strive\\s+for|striving\\s+for|strived\\s+for|work\\s+towards|working\\s+towards|worked\\s+towards|shoot\\s+for|shooting\\s+for|shot\\s+for).*?(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(\\d+(?:\\.\\d+)?).*?(?:want|wanting|wanted|need|needing|needed|require|requiring|required|expect|expecting|expected|hope|hoping|hoped|wish|wishing|wished|desire|desiring|desired|aim\\s+for|aiming\\s+for|aimed\\s+for|strive\\s+for|striving\\s+for|strived\\s+for|work\\s+towards|working\\s+towards|worked\\s+towards|shoot\\s+for|shooting\\s+for|shot\\s+for)\\b",
-            "\\b(?:increase|increasing|increased|boost|boosting|boosted|raise|raising|raised|lift|lifting|lifted|elevate|elevating|elevated|enhance|enhancing|enhanced|improve|improving|improved|better|bettering|bettered|upgrade|upgrading|upgraded|advance|advancing|advanced|progress|progressing|progressed|grow|growing|grew|expand|expanding|expanded|extend|extending|extended|amplify|amplifying|amplified|maximize|maximizing|maximized|optimize|optimizing|optimized).*?(?:to|by|up\\s+to|until|till|reaching|hitting|getting\\s+to|arriving\\s+at)\\s*(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(?:to|by|up\\s+to|until|till|reaching|hitting|getting\\s+to|arriving\\s+at)\\s*(\\d+(?:\\.\\d+)?).*?(?:increase|increasing|increased|boost|boosting|boosted|raise|raising|raised|lift|lifting|lifted|elevate|elevating|elevated|enhance|enhancing|enhanced|improve|improving|improved|better|bettering|bettered|upgrade|upgrading|upgraded|advance|advancing|advanced|progress|progressing|progressed|grow|growing|grew|expand|expanding|expanded|extend|extending|extended|amplify|amplifying|amplified|maximize|maximizing|maximized|optimize|optimizing|optimized)\\b"
+            "\\b(?:goal|target|aim|objective|plan|intention|aspiration|ambition|desire|want|wish|hope)\\s*(?:is|of|to|for|at)?\\s*(?:be|reach|hit|achieve|get|make|do)?\\s*(\\d+(?:\\.\\d+)?)\\b",
+            "\\b(?:set|change|update|modify|adjust|edit|configure|make|establish|create|define|specify)\\s*(?:my|the)?\\s*(?:goal|target|aim|objective)?\\s*(?:to|at|as|for)?\\s*(\\d+(?:\\.\\d+)?)\\b",
+            "\\b(?:reach|hit|achieve|attain|get|get\\s+to|make|do|complete|finish|accomplish|meet)\\s*(\\d+(?:\\.\\d+)?)\\s*(?:steps?|kg|kgs|kilogram|kilograms|pounds?|lbs?|km|kms|kilometer|kilometers|miles?|hours?|hrs?|minutes?|mins?|calories?|kcal|bpm)\\b",
+            "\\b(\\d+(?:\\.\\d+)?)\\s*(?:steps?|kg|kgs|kilogram|kilograms|pounds?|lbs?|lb|km|kms|kilometer|kilometers|kilometre|kilometres|miles?|mi|hours?|hrs?|hr|h|minutes?|mins?|min|m|calories?|kcal|cal|cals|bpm|beats?|meter|meters|metre|metres|feet|foot|ft)\\b",
+            "\\b(?:I|i)\\s+(?:want|wanna|need|must|should|have\\s+to|got\\s+to|gotta)\\s+(?:to\\s+)?(?:reach|hit|get|do|achieve|make|walk|run|burn|lose|gain|sleep)\\s*(?:to|at)?\\s*(\\d+(?:\\.\\d+)?)\\b",
+            "\\b(?:trying|attempting|aiming|working|striving|shooting|going)\\s+(?:to|for)\\s+(?:reach|hit|get|do|achieve|make)?\\s*(\\d+(?:\\.\\d+)?)\\b",
+            "\\b(?:daily|weekly|monthly|per\\s+day|each\\s+day|every\\s+day)\\s+(?:goal|target|aim|objective)?\\s*(?:is|of|to)?\\s*(\\d+(?:\\.\\d+)?)\\b",
+            "\\b(?:increase|raise|boost|bump|up|improve|decrease|reduce|lower|drop|cut|bring\\s+down)\\s+(?:to|by)?\\s*(\\d+(?:\\.\\d+)?)\\b",
+            "\\b(?:at\\s+least|minimum\\s+of|no\\s+less\\s+than|minimum|min)\\s*(\\d+(?:\\.\\d+)?)\\b",
+            "\\b(?:need|needs)\\s+to\\s+(?:be|reach|hit|get)\\s*(?:at|to)?\\s*(\\d+(?:\\.\\d+)?)\\b",
+            "\\b(?:suggest|recommend|advise|tell\\s+me|remind\\s+me|notify\\s+me).*?(?:when|if|at)\\s*(\\d+(?:\\.\\d+)?)\\b"
         ]
         
         // Try each pattern
@@ -628,12 +680,16 @@ class SlotExtractor {
     /// - "1030 pm" -> "22:30"
     /// - "2230" -> "22:30"
     /// - "7:30 am" -> "07:30"
+    /// - "5 30 pm" -> "17:30"
+    /// - "5.30 am" -> "05:30"
+    /// - "10:30 a.m." -> "10:30"
     /// - "12:00 pm" -> "12:00"
     /// - "12:00 am" -> "00:00"
+    /// Supports AM/PM formats: am, pm, a.m., p.m., a.m, p.m, a m, p m
     private func normalizeTimeFormat(_ timeString: String) -> String {
         let cleanTime = timeString.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         
-        // Pattern for times like "730", "1030", "2230" (3-4 digits)
+        // Pattern for times like "730", "1030", "2230" (3-4 digits) without AM/PM
         if let regex = try? NSRegularExpression(pattern: "^(\\d{3,4})$"),
            let match = regex.firstMatch(in: cleanTime, range: NSRange(cleanTime.startIndex..., in: cleanTime)) {
             if let range = Range(match.range(at: 1), in: cleanTime) {
@@ -652,14 +708,15 @@ class SlotExtractor {
             }
         }
         
-        // Pattern for times like "730 pm", "1030 am"
-        let amPmPattern = "^(\\d{1,4})\\s*(am|pm)$"
+        // Pattern for times like "730 pm", "1030 am" (digits + space + am/pm)
+        // Supports: am, pm, a.m., p.m., a.m, p.m, a m, p m
+        let amPmPattern = "^(\\d{1,4})\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?))$"
         if let regex = try? NSRegularExpression(pattern: amPmPattern),
            let match = regex.firstMatch(in: cleanTime, range: NSRange(cleanTime.startIndex..., in: cleanTime)) {
-            if let timeRange = Range(match.range(at: 1), in: cleanTime),
-               let amPmRange = Range(match.range(at: 2), in: cleanTime) {
+            if let timeRange = Range(match.range(at: 1), in: cleanTime) {
                 let timeDigits = String(cleanTime[timeRange])
-                let amPm = String(cleanTime[amPmRange])
+                let amPmText = String(cleanTime[cleanTime.index(cleanTime.startIndex, offsetBy: timeDigits.count)...]).trimmingCharacters(in: .whitespaces)
+                let amPm = amPmText.starts(with: "a") ? "am" : "pm"
                 
                 var hour: Int = 0
                 var minute: Int = 0
@@ -689,16 +746,51 @@ class SlotExtractor {
             }
         }
         
+        // Pattern for "5 30 pm" or "5.30 am" format (hour [space|dot] minute am/pm)
+        // Supports: am, pm, a.m., p.m., a.m, p.m, a m, p m
+        let hourMinuteAmPmPattern = "^(\\d{1,2})[\\s.]+?(\\d{1,2})\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?))$"
+        if let regex = try? NSRegularExpression(pattern: hourMinuteAmPmPattern),
+           let match = regex.firstMatch(in: cleanTime, range: NSRange(cleanTime.startIndex..., in: cleanTime)) {
+            if let hourRange = Range(match.range(at: 1), in: cleanTime),
+               let minuteRange = Range(match.range(at: 2), in: cleanTime) {
+                var hour = Int(cleanTime[hourRange]) ?? 0
+                let minute = Int(cleanTime[minuteRange]) ?? 0
+                
+                // Find AM/PM indicator
+                let minuteEndIndex = cleanTime.index(cleanTime.startIndex, offsetBy: NSMaxRange(match.range(at: 2)))
+                let amPmText = String(cleanTime[minuteEndIndex...]).trimmingCharacters(in: .whitespaces)
+                let amPm = amPmText.starts(with: "a") ? "am" : "pm"
+                
+                // Validate hour and minute ranges
+                if hour > 12 || minute >= 60 {
+                    return timeString // Return original if invalid
+                }
+                
+                // Convert to 24-hour format
+                if amPm == "pm" && hour != 12 {
+                    hour += 12
+                } else if amPm == "am" && hour == 12 {
+                    hour = 0
+                }
+                
+                return String(format: "%02d:%02d", hour, minute)
+            }
+        }
+        
         // Pattern for times with colon like "7:30 pm", "10:30 am"
-        let colonAmPmPattern = "^(\\d{1,2}):(\\d{2})\\s*(am|pm)$"
+        // Supports: am, pm, a.m., p.m., a.m, p.m, a m, p m
+        let colonAmPmPattern = "^(\\d{1,2}):(\\d{2})\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?))$"
         if let regex = try? NSRegularExpression(pattern: colonAmPmPattern),
            let match = regex.firstMatch(in: cleanTime, range: NSRange(cleanTime.startIndex..., in: cleanTime)) {
             if let hourRange = Range(match.range(at: 1), in: cleanTime),
-               let minuteRange = Range(match.range(at: 2), in: cleanTime),
-               let amPmRange = Range(match.range(at: 3), in: cleanTime) {
+               let minuteRange = Range(match.range(at: 2), in: cleanTime) {
                 var hour = Int(cleanTime[hourRange]) ?? 0
                 let minute = Int(cleanTime[minuteRange]) ?? 0
-                let amPm = String(cleanTime[amPmRange])
+                
+                // Find AM/PM indicator
+                let minuteEndIndex = cleanTime.index(cleanTime.startIndex, offsetBy: NSMaxRange(match.range(at: 2)))
+                let amPmText = String(cleanTime[minuteEndIndex...]).trimmingCharacters(in: .whitespaces)
+                let amPm = amPmText.starts(with: "a") ? "am" : "pm"
                 
                 // Convert to 24-hour format
                 if amPm == "pm" && hour != 12 {
@@ -725,6 +817,97 @@ class SlotExtractor {
         
         // Return original string if no pattern matches
         return timeString
+    }
+    
+    // MARK: - Timer Duration Normalization Helper
+    
+    /// Normalizes timer duration to seconds
+    /// Examples:
+    /// - "5 min" -> 300 (seconds)
+    /// - "2 hr" -> 7200 (seconds)
+    /// - "1 hour 30 minutes" -> 5400 (seconds)
+    /// - "45 sec" -> 45 (seconds)
+    /// - "1:30" -> 90 (seconds, interpreted as MM:SS)
+    /// - "2:30:45" -> 9045 (seconds, HH:MM:SS)
+    private func normalizeTimerDuration(_ text: String, matchedValue: String) -> Int {
+        let cleanText = text.lowercased()
+        
+        // Check for combined duration patterns first
+        
+        // "1 hour 30 minutes 45 seconds" pattern
+        if let regex = try? NSRegularExpression(pattern: "(\\d+)\\s*(?:hours?|hrs?|hr|h)\\s*(?:and\\s+)?(\\d+)\\s*(?:minutes?|mins?|min|m)\\s*(?:and\\s+)?(\\d+)\\s*(?:seconds?|secs?|sec|s)", options: [.caseInsensitive]),
+           let match = regex.firstMatch(in: cleanText, range: NSRange(cleanText.startIndex..., in: cleanText)) {
+            if let hoursRange = Range(match.range(at: 1), in: cleanText),
+               let minutesRange = Range(match.range(at: 2), in: cleanText),
+               let secondsRange = Range(match.range(at: 3), in: cleanText) {
+                let hours = Int(cleanText[hoursRange]) ?? 0
+                let minutes = Int(cleanText[minutesRange]) ?? 0
+                let seconds = Int(cleanText[secondsRange]) ?? 0
+                return hours * 3600 + minutes * 60 + seconds
+            }
+        }
+        
+        // "1 hour 30 minutes" or "2h 45m" pattern
+        if let regex = try? NSRegularExpression(pattern: "(\\d+)\\s*(?:hours?|hrs?|hr|h)\\s*(?:and\\s+)?(\\d+)\\s*(?:minutes?|mins?|min|m)", options: [.caseInsensitive]),
+           let match = regex.firstMatch(in: cleanText, range: NSRange(cleanText.startIndex..., in: cleanText)) {
+            if let hoursRange = Range(match.range(at: 1), in: cleanText),
+               let minutesRange = Range(match.range(at: 2), in: cleanText) {
+                let hours = Int(cleanText[hoursRange]) ?? 0
+                let minutes = Int(cleanText[minutesRange]) ?? 0
+                return hours * 3600 + minutes * 60
+            }
+        }
+        
+        // "30 minutes 45 seconds" or "30m 45s" pattern
+        if let regex = try? NSRegularExpression(pattern: "(\\d+)\\s*(?:minutes?|mins?|min|m)\\s*(?:and\\s+)?(\\d+)\\s*(?:seconds?|secs?|sec|s)", options: [.caseInsensitive]),
+           let match = regex.firstMatch(in: cleanText, range: NSRange(cleanText.startIndex..., in: cleanText)) {
+            if let minutesRange = Range(match.range(at: 1), in: cleanText),
+               let secondsRange = Range(match.range(at: 2), in: cleanText) {
+                let minutes = Int(cleanText[minutesRange]) ?? 0
+                let seconds = Int(cleanText[secondsRange]) ?? 0
+                return minutes * 60 + seconds
+            }
+        }
+        
+        // Check for time format patterns (MM:SS or HH:MM:SS)
+        
+        // HH:MM:SS format
+        if let regex = try? NSRegularExpression(pattern: "^(\\d+):(\\d+):(\\d+)$"),
+           let match = regex.firstMatch(in: matchedValue.trimmingCharacters(in: .whitespaces), range: NSRange(matchedValue.startIndex..., in: matchedValue)) {
+            if let hoursRange = Range(match.range(at: 1), in: matchedValue),
+               let minutesRange = Range(match.range(at: 2), in: matchedValue),
+               let secondsRange = Range(match.range(at: 3), in: matchedValue) {
+                let hours = Int(matchedValue[hoursRange]) ?? 0
+                let minutes = Int(matchedValue[minutesRange]) ?? 0
+                let seconds = Int(matchedValue[secondsRange]) ?? 0
+                return hours * 3600 + minutes * 60 + seconds
+            }
+        }
+        
+        // MM:SS format (assuming minutes:seconds for timer)
+        if let regex = try? NSRegularExpression(pattern: "^(\\d+):(\\d+)$"),
+           let match = regex.firstMatch(in: matchedValue.trimmingCharacters(in: .whitespaces), range: NSRange(matchedValue.startIndex..., in: matchedValue)) {
+            if let minutesRange = Range(match.range(at: 1), in: matchedValue),
+               let secondsRange = Range(match.range(at: 2), in: matchedValue) {
+                let minutes = Int(matchedValue[minutesRange]) ?? 0
+                let seconds = Int(matchedValue[secondsRange]) ?? 0
+                return minutes * 60 + seconds
+            }
+        }
+        
+        // Check for single unit patterns
+        let cleanedValue = matchedValue.replacingOccurrences(of: "[^\\d.]", with: "", options: .regularExpression)
+        guard let value = Double(cleanedValue) else { return 0 }
+        
+        if cleanText.range(of: "\\b(?:hours?|hrs?|hr|h)\\b", options: .regularExpression) != nil {
+            return Int(value * 3600)
+        } else if cleanText.range(of: "\\b(?:minutes?|mins?|min|m)\\b", options: .regularExpression) != nil {
+            return Int(value * 60)
+        } else if cleanText.range(of: "\\b(?:seconds?|secs?|sec|s)\\b", options: .regularExpression) != nil {
+            return Int(value)
+        } else {
+            return Int(value) // Default to treating as seconds if no unit specified
+        }
     }
     
     
@@ -785,75 +968,114 @@ class SlotExtractor {
             }
             
         case "TimerStopwatch":
-            // Time patterns with comprehensive coverage
+            // Determine if this is a timer (duration) or alarm (specific time) context
+            let isTimerContext = text.range(of: "\\b(?:timer|stopwatch|countdown|count\\s+down)\\b", options: .regularExpression) != nil
+            let isAlarmContext = text.range(of: "\\b(?:alarm|wake|remind|alert)\\b", options: .regularExpression) != nil
+            
             let timePatterns = [
-                "\\b(\\d{1,2}(?::\\d{2})?(?:\\s*[ap]m)?)\\b",
-                "\\b(\\d+)\\s*(?:min|mins|minute|minutes|minute\\s+duration|min\\.?s?\\.?)\\b",
-                "\\b(?:min|mins|minute|minutes|minute\\s+duration|min\\.?s?\\.?).*?(\\d+)\\b",
-                "\\b(\\d+)\\s*(?:hours?|hrs?|hr|h|hour\\s+duration|h\\.?r\\.?s?\\.?)\\b",
-                "\\b(?:hours?|hrs?|hr|h|hour\\s+duration|h\\.?r\\.?s?\\.?).*?(\\d+)\\b",
-                "\\b(\\d+)\\s*(?:seconds?|secs?|sec|s|second\\s+duration|s\\.?e?c?\\.?s?\\.?)\\b",
-                "\\b(?:seconds?|secs?|sec|s|second\\s+duration|s\\.?e?c?\\.?s?\\.?).*?(\\d+)\\b",
-                "\\b(\\d+)\\s*(?:and\\s+)?(?:\\d+)?\\s*(?:min|mins|minute|minutes|minute\\s+duration|min\\.?s?\\.?)\\b",
-                "\\b(\\d+)\\s*(?:hours?|hrs?|hr|h|hour\\s+duration|h\\.?r\\.?s?\\.?)\\s*(?:and\\s+)?(?:\\d+)?\\s*(?:min|mins|minute|minutes|minute\\s+duration|min\\.?s?\\.?)\\b",
-                "\\b(?:for|during|in|after|within|over|under|about|around|approximately|roughly|exactly|precisely|just|only|at\\s+least|at\\s+most|more\\s+than|less\\s+than|up\\s+to|down\\s+to)\\s*(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|minute\\s+duration|min\\.?s?\\.?|hours?|hrs?|hr|h|hour\\s+duration|h\\.?r\\.?s?\\.?|seconds?|secs?|sec|s|second\\s+duration|s\\.?e?c?\\.?s?\\.?)\\b",
-                "\\b(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|minute\\s+duration|min\\.?s?\\.?|hours?|hrs?|hr|h|hour\\s+duration|h\\.?r\\.?s?\\.?|seconds?|secs?|sec|s|second\\s+duration|s\\.?e?c?\\.?s?\\.?).*?(?:for|during|in|after|within|over|under|about|around|approximately|roughly|exactly|precisely|just|only|at\\s+least|at\\s+most|more\\s+than|less\\s+than|up\\s+to|down\\s+to)\\b",
-                "\\b(?:set|setting|start|starting|begin|beginning|create|creating|make|making|put|putting|place|placing|configure|configuring|establish|establishing|initiate|initiating|launch|launching|activate|activating|trigger|triggering|run|running|execute|executing).*?(?:timer|alarm|countdown|stopwatch|clock|time|duration|period).*?(?:for|to|at|in|during|within|over|under|about|around|approximately|roughly|exactly|precisely|just|only|at\\s+least|at\\s+most|more\\s+than|less\\s+than|up\\s+to|down\\s+to)\\s*(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|minute\\s+duration|min\\.?s?\\.?|hours?|hrs?|hr|h|hour\\s+duration|h\\.?r\\.?s?\\.?|seconds?|secs?|sec|s|second\\s+duration|s\\.?e?c?\\.?s?\\.?)\\b",
-                "\\b(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|minute\\s+duration|min\\.?s?\\.?|hours?|hrs?|hr|h|hour\\s+duration|h\\.?r\\.?s?\\.?|seconds?|secs?|sec|s|second\\s+duration|s\\.?e?c?\\.?s?\\.?).*?(?:set|setting|start|starting|begin|beginning|create|creating|make|making|put|putting|place|placing|configure|configuring|establish|establishing|initiate|initiating|launch|launching|activate|activating|trigger|triggering|run|running|execute|executing).*?(?:timer|alarm|countdown|stopwatch|clock|time|duration|period)\\b",
-                "\\b(?:timer|alarm|countdown|stopwatch|clock|time|duration|period).*?(?:set|setting|start|starting|begin|beginning|create|creating|make|making|put|putting|place|placing|configure|configuring|establish|establishing|initiate|initiating|launch|launching|activate|activating|trigger|triggering|run|running|execute|executing).*?(?:for|to|at|in|during|within|over|under|about|around|approximately|roughly|exactly|precisely|just|only|at\\s+least|at\\s+most|more\\s+than|less\\s+than|up\\s+to|down\\s+to)\\s*(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|minute\\s+duration|min\\.?s?\\.?|hours?|hrs?|hr|h|hour\\s+duration|h\\.?r\\.?s?\\.?|seconds?|secs?|sec|s|second\\s+duration|s\\.?e?c?\\.?s?\\.?)\\b",
-                "\\b(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|minute\\s+duration|min\\.?s?\\.?|hours?|hrs?|hr|h|hour\\s+duration|h\\.?r\\.?s?\\.?|seconds?|secs?|sec|s|second\\s+duration|s\\.?e?c?\\.?s?\\.?).*?(?:timer|alarm|countdown|stopwatch|clock|time|duration|period).*?(?:set|setting|start|starting|begin|beginning|create|creating|make|making|put|putting|place|placing|configure|configuring|establish|establishing|initiate|initiating|launch|launching|activate|activating|trigger|triggering|run|running|execute|executing)\\b",
-                "\\b(?:wake\\s+me|alarm\\s+me|alert\\s+me|remind\\s+me|notify\\s+me|call\\s+me|ring\\s+me|buzz\\s+me|ping\\s+me|sound\\s+off|go\\s+off).*?(?:in|after|within|at|for|during)\\s*(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|minute\\s+duration|min\\.?s?\\.?|hours?|hrs?|hr|h|hour\\s+duration|h\\.?r\\.?s?\\.?|seconds?|secs?|sec|s|second\\s+duration|s\\.?e?c?\\.?s?\\.?)\\b",
-                "\\b(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|minute\\s+duration|min\\.?s?\\.?|hours?|hrs?|hr|h|hour\\s+duration|h\\.?r\\.?s?\\.?|seconds?|secs?|sec|s|second\\s+duration|s\\.?e?c?\\.?s?\\.?).*?(?:wake\\s+me|alarm\\s+me|alert\\s+me|remind\\s+me|notify\\s+me|call\\s+me|ring\\s+me|buzz\\s+me|ping\\s+me|sound\\s+off|go\\s+off)\\b",
-                "\\b(?:wait|pause|hold|stop|delay|postpone|suspend|freeze|halt).*?(?:for|during|in|within|over|about|around|approximately|roughly|exactly|precisely|just|only|at\\s+least|at\\s+most|more\\s+than|less\\s+than|up\\s+to|down\\s+to)\\s*(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|minute\\s+duration|min\\.?s?\\.?|hours?|hrs?|hr|h|hour\\s+duration|h\\.?r\\.?s?\\.?|seconds?|secs?|sec|s|second\\s+duration|s\\.?e?c?\\.?s?\\.?)\\b",
-                "\\b(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|minute\\s+duration|min\\.?s?\\.?|hours?|hrs?|hr|h|hour\\s+duration|h\\.?r\\.?s?\\.?|seconds?|secs?|sec|s|second\\s+duration|s\\.?e?c?\\.?s?\\.?).*?(?:wait|pause|hold|stop|delay|postpone|suspend|freeze|halt)\\b",
-                // NEW: Direct time patterns for alarm setting
-                "\\b(?:set|create|make).*?(?:alarm|wake).*?(?:for|at)\\s*(\\d{3,4})(?:\\s*(?:am|pm))?\\b",
-                "\\b(?:set|create|make).*?(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}(?::\\d{2})?)(?:\\s*(?:am|pm))?\\b",
-                "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{3,4})(?:\\s*(?:am|pm))?\\b",
-                "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}(?::\\d{2})?)(?:\\s*(?:am|pm))?\\b"
+                // Space/dot separated time with AM/PM - highest priority for "5 30 pm", "10.30 am" format
+                "\\b(\\d{1,2}[\\s.]+?\\d{1,2}\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?)))\\b",
+                
+                // Time with AM/PM - capture full time including AM/PM
+                "\\b(\\d{1,2}(?::\\d{2})?\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?)))\\b",
+                "\\b(\\d{3,4}\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?)))\\b", // For "1030 pm" format
+                
+                // Duration patterns for timers
+                "\\b(\\d+(?:\\.\\d+)?)\\s*(?:hours?|hrs?|hr|h)\\b",
+                "\\b(\\d+(?:\\.\\d+)?)\\s*(?:minutes?|mins?|min|m)\\b",
+                "\\b(\\d+(?:\\.\\d+)?)\\s*(?:seconds?|secs?|sec|s)\\b",
+                
+                // Combined time patterns
+                "\\b(\\d+)\\s*(?:h|hr|hours?)\\s*(?:and\\s+)?(\\d+)\\s*(?:m|min|minutes?)\\b",
+                "\\b(\\d+)\\s*(?:m|min|minutes?)\\s*(?:and\\s+)?(\\d+)\\s*(?:s|sec|seconds?)\\b",
+                "\\b(\\d+):(\\d+):(\\d+)\\b", // HH:MM:SS format
+                "\\b(\\d+):(\\d+)\\b", // MM:SS or HH:MM format
+                
+                // Duration keywords
+                "\\b(?:for|during|lasting|takes?)\\s+(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
+                
+                // Timer-specific patterns
+                "\\b(?:set|start|begin|run|timer|stopwatch)\\s*(?:for|to|at)?\\s*(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
+                
+                // Alarm-specific patterns - capture full time with AM/PM (prioritize space-separated)
+                "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{1,2}[\\s.]+?\\d{1,2}\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?)))\\b",
+                "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{1,2}(?::\\d{2})?\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?)))\\b",
+                "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{3,4}\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?)))\\b",
+                
+                // "In X time" patterns
+                "\\b(?:in|after|within)\\s+(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
+                
+                // Countdown patterns
+                "\\b(?:countdown|count\\s+down)\\s*(?:from|for)?\\s*(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
+                
+                // Direct time patterns for alarm setting - capture full time with AM/PM (prioritize space-separated)
+                "\\b(?:set|create|make).*?(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}[\\s.]+?\\d{1,2}\\s*(?:am|pm))\\b",
+                "\\b(?:set|create|make).*?(?:alarm|wake).*?(?:for|at)\\s*(\\d{3,4}\\s*(?:am|pm))\\b",
+                "\\b(?:set|create|make).*?(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm))\\b",
+                "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}[\\s.]+?\\d{1,2}\\s*(?:am|pm))\\b",
+                "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{3,4}\\s*(?:am|pm))\\b",
+                "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm))\\b",
+                
+                // Standalone numeric patterns for alarm context (no AM/PM)
+                "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{3,4})\\b",
+                "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}(?::\\d{2})?)\\b"
             ]
             
             for pattern in timePatterns {
-                if let range = text.range(of: pattern, options: .regularExpression) {
-                    let matchedText = String(text[range])
+                if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                   let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) {
                     
-                    // Check for time format (like 3:45 or 3:45pm)
-                    if let timeMatch = matchedText.range(of: "\\d{1,2}(?::\\d{2})?(?:\\s*[ap]m)?", options: .regularExpression) {
-                        let timeString = String(matchedText[timeMatch])
-                        // Normalize the time format to 24-hour HH:MM format
-                        return normalizeTimeFormat(timeString)
-                    }
-                    
-                    // Check for simple numeric times like "730", "1030" etc. in alarm context
-                    if text.range(of: "\\b(?:alarm|wake)", options: .regularExpression) != nil {
-                        if let simpleTimeMatch = matchedText.range(of: "\\b\\d{3,4}\\b", options: .regularExpression) {
-                            let timeString = String(matchedText[simpleTimeMatch])
-                            // If it's in alarm context and looks like a time (3-4 digits), normalize it
-                            if timeString.count >= 3 {
-                                return normalizeTimeFormat(timeString)
+                    // Handle combined time formats for duration (e.g., "1h 30m" or "1:30")
+                    if match.numberOfRanges > 2,
+                       let range2 = Range(match.range(at: 2), in: text),
+                       !String(text[range2]).isEmpty,
+                       text.range(of: "\\b(?:am|pm)\\b", options: .regularExpression) == nil {
+                        
+                        if isTimerContext {
+                            // For timers, convert combined duration to seconds
+                            if let matchRange = Range(match.range, in: text) {
+                                return normalizeTimerDuration(text, matchedValue: String(text[matchRange]))
+                            }
+                        } else {
+                            // For other contexts, return total minutes as before
+                            if let range1 = Range(match.range(at: 1), in: text) {
+                                let hours = Int(text[range1]) ?? 0
+                                let minutes = Int(text[range2]) ?? 0
+                                return String(hours * 60 + minutes)
                             }
                         }
                     }
                     
-                    // Extract number for duration
-                    let matches = try! NSRegularExpression(pattern: "(\\d+(?:\\.\\d+)?)", options: []).matches(in: matchedText, options: [], range: NSRange(location: 0, length: matchedText.count))
-                    if let match = matches.first {
-                        let numberRange = Range(match.range, in: matchedText)!
-                        let numberString = String(matchedText[numberRange])
-                        if let number = Double(numberString) {
-                            return Int(number)
+                    if let timeRange = Range(match.range(at: 1), in: text) {
+                        let timeValue = String(text[timeRange])
+                        
+                        // Check if this is a time format (contains AM/PM or looks like time in alarm context)
+                        let containsAmPm = timeValue.range(of: "\\b(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?))\\b", options: .regularExpression) != nil
+                        let containsSpaceOrDot = timeValue.range(of: "[\\s.]\\d", options: .regularExpression) != nil
+                        let looksLikeTime = timeValue.range(of: "^\\d{3,4}$", options: .regularExpression) != nil || timeValue.contains(":") || containsSpaceOrDot
+                        
+                        if containsAmPm || (isAlarmContext && looksLikeTime) {
+                            // This is an alarm time, normalize to HH:MM format
+                            return normalizeTimeFormat(timeValue)
+                        } else if isTimerContext {
+                            // This is a timer duration, convert to seconds
+                            if let matchRange = Range(match.range, in: text) {
+                                return normalizeTimerDuration(text, matchedValue: String(text[matchRange]))
+                            }
                         }
+                        
+                        // Return the time value for other cases
+                        return timeValue
                     }
                 }
             }
             
-            // Fallback to any number for timers
-            let matches = numberRegex.matches(in: text, options: [], range: NSRange(location: 0, length: text.count))
-            if let match = matches.first {
-                let numberRange = Range(match.range, in: text)!
-                let numberString = String(text[numberRange])
-                if let number = Double(numberString) {
-                    return Int(number)
+            // Fallback to any number
+            let matches = numberSequenceRegex.matches(in: text, options: [], range: NSRange(location: 0, length: text.count))
+            if let match = matches.first,
+               let numberRange = Range(match.range(at: 1), in: text) {
+                if let number = Int(text[numberRange]) {
+                    return number
                 }
             }
             
@@ -896,49 +1118,38 @@ class SlotExtractor {
     
     private func extractFeature(text: String) -> String? {
         let features: [String: String] = [
-            "do not disturb": "\\b(?:do\\s+not\\s+disturb|dnd|silent\\s+mode|quiet\\s+mode|silence|silent|mute|muted|muting|no\\s+disturb|don't\\s+disturb|dont\\s+disturb|undisturbed|peaceful\\s+mode|focus\\s+mode|concentration\\s+mode)\\b",
-            "AOD": "\\b(?:AOD|always\\s+on\\s+display|always-on|always\\s+on|constant\\s+display|persistent\\s+display|continuous\\s+display|permanent\\s+display|screen\\s+always\\s+on|display\\s+always\\s+on|ambient\\s+display|glance\\s+screen|active\\s+display)\\b",
-            "raise to wake": "\\b(?:raise\\s+to\\s+wake|lift\\s+to\\s+wake|tap\\s+to\\s+wake|pick\\s+up\\s+to\\s+wake|motion\\s+to\\s+wake|gesture\\s+to\\s+wake|movement\\s+to\\s+wake|touch\\s+to\\s+wake|auto\\s+wake|smart\\s+wake|intelligent\\s+wake|proximity\\s+wake|sensor\\s+wake|accelerometer\\s+wake)\\b",
-            "vibration": "\\b(?:vibration|vibrate|vibrating|vibrates|vibrated|haptic|haptics|haptic\\s+feedback|tactile|tactile\\s+feedback|buzz|buzzing|buzzes|buzzed|rumble|rumbling|rumbles|rumbled|shake|shaking|shakes|shook|tremor|trembling|trembles|trembled|pulse|pulsing|pulses|pulsed|vibe|vibes|vibing|vibed)\\b",
-            "brightness": "\\b(?:brightness|bright|brighter|brighten|brightest|screen\\s+brightness|display\\s+brightness|backlight|luminosity|luminance|illumination|light\\s+level|intensity|dim|dimmer|dimming|dimmest|dark|darker|darkening|darkest|contrast|gamma|glow|glowing|radiance|brilliance)\\b",
-            "volume": "\\b(?:volume|sound\\s+level|audio\\s+level|sound|audio|loud|louder|loudest|quiet|quieter|quietest|soft|softer|softest|high\\s+volume|low\\s+volume|medium\\s+volume|max\\s+volume|min\\s+volume|mute|muted|muting|unmute|unmuted|unmuting|amplify|amplified|amplifying|boost|boosted|boosting|reduce|reduced|reducing)\\b",
-            "bluetooth": "\\b(?:bluetooth|bt|blue\\s+tooth|wireless|pairing|paired|pair|connect|connected|connecting|connection|disconnect|disconnected|disconnecting|link|linked|linking|sync|synced|syncing|bond|bonded|bonding)\\b",
-            "wifi": "\\b(?:wifi|wi-fi|wi\\s+fi|wireless|wlan|network|internet|connection|connected|connecting|connect|disconnect|disconnected|disconnecting|hotspot|access\\s+point|ssid|router|modem)\\b",
-            "location": "\\b(?:location|gps|positioning|coordinates|navigation|maps|directions|tracking|track|tracked|find\\s+my|location\\s+services|geo|geolocation|latitude|longitude|whereabouts|position|place)\\b",
-            "flashlight": "\\b(?:flashlight|torch|flash|light|led|lamp|illumination|bright\\s+light|emergency\\s+light|pocket\\s+light|portable\\s+light|handheld\\s+light)\\b",
-            "airplane mode": "\\b(?:airplane\\s+mode|flight\\s+mode|aeroplane\\s+mode|air\\s+mode|offline\\s+mode|radio\\s+off|wireless\\s+off|network\\s+off|cellular\\s+off|mobile\\s+off|disconnect\\s+all|isolation\\s+mode)\\b",
-            "mobile data": "\\b(?:mobile\\s+data|cellular\\s+data|data\\s+connection|internet\\s+data|4g|5g|3g|lte|edge|hspa|gprs|roaming|data\\s+roaming|cellular|mobile\\s+network|carrier\\s+data)\\b",
-            "auto sync": "\\b(?:auto\\s+sync|automatic\\s+sync|sync|syncing|synchronization|synchronize|synchronizing|auto\\s+backup|automatic\\s+backup|cloud\\s+sync|background\\s+sync|real-time\\s+sync)\\b",
-            "screen timeout": "\\b(?:screen\\s+timeout|display\\s+timeout|auto\\s+lock|screen\\s+lock|sleep\\s+timer|idle\\s+timeout|standby\\s+timeout|power\\s+saving|screen\\s+saver|auto\\s+sleep|hibernate)\\b"
+            "do not disturb": "\\b(?:do\\s+not\\s+disturb|dnd|d\\.?n\\.?d\\.?|silent\\s+mode|silence|quiet\\s+mode|mute|muted|no\\s+disturb|don'?t\\s+disturb|silence\\s+notifications?|quiet\\s+hours?|sleep\\s+mode|bedtime\\s+mode|focus\\s+mode|zen\\s+mode|peaceful\\s+mode|undisturbed|interruption\\s+free|notification\\s+silence)\\b",
+            "AOD": "\\b(?:AOD|aod|a\\.?o\\.?d\\.?|always\\s+on\\s+display|always-on\\s+display|always\\s+on|screen\\s+always\\s+on|display\\s+always\\s+on|persistent\\s+display|constant\\s+display|continuous\\s+display|keep\\s+screen\\s+on|screen\\s+stays\\s+on|display\\s+on|ambient\\s+display|glance\\s+screen|standby\\s+screen)\\b",
+            "raise to wake": "\\b(?:raise\\s+to\\s+wake|lift\\s+to\\s+wake|tap\\s+to\\s+wake|double\\s+tap\\s+to\\s+wake|touch\\s+to\\s+wake|wrist\\s+raise|raise\\s+wrist|lift\\s+wrist|wake\\s+on\\s+raise|wake\\s+on\\s+lift|wake\\s+on\\s+tap|wake\\s+on\\s+touch|pick\\s+up\\s+to\\s+wake|gesture\\s+wake|motion\\s+wake|tilt\\s+to\\s+wake|wake\\s+gesture|screen\\s+wake|auto\\s+wake|smart\\s+wake)\\b",
+            "vibration": "\\b(?:vibration|vibrate|vibrating|haptic|haptics|buzz|buzzing|rumble|rumbling|tactile|tactile\\s+feedback|vibration\\s+feedback|motor|vibration\\s+motor|shake|shaking|pulse|pulsing|vibe|vibes|vibrate\\s+mode|silent\\s+vibrate|ring\\s+vibrate)\\b",
+            "volume": "\\b(?:volume|sound\\s+level|sound\\s+volume|audio\\s+level|audio\\s+volume|loudness|loud|quiet|soft|sound|audio|speaker\\s+volume|media\\s+volume|ringtone\\s+volume|notification\\s+volume|alarm\\s+volume|call\\s+volume|ringer|sound\\s+output|audio\\s+output|volume\\s+level)\\b",
+            "torch": "\\b(?:torch|flashlight|flash\\s+light|led\\s+light|led\\s+torch|camera\\s+flash|light|lamp|lantern|beam|illumination|bright\\s+light|phone\\s+light|mobile\\s+light|emergency\\s+light|torch\\s+light|strobe|strobe\\s+light|spotlight|searchlight|headlight|flash\\s+lamp|portable\\s+light|hand\\s+light|led\\s+flash|camera\\s+light|phone\\s+torch|device\\s+light|built-in\\s+light|integrated\\s+light)\\b"
         ]
-        
-        // Try to match features in order of specificity (more specific patterns first)
+        // Sort by pattern length for more specific matching
         let sortedFeatures = features.sorted { $0.value.count > $1.value.count }
-        
         for (feature, pattern) in sortedFeatures {
             if text.range(of: pattern, options: .regularExpression) != nil {
                 return feature
             }
         }
-        
         return nil
     }
     
     
     private func extractState(text: String) -> String? {
-        if text.range(of: "\\b(?:turn\\s+on|enable|activate|switch\\s+on|start|power\\s+on|boot\\s+up|fire\\s+up|kick\\s+on|bring\\s+up|wake\\s+up|ramp\\s+up|spin\\s+up|light\\s+up|rev\\s+up|crank\\s+up|gear\\s+up|warm\\s+up|dial\\s+up|jack\\s+up|pump\\s+up|open|opening|opened|engage|engaging|engaged|trigger|triggering|triggered|launch|launching|launched|initiate|initiating|initiated|commence|commencing|commenced)\\b", options: .regularExpression) != nil {
+        if text.range(of: "\\b(?:turn\\s+on|enable|enabled|enabling|activate|activated|activating|switch\\s+on|start|started|starting|power\\s+on|boot|boot\\s+up|fire\\s+up|launch|open|unmute|unmuted|resume|allow|permit|engage|engaged|engaging|set\\s+on|put\\s+on|make\\s+it\\s+on|get\\s+it\\s+on|bring\\s+up|wake\\s+up|light\\s+up|flip\\s+on|on)\\b", options: [.regularExpression, .caseInsensitive]) != nil {
             return "on"
         }
         
-        if text.range(of: "\\b(?:turn\\s+off|disable|deactivate|switch\\s+off|stop|power\\s+off|shut\\s+down|close\\s+down|wind\\s+down|dial\\s+down|turn\\s+down|shut\\s+off|cut\\s+off|kill|killing|killed|end|ending|ended|finish|finishing|finished|terminate|terminating|terminated|halt|halting|halted|cease|ceasing|ceased|suspend|suspending|suspended|pause|pausing|paused|disengage|disengaging|disengaged|close|closing|closed)\\b", options: .regularExpression) != nil {
+        if text.range(of: "\\b(?:turn\\s+off|disable|disabled|disabling|deactivate|deactivated|deactivating|switch\\s+off|stop|stopped|stopping|shut\\s+off|shut\\s+down|power\\s+off|kill|close|mute|muted|pause|paused|block|deny|disengage|disengaged|disengaging|set\\s+off|put\\s+off|make\\s+it\\s+off|get\\s+it\\s+off|bring\\s+down|sleep|suspend|flip\\s+off|cut\\s+off|off)\\b", options: [.regularExpression, .caseInsensitive]) != nil {
             return "off"
         }
         
-        if text.range(of: "\\b(?:increase|increasing|increased|up|higher|raise|raising|raised|lift|lifting|lifted|boost|boosting|boosted|amplify|amplifying|amplified|enhance|enhancing|enhanced|escalate|escalating|escalated|intensify|intensifying|intensified|strengthen|strengthening|strengthened|maximize|maximizing|maximized|pump\\s+up|crank\\s+up|ramp\\s+up|step\\s+up|gear\\s+up|rev\\s+up|jack\\s+up|bump\\s+up|turn\\s+up|dial\\s+up|scale\\s+up|beef\\s+up)\\b", options: .regularExpression) != nil {
+        if text.range(of: "\\b(?:increase|increased|increasing|up|higher|raise|raised|raising|boost|boosted|boosting|amplify|amplified|amplifying|enhance|enhanced|enhancing|elevate|elevated|elevating|pump\\s+up|turn\\s+up|crank\\s+up|ramp\\s+up|scale\\s+up|step\\s+up|jack\\s+up|bump\\s+up|push\\s+up|bring\\s+up|make\\s+it\\s+higher|louder|brighter|stronger|more|maximize|max\\s+out|intensify)\\b", options: [.regularExpression, .caseInsensitive]) != nil {
             return "increase"
         }
         
-        if text.range(of: "\\b(?:decrease|decreasing|decreased|down|lower|reduce|reducing|reduced|diminish|diminishing|diminished|lessen|lessening|lessened|weaken|weakening|weakened|minimize|minimizing|minimized|scale\\s+down|dial\\s+down|turn\\s+down|bring\\s+down|take\\s+down|cut\\s+down|wind\\s+down|tone\\s+down|calm\\s+down|cool\\s+down|slow\\s+down|back\\s+down|step\\s+down|gear\\s+down|drop|dropping|dropped)\\b", options: .regularExpression) != nil {
+        if text.range(of: "\\b(?:decrease|decreased|decreasing|down|lower|lowered|lowering|reduce|reduced|reducing|diminish|diminished|diminishing|lessen|lessened|lessening|drop|dropped|dropping|cut|cutting|turn\\s+down|bring\\s+down|scale\\s+down|step\\s+down|tone\\s+down|dial\\s+down|wind\\s+down|ramp\\s+down|make\\s+it\\s+lower|quieter|dimmer|weaker|less|minimize|min\\s+out|soften)\\b", options: [.regularExpression, .caseInsensitive]) != nil {
             return "decrease"
         }
         
@@ -947,23 +1158,53 @@ class SlotExtractor {
     
     private func extractAction(text: String) -> String? {
         let actions: [String: String] = [
-            "call": "\\b(?:call|calling|called|phone|phoning|phoned|dial|dialing|dialed|ring|ringing|rang|contact|contacting|contacted|reach|reaching|reached|get\\s+in\\s+touch|getting\\s+in\\s+touch|got\\s+in\\s+touch|connect\\s+with|connecting\\s+with|connected\\s+with|speak\\s+to|speaking\\s+to|spoke\\s+to|talk\\s+to|talking\\s+to|talked\\s+to)\\b",
-            "message": "\\b(?:message|messaging|messaged|text|texting|texted|sms|send\\s+sms|sending\\s+sms|sent\\s+sms|chat|chatting|chatted|write|writing|wrote|compose|composing|composed|draft|drafting|drafted|type|typing|typed|ping|pinging|pinged|notify|notifying|notified|alert|alerting|alerted|inform|informing|informed|tell|telling|told)\\b",
-            "video call": "\\b(?:video\\s+call|video\\s+calling|video\\s+called|facetime|face\\s+time|video\\s+chat|video\\s+chatting|video\\s+chatted|skype|skyping|skyped|zoom|zooming|zoomed|hangout|hangouts|meet|meeting|met|conference\\s+call|video\\s+conference|visual\\s+call|cam\\s+call)\\b",
-            "set": "\\b(?:set|setting|configure|configuring|configured|setup|setting\\s+up|set\\s+up|establish|establishing|established|create|creating|created|make|making|made|build|building|built|construct|constructing|constructed|form|forming|formed|prepare|preparing|prepared|arrange|arranging|arranged|organize|organizing|organized|define|defining|defined|specify|specifying|specified|determine|determining|determined|fix|fixing|fixed|adjust|adjusting|adjusted|modify|modifying|modified|change|changing|changed|alter|altering|altered|update|updating|updated|edit|editing|edited)\\b",
-            "start": "\\b(?:start|starting|started|begin|beginning|began|initiate|initiating|initiated|launch|launching|launched|commence|commencing|commenced|kick\\s+off|kicking\\s+off|kicked\\s+off|fire\\s+up|firing\\s+up|fired\\s+up|boot\\s+up|booting\\s+up|booted\\s+up|power\\s+up|powering\\s+up|powered\\s+up|switch\\s+on|switching\\s+on|switched\\s+on|turn\\s+on|turning\\s+on|turned\\s+on|activate|activating|activated|enable|enabling|enabled|engage|engaging|engaged|trigger|triggering|triggered|open|opening|opened)\\b",
-            "stop": "\\b(?:stop|stopping|stopped|end|ending|ended|finish|finishing|finished|complete|completing|completed|conclude|concluding|concluded|terminate|terminating|terminated|halt|halting|halted|cease|ceasing|ceased|quit|quitting|quit|exit|exiting|exited|close|closing|closed|shut\\s+down|shutting\\s+down|shut\\s+down|power\\s+off|powering\\s+off|powered\\s+off|switch\\s+off|switching\\s+off|switched\\s+off|turn\\s+off|turning\\s+off|turned\\s+off|deactivate|deactivating|deactivated|disable|disabling|disabled|suspend|suspending|suspended|pause|pausing|paused|cancel|canceling|canceled|abort|aborting|aborted)\\b",
-            "open": "\\b(?:open|opening|opened|launch|launching|launched|start\\s+up|starting\\s+up|started\\s+up|fire\\s+up|firing\\s+up|fired\\s+up|boot\\s+up|booting\\s+up|booted\\s+up|load|loading|loaded|run|running|ran|execute|executing|executed|activate|activating|activated|access|accessing|accessed|enter|entering|entered|go\\s+to|going\\s+to|went\\s+to|navigate\\s+to|navigating\\s+to|navigated\\s+to|visit|visiting|visited|browse|browsing|browsed|view|viewing|viewed|display|displaying|displayed|show|showing|showed|present|presenting|presented)\\b",
-            "check": "\\b(?:check|checking|checked|verify|verifying|verified|examine|examining|examined|inspect|inspecting|inspected|review|reviewing|reviewed|look|looking|looked|see|seeing|saw|view|viewing|viewed|observe|observing|observed|monitor|monitoring|monitored|watch|watching|watched|survey|surveying|surveyed|scan|scanning|scanned|browse|browsing|browsed|search|searching|searched|find|finding|found|locate|locating|located|discover|discovering|discovered|explore|exploring|explored|investigate|investigating|investigated|study|studying|studied|analyze|analyzing|analyzed|assess|assessing|assessed|evaluate|evaluating|evaluated)\\b",
-            "measure": "\\b(?:measure|measuring|measured|test|testing|tested|record|recording|recorded|log|logging|logged|track|tracking|tracked|monitor|monitoring|monitored|gauge|gauging|gauged|assess|assessing|assessed|evaluate|evaluating|evaluated|calculate|calculating|calculated|compute|computing|computed|determine|determining|determined|quantify|quantifying|quantified|estimate|estimating|estimated|approximate|approximating|approximated|count|counting|counted|tally|tallying|tallied|sum|summing|summed|total|totaling|totaled)\\b",
-            "play": "\\b(?:play|playing|played|start\\s+playing|starting\\s+playing|started\\s+playing|begin\\s+playing|beginning\\s+playing|began\\s+playing|resume|resuming|resumed|continue|continuing|continued|run|running|ran|execute|executing|executed|stream|streaming|streamed|broadcast|broadcasting|broadcasted|transmit|transmitting|transmitted)\\b",
-            "pause": "\\b(?:pause|pausing|paused|hold|holding|held|suspend|suspending|suspended|freeze|freezing|froze|halt|halting|halted|stop\\s+temporarily|stopping\\s+temporarily|stopped\\s+temporarily|break|breaking|broke|interrupt|interrupting|interrupted|delay|delaying|delayed|wait|waiting|waited)\\b",
-            "skip": "\\b(?:skip|skipping|skipped|next|forward|forwarding|forwarded|advance|advancing|advanced|jump\\s+ahead|jumping\\s+ahead|jumped\\s+ahead|move\\s+forward|moving\\s+forward|moved\\s+forward|go\\s+forward|going\\s+forward|went\\s+forward|fast\\s+forward|fast\\s+forwarding|fast\\s+forwarded)\\b",
-            "previous": "\\b(?:previous|back|backward|rewinding|rewound|rewind|reverse|reversing|reversed|go\\s+back|going\\s+back|went\\s+back|move\\s+back|moving\\s+back|moved\\s+back|step\\s+back|stepping\\s+back|stepped\\s+back|return|returning|returned|retreat|retreating|retreated)\\b",
-            "shuffle": "\\b(?:shuffle|shuffling|shuffled|randomize|randomizing|randomized|mix|mixing|mixed|jumble|jumbling|jumbled|scramble|scrambling|scrambled|random\\s+play|randomly\\s+play|random\\s+order|mixed\\s+order)\\b",
-            "repeat": "\\b(?:repeat|repeating|repeated|loop|looping|looped|replay|replaying|replayed|again|once\\s+more|one\\s+more\\s+time|over\\s+again|all\\s+over|from\\s+beginning|from\\s+start|restart|restarting|restarted|redo|redoing|redid|reiterate|reiterating|reiterated)\\b",
-            "mute": "\\b(?:mute|muting|muted|silence|silencing|silenced|quiet|quieting|quieted|hush|hushing|hushed|turn\\s+off\\s+sound|turning\\s+off\\s+sound|turned\\s+off\\s+sound|disable\\s+sound|disabling\\s+sound|disabled\\s+sound|cut\\s+sound|cutting\\s+sound|cut\\s+sound|kill\\s+sound|killing\\s+sound|killed\\s+sound)\\b",
-            "unmute": "\\b(?:unmute|unmuting|unmuted|enable\\s+sound|enabling\\s+sound|enabled\\s+sound|turn\\s+on\\s+sound|turning\\s+on\\s+sound|turned\\s+on\\s+sound|restore\\s+sound|restoring\\s+sound|restored\\s+sound|bring\\s+back\\s+sound|bringing\\s+back\\s+sound|brought\\s+back\\s+sound)\\b"
+            "set": "\\b(?:set|setup|set\\s+up|configure|configuration|adjust|adjustment|change|modify|edit|customize|establish|define|specify|determine|fix|assign|allocate|program|preset|input|enter|put\\s+in|make\\s+it|arrange|organize|prepare)\\b",
+            
+            "start": "\\b(?:start|started|starting|begin|began|beginning|initiate|initiated|initiating|launch|launched|launching|commence|commencing|kick\\s+off|fire\\s+up|boot\\s+up|power\\s+on|turn\\s+on|switch\\s+on|activate|enable|engage|trigger|run|execute|go|let'?s\\s+go|get\\s+going|get\\s+started)\\b",
+            
+            "stop": "\\b(?:stop|stopped|stopping|end|ended|ending|finish|finished|finishing|terminate|terminated|terminating|cease|halt|pause|paused|pausing|kill|abort|cancel|cancelled|canceling|quit|exit|close|shut\\s+down|power\\s+off|turn\\s+off|switch\\s+off|deactivate|disable|disengage|cut\\s+off)\\b",
+            
+            "call": "\\b(?:call|calling|phone|dial|dialing|ring|ringing|contact|reach|reach\\s+out|get\\s+in\\s+touch|give\\s+a\\s+call|make\\s+a\\s+call|place\\s+a\\s+call|telephone|buzz|video\\s+call|voice\\s+call|facetime)\\b",
+            
+            "message": "\\b(?:message|messaging|text|texting|sms|send|sending|sent|write|compose|type|drop\\s+a\\s+message|send\\s+a\\s+text|shoot\\s+a\\s+message|ping|dm|direct\\s+message|whatsapp|imessage|chat|msg)\\b",
+            
+            "open": "\\b(?:open|opened|opening|launch|launched|launching|start|show|display|view|access|load|bring\\s+up|pull\\s+up|fire\\s+up|boot|go\\s+to|navigate\\s+to|switch\\s+to|take\\s+me\\s+to)\\b",
+            
+            "check": "\\b(?:check|checking|verify|verifying|examine|look|looking|see|review|inspect|assess|evaluate|monitor|watch|observe|scan|browse|view|find\\s+out|tell\\s+me|show\\s+me|let\\s+me\\s+see|give\\s+me|what'?s|how'?s|any)\\b",
+            
+            "measure": "\\b(?:measure|measuring|measured|test|testing|tested|record|recording|recorded|track|tracking|log|logging|logged|take|capture|monitor|scan|read|reading|sample|collect|gauge|assess|evaluate)\\b",
+
+            "play": "\\b(?:play|playing|played|resume|resuming|resumed|continue|continuing|continued|unpause|unpausing|unpaused|start\\s+playing|begin\\s+playing|kick\\s+off|fire\\s+up|roll|rolling|spun|spin|spinning)\\b",
+
+            "pause": "\\b(?:pause|pausing|paused|hold|holding|held|freeze|freezing|frozen|stop\\s+temporarily|suspend|suspended|suspending|halt\\s+temporarily|break|breaking|broke|interrupt|interrupting|interrupted)\\b",
+
+            "increase": "\\b(?:increase|increased|increasing|up|higher|raise|raised|raising|boost|boosted|boosting|amplify|amplified|amplifying|enhance|enhanced|enhancing|elevate|elevated|elevating|pump\\s+up|turn\\s+up|crank\\s+up|ramp\\s+up|scale\\s+up|step\\s+up|jack\\s+up|bump\\s+up|push\\s+up|bring\\s+up|make\\s+it\\s+higher|louder|brighter|stronger|more|maximize|max\\s+out|intensify)\\b",
+
+            "decrease": "\\b(?:decrease|decreased|decreasing|down|lower|lowered|lowering|reduce|reduced|reducing|diminish|diminished|diminishing|lessen|lessened|lessening|drop|dropped|dropping|cut|cutting|turn\\s+down|bring\\s+down|scale\\s+down|step\\s+down|tone\\s+down|dial\\s+down|wind\\s+down|ramp\\s+down|make\\s+it\\s+lower|quieter|dimmer|weaker|less|minimize|min\\s+out|soften)\\b",
+
+            "skip_next": "\\b(?:skip\\s+(?:forward|next|ahead)|next\\s+(?:track|song|chapter|episode|video|clip)|forward\\s+(?:to\\s+next|one)|advance\\s+(?:to\\s+next|one)|go\\s+(?:to\\s+next|forward\\s+one)|jump\\s+(?:to\\s+next|forward)|fast\\s+forward\\s+(?:to\\s+next|one)|move\\s+(?:to\\s+next|forward)|switch\\s+(?:to\\s+next|forward))\\b",
+
+            "skip_previous": "\\b(?:skip\\s+(?:back|previous|backward)|previous\\s+(?:track|song|chapter|episode|video|clip)|back\\s+(?:to\\s+previous|one)|go\\s+(?:to\\s+previous|back\\s+one)|jump\\s+(?:to\\s+previous|back)|rewind\\s+(?:to\\s+previous|one)|move\\s+(?:to\\s+previous|back)|switch\\s+(?:to\\s+previous|back)|restart\\s+(?:track|song|current))\\b",
+
+            "fast_forward": "\\b(?:fast\\s+forward|speed\\s+up|forward\\s+(?:quickly|fast)|accelerate\\s+(?:playback|forward)|rush\\s+forward|zoom\\s+forward|hurry\\s+forward|quick\\s+forward|rapid\\s+forward|expedite\\s+forward|double\\s+speed|triple\\s+speed|increase\\s+speed)\\b",
+
+            "rewind": "\\b(?:rewind|rewinding|rewound|fast\\s+backward|reverse\\s+(?:quickly|fast)|back\\s+up|go\\s+back|reverse\\s+playback|backward\\s+(?:quickly|fast)|retreat|retreating|retreated|regress|regressing|regressed|slow\\s+reverse|reverse\\s+slowly)\\b",
+
+            "seek": "\\b(?:seek|seeking|sought|jump\\s+to|go\\s+to|move\\s+to|navigate\\s+to|position\\s+to|scrub\\s+to|advance\\s+to|retreat\\s+to|set\\s+position|change\\s+position|adjust\\s+position|locate\\s+to|find\\s+position|progress\\s+to)\\b",
+
+            "mute": "\\b(?:mute|muting|muted|silence|silencing|silenced|quiet|quieting|quieted|turn\\s+off\\s+sound|disable\\s+sound|kill\\s+sound|cut\\s+sound|no\\s+sound|sound\\s+off|audio\\s+off|volume\\s+off|silent\\s+mode)\\b",
+
+            "unmute": "\\b(?:unmute|unmuting|unmuted|unsilence|unsilencing|unsilenced|unquiet|unquieting|unquieted|turn\\s+on\\s+sound|enable\\s+sound|restore\\s+sound|bring\\s+back\\s+sound|sound\\s+on|audio\\s+on|volume\\s+on|exit\\s+silent\\s+mode)\\b",
+
+            "fullscreen": "\\b(?:full\\s+screen|fullscreen|full-screen|maximize|maximizing|maximized|expand|expanding|expanded|enlarge|enlarging|enlarged|stretch|stretching|stretched|fill\\s+screen|screen\\s+fill|wide\\s+screen|cinema\\s+mode|theater\\s+mode|immersive\\s+mode)\\b",
+
+            "captions": "\\b(?:caption|captions|subtitle|subtitles|closed\\s+caption|closed\\s+captions|cc|cc'?s|text|texts|transcript|transcripts|sub|subs|overlay|overlays|dialogue|dialogues|speech\\s+text|spoken\\s+text|audio\\s+description)\\b",
+
+            "speed": "\\b(?:speed|speeding|sped|playback\\s+speed|play\\s+speed|rate|rates|pace|pacing|paced|tempo|tempos|tempoing|tempoed|rhythm|rhythms|rhythmical|velocity|velocities|quickness|quicknesses|rapidity|rapidities)\\b",
+
+            "shuffle": "\\b(?:shuffle|shuffling|shuffled|random|randomize|randomizing|randomized|mix|mixing|mixed|scramble|scrambling|scrambled|jumble|jumbling|jumbled|disorder|disordering|disordered|rearrange|rearranging|rearranged)\\b",
+
+            "repeat": "\\b(?:repeat|repeating|repeated|loop|looping|looped|cycle|cycling|cycled|replay|replaying|replayed|encore|encoring|encored|again|repeat\\s+mode|loop\\s+mode|continuous\\s+play|infinite\\s+play)\\b"
         ]
         
         // Sort actions by pattern length for more specific matching
@@ -981,11 +1222,11 @@ class SlotExtractor {
     
     private func extractTimerAction(text: String) -> String? {
         let timerActions: [String: String] = [
-            "set": "\\b(?:set|setting|create|creating|make|making|establish|establishing|configure|configuring|start|starting|begin|beginning|initiate|initiating)\\b",
-            "start": "\\b(?:start|starting|begin|beginning|run|running|activate|activating|turn\\s+on|turning\\s+on|launch|launching|kick\\s+off|kicking\\s+off)\\b",
-            "stop": "\\b(?:stop|stopping|end|ending|finish|finishing|cancel|canceling|halt|halting|terminate|terminating|turn\\s+off|turning\\s+off|disable|disabling)\\b",
-            "pause": "\\b(?:pause|pausing|hold|holding|suspend|suspending|freeze|freezing|break|breaking)\\b",
-            "resume": "\\b(?:resume|resuming|continue|continuing|restart|restarting|unpause|unpausing)\\b"
+            "set": "\\b(?:set|setup|set\\s+up|configure|configuration|adjust|adjustment|change|modify|edit|customize|establish|define|specify|determine|fix|assign|allocate|program|preset|input|enter|put\\s+in|make\\s+it|arrange|organize|prepare|setting)\\b",
+            
+            "start": "\\b(?:start|started|starting|begin|began|beginning|initiate|initiated|initiating|launch|launched|launching|commence|commencing|kick\\s+off|fire\\s+up|boot\\s+up|power\\s+on|turn\\s+on|switch\\s+on|activate|enable|engage|trigger|run|execute|go|let'?s\\s+go|get\\s+going|get\\s+started)\\b",
+            
+            "stop": "\\b(?:stop|stopped|stopping|end|ended|ending|finish|finished|finishing|terminate|terminated|terminating|cease|halt|pause|paused|pausing|kill|abort|cancel|cancelled|canceling|quit|exit|close|shut\\s+down|power\\s+off|turn\\s+off|switch\\s+off|deactivate|disable|disengage|cut\\s+off)\\b"
         ]
         
         // Sort actions by pattern specificity (longer patterns first for better matching)
@@ -1002,23 +1243,45 @@ class SlotExtractor {
     
     private func extractMediaAction(text: String) -> String? {
         let mediaActions: [String: String] = [
-            "play": "\\b(?:play|playing|played|start\\s+playing|starting\\s+playing|started\\s+playing|begin\\s+playing|beginning\\s+playing|began\\s+playing|resume\\s+playing|resuming\\s+playing|resumed\\s+playing|continue\\s+playing|continuing\\s+playing|continued\\s+playing|run|running|ran|execute|executing|executed|stream|streaming|streamed|broadcast|broadcasting|broadcasted|transmit|transmitting|transmitted|put\\s+on|putting\\s+on|turn\\s+on|turning\\s+on|turned\\s+on|switch\\s+on|switching\\s+on|switched\\s+on|fire\\s+up|firing\\s+up|fired\\s+up|boot\\s+up|booting\\s+up|booted\\s+up|launch|launching|launched|activate|activating|activated|start|starting|started)\\b",
-            "pause": "\\b(?:pause|pausing|paused|hold|holding|held|suspend|suspending|suspended|freeze|freezing|froze|halt|halting|halted|stop\\s+temporarily|stopping\\s+temporarily|stopped\\s+temporarily|break|breaking|broke|interrupt|interrupting|interrupted|delay|delaying|delayed|wait|waiting|waited|rest|resting|rested)\\b",
-            "stop": "\\b(?:stop|stopping|stopped|end|ending|ended|finish|finishing|finished|complete|completing|completed|conclude|concluding|concluded|terminate|terminating|terminated|halt|halting|halted|cease|ceasing|ceased|quit|quitting|exit|exiting|exited|close|closing|closed|shut\\s+down|shutting\\s+down|shut\\s+down|power\\s+off|powering\\s+off|powered\\s+off|switch\\s+off|switching\\s+off|switched\\s+off|turn\\s+off|turning\\s+off|turned\\s+off|cut\\s+off|cutting\\s+off|cut\\s+off|kill|killing|killed)\\b",
-            "skip": "\\b(?:skip|skipping|skipped|next|forward|forwarding|forwarded|advance|advancing|advanced|jump\\s+ahead|jumping\\s+ahead|jumped\\s+ahead|move\\s+forward|moving\\s+forward|moved\\s+forward|go\\s+forward|going\\s+forward|went\\s+forward|fast\\s+forward|fast\\s+forwarding|fast\\s+forwarded|skip\\s+ahead|skipping\\s+ahead|skipped\\s+ahead|jump\\s+forward|jumping\\s+forward|jumped\\s+forward|leap\\s+ahead|leaping\\s+ahead|leaped\\s+ahead|step\\s+forward|stepping\\s+forward|stepped\\s+forward)\\b",
-            "previous": "\\b(?:previous|back|backward|rewinding|rewound|rewind|reverse|reversing|reversed|go\\s+back|going\\s+back|went\\s+back|move\\s+back|moving\\s+back|moved\\s+back|step\\s+back|stepping\\s+back|stepped\\s+back|jump\\s+back|jumping\\s+back|jumped\\s+back|skip\\s+back|skipping\\s+back|skipped\\s+back|return|returning|returned|retreat|retreating|retreated|backtrack|backtracking|backtracked|reverse|reversing|reversed|last|prior|earlier|before)\\b",
-            "shuffle": "\\b(?:shuffle|shuffling|shuffled|randomize|randomizing|randomized|mix|mixing|mixed|jumble|jumbling|jumbled|scramble|scrambling|scrambled|random\\s+play|randomly\\s+play|random\\s+order|mixed\\s+order|disorder|disordering|disordered|mess\\s+up|messing\\s+up|messed\\s+up|rearrange|rearranging|rearranged)\\b",
-            "repeat": "\\b(?:repeat|repeating|repeated|loop|looping|looped|replay|replaying|replayed|again|once\\s+more|one\\s+more\\s+time|over\\s+again|all\\s+over|from\\s+beginning|from\\s+start|restart|restarting|restarted|redo|redoing|redid|reiterate|reiterating|reiterated|cycle|cycling|cycled|continuous|continuously|endlessly|infinitely)\\b",
-            "mute": "\\b(?:mute|muting|muted|silence|silencing|silenced|quiet|quieting|quieted|hush|hushing|hushed|shush|shushing|shushed|turn\\s+off\\s+sound|turning\\s+off\\s+sound|turned\\s+off\\s+sound|disable\\s+sound|disabling\\s+sound|disabled\\s+sound|cut\\s+sound|cutting\\s+sound|cut\\s+sound|kill\\s+sound|killing\\s+sound|killed\\s+sound|no\\s+sound|without\\s+sound|soundless|voiceless)\\b",
-            "unmute": "\\b(?:unmute|unmuting|unmuted|enable\\s+sound|enabling\\s+sound|enabled\\s+sound|turn\\s+on\\s+sound|turning\\s+on\\s+sound|turned\\s+on\\s+sound|restore\\s+sound|restoring\\s+sound|restored\\s+sound|bring\\s+back\\s+sound|bringing\\s+back\\s+sound|brought\\s+back\\s+sound|activate\\s+sound|activating\\s+sound|activated\\s+sound|switch\\s+on\\s+sound|switching\\s+on\\s+sound|switched\\s+on\\s+sound|unsilence|unsilencing|unsilenced)\\b",
-            "volume up": "\\b(?:volume\\s+up|turn\\s+up|turning\\s+up|turned\\s+up|increase\\s+volume|increasing\\s+volume|increased\\s+volume|raise\\s+volume|raising\\s+volume|raised\\s+volume|boost\\s+volume|boosting\\s+volume|boosted\\s+volume|amplify|amplifying|amplified|louder|make\\s+louder|making\\s+louder|made\\s+louder|crank\\s+up|cranking\\s+up|cranked\\s+up|pump\\s+up|pumping\\s+up|pumped\\s+up)\\b",
-            "volume down": "\\b(?:volume\\s+down|turn\\s+down|turning\\s+down|turned\\s+down|decrease\\s+volume|decreasing\\s+volume|decreased\\s+volume|lower\\s+volume|lowering\\s+volume|lowered\\s+volume|reduce\\s+volume|reducing\\s+volume|reduced\\s+volume|quieter|make\\s+quieter|making\\s+quieter|made\\s+quieter|softer|make\\s+softer|making\\s+softer|made\\s+softer)\\b"
+            "play": "\\b(?:play|playing|played|resume|resuming|resumed|continue|continuing|continued|unpause|unpausing|unpaused|start\\s+playing|begin\\s+playing|kick\\s+off|fire\\s+up|roll|rolling|spun|spin|spinning)\\b",
+            
+            "pause": "\\b(?:pause|pausing|paused|hold|holding|held|freeze|freezing|frozen|stop\\s+temporarily|suspend|suspended|suspending|halt\\s+temporarily|break|breaking|broke|interrupt|interrupting|interrupted)\\b",
+            
+            "stop": "\\b(?:stop|stopped|stopping|end|ended|ending|finish|finished|finishing|terminate|terminated|terminating|cease|halt|kill|abort|cancel|cancelled|canceling|quit|exit|close|shut\\s+down|power\\s+off|turn\\s+off|switch\\s+off|deactivate|disable|disengage|cut\\s+off)\\b",
+            
+            "skip_next": "\\b(?:skip\\s+(?:forward|next|ahead)|next\\s+(?:track|song|chapter|episode|video|clip)|forward\\s+(?:to\\s+next|one)|advance\\s+(?:to\\s+next|one)|go\\s+(?:to\\s+next|forward\\s+one)|jump\\s+(?:to\\s+next|forward)|fast\\s+forward\\s+(?:to\\s+next|one)|move\\s+(?:to\\s+next|forward)|switch\\s+(?:to\\s+next|forward))\\b",
+            
+            "skip_previous": "\\b(?:skip\\s+(?:back|previous|backward)|previous\\s+(?:track|song|chapter|episode|video|clip)|back\\s+(?:to\\s+previous|one)|go\\s+(?:to\\s+previous|back\\s+one)|jump\\s+(?:to\\s+previous|back)|rewind\\s+(?:to\\s+previous|one)|move\\s+(?:to\\s+previous|back)|switch\\s+(?:to\\s+previous|back)|restart\\s+(?:track|song|current))\\b",
+            
+            "fast_forward": "\\b(?:fast\\s+forward|speed\\s+up|forward\\s+(?:quickly|fast)|accelerate\\s+(?:playback|forward)|rush\\s+forward|zoom\\s+forward|hurry\\s+forward|quick\\s+forward|rapid\\s+forward|expedite\\s+forward|double\\s+speed|triple\\s+speed|increase\\s+speed)\\b",
+            
+            "rewind": "\\b(?:rewind|rewinding|rewound|fast\\s+backward|reverse\\s+(?:quickly|fast)|back\\s+up|go\\s+back|reverse\\s+playback|backward\\s+(?:quickly|fast)|retreat|retreating|retreated|regress|regressing|regressed|slow\\s+reverse|reverse\\s+slowly)\\b",
+            
+            "seek": "\\b(?:seek|seeking|sought|jump\\s+to|go\\s+to|move\\s+to|navigate\\s+to|position\\s+to|scrub\\s+to|advance\\s+to|retreat\\s+to|set\\s+position|change\\s+position|adjust\\s+position|locate\\s+to|find\\s+position|progress\\s+to)\\b",
+            
+            "mute": "\\b(?:mute|muting|muted|silence|silencing|silenced|quiet|quieting|quieted|turn\\s+off\\s+sound|disable\\s+sound|kill\\s+sound|cut\\s+sound|no\\s+sound|sound\\s+off|audio\\s+off|volume\\s+off|silent\\s+mode)\\b",
+            
+            "unmute": "\\b(?:unmute|unmuting|unmuted|unsilence|unsilencing|unsilenced|unquiet|unquieting|unquieted|turn\\s+on\\s+sound|enable\\s+sound|restore\\s+sound|bring\\s+back\\s+sound|sound\\s+on|audio\\s+on|volume\\s+on|exit\\s+silent\\s+mode)\\b",
+            
+            "fullscreen": "\\b(?:full\\s+screen|fullscreen|full-screen|maximize|maximizing|maximized|expand|expanding|expanded|enlarge|enlarging|enlarged|stretch|stretching|stretched|fill\\s+screen|screen\\s+fill|wide\\s+screen|cinema\\s+mode|theater\\s+mode|immersive\\s+mode)\\b",
+            
+            "captions": "\\b(?:caption|captions|subtitle|subtitles|closed\\s+caption|closed\\s+captions|cc|cc'?s|text|texts|transcript|transcripts|sub|subs|overlay|overlays|dialogue|dialogues|speech\\s+text|spoken\\s+text|audio\\s+description)\\b",
+            
+            "speed": "\\b(?:speed|speeding|sped|playback\\s+speed|play\\s+speed|rate|rates|pace|pacing|paced|tempo|tempos|tempoing|tempoed|rhythm|rhythms|rhythmical|velocity|velocities|quickness|quicknesses|rapidity|rapidities)\\b",
+            
+            "shuffle": "\\b(?:shuffle|shuffling|shuffled|random|randomize|randomizing|randomized|mix|mixing|mixed|scramble|scrambling|scrambled|jumble|jumbling|jumbled|disorder|disordering|disordered|rearrange|rearranging|rearranged)\\b",
+            
+            "repeat": "\\b(?:repeat|repeating|repeated|loop|looping|looped|cycle|cycling|cycled|replay|replaying|replayed|encore|encoring|encored|again|repeat\\s+mode|loop\\s+mode|continuous\\s+play|infinite\\s+play)\\b",
+            
+            "increase": "\\b(?:increase|increased|increasing|up|higher|raise|raised|raising|boost|boosted|boosting|amplify|amplified|amplifying|enhance|enhanced|enhancing|elevate|elevated|elevating|pump\\s+up|turn\\s+up|crank\\s+up|ramp\\s+up|scale\\s+up|step\\s+up|jack\\s+up|bump\\s+up|push\\s+up|bring\\s+up|make\\s+it\\s+higher|louder|brighter|stronger|more|maximize|max\\s+out|intensify)\\b",
+            
+            "decrease": "\\b(?:decrease|decreased|decreasing|down|lower|lowered|lowering|reduce|reduced|reducing|diminish|diminished|diminishing|lessen|lessened|lessening|drop|dropped|dropping|cut|cutting|turn\\s+down|bring\\s+down|scale\\s+down|step\\s+down|tone\\s+down|dial\\s+down|wind\\s+down|ramp\\s+down|make\\s+it\\s+lower|quieter|dimmer|weaker|less|minimize|min\\s+out|soften)\\b"
         ]
         
         // Sort actions by pattern specificity (longer patterns first for better matching)
-        let sortedActions = mediaActions.sorted { $0.value.count > $1.value.count }
+        let sortedMediaActions = mediaActions.sorted { $0.value.count > $1.value.count }
         
-        for (action, pattern) in sortedActions {
+        for (action, pattern) in sortedMediaActions {
             if text.range(of: pattern, options: .regularExpression) != nil {
                 return action
             }
@@ -1029,27 +1292,24 @@ class SlotExtractor {
     
     private func extractAppAction(text: String) -> String? {
         let appActions: [String: String] = [
-            "open": "\\b(?:open|opening|opened|launch|launching|launched|start|starting|started|run|running|ran|execute|executing|executed|activate|activating|activated|fire\\s+up|firing\\s+up|fired\\s+up|boot\\s+up|booting\\s+up|booted\\s+up|load|loading|loaded)\\b",
-            "close": "\\b(?:close|closing|closed|shut|shutting|shut|exit|exiting|exited|quit|quitting|terminate|terminating|terminated|end|ending|ended|finish|finishing|finished|stop|stopping|stopped)\\b",
-            "switch": "\\b(?:switch|switching|switched|change|changing|changed|go\\s+to|going\\s+to|went\\s+to|navigate\\s+to|navigating\\s+to|navigated\\s+to|move\\s+to|moving\\s+to|moved\\s+to|jump\\s+to|jumping\\s+to|jumped\\s+to)\\b"
+            "open": "\\b(?:open|opened|opening|launch|launched|launching|start|show|display|view|access|load|bring\\s+up|pull\\s+up|fire\\s+up|boot|go\\s+to|navigate\\s+to|switch\\s+to|take\\s+me\\s+to|turn\\s+on|on|enable|enabled|activate|activated|power\\s+on|switch\\s+on)\\b",
+            "increase": "\\b(?:increase|increased|increasing|up|higher|raise|raised|raising|boost|boosted|boosting|amplify|amplified|amplifying|enhance|enhanced|enhancing|elevate|elevated|elevating|pump\\s+up|turn\\s+up|crank\\s+up|ramp\\s+up|scale\\s+up|step\\s+up|jack\\s+up|bump\\s+up|push\\s+up|bring\\s+up|make\\s+it\\s+higher|louder|brighter|stronger|more|maximize|max\\s+out|intensify)\\b",
+            "decrease": "\\b(?:decrease|decreased|decreasing|down|lower|lowered|lowering|reduce|reduced|reducing|diminish|diminished|diminishing|lessen|lessened|lessening|drop|dropped|dropping|cut|cutting|turn\\s+down|bring\\s+down|scale\\s+down|step\\s+down|tone\\s+down|dial\\s+down|wind\\s+down|ramp\\s+down|make\\s+it\\s+lower|quieter|dimmer|weaker|less|minimize|min\\s+out|soften)\\b"
         ]
-        
         // Sort actions by pattern specificity (longer patterns first for better matching)
         let sortedActions = appActions.sorted { $0.value.count > $1.value.count }
-        
         for (action, pattern) in sortedActions {
             if text.range(of: pattern, options: .regularExpression) != nil {
                 return action
             }
         }
-        
         return nil
     }
     
     private func extractPhoneAction(text: String) -> String? {
         let phoneActions: [String: String] = [
             "call": "\\b(?:call|calling|called|phone|phoning|phoned|dial|dialing|dialed|ring|ringing|rang)\\b",
-            "text": "\\b(?:text|texting|texted|message|messaging|messaged|sms|send\\s+sms|sending\\s+sms|sent\\s+sms)\\b"
+            "message": "\\b(?:text|texting|texted|message|messaging|messaged|sms|send\\s+sms|sending\\s+sms|sent\\s+sms)\\b"
         ]
         
         // Sort actions by pattern specificity (longer patterns first for better matching)
@@ -1065,15 +1325,15 @@ class SlotExtractor {
     }
     
     private func extractTool(text: String) -> String? {
-        if text.range(of: "\\b(?:alarm|alarms|wake\\s+up|wake\\s+me|wake\\s+me\\s+up|morning\\s+alarm|daily\\s+alarm|recurring\\s+alarm|set\\s+alarm|setting\\s+alarm|set\\s+alarm|alarm\\s+clock|clock\\s+alarm|wakeup\\s+call|wake\\s+up\\s+call|reveille)\\b", options: .regularExpression) != nil {
+        if text.range(of: "\\b(?:alarm|alarms|wake\\s+up|wake\\s+me|wake\\s+me\\s+up|morning\\s+alarm|set\\s+alarm|alarm\\s+clock|wakeup|wake-up|rouse|rise|get\\s+up|ring|ringer|buzzer|morning\\s+call|wake\\s+call|alert\\s+me|morning\\s+alert|sleep\\s+alarm|snooze|beep)\\b", options: .regularExpression) != nil {
             return "alarm"
         }
         
-        if text.range(of: "\\b(?:timer|timers|countdown|count\\s+down|counting\\s+down|kitchen\\s+timer|cooking\\s+timer|egg\\s+timer|stopwatch\\s+timer|interval\\s+timer|pomodoro|pomo|break\\s+timer|work\\s+timer|study\\s+timer|meditation\\s+timer|exercise\\s+timer|reminder\\s+timer)\\b", options: .regularExpression) != nil {
+        if text.range(of: "\\b(?:timer|timers|countdown|count\\s+down|set\\s+timer|start\\s+timer|kitchen\\s+timer|cooking\\s+timer|egg\\s+timer|time\\s+me|timing|timed|set\\s+a\\s+timer|countdown\\s+timer|interval\\s+timer|remind\\s+me\\s+in|alert\\s+in|notify\\s+in|time\\s+limit|duration|time\\s+out)\\b", options: .regularExpression) != nil {
             return "timer"
         }
         
-        if text.range(of: "\\b(?:stopwatch|stop\\s+watch|chronometer|chrono|lap\\s+timer|split\\s+timer|race\\s+timer|sports\\s+timer|athletic\\s+timer|precision\\s+timer|accurate\\s+timer|timing\\s+device|time\\s+keeper|timekeeper)\\b", options: .regularExpression) != nil {
+        if text.range(of: "\\b(?:stopwatch|stop\\s+watch|chronometer|lap\\s+timer|lap\\s+time|split\\s+time|time\\s+lap|elapsed\\s+time|running\\s+time|measure\\s+time|track\\s+time|timing|chrono|lap|laps|split|splits|time\\s+it|how\\s+long|duration\\s+tracker)\\b", options: .regularExpression) != nil {
             return "stopwatch"
         }
         
@@ -1083,21 +1343,17 @@ class SlotExtractor {
     
     private func extractActivityType(text: String) -> String? {
         let activities: [String: String] = [
-            "outdoor run": "\\b(?:outdoor\\s+)?(?:run|running|jog|jogging|sprint|sprinting|marathon|half\\s+marathon|5k|10k|race|racing|trail\\s+run|trail\\s+running|road\\s+run|road\\s+running|distance\\s+run|distance\\s+running|long\\s+run|long\\s+distance\\s+run|endurance\\s+run|cardio\\s+run)\\b",
-            "indoor cycling": "\\b(?:indoor\\s+)?(?:cycling|cycle|bike|biking|bicycle|bicycling|spin|spinning|stationary\\s+bike|exercise\\s+bike|indoor\\s+bike|gym\\s+bike|fitness\\s+bike|spin\\s+class|cycling\\s+class|bike\\s+workout|cycling\\s+workout|pedal|pedaling)\\b",
-            "swimming": "\\b(?:swim|swimming|swam|pool|pools|lap|laps|freestyle|backstroke|breaststroke|butterfly|water\\s+aerobics|aqua\\s+fitness|pool\\s+workout|water\\s+workout|diving|synchronized\\s+swimming|open\\s+water\\s+swimming|ocean\\s+swimming|lake\\s+swimming)\\b",
-            "yoga": "\\b(?:yoga|yogi|asana|asanas|namaste|meditation|meditate|meditated|stretch|stretching|stretched|flexibility|mindfulness|breathing\\s+exercise|pranayama|vinyasa|hatha|ashtanga|bikram|hot\\s+yoga|power\\s+yoga|restorative\\s+yoga|yin\\s+yoga|kundalini)\\b",
-            "walking": "\\b(?:walk|walking|walked|stroll|strolling|strolled|hike|hiking|hiked|trek|trekking|trekked|march|marching|marched|pace|pacing|paced|step|stepping|stepped|footstep|footsteps|stride|striding|strode|amble|ambling|ambled|saunter|sauntering|sauntered|wander|wandering|wandered)\\b",
-            "workout": "\\b(?:workout|work\\s+out|working\\s+out|worked\\s+out|exercise|exercising|exercised|training|train|trained|gym|gymnasium|fitness|fit|strength\\s+training|weight\\s+training|resistance\\s+training|cardio|cardiovascular|aerobic|anaerobic|circuit\\s+training|interval\\s+training|hiit|high\\s+intensity|crossfit|bodybuilding|powerlifting|weightlifting|calisthenics|bodyweight|functional\\s+training)\\b",
-            "tennis": "\\b(?:tennis|ping\\s+pong|table\\s+tennis|badminton|squash|racquetball|paddle\\s+tennis|platform\\s+tennis)\\b",
-            "basketball": "\\b(?:basketball|hoops|ball|dribble|dribbling|shoot|shooting|layup|three\\s+pointer|free\\s+throw|dunk|dunking)\\b",
-            "football": "\\b(?:football|soccer|kick|kicking|goal|penalty|corner\\s+kick|free\\s+kick)\\b",
-            "baseball": "\\b(?:baseball|bat|batting|pitch|pitching|home\\s+run|strike|ball|inning)\\b",
-            "golf": "\\b(?:golf|golfing|golfer|drive|driving|putt|putting|chip|chipping|tee\\s+off|fairway|green|bunker|sand\\s+trap|hole\\s+in\\s+one|birdie|eagle|par|bogey)\\b",
-            "dancing": "\\b(?:dance|dancing|danced|dancer|ballet|ballroom|salsa|tango|waltz|foxtrot|swing|latin|hip\\s+hop|contemporary|jazz\\s+dance|tap\\s+dance|breakdance|choreography)\\b",
-            "martial arts": "\\b(?:martial\\s+arts|karate|judo|taekwondo|kung\\s+fu|boxing|kickboxing|muay\\s+thai|jiu\\s+jitsu|aikido|krav\\s+maga|self\\s+defense|sparring|kata|forms)\\b",
-            "climbing": "\\b(?:climb|climbing|climbed|rock\\s+climb|rock\\s+climbing|bouldering|mountaineering|rappelling|belaying)\\b",
-            "skiing": "\\b(?:ski|skiing|skied|snowboard|snowboarding|snowboarded|alpine|nordic|cross\\s+country|downhill|slalom|mogul|freestyle)\\b"
+            "outdoor run": "\\b(?:outdoor\\s+)?(?:run|running|ran|jog|jogging|jogged|sprint|sprinting|sprinted|dash|dashing|race|racing|trail\\s+run|trail\\s+running|distance\\s+run|long\\s+run|short\\s+run|tempo\\s+run|interval\\s+run|fartlek|road\\s+run|cross\\s+country|marathon|half\\s+marathon|5k|10k|runner|runners)\\b",
+            
+            "indoor cycling": "\\b(?:indoor\\s+)?(?:cycling|cycle|cycled|bike|biking|biked|bicycle|bicycling|spin|spinning|spin\\s+class|stationary\\s+bike|exercise\\s+bike|bike\\s+ride|pedal|pedaling|pedalled|indoor\\s+bike|cycle\\s+class|RPM|cadence\\s+training|peloton|zwift|virtual\\s+cycling|turbo\\s+trainer|trainer\\s+ride)\\b",
+            
+            "swimming": "\\b(?:swim|swimming|swam|swum|swimmer|pool|lap|laps|freestyle|backstroke|breaststroke|butterfly|stroke|strokes|aquatic|water\\s+exercise|lap\\s+swimming|pool\\s+workout|open\\s+water|triathlon\\s+swim|swim\\s+training|water\\s+aerobics|aqua|diving|float|floating)\\b",
+            
+            "yoga": "\\b(?:yoga|yogi|asana|asanas|meditation|meditate|meditating|meditated|stretch|stretching|stretched|flexibility|vinyasa|hatha|ashtanga|bikram|hot\\s+yoga|power\\s+yoga|yin\\s+yoga|restorative\\s+yoga|pranayama|breathing\\s+exercise|mindfulness|zen|namaste|downward\\s+dog|warrior\\s+pose|sun\\s+salutation|flow|yoga\\s+flow)\\b",
+            
+            "walking": "\\b(?:walk|walking|walked|walker|stroll|strolling|strolled|hike|hiking|hiked|hiker|trek|trekking|trekked|ramble|rambling|wander|wandering|wandered|amble|ambling|march|marching|power\\s+walk|brisk\\s+walk|leisurely\\s+walk|nature\\s+walk|trail\\s+walk|hill\\s+walk|speed\\s+walk|fitness\\s+walk|evening\\s+walk|morning\\s+walk)\\b",
+            
+            "workout": "\\b(?:workout|work\\s+out|worked\\s+out|exercise|exercising|exercised|training|train|trained|gym|gymnasium|fitness|fit|strength\\s+training|weight\\s+training|weightlifting|lift|lifting|cardio|HIIT|circuit\\s+training|crossfit|bootcamp|boot\\s+camp|calisthenics|bodyweight|resistance\\s+training|functional\\s+training|core\\s+workout|abs\\s+workout|upper\\s+body|lower\\s+body|full\\s+body)\\b"
         ]
         
         // Sort by pattern length for more specific matching
@@ -1114,31 +1370,18 @@ class SlotExtractor {
     
     private func extractApp(text: String) -> String? {
         let apps: [String: String] = [
-            "weather": "\\b(?:weather|forecast|temperature|temp|rain|snow|sunny|cloudy|humidity|wind|storm|thunder|lightning|precipitation|meteorology|climate|conditions|barometric|pressure|uv\\s+index|heat\\s+index|wind\\s+chill|dew\\s+point|visibility|sunrise|sunset|moonrise|moonset)\\b",
-            "settings": "\\b(?:settings?|preferences|prefs|config|configuration|options|controls|setup|system|admin|administration|customize|customization|personalize|personalization)\\b",
-            "health": "\\b(?:health|fitness|medical|wellness|wellbeing|doctor|physician|hospital|clinic|symptoms|diagnosis|treatment|medicine|medication|prescription|vital\\s+signs|blood\\s+pressure|heart\\s+rate|temperature|pulse|medical\\s+record|health\\s+record|fitness\\s+tracker|activity\\s+tracker)\\b",
-            "calendar": "\\b(?:calendar|schedule|appointment|meeting|event|date|time|reminder|alert|notification|agenda|planner|diary|booking|reservation|commitment|engagement|conference|session)\\b",
-            "camera": "\\b(?:camera|photo|picture|image|snapshot|selfie|portrait|landscape|video|record|recording|shoot|shooting|capture|capturing|lens|flash|zoom|focus|exposure|shutter)\\b",
-            "music": "\\b(?:music|song|songs|track|tracks|album|albums|artist|artists|band|bands|playlist|playlists|audio|sound|melody|rhythm|beat|tune|harmony|compose|composition|lyrics|genre|spotify|apple\\s+music|pandora|youtube\\s+music|soundcloud)\\b",
-            "maps": "\\b(?:maps?|navigation|navigate|directions|route|routing|gps|location|address|destination|waypoint|landmark|street|road|highway|freeway|avenue|boulevard|intersection|coordinates|latitude|longitude|compass|north|south|east|west|traffic|commute)\\b",
-            "messages": "\\b(?:messages?|messaging|text|texting|sms|chat|chatting|conversation|thread|imessage|whatsapp|telegram|signal|messenger|facetime|video\\s+call|voice\\s+call|communication|correspond|correspondence)\\b",
-            "email": "\\b(?:email|e-mail|mail|inbox|outbox|sent|draft|compose|reply|forward|attachment|subject|recipient|sender|cc|bcc|gmail|outlook|yahoo\\s+mail|icloud\\s+mail|exchange|smtp|pop|imap)\\b",
-            "photos": "\\b(?:photos?|pictures?|images?|gallery|album|albums|slideshow|memories|moments|library|collection|thumbnail|preview|edit|editing|filter|filters|crop|cropping|rotate|rotation|brightness|contrast|saturation|exposure)\\b",
-            "notes": "\\b(?:notes?|note|notepad|memo|memos|reminder|reminders|list|lists|todo|to-do|task|tasks|checklist|journal|diary|text\\s+editor|document|documents|writing|write|typed|type)\\b",
-            "calculator": "\\b(?:calculator|calculate|calculation|math|mathematics|arithmetic|add|addition|subtract|subtraction|multiply|multiplication|divide|division|equation|formula|compute|computation|numbers?|digits?)\\b",
-            "clock": "\\b(?:clock|time|timer|alarm|stopwatch|world\\s+clock|timezone|time\\s+zone|hour|minute|second|am|pm|24\\s+hour|12\\s+hour|analog|digital)\\b",
-            "browser": "\\b(?:browser|web|internet|website|url|link|search|google|safari|chrome|firefox|edge|bookmark|history|tab|tabs|page|pages|browse|browsing|online|www|http|https)\\b"
+            "heart rate": "\\b(?:heart\\s+rate|heartrate|heart\\s+beat|heartbeat|pulse|pulse\\s+rate|bpm|beats\\s+per\\s+minute|cardiac|cardiac\\s+rate|heart\\s+rhythm|resting\\s+heart\\s+rate|rhr|max\\s+heart\\s+rate|maximum\\s+heart\\s+rate|heart\\s+health|cardiovascular|cardio|ticker|heart\\s+monitor|heart\\s+sensor|hr|beat|beats|beating|palpitation|palpitations|tachycardia|bradycardia|heart\\s+zone|target\\s+heart\\s+rate|recovery\\s+heart\\s+rate)\\b",
+            "blood oxygen": "\\b(?:blood\\s+oxygen|oxygen|o2|spo2|sp\\s+o2|oxygen\\s+saturation|oxygen\\s+level|oxygen\\s+levels|blood\\s+o2|oxygen\\s+sat|o2\\s+sat|o2\\s+level|o2\\s+saturation|pulse\\s+ox|pulse\\s+oximetry|oximeter|oxygen\\s+reading|oxygen\\s+sensor|saturation|sat|blood\\s+oxygen\\s+level|arterial\\s+oxygen|respiratory|respiration|breathing|breath|lung\\s+function|oxygenation|hypoxia|oxygen\\s+content|sp2|SP2)\\b",
+            "stress": "\\b(?:stress|stressed|stressful|stress\\s+level|stress\\s+score|stress\\s+index|anxiety|anxious|worried|worry|worrying|tension|tense|pressure|pressured|strain|strained|overwhelm|overwhelmed|nervous|nervousness|burnout|burnt\\s+out|mental\\s+stress|emotional\\s+stress|psychological\\s+stress|chronic\\s+stress|acute\\s+stress|relaxation|relax|calm|calmness|peace|peaceful|tranquil|serene|zen|mindfulness)\\b",
+            "brightness": "\\b(?:brightness|bright|brighter|brighten|brightening|screen\\s+brightness|display\\s+brightness|luminosity|luminance|backlight|screen\\s+light|light\\s+level|dim|dimmer|dimming|dimness|darken|darker|darkening|auto\\s+brightness|adaptive\\s+brightness|brightness\\s+level|screen\\s+intensity|display\\s+intensity|illumination|illuminate|glow|glowing|radiance|light\\s+output|ambient\\s+light|screen\\s+glow|visibility|contrast|gamma|exposure|luminous)\\b"
         ]
-        
         // Sort by pattern length for more specific matching
         let sortedApps = apps.sorted { $0.value.count > $1.value.count }
-        
         for (app, pattern) in sortedApps {
             if text.range(of: pattern, options: .regularExpression) != nil {
                 return app
             }
         }
-        
         return nil
     }
     
@@ -1277,14 +1520,15 @@ class SlotExtractor {
     
     private func extractAttribute(text: String) -> String? {
         let attributes: [String: String] = [
-            "forecast": "\\b(?:forecast|prediction|outlook|future|tomorrow|next\\s+week|next\\s+few\\s+days|coming\\s+days|upcoming|later|ahead|projected|expected|anticipated)\\b",
-            "temperature": "\\b(?:temperature|temp|hot|cold|warm|cool|degree|degrees|celsius|fahrenheit|heat|chill|thermal|thermostat)\\b",
-            "rain": "\\b(?:rain|raining|shower|showers|precipitation|drizzle|drizzling|downpour|wet|umbrella|storm|storms|thunderstorm|thunderstorms)\\b",
-            "humidity": "\\b(?:humidity|humid|moisture|muggy|sticky|damp|dry|arid|steamy|moist)\\b",
-            "air quality": "\\b(?:air\\s+quality|aqi|pollution|smog|clean\\s+air|dirty\\s+air|particulates|pm2\\.5|pm10|ozone|carbon\\s+monoxide|allergens|pollen)\\b",
-            "wind": "\\b(?:wind|windy|breeze|breezy|gust|gusty|calm|still|draft|drafty)\\b",
-            "visibility": "\\b(?:visibility|clear|cloudy|foggy|hazy|misty|overcast|sunny|bright)\\b",
-            "uv index": "\\b(?:uv\\s+index|ultraviolet|sun\\s+exposure|sunburn|sun\\s+protection|spf)\\b"
+            "forecast": "\\b(?:forecast|forecasts|forecasting|prediction|predictions|predict|predicted|outlook|outlooks|projection|projections|future\\s+weather|upcoming\\s+weather|expected\\s+weather|weather\\s+ahead|what'?s\\s+coming|coming\\s+weather|next\\s+days|next\\s+week|tomorrow|later|ahead|anticipate|anticipated|expect|expected|probable|likely|chance\\s+of)\\b",
+        
+            "temperature": "\\b(?:temperature|temperatures|temp|temps|hot|cold|warm|cool|heat|heated|heating|chill|chilly|freezing|frozen|frost|frosty|degrees|degree|celsius|fahrenheit|thermometer|thermal|feels\\s+like|wind\\s+chill|heat\\s+index|mild|moderate|extreme|scorching|boiling|icy|frigid|lukewarm|toasty)\\b",
+            
+            "rain": "\\b(?:rain|raining|rainy|rained|rainfall|rainwater|shower|showers|showery|drizzle|drizzling|drizzly|sprinkle|sprinkling|downpour|pouring|pour|umbrella|wet|wetness|damp|dampness|moisture|precipitation|precipitating|storm|stormy|thunderstorm|cloudburst|deluge|mist|misty|monsoon)\\b",
+            
+            "humidity": "\\b(?:humidity|humid|moisture|moistness|damp|dampness|dank|muggy|sticky|clammy|steamy|sultry|wet|wetness|dew|dew\\s+point|relative\\s+humidity|water\\s+vapor|vapour|atmospheric\\s+moisture|air\\s+moisture|condensation|saturated|saturation|dry|dryness|arid)\\b",
+            
+            "air quality": "\\b(?:air\\s+quality|aqi|air\\s+quality\\s+index|pollution|polluted|pollutants|smog|smoggy|haze|hazy|particulate|particles|pm2\\.?5|pm10|pm\\s+2\\.?5|pm\\s+10|ozone|allergens|pollen|dust|emissions|exhaust|fumes|toxic|toxins|clean\\s+air|dirty\\s+air|unhealthy\\s+air|breathable|air\\s+pollution)\\b"
         ]
         
         for (attr, pattern) in attributes {
@@ -1297,15 +1541,13 @@ class SlotExtractor {
     }
     
     private func extractType(text: String) -> String? {
-        if text.range(of: "\\b(?:above|over|exceed|exceeding|exceeded|exceeds|higher|more\\s+than|greater\\s+than|beyond|surpass|surpassing|surpassed|surpasses|top|topping|topped|tops|beat|beating|beaten|beats|cross|crossing|crossed|crosses|pass|passing|passed|passes)\\b", options: .regularExpression) != nil {
+        if text.range(of: "\\b(?:above|over|high|higher|highest|exceed|exceeding|exceeded|exceeds|higher|more\\s+than|greater\\s+than|beyond|surpass|surpassing|surpassed|surpasses|top|topping|topped|tops|beat|beating|beaten|beats|cross|crossing|crossed|crosses|pass|passing|passed|passes)\\b", options: [.regularExpression, .caseInsensitive]) != nil {
             return "high"
         }
-        
-        if text.range(of: "\\b(?:below|under|less\\s+than|lower\\s+than|beneath|underneath|drop|drops|dropped|dropping|fall|falls|fell|falling|decrease|decreases|decreased|decreasing|reduce|reduces|reduced|reducing|decline|declines|declined|declining|go\\s+down|goes\\s+down|went\\s+down|going\\s+down|dip|dips|dipped|dipping|plunge|plunges|plunged|plunging|sink|sinks|sank|sinking|tumble|tumbles|tumbled|tumbling)\\b", options: .regularExpression) != nil {
+        if text.range(of: "\\b(?:below|under|low|lower|lowest|less\\s+than|lower\\s+than|beneath|underneath|drop|drops|dropped|dropping|fall|falls|fell|falling|decrease|decreases|decreased|decreasing|reduce|reduces|reduced|reducing|decline|declines|declined|declining|go\\s+down|goes\\s+down|went\\s+down|going\\s+down|dip|dips|dipped|dipping|plunge|plunges|plunged|plunging|sink|sinks|sank|sinking|tumble|tumbles|tumbled|tumbling)\\b", options: [.regularExpression, .caseInsensitive]) != nil {
             return "low"
         }
-        
-        return nil
+        return null
     }
     
     private func extractPeriod(text: String) -> String? {
@@ -1330,32 +1572,12 @@ class SlotExtractor {
     }
     
     private func extractEventType(text: String) -> String? {
-        if text.range(of: "\\b(?:weight|weigh|weighing|weighed|kg|kilogram|kilograms|pounds?|lbs?|lb|body\\s+weight|body\\s+mass|mass|scale|heavy|light|bmi|body\\s+mass\\s+index)\\b", options: .regularExpression) != nil {
+        if text.range(of: "\\b(?:weight|weigh|weighing|weighed|kg|kgs|kilogram|kilograms|kilogramme|kilogrammes|kilo|kilos|pounds?|lbs?|lb|body\\s+weight|body\\s+mass|mass|scale|scales|weighing\\s+scale|weight\\s+scale|heavy|heaviness|light|lightness|bmi|body\\s+mass\\s+index|stone|st|grams?|grammes?|g|ounces?|oz|#)\\b", options: [.regularExpression, .caseInsensitive]) != nil {
             return "weight"
         }
         
-        if text.range(of: "\\b(?:menstrual|period|cycle|menstruation|menses|flow|pms|ovulation|ovulating|ovulated|fertility|fertile|reproductive|hormonal|cramps|bloating|spotting|irregular|regular)\\b", options: .regularExpression) != nil {
+        if text.range(of: "\\b(?:menstrual|menstruation|menstruating|menstruate|period|periods|cycle|cycles|monthly\\s+cycle|time\\s+of\\s+month|that\\s+time|aunt\\s+flo|flow|bleeding|spotting|pms|premenstrual|ovulation|ovulating|ovulate|fertile|fertility|fertility\\s+window|luteal\\s+phase|follicular\\s+phase|cramping|cramps|menses|feminine\\s+hygiene|menstrual\\s+health|reproductive\\s+cycle)\\b", options: [.regularExpression, .caseInsensitive]) != nil {
             return "menstrual cycle"
-        }
-        
-        if text.range(of: "\\b(?:medication|medicine|pill|pills|tablet|tablets|capsule|capsules|dose|dosage|prescription|drug|drugs|supplement|supplements|vitamin|vitamins|antibiotic|antibiotics|painkiller|painkillers)\\b", options: .regularExpression) != nil {
-            return "medication"
-        }
-        
-        if text.range(of: "\\b(?:blood\\s+pressure|bp|systolic|diastolic|hypertension|hypotension|mmhg|pressure|cardiovascular|heart\\s+health)\\b", options: .regularExpression) != nil {
-            return "blood pressure"
-        }
-        
-        if text.range(of: "\\b(?:blood\\s+sugar|glucose|diabetes|diabetic|insulin|blood\\s+glucose|bg|hyperglycemia|hypoglycemia|a1c|hemoglobin\\s+a1c)\\b", options: .regularExpression) != nil {
-            return "blood sugar"
-        }
-        
-        if text.range(of: "\\b(?:water|drink|drinking|drank|hydration|hydrated|hydrating|fluid|fluids|liquid|liquids|h2o|ml|milliliters|millilitres|liters|litres|cups?|glasses?|bottles?)\\b", options: .regularExpression) != nil {
-            return "water intake"
-        }
-        
-        if text.range(of: "\\b(?:mood|emotion|emotional|feeling|feelings|happy|sad|angry|depressed|anxious|stressed|calm|peaceful|excited|nervous|worried|content|joyful|frustrated|irritated|overwhelmed|relaxed)\\b", options: .regularExpression) != nil {
-            return "mood"
         }
         
         return nil
@@ -1553,6 +1775,28 @@ class SlotExtractor {
                 }
             }
             
+        case "ToggleFeature":
+            if slots["feature"] == nil {
+                if let feature = extractFeature(text: text) {
+                    slots["feature"] = feature
+                }
+            }
+            if slots["state"] == nil {
+                if let state = extractState(text: text) {
+                    slots["state"] = state
+                }
+            }
+            
+        case "StartActivity", "StopActivity":
+            if slots["activity_type"] == nil {
+                if let activityType = extractActivityType(text: text) {
+                    slots["activity_type"] = activityType
+                }
+            }
+            if slots["time_ref"] == nil {
+                slots["time_ref"] = "today"
+            }
+            
         default:
             break
         }
@@ -1621,15 +1865,6 @@ class SlotExtractor {
             }
         }
         
-        return nil
-    }
-    
-    private func extractNumber(from text: String) -> Double? {
-        let pattern = "\\d+(?:\\.\\d+)?"
-        if let match = text.range(of: pattern, options: .regularExpression) {
-            let numberString = String(text[match])
-            return Double(numberString)
-        }
         return nil
     }
 }

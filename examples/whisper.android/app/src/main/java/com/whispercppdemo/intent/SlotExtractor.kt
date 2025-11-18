@@ -18,7 +18,7 @@ class SlotExtractor {
     private val intentSlotTemplates = mapOf(
         "QueryPoint" to listOf("metric"),  // time_ref, unit, and identifier can have defaults
         "SetGoal" to listOf("metric", "target"),  // unit can be inferred
-        "SetThreshold" to listOf("metric", "threshold", "type"),  // unit can be inferred
+        "SetThreshold" to listOf("metric", "threshold"),  // unit can be inferred
         "TimerStopwatch" to listOf("tool", "action"),  // value only required for "set timer X min"
         "ToggleFeature" to listOf("feature", "state"),
         "LogEvent" to listOf("event_type"),  // value, unit, time_ref can have defaults
@@ -287,6 +287,29 @@ class SlotExtractor {
             if (value != null) {
                 slots[slotName] = value
                 Log.d(LOG_TAG, "  ✓ Extracted $slotName: $value")
+            }
+        }
+        
+        // Special handling for SetThreshold: combine type into metric
+        if (intent == "SetThreshold") {
+            val type = extractSingleSlot(processedText, textLower, "type", intent) as? String
+            val metric = slots["metric"] as? String
+            if (type != null && metric != null) {
+                // Set unit based on base metric before combining
+                if (!slots.containsKey("unit")) {
+                    when (metric) {
+                        "steps" -> slots["unit"] = "count"
+                        "distance" -> slots["unit"] = "km"
+                        "calories" -> slots["unit"] = "kcal"
+                        "heart rate" -> slots["unit"] = "bpm"
+                        "sleep" -> slots["unit"] = "hours"
+                        "weight" -> slots["unit"] = "kg"
+                        "spo2" -> slots["unit"] = "percent"
+                        "stress" -> slots["unit"] = "score"
+                    }
+                }
+                slots["metric"] = "$type $metric"
+                Log.d(LOG_TAG, "  ✓ Combined metric: ${slots["metric"]}")
             }
         }
         
@@ -1061,8 +1084,6 @@ class SlotExtractor {
             
             "vibration" to "\\b(?:vibration|vibrate|vibrating|haptic|haptics|buzz|buzzing|rumble|rumbling|tactile|tactile\\s+feedback|vibration\\s+feedback|motor|vibration\\s+motor|shake|shaking|pulse|pulsing|vibe|vibes|vibrate\\s+mode|silent\\s+vibrate|ring\\s+vibrate)\\b",
             
-            "brightness" to "\\b(?:brightness|screen\\s+brightness|display\\s+brightness|luminosity|backlight|screen\\s+light|light\\s+level|dim|dimness|brighten|darken|auto\\s+brightness|adaptive\\s+brightness|brightness\\s+level|screen\\s+intensity|display\\s+intensity|illumination|glow|radiance)\\b",
-            
             "volume" to "\\b(?:volume|sound\\s+level|sound\\s+volume|audio\\s+level|audio\\s+volume|loudness|loud|quiet|soft|sound|audio|speaker\\s+volume|media\\s+volume|ringtone\\s+volume|notification\\s+volume|alarm\\s+volume|call\\s+volume|ringer|sound\\s+output|audio\\s+output|volume\\s+level)\\b",
 
             "torch" to "\\b(?:torch|flashlight|flash\\s+light|led\\s+light|led\\s+torch|camera\\s+flash|light|lamp|lantern|beam|illumination|bright\\s+light|phone\\s+light|mobile\\s+light|emergency\\s+light|torch\\s+light|strobe|strobe\\s+light|spotlight|searchlight|headlight|flash\\s+lamp|portable\\s+light|hand\\s+light|led\\s+flash|camera\\s+light|phone\\s+torch|device\\s+light|built-in\\s+light|integrated\\s+light)\\b"
@@ -1313,14 +1334,6 @@ class SlotExtractor {
     
     private fun extractApp(text: String): String? {
         val apps = mapOf(
-            "weather" to "\\b(?:weather|forecast|forecasts|temperature|temp|temps|climate|conditions|rain|raining|rainy|rainfall|precipitation|snow|snowing|snowy|snowfall|sunny|sun|sunshine|cloud|clouds|cloudy|overcast|storm|stormy|thunder|thunderstorm|lightning|wind|windy|humidity|humid|fog|foggy|mist|misty|hail|sleet|tornado|hurricane|cyclone|meteorology|barometer|pressure)\\b",
-            
-            "settings" to "\\b(?:settings?|setting|preferences|preference|prefs|config|configuration|configure|options|option|control|controls|control\\s+panel|setup|set\\s+up|adjust|adjustment|customize|customization|personalize|personalization|system\\s+settings|device\\s+settings|app\\s+settings|change\\s+settings|modify\\s+settings|tweak|parameters)\\b",
-            
-            "health" to "\\b(?:health|healthy|healthcare|fitness|fit|medical|medicine|wellbeing|well-being|wellness|vitals|vital\\s+signs|workout|exercise|activity|activities|steps|weight|bmi|body\\s+mass\\s+index|calories|sleep|hydration|nutrition|diet|mental\\s+health|physical\\s+health|body|metrics)\\b",
-            
-            "calendar" to "\\b(?:calendar|calendars|schedule|schedules|scheduling|scheduled|appointment|appointments|meeting|meetings|event|events|agenda|agendas|planner|plan|plans|planning|date|dates|day\\s+planner|organizer|diary|diaries|booking|bookings|reservation|reservations|engagement|engagements|commitment|commitments|reminder|reminders|time\\s+slot|availability)\\b",
-            
             "heart rate" to "\\b(?:heart\\s+rate|heartrate|heart\\s+beat|heartbeat|pulse|pulse\\s+rate|bpm|beats\\s+per\\s+minute|cardiac|cardiac\\s+rate|heart\\s+rhythm|resting\\s+heart\\s+rate|rhr|max\\s+heart\\s+rate|maximum\\s+heart\\s+rate|heart\\s+health|cardiovascular|cardio|ticker|heart\\s+monitor|heart\\s+sensor|hr|beat|beats|beating|palpitation|palpitations|tachycardia|bradycardia|heart\\s+zone|target\\s+heart\\s+rate|recovery\\s+heart\\s+rate)\\b",
             
             "blood oxygen" to "\\b(?:blood\\s+oxygen|oxygen|o2|spo2|sp\\s+o2|oxygen\\s+saturation|oxygen\\s+level|oxygen\\s+levels|blood\\s+o2|oxygen\\s+sat|o2\\s+sat|o2\\s+level|o2\\s+saturation|pulse\\s+ox|pulse\\s+oximetry|oximeter|oxygen\\s+reading|oxygen\\s+sensor|saturation|sat|blood\\s+oxygen\\s+level|arterial\\s+oxygen|respiratory|respiration|breathing|breath|lung\\s+function|oxygenation|hypoxia|oxygen\\s+content|sp2|SP2)\\b",
