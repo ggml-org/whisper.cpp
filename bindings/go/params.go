@@ -47,6 +47,38 @@ func (p *Params) SetPrintTimestamps(v bool) {
 	p.print_timestamps = toBool(v)
 }
 
+// Voice Activity Detection (VAD)
+func (p *Params) SetVAD(v bool) {
+	p.vad = toBool(v)
+}
+
+func (p *Params) SetVADModelPath(path string) {
+	p.vad_model_path = C.CString(path)
+}
+
+func (p *Params) SetVADThreshold(t float32) {
+	p.vad_params.threshold = C.float(t)
+}
+
+func (p *Params) SetVADMinSpeechMs(ms int) {
+	p.vad_params.min_speech_duration_ms = C.int(ms)
+}
+
+func (p *Params) SetVADMinSilenceMs(ms int) {
+	p.vad_params.min_silence_duration_ms = C.int(ms)
+}
+
+func (p *Params) SetVADMaxSpeechSec(s float32) {
+	p.vad_params.max_speech_duration_s = C.float(s)
+}
+
+func (p *Params) SetVADSpeechPadMs(ms int) {
+	p.vad_params.speech_pad_ms = C.int(ms)
+}
+
+func (p *Params) SetVADSamplesOverlap(sec float32) {
+	p.vad_params.samples_overlap = C.float(sec)
+}
 
 // Set language id
 func (p *Params) SetLanguage(lang int) error {

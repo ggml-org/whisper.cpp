@@ -80,6 +80,39 @@ func (context *context) SetTranslate(v bool) {
 	context.params.SetTranslate(v)
 }
 
+// Voice Activity Detection (VAD)
+func (context *context) SetVAD(v bool) {
+	context.params.SetVAD(v)
+}
+
+func (context *context) SetVADModelPath(path string) {
+	context.params.SetVADModelPath(path)
+}
+
+func (context *context) SetVADThreshold(t float32) {
+	context.params.SetVADThreshold(t)
+}
+
+func (context *context) SetVADMinSpeechMs(ms int) {
+	context.params.SetVADMinSpeechMs(ms)
+}
+
+func (context *context) SetVADMinSilenceMs(ms int) {
+	context.params.SetVADMinSilenceMs(ms)
+}
+
+func (context *context) SetVADMaxSpeechSec(s float32) {
+	context.params.SetVADMaxSpeechSec(s)
+}
+
+func (context *context) SetVADSpeechPadMs(ms int) {
+	context.params.SetVADSpeechPadMs(ms)
+}
+
+func (context *context) SetVADSamplesOverlap(sec float32) {
+	context.params.SetVADSamplesOverlap(sec)
+}
+
 func (context *context) SetSplitOnWord(v bool) {
 	context.params.SetSplitOnWord(v)
 }
