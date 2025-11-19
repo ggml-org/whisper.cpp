@@ -6800,8 +6800,7 @@ int whisper_full_with_state(
 
     result_all.clear();
 
-    // Calculate audio context based on recording length
-    // Whisper uses 30-second chunks, scale context accordingly for short recordings (gives significant peformance boost)
+    // if not explicitly set by user, scale audio_ctx for short recordings
     if (params.audio_ctx == 0) {
         const double audio_length_seconds = (double)n_samples / WHISPER_SAMPLE_RATE;
         if (audio_length_seconds <= 30.0) {
