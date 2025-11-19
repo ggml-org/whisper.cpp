@@ -216,22 +216,14 @@ module Whisper
       @pre_converted_models[name] = URI.new("https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-#{name}.bin")
     end
 
-    @coreml_compiled_models = %w[
-      tiny
-      tiny.en
-      base
-      base.en
-      small
-      small.en
-      medium
-      medium.en
-      large-v1
-      large-v2
-      large-v3
-      large-v3-turbo
-    ].each_with_object({}) do |name, models|
-      models[@pre_converted_models[name]] = ZipURI.new("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-#{name}-encoder.mlmodelc.zip")
-    end
+    @coreml_compiled_models = @pre_converted_models.each_with_object({}) {|(name, uri), models|
+      next if name.end_with?("-tdrz") || name.start_with?("silero-")
+
+      if matched = name.match(/\A(?<name>.*)-q\d_\d\z/)
+        name = matched[:name]
+      end
+      models[uri] = ZipURI.new("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-#{name}-encoder.mlmodelc.zip")
+    }
 
     class << self
       attr_reader :pre_converted_models, :coreml_compiled_models
