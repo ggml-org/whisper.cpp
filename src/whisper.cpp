@@ -6800,6 +6800,17 @@ int whisper_full_with_state(
 
     result_all.clear();
 
+    // Calculate audio context based on recording length
+    // Whisper uses 30-second chunks, scale context accordingly for short recordings (gives significant peformance boost)
+    if (params.audio_ctx == 0) {
+        const double audio_length_seconds = (double)n_samples / WHISPER_SAMPLE_RATE;
+        if (audio_length_seconds <= 30.0) {
+            int audio_context = std::max(768, std::min((int)(audio_length_seconds / 30.0 * 1500.0) + 128, 1500));
+            params.audio_ctx = audio_context;
+            WHISPER_LOG_DEBUG("%s: Audio context length: %d for %.1fs of audio\n", __func__, audio_context, audio_length_seconds);
+        }
+    }
+
     if (n_samples > 0) {
         // compute log mel spectrogram
         if (whisper_pcm_to_mel_with_state(ctx, state, samples, n_samples, params.n_threads) != 0) {
