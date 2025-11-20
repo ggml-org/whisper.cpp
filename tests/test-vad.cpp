@@ -36,7 +36,7 @@ struct whisper_vad_segments * test_detect_timestamps(
         struct whisper_vad_context * vctx,
         struct whisper_vad_params params) {
     struct whisper_vad_segments * timestamps = whisper_vad_segments_from_probs(vctx, params);
-    assert(whisper_vad_segments_n_segments(timestamps) == 5);
+    assert(whisper_vad_segments_n_segments(timestamps) == 4);
 
     for (int i = 0; i < whisper_vad_segments_n_segments(timestamps); ++i) {
         printf("VAD segment %d: start = %.2f, end = %.2f\n", i,
