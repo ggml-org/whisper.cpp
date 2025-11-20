@@ -15,7 +15,7 @@ The examples can be run using the following command, which uses a model
 that we use internally for testing:
 ```console
 ./build/bin/vad-speech-segments \
-    -vad-model models/for-tests-silero-v6.2.0-ggml.bin \
+    --vad-model models/for-tests-silero-v6.2.0-ggml.bin \
     --file samples/jfk.wav \
     --no-prints
 
