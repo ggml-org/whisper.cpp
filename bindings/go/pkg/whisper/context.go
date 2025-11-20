@@ -237,6 +237,9 @@ func (context *context) Process(
 		return err
 	}
 
+	// Reset n so that more Segments can be available within NextSegment call
+	context.n = 0
+
 	// Return success
 	return nil
 }
