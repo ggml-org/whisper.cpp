@@ -362,6 +362,7 @@ First, check if your Ascend NPU device is supported:
 | Ascend NPU                    | Status  |
 |:-----------------------------:|:-------:|
 | Atlas 300T A2                 | Support |
+| Atlas 300I Duo                | Support |
 
 Then, make sure you have installed [`CANN toolkit`](https://www.hiascend.com/en/software/cann/community) . The lasted version of CANN is recommanded.
 
@@ -755,23 +756,23 @@ written in Python that is fast and accurate.
 
 Models can be downloaded by running the following command on Linux or MacOS:
 ```console
-$ ./models/download-vad-model.sh silero-v5.1.2
-Downloading ggml model silero-v5.1.2 from 'https://huggingface.co/ggml-org/whisper-vad' ...
-ggml-silero-v5.1.2.bin        100%[==============================================>] 864.35K  --.-KB/s    in 0.04s
-Done! Model 'silero-v5.1.2' saved in '/path/models/ggml-silero-v5.1.2.bin'
+$ ./models/download-vad-model.sh silero-v6.2.0
+Downloading ggml model silero-v6.2.0 from 'https://huggingface.co/ggml-org/whisper-vad' ...
+ggml-silero-v6.2.0.bin        100%[==============================================>] 864.35K  --.-KB/s    in 0.04s
+Done! Model 'silero-v6.2.0' saved in '/path/models/ggml-silero-v6.2.0.bin'
 You can now use it like this:
 
-  $ ./build/bin/whisper-cli -vm /path/models/ggml-silero-v5.1.2.bin --vad -f samples/jfk.wav -m models/ggml-base.en.bin
+  $ ./build/bin/whisper-cli -vm /path/models/ggml-silero-v6.2.0.bin --vad -f samples/jfk.wav -m models/ggml-base.en.bin
 
 ```
 And the following command on Windows:
 ```console
-> .\models\download-vad-model.cmd silero-v5.1.2
-Downloading vad model silero-v5.1.2...
-Done! Model silero-v5.1.2 saved in C:\Users\danie\work\ai\whisper.cpp\ggml-silero-v5.1.2.bin
+> .\models\download-vad-model.cmd silero-v6.2.0
+Downloading vad model silero-v6.2.0...
+Done! Model silero-v6.2.0 saved in C:\Users\danie\work\ai\whisper.cpp\ggml-silero-v6.2.0.bin
 You can now use it like this:
 
-C:\path\build\bin\Release\whisper-cli.exe -vm C:\path\ggml-silero-v5.1.2.bin --vad -m models/ggml-base.en.bin -f samples\jfk.wav
+C:\path\build\bin\Release\whisper-cli.exe -vm C:\path\ggml-silero-v6.2.0.bin --vad -m models/ggml-base.en.bin -f samples\jfk.wav
 
 ```
 
@@ -783,7 +784,7 @@ This model can be also be converted manually to ggml using the following command
 $ python3 -m venv venv && source venv/bin/activate
 $ (venv) pip install silero-vad
 $ (venv) $ python models/convert-silero-vad-to-ggml.py --output models/silero.bin
-Saving GGML Silero-VAD model to models/silero-v5.1.2-ggml.bin
+Saving GGML Silero-VAD model to models/silero-v6.2.0-ggml.bin
 ```
 And it can then be used with whisper as follows:
 ```console
@@ -791,7 +792,7 @@ $ ./build/bin/whisper-cli \
    --file ./samples/jfk.wav \
    --model ./models/ggml-base.en.bin \
    --vad \
-   --vad-model ./models/silero-v5.1.2-ggml.bin
+   --vad-model ./models/silero-v6.2.0-ggml.bin
 ```
 
 ### VAD Options
