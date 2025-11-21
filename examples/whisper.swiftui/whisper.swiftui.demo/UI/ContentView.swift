@@ -6,75 +6,89 @@ struct ContentView: View {
     @StateObject var whisperState = WhisperState()
     
     var body: some View {
-        NavigationStack {
-            VStack {
-                HStack {
-                    Button("Transcribe", action: {
-                        Task {
-                            await whisperState.transcribeSample()
-                        }
-                    })
-                    .buttonStyle(.bordered)
-                    .disabled(!whisperState.canTranscribe)
+        TabView {
+            // Whisper Tab
+            NavigationStack {
+                VStack {
+                    HStack {
+                        Button("Transcribe", action: {
+                            Task {
+                                await whisperState.transcribeSample()
+                            }
+                        })
+                        .buttonStyle(.bordered)
+                        .disabled(!whisperState.canTranscribe)
+                        
+                        Button(whisperState.isRecording ? "Stop recording" : "Start recording", action: {
+                            Task {
+                                await whisperState.toggleRecord()
+                            }
+                        })
+                        .buttonStyle(.bordered)
+                        .disabled(!whisperState.canTranscribe)
+                    }
                     
-                    Button(whisperState.isRecording ? "Stop recording" : "Start recording", action: {
-                        Task {
-                            await whisperState.toggleRecord()
-                        }
-                    })
-                    .buttonStyle(.bordered)
-                    .disabled(!whisperState.canTranscribe)
-                }
-                
-                ScrollView {
-                    Text(verbatim: whisperState.messageLog)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .font(.footnote)
-                .padding()
-                .background(Color.gray.opacity(0.1))
-                .cornerRadius(10)
-
-                HStack {
-                    Button("Clear Logs", action: {
-                        whisperState.messageLog = ""
-                    })
+                    ScrollView {
+                        Text(verbatim: whisperState.messageLog)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     .font(.footnote)
-                    .buttonStyle(.bordered)
+                    .padding()
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(10)
 
-                    Button("Copy Logs", action: {
-                        UIPasteboard.general.string = whisperState.messageLog
-                    })
-                    .font(.footnote)
-                    .buttonStyle(.bordered)
+                    HStack {
+                        Button("Clear Logs", action: {
+                            whisperState.messageLog = ""
+                        })
+                        .font(.footnote)
+                        .buttonStyle(.bordered)
 
-                    Button("Bench", action: {
-                        Task {
-                            await whisperState.benchCurrentModel()
-                        }
-                    })
-                    .font(.footnote)
-                    .buttonStyle(.bordered)
-                    .disabled(!whisperState.canTranscribe)
+                        Button("Copy Logs", action: {
+                            UIPasteboard.general.string = whisperState.messageLog
+                        })
+                        .font(.footnote)
+                        .buttonStyle(.bordered)
 
-                    Button("Bench All", action: {
-                        Task {
-                            await whisperState.bench(models: ModelsView.getDownloadedModels())
-                        }
-                    })
+                        Button("Bench", action: {
+                            Task {
+                                await whisperState.benchCurrentModel()
+                            }
+                        })
+                        .font(.footnote)
+                        .buttonStyle(.bordered)
+                        .disabled(!whisperState.canTranscribe)
+
+                        Button("Bench All", action: {
+                            Task {
+                                await whisperState.bench(models: ModelsView.getDownloadedModels())
+                            }
+                        })
+                        .font(.footnote)
+                        .buttonStyle(.bordered)
+                        .disabled(!whisperState.canTranscribe)
+                    }
+
+                    NavigationLink(destination: ModelsView(whisperState: whisperState)) {
+                        Text("View Models")
+                    }
                     .font(.footnote)
-                    .buttonStyle(.bordered)
-                    .disabled(!whisperState.canTranscribe)
+                    .padding()
                 }
-
-                NavigationLink(destination: ModelsView(whisperState: whisperState)) {
-                    Text("View Models")
-                }
-                .font(.footnote)
+                .navigationTitle("Whisper Demo")
                 .padding()
             }
-            .navigationTitle("Whisper SwiftUI Demo")
-            .padding()
+            .tabItem {
+                Image(systemName: "mic")
+                Text("Whisper")
+            }
+            
+            // Intent Classification Tab
+            IntentTestView()
+                .tabItem {
+                    Image(systemName: "brain.head.profile")
+                    Text("Intent Test")
+                }
         }
     }
 

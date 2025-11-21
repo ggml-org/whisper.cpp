@@ -1,0 +1,8 @@
+C:\Users\tanmay.pawar\Downloads\tokenizer trainer\whisper-cpp-intent-classifier\rs-hf-tokenizer\target\i686-linux-android\release\deps\crossbeam_deque-b2305467aa4f4379.d: C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crossbeam-deque-0.8.6\src\lib.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crossbeam-deque-0.8.6\src\deque.rs
+
+C:\Users\tanmay.pawar\Downloads\tokenizer trainer\whisper-cpp-intent-classifier\rs-hf-tokenizer\target\i686-linux-android\release\deps\libcrossbeam_deque-b2305467aa4f4379.rlib: C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crossbeam-deque-0.8.6\src\lib.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crossbeam-deque-0.8.6\src\deque.rs
+
+C:\Users\tanmay.pawar\Downloads\tokenizer trainer\whisper-cpp-intent-classifier\rs-hf-tokenizer\target\i686-linux-android\release\deps\libcrossbeam_deque-b2305467aa4f4379.rmeta: C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crossbeam-deque-0.8.6\src\lib.rs C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crossbeam-deque-0.8.6\src\deque.rs
+
+C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crossbeam-deque-0.8.6\src\lib.rs:
+C:\Users\tanmay.pawar\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\crossbeam-deque-0.8.6\src\deque.rs:

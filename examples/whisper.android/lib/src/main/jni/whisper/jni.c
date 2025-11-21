@@ -193,6 +193,60 @@ Java_com_whispercpp_whisper_WhisperLib_00024Companion_fullTranscribe(
     (*env)->ReleaseFloatArrayElements(env, audio_data, audio_data_arr, JNI_ABORT);
 }
 
+JNIEXPORT void JNICALL
+Java_com_whispercpp_whisper_WhisperLib_00024Companion_fullTranscribeWithPrompt(
+        JNIEnv *env, jobject thiz, jlong context_ptr, jint num_threads, jfloatArray audio_data, jstring prompt) {
+    UNUSED(thiz);
+    struct whisper_context *context = (struct whisper_context *) context_ptr;
+    jfloat *audio_data_arr = (*env)->GetFloatArrayElements(env, audio_data, NULL);
+    const jsize audio_data_length = (*env)->GetArrayLength(env, audio_data);
+
+    // Get the prompt string from Java
+    const char *prompt_chars = NULL;
+    if (prompt != NULL) {
+        prompt_chars = (*env)->GetStringUTFChars(env, prompt, NULL);
+    }
+
+    // Optimized parameters for faster real-time transcription
+    struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    params.print_realtime = false;  // Disable real-time printing for speed
+    params.print_progress = false;
+    params.print_timestamps = false;  // Disable timestamps for speed (we handle timing in Java)
+    params.print_special = false;
+    params.translate = false;
+    params.language = "en";
+    params.n_threads = num_threads > 4 ? 4 : num_threads;  // Limit threads to 4 for optimal mobile performance
+    params.offset_ms = 0;
+    params.no_context = false;  // Enable context for better longer command recognition
+    params.single_segment = true;  // Force single segment for short commands - major speed boost
+    params.audio_ctx = 512;  // Increased audio context for longer commands (balance of speed vs accuracy)
+    params.suppress_blank = true;  // Skip blank segments
+    params.suppress_nst = true;  // Suppress non-speech tokens for commands
+    params.temperature = 0.0f;    // Greedy decoding for maximum speed
+    params.max_len = 150;          // Increased length limit for longer commands
+    
+    // Set the prompt if provided
+    if (prompt_chars != NULL) {
+        params.initial_prompt = prompt_chars;
+        LOGI("Using prompt: %s", prompt_chars);
+    }
+
+    whisper_reset_timings(context);
+
+    LOGI("About to run whisper_full with prompt");
+    if (whisper_full(context, params, audio_data_arr, audio_data_length) != 0) {
+        LOGI("Failed to run the model");
+    } else {
+        whisper_print_timings(context);
+    }
+    
+    // Release resources
+    (*env)->ReleaseFloatArrayElements(env, audio_data, audio_data_arr, JNI_ABORT);
+    if (prompt_chars != NULL) {
+        (*env)->ReleaseStringUTFChars(env, prompt, prompt_chars);
+    }
+}
+
 JNIEXPORT jint JNICALL
 Java_com_whispercpp_whisper_WhisperLib_00024Companion_getTextSegmentCount(
         JNIEnv *env, jobject thiz, jlong context_ptr) {
