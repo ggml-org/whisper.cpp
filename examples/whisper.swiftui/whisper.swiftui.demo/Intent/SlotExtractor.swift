@@ -709,15 +709,16 @@ class SlotExtractor {
             }
         }
         
-        // Pattern for times like "730 pm", "1030 am" (digits + space + am/pm)
-        // Supports: am, pm, a.m., p.m., a.m, p.m, a m, p m
-        let amPmPattern = "^(\\d{1,4})\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?))$"
+        // Pattern for times like "730 pm", "1030 am", "6.pm" (digits + optional space/dot + am/pm)
+        // Supports: am, pm, a.m., p.m., a.m, p.m, a m, p m, 6.pm, 5.am
+        let amPmPattern = "^(\\d{1,4})[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?$"
         if let regex = try? NSRegularExpression(pattern: amPmPattern),
            let match = regex.firstMatch(in: cleanTime, range: NSRange(cleanTime.startIndex..., in: cleanTime)) {
-            if let timeRange = Range(match.range(at: 1), in: cleanTime) {
+            if let timeRange = Range(match.range(at: 1), in: cleanTime),
+               let amPmRange = Range(match.range(at: 2), in: cleanTime) {
                 let timeDigits = String(cleanTime[timeRange])
-                let amPmText = String(cleanTime[cleanTime.index(cleanTime.startIndex, offsetBy: timeDigits.count)...]).trimmingCharacters(in: .whitespaces)
-                let amPm = amPmText.starts(with: "a") ? "am" : "pm"
+                let amPmLetter = String(cleanTime[amPmRange])
+                let amPm = amPmLetter == "a" ? "am" : "pm"
                 
                 var hour: Int = 0
                 var minute: Int = 0
@@ -749,18 +750,16 @@ class SlotExtractor {
         
         // Pattern for "5 30 pm" or "5.30 am" format (hour [space|dot] minute am/pm)
         // Supports: am, pm, a.m., p.m., a.m, p.m, a m, p m
-        let hourMinuteAmPmPattern = "^(\\d{1,2})[\\s.]+?(\\d{1,2})\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?))$"
+        let hourMinuteAmPmPattern = "^(\\d{1,2})[\\s.]+?(\\d{1,2})[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?$"
         if let regex = try? NSRegularExpression(pattern: hourMinuteAmPmPattern),
            let match = regex.firstMatch(in: cleanTime, range: NSRange(cleanTime.startIndex..., in: cleanTime)) {
             if let hourRange = Range(match.range(at: 1), in: cleanTime),
-               let minuteRange = Range(match.range(at: 2), in: cleanTime) {
+               let minuteRange = Range(match.range(at: 2), in: cleanTime),
+               let amPmRange = Range(match.range(at: 3), in: cleanTime) {
                 var hour = Int(cleanTime[hourRange]) ?? 0
                 let minute = Int(cleanTime[minuteRange]) ?? 0
-                
-                // Find AM/PM indicator
-                let minuteEndIndex = cleanTime.index(cleanTime.startIndex, offsetBy: NSMaxRange(match.range(at: 2)))
-                let amPmText = String(cleanTime[minuteEndIndex...]).trimmingCharacters(in: .whitespaces)
-                let amPm = amPmText.starts(with: "a") ? "am" : "pm"
+                let amPmLetter = String(cleanTime[amPmRange])
+                let amPm = amPmLetter == "a" ? "am" : "pm"
                 
                 // Validate hour and minute ranges
                 if hour > 12 || minute >= 60 {
@@ -780,18 +779,16 @@ class SlotExtractor {
         
         // Pattern for times with colon like "7:30 pm", "10:30 am"
         // Supports: am, pm, a.m., p.m., a.m, p.m, a m, p m
-        let colonAmPmPattern = "^(\\d{1,2}):(\\d{2})\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?))$"
+        let colonAmPmPattern = "^(\\d{1,2}):(\\d{2})[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?$"
         if let regex = try? NSRegularExpression(pattern: colonAmPmPattern),
            let match = regex.firstMatch(in: cleanTime, range: NSRange(cleanTime.startIndex..., in: cleanTime)) {
             if let hourRange = Range(match.range(at: 1), in: cleanTime),
-               let minuteRange = Range(match.range(at: 2), in: cleanTime) {
+               let minuteRange = Range(match.range(at: 2), in: cleanTime),
+               let amPmRange = Range(match.range(at: 3), in: cleanTime) {
                 var hour = Int(cleanTime[hourRange]) ?? 0
                 let minute = Int(cleanTime[minuteRange]) ?? 0
-                
-                // Find AM/PM indicator
-                let minuteEndIndex = cleanTime.index(cleanTime.startIndex, offsetBy: NSMaxRange(match.range(at: 2)))
-                let amPmText = String(cleanTime[minuteEndIndex...]).trimmingCharacters(in: .whitespaces)
-                let amPm = amPmText.starts(with: "a") ? "am" : "pm"
+                let amPmLetter = String(cleanTime[amPmRange])
+                let amPm = amPmLetter == "a" ? "am" : "pm"
                 
                 // Convert to 24-hour format
                 if amPm == "pm" && hour != 12 {
@@ -974,12 +971,12 @@ class SlotExtractor {
             let isAlarmContext = text.range(of: "\\b(?:alarm|wake|remind|alert)\\b", options: .regularExpression) != nil
             
             let timePatterns = [
-                // Space/dot separated time with AM/PM - highest priority for "5 30 pm", "10.30 am" format
-                "\\b(\\d{1,2}[\\s.]+?\\d{1,2}\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?)))\\b",
+                // Space/dot separated time with AM/PM - highest priority for "5 30 pm", "10.30 am", "6.pm" format
+                "\\b(\\d{1,2}[\\s.]+?\\d{1,2}[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?)\\b",
                 
                 // Time with AM/PM - capture full time including AM/PM
-                "\\b(\\d{1,2}(?::\\d{2})?\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?)))\\b",
-                "\\b(\\d{3,4}\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?)))\\b", // For "1030 pm" format
+                "\\b(\\d{1,2}(?::\\d{2})?[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?)\\b",
+                "\\b(\\d{3,4}[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?)\\b", // For "1030 pm", "630.pm" format
                 
                 // Duration patterns for timers
                 "\\b(\\d+(?:\\.\\d+)?)\\s*(?:hours?|hrs?|hr|h)\\b",
@@ -999,9 +996,9 @@ class SlotExtractor {
                 "\\b(?:set|start|begin|run|timer|stopwatch)\\s*(?:for|to|at)?\\s*(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
                 
                 // Alarm-specific patterns - capture full time with AM/PM (prioritize space-separated)
-                "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{1,2}[\\s.]+?\\d{1,2}\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?)))\\b",
-                "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{1,2}(?::\\d{2})?\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?)))\\b",
-                "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{3,4}\\s*(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?)))\\b",
+                "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{1,2}[\\s.]+?\\d{1,2}[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?)\\b",
+                "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{1,2}(?::\\d{2})?[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?)\\b",
+                "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{3,4}[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?)\\b",
                 
                 // "In X time" patterns
                 "\\b(?:in|after|within)\\s+(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
@@ -1010,12 +1007,12 @@ class SlotExtractor {
                 "\\b(?:countdown|count\\s+down)\\s*(?:from|for)?\\s*(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
                 
                 // Direct time patterns for alarm setting - capture full time with AM/PM (prioritize space-separated)
-                "\\b(?:set|create|make).*?(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}[\\s.]+?\\d{1,2}\\s*(?:am|pm))\\b",
-                "\\b(?:set|create|make).*?(?:alarm|wake).*?(?:for|at)\\s*(\\d{3,4}\\s*(?:am|pm))\\b",
-                "\\b(?:set|create|make).*?(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm))\\b",
-                "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}[\\s.]+?\\d{1,2}\\s*(?:am|pm))\\b",
-                "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{3,4}\\s*(?:am|pm))\\b",
-                "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm))\\b",
+                "\\b(?:set|create|make).*?(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}[\\s.]+?\\d{1,2}[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?)\\b",
+                "\\b(?:set|create|make).*?(?:alarm|wake).*?(?:for|at)\\s*(\\d{3,4}[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?)\\b",
+                "\\b(?:set|create|make).*?(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}(?::\\d{2})?[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?)\\b",
+                "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}[\\s.]+?\\d{1,2}[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?)\\b",
+                "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{3,4}[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?)\\b",
+                "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}(?::\\d{2})?[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?)\\b",
                 
                 // Standalone numeric patterns for alarm context (no AM/PM)
                 "\\b(?:alarm|wake).*?(?:for|at)\\s*(\\d{3,4})\\b",
@@ -1051,7 +1048,7 @@ class SlotExtractor {
                         let timeValue = String(text[timeRange])
                         
                         // Check if this is a time format (contains AM/PM or looks like time in alarm context)
-                        let containsAmPm = timeValue.range(of: "\\b(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?))\\b", options: .regularExpression) != nil
+                        let containsAmPm = timeValue.range(of: "\\b(?:(?:a\\.?\\s*m\\.?)|(?:p\\.?\\s*m\\.?)|(\\.am)|(\\.pm))\\b", options: .regularExpression) != nil
                         let containsSpaceOrDot = timeValue.range(of: "[\\s.]\\d", options: .regularExpression) != nil
                         let looksLikeTime = timeValue.range(of: "^\\d{3,4}$", options: .regularExpression) != nil || timeValue.contains(":") || containsSpaceOrDot
                         
