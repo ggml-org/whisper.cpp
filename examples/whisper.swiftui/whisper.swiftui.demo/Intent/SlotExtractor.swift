@@ -630,27 +630,27 @@ class SlotExtractor {
     
     private func extractTarget(text: String) -> Int? {
         let goalPatterns = [
-            "\\b(?:goal|target|aim|objective|plan|intention|aspiration|ambition|desire|want|wish|hope)\\s*(?:is|of|to|for|at)?\\s*(?:be|reach|hit|achieve|get|make|do)?\\s*(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(?:set|change|update|modify|adjust|edit|configure|make|establish|create|define|specify)\\s*(?:my|the)?\\s*(?:goal|target|aim|objective)?\\s*(?:to|at|as|for)?\\s*(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(?:reach|hit|achieve|attain|get|get\\s+to|make|do|complete|finish|accomplish|meet)\\s*(\\d+(?:\\.\\d+)?)\\s*(?:steps?|kg|kgs|kilogram|kilograms|pounds?|lbs?|km|kms|kilometer|kilometers|miles?|hours?|hrs?|minutes?|mins?|calories?|kcal|bpm)\\b",
-            "\\b(\\d+(?:\\.\\d+)?)\\s*(?:steps?|kg|kgs|kilogram|kilograms|pounds?|lbs?|lb|km|kms|kilometer|kilometers|kilometre|kilometres|miles?|mi|hours?|hrs?|hr|h|minutes?|mins?|min|m|calories?|kcal|cal|cals|bpm|beats?|meter|meters|metre|metres|feet|foot|ft)\\b",
-            "\\b(?:I|i)\\s+(?:want|wanna|need|must|should|have\\s+to|got\\s+to|gotta)\\s+(?:to\\s+)?(?:reach|hit|get|do|achieve|make|walk|run|burn|lose|gain|sleep)\\s*(?:to|at)?\\s*(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(?:trying|attempting|aiming|working|striving|shooting|going)\\s+(?:to|for)\\s+(?:reach|hit|get|do|achieve|make)?\\s*(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(?:daily|weekly|monthly|per\\s+day|each\\s+day|every\\s+day)\\s+(?:goal|target|aim|objective)?\\s*(?:is|of|to)?\\s*(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(?:increase|raise|boost|bump|up|improve|decrease|reduce|lower|drop|cut|bring\\s+down)\\s+(?:to|by)?\\s*(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(?:at\\s+least|minimum\\s+of|no\\s+less\\s+than|minimum|min)\\s*(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(?:need|needs)\\s+to\\s+(?:be|reach|hit|get)\\s*(?:at|to)?\\s*(\\d+(?:\\.\\d+)?)\\b",
-            "\\b(?:suggest|recommend|advise|tell\\s+me|remind\\s+me|notify\\s+me).*?(?:when|if|at)\\s*(\\d+(?:\\.\\d+)?)\\b"
+            "\\b(?:goal|target|aim|objective|plan|intention|aspiration|ambition|desire|want|wish|hope)\\s*(?:is|of|to|for|at)?\\s*(?:be|reach|hit|achieve|get|make|do)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            "\\b(?:set|change|update|modify|adjust|edit|configure|make|establish|create|define|specify)\\s*(?:my|the)?\\s*(?:goal|target|aim|objective)?\\s*(?:to|at|as|for)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            "\\b(?:reach|hit|achieve|attain|get|get\\s+to|make|do|complete|finish|accomplish|meet)\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\s*(?:steps?|kg|kgs|kilogram|kilograms|pounds?|lbs?|km|kms|kilometer|kilometers|miles?|hours?|hrs?|minutes?|mins?|calories?|kcal|bpm)\\b",
+            "\\b(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\s*(?:steps?|kg|kgs|kilogram|kilograms|pounds?|lbs?|lb|km|kms|kilometer|kilometers|kilometre|kilometres|miles?|mi|hours?|hrs?|hr|h|minutes?|mins?|min|m|calories?|kcal|cal|cals|bpm|beats?|meter|meters|metre|metres|feet|foot|ft)\\b",
+            "\\b(?:I|i)\\s+(?:want|wanna|need|must|should|have\\s+to|got\\s+to|gotta)\\s+(?:to\\s+)?(?:reach|hit|get|do|achieve|make|walk|run|burn|lose|gain|sleep)\\s*(?:to|at)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            "\\b(?:trying|attempting|aiming|working|striving|shooting|going)\\s+(?:to|for)\\s+(?:reach|hit|get|do|achieve|make)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            "\\b(?:daily|weekly|monthly|per\\s+day|each\\s+day|every\\s+day)\\s+(?:goal|target|aim|objective)?\\s*(?:is|of|to)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            "\\b(?:increase|raise|boost|bump|up|improve|decrease|reduce|lower|drop|cut|bring\\s+down)\\s+(?:to|by)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            "\\b(?:at\\s+least|minimum\\s+of|no\\s+less\\s+than|minimum|min)\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            "\\b(?:need|needs)\\s+to\\s+(?:be|reach|hit|get)\\s*(?:at|to)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            "\\b(?:suggest|recommend|advise|tell\\s+me|remind\\s+me|notify\\s+me).*?(?:when|if|at)\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b"
         ]
         
         // Try each pattern
         for pattern in goalPatterns {
             if let range = text.range(of: pattern, options: .regularExpression) {
                 let matchedText = String(text[range])
-                let matches = try! NSRegularExpression(pattern: "(\\d+(?:\\.\\d+)?)", options: []).matches(in: matchedText, options: [], range: NSRange(location: 0, length: matchedText.count))
+                let matches = try! NSRegularExpression(pattern: "(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)", options: []).matches(in: matchedText, options: [], range: NSRange(location: 0, length: matchedText.count))
                 if let match = matches.first {
                     let numberRange = Range(match.range, in: matchedText)!
-                    let numberString = String(matchedText[numberRange])
+                    let numberString = String(matchedText[numberRange]).replacingOccurrences(of: ",", with: "")
                     if let number = Double(numberString) {
                         return Int(number)
                     }
@@ -658,11 +658,12 @@ class SlotExtractor {
             }
         }
         
-        // Fallback: extract any number from the text
-        let matches = numberRegex.matches(in: text, options: [], range: NSRange(location: 0, length: text.count))
+        // Fallback: extract any number from the text (including comma-separated)
+        let commaNumberRegex = try! NSRegularExpression(pattern: "\\b(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b", options: [])
+        let matches = commaNumberRegex.matches(in: text, options: [], range: NSRange(location: 0, length: text.count))
         if let match = matches.first {
             let numberRange = Range(match.range, in: text)!
-            let numberString = String(text[numberRange])
+            let numberString = String(text[numberRange]).replacingOccurrences(of: ",", with: "")
             if let number = Double(numberString) {
                 return Int(number)
             }
@@ -1343,17 +1344,283 @@ class SlotExtractor {
     
     private func extractActivityType(text: String) -> String? {
         let activities: [String: String] = [
-            "outdoor run": "\\b(?:outdoor\\s+)?(?:run|running|ran|jog|jogging|jogged|sprint|sprinting|sprinted|dash|dashing|race|racing|trail\\s+run|trail\\s+running|distance\\s+run|long\\s+run|short\\s+run|tempo\\s+run|interval\\s+run|fartlek|road\\s+run|cross\\s+country|marathon|half\\s+marathon|5k|10k|runner|runners)\\b",
+            "outdoor running": "\\b(?<!indoor\\s)(?:outdoor\\s+)?(?:run|running|ran|jog|jogging|jogged|sprint|sprinting|sprinted|dash|dashing|race|racing|trail\\s+run|trail\\s+running|distance\\s+run|long\\s+run|short\\s+run|tempo\\s+run|interval\\s+run|fartlek|road\\s+run|cross\\s+country|marathon|half\\s+marathon|5k|10k|runner|runners|pace|pacing|stride|striding|gallop|galloping|bound|bounding|hurdle|hurdling|relay|relays|track\\s+running|road\\s+racing|fun\\s+run|charity\\s+run|morning\\s+run|evening\\s+run|daily\\s+run|weekly\\s+run|cardio\\s+run|fitness\\s+run|outdoor\\s+jog|park\\s+run|street\\s+running|pavement\\s+running|sidewalk\\s+running|neighborhood\\s+run|community\\s+run|group\\s+run|solo\\s+run|recreational\\s+running|competitive\\s+running|distance\\s+running|endurance\\s+running|speed\\s+work|tempo\\s+training|interval\\s+training)\\b",
             
-            "indoor cycling": "\\b(?:indoor\\s+)?(?:cycling|cycle|cycled|bike|biking|biked|bicycle|bicycling|spin|spinning|spin\\s+class|stationary\\s+bike|exercise\\s+bike|bike\\s+ride|pedal|pedaling|pedalled|indoor\\s+bike|cycle\\s+class|RPM|cadence\\s+training|peloton|zwift|virtual\\s+cycling|turbo\\s+trainer|trainer\\s+ride)\\b",
+            "indoor cycling": "\\b(?<!outdoor\\s)indoor\\s+(?:cycling|cycle|cycled|bike|biking|biked|bicycle|bicycling|spin|spinning|spin\\s+class|stationary\\s+bike|exercise\\s+bike|bike\\s+ride|pedal|pedaling|pedalled|indoor\\s+bike|cycle\\s+class|RPM|cadence\\s+training|peloton|zwift|virtual\\s+cycling|turbo\\s+trainer|trainer\\s+ride)\\b",
             
-            "swimming": "\\b(?:swim|swimming|swam|swum|swimmer|pool|lap|laps|freestyle|backstroke|breaststroke|butterfly|stroke|strokes|aquatic|water\\s+exercise|lap\\s+swimming|pool\\s+workout|open\\s+water|triathlon\\s+swim|swim\\s+training|water\\s+aerobics|aqua|diving|float|floating)\\b",
+            "swimming": "\\b(?<!pool\\s)(?<!open water\\s)(?:swim|swimming|swam|swum|swimmer|pool|lap|laps|freestyle|backstroke|breaststroke|butterfly|stroke|strokes|aquatic|water\\s+exercise|lap\\s+swimming|pool\\s+workout|open\\s+water|triathlon\\s+swim|swim\\s+training|water\\s+aerobics|aqua|diving|float|floating|paddle|paddling|kick|kicking|dolphin\\s+kick|flutter\\s+kick|scissor\\s+kick|treading\\s+water|water\\s+treading|swim\\s+laps|lane\\s+swimming|competitive\\s+swimming|recreational\\s+swimming|fitness\\s+swimming|endurance\\s+swimming|sprint\\s+swimming|distance\\s+swimming|medley|individual\\s+medley|relay\\s+swimming|open\\s+water\\s+swimming|marathon\\s+swimming|cold\\s+water\\s+swimming|wild\\s+swimming|natural\\s+swimming|outdoor\\s+swimming|indoor\\s+swimming|pool\\s+training|swim\\s+practice|swim\\s+session|water\\s+workout|aquatic\\s+exercise|hydro\\s+fitness)\\b",
             
-            "yoga": "\\b(?:yoga|yogi|asana|asanas|meditation|meditate|meditating|meditated|stretch|stretching|stretched|flexibility|vinyasa|hatha|ashtanga|bikram|hot\\s+yoga|power\\s+yoga|yin\\s+yoga|restorative\\s+yoga|pranayama|breathing\\s+exercise|mindfulness|zen|namaste|downward\\s+dog|warrior\\s+pose|sun\\s+salutation|flow|yoga\\s+flow)\\b",
+            "yoga": "\\b(?:yoga|yogi|asana|asanas|meditation|meditate|meditating|meditated|stretch|stretching|stretched|flexibility|vinyasa|hatha|ashtanga|bikram|hot\\s+yoga|power\\s+yoga|yin\\s+yoga|restorative\\s+yoga|pranayama|breathing\\s+exercise|mindfulness|zen|namaste|downward\\s+dog|warrior\\s+pose|sun\\s+salutation|flow|yoga\\s+flow|kundalini|iyengar|anusara|kripalu|sivananda|gentle\\s+yoga|beginner\\s+yoga|advanced\\s+yoga|therapeutic\\s+yoga|chair\\s+yoga|wall\\s+yoga|aerial\\s+yoga|yoga\\s+nidra|relaxation\\s+yoga|spiritual\\s+yoga|classical\\s+yoga|modern\\s+yoga|fusion\\s+yoga|yoga\\s+therapy|yoga\\s+practice|yoga\\s+session|yoga\\s+class|yoga\\s+workout|yoga\\s+routine|morning\\s+yoga|evening\\s+yoga|bedtime\\s+yoga|wake\\s+up\\s+yoga|desk\\s+yoga|office\\s+yoga|travel\\s+yoga|outdoor\\s+yoga|beach\\s+yoga|park\\s+yoga|home\\s+yoga|studio\\s+yoga|group\\s+yoga|private\\s+yoga|online\\s+yoga|virtual\\s+yoga)\\b",
             
             "walking": "\\b(?:walk|walking|walked|walker|stroll|strolling|strolled|hike|hiking|hiked|hiker|trek|trekking|trekked|ramble|rambling|wander|wandering|wandered|amble|ambling|march|marching|power\\s+walk|brisk\\s+walk|leisurely\\s+walk|nature\\s+walk|trail\\s+walk|hill\\s+walk|speed\\s+walk|fitness\\s+walk|evening\\s+walk|morning\\s+walk)\\b",
-            
-            "workout": "\\b(?:workout|work\\s+out|worked\\s+out|exercise|exercising|exercised|training|train|trained|gym|gymnasium|fitness|fit|strength\\s+training|weight\\s+training|weightlifting|lift|lifting|cardio|HIIT|circuit\\s+training|crossfit|bootcamp|boot\\s+camp|calisthenics|bodyweight|resistance\\s+training|functional\\s+training|core\\s+workout|abs\\s+workout|upper\\s+body|lower\\s+body|full\\s+body)\\b"
+
+            "indoor running": "\\b(?:indoor\\s+running|indoor\\s+run|indoor\\s+jog|indoor\\s+jogging|treadmill\\s+running|treadmill\\s+run|stationary\\s+running|stationary\\s+run)\\b",
+
+            "treadmill": "\\b(?:treadmill|tread\\s+mill|running\\s+machine|jogging\\s+machine|mill|stationary\\s+run|indoor\\s+running\\s+machine)\\b",
+
+            "trekking": "\\b(?:trekking|trek|trekked|backpacking|backpack|mountain\\s+trek|hill\\s+trek)\\b",
+
+            "trail running": "\\b(?:trail\\s+running|trail\\s+run|trail\\s+jog|trail\\s+jogging|mountain\\s+running|mountain\\s+run|off\\s+road\\s+running|off\\s+road\\s+run)\\b",
+
+            "outdoor walking": "\\b(?<!indoor\\s)(?:outdoor\\s+walking|outdoor\\s+walk|outdoor\\s+hike|outdoor\\s+stroll|nature\\s+walk|trail\\s+walk|hill\\s+walk|forest\\s+walk|walk|walking|walked|walker|stroll|strolling|strolled|hike|hiking|hiked|hiker|trek|trekking|trekked|ramble|rambling|wander|wandering|wandered|amble|ambling|march|marching|power\\s+walk|brisk\\s+walk|leisurely\\s+walk|nature\\s+walk|trail\\s+walk|hill\\s+walk|speed\\s+walk|fitness\\s+walk|evening\\s+walk|morning\\s+walk)\\b",
+
+            "indoor walking": "\\b(?:indoor\\s+walking|indoor\\s+walk|indoor\\s+stroll|treadmill\\s+walking|treadmill\\s+walk)\\b",
+
+            "outdoor cycling": "\\b(?<!indoor\\s)(?<!quad\\s)(?:outdoor\\s+cycling|outdoor\\s+bike|outdoor\\s+biking|road\\s+cycling|road\\s+bike|mountain\\s+bike|mountain\\s+biking|bike\\s+ride|cycle\\s+ride|bicycle\\s+ride|cycling|cycle|cycled|bike|biking|biked|bicycle|bicycling|pedal|pedaling|pedalled|two\\s+wheeler|pushbike|velocipede|touring\\s+bike|hybrid\\s+bike|commuter\\s+bike|recreational\\s+cycling|leisure\\s+cycling|weekend\\s+ride|group\\s+ride|solo\\s+ride|charity\\s+ride|bike\\s+tour|cycling\\s+tour|bike\\s+trip|cycling\\s+trip|bicycle\\s+tour|road\\s+biking|trail\\s+biking|cross\\s+country\\s+biking|endurance\\s+cycling|speed\\s+cycling|time\\s+trial|criterium|gran\\s+fondo|century\\s+ride|metric\\s+century|bike\\s+workout|cycling\\s+workout|outdoor\\s+pedaling|fresh\\s+air\\s+cycling|nature\\s+cycling|scenic\\s+ride|countryside\\s+cycling)\\b",
+
+            "bmx": "\\b(?:bmx|bmx\\s+bike|bmx\\s+cycling|bmx\\s+racing)\\b",
+
+            "pool swimming": "\\b(?:pool\\s+swimming|pool\\s+swim|pool\\s+workout|lap\\s+swimming|lap\\s+swim|indoor\\s+swimming|indoor\\s+swim)\\b",
+
+            "open water": "\\b(?:open\\s+water|open\\s+water\\s+swimming|open\\s+water\\s+swim|ocean\\s+swimming|ocean\\s+swim|lake\\s+swimming|lake\\s+swim|sea\\s+swimming|sea\\s+swim)\\b",
+
+            "strength training": "\\b(?:strength\\s+training|strength|weight\\s+training|weightlifting|lift|lifting|resistance\\s+training|muscle\\s+building|power\\s+training|training|pump|pumping|iron|pumping\\s+iron|gym\\s+workout|weight\\s+workout|muscle\\s+workout|bodybuilding|body\\s+building|powerlifting|olympic\\s+lifting|functional\\s+strength|compound\\s+movements|isolation\\s+exercises|progressive\\s+overload|hypertrophy|mass\\s+building|lean\\s+muscle|toning|muscle\\s+toning|resistance\\s+exercises|free\\s+weights|machine\\s+weights|cable\\s+exercises|strength\\s+conditioning|athletic\\s+training|performance\\s+training|sports\\s+training|cross\\s+training|circuit\\s+training|superset|drop\\s+set|pyramid\\s+training|periodization|strength\\s+building|muscle\\s+gain|power\\s+development|maximal\\s+strength|muscular\\s+endurance)\\b",
+
+            "weightlifting": "\\b(?:weightlifting|weight\\s+lifting|olympic\\s+lifting|powerlifting|clean|snatch|jerk)\\b",
+
+            "dumbbell training": "\\b(?:dumbbell\\s+training|dumbbell|dumbells|free\\s+weights|dumbbell\\s+workout)\\b",
+
+            "barbell training": "\\b(?:barbell\\s+training|barbell|barbells|bar\\s+training)\\b",
+
+            "deadlift": "\\b(?:deadlift|dead\\s+lift|deadlifts)\\b",
+
+            "sit ups": "\\b(?:sit\\s+ups|situps|crunches|crunch|ab\\s+workout|abs)\\b",
+
+            "core training": "\\b(?:core\\s+training|core|abs|abdominals|planks|plank|core\\s+workout)\\b",
+
+            "pilates": "\\b(?:pilates|pilates\\s+workout|pilates\\s+class)\\b",
+
+            "hiit": "\\b(?:hiit|high\\s+intensity\\s+interval\\s+training|interval\\s+training|hiit\\s+workout)\\b",
+
+            "functional training": "\\b(?:functional\\s+training|functional|functional\\s+fitness|movement\\s+training)\\b",
+
+            "elliptical machine": "\\b(?:elliptical|elliptical\\s+machine|elliptical\\s+trainer|cross\\s+trainer|elliptical\\s+workout)\\b",
+
+            "stepper": "\\b(?:stepper|step\\s+machine|stepper\\s+workout|step\\s+training)\\b",
+
+            "step training": "\\b(?:step\\s+training|step|step\\s+class|step\\s+aerobics)\\b",
+
+            "climbing machine": "\\b(?:climbing\\s+machine|stair\\s+climber|stair\\s+master|vertical\\s+climber)\\b",
+
+            "rowing machine": "\\b(?:rowing\\s+machine|rower|indoor\\s+rowing|rowing\\s+workout)\\b",
+
+            "rope skipping": "\\b(?:rope\\s+skipping|jump\\s+rope|skipping|jump\\s+roping|rope\\s+jump)\\b",
+
+            "basketball": "\\b(?:basketball|basketball\\s+game|basketball\\s+practice|b ball|b-ball|hoops|shooting\\s+hoops|bball|roundball|court\\s+game|five\\s+on\\s+five|full\\s+court|half\\s+court|pickup\\s+basketball|streetball|street\\s+basketball|indoor\\s+basketball|outdoor\\s+basketball|recreational\\s+basketball|competitive\\s+basketball|league\\s+basketball|tournament\\s+basketball|scrimmage|basketball\\s+scrimmage|basketball\\s+training|basketball\\s+workout|basketball\\s+drills|free\\s+throws|three\\s+pointers|layups|dunking|dribbling|basketball\\s+skills|basketball\\s+conditioning|basketball\\s+fitness|team\\s+basketball|solo\\s+basketball|basketball\\s+shooting|shooting\\s+practice|basketball\\s+fundamentals)\\b",
+
+            "football": "\\b(?:football|soccer|football\\s+game|football\\s+practice|soccer\\s+game|soccer\\s+practice|futbol|footy|the\\s+beautiful\\s+game|association\\s+football|pitch\\s+game|eleven\\s+a\\s+side|kickball|ball\\s+game|field\\s+soccer|grass\\s+soccer|turf\\s+soccer|indoor\\s+soccer|outdoor\\s+soccer|recreational\\s+soccer|competitive\\s+soccer|league\\s+soccer|tournament\\s+soccer|pickup\\s+soccer|casual\\s+soccer|friendly\\s+match|soccer\\s+match|football\\s+match|soccer\\s+training|football\\s+training|soccer\\s+workout|football\\s+workout|soccer\\s+drills|football\\s+drills|soccer\\s+skills|football\\s+skills|soccer\\s+fitness|football\\s+fitness|team\\s+sport|world\\s+cup\\s+sport|penalty\\s+kicks|corner\\s+kicks|free\\s+kicks|goal\\s+scoring|soccer\\s+conditioning|football\\s+conditioning)\\b",
+
+            "cricket": "\\b(?:cricket|cricket\\s+game|cricket\\s+practice|cricket\\s+match|cricket\\s+training|cricket\\s+workout|cricket\\s+session|cricket\\s+drill|cricket\\s+coaching|cricket\\s+nets|cricket\\s+batting|cricket\\s+bowling|cricket\\s+fielding|wicket\\s+keeping|stumping|batting\\s+practice|bowling\\s+practice|fielding\\s+practice|test\\s+cricket|one\\s+day\\s+cricket|twenty20|t20|odi|international\\s+cricket|domestic\\s+cricket|club\\s+cricket|street\\s+cricket|gully\\s+cricket|beach\\s+cricket|indoor\\s+cricket|outdoor\\s+cricket|professional\\s+cricket|amateur\\s+cricket|recreational\\s+cricket|competitive\\s+cricket|village\\s+cricket|school\\s+cricket|college\\s+cricket|county\\s+cricket|league\\s+cricket|tournament\\s+cricket|championship\\s+cricket|world\\s+cup\\s+cricket|premier\\s+league\\s+cricket|ipl\\s+style|cricket\\s+fitness|cricket\\s+conditioning)\\b",
+
+            "badminton": "\\b(?:badminton|badminton\\s+game|badminton\\s+practice|shuttlecock|shuttle|badminton\\s+match|badminton\\s+training|badminton\\s+workout|badminton\\s+session|badminton\\s+drill|badminton\\s+coaching|racquet\\s+badminton|singles\\s+badminton|doubles\\s+badminton|mixed\\s+doubles\\s+badminton|badminton\\s+rally|badminton\\s+serve|badminton\\s+smash|badminton\\s+drop|badminton\\s+clear|badminton\\s+net\\s+play|badminton\\s+footwork|badminton\\s+fitness|badminton\\s+conditioning|recreational\\s+badminton|competitive\\s+badminton|professional\\s+badminton|amateur\\s+badminton|club\\s+badminton|league\\s+badminton|tournament\\s+badminton|championship\\s+badminton|international\\s+badminton|domestic\\s+badminton|indoor\\s+badminton|outdoor\\s+badminton|court\\s+badminton|backyard\\s+badminton|park\\s+badminton|beach\\s+badminton)\\b",
+
+            "tennis": "\\b(?:tennis|tennis\\s+game|tennis\\s+practice|lawn\\s+tennis|court\\s+tennis|racquet\\s+sport|racket\\s+sport|singles\\s+tennis|doubles\\s+tennis|mixed\\s+doubles|tennis\\s+match|tennis\\s+set|tennis\\s+tournament|tennis\\s+lesson|tennis\\s+coaching|tennis\\s+training|tennis\\s+workout|tennis\\s+fitness|tennis\\s+drills|tennis\\s+skills|serve\\s+practice|return\\s+practice|baseline\\s+play|net\\s+play|volley\\s+practice|overhead\\s+practice|forehand\\s+practice|backhand\\s+practice|tennis\\s+conditioning|recreational\\s+tennis|competitive\\s+tennis|club\\s+tennis|league\\s+tennis|hard\\s+court\\s+tennis|clay\\s+court\\s+tennis|grass\\s+court\\s+tennis|indoor\\s+tennis|outdoor\\s+tennis|professional\\s+tennis|amateur\\s+tennis)\\b",
+
+            "volleyball": "\\b(?:volleyball|volleyball\\s+game|volleyball\\s+practice|volleyball\\s+match|volleyball\\s+training|volleyball\\s+workout|volleyball\\s+session|volleyball\\s+drill|volleyball\\s+coaching|volleyball\\s+serve|volleyball\\s+spike|volleyball\\s+set|volleyball\\s+dig|volleyball\\s+block|volleyball\\s+pass|volleyball\\s+bump|volleyball\\s+attack|volleyball\\s+defense|volleyball\\s+rotation|six\\s+on\\s+six|beach\\s+volleyball|sand\\s+volleyball|indoor\\s+volleyball|outdoor\\s+volleyball|court\\s+volleyball|recreational\\s+volleyball|competitive\\s+volleyball|professional\\s+volleyball|amateur\\s+volleyball|club\\s+volleyball|league\\s+volleyball|tournament\\s+volleyball|championship\\s+volleyball|international\\s+volleyball|domestic\\s+volleyball|school\\s+volleyball|college\\s+volleyball|university\\s+volleyball|olympic\\s+volleyball|world\\s+cup\\s+volleyball|volleyball\\s+fitness|volleyball\\s+conditioning|sitting\\s+volleyball|standing\\s+volleyball)\\b",
+
+            "baseball": "\\b(?:baseball|baseball\\s+game|baseball\\s+practice|baseball\\s+match|baseball\\s+training|baseball\\s+workout|baseball\\s+session|baseball\\s+drill|baseball\\s+coaching|batting\\s+practice|pitching\\s+practice|fielding\\s+practice|catching\\s+practice|base\\s+running|diamond\\s+sport|america\\s+pastime|hardball|nine\\s+innings|major\\s+league|minor\\s+league|little\\s+league|softball\\s+variant|recreational\\s+baseball|competitive\\s+baseball|professional\\s+baseball|amateur\\s+baseball|club\\s+baseball|league\\s+baseball|tournament\\s+baseball|championship\\s+baseball|world\\s+series|mlb\\s+style|college\\s+baseball|high\\s+school\\s+baseball|youth\\s+baseball|senior\\s+baseball|vintage\\s+baseball|classic\\s+baseball|sandlot\\s+baseball|pickup\\s+baseball|backyard\\s+baseball|street\\s+baseball|baseball\\s+fitness|baseball\\s+conditioning)\\b",
+
+            "softball": "\\b(?:softball|softball\\s+game|softball\\s+practice|softball\\s+match|softball\\s+training|softball\\s+workout|softball\\s+session|softball\\s+drill|softball\\s+coaching|slow\\s+pitch|fast\\s+pitch|modified\\s+pitch|softball\\s+batting|softball\\s+pitching|softball\\s+fielding|softball\\s+catching|underhand\\s+pitch|recreational\\s+softball|competitive\\s+softball|professional\\s+softball|amateur\\s+softball|club\\s+softball|league\\s+softball|tournament\\s+softball|championship\\s+softball|co\\s+ed\\s+softball|men\\s+softball|women\\s+softball|mixed\\s+softball|church\\s+softball|company\\s+softball|community\\s+softball|park\\s+softball|beer\\s+league\\s+softball|weekend\\s+softball|summer\\s+softball|indoor\\s+softball|outdoor\\s+softball|softball\\s+fitness|softball\\s+conditioning)\\b",
+
+            "golf": "\\b(?:golf|golfing|golf\\s+game|golf\\s+practice)\\b",
+
+            "hockey": "\\b(?:hockey|hockey\\s+game|hockey\\s+practice|ice\\s+hockey|field\\s+hockey)\\b",
+
+            "rugby": "\\b(?:rugby|rugby\\s+game|rugby\\s+practice)\\b",
+
+            "pingpong": "\\b(?:pingpong|ping\\s+pong|table\\s+tennis|table\\s+tennis\\s+game)\\b",
+
+            "squash": "\\b(?:squash|squash\\s+game|squash\\s+practice)\\b",
+
+            "bowling": "\\b(?:bowling|bowling\\s+game|bowling\\s+practice|tenpin|bowling\\s+alley)\\b",
+
+            "billiards": "\\b(?:billiards|pool|billiards\\s+game|pool\\s+game|snooker)\\b",
+
+            "darts": "\\b(?:darts|darts\\s+game|darts\\s+practice)\\b",
+
+            "archery": "\\b(?:archery|archery\\s+practice|bow\\s+and\\s+arrow)\\b",
+
+            "fencing": "\\b(?:fencing|fencing\\s+practice|sword\\s+fighting|epee|foil|sabre)\\b",
+
+            "boxing": "\\b(?:boxing|boxing\\s+match|boxing\\s+practice|fight|fighting|pugilism|prizefighting|sweet\\s+science|fisticuffs|sparring|boxing\\s+sparring|shadow\\s+boxing|heavy\\s+bag|speed\\s+bag|double\\s+end\\s+bag|boxing\\s+training|boxing\\s+workout|boxing\\s+fitness|boxing\\s+conditioning|boxing\\s+drills|boxing\\s+technique|boxing\\s+skills|jab\\s+practice|cross\\s+practice|hook\\s+practice|uppercut\\s+practice|combination\\s+punches|pad\\s+work|mitt\\s+work|boxing\\s+footwork|ring\\s+work|boxing\\s+defense|boxing\\s+offense|amateur\\s+boxing|professional\\s+boxing|recreational\\s+boxing|fitness\\s+boxing|cardio\\s+boxing|boxing\\s+cardio|boxing\\s+class|boxing\\s+gym|white\\s+collar\\s+boxing)\\b",
+
+            "karate": "\\b(?:karate|karate\\s+practice|karate\\s+class)\\b",
+
+            "judo": "\\b(?:judo|judo\\s+practice|judo\\s+class)\\b",
+
+            "wrestling": "\\b(?:wrestling|wrestling\\s+match|wrestling\\s+practice)\\b",
+
+            "taekwondo": "\\b(?:taekwondo|tae\\s+kwon\\s+do|taekwondo\\s+practice)\\b",
+
+            "muay thai": "\\b(?:muay\\s+thai|muay\\s+thai\\s+fighting|thai\\s+boxing)\\b",
+
+            "martial arts": "\\b(?:martial\\s+arts|martial\\s+arts\\s+practice|self\\s+defense)\\b",
+
+            "kendo": "\\b(?:kendo|kendo\\s+practice)\\b",
+
+            "kickboxing": "\\b(?:kickboxing|kick\\s+boxing|kickboxing\\s+practice)\\b",
+
+            "kayaking": "\\b(?:kayaking|kayak|kayak\\s+ride|kayaking\\s+trip|rafting|raft|white\\s+water\\s+rafting|whitewater\\s+rafting|river\\s+rafting|rapid\\s+rafting|paddle\\s+boat|paddling|canoe|canoeing|canoe\\s+trip|paddleboard|paddle\\s+boarding|stand\\s+up\\s+paddle|sup|water\\s+paddling|recreational\\s+paddling|touring\\s+kayak|sea\\s+kayaking|ocean\\s+kayaking|lake\\s+kayaking|river\\s+kayaking|creek\\s+kayaking|flatwater\\s+kayaking|whitewater\\s+kayaking|kayak\\s+fishing|fishing\\s+kayak|tandem\\s+kayak|single\\s+kayak|sit\\s+on\\s+top\\s+kayak|sit\\s+inside\\s+kayak|inflatable\\s+kayak|folding\\s+kayak|expedition\\s+kayaking|adventure\\s+kayaking|wilderness\\s+kayaking|backcountry\\s+kayaking|multi\\s+day\\s+kayaking|kayak\\s+camping|paddle\\s+sports|water\\s+sports|aquatic\\s+adventure)\\b",
+
+            "water skiing": "\\b(?:water\\s+skiing|water\\s+ski|water\\s+skiing\\s+run)\\b",
+
+            "kite surfing": "\\b(?:kite\\s+surfing|kite\\s+surf|kiteboarding)\\b",
+
+            "snorkeling": "\\b(?:snorkeling|snorkel|snorkeling\\s+trip)\\b",
+
+            "diving": "\\b(?:diving|scuba\\s+diving|diving\\s+trip)\\b",
+
+            "synchronized swimming": "\\b(?:synchronized\\s+swimming|synchro|water\\s+ballet)\\b",
+
+            "fin swimming": "\\b(?:fin\\s+swimming|fin\\s+swim|monofin)\\b",
+
+            "water polo": "\\b(?:water\\s+polo|water\\s+polo\\s+game)\\b",
+
+            "skiing": "\\b(?:skiing|ski|ski\\s+run|skiing\\s+trip)\\b",
+
+            "snowboarding": "\\b(?:snowboarding|snowboard|snowboarding\\s+run)\\b",
+
+            "cross country skiing": "\\b(?:cross\\s+country\\s+skiing|cross\\s+country\\s+ski|xc\\s+skiing)\\b",
+
+            "alpine skiing": "\\b(?:alpine\\s+skiing|alpine\\s+ski|downhill\\s+skiing)\\b",
+
+            "curling": "\\b(?:curling|curling\\s+game|curling\\s+practice)\\b",
+
+            "zumba": "\\b(?:zumba|zumba\\s+class|zumba\\s+workout)\\b",
+
+            "ballet": "\\b(?:ballet|ballet\\s+class|ballet\\s+dance)\\b",
+
+            "belly dance": "\\b(?:belly\\s+dance|belly\\s+dancing)\\b",
+
+            "street dance": "\\b(?:street\\s+dance|street\\s+dancing|hip\\s+hop)\\b",
+
+            "ballroom dancing": "\\b(?:ballroom\\s+dancing|ballroom|ballroom\\s+dance)\\b",
+
+            "square dance": "\\b(?:square\\s+dance|square\\s+dancing)\\b",
+
+            "jazz dance": "\\b(?:jazz\\s+dance|jazz\\s+dancing)\\b",
+
+            "latin dance": "\\b(?:latin\\s+dance|latin\\s+dancing|salsa|tango|rumba)\\b",
+
+            "national dance": "\\b(?:national\\s+dance|folk\\s+dance|traditional\\s+dance)\\b",
+
+            "dance": "\\b(?:dance|dancing|dance\\s+class)\\b",
+
+            "hunting": "\\b(?:hunting|hunt|game\\s+hunting)\\b",
+
+            "fishing": "\\b(?:fishing|fish|angling)\\b",
+
+            "equestrian": "\\b(?:equestrian|horse\\s+riding|horseback\\s+riding)\\b",
+
+            "sailing": "\\b(?:sailing|sail|sailing\\s+trip|boat\\s+sailing)\\b",
+
+            "motorboat": "\\b(?:motorboat|speedboat|powerboat)\\b",
+
+            "atv": "\\b(?:atv|all\\s+terrain\\s+vehicle|quad|quad\\s+bike)\\b",
+
+            "paraglider": "\\b(?:paraglider|paragliding|paraglide)\\b",
+
+            "rock climbing": "\\b(?:rock\\s+climbing|climbing|rock\\s+climb|bouldering)\\b",
+
+            "parkour": "\\b(?:parkour|parkour\\s+training|free\\s+running)\\b",
+
+            "frisbee": "\\b(?:frisbee|disc|frisbee\\s+game)\\b",
+
+            "kite flying": "\\b(?:kite\\s+flying|kite|kite\\s+fly)\\b",
+
+            "tug of war": "\\b(?:tug\\s+of\\s+war|tug\\s+war|rope\\s+pull)\\b",
+
+            "hula hoop": "\\b(?:hula\\s+hoop|hula\\s+hooping)\\b",
+
+            "track and field": "\\b(?:track\\s+and\\s+field|track|field\\s+events|athletics)\\b",
+
+            "racing car": "\\b(?:racing\\s+car|car\\s+racing|auto\\s+racing)\\b",
+
+            "triathlon": "\\b(?:triathlon|triathlon\\s+training|ironman)\\b",
+
+            "cross training crossfit": "\\b(?:crossfit|cross\\s+fit|crossfit\\s+workout|cross\\s+training)\\b",
+
+            "free exercise": "\\b(?:free\\s+exercise|free\\s+workout|unspecified\\s+exercise)\\b",
+
+            "kabaddi": "\\b(?:kabaddi|kabaddi\\s+game)\\b",
+
+            "table football": "\\b(?:table\\s+football|foosball|table\\s+soccer)\\b",
+
+            "seven stones": "\\b(?:seven\\s+stones|seven\\s+stones\\s+game)\\b",
+
+            "kho kho": "\\b(?:kho\\s+kho|kho\\s+kho\\s+game)\\b",
+
+            "sepak takraw": "\\b(?:sepak\\s+takraw|sepak\\s+takraw\\s+game)\\b",
+
+            "snow sports": "\\b(?:snow\\s+sports|winter\\s+sports)\\b",
+
+            "snowmobile": "\\b(?:snowmobile|snow\\s+mobile)\\b",
+
+            "puck": "\\b(?:puck|puck\\s+game|ice\\s+puck)\\b",
+
+            "snow car": "\\b(?:snow\\s+car|snow\\s+vehicle)\\b",
+
+            "sled": "\\b(?:sled|sledding|sleigh)\\b",
+
+            "paddleboard surfing": "\\b(?:paddleboard\\s+surfing|stand\\s+up\\s+paddleboarding|sup)\\b",
+
+            "double board skiing": "\\b(?:double\\s+board\\s+skiing|double\\s+ski)\\b",
+
+            "paddle board": "\\b(?:paddle\\s+board|stand\\s+up\\s+paddle|sup)\\b",
+
+            "water sports": "\\b(?:water\\s+sports|aquatic\\s+sports)\\b",
+
+            "kayak rafting": "\\b(?:kayak\\s+rafting|whitewater\\s+kayaking)\\b",
+
+            "climb the stairs": "\\b(?:climb\\s+the\\s+stairs|stair\\s+climbing|stair\\s+climb)\\b",
+
+            "aerobics": "\\b(?:aerobics|aerobics\\s+class|aerobics\\s+workout)\\b",
+
+            "physical training": "\\b(?:physical\\s+training|pt|physical\\s+fitness)\\b",
+
+            "wall ball": "\\b(?:wall\\s+ball|wall\\s+ball\\s+workout)\\b",
+
+            "bobby jump": "\\b(?:bobby\\s+jump|bobby\\s+jump\\s+workout)\\b",
+
+            "upper limb training": "\\b(?:upper\\s+limb\\s+training|upper\\s+body\\s+training|arm\\s+training)\\b",
+
+            "lower limb training": "\\b(?:lower\\s+limb\\s+training|lower\\s+body\\s+training|leg\\s+training)\\b",
+
+            "waist and abdomen training": "\\b(?:waist\\s+and\\s+abdomen\\s+training|waist\\s+training|abdomen\\s+training|core\\s+training)\\b",
+
+            "back training": "\\b(?:back\\s+training|back\\s+workout|back\\s+exercises)\\b",
+
+            "gymnastics": "\\b(?:gymnastics|gymnastics\\s+practice|gymnastics\\s+class)\\b",
+
+            "freestyle": "\\b(?:freestyle|freestyle\\s+workout|free\\s+style)\\b",
+
+            "indoor fitness": "\\b(?:indoor\\s+fitness|indoor\\s+gym|indoor\\s+workout)\\b",
+
+            "flexibility training": "\\b(?:flexibility\\s+training|flexibility|stretching|stretch)\\b",
+
+            "stretching": "\\b(?:stretching|stretch|stretch\\s+workout)\\b",
+
+            "mixed aerobics": "\\b(?:mixed\\s+aerobics|mixed\\s+aerobics\\s+class)\\b",
+
+            "outdoor hiking": "\\b(?:outdoor\\s+hiking|outdoor\\s+hike|hiking|hike)\\b",
+
+            "indoor skating": "\\b(?:indoor\\s+skating|indoor\\s+skate|ice\\s+skating|ice\\s+skate)\\b",
+
+            "outdoor skating": "\\b(?:outdoor\\s+skating|outdoor\\s+skate|roller\\s+skating|roller\\s+skate)\\b",
+
+            "roller skating": "\\b(?:roller\\s+skating|roller\\s+skate|rollerblading|inline\\s+skating)\\b",
+
+            "skateboarding": "\\b(?:skateboarding|skateboard|skate\\s+boarding)\\b",
+
+            "croquet": "\\b(?:croquet|croquet\\s+game)\\b",
+
+            "handball": "\\b(?:handball|handball\\s+game)\\b",
+
+            "free sparring": "\\b(?:free\\s+sparring|sparring|sparring\\s+practice)\\b",
+
+            "tai chi": "\\b(?:tai\\s+chi|tai\\s+chi\\s+practice)\\b",
+
+            "mountain cycling": "\\b(?:mountain\\s+cycling|mountain\\s+bike|mountain\\s+biking|mtb|mountain\\s+terrain\\s+bike)\\b"
         ]
         
         // Sort by pattern length for more specific matching
@@ -1793,9 +2060,6 @@ class SlotExtractor {
                     slots["activity_type"] = activityType
                 }
             }
-            if slots["time_ref"] == nil {
-                slots["time_ref"] = "today"
-            }
             
         default:
             break
@@ -1839,7 +2103,7 @@ class SlotExtractor {
                 "\\bhow\\s+well\\s+(?:slept|sleep)\\b"
             ],
             "spo2": [
-                "\\boxygen|o2|spo2|saturation|blood\\s+oxygen\\b",
+                "\\boxygen|o2|spo2|sp2|sp\\s+2|saturation|blood\\s+oxygen\\b",
                 "\\bpulse\\s+ox|oximeter|breathing\\b"
             ],
             "weight": [
@@ -1851,6 +2115,17 @@ class SlotExtractor {
                 "\\bstress|stressed|anxiety|anxious\\b",
                 "\\btension|worried|overwhelmed\\b",
                 "\\bmental\\s+health|relaxation|calm\\b"
+            ],
+            "active hours": [
+                "\\bactive\\s+hours?\\b|\\bactivity\\s+hours?\\b|\\bhours?\\s+active\\b",
+                "\\bhow\\s+(?:much|many|long).*(?:active|activity).*hours?\\b",
+                "\\bhours?\\s+(?:of\\s+)?(?:activity|active\\s+time|movement)\\b",
+                "\\b(?:daily|today'?s|total)\\s+active\\s+(?:time|hours?|duration)\\b",
+                "\\btime\\s+(?:spent\\s+)?active\\b|\\bactive\\s+time\\b|\\bactivity\\s+time\\b",
+                "\\bhow\\s+active.*(?:today|been)\\b",
+                "\\bmoving\\s+(?:time|hours?|duration)\\b|\\btime\\s+moving\\b",
+                "\\bactive\\s+(?:duration|period|minutes?)\\b",
+                "\\bphysical\\s+activity\\s+(?:time|hours?|duration)\\b"
             ]
         ]
         
