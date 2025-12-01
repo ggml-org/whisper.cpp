@@ -12,6 +12,147 @@ class SlotExtractor {
     
     private static let logger = Logger(subsystem: "com.whispercpp.demo", category: "SlotExtractor")
     
+    // Activity type to number mapping based on SportActivityName enum
+    private let activityNumberMap: [String: Int] = [
+        "indoor running": 3,
+        "treadmill": 66,
+        "outdoor walking": 2,
+        "outdoor running": 1,
+        "trekking": 4,
+        "trail running": 5,
+        "hunting": 15,
+        "fishing": 36,
+        "skateboarding": 17,
+        "fencing": 102,
+        "boxing": 56,
+        "tai chi": 59,
+        "outdoor cycling": 6,
+        "indoor cycling": 7,
+        "bmx": 14,
+        "curling": 37,
+        "outdoor skating": 19,
+        "indoor skating": 38,
+        "archery": 65,
+        "equestrian": 20,
+        "cricket": 217,
+        "basketball": 9,
+        "badminton": 12,
+        "outdoor hiking": 13,
+        "golf": 134,
+        "football": 10,
+        "ballet": 47,
+        "square dance": 49,
+        "zumba": 53,
+        "mixed aerobics": 24,
+        "strength training": 25,
+        "stretching": 26,
+        "indoor fitness": 30,
+        "elliptical machine": 34,
+        "yoga": 35,
+        "climbing machine": 27,
+        "flexibility training": 29,
+        "stepper": 31,
+        "step training": 32,
+        "gymnastics": 33,
+        "freestyle": 8,
+        "core training": 23,
+        "sailing": 16,
+        "roller skating": 18,
+        "baseball": 40,
+        "bowling": 41,
+        "squash": 42,
+        "softball": 43,
+        "croquet": 44,
+        "volleyball": 45,
+        "handball": 46,
+        "pingpong": 11,
+        "belly dance": 48,
+        "street dance": 50,
+        "ballroom dancing": 51,
+        "dance": 52,
+        "cross training crossfit": 84,
+        "karate": 55,
+        "judo": 57,
+        "wrestling": 58,
+        "muay thai": 60,
+        "taekwondo": 61,
+        "martial arts": 62,
+        "free sparring": 63,
+        "pool swimming": 200,
+        "rope skipping": 122,
+        "rowing machine": 121,
+        "open water": 201,
+        "triathlon": 123,
+        "kendo": 54,
+        "pilates": 28,
+        "functional training": 94,
+        "sit ups": 93,
+        "dumbbell training": 88,
+        "barbell training": 89,
+        "weightlifting": 90,
+        "hiit": 64,
+        "deadlift": 91,
+        "darts": 114,
+        "frisbee": 118,
+        "kite flying": 117,
+        "tug of war": 115,
+        "paddleboard surfing": 132,
+        "double board skiing": 130,
+        "paddle board": 67,
+        "water polo": 68,
+        "water sports": 69,
+        "water skiing": 70,
+        "kayaking": 71,
+        "kayak rafting": 72,
+        "motorboat": 73,
+        "fin swimming": 74,
+        "diving": 75,
+        "synchronized swimming": 76,
+        "snorkeling": 77,
+        "kite surfing": 78,
+        "rock climbing": 79,
+        "parkour": 80,
+        "atv": 81,
+        "paraglider": 82,
+        "climb the stairs": 83,
+        "aerobics": 85,
+        "physical training": 86,
+        "wall ball": 87,
+        "bobby jump": 92,
+        "upper limb training": 95,
+        "lower limb training": 96,
+        "waist and abdomen training": 97,
+        "back training": 98,
+        "national dance": 99,
+        "jazz dance": 100,
+        "latin dance": 101,
+        "rugby": 103,
+        "hockey": 104,
+        "tennis": 105,
+        "billiards": 106,
+        "sepak takraw": 108,
+        "snow sports": 109,
+        "snowmobile": 110,
+        "puck": 111,
+        "snow car": 112,
+        "sled": 113,
+        "hula hoop": 116,
+        "track and field": 119,
+        "racing car": 120,
+        "mountain cycling": 124,
+        "kickboxing": 125,
+        "skiing": 126,
+        "cross country skiing": 127,
+        "snowboarding": 128,
+        "alpine skiing": 129,
+        "free exercise": 131,
+        "kabaddi": 133,
+        "indoor walking": 135,
+        "table football": 136,
+        "seven stones": 137,
+        "kho kho": 138
+    ]
+    
     // MARK: - Slot Templates
     
     private let intentSlotTemplates: [String: [String]] = [
@@ -373,6 +514,8 @@ class SlotExtractor {
             return extractTool(text: originalText)
         case "activity_type":
             return extractActivityType(text: originalText)
+        case "activity_number":
+            return extractActivityNumber(text: originalText)
         case "app":
             return extractApp(text: originalText)
         case "contact":
@@ -1677,6 +1820,16 @@ class SlotExtractor {
         return nil
     }
     
+    private func extractActivityNumber(text: String) -> Int? {
+        // First extract the activity type
+        guard let activityType = extractActivityType(text: text) else {
+            return nil
+        }
+        
+        // Then look up the activity number from the mapping
+        return activityNumberMap[activityType]
+    }
+    
     private func extractApp(text: String) -> String? {
         let apps: [String: String] = [
             "heart rate": "\\b(?:heart\\s+rate|heartrate|heart\\s+beat|heartbeat|pulse|pulse\\s+rate|bpm|beats\\s+per\\s+minute|cardiac|cardiac\\s+rate|heart\\s+rhythm|resting\\s+heart\\s+rate|rhr|max\\s+heart\\s+rate|maximum\\s+heart\\s+rate|heart\\s+health|cardiovascular|cardio|ticker|heart\\s+monitor|heart\\s+sensor|hr|beat|beats|beating|palpitation|palpitations|tachycardia|bradycardia|heart\\s+zone|target\\s+heart\\s+rate|recovery\\s+heart\\s+rate)\\b",
@@ -2100,6 +2253,11 @@ class SlotExtractor {
             if slots["activity_type"] == nil {
                 if let activityType = extractActivityType(text: text) {
                     slots["activity_type"] = activityType
+                }
+            }
+            if slots["activity_number"] == nil {
+                if let activityNumber = extractActivityNumber(text: text) {
+                    slots["activity_number"] = activityNumber
                 }
             }
             

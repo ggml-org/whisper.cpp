@@ -15,6 +15,147 @@ data class SlotExtractionResult(
 
 class SlotExtractor {
     
+    // Activity type to number mapping based on SportActivityName enum
+    private val activityNumberMap = mapOf(
+        "indoor running" to 3,
+        "treadmill" to 66,
+        "outdoor walking" to 2,
+        "outdoor running" to 1,
+        "trekking" to 4,
+        "trail running" to 5,
+        "hunting" to 15,
+        "fishing" to 36,
+        "skateboarding" to 17,
+        "fencing" to 102,
+        "boxing" to 56,
+        "tai chi" to 59,
+        "outdoor cycling" to 6,
+        "indoor cycling" to 7,
+        "bmx" to 14,
+        "curling" to 37,
+        "outdoor skating" to 19,
+        "indoor skating" to 38,
+        "archery" to 65,
+        "equestrian" to 20,
+        "cricket" to 217,
+        "basketball" to 9,
+        "badminton" to 12,
+        "outdoor hiking" to 13,
+        "golf" to 134,
+        "football" to 10,
+        "ballet" to 47,
+        "square dance" to 49,
+        "zumba" to 53,
+        "mixed aerobics" to 24,
+        "strength training" to 25,
+        "stretching" to 26,
+        "indoor fitness" to 30,
+        "elliptical machine" to 34,
+        "yoga" to 35,
+        "climbing machine" to 27,
+        "flexibility training" to 29,
+        "stepper" to 31,
+        "step training" to 32,
+        "gymnastics" to 33,
+        "freestyle" to 8,
+        "core training" to 23,
+        "sailing" to 16,
+        "roller skating" to 18,
+        "baseball" to 40,
+        "bowling" to 41,
+        "squash" to 42,
+        "softball" to 43,
+        "croquet" to 44,
+        "volleyball" to 45,
+        "handball" to 46,
+        "pingpong" to 11,
+        "belly dance" to 48,
+        "street dance" to 50,
+        "ballroom dancing" to 51,
+        "dance" to 52,
+        "cross training crossfit" to 84,
+        "karate" to 55,
+        "judo" to 57,
+        "wrestling" to 58,
+        "muay thai" to 60,
+        "taekwondo" to 61,
+        "martial arts" to 62,
+        "free sparring" to 63,
+        "pool swimming" to 200,
+        "rope skipping" to 122,
+        "rowing machine" to 121,
+        "open water" to 201,
+        "triathlon" to 123,
+        "kendo" to 54,
+        "pilates" to 28,
+        "functional training" to 94,
+        "sit ups" to 93,
+        "dumbbell training" to 88,
+        "barbell training" to 89,
+        "weightlifting" to 90,
+        "hiit" to 64,
+        "deadlift" to 91,
+        "darts" to 114,
+        "frisbee" to 118,
+        "kite flying" to 117,
+        "tug of war" to 115,
+        "paddleboard surfing" to 132,
+        "double board skiing" to 130,
+        "paddle board" to 67,
+        "water polo" to 68,
+        "water sports" to 69,
+        "water skiing" to 70,
+        "kayaking" to 71,
+        "kayak rafting" to 72,
+        "motorboat" to 73,
+        "fin swimming" to 74,
+        "diving" to 75,
+        "synchronized swimming" to 76,
+        "snorkeling" to 77,
+        "kite surfing" to 78,
+        "rock climbing" to 79,
+        "parkour" to 80,
+        "atv" to 81,
+        "paraglider" to 82,
+        "climb the stairs" to 83,
+        "aerobics" to 85,
+        "physical training" to 86,
+        "wall ball" to 87,
+        "bobby jump" to 92,
+        "upper limb training" to 95,
+        "lower limb training" to 96,
+        "waist and abdomen training" to 97,
+        "back training" to 98,
+        "national dance" to 99,
+        "jazz dance" to 100,
+        "latin dance" to 101,
+        "rugby" to 103,
+        "hockey" to 104,
+        "tennis" to 105,
+        "billiards" to 106,
+        "sepak takraw" to 108,
+        "snow sports" to 109,
+        "snowmobile" to 110,
+        "puck" to 111,
+        "snow car" to 112,
+        "sled" to 113,
+        "hula hoop" to 116,
+        "track and field" to 119,
+        "racing car" to 120,
+        "mountain cycling" to 124,
+        "kickboxing" to 125,
+        "skiing" to 126,
+        "cross country skiing" to 127,
+        "snowboarding" to 128,
+        "alpine skiing" to 129,
+        "free exercise" to 131,
+        "kabaddi" to 133,
+        "indoor walking" to 135,
+        "table football" to 136,
+        "seven stones" to 137,
+        "kho kho" to 138
+    )
+    
     private val intentSlotTemplates = mapOf(
         "QueryPoint" to listOf("metric"),  // time_ref, unit, and identifier can have defaults
         "SetGoal" to listOf("metric", "target"),  // unit can be inferred
@@ -356,6 +497,7 @@ class SlotExtractor {
             "action" -> extractAction(originalText)
             "tool" -> extractTool(originalText)
             "activity_type" -> extractActivityType(originalText)
+            "activity_number" -> extractActivityNumber(originalText)
             "app" -> extractApp(originalText)
             "contact" -> extractContact(originalText)
             "location" -> extractLocation(originalText)
@@ -1344,7 +1486,7 @@ class SlotExtractor {
         val activities = mapOf(
             "outdoor running" to "\\b(?<!indoor\\s)(?:outdoor\\s+)?(?:run|running|ran|jog|jogging|jogged|sprint|sprinting|sprinted|dash|dashing|race|racing|trail\\s+run|trail\\s+running|distance\\s+run|long\\s+run|short\\s+run|tempo\\s+run|interval\\s+run|fartlek|road\\s+run|cross\\s+country|marathon|half\\s+marathon|5k|10k|runner|runners|pace|pacing|stride|striding|gallop|galloping|bound|bounding|hurdle|hurdling|relay|relays|track\\s+running|road\\s+racing|fun\\s+run|charity\\s+run|morning\\s+run|evening\\s+run|daily\\s+run|weekly\\s+run|cardio\\s+run|fitness\\s+run|outdoor\\s+jog|park\\s+run|street\\s+running|pavement\\s+running|sidewalk\\s+running|neighborhood\\s+run|community\\s+run|group\\s+run|solo\\s+run|recreational\\s+running|competitive\\s+running|distance\\s+running|endurance\\s+running|speed\\s+work)\\b",
             
-            "indoor cycling" to "\\b(?<!outdoor\\s)indoor\\s+(?:cycling|cycle|cycled|bike|biking|biked|bicycle|bicycling|spin|spinning|spin\\s+class|stationary\\s+bike|exercise\\s+bike|bike\\s+ride|pedal|pedaling|pedalled|indoor\\s+bike|cycle\\s+class|RPM|cadence|peloton|zwift|virtual\\s+cycling|turbo\\s+trainer|trainer\\s+ride)\\b",
+            "indoor cycling" to "\\b(?<!outdoor\\s)indoor\\s+(?:cycling|cycle|cycled|bike|biking|biked|bicycle|bicycling|spin|spinning|spin\\s+class|stationary\\s+bike|exercise\\s+bike|bike\\s+ride|pedal|pedaling|pedalled|indoor\\s+bike|cycle\\s+class|RPM|cadence|peloton|zwift|virtual\\s+cycling|turbo\\s+trainer|trainer\\s+ride|cycling indoor)\\b",
             
             "yoga" to "\\b(?:yoga|yogi|asana|asanas|meditation|meditate|meditating|meditated|stretch|stretching|stretched|flexibility|vinyasa|hatha|ashtanga|bikram|hot\\s+yoga|power\\s+yoga|yin\\s+yoga|restorative\\s+yoga|pranayama|breathing\\s+exercise|mindfulness|zen|namaste|downward\\s+dog|warrior\\s+pose|sun\\s+salutation|flow|yoga\\s+flow|kundalini|iyengar|anusara|kripalu|sivananda|gentle\\s+yoga|beginner\\s+yoga|advanced\\s+yoga|therapeutic\\s+yoga|chair\\s+yoga|wall\\s+yoga|aerial\\s+yoga|yoga\\s+nidra|relaxation\\s+yoga|spiritual\\s+yoga|classical\\s+yoga|modern\\s+yoga|fusion\\s+yoga|yoga\\s+therapy|yoga\\s+practice|yoga\\s+session|yoga\\s+class|yoga\\s+workout|yoga\\s+routine|morning\\s+yoga|evening\\s+yoga|bedtime\\s+yoga|wake\\s+up\\s+yoga|desk\\s+yoga|office\\s+yoga|travel\\s+yoga|outdoor\\s+yoga|beach\\s+yoga|park\\s+yoga|home\\s+yoga|studio\\s+yoga|group\\s+yoga|private\\s+yoga|online\\s+yoga|virtual\\s+yoga)\\b",
 
@@ -1358,13 +1500,13 @@ class SlotExtractor {
 
             "outdoor walking" to "\\b(?<!indoor\\s)(?:outdoor\\s+walking|outdoor\\s+walk|outdoor\\s+hike|outdoor\\s+stroll|nature\\s+walk|trail\\s+walk|hill\\s+walk|forest\\s+walk|walk|walking|walked|walker|stroll|strolling|strolled|hike|hiking|hiked|hiker|trek|trekking|trekked|ramble|rambling|wander|wandering|wandered|amble|ambling|march|marching|power\\s+walk|brisk\\s+walk|leisurely\\s+walk|nature\\s+walk|trail\\s+walk|hill\\s+walk|speed\\s+walk|fitness\\s+walk|evening\\s+walk|morning\\s+walk)\\b",
 
-            "indoor walking" to "\\b(?:indoor\\s+walking|indoor\\s+walk|indoor\\s+stroll|treadmill\\s+walking|treadmill\\s+walk)\\b",
+            "indoor walking" to "\\b(?:indoor\\s+walking|indoor\\s+walk|indoor\\s+stroll|treadmill\\s+walking|treadmill\\s+walk|walk indoor|walking indoor)\\b",
 
             "outdoor cycling" to "\\b(?<!indoor\\s)(?<!quad\\s)(?:outdoor\\s+cycling|outdoor\\s+bike|outdoor\\s+biking|road\\s+cycling|road\\s+bike|mountain\\s+bike|mountain\\s+biking|bike\\s+ride|cycle\\s+ride|bicycle\\s+ride|cycling|cycle|cycled|bike|biking|biked|bicycle|bicycling|pedal|pedaling|pedalled|two\\s+wheeler|pushbike|velocipede|touring\\s+bike|hybrid\\s+bike|commuter\\s+bike|recreational\\s+cycling|leisure\\s+cycling|weekend\\s+ride|group\\s+ride|solo\\s+ride|charity\\s+ride|bike\\s+tour|cycling\\s+tour|bike\\s+trip|cycling\\s+trip|bicycle\\s+tour|road\\s+biking|trail\\s+biking|cross\\s+country\\s+biking|endurance\\s+cycling|speed\\s+cycling|time\\s+trial|criterium|gran\\s+fondo|century\\s+ride|metric\\s+century|bike\\s+workout|cycling\\s+workout|outdoor\\s+pedaling|fresh\\s+air\\s+cycling|nature\\s+cycling|scenic\\s+ride|countryside\\s+cycling)\\b",
 
             "bmx" to "\\b(?:bmx|bmx\\s+bike|bmx\\s+racing|bmx\\s+riding|bmx\\s+freestyle|bmx\\s+street|bmx\\s+park|bmx\\s+dirt|bmx\\s+vert|bmx\\s+flatland|bicycle\\s+motocross|bike\\s+motocross|twenty\\s+inch\\s+bike|small\\s+wheel\\s+bike|stunt\\s+bike|trick\\s+bike|jump\\s+bike|ramp\\s+bike|skate\\s+park\\s+bike|pump\\s+track|bmx\\s+track|bmx\\s+course|bmx\\s+trail|bmx\\s+session|recreational\\s+bmx|competitive\\s+bmx|professional\\s+bmx|amateur\\s+bmx|youth\\s+bmx|adult\\s+bmx|racing\\s+bmx|freestyle\\s+bmx|old\\s+school\\s+bmx|new\\s+school\\s+bmx|vintage\\s+bmx|modern\\s+bmx|single\\s+speed\\s+bmx|fixed\\s+gear\\s+bmx)\\b",
 
-            "pool swimming" to "\\b(?:pool\\s+swimming|pool\\s+swim|pool\\s+workout|lap\\s+swimming|lap\\s+swim|indoor\\s+swimming|indoor\\s+swim|chlorinated\\s+pool|swimming\\s+pool|olympic\\s+pool|competition\\s+pool|lane\\s+swimming|freestyle\\s+swimming|backstroke\\s+swimming|breaststroke\\s+swimming|butterfly\\s+swimming|individual\\s+medley|medley\\s+swimming|sprint\\s+swimming|distance\\s+swimming|endurance\\s+swimming|interval\\s+swimming|tempo\\s+swimming|technique\\s+swimming|stroke\\s+work|kick\\s+sets|pull\\s+sets|swim\\s+drills|swimming\\s+laps|length\\s+swimming|recreational\\s+pool\\s+swimming|competitive\\s+pool\\s+swimming|masters\\s+swimming|youth\\s+swimming|adult\\s+swimming|senior\\s+swimming|aquatic\\s+center|natatorium|swimming\\s+facility|heated\\s+pool)\\b",
+            "pool swimming" to "\\b(?:pool\\s+swimming|pool\\s+swim|swimming|pool\\s+workout|lap\\s+swimming|lap\\s+swim|indoor\\s+swimming|indoor\\s+swim|chlorinated\\s+pool|swimming\\s+pool|olympic\\s+pool|competition\\s+pool|lane\\s+swimming|freestyle\\s+swimming|backstroke\\s+swimming|breaststroke\\s+swimming|butterfly\\s+swimming|individual\\s+medley|medley\\s+swimming|sprint\\s+swimming|distance\\s+swimming|endurance\\s+swimming|interval\\s+swimming|tempo\\s+swimming|technique\\s+swimming|stroke\\s+work|kick\\s+sets|pull\\s+sets|swim\\s+drills|swimming\\s+laps|length\\s+swimming|recreational\\s+pool\\s+swimming|competitive\\s+pool\\s+swimming|masters\\s+swimming|youth\\s+swimming|adult\\s+swimming|senior\\s+swimming|aquatic\\s+center|natatorium|swimming\\s+facility|heated\\s+pool)\\b",
 
             "open water" to "\\b(?:open\\s+water|open\\s+water\\s+swimming|open\\s+water\\s+swim|ocean\\s+swimming|ocean\\s+swim|lake\\s+swimming|lake\\s+swim|sea\\s+swimming|sea\\s+swim|river\\s+swimming|river\\s+swim|bay\\s+swimming|bay\\s+swim|pond\\s+swimming|pond\\s+swim|natural\\s+water\\s+swimming|wild\\s+swimming|cold\\s+water\\s+swimming|salt\\s+water\\s+swimming|fresh\\s+water\\s+swimming|tidal\\s+swimming|current\\s+swimming|wave\\s+swimming|surf\\s+swimming|channel\\s+swimming|crossing\\s+swimming|marathon\\s+swimming|ultra\\s+swimming|endurance\\s+open\\s+water|triathlon\\s+swimming|wetsuit\\s+swimming|skin\\s+swimming|outdoor\\s+swimming|natural\\s+swimming|adventure\\s+swimming|expedition\\s+swimming|recreational\\s+open\\s+water|competitive\\s+open\\s+water|mass\\s+start\\s+swimming|beach\\s+start\\s+swimming)\\b",
 
@@ -1627,6 +1769,22 @@ class SlotExtractor {
         }
         
         return null
+    }
+    
+    private fun extractActivityNumber(text: String): Int? {
+        // First extract the activity type
+        val activityType = extractActivityType(text)
+        Log.d(LOG_TAG, "🔢 extractActivityNumber - activity_type: $activityType")
+        
+        if (activityType == null) {
+            return null
+        }
+        
+        // Then look up the activity number from the mapping
+        val activityNumber = activityNumberMap[activityType]
+        Log.d(LOG_TAG, "🔢 extractActivityNumber - activity_number: $activityNumber")
+        
+        return activityNumber
     }
     
     private fun extractApp(text: String): String? {
@@ -2001,6 +2159,14 @@ class SlotExtractor {
                     val activityType = extractActivityType(text)
                     if (activityType != null) {
                         slots["activity_type"] = activityType
+                        Log.d(LOG_TAG, "  ✓ Added activity_type contextually: $activityType")
+                    }
+                }
+                if (!slots.containsKey("activity_number")) {
+                    val activityNumber = extractActivityNumber(text)
+                    if (activityNumber != null) {
+                        slots["activity_number"] = activityNumber
+                        Log.d(LOG_TAG, "  ✓ Added activity_number contextually: $activityNumber")
                     }
                 }
             }
