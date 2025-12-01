@@ -674,6 +674,49 @@ class SlotExtractor {
     
     // MARK: - Time Normalization Helper
     
+    /// Converts word numbers to digits
+    /// Examples: "three" -> "3", "fifteen" -> "15", "twenty five" -> "25"
+    private func convertWordToNumber(_ text: String) -> String {
+        let wordToDigit: [String: String] = [
+            "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+            "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+            "ten": "10", "eleven": "11", "twelve": "12", "thirteen": "13",
+            "fourteen": "14", "fifteen": "15", "sixteen": "16", "seventeen": "17",
+            "eighteen": "18", "nineteen": "19", "twenty": "20", "thirty": "30",
+            "forty": "40", "fifty": "50", "sixty": "60", "seventy": "70",
+            "eighty": "80", "ninety": "90",
+            "a": "1", "an": "1", "half": "0.5", "quarter": "0.25"
+        ]
+        
+        var result = text.lowercased()
+        
+        // Handle compound numbers like "twenty five" -> "25"
+        let compoundPattern = "\\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)[\\s-]+(one|two|three|four|five|six|seven|eight|nine)\\b"
+        if let regex = try? NSRegularExpression(pattern: compoundPattern, options: [.caseInsensitive]) {
+            let matches = regex.matches(in: result, range: NSRange(result.startIndex..., in: result))
+            for match in matches.reversed() {
+                if let tensRange = Range(match.range(at: 1), in: result),
+                   let onesRange = Range(match.range(at: 2), in: result),
+                   let fullRange = Range(match.range, in: result) {
+                    let tens = Int(wordToDigit[String(result[tensRange])] ?? "0") ?? 0
+                    let ones = Int(wordToDigit[String(result[onesRange])] ?? "0") ?? 0
+                    let sum = tens + ones
+                    result.replaceSubrange(fullRange, with: String(sum))
+                }
+            }
+        }
+        
+        // Replace simple word numbers
+        for (word, digit) in wordToDigit {
+            let pattern = "\\b\(word)\\b"
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+                result = regex.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: digit)
+            }
+        }
+        
+        return result
+    }
+    
     /// Normalizes various time formats to 24-hour HH:MM format
     /// Examples:
     /// - "730" -> "07:30"
@@ -828,7 +871,9 @@ class SlotExtractor {
     /// - "1:30" -> 90 (seconds, interpreted as MM:SS)
     /// - "2:30:45" -> 9045 (seconds, HH:MM:SS)
     private func normalizeTimerDuration(_ text: String, matchedValue: String) -> Int {
-        let cleanText = text.lowercased()
+        // Convert word numbers to digits first
+        let cleanText = convertWordToNumber(text.lowercased())
+        let cleanMatchedValue = convertWordToNumber(matchedValue.lowercased())
         
         // Check for combined duration patterns first
         
@@ -871,30 +916,30 @@ class SlotExtractor {
         
         // HH:MM:SS format
         if let regex = try? NSRegularExpression(pattern: "^(\\d+):(\\d+):(\\d+)$"),
-           let match = regex.firstMatch(in: matchedValue.trimmingCharacters(in: .whitespaces), range: NSRange(matchedValue.startIndex..., in: matchedValue)) {
-            if let hoursRange = Range(match.range(at: 1), in: matchedValue),
-               let minutesRange = Range(match.range(at: 2), in: matchedValue),
-               let secondsRange = Range(match.range(at: 3), in: matchedValue) {
-                let hours = Int(matchedValue[hoursRange]) ?? 0
-                let minutes = Int(matchedValue[minutesRange]) ?? 0
-                let seconds = Int(matchedValue[secondsRange]) ?? 0
+           let match = regex.firstMatch(in: cleanMatchedValue.trimmingCharacters(in: .whitespaces), range: NSRange(cleanMatchedValue.startIndex..., in: cleanMatchedValue)) {
+            if let hoursRange = Range(match.range(at: 1), in: cleanMatchedValue),
+               let minutesRange = Range(match.range(at: 2), in: cleanMatchedValue),
+               let secondsRange = Range(match.range(at: 3), in: cleanMatchedValue) {
+                let hours = Int(cleanMatchedValue[hoursRange]) ?? 0
+                let minutes = Int(cleanMatchedValue[minutesRange]) ?? 0
+                let seconds = Int(cleanMatchedValue[secondsRange]) ?? 0
                 return hours * 3600 + minutes * 60 + seconds
             }
         }
         
         // MM:SS format (assuming minutes:seconds for timer)
         if let regex = try? NSRegularExpression(pattern: "^(\\d+):(\\d+)$"),
-           let match = regex.firstMatch(in: matchedValue.trimmingCharacters(in: .whitespaces), range: NSRange(matchedValue.startIndex..., in: matchedValue)) {
-            if let minutesRange = Range(match.range(at: 1), in: matchedValue),
-               let secondsRange = Range(match.range(at: 2), in: matchedValue) {
-                let minutes = Int(matchedValue[minutesRange]) ?? 0
-                let seconds = Int(matchedValue[secondsRange]) ?? 0
+           let match = regex.firstMatch(in: cleanMatchedValue.trimmingCharacters(in: .whitespaces), range: NSRange(cleanMatchedValue.startIndex..., in: cleanMatchedValue)) {
+            if let minutesRange = Range(match.range(at: 1), in: cleanMatchedValue),
+               let secondsRange = Range(match.range(at: 2), in: cleanMatchedValue) {
+                let minutes = Int(cleanMatchedValue[minutesRange]) ?? 0
+                let seconds = Int(cleanMatchedValue[secondsRange]) ?? 0
                 return minutes * 60 + seconds
             }
         }
         
         // Check for single unit patterns
-        let cleanedValue = matchedValue.replacingOccurrences(of: "[^\\d.]", with: "", options: .regularExpression)
+        let cleanedValue = cleanMatchedValue.replacingOccurrences(of: "[^\\d.]", with: "", options: .regularExpression)
         guard let value = Double(cleanedValue) else { return 0 }
         
         if cleanText.range(of: "\\b(?:hours?|hrs?|hr|h)\\b", options: .regularExpression) != nil {
@@ -978,10 +1023,10 @@ class SlotExtractor {
                 "\\b(\\d{1,2}(?::\\d{2})?[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?)\\b",
                 "\\b(\\d{3,4}[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?)\\b", // For "1030 pm", "630.pm" format
                 
-                // Duration patterns for timers
-                "\\b(\\d+(?:\\.\\d+)?)\\s*(?:hours?|hrs?|hr|h)\\b",
-                "\\b(\\d+(?:\\.\\d+)?)\\s*(?:minutes?|mins?|min|m)\\b",
-                "\\b(\\d+(?:\\.\\d+)?)\\s*(?:seconds?|secs?|sec|s)\\b",
+                // Duration patterns for timers (with word number support)
+                "\\b(\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|a|an|half|quarter)\\s*(?:hours?|hrs?|hr|h)\\b",
+                "\\b(\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|a|an|half|quarter)\\s*(?:minutes?|mins?|min|m)\\b",
+                "\\b(\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|a|an|half|quarter)\\s*(?:seconds?|secs?|sec|s)\\b",
                 
                 // Combined time patterns
                 "\\b(\\d+)\\s*(?:h|hr|hours?)\\s*(?:and\\s+)?(\\d+)\\s*(?:m|min|minutes?)\\b",
@@ -992,19 +1037,19 @@ class SlotExtractor {
                 // Duration keywords
                 "\\b(?:for|during|lasting|takes?)\\s+(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
                 
-                // Timer-specific patterns
-                "\\b(?:set|start|begin|run|timer|stopwatch)\\s*(?:for|to|at)?\\s*(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
+                // Timer-specific patterns (with word number support)
+                "\\b(?:set|start|begin|run|timer|stopwatch)\\s*(?:for|to|at)?\\s*(\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|a|an|half|quarter)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
                 
                 // Alarm-specific patterns - capture full time with AM/PM (prioritize space-separated)
                 "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{1,2}[\\s.]+?\\d{1,2}[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?)\\b",
                 "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{1,2}(?::\\d{2})?[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?)\\b",
                 "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{3,4}[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?)\\b",
                 
-                // "In X time" patterns
-                "\\b(?:in|after|within)\\s+(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
+                // "In X time" patterns (with word number support)
+                "\\b(?:in|after|within)\\s+(\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|a|an|half|quarter)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
                 
-                // Countdown patterns
-                "\\b(?:countdown|count\\s+down)\\s*(?:from|for)?\\s*(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
+                // Countdown patterns (with word number support)
+                "\\b(?:countdown|count\\s+down)\\s*(?:from|for)?\\s*(\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|a|an|half|quarter)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
                 
                 // Direct time patterns for alarm setting - capture full time with AM/PM (prioritize space-separated)
                 "\\b(?:set|create|make).*?(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}[\\s.]+?\\d{1,2}[\\.\\s]*([ap])(?:\\.?\\s*m(?:\\.?)?)?)\\b",

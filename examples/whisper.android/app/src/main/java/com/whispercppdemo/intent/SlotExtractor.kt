@@ -662,6 +662,41 @@ class SlotExtractor {
     }
     
     /**
+     * Converts word numbers to digits
+     * Examples: "three" -> "3", "fifteen" -> "15", "twenty five" -> "25"
+     */
+    private fun convertWordToNumber(text: String): String {
+        val wordToDigit = mapOf(
+            "zero" to "0", "one" to "1", "two" to "2", "three" to "3", "four" to "4",
+            "five" to "5", "six" to "6", "seven" to "7", "eight" to "8", "nine" to "9",
+            "ten" to "10", "eleven" to "11", "twelve" to "12", "thirteen" to "13",
+            "fourteen" to "14", "fifteen" to "15", "sixteen" to "16", "seventeen" to "17",
+            "eighteen" to "18", "nineteen" to "19", "twenty" to "20", "thirty" to "30",
+            "forty" to "40", "fifty" to "50", "sixty" to "60", "seventy" to "70",
+            "eighty" to "80", "ninety" to "90",
+            "a" to "1", "an" to "1", "half" to "0.5", "quarter" to "0.25"
+        )
+        
+        var result = text.lowercase()
+        
+        // Handle compound numbers like "twenty five" -> "25"
+        val compoundPattern = "\\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)[\\s-]+(one|two|three|four|five|six|seven|eight|nine)\\b".toRegex()
+        compoundPattern.findAll(result).forEach { match ->
+            val tens = wordToDigit[match.groupValues[1]] ?: "0"
+            val ones = wordToDigit[match.groupValues[2]] ?: "0"
+            val sum = tens.toInt() + ones.toInt()
+            result = result.replace(match.value, sum.toString())
+        }
+        
+        // Replace simple word numbers
+        wordToDigit.forEach { (word, digit) ->
+            result = result.replace("\\b$word\\b".toRegex(), digit)
+        }
+        
+        return result
+    }
+    
+    /**
      * Normalizes various time formats to 24-hour HH:MM format
      * Examples:
      * - "730" -> "07:30"
@@ -801,7 +836,9 @@ class SlotExtractor {
      * - "2:30:45" -> 9045 (seconds, HH:MM:SS)
      */
     private fun normalizeTimerDuration(text: String, matchedValue: String): Int {
-        val cleanText = text.lowercase()
+        // Convert word numbers to digits first
+        val cleanText = convertWordToNumber(text.lowercase())
+        val cleanMatchedValue = convertWordToNumber(matchedValue.lowercase())
         
         // Check for combined duration patterns first
         
@@ -834,7 +871,7 @@ class SlotExtractor {
         
         // HH:MM:SS format
         val hhMmSsPattern = "^(\\d+):(\\d+):(\\d+)$".toRegex()
-        hhMmSsPattern.find(matchedValue.trim())?.let { match ->
+        hhMmSsPattern.find(cleanMatchedValue.trim())?.let { match ->
             val hours = match.groupValues[1].toIntOrNull() ?: 0
             val minutes = match.groupValues[2].toIntOrNull() ?: 0
             val seconds = match.groupValues[3].toIntOrNull() ?: 0
@@ -843,14 +880,14 @@ class SlotExtractor {
         
         // MM:SS format (assuming minutes:seconds for timer)
         val mmSsPattern = "^(\\d+):(\\d+)$".toRegex()
-        mmSsPattern.find(matchedValue.trim())?.let { match ->
+        mmSsPattern.find(cleanMatchedValue.trim())?.let { match ->
             val minutes = match.groupValues[1].toIntOrNull() ?: 0
             val seconds = match.groupValues[2].toIntOrNull() ?: 0
             return minutes * 60 + seconds
         }
         
         // Check for single unit patterns
-        val value = matchedValue.replace(Regex("[^\\d.]"), "").toDoubleOrNull() ?: return 0
+        val value = cleanMatchedValue.replace(Regex("[^\\d.]"), "").toDoubleOrNull() ?: return 0
         
         return when {
             cleanText.contains(Regex("\\b(?:hours?|hrs?|hr|h)\\b")) -> (value * 3600).toInt()
@@ -882,10 +919,10 @@ class SlotExtractor {
                     "\\b(\\d{1,2}(?::\\d{2})?\\s*[ap](?:\\.?\\s*m(?:\\.?)?)?(?!\\w))\\b",
                     "\\b(\\d{3,4}\\s*[ap](?:\\.?\\s*m(?:\\.?)?)?(?!\\w))\\b", // For "1030 pm" format  
                     
-                    // Duration patterns for timers
-                    "\\b(\\d+(?:\\.\\d+)?)\\s*(?:hours?|hrs?|hr|h)\\b",
-                    "\\b(\\d+(?:\\.\\d+)?)\\s*(?:minutes?|mins?|min|m)\\b",
-                    "\\b(\\d+(?:\\.\\d+)?)\\s*(?:seconds?|secs?|sec|s)\\b",
+                    // Duration patterns for timers (with word number support)
+                    "\\b(\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|a|an|half|quarter)\\s*(?:hours?|hrs?|hr|h)\\b",
+                    "\\b(\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|a|an|half|quarter)\\s*(?:minutes?|mins?|min|m)\\b",
+                    "\\b(\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|a|an|half|quarter)\\s*(?:seconds?|secs?|sec|s)\\b",
                     
                     // Combined time patterns
                     "\\b(\\d+)\\s*(?:h|hr|hours?)\\s*(?:and\\s+)?(\\d+)\\s*(?:m|min|minutes?)\\b",
@@ -893,22 +930,22 @@ class SlotExtractor {
                     "\\b(\\d+):(\\d+):(\\d+)\\b", // HH:MM:SS format
                     "\\b(\\d+):(\\d+)\\b", // MM:SS or HH:MM format
                     
-                    // Duration keywords
-                    "\\b(?:for|during|lasting|takes?)\\s+(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
+                    // Duration keywords (with word number support)
+                    "\\b(?:for|during|lasting|takes?)\\s+(\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|a|an|half|quarter)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
                     
-                    // Timer-specific patterns
-                    "\\b(?:set|start|begin|run|timer|stopwatch)\\s*(?:for|to|at)?\\s*(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
+                    // Timer-specific patterns (with word number support)
+                    "\\b(?:set|start|begin|run|timer|stopwatch)\\s*(?:for|to|at)?\\s*(\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|a|an|half|quarter)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
                     
                     // Alarm-specific patterns - capture full time with AM/PM (prioritize space-separated)
                     "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{1,2}[\\s.]+?\\d{1,2}[\\.\\s]*[ap](?:\\.?\\s*m(?:\\.?)?)?)\\b",
                     "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{1,2}(?::\\d{2})?[\\.\\s]*[ap](?:\\.?\\s*m(?:\\.?)?)?)\\b",
                     "\\b(?:alarm|wake|remind|alert)\\s*(?:at|for|in)?\\s*(\\d{3,4}[\\.\\s]*[ap](?:\\.?\\s*m(?:\\.?)?)?)\\b",
                     
-                    // "In X time" patterns
-                    "\\b(?:in|after|within)\\s+(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
+                    // "In X time" patterns (with word number support)
+                    "\\b(?:in|after|within)\\s+(\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|a|an|half|quarter)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
                     
-                    // Countdown patterns
-                    "\\b(?:countdown|count\\s+down)\\s*(?:from|for)?\\s*(\\d+(?:\\.\\d+)?)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
+                    // Countdown patterns (with word number support)
+                    "\\b(?:countdown|count\\s+down)\\s*(?:from|for)?\\s*(\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|a|an|half|quarter)\\s*(?:min|mins|minute|minutes|hours?|hrs?|seconds?|secs?)\\b",
                     
                     // Direct time patterns for alarm setting - capture full time with AM/PM (prioritize space-separated)
                     "\\b(?:set|create|make).*?(?:alarm|wake).*?(?:for|at)\\s*(\\d{1,2}[\\s.]+?\\d{1,2}[\\.\\s]*[ap](?:\\.?\\s*m(?:\\.?)?)?)\\b",
