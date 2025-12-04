@@ -1626,7 +1626,7 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
 
         vocab.token_eot        = common_vocab_size;        // <|endoftext|>
         vocab.token_sot        = common_vocab_size + 1;    // <|startoftext|>
-        // [common_vocab_size + 2, vocab.n_vocab - 1504) are language tokens
+        // [common_vocab_size + 2, vocab.n_vocab - 1507) are language tokens
         // num_language = vocab.token_translate - vocab.token_sot = vocab.n_vocab - vocab.token_to_id.size() - 1509
         vocab.token_translate  = vocab.n_vocab - 1507;     // <|translate|>
         vocab.token_transcribe = vocab.n_vocab - 1506;     // <|transcribe|>
