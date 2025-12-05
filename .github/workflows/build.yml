@@ -134,7 +134,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libsdl2-dev cmake libvulkan-dev
+          sudo apt-get install -y build-essential libsdl2-dev cmake libvulkan-dev vulkan-tools
 
       - name: Configure
         run: |
