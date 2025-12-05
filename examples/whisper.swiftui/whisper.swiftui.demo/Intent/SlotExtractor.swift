@@ -2269,19 +2269,21 @@ class SlotExtractor {
     private func inferMetricFromContext(text: String) -> String? {
         // Pre-compiled regex patterns for better performance
         let inferencePatterns: [String: [String]] = [
+            "distance": [
+                "\\bhow\\s+(?:much|many)\\s+distance\\b",
+                "\\bhow\\s+far\\b",
+                "\\bdistance.*(?:walk|walked)\\b",
+                "\\bhow\\s+(?:much|many).*distance.*(?:walk|walked|run|ran|travel|travelled|traveled|cover|covered)\\b",
+                "\\b(?:walk|walked|walking)\\s+(?:distance|far)\\b",
+                "\\bkilometers?\\b|\\bmiles?\\b|\\bkm\\b",
+                "\\btravelled?|traveled|covered|journey|route|path\\b"
+            ],
             "steps": [
                 "\\b(?:walk|walked|walking)\\b(?!\\s+distance)",
-                "\\bhow\\s+much.*(?:walk|walked)\\b",
+                "\\bhow\\s+(?:much|many)(?!.*distance).*(?:walk|walked)\\b",
                 "\\bsteps?\\b",
                 "\\bpace|paces|stride|strides|footsteps?\\b",
                 "\\bmove|moved|movement|activity\\b"
-            ],
-            "distance": [
-                "\\bhow\\s+far\\b",
-                "\\b(?:walk|walked|walking)\\s+(?:distance|far)\\b",
-                "\\bdistance.*(?:walk|walked)\\b",
-                "\\bkilometers?\\b|\\bmiles?\\b|\\bkm\\b",
-                "\\btravelled?|traveled|covered|journey|route|path\\b"
             ],
             "heart rate": [
                 "\\bheart\\s+rate\\b|\\bheartrate\\b|\\bpulse\\b|\\bhr\\b|\\bbpm\\b",

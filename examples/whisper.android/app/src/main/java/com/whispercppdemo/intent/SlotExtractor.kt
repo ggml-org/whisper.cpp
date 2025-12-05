@@ -2262,21 +2262,12 @@ class SlotExtractor {
     private fun inferMetricFromContext(text: String): String? {
         // Pre-compiled regex patterns for better performance
         val inferencePatterns = mapOf(
-            "steps" to listOf(
-                Regex("\\b(?:walk|walked|walking|stroll|strolling|strolled|hike|hiking|hiked|trek|trekking|trekked|march|marching|marched|wander|wandering|wandered|amble|ambling|ambled|pace|pacing|paced)\\b(?!\\s+(?:distance|far|km|miles?|kilometers?))", RegexOption.IGNORE_CASE),
-                Regex("\\bhow\\s+(?:much|many).*(?:walk|walked|stroll|hike|move|moved|step)\\b", RegexOption.IGNORE_CASE),
-                Regex("\\bsteps?\\b|\\bfootsteps?\\b|\\bfoot\\s+steps?\\b", RegexOption.IGNORE_CASE),
-                Regex("\\b(?:count|counting|total|number).*(?:steps?|walk)\\b", RegexOption.IGNORE_CASE),
-                Regex("\\b(?:daily|today'?s|my)\\s+(?:steps?|walk|walking)\\b", RegexOption.IGNORE_CASE),
-                Regex("\\bstep\\s+(?:count|counter|goal|target|total)\\b", RegexOption.IGNORE_CASE),
-                Regex("\\bhow\\s+(?:active|much\\s+activity)\\b", RegexOption.IGNORE_CASE),
-                Regex("\\bmovement\\b|\\bactivity\\s+level\\b", RegexOption.IGNORE_CASE),
-                Regex("\\bgait\\b|\\btread\\b|\\bstride\\b", RegexOption.IGNORE_CASE)
-            ),
             "distance" to listOf(
-                Regex("\\bhow\\s+far\\b|\\bhow\\s+much\\s+distance\\b|\\bhow\\s+long\\s+(?:of\\s+)?(?:a\\s+)?distance\\b", RegexOption.IGNORE_CASE),
-                Regex("\\b(?:walk|walked|walking|run|ran|running|jog|jogged|jogging|hike|hiked|hiking)\\s+(?:distance|far|length)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bhow\\s+(?:much|many)\\s+distance\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bhow\\s+far\\b|\\bhow\\s+long\\s+(?:of\\s+)?(?:a\\s+)?distance\\b", RegexOption.IGNORE_CASE),
                 Regex("\\bdistance.*(?:walk|walked|run|ran|travel|travelled|traveled|cover|covered)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bhow\\s+(?:much|many).*distance.*(?:walk|walked|run|ran|travel|travelled|traveled|cover|covered)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\b(?:walk|walked|walking|run|ran|running|jog|jogged|jogging|hike|hiked|hiking)\\s+(?:distance|far|length)\\b", RegexOption.IGNORE_CASE),
                 Regex("\\bkilometers?\\b|\\bkilometres?\\b|\\bmiles?\\b|\\bkm\\b|\\bmi\\b|\\bmeters?\\b|\\bmetres?\\b", RegexOption.IGNORE_CASE),
                 Regex("\\bhow\\s+(?:much|many)\\s+(?:km|miles?|meters?)\\b", RegexOption.IGNORE_CASE),
                 Regex("\\b(?:total|overall|entire)\\s+distance\\b", RegexOption.IGNORE_CASE),
@@ -2284,6 +2275,17 @@ class SlotExtractor {
                 Regex("\\brange\\b|\\bspan\\b|\\blength\\b|\\bmileage\\b", RegexOption.IGNORE_CASE),
                 Regex("\\bjourney\\s+length\\b|\\btrip\\s+distance\\b", RegexOption.IGNORE_CASE),
                 Regex("\\bhow\\s+long\\s+(?:of\\s+)?(?:a\\s+)?(?:walk|run|hike)\\b", RegexOption.IGNORE_CASE)
+            ),
+            "steps" to listOf(
+                Regex("\\b(?:walk|walked|walking|stroll|strolling|strolled|hike|hiking|hiked|trek|trekking|trekked|march|marching|marched|wander|wandering|wandered|amble|ambling|ambled|pace|pacing|paced)\\b(?!\\s+(?:distance|far|km|miles?|kilometers?))", RegexOption.IGNORE_CASE),
+                Regex("\\bhow\\s+(?:much|many)(?!.*distance).*(?:walk|walked|stroll|hike|move|moved|step)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bsteps?\\b|\\bfootsteps?\\b|\\bfoot\\s+steps?\\b", RegexOption.IGNORE_CASE),
+                Regex("\\b(?:count|counting|total|number).*(?:steps?|walk)(?!.*distance)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\b(?:daily|today'?s|my)\\s+(?:steps?|walk|walking)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bstep\\s+(?:count|counter|goal|target|total)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bhow\\s+(?:active|much\\s+activity)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bmovement\\b|\\bactivity\\s+level\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bgait\\b|\\btread\\b|\\bstride\\b", RegexOption.IGNORE_CASE)
             ),
             "heart rate" to listOf(
                 Regex("\\bheart\\s+rate\\b|\\bheartrate\\b|\\bheart\\s+beat\\b|\\bheartbeat\\b", RegexOption.IGNORE_CASE),
