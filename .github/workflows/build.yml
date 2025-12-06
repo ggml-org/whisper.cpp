@@ -251,9 +251,13 @@ jobs:
           - arch: x86
             msystem: MINGW32
             pkg_prefix: mingw-w64-i686
+            host_glsl_tools: "mingw-w64-x86_64-glslang mingw-w64-x86_64-shaderc mingw-w64-x86_64-spirv-tools"
+            glslc_path: /mingw64/bin/glslc
           - arch: x64
             msystem: MINGW64
             pkg_prefix: mingw-w64-x86_64
+            host_glsl_tools: ""
+            glslc_path: /mingw64/bin/glslc
 
     runs-on: windows-latest
 
@@ -278,9 +282,7 @@ jobs:
             ${{ matrix.pkg_prefix }}-vulkan-headers
             ${{ matrix.pkg_prefix }}-vulkan-loader
             ${{ matrix.pkg_prefix }}-vulkan-devel
-            ${{ matrix.pkg_prefix }}-glslang
-            ${{ matrix.pkg_prefix }}-shaderc
-            ${{ matrix.pkg_prefix }}-spirv-tools
+            ${{ matrix.host_glsl_tools }}
             zip
 
       - name: Configure
@@ -292,6 +294,7 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_STATIC=ON \
             -DGGML_VULKAN=ON \
+            -DVulkan_GLSLC_EXECUTABLE=${{ matrix.glslc_path }} \
             -DGGML_BLAS=ON \
             -DGGML_BLAS_VENDOR=OpenBLAS \
             -DWHISPER_SDL2=OFF \
