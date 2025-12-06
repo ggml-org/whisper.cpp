@@ -107,6 +107,8 @@ dir_tokenizer = dir_model
 fname_out = dir_out / "ggml-model.bin"
 
 tokens = json.load(open(dir_tokenizer / "vocab.json", "r", encoding="utf8"))
+if "<|endoftext|>" in tokens:
+    del tokens["<|endoftext|>"]
 
 # use 16-bit or 32-bit floats
 use_f16 = True
