@@ -132,7 +132,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libsdl2-dev cmake libvulkan-dev vulkan-tools shaderc
+          sudo apt-get install -y build-essential libsdl2-dev cmake libvulkan-dev
 
       - name: Configure
         run: |
