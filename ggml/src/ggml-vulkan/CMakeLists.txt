@@ -6,7 +6,11 @@ if (POLICY CMP0147)
     cmake_policy(SET CMP0147 NEW)
 endif()
 
-find_package(Vulkan COMPONENTS glslc REQUIRED)
+find_package(Vulkan COMPONENTS glslc)
+
+if (NOT Vulkan_FOUND OR NOT Vulkan_glslc_FOUND)
+    message(FATAL_ERROR "Vulkan GLSL compiler (glslc) not found. Install the Vulkan SDK shader compiler (for example the 'shaderc' package on Debian/Ubuntu) or disable GGML_VULKAN.")
+endif()
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     # Parallel build object files
