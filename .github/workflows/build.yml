@@ -276,7 +276,7 @@ jobs:
           mkdir -p dist
           cp build/bin/whisper-cli.exe dist/
           pushd dist
-          zip -9 "whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-windows-x64.zip" whisper-cli.exe
+          zip -9 "whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-windows-x64-openblas-vulkan.zip" whisper-cli.exe
           popd
 
       - name: Upload whisper-cli package (Windows x64)
@@ -284,7 +284,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: whisper-cli-windows
-          path: dist/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-windows-x64.zip
+          path: dist/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-windows-x64-openblas-vulkan.zip
 
   create-release:
     if: ${{ needs.determine-tag.outputs.should_release == 'true' || github.event.inputs.run_type == 'release-only' }}
@@ -317,6 +317,6 @@ jobs:
           files: |
             release/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-ubuntu-x64.zip
             release/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-macos-universal.zip
-            release/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-windows-x64.zip
+            release/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-windows-x64-openblas-vulkan.zip
           generate_release_notes: true
           prerelease: ${{ github.ref_type != 'tag' }}
