@@ -132,14 +132,14 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libsdl2-dev cmake libvulkan-dev
+          sudo apt-get install -y build-essential libsdl2-dev cmake libvulkan-dev glslc
 
       - name: Configure
         run: |
           git config --global --add safe.directory /workspace
           cmake -S . -B build \
             -DWHISPER_SDL2=ON \
-            -DGGML_VULKAN=OFF \
+            -DGGML_VULKAN=ON \
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_STATIC=ON \
             -DWHISPER_BUILD_EXAMPLES=OFF \
