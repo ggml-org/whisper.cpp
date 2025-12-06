@@ -453,7 +453,7 @@ struct whisper_vocab {
     }
 
     int num_languages() const {
-        return n_vocab - token_to_id.size() - 1509;
+        return token_translate - token_sot - 1;
     }
 };
 
@@ -1621,13 +1621,12 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
             //printf("%s: vocab[%d] = '%s'\n", __func__, i, word.c_str());
         }
 
-        size_t common_vocab_size = vocab.token_to_id.size();     // common vocab size, excluding special tokens
         vocab.n_vocab = model.hparams.n_vocab;                   // all tokens, including special tokens
 
-        vocab.token_eot        = common_vocab_size;        // <|endoftext|>
-        vocab.token_sot        = common_vocab_size + 1;    // <|startoftext|>
-        // [common_vocab_size + 2, vocab.n_vocab - 1507) are language tokens
-        // num_language = vocab.token_translate - vocab.token_sot = vocab.n_vocab - vocab.token_to_id.size() - 1509
+        vocab.token_eot        = n_vocab;                  // <|endoftext|>   50256 for en, 50257 for multilingual, others for custom model
+        vocab.token_sot        = n_vocab + 1;              // <|startoftext|>
+        // [n_vocab + 2, vocab.n_vocab - 1507) are language tokens
+        // num_language = vocab.token_translate - vocab.token_sot - 1 = vocab.n_vocab - n_vocab - 1509
         vocab.token_translate  = vocab.n_vocab - 1507;     // <|translate|>
         vocab.token_transcribe = vocab.n_vocab - 1506;     // <|transcribe|>
         vocab.token_solm       = vocab.n_vocab - 1505;     // <|startoflm|>
