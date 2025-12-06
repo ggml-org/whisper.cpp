@@ -144,7 +144,7 @@ jobs:
             -DGGML_VULKAN=ON \
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_STATIC=ON \
-            -DWHISPER_BUILD_EXAMPLES=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON \
             -DWHISPER_BUILD_TESTS=OFF \
             -DWHISPER_BUILD_SERVER=OFF \
             ${{ matrix.extra_cmake }}
@@ -193,7 +193,7 @@ jobs:
             -DGGML_COREML=ON \
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_STATIC=ON \
-            -DWHISPER_BUILD_EXAMPLES=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON \
             -DWHISPER_BUILD_TESTS=OFF \
             -DWHISPER_BUILD_SERVER=OFF \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
@@ -238,7 +238,7 @@ jobs:
             -DGGML_STATIC=ON `
             -DWHISPER_SDL2=OFF `
             -DWHISPER_BUILD_TESTS=OFF `
-            -DWHISPER_BUILD_EXAMPLES=OFF `
+            -DWHISPER_BUILD_EXAMPLES=ON `
             -DWHISPER_BUILD_SERVER=OFF
 
       - name: Build
