@@ -227,31 +227,56 @@ jobs:
       - name: Clone
         uses: actions/checkout@v4
 
-      - name: Add msbuild to PATH
-        uses: microsoft/setup-msbuild@v2
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-python
+            mingw-w64-x86_64-pkg-config
+            mingw-w64-x86_64-openblas
+            mingw-w64-x86_64-vulkan-headers
+            mingw-w64-x86_64-vulkan-loader
+            mingw-w64-x86_64-glslang
+            mingw-w64-x86_64-shaderc
+            mingw-w64-x86_64-spirv-tools
+            zip
 
       - name: Configure
+        shell: msys2 {0}
         run: |
           git config --global --add safe.directory /workspace
-          cmake -S . -B ./build -A ${{ matrix.arch }} `
-            -DBUILD_SHARED_LIBS=OFF `
-            -DGGML_STATIC=ON `
-            -DWHISPER_SDL2=OFF `
-            -DWHISPER_BUILD_TESTS=OFF `
-            -DWHISPER_BUILD_EXAMPLES=ON `
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_STATIC=ON \
+            -DGGML_VULKAN=ON \
+            -DGGML_BLAS=ON \
+            -DGGML_BLAS_VENDOR=OpenBLAS \
+            -DWHISPER_SDL2=OFF \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON \
             -DWHISPER_BUILD_SERVER=OFF
 
       - name: Build
+        shell: msys2 {0}
         run: |
-          cd ./build
-          msbuild ALL_BUILD.vcxproj -t:build -p:configuration=Release -p:platform=${{ matrix.arch }}
+          cmake --build build --config Release -- -j 4
 
       - name: Package whisper-cli (Windows x64)
         if: ${{ needs.determine-tag.outputs.should_release == 'true' || github.event.inputs.run_type == 'release-only' }}
+        shell: msys2 {0}
         run: |
-          mkdir dist
-          Copy-Item "build/bin/Release/whisper-cli.exe" dist/
-          Compress-Archive -Path "dist/whisper-cli.exe" -DestinationPath "dist/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-windows-x64.zip"
+          mkdir -p dist
+          cp build/bin/whisper-cli.exe dist/
+          pushd dist
+          zip -9 "whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-windows-x64.zip" whisper-cli.exe
+          popd
 
       - name: Upload whisper-cli package (Windows x64)
         if: ${{ needs.determine-tag.outputs.should_release == 'true' || github.event.inputs.run_type == 'release-only' }}
