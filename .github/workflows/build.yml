@@ -122,7 +122,28 @@ jobs:
         include:
           - os: ubuntu-22.04
             arch: x64
-            extra_cmake: ""
+            deb_arch: amd64
+            triplet: x86_64-linux-gnu
+            compiler_packages: ""
+            extra_cmake: "-DWHISPER_SDL2=ON"
+          - os: ubuntu-22.04
+            arch: x86
+            deb_arch: i386
+            triplet: i386-linux-gnu
+            compiler_packages: "gcc-i686-linux-gnu g++-i686-linux-gnu"
+            extra_cmake: "-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=x86 -DCMAKE_C_COMPILER=i686-linux-gnu-gcc -DCMAKE_CXX_COMPILER=i686-linux-gnu-g++ -DWHISPER_SDL2=OFF -DWHISPER_BUILD_EXAMPLES=OFF"
+          - os: ubuntu-22.04
+            arch: arm64
+            deb_arch: arm64
+            triplet: aarch64-linux-gnu
+            compiler_packages: "g++-aarch64-linux-gnu"
+            extra_cmake: "-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ -DWHISPER_SDL2=OFF -DWHISPER_BUILD_EXAMPLES=OFF"
+          - os: ubuntu-22.04
+            arch: armv7
+            deb_arch: armhf
+            triplet: arm-linux-gnueabihf
+            compiler_packages: "g++-arm-linux-gnueabihf"
+            extra_cmake: "-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=armv7 -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++ -DWHISPER_SDL2=OFF -DWHISPER_BUILD_EXAMPLES=OFF"
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -131,16 +152,21 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo dpkg --add-architecture ${{ matrix.deb_arch }}
           wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
           sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
           sudo apt-get update
-          sudo apt-get install -y build-essential libsdl2-dev cmake libvulkan-dev vulkan-sdk
+          sudo apt-get install -y build-essential cmake pkg-config \
+            ${{ matrix.compiler_packages }} \
+            libsdl2-dev:${{ matrix.deb_arch }} \
+            libvulkan-dev:${{ matrix.deb_arch }} \
+            vulkan-sdk:${{ matrix.deb_arch }}
 
       - name: Configure
         run: |
           git config --global --add safe.directory /workspace
+          export PKG_CONFIG_LIBDIR="/usr/lib/${{ matrix.triplet }}/pkgconfig:/usr/share/pkgconfig"
           cmake -S . -B build \
-            -DWHISPER_SDL2=ON \
             -DGGML_VULKAN=ON \
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_STATIC=ON \
@@ -158,15 +184,15 @@ jobs:
           mkdir -p dist
           cp build/bin/whisper-cli dist/
           pushd dist
-          zip -9 "whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-ubuntu-x64-vulkan.zip" whisper-cli
+          zip -9 "whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-ubuntu-${{ matrix.arch }}-vulkan.zip" whisper-cli
           popd
 
       - name: Upload whisper-cli package
         if: ${{ needs.determine-tag.outputs.should_release == 'true' || github.event.inputs.run_type == 'release-only' }}
         uses: actions/upload-artifact@v4
         with:
-          name: whisper-cli-ubuntu
-          path: dist/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-ubuntu-x64-vulkan.zip
+          name: whisper-cli-ubuntu-${{ matrix.arch }}
+          path: dist/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-ubuntu-${{ matrix.arch }}-vulkan.zip
 
   macos-build:
     needs: determine-tag
@@ -218,6 +244,17 @@ jobs:
   windows-build:
     needs: determine-tag
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || github.event.inputs.run_type == 'full-ci' || github.event.inputs.run_type == 'release-only' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86
+            msystem: MINGW32
+            pkg_prefix: mingw-w64-i686
+          - arch: x64
+            msystem: MINGW64
+            pkg_prefix: mingw-w64-x86_64
+
     runs-on: windows-latest
 
     steps:
@@ -227,22 +264,22 @@ jobs:
       - name: Setup MSYS2
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW32
+          msystem: ${{ matrix.msystem }}
           update: true
           install: >-
             base-devel
             git
-            mingw-w64-i686-toolchain
-            mingw-w64-i686-cmake
-            mingw-w64-i686-ninja
-            mingw-w64-i686-python
-            mingw-w64-i686-pkg-config
-            mingw-w64-i686-openblas
-            mingw-w64-i686-vulkan-headers
-            mingw-w64-i686-vulkan-loader
-            mingw-w64-i686-glslang
-            mingw-w64-i686-shaderc
-            mingw-w64-i686-spirv-tools
+            ${{ matrix.pkg_prefix }}-toolchain
+            ${{ matrix.pkg_prefix }}-cmake
+            ${{ matrix.pkg_prefix }}-ninja
+            ${{ matrix.pkg_prefix }}-python
+            ${{ matrix.pkg_prefix }}-pkg-config
+            ${{ matrix.pkg_prefix }}-openblas
+            ${{ matrix.pkg_prefix }}-vulkan-headers
+            ${{ matrix.pkg_prefix }}-vulkan-loader
+            ${{ matrix.pkg_prefix }}-glslang
+            ${{ matrix.pkg_prefix }}-shaderc
+            ${{ matrix.pkg_prefix }}-spirv-tools
             zip
 
       - name: Configure
@@ -266,22 +303,22 @@ jobs:
         run: |
           cmake --build build --config Release -- -j 4
 
-      - name: Package whisper-cli (Windows x86)
+      - name: Package whisper-cli (Windows ${{ matrix.arch }})
         if: ${{ needs.determine-tag.outputs.should_release == 'true' || github.event.inputs.run_type == 'release-only' }}
         shell: msys2 {0}
         run: |
           mkdir -p dist
           cp build/bin/whisper-cli.exe dist/
           pushd dist
-          zip -9 "whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-windows-x86-openblas-vulkan.zip" whisper-cli.exe
+          zip -9 "whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-windows-${{ matrix.arch }}-openblas-vulkan.zip" whisper-cli.exe
           popd
 
-      - name: Upload whisper-cli package (Windows x86)
+      - name: Upload whisper-cli package (Windows ${{ matrix.arch }})
         if: ${{ needs.determine-tag.outputs.should_release == 'true' || github.event.inputs.run_type == 'release-only' }}
         uses: actions/upload-artifact@v4
         with:
-          name: whisper-cli-windows
-          path: dist/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-windows-x86-openblas-vulkan.zip
+          name: whisper-cli-windows-${{ matrix.arch }}
+          path: dist/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-windows-${{ matrix.arch }}-openblas-vulkan.zip
 
   create-release:
     if: ${{ needs.determine-tag.outputs.should_release == 'true' || github.event.inputs.run_type == 'release-only' }}
@@ -292,8 +329,9 @@ jobs:
       - name: Download Ubuntu package
         uses: actions/download-artifact@v4
         with:
-          name: whisper-cli-ubuntu
+          pattern: whisper-cli-ubuntu-*
           path: release
+          merge-multiple: true
 
       - name: Download macOS package
         uses: actions/download-artifact@v4
@@ -304,16 +342,15 @@ jobs:
       - name: Download Windows package
         uses: actions/download-artifact@v4
         with:
-          name: whisper-cli-windows
+          pattern: whisper-cli-windows-*
           path: release
+          merge-multiple: true
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ needs.determine-tag.outputs.tag_name }}
           files: |
-            release/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-ubuntu-x64-vulkan.zip
-            release/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-macos-universal-coreml.zip
-            release/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-windows-x86-openblas-vulkan.zip
+            release/*
           generate_release_notes: true
           prerelease: ${{ github.ref_type != 'tag' }}
