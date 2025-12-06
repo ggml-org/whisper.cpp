@@ -139,7 +139,7 @@ jobs:
           git config --global --add safe.directory /workspace
           cmake -S . -B build \
             -DWHISPER_SDL2=ON \
-            -DGGML_VULKAN=ON \
+            -DGGML_VULKAN=OFF \
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_STATIC=ON \
             -DWHISPER_BUILD_EXAMPLES=OFF \
