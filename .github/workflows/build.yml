@@ -199,12 +199,12 @@ jobs:
       - name: Configure
         run: |
           git config --global --add safe.directory /workspace
-          cmake -S . -B ./build -A ${{ matrix.arch }} \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DGGML_STATIC=ON \
-            -DWHISPER_SDL2=OFF \
-            -DWHISPER_BUILD_TESTS=OFF \
-            -DWHISPER_BUILD_EXAMPLES=OFF \
+          cmake -S . -B ./build -A ${{ matrix.arch }} `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DGGML_STATIC=ON `
+            -DWHISPER_SDL2=OFF `
+            -DWHISPER_BUILD_TESTS=OFF `
+            -DWHISPER_BUILD_EXAMPLES=OFF `
             -DWHISPER_BUILD_SERVER=OFF
 
       - name: Build

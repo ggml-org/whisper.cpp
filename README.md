@@ -334,6 +334,9 @@ cmake --build build -j --config Release
 Cross-vendor solution which allows you to accelerate workload on your GPU.
 First, make sure your graphics card driver provides support for Vulkan API.
 
+The Vulkan backend also needs the `glslc` shader compiler (part of the Vulkan SDK).
+On Debian/Ubuntu systems it is provided by the `shaderc` package.
+
 Now build `whisper.cpp` with Vulkan support:
 ```
 cmake -B build -DGGML_VULKAN=1
