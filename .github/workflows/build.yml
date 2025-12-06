@@ -132,18 +132,6 @@ jobs:
             triplet: i386-linux-gnu
             compiler_packages: "gcc-i686-linux-gnu g++-i686-linux-gnu"
             extra_cmake: "-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=x86 -DCMAKE_C_COMPILER=i686-linux-gnu-gcc -DCMAKE_CXX_COMPILER=i686-linux-gnu-g++ -DWHISPER_SDL2=OFF -DWHISPER_BUILD_EXAMPLES=OFF"
-          - os: ubuntu-22.04
-            arch: arm64
-            deb_arch: arm64
-            triplet: aarch64-linux-gnu
-            compiler_packages: "g++-aarch64-linux-gnu"
-            extra_cmake: "-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ -DWHISPER_SDL2=OFF -DWHISPER_BUILD_EXAMPLES=OFF"
-          - os: ubuntu-22.04
-            arch: armv7
-            deb_arch: armhf
-            triplet: arm-linux-gnueabihf
-            compiler_packages: "g++-arm-linux-gnueabihf"
-            extra_cmake: "-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=armv7 -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++ -DWHISPER_SDL2=OFF -DWHISPER_BUILD_EXAMPLES=OFF"
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -248,11 +236,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: x86
-            msystem: MINGW32
-            pkg_prefix: mingw-w64-i686
-            host_glsl_tools: "mingw-w64-x86_64-glslang mingw-w64-x86_64-shaderc mingw-w64-x86_64-spirv-tools"
-            glslc_path: /mingw64/bin/glslc
           - arch: x64
             msystem: MINGW64
             pkg_prefix: mingw-w64-x86_64

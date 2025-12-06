@@ -3328,7 +3328,7 @@ void ggml_vec_dot_iq1_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
         __m256i sumi = _mm256_setzero_si256();
         int sumi1 = 0;
         for (int ib = 0; ib < QK_K/32; ib += 2) {
-#if defined(__BMI2__) && defined(__x86_64__)
+#if defined(__BMI2__)
             const uint64_t packed_idx1 = _pdep_u64(*(const uint32_t *)qs, 0x00ff00ff00ff00ffULL) | _pdep_u64(qh[ib], 0x700070007000700ULL);
             const uint64_t packed_idx2 = _pdep_u64(*(const uint32_t *)(qs + 4), 0x00ff00ff00ff00ffULL) | _pdep_u64(qh[ib + 1], 0x700070007000700ULL);
             const uint16_t *idx1 = (const uint16_t *)(&packed_idx1);
