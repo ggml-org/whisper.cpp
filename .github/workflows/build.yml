@@ -160,7 +160,7 @@ jobs:
             ${{ matrix.compiler_packages }} \
             libsdl2-dev:${{ matrix.deb_arch }} \
             libvulkan-dev:${{ matrix.deb_arch }} \
-            vulkan-sdk:${{ matrix.deb_arch }}
+            vulkan-sdk
 
       - name: Configure
         run: |
@@ -277,6 +277,7 @@ jobs:
             ${{ matrix.pkg_prefix }}-openblas
             ${{ matrix.pkg_prefix }}-vulkan-headers
             ${{ matrix.pkg_prefix }}-vulkan-loader
+            ${{ matrix.pkg_prefix }}-vulkan-devel
             ${{ matrix.pkg_prefix }}-glslang
             ${{ matrix.pkg_prefix }}-shaderc
             ${{ matrix.pkg_prefix }}-spirv-tools
