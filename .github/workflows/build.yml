@@ -114,7 +114,8 @@ jobs:
           echo "should_release=$SHOULD_RELEASE" >> $GITHUB_OUTPUT
 
   ubuntu-build:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || github.event.inputs.run_type == 'full-ci' }}
+    needs: determine-tag
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || github.event.inputs.run_type == 'full-ci' || github.event.inputs.run_type == 'release-only' }}
     strategy:
       fail-fast: false
       matrix:
@@ -122,9 +123,6 @@ jobs:
           - os: ubuntu-22.04
             arch: x64
             extra_cmake: ""
-          - os: ubuntu-22.04-arm64
-            arch: arm64
-            extra_cmake: "-DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8-a"
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -134,7 +132,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libsdl2-dev cmake libvulkan-dev vulkan-tools
+          sudo apt-get install -y build-essential libsdl2-dev cmake libvulkan-dev vulkan-tools shaderc
 
       - name: Configure
         run: |
@@ -152,8 +150,25 @@ jobs:
       - name: Build
         run: cmake --build build --config Release -j $(nproc)
 
+      - name: Package whisper-cli (Ubuntu)
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' || github.event.inputs.run_type == 'release-only' }}
+        run: |
+          mkdir -p dist
+          cp build/bin/whisper-cli dist/
+          pushd dist
+          zip -9 "whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-ubuntu-x64.zip" whisper-cli
+          popd
+
+      - name: Upload whisper-cli package
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' || github.event.inputs.run_type == 'release-only' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-cli-ubuntu
+          path: dist/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-ubuntu-x64.zip
+
   macos-build:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || github.event.inputs.run_type == 'full-ci' }}
+    needs: determine-tag
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || github.event.inputs.run_type == 'full-ci' || github.event.inputs.run_type == 'release-only' }}
     runs-on: macos-latest
 
     steps:
@@ -182,12 +197,29 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
+      - name: Package whisper-cli (macOS)
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' || github.event.inputs.run_type == 'release-only' }}
+        run: |
+          mkdir -p dist
+          cp build/bin/Release/whisper-cli dist/
+          pushd dist
+          zip -9 "whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-macos-universal.zip" whisper-cli
+          popd
+
+      - name: Upload whisper-cli package (macOS)
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' || github.event.inputs.run_type == 'release-only' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-cli-macos
+          path: dist/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-macos-universal.zip
+
   windows-build:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || github.event.inputs.run_type == 'full-ci' }}
+    needs: determine-tag
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || github.event.inputs.run_type == 'full-ci' || github.event.inputs.run_type == 'release-only' }}
     runs-on: windows-latest
     strategy:
       matrix:
-        arch: [Win32, x64]
+        arch: [x64]
 
     steps:
       - name: Clone
@@ -211,3 +243,52 @@ jobs:
         run: |
           cd ./build
           msbuild ALL_BUILD.vcxproj -t:build -p:configuration=Release -p:platform=${{ matrix.arch }}
+
+      - name: Package whisper-cli (Windows x64)
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' || github.event.inputs.run_type == 'release-only' }}
+        run: |
+          mkdir dist
+          Copy-Item "build/bin/Release/whisper-cli.exe" dist/
+          Compress-Archive -Path "dist/whisper-cli.exe" -DestinationPath "dist/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-windows-x64.zip"
+
+      - name: Upload whisper-cli package (Windows x64)
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' || github.event.inputs.run_type == 'release-only' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-cli-windows
+          path: dist/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-windows-x64.zip
+
+  create-release:
+    if: ${{ needs.determine-tag.outputs.should_release == 'true' || github.event.inputs.run_type == 'release-only' }}
+    needs: [determine-tag, ubuntu-build, macos-build, windows-build]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Ubuntu package
+        uses: actions/download-artifact@v4
+        with:
+          name: whisper-cli-ubuntu
+          path: release
+
+      - name: Download macOS package
+        uses: actions/download-artifact@v4
+        with:
+          name: whisper-cli-macos
+          path: release
+
+      - name: Download Windows package
+        uses: actions/download-artifact@v4
+        with:
+          name: whisper-cli-windows
+          path: release
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.determine-tag.outputs.tag_name }}
+          files: |
+            release/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-ubuntu-x64.zip
+            release/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-macos-universal.zip
+            release/whisper-cli-${{ needs.determine-tag.outputs.tag_name }}-windows-x64.zip
+          generate_release_notes: true
+          prerelease: ${{ github.ref_type != 'tag' }}
