@@ -23,7 +23,7 @@ const vadParams = {
   max_len: 0,
   // VAD parameters
   vad: true,
-  vad_model: path.join(__dirname, "../../models/ggml-silero-v5.1.2.bin"), // You need to download this model
+  vad_model: path.join(__dirname, "../../models/ggml-silero-v6.2.0.bin"), // You need to download this model
   vad_threshold: 0.5,
   vad_min_speech_duration_ms: 250,
   vad_min_silence_duration_ms: 100,
@@ -63,7 +63,7 @@ async function runVADExample() {
     const fs = require('fs');
     if (!fs.existsSync(vadParams.vad_model)) {
       console.log("⚠️  VAD model not found. Please download the VAD model first:");
-      console.log("   ./models/download-vad-model.sh silero-v5.1.2");
+      console.log("   ./models/download-vad-model.sh silero-v6.2.0");
       console.log("   Or run: python models/convert-silero-vad-to-ggml.py");
       console.log("\n   Falling back to traditional transcription without VAD...\n");
       

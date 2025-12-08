@@ -510,6 +510,30 @@ module Whisper
       def samples_overlap: () -> Float
       def ==: (Params) -> (true | false)
     end
+
+    class Context
+      def self.new: (String | path | ::URI::HTTP model_name_or_path) -> instance
+      def detect: (path wav_file_path, Params) -> Segments
+    end
+
+    class Segments
+      include Enumerable[Segment]
+
+      def each: { (Segment) -> void } -> void
+              | () -> Enumerator[Segment]
+      def length: -> Integer
+    end
+
+    class Segment
+      type deconstructed_keys = {
+        start_time: (Integer | nil),
+        end_time: (Integer | nil),
+      }
+
+      def start_time: () -> Integer
+      def end_time: () -> Integer
+      def deconstruct_keys: (Array[:start_time | :end_time] | nil) -> deconstructed_keys
+    end
   end
 
   class Error < StandardError

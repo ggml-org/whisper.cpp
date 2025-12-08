@@ -30,7 +30,7 @@ esac
 models_path="${2:-$default_download_path}"
 
 # Whisper VAD models
-models="silero-v5.1.2"
+models="silero-v5.1.2 silero-v6.2.0"
 
 # list available models
 list_models() {

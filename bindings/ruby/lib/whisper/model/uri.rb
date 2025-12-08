@@ -206,6 +206,7 @@ module Whisper
 
     %w[
       silero-v5.1.2
+      silero-v6.2.0
     ].each do |name|
       @pre_converted_models[name] = URI.new("https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-#{name}.bin")
     end
