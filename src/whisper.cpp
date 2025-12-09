@@ -1587,21 +1587,16 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
 
     // load vocab
     {
-        int32_t n_vocab = 0;
-        read_safe(loader, n_vocab);
-
-        //if (n_vocab != model.hparams.n_vocab) {
-        //    WHISPER_LOG_ERROR("%s: invalid model file '%s' (bad vocab size %d != %d)\n",
-        //            __func__, fname.c_str(), n_vocab, model.hparams.n_vocab);
-        //    return false;
-        //}
+        int32_t n_common_vocab = 0;
+        read_safe(loader, n_common_vocab);
+        WHISPER_LOG_INFO("%s: n_common_vocab = %d\n", __func__, n_common_vocab);
 
         std::string word;
         std::vector<char> tmp;
 
         tmp.reserve(128);
 
-        for (int i = 0; i < n_vocab; i++) {
+        for (int i = 0; i < n_common_vocab; i++) {
             uint32_t len;
             read_safe(loader, len);
 
@@ -1621,12 +1616,12 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
             //printf("%s: vocab[%d] = '%s'\n", __func__, i, word.c_str());
         }
 
-        vocab.n_vocab = model.hparams.n_vocab;                   // all tokens, including special tokens
+        vocab.n_vocab = model.hparams.n_vocab;             // all tokens, including special tokens
 
-        vocab.token_eot        = n_vocab;                  // <|endoftext|>   50256 for en, 50257 for multilingual, others for custom model
-        vocab.token_sot        = n_vocab + 1;              // <|startoftext|>
-        // [n_vocab + 2, vocab.n_vocab - 1507) are language tokens
-        // num_language = vocab.token_translate - vocab.token_sot - 1 = vocab.n_vocab - n_vocab - 1509
+        vocab.token_eot        = n_common_vocab;           // <|endoftext|>   50256 for en, 50257 for multilingual, others for custom model
+        vocab.token_sot        = n_common_vocab + 1;       // <|startoftranscribe|>
+        // [n_common_vocab + 2, vocab.n_vocab - 1507) are language tokens
+        // num_language = vocab.token_translate - vocab.token_sot - 1 = vocab.n_vocab - n_common_vocab - 1509
         vocab.token_translate  = vocab.n_vocab - 1507;     // <|translate|>
         vocab.token_transcribe = vocab.n_vocab - 1506;     // <|transcribe|>
         vocab.token_solm       = vocab.n_vocab - 1505;     // <|startoflm|>
@@ -1635,9 +1630,9 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         vocab.token_not        = vocab.n_vocab - 1502;     // <|notimestamps|>
         vocab.token_beg        = vocab.n_vocab - 1501;     // timestamps from <|0.00|> to <|30.00|>, 1501 tokens
 
-        if (n_vocab < model.hparams.n_vocab) {
-            WHISPER_LOG_INFO("%s: adding %d extra tokens\n", __func__, model.hparams.n_vocab - n_vocab);
-            for (int i = n_vocab; i < model.hparams.n_vocab; i++) {
+        if (n_common_vocab < model.hparams.n_vocab) {
+            WHISPER_LOG_INFO("%s: adding %d extra tokens\n", __func__, model.hparams.n_vocab - n_common_vocab);
+            for (int i = n_common_vocab; i < model.hparams.n_vocab; i++) {
                 if (i > vocab.token_beg) {
                     word = "[_TT_" + std::to_string(i - vocab.token_beg) + "]";
                 } else if (i == vocab.token_eot) {
