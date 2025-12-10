@@ -60,6 +60,7 @@ struct server_params
     std::string public_path = "examples/server/public";
     std::string request_path = "";
     std::string inference_path = "/inference";
+    std::string tmp_dir = ".";
 
     int32_t port          = 8080;
     int32_t read_timeout  = 600;
@@ -174,6 +175,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  --request-path PATH,           [%-7s] Request path for all requests\n", sparams.request_path.c_str());
     fprintf(stderr, "  --inference-path PATH,         [%-7s] Inference path for all requests\n", sparams.inference_path.c_str());
     fprintf(stderr, "  --convert,                     [%-7s] Convert audio to WAV, requires ffmpeg on the server\n", sparams.ffmpeg_converter ? "true" : "false");
+    fprintf(stderr, "  --tmp-dir,                     [%-7s] Temporary directory for ffmpeg transcoded files\n", sparams.tmp_dir.c_str());
     fprintf(stderr, "  -sns,      --suppress-nst      [%-7s] suppress non-speech tokens\n", params.suppress_nst ? "true" : "false");
     fprintf(stderr, "  -nth N,    --no-speech-thold N [%-7.2f] no speech threshold\n",   params.no_speech_thold);
     fprintf(stderr, "  -ng,       --no-gpu            [%-7s] do not use gpu\n", params.use_gpu ? "false" : "true");
@@ -248,6 +250,7 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params, serve
         else if (                  arg == "--request-path")    { sparams.request_path = argv[++i]; }
         else if (                  arg == "--inference-path")  { sparams.inference_path = argv[++i]; }
         else if (                  arg == "--convert")         { sparams.ffmpeg_converter     = true; }
+        else if (                  arg == "--tmp-dir")         { sparams.tmp_dir     = argv[++i]; }
 
         // Voice Activity Detection (VAD)
         else if (                  arg == "--vad")                         { params.vad                         = true; }
@@ -288,7 +291,7 @@ void check_ffmpeg_availibility() {
     }
 }
 
-std::string generate_temp_filename(const std::string &prefix, const std::string &extension) {
+std::string generate_temp_filename(const std::string &path, const std::string &prefix, const std::string &extension) {
     auto now = std::chrono::system_clock::now();
     auto now_time_t = std::chrono::system_clock::to_time_t(now);
 
@@ -296,7 +299,9 @@ std::string generate_temp_filename(const std::string &prefix, const std::string 
     std::uniform_int_distribution<long long> dist(0, 1e9);
 
     std::stringstream ss;
-    ss << prefix
+    ss << path
+       << std::filesystem::path::preferred_separator
+       << prefix
        << "-"
        << std::put_time(std::localtime(&now_time_t), "%Y%m%d-%H%M%S")
        << "-"
@@ -816,7 +821,7 @@ int main(int argc, char ** argv) {
         if (sparams.ffmpeg_converter) {
             // if file is not wav, convert to wav
             // write to temporary file
-            const std::string temp_filename = generate_temp_filename("whisper-server", ".wav");
+            const std::string temp_filename = generate_temp_filename(sparams.tmp_dir, "whisper-server", ".wav");
             std::ofstream temp_file{temp_filename, std::ios::binary};
             temp_file << audio_file.content;
             temp_file.close();
