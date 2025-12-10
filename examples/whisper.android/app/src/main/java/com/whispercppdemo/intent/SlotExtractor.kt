@@ -161,7 +161,7 @@ class SlotExtractor {
         "SetGoal" to listOf("metric", "target"),  // unit can be inferred
         "SetThreshold" to listOf("metric", "threshold"),  // unit can be inferred
         "TimerStopwatch" to listOf("tool", "action"),  // value only required for "set timer X min"
-        "ToggleFeature" to listOf("feature", "state"),
+        "ToggleFeature" to listOf("feature"), //feature only required, state may or may not be inferred
         "LogEvent" to listOf("event_type"),  // value, unit, time_ref can have defaults
         "StartActivity" to listOf("activity_type"),
         "StopActivity" to listOf("activity_type"),
@@ -249,6 +249,13 @@ class SlotExtractor {
             "sleep efficiency", "sleep assessment", "how well slept", "sleep health", 
             "sleep metric", "sleep stats", "sleep report", "sleep evaluation"
         ),
+        "deep sleep" to listOf(
+            "deep sleep", "deep sleeping", "deep slumber", "rem sleep", "rem", 
+            "deep rest", "deep phase", "deep stage", "stage 3", "stage 4", 
+            "slow wave sleep", "sws", "restorative sleep", "deep sleep time", 
+            "deep sleep duration", "deep sleep hours", "deep sleep stage", 
+            "profound sleep", "heavy sleep", "sound sleep"
+        ),
         "spo2" to listOf(
             "spo2", "oxygen", "blood oxygen", "o2", "saturation", "oxygen saturation", 
             "oxygen level", "oxygen levels", "o2 sat", "blood o2", "oxygen sat", 
@@ -266,6 +273,23 @@ class SlotExtractor {
             "worry", "pressure", "strain", "overwhelmed", "nervous", "nervousness", 
             "stress level", "mental stress", "emotional stress", "burnout", 
             "stress score", "relaxation", "calm", "mental health", "wellbeing"
+        ),
+        "standing" to listOf(
+            "standing", "stand", "stood", "stand hours", "standing hours", 
+            "stand time", "standing time", "hours standing", "hours stood", 
+            "time standing", "time stood", "standing goal", "stand goal", 
+            "upright", "upright time", "standing duration", "stand duration", 
+            "on feet", "on my feet", "standing up", "stood up", "vertical", 
+            "standing activity", "stand activity", "standing ring", "stand ring"
+        ),
+        "vo2" to listOf(
+            "vo2", "vo2 max", "vo2max", "v o2", "v o2 max", "vo 2", "vo 2 max",
+            "vo two", "vo two max", "v o two", "v o two max",
+            "aerobic capacity", "aerobic fitness", "cardio fitness", "cardiovascular fitness",
+            "max oxygen", "maximum oxygen", "oxygen uptake", "max aerobic capacity",
+            "cardio capacity", "endurance capacity", "fitness level", "cardio level",
+            "aerobic power", "oxygen capacity", "cardiorespiratory fitness",
+            "vo2 score", "vo2 reading", "vo2 level", "fitness score"
         )
     )
     
@@ -370,6 +394,8 @@ class SlotExtractor {
     private val oxygenRegex = Regex("\\b(?:oxygen|o2|spo2|saturation|sat|blood oxygen|pulse ox|oximeter|oximetry|breathing|respiratory|respiration|air|breathe)\\b", RegexOption.IGNORE_CASE)
     private val weightRegex = Regex("\\b(?:weight|weigh|weighing|weighed|kg|kilogram|kilograms|pound|pounds|lbs|lb|body mass|bmi|body weight|mass|scale|heavy|light|stone|gram|grams|ounce|ounces|oz)\\b", RegexOption.IGNORE_CASE)
     private val stressRegex = Regex("\\b(?:stress|stressed|stressful|anxiety|anxious|tension|tense|worried|worry|worrying|pressure|pressured|strain|strained|overwhelm|overwhelmed|nervous|nervousness|burnout|mental health|relaxation|relax|calm|peace|peaceful)\\b", RegexOption.IGNORE_CASE)
+    private val standingRegex = Regex("\\b(?:standing|stand|stood|upright|vertical|on feet|on my feet|stand hours|standing hours|stand time|standing time|stand goal|standing goal|stand ring|standing ring|stand activity|standing activity|stand up|stood up)\\b", RegexOption.IGNORE_CASE)
+    private val vo2Regex = Regex("\\b(?:vo2|vo2\\s*max|vo2max|v\\s*o\\s*2|v\\s*o\\s*2\\s*max|vo\\s*2|vo\\s*2\\s*max|vo\\s*two|vo\\s*two\\s*max|v\\s*o\\s*two|aerobic\\s+capacity|aerobic\\s+fitness|cardio\\s+fitness|cardiovascular\\s+fitness|max\\s+oxygen|maximum\\s+oxygen|oxygen\\s+uptake|cardio\\s+capacity|endurance\\s+capacity|fitness\\s+level|aerobic\\s+power|oxygen\\s+capacity|cardiorespiratory)\\b", RegexOption.IGNORE_CASE)
     private val heartRateUnitRegex = Regex("\\b(?:heart\\s+rate|pulse|hr)\\b", RegexOption.IGNORE_CASE)
     private val weightUnitRegex = Regex("\\b(?:weight|weigh)\\b", RegexOption.IGNORE_CASE)
     private val stepsUnitRegex = Regex("\\bsteps?\\b", RegexOption.IGNORE_CASE)
@@ -447,6 +473,8 @@ class SlotExtractor {
                         "weight" -> slots["unit"] = "kg"
                         "spo2" -> slots["unit"] = "percent"
                         "stress" -> slots["unit"] = "score"
+                        "standing" -> slots["unit"] = "hours"
+                        "vo2" -> slots["unit"] = "ml/kg/min"
                     }
                 }
                 slots["metric"] = "$type $metric"
@@ -641,6 +669,9 @@ class SlotExtractor {
     }
     
     private fun extractIdentifier(text: String): String? {
+        // Check if text contains VO2 context - if so, skip "max" matching for maximum identifier
+        val hasVO2Context = vo2Regex.containsMatchIn(text)
+        
         val identifierPatterns = mapOf(
             "minimum" to "\\b(?:minimum|min|lowest|least|bottom|smallest|bare minimum|minimal|minimally|rock bottom|floor|base|baseline|low point|lower|tiniest|fewest|less|lesser|reduced|at least|no less than|starting from|beginning at|from|low|lows|worst|slowest|minimum value|min value|floor value|bottom line|rock-bottom|absolute minimum|very least|bare min)\\b",
             
@@ -650,6 +681,10 @@ class SlotExtractor {
         )
         
         for ((identifier, pattern) in identifierPatterns) {
+            // Skip maximum pattern if VO2 context is present (to avoid matching "max" in "vo2 max")
+            if (identifier == "maximum" && hasVO2Context) {
+                continue
+            }
             if (text.contains(pattern.toRegex(RegexOption.IGNORE_CASE))) {
                 return identifier
             }
@@ -660,7 +695,14 @@ class SlotExtractor {
     }
     
     private fun extractUnit(text: String): String? {
-        // Try context-based unit inference first
+        // Check explicit unit patterns FIRST (higher priority)
+        for ((unit, pattern) in unitPatterns) {
+            if (pattern.containsMatchIn(text)) {
+                return unit
+            }
+        }
+        
+        // Then try context-based unit inference as fallback
         when {
             heartRateUnitRegex.containsMatchIn(text) -> return "bpm"
             stressRegex.containsMatchIn(text) -> return "score"
@@ -671,13 +713,8 @@ class SlotExtractor {
             caloriesRegex.containsMatchIn(text) -> return "kcal"
             walkingMovementRegex.containsMatchIn(text) -> return "distance"
             stepsUnitRegex.containsMatchIn(text) -> return "count"
-        }
-        
-        // Check pre-compiled unit patterns
-        for ((unit, pattern) in unitPatterns) {
-            if (pattern.containsMatchIn(text)) {
-                return unit
-            }
+            standingRegex.containsMatchIn(text) -> return "hours"
+            vo2Regex.containsMatchIn(text) -> return "ml/kg/min"
         }
         
         return null
@@ -731,59 +768,59 @@ class SlotExtractor {
     
     private fun extractTarget(text: String): Int? {
         val goalPatterns = listOf(
-            // Goal/Target/Aim patterns - expanded (now supports comma-separated numbers)
-            "\\b(?:goal|target|aim|objective|plan|intention|aspiration|ambition|desire|want|wish|hope)\\s*(?:is|of|to|for|at)?\\s*(?:be|reach|hit|achieve|get|make|do)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            // Goal/Target/Aim patterns - supports numbers with or without commas
+            "\\b(?:goal|target|aim|objective|plan|intention|aspiration|ambition|desire|want|wish|hope)\\s*(?:is|of|to|for|at)?\\s*(?:be|reach|hit|achieve|get|make|do)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
             
-            // Set/Change/Update patterns - expanded (now supports comma-separated numbers)
-            "\\b(?:set|change|update|modify|adjust|edit|configure|make|establish|create|define|specify)\\s*(?:my|the)?\\s*(?:goal|target|aim|objective)?\\s*(?:to|at|as|for)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            // Set/Change/Update patterns - supports numbers with or without commas
+            "\\b(?:set|change|update|modify|adjust|edit|configure|make|establish|create|define|specify)\\s*(?:my|the)?\\s*(?:goal|target|aim|objective)?\\s*(?:to|at|as|for)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
             
-            // Action + number + unit pattern - expanded (now supports comma-separated numbers)
-            "\\b(?:reach|hit|achieve|attain|get|get\\s+to|make|do|complete|finish|accomplish|meet)\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\s*(?:steps?|kg|kgs|kilogram|kilograms|pounds?|lbs?|km|kms|kilometer|kilometers|miles?|hours?|hrs?|minutes?|mins?|calories?|kcal|bpm)\\b",
+            // Action + number + unit pattern - supports numbers with or without commas
+            "\\b(?:reach|hit|achieve|attain|get|get\\s+to|make|do|complete|finish|accomplish|meet)\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\s*(?:steps?|kg|kgs|kilogram|kilograms|pounds?|lbs?|km|kms|kilometer|kilometers|miles?|hours?|hrs?|minutes?|mins?|calories?|kcal|bpm)\\b",
             
-            // Number + unit pattern - expanded (now supports comma-separated numbers)
-            "\\b(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\s*(?:steps?|kg|kgs|kilogram|kilograms|pounds?|lbs?|lb|km|kms|kilometer|kilometers|kilometre|kilometres|miles?|mi|hours?|hrs?|hr|h|minutes?|mins?|min|m|calories?|kcal|cal|cals|bpm|beats?|meter|meters|metre|metres|feet|foot|ft)\\b",
+            // Number + unit pattern - supports numbers with or without commas
+            "\\b(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\s*(?:steps?|kg|kgs|kilogram|kilograms|pounds?|lbs?|lb|km|kms|kilometer|kilometers|kilometre|kilometres|miles?|mi|hours?|hrs?|hr|h|minutes?|mins?|min|m|calories?|kcal|cal|cals|bpm|beats?|meter|meters|metre|metres|feet|foot|ft)\\b",
             
-            // "I want to" patterns - NEW (now supports comma-separated numbers)
-            "\\b(?:I|i)\\s+(?:want|wanna|need|must|should|have\\s+to|got\\s+to|gotta)\\s+(?:to\\s+)?(?:reach|hit|get|do|achieve|make|walk|run|burn|lose|gain|sleep)\\s*(?:to|at)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            // "I want to" patterns - supports numbers with or without commas
+            "\\b(?:I|i)\\s+(?:want|wanna|need|must|should|have\\s+to|got\\s+to|gotta)\\s+(?:to\\s+)?(?:reach|hit|get|do|achieve|make|walk|run|burn|lose|gain|sleep)\\s*(?:to|at)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
             
-            // "Trying to" patterns - NEW (now supports comma-separated numbers)
-            "\\b(?:trying|attempting|aiming|working|striving|shooting|going)\\s+(?:to|for)\\s+(?:reach|hit|get|do|achieve|make)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            // "Trying to" patterns - supports numbers with or without commas
+            "\\b(?:trying|attempting|aiming|working|striving|shooting|going)\\s+(?:to|for)\\s+(?:reach|hit|get|do|achieve|make)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
             
-            // Daily/Weekly goal patterns - NEW (now supports comma-separated numbers)
-            "\\b(?:daily|weekly|monthly|per\\s+day|each\\s+day|every\\s+day)\\s+(?:goal|target|aim|objective)?\\s*(?:is|of|to)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            // Daily/Weekly goal patterns - supports numbers with or without commas
+            "\\b(?:daily|weekly|monthly|per\\s+day|each\\s+day|every\\s+day)\\s+(?:goal|target|aim|objective)?\\s*(?:is|of|to)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
             
-            // Increase/Decrease to patterns - NEW (now supports comma-separated numbers)
-            "\\b(?:increase|raise|boost|bump|up|improve|decrease|reduce|lower|drop|cut|bring\\s+down)\\s+(?:to|by)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            // Increase/Decrease to patterns - supports numbers with or without commas
+            "\\b(?:increase|raise|boost|bump|up|improve|decrease|reduce|lower|drop|cut|bring\\s+down)\\s+(?:to|by)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
             
-            // Minimum/Maximum patterns - NEW (now supports comma-separated numbers)
-            "\\b(?:at\\s+least|minimum\\s+of|no\\s+less\\s+than|minimum|min)\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            // Minimum/Maximum patterns - supports numbers with or without commas
+            "\\b(?:at\\s+least|minimum\\s+of|no\\s+less\\s+than|minimum|min)\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
             
-            // "Need to be" patterns - NEW (now supports comma-separated numbers)
-            "\\b(?:need|needs)\\s+to\\s+(?:be|reach|hit|get)\\s*(?:at|to)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            // "Need to be" patterns - supports numbers with or without commas
+            "\\b(?:need|needs)\\s+to\\s+(?:be|reach|hit|get)\\s*(?:at|to)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
             
-            // Suggestion patterns - NEW (now supports comma-separated numbers)
-            "\\b(?:suggest|recommend|advise|tell\\s+me|remind\\s+me|notify\\s+me).*?(?:when|if|at)\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            // Suggestion patterns - supports numbers with or without commas
+            "\\b(?:suggest|recommend|advise|tell\\s+me|remind\\s+me|notify\\s+me).*?(?:when|if|at)\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
             
-            // Limit patterns - NEW (now supports comma-separated numbers)
-            "\\b(?:limit|cap|max|maximum|ceiling|upper\\s+limit)\\s*(?:of|to|at|is)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            // Limit patterns - supports numbers with or without commas
+            "\\b(?:limit|cap|max|maximum|ceiling|upper\\s+limit)\\s*(?:of|to|at|is)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
             
-            // Challenge patterns - NEW (now supports comma-separated numbers)
-            "\\b(?:challenge|dare|bet|see\\s+if).*?(?:to\\s+)?(?:reach|hit|do|get|make)\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            // Challenge patterns - supports numbers with or without commas
+            "\\b(?:challenge|dare|bet|see\\s+if).*?(?:to\\s+)?(?:reach|hit|do|get|make)\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
             
-            // "X or more/less" patterns - NEW (now supports comma-separated numbers)
-            "\\b(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\s+(?:or\\s+(?:more|above|over|higher|greater|less|below|under|lower|fewer))\\b",
+            // "X or more/less" patterns - supports numbers with or without commas
+            "\\b(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\s+(?:or\\s+(?:more|above|over|higher|greater|less|below|under|lower|fewer))\\b",
             
-            // Alert/Notify patterns - NEW (now supports comma-separated numbers)
-            "\\b(?:alert|notify|tell|remind|ping|warn|let\\s+me\\s+know).*?(?:when|if|at|after|once).*?(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            // Alert/Notify patterns - supports numbers with or without commas
+            "\\b(?:alert|notify|tell|remind|ping|warn|let\\s+me\\s+know).*?(?:when|if|at|after|once).*?(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
             
-            // Threshold patterns - NEW (now supports comma-separated numbers)
-            "\\b(?:threshold|cutoff|mark|milestone|benchmark)\\s*(?:of|at|is)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            // Threshold patterns - supports numbers with or without commas
+            "\\b(?:threshold|cutoff|mark|milestone|benchmark)\\s*(?:of|at|is)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
             
-            // "Should be" patterns - NEW (now supports comma-separated numbers)
-            "\\b(?:should|must|ought\\s+to|supposed\\s+to)\\s+(?:be|reach|hit|get)\\s*(?:at|to)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            // "Should be" patterns - supports numbers with or without commas
+            "\\b(?:should|must|ought\\s+to|supposed\\s+to)\\s+(?:be|reach|hit|get)\\s*(?:at|to)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
             
-            // Track patterns - NEW (now supports comma-separated numbers)
-            "\\b(?:track|monitor|watch|follow|check).*?(?:until|till|to|up\\s+to)\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b"
+            // Track patterns - supports numbers with or without commas
+            "\\b(?:track|monitor|watch|follow|check).*?(?:until|till|to|up\\s+to)\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b"
         )
         
         // Try each pattern
@@ -798,8 +835,8 @@ class SlotExtractor {
             }
         }
     
-        // Fallback: extract any number from the text (including comma-separated)
-        val numbers = "\\b(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b".toRegex().findAll(text)
+        // Fallback: extract any number from the text (supports numbers with or without commas)
+        val numbers = "\\b(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b".toRegex().findAll(text)
         return numbers.firstOrNull()?.groupValues?.get(1)?.replace(",", "")?.toDoubleOrNull()?.toInt()
     }
     
@@ -1039,6 +1076,36 @@ class SlotExtractor {
         }
     }
     
+    /**
+     * Normalizes distance values from various units to kilometers
+     * Supports: miles, meters, feet, yards
+     * Returns the distance value in kilometers as a Double
+     */
+    private fun normalizeDistanceToKm(value: Double, unit: String): Double {
+        return when (unit.lowercase()) {
+            "miles", "mile", "mi" -> value * 1.60934  // miles to km
+            "meters", "meter", "metres", "metre", "m" -> value / 1000.0  // meters to km
+            "feet", "foot", "ft" -> value * 0.0003048  // feet to km
+            "yards", "yard", "yd" -> value * 0.0009144  // yards to km
+            "km", "kms", "kilometer", "kilometers", "kilometre", "kilometres" -> value  // already in km
+            else -> value  // default: assume km
+        }
+    }
+    
+    /**
+     * Extracts distance value with unit from text and normalizes to kilometers
+     * Returns the normalized value in km
+     */
+    private fun extractAndNormalizeDistance(text: String): Double? {
+        val distancePattern = "\\b(\\d+(?:\\.\\d+)?)\\s*(miles?|mi|meters?|metres?|m|feet|foot|ft|yards?|yd|km|kms|kilometers?|kilometres?)\\b".toRegex(RegexOption.IGNORE_CASE)
+        val match = distancePattern.find(text) ?: return null
+        
+        val value = match.groupValues[1].toDoubleOrNull() ?: return null
+        val unit = match.groupValues[2]
+        
+        return normalizeDistanceToKm(value, unit)
+    }
+    
     private fun extractValue(text: String, intent: String): Any? {
         return when (intent) {
             "LogEvent" -> {
@@ -1263,7 +1330,19 @@ class SlotExtractor {
             
             "volume" to "\\b(?:volume|sound\\s+level|sound\\s+volume|audio\\s+level|audio\\s+volume|loudness|loud|quiet|soft|sound|audio|speaker\\s+volume|media\\s+volume|ringtone\\s+volume|notification\\s+volume|alarm\\s+volume|call\\s+volume|ringer|sound\\s+output|audio\\s+output|volume\\s+level)\\b",
 
-            "torch" to "\\b(?:torch|flashlight|flash\\s+light|led\\s+light|led\\s+torch|camera\\s+flash|light|lamp|lantern|beam|illumination|bright\\s+light|phone\\s+light|mobile\\s+light|emergency\\s+light|torch\\s+light|strobe|strobe\\s+light|spotlight|searchlight|headlight|flash\\s+lamp|portable\\s+light|hand\\s+light|led\\s+flash|camera\\s+light|phone\\s+torch|device\\s+light|built-in\\s+light|integrated\\s+light)\\b"
+            "torch" to "\\b(?:torch|flashlight|flash\\s+light|led\\s+light|led\\s+torch|camera\\s+flash|light|lamp|lantern|beam|illumination|bright\\s+light|phone\\s+light|mobile\\s+light|emergency\\s+light|torch\\s+light|strobe|strobe\\s+light|spotlight|searchlight|headlight|flash\\s+lamp|portable\\s+light|hand\\s+light|led\\s+flash|camera\\s+light|phone\\s+torch|device\\s+light|built-in\\s+light|integrated\\s+light)\\b",
+            
+            "autoHR" to "\\b(?:auto\\s+hr|autoHR|autohr|auto\\s+heart\\s+rate|automatic\\s+heart\\s+rate|auto\\s+heart|continuous\\s+heart\\s+rate|continuous\\s+hr|always\\s+on\\s+heart\\s+rate|heart\\s+rate\\s+monitoring|hr\\s+monitoring|continuous\\s+heart\\s+monitoring|background\\s+heart\\s+rate|24\\s+7\\s+heart\\s+rate|heart\\s+rate\\s+tracking)\\b",
+            
+            "autoSPo2" to "\\b(?:auto\\s+spo2|auto\\s+sp\\s+o2|auto\\s+oxygen|automatic\\s+spo2|automatic\\s+oxygen|continuous\\s+spo2|continuous\\s+oxygen|always\\s+on\\s+spo2|spo2\\s+monitoring|oxygen\\s+monitoring|continuous\\s+oxygen\\s+monitoring|background\\s+spo2|24\\s+7\\s+spo2|spo2\\s+tracking|oxygen\\s+tracking)\\b",
+            
+            "stress monitor" to "\\b(?:stress\\s+monitor|stress\\s+monitoring|stress\\s+tracking|stress\\s+detection|auto\\s+stress|automatic\\s+stress|continuous\\s+stress|stress\\s+measurement|stress\\s+sensor|mental\\s+health\\s+monitoring|stress\\s+alert|stress\\s+warning)\\b",
+            
+            "sleep mode" to "\\b(?:sleep\\s+mode|sleeping\\s+mode|night\\s+mode|bedtime\\s+mode|rest\\s+mode|sleep\\s+tracking\\s+mode|sleep\\s+monitoring|auto\\s+sleep|automatic\\s+sleep|sleep\\s+detection|sleep\\s+schedule|bedtime\\s+schedule|wind\\s+down|sleep\\s+routine)\\b",
+            
+            "sedentary alert" to "\\b(?:sedentary\\s+alert|sedentary\\s+reminder|inactivity\\s+alert|inactivity\\s+reminder|move\\s+reminder|move\\s+alert|sitting\\s+alert|sitting\\s+reminder|activity\\s+reminder|get\\s+up\\s+reminder|stand\\s+up\\s+reminder|movement\\s+reminder|idle\\s+alert|lazy\\s+reminder)\\b",
+            
+            "hydration alert" to "\\b(?:hydration\\s+alert|hydration\\s+reminder|water\\s+reminder|water\\s+alert|drink\\s+reminder|drink\\s+alert|drink\\s+water\\s+reminder|fluid\\s+reminder|thirst\\s+reminder|water\\s+intake\\s+reminder|hydration\\s+notification|water\\s+notification|stay\\s+hydrated\\s+reminder)\\b"
         )
         
         // Try to match features in order of specificity (more specific patterns first)
@@ -1795,7 +1874,19 @@ class SlotExtractor {
             
             "stress" to "\\b(?:stress|stressed|stressful|stress\\s+level|stress\\s+score|stress\\s+index|anxiety|anxious|worried|worry|worrying|tension|tense|pressure|pressured|strain|strained|overwhelm|overwhelmed|nervous|nervousness|burnout|burnt\\s+out|mental\\s+stress|emotional\\s+stress|psychological\\s+stress|chronic\\s+stress|acute\\s+stress|relaxation|relax|calm|calmness|peace|peaceful|tranquil|serene|zen|mindfulness)\\b",
 
-            "brightness" to "\\b(?:brightness|bright|brighter|brighten|brightening|screen\\s+brightness|display\\s+brightness|luminosity|luminance|backlight|screen\\s+light|light\\s+level|dim|dimmer|dimming|dimness|darken|darker|darkening|auto\\s+brightness|adaptive\\s+brightness|brightness\\s+level|screen\\s+intensity|display\\s+intensity|illumination|illuminate|glow|glowing|radiance|light\\s+output|ambient\\s+light|screen\\s+glow|visibility|contrast|gamma|exposure|luminous)\\b"
+            "brightness" to "\\b(?:brightness|bright|brighter|brighten|brightening|screen\\s+brightness|display\\s+brightness|luminosity|luminance|backlight|screen\\s+light|light\\s+level|dim|dimmer|dimming|dimness|darken|darker|darkening|auto\\s+brightness|adaptive\\s+brightness|brightness\\s+level|screen\\s+intensity|display\\s+intensity|illumination|illuminate|glow|glowing|radiance|light\\s+output|ambient\\s+light|screen\\s+glow|visibility|contrast|gamma|exposure|luminous)\\b",
+            
+            "cycle tracking" to "\\b(?:cycle\\s+tracking|menstrual\\s+cycle|period\\s+tracking|period\\s+tracker|menstruation|menstrual\\s+calendar|period\\s+calendar|cycle\\s+calendar|fertility|fertility\\s+tracking|ovulation|ovulation\\s+tracking|period\\s+log|cycle\\s+log|women\\s+health|female\\s+health|reproductive\\s+health)\\b",
+            
+            "activity rings" to "\\b(?:activity\\s+rings|activity\\s+ring|rings|move\\s+ring|exercise\\s+ring|stand\\s+ring|daily\\s+rings|close\\s+rings|ring\\s+progress|ring\\s+goal|activity\\s+circles|activity\\s+goals|daily\\s+goals|fitness\\s+rings|move\\s+goal|stand\\s+goal|exercise\\s+goal)\\b",
+            
+            "workout history" to "\\b(?:workout\\s+history|exercise\\s+history|training\\s+history|activity\\s+history|workout\\s+log|exercise\\s+log|training\\s+log|activity\\s+log|past\\s+workouts|previous\\s+workouts|workout\\s+records|exercise\\s+records|training\\s+records|fitness\\s+history|workout\\s+data|exercise\\s+data)\\b",
+            
+            "calendar" to "\\b(?:calendar|cal|schedule|agenda|planner|diary|appointments?|events?|meetings?|date|dates|day\\s+planner|time\\s+planner|organizer|scheduler|event\\s+calendar|meeting\\s+calendar|my\\s+calendar|calendar\\s+app)\\b",
+            
+            "camera" to "\\b(?:camera|cam|photo|photos|picture|pictures|pic|pics|snapshot|photograph|take\\s+photo|take\\s+picture|capture|shoot|selfie|video|record|recording|front\\s+camera|back\\s+camera|rear\\s+camera|camera\\s+app)\\b",
+            
+            "find my phone" to "\\b(?:find\\s+my\\s+phone|find\\s+phone|find\\s+device|find\\s+my\\s+device|locate\\s+phone|locate\\s+device|phone\\s+finder|device\\s+finder|where\\s+is\\s+my\\s+phone|lost\\s+phone|missing\\s+phone|track\\s+phone|track\\s+device|ring\\s+phone|make\\s+phone\\s+ring|phone\\s+locator)\\b"
         )
         
         // Sort by pattern length for more specific matching
@@ -2033,9 +2124,15 @@ class SlotExtractor {
                     slots["time_ref"] = timeRef
                 }
                 if (!slots.containsKey("unit")) {
-                    val unit = extractUnit(text)
-                    if (unit != null) {
-                        slots["unit"] = unit
+                    val metric = slots["metric"] as? String
+                    // For distance metric, always use km as the standard unit
+                    if (metric == "distance") {
+                        slots["unit"] = "km"
+                    } else {
+                        val unit = extractUnit(text)
+                        if (unit != null) {
+                            slots["unit"] = unit
+                        }
                     }
                 }
                 if (!slots.containsKey("qualifier")) {
@@ -2063,6 +2160,21 @@ class SlotExtractor {
                     val unit = extractUnit(text)
                     if (unit != null) {
                         slots["unit"] = unit
+                    }
+                }
+                // Normalize distance to km if metric is distance
+                val metric = slots["metric"] as? String
+                if (metric == "distance" && slots.containsKey("target")) {
+                    val target = when (val t = slots["target"]) {
+                        is Int -> t.toDouble()
+                        is Double -> t
+                        else -> null
+                    }
+                    if (target != null) {
+                        val unit = (slots["unit"] as? String) ?: "km"
+                        val normalizedValue = normalizeDistanceToKm(target, unit)
+                        slots["target"] = normalizedValue
+                        slots["unit"] = "km"
                     }
                 }
                 if (!slots.containsKey("period")) {
@@ -2093,6 +2205,21 @@ class SlotExtractor {
                     val unit = extractUnit(text)
                     if (unit != null) {
                         slots["unit"] = unit
+                    }
+                }
+                // Normalize distance to km if metric is distance
+                val metric = slots["metric"] as? String
+                if (metric == "distance" && slots.containsKey("threshold")) {
+                    val threshold = when (val t = slots["threshold"]) {
+                        is Int -> t.toDouble()
+                        is Double -> t
+                        else -> null
+                    }
+                    if (threshold != null) {
+                        val unit = (slots["unit"] as? String) ?: "km"
+                        val normalizedValue = normalizeDistanceToKm(threshold, unit)
+                        slots["threshold"] = normalizedValue
+                        slots["unit"] = "km"
                     }
                 }
             }
@@ -2263,6 +2390,7 @@ class SlotExtractor {
         // Pre-compiled regex patterns for better performance
         val inferencePatterns = mapOf(
             "distance" to listOf(
+                Regex("\\bhow\\s+long\\s+(?:did\\s+)?(?:I\\s+)?(?:walk|run|hike|jog|cycle|bike|swim|travel)\\b", RegexOption.IGNORE_CASE),
                 Regex("\\bhow\\s+(?:much|many)\\s+distance\\b", RegexOption.IGNORE_CASE),
                 Regex("\\bhow\\s+far\\b|\\bhow\\s+long\\s+(?:of\\s+)?(?:a\\s+)?distance\\b", RegexOption.IGNORE_CASE),
                 Regex("\\bdistance.*(?:walk|walked|run|ran|travel|travelled|traveled|cover|covered)\\b", RegexOption.IGNORE_CASE),
@@ -2273,12 +2401,11 @@ class SlotExtractor {
                 Regex("\\b(?:total|overall|entire)\\s+distance\\b", RegexOption.IGNORE_CASE),
                 Regex("\\b(?:covered|travelled|traveled)\\s+(?:distance|how\\s+far)\\b", RegexOption.IGNORE_CASE),
                 Regex("\\brange\\b|\\bspan\\b|\\blength\\b|\\bmileage\\b", RegexOption.IGNORE_CASE),
-                Regex("\\bjourney\\s+length\\b|\\btrip\\s+distance\\b", RegexOption.IGNORE_CASE),
-                Regex("\\bhow\\s+long\\s+(?:of\\s+)?(?:a\\s+)?(?:walk|run|hike)\\b", RegexOption.IGNORE_CASE)
+                Regex("\\bjourney\\s+length\\b|\\btrip\\s+distance\\b", RegexOption.IGNORE_CASE)
             ),
             "steps" to listOf(
                 Regex("\\b(?:walk|walked|walking|stroll|strolling|strolled|hike|hiking|hiked|trek|trekking|trekked|march|marching|marched|wander|wandering|wandered|amble|ambling|ambled|pace|pacing|paced)\\b(?!\\s+(?:distance|far|km|miles?|kilometers?))", RegexOption.IGNORE_CASE),
-                Regex("\\bhow\\s+(?:much|many)(?!.*distance).*(?:walk|walked|stroll|hike|move|moved|step)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bhow\\s+(?:much|many)(?!.*(?:distance|long)).*(?:walk|walked|stroll|hike|move|moved|step)\\b", RegexOption.IGNORE_CASE),
                 Regex("\\bsteps?\\b|\\bfootsteps?\\b|\\bfoot\\s+steps?\\b", RegexOption.IGNORE_CASE),
                 Regex("\\b(?:count|counting|total|number).*(?:steps?|walk)(?!.*distance)\\b", RegexOption.IGNORE_CASE),
                 Regex("\\b(?:daily|today'?s|my)\\s+(?:steps?|walk|walking)\\b", RegexOption.IGNORE_CASE),
@@ -2364,6 +2491,28 @@ class SlotExtractor {
                 Regex("\\bmoving\\s+(?:time|hours?|duration)\\b|\\btime\\s+moving\\b", RegexOption.IGNORE_CASE),
                 Regex("\\bactive\\s+(?:duration|period|minutes?)\\b", RegexOption.IGNORE_CASE),
                 Regex("\\bphysical\\s+activity\\s+(?:time|hours?|duration)\\b", RegexOption.IGNORE_CASE)
+            ),
+            "standing" to listOf(
+                Regex("\\bstanding\\s+(?:hours?|time|goal|duration|activity|ring)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bstand\\s+(?:hours?|time|goal|duration|activity|ring)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bhours?\\s+(?:standing|stood|stand)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\btime\\s+(?:standing|stood|stand)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bhow\\s+(?:much|long|many).*(?:standing|stand|stood)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bstood\\s+(?:up|hours?|time|today|for)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bon\\s+(?:my\\s+)?feet\\b|\\bupright\\b|\\bvertical\\b", RegexOption.IGNORE_CASE),
+                Regex("\\b(?:daily|today'?s|total)\\s+standing\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bstanding\\s+(?:up|position)\\b", RegexOption.IGNORE_CASE)
+            ),
+            "vo2" to listOf(
+                Regex("\\bvo2\\s*(?:max)?\\b|\\bvo2max\\b|\\bv\\s*o\\s*2\\s*(?:max)?\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bvo\\s*two\\s*(?:max)?\\b|\\bv\\s*o\\s*two\\s*(?:max)?\\b", RegexOption.IGNORE_CASE),
+                Regex("\\baerobic\\s+(?:capacity|fitness|power)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bcardio\\s+(?:fitness|capacity|level)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bcardiovascular\\s+fitness\\b|\\bcardiorespiratory\\s+fitness\\b", RegexOption.IGNORE_CASE),
+                Regex("\\b(?:max|maximum)\\s+oxygen\\b|\\boxygen\\s+uptake\\b|\\boxygen\\s+capacity\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bendurance\\s+capacity\\b|\\bfitness\\s+(?:level|score)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bhow\\s+(?:fit|aerobic)\\b|\\bwhat'?s\\s+my\\s+(?:vo2|fitness)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bvo2\\s+(?:score|reading|level|measurement)\\b", RegexOption.IGNORE_CASE)
             )
         )
         

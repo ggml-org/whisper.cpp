@@ -249,6 +249,13 @@ class SlotExtractor {
             "sleep efficiency", "sleep assessment", "how well slept", "sleep health",
             "sleep metric", "sleep stats", "sleep report", "sleep evaluation"
         ],
+        "deep sleep": [
+            "deep sleep", "deep sleeping", "deep slumber", "rem sleep", "rem",
+            "deep rest", "deep phase", "deep stage", "stage 3", "stage 4",
+            "slow wave sleep", "sws", "restorative sleep", "deep sleep time",
+            "deep sleep duration", "deep sleep hours", "deep sleep stage",
+            "profound sleep", "heavy sleep", "sound sleep"
+        ],
         "spo2": [
             "spo2", "oxygen", "blood oxygen", "o2", "saturation", "oxygen saturation",
             "oxygen level", "oxygen levels", "o2 sat", "blood o2", "oxygen sat",
@@ -266,6 +273,23 @@ class SlotExtractor {
             "worry", "pressure", "strain", "overwhelmed", "nervous", "nervousness",
             "stress level", "mental stress", "emotional stress", "burnout",
             "stress score", "relaxation", "calm", "mental health", "wellbeing"
+        ],
+        "standing": [
+            "standing", "stand", "stood", "stand hours", "standing hours",
+            "stand time", "standing time", "hours standing", "hours stood",
+            "time standing", "time stood", "standing goal", "stand goal",
+            "upright", "upright time", "standing duration", "stand duration",
+            "on feet", "on my feet", "standing up", "stood up", "vertical",
+            "standing activity", "stand activity", "standing ring", "stand ring"
+        ],
+        "vo2": [
+            "vo2", "vo2 max", "vo2max", "v o2", "v o2 max", "vo 2", "vo 2 max",
+            "vo two", "vo two max", "v o two", "v o two max",
+            "aerobic capacity", "aerobic fitness", "cardio fitness", "cardiovascular fitness",
+            "max oxygen", "maximum oxygen", "oxygen uptake", "max aerobic capacity",
+            "cardio capacity", "endurance capacity", "fitness level", "cardio level",
+            "aerobic power", "oxygen capacity", "cardiorespiratory fitness",
+            "vo2 score", "vo2 reading", "vo2 level", "fitness score"
         ]
     ]
     
@@ -370,6 +394,8 @@ class SlotExtractor {
     private let oxygenRegex = try! NSRegularExpression(pattern: "\\b(?:oxygen|o2|spo2|saturation|sat|blood oxygen|pulse ox|oximeter|oximetry|breathing|respiratory|respiration|air|breathe)\\b", options: [.caseInsensitive])
     private let weightRegex = try! NSRegularExpression(pattern: "\\b(?:weight|weigh|weighing|weighed|kg|kilogram|kilograms|pound|pounds|lbs|lb|body mass|bmi|body weight|mass|scale|heavy|light|stone|gram|grams|ounce|ounces|oz)\\b", options: [.caseInsensitive])
     private let stressRegex = try! NSRegularExpression(pattern: "\\b(?:stress|stressed|stressful|anxiety|anxious|tension|tense|worried|worry|worrying|pressure|pressured|strain|strained|overwhelm|overwhelmed|nervous|nervousness|burnout|mental health|relaxation|relax|calm|peace|peaceful)\\b", options: [.caseInsensitive])
+    private let standingRegex = try! NSRegularExpression(pattern: "\\b(?:standing|stand|stood|upright|vertical|on feet|on my feet|stand hours|standing hours|stand time|standing time|stand goal|standing goal|stand ring|standing ring|stand activity|standing activity|stand up|stood up)\\b", options: [.caseInsensitive])
+    private let vo2Regex = try! NSRegularExpression(pattern: "\\b(?:vo2|vo2\\s*max|vo2max|v\\s*o\\s*2|v\\s*o\\s*2\\s*max|vo\\s*2|vo\\s*2\\s*max|vo\\s*two|vo\\s*two\\s*max|v\\s*o\\s*two|aerobic\\s+capacity|aerobic\\s+fitness|cardio\\s+fitness|cardiovascular\\s+fitness|max\\s+oxygen|maximum\\s+oxygen|oxygen\\s+uptake|cardio\\s+capacity|endurance\\s+capacity|fitness\\s+level|aerobic\\s+power|oxygen\\s+capacity|cardiorespiratory)\\b", options: [.caseInsensitive])
     private let heartRateUnitRegex = try! NSRegularExpression(pattern: "\\b(?:heart\\s+rate|pulse|hr)\\b", options: [.caseInsensitive])
     private let weightUnitRegex = try! NSRegularExpression(pattern: "\\b(?:weight|weigh)\\b", options: [.caseInsensitive])
     private let stepsUnitRegex = try! NSRegularExpression(pattern: "\\bsteps?\\b", options: [.caseInsensitive])
@@ -455,6 +481,10 @@ class SlotExtractor {
                         slots["unit"] = "percent"
                     case "stress":
                         slots["unit"] = "score"
+                    case "standing":
+                        slots["unit"] = "hours"
+                    case "vo2":
+                        slots["unit"] = "ml/kg/min"
                     default:
                         break
                     }
@@ -659,6 +689,9 @@ class SlotExtractor {
     }
     
     private func extractIdentifier(text: String) -> String? {
+        // Check if text contains VO2 context - if so, skip "max" matching for maximum identifier
+        let hasVO2Context = vo2Regex.numberOfMatches(in: text, options: [], range: NSRange(location: 0, length: text.count)) > 0
+        
         let identifierPatterns: [String: String] = [
             "minimum": "\\b(?:minimum|min|lowest|least|bottom|bare minimum|minimal|minimally|rock bottom|floor|base|baseline|low point|lower|smallest|tiniest|fewest|less|lesser|reduced|at least|no less than|starting from|beginning at|from|low|lows|worst|slowest)\\b",
             "maximum": "\\b(?:maximum|max|highest|most|peak|top|maximal|maximally|ceiling|upper limit|high point|higher|greatest|largest|biggest|best|record|all time high|at most|no more than|up to|limit|cap|high|highs|fastest|extreme|topmost|ultimate)\\b",
@@ -667,6 +700,10 @@ class SlotExtractor {
         ]
         
         for (identifier, pattern) in identifierPatterns {
+            // Skip maximum pattern if VO2 context is present (to avoid matching "max" in "vo2 max")
+            if identifier == "maximum" && hasVO2Context {
+                continue
+            }
             if text.range(of: pattern, options: .regularExpression) != nil {
                 return identifier
             }
@@ -677,7 +714,14 @@ class SlotExtractor {
     }
     
     private func extractUnit(text: String) -> String? {
-        // Try context-based unit inference first
+        // Check explicit unit patterns FIRST (higher priority)
+        for (unit, pattern) in unitPatterns {
+            if pattern.numberOfMatches(in: text, options: [], range: NSRange(location: 0, length: text.count)) > 0 {
+                return unit
+            }
+        }
+        
+        // Then try context-based unit inference as fallback
         if heartRateUnitRegex.numberOfMatches(in: text, options: [], range: NSRange(location: 0, length: text.count)) > 0 {
             return "bpm"
         }
@@ -718,11 +762,11 @@ class SlotExtractor {
             return "count"
         }
         
-        // Check pre-compiled unit patterns
-        for (unit, pattern) in unitPatterns {
-            if pattern.numberOfMatches(in: text, options: [], range: NSRange(location: 0, length: text.count)) > 0 {
-                return unit
-            }
+        if standingRegex.numberOfMatches(in: text, options: [], range: NSRange(location: 0, length: text.count)) > 0 {
+            return "hours"
+        }
+        if vo2Regex.numberOfMatches(in: text, options: [], range: NSRange(location: 0, length: text.count)) > 0 {
+            return "ml/kg/min"
         }
         
         return nil
@@ -773,24 +817,24 @@ class SlotExtractor {
     
     private func extractTarget(text: String) -> Int? {
         let goalPatterns = [
-            "\\b(?:goal|target|aim|objective|plan|intention|aspiration|ambition|desire|want|wish|hope)\\s*(?:is|of|to|for|at)?\\s*(?:be|reach|hit|achieve|get|make|do)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
-            "\\b(?:set|change|update|modify|adjust|edit|configure|make|establish|create|define|specify)\\s*(?:my|the)?\\s*(?:goal|target|aim|objective)?\\s*(?:to|at|as|for)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
-            "\\b(?:reach|hit|achieve|attain|get|get\\s+to|make|do|complete|finish|accomplish|meet)\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\s*(?:steps?|kg|kgs|kilogram|kilograms|pounds?|lbs?|km|kms|kilometer|kilometers|miles?|hours?|hrs?|minutes?|mins?|calories?|kcal|bpm)\\b",
-            "\\b(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\s*(?:steps?|kg|kgs|kilogram|kilograms|pounds?|lbs?|lb|km|kms|kilometer|kilometers|kilometre|kilometres|miles?|mi|hours?|hrs?|hr|h|minutes?|mins?|min|m|calories?|kcal|cal|cals|bpm|beats?|meter|meters|metre|metres|feet|foot|ft)\\b",
-            "\\b(?:I|i)\\s+(?:want|wanna|need|must|should|have\\s+to|got\\s+to|gotta)\\s+(?:to\\s+)?(?:reach|hit|get|do|achieve|make|walk|run|burn|lose|gain|sleep)\\s*(?:to|at)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
-            "\\b(?:trying|attempting|aiming|working|striving|shooting|going)\\s+(?:to|for)\\s+(?:reach|hit|get|do|achieve|make)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
-            "\\b(?:daily|weekly|monthly|per\\s+day|each\\s+day|every\\s+day)\\s+(?:goal|target|aim|objective)?\\s*(?:is|of|to)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
-            "\\b(?:increase|raise|boost|bump|up|improve|decrease|reduce|lower|drop|cut|bring\\s+down)\\s+(?:to|by)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
-            "\\b(?:at\\s+least|minimum\\s+of|no\\s+less\\s+than|minimum|min)\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
-            "\\b(?:need|needs)\\s+to\\s+(?:be|reach|hit|get)\\s*(?:at|to)?\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b",
-            "\\b(?:suggest|recommend|advise|tell\\s+me|remind\\s+me|notify\\s+me).*?(?:when|if|at)\\s*(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b"
+            "\\b(?:goal|target|aim|objective|plan|intention|aspiration|ambition|desire|want|wish|hope)\\s*(?:is|of|to|for|at)?\\s*(?:be|reach|hit|achieve|get|make|do)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            "\\b(?:set|change|update|modify|adjust|edit|configure|make|establish|create|define|specify)\\s*(?:my|the)?\\s*(?:goal|target|aim|objective)?\\s*(?:to|at|as|for)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            "\\b(?:reach|hit|achieve|attain|get|get\\s+to|make|do|complete|finish|accomplish|meet)\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\s*(?:steps?|kg|kgs|kilogram|kilograms|pounds?|lbs?|km|kms|kilometer|kilometers|miles?|hours?|hrs?|minutes?|mins?|calories?|kcal|bpm)\\b",
+            "\\b(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\s*(?:steps?|kg|kgs|kilogram|kilograms|pounds?|lbs?|lb|km|kms|kilometer|kilometers|kilometre|kilometres|miles?|mi|hours?|hrs?|hr|h|minutes?|mins?|min|m|calories?|kcal|cal|cals|bpm|beats?|meter|meters|metre|metres|feet|foot|ft)\\b",
+            "\\b(?:I|i)\\s+(?:want|wanna|need|must|should|have\\s+to|got\\s+to|gotta)\\s+(?:to\\s+)?(?:reach|hit|get|do|achieve|make|walk|run|burn|lose|gain|sleep)\\s*(?:to|at)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            "\\b(?:trying|attempting|aiming|working|striving|shooting|going)\\s+(?:to|for)\\s+(?:reach|hit|get|do|achieve|make)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            "\\b(?:daily|weekly|monthly|per\\s+day|each\\s+day|every\\s+day)\\s+(?:goal|target|aim|objective)?\\s*(?:is|of|to)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            "\\b(?:increase|raise|boost|bump|up|improve|decrease|reduce|lower|drop|cut|bring\\s+down)\\s+(?:to|by)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            "\\b(?:at\\s+least|minimum\\s+of|no\\s+less\\s+than|minimum|min)\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            "\\b(?:need|needs)\\s+to\\s+(?:be|reach|hit|get)\\s*(?:at|to)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
+            "\\b(?:suggest|recommend|advise|tell\\s+me|remind\\s+me|notify\\s+me).*?(?:when|if|at)\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b"
         ]
         
         // Try each pattern
         for pattern in goalPatterns {
             if let range = text.range(of: pattern, options: .regularExpression) {
                 let matchedText = String(text[range])
-                let matches = try! NSRegularExpression(pattern: "(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)", options: []).matches(in: matchedText, options: [], range: NSRange(location: 0, length: matchedText.count))
+                let matches = try! NSRegularExpression(pattern: "(\\d+(?:,\\d{3})*(?:\\.\\d+)?)", options: []).matches(in: matchedText, options: [], range: NSRange(location: 0, length: matchedText.count))
                 if let match = matches.first {
                     let numberRange = Range(match.range, in: matchedText)!
                     let numberString = String(matchedText[numberRange]).replacingOccurrences(of: ",", with: "")
@@ -801,8 +845,8 @@ class SlotExtractor {
             }
         }
         
-        // Fallback: extract any number from the text (including comma-separated)
-        let commaNumberRegex = try! NSRegularExpression(pattern: "\\b(\\d{1,3}(?:,\\d{3})*(?:\\.\\d+)?)\\b", options: [])
+        // Fallback: extract any number from the text (supports numbers with or without commas)
+        let commaNumberRegex = try! NSRegularExpression(pattern: "\\b(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b", options: [])
         let matches = commaNumberRegex.matches(in: text, options: [], range: NSRange(location: 0, length: text.count))
         if let match = matches.first {
             let numberRange = Range(match.range, in: text)!
@@ -1096,6 +1140,51 @@ class SlotExtractor {
         }
     }
     
+    /**
+     * Normalizes distance values from various units to kilometers
+     * Supports: miles, meters, feet, yards
+     * Returns the distance value in kilometers as a Double
+     */
+    private func normalizeDistanceToKm(value: Double, unit: String) -> Double {
+        switch unit.lowercased() {
+        case "miles", "mile", "mi":
+            return value * 1.60934  // miles to km
+        case "meters", "meter", "metres", "metre", "m":
+            return value / 1000.0  // meters to km
+        case "feet", "foot", "ft":
+            return value * 0.0003048  // feet to km
+        case "yards", "yard", "yd":
+            return value * 0.0009144  // yards to km
+        case "km", "kms", "kilometer", "kilometers", "kilometre", "kilometres":
+            return value  // already in km
+        default:
+            return value  // default: assume km
+        }
+    }
+    
+    /**
+     * Extracts distance value with unit from text and normalizes to kilometers
+     * Returns the normalized value in km
+     */
+    private func extractAndNormalizeDistance(text: String) -> Double? {
+        let distancePattern = "\\\\b(\\\\d+(?:\\\\.\\\\d+)?)\\\\s*(miles?|mi|meters?|metres?|m|feet|foot|ft|yards?|yd|km|kms|kilometers?|kilometres?)\\\\b"
+        guard let regex = try? NSRegularExpression(pattern: distancePattern, options: .caseInsensitive) else { return nil }
+        
+        let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: text.count))
+        guard let match = matches.first else { return nil }
+        
+        guard match.numberOfRanges > 2,
+              let valueRange = Range(match.range(at: 1), in: text),
+              let unitRange = Range(match.range(at: 2), in: text) else { return nil }
+        
+        let valueStr = String(text[valueRange])
+        let unit = String(text[unitRange])
+        
+        guard let value = Double(valueStr) else { return nil }
+        
+        return normalizeDistanceToKm(value: value, unit: unit)
+    }
+    
     
     private func extractValue(text: String, intent: String) -> Any? {
         switch intent {
@@ -1309,7 +1398,13 @@ class SlotExtractor {
             "raise to wake": "\\b(?:raise\\s+to\\s+wake|lift\\s+to\\s+wake|tap\\s+to\\s+wake|double\\s+tap\\s+to\\s+wake|touch\\s+to\\s+wake|wrist\\s+raise|raise\\s+wrist|lift\\s+wrist|wake\\s+on\\s+raise|wake\\s+on\\s+lift|wake\\s+on\\s+tap|wake\\s+on\\s+touch|pick\\s+up\\s+to\\s+wake|gesture\\s+wake|motion\\s+wake|tilt\\s+to\\s+wake|wake\\s+gesture|screen\\s+wake|auto\\s+wake|smart\\s+wake)\\b",
             "vibration": "\\b(?:vibration|vibrate|vibrating|haptic|haptics|buzz|buzzing|rumble|rumbling|tactile|tactile\\s+feedback|vibration\\s+feedback|motor|vibration\\s+motor|shake|shaking|pulse|pulsing|vibe|vibes|vibrate\\s+mode|silent\\s+vibrate|ring\\s+vibrate)\\b",
             "volume": "\\b(?:volume|sound\\s+level|sound\\s+volume|audio\\s+level|audio\\s+volume|loudness|loud|quiet|soft|sound|audio|speaker\\s+volume|media\\s+volume|ringtone\\s+volume|notification\\s+volume|alarm\\s+volume|call\\s+volume|ringer|sound\\s+output|audio\\s+output|volume\\s+level)\\b",
-            "torch": "\\b(?:torch|flashlight|flash\\s+light|led\\s+light|led\\s+torch|camera\\s+flash|light|lamp|lantern|beam|illumination|bright\\s+light|phone\\s+light|mobile\\s+light|emergency\\s+light|torch\\s+light|strobe|strobe\\s+light|spotlight|searchlight|headlight|flash\\s+lamp|portable\\s+light|hand\\s+light|led\\s+flash|camera\\s+light|phone\\s+torch|device\\s+light|built-in\\s+light|integrated\\s+light)\\b"
+            "torch": "\\b(?:torch|flashlight|flash\\s+light|led\\s+light|led\\s+torch|camera\\s+flash|light|lamp|lantern|beam|illumination|bright\\s+light|phone\\s+light|mobile\\s+light|emergency\\s+light|torch\\s+light|strobe|strobe\\s+light|spotlight|searchlight|headlight|flash\\s+lamp|portable\\s+light|hand\\s+light|led\\s+flash|camera\\s+light|phone\\s+torch|device\\s+light|built-in\\s+light|integrated\\s+light)\\b",
+            "autoHR": "\\b(?:auto\\s+hr|auto\\s+heart\\s+rate|automatic\\s+heart\\s+rate|auto\\s+heart|continuous\\s+heart\\s+rate|continuous\\s+hr|always\\s+on\\s+heart\\s+rate|heart\\s+rate\\s+monitoring|hr\\s+monitoring|continuous\\s+heart\\s+monitoring|background\\s+heart\\s+rate|24\\s+7\\s+heart\\s+rate|heart\\s+rate\\s+tracking)\\b",
+            "autoSPo2": "\\b(?:auto\\s+spo2|auto\\s+sp\\s+o2|auto\\s+oxygen|automatic\\s+spo2|automatic\\s+oxygen|continuous\\s+spo2|continuous\\s+oxygen|always\\s+on\\s+spo2|spo2\\s+monitoring|oxygen\\s+monitoring|continuous\\s+oxygen\\s+monitoring|background\\s+spo2|24\\s+7\\s+spo2|spo2\\s+tracking|oxygen\\s+tracking)\\b",
+            "stress monitor": "\\b(?:stress\\s+monitor|stress\\s+monitoring|stress\\s+tracking|stress\\s+detection|auto\\s+stress|automatic\\s+stress|continuous\\s+stress|stress\\s+measurement|stress\\s+sensor|mental\\s+health\\s+monitoring|stress\\s+alert|stress\\s+warning)\\b",
+            "sleep mode": "\\b(?:sleep\\s+mode|sleeping\\s+mode|night\\s+mode|bedtime\\s+mode|rest\\s+mode|sleep\\s+tracking\\s+mode|sleep\\s+monitoring|auto\\s+sleep|automatic\\s+sleep|sleep\\s+detection|sleep\\s+schedule|bedtime\\s+schedule|wind\\s+down|sleep\\s+routine)\\b",
+            "sedentary alert": "\\b(?:sedentary\\s+alert|sedentary\\s+reminder|inactivity\\s+alert|inactivity\\s+reminder|move\\s+reminder|move\\s+alert|sitting\\s+alert|sitting\\s+reminder|activity\\s+reminder|get\\s+up\\s+reminder|stand\\s+up\\s+reminder|movement\\s+reminder|idle\\s+alert|lazy\\s+reminder)\\b",
+            "hydration alert": "\\b(?:hydration\\s+alert|hydration\\s+reminder|water\\s+reminder|water\\s+alert|drink\\s+reminder|drink\\s+alert|drink\\s+water\\s+reminder|fluid\\s+reminder|thirst\\s+reminder|water\\s+intake\\s+reminder|hydration\\s+notification|water\\s+notification|stay\\s+hydrated\\s+reminder)\\b"
         ]
         // Sort by pattern length for more specific matching
         let sortedFeatures = features.sorted { $0.value.count > $1.value.count }
@@ -1833,7 +1928,13 @@ class SlotExtractor {
             "heart rate": "\\b(?:heart\\s+rate|heartrate|heart\\s+beat|heartbeat|pulse|pulse\\s+rate|bpm|beats\\s+per\\s+minute|cardiac|cardiac\\s+rate|heart\\s+rhythm|resting\\s+heart\\s+rate|rhr|max\\s+heart\\s+rate|maximum\\s+heart\\s+rate|heart\\s+health|cardiovascular|cardio|ticker|heart\\s+monitor|heart\\s+sensor|hr|beat|beats|beating|palpitation|palpitations|tachycardia|bradycardia|heart\\s+zone|target\\s+heart\\s+rate|recovery\\s+heart\\s+rate)\\b",
             "blood oxygen": "\\b(?:blood\\s+oxygen|oxygen|o2|spo2|sp\\s+o2|oxygen\\s+saturation|oxygen\\s+level|oxygen\\s+levels|blood\\s+o2|oxygen\\s+sat|o2\\s+sat|o2\\s+level|o2\\s+saturation|pulse\\s+ox|pulse\\s+oximetry|oximeter|oxygen\\s+reading|oxygen\\s+sensor|saturation|sat|blood\\s+oxygen\\s+level|arterial\\s+oxygen|respiratory|respiration|breathing|breath|lung\\s+function|oxygenation|hypoxia|oxygen\\s+content|sp2|SP2)\\b",
             "stress": "\\b(?:stress|stressed|stressful|stress\\s+level|stress\\s+score|stress\\s+index|anxiety|anxious|worried|worry|worrying|tension|tense|pressure|pressured|strain|strained|overwhelm|overwhelmed|nervous|nervousness|burnout|burnt\\s+out|mental\\s+stress|emotional\\s+stress|psychological\\s+stress|chronic\\s+stress|acute\\s+stress|relaxation|relax|calm|calmness|peace|peaceful|tranquil|serene|zen|mindfulness)\\b",
-            "brightness": "\\b(?:brightness|bright|brighter|brighten|brightening|screen\\s+brightness|display\\s+brightness|luminosity|luminance|backlight|screen\\s+light|light\\s+level|dim|dimmer|dimming|dimness|darken|darker|darkening|auto\\s+brightness|adaptive\\s+brightness|brightness\\s+level|screen\\s+intensity|display\\s+intensity|illumination|illuminate|glow|glowing|radiance|light\\s+output|ambient\\s+light|screen\\s+glow|visibility|contrast|gamma|exposure|luminous)\\b"
+            "brightness": "\\b(?:brightness|bright|brighter|brighten|brightening|screen\\s+brightness|display\\s+brightness|luminosity|luminance|backlight|screen\\s+light|light\\s+level|dim|dimmer|dimming|dimness|darken|darker|darkening|auto\\s+brightness|adaptive\\s+brightness|brightness\\s+level|screen\\s+intensity|display\\s+intensity|illumination|illuminate|glow|glowing|radiance|light\\s+output|ambient\\s+light|screen\\s+glow|visibility|contrast|gamma|exposure|luminous)\\b",
+            "cycle tracking": "\\b(?:cycle\\s+tracking|menstrual\\s+cycle|period\\s+tracking|period\\s+tracker|menstruation|menstrual\\s+calendar|period\\s+calendar|cycle\\s+calendar|fertility|fertility\\s+tracking|ovulation|ovulation\\s+tracking|period\\s+log|cycle\\s+log|women\\s+health|female\\s+health|reproductive\\s+health)\\b",
+            "activity rings": "\\b(?:activity\\s+rings|activity\\s+ring|rings|move\\s+ring|exercise\\s+ring|stand\\s+ring|daily\\s+rings|close\\s+rings|ring\\s+progress|ring\\s+goal|activity\\s+circles|activity\\s+goals|daily\\s+goals|fitness\\s+rings|move\\s+goal|stand\\s+goal|exercise\\s+goal)\\b",
+            "workout history": "\\b(?:workout\\s+history|exercise\\s+history|training\\s+history|activity\\s+history|workout\\s+log|exercise\\s+log|training\\s+log|activity\\s+log|past\\s+workouts|previous\\s+workouts|workout\\s+records|exercise\\s+records|training\\s+records|fitness\\s+history|workout\\s+data|exercise\\s+data)\\b",
+            "calendar": "\\b(?:calendar|cal|schedule|agenda|planner|diary|appointments?|events?|meetings?|date|dates|day\\s+planner|time\\s+planner|organizer|scheduler|event\\s+calendar|meeting\\s+calendar|my\\s+calendar|calendar\\s+app)\\b",
+            "camera": "\\b(?:camera|cam|photo|photos|picture|pictures|pic|pics|snapshot|photograph|take\\s+photo|take\\s+picture|capture|shoot|selfie|video|record|recording|front\\s+camera|back\\s+camera|rear\\s+camera|camera\\s+app)\\b",
+            "find my phone": "\\b(?:find\\s+my\\s+phone|find\\s+phone|find\\s+device|find\\s+my\\s+device|locate\\s+phone|locate\\s+device|phone\\s+finder|device\\s+finder|where\\s+is\\s+my\\s+phone|lost\\s+phone|missing\\s+phone|track\\s+phone|track\\s+device|ring\\s+phone|make\\s+phone\\s+ring|phone\\s+locator)\\b"
         ]
         // Sort by pattern length for more specific matching
         let sortedApps = apps.sorted { $0.value.count > $1.value.count }
@@ -2061,7 +2162,60 @@ class SlotExtractor {
                 slots["time_ref"] = "today"
             }
             
-            // Add default unit based on metric
+            // For distance metric, always use km as the standard unit
+            if slots["unit"] == nil, let metric = slots["metric"] as? String {
+                if metric == "distance" {
+                    slots["unit"] = "km"
+                } else {
+                    switch metric {
+                    case "steps":
+                        slots["unit"] = "count"
+                    case "calories":
+                        slots["unit"] = "kcal"
+                    case "heart rate":
+                        slots["unit"] = "bpm"
+                    case "sleep":
+                        slots["unit"] = "hours"
+                    case "weight":
+                        slots["unit"] = "kg"
+                    case "spo2":
+                        slots["unit"] = "percent"
+                    case "stress":
+                        slots["unit"] = "score"
+                    default:
+                        break
+                    }
+                }
+            }
+            
+            // Add default identifier if not present
+            if slots["identifier"] == nil {
+                slots["identifier"] = "average"
+            }
+            
+        case "SetGoal":
+            // Normalize distance target to km if metric is distance
+            if let metric = slots["metric"] as? String, metric == "distance" {
+                if let target = slots["target"] {
+                    let targetValue: Double
+                    if let intVal = target as? Int {
+                        targetValue = Double(intVal)
+                    } else if let doubleVal = target as? Double {
+                        targetValue = doubleVal
+                    } else {
+                        targetValue = 0
+                    }
+                    
+                    if targetValue > 0 {
+                        let unit = (slots["unit"] as? String) ?? "km"
+                        let normalizedValue = normalizeDistanceToKm(value: targetValue, unit: unit)
+                        slots["target"] = normalizedValue
+                        slots["unit"] = "km"
+                    }
+                }
+            }
+            
+            // Add default unit based on metric if not already set
             if slots["unit"] == nil, let metric = slots["metric"] as? String {
                 switch metric {
                 case "steps":
@@ -2085,13 +2239,29 @@ class SlotExtractor {
                 }
             }
             
-            // Add default identifier if not present
-            if slots["identifier"] == nil {
-                slots["identifier"] = "average"
+        case "SetThreshold":
+            // Normalize distance threshold to km if metric is distance
+            if let metric = slots["metric"] as? String, metric == "distance" {
+                if let threshold = slots["threshold"] {
+                    let thresholdValue: Double
+                    if let intVal = threshold as? Int {
+                        thresholdValue = Double(intVal)
+                    } else if let doubleVal = threshold as? Double {
+                        thresholdValue = doubleVal
+                    } else {
+                        thresholdValue = 0
+                    }
+                    
+                    if thresholdValue > 0 {
+                        let unit = (slots["unit"] as? String) ?? "km"
+                        let normalizedValue = normalizeDistanceToKm(value: thresholdValue, unit: unit)
+                        slots["threshold"] = normalizedValue
+                        slots["unit"] = "km"
+                    }
+                }
             }
             
-        case "SetGoal", "SetThreshold":
-            // Add default unit based on metric
+            // Add default unit based on metric if not already set
             if slots["unit"] == nil, let metric = slots["metric"] as? String {
                 switch metric {
                 case "steps":
@@ -2268,6 +2438,7 @@ class SlotExtractor {
         // Pre-compiled regex patterns for better performance
         let inferencePatterns: [String: [String]] = [
             "distance": [
+                "\\bhow\\s+long\\s+(?:did\\s+)?(?:I\\s+)?(?:walk|run|hike|jog|cycle|bike|swim|travel)\\b",
                 "\\bhow\\s+(?:much|many)\\s+distance\\b",
                 "\\bhow\\s+far\\b",
                 "\\bdistance.*(?:walk|walked)\\b",
@@ -2278,7 +2449,7 @@ class SlotExtractor {
             ],
             "steps": [
                 "\\b(?:walk|walked|walking)\\b(?!\\s+distance)",
-                "\\bhow\\s+(?:much|many)(?!.*distance).*(?:walk|walked)\\b",
+                "\\bhow\\s+(?:much|many)(?!.*(?:distance|long)).*(?:walk|walked)\\b",
                 "\\bsteps?\\b",
                 "\\bpace|paces|stride|strides|footsteps?\\b",
                 "\\bmove|moved|movement|activity\\b"
@@ -2326,6 +2497,28 @@ class SlotExtractor {
                 "\\bmoving\\s+(?:time|hours?|duration)\\b|\\btime\\s+moving\\b",
                 "\\bactive\\s+(?:duration|period|minutes?)\\b",
                 "\\bphysical\\s+activity\\s+(?:time|hours?|duration)\\b"
+            ],
+            "standing": [
+                "\\bstanding\\s+(?:hours?|time|goal|duration|activity|ring)\\b",
+                "\\bstand\\s+(?:hours?|time|goal|duration|activity|ring)\\b",
+                "\\bhours?\\s+(?:standing|stood|stand)\\b",
+                "\\btime\\s+(?:standing|stood|stand)\\b",
+                "\\bhow\\s+(?:much|long|many).*(?:standing|stand|stood)\\b",
+                "\\bstood\\s+(?:up|hours?|time|today|for)\\b",
+                "\\bon\\s+(?:my\\s+)?feet\\b|\\bupright\\b|\\bvertical\\b",
+                "\\b(?:daily|today'?s|total)\\s+standing\\b",
+                "\\bstanding\\s+(?:up|position)\\b"
+            ],
+            "vo2": [
+                "\\bvo2\\s*(?:max)?\\b|\\bvo2max\\b|\\bv\\s*o\\s*2\\s*(?:max)?\\b",
+                "\\bvo\\s*two\\s*(?:max)?\\b|\\bv\\s*o\\s*two\\s*(?:max)?\\b",
+                "\\baerobic\\s+(?:capacity|fitness|power)\\b",
+                "\\bcardio\\s+(?:fitness|capacity|level)\\b",
+                "\\bcardiovascular\\s+fitness\\b|\\bcardiorespiratory\\s+fitness\\b",
+                "\\b(?:max|maximum)\\s+oxygen\\b|\\boxygen\\s+uptake\\b|\\boxygen\\s+capacity\\b",
+                "\\bendurance\\s+capacity\\b|\\bfitness\\s+(?:level|score)\\b",
+                "\\bhow\\s+(?:fit|aerobic)\\b|\\bwhat'?s\\s+my\\s+(?:vo2|fitness)\\b",
+                "\\bvo2\\s+(?:score|reading|level|measurement)\\b"
             ]
         ]
         
