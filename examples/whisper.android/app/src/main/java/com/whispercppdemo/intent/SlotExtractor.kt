@@ -389,6 +389,7 @@ class SlotExtractor {
     private val distanceRegex = Regex("\\b(?:far|distance|km|kilometers|kilometre|kilometres|mile|miles|meter|meters|metre|metres|feet|ft|yard|yards|yd|long|length|covered|travelled|traveled|route|path|journey|span|range|how far|mileage)\\b", RegexOption.IGNORE_CASE)
     private val sleepRegex = Regex("\\b(?:sleep|slept|sleeping|asleep|nap|napped|napping|rest|rested|resting|snooze|snoozed|snoozing|doze|dozed|dozing|slumber|bedtime|night|overnight|bed|zzz)\\b", RegexOption.IGNORE_CASE)
     private val sleepQualityRegex = Regex("\\b(?:quality|score|rating|rate|well|badly|good|bad|poor|deep|light|efficiency|grade|rank|analysis|performance|how well)\\b", RegexOption.IGNORE_CASE)
+    private val deepSleepRegex = Regex("\\b(?:deep\\s+sleep|deep\\s+sleeping|deep\\s+slumber|rem\\s+sleep|rem|slow\\s+wave\\s+sleep|sws|restorative\\s+sleep|profound\\s+sleep|heavy\\s+sleep|sound\\s+sleep|stage\\s+(?:3|4|three|four))\\b", RegexOption.IGNORE_CASE)
     private val heartRegex = Regex("\\b(?:heart|cardiac|cardio|cardiovascular|pulse|beat|beats|beating|bpm|rhythm|ticker)\\b", RegexOption.IGNORE_CASE)
     private val caloriesRegex = Regex("\\b(?:calorie|calories|kcal|energy|burn|burned|burnt|burning|expend|expended|consume|consumed|intake|kilojoule|kilojoules|kj|food energy|metabolic|metabolism|fat)\\b", RegexOption.IGNORE_CASE)
     private val oxygenRegex = Regex("\\b(?:oxygen|o2|spo2|saturation|sat|blood oxygen|pulse ox|oximeter|oximetry|breathing|respiratory|respiration|air|breathe)\\b", RegexOption.IGNORE_CASE)
@@ -539,21 +540,30 @@ class SlotExtractor {
     }
     
     private fun extractMetric(processedText: String, originalText: String): String? {
+        // Sort metrics by specificity (multi-word metrics first) to avoid false matches
+        // e.g., "deep sleep" should be checked before "sleep"
+        val sortedMetrics = synonymPatterns.entries.sortedByDescending { it.key.split(" ").size }
+        
         // Direct synonym matching on processed text first
-        for ((metric, pattern) in synonymPatterns) {
+        for ((metric, pattern) in sortedMetrics) {
             if (pattern.containsMatchIn(processedText)) {
                 return metric
             }
         }
         
         // Fallback to original text
-        for ((metric, pattern) in synonymPatterns) {
+        for ((metric, pattern) in sortedMetrics) {
             if (pattern.containsMatchIn(originalText)) {
                 return metric
             }
         }
         
         // Context-based inference with expanded patterns
+        
+        // Deep Sleep context - check BEFORE general sleep
+        if (deepSleepRegex.containsMatchIn(originalText)) {
+            return "deep sleep"
+        }
         
         // Walking/Movement context
         if (walkingMovementRegex.containsMatchIn(originalText)) {
@@ -2438,17 +2448,30 @@ class SlotExtractor {
                 Regex("\\benergy\\s+(?:consumption|used|expended)\\b", RegexOption.IGNORE_CASE),
                 Regex("\\bhow\\s+much\\s+(?:did\\s+I\\s+)?burn\\b", RegexOption.IGNORE_CASE)
             ),
+            "deep sleep" to listOf(
+                Regex("\\bdeep\\s+sleep\\b|\\bdeep\\s+sleeping\\b|\\bdeep\\s+slumber\\b", RegexOption.IGNORE_CASE),
+                Regex("\\brem\\s+sleep\\b|\\brem\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bdeep\\s+(?:rest|phase|stage)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\b(?:stage\\s+)?(?:3|4|three|four)(?:\\s+sleep)?\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bslow\\s+wave\\s+sleep\\b|\\bsws\\b", RegexOption.IGNORE_CASE),
+                Regex("\\brestorative\\s+sleep\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bhow\\s+(?:much|long|well).*deep\\s+sleep\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bdeep\\s+sleep\\s+(?:time|duration|hours|quality|data)\\b", RegexOption.IGNORE_CASE),
+                Regex("\\b(?:total|nightly)\\s+deep\\s+sleep\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bhours?\\s+(?:of\\s+)?deep\\s+sleep\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bprofound\\s+sleep\\b|\\bheavy\\s+sleep\\b|\\bsound\\s+sleep\\b", RegexOption.IGNORE_CASE)
+            ),
             "sleep" to listOf(
                 Regex("\\bsleep\\b|\\bslept\\b|\\bsleeping\\b|\\basleep\\b", RegexOption.IGNORE_CASE),
                 Regex("\\brest\\b|\\brested\\b|\\bresting\\b", RegexOption.IGNORE_CASE),
-                Regex("\\bhow\\s+(?:much|long|well).*sleep\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bhow\\s+(?:much|long|well).*sleep\\b(?!.*deep)", RegexOption.IGNORE_CASE),
                 Regex("\\b(?:last\\s+)?night'?s\\s+sleep\\b|\\btonight'?s\\s+sleep\\b", RegexOption.IGNORE_CASE),
-                Regex("\\bsleep\\s+(?:time|duration|hours|quality|data|tracking|pattern)\\b", RegexOption.IGNORE_CASE),
-                Regex("\\b(?:total|nightly)\\s+sleep\\b", RegexOption.IGNORE_CASE),
-                Regex("\\bhours?\\s+(?:of\\s+)?sleep\\b|\\bslept\\s+(?:for\\s+)?\\d+\\s+hours?\\b", RegexOption.IGNORE_CASE),
-                Regex("\\b(?:deep|light|rem)\\s+sleep\\b", RegexOption.IGNORE_CASE),
+                Regex("\\bsleep\\s+(?:time|duration|hours|quality|data|tracking|pattern)\\b(?!.*deep)", RegexOption.IGNORE_CASE),
+                Regex("\\b(?:total|nightly)\\s+sleep\\b(?!.*deep)", RegexOption.IGNORE_CASE),
+                Regex("\\bhours?\\s+(?:of\\s+)?sleep\\b(?!.*deep)|\\bslept\\s+(?:for\\s+)?\\d+\\s+hours?\\b", RegexOption.IGNORE_CASE),
+                Regex("\\blight\\s+sleep\\b", RegexOption.IGNORE_CASE),
                 Regex("\\bnap\\b|\\bnapped\\b|\\bnapping\\b|\\bsnooze\\b", RegexOption.IGNORE_CASE),
-                Regex("\\bsleep\\s+(?:score|rating|efficiency|quality)\\b", RegexOption.IGNORE_CASE)
+                Regex("\\bsleep\\s+(?:score|rating|efficiency|quality)\\b(?!.*deep)", RegexOption.IGNORE_CASE)
             ),
             "weight" to listOf(
                 Regex("\\bweight\\b|\\bweigh\\b|\\bweighing\\b|\\bweighed\\b", RegexOption.IGNORE_CASE),

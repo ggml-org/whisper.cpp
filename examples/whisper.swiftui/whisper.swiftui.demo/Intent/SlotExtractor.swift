@@ -389,6 +389,7 @@ class SlotExtractor {
     private let distanceRegex = try! NSRegularExpression(pattern: "\\b(?:far|distance|km|kilometers|kilometre|kilometres|mile|miles|meter|meters|metre|metres|feet|ft|yard|yards|yd|long|length|covered|travelled|traveled|route|path|journey|span|range|how far|mileage)\\b", options: [.caseInsensitive])
     private let sleepRegex = try! NSRegularExpression(pattern: "\\b(?:sleep|slept|sleeping|asleep|nap|napped|napping|rest|rested|resting|snooze|snoozed|snoozing|doze|dozed|dozing|slumber|bedtime|night|overnight|bed|zzz)\\b", options: [.caseInsensitive])
     private let sleepQualityRegex = try! NSRegularExpression(pattern: "\\b(?:quality|score|rating|rate|well|badly|good|bad|poor|deep|light|efficiency|grade|rank|analysis|performance|how well)\\b", options: [.caseInsensitive])
+    private let deepSleepRegex = try! NSRegularExpression(pattern: "\\b(?:deep\\s+sleep|deep\\s+sleeping|deep\\s+slumber|rem\\s+sleep|rem|slow\\s+wave\\s+sleep|sws|restorative\\s+sleep|profound\\s+sleep|heavy\\s+sleep|sound\\s+sleep|stage\\s+(?:3|4|three|four))\\b", options: [.caseInsensitive])
     private let heartRegex = try! NSRegularExpression(pattern: "\\b(?:heart|cardiac|cardio|cardiovascular|pulse|beat|beats|beating|bpm|rhythm|ticker)\\b", options: [.caseInsensitive])
     private let caloriesRegex = try! NSRegularExpression(pattern: "\\b(?:calorie|calories|kcal|energy|burn|burned|burnt|burning|expend|expended|consume|consumed|intake|kilojoule|kilojoules|kj|food energy|metabolic|metabolism|fat)\\b", options: [.caseInsensitive])
     private let oxygenRegex = try! NSRegularExpression(pattern: "\\b(?:oxygen|o2|spo2|saturation|sat|blood oxygen|pulse ox|oximeter|oximetry|breathing|respiratory|respiration|air|breathe)\\b", options: [.caseInsensitive])
@@ -569,21 +570,30 @@ class SlotExtractor {
     
     
     private func extractMetric(processedText: String, originalText: String) -> String? {
+        // Sort metrics by specificity (multi-word metrics first) to avoid false matches
+        // e.g., "deep sleep" should be checked before "sleep"
+        let sortedMetrics = synonymPatterns.sorted { $0.key.components(separatedBy: " ").count > $1.key.components(separatedBy: " ").count }
+        
         // Direct synonym matching on processed text first
-        for (metric, pattern) in synonymPatterns {
+        for (metric, pattern) in sortedMetrics {
             if pattern.numberOfMatches(in: processedText, options: [], range: NSRange(location: 0, length: processedText.count)) > 0 {
                 return metric
             }
         }
         
         // Fallback to original text
-        for (metric, pattern) in synonymPatterns {
+        for (metric, pattern) in sortedMetrics {
             if pattern.numberOfMatches(in: originalText, options: [], range: NSRange(location: 0, length: originalText.count)) > 0 {
                 return metric
             }
         }
         
         // Context-based inference with expanded patterns
+        
+        // Deep Sleep context - check BEFORE general sleep
+        if deepSleepRegex.numberOfMatches(in: originalText, options: [], range: NSRange(location: 0, length: originalText.count)) > 0 {
+            return "deep sleep"
+        }
         
         // Walking/Movement context
         if walkingMovementRegex.numberOfMatches(in: originalText, options: [], range: NSRange(location: 0, length: originalText.count)) > 0 {
@@ -2464,10 +2474,25 @@ class SlotExtractor {
                 "\\bfat\\s+burn|metabolic|metabolism\\b",
                 "\\bexpended|consumed|intake\\b"
             ],
+            "deep sleep": [
+                "\\bdeep\\s+sleep\\b|\\bdeep\\s+sleeping\\b|\\bdeep\\s+slumber\\b",
+                "\\brem\\s+sleep\\b|\\brem\\b",
+                "\\bdeep\\s+(?:rest|phase|stage)\\b",
+                "\\b(?:stage\\s+)?(?:3|4|three|four)(?:\\s+sleep)?\\b",
+                "\\bslow\\s+wave\\s+sleep\\b|\\bsws\\b",
+                "\\brestorative\\s+sleep\\b",
+                "\\bhow\\s+(?:much|long|well).*deep\\s+sleep\\b",
+                "\\bdeep\\s+sleep\\s+(?:time|duration|hours|quality|data)\\b",
+                "\\b(?:total|nightly)\\s+deep\\s+sleep\\b",
+                "\\bhours?\\s+(?:of\\s+)?deep\\s+sleep\\b",
+                "\\bprofound\\s+sleep\\b|\\bheavy\\s+sleep\\b|\\bsound\\s+sleep\\b"
+            ],
             "sleep": [
-                "\\bsleep|slept|sleeping|rest|rested\\b",
+                "\\bsleep|slept|sleeping|rest|rested\\b(?!.*deep)",
                 "\\bnap|napped|napping|slumber\\b",
-                "\\bbedtime|night\\s+sleep|sleep\\s+time\\b"
+                "\\bbedtime|night\\s+sleep|sleep\\s+time\\b(?!.*deep)",
+                "\\bhow\\s+(?:much|long|well).*sleep\\b(?!.*deep)",
+                "\\blight\\s+sleep\\b"
             ],
             "sleep score": [
                 "\\bsleep\\s+(?:quality|score|rating|performance|analysis|efficiency)\\b",
