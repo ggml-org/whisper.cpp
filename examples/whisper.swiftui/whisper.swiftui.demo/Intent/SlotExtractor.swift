@@ -290,6 +290,14 @@ class SlotExtractor {
             "cardio capacity", "endurance capacity", "fitness level", "cardio level",
             "aerobic power", "oxygen capacity", "cardiorespiratory fitness",
             "vo2 score", "vo2 reading", "vo2 level", "fitness score"
+        ],
+        "active hours": [
+            "active hours", "active hour","active" "activity hours", "activity hour",
+            "hours active", "hour active", "active time", "activity time",
+            "time active", "moving hours", "moving hour", "movement hours",
+            "movement hour", "active duration", "activity duration",
+            "physical activity time", "physical activity hours", "daily active time",
+            "daily activity time", "total active time", "hours of activity"
         ]
     ]
     
@@ -1403,7 +1411,7 @@ class SlotExtractor {
     
     private func extractFeature(text: String) -> String? {
         let features: [String: String] = [
-            "do not disturb": "\\b(?:do\\s+not\\s+disturb|dnd|d\\.?n\\.?d\\.?|silent\\s+mode|silence|quiet\\s+mode|mute|muted|no\\s+disturb|don'?t\\s+disturb|silence\\s+notifications?|quiet\\s+hours?|sleep\\s+mode|bedtime\\s+mode|focus\\s+mode|zen\\s+mode|peaceful\\s+mode|undisturbed|interruption\\s+free|notification\\s+silence)\\b",
+            "do not disturb": "\\b(?:do\\s+not\\s+disturb|dnd|d\\.?n\\.?d\\.?|silent\\s+mode|silence|quiet\\s+mode|mute|muted|no\\s+disturb|don'?t\\s+disturb|silence\\s+notifications?|quiet\\s+hours?|focus\\s+mode|zen\\s+mode|peaceful\\s+mode|undisturbed|interruption\\s+free|notification\\s+silence)\\b",
             "AOD": "\\b(?:AOD|aod|a\\.?o\\.?d\\.?|always\\s+on\\s+display|always-on\\s+display|always\\s+on|screen\\s+always\\s+on|display\\s+always\\s+on|persistent\\s+display|constant\\s+display|continuous\\s+display|keep\\s+screen\\s+on|screen\\s+stays\\s+on|display\\s+on|ambient\\s+display|glance\\s+screen|standby\\s+screen)\\b",
             "raise to wake": "\\b(?:raise\\s+to\\s+wake|lift\\s+to\\s+wake|tap\\s+to\\s+wake|double\\s+tap\\s+to\\s+wake|touch\\s+to\\s+wake|wrist\\s+raise|raise\\s+wrist|lift\\s+wrist|wake\\s+on\\s+raise|wake\\s+on\\s+lift|wake\\s+on\\s+tap|wake\\s+on\\s+touch|pick\\s+up\\s+to\\s+wake|gesture\\s+wake|motion\\s+wake|tilt\\s+to\\s+wake|wake\\s+gesture|screen\\s+wake|auto\\s+wake|smart\\s+wake)\\b",
             "vibration": "\\b(?:vibration|vibrate|vibrating|haptic|haptics|buzz|buzzing|rumble|rumbling|tactile|tactile\\s+feedback|vibration\\s+feedback|motor|vibration\\s+motor|shake|shaking|pulse|pulsing|vibe|vibes|vibrate\\s+mode|silent\\s+vibrate|ring\\s+vibrate)\\b",
@@ -1944,7 +1952,8 @@ class SlotExtractor {
             "workout history": "\\b(?:workout\\s+history|exercise\\s+history|training\\s+history|activity\\s+history|workout\\s+log|exercise\\s+log|training\\s+log|activity\\s+log|past\\s+workouts|previous\\s+workouts|workout\\s+records|exercise\\s+records|training\\s+records|fitness\\s+history|workout\\s+data|exercise\\s+data)\\b",
             "calendar": "\\b(?:calendar|cal|schedule|agenda|planner|diary|appointments?|events?|meetings?|date|dates|day\\s+planner|time\\s+planner|organizer|scheduler|event\\s+calendar|meeting\\s+calendar|my\\s+calendar|calendar\\s+app)\\b",
             "camera": "\\b(?:camera|cam|photo|photos|picture|pictures|pic|pics|snapshot|photograph|take\\s+photo|take\\s+picture|capture|shoot|selfie|video|record|recording|front\\s+camera|back\\s+camera|rear\\s+camera|camera\\s+app)\\b",
-            "find my phone": "\\b(?:find\\s+my\\s+phone|find\\s+phone|find\\s+device|find\\s+my\\s+device|locate\\s+phone|locate\\s+device|phone\\s+finder|device\\s+finder|where\\s+is\\s+my\\s+phone|lost\\s+phone|missing\\s+phone|track\\s+phone|track\\s+device|ring\\s+phone|make\\s+phone\\s+ring|phone\\s+locator)\\b"
+            "find my phone": "\\b(?:find\\s+my\\s+phone|find\\s+phone|find\\s+device|find\\s+my\\s+device|locate\\s+phone|locate\\s+device|phone\\s+finder|device\\s+finder|where\\s+is\\s+my\\s+phone|lost\\s+phone|missing\\s+phone|track\\s+phone|track\\s+device|ring\\s+phone|make\\s+phone\\s+ring|phone\\s+locator)\\b",
+            "weather": "\\b(?:weather|weather\\s+app|weather\\s+forecast|forecast|temperature|temp|climate|conditions|meteorology|meteo|weather\\s+report|weather\\s+update|weather\\s+info|weather\\s+information|precipitation|rain|snow|sun|sunny|cloudy|clouds|wind|humidity|forecast\\s+app)\\b"
         ]
         // Sort by pattern length for more specific matching
         let sortedApps = apps.sorted { $0.value.count > $1.value.count }
