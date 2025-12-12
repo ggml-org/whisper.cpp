@@ -777,7 +777,7 @@ class SlotExtractor {
         return numbers.firstOrNull()?.groupValues?.get(1)?.toDoubleOrNull()?.toInt()
     }
     
-    private fun extractTarget(text: String): Int? {
+    private fun extractTarget(text: String): Double? {
         // Convert word numbers to digits first (e.g., "two" -> "2")
         val processedText = convertWordToNumber(text)
         
@@ -842,7 +842,7 @@ class SlotExtractor {
             val match = pattern.toRegex(RegexOption.IGNORE_CASE).find(processedText)
             if (match != null && match.groupValues.size > 1) {
                 // Remove commas before parsing
-                val value = match.groupValues[1].replace(",", "").toDoubleOrNull()?.toInt()
+                val value = match.groupValues[1].replace(",", "").toDoubleOrNull()
                 if (value != null && value > 0) {
                     return value
                 }
@@ -851,7 +851,7 @@ class SlotExtractor {
     
         // Fallback: extract any number from the text (supports numbers with or without commas)
         val numbers = "\\b(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b".toRegex().findAll(processedText)
-        return numbers.firstOrNull()?.groupValues?.get(1)?.replace(",", "")?.toDoubleOrNull()?.toInt()
+        return numbers.firstOrNull()?.groupValues?.get(1)?.replace(",", "")?.toDoubleOrNull()
     }
     
     /**
@@ -2084,7 +2084,7 @@ class SlotExtractor {
     private fun extractType(text: String): String? {
         return when {
             // HIGH type - expanded with 20+ variations
-            text.contains("\\b(?:above|over|exceed|exceeded|exceeding|exceeds|higher|high|more\\s+than|greater\\s+than|greater|beyond|past|upwards?\\s+of|in\\s+excess\\s+of|surpass|surpassed|surpassing|top|topped|topping|beat|beaten|beating|outperform|outperformed|maximum|max|peak|peaked|peaking|spike|spiked|spiking|rise|rose|risen|rising|increase|increased|increasing|elevate|elevated|elevating|climb|climbed|climbing|jump|jumped|jumping|soar|soared|soaring)\\b".toRegex(RegexOption.IGNORE_CASE)) -> "high"
+            text.contains("\\b(?:above|over|hi|exceed|exceeded|exceeding|exceeds|higher|high|more\\s+than|greater\\s+than|greater|beyond|past|upwards?\\s+of|in\\s+excess\\s+of|surpass|surpassed|surpassing|top|topped|topping|beat|beaten|beating|outperform|outperformed|maximum|max|peak|peaked|peaking|spike|spiked|spiking|rise|rose|risen|rising|increase|increased|increasing|elevate|elevated|elevating|climb|climbed|climbing|jump|jumped|jumping|soar|soared|soaring)\\b".toRegex(RegexOption.IGNORE_CASE)) -> "high"
             
             // LOW type - expanded with 20+ variations
             text.contains("\\b(?:below|under|less\\s+than|lower|low|fewer\\s+than|drops?|dropped|dropping|fall|fell|fallen|falling|decrease|decreased|decreasing|decline|declined|declining|reduce|reduced|reducing|dip|dipped|dipping|plunge|plunged|plunging|sink|sank|sunk|sinking|minimum|min|bottom|bottomed|bottoming|down|downward|descend|descended|descending|tumble|tumbled|tumbling|slump|slumped|slumping)\\b".toRegex(RegexOption.IGNORE_CASE)) -> "low"

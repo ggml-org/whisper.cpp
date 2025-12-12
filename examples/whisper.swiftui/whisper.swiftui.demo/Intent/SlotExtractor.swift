@@ -825,7 +825,7 @@ class SlotExtractor {
         return nil
     }
     
-    private func extractTarget(text: String) -> Int? {
+    private func extractTarget(text: String) -> Double? {
         // Convert word numbers to digits first (e.g., "two" -> "2")
         let processedText = convertWordToNumber(text)
         
@@ -845,15 +845,13 @@ class SlotExtractor {
         
         // Try each pattern
         for pattern in goalPatterns {
-            if let range = processedText.range(of: pattern, options: .regularExpression) {
-                let matchedText = String(processedText[range])
-                let matches = try! NSRegularExpression(pattern: "(\\d+(?:,\\d{3})*(?:\\.\\d+)?)", options: []).matches(in: matchedText, options: [], range: NSRange(location: 0, length: matchedText.count))
-                if let match = matches.first {
-                    let numberRange = Range(match.range, in: matchedText)!
-                    let numberString = String(matchedText[numberRange]).replacingOccurrences(of: ",", with: "")
-                    if let number = Double(numberString) {
-                        return Int(number)
-                    }
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+               let match = regex.firstMatch(in: processedText, options: [], range: NSRange(location: 0, length: processedText.count)),
+               match.numberOfRanges > 1 {
+                let numberRange = Range(match.range(at: 1), in: processedText)!
+                let numberString = String(processedText[numberRange]).replacingOccurrences(of: ",", with: "")
+                if let value = Double(numberString), value > 0 {
+                    return value
                 }
             }
         }
@@ -862,10 +860,10 @@ class SlotExtractor {
         let commaNumberRegex = try! NSRegularExpression(pattern: "\\b(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b", options: [])
         let matches = commaNumberRegex.matches(in: processedText, options: [], range: NSRange(location: 0, length: processedText.count))
         if let match = matches.first {
-            let numberRange = Range(match.range, in: text)!
-            let numberString = String(text[numberRange]).replacingOccurrences(of: ",", with: "")
+            let numberRange = Range(match.range, in: processedText)!
+            let numberString = String(processedText[numberRange]).replacingOccurrences(of: ",", with: "")
             if let number = Double(numberString) {
-                return Int(number)
+                return number
             }
         }
         
@@ -2116,7 +2114,7 @@ class SlotExtractor {
     }
     
     private func extractType(text: String) -> String? {
-        if text.range(of: "\\b(?:above|over|high|higher|highest|exceed|exceeding|exceeded|exceeds|higher|more\\s+than|greater\\s+than|beyond|surpass|surpassing|surpassed|surpasses|top|topping|topped|tops|beat|beating|beaten|beats|cross|crossing|crossed|crosses|pass|passing|passed|passes)\\b", options: [.regularExpression, .caseInsensitive]) != nil {
+        if text.range(of: "\\b(?:above|over|hi|high|higher|highest|exceed|exceeding|exceeded|exceeds|higher|more\\s+than|greater\\s+than|beyond|surpass|surpassing|surpassed|surpasses|top|topping|topped|tops|beat|beating|beaten|beats|cross|crossing|crossed|crosses|pass|passing|passed|passes)\\b", options: [.regularExpression, .caseInsensitive]) != nil {
             return "high"
         }
         if text.range(of: "\\b(?:below|under|low|lower|lowest|less\\s+than|lower\\s+than|beneath|underneath|drop|drops|dropped|dropping|fall|falls|fell|falling|decrease|decreases|decreased|decreasing|reduce|reduces|reduced|reducing|decline|declines|declined|declining|go\\s+down|goes\\s+down|went\\s+down|going\\s+down|dip|dips|dipped|dipping|plunge|plunges|plunged|plunging|sink|sinks|sank|sinking|tumble|tumbles|tumbled|tumbling)\\b", options: [.regularExpression, .caseInsensitive]) != nil {

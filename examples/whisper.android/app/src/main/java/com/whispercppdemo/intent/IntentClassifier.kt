@@ -82,7 +82,7 @@ class IntentClassifier(private val context: Context) {
     }
 
     private fun loadIntentClassifier() {
-        val model = loadModelFile("Intent classifier 10-12-2025.tflite")
+        val model = loadModelFile("intent_classifier_complete.tflite")
         intentClassifier = Interpreter(model)
         
         val inputDetails = intentClassifier!!.inputTensorCount
