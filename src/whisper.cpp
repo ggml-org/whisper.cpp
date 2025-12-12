@@ -6188,11 +6188,10 @@ static void whisper_process_logits(
         // suppress <|notimestamps|> token
         // ref: https://github.com/openai/whisper/blob/0b1ba3d46ebf7fe6f953acfd8cad62a4f851b49f/whisper/decoding.py#L410-L412
         logits[vocab.token_not] = -INFINITY;
-        if (params.no_timestamps) {
-            for (int i = vocab.token_beg; i < n_logits; ++i) {
-                logits[i] = -INFINITY;
-            }
-        }
+        
+        // NOTE: We do NOT suppress timestamp tokens even when no_timestamps is true
+        // Suppressing them causes the model to lose its ability to segment properly
+        // The model needs timestamps internally for segmentation, even if we hide them in output
 
         // suppress sot and nosp tokens
         logits[vocab.token_sot]  = -INFINITY;
@@ -6964,18 +6963,10 @@ int whisper_full_with_state(
         }
     }
 
-    // first release distilled models require the "no_timestamps" token
-    {
-        const bool is_distil = ctx->model.hparams.n_text_layer == 2 && ctx->model.hparams.n_vocab != 51866;
-        if (is_distil && !params.no_timestamps) {
-            WHISPER_LOG_WARN("%s: using first release distilled models - forcing no_timestamps\n", __func__);
-            params.no_timestamps = true;
-        }
-    }
-
-    if (params.no_timestamps) {
-        prompt_init.push_back(whisper_token_not(ctx));
-    }
+    // NOTE: We do NOT add <|notimestamps|> token even when no_timestamps is true
+    // Adding it causes the model to hang or terminate early on some models
+    // Instead, we let the model generate timestamps internally for proper segmentation
+    // The no_timestamps flag only affects output formatting (in CLI)
 
     int seek = seek_start;
 
@@ -7368,7 +7359,7 @@ int whisper_full_with_state(
                            (params.max_tokens > 0 && i >= params.max_tokens) || // max tokens per segment reached
                            (has_ts && seek + seek_delta + delta_min >= seek_end)       // end of audio reached (100ms)
                            ) {
-                            if (result_len == 0 && !params.no_timestamps) {
+                            if (result_len == 0) {
                                 if (seek + seek_delta + delta_min >= seek_end) {
                                     result_len = i + 1;
                                 } else {
@@ -7378,7 +7369,7 @@ int whisper_full_with_state(
                                 }
                             }
 
-                            if (params.single_segment || params.no_timestamps) {
+                            if (params.single_segment) {
                                 result_len = i + 1;
                                 seek_delta = 100*WHISPER_CHUNK_SIZE;
                             }
@@ -7403,6 +7394,46 @@ int whisper_full_with_state(
                         failed = true;
                         continue;
                     }
+                    
+                    // Additional repetition detection: check for exact repeating sequences
+                    // This catches stuck loops where the model repeats the same phrase over and over
+                    if (i >= 12) {  // Start checking very early
+                        const auto & tokens = decoder.sequence.tokens;
+                        
+                        // Try different pattern lengths from very small to medium
+                        for (int pattern_len = 3; pattern_len <= 30; pattern_len += 2) {
+                            const int needed_tokens = pattern_len * 2;  // Only need 2 repetitions now
+                            if (i + 1 < needed_tokens) continue;
+                            
+                            bool is_loop = true;
+                            
+                            // Check if tokens repeat exactly 2 times (more aggressive)
+                            for (int k = 0; k < pattern_len && is_loop; ++k) {
+                                const int idx_now = i - k;
+                                const int idx_prev = i - k - pattern_len;
+                                
+                                if (idx_prev < 0) {
+                                    is_loop = false;
+                                    break;
+                                }
+                                
+                                if (tokens[idx_now].id != tokens[idx_prev].id) {
+                                    is_loop = false;
+                                }
+                            }
+                            
+                            if (is_loop) {
+                                // Found 2x repetition - mark as failed to avoid adding more
+                                failed = true;
+                                break;
+                            }
+                        }
+                        
+                        if (failed) {
+                            continue;
+                        }
+                    }
+                    
                 }
 
                 // check if all decoders have finished (i.e. completed or failed)
@@ -7727,6 +7758,13 @@ int whisper_full_with_state(
                 tokens_cur[tokens_cur.size() - 1].id > whisper_token_beg(ctx);
             if (single_timestamp_ending) {
                 WHISPER_LOG_DEBUG("single timestamp ending - skip entire chunk\n");
+                seek_delta = std::min(seek_end - seek, WHISPER_CHUNK_SIZE * 100);
+            }
+
+            // If best decoder failed (e.g. due to repetition loop), ensure we still move forward
+            // This prevents infinite loops where seek doesn't update
+            if (best_decoder.failed && seek_delta == 0) {
+                WHISPER_LOG_DEBUG("%s: decoder failed with seek_delta = 0, forcing forward progress\n", __func__);
                 seek_delta = std::min(seek_end - seek, WHISPER_CHUNK_SIZE * 100);
             }
 
