@@ -290,14 +290,6 @@ class SlotExtractor {
             "cardio capacity", "endurance capacity", "fitness level", "cardio level",
             "aerobic power", "oxygen capacity", "cardiorespiratory fitness",
             "vo2 score", "vo2 reading", "vo2 level", "fitness score"
-        ),
-        "active hours" to listOf(
-            "active hours", "active hour", "activity hours","active", "activity hour",
-            "hours active", "hour active", "active time", "activity time",
-            "time active", "moving hours", "moving hour", "movement hours",
-            "movement hour", "active duration", "activity duration",
-            "physical activity time", "physical activity hours", "daily active time",
-            "daily activity time", "total active time", "hours of activity"
         )
     )
     
@@ -479,6 +471,7 @@ class SlotExtractor {
                         "calories" -> slots["unit"] = "kcal"
                         "heart rate" -> slots["unit"] = "bpm"
                         "sleep" -> slots["unit"] = "hours"
+                        "active hours" -> slots["unit"] = "hours"
                         "weight" -> slots["unit"] = "kg"
                         "spo2" -> slots["unit"] = "percent"
                         "stress" -> slots["unit"] = "score"
@@ -785,6 +778,9 @@ class SlotExtractor {
     }
     
     private fun extractTarget(text: String): Int? {
+        // Convert word numbers to digits first (e.g., "two" -> "2")
+        val processedText = convertWordToNumber(text)
+        
         val goalPatterns = listOf(
             // Goal/Target/Aim patterns - supports numbers with or without commas
             "\\b(?:goal|target|aim|objective|plan|intention|aspiration|ambition|desire|want|wish|hope)\\s*(?:is|of|to|for|at)?\\s*(?:be|reach|hit|achieve|get|make|do)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
@@ -843,7 +839,7 @@ class SlotExtractor {
         
         // Try each pattern
         for (pattern in goalPatterns) {
-            val match = pattern.toRegex(RegexOption.IGNORE_CASE).find(text)
+            val match = pattern.toRegex(RegexOption.IGNORE_CASE).find(processedText)
             if (match != null && match.groupValues.size > 1) {
                 // Remove commas before parsing
                 val value = match.groupValues[1].replace(",", "").toDoubleOrNull()?.toInt()
@@ -854,7 +850,7 @@ class SlotExtractor {
         }
     
         // Fallback: extract any number from the text (supports numbers with or without commas)
-        val numbers = "\\b(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b".toRegex().findAll(text)
+        val numbers = "\\b(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b".toRegex().findAll(processedText)
         return numbers.firstOrNull()?.groupValues?.get(1)?.replace(",", "")?.toDoubleOrNull()?.toInt()
     }
     
@@ -2401,6 +2397,10 @@ class SlotExtractor {
                     if (unit != null) {
                         slots["unit"] = unit
                     }
+                }
+                if (!slots.containsKey("identifier")) {
+                    val identifier = extractIdentifier(text) ?: "average"
+                    slots["identifier"] = identifier
                 }
             }
         }

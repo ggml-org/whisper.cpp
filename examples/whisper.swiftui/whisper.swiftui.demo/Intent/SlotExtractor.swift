@@ -290,14 +290,6 @@ class SlotExtractor {
             "cardio capacity", "endurance capacity", "fitness level", "cardio level",
             "aerobic power", "oxygen capacity", "cardiorespiratory fitness",
             "vo2 score", "vo2 reading", "vo2 level", "fitness score"
-        ],
-        "active hours": [
-            "active hours", "active hour","active" "activity hours", "activity hour",
-            "hours active", "hour active", "active time", "activity time",
-            "time active", "moving hours", "moving hour", "movement hours",
-            "movement hour", "active duration", "activity duration",
-            "physical activity time", "physical activity hours", "daily active time",
-            "daily activity time", "total active time", "hours of activity"
         ]
     ]
     
@@ -834,6 +826,9 @@ class SlotExtractor {
     }
     
     private func extractTarget(text: String) -> Int? {
+        // Convert word numbers to digits first (e.g., "two" -> "2")
+        let processedText = convertWordToNumber(text)
+        
         let goalPatterns = [
             "\\b(?:goal|target|aim|objective|plan|intention|aspiration|ambition|desire|want|wish|hope)\\s*(?:is|of|to|for|at)?\\s*(?:be|reach|hit|achieve|get|make|do)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
             "\\b(?:set|change|update|modify|adjust|edit|configure|make|establish|create|define|specify)\\s*(?:my|the)?\\s*(?:goal|target|aim|objective)?\\s*(?:to|at|as|for)?\\s*(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b",
@@ -850,8 +845,8 @@ class SlotExtractor {
         
         // Try each pattern
         for pattern in goalPatterns {
-            if let range = text.range(of: pattern, options: .regularExpression) {
-                let matchedText = String(text[range])
+            if let range = processedText.range(of: pattern, options: .regularExpression) {
+                let matchedText = String(processedText[range])
                 let matches = try! NSRegularExpression(pattern: "(\\d+(?:,\\d{3})*(?:\\.\\d+)?)", options: []).matches(in: matchedText, options: [], range: NSRange(location: 0, length: matchedText.count))
                 if let match = matches.first {
                     let numberRange = Range(match.range, in: matchedText)!
@@ -865,7 +860,7 @@ class SlotExtractor {
         
         // Fallback: extract any number from the text (supports numbers with or without commas)
         let commaNumberRegex = try! NSRegularExpression(pattern: "\\b(\\d+(?:,\\d{3})*(?:\\.\\d+)?)\\b", options: [])
-        let matches = commaNumberRegex.matches(in: text, options: [], range: NSRange(location: 0, length: text.count))
+        let matches = commaNumberRegex.matches(in: processedText, options: [], range: NSRange(location: 0, length: processedText.count))
         if let match = matches.first {
             let numberRange = Range(match.range, in: text)!
             let numberString = String(text[numberRange]).replacingOccurrences(of: ",", with: "")
@@ -2209,10 +2204,17 @@ class SlotExtractor {
             
             // Add default identifier if not present
             if slots["identifier"] == nil {
-                slots["identifier"] = "average"
+                slots["identifier"] = extractIdentifier(text: text) ?? "average"
             }
             
         case "SetGoal":
+            // Try to infer missing metric
+            if slots["metric"] == nil {
+                if let inferredMetric = inferMetricFromContext(text: text) {
+                    slots["metric"] = inferredMetric
+                }
+            }
+            
             // Normalize distance target to km if metric is distance
             if let metric = slots["metric"] as? String, metric == "distance" {
                 if let target = slots["target"] {
@@ -2246,6 +2248,8 @@ class SlotExtractor {
                 case "heart rate":
                     slots["unit"] = "bpm"
                 case "sleep":
+                    slots["unit"] = "hours"
+                case "active hours":
                     slots["unit"] = "hours"
                 case "weight":
                     slots["unit"] = "kg"
@@ -2422,6 +2426,11 @@ class SlotExtractor {
                 default:
                     break
                 }
+            }
+            
+            // Add default identifier if not present
+            if slots["identifier"] == nil {
+                slots["identifier"] = extractIdentifier(text: text) ?? "average"
             }
             
         case "ToggleFeature":
