@@ -125,7 +125,8 @@ if (WHISPER_EXTRA_FLAGS)
     target_compile_options(whisper PRIVATE ${WHISPER_EXTRA_FLAGS})
 endif()
 
-target_link_libraries(whisper PUBLIC ggml)
+find_package(Threads REQUIRED)
+target_link_libraries(whisper PUBLIC ggml Threads::Threads)
 
 if (WHISPER_COREML)
     target_link_libraries(whisper PRIVATE whisper.coreml)
