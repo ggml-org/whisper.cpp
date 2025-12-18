@@ -195,7 +195,7 @@ ruby_whisper_segment_deconstruct_keys(VALUE self, VALUE keys)
 }
 
 void
-init_ruby_whisper_segment(VALUE *mWhisper, VALUE *cContext)
+init_ruby_whisper_segment(VALUE *mWhisper)
 {
   cSegment  = rb_define_class_under(*mWhisper, "Segment", rb_cObject);
 
