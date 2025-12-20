@@ -34,6 +34,10 @@ typedef struct {
 } ruby_whisper_segment;
 
 typedef struct {
+  whisper_token_data *token_data;
+} ruby_whisper_token;
+
+typedef struct {
   VALUE context;
 } ruby_whisper_model;
 
@@ -53,6 +57,13 @@ typedef struct {
 #define GetContext(obj, rw) do { \
   TypedData_Get_Struct((obj), ruby_whisper, &ruby_whisper_type, (rw)); \
   if ((rw)->context == NULL) { \
+    rb_raise(rb_eRuntimeError, "Not initialized"); \
+  } \
+} while (0)
+
+#define GetToken(obj, rwt) do {                                             \
+  TypedData_Get_Struct((obj), ruby_whisper_token, &ruby_whisper_token_type, (rwt)); \
+  if ((rwt)->token_data == NULL) { \
     rb_raise(rb_eRuntimeError, "Not initialized"); \
   } \
 } while (0)

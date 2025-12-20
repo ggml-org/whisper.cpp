@@ -13,6 +13,7 @@ VALUE cVADSegment;
 VALUE eError;
 
 VALUE cSegment;
+VALUE cToken;
 VALUE cModel;
 
 ID id_to_s;
@@ -38,6 +39,7 @@ extern void init_ruby_whisper_context(VALUE *mWhisper);
 extern void init_ruby_whisper_params(VALUE *mWhisper);
 extern void init_ruby_whisper_error(VALUE *mWhisper);
 extern void init_ruby_whisper_segment(VALUE *mWhisper);
+extern void init_ruby_whisper_token(VALUE *mWhisper);
 extern void init_ruby_whisper_model(VALUE *mWhisper);
 extern void init_ruby_whisper_vad_params(VALUE *mVAD);
 extern void init_ruby_whisper_vad_context(VALUE *mVAD);
@@ -174,6 +176,7 @@ void Init_whisper() {
   init_ruby_whisper_params(&mWhisper);
   init_ruby_whisper_error(&mWhisper);
   init_ruby_whisper_segment(&mWhisper);
+  init_ruby_whisper_token(&mWhisper);
   init_ruby_whisper_model(&mWhisper);
   init_ruby_whisper_vad_params(&mVAD);
   init_ruby_whisper_vad_segment(&mVAD);
