@@ -46,6 +46,12 @@ rb_whisper_token_s_new(struct whisper_context *context, int i_segment, int i_tok
   return token;
 }
 
+/*
+ * Token ID.
+ *
+ * call-seq:
+ *   id -> Integer
+ */
 VALUE
 ruby_whisper_token_id(VALUE self)
 {
@@ -54,6 +60,12 @@ ruby_whisper_token_id(VALUE self)
   return INT2NUM(rwt->token_data->id);
 }
 
+/*
+ * Forced timestamp token ID.
+ *
+ * call-seq:
+ *   tid -> Integer
+ */
 VALUE
 ruby_whisper_token_tid(VALUE self)
 {
@@ -62,6 +74,12 @@ ruby_whisper_token_tid(VALUE self)
   return INT2NUM(rwt->token_data->tid);
 }
 
+/*
+ * Probability of the token.
+ *
+ * call-seq:
+ *   p -> Float
+ */
 VALUE
 ruby_whisper_token_p(VALUE self)
 {
@@ -70,6 +88,12 @@ ruby_whisper_token_p(VALUE self)
   return DBL2NUM(rwt->token_data->p);
 }
 
+/*
+ * Log probability of the token.
+ *
+ * call-seq:
+ *   plog -> Float
+ */
 VALUE
 ruby_whisper_token_plog(VALUE self)
 {
@@ -78,6 +102,12 @@ ruby_whisper_token_plog(VALUE self)
   return DBL2NUM(rwt->token_data->plog);
 }
 
+/*
+ * Probability of the timestamp token.
+ *
+ * call-seq:
+ *   pt -> Float
+ */
 VALUE
 ruby_whisper_token_pt(VALUE self)
 {
@@ -86,6 +116,12 @@ ruby_whisper_token_pt(VALUE self)
   return DBL2NUM(rwt->token_data->pt);
 }
 
+/*
+ * Sum of probability of all timestamp tokens.
+ *
+ * call-seq:
+ *   ptsum -> Float
+ */
 VALUE
 ruby_whisper_token_ptsum(VALUE self)
 {
@@ -94,6 +130,15 @@ ruby_whisper_token_ptsum(VALUE self)
   return DBL2NUM(rwt->token_data->ptsum);
 }
 
+/*
+ * Start time of the token.
+ *
+ * Token-level timestamp data.
+ * Do not use if you haven't computed token-level timestamps.
+ *
+ * call-seq:
+ *   t0 -> Integer
+ */
 VALUE
 ruby_whisper_token_t0(VALUE self)
 {
@@ -102,6 +147,15 @@ ruby_whisper_token_t0(VALUE self)
   return LONG2NUM(rwt->token_data->t0);
 }
 
+/*
+ * End time of the token.
+ *
+ * Token-level timestamp data.
+ * Do not use if you haven't computed token-level timestamps.
+ *
+ * call-seq:
+ *   t1 -> Integer
+ */
 VALUE
 ruby_whisper_token_t1(VALUE self)
 {
@@ -110,6 +164,15 @@ ruby_whisper_token_t1(VALUE self)
   return LONG2NUM(rwt->token_data->t1);
 }
 
+/*
+ * [EXPERIMENTAL] Token-level timestamps with DTW
+ *
+ * Do not use if you haven't computed token-level timestamps with dtw.
+ * Roughly corresponds to the moment in audio in which the token was output.
+ *
+ * call-seq:
+ *   t_dtw -> Integer
+ */
 VALUE
 ruby_whisper_token_t_dtw(VALUE self)
 {
@@ -118,6 +181,12 @@ ruby_whisper_token_t_dtw(VALUE self)
   return LONG2NUM(rwt->token_data->t_dtw);
 }
 
+/*
+ * Voice length of the token.
+ *
+ * call-seq:
+ *   vlen -> Float
+ */
 VALUE
 ruby_whisper_token_vlen(VALUE self)
 {
@@ -126,6 +195,15 @@ ruby_whisper_token_vlen(VALUE self)
   return DBL2NUM(rwt->token_data->vlen);
 }
 
+/*
+ * Start time of the token.
+ *
+ * Token-level timestamp data.
+ * Do not use if you haven't computed token-level timestamps.
+ *
+ * call-seq:
+ *   start_time -> Integer
+ */
 VALUE
 ruby_whisper_token_start_time(VALUE self)
 {
@@ -134,6 +212,15 @@ ruby_whisper_token_start_time(VALUE self)
   return LONG2NUM(rwt->token_data->t0 * 10);
 }
 
+/*
+ * End time of the token.
+ *
+ * Token-level timestamp data.
+ * Do not use if you haven't computed token-level timestamps.
+ *
+ * call-seq:
+ *   end_time -> Integer
+ */
 VALUE
 ruby_whisper_token_end_time(VALUE self)
 {

@@ -428,6 +428,7 @@ ruby_whisper_params_set_print_realtime(VALUE self, VALUE value)
 }
 /*
  * If true, prints results from within whisper.cpp. (avoid it, use callback instead)
+ *
  * call-seq:
  *   print_realtime -> bool
  */
