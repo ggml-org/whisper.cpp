@@ -4,11 +4,6 @@
 extern VALUE cToken;
 extern const rb_data_type_t ruby_whisper_type;
 
-ID id_p;
-ID id_probability;
-ID id_plog;
-ID id_log_probebability;
-
 static size_t
 ruby_whisper_token_memsize(const void *p)
 {
@@ -80,7 +75,7 @@ ruby_whisper_token_get_tid(VALUE self)
  * Probability of the token.
  *
  * call-seq:
- *   p -> Float
+ *   probability -> Float
  */
 static VALUE
 ruby_whisper_token_get_p(VALUE self)
@@ -94,7 +89,7 @@ ruby_whisper_token_get_p(VALUE self)
  * Log probability of the token.
  *
  * call-seq:
- *   plog -> Float
+ *   log_probability -> Float
  */
 static VALUE
 ruby_whisper_token_get_plog(VALUE self)
@@ -133,40 +128,6 @@ ruby_whisper_token_get_ptsum(VALUE self)
 }
 
 /*
- * Start time of the token.
- *
- * Token-level timestamp data.
- * Do not use if you haven't computed token-level timestamps.
- *
- * call-seq:
- *   t0 -> Integer
- */
-static VALUE
-ruby_whisper_token_get_t0(VALUE self)
-{
-  ruby_whisper_token *rwt;
-  GetToken(self, rwt);
-  return LONG2NUM(rwt->token_data->t0);
-}
-
-/*
- * End time of the token.
- *
- * Token-level timestamp data.
- * Do not use if you haven't computed token-level timestamps.
- *
- * call-seq:
- *   t1 -> Integer
- */
-static VALUE
-ruby_whisper_token_get_t1(VALUE self)
-{
-  ruby_whisper_token *rwt;
-  GetToken(self, rwt);
-  return LONG2NUM(rwt->token_data->t1);
-}
-
-/*
  * [EXPERIMENTAL] Token-level timestamps with DTW
  *
  * Do not use if you haven't computed token-level timestamps with dtw.
@@ -187,7 +148,7 @@ ruby_whisper_token_get_t_dtw(VALUE self)
  * Voice length of the token.
  *
  * call-seq:
- *   vlen -> Float
+ *   voice_length -> Float
  */
 static VALUE
 ruby_whisper_token_get_vlen(VALUE self)
@@ -251,24 +212,15 @@ init_ruby_whisper_token(VALUE *mWhisper)
 {
   cToken = rb_define_class_under(*mWhisper, "Token", rb_cObject);
 
-  id_p = rb_intern("p");
-  id_probability = rb_intern("probability");
-  id_plog = rb_intern("plog");
-  id_log_probebability = rb_intern("log_probability");
-
   rb_define_alloc_func(cToken, ruby_whisper_token_allocate);
   rb_define_method(cToken, "id", ruby_whisper_token_get_id, 0);
   rb_define_method(cToken, "tid", ruby_whisper_token_get_tid, 0);
-  rb_define_method(cToken, "p", ruby_whisper_token_get_p, 0);
-  rb_alias(cToken, id_probability, id_p);
-  rb_define_method(cToken, "plog", ruby_whisper_token_get_plog, 0);
-  rb_alias(cToken, id_log_probebability, id_plog);
+  rb_define_method(cToken, "probability", ruby_whisper_token_get_p, 0);
+  rb_define_method(cToken, "log_probability", ruby_whisper_token_get_plog, 0);
   rb_define_method(cToken, "pt", ruby_whisper_token_get_pt, 0);
   rb_define_method(cToken, "ptsum", ruby_whisper_token_get_ptsum, 0);
-  rb_define_method(cToken, "t0", ruby_whisper_token_get_t0, 0);
-  rb_define_method(cToken, "t1", ruby_whisper_token_get_t1, 0);
   rb_define_method(cToken, "t_dtw", ruby_whisper_token_get_t_dtw, 0);
-  rb_define_method(cToken, "vlen", ruby_whisper_token_get_vlen, 0);
+  rb_define_method(cToken, "voice_length", ruby_whisper_token_get_vlen, 0);
   rb_define_method(cToken, "start_time", ruby_whisper_token_get_start_time, 0);
   rb_define_method(cToken, "end_time", ruby_whisper_token_get_end_time, 0);
   rb_define_method(cToken, "text", ruby_whisper_token_get_text, 0);

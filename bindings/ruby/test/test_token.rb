@@ -34,24 +34,19 @@ class TestToken < TestBase
     assert_instance_of Whisper::Token, @token
 
     assert_instance_of Integer, @token.id
-    assert_instance_of Float, @token.p
-    assert_equal @token.p, @token.probability
-    assert_instance_of Float, @token.plog
-    assert_equal @token.plog, @token.log_probability
+    assert_instance_of Float, @token.probability
+    assert_instance_of Float, @token.log_probability
 
     assert_instance_of Integer, @token.tid
     assert_instance_of Float, @token.pt
     assert_instance_of Float, @token.ptsum
 
-    assert_instance_of Integer, @token.t0
-    assert_instance_of Integer, @token.t1
-    assert_equal @token.t0 * 10, @token.start_time
     assert_instance_of Integer, @token.start_time
-    assert_equal @token.t1 * 10, @token.end_time
+    assert_instance_of Integer, @token.end_time
 
     assert_instance_of Integer, @token.t_dtw
 
-    assert_instance_of Float, @token.vlen
+    assert_instance_of Float, @token.voice_length
 
     assert_instance_of String, @token.text
   end
