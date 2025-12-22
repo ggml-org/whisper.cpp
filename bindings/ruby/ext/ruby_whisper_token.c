@@ -54,7 +54,7 @@ ruby_whisper_token_s_init(struct whisper_context *context, int i_segment, int i_
  * call-seq:
  *   id -> Integer
  */
-VALUE
+static VALUE
 ruby_whisper_token_get_id(VALUE self)
 {
   ruby_whisper_token *rwt;
@@ -68,7 +68,7 @@ ruby_whisper_token_get_id(VALUE self)
  * call-seq:
  *   tid -> Integer
  */
-VALUE
+static VALUE
 ruby_whisper_token_get_tid(VALUE self)
 {
   ruby_whisper_token *rwt;
@@ -82,7 +82,7 @@ ruby_whisper_token_get_tid(VALUE self)
  * call-seq:
  *   p -> Float
  */
-VALUE
+static VALUE
 ruby_whisper_token_get_p(VALUE self)
 {
   ruby_whisper_token *rwt;
@@ -96,7 +96,7 @@ ruby_whisper_token_get_p(VALUE self)
  * call-seq:
  *   plog -> Float
  */
-VALUE
+static VALUE
 ruby_whisper_token_get_plog(VALUE self)
 {
   ruby_whisper_token *rwt;
@@ -110,7 +110,7 @@ ruby_whisper_token_get_plog(VALUE self)
  * call-seq:
  *   pt -> Float
  */
-VALUE
+static VALUE
 ruby_whisper_token_get_pt(VALUE self)
 {
   ruby_whisper_token *rwt;
@@ -124,7 +124,7 @@ ruby_whisper_token_get_pt(VALUE self)
  * call-seq:
  *   ptsum -> Float
  */
-VALUE
+static VALUE
 ruby_whisper_token_get_ptsum(VALUE self)
 {
   ruby_whisper_token *rwt;
@@ -141,7 +141,7 @@ ruby_whisper_token_get_ptsum(VALUE self)
  * call-seq:
  *   t0 -> Integer
  */
-VALUE
+static VALUE
 ruby_whisper_token_get_t0(VALUE self)
 {
   ruby_whisper_token *rwt;
@@ -158,7 +158,7 @@ ruby_whisper_token_get_t0(VALUE self)
  * call-seq:
  *   t1 -> Integer
  */
-VALUE
+static VALUE
 ruby_whisper_token_get_t1(VALUE self)
 {
   ruby_whisper_token *rwt;
@@ -175,7 +175,7 @@ ruby_whisper_token_get_t1(VALUE self)
  * call-seq:
  *   t_dtw -> Integer
  */
-VALUE
+static VALUE
 ruby_whisper_token_get_t_dtw(VALUE self)
 {
   ruby_whisper_token *rwt;
@@ -189,7 +189,7 @@ ruby_whisper_token_get_t_dtw(VALUE self)
  * call-seq:
  *   vlen -> Float
  */
-VALUE
+static VALUE
 ruby_whisper_token_get_vlen(VALUE self)
 {
   ruby_whisper_token *rwt;
@@ -203,7 +203,7 @@ ruby_whisper_token_get_vlen(VALUE self)
  * call-seq:
  *   text -> String
  */
-VALUE
+static VALUE
 ruby_whisper_token_get_text(VALUE self)
 {
   ruby_whisper_token *rwt;
@@ -221,7 +221,7 @@ ruby_whisper_token_get_text(VALUE self)
  * call-seq:
  *   start_time -> Integer
  */
-VALUE
+static VALUE
 ruby_whisper_token_get_start_time(VALUE self)
 {
   ruby_whisper_token *rwt;
@@ -238,7 +238,7 @@ ruby_whisper_token_get_start_time(VALUE self)
  * call-seq:
  *   end_time -> Integer
  */
-VALUE
+static VALUE
 ruby_whisper_token_get_end_time(VALUE self)
 {
   ruby_whisper_token *rwt;

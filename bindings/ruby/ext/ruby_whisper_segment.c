@@ -284,3 +284,4 @@ init_ruby_whisper_segment(VALUE *mWhisper)
   rb_define_method(cSegment, "each_token", ruby_whisper_segment_each_token, 0);
   rb_define_method(cSegment, "deconstruct_keys", ruby_whisper_segment_deconstruct_keys, 1);
 }
+#undef N_KEY_NAMES
