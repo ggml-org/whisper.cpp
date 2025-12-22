@@ -53,7 +53,7 @@ ruby_whisper_token_s_init(struct whisper_context *context, int i_segment, int i_
  *   id -> Integer
  */
 VALUE
-ruby_whisper_token_id(VALUE self)
+ruby_whisper_token_get_id(VALUE self)
 {
   ruby_whisper_token *rwt;
   GetToken(self, rwt);
@@ -67,7 +67,7 @@ ruby_whisper_token_id(VALUE self)
  *   tid -> Integer
  */
 VALUE
-ruby_whisper_token_tid(VALUE self)
+ruby_whisper_token_get_tid(VALUE self)
 {
   ruby_whisper_token *rwt;
   GetToken(self, rwt);
@@ -81,7 +81,7 @@ ruby_whisper_token_tid(VALUE self)
  *   p -> Float
  */
 VALUE
-ruby_whisper_token_p(VALUE self)
+ruby_whisper_token_get_p(VALUE self)
 {
   ruby_whisper_token *rwt;
   GetToken(self, rwt);
@@ -95,7 +95,7 @@ ruby_whisper_token_p(VALUE self)
  *   plog -> Float
  */
 VALUE
-ruby_whisper_token_plog(VALUE self)
+ruby_whisper_token_get_plog(VALUE self)
 {
   ruby_whisper_token *rwt;
   GetToken(self, rwt);
@@ -109,7 +109,7 @@ ruby_whisper_token_plog(VALUE self)
  *   pt -> Float
  */
 VALUE
-ruby_whisper_token_pt(VALUE self)
+ruby_whisper_token_get_pt(VALUE self)
 {
   ruby_whisper_token *rwt;
   GetToken(self, rwt);
@@ -123,7 +123,7 @@ ruby_whisper_token_pt(VALUE self)
  *   ptsum -> Float
  */
 VALUE
-ruby_whisper_token_ptsum(VALUE self)
+ruby_whisper_token_get_ptsum(VALUE self)
 {
   ruby_whisper_token *rwt;
   GetToken(self, rwt);
@@ -140,7 +140,7 @@ ruby_whisper_token_ptsum(VALUE self)
  *   t0 -> Integer
  */
 VALUE
-ruby_whisper_token_t0(VALUE self)
+ruby_whisper_token_get_t0(VALUE self)
 {
   ruby_whisper_token *rwt;
   GetToken(self, rwt);
@@ -157,7 +157,7 @@ ruby_whisper_token_t0(VALUE self)
  *   t1 -> Integer
  */
 VALUE
-ruby_whisper_token_t1(VALUE self)
+ruby_whisper_token_get_t1(VALUE self)
 {
   ruby_whisper_token *rwt;
   GetToken(self, rwt);
@@ -174,7 +174,7 @@ ruby_whisper_token_t1(VALUE self)
  *   t_dtw -> Integer
  */
 VALUE
-ruby_whisper_token_t_dtw(VALUE self)
+ruby_whisper_token_get_t_dtw(VALUE self)
 {
   ruby_whisper_token *rwt;
   GetToken(self, rwt);
@@ -188,7 +188,7 @@ ruby_whisper_token_t_dtw(VALUE self)
  *   vlen -> Float
  */
 VALUE
-ruby_whisper_token_vlen(VALUE self)
+ruby_whisper_token_get_vlen(VALUE self)
 {
   ruby_whisper_token *rwt;
   GetToken(self, rwt);
@@ -205,7 +205,7 @@ ruby_whisper_token_vlen(VALUE self)
  *   start_time -> Integer
  */
 VALUE
-ruby_whisper_token_start_time(VALUE self)
+ruby_whisper_token_get_start_time(VALUE self)
 {
   ruby_whisper_token *rwt;
   GetToken(self, rwt);
@@ -222,7 +222,7 @@ ruby_whisper_token_start_time(VALUE self)
  *   end_time -> Integer
  */
 VALUE
-ruby_whisper_token_end_time(VALUE self)
+ruby_whisper_token_get_end_time(VALUE self)
 {
   ruby_whisper_token *rwt;
   GetToken(self, rwt);
@@ -240,18 +240,18 @@ init_ruby_whisper_token(VALUE *mWhisper)
   id_log_probebability = rb_intern("log_probability");
 
   rb_define_alloc_func(cToken, ruby_whisper_token_allocate);
-  rb_define_method(cToken, "id", ruby_whisper_token_id, 0);
-  rb_define_method(cToken, "tid", ruby_whisper_token_tid, 0);
-  rb_define_method(cToken, "p", ruby_whisper_token_p, 0);
+  rb_define_method(cToken, "id", ruby_whisper_token_get_id, 0);
+  rb_define_method(cToken, "tid", ruby_whisper_token_get_tid, 0);
+  rb_define_method(cToken, "p", ruby_whisper_token_get_p, 0);
   rb_alias(cToken, id_probability, id_p);
-  rb_define_method(cToken, "plog", ruby_whisper_token_plog, 0);
+  rb_define_method(cToken, "plog", ruby_whisper_token_get_plog, 0);
   rb_alias(cToken, id_log_probebability, id_plog);
-  rb_define_method(cToken, "pt", ruby_whisper_token_pt, 0);
-  rb_define_method(cToken, "ptsum", ruby_whisper_token_ptsum, 0);
-  rb_define_method(cToken, "t0", ruby_whisper_token_t0, 0);
-  rb_define_method(cToken, "t1", ruby_whisper_token_t1, 0);
-  rb_define_method(cToken, "t_dtw", ruby_whisper_token_t_dtw, 0);
-  rb_define_method(cToken, "vlen", ruby_whisper_token_vlen, 0);
-  rb_define_method(cToken, "start_time", ruby_whisper_token_start_time, 0);
-  rb_define_method(cToken, "end_time", ruby_whisper_token_end_time, 0);
+  rb_define_method(cToken, "pt", ruby_whisper_token_get_pt, 0);
+  rb_define_method(cToken, "ptsum", ruby_whisper_token_get_ptsum, 0);
+  rb_define_method(cToken, "t0", ruby_whisper_token_get_t0, 0);
+  rb_define_method(cToken, "t1", ruby_whisper_token_get_t1, 0);
+  rb_define_method(cToken, "t_dtw", ruby_whisper_token_get_t_dtw, 0);
+  rb_define_method(cToken, "vlen", ruby_whisper_token_get_vlen, 0);
+  rb_define_method(cToken, "start_time", ruby_whisper_token_get_start_time, 0);
+  rb_define_method(cToken, "end_time", ruby_whisper_token_get_end_time, 0);
 }
