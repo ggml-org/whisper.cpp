@@ -32,6 +32,7 @@ ruby_whisper_token_allocate(VALUE klass)
   ruby_whisper_token *rwt;
   VALUE token = TypedData_Make_Struct(klass, ruby_whisper_token, &ruby_whisper_token_type, rwt);
   rwt->token_data = NULL;
+  rwt->text = NULL;
   return token;
 }
 
@@ -43,6 +44,7 @@ ruby_whisper_token_s_init(struct whisper_context *context, int i_segment, int i_
   ruby_whisper_token *rwt;
   TypedData_Get_Struct(token, ruby_whisper_token, &ruby_whisper_token_type, rwt);
   rwt->token_data = &token_data;
+  rwt->text = whisper_full_get_token_text(context, i_segment, i_token);
   return token;
 }
 
@@ -196,6 +198,21 @@ ruby_whisper_token_get_vlen(VALUE self)
 }
 
 /*
+ * Get the token text of the token.
+ *
+ * call-seq:
+ *   text -> String
+ */
+VALUE
+ruby_whisper_token_get_text(VALUE self)
+{
+  ruby_whisper_token *rwt;
+  GetToken(self, rwt);
+  return rb_str_new2(rwt->text);
+}
+
+
+/*
  * Start time of the token.
  *
  * Token-level timestamp data.
@@ -254,4 +271,5 @@ init_ruby_whisper_token(VALUE *mWhisper)
   rb_define_method(cToken, "vlen", ruby_whisper_token_get_vlen, 0);
   rb_define_method(cToken, "start_time", ruby_whisper_token_get_start_time, 0);
   rb_define_method(cToken, "end_time", ruby_whisper_token_get_end_time, 0);
+  rb_define_method(cToken, "text", ruby_whisper_token_get_text, 0);
 }
