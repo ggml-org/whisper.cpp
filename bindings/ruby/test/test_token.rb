@@ -52,5 +52,12 @@ class TestToken < TestBase
     assert_instance_of Integer, @token.t_dtw
 
     assert_instance_of Float, @token.vlen
+
+    assert_instance_of String, @token.text
+  end
+
+  def test_text
+    assert_equal ["[_BEG_]", " And", " so", " my", " fellow", " Americans", ",", " ask", " not", " what", " your", " country", " can", " do", " for", " you", ",", " ask", " what", " you", " can", " do", " for", " your", " country", ".", "[_TT_550]"],
+                 @segment.each_token.collect(&:text)
   end
 end
