@@ -36,7 +36,7 @@ ruby_whisper_token_allocate(VALUE klass)
 }
 
 VALUE
-rb_whisper_token_s_new(struct whisper_context *context, int i_segment, int i_token)
+ruby_whisper_token_s_init(struct whisper_context *context, int i_segment, int i_token)
 {
   whisper_token_data token_data = whisper_full_get_token_data(context, i_segment, i_token);
   const VALUE token = ruby_whisper_token_allocate(cToken);

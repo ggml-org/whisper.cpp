@@ -17,7 +17,7 @@ extern const rb_data_type_t ruby_whisper_type;
 
 extern VALUE cSegment;
 
-extern VALUE rb_whisper_token_s_new(struct whisper_context *context, int i_segment, int index);
+extern VALUE ruby_whisper_token_s_init(struct whisper_context *context, int i_segment, int index);
 
 static void
 rb_whisper_segment_mark(void *p)
@@ -192,7 +192,7 @@ ruby_whisper_segment_each_token(VALUE self)
 
   const int n_tokens = whisper_full_n_tokens(rw->context, rws->index);
   for (int i = 0; i < n_tokens; ++i) {
-    rb_yield(rb_whisper_token_s_new(rw->context, rws->index, i));
+    rb_yield(ruby_whisper_token_s_init(rw->context, rws->index, i));
   }
 
   return self;
