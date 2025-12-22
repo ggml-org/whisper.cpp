@@ -16,7 +16,7 @@ ruby_whisper_token_memsize(const void *p)
   if (!rwt) {
     return 0;
   }
-  return sizeof(rwt->token_data);
+  return sizeof(rwt);
 }
 
 static const rb_data_type_t ruby_whisper_token_type = {
