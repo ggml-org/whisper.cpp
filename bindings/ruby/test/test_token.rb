@@ -55,4 +55,14 @@ class TestToken < TestBase
     assert_equal ["[_BEG_]", " And", " so", " my", " fellow", " Americans", ",", " ask", " not", " what", " your", " country", " can", " do", " for", " you", ",", " ask", " what", " you", " can", " do", " for", " your", " country", ".", "[_TT_550]"],
                  @segment.each_token.collect(&:text)
   end
+
+  def test_deconstruct_keys_with_nil
+    assert_equal({}, @token.deconstruct_keys(nil))
+  end
+
+  def test_deconstruct_keys_with_keys
+    keys = %i[id tid probability log_probability pt ptsum t_dtw voice_length start_time end_time text]
+    expected = keys.collect {|key| [key, @token.send(key)] }.to_h
+    assert_equal expected, @token.deconstruct_keys(keys)
+  end
 end
