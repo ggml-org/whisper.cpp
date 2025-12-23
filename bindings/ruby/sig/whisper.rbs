@@ -446,12 +446,31 @@ module Whisper
     def end_time: () -> Integer
 
     # Whether the next segment is predicted as a speaker turn.
+    #
     def speaker_turn_next?: () -> (true | false)
 
     def text: () -> String
     def no_speech_prob: () -> Float
+
+    # Get number of tokens in the segment
+    #
+    def n_tokens: () -> Integer
+
+    # Yields each Whisper::Token:
+    #
+    #   whisper.each_segment.first.each_token do |token|
+    #     p token
+    #   end
+    #
+    # Returns an Enumerator if no block is given:
+    #
+    #   whisper.each_segment.first.each_token.to_a # => [#<Whisper::Token>, ...]
+    #
+    def each_token: { (Token) -> void } -> void
+                  | () -> Enumerator[Token]
     def to_srt_cue: () -> String
     def to_webvtt_cue: () -> String
+
 
     #  Possible keys: :start_time, :end_time, :text, :no_speech_prob, :speaker_turn_next
     #
@@ -461,6 +480,79 @@ module Whisper
     #        puts "[#{start_time} --> #{end_time}] #{text} (no speech prob: #{no_speech_prob}#{speaker_turn_next ? ', speaker turns next' : ''})"
     #      end
     def deconstruct_keys: (Array[:start_time | :end_time | :text | :no_speech_prob | :speaker_turn_next] | nil) -> deconstructed_keys
+  end
+
+  module Token
+    type deconstructed_keys = {
+      id: (Integer | nil),
+      tid: (Integer | nil),
+      probability: (Float | nil),
+      log_probability: (Float | nil),
+      pt: (Float | nil),
+      ptsum: (Float | nil),
+      t_dtw: (Integer | nil),
+      voice_length: (Float | nil),
+      text: (String | nil),
+      start_time: (Integer | nil),
+      end_time: (Integer | nil),
+    }
+
+    # Token ID.
+    #
+    def id: () -> Integer
+
+    # Forced timestamp token ID.
+    #
+    def tid: () -> Integer
+
+    # Probability of the token.
+    #
+    def probability: () ->
+
+    # Log probability of the token.
+    #
+    def log_probability: () ->
+
+    # Probability of the timestamp token.
+    #
+    def pt: () ->
+
+    # Sum of probability of all timestamp tokens.
+    #
+    def ptsum: () ->
+
+    # [EXPERIMENTAL] Token-level timestamps with DTW
+    #
+    # Do not use if you haven't computed token-level timestamps with dtw.
+    # Roughly corresponds to the moment in audio in which the token was output.
+    #
+    def t_dtw: () ->
+
+    # Voice length of the token.
+    #
+    def voice_length: () ->
+
+    # Start time of the token.
+    #
+    # Token-level timestamp data.
+    # Do not use if you haven't computed token-level timestamps.
+    #
+    def start_time: () ->
+
+    # End time of the token.
+    #
+    # Token-level timestamp data.
+    # Do not use if you haven't computed token-level timestamps.
+    #
+    def end_time: () ->
+
+    # Get the token text of the token.
+    #
+    def text: () -> String
+
+    #
+    #
+    def deconstructed_keys: (Array[:id | :tid | :probability | :log_probability | :pt | :ptsum | :t_dtw | :voice_length | :start_time | :end_time | :text] | nil) -> deconstructed_keys
   end
 
   module VAD
