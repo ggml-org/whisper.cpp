@@ -202,7 +202,7 @@ ruby_whisper_segment_each_token(VALUE self)
  * call-seq:
  *   deconstruct_keys(keys) -> hash
  *
- *  Possible keys: :start_time, :end_time, :text, :no_speech_prob, :speaker_turn_next
+ *  Possible keys: :start_time, :end_time, :text, :no_speech_prob, :speaker_turn_next, :n_tokens
  *
  *   whisper.each_segment do |segment|
  *     segment => {start_time:, end_time:, text:, no_speech_prob:, speaker_turn_next:}
