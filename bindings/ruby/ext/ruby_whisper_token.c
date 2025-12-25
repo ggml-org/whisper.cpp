@@ -334,6 +334,7 @@ init_ruby_whisper_token(VALUE *mWhisper)
     sym_end_time,
     sym_text
   );
+  rb_gc_register_mark_object(key_names);
 
   rb_define_method(cToken, "id", ruby_whisper_token_get_id, 0);
   rb_define_method(cToken, "tid", ruby_whisper_token_get_tid, 0);

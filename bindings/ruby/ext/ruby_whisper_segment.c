@@ -273,6 +273,7 @@ init_ruby_whisper_segment(VALUE *mWhisper)
     sym_no_speech_prob,
     sym_speaker_turn_next
   );
+  rb_gc_register_mark_object(key_names);
 
   rb_define_alloc_func(cSegment, ruby_whisper_segment_allocate);
   rb_define_method(cSegment, "start_time", ruby_whisper_segment_get_start_time, 0);

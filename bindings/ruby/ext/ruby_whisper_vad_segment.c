@@ -133,6 +133,7 @@ init_ruby_whisper_vad_segment(VALUE *mVAD)
     sym_start_time,
     sym_end_time
   );
+  rb_gc_register_mark_object(key_names);
 
   rb_define_alloc_func(cVADSegment, ruby_whisper_vad_segment_s_allocate);
   rb_define_method(cVADSegment, "start_time", ruby_whisper_vad_segment_get_start_time, 0);
