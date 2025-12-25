@@ -6,7 +6,6 @@
 extern VALUE cToken;
 extern const rb_data_type_t ruby_whisper_type;
 
-static VALUE key_names;
 static VALUE sym_id;
 static VALUE sym_tid;
 static VALUE sym_probability;
@@ -241,7 +240,20 @@ static VALUE ruby_whisper_token_deconstruct_keys(VALUE self, VALUE keys)
   long n_keys = 0;
 
   if (NIL_P(keys)) {
-    keys = key_names;
+    keys = rb_ary_new3(
+      N_KEY_NAMES,
+      sym_id,
+      sym_tid,
+      sym_probability,
+      sym_log_probability,
+      sym_pt,
+      sym_ptsum,
+      sym_t_dtw,
+      sym_voice_length,
+      sym_start_time,
+      sym_end_time,
+      sym_text
+      );
     n_keys = N_KEY_NAMES;
   } else {
     n_keys = RARRAY_LEN(keys);
@@ -320,21 +332,6 @@ init_ruby_whisper_token(VALUE *mWhisper)
   sym_start_time = ID2SYM(rb_intern("start_time"));
   sym_end_time = ID2SYM(rb_intern("end_time"));
   sym_text = ID2SYM(rb_intern("text"));
-  key_names = rb_ary_new3(
-    N_KEY_NAMES,
-    sym_id,
-    sym_tid,
-    sym_probability,
-    sym_log_probability,
-    sym_pt,
-    sym_ptsum,
-    sym_t_dtw,
-    sym_voice_length,
-    sym_start_time,
-    sym_end_time,
-    sym_text
-  );
-  rb_gc_register_mark_object(key_names);
 
   rb_define_method(cToken, "id", ruby_whisper_token_get_id, 0);
   rb_define_method(cToken, "tid", ruby_whisper_token_get_tid, 0);

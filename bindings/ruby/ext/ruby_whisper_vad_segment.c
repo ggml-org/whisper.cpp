@@ -9,7 +9,6 @@ extern const rb_data_type_t ruby_whisper_vad_segments_type;
 
 static VALUE sym_start_time;
 static VALUE sym_end_time;
-static VALUE key_names;
 
 static void
 rb_whisper_vad_segment_mark(void *p)
@@ -100,7 +99,11 @@ ruby_whisper_vad_segment_deconstruct_keys(VALUE self, VALUE keys)
 
   hash = rb_hash_new();
   if (NIL_P(keys)) {
-    keys = key_names;
+    keys = rb_ary_new3(
+      N_KEY_NAMES,
+      sym_start_time,
+      sym_end_time
+      );
     n_keys = N_KEY_NAMES;
   } else {
     n_keys = RARRAY_LEN(keys);
@@ -128,12 +131,6 @@ init_ruby_whisper_vad_segment(VALUE *mVAD)
 
   sym_start_time = ID2SYM(rb_intern("start_time"));
   sym_end_time = ID2SYM(rb_intern("end_time"));
-  key_names = rb_ary_new3(
-    N_KEY_NAMES,
-    sym_start_time,
-    sym_end_time
-  );
-  rb_gc_register_mark_object(key_names);
 
   rb_define_alloc_func(cVADSegment, ruby_whisper_vad_segment_s_allocate);
   rb_define_method(cVADSegment, "start_time", ruby_whisper_vad_segment_get_start_time, 0);
