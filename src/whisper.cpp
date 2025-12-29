@@ -8987,9 +8987,11 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
             int shift = 0;
             if (len > 0 && text) {
                 char c = tolower(text[0]);
-                // Check vowel (a, e, i, o, u) - 'y' treated as consonant to prevent excessive shift on 'you'/'your'
-                if (c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u') {
-                    shift = 15; // 150ms for vowels (Soft Onset)
+                // Universal Onset Shift (Vowels+Semi+Plosives 150ms, Fricatives 80ms)
+                // - Vowels/Semis (aeiouyw): Soft onset.
+                // - Plosives (bcdgkpqtb): Closure silence needs coverage.
+                if (strchr("aeiouywbcdgkpqqt", c)) {
+                    shift = 15; // 150ms (Aggressive)
                 } 
                 // Check consonant (alpha but not vowel)
                 else if (c >= 'a' && c <= 'z') {
