@@ -7758,9 +7758,28 @@ int whisper_full_with_state(
                                         }
                                     }
                                 }
-                                tok.t1 = (next_t_dtw >= 0) ? next_t_dtw : segment.t1;
+                                // Set t1 from next token's t_dtw or segment end
+                                int64_t raw_t1 = (next_t_dtw >= 0) ? next_t_dtw : segment.t1;
                                 
-                                // Enforce minimum duration of 5 units (50ms)
+                                // [IMPROVEMENT] Smart Gap / Silence Handling (Post-Wrap)
+                                int len = 1;
+                                const char * text = whisper_token_to_str(ctx, tok.id);
+                                if (text) {
+                                    len = (int)strlen(text);
+                                    if (len > 0 && text[0] == ' ') len--;
+                                    if (len < 1) len = 1;
+                                }
+                                
+                                // Formula: Max(100ms, Length * 250ms)
+                                int64_t max_dur = std::max((int64_t)10, (int64_t)(len * 25)); 
+                                
+                                if (raw_t1 - tok.t0 > max_dur) {
+                                    tok.t1 = tok.t0 + max_dur;
+                                } else {
+                                    tok.t1 = raw_t1;
+                                }
+
+                                // [RESTORED] Enforce minimum duration of 5 units (50ms)
                                 const int64_t min_dur = 5;
                                 if (tok.t1 - tok.t0 < min_dur) {
                                     tok.t1 = tok.t0 + min_dur;
@@ -9017,7 +9036,7 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
 
     // [IMPROVEMENT] Enforce minimum token duration
     // t_dtw units are centiseconds (10ms each). Min 5 units = 50ms per token.
-    const int64_t min_token_duration = 5;  // 5 * 10ms = 50ms minimum
+
     
     for (size_t i = i_segment; i < i_segment + n_segments; ++i) {
         auto & segment = state->result_all[i];
@@ -9046,17 +9065,38 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
             // Current duration
             int64_t duration = next_t_dtw - tok.t_dtw;
             
+            // [IMPROVEMENT] Adaptive minimum token duration
+            // t_dtw units are centiseconds (10ms each).
+            int len = 1;
+            const char * text = whisper_token_to_str(ctx, tok.id);
+            if (text) {
+                len = (int)strlen(text);
+                if (len > 0 && text[0] == ' ') len--; // Ignore leading space
+                if (len < 1) len = 1;
+            }
+            
+            // Adaptive formula: Max(50ms, Length * 20ms)
+            // 5 units = 50ms. 2 units = 20ms.
+            const int64_t adaptive_min = std::max((int64_t)5, (int64_t)(len * 2));
+
+            // Debug Print for Loop 1
+            /*
+            printf("[Loop1] Tok='%s' len=%d t0=%lld next=%lld dur=%lld req=%lld\n", 
+                   text ? text : "???", len, tok.t_dtw, next_t_dtw, duration, adaptive_min);
+            */
+
             // If duration too short, adjust by borrowing from next token
-            if (duration < min_token_duration && duration >= 0) {
+            if (duration < adaptive_min && duration >= 0) {
                 // Try to extend this token's end time
-                int64_t needed = min_token_duration - duration;
-                
                 // Find the next token and shift it forward if possible
                 for (int t2 = t + 1; t2 < n_tokens; ++t2) {
                     if (segment.tokens[t2].id < whisper_token_eot(ctx)) {
+                        printf("[Loop1] PUSH '%s' needs %lld -> Pushing next token from %lld to %lld\n",
+                               text, adaptive_min, segment.tokens[t2].t_dtw, tok.t_dtw + adaptive_min);
+                        
                         segment.tokens[t2].t_dtw = std::max(
                             segment.tokens[t2].t_dtw,
-                            tok.t_dtw + min_token_duration
+                            tok.t_dtw + adaptive_min
                         );
                         break;
                     }
@@ -9090,7 +9130,29 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
             }
             
             // Set t1 from next token's t_dtw or segment end
-            tok.t1 = (next_t_dtw >= 0) ? next_t_dtw : segment.t1;
+            int64_t raw_t1 = (next_t_dtw >= 0) ? next_t_dtw : segment.t1;
+            
+            // [IMPROVEMENT] Smart Gap / Silence Handling
+            // Prevent short words from stretching over long silences (e.g., "not ... what")
+            // Calculate reasonable max duration based on text length
+            int len = 1;
+            const char * text = whisper_token_to_str(ctx, tok.id);
+            if (text) {
+                len = (int)strlen(text);
+                if (len > 0 && text[0] == ' ') len--; 
+                if (len < 1) len = 1;
+            }
+            
+            // Formula: Max(100ms, Length * 250ms)
+            // 10 units = 100ms base. 25 units = 250ms per char limit.
+            // This is loose enough for slow speech but tight enough to catch 1s+ gaps on short words.
+            int64_t max_dur = std::max((int64_t)10, (int64_t)(len * 25)); 
+            
+            if (raw_t1 - tok.t0 > max_dur) {
+                tok.t1 = tok.t0 + max_dur;
+            } else {
+                tok.t1 = raw_t1;
+            }
         }
         
         // [IMPROVEMENT] Update segment t0/t1 from first/last token's corrected timestamps
