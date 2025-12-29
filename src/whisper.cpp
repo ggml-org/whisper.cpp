@@ -7695,7 +7695,9 @@ int whisper_full_with_state(
                         whisper_exp_compute_token_level_timestamps(
                                 *ctx, *state, result_all.size() - 1, params.thold_pt, params.thold_ptsum);
 
-                        if (params.max_len > 0) {
+                        // Skip segment wrap here for DTW mode - DTW block handles its own wrap
+                        // with corrected timestamps later
+                        if (params.max_len > 0 && !ctx->params.dtw_token_timestamps) {
                             n_new = whisper_wrap_segment(*ctx, *state, params.max_len, params.split_on_word);
                         }
                     }
@@ -7708,15 +7710,79 @@ int whisper_full_with_state(
             // FIXME: will timestamp offsets be correct?
             // [EXPERIMENTAL] Token-level timestamps with DTW
             {
-                const int n_segments = state->result_all.size() - n_segments_before;
+                int n_segments = state->result_all.size() - n_segments_before;
                 if (ctx->params.dtw_token_timestamps && n_segments) {
                     const int n_frames = std::min(std::min(WHISPER_CHUNK_SIZE * 100, seek_delta), seek_end - seek);
                     whisper_exp_compute_token_level_timestamps_dtw(
                             ctx, state, params, result_all.size() - n_segments, n_segments, seek, n_frames, 7, params.n_threads);
-                    if (params.new_segment_callback) {
-                        for (int seg = (int) result_all.size() - n_segments; seg < n_segments; seg++) {
-                            params.new_segment_callback(ctx, state, seg, params.new_segment_callback_user_data);
+                    
+                    // [IMPROVEMENT] Apply segment wrapping after DTW timestamps for -ml mode
+                    if (params.max_len > 0) {
+                        // Wrap each new segment using DTW-corrected t0/t1
+                        for (int seg_idx = (int) result_all.size() - n_segments; seg_idx < (int) result_all.size(); ) {
+                            int added = whisper_wrap_segment(*ctx, *state, params.max_len, params.split_on_word);
+                            seg_idx += added;
                         }
+                        // Recalculate n_segments after potential splits
+                        n_segments = state->result_all.size() - n_segments_before;
+                        
+                        // [IMPROVEMENT] Fix segment and token t0/t1 after wrap
+                        // Wrap copies tokens from old segment, so t0/t1 are stale but t_dtw is correct
+                        // Re-propagate t_dtw → t0/t1 for all tokens, then fix segment boundaries
+                        for (int seg = n_segments_before; seg < (int) state->result_all.size(); ++seg) {
+                            auto & segment = state->result_all[seg];
+                            const int n_tok = segment.tokens.size();
+                            
+                            // Re-propagate t_dtw → t0/t1 for tokens in this segment
+                            for (int t = 0; t < n_tok; ++t) {
+                                auto & tok = segment.tokens[t];
+                                if (tok.id >= whisper_token_eot(ctx)) continue;
+                                
+                                // Set t0 from t_dtw
+                                tok.t0 = tok.t_dtw;
+                                
+                                // Find next text token for t1
+                                int64_t next_t_dtw = -1;
+                                for (int t2 = t + 1; t2 < n_tok; ++t2) {
+                                    if (segment.tokens[t2].id < whisper_token_eot(ctx)) {
+                                        next_t_dtw = segment.tokens[t2].t_dtw;
+                                        break;
+                                    }
+                                }
+                                // Use next segment's first token if in same chunk, else use segment.t1
+                                if (next_t_dtw < 0 && seg + 1 < (int) state->result_all.size()) {
+                                    for (const auto & ntok : state->result_all[seg + 1].tokens) {
+                                        if (ntok.id < whisper_token_eot(ctx)) {
+                                            next_t_dtw = ntok.t_dtw;
+                                            break;
+                                        }
+                                    }
+                                }
+                                tok.t1 = (next_t_dtw >= 0) ? next_t_dtw : segment.t1;
+                                
+                                // Enforce minimum duration of 5 units (50ms)
+                                const int64_t min_dur = 5;
+                                if (tok.t1 - tok.t0 < min_dur) {
+                                    tok.t1 = tok.t0 + min_dur;
+                                }
+                            }
+                            
+                            // Now fix segment t0/t1 from corrected token values
+                            int64_t first_t0 = -1;
+                            int64_t last_t1 = -1;
+                            for (const auto & tok : segment.tokens) {
+                                if (tok.id >= whisper_token_eot(ctx)) continue;
+                                if (first_t0 < 0) first_t0 = tok.t0;
+                                last_t1 = tok.t1;
+                            }
+                            if (first_t0 >= 0) segment.t0 = first_t0;
+                            if (last_t1 >= 0) segment.t1 = last_t1;
+                        }
+                    }
+                    
+                    if (params.new_segment_callback) {
+                        // Call callback for all new segments after DTW timestamps are computed
+                        params.new_segment_callback(ctx, state, n_segments, params.new_segment_callback_user_data);
                     }
                 }
             }
@@ -8947,6 +9013,98 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
                 tok_i = seg_i->tokens.begin();
             }
         }
+    }
+
+    // [IMPROVEMENT] Enforce minimum token duration
+    // t_dtw units are centiseconds (10ms each). Min 5 units = 50ms per token.
+    const int64_t min_token_duration = 5;  // 5 * 10ms = 50ms minimum
+    
+    for (size_t i = i_segment; i < i_segment + n_segments; ++i) {
+        auto & segment = state->result_all[i];
+        const int n_tokens = segment.tokens.size();
+        
+        for (int t = 0; t < n_tokens; ++t) {
+            auto & tok = segment.tokens[t];
+            
+            // Skip non-text tokens
+            if (tok.id >= whisper_token_eot(ctx)) continue;
+            
+            // Find next text token for duration calculation
+            int64_t next_t_dtw = -1;
+            for (int t2 = t + 1; t2 < n_tokens; ++t2) {
+                if (segment.tokens[t2].id < whisper_token_eot(ctx)) {
+                    next_t_dtw = segment.tokens[t2].t_dtw;
+                    break;
+                }
+            }
+            
+            // If no next token in segment, use segment end
+            if (next_t_dtw < 0) {
+                next_t_dtw = segment.t1;
+            }
+            
+            // Current duration
+            int64_t duration = next_t_dtw - tok.t_dtw;
+            
+            // If duration too short, adjust by borrowing from next token
+            if (duration < min_token_duration && duration >= 0) {
+                // Try to extend this token's end time
+                int64_t needed = min_token_duration - duration;
+                
+                // Find the next token and shift it forward if possible
+                for (int t2 = t + 1; t2 < n_tokens; ++t2) {
+                    if (segment.tokens[t2].id < whisper_token_eot(ctx)) {
+                        segment.tokens[t2].t_dtw = std::max(
+                            segment.tokens[t2].t_dtw,
+                            tok.t_dtw + min_token_duration
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // [IMPROVEMENT] Propagate corrected t_dtw to t0/t1 for CLI visibility
+    // This ensures -ml 1 output uses DTW timestamps
+    for (size_t i = i_segment; i < i_segment + n_segments; ++i) {
+        auto & segment = state->result_all[i];
+        const int n_tokens = segment.tokens.size();
+        
+        for (int t = 0; t < n_tokens; ++t) {
+            auto & tok = segment.tokens[t];
+            
+            // Skip non-text tokens
+            if (tok.id >= whisper_token_eot(ctx)) continue;
+            
+            // Set t0 from t_dtw
+            tok.t0 = tok.t_dtw;
+            
+            // Find next text token for t1
+            int64_t next_t_dtw = -1;
+            for (int t2 = t + 1; t2 < n_tokens; ++t2) {
+                if (segment.tokens[t2].id < whisper_token_eot(ctx)) {
+                    next_t_dtw = segment.tokens[t2].t_dtw;
+                    break;
+                }
+            }
+            
+            // Set t1 from next token's t_dtw or segment end
+            tok.t1 = (next_t_dtw >= 0) ? next_t_dtw : segment.t1;
+        }
+        
+        // [IMPROVEMENT] Update segment t0/t1 from first/last token's corrected timestamps
+        // This ensures segment boundaries match DTW-aligned token timestamps
+        int64_t first_t0 = -1;
+        int64_t last_t1 = -1;
+        for (int t = 0; t < n_tokens; ++t) {
+            const auto & tok = segment.tokens[t];
+            if (tok.id >= whisper_token_eot(ctx)) continue;
+            if (first_t0 < 0) first_t0 = tok.t0;
+            last_t1 = tok.t1;
+        }
+        if (first_t0 >= 0) segment.t0 = first_t0;
+        if (last_t1 >= 0) segment.t1 = last_t1;
     }
 
     // Print DTW timestamps
