@@ -9047,6 +9047,28 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
             
             // Skip non-text tokens
             if (tok.id >= whisper_token_eot(ctx)) continue;
+
+            // [IMPROVEMENT] Vowel Onset Shift
+            // Shift start time earlier for vowels to capture soft onset (breath/fade-in)
+            int len = 1;
+            const char * text = whisper_token_to_str(ctx, tok.id);
+            if (text) {
+                len = (int)strlen(text);
+                if (len > 0 && text[0] == ' ') len--; 
+                if (len < 1) len = 1;
+
+                char c = (text[0] == ' ' && text[1] != 0) ? text[1] : text[0];
+                if (c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u' ||
+                    c == 'A' || c == 'E' || c == 'I' || c == 'O' || c == 'U') {
+                    
+                    int64_t shift = 5; // 50ms padding
+                    int64_t prev_start = 0;
+                    if (t > 0) prev_start = segment.tokens[t-1].t_dtw;
+                    else if (i > 0 && !state->result_all[i-1].tokens.empty()) prev_start = state->result_all[i-1].tokens.back().t_dtw;
+
+                    if (tok.t_dtw - shift > prev_start + 5) tok.t_dtw -= shift;
+                }
+            }
             
             // Find next text token for duration calculation
             int64_t next_t_dtw = -1;
@@ -9067,13 +9089,7 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
             
             // [IMPROVEMENT] Adaptive minimum token duration
             // t_dtw units are centiseconds (10ms each).
-            int len = 1;
-            const char * text = whisper_token_to_str(ctx, tok.id);
-            if (text) {
-                len = (int)strlen(text);
-                if (len > 0 && text[0] == ' ') len--; // Ignore leading space
-                if (len < 1) len = 1;
-            }
+            // len and text text calculated at start of loop
             
             // Adaptive formula: Max(50ms, Length * 20ms)
             // 5 units = 50ms. 2 units = 20ms.
