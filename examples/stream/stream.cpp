@@ -41,6 +41,8 @@ struct whisper_params {
     std::string language  = "en";
     std::string model     = "models/ggml-base.en.bin";
     std::string fname_out;
+    std::string dtw;
+    int32_t max_len = 0;
 };
 
 void whisper_print_usage(int argc, char ** argv, const whisper_params & params);
@@ -70,6 +72,8 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-l"    || arg == "--language")      { params.language      = argv[++i]; }
         else if (arg == "-m"    || arg == "--model")         { params.model         = argv[++i]; }
         else if (arg == "-f"    || arg == "--file")          { params.fname_out     = argv[++i]; }
+        else if (arg == "-dtw"  || arg == "--dtw")           { params.dtw           = argv[++i]; }
+        else if (arg == "-ml"   || arg == "--max-len")       { params.max_len       = std::stoi(argv[++i]); }
         else if (arg == "-tdrz" || arg == "--tinydiarize")   { params.tinydiarize   = true; }
         else if (arg == "-sa"   || arg == "--save-audio")    { params.save_audio    = true; }
         else if (arg == "-ng"   || arg == "--no-gpu")        { params.use_gpu       = false; }
@@ -109,6 +113,8 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -l LANG,  --language LANG [%-7s] spoken language\n",                                params.language.c_str());
     fprintf(stderr, "  -m FNAME, --model FNAME   [%-7s] model path\n",                                     params.model.c_str());
     fprintf(stderr, "  -f FNAME, --file FNAME    [%-7s] text output file name\n",                          params.fname_out.c_str());
+    fprintf(stderr, "  -dtw MODEL, --dtw MODEL   [%-7s] compute token timestamps using DTW (e.g. base.en)\n", params.dtw.c_str());
+    fprintf(stderr, "  -ml N,    --max-len N     [%-7d] maximum segment length in characters\n",           params.max_len);
     fprintf(stderr, "  -tdrz,    --tinydiarize   [%-7s] enable tinydiarize (requires a tdrz model)\n",     params.tinydiarize ? "true" : "false");
     fprintf(stderr, "  -sa,      --save-audio    [%-7s] save the recorded audio to a file\n",              params.save_audio ? "true" : "false");
     fprintf(stderr, "  -ng,      --no-gpu        [%-7s] disable GPU inference\n",                          params.use_gpu ? "false" : "true");
@@ -328,6 +334,21 @@ int main(int argc, char ** argv) {
             wparams.beam_search.beam_size = params.beam_size;
 
             wparams.audio_ctx        = params.audio_ctx;
+            wparams.max_len          = params.max_len;
+
+            // DTW configuration
+            wparams.dtw_token_timestamps = !params.dtw.empty();
+            if (params.dtw == "tiny")        wparams.dtw_aheads_preset = WHISPER_DTW_AHEADS_PRESET_TINY;
+            if (params.dtw == "tiny.en")     wparams.dtw_aheads_preset = WHISPER_DTW_AHEADS_PRESET_TINY;
+            if (params.dtw == "base")        wparams.dtw_aheads_preset = WHISPER_DTW_AHEADS_PRESET_BASE;
+            if (params.dtw == "base.en")     wparams.dtw_aheads_preset = WHISPER_DTW_AHEADS_PRESET_BASE;
+            if (params.dtw == "small")       wparams.dtw_aheads_preset = WHISPER_DTW_AHEADS_PRESET_SMALL;
+            if (params.dtw == "small.en")    wparams.dtw_aheads_preset = WHISPER_DTW_AHEADS_PRESET_SMALL;
+            if (params.dtw == "medium")      wparams.dtw_aheads_preset = WHISPER_DTW_AHEADS_PRESET_MEDIUM;
+            if (params.dtw == "medium.en")   wparams.dtw_aheads_preset = WHISPER_DTW_AHEADS_PRESET_MEDIUM;
+            if (params.dtw == "large-v1")    wparams.dtw_aheads_preset = WHISPER_DTW_AHEADS_PRESET_LARGE_V1;
+            if (params.dtw == "large-v2")    wparams.dtw_aheads_preset = WHISPER_DTW_AHEADS_PRESET_LARGE_V2;
+            if (params.dtw == "large-v3")    wparams.dtw_aheads_preset = WHISPER_DTW_AHEADS_PRESET_LARGE_V3;
 
             wparams.tdrz_enable      = params.tinydiarize; // [TDRZ]
 
@@ -380,6 +401,19 @@ int main(int argc, char ** argv) {
 
                         if (whisper_full_get_segment_speaker_turn_next(ctx, i)) {
                             output += " [SPEAKER_TURN]";
+                        }
+                        
+                        // Print DTW Token Timestamps if enabled
+                        if (!params.dtw.empty()) {
+                            output += "\n";
+                            int n_tokens = whisper_full_n_tokens(ctx, i);
+                            for (int j = 0; j < n_tokens; ++j) {
+                                auto token = whisper_full_get_token_data(ctx, i, j);
+                                if (token.id >= whisper_token_eot(ctx)) continue;
+                                 char buf[128];
+                                 snprintf(buf, 128, "  [%s -> %s] %s\n", to_timestamp(token.t0, false).c_str(), to_timestamp(token.t1, false).c_str(), whisper_token_to_str(ctx, token.id));
+                                 output += std::string(buf);
+                            }
                         }
 
                         output += "\n";
