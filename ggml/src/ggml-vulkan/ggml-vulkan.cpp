@@ -4681,26 +4681,26 @@ static vk_device ggml_vk_get_device(size_t idx) {
         }
         device->float_controls_rte_fp16 = vk12_props.shaderRoundingModeRTEFloat16;
 
-        device->subgroup_basic = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
-                                 (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eBasic);
-        device->subgroup_arithmetic = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
-                                      (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eArithmetic);
+        device->subgroup_basic = (subgroup_props.supportedStages & vk::ShaderStageFlagBits::eCompute) &&
+                                 (subgroup_props.supportedOperations & vk::SubgroupFeatureFlagBits::eBasic);
+        device->subgroup_arithmetic = (subgroup_props.supportedStages & vk::ShaderStageFlagBits::eCompute) &&
+                                      (subgroup_props.supportedOperations & vk::SubgroupFeatureFlagBits::eArithmetic);
 #ifdef __APPLE__
         // Workaround for subgroup arithmetic failing on MoltenVK with AMD GPUs (issue 15846)
         if (device->vendor_id == VK_VENDOR_ID_AMD) {
             device->subgroup_arithmetic = false;
         }
 #endif
-        device->subgroup_shuffle = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
-                                   (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eShuffle);
-        device->subgroup_clustered = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
-                                     (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eClustered);
+        device->subgroup_shuffle = (subgroup_props.supportedStages & vk::ShaderStageFlagBits::eCompute) &&
+                                   (subgroup_props.supportedOperations & vk::SubgroupFeatureFlagBits::eShuffle);
+        device->subgroup_clustered = (subgroup_props.supportedStages & vk::ShaderStageFlagBits::eCompute) &&
+                                     (subgroup_props.supportedOperations & vk::SubgroupFeatureFlagBits::eClustered);
 
-        device->subgroup_ballot = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
-                                  (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eBallot);
+        device->subgroup_ballot = (subgroup_props.supportedStages & vk::ShaderStageFlagBits::eCompute) &&
+                                  (subgroup_props.supportedOperations & vk::SubgroupFeatureFlagBits::eBallot);
 
-        device->subgroup_vote = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
-                                (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eVote);
+        device->subgroup_vote = (subgroup_props.supportedStages & vk::ShaderStageFlagBits::eCompute) &&
+                                (subgroup_props.supportedOperations & vk::SubgroupFeatureFlagBits::eVote);
 
         const bool force_disable_f16 = getenv("GGML_VK_DISABLE_F16") != nullptr;
 
