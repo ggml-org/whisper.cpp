@@ -4794,7 +4794,9 @@ static vk_device ggml_vk_get_device(size_t idx) {
             throw std::runtime_error("Unsupported device");
         }
 
-        device_extensions.push_back("VK_KHR_16bit_storage");
+        if (fp16_storage) {
+            device_extensions.push_back("VK_KHR_16bit_storage");
+        }
 
 #ifdef GGML_VULKAN_VALIDATE
         device_extensions.push_back("VK_KHR_shader_non_semantic_info");
