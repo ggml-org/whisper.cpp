@@ -892,6 +892,7 @@ struct whisper_state {
     std::vector<whisper_token>   prompt_past1; // dynamic context from decoded output
 
     int lang_id = 0; // english by default
+    float lang_prob = 0.0f; // probability of the detected language
 
     std::string path_model; // populated by whisper_init_from_file_with_params()
 
@@ -4198,6 +4199,14 @@ float * whisper_get_logits_from_state(struct whisper_state * state) {
     return state->logits.data();
 }
 
+int whisper_get_lang_id_from_state(struct whisper_state * state) {
+    return state->lang_id;
+}
+
+float whisper_get_lang_prob_from_state(struct whisper_state * state) {
+    return state->lang_prob;
+}
+
 const char * whisper_token_to_str(struct whisper_context * ctx, whisper_token token) {
     return ctx->vocab.id_to_token.at(token).c_str();
 }
@@ -6831,9 +6840,10 @@ int whisper_full_with_state(
             return -3;
         }
         state->lang_id = lang_id;
+        state->lang_prob = probs[lang_id];
         params.language = whisper_lang_str(lang_id);
 
-        WHISPER_LOG_INFO("%s: auto-detected language: %s (p = %f)\n", __func__, params.language, probs[whisper_lang_id(params.language)]);
+        WHISPER_LOG_INFO("%s: auto-detected language: %s (p = %f)\n", __func__, params.language, probs[lang_id]);
         if (params.detect_language) {
             return 0;
         }
