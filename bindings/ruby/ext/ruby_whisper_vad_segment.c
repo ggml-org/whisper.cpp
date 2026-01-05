@@ -103,7 +103,7 @@ ruby_whisper_vad_segment_deconstruct_keys(VALUE self, VALUE keys)
       N_KEY_NAMES,
       sym_start_time,
       sym_end_time
-      );
+    );
     n_keys = N_KEY_NAMES;
   } else {
     n_keys = RARRAY_LEN(keys);

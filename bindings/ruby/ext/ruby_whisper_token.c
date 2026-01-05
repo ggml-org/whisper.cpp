@@ -253,7 +253,7 @@ static VALUE ruby_whisper_token_deconstruct_keys(VALUE self, VALUE keys)
       sym_start_time,
       sym_end_time,
       sym_text
-      );
+    );
     n_keys = N_KEY_NAMES;
   } else {
     n_keys = RARRAY_LEN(keys);

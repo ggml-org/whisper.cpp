@@ -227,7 +227,7 @@ ruby_whisper_segment_deconstruct_keys(VALUE self, VALUE keys)
       sym_text,
       sym_no_speech_prob,
       sym_speaker_turn_next
-      );
+    );
     n_keys = N_KEY_NAMES;
   } else {
     n_keys = RARRAY_LEN(keys);
