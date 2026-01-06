@@ -28,21 +28,29 @@ void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 #ifdef USE_CUDA_GRAPH
     cudaStreamCaptureStatus iscapturing;
     CUDA_CHECK(cudaStreamIsCapturing(stream, &iscapturing));
-    if ((nrows == 1) &&
-            // CUDA_GRAPHS_DISABLED
-            ((ncols > 65536) &&
-             ((ctx.cuda_graph->instance == nullptr) && (iscapturing == cudaStreamCaptureStatusNone) ||
-              ctx.cuda_graph->disable_due_to_gpu_arch || ctx.cuda_graph->disable_due_to_too_many_updates ||
-              ctx.cuda_graph->disable_due_to_failed_graph_capture)) ||
-        // CUDA_GRAPHS ENABLED
-        ((ncols > 32768) &&
-         !((ctx.cuda_graph->instance == nullptr) && (iscapturing == cudaStreamCaptureStatusNone) ||
-           ctx.cuda_graph->disable_due_to_gpu_arch || ctx.cuda_graph->disable_due_to_too_many_updates ||
-           ctx.cuda_graph->disable_due_to_failed_graph_capture))) {
-#else
-    if ((nrows == 1) &&
-        (ncols > 65536)) {
+    if (((ctx.cuda_graph->instance == nullptr) && (iscapturing == cudaStreamCaptureStatusNone)) ||
+        (ctx.cuda_graph->disable_due_to_gpu_arch || ctx.cuda_graph->disable_due_to_too_many_updates ||
+              ctx.cuda_graph->disable_due_to_failed_graph_capture)) {
 #endif // USE_CUDA_GRAPH
+      if ((nrows == 1) && (ncols > 65536)) {
+        // CUDA_GRAPHS_DISABLED
+        // Single row - use device-wide reduction
+        size_t           tmp_size = 0;
+        ggml_cuda_pool & pool     = ctx.pool();
+
+        DeviceReduce::Sum(nullptr, tmp_size, src0_d, dst_d, ncols, stream);
+
+        ggml_cuda_pool_alloc<uint8_t> tmp_alloc(pool, tmp_size);
+        DeviceReduce::Sum(tmp_alloc.ptr, tmp_size, src0_d, dst_d, ncols, stream);
+
+        // Divide by ncols
+        divide_by_count<float>/*<<<1, 1, 0, stream>>>*/(dst_d, ncols);
+        return;
+      }
+    }
+#ifdef USE_CUDA_GRAPH
+    else if ((nrows == 1) && (ncols > 32768)) {
+        // CUDA_GRAPHS ENABLED
         // Single row - use device-wide reduction
         size_t           tmp_size = 0;
         ggml_cuda_pool & pool     = ctx.pool();
@@ -56,6 +64,7 @@ void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         divide_by_count<float><<<1, 1, 0, stream>>>(dst_d, ncols);
         return;
     }
+#endif // USE_CUDA_GRAPH
 #endif // GGML_CUDA_USE_CUB
 
     const dim3 block_nums(nrows, 1, 1);
