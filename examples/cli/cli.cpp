@@ -82,7 +82,11 @@ struct whisper_params {
 
     std::string language  = "en";
     std::string prompt;
+#ifdef __linux__
+    std::string font_path = "/usr/share/fonts/truetype/noto/NotoMono-Regular.ttf";
+#else
     std::string font_path = "/System/Library/Fonts/Supplemental/Courier New Bold.ttf";
+#endif
     std::string model     = "models/ggml-base.en.bin";
     std::string grammar;
     std::string grammar_rule;
