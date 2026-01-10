@@ -79,6 +79,7 @@ if (WHISPER_COREML)
         )
 
     set_target_properties(${TARGET} PROPERTIES FOLDER "libs")
+    install(TARGETS ${TARGET} LIBRARY)
 endif()
 
 if (WHISPER_OPENVINO)
