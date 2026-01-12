@@ -31,9 +31,8 @@ void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     if (((ctx.cuda_graph->instance == nullptr) && (iscapturing == cudaStreamCaptureStatusNone) ||
         (ctx.cuda_graph->disable_due_to_gpu_arch || ctx.cuda_graph->disable_due_to_too_many_updates ||
               ctx.cuda_graph->disable_due_to_failed_graph_capture))) {
-      if ((nrows == 1)
 #endif // USE_CUDA_GRAPH
-      if (ncols > 65536)) {
+      if ((nrows == 1) && (ncols > 65536)) {
         // CUDA_GRAPHS_DISABLED
         // Single row - use device-wide reduction
         size_t           tmp_size = 0;
