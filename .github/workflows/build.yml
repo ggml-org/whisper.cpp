@@ -1252,7 +1252,7 @@ jobs:
           ./models/download-ggml-model.sh tiny.en
           cmake -B build
           cmake --build build --config Release
-          ./build/bin/quantize models/ggml-tiny.en.bin models/ggml-tiny.en-q4_0.bin q4_0
+          ./build/bin/whisper-quantize models/ggml-tiny.en.bin models/ggml-tiny.en-q4_0.bin q4_0
 
   release:
     if: ${{ github.event.inputs.create_release == 'true' || github.event.inputs.pre_release_tag != '' || startsWith(github.ref, 'refs/tags/v') }}
