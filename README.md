@@ -312,6 +312,35 @@ This can result in significant speedup in encoder performance. Here are the inst
 
 For more information about the OpenVINO implementation please refer to PR [#1037](https://github.com/ggml-org/whisper.cpp/pull/1037).
 
+## VitisAI encoder support
+
+On AMD Ryzen AI NPU devices, you can run the Encoder via the VitisAI plugin to significantly accelerate the whisper models.
+
+- Prepare the AMD runtime packages (required before building):
+
+  - Obtain the XRT package and the FlexmlRT package from AMD. Both are distributed as tarballs or wheels.
+  - Copy the downloaded archives to a local path, extract them, and run the setup script from each extracted package in your shell (for example `source /path/to/xrt/setup.sh` and `source /path/to/flexmlrt/setup.sh`). Run these in every new shell you use to build or run `whisper.cpp`.
+
+- Fetch the prebuilt VitisAI encoder cache:
+
+  - Download the appropriate Whisper encoder `.rai` cache for your model size from the AMD collection on Hugging Face: https://huggingface.co/collections/amd/ryzen-ai-16-whisper-npu-optimized-onnx-models
+  - Place and rename the downloaded `.rai` file as `<gguf_model>-encoder-vitisai.rai` alongside your ggml model files `<gguf_model>.bin`.
+
+- Build `whisper.cpp` with VitisAI support:
+
+  ```bash
+  cmake -B build -DWHISPER_VITISAI=1
+  cmake --build build -j --config Release
+  ```
+
+- Run the examples as usual. For example:
+
+  ```text
+  $ ./build/bin/whisper-cli -m models/ggml-base.en.bin -f samples/jfk.wav
+  ```
+
+The VitisAI artifact from Huggingface is already optimized for Ryzen AI NPUs, there is no slow compilation needed. The acceleration advantage should be seen from first run itself apart from CPU caching overheads.
+
 ## NVIDIA GPU support
 
 With NVIDIA cards the processing of the models is done efficiently on the GPU via cuBLAS and custom CUDA kernels.
