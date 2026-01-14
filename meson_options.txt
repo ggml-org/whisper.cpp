@@ -1,0 +1,10 @@
+option('no_avx', type: 'boolean', value: false, description: 'Disable AVX')
+option('no_avx2', type: 'boolean', value: false, description: 'Disable AVX2')
+option('no_fma', type: 'boolean', value: false, description: 'Disable FMA')
+option('no_f16C', type: 'boolean', value: false, description: 'Disable F16c')
+option(
+    'build_examples',
+    type: 'boolean',
+    value: false,
+    description: 'Build examples',
+)
