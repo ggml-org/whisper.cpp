@@ -322,7 +322,21 @@ compile_count_guard acquire_compile_slot() {
 }
 
 void string_to_spv_func(std::string name, std::string in_path, std::string out_path, std::map<std::string, std::string> defines, bool coopmat, bool dep_file, compile_count_guard slot) {
-    std::string target_env = (name.find("_cm2") != std::string::npos) ? "--target-env=vulkan1.3" : "--target-env=vulkan1.2";
+    std::string target_env;
+    bool is_vulkan11;
+#ifdef GGML_VULKAN_MIN_1_1
+    // Vulkan 1.1 compatibility mode
+    if (name.find("_cm2") != std::string::npos) {
+        target_env = "--target-env=vulkan1.3";
+        is_vulkan11 = false;
+    } else {
+        target_env = "--target-env=vulkan1.1";
+        is_vulkan11 = true;
+    }
+#else
+    target_env = (name.find("_cm2") != std::string::npos) ? "--target-env=vulkan1.3" : "--target-env=vulkan1.2";
+    is_vulkan11 = false;
+#endif
 
     #ifdef _WIN32
         std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, "\"" + in_path + "\"", "-o", "\"" + out_path + "\""};
@@ -333,7 +347,13 @@ void string_to_spv_func(std::string name, std::string in_path, std::string out_p
     // disable spirv-opt for coopmat shaders for https://github.com/ggerganov/llama.cpp/issues/10734
     // disable spirv-opt for bf16 shaders for https://github.com/ggml-org/llama.cpp/issues/15344
     // disable spirv-opt for rope shaders for https://github.com/ggml-org/llama.cpp/issues/16860
-    if (!coopmat && name.find("bf16") == std::string::npos && name.find("rope") == std::string::npos) {
+    // disable spirv-opt for RTE shaders with vulkan1.1: spirv-opt rejects RoundingModeRTE with vulkan1.1 target
+    bool has_rte = (name.find("_rte") != std::string::npos) ||
+                   (defines.find("RTE16") != defines.end() && defines.at("RTE16") == "1");
+    if (!coopmat &&
+        name.find("bf16") == std::string::npos &&
+        name.find("rope") == std::string::npos &&
+        !(has_rte && is_vulkan11)) {
         cmd.push_back("-O");
     }
 
@@ -350,6 +370,11 @@ void string_to_spv_func(std::string name, std::string in_path, std::string out_p
     #ifdef GGML_VULKAN_SHADER_DEBUG_INFO
         cmd.push_back("-g");
     #endif
+
+    // Need SPV_KHR_float_controls extension for Vulkan 1.1 RTE shaders
+    if (is_vulkan11 && has_rte) {
+        cmd.push_back("-DVULKAN11_RTE=1");
+    }
 
     for (const auto& define : defines) {
         cmd.push_back("-D" + define.first + "=" + define.second);
