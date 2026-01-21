@@ -45,6 +45,15 @@ struct whisper_params {
 
 void whisper_print_usage(int argc, char ** argv, const whisper_params & params);
 
+static const char * get_next_arg(int & i, int argc, char ** argv, const char * flag, whisper_params & params) {
+    if (i + 1 < argc) {
+        return argv[++i];
+    }
+    fprintf(stderr, "error: %s requires an argument\n", flag);
+    whisper_print_usage(argc, argv, params);
+    exit(1);
+}
+
 static bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -53,23 +62,23 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
             whisper_print_usage(argc, argv, params);
             exit(0);
         }
-        else if (arg == "-t"    || arg == "--threads")       { params.n_threads     = std::stoi(argv[++i]); }
-        else if (                  arg == "--step")          { params.step_ms       = std::stoi(argv[++i]); }
-        else if (                  arg == "--length")        { params.length_ms     = std::stoi(argv[++i]); }
-        else if (                  arg == "--keep")          { params.keep_ms       = std::stoi(argv[++i]); }
-        else if (arg == "-c"    || arg == "--capture")       { params.capture_id    = std::stoi(argv[++i]); }
-        else if (arg == "-mt"   || arg == "--max-tokens")    { params.max_tokens    = std::stoi(argv[++i]); }
-        else if (arg == "-ac"   || arg == "--audio-ctx")     { params.audio_ctx     = std::stoi(argv[++i]); }
-        else if (arg == "-bs"   || arg == "--beam-size")     { params.beam_size     = std::stoi(argv[++i]); }
-        else if (arg == "-vth"  || arg == "--vad-thold")     { params.vad_thold     = std::stof(argv[++i]); }
-        else if (arg == "-fth"  || arg == "--freq-thold")    { params.freq_thold    = std::stof(argv[++i]); }
+        else if (arg == "-t"    || arg == "--threads")       { params.n_threads     = std::stoi(get_next_arg(i, argc, argv, arg.c_str(), params)); }
+        else if (                  arg == "--step")          { params.step_ms       = std::stoi(get_next_arg(i, argc, argv, arg.c_str(), params)); }
+        else if (                  arg == "--length")        { params.length_ms     = std::stoi(get_next_arg(i, argc, argv, arg.c_str(), params)); }
+        else if (                  arg == "--keep")          { params.keep_ms       = std::stoi(get_next_arg(i, argc, argv, arg.c_str(), params)); }
+        else if (arg == "-c"    || arg == "--capture")       { params.capture_id    = std::stoi(get_next_arg(i, argc, argv, arg.c_str(), params)); }
+        else if (arg == "-mt"   || arg == "--max-tokens")    { params.max_tokens    = std::stoi(get_next_arg(i, argc, argv, arg.c_str(), params)); }
+        else if (arg == "-ac"   || arg == "--audio-ctx")     { params.audio_ctx     = std::stoi(get_next_arg(i, argc, argv, arg.c_str(), params)); }
+        else if (arg == "-bs"   || arg == "--beam-size")     { params.beam_size     = std::stoi(get_next_arg(i, argc, argv, arg.c_str(), params)); }
+        else if (arg == "-vth"  || arg == "--vad-thold")     { params.vad_thold     = std::stof(get_next_arg(i, argc, argv, arg.c_str(), params)); }
+        else if (arg == "-fth"  || arg == "--freq-thold")    { params.freq_thold    = std::stof(get_next_arg(i, argc, argv, arg.c_str(), params)); }
         else if (arg == "-tr"   || arg == "--translate")     { params.translate     = true; }
         else if (arg == "-nf"   || arg == "--no-fallback")   { params.no_fallback   = true; }
         else if (arg == "-ps"   || arg == "--print-special") { params.print_special = true; }
         else if (arg == "-kc"   || arg == "--keep-context")  { params.no_context    = false; }
-        else if (arg == "-l"    || arg == "--language")      { params.language      = argv[++i]; }
-        else if (arg == "-m"    || arg == "--model")         { params.model         = argv[++i]; }
-        else if (arg == "-f"    || arg == "--file")          { params.fname_out     = argv[++i]; }
+        else if (arg == "-l"    || arg == "--language")      { params.language      = get_next_arg(i, argc, argv, arg.c_str(), params); }
+        else if (arg == "-m"    || arg == "--model")         { params.model         = get_next_arg(i, argc, argv, arg.c_str(), params); }
+        else if (arg == "-f"    || arg == "--file")          { params.fname_out     = get_next_arg(i, argc, argv, arg.c_str(), params); }
         else if (arg == "-tdrz" || arg == "--tinydiarize")   { params.tinydiarize   = true; }
         else if (arg == "-sa"   || arg == "--save-audio")    { params.save_audio    = true; }
         else if (arg == "-ng"   || arg == "--no-gpu")        { params.use_gpu       = false; }
