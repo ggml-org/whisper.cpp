@@ -189,6 +189,12 @@ func (p *Params) SetInitialPrompt(prompt string) {
 	p.initial_prompt = C.CString(prompt)
 }
 
+// SetCarryInitialPrompt if true, always prepend initial_prompt to every decode window
+// (may reduce conditioning on previous text)
+func (p *Params) SetCarryInitialPrompt(v bool) {
+	p.carry_initial_prompt = toBool(v)
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // PRIVATE METHODS
 

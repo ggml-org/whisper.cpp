@@ -64,6 +64,7 @@ func (w *Parameters) SetMaxContext(n int)              { w.p.SetMaxContext(n) }
 func (w *Parameters) SetBeamSize(n int)                { w.p.SetBeamSize(n) }
 func (w *Parameters) SetEntropyThold(t float32)        { w.p.SetEntropyThold(t) }
 func (w *Parameters) SetInitialPrompt(prompt string)   { w.p.SetInitialPrompt(prompt) }
+func (w *Parameters) SetCarryInitialPrompt(v bool)     { w.p.SetCarryInitialPrompt(v) }
 func (w *Parameters) SetTemperature(t float32)         { w.p.SetTemperature(t) }
 func (w *Parameters) SetTemperatureFallback(t float32) { w.p.SetTemperatureFallback(t) }
 func (w *Parameters) SetNoContext(v bool)              { w.p.SetNoContext(v) }

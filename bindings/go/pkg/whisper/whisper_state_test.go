@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const testModelPathState = "../../models/ggml-small.en.bin"
+const testModelPathState = "../../models/ggml-tiny.en.bin"
 
 func TestWhisperState_NilWrapper(t *testing.T) {
 	ws := newWhisperState(nil)

@@ -111,6 +111,24 @@ type Context interface {
 	// Get detected language
 	DetectedLanguage() string
 
+	// Voice Activity Detection (VAD) methods
+	// Deprecated: Use Params().SetVAD() instead
+	SetVAD(bool)
+	// Deprecated: Use Params().SetVADModelPath() instead
+	SetVADModelPath(string)
+	// Deprecated: Use Params().SetVADThreshold() instead
+	SetVADThreshold(float32)
+	// Deprecated: Use Params().SetVADMinSpeechMs() instead
+	SetVADMinSpeechMs(int)
+	// Deprecated: Use Params().SetVADMinSilenceMs() instead
+	SetVADMinSilenceMs(int)
+	// Deprecated: Use Params().SetVADMaxSpeechSec() instead
+	SetVADMaxSpeechSec(float32)
+	// Deprecated: Use Params().SetVADSpeechPadMs() instead
+	SetVADSpeechPadMs(int)
+	// Deprecated: Use Params().SetVADSamplesOverlap() instead
+	SetVADSamplesOverlap(float32)
+
 	// Process mono audio data and return any errors.
 	// If defined, newly generated segments are passed to the
 	// callback function during processing.

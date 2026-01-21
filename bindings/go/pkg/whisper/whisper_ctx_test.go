@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const testModelPathCtx = "../../models/ggml-small.en.bin"
+const testModelPathCtx = "../../models/ggml-tiny.en.bin"
 
 func TestWhisperCtx_NilWrapper(t *testing.T) {
 	wctx := newCtxAccessor(nil)

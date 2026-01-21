@@ -15,12 +15,12 @@ import (
 )
 
 const (
-	ModelPath  = "models/ggml-small.en.bin"
+	ModelPath  = "models/ggml-tiny.en.bin"
 	SamplePath = "samples/jfk.wav"
 )
 
 func TestMain(m *testing.M) {
-	whisper.DisableLogs()
+	// whisper.DisableLogs() // temporarily disabled to see error messages
 	os.Exit(m.Run())
 }
 

@@ -392,6 +392,47 @@ func (context *StatefulContext) SetTranslate(v bool) {
 	context.params.SetTranslate(v)
 }
 
+// VAD methods - implement Context interface
+// Deprecated: Use Params().SetVAD() instead
+func (context *StatefulContext) SetVAD(v bool) {
+	context.params.SetVAD(v)
+}
+
+// Deprecated: Use Params().SetVADModelPath() instead
+func (context *StatefulContext) SetVADModelPath(path string) {
+	context.params.SetVADModelPath(path)
+}
+
+// Deprecated: Use Params().SetVADThreshold() instead
+func (context *StatefulContext) SetVADThreshold(t float32) {
+	context.params.SetVADThreshold(t)
+}
+
+// Deprecated: Use Params().SetVADMinSpeechMs() instead
+func (context *StatefulContext) SetVADMinSpeechMs(ms int) {
+	context.params.SetVADMinSpeechMs(ms)
+}
+
+// Deprecated: Use Params().SetVADMinSilenceMs() instead
+func (context *StatefulContext) SetVADMinSilenceMs(ms int) {
+	context.params.SetVADMinSilenceMs(ms)
+}
+
+// Deprecated: Use Params().SetVADMaxSpeechSec() instead
+func (context *StatefulContext) SetVADMaxSpeechSec(s float32) {
+	context.params.SetVADMaxSpeechSec(s)
+}
+
+// Deprecated: Use Params().SetVADSpeechPadMs() instead
+func (context *StatefulContext) SetVADSpeechPadMs(ms int) {
+	context.params.SetVADSpeechPadMs(ms)
+}
+
+// Deprecated: Use Params().SetVADSamplesOverlap() instead
+func (context *StatefulContext) SetVADSamplesOverlap(sec float32) {
+	context.params.SetVADSamplesOverlap(sec)
+}
+
 // Make stateful context compatible with the old deprecated interface for
 // the simple migration into multi-threaded processing.
 var _ Context = (*StatefulContext)(nil)

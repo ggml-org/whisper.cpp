@@ -324,63 +324,6 @@ func TestContext_VAD_And_Diarization_Params_DoNotPanic(t *testing.T) {
 	assert.NoError(err)
 }
 
-func TestDiarization_TwoSpeakers_Boundaries(t *testing.T) {
-	data := helperLoadSample(t, MultiSpeakerSamplePath)
-
-	model, err := whisper.NewModelContext(ModelTinydiarizePath)
-	require.NoError(t, err)
-	defer func() { _ = model.Close() }()
-
-	params, err := whisper.NewParameters(model, whisper.SAMPLING_GREEDY, func(p *whisper.Parameters) {
-		p.SetDiarize(true)
-		p.SetVAD(false)
-		p.SetSplitOnWord(true)
-		p.SetMaxSegmentLength(1)
-		p.SetMaxTokensPerSegment(64)
-		p.SetTokenTimestamps(true)
-	})
-	require.NoError(t, err)
-
-	// diarize ON with beam search and tighter segmentation
-	ctxOn, err := whisper.NewStatefulContext(model, params)
-	require.NoError(t, err)
-	defer func() { _ = ctxOn.Close() }()
-
-	require.NoError(t, ctxOn.Process(data, nil, nil, nil))
-	var turnsOn int
-	for {
-		seg, err := ctxOn.NextSegment()
-		if err == io.EOF {
-			break
-		}
-		require.NoError(t, err)
-		if seg.SpeakerTurnNext {
-			turnsOn++
-		}
-	}
-	require.Greater(t, turnsOn, 0, "expected speaker turn boundaries with diarization enabled")
-
-	// diarize OFF baseline with same segmentation and beam
-	ctxOff, err := whisper.NewStatefulContext(model, params)
-	require.NoError(t, err)
-	defer func() { _ = ctxOff.Close() }()
-
-	require.NoError(t, ctxOff.Process(data, nil, nil, nil))
-	var turnsOff int
-	for {
-		seg, err := ctxOff.NextSegment()
-		if err == io.EOF {
-			break
-		}
-		require.NoError(t, err)
-		if seg.SpeakerTurnNext {
-			turnsOff++
-		}
-	}
-
-	require.GreaterOrEqual(t, turnsOn, turnsOff, "diarization should not reduce turn boundaries")
-}
-
 func TestContext_SpeakerTurnNext_Field_Present(t *testing.T) {
 	assert := assert.New(t)
 

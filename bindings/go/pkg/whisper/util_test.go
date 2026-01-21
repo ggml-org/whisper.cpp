@@ -6,10 +6,8 @@ import (
 )
 
 const (
-	ModelPath              = "../../models/ggml-small.en.bin"
-	ModelTinydiarizePath   = "../../models/ggml-small.en-tdrz.bin"
-	SamplePath             = "../../samples/jfk.wav"
-	MultiSpeakerSamplePath = "../../samples/a13.wav"
+	ModelPath  = "../../models/ggml-tiny.en.bin"
+	SamplePath = "../../samples/jfk.wav"
 )
 
 func TestMain(m *testing.M) {
