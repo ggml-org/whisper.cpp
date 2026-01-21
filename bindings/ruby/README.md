@@ -334,7 +334,7 @@ VAD feature itself is useful. You can use it separately from ASR:
 vad = Whisper::VAD::Context.new("silero-v6.2.0")
 vad
   .detect("path/to/audio.wav", Whisper::VAD::Params.new)
-  .each_with_index do |segment, index|
+  .each.with_index do |segment, index|
     segment => {start_time: st, end_time: ed} # `Segment` responds to `#deconstruct_keys`
 
     puts "[%{nth}: %{st} --> %{ed}]" % {nth: index + 1, st:, ed:}
