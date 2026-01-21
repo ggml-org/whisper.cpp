@@ -5447,6 +5447,9 @@ static void ggml_vk_print_gpu_info(size_t idx) {
 
     const vk_device_architecture device_architecture = get_device_architecture(physical_device);
 
+    vk::PhysicalDeviceProperties device_props = physical_device.getProperties();
+    const bool device_is_vulkan_12 = device_props.apiVersion >= VK_API_VERSION_1_2;
+
     const char* GGML_VK_DISABLE_F16 = getenv("GGML_VK_DISABLE_F16");
     bool force_disable_f16 = GGML_VK_DISABLE_F16 != nullptr;
 
@@ -5475,18 +5478,26 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     device_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     device_features2.pNext = nullptr;
 
-    VkPhysicalDeviceVulkan11Features vk11_features;
-    vk11_features.pNext = nullptr;
-    vk11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
-    device_features2.pNext = &vk11_features;
+    VkPhysicalDeviceVulkan11Features vk11_features {};
+    VkPhysicalDeviceVulkan12Features vk12_features {};
+    VkPhysicalDeviceShaderFloat16Int8Features float16_int8_features {};
 
-    VkPhysicalDeviceVulkan12Features vk12_features;
-    vk12_features.pNext = nullptr;
-    vk12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-    vk11_features.pNext = &vk12_features;
+    if (device_is_vulkan_12) {
+        vk11_features.pNext = nullptr;
+        vk11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+        device_features2.pNext = &vk11_features;
 
-    // Pointer to the last chain element
-    last_struct = (VkBaseOutStructure *)&vk12_features;
+        vk12_features.pNext = nullptr;
+        vk12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        vk11_features.pNext = &vk12_features;
+
+        last_struct = (VkBaseOutStructure *)&vk12_features;
+    } else {
+        float16_int8_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES;
+        float16_int8_features.pNext = nullptr;
+        device_features2.pNext = &float16_int8_features;
+        last_struct = (VkBaseOutStructure *)&float16_int8_features;
+    }
 
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
     VkPhysicalDeviceCooperativeMatrixFeaturesKHR coopmat_features;
@@ -5518,7 +5529,8 @@ static void ggml_vk_print_gpu_info(size_t idx) {
 
     vkGetPhysicalDeviceFeatures2(physical_device, &device_features2);
 
-    fp16 = fp16 && vk12_features.shaderFloat16;
+    bool shader_float16_supported = device_is_vulkan_12 ? vk12_features.shaderFloat16 : float16_int8_features.shaderFloat16;
+    fp16 = fp16 && shader_float16_supported;
 
 #if defined(VK_KHR_shader_bfloat16)
     bool bf16 = bfloat16_support && bfloat16_features.shaderBFloat16Type;
