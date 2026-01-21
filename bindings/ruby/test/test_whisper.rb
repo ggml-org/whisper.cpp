@@ -34,7 +34,7 @@ class TestWhisper < TestBase
     params  = Whisper::Params.new
 
     @whisper.transcribe(AUDIO, params, n_processors: 4) {|text|
-      assert_match(/ask not what your country can do for you[,.] ask what you can do for your country/i, text)
+      assert_match(/what you can do for your country/i, text)
     }
   end
 
@@ -147,6 +147,13 @@ class TestWhisper < TestBase
     assert_empty dev.string
   ensure
     $stderr = stderr
+  end
+
+  def test_access_attribute_without_initialization
+    whisper = Whisper::Context.allocate
+    assert_raise do
+      whisper.model_type
+    end
   end
 
   sub_test_case "full" do

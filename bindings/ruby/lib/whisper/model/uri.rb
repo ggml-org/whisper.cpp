@@ -94,7 +94,8 @@ module Whisper
       end
 
       def show_progress(current, size)
-        progress_rate_available = size && $stderr.tty? && $stderr.winsize[1] >= line.size
+        line_size = 47
+        progress_rate_available = size && $stderr.tty? && $stderr.winsize[1] >= line_size
 
         unless @prev
           @prev = Time.now
@@ -181,7 +182,6 @@ module Whisper
       base-q8_0
       small
       small.en
-      small.en-tdrz
       small-q5_1
       small.en-q5_1
       small-q8_0
@@ -204,27 +204,26 @@ module Whisper
     }
 
     %w[
+      small.en-tdrz
+    ].each do |name|
+      @pre_converted_models[name] = URI.new("https://huggingface.co/akashmjn/tinydiarize-whisper.cpp/resolve/main/ggml-#{name}.bin")
+    end
+
+    %w[
       silero-v5.1.2
+      silero-v6.2.0
     ].each do |name|
       @pre_converted_models[name] = URI.new("https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-#{name}.bin")
     end
 
-    @coreml_compiled_models = %w[
-      tiny
-      tiny.en
-      base
-      base.en
-      small
-      small.en
-      medium
-      medium.en
-      large-v1
-      large-v2
-      large-v3
-      large-v3-turbo
-    ].each_with_object({}) do |name, models|
-      models[@pre_converted_models[name]] = ZipURI.new("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-#{name}-encoder.mlmodelc.zip")
-    end
+    @coreml_compiled_models = @pre_converted_models.each_with_object({}) {|(name, uri), models|
+      next if name.end_with?("-tdrz") || name.start_with?("silero-")
+
+      if matched = name.match(/\A(?<name>.*)-q\d_\d\z/)
+        name = matched[:name]
+      end
+      models[uri] = ZipURI.new("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-#{name}-encoder.mlmodelc.zip")
+    }
 
     class << self
       attr_reader :pre_converted_models, :coreml_compiled_models

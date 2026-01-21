@@ -138,6 +138,7 @@ module Whisper
       ?max_len: Integer,
       ?split_on_word: boolish,
       ?initial_prompt: string | nil,
+      ?carry_initial_prompt: boolish,
       ?diarize: boolish,
       ?offset: Integer,
       ?duration: Integer,
@@ -236,6 +237,7 @@ module Whisper
     def split_on_word: () -> (true | false)
 
     def initial_prompt=: (_ToS) -> _ToS
+    def carry_initial_prompt=: (boolish) -> boolish
 
     # Tokens to provide to the whisper decoder as initial prompt
     # these are prepended to any existing text context from a previous call
@@ -243,6 +245,7 @@ module Whisper
     # Maximum of whisper_n_text_ctx()/2 tokens are used (typically 224).
     #
     def initial_prompt: () -> (String | nil)
+    def carry_initial_prompt: () -> (true | false)
 
     def diarize=: (boolish) -> boolish
 
@@ -431,7 +434,8 @@ module Whisper
       end_time: (Integer | nil),
       text: (String | nil),
       no_speech_prob: (Float | nil),
-      speaker_turn_next: (true | false | nil)
+      speaker_turn_next: (true | false | nil),
+      n_tokens: (Integer | nil)
     }
 
     # Start time in milliseconds.
@@ -443,12 +447,31 @@ module Whisper
     def end_time: () -> Integer
 
     # Whether the next segment is predicted as a speaker turn.
+    #
     def speaker_turn_next?: () -> (true | false)
 
     def text: () -> String
     def no_speech_prob: () -> Float
+
+    # Get number of tokens in the segment
+    #
+    def n_tokens: () -> Integer
+
+    # Yields each Whisper::Token:
+    #
+    #   whisper.each_segment.first.each_token do |token|
+    #     p token
+    #   end
+    #
+    # Returns an Enumerator if no block is given:
+    #
+    #   whisper.each_segment.first.each_token.to_a # => [#<Whisper::Token>, ...]
+    #
+    def each_token: { (Token) -> void } -> void
+                  | () -> Enumerator[Token]
     def to_srt_cue: () -> String
     def to_webvtt_cue: () -> String
+
 
     #  Possible keys: :start_time, :end_time, :text, :no_speech_prob, :speaker_turn_next
     #
@@ -457,7 +480,77 @@ module Whisper
     #
     #        puts "[#{start_time} --> #{end_time}] #{text} (no speech prob: #{no_speech_prob}#{speaker_turn_next ? ', speaker turns next' : ''})"
     #      end
-    def deconstruct_keys: (Array[:start_time | :end_time | :text | :no_speech_prob | :speaker_turn_next] | nil) -> deconstructed_keys
+    def deconstruct_keys: (Array[:start_time | :end_time | :text | :no_speech_prob | :speaker_turn_next | :n_tokens] | nil) -> deconstructed_keys
+  end
+
+  module Token
+    type deconstructed_keys = {
+      id: (Integer | nil),
+      tid: (Integer | nil),
+      probability: (Float | nil),
+      log_probability: (Float | nil),
+      pt: (Float | nil),
+      ptsum: (Float | nil),
+      t_dtw: (Integer | nil),
+      voice_length: (Float | nil),
+      text: (String | nil),
+      start_time: (Integer | nil),
+      end_time: (Integer | nil),
+    }
+
+    # Token ID.
+    #
+    def id: () -> Integer
+
+    # Forced timestamp token ID.
+    #
+    def tid: () -> Integer
+
+    # Probability of the token.
+    #
+    def probability: () -> Float
+
+    # Log probability of the token.
+    #
+    def log_probability: () -> Float
+
+    # Probability of the timestamp token.
+    #
+    def pt: () -> Float
+
+    # Sum of probability of all timestamp tokens.
+    #
+    def ptsum: () -> Float
+
+    # [EXPERIMENTAL] Token-level timestamps with DTW
+    #
+    # Do not use if you haven't computed token-level timestamps with dtw.
+    # Roughly corresponds to the moment in audio in which the token was output.
+    #
+    def t_dtw: () -> Integer
+
+    # Voice length of the token.
+    #
+    def voice_length: () -> Float
+
+    # Start time of the token.
+    #
+    # Token-level timestamp data.
+    # Do not use if you haven't computed token-level timestamps.
+    #
+    def start_time: () -> Integer
+
+    # End time of the token.
+    #
+    # Token-level timestamp data.
+    # Do not use if you haven't computed token-level timestamps.
+    #
+    def end_time: () -> Integer
+
+    # Get the token text of the token.
+    #
+    def text: () -> String
+    def deconstruct_keys: (Array[:id | :tid | :probability | :log_probability | :pt | :ptsum | :t_dtw | :voice_length | :start_time | :end_time | :text] | nil) -> deconstructed_keys
   end
 
   module VAD
@@ -506,6 +599,30 @@ module Whisper
 
       def samples_overlap: () -> Float
       def ==: (Params) -> (true | false)
+    end
+
+    class Context
+      def self.new: (String | path | ::URI::HTTP model_name_or_path) -> instance
+      def detect: (path wav_file_path, Params) -> Segments
+    end
+
+    class Segments
+      include Enumerable[Segment]
+
+      def each: { (Segment) -> void } -> void
+              | () -> Enumerator[Segment]
+      def length: -> Integer
+    end
+
+    class Segment
+      type deconstructed_keys = {
+        start_time: (Integer | nil),
+        end_time: (Integer | nil),
+      }
+
+      def start_time: () -> Integer
+      def end_time: () -> Integer
+      def deconstruct_keys: (Array[:start_time | :end_time] | nil) -> deconstructed_keys
     end
   end
 

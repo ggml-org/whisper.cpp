@@ -16,6 +16,7 @@ class TestParams < TestBase
     :max_len,
     :split_on_word,
     :initial_prompt,
+    :carry_initial_prompt,
     :diarize,
     :offset,
     :duration,
@@ -119,6 +120,13 @@ class TestParams < TestBase
     assert !@params.print_timestamps
   end
 
+  def test_carry_initial_prompt
+    @params.carry_initial_prompt = true
+    assert @params.carry_initial_prompt
+    @params.carry_initial_prompt = false
+    assert !@params.carry_initial_prompt
+  end
+
   def test_suppress_blank
     @params.suppress_blank = true
     assert @params.suppress_blank
@@ -210,12 +218,12 @@ class TestParams < TestBase
 
   def test_vad_model_path
     assert_nil @params.vad_model_path
-    @params.vad_model_path = "silero-v5.1.2"
-    assert_equal Whisper::Model.pre_converted_models["silero-v5.1.2"].to_path, @params.vad_model_path
+    @params.vad_model_path = "silero-v6.2.0"
+    assert_equal Whisper::Model.pre_converted_models["silero-v6.2.0"].to_path, @params.vad_model_path
   end
 
   def test_vad_model_path_with_nil
-    @params.vad_model_path = "silero-v5.1.2"
+    @params.vad_model_path = "silero-v6.2.0"
     @params.vad_model_path = nil
     assert_nil @params.vad_model_path
   end
@@ -227,13 +235,13 @@ class TestParams < TestBase
   end
 
   def test_vad_model_path_with_URI_string
-    @params.vad_model_path = "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin"
-    assert_equal @params.vad_model_path, Whisper::Model.pre_converted_models["silero-v5.1.2"].to_path
+    @params.vad_model_path = "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin"
+    assert_equal @params.vad_model_path, Whisper::Model.pre_converted_models["silero-v6.2.0"].to_path
   end
 
   def test_vad_model_path_with_URI
-    @params.vad_model_path = URI("https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin")
-    assert_equal @params.vad_model_path, Whisper::Model.pre_converted_models["silero-v5.1.2"].to_path
+    @params.vad_model_path = URI("https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin")
+    assert_equal @params.vad_model_path, Whisper::Model.pre_converted_models["silero-v6.2.0"].to_path
   end
 
   def test_vad_params
@@ -281,7 +289,7 @@ class TestParams < TestBase
             in [/_user_data\Z/, *]
               Object.new
             in [:vad_model_path, *]
-              Whisper::Model.pre_converted_models["silero-v5.1.2"].to_path
+              Whisper::Model.pre_converted_models["silero-v6.2.0"].to_path
             in [:vad_params, *]
               Whisper::VAD::Params.new
             end

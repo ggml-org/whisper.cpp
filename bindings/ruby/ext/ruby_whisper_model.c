@@ -53,7 +53,7 @@ ruby_whisper_model_n_vocab(VALUE self)
   ruby_whisper_model *rwm;
   TypedData_Get_Struct(self, ruby_whisper_model, &rb_whisper_model_type, rwm);
   ruby_whisper *rw;
-  TypedData_Get_Struct(rwm->context, ruby_whisper, &ruby_whisper_type, rw);
+  GetContext(rwm->context, rw);
   return INT2NUM(whisper_model_n_vocab(rw->context));
 }
 
@@ -67,7 +67,7 @@ ruby_whisper_model_n_audio_ctx(VALUE self)
   ruby_whisper_model *rwm;
   TypedData_Get_Struct(self, ruby_whisper_model, &rb_whisper_model_type, rwm);
   ruby_whisper *rw;
-  TypedData_Get_Struct(rwm->context, ruby_whisper, &ruby_whisper_type, rw);
+  GetContext(rwm->context, rw);
   return INT2NUM(whisper_model_n_audio_ctx(rw->context));
 }
 
@@ -81,7 +81,7 @@ ruby_whisper_model_n_audio_state(VALUE self)
   ruby_whisper_model *rwm;
   TypedData_Get_Struct(self, ruby_whisper_model, &rb_whisper_model_type, rwm);
   ruby_whisper *rw;
-  TypedData_Get_Struct(rwm->context, ruby_whisper, &ruby_whisper_type, rw);
+  GetContext(rwm->context, rw);
   return INT2NUM(whisper_model_n_audio_state(rw->context));
 }
 
@@ -95,7 +95,7 @@ ruby_whisper_model_n_audio_head(VALUE self)
   ruby_whisper_model *rwm;
   TypedData_Get_Struct(self, ruby_whisper_model, &rb_whisper_model_type, rwm);
   ruby_whisper *rw;
-  TypedData_Get_Struct(rwm->context, ruby_whisper, &ruby_whisper_type, rw);
+  GetContext(rwm->context, rw);
   return INT2NUM(whisper_model_n_audio_head(rw->context));
 }
 
@@ -109,7 +109,7 @@ ruby_whisper_model_n_audio_layer(VALUE self)
   ruby_whisper_model *rwm;
   TypedData_Get_Struct(self, ruby_whisper_model, &rb_whisper_model_type, rwm);
   ruby_whisper *rw;
-  TypedData_Get_Struct(rwm->context, ruby_whisper, &ruby_whisper_type, rw);
+  GetContext(rwm->context, rw);
   return INT2NUM(whisper_model_n_audio_layer(rw->context));
 }
 
@@ -123,7 +123,7 @@ ruby_whisper_model_n_text_ctx(VALUE self)
   ruby_whisper_model *rwm;
   TypedData_Get_Struct(self, ruby_whisper_model, &rb_whisper_model_type, rwm);
   ruby_whisper *rw;
-  TypedData_Get_Struct(rwm->context, ruby_whisper, &ruby_whisper_type, rw);
+  GetContext(rwm->context, rw);
   return INT2NUM(whisper_model_n_text_ctx(rw->context));
 }
 
@@ -137,7 +137,7 @@ ruby_whisper_model_n_text_state(VALUE self)
   ruby_whisper_model *rwm;
   TypedData_Get_Struct(self, ruby_whisper_model, &rb_whisper_model_type, rwm);
   ruby_whisper *rw;
-  TypedData_Get_Struct(rwm->context, ruby_whisper, &ruby_whisper_type, rw);
+  GetContext(rwm->context, rw);
   return INT2NUM(whisper_model_n_text_state(rw->context));
 }
 
@@ -151,7 +151,7 @@ ruby_whisper_model_n_text_head(VALUE self)
   ruby_whisper_model *rwm;
   TypedData_Get_Struct(self, ruby_whisper_model, &rb_whisper_model_type, rwm);
   ruby_whisper *rw;
-  TypedData_Get_Struct(rwm->context, ruby_whisper, &ruby_whisper_type, rw);
+  GetContext(rwm->context, rw);
   return INT2NUM(whisper_model_n_text_head(rw->context));
 }
 
@@ -165,7 +165,7 @@ ruby_whisper_model_n_text_layer(VALUE self)
   ruby_whisper_model *rwm;
   TypedData_Get_Struct(self, ruby_whisper_model, &rb_whisper_model_type, rwm);
   ruby_whisper *rw;
-  TypedData_Get_Struct(rwm->context, ruby_whisper, &ruby_whisper_type, rw);
+  GetContext(rwm->context, rw);
   return INT2NUM(whisper_model_n_text_layer(rw->context));
 }
 
@@ -179,7 +179,7 @@ ruby_whisper_model_n_mels(VALUE self)
   ruby_whisper_model *rwm;
   TypedData_Get_Struct(self, ruby_whisper_model, &rb_whisper_model_type, rwm);
   ruby_whisper *rw;
-  TypedData_Get_Struct(rwm->context, ruby_whisper, &ruby_whisper_type, rw);
+  GetContext(rwm->context, rw);
   return INT2NUM(whisper_model_n_mels(rw->context));
 }
 
@@ -193,7 +193,7 @@ ruby_whisper_model_ftype(VALUE self)
   ruby_whisper_model *rwm;
   TypedData_Get_Struct(self, ruby_whisper_model, &rb_whisper_model_type, rwm);
   ruby_whisper *rw;
-  TypedData_Get_Struct(rwm->context, ruby_whisper, &ruby_whisper_type, rw);
+  GetContext(rwm->context, rw);
   return INT2NUM(whisper_model_ftype(rw->context));
 }
 
@@ -207,7 +207,7 @@ ruby_whisper_model_type(VALUE self)
   ruby_whisper_model *rwm;
   TypedData_Get_Struct(self, ruby_whisper_model, &rb_whisper_model_type, rwm);
   ruby_whisper *rw;
-  TypedData_Get_Struct(rwm->context, ruby_whisper, &ruby_whisper_type, rw);
+  GetContext(rwm->context, rw);
   return rb_str_new2(whisper_model_type_readable(rw->context));
 }
 

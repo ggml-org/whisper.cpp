@@ -54,7 +54,7 @@ Before using VAD, download a VAD model:
 
 ```shell
 # From the whisper.cpp root directory
-./models/download-vad-model.sh silero-v5.1.2
+./models/download-vad-model.sh silero-v6.2.0
 ```
 
 ### VAD Parameters
@@ -85,7 +85,7 @@ const vadParams = {
   model: path.join(__dirname, "../../models/ggml-base.en.bin"),
   fname_inp: path.join(__dirname, "../../samples/jfk.wav"),
   vad: true,
-  vad_model: path.join(__dirname, "../../models/ggml-silero-v5.1.2.bin"),
+  vad_model: path.join(__dirname, "../../models/ggml-silero-v6.2.0.bin"),
   vad_threshold: 0.5,
   progress_callback: (progress) => console.log(`Progress: ${progress}%`)
 };

@@ -157,6 +157,8 @@ public class WhisperFullParams extends Structure {
     /** Tokens to provide to the whisper decoder as an initial prompt.
      * These are prepended to any existing text context from a previous call. */
     public String initial_prompt;
+    /** Always prepend initial_prompt for every decode chunk. */
+    public CBool carry_initial_prompt;
 
     /** Prompt tokens. (int*) */
     public Pointer prompt_tokens;
@@ -336,8 +338,8 @@ public class WhisperFullParams extends Structure {
                 "no_timestamps", "single_segment", "print_special",
                 "print_progress", "print_realtime", "print_timestamps",
                 "token_timestamps", "thold_pt", "thold_ptsum", "max_len",
-                "split_on_word", "max_tokens", "debug_mode", "audio_ctx", 
-                "tdrz_enable", "suppress_regex", "initial_prompt",
+                "split_on_word", "max_tokens", "debug_mode", "audio_ctx",
+                "tdrz_enable", "suppress_regex", "initial_prompt", "carry_initial_prompt",
                 "prompt_tokens", "prompt_n_tokens", "language", "detect_language",
                 "suppress_blank", "suppress_nst", "temperature",
                 "max_initial_ts", "length_penalty", "temperature_inc",

@@ -5,43 +5,6 @@ whispercpp
 
 Ruby bindings for [whisper.cpp][], an interface of automatic speech recognition model.
 
-Installation
-------------
-
-Install the gem and add to the application's Gemfile by executing:
-
-    $ bundle add whispercpp
-
-If bundler is not being used to manage dependencies, install the gem by executing:
-
-    $ gem install whispercpp
-
-You can pass build options for whisper.cpp, for instance:
-
-    $ bundle config build.whispercpp --enable-ggml-cuda
-
-or,
-
-    $ gem install whispercpp -- --enable-ggml-cuda
-
-See whisper.cpp's [README](https://github.com/ggml-org/whisper.cpp/blob/master/README.md) for available options. You need convert options present the README to Ruby-style options, for example:
-
-Boolean options:
-
-* `-DGGML_BLAS=1` -> `--enable-ggml-blas`
-* `-DWHISER_COREML=OFF` -> `--disable-whisper-coreml`
-
-Argument options:
-
-* `-DGGML_CUDA_COMPRESSION_MODE=size` -> `--ggml-cuda-compression-mode=size`
-
-Combination:
-
-* `-DGGML_CUDA=1 -DCMAKE_CUDA_ARCHITECTURES="86"` -> `--enable-ggml-cuda --cmake_cuda-architectures="86"`
-
-For boolean options like `GGML_CUDA`, the README says `-DGGML_CUDA=1`. You need strip `-D`, prepend `--enable-` for `1` or `ON` (`--disable-` for `0` or `OFF`) and make it kebab-case: `--enable-ggml-cuda`.  
-For options which require arguments like `CMAKE_CUDA_ARCHITECTURES`, the README says `-DCMAKE_CUDA_ARCHITECTURES="86"`. You need strip `-D`, prepend `--`, make it kebab-case, append `=` and append argument: `--cmake-cuda-architectures="86"`.
-
 Usage
 -----
 
@@ -57,7 +20,8 @@ params = Whisper::Params.new(
   max_text_tokens: 300,
   translate: true,
   print_timestamps: false,
-  initial_prompt: "Initial prompt here."
+  initial_prompt: "Initial prompt here.",
+  carry_initial_prompt: true
 )
 
 whisper.transcribe("path/to/audio.wav", params) do |whole_text|
@@ -118,7 +82,8 @@ Or, you can download model files:
 ```ruby
 whisper = Whisper::Context.new("https://example.net/uri/of/your/model.bin")
 # Or
-whisper = Whisper::Context.new(URI("https://example.net/uri/of/your/model.bin"))
+uri = URI("https://example.net/uri/of/your/model.bin")
+whisper = Whisper::Context.new(uri)
 ```
 
 See [models][] page for details.
@@ -134,20 +99,20 @@ Support for Voice Activity Detection (VAD) can be enabled by setting `Whisper::P
 ```ruby
 Whisper::Params.new(
   vad: true,
-  vad_model_path: "silero-v5.1.2",
+  vad_model_path: "silero-v6.2.0",
   # other arguments...
 )
 ```
 
-When you pass the model name (`"silero-v5.1.2"`) or URI (`https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin`), it will be downloaded automatically.
-Currently, "silero-v5.1.2" is registered as pre-converted model like ASR models. You also specify file path or URI of model.
+When you pass the model name (`"silero-v6.2.0"`) or URI (`https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin`), it will be downloaded automatically.
+Currently, "silero-v6.2.0" is registered as pre-converted model like ASR models. You also specify file path or URI of model.
 
 If you need configure VAD behavior, pass params for that:
 
 ```ruby
 Whisper::Params.new(
   vad: true,
-  vad_model_path: "silero-v5.1.2",
+  vad_model_path: "silero-v6.2.0",
   vad_params: Whisper::VAD::Params.new(
     threshold: 1.0, # defaults to 0.5
     min_speech_duration_ms: 500, # defaults to 250
@@ -187,6 +152,42 @@ WEBVTT
 
 You may call `#to_srt`, too
 
+Installation
+------------
+
+Install the gem and add to the application's Gemfile by executing:
+
+    $ bundle add whispercpp
+
+If bundler is not being used to manage dependencies, install the gem by executing:
+
+    $ gem install whispercpp
+
+You can pass build options for whisper.cpp, for instance:
+
+    $ bundle config build.whispercpp --enable-ggml-cuda
+
+or,
+
+    $ gem install whispercpp -- --enable-ggml-cuda
+
+See whisper.cpp's [README](https://github.com/ggml-org/whisper.cpp/blob/master/README.md) for available options. You need convert options present in the README to Ruby-style options, for example:
+
+Boolean options:
+
+* `-DGGML_BLAS=1` -> `--enable-ggml-blas`
+* `-DWHISER_COREML=OFF` -> `--disable-whisper-coreml`
+
+Argument options:
+
+* `-DGGML_CUDA_COMPRESSION_MODE=size` -> `--ggml-cuda-compression-mode=size`
+
+Combination:
+
+* `-DGGML_CUDA=1 -DCMAKE_CUDA_ARCHITECTURES="86"` -> `--enable-ggml-cuda --cmake_cuda-architectures="86"`
+
+For boolean options like `GGML_CUDA`, the README says `-DGGML_CUDA=1`. You need strip `-D`, prepend `--enable-` for `1` or `ON` (`--disable-` for `0` or `OFF`) and make it kebab-case: `--enable-ggml-cuda`.  
+For options which require arguments like `CMAKE_CUDA_ARCHITECTURES`, the README says `-DCMAKE_CUDA_ARCHITECTURES="86"`. You need strip `-D`, prepend `--`, make it kebab-case, append `=` and append argument: `--cmake-cuda-architectures="86"`.
 
 API
 ---
@@ -323,6 +324,22 @@ whisper
 ```
 
 The second argument `samples` may be an array, an object with `length` and `each` method, or a MemoryView. If you can prepare audio data as C array and export it as a MemoryView, whispercpp accepts and works with it with zero copy.
+
+Using VAD separately from ASR
+-----------------------------
+
+VAD feature itself is useful. You can use it separately from ASR:
+
+```ruby
+vad = Whisper::VAD::Context.new("silero-v6.2.0")
+vad
+  .detect("path/to/audio.wav", Whisper::VAD::Params.new)
+  .each_with_index do |segment, index|
+    segment => {start_time: st, end_time: ed} # `Segment` responds to `#deconstruct_keys`
+
+    puts "[%{nth}: %{st} --> %{ed}]" % {nth: index + 1, st:, ed:}
+  end
+```
 
 Development
 -----------
