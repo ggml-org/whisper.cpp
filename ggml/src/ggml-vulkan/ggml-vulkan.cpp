@@ -15343,17 +15343,47 @@ static bool ggml_vk_instance_debug_utils_ext_available(
 }
 
 static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev) {
+    vk::PhysicalDeviceProperties device_props = vkdev.getProperties();
+    const bool device_is_vulkan_12 = device_props.apiVersion >= VK_API_VERSION_1_2;
+
+    if (!device_is_vulkan_12) {
+        // Check for required extensions on Vulkan 1.1
+        std::vector<vk::ExtensionProperties> ext_props = vkdev.enumerateDeviceExtensionProperties();
+        bool timeline_semaphore_khr = false;
+        bool int8_storage_khr = false;
+
+        for (const auto& properties : ext_props) {
+            if (strcmp("VK_KHR_timeline_semaphore", properties.extensionName) == 0) {
+                timeline_semaphore_khr = true;
+            } else if (strcmp("VK_KHR_8bit_storage", properties.extensionName) == 0) {
+                int8_storage_khr = true;
+            }
+        }
+
+        if (!timeline_semaphore_khr || !int8_storage_khr) {
+            return false;
+        }
+    }
+
     VkPhysicalDeviceFeatures2 device_features2;
     device_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
 
-    VkPhysicalDeviceVulkan11Features vk11_features;
-    vk11_features.pNext = nullptr;
-    vk11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
-    device_features2.pNext = &vk11_features;
+    VkPhysicalDeviceVulkan11Features vk11_features {};
+    VkPhysicalDevice16BitStorageFeatures storage_16bit_features {};
+
+    if (device_is_vulkan_12) {
+        vk11_features.pNext = nullptr;
+        vk11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+        device_features2.pNext = &vk11_features;
+    } else {
+        storage_16bit_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;
+        storage_16bit_features.pNext = nullptr;
+        device_features2.pNext = &storage_16bit_features;
+    }
 
     vkGetPhysicalDeviceFeatures2(vkdev, &device_features2);
 
-    return vk11_features.storageBuffer16BitAccess;
+    return device_is_vulkan_12 ? vk11_features.storageBuffer16BitAccess : storage_16bit_features.storageBuffer16BitAccess;
 }
 
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch) {
