@@ -68,6 +68,7 @@ struct whisper_params {
     bool output_jsn      = false;
     bool output_jsn_full = false;
     bool output_lrc      = false;
+    bool output_lrc_word = false;  // word-level LRC output
     bool no_prints       = false;
     bool print_special   = false;
     bool print_colors    = false;
@@ -179,6 +180,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-osrt" || arg == "--output-srt")           { params.output_srt      = true; }
         else if (arg == "-owts" || arg == "--output-words")         { params.output_wts      = true; }
         else if (arg == "-olrc" || arg == "--output-lrc")           { params.output_lrc      = true; }
+        else if (arg == "-olrcw"|| arg == "--output-lrc-word")     { params.output_lrc_word = true; }
         else if (arg == "-fp"   || arg == "--font-path")            { params.font_path       = ARGV_NEXT; }
         else if (arg == "-ocsv" || arg == "--output-csv")           { params.output_csv      = true; }
         else if (arg == "-oj"   || arg == "--output-json")          { params.output_jsn      = true; }
@@ -260,6 +262,7 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  -ovtt,     --output-vtt           [%-7s] output result in a vtt file\n",                    params.output_vtt ? "true" : "false");
     fprintf(stderr, "  -osrt,     --output-srt           [%-7s] output result in a srt file\n",                    params.output_srt ? "true" : "false");
     fprintf(stderr, "  -olrc,     --output-lrc           [%-7s] output result in a lrc file\n",                    params.output_lrc ? "true" : "false");
+    fprintf(stderr, "  -olrcw,    --output-lrc-word      [%-7s] output result in a word-level lrc file\n",         params.output_lrc_word ? "true" : "false");
     fprintf(stderr, "  -owts,     --output-words         [%-7s] output script for generating karaoke video\n",     params.output_wts ? "true" : "false");
     fprintf(stderr, "  -fp,       --font-path            [%-7s] path to a monospace font for karaoke video\n",     params.font_path.c_str());
     fprintf(stderr, "  -ocsv,     --output-csv           [%-7s] output result in a CSV file\n",                    params.output_csv ? "true" : "false");
@@ -922,6 +925,106 @@ static void output_lrc(struct whisper_context * ctx, std::ofstream & fout, const
     }
 }
 
+// Helper: check if byte is a UTF-8 continuation byte (10xxxxxx)
+static bool is_utf8_continuation(unsigned char c) {
+    return (c & 0xC0) == 0x80;
+}
+
+// Helper: format timestamp and append text to line
+static void append_lrc_word(std::string & line, int64_t timestamp, const std::string & text) {
+    if (text.empty() || timestamp < 0) {
+        return;
+    }
+
+    int64_t msec = timestamp * 10;
+    int64_t min = msec / (1000 * 60);
+    msec = msec - min * (1000 * 60);
+    int64_t sec = msec / 1000;
+    msec = msec - sec * 1000;
+
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%02d:%02d.%02d", (int) min, (int) sec, (int) (msec / 10));
+
+    line += "[";
+    line += buf;
+    line += "]";
+    line += text;
+}
+
+// Word-level LRC output with inline timestamps
+static void output_lrc_word(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, std::vector<std::vector<float>> pcmf32s) {
+    fout << "[by:whisper.cpp]\n";
+
+    const int n_segments = whisper_full_n_segments(ctx);
+    for (int i = 0; i < n_segments; ++i) {
+        std::string line = "";
+        const int n_tokens = whisper_full_n_tokens(ctx, i);
+
+        // Get speaker prefix if diarize is enabled (will be prepended to first word)
+        std::string speaker_prefix = "";
+        if (params.diarize && pcmf32s.size() == 2) {
+            const int64_t t0 = whisper_full_get_segment_t0(ctx, i);
+            const int64_t t1 = whisper_full_get_segment_t1(ctx, i);
+            speaker_prefix = estimate_diarization_speaker(pcmf32s, t0, t1);
+        }
+
+        std::string pending_text = "";
+        int64_t pending_timestamp = -1;
+        bool is_first_word = true;
+
+        for (int j = 0; j < n_tokens; ++j) {
+            const char * token_text = whisper_full_get_token_text(ctx, i, j);
+            whisper_token_data token_data = whisper_full_get_token_data(ctx, i, j);
+
+            // Skip special tokens (like [BLANK], timestamps, etc.)
+            if (token_data.id >= whisper_token_eot(ctx)) {
+                continue;
+            }
+
+            // Skip empty tokens
+            if (!token_text || !token_text[0]) {
+                continue;
+            }
+
+            // Use DTW timestamp if available, otherwise use t0
+            int64_t t = (token_data.t_dtw >= 0) ? token_data.t_dtw : token_data.t0;
+            if (t < 0) {
+                // Fallback to segment start time if token timestamp is not available
+                t = whisper_full_get_segment_t0(ctx, i);
+            }
+
+            // Check if this token starts with a UTF-8 continuation byte
+            bool is_continuation = is_utf8_continuation((unsigned char)token_text[0]);
+
+            if (is_continuation && !pending_text.empty()) {
+                // This token is a continuation of a multi-byte UTF-8 character
+                // Append to pending text without adding a new timestamp
+                pending_text += token_text;
+            } else {
+                // Flush pending text with its timestamp
+                append_lrc_word(line, pending_timestamp, pending_text);
+
+                // Start new pending, prepend speaker to first word
+                if (is_first_word && !speaker_prefix.empty()) {
+                    pending_text = speaker_prefix + token_text;
+                    is_first_word = false;
+                } else {
+                    pending_text = token_text;
+                }
+                pending_timestamp = t;
+            }
+        }
+
+        // Flush remaining pending text
+        append_lrc_word(line, pending_timestamp, pending_text);
+
+        // Only output if we have actual content (line starts with timestamp)
+        if (!line.empty()) {
+            fout << line << "\n";
+        }
+    }
+}
+
 
 static void cb_log_disable(enum ggml_log_level , const char * , void * ) { }
 
@@ -1182,7 +1285,7 @@ int main(int argc, char ** argv) {
             wparams.offset_ms        = params.offset_t_ms;
             wparams.duration_ms      = params.duration_ms;
 
-            wparams.token_timestamps = params.output_wts || params.output_jsn_full || params.max_len > 0;
+            wparams.token_timestamps = params.output_wts || params.output_jsn_full || params.output_lrc_word || params.max_len > 0;
             wparams.thold_pt         = params.word_thold;
             wparams.max_len          = params.output_wts && params.max_len == 0 ? 60 : params.max_len;
             wparams.split_on_word    = params.split_on_word;
@@ -1294,6 +1397,7 @@ int main(int argc, char ** argv) {
             output_ext(csv, pcmf32s);
             output_func(output_json, ".json", params.output_jsn, pcmf32s);
             output_ext(lrc, pcmf32s);
+            output_func(output_lrc_word, ".word.lrc", params.output_lrc_word, pcmf32s);
             output_func(output_score, ".score.txt", params.log_score, pcmf32s);
 
 #undef output_ext
