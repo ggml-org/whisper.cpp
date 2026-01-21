@@ -4502,6 +4502,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         bool fp16_storage = false;
         bool fp16_compute = false;
+        bool int8_storage_khr = false;
         bool maintenance4_support = false;
         bool sm_builtins = false;
         bool amd_shader_core_properties2 = false;
@@ -4512,13 +4513,19 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->integer_dot_product = false;
         device->shader_64b_indexing = false;
         bool bfloat16_support = false;
+        bool buffer_device_address_khr = false;
+        bool timeline_semaphore_khr = false;
+        bool vulkan_memory_model_khr = false;
         bool shader_float_controls_khr = false;
+        bool descriptor_indexing_ext = false;
 
         for (const auto& properties : ext_props) {
             if (strcmp("VK_KHR_maintenance4", properties.extensionName) == 0) {
                 maintenance4_support = true;
             } else if (strcmp("VK_KHR_16bit_storage", properties.extensionName) == 0) {
                 fp16_storage = true;
+            } else if (strcmp("VK_KHR_8bit_storage", properties.extensionName) == 0) {
+                int8_storage_khr = true;
             } else if (strcmp("VK_KHR_shader_float16_int8", properties.extensionName) == 0) {
                 fp16_compute = true;
             } else if (strcmp("VK_NV_shader_sm_builtins", properties.extensionName) == 0) {
@@ -4563,9 +4570,25 @@ static vk_device ggml_vk_get_device(size_t idx) {
             } else if (strcmp("VK_EXT_shader_64bit_indexing", properties.extensionName) == 0) {
                 device->shader_64b_indexing = true;
 #endif
+            } else if (strcmp("VK_KHR_buffer_device_address", properties.extensionName) == 0) {
+                buffer_device_address_khr = true;
+            } else if (strcmp("VK_KHR_timeline_semaphore", properties.extensionName) == 0) {
+                timeline_semaphore_khr = true;
+            } else if (strcmp("VK_KHR_vulkan_memory_model", properties.extensionName) == 0) {
+                vulkan_memory_model_khr = true;
             } else if (strcmp("VK_KHR_shader_float_controls", properties.extensionName) == 0) {
                 shader_float_controls_khr = true;
+            } else if (strcmp("VK_EXT_descriptor_indexing", properties.extensionName) == 0) {
+                descriptor_indexing_ext = true;
             }
+        }
+
+        if (!device_is_vulkan_12 && !timeline_semaphore_khr) {
+            throw std::runtime_error("Unsupported device: timeline semaphores required");
+        }
+
+        if (!device_is_vulkan_12 && !int8_storage_khr) {
+            throw std::runtime_error("Unsupported device: 8-bit storage required");
         }
 
         vk::PhysicalDeviceProperties2 props2;
@@ -4765,17 +4788,78 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device_features2.pNext = nullptr;
         device_features2.features = (VkPhysicalDeviceFeatures)device_features;
 
-        VkPhysicalDeviceVulkan11Features vk11_features;
-        vk11_features.pNext = nullptr;
-        vk11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
-        device_features2.pNext = &vk11_features;
+        VkPhysicalDeviceVulkan11Features vk11_features {};
+        VkPhysicalDeviceVulkan12Features vk12_features {};
 
-        VkPhysicalDeviceVulkan12Features vk12_features;
-        vk12_features.pNext = nullptr;
-        vk12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-        vk11_features.pNext = &vk12_features;
+        // Used when Vulkan 1.2 API not available
+        VkPhysicalDevice16BitStorageFeatures storage_16bit_features {};
+        VkPhysicalDevice8BitStorageFeatures storage_8bit_features {};
+        VkPhysicalDeviceShaderFloat16Int8Features float16_int8_features {};
+        VkPhysicalDeviceBufferDeviceAddressFeaturesKHR buffer_device_address_features {};
+        VkPhysicalDeviceDescriptorIndexingFeaturesEXT descriptor_indexing_features {};
+        VkPhysicalDeviceVulkanMemoryModelFeatures vulkan_memory_model_features {};
+        VkPhysicalDeviceTimelineSemaphoreFeatures timeline_semaphore_features {};
 
-        last_struct = (VkBaseOutStructure *)&vk12_features;
+        if (device_is_vulkan_12) {
+            // Use vk11 and vk12 features structures
+            vk11_features.pNext = nullptr;
+            vk11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+            device_features2.pNext = &vk11_features;
+
+            vk12_features.pNext = nullptr;
+            vk12_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+            vk11_features.pNext = &vk12_features;
+
+            last_struct = (VkBaseOutStructure *)&vk12_features;
+        } else {
+            // Use individual features structures
+            storage_16bit_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES;
+            storage_16bit_features.pNext = nullptr;
+            device_features2.pNext = &storage_16bit_features;
+            last_struct = (VkBaseOutStructure *)&storage_16bit_features;
+
+            if (int8_storage_khr) {
+                storage_8bit_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_8BIT_STORAGE_FEATURES;
+                storage_8bit_features.pNext = nullptr;
+                last_struct->pNext = (VkBaseOutStructure *)&storage_8bit_features;
+                last_struct = (VkBaseOutStructure *)&storage_8bit_features;
+            }
+
+            if (fp16_compute) {
+                float16_int8_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES;
+                float16_int8_features.pNext = nullptr;
+                last_struct->pNext = (VkBaseOutStructure *)&float16_int8_features;
+                last_struct = (VkBaseOutStructure *)&float16_int8_features;
+            }
+
+            if (buffer_device_address_khr) {
+                buffer_device_address_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES_KHR;
+                buffer_device_address_features.pNext = nullptr;
+                last_struct->pNext = (VkBaseOutStructure *)&buffer_device_address_features;
+                last_struct = (VkBaseOutStructure *)&buffer_device_address_features;
+            }
+
+            if (descriptor_indexing_ext) {
+                descriptor_indexing_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT;
+                descriptor_indexing_features.pNext = nullptr;
+                last_struct->pNext = (VkBaseOutStructure *)&descriptor_indexing_features;
+                last_struct = (VkBaseOutStructure *)&descriptor_indexing_features;
+            }
+
+            if (vulkan_memory_model_khr) {
+                vulkan_memory_model_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES;
+                vulkan_memory_model_features.pNext = nullptr;
+                last_struct->pNext = (VkBaseOutStructure *)&vulkan_memory_model_features;
+                last_struct = (VkBaseOutStructure *)&vulkan_memory_model_features;
+            }
+
+            if (timeline_semaphore_khr) {
+                timeline_semaphore_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+                timeline_semaphore_features.pNext = nullptr;
+                last_struct->pNext = (VkBaseOutStructure *)&timeline_semaphore_features;
+                last_struct = (VkBaseOutStructure *)&timeline_semaphore_features;
+            }
+        }
 
         VkPhysicalDevicePipelineRobustnessFeaturesEXT pl_robustness_features;
         pl_robustness_features.pNext = nullptr;
@@ -4883,9 +4967,29 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         vkGetPhysicalDeviceFeatures2(device->physical_device, &device_features2);
 
+        bool shader_float16_supported;
+        bool buffer_device_address_supported;
+        bool vulkan_memory_model_supported;
+        bool storage_buffer_16bit_access_supported;
+        bool shader_rounding_mode_rte_fp16;
+
+        if (device_is_vulkan_12) {
+            shader_float16_supported = vk12_features.shaderFloat16;
+            buffer_device_address_supported = vk12_features.bufferDeviceAddress;
+            vulkan_memory_model_supported = vk12_features.vulkanMemoryModel;
+            storage_buffer_16bit_access_supported = vk11_features.storageBuffer16BitAccess;
+            shader_rounding_mode_rte_fp16 = vk12_props.shaderRoundingModeRTEFloat16;
+        } else {
+            shader_float16_supported = float16_int8_features.shaderFloat16;
+            buffer_device_address_supported = buffer_device_address_features.bufferDeviceAddress && buffer_device_address_khr;
+            vulkan_memory_model_supported = vulkan_memory_model_features.vulkanMemoryModel && vulkan_memory_model_khr;
+            storage_buffer_16bit_access_supported = storage_16bit_features.storageBuffer16BitAccess;
+            shader_rounding_mode_rte_fp16 = shader_float_controls_khr ? float_controls_props.shaderRoundingModeRTEFloat16 : false;
+        }
+
         device->pipeline_executable_properties_support = pipeline_executable_properties_support;
 
-        device->fp16 = device->fp16 && vk12_features.shaderFloat16;
+        device->fp16 = device->fp16 && shader_float16_supported;
 
 #if defined(VK_KHR_shader_bfloat16)
         device->bf16 = bfloat16_support && bfloat16_features.shaderBFloat16Type;
@@ -4895,13 +4999,13 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         device->pipeline_robustness = pl_robustness_features.pipelineRobustness;
 
-        device->multi_add = vk12_props.shaderRoundingModeRTEFloat16 &&
+        device->multi_add = shader_rounding_mode_rte_fp16 &&
                             device->properties.limits.maxPushConstantsSize >= sizeof(vk_op_multi_add_push_constants) &&
                             getenv("GGML_VK_DISABLE_MULTI_ADD") == nullptr;
 
         device->shader_int64 = device_features2.features.shaderInt64;
-        device->buffer_device_address = vk12_features.bufferDeviceAddress;
-        device->vulkan_memory_model = vk12_features.vulkanMemoryModel;
+        device->buffer_device_address = buffer_device_address_supported;
+        device->vulkan_memory_model = vulkan_memory_model_supported;
 
         if (device->subgroup_size_control) {
             device->subgroup_min_size = subgroup_size_control_props.minSubgroupSize;
@@ -4933,7 +5037,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 coopmat2_features.cooperativeMatrixPerElementOperations &&
                 coopmat2_features.cooperativeMatrixTensorAddressing &&
                 coopmat2_features.cooperativeMatrixBlockLoads &&
-                vk12_features.bufferDeviceAddress) {
+                buffer_device_address_supported) {
 
                 std::vector<VkCooperativeMatrixFlexibleDimensionsPropertiesNV> flexible_dimensions;
                 uint32_t count = 0;
@@ -5000,12 +5104,22 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #endif
         }
 
-        if (!vk11_features.storageBuffer16BitAccess) {
+        if (!storage_buffer_16bit_access_supported) {
             std::cerr << "ggml_vulkan: device " << GGML_VK_NAME << idx << " does not support 16-bit storage." << std::endl;
             throw std::runtime_error("Unsupported device");
         }
 
-        device_extensions.push_back("VK_KHR_16bit_storage");
+        if (fp16_storage) {
+            device_extensions.push_back("VK_KHR_16bit_storage");
+        }
+
+        if (!device_is_vulkan_12 && timeline_semaphore_khr) {
+            device_extensions.push_back("VK_KHR_timeline_semaphore");
+        }
+
+        if (!device_is_vulkan_12 && int8_storage_khr) {
+            device_extensions.push_back("VK_KHR_8bit_storage");
+        }
 
 #ifdef GGML_VULKAN_VALIDATE
         device_extensions.push_back("VK_KHR_shader_non_semantic_info");
@@ -5013,6 +5127,22 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         if (device->fp16) {
             device_extensions.push_back("VK_KHR_shader_float16_int8");
+        }
+
+        if (!device_is_vulkan_12 && device->buffer_device_address) {
+            device_extensions.push_back("VK_KHR_buffer_device_address");
+        }
+
+        if (!device_is_vulkan_12 && device->vulkan_memory_model) {
+            device_extensions.push_back("VK_KHR_vulkan_memory_model");
+        }
+
+        if (!device_is_vulkan_12 && shader_float_controls_khr) {
+            device_extensions.push_back("VK_KHR_shader_float_controls");
+        }
+
+        if (!device_is_vulkan_12 && descriptor_indexing_ext) {
+            device_extensions.push_back("VK_EXT_descriptor_indexing");
         }
 
 #if defined(VK_KHR_cooperative_matrix)
@@ -5200,7 +5330,10 @@ static vk_device ggml_vk_get_device(size_t idx) {
         vk::DescriptorSetLayoutCreateInfo descriptor_set_layout_create_info(
             {},
             dsl_binding);
-        descriptor_set_layout_create_info.setPNext(&dslbfci);
+        if (device_is_vulkan_12 || descriptor_indexing_ext) {
+            descriptor_set_layout_create_info.setPNext(&dslbfci);
+        }
+
         device->dsl = device->device.createDescriptorSetLayout(descriptor_set_layout_create_info);
 
         ggml_vk_load_shaders(device);
