@@ -21,6 +21,7 @@ High-performance inference of [OpenAI's Whisper](https://github.com/openai/whisp
 - [Vulkan support](#vulkan-gpu-support)
 - Support for CPU-only inference
 - [Efficient GPU support for NVIDIA](#nvidia-gpu-support)
+- [AMD Ryzen AI NPU Support](#amd-ryzen-ai-support-for-npu)
 - [OpenVINO Support](#openvino-support)
 - [Ascend NPU Support](#ascend-npu-support)
 - [Moore Threads GPU Support](#moore-threads-gpu-support)
