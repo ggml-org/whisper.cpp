@@ -317,21 +317,18 @@ For more information about the OpenVINO implementation please refer to PR [#1037
 
 On AMD's Ryzen™ AI 300 Series with dedicated NPUs for acceleration, you can now run Whisper models with the ability to fully offload the encoder to NPU. This brings significant speedup compared to CPU-only.
 > **Note:**  
-> **Ryzen™ AI NPU acceleration is currently supported on Windows only.** Linux support is planned for upcoming releases.
+> **Ryzen™ AI NPU acceleration is currently supported on Windows only.** Linux support is planned for upcoming releases.  
+> For the latest updates on Ryzen AI, check out [the official documentation](https://ryzenai.docs.amd.com/en/latest/).
 
 ### Setup environment (Windows only)
 
-- Ensure you have NPU drivers version .280 or above installed  
-  [Download latest drivers here: <insert latest driver link>]
-- Download the necessary dependencies for RyzenAI  
-  [Windows download link: <insert link>]
-- Extract and set up the environment:
-
+- **Driver:** Make sure you have NPU drivers version **.280 or newer** installed. [Download latest drivers from here](https://account.amd.com/en/forms/downloads/ryzenai-eula-public-xef.html?filename=NPU_RAI1.5_280_WHQL.zip)
+- **Runtime libraries:** Download and install the necessary [runtime dependencies from here](https://account.amd.com/en/forms/downloads/ryzenai-eula-public-xef.html?filename=NPU_RAI1.5_280_WHQL.zip).
+- **Environment:** Extract the runtime package and set up the environment:
   ```powershell
   tar xvf flexmlrt1.7rc3.zip
   flexmlrt\setup.bat
   ```
-
 Your environment is now ready.
 
 ### Build Whisper.cpp for Ryzen™ AI support
