@@ -315,52 +315,46 @@ For more information about the OpenVINO implementation please refer to PR [#1037
 
 ## AMD Ryzen™ AI support for NPU
 
-On AMD's Ryzen™ AI 300 Series that has dedicated NPUs for acceleration - you can now run whisper models with the ability to fully offload the encoder to NPU. This brings 4x speedup from running on CPU.
+On AMD's Ryzen™ AI 300 Series with dedicated NPUs for acceleration, you can now run Whisper models with the ability to fully offload the encoder to NPU. This brings significant speedup compared to CPU-only.
+> **Note:**  
+> **Ryzen™ AI NPU acceleration is currently supported on Windows only.** Linux support is planned for upcoming releases.
 
-### Setup environment
+### Setup environment (Windows only)
 
-  - Ensure you have NPU drivers .280 0r above installed from here: <insert latest driver link>
-  
-  - Download the necessary dependencies for RyzenAI from here:
-    - **Windows**: <insert link>
-    - **Linux**: <insert link>
-  
-  - Extract and source the environment:
+- Ensure you have NPU drivers version .280 or above installed  
+  [Download latest drivers here: <insert latest driver link>]
+- Download the necessary dependencies for RyzenAI  
+  [Windows download link: <insert link>]
+- Extract and set up the environment:
 
-  **Windows:**
   ```powershell
   tar xvf flexmlrt1.7rc3.zip
   flexmlrt\setup.bat
   ```
 
-  **Linux:**
-  ```bash
-  unzip flexmlrt1.7rc3.zip
-  source flexmlrt/setup.sh
-  ```
-
-  
-  Your environment is now ready.
+Your environment is now ready.
 
 ### Build Whisper.cpp for Ryzen™ AI support
 
-  ```bash
-  cmake -B build -DWHISPER_VITISAI=1
-  cmake --build build -j --config Release
-  ```
+```bash
+cmake -B build -DWHISPER_VITISAI=1
+cmake --build build -j --config Release
+```
 
 ### Download NPU-optimized models
 
-- The collection at https://huggingface.co/collections/amd/ryzen-ai-16-whisper-npu-optimized-onnx-models contains all the NPU supported Whisper models and their compiled `.rai` cache files.
-- Download the `.rai` file matching your desired model and place it in your `models/` directory alongside the corresponding `ggml-<...>.bin` file.
+- All NPU-supported Whisper models and their compiled `.rai` cache files are available in this collection:  
+  https://huggingface.co/collections/amd/ryzen-ai-16-whisper-npu-optimized-onnx-models
+- Download the `.rai` file matching your desired model, and place it in your `models/` directory alongside its corresponding `ggml-<...>.bin` file.
 
-> **Note:** The ".rai" models provided by Hugging Face are already pre-optimized for Ryzen™ AI NPUs. This means you should experience acceleration benefits on the very first run (aside from any initial CPU-side caching overhead).
-  
-  Run the examples as usual:
+> **Note:** The ".rai" models from Hugging Face are pre-optimized for Ryzen™ AI NPUs, delivering acceleration benefits from the very first run (aside from any initial CPU-side caching overhead).
 
-  ```bash
-  ./build/bin/whisper-cli -m models/ggml-base.en.bin -f samples/jfk.wav
-  ```
+Run the examples as usual:
+
+```bash
+./build/bin/whisper-cli -m models/ggml-base.en.bin -f samples/jfk.wav
+```
+
 
 ## NVIDIA GPU support
 
