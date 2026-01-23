@@ -26,7 +26,7 @@ on:
 
 jobs:
   build-ryzenai:
-    runs-on: [rai-160-sdk, Windows]
+    runs-on: [stx, Windows]
 
     steps:
       - name: Checkout code
@@ -70,18 +70,16 @@ jobs:
           # List what was extracted
           Get-ChildItem -Directory | Where-Object { $_.Name -like "flexmlrt*" }
 
-      - name: Setup FlexML Runtime environment
+      - name: Setup FlexML Runtime and Configure CMake
         shell: cmd
         run: |
           echo "Setting up FlexML environment..."
           cd flexmlrt
           call setup.bat
+          cd ..
           echo "Setup complete"
-
-      - name: Configure CMake with VitisAI
-        shell: powershell
-        run: |
-          Write-Host "Configuring CMake..."
+          echo.
+          echo "Configuring CMake..."
           cmake -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DWHISPER_VITISAI=ON
 
       - name: Build
