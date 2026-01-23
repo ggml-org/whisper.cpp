@@ -1,6 +1,16 @@
 name: Ryzen AI Minimal Build
 
 on:
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - '.github/workflows/ryzen-ai-minimal.yml'
+      - 'src/**'
+      - 'ggml/**'
+      - 'CMakeLists.txt'
+      - '**.cmake'
   workflow_dispatch:
     inputs:
       runson:
@@ -16,7 +26,7 @@ on:
 
 jobs:
   build-ryzenai:
-    runs-on: ${{ github.event.inputs.runson }}
+    runs-on: ${{ github.event.inputs.runson || 'stx' }}
 
     steps:
       - name: Checkout code
