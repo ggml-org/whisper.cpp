@@ -36,14 +36,32 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Download FlexML Runtime
-        shell: pwsh
+        shell: powershell
         run: |
           Write-Host "Downloading FlexML Runtime..."
           Invoke-WebRequest -Uri "https://github.com/lemonade-sdk/whisper.cpp/releases/download/deps/flexmlrt1.7.0-win.zip" -OutFile flexmlrt.zip
           Write-Host "Download complete"
+          
+          # Verify download
+          if (-Not (Test-Path "flexmlrt.zip")) {
+            Write-Error "ERROR: flexmlrt.zip was not downloaded!"
+            exit 1
+          }
+          
+          $fileSize = (Get-Item "flexmlrt.zip").Length
+          $fileSizeMB = [math]::Round($fileSize / 1MB, 2)
+          
+          if ($fileSize -eq 0) {
+            Write-Error "ERROR: flexmlrt.zip is empty (0 bytes)!"
+            exit 1
+          }
+          
+          Write-Host "✓ Download verified successfully" -ForegroundColor Green
+          Write-Host "  File: flexmlrt.zip"
+          Write-Host "  Size: $fileSizeMB MB ($fileSize bytes)"
 
       - name: Extract FlexML Runtime
-        shell: pwsh
+        shell: powershell
         run: |
           Write-Host "Extracting FlexML Runtime..."
           tar xvf flexmlrt.zip
@@ -61,26 +79,26 @@ jobs:
           echo "Setup complete"
 
       - name: Configure CMake with VitisAI
-        shell: pwsh
+        shell: powershell
         run: |
           Write-Host "Configuring CMake..."
           cmake -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DWHISPER_VITISAI=ON
 
       - name: Build
-        shell: pwsh
+        shell: powershell
         run: |
           Write-Host "Building..."
           cmake --build build --config Release -j
           Write-Host "Build complete"
 
       - name: List build output
-        shell: pwsh
+        shell: powershell
         run: |
           Write-Host "Build output contents:"
           Get-ChildItem -Path "build/bin/Release" -Recurse | Format-Table Name, Length
 
       - name: Copy FlexML Runtime DLLs to build output
-        shell: pwsh
+        shell: powershell
         run: |
           Write-Host "Copying FlexML Runtime DLLs..."
           
@@ -95,7 +113,7 @@ jobs:
           Write-Host "DLLs copied"
 
       - name: Package binaries
-        shell: pwsh
+        shell: powershell
         run: |
           Write-Host "Creating ZIP package..."
           Compress-Archive -Path "build/bin/Release/*" -DestinationPath "whisper-ryzenai-minimal.zip"
@@ -108,7 +126,7 @@ jobs:
           path: whisper-ryzenai-minimal.zip
           
       - name: Build Summary
-        shell: pwsh
+        shell: powershell
         run: |
           Write-Host "========================================" -ForegroundColor Green
           Write-Host "Build completed successfully!" -ForegroundColor Green
