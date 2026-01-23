@@ -56,9 +56,9 @@ jobs:
             exit 1
           }
           
-          Write-Host "✓ Download verified successfully" -ForegroundColor Green
-          Write-Host "  File: flexmlrt.zip"
-          Write-Host "  Size: $fileSizeMB MB ($fileSize bytes)"
+          Write-Host "Download verified successfully" -ForegroundColor Green
+          Write-Host "File: flexmlrt.zip"
+          Write-Host "Size: $fileSizeMB MB"
 
       - name: Extract FlexML Runtime
         shell: powershell
