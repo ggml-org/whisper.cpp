@@ -12,21 +12,21 @@ on:
       - 'CMakeLists.txt'
       - '**.cmake'
   workflow_dispatch:
-    inputs:
-      runson:
-        description: 'Which runner group to run the workflow on'
-        default: 'stx'
-        required: true
-        type: choice
-        options:
-          - 'rai300_400'
-          - 'stx'
-          - 'stx-halo'
-          - 'stx-test'
+    # inputs:
+    #   runson:
+    #     description: 'Which runner group to run the workflow on'
+    #     default: 'stx'
+    #     required: true
+    #     type: choice
+    #     options:
+    #       - 'rai300_400'
+    #       - 'stx'
+    #       - 'stx-halo'
+    #       - 'stx-test'
 
 jobs:
   build-ryzenai:
-    runs-on: ${{ github.event.inputs.runson || 'stx' }}
+    runs-on: [rai-160-sdk, Windows]
 
     steps:
       - name: Checkout code
