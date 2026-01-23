@@ -26,7 +26,7 @@ on:
 
 jobs:
   build-ryzenai:
-    runs-on: [stx, Windows]
+    runs-on: [rai-160-sdk, Windows]
 
     steps:
       - name: Checkout code
