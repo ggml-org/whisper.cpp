@@ -39,7 +39,7 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "Downloading FlexML Runtime..."
-          Invoke-WebRequest -Uri "https://github.com/lemonade-sdk/whisper.cpp/releases/download/deps/flexmlrt1.7.0rc.zip" -OutFile flexmlrt.zip
+          Invoke-WebRequest -Uri "https://github.com/lemonade-sdk/whisper.cpp/releases/download/deps/flexmlrt1.7.0-win.zip" -OutFile flexmlrt.zip
           Write-Host "Download complete"
 
       - name: Extract FlexML Runtime
