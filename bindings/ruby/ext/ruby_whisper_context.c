@@ -386,7 +386,7 @@ static VALUE
 ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
 {
   if (argc < 2 || argc > 4) {
-    rb_raise(rb_eArgError, "wrong number of arguments (given %d, expected 2..3)", argc);
+    rb_raise(rb_eArgError, "wrong number of arguments (given %d, expected 2..4)", argc);
   }
 
   ruby_whisper *rw;
@@ -394,11 +394,9 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
   GetContext(self, rw);
   VALUE params = argv[0];
   TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
-  VALUE samples = argv[1];
-  int n_samples;
+  float *samples = NULL;
+
   int n_processors;
-  rb_memory_view_t view;
-  const bool memory_view_available_p = rb_memory_view_available_p(samples);
   switch (argc) {
   case 2:
     n_processors = 1;
@@ -410,56 +408,13 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
     n_processors = NUM2INT(argv[3]);
     break;
   }
-  if (argc >= 3 && !NIL_P(argv[2])) {
-    n_samples = NUM2INT(argv[2]);
-    if (TYPE(samples) == T_ARRAY) {
-      if (RARRAY_LEN(samples) < n_samples) {
-        rb_raise(rb_eArgError, "samples length %ld is less than n_samples %d", RARRAY_LEN(samples), n_samples);
-      }
-    }
-    // Should check when samples.respond_to?(:length)?
-  } else if (memory_view_available_p) {
-    if (!rb_memory_view_get(samples, &view, RUBY_MEMORY_VIEW_SIMPLE)) {
-      view.obj = Qnil;
-      rb_raise(rb_eArgError, "unable to get a memory view");
-    }
-    ssize_t n_samples_size = view.byte_size / view.item_size;
-    if (n_samples_size > INT_MAX) {
-      rb_raise(rb_eArgError, "samples are too long");
-    }
-    n_samples = (int)n_samples_size;
-  } else {
-    if (TYPE(samples) == T_ARRAY) {
-      if (RARRAY_LEN(samples) > INT_MAX) {
-        rb_raise(rb_eArgError, "samples are too long");
-      }
-      n_samples = (int)RARRAY_LEN(samples);
-    } else if (rb_respond_to(samples, id_length)) {
-      n_samples = NUM2INT(rb_funcall(samples, id_length, 0));
-    } else {
-      rb_raise(rb_eArgError, "samples must respond to :length or be a MemoryView of an array of flaot when n_samples is not given");
-    }
-  }
-  float * c_samples = (float *)malloc(n_samples * sizeof(float));
-  if (memory_view_available_p) {
-    c_samples = (float *)view.data;
-  } else {
-    if (TYPE(samples) == T_ARRAY) {
-      for (int i = 0; i < n_samples; i++) {
-        c_samples[i] = RFLOAT_VALUE(rb_ary_entry(samples, i));
-      }
-    } else {
-      // FIXME: use rb_block_call
-      VALUE iter = rb_funcall(samples, id_to_enum, 1, rb_str_new2("each"));
-      for (int i = 0; i < n_samples; i++) {
-        // TODO: check if iter is exhausted and raise ArgumentError
-        VALUE sample = rb_funcall(iter, id_next, 0);
-        c_samples[i] = RFLOAT_VALUE(sample);
-      }
-    }
-  }
+  int n_samples = parse_full_args(
+    (argc >= 3 && !NIL_P(argv[2])) ? 3 : 2,
+    argv,
+    &samples
+  );
   prepare_transcription(rwp, &self);
-  const int result = whisper_full_parallel(rw->context, rwp->params, c_samples, n_samples, n_processors);
+  const int result = whisper_full_parallel(rw->context, rwp->params, samples, n_samples, n_processors);
   if (0 == result) {
     return self;
   } else {
