@@ -362,6 +362,9 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
   int n_samples = parse_full_args(argc, argv, &samples);
   prepare_transcription(rwp, &self);
   const int result = whisper_full(rw->context, rwp->params, samples, n_samples);
+  if (samples != NULL) {
+    free(samples);
+  }
   if (0 == result) {
     return self;
   } else {
@@ -415,6 +418,9 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
   );
   prepare_transcription(rwp, &self);
   const int result = whisper_full_parallel(rw->context, rwp->params, samples, n_samples, n_processors);
+  if (samples != NULL) {
+    free(samples);
+  }
   if (0 == result) {
     return self;
   } else {
