@@ -272,32 +272,18 @@ VALUE ruby_whisper_model_type(VALUE self)
   return rb_str_new2(whisper_model_type_readable(rw->context));
 }
 
-/*
- * Run the entire model: PCM -> log mel spectrogram -> encoder -> decoder -> text
- * Not thread safe for same context
- * Uses the specified decoding strategy to obtain the text.
- *
- * call-seq:
- *   full(params, samples, n_samples) -> nil
- *   full(params, samples) -> nil
- *
- * The second argument +samples+ must be an array of samples, respond to :length, or be a MemoryView of an array of float. It must be 32 bit float PCM audio data.
- */
-VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
+int
+parse_full_args(int argc, VALUE *argv, float** c_samples)
 {
   if (argc < 2 || argc > 3) {
     rb_raise(rb_eArgError, "wrong number of arguments (given %d, expected 2..3)", argc);
   }
 
-  ruby_whisper *rw;
-  ruby_whisper_params *rwp;
-  GetContext(self, rw);
-  VALUE params = argv[0];
-  TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
   VALUE samples = argv[1];
   int n_samples;
   rb_memory_view_t view;
   const bool memory_view_available_p = rb_memory_view_available_p(samples);
+
   if (argc == 3) {
     n_samples = NUM2INT(argv[2]);
     if (TYPE(samples) == T_ARRAY) {
@@ -328,13 +314,15 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
       rb_raise(rb_eArgError, "samples must respond to :length or be a MemoryView of an array of flaot when n_samples is not given");
     }
   }
-  float * c_samples = (float *)malloc(n_samples * sizeof(float));
+
+  float *tmp_samples = (float *)malloc(n_samples * sizeof(float));
+
   if (memory_view_available_p)  {
-    c_samples = (float *)view.data;
+    tmp_samples = (float *)view.data;
   } else {
     if (TYPE(samples) == T_ARRAY) {
       for (int i = 0; i < n_samples; i++) {
-        c_samples[i] = RFLOAT_VALUE(rb_ary_entry(samples, i));
+        tmp_samples[i] = RFLOAT_VALUE(rb_ary_entry(samples, i));
       }
     } else {
       // TODO: use rb_block_call
@@ -342,12 +330,38 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
       for (int i = 0; i < n_samples; i++) {
         // TODO: check if iter is exhausted and raise ArgumentError appropriately
         VALUE sample = rb_funcall(iter, id_next, 0);
-        c_samples[i] = RFLOAT_VALUE(sample);
+        tmp_samples[i] = RFLOAT_VALUE(sample);
       }
     }
   }
+  *c_samples = tmp_samples;
+
+  return n_samples;
+}
+
+/*
+ * Run the entire model: PCM -> log mel spectrogram -> encoder -> decoder -> text
+ * Not thread safe for same context
+ * Uses the specified decoding strategy to obtain the text.
+ *
+ * call-seq:
+ *   full(params, samples, n_samples) -> nil
+ *   full(params, samples) -> nil
+ *
+ * The second argument +samples+ must be an array of samples, respond to :length, or be a MemoryView of an array of float. It must be 32 bit float PCM audio data.
+ */
+VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
+{
+  ruby_whisper *rw;
+  ruby_whisper_params *rwp;
+  GetContext(self, rw);
+  VALUE params = argv[0];
+  TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
+  float *samples = NULL;
+
+  int n_samples = parse_full_args(argc, argv, &samples);
   prepare_transcription(rwp, &self);
-  const int result = whisper_full(rw->context, rwp->params, c_samples, n_samples);
+  const int result = whisper_full(rw->context, rwp->params, samples, n_samples);
   if (0 == result) {
     return self;
   } else {
