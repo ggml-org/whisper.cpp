@@ -368,7 +368,7 @@ samples = reader.enum_for(:each_buffer).map(&:samples).flatten
 waveform, sample_rate = TorchAudio.load("test/fixtures/jfk.wav")
 samples = waveform.squeeze.numo.to_arrow.to_arrow_array
 
-segments = vad.segments_from_samples(Whisper::Params.new, samples)
+segments = vad.segments_from_samples(Whisper::VAD::Params.new, samples)
 ```
 
 Development
