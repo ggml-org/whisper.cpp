@@ -312,14 +312,20 @@ parse_full_args(int argc, VALUE *argv)
       }
       parsed.n_samples = (int)RARRAY_LEN(samples);
     } else if (memview_available) {
-      if (rb_memory_view_get(samples, &parsed.memview, RUBY_MEMORY_VIEW_SIMPLE) &&
-          check_memory_view(&parsed.memview)) {
+      bool memview_got = rb_memory_view_get(samples, &parsed.memview, RUBY_MEMORY_VIEW_SIMPLE);
+      if (memview_got) {
+        parsed.memview_exported = check_memory_view(&parsed.memview);
+        if (!parsed.memview_exported) {
+          rb_memory_view_release(&parsed.memview);
+          parsed.memview = (rb_memory_view_t){0};
+        }
+      }
+      if (parsed.memview_exported) {
         ssize_t n_samples_size = parsed.memview.byte_size / parsed.memview.item_size;
         if (n_samples_size > INT_MAX) {
           rb_memory_view_release(&parsed.memview);
           rb_raise(rb_eArgError, "samples are too long: %zd", n_samples_size);
         }
-        parsed.memview_exported = true;
         parsed.n_samples = (int)n_samples_size;
       } else {
         rb_warn("unable to get a memory view. fallbacks to Ruby object");
