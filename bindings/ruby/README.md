@@ -323,7 +323,24 @@ whisper
   end
 ```
 
-The second argument `samples` may be an array, an object with `length` and `each` method, or a MemoryView. If you can prepare audio data as C array and export it as a MemoryView, whispercpp accepts and works with it with zero copy.
+The second argument `samples` may be an array, an object with `length` and `each` method, or a MemoryView.
+
+If you can prepare audio data as C array and export it as a MemoryView, whispercpp accepts and works with it with zero copy.
+
+```ruby
+require "torchaudio"
+require "arrow-numo-narray"
+require "whisper"
+
+waveform, sample_rate = TorchAudio.load("test/fixtures/jfk.wav")
+# Convert Torch::Tensor to Arrow::Array via Numo::NArray
+samples = waveform.squeeze.numo.to_arrow.to_arrow_array
+
+whisper = Whisper::Context.new("base")
+whisper
+  # Arrow::Array exports MemoryView
+  .full(Whisper::Params.new, samples)
+```
 
 Using VAD separately from ASR
 -----------------------------
