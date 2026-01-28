@@ -5,8 +5,11 @@ extern ID id_to_s;
 
 extern VALUE cVADContext;
 
+extern const rb_data_type_t ruby_whisper_vad_params_type;
 extern VALUE ruby_whisper_vad_detect(VALUE self, VALUE file_path, VALUE params);
 extern VALUE ruby_whisper_normalize_model_path(VALUE model_path);
+extern int parse_full_args(int argc, VALUE *argv, float** samples);
+extern VALUE ruby_whisper_vad_segments_s_init(struct whisper_vad_segments *segments);
 
 static size_t
 ruby_whisper_vad_context_memsize(const void *p)
@@ -66,10 +69,35 @@ ruby_whisper_vad_context_initialize(VALUE self, VALUE model_path)
   return Qnil;
 }
 
+static VALUE
+ruby_whisper_vad_segments_from_samples(int argc, VALUE *argv, VALUE self)
+{
+  ruby_whisper_vad_context *rwvc;
+  ruby_whisper_vad_params *rwvp;
+  GetVADContext(self, rwvc);
+  VALUE params = argv[0];
+  GetVADParams(params, rwvp);
+  float *samples = NULL;
+
+  int n_samples = parse_full_args(argc, argv, &samples);
+  if (samples == NULL) {
+    rb_raise(rb_eRuntimeError, "failed to parse samples");
+  }
+  struct whisper_vad_segments *segments = whisper_vad_segments_from_samples(
+    rwvc->context,
+    rwvp->params,
+    samples,
+    n_samples
+  );
+
+  return ruby_whisper_vad_segments_s_init(segments);
+}
+
 void init_ruby_whisper_vad_context(VALUE *mVAD)
 {
   cVADContext = rb_define_class_under(*mVAD, "Context", rb_cObject);
   rb_define_alloc_func(cVADContext, ruby_whisper_vad_context_s_allocate);
   rb_define_method(cVADContext, "initialize", ruby_whisper_vad_context_initialize, 1);
+  rb_define_method(cVADContext, "segments_from_samples", ruby_whisper_vad_segments_from_samples, -1);
   rb_define_method(cVADContext, "detect", ruby_whisper_vad_detect, 2);
 }
