@@ -31,7 +31,7 @@ ruby_whisper_vad_detect(VALUE self, VALUE file_path, VALUE params) {
   TypedData_Get_Struct(params, ruby_whisper_vad_params, &ruby_whisper_vad_params_type, rwvp);
 
   if (rb_respond_to(file_path, id_to_path)) {
-    cpp_file_path = rb_funcall(file_path, id_to_path, 0);
+    file_path = rb_funcall(file_path, id_to_path, 0);
   }
   cpp_file_path = StringValueCStr(file_path);
 
