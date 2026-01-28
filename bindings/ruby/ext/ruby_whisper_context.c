@@ -270,6 +270,21 @@ VALUE ruby_whisper_model_type(VALUE self)
   return rb_str_new2(whisper_model_type_readable(rw->context));
 }
 
+static bool
+check_memory_view(rb_memory_view_t *memview)
+{
+  if (strcmp(memview->format, "f") != 0) {
+    rb_warn("currently only \"f\"View is supported for MemoryView, but given: %s", memview->format);
+    return false;
+  }
+  if (memview->ndim != 1) {
+    rb_warn("currently only 1 dimensional MemoryView is supported, but given: %zd", memview->ndim);
+    return false;
+  }
+
+  return true;
+}
+
 struct full_parsed_args
 parse_full_args(int argc, VALUE *argv)
 {
@@ -297,7 +312,8 @@ parse_full_args(int argc, VALUE *argv)
       }
       parsed.n_samples = (int)RARRAY_LEN(samples);
     } else if (memview_available) {
-      if (rb_memory_view_get(samples, &parsed.memview, RUBY_MEMORY_VIEW_SIMPLE)) {
+      if (rb_memory_view_get(samples, &parsed.memview, RUBY_MEMORY_VIEW_SIMPLE) &&
+          check_memory_view(&parsed.memview)) {
         ssize_t n_samples_size = parsed.memview.byte_size / parsed.memview.item_size;
         if (n_samples_size > INT_MAX) {
           rb_memory_view_release(&parsed.memview);
@@ -306,8 +322,12 @@ parse_full_args(int argc, VALUE *argv)
         parsed.memview_exported = true;
         parsed.n_samples = (int)n_samples_size;
       } else {
-        rb_warn("unable to get a memory view");
-        parsed.n_samples = NUM2INT(rb_funcall(samples, id_length, 0));
+        rb_warn("unable to get a memory view. fallbacks to Ruby object");
+        if (rb_respond_to(samples, id_length)) {
+          parsed.n_samples = NUM2INT(rb_funcall(samples, id_length, 0));
+        } else {
+          rb_raise(rb_eArgError, "samples must respond to :length");
+        }
       }
     } else if (rb_respond_to(samples, id_length)) {
       parsed.n_samples = NUM2INT(rb_funcall(samples, id_length, 0));
