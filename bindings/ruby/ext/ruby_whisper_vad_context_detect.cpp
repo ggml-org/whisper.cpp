@@ -25,10 +25,7 @@ ruby_whisper_vad_detect(VALUE self, VALUE file_path, VALUE params) {
   std::vector<std::vector<float>> pcmf32s;
   whisper_vad_segments *segments;
 
-  TypedData_Get_Struct(self, ruby_whisper_vad_context, &ruby_whisper_vad_context_type, rwvc);
-  if (rwvc->context == NULL) {
-    rb_raise(rb_eRuntimeError, "Doesn't have referenxe to context internally");
-  }
+  GetVADContext(self, rwvc);
   TypedData_Get_Struct(params, ruby_whisper_vad_params, &ruby_whisper_vad_params_type, rwvp);
 
   cpp_file_path = StringValueCStr(file_path);
