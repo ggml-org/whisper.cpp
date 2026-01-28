@@ -301,7 +301,7 @@ parse_full_args(int argc, VALUE *argv)
         ssize_t n_samples_size = parsed.memview.byte_size / parsed.memview.item_size;
         if (n_samples_size > INT_MAX) {
           rb_memory_view_release(&parsed.memview);
-          rb_raise(rb_eArgError, "samples are too long");
+          rb_raise(rb_eArgError, "samples are too long: %zd", n_samples_size);
         }
         parsed.memview_exported = true;
         parsed.n_samples = (int)n_samples_size;
