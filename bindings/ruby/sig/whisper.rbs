@@ -603,6 +603,8 @@ module Whisper
 
     class Context
       def self.new: (String | path | ::URI::HTTP model_name_or_path) -> instance
+      def segments_from_samples: (Params, Array[Float] samples, ?Integer n_samples) -> Segments
+                               | (Params, _Samples, ?Integer n_samples) -> Segments
       def detect: (path wav_file_path, Params) -> Segments
     end
 
