@@ -1,6 +1,7 @@
 require_relative "helper"
 require "stringio"
 require "etc"
+require "pathname"
 
 # Exists to detect memory-related bug
 Whisper.log_set ->(level, buffer, user_data) {}, nil
@@ -16,6 +17,15 @@ class TestWhisper < TestBase
     params.print_timestamps = false
 
     @whisper.transcribe(AUDIO, params) {|text|
+      assert_match(/ask not what your country can do for you, ask what you can do for your country/, text)
+    }
+  end
+
+  def test_whisper_pathname
+    @whisper = Whisper::Context.new("base.en")
+    params  = Whisper::Params.new
+
+    @whisper.transcribe(Pathname(AUDIO), params) {|text|
       assert_match(/ask not what your country can do for you, ask what you can do for your country/, text)
     }
   end
