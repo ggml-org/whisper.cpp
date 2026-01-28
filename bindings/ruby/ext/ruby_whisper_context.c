@@ -274,7 +274,7 @@ static bool
 check_memory_view(rb_memory_view_t *memview)
 {
   if (strcmp(memview->format, "f") != 0) {
-    rb_warn("currently only \"f\"View is supported for MemoryView, but given: %s", memview->format);
+    rb_warn("currently only format \"f\" is supported for MemoryView, but given: %s", memview->format);
     return false;
   }
   if (memview->ndim != 1) {
