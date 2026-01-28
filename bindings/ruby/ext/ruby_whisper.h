@@ -1,6 +1,8 @@
 #ifndef RUBY_WHISPER_H
 #define RUBY_WHISPER_H
 
+#include <ruby.h>
+#include <ruby/memory_view.h>
 #include "whisper.h"
 
 typedef struct {
@@ -54,6 +56,13 @@ typedef struct {
 typedef struct {
   struct whisper_vad_context *context;
 } ruby_whisper_vad_context;
+
+typedef struct full_parsed_args {
+  float *samples;
+  int n_samples;
+  rb_memory_view_t memview;
+  bool memview_exported;
+} full_parsed_args;
 
 #define GetContext(obj, rw) do { \
   TypedData_Get_Struct((obj), ruby_whisper, &ruby_whisper_type, (rw)); \

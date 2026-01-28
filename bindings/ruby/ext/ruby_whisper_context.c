@@ -1,5 +1,3 @@
-#include <ruby.h>
-#include <ruby/memory_view.h>
 #include "ruby_whisper.h"
 
 extern ID id_to_s;
@@ -272,22 +270,22 @@ VALUE ruby_whisper_model_type(VALUE self)
   return rb_str_new2(whisper_model_type_readable(rw->context));
 }
 
-bool
-parse_full_args(int argc, VALUE *argv, float** c_samples, int *n_samples, bool *memview_exported)
+struct full_parsed_args
+parse_full_args(int argc, VALUE *argv)
 {
   if (argc < 2 || argc > 3) {
     rb_raise(rb_eArgError, "wrong number of arguments (given %d, expected 2..3)", argc);
   }
 
   VALUE samples = argv[1];
-  rb_memory_view_t view;
-  *memview_exported = rb_memory_view_available_p(samples);
+  bool memview_available = rb_memory_view_available_p(samples);
+  struct full_parsed_args parsed = {0};
 
   if (argc == 3) {
-    *n_samples = NUM2INT(argv[2]);
+    parsed.n_samples = NUM2INT(argv[2]);
     if (TYPE(samples) == T_ARRAY) {
-      if (RARRAY_LEN(samples) < *n_samples) {
-        rb_raise(rb_eArgError, "samples length %ld is less than n_samples %d", RARRAY_LEN(samples), *n_samples);
+      if (RARRAY_LEN(samples) < parsed.n_samples) {
+        rb_raise(rb_eArgError, "samples length %ld is less than n_samples %d", RARRAY_LEN(samples), parsed.n_samples);
       }
     }
     // Should check when samples.respond_to?(:length)?
@@ -296,46 +294,57 @@ parse_full_args(int argc, VALUE *argv, float** c_samples, int *n_samples, bool *
       if (RARRAY_LEN(samples) > INT_MAX) {
         rb_raise(rb_eArgError, "samples are too long");
       }
-      *n_samples = (int)RARRAY_LEN(samples);
-    } else if (*memview_exported) {
-      if (!rb_memory_view_get(samples, &view, RUBY_MEMORY_VIEW_SIMPLE)) {
-        view.obj = Qnil;
+      parsed.n_samples = (int)RARRAY_LEN(samples);
+    } else if (memview_available) {
+      if (!rb_memory_view_get(samples, &parsed.memview, RUBY_MEMORY_VIEW_SIMPLE)) {
         rb_raise(rb_eArgError, "unable to get a memory view");
       }
-      ssize_t n_samples_size = view.byte_size / view.item_size;
+      ssize_t n_samples_size = parsed.memview.byte_size / parsed.memview.item_size;
       if (n_samples_size > INT_MAX) {
+        rb_memory_view_release(&parsed.memview);
         rb_raise(rb_eArgError, "samples are too long");
       }
-      *n_samples = (int)n_samples_size;
+      parsed.n_samples = (int)n_samples_size;
     } else if (rb_respond_to(samples, id_length)) {
-      *n_samples = NUM2INT(rb_funcall(samples, id_length, 0));
+      parsed.n_samples = NUM2INT(rb_funcall(samples, id_length, 0));
     } else {
       rb_raise(rb_eArgError, "samples must respond to :length or be a MemoryView of an array of flaot when n_samples is not given");
     }
   }
 
-  float *tmp_samples = (float *)malloc(*n_samples * sizeof(float));
-
-  if (*memview_exported)  {
-    tmp_samples = (float *)view.data;
+  if (memview_available)  {
+    parsed.memview_exported = true;
+    parsed.samples = (float *)parsed.memview.data;
   } else {
+    parsed.memview_exported = false;
+    parsed.samples = (float *)malloc(parsed.n_samples * sizeof(float));
     if (TYPE(samples) == T_ARRAY) {
-      for (int i = 0; i < *n_samples; i++) {
-        tmp_samples[i] = RFLOAT_VALUE(rb_ary_entry(samples, i));
+      for (int i = 0; i < parsed.n_samples; i++) {
+        parsed.samples[i] = RFLOAT_VALUE(rb_ary_entry(samples, i));
       }
     } else {
       // TODO: use rb_block_call
       VALUE iter = rb_funcall(samples, id_to_enum, 1, rb_str_new2("each"));
-      for (int i = 0; i < *n_samples; i++) {
+      for (int i = 0; i < parsed.n_samples; i++) {
         // TODO: check if iter is exhausted and raise ArgumentError appropriately
         VALUE sample = rb_funcall(iter, id_next, 0);
-        tmp_samples[i] = RFLOAT_VALUE(sample);
+        parsed.samples[i] = RFLOAT_VALUE(sample);
       }
     }
   }
-  *c_samples = tmp_samples;
 
-  return true;
+  return parsed;
+}
+
+void
+release_samples(full_parsed_args *parsed_args)
+{
+  if (parsed_args->memview_exported) {
+    rb_memory_view_release(&parsed_args->memview);
+  } else {
+    free(parsed_args->samples);
+  }
+  *parsed_args = (full_parsed_args){0};
 }
 
 /*
@@ -356,18 +365,11 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
   GetContext(self, rw);
   VALUE params = argv[0];
   TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
-  float *samples = NULL;
-  int n_samples;
-  bool memview_exported;
 
-  if (!parse_full_args(argc, argv, &samples, &n_samples, &memview_exported)) {
-    rb_raise(rb_eRuntimeError, "failed to parse samples");
-  }
+  struct full_parsed_args parsed = parse_full_args(argc, argv);
   prepare_transcription(rwp, &self);
-  const int result = whisper_full(rw->context, rwp->params, samples, n_samples);
-  if (!memview_exported) {
-    free(samples);
-  }
+  const int result = whisper_full(rw->context, rwp->params, parsed.samples, parsed.n_samples);
+  release_samples(&parsed);
   if (0 == result) {
     return self;
   } else {
@@ -400,9 +402,6 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
   GetContext(self, rw);
   VALUE params = argv[0];
   TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
-  float *samples = NULL;
-  int n_samples;
-  bool memview_exported;
 
   int n_processors;
   switch (argc) {
@@ -416,20 +415,10 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
     n_processors = NUM2INT(argv[3]);
     break;
   }
-  if (!parse_full_args(
-        (argc >= 3 && !NIL_P(argv[2])) ? 3 : 2,
-        argv,
-        &samples,
-        &n_samples,
-        &memview_exported
-        )) {
-    rb_raise(rb_eRuntimeError, "failed to parse samples");
-  }
+  struct full_parsed_args parsed = parse_full_args((argc >= 3 && !NIL_P(argv[2])) ? 3 : 2, argv);
   prepare_transcription(rwp, &self);
-  const int result = whisper_full_parallel(rw->context, rwp->params, samples, n_samples, n_processors);
-  if (!memview_exported) {
-    free(samples);
-  }
+  const int result = whisper_full_parallel(rw->context, rwp->params, parsed.samples, parsed.n_samples, n_processors);
+  release_samples(&parsed);
   if (0 == result) {
     return self;
   } else {

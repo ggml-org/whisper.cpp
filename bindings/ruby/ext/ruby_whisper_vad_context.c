@@ -8,7 +8,9 @@ extern VALUE cVADContext;
 extern const rb_data_type_t ruby_whisper_vad_params_type;
 extern VALUE ruby_whisper_vad_detect(VALUE self, VALUE file_path, VALUE params);
 extern VALUE ruby_whisper_normalize_model_path(VALUE model_path);
-extern int parse_full_args(int argc, VALUE *argv, float** samples, int *n_samples, bool *memview_exported);
+extern full_parsed_args parse_full_args(int argc, VALUE *argv);
+extern void release_samples(struct full_parsed_args *parsed);
+
 extern VALUE ruby_whisper_vad_segments_s_init(struct whisper_vad_segments *segments);
 
 static size_t
@@ -77,22 +79,15 @@ ruby_whisper_vad_segments_from_samples(int argc, VALUE *argv, VALUE self)
   GetVADContext(self, rwvc);
   VALUE params = argv[0];
   GetVADParams(params, rwvp);
-  float *samples = NULL;
-  int n_samples;
-  bool memview_exported;
 
-  if (!parse_full_args(argc, argv, &samples, &n_samples, &memview_exported)) {
-    rb_raise(rb_eRuntimeError, "failed to parse samples");
-  }
+  struct full_parsed_args parsed = parse_full_args(argc, argv);
   struct whisper_vad_segments *segments = whisper_vad_segments_from_samples(
     rwvc->context,
     rwvp->params,
-    samples,
-    n_samples
+    parsed.samples,
+    parsed.n_samples
   );
-  if (!memview_exported) {
-    free(samples);
-  }
+  release_samples(&parsed);
 
   return ruby_whisper_vad_segments_s_init(segments);
 }
