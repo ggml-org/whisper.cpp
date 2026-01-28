@@ -332,7 +332,7 @@ parse_full_args(int argc, VALUE *argv)
     } else if (rb_respond_to(samples, id_length)) {
       parsed.n_samples = NUM2INT(rb_funcall(samples, id_length, 0));
     } else {
-      rb_raise(rb_eArgError, "samples must respond to :length or be a MemoryView of an array of flaot when n_samples is not given");
+      rb_raise(rb_eArgError, "samples must respond to :length or be a MemoryView of an array of float when n_samples is not given");
     }
   }
 
