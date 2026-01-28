@@ -280,6 +280,7 @@ parse_full_args(int argc, VALUE *argv)
   VALUE samples = argv[1];
   bool memview_available = rb_memory_view_available_p(samples);
   struct full_parsed_args parsed = {0};
+  parsed.memview_exported = false;
 
   if (argc == 3) {
     parsed.n_samples = NUM2INT(argv[2]);
@@ -296,15 +297,18 @@ parse_full_args(int argc, VALUE *argv)
       }
       parsed.n_samples = (int)RARRAY_LEN(samples);
     } else if (memview_available) {
-      if (!rb_memory_view_get(samples, &parsed.memview, RUBY_MEMORY_VIEW_SIMPLE)) {
-        rb_raise(rb_eArgError, "unable to get a memory view");
+      if (rb_memory_view_get(samples, &parsed.memview, RUBY_MEMORY_VIEW_SIMPLE)) {
+        ssize_t n_samples_size = parsed.memview.byte_size / parsed.memview.item_size;
+        if (n_samples_size > INT_MAX) {
+          rb_memory_view_release(&parsed.memview);
+          rb_raise(rb_eArgError, "samples are too long");
+        }
+        parsed.memview_exported = true;
+        parsed.n_samples = (int)n_samples_size;
+      } else {
+        rb_warn("unable to get a memory view");
+        parsed.n_samples = NUM2INT(rb_funcall(samples, id_length, 0));
       }
-      ssize_t n_samples_size = parsed.memview.byte_size / parsed.memview.item_size;
-      if (n_samples_size > INT_MAX) {
-        rb_memory_view_release(&parsed.memview);
-        rb_raise(rb_eArgError, "samples are too long");
-      }
-      parsed.n_samples = (int)n_samples_size;
     } else if (rb_respond_to(samples, id_length)) {
       parsed.n_samples = NUM2INT(rb_funcall(samples, id_length, 0));
     } else {
@@ -312,11 +316,9 @@ parse_full_args(int argc, VALUE *argv)
     }
   }
 
-  if (memview_available)  {
-    parsed.memview_exported = true;
+  if (parsed.memview_exported)  {
     parsed.samples = (float *)parsed.memview.data;
   } else {
-    parsed.memview_exported = false;
     parsed.samples = (float *)malloc(parsed.n_samples * sizeof(float));
     if (TYPE(samples) == T_ARRAY) {
       for (int i = 0; i < parsed.n_samples; i++) {
