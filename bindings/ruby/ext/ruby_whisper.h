@@ -69,6 +69,13 @@ typedef struct {
   } \
 } while (0)
 
+#define GetVADContext(obj, rwvc) do { \
+    TypedData_Get_Struct((obj), ruby_whisper_vad_context, &ruby_whisper_vad_context_type, (rwvc)); \
+    if ((rwvc)->context == NULL) { \
+      rb_raise(rb_eRuntimeError, "Not initialized"); \
+    } \
+} while (0)
+
 #define GetVADSegments(obj, rwvss) do { \
   TypedData_Get_Struct((obj), ruby_whisper_vad_segments, &ruby_whisper_vad_segments_type, (rwvss)); \
   if ((rwvss)->segments == NULL) { \
