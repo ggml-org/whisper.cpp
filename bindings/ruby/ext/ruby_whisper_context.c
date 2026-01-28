@@ -272,23 +272,22 @@ VALUE ruby_whisper_model_type(VALUE self)
   return rb_str_new2(whisper_model_type_readable(rw->context));
 }
 
-int
-parse_full_args(int argc, VALUE *argv, float** c_samples)
+bool
+parse_full_args(int argc, VALUE *argv, float** c_samples, int *n_samples, bool *memview_exported)
 {
   if (argc < 2 || argc > 3) {
     rb_raise(rb_eArgError, "wrong number of arguments (given %d, expected 2..3)", argc);
   }
 
   VALUE samples = argv[1];
-  int n_samples;
   rb_memory_view_t view;
-  const bool memory_view_available_p = rb_memory_view_available_p(samples);
+  *memview_exported = rb_memory_view_available_p(samples);
 
   if (argc == 3) {
-    n_samples = NUM2INT(argv[2]);
+    *n_samples = NUM2INT(argv[2]);
     if (TYPE(samples) == T_ARRAY) {
-      if (RARRAY_LEN(samples) < n_samples) {
-        rb_raise(rb_eArgError, "samples length %ld is less than n_samples %d", RARRAY_LEN(samples), n_samples);
+      if (RARRAY_LEN(samples) < *n_samples) {
+        rb_raise(rb_eArgError, "samples length %ld is less than n_samples %d", RARRAY_LEN(samples), *n_samples);
       }
     }
     // Should check when samples.respond_to?(:length)?
@@ -297,8 +296,8 @@ parse_full_args(int argc, VALUE *argv, float** c_samples)
       if (RARRAY_LEN(samples) > INT_MAX) {
         rb_raise(rb_eArgError, "samples are too long");
       }
-      n_samples = (int)RARRAY_LEN(samples);
-    } else if (memory_view_available_p) {
+      *n_samples = (int)RARRAY_LEN(samples);
+    } else if (*memview_exported) {
       if (!rb_memory_view_get(samples, &view, RUBY_MEMORY_VIEW_SIMPLE)) {
         view.obj = Qnil;
         rb_raise(rb_eArgError, "unable to get a memory view");
@@ -307,27 +306,27 @@ parse_full_args(int argc, VALUE *argv, float** c_samples)
       if (n_samples_size > INT_MAX) {
         rb_raise(rb_eArgError, "samples are too long");
       }
-      n_samples = (int)n_samples_size;
+      *n_samples = (int)n_samples_size;
     } else if (rb_respond_to(samples, id_length)) {
-      n_samples = NUM2INT(rb_funcall(samples, id_length, 0));
+      *n_samples = NUM2INT(rb_funcall(samples, id_length, 0));
     } else {
       rb_raise(rb_eArgError, "samples must respond to :length or be a MemoryView of an array of flaot when n_samples is not given");
     }
   }
 
-  float *tmp_samples = (float *)malloc(n_samples * sizeof(float));
+  float *tmp_samples = (float *)malloc(*n_samples * sizeof(float));
 
-  if (memory_view_available_p)  {
+  if (*memview_exported)  {
     tmp_samples = (float *)view.data;
   } else {
     if (TYPE(samples) == T_ARRAY) {
-      for (int i = 0; i < n_samples; i++) {
+      for (int i = 0; i < *n_samples; i++) {
         tmp_samples[i] = RFLOAT_VALUE(rb_ary_entry(samples, i));
       }
     } else {
       // TODO: use rb_block_call
       VALUE iter = rb_funcall(samples, id_to_enum, 1, rb_str_new2("each"));
-      for (int i = 0; i < n_samples; i++) {
+      for (int i = 0; i < *n_samples; i++) {
         // TODO: check if iter is exhausted and raise ArgumentError appropriately
         VALUE sample = rb_funcall(iter, id_next, 0);
         tmp_samples[i] = RFLOAT_VALUE(sample);
@@ -336,7 +335,7 @@ parse_full_args(int argc, VALUE *argv, float** c_samples)
   }
   *c_samples = tmp_samples;
 
-  return n_samples;
+  return true;
 }
 
 /*
@@ -358,14 +357,15 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
   VALUE params = argv[0];
   TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
   float *samples = NULL;
+  int n_samples;
+  bool memview_exported;
 
-  int n_samples = parse_full_args(argc, argv, &samples);
-  if (samples == NULL) {
+  if (!parse_full_args(argc, argv, &samples, &n_samples, &memview_exported)) {
     rb_raise(rb_eRuntimeError, "failed to parse samples");
   }
   prepare_transcription(rwp, &self);
   const int result = whisper_full(rw->context, rwp->params, samples, n_samples);
-  if (samples != NULL) {
+  if (!memview_exported) {
     free(samples);
   }
   if (0 == result) {
@@ -401,6 +401,8 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
   VALUE params = argv[0];
   TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
   float *samples = NULL;
+  int n_samples;
+  bool memview_exported;
 
   int n_processors;
   switch (argc) {
@@ -414,17 +416,18 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
     n_processors = NUM2INT(argv[3]);
     break;
   }
-  int n_samples = parse_full_args(
-    (argc >= 3 && !NIL_P(argv[2])) ? 3 : 2,
-    argv,
-    &samples
-  );
-  if (samples == NULL) {
+  if (!parse_full_args(
+        (argc >= 3 && !NIL_P(argv[2])) ? 3 : 2,
+        argv,
+        &samples,
+        &n_samples,
+        &memview_exported
+        )) {
     rb_raise(rb_eRuntimeError, "failed to parse samples");
   }
   prepare_transcription(rwp, &self);
   const int result = whisper_full_parallel(rw->context, rwp->params, samples, n_samples, n_processors);
-  if (samples != NULL) {
+  if (!memview_exported) {
     free(samples);
   }
   if (0 == result) {

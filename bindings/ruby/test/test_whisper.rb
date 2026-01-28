@@ -217,6 +217,16 @@ class TestWhisper < TestBase
       assert_match(/ask not what your country can do for you, ask what you can do for your country/, @whisper.each_segment.first.text)
     end
 
+    def test_full_with_memroy_view_gc
+      samples = JFKReader.new(AUDIO)
+      @whisper.full(@params, samples)
+      GC.start
+      require "fiddle"
+      Fiddle::MemoryView.export samples do |view|
+        assert_equal 176000, view.to_s.unpack("#{view.format}*").length
+      end
+    end
+
     def test_full_parallel
       nprocessors = 2
       @whisper.full_parallel(@params, @samples, @samples.length, nprocessors)
