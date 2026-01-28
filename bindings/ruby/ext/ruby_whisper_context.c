@@ -345,6 +345,8 @@ parse_full_args(int argc, VALUE *argv)
   if (parsed.memview_exported)  {
     parsed.samples = (float *)parsed.memview.data;
   } else {
+    // FIXME: Ensure free parsed.samples both after this line and
+    //        in caller context using rb_ensure or so
     parsed.samples = (float *)malloc(parsed.n_samples * sizeof(float));
     if (TYPE(samples) == T_ARRAY) {
       for (int i = 0; i < parsed.n_samples; i++) {
