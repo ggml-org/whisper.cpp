@@ -347,7 +347,7 @@ parse_full_args(int argc, VALUE *argv)
   } else {
     // FIXME: Ensure free parsed.samples both after this line and
     //        in caller context using rb_ensure or so
-    parsed.samples = (float *)malloc(parsed.n_samples * sizeof(float));
+    parsed.samples = ALLOC_N(float, parsed.n_samples);
     if (TYPE(samples) == T_ARRAY) {
       for (int i = 0; i < parsed.n_samples; i++) {
         parsed.samples[i] = RFLOAT_VALUE(rb_ary_entry(samples, i));
@@ -372,7 +372,7 @@ release_samples(full_parsed_args *parsed_args)
   if (parsed_args->memview_exported) {
     rb_memory_view_release(&parsed_args->memview);
   } else {
-    free(parsed_args->samples);
+    ruby_xfree(parsed_args->samples);
   }
   *parsed_args = (full_parsed_args){0};
 }
