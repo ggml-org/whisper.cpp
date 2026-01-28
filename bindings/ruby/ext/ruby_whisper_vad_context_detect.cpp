@@ -1,4 +1,3 @@
-#include <ruby.h>
 #include "ruby_whisper.h"
 #include "common-whisper.h"
 #include <string>

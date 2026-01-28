@@ -1,5 +1,3 @@
-#include <ruby.h>
-#include <ruby/memory_view.h>
 #include "ruby_whisper.h"
 
 VALUE mWhisper;
