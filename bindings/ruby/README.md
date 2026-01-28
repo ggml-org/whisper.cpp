@@ -358,6 +358,19 @@ vad
   end
 ```
 
+You may also low level API `Whisper::VAD::Context#segments_from_samples` as such `Whisper::Context#full`:
+
+```ruby
+reader = WaveFile::Reader.new("path/to/audio.wav", WaveFile::Format.new(:mono, :float, 16000))
+samples = reader.enum_for(:each_buffer).map(&:samples).flatten
+
+# Or,
+waveform, sample_rate = TorchAudio.load("test/fixtures/jfk.wav")
+samples = waveform.squeeze.numo.to_arrow.to_arrow_array
+
+segments = vad.segments_from_samples(Whisper::Params.new, samples)
+```
+
 Development
 -----------
 
