@@ -8,7 +8,7 @@ extern const rb_data_type_t ruby_whisper_vad_params_type;
 extern VALUE ruby_whisper_vad_detect(VALUE self, VALUE file_path, VALUE params);
 extern VALUE ruby_whisper_normalize_model_path(VALUE model_path);
 extern parsed_samples_t parse_samples(VALUE *samples, VALUE *n_samples);
-extern void release_samples(struct parsed_samples_t *parsed);
+extern VALUE release_samples(VALUE parsed);
 
 extern VALUE ruby_whisper_vad_segments_s_init(struct whisper_vad_segments *segments);
 
@@ -91,7 +91,7 @@ ruby_whisper_vad_segments_from_samples(int argc, VALUE *argv, VALUE self)
     parsed.samples,
     parsed.n_samples
   );
-  release_samples(&parsed);
+  release_samples((VALUE)&parsed);
 
   return ruby_whisper_vad_segments_s_init(segments);
 }

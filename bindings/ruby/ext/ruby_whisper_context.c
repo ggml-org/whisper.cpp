@@ -369,15 +369,19 @@ parse_samples(VALUE *samples, VALUE *n_samples)
   return parsed;
 }
 
-void
-release_samples(parsed_samples_t *parsed_args)
+VALUE
+release_samples(VALUE rb_parsed_args)
 {
+  parsed_samples_t *parsed_args = (parsed_samples_t *)rb_parsed_args;
+
   // When parsed_args->memview_exported is false,
   // parsed_args->samples was allocated by rb_alloc_tmp_buffer, so no need to free here
   if (parsed_args->memview_exported) {
     rb_memory_view_release(&parsed_args->memview);
   }
   *parsed_args = (parsed_samples_t){0};
+
+  return Qnil;
 }
 
 static VALUE
@@ -423,7 +427,7 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
     parsed.n_samples,
   };
   VALUE rb_result = rb_full((VALUE)&args);
-  release_samples(&parsed);
+  release_samples((VALUE)&parsed);
   const int result = NUM2INT(rb_result);
   if (0 == result) {
     return self;
@@ -474,7 +478,7 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
   struct parsed_samples_t parsed = parse_samples(&argv[1], &n_samples);
   prepare_transcription(rwp, &self);
   const int result = whisper_full_parallel(rw->context, rwp->params, parsed.samples, parsed.n_samples, n_processors);
-  release_samples(&parsed);
+  release_samples((VALUE)&parsed);
   if (0 == result) {
     return self;
   } else {
