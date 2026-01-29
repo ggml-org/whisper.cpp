@@ -25,6 +25,12 @@ extern void prepare_transcription(ruby_whisper_params *rwp, VALUE *context);
 
 ID transcribe_option_names[1];
 
+typedef struct fill_samples_args {
+  float *dest;
+  VALUE *src;
+  int n_samples;
+} fill_samples_args;
+
 typedef struct full_args {
   struct whisper_context *context;
   struct whisper_full_params *params;
@@ -300,6 +306,28 @@ check_memory_view(rb_memory_view_t *memview)
   return true;
 }
 
+static VALUE
+fill_samples(VALUE rb_args)
+{
+  fill_samples_args *args = (fill_samples_args *)rb_args;
+
+  if (RB_TYPE_P(*args->src, T_ARRAY)) {
+    for (int i = 0; i < args->n_samples; i++) {
+      args->dest[i] = RFLOAT_VALUE(rb_ary_entry(*args->src, i));
+    }
+  } else {
+    // TODO: use rb_block_call
+    VALUE iter = rb_funcall(*args->src, id_to_enum, 1, rb_str_new2("each"));
+    for (int i = 0; i < args->n_samples; i++) {
+      // TODO: check if iter is exhausted and raise ArgumentError appropriately
+      VALUE sample = rb_funcall(iter, id_next, 0);
+      args->dest[i] = RFLOAT_VALUE(sample);
+    }
+  }
+
+  return Qnil;
+}
+
 struct parsed_samples_t
 parse_samples(VALUE *samples, VALUE *n_samples)
 {
@@ -356,22 +384,13 @@ parse_samples(VALUE *samples, VALUE *n_samples)
   if (parsed.memview_exported)  {
     parsed.samples = (float *)parsed.memview.data;
   } else {
-    VALUE store;
-    parsed.samples = rb_alloc_tmp_buffer(&store, sizeof(float) * parsed.n_samples);
-    if (is_array) {
-      for (int i = 0; i < parsed.n_samples; i++) {
-        parsed.samples[i] = RFLOAT_VALUE(rb_ary_entry(*samples, i));
-      }
-    } else {
-      // TODO: use rb_block_call
-      VALUE iter = rb_funcall(*samples, id_to_enum, 1, rb_str_new2("each"));
-      for (int i = 0; i < parsed.n_samples; i++) {
-        // TODO: check if iter is exhausted and raise ArgumentError appropriately
-        VALUE sample = rb_funcall(iter, id_next, 0);
-        parsed.samples[i] = RFLOAT_VALUE(sample);
-      }
-    }
-    rb_free_tmp_buffer(&store);
+    parsed.samples = ALLOC_N(float, parsed.n_samples);
+    fill_samples_args args = {
+      parsed.samples,
+      samples,
+      parsed.n_samples,
+    };
+    fill_samples((VALUE)&args);
   }
 
   return parsed;
