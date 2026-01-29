@@ -406,10 +406,10 @@ release_samples(VALUE rb_parsed_args)
 {
   parsed_samples_t *parsed_args = (parsed_samples_t *)rb_parsed_args;
 
-  // When parsed_args->memview_exported is false,
-  // parsed_args->samples was allocated by rb_alloc_tmp_buffer, so no need to free here
   if (parsed_args->memview_exported) {
     rb_memory_view_release(&parsed_args->memview);
+  } else {
+    xfree(parsed_args->samples);
   }
   *parsed_args = (parsed_samples_t){0};
 
