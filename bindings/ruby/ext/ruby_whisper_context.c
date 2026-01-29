@@ -285,34 +285,29 @@ check_memory_view(rb_memory_view_t *memview)
   return true;
 }
 
-struct full_parsed_args
-parse_full_args(int argc, VALUE *argv)
+struct parsed_samples_t
+parse_samples(VALUE *samples, VALUE *n_samples)
 {
-  if (argc < 2 || argc > 3) {
-    rb_raise(rb_eArgError, "wrong number of arguments (given %d, expected 2..3)", argc);
-  }
-
-  VALUE samples = argv[1];
-  bool memview_available = rb_memory_view_available_p(samples);
-  struct full_parsed_args parsed = {0};
+  bool memview_available = rb_memory_view_available_p(*samples);
+  struct parsed_samples_t parsed = {0};
   parsed.memview_exported = false;
 
-  if (argc == 3) {
-    parsed.n_samples = NUM2INT(argv[2]);
-    if (TYPE(samples) == T_ARRAY) {
-      if (RARRAY_LEN(samples) < parsed.n_samples) {
-        rb_raise(rb_eArgError, "samples length %ld is less than n_samples %d", RARRAY_LEN(samples), parsed.n_samples);
+  if (!NIL_P(*n_samples)) {
+    parsed.n_samples = NUM2INT(*n_samples);
+    if (TYPE(*samples) == T_ARRAY) {
+      if (RARRAY_LEN(*samples) < parsed.n_samples) {
+        rb_raise(rb_eArgError, "samples length %ld is less than n_samples %d", RARRAY_LEN(*samples), parsed.n_samples);
       }
     }
     // Should check when samples.respond_to?(:length)?
   } else {
-    if (TYPE(samples) == T_ARRAY) {
-      if (RARRAY_LEN(samples) > INT_MAX) {
+    if (TYPE(*samples) == T_ARRAY) {
+      if (RARRAY_LEN(*samples) > INT_MAX) {
         rb_raise(rb_eArgError, "samples are too long");
       }
-      parsed.n_samples = (int)RARRAY_LEN(samples);
+      parsed.n_samples = (int)RARRAY_LEN(*samples);
     } else if (memview_available) {
-      bool memview_got = rb_memory_view_get(samples, &parsed.memview, RUBY_MEMORY_VIEW_SIMPLE);
+      bool memview_got = rb_memory_view_get(*samples, &parsed.memview, RUBY_MEMORY_VIEW_SIMPLE);
       if (memview_got) {
         parsed.memview_exported = check_memory_view(&parsed.memview);
         if (!parsed.memview_exported) {
@@ -329,14 +324,14 @@ parse_full_args(int argc, VALUE *argv)
         parsed.n_samples = (int)n_samples_size;
       } else {
         rb_warn("unable to get a memory view. fallbacks to Ruby object");
-        if (rb_respond_to(samples, id_length)) {
-          parsed.n_samples = NUM2INT(rb_funcall(samples, id_length, 0));
+        if (rb_respond_to(*samples, id_length)) {
+          parsed.n_samples = NUM2INT(rb_funcall(*samples, id_length, 0));
         } else {
           rb_raise(rb_eArgError, "samples must respond to :length");
         }
       }
-    } else if (rb_respond_to(samples, id_length)) {
-      parsed.n_samples = NUM2INT(rb_funcall(samples, id_length, 0));
+    } else if (rb_respond_to(*samples, id_length)) {
+      parsed.n_samples = NUM2INT(rb_funcall(*samples, id_length, 0));
     } else {
       rb_raise(rb_eArgError, "samples must respond to :length or be a MemoryView of an array of float when n_samples is not given");
     }
@@ -348,13 +343,13 @@ parse_full_args(int argc, VALUE *argv)
     // FIXME: Ensure free parsed.samples both after this line and
     //        in caller context using rb_ensure or so
     parsed.samples = ALLOC_N(float, parsed.n_samples);
-    if (TYPE(samples) == T_ARRAY) {
+    if (TYPE(*samples) == T_ARRAY) {
       for (int i = 0; i < parsed.n_samples; i++) {
-        parsed.samples[i] = RFLOAT_VALUE(rb_ary_entry(samples, i));
+        parsed.samples[i] = RFLOAT_VALUE(rb_ary_entry(*samples, i));
       }
     } else {
       // TODO: use rb_block_call
-      VALUE iter = rb_funcall(samples, id_to_enum, 1, rb_str_new2("each"));
+      VALUE iter = rb_funcall(*samples, id_to_enum, 1, rb_str_new2("each"));
       for (int i = 0; i < parsed.n_samples; i++) {
         // TODO: check if iter is exhausted and raise ArgumentError appropriately
         VALUE sample = rb_funcall(iter, id_next, 0);
@@ -367,14 +362,14 @@ parse_full_args(int argc, VALUE *argv)
 }
 
 void
-release_samples(full_parsed_args *parsed_args)
+release_samples(parsed_samples_t *parsed_args)
 {
   if (parsed_args->memview_exported) {
     rb_memory_view_release(&parsed_args->memview);
   } else {
     ruby_xfree(parsed_args->samples);
   }
-  *parsed_args = (full_parsed_args){0};
+  *parsed_args = (parsed_samples_t){0};
 }
 
 /*
@@ -390,13 +385,18 @@ release_samples(full_parsed_args *parsed_args)
  */
 VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
 {
+  if (argc < 2 || argc > 3) {
+    rb_raise(rb_eArgError, "wrong number of arguments (given %d, expected 2..3)", argc);
+  }
+
   ruby_whisper *rw;
   ruby_whisper_params *rwp;
   GetContext(self, rw);
   VALUE params = argv[0];
   TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
+  VALUE n_samples = argc == 2 ? Qnil : argv[2];
 
-  struct full_parsed_args parsed = parse_full_args(argc, argv);
+  struct parsed_samples_t parsed = parse_samples(&argv[1], &n_samples);
   prepare_transcription(rwp, &self);
   const int result = whisper_full(rw->context, rwp->params, parsed.samples, parsed.n_samples);
   release_samples(&parsed);
@@ -432,6 +432,7 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
   GetContext(self, rw);
   VALUE params = argv[0];
   TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
+  VALUE n_samples = argc == 2 ? Qnil : argv[2];
 
   int n_processors;
   switch (argc) {
@@ -445,7 +446,7 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
     n_processors = NUM2INT(argv[3]);
     break;
   }
-  struct full_parsed_args parsed = parse_full_args((argc >= 3 && !NIL_P(argv[2])) ? 3 : 2, argv);
+  struct parsed_samples_t parsed = parse_samples(&argv[1], &n_samples);
   prepare_transcription(rwp, &self);
   const int result = whisper_full_parallel(rw->context, rwp->params, parsed.samples, parsed.n_samples, n_processors);
   release_samples(&parsed);

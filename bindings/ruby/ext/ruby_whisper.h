@@ -57,12 +57,12 @@ typedef struct {
   struct whisper_vad_context *context;
 } ruby_whisper_vad_context;
 
-typedef struct full_parsed_args {
+typedef struct parsed_samples_t {
   float *samples;
   int n_samples;
   rb_memory_view_t memview;
   bool memview_exported;
-} full_parsed_args;
+} parsed_samples_t;
 
 #define GetContext(obj, rw) do { \
   TypedData_Get_Struct((obj), ruby_whisper, &ruby_whisper_type, (rw)); \

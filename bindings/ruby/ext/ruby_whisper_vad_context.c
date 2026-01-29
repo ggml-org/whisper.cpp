@@ -7,8 +7,8 @@ extern VALUE cVADContext;
 extern const rb_data_type_t ruby_whisper_vad_params_type;
 extern VALUE ruby_whisper_vad_detect(VALUE self, VALUE file_path, VALUE params);
 extern VALUE ruby_whisper_normalize_model_path(VALUE model_path);
-extern full_parsed_args parse_full_args(int argc, VALUE *argv);
-extern void release_samples(struct full_parsed_args *parsed);
+extern parsed_samples_t parse_samples(VALUE *samples, VALUE *n_samples);
+extern void release_samples(struct parsed_samples_t *parsed);
 
 extern VALUE ruby_whisper_vad_segments_s_init(struct whisper_vad_segments *segments);
 
@@ -73,13 +73,18 @@ ruby_whisper_vad_context_initialize(VALUE self, VALUE model_path)
 static VALUE
 ruby_whisper_vad_segments_from_samples(int argc, VALUE *argv, VALUE self)
 {
+  if (argc < 2 || argc > 3) {
+    rb_raise(rb_eArgError, "wrong number of arguments (given %d, expected 2..3)", argc);
+  }
+
   ruby_whisper_vad_context *rwvc;
   ruby_whisper_vad_params *rwvp;
   GetVADContext(self, rwvc);
   VALUE params = argv[0];
   GetVADParams(params, rwvp);
+  VALUE n_samples = argc == 2 ? Qnil : argv[2];
 
-  struct full_parsed_args parsed = parse_full_args(argc, argv);
+  struct parsed_samples_t parsed = parse_samples(&argv[1], &n_samples);
   struct whisper_vad_segments *segments = whisper_vad_segments_from_samples(
     rwvc->context,
     rwvp->params,
