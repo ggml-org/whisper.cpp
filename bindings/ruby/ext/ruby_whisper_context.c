@@ -340,9 +340,8 @@ parse_samples(VALUE *samples, VALUE *n_samples)
   if (parsed.memview_exported)  {
     parsed.samples = (float *)parsed.memview.data;
   } else {
-    // FIXME: Ensure free parsed.samples both after this line and
-    //        in caller context using rb_ensure or so
-    parsed.samples = ALLOC_N(float, parsed.n_samples);
+    VALUE store;
+    parsed.samples = rb_alloc_tmp_buffer(&store, sizeof(float) * parsed.n_samples);
     if (TYPE(*samples) == T_ARRAY) {
       for (int i = 0; i < parsed.n_samples; i++) {
         parsed.samples[i] = RFLOAT_VALUE(rb_ary_entry(*samples, i));
@@ -356,6 +355,7 @@ parse_samples(VALUE *samples, VALUE *n_samples)
         parsed.samples[i] = RFLOAT_VALUE(sample);
       }
     }
+    rb_free_tmp_buffer(&store);
   }
 
   return parsed;
@@ -364,10 +364,10 @@ parse_samples(VALUE *samples, VALUE *n_samples)
 void
 release_samples(parsed_samples_t *parsed_args)
 {
+  // When parsed_args->memview_exported is false,
+  // parsed_args->samples was allocated by rb_alloc_tmp_buffer, so no need to free here
   if (parsed_args->memview_exported) {
     rb_memory_view_release(&parsed_args->memview);
-  } else {
-    ruby_xfree(parsed_args->samples);
   }
   *parsed_args = (parsed_samples_t){0};
 }
@@ -398,6 +398,7 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
 
   struct parsed_samples_t parsed = parse_samples(&argv[1], &n_samples);
   prepare_transcription(rwp, &self);
+  // FIXME: Ensure release_samples is called in case of exception
   const int result = whisper_full(rw->context, rwp->params, parsed.samples, parsed.n_samples);
   release_samples(&parsed);
   if (0 == result) {
