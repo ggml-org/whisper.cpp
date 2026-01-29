@@ -25,6 +25,13 @@ extern void prepare_transcription(ruby_whisper_params *rwp, VALUE *context);
 
 ID transcribe_option_names[1];
 
+typedef struct full_args {
+  struct whisper_context *context;
+  struct whisper_full_params *params;
+  float *samples;
+  int n_samples;
+} full_args;
+
 static void
 ruby_whisper_free(ruby_whisper *rw)
 {
@@ -373,6 +380,14 @@ release_samples(parsed_samples_t *parsed_args)
   *parsed_args = (parsed_samples_t){0};
 }
 
+static VALUE
+rb_full(VALUE rb_args)
+{
+  full_args *args = (full_args *)rb_args;
+  int result = whisper_full(args->context, *args->params, args->samples, args->n_samples);
+  return INT2NUM(result);
+}
+
 /*
  * Run the entire model: PCM -> log mel spectrogram -> encoder -> decoder -> text
  * Not thread safe for same context
@@ -400,8 +415,16 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
   struct parsed_samples_t parsed = parse_samples(&argv[1], &n_samples);
   prepare_transcription(rwp, &self);
   // FIXME: Ensure release_samples is called in case of exception
-  const int result = whisper_full(rw->context, rwp->params, parsed.samples, parsed.n_samples);
+  //        Defining Samples class and wrapping parsed.samples in it might help
+  full_args args = {
+    rw->context,
+    &rwp->params,
+    parsed.samples,
+    parsed.n_samples,
+  };
+  VALUE rb_result = rb_full((VALUE)&args);
   release_samples(&parsed);
+  const int result = NUM2INT(rb_result);
   if (0 == result) {
     return self;
   } else {
