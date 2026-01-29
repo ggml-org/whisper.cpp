@@ -390,7 +390,12 @@ parse_samples(VALUE *samples, VALUE *n_samples)
       samples,
       parsed.n_samples,
     };
-    fill_samples((VALUE)&args);
+    int state;
+    rb_protect(fill_samples, (VALUE)&args, &state);
+    if (state) {
+      xfree(parsed.samples);
+      rb_jump_tag(state);
+    }
   }
 
   return parsed;
