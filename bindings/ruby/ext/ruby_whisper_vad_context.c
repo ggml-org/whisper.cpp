@@ -13,8 +13,8 @@ extern VALUE release_samples(VALUE parsed);
 extern VALUE ruby_whisper_vad_segments_s_init(struct whisper_vad_segments *segments);
 
 typedef struct segments_from_samples_args {
-  struct whisper_vad_context *context;
-  struct whisper_vad_params *params;
+  VALUE *context;
+  VALUE *params;
   float *samples;
   int n_samples;
 } segments_from_samples_args;
@@ -82,7 +82,12 @@ segments_from_samples_body(VALUE rb_args)
 {
   segments_from_samples_args *args = (segments_from_samples_args *)rb_args;
 
-  struct whisper_vad_segments *segments = whisper_vad_segments_from_samples(args->context, *args->params, args->samples, args->n_samples);
+  ruby_whisper_vad_context *rwvc;
+  ruby_whisper_vad_params *rwvp;
+  GetVADContext(*args->context, rwvc);
+  GetVADParams(*args->params, rwvp);
+
+  struct whisper_vad_segments *segments = whisper_vad_segments_from_samples(rwvc->context, rwvp->params, args->samples, args->n_samples);
 
   return ruby_whisper_vad_segments_s_init(segments);
 }
@@ -94,17 +99,11 @@ ruby_whisper_vad_segments_from_samples(int argc, VALUE *argv, VALUE self)
     rb_raise(rb_eArgError, "wrong number of arguments (given %d, expected 2..3)", argc);
   }
 
-  ruby_whisper_vad_context *rwvc;
-  ruby_whisper_vad_params *rwvp;
-  GetVADContext(self, rwvc);
-  VALUE params = argv[0];
-  GetVADParams(params, rwvp);
   VALUE n_samples = argc == 2 ? Qnil : argv[2];
-
   struct parsed_samples_t parsed = parse_samples(&argv[1], &n_samples);
   segments_from_samples_args args = {
-    rwvc->context,
-    &rwvp->params,
+    &self,
+    &argv[0],
     parsed.samples,
     parsed.n_samples,
   };

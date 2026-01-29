@@ -32,17 +32,15 @@ typedef struct fill_samples_args {
 } fill_samples_args;
 
 typedef struct full_args {
-  VALUE *rb_context;
-  struct whisper_context *context;
-  ruby_whisper_params *params;
+  VALUE *context;
+  VALUE *params;
   float *samples;
   int n_samples;
 } full_args;
 
 typedef struct full_parallel_args {
-  VALUE *rb_context;
-  struct whisper_context *context;
-  ruby_whisper_params *params;
+  VALUE *context;
+  VALUE *params;
   float *samples;
   int n_samples;
   int n_processors;
@@ -423,8 +421,13 @@ full_body(VALUE rb_args)
 {
   full_args *args = (full_args *)rb_args;
 
-  prepare_transcription(args->params, args->rb_context);
-  int result = whisper_full(args->context, args->params->params, args->samples, args->n_samples);
+  ruby_whisper *rw;
+  ruby_whisper_params *rwp;
+  GetContext(*args->context, rw);
+  TypedData_Get_Struct(*args->params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
+
+  prepare_transcription(rwp, args->context);
+  int result = whisper_full(rw->context, rwp->params, args->samples, args->n_samples);
 
   return INT2NUM(result);
 }
@@ -446,18 +449,12 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
     rb_raise(rb_eArgError, "wrong number of arguments (given %d, expected 2..3)", argc);
   }
 
-  ruby_whisper *rw;
-  ruby_whisper_params *rwp;
-  GetContext(self, rw);
-  VALUE params = argv[0];
-  TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
   VALUE n_samples = argc == 2 ? Qnil : argv[2];
 
   struct parsed_samples_t parsed = parse_samples(&argv[1], &n_samples);
   full_args args = {
     &self,
-    rw->context,
-    rwp,
+    &argv[0],
     parsed.samples,
     parsed.n_samples,
   };
@@ -475,8 +472,13 @@ full_parallel_body(VALUE rb_args)
 {
   full_parallel_args *args = (full_parallel_args *)rb_args;
 
-  prepare_transcription(args->params, args->rb_context);
-  int result = whisper_full_parallel(args->context, args->params->params, args->samples, args->n_samples, args->n_processors);
+  ruby_whisper *rw;
+  ruby_whisper_params *rwp;
+  GetContext(*args->context, rw);
+  TypedData_Get_Struct(*args->params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
+
+  prepare_transcription(rwp, args->context);
+  int result = whisper_full_parallel(rw->context, rwp->params, args->samples, args->n_samples, args->n_processors);
 
   return INT2NUM(result);
 }
@@ -501,13 +503,7 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
     rb_raise(rb_eArgError, "wrong number of arguments (given %d, expected 2..4)", argc);
   }
 
-  ruby_whisper *rw;
-  ruby_whisper_params *rwp;
-  GetContext(self, rw);
-  VALUE params = argv[0];
-  TypedData_Get_Struct(params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
   VALUE n_samples = argc == 2 ? Qnil : argv[2];
-
   int n_processors;
   switch (argc) {
   case 2:
@@ -523,8 +519,7 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
   struct parsed_samples_t parsed = parse_samples(&argv[1], &n_samples);
   const full_parallel_args args = {
     &self,
-    rw->context,
-    rwp,
+    &argv[0],
     parsed.samples,
     parsed.n_samples,
     n_processors,
