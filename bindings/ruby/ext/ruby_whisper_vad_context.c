@@ -78,7 +78,7 @@ ruby_whisper_vad_context_initialize(VALUE self, VALUE model_path)
 }
 
 static VALUE
-rb_segments_from_samples(VALUE rb_args)
+segments_from_samples_body(VALUE rb_args)
 {
   segments_from_samples_args *args = (segments_from_samples_args *)rb_args;
 
@@ -108,7 +108,7 @@ ruby_whisper_vad_segments_from_samples(int argc, VALUE *argv, VALUE self)
     parsed.samples,
     parsed.n_samples,
   };
-  VALUE segments = rb_ensure(rb_segments_from_samples, (VALUE)&args, release_samples, (VALUE)&parsed);
+  VALUE segments = rb_ensure(segments_from_samples_body, (VALUE)&args, release_samples, (VALUE)&parsed);
 
   return segments;
 }

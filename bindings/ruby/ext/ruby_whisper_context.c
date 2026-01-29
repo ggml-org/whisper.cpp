@@ -419,7 +419,7 @@ release_samples(VALUE rb_parsed_args)
 }
 
 static VALUE
-rb_full(VALUE rb_args)
+full_body(VALUE rb_args)
 {
   full_args *args = (full_args *)rb_args;
 
@@ -461,7 +461,7 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
     parsed.samples,
     parsed.n_samples,
   };
-  VALUE rb_result = rb_ensure(rb_full, (VALUE)&args, release_samples, (VALUE)&parsed);
+  VALUE rb_result = rb_ensure(full_body, (VALUE)&args, release_samples, (VALUE)&parsed);
   const int result = NUM2INT(rb_result);
   if (0 == result) {
     return self;
@@ -471,7 +471,7 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
 }
 
 static VALUE
-rb_full_parallel(VALUE rb_args)
+full_parallel_body(VALUE rb_args)
 {
   full_parallel_args *args = (full_parallel_args *)rb_args;
 
@@ -529,7 +529,7 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
     parsed.n_samples,
     n_processors,
   };
-  const VALUE rb_result = rb_ensure(rb_full_parallel, (VALUE)&args, release_samples, (VALUE)&parsed);
+  const VALUE rb_result = rb_ensure(full_parallel_body, (VALUE)&args, release_samples, (VALUE)&parsed);
   const int result = NUM2INT(rb_result);
   if (0 == result) {
     return self;
