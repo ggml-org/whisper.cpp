@@ -32,15 +32,17 @@ typedef struct fill_samples_args {
 } fill_samples_args;
 
 typedef struct full_args {
+  VALUE *rb_context;
   struct whisper_context *context;
-  struct whisper_full_params *params;
+  ruby_whisper_params *params;
   float *samples;
   int n_samples;
 } full_args;
 
 typedef struct full_parallel_args {
+  VALUE *rb_context;
   struct whisper_context *context;
-  struct whisper_full_params *params;
+  ruby_whisper_params *params;
   float *samples;
   int n_samples;
   int n_processors;
@@ -420,7 +422,10 @@ static VALUE
 rb_full(VALUE rb_args)
 {
   full_args *args = (full_args *)rb_args;
-  int result = whisper_full(args->context, *args->params, args->samples, args->n_samples);
+
+  prepare_transcription(args->params, args->rb_context);
+  int result = whisper_full(args->context, args->params->params, args->samples, args->n_samples);
+
   return INT2NUM(result);
 }
 
@@ -449,10 +454,10 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
   VALUE n_samples = argc == 2 ? Qnil : argv[2];
 
   struct parsed_samples_t parsed = parse_samples(&argv[1], &n_samples);
-  prepare_transcription(rwp, &self);
   full_args args = {
+    &self,
     rw->context,
-    &rwp->params,
+    rwp,
     parsed.samples,
     parsed.n_samples,
   };
@@ -469,7 +474,10 @@ static VALUE
 rb_full_parallel(VALUE rb_args)
 {
   full_parallel_args *args = (full_parallel_args *)rb_args;
-  int result = whisper_full_parallel(args->context, *args->params, args->samples, args->n_samples, args->n_processors);
+
+  prepare_transcription(args->params, args->rb_context);
+  int result = whisper_full_parallel(args->context, args->params->params, args->samples, args->n_samples, args->n_processors);
+
   return INT2NUM(result);
 }
 
@@ -513,10 +521,10 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
     break;
   }
   struct parsed_samples_t parsed = parse_samples(&argv[1], &n_samples);
-  prepare_transcription(rwp, &self);
   const full_parallel_args args = {
+    &self,
     rw->context,
-    &rwp->params,
+    rwp,
     parsed.samples,
     parsed.n_samples,
     n_processors,
