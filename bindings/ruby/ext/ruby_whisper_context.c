@@ -291,17 +291,18 @@ parse_samples(VALUE *samples, VALUE *n_samples)
   bool memview_available = rb_memory_view_available_p(*samples);
   struct parsed_samples_t parsed = {0};
   parsed.memview_exported = false;
+  const bool is_array = RB_TYPE_P(*samples, T_ARRAY);
 
   if (!NIL_P(*n_samples)) {
     parsed.n_samples = NUM2INT(*n_samples);
-    if (TYPE(*samples) == T_ARRAY) {
+    if (is_array) {
       if (RARRAY_LEN(*samples) < parsed.n_samples) {
         rb_raise(rb_eArgError, "samples length %ld is less than n_samples %d", RARRAY_LEN(*samples), parsed.n_samples);
       }
     }
     // Should check when samples.respond_to?(:length)?
   } else {
-    if (TYPE(*samples) == T_ARRAY) {
+    if (is_array) {
       if (RARRAY_LEN(*samples) > INT_MAX) {
         rb_raise(rb_eArgError, "samples are too long");
       }
@@ -342,7 +343,7 @@ parse_samples(VALUE *samples, VALUE *n_samples)
   } else {
     VALUE store;
     parsed.samples = rb_alloc_tmp_buffer(&store, sizeof(float) * parsed.n_samples);
-    if (TYPE(*samples) == T_ARRAY) {
+    if (is_array) {
       for (int i = 0; i < parsed.n_samples; i++) {
         parsed.samples[i] = RFLOAT_VALUE(rb_ary_entry(*samples, i));
       }
