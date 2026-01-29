@@ -32,6 +32,14 @@ typedef struct full_args {
   int n_samples;
 } full_args;
 
+typedef struct full_parallel_args {
+  struct whisper_context *context;
+  struct whisper_full_params *params;
+  float *samples;
+  int n_samples;
+  int n_processors;
+} full_parallel_args;
+
 static void
 ruby_whisper_free(ruby_whisper *rw)
 {
@@ -418,22 +426,27 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
 
   struct parsed_samples_t parsed = parse_samples(&argv[1], &n_samples);
   prepare_transcription(rwp, &self);
-  // FIXME: Ensure release_samples is called in case of exception
-  //        Defining Samples class and wrapping parsed.samples in it might help
   full_args args = {
     rw->context,
     &rwp->params,
     parsed.samples,
     parsed.n_samples,
   };
-  VALUE rb_result = rb_full((VALUE)&args);
-  release_samples((VALUE)&parsed);
+  VALUE rb_result = rb_ensure(rb_full, (VALUE)&args, release_samples, (VALUE)&parsed);
   const int result = NUM2INT(rb_result);
   if (0 == result) {
     return self;
   } else {
     rb_exc_raise(rb_funcall(eError, id_new, 1, result));
   }
+}
+
+static VALUE
+rb_full_parallel(VALUE rb_args)
+{
+  full_parallel_args *args = (full_parallel_args *)rb_args;
+  int result = whisper_full_parallel(args->context, *args->params, args->samples, args->n_samples, args->n_processors);
+  return INT2NUM(result);
 }
 
 /*
@@ -477,8 +490,15 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
   }
   struct parsed_samples_t parsed = parse_samples(&argv[1], &n_samples);
   prepare_transcription(rwp, &self);
-  const int result = whisper_full_parallel(rw->context, rwp->params, parsed.samples, parsed.n_samples, n_processors);
-  release_samples((VALUE)&parsed);
+  const full_parallel_args args = {
+    rw->context,
+    &rwp->params,
+    parsed.samples,
+    parsed.n_samples,
+    n_processors,
+  };
+  const VALUE rb_result = rb_ensure(rb_full_parallel, (VALUE)&args, release_samples, (VALUE)&parsed);
+  const int result = NUM2INT(rb_result);
   if (0 == result) {
     return self;
   } else {

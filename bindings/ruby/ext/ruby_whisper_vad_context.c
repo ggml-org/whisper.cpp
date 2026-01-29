@@ -12,6 +12,13 @@ extern VALUE release_samples(VALUE parsed);
 
 extern VALUE ruby_whisper_vad_segments_s_init(struct whisper_vad_segments *segments);
 
+typedef struct segments_from_samples_args {
+  struct whisper_vad_context *context;
+  struct whisper_vad_params *params;
+  float *samples;
+  int n_samples;
+} segments_from_samples_args;
+
 static size_t
 ruby_whisper_vad_context_memsize(const void *p)
 {
@@ -71,6 +78,16 @@ ruby_whisper_vad_context_initialize(VALUE self, VALUE model_path)
 }
 
 static VALUE
+rb_segments_from_samples(VALUE rb_args)
+{
+  segments_from_samples_args *args = (segments_from_samples_args *)rb_args;
+
+  struct whisper_vad_segments *segments = whisper_vad_segments_from_samples(args->context, *args->params, args->samples, args->n_samples);
+
+  return ruby_whisper_vad_segments_s_init(segments);
+}
+
+static VALUE
 ruby_whisper_vad_segments_from_samples(int argc, VALUE *argv, VALUE self)
 {
   if (argc < 2 || argc > 3) {
@@ -85,15 +102,15 @@ ruby_whisper_vad_segments_from_samples(int argc, VALUE *argv, VALUE self)
   VALUE n_samples = argc == 2 ? Qnil : argv[2];
 
   struct parsed_samples_t parsed = parse_samples(&argv[1], &n_samples);
-  struct whisper_vad_segments *segments = whisper_vad_segments_from_samples(
+  segments_from_samples_args args = {
     rwvc->context,
-    rwvp->params,
+    &rwvp->params,
     parsed.samples,
-    parsed.n_samples
-  );
-  release_samples((VALUE)&parsed);
+    parsed.n_samples,
+  };
+  VALUE segments = rb_ensure(rb_segments_from_samples, (VALUE)&args, release_samples, (VALUE)&parsed);
 
-  return ruby_whisper_vad_segments_s_init(segments);
+  return segments;
 }
 
 void init_ruby_whisper_vad_context(VALUE *mVAD)
