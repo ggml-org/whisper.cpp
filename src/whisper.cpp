@@ -7672,11 +7672,14 @@ int whisper_full_with_state(
                             }
                         }
                         text = "";
-                        while (i < (int) tokens_cur.size() && tokens_cur[i].id > whisper_token_beg(ctx)) {
-                            i++;
-                        }
-                        i--;
                         t0 = t1;
+                        while (i + 1 < (int) tokens_cur.size() && tokens_cur[i + 1].id > whisper_token_beg(ctx)) {
+                            i++;
+                            if (params.print_special) {
+                                text += whisper_token_to_str(ctx, tokens_cur[i].id);
+                            }
+                            t0 = seek + 2 * (tokens_cur[i].tid - whisper_token_beg(ctx));
+                        }
                         i0 = i + 1;
                         speaker_turn_next = false;
                     }
@@ -7693,8 +7696,8 @@ int whisper_full_with_state(
                             printf("[%s --> %s]  %s\n", to_timestamp(tt0).c_str(), to_timestamp(tt1).c_str(), text.c_str());
                         } else {
                             printf("%s", text.c_str());
-                            fflush(stdout);
                         }
+                        fflush(stdout);
                     }
 
                     result_all.push_back({ tt0, tt1, text, state->no_speech_prob, {}, speaker_turn_next });
