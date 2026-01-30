@@ -427,9 +427,7 @@ full_body(VALUE rb_args)
   TypedData_Get_Struct(*args->params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
 
   prepare_transcription(rwp, args->context);
-  int result = whisper_full(rw->context, rwp->params, args->samples, args->n_samples);
-
-  return INT2NUM(result);
+  return (VALUE)whisper_full(rw->context, rwp->params, args->samples, args->n_samples);
 }
 
 /*
@@ -458,8 +456,7 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
     parsed.samples,
     parsed.n_samples,
   };
-  VALUE rb_result = rb_ensure(full_body, (VALUE)&args, release_samples, (VALUE)&parsed);
-  const int result = NUM2INT(rb_result);
+  const int result = (int)rb_ensure(full_body, (VALUE)&args, release_samples, (VALUE)&parsed);
   if (0 == result) {
     return self;
   } else {
@@ -478,9 +475,7 @@ full_parallel_body(VALUE rb_args)
   TypedData_Get_Struct(*args->params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
 
   prepare_transcription(rwp, args->context);
-  int result = whisper_full_parallel(rw->context, rwp->params, args->samples, args->n_samples, args->n_processors);
-
-  return INT2NUM(result);
+  return (VALUE)whisper_full_parallel(rw->context, rwp->params, args->samples, args->n_samples, args->n_processors);
 }
 
 /*
@@ -524,8 +519,7 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
     parsed.n_samples,
     n_processors,
   };
-  const VALUE rb_result = rb_ensure(full_parallel_body, (VALUE)&args, release_samples, (VALUE)&parsed);
-  const int result = NUM2INT(rb_result);
+  const int result = (int)rb_ensure(full_parallel_body, (VALUE)&args, release_samples, (VALUE)&parsed);
   if (0 == result) {
     return self;
   } else {
