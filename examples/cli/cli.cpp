@@ -7,6 +7,7 @@
 #include <cmath>
 #include <algorithm>
 #include <fstream>
+#include <iostream>
 #include <cstdio>
 #include <string>
 #include <thread>
@@ -112,6 +113,9 @@ struct whisper_params {
     float       vad_max_speech_duration_s = FLT_MAX;
     int         vad_speech_pad_ms = 30;
     float       vad_samples_overlap = 0.1f;
+
+    // Stdin mode for dynamic file loading
+    bool stdin_mode = false;
 };
 
 static void whisper_print_usage(int argc, char ** argv, const whisper_params & params);
@@ -217,6 +221,8 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-vmsd" || arg == "--vad-max-speech-duration-s")   { params.vad_max_speech_duration_s   = std::stof(ARGV_NEXT); }
         else if (arg == "-vp"   || arg == "--vad-speech-pad-ms")           { params.vad_speech_pad_ms           = std::stoi(ARGV_NEXT); }
         else if (arg == "-vo"   || arg == "--vad-samples-overlap")         { params.vad_samples_overlap         = std::stof(ARGV_NEXT); }
+        // Stdin mode
+        else if (                  arg == "--stdin-mode")                { params.stdin_mode                  = true; }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             whisper_print_usage(argc, argv, params);
@@ -302,6 +308,8 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
                                                                                                                                   std::to_string(params.vad_max_speech_duration_s).c_str());
     fprintf(stderr, "  -vp N,     --vad-speech-pad-ms           N [%-7d] VAD speech padding (extend segments)\n",             params.vad_speech_pad_ms);
     fprintf(stderr, "  -vo N,     --vad-samples-overlap         N [%-7.2f] VAD samples overlap (seconds between segments)\n", params.vad_samples_overlap);
+    fprintf(stderr, "\nStdin mode options:\n");
+    fprintf(stderr, "             --stdin-mode                  [%-7s] read file paths from stdin (one per line, JSON output)\n", params.stdin_mode ? "true" : "false");
     fprintf(stderr, "\n");
 }
 
@@ -925,6 +933,35 @@ static void output_lrc(struct whisper_context * ctx, std::ofstream & fout, const
 
 static void cb_log_disable(enum ggml_log_level , const char * , void * ) { }
 
+// escape string for JSON output (handles quotes, backslashes, newlines, tabs, etc.)
+static std::string escape_json_string(const std::string & s) {
+    std::string result;
+    result.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        char c = s[i];
+        switch (c) {
+            case '"':  result += "\\\""; break;
+            case '\\': result += "\\\\"; break;
+            case '\n': result += "\\n";  break;
+            case '\r': result += "\\r";  break;
+            case '\t': result += "\\t";  break;
+            case '\b': result += "\\b";  break;
+            case '\f': result += "\\f";  break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    // Control character - use \uXXXX format
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
+                    result += buf;
+                } else {
+                    result += c;
+                }
+                break;
+        }
+    }
+    return result;
+}
+
 int main(int argc, char ** argv) {
     ggml_backend_load_all();
 
@@ -971,23 +1008,25 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // remove non-existent files
-    for (auto it = params.fname_inp.begin(); it != params.fname_inp.end();) {
-        const auto fname_inp = it->c_str();
+    // remove non-existent files (skip in stdin-mode)
+    if (!params.stdin_mode) {
+        for (auto it = params.fname_inp.begin(); it != params.fname_inp.end();) {
+            const auto fname_inp = it->c_str();
 
-        if (*it != "-" && !is_file_exist(fname_inp)) {
-            fprintf(stderr, "error: input file not found '%s'\n", fname_inp);
-            it = params.fname_inp.erase(it);
-            continue;
+            if (*it != "-" && !is_file_exist(fname_inp)) {
+                fprintf(stderr, "error: input file not found '%s'\n", fname_inp);
+                it = params.fname_inp.erase(it);
+                continue;
+            }
+
+            it++;
         }
 
-        it++;
-    }
-
-    if (params.fname_inp.empty()) {
-        fprintf(stderr, "error: no input files specified\n");
-        whisper_print_usage(argc, argv, params);
-        return 2;
+        if (params.fname_inp.empty()) {
+            fprintf(stderr, "error: no input files specified\n");
+            whisper_print_usage(argc, argv, params);
+            return 2;
+        }
     }
 
     if (params.language != "auto" && whisper_lang_id(params.language.c_str()) == -1) {
@@ -1069,6 +1108,148 @@ int main(int argc, char ** argv) {
         }
     }
 
+    // stdin-mode: read file paths from stdin and process each
+    if (params.stdin_mode) {
+        // Output ready signal
+        printf("{\"status\":\"ready\"}\n");
+        fflush(stdout);
+
+        std::string line;
+        while (std::getline(std::cin, line)) {
+            // Trim whitespace
+            while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' ' || line.back() == '\t')) {
+                line.pop_back();
+            }
+            while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) {
+                line.erase(0, 1);
+            }
+
+            // Skip empty lines
+            if (line.empty()) {
+                continue;
+            }
+
+            // Exit commands
+            if (line == "exit" || line == "quit") {
+                printf("{\"status\":\"exit\"}\n");
+                fflush(stdout);
+                break;
+            }
+
+            std::string escaped_file = escape_json_string(line);
+
+            // Check file existence
+            if (!is_file_exist(line.c_str())) {
+                printf("{\"file\":\"%s\",\"status\":\"error\",\"error\":\"file not found\"}\n", escaped_file.c_str());
+                fflush(stdout);
+                continue;
+            }
+
+            // Read audio data
+            std::vector<float> pcmf32;
+            std::vector<std::vector<float>> pcmf32s;
+            if (!::read_audio_data(line, pcmf32, pcmf32s, params.diarize)) {
+                printf("{\"file\":\"%s\",\"status\":\"error\",\"error\":\"failed to read audio\"}\n", escaped_file.c_str());
+                fflush(stdout);
+                continue;
+            }
+
+            // Run inference
+            whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+
+            const bool use_grammar = (!params.grammar_parsed.rules.empty() && !params.grammar_rule.empty());
+            wparams.strategy = (params.beam_size > 1 || use_grammar) ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY;
+
+            wparams.print_realtime   = false;
+            wparams.print_progress   = false;
+            wparams.print_timestamps = false;
+            wparams.print_special    = false;
+            wparams.translate        = params.translate;
+            wparams.language         = params.language.c_str();
+            wparams.detect_language  = params.detect_language;
+            wparams.n_threads        = params.n_threads;
+            wparams.n_max_text_ctx   = params.max_context >= 0 ? params.max_context : wparams.n_max_text_ctx;
+            wparams.offset_ms        = params.offset_t_ms;
+            wparams.duration_ms      = params.duration_ms;
+
+            wparams.token_timestamps = params.max_len > 0;
+            wparams.thold_pt         = params.word_thold;
+            wparams.max_len          = params.max_len;
+            wparams.split_on_word    = params.split_on_word;
+            wparams.audio_ctx        = params.audio_ctx;
+
+            wparams.debug_mode       = params.debug_mode;
+
+            wparams.tdrz_enable      = params.tinydiarize;
+
+            wparams.suppress_regex   = params.suppress_regex.empty() ? nullptr : params.suppress_regex.c_str();
+
+            wparams.initial_prompt       = params.prompt.c_str();
+            wparams.carry_initial_prompt = params.carry_initial_prompt;
+
+            wparams.greedy.best_of        = params.best_of;
+            wparams.beam_search.beam_size = params.beam_size;
+
+            wparams.temperature_inc  = params.no_fallback ? 0.0f : params.temperature_inc;
+            wparams.temperature      = params.temperature;
+
+            wparams.entropy_thold    = params.entropy_thold;
+            wparams.logprob_thold    = params.logprob_thold;
+            wparams.no_speech_thold  = params.no_speech_thold;
+
+            wparams.no_timestamps    = params.no_timestamps;
+
+            wparams.suppress_nst     = params.suppress_nst;
+
+            wparams.vad            = params.vad;
+            wparams.vad_model_path = params.vad_model.c_str();
+
+            wparams.vad_params.threshold               = params.vad_threshold;
+            wparams.vad_params.min_speech_duration_ms  = params.vad_min_speech_duration_ms;
+            wparams.vad_params.min_silence_duration_ms = params.vad_min_silence_duration_ms;
+            wparams.vad_params.max_speech_duration_s   = params.vad_max_speech_duration_s;
+            wparams.vad_params.speech_pad_ms           = params.vad_speech_pad_ms;
+            wparams.vad_params.samples_overlap         = params.vad_samples_overlap;
+
+            const auto & grammar_parsed = params.grammar_parsed;
+            auto grammar_rules = grammar_parsed.c_rules();
+
+            if (use_grammar) {
+                if (grammar_parsed.symbol_ids.find(params.grammar_rule) != grammar_parsed.symbol_ids.end()) {
+                    wparams.grammar_rules = grammar_rules.data();
+                    wparams.n_grammar_rules = grammar_rules.size();
+                    wparams.i_start_rule = grammar_parsed.symbol_ids.at(params.grammar_rule);
+                    wparams.grammar_penalty = params.grammar_penalty;
+                }
+            }
+
+            if (whisper_full_parallel(ctx, wparams, pcmf32.data(), pcmf32.size(), params.n_processors) != 0) {
+                printf("{\"file\":\"%s\",\"status\":\"error\",\"error\":\"failed to process audio\"}\n", escaped_file.c_str());
+                fflush(stdout);
+                continue;
+            }
+
+            // Collect all text from segments
+            std::string result_text;
+            const int n_segments = whisper_full_n_segments(ctx);
+            for (int i = 0; i < n_segments; ++i) {
+                const char * text = whisper_full_get_segment_text(ctx, i);
+                if (text) {
+                    result_text += text;
+                }
+            }
+
+            // Output success result
+            std::string escaped_text = escape_json_string(result_text);
+            printf("{\"file\":\"%s\",\"status\":\"success\",\"text\":\"%s\"}\n", escaped_file.c_str(), escaped_text.c_str());
+            fflush(stdout);
+        }
+
+        whisper_free(ctx);
+        return 0;
+    }
+
+    // Normal mode: process files from command line
     for (int f = 0; f < (int) params.fname_inp.size(); ++f) {
         const auto & fname_inp = params.fname_inp[f];
         struct fout_factory {
