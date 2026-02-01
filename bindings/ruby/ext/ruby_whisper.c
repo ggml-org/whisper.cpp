@@ -33,7 +33,8 @@ static bool is_log_callback_finalized = false;
 // High level API
 extern VALUE ruby_whisper_segment_allocate(VALUE klass);
 
-extern void init_ruby_whisper_context(VALUE *mWhisper);
+extern VALUE init_ruby_whisper_context(VALUE *mWhisper);
+extern void init_ruby_whisper_context_params(VALUE *cContext);
 extern void init_ruby_whisper_params(VALUE *mWhisper);
 extern void init_ruby_whisper_error(VALUE *mWhisper);
 extern void init_ruby_whisper_segment(VALUE *mWhisper);
@@ -170,7 +171,8 @@ void Init_whisper() {
   rb_define_singleton_method(mWhisper, "log_set", ruby_whisper_s_log_set, 2);
   rb_define_private_method(rb_singleton_class(mWhisper), "finalize_log_callback", ruby_whisper_s_finalize_log_callback, 1);
 
-  init_ruby_whisper_context(&mWhisper);
+  cContext = init_ruby_whisper_context(&mWhisper);
+  init_ruby_whisper_context_params(&cContext);
   init_ruby_whisper_params(&mWhisper);
   init_ruby_whisper_error(&mWhisper);
   init_ruby_whisper_segment(&mWhisper);

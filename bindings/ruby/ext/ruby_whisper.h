@@ -16,6 +16,10 @@ typedef struct {
   struct whisper_context *context;
 } ruby_whisper;
 
+typedef struct ruby_whisper_context_params {
+  struct whisper_context_params *params;
+} ruby_whisper_context_params;
+
 typedef struct {
   struct whisper_full_params params;
   bool diarize;

@@ -705,7 +705,7 @@ ruby_whisper_get_model(VALUE self)
   return rb_whisper_model_s_new(self);
 }
 
-void
+VALUE
 init_ruby_whisper_context(VALUE *mWhisper)
 {
   cContext = rb_define_class_under(*mWhisper, "Context", rb_cObject);
@@ -743,4 +743,6 @@ init_ruby_whisper_context(VALUE *mWhisper)
   rb_define_method(cContext, "each_segment", ruby_whisper_each_segment, 0);
 
   rb_define_method(cContext, "model", ruby_whisper_get_model, 0);
+
+  return cContext;
 }
