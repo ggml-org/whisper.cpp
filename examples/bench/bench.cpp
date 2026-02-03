@@ -18,6 +18,15 @@ struct whisper_params {
 
 void whisper_print_usage(int argc, char ** argv, const whisper_params & params);
 
+static const char * get_next_arg(int & i, int argc, char ** argv, const char * flag, whisper_params & params) {
+    if (i + 1 < argc) {
+        return argv[++i];
+    }
+    fprintf(stderr, "error: %s requires an argument\n", flag);
+    whisper_print_usage(argc, argv, params);
+    exit(1);
+}
+
 static bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -26,9 +35,9 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
             whisper_print_usage(argc, argv, params);
             exit(0);
         }
-        else if (arg == "-t"     || arg == "--threads")       { params.n_threads  = std::stoi(argv[++i]); }
-        else if (arg == "-m"     || arg == "--model")         { params.model      = argv[++i]; }
-        else if (arg == "-w"     || arg == "--what")          { params.what       = atoi(argv[++i]); }
+        else if (arg == "-t"     || arg == "--threads")       { params.n_threads  = std::stoi(get_next_arg(i, argc, argv, arg.c_str(), params)); }
+        else if (arg == "-m"     || arg == "--model")         { params.model      = get_next_arg(i, argc, argv, arg.c_str(), params); }
+        else if (arg == "-w"     || arg == "--what")          { params.what       = atoi(get_next_arg(i, argc, argv, arg.c_str(), params)); }
         else if (arg == "-ng"    || arg == "--no-gpu")        { params.use_gpu    = false; }
         else if (arg == "-fa"    || arg == "--flash-attn")    { params.flash_attn = true; }
         else if (arg == "-nfa"   || arg == "--no-flash-attn") { params.flash_attn = false; }
