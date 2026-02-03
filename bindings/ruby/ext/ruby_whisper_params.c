@@ -25,7 +25,7 @@
   rb_define_method(cParams, #param_name, ruby_whisper_params_get_ ## param_name, 0); \
   rb_define_method(cParams, #param_name "=", ruby_whisper_params_set_ ## param_name, 1);
 
-#define RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT 37
+#define RUBY_WHISPER_PARAMS_PARAM_NAMES_COUNT 42
 
 extern VALUE cParams;
 extern VALUE cVADParams;
@@ -74,6 +74,11 @@ static ID id_abort_callback_user_data;
 static ID id_vad;
 static ID id_vad_model_path;
 static ID id_vad_params;
+static ID id_suppress_regex;
+static ID id_grammar_penalty;
+static ID id_tdrz_enable;
+static ID id_audio_ctx;
+static ID id_debug_mode;
 
 static void
 rb_whisper_callbcack_container_mark(ruby_whisper_callback_container *rwc)
@@ -1141,6 +1146,105 @@ ruby_whisper_params_get_vad_params(VALUE self)
   return rwp->vad_params;
 }
 
+/*
+ * call-seq:
+ *   suppress_regex = regex -> regex
+ */
+static VALUE
+ruby_whisper_params_set_suppress_regex(VALUE self, VALUE value)
+{
+  ruby_whisper_params *rwp;
+  TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
+  if (NIL_P(value)) {
+    rwp->params.suppress_regex = NULL;
+    return value;
+  }
+  rwp->params.suppress_regex = StringValueCStr(value);
+  return value;
+}
+
+static VALUE
+ruby_whisper_params_get_suppress_regex(VALUE self)
+{
+  ruby_whisper_params *rwp;
+  TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
+  return rwp->params.suppress_regex == NULL ? Qnil : rb_str_new2(rwp->params.suppress_regex);
+}
+
+/*
+ * call-seq:
+ *   grammar_penalty = penalty -> penalty
+ */
+static VALUE
+ruby_whisper_params_set_grammar_penalty(VALUE self, VALUE value)
+{
+  ruby_whisper_params *rwp;
+  TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
+  rwp->params.grammar_penalty = NUM2DBL(value);
+  return value;
+}
+
+static VALUE
+ruby_whisper_params_get_grammar_penalty(VALUE self)
+{
+  ruby_whisper_params *rwp;
+  TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
+  return DBL2NUM(rwp->params.grammar_penalty);
+}
+
+/*
+ * call-seq:
+ *   tdrz_enable = enable -> enable
+ */
+static VALUE
+ruby_whisper_params_set_tdrz_enable(VALUE self, VALUE value)
+{
+  BOOL_PARAMS_SETTER(self, tdrz_enable, value)
+}
+
+static VALUE
+ruby_whisper_params_get_tdrz_enable(VALUE self)
+{
+  BOOL_PARAMS_GETTER(self, tdrz_enable)
+}
+
+/*
+ * call-seq:
+ *   audio_ctx = context_size -> context_size
+ */
+static VALUE
+ruby_whisper_params_set_audio_ctx(VALUE self, VALUE value)
+{
+  ruby_whisper_params *rwp;
+  TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
+  rwp->params.audio_ctx = NUM2INT(value);
+  return value;
+}
+
+static VALUE
+ruby_whisper_params_get_audio_ctx(VALUE self)
+{
+  ruby_whisper_params *rwp;
+  TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
+  return INT2NUM(rwp->params.audio_ctx);
+}
+
+/*
+ * call-seq:
+ *   debug_mode = enable -> enable
+ */
+static VALUE
+ruby_whisper_params_set_debug_mode(VALUE self, VALUE value)
+{
+  BOOL_PARAMS_SETTER(self, debug_mode, value)
+}
+
+static VALUE
+ruby_whisper_params_get_debug_mode(VALUE self)
+{
+  BOOL_PARAMS_GETTER(self, debug_mode)
+}
+
 #define SET_PARAM_IF_SAME(param_name) \
   if (id == id_ ## param_name) { \
     ruby_whisper_params_set_ ## param_name(self, value); \
@@ -1211,6 +1315,11 @@ ruby_whisper_params_initialize(int argc, VALUE *argv, VALUE self)
       SET_PARAM_IF_SAME(vad)
       SET_PARAM_IF_SAME(vad_model_path)
       SET_PARAM_IF_SAME(vad_params)
+      SET_PARAM_IF_SAME(suppress_regex)
+      SET_PARAM_IF_SAME(grammar_penalty)
+      SET_PARAM_IF_SAME(tdrz_enable)
+      SET_PARAM_IF_SAME(audio_ctx)
+      SET_PARAM_IF_SAME(debug_mode)
     }
   }
 
@@ -1348,6 +1457,11 @@ init_ruby_whisper_params(VALUE *mWhisper)
   DEFINE_PARAM(vad, 34)
   DEFINE_PARAM(vad_model_path, 35)
   DEFINE_PARAM(vad_params, 36)
+  DEFINE_PARAM(suppress_regex, 37)
+  DEFINE_PARAM(grammar_penalty, 38)
+  DEFINE_PARAM(tdrz_enable, 39)
+  DEFINE_PARAM(audio_ctx, 40)
+  DEFINE_PARAM(debug_mode, 41)
 
   rb_define_method(cParams, "on_new_segment", ruby_whisper_params_on_new_segment, 0);
   rb_define_method(cParams, "on_progress", ruby_whisper_params_on_progress, 0);
