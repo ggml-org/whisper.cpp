@@ -142,7 +142,7 @@ module Whisper
         flash_attn: boolish,
         gpu_device: Integer,
         dtw_token_timestamps: boolish,
-        dtw_heads_preset: Integer,
+        dtw_aheads_preset: Integer,
         dtw_n_top: Integer | nil,
       ) -> instance
 
@@ -154,8 +154,8 @@ module Whisper
       def gpu_device: () -> Integer
       def dtw_token_timestamps=: (boolish) -> boolish
       def dtw_token_timestamps: () -> (true | false)
-      def dtw_heads_preset=: (Integer) -> Integer
-      def dtw_heads_preset: () -> Integer
+      def dtw_aheads_preset=: (Integer) -> Integer
+      def dtw_aheads_preset: () -> Integer
       def dtw_n_top=: (Integer | nil) -> (Integer | nil)
       def dtw_n_top: () -> (Integer | nil)
     end
