@@ -251,7 +251,7 @@ whisper.transcribe("path/to/audio.wav", params)
 
 Each segment has tokens.
 
-To enable token timestamps, you need set `Whisper::Params#token_timestamps = true`. Then, retrieve tokens from segments using `Whisper::Segment#each_token`.
+To enable token timestamps, you need to set `Whisper::Params#token_timestamps = true`. Then, retrieve tokens from segments using `Whisper::Segment#each_token`.
 
 ```ruby
 whisper = Whisper::Context.new("base.en")
