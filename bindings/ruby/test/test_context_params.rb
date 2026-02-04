@@ -25,20 +25,14 @@ class TestContextParams < TestBase
     params.dtw_token_timestamps = true
     assert_true params.dtw_token_timestamps
 
-    # assert_equal , params.dtw_aheads_preset
-    # params.dtw_aheads_preset = 
-    # assert_equal , params.dtw_aheads_preset
+    assert_equal Whisper::AHEADS_NONE, params.dtw_aheads_preset
+    params.dtw_aheads_preset =Whisper::AHEADS_BASE
+    assert_equal Whisper::AHEADS_BASE, params.dtw_aheads_preset
 
     assert_nil params.dtw_n_top
     params.dtw_n_top = 6
     assert_equal 6, params.dtw_n_top
-
-    # assert_equal 0, params.dtw_aheads.n_heads
-    # params.dtw_aheads.n_heads = 6
-    # assert_equal 6, params.dtw_aheads.n_heads
-
-    # assert_nil params.dtw_aheads.heads
-    # params.dtw_aheads.heads = 
-    # assert_equal , params.dtw_aheads.heads
+    params.dtw_n_top = nil
+    assert_nil params.dtw_n_top
   end
 end
