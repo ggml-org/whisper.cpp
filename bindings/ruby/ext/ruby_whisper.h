@@ -17,7 +17,7 @@ typedef struct {
 } ruby_whisper;
 
 typedef struct ruby_whisper_context_params {
-  struct whisper_context_params *params;
+  struct whisper_context_params params;
 } ruby_whisper_context_params;
 
 typedef struct {
@@ -77,9 +77,6 @@ typedef struct parsed_samples_t {
 
 #define GetContextParams(obj, rwcp) do { \
   TypedData_Get_Struct((obj), ruby_whisper_context_params, &ruby_whisper_context_params_type, (rwcp)); \
-  if ((rwcp)->params == NULL) { \
-    rb_raise(rb_eRuntimeError, "Not initialized"); \
-  } \
 } while (0)
 
 #define GetToken(obj, rwt) do { \

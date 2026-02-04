@@ -7,13 +7,13 @@ static VALUE \
 ruby_whisper_context_params_get_ ## name(VALUE self) { \
   ruby_whisper_context_params *rwcp; \
   GetContextParams(self, rwcp); \
-  return rwcp->params->name ? Qtrue : Qfalse; \
+  return rwcp->params.name ? Qtrue : Qfalse; \
 } \
 static VALUE \
 ruby_whisper_context_params_set_ ## name(VALUE self, VALUE value) { \
   ruby_whisper_context_params *rwcp; \
   GetContextParams(self, rwcp); \
-  rwcp->params->name = RTEST(value); \
+  rwcp->params.name = RTEST(value); \
   return value; \
 }
 
@@ -22,13 +22,13 @@ static VALUE \
 ruby_whisper_context_params_get_ ## name(VALUE self) { \
   ruby_whisper_context_params *rwcp; \
   GetContextParams(self, rwcp); \
-  return INT2NUM(rwcp->params->name); \
+  return INT2NUM(rwcp->params.name); \
 } \
 static VALUE \
 ruby_whisper_context_params_set_ ## name(VALUE self, VALUE value) { \
   ruby_whisper_context_params *rwcp; \
   GetContextParams(self, rwcp); \
-  rwcp->params->name = NUM2INT(value); \
+  rwcp->params.name = NUM2INT(value); \
   return value; \
 }
 
@@ -55,17 +55,13 @@ ruby_whisper_context_params_memsize(const void *p)
   if (!rwcp) {
     return 0;
   }
-  return sizeof(rwcp) + sizeof(*rwcp->params);
+  return sizeof(ruby_whisper_context_params);
 }
 
 static void
 ruby_whisper_context_params_free(void *p)
 {
   ruby_whisper_context_params *rwcp = (ruby_whisper_context_params *)p;
-  if (rwcp->params) {
-    whisper_free_context_params(rwcp->params);
-    rwcp->params = NULL;
-  }
   xfree(rwcp);
 }
 
@@ -80,10 +76,7 @@ static VALUE
 ruby_whisper_context_params_s_allocate(VALUE klass)
 {
   ruby_whisper_context_params *rwcp;
-  VALUE obj = TypedData_Make_Struct(klass, ruby_whisper_context_params, &ruby_whisper_context_params_type, rwcp);
-  rwcp->params = ALLOC(struct whisper_context_params);
-
-  return obj;
+  return TypedData_Make_Struct(klass, ruby_whisper_context_params, &ruby_whisper_context_params_type, rwcp);
 }
 
 DEF_BOOLEAN_ATTR_METHOD(use_gpu);
@@ -97,7 +90,7 @@ ruby_whisper_context_params_get_dtw_n_top(VALUE self) {
   ruby_whisper_context_params *rwcp;
   GetContextParams(self, rwcp);
 
-  int dtw_n_top = rwcp->params->dtw_n_top;
+  int dtw_n_top = rwcp->params.dtw_n_top;
 
   return dtw_n_top == -1 ? Qnil : INT2NUM(dtw_n_top);
 }
@@ -107,7 +100,7 @@ ruby_whisper_context_params_set_dtw_n_top(VALUE self, VALUE value) {
   ruby_whisper_context_params *rwcp;
   GetContextParams(self, rwcp);
 
-  rwcp->params->dtw_n_top = NIL_P(value) ? -1 : NUM2INT(value);
+  rwcp->params.dtw_n_top = NIL_P(value) ? -1 : NUM2INT(value);
 
   return value;
 }
@@ -123,7 +116,7 @@ ruby_whisper_context_params_initialize(int argc, VALUE *argv, VALUE self)
 {
   ruby_whisper_context_params *rwcp;
   TypedData_Get_Struct(self, ruby_whisper_context_params, &ruby_whisper_context_params_type, rwcp);
-  *rwcp->params = whisper_context_default_params();
+  rwcp->params = whisper_context_default_params();
 
   VALUE kw_hash;
   rb_scan_args_kw(RB_SCAN_ARGS_KEYWORDS, argc, argv, ":", &kw_hash);

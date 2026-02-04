@@ -160,7 +160,7 @@ ruby_whisper_initialize(int argc, VALUE *argv, VALUE self)
   } else {
     ruby_whisper_context_params *rwcp;
     GetContextParams(context_params, rwcp);
-    params = *(rwcp->params);
+    params = rwcp->params;
   }
   rw->context = whisper_init_from_file_with_params(StringValueCStr(whisper_model_file_path), params);
   if (rw->context == NULL) {
