@@ -58,16 +58,9 @@ ruby_whisper_context_params_memsize(const void *p)
   return sizeof(ruby_whisper_context_params);
 }
 
-static void
-ruby_whisper_context_params_free(void *p)
-{
-  ruby_whisper_context_params *rwcp = (ruby_whisper_context_params *)p;
-  xfree(rwcp);
-}
-
 const rb_data_type_t ruby_whisper_context_params_type = {
   "ruby_whisper_context_params",
-  {0, ruby_whisper_context_params_free, ruby_whisper_context_params_memsize,},
+  {0, RUBY_DEFAULT_FREE, ruby_whisper_context_params_memsize,},
   0, 0,
   0
 };
