@@ -394,6 +394,20 @@ whisper
   .full(Whisper::Params.new, samples)
 ```
 
+Custom context params
+---------------------
+
+You can use customize `Whisper::Context`'s behavior using `Whisper::Context::Params`.
+
+```ruby
+context_params = Whisper::Context::Params.new(
+  use_gpu: false,
+  flash_attn: false,
+  # etc
+)
+whisper = Whisper::Context.new("base", context_params)
+```
+
 Using VAD separately from ASR
 -----------------------------
 
