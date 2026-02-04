@@ -41,7 +41,7 @@ typedef struct {
 
 typedef struct {
   whisper_token_data *token_data;
-  const char *text;
+  VALUE text;
 } ruby_whisper_token;
 
 typedef struct {

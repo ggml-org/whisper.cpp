@@ -32,6 +32,13 @@ ruby_whisper_token_memsize(const void *p)
 }
 
 static void
+ruby_whisper_token_mark(void *p)
+{
+  ruby_whisper_token *rwt = (ruby_whisper_token *)p;
+  rb_gc_mark(rwt->text);
+}
+
+static void
 ruby_whisper_token_free(void *p)
 {
   ruby_whisper_token *rwt = (ruby_whisper_token *)p;
@@ -44,7 +51,7 @@ ruby_whisper_token_free(void *p)
 
 static const rb_data_type_t ruby_whisper_token_type = {
   "ruby_whisper_token",
-  {0, ruby_whisper_token_free, ruby_whisper_token_memsize,},
+  {ruby_whisper_token_mark, ruby_whisper_token_free, ruby_whisper_token_memsize,},
   0, 0,
   0
 };
@@ -55,7 +62,7 @@ ruby_whisper_token_allocate(VALUE klass)
   ruby_whisper_token *rwt;
   VALUE token = TypedData_Make_Struct(klass, ruby_whisper_token, &ruby_whisper_token_type, rwt);
   rwt->token_data = NULL;
-  rwt->text = NULL;
+  rwt->text = Qnil;
   return token;
 }
 
@@ -67,7 +74,7 @@ ruby_whisper_token_s_init(struct whisper_context *context, int i_segment, int i_
   TypedData_Get_Struct(token, ruby_whisper_token, &ruby_whisper_token_type, rwt);
   rwt->token_data = ALLOC(whisper_token_data);
   *(rwt->token_data) = whisper_full_get_token_data(context, i_segment, i_token);
-  rwt->text = whisper_full_get_token_text(context, i_segment, i_token);
+  rwt->text = rb_str_new2(whisper_full_get_token_text(context, i_segment, i_token));
   return token;
 }
 
@@ -197,7 +204,7 @@ ruby_whisper_token_get_text(VALUE self)
 {
   ruby_whisper_token *rwt;
   GetToken(self, rwt);
-  return rb_str_new2(rwt->text);
+  return rwt->text;
 }
 
 /*
