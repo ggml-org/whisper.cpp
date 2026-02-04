@@ -247,6 +247,58 @@ whisper.transcribe("path/to/audio.wav", params)
 
 ```
 
+### Tokens ###
+
+Each segment has tokens.
+
+To enable token timestamps, you need set `Whisper::Params#token_timestamps = true`. Then, retrieve tokens from segments using `Whisper::Segment#each_token`.
+
+```ruby
+whisper = Whisper::Context.new("base.en")
+params = Whisper::Params.new(token_timestamps: true)
+whisper
+  .transcribe("path/to/audio.wav", params)
+  .each_segment do |segment|
+    segment.each_token do |token|
+      token => {start_time:, end_time:, text:, probability:}
+      st = "%05.2fs" % (start_time / 1000.0)
+      et = "%05.2fs" % (end_time / 1000.0)
+      prob = "%.1f%%" % (probability * 100)
+      puts "[#{st} --> #{et}] #{text} (#{prob})"
+    end
+  end
+```
+
+```
+[00.00s --> 00.00s] [_BEG_] (84.2%)
+[00.32s --> 00.37s]  And (71.2%)
+[00.37s --> 00.53s]  so (98.5%)
+[00.69s --> 00.85s]  my (70.7%)
+[00.85s --> 01.59s]  fellow (99.5%)
+[01.59s --> 02.10s]  Americans (90.1%)
+[02.85s --> 03.30s] , (28.4%)
+[03.30s --> 04.14s]  ask (79.8%)
+[04.14s --> 04.28s]  not (78.9%)
+[05.03s --> 05.35s]  what (93.3%)
+[05.41s --> 05.74s]  your (98.8%)
+[05.74s --> 06.41s]  country (99.6%)
+[06.41s --> 06.74s]  can (97.7%)
+[06.74s --> 06.92s]  do (99.0%)
+[07.00s --> 07.00s]  for (95.8%)
+[07.01s --> 07.52s]  you (98.5%)
+[07.81s --> 08.05s] , (49.3%)
+[08.19s --> 08.37s]  ask (65.6%)
+[08.37s --> 08.75s]  what (98.8%)
+[08.91s --> 09.04s]  you (98.2%)
+[09.04s --> 09.32s]  can (96.9%)
+[09.32s --> 09.38s]  do (90.3%)
+[09.44s --> 09.76s]  for (91.8%)
+[09.76s --> 09.99s]  your (98.2%)
+[10.02s --> 10.36s]  country (99.6%)
+[10.51s --> 10.99s] . (87.0%)
+[11.00s --> 11.00s] [_TT_550] (7.6%)
+```
+
 ### Models ###
 
 You can see model information:
