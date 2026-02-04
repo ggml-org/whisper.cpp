@@ -18,6 +18,7 @@ extern VALUE eError;
 extern VALUE cModel;
 
 extern const rb_data_type_t ruby_whisper_params_type;
+extern const rb_data_type_t ruby_whisper_context_params_type;
 extern VALUE ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self);
 extern VALUE rb_whisper_model_s_new(VALUE context);
 extern VALUE rb_whisper_segment_s_new(VALUE context, int index);
@@ -143,16 +144,25 @@ ruby_whisper_initialize(int argc, VALUE *argv, VALUE self)
 {
   ruby_whisper *rw;
   VALUE whisper_model_file_path;
+  VALUE context_params;
+  struct whisper_context_params params;
 
   // TODO: we can support init from buffer here too maybe another ruby object to expose
-  rb_scan_args(argc, argv, "01", &whisper_model_file_path);
+  rb_scan_args(argc, argv, "11", &whisper_model_file_path, &context_params);
   TypedData_Get_Struct(self, ruby_whisper, &ruby_whisper_type, rw);
 
   whisper_model_file_path = ruby_whisper_normalize_model_path(whisper_model_file_path);
   if (!rb_respond_to(whisper_model_file_path, id_to_s)) {
     rb_raise(rb_eRuntimeError, "Expected file path to model to initialize Whisper::Context");
   }
-  rw->context = whisper_init_from_file_with_params(StringValueCStr(whisper_model_file_path), whisper_context_default_params());
+  if (NIL_P(context_params)) {
+    params = whisper_context_default_params();
+  } else {
+    ruby_whisper_context_params *rwcp;
+    GetContextParams(context_params, rwcp);
+    params = *(rwcp->params);
+  }
+  rw->context = whisper_init_from_file_with_params(StringValueCStr(whisper_model_file_path), params);
   if (rw->context == NULL) {
     rb_raise(rb_eRuntimeError, "error: failed to initialize whisper context");
   }
