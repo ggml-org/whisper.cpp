@@ -47,6 +47,16 @@ func (p *Params) SetPrintTimestamps(v bool) {
 	p.print_timestamps = toBool(v)
 }
 
+// Enable extra debug information
+func (p *Params) SetDebugMode(v bool) {
+	p.debug_mode = toBool(v)
+}
+
+// Enable tinydiarize speaker turn detection
+func (p *Params) SetDiarize(v bool) {
+	p.tdrz_enable = toBool(v)
+}
+
 // Voice Activity Detection (VAD)
 func (p *Params) SetVAD(v bool) {
 	p.vad = toBool(v)
@@ -179,6 +189,8 @@ func (p *Params) SetInitialPrompt(prompt string) {
 	p.initial_prompt = C.CString(prompt)
 }
 
+// SetCarryInitialPrompt if true, always prepend initial_prompt to every decode window
+// (may reduce conditioning on previous text)
 func (p *Params) SetCarryInitialPrompt(v bool) {
 	p.carry_initial_prompt = toBool(v)
 }
@@ -235,9 +247,6 @@ func (p *Params) String() string {
 	}
 	if p.token_timestamps {
 		str += " token_timestamps"
-	}
-	if p.carry_initial_prompt {
-		str += " carry_initial_prompt"
 	}
 
 	return str + ">"
