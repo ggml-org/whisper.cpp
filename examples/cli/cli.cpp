@@ -965,6 +965,9 @@ static std::string escape_json_string(const std::string & s) {
 int main(int argc, char ** argv) {
     ggml_backend_load_all();
 
+    // Disable stdout buffering to ensure real-time output when piped
+    setvbuf(stdout, NULL, _IONBF, 0);
+
 #if defined(_WIN32)
     // Set the console output code page to UTF-8, while command line arguments
     // are still encoded in the system's code page. In this way, we can print
