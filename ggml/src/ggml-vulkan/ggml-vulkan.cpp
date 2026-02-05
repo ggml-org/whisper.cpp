@@ -1963,6 +1963,7 @@ struct vk_instance_t {
     vk_device devices[GGML_VK_MAX_DEVICES];
 };
 
+static std::recursive_mutex vk_instance_init_mutex;
 static bool vk_instance_initialized = false;
 static vk_instance_t vk_instance;
 
@@ -4487,6 +4488,7 @@ static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDevicePrope
 static vk_device ggml_vk_get_device(size_t idx) {
     VK_LOG_DEBUG("ggml_vk_get_device(" << idx << ")");
 
+    std::lock_guard<std::recursive_mutex> lock(vk_instance_init_mutex);
     if (vk_instance.devices[idx] == nullptr) {
         VK_LOG_DEBUG("Initializing new vk_device");
         vk_device device = std::make_shared<vk_device_struct>();
@@ -5415,6 +5417,7 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher() {
 }
 
 static void ggml_vk_instance_init() {
+    std::lock_guard<std::recursive_mutex> lock(vk_instance_init_mutex);
     if (vk_instance_initialized) {
         return;
     }
