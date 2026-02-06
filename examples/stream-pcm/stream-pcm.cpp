@@ -62,6 +62,8 @@ struct whisper_params {
     int32_t vad_probe_ms    = 200;
     int32_t vad_silence_ms  = 800;
     int32_t vad_pre_roll_ms = 300;
+
+    std::string vad_model   = "";       // path to silero .bin model
 };
 
 void whisper_print_usage(int argc, char ** argv, const whisper_params & params);
@@ -108,6 +110,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "--vad-probe-ms")                     { params.vad_probe_ms  = std::stoi(argv[++i]); }
         else if (arg == "--vad-silence-ms")                   { params.vad_silence_ms = std::stoi(argv[++i]); }
         else if (arg == "--vad-pre-roll-ms")                  { params.vad_pre_roll_ms = std::stoi(argv[++i]); }
+        else if (arg == "-vm"   || arg == "--vad-model")        { params.vad_model      = argv[++i]; }
 
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
@@ -154,6 +157,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "            --vad-probe-ms N   [%-5d] VAD probe chunk size (ms)\n",                    params.vad_probe_ms);
     fprintf(stderr, "            --vad-silence-ms N [%-5d] silence duration to end segment (ms)\n",        params.vad_silence_ms);
     fprintf(stderr, "            --vad-pre-roll-ms N[%-5d] audio prepended before VAD trigger (ms)\n",      params.vad_pre_roll_ms);
+    fprintf(stderr, "  -vm PATH, --vad-model PATH  [%-5s] path to Silero VAD model (enables silero VAD)\n", params.vad_model.c_str());
     fprintf(stderr, "\n");
 }
 
@@ -519,6 +523,20 @@ int main(int argc, char ** argv) {
         return 2;
     }
 
+    // init Silero VAD context (if requested)
+    struct whisper_vad_context * vad_ctx = nullptr;
+    if (use_vad && !params.vad_model.empty()) {
+        struct whisper_vad_context_params vparams = whisper_vad_default_context_params();
+        vparams.n_threads = params.n_threads;
+        vparams.use_gpu   = false; // Silero VAD is tiny, always runs on CPU
+        vad_ctx = whisper_vad_init_from_file_with_params(params.vad_model.c_str(), vparams);
+        if (!vad_ctx) {
+            fprintf(stderr, "error: failed to init VAD model '%s'\n", params.vad_model.c_str());
+            whisper_free(ctx);
+            return 2;
+        }
+    }
+
     std::vector<float> pcmf32    (n_samples_30s, 0.0f);
     std::vector<float> pcmf32_old;
     std::vector<float> pcmf32_new(n_samples_30s, 0.0f);
@@ -549,7 +567,7 @@ int main(int argc, char ** argv) {
         if (!use_vad) {
             fprintf(stderr, "%s: n_new_line = %d, no_context = %d\n", __func__, n_new_line, params.no_context);
         } else {
-            fprintf(stderr, "%s: using VAD, will transcribe on speech activity\n", __func__);
+            fprintf(stderr, "%s: using VAD (%s), will transcribe on speech activity\n", __func__, vad_ctx ? "silero" : "simple");
         }
 
         fprintf(stderr, "\n");
@@ -806,8 +824,28 @@ int main(int argc, char ** argv) {
                 debug_log("debug: save_audio wrote %zu samples (probe)\n", pcmf32_new.size());
             }
 
-            const bool silence = ::vad_simple(pcmf32_new, WHISPER_SAMPLE_RATE, vad_last_ms, params.vad_thold, params.freq_thold, false);
-            debug_log("debug: vad silence=%d (last_ms=%d)\n", silence ? 1 : 0, vad_last_ms);
+            bool silence;
+            if (vad_ctx) {
+                // Silero VAD: run model on probe chunk, average probs
+                if (whisper_vad_detect_speech(vad_ctx, pcmf32_new.data(), pcmf32_new.size())) {
+                    const int n_probs = whisper_vad_n_probs(vad_ctx);
+                    const float * probs = whisper_vad_probs(vad_ctx);
+                    float avg = 0.0f;
+                    for (int i = 0; i < n_probs; ++i) {
+                        avg += probs[i];
+                    }
+                    avg = (n_probs > 0) ? avg / n_probs : 0.0f;
+                    silence = (avg < params.vad_thold);
+                    debug_log("debug: silero vad avg=%.3f thold=%.2f silence=%d\n", avg, params.vad_thold, silence ? 1 : 0);
+                } else {
+                    // detect_speech failed — treat as silence to avoid false triggers
+                    silence = true;
+                    debug_log("debug: silero vad detect_speech failed, treating as silence\n");
+                }
+            } else {
+                silence = ::vad_simple(pcmf32_new, WHISPER_SAMPLE_RATE, vad_last_ms, params.vad_thold, params.freq_thold, false);
+                debug_log("debug: vad silence=%d (last_ms=%d)\n", silence ? 1 : 0, vad_last_ms);
+            }
 
             if (!in_speech) {
                 if (!silence) {
@@ -854,6 +892,10 @@ int main(int argc, char ** argv) {
 
     whisper_print_timings(ctx);
     whisper_free(ctx);
+
+    if (vad_ctx) {
+        whisper_vad_free(vad_ctx);
+    }
 
     return 0;
 }
