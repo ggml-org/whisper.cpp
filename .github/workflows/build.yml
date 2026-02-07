@@ -1264,6 +1264,7 @@ jobs:
       - ios-xcode-build
       - windows
       - windows-blas
+      - windows-cublas
 
     steps:
       - name: Clone
