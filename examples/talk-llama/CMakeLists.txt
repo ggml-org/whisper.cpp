@@ -29,7 +29,7 @@ if (WHISPER_SDL2)
         llama-model-saver.cpp
         llama-model.cpp
         llama-quant.cpp
-        llama-sampling.cpp
+        llama-sampler.cpp
         llama-vocab.cpp
         unicode.cpp
         unicode-data.cpp
