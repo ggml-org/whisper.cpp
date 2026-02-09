@@ -1,0 +1,5 @@
+#!/bin/bash
+# whisper-linux — Voice typing for Linux desktop
+# Unique process name for easy pkill -f whisper-linux
+cd "$(dirname "$0")"
+exec python3 -m app "$@"
