@@ -1,3 +1,17 @@
-build*/
+*.o
+*.a
+.cache/
+# Do not ignore .git directory, otherwise the reported build number will always be 0
 .github/
+.gitignore
+.vs/
+.vscode/
+.DS_Store
+*.md
+*.cmd
+
+build*/
 .devops/
+models/*.bin
+samples/
+tests/
