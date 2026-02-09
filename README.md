@@ -509,6 +509,14 @@ cmake --build build -j --config Release
 
 https://user-images.githubusercontent.com/1991296/194935793-76afede7-cfa8-48d8-a80f-28ba83be7d09.mp4
 
+If you want to stream audio from another app without SDL or a microphone device, use
+[stream-pcm](examples/stream-pcm). It reads raw PCM from stdin or a pipe:
+
+```bash
+ffmpeg -i samples/jfk.wav -f s16le -ac 1 -ar 16000 - | \
+  ./build/bin/whisper-stream-pcm -m ./models/ggml-base.en.bin --format s16 --sample-rate 16000 --step 500 --length 5000
+```
+
 ## Confidence color-coding
 
 Adding the `--print-colors` argument will print the transcribed text using an experimental color coding strategy
@@ -842,6 +850,7 @@ Some of the examples are even ported to run in the browser using WebAssembly. Ch
 | [whisper-cli](examples/cli)                         | [whisper.wasm](examples/whisper.wasm) | Tool for translating and transcribing audio using Whisper                                                                       |
 | [whisper-bench](examples/bench)                     | [bench.wasm](examples/bench.wasm)     | Benchmark the performance of Whisper on your machine                                                                            |
 | [whisper-stream](examples/stream)                   | [stream.wasm](examples/stream.wasm)   | Real-time transcription of raw microphone capture                                                                               |
+| [whisper-stream-pcm](examples/stream-pcm)           |                                       | Real-time transcription of raw PCM via stdin/pipe (no SDL dependency)                                                           |
 | [whisper-command](examples/command)                 | [command.wasm](examples/command.wasm) | Basic voice assistant example for receiving voice commands from the mic                                                         |
 | [whisper-server](examples/server)                   |                                       | HTTP transcription server with OAI-like API                                                                                     |
 | [whisper-talk-llama](examples/talk-llama)           |                                       | Talk with a LLaMA bot                                                                                                           |
