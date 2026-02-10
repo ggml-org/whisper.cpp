@@ -744,7 +744,13 @@ static void output_json(
                                 value_s("text", whisper_token_to_str(ctx, token.id), false);
                                 if(token.t0 > -1 && token.t1 > -1) {
                                     // If we have per-token timestamps, write them out
-                                    times_o(token.t0, token.t1, false);
+                                    if (params.vad) {
+                                        times_o(vad_ts_to_original_ts(token.t0, ctx),
+                                                vad_ts_to_original_ts(token.t1, ctx),
+                                                false);
+                                    } else {
+                                        times_o(token.t0, token.t1, false);
+                                    }
                                 }
                                 value_i("id", token.id, false);
                                 value_f("p", token.p, false);
