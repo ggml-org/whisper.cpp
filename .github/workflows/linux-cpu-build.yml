@@ -79,6 +79,11 @@ jobs:
             echo ""
             echo "All build artifacts:"
             find build/bin -type f | sort
+            echo ""
+            echo "Checking library dependencies for whisper-server:"
+            if [ -f "build/bin/whisper-server" ]; then
+              ldd build/bin/whisper-server || echo "Note: ldd may show missing libs if statically linked"
+            fi
           else
             echo "ERROR: build/bin directory not found!"
             exit 1
@@ -93,22 +98,67 @@ jobs:
           PACKAGE_DIR="$PACKAGE_NAME"
           mkdir -p "$PACKAGE_DIR"
           
-          # Copy binaries
+          # Copy binaries and libraries from build/bin
           if [ -d "build/bin" ]; then
+            # Copy all files from build/bin
             cp -r build/bin/* "$PACKAGE_DIR/" 2>/dev/null || true
-            # Also copy any .so files
-            find build -name "*.so*" -exec cp {} "$PACKAGE_DIR/" \; 2>/dev/null || true
+            
+            # Also find and copy .so files from build directory (they might be in lib/)
+            find build -name "*.so*" -type f -exec cp {} "$PACKAGE_DIR/" \; 2>/dev/null || true
           fi
           
-          # Create README
-          printf "Whisper.cpp CPU Build for Linux\n" > "$PACKAGE_DIR/README.txt"
-          printf "===============================\n\n" >> "$PACKAGE_DIR/README.txt"
-          printf "Build Date: %s\n" "$(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> "$PACKAGE_DIR/README.txt"
-          printf "Architecture: %s\n" "$(uname -m)" >> "$PACKAGE_DIR/README.txt"
-          printf "OS: %s\n" "$(uname -o)" >> "$PACKAGE_DIR/README.txt"
-          printf "Kernel: %s\n\n" "$(uname -r)" >> "$PACKAGE_DIR/README.txt"
-          printf "Binaries:\n" >> "$PACKAGE_DIR/README.txt"
-          ls -lh "$PACKAGE_DIR" | grep -v "^total" | grep -v "^d" | awk '{print "  " $9 " (" $5 ")"}' >> "$PACKAGE_DIR/README.txt"
+          # Verify whisper-server exists
+          if [ ! -f "$PACKAGE_DIR/whisper-server" ]; then
+            echo "ERROR: whisper-server not found in package!"
+            echo "Contents of package directory:"
+            ls -la "$PACKAGE_DIR"
+            exit 1
+          fi
+          
+          # Check dependencies
+          echo "Checking whisper-server dependencies:"
+          ldd "$PACKAGE_DIR/whisper-server" || echo "Note: May be statically linked or missing system libs"
+          
+          # Make whisper-server executable
+          chmod +x "$PACKAGE_DIR/whisper-server"
+          
+          # Create a run script that sets LD_LIBRARY_PATH
+          {
+            printf "#!/bin/bash\n"
+            printf "# Run whisper-server with proper library path\n"
+            printf "SCRIPT_DIR=\"\$(cd \"\$(dirname \"\${BASH_SOURCE[0]}\")\" && pwd)\"\n"
+            printf "export LD_LIBRARY_PATH=\"\${SCRIPT_DIR}:\${LD_LIBRARY_PATH}\"\n"
+            printf "exec \"\${SCRIPT_DIR}/whisper-server\" \"\$@\"\n"
+          } > "$PACKAGE_DIR/run-whisper-server.sh"
+          chmod +x "$PACKAGE_DIR/run-whisper-server.sh"
+          
+          # Create README with usage instructions
+          {
+            printf "Whisper.cpp CPU Build for Linux\n"
+            printf "===============================\n\n"
+            printf "Build Date: %s\n" "$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+            printf "Architecture: %s\n" "$(uname -m)"
+            printf "OS: %s\n" "$(uname -o)"
+            printf "Kernel: %s\n\n" "$(uname -r)"
+            printf "Binaries:\n"
+            ls -lh "$PACKAGE_DIR" | grep -v "^total" | grep -v "^d" | awk '{print "  " $9 " (" $5 ")"}'
+            printf "\n"
+            printf "Usage:\n"
+            printf "------\n\n"
+            printf "Option 1: Use the run script (recommended):\n"
+            printf "  ./run-whisper-server.sh --host 127.0.0.1 -m /path/to/model.bin\n\n"
+            printf "Option 2: Set LD_LIBRARY_PATH manually:\n"
+            printf "  export LD_LIBRARY_PATH=\$(pwd):\$LD_LIBRARY_PATH\n"
+            printf "  ./whisper-server --host 127.0.0.1 -m /path/to/model.bin\n\n"
+            printf "System Requirements:\n"
+            printf "-------------------\n"
+            printf "This build requires standard Linux system libraries:\n"
+            printf "  - libc (glibc)\n"
+            printf "  - libstdc++\n"
+            printf "  - libpthread\n"
+            printf "  - libm\n"
+            printf "These are typically pre-installed on most Linux distributions.\n"
+          } > "$PACKAGE_DIR/README.txt"
           
           # Create tarball
           tar -czf "${PACKAGE_NAME}.tar.gz" "$PACKAGE_DIR"
@@ -117,6 +167,9 @@ jobs:
             PACKAGE_SIZE=$(du -h "${PACKAGE_NAME}.tar.gz" | cut -f1)
             echo "Package created successfully: ${PACKAGE_NAME}.tar.gz ($PACKAGE_SIZE)"
             ls -lh "${PACKAGE_NAME}.tar.gz"
+            echo ""
+            echo "Package contents:"
+            tar -tzf "${PACKAGE_NAME}.tar.gz" | head -20
           else
             echo "ERROR: Failed to create package!"
             exit 1
