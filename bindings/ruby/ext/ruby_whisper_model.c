@@ -1,4 +1,3 @@
-#include <ruby.h>
 #include "ruby_whisper.h"
 
 extern const rb_data_type_t ruby_whisper_type;

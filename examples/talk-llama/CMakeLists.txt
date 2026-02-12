@@ -22,13 +22,14 @@ if (WHISPER_SDL2)
         llama-kv-cache-iswa.cpp
         llama-memory-recurrent.cpp
         llama-memory-hybrid.cpp
+        llama-memory-hybrid-iswa.cpp
         llama-memory.cpp
         llama-mmap.cpp
         llama-model-loader.cpp
         llama-model-saver.cpp
         llama-model.cpp
         llama-quant.cpp
-        llama-sampling.cpp
+        llama-sampler.cpp
         llama-vocab.cpp
         unicode.cpp
         unicode-data.cpp

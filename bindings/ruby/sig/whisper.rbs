@@ -17,6 +17,21 @@ module Whisper
   LOG_LEVEL_ERROR: Integer
   LOG_LEVEL_DEBUG: Integer
   LOG_LEVEL_CONT: Integer
+  AHEADS_NONE: Integer
+  AHEADS_N_TOP_MOST: Integer
+  AHEADS_CUSTOM: Integer
+  AHEADS_TINY_EN: Integer
+  AHEADS_TINY: Integer
+  AHEADS_BASE_EN: Integer
+  AHEADS_BASE: Integer
+  AHEADS_SMALL_EN: Integer
+  AHEADS_SMALL: Integer
+  AHEADS_MEDIUM_EN: Integer
+  AHEADS_MEDIUM: Integer
+  AHEADS_LARGE_V1: Integer
+  AHEADS_LARGE_V2: Integer
+  AHEADS_LARGE_V3: Integer
+  AHEADS_LARGE_V3_TURBO: Integer
 
   def self.lang_max_id: () -> Integer
   def self.lang_id: (string name) -> Integer
@@ -37,8 +52,8 @@ module Whisper
     #       puts text
     #     end
     #
-    def transcribe: (string, Params, ?n_processors: Integer) -> self
-                  | (string, Params, ?n_processors: Integer) { (String) -> void } -> self
+    def transcribe: (path, Params, ?n_processors: Integer) -> self
+                  | (path, Params, ?n_processors: Integer) { (String) -> void } -> self
 
     def model_n_vocab: () -> Integer
     def model_n_audio_ctx: () -> Integer
@@ -120,6 +135,30 @@ module Whisper
 
     def to_srt: () -> String
     def to_webvtt: () -> String
+
+    class Params
+      def self.new: (
+        use_gpu: boolish,
+        flash_attn: boolish,
+        gpu_device: Integer,
+        dtw_token_timestamps: boolish,
+        dtw_aheads_preset: Integer,
+        dtw_n_top: Integer | nil,
+      ) -> instance
+
+      def use_gpu=: (boolish) -> boolish
+      def use_gpu: () -> (true | false)
+      def flash_attn=: (boolish) -> boolish
+      def flash_attn: () -> (true | false)
+      def gpu_device=: (Integer) -> Integer
+      def gpu_device: () -> Integer
+      def dtw_token_timestamps=: (boolish) -> boolish
+      def dtw_token_timestamps: () -> (true | false)
+      def dtw_aheads_preset=: (Integer) -> Integer
+      def dtw_aheads_preset: () -> Integer
+      def dtw_n_top=: (Integer | nil) -> (Integer | nil)
+      def dtw_n_top: () -> (Integer | nil)
+    end
   end
 
   class Params
@@ -603,6 +642,8 @@ module Whisper
 
     class Context
       def self.new: (String | path | ::URI::HTTP model_name_or_path) -> instance
+      def segments_from_samples: (Params, Array[Float] samples, ?Integer n_samples) -> Segments
+                               | (Params, _Samples, ?Integer n_samples) -> Segments
       def detect: (path wav_file_path, Params) -> Segments
     end
 

@@ -1,4 +1,3 @@
-#include <ruby.h>
 #include "ruby_whisper.h"
 
 #define BOOL_PARAMS_SETTER(self, prop, value) \

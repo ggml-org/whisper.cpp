@@ -67,7 +67,7 @@ jobs:
 
     steps:
       - name: Checkout with full history
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -127,7 +127,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -159,7 +159,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -173,10 +173,6 @@ jobs:
             export DEBIAN_FRONTEND=noninteractive
             sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
             sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-
-            apt-get update
-            apt-get install -y ca-certificates
-            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
 
             apt update
             apt install -y build-essential libsdl2-dev cmake git
@@ -195,7 +191,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -209,10 +205,6 @@ jobs:
             export DEBIAN_FRONTEND=noninteractive
             sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
             sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-
-            apt-get update
-            apt-get install -y ca-certificates
-            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
 
             apt update
             apt install -y build-essential libsdl2-dev cmake git
@@ -231,7 +223,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2.16
@@ -263,7 +255,7 @@ jobs:
 #
 #    steps:
 #      - name: Clone
-#        uses: actions/checkout@v4
+#        uses: actions/checkout@v6
 #
 #      - name: Build
 #        uses: cross-platform-actions/action@v0.27.0
@@ -289,7 +281,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -323,7 +315,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -337,10 +329,6 @@ jobs:
             export DEBIAN_FRONTEND=noninteractive
             sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
             sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-
-            apt-get update
-            apt-get install -y ca-certificates
-            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
 
             apt update
             apt install -y build-essential cmake libsdl2-dev git
@@ -361,7 +349,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -375,10 +363,6 @@ jobs:
             export DEBIAN_FRONTEND=noninteractive
             sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
             sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-
-            apt-get update
-            apt-get install -y ca-certificates
-            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
 
             apt update
             apt install -y build-essential cmake libsdl2-dev git
@@ -402,7 +386,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -416,10 +400,6 @@ jobs:
             export DEBIAN_FRONTEND=noninteractive
             sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
             sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-
-            apt-get update
-            apt-get install -y ca-certificates
-            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
 
             apt update
             apt install -y clang build-essential cmake libsdl2-dev git
@@ -440,7 +420,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -480,7 +460,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: add oneAPI to apt
         shell: bash
@@ -504,7 +484,7 @@ jobs:
 
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build
         id: cmake_build
@@ -532,7 +512,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: add oneAPI to apt
         shell: bash
@@ -556,7 +536,7 @@ jobs:
 
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build
         id: cmake_build
@@ -581,7 +561,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup ${{ matrix.sys }}
         uses: msys2/setup-msys2@v2
@@ -636,7 +616,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Add msbuild to PATH
         uses: microsoft/setup-msbuild@v2
@@ -666,31 +646,31 @@ jobs:
 
       - name: Upload SDL2.dll
         if: matrix.sdl2 == 'ON'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.s2arc }}_SDL2.dll
           path: build/bin/${{ matrix.build }}/SDL2.dll
 
       - name: Upload whisper dll
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: whisper_${{ matrix.arch }}.dll
           path: build/bin/${{ matrix.build }}/whisper.dll
 
       - name: Upload ggml dll
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ggml_${{ matrix.arch }}.dll
           path: build/bin/${{ matrix.build }}/ggml.dll
 
       - name: Upload ggml base dll
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ggml_base_${{ matrix.arch }}.dll
           path: build/bin/${{ matrix.build }}/ggml-base.dll
 
       - name: Upload ggml cpu dll
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ggml_cpu_${{ matrix.arch }}.dll
           path: build/bin/${{ matrix.build }}/ggml-cpu.dll
@@ -702,7 +682,7 @@ jobs:
 
       - name: Upload binaries
         if: matrix.sdl2 == 'ON' && ${{ needs.determine-tag.outputs.should_release }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: whisper-bin-${{ matrix.arch }}.zip
           path: whisper-bin-${{ matrix.arch }}.zip
@@ -731,10 +711,10 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Export GitHub Actions cache environment variables
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
@@ -788,7 +768,7 @@ jobs:
 
       - name: Upload binaries
         if: matrix.blas == 'ON' && matrix.sdl2 == 'ON' && ${{ needs.determine-tag.outputs.should_release }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: whisper-blas-bin-${{ matrix.arch }}.zip
           path: whisper-blas-bin-${{ matrix.arch }}.zip
@@ -812,7 +792,7 @@ jobs:
             sdl2_ver: 2.28.5
     steps:
       - name: Clone repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Ninja
         id: install_ninja
@@ -997,7 +977,7 @@ jobs:
 
       - name: Upload binaries
         if: ${{ needs.determine-tag.outputs.should_release }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
           path: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
@@ -1013,7 +993,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup emsdk
         uses: mymindstorm/setup-emsdk@v14
@@ -1036,7 +1016,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Configure
         run: |
@@ -1078,7 +1058,7 @@ jobs:
 
       - name: Upload artifacts
         if: ${{ needs.determine-tag.outputs.should_release }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           path: whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip
           name: whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip
@@ -1090,12 +1070,12 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: whisper
 
       - name: Install Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: zulu
           java-version: 21
@@ -1119,10 +1099,10 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: set up JDK 11
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '11'
           distribution: 'temurin'
@@ -1145,36 +1125,36 @@ jobs:
     needs: ['windows']
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: zulu
           java-version: 20
 
       - name: Download Whisper Windows lib
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: whisper_x64.dll
 
       - name: Download GGML Windows lib
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ggml_x64.dll
 
       - name: Download GGML Base Windows lib
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ggml_base_x64.dll
 
       - name: Download GGML CPU Windows lib
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ggml_cpu_x64.dll
 
       - name: Download SDL2.dll
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: x64_SDL2.dll
 
@@ -1221,7 +1201,7 @@ jobs:
               Compress-Archive -Path "bindings/java/build/libs/whispercpp-*.jar" -DestinationPath "whispercpp.jar.zip"
 
       - name: Upload jar
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: whispercpp.jar.zip
           path: whispercpp.jar.zip
@@ -1245,7 +1225,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Test quantize
         run: |
@@ -1269,7 +1249,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -1282,7 +1262,7 @@ jobs:
       # Downloads all the artifacts from the previous jobs
       - name: Download artifacts
         id: download-artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: ./artifact
 
@@ -1332,7 +1312,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set environment variables
         id: set_vars
@@ -1358,7 +1338,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build
         shell: bash
@@ -1378,7 +1358,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -1403,7 +1383,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -1428,7 +1408,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -1453,7 +1433,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -1478,7 +1458,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -1503,7 +1483,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Test
         id: ggml-ci
@@ -1517,7 +1497,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Test
         id: ggml-ci
@@ -1531,7 +1511,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Test
         id: ggml-ci
@@ -1545,7 +1525,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Test
         id: ggml-ci
@@ -1558,7 +1538,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Test
         id: ggml-ci
@@ -1571,7 +1551,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Test
         id: ggml-ci

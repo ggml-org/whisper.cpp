@@ -748,9 +748,9 @@ int main(int argc, char ** argv) {
     <body>
         <h1>Whisper.cpp Server</h1>
 
-        <h2>/inference</h2>
+        <h2>)" + sparams.request_path + sparams.inference_path + R"(</h2>
         <pre>
-    curl 127.0.0.1:)" + std::to_string(sparams.port) + R"(/inference \
+    curl 127.0.0.1:)" + std::to_string(sparams.port) + sparams.request_path + sparams.inference_path + R"( \
     -H "Content-Type: multipart/form-data" \
     -F file="@&lt;file-path&gt;" \
     -F temperature="0.0" \
@@ -767,7 +767,7 @@ int main(int argc, char ** argv) {
 
         <div>
             <h2>Try it out</h2>
-            <form action="/inference" method="POST" enctype="multipart/form-data">
+            <form action=")" + sparams.request_path + sparams.inference_path + R"(" method="POST" enctype="multipart/form-data">
                 <label for="file">Choose an audio file:</label>
                 <input type="file" id="file" name="file" accept="audio/*" required><br>
 

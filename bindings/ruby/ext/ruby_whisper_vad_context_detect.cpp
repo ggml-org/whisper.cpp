@@ -1,4 +1,3 @@
-#include <ruby.h>
 #include "ruby_whisper.h"
 #include "common-whisper.h"
 #include <string>
@@ -7,6 +6,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+extern ID id_to_path;
 
 extern VALUE cVADSegments;
 
@@ -25,12 +26,12 @@ ruby_whisper_vad_detect(VALUE self, VALUE file_path, VALUE params) {
   std::vector<std::vector<float>> pcmf32s;
   whisper_vad_segments *segments;
 
-  TypedData_Get_Struct(self, ruby_whisper_vad_context, &ruby_whisper_vad_context_type, rwvc);
-  if (rwvc->context == NULL) {
-    rb_raise(rb_eRuntimeError, "Doesn't have referenxe to context internally");
-  }
+  GetVADContext(self, rwvc);
   TypedData_Get_Struct(params, ruby_whisper_vad_params, &ruby_whisper_vad_params_type, rwvp);
 
+  if (rb_respond_to(file_path, id_to_path)) {
+    file_path = rb_funcall(file_path, id_to_path, 0);
+  }
   cpp_file_path = StringValueCStr(file_path);
 
   if (!read_audio_data(cpp_file_path, pcmf32, pcmf32s, false)) {

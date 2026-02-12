@@ -1,6 +1,7 @@
 require_relative "helper"
 require "stringio"
 require "etc"
+require "pathname"
 
 # Exists to detect memory-related bug
 Whisper.log_set ->(level, buffer, user_data) {}, nil
@@ -16,6 +17,15 @@ class TestWhisper < TestBase
     params.print_timestamps = false
 
     @whisper.transcribe(AUDIO, params) {|text|
+      assert_match(/ask not what your country can do for you, ask what you can do for your country/, text)
+    }
+  end
+
+  def test_whisper_pathname
+    @whisper = Whisper::Context.new("base.en")
+    params  = Whisper::Params.new
+
+    @whisper.transcribe(Pathname(AUDIO), params) {|text|
       assert_match(/ask not what your country can do for you, ask what you can do for your country/, text)
     }
   end
@@ -205,6 +215,16 @@ class TestWhisper < TestBase
 
       assert_equal 1, @whisper.full_n_segments
       assert_match(/ask not what your country can do for you, ask what you can do for your country/, @whisper.each_segment.first.text)
+    end
+
+    def test_full_with_memroy_view_gc
+      samples = JFKReader.new(AUDIO)
+      @whisper.full(@params, samples)
+      GC.start
+      require "fiddle"
+      Fiddle::MemoryView.export samples do |view|
+        assert_equal 176000, view.to_s.unpack("#{view.format}*").length
+      end
     end
 
     def test_full_parallel
