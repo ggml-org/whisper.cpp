@@ -1,12 +1,20 @@
 name: Linux CPU Build
 
 on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'src/**'
+      - 'ggml/**'
+      - 'CMakeLists.txt'
+      - '**.cmake'
   pull_request:
     branches:
       - main
       - master
     paths:
-      - '.github/workflows/linux-cpu-build.yml'
       - 'src/**'
       - 'ggml/**'
       - 'CMakeLists.txt'
