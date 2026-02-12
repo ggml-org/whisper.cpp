@@ -6653,8 +6653,8 @@ static bool whisper_vad(
 
     if (vad_segments->data.size() > 0) {
         state->has_vad_segments = true;
-        ctx->state->vad_segments.clear();
-        ctx->state->vad_segments.reserve(vad_segments->data.size());
+        state->vad_segments.clear();
+        state->vad_segments.reserve(vad_segments->data.size());
 
         // Initialize the time mapping table
         state->vad_mapping_table.clear();
@@ -6749,7 +6749,7 @@ static bool whisper_vad(
 
                 WHISPER_LOG_INFO("%s: vad_segment_info: orig_start: %.2f, orig_end: %.2f, vad_start: %.2f, vad_end: %.2f\n",
                     __func__, segment.orig_start/100.0, segment.orig_end/100.0, segment.vad_start/100.0, segment.vad_end/100.0);
-                ctx->state->vad_segments.push_back(segment);
+                state->vad_segments.push_back(segment);
 
                 // Copy this speech segment
                 memcpy(filtered_samples.data() + offset, samples + segment_start_samples, segment_length * sizeof(float));
@@ -6803,19 +6803,41 @@ static bool whisper_vad(
 }
 
 int whisper_full_with_state(
-        struct whisper_context * ctx,
-          struct whisper_state * state,
-    struct whisper_full_params   params,
-                   const float * samples,
-                           int   n_samples) {
+    struct whisper_context *ctx,
+    struct whisper_state *state,
+    struct whisper_full_params params,
+    const float *samples,
+    int n_samples)
+{
+
+    std::vector<float> vad_samples;
+    if (params.vad)
+    {
+        WHISPER_LOG_INFO("%s: VAD is enabled, processing speech segments only\n", __func__);
+        if (!whisper_vad(ctx, state, params, samples, n_samples, vad_samples))
+        {
+            WHISPER_LOG_ERROR("%s: failed to compute VAD\n", __func__);
+            return -1;
+        }
+        if (vad_samples.empty())
+        {
+            state->result_all.clear();
+            return 0;
+        }
+        samples = vad_samples.data();
+        n_samples = vad_samples.size();
+    }
+
     // clear old results
-    auto & result_all = state->result_all;
+    auto &result_all = state->result_all;
 
     result_all.clear();
 
-    if (n_samples > 0) {
+    if (n_samples > 0)
+    {
         // compute log mel spectrogram
-        if (whisper_pcm_to_mel_with_state(ctx, state, samples, n_samples, params.n_threads) != 0) {
+        if (whisper_pcm_to_mel_with_state(ctx, state, samples, n_samples, params.n_threads) != 0)
+        {
             WHISPER_LOG_ERROR("%s: failed to compute log mel spectrogram\n", __func__);
             return -2;
         }
@@ -7754,25 +7776,11 @@ int whisper_full_with_state(
 }
 
 int whisper_full(
-        struct whisper_context * ctx,
-    struct whisper_full_params   params,
-                   const float * samples,
-                           int   n_samples) {
-
-    std::vector<float> vad_samples;
-    if (params.vad) {
-        WHISPER_LOG_INFO("%s: VAD is enabled, processing speech segments only\n", __func__);
-        if (!whisper_vad(ctx, ctx->state, params, samples, n_samples, vad_samples)) {
-            WHISPER_LOG_ERROR("%s: failed to compute VAD\n", __func__);
-            return -1;
-        }
-        if (vad_samples.empty()) {
-            ctx->state->result_all.clear();
-            return 0;
-        }
-        samples = vad_samples.data();
-        n_samples = vad_samples.size();
-    }
+    struct whisper_context *ctx,
+    struct whisper_full_params params,
+    const float *samples,
+    int n_samples)
+{
     return whisper_full_with_state(ctx, ctx->state, params, samples, n_samples);
 }
 
@@ -7787,19 +7795,6 @@ int whisper_full_parallel(
         return whisper_full(ctx, params, samples, n_samples);
     }
 
-    std::vector<float> vad_samples;
-    if (params.vad) {
-        WHISPER_LOG_INFO("%s: VAD is enabled, processing speech segments only\n", __func__);
-        if (!whisper_vad(ctx, ctx->state, params, samples, n_samples, vad_samples)) {
-            WHISPER_LOG_ERROR("%s: failed to compute VAD\n", __func__);
-            return -1;
-        }
-        if (vad_samples.empty()) {
-            return 0;
-        }
-        samples = vad_samples.data();
-        n_samples = vad_samples.size();
-    }
     int ret = 0;
 
     // prepare separate states for each thread
