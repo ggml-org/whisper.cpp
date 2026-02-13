@@ -5189,8 +5189,9 @@ bool whisper_vad_detect_speech(
         //WHISPER_LOG_DEBUG("chunk %d: p = %7.3f\n", i, probs[i]);
     }
 
-    vctx->t_vad_us += ggml_time_us() - t_start_vad_us;
-    WHISPER_LOG_INFO("%s: vad time = %.2f ms processing %d samples\n", __func__, 1e-3f * vctx->t_vad_us, n_samples);
+    const int64_t t_vad_this_us = ggml_time_us() - t_start_vad_us;
+    vctx->t_vad_us += t_vad_this_us;
+    WHISPER_LOG_INFO("%s: vad time = %.2f ms (cumulative %.2f ms) processing %d samples\n", __func__, 1e-3f * t_vad_this_us, 1e-3f * vctx->t_vad_us, n_samples);
 
     ggml_backend_sched_reset(sched);
 
