@@ -112,6 +112,11 @@ if (Vulkan_FOUND)
         list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -DGGML_VULKAN_SHADER_DEBUG_INFO=ON)
     endif()
 
+    if (GGML_VULKAN_MIN_1_1)
+        add_compile_definitions(GGML_VULKAN_MIN_1_1)
+        list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -DGGML_VULKAN_MIN_1_1=ON)
+    endif()
+
     if (GGML_VULKAN_VALIDATE)
         add_compile_definitions(GGML_VULKAN_VALIDATE)
     endif()
