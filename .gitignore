@@ -3,6 +3,7 @@
 *.d
 .cache/
 .coreml/
+pkg/
 .test/
 .venv/
 .vs/
