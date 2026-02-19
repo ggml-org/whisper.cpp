@@ -3954,6 +3954,38 @@ int whisper_decode(struct whisper_context * ctx, const whisper_token * tokens, i
     return whisper_decode_with_state(ctx, ctx->state, tokens, n_tokens, n_past, n_threads);
 }
 
+int whisper_decode_with_state_and_aheads(struct whisper_context * ctx, struct whisper_state * state, const whisper_token * tokens, int n_tokens, int n_past, int n_threads) {
+    whisper_batch_prep_legacy(state->batch, tokens, n_tokens, n_past, 0);
+    whisper_kv_cache_seq_rm(state->kv_self, 0, n_past, -1);
+
+    if (!whisper_decode_internal(*ctx, *state, state->batch, n_threads, true, nullptr, nullptr)) {
+        WHISPER_LOG_ERROR("%s: failed to eval\n", __func__);
+        return 1;
+    }
+
+    return 0;
+}
+
+const float * whisper_state_get_aheads_cross_qks(struct whisper_state * state, int * out_n_tokens, int * out_n_audio_ctx, int * out_n_heads) {
+    if (state->aheads_cross_QKs == nullptr) {
+        return nullptr;
+    }
+
+    const int n_tokens    = state->aheads_cross_QKs->ne[0];
+    const int n_audio_ctx = state->aheads_cross_QKs->ne[1];
+    const int n_heads     = state->aheads_cross_QKs->ne[2];
+
+    auto & data = state->aheads_cross_QKs_data;
+    data.resize(n_tokens * n_audio_ctx * n_heads);
+    ggml_backend_tensor_get(state->aheads_cross_QKs, data.data(), 0, sizeof(float) * n_tokens * n_audio_ctx * n_heads);
+
+    if (out_n_tokens)    *out_n_tokens    = n_tokens;
+    if (out_n_audio_ctx) *out_n_audio_ctx = n_audio_ctx;
+    if (out_n_heads)     *out_n_heads     = n_heads;
+
+    return data.data();
+}
+
 int whisper_tokenize(struct whisper_context * ctx, const char * text, whisper_token * tokens, int n_max_tokens) {
     const auto res = tokenize(ctx->vocab, text);
 
@@ -5157,8 +5189,9 @@ bool whisper_vad_detect_speech(
         //WHISPER_LOG_DEBUG("chunk %d: p = %7.3f\n", i, probs[i]);
     }
 
-    vctx->t_vad_us += ggml_time_us() - t_start_vad_us;
-    WHISPER_LOG_INFO("%s: vad time = %.2f ms processing %d samples\n", __func__, 1e-3f * vctx->t_vad_us, n_samples);
+    const int64_t t_vad_this_us = ggml_time_us() - t_start_vad_us;
+    vctx->t_vad_us += t_vad_this_us;
+    WHISPER_LOG_INFO("%s: vad time = %.2f ms (cumulative %.2f ms) processing %d samples\n", __func__, 1e-3f * t_vad_this_us, 1e-3f * vctx->t_vad_us, n_samples);
 
     ggml_backend_sched_reset(sched);
 
