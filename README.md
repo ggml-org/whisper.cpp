@@ -755,7 +755,7 @@ argument to `whisper-cli`. In addition to this option a VAD model is also
 required.
 
 The way this works is that first the audio samples are passed through
-the VAD model which will detect speech segments. Using this information the
+the VAD model which will detect speech segments. Using this information,
 only the speech segments that are detected are extracted from the original audio
 input and passed to whisper for processing. This reduces the amount of audio
 data that needs to be processed by whisper and can significantly speed up the
