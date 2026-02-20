@@ -27,8 +27,8 @@ on:
 
 jobs:
   build-vulkan-linux:
-    # Targets self-hosted STX Halo Linux runners (e.g. sjlab-stx-halo-10/11/12/13)
-    runs-on: [self-hosted, Linux, X64, stx-halo]
+    # Pinned to one specific self-hosted runner host.
+    runs-on: [self-hosted, Linux, X64, stx-halo, sjlab-stx-halo-11]
 
     steps:
       - name: Checkout code
