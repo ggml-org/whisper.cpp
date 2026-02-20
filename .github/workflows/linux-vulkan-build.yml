@@ -34,22 +34,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Vulkan and build dependencies
+      - name: Check Vulkan readiness
         run: |
-          echo "Installing Vulkan and build dependencies..."
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            git \
-            libsdl2-dev \
-            pkg-config \
-            vulkan-tools \
-            libvulkan-dev \
-            vulkan-validationlayers \
-            spirv-tools \
-            mesa-vulkan-drivers \
-            glslc
+          echo "Checking Vulkan readiness..."
+          if ! command -v vulkaninfo >/dev/null 2>&1; then
+            echo "ERROR: vulkaninfo is not available on this runner."
+            exit 1
+          fi
+
+          vulkaninfo | grep "GPU id"
+          if [ $? -ne 0 ]; then
+            echo "ERROR: Vulkan check failed. 'vulkaninfo | grep \"GPU id\"' returned no result."
+            exit 1
+          fi
 
           # Some Ubuntu images may provide glslc through shaderc instead of glslc package.
           if ! command -v glslc >/dev/null 2>&1; then
@@ -57,10 +54,9 @@ jobs:
             sudo apt-get install -y shaderc
           fi
 
-          echo "Dependencies installed"
+          echo "Vulkan is ready"
           cmake --version
           gcc --version
-          vulkaninfo --summary || true
 
       - name: Configure CMake (Vulkan)
         run: |
