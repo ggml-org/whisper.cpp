@@ -134,7 +134,8 @@ jobs:
           printf "Binaries:\n" >> "$PACKAGE_DIR/README.txt"
           ls -lh "$PACKAGE_DIR" | grep -v "^total" | grep -v "^d" | awk '{print "  " $9 " (" $5 ")"}' >> "$PACKAGE_DIR/README.txt"
 
-          tar -czf "${PACKAGE_NAME}.tar.gz" "$PACKAGE_DIR"
+          # Create a flat tarball (files at archive root, no extra top-level directory).
+          tar -czf "${PACKAGE_NAME}.tar.gz" -C "$PACKAGE_DIR" .
 
           if [ -f "${PACKAGE_NAME}.tar.gz" ]; then
             PACKAGE_SIZE=$(du -h "${PACKAGE_NAME}.tar.gz" | cut -f1)
