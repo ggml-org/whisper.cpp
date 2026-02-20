@@ -282,13 +282,20 @@ func Download(ctx context.Context, p io.Writer, model, out string) (string, erro
 		default:
 			// Read body
 			n, err := resp.Body.Read(data)
+			if n > 0 {
+				if m, err := w.Write(data[:n]); err != nil {
+					return path, err
+				} else {
+					count += int64(m)
+				}
+			}
+
 			if err != nil {
-				DownloadReport(p, pct, count, resp.ContentLength)
+				if err == io.EOF {
+					DownloadReport(p, pct, count, resp.ContentLength)
+					return path, nil
+				}
 				return path, err
-			} else if m, err := w.Write(data[:n]); err != nil {
-				return path, err
-			} else {
-				count += int64(m)
 			}
 		}
 	}
