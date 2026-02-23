@@ -695,6 +695,16 @@ extern "C" {
                            const float * samples,
                                    int   n_samples);
 
+    // Like whisper_vad_detect_speech, but does not reset LSTM state.
+    // Use for streaming: call whisper_vad_reset_state() between utterances.
+    WHISPER_API bool whisper_vad_detect_speech_no_reset(
+            struct whisper_vad_context * vctx,
+                           const float * samples,
+                                   int   n_samples);
+
+    // Reset LSTM hidden/cell states to zero.
+    WHISPER_API void whisper_vad_reset_state(struct whisper_vad_context * vctx);
+
     WHISPER_API int     whisper_vad_n_probs(struct whisper_vad_context * vctx);
     WHISPER_API float * whisper_vad_probs  (struct whisper_vad_context * vctx);
 
