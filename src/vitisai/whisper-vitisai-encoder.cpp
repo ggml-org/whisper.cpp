@@ -1,4 +1,3 @@
-// Copyright(C) 2025 Advanced Micro Devices, Inc. All rights reserved.
 #include "vitisai/whisper-vitisai-encoder.h"
 #include "FlexMLClient.h"
 #include "ggml.h"
@@ -24,7 +23,7 @@ struct whisper_vitisai_context {
 };
 
 // Function to mmap rai file for Linux and MapViewOfFile for Windows
-bool map_rai_file(const char * path, uint8_t ** buffer, size_t * size) {
+static bool map_rai_file(const char * path, uint8_t ** buffer, size_t * size) {
 #ifdef _WIN32
     // Open the file
     HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -87,7 +86,7 @@ bool map_rai_file(const char * path, uint8_t ** buffer, size_t * size) {
 #endif // _WIN32
 }
 
-void unmap_rai_file(uint8_t * buffer, size_t size) {
+static void unmap_rai_file(uint8_t * buffer, size_t size) {
 #ifdef _WIN32
     UnmapViewOfFile(buffer);
 #else
@@ -194,7 +193,9 @@ int whisper_vitisai_encode(struct whisper_vitisai_context * ctx, struct ggml_ten
 
     try {
         model->forward(input_tensors, output_tensors);
-        std::fprintf(stdout, "%s: Vitis AI model inference completed.\n", __func__);
+#if defined(WHISPER_DEBUG)
+        std::fprintf(stderr, "%s: Vitis AI model inference completed.\n", __func__);
+#endif
     } catch (const std::exception & e) {
         std::fprintf(stderr, "%s: Exception during model inference: %s\n", __func__, e.what());
         return 0;
