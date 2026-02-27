@@ -105,6 +105,7 @@ struct whisper_params {
 
     // Voice Activity Detection (VAD) parameters
     bool        vad           = false;
+    bool        stable_timestamps = false;
     std::string vad_model     = "";
     float       vad_threshold = 0.5f;
     int         vad_min_speech_duration_ms = 250;
@@ -210,6 +211,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (                  arg == "--grammar-penalty")      { params.grammar_penalty = std::stof(ARGV_NEXT); }
         // Voice Activity Detection (VAD)
         else if (                  arg == "--vad")                         { params.vad                         = true; }
+        else if (                  arg == "--stable-timestamps")           { params.stable_timestamps           = true; }
         else if (arg == "-vm"   || arg == "--vad-model")                   { params.vad_model                   = ARGV_NEXT; }
         else if (arg == "-vt"   || arg == "--vad-threshold")               { params.vad_threshold               = std::stof(ARGV_NEXT); }
         else if (arg == "-vspd" || arg == "--vad-min-speech-duration-ms")  { params.vad_min_speech_duration_ms  = std::stoi(ARGV_NEXT); }
@@ -293,6 +295,7 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     // Voice Activity Detection (VAD) parameters
     fprintf(stderr, "\nVoice Activity Detection (VAD) options:\n");
     fprintf(stderr, "             --vad                           [%-7s] enable Voice Activity Detection (VAD)\n",            params.vad ? "true" : "false");
+    fprintf(stderr, "             --stable-timestamps             [%-7s] enable stable timestamps (requires --vad-model)\n", params.stable_timestamps ? "true" : "false");
     fprintf(stderr, "  -vm FNAME, --vad-model FNAME               [%-7s] VAD model path\n",                                   params.vad_model.c_str());
     fprintf(stderr, "  -vt N,     --vad-threshold N               [%-7.2f] VAD threshold for speech recognition\n",           params.vad_threshold);
     fprintf(stderr, "  -vspd N,   --vad-min-speech-duration-ms  N [%-7d] VAD min speech duration (0.0-1.0)\n",                params.vad_min_speech_duration_ms);
@@ -1002,6 +1005,12 @@ int main(int argc, char ** argv) {
         exit(0);
     }
 
+    if (params.stable_timestamps && params.vad_model.empty()) {
+        fprintf(stderr, "error: --stable-timestamps requires --vad-model\n");
+        whisper_print_usage(argc, argv, params);
+        return 2;
+    }
+
     if (params.no_prints) {
         whisper_log_set(cb_log_disable, NULL);
     }
@@ -1211,6 +1220,7 @@ int main(int argc, char ** argv) {
 
             wparams.suppress_nst     = params.suppress_nst;
 
+            wparams.stable_timestamps = params.stable_timestamps;
             wparams.vad            = params.vad;
             wparams.vad_model_path = params.vad_model.c_str();
 

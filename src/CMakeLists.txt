@@ -106,6 +106,9 @@ endif()
 add_library(whisper
             ../include/whisper.h
             whisper-arch.h
+            whisper-state.h
+            whisper-stable.h
+            whisper-stable.cpp
             whisper.cpp
             )
 

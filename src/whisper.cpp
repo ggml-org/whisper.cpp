@@ -1,5 +1,7 @@
 #include "whisper.h"
 #include "whisper-arch.h"
+#include "whisper-state.h"
+#include "whisper-stable.h"
 
 #include "ggml.h"
 #include "ggml-cpp.h"
@@ -457,18 +459,6 @@ struct whisper_vocab {
     }
 };
 
-struct whisper_segment {
-    int64_t t0;
-    int64_t t1;
-
-    std::string text;
-    float no_speech_prob;
-
-    std::vector<whisper_token_data> tokens;
-
-    bool speaker_turn_next;
-};
-
 struct whisper_batch {
     int32_t n_tokens;
 
@@ -824,11 +814,6 @@ struct whisper_aheads_masks {
     std::vector<struct ggml_tensor *> m;    // One mask per text layer.
     struct ggml_context * ctx = nullptr;
     ggml_backend_buffer_t buffer = nullptr;
-};
-
-struct vad_time_mapping {
-    int64_t processed_time;  // Time in processed (VAD) audio
-    int64_t original_time;   // Corresponding time in original audio
 };
 
 struct whisper_state {
@@ -5185,6 +5170,10 @@ float * whisper_vad_probs(struct whisper_vad_context * vctx) {
     return vctx->probs.data();
 }
 
+int whisper_stable_vad_n_window(struct whisper_vad_context * vctx) {
+    return vctx ? vctx->n_window : 0;
+}
+
 struct whisper_vad_segments * whisper_vad_segments_from_probs(
         struct whisper_vad_context *  vctx,
                 whisper_vad_params    params) {
@@ -5984,6 +5973,8 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
         /*.n_grammar_rules =*/ 0,
         /*.i_start_rule    =*/ 0,
         /*.grammar_penalty =*/ 100.0f,
+
+        /*.stable_timestamps            =*/ false,
 
         /*.vad                         =*/ false,
         /*.vad_model_path              =*/ nullptr,
@@ -7022,6 +7013,10 @@ int whisper_full_with_state(
             break;
         }
 
+        if (params.stable_timestamps && params.logits_filter_callback == whisper_stable_logits_filter_callback) {
+            whisper_stable_set_filter_seek(params.logits_filter_callback_user_data, seek);
+        }
+
         if (params.encoder_begin_callback) {
             if (params.encoder_begin_callback(ctx, state, params.encoder_begin_callback_user_data) == false) {
                 WHISPER_LOG_ERROR("%s: encoder_begin_callback returned false - aborting\n", __func__);
@@ -7759,6 +7754,17 @@ int whisper_full(
                    const float * samples,
                            int   n_samples) {
 
+    // stable_timestamps forces dependencies
+    if (params.stable_timestamps) {
+        if (!params.vad_model_path) {
+            WHISPER_LOG_ERROR("%s: stable_timestamps requires vad_model_path to be set\n", __func__);
+            return -8;
+        }
+        params.vad              = true;
+        params.token_timestamps = true;
+        params.max_initial_ts   = 0.0f;
+    }
+
     std::vector<float> vad_samples;
     if (params.vad) {
         WHISPER_LOG_INFO("%s: VAD is enabled, processing speech segments only\n", __func__);
@@ -7773,7 +7779,37 @@ int whisper_full(
         samples = vad_samples.data();
         n_samples = vad_samples.size();
     }
-    return whisper_full_with_state(ctx, ctx->state, params, samples, n_samples);
+
+    auto * state = ctx->state;
+    whisper_stable_runtime stable_runtime;
+    if (params.stable_timestamps) {
+        whisper_stable_prepare_from_ctx(
+            params,
+            state->vad_context,
+            n_samples,
+            state->has_vad_segments && !state->vad_mapping_table.empty(),
+            state->vad_mapping_table,
+            &stable_runtime);
+    }
+
+    const int ret = whisper_full_with_state(ctx, ctx->state, params, samples, n_samples);
+    if (ret != 0) {
+        return ret;
+    }
+
+    // Post-process: apply stable timestamp fixes
+    if (params.stable_timestamps) {
+        whisper_stable_finalize(
+            ctx,
+            state->result_all,
+            state->vad_mapping_table,
+            state->has_vad_segments,
+            stable_runtime,
+            /*min_word_dur_cs=*/5,
+            /*min_snap_silence_dur_cs=*/200);
+    }
+
+    return 0;
 }
 
 int whisper_full_parallel(
@@ -8848,6 +8884,13 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
     }
     const size_t sot_sequence_length = tokens.size();
     tokens.push_back(whisper_token_not(ctx));
+
+    size_t gap_token_count = 0;
+    if (params.stable_timestamps) {
+        const auto gap_tokens = whisper_stable_get_gap_tokens(ctx);
+        gap_token_count = gap_tokens.size();
+        tokens.insert(tokens.end(), gap_tokens.begin(), gap_tokens.end());
+    }
     for (size_t i = i_segment; i < i_segment + n_segments; ++i) {
         auto & segment = state->result_all[i];
         for (auto &t: segment.tokens) {
@@ -8898,6 +8941,10 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
         }
     }
 
+    if (params.stable_timestamps) {
+        whisper_stable_select_heads((float *) w->data, n_tokens, n_audio_tokens, n_heads, /*top_k=*/6);
+    }
+
     // Normalize - in original OpenAI code, this is done over dim=-2. In this case,
     // we already permuted N_TOKENS dimension to columns on last loop, becase ggml_norm
     // operates over columns. Afterwards, permute to a shape that facilitates mean
@@ -8935,6 +8982,7 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
 
     // Place timestamps on segments
     int32_t last_v = 0;
+    const int32_t first_text_alignment_row = 1 + (int32_t) gap_token_count;
     auto seg_i = state->result_all.begin() + i_segment;
     auto tok_i = seg_i->tokens.begin();
     for (int i = 0; i < alignment->ne[1]; ++i) {
@@ -8943,6 +8991,11 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
             int32_t time_index = whisper_get_i32_nd(alignment, 1, i, 0, 0);
             int64_t timestamp = (time_index * 2) + seek; // Each index on DTW result = 20mS audio
             last_v = v;
+
+            // Rows before first_text_alignment_row are [no_timestamps] and optional gap padding.
+            if (v < first_text_alignment_row) {
+                continue;
+            }
 
             // Skip non-text tokens
             while (!(tok_i->id < whisper_token_eot(ctx))) {
