@@ -26,6 +26,7 @@ High-performance inference of [OpenAI's Whisper](https://github.com/openai/whisp
 - [Moore Threads GPU Support](#moore-threads-gpu-support)
 - [C-style API](https://github.com/ggml-org/whisper.cpp/blob/master/include/whisper.h)
 - [Voice Activity Detection (VAD)](#voice-activity-detection-vad)
+- [Integration with Coding Agents as SKILL.md](#skill-installation)
 
 Supported platforms:
 
@@ -45,15 +46,15 @@ The rest of the code is part of the [`ggml`](https://github.com/ggml-org/ggml) m
 Having such a lightweight implementation of the model allows to easily integrate it in different platforms and applications.
 As an example, here is a video of running the model on an iPhone 13 device - fully offline, on-device: [whisper.objc](examples/whisper.objc)
 
-https://user-images.githubusercontent.com/1991296/197385372-962a6dea-bca1-4d50-bf96-1d8c27b98c81.mp4
+<https://user-images.githubusercontent.com/1991296/197385372-962a6dea-bca1-4d50-bf96-1d8c27b98c81.mp4>
 
 You can also easily make your own offline voice assistant application: [command](examples/command)
 
-https://user-images.githubusercontent.com/1991296/204038393-2f846eae-c255-4099-a76d-5735c25c49da.mp4
+<https://user-images.githubusercontent.com/1991296/204038393-2f846eae-c255-4099-a76d-5735c25c49da.mp4>
 
 On Apple Silicon, the inference runs fully on the GPU via Metal:
 
-https://github.com/ggml-org/whisper.cpp/assets/1991296/c82e8f86-60dc-49f2-b048-d2fdbd6b5225
+<https://github.com/ggml-org/whisper.cpp/assets/1991296/c82e8f86-60dc-49f2-b048-d2fdbd6b5225>
 
 ## Quick start
 
@@ -315,7 +316,7 @@ For more information about the OpenVINO implementation please refer to PR [#1037
 ## NVIDIA GPU support
 
 With NVIDIA cards the processing of the models is done efficiently on the GPU via cuBLAS and custom CUDA kernels.
-First, make sure you have installed `cuda`: https://developer.nvidia.com/cuda-downloads
+First, make sure you have installed `cuda`: <https://developer.nvidia.com/cuda-downloads>
 
 Now build `whisper.cpp` with CUDA support:
 
@@ -325,16 +326,19 @@ cmake --build build -j --config Release
 ```
 
 or for newer NVIDIA GPU's (RTX 5000 series):
+
 ```
 cmake -B build -DGGML_CUDA=1 -DCMAKE_CUDA_ARCHITECTURES="86"
 cmake --build build -j --config Release
 ```
 
 ## Vulkan GPU support
+
 Cross-vendor solution which allows you to accelerate workload on your GPU.
 First, make sure your graphics card driver provides support for Vulkan API.
 
 Now build `whisper.cpp` with Vulkan support:
+
 ```
 cmake -B build -DGGML_VULKAN=1
 cmake --build build -j --config Release
@@ -343,7 +347,7 @@ cmake --build build -j --config Release
 ## BLAS CPU support via OpenBLAS
 
 Encoder processing can be accelerated on the CPU via OpenBLAS.
-First, make sure you have installed `openblas`: https://www.openblas.net/
+First, make sure you have installed `openblas`: <https://www.openblas.net/>
 
 Now build `whisper.cpp` with OpenBLAS support:
 
@@ -359,6 +363,7 @@ Ascend NPU provides inference acceleration via [`CANN`](https://www.hiascend.com
 First, check if your Ascend NPU device is supported:
 
 **Verified devices**
+
 | Ascend NPU                    | Status  |
 |:-----------------------------:|:-------:|
 | Atlas 300T A2                 | Support |
@@ -387,7 +392,7 @@ Run the inference examples as usual, for example:
 ## Moore Threads GPU support
 
 With Moore Threads cards the processing of the models is done efficiently on the GPU via muBLAS and custom MUSA kernels.
-First, make sure you have installed `MUSA SDK rc4.2.0`: https://developer.mthreads.com/sdk/download/musa?equipment=&os=&driverVersion=&version=4.2.0
+First, make sure you have installed `MUSA SDK rc4.2.0`: <https://developer.mthreads.com/sdk/download/musa?equipment=&os=&driverVersion=&version=4.2.0>
 
 Now build `whisper.cpp` with MUSA support:
 
@@ -507,7 +512,7 @@ cmake --build build -j --config Release
 ./build/bin/whisper-stream -m ./models/ggml-base.en.bin -t 8 --step 500 --length 5000
 ```
 
-https://user-images.githubusercontent.com/1991296/194935793-76afede7-cfa8-48d8-a80f-28ba83be7d09.mp4
+<https://user-images.githubusercontent.com/1991296/194935793-76afede7-cfa8-48d8-a80f-28ba83be7d09.mp4>
 
 ## Confidence color-coding
 
@@ -587,7 +592,7 @@ main: processing './samples/jfk.wav' (176000 samples, 11.0 sec), 4 threads, 1 pr
 
 ## Speaker segmentation via tinydiarize (experimental)
 
-More information about this approach is available here: https://github.com/ggml-org/whisper.cpp/pull/1058
+More information about this approach is available here: <https://github.com/ggml-org/whisper.cpp/pull/1058>
 
 Sample usage:
 
@@ -617,7 +622,7 @@ The [whisper-cli](examples/cli) example provides support for output of karaoke-s
 currently pronounced word is highlighted. Use the `-owts` argument and run the generated bash script.
 This requires to have `ffmpeg` installed.
 
-Here are a few _"typical"_ examples:
+Here are a few *"typical"* examples:
 
 ```bash
 ./build/bin/whisper-cli -m ./models/ggml-base.en.bin -f ./samples/jfk.wav -owts
@@ -625,7 +630,7 @@ source ./samples/jfk.wav.wts
 ffplay ./samples/jfk.wav.mp4
 ```
 
-https://user-images.githubusercontent.com/1991296/199337465-dbee4b5e-9aeb-48a3-b1c6-323ac4db5b2c.mp4
+<https://user-images.githubusercontent.com/1991296/199337465-dbee4b5e-9aeb-48a3-b1c6-323ac4db5b2c.mp4>
 
 ---
 
@@ -635,7 +640,7 @@ source ./samples/mm0.wav.wts
 ffplay ./samples/mm0.wav.mp4
 ```
 
-https://user-images.githubusercontent.com/1991296/199337504-cc8fd233-0cb7-4920-95f9-4227de3570aa.mp4
+<https://user-images.githubusercontent.com/1991296/199337504-cc8fd233-0cb7-4920-95f9-4227de3570aa.mp4>
 
 ---
 
@@ -645,7 +650,7 @@ source ./samples/gb0.wav.wts
 ffplay ./samples/gb0.wav.mp4
 ```
 
-https://user-images.githubusercontent.com/1991296/199337538-b7b0c7a3-2753-4a88-a0cd-f28a317987ba.mp4
+<https://user-images.githubusercontent.com/1991296/199337538-b7b0c7a3-2753-4a88-a0cd-f28a317987ba.mp4>
 
 ---
 
@@ -658,7 +663,7 @@ Use the [scripts/bench-wts.sh](https://github.com/ggml-org/whisper.cpp/blob/mast
 ffplay ./samples/jfk.wav.all.mp4
 ```
 
-https://user-images.githubusercontent.com/1991296/223206245-2d36d903-cf8e-4f09-8c3b-eb9f9c39d6fc.mp4
+<https://user-images.githubusercontent.com/1991296/223206245-2d36d903-cf8e-4f09-8c3b-eb9f9c39d6fc.mp4>
 
 ---
 
@@ -694,7 +699,7 @@ The original models are converted to a custom binary format. This allows to pack
 You can download the converted models using the [models/download-ggml-model.sh](models/download-ggml-model.sh) script
 or manually from here:
 
-- https://huggingface.co/ggerganov/whisper.cpp
+- <https://huggingface.co/ggerganov/whisper.cpp>
 
 For more details, see the conversion script [models/convert-pt-to-ggml.py](models/convert-pt-to-ggml.py) or [models/README.md](models/README.md).
 
@@ -721,6 +726,7 @@ For more details, see the conversion script [models/convert-pt-to-ggml.py](model
 - [x] Unity: [macoron/whisper.unity](https://github.com/Macoron/whisper.unity)
 
 ## XCFramework
+
 The XCFramework is a precompiled version of the library for iOS, visionOS, tvOS,
 and macOS. It can be used in Swift projects without the need to compile the
 library from source. For example, the v1.7.5 version of the XCFramework can be
@@ -750,6 +756,7 @@ let package = Package(
 ```
 
 ## Voice Activity Detection (VAD)
+
 Support for Voice Activity Detection (VAD) can be enabled using the `--vad`
 argument to `whisper-cli`. In addition to this option a VAD model is also
 required.
@@ -764,10 +771,12 @@ transcription process.
 The following VAD models are currently supported:
 
 ### Silero-VAD
+
 [Silero-vad](https://github.com/snakers4/silero-vad) is a lightweight VAD model
 written in Python that is fast and accurate.
 
 Models can be downloaded by running the following command on Linux or MacOS:
+
 ```console
 $ ./models/download-vad-model.sh silero-v6.2.0
 Downloading ggml model silero-v6.2.0 from 'https://huggingface.co/ggml-org/whisper-vad' ...
@@ -778,7 +787,9 @@ You can now use it like this:
   $ ./build/bin/whisper-cli -vm /path/models/ggml-silero-v6.2.0.bin --vad -f samples/jfk.wav -m models/ggml-base.en.bin
 
 ```
+
 And the following command on Windows:
+
 ```console
 > .\models\download-vad-model.cmd silero-v6.2.0
 Downloading vad model silero-v6.2.0...
@@ -793,13 +804,16 @@ To see a list of all available models, run the above commands without any
 arguments.
 
 This model can be also be converted manually to ggml using the following command:
+
 ```console
 $ python3 -m venv venv && source venv/bin/activate
 $ (venv) pip install silero-vad
 $ (venv) $ python models/convert-silero-vad-to-ggml.py --output models/silero.bin
 Saving GGML Silero-VAD model to models/silero-v6.2.0-ggml.bin
 ```
+
 And it can then be used with whisper as follows:
+
 ```console
 $ ./build/bin/whisper-cli \
    --file ./samples/jfk.wav \
@@ -810,27 +824,48 @@ $ ./build/bin/whisper-cli \
 
 ### VAD Options
 
-* --vad-threshold: Threshold probability for speech detection. A probability
+- --vad-threshold: Threshold probability for speech detection. A probability
 for a speech segment/frame above this threshold will be considered as speech.
 
-* --vad-min-speech-duration-ms: Minimum speech duration in milliseconds. Speech
+- --vad-min-speech-duration-ms: Minimum speech duration in milliseconds. Speech
 segments shorter than this value will be discarded to filter out brief noise or
 false positives.
 
-* --vad-min-silence-duration-ms: Minimum silence duration in milliseconds. Silence
+- --vad-min-silence-duration-ms: Minimum silence duration in milliseconds. Silence
 periods must be at least this long to end a speech segment. Shorter silence
 periods will be ignored and included as part of the speech.
 
-* --vad-max-speech-duration-s: Maximum speech duration in seconds. Speech segments
+- --vad-max-speech-duration-s: Maximum speech duration in seconds. Speech segments
 longer than this will be automatically split into multiple segments at silence
 points exceeding 98ms to prevent excessively long segments.
 
-* --vad-speech-pad-ms: Speech padding in milliseconds. Adds this amount of padding
+- --vad-speech-pad-ms: Speech padding in milliseconds. Adds this amount of padding
 before and after each detected speech segment to avoid cutting off speech edges.
 
-* --vad-samples-overlap: Amount of audio to extend from each speech segment into
+- --vad-samples-overlap: Amount of audio to extend from each speech segment into
 the next one, in seconds (e.g., 0.10 = 100ms overlap). This ensures speech isn't
 cut off abruptly between segments when they're concatenated together.
+
+## Skill Installation
+
+Agents can be extended to use whisper.cpp for transcription through a `SKILL.md`.
+
+The skill supports both the CLI and interacting with a running docker container. Two environment variables guide this:
+
+| Variable | Mode | Purpose |
+|----------|------|---------|
+| `WHISPER_CPP_URL` | Docker/HTTP | Server URL (e.g. `http://localhost:8080`). Is responsible for conneting to the docker container and is checked first - taking priority. Refer to the [docker setup guide](./whisper_skill/references/docker-setup.md)|
+| `WHISPER_CPP_MODEL` | Local CLI | Absolute path to `.bin` model file. Is responsible for using the CLI and is checked second. Refer to [local setup guide](.whisper_skill/references/local-setup.md). |
+
+Then install, e.g. for claude:
+
+```bash
+# Copy skill to all projects (global)
+cp -r my-skill/ ~/.claude/skills/
+
+# Copy skill to a specific project
+cp -r my-skill/ /path/to/your/project/.claude/skills/
+```
 
 ## Examples
 
