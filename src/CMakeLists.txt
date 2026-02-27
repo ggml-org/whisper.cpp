@@ -109,8 +109,23 @@ add_library(whisper
             whisper.cpp
             )
 
+add_library(parakeet
+            ../include/parakeet.h
+            parakeet-arch.h
+            parakeet.cpp
+            )
+
+target_include_directories(parakeet PUBLIC . ../include)
+target_compile_features   (parakeet PUBLIC cxx_std_11)
+target_link_libraries(parakeet PUBLIC ggml Threads::Threads)
+
 # Set the version numbers
 set_target_properties(whisper PROPERTIES
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${SOVERSION}
+)
+
+set_target_properties(parakeet PROPERTIES
     VERSION ${PROJECT_VERSION}
     SOVERSION ${SOVERSION}
 )
@@ -120,10 +135,15 @@ target_compile_features   (whisper PUBLIC cxx_std_11) # don't bump
 
 if (CMAKE_CXX_BYTE_ORDER STREQUAL "BIG_ENDIAN")
     set(WHISPER_EXTRA_FLAGS ${WHISPER_EXTRA_FLAGS} -DWHISPER_BIG_ENDIAN)
+    set(PARAKEET_EXTRA_FLAGS ${PARAKEET_EXTRA_FLAGS} -DPARAKEET_BIG_ENDIAN)
 endif()
 
 if (WHISPER_EXTRA_FLAGS)
     target_compile_options(whisper PRIVATE ${WHISPER_EXTRA_FLAGS})
+endif()
+
+if (PARAKEET_EXTRA_FLAGS)
+    target_compile_options(parakeet PRIVATE ${PARAKEET_EXTRA_FLAGS})
 endif()
 
 find_package(Threads REQUIRED)
@@ -144,4 +164,7 @@ endif()
 if (BUILD_SHARED_LIBS)
     set_target_properties(whisper PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(whisper PRIVATE WHISPER_SHARED WHISPER_BUILD)
+
+    set_target_properties(parakeet PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_compile_definitions(parakeet PRIVATE PARAKEET_SHARED PARAKEET_BUILD)
 endif()
