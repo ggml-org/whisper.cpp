@@ -8067,6 +8067,45 @@ float whisper_full_get_token_p(struct whisper_context * ctx, int i_segment, int 
     return ctx->state->result_all[i_segment].tokens[i_token].p;
 }
 
+int64_t whisper_full_get_token_t0_from_state(struct whisper_state* state, struct whisper_token_data* token)
+{
+    if (!state->has_vad_segments || state->vad_mapping_table.empty()) {
+        return token->t0;
+    }
+    return map_processed_to_original_time(token->t0, state->vad_mapping_table);
+}
+int64_t whisper_full_get_token_t1_from_state(struct whisper_state* state, struct whisper_token_data* token)
+{
+    if (!state->has_vad_segments || state->vad_mapping_table.empty()) {
+        return token->t1;
+    }
+
+    int64_t t1 = token->t1;
+
+    int64_t orig_t1 = map_processed_to_original_time(t1, state->vad_mapping_table);
+
+    int64_t orig_t0 = whisper_full_get_token_t0_from_state(state, token);
+
+    // Ensure minimum duration to prevent zero-length token
+    const int64_t min_duration = 10; // 10ms minimum
+    if (orig_t1 - orig_t0 < min_duration) {
+        orig_t1 = orig_t0 + min_duration;
+    }
+    return orig_t1;
+}
+
+int64_t whisper_full_get_token_t0(struct whisper_context* ctx, int i_segment, int i_token)
+{
+    whisper_token_data token = whisper_full_get_token_data(ctx, i_segment, i_token);
+    return whisper_full_get_token_t0_from_state(ctx->state, &token);
+}
+int64_t whisper_full_get_token_t1(struct whisper_context* ctx, int i_segment, int i_token)
+{
+    whisper_token_data token = whisper_full_get_token_data(ctx, i_segment, i_token);
+    return whisper_full_get_token_t1_from_state(ctx->state, &token);
+}
+
+
 float whisper_full_get_segment_no_speech_prob(struct whisper_context * ctx, int i_segment) {
     return ctx->state->result_all[i_segment].no_speech_prob;
 }
