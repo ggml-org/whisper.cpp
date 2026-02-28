@@ -718,6 +718,12 @@ extern "C" {
     WHISPER_API void whisper_vad_free_segments(struct whisper_vad_segments * segments);
     WHISPER_API void whisper_vad_free         (struct whisper_vad_context  * ctx);
 
+    // Inject external VAD context for use with params.vad = true.
+    // The caller retains ownership - whisper will not free this context.
+    // Frees any previously set internal VAD context.
+    WHISPER_API void whisper_state_set_vad(struct whisper_state * state, struct whisper_vad_context * vctx);
+    WHISPER_API void whisper_set_vad      (struct whisper_context * ctx, struct whisper_vad_context * vctx);
+
     ////////////////////////////////////////////////////////////////////////////
 
     // Temporary helpers needed for exposing ggml interface
