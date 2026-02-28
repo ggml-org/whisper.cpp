@@ -13,7 +13,7 @@ func TestNew(t *testing.T) {
 		model, err := whisper.New(ModelPath)
 		assert.NoError(err)
 		assert.NotNil(model)
-		defer model.Close()
+		defer func() { _ = model.Close() }()
 
 	})
 
@@ -42,11 +42,25 @@ func TestNewContext(t *testing.T) {
 	model, err := whisper.New(ModelPath)
 	assert.NoError(err)
 	assert.NotNil(model)
-	defer model.Close()
+	defer func() { _ = model.Close() }()
 
 	context, err := model.NewContext()
 	assert.NoError(err)
 	assert.NotNil(context)
+}
+
+func TestNewContext_ClosedModel(t *testing.T) {
+	assert := assert.New(t)
+
+	model, err := whisper.New(ModelPath)
+	assert.NoError(err)
+	assert.NotNil(model)
+	assert.NoError(model.Close())
+
+	context, err := model.NewContext()
+	assert.ErrorIs(err, whisper.ErrInternalAppError)
+	assert.ErrorIs(err, whisper.ErrModelClosed)
+	assert.Nil(context)
 }
 
 func TestIsMultilingual(t *testing.T) {
@@ -55,7 +69,7 @@ func TestIsMultilingual(t *testing.T) {
 	model, err := whisper.New(ModelPath)
 	assert.NoError(err)
 	assert.NotNil(model)
-	defer model.Close()
+	defer func() { _ = model.Close() }()
 
 	isMultilingual := model.IsMultilingual()
 
@@ -71,7 +85,7 @@ func TestLanguages(t *testing.T) {
 	model, err := whisper.New(ModelPath)
 	assert.NoError(err)
 	assert.NotNil(model)
-	defer model.Close()
+	defer func() { _ = model.Close() }()
 
 	expectedLanguages := []string{
 		"en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr", "pl",
