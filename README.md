@@ -26,6 +26,7 @@ High-performance inference of [OpenAI's Whisper](https://github.com/openai/whisp
 - [Moore Threads GPU Support](#moore-threads-gpu-support)
 - [C-style API](https://github.com/ggml-org/whisper.cpp/blob/master/include/whisper.h)
 - [Voice Activity Detection (VAD)](#voice-activity-detection-vad)
+- [Integration with Coding Agents as SKILL.md](#skill-installation)
 
 Supported platforms:
 
@@ -831,6 +832,39 @@ before and after each detected speech segment to avoid cutting off speech edges.
 * --vad-samples-overlap: Amount of audio to extend from each speech segment into
 the next one, in seconds (e.g., 0.10 = 100ms overlap). This ensures speech isn't
 cut off abruptly between segments when they're concatenated together.
+
+## Skill Installation
+
+Agents can be extended to use whisper.cpp for transcription through a `SKILL.md`.
+
+The skill supports both the CLI and interacting with a running docker container. Two environment variables guide this:
+
+| Variable | Mode | Purpose |
+|----------|------|---------|
+| `WHISPER_CPP_URL` | Docker/HTTP | Server URL (e.g. `http://localhost:8080`). Is responsible for conneting to the docker container and is checked first - taking priority. Refer to the [docker setup guide](./whisper-transcribe/references/docker-setup.md)|
+| `WHISPER_CPP_MODEL` | Local CLI | Absolute path to `.bin` model file. Is responsible for using the CLI and is checked second. Refer to [local setup guide](.whisper-transcribe/references/local-setup.md). |
+
+Then install, e.g. for claude:
+
+```bash
+# Copy skill to all projects (global)
+cp -r my-skill/ ~/.claude/skills/
+
+# Copy skill to a specific project
+cp -r my-skill/ /path/to/your/project/.claude/skills/
+```
+
+Then ask your agent to transcribe audio files, for example:
+
+```text
+Transcribe all audio files in the folder @./samples
+```
+
+or by directly referencing the skill
+
+```text
+/whisper-transcribe ./samples/jfk.wav
+```
 
 ## Examples
 
