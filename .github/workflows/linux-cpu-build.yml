@@ -1,0 +1,152 @@
+name: Linux CPU Build
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'src/**'
+      - 'ggml/**'
+      - 'CMakeLists.txt'
+      - '**.cmake'
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - 'src/**'
+      - 'ggml/**'
+      - 'CMakeLists.txt'
+      - '**.cmake'
+  workflow_dispatch:
+  release:
+    types: [created]
+
+jobs:
+  build-cpu-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          echo "Installing build dependencies..."
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            git \
+            libsdl2-dev \
+            pkg-config
+          echo "Dependencies installed"
+          cmake --version
+          gcc --version
+
+      - name: Configure CMake
+        run: |
+          echo "Configuring CMake..."
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWHISPER_BUILD_EXAMPLES=ON \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_SERVER=ON
+          if [ $? -ne 0 ]; then
+            echo "ERROR: CMake configuration failed!"
+            exit 1
+          fi
+          echo "Configuration complete"
+
+      - name: Build
+        run: |
+          echo "Building..."
+          cmake --build build --config Release -j$(nproc)
+          if [ $? -ne 0 ]; then
+            echo "ERROR: Build failed!"
+            exit 1
+          fi
+          echo "Build complete"
+
+      - name: List build output
+        run: |
+          echo "Build output contents:"
+          if [ -d "build/bin" ]; then
+            find build/bin -type f -executable -o -name "*.so*" | while read file; do
+              ls -lh "$file"
+            done
+            echo ""
+            echo "All build artifacts:"
+            find build/bin -type f | sort
+          else
+            echo "ERROR: build/bin directory not found!"
+            exit 1
+          fi
+
+      - name: Package binaries
+        run: |
+          echo "Creating package..."
+          
+          # Create package directory
+          PACKAGE_NAME="whisper-cpu-linux-$(uname -m)"
+          PACKAGE_DIR="$PACKAGE_NAME"
+          mkdir -p "$PACKAGE_DIR"
+          
+          # Copy binaries
+          if [ -d "build/bin" ]; then
+            cp -r build/bin/* "$PACKAGE_DIR/" 2>/dev/null || true
+            # Also copy any .so files
+            find build -name "*.so*" -exec cp {} "$PACKAGE_DIR/" \; 2>/dev/null || true
+          fi
+          
+          # Create README
+          printf "Whisper.cpp CPU Build for Linux\n" > "$PACKAGE_DIR/README.txt"
+          printf "===============================\n\n" >> "$PACKAGE_DIR/README.txt"
+          printf "Build Date: %s\n" "$(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> "$PACKAGE_DIR/README.txt"
+          printf "Architecture: %s\n" "$(uname -m)" >> "$PACKAGE_DIR/README.txt"
+          printf "OS: %s\n" "$(uname -o)" >> "$PACKAGE_DIR/README.txt"
+          printf "Kernel: %s\n\n" "$(uname -r)" >> "$PACKAGE_DIR/README.txt"
+          printf "Binaries:\n" >> "$PACKAGE_DIR/README.txt"
+          ls -lh "$PACKAGE_DIR" | grep -v "^total" | grep -v "^d" | awk '{print "  " $9 " (" $5 ")"}' >> "$PACKAGE_DIR/README.txt"
+          
+          # Create tarball
+          tar -czf "${PACKAGE_NAME}.tar.gz" "$PACKAGE_DIR"
+          
+          if [ -f "${PACKAGE_NAME}.tar.gz" ]; then
+            PACKAGE_SIZE=$(du -h "${PACKAGE_NAME}.tar.gz" | cut -f1)
+            echo "Package created successfully: ${PACKAGE_NAME}.tar.gz ($PACKAGE_SIZE)"
+            ls -lh "${PACKAGE_NAME}.tar.gz"
+          else
+            echo "ERROR: Failed to create package!"
+            exit 1
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-cpu-linux
+          path: whisper-cpu-linux-*.tar.gz
+          retention-days: 30
+
+      - name: Create Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: whisper-cpu-linux-*.tar.gz
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Summary
+        run: |
+          echo "========================================"
+          echo "Build completed successfully!"
+          echo "========================================"
+          echo ""
+          echo "Artifact: whisper-cpu-linux-*.tar.gz"
+          echo "Download from: Actions > This workflow run > Artifacts"
+          if [ "${{ github.event_name }}" == "release" ]; then
+            echo "Release: Available in GitHub Releases"
+          fi

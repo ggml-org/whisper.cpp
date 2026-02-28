@@ -1,0 +1,220 @@
+name: Ryzen AI Minimal Build
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - '.github/workflows/ryzen-ai-minimal.yml'
+      - 'src/**'
+      - 'ggml/**'
+      - 'CMakeLists.txt'
+      - '**.cmake'
+  workflow_dispatch:
+    # inputs:
+    #   runson:
+    #     description: 'Which runner group to run the workflow on'
+    #     default: 'stx'
+    #     required: true
+    #     type: choice
+    #     options:
+    #       - 'rai300_400'
+    #       - 'stx'
+    #       - 'stx-halo'
+    #       - 'stx-test'
+
+jobs:
+  build-ryzenai:
+    runs-on: [rai-170-sdk, Windows]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Install CMake if not available
+        shell: powershell
+        run: |
+          # Check if CMake is already installed
+          $cmakeInstalled = Get-Command cmake -ErrorAction SilentlyContinue
+          
+          if (-not $cmakeInstalled) {
+              Write-Host "CMake not found, installing..." -ForegroundColor Yellow
+              
+              # Download CMake installer
+              $cmakeVersion = "3.28.1"
+              $cmakeUrl = "https://github.com/Kitware/CMake/releases/download/v$cmakeVersion/cmake-$cmakeVersion-windows-x86_64.msi"
+              $cmakeInstaller = "cmake-installer.msi"
+              
+              Invoke-WebRequest -Uri $cmakeUrl -OutFile $cmakeInstaller
+              
+              # Install CMake silently
+              Start-Process msiexec.exe -ArgumentList "/i $cmakeInstaller /quiet /norestart" -Wait
+              
+              # Add CMake to PATH for this session AND future steps
+              $cmakePath = "C:\Program Files\CMake\bin"
+              $env:PATH = "$cmakePath;$env:PATH"
+              
+              # Persist to GITHUB_PATH for future steps
+              echo $cmakePath >> $env:GITHUB_PATH
+              
+              # Verify installation
+              cmake --version
+              if ($LASTEXITCODE -ne 0) {
+                  Write-Host "ERROR: CMake installation failed!" -ForegroundColor Red
+                  exit 1
+              }
+              
+              Write-Host "CMake installed successfully and added to PATH!" -ForegroundColor Green
+          } else {
+              Write-Host "CMake is already installed:" -ForegroundColor Green
+              cmake --version
+          }
+
+      - name: Download FlexML Runtime
+        shell: powershell
+        run: |
+          Write-Host "Downloading FlexML Runtime..."
+          Invoke-WebRequest -Uri "https://github.com/lemonade-sdk/whisper.cpp/releases/download/deps/flexmlrt1.7.0-win.zip" -OutFile flexmlrt.zip
+          Write-Host "Download complete"
+          
+          # Verify download
+          if (-Not (Test-Path "flexmlrt.zip")) {
+            Write-Error "ERROR: flexmlrt.zip was not downloaded!"
+            exit 1
+          }
+          
+          $fileSize = (Get-Item "flexmlrt.zip").Length
+          $fileSizeMB = [math]::Round($fileSize / 1MB, 2)
+          
+          if ($fileSize -eq 0) {
+            Write-Error "ERROR: flexmlrt.zip is empty (0 bytes)!"
+            exit 1
+          }
+          
+          Write-Host "Download verified successfully" -ForegroundColor Green
+          Write-Host "File: flexmlrt.zip"
+          Write-Host "Size: $fileSizeMB MB"
+
+      - name: Extract FlexML Runtime
+        shell: powershell
+        run: |
+          Write-Host "Extracting FlexML Runtime..."
+          tar xvf flexmlrt.zip
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "ERROR: Extraction failed!"
+            exit 1
+          }
+          Write-Host "Extraction complete"
+          
+          # List what was extracted
+          $extractedDirs = Get-ChildItem -Directory | Where-Object { $_.Name -like "flexmlrt*" }
+          if ($extractedDirs) {
+            Write-Host "Extracted directories:" -ForegroundColor Green
+            $extractedDirs | ForEach-Object { Write-Host "  - $($_.Name)" }
+          } else {
+            Write-Error "ERROR: No flexmlrt directory found after extraction!"
+            exit 1
+          }
+
+      - name: Setup FlexML Runtime, Configure and Build
+        shell: cmd
+        run: |
+          echo "Setting up FlexML environment..."
+          cd flexmlrt
+          call setup.bat
+          if errorlevel 1 (
+            echo ERROR: FlexML setup failed!
+            exit /b 1
+          )
+          cd ..
+          echo "Setup complete"
+          echo.
+          echo "Configuring CMake..."
+          cmake -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DWHISPER_VITISAI=ON
+          if errorlevel 1 (
+            echo ERROR: CMake configuration failed!
+            exit /b 1
+          )
+          echo.
+          echo "Building..."
+          cmake --build build --config Release -j
+          if errorlevel 1 (
+            echo ERROR: Build failed!
+            exit /b 1
+          )
+          echo "Build complete"
+
+      - name: List build output
+        shell: powershell
+        run: |
+          Write-Host "Build output contents:"
+          if (Test-Path "build/bin/Release") {
+            Get-ChildItem -Path "build/bin/Release" -Recurse | Format-Table Name, Length
+          } else {
+            Write-Warning "build/bin/Release directory not found!"
+            exit 1
+          }
+
+      - name: Copy FlexML Runtime DLLs to build output
+        shell: powershell
+        run: |
+          Write-Host "Copying FlexML Runtime DLLs..."
+          
+          $dllsCopied = 0
+          
+          if (Test-Path "flexmlrt/bin") {
+            $binDlls = Get-ChildItem -Path "flexmlrt/bin/*.dll" -ErrorAction SilentlyContinue
+            if ($binDlls) {
+              Copy-Item -Path "flexmlrt/bin/*.dll" -Destination "build/bin/Release/" -Force
+              $dllsCopied += $binDlls.Count
+              Write-Host "Copied $($binDlls.Count) DLLs from flexmlrt/bin"
+            }
+          }
+          
+          if (Test-Path "flexmlrt/lib") {
+            $libDlls = Get-ChildItem -Path "flexmlrt/lib/*.dll" -ErrorAction SilentlyContinue
+            if ($libDlls) {
+              Copy-Item -Path "flexmlrt/lib/*.dll" -Destination "build/bin/Release/" -Force
+              $dllsCopied += $libDlls.Count
+              Write-Host "Copied $($libDlls.Count) DLLs from flexmlrt/lib"
+            }
+          }
+          
+          if ($dllsCopied -eq 0) {
+            Write-Warning "No DLLs found to copy from flexmlrt/bin or flexmlrt/lib"
+          } else {
+            Write-Host "Total DLLs copied: $dllsCopied" -ForegroundColor Green
+          }
+
+      - name: Package binaries
+        shell: powershell
+        run: |
+          Write-Host "Creating ZIP package..."
+          Compress-Archive -Path "build/bin/Release/*" -DestinationPath "whisper-ryzenai-minimal.zip" -Force
+          if (Test-Path "whisper-ryzenai-minimal.zip") {
+            $zipSize = (Get-Item "whisper-ryzenai-minimal.zip").Length / 1MB
+            Write-Host "Package created successfully: $([math]::Round($zipSize, 2)) MB"
+          } else {
+            Write-Error "ERROR: Failed to create package!"
+            exit 1
+          }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-ryzenai-minimal
+          path: whisper-ryzenai-minimal.zip
+          
+      - name: Build Summary
+        shell: powershell
+        run: |
+          Write-Host "========================================" -ForegroundColor Green
+          Write-Host "Build completed successfully!" -ForegroundColor Green
+          Write-Host "========================================" -ForegroundColor Green
+          Write-Host ""
+          Write-Host "Artifact: whisper-ryzenai-minimal.zip"
+          Write-Host "Download from: Actions > This workflow run > Artifacts"

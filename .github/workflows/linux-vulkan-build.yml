@@ -1,0 +1,176 @@
+name: Linux Vulkan Build
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - '.github/workflows/linux-vulkan-build.yml'
+      - 'src/**'
+      - 'ggml/**'
+      - 'CMakeLists.txt'
+      - '**.cmake'
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - '.github/workflows/linux-vulkan-build.yml'
+      - 'src/**'
+      - 'ggml/**'
+      - 'CMakeLists.txt'
+      - '**.cmake'
+  workflow_dispatch:
+  release:
+    types: [created]
+
+jobs:
+  build-vulkan-linux:
+    # Pinned to one specific self-hosted runner host.
+    runs-on: [self-hosted, Linux, X64, stx-halo, sjlab-stx-halo-11]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check Vulkan readiness
+        run: |
+          echo "Checking Vulkan readiness..."
+          if ! command -v vulkaninfo >/dev/null 2>&1; then
+            echo "ERROR: vulkaninfo is not available on this runner."
+            exit 1
+          fi
+
+          vulkaninfo | grep "GPU id"
+          if [ $? -ne 0 ]; then
+            echo "ERROR: Vulkan check failed. 'vulkaninfo | grep \"GPU id\"' returned no result."
+            exit 1
+          fi
+
+          # Some Ubuntu images may provide glslc through shaderc instead of glslc package.
+          if ! command -v glslc >/dev/null 2>&1; then
+            echo "glslc not found after install, trying shaderc..."
+            sudo apt-get install -y shaderc
+          fi
+
+          echo "Vulkan is ready"
+          cmake --version
+          gcc --version
+
+      - name: Configure CMake (Vulkan)
+        run: |
+          echo "Configuring CMake with Vulkan backend..."
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_VULKAN=ON \
+            -DWHISPER_BUILD_EXAMPLES=ON \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_SERVER=ON
+
+          if [ $? -ne 0 ]; then
+            echo "ERROR: CMake configuration failed!"
+            exit 1
+          fi
+          echo "Configuration complete"
+
+      - name: Build
+        run: |
+          echo "Building..."
+          cmake --build build --config Release -j"$(nproc)"
+          if [ $? -ne 0 ]; then
+            echo "ERROR: Build failed!"
+            exit 1
+          fi
+          echo "Build complete"
+
+      - name: Validate Vulkan artifacts
+        run: |
+          echo "Checking Vulkan-related outputs..."
+          find build -iname "*vulkan*" | sort || true
+
+          VULKAN_FILES=$(find build -type f \( -iname "*vulkan*.so*" -o -iname "*vulkan*" \) | wc -l)
+          if [ "$VULKAN_FILES" -eq 0 ]; then
+            echo "ERROR: No Vulkan-related build artifacts found!"
+            exit 1
+          fi
+
+          if [ -f "build/bin/whisper-cli" ]; then
+            echo "whisper-cli found, printing linked Vulkan libs if present:"
+            ldd build/bin/whisper-cli | grep -i vulkan || true
+          fi
+
+      - name: List build output
+        run: |
+          echo "Build output contents:"
+          if [ -d "build/bin" ]; then
+            find build/bin -type f | sort
+          else
+            echo "ERROR: build/bin directory not found!"
+            exit 1
+          fi
+
+      - name: Package binaries
+        run: |
+          echo "Creating package..."
+
+          PACKAGE_NAME="whisper-vulkan-linux-$(uname -m)"
+          PACKAGE_DIR="$PACKAGE_NAME"
+          mkdir -p "$PACKAGE_DIR"
+
+          # Copy binaries and runtime libraries
+          if [ -d "build/bin" ]; then
+            cp -r build/bin/* "$PACKAGE_DIR/" 2>/dev/null || true
+          fi
+          find build -name "*.so*" -exec cp {} "$PACKAGE_DIR/" \; 2>/dev/null || true
+
+          printf "Whisper.cpp Vulkan Build for Linux\n" > "$PACKAGE_DIR/README.txt"
+          printf "===================================\n\n" >> "$PACKAGE_DIR/README.txt"
+          printf "Build Date: %s\n" "$(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> "$PACKAGE_DIR/README.txt"
+          printf "Architecture: %s\n" "$(uname -m)" >> "$PACKAGE_DIR/README.txt"
+          printf "OS: %s\n" "$(uname -o)" >> "$PACKAGE_DIR/README.txt"
+          printf "Kernel: %s\n" "$(uname -r)" >> "$PACKAGE_DIR/README.txt"
+          printf "Backend: GGML_VULKAN=ON\n\n" >> "$PACKAGE_DIR/README.txt"
+          printf "Binaries:\n" >> "$PACKAGE_DIR/README.txt"
+          ls -lh "$PACKAGE_DIR" | grep -v "^total" | grep -v "^d" | awk '{print "  " $9 " (" $5 ")"}' >> "$PACKAGE_DIR/README.txt"
+
+          # Create a flat tarball (files at archive root, no extra top-level directory).
+          tar -czf "${PACKAGE_NAME}.tar.gz" -C "$PACKAGE_DIR" .
+
+          if [ -f "${PACKAGE_NAME}.tar.gz" ]; then
+            PACKAGE_SIZE=$(du -h "${PACKAGE_NAME}.tar.gz" | cut -f1)
+            echo "Package created successfully: ${PACKAGE_NAME}.tar.gz (${PACKAGE_SIZE})"
+            ls -lh "${PACKAGE_NAME}.tar.gz"
+          else
+            echo "ERROR: Failed to create package!"
+            exit 1
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-vulkan-linux
+          path: whisper-vulkan-linux-*.tar.gz
+          retention-days: 30
+
+      - name: Create Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: whisper-vulkan-linux-*.tar.gz
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Summary
+        run: |
+          echo "========================================"
+          echo "Vulkan build completed successfully!"
+          echo "========================================"
+          echo ""
+          echo "Artifact: whisper-vulkan-linux-*.tar.gz"
+          echo "Download from: Actions > This workflow run > Artifacts"
+          if [ "${{ github.event_name }}" == "release" ]; then
+            echo "Release: Available in GitHub Releases"
+          fi
