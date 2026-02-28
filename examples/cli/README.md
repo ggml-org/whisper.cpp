@@ -37,6 +37,7 @@ options:
   -ovtt,     --output-vtt        [false  ] output result in a vtt file
   -osrt,     --output-srt        [false  ] output result in a srt file
   -olrc,     --output-lrc        [false  ] output result in a lrc file
+  -olrcw,    --output-lrc-word   [false  ] output result in a word-level lrc file
   -owts,     --output-words      [false  ] output script for generating karaoke video
   -fp,       --font-path         [/System/Library/Fonts/Supplemental/Courier New Bold.ttf] path to a monospace font for karaoke video
   -ocsv,     --output-csv        [false  ] output result in a CSV file
