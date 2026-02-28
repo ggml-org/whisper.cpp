@@ -8011,6 +8011,10 @@ int64_t whisper_full_get_segment_t1(struct whisper_context * ctx, int i_segment)
     return whisper_full_get_segment_t1_from_state(ctx->state, i_segment);
 }
 
+int64_t vad_ts_to_original_ts(int64_t vad_ts, struct whisper_context * ctx) {
+    return map_processed_to_original_time(vad_ts, ctx->state->vad_mapping_table);
+}
+
 bool whisper_full_get_segment_speaker_turn_next_from_state(struct whisper_state * state, int i_segment) {
     return state->result_all[i_segment].speaker_turn_next;
 }
