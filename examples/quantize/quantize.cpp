@@ -37,7 +37,11 @@ struct whisper_filters {
 };
 
 // quantize a model
-static bool whisper_model_quantize(const std::string & fname_inp, const std::string & fname_out, ggml_ftype ftype) {
+static bool whisper_model_quantize(
+        const std::string & fname_inp, 
+        const std::string & fname_out, 
+        ggml_ftype ftype,
+        const std::vector<tensor_quant_spec> & tensor_quant_specs = {}) {
     gpt_vocab vocab;
 
     printf("%s: loading model from '%s'\n", __func__, fname_inp.c_str());
@@ -83,7 +87,12 @@ static bool whisper_model_quantize(const std::string & fname_inp, const std::str
         finp.read((char *) &hparams.ftype,         sizeof(hparams.ftype));
 
         const int32_t qntvr_src =    hparams.ftype / GGML_QNT_VERSION_FACTOR;
-        const int32_t ftype_dst = GGML_QNT_VERSION * GGML_QNT_VERSION_FACTOR + ftype;
+        
+        // For mixed precision quantization, use F16 as the base ftype to ensure
+        // all tensor buffers are large enough to hold any quantization type
+        const bool use_mixed_precision = !tensor_quant_specs.empty();
+        const int32_t ftype_for_allocation = use_mixed_precision ? GGML_FTYPE_MOSTLY_F16 : ftype;
+        const int32_t ftype_dst = GGML_QNT_VERSION * GGML_QNT_VERSION_FACTOR + ftype_for_allocation;
 
         fprintf(stderr, "%s: n_vocab       = %d\n", __func__, hparams.n_vocab);
         fprintf(stderr, "%s: n_audio_ctx   = %d\n", __func__, hparams.n_audio_ctx);
@@ -99,6 +108,9 @@ static bool whisper_model_quantize(const std::string & fname_inp, const std::str
         fprintf(stderr, "%s: qntvr (src)   = %d\n", __func__, qntvr_src);
         fprintf(stderr, "%s: ftype (dst)   = %d\n", __func__, ftype_dst);
         fprintf(stderr, "%s: qntvr (dst)   = %d\n", __func__, GGML_QNT_VERSION);
+        if (use_mixed_precision) {
+            fprintf(stderr, "%s: using mixed precision quantization (ftype for allocation = F16)\n", __func__);
+        }
 
         fout.write((const char *) &hparams.n_vocab,       sizeof(hparams.n_vocab));
         fout.write((const char *) &hparams.n_audio_ctx,   sizeof(hparams.n_audio_ctx));
@@ -165,7 +177,15 @@ static bool whisper_model_quantize(const std::string & fname_inp, const std::str
         "decoder.positional_embedding",
     };
 
-    if (!ggml_common_quantize_0(finp, fout, ftype, { ".*" }, to_skip)) {
+    // Use the extended quantization function if we have per-tensor specs
+    bool success;
+    if (!tensor_quant_specs.empty()) {
+        success = ggml_common_quantize_0(finp, fout, ftype, { ".*" }, to_skip, tensor_quant_specs);
+    } else {
+        success = ggml_common_quantize_0(finp, fout, ftype, { ".*" }, to_skip);
+    }
+    
+    if (!success) {
         fprintf(stderr, "%s: failed to quantize model '%s'\n", __func__, fname_inp.c_str());
         return false;
     }
@@ -179,9 +199,64 @@ static bool whisper_model_quantize(const std::string & fname_inp, const std::str
 int main(int argc, char ** argv) {
     ggml_backend_load_all();
 
-    if (argc != 4) {
-        fprintf(stderr, "usage: %s model-f32.bin model-quant.bin type\n", argv[0]);
+    if (argc < 4) {
+        fprintf(stderr, "usage: %s [--tensor-type PATTERN=TYPE ...] model-f32.bin model-quant.bin type\n", argv[0]);
+        fprintf(stderr, "\n");
+        fprintf(stderr, "  --tensor-type PATTERN=TYPE : specify quantization type for tensors matching PATTERN\n");
+        fprintf(stderr, "      PATTERN is a regex pattern to match tensor names\n");
+        fprintf(stderr, "      TYPE is a quantization type (e.g., q4_0, q8_0, f16)\n");
+        fprintf(stderr, "      Example: --tensor-type 'encoder\\..*\\.weight'=q8_0 --tensor-type 'decoder\\..*\\.weight'=q4_0\n");
+        fprintf(stderr, "\n");
         ggml_print_ftypes(stderr);
+        return 1;
+    }
+
+    // Parse optional arguments
+    std::vector<tensor_quant_spec> tensor_quant_specs;
+    int arg_idx = 1;
+    
+    while (arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0) {
+        if (strcmp(argv[arg_idx], "--tensor-type") == 0) {
+            if (arg_idx + 1 >= argc) {
+                fprintf(stderr, "error: --tensor-type requires an argument\n");
+                return 1;
+            }
+            arg_idx++;
+            
+            // Parse PATTERN=TYPE
+            const char * spec_str = argv[arg_idx];
+            const char * eq = strchr(spec_str, '=');
+            if (eq == nullptr) {
+                fprintf(stderr, "error: invalid --tensor-type format '%s', expected PATTERN=TYPE\n", spec_str);
+                return 1;
+            }
+            
+            std::string pattern(spec_str, eq - spec_str);
+            std::string type_str(eq + 1);
+            
+            ggml_type qtype = ggml_parse_qtype(type_str.c_str());
+            if (qtype == GGML_TYPE_COUNT) {
+                fprintf(stderr, "error: unknown quantization type '%s'\n", type_str.c_str());
+                return 1;
+            }
+            
+            tensor_quant_spec spec;
+            spec.pattern = pattern;
+            spec.quant_type = qtype;
+            tensor_quant_specs.push_back(spec);
+            
+            printf("Added tensor quantization spec: pattern='%s' type=%s\n", 
+                   pattern.c_str(), ggml_type_name(qtype));
+        } else {
+            fprintf(stderr, "error: unknown option '%s'\n", argv[arg_idx]);
+            return 1;
+        }
+        arg_idx++;
+    }
+    
+    if (argc - arg_idx < 3) {
+        fprintf(stderr, "error: missing required arguments\n");
+        fprintf(stderr, "usage: %s [--tensor-type PATTERN=TYPE ...] model-f32.bin model-quant.bin type\n", argv[0]);
         return 1;
     }
 
@@ -192,10 +267,10 @@ int main(int argc, char ** argv) {
         ggml_free(ctx);
     }
 
-    const std::string fname_inp = argv[1];
-    const std::string fname_out = argv[2];
+    const std::string fname_inp = argv[arg_idx];
+    const std::string fname_out = argv[arg_idx + 1];
 
-    const ggml_ftype ftype = ggml_parse_ftype(argv[3]);
+    const ggml_ftype ftype = ggml_parse_ftype(argv[arg_idx + 2]);
 
     const int64_t t_main_start_us = ggml_time_us();
 
@@ -205,7 +280,7 @@ int main(int argc, char ** argv) {
     {
         const int64_t t_start_us = ggml_time_us();
 
-        if (!whisper_model_quantize(fname_inp, fname_out, ggml_ftype(ftype))) {
+        if (!whisper_model_quantize(fname_inp, fname_out, ggml_ftype(ftype), tensor_quant_specs)) {
             fprintf(stderr, "%s: failed to quantize model from '%s'\n", __func__, fname_inp.c_str());
             return 1;
         }
