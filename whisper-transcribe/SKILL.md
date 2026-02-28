@@ -42,8 +42,12 @@ find /path/to/search -type f \( -name "*.wav" -o -name "*.mp3" -o -name "*.flac"
 
 Use the actual directory the user mentioned. Present the list and confirm before transcribing.
 
-## Step 3 — Transcribe via HTTP
+## Step 3 — Transcribe via HTTP or CLI
 
+If using HTTP mode refer to Step 3: HTTP Mode.
+If using CLI mode refer to Step 3: CLI Mode.
+
+### HTTP Mode
 **Convert non-WAV files first** (the HTTP server only accepts WAV):
 
 ```bash
@@ -58,9 +62,7 @@ curl -s -F "file=@/absolute/path/to/audio.wav" -F "response_format=text" "${WHIS
 
 The response body is the plain transcription text. Process files one at a time — the server serializes requests.
 
-Skip to Step 5 for output.
-
-## Step 4 — Transcribe via CLI
+### CLI Mode
 
 **The CLI natively supports: wav, mp3, flac, ogg.** No conversion needed for these.
 
@@ -80,7 +82,7 @@ Flags: `-m` model path, `-f` input file (absolute path), `-np` suppresses debug 
 
 Add `--no-timestamps` if the user wants plain text without `[HH:MM:SS.mmm --> HH:MM:SS.mmm]` prefixes.
 
-## Step 5 — Present Output
+## Step 4 — Present Output
 
 For **every** file, show the complete transcription text. Never abbreviate, summarize, or write "(same as above)" — even if multiple files produce identical text. If timestamps are present, keep them formatted readably.
 
