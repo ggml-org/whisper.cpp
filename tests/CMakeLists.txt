@@ -110,3 +110,14 @@ target_compile_definitions(${VAD_TEST} PRIVATE
     SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
 add_test(NAME ${VAD_TEST} COMMAND ${VAD_TEST})
 set_tests_properties(${VAD_TEST} PROPERTIES LABELS "base;en")
+
+# Test that no_timestamps flag doesn't affect transcription quality
+set(NO_TS_TEST test-no-timestamps)
+add_executable(${NO_TS_TEST} ${NO_TS_TEST}.cpp)
+target_include_directories(${NO_TS_TEST} PRIVATE ../include ../ggml/include ../examples)
+target_link_libraries(${NO_TS_TEST} PRIVATE common)
+target_compile_definitions(${NO_TS_TEST} PRIVATE
+    WHISPER_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/ggml-base.en.bin"
+    SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
+add_test(NAME ${NO_TS_TEST} COMMAND ${NO_TS_TEST})
+set_tests_properties(${NO_TS_TEST} PROPERTIES LABELS "base;en;unit")
