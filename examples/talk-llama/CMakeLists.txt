@@ -34,7 +34,7 @@ if (WHISPER_SDL2)
         unicode.cpp
         unicode-data.cpp
         ${SRC_MODELS})
-    target_include_directories(${TARGET} PRIVATE ${SDL2_INCLUDE_DIRS})
+    target_include_directories(${TARGET} PRIVATE . ${SDL2_INCLUDE_DIRS})
 
     target_link_libraries(${TARGET} PRIVATE common common-sdl whisper ${SDL2_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
     install(TARGETS ${TARGET} RUNTIME)
