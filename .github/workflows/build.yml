@@ -438,11 +438,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ${{fromJson(needs.prepare-matrix.outputs.ubuntu_matrix)}}
+        arch: [linux/amd64]
+        build: [Release]
 
     steps:
       - name: Clone
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
