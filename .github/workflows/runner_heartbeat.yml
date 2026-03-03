@@ -1,0 +1,59 @@
+name: Runner Heartbeat
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  check-rocm-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: [rai300_400, Linux]
+            name: rai300-400-linux
+          - runner: [stx-halo, Linux]
+            name: stx-halo-linux
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - name: Heartbeat
+        run: |
+          echo "=== Runner Heartbeat: ${{ matrix.name }} ==="
+          echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "Hostname: $(hostname)"
+          echo "=== GPU Status ==="
+          rocm-smi 2>/dev/null || echo "rocm-smi not available"
+          echo "=== Disk Space ==="
+          df -h / /mnt 2>/dev/null || df -h /
+          echo "=== Memory ==="
+          free -h
+          echo "=== ROCm Version ==="
+          cat /opt/rocm/.info/version 2>/dev/null || echo "ROCm version file not found"
+
+  check-rocm-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: [rai300_400, Windows]
+            name: rai300-400-windows
+          - runner: [stx-halo, Windows]
+            name: stx-halo-windows
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - name: Heartbeat
+        shell: pwsh
+        run: |
+          Write-Host "=== Runner Heartbeat: ${{ matrix.name }} ==="
+          Write-Host "Timestamp: $(Get-Date -Format o)"
+          Write-Host "Hostname: $env:COMPUTERNAME"
+          Write-Host "=== GPU Status ==="
+          & "$env:HIP_PATH\bin\rocm-smi.exe" 2>$null
+          Write-Host "=== Disk Space ==="
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name, Used, Free -AutoSize
+          Write-Host "=== Memory ==="
+          $os = Get-CimInstance Win32_OperatingSystem
+          Write-Host "Free: $([math]::Round($os.FreePhysicalMemory/1MB, 1)) GB / Total: $([math]::Round($os.TotalVisibleMemorySize/1MB, 1)) GB"

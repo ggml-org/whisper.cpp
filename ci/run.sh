@@ -79,6 +79,13 @@ if [ ! -z ${GG_BUILD_ROCM} ]; then
     fi
 
     CMAKE_EXTRA="${CMAKE_EXTRA} -DAMDGPU_TARGETS=${GG_BUILD_AMDGPU_TARGETS}"
+
+    # Set HIP environment if not already set
+    export HIP_PLATFORM=${HIP_PLATFORM:-amd}
+    export ROCM_PATH=${ROCM_PATH:-/opt/rocm}
+    export HIP_PATH=${HIP_PATH:-/opt/rocm}
+    export LD_LIBRARY_PATH=${ROCM_PATH}/lib:${LD_LIBRARY_PATH}
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DCMAKE_PREFIX_PATH=${ROCM_PATH} -DCMAKE_HIP_COMPILER=${ROCM_PATH}/lib/llvm/bin/clang++"
 fi
 
 if [ ! -z ${GG_BUILD_SYCL} ]; then
@@ -223,7 +230,7 @@ function gg_run_ctest {
     gg_check_build_requirements
 
     (time cmake -DCMAKE_BUILD_TYPE=${mode} ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
-    (time make -j$(nproc)                                    ) 2>&1 | tee -a $OUT/${ci}-make.log
+    (time cmake --build . --config ${mode} -j $(nproc)      ) 2>&1 | tee -a $OUT/${ci}-make.log
 
     (time ctest --output-on-failure -L main -E test-opt ) 2>&1 | tee -a $OUT/${ci}-ctest.log
 
