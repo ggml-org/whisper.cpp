@@ -37,7 +37,7 @@ if [ "$rocm_version" = "latest" ]; then
     echo "Auto-detecting latest ROCm version for ${platform}/${gfx_target}..."
     s3_response=$(curl -s "https://therock-nightly-tarball.s3.amazonaws.com/?prefix=${dist_prefix}-7")
 
-    files=$(echo "$s3_response" | grep -oP '(?<=<Key>)[^<]*' | grep "${dist_prefix}-")
+    files=$(echo "$s3_response" | sed -n 's/.*<Key>\([^<]*\)<\/Key>.*/\1/gp' | grep "${dist_prefix}-")
 
     latest_file=""
     latest_major=0
