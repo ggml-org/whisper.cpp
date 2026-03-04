@@ -7,6 +7,9 @@
 # # CPU-only build
 # bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
+# # with Vulkan support
+# GG_BUILD_VULKAN=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
 # # with CUDA support
 # GG_BUILD_CUDA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
@@ -311,6 +314,9 @@ function gg_run_bench {
             fi
             if [[ $system_info == *"METAL = 1"* ]]; then
                 config="$config METAL"
+            fi
+            if [[ $system_info == *"VULKAN = 1"* ]]; then
+                config="$config VULKAN"
             fi
 
             # get commit hash
