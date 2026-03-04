@@ -230,8 +230,7 @@ function gg_run_ctest {
     gg_check_build_requirements
 
     (time cmake -DCMAKE_BUILD_TYPE=${mode} ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
-    # Use cmake --build instead of make for cross-platform compatibility (Windows ROCm CI)
-    (time cmake --build . --config ${mode} -j $(nproc)      ) 2>&1 | tee -a $OUT/${ci}-make.log
+    (time make -j $(nproc)                                   ) 2>&1 | tee -a $OUT/${ci}-make.log
 
     (time ctest --output-on-failure -L main -E test-opt ) 2>&1 | tee -a $OUT/${ci}-ctest.log
 

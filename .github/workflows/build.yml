@@ -413,12 +413,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [linux/amd64]
-        build: [Release]
+        build: [Debug, Release]
+        #arch: [linux/amd64, linux/arm64, linux/arm/v7, linux/ppc64le]
+        # TODO: arm/v7 disabled due to clang bug
+        #       https://github.com/ggerganov/whisper.cpp/actions/runs/9657764109/job/26637633042?pr=2256#step:4:1990
+        arch: [linux/amd64, linux/arm64, linux/ppc64le]
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
