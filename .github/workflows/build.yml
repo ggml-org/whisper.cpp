@@ -127,17 +127,12 @@ jobs:
     outputs:
       windows_matrix: ${{ steps.set-matrix.outputs.windows_matrix }}
       ubuntu_matrix: ${{ steps.set-matrix.outputs.ubuntu_matrix }}
-      should_build_windows: ${{ steps.set-matrix.outputs.should_build_windows }}
-      should_build_ubuntu: ${{ steps.set-matrix.outputs.should_build_ubuntu }}
     steps:
     - name: Set matrix
       id: set-matrix
       run: |
         targets="${{ env.GFX_TARGETS }}"
-        operating_systems="windows,ubuntu"
-        
         echo "Input targets: $targets"
-        echo "Input operating systems: $operating_systems"
 
         target_array=$(echo "$targets" \
           | tr ',' '\n' \
@@ -149,31 +144,11 @@ jobs:
         windows_matrix=$(echo "$target_array" \
           | jq -c '{gfx_target: ., sdl2: ["ON"], build: ["Release"], arch: ["x64"], s2arc: ["x64"], s2ver: ["2.28.5"]}')
 
-        # 3. Create Ubuntu Matrix
         ubuntu_matrix=$(echo "$target_array" \
           | jq -c '{gfx_target: ., sdl2: ["ON"], build: ["Release"], arch: ["linux/amd64"]}')
 
-        # Check which operating systems to build
-        should_build_windows="false"
-        should_build_ubuntu="false"
-        
-        if [[ "$operating_systems" == *"windows"* ]]; then
-          should_build_windows="true"
-          echo "windows_matrix=$windows_matrix" >> $GITHUB_OUTPUT
-        fi
-        
-        if [[ "$operating_systems" == *"ubuntu"* ]]; then
-          should_build_ubuntu="true"
-          echo "ubuntu_matrix=$ubuntu_matrix" >> $GITHUB_OUTPUT
-        fi
-        
-        echo "should_build_windows=$should_build_windows" >> $GITHUB_OUTPUT
-        echo "should_build_ubuntu=$should_build_ubuntu" >> $GITHUB_OUTPUT
-        
-        echo "Windows build: $should_build_windows"
-        echo "Ubuntu build: $should_build_ubuntu"
-        echo "Generated matrix: $matrix_targets"
-        #linux/amd64
+        echo "windows_matrix=$windows_matrix" >> $GITHUB_OUTPUT
+        echo "ubuntu_matrix=$ubuntu_matrix" >> $GITHUB_OUTPUT
 
   ubuntu-22:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
@@ -469,17 +444,20 @@ jobs:
             github.event.inputs.run_type == 'full-ci' }}
     runs-on: ubuntu-22.04
     needs: [determine-tag, prepare-matrix]
-    # Check if we should run (based on the prepare-matrix output)
     strategy:
-      # Uses the matrix generated in prepare-matrix (gfx_target, arch, build, sdl2)
       matrix: ${{fromJson(needs.prepare-matrix.outputs.ubuntu_matrix)}}
       fail-fast: false
-    outputs:
-      rocm_version: ${{ steps.set-outputs.outputs.rocm_version }}
 
     steps:
       - name: Free disk space
-        run: curl -fsSL https://raw.githubusercontent.com/kou/arrow/e49d8ae15583ceff03237571569099a6ad62be32/ci/scripts/util_free_space.sh | bash
+        run: |
+          echo "=== Disk usage before cleanup ==="
+          df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/share/boost \
+            /usr/share/dotnet /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force 2>/dev/null || true
+          echo "=== Disk usage after cleanup ==="
+          df -h /
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -491,86 +469,10 @@ jobs:
 
       - name: Download and extract ROCm directly to /opt/rocm
         run: |
-          # Determine ROCm version to use
-          rocm_version="${{ env.ROCM_VERSION }}"
-          current_target="${{ matrix.gfx_target }}"
-          
-          # Add appropriate suffixes for different GPU targets
-          s3_target="$current_target"
-          if [ "$current_target" = "gfx110X" ]; then
-            s3_target="${current_target}-dgpu"
-            echo "Using S3 target with -dgpu suffix: $s3_target"
-          elif [ "$current_target" = "gfx120X" ]; then
-            s3_target="${current_target}-all"
-            echo "Using S3 target with -all suffix: $s3_target"
-          fi
-          
-          if [ "$rocm_version" = "latest" ]; then
-            echo "Auto-detecting latest ROCm version for target: $current_target"
-            s3_response=$(curl -s "https://therock-nightly-tarball.s3.amazonaws.com/?prefix=therock-dist-linux-${s3_target}-7")
-            
-            # Extract all files
-            files=$(echo "$s3_response" | grep -oP '(?<=<Key>)[^<]*' | grep "therock-dist-linux-${s3_target}-")
-            
-            # Extract versions and sort them properly
-            latest_file=""
-            latest_major=0
-            latest_minor=0
-            latest_patch=0
-            latest_rc=0
-            latest_is_alpha=false
-            
-            while IFS= read -r file; do
-              if [[ "$file" =~ therock-dist-linux-${s3_target}-.*?([0-9]+\.[0-9]+\.[0-9]+(a|rc)[0-9]+)\.tar\.gz ]]; then
-                version="${BASH_REMATCH[1]}"
-                major=$(echo "$version" | cut -d. -f1)
-                minor=$(echo "$version" | cut -d. -f2)
-                patch=$(echo "$version" | cut -d. -f3 | sed 's/\(a\|rc\).*//')
-                rc=$(echo "$version" | sed 's/.*\(a\|rc\)//')
-                is_alpha=false
-                if [[ "$version" =~ a ]]; then is_alpha=true; fi
-                
-                is_newer=false
-                if [ "$major" -gt "$latest_major" ]; then is_newer=true;
-                elif [ "$major" -eq "$latest_major" ] && [ "$minor" -gt "$latest_minor" ]; then is_newer=true;
-                elif [ "$major" -eq "$latest_major" ] && [ "$minor" -eq "$latest_minor" ] && [ "$patch" -gt "$latest_patch" ]; then is_newer=true;
-                elif [ "$major" -eq "$latest_major" ] && [ "$minor" -eq "$latest_minor" ] && [ "$patch" -eq "$latest_patch" ]; then
-                  if [ "$is_alpha" = true ] && [ "$latest_is_alpha" = false ]; then is_newer=true;
-                  elif [ "$is_alpha" = "$latest_is_alpha" ] && [ "$rc" -gt "$latest_rc" ]; then is_newer=true;
-                  fi
-                fi
-                
-                if [ "$is_newer" = true ]; then
-                  latest_file="$file"
-                  latest_major="$major"
-                  latest_minor="$minor"
-                  latest_patch="$patch"
-                  latest_rc="$rc"
-                  latest_is_alpha="$is_alpha"
-                fi
-              fi
-            done <<< "$files"
-            
-            echo "Found latest file: $latest_file"
-            
-            if [[ "$latest_file" =~ therock-dist-linux-${s3_target}-.*?([0-9]+\.[0-9]+\.[0-9]+(a|rc)[0-9]+)\.tar\.gz ]]; then
-              rocm_version="${BASH_REMATCH[1]}"
-              echo "Detected latest ROCm version: $rocm_version"
-            else
-              echo "Failed to extract ROCm version from latest file: $latest_file"
-              exit 1
-            fi
-            
-            rocm_url="https://therock-nightly-tarball.s3.amazonaws.com/$latest_file"
-          else
-            rocm_url="https://therock-nightly-tarball.s3.amazonaws.com/therock-dist-linux-${s3_target}-${rocm_version}.tar.gz"
-          fi
-          
-          echo "DETECTED_ROCM_VERSION=$rocm_version" >> $GITHUB_ENV
-          
-          # Create directory and stream extraction
+          source ci/resolve-rocm-version.sh linux "${{ matrix.gfx_target }}" "${{ env.ROCM_VERSION }}"
+          echo "DETECTED_ROCM_VERSION=$ROCM_RESOLVED_VERSION" >> $GITHUB_ENV
           sudo mkdir -p /opt/rocm
-          curl -sL "$rocm_url" | sudo tar --use-compress-program=gzip -xf - -C /opt/rocm --strip-components=1
+          curl -sL "$ROCM_TARBALL_URL" | sudo tar --use-compress-program=gzip -xf - -C /opt/rocm --strip-components=1
 
       - name: Set ROCm environment variables
         run: |
@@ -595,23 +497,7 @@ jobs:
 
       - name: Configure CMake
         run: |
-
-          # Map GPU targets
-          current_target="${{ matrix.gfx_target }}"
-          echo "Input target: $current_target"
-          
-          if [ "$current_target" = "gfx110X" ]; then
-            mapped_target="gfx1100;gfx1101;gfx1102"
-          elif [ "$current_target" = "gfx1151" ]; then
-            mapped_target="gfx1151"
-          elif [ "$current_target" = "gfx1150" ]; then
-            mapped_target="gfx1150"
-          elif [ "$current_target" = "gfx120X" ]; then
-            mapped_target="gfx1200;gfx1201"
-          else
-            mapped_target="$current_target"
-          fi
-          echo "Mapped target: $mapped_target"
+          source ci/map-gpu-target.sh "${{ matrix.gfx_target }}"
 
           cmake -S . -B build -G Ninja \
             -DCMAKE_C_COMPILER=/opt/rocm/llvm/bin/clang \
@@ -619,10 +505,9 @@ jobs:
             -DCMAKE_HIP_FLAGS="--rocm-path=/opt/rocm --rocm-device-lib-path=${{ env.ROCM_BITCODE_PATH }}" \
             -DCMAKE_PREFIX_PATH=/opt/rocm \
             -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
-            -DGPU_TARGETS="$mapped_target" \
+            -DGPU_TARGETS="$MAPPED_GPU_TARGET" \
             -DBUILD_SHARED_LIBS=ON \
             -DGGML_HIP=ON \
-            -DGGML_ROCM=1 \
             -DWHISPER_SDL2=${{ matrix.sdl2 }}
 
       - name: Build
@@ -1313,8 +1198,6 @@ jobs:
     strategy:
       matrix: ${{fromJson(needs.prepare-matrix.outputs.windows_matrix)}}
       fail-fast: false
-    outputs:
-      rocm_version: ${{ steps.set-outputs.outputs.rocm_version }}
 
     steps:
       - name: Clone
@@ -1372,95 +1255,36 @@ jobs:
           }
 
       - name: Download ROCm nightly tarball
+        shell: bash
         run: |
-          # Determine ROCm version to use
-          $rocmVersion = "${{ env.ROCM_VERSION }}"
-          $currentTarget = "${{ matrix.gfx_target }}"
-          
-          $s3Target = $currentTarget
-          if ($currentTarget -eq "gfx110X") {
-            $s3Target = "$currentTarget-dgpu"
-            Write-Host "Using S3 target with -dgpu suffix: $s3Target"
-          } elseif ($currentTarget -eq "gfx120X") {
-            $s3Target = "$currentTarget-all"
-            Write-Host "Using S3 target with -all suffix: $s3Target"
-          }
-          
-          if ($rocmVersion -eq "latest") {
-            Write-Host "Auto-detecting latest ROCm version for target: $currentTarget"
-            $s3Response = (Invoke-WebRequest "https://therock-nightly-tarball.s3.amazonaws.com/?prefix=therock-dist-windows-$s3Target-7").Content
-            $files = $s3Response -split '<Key>' | Where-Object {$_ -match '</Key>'} | ForEach-Object { ($_ -split '</Key>')[0] }
-            
-            $versionFiles = @()
-            foreach ($file in $files) {
-              if ($file -match "therock-dist-windows-$s3Target-.*?(\d+\.\d+\.\d+(?:a|rc)\d+)\.tar\.gz") {
-                $version = $matches[1]
-                $versionFiles += [PSCustomObject]@{
-                  File = $file
-                  Version = $version
-                  Major = [int]($version -split '\.')[0]
-                  Minor = [int]($version -split '\.')[1]
-                  Patch = [int](($version -split '\.')[2] -replace '(?:a|rc).*', '')
-                  RC = [int]($version -replace '.*(?:a|rc)', '')
-                  IsAlpha = $version -match 'a'
-                }
-              }
-            }
-            
-            $latestFile = ($versionFiles | Sort-Object Major, Minor, Patch, @{Expression={if($_.IsAlpha){1}else{0}}}, RC | Select-Object -Last 1).File
-            Write-Host "Found latest file: $latestFile"
-            
-            if ($latestFile -match "therock-dist-windows-$s3Target-.*?(\d+\.\d+\.\d+(?:a|rc)\d+)\.tar\.gz") {
-              $rocmVersion = $matches[1]
-              Write-Host "Detected latest ROCm version: $rocmVersion"
-            } else {
-              Write-Error "Failed to extract ROCm version from latest file: $latestFile"
-              exit 1
-            }
-            $rocmUrl = "https://therock-nightly-tarball.s3.amazonaws.com/$latestFile"
-          } else {
-            $rocmUrl = "https://therock-nightly-tarball.s3.amazonaws.com/therock-dist-windows-$s3Target-$rocmVersion.tar.gz"
-          }
-          
-          echo "DETECTED_ROCM_VERSION=$rocmVersion" >> $env:GITHUB_ENV
-          Invoke-WebRequest -Uri $rocmUrl -OutFile "rocm.tar.gz"
+          source ci/resolve-rocm-version.sh windows "${{ matrix.gfx_target }}" "${{ env.ROCM_VERSION }}"
+          echo "DETECTED_ROCM_VERSION=$ROCM_RESOLVED_VERSION" >> $GITHUB_ENV
+          curl -sL "$ROCM_TARBALL_URL" -o rocm.tar.gz
 
       - name: Extract ROCm to C:\opt\rocm
         run: |
           New-Item -ItemType Directory -Force -Path "C:\opt\rocm"
           tar -xzf rocm.tar.gz -C C:\opt\rocm --strip-components=1
 
+      - name: Map GPU target
+        id: gpu-target
+        shell: bash
+        run: |
+          source ci/map-gpu-target.sh "${{ matrix.gfx_target }}"
+          echo "mapped=$MAPPED_GPU_TARGET" >> $GITHUB_OUTPUT
+
       - name: Configure
         shell: pwsh
         run: |
-          $currentTarget = "${{ matrix.gfx_target }}"
-          Write-Host "Input target: $currentTarget"
-
-          if ($currentTarget -eq "gfx110X") {
-            $mapped_target = "gfx1100;gfx1101;gfx1102"
-          } elseif ($currentTarget -eq "gfx1151") {
-            $mapped_target = "gfx1151"
-          } elseif ($currentTarget -eq "gfx1150") {
-            $mapped_target = "gfx1150"
-          } elseif ($currentTarget -eq "gfx120X") {
-            $mapped_target = "gfx1200;gfx1201"
-          } else {
-            $mapped_target = $currentTarget
-          }
-          Write-Host "Mapped target: $mapped_target"
-
-          # Set up environment variables and PATH
           $env:HIP_PATH = "C:\opt\rocm"
           $env:HIP_PLATFORM = "amd"
-          # Ensure bin comes before llvm\bin for consistency
           $env:PATH = "$env:HIP_PATH\bin;$env:HIP_PATH\lib\llvm\bin;$env:PATH"
 
-          # Define CMake arguments
           $cmakeArgs = @(
             "-S", ".",
             "-B", "build",
             "-G", "Ninja Multi-Config",
-            "-DGPU_TARGETS=$mapped_target",
+            "-DGPU_TARGETS=${{ steps.gpu-target.outputs.mapped }}",
             "-DGGML_HIP=ON",
             "-DCMAKE_C_COMPILER=$env:HIP_PATH/lib/llvm/bin/amdclang.exe",
             "-DCMAKE_CXX_COMPILER=$env:HIP_PATH/lib/llvm/bin/amdclang++.exe",
@@ -1469,12 +1293,10 @@ jobs:
             "-DCMAKE_CXX_FLAGS='-D__PRFCHWINTRIN_H'",
             "-DCMAKE_HIP_FLAGS=--rocm-path=C:/opt/rocm",
             "-DCMAKE_PREFIX_PATH=$env:HIP_PATH",
-            "-DGGML_ROCM=1",
             "-DCMAKE_BUILD_TYPE=${{ matrix.build }}",
             "-DBUILD_SHARED_LIBS=ON",
             "-DWHISPER_SDL2=${{ matrix.sdl2 }}"
           )
-          # Run CMake
           cmake @cmakeArgs
 
       - name: Build
@@ -1527,10 +1349,6 @@ jobs:
               Write-Host "Copied: hipblaslt\library"
             }
           }
-
-      - name: Copy SDL2.dll
-        if: matrix.sdl2 == 'ON'
-        run: copy "$env:SDL2_DIR/../lib/${{ matrix.s2arc }}/SDL2.dll" build/bin/${{ matrix.build }}
 
       - name: Copy SDL2.dll
         if: matrix.sdl2 == 'ON'
