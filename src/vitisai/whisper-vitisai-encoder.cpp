@@ -116,7 +116,6 @@ struct whisper_vitisai_context * whisper_vitisai_init(const char * path_model) {
     options.deviceName = "stx";
     options.debug = false;
     options.executeMode = 2;
-    options.extOptions["ai_analyzer_profiling"] = true; // Enable AIA profiling
     options.extOptions["enable_preemption"] = true;
 
     // Check if model_path is rai file and if so, add fbs_buffer and fbs_buffer_size to the options
