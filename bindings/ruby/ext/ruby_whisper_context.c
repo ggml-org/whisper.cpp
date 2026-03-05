@@ -304,11 +304,11 @@ VALUE ruby_whisper_model_type(VALUE self)
 static bool
 check_memory_view(rb_memory_view_t *memview)
 {
-  if (strcmp(memview->format, "f") != 0) {
+  if (memview->format != NULL && strcmp(memview->format, "f") != 0) {
     rb_warn("currently only format \"f\" is supported for MemoryView, but given: %s", memview->format);
     return false;
   }
-  if (memview->ndim != 1) {
+  if (memview->format != NULL && memview->ndim != 1) {
     rb_warn("currently only 1 dimensional MemoryView is supported, but given: %zd", memview->ndim);
     return false;
   }
@@ -377,7 +377,7 @@ parse_samples(VALUE *samples, VALUE *n_samples)
         }
         parsed.n_samples = (int)n_samples_size;
       } else {
-        rb_warn("unable to get a memory view. fallbacks to Ruby object");
+        rb_warn("unable to get a memory view. falls back to Ruby object");
         if (rb_respond_to(*samples, id_length)) {
           parsed.n_samples = NUM2INT(rb_funcall(*samples, id_length, 0));
         } else {
