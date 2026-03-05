@@ -304,11 +304,11 @@ VALUE ruby_whisper_model_type(VALUE self)
 static bool
 check_memory_view(rb_memory_view_t *memview)
 {
-  if (strcmp(memview->format, "f") != 0) {
+  if (memview->format != NULL && strcmp(memview->format, "f") != 0) {
     rb_warn("currently only format \"f\" is supported for MemoryView, but given: %s", memview->format);
     return false;
   }
-  if (memview->ndim != 1) {
+  if (memview->format != NULL && memview->ndim != 1) {
     rb_warn("currently only 1 dimensional MemoryView is supported, but given: %zd", memview->ndim);
     return false;
   }
