@@ -377,7 +377,7 @@ parse_samples(VALUE *samples, VALUE *n_samples)
         }
         parsed.n_samples = (int)n_samples_size;
       } else {
-        rb_warn("unable to get a memory view. fallbacks to Ruby object");
+        rb_warn("unable to get a memory view. falls back to Ruby object");
         if (rb_respond_to(*samples, id_length)) {
           parsed.n_samples = NUM2INT(rb_funcall(*samples, id_length, 0));
         } else {
