@@ -935,7 +935,7 @@ int main(int argc, char ** argv) {
             wparams.logprob_thold    = params.logprob_thold;
 
             wparams.no_timestamps    = params.no_timestamps;
-            wparams.token_timestamps = !params.no_timestamps && params.response_format == vjson_format;
+            wparams.token_timestamps = !params.no_timestamps;
             wparams.no_context       = params.no_context;
 
             wparams.suppress_nst     = params.suppress_nst;
