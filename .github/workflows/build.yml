@@ -1257,12 +1257,66 @@ jobs:
              exit 1
           }
 
-      - name: Download ROCm nightly tarball
-        shell: bash
+      - name: Resolve ROCm version and download tarball
+        shell: pwsh
         run: |
-          source ci/resolve-rocm-version.sh windows "${{ matrix.gfx_target }}" "${{ env.ROCM_VERSION }}"
-          echo "DETECTED_ROCM_VERSION=$ROCM_RESOLVED_VERSION" >> $GITHUB_ENV
-          curl -sL "$ROCM_TARBALL_URL" -o rocm.tar.gz
+          $gfxTarget = "${{ matrix.gfx_target }}"
+          $rocmVersion = "${{ env.ROCM_VERSION }}"
+
+          $s3Target = $gfxTarget
+          if ($gfxTarget -eq "gfx110X" -or $gfxTarget -eq "gfx120X") {
+            $s3Target = "$gfxTarget-all"
+          }
+          $distPrefix = "therock-dist-windows-$s3Target"
+
+          if ($rocmVersion -eq "latest") {
+            Write-Host "Auto-detecting latest ROCm version for windows/$gfxTarget..."
+            $response = Invoke-RestMethod -Uri "https://therock-nightly-tarball.s3.amazonaws.com/?prefix=$distPrefix-7"
+            $keys = $response.ListBucketResult.Contents.Key | Where-Object { $_ -match "^$([regex]::Escape($distPrefix))-" }
+
+            $latestFile = $null
+            $latestMajor = 0; $latestMinor = 0; $latestPatch = 0
+            $latestBuild = 0; $latestIsAlpha = $false
+
+            foreach ($key in $keys) {
+              if ($key -match "$([regex]::Escape($distPrefix))-.*?(\d+)\.(\d+)\.(\d+)(a|rc)(\d+)\.tar\.gz$") {
+                $major = [int]$Matches[1]; $minor = [int]$Matches[2]; $patch = [int]$Matches[3]
+                $preType = $Matches[4]; $build = [int]$Matches[5]
+                $isAlpha = ($preType -eq "a")
+
+                $isNewer = $false
+                if ($major -gt $latestMajor) { $isNewer = $true }
+                elseif ($major -eq $latestMajor -and $minor -gt $latestMinor) { $isNewer = $true }
+                elseif ($major -eq $latestMajor -and $minor -eq $latestMinor -and $patch -gt $latestPatch) { $isNewer = $true }
+                elseif ($major -eq $latestMajor -and $minor -eq $latestMinor -and $patch -eq $latestPatch) {
+                  if ($isAlpha -and -not $latestIsAlpha) { $isNewer = $true }
+                  elseif ($isAlpha -eq $latestIsAlpha -and $build -gt $latestBuild) { $isNewer = $true }
+                }
+
+                if ($isNewer) {
+                  $latestFile = $key
+                  $latestMajor = $major; $latestMinor = $minor; $latestPatch = $patch
+                  $latestBuild = $build; $latestIsAlpha = $isAlpha
+                }
+              }
+            }
+
+            Write-Host "Found latest file: $latestFile"
+            if ($latestFile -match "(\d+\.\d+\.\d+(?:a|rc)\d+)\.tar\.gz$") {
+              $rocmVersion = $Matches[1]
+              Write-Host "Detected latest ROCm version: $rocmVersion"
+            } else {
+              Write-Error "Failed to extract ROCm version from: $latestFile"
+              exit 1
+            }
+            $tarballUrl = "https://therock-nightly-tarball.s3.amazonaws.com/$latestFile"
+          } else {
+            $tarballUrl = "https://therock-nightly-tarball.s3.amazonaws.com/$distPrefix-$rocmVersion.tar.gz"
+          }
+
+          Write-Host "ROCm URL: $tarballUrl"
+          echo "DETECTED_ROCM_VERSION=$rocmVersion" >> $env:GITHUB_ENV
+          Invoke-WebRequest -Uri $tarballUrl -OutFile rocm.tar.gz
 
       - name: Extract ROCm to C:\opt\rocm
         run: |
