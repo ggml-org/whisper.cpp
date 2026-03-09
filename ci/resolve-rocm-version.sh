@@ -36,11 +36,9 @@ if [ "$rocm_version" = "latest" ]; then
     echo "Auto-detecting latest ROCm version for ${platform}/${gfx_target}..."
     s3_response=$(curl -s "https://therock-nightly-tarball.s3.amazonaws.com/?prefix=${dist_prefix}-7")
 
-    # Use awk for XML parsing - portable across Linux and Windows Git Bash
-    files=$(echo "$s3_response" | awk -v prefix="${dist_prefix}-" '
-      BEGIN { RS="<Key>"; FS="</Key>" }
-      NR>1 && $1 ~ prefix { print $1 }
-    ')
+    # Use grep -o (basic regex, no PCRE) + sed for XML parsing
+    # Works on full Git Bash AND MinGit/BusyBox variants
+    files=$(echo "$s3_response" | tr -d '\r' | grep -o '<Key>[^<]*</Key>' | sed 's/<Key>//;s/<\/Key>//' | grep "^${dist_prefix}-")
 
     latest_file=""
     latest_major=0
