@@ -1,0 +1,24 @@
+{
+  "refs_dir": "/Users/shaihi/Downloads/whisper_optimization/benchmark/references",
+  "max_wer": 0.02,
+  "max_cer": 0.02,
+  "enforce_correctness": true,
+  "missing_references": [],
+  "overall_correctness_pass": true,
+  "audios": [
+    {
+      "audio_key": "short",
+      "reference_present": true,
+      "wer_median": 0.0,
+      "cer_median": 0.0,
+      "correctness_pass": true
+    },
+    {
+      "audio_key": "medium",
+      "reference_present": true,
+      "wer_median": 0.0,
+      "cer_median": 0.0,
+      "correctness_pass": true
+    }
+  ]
+}

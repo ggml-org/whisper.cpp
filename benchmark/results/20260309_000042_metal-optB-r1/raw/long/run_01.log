@@ -1,0 +1,190 @@
+whisper_init_from_file_with_params_no_state: loading model from '/Users/shaihi/Downloads/whisper_optimization/models/ggml-small.en.bin'
+whisper_init_with_params_no_state: use gpu    = 1
+whisper_init_with_params_no_state: flash attn = 1
+whisper_init_with_params_no_state: gpu_device = 0
+whisper_init_with_params_no_state: dtw        = 0
+ggml_metal_device_init: tensor API disabled for pre-M5 and pre-A19 devices
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: loaded in 0.006 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple8  (1008)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = false
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 12713.12 MB
+whisper_init_with_params_no_state: devices    = 3
+whisper_init_with_params_no_state: backends   = 3
+whisper_model_load: loading model
+whisper_model_load: n_vocab       = 51864
+whisper_model_load: n_audio_ctx   = 1500
+whisper_model_load: n_audio_state = 768
+whisper_model_load: n_audio_head  = 12
+whisper_model_load: n_audio_layer = 12
+whisper_model_load: n_text_ctx    = 448
+whisper_model_load: n_text_state  = 768
+whisper_model_load: n_text_head   = 12
+whisper_model_load: n_text_layer  = 12
+whisper_model_load: n_mels        = 80
+whisper_model_load: ftype         = 1
+whisper_model_load: qntvr         = 0
+whisper_model_load: type          = 3 (small)
+whisper_model_load: adding 1607 extra tokens
+whisper_model_load: n_langs       = 99
+whisper_model_load:         MTL0 total size =   487.00 MB
+whisper_model_load: model size    =  487.00 MB
+whisper_backend_init_gpu: device 0: MTL0 (type: 1)
+whisper_backend_init_gpu: found GPU device 0: MTL0 (type: 1, cnt: 0)
+whisper_backend_init_gpu: using MTL0 backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M2
+ggml_metal_init: picking default device: Apple M2
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =   18.87 MB
+whisper_init_state: kv cross size =   56.62 MB
+whisper_init_state: kv pad  size  =    4.72 MB
+whisper_init_state: compute buffer (conv)   =   23.38 MB
+whisper_init_state: compute buffer (encode) =   39.45 MB
+whisper_init_state: compute buffer (cross)  =   79.93 MB
+whisper_init_state: compute buffer (decode) =   98.20 MB
+
+system_info: n_threads = 8 / 8 | WHISPER : COREML = 0 | OPENVINO = 0 | MTL : EMBED_LIBRARY = 1 | CPU : NEON = 1 | ARM_FMA = 1 | FP16_VA = 1 | MATMUL_INT8 = 1 | DOTPROD = 1 | ACCELERATE = 1 | REPACK = 1 | 
+
+main: processing '/Users/shaihi/Downloads/whisper_optimization/benchmark/audio/long.wav' (28800000 samples, 1800.0 sec), 8 threads, 1 processors, 1 beams + best of 1, lang = en, task = transcribe, timestamps = 1 ...
+
+
+[00:00:00.000 --> 00:00:28.720]   "The Town Hose Story"
+[00:00:30.000 --> 00:00:32.000]   As told at the Golden Inn.
+[00:00:32.000 --> 00:00:46.000]   The Cape of Good Hope, and all the watery region about there, is much like some noted four corners of a great highway, where you meet more travelers than in any other part.
+[00:00:47.000 --> 00:01:03.000]   It was not very long after speaking the Goni that another homeward bound whaleman, the Town Hoe, was encountered. She was manned almost wholly by Polynesians. In the short gam that ensued she gave us strong news of Moby Dick.
+[00:01:04.000 --> 00:01:25.000]   For some the general interest in the white whale was now wildly heightened by a circumstance of the Town Hose Story, which seemed obscurely to involve with the whale a certain wondrous inverted visitation of one of those so-called "judgments of God" which are at times said to overtake some men.
+[00:01:26.000 --> 00:01:40.000]   The Town Hose Story was a very popular circumstance, with its own particular accompaniments forming what may be called the "secret part" of the tragedy about to be narrated, never reach the ears of Captain Ahab or his mates.
+[00:01:41.000 --> 00:01:58.000]   The Town Hose Story was unknown to the Captain of the Town Hoe himself. It was the private property of three Confederate white seamen of that ship, one of whom, it seems, communicated it to Tashtego with "romish injunctions of secrecy."
+[00:01:59.000 --> 00:02:28.000]   One night Tashtego rambled in his sleep and revealed so much of it in that way that when he was wakened he could not well withhold the rest. Nevertheless, so potent an influence did this thing have on those seamen in the Pequod who came to the full knowledge of it, and by such a strange delicacy, to call it so, were they governed in this matter, that they kept the secret among themselves so that it never transpired a bath the Pequod's main-mess.
+[00:02:29.000 --> 00:02:41.000]   Interweaving in its proper place this darker thread with the story as publicly narrated on the ship, the whole of this strange affair I now proceed to put on lasting record.
+[00:02:41.000 --> 00:02:55.000]   Footnote. Town Hoe. The ancient whale cry upon first sighting a whale from the masthead, still used by whalemen in hunting the famous Galapagos Terrapin.
+[00:02:56.000 --> 00:03:13.000]   For my humor's sake I shall preserve the style in which I once narrated it at Lima, to a lounging circle of my Spanish friends, one Saint's Eve, smoking upon the thick-guilt, tiled piazza of the Golden Inn.
+[00:03:14.000 --> 00:03:27.000]   Of those fine cavaliers the young dons Pedro and Sebastian were on closer terms with me, and hence the interluding questions they occasionally put, and which are duly answered at the time.
+[00:03:28.000 --> 00:03:47.000]   Quote. Some two years prior to my first learning the events, which I am about rehearsing to you, gentlemen, the Town Hoe, sperm-whaler of Nantucket, was cruising in your Pacific here, not very many days sail eastward from the eaves of this good Golden Inn.
+[00:03:48.000 --> 00:03:59.000]   Somewhere to the northward of the line. One morning upon handling the pumps, according to daily usage, it was observed that she made more water in her hull than common.
+[00:03:59.000 --> 00:04:17.000]   They supposed a swordfish had stabbed her, gentlemen. But the captain, having some unusual reason for believing that rare good luck awaited him in those latitudes, and therefore being very averse to quit them, and the leak not being then considered at all dangerous,
+[00:04:18.000 --> 00:04:31.000]   indeed they could not find it after searching the hold as low down as was possible in rather heavy weather, the ship still continued her cruisings, the mariners working at the pumps at wide and easy intervals.
+[00:04:32.000 --> 00:04:52.000]   But no good luck came, more days went by, and not only was the leak yet undiscovered, but it sensibly increased, so much so that, now taking some alarm, the captain, making all sail, stood away for the nearest harbor among the islands, there to have his hull hove out and repaired.
+[00:04:53.000 --> 00:05:13.000]   Though no small passage was before her, yet if the commonest chance favored, he did not at all fear that his ship would found her by the way, because his pumps were of the best, and being periodically relieved at them, those six and thirty men of his could easily keep the ship free, never mind if the leak should double on her.
+[00:05:14.000 --> 00:05:40.000]   In truth, well nigh the whole of this passage being attended by very prosperous breezes, the town-hole had all but certainly arrived in perfect safety at her port without the occurrence of the least fatality, had it not been for the brutal overbearing of Radney, the mate of Vineyarder, and the bitterly provoked vengeance of Steelkilt, a Lakeman in Desperado from Buffalo.
+[00:05:41.000 --> 00:05:51.000]   "Lakeman, Buffalo! Pray what is a Lakeman, and where is Buffalo?" said Don Sebastian, rising in his swinging mat of grass.
+[00:05:51.000 --> 00:06:00.000]   On the eastern shore of our Lake Erie, Don, but I crave your courtesy, may be you shall soon hear further of all that.
+[00:06:01.000 --> 00:06:24.000]   Now, gentlemen, in square sail-brigs and three-masted ships, well nigh as large and stout as any that ever sailed out of your old Caiao to far Manila, this Lakeman, in the landlocked heart of our America, had yet been nurtured by all those agrarian, free-booting impressions popularly connected with the open ocean.
+[00:06:25.000 --> 00:06:51.000]   Where interflowing aggregate those grand freshwater seas of ours, Erie and Ontario and Huron and Superior and Michigan, possess an ocean-like expansiveness with many of the ocean's noblest traits, with many of its rimmed varieties of races and of climes, they contain round archipelagos of romantic isles, even as the Polynesian waters do.
+[00:06:52.000 --> 00:06:57.000]   Each part are shored by two great contrasting nations as the Atlantic is.
+[00:06:57.000 --> 00:07:06.000]   They furnish long maritime approaches to our numerous territorial colonies from the east, dotted all round their banks.
+[00:07:06.000 --> 00:07:13.000]   Here and there are frowned upon by batteries and by the goat-like craggy guns of lofty Mackinac.
+[00:07:14.000 --> 00:07:26.000]   They have heard the fleet thunderings of naval victories. At intervals they yield their beaches to wild barbarians whose red painted faces flash from out their peltry wigwams.
+[00:07:26.000 --> 00:07:42.000]   For leagues and leagues are flanked by ancient and unentered forests, where the gaunt pines stand like serried lines of kings in Gothic genealogies, those same woods harboring wild, Africa beasts of prey,
+[00:07:43.000 --> 00:07:47.000]   and the creatures whose exported furs give robes to tartar emperors.
+[00:07:47.000 --> 00:07:53.000]   They mirror the paved capitals of Buffalo and Cleveland, as well as Winnebago villages.
+[00:07:53.000 --> 00:08:01.000]   They float alike the full-rigged merchant ship, the armed cruiser of the state, the steamer and the beach canoe.
+[00:08:01.000 --> 00:08:08.000]   They are swept by borean and dis-masting blasts as direful as any that lash the salted wave.
+[00:08:09.000 --> 00:08:17.000]   They know what shipwrecks are for out of sight of land, however inland they have drowned full many a midnight ship with all its shrieking crew.
+[00:08:17.000 --> 00:08:28.000]   Thus, gentlemen, though an inlander, steel-kilt was wild ocean-born and wild ocean-nurtured, as much of an audacious mariner as any.
+[00:08:29.000 --> 00:08:43.000]   And for Radney, though in his infancy he may have laid him down on the lone Nantucket beach, to nurse at his maternal sea, though in afterlife he had long followed our austere Atlantic and your contemplative Pacific,
+[00:08:43.000 --> 00:08:53.000]   yet he was quite as vengeful and full of social quarrel as the backwoods seamen, fresh from the latitudes of buckhorn-handled buoy knives.
+[00:08:54.000 --> 00:09:11.000]   Yet was this Nantucketer a man with some good-hearted traits, and this lakeman, a mariner, who though a sort of devil indeed, might yet by inflexible firmness only tempered by that common decency of human recognition which is the meanest slave's right,
+[00:09:12.000 --> 00:09:27.000]   as treated, this steel-kilt had long been retained harmless and docile. At all events he had proved so thus far, but Radney was doomed and made mad, and steel-kilt, but gentlemen you shall hear.
+[00:09:28.000 --> 00:09:42.000]   It was not more than a day or two at the furthest after pointing her prow for her island haven that the town-hose leak seemed again increasing, but only so as to require an hour or more at the pumps every day.
+[00:09:43.000 --> 00:09:58.000]   Let us know that in a settled and civilized ocean like our Atlantic, for example, some skippers think little of pumping their whole way across it, though of a still sleepy night should the officer of the deck happen to forget his duty in that respect,
+[00:09:58.000 --> 00:10:07.000]   the probability would be that he and his shipmates would never again remember it, on account of all hands gently subsiding to the bottom.
+[00:10:08.000 --> 00:10:29.000]   Whether in the solitary and savage seas far from you to the westward, gentlemen, is it altogether unusual for ships to keep clanging at their pump handles in full chorus even for a voyage of considerable length, that is if it lie along a tolerably accessible coast, or if any other reasonable retreat is afforded them.
+[00:10:30.000 --> 00:10:40.000]   It is only when a leaky vessel is in some very out-of-the-way part of those waters, some really landless latitude, that her captain begins to feel a little anxious.
+[00:10:40.000 --> 00:10:55.000]   Much this way had it been with the town-hoe, so when her leak was found gaining once more, there was in truth some small concern manifested by several of her company, especially by Radney the mate.
+[00:10:56.000 --> 00:11:03.000]   He commanded the upper sails to be well hoisted, sheeted home anew, and every way expanded to the breeze.
+[00:11:03.000 --> 00:11:20.000]   Now this Radney, I suppose, was as little of a coward, and as little inclined to any sort of nervous apprehensiveness touching his own person, as any fearless, unthinking creature on land or on sea that you can conveniently imagine, gentlemen.
+[00:11:21.000 --> 00:11:31.000]   Therefore when he betrayed this solicitude about the safety of the ship, some of the seamen declared that it was only on account of his being a part-owner in her.
+[00:11:31.000 --> 00:11:45.000]   So when they were working that evening at the pumps, there was on this head no small game-someness slyly going on among them, as they stood with their feet continually overflowed by the rippling clear water.
+[00:11:46.000 --> 00:11:56.000]   As any mountain-spring, gentlemen, that bubbling from the pumps ran across the deck and poured itself out in steady spouts at the Lee Scupper-holes.
+[00:11:56.000 --> 00:12:14.000]   Now as you well know, it is not seldom the case in this conventional world of ours, watery or otherwise, that when a person placed in command over his fellow men finds one of them to be very significantly his superior in general pride of manhood,
+[00:12:15.000 --> 00:12:28.000]   it may against that man he conceives an unconquerable dislike and bitterness, and if he have a chance, he will pull down and pulverize that subaltern's tower and make a little heap of dust of it.
+[00:12:29.000 --> 00:12:54.000]   Be this conceit of mine as it may, gentlemen, at all events steel-kilt was a tall and noble animal with a head like a Roman, and a flowing golden beard like the tasseled housings of your last viceroy's snorting charger, and a brain and a heart and a soul in him, gentlemen, which had made steel-kilt Charlemagne, had he been born son to Charlemagne's father.
+[00:12:55.000 --> 00:13:06.000]   In the maddening, the mate was as ugly as a mule, yet as hardy, as stubborn, as malicious. He did not love steel-kilt, and steel-kilt knew it.
+[00:13:06.000 --> 00:13:18.000]   As spying the mate drawing near as he was toiling at the pump with the rest, the lakeman affected not to notice him, but anod went on with his gay banterings.
+[00:13:19.000 --> 00:13:47.000]   "Aye, aye, my merry lads, it's a lively leak, this. Hold a cannekin, one of you, and let's have a taste. By the Lord, it's worth bottling. I tell you what, men, old Rad's investment must go for it. He had best cut away his part of the hull and tow it home. The fact is, boys, that swordfish only began the job. He's come back again with a gang of ship carpenters, sawfish and filefish and whatnot.
+[00:13:48.000 --> 00:14:17.000]   "The whole posse of 'em are now hard at work, cutting and slashing the bottom, making improvements, I suppose. If old Rad were here now, I'd tell him to jump overboard and scatter 'em. They're playing the devil with his estate, I can tell him. But he's a simple old soul, Rad, and a beauty too. Boys, they say the rest of his property is invested in looking-glasses. I wonder if he'd give a poor devil like me the model of his nose."
+[00:14:18.000 --> 00:14:28.000]   "Damn your eyes! What's that pump stopping for?" roared Radney, pretending not to have heard the sailors talk. Thunder away at it.
+[00:14:28.000 --> 00:14:34.000]   "Aye, aye, sir," said Steelkilt. "Mary is a cricket. Lively, boys, lively now."
+[00:14:34.000 --> 00:14:49.000]   And with that the pump clanged like fifty fire engines, the men tossed their hats off to it, and ere long that peculiar gasping of the lungs was heard, which denotes the fullest tensions of life's utmost energies.
+[00:14:49.000 --> 00:15:06.000]   Quitting the pump at last with the rest of his band, the lakeman went forward all panting, and sat himself down on the windlass, his face fiery red, his eyes bloodshot, and wiping the profuse sweat from his brow.
+[00:15:06.000 --> 00:15:33.000]   Now what cousining fiend it was, gentlemen, that possessed Radney to meddle with such a man in that corporeally exasperated state, I know not. But so it happened. Intolerably striding along the deck, the mate commanded him to get a broom and sweep down the planks, and also a shovel, and remove some offensive matters consequent upon allowing a pig to run at large.
+[00:15:33.000 --> 00:15:45.000]   Now, gentlemen, sweeping a ship's deck at sea is a piece of household work, which in all times but raging gales is regularly attended to every evening.
+[00:15:45.000 --> 00:16:03.000]   It has been known to be done in the case of ships actually foundering at the time. Such, gentlemen, is the inflexibility of sea usages, and the instinctive love of neatness in seaman, some of whom would not willingly drown without first washing their faces.
+[00:16:03.000 --> 00:16:18.000]   But in all vessels this broom business is the prescriptive province of the boys, if boys there be aboard. Besides, it was the stronger men in the town hoe that had been divided into gangs, taking turns at the pumps.
+[00:16:18.000 --> 00:16:35.000]   And, being the most athletic seaman of them all, Steelkilt had been regularly assigned captain of one of the gangs. Consequently he should have been freed from any trivial business not connected with truly nautical duties, such being the case with his comrades.
+[00:16:35.000 --> 00:16:43.000]   I mention all of these particulars so that you may understand exactly how this affair stood between the two men.
+[00:16:43.000 --> 00:16:53.000]   But there was more than this. The order about the shovel was almost as plainly meant to sting and insult Steelkilt as though Radney had spat in his face.
+[00:16:53.000 --> 00:17:05.000]   Any man who has gone sailor in a whale ship will understand this, and all this and doubtless much more the lakeman fully comprehended when the mate uttered his command.
+[00:17:05.000 --> 00:17:19.000]   But as he sat still for a moment, and as he steadfastly looked into the mate's malignant eye and perceived the stacks of powder casks heaped up in him, and the slow match silently burning along towards them,
+[00:17:19.000 --> 00:17:41.000]   as he instinctively saw all this, that strange forbearance and unwillingness to stir up the deeper passionateness in any already-ireful being, a repugnance most felt when felt at all by really valiant men even when aggrieved, this nameless phantom-feeling gentleman stole over Steelkilt.
+[00:17:41.000 --> 00:17:55.000]   Therefore, in his ordinary tone, only a little broken by the bodily exhaustion he was temporarily in, he answered him saying that sweeping the deck was not his business, and he would not do it.
+[00:17:55.000 --> 00:18:07.000]   And then, without at all alluding to the shovel, he pointed to three lads as the customary sweepers, who, not being billeted at the pumps, had done little or nothing all day.
+[00:18:07.000 --> 00:18:25.000]   To this, Radney replied with an oath, in a most domineering and outrageous manner unconditionally reiterating his command, meanwhile advancing upon these still-seated lakemen with an uplifted Cooper's club hammer which he had snatched from a cask nearby.
+[00:18:25.000 --> 00:18:38.000]   Heeded and irritated as he was by his spasmodic toil at the pumps, for all his first nameless feeling of forbearance, the sweating Steelkilt could but ill-brooke this bearing in the mate.
+[00:18:38.000 --> 00:18:55.000]   But somehow, still smothering the conflagration within him, without speaking, he remained doggedly rooted to his seat, till at last the incensed Radney shook the hammer within a few inches of his face, furiously commanding him to do his bidding.
+[00:18:55.000 --> 00:19:08.000]   Steelkilt rose, and slowly retreating round the windlass, steadily followed by the mate with his menacing hammer, deliberately repeated his intention not to obey.
+[00:19:08.000 --> 00:19:20.000]   Seeing, however, that his forbearance had not the slightest effect, by an awful and unspeakable intimation with his twisted hand, he warned off the foolish and infatuated man.
+[00:19:20.000 --> 00:19:40.000]   But it was to no purpose, and in this way the two went once slowly round the windlass, when resolved at last no longer to retreat, bethinking him that he had now foreborn as much as comported with his humor, the lakemen paused on the hatches and thus spoke to the officer.
+[00:19:40.000 --> 00:20:01.000]   "Mr. Radney, I will not obey you. Take that hammer away, or look to yourself." But the predestinated mate, coming still closer to him, where the lakemen stood fixed, now shook the heavy hammer within an inch of his teeth, meanwhile repeating a string of insufferable maledictions,
+[00:20:01.000 --> 00:20:22.000]   retreating not the thousandth part of an inch, stabbing him in the eye with the unflinching panyard of his glance, Steelkilt, clenching his right hand behind him and creepingly drawing it back, told his persecutor that if the hammer but grazed his cheek, he, Steelkilt, would murder him.
+[00:20:22.000 --> 00:20:37.000]   But, gentlemen, the fool had been branded for the slaughter by the gods. Immediately the hammer touched his cheek, the next instant the lower jaw of the mate was stove in his head, he fell on the hatch spouting blood like a whale.
+[00:20:37.000 --> 00:21:01.000]   Ere the cry could go aft, Steelkilt was shaking one of the backstays leading far aloft, to where two of his comrades were standing their mastheads. They were both canalers. "Canalers!" cried Don Pedro. "We have seen many whale ships in our harbors, but never heard of your canalers. Pardon. Who and what are they?"
+[00:21:01.000 --> 00:21:08.000]   "Canalers, Don, are the boatmen belonging to our grand eerie canal. You must have heard of it."
+[00:21:08.000 --> 00:21:19.000]   "Nay, señor. Hereabouts in this dull, warm, most lazy and hereditary land, we know but little of your vigorous north."
+[00:21:19.000 --> 00:21:33.000]   "Aye? Well, then, Don, refill my cup. Your chicha's very fine, and ere proceeding further I will tell you what our canalers are, for such information may throw sidelight upon my story."
+[00:21:33.000 --> 00:21:51.000]   For 360 miles, gentlemen, through the entire breadth of the state of New York, through numerous populous cities and most thriving villages, through long, dismal, uninhabited swamps and affluent cultivated fields, unrivaled for fertility,
+[00:21:51.000 --> 00:22:04.000]   by billiard-room and bar-room, through the holy of holies of great forests, on Roman arches over Indian rivers, through sun and shade, by happy hearts are broken,
+[00:22:04.000 --> 00:22:16.000]   through all the wide contrasting scenery of those noble Mohawk counties, and especially by rows of snow-white chapels, whose spires stand almost like milestones,
+[00:22:16.000 --> 00:22:35.000]   flows one continual stream of venetianly corrupt and often lawless life. There's your true Ashanti, gentlemen. There howl your pagans, where you ever find them next door to you, under the long-flung shadow and the snug patronizing lee of churches.
+[00:22:35.000 --> 00:22:49.000]   For by some curious fatality, as it is often noted of your metropolitan free-booters that they ever encamp around the halls of justice, so sinners, gentlemen, most abound in holiest vicinities.
+[00:22:49.000 --> 00:22:58.000]   "Is that a friar passing?" said Don Pedro, looking downwards into the crowded piazza with humorous concern.
+[00:22:58.000 --> 00:23:09.000]   "Well, for our northern friend, dim Isabella's inquisition wanes in Lima," laughed Don Sebastian. "Proceeds in yore."
+[00:23:09.000 --> 00:23:28.000]   "A moment! Pardon!" cried another of the company. "In the name of all us limis, I but desire to express to you, Sir Sailor, that we have by no means overlooked your delicacy in not substituting present Lima for distant Venice in your corrupt comparison.
+[00:23:28.000 --> 00:23:43.000]   Oh, no, do not bow and look surprised. You know the proverb along all this coast, 'Corrupt as Lima.' It but bears out your saying, too, churches more plentiful than billiard tables and forever open.
+[00:23:43.000 --> 00:24:00.000]   And corrupt as Lima! So too Venice, I have been there, the holy city of the blessed evangelist St. Mark. St. Dominic, purge it! Your cup! Thanks, here I refill. Now, you pour out again."
+[00:24:00.000 --> 00:24:25.000]   Freely depicted in his own vocation, gentlemen, the canaler would make a fine dramatic hero, so abundantly and picturesquely wicked is he. Like Mark Antony, for days and days along his green-turfed flowery Nile, he indolently floats, openly toying with his red-cheeked Cleopatra, ripening his apricot thigh upon the sunny deck.
+[00:24:25.000 --> 00:24:37.000]   But ashore all this effeminacy is dashed. The brigandish guise which the canaler so proudly sports, his slouched and gaily-ribboned hat betoken his grand features.
+[00:24:37.000 --> 00:24:47.000]   A terror to the smiling innocence of the villages through which he floats, his swart visage and bold swagger, are not unshunned in cities.
+[00:24:47.000 --> 00:25:08.000]   Once a vagabond on his own canal, I have received good turns from one of these canalers. I thanked him heartily. Would Fane not be ungrateful? But it is often one of the prime redeeming qualities of your man of violence, that at times he is as stiff an arm to back a poor stranger in a strait as to plunder a wealthy one.
+[00:25:08.000 --> 00:25:28.000]   In some, gentlemen, what the wildness of this canal life is, is emphatically evinced by this. That our wild whale fishery contains so many of its most finished graduates, and that scarce any race of mankind, except Sydney men, are so much distrusted by our whaling captains.
+[00:25:28.000 --> 00:25:50.000]   Nor does it at all diminish the curiousness of this matter, that to many thousands of our rural boys and young men born along its line, the probationary life of the grand canal furnishes the sole transition between quietly reaping in a Christian cornfield and recklessly plowing the waters of the most barbaric seas.
+[00:25:50.000 --> 00:26:12.000]   "I see, I see," impetuously exclaimed Don Pedro, spilling his chicha upon his silvery ruffles. "No need to travel. The world's one Lima. I had thought now that at your temperate north, the generations were cold and holy as the hills. But the story."
+[00:26:12.000 --> 00:26:26.000]   I left off, gentlemen, where the lakeman shook the backstay. Hardly had he done so, when he was surrounded by the three junior mates and the four harpooners, who all crowded him to the deck.
+[00:26:26.000 --> 00:26:35.000]   But sliding down the ropes like baleful comets, the two canalers rushed into the uproar, and sought to drag their man out of it toward the folksil.
+[00:26:35.000 --> 00:26:53.000]   Others of the sailors joined with them in this attempt, and a twisted turmoil ensued. While standing out of harm's way, the valiant captain danced up and down with a whale pike, calling upon his officers to manhandle that atrocious scoundrel and smoke him along to the quarter deck.
+[00:26:53.000 --> 00:27:07.000]   At intervals he ran close up to the revolving border of the confusion, and prying into the heart of it with his pike, sought to prick out the object of his resentment. But steelkilt and his desperados were too much for them all.
+[00:27:07.000 --> 00:27:22.000]   They succeeded in gaining the folksil deck, where, hastily slewing about three or four large casks in a line with the windlass, these sea Parisians entrenched themselves behind the barricade.
+[00:27:22.000 --> 00:27:34.000]   "Come out of that, ye pirates!" roared the captain, now menacing them with a pistol in each hand, just brought to him by the steward. "Come out of that, ye cutthroats!"
+[00:27:34.000 --> 00:28:01.000]   Steelkilt leaped on the barricade, and, striding up and down there, defied the worst the pistols could do, but gave the captain to understand distinctly that his, Steelkilt's death, would be the signal for a murderous mutiny on the part of all hands. Fearing in his heart, lest this might prove but too true, the captain a little desisted, but still commanded the insurgents instantly to return to their duty.
+[00:28:01.000 --> 00:28:19.000]   "Will ye promise not to touch us if we do?" demanded their ringleader. "Turn two, turn two! I make no promise. To your duty! Do ye want to sink the ship by knocking off at a time like this? Turn two!" And he once more raised a pistol.
+[00:28:19.000 --> 00:28:36.000]   "Sink the ship!" cried Steelkilt. "Aye, let her sink! Not a man of us turns two unless ye swear not to raise a rope-yard against us. What say ye men?" turning to his comrades. A fierce cheer was their response.
+[00:28:36.000 --> 00:29:04.000]   The lakeman now patrolled the barricade, all the while keeping his eye on the captain, and jerking out such sentences as these. "It's not our fault! We didn't want it! I told him to take his hammer away! It was boys' business! He might have known me before this! I told him not to prick the buffalo! I believe I have broken a finger here against his cursed jaw! Ain't those mincing knives down in the fuxal there, men?
+[00:29:04.000 --> 00:29:20.000]   Look to those hand spikes, my hearties. Captain, by God, look to yourself. Say the word and don't be a fool. Forget it all. We are ready to turn two. Treat us decently and we're your men, but we won't be flogged."
+[00:29:20.000 --> 00:29:49.000]   "Turn two! I make no promises! Turn two, I say!" "Look ye now!" cried the lakeman, flinging out his arms towards him. "There are a few of us here, and I am one of them, who have shipped for the cruise, de' you see. Now, as you well know, sir, we can claim our discharge as soon as the anchor is down. So we don't want a row! It's not our interest! We want to be peaceable! We are ready to work, but we won't be flogged!"
+[00:29:49.000 --> 00:30:00.000]   "Turn two!" roared the captain. Steelkilt glanced round him a moment and then said, "I tell you what it is now, captain."
+
+whisper_print_timings:     load time =   203.16 ms
+whisper_print_timings:     fallbacks =   0 p /   0 h
+whisper_print_timings:      mel time =   570.20 ms
+whisper_print_timings:   sample time =  2129.18 ms /     1 runs (  2129.18 ms per run)
+whisper_print_timings:   encode time = 25608.92 ms /    86 runs (   297.78 ms per run)
+whisper_print_timings:   decode time = 40724.59 ms /  5925 runs (     6.87 ms per run)
+whisper_print_timings:   batchd time =    12.82 ms /    11 runs (     1.17 ms per run)
+whisper_print_timings:   prompt time =  4951.52 ms / 18584 runs (     0.27 ms per run)
+whisper_print_timings:    total time = 75479.43 ms
+ggml_metal_free: deallocating
