@@ -24,10 +24,9 @@ if [ -z "$platform" ] || [ -z "$gfx_target" ] || [ -z "$rocm_version" ]; then
 fi
 
 # Map GPU target to S3 naming convention
+# Group targets (gfx110X, gfx120X) use "-all" suffix; individual targets have no suffix
 s3_target="$gfx_target"
-if [ "$gfx_target" = "gfx110X" ]; then
-    s3_target="${gfx_target}-dgpu"
-elif [ "$gfx_target" = "gfx120X" ]; then
+if [ "$gfx_target" = "gfx110X" ] || [ "$gfx_target" = "gfx120X" ]; then
     s3_target="${gfx_target}-all"
 fi
 
@@ -37,7 +36,7 @@ if [ "$rocm_version" = "latest" ]; then
     echo "Auto-detecting latest ROCm version for ${platform}/${gfx_target}..."
     s3_response=$(curl -s "https://therock-nightly-tarball.s3.amazonaws.com/?prefix=${dist_prefix}-7")
 
-    files=$(echo "$s3_response" | sed 's/<Key>/\n/g' | sed -n 's/\([^<]*\)<\/Key>.*/\1/p' | grep "${dist_prefix}-")
+    files=$(echo "$s3_response" | tr '<' '\n' | sed -n 's/^Key>\([^<]*\)/\1/p' | grep "${dist_prefix}-")
 
     latest_file=""
     latest_major=0
