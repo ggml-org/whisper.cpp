@@ -851,6 +851,9 @@ struct whisper_state {
     int32_t n_fail_p = 0; // number of logprob threshold failures
     int32_t n_fail_h = 0; // number of entropy threshold failures
 
+    // RTF (Real-Time Factor) calculation
+    int32_t n_audio_samples = 0; // total audio samples processed
+
     // number of decoders for which we have constructed the KV cache
     int32_t kv_self_n_dec = 0;
 
@@ -4327,6 +4330,14 @@ void whisper_print_timings(struct whisper_context * ctx) {
         WHISPER_LOG_INFO("%s:   prompt time = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_prompt_us, n_prompt, 1e-3f * ctx->state->t_prompt_us / n_prompt);
     }
     WHISPER_LOG_INFO("%s:    total time = %8.2f ms\n", __func__, (t_end_us - ctx->t_start_us)/1000.0f);
+
+    // Calculate and print RTF (Real-Time Factor)
+    if (ctx->state != nullptr && ctx->state->n_audio_samples > 0) {
+        const float processing_time_sec = (t_end_us - ctx->t_start_us) / 1000000.0f;
+        const float audio_duration_sec = ctx->state->n_audio_samples / (float)WHISPER_SAMPLE_RATE;
+        const float rtf = processing_time_sec / audio_duration_sec;
+        WHISPER_LOG_INFO("%s:          RTF = %8.4f (%.2fx realtime)\n", __func__, rtf, 1.0f / rtf);
+    }
 }
 
 void whisper_reset_timings(struct whisper_context * ctx) {
@@ -4343,6 +4354,7 @@ void whisper_reset_timings(struct whisper_context * ctx) {
         ctx->state->n_decode = 0;
         ctx->state->n_batchd = 0;
         ctx->state->n_prompt = 0;
+        ctx->state->n_audio_samples = 0;
     }
 }
 
@@ -6858,6 +6870,9 @@ int whisper_full_with_state(
     auto & result_all = state->result_all;
 
     result_all.clear();
+
+    // Track audio samples for RTF calculation
+    state->n_audio_samples = n_samples;
 
     if (n_samples > 0) {
         // compute log mel spectrogram

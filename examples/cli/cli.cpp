@@ -3,6 +3,7 @@
 
 #include "whisper.h"
 #include "grammar-parser.h"
+#include "whisper-memory-profiler.h"
 
 #include <cmath>
 #include <algorithm>
@@ -1265,8 +1266,12 @@ int main(int argc, char ** argv) {
                 wparams.abort_callback_user_data = &is_aborted;
             }
 
+            // Start memory profiler if WHISPER_PROFILE_MEMORY=1 is set
+            whisper_profiler_start();
+
             if (whisper_full_parallel(ctx, wparams, pcmf32.data(), pcmf32.size(), params.n_processors) != 0) {
                 fprintf(stderr, "%s: failed to process audio\n", argv[0]);
+                whisper_profiler_stop_and_print();  // Stop profiler before returning
                 return 10;
             }
         }
@@ -1300,6 +1305,7 @@ int main(int argc, char ** argv) {
     if (!params.no_prints) {
         whisper_print_timings(ctx);
     }
+    whisper_profiler_stop_and_print();
     whisper_free(ctx);
 
     return 0;
