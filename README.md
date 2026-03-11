@@ -443,11 +443,12 @@ ffmpeg -i samples/jfk.wav jfk.opus
 
 ### Images
 
-We have two Docker images available for this project:
+We have multiple Docker images available for this project:
 
 1. `ghcr.io/ggml-org/whisper.cpp:main`: This image includes the main executable file as well as `curl` and `ffmpeg`. (platforms: `linux/amd64`, `linux/arm64`)
 2. `ghcr.io/ggml-org/whisper.cpp:main-cuda`: Same as `main` but compiled with CUDA support. (platforms: `linux/amd64`)
 3. `ghcr.io/ggml-org/whisper.cpp:main-musa`: Same as `main` but compiled with MUSA support. (platforms: `linux/amd64`)
+4. `ghcr.io/ggml-org/whisper.cpp:main-vulkan`: Same as `main` but compiled with Vulkan support. (platforms: `linux/amd64`)
 
 ### Usage
 
@@ -456,15 +457,27 @@ We have two Docker images available for this project:
 docker run -it --rm \
   -v path/to/models:/models \
   whisper.cpp:main "./models/download-ggml-model.sh base /models"
+
 # transcribe an audio file
 docker run -it --rm \
   -v path/to/models:/models \
   -v path/to/audios:/audios \
   whisper.cpp:main "whisper-cli -m /models/ggml-base.bin -f /audios/jfk.wav"
+
 # transcribe an audio file in samples folder
 docker run -it --rm \
   -v path/to/models:/models \
   whisper.cpp:main "whisper-cli -m /models/ggml-base.bin -f ./samples/jfk.wav"
+
+# run the web server
+docker run -it --rm -p "8080:8080" \
+  -v path/to/models:/models \
+  whisper.cpp:main "whisper-server --host 127.0.0.1 -m /models/ggml-base.bin"
+  
+# run the bench too on the small.en model using 4 threads
+docker run -it --rm \
+  -v path/to/models:/models \
+  whisper.cpp:main "whisper-bench -m /models/ggml-small.en.bin -t 4"
 ```
 
 ## Installing with Conan
@@ -742,7 +755,7 @@ argument to `whisper-cli`. In addition to this option a VAD model is also
 required.
 
 The way this works is that first the audio samples are passed through
-the VAD model which will detect speech segments. Using this information the
+the VAD model which will detect speech segments. Using this information,
 only the speech segments that are detected are extracted from the original audio
 input and passed to whisper for processing. This reduces the amount of audio
 data that needs to be processed by whisper and can significantly speed up the

@@ -7,6 +7,7 @@ cp -rpv ../ggml/cmake/*              ./ggml/cmake/
 cp -rpv ../ggml/src/ggml-cpu/cmake/* ./ggml/src/ggml-cpu/cmake/
 
 cp -rpv ../ggml/src/ggml* ./ggml/src/
+cp -rpv ../ggml/src/gguf* ./ggml/src/
 
 cp -rpv ../ggml/include/ggml*.h ./ggml/include/
 cp -rpv ../ggml/include/gguf*.h ./ggml/include/

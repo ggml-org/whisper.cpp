@@ -1,4 +1,3 @@
-#include <ruby.h>
 #include "ruby_whisper.h"
 
 #define N_KEY_NAMES 6
