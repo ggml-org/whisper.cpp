@@ -9,6 +9,7 @@
 #include <type_traits>
 #include <vector>
 #include <cctype>
+#include <unordered_set>
 
 #ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
@@ -555,32 +556,41 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
     return get_reg().load_backend(best_path, silent);
 }
 
-void ggml_backend_load_all() {
-    ggml_backend_load_all_from_path(nullptr);
-}
+void ggml_backend_load_all() { ggml_backend_load_all_from_path(nullptr); }
 
-void ggml_backend_load_all_from_path(const char * dir_path) {
+void ggml_backend_load_all_from_path(const char *dir_path) { ggml_backend_load_all_from_path_with_disable(dir_path, nullptr); }
+
+void ggml_backend_load_all_from_path_with_disable(const char *dir_path, const char *disable_backends) {
 #ifdef NDEBUG
     bool silent = true;
 #else
     bool silent = false;
 #endif
-
-    ggml_backend_load_best("blas", silent, dir_path);
-    ggml_backend_load_best("cann", silent, dir_path);
-    ggml_backend_load_best("cuda", silent, dir_path);
-    ggml_backend_load_best("hip", silent, dir_path);
-    ggml_backend_load_best("kompute", silent, dir_path);
-    ggml_backend_load_best("metal", silent, dir_path);
-    ggml_backend_load_best("rpc", silent, dir_path);
-    ggml_backend_load_best("sycl", silent, dir_path);
-    ggml_backend_load_best("vulkan", silent, dir_path);
-    ggml_backend_load_best("opencl", silent, dir_path);
-    ggml_backend_load_best("musa", silent, dir_path);
-    ggml_backend_load_best("cpu", silent, dir_path);
-    // check the environment variable GGML_BACKEND_PATH to load an out-of-tree backend
+    const std::pair<const char*, const char*> backends[] = {
+        {"blas",    "BLAS"},
+        {"cann",    "CANN"},
+        {"cuda",    "CUDA"},
+        {"hip",     "HIP"},
+        {"kompute", "Kompute"},
+        {"metal",   "Metal"},
+        {"rpc",     "RPC"},
+        {"sycl",    "SYCL"},
+        {"vulkan",  "Vulkan"},
+        {"opencl",  "OpenCL"},
+        {"musa",    "MUSA"},
+        {"cpu",     "CPU"} };
+    std::unordered_set<std::string> skiplist;
+    if (disable_backends && *disable_backends) {
+        std::stringstream ss(disable_backends);
+        std::string token;
+        while (std::getline(ss, token, ',')) { skiplist.insert(token); } }
+    for (const auto& [key, name] : backends) {
+        if(skiplist.find(key) != skiplist.end()) { fprintf(stderr, "INFO: Skipping backend '%s'.\n", name); continue; }
+        fprintf(stderr, "INFO: Loading backend '%s'.\n", name);
+        ggml_backend_load_best(key, silent, dir_path); }
     const char * backend_path = std::getenv("GGML_BACKEND_PATH");
     if (backend_path) {
         ggml_backend_load(backend_path);
     }
 }
+

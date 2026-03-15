@@ -231,6 +231,7 @@ extern "C" {
     // Load all known backends from dynamic libraries
     GGML_API void               ggml_backend_load_all(void);
     GGML_API void               ggml_backend_load_all_from_path(const char * dir_path);
+    GGML_API void               ggml_backend_load_all_from_path_with_disable(const char *dir_path, const char *skiplist);
 
     //
     // Backend scheduler
