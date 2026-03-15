@@ -811,6 +811,7 @@ int main(int argc, char ** argv) {
         {
             fprintf(stderr, "error: no 'file' field in the request\n");
             const std::string error_resp = "{\"error\":\"no 'file' field in the request\"}";
+            res.status = 400;
             res.set_content(error_resp, "application/json");
             return;
         }
@@ -837,6 +838,7 @@ int main(int argc, char ** argv) {
             std::string error_resp = "{\"error\":\"Failed to execute ffmpeg command.\"}";
             const bool is_converted = convert_to_wav(temp_filename, error_resp);
             if (!is_converted) {
+                res.status = 500;
                 res.set_content(error_resp, "application/json");
                 return;
             }
@@ -846,6 +848,7 @@ int main(int argc, char ** argv) {
             {
                 fprintf(stderr, "error: failed to read WAV file '%s'\n", temp_filename.c_str());
                 const std::string error_resp = "{\"error\":\"failed to read WAV file\"}";
+                res.status = 400;
                 res.set_content(error_resp, "application/json");
                 std::remove(temp_filename.c_str());
                 return;
@@ -857,6 +860,7 @@ int main(int argc, char ** argv) {
             {
                 fprintf(stderr, "error: failed to read audio data\n");
                 const std::string error_resp = "{\"error\":\"failed to read audio data\"}";
+                res.status = 400;
                 res.set_content(error_resp, "application/json");
                 return;
             }
@@ -1127,6 +1131,7 @@ int main(int argc, char ** argv) {
         {
             fprintf(stderr, "error: no 'model' field in the request\n");
             const std::string error_resp = "{\"error\":\"no 'model' field in the request\"}";
+            res.status = 400;
             res.set_content(error_resp, "application/json");
             return;
         }
@@ -1135,6 +1140,7 @@ int main(int argc, char ** argv) {
         {
             fprintf(stderr, "error: 'model': %s not found!\n", model.c_str());
             const std::string error_resp = "{\"error\":\"model not found!\"}";
+            res.status = 400;
             res.set_content(error_resp, "application/json");
             return;
         }
