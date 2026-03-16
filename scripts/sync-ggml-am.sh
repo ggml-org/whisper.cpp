@@ -60,8 +60,8 @@ while read c; do
         cmake/common.cmake \
         cmake/ggml-config.cmake.in \
         src/ggml-cpu/cmake/FindSIMD.cmake \
-        src/ggml*.h \
         src/ggml* \
+        src/gguf* \
         include/ggml*.h \
         include/gguf*.h \
         examples/common.h \
@@ -105,6 +105,7 @@ if [ -f $SRC_WHISPER/ggml-src.patch ]; then
     # src/ggml-cpu/cmake/FindSIMD.cmake -> ggml/src/ggml-cpu/cmake/FindSIMD.cmake
     #
     # src/ggml* -> ggml/src/ggml*.c
+    # src/gguf* -> ggml/src/gguf*.c
     #
     # include/ggml*.h -> ggml/include/ggml*.h
     # include/gguf*.h -> ggml/include/gguf*.h
@@ -126,6 +127,7 @@ if [ -f $SRC_WHISPER/ggml-src.patch ]; then
         -e 's/(^[[:space:]]| [ab]\/)cmake\/ggml-config.cmake.in/\1ggml\/cmake\/ggml-config.cmake.in/g' \
         -e 's/(^[[:space:]]| [ab]\/)src\/ggml-cpu\/cmake\/FindSIMD.cmake/\1ggml\/src\/ggml-cpu\/cmake\/FindSIMD.cmake/g' \
         -e 's/([[:space:]]| [ab]\/)src\/ggml(.*)/\1ggml\/src\/ggml\2/g' \
+        -e 's/([[:space:]]| [ab]\/)src\/gguf(.*)/\1ggml\/src\/gguf\2/g' \
         -e 's/(^[[:space:]]| [ab]\/)include\/ggml(.*)\.h/\1ggml\/include\/ggml\2.h/g' \
         -e 's/(^[[:space:]]| [ab]\/)include\/gguf(.*)\.h/\1ggml\/include\/gguf\2.h/g' \
         -e 's/(^[[:space:]]| [ab]\/)examples\/common\.h/\1examples\/common.h/g' \

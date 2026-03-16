@@ -559,7 +559,7 @@ xcodebuild -create-xcframework \
     -framework $(pwd)/build-ios-device/framework/whisper.framework \
     -debug-symbols $(pwd)/build-ios-device/dSYMs/whisper.dSYM \
     -framework $(pwd)/build-macos/framework/whisper.framework \
-    -debug-symbols $(pwd)/build-macos/dSYMS/whisper.dSYM \
+    -debug-symbols $(pwd)/build-macos/dSYMs/whisper.dSYM \
     -framework $(pwd)/build-visionos/framework/whisper.framework \
     -debug-symbols $(pwd)/build-visionos/dSYMs/whisper.dSYM \
     -framework $(pwd)/build-visionos-sim/framework/whisper.framework \

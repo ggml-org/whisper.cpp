@@ -1,4 +1,3 @@
-#include <ruby.h>
 #include "ruby_whisper.h"
 #include "common-whisper.h"
 #include <string>
@@ -13,6 +12,7 @@ extern const rb_data_type_t ruby_whisper_params_type;
 
 extern ID id_to_s;
 extern ID id_call;
+extern ID id_to_path;
 extern ID transcribe_option_names[1];
 
 extern void
@@ -50,6 +50,9 @@ ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self) {
     rb_raise(rb_eRuntimeError, "Expected file path to wave file");
   }
 
+  if (rb_respond_to(wave_file_path, id_to_path)) {
+    wave_file_path = rb_funcall(wave_file_path, id_to_path, 0);
+  }
   std::string fname_inp = StringValueCStr(wave_file_path);
 
   std::vector<float> pcmf32; // mono-channel F32 PCM

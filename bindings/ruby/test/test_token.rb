@@ -56,6 +56,17 @@ class TestToken < TestBase
                  @segment.each_token.collect(&:text)
   end
 
+  def test_token_timestamps
+    params = Whisper::Params.new(token_timestamps: true)
+    whisper.transcribe(TestBase::AUDIO, params)
+    prev = -1
+    whisper.each_segment.first.each_token do |token|
+      assert token.start_time >= prev
+      assert token.end_time >= token.start_time
+      prev = token.end_time
+    end
+  end
+
   def test_deconstruct_keys_with_nil
     keys = %i[id tid probability log_probability pt ptsum t_dtw voice_length start_time end_time text]
     expected = keys.collect {|key| [key, @token.send(key)] }.to_h

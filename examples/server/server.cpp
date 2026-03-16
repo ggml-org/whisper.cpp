@@ -103,6 +103,7 @@ struct whisper_params {
     bool no_timestamps   = false;
     bool use_gpu         = true;
     bool flash_attn      = true;
+    int32_t gpu_device   = 0;
     bool suppress_nst    = false;
     bool no_context      = true;
     bool no_language_probabilities = false;
@@ -179,6 +180,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -sns,      --suppress-nst      [%-7s] suppress non-speech tokens\n", params.suppress_nst ? "true" : "false");
     fprintf(stderr, "  -nth N,    --no-speech-thold N [%-7.2f] no speech threshold\n",   params.no_speech_thold);
     fprintf(stderr, "  -ng,       --no-gpu            [%-7s] do not use gpu\n", params.use_gpu ? "false" : "true");
+    fprintf(stderr, "  -dev N,    --device N          [%-7d] GPU device ID (default: 0)\n", params.gpu_device);
     fprintf(stderr, "  -fa,       --flash-attn        [%-7s] enable flash attention\n", params.flash_attn ? "true" : "false");
     fprintf(stderr, "  -nfa,      --no-flash-attn     [%-7s] disable flash attention\n", params.flash_attn ? "false" : "true");
     fprintf(stderr, "  -nlp,      --no-language-probabilities [%-7s] exclude language probabilities from verbose_json output\n", params.no_language_probabilities ? "true" : "false");
@@ -198,6 +200,10 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
 }
 
 bool whisper_params_parse(int argc, char ** argv, whisper_params & params, server_params & sparams) {
+    if (const char * env_device = std::getenv("WHISPER_ARG_DEVICE")) {
+        params.gpu_device = std::stoi(env_device);
+    }
+
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
 
@@ -237,6 +243,7 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params, serve
         else if (arg == "-oved" || arg == "--ov-e-device")     { params.openvino_encode_device = argv[++i]; }
         else if (arg == "-dtw"  || arg == "--dtw")             { params.dtw             = argv[++i]; }
         else if (arg == "-ng"   || arg == "--no-gpu")          { params.use_gpu         = false; }
+        else if (arg == "-dev"  || arg == "--device")          { params.gpu_device      = std::stoi(argv[++i]); }
         else if (arg == "-fa"   || arg == "--flash-attn")      { params.flash_attn      = true; }
         else if (arg == "-nfa"  || arg == "--no-flash-attn")   { params.flash_attn      = false; }
         else if (arg == "-sns"  || arg == "--suppress-nst")    { params.suppress_nst    = true; }
@@ -643,6 +650,7 @@ int main(int argc, char ** argv) {
     struct whisper_context_params cparams = whisper_context_default_params();
 
     cparams.use_gpu    = params.use_gpu;
+    cparams.gpu_device = params.gpu_device;
     cparams.flash_attn = params.flash_attn;
 
     if (!params.dtw.empty()) {
@@ -740,9 +748,9 @@ int main(int argc, char ** argv) {
     <body>
         <h1>Whisper.cpp Server</h1>
 
-        <h2>/inference</h2>
+        <h2>)" + sparams.request_path + sparams.inference_path + R"(</h2>
         <pre>
-    curl 127.0.0.1:)" + std::to_string(sparams.port) + R"(/inference \
+    curl 127.0.0.1:)" + std::to_string(sparams.port) + sparams.request_path + sparams.inference_path + R"( \
     -H "Content-Type: multipart/form-data" \
     -F file="@&lt;file-path&gt;" \
     -F temperature="0.0" \
@@ -759,7 +767,7 @@ int main(int argc, char ** argv) {
 
         <div>
             <h2>Try it out</h2>
-            <form action="/inference" method="POST" enctype="multipart/form-data">
+            <form action=")" + sparams.request_path + sparams.inference_path + R"(" method="POST" enctype="multipart/form-data">
                 <label for="file">Choose an audio file:</label>
                 <input type="file" id="file" name="file" accept="audio/*" required><br>
 
@@ -803,6 +811,7 @@ int main(int argc, char ** argv) {
         {
             fprintf(stderr, "error: no 'file' field in the request\n");
             const std::string error_resp = "{\"error\":\"no 'file' field in the request\"}";
+            res.status = 400;
             res.set_content(error_resp, "application/json");
             return;
         }
@@ -829,6 +838,7 @@ int main(int argc, char ** argv) {
             std::string error_resp = "{\"error\":\"Failed to execute ffmpeg command.\"}";
             const bool is_converted = convert_to_wav(temp_filename, error_resp);
             if (!is_converted) {
+                res.status = 500;
                 res.set_content(error_resp, "application/json");
                 return;
             }
@@ -838,6 +848,7 @@ int main(int argc, char ** argv) {
             {
                 fprintf(stderr, "error: failed to read WAV file '%s'\n", temp_filename.c_str());
                 const std::string error_resp = "{\"error\":\"failed to read WAV file\"}";
+                res.status = 400;
                 res.set_content(error_resp, "application/json");
                 std::remove(temp_filename.c_str());
                 return;
@@ -849,6 +860,7 @@ int main(int argc, char ** argv) {
             {
                 fprintf(stderr, "error: failed to read audio data\n");
                 const std::string error_resp = "{\"error\":\"failed to read audio data\"}";
+                res.status = 400;
                 res.set_content(error_resp, "application/json");
                 return;
             }
@@ -927,7 +939,7 @@ int main(int argc, char ** argv) {
             wparams.logprob_thold    = params.logprob_thold;
 
             wparams.no_timestamps    = params.no_timestamps;
-            wparams.token_timestamps = !params.no_timestamps && params.response_format == vjson_format;
+            wparams.token_timestamps = !params.no_timestamps;
             wparams.no_context       = params.no_context;
 
             wparams.suppress_nst     = params.suppress_nst;
@@ -1119,6 +1131,7 @@ int main(int argc, char ** argv) {
         {
             fprintf(stderr, "error: no 'model' field in the request\n");
             const std::string error_resp = "{\"error\":\"no 'model' field in the request\"}";
+            res.status = 400;
             res.set_content(error_resp, "application/json");
             return;
         }
@@ -1127,6 +1140,7 @@ int main(int argc, char ** argv) {
         {
             fprintf(stderr, "error: 'model': %s not found!\n", model.c_str());
             const std::string error_resp = "{\"error\":\"model not found!\"}";
+            res.status = 400;
             res.set_content(error_resp, "application/json");
             return;
         }

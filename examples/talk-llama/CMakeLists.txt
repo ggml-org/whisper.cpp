@@ -22,18 +22,19 @@ if (WHISPER_SDL2)
         llama-kv-cache-iswa.cpp
         llama-memory-recurrent.cpp
         llama-memory-hybrid.cpp
+        llama-memory-hybrid-iswa.cpp
         llama-memory.cpp
         llama-mmap.cpp
         llama-model-loader.cpp
         llama-model-saver.cpp
         llama-model.cpp
         llama-quant.cpp
-        llama-sampling.cpp
+        llama-sampler.cpp
         llama-vocab.cpp
         unicode.cpp
         unicode-data.cpp
         ${SRC_MODELS})
-    target_include_directories(${TARGET} PRIVATE ${SDL2_INCLUDE_DIRS})
+    target_include_directories(${TARGET} PRIVATE . ${SDL2_INCLUDE_DIRS})
 
     target_link_libraries(${TARGET} PRIVATE common common-sdl whisper ${SDL2_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
     install(TARGETS ${TARGET} RUNTIME)
