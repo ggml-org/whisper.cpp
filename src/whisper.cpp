@@ -6701,12 +6701,14 @@ static bool whisper_vad(
             int segment_start_samples = cs_to_samples(vad_segments->data[i].start);
             int segment_end_samples   = cs_to_samples(vad_segments->data[i].end);
 
+            segment_start_samples = std::min(segment_start_samples, n_samples - 1);
+            segment_end_samples   = std::min(segment_end_samples, n_samples - 1);
+            int original_segment_length = segment_end_samples - segment_start_samples;
+
             if (i < (int)vad_segments->data.size() - 1) {
-                segment_end_samples += overlap_samples;
+                segment_end_samples = std::min(segment_end_samples + overlap_samples, n_samples - 1);
             }
 
-            segment_start_samples = std::min(segment_start_samples, n_samples - 1);
-            segment_end_samples = std::min(segment_end_samples, n_samples - 1);
             int segment_length = segment_end_samples - segment_start_samples;
             if (segment_length > 0) {
                 whisper_state::vad_segment_info segment;
@@ -6715,7 +6717,7 @@ static bool whisper_vad(
                 segment.orig_end   = vad_segments->data[i].end;
 
                 segment.vad_start = samples_to_cs(offset);
-                segment.vad_end   = samples_to_cs(offset + segment_length);
+                segment.vad_end   = samples_to_cs(offset + original_segment_length);
 
                 // Add segment boundaries to mapping table
                 vad_time_mapping start_mapping = {segment.vad_start, segment.orig_start};
