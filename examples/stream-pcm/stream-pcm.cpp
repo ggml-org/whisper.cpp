@@ -636,9 +636,9 @@ int main(int argc, char ** argv) {
         wparams.temperature_inc  = params.no_fallback ? 0.0f : wparams.temperature_inc;
 
         wparams.prompt_tokens    = params.no_context ? nullptr : prompt_tokens.data();
-        wparams.prompt_n_tokens  = params.no_context ? 0       : prompt_tokens.size();
+        wparams.prompt_n_tokens  = params.no_context ? 0       : (int) prompt_tokens.size();
 
-        if (whisper_full(ctx, wparams, audio_buf.data(), audio_buf.size()) != 0) {
+        if (whisper_full(ctx, wparams, audio_buf.data(), (int) audio_buf.size()) != 0) {
             fprintf(stderr, "%s: failed to process audio\n", argv[0]);
             return false;
         }
@@ -753,7 +753,7 @@ int main(int argc, char ** argv) {
                 debug_log("debug: save_audio wrote %zu samples (step)\n", pcmf32_new.size());
             }
 
-            const int n_samples_new = pcmf32_new.size();
+            const int n_samples_new = (int) pcmf32_new.size();
             const int n_samples_take = std::min((int) pcmf32_old.size(), std::max(0, n_samples_keep + n_samples_len - n_samples_new));
 
             pcmf32.resize(n_samples_new + n_samples_take);
@@ -827,7 +827,7 @@ int main(int argc, char ** argv) {
             bool silence;
             if (vad_ctx) {
                 // Silero VAD: run model on probe chunk, average probs
-                if (whisper_vad_detect_speech(vad_ctx, pcmf32_new.data(), pcmf32_new.size())) {
+                if (whisper_vad_detect_speech(vad_ctx, pcmf32_new.data(), (int) pcmf32_new.size())) {
                     const int n_probs = whisper_vad_n_probs(vad_ctx);
                     const float * probs = whisper_vad_probs(vad_ctx);
                     float avg = 0.0f;

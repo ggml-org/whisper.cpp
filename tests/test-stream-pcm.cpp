@@ -68,7 +68,7 @@ int main() {
     }
     argv.push_back(nullptr);
 
-    rc = _spawnv(_P_WAIT, stream_bin.c_str(), argv.data());
+    rc = (int) _spawnv(_P_WAIT, stream_bin.c_str(), argv.data());
     if (rc == -1) {
         fprintf(stderr, "failed to spawn whisper-stream-pcm: %s\n", std::strerror(errno));
         rc = 1;
