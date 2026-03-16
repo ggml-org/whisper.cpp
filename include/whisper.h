@@ -583,6 +583,10 @@ extern "C" {
         size_t                           i_start_rule;
         float                            grammar_penalty;
 
+        // Stable timestamps - snap word boundaries to speech edges using VAD
+        // Requires vad_model_path to be set. Forces vad=true, token_timestamps=true, max_initial_ts=0.
+        bool         stable_timestamps;
+
         // Voice Activity Detection (VAD) params
         bool         vad;                         // Enable VAD
         const char * vad_model_path;              // Path to VAD model

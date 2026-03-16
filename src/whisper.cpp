@@ -1,5 +1,7 @@
 #include "whisper.h"
 #include "whisper-arch.h"
+#include "whisper-state.h"
+#include "whisper-stable.h"
 
 #include "ggml.h"
 #include "ggml-cpp.h"
@@ -457,18 +459,6 @@ struct whisper_vocab {
     }
 };
 
-struct whisper_segment {
-    int64_t t0;
-    int64_t t1;
-
-    std::string text;
-    float no_speech_prob;
-
-    std::vector<whisper_token_data> tokens;
-
-    bool speaker_turn_next;
-};
-
 struct whisper_batch {
     int32_t n_tokens;
 
@@ -826,11 +816,6 @@ struct whisper_aheads_masks {
     ggml_backend_buffer_t buffer = nullptr;
 };
 
-struct vad_time_mapping {
-    int64_t processed_time;  // Time in processed (VAD) audio
-    int64_t original_time;   // Corresponding time in original audio
-};
-
 struct whisper_state {
     int64_t t_sample_us = 0;
     int64_t t_encode_us = 0;
@@ -921,17 +906,6 @@ struct whisper_state {
     int32_t exp_n_audio_ctx = 0; // 0 - use default
 
     whisper_vad_context * vad_context = nullptr;
-
-    struct vad_segment_info {
-        int64_t orig_start;
-        int64_t orig_end;
-        int64_t vad_start;
-        int64_t vad_end;
-    };
-    std::vector<vad_segment_info> vad_segments;
-    bool has_vad_segments = false;
-
-    std::vector<vad_time_mapping> vad_mapping_table;
 };
 
 struct whisper_context {
@@ -5985,6 +5959,8 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
         /*.i_start_rule    =*/ 0,
         /*.grammar_penalty =*/ 100.0f,
 
+        /*.stable_timestamps            =*/ false,
+
         /*.vad                         =*/ false,
         /*.vad_model_path              =*/ nullptr,
 
@@ -6618,188 +6594,92 @@ static void whisper_sequence_score(
     }
 }
 
-static bool whisper_vad(
+// Decode each VAD speech segment independently and accumulate results into
+// state->result_all with timestamps already offset to the original audio timeline.
+// This avoids cross-silence segments and removes the need for a mapping table.
+static int whisper_full_vad_segments(
         struct whisper_context * ctx,
           struct whisper_state * state,
     struct whisper_full_params   params,
                    const float * samples,
-                           int   n_samples,
-            std::vector<float> & filtered_samples) {
-    WHISPER_LOG_INFO("%s: VAD is enabled, processing speech segments only\n", __func__);
-    int filtered_n_samples = 0;
-
-    // Clear any existing mapping table
-    state->vad_mapping_table.clear();
-    state->has_vad_segments = false;
-
+                           int   n_samples) {
+    // Initialize VAD context if needed
     if (state->vad_context == nullptr) {
         struct whisper_vad_context_params vad_ctx_params = whisper_vad_default_context_params();
         struct whisper_vad_context * vctx = whisper_vad_init_from_file_with_params(params.vad_model_path, vad_ctx_params);
         if (vctx == nullptr) {
             WHISPER_LOG_ERROR("%s: failed to initialize VAD context\n", __func__);
-            return false;
+            return -1;
         }
         state->vad_context = vctx;
     }
-    auto vctx = state->vad_context;
 
-    const whisper_vad_params & vad_params = params.vad_params;
+    whisper_vad_segments * vad_segs = whisper_vad_segments_from_samples(
+        state->vad_context, params.vad_params, samples, n_samples);
 
-    whisper_vad_segments * vad_segments = whisper_vad_segments_from_samples(vctx, vad_params, samples, n_samples);
-
-    if (!vad_segments) {
-        return false;
+    if (!vad_segs) {
+        WHISPER_LOG_ERROR("%s: failed to compute VAD\n", __func__);
+        return -1;
     }
 
-    if (vad_segments->data.size() > 0) {
-        state->has_vad_segments = true;
-        ctx->state->vad_segments.clear();
-        ctx->state->vad_segments.reserve(vad_segments->data.size());
-
-        // Initialize the time mapping table
-        state->vad_mapping_table.clear();
-        state->vad_mapping_table.reserve(vad_segments->data.size() * 4);
-
-        WHISPER_LOG_INFO("%s: detected %d speech segments\n", __func__, (int)vad_segments->data.size());
-        float overlap_seconds = vad_params.samples_overlap;
-        int overlap_samples = overlap_seconds * WHISPER_SAMPLE_RATE;
-
-        for (int i = 0; i < (int)vad_segments->data.size(); i++) {
-            int segment_start_samples = cs_to_samples(vad_segments->data[i].start);
-            int segment_end_samples   = cs_to_samples(vad_segments->data[i].end);
-
-            if (i < (int)vad_segments->data.size() - 1) {
-                segment_end_samples += overlap_samples;
-            }
-            segment_end_samples = std::min(segment_end_samples, n_samples - 1);
-            filtered_n_samples  += (segment_end_samples - segment_start_samples);
-
-            WHISPER_LOG_INFO("%s: Including segment %d: %.2f - %.2f (duration: %.2f)\n",
-                __func__, i, vad_segments->data[i].start/100.0,
-                (vad_segments->data[i].end/100.0 + (i < (int)vad_segments->data.size() - 1 ? overlap_seconds : 0)),
-                (vad_segments->data[i].end - vad_segments->data[i].start)/100.0 +
-                (i < (int)vad_segments->data.size() - 1 ? overlap_seconds : 0));
-        }
-
-        int silence_samples = 0.1 * WHISPER_SAMPLE_RATE;
-        int total_silence_samples = (vad_segments->data.size() > 1) ? (vad_segments->data.size() - 1) * silence_samples : 0;
-        int total_samples_needed = filtered_n_samples + total_silence_samples;
-
-        WHISPER_LOG_INFO("%s: total duration of speech segments: %.2f seconds\n",
-                        __func__, (float)filtered_n_samples / WHISPER_SAMPLE_RATE);
-
-        try {
-            filtered_samples.resize(total_samples_needed);
-        } catch (const std::bad_alloc & /* e */) {
-            WHISPER_LOG_ERROR("%s: failed to allocate memory for filtered samples\n", __func__);
-            whisper_vad_free_segments(vad_segments);
-            return false;
-        }
-
-        int offset = 0;
-        for (int i = 0; i < (int)vad_segments->data.size(); i++) {
-            int segment_start_samples = cs_to_samples(vad_segments->data[i].start);
-            int segment_end_samples   = cs_to_samples(vad_segments->data[i].end);
-
-            if (i < (int)vad_segments->data.size() - 1) {
-                segment_end_samples += overlap_samples;
-            }
-
-            segment_start_samples = std::min(segment_start_samples, n_samples - 1);
-            segment_end_samples = std::min(segment_end_samples, n_samples - 1);
-            int segment_length = segment_end_samples - segment_start_samples;
-            if (segment_length > 0) {
-                whisper_state::vad_segment_info segment;
-
-                segment.orig_start = vad_segments->data[i].start;
-                segment.orig_end   = vad_segments->data[i].end;
-
-                segment.vad_start = samples_to_cs(offset);
-                segment.vad_end   = samples_to_cs(offset + segment_length);
-
-                // Add segment boundaries to mapping table
-                vad_time_mapping start_mapping = {segment.vad_start, segment.orig_start};
-                vad_time_mapping end_mapping = {segment.vad_end, segment.orig_end};
-
-                state->vad_mapping_table.push_back(start_mapping);
-                state->vad_mapping_table.push_back(end_mapping);
-
-                // Add intermediate points for longer segments to improve interpolation accuracy
-                const int64_t min_segment_length = 100; // 1 second
-                const int64_t point_interval = 20;     // Add a point every 200ms
-
-                if (segment.vad_end - segment.vad_start > min_segment_length) {
-                    int64_t segment_duration = segment.vad_end - segment.vad_start;
-                    int num_points = (int)(segment_duration / point_interval) - 1;
-
-                    for (int j = 1; j <= num_points; j++) {
-                        int64_t vad_time = segment.vad_start + j * point_interval;
-
-                        if (vad_time >= segment.vad_end) continue;
-
-                        int64_t vad_elapsed = vad_time - segment.vad_start;
-                        int64_t vad_total = segment.vad_end - segment.vad_start;
-                        int64_t orig_total = segment.orig_end - segment.orig_start;
-                        int64_t orig_time = segment.orig_start + (vad_elapsed * orig_total) / vad_total;
-
-                        vad_time_mapping intermediate_mapping = {vad_time, orig_time};
-                        state->vad_mapping_table.push_back(intermediate_mapping);
-                    }
-                }
-
-                WHISPER_LOG_INFO("%s: vad_segment_info: orig_start: %.2f, orig_end: %.2f, vad_start: %.2f, vad_end: %.2f\n",
-                    __func__, segment.orig_start/100.0, segment.orig_end/100.0, segment.vad_start/100.0, segment.vad_end/100.0);
-                ctx->state->vad_segments.push_back(segment);
-
-                // Copy this speech segment
-                memcpy(filtered_samples.data() + offset, samples + segment_start_samples, segment_length * sizeof(float));
-                offset += segment_length;
-
-                // Add silence after this segment (except after the last segment)
-                if (i < (int)vad_segments->data.size() - 1) {
-                    // Calculate the start and end time of the silence gap in processed audio
-                    int64_t silence_start_vad = samples_to_cs(offset);
-                    int64_t silence_end_vad = samples_to_cs(offset + silence_samples);
-                    // Calculate the corresponding original times
-                    int64_t orig_silence_start = segment.orig_end;
-                    int64_t orig_silence_end = vad_segments->data[i+1].start;
-
-                    // Add mapping points for silence boundaries
-                    state->vad_mapping_table.push_back({silence_start_vad, orig_silence_start});
-                    state->vad_mapping_table.push_back({silence_end_vad, orig_silence_end});
-
-                    // Fill with zeros (silence)
-                    memset(filtered_samples.data() + offset, 0, silence_samples * sizeof(float));
-                    offset += silence_samples;
-                }
-            }
-        }
-
-        // Sort the mapping table by processed time
-        std::sort(state->vad_mapping_table.begin(), state->vad_mapping_table.end(),
-            [](const vad_time_mapping& a, const vad_time_mapping& b) {
-                return a.processed_time < b.processed_time;
-        });
-
-        // Remove any duplicate processed times to ensure monotonicity which is
-        // needed for binary search and interpolation later.
-        if (!state->vad_mapping_table.empty()) {
-            auto last = std::unique(state->vad_mapping_table.begin(), state->vad_mapping_table.end(),
-                [](const vad_time_mapping& a, const vad_time_mapping& b) {
-                    return a.processed_time == b.processed_time;
-                });
-            state->vad_mapping_table.erase(last, state->vad_mapping_table.end());
-        }
-
-        WHISPER_LOG_INFO("%s: Created time mapping table with %d points\n", __func__, (int)state->vad_mapping_table.size());
-
-        filtered_n_samples = offset;
-        WHISPER_LOG_INFO("%s: Reduced audio from %d to %d samples (%.1f%% reduction)\n",
-                        __func__, n_samples, filtered_n_samples, 100.0f * (1.0f - (float)filtered_n_samples / n_samples));
+    if (vad_segs->data.empty()) {
+        whisper_vad_free_segments(vad_segs);
+        state->result_all.clear();
+        return 0;
     }
 
-    whisper_vad_free_segments(vad_segments);
-    return true;
+    WHISPER_LOG_INFO("%s: detected %d speech segments\n", __func__, (int)vad_segs->data.size());
+
+    const int overlap_samples = (int)(params.vad_params.samples_overlap * WHISPER_SAMPLE_RATE);
+
+    // Per-segment params: always start at offset 0, no duration limit
+    auto seg_params = params;
+    seg_params.offset_ms   = 0;
+    seg_params.duration_ms = 0;
+
+    std::vector<whisper_segment> all_results;
+
+    for (int i = 0; i < (int)vad_segs->data.size(); i++) {
+        int seg_start = cs_to_samples(vad_segs->data[i].start);
+        int seg_end   = cs_to_samples(vad_segs->data[i].end);
+
+        // Add overlap to all but last segment (gives context for boundary words)
+        if (i < (int)vad_segs->data.size() - 1) {
+            seg_end += overlap_samples;
+        }
+        seg_start = std::max(0, std::min(seg_start, n_samples - 1));
+        seg_end   = std::min(seg_end, n_samples);
+        const int seg_len = seg_end - seg_start;
+        if (seg_len <= 0) continue;
+
+        WHISPER_LOG_INFO("%s: decoding segment %d: %.2f - %.2f s\n",
+            __func__, i, vad_segs->data[i].start / 100.0, vad_segs->data[i].end / 100.0);
+
+        const int ret = whisper_full_with_state(ctx, state, seg_params, samples + seg_start, seg_len);
+        if (ret != 0) {
+            whisper_vad_free_segments(vad_segs);
+            return ret;
+        }
+
+        // Shift all timestamps to original timeline (segment starts at orig_start in original audio)
+        const int64_t offset_cs = vad_segs->data[i].start;
+        for (auto & seg : state->result_all) {
+            seg.t0 += offset_cs;
+            seg.t1 += offset_cs;
+            for (auto & tok : seg.tokens) {
+                if (tok.t0 >= 0) tok.t0 += offset_cs;
+                if (tok.t1 >= 0) tok.t1 += offset_cs;
+            }
+        }
+
+        all_results.insert(all_results.end(),
+            std::make_move_iterator(state->result_all.begin()),
+            std::make_move_iterator(state->result_all.end()));
+    }
+
+    whisper_vad_free_segments(vad_segs);
+    state->result_all = std::move(all_results);
+    return 0;
 }
 
 int whisper_full_with_state(
@@ -7020,6 +6900,10 @@ int whisper_full_with_state(
         // if only 100ms left, then stop
         if (seek + delta_min >= seek_end) {
             break;
+        }
+
+        if (params.stable_timestamps && params.logits_filter_callback == whisper_stable_logits_filter_callback) {
+            whisper_stable_set_filter_seek(params.logits_filter_callback_user_data, seek);
         }
 
         if (params.encoder_begin_callback) {
@@ -7759,21 +7643,49 @@ int whisper_full(
                    const float * samples,
                            int   n_samples) {
 
-    std::vector<float> vad_samples;
-    if (params.vad) {
-        WHISPER_LOG_INFO("%s: VAD is enabled, processing speech segments only\n", __func__);
-        if (!whisper_vad(ctx, ctx->state, params, samples, n_samples, vad_samples)) {
-            WHISPER_LOG_ERROR("%s: failed to compute VAD\n", __func__);
-            return -1;
-        }
-        if (vad_samples.empty()) {
-            ctx->state->result_all.clear();
-            return 0;
-        }
-        samples = vad_samples.data();
-        n_samples = vad_samples.size();
+    // stable_timestamps forces word-level timestamps and removes the 1s initial constraint
+    if (params.stable_timestamps) {
+        params.token_timestamps = true;
+        params.max_initial_ts   = 0.0f;
     }
-    return whisper_full_with_state(ctx, ctx->state, params, samples, n_samples);
+
+    // Build PCM-energy silence map from original audio. Install constrained decoding
+    // filter only when not using VAD (with per-segment VAD, cross-silence decoding can't happen).
+    std::vector<std::pair<int64_t, int64_t>> stable_silence;
+    whisper_stable_ts_filter_ctx stable_filter_ctx;
+    if (params.stable_timestamps) {
+        stable_silence = whisper_stable_build_silence_map_from_pcm(
+            samples, n_samples, WHISPER_SAMPLE_RATE, /*min_silence_dur_cs=*/10);
+
+        if (!stable_silence.empty() && !params.vad) {
+            const int64_t total_cs = (int64_t)((double)n_samples * 100.0 / WHISPER_SAMPLE_RATE + 0.5);
+            whisper_stable_setup_filter(params, stable_silence, total_cs, &stable_filter_ctx);
+        }
+    }
+
+    auto * state = ctx->state;
+    int ret;
+    if (params.vad) {
+        ret = whisper_full_vad_segments(ctx, state, params, samples, n_samples);
+    } else {
+        ret = whisper_full_with_state(ctx, state, params, samples, n_samples);
+    }
+    if (ret != 0) {
+        return ret;
+    }
+
+    // Post-process: snap word timestamps away from silence regions.
+    // Timestamps are already in original timeline (VAD offset applied per-segment above).
+    if (params.stable_timestamps && !stable_silence.empty()) {
+        whisper_stable_snap_segments(
+            ctx,
+            state->result_all,
+            stable_silence,
+            /*min_word_dur_cs=*/5,
+            /*min_snap_silence_dur_cs=*/10);
+    }
+
+    return 0;
 }
 
 int whisper_full_parallel(
@@ -7787,19 +7699,11 @@ int whisper_full_parallel(
         return whisper_full(ctx, params, samples, n_samples);
     }
 
-    std::vector<float> vad_samples;
+    // VAD uses per-segment sequential decoding; delegate to whisper_full
     if (params.vad) {
-        WHISPER_LOG_INFO("%s: VAD is enabled, processing speech segments only\n", __func__);
-        if (!whisper_vad(ctx, ctx->state, params, samples, n_samples, vad_samples)) {
-            WHISPER_LOG_ERROR("%s: failed to compute VAD\n", __func__);
-            return -1;
-        }
-        if (vad_samples.empty()) {
-            return 0;
-        }
-        samples = vad_samples.data();
-        n_samples = vad_samples.size();
+        return whisper_full(ctx, params, samples, n_samples);
     }
+
     int ret = 0;
 
     // prepare separate states for each thread
@@ -7922,84 +7826,13 @@ int whisper_full_lang_id(struct whisper_context * ctx) {
     return ctx->state->lang_id;
 }
 
-static int64_t map_processed_to_original_time(int64_t processed_time, const std::vector<vad_time_mapping> & mapping_table) {
-    if (mapping_table.empty()) {
-        return processed_time;
-    }
-
-    if (processed_time <= mapping_table.front().processed_time) {
-        return mapping_table.front().original_time; // Before first mapping point
-    }
-
-    if (processed_time >= mapping_table.back().processed_time) {
-        return mapping_table.back().original_time; // After last mapping point
-    }
-
-    // Binary search over the time map that finds the first entry that has a
-    // processed time greater than or equal to the current processed time.
-    auto upper = std::lower_bound(mapping_table.begin(), mapping_table.end(), processed_time,
-        [](const vad_time_mapping & entry, int64_t time) {
-            return entry.processed_time < time;
-        }
-    );
-
-    // If exact match found
-    if (upper->processed_time == processed_time) {
-        return upper->original_time;
-    }
-
-    // Need to interpolate between two points
-    auto lower = upper - 1;
-
-    int64_t processed_diff = upper->processed_time - lower->processed_time;
-    int64_t original_diff = upper->original_time - lower->original_time;
-    int64_t offset = processed_time - lower->processed_time;
-
-    if (processed_diff == 0) {
-        return lower->original_time;
-    }
-
-    // Perform linear interpolation
-    return lower->original_time + (offset * original_diff) / processed_diff;
-}
-
-// Function to get the starting timestamp of a segment
+// Timestamps are stored in original audio timeline (VAD offset applied at decode time).
 int64_t whisper_full_get_segment_t0_from_state(struct whisper_state * state, int i_segment) {
-    // If VAD wasn't used, return the original timestamp
-    if (!state->has_vad_segments || state->vad_mapping_table.empty()) {
-        return state->result_all[i_segment].t0;
-    }
-
-    // Get the processed timestamp
-    int64_t t0 = state->result_all[i_segment].t0;
-
-    // Map to original time using the mapping table
-    return map_processed_to_original_time(t0, state->vad_mapping_table);
+    return state->result_all[i_segment].t0;
 }
 
-// Function to get the ending timestamp of a segment
 int64_t whisper_full_get_segment_t1_from_state(struct whisper_state * state, int i_segment) {
-    // If VAD wasn't used, return the original timestamp
-    if (!state->has_vad_segments || state->vad_mapping_table.empty()) {
-        return state->result_all[i_segment].t1;
-    }
-
-    // Get the processed timestamp
-    int64_t t1 = state->result_all[i_segment].t1;
-
-    // Map to original time using the mapping table
-    int64_t orig_t1 = map_processed_to_original_time(t1, state->vad_mapping_table);
-
-    // Get the corresponding t0 for this segment
-    int64_t orig_t0 = whisper_full_get_segment_t0_from_state(state, i_segment);
-
-    // Ensure minimum duration to prevent zero-length segments
-    const int64_t min_duration = 10; // 10ms minimum
-    if (orig_t1 - orig_t0 < min_duration) {
-        orig_t1 = orig_t0 + min_duration;
-    }
-
-    return orig_t1;
+    return state->result_all[i_segment].t1;
 }
 
 
@@ -8848,6 +8681,13 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
     }
     const size_t sot_sequence_length = tokens.size();
     tokens.push_back(whisper_token_not(ctx));
+
+    size_t gap_token_count = 0;
+    if (params.stable_timestamps) {
+        const auto gap_tokens = whisper_stable_get_gap_tokens(ctx);
+        gap_token_count = gap_tokens.size();
+        tokens.insert(tokens.end(), gap_tokens.begin(), gap_tokens.end());
+    }
     for (size_t i = i_segment; i < i_segment + n_segments; ++i) {
         auto & segment = state->result_all[i];
         for (auto &t: segment.tokens) {
@@ -8898,6 +8738,10 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
         }
     }
 
+    if (params.stable_timestamps) {
+        whisper_stable_select_heads((float *) w->data, n_tokens, n_audio_tokens, n_heads, /*top_k=*/6);
+    }
+
     // Normalize - in original OpenAI code, this is done over dim=-2. In this case,
     // we already permuted N_TOKENS dimension to columns on last loop, becase ggml_norm
     // operates over columns. Afterwards, permute to a shape that facilitates mean
@@ -8935,6 +8779,7 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
 
     // Place timestamps on segments
     int32_t last_v = 0;
+    const int32_t first_text_alignment_row = 1 + (int32_t) gap_token_count;
     auto seg_i = state->result_all.begin() + i_segment;
     auto tok_i = seg_i->tokens.begin();
     for (int i = 0; i < alignment->ne[1]; ++i) {
@@ -8943,6 +8788,11 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
             int32_t time_index = whisper_get_i32_nd(alignment, 1, i, 0, 0);
             int64_t timestamp = (time_index * 2) + seek; // Each index on DTW result = 20mS audio
             last_v = v;
+
+            // Rows before first_text_alignment_row are [no_timestamps] and optional gap padding.
+            if (v < first_text_alignment_row) {
+                continue;
+            }
 
             // Skip non-text tokens
             while (!(tok_i->id < whisper_token_eot(ctx))) {
