@@ -177,7 +177,7 @@ void recognize_audio(struct whisper_context* ctx, const std::vector<float>& audi
     wparams.max_len = 0;
     wparams.translate = false;
     wparams.no_context = true;
-    wparams.single_segment = true;
+    wparams.single_segment = false;
     wparams.print_special = false;
     wparams.token_timestamps = false;
 
@@ -251,7 +251,7 @@ int main(int argc, char** argv) {
 
     // 4. 初始化 Whisper 模型
     struct whisper_context_params cparams = whisper_context_default_params();
-    cparams.use_gpu = false;
+    cparams.use_gpu = true;
 
     printf("\n🚀 正在加载模型：%s\n", model_path);
     struct whisper_context* ctx = whisper_init_from_file_with_params(model_path, cparams);
