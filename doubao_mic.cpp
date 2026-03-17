@@ -24,7 +24,8 @@ std::atomic<int> recorded_seconds(0); // 实时录制时长
 std::vector<float> audio_buffer;
 std::mutex buffer_mutex;
 // 可选超时（默认60秒，可自定义）
-const int RECORD_TIMEOUT = 60; // 延长到60秒，也可设为0取消超时
+const int RECORD_TIMEOUT = 30; // 延长到60秒，也可设为0取消超时
+const int RECORD_FINISH_WAIT_MS = 5000; // 停止后等待1秒收尾
 
 // 信号处理：Ctrl+C 优雅退出
 void signal_handler(int sig) {
@@ -32,6 +33,8 @@ void signal_handler(int sig) {
         printf("\n\n🛑 收到退出信号，正在清理资源...\n");
         exit_program.store(true);
         is_recording.store(false);
+        // 等待收尾
+        std::this_thread::sleep_for(std::chrono::milliseconds(RECORD_FINISH_WAIT_MS));
         exit(0);
     }
 }
@@ -100,7 +103,7 @@ void print_usage() {
     printf("  3. 录制超过%d秒自动停止（可自定义）\n", RECORD_TIMEOUT);
     printf("  4. 录制中实时显示时长：【录制中... X秒】\n");
     printf("  5. Ctrl+C 退出程序\n");
-    printf("=============================================\n"); // 移除多余的RECORD_TIMEOUT参数
+    printf("=============================================\n");
 }
 
 // CPU优化提示
@@ -149,7 +152,6 @@ int main(int argc, char** argv) {
     // 4. 初始化 Whisper 模型（CPU优化，移除不存在的use_flash_attention）
     struct whisper_context_params cparams = whisper_context_default_params();
     cparams.use_gpu = false; // 强制CPU（避免GPU检测开销）
-    // 移除 cparams.use_flash_attention = false; （旧版本无此成员）
 
     printf("\n🚀 正在加载模型：%s\n", model_path);
     struct whisper_context* ctx = whisper_init_from_file_with_params(model_path, cparams);
@@ -226,6 +228,7 @@ int main(int argc, char** argv) {
         std::thread wait_thread([&]() {
             getchar();
             stop_record.store(true);
+            // 先标记停止，但不立即退出，给回调留时间
             is_recording.store(false);
         });
 
@@ -245,9 +248,11 @@ int main(int argc, char** argv) {
         }
 
         wait_thread.join();
+        // 核心修复：等待1秒让回调线程写完最后几帧音频
+        printf("\n⏳ 正在收尾音频数据...");
+        std::this_thread::sleep_for(std::chrono::milliseconds(RECORD_FINISH_WAIT_MS));
         progress_thread.join();
-        is_recording.store(false);
-        printf("\n"); // 换行，清理进度显示
+        printf("完成\n");
 
         if (exit_program.load()) break;
 
