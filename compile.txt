@@ -5,3 +5,8 @@ g++ -O3 minimal_mic.cpp \
     -lpthread -ldl -lm -lrt -o minimal_mic
 
 g++ -O3 doubao_mic.cpp     -I. -I./include -I./ggml/include -I./examples     ./build_gpu/src/libwhisper.so     -L/usr/local/cuda/lib64 -lcudart -lcublas  -lportaudio   -lpthread -ldl -lm -lrt -o doubao_mic.exe
+
+gpu build:
+# 显式指定使用 CUDA 13.1 编译
+cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_COMPILER=/usr/local/cuda-13.1/bin/nvcc
+cmake --build build --config Release -j$(nproc)

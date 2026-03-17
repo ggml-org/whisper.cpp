@@ -1,2 +1,15 @@
 export LD_LIBRARY_PATH=./build/src
 ./minimal_mic ./models/ggml-small.bin
+
+# 确保运行时能找到 CUDA 13.1 的库
+export LD_LIBRARY_PATH=/usr/local/cuda-13.1/lib64:./build/src:$LD_LIBRARY_PATH
+./doubao_mic.exe ./models/ggml-medium.bin
+
+cat ~/.bashrc | tail -n 6
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+export PATH=$PATH:/home/nick/.local/bin
+alias cmake='/snap/bin/cmake'
+export CUDA_HOME=/usr/local/cuda-13.1
+export PATH=$CUDA_HOME/bin:$PATH
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$CUDA_HOME/targets/x86_64-linux/lib:$LD_LIBRARY_PATH
+
