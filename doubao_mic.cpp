@@ -13,23 +13,26 @@
 #include <sys/select.h>
 
 // =============================================
-// 工程常量：全局统一管理，杜绝 Magic Numbers
+// 工程常量：全局统一管理
 // =============================================
 struct RecordingConfig {
     static constexpr int SAMPLE_RATE = 16000;
-    static constexpr int PROGRESS_MS = 100;           // 进度条刷新间隔
-    static constexpr int UI_LOOP_MS = 10;             // UI循环步长
-    static constexpr int SELECT_TIMEOUT_MS = 20;      // select 超时
-    static constexpr int SMOOTH_FINISH_MS = 1500;     // 平滑收尾时长 (1.5秒)
-    static constexpr int CLOCK_TOLERANCE_MS = 300;    // 边界容差，确保显示完整
+    static constexpr int PROGRESS_MS = 100;           
+    static constexpr int UI_LOOP_MS = 10;             
+    static constexpr int SELECT_TIMEOUT_MS = 20;      
+    static constexpr int SMOOTH_FINISH_MS = 1500;     
+    static constexpr int CLOCK_TOLERANCE_MS = 350;    
+    // 用于清理控制台残余的空格
+    static const char* CLEAR_LINE; 
 };
+const char* RecordingConfig::CLEAR_LINE = "                                        ";
 
 std::atomic<bool> is_recording(false);
 std::atomic<bool> exit_program(false);
 std::atomic<int> recorded_seconds(0);
 std::vector<float> audio_buffer;
 std::mutex buffer_mutex;
-int g_timeout_limit = 30; // 默认 30s
+int g_timeout_limit = 30; 
 
 void signal_handler(int sig) {
     if (sig == SIGINT) {
@@ -39,7 +42,6 @@ void signal_handler(int sig) {
     }
 }
 
-// 非阻塞输入检测
 bool check_stdin_ready(int timeout_ms = RecordingConfig::SELECT_TIMEOUT_MS) {
     fd_set fds; FD_ZERO(&fds); FD_SET(STDIN_FILENO, &fds);
     struct timeval tv = {0, timeout_ms * 1000};
@@ -50,7 +52,6 @@ void clear_stdin() {
     while (check_stdin_ready(0)) getchar();
 }
 
-// 音频采集回调
 void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
     if (!is_recording.load() || pInput == NULL) return;
     std::lock_guard<std::mutex> lock(buffer_mutex);
@@ -60,20 +61,17 @@ void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uin
 
 int main(int argc, char** argv) {
     signal(SIGINT, signal_handler);
-    if (argc < 2) {
-        printf("用法: %s <模型路径> [超时秒数]\n", argv[0]);
-        return 1;
-    }
+    if (argc < 2) return 1;
     if (argc >= 3) g_timeout_limit = atoi(argv[2]);
 
     struct whisper_context_params cparams = whisper_context_default_params();
     cparams.use_gpu = true;
     struct whisper_context* ctx = whisper_init_from_file_with_params(argv[1], cparams);
 
-    // 设备枚举与选择
     ma_context context; ma_context_init(NULL, 0, NULL, &context);
     ma_device_info* pCapInfos; ma_uint32 capCount;
     ma_context_get_devices(&context, NULL, NULL, &pCapInfos, &capCount);
+    
     printf("\n📜 可用麦克风列表:\n");
     for (ma_uint32 i = 0; i < capCount; ++i) printf("  [%u] %s\n", i, pCapInfos[i].name);
     printf("👉 请输入设备 ID (默认5): ");
@@ -93,7 +91,7 @@ int main(int argc, char** argv) {
         printf("\n=============================================\n");
         printf("🎙️  操作提示 (自动断开设置: %d 秒):\n", g_timeout_limit);
         printf("  ▶ [回车键] : 开始录制\n");
-        printf("  ■ [回车键] : 停止录制 (含 %.1f 秒补录)\n", (float)RecordingConfig::SMOOTH_FINISH_MS/1000.0f);
+        printf("  ■ [回车键] : 停止录制 (含 1.5 秒补录)\n");
         printf("=============================================\n");
         printf("👉 等待指令...");
         fflush(stdout);
@@ -111,7 +109,7 @@ int main(int argc, char** argv) {
 
         std::thread progress_thread([&]() {
             while (is_recording.load()) {
-                printf("\r📊 进度: %d 秒    ", recorded_seconds.load());
+                printf("\r%s\r📊 进度: %d 秒", RecordingConfig::CLEAR_LINE, recorded_seconds.load());
                 fflush(stdout);
                 std::this_thread::sleep_for(std::chrono::milliseconds(RecordingConfig::PROGRESS_MS));
             }
@@ -124,19 +122,20 @@ int main(int argc, char** argv) {
 
             if (check_stdin_ready(RecordingConfig::UI_LOOP_MS)) {
                 if (getchar() == '\n') {
-                    printf("\n🛑 手动停止，正在收尾以确保不丢字...");
+                    // 使用 \r 覆盖并清理残余
+                    printf("\r%s\r🛑 手动停止，正在收尾以确保不丢字...", RecordingConfig::CLEAR_LINE);
+                    fflush(stdout);
                     trigger_stop = true;
                 }
             } 
-            // 关键：n + 容差，确保进度条能显示出最后那一秒
             else if (elapsed >= (g_timeout_limit * 1000 + RecordingConfig::CLOCK_TOLERANCE_MS)) {
-                printf("\r📊 进度: %d 秒    ", g_timeout_limit);
+                printf("\r%s\r📊 进度: %d 秒", RecordingConfig::CLEAR_LINE, g_timeout_limit);
                 printf("\n⏱️  时间已到 (%d秒)，正在自动收尾...", g_timeout_limit);
+                fflush(stdout);
                 trigger_stop = true;
             }
         }
 
-        // 执行平滑刷新
         std::this_thread::sleep_for(std::chrono::milliseconds(RecordingConfig::SMOOTH_FINISH_MS));
         is_recording.store(false); 
         if (progress_thread.joinable()) progress_thread.join();
@@ -145,14 +144,13 @@ int main(int argc, char** argv) {
         { std::lock_guard<std::mutex> lock(buffer_mutex); captured = audio_buffer; }
         
         printf("\n🔍 正在识别 (音频长度: %.2fs)...", (float)captured.size()/RecordingConfig::SAMPLE_RATE);
+        
         whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
         wparams.language = "zh";
-        // 2. 【核心修正】注入简体中文引导词，强制模型输出简体
-        // "以下是普通话的句子。" 作为一个初始提示（Prompt）
-        wparams.initial_prompt = "以下是普通话的句子，使用简体中文。";
-        // 3. 翻译控制（确保不开启翻译模式）
-        wparams.translate = false;
+        // 【正式固化】简体中文引导词
+        wparams.initial_prompt = "以下是普通话，使用简体中文输出。"; 
         wparams.n_threads = 4;
+        
         whisper_full(ctx, wparams, captured.data(), captured.size());
         
         int n_segments = whisper_full_n_segments(ctx);
