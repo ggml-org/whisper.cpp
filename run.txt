@@ -1,0 +1,2 @@
+export LD_LIBRARY_PATH=./build/src
+./minimal_mic ./models/ggml-small.bin
