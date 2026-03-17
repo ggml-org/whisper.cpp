@@ -144,6 +144,7 @@ int main(int argc, char** argv) {
         { std::lock_guard<std::mutex> lock(buffer_mutex); captured = audio_buffer; }
         
         printf("\n🔍 正在识别 (音频长度: %.2fs)...", (float)captured.size()/RecordingConfig::SAMPLE_RATE);
+        auto start_recognition = std::chrono::steady_clock::now();
         
         whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
         wparams.language = "zh";
@@ -154,7 +155,8 @@ int main(int argc, char** argv) {
         whisper_full(ctx, wparams, captured.data(), captured.size());
         
         int n_segments = whisper_full_n_segments(ctx);
-        printf("\n📝 识别结果：");
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start_recognition).count();
+        printf("\n📝 识别结果(%.2f秒)：", elapsed/1000.0f);
         for (int i = 0; i < n_segments; ++i) {
             printf("\n   %s", whisper_full_get_segment_text(ctx, i));
         }
