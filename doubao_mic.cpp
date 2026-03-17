@@ -73,17 +73,15 @@ void clear_input_buffer() {
 
 // 音频回调（仅写数据，无额外逻辑）
 void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
-    if (!is_recording.load() || is_stopping.load() || pInput == NULL) return;
+    // 只有在真正停止录制标记为 false 时才退出
+    if (!is_recording.load() || pInput == NULL) return;
 
     const float* pInputFloat = (const float*)pInput;
-    if (pInputFloat == NULL) return;
-
     std::lock_guard<std::mutex> lock(buffer_mutex);
-    const size_t max_memory = 16000 * (RECORD_TIMEOUT + 5);
-    if (audio_buffer.size() < max_memory) {
-        audio_buffer.insert(audio_buffer.end(), pInputFloat, pInputFloat + frameCount);
-        recorded_seconds.store(static_cast<int>(audio_buffer.size() / 16000.0));
-    }
+    
+    // 持续写入，直到 is_recording 被主线程关掉
+    audio_buffer.insert(audio_buffer.end(), pInputFloat, pInputFloat + frameCount);
+    recorded_seconds.store(static_cast<int>(audio_buffer.size() / 16000.0));
 }
 
 // 静音检测（仅裁剪开头）
@@ -331,25 +329,29 @@ int main(int argc, char** argv) {
         // 核心循环 - 无死锁逻辑
         while (!exit_program.load() && !stopped) {
             // 1. 检查手动停止（非阻塞）
-            if (check_input_non_blocking(50)) {
-                char c;
-                ssize_t ret2 = read(STDIN_FILENO, &c, 1);
-                (void)ret2;
-                if (c == '\n' && is_recording.load() && !is_stopping.load()) {
-                    async_stop_recording("🛑 手动停止录制"); // 异步停止，不阻塞
-                    stopped = true;
-                    break;
-                }
-            }
+           if (check_input_non_blocking(50)) {
+				char c;
+				read(STDIN_FILENO, &c, 1);
+				if (c == '\n') {
+					printf("\n🛑 手动停止，正在收尾音频数据...");
+					// 关键：先睡 500ms 捕获回车瞬间的余音，但不开启新线程
+					std::this_thread::sleep_for(std::chrono::milliseconds(500)); 
+					is_recording.store(false); // 此时回调停止写入
+					stopped = true;
+				}
+			}
+
 
             // 2. 检查超时停止（非阻塞）
             auto duration = std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::steady_clock::now() - start_time).count();
-            if (duration >= RECORD_TIMEOUT && is_recording.load() && !is_stopping.load()) {
-                async_stop_recording("⏱️  录制超时（30秒）"); // 异步停止，不阻塞
-                stopped = true;
-                break;
-            }
+ 			// 超时判断同理
+			if (duration >= RECORD_TIMEOUT) {
+				printf("\n⏱️  超时停止，正在收尾...");
+				std::this_thread::sleep_for(std::chrono::milliseconds(500));
+				is_recording.store(false);
+				stopped = true;
+			}
 
             // 3. 检查是否已停止
             if (!is_recording.load()) {
