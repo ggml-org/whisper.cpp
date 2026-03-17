@@ -1,299 +1,278 @@
 #include "whisper.h"
-#include <portaudio.h>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <ctime>
-#include <iostream>
-#include <vector>
-#include <string>
+#include "common.h"
 
-// ====================== 1. 枚举并选择麦克风设备（纯PortAudio原生实现） ======================
-void enumerate_audio_devices() {
-    PaError err = Pa_Initialize();
-    if (err != paNoError) {
-        fprintf(stderr, "❌ PortAudio初始化失败: %s\n", Pa_GetErrorText(err));
+#define MINIAUDIO_IMPLEMENTATION
+#include "miniaudio.h"
+
+#include <vector>
+#include <cstdio>
+#include <string>
+#include <atomic>
+#include <chrono>
+#include <thread>
+#include <csignal>
+#include <cstdlib>
+#include <algorithm>
+#include <cstring>
+#include <mutex>  // 关键：补充缺失的mutex头文件
+
+// 全局原子变量（线程安全）
+std::atomic<bool> is_recording(false);
+std::atomic<bool> exit_program(false);
+// 音频缓冲区（加锁保护，避免多线程冲突）
+std::vector<float> audio_buffer;
+std::mutex buffer_mutex;  // 现在有头文件支持，不会报错
+
+// 信号处理：Ctrl+C 优雅退出
+void signal_handler(int sig) {
+    if (sig == SIGINT) {
+        printf("\n\n🛑 收到退出信号，正在清理资源...\n");
+        exit_program.store(true);
+        is_recording.store(false);
+        exit(0);
+    }
+}
+
+// 音频回调（旧版 miniaudio 兼容）
+void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
+    if (!is_recording.load() || pInput == NULL) return;
+
+    const float* pInputFloat = (const float*)pInput;
+    if (pInputFloat == NULL) return;
+
+    // 加锁操作缓冲区（避免主线程/回调线程冲突）
+    std::lock_guard<std::mutex> lock(buffer_mutex);
+    
+    // 限制最大录制时长 30 秒（16000Hz）
+    const size_t max_frames = 16000 * 30;
+    const size_t available = max_frames - audio_buffer.size();
+    if (available == 0) {
+        is_recording.store(false);
         return;
     }
 
-    int numDevices = Pa_GetDeviceCount();
+    const size_t copy_frames = (frameCount > available) ? available : frameCount;
+    audio_buffer.insert(audio_buffer.end(), pInputFloat, pInputFloat + copy_frames);
+}
+
+// 列出系统音频设备（兼容旧版 API）
+void list_audio_devices(ma_context& context, ma_device_info** pCaptureInfos, ma_uint32& captureCount) {
     printf("\n📜 系统可用麦克风设备列表：\n");
     printf("=============================================\n");
-    for (int i = 0; i < numDevices; i++) {
-        const PaDeviceInfo* pInfo = Pa_GetDeviceInfo(i);
-        // 只显示输入设备（麦克风，至少1个输入声道）
-        if (pInfo->maxInputChannels > 0) {
-            printf("🔧 设备ID: %d | 名称: %s\n", i, pInfo->name);
-            printf("   最大输入声道: %d | 默认采样率: %.1f Hz\n", 
-                   pInfo->maxInputChannels, pInfo->defaultSampleRate);
-            printf("---------------------------------------------\n");
-        }
-    }
-    printf("=============================================\n\n");
 
-    Pa_Terminate();
+    ma_result result = ma_context_get_devices(&context, NULL, NULL, pCaptureInfos, &captureCount);
+    if (result != MA_SUCCESS) {
+        fprintf(stderr, "❌ 获取设备列表失败，使用默认设备\n");
+        *pCaptureInfos = NULL;
+        captureCount = 0;
+        return;
+    }
+
+    for (ma_uint32 i = 0; i < captureCount; ++i) {
+        printf("🔧 设备ID: %u | 名称: %s\n", i, (*pCaptureInfos)[i].name);
+        printf("   声道数: 1 | 采样率: 16000 Hz\n"); // 固定 16000Hz 避免采样率冲突
+        printf("---------------------------------------------\n");
+    }
+    printf("=============================================\n");
 }
 
-int select_mic_device() {
-    int selected_id = -1;
-    printf("👉 请输入你要使用的麦克风设备ID（比如苹果耳机对应的ID）：");
-    std::cin >> selected_id;
-
-    // 验证设备ID有效性
-    PaError err = Pa_Initialize();
-    if (err != paNoError) {
-        fprintf(stderr, "❌ PortAudio初始化失败: %s\n", Pa_GetErrorText(err));
-        return -1;
-    }
-
-    int numDevices = Pa_GetDeviceCount();
-    if (selected_id < 0 || selected_id >= numDevices) {
-        fprintf(stderr, "❌ 设备ID无效！请输入列表中的有效ID\n");
-        Pa_Terminate();
-        return -1;
-    }
-
-    const PaDeviceInfo* pInfo = Pa_GetDeviceInfo(selected_id);
-    if (pInfo->maxInputChannels == 0) {
-        fprintf(stderr, "❌ 选择的设备不是麦克风（无输入声道）！\n");
-        Pa_Terminate();
-        return -1;
-    }
-
-    printf("\n✅ 已选择麦克风：\n");
-    printf("   ID: %d | 名称: %s\n", selected_id, pInfo->name);
-    printf("   采样率: %.1f Hz | 声道数: %d\n\n", 
-           pInfo->defaultSampleRate, pInfo->maxInputChannels);
-    
-    Pa_Terminate();
-    return selected_id;
+// 提示信息
+void print_usage() {
+    printf("=============================================\n");
+    printf("🎤 语音识别程序（旧版兼容）\n");
+    printf("操作说明：\n");
+    printf("  1. 按下【回车键】开始录制\n");
+    printf("  2. 说话完成后按回车停止录制并识别\n");
+    printf("  3. 录制超过30秒自动停止\n");
+    printf("  4. Ctrl+C 退出程序\n");
+    printf("=============================================\n");
 }
 
-// ====================== 2. 音频采集函数（纯PortAudio原生实现） ======================
-int audio_record(short* buffer, int buffer_size, int sample_rate, int channels, int max_seconds, int device_id) {
-    PaError err;
-    PaStream* stream;
-    PaStreamParameters input_params;
-
-    // 初始化PortAudio
-    err = Pa_Initialize();
-    if (err != paNoError) {
-        fprintf(stderr, "❌ PortAudio初始化失败: %s\n", Pa_GetErrorText(err));
-        return -1;
-    }
-
-    // 配置输入参数（指定麦克风设备ID）
-    input_params.device = device_id;
-    input_params.channelCount = channels;
-    input_params.sampleFormat = paInt16; // 16位深（Whisper要求）
-    input_params.suggestedLatency = Pa_GetDeviceInfo(device_id)->defaultLowInputLatency;
-    input_params.hostApiSpecificStreamInfo = NULL;
-
-    // 打开音频流
-    err = Pa_OpenStream(
-        &stream,
-        &input_params,
-        NULL, // 无输出
-        sample_rate,
-        1024, // 缓冲区大小
-        paClipOff, // 关闭裁剪
-        NULL, // 无回调
-        NULL
-    );
-
-    if (err != paNoError) {
-        fprintf(stderr, "❌ 打开音频流失败: %s\n", Pa_GetErrorText(err));
-        Pa_Terminate();
-        return -1;
-    }
-
-    // 开始录制
-    err = Pa_StartStream(stream);
-    if (err != paNoError) {
-        fprintf(stderr, "❌ 开始录制失败: %s\n", Pa_GetErrorText(err));
-        Pa_CloseStream(stream);
-        Pa_Terminate();
-        return -1;
-    }
-
-    printf("🎙️  录制中（按回车键停止，最长%d秒）...\n", max_seconds);
-    int total_samples = 0;
-    time_t start_time = time(NULL);
-
-    // 录制逻辑：要么按回车停止，要么超时停止
-    while (1) {
-        // 读取音频数据
-        int samples_to_read = buffer_size - total_samples;
-        if (samples_to_read <= 0) break;
-
-        err = Pa_ReadStream(stream, buffer + total_samples, 1024);
-        if (err != paNoError) {
-            fprintf(stderr, "❌ 读取音频失败: %s\n", Pa_GetErrorText(err));
-            break;
-        }
-
-        total_samples += 1024;
-
-        // 超时检查（max_seconds秒）
-        if (difftime(time(NULL), start_time) >= max_seconds) {
-            printf("\n⏰ 录制超时（%d秒），自动停止\n", max_seconds);
-            break;
-        }
-
-        // 检查是否按了回车
-        if (std::cin.rdbuf()->in_avail() > 0) {
-            getchar();
-            printf("\n🛑 用户停止录制\n");
-            break;
-        }
-    }
-
-    // 停止录制
-    Pa_StopStream(stream);
-    Pa_CloseStream(stream);
-    Pa_Terminate();
-
-    return total_samples;
+// GPU 状态提示（兼容旧版）
+void check_gpu_status() {
+    printf("🔍 GPU加速配置说明：\n");
+    printf("   ❌ 若识别速度慢，说明使用CPU运行\n");
+    printf("   ✅ 启用GPU：重新编译whisper.cpp时添加 -DWHISPER_CUDA=ON\n");
 }
 
-// ====================== 3. 新增：short转float（Whisper要求） ======================
-void convert_short_to_float(const short* src, float* dst, int count) {
-    // 16位short的范围是[-32768, 32767]，归一化到float的[-1.0, 1.0]
-    for (int i = 0; i < count; i++) {
-        dst[i] = static_cast<float>(src[i]) / 32768.0f;
-    }
-}
+int main(int argc, char** argv) {
+    // 注册信号处理
+    signal(SIGINT, signal_handler);
 
-// ====================== 4. 主函数（修正数据类型转换） ======================
-int main(int argc, char **argv) {
-    // 检查参数
     if (argc < 2) {
-        fprintf(stderr, "用法: %s 模型文件路径（如 ./models/ggml-medium.bin）\n", argv[0]);
+        fprintf(stderr, "Usage: %s <model_path>\n", argv[0]);
         return 1;
     }
     const char* model_path = argv[1];
 
-    // 步骤1：枚举并选择麦克风
-    enumerate_audio_devices();
-    int mic_device_id = select_mic_device();
-    if (mic_device_id < 0) {
-        fprintf(stderr, "❌ 麦克风选择失败，程序退出\n");
+    // 1. 初始化音频上下文（旧版兼容）
+    ma_context context;
+    if (ma_context_init(NULL, 0, NULL, &context) != MA_SUCCESS) {
+        fprintf(stderr, "❌ 初始化音频上下文失败\n");
         return 1;
     }
 
-    // 步骤2：GPU加速配置说明
-    printf("\n🔍 GPU加速配置说明...\n");
-    printf("   当前已启用GPU加速（use_gpu = true）\n");
-    printf("   ✅ 如果编译时链接了CUDA库，模型会自动使用GPU\n");
-    printf("   ❌ 如果识别速度很慢，说明实际使用CPU运行\n");
-    printf("   验证方法：观察识别耗时，GPU版本比CPU快5-10倍\n\n");
+    // 2. 枚举麦克风设备
+    ma_device_info* pCaptureInfos = NULL;
+    ma_uint32 captureCount = 0;
+    list_audio_devices(context, &pCaptureInfos, captureCount);
 
-    // 步骤3：加载Whisper模型（启用GPU）
-    printf("🚀 正在加载模型：%s\n", model_path);
+    // 3. 选择麦克风设备
+    ma_uint32 device_id = 0;
+    if (captureCount > 0) {
+        printf("\n👉 请输入要使用的麦克风设备ID：");
+        if (scanf("%u", &device_id) != 1 || device_id >= captureCount) {
+            fprintf(stderr, "❌ 输入无效，使用默认设备ID 0\n");
+            device_id = 0;
+        }
+        // 清空输入缓冲区
+        while (getchar() != '\n');
+    }
+
+    // 4. 初始化 Whisper 模型
     struct whisper_context_params cparams = whisper_context_default_params();
     cparams.use_gpu = true;
-    cparams.gpu_device = 0;
 
+    printf("\n🚀 正在加载模型：%s\n", model_path);
     struct whisper_context* ctx = whisper_init_from_file_with_params(model_path, cparams);
     if (!ctx) {
-        fprintf(stderr, "❌ 加载模型失败: %s\n", model_path);
+        fprintf(stderr, "❌ 初始化Whisper模型失败\n");
+        ma_context_uninit(&context);
         return 1;
     }
 
-    // 打印模型信息
-    whisper_print_system_info();
+    // GPU 状态提示
+    check_gpu_status();
     printf("✅ 模型加载成功！\n");
-    printf("   📌 若识别速度快（几秒内完成）= GPU运行\n");
-    printf("   📌 若识别速度慢（十几秒/分钟）= CPU运行\n");
-    printf("=============================================\n");
-    printf("🎤 语音识别程序（指定麦克风版）\n");
-    printf("操作说明：\n");
-    printf("  1. 按下【回车键】开始录制\n");
-    printf("  2. 说话完成后，再次按下【回车键】停止录制并识别\n");
-    printf("  3. 录制超过30秒会自动停止\n");
-    printf("  4. Ctrl+C 退出程序\n");
-    printf("=============================================\n\n");
 
-    // 步骤4：准备音频缓冲区
-    const int sample_rate = 16000; // Whisper标准采样率
-    const int channels = 1;        // 单声道
-    const int max_seconds = 30;    // 最长录制30秒
-    const int buffer_size = sample_rate * channels * max_seconds;
-    
-    // 原始音频缓冲区（short类型）
-    short* buffer_short = (short*)malloc(buffer_size * sizeof(short));
-    // Whisper输入缓冲区（float类型）
-    float* buffer_float = (float*)malloc(buffer_size * sizeof(float));
-    
-    if (!buffer_short || !buffer_float) {
-        fprintf(stderr, "❌ 分配音频缓冲区失败\n");
-        free(buffer_short);
-        free(buffer_float);
-        whisper_free(ctx);
-        return 1;
-    }
+    // 5. 初始化录音设备（旧版 miniaudio 核心兼容）
+    ma_device_config deviceConfig = ma_device_config_init(ma_device_type_capture);
+    deviceConfig.capture.format   = ma_format_f32;    // Whisper 要求 float32
+    deviceConfig.capture.channels = 1;                // 单声道
+    deviceConfig.sampleRate       = 16000;            // 固定 16000Hz 避免采样率错误
+    deviceConfig.dataCallback     = data_callback;    // 回调函数
+    deviceConfig.pUserData        = NULL;
 
-    // 步骤5：等待用户开始录制
-    printf("👉 按下回车键开始录制...\n");
-    getchar();
-
-    // 步骤6：录制音频（指定选择的麦克风）
-    int samples_read = audio_record(buffer_short, buffer_size, sample_rate, channels, max_seconds, mic_device_id);
-    if (samples_read <= 0) {
-        fprintf(stderr, "❌ 录制音频失败\n");
-        free(buffer_short);
-        free(buffer_float);
-        whisper_free(ctx);
-        return 1;
-    }
-
-    // 步骤7：关键修正：short转float（Whisper要求）
-    convert_short_to_float(buffer_short, buffer_float, samples_read);
-
-    // 步骤8：语音识别（传入float缓冲区）
-    printf("\n🔍 正在识别...\n");
-    clock_t start = clock();
-
-    struct whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    wparams.language = "zh";       // 中文识别
-    wparams.translate = false;
-    wparams.print_special = false;
-    wparams.print_progress = false;
-    wparams.print_realtime = false;
-    wparams.print_timestamps = false;
-
-    // 传入float类型的buffer_float，而非short类型的buffer_short
-    if (whisper_full(ctx, wparams, buffer_float, samples_read) != 0) {
-        fprintf(stderr, "❌ 识别音频失败\n");
-        free(buffer_short);
-        free(buffer_float);
-        whisper_free(ctx);
-        return 1;
-    }
-
-    // 步骤9：输出结果
-    clock_t end = clock();
-    double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
-    printf("⏱️  识别耗时：%.2f 秒\n", elapsed);
-    
-    if (elapsed < 5.0) {
-        printf("   🎯 识别速度快，应该是GPU在运行！\n");
+    // 指定选中的麦克风设备（旧版用 pDeviceID）
+    if (captureCount > 0 && pCaptureInfos != NULL) {
+        deviceConfig.capture.pDeviceID = &pCaptureInfos[device_id].id;
+        printf("\n✅ 已选择麦克风：%s\n", pCaptureInfos[device_id].name);
     } else {
-        printf("   ⚠️  识别速度慢，当前使用CPU运行（需编译CUDA版本）\n");
+        printf("\n✅ 使用默认麦克风设备\n");
     }
 
-    printf("📝 识别结果：\n   ");
-    const int n_segments = whisper_full_n_segments(ctx);
-    for (int i = 0; i < n_segments; i++) {
-        const char* text = whisper_full_get_segment_text(ctx, i);
-        printf("%s\n   ", text);
+    ma_device device;
+    if (ma_device_init(&context, &deviceConfig, &device) != MA_SUCCESS) {
+        fprintf(stderr, "❌ 打开录音设备失败\n");
+        whisper_free(ctx);
+        ma_context_uninit(&context);
+        return 1;
     }
-    printf("\n");
 
-    // 步骤10：清理资源
-    free(buffer_short);
-    free(buffer_float);
+    // 启动录音设备（仅初始化，不采集数据）
+    if (ma_device_start(&device) != MA_SUCCESS) {
+        fprintf(stderr, "❌ 启动录音设备失败\n");
+        ma_device_uninit(&device);
+        whisper_free(ctx);
+        ma_context_uninit(&context);
+        return 1;
+    }
+
+    print_usage();
+
+    // 主循环
+    while (!exit_program.load()) {
+        // 等待用户按回车开始录制
+        printf("\n👉 按下回车键开始录制...\n");
+        getchar();
+
+        if (exit_program.load()) break;
+
+        // 重置录制状态
+        is_recording.store(true);
+        {
+            std::lock_guard<std::mutex> lock(buffer_mutex);
+            audio_buffer.clear();
+        }
+        printf("🎙️  正在录制（按回车停止，最长30秒）...\n");
+
+        // 等待用户停止录制（子线程监听回车）
+        std::thread wait_thread([&]() {
+            getchar();
+            is_recording.store(false);
+        });
+
+        // 超时控制（30秒）
+        auto start_time = std::chrono::steady_clock::now();
+        while (is_recording.load() && !exit_program.load()) {
+            auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - start_time).count();
+            
+            if (duration >= 30) {
+                printf("⏱️  录制超时，自动停止\n");
+                is_recording.store(false);
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        wait_thread.join();
+        is_recording.store(false);
+
+        if (exit_program.load()) break;
+
+        // 检查录制数据
+        std::vector<float> captured_audio;
+        {
+            std::lock_guard<std::mutex> lock(buffer_mutex);
+            captured_audio = audio_buffer; // 拷贝数据避免锁冲突
+        }
+
+        if (captured_audio.empty()) {
+            printf("⚠️  未采集到音频数据，请重新录制\n");
+            continue;
+        }
+
+        // 开始识别
+        printf("🔍 正在识别（音频长度：%.2f秒）...\n", (float)captured_audio.size() / 16000);
+        auto recognize_start = std::chrono::steady_clock::now();
+        
+        whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+        wparams.language = "zh";
+        wparams.n_threads = std::max(1, (int)std::thread::hardware_concurrency());
+        wparams.print_progress = false;
+        wparams.print_realtime = false;
+        wparams.temperature = 0.0;
+        wparams.max_len = 0;
+        wparams.translate = false;
+        wparams.no_context = true;
+
+        if (whisper_full(ctx, wparams, captured_audio.data(), captured_audio.size()) != 0) {
+            fprintf(stderr, "❌ 识别失败\n");
+            continue;
+        }
+
+        // 输出识别结果
+        auto recognize_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - recognize_start).count();
+        printf("⏱️  识别耗时：%.2f 秒\n", recognize_duration / 1000.0);
+        
+        const int n_segments = whisper_full_n_segments(ctx);
+        if (n_segments == 0) {
+            printf("📝 未识别到有效内容\n");
+        } else {
+            printf("📝 识别结果：\n");
+            for (int i = 0; i < n_segments; ++i) {
+                const char* text = whisper_full_get_segment_text(ctx, i);
+                printf("   %s\n", text);
+            }
+        }
+    }
+
+    // 清理资源
+    ma_device_uninit(&device);
+    ma_context_uninit(&context);
     whisper_free(ctx);
-
+    printf("✅ 资源清理完成，程序退出\n");
     return 0;
 }

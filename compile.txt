@@ -3,3 +3,5 @@ g++ -O3 minimal_mic.cpp \
     ./build/src/libwhisper.so \
     -L/usr/local/cuda/lib64 -lcudart -lcublas \
     -lpthread -ldl -lm -lrt -o minimal_mic
+
+g++ -O3 doubao_mic.cpp     -I. -I./include -I./ggml/include -I./examples     ./build_gpu/src/libwhisper.so     -L/usr/local/cuda/lib64 -lcudart -lcublas  -lportaudio   -lpthread -ldl -lm -lrt -o doubao_mic.exe
