@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cstring>
 #include <mutex>
+#include <unistd.h> // 用于STDIN_FILENO和read
 
 // 全局原子变量（线程安全）
 std::atomic<bool> is_recording(false);
@@ -23,9 +24,10 @@ std::atomic<int> recorded_seconds(0); // 实时录制时长
 // 音频缓冲区（加锁保护）
 std::vector<float> audio_buffer;
 std::mutex buffer_mutex;
-// 可选超时（默认60秒，可自定义）
-const int RECORD_TIMEOUT = 30; // 延长到60秒，也可设为0取消超时
-const int RECORD_FINISH_WAIT_MS = 5000; // 停止后等待1秒收尾
+// 配置常量（可自定义）
+const int RECORD_TIMEOUT = 30; // 超时时间（秒）
+const int RECORD_FINISH_WAIT_MS = 5000; // 停止后收尾等待时间
+const bool AUTO_RECOGNIZE_ON_TIMEOUT = true; // 超时自动识别
 
 // 信号处理：Ctrl+C 优雅退出
 void signal_handler(int sig) {
@@ -36,6 +38,27 @@ void signal_handler(int sig) {
         // 等待收尾
         std::this_thread::sleep_for(std::chrono::milliseconds(RECORD_FINISH_WAIT_MS));
         exit(0);
+    }
+}
+
+// 非阻塞检查输入（解决超时后需按回车问题）
+bool check_input_non_blocking() {
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(STDIN_FILENO, &fds);
+    
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 100000; // 100ms超时
+    
+    return select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) > 0;
+}
+
+// 清空输入缓冲区（避免残留回车）
+void clear_input_buffer() {
+    while (check_input_non_blocking()) {
+        char c;
+        read(STDIN_FILENO, &c, 1);
     }
 }
 
@@ -93,14 +116,14 @@ void list_audio_devices(ma_context& context, ma_device_info** pCaptureInfos, ma_
     printf("=============================================\n");
 }
 
-// 提示信息（修复printf多参数问题）
+// 提示信息
 void print_usage() {
     printf("=============================================\n");
     printf("🎤 语音识别程序（CPU优化版）\n");
     printf("操作说明：\n");
     printf("  1. 按下【回车键】开始录制\n");
     printf("  2. 说话完成后按回车停止录制并识别\n");
-    printf("  3. 录制超过%d秒自动停止（可自定义）\n", RECORD_TIMEOUT);
+    printf("  3. 录制超过%d秒自动停止并识别\n", RECORD_TIMEOUT);
     printf("  4. 录制中实时显示时长：【录制中... X秒】\n");
     printf("  5. Ctrl+C 退出程序\n");
     printf("=============================================\n");
@@ -115,6 +138,60 @@ void print_cpu_optimize_tips() {
     printf("   📌 模型优化：推荐使用 ggml-medium-q4_0.bin（量化版）\n");
     printf("   📌 编译优化：已用 -O3 最高级优化\n");
     printf("=============================================\n");
+}
+
+// 核心识别函数（抽离复用）
+void recognize_audio(struct whisper_context* ctx, const std::vector<float>& audio_data) {
+    if (audio_data.empty()) {
+        printf("⚠️  未采集到音频数据，跳过识别\n");
+        return;
+    }
+
+    // 静音裁剪
+    int valid_len = trim_silence(audio_data.data(), audio_data.size());
+    float valid_seconds = (float)valid_len / 16000;
+    printf("🔍 正在识别（有效音频长度：%.2f秒，原始：%.2f秒）...\n", 
+           valid_seconds, (float)audio_data.size() / 16000);
+    
+    auto recognize_start = std::chrono::steady_clock::now();
+    
+    // CPU最优识别参数
+    whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    wparams.language = "zh";
+    wparams.n_threads = std::max(2, (int)std::thread::hardware_concurrency());
+    wparams.print_progress = false;
+    wparams.print_realtime = false;
+    wparams.temperature = 0.0;
+    wparams.max_len = 0;
+    wparams.translate = false;
+    wparams.no_context = true;
+    wparams.single_segment = true;
+    wparams.print_special = false;
+    wparams.token_timestamps = false;
+
+    // 执行识别
+    if (whisper_full(ctx, wparams, audio_data.data(), valid_len) != 0) {
+        fprintf(stderr, "❌ 识别失败\n");
+        return;
+    }
+
+    // 输出结果
+    auto recognize_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - recognize_start).count();
+    float speed = valid_seconds / (recognize_duration / 1000.0);
+    printf("⏱️  识别耗时：%.2f 秒 | 识别速度：%.2fx实时速度\n", 
+           recognize_duration / 1000.0, speed);
+    
+    const int n_segments = whisper_full_n_segments(ctx);
+    if (n_segments == 0) {
+        printf("📝 未识别到有效内容\n");
+    } else {
+        printf("📝 识别结果：\n");
+        for (int i = 0; i < n_segments; ++i) {
+            const char* text = whisper_full_get_segment_text(ctx, i);
+            printf("   %s\n", text);
+        }
+    }
 }
 
 int main(int argc, char** argv) {
@@ -146,12 +223,12 @@ int main(int argc, char** argv) {
             fprintf(stderr, "❌ 输入无效，使用默认设备ID 0\n");
             device_id = 0;
         }
-        while (getchar() != '\n'); // 清空输入缓冲区
+        clear_input_buffer(); // 清空输入缓冲区
     }
 
-    // 4. 初始化 Whisper 模型（CPU优化，移除不存在的use_flash_attention）
+    // 4. 初始化 Whisper 模型
     struct whisper_context_params cparams = whisper_context_default_params();
-    cparams.use_gpu = false; // 强制CPU（避免GPU检测开销）
+    cparams.use_gpu = false; // 强制CPU
 
     printf("\n🚀 正在加载模型：%s\n", model_path);
     struct whisper_context* ctx = whisper_init_from_file_with_params(model_path, cparams);
@@ -202,6 +279,7 @@ int main(int argc, char** argv) {
     while (!exit_program.load()) {
         printf("\n👉 按下回车键开始录制...\n");
         getchar();
+        clear_input_buffer(); // 清空残留输入
 
         if (exit_program.load()) break;
 
@@ -218,101 +296,58 @@ int main(int argc, char** argv) {
         std::thread progress_thread([&]() {
             while (is_recording.load() && !exit_program.load()) {
                 printf("\r📊 录制中... %d秒", recorded_seconds.load());
-                fflush(stdout); // 强制刷新输出
+                fflush(stdout);
                 std::this_thread::sleep_for(std::chrono::seconds(1));
             }
         });
 
-        // 等待用户停止录制（主线程监听，避免子线程输入阻塞）
-        std::atomic<bool> stop_record(false);
-        std::thread wait_thread([&]() {
-            getchar();
-            stop_record.store(true);
-            // 先标记停止，但不立即退出，给回调留时间
-            is_recording.store(false);
-        });
-
-        // 超时控制（可选）
+        bool is_timeout = false;
         auto start_time = std::chrono::steady_clock::now();
-        while (!stop_record.load() && !exit_program.load()) {
+
+        // 非阻塞监听输入 + 超时检测（核心修复）
+        while (is_recording.load() && !exit_program.load()) {
+            // 检查是否有回车输入（手动停止）
+            if (check_input_non_blocking()) {
+                char c;
+                read(STDIN_FILENO, &c, 1);
+                if (c == '\n') { // 只响应回车
+                    is_recording.store(false);
+                    printf("\n🛑 已手动停止录制\n");
+                    break;
+                }
+            }
+
+            // 检查超时
             auto duration = std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::steady_clock::now() - start_time).count();
             
-            if (RECORD_TIMEOUT > 0 && duration >= RECORD_TIMEOUT) {
-                printf("\n⏱️  录制超时（%d秒），自动停止\n", RECORD_TIMEOUT);
+            if (duration >= RECORD_TIMEOUT) {
                 is_recording.store(false);
-                stop_record.store(true);
+                is_timeout = true;
+                printf("\n⏱️  录制超时（%d秒），自动停止\n", RECORD_TIMEOUT);
                 break;
             }
+
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
-        wait_thread.join();
-        // 核心修复：等待1秒让回调线程写完最后几帧音频
+        // 等待录制收尾
+        progress_thread.join();
         printf("\n⏳ 正在收尾音频数据...");
         std::this_thread::sleep_for(std::chrono::milliseconds(RECORD_FINISH_WAIT_MS));
-        progress_thread.join();
         printf("完成\n");
 
         if (exit_program.load()) break;
 
-        // 检查录制数据
+        // 拷贝音频数据
         std::vector<float> captured_audio;
         {
             std::lock_guard<std::mutex> lock(buffer_mutex);
             captured_audio = audio_buffer;
         }
 
-        if (captured_audio.empty()) {
-            printf("⚠️  未采集到音频数据，请重新录制\n");
-            continue;
-        }
-
-        // 优化1：静音裁剪（减少识别数据量）
-        int valid_len = trim_silence(captured_audio.data(), captured_audio.size());
-        float valid_seconds = (float)valid_len / 16000;
-        printf("🔍 正在识别（有效音频长度：%.2f秒，原始：%.2f秒）...\n", 
-               valid_seconds, (float)captured_audio.size() / 16000);
-        
-        auto recognize_start = std::chrono::steady_clock::now();
-        
-        // 优化2：调整识别参数（CPU最优配置）
-        whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-        wparams.language = "zh";
-        wparams.n_threads = std::max(2, (int)std::thread::hardware_concurrency()); // 至少2线程
-        wparams.print_progress = false;
-        wparams.print_realtime = false;
-        wparams.temperature = 0.0; // 最快的温度设置
-        wparams.max_len = 0;
-        wparams.translate = false;
-        wparams.no_context = true;
-        wparams.single_segment = true; // 单段识别（更快）
-        wparams.print_special = false; // 不打印特殊字符
-        wparams.token_timestamps = false; // 关闭时间戳（节省计算）
-
-        // 执行识别（仅识别有效音频）
-        if (whisper_full(ctx, wparams, captured_audio.data(), valid_len) != 0) {
-            fprintf(stderr, "❌ 识别失败\n");
-            continue;
-        }
-
-        // 输出识别结果
-        auto recognize_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - recognize_start).count();
-        float speed = valid_seconds / (recognize_duration / 1000.0);
-        printf("⏱️  识别耗时：%.2f 秒 | 识别速度：%.2fx实时速度\n", 
-               recognize_duration / 1000.0, speed);
-        
-        const int n_segments = whisper_full_n_segments(ctx);
-        if (n_segments == 0) {
-            printf("📝 未识别到有效内容\n");
-        } else {
-            printf("📝 识别结果：\n");
-            for (int i = 0; i < n_segments; ++i) {
-                const char* text = whisper_full_get_segment_text(ctx, i);
-                printf("   %s\n", text);
-            }
-        }
+        // 执行识别（无论手动/超时，自动识别）
+        recognize_audio(ctx, captured_audio);
     }
 
     // 清理资源
