@@ -130,6 +130,7 @@ void async_stop_recording(const char* stop_type) {
     }).detach(); // 分离线程，自动回收资源
 }
 
+
 // 提示信息
 void print_usage() {
     printf("=============================================\n");
@@ -211,6 +212,19 @@ int main(int argc, char** argv) {
         return 1;
     }
     const char* model_path = argv[1];
+
+	// 1. 定义一个统一的收尾函数，替代原有的异步函数
+	auto stop_and_collect = [&](const char* reason) {
+		printf("\n%s，正在捕获余音收尾...", reason);
+		fflush(stdout);
+		
+		// 关键点：此时 is_recording 仍为 true，data_callback 还在工作
+		// 睡眠 800ms 确保敲击回车或超时瞬间的最后几个采样点进入 buffer
+		std::this_thread::sleep_for(std::chrono::milliseconds(800)); 
+		
+		is_recording.store(false); // 现在真正停止回调写入
+		printf("完成。\n");
+	};
 
     // 1. 初始化音频上下文
     ma_context context;
@@ -328,38 +342,28 @@ int main(int argc, char** argv) {
 
         // 核心循环 - 无死锁逻辑
         while (!exit_program.load() && !stopped) {
-            // 1. 检查手动停止（非阻塞）
-           if (check_input_non_blocking(50)) {
+			// 场景 A: 检查手动回车
+			if (check_input_non_blocking(50)) {
 				char c;
-				read(STDIN_FILENO, &c, 1);
-				if (c == '\n') {
-					printf("\n🛑 手动停止，正在收尾音频数据...");
-					// 关键：先睡 500ms 捕获回车瞬间的余音，但不开启新线程
-					std::this_thread::sleep_for(std::chrono::milliseconds(500)); 
-					is_recording.store(false); // 此时回调停止写入
+				if (read(STDIN_FILENO, &c, 1) > 0 && c == '\n') {
+					stop_and_collect("🛑 手动停止");
 					stopped = true;
+					break;
 				}
 			}
 
 
-            // 2. 检查超时停止（非阻塞）
-            auto duration = std::chrono::duration_cast<std::chrono::seconds>(
-                std::chrono::steady_clock::now() - start_time).count();
- 			// 超时判断同理
-			if (duration >= RECORD_TIMEOUT) {
-				printf("\n⏱️  超时停止，正在收尾...");
-				std::this_thread::sleep_for(std::chrono::milliseconds(500));
-				is_recording.store(false);
+			// 场景 B: 检查 30 秒超时
+			auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+				std::chrono::steady_clock::now() - start_time).count();
+			
+			if (duration >= RECORD_TIMEOUT * 1000) {
+				stop_and_collect("⏱️ 超时停止 (30s)");
 				stopped = true;
-			}
+				break;
+			}       
 
-            // 3. 检查是否已停止
-            if (!is_recording.load()) {
-                stopped = true;
-                break;
-            }
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
 
         // 等待进度线程退出
