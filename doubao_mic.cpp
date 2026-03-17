@@ -23,23 +23,12 @@
 std::atomic<bool> is_recording(false);
 std::atomic<bool> exit_program(false);
 std::atomic<int> recorded_seconds(0);
-// 新增：记录最后一次音频回调的时间（毫秒）
-std::atomic<long long> last_callback_time(0);
 // 音频缓冲区（加锁保护）
 std::vector<float> audio_buffer;
 std::mutex buffer_mutex;
 // 配置常量
-const int RECORD_TIMEOUT = 30; // 基础超时时间（秒）
-const int TIMEOUT_GRACE_MS = 1500; // 超时后宽限1.5秒（等最后帧）
-const int FINISH_WAIT_MS = 2000; // 停止前收尾等待时间
-const int FRAME_INTERVAL_MS = 100; // 音频帧间隔（ms）
-
-// 获取当前时间戳（毫秒）
-long long get_current_time_ms() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()
-    ).count();
-}
+const int RECORD_TIMEOUT = 30; // 超时时间（秒）
+const int STOP_WAIT_MS = 2000; // 停止前等待2秒（手动/超时共用）
 
 // 信号处理：Ctrl+C 优雅退出
 void signal_handler(int sig) {
@@ -74,34 +63,28 @@ void clear_input_buffer() {
     }
 }
 
-// 音频回调（关键：记录最后回调时间，确保每帧都写入）
+// 音频回调（仅负责写数据，无额外逻辑）
 void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
     if (!is_recording.load() || pInput == NULL) return;
 
     const float* pInputFloat = (const float*)pInput;
     if (pInputFloat == NULL) return;
 
-    // 更新最后回调时间（关键：标记有新数据）
-    last_callback_time.store(get_current_time_ms());
-
     std::lock_guard<std::mutex> lock(buffer_mutex);
     // 安全保护：最多录制35秒（超时+5秒缓冲）
     const size_t max_memory = 16000 * (RECORD_TIMEOUT + 5);
     if (audio_buffer.size() < max_memory) {
-        // 逐帧写入，确保不丢帧
         audio_buffer.insert(audio_buffer.end(), pInputFloat, pInputFloat + frameCount);
-        // 精确计算录制时长（按实际采样数）
         recorded_seconds.store(static_cast<int>(audio_buffer.size() / 16000.0));
     }
 }
 
-// 静音检测（仅裁剪开头，保留末尾所有内容）
+// 静音检测（仅裁剪开头，保留末尾）
 int trim_silence(const float* audio_data, int audio_len, float threshold = 0.001f) {
     int start = 0;
     while (start < audio_len && fabs(audio_data[start]) < threshold) {
         start++;
     }
-    // 完全保留末尾，哪怕是静音
     return std::max(audio_len - start, 16000);
 }
 
@@ -126,14 +109,24 @@ void list_audio_devices(ma_context& context, ma_device_info** pCaptureInfos, ma_
     printf("=============================================\n");
 }
 
+// 核心停止录制函数（手动/超时共用同一套逻辑）
+void stop_recording(const char* stop_type) {
+    printf("\n%s 正在等待最后音频数据写入（2秒）...", stop_type);
+    fflush(stdout);
+    // 关键：先等2秒让数据写完，再停采集（手动/超时完全一致）
+    std::this_thread::sleep_for(std::chrono::milliseconds(STOP_WAIT_MS));
+    is_recording.store(false);
+    printf("完成\n");
+}
+
 // 提示信息
 void print_usage() {
     printf("=============================================\n");
-    printf("🎤 语音识别程序（防丢帧终极版）\n");
+    printf("🎤 语音识别程序（统一逻辑版）\n");
     printf("操作说明：\n");
     printf("  1. 按下【回车键】开始录制\n");
-    printf("  2. 说话完成后按回车停止（会自动收尾）\n");
-    printf("  3. 录制超过%d秒后宽限1.5秒自动停止\n", RECORD_TIMEOUT);
+    printf("  2. 说话完成后按回车停止（等2秒收尾）\n");
+    printf("  3. 录制超过%d秒自动停止（同样等2秒收尾）\n", RECORD_TIMEOUT);
     printf("  4. 录制中实时显示时长\n");
     printf("  5. Ctrl+C 退出程序\n");
     printf("=============================================\n");
@@ -142,9 +135,9 @@ void print_usage() {
 // CPU优化提示
 void print_cpu_optimize_tips() {
     printf("⚡ CPU优化配置说明：\n");
-    printf("   ✅ 已启用多线程识别（自动适配CPU核心数）\n");
-    printf("   ✅ 超时宽限1.5秒，确保最后音频帧不丢\n");
-    printf("   ✅ 记录音频回调时间，实时检测数据写入\n");
+    printf("   ✅ 手动/超时停止共用同一套逻辑，无行为差异\n");
+    printf("   ✅ 停止前等待2秒，确保最后音频完整\n");
+    printf("   ✅ 启用多线程识别（自动适配CPU核心数）\n");
     printf("   📌 模型优化：推荐使用 ggml-medium-q4_0.bin（量化版）\n");
     printf("=============================================\n");
 }
@@ -300,10 +293,9 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        // 重置录制状态（关键：清空最后回调时间）
+        // 重置录制状态
         is_recording.store(true);
         recorded_seconds.store(0);
-        last_callback_time.store(get_current_time_ms());
         {
             std::lock_guard<std::mutex> lock(buffer_mutex);
             audio_buffer.clear();
@@ -319,44 +311,33 @@ int main(int argc, char** argv) {
             }
         });
 
-        bool is_timeout = false;
+        bool stopped = false;
         auto start_time = std::chrono::steady_clock::now();
-        long long timeout_deadline_ms = get_current_time_ms() + (RECORD_TIMEOUT * 1000) + TIMEOUT_GRACE_MS;
 
-        // 核心循环 - 防丢帧逻辑
-        while (is_recording.load() && !exit_program.load()) {
-            long long current_ms = get_current_time_ms();
-            
-            // 超时判断：1. 超过总时限 且 2. 最后回调超过帧间隔（无新数据）
-            bool timeout_1 = current_ms >= timeout_deadline_ms;
-            bool timeout_2 = (current_ms - last_callback_time.load()) > (FRAME_INTERVAL_MS * 2);
-            if (timeout_1 && timeout_2) {
-                printf("\n⏱️  录制超时（%d秒+宽限1.5秒），正在等待最后帧写入...", RECORD_TIMEOUT);
-                fflush(stdout);
-                // 等待最后帧写完（哪怕多等一点）
-                std::this_thread::sleep_for(std::chrono::milliseconds(FINISH_WAIT_MS));
-                is_recording.store(false);
-                is_timeout = true;
-                printf("完成\n");
-                break;
-            }
-
-            // 手动停止（正常逻辑）
+        // 核心循环 - 手动/超时共用同一套停止逻辑
+        while (is_recording.load() && !exit_program.load() && !stopped) {
+            // 1. 检查手动停止
             if (check_input_non_blocking(100)) {
                 char c;
                 ssize_t ret2 = read(STDIN_FILENO, &c, 1);
                 (void)ret2;
                 if (c == '\n') {
-                    printf("\n🛑 已手动停止录制，正在收尾...");
-                    fflush(stdout);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(FINISH_WAIT_MS));
-                    is_recording.store(false);
-                    printf("完成\n");
+                    stop_recording("🛑 手动停止录制"); // 调用统一停止函数
+                    stopped = true;
                     break;
                 }
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(50)); // 更短轮询，减少延迟
+            // 2. 检查超时停止（和手动停止逻辑完全一致）
+            auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - start_time).count();
+            if (duration >= RECORD_TIMEOUT) {
+                stop_recording("⏱️  录制超时（30秒）"); // 调用统一停止函数
+                stopped = true;
+                break;
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
         // 等待进度线程退出
