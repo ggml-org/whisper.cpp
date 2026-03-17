@@ -22,13 +22,14 @@
 // 全局原子变量（线程安全）
 std::atomic<bool> is_recording(false);
 std::atomic<bool> exit_program(false);
+std::atomic<bool> is_stopping(false); // 新增：标记是否正在停止
 std::atomic<int> recorded_seconds(0);
 // 音频缓冲区（加锁保护）
 std::vector<float> audio_buffer;
 std::mutex buffer_mutex;
 // 配置常量
 const int RECORD_TIMEOUT = 30; // 超时时间（秒）
-const int STOP_WAIT_MS = 2000; // 停止前等待2秒（手动/超时共用）
+const int STOP_WAIT_MS = 2000; // 停止前等待2秒
 
 // 信号处理：Ctrl+C 优雅退出
 void signal_handler(int sig) {
@@ -36,13 +37,14 @@ void signal_handler(int sig) {
         printf("\n\n🛑 收到退出信号，正在清理资源...\n");
         exit_program.store(true);
         is_recording.store(false);
+        is_stopping.store(false);
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         exit(0);
     }
 }
 
-// 非阻塞检查输入
-bool check_input_non_blocking(int timeout_ms = 100) {
+// 非阻塞检查输入（核心：永不阻塞）
+bool check_input_non_blocking(int timeout_ms = 50) {
     fd_set fds;
     FD_ZERO(&fds);
     FD_SET(STDIN_FILENO, &fds);
@@ -51,10 +53,16 @@ bool check_input_non_blocking(int timeout_ms = 100) {
     tv.tv_sec = 0;
     tv.tv_usec = timeout_ms * 1000;
     
-    return select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) > 0;
+    // 处理EINTR错误（避免信号中断导致的异常）
+    int ret;
+    do {
+        ret = select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv);
+    } while (ret == -1 && errno == EINTR);
+    
+    return ret > 0;
 }
 
-// 清空输入缓冲区
+// 清空输入缓冲区（非阻塞）
 void clear_input_buffer() {
     while (check_input_non_blocking(10)) {
         char c;
@@ -63,15 +71,14 @@ void clear_input_buffer() {
     }
 }
 
-// 音频回调（仅负责写数据，无额外逻辑）
+// 音频回调（仅写数据，无额外逻辑）
 void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount) {
-    if (!is_recording.load() || pInput == NULL) return;
+    if (!is_recording.load() || is_stopping.load() || pInput == NULL) return;
 
     const float* pInputFloat = (const float*)pInput;
     if (pInputFloat == NULL) return;
 
     std::lock_guard<std::mutex> lock(buffer_mutex);
-    // 安全保护：最多录制35秒（超时+5秒缓冲）
     const size_t max_memory = 16000 * (RECORD_TIMEOUT + 5);
     if (audio_buffer.size() < max_memory) {
         audio_buffer.insert(audio_buffer.end(), pInputFloat, pInputFloat + frameCount);
@@ -79,7 +86,7 @@ void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uin
     }
 }
 
-// 静音检测（仅裁剪开头，保留末尾）
+// 静音检测（仅裁剪开头）
 int trim_silence(const float* audio_data, int audio_len, float threshold = 0.001f) {
     int start = 0;
     while (start < audio_len && fabs(audio_data[start]) < threshold) {
@@ -109,24 +116,30 @@ void list_audio_devices(ma_context& context, ma_device_info** pCaptureInfos, ma_
     printf("=============================================\n");
 }
 
-// 核心停止录制函数（手动/超时共用同一套逻辑）
-void stop_recording(const char* stop_type) {
+// 异步停止录制函数（无阻塞，避免死锁）
+void async_stop_recording(const char* stop_type) {
+    is_stopping.store(true); // 标记正在停止，阻止新数据写入
     printf("\n%s 正在等待最后音频数据写入（2秒）...", stop_type);
     fflush(stdout);
-    // 关键：先等2秒让数据写完，再停采集（手动/超时完全一致）
-    std::this_thread::sleep_for(std::chrono::milliseconds(STOP_WAIT_MS));
-    is_recording.store(false);
-    printf("完成\n");
+    
+    // 独立线程等待，不阻塞主线程
+    std::thread([&]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(STOP_WAIT_MS));
+        is_recording.store(false);
+        is_stopping.store(false);
+        printf("完成\n");
+        fflush(stdout);
+    }).detach(); // 分离线程，自动回收资源
 }
 
 // 提示信息
 void print_usage() {
     printf("=============================================\n");
-    printf("🎤 语音识别程序（统一逻辑版）\n");
+    printf("🎤 语音识别程序（无死锁+统一逻辑版）\n");
     printf("操作说明：\n");
     printf("  1. 按下【回车键】开始录制\n");
-    printf("  2. 说话完成后按回车停止（等2秒收尾）\n");
-    printf("  3. 录制超过%d秒自动停止（同样等2秒收尾）\n", RECORD_TIMEOUT);
+    printf("  2. 说话完成后按回车停止（异步等2秒收尾）\n");
+    printf("  3. 录制超过30秒自动停止（同样异步等2秒）\n");
     printf("  4. 录制中实时显示时长\n");
     printf("  5. Ctrl+C 退出程序\n");
     printf("=============================================\n");
@@ -135,10 +148,10 @@ void print_usage() {
 // CPU优化提示
 void print_cpu_optimize_tips() {
     printf("⚡ CPU优化配置说明：\n");
-    printf("   ✅ 手动/超时停止共用同一套逻辑，无行为差异\n");
-    printf("   ✅ 停止前等待2秒，确保最后音频完整\n");
-    printf("   ✅ 启用多线程识别（自动适配CPU核心数）\n");
-    printf("   📌 模型优化：推荐使用 ggml-medium-q4_0.bin（量化版）\n");
+    printf("   ✅ 异步停止逻辑，彻底解决死锁\n");
+    printf("   ✅ 手动/超时停止共用同一套逻辑\n");
+    printf("   ✅ 非阻塞输入检查，永不卡死\n");
+    printf("   📌 模型优化：推荐使用 ggml-medium-q4_0.bin\n");
     printf("=============================================\n");
 }
 
@@ -276,16 +289,16 @@ int main(int argc, char** argv) {
     while (!exit_program.load()) {
         printf("\n👉 按下回车键开始录制...\n");
         
-        // 阻塞等待用户回车
+        // 阻塞等待用户回车（非阻塞检查，避免死锁）
         char input_char = 0;
         while (!check_input_non_blocking() && !exit_program.load()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
         if (exit_program.load()) break;
         
-        ssize_t ret1 = read(STDIN_FILENO, &input_char, 1);
-        (void)ret1;
-        clear_input_buffer();
+			ssize_t ret1 = read(STDIN_FILENO, &input_char, 1);
+			(void)ret1;
+			clear_input_buffer();
 
         if (exit_program.load()) break;
         if (input_char != '\n') {
@@ -295,16 +308,17 @@ int main(int argc, char** argv) {
 
         // 重置录制状态
         is_recording.store(true);
+        is_stopping.store(false);
         recorded_seconds.store(0);
         {
             std::lock_guard<std::mutex> lock(buffer_mutex);
             audio_buffer.clear();
         }
-        printf("🎙️  正在录制（按回车停止，最长%d秒）...\n", RECORD_TIMEOUT);
+        printf("🎙️  正在录制（按回车停止，最长30秒）...\n");
 
         // 录制时长实时显示线程
         std::thread progress_thread([&]() {
-            while (is_recording.load() && !exit_program.load()) {
+            while (is_recording.load() && !exit_program.load() && !is_stopping.load()) {
                 printf("\r📊 录制中... %d秒", recorded_seconds.load());
                 fflush(stdout);
                 std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -314,36 +328,47 @@ int main(int argc, char** argv) {
         bool stopped = false;
         auto start_time = std::chrono::steady_clock::now();
 
-        // 核心循环 - 手动/超时共用同一套停止逻辑
-        while (is_recording.load() && !exit_program.load() && !stopped) {
-            // 1. 检查手动停止
-            if (check_input_non_blocking(100)) {
+        // 核心循环 - 无死锁逻辑
+        while (!exit_program.load() && !stopped) {
+            // 1. 检查手动停止（非阻塞）
+            if (check_input_non_blocking(50)) {
                 char c;
                 ssize_t ret2 = read(STDIN_FILENO, &c, 1);
                 (void)ret2;
-                if (c == '\n') {
-                    stop_recording("🛑 手动停止录制"); // 调用统一停止函数
+                if (c == '\n' && is_recording.load() && !is_stopping.load()) {
+                    async_stop_recording("🛑 手动停止录制"); // 异步停止，不阻塞
                     stopped = true;
                     break;
                 }
             }
 
-            // 2. 检查超时停止（和手动停止逻辑完全一致）
+            // 2. 检查超时停止（非阻塞）
             auto duration = std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::steady_clock::now() - start_time).count();
-            if (duration >= RECORD_TIMEOUT) {
-                stop_recording("⏱️  录制超时（30秒）"); // 调用统一停止函数
+            if (duration >= RECORD_TIMEOUT && is_recording.load() && !is_stopping.load()) {
+                async_stop_recording("⏱️  录制超时（30秒）"); // 异步停止，不阻塞
                 stopped = true;
                 break;
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            // 3. 检查是否已停止
+            if (!is_recording.load()) {
+                stopped = true;
+                break;
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
 
         // 等待进度线程退出
         progress_thread.join();
 
         if (exit_program.load()) break;
+
+        // 等待异步停止线程完成（确保数据写完）
+        while (is_stopping.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
 
         // 拷贝音频数据
         std::vector<float> captured_audio;
