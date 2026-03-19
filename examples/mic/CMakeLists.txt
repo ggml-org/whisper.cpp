@@ -1,19 +1,8 @@
-cmake_minimum_required(VERSION 3.10)
-project(whisper-mic)
+set(TARGET whisper-mic)
+add_executable(${TARGET} whisper-mic.cpp)
 
-add_executable(whisper-mic whisper-mic.cpp)
+include(DefaultTargetOptions)
 
-target_include_directories(whisper-mic PRIVATE
-    ${CMAKE_SOURCE_DIR}/..
-    ${CMAKE_SOURCE_DIR}/../..
-    ${CMAKE_SOURCE_DIR}/../../include
-    ${CMAKE_SOURCE_DIR}/../../ggml/include
-)
+target_link_libraries(${TARGET} PRIVATE common whisper ${CMAKE_THREAD_LIBS_INIT})
 
-target_link_libraries(whisper-mic PRIVATE whisper pthread dl m rt)
-
-set_target_properties(whisper-mic PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED YES
-    CXX_EXTENSIONS NO
-)
+install(TARGETS ${TARGET} RUNTIME)

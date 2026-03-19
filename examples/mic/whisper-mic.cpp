@@ -1,3 +1,53 @@
+#include <string>
+
+struct mic_params {
+    std::string model = "models/ggml-base.bin";
+    int timeout = 30;
+    int capture_id = 5;
+    std::string language = "zh";
+    bool use_gpu = true;
+};
+
+void mic_print_usage(int argc, char ** argv, const mic_params & params) {
+    printf("\n");
+    printf("usage: %s [options]\n", argv[0]);
+    printf("\n");
+    printf("options:\n");
+    printf("  -h,   --help           show this help message and exit\n");
+    printf("  -m F, --model F        [%-7s] model path\n", params.model.c_str());
+    printf("  -t N, --timeout N      [%-7d] max recording time in seconds\n", params.timeout);
+    printf("  -c N, --capture N      [%-7d] capture device ID\n", params.capture_id);
+    printf("  -l S, --language S     [%-7s] language (e.g. zh, en)\n", params.language.c_str());
+    printf("  -ng,  --no-gpu         [%-7s] disable GPU inference\n", params.use_gpu ? "false" : "true");
+    printf("\n");
+    printf("example: %s -m models/ggml-base.bin -t 30 -c 0 -l zh\n", argv[0]);
+    printf("\n");
+}
+
+static bool mic_params_parse(int argc, char ** argv, mic_params & params) {
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "-h" || arg == "--help") {
+            mic_print_usage(argc, argv, params);
+            exit(0);
+        } else if (arg == "-m" || arg == "--model") {
+            params.model = argv[++i];
+        } else if (arg == "-t" || arg == "--timeout") {
+            params.timeout = std::stoi(argv[++i]);
+        } else if (arg == "-c" || arg == "--capture") {
+            params.capture_id = std::stoi(argv[++i]);
+        } else if (arg == "-l" || arg == "--language") {
+            params.language = argv[++i];
+        } else if (arg == "-ng" || arg == "--no-gpu") {
+            params.use_gpu = false;
+        } else {
+            fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
+            mic_print_usage(argc, argv, params);
+            exit(1);
+        }
+    }
+    return true;
+}
 #include "whisper.h"
 #include "common.h"
 #define MINIAUDIO_IMPLEMENTATION
@@ -20,7 +70,7 @@ struct RecordingConfig {
     static constexpr int PROGRESS_MS = 100;           
     static constexpr int UI_LOOP_MS = 10;             
     static constexpr int SELECT_TIMEOUT_MS = 20;      
-    static constexpr int SMOOTH_FINISH_MS = 1500;     
+    static constexpr int SMOOTH_FINISH_MS = 300;
     static constexpr int CLOCK_TOLERANCE_MS = 350;    
     // 用于清理控制台残余的空格
     static const char* CLEAR_LINE; 
@@ -61,22 +111,37 @@ void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uin
 
 int main(int argc, char** argv) {
     signal(SIGINT, signal_handler);
-    if (argc < 2) return 1;
-    if (argc >= 3) g_timeout_limit = atoi(argv[2]);
+    mic_params params;
+    mic_params_parse(argc, argv, params);
+    g_timeout_limit = params.timeout;
 
     struct whisper_context_params cparams = whisper_context_default_params();
-    cparams.use_gpu = true;
-    struct whisper_context* ctx = whisper_init_from_file_with_params(argv[1], cparams);
+    cparams.use_gpu = params.use_gpu;
+    struct whisper_context* ctx = whisper_init_from_file_with_params(params.model.c_str(), cparams);
+    if (!ctx) {
+        fprintf(stderr, "Failed to load model from '%s'\n", params.model.c_str());
+        return 1;
+    }
 
-    ma_context context; ma_context_init(NULL, 0, NULL, &context);
+    ma_context context;
+    if (ma_context_init(NULL, 0, NULL, &context) != MA_SUCCESS) {
+        fprintf(stderr, "Failed to initialize miniaudio context\n");
+        whisper_free(ctx);
+        return 1;
+    }
     ma_device_info* pCapInfos; ma_uint32 capCount;
-    ma_context_get_devices(&context, NULL, NULL, &pCapInfos, &capCount);
-    
+    if (ma_context_get_devices(&context, NULL, NULL, &pCapInfos, &capCount) != MA_SUCCESS || capCount == 0) {
+        fprintf(stderr, "No audio capture devices found\n");
+        ma_context_uninit(&context);
+        whisper_free(ctx);
+        return 1;
+    }
+
     printf("\n📜 可用麦克风列表:\n");
     for (ma_uint32 i = 0; i < capCount; ++i) printf("  [%u] %s\n", i, pCapInfos[i].name);
-    printf("👉 请输入设备 ID (默认5): ");
-    ma_uint32 dev_id = 5; 
-    if(scanf("%u", &dev_id) != 1) dev_id = 5;
+    printf("👉 请输入设备 ID (默认%d): ", params.capture_id);
+    ma_uint32 dev_id = params.capture_id;
+    if(scanf("%u", &dev_id) != 1) dev_id = params.capture_id;
     clear_stdin();
 
     ma_device_config devCfg = ma_device_config_init(ma_device_type_capture);
@@ -84,8 +149,20 @@ int main(int argc, char** argv) {
     devCfg.sampleRate = RecordingConfig::SAMPLE_RATE; devCfg.dataCallback = data_callback;
     if (dev_id < capCount) devCfg.capture.pDeviceID = &pCapInfos[dev_id].id;
 
-    ma_device device; ma_device_init(&context, &devCfg, &device);
-    ma_device_start(&device);
+    ma_device device;
+    if (ma_device_init(&context, &devCfg, &device) != MA_SUCCESS) {
+        fprintf(stderr, "Failed to initialize audio capture device\n");
+        ma_context_uninit(&context);
+        whisper_free(ctx);
+        return 1;
+    }
+    if (ma_device_start(&device) != MA_SUCCESS) {
+        fprintf(stderr, "Failed to start audio capture device\n");
+        ma_device_uninit(&device);
+        ma_context_uninit(&context);
+        whisper_free(ctx);
+        return 1;
+    }
 
     while (!exit_program.load()) {
         printf("\n=============================================\n");
@@ -136,24 +213,36 @@ int main(int argc, char** argv) {
             }
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(RecordingConfig::SMOOTH_FINISH_MS));
-        is_recording.store(false); 
+
+        // Stop progress meter immediately
+        is_recording.store(false);
         if (progress_thread.joinable()) progress_thread.join();
+        // Now wait for smooth finish (buffer tail)
+        std::this_thread::sleep_for(std::chrono::milliseconds(RecordingConfig::SMOOTH_FINISH_MS));
 
         std::vector<float> captured;
         { std::lock_guard<std::mutex> lock(buffer_mutex); captured = audio_buffer; }
-        
+
+        if (captured.empty()) {
+            printf("\n⚠️  没有录制到音频，跳过识别。\n");
+            continue;
+        }
+
         printf("\n🔍 正在识别 (音频长度: %.2fs)...", (float)captured.size()/RecordingConfig::SAMPLE_RATE);
         auto start_recognition = std::chrono::steady_clock::now();
-        
+
         whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-        wparams.language = "zh";
-        // 【正式固化】简体中文引导词
-        wparams.initial_prompt = "以下是普通话，使用简体中文输出。"; 
+        wparams.language = params.language.c_str();
+        if (params.language == "zh") {
+            wparams.initial_prompt = "以下是普通话，使用简体中文输出。";
+        }
         wparams.n_threads = 4;
-        
-        whisper_full(ctx, wparams, captured.data(), captured.size());
-        
+
+        if (whisper_full(ctx, wparams, captured.data(), captured.size()) != 0) {
+            printf("\n❌ 语音识别失败。\n");
+            continue;
+        }
+
         int n_segments = whisper_full_n_segments(ctx);
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start_recognition).count();
         printf("\n📝 识别结果(%.2f秒)：", elapsed/1000.0f);
