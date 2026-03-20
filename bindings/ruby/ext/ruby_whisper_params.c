@@ -240,6 +240,15 @@ rb_whisper_params_mark(void *p)
 void
 ruby_whisper_params_free(ruby_whisper_params *rwp)
 {
+  if (rwp->params.language) {
+    ruby_xfree((void *)rwp->params.language);
+  }
+  if (rwp->params.initial_prompt) {
+    ruby_xfree((void *)rwp->params.initial_prompt);
+  }
+  if (rwp->params.vad_model_path) {
+    ruby_xfree((void *)rwp->params.vad_model_path);
+  }
 }
 
 void
@@ -276,6 +285,15 @@ ruby_whisper_params_allocate(VALUE klass)
   ruby_whisper_params *rwp;
   VALUE obj = TypedData_Make_Struct(klass, ruby_whisper_params, &ruby_whisper_params_type, rwp);
   rwp->params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+  if (rwp->params.language != NULL) {
+    rwp->params.language = ruby_strdup(rwp->params.language);
+  }
+  if (rwp->params.initial_prompt != NULL) {
+    rwp->params.initial_prompt = ruby_strdup(rwp->params.initial_prompt);
+  }
+  if (rwp->params.vad_model_path != NULL) {
+    rwp->params.vad_model_path = ruby_strdup(rwp->params.vad_model_path);
+  }
   rwp->diarize = false;
   rwp->vad_params = TypedData_Wrap_Struct(cVADParams, &ruby_whisper_vad_params_type, (void *)&rwp->params.vad_params);
   rwp->new_segment_callback_container = rb_whisper_callback_container_allocate();
@@ -296,10 +314,12 @@ ruby_whisper_params_set_language(VALUE self, VALUE value)
 {
   ruby_whisper_params *rwp;
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
+  ruby_xfree((void *)rwp->params.language);
+  rwp->params.language = NULL;
   if (value == Qfalse || value == Qnil) {
-    rwp->params.language = "auto";
+    rwp->params.language = ruby_strdup("auto");
   } else {
-    rwp->params.language = StringValueCStr(value);
+    rwp->params.language = ruby_strdup(StringValueCStr(value));
   }
   return value;
 }
@@ -608,7 +628,13 @@ ruby_whisper_params_set_initial_prompt(VALUE self, VALUE value)
 {
   ruby_whisper_params *rwp;
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
-  rwp->params.initial_prompt = StringValueCStr(value);
+  ruby_xfree((void *)rwp->params.initial_prompt);
+  rwp->params.initial_prompt = NULL;
+  if (NIL_P(value)) {
+    rwp->params.initial_prompt = NULL;
+  } else {
+    rwp->params.initial_prompt = ruby_strdup(StringValueCStr(value));
+  }
   return value;
 }
 /*
@@ -1103,12 +1129,14 @@ ruby_whisper_params_set_vad_model_path(VALUE self, VALUE value)
 {
   ruby_whisper_params *rwp;
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
+  ruby_xfree((void *)rwp->params.vad_model_path);
+  rwp->params.vad_model_path = NULL;
   if (NIL_P(value)) {
     rwp->params.vad_model_path = NULL;
     return value;
   }
   VALUE path = ruby_whisper_normalize_model_path(value);
-  rwp->params.vad_model_path = StringValueCStr(path);
+  rwp->params.vad_model_path = ruby_strdup(StringValueCStr(path));
   return value;
 }
 
