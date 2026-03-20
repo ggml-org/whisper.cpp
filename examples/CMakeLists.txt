@@ -118,7 +118,9 @@ else()
     endif (WHISPER_SDL2)
 
     add_subdirectory(deprecation-warning)
-    add_subdirectory(mic)
+    if (UNIX AND NOT WIN32)
+        add_subdirectory(mic)
+    endif()
 endif()
 
 if (WHISPER_SDL2)
