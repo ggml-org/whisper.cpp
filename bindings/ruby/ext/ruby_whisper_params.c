@@ -257,7 +257,7 @@ rb_whisper_params_free(void *p)
   ruby_whisper_params *rwp = (ruby_whisper_params *)p;
   // How to free user_data and callback only when not referred to by others?
   ruby_whisper_params_free(rwp);
-  free(rwp);
+  xfree(rwp);
 }
 
 static size_t
