@@ -249,6 +249,11 @@ ruby_whisper_params_free(ruby_whisper_params *rwp)
   if (rwp->params.vad_model_path) {
     ruby_xfree((void *)rwp->params.vad_model_path);
   }
+
+  xfree(rwp->new_segment_callback_container);
+  xfree(rwp->progress_callback_container);
+  xfree(rwp->encoder_begin_callback_container);
+  xfree(rwp->abort_callback_container);
 }
 
 void
