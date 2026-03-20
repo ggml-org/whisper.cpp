@@ -122,7 +122,7 @@ int main(int argc, char ** argv) {
         return 3;
     }
 
-    // Get the the vad segements using the probabilities that have been computed
+    // Get the the vad segments using the probabilities that have been computed
     // previously and stored in the whisper_vad_context.
     struct whisper_vad_params params = whisper_vad_default_params();
     params.threshold = cli_params.vad_threshold;

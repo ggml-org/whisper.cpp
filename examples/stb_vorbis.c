@@ -90,7 +90,7 @@ extern "C" {
 
 // Individual stb_vorbis* handles are not thread-safe; you cannot decode from
 // them from multiple threads at the same time. However, you can have multiple
-// stb_vorbis* handles and decode from them independently in multiple thrads.
+// stb_vorbis* handles and decode from them independently in multiple threads.
 
 
 ///////////   MEMORY ALLOCATION

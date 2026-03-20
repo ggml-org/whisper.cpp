@@ -8678,7 +8678,7 @@ static ggml_tensor * dtw_and_backtrace(ggml_context * ctx, ggml_tensor * x) {
     whisper_set_f32_nd(cost, 0, 0, 0, 0, 0.0);
 
     // dtw
-    // supposedly can be optmized by computing diagonals in parallel ?
+    // supposedly can be optimized by computing diagonals in parallel ?
     // Not sure it is worth it since x will be GENERATED_TOKENS*1500 size at most.
     for (int64_t j = 1; j < M + 1; ++j) {
         for (int64_t i = 1; i < N + 1; ++i) {
@@ -8806,7 +8806,7 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
     WHISPER_ASSERT(n_frames <= n_audio_ctx * 2);
     WHISPER_ASSERT(ctx->params.dtw_aheads_preset != WHISPER_AHEADS_NONE);
 
-    // FIXME: Allocating mem everytime we call this func
+    // FIXME: Allocating mem every time we call this func
     // Our ggml buffer should be pre-allocated somewhere during init and reused
     // when we call this function
     struct ggml_init_params gparams = {
@@ -8877,7 +8877,7 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
     }
 
     // Normalize - in original OpenAI code, this is done over dim=-2. In this case,
-    // we already permuted N_TOKENS dimension to columns on last loop, becase ggml_norm
+    // we already permuted N_TOKENS dimension to columns on last loop, because ggml_norm
     // operates over columns. Afterwards, permute to a shape that facilitates mean
     // operation (after median filter)
     // IN: Tensor with N_TOKENS*N_AUDIO_TOKENS*N_ALIGNMENT_HEADS dims
