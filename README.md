@@ -83,7 +83,7 @@ cmake -B build
 cmake --build build -j --config Release
 
 # transcribe an audio file
-./build/bin/whisper-cli -f samples/jfk.wav
+./build/bin/Release/whisper-cli -f samples/jfk.wav
 ```
 
 ---
