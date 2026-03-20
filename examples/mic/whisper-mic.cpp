@@ -63,7 +63,7 @@ static bool mic_params_parse(int argc, char ** argv, mic_params & params) {
 #include <sys/select.h>
 
 // =============================================
-// 工程常量：全局统一管理
+// Shared constants
 // =============================================
 struct RecordingConfig {
     static constexpr int SAMPLE_RATE = 16000;
@@ -72,7 +72,7 @@ struct RecordingConfig {
     static constexpr int SELECT_TIMEOUT_MS = 20;      
     static constexpr int SMOOTH_FINISH_MS = 300;
     static constexpr int CLOCK_TOLERANCE_MS = 350;    
-    // 用于清理控制台残余的空格
+    // Used to clear leftover characters in terminal progress rendering.
     static const char* CLEAR_LINE; 
 };
 const char* RecordingConfig::CLEAR_LINE = "                                        ";
@@ -137,9 +137,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    printf("\n📜 可用麦克风列表:\n");
+    printf("\n📜 Available microphones:\n");
     for (ma_uint32 i = 0; i < capCount; ++i) printf("  [%u] %s\n", i, pCapInfos[i].name);
-    printf("👉 请输入设备 ID (默认%d): ", params.capture_id);
+    printf("👉 Enter device ID (default %d): ", params.capture_id);
     ma_uint32 dev_id = params.capture_id;
     if(scanf("%u", &dev_id) != 1) dev_id = params.capture_id;
     clear_stdin();
@@ -166,11 +166,11 @@ int main(int argc, char** argv) {
 
     while (!exit_program.load()) {
         printf("\n=============================================\n");
-        printf("🎙️  操作提示 (自动断开设置: %d 秒):\n", g_timeout_limit);
-        printf("  ▶ [回车键] : 开始录制\n");
-        printf("  ■ [回车键] : 停止录制 (含 1.5 秒补录)\n");
+        printf("🎙️  Controls (auto stop after %d seconds):\n", g_timeout_limit);
+        printf("  ▶ [Enter] : start recording\n");
+        printf("  ■ [Enter] : stop recording (with 1.5s tail capture)\n");
         printf("=============================================\n");
-        printf("👉 等待指令...");
+        printf("👉 Waiting for input...");
         fflush(stdout);
 
         while (!check_stdin_ready(100) && !exit_program.load());
@@ -182,11 +182,11 @@ int main(int argc, char** argv) {
         is_recording.store(true);
         auto start_time = std::chrono::steady_clock::now();
 
-        printf("\n🎙️  录制中...\n");
+        printf("\n🎙️  Recording...\n");
 
         std::thread progress_thread([&]() {
             while (is_recording.load()) {
-                printf("\r%s\r📊 进度: %d 秒", RecordingConfig::CLEAR_LINE, recorded_seconds.load());
+                printf("\r%s\r📊 Elapsed: %d s", RecordingConfig::CLEAR_LINE, recorded_seconds.load());
                 fflush(stdout);
                 std::this_thread::sleep_for(std::chrono::milliseconds(RecordingConfig::PROGRESS_MS));
             }
@@ -199,15 +199,15 @@ int main(int argc, char** argv) {
 
             if (check_stdin_ready(RecordingConfig::UI_LOOP_MS)) {
                 if (getchar() == '\n') {
-                    // 使用 \r 覆盖并清理残余
-                    printf("\r%s\r🛑 手动停止，正在收尾以确保不丢字...", RecordingConfig::CLEAR_LINE);
+                    // Use carriage return to overwrite and clear the previous line.
+                    printf("\r%s\r🛑 Stopping manually, finalizing capture...", RecordingConfig::CLEAR_LINE);
                     fflush(stdout);
                     trigger_stop = true;
                 }
             } 
             else if (elapsed >= (g_timeout_limit * 1000 + RecordingConfig::CLOCK_TOLERANCE_MS)) {
-                printf("\r%s\r📊 进度: %d 秒", RecordingConfig::CLEAR_LINE, g_timeout_limit);
-                printf("\n⏱️  时间已到 (%d秒)，正在自动收尾...", g_timeout_limit);
+                printf("\r%s\r📊 Elapsed: %d s", RecordingConfig::CLEAR_LINE, g_timeout_limit);
+                printf("\n⏱️  Time limit reached (%d s), finalizing capture...", g_timeout_limit);
                 fflush(stdout);
                 trigger_stop = true;
             }
@@ -224,28 +224,28 @@ int main(int argc, char** argv) {
         { std::lock_guard<std::mutex> lock(buffer_mutex); captured = audio_buffer; }
 
         if (captured.empty()) {
-            printf("\n⚠️  没有录制到音频，跳过识别。\n");
+            printf("\n⚠️  No audio captured, skipping recognition.\n");
             continue;
         }
 
-        printf("\n🔍 正在识别 (音频长度: %.2fs)...", (float)captured.size()/RecordingConfig::SAMPLE_RATE);
+        printf("\n🔍 Running recognition (audio length: %.2fs)...", (float)captured.size()/RecordingConfig::SAMPLE_RATE);
         auto start_recognition = std::chrono::steady_clock::now();
 
         whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
         wparams.language = params.language.c_str();
         if (params.language == "zh") {
-            wparams.initial_prompt = "以下是普通话，使用简体中文输出。";
+            wparams.initial_prompt = "The following speech is Mandarin Chinese. Output in Simplified Chinese.";
         }
         wparams.n_threads = 4;
 
         if (whisper_full(ctx, wparams, captured.data(), captured.size()) != 0) {
-            printf("\n❌ 语音识别失败。\n");
+            printf("\n❌ Speech recognition failed.\n");
             continue;
         }
 
         int n_segments = whisper_full_n_segments(ctx);
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start_recognition).count();
-        printf("\n📝 识别结果(%.2f秒)：", elapsed/1000.0f);
+        printf("\n📝 Recognition result (%.2f s):", elapsed/1000.0f);
         for (int i = 0; i < n_segments; ++i) {
             printf("\n   %s", whisper_full_get_segment_text(ctx, i));
         }
