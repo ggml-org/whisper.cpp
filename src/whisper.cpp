@@ -921,6 +921,7 @@ struct whisper_state {
     int32_t exp_n_audio_ctx = 0; // 0 - use default
 
     whisper_vad_context * vad_context = nullptr;
+    bool vad_external = false;
 
     struct vad_segment_info {
         int64_t orig_start;
@@ -3835,7 +3836,7 @@ void whisper_free_state(struct whisper_state * state) {
         // [EXPERIMENTAL] Token-level timestamps with DTW
         aheads_masks_free(state->aheads_masks);
 
-        if (state->vad_context != nullptr) {
+        if (state->vad_context != nullptr && !state->vad_external) {
             whisper_vad_free(state->vad_context);
             state->vad_context = nullptr;
         }
@@ -5465,6 +5466,22 @@ void whisper_vad_free_segments(whisper_vad_segments * segments) {
     if (segments) {
         delete segments;
     }
+}
+
+void whisper_state_set_vad(
+        struct whisper_state * state,
+        struct whisper_vad_context * vctx) {
+    if (state->vad_context != nullptr && !state->vad_external) {
+        whisper_vad_free(state->vad_context);
+    }
+    state->vad_context = vctx;
+    state->vad_external = (vctx != nullptr);
+}
+
+void whisper_set_vad(
+        struct whisper_context * ctx,
+        struct whisper_vad_context * vctx) {
+    whisper_state_set_vad(ctx->state, vctx);
 }
 
 //////////////////////////////////
