@@ -7,6 +7,8 @@
  * Copyright (C) 2024       William Tambellini <william.tambellini@gmail.com>
  */
 
+#include "compat_win.h"
+
 // Just for conveninent C++ API
 #include <vector>
 #include <string>
@@ -20,8 +22,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <unistd.h>
-#include <sys/mman.h>
 
 extern "C" {
 #include <libavutil/opt.h>
@@ -325,19 +325,19 @@ static int decode_audio(struct audio_buffer *audio_buf, s16 **data, int *size)
 // ifname: input file path
 // owav_data: in mem wav file. Can be forwarded as it to whisper/drwav
 // return 0 on success
-int ffmpeg_decode_audio(const std::string &ifname, std::vector<uint8_t>& owav_data) {
+bool ffmpeg_decode_audio(const std::string &ifname, std::vector<uint8_t>& owav_data) {
     LOG("ffmpeg_decode_audio: %s\n", ifname.c_str());
     int ifd = open(ifname.c_str(), O_RDONLY);
     if (ifd == -1) {
         fprintf(stderr, "Couldn't open input file %s\n", ifname.c_str());
-        return -1;
+        return false;
     }
     u8 *ibuf = NULL;
     size_t ibuf_size;
     int err = map_file(ifd, &ibuf, &ibuf_size);
     if (err) {
         LOG("Couldn't map input file %s\n", ifname.c_str());
-        return err;
+        return false;
     }
     LOG("Mapped input file: %s size: %d\n", ibuf, (int) ibuf_size);
     struct audio_buffer inaudio_buf;
@@ -351,7 +351,7 @@ int ffmpeg_decode_audio(const std::string &ifname, std::vector<uint8_t>& owav_da
     LOG("decode_audio returned %d \n", err);
     if (err != 0) {
         LOG("decode_audio failed\n");
-        return err;
+        return false;
     }
     LOG("decode_audio output size: %d\n", osize);
 
@@ -364,5 +364,5 @@ int ffmpeg_decode_audio(const std::string &ifname, std::vector<uint8_t>& owav_da
     // the data:
     memcpy(owav_data.data() + sizeof(wave_hdr), odata, osize* sizeof(s16));
 
-    return 0;
+    return true;
 }
