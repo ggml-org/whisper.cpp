@@ -48,6 +48,12 @@ if (WHISPER_OPENVINO)
     find_package(OpenVINO REQUIRED COMPONENTS Runtime)
 endif()
 
+if (WHISPER_MKL)
+    find_package(MKL REQUIRED)
+    set(MKL_INCLUDE_DIRS "${MKLROOT}/include")
+    set(MKL_LIBRARIES "${MKLROOT}/lib/intel64")
+endif()
+
 #
 # libraries
 #
@@ -138,7 +144,9 @@ if (WHISPER_OPENVINO)
 endif()
 
 if (WHISPER_MKL)
-    target_link_libraries(whisper PRIVATE MKL::MKL)
+    include_directories(${MKL_INCLUDE_DIRS})
+    link_directories(${MKL_LIBRARIES})
+    target_link_libraries(whisper PRIVATE mkl_rt)
 endif()
 
 if (BUILD_SHARED_LIBS)
