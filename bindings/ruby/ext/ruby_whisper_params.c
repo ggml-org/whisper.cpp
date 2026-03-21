@@ -29,6 +29,7 @@
 
 extern VALUE cParams;
 extern VALUE cVADParams;
+extern VALUE mWhisper;
 
 extern ID id_call;
 
@@ -186,6 +187,35 @@ static bool abort_callback(void * user_data) {
   return false;
 }
 
+static void
+check_thread_safety(ruby_whisper_params *rwp, VALUE *context, int n_processors)
+{
+  if (n_processors == 1) {
+    return;
+  }
+
+  if (!NIL_P(rwp->new_segment_callback_container->callback) || 0 != RARRAY_LEN(rwp->new_segment_callback_container->callbacks)) {
+    rb_raise(rb_eRuntimeError, "new segment callback not supported on parallel transcription");
+  }
+
+  if (!NIL_P(rwp->progress_callback_container->callback) || 0 != RARRAY_LEN(rwp->progress_callback_container->callbacks)) {
+    rb_raise(rb_eRuntimeError, "progress callback not supported on parallel transcription");
+  }
+
+  if (!NIL_P(rwp->encoder_begin_callback_container->callback) || 0 != RARRAY_LEN(rwp->encoder_begin_callback_container->callbacks)) {
+    rb_raise(rb_eRuntimeError, "encoder begin callback not supported on parallel transcription");
+  }
+
+  if (!NIL_P(rwp->abort_callback_container->callback) || 0 != RARRAY_LEN(rwp->abort_callback_container->callbacks)) {
+    rb_raise(rb_eRuntimeError, "abort callback not supported on parallel transcription");
+  }
+
+  VALUE log_callback = rb_iv_get(mWhisper, "log_callback");
+  if (!NIL_P(log_callback)) {
+    rb_raise(rb_eRuntimeError, "log callback not supported for parallel transcription");
+  }
+}
+
 static void register_callbacks(ruby_whisper_params * rwp, VALUE * context) {
   if (!NIL_P(rwp->new_segment_callback_container->callback) || 0 != RARRAY_LEN(rwp->new_segment_callback_container->callbacks)) {
     rwp->new_segment_callback_container->context = context;
@@ -219,9 +249,13 @@ static void set_vad_params(ruby_whisper_params *rwp)
   rwp->params.vad_params = rwvp->params;
 }
 
+/*
+  TODO: Set abort callback to trap SIGINT and SIGTERM
+*/
 void
-prepare_transcription(ruby_whisper_params *rwp, VALUE *context)
+prepare_transcription(ruby_whisper_params *rwp, VALUE *context, int n_processors)
 {
+  check_thread_safety(rwp, context, n_processors);
   register_callbacks(rwp, context);
   set_vad_params(rwp);
 }
