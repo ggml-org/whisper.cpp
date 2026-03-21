@@ -37,7 +37,7 @@ module Whisper
   def self.lang_id: (string name) -> Integer
   def self.lang_str: (Integer id) -> String
   def self.lang_str_full: (Integer id) -> String
-  def self.log_set: (log_callback, Object? user_data) -> log_callback
+  def self.log_set: (log_callback?, Object? user_data) -> log_callback
   def self.system_info_str: () -> String
 
   class Context
