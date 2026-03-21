@@ -44,7 +44,7 @@ args = parser.parse_args()
 if not args.quick:
     import importlib.util
     if importlib.util.find_spec("elevenlabs") is None:
-        print("elevenlabs library is not installed, you can install it to your enviroment using 'pip install elevenlabs'")
+        print("elevenlabs library is not installed, you can install it to your environment using 'pip install elevenlabs'")
         sys.exit()
 
 from elevenlabs import voices, generate, play, save

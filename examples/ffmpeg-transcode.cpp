@@ -7,7 +7,7 @@
  * Copyright (C) 2024       William Tambellini <william.tambellini@gmail.com>
  */
 
-// Just for conveninent C++ API
+// Just for convenient C++ API
 #include <vector>
 #include <string>
 

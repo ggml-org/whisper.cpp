@@ -31,7 +31,7 @@ The vim plugin was designed to closely follow the mnemonics of vim
 
 
 Keys corresponding to a string use that spoken value normally and when a motion is expected, but use the key itself when a character is expected.  
-Keys corresponding to a dict, like `i`, can have manual difinitions given to each possible commandset.
+Keys corresponding to a dict, like `i`, can have manual definitions given to each possible commandset.
 
 0 is normal (insert), 1 is motion (inside), 2 is it's usage as a single key ([till] i), and 3 is it's usage in an area selection (s -> [around] sentence)
 
@@ -89,7 +89,7 @@ Will return an error if any of the commands in the commandset have duplicate tok
 
 `guided`  
 `params.commandset_index` An index returned by a corresponding commandset registration. If not set, the most recently registered commandset is used.
-`params.timestamp` A positive unsigned integer which designates a point in time which audio should begin processing from. If left blank, the start point of audio processing will be the moment the message is recieved. This should be left blank unless you have a timestamp from a previous response.  
+`params.timestamp` A positive unsigned integer which designates a point in time which audio should begin processing from. If left blank, the start point of audio processing will be the moment the message is received. This should be left blank unless you have a timestamp from a previous response.  
 Responds with  
 `result.command_index` The numerical index (starting from 0) of the detected command in the selected commandset
 `result.command_text` A string containing the command as provided in the commandset
@@ -98,7 +98,7 @@ Responds with
 `unguided`  
 `params.no_context` Sets the corresponding whisper `no_context` param. Defaults to true. Might provide more accurate results for consecutive unguided transcriptions if those after the first are set to false.
 `params.prompt` If provided, sets the initial prompt used during transcription.
-`params.timestamp` A positive unsigned integer which designates a point in time which audio should begin processing from. If left blank, the start point of audio processing will be the moment the message is recieved. This should be left blank unless you have a timestamp from a previous response.  
+`params.timestamp` A positive unsigned integer which designates a point in time which audio should begin processing from. If left blank, the start point of audio processing will be the moment the message is received. This should be left blank unless you have a timestamp from a previous response.  
 Responds with  
 `result.transcription` A string containing the transcribed text.  N.B. This will almost always start with a space due to how text is tokenized.
 `result.timestamp` A positive unsigned integer that designates the point in time which audio stopped being processed at. Pass this timestamp back in a subsequent message to mask the latency of transcription.

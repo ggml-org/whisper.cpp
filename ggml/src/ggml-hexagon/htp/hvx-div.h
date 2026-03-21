@@ -86,7 +86,7 @@ static inline void hvx_div_scalar_f16_uu(uint8_t * restrict dst, const uint8_t *
     hvx_div_scaler_f16_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u);
 }
 
-// Compute div by using hvx_vec_inverse_f32_guard. Requires first by exapnding fp32 to fp16 and convert the result back to fp32.
+// Compute div by using hvx_vec_inverse_f32_guard. Requires first by expanding fp32 to fp16 and convert the result back to fp32.
 static inline HVX_Vector hvx_vec_div_f16_using_f32(HVX_Vector vec1, HVX_Vector vec2, HVX_Vector f32_nan_inf_mask, HVX_Vector vec_hf_one_1_0) {
 #if __HVX_ARCH__ < 79
     // Convert first input to fp32
