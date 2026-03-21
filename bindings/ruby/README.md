@@ -383,16 +383,16 @@ If you can prepare audio data as C array and export it as a MemoryView, whisperc
 
 ```ruby
 require "torchaudio"
-require "arrow-numo-narray"
+require "ndav/torch/tensor"
 require "whisper"
 
 waveform, sample_rate = TorchAudio.load("test/fixtures/jfk.wav")
-# Convert Torch::Tensor to Arrow::Array via Numo::NArray
-samples = waveform.squeeze.numo.to_arrow.to_arrow_array
+# Convert Torch::Tensor to NDAV
+samples = waveform.squeeze.to_ndav
 
 whisper = Whisper::Context.new("base")
 whisper
-  # Arrow::Array exports MemoryView
+  # NDAV exports MemoryView
   .full(Whisper::Params.new, samples)
 ```
 
