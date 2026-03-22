@@ -116,8 +116,8 @@ jobs:
 
 
   ubuntu-22:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci') }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -148,8 +148,8 @@ jobs:
             cmake --build build --config Release -j $(nproc)'
 
   ubuntu-22-arm64:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci') }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -180,8 +180,8 @@ jobs:
             cmake --build build --config Release -j $(nproc)'
 
   ubuntu-22-arm-v7:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci') }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -212,8 +212,8 @@ jobs:
             cmake --build build --config Release -j $(nproc)'
 
   macOS-latest:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci') }}
     runs-on: macOS-latest
 
     strategy:
@@ -269,8 +269,8 @@ jobs:
 #            cmake --build build --config Release
 
   ubuntu-22-gcc:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci') }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -303,8 +303,8 @@ jobs:
             ctest -L gh --output-on-failure'
 
   ubuntu-22-gcc-arm64:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci') }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -337,8 +337,8 @@ jobs:
             ctest -L gh --output-on-failure'
 
   ubuntu-22-gcc-arm-v7:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci') }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -371,8 +371,8 @@ jobs:
             ctest -L gh --output-on-failure'
 
   ubuntu-22-clang:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci') }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -408,8 +408,8 @@ jobs:
             ctest -L gh --output-on-failure'
 
   ubuntu-22-gcc-sanitized:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci') }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -443,9 +443,110 @@ jobs:
             make
             ctest -L gh --output-on-failure'
 
-  ubuntu-22-cmake-sycl:
+  linux-x64-cpu:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
             github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-latest
+    needs: determine-tag
+
+    strategy:
+      matrix:
+        build: [Release]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git libsdl2-dev pkg-config
+
+      - name: Configure CMake
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
+            -DWHISPER_BUILD_EXAMPLES=ON \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_SERVER=ON
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.build }} -j$(nproc)
+
+      - name: Package binaries
+        run: |
+          PACKAGE_NAME="whisper-bin-linux-x64-cpu"
+          mkdir -p "$PACKAGE_NAME"
+          cp -r build/bin/* "$PACKAGE_NAME/" 2>/dev/null || true
+          find build -name "*.so*" -exec cp {} "$PACKAGE_NAME/" \; 2>/dev/null || true
+          zip -r "${PACKAGE_NAME}.zip" "$PACKAGE_NAME"
+
+      - name: Upload binaries
+        if: ${{ needs.determine-tag.outputs.should_release }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: whisper-bin-linux-x64-cpu.zip
+          path: whisper-bin-linux-x64-cpu.zip
+
+  linux-x64-vulkan:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-latest
+    needs: determine-tag
+
+    strategy:
+      matrix:
+        build: [Release]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git libsdl2-dev pkg-config \
+            libvulkan-dev vulkan-tools
+          sudo apt-get install -y glslc || sudo apt-get install -y shaderc
+
+      - name: Configure CMake (Vulkan)
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
+            -DGGML_VULKAN=ON \
+            -DWHISPER_BUILD_EXAMPLES=ON \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_SERVER=ON
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.build }} -j$(nproc)
+
+      - name: Validate Vulkan artifacts
+        run: |
+          find build -iname "*vulkan*" | sort || true
+          VULKAN_FILES=$(find build -type f \( -iname "*vulkan*.so*" -o -iname "*vulkan*" \) 2>/dev/null | wc -l)
+          if [ "$VULKAN_FILES" -eq 0 ]; then
+            echo "WARNING: No Vulkan-related build artifacts found"
+          fi
+
+      - name: Package binaries
+        run: |
+          PACKAGE_NAME="whisper-bin-linux-x64-vulkan"
+          mkdir -p "$PACKAGE_NAME"
+          cp -r build/bin/* "$PACKAGE_NAME/" 2>/dev/null || true
+          find build -name "*.so*" -exec cp {} "$PACKAGE_NAME/" \; 2>/dev/null || true
+          zip -r "${PACKAGE_NAME}.zip" "$PACKAGE_NAME"
+
+      - name: Upload binaries
+        if: ${{ needs.determine-tag.outputs.should_release }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: whisper-bin-linux-x64-vulkan.zip
+          path: whisper-bin-linux-x64-vulkan.zip
+
+  ubuntu-22-cmake-sycl:
+    if: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci') }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -496,8 +597,8 @@ jobs:
           cmake --build . --config Release -j $(nproc)
 
   ubuntu-22-cmake-sycl-fp16:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci') }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -548,8 +649,8 @@ jobs:
           cmake --build . --config Release -j $(nproc)
 
   windows-msys2:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci') }}
     runs-on: windows-latest
 
     strategy:
@@ -594,8 +695,8 @@ jobs:
             cmake --build build --config ${{ matrix.build }} -j $(nproc)
 
   windows:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci') }}
     runs-on: windows-latest
     needs: determine-tag
 
@@ -688,8 +789,8 @@ jobs:
           path: whisper-bin-${{ matrix.arch }}.zip
 
   windows-blas:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci') }}
     runs-on: windows-latest
 
     strategy:
@@ -774,8 +875,8 @@ jobs:
           path: whisper-blas-bin-${{ matrix.arch }}.zip
 
   windows-cublas:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci') }}
     runs-on: windows-2022
     needs: determine-tag
     strategy:
@@ -982,9 +1083,74 @@ jobs:
           name: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
           path: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
 
-  emscripten:
+  windows-vulkan:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
             github.event.inputs.run_type == 'full-ci' }}
+    runs-on: windows-latest
+    needs: determine-tag
+
+    strategy:
+      matrix:
+        build: [Release]
+        arch: [x64]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          winget install --id KhronosGroup.VulkanSDK -e --silent --accept-package-agreements --accept-source-agreements
+          $sdkDir = Get-ChildItem "C:\VulkanSDK" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $sdkDir) { throw "Vulkan SDK not found under C:\VulkanSDK after install" }
+          "VULKAN_SDK=$($sdkDir.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "VULKAN_SDK=$($sdkDir.FullName)"
+
+      - name: Fetch SDL2 and set SDL2_DIR
+        run: |
+          C:/msys64/usr/bin/wget.exe -qO sdl2.zip https://github.com/libsdl-org/SDL/releases/download/release-2.28.5/SDL2-devel-2.28.5-VC.zip
+          7z x sdl2.zip
+          echo "SDL2_DIR=$env:GITHUB_WORKSPACE/SDL2-2.28.5/cmake" >> $env:GITHUB_ENV
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $vulkan = $env:VULKAN_SDK
+          if (-not $vulkan) { $vulkan = (Get-ChildItem "C:\VulkanSDK" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName }
+          cmake -S . -B ./build -A ${{ matrix.arch }} `
+            -DCMAKE_BUILD_TYPE=${{ matrix.build }} `
+            -DBUILD_SHARED_LIBS=ON `
+            -DGGML_VULKAN=ON `
+            -DWHISPER_SDL2=ON `
+            -DVULKAN_SDK="$vulkan"
+
+      - name: Build
+        run: |
+          cd ./build
+          msbuild ALL_BUILD.vcxproj -t:build -p:configuration=${{ matrix.build }} -p:platform=${{ matrix.arch }}
+
+      - name: Copy SDL2.dll
+        run: copy "$env:SDL2_DIR/../lib/${{ matrix.arch }}/SDL2.dll" build/bin/${{ matrix.build }}
+
+      - name: Pack bin artifacts
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-bin-x64-vulkan.zip"
+
+      - name: Upload binaries
+        if: ${{ needs.determine-tag.outputs.should_release }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: whisper-bin-x64-vulkan.zip
+          path: whisper-bin-x64-vulkan.zip
+
+  emscripten:
+    if: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci') }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -1064,8 +1230,8 @@ jobs:
           name: whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip
 
   android:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci') }}
     runs-on: ubuntu-22.04
 
     steps:
@@ -1235,7 +1401,7 @@ jobs:
           ./build/bin/whisper-quantize models/ggml-tiny.en.bin models/ggml-tiny.en-q4_0.bin q4_0
 
   release:
-    if: ${{ github.event.inputs.create_release == 'true' || github.event.inputs.pre_release_tag != '' || startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ (github.event.inputs.create_release == 'true' || github.event.inputs.pre_release_tag != '' || startsWith(github.ref, 'refs/tags/v')) }}
 
     runs-on: ubuntu-latest
 
@@ -1245,6 +1411,9 @@ jobs:
       - windows
       - windows-blas
       - windows-cublas
+      - linux-x64-cpu
+      - linux-x64-vulkan
+      - windows-vulkan
 
     steps:
       - name: Clone
@@ -1303,10 +1472,10 @@ jobs:
             }
 
   coreml-base-en:
-    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
+    if: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/master') ||
             github.event.inputs.create_release == 'true' ||
             github.event.inputs.pre_release_tag != '' ||
-            startsWith(github.ref, 'refs/tags/v') }}
+            startsWith(github.ref, 'refs/tags/v')) }}
     runs-on: macos-latest
     needs: determine-tag
 
