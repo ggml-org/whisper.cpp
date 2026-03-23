@@ -1,0 +1,82 @@
+[
+  {
+    "variant": "metal-optB-final",
+    "model": "ggml-small.en.bin",
+    "audio_key": "short",
+    "audio_length_s": 30.0,
+    "runs": 5,
+    "model_load_ms": {
+      "mean": 207.068,
+      "median": 205.38,
+      "min": 200.33,
+      "max": 219.38,
+      "std_dev": 7.480011363627729
+    },
+    "first_inference_latency_s": {
+      "mean": 0.6697685502003878,
+      "median": 0.668602292003925,
+      "min": 0.6644730839907425,
+      "max": 0.6782834170007845,
+      "std_dev": 0.005164416012494588
+    },
+    "wall_clock_runtime_s": {
+      "mean": 1.0645851581997703,
+      "median": 1.061812124986318,
+      "min": 1.0563459999975748,
+      "max": 1.0721872499998426,
+      "std_dev": 0.00702706432431074
+    },
+    "full_runtime_ms": {
+      "mean": 619.78,
+      "median": 617.05,
+      "min": 615.56,
+      "max": 632.79,
+      "std_dev": 7.332230220062645
+    },
+    "throughput_audio_seconds_per_second": {
+      "mean": 28.18097234137864,
+      "median": 28.25358582186709,
+      "min": 27.980187229426953,
+      "max": 28.399785676349296,
+      "std_dev": 0.1858715130399135
+    },
+    "tokens_per_second": {
+      "mean": null,
+      "median": null,
+      "min": null,
+      "max": null,
+      "std_dev": null
+    },
+    "encode_ms": {
+      "mean": 303.914,
+      "median": 303.63,
+      "min": 302.95,
+      "max": 305.42,
+      "std_dev": 0.9182211062701704
+    },
+    "decode_ms": {
+      "mean": 76.54599999999999,
+      "median": 76.13,
+      "min": 74.1,
+      "max": 79.13,
+      "std_dev": 1.998231718294955
+    },
+    "wer": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "std_dev": 0.0
+    },
+    "cer": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "std_dev": 0.0
+    },
+    "reference_present": true,
+    "correctness_pass": true,
+    "notes": "tokens/s unavailable; encode mean=303.91 ms; decode mean=76.55 ms; wer median=0.0000; cer median=0.0000"
+  }
+]

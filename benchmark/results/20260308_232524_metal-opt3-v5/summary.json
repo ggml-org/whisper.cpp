@@ -1,0 +1,82 @@
+[
+  {
+    "variant": "metal-opt3-v5",
+    "model": "ggml-small.en.bin",
+    "audio_key": "short",
+    "audio_length_s": 30.0,
+    "runs": 5,
+    "model_load_ms": {
+      "mean": 565.146,
+      "median": 584.23,
+      "min": 410.77,
+      "max": 674.35,
+      "std_dev": 106.54555682899219
+    },
+    "first_inference_latency_s": {
+      "mean": 3.3695700165990274,
+      "median": 3.4368806249985937,
+      "min": 3.1280664169971715,
+      "max": 3.5501054159976775,
+      "std_dev": 0.16773008329754868
+    },
+    "wall_clock_runtime_s": {
+      "mean": 3.626605583402852,
+      "median": 3.6233550420001848,
+      "min": 3.614153916001669,
+      "max": 3.6432825840020087,
+      "std_dev": 0.0125376431060518
+    },
+    "full_runtime_ms": {
+      "mean": 3285.234,
+      "median": 3353.54,
+      "min": 3041.76,
+      "max": 3456.17,
+      "std_dev": 165.39089917525683
+    },
+    "throughput_audio_seconds_per_second": {
+      "mean": 8.272277162113244,
+      "median": 8.279619207131088,
+      "min": 8.234332448362029,
+      "max": 8.300697949574028,
+      "std_dev": 0.028568378220725936
+    },
+    "tokens_per_second": {
+      "mean": null,
+      "median": null,
+      "min": null,
+      "max": null,
+      "std_dev": null
+    },
+    "encode_ms": {
+      "mean": 2041.7659999999998,
+      "median": 2014.06,
+      "min": 1893.25,
+      "max": 2239.96,
+      "std_dev": 155.44123802903783
+    },
+    "decode_ms": {
+      "mean": 536.728,
+      "median": 534.39,
+      "min": 492.07,
+      "max": 582.92,
+      "std_dev": 36.58891731112032
+    },
+    "wer": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "std_dev": 0.0
+    },
+    "cer": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "std_dev": 0.0
+    },
+    "reference_present": true,
+    "correctness_pass": true,
+    "notes": "tokens/s unavailable; encode mean=2041.77 ms; decode mean=536.73 ms; wer median=0.0000; cer median=0.0000"
+  }
+]

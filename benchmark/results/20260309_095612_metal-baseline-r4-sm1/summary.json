@@ -1,0 +1,162 @@
+[
+  {
+    "variant": "metal-baseline-r4-sm1",
+    "model": "ggml-small.en.bin",
+    "audio_key": "short",
+    "audio_length_s": 30.0,
+    "runs": 5,
+    "model_load_ms": {
+      "mean": 554.888,
+      "median": 553.2,
+      "min": 402.38,
+      "max": 726.87,
+      "std_dev": 116.13307311011795
+    },
+    "first_inference_latency_s": {
+      "mean": 4.332124508201377,
+      "median": 4.2468679580051685,
+      "min": 4.016546917002415,
+      "max": 4.8114226249890635,
+      "std_dev": 0.3030733327112548
+    },
+    "wall_clock_runtime_s": {
+      "mean": 4.6481284331996,
+      "median": 4.658535082999151,
+      "min": 4.139592167004594,
+      "max": 5.013049999994109,
+      "std_dev": 0.31951728481648517
+    },
+    "full_runtime_ms": {
+      "mean": 4158.482,
+      "median": 4174.35,
+      "min": 3928.66,
+      "max": 4374.67,
+      "std_dev": 162.06934648476874
+    },
+    "throughput_audio_seconds_per_second": {
+      "mean": 6.479901806255953,
+      "median": 6.439792652733676,
+      "min": 5.9843807662072495,
+      "max": 7.247090725294319,
+      "std_dev": 0.468081267880724
+    },
+    "tokens_per_second": {
+      "mean": null,
+      "median": null,
+      "min": null,
+      "max": null,
+      "std_dev": null
+    },
+    "encode_ms": {
+      "mean": 2680.758,
+      "median": 2645.52,
+      "min": 2484.89,
+      "max": 2858.26,
+      "std_dev": 146.25191407294483
+    },
+    "decode_ms": {
+      "mean": 799.274,
+      "median": 845.75,
+      "min": 643.74,
+      "max": 938.7,
+      "std_dev": 131.5914764716925
+    },
+    "wer": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "std_dev": 0.0
+    },
+    "cer": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "std_dev": 0.0
+    },
+    "reference_present": true,
+    "correctness_pass": true,
+    "notes": "tokens/s unavailable; encode mean=2680.76 ms; decode mean=799.27 ms; wer median=0.0000; cer median=0.0000"
+  },
+  {
+    "variant": "metal-baseline-r4-sm1",
+    "model": "ggml-small.en.bin",
+    "audio_key": "medium",
+    "audio_length_s": 300.0,
+    "runs": 5,
+    "model_load_ms": {
+      "mean": 616.222,
+      "median": 631.33,
+      "min": 360.61,
+      "max": 815.5,
+      "std_dev": 179.24904984406473
+    },
+    "first_inference_latency_s": {
+      "mean": 5.254207508199033,
+      "median": 5.231885207991581,
+      "min": 4.878914832996088,
+      "max": 5.697556500002975,
+      "std_dev": 0.29269920698989305
+    },
+    "wall_clock_runtime_s": {
+      "mean": 128.57911593339813,
+      "median": 130.46477074999711,
+      "min": 114.6771394170064,
+      "max": 137.23027204199752,
+      "std_dev": 9.069832833737284
+    },
+    "full_runtime_ms": {
+      "mean": 128051.98199999999,
+      "median": 129918.17,
+      "min": 113856.09,
+      "max": 136626.59,
+      "std_dev": 9171.974677588243
+    },
+    "throughput_audio_seconds_per_second": {
+      "mean": 2.3429522270266734,
+      "median": 2.299471330654269,
+      "min": 2.1861065749996396,
+      "max": 2.616040141262109,
+      "std_dev": 0.17315636395852593
+    },
+    "tokens_per_second": {
+      "mean": null,
+      "median": null,
+      "min": null,
+      "max": null,
+      "std_dev": null
+    },
+    "encode_ms": {
+      "mean": 43349.158,
+      "median": 43643.29,
+      "min": 39975.04,
+      "max": 46089.69,
+      "std_dev": 2541.451111052503
+    },
+    "decode_ms": {
+      "mean": 74948.446,
+      "median": 76597.13,
+      "min": 64520.39,
+      "max": 80949.05,
+      "std_dev": 6452.810010307913
+    },
+    "wer": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "std_dev": 0.0
+    },
+    "cer": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "std_dev": 0.0
+    },
+    "reference_present": true,
+    "correctness_pass": true,
+    "notes": "tokens/s unavailable; encode mean=43349.16 ms; decode mean=74948.45 ms; wer median=0.0000; cer median=0.0000"
+  }
+]
