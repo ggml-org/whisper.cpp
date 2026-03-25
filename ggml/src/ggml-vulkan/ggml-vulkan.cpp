@@ -5253,12 +5253,18 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #endif
         }
 
-        if (!vk11_features.storageBuffer16BitAccess) {
-            std::cerr << "ggml_vulkan: device " << GGML_VK_NAME << idx << " does not support 16-bit storage." << std::endl;
-            throw std::runtime_error("Unsupported device");
+        if (!vk11_features.storageBuffer16BitAccess || !fp16_storage) {
+            GGML_LOG_WARN("ggml_vulkan: device %s%zu does not support 16-bit storage "
+                          "(feature=%d, extension=%d), falling back to CPU\n",
+                          GGML_VK_NAME, idx,
+                          (int)vk11_features.storageBuffer16BitAccess,
+                          (int)fp16_storage);
+            device->pipeline_failures.store(1, std::memory_order_relaxed);
         }
 
-        device_extensions.push_back("VK_KHR_16bit_storage");
+        if (fp16_storage) {
+            device_extensions.push_back("VK_KHR_16bit_storage");
+        }
 
 #ifdef GGML_VULKAN_VALIDATE
         device_extensions.push_back("VK_KHR_shader_non_semantic_info");
