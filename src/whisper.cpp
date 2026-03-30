@@ -14,6 +14,11 @@
 #include "openvino/whisper-openvino-encoder.h"
 #endif
 
+#ifdef WHISPER_DIARIZE
+#include "whisper-diarize.h"
+#include "whisper-speaker.h"
+#endif
+
 #include <atomic>
 #include <algorithm>
 #include <cassert>
@@ -467,6 +472,8 @@ struct whisper_segment {
     std::vector<whisper_token_data> tokens;
 
     bool speaker_turn_next;
+
+    int speaker_id = -1;  // Speaker assignment from diarization; -1 if diarization disabled
 };
 
 struct whisper_batch {
@@ -932,6 +939,12 @@ struct whisper_state {
     bool has_vad_segments = false;
 
     std::vector<vad_time_mapping> vad_mapping_table;
+
+    // Speaker diarization context
+    struct whisper_speaker_model * diarize_model = nullptr;
+    struct whisper_speaker_encoder * diarize_encoder = nullptr;
+    std::vector<float> diarize_embeddings;
+    struct whisper_clustering_context * diarize_clustering = nullptr;
 };
 
 struct whisper_context {
@@ -3840,6 +3853,25 @@ void whisper_free_state(struct whisper_state * state) {
             state->vad_context = nullptr;
         }
 
+#ifdef WHISPER_DIARIZE
+        // Free diarization context
+        if (state->diarize_model) {
+            whisper_speaker_free(state->diarize_model);
+            state->diarize_model = nullptr;
+        }
+
+        if (state->diarize_encoder) {
+            whisper_speaker_encoder_free(state->diarize_encoder);
+            state->diarize_encoder = nullptr;
+        }
+
+        if (state->diarize_clustering) {
+            whisper_clustering_context_free(state->diarize_clustering);
+            state->diarize_clustering = nullptr;
+        }
+
+#endif
+
         delete state;
     }
 }
@@ -5989,6 +6021,12 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
         /*.vad_model_path              =*/ nullptr,
 
         /* vad_params =*/ whisper_vad_default_params(),
+
+        // Speaker diarization defaults
+        /*.diarize                     =*/ false,
+        /*.diarize_model_path          =*/ nullptr,
+        /*.diarize_threshold           =*/ 0.5f,
+        /*.diarize_speakers            =*/ 0,
     };
 
     switch (strategy) {
@@ -6968,6 +7006,32 @@ int whisper_full_with_state(
         prompt_init.push_back(whisper_token_not(ctx));
     }
 
+#ifdef WHISPER_DIARIZE
+    // Lazy load speaker embedding model if diarization enabled
+    if (params.diarize && params.diarize_model_path) {
+        if (!state->diarize_model) {
+            state->diarize_model = whisper_speaker_load_from_file(
+                params.diarize_model_path
+            );
+            if (!state->diarize_model) {
+                WHISPER_LOG_ERROR("failed to load speaker embedding model from: %s\n",
+                                  params.diarize_model_path);
+                // Continue without diarization
+            }
+        }
+    }
+
+    // Free leftover encoder from previous calls
+    if (state->diarize_encoder) {
+        whisper_speaker_encoder_free(state->diarize_encoder);
+        state->diarize_encoder = nullptr;
+    }
+
+    if (params.diarize && state->diarize_model) {
+        state->diarize_embeddings.clear();
+    }
+#endif // WHISPER_DIARIZE
+
     int seek = seek_start;
 
     std::vector<whisper_token> prompt;
@@ -7648,6 +7712,43 @@ int whisper_full_with_state(
                             if (params.new_segment_callback && !ctx->params.dtw_token_timestamps) {
                                 params.new_segment_callback(ctx, state, n_new, params.new_segment_callback_user_data);
                             }
+
+#ifdef WHISPER_DIARIZE
+                            // Compute diarization embedding for this segment (if enabled)
+                            if (params.diarize && state->diarize_model) {
+                                whisper_segment & seg = state->result_all.back();
+
+                                // Extract PCM for segment and compute mel
+                                int sample_start = (int)(seg.t0 * WHISPER_SAMPLE_RATE / 100);
+                                int sample_end   = (int)(seg.t1 * WHISPER_SAMPLE_RATE / 100);
+                                if (sample_start < 0) sample_start = 0;
+                                if (sample_end > n_samples) sample_end = n_samples;
+                                int seg_n_samples = sample_end - sample_start;
+
+                                if (seg_n_samples > 1600) {  // at least 0.1s
+                                    float * mel_data = whisper_compute_mel_80(samples + sample_start, seg_n_samples);
+                                    if (mel_data) {
+                                        int mel_n_frames = whisper_get_mel_n_frames(seg_n_samples);
+                                        if (mel_n_frames > 160) mel_n_frames = 160;  // cap for memory
+
+                                        // Create per-segment encoder with correct n_frames
+                                        whisper_speaker_encoder * enc = whisper_speaker_encoder_new(
+                                            state->diarize_model, mel_n_frames, 0);
+
+                                        if (enc) {
+                                            float embedding[192] = {0};
+                                            if (whisper_speaker_encoder_compute(enc, mel_data, embedding)) {
+                                                state->diarize_embeddings.insert(
+                                                    state->diarize_embeddings.end(),
+                                                    embedding, embedding + 192);
+                                            }
+                                            whisper_speaker_encoder_free(enc);
+                                        }
+                                        free(mel_data);
+                                    }
+                                }
+                            }
+#endif // WHISPER_DIARIZE
                         }
                         text = "";
                         while (i < (int) tokens_cur.size() && tokens_cur[i].id > whisper_token_beg(ctx)) {
@@ -7693,6 +7794,45 @@ int whisper_full_with_state(
                     if (params.new_segment_callback && !ctx->params.dtw_token_timestamps) {
                         params.new_segment_callback(ctx, state, n_new, params.new_segment_callback_user_data);
                     }
+
+#ifdef WHISPER_DIARIZE
+                    // Compute diarization embedding for this segment (if enabled)
+                    if (params.diarize && state->diarize_encoder) {
+                        whisper_segment & seg = state->result_all.back();  // Just-added segment
+
+                        // Extract mel frames for segment time range [seg.t0, seg.t1]
+                        // Time is in centiseconds; frame index = time_centiseconds / 100
+                        int frame_start = seg.t0 / 100;
+                        int frame_end = seg.t1 / 100;
+                        int n_frames = frame_end - frame_start;
+
+                        if (n_frames > 0 && frame_start >= 0 && frame_end <= state->mel.n_len) {
+                            // Get mel spectrogram for this segment
+                            const float * mel_data = state->mel.data.data() + (frame_start * 80);
+
+                            // Allocate embedding buffer for this segment
+                            float embedding[192];  // ECAPA-TDNN output size (192-dim)
+                            memset(embedding, 0, sizeof(embedding));
+
+                            // Compute speaker embedding
+                            if (whisper_speaker_encoder_compute(state->diarize_encoder, mel_data, embedding)) {
+                                // Store in buffer for later clustering
+                                state->diarize_embeddings.insert(
+                                    state->diarize_embeddings.end(),
+                                    embedding,
+                                    embedding + 192
+                                );
+                            } else {
+                                WHISPER_LOG_WARN("failed to compute speaker embedding for segment %lu\n",
+                                                 state->result_all.size() - 1);
+                            }
+                        } else {
+                            WHISPER_LOG_WARN("invalid mel frame range for segment %lu: [%d, %d), total frames: %d\n",
+                                             state->result_all.size() - 1, frame_start, frame_end,
+                                             state->mel.n_len);
+                        }
+                    }
+#endif // WHISPER_DIARIZE
                 }
             }
 
@@ -7727,6 +7867,44 @@ int whisper_full_with_state(
             WHISPER_LOG_DEBUG("seek = %d, seek_delta = %d\n", seek, seek_delta);
         }
     }
+
+#ifdef WHISPER_DIARIZE
+    // Perform speaker clustering if diarization enabled
+    if (params.diarize && !state->diarize_embeddings.empty()) {
+        int num_segments = state->result_all.size();
+        int num_embeddings = state->diarize_embeddings.size() / 192;
+
+        if (num_embeddings != num_segments) {
+            WHISPER_LOG_ERROR("embedding count (%d) != segment count (%d); skipping clustering\n",
+                              num_embeddings, num_segments);
+        } else {
+            state->diarize_clustering = whisper_clustering_context_create(num_segments);
+            if (!state->diarize_clustering) {
+                WHISPER_LOG_ERROR("failed to create clustering context\n");
+            } else {
+                int ret = whisper_clustering_cluster(
+                    state->diarize_clustering,
+                    state->diarize_embeddings.data(),
+                    params.diarize_speakers,
+                    params.diarize_threshold,
+                    WHISPER_LINKAGE_AVERAGE
+                );
+
+                if (ret == 0) {
+                    // Assign speaker IDs to segments
+                    for (int i = 0; i < num_segments; ++i) {
+                        state->result_all[i].speaker_id =
+                            state->diarize_clustering->speaker_ids[i];
+                    }
+                    WHISPER_LOG_INFO("diarization complete: %d speakers detected\n",
+                                     state->diarize_clustering->num_speakers);
+                } else {
+                    WHISPER_LOG_ERROR("clustering failed with code %d\n", ret);
+                }
+            }
+        }
+    }
+#endif // WHISPER_DIARIZE
 
     return 0;
 }
@@ -7995,6 +8173,17 @@ bool whisper_full_get_segment_speaker_turn_next_from_state(struct whisper_state 
 
 bool whisper_full_get_segment_speaker_turn_next(struct whisper_context * ctx, int i_segment) {
     return ctx->state->result_all[i_segment].speaker_turn_next;
+}
+
+int whisper_full_get_segment_speaker_id(struct whisper_context * ctx, int segment) {
+    return whisper_full_get_segment_speaker_id_from_state(ctx->state, segment);
+}
+
+int whisper_full_get_segment_speaker_id_from_state(struct whisper_state * state, int segment) {
+    if (segment < 0 || segment >= (int) state->result_all.size()) {
+        return -1;  // Invalid segment index
+    }
+    return state->result_all[segment].speaker_id;
 }
 
 const char * whisper_full_get_segment_text_from_state(struct whisper_state * state, int i_segment) {

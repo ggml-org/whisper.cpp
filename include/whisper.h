@@ -588,6 +588,12 @@ extern "C" {
         const char * vad_model_path;              // Path to VAD model
 
         whisper_vad_params vad_params;
+
+        // Speaker diarization params
+        bool         diarize;                      // Enable speaker diarization (default: false)
+        const char * diarize_model_path;           // Path to speaker embedding model file (GGUF format)
+        float        diarize_threshold;            // Distance threshold for clustering (default: 0.5f)
+        int          diarize_speakers;             // Target speaker count; 0 = auto-detect (default: 0)
     };
 
     // NOTE: this function allocates memory, and it is the responsibility of the caller to free the pointer - see whisper_free_context_params & whisper_free_params()
@@ -646,6 +652,19 @@ extern "C" {
     // Get whether the next segment is predicted as a speaker turn
     WHISPER_API bool whisper_full_get_segment_speaker_turn_next(struct whisper_context * ctx, int i_segment);
     WHISPER_API bool whisper_full_get_segment_speaker_turn_next_from_state(struct whisper_state * state, int i_segment);
+
+    // Speaker diarization accessor
+
+    // Get the speaker ID assigned to the given segment (result of diarization clustering)
+    // Returns: 0-based speaker ID if diarization enabled, -1 if disabled or invalid segment
+    WHISPER_API int whisper_full_get_segment_speaker_id(
+        struct whisper_context * ctx,
+        int i_segment);
+
+    // Variant that works with whisper_state directly (for advanced use cases)
+    WHISPER_API int whisper_full_get_segment_speaker_id_from_state(
+        struct whisper_state * state,
+        int i_segment);
 
     // Get the text of the specified segment
     WHISPER_API const char * whisper_full_get_segment_text           (struct whisper_context * ctx, int i_segment);
