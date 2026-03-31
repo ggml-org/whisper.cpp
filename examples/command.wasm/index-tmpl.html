@@ -42,6 +42,7 @@
                 <a href="../bench.wasm/">bench</a> |
                 <a href="../stream.wasm">stream</a> |
                 <a href="../command.wasm/">command</a> |
+                <a href="../wchess.wasm/">wchess</a> |
 
             <br><br>
 
@@ -174,11 +175,11 @@
 
             function loadWhisper(model) {
                 let urls = {
-                    'tiny.en': 'https://whisper.ggerganov.com/ggml-model-whisper-tiny.en.bin',
-                    'base.en': 'https://whisper.ggerganov.com/ggml-model-whisper-base.en.bin',
+                    'tiny.en': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin',
+                    'base.en': 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin',
 
-                    'tiny-en-q5_1':  'https://whisper.ggerganov.com/ggml-model-whisper-tiny.en-q5_1.bin',
-                    'base-en-q5_1':  'https://whisper.ggerganov.com/ggml-model-whisper-base.en-q5_1.bin',
+                    'tiny-en-q5_1':  'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en-q5_1.bin',
+                    'base-en-q5_1':  'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q5_1.bin',
                 };
 
                 let sizes = {

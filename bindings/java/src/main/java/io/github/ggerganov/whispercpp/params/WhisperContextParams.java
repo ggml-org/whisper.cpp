@@ -20,7 +20,7 @@ public class WhisperContextParams extends Structure {
     /** Use GPU for inference (default = true) */
     public CBool use_gpu;
 
-    /** Use flash attention (default = false) */
+    /** Use flash attention (default = true) */
     public CBool flash_attn;
 
     /** CUDA device to use (default = 0) */

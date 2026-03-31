@@ -5,6 +5,17 @@ project(whisper.cpp)
 set(CMAKE_CXX_STANDARD 17)
 set(WHISPER_LIB_DIR ${CMAKE_SOURCE_DIR}/../../../../../../../)
 
+# Get whisper.cpp version
+file(READ "${WHISPER_LIB_DIR}/CMakeLists.txt" MAIN_CMAKE_CONTENT)
+string(REGEX MATCH "project\\(\"whisper\\.cpp\" VERSION ([0-9]+\\.[0-9]+\\.[0-9]+)\\)" VERSION_MATCH "${MAIN_CMAKE_CONTENT}")
+if(CMAKE_MATCH_1)
+    set(WHISPER_VERSION ${CMAKE_MATCH_1} PARENT_SCOPE)
+else()
+    set(WHISPER_VERSION "unknown" PARENT_SCOPE)
+endif()
+
+message(STATUS " Whisper version: ${WHISPER_VERSION}")
+
 set(SOURCE_FILES
     ${WHISPER_LIB_DIR}/src/whisper.cpp
     ${CMAKE_SOURCE_DIR}/jni.c
@@ -26,6 +37,7 @@ function(build_library target_name)
 
     target_link_libraries(${target_name} ${LOG_LIB} android ggml)
     target_compile_definitions(${target_name} PUBLIC GGML_USE_CPU)
+    target_compile_definitions(${target_name} PRIVATE WHISPER_VERSION="${WHISPER_VERSION}")
 
     if (${target_name} STREQUAL "whisper_v8fp16_va")
         target_compile_options(${target_name} PRIVATE -march=armv8.2-a+fp16)

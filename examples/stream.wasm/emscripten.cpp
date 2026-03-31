@@ -31,10 +31,11 @@ void stream_set_status(const std::string & status) {
     g_status = status;
 }
 
-void stream_main(size_t index) {
+void stream_main(size_t index, const std::string & lang) {
     stream_set_status("loading data ...");
 
     struct whisper_full_params wparams = whisper_full_default_params(whisper_sampling_strategy::WHISPER_SAMPLING_GREEDY);
+    bool is_multilingual = whisper_is_multilingual(g_contexts[index]);
 
     wparams.n_threads        = std::min(N_THREAD, (int) std::thread::hardware_concurrency());
     wparams.offset_ms        = 0;
@@ -52,7 +53,7 @@ void stream_main(size_t index) {
     // disable temperature fallback
     wparams.temperature_inc  = -1.0f;
 
-    wparams.language         = "en";
+    wparams.language         = is_multilingual ? lang.c_str() : "en";
 
     printf("stream: using %d threads\n", wparams.n_threads);
 
@@ -127,9 +128,8 @@ void stream_main(size_t index) {
         g_contexts[index] = nullptr;
     }
 }
-
 EMSCRIPTEN_BINDINGS(stream) {
-    emscripten::function("init", emscripten::optional_override([](const std::string & path_model) {
+    emscripten::function("init", emscripten::optional_override([](const std::string & path_model, const std::string & lang) {
         for (size_t i = 0; i < g_contexts.size(); ++i) {
             if (g_contexts[i] == nullptr) {
                 g_contexts[i] = whisper_init_from_file_with_params(path_model.c_str(), whisper_context_default_params());
@@ -138,8 +138,8 @@ EMSCRIPTEN_BINDINGS(stream) {
                     if (g_worker.joinable()) {
                         g_worker.join();
                     }
-                    g_worker = std::thread([i]() {
-                        stream_main(i);
+                    g_worker = std::thread([i, lang]() {
+                        stream_main(i, lang);
                     });
 
                     return i + 1;

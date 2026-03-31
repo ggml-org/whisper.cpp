@@ -27,6 +27,7 @@ ignored_files = %w[
   twitch.sh
   yt-wsp.sh
   close-issue.yml
+  build-xcframework.sh
 ]
 
 EXTSOURCES =

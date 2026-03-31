@@ -1,8 +1,10 @@
-const path = require("path");
-const { whisper } = require(path.join(
-  __dirname,
-  "../../build/Release/addon.node"
-));
+const path = require('path');
+const os = require('os');
+
+const isWindows = os.platform() === 'win32';
+const buildPath = isWindows ? "../../build/bin/Release/addon.node" : "../../build/Release/addon.node";
+
+const { whisper } = require(path.join(__dirname, buildPath));
 const { promisify } = require("util");
 
 const whisperAsync = promisify(whisper);

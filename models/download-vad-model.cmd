@@ -25,7 +25,7 @@ rem Count number of arguments passed to script
 set argc=0
 for %%x in (%*) do set /A argc+=1
 
-set models=silero-v5.1.2
+set models=silero-v5.1.2 silero-v6.2.0
 
 rem If argc is not equal to 1 or 2, print usage information and exit
 if %argc% NEQ 1 (

@@ -31,7 +31,7 @@ struct whisper_params {
     bool print_energy  = false;
     bool no_timestamps = true;
     bool use_gpu       = true;
-    bool flash_attn    = false;
+    bool flash_attn    = true;
 
     std::string language  = "en";
     std::string model     = "models/ggml-base.en.bin";
@@ -60,7 +60,8 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -ps,        --print-special  [%-7s] print special tokens\n",                        params.print_special ? "true" : "false");
     fprintf(stderr, "  -pe,        --print-energy   [%-7s] print sound energy (for debugging)\n",          params.print_energy ? "true" : "false");
     fprintf(stderr, "  -ng,        --no-gpu         [%-7s] disable GPU\n",                                 params.use_gpu ? "false" : "true");
-    fprintf(stderr, "  -fa,        --flash-attn     [%-7s] flash attention during decoding\n",             params.flash_attn ? "true" : "false");
+    fprintf(stderr, "  -fa,        --flash-attn     [%-7s] enable flash attention during decoding\n",      params.flash_attn ? "true" : "false");
+    fprintf(stderr, "  -nfa,       --no-flash-attn  [%-7s] disable flash attention during decoding\n",     params.flash_attn ? "false" : "true");
     fprintf(stderr, "  -l LANG,    --language LANG  [%-7s] spoken language\n",                             params.language.c_str());
     fprintf(stderr, "  -m FNAME,   --model FNAME    [%-7s] model path\n",                                  params.model.c_str());
     fprintf(stderr, "  -f FNAME,   --file FNAME     [%-7s] text output file name\n",                       params.fname_out.c_str());
@@ -92,6 +93,7 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
         else if (arg == "-pe"  || arg == "--print-energy")  { params.print_energy  = true; }
         else if (arg == "-ng"  || arg == "--no-gpu")        { params.use_gpu       = false; }
         else if (arg == "-fa"  || arg == "--flash-attn")    { params.flash_attn    = true; }
+        else if (arg == "-nfa" || arg == "--no-flash-attn") { params.flash_attn    = false; }
         else if (arg == "-l"   || arg == "--language")      { params.language      = argv[++i]; }
         else if (arg == "-m"   || arg == "--model")         { params.model         = argv[++i]; }
         else if (arg == "-f"   || arg == "--file")          { params.fname_out     = argv[++i]; }

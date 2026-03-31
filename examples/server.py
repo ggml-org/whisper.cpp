@@ -47,7 +47,12 @@ class CustomHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 
             elif actual_path == '/':
                 self.path = '/whisper.wasm/index.html'
-            elif actual_path.startswith('/bench.wasm/') or actual_path.startswith('/command.wasm/') or actual_path.startswith('/stream.wasm/'):
+            elif any(actual_path.startswith(prefix) for prefix in (
+                '/bench.wasm/',
+                '/command.wasm/',
+                '/stream.wasm/',
+                '/wchess.wasm/'
+            )):
                 # Keep the path as is, just remove the context root
                 self.path = actual_path
             # For all other paths under the context root

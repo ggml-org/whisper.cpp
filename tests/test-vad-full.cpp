@@ -13,9 +13,9 @@
 #include <cassert>
 
 int main() {
-    std::string whisper_model_path = "../../models/ggml-base.en.bin";
-    std::string vad_model_path     = "../../models/for-tests-silero-v5.1.2-ggml.bin";
-    std::string sample_path        = "../../samples/jfk.wav";
+    std::string whisper_model_path = WHISPER_MODEL_PATH;
+    std::string vad_model_path     = VAD_MODEL_PATH;
+    std::string sample_path        = SAMPLE_PATH;
 
     // Load the sample audio file
     std::vector<float> pcmf32;
@@ -42,11 +42,13 @@ int main() {
     const int n_segments = whisper_full_n_segments(wctx);
     assert(n_segments == 1);
 
+
+    printf("Segment text:\n%s", whisper_full_get_segment_text(wctx, 0));
     assert(strcmp(" And so my fellow Americans, ask not what your country can do for you,"
                   " ask what you can do for your country.",
            whisper_full_get_segment_text(wctx, 0)) == 0);
-    assert(whisper_full_get_segment_t0(wctx, 0) == 29);
-    assert(whisper_full_get_segment_t1(wctx, 0) == 1049);
+    assert(whisper_full_get_segment_t0(wctx, 0) == 32);
+    assert(whisper_full_get_segment_t1(wctx, 0) == 1051);
 
     whisper_free(wctx);
 

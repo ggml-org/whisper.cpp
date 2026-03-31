@@ -22,10 +22,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Pages
-        uses: actions/configure-pages@v4
+        uses: actions/configure-pages@v5
 
       - name: Setup emsdk
         uses: mymindstorm/setup-emsdk@v14
@@ -67,6 +67,12 @@ jobs:
           cp ${build_dir}/stream.wasm/{index.html,stream.js,helpers.js} ${target_dir}
           cp ${build_dir}/libstream.js ${target_dir}
 
+          # wchess.wasm
+          target_dir=staging/wchess.wasm
+          mkdir -p ${target_dir}
+          cp -r ${build_dir}/wchess.wasm/{index.html,css,img,js} ${target_dir}
+          cp ${build_dir}/wchess.wasm.js ${target_dir}
+
           # whisper.wasm (this will be the main example page)
           target_dir=staging
           mkdir -p ${target_dir}
@@ -82,7 +88,7 @@ jobs:
           find staging -type f | sort
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: ./staging
 

@@ -3,10 +3,11 @@ require_relative "options"
 require_relative "dependencies"
 
 cmake = find_executable("cmake") || abort
-options = Options.new(cmake)
+options = Options.new(cmake).to_s
 have_library("gomp") rescue nil
-libs = Dependencies.new(cmake, options)
+libs = Dependencies.new(cmake, options).to_s
 
+$CFLAGS << " -O3 -march=native"
 $INCFLAGS << " -Isources/include -Isources/ggml/include -Isources/examples"
 $LOCAL_LIBS << " #{libs}"
 $cleanfiles << " build #{libs}"

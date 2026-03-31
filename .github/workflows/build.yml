@@ -4,6 +4,28 @@ on:
   push:
     branches:
       - master
+    tags:
+      - 'v*'
+    paths: ['.github/workflows/build.yml',
+            '**/CMakeLists.txt',
+            '**/Makefile',
+            '**/*.mk',
+            '**/*.cmake',
+            '**/*.in',
+            '**/*.h',
+            '**/*.hpp',
+            '**/*.c',
+            '**/*.cpp',
+            '**/*.cu',
+            '**/*.cuh',
+            '**/*.cl',
+            '**/*.swift',
+            '**/*.m',
+            '**/*.mm',
+            '**/*.metal',
+            '**/*.comp',
+            '**/*.java']
+
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
@@ -41,10 +63,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag_name: ${{ steps.tag.outputs.name }}
+      should_release: ${{ steps.tag.outputs.should_release }}
 
     steps:
       - name: Checkout with full history
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -55,6 +78,7 @@ jobs:
           BUILD_NUMBER=$(git rev-list --count HEAD)
           SHORT_HASH=$(git rev-parse --short=7 HEAD)
           CUSTOM_TAG="${{ github.event.inputs.pre_release_tag }}"
+          SHOULD_RELEASE="false"
 
           echo "Raw values:"
           echo "BUILD_NUMBER: $BUILD_NUMBER"
@@ -62,21 +86,34 @@ jobs:
           echo "BRANCH_NAME: ${{ env.BRANCH_NAME }}"
           echo "CUSTOM_TAG: $CUSTOM_TAG"
 
-          # Use custom tag if provided
-          if [[ -n "$CUSTOM_TAG" ]]; then
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "Using pushed tag name"
+            TAG_NAME="${{ github.ref_name }}"
+            SHOULD_RELEASE="true"
+          elif [[ -n "$CUSTOM_TAG" ]]; then
             echo "Using custom tag"
             TAG_NAME="${CUSTOM_TAG}"
+            SHOULD_RELEASE="true"
+          elif [[ "${{ github.event.inputs.create_release }}" == "true" ]]; then
+            echo "Manual release requested"
+            SHOULD_RELEASE="true"
+            TAG_NAME="b${BUILD_NUMBER}"
           elif [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
             echo "Using master branch format"
             TAG_NAME="b${BUILD_NUMBER}"
+            SHOULD_RELEASE="false"
           else
             echo "Using non-master branch format"
             SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
             TAG_NAME="${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}"
+            SHOULD_RELEASE="false"
           fi
 
           echo "Final tag name: $TAG_NAME"
+          echo "Should release: $SHOULD_RELEASE"
           echo "name=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "should_release=$SHOULD_RELEASE" >> $GITHUB_OUTPUT
+
 
   ubuntu-22:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
@@ -90,7 +127,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -122,7 +159,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -136,10 +173,6 @@ jobs:
             export DEBIAN_FRONTEND=noninteractive
             sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
             sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-
-            apt-get update
-            apt-get install -y ca-certificates
-            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
 
             apt update
             apt install -y build-essential libsdl2-dev cmake git
@@ -158,7 +191,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -172,10 +205,6 @@ jobs:
             export DEBIAN_FRONTEND=noninteractive
             sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
             sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-
-            apt-get update
-            apt-get install -y ca-certificates
-            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
 
             apt update
             apt install -y build-essential libsdl2-dev cmake git
@@ -194,7 +223,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2.16
@@ -205,7 +234,8 @@ jobs:
       - name: Dependencies
         run: |
           brew update
-          brew install sdl2 cmake
+          cmake --version
+          brew install sdl2
 
       - name: Build
         run: |
@@ -225,7 +255,7 @@ jobs:
 #
 #    steps:
 #      - name: Clone
-#        uses: actions/checkout@v4
+#        uses: actions/checkout@v6
 #
 #      - name: Build
 #        uses: cross-platform-actions/action@v0.27.0
@@ -251,7 +281,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -285,7 +315,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -299,10 +329,6 @@ jobs:
             export DEBIAN_FRONTEND=noninteractive
             sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
             sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-
-            apt-get update
-            apt-get install -y ca-certificates
-            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
 
             apt update
             apt install -y build-essential cmake libsdl2-dev git
@@ -323,7 +349,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -337,10 +363,6 @@ jobs:
             export DEBIAN_FRONTEND=noninteractive
             sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
             sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-
-            apt-get update
-            apt-get install -y ca-certificates
-            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
 
             apt update
             apt install -y build-essential cmake libsdl2-dev git
@@ -364,7 +386,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -378,10 +400,6 @@ jobs:
             export DEBIAN_FRONTEND=noninteractive
             sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
             sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-
-            apt-get update
-            apt-get install -y ca-certificates
-            sed -i "s|http://ports.ubuntu.com|https://mirror.kumi.systems|g" /etc/apt/sources.list
 
             apt update
             apt install -y clang build-essential cmake libsdl2-dev git
@@ -402,7 +420,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -442,7 +460,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: add oneAPI to apt
         shell: bash
@@ -466,7 +484,7 @@ jobs:
 
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build
         id: cmake_build
@@ -494,7 +512,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: add oneAPI to apt
         shell: bash
@@ -518,7 +536,7 @@ jobs:
 
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build
         id: cmake_build
@@ -543,7 +561,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup ${{ matrix.sys }}
         uses: msys2/setup-msys2@v2
@@ -579,6 +597,7 @@ jobs:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
             github.event.inputs.run_type == 'full-ci' }}
     runs-on: windows-latest
+    needs: determine-tag
 
     strategy:
       matrix:
@@ -597,7 +616,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Add msbuild to PATH
         uses: microsoft/setup-msbuild@v2
@@ -627,31 +646,31 @@ jobs:
 
       - name: Upload SDL2.dll
         if: matrix.sdl2 == 'ON'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.s2arc }}_SDL2.dll
           path: build/bin/${{ matrix.build }}/SDL2.dll
 
       - name: Upload whisper dll
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: whisper_${{ matrix.arch }}.dll
           path: build/bin/${{ matrix.build }}/whisper.dll
 
       - name: Upload ggml dll
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ggml_${{ matrix.arch }}.dll
           path: build/bin/${{ matrix.build }}/ggml.dll
 
       - name: Upload ggml base dll
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ggml_base_${{ matrix.arch }}.dll
           path: build/bin/${{ matrix.build }}/ggml-base.dll
 
       - name: Upload ggml cpu dll
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ggml_cpu_${{ matrix.arch }}.dll
           path: build/bin/${{ matrix.build }}/ggml-cpu.dll
@@ -662,10 +681,8 @@ jobs:
               Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-bin-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
-        if: matrix.sdl2 == 'ON' && ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
-                github.event.inputs.create_release == 'true' ||
-                github.event.inputs.pre_release_tag != '' }}
-        uses: actions/upload-artifact@v4
+        if: matrix.sdl2 == 'ON' && ${{ needs.determine-tag.outputs.should_release }}
+        uses: actions/upload-artifact@v6
         with:
           name: whisper-bin-${{ matrix.arch }}.zip
           path: whisper-bin-${{ matrix.arch }}.zip
@@ -694,10 +711,10 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Export GitHub Actions cache environment variables
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
@@ -750,10 +767,8 @@ jobs:
               Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-blas-bin-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
-        if: matrix.blas == 'ON' && matrix.sdl2 == 'ON' && ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
-                github.event.inputs.create_release == 'true' ||
-                github.event.inputs.pre_release_tag != '' }}
-        uses: actions/upload-artifact@v4
+        if: matrix.blas == 'ON' && matrix.sdl2 == 'ON' && ${{ needs.determine-tag.outputs.should_release }}
+        uses: actions/upload-artifact@v6
         with:
           name: whisper-blas-bin-${{ matrix.arch }}.zip
           path: whisper-blas-bin-${{ matrix.arch }}.zip
@@ -762,6 +777,7 @@ jobs:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
             github.event.inputs.run_type == 'full-ci' }}
     runs-on: windows-2022
+    needs: determine-tag
     strategy:
       fail-fast: false
       matrix:
@@ -776,7 +792,7 @@ jobs:
             sdl2_ver: 2.28.5
     steps:
       - name: Clone repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Ninja
         id: install_ninja
@@ -844,7 +860,7 @@ jobs:
           echo "$CUDA_TOOLKIT_DIR\libnvvp" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "CUDA_PATH=$CUDA_TOOLKIT_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           echo "CUDA_PATH_V11_8=$CUDA_TOOLKIT_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-        
+
       - name: Install Cuda Toolkit 12.4.0
         if: ${{ matrix.cuda-toolkit == '12.4.0' }}
         run: |
@@ -960,10 +976,8 @@ jobs:
               Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
-        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
-                github.event.inputs.create_release == 'true' ||
-                github.event.inputs.pre_release_tag != '' }}
-        uses: actions/upload-artifact@v4
+        if: ${{ needs.determine-tag.outputs.should_release }}
+        uses: actions/upload-artifact@v6
         with:
           name: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
           path: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
@@ -979,7 +993,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup emsdk
         uses: mymindstorm/setup-emsdk@v14
@@ -1002,7 +1016,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Configure
         run: |
@@ -1039,17 +1053,12 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
-                github.event.inputs.create_release == 'true' ||
-                github.event.inputs.pre_release_tag != '' }}
         run: |
           zip --symlinks -r whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip build-apple/whisper.xcframework
 
       - name: Upload artifacts
-        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
-                github.event.inputs.create_release == 'true' ||
-                github.event.inputs.pre_release_tag != '' }}
-        uses: actions/upload-artifact@v4
+        if: ${{ needs.determine-tag.outputs.should_release }}
+        uses: actions/upload-artifact@v6
         with:
           path: whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip
           name: whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip
@@ -1061,12 +1070,12 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: whisper
 
       - name: Install Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: zulu
           java-version: 21
@@ -1090,10 +1099,10 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: set up JDK 11
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '11'
           distribution: 'temurin'
@@ -1116,36 +1125,36 @@ jobs:
     needs: ['windows']
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: zulu
           java-version: 20
 
       - name: Download Whisper Windows lib
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: whisper_x64.dll
 
       - name: Download GGML Windows lib
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ggml_x64.dll
 
       - name: Download GGML Base Windows lib
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ggml_base_x64.dll
 
       - name: Download GGML CPU Windows lib
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ggml_cpu_x64.dll
 
       - name: Download SDL2.dll
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: x64_SDL2.dll
 
@@ -1192,7 +1201,7 @@ jobs:
               Compress-Archive -Path "bindings/java/build/libs/whispercpp-*.jar" -DestinationPath "whispercpp.jar.zip"
 
       - name: Upload jar
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: whispercpp.jar.zip
           path: whispercpp.jar.zip
@@ -1216,17 +1225,17 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Test quantize
         run: |
           ./models/download-ggml-model.sh tiny.en
           cmake -B build
           cmake --build build --config Release
-          ./build/bin/quantize models/ggml-tiny.en.bin models/ggml-tiny.en-q4_0.bin q4_0
+          ./build/bin/whisper-quantize models/ggml-tiny.en.bin models/ggml-tiny.en-q4_0.bin q4_0
 
   release:
-    if: ${{ github.event.inputs.create_release == 'true' || github.event.inputs.pre_release_tag != '' }}
+    if: ${{ github.event.inputs.create_release == 'true' || github.event.inputs.pre_release_tag != '' || startsWith(github.ref, 'refs/tags/v') }}
 
     runs-on: ubuntu-latest
 
@@ -1240,7 +1249,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -1253,7 +1262,7 @@ jobs:
       # Downloads all the artifacts from the previous jobs
       - name: Download artifacts
         id: download-artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: ./artifact
 
@@ -1269,6 +1278,7 @@ jobs:
         with:
           tag_name: ${{ needs.determine-tag.outputs.tag_name }}
           prerelease: ${{ github.event.inputs.pre_release_tag != '' }}
+          draft: true
 
       - name: Upload release
         id: upload_release
@@ -1295,13 +1305,14 @@ jobs:
   coreml-base-en:
     if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
             github.event.inputs.create_release == 'true' ||
-            github.event.inputs.pre_release_tag != '' }}
+            github.event.inputs.pre_release_tag != '' ||
+            startsWith(github.ref, 'refs/tags/v') }}
     runs-on: macos-latest
     needs: determine-tag
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set environment variables
         id: set_vars
@@ -1327,7 +1338,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build
         shell: bash
@@ -1339,3 +1350,211 @@ jobs:
         shell: bash
         run: |
           ctest -R ^test-vad$ --test-dir build --output-on-failure -VV
+
+# TODO: simplify the following workflows using a matrix
+  ggml-ci-x64-cpu-low-perf:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ggml-ci-x64-cpu-low-perf
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+
+  ggml-ci-arm64-cpu-low-perf:
+    runs-on: ubuntu-22.04-arm
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ggml-ci-arm64-cpu-low-perf
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+
+  ggml-ci-x64-cpu-high-perf:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ggml-ci-x64-cpu-high-perf
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) bash ./ci/run.sh ./tmp/results ./tmp/mnt
+
+  ggml-ci-arm64-cpu-high-perf:
+    runs-on: ubuntu-22.04-arm
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ggml-ci-arm64-cpu-high-perf
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+
+  ggml-ci-arm64-cpu-high-perf-sve:
+    runs-on: ubuntu-22.04-arm
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ggml-ci-arm64-cpu-high-perf-sve
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+
+  ggml-ci-x64-nvidia-cuda:
+    runs-on: [self-hosted, Linux, mnt-root, NVIDIA]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          nvidia-smi
+          GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/whisper.cpp /mnt/whisper.cpp
+
+  ggml-ci-x64-nvidia-vulkan-cm:
+    runs-on: [self-hosted, Linux, mnt-root, NVIDIA]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/whisper.cpp /mnt/whisper.cpp
+
+  ggml-ci-x64-nvidia-vulkan-cm2:
+    runs-on: [self-hosted, Linux, mnt-root, NVIDIA, COOPMAT2]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/whisper.cpp /mnt/whisper.cpp
+
+  #ggml-ci-x64-cpu-amx:
+  #  runs-on: [self-hosted, Linux, X64, CPU, AMX]
+
+  #  steps:
+  #    - name: Clone
+  #      id: checkout
+  #      uses: actions/checkout@v6
+
+  #    - name: Test
+  #      id: ggml-ci
+  #      run: |
+  #        bash ./ci/run.sh ~/results/whisper.cpp /mnt/whisper.cpp
+
+  ggml-ci-mac-metal:
+    runs-on: [self-hosted, macOS, ARM64]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          GG_BUILD_METAL=1 bash ./ci/run.sh ~/results/whisper.cpp ~/mnt/whisper.cpp
+
+  ggml-ci-mac-vulkan:
+    runs-on: [self-hosted, macOS, ARM64]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/whisper.cpp ~/mnt/whisper.cpp

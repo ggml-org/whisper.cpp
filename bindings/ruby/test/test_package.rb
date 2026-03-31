@@ -31,10 +31,11 @@ class TestPackage < TestBase
         Dir.mktmpdir do |dir|
           system "gem", "install", "--install-dir", dir.shellescape, "--no-document", "pkg/#{gemspec.file_name.shellescape}", "--", "--enable-whisper-coreml", exception: true
           assert_installed dir, gemspec.version
+          libdir = File.join(dir, "gems", "#{gemspec.name}-#{gemspec.version}", "lib")
           assert_nothing_raised do
-            libdir = File.join(dir, "gems", "#{gemspec.name}-#{gemspec.version}", "lib")
             system "ruby", "-I", libdir, "-r", "whisper", "-e", "Whisper::Context.new('tiny')", exception: true
           end
+          assert_match(/COREML = 1/, `ruby -I #{libdir.shellescape} -r whisper -e 'puts Whisper.system_info_str'`)
         end
       end
     end

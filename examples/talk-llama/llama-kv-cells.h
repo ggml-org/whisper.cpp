@@ -5,16 +5,36 @@
 
 #include <bitset>
 #include <cassert>
-#include <vector>
+#include <cstring>
+#include <map>
 #include <set>
+#include <vector>
+
+struct llama_kv_cell_ext {
+    // 2D spatial positions, typically used for M-RoPE
+    llama_pos x = 0;
+    llama_pos y = 0;
+
+    // return true if the current 2D spatial position is greater than other
+    bool is_2d_gt(llama_pos ox, llama_pos oy) const {
+        return (y > oy) || (y == oy && x > ox);
+    }
+
+    void reset() {
+        static_assert(std::is_trivially_copyable_v<llama_kv_cell_ext>);
+
+        memset(this, 0, sizeof(*this));
+    }
+};
 
 // meta information about KV cells that can be part of multiple sequences at the same time
 // TODO: add unit tests
-class llama_kv_cells_unified {
+class llama_kv_cells {
 public:
     void reset() {
         for (uint32_t i = 0; i < pos.size(); ++i) {
             pos[i]   = -1;
+            ext[i].reset();
             shift[i] =  0;
             seq[i].reset();
         }
@@ -42,6 +62,7 @@ public:
 
     void resize(uint32_t n) {
         pos.resize(n);
+        ext.resize(n);
         shift.resize(n);
         seq.resize(n);
 
@@ -76,68 +97,124 @@ public:
     }
 
     // move cell isrc to idst (used during defrag)
-    void mv(uint32_t isrc, uint32_t idst) {
-        assert(isrc < pos.size());
-        assert(idst < pos.size());
+    //void mv(uint32_t isrc, uint32_t idst) {
+    //    assert(isrc < pos.size());
+    //    assert(idst < pos.size());
 
-        assert(pos[idst] == -1);
-        assert(pos[isrc] != -1);
+    //    assert(pos[idst] == -1);
+    //    assert(pos[isrc] != -1);
 
-        pos  [idst] = pos  [isrc];
-        shift[idst] = shift[isrc];
-        seq  [idst] = seq  [isrc];
+    //    pos  [idst] = pos  [isrc];
+    //    shift[idst] = shift[isrc];
+    //    seq  [idst] = seq  [isrc];
 
-        pos  [isrc] = -1;
-        shift[isrc] =  0;
-        seq  [isrc].reset();
+    //    pos  [isrc] = -1;
+    //    shift[isrc] =  0;
+    //    seq  [isrc].reset();
 
-        used.erase (isrc);
-        used.insert(idst);
-    }
+    //    used.erase (isrc);
+    //    used.insert(idst);
+    //}
 
     // copy the state of cells [i, i + n) (used for save/restore the state of the cells)
-    llama_kv_cells_unified cp(uint32_t i, uint32_t n) const {
+    llama_kv_cells cp(uint32_t i, uint32_t n) const {
         assert(i + n <= pos.size());
 
-        llama_kv_cells_unified res;
+        llama_kv_cells res;
 
         res.resize(n);
 
         for (uint32_t j = 0; j < n; ++j) {
-            res.pos[j] = pos[i + j];
-            res.seq[j] = seq[i + j];
+            const auto idx = i + j;
 
-            assert(shift[i + j] == 0);
+            res.pos[j] = pos[idx];
+            res.ext[j] = ext[idx];
+            res.seq[j] = seq[idx];
+
+            assert(shift[idx] == 0);
+        }
+
+        return res;
+    }
+
+    // copy the state of cells [idxs[0], idxs[1], ..., idxs[idxs.size() - 1])
+    llama_kv_cells cp(const std::vector<uint32_t> & idxs) const {
+        llama_kv_cells res;
+
+        res.resize(idxs.size());
+
+        for (uint32_t j = 0; j < idxs.size(); ++j) {
+            const auto idx = idxs[j];
+
+            res.pos[j] = pos[idx];
+            res.ext[j] = ext[idx];
+            res.seq[j] = seq[idx];
+
+            assert(shift[idx] == 0);
         }
 
         return res;
     }
 
     // set the state of cells [i, i + other.pos.size()) (used for save/restore the state of the cells)
-    void set(uint32_t i, const llama_kv_cells_unified & other) {
+    void set(uint32_t i, const llama_kv_cells & other) {
         assert(i + other.pos.size() <= pos.size());
 
         for (uint32_t j = 0; j < other.pos.size(); ++j) {
-            if (pos[i + j] == -1 && other.pos[j] != -1) {
+            const auto idx = i + j;
+
+            if (pos[idx] == -1 && other.pos[j] != -1) {
                 used.insert(i + j);
             }
 
-            if (pos[i + j] != -1 && other.pos[j] == -1) {
+            if (pos[idx] != -1 && other.pos[j] == -1) {
                 used.erase(i + j);
             }
 
-            if (pos[i + j] != -1) {
+            if (pos[idx] != -1) {
                 seq_pos_rm(i + j);
             }
 
-            pos[i + j] = other.pos[j];
-            seq[i + j] = other.seq[j];
+            pos[idx] = other.pos[j];
+            ext[idx] = other.ext[j];
+            seq[idx] = other.seq[j];
 
-            if (pos[i + j] != -1) {
+            if (pos[idx] != -1) {
                 seq_pos_add(i + j);
             }
 
-            assert(shift[i + j] == 0);
+            assert(shift[idx] == 0);
+        }
+    }
+
+    // set the state of cells [idxs[0], idxs[1], ..., idxs[idxs.size() - 1])
+    void set(const std::vector<uint32_t> & idxs, const llama_kv_cells & other) {
+        assert(idxs.size() == other.pos.size());
+
+        for (uint32_t j = 0; j < other.pos.size(); ++j) {
+            const auto idx = idxs[j];
+
+            if (pos[idx] == -1 && other.pos[j] != -1) {
+                used.insert(idx);
+            }
+
+            if (pos[idx] != -1 && other.pos[j] == -1) {
+                used.erase(idx);
+            }
+
+            if (pos[idx] != -1) {
+                seq_pos_rm(idx);
+            }
+
+            pos[idx] = other.pos[j];
+            ext[idx] = other.ext[j];
+            seq[idx] = other.seq[j];
+
+            if (pos[idx] != -1) {
+                seq_pos_add(idx);
+            }
+
+            assert(shift[idx] == 0);
         }
     }
 
@@ -150,6 +227,7 @@ public:
         seq[i].reset();
 
         pos[i] = -1;
+        ext[i].reset();
         shift[i] = 0;
 
         used.erase(i);
@@ -164,10 +242,11 @@ public:
         assert(seq_id >= 0);
 
         seq[i].reset(seq_id);
-        seq_pos[seq_id].erase(pos[i]);
+        seq_pos_dec(seq_id, pos[i]);
 
         if (seq[i].none()) {
             pos[i] = -1;
+            ext[i].reset();
             shift[i] = 0;
 
             used.erase(i);
@@ -187,7 +266,7 @@ public:
             seq[i].reset();
 
             seq[i].set(seq_id);
-            seq_pos[seq_id].insert(pos[i]);
+            seq_pos_inc(seq_id, pos[i]);
 
             return false;
         }
@@ -197,6 +276,7 @@ public:
             seq[i].reset();
 
             pos[i] = -1;
+            ext[i].reset();
             shift[i] = 0;
 
             used.erase(i);
@@ -232,7 +312,7 @@ public:
         assert(!seq[i].test(seq_id));
 
         seq[i].set(seq_id);
-        seq_pos[seq_id].insert(pos[i]);
+        seq_pos_inc(seq_id, pos[i]);
     }
 
     // return the sequence id of this cell
@@ -259,7 +339,9 @@ public:
             return -1;
         }
 
-        return *seq_pos[seq_id].begin();
+        assert(seq_pos[seq_id].begin()->second > 0);
+
+        return seq_pos[seq_id].begin()->first;
     }
 
     // the maximum position of sequence seq_id currently present in any of the cells
@@ -272,7 +354,9 @@ public:
             return -1;
         }
 
-        return *seq_pos[seq_id].rbegin();
+        assert(seq_pos[seq_id].rbegin()->second > 0);
+
+        return seq_pos[seq_id].rbegin()->first;
     }
 
     // note: call only if the cell is not empty
@@ -281,6 +365,13 @@ public:
         assert(pos[i] != -1);
 
         return pos[i];
+    }
+
+    const llama_kv_cell_ext & ext_get(uint32_t i) const {
+        assert(i < pos.size());
+        assert(pos[i] != -1);
+
+        return ext[i];
     }
 
     // note: call only if the cell is not empty
@@ -309,6 +400,11 @@ public:
         pos[i] = p;
 
         used.insert(i);
+    }
+
+    void ext_set(uint32_t i, llama_kv_cell_ext p) {
+        assert(i < ext.size());
+        ext[i] = p;
     }
 
     // pos[i] = pos[i] + d
@@ -367,6 +463,9 @@ private:
 
     std::vector<llama_pos> pos;
 
+    // stores extra info per cell
+    std::vector<llama_kv_cell_ext> ext;
+
     // this array accumulates any applied shifts to the pos array since the last reset_shift() call
     // this is used to queue multiple updates to the pos array, which in the end can be applied in one go:
     //
@@ -389,17 +488,36 @@ private:
     // the bitset seq[i] tells us which sequences are currently occupying the i-th cell
     std::vector<seq_set_t> seq;
 
-    // the set seq_pos[s] tells us which positions are currently present for sequence s
+    // the set seq_pos[s][p] tells us how many times the position p is currently present for sequence s
+    // if the position p is not present, seq_pos[s][p] is not set
     // this way seq_pos[s].begin() and seq_pos[s].rbegin() give us the min/max positions currently in the cache
-    std::set<llama_pos> seq_pos[LLAMA_MAX_SEQ];
+    //
+    // note that we cannot a use an std::set because in some cases a position can occur more than once for the same seq:
+    //  - during performing a cache reuse via (rm + add)
+    //  - some vision models have input embeddings with repeating positions
+    //
+    std::map<llama_pos, int> seq_pos[LLAMA_MAX_SEQ];
 
     // helper functions for updating `seq_pos`, once cell at a time:
+
+    void seq_pos_dec(llama_seq_id s, llama_pos p) {
+        auto it = seq_pos[s].find(p);
+        assert(it != seq_pos[s].end());
+
+        if (--it->second == 0) {
+            seq_pos[s].erase(it);
+        }
+    }
+
+    void seq_pos_inc(llama_seq_id s, llama_pos p) {
+        seq_pos[s][p]++;
+    }
 
     // remove cell i
     void seq_pos_rm(uint32_t i) {
         for (int s = 0; s < LLAMA_MAX_SEQ; ++s) {
             if (seq[i].test(s)) {
-                seq_pos[s].erase(pos[i]);
+                seq_pos_dec(s, pos[i]);
             }
         }
     }
@@ -408,7 +526,7 @@ private:
     void seq_pos_add(uint32_t i) {
         for (int s = 0; s < LLAMA_MAX_SEQ; ++s) {
             if (seq[i].test(s)) {
-                seq_pos[s].insert(pos[i]);
+                seq_pos_inc(s, pos[i]);
             }
         }
     }

@@ -1,6 +1,8 @@
 #ifndef RUBY_WHISPER_H
 #define RUBY_WHISPER_H
 
+#include <ruby.h>
+#include <ruby/memory_view.h>
 #include "whisper.h"
 
 typedef struct {
@@ -13,6 +15,10 @@ typedef struct {
 typedef struct {
   struct whisper_context *context;
 } ruby_whisper;
+
+typedef struct ruby_whisper_context_params {
+  struct whisper_context_params params;
+} ruby_whisper_context_params;
 
 typedef struct {
   struct whisper_full_params params;
@@ -34,7 +40,68 @@ typedef struct {
 } ruby_whisper_segment;
 
 typedef struct {
+  whisper_token_data *token_data;
+  VALUE text;
+} ruby_whisper_token;
+
+typedef struct {
   VALUE context;
 } ruby_whisper_model;
+
+typedef struct {
+  struct whisper_vad_segments *segments;
+} ruby_whisper_vad_segments;
+
+typedef struct {
+  VALUE segments;
+  int index;
+} ruby_whisper_vad_segment;
+
+typedef struct {
+  struct whisper_vad_context *context;
+} ruby_whisper_vad_context;
+
+typedef struct parsed_samples_t {
+  float *samples;
+  int n_samples;
+  rb_memory_view_t memview;
+  bool memview_exported;
+} parsed_samples_t;
+
+#define GetContext(obj, rw) do { \
+  TypedData_Get_Struct((obj), ruby_whisper, &ruby_whisper_type, (rw)); \
+  if ((rw)->context == NULL) { \
+    rb_raise(rb_eRuntimeError, "Not initialized"); \
+  } \
+} while (0)
+
+#define GetContextParams(obj, rwcp) do { \
+  TypedData_Get_Struct((obj), ruby_whisper_context_params, &ruby_whisper_context_params_type, (rwcp)); \
+} while (0)
+
+#define GetToken(obj, rwt) do { \
+  TypedData_Get_Struct((obj), ruby_whisper_token, &ruby_whisper_token_type, (rwt)); \
+  if ((rwt)->token_data == NULL) { \
+    rb_raise(rb_eRuntimeError, "Not initialized"); \
+  } \
+} while (0)
+
+#define GetVADContext(obj, rwvc) do { \
+    TypedData_Get_Struct((obj), ruby_whisper_vad_context, &ruby_whisper_vad_context_type, (rwvc)); \
+    if ((rwvc)->context == NULL) { \
+      rb_raise(rb_eRuntimeError, "Not initialized"); \
+    } \
+} while (0)
+
+#define GetVADParams(obj, rwvp) do { \
+  TypedData_Get_Struct((obj), ruby_whisper_vad_params, &ruby_whisper_vad_params_type, (rwvp)); \
+} while (0)
+
+#define GetVADSegments(obj, rwvss) do { \
+  TypedData_Get_Struct((obj), ruby_whisper_vad_segments, &ruby_whisper_vad_segments_type, (rwvss)); \
+  if ((rwvss)->segments == NULL) { \
+    rb_raise(rb_eRuntimeError, "Not initialized"); \
+  } \
+} while (0)
 
 #endif

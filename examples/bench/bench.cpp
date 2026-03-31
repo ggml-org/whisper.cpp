@@ -13,7 +13,7 @@ struct whisper_params {
     std::string model = "models/ggml-base.en.bin";
 
     bool use_gpu    = true;
-    bool flash_attn = false;
+    bool flash_attn = true;
 };
 
 void whisper_print_usage(int argc, char ** argv, const whisper_params & params);
@@ -26,11 +26,12 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
             whisper_print_usage(argc, argv, params);
             exit(0);
         }
-        else if (arg == "-t"  || arg == "--threads")    { params.n_threads  = std::stoi(argv[++i]); }
-        else if (arg == "-m"  || arg == "--model")      { params.model      = argv[++i]; }
-        else if (arg == "-w"  || arg == "--what")       { params.what       = atoi(argv[++i]); }
-        else if (arg == "-ng" || arg == "--no-gpu")     { params.use_gpu    = false; }
-        else if (arg == "-fa" || arg == "--flash-attn") { params.flash_attn = true; }
+        else if (arg == "-t"     || arg == "--threads")       { params.n_threads  = std::stoi(argv[++i]); }
+        else if (arg == "-m"     || arg == "--model")         { params.model      = argv[++i]; }
+        else if (arg == "-w"     || arg == "--what")          { params.what       = atoi(argv[++i]); }
+        else if (arg == "-ng"    || arg == "--no-gpu")        { params.use_gpu    = false; }
+        else if (arg == "-fa"    || arg == "--flash-attn")    { params.flash_attn = true; }
+        else if (arg == "-nfa"   || arg == "--no-flash-attn") { params.flash_attn = false; }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             whisper_print_usage(argc, argv, params);
@@ -46,15 +47,16 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "usage: %s [options]\n", argv[0]);
     fprintf(stderr, "\n");
     fprintf(stderr, "options:\n");
-    fprintf(stderr, "  -h,       --help        [default] show this help message and exit\n");
-    fprintf(stderr, "  -t N,     --threads N   [%-7d] number of threads to use during computation\n", params.n_threads);
-    fprintf(stderr, "  -m FNAME, --model FNAME [%-7s] model path\n",                                  params.model.c_str());
-    fprintf(stderr, "  -w N,     --what N      [%-7d] what to benchmark:\n",                          params.what);
-    fprintf(stderr, "                           %-7s  0 - whisper\n",                                 "");
-    fprintf(stderr, "                           %-7s  1 - memcpy\n",                                  "");
-    fprintf(stderr, "                           %-7s  2 - ggml_mul_mat\n",                            "");
-    fprintf(stderr, "  -ng,      --no-gpu      [%-7s] disable GPU\n",                                 params.use_gpu ? "false" : "true");
-    fprintf(stderr, "  -fa,      --flash-attn  [%-7s] enable flash attention\n",                      params.flash_attn ? "true" : "false");
+    fprintf(stderr, "  -h,       --help          [default] show this help message and exit\n");
+    fprintf(stderr, "  -t N,     --threads N     [%-7d] number of threads to use during computation\n", params.n_threads);
+    fprintf(stderr, "  -m FNAME, --model FNAME   [%-7s] model path\n",                                  params.model.c_str());
+    fprintf(stderr, "  -w N,     --what N        [%-7d] what to benchmark:\n",                          params.what);
+    fprintf(stderr, "                             %-7s  0 - whisper\n",                                 "");
+    fprintf(stderr, "                             %-7s  1 - memcpy\n",                                  "");
+    fprintf(stderr, "                             %-7s  2 - ggml_mul_mat\n",                            "");
+    fprintf(stderr, "  -ng,      --no-gpu        [%-7s] disable GPU\n",                                 params.use_gpu ? "false" : "true");
+    fprintf(stderr, "  -fa,      --flash-attn    [%-7s] enable flash attention\n",                      params.flash_attn ? "true" : "false");
+    fprintf(stderr, "  -nfa,     --no-flash-attn [%-7s] disable flash attention\n",                     params.flash_attn ? "false" : "true");
     fprintf(stderr, "\n");
 }
 
@@ -66,13 +68,12 @@ static int whisper_bench_full(const whisper_params & params) {
     cparams.use_gpu    = params.use_gpu;
     cparams.flash_attn = params.flash_attn;
 
-    struct whisper_context * ctx = whisper_init_from_file_with_params(params.model.c_str(), cparams);
-
     {
         fprintf(stderr, "\n");
         fprintf(stderr, "system_info: n_threads = %d / %d | %s\n", params.n_threads, std::thread::hardware_concurrency(), whisper_print_system_info());
     }
 
+    struct whisper_context * ctx = whisper_init_from_file_with_params(params.model.c_str(), cparams);
     if (ctx == nullptr) {
         fprintf(stderr, "error: failed to initialize whisper context\n");
         return 2;
@@ -84,25 +85,38 @@ static int whisper_bench_full(const whisper_params & params) {
         fprintf(stderr, "error: failed to set mel: %d\n", ret);
         return 3;
     }
-    // heat encoder
-    if (int ret = whisper_encode(ctx, 0, params.n_threads) != 0) {
-        fprintf(stderr, "error: failed to encode: %d\n", ret);
-        return 4;
-    }
 
     whisper_token tokens[512];
     memset(tokens, 0, sizeof(tokens));
 
-    // prompt heat
-    if (int ret = whisper_decode(ctx, tokens, 256, 0, params.n_threads) != 0) {
-        fprintf(stderr, "error: failed to decode: %d\n", ret);
-        return 4;
-    }
+    // TODO: need 2 loops because of the current graph capture logic in the CUDA backend
+    //       https://github.com/ggml-org/llama.cpp/pull/19754
+    for (int h = 0; h < 2; ++h) {
+        // heat encoder
+        if (int ret = whisper_encode(ctx, 0, params.n_threads) != 0) {
+            fprintf(stderr, "error: failed to encode: %d\n", ret);
+            return 4;
+        }
 
-    // text-generation heat
-    if (int ret = whisper_decode(ctx, tokens, 1, 256, params.n_threads) != 0) {
-        fprintf(stderr, "error: failed to decode: %d\n", ret);
-        return 4;
+        // prompt heat
+        if (int ret = whisper_decode(ctx, tokens, 256, 0, params.n_threads) != 0) {
+            fprintf(stderr, "error: failed to decode: %d\n", ret);
+            return 4;
+        }
+
+        // text-generation heat
+        for (int i = 0; i < 256; i++) {
+            if (int ret = whisper_decode(ctx, tokens, 1, i, params.n_threads) != 0) {
+                fprintf(stderr, "error: failed to decode: %d\n", ret);
+                return 4;
+            }
+        }
+
+        // batched heat
+        if (int ret = whisper_decode(ctx, tokens, 5, 0, params.n_threads) != 0) {
+            fprintf(stderr, "error: failed to decode: %d\n", ret);
+            return 4;
+        }
     }
 
     whisper_reset_timings(ctx);

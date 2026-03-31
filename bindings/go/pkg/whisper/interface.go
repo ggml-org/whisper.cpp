@@ -60,6 +60,15 @@ type Context interface {
 	SetTemperature(t float32)         // Set temperature
 	SetTemperatureFallback(t float32) // Set temperature incrementation
 
+	SetVAD(v bool)
+	SetVADModelPath(path string)
+	SetVADThreshold(t float32)
+	SetVADMinSpeechMs(ms int)
+	SetVADMinSilenceMs(ms int)
+	SetVADMaxSpeechSec(s float32)
+	SetVADSpeechPadMs(ms int)
+	SetVADSamplesOverlap(sec float32)
+
 	// Process mono audio data and return any errors.
 	// If defined, newly generated segments are passed to the
 	// callback function during processing.

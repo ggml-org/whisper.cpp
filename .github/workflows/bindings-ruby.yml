@@ -17,5 +17,5 @@ jobs:
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.2'
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: rake test

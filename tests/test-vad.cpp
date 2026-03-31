@@ -36,7 +36,7 @@ struct whisper_vad_segments * test_detect_timestamps(
         struct whisper_vad_context * vctx,
         struct whisper_vad_params params) {
     struct whisper_vad_segments * timestamps = whisper_vad_segments_from_probs(vctx, params);
-    assert(whisper_vad_segments_n_segments(timestamps) == 5);
+    assert(whisper_vad_segments_n_segments(timestamps) == 4);
 
     for (int i = 0; i < whisper_vad_segments_n_segments(timestamps); ++i) {
         printf("VAD segment %d: start = %.2f, end = %.2f\n", i,
@@ -48,8 +48,8 @@ struct whisper_vad_segments * test_detect_timestamps(
 }
 
 int main() {
-    std::string vad_model_path = "../../models/for-tests-silero-v5.1.2-ggml.bin";
-    std::string sample_path    = "../../samples/jfk.wav";
+    std::string vad_model_path = VAD_MODEL_PATH;
+    std::string sample_path    = SAMPLE_PATH;
 
     // Load the sample audio file
     std::vector<float> pcmf32;

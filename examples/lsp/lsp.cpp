@@ -31,7 +31,7 @@ struct whisper_params {
     bool print_special = false;
     bool print_energy  = false;
     bool use_gpu       = true;
-    bool flash_attn    = false;
+    bool flash_attn    = true;
 
     std::string language  = "en";
     std::string model     = "models/ggml-base.en.bin";
@@ -62,21 +62,22 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
             whisper_print_usage(argc, argv, params);
             exit(0);
         }
-        else if (arg == "-t"   || arg == "--threads")       { params.n_threads     = std::stoi(argv[++i]); }
-        else if (arg == "-pms" || arg == "--prompt-ms")     { params.prompt_ms     = std::stoi(argv[++i]); }
-        else if (arg == "-cms" || arg == "--command-ms")    { params.command_ms    = std::stoi(argv[++i]); }
-        else if (arg == "-c"   || arg == "--capture")       { params.capture_id    = std::stoi(argv[++i]); }
-        else if (arg == "-mt"  || arg == "--max-tokens")    { params.max_tokens    = std::stoi(argv[++i]); }
-        else if (arg == "-ac"  || arg == "--audio-ctx")     { params.audio_ctx     = std::stoi(argv[++i]); }
-        else if (arg == "-vth" || arg == "--vad-thold")     { params.vad_thold     = std::stof(argv[++i]); }
-        else if (arg == "-fth" || arg == "--freq-thold")    { params.freq_thold    = std::stof(argv[++i]); }
-        else if (arg == "-tr"  || arg == "--translate")     { params.translate     = true; }
-        else if (arg == "-ps"  || arg == "--print-special") { params.print_special = true; }
-        else if (arg == "-pe"  || arg == "--print-energy")  { params.print_energy  = true; }
-        else if (arg == "-ng"  || arg == "--no-gpu")        { params.use_gpu       = false; }
-        else if (arg == "-fa"  || arg == "--flash-attn")    { params.flash_attn    = true; }
-        else if (arg == "-l"   || arg == "--language")      { params.language      = argv[++i]; }
-        else if (arg == "-m"   || arg == "--model")         { params.model         = argv[++i]; }
+        else if (arg == "-t"      || arg == "--threads")       { params.n_threads     = std::stoi(argv[++i]); }
+        else if (arg == "-pms"    || arg == "--prompt-ms")     { params.prompt_ms     = std::stoi(argv[++i]); }
+        else if (arg == "-cms"    || arg == "--command-ms")    { params.command_ms    = std::stoi(argv[++i]); }
+        else if (arg == "-c"      || arg == "--capture")       { params.capture_id    = std::stoi(argv[++i]); }
+        else if (arg == "-mt"     || arg == "--max-tokens")    { params.max_tokens    = std::stoi(argv[++i]); }
+        else if (arg == "-ac"     || arg == "--audio-ctx")     { params.audio_ctx     = std::stoi(argv[++i]); }
+        else if (arg == "-vth"    || arg == "--vad-thold")     { params.vad_thold     = std::stof(argv[++i]); }
+        else if (arg == "-fth"    || arg == "--freq-thold")    { params.freq_thold    = std::stof(argv[++i]); }
+        else if (arg == "-tr"     || arg == "--translate")     { params.translate     = true; }
+        else if (arg == "-ps"     || arg == "--print-special") { params.print_special = true; }
+        else if (arg == "-pe"     || arg == "--print-energy")  { params.print_energy  = true; }
+        else if (arg == "-ng"     || arg == "--no-gpu")        { params.use_gpu       = false; }
+        else if (arg == "-fa"     || arg == "--flash-attn")    { params.flash_attn    = true; }
+        else if (arg == "-nfa"    || arg == "--no-flash-attn") { params.flash_attn    = false; }
+        else if (arg == "-l"      || arg == "--language")      { params.language      = argv[++i]; }
+        else if (arg == "-m"      || arg == "--model")         { params.model         = argv[++i]; }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             whisper_print_usage(argc, argv, params);
@@ -105,7 +106,8 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -ps,        --print-special  [%-7s] print special tokens\n",                        params.print_special ? "true" : "false");
     fprintf(stderr, "  -pe,        --print-energy   [%-7s] print sound energy (for debugging)\n",          params.print_energy ? "true" : "false");
     fprintf(stderr, "  -ng,        --no-gpu         [%-7s] disable GPU\n",                                 params.use_gpu ? "false" : "true");
-    fprintf(stderr, "  -fa,        --flash-attn     [%-7s] flash attention\n",                             params.flash_attn ? "true" : "false");
+    fprintf(stderr, "  -fa,        --flash-attn     [%-7s] enable flash attention\n",                      params.flash_attn ? "true" : "false");
+    fprintf(stderr, "  -nfa,       --no-flash-attn  [%-7s] disable flash attention\n",                     params.flash_attn ? "false" : "true");
     fprintf(stderr, "  -l LANG,    --language LANG  [%-7s] spoken language\n",                             params.language.c_str());
     fprintf(stderr, "  -m FNAME,   --model FNAME    [%-7s] model path\n",                                  params.model.c_str());
     fprintf(stderr, "\n");

@@ -60,6 +60,7 @@ struct server_params
     std::string public_path = "examples/server/public";
     std::string request_path = "";
     std::string inference_path = "/inference";
+    std::string tmp_dir = ".";
 
     int32_t port          = 8080;
     int32_t read_timeout  = 600;
@@ -101,9 +102,11 @@ struct whisper_params {
     bool print_progress  = false;
     bool no_timestamps   = false;
     bool use_gpu         = true;
-    bool flash_attn      = false;
+    bool flash_attn      = true;
+    int32_t gpu_device   = 0;
     bool suppress_nst    = false;
-    bool no_context      = false;
+    bool no_context      = true;
+    bool no_language_probabilities = false;
 
     std::string language        = "en";
     std::string prompt          = "";
@@ -173,11 +176,14 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  --request-path PATH,           [%-7s] Request path for all requests\n", sparams.request_path.c_str());
     fprintf(stderr, "  --inference-path PATH,         [%-7s] Inference path for all requests\n", sparams.inference_path.c_str());
     fprintf(stderr, "  --convert,                     [%-7s] Convert audio to WAV, requires ffmpeg on the server\n", sparams.ffmpeg_converter ? "true" : "false");
+    fprintf(stderr, "  --tmp-dir,                     [%-7s] Temporary directory for ffmpeg transcoded files\n", sparams.tmp_dir.c_str());
     fprintf(stderr, "  -sns,      --suppress-nst      [%-7s] suppress non-speech tokens\n", params.suppress_nst ? "true" : "false");
     fprintf(stderr, "  -nth N,    --no-speech-thold N [%-7.2f] no speech threshold\n",   params.no_speech_thold);
-    fprintf(stderr, "  -nc,       --no-context        [%-7s] do not use previous audio context\n", params.no_context ? "true" : "false");
     fprintf(stderr, "  -ng,       --no-gpu            [%-7s] do not use gpu\n", params.use_gpu ? "false" : "true");
-    fprintf(stderr, "  -fa,       --flash-attn        [%-7s] flash attention\n", params.flash_attn ? "true" : "false");
+    fprintf(stderr, "  -dev N,    --device N          [%-7d] GPU device ID (default: 0)\n", params.gpu_device);
+    fprintf(stderr, "  -fa,       --flash-attn        [%-7s] enable flash attention\n", params.flash_attn ? "true" : "false");
+    fprintf(stderr, "  -nfa,      --no-flash-attn     [%-7s] disable flash attention\n", params.flash_attn ? "false" : "true");
+    fprintf(stderr, "  -nlp,      --no-language-probabilities [%-7s] exclude language probabilities from verbose_json output\n", params.no_language_probabilities ? "true" : "false");
     // Voice Activity Detection (VAD) parameters
     fprintf(stderr, "\nVoice Activity Detection (VAD) options:\n");
     fprintf(stderr, "             --vad                           [%-7s] enable Voice Activity Detection (VAD)\n",            params.vad ? "true" : "false");
@@ -194,6 +200,10 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
 }
 
 bool whisper_params_parse(int argc, char ** argv, whisper_params & params, server_params & sparams) {
+    if (const char * env_device = std::getenv("WHISPER_ARG_DEVICE")) {
+        params.gpu_device = std::stoi(env_device);
+    }
+
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
 
@@ -233,10 +243,12 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params, serve
         else if (arg == "-oved" || arg == "--ov-e-device")     { params.openvino_encode_device = argv[++i]; }
         else if (arg == "-dtw"  || arg == "--dtw")             { params.dtw             = argv[++i]; }
         else if (arg == "-ng"   || arg == "--no-gpu")          { params.use_gpu         = false; }
+        else if (arg == "-dev"  || arg == "--device")          { params.gpu_device      = std::stoi(argv[++i]); }
         else if (arg == "-fa"   || arg == "--flash-attn")      { params.flash_attn      = true; }
+        else if (arg == "-nfa"  || arg == "--no-flash-attn")   { params.flash_attn      = false; }
         else if (arg == "-sns"  || arg == "--suppress-nst")    { params.suppress_nst    = true; }
         else if (arg == "-nth"  || arg == "--no-speech-thold") { params.no_speech_thold = std::stof(argv[++i]); }
-        else if (arg == "-nc"   || arg == "--no-context")      { params.no_context      = true; }
+        else if (arg == "-nlp"  || arg == "--no-language-probabilities") { params.no_language_probabilities = true; }
 
         // server params
         else if (                  arg == "--port")            { sparams.port        = std::stoi(argv[++i]); }
@@ -245,13 +257,14 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params, serve
         else if (                  arg == "--request-path")    { sparams.request_path = argv[++i]; }
         else if (                  arg == "--inference-path")  { sparams.inference_path = argv[++i]; }
         else if (                  arg == "--convert")         { sparams.ffmpeg_converter     = true; }
+        else if (                  arg == "--tmp-dir")         { sparams.tmp_dir     = argv[++i]; }
 
         // Voice Activity Detection (VAD)
         else if (                  arg == "--vad")                         { params.vad                         = true; }
         else if (arg == "-vm"   || arg == "--vad-model")                   { params.vad_model                   = argv[++i]; }
         else if (arg == "-vt"   || arg == "--vad-threshold")               { params.vad_threshold               = std::stof(argv[++i]); }
         else if (arg == "-vspd" || arg == "--vad-min-speech-duration-ms")  { params.vad_min_speech_duration_ms  = std::stoi(argv[++i]); }
-        else if (arg == "-vsd"  || arg == "--vad-min-silence-duration-ms") { params.vad_min_speech_duration_ms  = std::stoi(argv[++i]); }
+        else if (arg == "-vsd"  || arg == "--vad-min-silence-duration-ms") { params.vad_min_silence_duration_ms = std::stoi(argv[++i]); }
         else if (arg == "-vmsd" || arg == "--vad-max-speech-duration-s")   { params.vad_max_speech_duration_s   = std::stof(argv[++i]); }
         else if (arg == "-vp"   || arg == "--vad-speech-pad-ms")           { params.vad_speech_pad_ms           = std::stoi(argv[++i]); }
         else if (arg == "-vo"   || arg == "--vad-samples-overlap")         { params.vad_samples_overlap         = std::stof(argv[++i]); }
@@ -285,7 +298,7 @@ void check_ffmpeg_availibility() {
     }
 }
 
-std::string generate_temp_filename(const std::string &prefix, const std::string &extension) {
+std::string generate_temp_filename(const std::string &path, const std::string &prefix, const std::string &extension) {
     auto now = std::chrono::system_clock::now();
     auto now_time_t = std::chrono::system_clock::to_time_t(now);
 
@@ -293,7 +306,9 @@ std::string generate_temp_filename(const std::string &prefix, const std::string 
     std::uniform_int_distribution<long long> dist(0, 1e9);
 
     std::stringstream ss;
-    ss << prefix
+    ss << path
+       << std::filesystem::path::preferred_separator
+       << prefix
        << "-"
        << std::put_time(std::localtime(&now_time_t), "%Y%m%d-%H%M%S")
        << "-"
@@ -567,10 +582,6 @@ void get_req_parameters(const Request & req, whisper_params & params)
     {
         params.suppress_nst = parse_str_to_bool(req.get_file_value("suppress_nst").content);
     }
-    if (req.has_file("no_context"))
-    {
-        params.no_context = parse_str_to_bool(req.get_file_value("no_context").content);
-    }
     if (req.has_file("vad"))
     {
         params.vad = parse_str_to_bool(req.get_file_value("vad").content);
@@ -598,6 +609,10 @@ void get_req_parameters(const Request & req, whisper_params & params)
     if (req.has_file("vad_samples_overlap"))
     {
         params.vad_samples_overlap = std::stof(req.get_file_value("vad_samples_overlap").content);
+    }
+    if (req.has_file("no_language_probabilities"))
+    {
+        params.no_language_probabilities = parse_str_to_bool(req.get_file_value("no_language_probabilities").content);
     }
 }
 
@@ -635,6 +650,7 @@ int main(int argc, char ** argv) {
     struct whisper_context_params cparams = whisper_context_default_params();
 
     cparams.use_gpu    = params.use_gpu;
+    cparams.gpu_device = params.gpu_device;
     cparams.flash_attn = params.flash_attn;
 
     if (!params.dtw.empty()) {
@@ -674,7 +690,10 @@ int main(int argc, char ** argv) {
         if (params.dtw == "large.v3") {
             cparams.dtw_aheads_preset = WHISPER_AHEADS_LARGE_V3;
         }
-
+        if (params.dtw == "large.v3.turbo") { 
+            cparams.dtw_aheads_preset = WHISPER_AHEADS_LARGE_V3_TURBO;
+        }
+        
         if (cparams.dtw_aheads_preset == WHISPER_AHEADS_NONE) {
             fprintf(stderr, "error: unknown DTW preset '%s'\n", params.dtw.c_str());
             return 3;
@@ -729,9 +748,9 @@ int main(int argc, char ** argv) {
     <body>
         <h1>Whisper.cpp Server</h1>
 
-        <h2>/inference</h2>
+        <h2>)" + sparams.request_path + sparams.inference_path + R"(</h2>
         <pre>
-    curl 127.0.0.1:)" + std::to_string(sparams.port) + R"(/inference \
+    curl 127.0.0.1:)" + std::to_string(sparams.port) + sparams.request_path + sparams.inference_path + R"( \
     -H "Content-Type: multipart/form-data" \
     -F file="@&lt;file-path&gt;" \
     -F temperature="0.0" \
@@ -748,7 +767,7 @@ int main(int argc, char ** argv) {
 
         <div>
             <h2>Try it out</h2>
-            <form action="/inference" method="POST" enctype="multipart/form-data">
+            <form action=")" + sparams.request_path + sparams.inference_path + R"(" method="POST" enctype="multipart/form-data">
                 <label for="file">Choose an audio file:</label>
                 <input type="file" id="file" name="file" accept="audio/*" required><br>
 
@@ -792,6 +811,7 @@ int main(int argc, char ** argv) {
         {
             fprintf(stderr, "error: no 'file' field in the request\n");
             const std::string error_resp = "{\"error\":\"no 'file' field in the request\"}";
+            res.status = 400;
             res.set_content(error_resp, "application/json");
             return;
         }
@@ -810,7 +830,7 @@ int main(int argc, char ** argv) {
         if (sparams.ffmpeg_converter) {
             // if file is not wav, convert to wav
             // write to temporary file
-            const std::string temp_filename = generate_temp_filename("whisper-server", ".wav");
+            const std::string temp_filename = generate_temp_filename(sparams.tmp_dir, "whisper-server", ".wav");
             std::ofstream temp_file{temp_filename, std::ios::binary};
             temp_file << audio_file.content;
             temp_file.close();
@@ -818,6 +838,7 @@ int main(int argc, char ** argv) {
             std::string error_resp = "{\"error\":\"Failed to execute ffmpeg command.\"}";
             const bool is_converted = convert_to_wav(temp_filename, error_resp);
             if (!is_converted) {
+                res.status = 500;
                 res.set_content(error_resp, "application/json");
                 return;
             }
@@ -827,6 +848,7 @@ int main(int argc, char ** argv) {
             {
                 fprintf(stderr, "error: failed to read WAV file '%s'\n", temp_filename.c_str());
                 const std::string error_resp = "{\"error\":\"failed to read WAV file\"}";
+                res.status = 400;
                 res.set_content(error_resp, "application/json");
                 std::remove(temp_filename.c_str());
                 return;
@@ -838,6 +860,7 @@ int main(int argc, char ** argv) {
             {
                 fprintf(stderr, "error: failed to read audio data\n");
                 const std::string error_resp = "{\"error\":\"failed to read audio data\"}";
+                res.status = 400;
                 res.set_content(error_resp, "application/json");
                 return;
             }
@@ -916,7 +939,7 @@ int main(int argc, char ** argv) {
             wparams.logprob_thold    = params.logprob_thold;
 
             wparams.no_timestamps    = params.no_timestamps;
-            wparams.token_timestamps = !params.no_timestamps && params.response_format == vjson_format;
+            wparams.token_timestamps = !params.no_timestamps;
             wparams.no_context       = params.no_context;
 
             wparams.suppress_nst     = params.suppress_nst;
@@ -1021,23 +1044,25 @@ int main(int argc, char ** argv) {
         } else if (params.response_format == vjson_format) {
             /* try to match openai/whisper's Python format */
             std::string results = output_str(ctx, params, pcmf32s); 
-            // Get language probabilities
-            std::vector<float> lang_probs(whisper_lang_max_id() + 1, 0.0f);
-            const auto detected_lang_id = whisper_lang_auto_detect(ctx, 0, params.n_threads, lang_probs.data());
             json jres = json{
                 {"task", params.translate ? "translate" : "transcribe"},
                 {"language", whisper_lang_str_full(whisper_full_lang_id(ctx))},
                 {"duration", float(pcmf32.size())/WHISPER_SAMPLE_RATE},
                 {"text", results},
-                {"segments", json::array()},
-                {"detected_language", whisper_lang_str_full(detected_lang_id)},
-                {"detected_language_probability", lang_probs[detected_lang_id]},
-                {"language_probabilities", json::object()}
+                {"segments", json::array()}
             };
-            // Add all language probabilities
-            for (int i = 0; i <= whisper_lang_max_id(); ++i) {
-                if (lang_probs[i] > 0.001f) { // Only include non-negligible probabilities
-                    jres["language_probabilities"][whisper_lang_str(i)] = lang_probs[i];
+            // Only compute language probabilities if requested (expensive operation)
+            if (!params.no_language_probabilities) {
+                std::vector<float> lang_probs(whisper_lang_max_id() + 1, 0.0f);
+                const auto detected_lang_id = whisper_lang_auto_detect(ctx, 0, params.n_threads, lang_probs.data());
+                jres["detected_language"] = whisper_lang_str_full(detected_lang_id);
+                jres["detected_language_probability"] = lang_probs[detected_lang_id];
+                jres["language_probabilities"] = json::object();
+                // Add all language probabilities
+                for (int i = 0; i <= whisper_lang_max_id(); ++i) {
+                    if (lang_probs[i] > 0.001f) { // Only include non-negligible probabilities
+                        jres["language_probabilities"][whisper_lang_str(i)] = lang_probs[i];
+                    }
                 }
             }
             const int n_segments = whisper_full_n_segments(ctx);
@@ -1106,6 +1131,7 @@ int main(int argc, char ** argv) {
         {
             fprintf(stderr, "error: no 'model' field in the request\n");
             const std::string error_resp = "{\"error\":\"no 'model' field in the request\"}";
+            res.status = 400;
             res.set_content(error_resp, "application/json");
             return;
         }
@@ -1114,6 +1140,7 @@ int main(int argc, char ** argv) {
         {
             fprintf(stderr, "error: 'model': %s not found!\n", model.c_str());
             const std::string error_resp = "{\"error\":\"model not found!\"}";
+            res.status = 400;
             res.set_content(error_resp, "application/json");
             return;
         }

@@ -111,6 +111,10 @@ int main(int argc, char ** argv) {
     struct whisper_vad_context * vctx = whisper_vad_init_from_file_with_params(
             cli_params.vad_model.c_str(),
             ctx_params);
+    if (vctx == nullptr) {
+        fprintf(stderr, "error: failed to initialize whisper context\n");
+        return 2;
+    }
 
     // Detect speech in the input audio file.
     if (!whisper_vad_detect_speech(vctx, pcmf32.data(), pcmf32.size())) {

@@ -6,7 +6,7 @@ class TestVAD < TestBase
     vad_params = Whisper::VAD::Params.new
     @params = Whisper::Params.new(
       vad: true,
-      vad_model_path: "silero-v5.1.2",
+      vad_model_path: "silero-v6.2.0",
       vad_params:
     )
   end

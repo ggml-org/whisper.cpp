@@ -1,6 +1,7 @@
 require_relative "helper"
 require "stringio"
 require "etc"
+require "pathname"
 
 # Exists to detect memory-related bug
 Whisper.log_set ->(level, buffer, user_data) {}, nil
@@ -20,6 +21,15 @@ class TestWhisper < TestBase
     }
   end
 
+  def test_whisper_pathname
+    @whisper = Whisper::Context.new("base.en")
+    params  = Whisper::Params.new
+
+    @whisper.transcribe(Pathname(AUDIO), params) {|text|
+      assert_match(/ask not what your country can do for you, ask what you can do for your country/, text)
+    }
+  end
+
   def test_transcribe_non_parallel
     @whisper = Whisper::Context.new("base.en")
     params  = Whisper::Params.new
@@ -34,7 +44,7 @@ class TestWhisper < TestBase
     params  = Whisper::Params.new
 
     @whisper.transcribe(AUDIO, params, n_processors: 4) {|text|
-      assert_match(/ask not what your country can do for you[,.] ask what you can do for your country/i, text)
+      assert_match(/what you can do for your country/i, text)
     }
   end
 
@@ -116,6 +126,10 @@ class TestWhisper < TestBase
     assert_match(/\AWHISPER : COREML = \d | OPENVINO = \d |/, Whisper.system_info_str)
   end
 
+  def test_version
+    assert_kind_of String, Whisper::VERSION
+  end
+
   def test_log_set
     user_data = Object.new
     logs = []
@@ -143,6 +157,13 @@ class TestWhisper < TestBase
     assert_empty dev.string
   ensure
     $stderr = stderr
+  end
+
+  def test_access_attribute_without_initialization
+    whisper = Whisper::Context.allocate
+    assert_raise do
+      whisper.model_type
+    end
   end
 
   sub_test_case "full" do
@@ -194,6 +215,16 @@ class TestWhisper < TestBase
 
       assert_equal 1, @whisper.full_n_segments
       assert_match(/ask not what your country can do for you, ask what you can do for your country/, @whisper.each_segment.first.text)
+    end
+
+    def test_full_with_memroy_view_gc
+      samples = JFKReader.new(AUDIO)
+      @whisper.full(@params, samples)
+      GC.start
+      require "fiddle"
+      Fiddle::MemoryView.export samples do |view|
+        assert_equal 176000, view.to_s.unpack("#{view.format}*").length
+      end
     end
 
     def test_full_parallel

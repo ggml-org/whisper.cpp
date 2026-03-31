@@ -1,10 +1,10 @@
 ARG UBUNTU_VERSION=22.04
 # This needs to generally match the container host's environment.
-ARG MUSA_VERSION=rc4.0.1
+ARG MUSA_VERSION=rc4.2.0
 # Target the MUSA build image
-ARG BASE_MUSA_DEV_CONTAINER=mthreads/musa:${MUSA_VERSION}-mudnn-devel-ubuntu${UBUNTU_VERSION}
+ARG BASE_MUSA_DEV_CONTAINER=mthreads/musa:${MUSA_VERSION}-devel-ubuntu${UBUNTU_VERSION}-amd64
 # Target the MUSA runtime image
-ARG BASE_MUSA_RUN_CONTAINER=mthreads/musa:${MUSA_VERSION}-mudnn-runtime-ubuntu${UBUNTU_VERSION}
+ARG BASE_MUSA_RUN_CONTAINER=mthreads/musa:${MUSA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}-amd64
 
 FROM ${BASE_MUSA_DEV_CONTAINER} AS build
 WORKDIR /app
@@ -32,8 +32,9 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/* /var/tmp/*
 
-COPY --from=build /app /app
-RUN du -sh /app/*
-RUN find /app -type f -size +100M
+COPY --from=build /app/build/bin /app/build/bin
+COPY --from=build /app/samples /app/samples
+COPY --from=build /app/models /app/models
+
 ENV PATH=/app/build/bin:$PATH
 ENTRYPOINT [ "bash", "-c" ]

@@ -198,6 +198,8 @@ extern "C" {
         float samples_overlap;         // Overlap in seconds when copying audio samples from speech segment.
     } whisper_vad_params;
 
+    WHISPER_API const char * whisper_version(void);
+
     // Various functions for loading a ggml whisper model.
     // Allocate (almost) all memory needed for the model.
     // Return NULL on failure
@@ -523,6 +525,7 @@ extern "C" {
         // use whisper_tokenize() to convert text to tokens
         // maximum of whisper_n_text_ctx()/2 tokens are used (typically 224)
         const char * initial_prompt;
+        bool carry_initial_prompt; // if true, always prepend initial_prompt to every decode window (may reduce conditioning on previous text)
         const whisper_token * prompt_tokens;
         int prompt_n_tokens;
 

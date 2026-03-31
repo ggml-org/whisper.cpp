@@ -30,7 +30,7 @@ tiny.en tiny.en-q5_1 tiny.en-q8_0 ^
 base base-q5_1 base-q8_0 ^
 base.en base.en-q5_1 base.en-q8_0 ^
 small small-q5_1 small-q8_0 ^
-small.en small.en-q5_1 small.en-q8_0 ^
+small.en small.en-q5_1 small.en-q8_0 small.en-tdrz ^
 medium medium-q5_0 medium-q8_0 ^
 medium.en medium.en-q5_0 medium.en-q8_0 ^
 large-v1 ^
@@ -74,8 +74,13 @@ if exist "%models_path%\\ggml-%model%.bin" (
   echo Model %model% already exists. Skipping download.
   goto :eof
 )
+echo %model% | findstr tdrz
+if %ERRORLEVEL% neq 0 (
+ PowerShell -NoProfile -ExecutionPolicy Bypass -Command "Start-BitsTransfer -Source https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-%model%.bin -Destination \"%models_path%\\ggml-%model%.bin\""
+) else (
+  PowerShell -NoProfile -ExecutionPolicy Bypass -Command "Start-BitsTransfer -Source https://huggingface.co/akashmjn/tinydiarize-whisper.cpp/resolve/main/ggml-%model%.bin -Destination \"%models_path%\\ggml-%model%.bin\""
 
-PowerShell -NoProfile -ExecutionPolicy Bypass -Command "Start-BitsTransfer -Source https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-%model%.bin -Destination \"%models_path%\\ggml-%model%.bin\""
+)
 
 if %ERRORLEVEL% neq 0 (
   echo Failed to download ggml model %model%
