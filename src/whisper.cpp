@@ -32,6 +32,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #ifdef _MSC_VER
@@ -210,6 +211,17 @@ static bool ggml_graph_compute_helper(
     }
 
     return t;
+}
+
+static void whisper_load_backends(const char *disable_backends) {
+#ifdef GGML_BACKEND_DL
+    static std::once_flag flag;
+    std::call_once(flag, [disable_backends]() {
+        ggml_backend_load_all_from_path_with_disable(nullptr, disable_backends);
+    });
+#else
+    (void)disable_backends;
+#endif
 }
 
 // TODO: move these functions to ggml-base with support for ggml-backend?
@@ -1289,6 +1301,8 @@ static size_t aheads_masks_nbytes(struct whisper_aheads_masks & aheads_masks) {
 
 static ggml_backend_t whisper_backend_init_gpu(const whisper_context_params & params) {
     ggml_log_set(g_state.log_callback, g_state.log_callback_user_data);
+
+    whisper_load_backends(params.disable_backends);
 
     ggml_backend_dev_t dev = nullptr;
 
@@ -3608,6 +3622,7 @@ struct whisper_context_params whisper_context_default_params() {
         /*.use_gpu              =*/ true,
         /*.flash_attn           =*/ true,
         /*.gpu_device           =*/ 0,
+        /*.disable_backends     =*/ NULL,
 
         /*.dtw_token_timestamps =*/ false,
         /*.dtw_aheads_preset    =*/ WHISPER_AHEADS_NONE,
@@ -4314,6 +4329,8 @@ static int whisper_has_openvino(void) {
 
 const char * whisper_print_system_info(void) {
     static std::string s;
+
+    whisper_load_backends(nullptr);
 
     s  = "";
     s += "WHISPER : ";
@@ -8214,6 +8231,8 @@ WHISPER_API int whisper_bench_ggml_mul_mat(int n_threads) {
 }
 
 WHISPER_API const char * whisper_bench_ggml_mul_mat_str(int n_threads) {
+    whisper_load_backends(nullptr);
+
     static std::string s;
     s = "";
     char strbuf[256];
@@ -8992,3 +9011,4 @@ static void whisper_log_callback_default(ggml_log_level level, const char * text
     fputs(text, stderr);
     fflush(stderr);
 }
+
