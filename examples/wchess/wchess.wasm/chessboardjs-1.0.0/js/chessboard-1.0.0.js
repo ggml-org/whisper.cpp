@@ -1552,7 +1552,7 @@
     }
 
     widget.resize = function () {
-      // calulate the new square size
+      // calculate the new square size
       squareSize = calculateSquareSize()
 
       // set board width

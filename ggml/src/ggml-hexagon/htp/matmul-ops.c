@@ -429,7 +429,7 @@ static void vec_dot_q4x4x2_q8x4x2_1x1(const int n, float * restrict s0, const vo
     // Apply scale to acc and accumulate into the row sum (qf32).
 
     const uint32_t nb   = n / qk;  // num full blocks
-    const uint32_t nloe = n % qk;  // num leftover elemements
+    const uint32_t nloe = n % qk;  // num leftover elements
 
     uint32_t i = 0;
     for (; i < nb; i++) {
@@ -510,7 +510,7 @@ static void vec_dot_q4x4x2_q8x4x2_2x1(const int n, float * restrict s0,
     // Apply scale to acc and accumulate into the row sum (qf32).
 
     const uint32_t nb   = n / qk;  // num full blocks
-    const uint32_t nloe = n % qk;  // num leftover elemements
+    const uint32_t nloe = n % qk;  // num leftover elements
 
     uint32_t i = 0;
     for (; i < nb; i++) {
@@ -728,7 +728,7 @@ static void vec_dot_q8x4x2_q8x4x2_1x1(const int n, float * restrict s0, const vo
     // Apply scale to acc and accumulate into the row sum (qf32).
 
     const uint32_t nb   = n / qk;  // num full blocks
-    int32_t        nloe = n % qk;  // num leftover elemements (must be signed)
+    int32_t        nloe = n % qk;  // num leftover elements (must be signed)
 
     uint32_t i = 0;
     for (; i < nb; i++) {
@@ -809,7 +809,7 @@ static void vec_dot_q8x4x2_q8x4x2_2x1(const int n, float * restrict s0,
     // Apply scale to acc and accumulate into the row sum (qf32).
 
     const uint32_t nb   = n / qk;  // num full blocks
-    int32_t        nloe = n % qk;  // num leftover elemements (must be signed)
+    int32_t        nloe = n % qk;  // num leftover elements (must be signed)
 
     uint32_t i = 0;
     for (; i < nb; i++) {
@@ -1314,7 +1314,7 @@ static void vec_dot_mxfp4x4x2_q8x4x2_1x1(const int n, float * restrict s0, const
     // Apply scale to acc and accumulate into the row sum (qf32).
 
     const uint32_t nb   = n / qk;  // num full blocks
-    int32_t        nloe = n % qk;  // num leftover elemements (must be signed)
+    int32_t        nloe = n % qk;  // num leftover elements (must be signed)
 
     uint32_t i = 0;
     for (; i < nb; i++) {
@@ -1425,7 +1425,7 @@ static void vec_dot_mxfp4x4x2_q8x4x2_2x1(const int n, float * restrict s0,
     // Apply scale to acc and accumulate into the row sum (f32).
 
     const uint32_t nb   = n / qk;  // num full blocks
-    int32_t        nloe = n % qk;  // num leftover elemements (must be signed)
+    int32_t        nloe = n % qk;  // num leftover elements (must be signed)
 
     uint32_t i = 0;
     for (; i < nb; i++) {

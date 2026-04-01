@@ -4,7 +4,7 @@ factory().then(function(whisper) {
     var fs = require('fs');
 
     // to avoid reading WAV files and depending on some 3rd-party package, we read
-    // 32-bit float PCM directly. to genereate it:
+    // 32-bit float PCM directly. to generate it:
     //
     //   $ ffmpeg -i samples/jfk.wav -f f32le -acodec pcm_f32le samples/jfk.pcmf32
     //

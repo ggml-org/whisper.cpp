@@ -70,7 +70,7 @@ int main() {
     struct whisper_vad_params params = whisper_vad_default_params();
     assert_default_params(params);
 
-    // Test speech probabilites
+    // Test speech probabilities
     test_detect_speech(vctx, params, pcmf32.data(), pcmf32.size());
 
     // Test speech timestamps (uses speech probabilities from above)

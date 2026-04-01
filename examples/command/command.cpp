@@ -117,7 +117,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -ps,        --print-special  [%-7s] print special tokens\n",                        params.print_special ? "true" : "false");
     fprintf(stderr, "  -pe,        --print-energy   [%-7s] print sound energy (for debugging)\n",          params.print_energy ? "true" : "false");
     fprintf(stderr, "  -ng,        --no-gpu         [%-7s] disable GPU\n",                                 params.use_gpu ? "false" : "true");
-    fprintf(stderr, "  -fa,        --flash-attn     [%-7s] enbale flash attention\n",                      params.flash_attn ? "true" : "false");
+    fprintf(stderr, "  -fa,        --flash-attn     [%-7s] enable flash attention\n",                      params.flash_attn ? "true" : "false");
     fprintf(stderr, "  -nfa,       --no-flash-attn  [%-7s] disable flash attention\n",                     params.flash_attn ? "false" : "true");
     fprintf(stderr, "  -l LANG,    --language LANG  [%-7s] spoken language\n",                             params.language.c_str());
     fprintf(stderr, "  -m FNAME,   --model FNAME    [%-7s] model path\n",                                  params.model.c_str());

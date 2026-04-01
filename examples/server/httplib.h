@@ -4439,7 +4439,7 @@ inline bool read_content_chunked(Stream &strm, T &x,
   // an empty line". https://www.rfc-editor.org/rfc/rfc9112.html#section-7.1
   //
   // In '7.1.3. Decoding Chunked', however, the pseudo-code in the section
-  // does't care for the existence of the final CRLF. In other words, it seems
+  // doesn't care for the existence of the final CRLF. In other words, it seems
   // to be ok whether the final CRLF exists or not in the chunked data.
   // https://www.rfc-editor.org/rfc/rfc9112.html#section-7.1.3
   //
