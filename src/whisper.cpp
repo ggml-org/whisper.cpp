@@ -7878,6 +7878,12 @@ int whisper_full_with_state(
             WHISPER_LOG_ERROR("embedding count (%d) != segment count (%d); skipping clustering\n",
                               num_embeddings, num_segments);
         } else {
+            // Free previous clustering context if it exists
+            if (state->diarize_clustering) {
+                whisper_clustering_context_free(state->diarize_clustering);
+                state->diarize_clustering = nullptr;
+            }
+
             state->diarize_clustering = whisper_clustering_context_create(num_segments);
             if (!state->diarize_clustering) {
                 WHISPER_LOG_ERROR("failed to create clustering context\n");
