@@ -89,7 +89,7 @@ struct whisper_params {
     std::string grammar;
     std::string grammar_rule;
 
-    float diarize_threshold = 0.5f;
+    float diarize_threshold = 0.70f;
     int   diarize_speakers  = 0;
 
     // [TDRZ] speaker turn string

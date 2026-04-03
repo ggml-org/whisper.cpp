@@ -116,7 +116,7 @@ struct whisper_params {
 
     std::string response_format     = json_format;
 
-    float diarize_threshold = 0.5f;
+    float diarize_threshold = 0.70f;
     int   diarize_speakers  = 0;
 
     // [TDRZ] speaker turn string
