@@ -33,42 +33,6 @@ import torch
 import numpy as np
 from pathlib import Path
 
-def fuse_batch_norm_weights(conv_weight, conv_bias, bn_mean, bn_var, bn_weight, bn_bias, eps=1e-5):
-    """
-    Fuse BatchNorm into conv weights for inference.
-
-    Args:
-        conv_weight: [out_c, in_c, kernel_size]
-        conv_bias: [out_c]
-        bn_mean, bn_var, bn_weight, bn_bias: [out_c] each
-
-    Returns:
-        fused_weight: [out_c, in_c, kernel_size]
-        fused_bias: [out_c]
-    """
-    # Convert to numpy if needed
-    if isinstance(conv_weight, torch.Tensor):
-        conv_weight = conv_weight.cpu().numpy()
-    if isinstance(conv_bias, torch.Tensor):
-        conv_bias = conv_bias.cpu().numpy()
-    if isinstance(bn_mean, torch.Tensor):
-        bn_mean = bn_mean.cpu().numpy()
-    if isinstance(bn_var, torch.Tensor):
-        bn_var = bn_var.cpu().numpy()
-    if isinstance(bn_weight, torch.Tensor):
-        bn_weight = bn_weight.cpu().numpy()
-    if isinstance(bn_bias, torch.Tensor):
-        bn_bias = bn_bias.cpu().numpy()
-
-    # Fusion formula: W_fused = W * γ / sqrt(σ² + ε), b_fused = β + γ * (b - μ) / sqrt(σ² + ε)
-    scale = bn_weight / np.sqrt(bn_var + eps)  # [out_c]
-
-    # Broadcast scale across weight dimensions [out_c, in_c, kernel_size]
-    fused_weight = conv_weight.astype(np.float32) * scale[:, np.newaxis, np.newaxis]
-    fused_bias = bn_bias + scale * (conv_bias.astype(np.float32) - bn_mean)
-
-    return fused_weight, fused_bias
-
 def load_speaker_model(model_name: str, tmp_dir: str = None):
     """
     Load SpeakerRecognition model from SpeechBrain.
@@ -167,8 +131,8 @@ def convert_speaker_model(model_name: str, output_path: str, test_mode: bool = F
         print(f"Version: {version_major}.{version_minor}.{version_patch}")
 
         # Write hyperparameters
-        embedding_dim = 192  # ECAPA-TDNN output dimension
-        n_channels = 512    # Internal architecture parameter
+        embedding_dim = 192   # ECAPA-TDNN output dimension
+        n_channels = 1024    # Internal channel width
         fout.write(struct.pack('i', embedding_dim))
         fout.write(struct.pack('i', n_channels))
         print(f"Embedding dimension: {embedding_dim}")

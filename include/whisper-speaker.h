@@ -2,7 +2,6 @@
 #define WHISPER_SPEAKER_H
 
 #include "ggml.h"
-#include <cstdint>
 
 #ifdef __cplusplus
 extern "C" {

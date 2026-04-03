@@ -30,7 +30,10 @@ options:
   -tpi,      --temperature-inc N [0.20   ] The increment of temperature, between 0 and 1
   -debug,    --debug-mode        [false  ] enable debug mode (eg. dump log_mel)
   -tr,       --translate         [false  ] translate from source language to english
-  -di,       --diarize           [false  ] stereo audio diarization
+  -di,       --diarize           [false  ] enable speaker diarization
+             --diarize-model FNAME [       ] speaker embedding model path (GGML .bin)
+             --diarize-threshold N [0.50   ] clustering distance threshold
+             --diarize-speakers N  [0      ] target speaker count (0 = auto)
   -tdrz,     --tinydiarize       [false  ] enable tinydiarize (requires a tdrz model)
   -nf,       --no-fallback       [false  ] do not use temperature fallback while decoding
   -otxt,     --output-txt        [false  ] output result in a text file
@@ -63,4 +66,14 @@ options:
   --grammar GRAMMAR              [       ] GBNF grammar to guide decoding
   --grammar-rule RULE            [       ] top-level GBNF grammar rule name
   --grammar-penalty N            [100.0  ] scales down logits of nongrammar tokens
+```
+
+Model-based diarization uses the ECAPA-TDNN speaker embedding model produced by
+`models/convert-speaker-to-ggml.py`:
+
+```
+python models/convert-speaker-to-ggml.py --output models/ggml-speaker-ecapa-tdnn.bin
+./build/bin/whisper-cli -m models/ggml-base.en.bin \
+  --diarize --diarize-model models/ggml-speaker-ecapa-tdnn.bin \
+  -f input.wav
 ```

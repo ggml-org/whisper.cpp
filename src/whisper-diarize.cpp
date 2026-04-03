@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <vector>
 #include <cstdio>
+#include <mutex>
 
 // Define logging macros for consistency with whisper.cpp
 #define WHISPER_LOG_ERROR(...) fprintf(stderr, "[ERROR] " __VA_ARGS__)
@@ -25,17 +26,13 @@
 // FFT constants
 #define FFT_SIZE            512  // Next power of 2 for efficiency
 
-static float g_hann_window[WHISPER_N_FFT] = {0};
-static int g_hann_computed = 0;
+static float g_hamming_window[WHISPER_N_FFT] = {0};
+static std::once_flag g_hamming_once;
 
-static void compute_hann_window() {
-    if (g_hann_computed) return;
-
-    // Hamming window (matching SpeechBrain pretrained model)
+static void compute_hamming_window() {
     for (int i = 0; i < WHISPER_N_FFT; i++) {
-        g_hann_window[i] = 0.54f - 0.46f * cosf(2.0f * M_PI * i / (WHISPER_N_FFT - 1));
+        g_hamming_window[i] = 0.54f - 0.46f * cosf(2.0f * M_PI * i / (WHISPER_N_FFT - 1));
     }
-    g_hann_computed = 1;
 }
 
 // Cooley-Tukey radix-2 FFT (complex-to-complex, in-place)
@@ -128,12 +125,25 @@ static float * create_mel_filters(int n_mels, int n_fft, int sample_rate) {
 }
 
 // Compute 80-bin mel-spectrogram from PCM samples
+static float * g_mel_filters = NULL;
+static std::once_flag g_mel_filters_once;
+static const int g_n_fft_bins = 1 + WHISPER_N_FFT / 2;  // 201 bins for 400-point DFT
+
+static void init_mel_filters() {
+    g_mel_filters = create_mel_filters(MEL_N_BINS, g_n_fft_bins, WHISPER_SAMPLE_RATE);
+}
+
 float * whisper_compute_mel_80(const float * samples, int n_samples) {
     if (!samples || n_samples <= 0) {
         return NULL;
     }
 
-    compute_hann_window();
+    std::call_once(g_hamming_once, compute_hamming_window);
+    std::call_once(g_mel_filters_once, init_mel_filters);
+
+    if (!g_mel_filters) {
+        return NULL;
+    }
 
     // Center padding: add n_fft/2 samples on both sides
     int pad = WHISPER_N_FFT / 2;  // 200 samples
@@ -157,20 +167,18 @@ float * whisper_compute_mel_80(const float * samples, int n_samples) {
     // Allocate output mel array [n_frames, 80]
     float * mel = (float *)calloc(n_frames * MEL_N_BINS, sizeof(float));
     if (!mel) {
+        free(padded_samples);
         return NULL;
     }
 
-    // Create mel filterbank once (n_fft=400 → 201 bins)
-    static float * mel_filters = NULL;
-    static int mel_filters_initialized = 0;
-    int n_fft_bins = 1 + WHISPER_N_FFT / 2;  // 201 bins for 400-point DFT
-    if (!mel_filters_initialized) {
-        mel_filters = create_mel_filters(MEL_N_BINS, n_fft_bins, WHISPER_SAMPLE_RATE);
-        mel_filters_initialized = 1;
-    }
-
-    if (!mel_filters) {
+    // Allocate FFT and magnitude buffers once for the loop
+    float * fft_buf = (float *)malloc(FFT_SIZE * 2 * sizeof(float));
+    float * mag = (float *)malloc(g_n_fft_bins * sizeof(float));
+    if (!fft_buf || !mag) {
+        free(fft_buf);
+        free(mag);
         free(mel);
+        free(padded_samples);
         return NULL;
     }
 
@@ -179,12 +187,10 @@ float * whisper_compute_mel_80(const float * samples, int n_samples) {
         int offset = t * WHISPER_HOP_LENGTH;
 
         // Extract frame, apply Hamming window, zero-pad to 512 as complex interleaved
-        float * fft_buf = (float *)calloc(FFT_SIZE * 2, sizeof(float));
+        memset(fft_buf, 0, FFT_SIZE * 2 * sizeof(float));
         for (int i = 0; i < WHISPER_N_FFT; i++) {
-            fft_buf[2*i] = padded_samples[offset + i] * g_hann_window[i];
-            // imaginary = 0 (calloc)
+            fft_buf[2*i] = padded_samples[offset + i] * g_hamming_window[i];
         }
-        // positions WHISPER_N_FFT..FFT_SIZE-1 are zero-padded (calloc)
 
         // In-place 512-point FFT
         fft_radix2(fft_buf, FFT_SIZE);
@@ -195,8 +201,7 @@ float * whisper_compute_mel_80(const float * samples, int n_samples) {
         // Map: for target bin j (400-point), find 512-point bin at same frequency
         // freq_j = j * sr / 400 → k_512 = j * 512 / 400 = j * 1.28
         // Use linear interpolation between adjacent 512-point bins
-        float * mag = (float *)malloc(n_fft_bins * sizeof(float));
-        for (int j = 0; j < n_fft_bins; j++) {
+        for (int j = 0; j < g_n_fft_bins; j++) {
             float k_f = j * (float)FFT_SIZE / WHISPER_N_FFT;  // fractional 512-bin index
             int k0 = (int)k_f;
             float frac = k_f - k0;
@@ -214,17 +219,17 @@ float * whisper_compute_mel_80(const float * samples, int n_samples) {
         // Apply mel filterbank
         for (int m = 0; m < MEL_N_BINS; m++) {
             float mel_val = 0.0f;
-            for (int k = 0; k < n_fft_bins; k++) {
-                mel_val += mag[k] * mel_filters[m * n_fft_bins + k];
+            for (int k = 0; k < g_n_fft_bins; k++) {
+                mel_val += mag[k] * g_mel_filters[m * g_n_fft_bins + k];
             }
 
             // dB scale: 10 * log10(max(x, 1e-10))
             mel[t * MEL_N_BINS + m] = 10.0f * log10f(fmaxf(mel_val, 1e-10f));
         }
-
-        free(fft_buf);
-        free(mag);
     }
+
+    free(fft_buf);
+    free(mag);
 
     // top_db clipping: clamp to (max_db - 80)
     float max_db = -1e30f;
@@ -258,16 +263,6 @@ void whisper_mel_free(float * mel) {
 }
 
 // Speaker encoder forward pass
-
-static struct ggml_tensor * apply_simple_norm(
-    struct ggml_context * ctx,
-    struct ggml_tensor * x) {
-    if (!x) {
-        WHISPER_LOG_ERROR("apply_simple_norm: NULL input tensor\n");
-        return x;
-    }
-    return ggml_norm(ctx, x, 1e-5f);
-}
 
 // Reshape conv1d output to 4D for broadcasting
 static struct ggml_tensor * ensure_4d_from_conv1d(struct ggml_context * ctx, struct ggml_tensor * t) {
@@ -391,9 +386,9 @@ struct whisper_speaker_encoder * whisper_speaker_encoder_new(
     // Dynamic context size: base 200MB + ~0.5MB per frame for intermediate tensors
     size_t ctx_bytes = (size_t)200 * 1024 * 1024 + (size_t)n_frames * 512 * 1024;
     struct ggml_init_params params = {
-        .mem_size = ctx_bytes,
-        .mem_buffer = NULL,
-        .no_alloc = false,
+        ctx_bytes,
+        NULL,
+        false,
     };
 
     encoder->ctx = ggml_init(params);

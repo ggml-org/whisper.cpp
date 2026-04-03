@@ -29,7 +29,10 @@ options:
   -lpt N,    --logprob-thold N   [-1.00  ] log probability threshold for decoder fail
   -debug,    --debug-mode        [false  ] enable debug mode (eg. dump log_mel)
   -tr,       --translate         [false  ] translate from source language to english
-  -di,       --diarize           [false  ] stereo audio diarization
+  -di,       --diarize           [false  ] enable speaker diarization
+             --diarize-model FNAME [       ] speaker embedding model path (GGML .bin)
+             --diarize-threshold N [0.50   ] clustering distance threshold
+             --diarize-speakers N  [0      ] target speaker count (0 = auto)
   -tdrz,     --tinydiarize       [false  ] enable tinydiarize (requires a tdrz model)
   -nf,       --no-fallback       [false  ] do not use temperature fallback while decoding
   -ps,       --print-special     [false  ] print special tokens
@@ -69,6 +72,10 @@ Voice Activity Detection (VAD) options:
 > [!WARNING]
 > **Do not run the server example with administrative privileges and ensure it's operated in a sandbox environment, especially since it involves risky operations like accepting user file uploads and using ffmpeg for format conversions. Always validate and sanitize inputs to guard against potential security threats.**
 
+When using diarization over HTTP, `diarize_model` is a form field whose value is a
+path on the server host, not an uploaded model file. The speaker embedding model
+must already exist on the machine running `whisper-server`.
+
 ## request examples
 
 **/inference**
@@ -78,6 +85,8 @@ curl 127.0.0.1:8080/inference \
 -F file="@<file-path>" \
 -F temperature="0.0" \
 -F temperature_inc="0.2" \
+-F diarize="true" \
+-F diarize_model="/absolute/path/on/server/models/ggml-speaker-ecapa-tdnn.bin" \
 -F response_format="json"
 ```
 

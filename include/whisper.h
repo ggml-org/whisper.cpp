@@ -591,7 +591,7 @@ extern "C" {
 
         // Speaker diarization params
         bool         diarize;                      // Enable speaker diarization (default: false)
-        const char * diarize_model_path;           // Path to speaker embedding model file (GGUF format)
+        const char * diarize_model_path;           // Path to speaker embedding model file (GGML .bin format)
         float        diarize_threshold;            // Distance threshold for clustering (default: 0.5f)
         int          diarize_speakers;             // Target speaker count; 0 = auto-detect (default: 0)
     };

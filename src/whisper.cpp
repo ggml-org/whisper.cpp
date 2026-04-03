@@ -942,8 +942,8 @@ struct whisper_state {
 
     // Speaker diarization context
     struct whisper_speaker_model * diarize_model = nullptr;
-    struct whisper_speaker_encoder * diarize_encoder = nullptr;
     std::vector<float> diarize_embeddings;
+    std::vector<int> diarize_segment_indices;
     struct whisper_clustering_context * diarize_clustering = nullptr;
 };
 
@@ -963,6 +963,85 @@ struct whisper_context {
 
     std::string path_model; // populated by whisper_init_from_file_with_params()
 };
+
+#ifdef WHISPER_DIARIZE
+static bool whisper_compute_diarization_embedding(
+        struct whisper_state * state,
+        const float * samples,
+        int n_samples,
+        int segment_index) {
+    if (state == nullptr || state->diarize_model == nullptr || samples == nullptr) {
+        return false;
+    }
+
+    if (segment_index < 0 || segment_index >= (int) state->result_all.size()) {
+        return false;
+    }
+
+    const whisper_segment & seg = state->result_all[segment_index];
+
+    int sample_start = (int) (seg.t0 * WHISPER_SAMPLE_RATE / 100);
+    int sample_end   = (int) (seg.t1 * WHISPER_SAMPLE_RATE / 100);
+
+    sample_start = std::max(sample_start, 0);
+    sample_end   = std::min(sample_end, n_samples);
+
+    const int seg_n_samples = sample_end - sample_start;
+    if (seg_n_samples <= 1600) {
+        return false;
+    }
+
+    float * mel_data = whisper_compute_mel_80(samples + sample_start, seg_n_samples);
+    if (mel_data == nullptr) {
+        WHISPER_LOG_WARN("%s: failed to compute mel for segment %d\n", __func__, segment_index);
+        return false;
+    }
+
+    const int mel_n_frames = whisper_get_mel_n_frames(seg_n_samples);
+
+    struct whisper_speaker_encoder * enc =
+        whisper_speaker_encoder_new(state->diarize_model, mel_n_frames, 0);
+    if (enc == nullptr) {
+        whisper_mel_free(mel_data);
+        WHISPER_LOG_WARN("%s: failed to create speaker encoder for segment %d\n", __func__, segment_index);
+        return false;
+    }
+
+    float embedding[192] = {0};
+    const bool ok = whisper_speaker_encoder_compute(enc, mel_data, embedding);
+
+    whisper_speaker_encoder_free(enc);
+    whisper_mel_free(mel_data);
+
+    if (!ok) {
+        WHISPER_LOG_WARN("%s: failed to compute speaker embedding for segment %d\n", __func__, segment_index);
+        return false;
+    }
+
+    state->diarize_embeddings.insert(
+        state->diarize_embeddings.end(),
+        embedding,
+        embedding + 192);
+    state->diarize_segment_indices.push_back(segment_index);
+
+    return true;
+}
+
+static void whisper_collect_diarization_embeddings(
+        struct whisper_state * state,
+        const float * samples,
+        int n_samples,
+        int n_new_segments) {
+    if (state == nullptr || state->diarize_model == nullptr || n_new_segments <= 0) {
+        return;
+    }
+
+    const int start = std::max(0, (int) state->result_all.size() - n_new_segments);
+    for (int segment_index = start; segment_index < (int) state->result_all.size(); ++segment_index) {
+        whisper_compute_diarization_embedding(state, samples, n_samples, segment_index);
+    }
+}
+#endif
 
 struct whisper_global {
     // We save the log callback globally
@@ -3858,11 +3937,6 @@ void whisper_free_state(struct whisper_state * state) {
         if (state->diarize_model) {
             whisper_speaker_free(state->diarize_model);
             state->diarize_model = nullptr;
-        }
-
-        if (state->diarize_encoder) {
-            whisper_speaker_encoder_free(state->diarize_encoder);
-            state->diarize_encoder = nullptr;
         }
 
         if (state->diarize_clustering) {
@@ -7021,15 +7095,13 @@ int whisper_full_with_state(
         }
     }
 
-    // Free leftover encoder from previous calls
-    if (state->diarize_encoder) {
-        whisper_speaker_encoder_free(state->diarize_encoder);
-        state->diarize_encoder = nullptr;
+    if (state->diarize_clustering) {
+        whisper_clustering_context_free(state->diarize_clustering);
+        state->diarize_clustering = nullptr;
     }
 
-    if (params.diarize && state->diarize_model) {
-        state->diarize_embeddings.clear();
-    }
+    state->diarize_embeddings.clear();
+    state->diarize_segment_indices.clear();
 #endif // WHISPER_DIARIZE
 
     int seek = seek_start;
@@ -7714,39 +7786,9 @@ int whisper_full_with_state(
                             }
 
 #ifdef WHISPER_DIARIZE
-                            // Compute diarization embedding for this segment (if enabled)
+                            // Compute diarization embeddings for all newly finalized segments.
                             if (params.diarize && state->diarize_model) {
-                                whisper_segment & seg = state->result_all.back();
-
-                                // Extract PCM for segment and compute mel
-                                int sample_start = (int)(seg.t0 * WHISPER_SAMPLE_RATE / 100);
-                                int sample_end   = (int)(seg.t1 * WHISPER_SAMPLE_RATE / 100);
-                                if (sample_start < 0) sample_start = 0;
-                                if (sample_end > n_samples) sample_end = n_samples;
-                                int seg_n_samples = sample_end - sample_start;
-
-                                if (seg_n_samples > 1600) {  // at least 0.1s
-                                    float * mel_data = whisper_compute_mel_80(samples + sample_start, seg_n_samples);
-                                    if (mel_data) {
-                                        int mel_n_frames = whisper_get_mel_n_frames(seg_n_samples);
-                                        if (mel_n_frames > 160) mel_n_frames = 160;  // cap for memory
-
-                                        // Create per-segment encoder with correct n_frames
-                                        whisper_speaker_encoder * enc = whisper_speaker_encoder_new(
-                                            state->diarize_model, mel_n_frames, 0);
-
-                                        if (enc) {
-                                            float embedding[192] = {0};
-                                            if (whisper_speaker_encoder_compute(enc, mel_data, embedding)) {
-                                                state->diarize_embeddings.insert(
-                                                    state->diarize_embeddings.end(),
-                                                    embedding, embedding + 192);
-                                            }
-                                            whisper_speaker_encoder_free(enc);
-                                        }
-                                        free(mel_data);
-                                    }
-                                }
+                                whisper_collect_diarization_embeddings(state, samples, n_samples, n_new);
                             }
 #endif // WHISPER_DIARIZE
                         }
@@ -7796,41 +7838,9 @@ int whisper_full_with_state(
                     }
 
 #ifdef WHISPER_DIARIZE
-                    // Compute diarization embedding for this segment (if enabled)
-                    if (params.diarize && state->diarize_encoder) {
-                        whisper_segment & seg = state->result_all.back();  // Just-added segment
-
-                        // Extract mel frames for segment time range [seg.t0, seg.t1]
-                        // Time is in centiseconds; frame index = time_centiseconds / 100
-                        int frame_start = seg.t0 / 100;
-                        int frame_end = seg.t1 / 100;
-                        int n_frames = frame_end - frame_start;
-
-                        if (n_frames > 0 && frame_start >= 0 && frame_end <= state->mel.n_len) {
-                            // Get mel spectrogram for this segment
-                            const float * mel_data = state->mel.data.data() + (frame_start * 80);
-
-                            // Allocate embedding buffer for this segment
-                            float embedding[192];  // ECAPA-TDNN output size (192-dim)
-                            memset(embedding, 0, sizeof(embedding));
-
-                            // Compute speaker embedding
-                            if (whisper_speaker_encoder_compute(state->diarize_encoder, mel_data, embedding)) {
-                                // Store in buffer for later clustering
-                                state->diarize_embeddings.insert(
-                                    state->diarize_embeddings.end(),
-                                    embedding,
-                                    embedding + 192
-                                );
-                            } else {
-                                WHISPER_LOG_WARN("failed to compute speaker embedding for segment %lu\n",
-                                                 state->result_all.size() - 1);
-                            }
-                        } else {
-                            WHISPER_LOG_WARN("invalid mel frame range for segment %lu: [%d, %d), total frames: %d\n",
-                                             state->result_all.size() - 1, frame_start, frame_end,
-                                             state->mel.n_len);
-                        }
+                    // Compute diarization embeddings for all newly finalized segments.
+                    if (params.diarize && state->diarize_model) {
+                        whisper_collect_diarization_embeddings(state, samples, n_samples, n_new);
                     }
 #endif // WHISPER_DIARIZE
                 }
@@ -7871,20 +7881,14 @@ int whisper_full_with_state(
 #ifdef WHISPER_DIARIZE
     // Perform speaker clustering if diarization enabled
     if (params.diarize && !state->diarize_embeddings.empty()) {
-        int num_segments = state->result_all.size();
-        int num_embeddings = state->diarize_embeddings.size() / 192;
+        const int num_embeddings = state->diarize_embeddings.size() / 192;
+        const int num_indexed_segments = state->diarize_segment_indices.size();
 
-        if (num_embeddings != num_segments) {
-            WHISPER_LOG_ERROR("embedding count (%d) != segment count (%d); skipping clustering\n",
-                              num_embeddings, num_segments);
+        if (num_embeddings != num_indexed_segments) {
+            WHISPER_LOG_ERROR("embedding count (%d) != diarized segment count (%d); skipping clustering\n",
+                              num_embeddings, num_indexed_segments);
         } else {
-            // Free previous clustering context if it exists
-            if (state->diarize_clustering) {
-                whisper_clustering_context_free(state->diarize_clustering);
-                state->diarize_clustering = nullptr;
-            }
-
-            state->diarize_clustering = whisper_clustering_context_create(num_segments);
+            state->diarize_clustering = whisper_clustering_context_create(num_embeddings);
             if (!state->diarize_clustering) {
                 WHISPER_LOG_ERROR("failed to create clustering context\n");
             } else {
@@ -7897,13 +7901,13 @@ int whisper_full_with_state(
                 );
 
                 if (ret == 0) {
-                    // Assign speaker IDs to segments
-                    for (int i = 0; i < num_segments; ++i) {
-                        state->result_all[i].speaker_id =
+                    // Assign speaker IDs to the segments that produced embeddings.
+                    for (int i = 0; i < num_embeddings; ++i) {
+                        state->result_all[state->diarize_segment_indices[i]].speaker_id =
                             state->diarize_clustering->speaker_ids[i];
                     }
-                    WHISPER_LOG_INFO("diarization complete: %d speakers detected\n",
-                                     state->diarize_clustering->num_speakers);
+                    WHISPER_LOG_INFO("diarization complete: %d speakers detected across %d segments\n",
+                                     state->diarize_clustering->num_speakers, num_embeddings);
                 } else {
                     WHISPER_LOG_ERROR("clustering failed with code %d\n", ret);
                 }
