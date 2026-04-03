@@ -383,8 +383,9 @@ struct whisper_speaker_encoder * whisper_speaker_encoder_new(
     encoder->n_frames = n_frames;
     encoder->n_mels = 80;  // Fixed for ECAPA-TDNN
 
-    // Dynamic context size: base 200MB + ~0.5MB per frame for intermediate tensors
+    // Dynamic context size: base 200MB + ~0.5MB per frame for intermediate tensors + 10% margin
     size_t ctx_bytes = (size_t)200 * 1024 * 1024 + (size_t)n_frames * 512 * 1024;
+    ctx_bytes = ctx_bytes + ctx_bytes / 10;
     struct ggml_init_params params = {
         ctx_bytes,
         NULL,
