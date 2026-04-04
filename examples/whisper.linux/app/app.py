@@ -131,7 +131,6 @@ class WhisperLinuxApp:
     # -- Streaming mode --
 
     def _start_listening(self):
-        self._save_active_window()
         self._wake_detector = WakeWordDetector(self.config.wake_word)
         self._vad = SimpleVAD(self.config, on_speech_end=self._on_speech_end,
                               on_speech_start=self._on_speech_start)
@@ -270,11 +269,15 @@ class WhisperLinuxApp:
                 remaining = self._wake_detector.strip_wake_word(text)
 
                 if self.state == AppState.LISTENING:
-                    self._cancel_silence_timer()
+                    self._save_active_window()
                     self._accumulated_texts.clear()
                     self.state = AppState.DICTATING
                     self._marshal_set_state(AppState.DICTATING)
                     self._play_start_signal()
+                    # Start silence timer immediately so dictation auto-stops
+                    # even if user says nothing after wake word
+                    if self.config.input_mode == "listen":
+                        self._reset_silence_timer()
                     log.info("Streaming: DICTATING (wake word detected)")
                     self._marshal_notify("whisper.linux", "Dictation started")
                 elif self.state == AppState.DICTATING:
@@ -288,6 +291,7 @@ class WhisperLinuxApp:
                     self._flush_accumulated_text()
                     self.state = AppState.LISTENING
                     self._marshal_set_state(AppState.LISTENING)
+                    self._play_end_signal()
                     log.info("Streaming: LISTENING (wake word \u2192 stop dictation)")
                     self._marshal_notify("whisper.linux", "Dictation paused")
                 return
@@ -300,7 +304,7 @@ class WhisperLinuxApp:
                     self._accumulated_texts.append(text)
                 if self.config.input_mode == "listen":
                     self._reset_silence_timer()
-                    log.debug("Silence timer started after segment (%.1fs)",
+                    log.debug("Silence timer reset after segment (%.1fs)",
                               self.config.silence_timeout)
                 if self.config.notification:
                     preview = text[:80] + ("..." if len(text) > 80 else "")
@@ -313,20 +317,15 @@ class WhisperLinuxApp:
                 os.unlink(wav_path)
 
     def _marshal_set_state(self, state: AppState):
-        if self._qt_app:
-            from PyQt5.QtCore import QTimer
-            QTimer.singleShot(0, lambda: self._set_state(state))
+        if self._tray:
+            self._tray._call_helper.call(lambda: self._set_state(state))
         else:
             self._set_state(state)
 
     def _marshal_notify(self, title: str, message: str):
         if not self._tray:
             return
-        if self._qt_app:
-            from PyQt5.QtCore import QTimer
-            QTimer.singleShot(0, lambda: self._tray.notify(title, message))
-        else:
-            self._tray.notify(title, message)
+        self._tray._call_helper.call(lambda: self._tray.notify(title, message))
 
     def _reset_silence_timer(self):
         self._cancel_silence_timer()
@@ -484,6 +483,70 @@ class WhisperLinuxApp:
         if self._qt_app:
             self._qt_app.quit()
 
+    # -- Global hotkey --
+
+    def _start_hotkey_listener(self):
+        """Start a global keyboard hotkey listener using pynput."""
+        hotkey_str = self.config.hotkey
+        if not hotkey_str:
+            log.info("No hotkey configured, skipping listener")
+            return
+        try:
+            from pynput import keyboard
+        except ImportError:
+            log.warning("pynput not installed — global hotkey disabled")
+            return
+
+        # Parse hotkey string like "ctrl+Super_L" into pynput keys
+        key_map = {
+            "ctrl": keyboard.Key.ctrl_l,
+            "ctrl_l": keyboard.Key.ctrl_l,
+            "ctrl_r": keyboard.Key.ctrl_r,
+            "alt": keyboard.Key.alt_l,
+            "alt_l": keyboard.Key.alt_l,
+            "alt_r": keyboard.Key.alt_r,
+            "shift": keyboard.Key.shift_l,
+            "shift_l": keyboard.Key.shift_l,
+            "shift_r": keyboard.Key.shift_r,
+            "super": keyboard.Key.cmd,
+            "super_l": keyboard.Key.cmd_l,
+            "super_r": keyboard.Key.cmd_r,
+        }
+
+        parts = [p.strip() for p in hotkey_str.split("+")]
+        combo = set()
+        for p in parts:
+            low = p.lower()
+            if low in key_map:
+                combo.add(key_map[low])
+            elif len(p) == 1:
+                combo.add(keyboard.KeyCode.from_char(p.lower()))
+            else:
+                log.warning("Unknown hotkey part: %r", p)
+
+        if not combo:
+            log.warning("Could not parse hotkey: %s", hotkey_str)
+            return
+
+        self._hotkey_pressed = set()
+
+        def on_press(key):
+            self._hotkey_pressed.add(key)
+            if combo.issubset(self._hotkey_pressed):
+                log.info("Hotkey pressed: %s", hotkey_str)
+                if self._tray:
+                    self._tray._call_helper.call(self.toggle)
+
+        def on_release(key):
+            self._hotkey_pressed.discard(key)
+
+        self._hotkey_listener = keyboard.Listener(
+            on_press=on_press, on_release=on_release,
+        )
+        self._hotkey_listener.daemon = True
+        self._hotkey_listener.start()
+        log.info("Global hotkey listener started: %s", hotkey_str)
+
     # -- Main entry --
 
     def run(self):
@@ -502,6 +565,7 @@ class WhisperLinuxApp:
 
         self._tray = TrayIcon(self)
         self._set_state(AppState.IDLE)
+        self._start_hotkey_listener()
 
         log.info("whisper.linux started (pid %d)", os.getpid())
         log.info("  whisper-cli : %s", self.config.whisper_cli)
@@ -516,6 +580,7 @@ class WhisperLinuxApp:
         log.info("  clipboard   : %s", self.config.use_clipboard_fallback)
         log.info("  input_mode  : %s", self.config.input_mode)
         log.info("  output_mode : %s", self.config.output_mode)
+        log.info("  hotkey      : %s", self.config.hotkey)
         log.info("  wake_word   : %s", self.config.wake_word)
         log.info("  wake_model  : %s", self.config.wake_model or "(same as main)")
         log.info("  voice_cmds  : %s", self.config.voice_commands)

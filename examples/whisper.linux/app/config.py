@@ -170,6 +170,7 @@ class Config:
     min_speech_ms: int = 500
     max_speech_s: float = 30.0
     end_signal: bool = True
+    hotkey: str = "ctrl+Super_L"
     voice_commands: bool = True
 
     def __post_init__(self):
@@ -215,6 +216,7 @@ class Config:
             self.min_speech_ms = cp.getint(sec, "min_speech_ms", fallback=self.min_speech_ms)
             self.max_speech_s = cp.getfloat(sec, "max_speech_s", fallback=self.max_speech_s)
             self.end_signal = cp.getboolean(sec, "end_signal", fallback=self.end_signal)
+            self.hotkey = cp.get(sec, "hotkey", fallback=self.hotkey)
             self.voice_commands = cp.getboolean(sec, "voice_commands", fallback=self.voice_commands)
 
         vc_sec = "voice-commands"
@@ -345,6 +347,7 @@ class Config:
         cp.set(sec, "min_speech_ms", str(self.min_speech_ms))
         cp.set(sec, "max_speech_s", str(self.max_speech_s))
         cp.set(sec, "end_signal", str(self.end_signal))
+        cp.set(sec, "hotkey", self.hotkey)
         cp.set(sec, "voice_commands", str(self.voice_commands))
         vc_sec = "voice-commands"
         cp.add_section(vc_sec)

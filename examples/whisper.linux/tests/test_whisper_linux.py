@@ -406,37 +406,41 @@ class TestTextInjector:
         inj = wl.TextInjector(mock_config)
         inj.inject("hello")
 
-        assert mock_run.call_count == 2
-        # First call: xclip
+        assert mock_run.call_count == 3
+        # First call: xclip clipboard
         assert mock_run.call_args_list[0][0][0][0] == "xclip"
-        # Second call: xdotool key ctrl+v
-        assert mock_run.call_args_list[1][0][0][0] == "xdotool"
+        # Second call: xclip primary
+        assert mock_run.call_args_list[1][0][0][0] == "xclip"
+        # Third call: xdotool key paste
+        assert mock_run.call_args_list[2][0][0][0] == "xdotool"
 
     @patch("app.subprocess.run")
-    def test_inject_x11_non_ascii_uses_clipboard(self, mock_run, mock_config):
-        """Non-ASCII text (Cyrillic) auto-switches to clipboard paste."""
+    def test_inject_x11_non_ascii_uses_direct_type(self, mock_run, mock_config):
+        """Non-ASCII text (Cyrillic) uses xdotool type directly (no clipboard)."""
         mock_run.return_value = MagicMock(returncode=0)
 
         inj = wl.TextInjector(mock_config)
         inj.inject("Привет мир")
 
-        assert mock_run.call_count == 2
-        assert mock_run.call_args_list[0][0][0][0] == "xclip"
-        assert mock_run.call_args_list[1][0][0][0] == "xdotool"
+        assert mock_run.call_count == 1
+        cmd = mock_run.call_args_list[0][0][0]
+        assert cmd[0] == "xdotool"
+        assert "type" in cmd
 
     @patch("app.subprocess.run")
     def test_inject_x11_xdotool_fails_falls_back(self, mock_run, mock_config):
         # First call (xdotool type) fails, then clipboard calls succeed
         mock_run.side_effect = [
             subprocess.CalledProcessError(1, "xdotool"),
-            MagicMock(returncode=0),  # xclip
+            MagicMock(returncode=0),  # xclip clipboard
+            MagicMock(returncode=0),  # xclip primary
             MagicMock(returncode=0),  # xdotool key
         ]
 
         inj = wl.TextInjector(mock_config)
         inj.inject("test")
 
-        assert mock_run.call_count == 3
+        assert mock_run.call_count == 4
 
     @patch("app.subprocess.run")
     def test_inject_wayland_wtype(self, mock_run, mock_config_wayland):
@@ -1422,8 +1426,8 @@ class TestWhisperLinuxAppStreaming:
         assert app._silence_timer is None
 
     @patch("app.app.AudioStream")
-    def test_timer_starts_after_injection_not_wake_word(self, mock_stream_cls, mock_config_stream):
-        """Timer is NOT started when wake word detected, only after text injection."""
+    def test_timer_starts_on_wake_word_and_after_injection(self, mock_stream_cls, mock_config_stream):
+        """Timer is started both when wake word detected AND after text injection."""
         mock_stream = MagicMock()
         mock_stream_cls.return_value = mock_stream
 
@@ -1431,13 +1435,14 @@ class TestWhisperLinuxAppStreaming:
         app._wake_detector = wl.WakeWordDetector(mock_config_stream.wake_word)
         app.state = wl.AppState.LISTENING
 
-        # Wake word → DICTATING: timer should NOT be set
+        # Wake word → DICTATING: timer SHOULD be set immediately
         app.transcriber.transcribe.return_value = "дуняша"
         app._process_speech_segment(b"\x00" * 32000)
         assert app.state == wl.AppState.DICTATING
-        assert app._silence_timer is None
+        assert app._silence_timer is not None
+        app._cancel_silence_timer()
 
-        # Text injection → timer SHOULD be set
+        # Text injection → timer SHOULD be reset
         app.transcriber.transcribe.return_value = "привет мир"
         app._process_speech_segment(b"\x00" * 32000)
         assert app._silence_timer is not None

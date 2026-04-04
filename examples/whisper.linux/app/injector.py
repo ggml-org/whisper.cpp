@@ -29,12 +29,12 @@ class TextInjector:
             self._inject_x11(text)
 
     def _inject_x11(self, text: str):
-        if self.config.use_clipboard_fallback or not text.isascii():
+        if self.config.use_clipboard_fallback:
             self._inject_clipboard_x11(text)
             return
         try:
             subprocess.run(
-                ["xdotool", "type", "--clearmodifiers", "--", text],
+                ["xdotool", "type", "--delay", "12", "--clearmodifiers", "--", text],
                 check=True, timeout=10,
             )
         except (subprocess.CalledProcessError, FileNotFoundError):
@@ -42,13 +42,20 @@ class TextInjector:
             self._inject_clipboard_x11(text)
 
     def _inject_clipboard_x11(self, text: str):
+        encoded = text.encode("utf-8")
+        # Set both CLIPBOARD and PRIMARY so shift+Insert works everywhere
         subprocess.run(
             ["xclip", "-selection", "clipboard"],
-            input=text.encode("utf-8"), check=True, timeout=5,
+            input=encoded, check=True, timeout=5,
         )
-        time.sleep(0.1)
         subprocess.run(
-            ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
+            ["xclip", "-selection", "primary"],
+            input=encoded, check=True, timeout=5,
+        )
+        time.sleep(0.05)
+        paste_keys = self.config.paste_keys
+        subprocess.run(
+            ["xdotool", "key", "--clearmodifiers", paste_keys],
             check=True, timeout=5,
         )
 

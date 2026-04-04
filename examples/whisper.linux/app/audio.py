@@ -132,7 +132,7 @@ class SimpleVAD:
     """Energy-based Voice Activity Detection on raw s16le PCM frames."""
 
     FRAME_MS = 30
-    TRAILING_SILENCE_MS = 300
+    TRAILING_SILENCE_MS = 150
 
     def __init__(self, config: Config, on_speech_end=None, on_speech_start=None):
         self._threshold = config.vad_threshold

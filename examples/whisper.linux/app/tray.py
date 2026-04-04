@@ -100,14 +100,25 @@ class TrayIcon:
         "large-v3-turbo": 1_500_000_000,
     }
 
+    # States that blink the tray icon
+    _BLINK_STATES = {AppState.RECORDING, AppState.DICTATING}
+    _BLINK_INTERVAL_MS = 500
+
     def __init__(self, app_ref: "WhisperLinuxApp"):
         from PyQt5.QtWidgets import QSystemTrayIcon
+        from PyQt5.QtCore import QTimer
 
         self._app_ref = app_ref
         self._icons = {state: _create_icon(color) for state, color in self.COLORS.items()}
+        self._bright_icon = _create_icon("#FFFFFF")
         self._downloading = set()
         self._kept_actions = []
         self._call_helper = _CallHelper()
+        self._blink_on = True
+        self._current_state = AppState.IDLE
+
+        self._blink_timer = QTimer()
+        self._blink_timer.timeout.connect(self._on_blink)
 
         self.tray = QSystemTrayIcon()
         self.tray.setIcon(self._icons[AppState.IDLE])
@@ -241,18 +252,17 @@ class TrayIcon:
         settings_menu = self.menu.addMenu("Settings")
         config = self._app_ref.config
 
-        # Input mode
-        input_menu = settings_menu.addMenu("Input mode")
-        self._input_mode_group = QActionGroup(input_menu)
-        self._input_mode_group.setExclusive(True)
-        for val, label in [("hotkey", "Hotkey (push-to-talk)"), ("listen", "Listening (wake word)")]:
-            a = QAction(label, input_menu, checkable=True)
-            a.setData(val)
-            if val == config.input_mode:
-                a.setChecked(True)
-            a.triggered.connect(self._on_input_mode_changed)
-            self._input_mode_group.addAction(a)
-            input_menu.addAction(a)
+        # Hotkey (always active)
+        hotkey_label = self._format_hotkey_label(config.hotkey)
+        self._hotkey_action = QAction(f"Hotkey: {hotkey_label}  (change...)", settings_menu)
+        self._hotkey_action.triggered.connect(self._on_hotkey_change)
+        settings_menu.addAction(self._hotkey_action)
+
+        # Wake word listening toggle
+        self._wake_listen_action = QAction("Wake word listening", settings_menu, checkable=True)
+        self._wake_listen_action.setChecked(config.input_mode == "listen")
+        self._wake_listen_action.triggered.connect(self._on_wake_listen_toggled)
+        settings_menu.addAction(self._wake_listen_action)
 
         # Output mode
         output_menu = settings_menu.addMenu("Output mode")
@@ -391,6 +401,25 @@ class TrayIcon:
         self._edit_cmds_action = QAction("Edit voice commands...", settings_menu)
         self._edit_cmds_action.triggered.connect(self._on_edit_voice_commands)
         settings_menu.addAction(self._edit_cmds_action)
+
+    @staticmethod
+    def _format_hotkey_label(hotkey: str) -> str:
+        """Convert internal hotkey string to a human-readable label."""
+        parts = hotkey.split("+")
+        pretty = []
+        for p in parts:
+            low = p.lower()
+            if low in ("super_l", "super_r", "super"):
+                pretty.append("Super")
+            elif low == "ctrl":
+                pretty.append("Ctrl")
+            elif low == "alt":
+                pretty.append("Alt")
+            elif low == "shift":
+                pretty.append("Shift")
+            else:
+                pretty.append(p)
+        return "+".join(pretty)
 
     # -- Event handlers --
 
@@ -534,18 +563,17 @@ class TrayIcon:
         self._rebuild_wake_model_menu()
         log.info("Models dir changed to: %s", new_dir)
 
-    def _on_input_mode_changed(self):
-        action = self._input_mode_group.checkedAction()
-        if action:
-            old_val = self._app_ref.config.input_mode
-            new_val = action.data()
-            if old_val != new_val and self._app_ref.state != AppState.IDLE:
-                self._app_ref._force_idle()
-            self._app_ref.config.input_mode = new_val
-            self._app_ref.config.save()
-            log.info("Input mode changed to: %s", new_val)
-            if new_val == "listen" and self._app_ref.state == AppState.IDLE:
-                self._app_ref.toggle()
+    def _on_wake_listen_toggled(self):
+        enabled = self._wake_listen_action.isChecked()
+        old_val = self._app_ref.config.input_mode
+        new_val = "listen" if enabled else "hotkey"
+        if old_val != new_val and self._app_ref.state != AppState.IDLE:
+            self._app_ref._force_idle()
+        self._app_ref.config.input_mode = new_val
+        self._app_ref.config.save()
+        log.info("Wake word listening: %s (input_mode=%s)", enabled, new_val)
+        if enabled and self._app_ref.state == AppState.IDLE:
+            self._app_ref.toggle()
 
     def _on_output_mode_changed(self):
         action = self._output_mode_group.checkedAction()
@@ -557,6 +585,19 @@ class TrayIcon:
             self._app_ref.config.output_mode = new_val
             self._app_ref.config.save()
             log.info("Output mode changed to: %s", new_val)
+
+    def _on_hotkey_change(self):
+        from PyQt5.QtWidgets import QInputDialog
+        current = self._app_ref.config.hotkey
+        text, ok = QInputDialog.getText(
+            None, "Hotkey", "Enter hotkey (e.g. ctrl+Super_L):", text=current,
+        )
+        if ok and text.strip():
+            self._app_ref.config.hotkey = text.strip()
+            self._app_ref.config.save()
+            label = self._format_hotkey_label(text.strip())
+            self._hotkey_action.setText(f"Hotkey: {label}  (change...)")
+            log.info("Hotkey changed to: %s", text.strip())
 
     def _on_wake_word_change(self):
         from PyQt5.QtWidgets import QInputDialog
@@ -673,8 +714,25 @@ class TrayIcon:
 
     # -- State & notifications --
 
+    def _on_blink(self):
+        self._blink_on = not self._blink_on
+        state = self._current_state
+        if self._blink_on:
+            self.tray.setIcon(self._icons[state])
+        else:
+            self.tray.setIcon(self._bright_icon)
+
     def set_state(self, state: AppState):
+        self._current_state = state
         self.tray.setIcon(self._icons[state])
+        self._blink_on = True
+
+        if state in self._BLINK_STATES:
+            if not self._blink_timer.isActive():
+                self._blink_timer.start(self._BLINK_INTERVAL_MS)
+        else:
+            self._blink_timer.stop()
+
         if state == AppState.IDLE:
             self.action_toggle.setText("Start Recording")
             self.tray.setToolTip("whisper.linux \u2014 Idle")
