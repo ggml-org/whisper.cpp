@@ -1252,16 +1252,15 @@ class TestWhisperLinuxAppStreaming:
         mock_stream.start.assert_called_once()
 
     @patch("app.app.AudioStream")
-    def test_toggle_listen_stops_listening(self, mock_stream_cls, mock_config_stream):
+    def test_toggle_listen_hotkey_starts_dictating(self, mock_stream_cls, mock_config_stream):
         mock_stream = MagicMock()
         mock_stream_cls.return_value = mock_stream
 
         app = self._make_app(mock_config_stream)
         app.toggle()  # IDLE → LISTENING
         assert app.state == wl.AppState.LISTENING
-        app.toggle()  # LISTENING → IDLE
-        assert app.state == wl.AppState.IDLE
-        mock_stream.stop.assert_called_once()
+        app.toggle()  # LISTENING → DICTATING (hotkey trigger)
+        assert app.state == wl.AppState.DICTATING
 
     @patch("app.app.AudioStream")
     def test_toggle_listen_stops_dictating(self, mock_stream_cls, mock_config_stream):
@@ -1271,8 +1270,8 @@ class TestWhisperLinuxAppStreaming:
         app = self._make_app(mock_config_stream)
         app.toggle()  # IDLE → LISTENING
         app.state = wl.AppState.DICTATING  # simulate wake word
-        app.toggle()  # DICTATING → IDLE
-        assert app.state == wl.AppState.IDLE
+        app.toggle()  # DICTATING → LISTENING
+        assert app.state == wl.AppState.LISTENING
 
     @patch("app.app.AudioStream")
     def test_process_segment_wake_word_starts_dictating(self, mock_stream_cls, mock_config_stream):

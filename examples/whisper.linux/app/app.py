@@ -97,7 +97,29 @@ class WhisperLinuxApp:
         log.info("Toggle: state=%s, input=%s, output=%s",
                  self.state.value, self.config.input_mode, self.config.output_mode)
         if self.config.input_mode == "listen":
-            self._toggle_listen()
+            # In listen mode, hotkey acts as manual dictation trigger
+            if self.state == AppState.IDLE:
+                self._start_listening()
+            elif self.state == AppState.LISTENING:
+                # Hotkey starts dictation (like wake word)
+                self._save_active_window()
+                self._accumulated_texts.clear()
+                self._cancel_silence_timer()
+                self.state = AppState.DICTATING
+                self._set_state(AppState.DICTATING)
+                self._play_start_signal()
+                self._reset_silence_timer()
+                log.info("Hotkey: LISTENING → DICTATING")
+            elif self.state == AppState.DICTATING:
+                # Hotkey stops dictation back to listening
+                self._cancel_silence_timer()
+                self._flush_accumulated_text()
+                self.state = AppState.LISTENING
+                self._set_state(AppState.LISTENING)
+                self._play_end_signal()
+                log.info("Hotkey: DICTATING → LISTENING")
+            else:
+                self._toggle_listen()
         else:
             self._toggle_hotkey()
 
@@ -486,66 +508,108 @@ class WhisperLinuxApp:
     # -- Global hotkey --
 
     def _start_hotkey_listener(self):
-        """Start a global keyboard hotkey listener using pynput."""
+        """Start a global keyboard hotkey listener using Xlib XRecord."""
         hotkey_str = self.config.hotkey
         if not hotkey_str:
             log.info("No hotkey configured, skipping listener")
             return
+
         try:
-            from pynput import keyboard
+            from Xlib import X, XK, display
+            from Xlib.ext import record
+            from Xlib.protocol import rq
         except ImportError:
-            log.warning("pynput not installed — global hotkey disabled")
+            log.warning("python-xlib not installed — global hotkey disabled")
             return
 
-        # Parse hotkey string like "ctrl+Super_L" into pynput keys
-        key_map = {
-            "ctrl": keyboard.Key.ctrl_l,
-            "ctrl_l": keyboard.Key.ctrl_l,
-            "ctrl_r": keyboard.Key.ctrl_r,
-            "alt": keyboard.Key.alt_l,
-            "alt_l": keyboard.Key.alt_l,
-            "alt_r": keyboard.Key.alt_r,
-            "shift": keyboard.Key.shift_l,
-            "shift_l": keyboard.Key.shift_l,
-            "shift_r": keyboard.Key.shift_r,
-            "super": keyboard.Key.cmd,
-            "super_l": keyboard.Key.cmd_l,
-            "super_r": keyboard.Key.cmd_r,
+        # Parse hotkey string into X11 keycodes
+        keysym_map = {
+            "ctrl": XK.XK_Control_L, "ctrl_l": XK.XK_Control_L,
+            "ctrl_r": XK.XK_Control_R,
+            "alt": XK.XK_Alt_L, "alt_l": XK.XK_Alt_L, "alt_r": XK.XK_Alt_R,
+            "shift": XK.XK_Shift_L, "shift_l": XK.XK_Shift_L,
+            "shift_r": XK.XK_Shift_R,
+            "super": XK.XK_Super_L, "super_l": XK.XK_Super_L,
+            "super_r": XK.XK_Super_R,
         }
 
+        d = display.Display()
+        combo_keycodes = set()
         parts = [p.strip() for p in hotkey_str.split("+")]
-        combo = set()
         for p in parts:
             low = p.lower()
-            if low in key_map:
-                combo.add(key_map[low])
+            if low in keysym_map:
+                kc = d.keysym_to_keycode(keysym_map[low])
+                combo_keycodes.add(kc)
             elif len(p) == 1:
-                combo.add(keyboard.KeyCode.from_char(p.lower()))
+                kc = d.keysym_to_keycode(XK.string_to_keysym(p))
+                if kc:
+                    combo_keycodes.add(kc)
+                else:
+                    log.warning("Unknown hotkey part: %r", p)
             else:
                 log.warning("Unknown hotkey part: %r", p)
 
-        if not combo:
+        if not combo_keycodes:
             log.warning("Could not parse hotkey: %s", hotkey_str)
+            d.close()
             return
 
-        self._hotkey_pressed = set()
+        log.debug("Hotkey keycodes: %s", combo_keycodes)
+        pressed = set()
+        hotkey_fired = [False]  # prevent repeats while held
 
-        def on_press(key):
-            self._hotkey_pressed.add(key)
-            if combo.issubset(self._hotkey_pressed):
-                log.info("Hotkey pressed: %s", hotkey_str)
-                if self._tray:
-                    self._tray._call_helper.call(self.toggle)
+        def callback(reply):
+            if reply.category != record.FromServer:
+                return
+            if reply.client_swapped:
+                return
+            data = reply.data
+            while data:
+                event, data = rq.EventField(None).parse_binary_value(
+                    data, record_display.display, None, None)
+                keycode = event.detail
+                if event.type == X.KeyPress:
+                    pressed.add(keycode)
+                    if combo_keycodes.issubset(pressed) and not hotkey_fired[0]:
+                        hotkey_fired[0] = True
+                        log.info("Hotkey pressed: %s", hotkey_str)
+                        if self._tray:
+                            self._tray._call_helper.call(self.toggle)
+                elif event.type == X.KeyRelease:
+                    pressed.discard(keycode)
+                    if not combo_keycodes.issubset(pressed):
+                        hotkey_fired[0] = False
 
-        def on_release(key):
-            self._hotkey_pressed.discard(key)
-
-        self._hotkey_listener = keyboard.Listener(
-            on_press=on_press, on_release=on_release,
+        record_display = display.Display()
+        ctx = record_display.record_create_context(
+            0,
+            [record.AllClients],
+            [{
+                'core_requests': (0, 0),
+                'core_replies': (0, 0),
+                'ext_requests': (0, 0, 0, 0),
+                'ext_replies': (0, 0, 0, 0),
+                'delivered_events': (0, 0),
+                'device_events': (X.KeyPress, X.KeyRelease),
+                'errors': (0, 0),
+                'client_started': False,
+                'client_died': False,
+            }]
         )
-        self._hotkey_listener.daemon = True
-        self._hotkey_listener.start()
-        log.info("Global hotkey listener started: %s", hotkey_str)
+
+        def listener_thread():
+            try:
+                record_display.record_enable_context(ctx, callback)
+            except Exception as e:
+                log.error("Hotkey listener error: %s", e)
+
+        self._hotkey_record_display = record_display
+        self._hotkey_record_ctx = ctx
+        t = threading.Thread(target=listener_thread, daemon=True)
+        t.start()
+        d.close()
+        log.info("Global hotkey listener started (Xlib XRecord): %s", hotkey_str)
 
     # -- Main entry --
 
