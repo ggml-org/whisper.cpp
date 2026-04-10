@@ -78,6 +78,7 @@ struct whisper_params {
     int32_t progress_step = 5;
     int32_t max_context   = -1;
     int32_t max_len       = 0;
+    int32_t seg_len_hint  = 0;
     int32_t best_of       = 2;
     int32_t beam_size     = -1;
     int32_t audio_ctx     = 0;
@@ -146,6 +147,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -d  N,     --duration N        [%-7d] duration of audio to process in milliseconds\n",   params.duration_ms);
     fprintf(stderr, "  -mc N,     --max-context N     [%-7d] maximum number of text context tokens to store\n", params.max_context);
     fprintf(stderr, "  -ml N,     --max-len N         [%-7d] maximum segment length in characters\n",           params.max_len);
+    fprintf(stderr, "  -slh N,    --seg-len-hint N    [%-7d] target segment length in ms\n",                    params.seg_len_hint);
     fprintf(stderr, "  -sow,      --split-on-word     [%-7s] split on word rather than on token\n",             params.split_on_word ? "true" : "false");
     fprintf(stderr, "  -bo N,     --best-of N         [%-7d] number of best candidates to keep\n",              params.best_of);
     fprintf(stderr, "  -bs N,     --beam-size N       [%-7d] beam size for beam search\n",                      params.beam_size);
@@ -218,6 +220,7 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params, serve
         else if (arg == "-d"    || arg == "--duration")        { params.duration_ms     = std::stoi(argv[++i]); }
         else if (arg == "-mc"   || arg == "--max-context")     { params.max_context     = std::stoi(argv[++i]); }
         else if (arg == "-ml"   || arg == "--max-len")         { params.max_len         = std::stoi(argv[++i]); }
+        else if (arg == "-slh"  || arg == "--seg-len-hint")    { params.seg_len_hint    = std::stoi(argv[++i]); }
         else if (arg == "-bo"   || arg == "--best-of")         { params.best_of         = std::stoi(argv[++i]); }
         else if (arg == "-bs"   || arg == "--beam-size")       { params.beam_size       = std::stoi(argv[++i]); }
         else if (arg == "-ac"   || arg == "--audio-ctx")       { params.audio_ctx       = std::stoi(argv[++i]); }
@@ -501,6 +504,10 @@ void get_req_parameters(const Request & req, whisper_params & params)
     if (req.has_file("max_len"))
     {
         params.max_len = std::stoi(req.get_file_value("max_len").content);
+    }
+    if (req.has_file("seg_len_hint"))
+    {
+        params.seg_len_hint = std::stoi(req.get_file_value("seg_len_hint").content);
     }
     if (req.has_file("best_of"))
     {
@@ -931,6 +938,8 @@ int main(int argc, char ** argv) {
 
             wparams.greedy.best_of        = params.best_of;
             wparams.beam_search.beam_size = params.beam_size;
+
+            wparams.seg_len_hint     = params.seg_len_hint;
 
             wparams.temperature      = params.temperature;
             wparams.no_speech_thold = params.no_speech_thold;
