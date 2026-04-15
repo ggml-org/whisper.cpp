@@ -18,7 +18,7 @@ class Options
 
     output = nil
     Dir.chdir __dir__ do
-      output = `#{@cmake.shellescape} -S sources -B build -L`
+      output = IO.popen([@cmake, "-S", "sources", "-B", "build", "-L"]).read
     end
     @cmake_options = output.lines.drop_while {|line| line.chomp != "-- Cache values"}.drop(1)
                        .filter_map {|line|
