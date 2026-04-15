@@ -3,7 +3,7 @@ require_relative "options"
 require_relative "dependencies"
 
 cmake = find_executable("cmake") || abort
-options = Options.new(cmake).to_s
+options = Options.new(cmake)
 have_library("gomp") rescue nil
 libs = Dependencies.new(cmake, options).to_s
 
@@ -17,7 +17,7 @@ create_makefile "whisper" do |conf|
     $(TARGET_SO): #{libs}
     #{libs}: cmake-targets
     cmake-targets:
-    #{"\t"}#{cmake} -S sources -B build -D BUILD_SHARED_LIBS=OFF -D CMAKE_ARCHIVE_OUTPUT_DIRECTORY=#{__dir__} -D CMAKE_POSITION_INDEPENDENT_CODE=ON #{options}
+    #{"\t"}#{cmake} -S sources -B build -D BUILD_SHARED_LIBS=OFF -D CMAKE_ARCHIVE_OUTPUT_DIRECTORY=#{__dir__} -D CMAKE_POSITION_INDEPENDENT_CODE=ON -C #{options.cache_path}
     #{"\t"}#{cmake} --build build --config Release --target common whisper
   EOF
 end

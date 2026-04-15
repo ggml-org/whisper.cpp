@@ -1,16 +1,16 @@
+require "fileutils"
+
 class Options
   def initialize(cmake="cmake")
     @cmake = cmake
     @options = {}
 
     configure
+    write_cache_file
   end
 
-  def to_s
-    @options
-      .reject {|name, (type, value)| value.nil?}
-      .collect {|name, (type, value)| "-D #{name}=#{value == true ? "ON" : value == false ? "OFF" : value.shellescape}"}
-      .join(" ")
+  def cache_path
+    File.join(__dir__, "source", "Options.cmake")
   end
 
   def cmake_options
@@ -81,5 +81,23 @@ class Options
     else
       op[1]
     end
+  end
+
+  def write_cache_file
+    FileUtils.mkpath File.dirname(cache_path)
+    File.open cache_path, "w" do |file|
+      @options.reject {|name, (type, value)| value.nil?}.each do |name, (type, value)|
+        line = "set(CACHE{%<name>s} TYPE %<type>s FORCE VALUE %<value>s)" % {
+          name:,
+          type:,
+          value: value == true ? "ON" : value == false ? "OFF" : escape_cmake(value)
+        }
+        file.puts line
+      end
+    end
+  end
+
+  def escape_cmake(str)
+    str.gsub(/([\\"])/, '\\\\\1')
   end
 end

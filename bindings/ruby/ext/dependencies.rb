@@ -36,8 +36,7 @@ class Dependencies
   end
 
   def generate_dot
-    args = ["-S", "sources", "-B", "build", "--graphviz", dot_path, "-D", "BUILD_SHARED_LIBS=OFF"]
-    args << @options.to_s unless @options.to_s.empty?
+    args = ["-S", "sources", "-B", "build", "--graphviz", dot_path, "-D", "BUILD_SHARED_LIBS=OFF", "-C", @options.cache_path]
     system @cmake, *args, exception: true
   end
 
