@@ -612,7 +612,7 @@ jobs:
           zip -r ../../whisper-bin-${{ matrix.gfx_target }}-${SAFE_ARCH}.zip .
 
       - name: Upload binaries
-        if: matrix.sdl2 == 'ON' && needs.determine-tag.outputs.should_release
+        if: ${{ matrix.sdl2 == 'ON' && needs.determine-tag.outputs.should_release }}
         uses: actions/upload-artifact@v4
         with:
           name: whisper-bin-${{ matrix.gfx_target }}-${{ env.SAFE_ARCH }}
@@ -1289,7 +1289,7 @@ jobs:
                 elseif ($major -eq $latestMajor -and $minor -gt $latestMinor) { $isNewer = $true }
                 elseif ($major -eq $latestMajor -and $minor -eq $latestMinor -and $patch -gt $latestPatch) { $isNewer = $true }
                 elseif ($major -eq $latestMajor -and $minor -eq $latestMinor -and $patch -eq $latestPatch) {
-                  if ($isAlpha -and -not $latestIsAlpha) { $isNewer = $true }
+                  if (-not $isAlpha -and $latestIsAlpha) { $isNewer = $true }
                   elseif ($isAlpha -eq $latestIsAlpha -and $build -gt $latestBuild) { $isNewer = $true }
                 }
 
@@ -1419,7 +1419,7 @@ jobs:
           Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath $zipName
 
       - name: Upload binaries
-        if: matrix.sdl2 == 'ON' && needs.determine-tag.outputs.should_release
+        if: ${{ matrix.sdl2 == 'ON' && needs.determine-tag.outputs.should_release }}
         uses: actions/upload-artifact@v4
         with:
           # Unique artifact name per matrix job

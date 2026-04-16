@@ -62,7 +62,7 @@ if [ "$rocm_version" = "latest" ]; then
             elif [ "$major" -eq "$latest_major" ] && [ "$minor" -gt "$latest_minor" ]; then is_newer=true;
             elif [ "$major" -eq "$latest_major" ] && [ "$minor" -eq "$latest_minor" ] && [ "$patch" -gt "$latest_patch" ]; then is_newer=true;
             elif [ "$major" -eq "$latest_major" ] && [ "$minor" -eq "$latest_minor" ] && [ "$patch" -eq "$latest_patch" ]; then
-                if [ "$is_alpha" = true ] && [ "$latest_is_alpha" = false ]; then is_newer=true;
+                if [ "$is_alpha" = false ] && [ "$latest_is_alpha" = true ]; then is_newer=true;
                 elif [ "$is_alpha" = "$latest_is_alpha" ] && [ "$rc" -gt "$latest_rc" ]; then is_newer=true;
                 fi
             fi

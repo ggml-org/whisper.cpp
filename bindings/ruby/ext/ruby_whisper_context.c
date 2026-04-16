@@ -308,7 +308,7 @@ check_memory_view(rb_memory_view_t *memview)
     rb_warn("currently only format \"f\" is supported for MemoryView, but given: %s", memview->format);
     return false;
   }
-  if (memview->format != NULL && memview->ndim != 1) {
+  if (memview->ndim != 1) {
     rb_warn("currently only 1 dimensional MemoryView is supported, but given: %zd", memview->ndim);
     return false;
   }
