@@ -600,6 +600,7 @@ struct whisper_hparams {
     int32_t n_mels        = 80;
     int32_t ftype         = 1;
     float   eps           = 1e-5f;
+    int32_t n_audio_conv1_kernel = 3;
 };
 
 // audio encoding layer
@@ -1517,6 +1518,7 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         read_safe(loader, hparams.n_text_layer);
         read_safe(loader, hparams.n_mels);
         read_safe(loader, hparams.ftype);
+        read_safe(loader, hparams.n_audio_conv1_kernel);
 
         assert(hparams.n_text_state == hparams.n_audio_state);
 
@@ -1757,7 +1759,7 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         // encoder
         model.e_pe = create_tensor(ASR_TENSOR_ENC_POS_EMBD, ASR_SYSTEM_ENCODER, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_audio_state, n_audio_ctx));
 
-        model.e_conv_1_w = create_tensor(ASR_TENSOR_CONV1_WEIGHT, ASR_SYSTEM_ENCODER, ggml_new_tensor_3d(ctx, vtype, 3, n_mels, n_audio_state));
+        model.e_conv_1_w = create_tensor(ASR_TENSOR_CONV1_WEIGHT, ASR_SYSTEM_ENCODER, ggml_new_tensor_3d(ctx, vtype, hparams.n_audio_conv1_kernel, n_mels, n_audio_state));
         model.e_conv_1_b = create_tensor(ASR_TENSOR_CONV1_BIAS, ASR_SYSTEM_ENCODER, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, n_audio_state));
 
         model.e_conv_2_w = create_tensor(ASR_TENSOR_CONV2_WEIGHT, ASR_SYSTEM_ENCODER, ggml_new_tensor_3d(ctx, vtype, 3, n_audio_state, n_audio_state));
