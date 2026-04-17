@@ -50,13 +50,9 @@ on:
         required: false
         default: 'gfx1151,gfx1150,gfx120X,gfx110X'
       rocm_version:
-        description: 'ROCm version to use (e.g., 7.12.0, 7.2.1)'
+        description: 'ROCm version to use (e.g., 7.12.0, 7.2.1). Available versions: https://repo.amd.com/rocm/tarball/'
         required: false
         default: '7.12.0'
-        type: choice
-        options:
-          - 7.12.0
-          - 7.2.1
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
