@@ -112,6 +112,10 @@ ruby_whisper_log_callback(enum ggml_log_level level, const char * buffer, void *
     return;
   }
   VALUE log_callback = rb_iv_get(mWhisper, "log_callback");
+  if (NIL_P(log_callback)) {
+    return;
+  }
+
   VALUE udata = rb_iv_get(mWhisper, "user_data");
   rb_funcall(log_callback, id_call, 3, INT2NUM(level), rb_str_new2(buffer), udata);
 }
@@ -129,10 +133,16 @@ static VALUE ruby_whisper_s_log_set(VALUE self, VALUE log_callback, VALUE user_d
   rb_iv_set(self, "log_callback", log_callback);
   rb_iv_set(self, "user_data", user_data);
 
-  VALUE finalize_log_callback = rb_funcall(mWhisper, rb_intern("method"), 1, rb_str_new2("finalize_log_callback"));
-  rb_define_finalizer(log_callback, finalize_log_callback);
+  if (!NIL_P(log_callback)) {
+    VALUE finalize_log_callback = rb_funcall(mWhisper, rb_intern("method"), 1, rb_str_new2("finalize_log_callback"));
+    rb_define_finalizer(log_callback, finalize_log_callback);
+  }
 
-  whisper_log_set(ruby_whisper_log_callback, NULL);
+  if (NIL_P(log_callback)) {
+    whisper_log_set(NULL, NULL);
+  } else {
+    whisper_log_set(ruby_whisper_log_callback, NULL);
+  }
 
   return Qnil;
 }

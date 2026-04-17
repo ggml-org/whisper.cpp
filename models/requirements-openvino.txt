@@ -1,2 +1,2 @@
-openvino-dev[pytorch,onnx]
+openvino>=2023.3.0
 openai-whisper

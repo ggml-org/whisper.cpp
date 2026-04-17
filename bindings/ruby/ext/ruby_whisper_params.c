@@ -29,6 +29,7 @@
 
 extern VALUE cParams;
 extern VALUE cVADParams;
+extern VALUE mWhisper;
 
 extern ID id_call;
 
@@ -186,6 +187,35 @@ static bool abort_callback(void * user_data) {
   return false;
 }
 
+static void
+check_thread_safety(ruby_whisper_params *rwp, VALUE *context, int n_processors)
+{
+  if (n_processors == 1) {
+    return;
+  }
+
+  if (!NIL_P(rwp->new_segment_callback_container->callback) || 0 != RARRAY_LEN(rwp->new_segment_callback_container->callbacks)) {
+    rb_raise(rb_eRuntimeError, "new segment callback not supported on parallel transcription");
+  }
+
+  if (!NIL_P(rwp->progress_callback_container->callback) || 0 != RARRAY_LEN(rwp->progress_callback_container->callbacks)) {
+    rb_raise(rb_eRuntimeError, "progress callback not supported on parallel transcription");
+  }
+
+  if (!NIL_P(rwp->encoder_begin_callback_container->callback) || 0 != RARRAY_LEN(rwp->encoder_begin_callback_container->callbacks)) {
+    rb_raise(rb_eRuntimeError, "encoder begin callback not supported on parallel transcription");
+  }
+
+  if (!NIL_P(rwp->abort_callback_container->callback) || 0 != RARRAY_LEN(rwp->abort_callback_container->callbacks)) {
+    rb_raise(rb_eRuntimeError, "abort callback not supported on parallel transcription");
+  }
+
+  VALUE log_callback = rb_iv_get(mWhisper, "log_callback");
+  if (!NIL_P(log_callback)) {
+    rb_raise(rb_eRuntimeError, "log callback not supported for parallel transcription");
+  }
+}
+
 static void register_callbacks(ruby_whisper_params * rwp, VALUE * context) {
   if (!NIL_P(rwp->new_segment_callback_container->callback) || 0 != RARRAY_LEN(rwp->new_segment_callback_container->callbacks)) {
     rwp->new_segment_callback_container->context = context;
@@ -219,9 +249,13 @@ static void set_vad_params(ruby_whisper_params *rwp)
   rwp->params.vad_params = rwvp->params;
 }
 
+/*
+  TODO: Set abort callback to trap SIGINT and SIGTERM
+*/
 void
-prepare_transcription(ruby_whisper_params *rwp, VALUE *context)
+prepare_transcription(ruby_whisper_params *rwp, VALUE *context, int n_processors)
 {
+  check_thread_safety(rwp, context, n_processors);
   register_callbacks(rwp, context);
   set_vad_params(rwp);
 }
@@ -240,6 +274,20 @@ rb_whisper_params_mark(void *p)
 void
 ruby_whisper_params_free(ruby_whisper_params *rwp)
 {
+  if (rwp->params.language) {
+    ruby_xfree((void *)rwp->params.language);
+  }
+  if (rwp->params.initial_prompt) {
+    ruby_xfree((void *)rwp->params.initial_prompt);
+  }
+  if (rwp->params.vad_model_path) {
+    ruby_xfree((void *)rwp->params.vad_model_path);
+  }
+
+  xfree(rwp->new_segment_callback_container);
+  xfree(rwp->progress_callback_container);
+  xfree(rwp->encoder_begin_callback_container);
+  xfree(rwp->abort_callback_container);
 }
 
 void
@@ -248,7 +296,7 @@ rb_whisper_params_free(void *p)
   ruby_whisper_params *rwp = (ruby_whisper_params *)p;
   // How to free user_data and callback only when not referred to by others?
   ruby_whisper_params_free(rwp);
-  free(rwp);
+  xfree(rwp);
 }
 
 static size_t
@@ -276,6 +324,15 @@ ruby_whisper_params_allocate(VALUE klass)
   ruby_whisper_params *rwp;
   VALUE obj = TypedData_Make_Struct(klass, ruby_whisper_params, &ruby_whisper_params_type, rwp);
   rwp->params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+  if (rwp->params.language != NULL) {
+    rwp->params.language = ruby_strdup(rwp->params.language);
+  }
+  if (rwp->params.initial_prompt != NULL) {
+    rwp->params.initial_prompt = ruby_strdup(rwp->params.initial_prompt);
+  }
+  if (rwp->params.vad_model_path != NULL) {
+    rwp->params.vad_model_path = ruby_strdup(rwp->params.vad_model_path);
+  }
   rwp->diarize = false;
   rwp->vad_params = TypedData_Wrap_Struct(cVADParams, &ruby_whisper_vad_params_type, (void *)&rwp->params.vad_params);
   rwp->new_segment_callback_container = rb_whisper_callback_container_allocate();
@@ -296,10 +353,12 @@ ruby_whisper_params_set_language(VALUE self, VALUE value)
 {
   ruby_whisper_params *rwp;
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
+  ruby_xfree((void *)rwp->params.language);
+  rwp->params.language = NULL;
   if (value == Qfalse || value == Qnil) {
-    rwp->params.language = "auto";
+    rwp->params.language = ruby_strdup("auto");
   } else {
-    rwp->params.language = StringValueCStr(value);
+    rwp->params.language = ruby_strdup(StringValueCStr(value));
   }
   return value;
 }
@@ -608,7 +667,13 @@ ruby_whisper_params_set_initial_prompt(VALUE self, VALUE value)
 {
   ruby_whisper_params *rwp;
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
-  rwp->params.initial_prompt = StringValueCStr(value);
+  ruby_xfree((void *)rwp->params.initial_prompt);
+  rwp->params.initial_prompt = NULL;
+  if (NIL_P(value)) {
+    rwp->params.initial_prompt = NULL;
+  } else {
+    rwp->params.initial_prompt = ruby_strdup(StringValueCStr(value));
+  }
   return value;
 }
 /*
@@ -1103,12 +1168,14 @@ ruby_whisper_params_set_vad_model_path(VALUE self, VALUE value)
 {
   ruby_whisper_params *rwp;
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
+  ruby_xfree((void *)rwp->params.vad_model_path);
+  rwp->params.vad_model_path = NULL;
   if (NIL_P(value)) {
     rwp->params.vad_model_path = NULL;
     return value;
   }
   VALUE path = ruby_whisper_normalize_model_path(value);
-  rwp->params.vad_model_path = StringValueCStr(path);
+  rwp->params.vad_model_path = ruby_strdup(StringValueCStr(path));
   return value;
 }
 
