@@ -57,7 +57,7 @@ if [ "$rocm_version" = "latest" ]; then
     latest_is_alpha=false
 
     # ERE-compatible regex pattern for version extraction.
-    version_regex="^${dist_prefix}-[^0-9]*([0-9]+\\.[0-9]+\\.[0-9]+(a|rc)[0-9]+)\\.tar\\.gz$"
+    version_regex="^${dist_prefix}-([0-9]+[.][0-9]+[.][0-9]+(a|rc)[0-9]+)[.]tar[.]gz$"
 
     while IFS= read -r file; do
         [ -z "$file" ] && continue
