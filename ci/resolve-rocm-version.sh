@@ -1,18 +1,21 @@
 #!/bin/bash
 #
-# Resolve the latest ROCm nightly tarball URL for a given GPU target and platform.
+# Resolve the ROCm tarball URL for a given platform and version.
+#
+# Uses AMD's official repo tarball distribution:
+#   https://repo.amd.com/rocm/tarball/therock-dist-{platform}-{gfx_target}-{version}.tar.gz
 #
 # Usage:
 #   source ci/resolve-rocm-version.sh <platform> <gfx_target> <rocm_version>
 #
 # Arguments:
 #   platform      - "linux" or "windows"
-#   gfx_target    - GPU target (gfx1151, gfx1150, gfx110X, gfx120X)
-#   rocm_version  - Specific version (e.g. 7.11.0a20251205) or "latest"
+#   gfx_target    - GPU target (defaults to gfx1151 if not specified or is a group target)
+#   rocm_version  - Specific version (e.g. 7.12.0, 7.2.1) - required, no "latest" auto-detection
 #
 # Outputs (exported):
 #   ROCM_RESOLVED_VERSION - The resolved version string
-#   ROCM_TARBALL_URL      - The full S3 URL to download
+#   ROCM_TARBALL_URL      - The full URL to download
 
 platform="$1"
 gfx_target="$2"
@@ -23,96 +26,34 @@ if [ -z "$platform" ] || [ -z "$gfx_target" ] || [ -z "$rocm_version" ]; then
     return 1 2>/dev/null || exit 1
 fi
 
-# Map GPU target to S3 naming convention
-# Group targets (gfx110X, gfx120X) use "-all" suffix; individual targets have no suffix
-s3_target="$gfx_target"
-if [ "$gfx_target" = "gfx110X" ] || [ "$gfx_target" = "gfx120X" ]; then
-    s3_target="${gfx_target}-all"
-fi
-
-dist_prefix="therock-dist-${platform}-${s3_target}"
-
+# Validate that a specific version was provided (no "latest" auto-detection)
 if [ "$rocm_version" = "latest" ]; then
-    echo "Auto-detecting latest ROCm version for ${platform}/${gfx_target}..."
-    s3_response=$(curl -s "https://therock-nightly-tarball.s3.amazonaws.com/?prefix=${dist_prefix}-7")
-
-    # Use grep -o (basic regex, no PCRE) + sed for XML parsing
-    # Works on full Git Bash AND MinGit/BusyBox variants
-    files=$(echo "$s3_response" | tr -d '\r' | grep -o '<Key>[^<]*</Key>' | sed 's/<Key>//;s/<\/Key>//' | grep "^${dist_prefix}-")
-
-    # Validate that we found any files at all
-    file_count=$(echo "$files" | grep -c '.' 2>/dev/null || echo "0")
-    if [ "$file_count" -eq 0 ]; then
-        echo "ERROR: No ROCm tarball files found for prefix '${dist_prefix}-'"
-        echo "S3 response (first 500 chars): $(echo "$s3_response" | head -c 500)"
-        return 1 2>/dev/null || exit 1
-    fi
-    echo "Found $file_count candidate files from S3"
-
-    latest_file=""
-    latest_major=0
-    latest_minor=0
-    latest_patch=0
-    latest_rc=0
-    latest_is_alpha=false
-
-    # ERE-compatible regex pattern for version extraction.
-    version_regex="^${dist_prefix}-([0-9]+[.][0-9]+[.][0-9]+(a|rc)[0-9]+)[.]tar[.]gz$"
-
-    while IFS= read -r file; do
-        [ -z "$file" ] && continue
-        if [[ "$file" =~ $version_regex ]]; then
-            version="${BASH_REMATCH[1]}"
-            major=$(echo "$version" | cut -d. -f1)
-            minor=$(echo "$version" | cut -d. -f2)
-            patch=$(echo "$version" | cut -d. -f3 | sed 's/\(a\|rc\).*//')
-            rc=$(echo "$version" | sed 's/.*\(a\|rc\)//')
-            is_alpha=false
-            if [[ "$version" =~ a ]]; then is_alpha=true; fi
-
-            is_newer=false
-            if [ "$major" -gt "$latest_major" ]; then is_newer=true;
-            elif [ "$major" -eq "$latest_major" ] && [ "$minor" -gt "$latest_minor" ]; then is_newer=true;
-            elif [ "$major" -eq "$latest_major" ] && [ "$minor" -eq "$latest_minor" ] && [ "$patch" -gt "$latest_patch" ]; then is_newer=true;
-            elif [ "$major" -eq "$latest_major" ] && [ "$minor" -eq "$latest_minor" ] && [ "$patch" -eq "$latest_patch" ]; then
-                if [ "$is_alpha" = false ] && [ "$latest_is_alpha" = true ]; then is_newer=true;
-                elif [ "$is_alpha" = "$latest_is_alpha" ] && [ "$rc" -gt "$latest_rc" ]; then is_newer=true;
-                fi
-            fi
-
-            if [ "$is_newer" = true ]; then
-                latest_file="$file"
-                latest_major="$major"
-                latest_minor="$minor"
-                latest_patch="$patch"
-                latest_rc="$rc"
-                latest_is_alpha="$is_alpha"
-            fi
-        fi
-    done <<< "$files"
-
-    echo "Found latest file: $latest_file"
-
-    if [ -z "$latest_file" ]; then
-        echo "ERROR: No valid ROCm tarball files matched the version pattern"
-        echo "Showing first 5 candidate files:"
-        echo "$files" | head -5
-        return 1 2>/dev/null || exit 1
-    fi
-
-    # Extract version from the resolved file using the same ERE-compatible pattern
-    if [[ "$latest_file" =~ $version_regex ]]; then
-        rocm_version="${BASH_REMATCH[1]}"
-        echo "Detected latest ROCm version: $rocm_version"
-    else
-        echo "Failed to extract ROCm version from latest file: $latest_file"
-        return 1 2>/dev/null || exit 1
-    fi
-
-    export ROCM_TARBALL_URL="https://therock-nightly-tarball.s3.amazonaws.com/$latest_file"
-else
-    export ROCM_TARBALL_URL="https://therock-nightly-tarball.s3.amazonaws.com/${dist_prefix}-${rocm_version}.tar.gz"
+    echo "ERROR: 'latest' auto-detection is not supported."
+    echo "Please specify a concrete ROCm version (e.g., 7.12.0, 7.2.1)."
+    echo "Available versions: https://repo.amd.com/rocm/tarball/"
+    return 1 2>/dev/null || exit 1
 fi
+
+# Validate version format (should be X.Y.Z or X.Y.ZaNNNNNNNN pattern)
+if ! echo "$rocm_version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+'; then
+    echo "ERROR: Invalid ROCm version format: '$rocm_version'"
+    echo "Expected format: X.Y.Z (e.g., 7.12.0) or X.Y.ZaNNNNNNNN (e.g., 7.11.0a20251205)"
+    return 1 2>/dev/null || exit 1
+fi
+
+# For the AMD tarball distribution, use gfx1151 as the base target
+# The tarball contains ROCm tools/libraries for all supported GPUs
+# GPU targets are specified during build via GPU_TARGETS CMake variable
+# Group targets (gfx110X, gfx120X) should use gfx1151 as the base
+base_target="gfx1151"
+if [ "$gfx_target" != "gfx110X" ] && [ "$gfx_target" != "gfx120X" ] && [ "$gfx_target" != "gfx1150" ] && [ "$gfx_target" != "gfx1100" ]; then
+    # Use the specific target if it's an individual target
+    base_target="$gfx_target"
+fi
+
+# Construct the AMD official repo URL
+ROCM_TARBALL_URL="https://repo.amd.com/rocm/tarball/therock-dist-${platform}-${base_target}-${rocm_version}.tar.gz"
 
 export ROCM_RESOLVED_VERSION="$rocm_version"
+echo "ROCm version: $ROCM_RESOLVED_VERSION"
 echo "ROCm URL: $ROCM_TARBALL_URL"

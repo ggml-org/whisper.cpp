@@ -50,9 +50,13 @@ on:
         required: false
         default: 'gfx1151,gfx1150,gfx120X,gfx110X'
       rocm_version:
-        description: 'ROCm version to use (e.g., 7.11.0a20251205) or "latest" to auto-detect'
+        description: 'ROCm version to use (e.g., 7.12.0, 7.2.1)'
         required: false
-        default: 'latest'
+        default: '7.12.0'
+        type: choice
+        options:
+          - 7.12.0
+          - 7.2.1
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -66,7 +70,7 @@ env:
   ubuntu_image: "ubuntu:22.04"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   GFX_TARGETS: ${{ github.event.inputs.gfx_target || 'gfx1151,gfx1150,gfx120X,gfx110X' }}
-  ROCM_VERSION: ${{ github.event.inputs.rocm_version || 'latest' }}
+  ROCM_VERSION: ${{ github.event.inputs.rocm_version || '7.12.0' }}
 
 jobs:
   determine-tag:
