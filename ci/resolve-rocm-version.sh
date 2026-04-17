@@ -40,6 +40,15 @@ if [ "$rocm_version" = "latest" ]; then
     # Works on full Git Bash AND MinGit/BusyBox variants
     files=$(echo "$s3_response" | tr -d '\r' | grep -o '<Key>[^<]*</Key>' | sed 's/<Key>//;s/<\/Key>//' | grep "^${dist_prefix}-")
 
+    # Validate that we found any files at all
+    file_count=$(echo "$files" | grep -c '.' 2>/dev/null || echo "0")
+    if [ "$file_count" -eq 0 ]; then
+        echo "ERROR: No ROCm tarball files found for prefix '${dist_prefix}-'"
+        echo "S3 response (first 500 chars): $(echo "$s3_response" | head -c 500)"
+        return 1 2>/dev/null || exit 1
+    fi
+    echo "Found $file_count candidate files from S3"
+
     latest_file=""
     latest_major=0
     latest_minor=0
@@ -47,8 +56,17 @@ if [ "$rocm_version" = "latest" ]; then
     latest_rc=0
     latest_is_alpha=false
 
+    # ERE-compatible regex pattern for version extraction.
+    # IMPORTANT: Bash [[ =~ ]] uses POSIX ERE, NOT PCRE.
+    # The PCRE non-greedy quantifier .*? is NOT supported in ERE.
+    # On Windows Git Bash, .*? is interpreted literally and fails to match.
+    # Fix: Use [^0-9]* (match non-digit chars) instead of .*? - this is ERE-compatible
+    # and works correctly since each filename contains exactly one version number.
+    version_regex="^${dist_prefix}-[^0-9]*([0-9]+\\.[0-9]+\\.[0-9]+(a|rc)[0-9]+)\\.tar\\.gz$"
+
     while IFS= read -r file; do
-        if [[ "$file" =~ ${dist_prefix}-.*?([0-9]+\.[0-9]+\.[0-9]+(a|rc)[0-9]+)\.tar\.gz ]]; then
+        [ -z "$file" ] && continue
+        if [[ "$file" =~ $version_regex ]]; then
             version="${BASH_REMATCH[1]}"
             major=$(echo "$version" | cut -d. -f1)
             minor=$(echo "$version" | cut -d. -f2)
@@ -80,7 +98,15 @@ if [ "$rocm_version" = "latest" ]; then
 
     echo "Found latest file: $latest_file"
 
-    if [[ "$latest_file" =~ ${dist_prefix}-.*?([0-9]+\.[0-9]+\.[0-9]+(a|rc)[0-9]+)\.tar\.gz ]]; then
+    if [ -z "$latest_file" ]; then
+        echo "ERROR: No valid ROCm tarball files matched the version pattern"
+        echo "Showing first 5 candidate files:"
+        echo "$files" | head -5
+        return 1 2>/dev/null || exit 1
+    fi
+
+    # Extract version from the resolved file using the same ERE-compatible pattern
+    if [[ "$latest_file" =~ $version_regex ]]; then
         rocm_version="${BASH_REMATCH[1]}"
         echo "Detected latest ROCm version: $rocm_version"
     else
