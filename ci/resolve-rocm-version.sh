@@ -57,11 +57,6 @@ if [ "$rocm_version" = "latest" ]; then
     latest_is_alpha=false
 
     # ERE-compatible regex pattern for version extraction.
-    # IMPORTANT: Bash [[ =~ ]] uses POSIX ERE, NOT PCRE.
-    # The PCRE non-greedy quantifier .*? is NOT supported in ERE.
-    # On Windows Git Bash, .*? is interpreted literally and fails to match.
-    # Fix: Use [^0-9]* (match non-digit chars) instead of .*? - this is ERE-compatible
-    # and works correctly since each filename contains exactly one version number.
     version_regex="^${dist_prefix}-[^0-9]*([0-9]+\\.[0-9]+\\.[0-9]+(a|rc)[0-9]+)\\.tar\\.gz$"
 
     while IFS= read -r file; do
