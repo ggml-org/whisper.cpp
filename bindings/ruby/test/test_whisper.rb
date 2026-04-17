@@ -43,9 +43,20 @@ class TestWhisper < TestBase
     @whisper = Whisper::Context.new("base.en")
     params  = Whisper::Params.new
 
-    @whisper.transcribe(AUDIO, params, n_processors: 4) {|text|
-      assert_match(/what you can do for your country/i, text)
-    }
+    without_log_callback do
+      @whisper.transcribe(AUDIO, params, n_processors: 4) {|text|
+        assert_match(/what you can do for your country/i, text)
+      }
+    end
+  end
+
+  private
+
+  def without_log_callback
+    Whisper.log_set nil, nil
+    yield
+  ensure
+    Whisper.log_set ->(level, buffer, user_data) {}, nil
   end
 
   sub_test_case "After transcription" do
@@ -229,7 +240,9 @@ class TestWhisper < TestBase
 
     def test_full_parallel
       nprocessors = 2
-      @whisper.full_parallel(@params, @samples, @samples.length, nprocessors)
+      without_log_callback do
+        @whisper.full_parallel(@params, @samples, @samples.length, nprocessors)
+      end
 
       assert_equal nprocessors, @whisper.full_n_segments
       text = @whisper.each_segment.collect(&:text).join
@@ -240,7 +253,9 @@ class TestWhisper < TestBase
     def test_full_parallel_with_memory_view
       nprocessors = 2
       samples = JFKReader.new(AUDIO)
-      @whisper.full_parallel(@params, samples, nil, nprocessors)
+      without_log_callback do
+        @whisper.full_parallel(@params, samples, nil, nprocessors)
+      end
 
       assert_equal nprocessors, @whisper.full_n_segments
       text = @whisper.each_segment.collect(&:text).join
@@ -259,7 +274,9 @@ class TestWhisper < TestBase
 
     def test_full_parallel_without_length
       nprocessors = 2
-      @whisper.full_parallel(@params, @samples, nil, nprocessors)
+      without_log_callback do
+        @whisper.full_parallel(@params, @samples, nil, nprocessors)
+      end
 
       assert_equal nprocessors, @whisper.full_n_segments
       text = @whisper.each_segment.collect(&:text).join

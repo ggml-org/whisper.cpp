@@ -22,7 +22,7 @@ extern const rb_data_type_t ruby_whisper_context_params_type;
 extern VALUE ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self);
 extern VALUE rb_whisper_model_s_new(VALUE context);
 extern VALUE rb_whisper_segment_s_new(VALUE context, int index);
-extern void prepare_transcription(ruby_whisper_params *rwp, VALUE *context);
+extern void prepare_transcription(ruby_whisper_params *rwp, VALUE *context, int n_processors);
 
 ID transcribe_option_names[1];
 
@@ -436,7 +436,7 @@ full_body(VALUE rb_args)
   GetContext(*args->context, rw);
   TypedData_Get_Struct(*args->params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
 
-  prepare_transcription(rwp, args->context);
+  prepare_transcription(rwp, args->context, 1);
   int result = whisper_full(rw->context, rwp->params, args->samples, args->n_samples);
 
   return INT2NUM(result);
@@ -487,7 +487,7 @@ full_parallel_body(VALUE rb_args)
   GetContext(*args->context, rw);
   TypedData_Get_Struct(*args->params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
 
-  prepare_transcription(rwp, args->context);
+  prepare_transcription(rwp, args->context, args->n_processors);
   int result = whisper_full_parallel(rw->context, rwp->params, args->samples, args->n_samples, args->n_processors);
 
   return INT2NUM(result);

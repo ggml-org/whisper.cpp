@@ -37,7 +37,7 @@ module Whisper
   def self.lang_id: (string name) -> Integer
   def self.lang_str: (Integer id) -> String
   def self.lang_str_full: (Integer id) -> String
-  def self.log_set: (log_callback, Object? user_data) -> log_callback
+  def self.log_set: (log_callback?, Object? user_data) -> log_callback
   def self.system_info_str: () -> String
 
   class Context
@@ -52,6 +52,9 @@ module Whisper
     #       puts text
     #     end
     #
+    # If n_processors is greater than 1, you cannot set any callbacks including
+    # new_segment_callback, progress_callback, encoder_begin_callback, abort_callback,
+    # and log_callback set by Whisper.log_set
     def transcribe: (path, Params, ?n_processors: Integer) -> self
                   | (path, Params, ?n_processors: Integer) { (String) -> void } -> self
 
@@ -129,6 +132,9 @@ module Whisper
     # It seems this approach can offer some speedup in some cases.
     # However, the transcription accuracy can be worse at the beginning and end of each chunk.
     #
+    # If n_processors is greater than 1, you cannot set any callbacks including
+    # new_segment_callback, progress_callback, encoder_begin_callback, abort_callback,
+    # and log_callback set by Whisper.log_set
     def full_parallel: (Params, Array[Float], ?Integer n_samples) -> self
                      | (Params, _Samples, ?Integer n_samples) -> self
                      | (Params, _Samples, ?Integer? n_samples, Integer n_processors) -> self

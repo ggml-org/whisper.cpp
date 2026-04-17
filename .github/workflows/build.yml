@@ -1183,7 +1183,7 @@ jobs:
           echo "$CUDA_TOOLKIT_DIR\libnvvp" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "CUDA_PATH=$CUDA_TOOLKIT_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           echo "CUDA_PATH_V11_8=$CUDA_TOOLKIT_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-        
+
       - name: Install Cuda Toolkit 12.4.0
         if: ${{ matrix.cuda-toolkit == '12.4.0' }}
         run: |
@@ -2049,7 +2049,7 @@ jobs:
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-x64-nvidia-cuda:
-    runs-on: [self-hosted, Linux, X64, NVIDIA]
+    runs-on: [self-hosted, Linux, mnt-root, NVIDIA]
 
     steps:
       - name: Clone
@@ -2063,7 +2063,7 @@ jobs:
           GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/whisper.cpp /mnt/whisper.cpp
 
   ggml-ci-x64-nvidia-vulkan-cm:
-    runs-on: [self-hosted, Linux, X64, NVIDIA]
+    runs-on: [self-hosted, Linux, mnt-root, NVIDIA]
 
     steps:
       - name: Clone
@@ -2077,7 +2077,7 @@ jobs:
           GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/whisper.cpp /mnt/whisper.cpp
 
   ggml-ci-x64-nvidia-vulkan-cm2:
-    runs-on: [self-hosted, Linux, X64, NVIDIA, COOPMAT2]
+    runs-on: [self-hosted, Linux, mnt-root, NVIDIA, COOPMAT2]
 
     steps:
       - name: Clone
@@ -2090,18 +2090,18 @@ jobs:
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/whisper.cpp /mnt/whisper.cpp
 
-  ggml-ci-x64-cpu-amx:
-    runs-on: [self-hosted, Linux, X64, CPU, AMX]
+  #ggml-ci-x64-cpu-amx:
+  #  runs-on: [self-hosted, Linux, X64, CPU, AMX]
 
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
+  #  steps:
+  #    - name: Clone
+  #      id: checkout
+  #      uses: actions/checkout@v6
 
-      - name: Test
-        id: ggml-ci
-        run: |
-          bash ./ci/run.sh ~/results/whisper.cpp /mnt/whisper.cpp
+  #    - name: Test
+  #      id: ggml-ci
+  #      run: |
+  #        bash ./ci/run.sh ~/results/whisper.cpp /mnt/whisper.cpp
 
   ggml-ci-mac-metal:
     runs-on: [self-hosted, macOS, ARM64]
