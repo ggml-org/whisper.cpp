@@ -15,8 +15,15 @@ jfk_reader_get_memory_view(const VALUE obj, rb_memory_view_t *view, int flags)
   VALUE audio_path = rb_iv_get(obj, "audio_path");
   const char *audio_path_str = StringValueCStr(audio_path);
   const int n_samples = 176000;
-  float *data = (float *)malloc(n_samples * sizeof(float));
-  short *samples = (short *)malloc(n_samples * sizeof(short));
+  float *data = (float *)calloc((size_t)n_samples, sizeof(float));
+  if (data == NULL) {
+    return false;
+  }
+  short *samples = (short *)calloc((size_t)n_samples, sizeof(short));
+  if (samples == NULL) {
+    free(data);
+    return false;
+  }
   FILE *file = fopen(audio_path_str, "rb");
 
   fseek(file, 78, SEEK_SET);
