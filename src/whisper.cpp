@@ -603,6 +603,7 @@ struct whisper_hparams {
     int32_t n_audio_conv1_kernel = 3;
     int32_t n_audio_window_size  = 0;
     int32_t n_audio_last_window_layer = -1;
+    bool    is_bci = false;
 };
 
 // audio encoding layer
@@ -1520,9 +1521,13 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         read_safe(loader, hparams.n_text_layer);
         read_safe(loader, hparams.n_mels);
         read_safe(loader, hparams.ftype);
-        read_safe(loader, hparams.n_audio_conv1_kernel);
-        read_safe(loader, hparams.n_audio_window_size);
-        read_safe(loader, hparams.n_audio_last_window_layer);
+
+        if (hparams.n_mels > 256) {
+            read_safe(loader, hparams.n_audio_conv1_kernel);
+            read_safe(loader, hparams.n_audio_window_size);
+            read_safe(loader, hparams.n_audio_last_window_layer);
+            hparams.is_bci = true;
+        }
 
         assert(hparams.n_text_state == hparams.n_audio_state);
 
@@ -1577,6 +1582,13 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         WHISPER_LOG_INFO("%s: ftype         = %d\n", __func__, model.hparams.ftype);
         WHISPER_LOG_INFO("%s: qntvr         = %d\n", __func__, qntvr);
         WHISPER_LOG_INFO("%s: type          = %d (%s%s)\n", __func__, model.type, g_model_name.at(model.type).c_str(), mver.c_str());
+
+        if (hparams.is_bci) {
+            WHISPER_LOG_INFO("%s: is_bci        = true\n",  __func__);
+            WHISPER_LOG_INFO("%s: conv1_kernel  = %d\n",    __func__, hparams.n_audio_conv1_kernel);
+            WHISPER_LOG_INFO("%s: window_size   = %d\n",    __func__, hparams.n_audio_window_size);
+            WHISPER_LOG_INFO("%s: last_win_layer= %d\n",    __func__, hparams.n_audio_last_window_layer);
+        }
     }
 
     // load mel filters
@@ -6993,7 +7005,7 @@ int whisper_full_with_state(
         } else {
             prompt_init.push_back(whisper_token_transcribe(ctx));
         }
-    } else if (ctx->model.hparams.n_audio_window_size > 0) {
+    } else if (ctx->model.hparams.is_bci) {
         const int lang_id = whisper_lang_id(params.language);
         state->lang_id = lang_id;
         prompt_init.push_back(whisper_token_lang(ctx, lang_id));
