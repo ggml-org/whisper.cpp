@@ -14,17 +14,16 @@ jfk_reader_get_memory_view(const VALUE obj, rb_memory_view_t *view, int flags)
 {
   VALUE audio_path = rb_iv_get(obj, "audio_path");
   const char *audio_path_str = StringValueCStr(audio_path);
+  // n_samples is a fixed constant (not derived from user input).
   const int n_samples = 176000;
-  float *data = (float *)calloc((size_t)n_samples, sizeof(float));
-  if (data == NULL) {
-    return false;
-  }
-  short *samples = (short *)calloc((size_t)n_samples, sizeof(short));
-  if (samples == NULL) {
-    free(data);
-    return false;
-  }
+  float *data = ALLOC_N(float, n_samples);
+  short *samples = ALLOC_N(short, n_samples);
   FILE *file = fopen(audio_path_str, "rb");
+  if (file == NULL) {
+    xfree(samples);
+    xfree(data);
+    rb_raise(rb_eIOError, "failed to open audio file");
+  }
 
   fseek(file, 78, SEEK_SET);
   fread(samples, sizeof(short), n_samples, file);
@@ -32,6 +31,7 @@ jfk_reader_get_memory_view(const VALUE obj, rb_memory_view_t *view, int flags)
   for (int i = 0; i < n_samples; i++) {
     data[i] = samples[i]/32768.0;
   }
+  xfree(samples);
 
   view->obj = obj;
   view->data = (void *)data;
