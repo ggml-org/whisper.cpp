@@ -8039,11 +8039,25 @@ whisper_token whisper_full_get_token_id(struct whisper_context * ctx, int i_segm
 }
 
 struct whisper_token_data whisper_full_get_token_data_from_state(struct whisper_state * state, int i_segment, int i_token) {
-    return state->result_all[i_segment].tokens[i_token];
+    whisper_token_data token = state->result_all[i_segment].tokens[i_token];
+
+    // Map VAD-processed token timestamps back to the original audio timeline.
+    // Without this, tokens report timestamps in the VAD-stripped timeline
+    // (starting at 0 after whisper_full_with_state sees only the speech-
+    // filtered samples), while segment timestamps are already mapped back by
+    // whisper_full_get_segment_t0/t1_from_state. The two diverge when VAD
+    // strips a non-speech prefix (e.g. music before speech).
+    // ref: https://github.com/ggml-org/whisper.cpp/issues/3754
+    if (state->has_vad_segments && !state->vad_mapping_table.empty()) {
+        token.t0 = map_processed_to_original_time(token.t0, state->vad_mapping_table);
+        token.t1 = map_processed_to_original_time(token.t1, state->vad_mapping_table);
+    }
+
+    return token;
 }
 
 struct whisper_token_data whisper_full_get_token_data(struct whisper_context * ctx, int i_segment, int i_token) {
-    return ctx->state->result_all[i_segment].tokens[i_token];
+    return whisper_full_get_token_data_from_state(ctx->state, i_segment, i_token);
 }
 
 float whisper_full_get_token_p_from_state(struct whisper_state * state, int i_segment, int i_token) {
