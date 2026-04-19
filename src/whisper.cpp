@@ -886,6 +886,9 @@ struct whisper_state {
     std::vector<float> inp_mel;
     std::vector<float> inp_mask;
 
+    // pre-computed BCI windowed attention mask (constant after init)
+    std::vector<float> window_mask_data;
+
     // decode output (2-dimensional array: [n_tokens][n_vocab])
     std::vector<float> logits;
 
@@ -2458,20 +2461,9 @@ static bool whisper_encode_internal(
 
         {
             struct ggml_tensor * wmask = ggml_graph_get_tensor(gf, "window_mask");
-            if (wmask) {
-                const int n_ctx = wstate.exp_n_audio_ctx > 0
-                    ? wstate.exp_n_audio_ctx : wctx.model.hparams.n_audio_ctx;
-                const int ws = wctx.model.hparams.n_audio_window_size;
-                const int half_w = ws / 2;
-                std::vector<float> mask_data(n_ctx * n_ctx);
-                for (int i = 0; i < n_ctx; ++i) {
-                    for (int j = 0; j < n_ctx; ++j) {
-                        mask_data[i * n_ctx + j] =
-                            (abs(i - j) <= half_w) ? 0.0f : -INFINITY;
-                    }
-                }
-                ggml_backend_tensor_set(wmask, mask_data.data(), 0,
-                    n_ctx * n_ctx * sizeof(float));
+            if (wmask && !wstate.window_mask_data.empty()) {
+                ggml_backend_tensor_set(wmask, wstate.window_mask_data.data(), 0,
+                    wstate.window_mask_data.size() * sizeof(float));
             }
         }
 
@@ -3586,6 +3578,20 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
         }
 
         WHISPER_LOG_INFO("%s: compute buffer (decode) = %7.2f MB\n", __func__, whisper_sched_size(state->sched_decode) / 1e6);
+    }
+
+    if (ctx->model.hparams.is_bci) {
+        const auto & hparams = ctx->model.hparams;
+        const int n_ctx  = hparams.n_audio_ctx;
+        const int half_w = hparams.n_audio_window_size / 2;
+
+        state->window_mask_data.resize(n_ctx * n_ctx);
+        for (int i = 0; i < n_ctx; ++i) {
+            for (int j = 0; j < n_ctx; ++j) {
+                state->window_mask_data[i * n_ctx + j] =
+                    (abs(i - j) <= half_w) ? 0.0f : -INFINITY;
+            }
+        }
     }
 
     return state;
