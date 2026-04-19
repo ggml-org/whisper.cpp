@@ -6812,21 +6812,7 @@ int whisper_full_with_state(
     if (params.language == nullptr || strlen(params.language) == 0 || strcmp(params.language, "auto") == 0 || params.detect_language) {
         std::vector<float> probs(whisper_lang_max_id() + 1, 0.0f);
 
-        // Respect the user's offset_ms when choosing the window for language
-        // detection. Previously this was hardcoded to 0, which meant that on
-        // audio like "1 minute of French then 30 minutes of German" with
-        // offset_ms=60000, transcription correctly started at the 1-minute
-        // mark but language detection still picked the French prefix.
-        // If the offset falls past the end of the audio (including short
-        // files where offset_ms exceeds total duration), fall back to 0 so
-        // auto-detect still returns a valid language. The too-short-audio
-        // guard later in this function will then handle the empty-decode
-        // case cleanly.
-        // ref: https://github.com/ggml-org/whisper.cpp/issues/1831
-        const int detect_offset_ms = (params.offset_ms > 0 && (params.offset_ms / 10) < state->mel.n_len_org)
-            ? params.offset_ms
-            : 0;
-        const auto lang_id = whisper_lang_auto_detect_with_state(ctx, state, detect_offset_ms, params.n_threads, probs.data());
+        const auto lang_id = whisper_lang_auto_detect_with_state(ctx, state, 0, params.n_threads, probs.data());
         if (lang_id < 0) {
             WHISPER_LOG_ERROR("%s: failed to auto-detect language\n", __func__);
             return -3;
@@ -7855,10 +7841,22 @@ int whisper_full_parallel(
     for (int i = 0; i < n_processors - 1; ++i) {
         auto& results_i = states[i]->result_all;
 
+        const int64_t chunk_offset = 100 * ((i + 1) * n_samples_per_processor) / WHISPER_SAMPLE_RATE + offset_t;
+
         for (auto& result : results_i) {
             // correct the segment timestamp taking into account the offset
-            result.t0 += 100 * ((i + 1) * n_samples_per_processor) / WHISPER_SAMPLE_RATE + offset_t;
-            result.t1 += 100 * ((i + 1) * n_samples_per_processor) / WHISPER_SAMPLE_RATE + offset_t;
+            result.t0 += chunk_offset;
+            result.t1 += chunk_offset;
+
+            // also correct per-token timestamps inside this segment.
+            // Without this, segments report correct absolute times in the
+            // final audio but token-level timestamps reset to 0 at each
+            // worker-chunk boundary when --processors > 1.
+            // ref: https://github.com/ggml-org/whisper.cpp/issues/3726
+            for (auto& token : result.tokens) {
+                token.t0 += chunk_offset;
+                token.t1 += chunk_offset;
+            }
 
             // make sure that segments are not overlapping
             if (!ctx->state->result_all.empty()) {
@@ -8053,11 +8051,25 @@ whisper_token whisper_full_get_token_id(struct whisper_context * ctx, int i_segm
 }
 
 struct whisper_token_data whisper_full_get_token_data_from_state(struct whisper_state * state, int i_segment, int i_token) {
-    return state->result_all[i_segment].tokens[i_token];
+    whisper_token_data token = state->result_all[i_segment].tokens[i_token];
+
+    // Map VAD-processed token timestamps back to the original audio timeline.
+    // Without this, tokens report timestamps in the VAD-stripped timeline
+    // (starting at 0 after whisper_full_with_state sees only the speech-
+    // filtered samples), while segment timestamps are already mapped back by
+    // whisper_full_get_segment_t0/t1_from_state. The two diverge when VAD
+    // strips a non-speech prefix (e.g. music before speech).
+    // ref: https://github.com/ggml-org/whisper.cpp/issues/3754
+    if (state->has_vad_segments && !state->vad_mapping_table.empty()) {
+        token.t0 = map_processed_to_original_time(token.t0, state->vad_mapping_table);
+        token.t1 = map_processed_to_original_time(token.t1, state->vad_mapping_table);
+    }
+
+    return token;
 }
 
 struct whisper_token_data whisper_full_get_token_data(struct whisper_context * ctx, int i_segment, int i_token) {
-    return ctx->state->result_all[i_segment].tokens[i_token];
+    return whisper_full_get_token_data_from_state(ctx->state, i_segment, i_token);
 }
 
 float whisper_full_get_token_p_from_state(struct whisper_state * state, int i_segment, int i_token) {
