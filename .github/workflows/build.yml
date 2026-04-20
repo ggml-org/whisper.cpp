@@ -635,6 +635,7 @@ jobs:
           -DBUILD_SHARED_LIBS=ON
           -DWHISPER_SDL2=${{ matrix.sdl2 }}
           -DGGML_NATIVE=OFF
+          -DGGML_BMI2=OFF
 
       - name: Build
         run: |
