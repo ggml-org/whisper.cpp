@@ -890,6 +890,18 @@ struct whisper_state {
     std::vector<float> window_mask_data;
     int                window_mask_n_ctx = 0;
 
+    // (Re)compute the banded attention mask for a given context length.
+    void compute_window_mask(int n_ctx, int half_w) {
+        window_mask_data.resize(n_ctx * n_ctx);
+        for (int i = 0; i < n_ctx; ++i) {
+            for (int j = 0; j < n_ctx; ++j) {
+                window_mask_data[i * n_ctx + j] =
+                    (std::abs(i - j) <= half_w) ? 0.0f : -INFINITY;
+            }
+        }
+        window_mask_n_ctx = n_ctx;
+    }
+
     // decode output (2-dimensional array: [n_tokens][n_vocab])
     std::vector<float> logits;
 
@@ -1526,11 +1538,25 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         read_safe(loader, hparams.n_mels);
         read_safe(loader, hparams.ftype);
 
+        // BCI models encode three extra hparams after ftype. Standard whisper
+        // models use n_mels <= 128 (80 or 128); BCI models use 512. The
+        // threshold of 256 is a safe discriminator today. If a future
+        // non-BCI model exceeds 256 mels, a dedicated file-format marker
+        // should be introduced instead.
         if (hparams.n_mels > 256) {
             read_safe(loader, hparams.n_audio_conv1_kernel);
             read_safe(loader, hparams.n_audio_window_size);
             read_safe(loader, hparams.n_audio_last_window_layer);
             hparams.is_bci = true;
+
+            if (hparams.n_audio_conv1_kernel <= 0) {
+                WHISPER_LOG_ERROR("%s: invalid n_audio_conv1_kernel: %d\n", __func__, hparams.n_audio_conv1_kernel);
+                return false;
+            }
+            if (hparams.n_audio_window_size < 0) {
+                WHISPER_LOG_ERROR("%s: invalid n_audio_window_size: %d\n", __func__, hparams.n_audio_window_size);
+                return false;
+            }
         }
 
         assert(hparams.n_text_state == hparams.n_audio_state);
@@ -2120,7 +2146,7 @@ static struct ggml_cgraph * whisper_build_graph_encoder(
     struct ggml_tensor * window_mask = nullptr;
     const int window_size = hparams.n_audio_window_size;
     const int last_window_layer = hparams.n_audio_last_window_layer;
-    if (window_size > 0 && last_window_layer >= 0) {
+    if (hparams.is_bci && window_size > 0 && last_window_layer >= 0) {
         window_mask = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_ctx, n_ctx, 1);
         ggml_set_name(window_mask, "window_mask");
         ggml_set_input(window_mask);
@@ -2461,22 +2487,14 @@ static bool whisper_encode_internal(
             return false;
         }
 
-        {
+        if (wctx.model.hparams.is_bci) {
             struct ggml_tensor * wmask = ggml_graph_get_tensor(gf, "window_mask");
             if (wmask) {
                 const auto & hparams = wctx.model.hparams;
                 const int n_ctx = wstate.exp_n_audio_ctx > 0 ? wstate.exp_n_audio_ctx : hparams.n_audio_ctx;
 
                 if (wstate.window_mask_n_ctx != n_ctx) {
-                    const int half_w = hparams.n_audio_window_size / 2;
-                    wstate.window_mask_data.resize(n_ctx * n_ctx);
-                    for (int i = 0; i < n_ctx; ++i) {
-                        for (int j = 0; j < n_ctx; ++j) {
-                            wstate.window_mask_data[i * n_ctx + j] =
-                                (std::abs(i - j) <= half_w) ? 0.0f : -INFINITY;
-                        }
-                    }
-                    wstate.window_mask_n_ctx = n_ctx;
+                    wstate.compute_window_mask(n_ctx, hparams.n_audio_window_size / 2);
                 }
 
                 ggml_backend_tensor_set(wmask, wstate.window_mask_data.data(), 0,
@@ -3599,17 +3617,7 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
 
     if (ctx->model.hparams.is_bci) {
         const auto & hparams = ctx->model.hparams;
-        const int n_ctx  = hparams.n_audio_ctx;
-        const int half_w = hparams.n_audio_window_size / 2;
-
-        state->window_mask_data.resize(n_ctx * n_ctx);
-        for (int i = 0; i < n_ctx; ++i) {
-            for (int j = 0; j < n_ctx; ++j) {
-                state->window_mask_data[i * n_ctx + j] =
-                    (std::abs(i - j) <= half_w) ? 0.0f : -INFINITY;
-            }
-        }
-        state->window_mask_n_ctx = n_ctx;
+        state->compute_window_mask(hparams.n_audio_ctx, hparams.n_audio_window_size / 2);
     }
 
     return state;
