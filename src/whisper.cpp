@@ -1587,14 +1587,22 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
 
     // load vocab
     {
+        // Upper bounds for values read from untrusted model files. A malformed
+        // or fuzzed file can otherwise set these to values that cause
+        // std::vector::resize to throw (bad_alloc) or std::string to terminate
+        // the process with SIGABRT during vocab construction.
+        // ref: https://github.com/ggml-org/whisper.cpp/issues/3674
+        constexpr int32_t  max_n_vocab  = 1 << 20; // ~1M tokens (largest real models are ~52k)
+        constexpr uint32_t max_word_len = 1 << 16; // 64 KiB per vocab token
+
         int32_t n_vocab = 0;
         read_safe(loader, n_vocab);
 
-        //if (n_vocab != model.hparams.n_vocab) {
-        //    WHISPER_LOG_ERROR("%s: invalid model file '%s' (bad vocab size %d != %d)\n",
-        //            __func__, fname.c_str(), n_vocab, model.hparams.n_vocab);
-        //    return false;
-        //}
+        if (n_vocab < 0 || n_vocab > max_n_vocab) {
+            WHISPER_LOG_ERROR("%s: invalid vocab size %d (expected 0..%d); malformed model file\n",
+                    __func__, n_vocab, max_n_vocab);
+            return false;
+        }
 
         std::string word;
         std::vector<char> tmp;
@@ -1604,6 +1612,12 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         for (int i = 0; i < n_vocab; i++) {
             uint32_t len;
             read_safe(loader, len);
+
+            if (len > max_word_len) {
+                WHISPER_LOG_ERROR("%s: invalid vocab entry %d length %u (max %u); malformed model file\n",
+                        __func__, i, len, max_word_len);
+                return false;
+            }
 
             if (len > 0) {
                 tmp.resize(len);
