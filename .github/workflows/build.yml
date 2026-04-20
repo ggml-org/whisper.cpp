@@ -634,6 +634,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=${{ matrix.build }}
           -DBUILD_SHARED_LIBS=ON
           -DWHISPER_SDL2=${{ matrix.sdl2 }}
+          -DGGML_NATIVE=OFF
 
       - name: Build
         run: |
