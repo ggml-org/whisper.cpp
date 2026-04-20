@@ -187,9 +187,13 @@ static bool is_audio_stream(const AVStream *stream)
 // audio_buffer: input memory
 // data: decoded output audio data (wav file)
 // size: size of output data
-static int decode_audio(struct audio_buffer *audio_buf, s16 **data, int *size)
+int ffmpeg_decode_audio(u8 *idata, size_t isize, std::vector<uint8_t> &wav_data)
 {
-    LOG("decode_audio: input size: %d\n", audio_buf->size);
+	struct audio_buffer inaudio_buf;
+    inaudio_buf.ptr = idata;
+    inaudio_buf.size = isize;
+
+    LOG("ffmpeg_decode_audio: input size: %d\n", inaudio_buf.size);
 	AVFormatContext *fmt_ctx;
 	AVIOContext *avio_ctx;
 	AVStream *stream;
@@ -207,7 +211,7 @@ static int decode_audio(struct audio_buffer *audio_buf, s16 **data, int *size)
     fmt_ctx = avformat_alloc_context();
     avio_ctx_buffer = (u8*)av_malloc(AVIO_CTX_BUF_SZ);
     LOG("Creating an avio context: AVIO_CTX_BUF_SZ=%d\n", AVIO_CTX_BUF_SZ);
-    avio_ctx = avio_alloc_context(avio_ctx_buffer, AVIO_CTX_BUF_SZ, 0, audio_buf, &read_packet, NULL, NULL);
+    avio_ctx = avio_alloc_context(avio_ctx_buffer, AVIO_CTX_BUF_SZ, 0, &inaudio_buf, &read_packet, NULL, NULL);
 	fmt_ctx->pb = avio_ctx;
 
     // open the input stream and read header
@@ -291,8 +295,8 @@ static int decode_audio(struct audio_buffer *audio_buf, s16 **data, int *size)
 	}
 
 	/* iterate through frames */
-	*data = NULL;
-	*size = 0;
+	s16 *odata = NULL;
+	int osize = 0;
 	while (av_read_frame(fmt_ctx, packet) >= 0) {
 		avcodec_send_packet(codec, packet);
 
@@ -300,10 +304,10 @@ static int decode_audio(struct audio_buffer *audio_buf, s16 **data, int *size)
 		if (err == AVERROR(EAGAIN))
 			continue;
 
-		convert_frame(swr, codec, frame, data, size, false);
+		convert_frame(swr, codec, frame, &odata, &osize, false);
 	}
 	/* Flush any remaining conversion buffers... */
-	convert_frame(swr, codec, frame, data, size, true);
+	convert_frame(swr, codec, frame, &odata, &osize, true);
 
 	av_packet_free(&packet);
 	av_frame_free(&frame);
@@ -318,6 +322,17 @@ static int decode_audio(struct audio_buffer *audio_buf, s16 **data, int *size)
 		av_freep(&avio_ctx);
 	}
 
+    wave_hdr wh;
+    const size_t outdatasize = osize * sizeof(s16);
+    set_wave_hdr(wh, outdatasize);
+    wav_data.resize(sizeof(wave_hdr) + outdatasize);
+    // header:
+    memcpy(wav_data.data(), &wh, sizeof(wave_hdr));
+    // the data:
+    memcpy(wav_data.data() + sizeof(wave_hdr), odata, osize* sizeof(s16));
+
+	free(odata);
+
 	return 0;
 }
 
@@ -325,8 +340,8 @@ static int decode_audio(struct audio_buffer *audio_buf, s16 **data, int *size)
 // ifname: input file path
 // owav_data: in mem wav file. Can be forwarded as it to whisper/drwav
 // return 0 on success
-int ffmpeg_decode_audio(const std::string &ifname, std::vector<uint8_t>& owav_data) {
-    LOG("ffmpeg_decode_audio: %s\n", ifname.c_str());
+int ffmpeg_decode_audio_file(const std::string &ifname, std::vector<uint8_t>& owav_data) {
+    LOG("ffmpeg_decode_audio_file: %s\n", ifname.c_str());
     int ifd = open(ifname.c_str(), O_RDONLY);
     if (ifd == -1) {
         fprintf(stderr, "Couldn't open input file %s\n", ifname.c_str());
@@ -340,29 +355,16 @@ int ffmpeg_decode_audio(const std::string &ifname, std::vector<uint8_t>& owav_da
         return err;
     }
     LOG("Mapped input file: %s size: %d\n", ibuf, (int) ibuf_size);
-    struct audio_buffer inaudio_buf;
-    inaudio_buf.ptr = ibuf;
-    inaudio_buf.size = ibuf_size;
-
     s16 *odata=NULL;
     int osize=0;
 
-    err = decode_audio(&inaudio_buf, &odata, &osize);
+    err = ffmpeg_decode_audio(ibuf, ibuf_size, owav_data);
     LOG("decode_audio returned %d \n", err);
     if (err != 0) {
         LOG("decode_audio failed\n");
         return err;
     }
     LOG("decode_audio output size: %d\n", osize);
-
-    wave_hdr wh;
-    const size_t outdatasize = osize * sizeof(s16);
-    set_wave_hdr(wh, outdatasize);
-    owav_data.resize(sizeof(wave_hdr) + outdatasize);
-    // header:
-    memcpy(owav_data.data(), &wh, sizeof(wave_hdr));
-    // the data:
-    memcpy(owav_data.data() + sizeof(wave_hdr), odata, osize* sizeof(s16));
 
     return 0;
 }
