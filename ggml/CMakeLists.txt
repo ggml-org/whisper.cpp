@@ -99,7 +99,9 @@ else()
     set(GGML_BLAS_VENDOR_DEFAULT "Generic")
 endif()
 
-if (CMAKE_CROSSCOMPILING OR DEFINED ENV{SOURCE_DATE_EPOCH})
+if (CMAKE_CROSSCOMPILING OR DEFINED ENV{SOURCE_DATE_EPOCH} OR
+    (APPLE AND CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "arm64" AND
+     CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64"))
     message(STATUS "Setting GGML_NATIVE_DEFAULT to OFF")
     set(GGML_NATIVE_DEFAULT OFF)
 else()
@@ -336,8 +338,17 @@ set_target_properties(ggml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")
 #if (GGML_METAL)
 #    set_target_properties(ggml PROPERTIES RESOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/ggml-metal.metal")
 #endif()
-install(TARGETS ggml LIBRARY PUBLIC_HEADER)
-install(TARGETS ggml-base LIBRARY)
+install(
+  TARGETS ggml ggml-base
+  EXPORT ggml-targets
+  PUBLIC_HEADER
+    DESTINATION ${GGML_INCLUDE_INSTALL_DIR})
+
+install(
+  EXPORT ggml-targets
+  FILE ggml-targets.cmake
+  NAMESPACE ggml::
+  DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/ggml)
 
 if (GGML_STANDALONE)
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/ggml.pc.in
@@ -388,7 +399,7 @@ set(GGML_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of
 configure_package_config_file(
         ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ggml-config.cmake.in
         ${CMAKE_CURRENT_BINARY_DIR}/ggml-config.cmake
-    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ggml
+    INSTALL_DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/ggml
     PATH_VARS GGML_INCLUDE_INSTALL_DIR
               GGML_LIB_INSTALL_DIR
               GGML_BIN_INSTALL_DIR)
@@ -407,7 +418,7 @@ message(STATUS "ggml commit:  ${GGML_BUILD_COMMIT}")
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ggml-config.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/ggml-version.cmake
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ggml)
+        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/ggml)
 
 if (MSVC)
     set(MSVC_WARNING_FLAGS

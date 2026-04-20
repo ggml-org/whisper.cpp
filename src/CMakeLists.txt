@@ -115,7 +115,11 @@ set_target_properties(whisper PROPERTIES
     SOVERSION ${SOVERSION}
 )
 
-target_include_directories(whisper PUBLIC . ../include)
+target_include_directories(
+  whisper
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/whisper>)
 target_compile_features   (whisper PUBLIC cxx_std_11) # don't bump
 
 if (CMAKE_CXX_BYTE_ORDER STREQUAL "BIG_ENDIAN")

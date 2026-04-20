@@ -23,10 +23,18 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(WHISPER_STANDALONE ON)
 
-    include(git-vars)
+    find_package(Git QUIET)
+    if(GIT_FOUND)
+        include(git-vars)
+    else()
+        set(GIT_SHA1 "unknown")
+        set(GIT_DATE "unknown")
+        set(GIT_COMMIT_SUBJECT "unknown")
+    endif()
 
-    # configure project version
-    configure_file(${CMAKE_SOURCE_DIR}/bindings/javascript/package-tmpl.json ${CMAKE_SOURCE_DIR}/bindings/javascript/package.json @ONLY)
+    if(EXISTS ${CMAKE_SOURCE_DIR}/bindings/javascript/package-tmpl.json)
+        configure_file(${CMAKE_SOURCE_DIR}/bindings/javascript/package-tmpl.json ${CMAKE_SOURCE_DIR}/bindings/javascript/package.json @ONLY)
+    endif()
 else()
     set(WHISPER_STANDALONE OFF)
 endif()
@@ -172,27 +180,38 @@ set(WHISPER_BUILD_NUMBER        ${BUILD_NUMBER})
 set(WHISPER_BUILD_COMMIT        ${BUILD_COMMIT})
 set(WHISPER_INSTALL_VERSION     ${CMAKE_PROJECT_VERSION})
 
-set(WHISPER_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of header  files")
+set(WHISPER_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR}/whisper CACHE PATH "Location of header  files")
 set(WHISPER_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
 set(WHISPER_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of binary  files")
 
 get_directory_property(WHISPER_TRANSIENT_DEFINES COMPILE_DEFINITIONS)
 
 set_target_properties(whisper PROPERTIES PUBLIC_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/include/whisper.h)
-install(TARGETS whisper LIBRARY PUBLIC_HEADER)
+
+install(
+  TARGETS whisper
+  EXPORT whisper-targets
+  PUBLIC_HEADER
+    DESTINATION ${WHISPER_INCLUDE_INSTALL_DIR})
+
+install(
+  EXPORT whisper-targets
+  FILE whisper-targets.cmake
+  NAMESPACE whisper::
+  DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/whisper)
+
+install(
+  FILES ${CMAKE_CURRENT_BINARY_DIR}/whisper-config.cmake
+  DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/whisper)
 
 target_compile_definitions(whisper PRIVATE
     WHISPER_VERSION="${PROJECT_VERSION}"
 )
 
 configure_package_config_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/whisper-config.cmake.in
-        ${CMAKE_CURRENT_BINARY_DIR}/whisper-config.cmake
-    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/whisper
-    PATH_VARS
-    WHISPER_INCLUDE_INSTALL_DIR
-    WHISPER_LIB_INSTALL_DIR
-    WHISPER_BIN_INSTALL_DIR )
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/whisper-config.cmake.in
+  ${CMAKE_CURRENT_BINARY_DIR}/whisper-config.cmake
+  INSTALL_DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/whisper)
 
 write_basic_package_version_file(
     ${CMAKE_CURRENT_BINARY_DIR}/whisper-version.cmake
@@ -201,7 +220,7 @@ write_basic_package_version_file(
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/whisper-config.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/whisper-version.cmake
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/whisper)
+        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/whisper)
 
 configure_file(cmake/whisper.pc.in
         "${CMAKE_CURRENT_BINARY_DIR}/whisper.pc"

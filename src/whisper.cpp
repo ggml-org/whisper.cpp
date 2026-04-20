@@ -600,6 +600,10 @@ struct whisper_hparams {
     int32_t n_mels        = 80;
     int32_t ftype         = 1;
     float   eps           = 1e-5f;
+    int32_t n_audio_conv1_kernel = 3;
+    int32_t n_audio_window_size  = 0;
+    int32_t n_audio_last_window_layer = -1;
+    bool    is_bci = false;
 };
 
 // audio encoding layer
@@ -881,6 +885,22 @@ struct whisper_state {
     // helpers for GPU offloading
     std::vector<float> inp_mel;
     std::vector<float> inp_mask;
+
+    // pre-computed BCI windowed attention mask (constant after init)
+    std::vector<float> window_mask_data;
+    int                window_mask_n_ctx = 0;
+
+    // (Re)compute the banded attention mask for a given context length.
+    void compute_window_mask(int n_ctx, int half_w) {
+        window_mask_data.resize(n_ctx * n_ctx);
+        for (int i = 0; i < n_ctx; ++i) {
+            for (int j = 0; j < n_ctx; ++j) {
+                window_mask_data[i * n_ctx + j] =
+                    (std::abs(i - j) <= half_w) ? 0.0f : -INFINITY;
+            }
+        }
+        window_mask_n_ctx = n_ctx;
+    }
 
     // decode output (2-dimensional array: [n_tokens][n_vocab])
     std::vector<float> logits;
@@ -1518,6 +1538,27 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         read_safe(loader, hparams.n_mels);
         read_safe(loader, hparams.ftype);
 
+        // BCI models encode three extra hparams after ftype. Standard whisper
+        // models use n_mels <= 128 (80 or 128); BCI models use 512. The
+        // threshold of 256 is a safe discriminator today. If a future
+        // non-BCI model exceeds 256 mels, a dedicated file-format marker
+        // should be introduced instead.
+        if (hparams.n_mels > 256) {
+            read_safe(loader, hparams.n_audio_conv1_kernel);
+            read_safe(loader, hparams.n_audio_window_size);
+            read_safe(loader, hparams.n_audio_last_window_layer);
+            hparams.is_bci = true;
+
+            if (hparams.n_audio_conv1_kernel <= 0) {
+                WHISPER_LOG_ERROR("%s: invalid n_audio_conv1_kernel: %d\n", __func__, hparams.n_audio_conv1_kernel);
+                return false;
+            }
+            if (hparams.n_audio_window_size < 0) {
+                WHISPER_LOG_ERROR("%s: invalid n_audio_window_size: %d\n", __func__, hparams.n_audio_window_size);
+                return false;
+            }
+        }
+
         assert(hparams.n_text_state == hparams.n_audio_state);
 
         std::string mver = "";
@@ -1571,6 +1612,13 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         WHISPER_LOG_INFO("%s: ftype         = %d\n", __func__, model.hparams.ftype);
         WHISPER_LOG_INFO("%s: qntvr         = %d\n", __func__, qntvr);
         WHISPER_LOG_INFO("%s: type          = %d (%s%s)\n", __func__, model.type, g_model_name.at(model.type).c_str(), mver.c_str());
+
+        if (hparams.is_bci) {
+            WHISPER_LOG_INFO("%s: is_bci        = true\n",  __func__);
+            WHISPER_LOG_INFO("%s: conv1_kernel  = %d\n",    __func__, hparams.n_audio_conv1_kernel);
+            WHISPER_LOG_INFO("%s: window_size   = %d\n",    __func__, hparams.n_audio_window_size);
+            WHISPER_LOG_INFO("%s: last_win_layer= %d\n",    __func__, hparams.n_audio_last_window_layer);
+        }
     }
 
     // load mel filters
@@ -1757,7 +1805,7 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         // encoder
         model.e_pe = create_tensor(ASR_TENSOR_ENC_POS_EMBD, ASR_SYSTEM_ENCODER, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_audio_state, n_audio_ctx));
 
-        model.e_conv_1_w = create_tensor(ASR_TENSOR_CONV1_WEIGHT, ASR_SYSTEM_ENCODER, ggml_new_tensor_3d(ctx, vtype, 3, n_mels, n_audio_state));
+        model.e_conv_1_w = create_tensor(ASR_TENSOR_CONV1_WEIGHT, ASR_SYSTEM_ENCODER, ggml_new_tensor_3d(ctx, vtype, hparams.n_audio_conv1_kernel, n_mels, n_audio_state));
         model.e_conv_1_b = create_tensor(ASR_TENSOR_CONV1_BIAS, ASR_SYSTEM_ENCODER, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, n_audio_state));
 
         model.e_conv_2_w = create_tensor(ASR_TENSOR_CONV2_WEIGHT, ASR_SYSTEM_ENCODER, ggml_new_tensor_3d(ctx, vtype, 3, n_audio_state, n_audio_state));
@@ -2095,6 +2143,15 @@ static struct ggml_cgraph * whisper_build_graph_encoder(
 
     struct ggml_tensor * inpL = cur;
 
+    struct ggml_tensor * window_mask = nullptr;
+    const int window_size = hparams.n_audio_window_size;
+    const int last_window_layer = hparams.n_audio_last_window_layer;
+    if (hparams.is_bci && window_size > 0 && last_window_layer >= 0) {
+        window_mask = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_ctx, n_ctx, 1);
+        ggml_set_name(window_mask, "window_mask");
+        ggml_set_input(window_mask);
+    }
+
     for (int il = 0; il < n_layer; ++il) {
         const auto & layer = model.layers_encoder[il];
 
@@ -2138,7 +2195,9 @@ static struct ggml_cgraph * whisper_build_graph_encoder(
                         ggml_reshape_3d(ctx0, Qcur, n_state_head, n_head, n_ctx),
                         0, 2, 1, 3);
 
-            if (wctx.params.flash_attn) {
+            const bool layer_needs_mask = window_mask && il <= last_window_layer;
+
+            if (wctx.params.flash_attn && !layer_needs_mask) {
                 ggml_build_forward_expand(gf, ggml_cpy(ctx0, Kcur, ggml_view_1d(ctx0, kv_pad.k, n_ctx*n_state, 0)));
                 ggml_build_forward_expand(gf, ggml_cpy(ctx0, Vcur, ggml_view_1d(ctx0, kv_pad.v, n_ctx*n_state, 0)));
 
@@ -2170,7 +2229,7 @@ static struct ggml_cgraph * whisper_build_graph_encoder(
                 // K * Q
                 struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
 
-                struct ggml_tensor * KQ_soft_max = ggml_soft_max_ext(ctx0, KQ, nullptr, KQscale, 0.0f);
+                struct ggml_tensor * KQ_soft_max = ggml_soft_max_ext(ctx0, KQ, layer_needs_mask ? window_mask : nullptr, KQscale, 0.0f);
 
                 struct ggml_tensor * V =
                     ggml_cast(ctx0,
@@ -2426,6 +2485,21 @@ static bool whisper_encode_internal(
         if (!ggml_backend_sched_alloc_graph(sched, gf)) {
             // should never happen as we pre-allocate the memory
             return false;
+        }
+
+        if (wctx.model.hparams.is_bci) {
+            struct ggml_tensor * wmask = ggml_graph_get_tensor(gf, "window_mask");
+            if (wmask) {
+                const auto & hparams = wctx.model.hparams;
+                const int n_ctx = wstate.exp_n_audio_ctx > 0 ? wstate.exp_n_audio_ctx : hparams.n_audio_ctx;
+
+                if (wstate.window_mask_n_ctx != n_ctx) {
+                    wstate.compute_window_mask(n_ctx, hparams.n_audio_window_size / 2);
+                }
+
+                ggml_backend_tensor_set(wmask, wstate.window_mask_data.data(), 0,
+                    wstate.window_mask_data.size() * sizeof(float));
+            }
         }
 
         if (!ggml_graph_compute_helper(sched, gf, n_threads)) {
@@ -3539,6 +3613,11 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
         }
 
         WHISPER_LOG_INFO("%s: compute buffer (decode) = %7.2f MB\n", __func__, whisper_sched_size(state->sched_decode) / 1e6);
+    }
+
+    if (ctx->model.hparams.is_bci) {
+        const auto & hparams = ctx->model.hparams;
+        state->compute_window_mask(hparams.n_audio_ctx, hparams.n_audio_window_size / 2);
     }
 
     return state;
@@ -6958,6 +7037,11 @@ int whisper_full_with_state(
         } else {
             prompt_init.push_back(whisper_token_transcribe(ctx));
         }
+    } else if (ctx->model.hparams.is_bci) {
+        const int lang_id = whisper_lang_id(params.language);
+        state->lang_id = lang_id;
+        prompt_init.push_back(whisper_token_lang(ctx, lang_id));
+        prompt_init.push_back(whisper_token_transcribe(ctx));
     }
 
     // first release distilled models require the "no_timestamps" token
