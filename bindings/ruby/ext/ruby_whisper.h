@@ -7,6 +7,7 @@
 #include <ruby/thread.h>
 #include <ruby/memory_view.h>
 #include "whisper.h"
+#include "parakeet.h"
 
 #if RUBY_API_VERSION_MAJOR < 4
 // Exists but not declared as public API
@@ -83,6 +84,10 @@ typedef struct parsed_samples_t {
   rb_memory_view_t memview;
   bool memview_exported;
 } parsed_samples_t;
+
+typedef struct {
+  struct parakeet_full_params params;
+} ruby_whisper_parakeet_params;
 
 #define GetContext(obj, rw) do { \
   TypedData_Get_Struct((obj), ruby_whisper, &ruby_whisper_type, (rw)); \

@@ -2,12 +2,14 @@
 
 VALUE mWhisper;
 VALUE mVAD;
+VALUE mParakeet;
 VALUE cContext;
 VALUE cParams;
 VALUE cVADContext;
 VALUE cVADParams;
 VALUE cVADSegments;
 VALUE cVADSegment;
+VALUE cParakeetParams;
 VALUE eError;
 
 VALUE cSegment;
@@ -45,6 +47,7 @@ extern void init_ruby_whisper_vad_params(VALUE *mVAD);
 extern void init_ruby_whisper_vad_context(VALUE *mVAD);
 extern void init_ruby_whisper_vad_segment(VALUE *mVAD);
 extern void init_ruby_whisper_vad_segments(VALUE *mVAD);
+extern void init_ruby_whisper_parakeet_params(VALUE *mParakeet);
 extern void register_callbacks(ruby_whisper_params *rwp, VALUE *context);
 
 /*
@@ -192,6 +195,7 @@ void Init_whisper() {
 
   mWhisper = rb_define_module("Whisper");
   mVAD = rb_define_module_under(mWhisper, "VAD");
+  mParakeet = rb_define_module_under(mWhisper, "Parakeet");
 
   rb_define_const(mWhisper, "VERSION", rb_str_new2(whisper_version()));
   rb_define_const(mWhisper, "LOG_LEVEL_NONE", INT2NUM(GGML_LOG_LEVEL_NONE));
@@ -236,6 +240,7 @@ void Init_whisper() {
   init_ruby_whisper_vad_segment(&mVAD);
   init_ruby_whisper_vad_segments(&mVAD);
   init_ruby_whisper_vad_context(&mVAD);
+  init_ruby_whisper_parakeet_params(&mParakeet);
 
   rb_require("whisper/context");
   rb_require("whisper/segment");
