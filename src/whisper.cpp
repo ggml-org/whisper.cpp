@@ -888,6 +888,7 @@ struct whisper_state {
 
     // pre-computed BCI windowed attention mask (constant after init)
     std::vector<float> window_mask_data;
+    int                window_mask_n_ctx = 0;
 
     // decode output (2-dimensional array: [n_tokens][n_vocab])
     std::vector<float> logits;
@@ -2168,7 +2169,9 @@ static struct ggml_cgraph * whisper_build_graph_encoder(
                         ggml_reshape_3d(ctx0, Qcur, n_state_head, n_head, n_ctx),
                         0, 2, 1, 3);
 
-            if (wctx.params.flash_attn && !window_mask) {
+            const bool layer_needs_mask = window_mask && il <= last_window_layer;
+
+            if (wctx.params.flash_attn && !layer_needs_mask) {
                 ggml_build_forward_expand(gf, ggml_cpy(ctx0, Kcur, ggml_view_1d(ctx0, kv_pad.k, n_ctx*n_state, 0)));
                 ggml_build_forward_expand(gf, ggml_cpy(ctx0, Vcur, ggml_view_1d(ctx0, kv_pad.v, n_ctx*n_state, 0)));
 
@@ -2200,8 +2203,7 @@ static struct ggml_cgraph * whisper_build_graph_encoder(
                 // K * Q
                 struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
 
-                struct ggml_tensor * enc_attn_mask = (window_mask && il <= last_window_layer) ? window_mask : nullptr;
-                struct ggml_tensor * KQ_soft_max = ggml_soft_max_ext(ctx0, KQ, enc_attn_mask, KQscale, 0.0f);
+                struct ggml_tensor * KQ_soft_max = ggml_soft_max_ext(ctx0, KQ, layer_needs_mask ? window_mask : nullptr, KQscale, 0.0f);
 
                 struct ggml_tensor * V =
                     ggml_cast(ctx0,
@@ -2464,20 +2466,21 @@ static bool whisper_encode_internal(
             if (wmask) {
                 const auto & hparams = wctx.model.hparams;
                 const int n_ctx = wstate.exp_n_audio_ctx > 0 ? wstate.exp_n_audio_ctx : hparams.n_audio_ctx;
-                const int half_w = hparams.n_audio_window_size / 2;
 
-                if ((int) wstate.window_mask_data.size() == n_ctx * n_ctx) {
-                    ggml_backend_tensor_set(wmask, wstate.window_mask_data.data(), 0,
-                        wstate.window_mask_data.size() * sizeof(float));
-                } else {
-                    std::vector<float> mask(n_ctx * n_ctx);
+                if (wstate.window_mask_n_ctx != n_ctx) {
+                    const int half_w = hparams.n_audio_window_size / 2;
+                    wstate.window_mask_data.resize(n_ctx * n_ctx);
                     for (int i = 0; i < n_ctx; ++i) {
                         for (int j = 0; j < n_ctx; ++j) {
-                            mask[i * n_ctx + j] = (abs(i - j) <= half_w) ? 0.0f : -INFINITY;
+                            wstate.window_mask_data[i * n_ctx + j] =
+                                (std::abs(i - j) <= half_w) ? 0.0f : -INFINITY;
                         }
                     }
-                    ggml_backend_tensor_set(wmask, mask.data(), 0, mask.size() * sizeof(float));
+                    wstate.window_mask_n_ctx = n_ctx;
                 }
+
+                ggml_backend_tensor_set(wmask, wstate.window_mask_data.data(), 0,
+                    wstate.window_mask_data.size() * sizeof(float));
             }
         }
 
@@ -3603,9 +3606,10 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
         for (int i = 0; i < n_ctx; ++i) {
             for (int j = 0; j < n_ctx; ++j) {
                 state->window_mask_data[i * n_ctx + j] =
-                    (abs(i - j) <= half_w) ? 0.0f : -INFINITY;
+                    (std::abs(i - j) <= half_w) ? 0.0f : -INFINITY;
             }
         }
+        state->window_mask_n_ctx = n_ctx;
     }
 
     return state;
