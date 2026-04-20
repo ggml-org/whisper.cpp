@@ -2461,9 +2461,23 @@ static bool whisper_encode_internal(
 
         {
             struct ggml_tensor * wmask = ggml_graph_get_tensor(gf, "window_mask");
-            if (wmask && !wstate.window_mask_data.empty()) {
-                ggml_backend_tensor_set(wmask, wstate.window_mask_data.data(), 0,
-                    wstate.window_mask_data.size() * sizeof(float));
+            if (wmask) {
+                const auto & hparams = wctx.model.hparams;
+                const int n_ctx = wstate.exp_n_audio_ctx > 0 ? wstate.exp_n_audio_ctx : hparams.n_audio_ctx;
+                const int half_w = hparams.n_audio_window_size / 2;
+
+                if ((int) wstate.window_mask_data.size() == n_ctx * n_ctx) {
+                    ggml_backend_tensor_set(wmask, wstate.window_mask_data.data(), 0,
+                        wstate.window_mask_data.size() * sizeof(float));
+                } else {
+                    std::vector<float> mask(n_ctx * n_ctx);
+                    for (int i = 0; i < n_ctx; ++i) {
+                        for (int j = 0; j < n_ctx; ++j) {
+                            mask[i * n_ctx + j] = (abs(i - j) <= half_w) ? 0.0f : -INFINITY;
+                        }
+                    }
+                    ggml_backend_tensor_set(wmask, mask.data(), 0, mask.size() * sizeof(float));
+                }
             }
         }
 

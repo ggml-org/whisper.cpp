@@ -13,9 +13,7 @@ set(GGML_ACCELERATE @GGML_ACCELERATE@)
 
 include(CMakeFindDependencyMacro)
 
-if(NOT WIN32)
-    find_dependency(Threads REQUIRED)
-endif()
+find_dependency(Threads REQUIRED)
 
 if (APPLE AND GGML_ACCELERATE)
     find_library(ACCELERATE_FRAMEWORK Accelerate REQUIRED)
