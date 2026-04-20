@@ -22,7 +22,7 @@ jfk_reader_get_memory_view(const VALUE obj, rb_memory_view_t *view, int flags)
   if (file == NULL) {
     xfree(samples);
     xfree(data);
-    rb_raise(rb_eIOError, "failed to open audio file");
+    return false;
   }
 
   fseek(file, 78, SEEK_SET);
