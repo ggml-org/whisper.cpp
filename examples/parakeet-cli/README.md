@@ -30,7 +30,7 @@ options:
   -f,     --file FILE         [       ] input audio file
   -ng,    --no-gpu            [false  ] disable GPU
   -dev N, --device N          [0      ] GPU device to use
-  -fa,    --flash-attn        [true   ] enable flash attention
+  -fa,    --flash-attn        [false  ] enable flash attention
   -nfa,   --no-flash-attn     [false  ] disable flash attention
   -ps,    --print-segments    [false  ] print segment information
 ```

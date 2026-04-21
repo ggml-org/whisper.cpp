@@ -62,7 +62,7 @@ static bool parakeet_params_parse(int argc, char ** argv, parakeet_params & para
         else if (arg == "-f"    || arg == "--file")            { params.fname_inp.emplace_back(ARGV_NEXT); }
         else if (arg == "-ng"   || arg == "--no-gpu")          { params.use_gpu           = false; }
         else if (arg == "-dev"  || arg == "--device")          { params.gpu_device        = std::stoi(ARGV_NEXT); }
-        else if (arg == "-fa"   || arg == "--flash-attn")      { params.flash_attn        = true; }
+        else if (arg == "-fa"   || arg == "--flash-attn")      { params.flash_attn        = false; }
         else if (arg == "-nfa"  || arg == "--no-flash-attn")   { params.flash_attn        = false; }
         else if (arg == "-ps"   || arg == "--print-segments")  { params.print_segments    = true; }
         else {
