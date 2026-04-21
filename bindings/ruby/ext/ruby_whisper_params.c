@@ -188,7 +188,7 @@ static bool abort_callback(void * user_data) {
 }
 
 static void
-check_thread_safety(ruby_whisper_params *rwp, VALUE *context, int n_processors)
+check_thread_safety(ruby_whisper_params *rwp, int n_processors)
 {
   if (n_processors == 1) {
     return;
@@ -255,7 +255,7 @@ static void set_vad_params(ruby_whisper_params *rwp)
 void
 prepare_transcription(ruby_whisper_params *rwp, VALUE *context, int n_processors)
 {
-  check_thread_safety(rwp, context, n_processors);
+  check_thread_safety(rwp, n_processors);
   register_callbacks(rwp, context);
   set_vad_params(rwp);
 }
