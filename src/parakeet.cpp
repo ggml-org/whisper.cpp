@@ -463,65 +463,65 @@ struct parakeet_hparams {
 };
 
 struct parakeet_layer_encoder {
-    struct ggml_tensor * norm_ff1_w;
-    struct ggml_tensor * norm_ff1_b;
+    struct ggml_tensor * norm_ff1_w = nullptr;
+    struct ggml_tensor * norm_ff1_b = nullptr;
 
-    struct ggml_tensor * ff1_linear1_w;
-    struct ggml_tensor * ff1_linear2_w;
+    struct ggml_tensor * ff1_linear1_w = nullptr;
+    struct ggml_tensor * ff1_linear2_w = nullptr;
 
-    struct ggml_tensor * norm_conv_w;
-    struct ggml_tensor * norm_conv_b;
+    struct ggml_tensor * norm_conv_w = nullptr;
+    struct ggml_tensor * norm_conv_b = nullptr;
 
-    struct ggml_tensor * conv_pw1_w;          // pointwise_conv1
-    struct ggml_tensor * conv_dw_w;           // depthwise_conv
-    struct ggml_tensor * conv_bn_w;           // batch_norm weight
-    struct ggml_tensor * conv_bn_b;           // batch_norm bias
-    struct ggml_tensor * conv_bn_mean;        // batch_norm running_mean
-    struct ggml_tensor * conv_bn_var;         // batch_norm running_var
-    struct ggml_tensor * conv_bn_num_batches; // batch_norm num_batches_tracked
-    struct ggml_tensor * conv_pw2_w;          // pointwise_conv2
+    struct ggml_tensor * conv_pw1_w          = nullptr;  // pointwise_conv1
+    struct ggml_tensor * conv_dw_w           = nullptr;  // depthwise_conv
+    struct ggml_tensor * conv_bn_w           = nullptr;  // batch_norm weight
+    struct ggml_tensor * conv_bn_b           = nullptr;  // batch_norm bias
+    struct ggml_tensor * conv_bn_mean        = nullptr;  // batch_norm running_mean
+    struct ggml_tensor * conv_bn_var         = nullptr;  // batch_norm running_var
+    struct ggml_tensor * conv_bn_num_batches = nullptr;  // batch_norm num_batches_tracked
+    struct ggml_tensor * conv_pw2_w          = nullptr;  // pointwise_conv2
 
-    struct ggml_tensor * norm_attn_w;
-    struct ggml_tensor * norm_attn_b;
+    struct ggml_tensor * norm_attn_w = nullptr;
+    struct ggml_tensor * norm_attn_b = nullptr;
 
-    struct ggml_tensor * attn_pos_bias_u;
-    struct ggml_tensor * attn_pos_bias_v;
-    struct ggml_tensor * attn_q_w;
-    struct ggml_tensor * attn_k_w;
-    struct ggml_tensor * attn_v_w;
-    struct ggml_tensor * attn_out_w;
-    struct ggml_tensor * attn_pos_w;
+    struct ggml_tensor * attn_pos_bias_u = nullptr;
+    struct ggml_tensor * attn_pos_bias_v = nullptr;
+    struct ggml_tensor * attn_q_w        = nullptr;
+    struct ggml_tensor * attn_k_w        = nullptr;
+    struct ggml_tensor * attn_v_w        = nullptr;
+    struct ggml_tensor * attn_out_w      = nullptr;
+    struct ggml_tensor * attn_pos_w      = nullptr;
 
-    struct ggml_tensor * norm_ff2_w;
-    struct ggml_tensor * norm_ff2_b;
+    struct ggml_tensor * norm_ff2_w      = nullptr;
+    struct ggml_tensor * norm_ff2_b      = nullptr;
 
-    struct ggml_tensor * ff2_linear1_w;
-    struct ggml_tensor * ff2_linear2_w;
+    struct ggml_tensor * ff2_linear1_w = nullptr;
+    struct ggml_tensor * ff2_linear2_w = nullptr;
 
-    struct ggml_tensor * norm_out_w;
-    struct ggml_tensor * norm_out_b;
+    struct ggml_tensor * norm_out_w = nullptr;
+    struct ggml_tensor * norm_out_b = nullptr;
 };
 
 struct parakeet_lsmt_layer {
-    struct ggml_tensor * ih_w;  // input-to-hidden weight
-    struct ggml_tensor * ih_b;  // input-to-hidden bias
-    struct ggml_tensor * hh_w;  // hidden-to-hidden weight
-    struct ggml_tensor * hh_b;  // hidden-to-hidden bias
+    struct ggml_tensor * ih_w = nullptr;  // input-to-hidden weight
+    struct ggml_tensor * ih_b = nullptr;  // input-to-hidden bias
+    struct ggml_tensor * hh_w = nullptr;  // hidden-to-hidden weight
+    struct ggml_tensor * hh_b = nullptr;  // hidden-to-hidden bias
 };
 
 struct parakeet_prediction_network {
-    struct ggml_tensor * embed_w;
+    struct ggml_tensor * embed_w = nullptr;
 
     std::vector<parakeet_lsmt_layer> lstm_layer;
 };
 
 struct parakeet_joint_network {
-    struct ggml_tensor * pred_w;
-    struct ggml_tensor * pred_b;
-    struct ggml_tensor * enc_w;
-    struct ggml_tensor * enc_b;
-    struct ggml_tensor * net_w;
-    struct ggml_tensor * net_b;
+    struct ggml_tensor * pred_w = nullptr;
+    struct ggml_tensor * pred_b = nullptr;
+    struct ggml_tensor * enc_w  = nullptr;
+    struct ggml_tensor * enc_b  = nullptr;
+    struct ggml_tensor * net_w  = nullptr;
+    struct ggml_tensor * net_b  = nullptr;
 };
 
 struct parakeet_model {
@@ -529,20 +529,20 @@ struct parakeet_model {
     parakeet_hparams hparams;
 
     // Relative positional encoding (pe)
-    struct ggml_tensor * pe;
+    struct ggml_tensor * pe = nullptr;
 
-    struct ggml_tensor * enc_pre_out_w;
-    struct ggml_tensor * enc_pre_out_b;
-    struct ggml_tensor * enc_pre_conv_0_w;
-    struct ggml_tensor * enc_pre_conv_0_b;
-    struct ggml_tensor * enc_pre_conv_2_w;
-    struct ggml_tensor * enc_pre_conv_2_b;
-    struct ggml_tensor * enc_pre_conv_3_w;
-    struct ggml_tensor * enc_pre_conv_3_b;
-    struct ggml_tensor * enc_pre_conv_5_w;
-    struct ggml_tensor * enc_pre_conv_5_b;
-    struct ggml_tensor * enc_pre_conv_6_w;
-    struct ggml_tensor * enc_pre_conv_6_b;
+    struct ggml_tensor * enc_pre_out_w    = nullptr;
+    struct ggml_tensor * enc_pre_out_b    = nullptr;
+    struct ggml_tensor * enc_pre_conv_0_w = nullptr;
+    struct ggml_tensor * enc_pre_conv_0_b = nullptr;
+    struct ggml_tensor * enc_pre_conv_2_w = nullptr;
+    struct ggml_tensor * enc_pre_conv_2_b = nullptr;
+    struct ggml_tensor * enc_pre_conv_3_w = nullptr;
+    struct ggml_tensor * enc_pre_conv_3_b = nullptr;
+    struct ggml_tensor * enc_pre_conv_5_w = nullptr;
+    struct ggml_tensor * enc_pre_conv_5_b = nullptr;
+    struct ggml_tensor * enc_pre_conv_6_w = nullptr;
+    struct ggml_tensor * enc_pre_conv_6_b = nullptr;
 
     std::vector<parakeet_layer_encoder> layers;
 
@@ -556,13 +556,13 @@ struct parakeet_model {
 
     std::vector<ggml_backend_buffer_t> buffers;
 
-    int n_loaded;
+    int n_loaded = 0;
     std::map<std::string, struct ggml_tensor *> tensors;
 };
 
 struct parakeet_lstm_state_layer {
-    struct ggml_tensor * h_state;
-    struct ggml_tensor * c_state;
+    struct ggml_tensor * h_state = nullptr;
+    struct ggml_tensor * c_state = nullptr;
 };
 
 struct parakeet_lstm_state {
@@ -612,7 +612,7 @@ struct parakeet_state {
 
     parakeet_batch batch;
 
-    int n_frames;
+    int n_frames = 0;
 
     std::vector<ggml_backend_t> backends;
 
