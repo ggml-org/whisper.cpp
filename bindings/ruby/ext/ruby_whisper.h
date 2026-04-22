@@ -14,6 +14,14 @@ typedef struct {
 } ruby_whisper_callback_container;
 
 typedef struct {
+  VALUE *context;
+  VALUE user_data;
+  VALUE callback;
+  VALUE callbacks;
+  bool is_interrupted;
+} ruby_whisper_abort_callback_container;
+
+typedef struct {
   struct whisper_context *context;
 } ruby_whisper;
 
@@ -27,7 +35,7 @@ typedef struct {
   ruby_whisper_callback_container *new_segment_callback_container;
   ruby_whisper_callback_container *progress_callback_container;
   ruby_whisper_callback_container *encoder_begin_callback_container;
-  ruby_whisper_callback_container *abort_callback_container;
+  ruby_whisper_abort_callback_container *abort_callback_container;
   VALUE vad_params;
 } ruby_whisper_params;
 

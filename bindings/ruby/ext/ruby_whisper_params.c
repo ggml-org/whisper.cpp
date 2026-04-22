@@ -97,6 +97,28 @@ rb_whisper_callback_container_allocate() {
   return container;
 }
 
+static void
+rb_whisper_abort_callback_container_mark(ruby_whisper_abort_callback_container *rwc)
+{
+  if (rwc == NULL) return;
+
+  rb_gc_mark(rwc->user_data);
+  rb_gc_mark(rwc->callback);
+  rb_gc_mark(rwc->callbacks);
+}
+
+static ruby_whisper_abort_callback_container*
+rb_whisper_abort_callback_container_allocate() {
+  ruby_whisper_abort_callback_container *container;
+  container = ALLOC(ruby_whisper_abort_callback_container);
+  container->context = NULL;
+  container->user_data = Qnil;
+  container->callback = Qnil;
+  container->callbacks = rb_ary_new();
+  container->is_interrupted = false;
+  return container;
+}
+
 static void new_segment_callback(struct whisper_context *ctx, struct whisper_state *state, int n_new, void *user_data) {
   const ruby_whisper_callback_container *container = (ruby_whisper_callback_container *)user_data;
 
@@ -166,7 +188,12 @@ static bool encoder_begin_callback(struct whisper_context *ctx, struct whisper_s
 }
 
 static bool abort_callback(void * user_data) {
-  const ruby_whisper_callback_container *container = (ruby_whisper_callback_container *)user_data;
+  const ruby_whisper_abort_callback_container *container = (ruby_whisper_abort_callback_container *)user_data;
+
+  if (container->is_interrupted) {
+    return true;
+  }
+
   if (!NIL_P(container->callback)) {
     VALUE result = rb_funcall(container->callback, id_call, 1, container->user_data);
     if (!NIL_P(result) && Qfalse != result) {
@@ -235,11 +262,10 @@ static void register_callbacks(ruby_whisper_params * rwp, VALUE * context) {
     rwp->params.encoder_begin_callback_user_data = rwp->encoder_begin_callback_container;
   }
 
-  if (!NIL_P(rwp->abort_callback_container->callback) || 0 != RARRAY_LEN(rwp->abort_callback_container->callbacks)) {
-    rwp->abort_callback_container->context = context;
-    rwp->params.abort_callback = abort_callback;
-    rwp->params.abort_callback_user_data = rwp->abort_callback_container;
-  }
+  rwp->abort_callback_container->context = context;
+  rwp->params.abort_callback = abort_callback;
+  rwp->abort_callback_container->is_interrupted = false;
+  rwp->params.abort_callback_user_data = rwp->abort_callback_container;
 }
 
 static void set_vad_params(ruby_whisper_params *rwp)
@@ -267,7 +293,7 @@ rb_whisper_params_mark(void *p)
   rb_whisper_callbcack_container_mark(rwp->new_segment_callback_container);
   rb_whisper_callbcack_container_mark(rwp->progress_callback_container);
   rb_whisper_callbcack_container_mark(rwp->encoder_begin_callback_container);
-  rb_whisper_callbcack_container_mark(rwp->abort_callback_container);
+  rb_whisper_abort_callback_container_mark(rwp->abort_callback_container);
   rb_gc_mark(rwp->vad_params);
 }
 
@@ -338,7 +364,7 @@ ruby_whisper_params_allocate(VALUE klass)
   rwp->new_segment_callback_container = rb_whisper_callback_container_allocate();
   rwp->progress_callback_container = rb_whisper_callback_container_allocate();
   rwp->encoder_begin_callback_container = rb_whisper_callback_container_allocate();
-  rwp->abort_callback_container = rb_whisper_callback_container_allocate();
+  rwp->abort_callback_container = rb_whisper_abort_callback_container_allocate();
   return obj;
 }
 
