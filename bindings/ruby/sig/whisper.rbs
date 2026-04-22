@@ -5,10 +5,10 @@ module Whisper
   end
 
   type log_callback = ^(Integer level, String message, Object user_data) -> void
-  type new_segment_callback = ^(Whisper::Context, void, Integer n_new, Object user_data) -> void
-  type progress_callback = ^(Whisper::Context, void, Integer progress, Object user_data) -> void
-  type encoder_begin_callback = ^(Whisper::Context, void, Object user_data) -> void
-  type abort_callback = ^(Whisper::Context, void, Object user_data) -> boolish
+  type new_segment_callback = ^(Whisper::Context, untyped, Integer n_new, Object user_data) -> void
+  type progress_callback = ^(Whisper::Context, untyped, Integer progress, Object user_data) -> void
+  type encoder_begin_callback = ^(Whisper::Context, untyped, Object user_data) -> void
+  type abort_callback = ^(Whisper::Context, untyped, Object user_data) -> boolish
 
   VERSION: String
   LOG_LEVEL_NONE: Integer
