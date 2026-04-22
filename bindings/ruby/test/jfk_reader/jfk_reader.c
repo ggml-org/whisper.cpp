@@ -2,6 +2,24 @@
 #include <ruby/memory_view.h>
 #include <ruby/encoding.h>
 
+typedef struct {
+    VALUE audio_path;
+    int   n_samples;
+    const char *audio_path_str;
+    float      *data;
+    short      *samples;
+} jfk_alloc_args;
+
+static VALUE
+jfk_reader_alloc_resources(VALUE arg)
+{
+    jfk_alloc_args *a = (jfk_alloc_args *)arg;
+    a->audio_path_str = StringValueCStr(a->audio_path);
+    a->data    = ALLOC_N(float, a->n_samples);
+    a->samples = ALLOC_N(short, a->n_samples);
+    return Qnil;
+}
+
 static VALUE
 jfk_reader_initialize(VALUE self, VALUE audio_path)
 {
@@ -13,28 +31,42 @@ static bool
 jfk_reader_get_memory_view(const VALUE obj, rb_memory_view_t *view, int flags)
 {
   VALUE audio_path = rb_iv_get(obj, "audio_path");
-  const char *audio_path_str = StringValueCStr(audio_path);
   // n_samples is a fixed constant (not derived from user input).
   const int n_samples = 176000;
-  float *data = ALLOC_N(float, n_samples);
-  short *samples = ALLOC_N(short, n_samples);
-  FILE *file = fopen(audio_path_str, "rb");
+
+  jfk_alloc_args args = {
+    .audio_path = audio_path,
+    .n_samples  = n_samples,
+    .audio_path_str = NULL,
+    .data    = NULL,
+    .samples = NULL,
+  };
+
+  int state;
+  rb_protect(jfk_reader_alloc_resources, (VALUE)&args, &state);
+  if (state) {
+    if (args.samples) xfree(args.samples);
+    if (args.data)    xfree(args.data);
+    return false;
+  }
+
+  FILE *file = fopen(args.audio_path_str, "rb");
   if (file == NULL) {
-    xfree(samples);
-    xfree(data);
+    xfree(args.samples);
+    xfree(args.data);
     return false;
   }
 
   fseek(file, 78, SEEK_SET);
-  fread(samples, sizeof(short), n_samples, file);
+  fread(args.samples, sizeof(short), n_samples, file);
   fclose(file);
   for (int i = 0; i < n_samples; i++) {
-    data[i] = samples[i]/32768.0;
+    args.data[i] = args.samples[i] / 32768.0;
   }
-  xfree(samples);
+  xfree(args.samples);
 
   view->obj = obj;
-  view->data = (void *)data;
+  view->data = (void *)args.data;
   view->byte_size = sizeof(float) * n_samples;
   view->readonly = true;
   view->format = "f";
@@ -52,6 +84,10 @@ jfk_reader_get_memory_view(const VALUE obj, rb_memory_view_t *view, int flags)
 static bool
 jfk_reader_release_memory_view(const VALUE obj, rb_memory_view_t *view)
 {
+  if (view->data) {
+    xfree(view->data);
+    view->data = NULL;
+  }
   return true;
 }
 
