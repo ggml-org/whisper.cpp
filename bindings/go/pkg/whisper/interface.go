@@ -1,6 +1,7 @@
 package whisper
 
 import (
+	"fmt"
 	"io"
 	"time"
 )
@@ -20,15 +21,21 @@ type ProgressCallback func(int)
 // continue processing. It is called during the Process function
 type EncoderBeginCallback func() bool
 
+type ParamsConfigure func(*Parameters)
+
 // Model is the interface to a whisper model. Create a new model with the
 // function whisper.New(string)
+// Deprecated: Use NewModel implementation struct instead of relying on this interface
 type Model interface {
 	io.Closer
 
 	// Return a new speech-to-text context.
+	// It may return an error is the model is not loaded or closed
+	// Deprecated: Use NewContext implementation struct instead of relying on this interface
 	NewContext() (Context, error)
 
 	// Return true if the model is multilingual.
+	// It returns false if the model is not loaded or closed
 	IsMultilingual() bool
 
 	// Return all languages supported.
@@ -36,38 +43,91 @@ type Model interface {
 }
 
 // Context is the speech recognition context.
+// Deprecated: Use NewContext implementation struct instead of relying on this interface
 type Context interface {
-	SetLanguage(string) error // Set the language to use for speech recognition, use "auto" for auto detect language.
-	SetTranslate(bool)        // Set translate flag
-	IsMultilingual() bool     // Return true if the model is multilingual.
-	Language() string         // Get language
-	DetectedLanguage() string // Get detected language
+	io.Closer
 
-	SetOffset(time.Duration)          // Set offset
-	SetDuration(time.Duration)        // Set duration
-	SetThreads(uint)                  // Set number of threads to use
-	SetSplitOnWord(bool)              // Set split on word flag
-	SetTokenThreshold(float32)        // Set timestamp token probability threshold
-	SetTokenSumThreshold(float32)     // Set timestamp token sum probability threshold
-	SetMaxSegmentLength(uint)         // Set max segment length in characters
-	SetTokenTimestamps(bool)          // Set token timestamps flag
-	SetMaxTokensPerSegment(uint)      // Set max tokens per segment (0 = no limit)
-	SetAudioCtx(uint)                 // Set audio encoder context
-	SetMaxContext(n int)              // Set maximum number of text context tokens to store
-	SetBeamSize(n int)                // Set Beam Size
-	SetEntropyThold(t float32)        // Set Entropy threshold
-	SetInitialPrompt(prompt string)   // Set initial prompt
-	SetTemperature(t float32)         // Set temperature
-	SetTemperatureFallback(t float32) // Set temperature incrementation
+	// Deprecated: Use Params().SetLanguage() instead
+	SetLanguage(string) error
 
-	SetVAD(v bool)
-	SetVADModelPath(path string)
-	SetVADThreshold(t float32)
-	SetVADMinSpeechMs(ms int)
-	SetVADMinSilenceMs(ms int)
-	SetVADMaxSpeechSec(s float32)
-	SetVADSpeechPadMs(ms int)
-	SetVADSamplesOverlap(sec float32)
+	// Deprecated: Use Params().SetTranslate() instead
+	SetTranslate(bool)
+
+	// Deprecated: Use Params().SetSplitOnWord() instead
+	SetSplitOnWord(bool)
+
+	// Deprecated: Use Params().SetThreads() instead
+	SetThreads(uint)
+
+	// Deprecated: Use Params().SetOffset() instead
+	SetOffset(time.Duration)
+
+	// Deprecated: Use Params().SetDuration() instead
+	SetDuration(time.Duration)
+
+	// Deprecated: Use Params().SetTokenThreshold() instead
+	SetTokenThreshold(float32)
+
+	// Deprecated: Use Params().SetTokenSumThreshold() instead
+	SetTokenSumThreshold(float32)
+	// Deprecated: Use Params().SetMaxSegmentLength() instead
+
+	SetMaxSegmentLength(uint)
+
+	// Deprecated: Use Params().SetTokenTimestamps() instead
+	SetTokenTimestamps(bool)
+
+	// Deprecated: Use Params().SetMaxTokensPerSegment() instead
+	SetMaxTokensPerSegment(uint)
+
+	// Deprecated: Use Params().SetAudioCtx() instead
+	SetAudioCtx(uint)
+
+	// Deprecated: Use Params().SetMaxContext() instead
+	SetMaxContext(int)
+
+	// Deprecated: Use Params().SetBeamSize() instead
+	SetBeamSize(int)
+
+	// Deprecated: Use Params().SetEntropyThold() instead
+	SetEntropyThold(float32)
+
+	// Deprecated: Use Params().SetTemperature() instead
+	SetTemperature(float32)
+
+	// Deprecated: Use Params().SetTemperatureFallback() instead
+	SetTemperatureFallback(float32)
+
+	// Deprecated: Use Params().SetInitialPrompt() instead
+	SetInitialPrompt(string)
+
+	// Get language of the context parameters
+	// Deprecated: Use Params().Language() instead
+	Language() string
+
+	// Deprecated: Use Model().IsMultilingual() instead
+	IsMultilingual() bool
+
+	// Get detected language
+	DetectedLanguage() string
+
+	// Voice Activity Detection (VAD) methods
+	// Deprecated: Use Params().SetVAD() instead
+	SetVAD(bool)
+	// Deprecated: Use Params().SetVADModelPath() instead
+	SetVADModelPath(string)
+	// Deprecated: Use Params().SetVADThreshold() instead
+	SetVADThreshold(float32)
+	// Deprecated: Use Params().SetVADMinSpeechMs() instead
+	SetVADMinSpeechMs(int)
+	// Deprecated: Use Params().SetVADMinSilenceMs() instead
+	SetVADMinSilenceMs(int)
+	// Deprecated: Use Params().SetVADMaxSpeechSec() instead
+	SetVADMaxSpeechSec(float32)
+	// Deprecated: Use Params().SetVADSpeechPadMs() instead
+	SetVADSpeechPadMs(int)
+	// Deprecated: Use Params().SetVADSamplesOverlap() instead
+	SetVADSamplesOverlap(float32)
 
 	// Process mono audio data and return any errors.
 	// If defined, newly generated segments are passed to the
@@ -78,19 +138,39 @@ type Context interface {
 	// is reached, when io.EOF is returned.
 	NextSegment() (Segment, error)
 
-	IsBEG(Token) bool          // Test for "begin" token
-	IsSOT(Token) bool          // Test for "start of transcription" token
-	IsEOT(Token) bool          // Test for "end of transcription" token
-	IsPREV(Token) bool         // Test for "start of prev" token
-	IsSOLM(Token) bool         // Test for "start of lm" token
-	IsNOT(Token) bool          // Test for "No timestamps" token
-	IsLANG(Token, string) bool // Test for token associated with a specific language
-	IsText(Token) bool         // Test for text token
+	// Deprecated: Use Model().TokenIdentifier().IsBEG() instead
+	IsBEG(Token) bool
 
-	// Timings
+	// Deprecated: Use Model().TokenIdentifier().IsSOT() instead
+	IsSOT(Token) bool
+
+	// Deprecated: Use Model().TokenIdentifier().IsEOT() instead
+	IsEOT(Token) bool
+
+	// Deprecated: Use Model().TokenIdentifier().IsPREV() instead
+	IsPREV(Token) bool
+
+	// Deprecated: Use Model().TokenIdentifier().IsSOLM() instead
+	IsSOLM(Token) bool
+
+	// Deprecated: Use Model().TokenIdentifier().IsNOT() instead
+	IsNOT(Token) bool
+
+	// Deprecated: Use Model().TokenIdentifier().IsLANG() instead
+	IsLANG(Token, string) bool
+
+	// Deprecated: Use Model().TokenIdentifier().IsText() instead
+	IsText(Token) bool
+
+	// Deprecated: Use Model().PrintTimings() instead
+	// these are model-level performance metrics
 	PrintTimings()
+
+	// Deprecated: Use Model().ResetTimings() instead
+	// these are model-level performance metrics
 	ResetTimings()
 
+	// SystemInfo returns the system information
 	SystemInfo() string
 }
 
@@ -107,12 +187,29 @@ type Segment struct {
 
 	// The tokens of the segment.
 	Tokens []Token
+
+	// True if the next segment is predicted as a speaker turn (tinydiarize)
+	// It works only with the diarization supporting models (like small.en-tdrz.bin) with the diarization enabled
+	// using Parameters.SetDiarize(true)
+	SpeakerTurnNext bool
+}
+
+func (s Segment) String() string {
+	// foramt: [00:01:39.000 --> 00:01:50.000]   And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.
+	return fmt.Sprintf("[%s --> %s] %s", s.Start.Truncate(time.Millisecond), s.End.Truncate(time.Millisecond), s.Text)
 }
 
 // Token is a text or special token
 type Token struct {
-	Id         int
-	Text       string
-	P          float32
+	// ID of the token
+	Id int
+
+	// Text of the token
+	Text string
+
+	// Probability of the token
+	P float32
+
+	// Timestamp of the token
 	Start, End time.Duration
 }

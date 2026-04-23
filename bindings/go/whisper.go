@@ -2,6 +2,7 @@ package whisper
 
 import (
 	"errors"
+	"sync"
 	"unsafe"
 )
 
@@ -14,6 +15,7 @@ import (
 #cgo darwin LDFLAGS: -lggml-metal -lggml-blas
 #cgo darwin LDFLAGS: -framework Accelerate -framework Metal -framework Foundation -framework CoreGraphics
 #include <whisper.h>
+#include <ggml.h>
 #include <stdlib.h>
 
 extern void callNewSegment(void* user_data, int new);
@@ -59,6 +61,22 @@ static struct whisper_full_params whisper_full_default_params_cb(struct whisper_
 	params.progress_callback_user_data = (void*)(ctx);
 	return params;
 }
+
+// Disable all C-side logging (whisper.cpp and ggml)
+static void go_cb_log_disable(enum ggml_log_level level, const char * text, void * user_data) {
+    (void) level; (void) text; (void) user_data;
+}
+
+static void whisper_log_disable_all(void) {
+    ggml_log_set(go_cb_log_disable, NULL);
+    whisper_log_set(go_cb_log_disable, NULL);
+}
+
+// Enable default logging (stdout) for whisper.cpp and ggml
+static void whisper_log_enable_default(void) {
+    ggml_log_set(NULL, NULL);
+    whisper_log_set(NULL, NULL);
+}
 */
 import "C"
 
@@ -67,10 +85,13 @@ import "C"
 
 type (
 	Context          C.struct_whisper_context
+	State            C.struct_whisper_state
 	Token            C.whisper_token
 	TokenData        C.struct_whisper_token_data
 	SamplingStrategy C.enum_whisper_sampling_strategy
 	Params           C.struct_whisper_full_params
+	Timings          C.struct_whisper_timings
+	ContextParams    C.struct_whisper_context_params
 )
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -96,6 +117,12 @@ var (
 	ErrInvalidLanguage  = errors.New("invalid language")
 )
 
+// DisableLogs disables all logging coming from the C libraries (whisper.cpp and ggml).
+// Call once early in program startup if you want to silence device/backend prints.
+func DisableLogs() {
+	C.whisper_log_disable_all()
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // PUBLIC METHODS
 
@@ -111,15 +138,67 @@ func Whisper_init(path string) *Context {
 	}
 }
 
+// Whisper_context_default_params returns default model context params
+func Whisper_context_default_params() ContextParams {
+	return ContextParams(C.whisper_context_default_params())
+}
+
+// SetUseGPU enables or disables GPU acceleration on the model context (if available)
+func (p *ContextParams) SetUseGPU(v bool) {
+	if v {
+		p.use_gpu = C.bool(true)
+	} else {
+		p.use_gpu = C.bool(false)
+	}
+}
+
+// SetGPUDevice selects the GPU device index for the model context (CUDA)
+func (p *ContextParams) SetGPUDevice(n int) {
+	p.gpu_device = C.int(n)
+}
+
+// Whisper_init_with_params allocates and initializes a model using custom context params
+func Whisper_init_with_params(path string, params ContextParams) *Context {
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+	if ctx := C.whisper_init_from_file_with_params(cPath, (C.struct_whisper_context_params)(params)); ctx != nil {
+		return (*Context)(ctx)
+	} else {
+		return nil
+	}
+}
+
 // Frees all memory allocated by the model.
 func (ctx *Context) Whisper_free() {
 	C.whisper_free((*C.struct_whisper_context)(ctx))
+}
+
+// Allocates a new state associated with the context. Returns nil on failure.
+func (ctx *Context) Whisper_init_state() *State {
+	if s := C.whisper_init_state((*C.struct_whisper_context)(ctx)); s != nil {
+		return (*State)(s)
+	}
+	return nil
+}
+
+// Frees all memory allocated by the state.
+func (s *State) Whisper_free_state() {
+	C.whisper_free_state((*C.struct_whisper_state)(s))
 }
 
 // Convert RAW PCM audio to log mel spectrogram.
 // The resulting spectrogram is stored inside the provided whisper context.
 func (ctx *Context) Whisper_pcm_to_mel(data []float32, threads int) error {
 	if C.whisper_pcm_to_mel((*C.struct_whisper_context)(ctx), (*C.float)(&data[0]), C.int(len(data)), C.int(threads)) == 0 {
+		return nil
+	} else {
+		return ErrConversionFailed
+	}
+}
+
+// Convert RAW PCM audio to log mel spectrogram into the provided state.
+func (ctx *Context) Whisper_pcm_to_mel_with_state(state *State, data []float32, threads int) error {
+	if C.whisper_pcm_to_mel_with_state((*C.struct_whisper_context)(ctx), (*C.struct_whisper_state)(state), (*C.float)(&data[0]), C.int(len(data)), C.int(threads)) == 0 {
 		return nil
 	} else {
 		return ErrConversionFailed
@@ -137,11 +216,29 @@ func (ctx *Context) Whisper_set_mel(data []float32, n_mel int) error {
 	}
 }
 
+// Set a custom log mel spectrogram into the provided state.
+func (ctx *Context) Whisper_set_mel_with_state(state *State, data []float32, n_mel int) error {
+	if C.whisper_set_mel_with_state((*C.struct_whisper_context)(ctx), (*C.struct_whisper_state)(state), (*C.float)(&data[0]), C.int(len(data)), C.int(n_mel)) == 0 {
+		return nil
+	} else {
+		return ErrConversionFailed
+	}
+}
+
 // Run the Whisper encoder on the log mel spectrogram stored inside the provided whisper context.
 // Make sure to call whisper_pcm_to_mel() or whisper_set_mel() first.
 // offset can be used to specify the offset of the first frame in the spectrogram.
 func (ctx *Context) Whisper_encode(offset, threads int) error {
 	if C.whisper_encode((*C.struct_whisper_context)(ctx), C.int(offset), C.int(threads)) == 0 {
+		return nil
+	} else {
+		return ErrConversionFailed
+	}
+}
+
+// Run the Whisper encoder using the provided state.
+func (ctx *Context) Whisper_encode_with_state(state *State, offset, threads int) error {
+	if C.whisper_encode_with_state((*C.struct_whisper_context)(ctx), (*C.struct_whisper_state)(state), C.int(offset), C.int(threads)) == 0 {
 		return nil
 	} else {
 		return ErrConversionFailed
@@ -154,6 +251,15 @@ func (ctx *Context) Whisper_encode(offset, threads int) error {
 // n_past is the number of tokens to use from previous decoder calls.
 func (ctx *Context) Whisper_decode(tokens []Token, past, threads int) error {
 	if C.whisper_decode((*C.struct_whisper_context)(ctx), (*C.whisper_token)(&tokens[0]), C.int(len(tokens)), C.int(past), C.int(threads)) == 0 {
+		return nil
+	} else {
+		return ErrConversionFailed
+	}
+}
+
+// Run the Whisper decoder using the provided state.
+func (ctx *Context) Whisper_decode_with_state(state *State, tokens []Token, past, threads int) error {
+	if C.whisper_decode_with_state((*C.struct_whisper_context)(ctx), (*C.struct_whisper_state)(state), (*C.whisper_token)(&tokens[0]), C.int(len(tokens)), C.int(past), C.int(threads)) == 0 {
 		return nil
 	} else {
 		return ErrConversionFailed
@@ -181,6 +287,10 @@ func (ctx *Context) Whisper_lang_id(lang string) int {
 	return int(C.whisper_lang_id(C.CString(lang)))
 }
 
+func Whisper_lang_id_str(lang string) int {
+	return int(C.whisper_lang_id(C.CString(lang)))
+}
+
 // Largest language id (i.e. number of available languages - 1)
 func Whisper_lang_max_id() int {
 	return int(C.whisper_lang_max_id())
@@ -199,6 +309,16 @@ func Whisper_lang_str(id int) string {
 func (ctx *Context) Whisper_lang_auto_detect(offset_ms, n_threads int) ([]float32, error) {
 	probs := make([]float32, Whisper_lang_max_id()+1)
 	if n := int(C.whisper_lang_auto_detect((*C.struct_whisper_context)(ctx), C.int(offset_ms), C.int(n_threads), (*C.float)(&probs[0]))); n < 0 {
+		return nil, ErrAutoDetectFailed
+	} else {
+		return probs, nil
+	}
+}
+
+// Use mel data at offset_ms to auto-detect language using the provided state.
+func (ctx *Context) Whisper_lang_auto_detect_with_state(state *State, offset_ms, n_threads int) ([]float32, error) {
+	probs := make([]float32, Whisper_lang_max_id()+1)
+	if n := int(C.whisper_lang_auto_detect_with_state((*C.struct_whisper_context)(ctx), (*C.struct_whisper_state)(state), C.int(offset_ms), C.int(n_threads), (*C.float)(&probs[0]))); n < 0 {
 		return nil, ErrAutoDetectFailed
 	} else {
 		return probs, nil
@@ -290,6 +410,32 @@ func (ctx *Context) Whisper_reset_timings() {
 	C.whisper_reset_timings((*C.struct_whisper_context)(ctx))
 }
 
+// TimingsGo is a Go-friendly copy of whisper_timings
+type TimingsGo struct {
+	SampleMS float32
+	EncodeMS float32
+	DecodeMS float32
+	BatchdMS float32
+	PromptMS float32
+}
+
+// Whisper_get_timings_go retrieves timing counters and converts them to TimingsGo
+func (ctx *Context) Whisper_get_timings_go() (TimingsGo, bool) {
+	t := C.whisper_get_timings((*C.struct_whisper_context)(ctx))
+	if t == nil {
+		return TimingsGo{}, false
+	}
+	// The C struct is 5 consecutive floats; reinterpret and copy
+	arr := (*[5]C.float)(unsafe.Pointer(t))
+	return TimingsGo{
+		SampleMS: float32(arr[0]),
+		EncodeMS: float32(arr[1]),
+		DecodeMS: float32(arr[2]),
+		BatchdMS: float32(arr[3]),
+		PromptMS: float32(arr[4]),
+	}, true
+}
+
 // Print system information
 func Whisper_print_system_info() string {
 	return C.GoString(C.whisper_print_system_info())
@@ -317,6 +463,28 @@ func (ctx *Context) Whisper_full(
 	defer registerNewSegmentCallback(ctx, nil)
 	defer registerProgressCallback(ctx, nil)
 	if C.whisper_full((*C.struct_whisper_context)(ctx), (C.struct_whisper_full_params)(params), (*C.float)(&samples[0]), C.int(len(samples))) == 0 {
+		return nil
+	} else {
+		return ErrConversionFailed
+	}
+}
+
+// Run the entire model using the provided state: PCM -> mel -> encoder -> decoder -> text
+func (ctx *Context) Whisper_full_with_state(
+	state *State,
+	params Params,
+	samples []float32,
+	encoderBeginCallback func() bool,
+	newSegmentCallback func(int),
+	progressCallback func(int),
+) error {
+	registerEncoderBeginCallback(ctx, encoderBeginCallback)
+	registerNewSegmentCallback(ctx, newSegmentCallback)
+	registerProgressCallback(ctx, progressCallback)
+	defer registerEncoderBeginCallback(ctx, nil)
+	defer registerNewSegmentCallback(ctx, nil)
+	defer registerProgressCallback(ctx, nil)
+	if C.whisper_full_with_state((*C.struct_whisper_context)(ctx), (*C.struct_whisper_state)(state), (C.struct_whisper_full_params)(params), (*C.float)(&samples[0]), C.int(len(samples))) == 0 {
 		return nil
 	} else {
 		return ErrConversionFailed
@@ -357,9 +525,17 @@ func (ctx *Context) Whisper_full_n_segments() int {
 	return int(C.whisper_full_n_segments((*C.struct_whisper_context)(ctx)))
 }
 
+func (ctx *Context) Whisper_full_n_segments_from_state(state *State) int {
+	return int(C.whisper_full_n_segments_from_state((*C.struct_whisper_state)(state)))
+}
+
 // Get the start and end time of the specified segment.
 func (ctx *Context) Whisper_full_get_segment_t0(segment int) int64 {
 	return int64(C.whisper_full_get_segment_t0((*C.struct_whisper_context)(ctx), C.int(segment)))
+}
+
+func (ctx *Context) Whisper_full_get_segment_t0_from_state(state *State, segment int) int64 {
+	return int64(C.whisper_full_get_segment_t0_from_state((*C.struct_whisper_state)(state), C.int(segment)))
 }
 
 // Get the start and end time of the specified segment.
@@ -367,9 +543,17 @@ func (ctx *Context) Whisper_full_get_segment_t1(segment int) int64 {
 	return int64(C.whisper_full_get_segment_t1((*C.struct_whisper_context)(ctx), C.int(segment)))
 }
 
+func (ctx *Context) Whisper_full_get_segment_t1_from_state(state *State, segment int) int64 {
+	return int64(C.whisper_full_get_segment_t1_from_state((*C.struct_whisper_state)(state), C.int(segment)))
+}
+
 // Get the text of the specified segment.
 func (ctx *Context) Whisper_full_get_segment_text(segment int) string {
 	return C.GoString(C.whisper_full_get_segment_text((*C.struct_whisper_context)(ctx), C.int(segment)))
+}
+
+func (ctx *Context) Whisper_full_get_segment_text_from_state(state *State, segment int) string {
+	return C.GoString(C.whisper_full_get_segment_text_from_state((*C.struct_whisper_state)(state), C.int(segment)))
 }
 
 // Get number of tokens in the specified segment.
@@ -377,14 +561,26 @@ func (ctx *Context) Whisper_full_n_tokens(segment int) int {
 	return int(C.whisper_full_n_tokens((*C.struct_whisper_context)(ctx), C.int(segment)))
 }
 
+func (ctx *Context) Whisper_full_n_tokens_from_state(state *State, segment int) int {
+	return int(C.whisper_full_n_tokens_from_state((*C.struct_whisper_state)(state), C.int(segment)))
+}
+
 // Get the token text of the specified token index in the specified segment.
 func (ctx *Context) Whisper_full_get_token_text(segment int, token int) string {
 	return C.GoString(C.whisper_full_get_token_text((*C.struct_whisper_context)(ctx), C.int(segment), C.int(token)))
 }
 
+func (ctx *Context) Whisper_full_get_token_text_from_state(state *State, segment int, token int) string {
+	return C.GoString(C.whisper_full_get_token_text_from_state((*C.struct_whisper_context)(ctx), (*C.struct_whisper_state)(state), C.int(segment), C.int(token)))
+}
+
 // Get the token of the specified token index in the specified segment.
 func (ctx *Context) Whisper_full_get_token_id(segment int, token int) Token {
 	return Token(C.whisper_full_get_token_id((*C.struct_whisper_context)(ctx), C.int(segment), C.int(token)))
+}
+
+func (ctx *Context) Whisper_full_get_token_id_from_state(state *State, segment int, token int) Token {
+	return Token(C.whisper_full_get_token_id_from_state((*C.struct_whisper_state)(state), C.int(segment), C.int(token)))
 }
 
 // Get token data for the specified token in the specified segment.
@@ -393,66 +589,93 @@ func (ctx *Context) Whisper_full_get_token_data(segment int, token int) TokenDat
 	return TokenData(C.whisper_full_get_token_data((*C.struct_whisper_context)(ctx), C.int(segment), C.int(token)))
 }
 
+func (ctx *Context) Whisper_full_get_token_data_from_state(state *State, segment int, token int) TokenData {
+	return TokenData(C.whisper_full_get_token_data_from_state((*C.struct_whisper_state)(state), C.int(segment), C.int(token)))
+}
+
 // Get the probability of the specified token in the specified segment.
 func (ctx *Context) Whisper_full_get_token_p(segment int, token int) float32 {
 	return float32(C.whisper_full_get_token_p((*C.struct_whisper_context)(ctx), C.int(segment), C.int(token)))
+}
+
+func (ctx *Context) Whisper_full_get_token_p_from_state(state *State, segment int, token int) float32 {
+	return float32(C.whisper_full_get_token_p_from_state((*C.struct_whisper_state)(state), C.int(segment), C.int(token)))
+}
+
+func (ctx *Context) Whisper_full_lang_id_from_state(state *State) int {
+	return int(C.whisper_full_lang_id_from_state((*C.struct_whisper_state)(state)))
+}
+
+func (ctx *Context) Whisper_n_len_from_state(state *State) int {
+	return int(C.whisper_n_len_from_state((*C.struct_whisper_state)(state)))
+}
+
+func (ctx *Context) Whisper_get_logits_from_state(state *State) []float32 {
+	return (*[1 << 30]float32)(unsafe.Pointer(C.whisper_get_logits_from_state((*C.struct_whisper_state)(state))))[:ctx.Whisper_n_vocab()]
+}
+
+// Get whether the next segment is predicted as a speaker turn (tinydiarize)
+func (ctx *Context) Whisper_full_get_segment_speaker_turn_next_from_state(state *State, segment int) bool {
+	return bool(C.whisper_full_get_segment_speaker_turn_next_from_state((*C.struct_whisper_state)(state), C.int(segment)))
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 // CALLBACKS
 
 var (
-	cbNewSegment   = make(map[unsafe.Pointer]func(int))
-	cbProgress     = make(map[unsafe.Pointer]func(int))
-	cbEncoderBegin = make(map[unsafe.Pointer]func() bool)
+	cbNewSegment   sync.Map // map[unsafe.Pointer]func(int)
+	cbProgress     sync.Map // map[unsafe.Pointer]func(int)
+	cbEncoderBegin sync.Map // map[unsafe.Pointer]func() bool
 )
 
 func registerNewSegmentCallback(ctx *Context, fn func(int)) {
+	k := unsafe.Pointer(ctx)
 	if fn == nil {
-		delete(cbNewSegment, unsafe.Pointer(ctx))
+		cbNewSegment.Delete(k)
 	} else {
-		cbNewSegment[unsafe.Pointer(ctx)] = fn
+		cbNewSegment.Store(k, fn)
 	}
 }
 
 func registerProgressCallback(ctx *Context, fn func(int)) {
+	k := unsafe.Pointer(ctx)
 	if fn == nil {
-		delete(cbProgress, unsafe.Pointer(ctx))
+		cbProgress.Delete(k)
 	} else {
-		cbProgress[unsafe.Pointer(ctx)] = fn
+		cbProgress.Store(k, fn)
 	}
 }
 
 func registerEncoderBeginCallback(ctx *Context, fn func() bool) {
+	k := unsafe.Pointer(ctx)
 	if fn == nil {
-		delete(cbEncoderBegin, unsafe.Pointer(ctx))
+		cbEncoderBegin.Delete(k)
 	} else {
-		cbEncoderBegin[unsafe.Pointer(ctx)] = fn
+		cbEncoderBegin.Store(k, fn)
 	}
 }
 
 //export callNewSegment
 func callNewSegment(user_data unsafe.Pointer, new C.int) {
-	if fn, ok := cbNewSegment[user_data]; ok {
-		fn(int(new))
+	if v, ok := cbNewSegment.Load(user_data); ok {
+		v.(func(int))(int(new))
 	}
 }
 
 //export callProgress
 func callProgress(user_data unsafe.Pointer, progress C.int) {
-	if fn, ok := cbProgress[user_data]; ok {
-		fn(int(progress))
+	if v, ok := cbProgress.Load(user_data); ok {
+		v.(func(int))(int(progress))
 	}
 }
 
 //export callEncoderBegin
 func callEncoderBegin(user_data unsafe.Pointer) C.bool {
-	if fn, ok := cbEncoderBegin[user_data]; ok {
-		if fn() {
+	if v, ok := cbEncoderBegin.Load(user_data); ok {
+		if v.(func() bool)() {
 			return C.bool(true)
-		} else {
-			return C.bool(false)
 		}
+		return C.bool(false)
 	}
 	return true
 }
