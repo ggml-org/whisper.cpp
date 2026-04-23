@@ -47,6 +47,18 @@ typedef struct full_parallel_args {
   int n_processors;
 } full_parallel_args;
 
+typedef struct full_without_gvl_args {
+  struct whisper_context *context;
+  struct whisper_full_params *params;
+  float *samples;
+  int n_samples;
+  int result;
+} full_without_gvl_args;
+
+typedef struct full_ubf_args {
+  ruby_whisper_abort_callback_container *abort_callback_container;
+} full_ubf_args;
+
 static void
 ruby_whisper_free(ruby_whisper *rw)
 {
@@ -428,6 +440,22 @@ release_samples(VALUE rb_parsed_args)
   return Qnil;
 }
 
+static void*
+full_without_gvl(void *rb_args)
+{
+  full_without_gvl_args *args = (full_without_gvl_args *)rb_args;
+  args->result = whisper_full(args->context, *args->params, args->samples, args->n_samples);
+  return NULL;
+}
+
+static void
+full_ubf(void *rb_args)
+{
+  full_ubf_args *args = (full_ubf_args *)rb_args;
+
+  args->abort_callback_container->is_interrupted = true;
+}
+
 static VALUE
 full_body(VALUE rb_args)
 {
@@ -439,9 +467,19 @@ full_body(VALUE rb_args)
   TypedData_Get_Struct(*args->params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
 
   prepare_transcription(rwp, args->context, 1);
-  int result = whisper_full(rw->context, rwp->params, args->samples, args->n_samples);
 
-  return INT2NUM(result);
+  struct full_without_gvl_args full_without_gvl_args = {
+    rw->context,
+    &rwp->params,
+    args->samples,
+    args->n_samples,
+    0,
+  };
+  full_ubf_args full_ubf_args = {
+    rwp->abort_callback_container,
+  };
+  rb_thread_call_without_gvl(full_without_gvl, (void *)&full_without_gvl_args, full_ubf, (void *)&full_ubf_args);
+  return INT2NUM(full_without_gvl_args.result);
 }
 
 /*
