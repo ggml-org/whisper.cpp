@@ -5936,6 +5936,7 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
         /*.max_len           =*/ 0,
         /*.split_on_word     =*/ false,
         /*.max_tokens        =*/ 0,
+        /*.seg_len_hint      =*/ 0,
 
         /*.debug_mode        =*/ false,
         /*.audio_ctx         =*/ 0,
@@ -6905,6 +6906,9 @@ int whisper_full_with_state(
     // calculate the maximum context budget for prompt history
     const int max_prompt_ctx = std::min(params.n_max_text_ctx, whisper_n_text_ctx(ctx)/2);
 
+    // track last timestamp kept in prompt context for seg_len_hint thinning
+    int last_prompt_ts = 0;
+
     // prepare prompt
     {
         std::vector<whisper_token> prompt_tokens;
@@ -7594,9 +7598,32 @@ int whisper_full_with_state(
             }
 
             // Add newly decoded tokens to the rolling context
+            // When seg_len_hint is set, thin out timestamp tokens in the context to prevent
+            // the model from conditioning on frequent segment breaks (which causes
+            // progressively shorter segments)
             if (!is_no_speech) {
+                const whisper_token token_beg = whisper_token_beg(ctx);
+                const whisper_token token_eot = whisper_token_eot(ctx);
+                // convert seg_len_hint from ms to 20ms timestamp steps
+                const int min_timestamp_gap = params.seg_len_hint / 20;
+
                 for (int i = 0; i < result_len; ++i) {
-                    prompt_past1.push_back(tokens_cur[i].id);
+                    const whisper_token id = tokens_cur[i].id;
+                    if (id >= token_eot && id <= token_beg) {
+                        // special non-timestamp token (eot, sot, etc.) — skip
+                        continue;
+                    }
+                    if (min_timestamp_gap > 0 && id > token_beg) {
+                        // timestamp token — only keep if enough time since last one
+                        const int ts = id - token_beg;
+                        if (ts - last_prompt_ts >= min_timestamp_gap) {
+                            last_prompt_ts = ts;
+                            prompt_past1.push_back(id);
+                        }
+                        continue;
+                    }
+                    // regular text token (or timestamp when seg_len_hint=0) — always keep
+                    prompt_past1.push_back(id);
                 }
             }
 
