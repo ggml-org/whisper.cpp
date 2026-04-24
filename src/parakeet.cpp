@@ -419,6 +419,11 @@ static bool parakeet_sched_graph_init(struct parakeet_sched & allocr, std::vecto
 
     sched = ggml_backend_sched_new(backends.data(), nullptr, backends.size(), PARAKEET_MAX_NODES, false, true);
 
+    if (!sched) {
+        PARAKEET_LOG_ERROR("%s: failed to create scheduler\n", __func__);
+        return false;
+    }
+
     meta.resize(ggml_tensor_overhead()*PARAKEET_MAX_NODES + ggml_graph_overhead());
 
     // since there are dependencies between the different graphs,
@@ -426,6 +431,8 @@ static bool parakeet_sched_graph_init(struct parakeet_sched & allocr, std::vecto
     if (!ggml_backend_sched_alloc_graph(sched, get_graph())) {
         // failed to allocate the compute buffer
         PARAKEET_LOG_ERROR("%s: failed to allocate the compute buffer\n", __func__);
+        ggml_backend_sched_free(sched);
+        sched = nullptr;
         return false;
     }
 
