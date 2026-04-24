@@ -596,15 +596,11 @@ struct parakeet_state {
     int64_t t_sample_us = 0;
     int64_t t_encode_us = 0;
     int64_t t_decode_us = 0;
-    int64_t t_batchd_us = 0;
-    int64_t t_prompt_us = 0;
     int64_t t_mel_us = 0;
 
     int32_t n_sample = 0; // number of tokens sampled
     int32_t n_encode = 0; // number of encoder calls
     int32_t n_decode = 0; // number of decoder calls with n_tokens == 1  (text-generation)
-    int32_t n_batchd = 0; // number of decoder calls with n_tokens <  16 (batch decoding)
-    int32_t n_prompt = 0; // number of decoder calls with n_tokens >  1  (prompt encoding)
     int32_t n_fail_p = 0; // number of logprob threshold failures
     int32_t n_fail_h = 0; // number of entropy threshold failures
 
@@ -2230,12 +2226,6 @@ static bool parakeet_joint(
     if (batch.n_tokens == 1) {
         pstate.t_decode_us += ggml_time_us() - t_start_us;
         pstate.n_decode++;
-    } else if (batch.n_tokens < 16) {
-        pstate.t_batchd_us += ggml_time_us() - t_start_us;
-        pstate.n_batchd += n_tokens;
-    } else {
-        pstate.t_prompt_us += ggml_time_us() - t_start_us;
-        pstate.n_prompt += n_tokens;
     }
 
     return !(abort_callback && abort_callback(abort_callback_data));
@@ -3463,8 +3453,6 @@ struct parakeet_timings * parakeet_get_timings(struct parakeet_context * ctx) {
     timings->sample_ms = 1e-3f * ctx->state->t_sample_us / std::max(1, ctx->state->n_sample);
     timings->encode_ms = 1e-3f * ctx->state->t_encode_us / std::max(1, ctx->state->n_encode);
     timings->decode_ms = 1e-3f * ctx->state->t_decode_us / std::max(1, ctx->state->n_decode);
-    timings->batchd_ms = 1e-3f * ctx->state->t_batchd_us / std::max(1, ctx->state->n_batchd);
-    timings->prompt_ms = 1e-3f * ctx->state->t_prompt_us / std::max(1, ctx->state->n_prompt);
     return timings;
 }
 
@@ -3478,16 +3466,13 @@ void parakeet_print_timings(struct parakeet_context * ctx) {
         const int32_t n_sample = std::max(1, ctx->state->n_sample);
         const int32_t n_encode = std::max(1, ctx->state->n_encode);
         const int32_t n_decode = std::max(1, ctx->state->n_decode);
-        const int32_t n_batchd = std::max(1, ctx->state->n_batchd);
-        const int32_t n_prompt = std::max(1, ctx->state->n_prompt);
 
         PARAKEET_LOG_INFO("%s:     fallbacks = %3d p / %3d h\n", __func__, ctx->state->n_fail_p, ctx->state->n_fail_h);
         PARAKEET_LOG_INFO("%s:      mel time = %8.2f ms\n", __func__, ctx->state->t_mel_us / 1000.0f);
         PARAKEET_LOG_INFO("%s:   sample time = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_sample_us, n_sample, 1e-3f * ctx->state->t_sample_us / n_sample);
         PARAKEET_LOG_INFO("%s:   encode time = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_encode_us, n_encode, 1e-3f * ctx->state->t_encode_us / n_encode);
         PARAKEET_LOG_INFO("%s:   decode time = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_decode_us, n_decode, 1e-3f * ctx->state->t_decode_us / n_decode);
-        PARAKEET_LOG_INFO("%s:   batchd time = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_batchd_us, n_batchd, 1e-3f * ctx->state->t_batchd_us / n_batchd);
-        PARAKEET_LOG_INFO("%s:   prompt time = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_prompt_us, n_prompt, 1e-3f * ctx->state->t_prompt_us / n_prompt);
+
     }
     PARAKEET_LOG_INFO("%s:    total time = %8.2f ms\n", __func__, (t_end_us - ctx->t_start_us)/1000.0f);
 }
@@ -3499,13 +3484,10 @@ void parakeet_reset_timings(struct parakeet_context * ctx) {
         ctx->state->t_sample_us = 0;
         ctx->state->t_encode_us = 0;
         ctx->state->t_decode_us = 0;
-        ctx->state->t_batchd_us = 0;
-        ctx->state->t_prompt_us = 0;
+
         ctx->state->n_sample = 0;
         ctx->state->n_encode = 0;
         ctx->state->n_decode = 0;
-        ctx->state->n_batchd = 0;
-        ctx->state->n_prompt = 0;
     }
 }
 
@@ -4169,18 +4151,12 @@ int parakeet_full_parallel(
         }
 
         ctx->state->t_mel_us += states[i]->t_mel_us;
-
         ctx->state->t_sample_us += states[i]->t_sample_us;
         ctx->state->t_encode_us += states[i]->t_encode_us;
         ctx->state->t_decode_us += states[i]->t_decode_us;
-        ctx->state->t_batchd_us += states[i]->t_batchd_us;
-        ctx->state->t_prompt_us += states[i]->t_prompt_us;
-
         ctx->state->n_sample += states[i]->n_sample;
         ctx->state->n_encode += states[i]->n_encode;
         ctx->state->n_decode += states[i]->n_decode;
-        ctx->state->n_batchd += states[i]->n_batchd;
-        ctx->state->n_prompt += states[i]->n_prompt;
 
         parakeet_free_state(states[i]);
     }
