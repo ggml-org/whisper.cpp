@@ -3533,32 +3533,23 @@ struct parakeet_full_params * parakeet_full_default_params_by_ref(enum parakeet_
 
 struct parakeet_full_params parakeet_full_default_params(enum parakeet_sampling_strategy strategy) {
     struct parakeet_full_params result = {
-        /*.strategy          =*/ strategy,
-
-        /*.n_threads         =*/ std::min(4, (int32_t) std::thread::hardware_concurrency()),
-        /*.offset_ms         =*/ 0,
-        /*.duration_ms       =*/ 0,
-
-        /*.no_context        =*/ true,
-
-        /*.audio_ctx         =*/ 0,
-
-        /*.chunk_length_ms   =*/ 10000,  // 10 second chunks
-        /*.left_context_ms   =*/ 10000,  // 10 second left context
-        /*.right_context_ms  =*/ 4960,   // 4.96 second right context
-
-        /*.new_token_callback           =*/ nullptr,
-        /*.new_token_callback_user_data =*/ nullptr,
-
-        /*.new_segment_callback           =*/ nullptr,
-        /*.new_segment_callback_user_data =*/ nullptr,
-
-        /*.progress_callback           =*/ nullptr,
-        /*.progress_callback_user_data =*/ nullptr,
-
+        /*.strategy                         =*/ strategy,
+        /*.n_threads                        =*/ std::min(4, (int32_t) std::thread::hardware_concurrency()),
+        /*.offset_ms                        =*/ 0,
+        /*.duration_ms                      =*/ 0,
+        /*.no_context                       =*/ true,
+        /*.audio_ctx                        =*/ 0,
+        /*.chunk_length_ms                  =*/ 10000,  // 10 second chunks
+        /*.left_context_ms                  =*/ 10000,  // 10 second left context
+        /*.right_context_ms                 =*/ 4960,   // 4.96 second right context
+        /*.new_token_callback               =*/ nullptr,
+        /*.new_token_callback_user_data     =*/ nullptr,
+        /*.new_segment_callback             =*/ nullptr,
+        /*.new_segment_callback_user_data   =*/ nullptr,
+        /*.progress_callback                =*/ nullptr,
+        /*.progress_callback_user_data      =*/ nullptr,
         /*.encoder_begin_callback           =*/ nullptr,
         /*.encoder_begin_callback_user_data =*/ nullptr,
-
         /*.abort_callback                   =*/ nullptr,
         /*.abort_callback_user_data         =*/ nullptr,
     };
