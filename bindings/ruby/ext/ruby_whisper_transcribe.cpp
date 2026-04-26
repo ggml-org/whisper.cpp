@@ -15,8 +15,39 @@ extern ID id_call;
 extern ID id_to_path;
 extern ID transcribe_option_names[1];
 
-extern void
-prepare_transcription(ruby_whisper_params * rwp, VALUE * self, int n_processors);
+extern void prepare_transcription(ruby_whisper_params * rwp, VALUE * self, int n_processors);
+extern void ruby_whisper_lock_gvl(void);
+extern void ruby_whisper_unlock_gvl(void);
+
+typedef struct transcribe_without_gvl_args {
+  struct whisper_context *context;
+  struct whisper_full_params *params;
+  float *samples;
+  size_t n_samples;
+  int n_processors;
+  int result;
+} full_parallel_without_gvl_args;
+
+static void*
+transcribe_without_gvl(void *rb_args)
+{
+  transcribe_without_gvl_args *args = (transcribe_without_gvl_args *)rb_args;
+  args->result = whisper_full_parallel(args->context, *args->params, args->samples, args->n_samples, args->n_processors);
+
+  return NULL;
+}
+
+typedef struct transcribe_ubf_args {
+  ruby_whisper_abort_callback_container *abort_callback_container;
+} full_ubf_args;
+
+static void
+transcribe_ubf(void *rb_args)
+{
+  transcribe_ubf_args *args = (transcribe_ubf_args *)rb_args;
+
+  args->abort_callback_container->is_interrupted = true;
+}
 
 /*
  * transcribe a single file
@@ -75,7 +106,19 @@ ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self) {
 
   prepare_transcription(rwp, &self, n_processors);
 
-  if (whisper_full_parallel(rw->context, rwp->params, pcmf32.data(), pcmf32.size(), n_processors) != 0) {
+  transcribe_without_gvl_args args = {
+    rw->context,
+    &rwp->params,
+    pcmf32.data(),
+    pcmf32.size(),
+    n_processors,
+    0,
+  };
+  transcribe_ubf_args ubf_args = {
+    rwp->abort_callback_container,
+  };
+  rb_thread_call_without_gvl(transcribe_without_gvl, (void *)&args, transcribe_ubf, (void *)&ubf_args);
+  if (args.result != 0) {
     fprintf(stderr, "failed to process audio\n");
     return self;
   }
