@@ -1,7 +1,3 @@
-interface _MemoryView
-  def initialize: (string) -> void
-end
-
 module Whisper
   interface _Samples
     def length: () -> Integer
