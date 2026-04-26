@@ -23,8 +23,8 @@ extern VALUE ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self);
 extern VALUE rb_whisper_model_s_new(VALUE context);
 extern VALUE rb_whisper_segment_s_new(VALUE context, int index);
 extern void prepare_transcription(ruby_whisper_params *rwp, VALUE *context, int n_processors);
-extern void ruby_whisper_lock_gvl(void);
-extern void ruby_whisper_unlock_gvl(void);
+extern void ruby_whisper_gvl_locked(void);
+extern void ruby_whisper_gvl_unlocked(void);
 
 ID transcribe_option_names[1];
 
@@ -454,7 +454,7 @@ release_samples(VALUE rb_parsed_args)
 static void*
 full_without_gvl(void *rb_args)
 {
-  ruby_whisper_unlock_gvl();
+  ruby_whisper_gvl_unlocked();
 
   full_without_gvl_args *args = (full_without_gvl_args *)rb_args;
   args->result = whisper_full(args->context, *args->params, args->samples, args->n_samples);
@@ -492,7 +492,7 @@ full_body(VALUE rb_args)
     rwp->abort_callback_container,
   };
   rb_thread_call_without_gvl(full_without_gvl, (void *)&full_without_gvl_args, full_ubf, (void *)&full_ubf_args);
-  ruby_whisper_lock_gvl();
+  ruby_whisper_gvl_locked();
   return INT2NUM(full_without_gvl_args.result);
 }
 
@@ -534,7 +534,7 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
 static void*
 full_parallel_without_gvl(void *rb_args)
 {
-  ruby_whisper_unlock_gvl();
+  ruby_whisper_gvl_unlocked();
 
   full_parallel_without_gvl_args *args = (full_parallel_without_gvl_args *)rb_args;
   args->result = whisper_full_parallel(args->context, *args->params, args->samples, args->n_samples, args->n_processors);
@@ -565,7 +565,7 @@ full_parallel_body(VALUE rb_args)
     rwp->abort_callback_container,
   };
   rb_thread_call_without_gvl(full_parallel_without_gvl, (void *)&full_parallel_without_gvl_args, full_ubf, (void *)&full_ubf_args);
-  ruby_whisper_lock_gvl();
+  ruby_whisper_gvl_locked();
   return INT2NUM(full_parallel_without_gvl_args.result);
 }
 

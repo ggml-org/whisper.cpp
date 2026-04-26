@@ -109,15 +109,15 @@ static VALUE ruby_whisper_s_finalize_log_callback(VALUE self, VALUE id) {
 }
 
 void
-ruby_whisper_lock_gvl(void)
+ruby_whisper_gvl_locked(void)
 {
-  is_without_gvl = true;
+  is_without_gvl = false;
 }
 
 void
-ruby_whisper_unlock_gvl(void)
+ruby_whisper_gvl_unlocked(void)
 {
-  is_without_gvl = false;
+  is_without_gvl = true;
 }
 
 typedef struct {

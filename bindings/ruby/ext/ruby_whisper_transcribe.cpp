@@ -16,8 +16,8 @@ extern ID id_to_path;
 extern ID transcribe_option_names[1];
 
 extern void prepare_transcription(ruby_whisper_params * rwp, VALUE * self, int n_processors);
-extern void ruby_whisper_lock_gvl(void);
-extern void ruby_whisper_unlock_gvl(void);
+extern void ruby_whisper_gvl_locked(void);
+extern void ruby_whisper_gvl_unlocked(void);
 
 typedef struct transcribe_without_gvl_args {
   struct whisper_context *context;
