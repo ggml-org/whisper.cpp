@@ -31,6 +31,8 @@ typedef struct transcribe_without_gvl_args {
 static void*
 transcribe_without_gvl(void *rb_args)
 {
+  ruby_whisper_gvl_unlocked();
+
   transcribe_without_gvl_args *args = (transcribe_without_gvl_args *)rb_args;
   args->result = whisper_full_parallel(args->context, *args->params, args->samples, args->n_samples, args->n_processors);
 
@@ -118,6 +120,7 @@ ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self) {
     rwp->abort_callback_container,
   };
   rb_thread_call_without_gvl(transcribe_without_gvl, (void *)&args, transcribe_ubf, (void *)&ubf_args);
+  ruby_whisper_gvl_locked();
   if (args.result != 0) {
     fprintf(stderr, "failed to process audio\n");
     return self;
