@@ -127,7 +127,7 @@ ruby_whisper_callback_container_is_present(const ruby_whisper_callback_container
 }
 
 static bool
-abort_ruby_whisper_callback_container_is_present(ruby_whisper_abort_callback_container *container) {
+ruby_whisper_abort_callback_container_is_present(const ruby_whisper_abort_callback_container *container) {
   return !NIL_P(container->callback) || !NIL_P(container->callbacks);
 }
 
@@ -344,6 +344,10 @@ static bool abort_callback(void * user_data) {
     return true;
   }
 
+  if (!ruby_whisper_abort_callback_container_is_present(container)) {
+    return false;
+  }
+
   call_abort_callbacks_args args = {
     container,
     NULL,
@@ -374,7 +378,7 @@ check_thread_safety(ruby_whisper_params *rwp, int n_processors)
     rb_raise(rb_eRuntimeError, "encoder begin callback not supported on parallel transcription");
   }
 
-  if (abort_ruby_whisper_callback_container_is_present(rwp->abort_callback_container)) {
+  if (ruby_whisper_abort_callback_container_is_present(rwp->abort_callback_container)) {
     rb_raise(rb_eRuntimeError, "abort callback not supported on parallel transcription");
   }
 
