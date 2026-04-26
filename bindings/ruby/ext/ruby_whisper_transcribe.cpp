@@ -19,14 +19,14 @@ extern void prepare_transcription(ruby_whisper_params * rwp, VALUE * self, int n
 extern void ruby_whisper_gvl_locked(void);
 extern void ruby_whisper_gvl_unlocked(void);
 
-typedef struct transcribe_without_gvl_args {
+typedef struct{
   struct whisper_context *context;
   struct whisper_full_params *params;
   float *samples;
   size_t n_samples;
   int n_processors;
   int result;
-} full_parallel_without_gvl_args;
+} transcribe_without_gvl_args;
 
 static void*
 transcribe_without_gvl(void *rb_args)
@@ -39,9 +39,9 @@ transcribe_without_gvl(void *rb_args)
   return NULL;
 }
 
-typedef struct transcribe_ubf_args {
+typedef struct {
   ruby_whisper_abort_callback_container *abort_callback_container;
-} full_ubf_args;
+} transcribe_ubf_args;
 
 static void
 transcribe_ubf(void *rb_args)
