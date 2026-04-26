@@ -279,7 +279,7 @@ call_encoder_begin_callbacks(void *v_args) {
 static bool encoder_begin_callback(struct whisper_context *ctx, struct whisper_state *state, void *user_data) {
   const ruby_whisper_callback_container *container = (ruby_whisper_callback_container *)user_data;
   if (!ruby_whisper_callback_container_is_present(container)) {
-    return false;
+    return true;
   }
 
   call_encoder_begin_callbacks_args args = {
