@@ -33,6 +33,8 @@ extern VALUE mWhisper;
 
 extern ID id_call;
 
+extern void ruby_whisper_lock_gvl(void);
+extern void ruby_whisper_unlock_gvl(void);
 extern VALUE ruby_whisper_normalize_model_path(VALUE model_path);
 extern VALUE rb_whisper_segment_s_new(VALUE context, int index);
 extern const rb_data_type_t ruby_whisper_vad_params_type;
@@ -137,6 +139,8 @@ typedef struct {
 
 static void*
 call_new_segment_callbacks(void *v_args) {
+  ruby_whisper_lock_gvl();
+
   call_new_segment_callbacks_args *args = (call_new_segment_callbacks_args *)v_args;
   const ruby_whisper_callback_container *container = args->container;
   struct whisper_state *state = args->state;
@@ -179,6 +183,7 @@ static void new_segment_callback(struct whisper_context *ctx, struct whisper_sta
     n_new
   };
   rb_thread_call_with_gvl(call_new_segment_callbacks, (void *)&args);
+  ruby_whisper_unlock_gvl();
 }
 
 typedef struct {
@@ -189,6 +194,8 @@ typedef struct {
 
 static void*
 call_progress_callbacks(void *v_args) {
+  ruby_whisper_lock_gvl();
+
   call_progress_callbacks_args *args = (call_progress_callbacks_args *)v_args;
   const ruby_whisper_callback_container *container = args->container;
   int progress_cur = args->progress_cur;
@@ -225,6 +232,7 @@ static void progress_callback(struct whisper_context *ctx, struct whisper_state 
     progress_cur
   };
   rb_thread_call_with_gvl(call_progress_callbacks, (void *)&args);
+  ruby_whisper_unlock_gvl();
 }
 
 typedef struct {
@@ -235,6 +243,8 @@ typedef struct {
 
 static void*
 call_encoder_begin_callbacks(void *v_args) {
+  ruby_whisper_lock_gvl();
+
   call_encoder_begin_callbacks_args *args = (call_encoder_begin_callbacks_args *)v_args;
   const ruby_whisper_callback_container *container = args->container;
   VALUE result = Qnil;
@@ -278,6 +288,7 @@ static bool encoder_begin_callback(struct whisper_context *ctx, struct whisper_s
     true
   };
   rb_thread_call_with_gvl(call_encoder_begin_callbacks, (void *)&args);
+  ruby_whisper_unlock_gvl();
 
   return args.is_continued;
 }
@@ -290,6 +301,8 @@ typedef struct {
 
 static void*
 call_abort_callbacks(void *v_args) {
+  ruby_whisper_lock_gvl();
+
   call_abort_callbacks_args *args = (call_abort_callbacks_args *)v_args;
   const ruby_whisper_abort_callback_container *container = args->container;
 
@@ -337,6 +350,7 @@ static bool abort_callback(void * user_data) {
     false
   };
   rb_thread_call_with_gvl(call_abort_callbacks, (void *)&args);
+  ruby_whisper_unlock_gvl();
 
   return args.is_interrupted;
 }
