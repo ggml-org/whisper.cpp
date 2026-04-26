@@ -30,7 +30,7 @@ ID id_n_processors;
 
 static bool is_log_callback_finalized = false;
 static bool is_ruby_log_callback_present = false;
-static bool is_without_gvl = false;
+static _Thread_local bool is_without_gvl = false;
 
 // High level API
 extern VALUE ruby_whisper_segment_allocate(VALUE klass);
