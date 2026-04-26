@@ -30,7 +30,6 @@ ID id_n_processors;
 
 static bool is_log_callback_finalized = false;
 static bool is_ruby_log_callback_present = false;
-static _Thread_local bool is_without_gvl = false;
 
 // High level API
 extern VALUE ruby_whisper_segment_allocate(VALUE klass);
@@ -108,18 +107,6 @@ static VALUE ruby_whisper_s_finalize_log_callback(VALUE self, VALUE id) {
   return Qnil;
 }
 
-void
-ruby_whisper_gvl_locked(void)
-{
-  is_without_gvl = false;
-}
-
-void
-ruby_whisper_gvl_unlocked(void)
-{
-  is_without_gvl = true;
-}
-
 typedef struct {
   int level;
   const char * buffer;
@@ -153,10 +140,10 @@ ruby_whisper_log_callback(enum ggml_log_level level, const char * buffer, void *
     buffer,
     rb_iv_get(mWhisper, "user_data")
   };
-  if (is_without_gvl) {
-    rb_thread_call_with_gvl(call_log_callbacks, (void *)&args);
-  } else {
+  if (ruby_thread_has_gvl_p()) {
     call_log_callbacks((void *)&args);
+  } else {
+    rb_thread_call_with_gvl(call_log_callbacks, (void *)&args);
   }
 }
 
