@@ -1,0 +1,14 @@
+# Install in two steps:
+#   Step A (PyTorch CPU wheel):
+#     pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+#   Step B (remaining packages from PyPI):
+#     pip install -r requirements-diarize.txt
+
+# Speaker diarization
+pyannote.audio>=3.1.0
+
+# Hugging Face model hub access
+huggingface_hub>=0.20.0
+
+# Audio reading (avoids torchcodec/FFmpeg dependency on Windows)
+soundfile>=0.12.0
