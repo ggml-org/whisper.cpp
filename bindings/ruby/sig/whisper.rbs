@@ -137,6 +137,7 @@ module Whisper
     # and log_callback set by Whisper.log_set
     def full_parallel: (Whisper::Params, Array[Float], ?Integer n_samples) -> self
                      | (Whisper::Params, _Samples, ?Integer n_samples) -> self
+                     | (Whisper::Params, _Samples, ?Integer? n_samples, Integer n_processors) -> self
 
     def to_srt: () -> String
     def to_webvtt: () -> String
