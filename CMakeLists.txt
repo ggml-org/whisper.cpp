@@ -88,6 +88,7 @@ if (CMAKE_SYSTEM_NAME MATCHES "Linux")
     option(WHISPER_FFMPEG "whisper: support building and linking with ffmpeg libs (avcodec, swresample, ...)" OFF)
 endif()
 
+option(GGML_VULKAN                 "ggml: support for Vulkan"                  OFF)
 option(WHISPER_COREML                "whisper: enable Core ML framework"  OFF)
 option(WHISPER_COREML_ALLOW_FALLBACK "whisper: allow non-CoreML fallback" OFF)
 option(WHISPER_OPENVINO              "whisper: support for OpenVINO"      OFF)
