@@ -110,7 +110,6 @@ static VALUE ruby_whisper_s_finalize_log_callback(VALUE self, VALUE id) {
 typedef struct {
   int level;
   const char * buffer;
-  VALUE user_data;
 } call_log_callbacks_args;
 
 static void*
@@ -121,7 +120,8 @@ call_log_callbacks(void *v_args) {
   }
 
   call_log_callbacks_args *args = (call_log_callbacks_args *)v_args;
-  rb_funcall(log_callback, id_call, 3, INT2NUM(args->level), rb_str_new2(args->buffer), args->user_data);
+  VALUE user_data = rb_iv_get(mWhisper, "user_data");
+  rb_funcall(log_callback, id_call, 3, INT2NUM(args->level), rb_str_new2(args->buffer), user_data);
 
   return NULL;
 }
@@ -138,7 +138,6 @@ ruby_whisper_log_callback(enum ggml_log_level level, const char * buffer, void *
   call_log_callbacks_args args = {
     level,
     buffer,
-    rb_iv_get(mWhisper, "user_data")
   };
   if (ruby_thread_has_gvl_p()) {
     call_log_callbacks((void *)&args);
