@@ -1,5 +1,11 @@
 #include "ruby_whisper.h"
 
+#ifdef WORDS_BIGENDIAN
+  #define IS_BIGENDIAN true
+#else
+  #define IS_BIGENDIAN false
+#endif
+
 extern ID id_to_s;
 extern ID id___method__;
 extern ID id_to_enum;
@@ -325,12 +331,24 @@ VALUE ruby_whisper_model_type(VALUE self)
 static bool
 check_memory_view(rb_memory_view_t *memview)
 {
-  if (memview->format != NULL && strcmp(memview->format, "f") != 0 && strcmp(memview->format, "e") != 0) {
-    // TODO: Accept other formats and convert samples
-    rb_warn("currently only format \"f\" and \"e\" is supported for MemoryView, but given: %s", memview->format);
+  if (!memview->format) {
+    rb_warn("currently format is required");
     return false;
   }
-  if (memview->format != NULL && memview->ndim != 1 && !(memview->ndim == 2 && memview->shape[1] == 1)) {
+
+  if (strcmp(memview->format, "f") == 0) {
+    // accept
+  } else if (strcmp(memview->format, "e") == 0) {
+    if (IS_BIGENDIAN) {
+      rb_warn("currently format \"e\" is only supported on little-endian environment");
+      return false;
+    }
+  } else {
+    rb_warn("currently only format \"f\" and \"e\" on little-endian environment is supported for MemoryView, but given: %s", memview->format);
+    return false;
+  }
+
+  if (memview->ndim != 1 && !(memview->ndim == 2 && memview->shape[1] == 1)) {
     // TODO: Accept ndim == 2 with shape [n_samples, channels] and channels > 1 by averaging the samples in different channels or just taking the first channel
     rb_warn("currently only 1 dimensional MemoryView is supported, but given: %zd", memview->ndim);
     return false;
