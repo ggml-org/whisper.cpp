@@ -10,7 +10,7 @@ class Options
   end
 
   def cache_path
-    File.join(__dir__, "source", "Options.cmake")
+    File.join(__dir__, "sources", "Options.cmake")
   end
 
   def cmake_options
