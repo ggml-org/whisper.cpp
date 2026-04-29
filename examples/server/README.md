@@ -40,6 +40,7 @@ options:
   -l LANG,   --language LANG     [en     ] spoken language ('auto' for auto-detect)
   -dl,       --detect-language   [false  ] exit after automatically detecting language
              --prompt PROMPT     [       ] initial prompt
+             --carry-initial-prompt [false  ] always prepend initial prompt
   -m FNAME,  --model FNAME       [models/ggml-base.en.bin] model path
   -oved D,   --ov-e-device DNAME [CPU    ] the OpenVINO device used for encode inference
   -dtw MODEL --dtw MODEL         [       ] compute token-level timestamps
@@ -78,6 +79,8 @@ curl 127.0.0.1:8080/inference \
 -F file="@<file-path>" \
 -F temperature="0.0" \
 -F temperature_inc="0.2" \
+-F prompt="<prompt>" \
+-F carry_initial_prompt="true" \
 -F response_format="json"
 ```
 
