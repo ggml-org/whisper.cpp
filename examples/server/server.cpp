@@ -107,6 +107,7 @@ struct whisper_params {
     bool suppress_nst    = false;
     bool no_context      = true;
     bool no_language_probabilities = false;
+    bool carry_initial_prompt = false;
 
     std::string language        = "en";
     std::string prompt          = "";
@@ -166,6 +167,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -l LANG,   --language LANG     [%-7s] spoken language ('auto' for auto-detect)\n",       params.language.c_str());
     fprintf(stderr, "  -dl,       --detect-language   [%-7s] exit after automatically detecting language\n",    params.detect_language ? "true" : "false");
     fprintf(stderr, "             --prompt PROMPT     [%-7s] initial prompt\n",                                 params.prompt.c_str());
+    fprintf(stderr, "             --carry-initial-prompt [%-7s] always prepend initial prompt\n",               params.carry_initial_prompt ? "true" : "false");
     fprintf(stderr, "  -m FNAME,  --model FNAME       [%-7s] model path\n",                                     params.model.c_str());
     fprintf(stderr, "  -oved D,   --ov-e-device DNAME [%-7s] the OpenVINO device used for encode inference\n",  params.openvino_encode_device.c_str());
     // server params
@@ -239,6 +241,7 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params, serve
         else if (arg == "-l"    || arg == "--language")        { params.language        = argv[++i]; }
         else if (arg == "-dl"   || arg == "--detect-language") { params.detect_language = true; }
         else if (                  arg == "--prompt")          { params.prompt          = argv[++i]; }
+        else if (                  arg == "--carry-initial-prompt") { params.carry_initial_prompt = true; }
         else if (arg == "-m"    || arg == "--model")           { params.model           = argv[++i]; }
         else if (arg == "-oved" || arg == "--ov-e-device")     { params.openvino_encode_device = argv[++i]; }
         else if (arg == "-dtw"  || arg == "--dtw")             { params.dtw             = argv[++i]; }
@@ -562,6 +565,10 @@ void get_req_parameters(const Request & req, whisper_params & params)
     {
         params.prompt = req.get_file_value("prompt").content;
     }
+    if (req.has_file("carry_initial_prompt"))
+    {
+        params.carry_initial_prompt = parse_str_to_bool(req.get_file_value("carry_initial_prompt").content);
+    }
     if (req.has_file("response_format"))
     {
         params.response_format = req.get_file_value("response_format").content;
@@ -690,10 +697,10 @@ int main(int argc, char ** argv) {
         if (params.dtw == "large.v3") {
             cparams.dtw_aheads_preset = WHISPER_AHEADS_LARGE_V3;
         }
-        if (params.dtw == "large.v3.turbo") { 
+        if (params.dtw == "large.v3.turbo") {
             cparams.dtw_aheads_preset = WHISPER_AHEADS_LARGE_V3_TURBO;
         }
-        
+
         if (cparams.dtw_aheads_preset == WHISPER_AHEADS_NONE) {
             fprintf(stderr, "error: unknown DTW preset '%s'\n", params.dtw.c_str());
             return 3;
@@ -928,6 +935,7 @@ int main(int argc, char ** argv) {
             wparams.tdrz_enable      = params.tinydiarize; // [TDRZ]
 
             wparams.initial_prompt   = params.prompt.c_str();
+            wparams.carry_initial_prompt = params.carry_initial_prompt;
 
             wparams.greedy.best_of        = params.best_of;
             wparams.beam_search.beam_size = params.beam_size;
@@ -1043,7 +1051,7 @@ int main(int argc, char ** argv) {
             res.set_content(ss.str(), "text/vtt");
         } else if (params.response_format == vjson_format) {
             /* try to match openai/whisper's Python format */
-            std::string results = output_str(ctx, params, pcmf32s); 
+            std::string results = output_str(ctx, params, pcmf32s);
             json jres = json{
                 {"task", params.translate ? "translate" : "transcribe"},
                 {"language", whisper_lang_str_full(whisper_full_lang_id(ctx))},
