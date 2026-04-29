@@ -277,61 +277,6 @@ struct parakeet_vocab {
     id token_eos;
 };
 
-static const std::string PARAKEET_SPM_SPACE = "\xE2\x96\x81";
-
-static inline int utf8_codepoint_len(unsigned char c) {
-    if ((c & 0x80) == 0x00) return 1;
-    if ((c & 0xE0) == 0xC0) return 2;
-    if ((c & 0xF0) == 0xE0) return 3;
-    if ((c & 0xF8) == 0xF0) return 4;
-    return 1;
-}
-
-static bool is_sentencepiece_control(const std::string & piece) {
-    return piece == "<unk>" || piece == "<s>" || piece == "</s>" || piece == "[BLANK]";
-}
-
-static std::string sentencepiece_normalize(const std::string & text) {
-    std::string normalized;
-    normalized.reserve(text.size() + PARAKEET_SPM_SPACE.size());
-    normalized += PARAKEET_SPM_SPACE; // SentencePiece dummy prefix
-
-    for (unsigned char c : text) {
-        if (std::isspace(c)) {
-            normalized += PARAKEET_SPM_SPACE;
-        } else {
-            normalized += static_cast<char>(c);
-        }
-    }
-
-    return normalized;
-}
-
-static std::string sentencepiece_piece_to_text(const std::string & piece, bool is_first_piece) {
-    if (is_sentencepiece_control(piece)) {
-        return "";
-    }
-
-    std::string text;
-    text.reserve(piece.size());
-
-    size_t pos = 0;
-    while (pos < piece.size()) {
-        if (piece.compare(pos, PARAKEET_SPM_SPACE.size(), PARAKEET_SPM_SPACE) == 0) {
-            if (!is_first_piece || !text.empty()) {
-                text += ' ';
-            }
-            pos += PARAKEET_SPM_SPACE.size();
-            continue;
-        }
-
-        text += piece[pos];
-        ++pos;
-    }
-
-    return text;
-}
-
 struct parakeet_segment {
     int64_t t0;
     int64_t t1;
@@ -352,94 +297,12 @@ struct parakeet_batch {
     int8_t          *  logits;
 };
 
-static struct parakeet_batch parakeet_batch_init(int32_t n_tokens) {
-    parakeet_batch batch = { 0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, };
-
-    batch.token    = (parakeet_token *  ) malloc(sizeof(parakeet_token)    * (n_tokens));
-    batch.i_time   = (int32_t *)          malloc(sizeof(int32_t)           * (n_tokens));
-    batch.pos      = (parakeet_pos *)     malloc(sizeof(parakeet_pos)      * (n_tokens));
-    batch.n_seq_id = (int32_t *)          malloc(sizeof(int32_t)           * (n_tokens));
-    batch.seq_id   = (parakeet_seq_id **) malloc(sizeof(parakeet_seq_id *) * (n_tokens + 1));
-    for (int i = 0; i < n_tokens; ++i) {
-        batch.seq_id[i] = (parakeet_seq_id *) malloc(sizeof(parakeet_seq_id));
-    }
-    batch.seq_id[n_tokens] = nullptr;
-    batch.logits   = (int8_t *)          malloc(sizeof(int8_t)           * n_tokens);
-
-    return batch;
-}
-
-static void parakeet_batch_free(struct parakeet_batch batch) {
-    if (batch.token)    free(batch.token);
-    if (batch.pos)      free(batch.pos);
-    if (batch.n_seq_id) free(batch.n_seq_id);
-    if (batch.seq_id) {
-        for (int i = 0; batch.seq_id[i]; ++i) {
-            free(batch.seq_id[i]);
-        }
-        free(batch.seq_id);
-    }
-    if (batch.logits)   free(batch.logits);
-}
-
-static void parakeet_batch_prep_legacy(parakeet_batch & batch, const parakeet_token * tokens, int n_tokens, int n_past, int seq_id) {
-    batch.n_tokens = n_tokens;
-    for (int i = 0; i < n_tokens; ++i) {
-        if (tokens) {
-            batch.token[i] = tokens[i];
-        }
-        batch.pos     [i]    = n_past + i;
-        batch.n_seq_id[i]    = 1;
-        batch.seq_id  [i][0] = seq_id;
-        batch.logits  [i]    = 0;
-    }
-    batch.logits[n_tokens - 1] = 1;
-}
-
 // ggml_backend_sched wrapper for parakeet usage
 struct parakeet_sched {
     ggml_backend_sched_t sched = nullptr;
 
     std::vector<uint8_t> meta;
 };
-
-static size_t parakeet_sched_size(struct parakeet_sched & allocr) {
-    size_t size = allocr.meta.size();
-    for (int i = 0; i < ggml_backend_sched_get_n_backends(allocr.sched); ++i) {
-        ggml_backend_t backend = ggml_backend_sched_get_backend(allocr.sched, i);
-        size += ggml_backend_sched_get_buffer_size(allocr.sched, backend);
-    }
-    return size;
-}
-
-// measure the memory usage of a graph and prepare the allocr's internal data buffer
-static bool parakeet_sched_graph_init(struct parakeet_sched & allocr, std::vector<ggml_backend_t> backends, std::function<struct ggml_cgraph *()> && get_graph) {
-    auto & sched = allocr.sched;
-    auto & meta  = allocr.meta;
-
-    sched = ggml_backend_sched_new(backends.data(), nullptr, backends.size(), PARAKEET_MAX_NODES, false, true);
-
-    if (!sched) {
-        PARAKEET_LOG_ERROR("%s: failed to create scheduler\n", __func__);
-        return false;
-    }
-
-    meta.resize(ggml_tensor_overhead()*PARAKEET_MAX_NODES + ggml_graph_overhead());
-
-    // since there are dependencies between the different graphs,
-    // we need to allocate them instead of only reserving to get the correct compute buffer size
-    if (!ggml_backend_sched_alloc_graph(sched, get_graph())) {
-        // failed to allocate the compute buffer
-        PARAKEET_LOG_ERROR("%s: failed to allocate the compute buffer\n", __func__);
-        ggml_backend_sched_free(sched);
-        sched = nullptr;
-        return false;
-    }
-
-    ggml_backend_sched_reset(sched);
-
-    return true;
-}
 
 // TODO: Find out is there a multiple version types. It is not yet clear to me
 // at this point.
@@ -729,6 +592,146 @@ struct parakeet_global {
 };
 
 static parakeet_global g_state;
+
+static const std::string PARAKEET_SPM_SPACE = "\xE2\x96\x81";
+
+static inline int utf8_codepoint_len(unsigned char c) {
+    if ((c & 0x80) == 0x00) return 1;
+    if ((c & 0xE0) == 0xC0) return 2;
+    if ((c & 0xF0) == 0xE0) return 3;
+    if ((c & 0xF8) == 0xF0) return 4;
+    return 1;
+}
+
+static bool is_sentencepiece_control(const std::string & piece) {
+    return piece == "<unk>" || piece == "<s>" || piece == "</s>" || piece == "[BLANK]";
+}
+
+static std::string sentencepiece_normalize(const std::string & text) {
+    std::string normalized;
+    normalized.reserve(text.size() + PARAKEET_SPM_SPACE.size());
+    normalized += PARAKEET_SPM_SPACE; // SentencePiece dummy prefix
+
+    for (unsigned char c : text) {
+        if (std::isspace(c)) {
+            normalized += PARAKEET_SPM_SPACE;
+        } else {
+            normalized += static_cast<char>(c);
+        }
+    }
+
+    return normalized;
+}
+
+static std::string sentencepiece_piece_to_text(const std::string & piece, bool is_first_piece) {
+    if (is_sentencepiece_control(piece)) {
+        return "";
+    }
+
+    std::string text;
+    text.reserve(piece.size());
+
+    size_t pos = 0;
+    while (pos < piece.size()) {
+        if (piece.compare(pos, PARAKEET_SPM_SPACE.size(), PARAKEET_SPM_SPACE) == 0) {
+            if (!is_first_piece || !text.empty()) {
+                text += ' ';
+            }
+            pos += PARAKEET_SPM_SPACE.size();
+            continue;
+        }
+
+        text += piece[pos];
+        ++pos;
+    }
+
+    return text;
+}
+
+
+static struct parakeet_batch parakeet_batch_init(int32_t n_tokens) {
+    parakeet_batch batch = { 0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, };
+
+    batch.token    = (parakeet_token *  ) malloc(sizeof(parakeet_token)    * (n_tokens));
+    batch.i_time   = (int32_t *)          malloc(sizeof(int32_t)           * (n_tokens));
+    batch.pos      = (parakeet_pos *)     malloc(sizeof(parakeet_pos)      * (n_tokens));
+    batch.n_seq_id = (int32_t *)          malloc(sizeof(int32_t)           * (n_tokens));
+    batch.seq_id   = (parakeet_seq_id **) malloc(sizeof(parakeet_seq_id *) * (n_tokens + 1));
+    for (int i = 0; i < n_tokens; ++i) {
+        batch.seq_id[i] = (parakeet_seq_id *) malloc(sizeof(parakeet_seq_id));
+    }
+    batch.seq_id[n_tokens] = nullptr;
+    batch.logits   = (int8_t *)          malloc(sizeof(int8_t)           * n_tokens);
+
+    return batch;
+}
+
+static void parakeet_batch_free(struct parakeet_batch batch) {
+    if (batch.token)    free(batch.token);
+    if (batch.pos)      free(batch.pos);
+    if (batch.n_seq_id) free(batch.n_seq_id);
+    if (batch.seq_id) {
+        for (int i = 0; batch.seq_id[i]; ++i) {
+            free(batch.seq_id[i]);
+        }
+        free(batch.seq_id);
+    }
+    if (batch.logits)   free(batch.logits);
+}
+
+static void parakeet_batch_prep_legacy(parakeet_batch & batch, const parakeet_token * tokens, int n_tokens, int n_past, int seq_id) {
+    batch.n_tokens = n_tokens;
+    for (int i = 0; i < n_tokens; ++i) {
+        if (tokens) {
+            batch.token[i] = tokens[i];
+        }
+        batch.pos     [i]    = n_past + i;
+        batch.n_seq_id[i]    = 1;
+        batch.seq_id  [i][0] = seq_id;
+        batch.logits  [i]    = 0;
+    }
+    batch.logits[n_tokens - 1] = 1;
+}
+
+
+static size_t parakeet_sched_size(struct parakeet_sched & allocr) {
+    size_t size = allocr.meta.size();
+    for (int i = 0; i < ggml_backend_sched_get_n_backends(allocr.sched); ++i) {
+        ggml_backend_t backend = ggml_backend_sched_get_backend(allocr.sched, i);
+        size += ggml_backend_sched_get_buffer_size(allocr.sched, backend);
+    }
+    return size;
+}
+
+// measure the memory usage of a graph and prepare the allocr's internal data buffer
+static bool parakeet_sched_graph_init(struct parakeet_sched & allocr, std::vector<ggml_backend_t> backends, std::function<struct ggml_cgraph *()> && get_graph) {
+    auto & sched = allocr.sched;
+    auto & meta  = allocr.meta;
+
+    sched = ggml_backend_sched_new(backends.data(), nullptr, backends.size(), PARAKEET_MAX_NODES, false, true);
+
+    if (!sched) {
+        PARAKEET_LOG_ERROR("%s: failed to create scheduler\n", __func__);
+        return false;
+    }
+
+    meta.resize(ggml_tensor_overhead()*PARAKEET_MAX_NODES + ggml_graph_overhead());
+
+    // since there are dependencies between the different graphs,
+    // we need to allocate them instead of only reserving to get the correct compute buffer size
+    if (!ggml_backend_sched_alloc_graph(sched, get_graph())) {
+        // failed to allocate the compute buffer
+        PARAKEET_LOG_ERROR("%s: failed to allocate the compute buffer\n", __func__);
+        ggml_backend_sched_free(sched);
+        sched = nullptr;
+        return false;
+    }
+
+    ggml_backend_sched_reset(sched);
+
+    return true;
+}
+
 
 template<typename T>
 static void read_safe(parakeet_model_loader * loader, T & dest) {
