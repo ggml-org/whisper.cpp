@@ -34,7 +34,7 @@ LIB_NAME = "whisper".ext(RbConfig::CONFIG["DLEXT"])
 SO_FILE = File.join("ext", LIB_NAME)
 LIB_FILE = File.join("lib", LIB_NAME)
 
-file "ext/Makefile" => SRC + ["ext/extconf.rb"] + SOURCES do |t|
+file "ext/Makefile" => SRC + SOURCES + FileList["ext/*.rb"] do |t|
   chdir "ext" do
     ruby "extconf.rb"
   end
