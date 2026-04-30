@@ -196,8 +196,6 @@ extern "C" {
         float sample_ms;
         float encode_ms;
         float decode_ms;
-        float batchd_ms;
-        float prompt_ms;
     };
     PARAKEET_API struct parakeet_timings * parakeet_get_timings(struct parakeet_context * ctx);
     PARAKEET_API void parakeet_print_timings(struct parakeet_context * ctx);
@@ -245,7 +243,6 @@ extern "C" {
 
         bool no_context;        // do not use past transcription (if any) as context
 
-        // [EXPERIMENTAL] speed-up techniques
         int  audio_ctx;         // overwrite the audio context size (0 = use default)
 
         int  chunk_length_ms;  // length of each chunk in ms
