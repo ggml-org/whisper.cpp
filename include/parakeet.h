@@ -295,16 +295,6 @@ extern "C" {
                             const float * samples,
                                     int   n_samples);
 
-    // Split the input audio in chunks and process each chunk separately using parakeet_full_with_state()
-    // Result is stored in the default state of the context
-    // Not thread safe if executed in parallel on the same context.
-    PARAKEET_API int parakeet_full_parallel(
-                struct parakeet_context * ctx,
-            struct parakeet_full_params   params,
-                            const float * samples,
-                                    int   n_samples,
-                                    int   n_processors);
-
     // Process a single chunk of audio data that fits within the model's audio context window.
     // This is more efficient than parakeet_full() for short audio clips.
     PARAKEET_API int parakeet_chunk(

@@ -57,6 +57,6 @@ int main() {
 
     parakeet_free(pctx);
 
-    printf("\nTest passed: parakeet_full_parallel succeeded!\n");
+    printf("\nTest passed: parakeet_full succeeded!\n");
     return 0;
 }
