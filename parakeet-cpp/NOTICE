@@ -1,0 +1,73 @@
+parakeet.cpp
+Copyright 2026 QVAC contributors
+
+This product includes third-party components under their respective
+licenses. parakeet.cpp itself is licensed under Apache-2.0; bundled
+dependencies are governed by the licenses listed below. Python packages
+listed under Python Dependencies are optional and apply only to scripts/
+(conversion and offline reference tooling), not to C++ inference binaries.
+
+=========================================================================
+C++ Dependencies
+=========================================================================
+
+--- mit (MIT License) ---
+
+  ggml
+    https://github.com/ggml-org/ggml
+
+--- dual-license (Unlicense or MIT-0; recipient may choose either; see file) ---
+
+  dr_wav (dr_libs)
+    src/dr_wav.h
+    https://github.com/mackron/dr_libs
+
+  miniaudio
+    examples/miniaudio.h
+    https://github.com/mackron/miniaudio
+    https://miniaud.io/
+
+--- apache-2.0-with-llvm-exception ---
+
+  libc++ (LLVM C++ Standard Library), when linked (e.g. some Linux toolchains)
+    https://github.com/llvm/llvm-project
+
+=========================================================================
+Python Dependencies
+=========================================================================
+
+--- apache-2.0 (Apache License 2.0) ---
+
+  nemo_toolkit (NeMo)
+    https://github.com/NVIDIA/NeMo
+  sentencepiece
+    https://github.com/google/sentencepiece
+
+--- bsd-2-clause ---
+
+  soundfile (PySoundFile)
+    https://python-soundfile.readthedocs.io/
+
+--- bsd-3-clause ---
+
+  numpy
+    https://numpy.org/
+  torch (PyTorch)
+    https://pytorch.org/
+
+--- isc ---
+
+  librosa
+    https://librosa.org/
+
+--- lgpl-2.1-or-later ---
+
+  libsndfile (used via soundfile)
+    http://www.mega-nerd.com/libsndfile/
+
+--- mit (MIT License) ---
+
+  gguf
+    https://pypi.org/project/gguf/
+  PyYAML
+    https://github.com/yaml/pyyaml
