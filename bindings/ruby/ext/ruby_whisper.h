@@ -2,10 +2,16 @@
 #define RUBY_WHISPER_H
 
 #include <ruby.h>
+#include <ruby/version.h>
 #include <ruby/util.h>
 #include <ruby/thread.h>
 #include <ruby/memory_view.h>
 #include "whisper.h"
+
+#if RUBY_API_VERSION_MAJOR < 4
+// Exists but not declared as public API
+int ruby_thread_has_gvl_p(void);
+#endif
 
 typedef struct {
   VALUE *context;
