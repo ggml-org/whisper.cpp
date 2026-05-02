@@ -9,18 +9,28 @@ class Options
     write_cache_file
   end
 
-  def cache_path
-    File.join(__dir__, "sources", "Options.cmake")
+  def to_a
+    [
+      "-D", "BUILD_SHARED_LIBS=OFF",
+      "-D", "WHISPER_BUILD_TESTS=OFF",
+      "-D", "CMAKE_ARCHIVE_OUTPUT_DIRECTORY=#{__dir__}",
+      "-D", "CMAKE_POSITION_INDEPENDENT_CODE=ON",
+      "-C", cache_path
+    ]
   end
 
-  def cmake_options
-    return @cmake_options if @cmake_options
+  def to_s
+    command_line(*to_a)
+  end
 
-    output = nil
-    Dir.chdir __dir__ do
-      output = IO.popen([@cmake, "-S", "sources", "-B", "build", "-L"]) {|io| io.read}
-    end
-    @cmake_options = output.lines.drop_while {|line| line.chomp != "-- Cache values"}.drop(1)
+  def graphviz_cmake_args
+    []
+  end
+
+  private
+
+  def cmake_options
+    @cmake_options ||= cmake_options_output.lines.drop_while {|line| line.chomp != "-- Cache values"}.drop(1)
                        .filter_map {|line|
                          option, value = line.chomp.split("=", 2)
                          name, type = option.split(":", 2)
@@ -34,7 +44,11 @@ class Options
                        }.to_h
   end
 
-  private
+  def cmake_options_output
+    Dir.chdir(__dir__) do
+      IO.popen([@cmake, "-S", "sources", "-B", "build", "-L"]) {|io| io.read}
+    end
+  end
 
   def configure
     cmake_options.each_pair do |name, (type, default_value)|
@@ -83,6 +97,10 @@ class Options
     end
   end
 
+  def cache_path
+    File.join(__dir__, "sources", "Options.cmake")
+  end
+
   def write_cache_file
     FileUtils.mkpath File.dirname(cache_path)
     File.open cache_path, "w" do |file|
@@ -98,6 +116,10 @@ class Options
   end
 
   def escape_cmake(str)
-    str.gsub(/([\\"])/, '\\\\\1')
+    str.gsub(/[\\"]/, '\\\\\&')
+  end
+
+  def command_line(*args)
+    args.collect {|arg| %|"#{arg.to_s.gsub(/[\\"]/, '\\\\\&')}"|}.join(" ")
   end
 end
