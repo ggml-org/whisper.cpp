@@ -101,6 +101,7 @@ struct whisper_params {
     bool print_realtime  = false;
     bool print_progress  = false;
     bool no_timestamps   = false;
+    bool token_timestamps = true;
     bool use_gpu         = true;
     bool flash_attn      = true;
     int32_t gpu_device   = 0;
@@ -550,6 +551,12 @@ void get_req_parameters(const Request & req, whisper_params & params)
     {
         params.no_timestamps = parse_str_to_bool(req.get_file_value("no_timestamps").content);
     }
+    if (req.has_file("token_timestamps"))
+    {
+        params.token_timestamps = parse_str_to_bool(req.get_file_value("token_timestamps").content);
+    } else {
+        params.token_timestamps = !params.no_timestamps;
+    }
     if (req.has_file("language"))
     {
         params.language = req.get_file_value("language").content;
@@ -690,10 +697,10 @@ int main(int argc, char ** argv) {
         if (params.dtw == "large.v3") {
             cparams.dtw_aheads_preset = WHISPER_AHEADS_LARGE_V3;
         }
-        if (params.dtw == "large.v3.turbo") { 
+        if (params.dtw == "large.v3.turbo") {
             cparams.dtw_aheads_preset = WHISPER_AHEADS_LARGE_V3_TURBO;
         }
-        
+
         if (cparams.dtw_aheads_preset == WHISPER_AHEADS_NONE) {
             fprintf(stderr, "error: unknown DTW preset '%s'\n", params.dtw.c_str());
             return 3;
@@ -939,7 +946,7 @@ int main(int argc, char ** argv) {
             wparams.logprob_thold    = params.logprob_thold;
 
             wparams.no_timestamps    = params.no_timestamps;
-            wparams.token_timestamps = !params.no_timestamps;
+            wparams.token_timestamps = params.token_timestamps;
             wparams.no_context       = params.no_context;
 
             wparams.suppress_nst     = params.suppress_nst;
@@ -1043,7 +1050,7 @@ int main(int argc, char ** argv) {
             res.set_content(ss.str(), "text/vtt");
         } else if (params.response_format == vjson_format) {
             /* try to match openai/whisper's Python format */
-            std::string results = output_str(ctx, params, pcmf32s); 
+            std::string results = output_str(ctx, params, pcmf32s);
             json jres = json{
                 {"task", params.translate ? "translate" : "transcribe"},
                 {"language", whisper_lang_str_full(whisper_full_lang_id(ctx))},
@@ -1088,7 +1095,7 @@ int main(int argc, char ** argv) {
 
                     segment["tokens"].push_back(token.id);
                     json word = json{{"word", whisper_full_get_token_text(ctx, i, j)}};
-                    if (!params.no_timestamps) {
+                    if (!params.no_timestamps && params.token_timestamps) {
                         word["start"] = token.t0 * 0.01;
                         word["end"] = token.t1 * 0.01;
                         word["t_dtw"] = token.t_dtw;
