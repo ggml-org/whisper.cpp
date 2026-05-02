@@ -6800,6 +6800,39 @@ int whisper_full_with_state(
 
     result_all.clear();
 
+    // Guard against hallucinations on zero-filled input when a specific
+    // language is forced (e.g. -l ru, -l es). The auto-detect path
+    // naturally emits "[BLANK_AUDIO]" for silent input, but forcing a
+    // language biases the decoder toward language-specific fallback
+    // tokens (Cyrillic music tags on -l ru, "[Música]" on -l es, etc.).
+    // Detect zero-filled input up-front in the forced-language case and
+    // emit a single [BLANK_AUDIO] segment spanning the input duration,
+    // matching the auto-detect path's output shape.
+    // The auto-detect case is intentionally left untouched.
+    // ref: https://github.com/ggml-org/whisper.cpp/issues/1881
+    const bool language_is_forced = (params.language != nullptr
+        && strlen(params.language) > 0
+        && strcmp(params.language, "auto") != 0
+        && !params.detect_language);
+    if (n_samples > 0 && language_is_forced) {
+        bool is_all_zero = true;
+        for (int i = 0; i < n_samples; ++i) {
+            if (samples[i] != 0.0f) {
+                is_all_zero = false;
+                break;
+            }
+        }
+        if (is_all_zero) {
+            WHISPER_LOG_INFO("%s: input is zero-filled with forced language %s; emitting blank-audio segment (ref: #1881)\n", __func__, params.language);
+            const int64_t t1 = (int64_t) n_samples * 100 / WHISPER_SAMPLE_RATE;
+            result_all.push_back({ 0, t1, " [BLANK_AUDIO]", 1.0f, {}, false });
+            if (params.new_segment_callback && !ctx->params.dtw_token_timestamps) {
+                params.new_segment_callback(ctx, state, 1, params.new_segment_callback_user_data);
+            }
+            return 0;
+        }
+    }
+
     if (n_samples > 0) {
         // compute log mel spectrogram
         if (whisper_pcm_to_mel_with_state(ctx, state, samples, n_samples, params.n_threads) != 0) {
