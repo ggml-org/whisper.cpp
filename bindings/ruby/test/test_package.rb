@@ -1,12 +1,12 @@
 require_relative "helper"
 require 'tempfile'
 require 'tmpdir'
-require 'shellwords'
+require 'open3'
 
 class TestPackage < TestBase
   def test_build
     Tempfile.create do |file|
-      assert system("gem", "build", "whispercpp.gemspec", "--output", file.to_path.shellescape, exception: true)
+      assert system("gem", "build", "whispercpp.gemspec", "--output", file.to_path, exception: true)
       assert file.size > 0
       assert_path_exist file.to_path
     end
@@ -20,7 +20,7 @@ class TestPackage < TestBase
     def test_install
       gemspec = Gem::Specification.load("whispercpp.gemspec")
       Dir.mktmpdir do |dir|
-        system "gem", "install", "--install-dir", dir.shellescape, "--no-document", "pkg/#{gemspec.file_name.shellescape}", exception: true
+        system "gem", "install", "--install-dir", dir, "--no-document", File.join("pkg", gemspec.file_name), exception: true
         assert_installed dir, gemspec.version
       end
     end
@@ -29,13 +29,14 @@ class TestPackage < TestBase
       omit_unless RUBY_PLATFORM.match?(/darwin/) do
         gemspec = Gem::Specification.load("whispercpp.gemspec")
         Dir.mktmpdir do |dir|
-          system "gem", "install", "--install-dir", dir.shellescape, "--no-document", "pkg/#{gemspec.file_name.shellescape}", "--", "--enable-whisper-coreml", exception: true
+          system "gem", "install", "--install-dir", dir, "--no-document", File.join("pkg", gemspec.file_name), "--", "--enable-whisper-coreml", exception: true
           assert_installed dir, gemspec.version
           libdir = File.join(dir, "gems", "#{gemspec.name}-#{gemspec.version}", "lib")
           assert_nothing_raised do
             system "ruby", "-I", libdir, "-r", "whisper", "-e", "Whisper::Context.new('tiny')", exception: true
           end
-          assert_match(/COREML = 1/, `ruby -I #{libdir.shellescape} -r whisper -e 'puts Whisper.system_info_str'`)
+          output, status = Open3.capture2("ruby", "-I", libdir, "-r", "whisper", "-e", "puts Whisper.system_info_str")
+          assert_match /COREML = 1/, output
         end
       end
     end
