@@ -6812,7 +6812,21 @@ int whisper_full_with_state(
     if (params.language == nullptr || strlen(params.language) == 0 || strcmp(params.language, "auto") == 0 || params.detect_language) {
         std::vector<float> probs(whisper_lang_max_id() + 1, 0.0f);
 
-        const auto lang_id = whisper_lang_auto_detect_with_state(ctx, state, 0, params.n_threads, probs.data());
+        // Respect the user's offset_ms when choosing the window for language
+        // detection. Previously this was hardcoded to 0, which meant that on
+        // audio like "1 minute of French then 30 minutes of German" with
+        // offset_ms=60000, transcription correctly started at the 1-minute
+        // mark but language detection still picked the French prefix.
+        // If the offset falls past the end of the audio (including short
+        // files where offset_ms exceeds total duration), fall back to 0 so
+        // auto-detect still returns a valid language. The too-short-audio
+        // guard later in this function will then handle the empty-decode
+        // case cleanly.
+        // ref: https://github.com/ggml-org/whisper.cpp/issues/1831
+        const int detect_offset_ms = (params.offset_ms > 0 && (params.offset_ms / 10) < state->mel.n_len_org)
+            ? params.offset_ms
+            : 0;
+        const auto lang_id = whisper_lang_auto_detect_with_state(ctx, state, detect_offset_ms, params.n_threads, probs.data());
         if (lang_id < 0) {
             WHISPER_LOG_ERROR("%s: failed to auto-detect language\n", __func__);
             return -3;
