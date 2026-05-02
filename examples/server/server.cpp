@@ -817,7 +817,7 @@ int main(int argc, char ** argv) {
         }
         auto audio_file = req.get_file_value("file");
 
-        // check non-required fields
+        whisper_params params = default_params;
         get_req_parameters(req, params);
 
         std::string filename{audio_file.filename};
@@ -1120,9 +1120,6 @@ int main(int argc, char ** argv) {
             res.set_content(jres.dump(-1, ' ', false, json::error_handler_t::replace),
                             "application/json");
         }
-
-        // reset params to their defaults
-        params = default_params;
     });
     svr->Post(sparams.request_path + "/load", [&](const Request &req, Response &res){
         std::lock_guard<std::mutex> lock(whisper_mutex);
