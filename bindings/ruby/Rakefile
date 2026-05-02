@@ -16,7 +16,7 @@ EXTSOURCES.each do |src|
   file src
   directory dir
   file dest => [src, dir] do |t|
-    cp t.source, t.name
+    copy t.source, t.name
   end
   SOURCES.include dest
 end
