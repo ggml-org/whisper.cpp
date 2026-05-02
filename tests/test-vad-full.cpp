@@ -37,7 +37,7 @@ int main() {
     wparams.vad_params.max_speech_duration_s   = FLT_MAX;
     wparams.vad_params.speech_pad_ms           = 30;
 
-    assert(whisper_full_parallel(wctx, wparams, pcmf32.data(), pcmf32.size(), 1) == 0);
+    assert(whisper_full_parallel(wctx, wparams, pcmf32.data(), static_cast<int>(pcmf32.size()), 1) == 0);
 
     const int n_segments = whisper_full_n_segments(wctx);
     assert(n_segments == 1);
