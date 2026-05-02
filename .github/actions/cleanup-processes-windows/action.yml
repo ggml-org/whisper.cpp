@@ -1,0 +1,15 @@
+name: 'Cleanup GPU Processes (Windows)'
+description: 'Kill zombie whisper/GPU processes on self-hosted Windows runners'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Kill zombie processes
+      shell: pwsh
+      run: |
+        Write-Host "=== Cleaning up stale processes ==="
+        $processNames = @("whisper-cli", "whisper-bench", "whisper-server", "ctest")
+        foreach ($name in $processNames) {
+          Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        }
+        Write-Host "=== Cleanup complete ==="

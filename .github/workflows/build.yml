@@ -45,6 +45,14 @@ on:
         options:
           - full-ci
           - release-only
+      gfx_target:
+        description: 'AMD GPU targets (comma-separated)'
+        required: false
+        default: 'gfx1151,gfx1150,gfx120X,gfx110X'
+      rocm_version:
+        description: 'ROCm version to use (e.g., 7.12.0, 7.2.1). Available versions: https://repo.amd.com/rocm/tarball/'
+        required: false
+        default: '7.12.0'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -57,6 +65,8 @@ env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   ubuntu_image: "ubuntu:22.04"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  GFX_TARGETS: ${{ github.event.inputs.gfx_target || 'gfx1151,gfx1150,gfx120X,gfx110X' }}
+  ROCM_VERSION: ${{ github.event.inputs.rocm_version || '7.12.0' }}
 
 jobs:
   determine-tag:
@@ -64,13 +74,11 @@ jobs:
     outputs:
       tag_name: ${{ steps.tag.outputs.name }}
       should_release: ${{ steps.tag.outputs.should_release }}
-
     steps:
       - name: Checkout with full history
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
       - name: Determine tag name
         id: tag
         shell: bash
@@ -114,6 +122,33 @@ jobs:
           echo "name=$TAG_NAME" >> $GITHUB_OUTPUT
           echo "should_release=$SHOULD_RELEASE" >> $GITHUB_OUTPUT
 
+  prepare-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      windows_matrix: ${{ steps.set-matrix.outputs.windows_matrix }}
+      ubuntu_matrix: ${{ steps.set-matrix.outputs.ubuntu_matrix }}
+    steps:
+    - name: Set matrix
+      id: set-matrix
+      run: |
+        targets="${{ env.GFX_TARGETS }}"
+        echo "Input targets: $targets"
+
+        target_array=$(echo "$targets" \
+          | tr ',' '\n' \
+          | sed 's/^ *//;s/ *$//' \
+          | sed 's/^"//;s/"$//' \
+          | jq -R . \
+          | jq -s .)
+
+        windows_matrix=$(echo "$target_array" \
+          | jq -c '{gfx_target: ., sdl2: ["ON"], build: ["Release"], arch: ["x64"], s2arc: ["x64"], s2ver: ["2.28.5"]}')
+
+        ubuntu_matrix=$(echo "$target_array" \
+          | jq -c '{gfx_target: ., sdl2: ["ON"], build: ["Release"], arch: ["linux/amd64"]}')
+
+        echo "windows_matrix=$windows_matrix" >> $GITHUB_OUTPUT
+        echo "ubuntu_matrix=$ubuntu_matrix" >> $GITHUB_OUTPUT
 
   ubuntu-22:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
@@ -378,15 +413,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build: [Debug, Release]
-        #arch: [linux/amd64, linux/arm64, linux/arm/v7, linux/ppc64le]
-        # TODO: arm/v7 disabled due to clang bug
-        #       https://github.com/ggerganov/whisper.cpp/actions/runs/9657764109/job/26637633042?pr=2256#step:4:1990
-        arch: [linux/amd64, linux/arm64, linux/ppc64le]
+        arch: [linux/amd64]
+        build: [Release]
 
     steps:
       - name: Clone
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -406,6 +438,182 @@ jobs:
             cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
             make
             ctest -L gh --output-on-failure'
+  
+  ubuntu-rocm:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-22.04
+    needs: [determine-tag, prepare-matrix]
+    strategy:
+      matrix: ${{fromJson(needs.prepare-matrix.outputs.ubuntu_matrix)}}
+      fail-fast: false
+
+    steps:
+      - name: Free disk space
+        run: |
+          echo "=== Disk usage before cleanup ==="
+          df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/share/boost \
+            /usr/share/dotnet /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force 2>/dev/null || true
+          echo "=== Disk usage after cleanup ==="
+          df -h /
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y cmake ninja-build unzip curl build-essential libsdl2-dev git patchelf
+
+      - name: Download and extract ROCm directly to /opt/rocm
+        run: |
+          source ci/resolve-rocm-version.sh linux "${{ matrix.gfx_target }}" "${{ env.ROCM_VERSION }}"
+          echo "DETECTED_ROCM_VERSION=$ROCM_RESOLVED_VERSION" >> $GITHUB_ENV
+          sudo mkdir -p /opt/rocm
+          curl -sL "$ROCM_TARBALL_URL" | sudo tar --use-compress-program=gzip -xf - -C /opt/rocm --strip-components=1
+
+      - name: Set ROCm environment variables
+        run: |
+          echo "HIP_PATH=/opt/rocm" >> $GITHUB_ENV
+          echo "ROCM_PATH=/opt/rocm" >> $GITHUB_ENV
+          echo "HIP_PLATFORM=amd" >> $GITHUB_ENV
+          echo "/opt/rocm/bin:/opt/rocm/llvm/bin:$PATH" >> $GITHUB_PATH
+      
+      - name: Find ROCm bitcode path
+        run: |
+          # Dynamically find the directory containing device libraries (amdgcn/bitcode)
+          BITCODE_PATH=$(find /opt/rocm -type d -name bitcode -print -quit)
+          
+          if [ -z "$BITCODE_PATH" ]; then
+            echo "::error::Could not find 'bitcode' directory in /opt/rocm"
+            find /opt/rocm -maxdepth 5
+            exit 1
+          fi
+          
+          echo "Found bitcode at: $BITCODE_PATH"
+          echo "ROCM_BITCODE_PATH=$BITCODE_PATH" >> $GITHUB_ENV
+
+      - name: Configure CMake
+        run: |
+          source ci/map-gpu-target.sh "${{ matrix.gfx_target }}"
+
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_C_COMPILER=/opt/rocm/llvm/bin/clang \
+            -DCMAKE_CXX_COMPILER=/opt/rocm/llvm/bin/clang++ \
+            -DCMAKE_HIP_FLAGS="--rocm-path=/opt/rocm --rocm-device-lib-path=${{ env.ROCM_BITCODE_PATH }}" \
+            -DCMAKE_PREFIX_PATH=/opt/rocm \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
+            -DGPU_TARGETS="$MAPPED_GPU_TARGET" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DGGML_HIP=ON \
+            -DWHISPER_SDL2=${{ matrix.sdl2 }}
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.build }} -j $(nproc)
+
+      # Copy Backend ROCm Folders ---
+      - name: Copy ROCm core and sysdep libs to build directory
+        run: |
+          build_bin_path="build/bin"
+          rocm_bin_path="/opt/rocm/bin"
+          rocm_lib_path="/opt/rocm/lib"
+          rocm_sysdeps_path="/opt/rocm/lib/rocm_sysdeps/lib"
+          
+          # Ensure build directory exists
+          mkdir -p "$build_bin_path"
+
+          # Copy rocblas/library folder
+          rocblas_lib_path="$rocm_lib_path/rocblas/library"
+          if [ -d "$rocblas_lib_path" ]; then
+            dest_rocblas_path="$build_bin_path/rocblas/library"
+            mkdir -p "$(dirname "$dest_rocblas_path")"
+            cp -r "$rocblas_lib_path" "$(dirname "$dest_rocblas_path")/"
+            echo "Copied: rocblas/library"
+          fi
+
+          # Copy hipblaslt/library folder
+          hipblaslt_lib_path="$rocm_lib_path/hipblaslt/library"
+          if [ -d "$hipblaslt_lib_path" ]; then
+            dest_hipblaslt_path="$build_bin_path/hipblaslt/library"
+            mkdir -p "$(dirname "$dest_hipblaslt_path")"
+            cp -r "$hipblaslt_lib_path" "$(dirname "$dest_hipblaslt_path")/"
+            echo "Copied: hipblaslt/library"
+          fi
+ 
+          # Copy standard ROCm shared libraries
+          echo "Copying core shared libraries..."
+          cp -v $rocm_lib_path/libhipblas.so* "$build_bin_path/" 2>/dev/null || true
+          cp -v $rocm_lib_path/librocblas.so* "$build_bin_path/" 2>/dev/null || true
+          cp -v $rocm_lib_path/libamdhip64.so* "$build_bin_path/" 2>/dev/null || true
+          cp -v $rocm_lib_path/librocsolver.so* "$build_bin_path/" 2>/dev/null || true
+          cp -v $rocm_lib_path/libroctx64.so* "$build_bin_path/" 2>/dev/null || true
+          cp -v $rocm_lib_path/libhipblaslt.so* "$build_bin_path/" 2>/dev/null || true
+          cp -v $rocm_lib_path/libamd_comgr.so* "$build_bin_path/" 2>/dev/null || true
+          cp -v $rocm_lib_path/libhsa-runtime64.so* "$build_bin_path/" 2>/dev/null || true
+          
+          # Copy LLVM runtime libs
+          cp -v $rocm_lib_path/llvm/lib/libLLVM.so* "$build_bin_path/" 2>/dev/null || true
+          cp -v $rocm_lib_path/llvm/lib/libclang-cpp.so* "$build_bin_path/" 2>/dev/null || true
+
+          if [ -d "$rocm_sysdeps_path" ]; then
+            echo "Copying sysdep libraries from $rocm_sysdeps_path..."
+            # Using a broad wildcard ensures we grab elf.so.1, drm.so.2, numa.so.1, etc.
+            cp -v $rocm_sysdeps_path/librocm_sysdeps_*.so* "$build_bin_path/"
+          fi
+
+      - name: Bundle Linked Libraries
+        run: |
+          build_bin="build/bin"
+          echo "Scanning dependencies for whisper-cli..."
+
+          ldd "$build_bin/whisper-cli" | grep "=> /" | while read -r line; do
+              
+              soname=$(echo "$line" | awk '{print $1}')
+              path=$(echo "$line" | awk '{print $3}')
+              
+              if [[ "$soname" =~ ^(libc\.so|libm\.so|libdl\.so|librt\.so|libpthread\.so|libstdc\+\+|libgcc_s|ld-linux) ]]; then
+                  continue
+              fi
+              echo "Bundling: $soname"
+              echo "  Source: $path"
+              cp -L "$path" "$build_bin/$soname"
+          done
+          chmod +x "$build_bin"/*.so*
+
+      - name: Set RPATH for portable distribution
+        run: |
+          cd build/bin
+          # Set RPATH to $ORIGIN so the binary looks for .so files in its own directory
+          # wildcards catch whisper-cli, whisper-bench, etc., plus shared libs
+          for file in *.so* whisper-*; do
+            if [ -f "$file" ] && [ ! -L "$file" ]; then
+               # Only patch ELF files (executables and shared objects)
+               if file "$file" | grep -q "ELF"; then
+                 patchelf --set-rpath '$ORIGIN' "$file" 2>/dev/null || true
+                 echo "Patched RPATH for $file"
+               fi
+            fi
+          done
+
+      - name: Pack bin artifacts
+        run: |
+          cd build/bin
+          SAFE_ARCH=$(echo "${{ matrix.arch }}" | tr '/' '-')
+          
+          # 1. Save SAFE_ARCH to GITHUB_ENV so the next step can use it
+          echo "SAFE_ARCH=$SAFE_ARCH" >> $GITHUB_ENV
+          
+          # Include target in filename (e.g., whisper-bin-gfx1100-linux-amd64.zip)
+          zip -r ../../whisper-bin-${{ matrix.gfx_target }}-${SAFE_ARCH}.zip .
+
+      - name: Upload binaries
+        if: ${{ matrix.sdl2 == 'ON' && needs.determine-tag.outputs.should_release }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-bin-${{ matrix.gfx_target }}-${{ env.SAFE_ARCH }}
+          path: whisper-bin-*.zip
 
   ubuntu-22-gcc-sanitized:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
@@ -681,7 +889,7 @@ jobs:
               Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-bin-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
-        if: matrix.sdl2 == 'ON' && ${{ needs.determine-tag.outputs.should_release }}
+        if: ${{ matrix.sdl2 == 'ON' && needs.determine-tag.outputs.should_release }}
         uses: actions/upload-artifact@v6
         with:
           name: whisper-bin-${{ matrix.arch }}.zip
@@ -767,7 +975,7 @@ jobs:
               Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-blas-bin-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
-        if: matrix.blas == 'ON' && matrix.sdl2 == 'ON' && ${{ needs.determine-tag.outputs.should_release }}
+        if: ${{ matrix.blas == 'ON' && matrix.sdl2 == 'ON' && needs.determine-tag.outputs.should_release }}
         uses: actions/upload-artifact@v6
         with:
           name: whisper-blas-bin-${{ matrix.arch }}.zip
@@ -981,6 +1189,185 @@ jobs:
         with:
           name: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
           path: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
+  
+  windows-rocm:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: windows-latest
+    needs: [determine-tag, prepare-matrix]
+    strategy:
+      matrix: ${{fromJson(needs.prepare-matrix.outputs.windows_matrix)}}
+      fail-fast: false
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Install Ninja
+        run: choco install ninja
+
+      - name: Fetch SDL2 and Patch Header (Robust)
+        if: matrix.sdl2 == 'ON'
+        shell: pwsh
+        run: |
+          $sdlVer = "${{ matrix.s2ver }}"
+          $url = "https://github.com/libsdl-org/SDL/releases/download/release-$sdlVer/SDL2-devel-$sdlVer-VC.zip"
+          
+          Write-Host "Downloading SDL2 from $url..."
+          Invoke-WebRequest -Uri $url -OutFile "sdl2.zip"
+          
+          Write-Host "Extracting SDL2..."
+          7z x sdl2.zip
+          
+          # 1. Locate CMake config dynamically
+          $cmakeFile = Get-ChildItem -Path . -Recurse -Filter "sdl2-config.cmake" | Select-Object -First 1
+          if ($cmakeFile) {
+            $cmakeDir = $cmakeFile.DirectoryName
+            Write-Host "Found SDL2 CMake dir at: $cmakeDir"
+            echo "SDL2_DIR=$cmakeDir" >> $env:GITHUB_ENV
+          } else {
+            Write-Error "FATAL: Could not find sdl2-config.cmake inside extracted files!"
+            exit 1
+          }
+
+          # 2. Find and Patch SDL_endian.h recursively
+          Write-Host "Searching for SDL_endian.h..."
+          $headerFile = Get-ChildItem -Path . -Recurse -Filter "SDL_endian.h" | Select-Object -First 1
+          
+          if ($headerFile) {
+             Write-Host "Found header at: $($headerFile.FullName)"
+             $content = Get-Content $headerFile.FullName -Raw
+             
+             # The Fix: Comment out the extern declaration
+             if ($content -match 'extern void _m_prefetch') {
+                $content = $content -replace 'extern void _m_prefetch\(void \*__P\);', '// extern void _m_prefetch(void *__P);'
+                Set-Content -Path $headerFile.FullName -Value $content
+                Write-Host "SUCCESS: Patched _m_prefetch in SDL_endian.h"
+             } else {
+                Write-Host "WARNING: _m_prefetch string not found. It might be a different SDL version or already patched."
+             }
+          } else {
+             # Debug output if file is missing
+             Write-Host "Listing root directories:"
+             Get-ChildItem -Path . -Directory | Format-Table Name
+             Write-Error "FATAL: Could not locate SDL_endian.h in the workspace."
+             exit 1
+          }
+
+      - name: Resolve ROCm version and download tarball
+        shell: bash
+        run: |
+          source ci/resolve-rocm-version.sh windows "${{ matrix.gfx_target }}" "${{ env.ROCM_VERSION }}"
+          echo "DETECTED_ROCM_VERSION=$ROCM_RESOLVED_VERSION" >> $GITHUB_ENV
+          curl -sL "$ROCM_TARBALL_URL" -o rocm.tar.gz
+
+      - name: Extract ROCm to C:\opt\rocm
+        run: |
+          New-Item -ItemType Directory -Force -Path "C:\opt\rocm"
+          tar -xzf rocm.tar.gz -C C:\opt\rocm --strip-components=1
+
+      - name: Map GPU target
+        id: gpu-target
+        shell: bash
+        run: |
+          source ci/map-gpu-target.sh "${{ matrix.gfx_target }}"
+          echo "mapped=$MAPPED_GPU_TARGET" >> $GITHUB_OUTPUT
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $env:HIP_PATH = "C:\opt\rocm"
+          $env:HIP_PLATFORM = "amd"
+          $env:PATH = "$env:HIP_PATH\bin;$env:HIP_PATH\lib\llvm\bin;$env:PATH"
+
+          $cmakeArgs = @(
+            "-S", ".",
+            "-B", "build",
+            "-G", "Ninja Multi-Config",
+            "-DGPU_TARGETS=${{ steps.gpu-target.outputs.mapped }}",
+            "-DGGML_HIP=ON",
+            "-DCMAKE_C_COMPILER=$env:HIP_PATH/lib/llvm/bin/amdclang.exe",
+            "-DCMAKE_CXX_COMPILER=$env:HIP_PATH/lib/llvm/bin/amdclang++.exe",
+            "-DCMAKE_HIP_COMPILER=$env:HIP_PATH/lib/llvm/bin/amdclang++.exe",
+            "-DCMAKE_C_FLAGS='-D__PRFCHWINTRIN_H'",
+            "-DCMAKE_CXX_FLAGS='-D__PRFCHWINTRIN_H'",
+            "-DCMAKE_HIP_FLAGS=--rocm-path=C:/opt/rocm",
+            "-DCMAKE_PREFIX_PATH=$env:HIP_PATH",
+            "-DCMAKE_BUILD_TYPE=${{ matrix.build }}",
+            "-DBUILD_SHARED_LIBS=ON",
+            "-DWHISPER_SDL2=${{ matrix.sdl2 }}"
+          )
+          cmake @cmakeArgs
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake --build build --config ${{ matrix.build }} -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Copy ROCm core DLLs to build directory
+        run: |
+          $rocmVersion = if ($env:DETECTED_ROCM_VERSION) { $env:DETECTED_ROCM_VERSION } else { $env:ROCM_VERSION }
+          $buildBinPath = "build/bin/${{ matrix.build }}"
+          $rocmBinPath = "C:\opt\rocm\bin"
+          
+          Write-Host "Copying ROCm core DLL files..."
+          
+          if (Test-Path $rocmBinPath) {
+            # Copy files matching patterns
+            $filesToCopy = @(
+              "amdhip64_*.dll",
+              "amd_comgr*.dll", 
+              "libhipblas.dll",
+              "rocblas.dll",
+              "rocsolver.dll",
+              "hipblaslt.dll",
+              "libhipblaslt.dll",
+              "hipblas.dll"
+            )
+            
+            foreach ($pattern in $filesToCopy) {
+              $matchingFiles = Get-ChildItem -Path $rocmBinPath -Name $pattern -ErrorAction SilentlyContinue
+              if ($matchingFiles) {
+                foreach ($file in $matchingFiles) {
+                  Copy-Item (Join-Path $rocmBinPath $file) (Join-Path $buildBinPath $file)
+                  Write-Host "Copied: $file"
+                }
+              }
+            }
+            
+            # Copy rocblas/library
+            $rocblasLibPath = Join-Path $rocmBinPath "rocblas\library"
+            if (Test-Path $rocblasLibPath) {
+              Copy-Item -Path $rocblasLibPath -Destination (Join-Path $buildBinPath "rocblas\library") -Recurse -Force
+              Write-Host "Copied: rocblas\library"
+            }
+
+            # Copy hipblaslt/library
+            $hipblasltLibPath = Join-Path $rocmBinPath "hipblaslt\library"
+            if (Test-Path $hipblasltLibPath) {
+              Copy-Item -Path $hipblasltLibPath -Destination (Join-Path $buildBinPath "hipblaslt\library") -Recurse -Force
+              Write-Host "Copied: hipblaslt\library"
+            }
+          }
+
+      - name: Copy SDL2.dll
+        if: matrix.sdl2 == 'ON'
+        run: copy "$env:SDL2_DIR/../lib/${{ matrix.s2arc }}/SDL2.dll" "build/bin/${{ matrix.build }}"
+
+      - name: Pack bin artifacts
+        shell: pwsh
+        run: |
+          # Create unique zip name with target suffix
+          $zipName = "whisper-bin-${{ matrix.gfx_target }}-windows-${{ matrix.arch }}.zip"
+          Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath $zipName
+
+      - name: Upload binaries
+        if: ${{ matrix.sdl2 == 'ON' && needs.determine-tag.outputs.should_release }}
+        uses: actions/upload-artifact@v4
+        with:
+          # Unique artifact name per matrix job
+          name: whisper-bin-${{ matrix.gfx_target }}-windows-${{ matrix.arch }}.zip
+          path: whisper-bin-${{ matrix.gfx_target }}-windows-${{ matrix.arch }}.zip
 
   emscripten:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
@@ -1245,6 +1632,8 @@ jobs:
       - windows
       - windows-blas
       - windows-cublas
+      - windows-rocm
+      - ubuntu-rocm
 
     steps:
       - name: Clone
@@ -1558,3 +1947,114 @@ jobs:
         run: |
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/whisper.cpp ~/mnt/whisper.cpp
+
+  # AMD ROCm GPU Testing (self-hosted runners)
+  test-rocm-linux:
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - gfx_target: gfx1151
+            runner: [stx-halo, Linux]
+          # Uncomment when runners are available:
+          # - gfx_target: gfx1100
+          #   runner: [navi31, Linux]
+          # - gfx_target: gfx1200
+          #   runner: [rdna4, Linux]
+          # - gfx_target: gfx1150
+          #   runner: [rai300_400, Linux]
+
+    concurrency:
+      group: rocm-test-linux-${{ matrix.gfx_target }}-${{ github.head_ref || github.run_id }}
+      cancel-in-progress: true
+
+    timeout-minutes: 120
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Cleanup before run
+        uses: ./.github/actions/cleanup-processes-linux
+
+      - name: Verify ROCm installation
+        run: |
+          echo "=== ROCm Environment ==="
+          rocm-smi || echo "rocm-smi not found"
+          rocminfo | head -40 || echo "rocminfo not found"
+          hipcc --version || echo "hipcc not found"
+          echo "=== GPU Info ==="
+          rocm-smi --showproductname 2>/dev/null || true
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS=${{ matrix.gfx_target }} GG_BUILD_LOW_PERF=1 \
+            bash ./ci/run.sh ~/results/whisper.cpp-rocm-${{ matrix.gfx_target }} /mnt/whisper.cpp
+
+      - name: Cleanup after run
+        if: always()
+        uses: ./.github/actions/cleanup-processes-linux
+
+  test-rocm-windows:
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - gfx_target: gfx1151
+            runner: [stx-halo, Windows]
+          # Uncomment when runners are available:
+          # - gfx_target: gfx1100
+          #   runner: [navi31, Windows]
+          # - gfx_target: gfx1200
+          #   runner: [rdna4, Windows]
+          # - gfx_target: gfx1150
+          #   runner: [rai300_400, Windows]
+
+    concurrency:
+      group: rocm-test-windows-${{ matrix.gfx_target }}-${{ github.head_ref || github.run_id }}
+      cancel-in-progress: true
+
+    timeout-minutes: 120
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Cleanup before run
+        uses: ./.github/actions/cleanup-processes-windows
+
+      - name: Verify ROCm installation
+        shell: pwsh
+        run: |
+          Write-Host "=== ROCm Environment ==="
+          & "$env:HIP_PATH\bin\rocm-smi.exe" 2>$null
+          & "$env:HIP_PATH\bin\hipcc.exe" --version 2>$null
+
+      - name: Configure ROCm environment
+        shell: pwsh
+        run: |
+          $rocmPath = $env:HIP_PATH
+          if (-not $rocmPath) { $rocmPath = "C:\opt\rocm" }
+          echo "HIP_PATH=$rocmPath" >> $env:GITHUB_ENV
+          echo "ROCM_PATH=$rocmPath" >> $env:GITHUB_ENV
+          echo "HIP_PLATFORM=amd" >> $env:GITHUB_ENV
+          echo "$rocmPath\bin" >> $env:GITHUB_PATH
+          echo "$rocmPath\lib\llvm\bin" >> $env:GITHUB_PATH
+
+      - name: Test
+        id: ggml-ci
+        shell: bash
+        run: |
+          GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS=${{ matrix.gfx_target }} GG_BUILD_LOW_PERF=1 \
+            bash ./ci/run.sh ~/results/whisper.cpp-rocm-${{ matrix.gfx_target }} /mnt/whisper.cpp
+
+      - name: Cleanup after run
+        if: always()
+        uses: ./.github/actions/cleanup-processes-windows

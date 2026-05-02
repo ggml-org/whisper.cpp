@@ -1,0 +1,19 @@
+name: 'Cleanup GPU Processes (Linux)'
+description: 'Kill zombie whisper/GPU processes on self-hosted Linux runners'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Kill zombie processes
+      shell: bash
+      run: |
+        echo "=== Cleaning up stale processes ==="
+        pkill -f "whisper-cli" 2>/dev/null || true
+        pkill -f "whisper-bench" 2>/dev/null || true
+        pkill -f "whisper-server" 2>/dev/null || true
+        pkill -f "ctest.*whisper" 2>/dev/null || true
+        if command -v rocm-smi &>/dev/null; then
+          echo "=== GPU process check ==="
+          rocm-smi --showpids 2>/dev/null || true
+        fi
+        echo "=== Cleanup complete ==="
