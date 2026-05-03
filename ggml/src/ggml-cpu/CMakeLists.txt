@@ -310,6 +310,14 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 list(APPEND ARCH_DEFINITIONS __BMI2__ GGML_BMI2)
             endif()
         else ()
+            # GCC on 32-bit x86 (i386/i686) defaults to x87 scalar FP (80-bit extended
+            # precision) even when compiling with -mavx2. Whisper's softmax/logit values
+            # diverge enough from the SSE2 path that the decoder produces garbage tokens.
+            # Force SSE FP math to match the precision expected by all SSE/AVX codepaths.
+            if (CMAKE_SIZEOF_VOID_P EQUAL 4 AND
+                    CMAKE_SYSTEM_PROCESSOR MATCHES "^(i[3-6]86|i686)$")
+                list(APPEND ARCH_FLAGS -mfpmath=sse -msse2)
+            endif()
             if (GGML_NATIVE)
                 list(APPEND ARCH_FLAGS -march=native)
             else ()
