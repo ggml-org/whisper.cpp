@@ -22,11 +22,15 @@ class Dependencies
       else
         nil
       end
-    }.reverse.collect {|lib| "lib#{lib}.a"}
+    }.reverse.collect {|lib| "#{prefix(lib)}#{lib}.#{RbConfig::CONFIG['LIBEXT']}"}
   end
 
   def to_s
     libs.join(" ")
+  end
+
+  def local_libs
+    to_s
   end
 
   private
@@ -36,9 +40,7 @@ class Dependencies
   end
 
   def generate_dot
-    args = ["-S", "sources", "-B", "build", "--graphviz", dot_path, "-D", "BUILD_SHARED_LIBS=OFF"]
-    args << @options.to_s unless @options.to_s.empty?
-    system @cmake, *args, exception: true
+    system @cmake, "-S", "sources", "-B", "build", *@options.graphviz_cmake_args, "--graphviz", dot_path, *@options, exception: true
   end
 
   def parse_dot
@@ -57,6 +59,10 @@ class Dependencies
         @graph[depender] << dependee
       end
     end
+  end
+
+  def prefix(lib)
+    "lib"
   end
 
   def tsort_each_node

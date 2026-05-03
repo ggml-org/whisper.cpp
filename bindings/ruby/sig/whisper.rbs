@@ -5,10 +5,10 @@ module Whisper
   end
 
   type log_callback = ^(Integer level, String message, Object user_data) -> void
-  type new_segment_callback = ^(Whisper::Context, void, Integer n_new, Object user_data) -> void
-  type progress_callback = ^(Whisper::Context, void, Integer progress, Object user_data) -> void
-  type encoder_begin_callback = ^(Whisper::Context, void, Object user_data) -> void
-  type abort_callback = ^(Whisper::Context, void, Object user_data) -> boolish
+  type new_segment_callback = ^(Whisper::Context, untyped, Integer n_new, Object user_data) -> void
+  type progress_callback = ^(Whisper::Context, untyped, Integer progress, Object user_data) -> void
+  type encoder_begin_callback = ^(Whisper::Context, untyped, Object user_data) -> void
+  type abort_callback = ^(Whisper::Context, untyped, Object user_data) -> boolish
 
   VERSION: String
   LOG_LEVEL_NONE: Integer
@@ -52,11 +52,11 @@ module Whisper
     #       puts text
     #     end
     #
-    # If n_processors is greater than 1, you cannot set any callbacks including
+    # If `n_processors` is greater than 1, you cannot set any callbacks including
     # new_segment_callback, progress_callback, encoder_begin_callback, abort_callback,
     # and log_callback set by Whisper.log_set
-    def transcribe: (path, Params, ?n_processors: Integer) -> self
-                  | (path, Params, ?n_processors: Integer) { (String) -> void } -> self
+    def transcribe: (path, Whisper::Params, ?n_processors: Integer) -> self
+                  | (path, Whisper::Params, ?n_processors: Integer) { (String) -> void } -> self
 
     def model_n_vocab: () -> Integer
     def model_n_audio_ctx: () -> Integer
@@ -74,7 +74,7 @@ module Whisper
     #       puts segment.text
     #     end
     #
-    # Returns an Enumerator if no block given:
+    # Returns an `Enumerator` if no block given:
     #
     #     whisper.transcribe("path/to/audio.wav", params)
     #     enum = whisper.each_segment
@@ -91,25 +91,25 @@ module Whisper
     #
     def full_lang_id: () -> Integer
 
-    # Start time of a segment indexed by +segment_index+ in centiseconds (10 times milliseconds).
+    # Start time of a segment indexed by `segment_index` in centiseconds (10 times milliseconds).
     #
     #     full_get_segment_t0(3) # => 1668 (16680 ms)
     #
     def full_get_segment_t0: (Integer) -> Integer
 
-    # End time of a segment indexed by +segment_index+ in centiseconds (10 times milliseconds).
+    # End time of a segment indexed by `segment_index` in centiseconds (10 times milliseconds).
     #
     #     full_get_segment_t1(3) # => 1668 (16680 ms)
     #
     def full_get_segment_t1: (Integer) -> Integer
 
-    # Whether the next segment indexed by +segment_index+ is predicated as a speaker turn.
+    # Whether the next segment indexed by `segment_index` is predicated as a speaker turn.
     #
     #     full_get_segment_speacker_turn_next(3) # => true
     #
     def full_get_segment_speaker_turn_next: (Integer) -> (true | false)
 
-    # Text of a segment indexed by +segment_index+.
+    # Text of a segment indexed by `segment_index`.
     #
     #     full_get_segment_text(3) # => "ask not what your country can do for you, ..."
     #
@@ -117,27 +117,27 @@ module Whisper
 
     def full_get_segment_no_speech_prob: (Integer) -> Float
 
-    # Run the entire model: PCM -> log mel spectrogram -> encoder -> decoder -> text
-    # Not thread safe for same context
+    # Run the entire model: PCM -> log mel spectrogram -> encoder -> decoder -> text  
+    # Not thread safe for same context  
     # Uses the specified decoding strategy to obtain the text.
     #
-    # The second argument +samples+ must be an array of samples, respond to :length, or be a MemoryView of an array of float. It must be 32 bit float PCM audio data.
+    # The second argument `samples` must be an array of samples, respond to `:length`, or be a MemoryView of an array of float. It must be 32 bit float PCM audio data.
     #
-    def full: (Params, Array[Float] samples, ?Integer n_samples) -> self
-            | (Params, _Samples, ?Integer n_samples) -> self
+    def full: (Whisper::Params, Array[Float] samples, ?Integer n_samples) -> self
+            | (Whisper::Params, _Samples, ?Integer n_samples) -> self
 
-    # Split the input audio in chunks and process each chunk separately using whisper_full_with_state()
-    # Result is stored in the default state of the context
-    # Not thread safe if executed in parallel on the same context.
-    # It seems this approach can offer some speedup in some cases.
+    # Split the input audio in chunks and process each chunk separately using `whisper_full_with_state()`  
+    # Result is stored in the default state of the context  
+    # Not thread safe if executed in parallel on the same context.  
+    # It seems this approach can offer some speedup in some cases.  
     # However, the transcription accuracy can be worse at the beginning and end of each chunk.
     #
-    # If n_processors is greater than 1, you cannot set any callbacks including
+    # If `n_processors` is greater than 1, you cannot set any callbacks including
     # new_segment_callback, progress_callback, encoder_begin_callback, abort_callback,
     # and log_callback set by Whisper.log_set
-    def full_parallel: (Params, Array[Float], ?Integer n_samples) -> self
-                     | (Params, _Samples, ?Integer n_samples) -> self
-                     | (Params, _Samples, ?Integer? n_samples, Integer n_processors) -> self
+    def full_parallel: (Whisper::Params, Array[Float], ?Integer n_samples) -> self
+                     | (Whisper::Params, _Samples, ?Integer n_samples) -> self
+                     | (Whisper::Params, _Samples, ?Integer? n_samples, Integer n_processors) -> self
 
     def to_srt: () -> String
     def to_webvtt: () -> String
@@ -217,35 +217,35 @@ module Whisper
     def translate: () -> (true | false)
     def no_context=: (boolish) -> boolish
 
-    # If true, does not use past transcription (if any) as initial prompt for the decoder.
+    # If `true`, does not use past transcription (if any) as initial prompt for the decoder.
     #
     def no_context: () -> (true | false)
 
     def single_segment=: (boolish) -> boolish
 
-    # If true, forces single segment output (useful for streaming).
+    # If `true`, forces single segment output (useful for streaming).
     #
     def single_segment: () -> (true | false)
 
     def print_special=: (boolish) -> boolish
 
-    # If true, prints special tokens (e.g. <SOT>, <EOT>, <BEG>, etc.).
+    # If `true`, prints special tokens (e.g. <SOT>, <EOT>, <BEG>, etc.).
     #
     def print_special: () -> (true | false)
 
     def print_progress=: (boolish) -> boolish
 
-    # If true, prints progress information.
+    # If `true`, prints progress information.
     #
     def print_progress: () -> (true | false)
 
     def print_realtime=: (boolish) -> boolish
 
-    # If true, prints results from within whisper.cpp. (avoid it, use callback instead)
+    # If `true`, prints results from within whisper.cpp. (avoid it, use callback instead)
     #
     def print_realtime: () -> (true | false)
 
-    # If true, prints timestamps for each text segment when printing realtime.
+    # If `true`, prints timestamps for each text segment when printing realtime.
     #
     def print_timestamps=: (boolish) -> boolish
 
@@ -253,19 +253,19 @@ module Whisper
 
     def suppress_blank=: (boolish) -> boolish
 
-    # If true, suppresses blank outputs.
+    # If `true`, suppresses blank outputs.
     #
     def suppress_blank: () -> (true | false)
 
     def suppress_nst=: (boolish) -> boolish
 
-    # If true, suppresses non-speech-tokens.
+    # If `true`, suppresses non-speech-tokens.
     #
     def suppress_nst: () -> (true | false)
 
     def token_timestamps=: (boolish) -> boolish
 
-    # If true, enables token-level timestamps.
+    # If `true`, enables token-level timestamps.
     #
     def token_timestamps: () -> (true | false)
 
@@ -277,16 +277,16 @@ module Whisper
 
     def split_on_word=: (boolish) -> boolish
 
-    # If true, split on word rather than on token (when used with max_len).
+    # If `true`, split on word rather than on token (when used with max_len).
     #
     def split_on_word: () -> (true | false)
 
     def initial_prompt=: (_ToS) -> _ToS
     def carry_initial_prompt=: (boolish) -> boolish
 
-    # Tokens to provide to the whisper decoder as initial prompt
-    # these are prepended to any existing text context from a previous call
-    # use whisper_tokenize() to convert text to tokens.
+    # Tokens to provide to the whisper decoder as initial prompt  
+    # these are prepended to any existing text context from a previous call  
+    # use whisper_tokenize() to convert text to tokens.  
     # Maximum of whisper_n_text_ctx()/2 tokens are used (typically 224).
     #
     def initial_prompt: () -> (String | nil)
@@ -294,7 +294,7 @@ module Whisper
 
     def diarize=: (boolish) -> boolish
 
-    # If true, enables diarization.
+    # If `true`, enables diarization.
     #
     def diarize: () -> (true | false)
 
@@ -423,7 +423,7 @@ module Whisper
     #
     def on_new_segment: { (Segment) -> void } -> void
 
-    # Hook called on progress update. Yields each progress Integer between 0 and 100.
+    # Hook called on progress update. Yields each progress `Integer` between 0 and 100.
     #
     def on_progress: { (Integer progress) -> void } -> void
 
@@ -431,7 +431,7 @@ module Whisper
     #
     def on_encoder_begin: { () -> void } -> void
 
-    # Call block to determine whether abort or not. Return +true+ when you want to abort.
+    # Call block to determine whether abort or not. Return `true` when you want to abort.
     #
     #     params.abort_on do
     #       if some_condition
@@ -504,13 +504,13 @@ module Whisper
 
     # Yields each Whisper::Token:
     #
-    #   whisper.each_segment.first.each_token do |token|
-    #     p token
-    #   end
+    #     whisper.each_segment.first.each_token do |token|
+    #       p token
+    #     end
     #
-    # Returns an Enumerator if no block is given:
+    # Returns an `Enumerator` if no block is given:
     #
-    #   whisper.each_segment.first.each_token.to_a # => [#<Whisper::Token>, ...]
+    #     whisper.each_segment.first.each_token.to_a # => [#<Whisper::Token>, ...]
     #
     def each_token: { (Token) -> void } -> void
                   | () -> Enumerator[Token]
@@ -518,7 +518,7 @@ module Whisper
     def to_webvtt_cue: () -> String
 
 
-    #  Possible keys: :start_time, :end_time, :text, :no_speech_prob, :speaker_turn_next
+    #  Possible keys: `:start_time`, `:end_time`, `:text`, `:no_speech_prob`, `:speaker_turn_next`
     #
     #      whisper.each_segment do |segment|
     #        segment => {start_time:, end_time:, text:, no_speech_prob:, speaker_turn_next:}
@@ -569,7 +569,7 @@ module Whisper
 
     # [EXPERIMENTAL] Token-level timestamps with DTW
     #
-    # Do not use if you haven't computed token-level timestamps with dtw.
+    # Do not use if you haven't computed token-level timestamps with dtw.  
     # Roughly corresponds to the moment in audio in which the token was output.
     #
     def t_dtw: () -> Integer
@@ -580,14 +580,14 @@ module Whisper
 
     # Start time of the token.
     #
-    # Token-level timestamp data.
+    # Token-level timestamp data.  
     # Do not use if you haven't computed token-level timestamps.
     #
     def start_time: () -> Integer
 
     # End time of the token.
     #
-    # Token-level timestamp data.
+    # Token-level timestamp data.  
     # Do not use if you haven't computed token-level timestamps.
     #
     def end_time: () -> Integer

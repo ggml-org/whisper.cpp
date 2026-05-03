@@ -1,15 +1,27 @@
 require "mkmf"
-require_relative "options"
-require_relative "dependencies"
+
+if RUBY_PLATFORM.match? /mswin|mingw|ucrt/
+  require_relative "options_for_windows"
+  require_relative "dependencies_for_windows"
+
+  Opts = OptionsForWindows
+  Deps = DependenciesForWindows
+else
+  require_relative "options"
+  require_relative "dependencies"
+
+  Opts = Options
+  Deps = Dependencies
+end
 
 cmake = find_executable("cmake") || abort
-options = Options.new(cmake).to_s
+options = Opts.new(cmake)
 have_library("gomp") rescue nil
-libs = Dependencies.new(cmake, options).to_s
+libs = Deps.new(cmake, options)
 
-$CFLAGS << " -O3 -march=native"
+append_cflags ["-O3", "-march=native"]
 $INCFLAGS << " -Isources/include -Isources/ggml/include -Isources/examples"
-$LOCAL_LIBS << " #{libs}"
+$LOCAL_LIBS << " #{libs.local_libs}"
 $cleanfiles << " build #{libs}"
 
 create_makefile "whisper" do |conf|
@@ -17,7 +29,7 @@ create_makefile "whisper" do |conf|
     $(TARGET_SO): #{libs}
     #{libs}: cmake-targets
     cmake-targets:
-    #{"\t"}#{cmake} -S sources -B build -D BUILD_SHARED_LIBS=OFF -D CMAKE_ARCHIVE_OUTPUT_DIRECTORY=#{__dir__} -D CMAKE_POSITION_INDEPENDENT_CODE=ON #{options}
-    #{"\t"}#{cmake} --build build --config Release --target common whisper
+    #{"\t"}"#{cmake}" -S sources -B build #{options}
+    #{"\t"}"#{cmake}" --build build --config Release --target common whisper
   EOF
 end

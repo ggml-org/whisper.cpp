@@ -1,5 +1,11 @@
 #include "ruby_whisper.h"
 
+#ifdef WORDS_BIGENDIAN
+  #define IS_BIGENDIAN true
+#else
+  #define IS_BIGENDIAN false
+#endif
+
 extern ID id_to_s;
 extern ID id___method__;
 extern ID id_to_enum;
@@ -47,6 +53,27 @@ typedef struct full_parallel_args {
   int n_processors;
 } full_parallel_args;
 
+typedef struct full_without_gvl_args {
+  struct whisper_context *context;
+  struct whisper_full_params *params;
+  float *samples;
+  int n_samples;
+  int result;
+} full_without_gvl_args;
+
+typedef struct full_parallel_without_gvl_args {
+  struct whisper_context *context;
+  struct whisper_full_params *params;
+  float *samples;
+  int n_samples;
+  int n_processors;
+  int result;
+} full_parallel_without_gvl_args;
+
+typedef struct full_ubf_args {
+  ruby_whisper_abort_callback_container *abort_callback_container;
+} full_ubf_args;
+
 static void
 ruby_whisper_free(ruby_whisper *rw)
 {
@@ -74,7 +101,7 @@ static size_t
 ruby_whisper_memsize(const void *p)
 {
   const ruby_whisper *rw = (const ruby_whisper *)p;
-  size_t size = sizeof(rw);
+  size_t size = sizeof(*rw);
   if (!rw) {
     return 0;
   }
@@ -304,11 +331,25 @@ VALUE ruby_whisper_model_type(VALUE self)
 static bool
 check_memory_view(rb_memory_view_t *memview)
 {
-  if (memview->format != NULL && strcmp(memview->format, "f") != 0) {
-    rb_warn("currently only format \"f\" is supported for MemoryView, but given: %s", memview->format);
+  if (!memview->format) {
+    rb_warn("currently format is required");
     return false;
   }
-  if (memview->format != NULL && memview->ndim != 1) {
+
+  if (strcmp(memview->format, "f") == 0) {
+    // accept
+  } else if (strcmp(memview->format, "e") == 0) {
+    if (IS_BIGENDIAN) {
+      rb_warn("currently format \"e\" is only supported on little-endian environment");
+      return false;
+    }
+  } else {
+    rb_warn("currently only format \"f\" and \"e\" on little-endian environment is supported for MemoryView, but given: %s", memview->format);
+    return false;
+  }
+
+  if (memview->ndim != 1 && !(memview->ndim == 2 && memview->shape[1] == 1)) {
+    // TODO: Accept ndim == 2 with shape [n_samples, channels] and channels > 1 by averaging the samples in different channels or just taking the first channel
     rb_warn("currently only 1 dimensional MemoryView is supported, but given: %zd", memview->ndim);
     return false;
   }
@@ -426,6 +467,22 @@ release_samples(VALUE rb_parsed_args)
   return Qnil;
 }
 
+static void*
+full_without_gvl(void *rb_args)
+{
+  full_without_gvl_args *args = (full_without_gvl_args *)rb_args;
+  args->result = whisper_full(args->context, *args->params, args->samples, args->n_samples);
+  return NULL;
+}
+
+static void
+full_ubf(void *rb_args)
+{
+  full_ubf_args *args = (full_ubf_args *)rb_args;
+
+  args->abort_callback_container->is_interrupted = true;
+}
+
 static VALUE
 full_body(VALUE rb_args)
 {
@@ -437,9 +494,19 @@ full_body(VALUE rb_args)
   TypedData_Get_Struct(*args->params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
 
   prepare_transcription(rwp, args->context, 1);
-  int result = whisper_full(rw->context, rwp->params, args->samples, args->n_samples);
 
-  return INT2NUM(result);
+  struct full_without_gvl_args full_without_gvl_args = {
+    rw->context,
+    &rwp->params,
+    args->samples,
+    args->n_samples,
+    0,
+  };
+  full_ubf_args full_ubf_args = {
+    rwp->abort_callback_container,
+  };
+  rb_thread_call_without_gvl(full_without_gvl, (void *)&full_without_gvl_args, full_ubf, (void *)&full_ubf_args);
+  return INT2NUM(full_without_gvl_args.result);
 }
 
 /*
@@ -477,6 +544,14 @@ VALUE ruby_whisper_full(int argc, VALUE *argv, VALUE self)
   }
 }
 
+static void*
+full_parallel_without_gvl(void *rb_args)
+{
+  full_parallel_without_gvl_args *args = (full_parallel_without_gvl_args *)rb_args;
+  args->result = whisper_full_parallel(args->context, *args->params, args->samples, args->n_samples, args->n_processors);
+  return NULL;
+}
+
 static VALUE
 full_parallel_body(VALUE rb_args)
 {
@@ -488,9 +563,20 @@ full_parallel_body(VALUE rb_args)
   TypedData_Get_Struct(*args->params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
 
   prepare_transcription(rwp, args->context, args->n_processors);
-  int result = whisper_full_parallel(rw->context, rwp->params, args->samples, args->n_samples, args->n_processors);
 
-  return INT2NUM(result);
+  struct full_parallel_without_gvl_args full_parallel_without_gvl_args = {
+    rw->context,
+    &rwp->params,
+    args->samples,
+    args->n_samples,
+    args->n_processors,
+    0,
+  };
+  full_ubf_args full_ubf_args = {
+    rwp->abort_callback_container,
+  };
+  rb_thread_call_without_gvl(full_parallel_without_gvl, (void *)&full_parallel_without_gvl_args, full_ubf, (void *)&full_ubf_args);
+  return INT2NUM(full_parallel_without_gvl_args.result);
 }
 
 /*
