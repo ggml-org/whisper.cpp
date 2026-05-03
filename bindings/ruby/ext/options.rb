@@ -88,8 +88,8 @@ class Options
 
   def enabled?(option)
     op = @options[option]
-    raise "Option not exist: #{option}" unless op
-    raise "Option not boolean: #{option}(#{op[0]})" unless op[0] == "BOOL"
+    return false unless op
+    return false unless op[0] == "BOOL"
     if op[1].nil?
       cmake_options[option][1]
     else
