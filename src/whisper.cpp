@@ -34,8 +34,8 @@
 #include <thread>
 #include <vector>
 
-#ifdef _MSC_VER
-#include <codecvt>
+#ifdef _WIN32
+#include <windows.h>
 #endif
 
 #if defined(WHISPER_BIG_ENDIAN)
@@ -3623,10 +3623,23 @@ struct whisper_context_params whisper_context_default_params() {
 
 struct whisper_context * whisper_init_from_file_with_params_no_state(const char * path_model, struct whisper_context_params params) {
     WHISPER_LOG_INFO("%s: loading model from '%s'\n", __func__, path_model);
-#ifdef _MSC_VER
-    // Convert UTF-8 path to wide string (UTF-16) for Windows, resolving character encoding issues.
-    std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-    std::wstring path_model_wide = converter.from_bytes(path_model);
+#ifdef _WIN32
+    // Convert path to wide string (UTF-16) for Windows.
+    // Try UTF-8 first; if invalid, fall back to the system ANSI code page (e.g. CP936).
+    // This handles both UTF-8 paths (from manifest-enabled or Unicode-aware callers)
+    // and ANSI paths (from the default MSVC main() which uses the system code page).
+    std::wstring path_model_wide;
+    int wlen = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path_model, -1, nullptr, 0);
+    if (wlen > 0) {
+        path_model_wide.resize(wlen - 1);
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path_model, -1, &path_model_wide[0], wlen);
+    } else {
+        wlen = MultiByteToWideChar(CP_ACP, 0, path_model, -1, nullptr, 0);
+        if (wlen > 0) {
+            path_model_wide.resize(wlen - 1);
+            MultiByteToWideChar(CP_ACP, 0, path_model, -1, &path_model_wide[0], wlen);
+        }
+    }
     auto fin = std::ifstream(path_model_wide, std::ios::binary);
 #else
     auto fin = std::ifstream(path_model, std::ios::binary);
@@ -4718,9 +4731,19 @@ struct whisper_vad_context * whisper_vad_init_from_file_with_params(
         const char * path_model,
         struct whisper_vad_context_params params) {
     WHISPER_LOG_INFO("%s: loading VAD model from '%s'\n", __func__, path_model);
-#ifdef _MSC_VER
-    std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-    std::wstring path_model_wide = converter.from_bytes(path_model);
+#ifdef _WIN32
+    std::wstring path_model_wide;
+    int wlen = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path_model, -1, nullptr, 0);
+    if (wlen > 0) {
+        path_model_wide.resize(wlen - 1);
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path_model, -1, &path_model_wide[0], wlen);
+    } else {
+        wlen = MultiByteToWideChar(CP_ACP, 0, path_model, -1, nullptr, 0);
+        if (wlen > 0) {
+            path_model_wide.resize(wlen - 1);
+            MultiByteToWideChar(CP_ACP, 0, path_model, -1, &path_model_wide[0], wlen);
+        }
+    }
     auto fin = std::ifstream(path_model_wide, std::ios::binary);
 #else
     auto fin = std::ifstream(path_model, std::ios::binary);
