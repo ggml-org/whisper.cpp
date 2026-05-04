@@ -664,6 +664,7 @@ static struct parakeet_batch parakeet_batch_init(int32_t n_tokens) {
 
 static void parakeet_batch_free(struct parakeet_batch batch) {
     if (batch.token)    free(batch.token);
+    if (batch.i_time)   free(batch.i_time);
     if (batch.pos)      free(batch.pos);
     if (batch.n_seq_id) free(batch.n_seq_id);
     if (batch.seq_id) {
