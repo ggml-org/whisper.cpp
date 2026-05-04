@@ -6800,6 +6800,14 @@ int whisper_full_with_state(
 
     result_all.clear();
 
+    // Capture whether the caller forced a specific language before
+    // the auto-detect block below overwrites params.language.
+    // ref: https://github.com/ggml-org/whisper.cpp/issues/1724
+    const bool language_was_forced_by_caller = (params.language != nullptr
+        && strlen(params.language) > 0
+        && strcmp(params.language, "auto") != 0
+        && !params.detect_language);
+
     if (n_samples > 0) {
         // compute log mel spectrogram
         if (whisper_pcm_to_mel_with_state(ctx, state, samples, n_samples, params.n_threads) != 0) {
@@ -7007,6 +7015,43 @@ int whisper_full_with_state(
         // if only 100ms left, then stop
         if (seek + delta_min >= seek_end) {
             break;
+        }
+
+        // Chunk-level zero-silence guard. When the current 30-second
+        // window is entirely zero-valued and the caller forced a
+        // specific language, emit a [BLANK_AUDIO] segment and advance
+        // without running the encoder/decoder. Without this, forced-
+        // language decoding of silent chunks emits language-specific
+        // fallback tokens (e.g. "[Музыка]" on -l ru, "[Música]" on
+        // -l es) or model-trained subtitle-credit phrases on -l ru.
+        // This matches the approach endorsed by the maintainer in
+        // PR #1588 review ("skip entire segments when silence is
+        // detected"), using zero-PCM as a stricter signal than the
+        // language-dependent no_speech_prob.
+        // ref: https://github.com/ggml-org/whisper.cpp/issues/1724
+        if (language_was_forced_by_caller && samples != nullptr) {
+            const int chunk_start = seek * (WHISPER_SAMPLE_RATE / 100);
+            const int chunk_end = std::min(n_samples, chunk_start + WHISPER_CHUNK_SIZE * WHISPER_SAMPLE_RATE);
+            if (chunk_start < chunk_end) {
+                bool chunk_is_zero = true;
+                for (int i = chunk_start; i < chunk_end; ++i) {
+                    if (samples[i] != 0.0f) {
+                        chunk_is_zero = false;
+                        break;
+                    }
+                }
+                if (chunk_is_zero) {
+                    WHISPER_LOG_INFO("%s: chunk at seek=%d is zero-filled with forced language %s; emitting blank-audio and skipping decode (ref: #1724)\n", __func__, seek, params.language);
+                    const int64_t t0 = seek;
+                    const int64_t t1 = (int64_t) chunk_end * 100 / WHISPER_SAMPLE_RATE;
+                    result_all.push_back({ t0, t1, " [BLANK_AUDIO]", 1.0f, {}, false });
+                    if (params.new_segment_callback && !ctx->params.dtw_token_timestamps) {
+                        params.new_segment_callback(ctx, state, 1, params.new_segment_callback_user_data);
+                    }
+                    seek += WHISPER_CHUNK_SIZE * 100;
+                    continue;
+                }
+            }
         }
 
         if (params.encoder_begin_callback) {
