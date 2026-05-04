@@ -21,6 +21,7 @@ struct parakeet_params {
 
     bool print_segments = false;
     bool output_txt     = false;
+    bool no_prints      = false;
 
     std::string model       = "models/ggml-parakeet-tdt-0.6b-v3.bin";
     std::string output_file = "";
@@ -70,6 +71,7 @@ static bool parakeet_params_parse(int argc, char ** argv, parakeet_params & para
         else if (arg == "-ps"   || arg == "--print-segments")  { params.print_segments    = true; }
         else if (arg == "-otxt" || arg == "--output-txt")      { params.output_txt        = true; }
         else if (arg == "-of"   || arg == "--output-file")     { params.output_file       = ARGV_NEXT; }
+        else if (arg == "-np"   || arg == "--no-prints")       { params.no_prints         = true; }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             parakeet_print_usage(argc, argv, params);
@@ -100,6 +102,7 @@ static void parakeet_print_usage(int /*argc*/, char ** argv, const parakeet_para
     fprintf(stderr, "  -ps,    --print-segments    [%-7s] print segment information\n",                   params.print_segments ? "true" : "false");
     fprintf(stderr, "  -otxt,  --output-txt        [%-7s] output result in a text file\n",                params.output_txt ? "true" : "false");
     fprintf(stderr, "  -of,    --output-file FILE  [%-7s] output file path (without file extension)\n",   "");
+    fprintf(stderr, "  -np,    --no-prints         [%-7s] do not print anything other than the results\n", params.no_prints ? "true" : "false");
     fprintf(stderr, "\n");
 }
 
@@ -115,6 +118,7 @@ void token_callback(parakeet_context * ctx, parakeet_state * state, const parake
     is_first = false;
 }
 
+static void cb_log_disable(enum ggml_log_level , const char * , void * ) { }
 
 int main(int argc, char ** argv) {
     ggml_backend_load_all();
@@ -125,6 +129,10 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    if (params.no_prints) {
+        parakeet_log_set(cb_log_disable, NULL);
+    }
+
     if (params.fname_inp.empty()) {
         fprintf(stderr, "error: no input files specified\n");
         parakeet_print_usage(argc, argv, params);
@@ -133,7 +141,9 @@ int main(int argc, char ** argv) {
 
     // Process each input file
     for (const auto & fname : params.fname_inp) {
-        fprintf(stderr, "\nProcessing file: %s\n", fname.c_str());
+        if (!params.no_prints) {
+            fprintf(stderr, "\nProcessing file: %s\n", fname.c_str());
+        }
 
         std::vector<float> pcmf32;
         std::vector<std::vector<float>> pcmf32s;
@@ -147,7 +157,9 @@ int main(int argc, char ** argv) {
             continue;
         }
 
-        fprintf(stderr, "Loading Parakeet model from: %s\n", params.model.c_str());
+        if (!params.no_prints) {
+            fprintf(stderr, "Loading Parakeet model from: %s\n", params.model.c_str());
+        }
 
         struct parakeet_context_params ctx_params = parakeet_context_default_params();
         ctx_params.use_gpu     = params.use_gpu;
@@ -160,11 +172,13 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
-        fprintf(stderr, "Successfully loaded Parakeet model\n");
-        fprintf(stderr, "system_info: n_threads = %d / %d | %s\n",
-                params.n_threads, (int32_t) std::thread::hardware_concurrency(), parakeet_print_system_info());
-        fprintf(stderr, "Processing audio (%zu samples, %.2f seconds)\n",
-                pcmf32.size(), (float)pcmf32.size() / PARAKEET_SAMPLE_RATE);
+        if (!params.no_prints) {
+            fprintf(stderr, "Successfully loaded Parakeet model\n");
+            fprintf(stderr, "system_info: n_threads = %d / %d | %s\n",
+                    params.n_threads, (int32_t) std::thread::hardware_concurrency(), parakeet_print_system_info());
+            fprintf(stderr, "Processing audio (%zu samples, %.2f seconds)\n",
+                    pcmf32.size(), (float)pcmf32.size() / PARAKEET_SAMPLE_RATE);
+        }
 
         struct parakeet_full_params full_params = parakeet_full_default_params(PARAKEET_SAMPLING_GREEDY);
         full_params.n_threads           = params.n_threads;
@@ -200,13 +214,17 @@ int main(int argc, char ** argv) {
                     fout << text << "\n";
                 }
                 fout.close();
-                fprintf(stderr, "Output written to: %s\n", fname_out.c_str());
+                if (!params.no_prints) {
+                    fprintf(stderr, "Output written to: %s\n", fname_out.c_str());
+                }
             } else {
                 fprintf(stderr, "error: failed to open '%s' for writing\n", fname_out.c_str());
             }
         }
 
-        parakeet_print_timings(pctx);
+        if (!params.no_prints) {
+            parakeet_print_timings(pctx);
+        }
 
         if (params.print_segments) {
             const int n_segments = parakeet_full_n_segments(pctx);
