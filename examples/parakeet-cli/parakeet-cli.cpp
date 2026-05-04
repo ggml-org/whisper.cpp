@@ -154,6 +154,8 @@ int main(int argc, char ** argv) {
         }
 
         fprintf(stderr, "Successfully loaded Parakeet model\n");
+        fprintf(stderr, "system_info: n_threads = %d / %d | %s\n",
+                params.n_threads, (int32_t) std::thread::hardware_concurrency(), parakeet_print_system_info());
         fprintf(stderr, "Processing audio (%zu samples, %.2f seconds)\n",
                 pcmf32.size(), (float)pcmf32.size() / PARAKEET_SAMPLE_RATE);
 
@@ -179,6 +181,8 @@ int main(int argc, char ** argv) {
         }
 
         printf("\n");
+
+        parakeet_print_timings(pctx);
 
         if (params.print_segments) {
             const int n_segments = parakeet_full_n_segments(pctx);
