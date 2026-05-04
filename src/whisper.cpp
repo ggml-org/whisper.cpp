@@ -14,6 +14,11 @@
 #include "openvino/whisper-openvino-encoder.h"
 #endif
 
+#ifdef WHISPER_DIARIZE
+#include "whisper-diarize.h"
+#include "whisper-speaker.h"
+#endif
+
 #include <atomic>
 #include <algorithm>
 #include <cassert>
@@ -467,6 +472,8 @@ struct whisper_segment {
     std::vector<whisper_token_data> tokens;
 
     bool speaker_turn_next;
+
+    int speaker_id = -1;  // Speaker assignment from diarization; -1 if diarization disabled
 };
 
 struct whisper_batch {
@@ -932,6 +939,14 @@ struct whisper_state {
     bool has_vad_segments = false;
 
     std::vector<vad_time_mapping> vad_mapping_table;
+
+    // Speaker diarization context
+    struct whisper_speaker_model * diarize_model = nullptr;
+    std::vector<float> diarize_embeddings;
+    std::vector<int> diarize_segment_indices;
+    std::vector<int> diarize_window_starts;
+    std::vector<int> diarize_window_ends;
+    struct whisper_clustering_context * diarize_clustering = nullptr;
 };
 
 struct whisper_context {
@@ -950,6 +965,566 @@ struct whisper_context {
 
     std::string path_model; // populated by whisper_init_from_file_with_params()
 };
+
+#ifdef WHISPER_DIARIZE
+// Compute a single embedding from a sample range and push it into state.
+static bool whisper_compute_embedding_for_range(
+        struct whisper_state * state,
+        const float * samples,
+        int range_start,
+        int range_n_samples,
+        int segment_index) {
+    float * mel_data = whisper_compute_mel_80(samples + range_start, range_n_samples);
+    if (mel_data == nullptr) {
+        return false;
+    }
+
+    const int mel_n_frames = whisper_get_mel_n_frames(range_n_samples);
+
+    struct whisper_speaker_encoder * enc =
+        whisper_speaker_encoder_new(state->diarize_model, mel_n_frames, 0);
+    if (enc == nullptr) {
+        whisper_mel_free(mel_data);
+        return false;
+    }
+
+    float embedding[192] = {0};
+    const bool ok = whisper_speaker_encoder_compute(enc, mel_data, embedding);
+
+    whisper_speaker_encoder_free(enc);
+    whisper_mel_free(mel_data);
+
+    if (!ok) {
+        return false;
+    }
+
+    state->diarize_embeddings.insert(
+        state->diarize_embeddings.end(),
+        embedding,
+        embedding + 192);
+    state->diarize_segment_indices.push_back(segment_index);
+    state->diarize_window_starts.push_back(range_start);
+    state->diarize_window_ends.push_back(range_start + range_n_samples);
+
+    return true;
+}
+
+// Sub-window size for speaker embedding extraction (2 seconds)
+static const int DIARIZE_WINDOW_SAMPLES = 2 * WHISPER_SAMPLE_RATE;
+// Hop size (1 second) — 50% overlap
+static const int DIARIZE_HOP_SAMPLES    = 1 * WHISPER_SAMPLE_RATE;
+// Minimum duration for a speaker turn before we preserve a split (1.5 seconds in 10 ms units)
+static const int64_t DIARIZE_MIN_TURN_TIME = 150;
+
+static int whisper_diarize_majority_speaker(
+        const struct whisper_state * state,
+        const std::vector<int> & window_indices) {
+    if (state == nullptr || state->diarize_clustering == nullptr || window_indices.empty()) {
+        return -1;
+    }
+
+    std::map<int, int> speaker_votes;
+    for (int window_index : window_indices) {
+        if (window_index < 0 || window_index >= state->diarize_clustering->num_segments) {
+            continue;
+        }
+
+        speaker_votes[state->diarize_clustering->speaker_ids[window_index]]++;
+    }
+
+    int best_speaker = -1;
+    int best_votes = 0;
+    for (std::map<int, int>::const_iterator it = speaker_votes.begin(); it != speaker_votes.end(); ++it) {
+        if (it->second > best_votes) {
+            best_votes = it->second;
+            best_speaker = it->first;
+        }
+    }
+
+    return best_speaker;
+}
+
+static int whisper_diarize_assign_token_speaker(
+        const struct whisper_state * state,
+        const std::vector<int> & window_indices,
+        const struct whisper_token_data & token,
+        int fallback_speaker) {
+    if (state == nullptr || state->diarize_clustering == nullptr || window_indices.empty()) {
+        return fallback_speaker;
+    }
+
+    if (token.t0 < 0 || token.t1 < 0 || token.t1 <= token.t0) {
+        return fallback_speaker;
+    }
+
+    const int token_start = (int) (token.t0 * WHISPER_SAMPLE_RATE / 100);
+    const int token_end   = (int) (token.t1 * WHISPER_SAMPLE_RATE / 100);
+
+    std::map<int, int> speaker_overlap;
+    for (int window_index : window_indices) {
+        if (window_index < 0 || window_index >= state->diarize_clustering->num_segments) {
+            continue;
+        }
+
+        const int overlap_start = std::max(token_start, state->diarize_window_starts[window_index]);
+        const int overlap_end   = std::min(token_end,   state->diarize_window_ends[window_index]);
+        if (overlap_end <= overlap_start) {
+            continue;
+        }
+
+        const int speaker_id = state->diarize_clustering->speaker_ids[window_index];
+        speaker_overlap[speaker_id] += overlap_end - overlap_start;
+    }
+
+    int best_speaker = fallback_speaker;
+    int best_overlap = 0;
+    for (std::map<int, int>::const_iterator it = speaker_overlap.begin(); it != speaker_overlap.end(); ++it) {
+        if (it->second > best_overlap) {
+            best_overlap = it->second;
+            best_speaker = it->first;
+        }
+    }
+
+    return best_speaker;
+}
+
+static float whisper_diarize_cosine_distance(
+        const float * lhs,
+        const float * rhs,
+        int dim) {
+    double dot = 0.0;
+    double lhs_norm = 0.0;
+    double rhs_norm = 0.0;
+
+    for (int i = 0; i < dim; ++i) {
+        dot += (double) lhs[i] * rhs[i];
+        lhs_norm += (double) lhs[i] * lhs[i];
+        rhs_norm += (double) rhs[i] * rhs[i];
+    }
+
+    if (lhs_norm <= 0.0 || rhs_norm <= 0.0) {
+        return 1.0f;
+    }
+
+    return 1.0f - (float) (dot / (sqrt(lhs_norm) * sqrt(rhs_norm)));
+}
+
+static void whisper_diarize_merge_small_clusters(struct whisper_state * state) {
+    if (state == nullptr || state->diarize_clustering == nullptr) {
+        return;
+    }
+
+    const int num_embeddings = state->diarize_clustering->num_segments;
+    const int embedding_dim = 192;
+    if (num_embeddings <= 0) {
+        return;
+    }
+
+    while (true) {
+        std::map<int, std::vector<int> > clusters;
+        for (int i = 0; i < num_embeddings; ++i) {
+            clusters[state->diarize_clustering->speaker_ids[i]].push_back(i);
+        }
+
+        if ((int) clusters.size() <= 3) {
+            break;
+        }
+
+        std::map<int, std::vector<float> > centroids;
+        for (std::map<int, std::vector<int> >::const_iterator it = clusters.begin(); it != clusters.end(); ++it) {
+            std::vector<float> centroid(embedding_dim, 0.0f);
+            for (int window_index : it->second) {
+                const float * embedding = state->diarize_embeddings.data() + window_index * embedding_dim;
+                for (int j = 0; j < embedding_dim; ++j) {
+                    centroid[j] += embedding[j];
+                }
+            }
+
+            const float inv = 1.0f / it->second.size();
+            for (int j = 0; j < embedding_dim; ++j) {
+                centroid[j] *= inv;
+            }
+
+            centroids[it->first] = std::move(centroid);
+        }
+
+        int smallest_speaker = -1;
+        size_t smallest_size = std::numeric_limits<size_t>::max();
+        for (std::map<int, std::vector<int> >::const_iterator it = clusters.begin(); it != clusters.end(); ++it) {
+            if (it->second.size() < smallest_size) {
+                smallest_size = it->second.size();
+                smallest_speaker = it->first;
+            }
+        }
+
+        if (smallest_speaker < 0 || smallest_size >= 3) {
+            break;
+        }
+
+        int best_target = -1;
+        float best_distance = std::numeric_limits<float>::max();
+        for (std::map<int, std::vector<int> >::const_iterator it = clusters.begin(); it != clusters.end(); ++it) {
+            if (it->first == smallest_speaker) {
+                continue;
+            }
+
+            const float distance = whisper_diarize_cosine_distance(
+                centroids[smallest_speaker].data(),
+                centroids[it->first].data(),
+                embedding_dim);
+            if (distance < best_distance) {
+                best_distance = distance;
+                best_target = it->first;
+            }
+        }
+
+        if (best_target < 0) {
+            break;
+        }
+
+        for (int window_index : clusters[smallest_speaker]) {
+            state->diarize_clustering->speaker_ids[window_index] = best_target;
+        }
+    }
+
+    std::map<int, int> speaker_remap;
+    int next_speaker = 0;
+    for (int i = 0; i < num_embeddings; ++i) {
+        const int speaker_id = state->diarize_clustering->speaker_ids[i];
+        if (speaker_remap.find(speaker_id) == speaker_remap.end()) {
+            speaker_remap[speaker_id] = next_speaker++;
+        }
+        state->diarize_clustering->speaker_ids[i] = speaker_remap[speaker_id];
+    }
+    state->diarize_clustering->num_speakers = next_speaker;
+}
+
+static void whisper_diarize_append_token_range(
+        struct whisper_context & ctx,
+        const whisper_segment & segment,
+        int token_start,
+        int token_end,
+        int speaker_id,
+        bool speaker_turn_next,
+        std::vector<whisper_segment> & out_segments) {
+    if (token_start < 0 || token_end < token_start || token_end >= (int) segment.tokens.size()) {
+        return;
+    }
+
+    whisper_segment split = segment;
+    split.tokens.assign(segment.tokens.begin() + token_start, segment.tokens.begin() + token_end + 1);
+    split.text.clear();
+    split.speaker_id = speaker_id;
+    split.speaker_turn_next = speaker_turn_next;
+
+    int64_t split_t0 = segment.t0;
+    int64_t split_t1 = segment.t1;
+
+    for (int i = 0; i < (int) split.tokens.size(); ++i) {
+        const whisper_token_data & token = split.tokens[i];
+        if (token.id >= whisper_token_eot(&ctx)) {
+            continue;
+        }
+
+        if (token.t0 >= 0) {
+            split_t0 = token.t0;
+            break;
+        }
+    }
+
+    for (int i = (int) split.tokens.size() - 1; i >= 0; --i) {
+        const whisper_token_data & token = split.tokens[i];
+        if (token.id >= whisper_token_eot(&ctx)) {
+            continue;
+        }
+
+        if (token.t1 >= split_t0) {
+            split_t1 = token.t1;
+            break;
+        }
+    }
+
+    split.t0 = std::max(segment.t0, split_t0);
+    split.t1 = std::max(split.t0, std::min(segment.t1, split_t1));
+
+    for (int i = 0; i < (int) split.tokens.size(); ++i) {
+        const whisper_token_data & token = split.tokens[i];
+        if (token.id >= whisper_token_eot(&ctx)) {
+            continue;
+        }
+
+        split.text += whisper_token_to_str(&ctx, token.id);
+    }
+
+    out_segments.push_back(std::move(split));
+}
+
+static void whisper_diarize_assign_segments(
+        struct whisper_context & ctx,
+        struct whisper_state & state) {
+    if (state.diarize_clustering == nullptr) {
+        return;
+    }
+
+    std::vector<whisper_segment> diarized_segments;
+    diarized_segments.reserve(state.result_all.size());
+
+    for (int segment_index = 0; segment_index < (int) state.result_all.size(); ++segment_index) {
+        whisper_segment & segment = state.result_all[segment_index];
+
+        const int segment_start = std::max(0, (int) (segment.t0 * WHISPER_SAMPLE_RATE / 100));
+        const int segment_end   = std::max(segment_start, (int) (segment.t1 * WHISPER_SAMPLE_RATE / 100));
+
+        std::vector<int> window_indices;
+        for (int i = 0; i < (int) state.diarize_window_starts.size(); ++i) {
+            if (state.diarize_window_ends[i] <= segment_start ||
+                state.diarize_window_starts[i] >= segment_end) {
+                continue;
+            }
+            window_indices.push_back(i);
+        }
+
+        if (window_indices.empty()) {
+            diarized_segments.push_back(segment);
+            continue;
+        }
+
+        const int fallback_speaker = whisper_diarize_majority_speaker(&state, window_indices);
+
+        std::vector<int> spoken_token_indices;
+        std::vector<int> token_speakers;
+        spoken_token_indices.reserve(segment.tokens.size());
+        token_speakers.reserve(segment.tokens.size());
+
+        for (int token_index = 0; token_index < (int) segment.tokens.size(); ++token_index) {
+            const whisper_token_data & token = segment.tokens[token_index];
+            if (token.id >= whisper_token_eot(&ctx)) {
+                continue;
+            }
+
+            spoken_token_indices.push_back(token_index);
+            token_speakers.push_back(
+                whisper_diarize_assign_token_speaker(&state, window_indices, token, fallback_speaker));
+        }
+
+        if (token_speakers.empty()) {
+            segment.speaker_id = fallback_speaker;
+            diarized_segments.push_back(segment);
+            continue;
+        }
+
+        for (int i = 1; i + 1 < (int) token_speakers.size(); ++i) {
+            if (token_speakers[i - 1] == token_speakers[i + 1] &&
+                token_speakers[i] != token_speakers[i - 1]) {
+                token_speakers[i] = token_speakers[i - 1];
+            }
+        }
+
+        bool merged_short_run = true;
+        while (merged_short_run && token_speakers.size() > 1) {
+            merged_short_run = false;
+
+            int run_start = 0;
+            while (run_start < (int) token_speakers.size()) {
+                int run_end = run_start + 1;
+                while (run_end < (int) token_speakers.size() &&
+                       token_speakers[run_end] == token_speakers[run_start]) {
+                    ++run_end;
+                }
+
+                const whisper_token_data & run_first = segment.tokens[spoken_token_indices[run_start]];
+                const whisper_token_data & run_last  = segment.tokens[spoken_token_indices[run_end - 1]];
+                const int64_t run_t0 = run_first.t0 >= 0 ? run_first.t0 : segment.t0;
+                const int64_t run_t1 = run_last.t1  >= run_t0 ? run_last.t1 : run_t0;
+
+                if (run_t1 - run_t0 < DIARIZE_MIN_TURN_TIME &&
+                    (run_start > 0 || run_end < (int) token_speakers.size())) {
+                    int replacement_speaker = fallback_speaker;
+
+                    if (run_start == 0) {
+                        replacement_speaker = token_speakers[run_end];
+                    } else if (run_end == (int) token_speakers.size()) {
+                        replacement_speaker = token_speakers[run_start - 1];
+                    } else if (token_speakers[run_start - 1] == token_speakers[run_end]) {
+                        replacement_speaker = token_speakers[run_start - 1];
+                    } else {
+                        int prev_start = run_start - 1;
+                        while (prev_start > 0 && token_speakers[prev_start - 1] == token_speakers[run_start - 1]) {
+                            --prev_start;
+                        }
+
+                        int next_end = run_end;
+                        while (next_end < (int) token_speakers.size() &&
+                               token_speakers[next_end] == token_speakers[run_end]) {
+                            ++next_end;
+                        }
+
+                        const whisper_token_data & prev_first = segment.tokens[spoken_token_indices[prev_start]];
+                        const whisper_token_data & prev_last  = segment.tokens[spoken_token_indices[run_start - 1]];
+                        const whisper_token_data & next_first = segment.tokens[spoken_token_indices[run_end]];
+                        const whisper_token_data & next_last  = segment.tokens[spoken_token_indices[next_end - 1]];
+
+                        const int64_t prev_t0 = prev_first.t0 >= 0 ? prev_first.t0 : segment.t0;
+                        const int64_t prev_t1 = prev_last.t1  >= prev_t0 ? prev_last.t1 : prev_t0;
+                        const int64_t next_t0 = next_first.t0 >= 0 ? next_first.t0 : segment.t0;
+                        const int64_t next_t1 = next_last.t1  >= next_t0 ? next_last.t1 : next_t0;
+
+                        const int64_t prev_dur = prev_t1 - prev_t0;
+                        const int64_t next_dur = next_t1 - next_t0;
+
+                        replacement_speaker =
+                            prev_dur >= next_dur ? token_speakers[run_start - 1] : token_speakers[run_end];
+                    }
+
+                    for (int i = run_start; i < run_end; ++i) {
+                        token_speakers[i] = replacement_speaker;
+                    }
+
+                    merged_short_run = true;
+                    break;
+                }
+
+                run_start = run_end;
+            }
+        }
+
+        bool uniform_speaker = true;
+        for (int i = 1; i < (int) token_speakers.size(); ++i) {
+            if (token_speakers[i] != token_speakers[0]) {
+                uniform_speaker = false;
+                break;
+            }
+        }
+
+        if (uniform_speaker) {
+            segment.speaker_id = token_speakers[0];
+            diarized_segments.push_back(segment);
+            continue;
+        }
+
+        int run_start = 0;
+        while (run_start < (int) token_speakers.size()) {
+            int run_end = run_start + 1;
+            while (run_end < (int) token_speakers.size() &&
+                   token_speakers[run_end] == token_speakers[run_start]) {
+                ++run_end;
+            }
+
+            whisper_diarize_append_token_range(
+                ctx,
+                segment,
+                spoken_token_indices[run_start],
+                spoken_token_indices[run_end - 1],
+                token_speakers[run_start],
+                run_end == (int) token_speakers.size() ? segment.speaker_turn_next : false,
+                diarized_segments);
+
+            run_start = run_end;
+        }
+    }
+
+    state.result_all.swap(diarized_segments);
+}
+
+static bool whisper_compute_diarization_embedding(
+        struct whisper_state * state,
+        const float * samples,
+        int n_samples,
+        int range_start,
+        int range_end) {
+    if (state == nullptr || state->diarize_model == nullptr || samples == nullptr) {
+        return false;
+    }
+
+    const int sample_start = std::max(0, range_start);
+    const int sample_end   = std::min(range_end, n_samples);
+    const int range_n_samples = sample_end - sample_start;
+    if (range_n_samples <= 1600) {
+        return false;
+    }
+
+    if (range_n_samples <= DIARIZE_WINDOW_SAMPLES) {
+        return whisper_compute_embedding_for_range(state, samples, sample_start, range_n_samples, -1);
+    }
+
+    std::vector<int> offsets;
+    for (int offset = 0; offset + DIARIZE_WINDOW_SAMPLES <= range_n_samples; offset += DIARIZE_HOP_SAMPLES) {
+        offsets.push_back(offset);
+    }
+
+    const int tail_offset = range_n_samples - DIARIZE_WINDOW_SAMPLES;
+    if (tail_offset >= 0 && (offsets.empty() || tail_offset > offsets.back())) {
+        offsets.push_back(tail_offset);
+    }
+
+    bool any_ok = false;
+    for (int i = 0; i < (int) offsets.size(); ++i) {
+        const int offset = offsets[i];
+        const float * win = samples + sample_start + offset;
+        float energy = 0.0f;
+        for (int j = 0; j < DIARIZE_WINDOW_SAMPLES; j++) {
+            energy += win[j] * win[j];
+        }
+        energy = sqrtf(energy / DIARIZE_WINDOW_SAMPLES);
+        if (energy < 0.01f) {
+            continue;
+        }
+        if (whisper_compute_embedding_for_range(state, samples, sample_start + offset, DIARIZE_WINDOW_SAMPLES, -1)) {
+            any_ok = true;
+        }
+    }
+
+    if (!any_ok) {
+        return whisper_compute_embedding_for_range(state, samples, sample_start, range_n_samples, -1);
+    }
+
+    return any_ok;
+}
+
+static void whisper_collect_diarization_embeddings(
+        struct whisper_state * state,
+        const float * samples,
+        int n_samples) {
+    if (state == nullptr || state->diarize_model == nullptr || state->result_all.empty()) {
+        return;
+    }
+
+    static const int DIARIZE_REGION_GAP_SAMPLES = 0;
+
+    state->diarize_embeddings.clear();
+    state->diarize_segment_indices.clear();
+    state->diarize_window_starts.clear();
+    state->diarize_window_ends.clear();
+
+    std::vector<std::pair<int, int> > regions;
+    regions.reserve(state->result_all.size());
+
+    for (int i = 0; i < (int) state->result_all.size(); ++i) {
+        const whisper_segment & segment = state->result_all[i];
+        const int sample_start = std::max(0, (int) (segment.t0 * WHISPER_SAMPLE_RATE / 100));
+        const int sample_end   = std::min(n_samples, (int) (segment.t1 * WHISPER_SAMPLE_RATE / 100));
+
+        if (sample_end - sample_start <= 1600) {
+            continue;
+        }
+
+        if (!regions.empty() && sample_start <= regions.back().second + DIARIZE_REGION_GAP_SAMPLES) {
+            regions.back().second = std::max(regions.back().second, sample_end);
+        } else {
+            regions.push_back(std::make_pair(sample_start, sample_end));
+        }
+    }
+
+    for (int i = 0; i < (int) regions.size(); ++i) {
+        whisper_compute_diarization_embedding(
+            state,
+            samples,
+            n_samples,
+            regions[i].first,
+            regions[i].second);
+    }
+}
+#endif
 
 struct whisper_global {
     // We save the log callback globally
@@ -3840,6 +4415,20 @@ void whisper_free_state(struct whisper_state * state) {
             state->vad_context = nullptr;
         }
 
+#ifdef WHISPER_DIARIZE
+        // Free diarization context
+        if (state->diarize_model) {
+            whisper_speaker_free(state->diarize_model);
+            state->diarize_model = nullptr;
+        }
+
+        if (state->diarize_clustering) {
+            whisper_clustering_context_free(state->diarize_clustering);
+            state->diarize_clustering = nullptr;
+        }
+
+#endif
+
         delete state;
     }
 }
@@ -5998,6 +6587,12 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
         /*.vad_model_path              =*/ nullptr,
 
         /* vad_params =*/ whisper_vad_default_params(),
+
+        // Speaker diarization defaults
+        /*.diarize                     =*/ false,
+        /*.diarize_model_path          =*/ nullptr,
+        /*.diarize_threshold           =*/ 0.70f,
+        /*.diarize_speakers            =*/ 0,
     };
 
     switch (strategy) {
@@ -6977,6 +7572,32 @@ int whisper_full_with_state(
         prompt_init.push_back(whisper_token_not(ctx));
     }
 
+#ifdef WHISPER_DIARIZE
+    // Lazy load speaker embedding model if diarization enabled
+    if (params.diarize && params.diarize_model_path) {
+        if (!state->diarize_model) {
+            state->diarize_model = whisper_speaker_load_from_file(
+                params.diarize_model_path
+            );
+            if (!state->diarize_model) {
+                WHISPER_LOG_ERROR("failed to load speaker embedding model from: %s\n",
+                                  params.diarize_model_path);
+                // Continue without diarization
+            }
+        }
+    }
+
+    if (state->diarize_clustering) {
+        whisper_clustering_context_free(state->diarize_clustering);
+        state->diarize_clustering = nullptr;
+    }
+
+    state->diarize_embeddings.clear();
+    state->diarize_segment_indices.clear();
+    state->diarize_window_starts.clear();
+    state->diarize_window_ends.clear();
+#endif // WHISPER_DIARIZE
+
     int seek = seek_start;
 
     std::vector<whisper_token> prompt;
@@ -7646,7 +8267,7 @@ int whisper_full_with_state(
 
                             int n_new = 1;
 
-                            if (params.token_timestamps) {
+                            if (params.token_timestamps || params.diarize) {
                                 whisper_exp_compute_token_level_timestamps(
                                         *ctx, *state, result_all.size() - 1, params.thold_pt, params.thold_ptsum);
 
@@ -7657,6 +8278,7 @@ int whisper_full_with_state(
                             if (params.new_segment_callback && !ctx->params.dtw_token_timestamps) {
                                 params.new_segment_callback(ctx, state, n_new, params.new_segment_callback_user_data);
                             }
+
                         }
                         text = "";
                         while (i < (int) tokens_cur.size() && tokens_cur[i].id > whisper_token_beg(ctx)) {
@@ -7691,7 +8313,7 @@ int whisper_full_with_state(
 
                     int n_new = 1;
 
-                    if (params.token_timestamps) {
+                    if (params.token_timestamps || params.diarize) {
                         whisper_exp_compute_token_level_timestamps(
                                 *ctx, *state, result_all.size() - 1, params.thold_pt, params.thold_ptsum);
 
@@ -7702,6 +8324,7 @@ int whisper_full_with_state(
                     if (params.new_segment_callback && !ctx->params.dtw_token_timestamps) {
                         params.new_segment_callback(ctx, state, n_new, params.new_segment_callback_user_data);
                     }
+
                 }
             }
 
@@ -7736,6 +8359,51 @@ int whisper_full_with_state(
             WHISPER_LOG_DEBUG("seek = %d, seek_delta = %d\n", seek, seek_delta);
         }
     }
+
+#ifdef WHISPER_DIARIZE
+    // Perform speaker clustering if diarization enabled
+    if (params.diarize && state->diarize_model) {
+        whisper_collect_diarization_embeddings(state, samples, n_samples);
+    }
+
+    if (params.diarize && !state->diarize_embeddings.empty()) {
+        const int num_embeddings = state->diarize_embeddings.size() / 192;
+        const int num_indexed_segments = state->diarize_segment_indices.size();
+        const int num_window_starts = state->diarize_window_starts.size();
+        const int num_window_ends = state->diarize_window_ends.size();
+
+        if (num_embeddings != num_indexed_segments ||
+            num_embeddings != num_window_starts ||
+            num_embeddings != num_window_ends) {
+            WHISPER_LOG_ERROR("embedding metadata mismatch (embeddings=%d, segment_indices=%d, starts=%d, ends=%d); skipping clustering\n",
+                              num_embeddings, num_indexed_segments, num_window_starts, num_window_ends);
+        } else {
+            state->diarize_clustering = whisper_clustering_context_create(num_embeddings);
+            if (!state->diarize_clustering) {
+                WHISPER_LOG_ERROR("failed to create clustering context\n");
+            } else {
+                int ret = whisper_clustering_cluster(
+                    state->diarize_clustering,
+                    state->diarize_embeddings.data(),
+                    params.diarize_speakers,
+                    params.diarize_threshold,
+                    WHISPER_LINKAGE_AVERAGE
+                );
+
+                if (ret == 0) {
+                    if (params.diarize_speakers <= 0) {
+                        whisper_diarize_merge_small_clusters(state);
+                    }
+                    whisper_diarize_assign_segments(*ctx, *state);
+                    WHISPER_LOG_INFO("diarization complete: %d speakers detected across %d segments\n",
+                                     state->diarize_clustering->num_speakers, (int) state->result_all.size());
+                } else {
+                    WHISPER_LOG_ERROR("clustering failed with code %d\n", ret);
+                }
+            }
+        }
+    }
+#endif // WHISPER_DIARIZE
 
     return 0;
 }
@@ -8004,6 +8672,17 @@ bool whisper_full_get_segment_speaker_turn_next_from_state(struct whisper_state 
 
 bool whisper_full_get_segment_speaker_turn_next(struct whisper_context * ctx, int i_segment) {
     return ctx->state->result_all[i_segment].speaker_turn_next;
+}
+
+int whisper_full_get_segment_speaker_id(struct whisper_context * ctx, int segment) {
+    return whisper_full_get_segment_speaker_id_from_state(ctx->state, segment);
+}
+
+int whisper_full_get_segment_speaker_id_from_state(struct whisper_state * state, int segment) {
+    if (segment < 0 || segment >= (int) state->result_all.size()) {
+        return -1;  // Invalid segment index
+    }
+    return state->result_all[segment].speaker_id;
 }
 
 const char * whisper_full_get_segment_text_from_state(struct whisper_state * state, int i_segment) {
