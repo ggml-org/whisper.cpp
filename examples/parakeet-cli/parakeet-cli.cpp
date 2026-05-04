@@ -6,6 +6,7 @@
 #include <thread>
 #include <vector>
 #include <cstring>
+#include <fstream>
 
 // command-line parameters
 struct parakeet_params {
@@ -19,8 +20,10 @@ struct parakeet_params {
     int32_t gpu_device = 0;
 
     bool print_segments = false;
+    bool output_txt     = false;
 
-    std::string model    = "models/ggml-parakeet-tdt-0.6b-v3.bin";
+    std::string model       = "models/ggml-parakeet-tdt-0.6b-v3.bin";
+    std::string output_file = "";
     std::vector<std::string> fname_inp = {};
 };
 
@@ -65,6 +68,8 @@ static bool parakeet_params_parse(int argc, char ** argv, parakeet_params & para
         else if (arg == "-fa"   || arg == "--flash-attn")      { params.flash_attn        = false; }
         else if (arg == "-nfa"  || arg == "--no-flash-attn")   { params.flash_attn        = false; }
         else if (arg == "-ps"   || arg == "--print-segments")  { params.print_segments    = true; }
+        else if (arg == "-otxt" || arg == "--output-txt")      { params.output_txt        = true; }
+        else if (arg == "-of"   || arg == "--output-file")     { params.output_file       = ARGV_NEXT; }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             parakeet_print_usage(argc, argv, params);
@@ -93,6 +98,8 @@ static void parakeet_print_usage(int /*argc*/, char ** argv, const parakeet_para
     fprintf(stderr, "  -fa,    --flash-attn        [%-7s] enable flash attention\n",                      params.flash_attn ? "true" : "false");
     fprintf(stderr, "  -nfa,   --no-flash-attn     [%-7s] disable flash attention\n",                     !params.flash_attn ? "true" : "false");
     fprintf(stderr, "  -ps,    --print-segments    [%-7s] print segment information\n",                   params.print_segments ? "true" : "false");
+    fprintf(stderr, "  -otxt,  --output-txt        [%-7s] output result in a text file\n",                params.output_txt ? "true" : "false");
+    fprintf(stderr, "  -of,    --output-file FILE  [%-7s] output file path (without file extension)\n",   "");
     fprintf(stderr, "\n");
 }
 
@@ -181,6 +188,23 @@ int main(int argc, char ** argv) {
         }
 
         printf("\n");
+
+        if (params.output_txt) {
+            const std::string fname_out = (!params.output_file.empty() ? params.output_file : fname) + ".txt";
+
+            std::ofstream fout(fname_out);
+            if (fout.is_open()) {
+                const int n_segments = parakeet_full_n_segments(pctx);
+                for (int i = 0; i < n_segments; ++i) {
+                    const char * text = parakeet_full_get_segment_text(pctx, i);
+                    fout << text << "\n";
+                }
+                fout.close();
+                fprintf(stderr, "Output written to: %s\n", fname_out.c_str());
+            } else {
+                fprintf(stderr, "error: failed to open '%s' for writing\n", fname_out.c_str());
+            }
+        }
 
         parakeet_print_timings(pctx);
 
