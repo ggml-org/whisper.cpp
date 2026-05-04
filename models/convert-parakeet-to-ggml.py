@@ -32,23 +32,6 @@ def hz_to_mel(freq):
 def mel_to_hz(mel):
     return 700.0 * (10.0**(mel / 2595.0) - 1.0)
 
-def create_relative_positional_encoding(d_model: int, n_pos_max_len: int) -> np.ndarray:
-    max_len = n_pos_max_len * 2 - 1
-    log_10000 = np.log(10000.0)
-    pe = np.zeros((max_len, d_model), dtype=np.float32)
-
-    for idx in range(max_len):
-        position = float((max_len // 2) - idx)
-
-        for i in range(0, d_model, 2):
-            div_term = np.exp(-float(i) * log_10000 / float(d_model))
-            angle = position * div_term
-
-            pe[idx, i] = np.sin(angle)
-            pe[idx, i + 1] = np.cos(angle)
-
-    return pe
-
 def extract_nemo_archive(nemo_path, extract_dir):
     print(f"Extracting {nemo_path} to {extract_dir}")
     with tarfile.open(nemo_path, 'r') as tar:
@@ -165,7 +148,6 @@ def convert_parakeet_to_ggml(nemo_path, output_dir, use_f16=True, out_name=None)
             'n_fft': config['preprocessor']['n_fft'],
             'subsampling_factor': config['encoder']['subsampling_factor'],
             'n_subsampling_channels': config['encoder']['subsampling_conv_channels'],
-            'n_pos_max_len': config['encoder']['pos_emb_max_len'],
 
             'n_pred_dim': config['decoder']['prednet']['pred_hidden'],
             'n_pred_layers': config['decoder']['prednet']['pred_rnn_layers'],
@@ -177,9 +159,6 @@ def convert_parakeet_to_ggml(nemo_path, output_dir, use_f16=True, out_name=None)
         print("\nGGML hyperparameters:")
         for key, value in hparams.items():
             print(f"  {key}: {value}")
-
-        pe = create_relative_positional_encoding(hparams['n_audio_state'], hparams['n_pos_max_len'])
-        print(f"\nGenerated positional encoding tensor 'encoder.pe' with shape {pe.shape}")
 
         # Create output file
         if out_name:
@@ -203,7 +182,6 @@ def convert_parakeet_to_ggml(nemo_path, output_dir, use_f16=True, out_name=None)
             fout.write(struct.pack("i", hparams['n_fft']))
             fout.write(struct.pack("i", hparams['subsampling_factor']))
             fout.write(struct.pack("i", hparams['n_subsampling_channels']))
-            fout.write(struct.pack("i", hparams['n_pos_max_len']))
             fout.write(struct.pack("i", hparams['n_pred_dim']))
             fout.write(struct.pack("i", hparams['n_pred_layers']))
             fout.write(struct.pack("i", hparams['n_tdt_durations']))
@@ -301,8 +279,6 @@ def convert_parakeet_to_ggml(nemo_path, output_dir, use_f16=True, out_name=None)
                     data = tensor.squeeze().numpy()
 
                 write_tensor(fout, name, data, use_f16=use_f16)
-
-            write_tensor(fout, "encoder.pe", pe, use_f16=use_f16, force_f32=True)
 
         print(f"\nConversion complete!")
         print(f"Output file: {fname_out}")

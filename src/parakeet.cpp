@@ -323,7 +323,6 @@ struct parakeet_hparams {
     float   eps                    = 1e-5f;
     int32_t subsampling_factor     = 8;
     int32_t n_subsampling_channels = 256;
-    int32_t n_pos_max_len          = 5000;
     int32_t n_pred_dim             = 640;
     int32_t n_pred_layers          = 2;
     int32_t n_tdt_durations        = 5;
@@ -397,9 +396,6 @@ struct parakeet_joint_network {
 struct parakeet_model {
     parakeet_filters filters;
     parakeet_hparams hparams;
-
-    // Relative positional encoding (pe)
-    struct ggml_tensor * pe = nullptr;
 
     struct ggml_tensor * enc_pre_out_w    = nullptr;
     struct ggml_tensor * enc_pre_out_b    = nullptr;
@@ -1033,7 +1029,6 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
         read_safe(loader, hparams.n_fft);
         read_safe(loader, hparams.subsampling_factor);
         read_safe(loader, hparams.n_subsampling_channels);
-        read_safe(loader, hparams.n_pos_max_len);
         read_safe(loader, hparams.n_pred_dim);
         read_safe(loader, hparams.n_pred_layers);
         read_safe(loader, hparams.n_tdt_durations);
@@ -1067,7 +1062,6 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
         PARAKEET_LOG_INFO("%s: qntvr         = %d\n", __func__, qntvr);
         PARAKEET_LOG_INFO("%s: subsampling_factor = %d\n", __func__, hparams.subsampling_factor);
         PARAKEET_LOG_INFO("%s: n_subsampling_channels = %d\n", __func__, hparams.n_subsampling_channels);
-        PARAKEET_LOG_INFO("%s: n_pos_max_len = %d\n", __func__, hparams.n_pos_max_len);
         PARAKEET_LOG_INFO("%s: n_pred_dim = %d\n", __func__, hparams.n_pred_dim);
         PARAKEET_LOG_INFO("%s: n_pred_layers = %d\n", __func__, hparams.n_pred_layers);
         PARAKEET_LOG_INFO("%s: n_tdt_durations = %d\n", __func__, hparams.n_tdt_durations);
@@ -1375,8 +1369,6 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
 
     // Relative positional encoding
     {
-        model.pe = create_tensor(PARAKEET_TENSOR_ENC_PE, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_audio_state, hparams.n_pos_max_len * 2 - 1));
-        ggml_set_name(model.pe, "pe");
     }
 
     ggml_free(ctx);
@@ -1618,6 +1610,27 @@ static struct ggml_cgraph * parakeet_build_graph_encoder(parakeet_context & pctx
     ggml_set_name(attn_mask, "attn_mask");
     ggml_set_input(attn_mask);
 
+    const int n_time      = cur->ne[1];
+    const int window_size = 2 * n_time - 1;
+    const int d_half      = n_state / 2;
+
+    struct ggml_tensor * pos_freqs = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, d_half);
+    ggml_set_name(pos_freqs, "pos_freqs");
+    ggml_set_input(pos_freqs);
+
+    struct ggml_tensor * rel_positions = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, window_size);
+    ggml_set_name(rel_positions, "rel_positions");
+    ggml_set_input(rel_positions);
+
+    struct ggml_tensor * freqs = ggml_repeat_4d(ctx0, pos_freqs, d_half, window_size, 1, 1);
+    struct ggml_tensor * theta = ggml_mul(ctx0, freqs, rel_positions);
+
+    struct ggml_tensor * sin_t = ggml_reshape_3d(ctx0, ggml_sin(ctx0, theta), 1, d_half, window_size);
+    struct ggml_tensor * cos_t = ggml_reshape_3d(ctx0, ggml_cos(ctx0, theta), 1, d_half, window_size);
+    // [n_state, window_size]
+    struct ggml_tensor * pos_emb = ggml_reshape_2d(ctx0, ggml_cont(ctx0, ggml_concat(ctx0, sin_t, cos_t, 0)), n_state, window_size);
+    ggml_set_name(pos_emb, "pos_emb");
+
     for (int il = 0; il < n_layer; ++il) {
         // FFN1
         {
@@ -1641,7 +1654,7 @@ static struct ggml_cgraph * parakeet_build_graph_encoder(parakeet_context & pctx
             ggml_format_name(cur, "enc_%d_res_ffn", il);
         }
 
-        // self attention block using relative positional encoding from the model.pe tensor.
+        // self attention block using relative positional encoding computed in graph.
         {
             // [feat, time_frames, 1, 1]
             struct ggml_tensor * residual = cur;
@@ -1664,18 +1677,7 @@ static struct ggml_cgraph * parakeet_build_graph_encoder(parakeet_context & pctx
             K_cur = ggml_reshape_3d(ctx0, K_cur, d_head, n_head, n_time);
             V_cur = ggml_reshape_3d(ctx0, V_cur, d_head, n_head, n_time);
 
-            const int input_len = cur->ne[1];
-            const int center_pos = model.pe->ne[1] / 2 + 1;
-            const int start_pos = center_pos - input_len;
-            const int window_size = 2 * input_len - 1;
-            const size_t offset = start_pos * model.pe->nb[1];
-
-            // [feat, window_size]
-            struct ggml_tensor * pos_emb = ggml_view_2d(ctx0, model.pe,
-                                            n_state, window_size,
-                                            model.pe->nb[1], offset);
-            ggml_format_name(pos_emb, "enc_%d_attn_pos_emb", il);
-
+            // [n_state, window_size]
             struct ggml_tensor * pos = ggml_mul_mat(ctx0, model.layers[il].attn_pos_w, pos_emb);
             ggml_format_name(pos, "enc_%d_attn_pos", il);
 
@@ -1704,7 +1706,7 @@ static struct ggml_cgraph * parakeet_build_graph_encoder(parakeet_context & pctx
             // [feat, window_size, 1, 1] and we are doing multi-head attention so
             // we need to split this into heads.
             // [feat, head, window_size, 1]
-            pos = ggml_reshape_3d(ctx0, pos, d_head, n_head, pos_emb->ne[1]);
+            pos = ggml_reshape_3d(ctx0, pos, d_head, n_head, window_size);
 
             // [feat, window_size, head, 1]
             pos = ggml_permute(ctx0, pos, 0, 2, 1, 3);
@@ -1939,6 +1941,29 @@ static bool parakeet_encode_internal(
             }
         }
         ggml_backend_tensor_set(attn_mask, mask_data.data(), 0, mask_data.size() * sizeof(float));
+    }
+
+    {
+        struct ggml_tensor * pos_freqs_t = ggml_graph_get_tensor(gf, "pos_freqs");
+        const int d_half      = pos_freqs_t->ne[0];
+        const int n_state     = pctx.model.hparams.n_audio_state;
+        const float log_10000 = logf(10000.0f);
+        std::vector<float> freqs(d_half);
+        for (int k = 0; k < d_half; ++k) {
+            freqs[k] = expf(-(float(k * 2) * log_10000 / float(n_state)));
+        }
+        ggml_backend_tensor_set(pos_freqs_t, freqs.data(), 0, freqs.size() * sizeof(float));
+    }
+
+    {
+        struct ggml_tensor * rel_pos_t = ggml_graph_get_tensor(gf, "rel_positions");
+        const int window_size = rel_pos_t->ne[1];
+        const int n_time      = (window_size + 1) / 2;
+        std::vector<float> pos(window_size);
+        for (int t = 0; t < window_size; ++t) {
+            pos[t] = float(n_time - 1 - t);
+        }
+        ggml_backend_tensor_set(rel_pos_t, pos.data(), 0, pos.size() * sizeof(float));
     }
 
     if (!ggml_graph_compute_helper(sched, gf, n_threads)) {

@@ -18,7 +18,6 @@ enum parakeet_tensor {
     PARAKEET_TENSOR_ENC_PRE_CONV_5_BIAS,
     PARAKEET_TENSOR_ENC_PRE_CONV_6_WEIGHT,
     PARAKEET_TENSOR_ENC_PRE_CONV_6_BIAS,
-    PARAKEET_TENSOR_ENC_PE,
 
     // Encoder layers (per-layer)
     PARAKEET_TENSOR_ENC_NORM_FF1_WEIGHT,
@@ -81,7 +80,6 @@ static const std::map<parakeet_tensor, const char *> PARAKEET_TENSOR_NAMES = {
     {PARAKEET_TENSOR_ENC_PRE_CONV_5_BIAS,         "encoder.pre_encode.conv.5.bias"},
     {PARAKEET_TENSOR_ENC_PRE_CONV_6_WEIGHT,       "encoder.pre_encode.conv.6.weight"},
     {PARAKEET_TENSOR_ENC_PRE_CONV_6_BIAS,         "encoder.pre_encode.conv.6.bias"},
-    {PARAKEET_TENSOR_ENC_PE,                      "encoder.pe"},
 
     // Encoder layers (use %d for layer number)
     {PARAKEET_TENSOR_ENC_NORM_FF1_WEIGHT,         "encoder.layers.%d.norm_feed_forward1.weight"},
@@ -144,7 +142,6 @@ static const std::map<parakeet_tensor, ggml_op> PARAKEET_TENSOR_INFO = {
     {PARAKEET_TENSOR_ENC_PRE_CONV_5_BIAS,         GGML_OP_ADD},
     {PARAKEET_TENSOR_ENC_PRE_CONV_6_WEIGHT,       GGML_OP_IM2COL},
     {PARAKEET_TENSOR_ENC_PRE_CONV_6_BIAS,         GGML_OP_ADD},
-    {PARAKEET_TENSOR_ENC_PE,                      GGML_OP_ADD},
 
     // Encoder layers
     {PARAKEET_TENSOR_ENC_NORM_FF1_WEIGHT,         GGML_OP_MUL},
