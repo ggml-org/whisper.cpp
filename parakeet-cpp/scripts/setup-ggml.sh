@@ -12,7 +12,7 @@
 #       Teaches ggml_backend_load_best() to honour a compile-time
 #       GGML_BACKEND_DL_PROJECT_PREFIX macro so renaming the bundled
 #       backend .so/.dll files (PARAKEET_GGML_LIB_PREFIX=ON, the default,
-#       emits libparakeet-ggml-*.so) does not break runtime backend
+#       emits libspeech-ggml-*.so) does not break runtime backend
 #       discovery under GGML_BACKEND_DL=ON. No-op when the macro is
 #       undefined.
 #   patches/ggml-opencl-allow-non-adreno.patch

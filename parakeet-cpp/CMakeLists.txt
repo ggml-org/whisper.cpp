@@ -20,7 +20,7 @@ option(PARAKEET_BUILD_EXAMPLES    "parakeet: build standalone examples (live-mic
 option(PARAKEET_INSTALL           "parakeet: generate install rules"                                 ON)
 option(PARAKEET_USE_SYSTEM_GGML   "parakeet: use system-installed GGML library"                      OFF)
 option(PARAKEET_CCACHE            "parakeet: use ccache as compiler launcher if available"           ON)
-option(PARAKEET_GGML_LIB_PREFIX   "parakeet: rename bundled ggml libraries to libparakeet-ggml-* (filename only; CMake target names and C symbols are unchanged). Prevents shared-library filename collisions when multiple consumers that vendor different ggml versions are loaded into the same host process. Has no effect when PARAKEET_USE_SYSTEM_GGML=ON." ON)
+option(PARAKEET_GGML_LIB_PREFIX   "parakeet: rename bundled ggml libraries to libspeech-ggml-* (filename only; CMake target names and C symbols are unchanged). Prevents shared-library filename collisions with other ggml consumers in the same host process; the `speech-` prefix is shared with the rest of the QVAC speech stack (whisper, parakeet, chatterbox, supertonic, ...) so they vendor a single ggml file set. Has no effect when PARAKEET_USE_SYSTEM_GGML=ON." ON)
 
 # ccache shaves ~30 % off iterative rebuild time on developer machines.
 # Opt-out via -DPARAKEET_CCACHE=OFF for clean reproducibility runs.
@@ -133,7 +133,7 @@ function(parakeet_apply_ggml_prefix target)
         set(_qpgp_old_name ${target})
     endif()
     set_target_properties(${target} PROPERTIES
-        OUTPUT_NAME "parakeet-${_qpgp_old_name}"
+        OUTPUT_NAME "speech-${_qpgp_old_name}"
     )
 endfunction()
 
@@ -158,10 +158,10 @@ if (PARAKEET_GGML_LIB_PREFIX AND NOT PARAKEET_USE_SYSTEM_GGML)
     # fail to load.
     if (TARGET ggml)
         target_compile_definitions(ggml PRIVATE
-            GGML_BACKEND_DL_PROJECT_PREFIX="parakeet-"
+            GGML_BACKEND_DL_PROJECT_PREFIX="speech-"
         )
     endif()
-    message(STATUS "parakeet: bundled ggml libraries will be emitted as libparakeet-ggml-* (set PARAKEET_GGML_LIB_PREFIX=OFF to keep upstream filenames)")
+    message(STATUS "parakeet: bundled ggml libraries will be emitted as libspeech-ggml-* (set PARAKEET_GGML_LIB_PREFIX=OFF to keep upstream filenames)")
 endif()
 
 # Same OpenMP avoidance as for ggml above: on Windows non-MinGW builds
@@ -396,7 +396,7 @@ if (PARAKEET_BUILD_TESTS)
         if (WIN32)
             # When ggml builds as shared (the clang-cl / MSVC default with
             # GGML_BACKEND_DL on), test exes link against import libs and
-            # need to find `parakeet-ggml-*.dll` at runtime. CMake places
+            # need to find `speech-ggml-*.dll` at runtime. CMake places
             # those at `${CMAKE_BINARY_DIR}/bin`, but Windows has no rpath
             # and the test exes live next to the binary root, not in bin/.
             # Without this, the OS loader fails with STATUS_DLL_NOT_FOUND

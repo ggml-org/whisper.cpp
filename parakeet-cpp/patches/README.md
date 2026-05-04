@@ -106,10 +106,13 @@ filename prefix used by a host project that renames the bundled
 `libggml-*` files in the same host process.
 
 Background: parakeet ships its bundled ggml backends as
-`libparakeet-ggml-*.{so,dll}` (CMake option
+`libspeech-ggml-*.{so,dll}` (CMake option
 `PARAKEET_GGML_LIB_PREFIX=ON`, default) so a host process that
 loads two consumers each vendoring its own ggml does not see a
-name clash on `libggml-vulkan.so` / `libggml-cuda.so` / etc.
+name clash on `libggml-vulkan.so` / `libggml-cuda.so` / etc. The
+`speech-` prefix is shared with the rest of the QVAC speech stack
+(whisper, parakeet, chatterbox, supertonic, ...) so the family
+co-vendors a single ggml file set.
 Without this patch, the rename works at link time but
 `ggml_backend_load_best()` still searches for `libggml-*.so` /
 `ggml-*.dll`, so under `GGML_BACKEND_DL=ON` the renamed files are
@@ -118,12 +121,12 @@ silently fail to load.
 
 | Symptom | Root cause | What this patch does |
 |---------|-----------|----------------------|
-| `parakeet-ggml-vulkan.so` (etc.) is on disk but ggml's loader never picks it up under `GGML_BACKEND_DL=ON` | `backend_filename_prefix()` hard-codes `libggml-` / `ggml-` and `ggml_backend_load_best` filters directory entries by that fixed prefix | Honour an optional compile-time `GGML_BACKEND_DL_PROJECT_PREFIX` string literal (e.g. `"parakeet-"`); when defined, the loader searches for `lib<prefix>ggml-*` / `<prefix>ggml-*` instead. Macro undefined ⇒ behaviour byte-equal to upstream. |
+| `speech-ggml-vulkan.so` (etc.) is on disk but ggml's loader never picks it up under `GGML_BACKEND_DL=ON` | `backend_filename_prefix()` hard-codes `libggml-` / `ggml-` and `ggml_backend_load_best` filters directory entries by that fixed prefix | Honour an optional compile-time `GGML_BACKEND_DL_PROJECT_PREFIX` string literal (e.g. `"speech-"`); when defined, the loader searches for `lib<prefix>ggml-*` / `<prefix>ggml-*` instead. Macro undefined ⇒ behaviour byte-equal to upstream. |
 
 The CMake side wires the macro from `PARAKEET_GGML_LIB_PREFIX`:
 when that option is on (the default), parakeet's top-level
 `CMakeLists.txt` does
-`target_compile_definitions(ggml PRIVATE GGML_BACKEND_DL_PROJECT_PREFIX="parakeet-")`
+`target_compile_definitions(ggml PRIVATE GGML_BACKEND_DL_PROJECT_PREFIX="speech-")`
 on the `ggml` target (which is what compiles
 `ggml-backend-reg.cpp`). Consumers that prefer the upstream
 filenames (system ggml, single-consumer hosts) configure with

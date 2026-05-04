@@ -86,7 +86,7 @@ Run with GPU layers:
 | `PARAKEET_BUILD_EXAMPLES` | `ON` standalone / `OFF` subdir | `live-mic`, `live-mic-attributed` |
 | `PARAKEET_INSTALL` | `ON` | Generate `install` rules + the `parakeet-cpp` CMake package config |
 | `PARAKEET_USE_SYSTEM_GGML` | `OFF` | Link system ggml instead of `ggml/` submodule |
-| `PARAKEET_GGML_LIB_PREFIX` | `ON` | Prefix bundled ggml libs as `parakeet-ggml-*` (no-op when `PARAKEET_USE_SYSTEM_GGML=ON`) |
+| `PARAKEET_GGML_LIB_PREFIX` | `ON` | Prefix bundled ggml libs as `speech-ggml-*` (shared with whisper / chatterbox / supertonic so the QVAC speech stack vendors a single ggml file set; no-op when `PARAKEET_USE_SYSTEM_GGML=ON`) |
 | `PARAKEET_OPENMP` | `ON` (auto-OFF on Windows non-MinGW) | Try `find_package(OpenMP)` and link the parakeet target against it |
 | `PARAKEET_FLASH_ATTN` | `ON` on Metal, `OFF` elsewhere | Fused flash-attn in the encoder MHA (per-backend A/B pending) |
 | `PARAKEET_CCACHE` | `ON` | Use ccache as compiler launcher for parakeet targets when found |

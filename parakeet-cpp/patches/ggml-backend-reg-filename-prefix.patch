@@ -13,7 +13,7 @@ diff --git a/src/ggml-backend-reg.cpp b/src/ggml-backend-reg.cpp
 +// loaded with `GGML_BACKEND_DL=ON`: the discovery walk in
 +// `ggml_backend_load_best` only matches the unprefixed names. Define
 +// `GGML_BACKEND_DL_PROJECT_PREFIX` (a string literal, e.g.
-+// "parakeet-") at compile time and the loader will instead search for
++// "speech-") at compile time and the loader will instead search for
 +// "<prefix>ggml-*" / "lib<prefix>ggml-*". Default behaviour (macro
 +// undefined) is byte-equal to upstream.
  static fs::path backend_filename_prefix() {
