@@ -179,10 +179,18 @@ set(WHISPER_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location
 get_directory_property(WHISPER_TRANSIENT_DEFINES COMPILE_DEFINITIONS)
 
 set_target_properties(whisper PROPERTIES PUBLIC_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/include/whisper.h)
+
 install(TARGETS whisper LIBRARY PUBLIC_HEADER)
 
 target_compile_definitions(whisper PRIVATE
     WHISPER_VERSION="${PROJECT_VERSION}"
+)
+
+set_target_properties(parakeet PROPERTIES PUBLIC_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/include/parakeet.h)
+install(TARGETS parakeet LIBRARY PUBLIC_HEADER)
+
+target_compile_definitions(parakeet PRIVATE
+    PARAKEET_VERSION="${PROJECT_VERSION}"
 )
 
 configure_package_config_file(
@@ -208,6 +216,35 @@ configure_file(cmake/whisper.pc.in
         @ONLY)
 
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/whisper.pc"
+        DESTINATION lib/pkgconfig)
+
+set(PARAKEET_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of header  files")
+set(PARAKEET_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
+set(PARAKEET_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of binary  files")
+
+configure_package_config_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/parakeet-config.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/parakeet-config.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/parakeet
+    PATH_VARS
+    PARAKEET_INCLUDE_INSTALL_DIR
+    PARAKEET_LIB_INSTALL_DIR
+    PARAKEET_BIN_INSTALL_DIR)
+
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/parakeet-version.cmake
+    VERSION ${WHISPER_INSTALL_VERSION}
+    COMPATIBILITY SameMajorVersion)
+
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/parakeet-config.cmake
+              ${CMAKE_CURRENT_BINARY_DIR}/parakeet-version.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/parakeet)
+
+configure_file(cmake/parakeet.pc.in
+        "${CMAKE_CURRENT_BINARY_DIR}/parakeet.pc"
+        @ONLY)
+
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/parakeet.pc"
         DESTINATION lib/pkgconfig)
 
 #

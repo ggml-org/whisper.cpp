@@ -110,3 +110,32 @@ target_compile_definitions(${VAD_TEST} PRIVATE
     SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
 add_test(NAME ${VAD_TEST} COMMAND ${VAD_TEST})
 set_tests_properties(${VAD_TEST} PROPERTIES LABELS "base;en")
+
+# Parakeet model loading test
+set(PARAKEET_TEST test-parakeet)
+add_executable(${PARAKEET_TEST} ${PARAKEET_TEST}.cpp)
+target_include_directories(${PARAKEET_TEST} PRIVATE ../include ../ggml/include ../examples)
+target_link_libraries(${PARAKEET_TEST} PRIVATE parakeet common)
+target_compile_definitions(${PARAKEET_TEST} PRIVATE
+    PARAKEET_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/ggml-parakeet-tdt-0.6b-v3.bin"
+    SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
+add_test(NAME ${PARAKEET_TEST} COMMAND ${PARAKEET_TEST})
+
+set(PARAKEET_TEST test-parakeet-stream)
+add_executable(${PARAKEET_TEST} ${PARAKEET_TEST}.cpp)
+target_include_directories(${PARAKEET_TEST} PRIVATE ../include ../ggml/include ../examples)
+target_link_libraries(${PARAKEET_TEST} PRIVATE parakeet common)
+target_compile_definitions(${PARAKEET_TEST} PRIVATE
+    PARAKEET_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/ggml-parakeet-tdt-0.6b-v3.bin"
+    SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/gb1.wav")
+add_test(NAME ${PARAKEET_TEST} COMMAND ${PARAKEET_TEST})
+
+set(PARAKEET_TEST test-parakeet-full)
+add_executable(${PARAKEET_TEST} ${PARAKEET_TEST}.cpp)
+target_include_directories(${PARAKEET_TEST} PRIVATE ../include ../ggml/include ../examples)
+target_link_libraries(${PARAKEET_TEST} PRIVATE parakeet common)
+target_compile_definitions(${PARAKEET_TEST} PRIVATE
+    PARAKEET_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/ggml-parakeet-tdt-0.6b-v3.bin"
+    SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/gb1.wav")
+add_test(NAME ${PARAKEET_TEST} COMMAND ${PARAKEET_TEST})
+set_tests_properties(${PARAKEET_TEST} PROPERTIES LABELS "parakeet;unit")

@@ -18,6 +18,6 @@ create_makefile "whisper" do |conf|
     #{libs}: cmake-targets
     cmake-targets:
     #{"\t"}#{cmake} -S sources -B build -D BUILD_SHARED_LIBS=OFF -D CMAKE_ARCHIVE_OUTPUT_DIRECTORY=#{__dir__} -D CMAKE_POSITION_INDEPENDENT_CODE=ON #{options}
-    #{"\t"}#{cmake} --build build --config Release --target common whisper
+    #{"\t"}#{cmake} --build build --config Release --target common whisper parakeet
   EOF
 end
