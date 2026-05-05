@@ -3,7 +3,7 @@ PYTHON = python
 PARAKEET_PREFIX = ../../
 PARAKEET_MODEL = parakeet-tdt-0.6b-v3
 
-PARAKEET_CLI = $(PARAKEET_PREFIX)build-cuda-89-release/bin/parakeet-cli
+PARAKEET_CLI = $(PARAKEET_PREFIX)build/bin/parakeet-cli
 PARAKEET_FLAGS = --no-prints --output-txt
 
 # You can create eval.conf to override the PARAKEET_* variables
