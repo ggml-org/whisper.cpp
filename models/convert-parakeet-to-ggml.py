@@ -39,7 +39,7 @@ def extract_nemo_archive(nemo_path, extract_dir):
     print("Extraction complete")
 
 def load_model_config(config_path):
-    with open(config_path, 'r') as f:
+    with open(config_path, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
     return config
 
