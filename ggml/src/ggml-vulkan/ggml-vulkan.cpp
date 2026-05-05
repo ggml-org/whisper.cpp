@@ -642,6 +642,11 @@ struct vk_device_struct {
 
     bool shader_64b_indexing;
 
+    // Number of compute pipelines that failed to compile.
+    // When > 0, supports_op returns false for all ops so the backend
+    // scheduler routes everything to the CPU backend.
+    std::atomic<uint32_t> pipeline_failures {};
+
     bool integer_dot_product;
     // 0: default, 1: force mmvq, -1: disable mmvq
     int32_t mmvq_mode;
@@ -2285,9 +2290,19 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
     try {
         pipeline->pipeline = device->device.createComputePipeline(VK_NULL_HANDLE, compute_pipeline_create_info).value;
     } catch (const vk::SystemError& e) {
-        std::cerr << "ggml_vulkan: Compute pipeline creation failed for " << pipeline->name << std::endl;
-        std::cerr << "ggml_vulkan: " << e.what() << std::endl;
-        throw e;
+        GGML_LOG_WARN("ggml_vulkan: compute pipeline creation failed for %s: %s\n",
+                      pipeline->name.c_str(), e.what());
+        device->pipeline_failures.fetch_add(1, std::memory_order_relaxed);
+        device->device.destroyShaderModule(pipeline->shader_module);
+        pipeline->shader_module = VK_NULL_HANDLE;
+        return;
+    }
+    if (!pipeline->pipeline) {
+        GGML_LOG_WARN("ggml_vulkan: compute pipeline is null for %s\n", pipeline->name.c_str());
+        device->pipeline_failures.fetch_add(1, std::memory_order_relaxed);
+        device->device.destroyShaderModule(pipeline->shader_module);
+        pipeline->shader_module = VK_NULL_HANDLE;
+        return;
     }
     pipeline->compiled = true;
 
@@ -5448,12 +5463,18 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #endif
         }
 
-        if (!vk11_features.storageBuffer16BitAccess) {
-            std::cerr << "ggml_vulkan: device " << GGML_VK_NAME << idx << " does not support 16-bit storage." << std::endl;
-            throw std::runtime_error("Unsupported device");
+        if (!vk11_features.storageBuffer16BitAccess || !fp16_storage) {
+            GGML_LOG_WARN("ggml_vulkan: device %s%zu does not support 16-bit storage "
+                          "(feature=%d, extension=%d), falling back to CPU\n",
+                          GGML_VK_NAME, idx,
+                          (int)vk11_features.storageBuffer16BitAccess,
+                          (int)fp16_storage);
+            device->pipeline_failures.store(1, std::memory_order_relaxed);
         }
 
-        device_extensions.push_back("VK_KHR_16bit_storage");
+        if (fp16_storage) {
+            device_extensions.push_back("VK_KHR_16bit_storage");
+        }
 
 #ifdef GGML_VULKAN_VALIDATE
         device_extensions.push_back("VK_KHR_shader_non_semantic_info");
@@ -5586,6 +5607,63 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         // Queues
         ggml_vk_create_queue(device, device->compute_queue, compute_queue_family_index, 0, { vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer }, false);
+
+        // Verify vkGetBufferDeviceAddress actually works — some drivers
+        // (e.g. certain Adreno builds) report bufferDeviceAddress support
+        // in the feature bits but crash (SIGSEGV) when the function is
+        // actually called. Probe it here and disable if broken.
+        if (device->buffer_device_address) {
+            PFN_vkGetBufferDeviceAddress pfn = (PFN_vkGetBufferDeviceAddress)
+                vkGetDeviceProcAddr(device->device, "vkGetBufferDeviceAddress");
+            if (pfn == nullptr) {
+                GGML_LOG_WARN("ggml_vulkan: vkGetBufferDeviceAddress proc addr is null, disabling BDA\n");
+                device->buffer_device_address = false;
+            } else {
+                // Create a tiny test buffer and verify the call returns non-zero
+                VkBufferCreateInfo test_bci = {};
+                test_bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+                test_bci.size = 256;
+                test_bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+                VkBuffer test_buf = VK_NULL_HANDLE;
+                if (vkCreateBuffer(device->device, &test_bci, nullptr, &test_buf) == VK_SUCCESS) {
+                    VkMemoryRequirements test_req;
+                    vkGetBufferMemoryRequirements(device->device, test_buf, &test_req);
+                    VkPhysicalDeviceMemoryProperties test_mem_props;
+                    vkGetPhysicalDeviceMemoryProperties(device->physical_device, &test_mem_props);
+                    uint32_t test_mtype = UINT32_MAX;
+                    for (uint32_t j = 0; j < test_mem_props.memoryTypeCount; j++) {
+                        if (test_req.memoryTypeBits & (1u << j)) { test_mtype = j; break; }
+                    }
+                    if (test_mtype != UINT32_MAX) {
+                        VkMemoryAllocateFlagsInfo test_flags = {};
+                        test_flags.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+                        test_flags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+                        VkMemoryAllocateInfo test_alloc = {};
+                        test_alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+                        test_alloc.pNext = &test_flags;
+                        test_alloc.allocationSize = test_req.size;
+                        test_alloc.memoryTypeIndex = test_mtype;
+                        VkDeviceMemory test_mem = VK_NULL_HANDLE;
+                        if (vkAllocateMemory(device->device, &test_alloc, nullptr, &test_mem) == VK_SUCCESS) {
+                            vkBindBufferMemory(device->device, test_buf, test_mem, 0);
+                            VkBufferDeviceAddressInfo test_addr = {};
+                            test_addr.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+                            test_addr.buffer = test_buf;
+                            VkDeviceAddress addr = pfn(device->device, &test_addr);
+                            if (addr == 0) {
+                                GGML_LOG_WARN("ggml_vulkan: vkGetBufferDeviceAddress returned 0, disabling BDA\n");
+                                device->buffer_device_address = false;
+                            }
+                            vkFreeMemory(device->device, test_mem, nullptr);
+                        } else {
+                            GGML_LOG_WARN("ggml_vulkan: BDA test alloc failed, disabling BDA\n");
+                            device->buffer_device_address = false;
+                        }
+                    }
+                    vkDestroyBuffer(device->device, test_buf, nullptr);
+                }
+            }
+        }
 
         // Shaders
         // Disable matmul tile sizes early if performance low or not supported
@@ -6660,6 +6738,9 @@ template <typename T, uint32_t N> const T *push_constant_data(const std::array<T
 
 template <typename T>
 static void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& subctx, vk_pipeline& pipeline, std::initializer_list<vk::DescriptorBufferInfo> const& descriptor_buffer_infos, const T &push_constants, std::array<uint32_t, 3> elements) {
+    if (!pipeline || !pipeline->compiled) {
+        return;
+    }
     const uint32_t wg0 = CEIL_DIV(elements[0], pipeline->wg_denoms[0]);
     const uint32_t wg1 = CEIL_DIV(elements[1], pipeline->wg_denoms[1]);
     const uint32_t wg2 = CEIL_DIV(elements[2], pipeline->wg_denoms[2]);
@@ -15488,6 +15569,14 @@ static ggml_backend_t ggml_backend_vk_device_init(ggml_backend_dev_t dev, const 
 static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
     const vk_device& device = ggml_vk_get_device(ctx->device);
+
+    // If any compute pipelines failed to compile, the GPU driver is broken
+    // for these shaders. Return false for all ops so the backend scheduler
+    // routes everything to the CPU backend instead of dispatching to
+    // null pipelines.
+    if (device->pipeline_failures.load(std::memory_order_relaxed) > 0) {
+        return false;
+    }
 
     const bool uses_bda = (op->op == GGML_OP_IM2COL || op->op == GGML_OP_IM2COL_3D) &&
                           device->shader_int64 && device->buffer_device_address;
