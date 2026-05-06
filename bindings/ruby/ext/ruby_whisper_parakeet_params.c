@@ -89,7 +89,6 @@ ruby_whisper_parakeet_params_initialize(int argc, VALUE *argv, VALUE self)
 {
   VALUE kw_hash;
   VALUE values[RUBY_WHISPER_PARAKEET_NUM_PARAMS] = {Qundef};
-  VALUE id;
   VALUE value;
   ruby_whisper_parakeet_params *rwpp;
   int i;
@@ -103,7 +102,6 @@ ruby_whisper_parakeet_params_initialize(int argc, VALUE *argv, VALUE self)
   TypedData_Get_Struct(self, ruby_whisper_parakeet_params, &ruby_whisper_parakeet_params_type, rwpp);
 
   for (i = 0; i < RUBY_WHISPER_PARAKEET_NUM_PARAMS; i++) {
-    id = param_names[i];
     value = values[i];
     if (value == Qundef) {
       continue;
