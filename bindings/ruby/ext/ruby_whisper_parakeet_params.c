@@ -1,28 +1,36 @@
 #include "ruby_whisper.h"
 
 #define ITERATE_PARAMS(ITERATOR) \
-  ITERATOR(n_threads, n_threads,INT) \
-  ITERATOR(offset_ms, offset_ms, INT) \
-  ITERATOR(duration_ms, duration_ms, INT) \
-  ITERATOR(no_context, no_context, BOOL) \
-  ITERATOR(audio_ctx, audio_ctx, INT) \
-  ITERATOR(chunk_length_ms, chunk_length_ms, INT) \
-  ITERATOR(left_context_ms, left_context_ms, INT) \
-  ITERATOR(right_context_ms, right_context_ms, INT) \
-  ITERATOR(new_segment_callback, new_segment_callback, CALLBACK) \
-  ITERATOR(new_segment_callback_user_data, new_segment_callback, USER_DATA) \
-  ITERATOR(new_token_callback, new_token_callback, CALLBACK) \
-  ITERATOR(new_token_callback_user_data, new_token_callback, USER_DATA) \
-  ITERATOR(progress_callback, progress_callback, CALLBACK) \
-  ITERATOR(progress_callback_user_data, progress_callback, USER_DATA) \
-  ITERATOR(encoder_begin_callback, encoder_begin_callback, CALLBACK) \
-  ITERATOR(encoder_begin_callback_user_data, encoder_begin_callback, USER_DATA) \
-  ITERATOR(abort_callback, abort_callback, CALLBACK) \
-  ITERATOR(abort_callback_user_data, abort_callback, USER_DATA)
+  ITERATOR(n_threads, INT) \
+  ITERATOR(offset_ms, INT) \
+  ITERATOR(duration_ms, INT) \
+  ITERATOR(no_context, BOOL) \
+  ITERATOR(audio_ctx, INT) \
+  ITERATOR(chunk_length_ms, INT) \
+  ITERATOR(left_context_ms, INT) \
+  ITERATOR(right_context_ms, INT)
+
+#define ITERATE_CALLBACK_PARAMS(ITERATOR) \
+  ITERATOR(new_segment_callback) \
+  ITERATOR(new_token_callback) \
+  ITERATOR(progress_callback) \
+  ITERATOR(encoder_begin_callback) \
+  ITERATOR(abort_callback)
+
+#define ITERATE_USER_DATA_PARAMS(ITERATOR) \
+  ITERATOR(new_segment_callback) \
+  ITERATOR(new_token_callback) \
+  ITERATOR(progress_callback) \
+  ITERATOR(encoder_begin_callback) \
+  ITERATOR(abort_callback)
 
 enum {
-#define DEF_IDX(name, cb, type) RUBY_WHISPER_PARAKEET_PARAM_##name,
+#define DEF_IDX(name, type) RUBY_WHISPER_PARAKEET_PARAM_##name,
+#define DEF_IDX_CALLBACK(name) RUBY_WHISPER_PARAKEET_PARAM_##name,
+#define DEF_IDX_USER_DATA(name) RUBY_WHISPER_PARAKEET_PARAM_##name##_user_data,
   ITERATE_PARAMS(DEF_IDX)
+  ITERATE_CALLBACK_PARAMS(DEF_IDX_CALLBACK)
+  ITERATE_USER_DATA_PARAMS(DEF_IDX_USER_DATA)
 #undef DEF_IDX
   RUBY_WHISPER_PARAKEET_NUM_PARAMS
 };
@@ -90,7 +98,7 @@ const rb_data_type_t ruby_whisper_parakeet_params_type = {
   0
 };
 
-#define DEF_BOOL_PARAM_ATTR(name, cb) \
+#define DEF_BOOL_PARAM_ATTR(name) \
   static VALUE \
   ruby_whisper_parakeet_params_get_##name(VALUE self) \
   { \
@@ -107,7 +115,7 @@ const rb_data_type_t ruby_whisper_parakeet_params_type = {
     return val; \
   }
 
-#define DEF_INT_PARAM_ATTR(name, cb) \
+#define DEF_INT_PARAM_ATTR(name) \
   static VALUE \
   ruby_whisper_parakeet_params_get_##name(VALUE self) \
   { \
@@ -126,44 +134,46 @@ const rb_data_type_t ruby_whisper_parakeet_params_type = {
 
 #define CALLBACK_CONTAINER_NAME(name) name ## _container
 
-#define DEF_CALLBACK_PARAM_ATTR(name, cb) \
+#define DEF_CALLBACK_PARAM_ATTR(name) \
   static VALUE \
   ruby_whisper_parakeet_params_get_##name(VALUE self) \
   { \
     ruby_whisper_parakeet_params *rwpp; \
     TypedData_Get_Struct(self, ruby_whisper_parakeet_params, &ruby_whisper_parakeet_params_type, rwpp); \
-    return rwpp->CALLBACK_CONTAINER_NAME(cb)->callback; \
+    return rwpp->CALLBACK_CONTAINER_NAME(name)->callback; \
   } \
   static VALUE \
   ruby_whisper_parakeet_params_set_##name(VALUE self, VALUE val) \
   { \
     ruby_whisper_parakeet_params *rwpp; \
     TypedData_Get_Struct(self, ruby_whisper_parakeet_params, &ruby_whisper_parakeet_params_type, rwpp); \
-    rwpp->CALLBACK_CONTAINER_NAME(cb)->callback = (val); \
+    rwpp->CALLBACK_CONTAINER_NAME(name)->callback = (val); \
     return val; \
   }
 
-#define DEF_USER_DATA_PARAM_ATTR(name, cb) \
+#define DEF_USER_DATA_PARAM_ATTR(name) \
   static VALUE \
-  ruby_whisper_parakeet_params_get_##name(VALUE self) \
+  ruby_whisper_parakeet_params_get_##name##_user_data(VALUE self) \
   { \
     ruby_whisper_parakeet_params *rwpp; \
     TypedData_Get_Struct(self, ruby_whisper_parakeet_params, &ruby_whisper_parakeet_params_type, rwpp); \
-    return rwpp->CALLBACK_CONTAINER_NAME(cb)->user_data; \
+    return rwpp->CALLBACK_CONTAINER_NAME(name)->user_data; \
   } \
   static VALUE \
-  ruby_whisper_parakeet_params_set_##name(VALUE self, VALUE val) \
+  ruby_whisper_parakeet_params_set_##name##_user_data(VALUE self, VALUE val) \
   { \
     ruby_whisper_parakeet_params *rwpp; \
     TypedData_Get_Struct(self, ruby_whisper_parakeet_params, &ruby_whisper_parakeet_params_type, rwpp); \
-    rwpp->CALLBACK_CONTAINER_NAME(cb)->user_data = val; \
+    rwpp->CALLBACK_CONTAINER_NAME(name)->user_data = val; \
     return val; \
   }
 
-#define DEF_PARAM_ATTR(name, cb, type) DEF_PARAM_ATTR_I(name, cb, type)
-#define DEF_PARAM_ATTR_I(name, cb, type) DEF_##type##_PARAM_ATTR(name, cb)
+#define DEF_PARAM_ATTR(name, type) DEF_PARAM_ATTR_I(name, type)
+#define DEF_PARAM_ATTR_I(name, type) DEF_##type##_PARAM_ATTR(name)
 
 ITERATE_PARAMS(DEF_PARAM_ATTR)
+ITERATE_CALLBACK_PARAMS(DEF_CALLBACK_PARAM_ATTR)
+ITERATE_USER_DATA_PARAMS(DEF_USER_DATA_PARAM_ATTR)
 
 static VALUE
 ruby_whisper_parakeet_params_s_allocate(VALUE klass)
@@ -220,14 +230,28 @@ init_ruby_whisper_parakeet_params(VALUE *mParakeet)
   rb_define_method(cParakeetParams, "initialize", ruby_whisper_parakeet_params_initialize, -1);
 
   int i = 0;
-#define REGISTER_PARAM_ATTR(name, cb, type) \
+#define REGISTER_PARAM_ATTR(name, type) \
   param_names[i] = rb_intern(#name); \
   param_writers[i] = ruby_whisper_parakeet_params_set_##name; \
   rb_define_method(cParakeetParams, #name, ruby_whisper_parakeet_params_get_##name, 0); \
   rb_define_method(cParakeetParams, #name "=", ruby_whisper_parakeet_params_set_##name, 1); \
   i++;
+#define REGISTER_CALLBACK_PARAM_ATTR(name) \
+  param_names[i] = rb_intern(#name); \
+  param_writers[i] = ruby_whisper_parakeet_params_set_##name; \
+  rb_define_method(cParakeetParams, #name, ruby_whisper_parakeet_params_get_##name, 0); \
+  rb_define_method(cParakeetParams, #name "=", ruby_whisper_parakeet_params_set_##name, 1); \
+  i++;
+#define REGISTER_USER_DATA_PARAM_ATTR(name) \
+  param_names[i] = rb_intern(#name "_user_data"); \
+  param_writers[i] = ruby_whisper_parakeet_params_set_##name##_user_data; \
+  rb_define_method(cParakeetParams, #name "_user_data", ruby_whisper_parakeet_params_get_##name##_user_data, 0); \
+  rb_define_method(cParakeetParams, #name "_user_data=", ruby_whisper_parakeet_params_set_##name##_user_data, 1); \
+  i++;
 
   ITERATE_PARAMS(REGISTER_PARAM_ATTR)
+  ITERATE_CALLBACK_PARAMS(REGISTER_CALLBACK_PARAM_ATTR)
+  ITERATE_USER_DATA_PARAMS(REGISTER_USER_DATA_PARAM_ATTR)
 
 #undef REGISTER_PARAM_ATTR
 }
