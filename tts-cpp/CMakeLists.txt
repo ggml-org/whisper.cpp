@@ -18,7 +18,7 @@ option(TTS_CPP_BUILD_SHARED      "tts-cpp: build tts-cpp as a SHARED library (ot
 option(TTS_CPP_BUILD_EXECUTABLES "tts-cpp: build the tts-cli executable + mel2wav demo"     ${TTS_CPP_STANDALONE_DEFAULT})
 option(TTS_CPP_BUILD_TESTS       "tts-cpp: build per-stage numerical validation harnesses"   ${TTS_CPP_STANDALONE_DEFAULT})
 option(TTS_CPP_INSTALL           "tts-cpp: generate install rules"                           ON)
-option(TTS_CPP_USE_SYSTEM_GGML   "tts-cpp: use system-installed GGML library"                OFF)
+option(TTS_CPP_USE_SYSTEM_GGML   "tts-cpp: use system-installed GGML library (find_package(ggml) instead of add_subdirectory(ggml)). Defaults to ON in this in-tree subtree of qvac-ext-lib-whisper.cpp because the standalone setup-ggml.sh + patches/ tooling has been dropped here; the QVAC speech-stack vcpkg port `ggml-speech` ships a pre-patched ggml from the qvac-ext-ggml/speech branch and is the canonical source-of-truth for builds out of this tree.  Flipping OFF in this tree is rejected at configure time (no patches/ to apply); use the standalone github.com/gianni-cor/chatterbox.cpp repo if you need a bundled-ggml dev build." ON)
 option(TTS_CPP_GGML_LIB_PREFIX   "tts-cpp: rename bundled ggml libraries to libspeech-ggml-* (filename only; CMake target names and C symbols are unchanged). Prevents shared-library filename collisions when several consumers that vendor different ggml versions are loaded into the same host process. The 'speech-' prefix is shared by parakeet.cpp, chatterbox.cpp, and the supertonic harnesses so the QVAC speech stack co-vendors a single ggml file set; flip to OFF to use stock upstream filenames. Has no effect when TTS_CPP_USE_SYSTEM_GGML=ON." ON)
 option(TTS_CPP_CCACHE            "tts-cpp: use ccache as compiler launcher if available"     ON)
 
@@ -99,10 +99,31 @@ if (NOT TARGET ggml)
     if (TTS_CPP_USE_SYSTEM_GGML)
         find_package(ggml CONFIG REQUIRED)
         if (NOT ggml_FOUND)
-            message(FATAL_ERROR "System-installed GGML library not found.")
+            message(FATAL_ERROR
+                "tts-cpp: system-installed GGML library not found.  Install the "
+                "qvac speech-stack `ggml-speech` vcpkg port (qvac-ext-ggml/speech "
+                "branch) and re-run cmake.")
         endif()
         add_library(ggml ALIAS ggml::ggml)
     else()
+        # In-tree subtree of qvac-ext-lib-whisper.cpp: the standalone
+        # patches/ folder + scripts/setup-ggml.sh tooling is intentionally
+        # absent here.  Without them, an add_subdirectory(ggml) build
+        # would silently miss the ggml-backend-reg-filename-prefix patch
+        # that GGML_BACKEND_DL_PROJECT_PREFIX="speech-" depends on, so
+        # libspeech-ggml-*.so files would exist on disk but the runtime
+        # loader would still search for libggml-*.so under
+        # GGML_BACKEND_DL=ON.  Reject up front with a pointer at the
+        # right consumption path.
+        if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/patches")
+            message(FATAL_ERROR
+                "tts-cpp: this in-tree subtree does not ship the patches/ "
+                "directory.  Pass -DTTS_CPP_USE_SYSTEM_GGML=ON to consume "
+                "the QVAC speech-stack `ggml-speech` vcpkg port (which "
+                "carries the pre-applied patches), or use the standalone "
+                "github.com/gianni-cor/chatterbox.cpp repo for a "
+                "bundled-ggml dev build with patches/ present.")
+        endif()
         add_subdirectory(ggml)
     endif()
 endif()
