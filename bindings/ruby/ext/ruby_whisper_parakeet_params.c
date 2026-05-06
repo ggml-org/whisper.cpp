@@ -53,32 +53,28 @@ static void
 ruby_whisper_parakeet_params_mark(void *p)
 {
   ruby_whisper_parakeet_params *rwpp = (ruby_whisper_parakeet_params *)p;
-  ruby_whisper_callback_container_mark(rwpp->new_segment_callback_container);
-  ruby_whisper_callback_container_mark(rwpp->new_token_callback_container);
-  ruby_whisper_callback_container_mark(rwpp->progress_callback_container);
-  ruby_whisper_callback_container_mark(rwpp->encoder_begin_callback_container);
-  ruby_whisper_callback_container_mark(rwpp->abort_callback_container);
+
+#define MARK_CONTAINER(name) ruby_whisper_callback_container_mark(rwpp->name##_container);
+
+  ITERATE_CALLBACK_PARAMS(MARK_CONTAINER)
+
+#undef MARK_CONTAINER
 }
 
 static void
 ruby_whisper_parakeet_params_free(void *p)
 {
   ruby_whisper_parakeet_params *rwpp = (ruby_whisper_parakeet_params *)p;
-  if (rwpp->params.new_segment_callback_user_data) {
-    xfree(&rwpp->params.new_segment_callback_user_data);
+
+#define FREE_CONTAINER(name) \
+  if (rwpp->name##_container) { \
+    xfree(rwpp->name##_container); \
   }
-  if (rwpp->params.new_token_callback_user_data) {
-    xfree(&rwpp->params.new_token_callback_user_data);
-  }
-  if (rwpp->params.progress_callback_user_data) {
-    xfree(&rwpp->params.progress_callback_user_data);
-  }
-  if (rwpp->params.encoder_begin_callback_user_data) {
-    xfree(&rwpp->params.encoder_begin_callback_user_data);
-  }
-  if (rwpp->params.abort_callback_user_data) {
-    xfree(&rwpp->params.abort_callback_user_data);
-  }
+
+ITERATE_CALLBACK_PARAMS(FREE_CONTAINER)
+
+#undef FREE_CONTAINER
+
   xfree(rwpp);
 }
 
@@ -197,11 +193,11 @@ ruby_whisper_parakeet_params_initialize(int argc, VALUE *argv, VALUE self)
 
   TypedData_Get_Struct(self, ruby_whisper_parakeet_params, &ruby_whisper_parakeet_params_type, rwpp);
 
-  rwpp->new_segment_callback_container = ruby_whisper_callback_container_allocate();
-  rwpp->new_token_callback_container = ruby_whisper_callback_container_allocate();
-  rwpp->progress_callback_container = ruby_whisper_callback_container_allocate();
-  rwpp->encoder_begin_callback_container = ruby_whisper_callback_container_allocate();
-  rwpp->abort_callback_container = ruby_whisper_callback_container_allocate();
+#define INIT_CONTAINER(name) rwpp->name##_container = ruby_whisper_callback_container_allocate();
+
+ITERATE_CALLBACK_PARAMS(INIT_CONTAINER)
+
+#undef INIT_CONTAINER
 
   rb_scan_args_kw(RB_SCAN_ARGS_KEYWORDS, argc, argv, ":", &kw_hash);
   if (NIL_P(kw_hash)) {
