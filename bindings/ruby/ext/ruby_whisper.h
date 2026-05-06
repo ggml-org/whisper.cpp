@@ -130,4 +130,8 @@ typedef struct {
   } \
 } while (0)
 
+#define GetParakeetParams(obj, rwpp) do { \
+  TypedData_Get_Struct((obj), ruby_whisper_parakeet_params, &ruby_whisper_parakeet_params_type, (rwpp)); \
+} while (0)
+
 #endif

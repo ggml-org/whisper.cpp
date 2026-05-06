@@ -105,14 +105,14 @@ const rb_data_type_t ruby_whisper_parakeet_params_type = {
   ruby_whisper_parakeet_params_get_##name(VALUE self) \
   { \
     ruby_whisper_parakeet_params *rwpp; \
-    TypedData_Get_Struct(self, ruby_whisper_parakeet_params, &ruby_whisper_parakeet_params_type, rwpp); \
+    GetParakeetParams(self, rwpp); \
     return VAL_FROM_BOOL(rwpp->params.name); \
   } \
   static VALUE \
   ruby_whisper_parakeet_params_set_##name(VALUE self, VALUE val) \
   { \
     ruby_whisper_parakeet_params *rwpp; \
-    TypedData_Get_Struct(self, ruby_whisper_parakeet_params, &ruby_whisper_parakeet_params_type, rwpp); \
+    GetParakeetParams(self, rwpp); \
     rwpp->params.name = VAL_TO_BOOL(val); \
     return val; \
   }
@@ -122,14 +122,14 @@ const rb_data_type_t ruby_whisper_parakeet_params_type = {
   ruby_whisper_parakeet_params_get_##name(VALUE self) \
   { \
     ruby_whisper_parakeet_params *rwpp; \
-    TypedData_Get_Struct(self, ruby_whisper_parakeet_params, &ruby_whisper_parakeet_params_type, rwpp); \
+    GetParakeetParams(self, rwpp); \
     return VAL_FROM_INT(rwpp->params.name); \
   } \
   static VALUE \
   ruby_whisper_parakeet_params_set_##name(VALUE self, VALUE val) \
   { \
     ruby_whisper_parakeet_params *rwpp; \
-    TypedData_Get_Struct(self, ruby_whisper_parakeet_params, &ruby_whisper_parakeet_params_type, rwpp); \
+    GetParakeetParams(self, rwpp); \
     rwpp->params.name = VAL_TO_INT(val); \
     return val; \
   }
@@ -141,14 +141,14 @@ const rb_data_type_t ruby_whisper_parakeet_params_type = {
   ruby_whisper_parakeet_params_get_##name(VALUE self) \
   { \
     ruby_whisper_parakeet_params *rwpp; \
-    TypedData_Get_Struct(self, ruby_whisper_parakeet_params, &ruby_whisper_parakeet_params_type, rwpp); \
+    GetParakeetParams(self, rwpp); \
     return rwpp->CALLBACK_CONTAINER_NAME(name)->callback; \
   } \
   static VALUE \
   ruby_whisper_parakeet_params_set_##name(VALUE self, VALUE val) \
   { \
     ruby_whisper_parakeet_params *rwpp; \
-    TypedData_Get_Struct(self, ruby_whisper_parakeet_params, &ruby_whisper_parakeet_params_type, rwpp); \
+    GetParakeetParams(self, rwpp); \
     rwpp->CALLBACK_CONTAINER_NAME(name)->callback = (val); \
     return val; \
   }
@@ -158,14 +158,14 @@ const rb_data_type_t ruby_whisper_parakeet_params_type = {
   ruby_whisper_parakeet_params_get_##name##_user_data(VALUE self) \
   { \
     ruby_whisper_parakeet_params *rwpp; \
-    TypedData_Get_Struct(self, ruby_whisper_parakeet_params, &ruby_whisper_parakeet_params_type, rwpp); \
+    GetParakeetParams(self, rwpp); \
     return rwpp->CALLBACK_CONTAINER_NAME(name)->user_data; \
   } \
   static VALUE \
   ruby_whisper_parakeet_params_set_##name##_user_data(VALUE self, VALUE val) \
   { \
     ruby_whisper_parakeet_params *rwpp; \
-    TypedData_Get_Struct(self, ruby_whisper_parakeet_params, &ruby_whisper_parakeet_params_type, rwpp); \
+    GetParakeetParams(self, rwpp); \
     rwpp->CALLBACK_CONTAINER_NAME(name)->user_data = val; \
     return val; \
   }
