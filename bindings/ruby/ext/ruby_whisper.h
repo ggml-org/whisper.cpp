@@ -87,6 +87,11 @@ typedef struct parsed_samples_t {
 
 typedef struct {
   struct parakeet_full_params params;
+  ruby_whisper_callback_container *new_segment_callback_container;
+  ruby_whisper_callback_container *new_token_callback_container;
+  ruby_whisper_callback_container *progress_callback_container;
+  ruby_whisper_callback_container *encoder_begin_callback_container;
+  ruby_whisper_callback_container *abort_callback_container;
 } ruby_whisper_parakeet_params;
 
 #define GetContext(obj, rw) do { \

@@ -76,8 +76,8 @@ static ID id_vad;
 static ID id_vad_model_path;
 static ID id_vad_params;
 
-static void
-rb_whisper_callbcack_container_mark(ruby_whisper_callback_container *rwc)
+void
+ruby_whisper_callbcack_container_mark(ruby_whisper_callback_container *rwc)
 {
   if (rwc == NULL) return;
 
@@ -86,8 +86,8 @@ rb_whisper_callbcack_container_mark(ruby_whisper_callback_container *rwc)
   rb_gc_mark(rwc->callbacks);
 }
 
-static ruby_whisper_callback_container*
-rb_whisper_callback_container_allocate() {
+ruby_whisper_callback_container*
+ruby_whisper_callback_container_allocate() {
   ruby_whisper_callback_container *container;
   container = ALLOC(ruby_whisper_callback_container);
   container->context = NULL;
@@ -492,9 +492,9 @@ ruby_whisper_params_allocate(VALUE klass)
   }
   rwp->diarize = false;
   rwp->vad_params = TypedData_Wrap_Struct(cVADParams, &ruby_whisper_vad_params_type, (void *)&rwp->params.vad_params);
-  rwp->new_segment_callback_container = rb_whisper_callback_container_allocate();
-  rwp->progress_callback_container = rb_whisper_callback_container_allocate();
-  rwp->encoder_begin_callback_container = rb_whisper_callback_container_allocate();
+  rwp->new_segment_callback_container = ruby_whisper_callback_container_allocate();
+  rwp->progress_callback_container = ruby_whisper_callback_container_allocate();
+  rwp->encoder_begin_callback_container = ruby_whisper_callback_container_allocate();
   rwp->abort_callback_container = rb_whisper_abort_callback_container_allocate();
   return obj;
 }
