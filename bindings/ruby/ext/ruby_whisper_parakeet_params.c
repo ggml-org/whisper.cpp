@@ -75,11 +75,10 @@ static size_t
 ruby_whisper_parakeet_params_memsize(const void *p)
 {
   const struct ruby_whisper_parakeet_params *params = p;
-  size_t size = sizeof(params);
   if (!params) {
     return 0;
   }
-  return size;
+  return sizeof(ruby_whisper_parakeet_params);
 }
 
 const rb_data_type_t ruby_whisper_parakeet_params_type = {
