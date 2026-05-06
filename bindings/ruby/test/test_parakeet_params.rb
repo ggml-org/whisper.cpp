@@ -13,11 +13,11 @@ class TestParakeetParams < TestBase
   ]
 
   def setup
-    @params = Whisper::Parakeet::Params.new
+    @params = Parakeet::Params.new
   end
 
   def test_new
-    assert_instance_of Whisper::Parakeet::Params, @params
+    assert_instance_of Parakeet::Params, @params
   end
 
   def test_n_threads
@@ -77,7 +77,7 @@ class TestParakeetParams < TestBase
   end
 
   def test_new_with_kw_args
-    params = Whisper::Parakeet::Params.new(n_threads: 1)
+    params = Parakeet::Params.new(n_threads: 1)
     assert_equal 1, params.n_threads
     assert_equal 0, params.offset_ms
   end
@@ -91,7 +91,7 @@ class TestParakeetParams < TestBase
             in [*, Integer]
               default_value + 1
             end
-    params = Whisper::Parakeet::Params.new(param => value)
+    params = Parakeet::Params.new(param => value)
     assert_equal value, params.send(param)
 
     PARAM_NAMES.reject {|name| name == param}.each do |name|
