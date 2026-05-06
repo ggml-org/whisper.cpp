@@ -143,9 +143,24 @@ const rb_data_type_t ruby_whisper_parakeet_params_type = {
     return val; \
   }
 
+#define DEF_HOOK(name) \
+  static VALUE \
+  ruby_whisper_parakeet_params_on_##name(VALUE self) \
+  { \
+    ruby_whisper_parakeet_params *rwpp; \
+    GetParakeetParams(self, rwpp); \
+    const VALUE blk = rb_block_proc(); \
+    if (!rwpp->name##_container->callbacks) { \
+      rwpp->name##_container->callbacks = rb_ary_new(); \
+    } \
+    rb_ary_push(rwpp->name##_container->callbacks, blk); \
+    return Qnil; \
+  }
+
 ITERATE_PARAMS(DEF_PARAM_ATTR)
 ITERATE_CALLBACK_PARAMS(DEF_CALLBACK_PARAM_ATTR)
 ITERATE_CALLBACK_PARAMS(DEF_USER_DATA_PARAM_ATTR)
+ITERATE_CALLBACK_PARAMS(DEF_HOOK)
 
 static VALUE
 ruby_whisper_parakeet_params_s_allocate(VALUE klass)
@@ -215,10 +230,16 @@ init_ruby_whisper_parakeet_params(VALUE *mParakeet)
   ITERATE_CALLBACK_PARAMS(REGISTER_CALLBACK_PARAM_ATTR)
   ITERATE_CALLBACK_PARAMS(REGISTER_USER_DATA_PARAM_ATTR)
 
+#define REGISTER_HOOK(name) \
+  rb_define_method(cParakeetParams, "on_" #name, ruby_whisper_parakeet_params_on_##name, 0);
+
+  ITERATE_CALLBACK_PARAMS(REGISTER_HOOK)
+
 #undef REGISTER_PARAM
 #undef REGISTER_PARAM_ATTR
 #undef REGISTER_CALLBACK_PARAM_ATTR
 #undef REGISTER_USER_DATA_PARAM_ATTR
+#undef REGISTER_HOOK
 }
 
 #undef VAL_TO_INT
@@ -230,6 +251,7 @@ init_ruby_whisper_parakeet_params(VALUE *mParakeet)
 #undef CALLBACK_CONTAINER_NAME
 #undef DEF_CALLBACK_PARAM_ATTR
 #undef DEF_USER_DATA_PARAM_ATTR
+#undef DEF_HOOK
 #undef READER
 #undef WRITER
 #undef DEF_PARAM_ATTR
