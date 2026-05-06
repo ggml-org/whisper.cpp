@@ -17,20 +17,13 @@
   ITERATOR(encoder_begin_callback) \
   ITERATOR(abort_callback)
 
-#define ITERATE_USER_DATA_PARAMS(ITERATOR) \
-  ITERATOR(new_segment_callback) \
-  ITERATOR(new_token_callback) \
-  ITERATOR(progress_callback) \
-  ITERATOR(encoder_begin_callback) \
-  ITERATOR(abort_callback)
-
 enum {
 #define DEF_IDX(name, type) RUBY_WHISPER_PARAKEET_PARAM_##name,
 #define DEF_IDX_CALLBACK(name) RUBY_WHISPER_PARAKEET_PARAM_##name,
 #define DEF_IDX_USER_DATA(name) RUBY_WHISPER_PARAKEET_PARAM_##name##_user_data,
   ITERATE_PARAMS(DEF_IDX)
   ITERATE_CALLBACK_PARAMS(DEF_IDX_CALLBACK)
-  ITERATE_USER_DATA_PARAMS(DEF_IDX_USER_DATA)
+  ITERATE_CALLBACK_PARAMS(DEF_IDX_USER_DATA)
 #undef DEF_IDX
 #undef DEF_IDX_CALLBACK
 #undef DEF_IDX_USER_DATA
@@ -171,7 +164,7 @@ const rb_data_type_t ruby_whisper_parakeet_params_type = {
 
 ITERATE_PARAMS(DEF_PARAM_ATTR)
 ITERATE_CALLBACK_PARAMS(DEF_CALLBACK_PARAM_ATTR)
-ITERATE_USER_DATA_PARAMS(DEF_USER_DATA_PARAM_ATTR)
+ITERATE_CALLBACK_PARAMS(DEF_USER_DATA_PARAM_ATTR)
 
 static VALUE
 ruby_whisper_parakeet_params_s_allocate(VALUE klass)
@@ -237,8 +230,7 @@ init_ruby_whisper_parakeet_params(VALUE *mParakeet)
   param_writers[i] = ruby_whisper_parakeet_params_set_##name; \
   rb_define_method(cParakeetParams, #name, ruby_whisper_parakeet_params_get_##name, 0); \
   rb_define_method(cParakeetParams, #name "=", ruby_whisper_parakeet_params_set_##name, 1); \
-  i++;
-#define REGISTER_USER_DATA_PARAM_ATTR(name) \
+  i++; \
   param_names[i] = rb_intern(#name "_user_data"); \
   param_writers[i] = ruby_whisper_parakeet_params_set_##name##_user_data; \
   rb_define_method(cParakeetParams, #name "_user_data", ruby_whisper_parakeet_params_get_##name##_user_data, 0); \
@@ -247,11 +239,9 @@ init_ruby_whisper_parakeet_params(VALUE *mParakeet)
 
   ITERATE_PARAMS(REGISTER_PARAM_ATTR)
   ITERATE_CALLBACK_PARAMS(REGISTER_CALLBACK_PARAM_ATTR)
-  ITERATE_USER_DATA_PARAMS(REGISTER_USER_DATA_PARAM_ATTR)
 
 #undef REGISTER_PARAM_ATTR
 #undef REGISTER_CALLBACK_PARAM_ATTR
-#undef REGISTER_USER_DATA_PARAM_ATTR
 }
 
 #undef VAL_TO_INT
@@ -267,4 +257,3 @@ init_ruby_whisper_parakeet_params(VALUE *mParakeet)
 #undef DEF_PARAM_ATTR_I
 #undef ITERATE_PARAMS
 #undef ITERATE_CALLBACK_PARAMS
-#undef ITERATE_USER_DATA_PARAMS
