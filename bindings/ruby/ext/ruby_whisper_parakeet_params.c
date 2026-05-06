@@ -200,29 +200,25 @@ init_ruby_whisper_parakeet_params(VALUE *mParakeet)
   rb_define_method(cParakeetParams, "initialize", ruby_whisper_parakeet_params_initialize, -1);
 
   int i = 0;
-#define REGISTER_PARAM_ATTR(name, type) \
+#define REGISTER_PARAM(name) \
   param_names[i] = rb_intern(#name); \
   param_writers[i] = ruby_whisper_parakeet_params_set_##name; \
   rb_define_method(cParakeetParams, #name, ruby_whisper_parakeet_params_get_##name, 0); \
   rb_define_method(cParakeetParams, #name "=", ruby_whisper_parakeet_params_set_##name, 1); \
   i++;
-#define REGISTER_CALLBACK_PARAM_ATTR(name) \
-  param_names[i] = rb_intern(#name); \
-  param_writers[i] = ruby_whisper_parakeet_params_set_##name; \
-  rb_define_method(cParakeetParams, #name, ruby_whisper_parakeet_params_get_##name, 0); \
-  rb_define_method(cParakeetParams, #name "=", ruby_whisper_parakeet_params_set_##name, 1); \
-  i++; \
-  param_names[i] = rb_intern(#name "_user_data"); \
-  param_writers[i] = ruby_whisper_parakeet_params_set_##name##_user_data; \
-  rb_define_method(cParakeetParams, #name "_user_data", ruby_whisper_parakeet_params_get_##name##_user_data, 0); \
-  rb_define_method(cParakeetParams, #name "_user_data=", ruby_whisper_parakeet_params_set_##name##_user_data, 1); \
-  i++;
+
+#define REGISTER_PARAM_ATTR(name, type) REGISTER_PARAM(name)
+#define REGISTER_CALLBACK_PARAM_ATTR(name) REGISTER_PARAM(name)
+#define REGISTER_USER_DATA_PARAM_ATTR(name) REGISTER_PARAM(name##_user_data)
 
   ITERATE_PARAMS(REGISTER_PARAM_ATTR)
   ITERATE_CALLBACK_PARAMS(REGISTER_CALLBACK_PARAM_ATTR)
+  ITERATE_CALLBACK_PARAMS(REGISTER_USER_DATA_PARAM_ATTR)
 
+#undef REGISTER_PARAM
 #undef REGISTER_PARAM_ATTR
 #undef REGISTER_CALLBACK_PARAM_ATTR
+#undef REGISTER_USER_DATA_PARAM_ATTR
 }
 
 #undef VAL_TO_INT
