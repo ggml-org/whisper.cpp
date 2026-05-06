@@ -77,7 +77,7 @@ static ID id_vad_model_path;
 static ID id_vad_params;
 
 void
-ruby_whisper_callbcack_container_mark(ruby_whisper_callback_container *rwc)
+ruby_whisper_callback_container_mark(ruby_whisper_callback_container *rwc)
 {
   if (rwc == NULL) return;
 
@@ -421,9 +421,9 @@ void
 rb_whisper_params_mark(void *p)
 {
   ruby_whisper_params *rwp = (ruby_whisper_params *)p;
-  rb_whisper_callbcack_container_mark(rwp->new_segment_callback_container);
-  rb_whisper_callbcack_container_mark(rwp->progress_callback_container);
-  rb_whisper_callbcack_container_mark(rwp->encoder_begin_callback_container);
+  ruby_whisper_callback_container_mark(rwp->new_segment_callback_container);
+  ruby_whisper_callback_container_mark(rwp->progress_callback_container);
+  ruby_whisper_callback_container_mark(rwp->encoder_begin_callback_container);
   rb_whisper_abort_callback_container_mark(rwp->abort_callback_container);
   rb_gc_mark(rwp->vad_params);
 }
