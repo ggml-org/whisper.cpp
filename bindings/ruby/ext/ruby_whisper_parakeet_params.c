@@ -88,37 +88,22 @@ const rb_data_type_t ruby_whisper_parakeet_params_type = {
   0
 };
 
-#define DEF_BOOL_PARAM_ATTR(name) \
+#define READER(type) VAL_FROM_##type
+#define WRITER(type) VAL_TO_##type
+#define DEF_PARAM_ATTR(name, type) \
   static VALUE \
   ruby_whisper_parakeet_params_get_##name(VALUE self) \
   { \
     ruby_whisper_parakeet_params *rwpp; \
     GetParakeetParams(self, rwpp); \
-    return VAL_FROM_BOOL(rwpp->params.name); \
+    return READER(type)(rwpp->params.name); \
   } \
   static VALUE \
   ruby_whisper_parakeet_params_set_##name(VALUE self, VALUE val) \
   { \
     ruby_whisper_parakeet_params *rwpp; \
     GetParakeetParams(self, rwpp); \
-    rwpp->params.name = VAL_TO_BOOL(val); \
-    return val; \
-  }
-
-#define DEF_INT_PARAM_ATTR(name) \
-  static VALUE \
-  ruby_whisper_parakeet_params_get_##name(VALUE self) \
-  { \
-    ruby_whisper_parakeet_params *rwpp; \
-    GetParakeetParams(self, rwpp); \
-    return VAL_FROM_INT(rwpp->params.name); \
-  } \
-  static VALUE \
-  ruby_whisper_parakeet_params_set_##name(VALUE self, VALUE val) \
-  { \
-    ruby_whisper_parakeet_params *rwpp; \
-    GetParakeetParams(self, rwpp); \
-    rwpp->params.name = VAL_TO_INT(val); \
+    rwpp->params.name = WRITER(type)(val); \
     return val; \
   }
 
@@ -157,9 +142,6 @@ const rb_data_type_t ruby_whisper_parakeet_params_type = {
     rwpp->CALLBACK_CONTAINER_NAME(name)->user_data = val; \
     return val; \
   }
-
-#define DEF_PARAM_ATTR(name, type) DEF_PARAM_ATTR_I(name, type)
-#define DEF_PARAM_ATTR_I(name, type) DEF_##type##_PARAM_ATTR(name)
 
 ITERATE_PARAMS(DEF_PARAM_ATTR)
 ITERATE_CALLBACK_PARAMS(DEF_CALLBACK_PARAM_ATTR)
@@ -252,6 +234,8 @@ init_ruby_whisper_parakeet_params(VALUE *mParakeet)
 #undef CALLBACK_CONTAINER_NAME
 #undef DEF_CALLBACK_PARAM_ATTR
 #undef DEF_USER_DATA_PARAM_ATTR
+#undef READER
+#undef WRITER
 #undef DEF_PARAM_ATTR
 #undef DEF_PARAM_ATTR_I
 #undef ITERATE_PARAMS
