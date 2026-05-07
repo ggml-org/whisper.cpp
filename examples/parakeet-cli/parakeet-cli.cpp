@@ -107,15 +107,15 @@ static void parakeet_print_usage(int /*argc*/, char ** argv, const parakeet_para
 }
 
 void token_callback(parakeet_context * ctx, parakeet_state * state, const parakeet_token_data * token_data, void * user_data) {
-    static bool is_first = true;
+    bool * is_first = (bool *) user_data;
 
     const char * token_str = parakeet_token_to_str(ctx, token_data->id);
     char text_buf[256];
-    parakeet_token_to_text(token_str, is_first, text_buf, sizeof(text_buf));
+    parakeet_token_to_text(token_str, *is_first, text_buf, sizeof(text_buf));
     printf("%s", text_buf);
     fflush(stdout);
 
-    is_first = false;
+    *is_first = false;
 }
 
 static void cb_log_disable(enum ggml_log_level , const char * , void * ) { }
@@ -139,6 +139,28 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    struct parakeet_context_params ctx_params = parakeet_context_default_params();
+    ctx_params.use_gpu     = params.use_gpu;
+    ctx_params.flash_attn  = params.flash_attn;
+    ctx_params.gpu_device  = params.gpu_device;
+
+    if (!params.no_prints) {
+        fprintf(stderr, "Loading Parakeet model from: %s\n", params.model.c_str());
+    }
+
+
+    struct parakeet_context * pctx = parakeet_init_from_file_with_params(params.model.c_str(), ctx_params);
+    if (pctx == nullptr) {
+        fprintf(stderr, "error: failed to load Parakeet model from '%s'\n", params.model.c_str());
+        return 1;
+    }
+
+    if (!params.no_prints) {
+        fprintf(stderr, "Successfully loaded Parakeet model\n");
+        fprintf(stderr, "system_info: n_threads = %d / %d | %s\n",
+                params.n_threads, (int32_t) std::thread::hardware_concurrency(), parakeet_print_system_info());
+    }
+
     // Process each input file
     for (const auto & fname : params.fname_inp) {
         if (!params.no_prints) {
@@ -157,36 +179,14 @@ int main(int argc, char ** argv) {
             continue;
         }
 
-        if (!params.no_prints) {
-            fprintf(stderr, "Loading Parakeet model from: %s\n", params.model.c_str());
-        }
-
-        struct parakeet_context_params ctx_params = parakeet_context_default_params();
-        ctx_params.use_gpu     = params.use_gpu;
-        ctx_params.flash_attn  = params.flash_attn;
-        ctx_params.gpu_device  = params.gpu_device;
-
-        struct parakeet_context * pctx = parakeet_init_from_file_with_params(params.model.c_str(), ctx_params);
-        if (pctx == nullptr) {
-            fprintf(stderr, "error: failed to load Parakeet model from '%s'\n", params.model.c_str());
-            return 1;
-        }
-
-        if (!params.no_prints) {
-            fprintf(stderr, "Successfully loaded Parakeet model\n");
-            fprintf(stderr, "system_info: n_threads = %d / %d | %s\n",
-                    params.n_threads, (int32_t) std::thread::hardware_concurrency(), parakeet_print_system_info());
-            fprintf(stderr, "Processing audio (%zu samples, %.2f seconds)\n",
-                    pcmf32.size(), (float)pcmf32.size() / PARAKEET_SAMPLE_RATE);
-        }
-
+        bool is_first = true;
         struct parakeet_full_params full_params = parakeet_full_default_params(PARAKEET_SAMPLING_GREEDY);
         full_params.n_threads           = params.n_threads;
         full_params.chunk_length_ms     = params.chunk_length_ms;
         full_params.left_context_ms     = params.left_context_ms;
         full_params.right_context_ms    = params.right_context_ms;
         full_params.new_token_callback  = token_callback;
-        full_params.new_token_callback_user_data = nullptr;
+        full_params.new_token_callback_user_data = &is_first;
 
         const int mel_frames = (int)(pcmf32.size() / PARAKEET_HOP_LENGTH);
         if (mel_frames <= parakeet_n_audio_ctx(pctx)) {
@@ -197,7 +197,6 @@ int main(int argc, char ** argv) {
 
         if (ret != 0) {
             fprintf(stderr, "error: failed to process audio file '%s'\n", fname.c_str());
-            parakeet_free(pctx);
             continue;
         }
 
@@ -258,9 +257,9 @@ int main(int argc, char ** argv) {
                 }
             }
         }
-
-        parakeet_free(pctx);
     }
+
+    parakeet_free(pctx);
 
     return 0;
 }
