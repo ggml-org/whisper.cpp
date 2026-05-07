@@ -1,0 +1,40 @@
+# Vendored ggml (cloned separately at setup time; see README)
+ggml/
+
+# Build artifacts
+build/
+build-*/
+build_tts_cli/
+*.o
+*.obj
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Model files (too big for git)
+models/
+*.gguf
+
+# Reference dumps
+artifacts/
+
+# Local tokenizer files (downloaded from HF cache)
+tokenizer/
+
+# Voice-clone profiles (generated per reference audio)
+voices/
+
+# Generated audio
+*.wav
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+.DS_Store
+._*
+.cache/
+compile_commands.json

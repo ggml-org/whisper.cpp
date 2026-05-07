@@ -55,6 +55,24 @@ On Apple Silicon, the inference runs fully on the GPU via Metal:
 
 https://github.com/ggml-org/whisper.cpp/assets/1991296/c82e8f86-60dc-49f2-b048-d2fdbd6b5225
 
+## QVAC speech-stack ports
+
+This fork carries two in-tree subtrees alongside the upstream whisper.cpp
+sources:
+
+- [`tts-cpp/`](tts-cpp/) — text-to-speech via Resemble Chatterbox (Turbo +
+  Multilingual) and Supertonic. In-tree subtree of
+  [github.com/gianni-cor/chatterbox.cpp](https://github.com/gianni-cor/chatterbox.cpp);
+  consumes ggml from the [`qvac-ext-ggml/speech`](https://github.com/tetherto/qvac-ext-ggml/tree/speech)
+  branch via the `ggml-speech` vcpkg port.
+- [`parakeet-cpp/`](parakeet-cpp/) — automatic speech recognition (NVIDIA
+  Parakeet FastConformer family — CTC, TDT, EOU, Sortformer) and
+  speaker diarization. In-tree subtree of the standalone parakeet.cpp
+  repo; same `ggml-speech` consumption pattern.
+
+Each subtree has its own README / build flow / public C++ API.  The
+upstream whisper.cpp build below is unaffected by either.
+
 ## Quick start
 
 First clone the repository:

@@ -1,0 +1,88 @@
+chatterbox.cpp
+Copyright 2026 QVAC contributors
+
+This product includes third-party components under their respective
+licenses. chatterbox.cpp itself is licensed under MIT; bundled
+dependencies are governed by the licenses listed below. Python packages
+listed under Python Dependencies are optional and apply only to scripts/
+(conversion and offline reference tooling), not to C++ inference binaries.
+
+=========================================================================
+Upstream model code
+=========================================================================
+
+--- mit (MIT License) ---
+
+  Resemble Chatterbox (T3 + S3Gen + HiFT)
+    https://github.com/resemble-ai/chatterbox
+    The C++ port in src/chatterbox_*.cpp / src/t3_mtl.cpp /
+    src/voice_features.cpp / src/voice_encoder.cpp / src/campplus.cpp /
+    src/s3tokenizer.cpp re-implements the Resemble Chatterbox PyTorch
+    inference path on top of ggml.
+
+--- mit (MIT License) ---
+
+  Supertonic (text encoder + duration + vector estimator + vocoder)
+    https://huggingface.co/Supertone/supertonic
+    The C++ port in src/supertonic_*.cpp re-implements the Supertonic
+    ONNX inference path on top of ggml; the model weights themselves
+    ship under their own license (consult the HuggingFace repo).
+
+=========================================================================
+C++ Dependencies
+=========================================================================
+
+--- mit (MIT License) ---
+
+  ggml
+    https://github.com/ggml-org/ggml
+    Vendored under ggml/ at the pinned commit declared in
+    scripts/setup-ggml.sh; chatterbox.cpp ships its local fixes as
+    standalone patches under patches/ rather than maintaining a fork.
+
+--- dual-license (Unlicense or MIT-0; recipient may choose either; see file) ---
+
+  dr_wav (dr_libs)
+    src/dr_wav.h
+    https://github.com/mackron/dr_libs
+
+--- apache-2.0-with-llvm-exception ---
+
+  libc++ (LLVM C++ Standard Library), when linked (e.g. some Linux toolchains)
+    https://github.com/llvm/llvm-project
+
+=========================================================================
+Python Dependencies
+=========================================================================
+
+--- apache-2.0 (Apache License 2.0) ---
+
+  huggingface_hub
+    https://github.com/huggingface/huggingface_hub
+  onnx
+    https://github.com/onnx/onnx
+  resampy
+    https://github.com/bmcfee/resampy
+  safetensors
+    https://github.com/huggingface/safetensors
+
+--- bsd-3-clause ---
+
+  numpy
+    https://numpy.org/
+  scipy
+    https://scipy.org/
+  torch (PyTorch)
+    https://pytorch.org/
+
+--- isc ---
+
+  librosa
+    https://librosa.org/
+
+--- mit (MIT License) ---
+
+  gguf
+    https://pypi.org/project/gguf/
+  Resemble Chatterbox (Python reference, used at conversion time)
+    https://github.com/resemble-ai/chatterbox

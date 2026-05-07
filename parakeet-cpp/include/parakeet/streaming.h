@@ -94,6 +94,21 @@ struct StreamingSegment {
     int  chunk_index = 0;
     bool is_final    = true;
 
+    // True when this segment's first token is a SentencePiece word-start
+    // (the piece begins with the `▁` U+2581 marker), false when it is a
+    // wordpiece continuation of the previous segment's last token.
+    //
+    // Streaming consumers building a running transcript should insert a
+    // separator (e.g. " ") between successive segments only when the
+    // *new* segment has `starts_word == true`. Concatenating verbatim
+    // when `starts_word == false` joins the splits like
+    // ["pun", "ctuation"] back into "punctuation"; inserting a space
+    // there would yield "pun ctuation" instead.
+    //
+    // Always true on the very first segment of a session and on any
+    // segment whose token list is empty (defensive default).
+    bool   starts_word = true;
+
     // EOU-only: true when this segment ends on `<EOU>`. For CTC/TDT use StreamEvent
     // EndOfTurn via `on_event` instead; those engines leave this flag false here.
     bool   is_eou_boundary = false;

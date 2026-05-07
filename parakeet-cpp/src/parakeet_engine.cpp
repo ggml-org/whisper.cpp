@@ -473,6 +473,9 @@ EngineResult Engine::transcribe_samples_stream(const float * samples,
             seg.end_s       = seg_end_s;
             seg.chunk_index = chunk_index;
             seg.is_final    = true;
+            seg.starts_word = win_tokens.empty()
+                ? true
+                : token_is_word_start(pimpl_->model.vocab, win_tokens.front());
             seg.is_eou_boundary = eou_boundaries_in_chunk > 0;
             seg.encoder_ms  = first_segment ? encoder_ms : 0.0;
             seg.decode_ms   = win_decode_ms;
@@ -863,6 +866,9 @@ void StreamSession::Impl::process_window(const float * window_samples, int windo
         seg.end_s       = chunk_end_s;
         seg.chunk_index = chunk_index;
         seg.is_final    = true;
+        seg.starts_word = win_tokens.empty()
+            ? true
+            : token_is_word_start(engine_impl->model.vocab, win_tokens.front());
         seg.is_eou_boundary = eou_boundaries_in_chunk > 0;
         seg.encoder_ms  = encoder_ms;
         seg.decode_ms   = decode_ms;
