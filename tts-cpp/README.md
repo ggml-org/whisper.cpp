@@ -961,11 +961,13 @@ Same prompt, voice, seed as §3.21 above.  Adds, on top of §3.21:
 WAV is byte-exact deterministic across runs (md5
 `d8a1b22375dbcb2259c686426a7d76c5` ×5).  Parity harness
 `test-metal-ops` passes 14 gates (3 base + 3 conv_transpose_1d + 8
-fused `mul_mm`).  Patch `patches/ggml-metal-chatterbox-ops.patch`
-(1088 lines) applies cleanly on a fresh ggml clone at pinned
-`58c38058`.  All §3.24–§3.30 kernel changes cross-compile cleanly
-for iOS-arm64 (portability verified; runtime measurement deferred
-until an M4 / iPhone / iPad run of
+fused `mul_mm`).  The 1088-line ggml-metal patch backing these
+kernel changes is shipped pre-applied by the `ggml-speech` vcpkg
+port (qvac-ext-ggml/speech branch); the standalone chatterbox.cpp
+repo carries it under `patches/ggml-metal-chatterbox-ops.patch`
+against pinned ggml `58c38058`.  All §3.24–§3.30 kernel changes
+cross-compile cleanly for iOS-arm64 (portability verified; runtime
+measurement deferred until an M4 / iPhone / iPad run of
 [`scripts/bench-m4-validation.sh`](scripts/bench-m4-validation.sh)).
 
 M3 Ultra CFM time specifically drops from 541.9 ms → 534.0 ms
@@ -1214,10 +1216,9 @@ tts-cpp/                         in-tree subtree of github.com/gianni-cor/chatte
                                    S3TokenizerV2, streaming, MTL T3)
     reference-t3-turbo.py        PyTorch T3 bit-exact compare vs C++
     compare-tokenizer.py         10-case BPE tokenizer compare vs HF
-  patches/
-    ggml-metal-chatterbox-ops.patch   ggml-metal fixes
-    ggml-opencl-chatterbox-ops.patch  OpenCL: HiFT (CONV_TRANSPOSE_1D, SIN, …)
-    README.md                    applies-to / what-it-does notes
+  (no patches/ in this in-tree subtree - the standalone chatterbox.cpp
+   repo ships ggml patches under patches/; here ggml comes pre-patched
+   from the ggml-speech vcpkg port and tts-cpp doesn't carry them.)
   voices/                        baked voice profiles (not tracked; populated
                                    by --save-voice)
   models/                        generated GGUFs (not tracked)
