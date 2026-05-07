@@ -468,6 +468,23 @@ struct Engine::Impl {
                                         model.hparams.stop_speech_token)
                 : sample_next_token_ex(logits, generated, sp, rng);
             generated.push_back(current);
+
+            // Port of AlignmentStreamAnalyzer's token_repetition guard
+            // (mirrors chatterbox_cli.cpp).  MTL T3 sometimes emits a
+            // plausible end-of-speech silence cadence mid-utterance and
+            // then hallucinates low-energy content (silence -> hissing
+            // -> garbage tokens) until n_predict, producing tens of
+            // seconds of trailing junk.  Three consecutive identical
+            // tokens cleanly signal the cadence without firing on normal
+            // speech; gated to MTL because Turbo's codebook has a
+            // different signature.
+            if (is_mtl && generated.size() >= 3) {
+                const size_t n = generated.size();
+                if (generated[n - 1] == generated[n - 2] &&
+                    generated[n - 2] == generated[n - 3]) {
+                    break;
+                }
+            }
         }
 
         if (!generated.empty() && generated.back() == model.hparams.stop_speech_token) {
