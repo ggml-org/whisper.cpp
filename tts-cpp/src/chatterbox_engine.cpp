@@ -386,7 +386,16 @@ struct Engine::Impl {
         // agnostic to.
         std::vector<int32_t> text_tokens;
         if (is_mtl) {
-            text_tokens = mtl_tok.encode(text, opts.language);
+            // Wrap with start_text_token (255) + ids + stop_text_token (0) to
+            // mirror chatterbox_cli.cpp and Python ChatterboxMultilingualTTS.generate;
+            // the MTL T3 prompt graph anchors position 0 on the SOT and drops
+            // the first speech tokens (audible as a missing leading syllable)
+            // when it is omitted.
+            std::vector<int32_t> ids = mtl_tok.encode(text, opts.language);
+            text_tokens.reserve(ids.size() + 2);
+            text_tokens.push_back(model.hparams.start_text_token);
+            text_tokens.insert(text_tokens.end(), ids.begin(), ids.end());
+            text_tokens.push_back(model.hparams.stop_text_token);
         } else {
             if (model.tok_tokens.empty()) {
                 throw std::runtime_error(
