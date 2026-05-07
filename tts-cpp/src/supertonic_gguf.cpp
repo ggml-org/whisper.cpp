@@ -1,7 +1,6 @@
 #include "supertonic_internal.h"
 
 #include "ggml-cpu.h"
-#include "ggml-quants.h"
 #include "gguf.h"
 
 #ifdef GGML_USE_CUDA
@@ -78,16 +77,19 @@ std::vector<float> expand_supertonic_tensor_to_f32(const ggml_tensor * src) {
     const int64_t n = ggml_nelements(src);
     std::vector<float> out((size_t) n);
     const void * data = ggml_get_data(src);
-    switch (src->type) {
-        case GGML_TYPE_F16:
-            ggml_fp16_to_fp32_row(static_cast<const ggml_fp16_t *>(data), out.data(), n);
-            break;
-        case GGML_TYPE_Q8_0:
-            dequantize_row_q8_0(static_cast<const block_q8_0 *>(data), out.data(), n);
-            break;
-        default:
-            throw std::runtime_error("unsupported Supertonic tensor expansion type");
+    // Use the public ggml_get_type_traits() API instead of the
+    // internal ggml-quants.h helpers.  ggml-quants.h lives under
+    // ggml/src/ and isn't shipped by the ggml-speech vcpkg port,
+    // so direct includes break system-ggml builds (the integrated
+    // tts-cpp port path).  The type-traits to_float function pointer
+    // is the public dequantization entry-point and covers F16, Q8_0
+    // and every other ggml type uniformly.
+    const ggml_type_traits * tr = ggml_get_type_traits(src->type);
+    if (!tr || !tr->to_float) {
+        throw std::runtime_error(std::string("unsupported Supertonic tensor expansion type ") +
+                                 ggml_type_name(src->type));
     }
+    tr->to_float(data, out.data(), n);
     return out;
 }
 
