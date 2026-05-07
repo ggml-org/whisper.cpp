@@ -36,4 +36,16 @@ std::string detokenize(const BpeVocab & vocab,
     return out;
 }
 
+bool token_is_word_start(const BpeVocab & vocab, int32_t token_id) {
+    if (token_id < 0 || token_id >= static_cast<int32_t>(vocab.pieces.size())) return false;
+    if (token_id == vocab.blank_id || token_id == vocab.bos_id ||
+        token_id == vocab.eos_id   || token_id == vocab.pad_id) return false;
+    const std::string & piece = vocab.pieces[token_id];
+    if (piece.size() < 3) return false;
+    const unsigned char c0 = static_cast<unsigned char>(piece[0]);
+    const unsigned char c1 = static_cast<unsigned char>(piece[1]);
+    const unsigned char c2 = static_cast<unsigned char>(piece[2]);
+    return c0 == 0xE2 && c1 == 0x96 && c2 == 0x81;
+}
+
 }

@@ -25,4 +25,18 @@ struct BpeVocab {
 std::string detokenize(const BpeVocab & vocab,
                        const std::vector<int32_t> & token_ids);
 
+// True when the token's piece (in `vocab.pieces`) begins with the
+// SentencePiece word-boundary marker `▁` (U+2581, encoded as the 3-byte
+// sequence 0xE2 0x96 0x81 in UTF-8). Used by the streaming sessions to
+// stamp `StreamingSegment::starts_word` so consumers can distinguish a
+// chunk-boundary wordpiece continuation ("ctuation" after "pun") from
+// a fresh word ("if" after "see") without re-implementing the BPE
+// detokenizer rules.
+//
+// Returns false for out-of-range, blank/bos/eos/pad ids, and pieces
+// whose first byte does not start the U+2581 marker (e.g. punctuation
+// pieces like ",", "." that should still be glued onto the previous
+// word without an inserted space).
+bool token_is_word_start(const BpeVocab & vocab, int32_t token_id);
+
 }
