@@ -147,7 +147,15 @@ endif()
 # port at its build time.  See the standalone chatterbox.cpp repo if
 # you need the locally-rename flow.
 
-find_package(OpenMP)
+option(TTS_CPP_OPENMP "tts-cpp: enable OpenMP for the tts-cpp target" ON)
+if (WIN32 AND NOT MINGW AND TTS_CPP_OPENMP AND NOT DEFINED CACHE{TTS_CPP_OPENMP_USER_OVERRIDE})
+    set(TTS_CPP_OPENMP OFF CACHE BOOL "" FORCE)
+    message(STATUS "tts-cpp: OpenMP disabled on Windows non-MinGW (clang-cl / MSVC + msys2 libgomp mismatch, plus consumer-toolchain probe leaks via static-archive transitive link interface). Set -DTTS_CPP_OPENMP_USER_OVERRIDE=ON and -DTTS_CPP_OPENMP=ON to force-enable.")
+endif()
+
+if (TTS_CPP_OPENMP)
+    find_package(OpenMP)
+endif()
 
 if (MSVC)
     add_compile_definitions(_USE_MATH_DEFINES _CRT_SECURE_NO_WARNINGS)
