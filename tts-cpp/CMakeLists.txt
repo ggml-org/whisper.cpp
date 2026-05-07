@@ -19,7 +19,16 @@ option(TTS_CPP_BUILD_EXECUTABLES "tts-cpp: build the tts-cli executable + mel2wa
 option(TTS_CPP_BUILD_TESTS       "tts-cpp: build per-stage numerical validation harnesses"   ${TTS_CPP_STANDALONE_DEFAULT})
 option(TTS_CPP_INSTALL           "tts-cpp: generate install rules"                           ON)
 option(TTS_CPP_USE_SYSTEM_GGML   "tts-cpp: use system-installed GGML library (find_package(ggml) instead of add_subdirectory(ggml)). Defaults to ON in this in-tree subtree of qvac-ext-lib-whisper.cpp because the standalone setup-ggml.sh + patches/ tooling has been dropped here; the QVAC speech-stack vcpkg port `ggml-speech` ships a pre-patched ggml from the qvac-ext-ggml/speech branch and is the canonical source-of-truth for builds out of this tree.  Flipping OFF in this tree is rejected at configure time (no patches/ to apply); use the standalone github.com/gianni-cor/chatterbox.cpp repo if you need a bundled-ggml dev build." ON)
-option(TTS_CPP_GGML_LIB_PREFIX   "tts-cpp: rename bundled ggml libraries to libspeech-ggml-* (filename only; CMake target names and C symbols are unchanged). Prevents shared-library filename collisions when several consumers that vendor different ggml versions are loaded into the same host process. The 'speech-' prefix is shared by parakeet.cpp, chatterbox.cpp, and the supertonic harnesses so the QVAC speech stack co-vendors a single ggml file set; flip to OFF to use stock upstream filenames. Has no effect when TTS_CPP_USE_SYSTEM_GGML=ON." ON)
+# Note: the standalone chatterbox.cpp repo carries a TTS_CPP_GGML_LIB_PREFIX
+# option here that controls renaming of bundled libggml-*.so to
+# libspeech-ggml-*.so when add_subdirectory(ggml) builds it locally.  In
+# this in-tree subtree that path is rejected at configure time (the
+# patches/ folder is intentionally absent; see TTS_CPP_USE_SYSTEM_GGML
+# below), so the option, the helper function, and the foreach prefix
+# loop that used to live here would all be unreachable code.  Dropped
+# entirely; the `ggml-speech` vcpkg port emits the renamed filenames
+# itself, so consumers picking up tts-cpp through find_package never
+# see the standalone bundled-rename path.
 option(TTS_CPP_CCACHE            "tts-cpp: use ccache as compiler launcher if available"     ON)
 
 # ccache shaves ~30 % off iterative rebuild time on developer machines.
@@ -128,53 +137,15 @@ if (NOT TARGET ggml)
     endif()
 endif()
 
-# Rename the bundled ggml shared/static library filenames so the speech
-# stack (whisper, parakeet, chatterbox, supertonic) can vendor a single
-# ggml file set without colliding with other addons that ship their own
-# (fabric/qvac-ggml-*, diffusion-ggml-*).  CMake target names and C
-# symbols are unchanged; only the on-disk filename gains the prefix.
-function(tts_cpp_apply_ggml_prefix target)
-    if (NOT TARGET ${target})
-        return()
-    endif()
-    get_target_property(_tcgp_type ${target} TYPE)
-    if (_tcgp_type STREQUAL "INTERFACE_LIBRARY" OR _tcgp_type STREQUAL "OBJECT_LIBRARY")
-        return()
-    endif()
-    get_target_property(_tcgp_old ${target} OUTPUT_NAME)
-    if (NOT _tcgp_old OR _tcgp_old STREQUAL "_tcgp_old-NOTFOUND")
-        set(_tcgp_old ${target})
-    endif()
-    set_target_properties(${target} PROPERTIES
-        OUTPUT_NAME "speech-${_tcgp_old}"
-    )
-endfunction()
-
-if (TTS_CPP_GGML_LIB_PREFIX AND NOT TTS_CPP_USE_SYSTEM_GGML)
-    foreach (_tcgp_target ggml ggml-base)
-        tts_cpp_apply_ggml_prefix(${_tcgp_target})
-    endforeach()
-    if (DEFINED GGML_AVAILABLE_BACKENDS)
-        foreach (_tcgp_target ${GGML_AVAILABLE_BACKENDS})
-            tts_cpp_apply_ggml_prefix(${_tcgp_target})
-        endforeach()
-    endif()
-    # Renaming the .so/.dll files alone is not enough: ggml's runtime
-    # backend loader (`ggml_backend_load_best`) hard-codes the
-    # `libggml-` / `ggml-` filename prefix when scanning under
-    # GGML_BACKEND_DL=ON.  patches/ggml-backend-reg-filename-prefix.patch
-    # adds the `GGML_BACKEND_DL_PROJECT_PREFIX` macro; defining it here
-    # teaches the loader to look for our prefixed filenames at runtime.
-    # Without the macro the renamed .so/.dll files would exist on disk
-    # but Vulkan / OpenCL / CUDA backends would silently fail to load
-    # on Android.
-    if (TARGET ggml)
-        target_compile_definitions(ggml PRIVATE
-            GGML_BACKEND_DL_PROJECT_PREFIX="speech-"
-        )
-    endif()
-    message(STATUS "tts-cpp: bundled ggml libraries will be emitted as libspeech-ggml-* (set TTS_CPP_GGML_LIB_PREFIX=OFF to keep upstream filenames)")
-endif()
+# The bundled-ggml filename-prefix block (helper function +
+# tts_cpp_apply_ggml_prefix loop + GGML_BACKEND_DL_PROJECT_PREFIX
+# define) used to live here in the standalone chatterbox.cpp source.
+# Removed in this in-tree subtree: the bundled add_subdirectory(ggml)
+# path is rejected above when patches/ is absent, and find_package
+# (TTS_CPP_USE_SYSTEM_GGML=ON, the default here) consumes a ggml
+# whose filenames + macro are already set by the ggml-speech vcpkg
+# port at its build time.  See the standalone chatterbox.cpp repo if
+# you need the locally-rename flow.
 
 find_package(OpenMP)
 
