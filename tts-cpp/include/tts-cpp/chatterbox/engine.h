@@ -38,6 +38,7 @@
 // Implemented in src/chatterbox_engine.cpp on top of the library-internal
 // helpers in src/chatterbox_t3_internal.h.
 
+#include "tts-cpp/backend.h"
 #include "tts-cpp/export.h"
 
 #include <cstdint>
@@ -253,6 +254,14 @@ public:
     // "(unknown)" when the backend is unset (e.g. a partial construction
     // path that hasn't run init_backend yet).
     std::string backend_name() const;
+
+    // Resolved compute device for this engine.  CPU when the build has
+    // no GPU backend compiled in, when no GPU was requested
+    // (n_gpu_layers <= 0), or when the requested GPU backend refused
+    // to initialise.  GPU otherwise (covers Metal, CUDA, Vulkan, OpenCL
+    // and any other ggml ACCEL/GPU device).  Stable for the lifetime
+    // of the Engine.
+    BackendDevice backend_device() const;
 
 private:
     struct Impl;

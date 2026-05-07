@@ -691,4 +691,14 @@ std::string Engine::backend_name() const {
     return "(unknown)";
 }
 
+BackendDevice Engine::backend_device() const {
+    ggml_backend_t b = pimpl_ ? pimpl_->model.backend : nullptr;
+    if (!b) return BackendDevice::CPU;
+    ggml_backend_dev_t dev = ggml_backend_get_device(b);
+    if (!dev) return BackendDevice::CPU;
+    return ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU
+               ? BackendDevice::CPU
+               : BackendDevice::GPU;
+}
+
 } // namespace tts_cpp::chatterbox

@@ -34,6 +34,7 @@
 // Implemented in src/supertonic_engine.cpp on top of the library-internal
 // helpers in src/supertonic_internal.h.
 
+#include "tts-cpp/backend.h"
 #include "tts-cpp/export.h"
 
 #include <memory>
@@ -110,6 +111,12 @@ public:
     // resolved to during construction (e.g. "CPU", "Metal").  Returns
     // "(unknown)" when the backend is unset.
     std::string backend_name() const;
+
+    // Resolved compute device.  CPU when the build has no GPU backend
+    // compiled in, when no GPU was requested (n_gpu_layers <= 0), or
+    // when the requested GPU backend refused to initialise.  GPU
+    // otherwise.  Stable for the lifetime of the Engine.
+    BackendDevice backend_device() const;
 
 private:
     struct Impl;
