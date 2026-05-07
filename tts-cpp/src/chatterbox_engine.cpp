@@ -510,6 +510,25 @@ struct Engine::Impl {
         fill_common_s3gen_opts(sopts);
         sopts.cfm_steps = opts.cfm_steps;
 
+        // apply_trim_fade defaults to true at the s3gen layer to mask
+        // reference-audio bleed-through across the prompt-feat / first
+        // synthesized-mel boundary -- the prompt audio context can leak
+        // ~20-40 ms of HiFT state into the start of "real" output. When
+        // there's no reference audio (built-in voice baked into the S3Gen
+        // GGUF, default for chatterbox::Engine), there's nothing to bleed
+        // through: the prompt_feat tensor is well-formed pre-recorded mel
+        // and HiFT primes cleanly. Leaving apply_trim_fade=true in that
+        // mode silently zeros + fades the first 40 ms of legitimate
+        // speech, which empirically clipped the leading consonant of the
+        // first word ("Hello" -> "lo", "El" -> "l", etc.) for the
+        // chatterbox-mtl variant whose built-in conds.pt produces audio
+        // with zero leading silence. Gate on the actual presence of a
+        // reference-audio source so the existing reference-audio path is
+        // unaffected.
+        const bool has_voice_override =
+            !opts.reference_audio.empty() || !opts.voice_dir.empty();
+        sopts.apply_trim_fade = has_voice_override;
+
         SynthesisResult result = std::move(partial);
         sopts.pcm_out = &result.pcm;
 
