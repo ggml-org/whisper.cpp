@@ -221,14 +221,37 @@ TTS_CPP_API int s3gen_synthesize_to_wav(
 // after the T3 GGUF load) while T3 is still inferring, then the first
 // streamed chunk is available as soon as T3 emits its first N tokens.
 // Returns 0 on success.
+//
+// Lifetime contract: s3gen_preload / s3gen_unload form a refcounted
+// pair.  Each successful s3gen_preload bumps an internal refcount;
+// s3gen_unload decrements it, and the actual cache release runs only
+// when the count reaches zero.  Multi-Engine hosts that share an S3Gen
+// GGUF (e.g. two chatterbox::Engine instances loading the same path,
+// or one Engine + a host that calls s3gen_preload directly) MUST call
+// s3gen_preload + s3gen_unload in matched pairs so that one teardown
+// doesn't clobber the cache an unrelated component still expects to
+// hold.
+//
+// Direct callers of s3gen_synthesize_to_wav (the back-half pipeline)
+// do NOT bump the refcount: the cache populates on first synth and is
+// reused, but unbalanced unload from a parallel Engine teardown will
+// force a re-load on the direct caller's next synth (~700 ms latency
+// spike, not a crash).  Bracket direct synthesize_to_wav usage with
+// an explicit s3gen_preload / s3gen_unload pair when running alongside
+// chatterbox::Engine.
 TTS_CPP_API int s3gen_preload(const std::string & s3gen_gguf_path, int n_gpu_layers);
 
-// Release the internal S3Gen cache (weights + backend + allocator).  Long-
-// running processes that cycle through models, as well as wrappers that
-// need deterministic teardown before the host backend is destroyed (e.g.
-// the tts-cpp Bare addon), should call this before tearing down
+// Release one reference to the internal S3Gen cache (weights + backend
+// + allocator).  Decrements the refcount established by s3gen_preload;
+// when the count reaches zero, frees the cached model_ctx, gallocator,
+// and backend.  Idempotent: an unload-without-matching-preload clamps
+// at zero and runs the release anyway (preserves the legacy
+// "preload-once / unload-once-no-matter-what" pattern).
+//
+// Long-running processes that cycle through models, as well as wrappers
+// that need deterministic teardown before the host backend is destroyed
+// (e.g. the tts-cpp Bare addon), should call this before tearing down
 // their own ggml backend.  Otherwise the cache is freed at process exit
 // via static destructors, after which the ggml-metal global device may
-// have already been finalised — tripping its resource-leak assertion.
-// Idempotent; safe to call when the cache is empty.
+// have already been finalised - tripping its resource-leak assertion.
 TTS_CPP_API void s3gen_unload();

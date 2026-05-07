@@ -350,8 +350,15 @@ struct vocoder_graph_cache {
     ggml_tensor * wav = nullptr;
 };
 
+// Guards ggml_gallocr_free against a backend that has already been torn
+// down (e.g. host destroyed engine_a then immediately invoked synthesize
+// on engine_b on the same thread; the cache miss-key triggers this free
+// path against the dangling allocr).  See supertonic_internal.h for the
+// full alive-registry rationale.  Skipping the gallocr_free leaks the
+// gallocr bookkeeping (~80 bytes) but the underlying GPU buffers were
+// already released when the model's backend was freed.
 void free_vocoder_cache(vocoder_graph_cache & cache) {
-    if (cache.allocr) ggml_gallocr_free(cache.allocr);
+    supertonic_safe_gallocr_free(cache.allocr, cache.generation_id);
     if (cache.ctx) ggml_free(cache.ctx);
     cache = {};
 }

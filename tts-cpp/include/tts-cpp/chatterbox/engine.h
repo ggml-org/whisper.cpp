@@ -222,18 +222,24 @@ public:
     // Best-effort cancel of an in-flight synthesize() call on another
     // thread.  Safe to call concurrently with synthesize() or from any
     // thread.  Setting the flag is all this does; actual termination
-    // happens at the next cancellation checkpoint:
+    // happens at the next cancellation checkpoint inside the pipeline:
     //
     //   - between iterations of the T3 decode loop (every token);
-    //   - between CFM steps inside s3gen_synthesize_to_wav (every
-    //     CFM step, ~80 ms on Metal, longer on CPU);
-    //   - between encoder / HiFT-decode stages.
+    //   - immediately before run_encoder;
+    //   - between CFM steps (top of each iteration of the loop in
+    //     s3gen_synthesize_to_wav);
+    //   - between run_stft and run_hift_decode;
+    //   - immediately before run_hift_decode.
     //
     // ggml_backend_graph_compute calls cannot be preempted, so the
-    // worst-case cancel latency is one in-flight graph submission
-    // (a single CFM step, an encoder pass, or a HiFT decode pass —
-    // whichever was running when cancel() fired).  Streaming-mode
-    // cancels apply at the same checkpoints inside each chunk.
+    // worst-case cancel latency is one in-flight graph submission -
+    // bounded by the longest single graph among encoder, CFM step,
+    // STFT, and HiFT decode.  For chatterbox today, HiFT decode is
+    // the dominant one (a few hundred ms on M3 Ultra Metal at
+    // HiFT-realistic shapes; longer on CPU).  CFM steps are ~80 ms
+    // each on Metal but can dominate on CPU when many are queued.
+    // Streaming-mode cancels apply at the same checkpoints inside
+    // each chunk.
     void cancel();
 
     // Return the options the engine was constructed with (convenience for

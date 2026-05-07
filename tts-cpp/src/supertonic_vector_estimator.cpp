@@ -583,23 +583,6 @@ struct vector_static_layout_cache {
     std::vector<float> kctx_raw;
 };
 
-const std::vector<float> & cached_text_lc(const supertonic_model & model, const float * text_emb, int text_len) {
-    thread_local vector_static_layout_cache cache;
-    if (cache.text_emb != text_emb || cache.text_generation_id != model.generation_id ||
-        cache.text_len != text_len) {
-        cache.text_emb = text_emb;
-        cache.text_generation_id = model.generation_id;
-        cache.text_len = text_len;
-        cache.text_lc_host.assign((size_t)text_len * 256, 0.0f);
-        for (int c = 0; c < 256; ++c) {
-            for (int t = 0; t < text_len; ++t) {
-                cache.text_lc_host[(size_t)c * text_len + t] = text_emb[(size_t)c * text_len + t];
-            }
-        }
-    }
-    return cache.text_lc_host;
-}
-
 void cached_style_layouts(const supertonic_model & model,
                           const float * style_ttl,
                           const std::vector<float> *& style_v_raw,
@@ -643,7 +626,7 @@ struct vector_text_attention_cache {
 };
 
 void free_text_attention_cache(vector_text_attention_cache & cache) {
-    if (cache.allocr) ggml_gallocr_free(cache.allocr);
+    supertonic_safe_gallocr_free(cache.allocr, cache.generation_id);
     if (cache.ctx) ggml_free(cache.ctx);
     cache = {};
 }
@@ -780,7 +763,7 @@ struct vector_group_graph_cache {
 };
 
 void free_group_graph_cache(vector_group_graph_cache & cache) {
-    if (cache.allocr) ggml_gallocr_free(cache.allocr);
+    supertonic_safe_gallocr_free(cache.allocr, cache.generation_id);
     if (cache.ctx) ggml_free(cache.ctx);
     cache = {};
 }
@@ -900,7 +883,7 @@ vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache
                                                 int L,
                                                 int C,
                                                 const std::vector<float> & temb,
-                                                const std::vector<float> & text_lc_host,
+                                                const float * text_lc_host,
                                                 int text_len,
                                                 int current_step,
                                                 int group,
@@ -932,7 +915,7 @@ vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache
     std::vector<float> x_raw = pack_time_channel_for_ggml(x_tc, L, C);
     ggml_backend_tensor_set(cache.x_in, x_raw.data(), 0, x_raw.size()*sizeof(float));
     ggml_backend_tensor_set(cache.temb_in, temb.data(), 0, temb.size()*sizeof(float));
-    ggml_backend_tensor_set(cache.text_in, text_lc_host.data(), 0, text_lc_host.size()*sizeof(float));
+    ggml_backend_tensor_set(cache.text_in, text_lc_host, 0, (size_t) text_len * 256 * sizeof(float));
     profile_vector_compute(model, cache.gf, current_step, island);
     if (trace) {
         for (int j = 0; j < 4; ++j) {
@@ -994,7 +977,7 @@ struct vector_res_style_qkv_cache {
 };
 
 void free_res_style_qkv_cache(vector_res_style_qkv_cache & cache) {
-    if (cache.allocr) ggml_gallocr_free(cache.allocr);
+    supertonic_safe_gallocr_free(cache.allocr, cache.generation_id);
     if (cache.ctx) ggml_free(cache.ctx);
     cache = {};
 }
@@ -1217,7 +1200,7 @@ void tail_update_op(ggml_tensor * dst, int ith, int nth, void * userdata) {
 #endif
 
 void free_tail_graph_cache(vector_tail_graph_cache & cache) {
-    if (cache.allocr) ggml_gallocr_free(cache.allocr);
+    supertonic_safe_gallocr_free(cache.allocr, cache.generation_id);
     if (cache.ctx) ggml_free(cache.ctx);
     cache = {};
 }
@@ -2141,8 +2124,11 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         ggml_backend_tensor_set(mask, latent_mask, 0, (size_t) L * sizeof(float));
         std::vector<float> te_host = time_embedding(model, current_step, total_steps);
         ggml_backend_tensor_set(t_emb, te_host.data(), 0, te_host.size() * sizeof(float));
-        const std::vector<float> & text_lc_host = cached_text_lc(model, text_emb, text_len);
-        ggml_backend_tensor_set(text_in, text_lc_host.data(), 0, text_lc_host.size() * sizeof(float));
+        // text_emb is already in (channel, time) layout so the cache that
+        // used to wrap this set was a verbatim copy keyed on a pointer
+        // that never matched twice.  Removed; set the tensor directly
+        // from the caller-owned text_emb buffer.
+        ggml_backend_tensor_set(text_in, text_emb, 0, (size_t) text_len * 256 * sizeof(float));
         profile_vector_compute(model, gf, current_step, "front_proj_attn0_qkv");
 
         PUSH_GGML_TRACE({"ve_latent_tc", {L, Cin}, in});
@@ -2255,7 +2241,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
 
         thread_local vector_group_graph_cache g1_group_cache;
         vector_group_graph_result g1_group = run_group_graph_cache(g1_group_cache, model, style_norm_ggml,
-            L, C, te_host, text_lc_host, text_len, current_step,
+            L, C, te_host, text_emb, text_len, current_step,
             1, 6, 7, "vector_estimator:onnx::MatMul_3140", 8,
             "vector_estimator:onnx::MatMul_3146",
             "vector_estimator:onnx::MatMul_3147",
@@ -2359,7 +2345,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
 
         thread_local vector_group_graph_cache g2_group_cache;
         vector_group_graph_result g2_group = run_group_graph_cache(g2_group_cache, model, g1_style_norm_vec,
-            L, C, te_host, text_lc_host, text_len, current_step,
+            L, C, te_host, text_emb, text_len, current_step,
             2, 12, 13, "vector_estimator:onnx::MatMul_3185", 14,
             "vector_estimator:onnx::MatMul_3191",
             "vector_estimator:onnx::MatMul_3192",
@@ -2463,7 +2449,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
 
         thread_local vector_group_graph_cache g3_group_cache;
         vector_group_graph_result g3_group = run_group_graph_cache(g3_group_cache, model, g2_style_norm_vec,
-            L, C, te_host, text_lc_host, text_len, current_step,
+            L, C, te_host, text_emb, text_len, current_step,
             3, 18, 19, "vector_estimator:onnx::MatMul_3230", 20,
             "vector_estimator:onnx::MatMul_3236",
             "vector_estimator:onnx::MatMul_3237",

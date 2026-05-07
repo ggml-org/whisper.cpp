@@ -216,4 +216,36 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
                                        bool include_ggml_trace = true,
                                        std::vector<float> * next_latent_tc_out = nullptr);
 
+// Process-wide alive registry: each loaded supertonic_model registers
+// its generation_id with this set on success and unregisters at the
+// start of free_supertonic_model.  The thread_local graph caches in
+// supertonic_vocoder.cpp / supertonic_text_encoder.cpp /
+// supertonic_vector_estimator.cpp own ggml_gallocr_t handles allocated
+// against a specific model's ggml_backend_t; on a cache miss the
+// existing teardown code calls ggml_gallocr_free(cache.allocr).  When
+// the model that backed the cache has already been destroyed, that
+// free path asserts inside the GPU-backend dylib finaliser.  The
+// is_supertonic_alive() check at every free_*_cache() site lets the
+// teardown skip the gallocr_free call for a generation that's no
+// longer alive (the underlying GPU buffers were freed when the
+// model's backend was freed; we only leak the gallocr bookkeeping
+// struct itself, ~80 bytes per cache type).
+//
+// Thread-safe: backed by a single std::mutex.  Lookup is on the
+// hot per-call path inside free_*_cache(), but the lock is held only
+// for an unordered_set::find() so contention is minimal.
+void register_supertonic_alive(uint64_t generation_id);
+void unregister_supertonic_alive(uint64_t generation_id);
+bool is_supertonic_alive(uint64_t generation_id);
+
+// Helper consumed by every per-stage free_*_cache().  Skips the
+// ggml_gallocr_free call when the allocr's backend has already been
+// torn down (model.generation_id no longer in the alive registry).
+inline void supertonic_safe_gallocr_free(ggml_gallocr_t & allocr, uint64_t generation_id) {
+    if (allocr && is_supertonic_alive(generation_id)) {
+        ggml_gallocr_free(allocr);
+    }
+    allocr = nullptr;
+}
+
 } // namespace tts_cpp::supertonic::detail

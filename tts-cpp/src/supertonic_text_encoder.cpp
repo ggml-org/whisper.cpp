@@ -395,7 +395,7 @@ struct text_relpos_graph_cache {
 };
 
 void free_relpos_cache(text_relpos_graph_cache & cache) {
-    if (cache.allocr) ggml_gallocr_free(cache.allocr);
+    supertonic_safe_gallocr_free(cache.allocr, cache.generation_id);
     if (cache.ctx) ggml_free(cache.ctx);
     cache = {};
 }
@@ -546,7 +546,7 @@ struct text_ffn_graph_cache {
 };
 
 void free_ffn_cache(text_ffn_graph_cache & cache) {
-    if (cache.allocr) ggml_gallocr_free(cache.allocr);
+    supertonic_safe_gallocr_free(cache.allocr, cache.generation_id);
     if (cache.ctx) ggml_free(cache.ctx);
     cache = {};
 }
@@ -690,7 +690,7 @@ struct speech_attention_cache {
 };
 
 void free_speech_attention_cache(speech_attention_cache & cache) {
-    if (cache.allocr) ggml_gallocr_free(cache.allocr);
+    supertonic_safe_gallocr_free(cache.allocr, cache.generation_id);
     if (cache.ctx) ggml_free(cache.ctx);
     cache = {};
 }

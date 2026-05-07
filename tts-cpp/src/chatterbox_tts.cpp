@@ -2287,7 +2287,7 @@ int s3gen_synthesize_to_wav(
         if (opts.prompt_token_view_data && opts.prompt_token_view_size > 0) {
             pt_data.assign(opts.prompt_token_view_data,
                            opts.prompt_token_view_data + opts.prompt_token_view_size);
-            vlog("  prompt_token: using C++ override view (%zu tokens, no copy)\n",
+            vlog("  prompt_token: using C++ override view (%zu tokens, single-copy view path)\n",
                     pt_data.size());
         } else if (!opts.prompt_token_override.empty()) {
             pt_data = opts.prompt_token_override;
@@ -2302,7 +2302,7 @@ int s3gen_synthesize_to_wav(
         if (opts.embedding_view_data && opts.embedding_view_size > 0) {
             emb_data.assign(opts.embedding_view_data,
                             opts.embedding_view_data + opts.embedding_view_size);
-            vlog("  embedding: using C++ override view (%zu dims, no copy)\n",
+            vlog("  embedding: using C++ override view (%zu dims, single-copy view path)\n",
                     emb_data.size());
         } else if (!opts.embedding_override.empty()) {
             emb_data = opts.embedding_override;
@@ -2317,7 +2317,7 @@ int s3gen_synthesize_to_wav(
             pf_data.assign(opts.prompt_feat_view_data,
                            opts.prompt_feat_view_data + opts.prompt_feat_view_size);
             pf_rows = opts.prompt_feat_view_rows;
-            vlog("  prompt_feat: using C++ override view (%d mel frames, no copy)\n", pf_rows);
+            vlog("  prompt_feat: using C++ override view (%d mel frames, single-copy view path)\n", pf_rows);
         } else if (!opts.prompt_feat_override.empty()) {
             pf_data = opts.prompt_feat_override;
             pf_rows = opts.prompt_feat_rows_override;
@@ -2880,6 +2880,11 @@ int s3gen_synthesize_to_wav(
     if (opts.hift_source_tail_out != nullptr && opts.source_tail_samples > 0) {
         int tail_n = std::min((int)src.size(), opts.source_tail_samples);
         opts.hift_source_tail_out->assign(src.end() - tail_n, src.end());
+    }
+
+    if (is_cancelled()) {
+        vlog("synthesis cancelled before STFT\n");
+        return 2;
     }
 
     vlog("Running STFT...\n");

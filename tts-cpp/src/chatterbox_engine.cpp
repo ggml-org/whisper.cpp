@@ -110,34 +110,43 @@ struct Engine::Impl {
         // the HuggingFace MTL tokenizer JSON embedded in the GGUF.
         // synthesize() / run_t3() switch graph + sampling paths on the
         // same flag.
-        if (model.hparams.variant == CHBX_VARIANT_TURBO) {
-            bpe.load_from_arrays(model.tok_tokens, model.tok_merges);
-        } else if (model.hparams.variant == CHBX_VARIANT_MTL) {
-            if (model.mtl_tokenizer_json.empty()) {
-                free_model();
+        //
+        // The whole block is wrapped in one try/catch so any throw -
+        // whether from the BPE/MTL tokenizer load, an unsupported
+        // language, or the unknown-variant case - calls free_model()
+        // before unwinding.  Without this the Turbo path's
+        // bpe.load_from_arrays would leak the partially-constructed
+        // model (backend, ctx_w, buffer_w) on a future malformed-vocab
+        // throw, since ~Impl never runs on a partial construction.
+        try {
+            if (model.hparams.variant == CHBX_VARIANT_TURBO) {
+                bpe.load_from_arrays(model.tok_tokens, model.tok_merges);
+            } else if (model.hparams.variant == CHBX_VARIANT_MTL) {
+                if (model.mtl_tokenizer_json.empty()) {
+                    throw std::runtime_error(
+                        "Engine: T3 GGUF reports chatterbox.variant == t3_mtl "
+                        "but does not embed an mtl_tokenizer.json blob; "
+                        "regenerate with scripts/convert-t3-mtl-to-gguf.py.  "
+                        "Path: " + opts.t3_gguf_path);
+                }
+                if (!mtl_tok.load_from_json(model.mtl_tokenizer_json)) {
+                    throw std::runtime_error(
+                        "Engine: failed to parse embedded mtl_tokenizer.json "
+                        "for: " + opts.t3_gguf_path);
+                }
+                if (!opts.language.empty() && !mtl_tok.is_language_supported(opts.language)) {
+                    throw std::runtime_error(
+                        "Engine: language '" + opts.language +
+                        "' not in the multilingual tokenizer's tier-1 set");
+                }
+            } else {
                 throw std::runtime_error(
-                    "Engine: T3 GGUF reports chatterbox.variant == t3_mtl "
-                    "but does not embed an mtl_tokenizer.json blob; "
-                    "regenerate with scripts/convert-t3-mtl-to-gguf.py.  "
-                    "Path: " + opts.t3_gguf_path);
+                    "Engine: T3 GGUF reports unknown chatterbox.variant; "
+                    "supported: t3_turbo, t3_mtl.  Path: " + opts.t3_gguf_path);
             }
-            if (!mtl_tok.load_from_json(model.mtl_tokenizer_json)) {
-                free_model();
-                throw std::runtime_error(
-                    "Engine: failed to parse embedded mtl_tokenizer.json "
-                    "for: " + opts.t3_gguf_path);
-            }
-            if (!opts.language.empty() && !mtl_tok.is_language_supported(opts.language)) {
-                free_model();
-                throw std::runtime_error(
-                    "Engine: language '" + opts.language +
-                    "' not in the multilingual tokenizer's tier-1 set");
-            }
-        } else {
+        } catch (...) {
             free_model();
-            throw std::runtime_error(
-                "Engine: T3 GGUF reports unknown chatterbox.variant; "
-                "supported: t3_turbo, t3_mtl.  Path: " + opts.t3_gguf_path);
+            throw;
         }
 
         s3gen_preload_thread = std::thread([path = opts.s3gen_gguf_path,

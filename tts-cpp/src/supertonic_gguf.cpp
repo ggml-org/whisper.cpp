@@ -20,6 +20,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
+#include <mutex>
+#include <unordered_set>
 #include <stdexcept>
 #include <thread>
 
@@ -168,7 +170,39 @@ uint64_t next_supertonic_generation_id() {
     return next_id.fetch_add(1, std::memory_order_relaxed);
 }
 
+// Process-wide alive-set keyed on generation_id.  See
+// supertonic_internal.h for the rationale; contract is local to the
+// register_supertonic_alive / unregister_supertonic_alive /
+// is_supertonic_alive triple defined further down at the
+// detail-namespace scope (so the symbols match the header
+// declarations and aren't accidentally hidden in this TU's anon
+// namespace).
+inline std::mutex & supertonic_alive_mu() {
+    static std::mutex m;
+    return m;
+}
+inline std::unordered_set<uint64_t> & supertonic_alive_ids() {
+    static std::unordered_set<uint64_t> s;
+    return s;
+}
+
 } // namespace
+
+void register_supertonic_alive(uint64_t generation_id) {
+    std::lock_guard<std::mutex> lk(supertonic_alive_mu());
+    supertonic_alive_ids().insert(generation_id);
+}
+
+void unregister_supertonic_alive(uint64_t generation_id) {
+    std::lock_guard<std::mutex> lk(supertonic_alive_mu());
+    supertonic_alive_ids().erase(generation_id);
+}
+
+bool is_supertonic_alive(uint64_t generation_id) {
+    if (generation_id == 0) return false;
+    std::lock_guard<std::mutex> lk(supertonic_alive_mu());
+    return supertonic_alive_ids().find(generation_id) != supertonic_alive_ids().end();
+}
 
 ggml_tensor * require_tensor(const supertonic_model & model, const std::string & name) {
     ggml_tensor * t = get_tensor_or_null(model, name);
@@ -346,10 +380,22 @@ bool load_supertonic_gguf(const std::string & path,
 
     gguf_free(gguf_ctx);
     ggml_free(tmp_ctx);
+    // Mark this model alive only after all the load steps succeeded.
+    // The per-stage thread_local graph caches consult is_supertonic_alive()
+    // before calling ggml_gallocr_free() to skip the free path against a
+    // backend that's already been torn down.
+    register_supertonic_alive(model.generation_id);
     return true;
 }
 
 void free_supertonic_model(supertonic_model & model) {
+    // Unregister BEFORE freeing the backend so any concurrent / subsequent
+    // free_*_cache() call on a stale thread_local cache sees the
+    // generation as no-longer-alive and skips ggml_gallocr_free against
+    // the soon-to-be-dead backend.
+    if (model.generation_id != 0) {
+        unregister_supertonic_alive(model.generation_id);
+    }
     if (model.buffer_w) {
         ggml_backend_buffer_free(model.buffer_w);
         model.buffer_w = nullptr;
