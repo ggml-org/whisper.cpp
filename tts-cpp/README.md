@@ -1,4 +1,13 @@
-# chatterbox.cpp
+# tts-cpp
+
+> **In-tree subtree of [`chatterbox.cpp`](https://github.com/gianni-cor/chatterbox.cpp)
+> integrated into `qvac-ext-lib-whisper.cpp`.** The standalone development
+> repo carries `scripts/setup-ggml.sh` + `patches/` and supports
+> bundled-ggml dev builds; this in-tree subtree drops both and consumes
+> ggml exclusively through the QVAC speech-stack `ggml-speech` vcpkg
+> port (the [`qvac-ext-ggml/speech`](https://github.com/tetherto/qvac-ext-ggml/tree/speech)
+> branch, which ships the patches pre-applied).  See [§1 below](#1-build-from-the-qvac-speech-stack)
+> for the build flow.
 
 **Chatterbox** (Resemble AI, MIT-licensed zero-shot text-to-speech) ported
 to [`ggml`](https://github.com/ggml-org/ggml).  Pure C++/ggml inference on
@@ -97,8 +106,8 @@ embedding into a host that already manages model lifetime:
 + explicit teardown — required for long-running processes that cycle
 through models or that need deterministic teardown before destroying
 their own ggml backend), and **`tts_cpp_cli_main`** (the same
-entry point used by the `tts-cli` / `chatterbox` binaries — useful for
-embedding the end-to-end CLI into a downstream binary without forking
+entry point used by the `tts-cli` binary — useful for embedding the
+end-to-end CLI into a downstream binary without forking
 [`src/cli_main.cpp`](src/cli_main.cpp)).  Anything outside the
 `TTS_CPP_API`-annotated surface (in particular the
 `tts_cpp::supertonic::detail::*` and `tts_cpp::chatterbox::*_internal`
@@ -107,17 +116,14 @@ helpers reachable from the supertonic / chatterbox test harnesses) is
 
 ### Consumer integration
 
-Downstream projects in the QVAC speech stack consume `tts-cpp`
-through the
-[`qvac-ext-lib-whisper.cpp`](https://github.com/tetherto/qvac-ext-lib-whisper.cpp)
-wrapper port, which pulls ggml from the
+Downstream projects in the QVAC speech stack consume `tts-cpp` via
+the matching `tts-cpp` vcpkg port (this in-tree subtree).  ggml comes
+from the [`ggml-speech`](https://github.com/tetherto/qvac-registry-vcpkg)
+sister port, which vendors the
 [`qvac-ext-ggml/speech`](https://github.com/tetherto/qvac-ext-ggml/tree/speech)
-branch directly (Metal / OpenCL / Vulkan patches included).  The
-integrated port does **not** ship `scripts/setup-ggml.sh` or
-`patches/` — those are standalone-development tools maintained in
-this repo only.  Once the wrapper has installed the `ggml-speech` and
-`tts-cpp` ports through vcpkg, integration on the consumer side is
-one `find_package` call:
+branch with all Metal / OpenCL / Vulkan patches pre-applied.  Once
+both ports are installed, integration on the consumer side is one
+`find_package` call:
 
 ```cmake
 find_package(tts-cpp CONFIG REQUIRED)
@@ -317,48 +323,43 @@ pip install onnx gguf huggingface_hub safetensors scipy librosa resampy
 cd -
 ```
 
-## 1. Clone and build
+## 1. Build from the qvac speech stack
 
-```bash
-# (from wherever you want the repo to live)
-git clone <this-repo> chatterbox.cpp
-cd chatterbox.cpp
+This in-tree subtree is built against the [`ggml-speech`](https://github.com/tetherto/qvac-registry-vcpkg)
+vcpkg port (which vendors the [`qvac-ext-ggml/speech`](https://github.com/tetherto/qvac-ext-ggml/tree/speech)
+branch with all patches pre-applied).  `tts-cpp` itself is consumed
+through the matching `tts-cpp` port; downstream applications in the
+QVAC speech stack add both to their `vcpkg.json` and call
+`find_package(tts-cpp CONFIG REQUIRED)`:
 
-# Clone ggml at the pinned commit and apply the Metal + OpenCL patches
-# (see patches/).  Re-running resets ./ggml to the pin and reapplies.
-./scripts/setup-ggml.sh
-
-# Configure + build every target in one shot.
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+```cmake
+find_package(tts-cpp CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE tts-cpp::tts-cpp)
 ```
 
-`scripts/setup-ggml.sh` clones upstream
-[`ggml`](https://github.com/ggml-org/ggml) into `./ggml`, hard-resets to the
-commit pinned in `GGML_COMMIT`, and applies
-[`patches/ggml-metal-chatterbox-ops.patch`](patches/ggml-metal-chatterbox-ops.patch)
-then
-[`patches/ggml-opencl-chatterbox-ops.patch`](patches/ggml-opencl-chatterbox-ops.patch).
-Re-running is idempotent and **destructive**: any local edits under
-`./ggml` are reset to the pinned commit before patches are reapplied,
-so use a separate clone if you're hacking on ggml itself.  Bump
-`GGML_COMMIT` and regenerate the patches when moving to a newer
-upstream ggml.
+For development out of this in-tree subtree (running the parity
+harnesses, prototyping API changes, etc.) the canonical build is:
 
-`scripts/setup-ggml.sh` and the `patches/` directory are
-**standalone-development tools**.  The qvac speech-stack
-integrated port consumes ggml from the
-[`qvac-ext-ggml/speech`](https://github.com/tetherto/qvac-ext-ggml/tree/speech)
-branch directly and does not carry these files — see
-[**Consumer integration**](#consumer-integration) above.
+```bash
+# Install the speech-stack ggml port via vcpkg first; then:
+cmake -S tts-cpp -B tts-cpp/build -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE=<vcpkg_root>/scripts/buildsystems/vcpkg.cmake
+cmake --build tts-cpp/build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+```
 
-To enable GPU acceleration, add the matching backend flag at configure
-time: `-DGGML_METAL=ON` on Apple Silicon, `-DGGML_VULKAN=ON` on
-Linux/Windows with a Vulkan loader, `-DGGML_OPENCL=ON` for OpenCL
-(Android/Termux, etc., after applying the OpenCL patch above), or
-`-DGGML_CUDA=ON` if you have the CUDA toolkit. Pass `--n-gpu-layers 99` at
-runtime to actually use the GPU. See `patches/README.md` for what the
-patches do and why.
+`TTS_CPP_USE_SYSTEM_GGML` defaults to `ON` here so the build picks
+up the patched ggml from vcpkg automatically; flipping it `OFF` in
+this subtree is rejected at configure time (no `patches/` to apply).
+GPU acceleration is selected at the ggml-port level - the
+`ggml-speech` port already carries the Metal / Vulkan / OpenCL
+backend support its consumers ask for; pass `--n-gpu-layers 99` at
+runtime to actually use the compiled GPU backend.
+
+If you need a bundled-ggml dev build (`add_subdirectory(ggml)` with
+patches applied locally rather than coming from vcpkg), use the
+standalone [`chatterbox.cpp`](https://github.com/gianni-cor/chatterbox.cpp)
+repo - the source-of-truth this subtree was copied from - which keeps
+`scripts/setup-ggml.sh` + `patches/` for that flow.
 
 ### Useful CMake options
 
@@ -372,7 +373,7 @@ override with `-D<flag>=...` at configure time):
 | `TTS_CPP_BUILD_EXECUTABLES` | `ON` standalone / `OFF` subdir | `tts-cli`, `mel2wav`, `supertonic-cli`, `supertonic-bench` |
 | `TTS_CPP_BUILD_TESTS` | `ON` standalone / `OFF` subdir | `test-*` parity / unit harnesses, registered with CTest (label-filterable via `ctest -L unit` / `ctest -L fixture` / `ctest -L gpu`) |
 | `TTS_CPP_INSTALL` | `ON` | Generate `install` rules + the `tts-cpp` CMake package config so consumers can `find_package(tts-cpp CONFIG REQUIRED)` |
-| `TTS_CPP_USE_SYSTEM_GGML` | `OFF` | Replace the bundled `add_subdirectory(ggml)` with `find_package(ggml CONFIG REQUIRED)` — the path consumers in the qvac speech stack take to pull ggml from the [`qvac-ext-ggml/speech`](https://github.com/tetherto/qvac-ext-ggml/tree/speech) port instead of the local `./ggml/` clone. See [**Alternative: consume ggml from vcpkg**](#alternative-consume-ggml-from-vcpkg-tts_cpp_use_system_ggml) below |
+| `TTS_CPP_USE_SYSTEM_GGML` | `ON` (this in-tree subtree) | `find_package(ggml CONFIG REQUIRED)` against the QVAC speech-stack `ggml-speech` vcpkg port (the [`qvac-ext-ggml/speech`](https://github.com/tetherto/qvac-ext-ggml/tree/speech) branch). Flipping `OFF` is rejected at configure time here because the standalone `patches/` directory is intentionally absent. The standalone `chatterbox.cpp` repo defaults this to `OFF` for its bundled-ggml dev flow |
 | `TTS_CPP_GGML_LIB_PREFIX` | `ON` | Rename bundled ggml libraries to `libspeech-ggml-*` (filename only; CMake target names and C symbols are unchanged). The `speech-` prefix is shared with `parakeet.cpp` so the QVAC speech stack (whisper, parakeet, chatterbox, supertonic) co-vendors a single ggml file set when several speech libraries are loaded into the same host process. Set to OFF to keep stock upstream filenames; no-op when `TTS_CPP_USE_SYSTEM_GGML=ON` |
 | `TTS_CPP_CCACHE` | `ON` | Use ccache as compiler launcher for `tts-cpp`'s own targets when `find_program(ccache)` succeeds. Scoped per target; ggml's independent `GGML_CCACHE` option handles the ggml subdirectory |
 
@@ -422,35 +423,17 @@ register with CTest so you can run `ctest -C Release -L unit` /
 `ctest -C Release -L fixture` from the build directory after fixtures
 are in place.
 
-### Alternative: consume ggml from vcpkg (`TTS_CPP_USE_SYSTEM_GGML`)
+### How `TTS_CPP_USE_SYSTEM_GGML=ON` resolves ggml
 
-This is the build path the qvac speech-stack
-[**Consumer integration**](#consumer-integration) story takes —
-documented here in CMake-mechanic detail.  Downstream projects that
-already vendor ggml through vcpkg (for example the
-[`qvac-ext-ggml/speech`](https://github.com/tetherto/qvac-ext-ggml/tree/speech)
-port) can skip `setup-ggml.sh` and instead point the build at a
-pre-installed ggml package:
-
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-  -DTTS_CPP_USE_SYSTEM_GGML=ON
-cmake --build build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
-```
-
-When `TTS_CPP_USE_SYSTEM_GGML=ON`, the top-level `CMakeLists.txt`
-swaps `add_subdirectory(ggml)` for `find_package(ggml CONFIG REQUIRED)`
-and aliases the imported `ggml::ggml` target onto the plain `ggml` name
-that the rest of the build uses.  The local `./ggml/` tree is never
-read.  The imported package is expected to provide the equivalent of
-the patches carried under `patches/` (the `qvac-ext-ggml/speech`
-branch ships them pre-applied so consumers don't have to maintain a
-patch trail).  This shape mirrors `stable-diffusion.cpp`'s
-`SD_USE_SYSTEM_GGML`.
-
-The default (`TTS_CPP_USE_SYSTEM_GGML=OFF`) preserves the standalone
-flow above untouched, so this is purely an opt-in escape hatch for
-package-manager-driven builds.
+When the option is `ON` (the default in this in-tree subtree), the
+top-level `CMakeLists.txt` swaps `add_subdirectory(ggml)` for
+`find_package(ggml CONFIG REQUIRED)` and aliases the imported
+`ggml::ggml` target onto the plain `ggml` name that the rest of the
+build uses.  No local `./ggml/` clone is read.  The imported package
+ships the equivalent of the patches the standalone `chatterbox.cpp`
+repo applies via `patches/` - the `qvac-ext-ggml/speech` branch
+carries them pre-applied so consumers don't maintain a patch trail.
+This shape mirrors `stable-diffusion.cpp`'s `SD_USE_SYSTEM_GGML`.
 
 ## 2. One-time: convert weights
 
@@ -851,22 +834,22 @@ architecture) on the same machine.  Shared setup:
 
 | Implementation                        | Backend         | T3 gen             | S3Gen+HiFT gen | Total inference | RTF   | vs real-time |
 |---------------------------------------|-----------------|-------------------:|---------------:|----------------:|------:|-------------:|
-| **`chatterbox.cpp` Q4_0**             | **Metal**       |  573 ms / 155 tok  |    412 ms      |   **985 ms**    | 0.16  | **6.4×**     |
-| `chatterbox.cpp` Q4_0                 | CPU (NEON+Accel)| 2 045 ms / 178 tok |  5 523 ms      |    7 568 ms     | 1.05  | 0.96×        |
+| **`tts-cpp` Q4_0**                    | **Metal**       |  573 ms / 155 tok  |    412 ms      |   **985 ms**    | 0.16  | **6.4×**     |
+| `tts-cpp` Q4_0                        | CPU (NEON+Accel)| 2 045 ms / 178 tok |  5 523 ms      |    7 568 ms     | 1.05  | 0.96×        |
 | ONNX Runtime Q4 baseline              | CPU             |        —           |      —         |   17 190 ms     | 3.18  | 0.31×        |
 
-`chatterbox.cpp` (Metal) is **17.5× faster than ONNX Runtime** on the
+`tts-cpp` (Metal) is **17.5× faster than ONNX Runtime** on the
 same machine; the CPU-only build is still 2.3× faster.
 
 ### Linux RTX 5090 + AMD Ryzen 9 9950X
 
 | Implementation                        | Backend         | T3 gen             | S3Gen+HiFT gen | Total inference | RTF   | vs real-time |
 |---------------------------------------|-----------------|-------------------:|---------------:|----------------:|------:|-------------:|
-| **`chatterbox.cpp` Q4_0**             | **Vulkan**      |  241 ms / 161 tok  |    222 ms      |    **463 ms**   | 0.07  | **14.2×**    |
-| `chatterbox.cpp` Q4_0                 | CPU (AVX)       | 2 161 ms / 161 tok |  3 236 ms      |    5 397 ms     | 0.82  | 1.2×         |
+| **`tts-cpp` Q4_0**                    | **Vulkan**      |  241 ms / 161 tok  |    222 ms      |    **463 ms**   | 0.07  | **14.2×**    |
+| `tts-cpp` Q4_0                        | CPU (AVX)       | 2 161 ms / 161 tok |  3 236 ms      |    5 397 ms     | 0.82  | 1.2×         |
 | ONNX Runtime Q4 baseline              | CPU             |        —           |      —         |    6 373 ms     | 1.18  | 0.85×        |
 
-`chatterbox.cpp` (Vulkan) is **13.8× faster than ONNX Runtime** on the
+`tts-cpp` (Vulkan) is **13.8× faster than ONNX Runtime** on the
 same machine.  Note that the ONNX Runtime baseline here only uses the
 CPU execution provider; a CUDA build would narrow the gap, but is not
 included in this comparison.
@@ -1031,7 +1014,7 @@ the runtime fix.
 ### Reproducing these numbers
 
 ```bash
-# Build chatterbox.cpp, then:
+# Build tts-cpp, then:
 ./build/tts-cli \
     --model       models/chatterbox-t3-turbo.gguf \
     --s3gen-gguf  models/chatterbox-s3gen.gguf \
@@ -1177,10 +1160,7 @@ python scripts/reference-t3-turbo.py \
 ## Repository layout
 
 ```
-chatterbox.cpp/
-  ggml/                          pristine ggml clone (not tracked; populated
-                                   by scripts/setup-ggml.sh, or skipped entirely
-                                   when building with -DTTS_CPP_USE_SYSTEM_GGML=ON)
+tts-cpp/                         in-tree subtree of github.com/gianni-cor/chatterbox.cpp
   include/tts-cpp/               installed public headers (Engine API)
     tts-cpp.h                    library entry; declares tts_cpp_cli_main()
     chatterbox/engine.h          Engine + EngineOptions (text → wav)
@@ -1190,7 +1170,7 @@ chatterbox.cpp/
     t3_mtl.{h,cpp}               T3 multilingual (Llama-520M) runtime + stage builders
     chatterbox_t3_internal.h     internal T3 declarations shared by main/engine/CLI
     chatterbox_engine.cpp        public Engine API impl (libtts-cpp)
-    chatterbox_cli.cpp           CLI entry (`tts-cli` + `chatterbox` binaries)
+    chatterbox_cli.cpp           CLI entry (`tts-cli` binary)
     cli_main.cpp                 thin int-main forwarder; calls tts_cpp_cli_main()
     chatterbox_tts.cpp           S3Gen + HiFT pipeline        (libtts-cpp)
     mel2wav.cpp                  HiFT-only demo              (mel2wav)
@@ -1216,7 +1196,6 @@ chatterbox.cpp/
                                    (S3Gen / HiFT / streaming / MTL T3 /
                                     MTL tokenizer / voice features / Metal ops)
   scripts/
-    setup-ggml.sh                clones the pinned ggml commit + applies patches
     synthesize.sh                text → wav wrapper around tts-cli
     convert-t3-turbo-to-gguf.py  Turbo T3 weights + GPT-2 BPE + VE + builtin
                                    voice → T3 GGUF (--quant)
