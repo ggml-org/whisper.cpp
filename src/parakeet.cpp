@@ -3593,17 +3593,22 @@ struct parakeet_full_params parakeet_full_default_params(enum parakeet_sampling_
     return result;
 }
 
+static void parakeet_reset_state(struct parakeet_state * state) {
+    state->decoded_tokens.clear();
+    state->decoded_token_data.clear();
+
+    if (state->lstm_state.buffer) {
+        ggml_backend_buffer_clear(state->lstm_state.buffer, 0);
+    }
+}
+
 static void parakeet_stream_reset_state(struct parakeet_state * state) {
     if (state == nullptr) {
         return;
     }
 
-    if (state->lstm_state.buffer) {
-        ggml_backend_buffer_clear(state->lstm_state.buffer, 0);
-    }
+    parakeet_reset_state(state);
 
-    state->decoded_tokens.clear();
-    state->decoded_token_data.clear();
     state->result_all.clear();
 
     state->tdt_stream_state.initialized    = false;
@@ -3858,8 +3863,7 @@ int parakeet_full_with_state(
 
     // Clear any previous decoded tokens if no_context is set
     if (params.no_context) {
-        state->decoded_tokens.clear();
-        state->decoded_token_data.clear();
+        parakeet_reset_state(state);
     }
 
     // If no chunking specified, delegate to parakeet_chunk (processes entire audio as one chunk)
@@ -4022,9 +4026,7 @@ int parakeet_chunk(
                             int   n_samples) {
 
     if (params.no_context) {
-        ggml_backend_buffer_clear(state->lstm_state.buffer, 0);
-        state->decoded_tokens.clear();
-        state->decoded_token_data.clear();
+        parakeet_reset_state(state);
 
         state->tdt_stream_state.initialized    = false;
         state->tdt_stream_state.last_token     = 0;
