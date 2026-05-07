@@ -738,6 +738,10 @@ if (TTS_CPP_INSTALL AND TTS_CPP_BUILD_LIBRARY)
         DESTINATION ${CMAKE_INSTALL_DATADIR}/tts-cpp
     )
 
+    set(TTS_CPP_OPTIONAL_DEPS "")
+    if (OpenMP_CXX_FOUND)
+        string(APPEND TTS_CPP_OPTIONAL_DEPS "find_dependency(OpenMP)\n")
+    endif()
     configure_package_config_file(
         ${CMAKE_CURRENT_SOURCE_DIR}/cmake/tts-cppConfig.cmake.in
         ${CMAKE_CURRENT_BINARY_DIR}/tts-cppConfig.cmake
