@@ -21,7 +21,6 @@
 #include <cctype>
 #include <map>
 #include <random>
-#include <regex>
 #include <set>
 #include <string>
 #include <thread>
