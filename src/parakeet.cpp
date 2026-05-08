@@ -1323,10 +1323,6 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
     model.joint.net_b  = create_tensor(PARAKEET_TENSOR_JOINT_NET_BIAS, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8198));
     ggml_set_name(model.joint.net_b, "net_b");
 
-    // Relative positional encoding
-    {
-    }
-
     ggml_free(ctx);
 
     // allocate tensors in the backend buffers
