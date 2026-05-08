@@ -202,49 +202,6 @@ static bool ggml_graph_compute_helper(
 
 // TODO: move these functions to ggml-base with support for ggml-backend?
 
-static ggml_tensor * parakeet_set_f32(struct ggml_tensor * t, float v) {
-    GGML_ASSERT(t->type == GGML_TYPE_F32);
-    GGML_ASSERT(ggml_is_contiguous(t));
-    size_t nels = ggml_nelements(t);
-    for (size_t i = 0; i < nels; ++i) {
-        ((float *) t->data)[i] = v;
-    }
-    return t;
-}
-
-static ggml_tensor * parakeet_set_i32(struct ggml_tensor * t, int32_t v) {
-    GGML_ASSERT(t->type == GGML_TYPE_I32);
-    GGML_ASSERT(ggml_is_contiguous(t));
-    size_t nels = ggml_nelements(t);
-    for (size_t i = 0; i < nels; ++i) {
-        ((int32_t *) t->data)[i] = v;
-    }
-    return t;
-}
-
-static float parakeet_get_f32_nd(const struct ggml_tensor * t, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
-    GGML_ASSERT(t->type == GGML_TYPE_F32);
-    void * data = (char *) t->data + i0*t->nb[0] + i1*t->nb[1] + i2*t->nb[2] + i3*t->nb[3];
-    return *(float *) data;
-}
-
-static void parakeet_set_f32_nd(struct ggml_tensor * t, int64_t i0, int64_t i1, int64_t i2, int64_t i3, float v) {
-    GGML_ASSERT(t->type == GGML_TYPE_F32);
-    void * data = (char *) t->data + i0*t->nb[0] + i1*t->nb[1] + i2*t->nb[2] + i3*t->nb[3];
-    *(float *) data = v;
-}
-
-static int32_t parakeet_get_i32_nd(const struct ggml_tensor * t, int64_t i0, int64_t i1, int64_t i2, int64_t i3) {
-    GGML_ASSERT(t->type == GGML_TYPE_I32);
-    void * data = (char *) t->data + i0*t->nb[0] + i1*t->nb[1] + i2*t->nb[2] + i3*t->nb[3];
-    return *(int32_t *) data;
-}
-
-static void parakeet_set_i32_nd(struct ggml_tensor * t, int64_t i0, int64_t i1, int64_t i2, int64_t i3, int32_t v) {
-    GGML_ASSERT(t->type == GGML_TYPE_I32);
-    void * data = (char *) t->data + i0*t->nb[0] + i1*t->nb[1] + i2*t->nb[2] + i3*t->nb[3];
-    *(int32_t *) data = v;
-}
 
 struct parakeet_mel {
     int n_len     = 0;
@@ -2677,21 +2634,6 @@ static bool parakeet_decode_chunk(
 
 //  500 -> 00:05.000
 // 6000 -> 01:00.000
-static std::string to_timestamp(int64_t t, bool comma = false) {
-    int64_t msec = t * 10;
-    int64_t hr = msec / (1000 * 60 * 60);
-    msec = msec - hr * (1000 * 60 * 60);
-    int64_t min = msec / (1000 * 60);
-    msec = msec - min * (1000 * 60);
-    int64_t sec = msec / 1000;
-    msec = msec - sec * 1000;
-
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%02d:%02d:%02d%s%03d", (int) hr, (int) min, (int) sec, comma ? "," : ".", (int) msec);
-
-    return std::string(buf);
-}
-
 // naive Discrete Fourier Transform
 // input is real-valued
 // output is complex-valued
