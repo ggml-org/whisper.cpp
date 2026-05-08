@@ -2702,49 +2702,53 @@ static void fft(float* in, int N, float* out, const parakeet_mel_cache & cache) 
     }
 }
 
+struct mel_worker_params {
+    int ith;
+    int window_size;
+    int n_samples;
+    int frame_size;
+    int frame_step;
+    int n_threads;
+};
+
 static void log_mel_spectrogram_worker_thread(
-                             int   ith,
-                     const float * window_func,
-                             int   window_size,
-        const std::vector<float> & samples,
-                             int   n_samples,
-                             int   frame_size,
-                             int   frame_step,
-                             int   n_threads,
-          const parakeet_filters & filters,
-                    parakeet_mel & mel,
-        const parakeet_mel_cache & cache) {
-    std::vector<float> fft_in(frame_size * 2, 0.0);
-    std::vector<float> fft_out(frame_size * 2 * 2 * 2);
+             mel_worker_params   params,
+                   const float * window_func,
+      const std::vector<float> & samples,
+        const parakeet_filters & filters,
+                  parakeet_mel & mel,
+      const parakeet_mel_cache & cache) {
+    std::vector<float> fft_in(params.frame_size * 2, 0.0);
+    std::vector<float> fft_out(params.frame_size * 2 * 2 * 2);
 
     int n_fb = filters.n_fb;  // number of frequency bins
-    int i = ith;
+    int i = params.ith;
 
     // make sure n_fb == 1 + (frame_size / 2), bin_0 to bin_nyquist
-    assert(n_fb == 1 + (frame_size / 2));
+    assert(n_fb == 1 + (params.frame_size / 2));
 
     const double eps = 5.960464477539063e-08;
 
     // calculate FFT only when fft_in are not all zero
-    for (; i < std::min(n_samples / frame_step + 1, mel.n_len); i += n_threads) {
-        const int offset = i * frame_step;
+    for (; i < std::min(params.n_samples / params.frame_step + 1, mel.n_len); i += params.n_threads) {
+        const int offset = i * params.frame_step;
 
-        const int window_pad_left = (frame_size - window_size) / 2;
+        const int window_pad_left = (params.frame_size - params.window_size) / 2;
 
         // Zero-pad left
         std::fill(fft_in.begin(), fft_in.begin() + window_pad_left, 0.0f);
 
         // Apply windowed samples in the center
-        const int n_to_process = std::min({window_size, n_samples - offset});
+        const int n_to_process = std::min({params.window_size, params.n_samples - offset});
         for (int j = 0; j < n_to_process; j++) {
             fft_in[window_pad_left + j] = window_func[j] * samples[offset + window_pad_left + j];
         }
 
         // Zero-pad right (and any samples we didn't have)
-        std::fill(fft_in.begin() + window_pad_left + n_to_process, fft_in.begin() + frame_size, 0.0f);
+        std::fill(fft_in.begin() + window_pad_left + n_to_process, fft_in.begin() + params.frame_size, 0.0f);
 
         // FFT
-        fft(fft_in.data(), frame_size, fft_out.data(), cache);
+        fft(fft_in.data(), params.frame_size, fft_out.data(), cache);
 
         // Calculate modulus^2 of complex numbers
         // Use pow(fft_out[2 * j + 0], 2) + pow(fft_out[2 * j + 1], 2) causes inference quality problem? Interesting.
@@ -2775,7 +2779,7 @@ static void log_mel_spectrogram_worker_thread(
 
     // Otherwise fft_out are all zero - use log(eps) for consistency
     const double empty_sum = std::log(eps);
-    for (; i < mel.n_len; i += n_threads) {
+    for (; i < mel.n_len; i += params.n_threads) {
         for (int j = 0; j < mel.n_mel; j++) {
             mel.data[i * mel.n_mel + j] = empty_sum;
         }
@@ -2823,30 +2827,24 @@ static bool log_mel_spectrogram(
     // Worker Threads (STFT + Mel + Natural Log)
     {
         std::vector<std::thread> workers(n_threads - 1);
+        const mel_worker_params mel_params { 0, window_size, (int)samples_padded.size(), frame_size, frame_step, n_threads };
+
         for (int iw = 0; iw < n_threads - 1; ++iw) {
+            mel_worker_params params = mel_params;
+            params.ith = iw + 1;
             workers[iw] = std::thread(log_mel_spectrogram_worker_thread,
-                    iw + 1,                      // thread index
+                    params,
                     window_func,
-                    window_size,
                     std::cref(samples_padded),
-                    samples_padded.size(),
-                    frame_size,
-                    frame_step,
-                    n_threads,
                     std::cref(filters),
                     std::ref(mel),
                     std::cref(cache));
         }
 
         log_mel_spectrogram_worker_thread(
-                0,
+                mel_params,
                 window_func,
-                window_size,
                 samples_padded,
-                samples_padded.size(),
-                frame_size,
-                frame_step,
-                n_threads,
                 filters,
                 mel,
                 cache);
