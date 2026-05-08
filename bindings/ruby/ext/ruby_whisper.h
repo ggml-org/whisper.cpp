@@ -132,19 +132,11 @@ typedef struct {
 
 #define GetParakeetParams(obj, rwpp) do { \
   TypedData_Get_Struct((obj), ruby_whisper_parakeet_params, &ruby_whisper_parakeet_params_type, (rwpp)); \
-  if (!(rwpp)->new_segment_callback_container) { \
-    rb_raise(rb_eRuntimeError, "Not initialized"); \
-  } \
-  if (!(rwpp)->new_token_callback_container) { \
-    rb_raise(rb_eRuntimeError, "Not initialized"); \
-  } \
-  if (!(rwpp)->progress_callback_container) { \
-    rb_raise(rb_eRuntimeError, "Not initialized"); \
-  } \
-  if (!(rwpp)->encoder_begin_callback_container) { \
-    rb_raise(rb_eRuntimeError, "Not initialized"); \
-  } \
-  if (!(rwpp)->abort_callback_container) { \
+  if (!(rwpp)->new_segment_callback_container || \
+      !(rwpp)->new_token_callback_container || \
+      !(rwpp)->progress_callback_container || \
+      !(rwpp)->encoder_begin_callback_container || \
+      !(rwpp)->abort_callback_container) { \
     rb_raise(rb_eRuntimeError, "Not initialized"); \
   } \
 } while (0)
