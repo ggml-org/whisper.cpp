@@ -1007,22 +1007,23 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
         }
 
         const char* arch_name = hparams.arch == PARAKEET_ARCH_TDT ? "Parakeet TDT" : "unknown";
-        PARAKEET_LOG_INFO("%s: arch          = %s\n", __func__, arch_name);
-        PARAKEET_LOG_INFO("%s: n_vocab       = %d\n", __func__, hparams.n_vocab);
-        PARAKEET_LOG_INFO("%s: n_audio_ctx   = %d\n", __func__, hparams.n_audio_ctx);
-        PARAKEET_LOG_INFO("%s: n_audio_state = %d\n", __func__, hparams.n_audio_state);
-        PARAKEET_LOG_INFO("%s: n_audio_head  = %d\n", __func__, hparams.n_audio_head);
-        PARAKEET_LOG_INFO("%s: n_audio_layer = %d\n", __func__, hparams.n_audio_layer);
-        PARAKEET_LOG_INFO("%s: n_mels        = %d\n", __func__, hparams.n_mels);
-        PARAKEET_LOG_INFO("%s: n_fft         = %d\n", __func__, hparams.n_fft);
-        PARAKEET_LOG_INFO("%s: ftype         = %d\n", __func__, hparams.ftype);
-        PARAKEET_LOG_INFO("%s: qntvr         = %d\n", __func__, qntvr);
-        PARAKEET_LOG_INFO("%s: subsampling_factor = %d\n", __func__, hparams.subsampling_factor);
+        PARAKEET_LOG_INFO("%s: arch                   = %s\n", __func__, arch_name);
+        PARAKEET_LOG_INFO("%s: n_vocab                = %d\n", __func__, hparams.n_vocab);
+        PARAKEET_LOG_INFO("%s: n_audio_ctx            = %d\n", __func__, hparams.n_audio_ctx);
+        PARAKEET_LOG_INFO("%s: n_audio_state          = %d\n", __func__, hparams.n_audio_state);
+        PARAKEET_LOG_INFO("%s: n_audio_head           = %d\n", __func__, hparams.n_audio_head);
+        PARAKEET_LOG_INFO("%s: n_audio_layer          = %d\n", __func__, hparams.n_audio_layer);
+        PARAKEET_LOG_INFO("%s: n_mels                 = %d\n", __func__, hparams.n_mels);
+        PARAKEET_LOG_INFO("%s: n_fft                  = %d\n", __func__, hparams.n_fft);
+        PARAKEET_LOG_INFO("%s: eps                    = %f\n", __func__, hparams.eps);
+        PARAKEET_LOG_INFO("%s: ftype                  = %d\n", __func__, hparams.ftype);
+        PARAKEET_LOG_INFO("%s: qntvr                  = %d\n", __func__, qntvr);
+        PARAKEET_LOG_INFO("%s: subsampling_factor     = %d\n", __func__, hparams.subsampling_factor);
         PARAKEET_LOG_INFO("%s: n_subsampling_channels = %d\n", __func__, hparams.n_subsampling_channels);
-        PARAKEET_LOG_INFO("%s: n_pred_dim = %d\n", __func__, hparams.n_pred_dim);
-        PARAKEET_LOG_INFO("%s: n_pred_layers = %d\n", __func__, hparams.n_pred_layers);
-        PARAKEET_LOG_INFO("%s: n_tdt_durations = %d\n", __func__, hparams.n_tdt_durations);
-        PARAKEET_LOG_INFO("%s: n_max_tokens = %d\n", __func__, hparams.n_max_tokens);
+        PARAKEET_LOG_INFO("%s: n_pred_dim             = %d\n", __func__, hparams.n_pred_dim);
+        PARAKEET_LOG_INFO("%s: n_pred_layers          = %d\n", __func__, hparams.n_pred_layers);
+        PARAKEET_LOG_INFO("%s: n_tdt_durations        = %d\n", __func__, hparams.n_tdt_durations);
+        PARAKEET_LOG_INFO("%s: n_max_tokens           = %d\n", __func__, hparams.n_max_tokens);
     }
 
     // load mel filters
