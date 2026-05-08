@@ -2811,10 +2811,8 @@ static bool log_mel_spectrogram(
     }
 
     // Parakeet Pytorch implementation uses centered contant padding.
-    const int pad = frame_size / 2;
-    std::vector<float> samples_padded(n_samples + 2 * pad); // 176512
-    std::fill(samples_padded.begin(), samples_padded.begin() + pad, 0.0f);
-    std::fill(samples_padded.begin() + pad + n_samples, samples_padded.end(), 0.0f);
+    const size_t pad = (size_t)(frame_size / 2);
+    std::vector<float> samples_padded(n_samples + 2 * pad, 0.0f);
     std::copy(samples_preprocessed.begin(), samples_preprocessed.end(), samples_padded.begin() + pad);
 
     mel.n_mel = n_mel;
