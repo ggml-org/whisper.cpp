@@ -1055,7 +1055,7 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
         PARAKEET_LOG_INFO("%s: loaded window function with %d samples\n", __func__, n_window);
     }
 
-    // load tdt durations values
+    // load TDT (Token and Duration Transducer) values
     {
         auto & tdt_durations = wctx.model.tdt_durations;
         tdt_durations.resize(hparams.n_tdt_durations);
@@ -1136,8 +1136,8 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
 
     const int n_audio_layer = hparams.n_audio_layer;
 
-    // Calculate tensor count based on architecture
-    size_t n_tensors = 2 + 14 + 1 + 29*n_audio_layer + 9 + 6;
+    // Calculate tensor count: pre_encode (12) + encoder layers (29 per layer) + prediction (9) + joint (6)
+    size_t n_tensors = 12 + (29 * n_audio_layer) + 9 + 6;
 
     std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
     auto get_ctx = [&](ggml_backend_buffer_type_t buft) -> ggml_context * {
@@ -1170,7 +1170,8 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
         ggml_op op = PARAKEET_TENSOR_INFO.at(type);
         ggml_backend_buffer_type_t buft = select_weight_buft(hparams, meta, op, buft_list);
         if (!buft) {
-            throw std::runtime_error(format("failed to find a compatible buffer type for parakeet tensor %s", PARAKEET_TENSOR_NAMES.at(type)));
+            throw std::runtime_error(format("failed to find a compatible buffer type for parakeet tensor %s",
+                        PARAKEET_TENSOR_NAMES.at(type)));
         }
 
         ggml_context * ctx = get_ctx(buft);
@@ -1190,11 +1191,8 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
 
     // prepare tensors for the weights
 
-    // Count: preprocessor (2) + pre_encode (14) + positional encoding (1) + encoder layers (29 per layer) + prediction (9) + joint (6)
-    const int n_parakeet_tensors = 2 + 14 + 1 + (29 * n_audio_layer) + 9 + 6;
-
     ggml_init_params params = {
-        /*.mem_size   =*/ n_parakeet_tensors * ggml_tensor_overhead(),
+        /*.mem_size   =*/ n_tensors * ggml_tensor_overhead(),
         /*.mem_buffer =*/ nullptr,
         /*.no_alloc   =*/ true,
     };
