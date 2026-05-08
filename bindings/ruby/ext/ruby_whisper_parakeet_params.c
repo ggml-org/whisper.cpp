@@ -58,6 +58,7 @@ static void
 ruby_whisper_parakeet_params_free(void *p)
 {
   ruby_whisper_parakeet_params *rwpp = (ruby_whisper_parakeet_params *)p;
+  parakeet_free_params(&rwpp->params);
 
 #define FREE_CONTAINER(name) \
   if (rwpp->name##_container) { \
