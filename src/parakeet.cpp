@@ -1440,7 +1440,7 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
 }
 
 //
-// This function build the computation graph for the pre-encoder stage.
+// This function builds the computation graph for the pre-encoder stage.
 //
 // It takes the generated mel spectrogram as an input tensor, which will be set
 // during processing, and performs a number of convolutions to detect/filter
@@ -1475,13 +1475,11 @@ static struct ggml_cgraph * parakeet_build_graph_conv(parakeet_context & pctx, p
     cur = ggml_relu(ctx0, cur);
     ggml_set_name(cur, "pre_conv_0_relu");
 
-    // enc_pre_conv_2_w: {3, 3, 1, 256} (depthwise)
     // [freq, time, channels, batch]
     cur = ggml_conv_2d_dw_direct(ctx0, model.enc_pre_conv_2_w, cur, 2, 2, 1, 1, 1, 1);
     cur = ggml_add(ctx0, cur, model.enc_pre_conv_2_b);
     ggml_set_name(cur, "pre_conv_2");
 
-    // enc_pre_conv_3_w: {1, 1, 256, 256} (pointwise)
     // [freq, time, channels, batch]
     cur = ggml_conv_2d(ctx0, model.enc_pre_conv_3_w, cur, 1, 1, 0, 0, 1, 1);
     cur = ggml_add(ctx0, cur, model.enc_pre_conv_3_b);
@@ -1490,14 +1488,12 @@ static struct ggml_cgraph * parakeet_build_graph_conv(parakeet_context & pctx, p
     cur = ggml_relu(ctx0, cur);
     ggml_set_name(cur, "pre_conv_3_relu");
 
-    // enc_pre_conv_5_w: {3, 3, 1, 256} (depthwise)
     // [freq, time, channels, batch]
     cur = ggml_conv_2d_dw_direct(ctx0, model.enc_pre_conv_5_w, cur, 2, 2, 1, 1, 1, 1);
     ggml_set_name(cur, "pre_conv_5_direct");
     cur = ggml_add(ctx0, cur, model.enc_pre_conv_5_b);
     ggml_set_name(cur, "pre_conv_5");
 
-    // enc_pre_conv_6_w: {1, 1, 256, 256} (pointwise)
     // [freq, time, channels, batch]
     cur = ggml_conv_2d(ctx0, model.enc_pre_conv_6_w, cur, 1, 1, 0, 0, 1, 1);
     cur = ggml_add(ctx0, cur, model.enc_pre_conv_6_b);
@@ -2250,7 +2246,7 @@ static bool is_punctuation_token(parakeet_vocab & vocab, parakeet_token token_id
 // Collapse punctuation timestamps to match the original Parakeet model.
 // Punctuations symbols like ',', '.' and others are not spoken words but the
 // model will still produce a duration for these tokens. But since these are
-// non-spoken we collapse the timesstamps so that they don't have an time duration.
+// non-spoken we collapse the timestamps so that they don't have an time duration.
 static void refine_timestamps_tdt(parakeet_vocab & vocab, std::vector<parakeet_token_data> & tokens) {
     if (tokens.empty()) {
         return;
@@ -2486,7 +2482,7 @@ static bool parakeet_decode_chunk(
         int chosen_duration_idx = 0;
         float chosen_token_logit = 0.0f;
 
-        // inner loop handles the joint network
+        // inner loop handles the joint network.
         while (t < chunk_enc_frames) {
             batch.n_tokens  = 1;
             batch.i_time[0] = std::min(t, chunk_enc_frames - 1);
@@ -2540,7 +2536,7 @@ static bool parakeet_decode_chunk(
                     break;
                 }
 
-                // we continue with the current frame
+                // we continue with the current frame.
                 current_token_time = t;
                 continue;
             }
