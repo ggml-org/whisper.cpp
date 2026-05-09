@@ -9,7 +9,8 @@ set_and_check(WHISPER_INCLUDE_DIR "@PACKAGE_WHISPER_INCLUDE_INSTALL_DIR@")
 set_and_check(WHISPER_LIB_DIR     "@PACKAGE_WHISPER_LIB_INSTALL_DIR@")
 set_and_check(WHISPER_BIN_DIR     "@PACKAGE_WHISPER_BIN_INSTALL_DIR@")
 
-find_package(ggml REQUIRED HINTS ${LLAMA_LIB_DIR}/cmake)
+include(CMakeFindDependencyMacro)
+find_dependency(ggml CONFIG REQUIRED)
 
 find_library(whisper_LIBRARY whisper
     REQUIRED

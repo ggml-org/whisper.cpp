@@ -69,6 +69,7 @@ jobs:
       - name: Checkout with full history
         uses: actions/checkout@v6
         with:
+          submodules: recursive
           fetch-depth: 0
 
       - name: Determine tag name
@@ -128,6 +129,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -160,6 +163,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -192,6 +197,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -224,6 +231,8 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2.16
@@ -282,6 +291,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -316,6 +327,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -350,6 +363,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -387,6 +402,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -421,6 +438,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -461,6 +480,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: add oneAPI to apt
         shell: bash
@@ -485,6 +506,8 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Build
         id: cmake_build
@@ -513,6 +536,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: add oneAPI to apt
         shell: bash
@@ -537,6 +562,8 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Build
         id: cmake_build
@@ -562,6 +589,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Setup ${{ matrix.sys }}
         uses: msys2/setup-msys2@v2
@@ -617,6 +646,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Add msbuild to PATH
         uses: microsoft/setup-msbuild@v2
@@ -712,6 +743,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@v8
@@ -793,6 +826,8 @@ jobs:
     steps:
       - name: Clone repository
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Install Ninja
         id: install_ninja
@@ -994,6 +1029,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Setup emsdk
         uses: mymindstorm/setup-emsdk@v14
@@ -1017,6 +1054,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Configure
         run: |
@@ -1072,6 +1111,7 @@ jobs:
       - name: Clone
         uses: actions/checkout@v6
         with:
+          submodules: recursive
           path: whisper
 
       - name: Install Java
@@ -1100,6 +1140,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: set up JDK 11
         uses: actions/setup-java@v5
@@ -1126,6 +1168,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Install Java
         uses: actions/setup-java@v5
@@ -1226,6 +1270,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Test quantize
         run: |
@@ -1251,6 +1297,7 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
         with:
+          submodules: recursive
           fetch-depth: 0
 
       - name: ccache
@@ -1313,6 +1360,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Set environment variables
         id: set_vars
@@ -1339,6 +1388,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Build
         shell: bash
@@ -1359,6 +1410,8 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -1384,6 +1437,8 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -1409,6 +1464,8 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -1434,6 +1491,8 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -1459,6 +1518,8 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -1484,6 +1545,8 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Test
         id: ggml-ci
@@ -1498,6 +1561,8 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Test
         id: ggml-ci
@@ -1512,6 +1577,8 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Test
         id: ggml-ci
@@ -1539,6 +1606,8 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Test
         id: ggml-ci
@@ -1552,6 +1621,8 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Test
         id: ggml-ci

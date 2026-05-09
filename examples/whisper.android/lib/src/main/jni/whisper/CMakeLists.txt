@@ -16,7 +16,7 @@ endif()
 
 message(STATUS " Whisper version: ${WHISPER_VERSION}")
 
-# Path to external GGML, otherwise uses the copy in whisper.cpp.
+# Path to external GGML, otherwise uses the bundled ggml submodule in whisper.cpp.
 option(GGML_HOME "whisper: Path to external GGML source" OFF)
 
 set(
@@ -83,4 +83,3 @@ include_directories(${WHISPER_LIB_DIR}/include)
 include_directories(${WHISPER_LIB_DIR}/ggml/include)
 include_directories(${WHISPER_LIB_DIR}/ggml/src)
 include_directories(${WHISPER_LIB_DIR}/ggml/src/ggml-cpu)
-

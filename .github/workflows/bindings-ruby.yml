@@ -18,4 +18,6 @@ jobs:
         with:
           ruby-version: '3.2'
       - uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - run: rake test

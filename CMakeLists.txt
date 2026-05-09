@@ -133,12 +133,19 @@ endif()
 
 if (NOT TARGET ggml)
     if (WHISPER_USE_SYSTEM_GGML)
-        find_package(ggml REQUIRED)
-        if (NOT ggml_FOUND)
-            message(FATAL_ERROR "System-installed GGML library not found.")
+        find_package(ggml CONFIG REQUIRED)
+        if (NOT TARGET ggml::ggml)
+            message(FATAL_ERROR "Target ggml::ggml is missing.")
         endif()
         add_library(ggml ALIAS ggml::ggml)
     else()
+        if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ggml/CMakeLists.txt")
+            message(FATAL_ERROR
+                "Bundled ggml submodule is missing or uninitialized.\n"
+                "Run:\n"
+                "  git submodule update --init --recursive\n"
+                "or configure with -DWHISPER_USE_SYSTEM_GGML=ON and provide an installed ggml package via CMAKE_PREFIX_PATH.")
+        endif()
         add_subdirectory(ggml)
         if(WIN32)
             # The following adds a _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR macro and is a workaround for

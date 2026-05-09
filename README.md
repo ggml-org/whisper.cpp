@@ -60,13 +60,19 @@ https://github.com/ggml-org/whisper.cpp/assets/1991296/c82e8f86-60dc-49f2-b048-d
 First clone the repository:
 
 ```bash
-git clone https://github.com/ggml-org/whisper.cpp.git
+git clone --recurse-submodules https://github.com/ggml-org/whisper.cpp.git
 ```
 
 Navigate into the directory:
 
 ```
 cd whisper.cpp
+```
+
+For an existing clone, initialize the bundled `ggml` submodule:
+
+```bash
+git submodule update --init --recursive
 ```
 
 Then, download one of the Whisper [models](models/README.md) converted in [`ggml` format](#ggml-format). For example:
@@ -99,6 +105,15 @@ For example, you can use `ffmpeg` like this:
 
 ```bash
 ffmpeg -i input.mp3 -ar 16000 -ac 1 -c:a pcm_s16le output.wav
+```
+
+## Using external ggml
+
+By default, `whisper.cpp` builds the bundled `ggml` submodule. To use an installed `ggml` CMake package instead, configure with `WHISPER_USE_SYSTEM_GGML` and provide the package location through `CMAKE_PREFIX_PATH` or `ggml_DIR`:
+
+```bash
+cmake -B build -DWHISPER_USE_SYSTEM_GGML=ON -DCMAKE_PREFIX_PATH=/path/to/ggml/install
+cmake --build build -j --config Release
 ```
 
 ## More audio samples

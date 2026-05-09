@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Dependencies
         run: |

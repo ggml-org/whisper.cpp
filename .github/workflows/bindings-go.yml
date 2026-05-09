@@ -17,6 +17,8 @@ jobs:
         with:
           go-version: '^1.23'
       - uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - run: |
           cd bindings/go
           make test
