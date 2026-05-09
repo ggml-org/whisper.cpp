@@ -4,3 +4,4 @@ scipy
 requests
 numpy
 piper-tts
+gradio>=4.16.0
