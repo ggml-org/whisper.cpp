@@ -94,6 +94,10 @@ typedef struct {
   ruby_whisper_callback_container *abort_callback_container;
 } ruby_whisper_parakeet_params;
 
+typedef struct {
+  struct parakeet_context *context;
+} ruby_whisper_parakeet_context;
+
 #define GetContext(obj, rw) do { \
   TypedData_Get_Struct((obj), ruby_whisper, &ruby_whisper_type, (rw)); \
   if ((rw)->context == NULL) { \
