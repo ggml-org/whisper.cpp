@@ -821,7 +821,7 @@ jobs:
           $NVTX_VER   = "11.8.86"
           $VS_VER     = "11.8.86"
           $NVPROF_VER = "11.8.87"
-          $CCCL_VER   = "12.4.127"
+          $CCCL_VER   = "11.8.89"
 
           # Create the directory where the CUDA Toolkit will be installed
           mkdir -p $CUDA_TOOLKIT_DIR
