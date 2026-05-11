@@ -3528,6 +3528,11 @@ static void parakeet_reset_state(struct parakeet_state * state) {
     if (state->lstm_state.buffer) {
         ggml_backend_buffer_clear(state->lstm_state.buffer, 0);
     }
+
+    state->tdt_stream_state.initialized    = false;
+    state->tdt_stream_state.last_token     = 0;
+    state->tdt_stream_state.time_step      = 0;
+    state->tdt_stream_state.decoded_length = 0;
 }
 
 static void parakeet_stream_reset_state(struct parakeet_state * state) {
@@ -3538,11 +3543,6 @@ static void parakeet_stream_reset_state(struct parakeet_state * state) {
     parakeet_reset_state(state);
 
     state->result_all.clear();
-
-    state->tdt_stream_state.initialized    = false;
-    state->tdt_stream_state.last_token     = 0;
-    state->tdt_stream_state.time_step      = 0;
-    state->tdt_stream_state.decoded_length = 0;
 
     state->stream.buffer.clear();
     state->stream.n_samples_advanced = 0;
@@ -3612,7 +3612,7 @@ static int parakeet_stream_process_window(
     if (new_token_count > 0) {
         std::string text;
         std::vector<parakeet_token_data> result_tokens;
-        const int64_t chunk_t0 = 100LL * stream.n_samples_advanced / PARAKEET_SAMPLE_RATE;
+        const int64_t chunk_t0 = 100LL * stream.n_samples_advanced             / PARAKEET_SAMPLE_RATE;
         const int64_t chunk_t1 = 100LL * (stream.n_samples_advanced + n_chunk) / PARAKEET_SAMPLE_RATE;
         const int frame_offset = chunk_t0 / ctx->model.hparams.subsampling_factor;
 
@@ -3848,7 +3848,7 @@ int parakeet_full_with_state(
                              __func__, total_mel_frames, left_context_mel_frames, chunk_mel_frames);
 
             // The encoder will see the left context, the main chunk, and the right
-            // context so that it has access to nearby frames during processing.
+            // context, so that it has access to nearby frames during processing.
             // Without this there would be hard cutoffs and the encoder might not
             // be able to detect speech near the edges.
             state->n_audio_ctx = total_mel_frames;
@@ -3865,8 +3865,8 @@ int parakeet_full_with_state(
             PARAKEET_LOG_DEBUG("%s: encoder output: total=%d frames, left_ctx=%d, chunk=%d\n",
                              __func__, state->n_frames, left_context_enc_frames, chunk_enc_frames);
 
-            // The joint network only sees the center chunk encoder frames and
-            // not the left and right context that the encoder did.
+            // The joint network only sees the center chunk encoded frames and
+            // not the left and right context like the encoder did.
             state->enc_out_buffer.resize(chunk_enc_frames * d_enc);
             ggml_backend_tensor_get(state->enc_out, state->enc_out_buffer.data(),
                                    left_context_enc_frames * d_enc * sizeof(float),
@@ -3888,7 +3888,7 @@ int parakeet_full_with_state(
             if (new_token_count > 0) {
                 std::string text;
                 std::vector<parakeet_token_data> result_tokens;
-                const int64_t chunk_t0 = 100LL * left_sample / PARAKEET_SAMPLE_RATE;
+                const int64_t chunk_t0 = 100LL * left_sample  / PARAKEET_SAMPLE_RATE;
                 const int64_t chunk_t1 = 100LL * right_sample / PARAKEET_SAMPLE_RATE;
                 const int frame_offset = chunk_t0 / ctx->model.hparams.subsampling_factor;
 
@@ -3955,11 +3955,6 @@ int parakeet_chunk(
 
     if (params.no_context) {
         parakeet_reset_state(state);
-
-        state->tdt_stream_state.initialized    = false;
-        state->tdt_stream_state.last_token     = 0;
-        state->tdt_stream_state.time_step      = 0;
-        state->tdt_stream_state.decoded_length = 0;
     }
 
     if (n_samples > 0) {
