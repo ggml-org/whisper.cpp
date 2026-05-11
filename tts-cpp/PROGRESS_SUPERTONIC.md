@@ -577,6 +577,26 @@ cmake --build build-opencl -j$(nproc) --target tts-cli supertonic-bench
   fixture data through the pure-GGML fallback graph and produce the
   same parity numbers (within F32 → F16 K/V tolerance on the attention
   output when `--f16-attn 1`).
+- Three new CPU-only unit harnesses ship alongside the bring-up code
+  to give the dispatch + portable-op primitives their own coverage
+  independent of any model GGUF:
+
+  | Test | What it covers |
+  |------|----------------|
+  | `test-supertonic-backend-dispatch` | Default thread-local flag state; `supertonic_op_dispatch_scope` mirroring CPU and GPU `supertonic_model` instances; RAII teardown on normal exit and on exception; nested-scope unwinding; independence of `use_cpu_custom_ops` / `use_f16_attn`. |
+  | `test-supertonic-portable-ops`     | CPU-backend parity of `leaky_relu_portable_ggml` (CPU lowering) vs the GPU decomposition for every `α ∈ {0, 0.01, 0.05, 0.1, 0.5, 0.99, 1.0}`; graph-node-count check that the GPU dispatch actually expands the op (catches a regression back to a passthrough `ggml_leaky_relu`). |
+  | `test-supertonic-f16-attn-parity`  | F32 vs F16 K/V `ggml_flash_attn_ext` parity on the two hot shapes from the vector estimator (text attention `kv=32`, style attention `kv=50`); tolerance budget `5e-3` absolute / `5e-3` relative, the same band chatterbox ships behind `--cfm-f16-kv-attn`. |
+
+  All three are registered with `LABEL "unit"` so a fresh checkout's
+  `ctest -L unit` exercises them without needing the Supertonic GGUF.
+
+### Next optimization rounds
+
+The roadmap beyond this PR — F16 weight materialization, Q8_0 GGUF
+support, host↔GPU round-trip elimination, OpenCL kernel-time profile
+mode, and vocoder-unpack-on-GPU — is captured with its test plan in
+`PLAN_SUPERTONIC_OPENCL.md`.  Each phase has an acceptance test
+spelled out (most TDD, written before the implementation lands).
 
 ---
 

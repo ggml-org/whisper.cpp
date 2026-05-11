@@ -271,6 +271,32 @@ inline void supertonic_safe_gallocr_free(ggml_gallocr_t & allocr, uint64_t gener
 }
 
 // ---------------------------------------------------------------------
+// Portable LeakyReLU(x, α) = (1-α)·relu(x) + α·x.
+//
+// `ggml_leaky_relu` (GGML_OP_LEAKY_RELU) is a CPU builtin and is also
+// present on the QVAC `ggml-speech` vcpkg port via the chatterbox
+// `ggml-opencl-chatterbox-ops.patch`, but baseline upstream
+// `ggml-opencl` and several other GPU backends still reject the op at
+// graph-execute time.  Routing through this helper keeps every
+// Supertonic graph executable on every backend:
+//
+//   - On CPU we keep the single fused builtin (cheaper, single op
+//     callback per row instead of three).
+//   - On GPU we decompose into `RELU + SCALE + ADD`, all universally
+//     supported (see `ggml_opencl_supports_op()`).
+//
+// Defined inline in the header so every TU that includes this header
+// gets the same lowering, and so the dispatch test can call it
+// directly without depending on which TU happens to instantiate it.
+// The thread-local `supertonic_use_cpu_custom_ops()` flag flips
+// behaviour; the inline body is a thin wrapper, so neither branch
+// retains hidden state.
+//
+// Bit-exact equivalence between the two lowerings is checked in
+// `test/test_supertonic_portable_ops.cpp` on a CPU backend.
+inline ggml_tensor * leaky_relu_portable_ggml(ggml_context * ctx, ggml_tensor * x, float alpha);
+
+// ---------------------------------------------------------------------
 // Op-dispatch policy for the GGML graph builders.
 //
 // The Supertonic vocoder + vector estimator carry several
@@ -304,5 +330,19 @@ struct supertonic_op_dispatch_scope {
     supertonic_op_dispatch_scope(const supertonic_op_dispatch_scope &)             = delete;
     supertonic_op_dispatch_scope & operator=(const supertonic_op_dispatch_scope &) = delete;
 };
+
+// Inline definition of the forward-declared portable leaky-relu helper
+// above.  Must come after `supertonic_use_cpu_custom_ops()` is
+// declared so the dispatcher resolves at every call site.
+inline ggml_tensor * leaky_relu_portable_ggml(ggml_context * ctx, ggml_tensor * x, float alpha) {
+    if (supertonic_use_cpu_custom_ops()) {
+        return ggml_leaky_relu(ctx, x, alpha, /*inplace=*/false);
+    }
+    // GPU lowering: (1 - α)·relu(x) + α·x.  Three universally-supported
+    // ops, no GGML_OP_LEAKY_RELU dependency.
+    ggml_tensor * pos    = ggml_scale(ctx, ggml_relu(ctx, x), 1.0f - alpha);
+    ggml_tensor * scaled = ggml_scale(ctx, x, alpha);
+    return ggml_add(ctx, pos, scaled);
+}
 
 } // namespace tts_cpp::supertonic::detail

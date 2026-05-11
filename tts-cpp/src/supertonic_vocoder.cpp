@@ -303,31 +303,10 @@ ggml_tensor * depthwise_causal_custom_ggml(ggml_context * ctx,
                           const_cast<depthwise_causal_op_config *>(cfg));
 }
 
-// Portable LeakyReLU(x, α) = (1-α)·relu(x) + α·x.
-//
-// `ggml_leaky_relu` lowers to `GGML_OP_LEAKY_RELU`, which is a CPU
-// builtin but only landed in `ggml-opencl` via the chatterbox
-// `patches/ggml-opencl-chatterbox-ops.patch` (see chatterbox
-// PROGRESS.md, "What was missing").  Builds that consume the
-// QVAC `ggml-speech` vcpkg port get the patched op, but a plain
-// upstream ggml build (or any other GPU backend that hasn't
-// implemented `LEAKY_RELU` yet) would reject the op at graph time.
-// Routing through this helper keeps the vocoder graph executable on
-// every backend: on CPU we keep the single-fused op for the inner
-// loop savings; on a GPU backend we decompose into RELU + SCALE +
-// ADD, all of which are universally supported (incl. baseline
-// upstream OpenCL — see ggml_opencl_supports_op() in
-// ggml/src/ggml-opencl/ggml-opencl.cpp).
-ggml_tensor * leaky_relu_portable_ggml(ggml_context * ctx, ggml_tensor * x, float alpha) {
-    if (supertonic_use_cpu_custom_ops()) {
-        // CPU backend: keep the fused builtin (cheaper).
-        return ggml_leaky_relu(ctx, x, alpha, false);
-    }
-    // GPU backends: (1 - α) · relu(x) + α · x.
-    ggml_tensor * pos = ggml_scale(ctx, ggml_relu(ctx, x), 1.0f - alpha);
-    ggml_tensor * scaled = ggml_scale(ctx, x, alpha);
-    return ggml_add(ctx, pos, scaled);
-}
+// `leaky_relu_portable_ggml` is now defined inline in
+// supertonic_internal.h so the dispatch tests can call it without
+// linking through this TU.  See the header for the lowering rationale
+// + parity-test reference.
 
 ggml_tensor * depthwise_conv1d_causal_ggml(ggml_context * ctx,
                                            ggml_tensor * x,

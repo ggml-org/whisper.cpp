@@ -630,6 +630,33 @@ if (TTS_CPP_BUILD_TESTS)
     add_supertonic_harness(test-supertonic-vector-trace test/test_supertonic_vector_trace.cpp)
     add_supertonic_harness(test-supertonic-pipeline test/test_supertonic_pipeline.cpp)
 
+    # OpenCL bring-up unit tests (QVAC-18607).  Three CPU-only
+    # parity / structural tests for the dispatch + portable-op
+    # primitives.  No GGUF needed; register as "unit" label so a
+    # fresh checkout's ctest exercises them.  Links against tts-cpp
+    # (STATIC) so the detail-namespace symbols are reachable, same
+    # pattern as test-mtl-tokenizer / test-t3-mtl / test-streaming.
+    add_executable(test-supertonic-backend-dispatch
+        test/test_supertonic_backend_dispatch.cpp)
+    target_link_libraries(test-supertonic-backend-dispatch PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-backend-dispatch PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-backend-dispatch)
+    tts_cpp_register_test(test-supertonic-backend-dispatch LABEL "unit")
+
+    add_executable(test-supertonic-portable-ops
+        test/test_supertonic_portable_ops.cpp)
+    target_link_libraries(test-supertonic-portable-ops PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-portable-ops PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-portable-ops)
+    tts_cpp_register_test(test-supertonic-portable-ops LABEL "unit")
+
+    add_executable(test-supertonic-f16-attn-parity
+        test/test_supertonic_f16_attn_parity.cpp)
+    target_link_libraries(test-supertonic-f16-attn-parity PRIVATE ggml)
+    target_include_directories(test-supertonic-f16-attn-parity PRIVATE ggml/include src)
+    tts_cpp_apply_ccache(test-supertonic-f16-attn-parity)
+    tts_cpp_register_test(test-supertonic-f16-attn-parity LABEL "unit")
+
     # supertonic-bench is a benchmark CLI (takes --text / --out / --runs),
     # not a parity test, so it doesn't go through add_supertonic_harness
     # which auto-registers everything as a positional-args (MODEL, REF_DIR)
