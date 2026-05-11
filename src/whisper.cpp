@@ -6216,6 +6216,7 @@ static void whisper_process_logits(
             }
         }
 
+        // ref: https://github.com/ggml-org/whisper.cpp/pull/3798
         if (!params.no_timestamps && !params.single_segment && params.max_tokens > 0 && (int) tokens_cur.size() >= params.max_tokens) {
             for (int i = 0; i < vocab.token_eot; ++i) {
                 logits[i] = -INFINITY;
