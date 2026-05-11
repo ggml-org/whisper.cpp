@@ -901,12 +901,28 @@ bool supertonic_text_encoder_forward_ggml(const supertonic_model & model,
         profile_text_begin();
         const int C = 256;
         const int L = text_len;
-        f32_tensor emb = read_f32(model, "text_encoder:tts.ttl.text_encoder.text_embedder.char_embedder.weight");
-        std::vector<float> x((size_t)L*C);
+
+        // F10 — embedding lookup runs as `ggml_get_rows` on the
+        // device.  The pre-audit code downloaded the entire
+        // embedding table (~2 MB for the default vocab × C=256
+        // model) and CPU-gathered one row per token; this hook
+        // uploads `L` int32 ids instead and produces the gathered
+        // matrix directly on the backend.  `get_rows` output is
+        // time-major (ne=[C, L]), so we follow with
+        // `ggml_transpose + ggml_cont` to land in the channel-major
+        // ne=[L, C] layout the convnext blocks expect.  Bounds
+        // check still runs host-side against the (host-known) vocab
+        // size of the embedding tensor.
+        ggml_tensor * emb_table = require_source_tensor(model,
+            "text_encoder:tts.ttl.text_encoder.text_embedder.char_embedder.weight");
+        const int64_t vocab_size = emb_table->ne[1];
+        std::vector<int32_t> ids(L);
         for (int t = 0; t < L; ++t) {
-            int64_t id = text_ids[t];
-            if (id < 0 || id >= emb.ne[1]) throw std::runtime_error("text id out of range");
-            for (int c = 0; c < C; ++c) x[(size_t)t*C+c] = emb.data[(size_t)id*C+c];
+            const int64_t id = text_ids[t];
+            if (id < 0 || id >= vocab_size) {
+                throw std::runtime_error("text id out of range");
+            }
+            ids[t] = (int32_t) id;
         }
 
         constexpr int MAX_NODES = 640;
@@ -915,8 +931,18 @@ bool supertonic_text_encoder_forward_ggml(const supertonic_model & model,
         ggml_init_params gp = { buf_size, buf.data(), true };
         ggml_context * ctx = ggml_init(gp);
         ggml_cgraph * gf = ggml_new_graph_custom(ctx, MAX_NODES, false);
-        ggml_tensor * in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, L, C);
-        ggml_set_name(in, "text_encoder_embed"); ggml_set_input(in);
+        // F10: graph input is the i32 token-id vector; downstream
+        // ops consume the channel-major embedding gather produced
+        // by `ggml_get_rows` + permute-to-channel-major.
+        ggml_tensor * ids_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, L);
+        ggml_set_name(ids_in, "text_encoder_ids"); ggml_set_input(ids_in);
+        ggml_tensor * gathered = ggml_get_rows(ctx, emb_table, ids_in);
+        // get_rows produces ne=[C, L] (time-major data layout).
+        // Convert to ne=[L, C] (channel-major) so the convnext
+        // helpers below see the same shape they had with the old
+        // `pack_time_channel_for_ggml` + `ggml_set_input` pair.
+        ggml_tensor * in = ggml_cont(ctx, ggml_transpose(ctx, gathered));
+        ggml_set_name(in, "text_encoder_embed");
         ggml_tensor * y = in;
         for (int i = 0; i < 6; ++i) {
             y = text_convnext_ggml(ctx, model, "text_encoder:tts.ttl.text_encoder.convnext.convnext." + std::to_string(i), y);
@@ -934,10 +960,9 @@ bool supertonic_text_encoder_forward_ggml(const supertonic_model & model,
             throw std::runtime_error("ggml_gallocr_reserve text encoder failed");
         }
         ggml_gallocr_alloc_graph(allocr, gf);
-        std::vector<float> raw = pack_time_channel_for_ggml(x, L, C);
-        ggml_backend_tensor_set(in, raw.data(), 0, raw.size()*sizeof(float));
+        ggml_backend_tensor_set(ids_in, ids.data(), 0, ids.size() * sizeof(int32_t));
         profile_text_compute(model, gf, "convnext_front");
-        x = tensor_to_time_channel(ggml_graph_get_tensor(gf, "text_encoder_convnext5"));
+        std::vector<float> x = tensor_to_time_channel(ggml_graph_get_tensor(gf, "text_encoder_convnext5"));
         ggml_gallocr_free(allocr);
         ggml_free(ctx);
         profile_text_checkpoint("convnext_readback");

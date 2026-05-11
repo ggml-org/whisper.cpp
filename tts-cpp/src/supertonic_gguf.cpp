@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <mutex>
 #include <unordered_set>
@@ -346,8 +347,15 @@ bool load_supertonic_gguf(const std::string & path,
         }
 
         const int64_t num_tensors = gguf_get_n_tensors(gguf_ctx);
+        // Reserve a small surplus of tensor-overhead slots for the
+        // audit-driven pre-baked tensors that load_supertonic_gguf
+        // appends to `model.ctx_w` below: F2 vocoder bn_scale_pre +
+        // bn_shift_pre, plus F6's pre-transposed companions for the
+        // five hot t_proj weights.  A surplus of 16 covers the
+        // current roster + headroom for follow-up audit phases.
+        constexpr int64_t kPrebakedTensorSurplus = 16;
         ggml_init_params params = {
-            /*.mem_size=*/ ggml_tensor_overhead() * (size_t) num_tensors,
+            /*.mem_size=*/ ggml_tensor_overhead() * (size_t)(num_tensors + kPrebakedTensorSurplus),
             /*.mem_buffer=*/ nullptr,
             /*.no_alloc=*/ true,
         };
@@ -369,6 +377,37 @@ bool load_supertonic_gguf(const std::string & path,
             }
         }
 
+        // Audit finding F2 — declare the pre-baked vocoder BN
+        // tensors BEFORE `ggml_backend_alloc_ctx_tensors` so they
+        // get a slot in the same backend buffer as the rest of the
+        // model weights.  Data is uploaded after the source-tensor
+        // upload loop further down; see the F2 hook after
+        // `bind_vocoder_weights`.
+        model.vocoder.bn_scale_pre = ggml_new_tensor_1d(model.ctx_w, GGML_TYPE_F32, 512);
+        ggml_set_name(model.vocoder.bn_scale_pre, "vocoder/bn_scale_pre");
+        model.vocoder.bn_shift_pre = ggml_new_tensor_1d(model.ctx_w, GGML_TYPE_F32, 512);
+        ggml_set_name(model.vocoder.bn_shift_pre, "vocoder/bn_shift_pre");
+
+        // Audit finding F6 — declare the pre-transposed companion
+        // tensors for the four t_proj matmul weights.  Each one has
+        // shape [512, 64] in the GGUF (matches the Supertonic-2
+        // architecture's time-embedding projection); the transposed
+        // form is [64, 512], i.e. axes 0/1 swapped.  Data uploaded
+        // after `bind_vocoder_weights` in the F6 post-bind hook.
+        // The roster matches AUDIT_SUPERTONIC_OPENCL.md F6 + the
+        // test in test_supertonic_load_caches.cpp.
+        ggml_tensor * pretrans_t_proj[4] = {nullptr, nullptr, nullptr, nullptr};
+        static const char * const kF6PretransNames[4] = {
+            "vector_estimator:onnx::MatMul_3095__T",
+            "vector_estimator:onnx::MatMul_3140__T",
+            "vector_estimator:onnx::MatMul_3185__T",
+            "vector_estimator:onnx::MatMul_3230__T",
+        };
+        for (int i = 0; i < 4; ++i) {
+            pretrans_t_proj[i] = ggml_new_tensor_2d(model.ctx_w, GGML_TYPE_F32, 64, 512);
+            ggml_set_name(pretrans_t_proj[i], kF6PretransNames[i]);
+        }
+
         model.buffer_w = ggml_backend_alloc_ctx_tensors(model.ctx_w, model.backend);
         if (!model.buffer_w) throw std::runtime_error("ggml_backend_alloc_ctx_tensors failed");
 
@@ -376,6 +415,14 @@ bool load_supertonic_gguf(const std::string & path,
              cur;
              cur = ggml_get_next_tensor(model.ctx_w, cur)) {
             ggml_tensor * src = ggml_get_tensor(tmp_ctx, ggml_get_name(cur));
+            if (!src) {
+                // Pre-baked tensor (F2 / F6 / future audit phases):
+                // declared in model.ctx_w earlier in this function but
+                // doesn't have a GGUF source row — data is uploaded by
+                // the dedicated post-bind hook further down.  Skip
+                // here so we don't deref a null `src`.
+                continue;
+            }
             auto expanded = expanded_f32_tensors.find(ggml_get_name(cur));
             if (expanded != expanded_f32_tensors.end()) {
                 ggml_backend_tensor_set(cur, expanded->second.data(), 0,
@@ -410,6 +457,119 @@ bool load_supertonic_gguf(const std::string & path,
         }
 
         bind_vocoder_weights(model);
+
+        // Audit finding F1 — cache the vector-estimator RoPE θ
+        // tensor on the host once at load time.  All four group
+        // attention sites in `supertonic_vector_step_ggml`'s
+        // production GGML path read from the same source tensor;
+        // caching here avoids 4 × N_STEPS GPU→host downloads per
+        // synth on a non-CPU backend.  Tensor is small (64 floats
+        // typical), so the host-side copy cost is negligible
+        // compared with the sync-point savings.  See
+        // AUDIT_SUPERTONIC_OPENCL.md F1 + PLAN Phase 2F.
+        //
+        // The source tensor is mandatory for any production
+        // Supertonic GGUF (all four group attention sites depend
+        // on it); fail-fast at load time so the call-site
+        // assumption "model.vector_rope_theta.data() is non-null"
+        // can stay assertion-free.  Matches the previous behaviour
+        // where the same tensor was looked up via
+        // `read_f32(model, "...theta")` on the hot path and would
+        // throw `runtime_error("missing source tensor: ...")`.
+        {
+            ggml_tensor * theta_src = require_source_tensor(model,
+                "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.theta");
+            model.vector_rope_theta.resize((size_t) ggml_nelements(theta_src));
+            ggml_backend_tensor_get(theta_src,
+                                    model.vector_rope_theta.data(),
+                                    0, ggml_nbytes(theta_src));
+        }
+
+        // Audit finding F2 — compute the vocoder BN scale / shift
+        // pre-bake.  Downloads the four final_norm.* tensors that
+        // were just uploaded a few lines above (so this is a single
+        // round-trip at load time, not per-synth), folds them into
+        // the BN-fused form, and uploads to bn_scale_pre /
+        // bn_shift_pre which the vocoder graph cache references
+        // directly as weights.  Every subsequent synth call skips
+        // the 4 reads + CPU compute + 2 uploads that the old path
+        // did.  See AUDIT_SUPERTONIC_OPENCL.md F2.
+        {
+            auto download = [](ggml_tensor * t, std::vector<float> & out) {
+                out.resize((size_t) ggml_nelements(t));
+                ggml_backend_tensor_get(t, out.data(), 0, ggml_nbytes(t));
+            };
+            std::vector<float> gamma, beta, mean, var;
+            download(model.vocoder.final_norm_g, gamma);
+            download(model.vocoder.final_norm_b, beta);
+            download(model.vocoder.final_norm_running_mean, mean);
+            download(model.vocoder.final_norm_running_var,  var);
+            if (gamma.size() != 512 || beta.size() != 512 ||
+                mean.size() != 512  || var.size()  != 512) {
+                throw std::runtime_error(
+                    "vocoder final_norm.* size mismatch (expected 512 each)");
+            }
+            std::vector<float> bn_scale_pre(512), bn_shift_pre(512);
+            for (int c = 0; c < 512; ++c) {
+                bn_scale_pre[c] = gamma[c] / std::sqrt(var[c] + 1e-5f);
+                bn_shift_pre[c] = beta[c] - mean[c] * bn_scale_pre[c];
+            }
+            ggml_backend_tensor_set(model.vocoder.bn_scale_pre,
+                                    bn_scale_pre.data(), 0, 512 * sizeof(float));
+            ggml_backend_tensor_set(model.vocoder.bn_shift_pre,
+                                    bn_shift_pre.data(), 0, 512 * sizeof(float));
+        }
+
+        // Audit finding F6 — populate the pre-transposed t_proj
+        // companions from the source tensors.  At the four call
+        // sites in supertonic_vector_estimator.cpp the original
+        // matmul weight is consumed as `ggml_cont(ggml_transpose(W))`
+        // every graph build; storing the transposed form in the
+        // backend buffer once at load eliminates both the in-graph
+        // transpose op and the ~640 KiB of compute-buffer copies
+        // that came with it.  Each source is downloaded once,
+        // transposed host-side, and uploaded into the companion.
+        // The mapping from `<name>` to `<name>__T` is added to
+        // `model.source_tensors` so `require_source_tensor` works
+        // at the rewritten call sites.
+        {
+            static const char * const kF6Sources[4] = {
+                "vector_estimator:onnx::MatMul_3095",
+                "vector_estimator:onnx::MatMul_3140",
+                "vector_estimator:onnx::MatMul_3185",
+                "vector_estimator:onnx::MatMul_3230",
+            };
+            for (int i = 0; i < 4; ++i) {
+                if (!pretrans_t_proj[i]) continue;
+                auto it = model.source_tensors.find(kF6Sources[i]);
+                if (it == model.source_tensors.end() || !it->second) continue;
+                ggml_tensor * orig = it->second;
+                // Defensive: only pre-transpose the F32 [512, 64]
+                // shape the audit roster targets.  Any other layout
+                // means the GGUF doesn't fit the assumed
+                // architecture (or has already been quantized below
+                // F32, in which case the call-site rewrite would
+                // need a different lowering anyway).
+                if (orig->type != GGML_TYPE_F32 ||
+                    orig->ne[0] != 512 || orig->ne[1] != 64 ||
+                    orig->ne[2] != 1   || orig->ne[3] != 1) {
+                    continue;
+                }
+                std::vector<float> src((size_t) ggml_nelements(orig));
+                ggml_backend_tensor_get(orig, src.data(), 0, ggml_nbytes(orig));
+                std::vector<float> dst((size_t) 64 * 512);
+                // Transpose: dst[i, j] = src[j, i] where source ne=
+                // [512, 64].  Memory: src[j * 512 + i],
+                // dst[i * 64 + j].
+                for (int j = 0; j < 64; ++j) {
+                    for (int ii = 0; ii < 512; ++ii) {
+                        dst[(size_t) ii * 64 + j] = src[(size_t) j * 512 + ii];
+                    }
+                }
+                ggml_backend_tensor_set(pretrans_t_proj[i], dst.data(), 0, dst.size() * sizeof(float));
+                model.source_tensors[std::string(kF6Sources[i]) + "__T"] = pretrans_t_proj[i];
+            }
+        }
     } catch (const std::exception & e) {
         fprintf(stderr, "load_supertonic_gguf: %s\n", e.what());
         gguf_free(gguf_ctx);
@@ -455,6 +615,13 @@ void free_supertonic_model(supertonic_model & model) {
     model.unicode_indexer.clear();
     model.languages.clear();
     model.tts_json.clear();
+    // Reset the OpenCL optimization caches (audit F1 / F9) added to
+    // supertonic_model.  The vector-estimator RoPE θ cache is a
+    // bare std::vector so its clear() is sufficient; the time
+    // embedding cache map is mutable so we clear it explicitly here
+    // even though dtor would handle it on the next load reuse.
+    model.vector_rope_theta.clear();
+    model.time_emb_cache.clear();
     model.generation_id = 0;
 }
 

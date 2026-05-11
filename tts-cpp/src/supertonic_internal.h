@@ -59,6 +59,26 @@ struct supertonic_vocoder_weights {
     ggml_tensor * head1_b = nullptr;
     ggml_tensor * head_prelu = nullptr;
     ggml_tensor * head2_w = nullptr;
+
+    // Audit finding F2 — pre-baked vocoder BN scale + shift.
+    //
+    //   bn_scale_pre[c] = final_norm_g[c] / sqrt(final_norm_var[c] + 1e-5)
+    //   bn_shift_pre[c] = final_norm_b[c] - final_norm_mean[c] * bn_scale_pre[c]
+    //
+    // Both are constants for the model lifetime; pre-computing once
+    // at `load_supertonic_gguf()` time and uploading into a small
+    // dedicated backend buffer avoids the per-synth pattern of:
+    //
+    //   - 4 × `ggml_backend_tensor_get` (final_norm_g/b/mean/var, 512 floats each)
+    //   - host-side 512-element scale/shift compute
+    //   - 2 × `ggml_backend_tensor_set` (bn_scale_in/bn_shift_in graph inputs)
+    //
+    // The vocoder graph cache references these tensors directly
+    // (no `ggml_set_input` markers needed — they're weights, not
+    // graph inputs).  See AUDIT_SUPERTONIC_OPENCL.md F2 + PLAN
+    // Phase 2F.
+    ggml_tensor * bn_scale_pre = nullptr;
+    ggml_tensor * bn_shift_pre = nullptr;
 };
 
 struct supertonic_trace_tensor {
@@ -106,6 +126,28 @@ struct supertonic_model {
     std::vector<int32_t> unicode_indexer;
     std::vector<std::string> languages;
     std::string tts_json;
+
+    // ----- OpenCL optimization caches (audit F1 / F9) -----
+    //
+    // F1: cached copy of the vector-estimator RoPE θ tensor (the
+    // `vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.theta`
+    // entry).  All four group attention sites in the production GGML
+    // path read from the same source tensor; caching once at load
+    // saves 4 × N_STEPS GPU→host downloads per synth on a non-CPU
+    // backend.  Empty if the GGUF doesn't carry the theta tensor.
+    // Populated unconditionally at load time so call sites can use
+    // it without a fallback.
+    std::vector<float> vector_rope_theta;
+
+    // F9: per-(current_step, total_steps) cache of
+    // `time_embedding(model, …)` outputs.  The vector denoising
+    // schedule fires at most `total_steps` distinct (current, total)
+    // pairs per synth; cache hit rate is ≥(steps − 1) / steps once
+    // warm.  `mutable` because the cache populates lazily on
+    // const-method paths; thread-unsafe by design (matches the rest
+    // of supertonic_model: one engine per thread).  Key is
+    // `(current << 32) | total`.
+    mutable std::unordered_map<uint64_t, std::array<float, 64>> time_emb_cache;
 };
 
 bool load_supertonic_gguf(const std::string & path,
@@ -221,6 +263,18 @@ bool supertonic_vector_step_ggml(const supertonic_model & model,
                                  int total_steps,
                                  std::vector<float> & next_latent_out,
                                  std::string * error = nullptr);
+
+// Audit finding F9 — `time_embedding(model, current, total)` is a
+// pure function over (current_step, total_steps) whose output (64
+// floats) is reused once per group inside the vector estimator.
+// `cached_time_embedding` populates `model.time_emb_cache` on first
+// touch and returns a stored reference on every subsequent call
+// with the same key.  Steady-state per-synth recomputation cost
+// drops from `total_steps` invocations to zero after the first
+// synth.  See PLAN_SUPERTONIC_OPENCL.md Phase 2F.
+std::array<float, 64> cached_time_embedding(const supertonic_model & model,
+                                            int current_step,
+                                            int total_steps);
 
 bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
                                        const float * noisy_latent,

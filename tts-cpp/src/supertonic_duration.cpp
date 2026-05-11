@@ -324,6 +324,33 @@ void dense(const std::vector<float> & x, const f32_tensor & w, const f32_tensor 
     }
 }
 
+// Audit finding F11 — persistent graph cache for the duration
+// sentence-encoder GGML graph.
+//
+// Before this finding `duration_sentence_proj_ggml_impl` allocated
+// a fresh `ggml_context` + `ggml_gallocr_t` on every call, then
+// freed both at the end.  The shape of the graph depends only on
+// `L = text_len + 1`; consecutive synth calls with the same text
+// length pay no graph-build cost after the first.  The lifetime
+// helpers below match the (alive-id, generation_id) safe-free
+// pattern used by the vocoder + vector estimator caches.
+struct duration_graph_cache {
+    const supertonic_model * model = nullptr;
+    uint64_t generation_id = 0;
+    int L = 0;
+    std::vector<uint8_t> buf;
+    ggml_context * ctx = nullptr;
+    ggml_cgraph * gf = nullptr;
+    ggml_gallocr_t allocr = nullptr;
+    ggml_tensor * in = nullptr;
+};
+
+inline void free_duration_graph_cache(duration_graph_cache & cache) {
+    supertonic_safe_gallocr_free(cache.allocr, cache.generation_id);
+    if (cache.ctx) ggml_free(cache.ctx);
+    cache = {};
+}
+
 } // namespace
 
 bool supertonic_duration_forward_cpu(const supertonic_model & model,
@@ -513,47 +540,66 @@ static bool duration_sentence_proj_ggml_impl(const supertonic_model & model,
         push_trace(*scalar_trace, "duration_pred0_no_style", 1, 128, h);
         }
 
-        constexpr int MAX_NODES = 512;
-        static size_t buf_size = ggml_tensor_overhead() * MAX_NODES +
-                                 ggml_graph_overhead_custom(MAX_NODES, false);
-        thread_local std::vector<uint8_t> buf(buf_size);
-        ggml_init_params gp = { buf_size, buf.data(), true };
-        ggml_context * ctx = ggml_init(gp);
-        ggml_cgraph * gf = ggml_new_graph_custom(ctx, MAX_NODES, false);
+        // F11 — cached duration graph.  Key is (model, generation_id, L);
+        // consecutive synth calls with the same text_len skip the
+        // graph rebuild (~200 nodes) + gallocr_new + reserve cycle.
+        // Lifetime: `free_duration_graph_cache` consults the alive-id
+        // registry to skip `gallocr_free` against a backend that's
+        // already been torn down, same pattern as the other stages.
+        thread_local duration_graph_cache cache;
+        if (cache.model != &model || cache.generation_id != model.generation_id ||
+            cache.L != L) {
+            free_duration_graph_cache(cache);
+            cache.model = &model;
+            cache.generation_id = model.generation_id;
+            cache.L = L;
 
-        ggml_tensor * in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, L, C);
-        ggml_set_name(in, "duration_embed"); ggml_set_input(in);
-        ggml_tensor * y = in;
-        for (int i = 0; i < 6; ++i) {
-            const std::string p = "duration:tts.dp.sentence_encoder.convnext.convnext." + std::to_string(i);
-            y = duration_convnext_ggml(ctx, model, p, y);
-            const std::string name = "duration_convnext" + std::to_string(i);
-            ggml_set_name(y, name.c_str()); ggml_set_output(y);
-            ggml_build_forward_expand(gf, y);
-        }
-        ggml_tensor * q = conv1d_f32(ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_q.weight"), y, 1, 0, 1);
-        q = ggml_add(ctx, q, repeat_like(ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_q.bias"), q));
-        ggml_set_name(q, "duration_attn0_q"); ggml_set_output(q); ggml_build_forward_expand(gf, q);
-        ggml_tensor * k = conv1d_f32(ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_k.weight"), y, 1, 0, 1);
-        k = ggml_add(ctx, k, repeat_like(ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_k.bias"), k));
-        ggml_set_name(k, "duration_attn0_k"); ggml_set_output(k); ggml_build_forward_expand(gf, k);
-        ggml_tensor * v = conv1d_f32(ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_v.weight"), y, 1, 0, 1);
-        v = ggml_add(ctx, v, repeat_like(ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_v.bias"), v));
-        ggml_set_name(v, "duration_attn0_v"); ggml_set_output(v); ggml_build_forward_expand(gf, v);
+            constexpr int MAX_NODES = 512;
+            const size_t buf_size = ggml_tensor_overhead() * MAX_NODES +
+                                    ggml_graph_overhead_custom(MAX_NODES, false);
+            cache.buf.assign(buf_size, 0);
+            ggml_init_params gp = { buf_size, cache.buf.data(), true };
+            cache.ctx = ggml_init(gp);
+            cache.gf = ggml_new_graph_custom(cache.ctx, MAX_NODES, false);
 
-        ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
-        if (!allocr) {
-            ggml_free(ctx);
-            throw std::runtime_error("ggml_gallocr_new duration failed");
+            cache.in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, L, C);
+            ggml_set_name(cache.in, "duration_embed"); ggml_set_input(cache.in);
+            ggml_tensor * y = cache.in;
+            for (int i = 0; i < 6; ++i) {
+                const std::string p = "duration:tts.dp.sentence_encoder.convnext.convnext." + std::to_string(i);
+                y = duration_convnext_ggml(cache.ctx, model, p, y);
+                const std::string name = "duration_convnext" + std::to_string(i);
+                ggml_set_name(y, name.c_str()); ggml_set_output(y);
+                ggml_build_forward_expand(cache.gf, y);
+            }
+            ggml_tensor * q = conv1d_f32(cache.ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_q.weight"), y, 1, 0, 1);
+            q = ggml_add(cache.ctx, q, repeat_like(cache.ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_q.bias"), q));
+            ggml_set_name(q, "duration_attn0_q"); ggml_set_output(q); ggml_build_forward_expand(cache.gf, q);
+            ggml_tensor * k = conv1d_f32(cache.ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_k.weight"), y, 1, 0, 1);
+            k = ggml_add(cache.ctx, k, repeat_like(cache.ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_k.bias"), k));
+            ggml_set_name(k, "duration_attn0_k"); ggml_set_output(k); ggml_build_forward_expand(cache.gf, k);
+            ggml_tensor * v = conv1d_f32(cache.ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_v.weight"), y, 1, 0, 1);
+            v = ggml_add(cache.ctx, v, repeat_like(cache.ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_v.bias"), v));
+            ggml_set_name(v, "duration_attn0_v"); ggml_set_output(v); ggml_build_forward_expand(cache.gf, v);
+
+            cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
+            if (!cache.allocr) {
+                ggml_free(cache.ctx);
+                cache = {};
+                throw std::runtime_error("ggml_gallocr_new duration failed");
+            }
+            if (!ggml_gallocr_reserve(cache.allocr, cache.gf)) {
+                ggml_gallocr_free(cache.allocr);
+                ggml_free(cache.ctx);
+                cache = {};
+                throw std::runtime_error("ggml_gallocr_reserve duration failed");
+            }
+            ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
         }
-        if (!ggml_gallocr_reserve(allocr, gf)) {
-            ggml_gallocr_free(allocr);
-            ggml_free(ctx);
-            throw std::runtime_error("ggml_gallocr_reserve duration failed");
-        }
-        ggml_gallocr_alloc_graph(allocr, gf);
+        ggml_cgraph * gf = cache.gf;
+
         std::vector<float> x_raw = pack_time_channel_for_ggml(x, L, C);
-        ggml_backend_tensor_set(in, x_raw.data(), 0, x_raw.size()*sizeof(float));
+        ggml_backend_tensor_set(cache.in, x_raw.data(), 0, x_raw.size()*sizeof(float));
         supertonic_graph_compute(model, gf);
 
         PUSH_DURATION_GGML({"duration_embed", {L, C}, x});
@@ -675,8 +721,7 @@ static bool duration_sentence_proj_ggml_impl(const supertonic_model & model,
               read_f32(model, "duration:tts.dp.predictor.layers.0.bias"),
               192, 128, h_g);
         PUSH_DURATION_GGML({"duration_pred0_no_style", {1, 128}, h_g});
-        ggml_gallocr_free(allocr);
-        ggml_free(ctx);
+        // F11: ctx + allocr live in `cache` and survive across synths.
         if (error) error->clear();
 #undef PUSH_DURATION_GGML
         return true;

@@ -360,9 +360,17 @@ struct vocoder_graph_cache {
     ggml_context * ctx = nullptr;
     ggml_cgraph * gf = nullptr;
     ggml_gallocr_t allocr = nullptr;
-    ggml_tensor * x_in = nullptr;
-    ggml_tensor * bn_scale = nullptr;
-    ggml_tensor * bn_shift = nullptr;
+
+    // F3: the new graph input is the raw latent in its natural
+    // `[latent_len, latent_channels]` shape; the existing
+    // `[t, r] → [t*factor + r]` unpack runs on the device via
+    // `ggml_reshape + ggml_permute + ggml_cont`.  Drops a ~40 KiB
+    // CPU loop + redundant upload per synth on a discrete GPU.
+    ggml_tensor * latent_in = nullptr;
+    // F2: bn_scale / bn_shift are no longer graph inputs — the
+    // vocoder graph references `model.vocoder.bn_scale_pre` /
+    // `bn_shift_pre` directly (allocated in model.buffer_w at load
+    // time).  The previous `ggml_set_input` markers are gone.
     ggml_tensor * wav = nullptr;
 };
 
@@ -396,17 +404,38 @@ void build_supertonic_vocoder_cache(vocoder_graph_cache & cache,
     cache.ctx = ggml_init(p);
     cache.gf = ggml_new_graph_custom(cache.ctx, MAX_NODES, false);
 
-    ggml_tensor * x = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, T0, C_latent);
-    cache.x_in = x;
-    ggml_set_name(cache.x_in, "vocoder_in");
-    ggml_set_input(cache.x_in);
+    // F3: graph input is the latent in its raw on-host layout
+    // `[latent_len, latent_channels]`.  The unpack-and-permute
+    // formerly done by a CPU triple-loop runs in the graph now:
+    //
+    //   latent_in : ne=[L, 144]
+    //   → reshape_3d  ne=[L, 6, 24]   (split channel into c × r)
+    //   → permute(1,0,2,3) ne=[6, L, 24]
+    //   → cont        ne=[6, L, 24]   contiguous
+    //   → reshape_2d  ne=[6*L, 24] = [T0, C_latent]
+    //
+    // Math is a pure permutation; output element
+    // `x[c * T0 + t*6 + r] = latent[(c*6+r) * L + t]` matches the
+    // CPU loop in the legacy `supertonic_vocoder_forward_cpu`.
+    const int latent_channels = model.hparams.latent_channels;  // 144
+    cache.latent_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32,
+                                         latent_len, latent_channels);
+    ggml_set_name(cache.latent_in, "vocoder_latent_in");
+    ggml_set_input(cache.latent_in);
+    ggml_tensor * latent_3d = ggml_reshape_3d(cache.ctx, cache.latent_in,
+                                              latent_len,
+                                              model.hparams.ttl_chunk_compress_factor,
+                                              C_latent);
+    ggml_tensor * latent_perm = ggml_permute(cache.ctx, latent_3d, 1, 0, 2, 3);
+    ggml_tensor * latent_cont = ggml_cont(cache.ctx, latent_perm);
+    ggml_tensor * x = ggml_reshape_2d(cache.ctx, latent_cont, T0, C_latent);
+    ggml_set_name(x, "vocoder_unpacked");
 
-    cache.bn_scale = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_F32, 512);
-    ggml_set_name(cache.bn_scale, "vocoder_bn_scale");
-    ggml_set_input(cache.bn_scale);
-    cache.bn_shift = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_F32, 512);
-    ggml_set_name(cache.bn_shift, "vocoder_bn_shift");
-    ggml_set_input(cache.bn_shift);
+    // F2: bn_scale / bn_shift are now persistent weight tensors
+    // (`model.vocoder.bn_scale_pre` / `bn_shift_pre`) allocated at
+    // load time.  See AUDIT_SUPERTONIC_OPENCL.md F2 for the
+    // recompute formula.  The graph references them as regular
+    // weight tensors so they don't show up as inputs.
 
     const float normalizer_scale = scalar_f32_tensor(model.vocoder.normalizer_scale);
     x = ggml_scale(cache.ctx, x, 1.0f / normalizer_scale);
@@ -421,8 +450,10 @@ void build_supertonic_vocoder_cache(vocoder_graph_cache & cache,
         ggml_set_name(x, ("vocoder_convnext_" + std::to_string(i)).c_str());
     }
 
-    x = ggml_mul(cache.ctx, x, repeat_like(cache.ctx, cache.bn_scale, x));
-    x = ggml_add(cache.ctx, x, repeat_like(cache.ctx, cache.bn_shift, x));
+    // F2: reference the pre-baked weight tensors directly instead
+    // of the (deleted) per-call graph inputs.
+    x = ggml_mul(cache.ctx, x, repeat_like(cache.ctx, model.vocoder.bn_scale_pre, x));
+    x = ggml_add(cache.ctx, x, repeat_like(cache.ctx, model.vocoder.bn_shift_pre, x));
     ggml_set_name(x, "vocoder_final_norm");
 
     x = conv1d_causal_ggml(cache.ctx, x, model.vocoder.head1_w, model.vocoder.head1_b);
@@ -717,33 +748,18 @@ bool supertonic_vocoder_forward_ggml(const supertonic_model & model,
     supertonic_op_dispatch_scope dispatch(model);
     try {
         auto profile_last = std::chrono::steady_clock::now();
-        const int C_latent = model.hparams.latent_dim;
-        const int factor = model.hparams.ttl_chunk_compress_factor;
-        const int T0 = latent_len * factor;
         if (latent_len <= 0) throw std::runtime_error("latent_len must be positive");
 
-        std::vector<float> x_in((size_t) T0 * C_latent);
-        for (int c = 0; c < C_latent; ++c) {
-            for (int t = 0; t < latent_len; ++t) {
-                for (int r = 0; r < factor; ++r) {
-                    int src_c = c * factor + r;
-                    x_in[(size_t) c * T0 + (t * factor + r)] =
-                        latent[(size_t) src_c * latent_len + t];
-                }
-            }
-        }
-        profile_vocoder_checkpoint("unpack", profile_last);
+        // F3: the CPU host-side unpack loop is gone — the graph
+        // ingests `latent` in its natural `[latent_len, latent_channels]`
+        // shape and runs the `reshape + permute + cont + reshape`
+        // chain on the device.
 
-        f32_tensor gamma = read_f32_tensor(model.vocoder.final_norm_g);
-        f32_tensor beta = read_f32_tensor(model.vocoder.final_norm_b);
-        f32_tensor mean = read_f32_tensor(model.vocoder.final_norm_running_mean);
-        f32_tensor var = read_f32_tensor(model.vocoder.final_norm_running_var);
-        std::vector<float> bn_scale(512), bn_shift(512);
-        for (int c = 0; c < 512; ++c) {
-            bn_scale[c] = gamma.data[c] / std::sqrt(var.data[c] + 1e-5f);
-            bn_shift[c] = beta.data[c] - mean.data[c] * bn_scale[c];
-        }
-        profile_vocoder_checkpoint("bn_params", profile_last);
+        // F2: bn_scale / bn_shift were pre-baked at load time into
+        // model.vocoder.{bn_scale_pre, bn_shift_pre} and the
+        // vocoder graph references those weight tensors directly.
+        // The per-synth pattern of 4 final_norm.* downloads + CPU
+        // compute + 2 uploads is gone; nothing happens here for BN.
 
         thread_local vocoder_graph_cache cache;
         if (cache.model != &model || cache.generation_id != model.generation_id ||
@@ -752,9 +768,8 @@ bool supertonic_vocoder_forward_ggml(const supertonic_model & model,
         }
         profile_vocoder_checkpoint("graph_cache", profile_last);
 
-        ggml_backend_tensor_set(cache.x_in, x_in.data(), 0, x_in.size() * sizeof(float));
-        ggml_backend_tensor_set(cache.bn_scale, bn_scale.data(), 0, bn_scale.size() * sizeof(float));
-        ggml_backend_tensor_set(cache.bn_shift, bn_shift.data(), 0, bn_shift.size() * sizeof(float));
+        const size_t latent_bytes = (size_t) ggml_nelements(cache.latent_in) * sizeof(float);
+        ggml_backend_tensor_set(cache.latent_in, latent, 0, latent_bytes);
         profile_vocoder_checkpoint("set_inputs", profile_last);
 
         supertonic_graph_compute(model, cache.gf);
@@ -931,14 +946,11 @@ bool supertonic_vocoder_trace_ggml(const supertonic_model & model,
             ggml_build_forward_expand(gf, cur);
         }
 
-        ggml_tensor * bn_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 512);
-        ggml_set_name(bn_scale, "trace_bn_scale");
-        ggml_set_input(bn_scale);
-        ggml_tensor * bn_shift = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 512);
-        ggml_set_name(bn_shift, "trace_bn_shift");
-        ggml_set_input(bn_shift);
-        cur = ggml_mul(ctx, cur, repeat_like(ctx, bn_scale, cur));
-        cur = ggml_add(ctx, cur, repeat_like(ctx, bn_shift, cur));
+        // F2: trace graph now references the pre-baked weight
+        // tensors directly (same as the production graph), so the
+        // per-call BN re-derivation below is gone too.
+        cur = ggml_mul(ctx, cur, repeat_like(ctx, model.vocoder.bn_scale_pre, cur));
+        cur = ggml_add(ctx, cur, repeat_like(ctx, model.vocoder.bn_shift_pre, cur));
         ggml_set_name(cur, "final_norm");
         ggml_set_output(cur);
         ggml_build_forward_expand(gf, cur);
@@ -969,17 +981,8 @@ bool supertonic_vocoder_trace_ggml(const supertonic_model & model,
 
         std::vector<float> x_host = unpack_latent_ggml_layout(model, latent, latent_len);
         ggml_backend_tensor_set(x_in, x_host.data(), 0, x_host.size() * sizeof(float));
-        f32_tensor gamma = read_f32_tensor(model.vocoder.final_norm_g);
-        f32_tensor beta = read_f32_tensor(model.vocoder.final_norm_b);
-        f32_tensor mean = read_f32_tensor(model.vocoder.final_norm_running_mean);
-        f32_tensor var = read_f32_tensor(model.vocoder.final_norm_running_var);
-        std::vector<float> bn_scale_host(512), bn_shift_host(512);
-        for (int c = 0; c < 512; ++c) {
-            bn_scale_host[c] = gamma.data[c] / std::sqrt(var.data[c] + 1e-5f);
-            bn_shift_host[c] = beta.data[c] - mean.data[c] * bn_scale_host[c];
-        }
-        ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "trace_bn_scale"), bn_scale_host.data(), 0, bn_scale_host.size() * sizeof(float));
-        ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "trace_bn_shift"), bn_shift_host.data(), 0, bn_shift_host.size() * sizeof(float));
+        // F2: trace_bn_scale / trace_bn_shift inputs are gone; the
+        // graph above now folds the pre-baked weights in directly.
         supertonic_graph_compute(model, gf);
 
         trace_out.push_back({"unpack", {T0, C_latent}, unpack_latent_scalar(model, latent, latent_len)});
