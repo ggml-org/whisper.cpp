@@ -142,20 +142,35 @@ class WakeWordDetector:
 # Transcriber
 # ---------------------------------------------------------------------------
 
+PARAKEET_PREFIX = "parakeet:"
+PARAKEET_VENV_PYTHON = (
+    "/mnt/82A23910A2390A65/Trade/EducationAndHack/VOICE/whisper.cpp/"
+    "examples/whisper.youtube/.venv-parakeet/bin/python"
+)
+
+
 class Transcriber:
-    """Runs whisper-cli and returns transcribed text."""
+    """Runs whisper-cli or Parakeet (NeMo) and returns transcribed text."""
 
     def __init__(self, config: Config):
         self.config = config
+        self._parakeet_proc = None
+        self._parakeet_model = None
 
     def transcribe(self, wav_path: str, model: str = None,
                    duration_s: float = 0) -> str:
         if not os.path.isfile(wav_path):
             raise FileNotFoundError(f"WAV file not found: {wav_path}")
 
+        target = model or self.config.model
+        if target.startswith(PARAKEET_PREFIX):
+            return self._transcribe_parakeet(wav_path, target, duration_s)
+        return self._transcribe_whisper(wav_path, target, duration_s)
+
+    def _transcribe_whisper(self, wav_path, model, duration_s):
         cmd = [
             self.config.whisper_cli,
-            "-m", model or self.config.model,
+            "-m", model,
             "-f", wav_path,
             "-nt",
             "-np",
@@ -163,7 +178,7 @@ class Transcriber:
             "-l", self.config.language,
             "-dev", str(self.config.gpu_device),
         ]
-        log.info("Transcribing (%.1fs): %s", duration_s, " ".join(cmd))
+        log.info("Transcribing whisper (%.1fs): %s", duration_s, " ".join(cmd))
 
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=300,
@@ -180,3 +195,98 @@ class Transcriber:
             return ""
         log.info("Transcription: %r", text[:100])
         return text
+
+    _PARAKEET_WORKER_SCRIPT = (
+        "import sys, json, os\n"
+        "os.environ.setdefault('HF_HUB_DISABLE_TELEMETRY', '1')\n"
+        "import nemo.collections.asr as nemo_asr\n"
+        "import torch\n"
+        "model_name = sys.argv[1]\n"
+        "asr = nemo_asr.models.ASRModel.from_pretrained(model_name)\n"
+        "if torch.cuda.is_available():\n"
+        "    asr = asr.cuda()\n"
+        "asr.eval()\n"
+        "sys.stdout.write('__PARAKEET_READY__\\n')\n"
+        "sys.stdout.flush()\n"
+        "for line in sys.stdin:\n"
+        "    wav = line.strip()\n"
+        "    if not wav: continue\n"
+        "    try:\n"
+        "        out = asr.transcribe([wav], timestamps=False, verbose=False)\n"
+        "        text = out[0].text or ''\n"
+        "        sys.stdout.write('__PARAKEET_RESULT__' + json.dumps({'text': text}) + '\\n')\n"
+        "    except Exception as e:\n"
+        "        sys.stdout.write('__PARAKEET_RESULT__' + json.dumps({'error': str(e)}) + '\\n')\n"
+        "    sys.stdout.flush()\n"
+    )
+
+    def _ensure_parakeet_worker(self, model_name):
+        """Spawn persistent NeMo worker if not running or model changed."""
+        if (self._parakeet_proc is not None
+                and self._parakeet_proc.poll() is None
+                and self._parakeet_model == model_name):
+            return
+
+        if self._parakeet_proc is not None and self._parakeet_proc.poll() is None:
+            log.info("Stopping parakeet worker (model change)")
+            self._parakeet_proc.terminate()
+            try:
+                self._parakeet_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._parakeet_proc.kill()
+
+        log.info("Starting parakeet worker for model: %s", model_name)
+        self._parakeet_proc = subprocess.Popen(
+            [PARAKEET_VENV_PYTHON, "-c", self._PARAKEET_WORKER_SCRIPT, model_name],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1,
+        )
+        self._parakeet_model = model_name
+
+        # wait for ready signal
+        while True:
+            line = self._parakeet_proc.stdout.readline()
+            if not line:
+                err = self._parakeet_proc.stderr.read()
+                raise RuntimeError(f"parakeet worker died at startup: {err[-500:]}")
+            if line.strip() == "__PARAKEET_READY__":
+                log.info("Parakeet worker ready")
+                return
+
+    def _transcribe_parakeet(self, wav_path, model, duration_s):
+        model_name = model[len(PARAKEET_PREFIX):]
+        log.info("Transcribing parakeet (%.1fs): model=%s file=%s",
+                 duration_s, model_name, wav_path)
+
+        self._ensure_parakeet_worker(model_name)
+        self._parakeet_proc.stdin.write(wav_path + "\n")
+        self._parakeet_proc.stdin.flush()
+
+        line = self._parakeet_proc.stdout.readline()
+        if not line:
+            err = self._parakeet_proc.stderr.read()
+            raise RuntimeError(f"parakeet worker died: {err[-500:]}")
+
+        import json
+        if not line.startswith("__PARAKEET_RESULT__"):
+            raise RuntimeError(f"unexpected parakeet output: {line[:200]}")
+        data = json.loads(line[len("__PARAKEET_RESULT__"):])
+        if "error" in data:
+            raise RuntimeError(f"parakeet error: {data['error']}")
+        text = data["text"].strip()
+
+        if text and _is_hallucination(text, duration_s):
+            log.info("Hallucination filtered (%.1fs): %r", duration_s, text[:100])
+            return ""
+        log.info("Transcription: %r", text[:100])
+        return text
+
+    def shutdown(self):
+        """Cleanly stop parakeet worker if running."""
+        if self._parakeet_proc is not None and self._parakeet_proc.poll() is None:
+            log.info("Shutting down parakeet worker")
+            self._parakeet_proc.terminate()
+            try:
+                self._parakeet_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._parakeet_proc.kill()

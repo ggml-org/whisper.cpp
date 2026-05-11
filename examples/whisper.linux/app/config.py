@@ -66,11 +66,17 @@ DEFAULT_VOICE_COMMANDS = {
 }
 
 AVAILABLE_MODELS = [
-    ("tiny",     "~75 MB"),
-    ("base",     "~142 MB"),
-    ("small",    "~466 MB"),
-    ("medium",   "~1.5 GB"),
-    ("large-v3", "~3.1 GB"),
+    ("tiny",                "~75 MB"),
+    ("base",                "~142 MB"),
+    ("small",               "~466 MB"),
+    ("medium",              "~1.5 GB"),
+    ("medium-q5_0",         "~539 MB"),
+    ("large-v2",            "~3.1 GB"),
+    ("large-v3",            "~3.1 GB"),
+    ("large-v3-q5_0",       "~1.1 GB"),
+    ("large-v3-turbo",      "~1.5 GB"),
+    ("large-v3-turbo-q5_0", "~574 MB"),
+    ("large-v3-turbo-q8_0", "~834 MB"),
 ]
 
 

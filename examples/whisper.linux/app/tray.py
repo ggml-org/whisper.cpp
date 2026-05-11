@@ -1,5 +1,6 @@
 """System tray icon and menu for whisper.linux."""
 
+import os
 import subprocess
 import threading
 from pathlib import Path
@@ -180,13 +181,15 @@ class TrayIcon:
         for a in self._model_group.actions():
             self._model_group.removeAction(a)
 
-        current_model = Path(self._app_ref.config.model).name if self._app_ref.config.model else ""
+        current_model_raw = self._app_ref.config.model or ""
+        current_model = (current_model_raw if current_model_raw.startswith("parakeet:")
+                         else Path(current_model_raw).name)
         downloaded = _list_models(self._app_ref.config.model_search_dirs)
         downloaded_names = {name for name, _ in downloaded}
 
-        if not downloaded and self._app_ref.config.model:
-            name = Path(self._app_ref.config.model).stem.replace("ggml-", "")
-            downloaded = [(name, self._app_ref.config.model)]
+        if not downloaded and current_model_raw and not current_model_raw.startswith("parakeet:"):
+            name = Path(current_model_raw).stem.replace("ggml-", "")
+            downloaded = [(name, current_model_raw)]
             downloaded_names = {name}
 
         for name, path in downloaded:
@@ -200,8 +203,26 @@ class TrayIcon:
             self._model_group.addAction(a)
             menu.addAction(a)
 
+        # Parakeet V3 \u2014 separate engine (NVIDIA NeMo)
+        menu.addSeparator()
+        parakeet_id = "parakeet:nvidia/parakeet-tdt-0.6b-v3"
+        parakeet_label = "Parakeet V3  (NVIDIA, GPU, ~600 MB)"
+        if self._parakeet_available():
+            a = QAction(parakeet_label, menu, checkable=True)
+            a.setData(parakeet_id)
+            if current_model_raw == parakeet_id:
+                a.setChecked(True)
+            a.triggered.connect(self._on_model_changed)
+            self._model_group.addAction(a)
+            menu.addAction(a)
+        else:
+            a = QAction(parakeet_label + "  (venv missing)", menu)
+            a.setEnabled(False)
+            menu.addAction(a)
+            self._kept_actions.append(a)
+
         available = [(n, s) for n, s in AVAILABLE_MODELS if n not in downloaded_names]
-        if available and downloaded:
+        if available:
             menu.addSeparator()
 
         for name, size in available:
@@ -214,6 +235,11 @@ class TrayIcon:
                 a.triggered.connect(lambda checked, n=name: self._on_download_model(n))
             menu.addAction(a)
             self._kept_actions.append(a)
+
+    @staticmethod
+    def _parakeet_available():
+        from .transcriber import PARAKEET_VENV_PYTHON
+        return os.path.isfile(PARAKEET_VENV_PYTHON) and os.access(PARAKEET_VENV_PYTHON, os.X_OK)
 
     def _rebuild_wake_model_menu(self):
         from PyQt5.QtWidgets import QAction
