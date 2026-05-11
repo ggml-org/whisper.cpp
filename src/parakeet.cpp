@@ -3521,6 +3521,16 @@ struct parakeet_full_params parakeet_full_default_params(enum parakeet_sampling_
     return result;
 }
 
+static void parakeet_stream_clear(struct parakeet_state * state) {
+    state->stream.buffer.clear();
+    state->stream.n_samples_advanced = 0;
+    state->stream.n_left_ctx         = 0;
+    state->stream.n_chunk            = 0;
+    state->stream.n_right_ctx        = 0;
+    state->stream.params             = {};
+    state->stream.initialized        = false;
+}
+
 static void parakeet_reset_state(struct parakeet_state * state) {
     state->decoded_tokens.clear();
     state->decoded_token_data.clear();
@@ -3544,13 +3554,7 @@ static void parakeet_stream_reset_state(struct parakeet_state * state) {
 
     state->result_all.clear();
 
-    state->stream.buffer.clear();
-    state->stream.n_samples_advanced = 0;
-    state->stream.n_left_ctx         = 0;
-    state->stream.n_chunk            = 0;
-    state->stream.n_right_ctx        = 0;
-    state->stream.params             = {};
-    state->stream.initialized        = false;
+    parakeet_stream_clear(state);
 
     state->enc_out_buffer.clear();
     state->enc_out_frames = 0;
@@ -3768,13 +3772,7 @@ int parakeet_stream_flush(
         state->stream.n_samples_advanced += n_flush_chunk;
     }
 
-    state->stream.buffer.clear();
-    state->stream.n_samples_advanced = 0;
-    state->stream.n_left_ctx         = 0;
-    state->stream.n_chunk            = 0;
-    state->stream.n_right_ctx        = 0;
-    state->stream.params             = {};
-    state->stream.initialized        = false;
+    parakeet_stream_clear(state);
 
     return 0;
 }
