@@ -695,6 +695,7 @@ bool supertonic_duration_trace_ggml(const supertonic_model & model,
                                     bool include_scalar_trace,
                                     bool include_ggml_trace,
                                     std::vector<float> * sentence_proj_out) {
+    supertonic_op_dispatch_scope dispatch(model);
     return duration_sentence_proj_ggml_impl(model, text_ids, text_len, &scalar_trace, &ggml_trace,
                                            error, include_scalar_trace, include_ggml_trace,
                                            sentence_proj_out);
@@ -706,6 +707,7 @@ bool supertonic_duration_forward_ggml(const supertonic_model & model,
                                       const float * style_dp,
                                       float & duration_out,
                                       std::string * error) {
+    supertonic_op_dispatch_scope dispatch(model);
     try {
         std::vector<supertonic_trace_tensor> scalar;
         std::vector<supertonic_trace_tensor> ggml;

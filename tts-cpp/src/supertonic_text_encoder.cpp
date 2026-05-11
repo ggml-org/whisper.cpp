@@ -896,6 +896,7 @@ bool supertonic_text_encoder_forward_ggml(const supertonic_model & model,
                                           const float * style_ttl,
                                           std::vector<float> & text_emb_out,
                                           std::string * error) {
+    supertonic_op_dispatch_scope dispatch(model);
     try {
         profile_text_begin();
         const int C = 256;
@@ -1001,6 +1002,7 @@ bool supertonic_text_encoder_trace_ggml(const supertonic_model & model,
                                         std::vector<supertonic_trace_tensor> & scalar_trace,
                                         std::vector<supertonic_trace_tensor> & ggml_trace,
                                         std::string * error) {
+    supertonic_op_dispatch_scope dispatch(model);
     try {
         scalar_trace.clear();
         ggml_trace.clear();

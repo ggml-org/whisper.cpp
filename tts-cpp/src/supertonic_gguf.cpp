@@ -206,6 +206,35 @@ bool is_supertonic_alive(uint64_t generation_id) {
     return supertonic_alive_ids().find(generation_id) != supertonic_alive_ids().end();
 }
 
+// Thread-local dispatch flags consulted by the GGML graph builders to
+// pick between the CBLAS-backed `ggml_custom_4d` fast paths (CPU only)
+// and the portable pure-GGML fallbacks (any backend).  See the
+// supertonic_op_dispatch_scope comment in supertonic_internal.h.
+namespace {
+thread_local bool g_supertonic_use_cpu_custom_ops = true;
+thread_local bool g_supertonic_use_f16_attn      = false;
+}
+
+bool supertonic_use_cpu_custom_ops() {
+    return g_supertonic_use_cpu_custom_ops;
+}
+
+bool supertonic_use_f16_attn() {
+    return g_supertonic_use_f16_attn;
+}
+
+supertonic_op_dispatch_scope::supertonic_op_dispatch_scope(const supertonic_model & model)
+    : prev_use_cpu_custom_ops(g_supertonic_use_cpu_custom_ops),
+      prev_use_f16_attn(g_supertonic_use_f16_attn) {
+    g_supertonic_use_cpu_custom_ops = model.backend_is_cpu;
+    g_supertonic_use_f16_attn       = model.use_f16_attn;
+}
+
+supertonic_op_dispatch_scope::~supertonic_op_dispatch_scope() {
+    g_supertonic_use_cpu_custom_ops = prev_use_cpu_custom_ops;
+    g_supertonic_use_f16_attn       = prev_use_f16_attn;
+}
+
 ggml_tensor * require_tensor(const supertonic_model & model, const std::string & name) {
     ggml_tensor * t = get_tensor_or_null(model, name);
     if (!t) throw std::runtime_error("missing tensor: " + name);
@@ -306,6 +335,15 @@ bool load_supertonic_gguf(const std::string & path,
         model.tts_json = get_string(gguf_ctx, "supertonic.tts_json");
 
         model.backend = init_supertonic_backend(n_gpu_layers, verbose);
+        // The graph builders below dispatch between CBLAS-backed
+        // `ggml_custom_4d` fast paths (CPU only) and pure-GGML fallbacks
+        // (any backend) based on this flag.  Stable for the model's
+        // lifetime; see the supertonic_op_dispatch_scope comment in
+        // supertonic_internal.h for the threading contract.
+        model.backend_is_cpu = ggml_backend_is_cpu(model.backend);
+        if (verbose) {
+            fprintf(stderr, "supertonic: backend_is_cpu=%s\n", model.backend_is_cpu ? "true" : "false");
+        }
 
         const int64_t num_tensors = gguf_get_n_tensors(gguf_ctx);
         ggml_init_params params = {

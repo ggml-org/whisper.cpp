@@ -154,7 +154,9 @@ ggml_tensor * conv1d_f32(ggml_context * ctx,
                          int padding,
                          int dilation) {
 #if defined(TTS_CPP_USE_ACCELERATE) || defined(TTS_CPP_USE_CBLAS)
-    if (kernel->ne[0] == 1 && stride == 1 && padding == 0 && dilation == 1 &&
+    // CPU-only fast path: see supertonic_op_dispatch_scope contract.
+    if (supertonic_use_cpu_custom_ops() &&
+        kernel->ne[0] == 1 && stride == 1 && padding == 0 && dilation == 1 &&
         input->type == GGML_TYPE_F32 && kernel->type == GGML_TYPE_F32 &&
         input->ne[2] == 1 && input->ne[3] == 1) {
         auto pointwise_op = [](ggml_tensor * dst, int ith, int nth, void *) {
@@ -299,6 +301,9 @@ ggml_tensor * depthwise_same_custom_ggml(ggml_context * ctx,
                                          ggml_tensor * w,
                                          ggml_tensor * b,
                                          int dilation) {
+    // GPU backends reject GGML_OP_CUSTOM; fall through to the pure-GGML
+    // im2col + mul_mat path in depthwise_same_ggml() below.
+    if (!supertonic_use_cpu_custom_ops()) return nullptr;
     const depthwise_same_op_config * cfg = depthwise_same_config(dilation);
     if (!cfg || x->type != GGML_TYPE_F32 || w->type != GGML_TYPE_F32 || b->type != GGML_TYPE_F32) {
         return nullptr;
@@ -335,7 +340,10 @@ ggml_tensor * layer_norm_ggml(ggml_context * ctx,
                               ggml_tensor * x,
                               ggml_tensor * g,
                               ggml_tensor * b) {
-    if (x->type == GGML_TYPE_F32 && g->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 &&
+    // CPU-only direct row-wise layer-norm; falls through to permute +
+    // ggml_norm on non-CPU backends so the graph stays GPU-executable.
+    if (supertonic_use_cpu_custom_ops() &&
+        x->type == GGML_TYPE_F32 && g->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 &&
         x->ne[2] == 1 && x->ne[3] == 1) {
         auto layer_norm_op = [](ggml_tensor * dst, int ith, int nth, void *) {
             const ggml_tensor * src = dst->src[0];
@@ -387,7 +395,11 @@ ggml_tensor * dense_matmul_time_ggml(ggml_context * ctx,
                                      ggml_tensor * w,
                                      ggml_tensor * b) {
 #if defined(TTS_CPP_USE_ACCELERATE) || defined(TTS_CPP_USE_CBLAS)
-    if (x->type == GGML_TYPE_F32 && w->type == GGML_TYPE_F32 && (!b || b->type == GGML_TYPE_F32) &&
+    // CPU-only direct dense-time matmul; the pure-GGML fallback below
+    // expresses the same op via conv1d_f32(K=1) which is supported on
+    // every backend.
+    if (supertonic_use_cpu_custom_ops() &&
+        x->type == GGML_TYPE_F32 && w->type == GGML_TYPE_F32 && (!b || b->type == GGML_TYPE_F32) &&
         x->ne[2] == 1 && x->ne[3] == 1 && w->ne[1] == x->ne[1]) {
         auto dense_op = [](ggml_tensor * dst, int ith, int nth, void *) {
             const ggml_tensor * src = dst->src[0];
@@ -450,7 +462,9 @@ ggml_tensor * dense_matmul_time_ggml(ggml_context * ctx,
 }
 
 ggml_tensor * bias_gelu_ggml(ggml_context * ctx, ggml_tensor * x, ggml_tensor * b) {
-    if (x->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 && x->ne[2] == 1 && x->ne[3] == 1) {
+    // CPU-only fused bias + GELU; falls back to gelu(add(x, b)) on GPU.
+    if (supertonic_use_cpu_custom_ops() &&
+        x->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 && x->ne[2] == 1 && x->ne[3] == 1) {
         auto op = [](ggml_tensor * dst, int ith, int nth, void *) {
             const ggml_tensor * src = dst->src[0];
             const ggml_tensor * bias = dst->src[1];
@@ -482,7 +496,10 @@ ggml_tensor * pw2_residual_ggml(ggml_context * ctx,
                                 ggml_tensor * x,
                                 ggml_tensor * b,
                                 ggml_tensor * gamma) {
-    if (residual->type == GGML_TYPE_F32 && x->type == GGML_TYPE_F32 &&
+    // CPU-only fused (bias + gamma + residual); falls back to the
+    // 3-step add/mul/add chain on GPU.
+    if (supertonic_use_cpu_custom_ops() &&
+        residual->type == GGML_TYPE_F32 && x->type == GGML_TYPE_F32 &&
         b->type == GGML_TYPE_F32 && gamma->type == GGML_TYPE_F32 &&
         x->ne[2] == 1 && x->ne[3] == 1) {
         auto op = [](ggml_tensor * dst, int ith, int nth, void *) {
@@ -614,6 +631,11 @@ struct vector_text_attention_cache {
     int kv_len = 0;
     int n_heads = 0;
     int head_dim = 0;
+    // Cache key bit for the F16-K/V flash-attention path; rebuilding
+    // the graph when this flips matches the same correctness contract
+    // as the (q_len, kv_len, n_heads, head_dim) cache keys above.  See
+    // f16_attn handling in build_text_attention_cache().
+    bool f16_kv_attn = false;
     std::string out_w_source;
     std::string out_b_source;
     std::vector<uint8_t> buf;
@@ -646,6 +668,7 @@ void build_text_attention_cache(vector_text_attention_cache & cache,
     cache.kv_len = kv_len;
     cache.n_heads = n_heads;
     cache.head_dim = head_dim;
+    cache.f16_kv_attn = supertonic_use_f16_attn();
     cache.out_w_source = out_w_source;
     cache.out_b_source = out_b_source;
 
@@ -672,6 +695,22 @@ void build_text_attention_cache(vector_text_attention_cache & cache,
         head_dim, kv_len, n_heads, time_stride, head_stride, 0);
     ggml_tensor * v_in = ggml_view_3d(cache.ctx, cache.v_tc_in,
         head_dim, kv_len, n_heads, time_stride, head_stride, 0);
+
+    if (cache.f16_kv_attn) {
+        // Materialise K / V into contiguous F16 so backends with a
+        // `flash_attn_f32_f16` kernel (OpenCL on Adreno, see chatterbox
+        // PROGRESS.md "OpenCL optimization log") dispatch the
+        // mixed-precision path instead of the slower F32-only one.
+        // Q stays F32: cheaper to keep one operand at the higher
+        // precision than to round-trip the post-attention output back
+        // through F32 for the downstream dense projection.  Mirrors
+        // chatterbox's --cfm-f16-kv-attn flag and the basic_tfm()
+        // f16_kv_attn branch in src/chatterbox_tts.cpp.
+        ggml_tensor * k_f16 = ggml_new_tensor_3d(cache.ctx, GGML_TYPE_F16, head_dim, kv_len, n_heads);
+        ggml_tensor * v_f16 = ggml_new_tensor_3d(cache.ctx, GGML_TYPE_F16, head_dim, kv_len, n_heads);
+        k_in = ggml_cpy(cache.ctx, k_in, k_f16);
+        v_in = ggml_cpy(cache.ctx, v_in, v_f16);
+    }
 
     ggml_tensor * attn = ggml_flash_attn_ext(cache.ctx, q_in, k_in, v_in,
                                              nullptr, 1.0f/16.0f, 0.0f, 0.0f);
@@ -711,6 +750,7 @@ std::vector<float> run_text_attention_cache(vector_text_attention_cache & cache,
     if (cache.model != &model || cache.generation_id != model.generation_id ||
         cache.q_len != q_len || cache.kv_len != kv_len ||
         cache.n_heads != n_heads || cache.head_dim != head_dim ||
+        cache.f16_kv_attn != supertonic_use_f16_attn() ||
         cache.out_w_source != out_w_source || cache.out_b_source != out_b_source) {
         build_text_attention_cache(cache, model, q_len, kv_len, n_heads, head_dim, out_w_source, out_b_source);
     }
@@ -1247,7 +1287,10 @@ void build_tail_graph_cache(vector_tail_graph_cache & cache,
     }
     ggml_tensor * velocity_t = nullptr;
 #if defined(TTS_CPP_USE_ACCELERATE) || defined(TTS_CPP_USE_CBLAS)
-    if (!trace_outputs) {
+    // CPU-only fused tail-update op (BLAS matmul + mask + step scale +
+    // residual add).  The `else` branch below is the pure-GGML
+    // decomposition used on GPU backends and during trace runs.
+    if (!trace_outputs && supertonic_use_cpu_custom_ops()) {
         ggml_tensor * args[] = {
             tail,
             cache.tail_mask,
@@ -1506,6 +1549,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
                                        bool include_scalar_trace,
                                        bool include_ggml_trace,
                                        std::vector<float> * next_latent_tc_out) {
+    supertonic_op_dispatch_scope dispatch(model);
     try {
         scalar_trace.clear();
         ggml_trace.clear();
@@ -2580,6 +2624,7 @@ bool supertonic_vector_step_ggml(const supertonic_model & model,
                                  int total_steps,
                                  std::vector<float> & next_latent_out,
                                  std::string * error) {
+    supertonic_op_dispatch_scope dispatch(model);
     try {
         std::vector<supertonic_trace_tensor> scalar_trace;
         std::vector<supertonic_trace_tensor> ggml_trace;

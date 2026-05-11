@@ -129,6 +129,17 @@ struct Engine::Impl {
         try {
             supertonic_set_n_threads(model, opts.n_threads);
 
+            // F16 K/V attention dispatch: auto-enable on GPU backends,
+            // disable on CPU; user can override either way.  Captured
+            // into the model so supertonic_op_dispatch_scope picks it
+            // up on every synthesize() call.  See model.use_f16_attn
+            // in supertonic_internal.h.
+            if (opts.f16_attn < 0) {
+                model.use_f16_attn = !model.backend_is_cpu;
+            } else {
+                model.use_f16_attn = opts.f16_attn != 0;
+            }
+
             // Validate voice up front so we throw at construction
             // rather than mid-synthesize().
             const std::string voice = opts.voice.empty()

@@ -77,6 +77,28 @@ struct supertonic_model {
     ggml_context * ctx_w = nullptr;
     ggml_backend_buffer_t buffer_w = nullptr;
 
+    // True when the resolved compute backend is the GGML CPU backend; the
+    // BLAS-backed `ggml_custom_4d` fast paths in the vocoder / vector
+    // estimator depend on the backend's CPU-side scheduler invoking the
+    // op callbacks and the tensor data pointers being host-addressable.
+    // On any non-CPU backend (CUDA / Metal / Vulkan / OpenCL) the runtime
+    // must take the pure-GGML fallback path instead — that's what the
+    // supertonic_op_dispatch_scope below toggles inside the graph-build
+    // helpers.  Set once in load_supertonic_gguf() right after
+    // init_supertonic_backend() resolves the device and is stable for
+    // the lifetime of the model.  See `OpenCL bring-up` section in
+    // PROGRESS_SUPERTONIC.md for the rationale.
+    bool backend_is_cpu = true;
+    // When true, the per-step vector-estimator attention graphs materialise
+    // K/V into contiguous F16 before calling ggml_flash_attn_ext so OpenCL
+    // (and other backends carrying the mixed-precision kernel) dispatch
+    // the `flash_attn_f32_f16` path instead of the F32-only one — large
+    // win on Adreno (see chatterbox PROGRESS.md OpenCL log).  Defaults to
+    // false on CPU (the cblas attention path is already efficient there);
+    // engine.cpp auto-enables it when the resolved backend is non-CPU,
+    // matching chatterbox's --cfm-f16-kv-attn behaviour.
+    bool use_f16_attn = false;
+
     std::map<std::string, ggml_tensor *> tensors;
     std::unordered_map<std::string, ggml_tensor *> source_tensors;
     std::unordered_map<std::string, supertonic_voice_style> voices;
@@ -247,5 +269,40 @@ inline void supertonic_safe_gallocr_free(ggml_gallocr_t & allocr, uint64_t gener
     }
     allocr = nullptr;
 }
+
+// ---------------------------------------------------------------------
+// Op-dispatch policy for the GGML graph builders.
+//
+// The Supertonic vocoder + vector estimator carry several
+// `ggml_custom_4d` fast paths whose op callbacks invoke CBLAS / direct
+// pointer loads against the tensor `data` field.  Those paths are
+// only valid on the GGML CPU backend (the only backend that exposes
+// host-addressable tensor data inside an op callback and schedules
+// custom ops at all — every other backend rejects GGML_OP_CUSTOM
+// outright).  When the resolved compute backend is non-CPU
+// (CUDA / Metal / Vulkan / OpenCL) those sites must take the
+// pure-GGML fallback path so the graph stays GPU-executable.
+//
+// Threading the decision through every graph-build helper would
+// touch dozens of file-static functions across three TUs.  Instead,
+// each public forward entry point (e.g. supertonic_vocoder_forward_ggml,
+// supertonic_vector_step_ggml) instantiates a
+// `supertonic_op_dispatch_scope` on entry, which sets a thread_local
+// flag mirroring `model.backend_is_cpu`.  Graph-build helpers query
+// it via `supertonic_use_cpu_custom_ops()` at the cblas-vs-fallback
+// branch.  RAII teardown guarantees the flag is cleared even on
+// exception paths, so a CPU-only second engine in the same thread
+// still sees the default `true` after a GPU engine's forward returns.
+bool supertonic_use_cpu_custom_ops();
+bool supertonic_use_f16_attn();
+
+struct supertonic_op_dispatch_scope {
+    bool prev_use_cpu_custom_ops;
+    bool prev_use_f16_attn;
+    explicit supertonic_op_dispatch_scope(const supertonic_model & model);
+    ~supertonic_op_dispatch_scope();
+    supertonic_op_dispatch_scope(const supertonic_op_dispatch_scope &)             = delete;
+    supertonic_op_dispatch_scope & operator=(const supertonic_op_dispatch_scope &) = delete;
+};
 
 } // namespace tts_cpp::supertonic::detail

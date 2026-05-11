@@ -56,6 +56,14 @@ struct EngineOptions {
     int   n_threads     = 0;
     int   n_gpu_layers  = 0;
 
+    // F16 K/V flash-attention in the vector estimator.  When -1, the
+    // engine auto-enables this on GPU backends (non-CPU) and disables
+    // it on CPU; pass 1 / 0 to force the setting regardless of the
+    // resolved backend.  Triggers the OpenCL `flash_attn_f32_f16`
+    // path on Adreno; mirrors chatterbox's `--cfm-f16-kv-attn`.  No
+    // effect on CPU (the cblas attention path is already efficient).
+    int f16_attn = -1;
+
     // Optional path to a .npy file containing the initial noise tensor of
     // shape [1, latent_channels, latent_len] (float32).  When provided,
     // latent_len is taken from the npy file (overriding the duration-

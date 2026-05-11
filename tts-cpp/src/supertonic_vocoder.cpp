@@ -96,7 +96,15 @@ ggml_tensor * conv1d_causal_ggml(ggml_context * ctx,
                                  int dilation = 1) {
     const int K = (int) w->ne[0];
 #if defined(TTS_CPP_USE_ACCELERATE) || defined(TTS_CPP_USE_CBLAS)
-    if (K == 1 && dilation == 1 &&
+    // The cblas-backed `ggml_custom_4d` fast paths below assume the op
+    // callbacks run on the CPU scheduler with host-addressable tensor
+    // data.  On any non-CPU backend (CUDA / Metal / Vulkan / OpenCL)
+    // GGML_OP_CUSTOM is rejected outright, so fall through to the
+    // pure-GGML im2col + mul_mat path which dispatches natively on
+    // every backend.  Flag is thread_local, set by the outer
+    // supertonic_op_dispatch_scope at each forward entry point.
+    const bool use_cpu_custom = supertonic_use_cpu_custom_ops();
+    if (use_cpu_custom && K == 1 && dilation == 1 &&
         x->type == GGML_TYPE_F32 && w->type == GGML_TYPE_F32 &&
         (!b || b->type == GGML_TYPE_F32) &&
         x->ne[2] == 1 && x->ne[3] == 1) {
@@ -146,7 +154,7 @@ ggml_tensor * conv1d_causal_ggml(ggml_context * ctx,
                               1,
                               nullptr);
     }
-    if (K > 1 && dilation == 1 &&
+    if (use_cpu_custom && K > 1 && dilation == 1 &&
         x->type == GGML_TYPE_F32 && w->type == GGML_TYPE_F32 &&
         (!b || b->type == GGML_TYPE_F32) &&
         x->ne[2] == 1 && x->ne[3] == 1) {
@@ -279,6 +287,9 @@ ggml_tensor * depthwise_causal_custom_ggml(ggml_context * ctx,
                                            ggml_tensor * w,
                                            ggml_tensor * b,
                                            int dilation) {
+    // CPU-only fast path; GPU backends reject GGML_OP_CUSTOM and must
+    // fall through to the im2col + mul_mat path further below.
+    if (!supertonic_use_cpu_custom_ops()) return nullptr;
     const depthwise_causal_op_config * cfg = depthwise_causal_config(dilation);
     if (!cfg || x->type != GGML_TYPE_F32 || w->type != GGML_TYPE_F32 || b->type != GGML_TYPE_F32) {
         return nullptr;
@@ -290,6 +301,32 @@ ggml_tensor * depthwise_causal_custom_ggml(ggml_context * ctx,
                           depthwise_causal_custom_op,
                           GGML_N_TASKS_MAX,
                           const_cast<depthwise_causal_op_config *>(cfg));
+}
+
+// Portable LeakyReLU(x, α) = (1-α)·relu(x) + α·x.
+//
+// `ggml_leaky_relu` lowers to `GGML_OP_LEAKY_RELU`, which is a CPU
+// builtin but only landed in `ggml-opencl` via the chatterbox
+// `patches/ggml-opencl-chatterbox-ops.patch` (see chatterbox
+// PROGRESS.md, "What was missing").  Builds that consume the
+// QVAC `ggml-speech` vcpkg port get the patched op, but a plain
+// upstream ggml build (or any other GPU backend that hasn't
+// implemented `LEAKY_RELU` yet) would reject the op at graph time.
+// Routing through this helper keeps the vocoder graph executable on
+// every backend: on CPU we keep the single-fused op for the inner
+// loop savings; on a GPU backend we decompose into RELU + SCALE +
+// ADD, all of which are universally supported (incl. baseline
+// upstream OpenCL — see ggml_opencl_supports_op() in
+// ggml/src/ggml-opencl/ggml-opencl.cpp).
+ggml_tensor * leaky_relu_portable_ggml(ggml_context * ctx, ggml_tensor * x, float alpha) {
+    if (supertonic_use_cpu_custom_ops()) {
+        // CPU backend: keep the fused builtin (cheaper).
+        return ggml_leaky_relu(ctx, x, alpha, false);
+    }
+    // GPU backends: (1 - α) · relu(x) + α · x.
+    ggml_tensor * pos = ggml_scale(ctx, ggml_relu(ctx, x), 1.0f - alpha);
+    ggml_tensor * scaled = ggml_scale(ctx, x, alpha);
+    return ggml_add(ctx, pos, scaled);
 }
 
 ggml_tensor * depthwise_conv1d_causal_ggml(ggml_context * ctx,
@@ -412,7 +449,7 @@ void build_supertonic_vocoder_cache(vocoder_graph_cache & cache,
     x = conv1d_causal_ggml(cache.ctx, x, model.vocoder.head1_w, model.vocoder.head1_b);
     ggml_set_name(x, "vocoder_head1");
     const float prelu = scalar_f32_tensor(model.vocoder.head_prelu);
-    x = ggml_leaky_relu(cache.ctx, x, prelu, false);
+    x = leaky_relu_portable_ggml(cache.ctx, x, prelu);
     ggml_set_name(x, "vocoder_prelu");
     x = conv1d_causal_ggml(cache.ctx, x, model.vocoder.head2_w, nullptr);
     ggml_set_name(x, "wav");
@@ -695,6 +732,10 @@ bool supertonic_vocoder_forward_ggml(const supertonic_model & model,
                                      int latent_len,
                                      std::vector<float> & wav_out,
                                      std::string * error) {
+    // Sets thread_local CPU-custom-op + F16-attn flags for the duration
+    // of this call so the graph-build helpers below pick the backend-
+    // appropriate dispatch path; RAII teardown handles exceptions.
+    supertonic_op_dispatch_scope dispatch(model);
     try {
         auto profile_last = std::chrono::steady_clock::now();
         const int C_latent = model.hparams.latent_dim;
@@ -846,6 +887,7 @@ bool supertonic_vocoder_trace_ggml(const supertonic_model & model,
                                    int latent_len,
                                    std::vector<supertonic_trace_tensor> & trace_out,
                                    std::string * error) {
+    supertonic_op_dispatch_scope dispatch(model);
     try {
         trace_out.clear();
         const int C_latent = model.hparams.latent_dim;
@@ -925,7 +967,7 @@ bool supertonic_vocoder_trace_ggml(const supertonic_model & model,
         ggml_set_name(cur, "head1");
         ggml_set_output(cur);
         ggml_build_forward_expand(gf, cur);
-        cur = ggml_leaky_relu(ctx, cur, scalar_f32_tensor(model.vocoder.head_prelu), false);
+        cur = leaky_relu_portable_ggml(ctx, cur, scalar_f32_tensor(model.vocoder.head_prelu));
         ggml_set_name(cur, "prelu");
         ggml_set_output(cur);
         ggml_build_forward_expand(gf, cur);
