@@ -943,7 +943,7 @@ jobs:
           cmake --version
           where cmake
           if "${{ matrix.cuda-toolkit }}" == "11.8.0" (
-            set CUDA_FLAGS=-allow-unsupported-compiler -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR
+            set CUDA_FLAGS=-allow-unsupported-compiler -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR -D__CUDA_NO_HALF_CONVERSIONS__
           ) else (
             set CUDA_FLAGS=
           )
