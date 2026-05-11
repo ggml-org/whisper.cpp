@@ -93,10 +93,12 @@ ggml_tensor * conv1d_causal_ggml(ggml_context * ctx,
                                  ggml_tensor * x,
                                  ggml_tensor * w,
                                  ggml_tensor * b,
+                                 bool use_cpu_fastpath,
                                  int dilation = 1) {
     const int K = (int) w->ne[0];
 #if defined(TTS_CPP_USE_ACCELERATE) || defined(TTS_CPP_USE_CBLAS)
-    if (K == 1 && dilation == 1 &&
+    if (use_cpu_fastpath &&
+        K == 1 && dilation == 1 &&
         x->type == GGML_TYPE_F32 && w->type == GGML_TYPE_F32 &&
         (!b || b->type == GGML_TYPE_F32) &&
         x->ne[2] == 1 && x->ne[3] == 1) {
@@ -146,7 +148,8 @@ ggml_tensor * conv1d_causal_ggml(ggml_context * ctx,
                               1,
                               nullptr);
     }
-    if (K > 1 && dilation == 1 &&
+    if (use_cpu_fastpath &&
+        K > 1 && dilation == 1 &&
         x->type == GGML_TYPE_F32 && w->type == GGML_TYPE_F32 &&
         (!b || b->type == GGML_TYPE_F32) &&
         x->ne[2] == 1 && x->ne[3] == 1) {
@@ -278,9 +281,11 @@ ggml_tensor * depthwise_causal_custom_ggml(ggml_context * ctx,
                                            ggml_tensor * x,
                                            ggml_tensor * w,
                                            ggml_tensor * b,
-                                           int dilation) {
+                                           int dilation,
+                                           bool use_cpu_fastpath) {
     const depthwise_causal_op_config * cfg = depthwise_causal_config(dilation);
-    if (!cfg || x->type != GGML_TYPE_F32 || w->type != GGML_TYPE_F32 || b->type != GGML_TYPE_F32) {
+    if (!use_cpu_fastpath ||
+        !cfg || x->type != GGML_TYPE_F32 || w->type != GGML_TYPE_F32 || b->type != GGML_TYPE_F32) {
         return nullptr;
     }
     ggml_tensor * args[] = { x, w, b };
@@ -296,8 +301,9 @@ ggml_tensor * depthwise_conv1d_causal_ggml(ggml_context * ctx,
                                            ggml_tensor * x,
                                            ggml_tensor * w,
                                            ggml_tensor * b,
-                                           int dilation) {
-    if (ggml_tensor * custom = depthwise_causal_custom_ggml(ctx, x, w, b, dilation)) {
+                                           int dilation,
+                                           bool use_cpu_fastpath) {
+    if (ggml_tensor * custom = depthwise_causal_custom_ggml(ctx, x, w, b, dilation, use_cpu_fastpath)) {
         return custom;
     }
     const int K = (int) w->ne[0];
@@ -324,14 +330,15 @@ ggml_tensor * layer_norm_channel_ggml(ggml_context * ctx,
 ggml_tensor * convnext_block_ggml(ggml_context * ctx,
                                   const supertonic_vocoder_convnext_weights & w,
                                   ggml_tensor * x,
-                                  int idx) {
+                                  int idx,
+                                  bool use_cpu_fastpath) {
     static const int dilations[10] = {1, 2, 4, 1, 2, 4, 1, 1, 1, 1};
     ggml_tensor * residual = x;
-    ggml_tensor * y = depthwise_conv1d_causal_ggml(ctx, x, w.dw_w, w.dw_b, dilations[idx]);
+    ggml_tensor * y = depthwise_conv1d_causal_ggml(ctx, x, w.dw_w, w.dw_b, dilations[idx], use_cpu_fastpath);
     y = layer_norm_channel_ggml(ctx, y, w.norm_g, w.norm_b);
-    y = conv1d_causal_ggml(ctx, y, w.pw1_w, w.pw1_b);
+    y = conv1d_causal_ggml(ctx, y, w.pw1_w, w.pw1_b, use_cpu_fastpath);
     y = ggml_gelu_erf(ctx, y);
-    y = conv1d_causal_ggml(ctx, y, w.pw2_w, w.pw2_b);
+    y = conv1d_causal_ggml(ctx, y, w.pw2_w, w.pw2_b, use_cpu_fastpath);
     y = ggml_mul(ctx, y, repeat_like(ctx, w.gamma, y));
     return ggml_add(ctx, residual, y);
 }
@@ -366,6 +373,7 @@ void free_vocoder_cache(vocoder_graph_cache & cache) {
 void build_supertonic_vocoder_cache(vocoder_graph_cache & cache,
                                     const supertonic_model & model,
                                     int latent_len) {
+    const bool use_cpu_fastpath = model_prefers_cpu_kernels(model);
     free_vocoder_cache(cache);
     cache.model = &model;
     cache.generation_id = model.generation_id;
@@ -398,10 +406,10 @@ void build_supertonic_vocoder_cache(vocoder_graph_cache & cache,
     x = ggml_add(cache.ctx, x, repeat_like(cache.ctx, model.vocoder.latent_mean, x));
     ggml_set_name(x, "vocoder_denorm");
 
-    x = conv1d_causal_ggml(cache.ctx, x, model.vocoder.embed_w, model.vocoder.embed_b);
+    x = conv1d_causal_ggml(cache.ctx, x, model.vocoder.embed_w, model.vocoder.embed_b, use_cpu_fastpath);
     ggml_set_name(x, "vocoder_embed");
     for (int i = 0; i < 10; ++i) {
-        x = convnext_block_ggml(cache.ctx, model.vocoder.convnext[(size_t) i], x, i);
+        x = convnext_block_ggml(cache.ctx, model.vocoder.convnext[(size_t) i], x, i, use_cpu_fastpath);
         ggml_set_name(x, ("vocoder_convnext_" + std::to_string(i)).c_str());
     }
 
@@ -409,12 +417,12 @@ void build_supertonic_vocoder_cache(vocoder_graph_cache & cache,
     x = ggml_add(cache.ctx, x, repeat_like(cache.ctx, cache.bn_shift, x));
     ggml_set_name(x, "vocoder_final_norm");
 
-    x = conv1d_causal_ggml(cache.ctx, x, model.vocoder.head1_w, model.vocoder.head1_b);
+    x = conv1d_causal_ggml(cache.ctx, x, model.vocoder.head1_w, model.vocoder.head1_b, use_cpu_fastpath);
     ggml_set_name(x, "vocoder_head1");
     const float prelu = scalar_f32_tensor(model.vocoder.head_prelu);
     x = ggml_leaky_relu(cache.ctx, x, prelu, false);
     ggml_set_name(x, "vocoder_prelu");
-    x = conv1d_causal_ggml(cache.ctx, x, model.vocoder.head2_w, nullptr);
+    x = conv1d_causal_ggml(cache.ctx, x, model.vocoder.head2_w, nullptr, use_cpu_fastpath);
     ggml_set_name(x, "wav");
     ggml_set_output(x);
     ggml_build_forward_expand(cache.gf, x);
@@ -846,6 +854,7 @@ bool supertonic_vocoder_trace_ggml(const supertonic_model & model,
                                    int latent_len,
                                    std::vector<supertonic_trace_tensor> & trace_out,
                                    std::string * error) {
+    const bool use_cpu_fastpath = model_prefers_cpu_kernels(model);
     try {
         trace_out.clear();
         const int C_latent = model.hparams.latent_dim;
@@ -871,13 +880,13 @@ bool supertonic_vocoder_trace_ggml(const supertonic_model & model,
         ggml_set_output(x);
         ggml_build_forward_expand(gf, x);
 
-        ggml_tensor * embed = conv1d_causal_ggml(ctx, x, model.vocoder.embed_w, model.vocoder.embed_b);
+        ggml_tensor * embed = conv1d_causal_ggml(ctx, x, model.vocoder.embed_w, model.vocoder.embed_b, use_cpu_fastpath);
         ggml_set_name(embed, "embed");
         ggml_set_output(embed);
         ggml_build_forward_expand(gf, embed);
 
         const auto & cw = model.vocoder.convnext[0];
-        ggml_tensor * dw = depthwise_conv1d_causal_ggml(ctx, embed, cw.dw_w, cw.dw_b, 1);
+        ggml_tensor * dw = depthwise_conv1d_causal_ggml(ctx, embed, cw.dw_w, cw.dw_b, 1, use_cpu_fastpath);
         ggml_set_name(dw, "block0_dw");
         ggml_set_output(dw);
         ggml_build_forward_expand(gf, dw);
@@ -885,7 +894,7 @@ bool supertonic_vocoder_trace_ggml(const supertonic_model & model,
         ggml_set_name(norm, "block0_norm");
         ggml_set_output(norm);
         ggml_build_forward_expand(gf, norm);
-        ggml_tensor * pw1 = conv1d_causal_ggml(ctx, norm, cw.pw1_w, cw.pw1_b);
+        ggml_tensor * pw1 = conv1d_causal_ggml(ctx, norm, cw.pw1_w, cw.pw1_b, use_cpu_fastpath);
         ggml_set_name(pw1, "block0_pw1");
         ggml_set_output(pw1);
         ggml_build_forward_expand(gf, pw1);
@@ -893,7 +902,7 @@ bool supertonic_vocoder_trace_ggml(const supertonic_model & model,
         ggml_set_name(gelu0, "block0_gelu");
         ggml_set_output(gelu0);
         ggml_build_forward_expand(gf, gelu0);
-        ggml_tensor * pw2 = conv1d_causal_ggml(ctx, gelu0, cw.pw2_w, cw.pw2_b);
+        ggml_tensor * pw2 = conv1d_causal_ggml(ctx, gelu0, cw.pw2_w, cw.pw2_b, use_cpu_fastpath);
         ggml_set_name(pw2, "block0_pw2");
         ggml_set_output(pw2);
         ggml_build_forward_expand(gf, pw2);
@@ -904,7 +913,7 @@ bool supertonic_vocoder_trace_ggml(const supertonic_model & model,
 
         ggml_tensor * cur = out0;
         for (int i = 1; i < 10; ++i) {
-            cur = convnext_block_ggml(ctx, model.vocoder.convnext[(size_t) i], cur, i);
+            cur = convnext_block_ggml(ctx, model.vocoder.convnext[(size_t) i], cur, i, use_cpu_fastpath);
             ggml_set_name(cur, ("block" + std::to_string(i) + "_out").c_str());
             ggml_set_output(cur);
             ggml_build_forward_expand(gf, cur);
@@ -921,7 +930,7 @@ bool supertonic_vocoder_trace_ggml(const supertonic_model & model,
         ggml_set_name(cur, "final_norm");
         ggml_set_output(cur);
         ggml_build_forward_expand(gf, cur);
-        cur = conv1d_causal_ggml(ctx, cur, model.vocoder.head1_w, model.vocoder.head1_b);
+        cur = conv1d_causal_ggml(ctx, cur, model.vocoder.head1_w, model.vocoder.head1_b, use_cpu_fastpath);
         ggml_set_name(cur, "head1");
         ggml_set_output(cur);
         ggml_build_forward_expand(gf, cur);
@@ -929,7 +938,7 @@ bool supertonic_vocoder_trace_ggml(const supertonic_model & model,
         ggml_set_name(cur, "prelu");
         ggml_set_output(cur);
         ggml_build_forward_expand(gf, cur);
-        cur = conv1d_causal_ggml(ctx, cur, model.vocoder.head2_w, nullptr);
+        cur = conv1d_causal_ggml(ctx, cur, model.vocoder.head2_w, nullptr, use_cpu_fastpath);
         ggml_set_name(cur, "wav");
         ggml_set_output(cur);
         ggml_build_forward_expand(gf, cur);

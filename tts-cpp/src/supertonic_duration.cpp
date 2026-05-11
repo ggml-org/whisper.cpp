@@ -59,7 +59,9 @@ ggml_tensor * conv1d_f32(ggml_context * ctx,
                          ggml_tensor * input,
                          int stride,
                          int padding,
-                         int dilation) {
+                         int dilation,
+                         [[maybe_unused]] bool use_cpu_fastpath) {
+    // duration uses the pure-graph path unconditionally; no CPU fast path.
     ggml_tensor * im2col = ggml_im2col(ctx, kernel, input, stride, 0, padding, 0, dilation, 0, false, GGML_TYPE_F32);
     ggml_tensor * result = ggml_mul_mat(ctx,
         ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1]),
@@ -88,7 +90,8 @@ ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
                                   ggml_tensor * x,
                                   ggml_tensor * w,
                                   ggml_tensor * b,
-                                  int dilation) {
+                                  int dilation,
+                                  [[maybe_unused]] bool use_cpu_fastpath) {
     const int K = (int) w->ne[0];
     const int pad_left = ((K - 1) * dilation) / 2;
     const int pad_right = (K - 1) * dilation - pad_left;
@@ -100,7 +103,7 @@ ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
     return ggml_add(ctx, y, repeat_like(ctx, b, y));
 }
 
-ggml_tensor * layer_norm_ggml(ggml_context * ctx, ggml_tensor * x, ggml_tensor * g, ggml_tensor * b) {
+ggml_tensor * layer_norm_ggml(ggml_context * ctx, ggml_tensor * x, ggml_tensor * g, ggml_tensor * b, [[maybe_unused]] bool use_cpu_fastpath) {
     ggml_tensor * xt = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
     xt = ggml_norm(ctx, xt, 1e-6f);
     xt = ggml_mul(ctx, xt, repeat_like(ctx, g, xt));
@@ -112,18 +115,19 @@ ggml_tensor * duration_convnext_ggml(ggml_context * ctx,
                                      const supertonic_model & model,
                                      const std::string & p,
                                      ggml_tensor * x) {
+    const bool use_cpu_fastpath = model_prefers_cpu_kernels(model);
     ggml_tensor * residual = x;
     ggml_tensor * y = depthwise_same_ggml(ctx, x,
         require_source_tensor(model, p + ".dwconv.weight"),
         require_source_tensor(model, p + ".dwconv.bias"),
-        1);
+        1, use_cpu_fastpath);
     y = layer_norm_ggml(ctx, y,
         require_source_tensor(model, p + ".norm.norm.weight"),
-        require_source_tensor(model, p + ".norm.norm.bias"));
-    y = conv1d_f32(ctx, require_source_tensor(model, p + ".pwconv1.weight"), y, 1, 0, 1);
+        require_source_tensor(model, p + ".norm.norm.bias"), use_cpu_fastpath);
+    y = conv1d_f32(ctx, require_source_tensor(model, p + ".pwconv1.weight"), y, 1, 0, 1, use_cpu_fastpath);
     y = ggml_add(ctx, y, repeat_like(ctx, require_source_tensor(model, p + ".pwconv1.bias"), y));
     y = ggml_gelu_erf(ctx, y);
-    y = conv1d_f32(ctx, require_source_tensor(model, p + ".pwconv2.weight"), y, 1, 0, 1);
+    y = conv1d_f32(ctx, require_source_tensor(model, p + ".pwconv2.weight"), y, 1, 0, 1, use_cpu_fastpath);
     y = ggml_add(ctx, y, repeat_like(ctx, require_source_tensor(model, p + ".pwconv2.bias"), y));
     y = ggml_mul(ctx, y, repeat_like(ctx, require_source_tensor(model, p + ".gamma"), y));
     return ggml_add(ctx, residual, y);
@@ -414,6 +418,7 @@ static bool duration_sentence_proj_ggml_impl(const supertonic_model & model,
                                              bool include_scalar_trace,
                                              bool include_ggml_trace,
                                              std::vector<float> * sentence_proj_out) {
+    const bool use_cpu_fastpath = model_prefers_cpu_kernels(model);
     try {
         if (scalar_trace) scalar_trace->clear();
         if (ggml_trace) ggml_trace->clear();
@@ -531,13 +536,13 @@ static bool duration_sentence_proj_ggml_impl(const supertonic_model & model,
             ggml_set_name(y, name.c_str()); ggml_set_output(y);
             ggml_build_forward_expand(gf, y);
         }
-        ggml_tensor * q = conv1d_f32(ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_q.weight"), y, 1, 0, 1);
+        ggml_tensor * q = conv1d_f32(ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_q.weight"), y, 1, 0, 1, use_cpu_fastpath);
         q = ggml_add(ctx, q, repeat_like(ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_q.bias"), q));
         ggml_set_name(q, "duration_attn0_q"); ggml_set_output(q); ggml_build_forward_expand(gf, q);
-        ggml_tensor * k = conv1d_f32(ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_k.weight"), y, 1, 0, 1);
+        ggml_tensor * k = conv1d_f32(ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_k.weight"), y, 1, 0, 1, use_cpu_fastpath);
         k = ggml_add(ctx, k, repeat_like(ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_k.bias"), k));
         ggml_set_name(k, "duration_attn0_k"); ggml_set_output(k); ggml_build_forward_expand(gf, k);
-        ggml_tensor * v = conv1d_f32(ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_v.weight"), y, 1, 0, 1);
+        ggml_tensor * v = conv1d_f32(ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_v.weight"), y, 1, 0, 1, use_cpu_fastpath);
         v = ggml_add(ctx, v, repeat_like(ctx, require_source_tensor(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_v.bias"), v));
         ggml_set_name(v, "duration_attn0_v"); ggml_set_output(v); ggml_build_forward_expand(gf, v);
 

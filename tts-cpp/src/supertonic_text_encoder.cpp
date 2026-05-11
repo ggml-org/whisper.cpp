@@ -113,7 +113,10 @@ ggml_tensor * conv1d_f32(ggml_context * ctx,
                          ggml_tensor * input,
                          int stride,
                          int padding,
-                         int dilation) {
+                         int dilation,
+                         [[maybe_unused]] bool use_cpu_fastpath) {
+    // text_encoder uses the pure-graph path unconditionally; no CPU fast path
+    // here so use_cpu_fastpath is accepted for call-site uniformity but unused.
     ggml_tensor * im2col = ggml_im2col(ctx, kernel, input, stride, 0, padding, 0, dilation, 0, false, GGML_TYPE_F32);
     ggml_tensor * result = ggml_mul_mat(ctx,
         ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1]),
@@ -138,7 +141,8 @@ ggml_tensor * edge_clamp_pad_1d(ggml_context * ctx, ggml_tensor * x, int pad_lef
 ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
                                   ggml_tensor * x,
                                   ggml_tensor * w,
-                                  ggml_tensor * b) {
+                                  ggml_tensor * b,
+                                  [[maybe_unused]] bool use_cpu_fastpath) {
     const int K = (int)w->ne[0];
     const int pad_left = (K - 1) / 2;
     const int pad_right = (K - 1) - pad_left;
@@ -150,7 +154,7 @@ ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
     return ggml_add(ctx, y, repeat_like(ctx, b, y));
 }
 
-ggml_tensor * layer_norm_ggml(ggml_context * ctx, ggml_tensor * x, ggml_tensor * g, ggml_tensor * b) {
+ggml_tensor * layer_norm_ggml(ggml_context * ctx, ggml_tensor * x, ggml_tensor * g, ggml_tensor * b, [[maybe_unused]] bool use_cpu_fastpath) {
     ggml_tensor * xt = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
     xt = ggml_norm(ctx, xt, 1e-6f);
     xt = ggml_mul(ctx, xt, repeat_like(ctx, g, xt));
@@ -161,10 +165,11 @@ ggml_tensor * layer_norm_ggml(ggml_context * ctx, ggml_tensor * x, ggml_tensor *
 ggml_tensor * dense_matmul_time_ggml(ggml_context * ctx,
                                      ggml_tensor * x,
                                      ggml_tensor * w,
-                                     ggml_tensor * b) {
+                                     ggml_tensor * b,
+                                     bool use_cpu_fastpath) {
     ggml_tensor * wt = ggml_cont(ctx, ggml_transpose(ctx, w));
     ggml_tensor * kernel = ggml_reshape_3d(ctx, wt, 1, w->ne[1], w->ne[0]);
-    ggml_tensor * y = conv1d_f32(ctx, kernel, x, 1, 0, 1);
+    ggml_tensor * y = conv1d_f32(ctx, kernel, x, 1, 0, 1, use_cpu_fastpath);
     if (b) y = ggml_add(ctx, y, repeat_like(ctx, b, y));
     return y;
 }
@@ -184,17 +189,18 @@ ggml_tensor * text_convnext_ggml(ggml_context * ctx,
                                 const supertonic_model & model,
                                 const std::string & p,
                                 ggml_tensor * x) {
+    const bool use_cpu_fastpath = model_prefers_cpu_kernels(model);
     ggml_tensor * residual = x;
     ggml_tensor * y = depthwise_same_ggml(ctx, x,
         require_source_tensor(model, p + ".dwconv.weight"),
-        require_source_tensor(model, p + ".dwconv.bias"));
+        require_source_tensor(model, p + ".dwconv.bias"), use_cpu_fastpath);
     y = layer_norm_ggml(ctx, y,
         require_source_tensor(model, p + ".norm.norm.weight"),
-        require_source_tensor(model, p + ".norm.norm.bias"));
-    y = conv1d_f32(ctx, require_source_tensor(model, p + ".pwconv1.weight"), y, 1, 0, 1);
+        require_source_tensor(model, p + ".norm.norm.bias"), use_cpu_fastpath);
+    y = conv1d_f32(ctx, require_source_tensor(model, p + ".pwconv1.weight"), y, 1, 0, 1, use_cpu_fastpath);
     y = ggml_add(ctx, y, repeat_like(ctx, require_source_tensor(model, p + ".pwconv1.bias"), y));
     y = ggml_gelu_erf(ctx, y);
-    y = conv1d_f32(ctx, require_source_tensor(model, p + ".pwconv2.weight"), y, 1, 0, 1);
+    y = conv1d_f32(ctx, require_source_tensor(model, p + ".pwconv2.weight"), y, 1, 0, 1, use_cpu_fastpath);
     y = ggml_add(ctx, y, repeat_like(ctx, require_source_tensor(model, p + ".pwconv2.bias"), y));
     y = ggml_mul(ctx, y, repeat_like(ctx, require_source_tensor(model, p + ".gamma"), y));
     return ggml_add(ctx, residual, y);
@@ -405,6 +411,7 @@ void build_relpos_cache(text_relpos_graph_cache & cache,
                         int idx,
                         int L,
                         int C) {
+    const bool use_cpu_fastpath = model_prefers_cpu_kernels(m);
     free_relpos_cache(cache);
     cache.model = &m;
     cache.generation_id = m.generation_id;
@@ -479,7 +486,7 @@ void build_relpos_cache(text_relpos_graph_cache & cache,
 
     ggml_tensor * out_lc_t = ggml_cont(cache.ctx, ggml_permute(cache.ctx, out, 1, 0, 2, 3));
     out_lc_t = ggml_reshape_2d(cache.ctx, out_lc_t, L, C);
-    out_lc_t = conv1d_f32(cache.ctx, require_source_tensor(m, p + ".conv_o.weight"), out_lc_t, 1, 0, 1);
+    out_lc_t = conv1d_f32(cache.ctx, require_source_tensor(m, p + ".conv_o.weight"), out_lc_t, 1, 0, 1, use_cpu_fastpath);
     out_lc_t = ggml_add(cache.ctx, out_lc_t, repeat_like(cache.ctx, require_source_tensor(m, p + ".conv_o.bias"), out_lc_t));
     ggml_set_name(out_lc_t, "relpos_out"); ggml_set_output(out_lc_t);
     ggml_build_forward_expand(cache.gf, out_lc_t);
@@ -556,6 +563,7 @@ void build_ffn_cache(text_ffn_graph_cache & cache,
                      int idx,
                      int L,
                      int C) {
+    const bool use_cpu_fastpath = model_prefers_cpu_kernels(m);
     free_ffn_cache(cache);
     cache.model = &m;
     cache.generation_id = m.generation_id;
@@ -572,10 +580,10 @@ void build_ffn_cache(text_ffn_graph_cache & cache,
     cache.x_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, L, C);
     ggml_set_name(cache.x_in, "text_ffn_in"); ggml_set_input(cache.x_in);
 
-    ggml_tensor * y = conv1d_f32(cache.ctx, require_source_tensor(m, p + ".conv_1.weight"), cache.x_in, 1, 0, 1);
+    ggml_tensor * y = conv1d_f32(cache.ctx, require_source_tensor(m, p + ".conv_1.weight"), cache.x_in, 1, 0, 1, use_cpu_fastpath);
     y = ggml_add(cache.ctx, y, repeat_like(cache.ctx, require_source_tensor(m, p + ".conv_1.bias"), y));
     y = ggml_relu(cache.ctx, y);
-    y = conv1d_f32(cache.ctx, require_source_tensor(m, p + ".conv_2.weight"), y, 1, 0, 1);
+    y = conv1d_f32(cache.ctx, require_source_tensor(m, p + ".conv_2.weight"), y, 1, 0, 1, use_cpu_fastpath);
     y = ggml_add(cache.ctx, y, repeat_like(cache.ctx, require_source_tensor(m, p + ".conv_2.bias"), y));
     ggml_set_name(y, "text_ffn_out"); ggml_set_output(y);
     ggml_build_forward_expand(cache.gf, y);
@@ -702,6 +710,7 @@ void build_speech_attention_cache(speech_attention_cache & cache,
                                   int Lctx,
                                   const std::string & out_w_source,
                                   const std::string & out_b_source) {
+    const bool use_cpu_fastpath = model_prefers_cpu_kernels(m);
     free_speech_attention_cache(cache);
     cache.model = &m;
     cache.generation_id = m.generation_id;
@@ -727,7 +736,7 @@ void build_speech_attention_cache(speech_attention_cache & cache,
     ggml_tensor * ctx_tc = ggml_cont(cache.ctx, ggml_transpose(cache.ctx, attn));
     ggml_tensor * out = dense_matmul_time_ggml(cache.ctx, ctx_tc,
         require_source_tensor(m, out_w_source),
-        require_source_tensor(m, out_b_source));
+        require_source_tensor(m, out_b_source), use_cpu_fastpath);
     ggml_set_name(out, "speech_attn_out"); ggml_set_output(out); ggml_build_forward_expand(cache.gf, out);
     cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
     if (!cache.allocr) throw std::runtime_error("ggml_gallocr_new speech attention cache failed");
@@ -741,6 +750,7 @@ void speech_prompted_attention_ggml(const supertonic_model & m, int idx,
                                     const std::vector<float> & x_lc, int L,
                                     const float * style_ttl,
                                     std::vector<float> & out_lc) {
+    const bool use_cpu_fastpath = model_prefers_cpu_kernels(m);
     const int C = 256;
     const int half = 128;
     const int Lctx = 50;
@@ -763,11 +773,11 @@ void speech_prompted_attention_ggml(const supertonic_model & m, int idx,
     ggml_set_name(style_in, "speech_attn_style"); ggml_set_input(style_in);
     ggml_tensor * q = dense_matmul_time_ggml(ctx, x_in,
         require_source_tensor(m, q_w),
-        require_source_tensor(m, p + ".W_query.linear.bias"));
+        require_source_tensor(m, p + ".W_query.linear.bias"), use_cpu_fastpath);
     ggml_set_name(q, "speech_attn_q"); ggml_set_output(q); ggml_build_forward_expand(gf, q);
     ggml_tensor * v = dense_matmul_time_ggml(ctx, style_in,
         require_source_tensor(m, v_w),
-        require_source_tensor(m, p + ".W_value.linear.bias"));
+        require_source_tensor(m, p + ".W_value.linear.bias"), use_cpu_fastpath);
     ggml_set_name(v, "speech_attn_v"); ggml_set_output(v); ggml_build_forward_expand(gf, v);
 
     ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
@@ -1001,6 +1011,7 @@ bool supertonic_text_encoder_trace_ggml(const supertonic_model & model,
                                         std::vector<supertonic_trace_tensor> & scalar_trace,
                                         std::vector<supertonic_trace_tensor> & ggml_trace,
                                         std::string * error) {
+    const bool use_cpu_fastpath = model_prefers_cpu_kernels(model);
     try {
         scalar_trace.clear();
         ggml_trace.clear();
@@ -1048,13 +1059,13 @@ bool supertonic_text_encoder_trace_ggml(const supertonic_model & model,
             ggml_set_name(y, name.c_str()); ggml_set_output(y);
             ggml_build_forward_expand(gf, y);
         }
-        ggml_tensor * q = conv1d_f32(ctx, require_source_tensor(model, "text_encoder:tts.ttl.text_encoder.attn_encoder.attn_layers.0.conv_q.weight"), y, 1, 0, 1);
+        ggml_tensor * q = conv1d_f32(ctx, require_source_tensor(model, "text_encoder:tts.ttl.text_encoder.attn_encoder.attn_layers.0.conv_q.weight"), y, 1, 0, 1, use_cpu_fastpath);
         q = ggml_add(ctx, q, repeat_like(ctx, require_source_tensor(model, "text_encoder:tts.ttl.text_encoder.attn_encoder.attn_layers.0.conv_q.bias"), q));
         ggml_set_name(q, "text_encoder_attn0_q"); ggml_set_output(q); ggml_build_forward_expand(gf, q);
-        ggml_tensor * k = conv1d_f32(ctx, require_source_tensor(model, "text_encoder:tts.ttl.text_encoder.attn_encoder.attn_layers.0.conv_k.weight"), y, 1, 0, 1);
+        ggml_tensor * k = conv1d_f32(ctx, require_source_tensor(model, "text_encoder:tts.ttl.text_encoder.attn_encoder.attn_layers.0.conv_k.weight"), y, 1, 0, 1, use_cpu_fastpath);
         k = ggml_add(ctx, k, repeat_like(ctx, require_source_tensor(model, "text_encoder:tts.ttl.text_encoder.attn_encoder.attn_layers.0.conv_k.bias"), k));
         ggml_set_name(k, "text_encoder_attn0_k"); ggml_set_output(k); ggml_build_forward_expand(gf, k);
-        ggml_tensor * v = conv1d_f32(ctx, require_source_tensor(model, "text_encoder:tts.ttl.text_encoder.attn_encoder.attn_layers.0.conv_v.weight"), y, 1, 0, 1);
+        ggml_tensor * v = conv1d_f32(ctx, require_source_tensor(model, "text_encoder:tts.ttl.text_encoder.attn_encoder.attn_layers.0.conv_v.weight"), y, 1, 0, 1, use_cpu_fastpath);
         v = ggml_add(ctx, v, repeat_like(ctx, require_source_tensor(model, "text_encoder:tts.ttl.text_encoder.attn_encoder.attn_layers.0.conv_v.bias"), v));
         ggml_set_name(v, "text_encoder_attn0_v"); ggml_set_output(v); ggml_build_forward_expand(gf, v);
         ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));

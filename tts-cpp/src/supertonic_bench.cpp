@@ -45,7 +45,8 @@ void usage(const char * argv0) {
         "usage: %s --model supertonic2.gguf --text TEXT\n"
         "          [--voice M1] [--language en] [--steps 5] [--speed 1.05]\n"
         "          [--seed 42] [--noise-npy /path/to/noise.npy]\n"
-        "          [--runs 5] [--warmup 1] [--threads N] [--json-out FILE]\n",
+        "          [--runs 5] [--warmup 1] [--threads N] [--n-gpu-layers N]\n"
+        "          [--json-out FILE]\n",
         argv0);
 }
 
@@ -116,6 +117,7 @@ int main(int argc, char ** argv) {
     int runs = 5;
     int warmup = 1;
     int n_threads = 0;
+    int n_gpu_layers = 0;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -134,6 +136,7 @@ int main(int argc, char ** argv) {
         else if (a == "--runs") runs = std::stoi(next("--runs"));
         else if (a == "--warmup") warmup = std::stoi(next("--warmup"));
         else if (a == "--threads") n_threads = std::stoi(next("--threads"));
+        else if (a == "--n-gpu-layers") n_gpu_layers = std::stoi(next("--n-gpu-layers"));
         else if (a == "--json-out") json_out = next("--json-out");
         else if (a == "-h" || a == "--help") { usage(argv[0]); return 0; }
         else { fprintf(stderr, "unknown arg: %s\n", a.c_str()); usage(argv[0]); return 2; }
@@ -141,7 +144,7 @@ int main(int argc, char ** argv) {
     if (model_path.empty() || text.empty()) { usage(argv[0]); return 2; }
 
     supertonic_model model;
-    if (!load_supertonic_gguf(model_path, model)) {
+    if (!load_supertonic_gguf(model_path, model, n_gpu_layers)) {
         fprintf(stderr, "failed to load model\n");
         return 1;
     }

@@ -152,9 +152,11 @@ ggml_tensor * conv1d_f32(ggml_context * ctx,
                          ggml_tensor * input,
                          int stride,
                          int padding,
-                         int dilation) {
+                         int dilation,
+                         bool use_cpu_fastpath) {
 #if defined(TTS_CPP_USE_ACCELERATE) || defined(TTS_CPP_USE_CBLAS)
-    if (kernel->ne[0] == 1 && stride == 1 && padding == 0 && dilation == 1 &&
+    if (use_cpu_fastpath &&
+        kernel->ne[0] == 1 && stride == 1 && padding == 0 && dilation == 1 &&
         input->type == GGML_TYPE_F32 && kernel->type == GGML_TYPE_F32 &&
         input->ne[2] == 1 && input->ne[3] == 1) {
         auto pointwise_op = [](ggml_tensor * dst, int ith, int nth, void *) {
@@ -298,9 +300,11 @@ ggml_tensor * depthwise_same_custom_ggml(ggml_context * ctx,
                                          ggml_tensor * x,
                                          ggml_tensor * w,
                                          ggml_tensor * b,
-                                         int dilation) {
+                                         int dilation,
+                                         bool use_cpu_fastpath) {
     const depthwise_same_op_config * cfg = depthwise_same_config(dilation);
-    if (!cfg || x->type != GGML_TYPE_F32 || w->type != GGML_TYPE_F32 || b->type != GGML_TYPE_F32) {
+    if (!use_cpu_fastpath ||
+        !cfg || x->type != GGML_TYPE_F32 || w->type != GGML_TYPE_F32 || b->type != GGML_TYPE_F32) {
         return nullptr;
     }
     ggml_tensor * args[] = { x, w, b };
@@ -316,8 +320,9 @@ ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
                                   ggml_tensor * x,
                                   ggml_tensor * w,
                                   ggml_tensor * b,
-                                  int dilation) {
-    if (ggml_tensor * custom = depthwise_same_custom_ggml(ctx, x, w, b, dilation)) {
+                                  int dilation,
+                                  bool use_cpu_fastpath) {
+    if (ggml_tensor * custom = depthwise_same_custom_ggml(ctx, x, w, b, dilation, use_cpu_fastpath)) {
         return custom;
     }
     const int K = (int) w->ne[0];
@@ -334,8 +339,10 @@ ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
 ggml_tensor * layer_norm_ggml(ggml_context * ctx,
                               ggml_tensor * x,
                               ggml_tensor * g,
-                              ggml_tensor * b) {
-    if (x->type == GGML_TYPE_F32 && g->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 &&
+                              ggml_tensor * b,
+                              bool use_cpu_fastpath) {
+    if (use_cpu_fastpath &&
+        x->type == GGML_TYPE_F32 && g->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 &&
         x->ne[2] == 1 && x->ne[3] == 1) {
         auto layer_norm_op = [](ggml_tensor * dst, int ith, int nth, void *) {
             const ggml_tensor * src = dst->src[0];
@@ -385,9 +392,11 @@ ggml_tensor * layer_norm_ggml(ggml_context * ctx,
 ggml_tensor * dense_matmul_time_ggml(ggml_context * ctx,
                                      ggml_tensor * x,
                                      ggml_tensor * w,
-                                     ggml_tensor * b) {
+                                     ggml_tensor * b,
+                                     bool use_cpu_fastpath) {
 #if defined(TTS_CPP_USE_ACCELERATE) || defined(TTS_CPP_USE_CBLAS)
-    if (x->type == GGML_TYPE_F32 && w->type == GGML_TYPE_F32 && (!b || b->type == GGML_TYPE_F32) &&
+    if (use_cpu_fastpath &&
+        x->type == GGML_TYPE_F32 && w->type == GGML_TYPE_F32 && (!b || b->type == GGML_TYPE_F32) &&
         x->ne[2] == 1 && x->ne[3] == 1 && w->ne[1] == x->ne[1]) {
         auto dense_op = [](ggml_tensor * dst, int ith, int nth, void *) {
             const ggml_tensor * src = dst->src[0];
@@ -444,13 +453,14 @@ ggml_tensor * dense_matmul_time_ggml(ggml_context * ctx,
     // standard time-major activation layout [T, IC].
     ggml_tensor * wt = ggml_cont(ctx, ggml_transpose(ctx, w));
     ggml_tensor * kernel = ggml_reshape_3d(ctx, wt, 1, w->ne[1], w->ne[0]);
-    ggml_tensor * y = conv1d_f32(ctx, kernel, x, 1, 0, 1);
+    ggml_tensor * y = conv1d_f32(ctx, kernel, x, 1, 0, 1, use_cpu_fastpath);
     if (b) y = ggml_add(ctx, y, repeat_like(ctx, b, y));
     return y;
 }
 
-ggml_tensor * bias_gelu_ggml(ggml_context * ctx, ggml_tensor * x, ggml_tensor * b) {
-    if (x->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 && x->ne[2] == 1 && x->ne[3] == 1) {
+ggml_tensor * bias_gelu_ggml(ggml_context * ctx, ggml_tensor * x, ggml_tensor * b, bool use_cpu_fastpath) {
+    if (use_cpu_fastpath &&
+        x->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 && x->ne[2] == 1 && x->ne[3] == 1) {
         auto op = [](ggml_tensor * dst, int ith, int nth, void *) {
             const ggml_tensor * src = dst->src[0];
             const ggml_tensor * bias = dst->src[1];
@@ -481,8 +491,10 @@ ggml_tensor * pw2_residual_ggml(ggml_context * ctx,
                                 ggml_tensor * residual,
                                 ggml_tensor * x,
                                 ggml_tensor * b,
-                                ggml_tensor * gamma) {
-    if (residual->type == GGML_TYPE_F32 && x->type == GGML_TYPE_F32 &&
+                                ggml_tensor * gamma,
+                                bool use_cpu_fastpath) {
+    if (use_cpu_fastpath &&
+        residual->type == GGML_TYPE_F32 && x->type == GGML_TYPE_F32 &&
         b->type == GGML_TYPE_F32 && gamma->type == GGML_TYPE_F32 &&
         x->ne[2] == 1 && x->ne[3] == 1) {
         auto op = [](ggml_tensor * dst, int ith, int nth, void *) {
@@ -524,20 +536,23 @@ ggml_tensor * vector_convnext_ggml(ggml_context * ctx,
                                    const std::string & p,
                                    ggml_tensor * x,
                                    int dilation) {
+    const bool use_cpu_fastpath = model_prefers_cpu_kernels(model);
     ggml_tensor * residual = x;
     ggml_tensor * y = depthwise_same_ggml(ctx, x,
         require_source_tensor(model, p + ".dwconv.weight"),
         require_source_tensor(model, p + ".dwconv.bias"),
-        dilation);
+        dilation, use_cpu_fastpath);
     y = layer_norm_ggml(ctx, y,
         require_source_tensor(model, p + ".norm.norm.weight"),
-        require_source_tensor(model, p + ".norm.norm.bias"));
-    y = conv1d_f32(ctx, require_source_tensor(model, p + ".pwconv1.weight"), y, 1, 0, 1);
-    y = bias_gelu_ggml(ctx, y, require_source_tensor(model, p + ".pwconv1.bias"));
-    y = conv1d_f32(ctx, require_source_tensor(model, p + ".pwconv2.weight"), y, 1, 0, 1);
+        require_source_tensor(model, p + ".norm.norm.bias"),
+        use_cpu_fastpath);
+    y = conv1d_f32(ctx, require_source_tensor(model, p + ".pwconv1.weight"), y, 1, 0, 1, use_cpu_fastpath);
+    y = bias_gelu_ggml(ctx, y, require_source_tensor(model, p + ".pwconv1.bias"), use_cpu_fastpath);
+    y = conv1d_f32(ctx, require_source_tensor(model, p + ".pwconv2.weight"), y, 1, 0, 1, use_cpu_fastpath);
     return pw2_residual_ggml(ctx, residual, y,
         require_source_tensor(model, p + ".pwconv2.bias"),
-        require_source_tensor(model, p + ".gamma"));
+        require_source_tensor(model, p + ".gamma"),
+        use_cpu_fastpath);
 }
 
 std::vector<float> tensor_to_time_channel(ggml_tensor * t) {
@@ -639,6 +654,7 @@ void build_text_attention_cache(vector_text_attention_cache & cache,
                                 int head_dim,
                                 const std::string & out_w_source,
                                 const std::string & out_b_source) {
+    const bool use_cpu_fastpath = model_prefers_cpu_kernels(model);
     free_text_attention_cache(cache);
     cache.model = &model;
     cache.generation_id = model.generation_id;
@@ -682,7 +698,7 @@ void build_text_attention_cache(vector_text_attention_cache & cache,
 
     ggml_tensor * out = dense_matmul_time_ggml(cache.ctx, ctx_tc,
         require_source_tensor(model, out_w_source),
-        require_source_tensor(model, out_b_source));
+        require_source_tensor(model, out_b_source), use_cpu_fastpath);
     ggml_set_name(out, "vector_attn_out"); ggml_set_output(out);
     ggml_build_forward_expand(cache.gf, out);
 
@@ -789,6 +805,7 @@ void build_group_graph_cache(vector_group_graph_cache & cache,
                              const std::string & k_name,
                              const std::string & v_name,
                              bool trace_outputs) {
+    const bool use_cpu_fastpath = model_prefers_cpu_kernels(model);
     free_group_graph_cache(cache);
     cache.model = &model;
     cache.generation_id = model.generation_id;
@@ -858,13 +875,13 @@ void build_group_graph_cache(vector_group_graph_cache & cache,
     const std::string attn_prefix = vector_main_block(post_block + 1) + ".attn.";
     ggml_tensor * q = dense_matmul_time_ggml(cache.ctx, cur,
         require_source_tensor(model, q_matmul_source),
-        require_source_tensor(model, attn_prefix + "W_query.linear.bias"));
+        require_source_tensor(model, attn_prefix + "W_query.linear.bias"), use_cpu_fastpath);
     ggml_tensor * k = dense_matmul_time_ggml(cache.ctx, cache.text_in,
         require_source_tensor(model, k_matmul_source),
-        require_source_tensor(model, attn_prefix + "W_key.linear.bias"));
+        require_source_tensor(model, attn_prefix + "W_key.linear.bias"), use_cpu_fastpath);
     ggml_tensor * v = dense_matmul_time_ggml(cache.ctx, cache.text_in,
         require_source_tensor(model, v_matmul_source),
-        require_source_tensor(model, attn_prefix + "W_value.linear.bias"));
+        require_source_tensor(model, attn_prefix + "W_value.linear.bias"), use_cpu_fastpath);
     ggml_set_name(q, q_name.c_str()); ggml_set_output(q); ggml_build_forward_expand(cache.gf, q);
     ggml_set_name(k, k_name.c_str()); ggml_set_output(k); ggml_build_forward_expand(cache.gf, k);
     ggml_set_name(v, v_name.c_str()); ggml_set_output(v); ggml_build_forward_expand(cache.gf, v);
@@ -999,6 +1016,7 @@ void build_res_style_qkv_cache(vector_res_style_qkv_cache & cache,
                                const std::string & k_name,
                                const std::string & v_name,
                                bool trace_outputs) {
+    const bool use_cpu_fastpath = model_prefers_cpu_kernels(model);
     free_res_style_qkv_cache(cache);
     cache.model = &model;
     cache.generation_id = model.generation_id;
@@ -1042,7 +1060,7 @@ void build_res_style_qkv_cache(vector_res_style_qkv_cache & cache,
     }
     ggml_tensor * norm = layer_norm_ggml(cache.ctx, res,
         require_source_tensor(model, vector_main_block(norm_block) + ".norm.norm.weight"),
-        require_source_tensor(model, vector_main_block(norm_block) + ".norm.norm.bias"));
+        require_source_tensor(model, vector_main_block(norm_block) + ".norm.norm.bias"), use_cpu_fastpath);
     ggml_set_name(norm, norm_name.c_str());
     if (trace_outputs) {
         ggml_set_output(norm);
@@ -1057,14 +1075,14 @@ void build_res_style_qkv_cache(vector_res_style_qkv_cache & cache,
     const std::string style_prefix = vector_main_block(style_block) + ".attention.";
     ggml_tensor * sq = dense_matmul_time_ggml(cache.ctx, post,
         require_source_tensor(model, q_matmul_source),
-        require_source_tensor(model, style_prefix + "W_query.linear.bias"));
+        require_source_tensor(model, style_prefix + "W_query.linear.bias"), use_cpu_fastpath);
     ggml_tensor * sk = dense_matmul_time_ggml(cache.ctx, cache.kctx_in,
         require_source_tensor(model, k_matmul_source),
-        require_source_tensor(model, style_prefix + "W_key.linear.bias"));
+        require_source_tensor(model, style_prefix + "W_key.linear.bias"), use_cpu_fastpath);
     sk = ggml_tanh(cache.ctx, sk);
     ggml_tensor * sv = dense_matmul_time_ggml(cache.ctx, cache.style_v_in,
         require_source_tensor(model, v_matmul_source),
-        require_source_tensor(model, style_prefix + "W_value.linear.bias"));
+        require_source_tensor(model, style_prefix + "W_value.linear.bias"), use_cpu_fastpath);
     ggml_set_name(sq, q_name.c_str()); ggml_set_output(sq); ggml_build_forward_expand(cache.gf, sq);
     ggml_set_name(sk, k_name.c_str()); ggml_set_output(sk); ggml_build_forward_expand(cache.gf, sk);
     ggml_set_name(sv, v_name.c_str()); ggml_set_output(sv); ggml_build_forward_expand(cache.gf, sv);
@@ -1212,6 +1230,7 @@ void build_tail_graph_cache(vector_tail_graph_cache & cache,
                             int Cin,
                             int total_steps,
                             bool trace_outputs) {
+    const bool use_cpu_fastpath = model_prefers_cpu_kernels(model);
     free_tail_graph_cache(cache);
     cache.model = &model;
     cache.generation_id = model.generation_id;
@@ -1247,7 +1266,7 @@ void build_tail_graph_cache(vector_tail_graph_cache & cache,
     }
     ggml_tensor * velocity_t = nullptr;
 #if defined(TTS_CPP_USE_ACCELERATE) || defined(TTS_CPP_USE_CBLAS)
-    if (!trace_outputs) {
+    if (use_cpu_fastpath && !trace_outputs) {
         ggml_tensor * args[] = {
             tail,
             cache.tail_mask,
@@ -1263,7 +1282,7 @@ void build_tail_graph_cache(vector_tail_graph_cache & cache,
     {
         velocity_t = conv1d_f32(cache.ctx,
             require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.proj_out.net.weight"),
-            tail, 1, 0, 1);
+            tail, 1, 0, 1, use_cpu_fastpath);
         velocity_t = ggml_mul(cache.ctx, velocity_t, repeat_like(cache.ctx, cache.tail_mask, velocity_t));
         ggml_set_name(velocity_t, "ve_proj_out"); ggml_set_output(velocity_t);
         ggml_build_forward_expand(cache.gf, velocity_t);
@@ -1506,6 +1525,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
                                        bool include_scalar_trace,
                                        bool include_ggml_trace,
                                        std::vector<float> * next_latent_tc_out) {
+    const bool use_cpu_fastpath = model_prefers_cpu_kernels(model);
     try {
         scalar_trace.clear();
         ggml_trace.clear();
@@ -2047,7 +2067,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         ggml_tensor * text_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, text_len, 256);
         ggml_set_name(text_in, "ve_text_lc");
         ggml_set_input(text_in);
-        ggml_tensor * y = conv1d_f32(ctx, require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.proj_in.net.weight"), x, 1, 0, 1);
+        ggml_tensor * y = conv1d_f32(ctx, require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.proj_in.net.weight"), x, 1, 0, 1, use_cpu_fastpath);
         ggml_tensor * masked = ggml_mul(ctx, y, repeat_like(ctx, mask, y));
         ggml_set_name(masked, "ve_masked");
         if (include_ggml_trace) {
@@ -2091,19 +2111,19 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         ggml_build_forward_expand(gf, cur);
         ggml_tensor * q_t = dense_matmul_time_ggml(ctx, cur,
             require_source_tensor(model, "vector_estimator:onnx::MatMul_3101"),
-            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.W_query.linear.bias"));
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.W_query.linear.bias"), use_cpu_fastpath);
         ggml_set_name(q_t, "ve_attn0_q");
         ggml_set_output(q_t);
         ggml_build_forward_expand(gf, q_t);
         ggml_tensor * k_t = dense_matmul_time_ggml(ctx, text_in,
             require_source_tensor(model, "vector_estimator:onnx::MatMul_3102"),
-            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.W_key.linear.bias"));
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.W_key.linear.bias"), use_cpu_fastpath);
         ggml_set_name(k_t, "ve_attn0_k");
         ggml_set_output(k_t);
         ggml_build_forward_expand(gf, k_t);
         ggml_tensor * v_t = dense_matmul_time_ggml(ctx, text_in,
             require_source_tensor(model, "vector_estimator:onnx::MatMul_3103"),
-            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.W_value.linear.bias"));
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.W_value.linear.bias"), use_cpu_fastpath);
         ggml_set_name(v_t, "ve_attn0_v");
         ggml_set_output(v_t);
         ggml_build_forward_expand(gf, v_t);
@@ -2214,7 +2234,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         }
         ggml_tensor * style_norm = layer_norm_ggml(srctx, style_res,
             require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.5.norm.norm.weight"),
-            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.5.norm.norm.bias"));
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.5.norm.norm.bias"), use_cpu_fastpath);
         ggml_set_name(style_norm, "ve_style0_norm"); ggml_set_output(style_norm);
         ggml_build_forward_expand(srgf, style_norm);
         ggml_gallocr_t srallocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
@@ -2318,7 +2338,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         }
         ggml_tensor * g1_style_norm = layer_norm_ggml(g1srctx, g1_style_res,
             require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.11.norm.norm.weight"),
-            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.11.norm.norm.bias"));
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.11.norm.norm.bias"), use_cpu_fastpath);
         ggml_set_name(g1_style_norm, "ve_g1_style_norm"); ggml_set_output(g1_style_norm);
         ggml_build_forward_expand(g1srgf, g1_style_norm);
         ggml_gallocr_t g1srallocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
@@ -2422,7 +2442,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         }
         ggml_tensor * g2_style_norm = layer_norm_ggml(g2srctx, g2_style_res,
             require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.17.norm.norm.weight"),
-            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.17.norm.norm.bias"));
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.17.norm.norm.bias"), use_cpu_fastpath);
         ggml_set_name(g2_style_norm, "ve_g2_style_norm"); ggml_set_output(g2_style_norm);
         ggml_build_forward_expand(g2srgf, g2_style_norm);
         ggml_gallocr_t g2srallocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
@@ -2526,7 +2546,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         }
         ggml_tensor * g3_style_norm = layer_norm_ggml(g3srctx, g3_style_res,
             require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.23.norm.norm.weight"),
-            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.23.norm.norm.bias"));
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.23.norm.norm.bias"), use_cpu_fastpath);
         ggml_set_name(g3_style_norm, "ve_g3_style_norm"); ggml_set_output(g3_style_norm);
         ggml_build_forward_expand(g3srgf, g3_style_norm);
         ggml_gallocr_t g3srallocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));

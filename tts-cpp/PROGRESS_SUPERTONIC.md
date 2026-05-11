@@ -479,9 +479,130 @@ python scripts/convert-supertonic2-to-gguf.py \
 - Consider a fused text relpos attention op only if profiling shows text is the
   next hard blocker.
 - Add quantized Supertonic GGUF support once graph paths are ready for f16/q8.
-- Evaluate GPU backends after CPU graph structure is fully stable.
+- ~~Evaluate GPU backends after CPU graph structure is fully stable.~~ — initial
+  Metal port landed 2026-05-11; see "Metal baseline (2026-05-11)" below.
 - Add CI coverage for converter help/setup syntax and portable Supertonic build
   targets.
+
+## Metal baseline (2026-05-11)
+
+First end-to-end Metal run of the Supertonic 2 pipeline. Approach mirrors
+Chatterbox's pattern: single `ggml_backend_metal_init()` at model load, no
+backend scheduler, and CPU-only `ggml_custom_4d` fast paths gated on
+`!ggml_backend_is_cpu(model.backend)` so the same graph builders fall through
+to stock `ggml_im2col` + `ggml_mul_mat` (etc.) when the backend is Metal.
+
+Implementation:
+
+- `model_prefers_cpu_kernels(const supertonic_model &)` added in
+  `src/supertonic_internal.h`. Returns `true` when `model.backend == nullptr`
+  or `ggml_backend_is_cpu(model.backend)`.
+- Per-stage helpers (`conv1d_f32`, `depthwise_same_ggml`, `layer_norm_ggml`,
+  `dense_matmul_time_ggml`, `bias_gelu_ggml`, `pw2_residual_ggml`,
+  `conv1d_causal_ggml`, `depthwise_conv1d_causal_ggml`, plus the tail-update
+  custom op in `vector_estimator.cpp`) now take a `bool use_cpu_fastpath` and
+  AND it into the existing dtype/shape gates.
+- Per-stage builders inject
+  `const bool use_cpu_fastpath = model_prefers_cpu_kernels(model);` at the top
+  and pass it down through `vector_convnext_ggml`, `convnext_block_ggml`, the
+  text/vector/style attention cache builders, the tail graph builder, and the
+  trace builder.
+- `text_encoder.cpp` and `duration.cpp` accept the flag for call-site
+  uniformity but mark it `[[maybe_unused]]` — those stages have always built
+  their graphs via stock ggml ops and are Metal-safe at HEAD.
+- `supertonic_bench.cpp` gains `--n-gpu-layers N` (passed through to
+  `load_supertonic_gguf`) so the same harness drives CPU and Metal.
+
+Smoke test (`supertonic-cli --n-gpu-layers 1`) produces a 1.44 s WAV that is
+byte-length-identical to the CPU output, confirming the graph builders run
+end-to-end on Metal. A `GGML_ASSERT([rsets->data count] == 0)` fires inside
+`ggml_metal_device_free` at process exit (atexit ordering with Metal's
+residency-set finaliser) — same shape as the Chatterbox `t3_stack_registry`
+atexit issue; cosmetic, fires after the WAV is fully written. Mitigation TBD.
+
+Benchmark (Apple M2, q8_0 GGUF, 4 threads, 3.204 s of audio, 5-step CFM, 5 runs
++ 1 warmup, same flags as `supertonic-cpp.json` / `supertonic-onnx-cpu.json`):
+
+| Stage                       | CPU q8_0   | Metal q8_0 | Δ vs CPU | ONNX CPU f32 |
+|-----------------------------|-----------:|-----------:|---------:|-------------:|
+| preprocess                  |    0.01 ms |    0.01 ms |       — |      0.06 ms |
+| duration                    |    1.76 ms |    2.50 ms |   +0.74 |      1.48 ms |
+| text_encoder                |   13.44 ms |   13.83 ms |   +0.39 |      9.04 ms |
+| vector_estimator (5 steps)  |   94.86 ms |  173.08 ms |  +78.22 |     82.65 ms |
+| vocoder                     |   43.44 ms |   59.74 ms |  +16.30 |     51.32 ms |
+| **total**                   | **153.5**  | **249.9**  |  **+96.4 (+63%)** | **144.9** |
+| RTF                         |     0.048  |     0.078  |          |       0.045 |
+| real-time multiplier        |     20.9×  |     12.8×  |          |       22.1× |
+
+Verdict: the Metal port is **correctness-validated but slower than CPU at this
+graph shape**. Two ggml-side stages dominate the regression:
+
+- **`vector_estimator` +82 %** (94.9 → 173.1 ms median). The 5 denoising steps
+  build many small ConvNeXt graphs (depthwise + pointwise + norm + GELU +
+  pointwise, repeated across blocks). On M2 these become Metal kernel
+  launches that are too short to amortise launch overhead; the CPU fast paths
+  (cblas-backed `pointwise_op` / unrolled depthwise K=5) had a real lead.
+- **`vocoder` +38 %** (43.4 → 59.7 ms median). Same kernel-launch-bound
+  pattern, smaller deficit because the vocoder graph is a single persistent
+  cgraph that's reused across calls (less per-step overhead than the
+  vector-estimator's per-block cgraphs).
+
+`text_encoder` and `duration` are unchanged within noise — expected, those
+already used the stock-op path on CPU.
+
+`supertonic-bench --runs 8 --warmup 3 --n-gpu-layers 1` drifted to ~288 ms
+median (up from ~250 ms at runs=5 / warmup=1), suggesting Metal residency
+sets accumulate across calls in this harness; investigate before drawing
+percentile-style conclusions from longer Metal runs.
+
+Artifacts: `artifacts/bench/supertonic-cpu.json`,
+`artifacts/bench/supertonic-cpu-after.json` (post-gating CPU regression
+check, median 158.2 ms / +3 % vs the pre-port baseline — within noise),
+`artifacts/bench/supertonic-metal.json`,
+`artifacts/bench/supertonic-onnx-cpu.json`,
+`artifacts/bench/supertonic-onnx-coreml.json`,
+`artifacts/bench/metal-phase-a.txt` (the Phase A failure-mode trace before
+gating).
+
+### Next: Metal optimisation passes (Phase E in the plan)
+
+Roughly Chatterbox's playbook, ordered by expected ROI given where the
+Supertonic Metal time is going today:
+
+1. **Step batching in the CFM loop (B=2 or B=5).** Today's vector estimator
+   runs 5 independent denoising steps as 5 separate compute calls per
+   ConvNeXt block. Chatterbox `PROGRESS.md §3.19` batches CFG cond+uncond
+   into B=2 along `ne[2]` *only on GPU*; the same idea adapted here would fuse
+   2–5 consecutive denoising steps into one graph, multiplicatively reducing
+   Metal kernel launches. Requires per-step time embeddings to vary along the
+   batch dim — non-trivial graph refactor, expected biggest win.
+2. **QKV stacking on the text-attention block.** `vector_text_attention_cache`
+   builds Q/K/V via three separate `dense_matmul_time_ggml` calls. Chatterbox
+   `t3_mtl.cpp:1660–1740` stacks them into one `wqkv` tensor on Metal only,
+   collapsing 3 matmul launches into 1. Same shape characteristics here.
+3. **f16 weight variant for the dominant matmuls.** Today's q8_0 GGUF forces
+   Metal to dequantise on every `mul_mat`. For the tiny `mul_mat`s in the
+   ConvNeXt blocks the dequant cost is non-trivial relative to the FLOPs.
+   Likely needs a separate `--ftype f16` GGUF produced by the existing
+   converter; benchmark per-stage to decide whether to ship it.
+4. **Per-op decision on the depthwise convolutions.** The graph-level
+   fallback for depthwise convs goes through `ggml_im2col` + `ggml_mul_mat`,
+   which is far from optimal on Metal for small K (=5) and small L
+   (=137-ish). A custom `kernel_depthwise_conv_1d` Metal kernel would
+   collapse this. Only worth writing if (1) above doesn't already close the
+   gap. The `test/test_metal_ops.cpp` harness is the right place to validate
+   any new kernel against CPU parity.
+5. **Investigate Metal `rsets` accumulation across calls** (the `runs=8`
+   drift). Either tighten the residency-set lifecycle or set `keep_alive` to
+   a smaller value via the ggml-metal env var.
+
+Each is its own commit + bench delta. Do not bundle.
+
+### Out of scope for this baseline
+
+- Custom .metal kernels (only after #1 + #3 above are tried).
+- CUDA/Vulkan paths (host is Apple silicon; address Metal first).
+- Multilingual / non-English voice perf — voice-agnostic.
 
 ### Distribution
 

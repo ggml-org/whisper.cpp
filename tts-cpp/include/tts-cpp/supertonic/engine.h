@@ -14,7 +14,15 @@
 //
 //     EngineOptions opts;
 //     opts.model_gguf_path = "models/supertonic.gguf";
-//     opts.n_gpu_layers    = 0;                      // CPU only today
+//     opts.n_gpu_layers    = 0;                      // 0 = CPU; >0 enables Metal
+//                                                    // on macOS / CUDA / Vulkan /
+//                                                    // OpenCL when compiled in.
+//                                                    // Metal is correctness-validated
+//                                                    // as of 2026-05-11 but is
+//                                                    // slower than CPU at this graph
+//                                                    // shape pending optimisation —
+//                                                    // see PROGRESS_SUPERTONIC.md
+//                                                    // "Metal baseline (2026-05-11)".
 //
 //     Engine engine(opts);
 //     for (const auto & line : lines) {

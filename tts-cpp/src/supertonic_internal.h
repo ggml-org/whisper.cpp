@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
 #include "ggml.h"
 
 namespace tts_cpp::supertonic::detail {
@@ -93,6 +94,16 @@ bool load_supertonic_gguf(const std::string & path,
 void free_supertonic_model(supertonic_model & model);
 void supertonic_set_n_threads(supertonic_model & model, int n_threads);
 void supertonic_graph_compute(const supertonic_model & model, ggml_cgraph * graph);
+
+// True when the model's compute backend supports the per-stage CPU fast paths
+// (the `ggml_custom_4d` callbacks in conv1d_f32 / depthwise_same_ggml /
+// layer_norm_ggml etc.).  ggml custom ops are CPU-only by design; on Metal /
+// CUDA / Vulkan the helpers must fall through to their stock-ggml-op paths.
+// Mirrors the `!ggml_backend_is_cpu(backend)` idiom Chatterbox uses to gate
+// its Metal-only batched-CFG path.
+inline bool model_prefers_cpu_kernels(const supertonic_model & model) {
+    return model.backend == nullptr || ggml_backend_is_cpu(model.backend);
+}
 
 ggml_tensor * require_tensor(const supertonic_model & model, const std::string & name);
 ggml_tensor * require_source_tensor(const supertonic_model & model, const std::string & source_name);
