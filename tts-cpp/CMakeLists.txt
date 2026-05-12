@@ -632,6 +632,20 @@ if (TTS_CPP_BUILD_TESTS)
     # OpenCL optimization audit follow-up harnesses (F1–F11).
     add_supertonic_harness(test-supertonic-load-caches    test/test_supertonic_load_caches.cpp)
     add_supertonic_harness(test-supertonic-graph-rewrites test/test_supertonic_graph_rewrites.cpp)
+    # OpenCL audit follow-up #2 — text-encoder caches (F13, F16),
+    # Phase 2A F16-weight roster (predicate-level), Phase 2D
+    # profile-CSV emitter (unit-only).
+    add_supertonic_harness(test-supertonic-text-encoder-caches
+        test/test_supertonic_text_encoder_caches.cpp)
+    add_supertonic_harness(test-supertonic-f16-weights
+        test/test_supertonic_f16_weights.cpp)
+    # Phase 2D profile-CSV emitter — unit-level, no GGUF needed.
+    add_executable(test-supertonic-profile-csv
+        test/test_supertonic_profile_csv.cpp)
+    target_link_libraries(test-supertonic-profile-csv PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-profile-csv PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-profile-csv)
+    tts_cpp_register_test(test-supertonic-profile-csv LABEL "unit")
 
     # OpenCL bring-up unit tests (QVAC-18607).  Three CPU-only
     # parity / structural tests for the dispatch + portable-op

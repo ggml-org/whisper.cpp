@@ -17,6 +17,9 @@ void usage(const char * argv0) {
         "          [--seed 42] [--threads N] [--n-gpu-layers N]\n"
         "          [--f16-attn 0|1] (vector-estimator F16 K/V attention;\n"
         "                            defaults to auto: on for GPU, off for CPU)\n"
+        "          [--f16-weights 0|1] (load-time F16 materialization for the\n"
+        "                            audit-identified hot matmul / pwconv weights;\n"
+        "                            defaults to auto: on for GPU, off for CPU)\n"
         "          [--noise-npy /path/to/noise.npy]\n",
         argv0);
 }
@@ -68,6 +71,7 @@ int main(int argc, char ** argv) {
         else if (arg == "--threads") opts.n_threads = std::stoi(next("--threads"));
         else if (arg == "--n-gpu-layers") opts.n_gpu_layers = std::stoi(next("--n-gpu-layers"));
         else if (arg == "--f16-attn") opts.f16_attn = std::stoi(next("--f16-attn"));
+        else if (arg == "--f16-weights") opts.f16_weights = std::stoi(next("--f16-weights"));
         else if (arg == "--noise-npy") opts.noise_npy_path = next("--noise-npy");
         else if (arg == "-h" || arg == "--help") { usage(argv[0]); return 0; }
         else { fprintf(stderr, "unknown arg: %s\n", arg.c_str()); usage(argv[0]); return 2; }

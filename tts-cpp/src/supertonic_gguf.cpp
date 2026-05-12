@@ -18,8 +18,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <unordered_set>
 #include <stdexcept>
@@ -207,6 +210,99 @@ bool is_supertonic_alive(uint64_t generation_id) {
     return supertonic_alive_ids().find(generation_id) != supertonic_alive_ids().end();
 }
 
+// Phase 2A — hot-weight predicate.
+//
+// Returns true for source names that should be materialised as
+// F16 on a non-CPU backend when `model.use_f16_weights` is set.
+// See the docstring on `should_materialise_f16_weight` in
+// supertonic_internal.h for the full roster + test references.
+//
+// Implementation rules:
+//   - String matching uses explicit suffix / contains checks; no
+//     regex (the predicate runs once per GGUF tensor at load time,
+//     not on the hot path, but we still want it cheap + audit-
+//     friendly).
+//   - Pre-transposed `__T` companions are excluded (the original
+//     gets materialised; the companion lives separately).
+//   - Bias / norm-weight / γ tensors are excluded by suffix.
+//   - Embedding tables and small fixed-shape per-channel vectors
+//     are excluded by name fragment.
+bool should_materialise_f16_weight(const std::string & source_name) {
+    if (source_name.empty()) return false;
+
+    auto ends_with = [&](const std::string & suffix) {
+        return source_name.size() >= suffix.size() &&
+               std::equal(suffix.rbegin(), suffix.rend(), source_name.rbegin());
+    };
+    auto contains = [&](const std::string & frag) {
+        return source_name.find(frag) != std::string::npos;
+    };
+
+    // Bias / scale / shift / γ — always cold.  Catches both
+    // `*.bias` and bias-like `linear.bias` substrings the audit
+    // explicitly negative-tested against.
+    if (ends_with(".bias"))                  return false;
+    if (contains(".linear.bias"))            return false;
+    if (contains(".norm.norm.weight"))       return false;
+    if (contains(".norm.norm.bias"))         return false;
+    if (ends_with(".gamma"))                 return false;
+    if (contains(".char_embedder.weight"))   return false;
+    if (contains(".emb_rel_k"))              return false;
+    if (contains(".emb_rel_v"))              return false;
+    if (contains("normalizer.scale"))        return false;
+    if (contains("PRelu_"))                  return false;
+    if (contains(".dwconv."))                return false;
+    if (contains(".attn.theta"))             return false;
+    // Pre-transposed companions (F6) are stored separately; the
+    // original goes through this predicate normally.  The `__T`
+    // suffix tags them.
+    if (ends_with("__T"))                    return false;
+    // Negative trap (test_supertonic_f16_weights.cpp covers this):
+    // a bias-like suffix could otherwise sneak through if it has
+    // a digit suffix that happens to match `_NNNN` below.
+    if (contains("MatMul_") && ends_with("_bias")) return false;
+
+    // Positive list:
+    //
+    //  - vector_estimator attention matmuls: `onnx::MatMul_NNNN`
+    //    where NNNN is the per-group / per-attention-site ID.
+    //    Cover-all by the `onnx::MatMul_` substring inside the
+    //    `vector_estimator:` namespace.
+    //  - vector_estimator convnext pwconv1/2: anything ending in
+    //    `.pwconv1.weight` or `.pwconv2.weight`.
+    //  - vocoder convnext pwconv1/2 + head linear: same suffix
+    //    convention.
+    //  - text-encoder linears: `text_encoder:onnx::MatMul_` and
+    //    the FFN `conv_1.weight` / `conv_2.weight`.
+    const bool ve  = source_name.rfind("vector_estimator:", 0) == 0;
+    const bool voc = source_name.rfind("vocoder:", 0) == 0;
+    const bool tex = source_name.rfind("text_encoder:", 0) == 0;
+    if (!ve && !voc && !tex) return false;
+
+    if (contains("onnx::MatMul_")) {
+        // Reject `onnx::MatMul_` followed by an empty / non-digit
+        // tail (audit test edge case: `"vector_estimator:onnx::MatMul_"`).
+        const size_t pos = source_name.find("onnx::MatMul_");
+        if (pos != std::string::npos) {
+            const std::string tail = source_name.substr(pos + 13);
+            if (tail.empty()) return false;
+            // First char of tail must be a digit; otherwise it's
+            // a name like `MatMul_bias_3101` which is a manufactured
+            // negative.  See predicate-negatives test.
+            if (!(tail[0] >= '0' && tail[0] <= '9')) return false;
+        }
+        return true;
+    }
+    if (ends_with(".pwconv1.weight")) return true;
+    if (ends_with(".pwconv2.weight")) return true;
+    if (ends_with(".head.layer1.net.weight")) return true;
+    if (ends_with(".head.layer2.weight"))     return true;
+    if (contains(".conv_1.weight")) return true;
+    if (contains(".conv_2.weight")) return true;
+
+    return false;
+}
+
 // Thread-local dispatch flags consulted by the GGML graph builders to
 // pick between the CBLAS-backed `ggml_custom_4d` fast paths (CPU only)
 // and the portable pure-GGML fallbacks (any backend).  See the
@@ -234,6 +330,157 @@ supertonic_op_dispatch_scope::supertonic_op_dispatch_scope(const supertonic_mode
 supertonic_op_dispatch_scope::~supertonic_op_dispatch_scope() {
     g_supertonic_use_cpu_custom_ops = prev_use_cpu_custom_ops;
     g_supertonic_use_f16_attn       = prev_use_f16_attn;
+}
+
+// ---------------------------------------------------------------------
+// Phase 2D — `SUPERTONIC_PROFILE_CSV` machine-readable timing emitter.
+//
+// Implementation lives here (in `supertonic_gguf.cpp`) rather than a
+// dedicated TU because:
+//   - the supertonic library already pulls this file in unconditionally
+//     (load_supertonic_gguf is the public entry point).
+//   - the file-local state (FILE *, mutex, env-probe latch) doesn't
+//     need to be shared across TUs.
+//
+// Storage model:
+//   - One `FILE *` opened at "first record after path set" time.
+//   - A mutex guards record / flush / set_path so the emitter is
+//     safe to call from any thread (the rest of the engine is
+//     single-threaded per model, but tests may spawn helpers).
+//   - The env var `SUPERTONIC_PROFILE_CSV` is probed lazily on the
+//     first `record` / `enabled` call after process start; tests
+//     override via `set_path(PATH)` which bypasses the env probe.
+//
+// Schema (matches the contract in
+// `test_supertonic_profile_csv.cpp`):
+//
+//   stage,island,step,wall_ms,unix_us
+//
+// The header row is written once, lazily, the first time we open
+// a new file that's empty.  Re-opening the same path appends, so
+// long-running bench harnesses can record many synths without
+// stomping their header / data.
+namespace {
+
+struct profile_csv_state {
+    std::mutex   mu;
+    std::FILE *  fp = nullptr;
+    std::string  path;
+    bool         env_checked = false;
+};
+
+profile_csv_state & profile_csv() {
+    static profile_csv_state s;
+    return s;
+}
+
+void profile_csv_close_locked(profile_csv_state & s) {
+    if (s.fp) {
+        std::fclose(s.fp);
+        s.fp = nullptr;
+    }
+    s.path.clear();
+}
+
+void profile_csv_open_locked(profile_csv_state & s, const std::string & path) {
+    // Append mode so multiple sessions can share one CSV.
+    // We only write the header when the file is empty (fresh).
+    bool need_header = false;
+    {
+        std::FILE * probe = std::fopen(path.c_str(), "rb");
+        if (probe) {
+            std::fseek(probe, 0, SEEK_END);
+            const long sz = std::ftell(probe);
+            need_header = (sz == 0);
+            std::fclose(probe);
+        } else {
+            need_header = true;
+        }
+    }
+    s.fp = std::fopen(path.c_str(), "ab");
+    if (!s.fp) return; // open failure → emitter stays disabled
+    s.path = path;
+    if (need_header) {
+        std::fprintf(s.fp, "stage,island,step,wall_ms,unix_us\n");
+        std::fflush(s.fp);
+    }
+}
+
+void profile_csv_atexit_flush() {
+    // Best-effort flush + close on normal process exit; if the
+    // bench harness segfaults we lose buffered rows but that's
+    // the same trade-off any FILE *-based logger makes.
+    profile_csv_state & s = profile_csv();
+    std::lock_guard<std::mutex> lk(s.mu);
+    if (s.fp) {
+        std::fflush(s.fp);
+        std::fclose(s.fp);
+        s.fp = nullptr;
+    }
+}
+
+void profile_csv_probe_env_locked(profile_csv_state & s) {
+    if (s.env_checked) return;
+    s.env_checked = true;
+    const char * env = std::getenv("SUPERTONIC_PROFILE_CSV");
+    if (env && *env) {
+        profile_csv_open_locked(s, env);
+        // Register an atexit hook the first time we open via the
+        // env var.  Tests that flip the path via `_set_path` get
+        // the flush via their explicit teardown call instead;
+        // they don't need an atexit because the unit harness
+        // explicitly cleans up.
+        std::atexit(profile_csv_atexit_flush);
+    }
+}
+
+} // namespace
+
+bool supertonic_profile_csv_enabled() {
+    profile_csv_state & s = profile_csv();
+    std::lock_guard<std::mutex> lk(s.mu);
+    profile_csv_probe_env_locked(s);
+    return s.fp != nullptr;
+}
+
+void supertonic_profile_csv_record(const char * stage, const char * island,
+                                   int step, double wall_ms) {
+    profile_csv_state & s = profile_csv();
+    std::lock_guard<std::mutex> lk(s.mu);
+    profile_csv_probe_env_locked(s);
+    if (!s.fp) return;
+    // Wall clock in microseconds-since-epoch so the CSV is sortable
+    // across separate bench harness invocations.  `steady_clock`
+    // would be cheaper but isn't comparable across processes; the
+    // CSV is post-analysed not perf-critical.
+    const auto now = std::chrono::system_clock::now().time_since_epoch();
+    const long long unix_us =
+        std::chrono::duration_cast<std::chrono::microseconds>(now).count();
+    std::fprintf(s.fp, "%s,%s,%d,%.3f,%lld\n",
+                 stage ? stage : "",
+                 island ? island : "",
+                 step,
+                 wall_ms,
+                 unix_us);
+}
+
+void supertonic_profile_csv_flush() {
+    profile_csv_state & s = profile_csv();
+    std::lock_guard<std::mutex> lk(s.mu);
+    if (s.fp) std::fflush(s.fp);
+}
+
+void supertonic_profile_csv_set_path(const char * path) {
+    profile_csv_state & s = profile_csv();
+    std::lock_guard<std::mutex> lk(s.mu);
+    profile_csv_close_locked(s);
+    // Latch the env probe even when the caller passes nullptr so
+    // that a subsequent enabled()/record() call doesn't accidentally
+    // re-pick-up the env var after the test asked us to disable.
+    s.env_checked = true;
+    if (path && *path) {
+        profile_csv_open_locked(s, path);
+    }
 }
 
 ggml_tensor * require_tensor(const supertonic_model & model, const std::string & name) {
@@ -299,7 +546,8 @@ static void bind_vocoder_weights(supertonic_model & model) {
 bool load_supertonic_gguf(const std::string & path,
                           supertonic_model & model,
                           int n_gpu_layers,
-                          bool verbose) {
+                          bool verbose,
+                          int f16_weights) {
     model.generation_id = next_supertonic_generation_id();
     ggml_context * tmp_ctx = nullptr;
     gguf_init_params gp = { /*.no_alloc=*/ false, /*.ctx=*/ &tmp_ctx };
@@ -346,6 +594,41 @@ bool load_supertonic_gguf(const std::string & path,
             fprintf(stderr, "supertonic: backend_is_cpu=%s\n", model.backend_is_cpu ? "true" : "false");
         }
 
+        // Phase 2A — auto/force policy for F16 weight materialization.
+        // Auto-enable on non-CPU backends; never auto-enable on CPU
+        // (the CBLAS custom-op fast paths require F32 storage).
+        if (f16_weights < 0) {
+            model.use_f16_weights = !model.backend_is_cpu;
+        } else {
+            model.use_f16_weights = (f16_weights != 0);
+        }
+        if (verbose) {
+            fprintf(stderr, "supertonic: use_f16_weights=%s\n",
+                    model.use_f16_weights ? "true" : "false");
+        }
+
+        // Phase 2A pre-step: build a (tensor_name → source_name)
+        // lookup BEFORE the alloc loop so we can apply the hot-
+        // weight predicate at allocation time (and pick F16 vs F32
+        // storage accordingly).  Same metadata arrays as the
+        // post-alloc source_tensors map further below; reading them
+        // twice is cheap.
+        std::unordered_map<std::string, std::string> tensor_to_source_for_alloc;
+        if (model.use_f16_weights) {
+            int64_t id_tn = gguf_find_key(gguf_ctx, "supertonic.tensor_names");
+            int64_t id_sn = gguf_find_key(gguf_ctx, "supertonic.source_names");
+            if (id_tn >= 0 && id_sn >= 0) {
+                const size_t n_tn = gguf_get_arr_n(gguf_ctx, id_tn);
+                const size_t n_sn = gguf_get_arr_n(gguf_ctx, id_sn);
+                if (n_tn == n_sn) {
+                    for (size_t i = 0; i < n_tn; ++i) {
+                        tensor_to_source_for_alloc[gguf_get_arr_str(gguf_ctx, id_tn, i)] =
+                            gguf_get_arr_str(gguf_ctx, id_sn, i);
+                    }
+                }
+            }
+        }
+
         const int64_t num_tensors = gguf_get_n_tensors(gguf_ctx);
         // Reserve a small surplus of tensor-overhead slots for the
         // audit-driven pre-baked tensors that load_supertonic_gguf
@@ -362,17 +645,78 @@ bool load_supertonic_gguf(const std::string & path,
         model.ctx_w = ggml_init(params);
         if (!model.ctx_w) throw std::runtime_error("ggml_init failed");
 
-        std::unordered_map<std::string, std::vector<float>> expanded_f32_tensors;
+        std::unordered_map<std::string, std::vector<float>>     expanded_f32_tensors;
+        // Phase 2A: tensors materialised as F16 land their host-side
+        // F16 payload here.  `ggml_fp16_t` is a 16-bit half-float;
+        // we use `uint16_t` storage to avoid a public-header dep on
+        // ggml's f16 typedef.
+        std::unordered_map<std::string, std::vector<uint16_t>>   f16_materialised_tensors;
+
+        // Decide per-tensor destination type:
+        //  - F16 / Q8_0 sources: expand to F32 (legacy behaviour;
+        //    `should_expand_supertonic_tensor`).
+        //  - F32 sources on the F16-weights hot-path roster:
+        //    materialise as F16 (Phase 2A).
+        //  - Everything else: preserve the source type via dup.
         for (int64_t i = 0; i < num_tensors; ++i) {
             const char * name = gguf_get_tensor_name(gguf_ctx, i);
             ggml_tensor * src = ggml_get_tensor(tmp_ctx, name);
             if (!src) throw std::runtime_error(std::string("missing tmp tensor: ") + name);
-            ggml_tensor * dst = should_expand_supertonic_tensor(src->type)
-                ? ggml_new_tensor(model.ctx_w, GGML_TYPE_F32, ggml_n_dims(src), src->ne)
-                : ggml_dup_tensor(model.ctx_w, src);
+
+            // Phase 2A predicate check.  Only fires when
+            // `use_f16_weights` was on and the source resolved to
+            // a hot-roster name AND its current GGML type is
+            // either F32 or one of the expand-to-F32 types
+            // (otherwise the source already carries narrower
+            // precision than F16 and we don't widen).
+            bool f16_materialise = false;
+            if (model.use_f16_weights) {
+                auto sit = tensor_to_source_for_alloc.find(name);
+                if (sit != tensor_to_source_for_alloc.end() &&
+                    should_materialise_f16_weight(sit->second) &&
+                    (src->type == GGML_TYPE_F32 ||
+                     should_expand_supertonic_tensor(src->type))) {
+                    f16_materialise = true;
+                }
+            }
+
+            ggml_type dst_type;
+            if (f16_materialise) {
+                dst_type = GGML_TYPE_F16;
+            } else if (should_expand_supertonic_tensor(src->type)) {
+                dst_type = GGML_TYPE_F32;
+            } else {
+                dst_type = src->type;
+            }
+
+            ggml_tensor * dst = ggml_new_tensor(model.ctx_w, dst_type,
+                                                 ggml_n_dims(src), src->ne);
             ggml_set_name(dst, name);
             model.tensors[name] = dst;
-            if (should_expand_supertonic_tensor(src->type)) {
+
+            if (f16_materialise) {
+                // Materialise F32 → F16 host-side.  When src was
+                // originally F16/Q8_0 we expand to F32 first via
+                // the existing helper, then convert back to F16
+                // — round-trip is lossless for the F16 case (the
+                // original 16-bit pattern is preserved) and a
+                // one-shot rounding loss for the Q8_0 case
+                // (acceptable; matches what Q4_0 + F16 down-quant
+                // does in chatterbox).
+                std::vector<float> src_f32;
+                if (should_expand_supertonic_tensor(src->type)) {
+                    src_f32 = expand_supertonic_tensor_to_f32(src);
+                } else {
+                    const int64_t n = ggml_nelements(src);
+                    src_f32.resize((size_t) n);
+                    std::memcpy(src_f32.data(), ggml_get_data(src), (size_t) n * sizeof(float));
+                }
+                std::vector<uint16_t> & f16 = f16_materialised_tensors[name];
+                f16.resize(src_f32.size());
+                ggml_fp32_to_fp16_row(src_f32.data(),
+                                      reinterpret_cast<ggml_fp16_t *>(f16.data()),
+                                      (int64_t) src_f32.size());
+            } else if (should_expand_supertonic_tensor(src->type)) {
                 expanded_f32_tensors[name] = expand_supertonic_tensor_to_f32(src);
             }
         }
@@ -396,6 +740,14 @@ bool load_supertonic_gguf(const std::string & path,
         // after `bind_vocoder_weights` in the F6 post-bind hook.
         // The roster matches AUDIT_SUPERTONIC_OPENCL.md F6 + the
         // test in test_supertonic_load_caches.cpp.
+        //
+        // Phase 2A interaction: the F6 hook only supports F32
+        // sources (the host-side transpose loop assumes 4-byte
+        // strides).  When F16 weights are on, the same matmul
+        // weights have already been materialised as F16, so we
+        // skip F6's allocation + upload entirely; call sites in
+        // `supertonic_vector_estimator.cpp` fall back to the
+        // legacy in-graph `ggml_cont(ggml_transpose(W))` path.
         ggml_tensor * pretrans_t_proj[4] = {nullptr, nullptr, nullptr, nullptr};
         static const char * const kF6PretransNames[4] = {
             "vector_estimator:onnx::MatMul_3095__T",
@@ -403,9 +755,12 @@ bool load_supertonic_gguf(const std::string & path,
             "vector_estimator:onnx::MatMul_3185__T",
             "vector_estimator:onnx::MatMul_3230__T",
         };
-        for (int i = 0; i < 4; ++i) {
-            pretrans_t_proj[i] = ggml_new_tensor_2d(model.ctx_w, GGML_TYPE_F32, 64, 512);
-            ggml_set_name(pretrans_t_proj[i], kF6PretransNames[i]);
+        const bool f6_active = !model.use_f16_weights;
+        if (f6_active) {
+            for (int i = 0; i < 4; ++i) {
+                pretrans_t_proj[i] = ggml_new_tensor_2d(model.ctx_w, GGML_TYPE_F32, 64, 512);
+                ggml_set_name(pretrans_t_proj[i], kF6PretransNames[i]);
+            }
         }
 
         model.buffer_w = ggml_backend_alloc_ctx_tensors(model.ctx_w, model.backend);
@@ -421,6 +776,15 @@ bool load_supertonic_gguf(const std::string & path,
                 // doesn't have a GGUF source row — data is uploaded by
                 // the dedicated post-bind hook further down.  Skip
                 // here so we don't deref a null `src`.
+                continue;
+            }
+            // Phase 2A: F16-materialised tensors take precedence over
+            // the F32 expansion path (they may have been promoted
+            // from either F32 or F16/Q8_0 sources).
+            auto f16_mat = f16_materialised_tensors.find(ggml_get_name(cur));
+            if (f16_mat != f16_materialised_tensors.end()) {
+                ggml_backend_tensor_set(cur, f16_mat->second.data(), 0,
+                                        f16_mat->second.size() * sizeof(uint16_t));
                 continue;
             }
             auto expanded = expanded_f32_tensors.find(ggml_get_name(cur));
@@ -521,18 +885,10 @@ bool load_supertonic_gguf(const std::string & path,
         }
 
         // Audit finding F6 — populate the pre-transposed t_proj
-        // companions from the source tensors.  At the four call
-        // sites in supertonic_vector_estimator.cpp the original
-        // matmul weight is consumed as `ggml_cont(ggml_transpose(W))`
-        // every graph build; storing the transposed form in the
-        // backend buffer once at load eliminates both the in-graph
-        // transpose op and the ~640 KiB of compute-buffer copies
-        // that came with it.  Each source is downloaded once,
-        // transposed host-side, and uploaded into the companion.
-        // The mapping from `<name>` to `<name>__T` is added to
-        // `model.source_tensors` so `require_source_tensor` works
-        // at the rewritten call sites.
-        {
+        // companions from the source tensors.  Gated on
+        // `f6_active`; see the declaration block above for the
+        // Phase 2A interaction note.
+        if (f6_active) {
             static const char * const kF6Sources[4] = {
                 "vector_estimator:onnx::MatMul_3095",
                 "vector_estimator:onnx::MatMul_3140",
@@ -568,6 +924,63 @@ bool load_supertonic_gguf(const std::string & path,
                 }
                 ggml_backend_tensor_set(pretrans_t_proj[i], dst.data(), 0, dst.size() * sizeof(float));
                 model.source_tensors[std::string(kF6Sources[i]) + "__T"] = pretrans_t_proj[i];
+            }
+        }
+
+        // Audit follow-up #2 — F13 + F16.
+        //
+        // F13: pre-download the text-encoder layer-norm weights
+        // that the GPU production path's scalar `layer_norm_channel`
+        // continuation consumes on every synth.  Roster covers the
+        // four `attn_encoder.norm_layers_{1,2}.{0..3}` pairs plus
+        // the trailing `speech_prompted_text_encoder.norm.norm.*`
+        // pair — 18 entries total — saving ~18 GPU→host syncs per
+        // synth on a non-CPU backend.  See
+        // `AUDIT_SUPERTONIC_OPENCL.md` § F13 (audit follow-up #2).
+        {
+            auto cache_if_present = [&](const std::string & name) {
+                auto it = model.source_tensors.find(name);
+                if (it == model.source_tensors.end() || !it->second) return;
+                std::vector<float> & dst = model.text_encoder_ln_weights[name];
+                dst.resize((size_t) ggml_nelements(it->second));
+                ggml_backend_tensor_get(it->second, dst.data(), 0, ggml_nbytes(it->second));
+            };
+            static const char * const kLnStems[] = {
+                "text_encoder:tts.ttl.text_encoder.attn_encoder.norm_layers_1.0",
+                "text_encoder:tts.ttl.text_encoder.attn_encoder.norm_layers_1.1",
+                "text_encoder:tts.ttl.text_encoder.attn_encoder.norm_layers_1.2",
+                "text_encoder:tts.ttl.text_encoder.attn_encoder.norm_layers_1.3",
+                "text_encoder:tts.ttl.text_encoder.attn_encoder.norm_layers_2.0",
+                "text_encoder:tts.ttl.text_encoder.attn_encoder.norm_layers_2.1",
+                "text_encoder:tts.ttl.text_encoder.attn_encoder.norm_layers_2.2",
+                "text_encoder:tts.ttl.text_encoder.attn_encoder.norm_layers_2.3",
+                "text_encoder:tts.ttl.speech_prompted_text_encoder.norm",
+            };
+            for (const char * stem : kLnStems) {
+                cache_if_present(std::string(stem) + ".norm.weight");
+                cache_if_present(std::string(stem) + ".norm.bias");
+            }
+        }
+
+        // F16: pre-download the two `tanh_k` tensors consumed by
+        // the speech-prompted attention's CPU-side packing loop.
+        // Each is ~50 × 256 floats; the per-synth pattern of "open
+        // a fresh ggml graph + read tanh_k + pack q/k/v + run
+        // flash attention + tear graph down" still requires the
+        // host-side tanh_k bytes for the pack loop, but those
+        // bytes don't need a fresh download on every synth.
+        {
+            static const char * const kTanhKSources[2] = {
+                "text_encoder:/speech_prompted_text_encoder/attention1/tanh/Tanh_output_0",
+                "text_encoder:/speech_prompted_text_encoder/attention2/tanh/Tanh_output_0",
+            };
+            for (int i = 0; i < 2; ++i) {
+                auto it = model.source_tensors.find(kTanhKSources[i]);
+                if (it == model.source_tensors.end() || !it->second) continue;
+                model.speech_tanh_k_cache[i].resize((size_t) ggml_nelements(it->second));
+                ggml_backend_tensor_get(it->second,
+                                        model.speech_tanh_k_cache[i].data(),
+                                        0, ggml_nbytes(it->second));
             }
         }
     } catch (const std::exception & e) {
@@ -615,13 +1028,15 @@ void free_supertonic_model(supertonic_model & model) {
     model.unicode_indexer.clear();
     model.languages.clear();
     model.tts_json.clear();
-    // Reset the OpenCL optimization caches (audit F1 / F9) added to
-    // supertonic_model.  The vector-estimator RoPE θ cache is a
-    // bare std::vector so its clear() is sufficient; the time
-    // embedding cache map is mutable so we clear it explicitly here
-    // even though dtor would handle it on the next load reuse.
+    // Reset the OpenCL optimization caches (audit F1 / F9 + F13 /
+    // F16) added to supertonic_model.  The vector-estimator RoPE θ
+    // cache is a bare std::vector so its clear() is sufficient; the
+    // time embedding cache map is mutable so we clear it explicitly
+    // here even though dtor would handle it on the next load reuse.
     model.vector_rope_theta.clear();
     model.time_emb_cache.clear();
+    model.text_encoder_ln_weights.clear();
+    for (auto & v : model.speech_tanh_k_cache) v.clear();
     model.generation_id = 0;
 }
 

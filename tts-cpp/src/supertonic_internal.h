@@ -119,6 +119,17 @@ struct supertonic_model {
     // matching chatterbox's --cfm-f16-kv-attn behaviour.
     bool use_f16_attn = false;
 
+    // Phase 2A — load-time F16 materialization for the hot
+    // matmul / pointwise-conv weights identified by
+    // `should_materialise_f16_weight`.  Halves the GPU read
+    // bandwidth into those ops on non-CPU backends.  Captured on
+    // the model state at load time so the graph builders can fall
+    // back through `repeat_like(model.vocoder.bn_scale_pre, …)`-
+    // style casts when a tensor's storage type changed.  Auto-
+    // enables on GPU backends, off on CPU (mirrors `use_f16_attn`).
+    // Override via `EngineOptions::f16_weights` / `--f16-weights`.
+    bool use_f16_weights = false;
+
     std::map<std::string, ggml_tensor *> tensors;
     std::unordered_map<std::string, ggml_tensor *> source_tensors;
     std::unordered_map<std::string, supertonic_voice_style> voices;
@@ -148,12 +159,48 @@ struct supertonic_model {
     // of supertonic_model: one engine per thread).  Key is
     // `(current << 32) | total`.
     mutable std::unordered_map<uint64_t, std::array<float, 64>> time_emb_cache;
+
+    // ----- Audit follow-up #2 caches (F13 / F16) -----
+    //
+    // F13: text-encoder LN weight host-side cache.  The text-encoder
+    // GGML production path runs four relpos + LN + FFN + LN
+    // iterations followed by a final speech-prompted LN; the LN
+    // step on each iteration calls the scalar `layer_norm_channel`
+    // which used to download γ + β from the backend on every call
+    // (~18 GPU→host downloads / synth on a non-CPU backend).
+    // Populated at `load_supertonic_gguf` time from
+    // `text_encoder:...attn_encoder.norm_layers_{1,2}.{0..3}.norm.{weight,bias}`
+    // plus the final `speech_prompted_text_encoder.norm.norm.*`.
+    // Keyed by the source-tensor name so the call-site rewrite
+    // becomes `auto & v = model.text_encoder_ln_weights[name]`.
+    // Empty entries fall back to `read_f32(model, name)` so a GGUF
+    // missing one of the rostered names degrades gracefully.
+    std::unordered_map<std::string, std::vector<float>> text_encoder_ln_weights;
+
+    // F16: speech-prompted attention `tanh_k` host-side cache.
+    // Indexed by attention layer (0 or 1).  Source tensors:
+    //   speech_tanh_k_cache[0] ←
+    //     "text_encoder:/speech_prompted_text_encoder/attention1/tanh/Tanh_output_0"
+    //   speech_tanh_k_cache[1] ←
+    //     "text_encoder:/speech_prompted_text_encoder/attention2/tanh/Tanh_output_0"
+    // Each ≈ 50 × 256 = 51.2 KiB; saves 2 sync points + ~100 KiB
+    // of redundant traffic per synth.
+    std::array<std::vector<float>, 2> speech_tanh_k_cache;
 };
 
+// `f16_weights`:
+//   -1 → auto (on when the resolved backend is non-CPU, off on CPU).
+//    0 → force off (every hot weight stays at its GGUF storage type).
+//    1 → force on  (every hot weight matching
+//        `should_materialise_f16_weight` is allocated as F16,
+//        regardless of backend).
+// See Phase 2A in `aiDocs/PLAN_SUPERTONIC_OPENCL.md` for the
+// roster + auto-policy rationale.
 bool load_supertonic_gguf(const std::string & path,
                           supertonic_model & model,
                           int n_gpu_layers = 0,
-                          bool verbose = false);
+                          bool verbose = false,
+                          int f16_weights = -1);
 void free_supertonic_model(supertonic_model & model);
 void supertonic_set_n_threads(supertonic_model & model, int n_threads);
 void supertonic_graph_compute(const supertonic_model & model, ggml_cgraph * graph);
@@ -275,6 +322,63 @@ bool supertonic_vector_step_ggml(const supertonic_model & model,
 std::array<float, 64> cached_time_embedding(const supertonic_model & model,
                                             int current_step,
                                             int total_steps);
+
+// Phase 2A — hot-weight predicate for F16 materialization.
+//
+// Returns `true` when `source_name` (the
+// `<stage>:<onnx-or-pytorch-path>` source key in
+// `model.source_tensors`) names one of the bandwidth-bound matmul /
+// pointwise-conv weights identified by the audit, and the load-time
+// hook should allocate it as `GGML_TYPE_F16` instead of `F32` when
+// `model.use_f16_weights` is on.  Pure function over the string; no
+// model state needed.  Documented in test_supertonic_f16_weights.cpp
+// with explicit positive + negative + edge-case rosters.
+//
+// Conservative roster:
+//   - vector_estimator attention W_query/W_key/W_value/W_out matmul
+//     weights (only those whose source name matches `onnx::MatMul_NNNN`
+//     where NNNN ∈ {3101..3110, 3116..3119, 3146..3155, 3161..3164,
+//                   3191..3200, 3206..3209, 3236..3245, 3251..3254}).
+//   - vector_estimator pwconv1/pwconv2 inside every convnext block,
+//     including `last_convnext`.
+//   - vocoder convnext pwconv1/pwconv2 + `head.layer1.net.weight`.
+//   - text-encoder linear weights `text_encoder:onnx::MatMul_*` and
+//     the per-layer FFN conv1/conv2 weights (`conv_1.weight`,
+//     `conv_2.weight`).
+//
+// Cold-weights list (predicate must return `false`):
+//   biases, per-channel γ/β, embedding tables, depthwise conv
+//   kernels, RoPE θ, BN scale/shift, normalizer scalars,
+//   pre-transposed `__T` companions, and anything else not on the
+//   audit's hot list.  See test_supertonic_f16_weights.cpp.
+bool should_materialise_f16_weight(const std::string & source_name);
+
+// Phase 2D — machine-readable per-island timing emitter.
+//
+// Three-function API:
+//   - `supertonic_profile_csv_enabled()` — true when either the
+//     env var `SUPERTONIC_PROFILE_CSV=PATH.csv` is set OR a
+//     subsequent `_set_path(PATH)` has installed a path.
+//   - `supertonic_profile_csv_record(stage, island, step, wall_ms)`
+//     — appends one row to the CSV.  No-op when disabled.
+//   - `supertonic_profile_csv_flush()` — flushes buffered writes
+//     to disk.  Called from each per-stage profile hook after the
+//     synth completes, plus at process exit via atexit.
+//   - `supertonic_profile_csv_set_path(PATH | nullptr)` — test-only
+//     hook to override the env var without touching `setenv`.
+//     Passing `nullptr` closes the active file + disables the
+//     emitter; passing a new path reopens (header is written
+//     only when the file is empty, so re-open appends).
+//
+// Thread-safety: single-threaded by design.  Recording from
+// multiple threads at once is undefined; callers serialise via the
+// usual single-engine-per-thread convention.  See
+// `test_supertonic_profile_csv.cpp` for the schema contract.
+bool supertonic_profile_csv_enabled();
+void supertonic_profile_csv_record(const char * stage, const char * island,
+                                   int step, double wall_ms);
+void supertonic_profile_csv_flush();
+void supertonic_profile_csv_set_path(const char * path);
 
 bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
                                        const float * noisy_latent,

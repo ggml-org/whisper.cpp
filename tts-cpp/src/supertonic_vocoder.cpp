@@ -56,11 +56,21 @@ bool vocoder_profile_enabled() {
 
 void profile_vocoder_checkpoint(const char * label,
                                 std::chrono::steady_clock::time_point & last) {
-    if (!vocoder_profile_enabled()) return;
+    const bool stderr_on = vocoder_profile_enabled();
+    const bool csv_on    = supertonic_profile_csv_enabled();
+    if (!stderr_on && !csv_on) return;
     const auto now = std::chrono::steady_clock::now();
     const double ms = std::chrono::duration<double, std::milli>(now - last).count();
     last = now;
-    std::fprintf(stderr, "supertonic_vocoder_profile island=%s ms=%.3f\n", label, ms);
+    if (stderr_on) {
+        std::fprintf(stderr, "supertonic_vocoder_profile island=%s ms=%.3f\n", label, ms);
+    }
+    // Phase 2D: machine-readable row.  `step` doesn't apply to the
+    // vocoder (synth-level call, not denoise-step), so we pass -1
+    // as the sentinel.
+    if (csv_on) {
+        supertonic_profile_csv_record("vocoder", label, /*step=*/-1, ms);
+    }
 }
 
 ggml_tensor * repeat_like(ggml_context * ctx, ggml_tensor * v, ggml_tensor * like) {

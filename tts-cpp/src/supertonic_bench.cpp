@@ -120,6 +120,9 @@ int main(int argc, char ** argv) {
     int n_gpu_layers = 0;
     // -1 = auto (GPU on, CPU off); 0/1 to force.  See model.use_f16_attn.
     int f16_attn = -1;
+    // Phase 2A — F16 load-time materialization of the hot matmul /
+    // pwconv weights.  -1 auto / 0 / 1 force.
+    int f16_weights = -1;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -140,6 +143,7 @@ int main(int argc, char ** argv) {
         else if (a == "--threads") n_threads = std::stoi(next("--threads"));
         else if (a == "--n-gpu-layers") n_gpu_layers = std::stoi(next("--n-gpu-layers"));
         else if (a == "--f16-attn") f16_attn = std::stoi(next("--f16-attn"));
+        else if (a == "--f16-weights") f16_weights = std::stoi(next("--f16-weights"));
         else if (a == "--json-out") json_out = next("--json-out");
         else if (a == "-h" || a == "--help") { usage(argv[0]); return 0; }
         else { fprintf(stderr, "unknown arg: %s\n", a.c_str()); usage(argv[0]); return 2; }
@@ -147,7 +151,7 @@ int main(int argc, char ** argv) {
     if (model_path.empty() || text.empty()) { usage(argv[0]); return 2; }
 
     supertonic_model model;
-    if (!load_supertonic_gguf(model_path, model, n_gpu_layers, /*verbose=*/false)) {
+    if (!load_supertonic_gguf(model_path, model, n_gpu_layers, /*verbose=*/false, f16_weights)) {
         fprintf(stderr, "failed to load model\n");
         return 1;
     }

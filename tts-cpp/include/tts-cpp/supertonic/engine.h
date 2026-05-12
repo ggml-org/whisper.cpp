@@ -64,6 +64,16 @@ struct EngineOptions {
     // effect on CPU (the cblas attention path is already efficient).
     int f16_attn = -1;
 
+    // F16 storage type for the audit-identified hot matmul /
+    // pointwise-conv weights (vector-estimator attention W_*,
+    // pwconv1/pwconv2 across every convnext block, vocoder
+    // head linear, text-encoder linears, …).  Same -1/0/1 tri-state
+    // as `f16_attn`: -1 auto (on for GPU, off for CPU); 0 or 1 force.
+    // Halves the GPU read bandwidth into those ops with a small
+    // (≤ 2e-3 abs / 5e-3 cosine) numerical drift on the end-to-end
+    // synth.  Mirrors chatterbox's CHATTERBOX_F16_CFM gate.
+    int f16_weights = -1;
+
     // Optional path to a .npy file containing the initial noise tensor of
     // shape [1, latent_channels, latent_len] (float32).  When provided,
     // latent_len is taken from the npy file (overriding the duration-

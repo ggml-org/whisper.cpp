@@ -122,7 +122,9 @@ struct Engine::Impl {
         if (!std::filesystem::exists(opts.model_gguf_path)) {
             throw std::runtime_error(supertonic_setup_hint(opts.model_gguf_path));
         }
-        if (!load_supertonic_gguf(opts.model_gguf_path, model, opts.n_gpu_layers, false)) {
+        if (!load_supertonic_gguf(opts.model_gguf_path, model,
+                                  opts.n_gpu_layers, /*verbose=*/false,
+                                  opts.f16_weights)) {
             throw std::runtime_error("Supertonic Engine: failed to load GGUF: " +
                                      opts.model_gguf_path);
         }

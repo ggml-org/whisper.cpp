@@ -53,7 +53,9 @@ void profile_text_begin() {
 }
 
 void profile_text_compute(const supertonic_model & model, ggml_cgraph * graph, const char * island) {
-    if (!text_profile_enabled()) {
+    const bool stderr_on = text_profile_enabled();
+    const bool csv_on    = supertonic_profile_csv_enabled();
+    if (!stderr_on && !csv_on) {
         supertonic_graph_compute(model, graph);
         return;
     }
@@ -64,8 +66,17 @@ void profile_text_compute(const supertonic_model & model, ggml_cgraph * graph, c
     const auto t1 = std::chrono::steady_clock::now();
     const double compute_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     state.last = t1;
-    std::fprintf(stderr, "supertonic_text_profile island=%s pre_ms=%.3f compute_ms=%.3f\n",
-                 island, pre_ms, compute_ms);
+    if (stderr_on) {
+        std::fprintf(stderr, "supertonic_text_profile island=%s pre_ms=%.3f compute_ms=%.3f\n",
+                     island, pre_ms, compute_ms);
+    }
+    // Phase 2D: text encoder doesn't have a denoise step concept;
+    // pass -1 sentinel.  Use the negative step value to filter
+    // text-stage rows out of vector-stage analyses in the
+    // analysis script.
+    if (csv_on) {
+        supertonic_profile_csv_record("text", island, /*step=*/-1, compute_ms);
+    }
 }
 
 void profile_text_checkpoint(const char * island) {
@@ -737,6 +748,33 @@ void build_speech_attention_cache(speech_attention_cache & cache,
     ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
 }
 
+// F14 — cached speech-prompted attention QKV graph.
+//
+// Pre-audit, `speech_prompted_attention_ggml` allocated a fresh
+// `ggml_context` + `ggml_gallocr_t` every call.  The graph shape
+// depends only on `(L, idx)`; for the typical synth flow
+// (one text encoder call → 2 layers) that's 2 cold misses on the
+// first synth, then steady-state zero rebuilds.  Same pattern as
+// the F8 / F11 caches.
+struct speech_qkv_graph_cache {
+    const supertonic_model * model = nullptr;
+    uint64_t generation_id = 0;
+    int idx = -1;
+    int L = 0;
+    std::vector<uint8_t> buf;
+    ggml_context * ctx = nullptr;
+    ggml_cgraph * gf = nullptr;
+    ggml_gallocr_t allocr = nullptr;
+    ggml_tensor * x_in = nullptr;
+    ggml_tensor * style_in = nullptr;
+};
+
+inline void free_speech_qkv_cache(speech_qkv_graph_cache & cache) {
+    supertonic_safe_gallocr_free(cache.allocr, cache.generation_id);
+    if (cache.ctx) ggml_free(cache.ctx);
+    cache = {};
+}
+
 void speech_prompted_attention_ggml(const supertonic_model & m, int idx,
                                     const std::vector<float> & x_lc, int L,
                                     const float * style_ttl,
@@ -750,50 +788,81 @@ void speech_prompted_attention_ggml(const supertonic_model & m, int idx,
     const std::string v_w = "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3680" : "onnx::MatMul_3684");
     const std::string o_w = "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3681" : "onnx::MatMul_3685");
 
-    constexpr int MAX_NODES = 256;
-    static size_t buf_size = ggml_tensor_overhead() * MAX_NODES + ggml_graph_overhead_custom(MAX_NODES, false);
-    thread_local std::vector<uint8_t> buf(buf_size);
-    ggml_init_params gp = { buf_size, buf.data(), true };
-    ggml_context * ctx = ggml_init(gp);
-    ggml_cgraph * gf = ggml_new_graph_custom(ctx, MAX_NODES, false);
+    // F14: per-(model, idx, L) cached QKV graph.  Two thread-local
+    // slots so the two speech-prompted layers don't fight over a
+    // shared cache key.  The inner flash-attention graph is still
+    // cached separately in `speech_attention_cache` below.
+    thread_local speech_qkv_graph_cache qkv_caches[2];
+    if (idx < 0 || idx >= 2) throw std::runtime_error("invalid speech attention idx");
+    speech_qkv_graph_cache & qkv_cache = qkv_caches[idx];
+    if (qkv_cache.model != &m || qkv_cache.generation_id != m.generation_id ||
+        qkv_cache.idx != idx || qkv_cache.L != L) {
+        free_speech_qkv_cache(qkv_cache);
+        qkv_cache.model = &m;
+        qkv_cache.generation_id = m.generation_id;
+        qkv_cache.idx = idx;
+        qkv_cache.L = L;
 
-    ggml_tensor * x_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, L, C);
-    ggml_set_name(x_in, "speech_attn_x"); ggml_set_input(x_in);
-    ggml_tensor * style_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, Lctx, C);
-    ggml_set_name(style_in, "speech_attn_style"); ggml_set_input(style_in);
-    ggml_tensor * q = dense_matmul_time_ggml(ctx, x_in,
-        require_source_tensor(m, q_w),
-        require_source_tensor(m, p + ".W_query.linear.bias"));
-    ggml_set_name(q, "speech_attn_q"); ggml_set_output(q); ggml_build_forward_expand(gf, q);
-    ggml_tensor * v = dense_matmul_time_ggml(ctx, style_in,
-        require_source_tensor(m, v_w),
-        require_source_tensor(m, p + ".W_value.linear.bias"));
-    ggml_set_name(v, "speech_attn_v"); ggml_set_output(v); ggml_build_forward_expand(gf, v);
+        constexpr int MAX_NODES = 256;
+        const size_t buf_size = ggml_tensor_overhead() * MAX_NODES +
+                                ggml_graph_overhead_custom(MAX_NODES, false);
+        qkv_cache.buf.assign(buf_size, 0);
+        ggml_init_params gp = { buf_size, qkv_cache.buf.data(), true };
+        qkv_cache.ctx = ggml_init(gp);
+        qkv_cache.gf = ggml_new_graph_custom(qkv_cache.ctx, MAX_NODES, false);
 
-    ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
-    if (!allocr) {
-        ggml_free(ctx);
-        throw std::runtime_error("ggml_gallocr_new speech text attention failed");
+        qkv_cache.x_in = ggml_new_tensor_2d(qkv_cache.ctx, GGML_TYPE_F32, L, C);
+        ggml_set_name(qkv_cache.x_in, "speech_attn_x"); ggml_set_input(qkv_cache.x_in);
+        qkv_cache.style_in = ggml_new_tensor_2d(qkv_cache.ctx, GGML_TYPE_F32, Lctx, C);
+        ggml_set_name(qkv_cache.style_in, "speech_attn_style"); ggml_set_input(qkv_cache.style_in);
+        ggml_tensor * q = dense_matmul_time_ggml(qkv_cache.ctx, qkv_cache.x_in,
+            require_source_tensor(m, q_w),
+            require_source_tensor(m, p + ".W_query.linear.bias"));
+        ggml_set_name(q, "speech_attn_q"); ggml_set_output(q);
+        ggml_build_forward_expand(qkv_cache.gf, q);
+        ggml_tensor * v_t = dense_matmul_time_ggml(qkv_cache.ctx, qkv_cache.style_in,
+            require_source_tensor(m, v_w),
+            require_source_tensor(m, p + ".W_value.linear.bias"));
+        ggml_set_name(v_t, "speech_attn_v"); ggml_set_output(v_t);
+        ggml_build_forward_expand(qkv_cache.gf, v_t);
+
+        qkv_cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
+        if (!qkv_cache.allocr) {
+            ggml_free(qkv_cache.ctx);
+            qkv_cache = {};
+            throw std::runtime_error("ggml_gallocr_new speech text attention failed");
+        }
+        if (!ggml_gallocr_reserve(qkv_cache.allocr, qkv_cache.gf)) {
+            ggml_gallocr_free(qkv_cache.allocr);
+            ggml_free(qkv_cache.ctx);
+            qkv_cache = {};
+            throw std::runtime_error("ggml_gallocr_reserve speech text attention failed");
+        }
+        ggml_gallocr_alloc_graph(qkv_cache.allocr, qkv_cache.gf);
     }
-    if (!ggml_gallocr_reserve(allocr, gf)) {
-        ggml_gallocr_free(allocr);
-        ggml_free(ctx);
-        throw std::runtime_error("ggml_gallocr_reserve speech text attention failed");
-    }
-    ggml_gallocr_alloc_graph(allocr, gf);
 
     std::vector<float> x_raw = pack_time_channel_for_ggml(x_lc, L, C);
     std::vector<float> style_tc((size_t)Lctx*C);
     for (int t = 0; t < Lctx; ++t) for (int c = 0; c < C; ++c) style_tc[(size_t)t*C+c] = style_ttl[(size_t)t*C+c];
     std::vector<float> style_raw = pack_time_channel_for_ggml(style_tc, Lctx, C);
-    ggml_backend_tensor_set(x_in, x_raw.data(), 0, x_raw.size()*sizeof(float));
-    ggml_backend_tensor_set(style_in, style_raw.data(), 0, style_raw.size()*sizeof(float));
+    ggml_backend_tensor_set(qkv_cache.x_in, x_raw.data(), 0, x_raw.size()*sizeof(float));
+    ggml_backend_tensor_set(qkv_cache.style_in, style_raw.data(), 0, style_raw.size()*sizeof(float));
     std::string qkv_island = "speech" + std::to_string(idx) + "_qkv";
-    profile_text_compute(m, gf, qkv_island.c_str());
+    profile_text_compute(m, qkv_cache.gf, qkv_island.c_str());
 
-    std::vector<float> q_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "speech_attn_q"));
-    std::vector<float> v_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "speech_attn_v"));
-    f32_tensor tanh_k = read_f32(m, "text_encoder:/speech_prompted_text_encoder/attention" + std::to_string(attn_num) + "/tanh/Tanh_output_0");
+    std::vector<float> q_out = tensor_to_time_channel(ggml_graph_get_tensor(qkv_cache.gf, "speech_attn_q"));
+    std::vector<float> v_out = tensor_to_time_channel(ggml_graph_get_tensor(qkv_cache.gf, "speech_attn_v"));
+    // F16: pre-cached at load (`m.speech_tanh_k_cache[idx]`).  Falls
+    // back to the per-call `read_f32` only when the GGUF didn't
+    // carry the rostered name (legacy + future-compat).
+    const float * tanh_k_data = nullptr;
+    f32_tensor tanh_k_fallback;
+    if (idx >= 0 && idx < 2 && !m.speech_tanh_k_cache[idx].empty()) {
+        tanh_k_data = m.speech_tanh_k_cache[idx].data();
+    } else {
+        tanh_k_fallback = read_f32(m, "text_encoder:/speech_prompted_text_encoder/attention" + std::to_string(attn_num) + "/tanh/Tanh_output_0");
+        tanh_k_data = tanh_k_fallback.data.data();
+    }
     std::vector<float> q_pack((size_t)half*L*2), k_pack((size_t)half*Lctx*2), v_pack((size_t)half*Lctx*2);
     for (int h = 0; h < 2; ++h) {
         for (int t = 0; t < L; ++t) {
@@ -801,7 +870,7 @@ void speech_prompted_attention_ggml(const supertonic_model & m, int idx,
         }
         for (int t = 0; t < Lctx; ++t) {
             for (int d = 0; d < half; ++d) {
-                k_pack[(size_t)d + (size_t)half*((size_t)t + (size_t)Lctx*h)] = tanh_k.data[((size_t)h*half + d)*Lctx + t];
+                k_pack[(size_t)d + (size_t)half*((size_t)t + (size_t)Lctx*h)] = tanh_k_data[((size_t)h*half + d)*Lctx + t];
                 v_pack[(size_t)d + (size_t)half*((size_t)t + (size_t)Lctx*h)] = v_out[(size_t)t*C + h*half + d];
             }
         }
@@ -819,8 +888,8 @@ void speech_prompted_attention_ggml(const supertonic_model & m, int idx,
     std::string flash_island = "speech" + std::to_string(idx) + "_flash";
     profile_text_compute(m, cache.gf, flash_island.c_str());
     out_lc = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, "speech_attn_out"));
-    ggml_gallocr_free(allocr);
-    ggml_free(ctx);
+    // F14: outer QKV graph lives in `qkv_cache` (above) and
+    // survives across synths.
 }
 
 } // namespace
@@ -971,14 +1040,30 @@ bool supertonic_text_encoder_forward_ggml(const supertonic_model & model,
         // layers are custom scalar continuations for now; the ConvNeXt front
         // half above is already run as a GGML graph.
         std::vector<float> convnext_out = x;
+        // F13: layer-norm weights are pre-downloaded into
+        // `model.text_encoder_ln_weights` at load time; the helper
+        // below wraps the lookup with a `read_f32` fallback so a
+        // GGUF that's missing one of the rostered names degrades
+        // gracefully to the legacy behaviour.
+        auto ln_cached = [&](const std::string & name) -> f32_tensor {
+            auto it = model.text_encoder_ln_weights.find(name);
+            if (it != model.text_encoder_ln_weights.end() && !it->second.empty()) {
+                f32_tensor t;
+                t.data = it->second;
+                t.ne[0] = (int64_t) it->second.size();
+                t.ne[1] = 1; t.ne[2] = 1; t.ne[3] = 1;
+                return t;
+            }
+            return read_f32(model, name);
+        };
         for (int i = 0; i < 4; ++i) {
             std::vector<float> residual = x;
             relpos_attention_ggml(model, i, x, L, C, x);
             for (size_t j = 0; j < x.size(); ++j) x[j] += residual[j];
             layer_norm_channel(
                 x, L, C,
-                read_f32(model, "text_encoder:tts.ttl.text_encoder.attn_encoder.norm_layers_1." + std::to_string(i) + ".norm.weight"),
-                read_f32(model, "text_encoder:tts.ttl.text_encoder.attn_encoder.norm_layers_1." + std::to_string(i) + ".norm.bias"));
+                ln_cached("text_encoder:tts.ttl.text_encoder.attn_encoder.norm_layers_1." + std::to_string(i) + ".norm.weight"),
+                ln_cached("text_encoder:tts.ttl.text_encoder.attn_encoder.norm_layers_1." + std::to_string(i) + ".norm.bias"));
             std::string attn_post = "relpos" + std::to_string(i) + "_res_norm";
             profile_text_checkpoint(attn_post.c_str());
             residual = x;
@@ -986,8 +1071,8 @@ bool supertonic_text_encoder_forward_ggml(const supertonic_model & model,
             for (size_t j = 0; j < x.size(); ++j) x[j] += residual[j];
             layer_norm_channel(
                 x, L, C,
-                read_f32(model, "text_encoder:tts.ttl.text_encoder.attn_encoder.norm_layers_2." + std::to_string(i) + ".norm.weight"),
-                read_f32(model, "text_encoder:tts.ttl.text_encoder.attn_encoder.norm_layers_2." + std::to_string(i) + ".norm.bias"));
+                ln_cached("text_encoder:tts.ttl.text_encoder.attn_encoder.norm_layers_2." + std::to_string(i) + ".norm.weight"),
+                ln_cached("text_encoder:tts.ttl.text_encoder.attn_encoder.norm_layers_2." + std::to_string(i) + ".norm.bias"));
             std::string ffn_post = "ffn" + std::to_string(i) + "_res_norm";
             profile_text_checkpoint(ffn_post.c_str());
         }
@@ -1002,10 +1087,12 @@ bool supertonic_text_encoder_forward_ggml(const supertonic_model & model,
         speech_prompted_attention_ggml(model, 1, x, L, style_ttl, attn_out);
         for (size_t i = 0; i < x.size(); ++i) x[i] = shared_residual[i] + attn_out[i];
         profile_text_checkpoint("speech1_residual");
+        // F13: final speech-prompted layer norm pair lives in the
+        // same host-side cache.
         layer_norm_channel(
             x, L, C,
-            read_f32(model, "text_encoder:tts.ttl.speech_prompted_text_encoder.norm.norm.weight"),
-            read_f32(model, "text_encoder:tts.ttl.speech_prompted_text_encoder.norm.norm.bias"));
+            ln_cached("text_encoder:tts.ttl.speech_prompted_text_encoder.norm.norm.weight"),
+            ln_cached("text_encoder:tts.ttl.speech_prompted_text_encoder.norm.norm.bias"));
         profile_text_checkpoint("speech_norm");
 
         text_emb_out.assign((size_t) C * L, 0.0f);

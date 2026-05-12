@@ -61,7 +61,9 @@ void profile_vector_compute(const supertonic_model & model,
                             ggml_cgraph * graph,
                             int step,
                             const char * island) {
-    if (!vector_profile_enabled()) {
+    const bool stderr_on = vector_profile_enabled();
+    const bool csv_on    = supertonic_profile_csv_enabled();
+    if (!stderr_on && !csv_on) {
         supertonic_graph_compute(model, graph);
         return;
     }
@@ -72,8 +74,17 @@ void profile_vector_compute(const supertonic_model & model,
     const auto t1 = std::chrono::steady_clock::now();
     const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     state.last = t1;
-    std::fprintf(stderr, "supertonic_vector_profile step=%d island=%s pre_ms=%.3f compute_ms=%.3f\n",
-                 step, island, pre_ms, ms);
+    if (stderr_on) {
+        std::fprintf(stderr, "supertonic_vector_profile step=%d island=%s pre_ms=%.3f compute_ms=%.3f\n",
+                     step, island, pre_ms, ms);
+    }
+    // Phase 2D: machine-readable timing for the post-mortem
+    // analysis script.  Records every graph compute call with the
+    // stage/island context the existing stderr line already
+    // carries.  No-op when the CSV emitter isn't enabled.
+    if (csv_on) {
+        supertonic_profile_csv_record("vector", island, step, ms);
+    }
 }
 
 void profile_vector_step_end(int step) {

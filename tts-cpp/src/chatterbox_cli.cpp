@@ -373,6 +373,10 @@ struct cli_params {
     // (on GPU, off on CPU); 0 / 1 force the setting.  Maps onto
     // EngineOptions::f16_attn.  See `--f16-attn` flag below.
     int32_t     supertonic_f16_attn = -1;
+    // Load-time F16 materialization for the audit-identified hot
+    // matmul / pwconv weights (Phase 2A).  -1 = auto / 0 / 1 force.
+    // Maps onto EngineOptions::f16_weights.
+    int32_t     supertonic_f16_weights = -1;
     bool        has_supertonic_options = false;
 
     // Streaming synthesis (PROGRESS.md B1).  When > 0, speech tokens from
@@ -507,6 +511,11 @@ static void print_usage(const char * argv0) {
     fprintf(stderr, "                          to auto (on for GPU/OpenCL, off for CPU).  Triggers\n");
     fprintf(stderr, "                          the OpenCL `flash_attn_f32_f16` kernel on Adreno;\n");
     fprintf(stderr, "                          see PROGRESS_SUPERTONIC.md OpenCL section.\n");
+    fprintf(stderr, "  --f16-weights 0|1       Load-time F16 materialization for the hot matmul /\n");
+    fprintf(stderr, "                          pwconv weights identified by the audit.  Defaults\n");
+    fprintf(stderr, "                          to auto (on for GPU, off for CPU).  Halves the GPU\n");
+    fprintf(stderr, "                          read bandwidth into those ops with a small (~2e-3)\n");
+    fprintf(stderr, "                          numerical drift on the end-to-end synth.\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "  --stream-chunk-tokens N Synthesize the wav in streaming chunks of N speech\n");
     fprintf(stderr, "                          tokens each (~1 s audio per 25-token chunk).  With\n");
@@ -646,6 +655,7 @@ static bool parse_args(int argc, char ** argv, cli_params & params) {
         else if (arg == "--speed")          { if (!parse_float("--speed",          params.supertonic_speed)) return false; params.has_supertonic_options = true; }
         else if (arg == "--noise-npy")      { auto v = next("--noise-npy");      if (!v) return false; params.supertonic_noise_npy = v; params.has_supertonic_options = true; }
         else if (arg == "--f16-attn")       { if (!parse_int  ("--f16-attn",       params.supertonic_f16_attn)) return false; params.has_supertonic_options = true; }
+        else if (arg == "--f16-weights")    { if (!parse_int  ("--f16-weights",    params.supertonic_f16_weights)) return false; params.has_supertonic_options = true; }
         else if (arg == "--cfm-f16-kv-attn") { params.cfm_f16_kv_attn = true; }
         else if (arg == "--max-sentence-chars") { if (!parse_int("--max-sentence-chars", params.max_sentence_chars)) return false; }
         else if (arg == "--no-auto-split")  { params.max_sentence_chars = 0; }
@@ -840,6 +850,7 @@ static int run_supertonic_cli_path(const cli_params & params) {
     opts.n_threads = params.n_threads;
     opts.n_gpu_layers = params.n_gpu_layers;
     opts.f16_attn = params.supertonic_f16_attn;
+    opts.f16_weights = params.supertonic_f16_weights;
     opts.noise_npy_path = params.supertonic_noise_npy;
 
     auto result = tts_cpp::supertonic::synthesize(opts, params.text);
