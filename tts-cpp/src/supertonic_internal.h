@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <array>
+#include <cmath>
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -508,6 +509,116 @@ struct supertonic_op_dispatch_scope {
     supertonic_op_dispatch_scope(const supertonic_op_dispatch_scope &)             = delete;
     supertonic_op_dispatch_scope & operator=(const supertonic_op_dispatch_scope &) = delete;
 };
+
+// ---------------------------------------------------------------------
+// Audit finding F20 (partial / Phase 2H) — RoPE rotation in-graph
+// with host-precomputed cos/sin tables.
+//
+// Replaces the per-attention-site `apply_rope(theta, q, L, H, D)`
+// host loop with a GPU-native rotation that reuses cos/sin tables
+// uploaded once per (L, θ).  Eliminates the CPU rotation step
+// (~50 µs × 40 sites/synth ≈ 2 ms) and is the prerequisite for a
+// follow-up that wires Q/K directly from the QKV graph into the
+// attention graph (cuts the host round-trip on Q and K outright).
+//
+// Formula it matches (exactly mirrors the scalar `apply_rope` in
+// `supertonic_vector_estimator.cpp`):
+//
+//     angle = (t / L) * theta[d]            ← `t/L`, not absolute t
+//     cs = cos(angle), sn = sin(angle)
+//     for d in [0, half):
+//         x[t, h, d]      := x[t, h, d]*cs       - x[t, h, half+d]*sn
+//         x[t, h, half+d] := x[t, h, half+d]*cs  + x[t, h, d]*sn
+//
+// Tensor contract:
+//   - `x`         : F32, ne=[head_dim, n_heads, L].  Memory layout
+//                   matches the scalar reference's
+//                   `data[t*H*D + h*D + d]`.
+//   - `cos_table` : F32, ne=[half, L]. cos_table[t*half + d] = cos((t/L)*θ[d]).
+//   - `sin_table` : F32, ne=[half, L]. Analogous.
+//   - returns     : F32, ne=[head_dim, n_heads, L].  Rotated x.
+//
+// Op-set used:
+//   `ggml_view_3d`, `ggml_reshape_3d`, `ggml_repeat`, `ggml_mul`,
+//   `ggml_sub`, `ggml_add`, `ggml_concat`.
+// All universally supported (incl. baseline upstream OpenCL —
+// see `ggml_opencl_supports_op()`), so the helper doesn't require
+// the chatterbox-patched `ggml_sin` / `ggml_cos` / `ggml_rope`.
+//
+// Parity-tested in `test_supertonic_rope_in_graph.cpp` against
+// the scalar `apply_rope` for the two hot vector-estimator shapes
+// + a zero-θ identity check.  Tolerance `1e-4` absolute.
+inline ggml_tensor * apply_rope_in_graph(ggml_context * ctx,
+                                         ggml_tensor * x,
+                                         ggml_tensor * cos_table,
+                                         ggml_tensor * sin_table) {
+    // Shape contracts (asserted at caller via test harness; here
+    // we only deref the fields).
+    const int64_t head_dim = x->ne[0];
+    const int64_t n_heads  = x->ne[1];
+    const int64_t L        = x->ne[2];
+    const int64_t half     = head_dim / 2;
+
+    // Split x along axis 0 into lower and upper halves.  Both
+    // halves share x's strides (`nb[0..2]`); the upper half just
+    // adds a half-byte offset.  Memory underneath is unchanged;
+    // these are views, not copies.
+    ggml_tensor * x_lower = ggml_view_3d(
+        ctx, x, half, n_heads, L,
+        /*nb1=*/x->nb[1], /*nb2=*/x->nb[2],
+        /*offset=*/0);
+    ggml_tensor * x_upper = ggml_view_3d(
+        ctx, x, half, n_heads, L,
+        /*nb1=*/x->nb[1], /*nb2=*/x->nb[2],
+        /*offset=*/(size_t) half * x->nb[0]);
+
+    // Broadcast cos/sin over n_heads: cos has ne=[half, L]; we
+    // need [half, n_heads, L] to align with x_lower/x_upper.
+    // `ggml_reshape_3d(c, half, 1, L)` gives ne=[half, 1, L] (a
+    // shape-changing zero-cost view of the same memory); then
+    // `ggml_repeat(c_3d, x_lower)` broadcasts axis 1 from 1 to
+    // n_heads.  ggml_can_repeat accepts the (..., 1, ...) → (...,
+    // N, ...) broadcast pattern unconditionally.
+    ggml_tensor * cos_3d = ggml_reshape_3d(ctx, cos_table, half, 1, L);
+    ggml_tensor * sin_3d = ggml_reshape_3d(ctx, sin_table, half, 1, L);
+    ggml_tensor * cos_b  = ggml_repeat(ctx, cos_3d, x_lower);
+    ggml_tensor * sin_b  = ggml_repeat(ctx, sin_3d, x_lower);
+
+    // Rotation: standard 2×2 cos/-sin / sin/cos block applied
+    // pointwise.  ggml_concat dim=0 stitches the lower + upper
+    // halves back into a [head_dim, n_heads, L] tensor with the
+    // same memory layout x came in with.
+    ggml_tensor * new_lower = ggml_sub(ctx,
+        ggml_mul(ctx, x_lower, cos_b),
+        ggml_mul(ctx, x_upper, sin_b));
+    ggml_tensor * new_upper = ggml_add(ctx,
+        ggml_mul(ctx, x_upper, cos_b),
+        ggml_mul(ctx, x_lower, sin_b));
+    return ggml_concat(ctx, new_lower, new_upper, /*dim=*/0);
+}
+
+// Host-side helper: precompute the (cos, sin) tables consumed by
+// `apply_rope_in_graph` for a given (L, θ) pair.  Output layout
+// matches the GGML tensor's natural row-major upload: element
+// (t, d) at `out[t*half + d]`.  Callers cache by L on
+// `supertonic_model::rope_cos_sin_cache` and upload once per cold
+// miss.  Pure function over (theta, L, half); no model state.
+inline void make_rope_cos_sin_tables(const float * theta,
+                                     int L,
+                                     int half,
+                                     std::vector<float> & cos_out,
+                                     std::vector<float> & sin_out) {
+    cos_out.resize((size_t) L * half);
+    sin_out.resize((size_t) L * half);
+    for (int t = 0; t < L; ++t) {
+        const float t_frac = (float) t / (float) L;
+        for (int d = 0; d < half; ++d) {
+            const float angle = t_frac * theta[d];
+            cos_out[(size_t) t * half + d] = std::cos(angle);
+            sin_out[(size_t) t * half + d] = std::sin(angle);
+        }
+    }
+}
 
 // Inline definition of the forward-declared portable leaky-relu helper
 // above.  Must come after `supertonic_use_cpu_custom_ops()` is

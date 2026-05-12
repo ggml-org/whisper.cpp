@@ -651,6 +651,15 @@ if (TTS_CPP_BUILD_TESTS)
     # F19 vector-estimator front-block graph cache.
     add_supertonic_harness(test-supertonic-audit3-caches
         test/test_supertonic_audit3_caches.cpp)
+    # OpenCL audit follow-up #4 — F20 partial / Phase 2H RoPE-in-
+    # graph helper (parity vs scalar apply_rope on CPU backend with
+    # synthetic input).  Unit-level — no GGUF, no fixture.
+    add_executable(test-supertonic-rope-in-graph
+        test/test_supertonic_rope_in_graph.cpp)
+    target_link_libraries(test-supertonic-rope-in-graph PRIVATE ggml)
+    target_include_directories(test-supertonic-rope-in-graph PRIVATE ggml/include src)
+    tts_cpp_apply_ccache(test-supertonic-rope-in-graph)
+    tts_cpp_register_test(test-supertonic-rope-in-graph LABEL "unit")
 
     # OpenCL bring-up unit tests (QVAC-18607).  Three CPU-only
     # parity / structural tests for the dispatch + portable-op
