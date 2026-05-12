@@ -182,6 +182,13 @@ struct supertonic_model {
     // global storage-type selector).
     int precision_id = 0; // supertonic_precision::F32
 
+    // QVAC-18605 round 6 — count of tensors that the curated allow-
+    // list would have promoted to F16 but the user-supplied
+    // `f16_weights_deny_list` excluded.  Surfaced in bench output
+    // so operators can confirm their deny-list took effect.  Zero
+    // for the default empty deny-list path (zero behaviour change).
+    int f16_weights_excluded_count = 0;
+
     std::map<std::string, ggml_tensor *> tensors;
     std::unordered_map<std::string, ggml_tensor *> source_tensors;
     std::unordered_map<std::string, supertonic_voice_style> voices;
@@ -300,13 +307,21 @@ enum class supertonic_precision {
 //        treated as 0 today.
 // Has no effect when the build wasn't compiled with `GGML_VULKAN`
 // or when `n_gpu_layers <= 0`.
+// QVAC-18605 round 6 — `f16_weights_deny_list`:
+//   Extra deny-list (substring patterns) for the F16-weights
+//   materialization predicate.  Layered ON TOP of the curated
+//   allow-list in `should_materialise_f16_weight()`.  Empty
+//   default → zero behaviour change for every existing call site.
+//   See `EngineOptions::f16_weights_deny_list` for the full
+//   contract + use cases.
 bool load_supertonic_gguf(const std::string & path,
                           supertonic_model & model,
                           int n_gpu_layers = 0,
                           bool verbose = false,
                           int f16_weights = -1,
                           supertonic_precision precision = supertonic_precision::F32,
-                          int vulkan_device = 0);
+                          int vulkan_device = 0,
+                          const std::vector<std::string> & f16_weights_deny_list = {});
 void free_supertonic_model(supertonic_model & model);
 void supertonic_set_n_threads(supertonic_model & model, int n_threads);
 void supertonic_graph_compute(const supertonic_model & model, ggml_cgraph * graph);
@@ -479,6 +494,40 @@ std::array<float, 64> cached_time_embedding(const supertonic_model & model,
 //   pre-transposed `__T` companions, and anything else not on the
 //   audit's hot list.  See test_supertonic_f16_weights.cpp.
 bool should_materialise_f16_weight(const std::string & source_name);
+
+// QVAC-18605 round 6 — 2-arg overload that layers a user-
+// overridable substring deny-list on top of the curated allow-
+// list above.  Returns `false` when ANY non-empty substring in
+// `extra_deny_substrings` is found inside `source_name`; otherwise
+// forwards to the 1-arg version.
+//
+// Contract:
+//   - Empty deny-list (default for every existing call site)
+//     behaves identically to the 1-arg version — zero behaviour
+//     change for the default path.
+//   - The deny-list is a DENY list, not an allow list: it can
+//     only flip `true → false`, never `false → true`.  A pattern
+//     that matches a cold weight is a no-op (cold + deny = cold).
+//   - Empty strings inside the deny-list are SKIPPED, not treated
+//     as universal matches (defensive against config typos that
+//     would otherwise silently disable F16 weights entirely).
+//   - Substring matching, not regex (matches the curated
+//     predicate's audit-friendly style; no regex compile cost,
+//     no invalid-pattern error surface).
+//
+// Use cases:
+//   - Researcher A/B testing a specific tensor pattern without
+//     recompiling.
+//   - Operator force-keeping a tensor as F32 if they observe
+//     drift on their hardware.
+//   - Safety net for new tensor patterns added in future GGUFs
+//     that the curated allow-list inadvertently scoops in.
+//
+// Plumbed through `EngineOptions::f16_weights_deny_list` →
+// `load_supertonic_gguf(..., f16_weights_deny_list)` → the
+// per-tensor allocation loop in `load_supertonic_gguf`.
+bool should_materialise_f16_weight(const std::string & source_name,
+                                   const std::vector<std::string> & extra_deny_substrings);
 
 // Phase 2D — machine-readable per-island timing emitter.
 //

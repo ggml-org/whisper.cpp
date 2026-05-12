@@ -792,6 +792,22 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-vulkan-device-select)
     tts_cpp_register_test(test-supertonic-vulkan-device-select LABEL "unit")
 
+    # QVAC-18605 round 6 — F16-weights deny-list API surface
+    # (EngineOptions::f16_weights_deny_list + load_supertonic_gguf
+    # 7th parameter + 2-arg should_materialise_f16_weight overload).
+    # CPU-only compile-time SFINAE + runtime defaults check; the
+    # predicate-level behaviour is covered by the existing
+    # test-supertonic-f16-weights TU.  The fixture-level shape /
+    # dtype check (loads model with deny-list, verifies a denied
+    # tensor stays F32) runs under the same fixture as the
+    # baseline F16-weights test on hosts with the GGUF available.
+    add_executable(test-supertonic-f16-deny-list-api
+        test/test_supertonic_f16_deny_list_api.cpp)
+    target_link_libraries(test-supertonic-f16-deny-list-api PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-f16-deny-list-api PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-f16-deny-list-api)
+    tts_cpp_register_test(test-supertonic-f16-deny-list-api LABEL "unit")
+
     add_executable(test-supertonic-f16-attn-parity
         test/test_supertonic_f16_attn_parity.cpp)
     target_link_libraries(test-supertonic-f16-attn-parity PRIVATE ggml)

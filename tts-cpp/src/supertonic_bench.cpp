@@ -55,6 +55,10 @@ void usage(const char * argv0) {
         "          [--vulkan-device N] (-1 = auto-pick adapter with most free VRAM)\n"
         "          [--f16-attn 0|1] [--f16-weights 0|1]\n"
         "          [--precision f32|f16|q8_0]   (default: f32)\n"
+        "          [--f16-weights-deny PATTERN1,PATTERN2,...] (substring patterns,\n"
+        "                            comma-separated; matching tensors stay F32 even\n"
+        "                            when --f16-weights is on.  Layered on top of the\n"
+        "                            curated allow-list.  Default empty.)\n"
         "          [--prewarm TEXT] (one cold-start synth before timed loop;\n"
         "                            independent of --warmup; CPU is no-op)\n"
         "          [--json-out FILE]\n",
@@ -168,6 +172,24 @@ int main(int argc, char ** argv) {
     // does, so the first warmup run reflects actual steady-state warm
     // time rather than the cold-start outlier.
     std::string prewarm_text;
+    // QVAC-18605 round 6 — comma-separated list of substring patterns
+    // that force matching tensors to stay F32 even when --f16-weights
+    // is on.  Layered on top of the curated allow-list in
+    // `should_materialise_f16_weight()`.  Default empty (zero
+    // behaviour change for every existing bench invocation).
+    std::vector<std::string> f16_weights_deny_list;
+
+    auto split_csv = [](const std::string & s) {
+        std::vector<std::string> out;
+        size_t start = 0;
+        for (size_t i = 0; i <= s.size(); ++i) {
+            if (i == s.size() || s[i] == ',') {
+                out.emplace_back(s.substr(start, i - start));
+                start = i + 1;
+            }
+        }
+        return out;
+    };
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -192,6 +214,7 @@ int main(int argc, char ** argv) {
         else if (a == "--f16-attn") f16_attn = std::stoi(next("--f16-attn"));
         else if (a == "--f16-weights") f16_weights = std::stoi(next("--f16-weights"));
         else if (a == "--precision") precision = parse_bench_precision(next("--precision"));
+        else if (a == "--f16-weights-deny") f16_weights_deny_list = split_csv(next("--f16-weights-deny"));
         else if (a == "--json-out") json_out = next("--json-out");
         else if (a == "-h" || a == "--help") { usage(argv[0]); return 0; }
         else { fprintf(stderr, "unknown arg: %s\n", a.c_str()); usage(argv[0]); return 2; }
@@ -201,7 +224,7 @@ int main(int argc, char ** argv) {
     supertonic_model model;
     if (!load_supertonic_gguf(model_path, model, n_gpu_layers,
                               /*verbose=*/false, f16_weights, precision,
-                              vulkan_device)) {
+                              vulkan_device, f16_weights_deny_list)) {
         fprintf(stderr, "failed to load model\n");
         return 1;
     }
@@ -431,6 +454,16 @@ int main(int argc, char ** argv) {
                supertonic_backend_supports_q8_0_kv_flash_attn(model.backend) ? " (q8_0_kv_attn=available)" : "",
                supertonic_backend_supports_bf16_kv_flash_attn(model.backend) ? " (bf16_kv_attn=available)" : "",
                supertonic_backend_supports_pinned_host_buffer(model.backend) ? " (pinned_host_buffer=available)" : "");
+        // QVAC-18605 round 6 — confirm the F16-weights deny-list took
+        // effect.  Silent when the operator didn't supply one (no
+        // visual noise on the default path).
+        if (!f16_weights_deny_list.empty()) {
+            printf("  f16_weights_deny_list: %zu pattern%s; %d tensor%s excluded\n",
+                   f16_weights_deny_list.size(),
+                   f16_weights_deny_list.size() == 1 ? "" : "s",
+                   model.f16_weights_excluded_count,
+                   model.f16_weights_excluded_count == 1 ? "" : "s");
+        }
         if (prewarm_ms > 0.0) {
             printf("  prewarm: %.1fms (cold-start, discarded)\n", prewarm_ms);
         }
@@ -474,6 +507,17 @@ int main(int argc, char ** argv) {
         os << "  \"prewarm_ms\": " << prewarm_ms << ",\n";
         os << "  \"f16_attn\": " << (model.use_f16_attn ? "true" : "false") << ",\n";
         os << "  \"f16_weights\": " << (model.use_f16_weights ? "true" : "false") << ",\n";
+        // QVAC-18605 round 6 — surface the user-supplied deny-list +
+        // the count of tensors it excluded.  Always emitted (even on
+        // the default empty path) so JSON consumers can attribute
+        // any quality regression observed in CI to a config change.
+        os << "  \"f16_weights_deny_list\": [";
+        for (size_t k = 0; k < f16_weights_deny_list.size(); ++k) {
+            if (k) os << ", ";
+            os << "\"" << json_escape(f16_weights_deny_list[k]) << "\"";
+        }
+        os << "],\n";
+        os << "  \"f16_weights_excluded_count\": " << model.f16_weights_excluded_count << ",\n";
         os << "  \"native_leaky_relu\": " << (model.use_native_leaky_relu ? "true" : "false") << ",\n";
         os << "  \"q8_0_kv_attn_available\": "
            << (supertonic_backend_supports_q8_0_kv_flash_attn(model.backend) ? "true" : "false") << ",\n";

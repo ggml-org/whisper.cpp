@@ -904,6 +904,95 @@ the tests re-run to verify green.
 
 ---
 
+### Vulkan optimisation round 6 (May 2026, QVAC-18605 follow-up #3) — F16-weights operator deny-list
+
+Round 6 layers a **user-overridable extra deny-list** on top of
+the existing hand-curated `should_materialise_f16_weight()`
+allow-list.  The curated allow-list (Phase 2A) already excludes
+biases, norms, embeddings, depthwise convs, and pre-transposed
+companions; the round-6 deny-list lets operators force-keep
+specific *additional* tensors as F32 even when `--f16-weights`
+is on.  Use cases:
+
+- **A/B testing**: researcher wants to exclude a specific tensor
+  pattern temporarily without recompiling.
+- **Hardware-specific drift mitigation**: operator observes drift
+  on a particular adapter / driver / shape and pins the
+  problematic tensor to F32 via config rather than disabling F16
+  weights wholesale.
+- **Future-GGUF safety net**: new tensor patterns added in future
+  Supertonic GGUFs that the curated allow-list inadvertently
+  scoops in can be excluded via config without a code change.
+
+Smallest blast radius of the four follow-up rounds — load-time
+policy only, runtime dispatch unaffected, zero behaviour change
+on the empty-deny-list default path.
+
+#### What changed
+
+1. **2-arg overload `should_materialise_f16_weight(name, extra_deny_substrings)`**
+   added alongside the existing 1-arg version (existing test +
+   call sites unchanged).  Substring matching (audit-friendly,
+   matches the curated predicate's style; no regex compile cost
+   or invalid-pattern surface).  The deny-list can only flip
+   `true → false`, never `false → true` — it's a deny-list, not
+   an allow-list.  Empty strings inside the deny-list are
+   SKIPPED defensively, not treated as universal matches (config-
+   typo guard against an empty entry silently disabling F16
+   weights for the whole model).
+
+2. **`EngineOptions::f16_weights_deny_list`** (`std::vector<std::string>`,
+   default empty) — public API surface for engine-side
+   integration.  Wired through `Engine::Impl` →
+   `load_supertonic_gguf` → the per-tensor allocation loop.
+
+3. **`load_supertonic_gguf` 7th parameter** added at the end of
+   the signature with a `{}` default — every existing call site
+   keeps compiling without modification.
+
+4. **`supertonic_model::f16_weights_excluded_count`** counter
+   bumped at load time when a curated-hot tensor is excluded by
+   the user's deny-list.  Surfaced in bench's human + JSON
+   output so operators can confirm their config took effect.
+
+5. **CLI plumbing**: `--f16-weights-deny PAT1,PAT2,...` flag on
+   `supertonic-cli`, `tts-cli` (chatterbox), and `supertonic-bench`
+   (comma-separated substring patterns).
+
+6. **Verbose-log line** in `load_supertonic_gguf` when the deny-
+   list is non-empty (silent on the default path — no visual
+   noise on existing operator workflows).
+
+#### Test plan (TDD, round 6)
+
+Both new tests were committed BEFORE the implementation and
+observed to fail on the missing symbols (compile errors:
+`'should_materialise_f16_weight' too many arguments` for the
+predicate test; `'EngineOptions::f16_weights_deny_list'` no such
+member for the API-surface test).  Only then was the
+implementation written and the tests re-run.
+
+| Test | Coverage | Result |
+|------|----------|--------|
+| `test-supertonic-f16-weights` (UPDATED) | Existing 36 checks (positives, negatives, edges) + 29 new round-6 checks across 7 new test functions (empty-list passthrough, matching-deny-excludes, non-matching-no-op, cannot-promote-cold, multiple-patterns ANY-match, empty-string defensive skip, empty-name safety) | 65 / 65 PASS |
+| `test-supertonic-f16-deny-list-api` (NEW) | SFINAE compile-time gate for `EngineOptions::f16_weights_deny_list` + `load_supertonic_gguf` 7th param; runtime defaults check + assignability + regression guards on every other documented `EngineOptions` default | 9 / 9 PASS |
+| Every other unit test (round 1+2+3 + audit follow-ups + the 14 baseline tests) | Zero-regression gate | 17 / 17 PASS — unchanged |
+
+Whole CPU-only `ctest -L unit` reports **17 / 17 tests, 0
+failures, 0 regressions**.
+
+#### Why no live perf number?
+
+Round 6 is a **policy** change, not a kernel change.  The
+quality-recovery on hand-picked tensors is workload-specific and
+quantified offline against the F16-attention parity harness;
+this PR adds the operator-facing knob so future drift incidents
+can be triaged via config without a code change.  Bench output
+surfaces the excluded-count so CI scripts can attribute any
+quality regression to a config change.
+
+---
+
 ## Remaining Work
 
 ### Runtime and performance

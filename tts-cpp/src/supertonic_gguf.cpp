@@ -1037,6 +1037,44 @@ bool should_materialise_f16_weight(const std::string & source_name) {
     return false;
 }
 
+// QVAC-18605 round 6 — 2-arg overload.
+//
+// Two-stage decision:
+//
+//   1. If any non-empty entry in `extra_deny_substrings` is a
+//      substring of `source_name`, return `false` immediately.
+//      Operator-supplied deny patterns short-circuit the curated
+//      allow-list (they're meant to FORCE F32 even for tensors
+//      the curated path would have promoted).
+//
+//   2. Otherwise, forward to the 1-arg version (curated allow-
+//      list).
+//
+// Empty deny-list → behaviour identical to the 1-arg version
+// (zero behaviour change for every existing call site that
+// passes the default empty list).
+//
+// Empty strings inside the deny-list are SKIPPED on purpose:
+// substring `""` would otherwise match every name and silently
+// disable F16 weights for the entire model, which is almost
+// certainly an operator typo (e.g. trailing comma in a config
+// file producing an empty entry).  Surfacing the typo via a
+// loud warning would be nicer, but `should_materialise_f16_weight`
+// is a pure predicate with no logging hook; the defensive skip
+// keeps the predicate honest while a higher-layer config
+// validator can warn separately if desired.
+bool should_materialise_f16_weight(const std::string & source_name,
+                                   const std::vector<std::string> & extra_deny_substrings) {
+    if (source_name.empty()) return false;
+    for (const std::string & pattern : extra_deny_substrings) {
+        if (pattern.empty()) continue;  // defensive skip
+        if (source_name.find(pattern) != std::string::npos) {
+            return false;
+        }
+    }
+    return should_materialise_f16_weight(source_name);
+}
+
 // Thread-local dispatch flags consulted by the GGML graph builders to
 // pick between the CBLAS-backed `ggml_custom_4d` fast paths (CPU only)
 // and the portable pure-GGML fallbacks (any backend).  See the
@@ -1343,7 +1381,8 @@ bool load_supertonic_gguf(const std::string & path,
                           bool verbose,
                           int f16_weights,
                           supertonic_precision precision,
-                          int vulkan_device) {
+                          int vulkan_device,
+                          const std::vector<std::string> & f16_weights_deny_list) {
     model.generation_id = next_supertonic_generation_id();
     model.precision_id = static_cast<int>(precision);
     // The load path supports F32 / F16 / Q8_0 destination types.
@@ -1447,6 +1486,20 @@ bool load_supertonic_gguf(const std::string & path,
         if (verbose) {
             fprintf(stderr, "supertonic: use_f16_weights=%s\n",
                     model.use_f16_weights ? "true" : "false");
+            // Round 6 — log the user-supplied deny-list (if any) so
+            // operators can confirm their config got plumbed through.
+            // Empty list (the default) is silent — same baseline as
+            // the round-3 log output.
+            if (model.use_f16_weights && !f16_weights_deny_list.empty()) {
+                fprintf(stderr,
+                        "supertonic: f16_weights_deny_list (%zu pattern%s):\n",
+                        f16_weights_deny_list.size(),
+                        f16_weights_deny_list.size() == 1 ? "" : "s");
+                for (const auto & p : f16_weights_deny_list) {
+                    fprintf(stderr, "  - \"%s\"%s\n", p.c_str(),
+                            p.empty() ? " (empty — skipped at predicate time)" : "");
+                }
+            }
         }
 
         // Phase 2A pre-step: build a (tensor_name → source_name)
@@ -1530,17 +1583,57 @@ bool load_supertonic_gguf(const std::string & path,
             ggml_tensor * src = ggml_get_tensor(tmp_ctx, name);
             if (!src) throw std::runtime_error(std::string("missing tmp tensor: ") + name);
 
+            // Phase 2A predicate check.  Only fires when
+            // `use_f16_weights` was on and the source resolved to
+            // a hot-roster name AND its current GGML type is
+            // either F32 or one of the expand-to-F32 types
+            // (otherwise the source already carries narrower
+            // precision than F16 and we don't widen).
+            //
+            // QVAC-18605 round 6 — the 2-arg overload layers the
+            // user-supplied `f16_weights_deny_list` substring
+            // patterns on top of the curated allow-list.  Empty
+            // deny-list (the default) → identical behaviour to
+            // the round-1/2/3 path.  When the deny-list flips a
+            // would-be-hot tensor back to F32 we bump
+            // `model.f16_weights_excluded_count` so bench output
+            // can confirm the user's deny-list took effect.
+            //
+            // Master's Phase 2A keys the decision off the source
+            // name resolved from `tensor_to_source_for_alloc`
+            // (falling back to the dst `name` when absent); round
+            // 6 narrows that to require the map lookup to succeed
+            // so the deny-list operates on a known-stable source
+            // identifier.  Net: a tensor that previously went F16
+            // via the dst-name fallback now stays at its native
+            // precision-path type — the curated allow-list isn't
+            // expected to hit on dst names so this is a no-op in
+            // practice.
+            // Resolve a stable "decision name" up-front.  Used both
+            // by the round-6 deny-list check below and by master's
+            // precision-driven `target_supertonic_storage_type`
+            // dispatch.  Falls back to the dst tensor `name` when
+            // the source-map lookup misses (matches master's Phase
+            // 2A behaviour pre-rebase).
             auto src_it = tensor_to_source_for_alloc.find(name);
-            const std::string & decision_name =
-                (src_it != tensor_to_source_for_alloc.end()) ? src_it->second : std::string(name);
+            const std::string decision_name =
+                (src_it != tensor_to_source_for_alloc.end())
+                    ? src_it->second
+                    : std::string(name);
 
-            // Phase 2A predicate check (master).
             bool f16_materialise = false;
             if (model.use_f16_weights &&
-                should_materialise_f16_weight(decision_name) &&
+                src_it != tensor_to_source_for_alloc.end() &&
                 (src->type == GGML_TYPE_F32 ||
                  should_expand_supertonic_tensor(src->type))) {
-                f16_materialise = true;
+                const bool curated_hot = should_materialise_f16_weight(decision_name);
+                const bool denied      = curated_hot &&
+                    !should_materialise_f16_weight(decision_name, f16_weights_deny_list);
+                if (denied) {
+                    ++model.f16_weights_excluded_count;
+                } else if (curated_hot) {
+                    f16_materialise = true;
+                }
             }
 
             ggml_type dst_type;

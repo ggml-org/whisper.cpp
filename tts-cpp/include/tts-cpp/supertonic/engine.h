@@ -125,6 +125,27 @@ struct EngineOptions {
     // the storage type of all matmul weights uniformly.
     int f16_weights = -1;
 
+    // QVAC-18605 round 6 — extra deny-list for F16 weight
+    // materialization, layered ON TOP of the curated allow-list
+    // in `should_materialise_f16_weight()`.  Each entry is a
+    // substring; if ANY non-empty entry is found inside a
+    // tensor's source name, that tensor stays at its native
+    // storage type (typically F32) even when `f16_weights` is
+    // on.  Empty strings are skipped (no-op) so a stray empty
+    // entry from a config-file typo doesn't silently disable F16
+    // weights for the whole model.
+    //
+    // Use cases:
+    //   - A/B testing a specific tensor pattern without recompiling.
+    //   - Force-keeping a tensor as F32 if drift on a particular
+    //     adapter / driver / shape is observed.
+    //   - Safety net for new tensor patterns added in future
+    //     GGUFs that the curated allow-list inadvertently scoops in.
+    //
+    // Default empty (zero behaviour change for every existing
+    // operator config).  No effect when `f16_weights == 0`.
+    std::vector<std::string> f16_weights_deny_list;
+
     // Optional path to a .npy file containing the initial noise tensor of
     // shape [1, latent_channels, latent_len] (float32).  When provided,
     // latent_len is taken from the npy file (overriding the duration-

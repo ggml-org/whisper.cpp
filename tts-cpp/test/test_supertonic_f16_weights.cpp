@@ -171,6 +171,143 @@ void test_predicate_edges() {
     CHECK(!should_materialise_f16_weight("vocoder:tts.ae.decoder.convnext.weight_stats"));
 }
 
+// QVAC-18605 round 6 — TDD test for the 2-arg
+// `should_materialise_f16_weight(name, extra_deny_substrings)`
+// overload.  Lets operators force-keep specific tensors as F32
+// even when the auto/curated allow-list would have promoted them
+// to F16.  Use cases:
+//   - Researcher A/B testing a specific tensor pattern without
+//     recompiling.
+//   - Operator force-keeping a tensor as F32 if they observe
+//     drift on their hardware.
+//   - Safety net for new tensor patterns added in future GGUFs.
+//
+// Contract:
+//   - Empty deny-list: 2-arg overload behaves identically to the
+//     1-arg version (zero behaviour change for the default path).
+//   - Any substring in the deny-list that matches a tensor name
+//     forces a `false` return, even if the curated allow-list
+//     would have said `true`.
+//   - The deny-list cannot promote a cold weight to hot
+//     (it's a deny-list, not an allow-list — adding a non-
+//     matching pattern doesn't help).
+//   - Empty strings inside the deny-list are skipped (no-op),
+//     not treated as matching every name (defensive).
+//   - Substring matching, not regex (matches the curated
+//     predicate's audit-friendly style; no regex compile cost,
+//     no invalid-pattern error surface).
+//
+// Written FIRST (TDD).  MUST fail before the 2-arg overload is
+// added; MUST pass after.
+void test_predicate_deny_list_empty_passthrough() {
+    std::fprintf(stderr, "[Round 6 deny-list: empty-list passthrough]\n");
+    // With an empty extra-deny-list, every result must equal the
+    // 1-arg version's result.  Spot-check a positive and a
+    // negative.
+    const std::vector<std::string> empty_deny;
+    CHECK(should_materialise_f16_weight("vector_estimator:onnx::MatMul_3101", empty_deny) ==
+          should_materialise_f16_weight("vector_estimator:onnx::MatMul_3101"));
+    CHECK(should_materialise_f16_weight("vocoder:tts.ae.decoder.convnext.0.pwconv1.weight", empty_deny) ==
+          should_materialise_f16_weight("vocoder:tts.ae.decoder.convnext.0.pwconv1.weight"));
+    CHECK(should_materialise_f16_weight("vector_estimator:tts.ttl.vector_field.main_blocks.0.convnext.0.norm.norm.weight", empty_deny) ==
+          should_materialise_f16_weight("vector_estimator:tts.ttl.vector_field.main_blocks.0.convnext.0.norm.norm.weight"));
+}
+
+void test_predicate_deny_list_excludes_match() {
+    std::fprintf(stderr, "[Round 6 deny-list: matching deny excludes hot weight]\n");
+    // A hot weight that the 1-arg version returns `true` for must
+    // return `false` when the deny-list contains a substring of
+    // its name.
+    const std::string hot = "vector_estimator:onnx::MatMul_3101";
+    CHECK(should_materialise_f16_weight(hot));  // baseline: hot
+
+    // Exact-name deny.
+    CHECK(!should_materialise_f16_weight(hot, std::vector<std::string>{"MatMul_3101"}));
+    // Stage-prefix deny: excludes EVERY vector_estimator MatMul.
+    CHECK(!should_materialise_f16_weight(hot, std::vector<std::string>{"vector_estimator:onnx::MatMul_"}));
+    // Single-char substring (defensive — works because substring
+    // semantics, but operators should write more specific patterns).
+    CHECK(!should_materialise_f16_weight(hot, std::vector<std::string>{"3101"}));
+
+    // Same pattern applied to a pwconv weight.
+    const std::string pw = "vocoder:tts.ae.decoder.convnext.0.pwconv1.weight";
+    CHECK(should_materialise_f16_weight(pw));  // baseline: hot
+    CHECK(!should_materialise_f16_weight(pw, std::vector<std::string>{".pwconv1."}));
+    // pwconv2 deny shouldn't affect pwconv1.
+    CHECK(should_materialise_f16_weight(pw, std::vector<std::string>{".pwconv2."}));
+}
+
+void test_predicate_deny_list_no_match() {
+    std::fprintf(stderr, "[Round 6 deny-list: non-matching deny is no-op]\n");
+    // A deny-list with no matching substring must leave the result
+    // unchanged.  Spot-check positive (still hot) and negative
+    // (still cold).
+    const std::vector<std::string> deny_unrelated = {"ZZZ_definitely_not_in_any_name"};
+    CHECK(should_materialise_f16_weight("vector_estimator:onnx::MatMul_3101", deny_unrelated));
+    CHECK(!should_materialise_f16_weight("vector_estimator:onnx::MatMul_3101_bias", deny_unrelated));
+}
+
+void test_predicate_deny_list_cannot_promote_cold() {
+    std::fprintf(stderr, "[Round 6 deny-list: cannot promote cold weight to hot]\n");
+    // The deny-list is a DENY-list, not an allow-list.  Adding a
+    // pattern that matches a cold weight has no effect (cold + deny
+    // is still cold; deny only operates on the `true` branch of
+    // the 1-arg predicate).
+    const std::string cold = "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.W_query.linear.bias";
+    CHECK(!should_materialise_f16_weight(cold));  // baseline: cold (bias)
+    CHECK(!should_materialise_f16_weight(cold, std::vector<std::string>{"linear.bias"}));
+    CHECK(!should_materialise_f16_weight(cold, std::vector<std::string>{"NOT_IN_NAME"}));
+}
+
+void test_predicate_deny_list_multiple_patterns() {
+    std::fprintf(stderr, "[Round 6 deny-list: ANY match excludes]\n");
+    // Multiple patterns: ANY match excludes the weight.  Patterns
+    // are independent (no AND-of-all semantics).
+    const std::string hot = "vocoder:tts.ae.decoder.convnext.0.pwconv1.weight";
+    const std::vector<std::string> deny_multi = {
+        "AAAAA_no_match",
+        ".pwconv1.",        // matches!
+        "BBBBB_no_match",
+    };
+    CHECK(!should_materialise_f16_weight(hot, deny_multi));
+
+    // All-non-matching multi-pattern: still hot.
+    const std::vector<std::string> deny_all_miss = {
+        "AAAAA_no_match",
+        "BBBBB_no_match",
+        "CCCCC_no_match",
+    };
+    CHECK(should_materialise_f16_weight(hot, deny_all_miss));
+}
+
+void test_predicate_deny_list_empty_string_safe() {
+    std::fprintf(stderr, "[Round 6 deny-list: empty string in deny-list is skipped]\n");
+    // An empty string would technically match every name under
+    // substring semantics ("" is a substring of every string),
+    // which would silently disable F16 weights entirely — almost
+    // certainly an operator typo (e.g. accidentally trailing
+    // comma in a config file).  Defensive: empty-string entries
+    // are SKIPPED instead of treated as universal matches.
+    const std::vector<std::string> deny_with_empty = {""};
+    CHECK(should_materialise_f16_weight("vector_estimator:onnx::MatMul_3101", deny_with_empty));
+    CHECK(should_materialise_f16_weight("vocoder:tts.ae.decoder.convnext.0.pwconv1.weight", deny_with_empty));
+
+    // Mixed: empty + a real pattern.  The real pattern must still
+    // take effect.
+    const std::vector<std::string> deny_mixed = {"", ".pwconv1."};
+    CHECK(!should_materialise_f16_weight("vocoder:tts.ae.decoder.convnext.0.pwconv1.weight", deny_mixed));
+    CHECK(should_materialise_f16_weight("vector_estimator:onnx::MatMul_3101", deny_mixed));
+}
+
+void test_predicate_deny_list_empty_name_safe() {
+    std::fprintf(stderr, "[Round 6 deny-list: empty source name still returns false]\n");
+    // Empty source name was handled defensively by the 1-arg
+    // version (returns false).  The 2-arg overload must preserve
+    // this regardless of the deny-list contents.
+    CHECK(!should_materialise_f16_weight("", std::vector<std::string>{}));
+    CHECK(!should_materialise_f16_weight("", std::vector<std::string>{"any"}));
+}
+
 } // namespace
 
 int main(int argc, char ** argv) {
@@ -178,6 +315,16 @@ int main(int argc, char ** argv) {
     test_predicate_positives();
     test_predicate_negatives();
     test_predicate_edges();
+    // QVAC-18605 round 6 — 2-arg overload tests (TDD: these are
+    // the new symbol; whole block must fail compilation before
+    // implementation, then pass after).
+    test_predicate_deny_list_empty_passthrough();
+    test_predicate_deny_list_excludes_match();
+    test_predicate_deny_list_no_match();
+    test_predicate_deny_list_cannot_promote_cold();
+    test_predicate_deny_list_multiple_patterns();
+    test_predicate_deny_list_empty_string_safe();
+    test_predicate_deny_list_empty_name_safe();
 
     // Fixture-level shape/dtype check requires the GGUF.
     if (argc >= 2) {

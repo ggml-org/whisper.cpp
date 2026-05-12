@@ -388,6 +388,11 @@ struct cli_params {
     // disables.  Maps onto EngineOptions::prewarm_text.  Auto no-op
     // on CPU backends.
     std::string supertonic_prewarm_text;
+    // QVAC-18605 round 6 — comma-separated extra deny-list of
+    // substring patterns.  Empty default → zero behaviour change.
+    // Maps onto EngineOptions::f16_weights_deny_list (after
+    // comma-splitting).
+    std::vector<std::string> supertonic_f16_weights_deny_list;
     bool        has_supertonic_options = false;
 
     // Streaming synthesis (PROGRESS.md B1).  When > 0, speech tokens from
@@ -527,6 +532,11 @@ static void print_usage(const char * argv0) {
     fprintf(stderr, "                          to auto (on for GPU, off for CPU).  Halves the GPU\n");
     fprintf(stderr, "                          read bandwidth into those ops with a small (~2e-3)\n");
     fprintf(stderr, "                          numerical drift on the end-to-end synth.\n");
+    fprintf(stderr, "  --f16-weights-deny PAT1,PAT2,...   Comma-separated substring patterns; matching\n");
+    fprintf(stderr, "                          tensors stay F32 even when --f16-weights is on.\n");
+    fprintf(stderr, "                          Layered on top of the curated allow-list.  Empty\n");
+    fprintf(stderr, "                          entries are skipped defensively (config-typo guard).\n");
+    fprintf(stderr, "                          Default empty (zero behaviour change).\n");
     fprintf(stderr, "  --vulkan-device N       Vulkan adapter index.  Default 0; -1 = auto-pick\n");
     fprintf(stderr, "                          adapter with most free VRAM (multi-GPU machines).\n");
     fprintf(stderr, "                          Has no effect unless built with -DGGML_VULKAN=ON\n");
@@ -679,6 +689,23 @@ static bool parse_args(int argc, char ** argv, cli_params & params) {
         else if (arg == "--noise-npy")      { auto v = next("--noise-npy");      if (!v) return false; params.supertonic_noise_npy = v; params.has_supertonic_options = true; }
         else if (arg == "--f16-attn")       { if (!parse_int  ("--f16-attn",       params.supertonic_f16_attn)) return false; params.has_supertonic_options = true; }
         else if (arg == "--f16-weights")    { if (!parse_int  ("--f16-weights",    params.supertonic_f16_weights)) return false; params.has_supertonic_options = true; }
+        else if (arg == "--f16-weights-deny") {
+            // Comma-split.  Empty entries tolerated; the predicate
+            // skips them.  Tracked as a supertonic-option so the
+            // model-arch-detection branch in main() routes
+            // correctly.
+            auto v = next("--f16-weights-deny"); if (!v) return false;
+            params.supertonic_f16_weights_deny_list.clear();
+            const std::string raw = v;
+            size_t start = 0;
+            for (size_t k = 0; k <= raw.size(); ++k) {
+                if (k == raw.size() || raw[k] == ',') {
+                    params.supertonic_f16_weights_deny_list.emplace_back(raw.substr(start, k - start));
+                    start = k + 1;
+                }
+            }
+            params.has_supertonic_options = true;
+        }
         else if (arg == "--vulkan-device")  { if (!parse_int  ("--vulkan-device",  params.supertonic_vulkan_device)) return false; params.has_supertonic_options = true; }
         else if (arg == "--prewarm")        { auto v = next("--prewarm");        if (!v) return false; params.supertonic_prewarm_text = v; params.has_supertonic_options = true; }
         else if (arg == "--cfm-f16-kv-attn") { params.cfm_f16_kv_attn = true; }
@@ -879,6 +906,7 @@ static int run_supertonic_cli_path(const cli_params & params) {
     opts.vulkan_device = params.supertonic_vulkan_device;
     opts.prewarm_text = params.supertonic_prewarm_text;
     opts.noise_npy_path = params.supertonic_noise_npy;
+    opts.f16_weights_deny_list = params.supertonic_f16_weights_deny_list;
 
     auto result = tts_cpp::supertonic::synthesize(opts, params.text);
     stream_write_wav(params.out_wav, result.pcm, result.sample_rate);
