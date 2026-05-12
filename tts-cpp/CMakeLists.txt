@@ -629,6 +629,126 @@ if (TTS_CPP_BUILD_TESTS)
     add_supertonic_harness(test-supertonic-vector test/test_supertonic_vector.cpp)
     add_supertonic_harness(test-supertonic-vector-trace test/test_supertonic_vector_trace.cpp)
     add_supertonic_harness(test-supertonic-pipeline test/test_supertonic_pipeline.cpp)
+    # OpenCL optimization audit follow-up harnesses (F1–F11).
+    add_supertonic_harness(test-supertonic-load-caches    test/test_supertonic_load_caches.cpp)
+    add_supertonic_harness(test-supertonic-graph-rewrites test/test_supertonic_graph_rewrites.cpp)
+    # OpenCL audit follow-up #2 — text-encoder caches (F13, F16),
+    # Phase 2A F16-weight roster (predicate-level), Phase 2D
+    # profile-CSV emitter (unit-only).
+    add_supertonic_harness(test-supertonic-text-encoder-caches
+        test/test_supertonic_text_encoder_caches.cpp)
+    add_supertonic_harness(test-supertonic-f16-weights
+        test/test_supertonic_f16_weights.cpp)
+    # Phase 2D profile-CSV emitter — unit-level, no GGUF needed.
+    add_executable(test-supertonic-profile-csv
+        test/test_supertonic_profile_csv.cpp)
+    target_link_libraries(test-supertonic-profile-csv PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-profile-csv PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-profile-csv)
+    tts_cpp_register_test(test-supertonic-profile-csv LABEL "unit")
+    # OpenCL audit follow-up #3 — F17 duration scalar-weight
+    # cache + F18 text-encoder convnext-front graph cache +
+    # F19 vector-estimator front-block graph cache.
+    add_supertonic_harness(test-supertonic-audit3-caches
+        test/test_supertonic_audit3_caches.cpp)
+    # OpenCL audit follow-up #4 — F20 partial / Phase 2H RoPE-in-
+    # graph helper (parity vs scalar apply_rope on CPU backend with
+    # synthetic input).  Unit-level — no GGUF, no fixture.
+    add_executable(test-supertonic-rope-in-graph
+        test/test_supertonic_rope_in_graph.cpp)
+    target_link_libraries(test-supertonic-rope-in-graph PRIVATE ggml)
+    target_include_directories(test-supertonic-rope-in-graph PRIVATE ggml/include src)
+    tts_cpp_apply_ccache(test-supertonic-rope-in-graph)
+    tts_cpp_register_test(test-supertonic-rope-in-graph LABEL "unit")
+
+    # Audit follow-up #5 — packed-QK RoPE adapter parity test for
+    # `apply_rope_to_packed_qk` (F23 = F20 integration shim).  The
+    # helper bridges the `[head_dim, n_heads, L]` layout consumed
+    # by `apply_rope_in_graph` with the `[H*D, L]` packed layout
+    # produced by `dense_matmul_time_ggml` — see
+    # `aiDocs/AUDIT_SUPERTONIC_OPENCL.md` finding F23.  Unit-level:
+    # CPU-only parity, no GGUF, no fixture; runs in <50 ms.
+    add_executable(test-supertonic-rope-packed-qk
+        test/test_supertonic_rope_packed_qk.cpp)
+    target_link_libraries(test-supertonic-rope-packed-qk PRIVATE ggml)
+    target_include_directories(test-supertonic-rope-packed-qk PRIVATE ggml/include src)
+    tts_cpp_apply_ccache(test-supertonic-rope-packed-qk)
+    tts_cpp_register_test(test-supertonic-rope-packed-qk LABEL "unit")
+
+    # Audit follow-up #6 (F7) — fused ConvNeXt block builder.  The
+    # helper rewires the vocoder's per-block LN + pw1 + gelu + pw2 +
+    # gamma + residual chain to skip the layer-norm back-permute and
+    # to lower K=1 pointwise convs to direct `ggml_mul_mat` against
+    # the `[C, T0]` LN-output layout, eliminating two redundant
+    # `[T0, C]` copies per block (~16.8 MiB / vocoder pass).  Unit-
+    # level: CPU-only parity vs scalar reference on synthetic
+    # weights; no GGUF, no fixture; runs in <50 ms.
+    add_executable(test-supertonic-convnext-block-fused
+        test/test_supertonic_convnext_block_fused.cpp)
+    target_link_libraries(test-supertonic-convnext-block-fused PRIVATE ggml)
+    target_include_directories(test-supertonic-convnext-block-fused PRIVATE ggml/include src)
+    tts_cpp_apply_ccache(test-supertonic-convnext-block-fused)
+    tts_cpp_register_test(test-supertonic-convnext-block-fused LABEL "unit")
+
+    # Audit follow-up #6 (F12) — in-graph time/channel transpose
+    # helper to kill the per-call `pack_time_channel_for_ggml`
+    # CPU loops at every vector / text / duration estimator cache
+    # ingestion point.  The helper exposes `cache.x_in` as
+    # `ne=[C, L]` so callers upload CPU-native `x_tc` directly,
+    # and the graph immediately does `ggml_cont(ggml_transpose(x))`
+    # to recover the `[L, C]` view downstream ops expect.  Unit-
+    # level: CPU-only parity vs the reference `pack_time_channel_for_ggml`
+    # on three shapes (group_graph, tail noise, vocoder-realistic)
+    # + an L=1 trip-wire.  No GGUF needed; runs in <50 ms.
+    add_executable(test-supertonic-in-graph-transpose
+        test/test_supertonic_in_graph_transpose.cpp)
+    target_link_libraries(test-supertonic-in-graph-transpose PRIVATE ggml)
+    target_include_directories(test-supertonic-in-graph-transpose PRIVATE ggml/include src)
+    tts_cpp_apply_ccache(test-supertonic-in-graph-transpose)
+    tts_cpp_register_test(test-supertonic-in-graph-transpose LABEL "unit")
+
+    # Audit follow-up #6 (2C-lite) — same-backend `ggml_backend_
+    # tensor_copy` regression test.  Locks in the contract the
+    # `run_text_attention_cache_gpu` fast path depends on: a
+    # device→device blit between two cached graphs that share a
+    # backend produces bit-exact output equivalent to the
+    # `tensor_get` + `tensor_set` host round-trip the slow path
+    # used to perform.  Five shapes including an L=1 trip-wire
+    # and both attn / style head configurations.  Pure-CPU; no
+    # GGUF; runs in <50 ms.
+    add_executable(test-supertonic-graph-to-graph-blit
+        test/test_supertonic_graph_to_graph_blit.cpp)
+    target_link_libraries(test-supertonic-graph-to-graph-blit PRIVATE ggml)
+    target_include_directories(test-supertonic-graph-to-graph-blit PRIVATE ggml/include src)
+    tts_cpp_apply_ccache(test-supertonic-graph-to-graph-blit)
+    tts_cpp_register_test(test-supertonic-graph-to-graph-blit LABEL "unit")
+
+    # OpenCL bring-up unit tests (QVAC-18607).  Three CPU-only
+    # parity / structural tests for the dispatch + portable-op
+    # primitives.  No GGUF needed; register as "unit" label so a
+    # fresh checkout's ctest exercises them.  Links against tts-cpp
+    # (STATIC) so the detail-namespace symbols are reachable, same
+    # pattern as test-mtl-tokenizer / test-t3-mtl / test-streaming.
+    add_executable(test-supertonic-backend-dispatch
+        test/test_supertonic_backend_dispatch.cpp)
+    target_link_libraries(test-supertonic-backend-dispatch PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-backend-dispatch PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-backend-dispatch)
+    tts_cpp_register_test(test-supertonic-backend-dispatch LABEL "unit")
+
+    add_executable(test-supertonic-portable-ops
+        test/test_supertonic_portable_ops.cpp)
+    target_link_libraries(test-supertonic-portable-ops PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-portable-ops PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-portable-ops)
+    tts_cpp_register_test(test-supertonic-portable-ops LABEL "unit")
+
+    add_executable(test-supertonic-f16-attn-parity
+        test/test_supertonic_f16_attn_parity.cpp)
+    target_link_libraries(test-supertonic-f16-attn-parity PRIVATE ggml)
+    target_include_directories(test-supertonic-f16-attn-parity PRIVATE ggml/include src)
+    tts_cpp_apply_ccache(test-supertonic-f16-attn-parity)
+    tts_cpp_register_test(test-supertonic-f16-attn-parity LABEL "unit")
 
     # supertonic-bench is a benchmark CLI (takes --text / --out / --runs),
     # not a parity test, so it doesn't go through add_supertonic_harness

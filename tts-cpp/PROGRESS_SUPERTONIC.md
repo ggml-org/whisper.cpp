@@ -471,6 +471,135 @@ python scripts/convert-supertonic2-to-gguf.py \
 
 ---
 
+## GPU bring-up: OpenCL (May 2026)
+
+Target: the same `--n-gpu-layers > 0` flag already exposed by the
+Supertonic CLI, but resolved to **OpenCL** instead of falling back to
+CPU.  Tracking ticket: QVAC-18607.
+
+### What was missing
+
+The Supertonic CPU path (§7-§8 above) earned its CPU benchmark wins by
+moving every hot loop onto a `ggml_custom_4d` op whose callback runs
+CBLAS / pointer-arithmetic directly against the tensor `data` field:
+
+| TU | Custom ops |
+|----|-----------|
+| `supertonic_vocoder.cpp` | K=1 cblas conv1d, K>1 cblas conv1d, depthwise dilated conv1d |
+| `supertonic_vector_estimator.cpp` | conv1d_f32(K=1), depthwise same-padded conv1d, row-wise layer-norm, dense-time matmul, fused bias+GELU, fused (pw2 bias + γ + residual), fused tail-update (BLAS GEMM + mask + step-scale + residual add) |
+
+None of those callbacks are valid on a GPU backend: `GGML_OP_CUSTOM`
+isn't supported by `ggml-opencl` (or by CUDA / Metal / Vulkan), and the
+op callbacks themselves assume host-addressable `data` pointers that
+no GPU backend exposes inside graph execution.  So before this round,
+loading Supertonic with `--n-gpu-layers > 0` either fell straight back
+to CPU via `init_supertonic_backend` (when the backend wasn't compiled
+in) or asserted at `ggml_backend_graph_compute` time inside the OpenCL
+dispatch loop (when it was).
+
+In addition, two builtins in the vocoder graph had similar portability
+holes against baseline upstream OpenCL: `ggml_leaky_relu`
+(`GGML_OP_LEAKY_RELU`) is only present on `ggml-opencl` builds that
+carry the chatterbox `ggml-opencl-chatterbox-ops.patch` — fine for the
+QVAC `ggml-speech` vcpkg consumption path, but unsafe for any other
+GPU backend wanting Supertonic.
+
+### What landed
+
+| Change | File(s) |
+|--------|---------|
+| `supertonic_model::backend_is_cpu` set from `ggml_backend_is_cpu(model.backend)` right after `init_supertonic_backend()` resolves the device. | `supertonic_gguf.cpp`, `supertonic_internal.h` |
+| `supertonic_op_dispatch_scope` — thread-local RAII helper instantiated at every public `supertonic_*_forward_ggml` / `*_trace_ggml` entry point.  Mirrors `model.backend_is_cpu` and `model.use_f16_attn` into the two thread-local flags consulted by the graph-build helpers. | `supertonic_internal.h`, `supertonic_gguf.cpp`, `supertonic_vocoder.cpp`, `supertonic_vector_estimator.cpp`, `supertonic_text_encoder.cpp`, `supertonic_duration.cpp` |
+| Every `ggml_custom_4d` site gated on `supertonic_use_cpu_custom_ops()` so GPU runs fall through to the existing pure-GGML paths (`ggml_im2col + ggml_mul_mat`, `ggml_norm`, etc.) — all of which `ggml-opencl` already supports natively (see `ggml_opencl_supports_op()` in `ggml/src/ggml-opencl/ggml-opencl.cpp`). | `supertonic_vocoder.cpp`, `supertonic_vector_estimator.cpp` |
+| Portable `leaky_relu_portable_ggml()` helper: on CPU keeps the fused builtin; on GPU decomposes into `RELU + SCALE + ADD`, all universally supported. | `supertonic_vocoder.cpp` |
+
+### Optimization #1: F16 K/V flash-attention
+
+The vector estimator's text-conditioned attention runs four times per
+denoising step × N steps, so it's the single hottest op in the
+Supertonic synthesis budget after the dense convnext blocks.  Lifted
+straight from chatterbox's Adreno bring-up (§ `OpenCL optimization
+log`), the vector-estimator graph now optionally materialises K / V
+into contiguous F16 before calling `ggml_flash_attn_ext`, which makes
+OpenCL dispatch the `flash_attn_f32_f16` kernel instead of the
+F32-only one.  In chatterbox's Q4_0 CFM smoke run this dropped the
+attention kernel from `~257 ms` to `~102 ms` on Adreno 830.
+
+- Engine option: `EngineOptions::f16_attn` (`-1`=auto, `0`=off, `1`=on).
+  Auto-enables on GPU backends, off on CPU.
+- CLI flag: `--f16-attn 0|1`, exposed on `tts-cli`, `supertonic-cli`,
+  and `supertonic-bench`.
+- Cache key: `vector_text_attention_cache::f16_kv_attn` so toggling the
+  flag mid-process safely rebuilds the cached graph.
+
+Q stays F32: cheaper to keep one operand at the higher precision than
+to round-trip the post-attention output back through F32 for the
+downstream dense projection.
+
+### How to use
+
+```bash
+# Build with OpenCL (in the standalone tree; in-tree subtree consumes
+# ggml-speech vcpkg port which already carries the OpenCL patches).
+cmake -S . -B build-opencl -DCMAKE_BUILD_TYPE=Release -DGGML_OPENCL=ON
+cmake --build build-opencl -j$(nproc) --target tts-cli supertonic-bench
+
+# Run on OpenCL with auto F16 attention.
+./build-opencl/supertonic-cli \
+  --model models/supertonic2.gguf \
+  --text "The quick brown fox jumps over the lazy dog." \
+  --voice F1 --language en --steps 5 --speed 1.05 \
+  --n-gpu-layers 99 \
+  --out /tmp/supertonic2.wav
+
+# Force F16 attention off (CPU-style fallback) for parity:
+./build-opencl/supertonic-cli ... --n-gpu-layers 99 --f16-attn 0
+```
+
+### Validation
+
+- Every `supertonic_*_forward_ggml` entry point opens an RAII
+  `supertonic_op_dispatch_scope(model)`, so a CPU-only second engine
+  in the same thread still sees the default `true` after a GPU
+  engine's forward returns — required because the pointwise vocoder
+  parity harness and the pipeline trace harness re-enter the model
+  from a single thread.
+- Both the trace `*_trace_ggml` entry points and the production
+  `*_forward_ggml` ones acquire the scope: trace runs still pick the
+  pure-GGML pathway whenever the backend isn't CPU, which is what the
+  existing parity tests expect (the trace harness already disables the
+  fused tail-update op via `!trace_outputs`; the new gate just removes
+  the secondary `ggml_custom_4d` branches under it).
+- CTest harnesses `test-supertonic-pipeline`, `test-supertonic-vocoder`,
+  `test-supertonic-vector`, `test-supertonic-text-encoder`,
+  `test-supertonic-duration` continue to exercise the CPU path
+  unchanged; running them with a GPU-bound model would route the same
+  fixture data through the pure-GGML fallback graph and produce the
+  same parity numbers (within F32 → F16 K/V tolerance on the attention
+  output when `--f16-attn 1`).
+- Three new CPU-only unit harnesses ship alongside the bring-up code
+  to give the dispatch + portable-op primitives their own coverage
+  independent of any model GGUF:
+
+  | Test | What it covers |
+  |------|----------------|
+  | `test-supertonic-backend-dispatch` | Default thread-local flag state; `supertonic_op_dispatch_scope` mirroring CPU and GPU `supertonic_model` instances; RAII teardown on normal exit and on exception; nested-scope unwinding; independence of `use_cpu_custom_ops` / `use_f16_attn`. |
+  | `test-supertonic-portable-ops`     | CPU-backend parity of `leaky_relu_portable_ggml` (CPU lowering) vs the GPU decomposition for every `α ∈ {0, 0.01, 0.05, 0.1, 0.5, 0.99, 1.0}`; graph-node-count check that the GPU dispatch actually expands the op (catches a regression back to a passthrough `ggml_leaky_relu`). |
+  | `test-supertonic-f16-attn-parity`  | F32 vs F16 K/V `ggml_flash_attn_ext` parity on the two hot shapes from the vector estimator (text attention `kv=32`, style attention `kv=50`); tolerance budget `5e-3` absolute / `5e-3` relative, the same band chatterbox ships behind `--cfm-f16-kv-attn`. |
+
+  All three are registered with `LABEL "unit"` so a fresh checkout's
+  `ctest -L unit` exercises them without needing the Supertonic GGUF.
+
+### Next optimization rounds
+
+The roadmap beyond this PR — F16 weight materialization, Q8_0 GGUF
+support, host↔GPU round-trip elimination, OpenCL kernel-time profile
+mode, and vocoder-unpack-on-GPU — is captured with its test plan in
+`PLAN_SUPERTONIC_OPENCL.md`.  Each phase has an acceptance test
+spelled out (most TDD, written before the implementation lands).
+
+---
+
 ## Remaining Work
 
 ### Runtime and performance
@@ -479,7 +608,10 @@ python scripts/convert-supertonic2-to-gguf.py \
 - Consider a fused text relpos attention op only if profiling shows text is the
   next hard blocker.
 - Add quantized Supertonic GGUF support once graph paths are ready for f16/q8.
-- Evaluate GPU backends after CPU graph structure is fully stable.
+- Run the chatterbox-style OpenCL profiling sweep on Adreno (Q4_0 weights,
+  `flash_attn_f32_f16` enabled) to confirm the Supertonic bottleneck shifts
+  from custom CPU ops to `kernel_mul_mm_f32_f32` and the same convnext block
+  shape that chatterbox already profiled.
 - Add CI coverage for converter help/setup syntax and portable Supertonic build
   targets.
 

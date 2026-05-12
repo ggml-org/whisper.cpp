@@ -45,7 +45,8 @@ void usage(const char * argv0) {
         "usage: %s --model supertonic2.gguf --text TEXT\n"
         "          [--voice M1] [--language en] [--steps 5] [--speed 1.05]\n"
         "          [--seed 42] [--noise-npy /path/to/noise.npy]\n"
-        "          [--runs 5] [--warmup 1] [--threads N] [--json-out FILE]\n",
+        "          [--runs 5] [--warmup 1] [--threads N] [--n-gpu-layers N]\n"
+        "          [--f16-attn 0|1] [--json-out FILE]\n",
         argv0);
 }
 
@@ -116,6 +117,12 @@ int main(int argc, char ** argv) {
     int runs = 5;
     int warmup = 1;
     int n_threads = 0;
+    int n_gpu_layers = 0;
+    // -1 = auto (GPU on, CPU off); 0/1 to force.  See model.use_f16_attn.
+    int f16_attn = -1;
+    // Phase 2A — F16 load-time materialization of the hot matmul /
+    // pwconv weights.  -1 auto / 0 / 1 force.
+    int f16_weights = -1;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -134,6 +141,9 @@ int main(int argc, char ** argv) {
         else if (a == "--runs") runs = std::stoi(next("--runs"));
         else if (a == "--warmup") warmup = std::stoi(next("--warmup"));
         else if (a == "--threads") n_threads = std::stoi(next("--threads"));
+        else if (a == "--n-gpu-layers") n_gpu_layers = std::stoi(next("--n-gpu-layers"));
+        else if (a == "--f16-attn") f16_attn = std::stoi(next("--f16-attn"));
+        else if (a == "--f16-weights") f16_weights = std::stoi(next("--f16-weights"));
         else if (a == "--json-out") json_out = next("--json-out");
         else if (a == "-h" || a == "--help") { usage(argv[0]); return 0; }
         else { fprintf(stderr, "unknown arg: %s\n", a.c_str()); usage(argv[0]); return 2; }
@@ -141,11 +151,18 @@ int main(int argc, char ** argv) {
     if (model_path.empty() || text.empty()) { usage(argv[0]); return 2; }
 
     supertonic_model model;
-    if (!load_supertonic_gguf(model_path, model)) {
+    if (!load_supertonic_gguf(model_path, model, n_gpu_layers, /*verbose=*/false, f16_weights)) {
         fprintf(stderr, "failed to load model\n");
         return 1;
     }
     supertonic_set_n_threads(model, n_threads);
+    // F16 K/V flash-attention dispatch: same auto policy as Engine (auto
+    // ⇒ on for GPU backends, off for CPU; user can force).
+    if (f16_attn < 0) {
+        model.use_f16_attn = !model.backend_is_cpu;
+    } else {
+        model.use_f16_attn = f16_attn != 0;
+    }
 
     auto vit = model.voices.find(voice);
     if (vit == model.voices.end()) {
@@ -275,6 +292,9 @@ int main(int argc, char ** argv) {
     printf("  voice: %s, language: %s, steps: %d, speed: %.2f\n",
            voice.c_str(), language.c_str(), steps, speed);
     printf("  threads: %d\n", model.n_threads);
+    printf("  backend: %s%s\n",
+           ggml_backend_name(model.backend) ? ggml_backend_name(model.backend) : "(unknown)",
+           model.use_f16_attn ? " (f16_attn=on)" : "");
     printf("  audio per run: %.3fs @ %d Hz\n", last_audio_s, model.hparams.sample_rate);
     printf("  runs: %d (warmup discarded: %d)\n", runs, warmup);
     printf("\n");
