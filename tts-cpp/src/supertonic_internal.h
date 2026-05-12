@@ -620,6 +620,81 @@ inline void make_rope_cos_sin_tables(const float * theta,
     }
 }
 
+// ---------------------------------------------------------------------
+// Audit finding F23 (F20 integration / Phase 2H follow-through) —
+// packed-QK RoPE adapter for the Q/K-producing graphs.
+//
+// `apply_rope_in_graph` operates on a tensor with `ne=[head_dim,
+// n_heads, L]` — the natural layout the scalar `apply_rope`
+// reference indexes into (`data[t*H*D + h*D + d]`).  Every actual
+// call site in the vector estimator produces Q/K via
+// `dense_matmul_time_ggml`, whose output is a 2D packed tensor
+// with `ne=[H*D, L]` (channel-major along axis 0, time along
+// axis 1).  `apply_rope_to_packed_qk` adapts between the two
+// layouts so the graph builders can bake the rotation in-place
+// without reshaping the rest of the QKV plumbing:
+//
+//   - Re-views the packed tensor as `[head_dim, n_heads, L]` via
+//     a zero-cost stride trick (`nb[0]=elem, nb[1]=D*4, nb[2]=H*D*4`)
+//     — the memory pattern `data[t*H*D + h*D + d]` is preserved
+//     bit-exactly.
+//   - Materialises a contiguous copy (`ggml_cont`) so the
+//     downstream `ggml_concat` inside `apply_rope_in_graph` sees
+//     monotonically-increasing strides.
+//   - Calls `apply_rope_in_graph(ctx, x_dhl, cos, sin)`.
+//   - Reshapes the rotated `[D, H, L]` result back to `[H*D, L]`
+//     so call sites can keep their existing `ggml_set_output` +
+//     `tensor_to_time_channel` plumbing unchanged.
+//
+// Cost vs. the current host-side `apply_rope`:
+//   - Eliminates 40 CPU rotations / synth (~50 µs each ≈ 2 ms
+//     wall-time on the default 5-step × 4-RoPE-site schedule).
+//   - Trades for one extra `ggml_cont` per site (small kernel
+//     on GPU; ~0).  No new ops beyond `view + cont + reshape +
+//     ggml_concat` chain already proven by the inner helper.
+//
+// Universally-supported ops only: `ggml_view_3d`, `ggml_cont`,
+// `ggml_reshape_2d` + everything `apply_rope_in_graph` uses.
+// Green on baseline upstream OpenCL.
+//
+// Parity-tested in `test_supertonic_rope_packed_qk.cpp` against
+// the scalar `apply_rope` on the two hot vector-estimator shapes
+// (`q_len=20 × H=4 × D=64`, `kv_len=32 × H=4 × D=64`) and a
+// degenerate `L=1` trip-wire.  Tolerance `1e-4` absolute.
+inline ggml_tensor * apply_rope_to_packed_qk(ggml_context * ctx,
+                                              ggml_tensor * q,
+                                              ggml_tensor * cos_table,
+                                              ggml_tensor * sin_table,
+                                              int n_heads,
+                                              int head_dim) {
+    const int64_t L  = q->ne[1];
+    const int64_t HD = q->ne[0];
+    (void) HD; // assertion-only; compiler may drop in NDEBUG.
+    GGML_ASSERT(HD == (int64_t) n_heads * head_dim);
+    // q has natural strides for ne=[HD, L]: nb[0]=elem_size,
+    // nb[1]=HD*elem_size.  A view with ne=[D, H, L] sharing the
+    // same memory needs nb=[elem, D*elem, HD*elem]; element
+    // (d, h, l) lands at offset `d + h*D + l*HD` in 4-byte units
+    // — identical memory pattern to the original packed layout's
+    // element (col=h*D+d, row=l) at `col + row*HD` = `h*D + d + l*HD`.
+    ggml_tensor * q_dhl_view = ggml_view_3d(ctx, q,
+        head_dim, n_heads, L,
+        /*nb1=*/(size_t) head_dim * sizeof(float),
+        /*nb2=*/(size_t) n_heads * head_dim * sizeof(float),
+        /*offset=*/0);
+    // Materialise a contiguous [D, H, L] copy so the downstream
+    // concat / repeat ops in `apply_rope_in_graph` see natural
+    // strides (`nb=[elem, D*elem, D*H*elem]`).  The view above is
+    // legal but non-natural (nb[1]<nb[2] with a `D*elem`/`H*D*elem`
+    // ratio that some backends' op implementations refuse).
+    ggml_tensor * q_dhl = ggml_cont(ctx, q_dhl_view);
+    ggml_tensor * q_rot = apply_rope_in_graph(ctx, q_dhl, cos_table, sin_table);
+    // Reshape back to the packed [HD, L] shape; same memory,
+    // different ne labels — downstream consumers (flash-attn cache
+    // upload buffers, trace download) see the original layout.
+    return ggml_reshape_2d(ctx, q_rot, (int64_t) n_heads * head_dim, L);
+}
+
 // Inline definition of the forward-declared portable leaky-relu helper
 // above.  Must come after `supertonic_use_cpu_custom_ops()` is
 // declared so the dispatcher resolves at every call site.

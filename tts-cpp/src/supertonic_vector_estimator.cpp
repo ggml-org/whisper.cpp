@@ -781,9 +781,17 @@ void push_trace(std::vector<supertonic_trace_tensor> & trace,
 
 struct vector_group_graph_result {
     std::vector<float> post;
-    std::vector<float> q;
-    std::vector<float> k;
+    std::vector<float> q;        // pre-RoPE Q (kept for scalar-parity trace)
+    std::vector<float> k;        // pre-RoPE K
     std::vector<float> v;
+    // F23 — when the cache has `apply_rope = true` these hold the
+    // post-RoPE Q/K downloaded from the in-graph rotation outputs
+    // (`<q_name>_rope` / `<k_name>_rope`).  Call sites pass these
+    // directly to `run_text_attention_cache` instead of calling
+    // host-side `apply_rope(theta, …)` on q/k.  Empty when the
+    // legacy fallback path is taken (model lacks `vector_rope_theta`).
+    std::vector<float> q_rope;
+    std::vector<float> k_rope;
 };
 
 struct vector_group_graph_cache {
@@ -811,6 +819,21 @@ struct vector_group_graph_cache {
     ggml_tensor * x_in = nullptr;
     ggml_tensor * temb_in = nullptr;
     ggml_tensor * text_in = nullptr;
+
+    // Audit follow-up #5 / F23 — in-graph RoPE inputs.  Populated
+    // at cache-build time and uploaded once (cos/sin only depend on
+    // L / text_len / θ, all stable across the cache's lifetime).
+    // When `apply_rope == false` (no `vector_rope_theta` available,
+    // e.g. a malformed GGUF) the graph falls back to the historical
+    // path: Q/K stay raw, host code still calls apply_rope.  See
+    // `aiDocs/AUDIT_SUPERTONIC_OPENCL.md` F23.
+    bool apply_rope = false;
+    ggml_tensor * q_cos_in = nullptr;
+    ggml_tensor * q_sin_in = nullptr;
+    ggml_tensor * k_cos_in = nullptr;
+    ggml_tensor * k_sin_in = nullptr;
+    std::string q_rope_name; // == q_name + "_rope"
+    std::string k_rope_name; // == k_name + "_rope"
 };
 
 void free_group_graph_cache(vector_group_graph_cache & cache) {
@@ -935,12 +958,77 @@ void build_group_graph_cache(vector_group_graph_cache & cache,
     ggml_set_name(k, k_name.c_str()); ggml_set_output(k); ggml_build_forward_expand(cache.gf, k);
     ggml_set_name(v, v_name.c_str()); ggml_set_output(v); ggml_build_forward_expand(cache.gf, v);
 
+    // F23 — bake the RoPE rotation into the same graph that
+    // produces Q/K, so the host path drops the per-step CPU
+    // `apply_rope(theta, q_out, …)` round-trips entirely.  Q's
+    // sequence length is `L` (latent_len) and K's is `text_len`;
+    // each gets its own cos/sin table input (`ne=[half, L]` /
+    // `ne=[half, text_len]`) populated once at build time.  The
+    // post-rotation tensors are exposed under
+    // `<q_name>_rope` / `<k_name>_rope` so trace harnesses can
+    // download both the pre- and post-RoPE values for parity
+    // checks against the scalar path.  Falls back to no-op when
+    // the GGUF didn't ship a `vector_rope_theta` (cache.apply_rope
+    // stays false; call sites then keep the legacy host
+    // apply_rope call).
+    const int H = 4;
+    const int D = 64;
+    const int half = D / 2;
+    cache.apply_rope = (int) model.vector_rope_theta.size() == half;
+    if (cache.apply_rope) {
+        cache.q_cos_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, half, L);
+        ggml_set_name(cache.q_cos_in,
+            ("vector_group_q_rope_cos_g" + std::to_string(group)).c_str());
+        ggml_set_input(cache.q_cos_in);
+        cache.q_sin_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, half, L);
+        ggml_set_name(cache.q_sin_in,
+            ("vector_group_q_rope_sin_g" + std::to_string(group)).c_str());
+        ggml_set_input(cache.q_sin_in);
+        cache.k_cos_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, half, text_len);
+        ggml_set_name(cache.k_cos_in,
+            ("vector_group_k_rope_cos_g" + std::to_string(group)).c_str());
+        ggml_set_input(cache.k_cos_in);
+        cache.k_sin_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, half, text_len);
+        ggml_set_name(cache.k_sin_in,
+            ("vector_group_k_rope_sin_g" + std::to_string(group)).c_str());
+        ggml_set_input(cache.k_sin_in);
+
+        ggml_tensor * q_rope = apply_rope_to_packed_qk(cache.ctx, q,
+            cache.q_cos_in, cache.q_sin_in, H, D);
+        ggml_tensor * k_rope = apply_rope_to_packed_qk(cache.ctx, k,
+            cache.k_cos_in, cache.k_sin_in, H, D);
+        cache.q_rope_name = q_name + "_rope";
+        cache.k_rope_name = k_name + "_rope";
+        ggml_set_name(q_rope, cache.q_rope_name.c_str());
+        ggml_set_output(q_rope);
+        ggml_build_forward_expand(cache.gf, q_rope);
+        ggml_set_name(k_rope, cache.k_rope_name.c_str());
+        ggml_set_output(k_rope);
+        ggml_build_forward_expand(cache.gf, k_rope);
+    }
+
     cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
     if (!cache.allocr) throw std::runtime_error("ggml_gallocr_new vector group cache failed");
     if (!ggml_gallocr_reserve(cache.allocr, cache.gf)) {
         throw std::runtime_error("ggml_gallocr_reserve vector group cache failed");
     }
     ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
+
+    // Upload the cos/sin tables — these inputs are stable for the
+    // entire cache lifetime (cos/sin depend only on L / text_len /
+    // θ, all encoded in the cache key + the model), so this is a
+    // one-shot population.
+    if (cache.apply_rope) {
+        std::vector<float> q_cos, q_sin, k_cos, k_sin;
+        make_rope_cos_sin_tables(model.vector_rope_theta.data(), L, half,
+                                 q_cos, q_sin);
+        make_rope_cos_sin_tables(model.vector_rope_theta.data(), text_len, half,
+                                 k_cos, k_sin);
+        ggml_backend_tensor_set(cache.q_cos_in, q_cos.data(), 0, q_cos.size() * sizeof(float));
+        ggml_backend_tensor_set(cache.q_sin_in, q_sin.data(), 0, q_sin.size() * sizeof(float));
+        ggml_backend_tensor_set(cache.k_cos_in, k_cos.data(), 0, k_cos.size() * sizeof(float));
+        ggml_backend_tensor_set(cache.k_sin_in, k_sin.data(), 0, k_sin.size() * sizeof(float));
+    }
 }
 
 vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache,
@@ -995,9 +1083,22 @@ vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache
         std::to_string(post_block) + "_convnext0";
     vector_group_graph_result out;
     out.post = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, post_name.c_str()));
+    // F23: on trace runs we still download the pre-RoPE Q/K so the
+    // scalar-parity harness can compare them against its own scalar
+    // `ve_g<n>_attn_q` reference.  Production runs don't push these
+    // through PUSH_GGML_TRACE so the download is the only cost.
+    // The post-RoPE Q/K (`q_rope` / `k_rope`) are what callers feed
+    // into `run_text_attention_cache`, eliminating the per-step
+    // host `apply_rope(theta, …)` round-trips entirely.
     out.q = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, q_name.c_str()));
     out.k = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, k_name.c_str()));
     out.v = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, v_name.c_str()));
+    if (cache.apply_rope) {
+        out.q_rope = tensor_to_time_channel(
+            ggml_graph_get_tensor(cache.gf, cache.q_rope_name.c_str()));
+        out.k_rope = tensor_to_time_channel(
+            ggml_graph_get_tensor(cache.gf, cache.k_rope_name.c_str()));
+    }
     if (trace) {
         push_trace(*trace, post_name, L, C, out.post);
         push_trace(*trace, q_name, L, 256, out.q);
@@ -2289,6 +2390,17 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             ggml_tensor * mask_in = nullptr;
             ggml_tensor * t_emb_in = nullptr;
             ggml_tensor * text_in_t = nullptr;
+            // F23 — in-graph RoPE inputs (cos/sin tables for Q's
+            // sequence length L and K's sequence length text_len).
+            // Stable for the cache's lifetime; uploaded once at
+            // build time.  `apply_rope` is false when the GGUF
+            // didn't ship vector_rope_theta, in which case the
+            // legacy host apply_rope path is taken downstream.
+            bool apply_rope = false;
+            ggml_tensor * q_cos_in = nullptr;
+            ggml_tensor * q_sin_in = nullptr;
+            ggml_tensor * k_cos_in = nullptr;
+            ggml_tensor * k_sin_in = nullptr;
         };
         thread_local ve_front_block_graph_cache front_cache;
         if (front_cache.model != &model ||
@@ -2399,6 +2511,48 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             ggml_set_output(v_t);
             ggml_build_forward_expand(front_cache.gf, v_t);
 
+            // F23 — same in-graph RoPE wiring as the per-group
+            // graph cache: produce post-rotation
+            // `ve_attn0_q_rope` / `ve_attn0_k_rope` outputs so the
+            // call site below can drop the host `apply_rope`
+            // round-trips.  Falls through to the legacy host
+            // rotation path when the GGUF didn't ship theta.
+            const int FRONT_H = 4;
+            const int FRONT_D = 64;
+            const int FRONT_HALF = FRONT_D / 2;
+            front_cache.apply_rope =
+                (int) model.vector_rope_theta.size() == FRONT_HALF;
+            if (front_cache.apply_rope) {
+                front_cache.q_cos_in = ggml_new_tensor_2d(front_cache.ctx,
+                    GGML_TYPE_F32, FRONT_HALF, L);
+                ggml_set_name(front_cache.q_cos_in, "ve_attn0_q_rope_cos");
+                ggml_set_input(front_cache.q_cos_in);
+                front_cache.q_sin_in = ggml_new_tensor_2d(front_cache.ctx,
+                    GGML_TYPE_F32, FRONT_HALF, L);
+                ggml_set_name(front_cache.q_sin_in, "ve_attn0_q_rope_sin");
+                ggml_set_input(front_cache.q_sin_in);
+                front_cache.k_cos_in = ggml_new_tensor_2d(front_cache.ctx,
+                    GGML_TYPE_F32, FRONT_HALF, text_len);
+                ggml_set_name(front_cache.k_cos_in, "ve_attn0_k_rope_cos");
+                ggml_set_input(front_cache.k_cos_in);
+                front_cache.k_sin_in = ggml_new_tensor_2d(front_cache.ctx,
+                    GGML_TYPE_F32, FRONT_HALF, text_len);
+                ggml_set_name(front_cache.k_sin_in, "ve_attn0_k_rope_sin");
+                ggml_set_input(front_cache.k_sin_in);
+                ggml_tensor * q_rope = apply_rope_to_packed_qk(front_cache.ctx,
+                    q_t, front_cache.q_cos_in, front_cache.q_sin_in,
+                    FRONT_H, FRONT_D);
+                ggml_set_name(q_rope, "ve_attn0_q_rope");
+                ggml_set_output(q_rope);
+                ggml_build_forward_expand(front_cache.gf, q_rope);
+                ggml_tensor * k_rope = apply_rope_to_packed_qk(front_cache.ctx,
+                    k_t, front_cache.k_cos_in, front_cache.k_sin_in,
+                    FRONT_H, FRONT_D);
+                ggml_set_name(k_rope, "ve_attn0_k_rope");
+                ggml_set_output(k_rope);
+                ggml_build_forward_expand(front_cache.gf, k_rope);
+            }
+
             front_cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
             if (!front_cache.allocr) {
                 ggml_free(front_cache.ctx);
@@ -2412,6 +2566,27 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
                 throw std::runtime_error("ggml_gallocr_reserve failed");
             }
             ggml_gallocr_alloc_graph(front_cache.allocr, front_cache.gf);
+
+            // F23 — upload cos/sin tables for the in-graph RoPE
+            // rotation.  These inputs depend only on (L, text_len,
+            // theta), all stable for the cache's lifetime; the
+            // upload is one-shot at build time.
+            if (front_cache.apply_rope) {
+                const int FRONT_HALF = 32;
+                std::vector<float> q_cos, q_sin, k_cos, k_sin;
+                make_rope_cos_sin_tables(model.vector_rope_theta.data(),
+                                         L, FRONT_HALF, q_cos, q_sin);
+                make_rope_cos_sin_tables(model.vector_rope_theta.data(),
+                                         text_len, FRONT_HALF, k_cos, k_sin);
+                ggml_backend_tensor_set(front_cache.q_cos_in, q_cos.data(),
+                                        0, q_cos.size() * sizeof(float));
+                ggml_backend_tensor_set(front_cache.q_sin_in, q_sin.data(),
+                                        0, q_sin.size() * sizeof(float));
+                ggml_backend_tensor_set(front_cache.k_cos_in, k_cos.data(),
+                                        0, k_cos.size() * sizeof(float));
+                ggml_backend_tensor_set(front_cache.k_sin_in, k_sin.data(),
+                                        0, k_sin.size() * sizeof(float));
+            }
         }
         // Reuse-or-rebuild done; expose the cache's compute graph
         // + input tensors under the variable names the rest of
@@ -2454,26 +2629,50 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         PUSH_GGML_TRACE({"ve_time_add0", {L, C}, tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_time_add0"))});
         std::vector<float> block2_ggml = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_block2_convnext0"));
         PUSH_GGML_TRACE({"ve_block2_convnext0", {L, C}, block2_ggml});
-        std::vector<float> q_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_q"));
-        std::vector<float> k_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_k"));
         std::vector<float> v_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_v"));
-        PUSH_GGML_TRACE({"ve_attn0_q", {L, 256}, q_out});
-        PUSH_GGML_TRACE({"ve_attn0_k", {text_len, 256}, k_out});
-        PUSH_GGML_TRACE({"ve_attn0_v", {text_len, 256}, v_out});
-        // F1: theta lives in model.vector_rope_theta (populated at load).
-        const float * theta = model.vector_rope_theta.data();
-        apply_rope(theta, q_out, L, 4, 64);
-        apply_rope(theta, k_out, text_len, 4, 64);
+        // F23 — when the front-block graph has the in-graph RoPE
+        // wired in (model carries `vector_rope_theta`), feed
+        // `run_text_attention_cache` the already-rotated Q/K from
+        // the `_rope` graph outputs.  Pre-RoPE Q/K are still
+        // downloaded into the GGML trace for scalar parity.  Host
+        // `apply_rope(theta, …)` is fully eliminated on the
+        // production path.
+        std::vector<float> q_out, k_out, q_rotated, k_rotated;
+        if (include_ggml_trace) {
+            q_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_q"));
+            k_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_k"));
+            PUSH_GGML_TRACE({"ve_attn0_q", {L, 256}, q_out});
+            PUSH_GGML_TRACE({"ve_attn0_k", {text_len, 256}, k_out});
+            PUSH_GGML_TRACE({"ve_attn0_v", {text_len, 256}, v_out});
+        }
+        const bool front_in_graph_rope =
+            ggml_graph_get_tensor(gf, "ve_attn0_q_rope") != nullptr;
+        if (front_in_graph_rope) {
+            q_rotated = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_q_rope"));
+            k_rotated = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_k_rope"));
+        } else {
+            // Legacy path: GGUF lacks vector_rope_theta-typed wiring.
+            // Materialise Q/K host-side, rotate, then forward.
+            if (q_out.empty()) {
+                q_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_q"));
+                k_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_k"));
+            }
+            const float * theta = model.vector_rope_theta.data();
+            apply_rope(theta, q_out, L, 4, 64);
+            apply_rope(theta, k_out, text_len, 4, 64);
+            q_rotated = std::move(q_out);
+            k_rotated = std::move(k_out);
+        }
         thread_local vector_text_attention_cache att0_cache;
         std::vector<float> att0_ctx_trace;
-        std::vector<float> attn_out_ggml = run_text_attention_cache(att0_cache, model, q_out, k_out, v_out,
+        std::vector<float> attn_out_ggml = run_text_attention_cache(att0_cache, model, q_rotated, k_rotated, v_out,
             L, text_len, 4, 64,
             "vector_estimator:onnx::MatMul_3110",
             "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.out_fc.linear.bias",
             current_step, "attn0_flash",
             include_ggml_trace ? &att0_ctx_trace : nullptr);
-        PUSH_GGML_TRACE({"ve_attn0_q_rope", {L, 256}, q_out});
-        PUSH_GGML_TRACE({"ve_attn0_k_rope", {text_len, 256}, k_out});
+        PUSH_GGML_TRACE({"ve_attn0_q_rope", {L, 256}, q_rotated});
+        PUSH_GGML_TRACE({"ve_attn0_k_rope", {text_len, 256}, k_rotated});
         PUSH_GGML_TRACE({"ve_attn0_ctx", {L, 256}, att0_ctx_trace});
         PUSH_GGML_TRACE({"ve_attn0_out", {L, C}, attn_out_ggml});
 
@@ -2534,20 +2733,30 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         std::vector<float> g1q_out = std::move(g1_group.q);
         std::vector<float> g1k_out = std::move(g1_group.k);
         std::vector<float> g1v_out = std::move(g1_group.v);
-        // F1: theta lives in model.vector_rope_theta (populated at load).
-        const float * theta_g1 = model.vector_rope_theta.data();
-        apply_rope(theta_g1, g1q_out, L, 4, 64);
-        apply_rope(theta_g1, g1k_out, text_len, 4, 64);
+        // F23 — `g1_group.q_rope` / `.k_rope` are non-empty iff
+        // the group cache built the in-graph rotation; if so we
+        // skip the host `apply_rope` entirely.
+        std::vector<float> g1q_rotated, g1k_rotated;
+        if (!g1_group.q_rope.empty() && !g1_group.k_rope.empty()) {
+            g1q_rotated = std::move(g1_group.q_rope);
+            g1k_rotated = std::move(g1_group.k_rope);
+        } else {
+            const float * theta_g1 = model.vector_rope_theta.data();
+            g1q_rotated = g1q_out;
+            g1k_rotated = g1k_out;
+            apply_rope(theta_g1, g1q_rotated, L, 4, 64);
+            apply_rope(theta_g1, g1k_rotated, text_len, 4, 64);
+        }
         thread_local vector_text_attention_cache g1_attn_cache;
         std::vector<float> g1_attn_ctx_trace;
-        std::vector<float> g1_attn_out = run_text_attention_cache(g1_attn_cache, model, g1q_out, g1k_out, g1v_out,
+        std::vector<float> g1_attn_out = run_text_attention_cache(g1_attn_cache, model, g1q_rotated, g1k_rotated, g1v_out,
             L, text_len, 4, 64,
             "vector_estimator:onnx::MatMul_3155",
             "vector_estimator:tts.ttl.vector_field.main_blocks.9.attn.out_fc.linear.bias",
             current_step, "g1_attn_flash",
             include_ggml_trace ? &g1_attn_ctx_trace : nullptr);
-        PUSH_GGML_TRACE({"ve_g1_attn_q_rope", {L, 256}, g1q_out});
-        PUSH_GGML_TRACE({"ve_g1_attn_k_rope", {text_len, 256}, g1k_out});
+        PUSH_GGML_TRACE({"ve_g1_attn_q_rope", {L, 256}, g1q_rotated});
+        PUSH_GGML_TRACE({"ve_g1_attn_k_rope", {text_len, 256}, g1k_rotated});
         PUSH_GGML_TRACE({"ve_g1_attn_ctx", {L, 256}, g1_attn_ctx_trace});
         PUSH_GGML_TRACE({"ve_g1_attn_out", {L, C}, g1_attn_out});
 
@@ -2605,20 +2814,30 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         std::vector<float> g2q_out = std::move(g2_group.q);
         std::vector<float> g2k_out = std::move(g2_group.k);
         std::vector<float> g2v_out = std::move(g2_group.v);
-        // F1: theta lives in model.vector_rope_theta (populated at load).
-        const float * theta_g2 = model.vector_rope_theta.data();
-        apply_rope(theta_g2, g2q_out, L, 4, 64);
-        apply_rope(theta_g2, g2k_out, text_len, 4, 64);
+        // F23 — consume the in-graph-rotated Q/K when available;
+        // otherwise fall back to host apply_rope.  Same pattern as
+        // the front-block and g1 sites above.
+        std::vector<float> g2q_rotated, g2k_rotated;
+        if (!g2_group.q_rope.empty() && !g2_group.k_rope.empty()) {
+            g2q_rotated = std::move(g2_group.q_rope);
+            g2k_rotated = std::move(g2_group.k_rope);
+        } else {
+            const float * theta_g2 = model.vector_rope_theta.data();
+            g2q_rotated = g2q_out;
+            g2k_rotated = g2k_out;
+            apply_rope(theta_g2, g2q_rotated, L, 4, 64);
+            apply_rope(theta_g2, g2k_rotated, text_len, 4, 64);
+        }
         thread_local vector_text_attention_cache g2_attn_cache;
         std::vector<float> g2_attn_ctx_trace;
-        std::vector<float> g2_attn_out = run_text_attention_cache(g2_attn_cache, model, g2q_out, g2k_out, g2v_out,
+        std::vector<float> g2_attn_out = run_text_attention_cache(g2_attn_cache, model, g2q_rotated, g2k_rotated, g2v_out,
             L, text_len, 4, 64,
             "vector_estimator:onnx::MatMul_3200",
             "vector_estimator:tts.ttl.vector_field.main_blocks.15.attn.out_fc.linear.bias",
             current_step, "g2_attn_flash",
             include_ggml_trace ? &g2_attn_ctx_trace : nullptr);
-        PUSH_GGML_TRACE({"ve_g2_attn_q_rope", {L, 256}, g2q_out});
-        PUSH_GGML_TRACE({"ve_g2_attn_k_rope", {text_len, 256}, g2k_out});
+        PUSH_GGML_TRACE({"ve_g2_attn_q_rope", {L, 256}, g2q_rotated});
+        PUSH_GGML_TRACE({"ve_g2_attn_k_rope", {text_len, 256}, g2k_rotated});
         PUSH_GGML_TRACE({"ve_g2_attn_ctx", {L, 256}, g2_attn_ctx_trace});
         PUSH_GGML_TRACE({"ve_g2_attn_out", {L, C}, g2_attn_out});
 
@@ -2676,20 +2895,28 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         std::vector<float> g3q_out = std::move(g3_group.q);
         std::vector<float> g3k_out = std::move(g3_group.k);
         std::vector<float> g3v_out = std::move(g3_group.v);
-        // F1: theta lives in model.vector_rope_theta (populated at load).
-        const float * theta_g3 = model.vector_rope_theta.data();
-        apply_rope(theta_g3, g3q_out, L, 4, 64);
-        apply_rope(theta_g3, g3k_out, text_len, 4, 64);
+        // F23 — final RoPE-using attention site; same pattern.
+        std::vector<float> g3q_rotated, g3k_rotated;
+        if (!g3_group.q_rope.empty() && !g3_group.k_rope.empty()) {
+            g3q_rotated = std::move(g3_group.q_rope);
+            g3k_rotated = std::move(g3_group.k_rope);
+        } else {
+            const float * theta_g3 = model.vector_rope_theta.data();
+            g3q_rotated = g3q_out;
+            g3k_rotated = g3k_out;
+            apply_rope(theta_g3, g3q_rotated, L, 4, 64);
+            apply_rope(theta_g3, g3k_rotated, text_len, 4, 64);
+        }
         thread_local vector_text_attention_cache g3_attn_cache;
         std::vector<float> g3_attn_ctx_trace;
-        std::vector<float> g3_attn_out = run_text_attention_cache(g3_attn_cache, model, g3q_out, g3k_out, g3v_out,
+        std::vector<float> g3_attn_out = run_text_attention_cache(g3_attn_cache, model, g3q_rotated, g3k_rotated, g3v_out,
             L, text_len, 4, 64,
             "vector_estimator:onnx::MatMul_3245",
             "vector_estimator:tts.ttl.vector_field.main_blocks.21.attn.out_fc.linear.bias",
             current_step, "g3_attn_flash",
             include_ggml_trace ? &g3_attn_ctx_trace : nullptr);
-        PUSH_GGML_TRACE({"ve_g3_attn_q_rope", {L, 256}, g3q_out});
-        PUSH_GGML_TRACE({"ve_g3_attn_k_rope", {text_len, 256}, g3k_out});
+        PUSH_GGML_TRACE({"ve_g3_attn_q_rope", {L, 256}, g3q_rotated});
+        PUSH_GGML_TRACE({"ve_g3_attn_k_rope", {text_len, 256}, g3k_rotated});
         PUSH_GGML_TRACE({"ve_g3_attn_ctx", {L, 256}, g3_attn_ctx_trace});
         PUSH_GGML_TRACE({"ve_g3_attn_out", {L, C}, g3_attn_out});
 

@@ -661,6 +661,20 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-rope-in-graph)
     tts_cpp_register_test(test-supertonic-rope-in-graph LABEL "unit")
 
+    # Audit follow-up #5 — packed-QK RoPE adapter parity test for
+    # `apply_rope_to_packed_qk` (F23 = F20 integration shim).  The
+    # helper bridges the `[head_dim, n_heads, L]` layout consumed
+    # by `apply_rope_in_graph` with the `[H*D, L]` packed layout
+    # produced by `dense_matmul_time_ggml` — see
+    # `aiDocs/AUDIT_SUPERTONIC_OPENCL.md` finding F23.  Unit-level:
+    # CPU-only parity, no GGUF, no fixture; runs in <50 ms.
+    add_executable(test-supertonic-rope-packed-qk
+        test/test_supertonic_rope_packed_qk.cpp)
+    target_link_libraries(test-supertonic-rope-packed-qk PRIVATE ggml)
+    target_include_directories(test-supertonic-rope-packed-qk PRIVATE ggml/include src)
+    tts_cpp_apply_ccache(test-supertonic-rope-packed-qk)
+    tts_cpp_register_test(test-supertonic-rope-packed-qk LABEL "unit")
+
     # OpenCL bring-up unit tests (QVAC-18607).  Three CPU-only
     # parity / structural tests for the dispatch + portable-op
     # primitives.  No GGUF needed; register as "unit" label so a
