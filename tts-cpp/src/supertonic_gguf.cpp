@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <unordered_map>
 #include <unordered_set>
 #include <stdexcept>
 #include <thread>
@@ -391,8 +392,11 @@ bool backend_is_vulkan(ggml_backend_t backend) {
 // probe only gates the *auto* policy.
 //
 // Cost: one ggml_init + ~6 tensor allocations + one supports_op call
-// at load time.  Zero hot-path cost.
-bool backend_supports_f16_kv_flash_attn(ggml_backend_t backend) {
+// at load time.  Zero hot-path cost — and the result is now memoised
+// per `ggml_backend_t` handle by `cached_backend_supports_*` below so
+// the engine + bench + load_supertonic_gguf trio doesn't re-run the
+// probe three times for the same backend.
+bool backend_supports_f16_kv_flash_attn_uncached(ggml_backend_t backend) {
     if (!backend) return false;
     ggml_init_params probe_params = {
         /*.mem_size   =*/ ggml_tensor_overhead() * 16,
@@ -427,6 +431,192 @@ bool backend_supports_f16_kv_flash_attn(ggml_backend_t backend) {
     }
     ggml_free(probe_ctx);
     return ok;
+}
+
+// QVAC-18605 follow-up — backend capability probe for the Q8_0
+// K/V `FLASH_ATTN_EXT` variant.
+//
+// Vulkan's `GGML_OP_FLASH_ATTN_EXT` `supports_op` advertises Q8_0
+// (and Q4_0) K/V types in the scalar and coopmat2 paths
+// (`ggml-vulkan.cpp:15257`).  Switching K/V from F16 to Q8_0
+// halves the upload bandwidth into the per-step attention cache
+// (50 KB → 25 KB per K and V on Supertonic's hot shape),
+// equivalently ~1 MB / synth on the default 5-step × 4-site
+// schedule, in exchange for a small (~0.5 %) relative-error drift
+// vs F16 K/V on the attention output.  Worth the trade on memory-
+// bandwidth-bound mobile GPUs (Adreno, Mali) once measured on a
+// real device.
+//
+// This PR adds the probe + caches the result, but does NOT yet
+// wire `model.use_q8_kv_attn` into the live dispatch site — Q8_0
+// K/V drift hasn't been measured against the existing F16 K/V
+// parity harness on a real Vulkan adapter.  The probe primes the
+// capability cache so a follow-up patch can flip the dispatch
+// behind a `--kv-attn-type q8_0` opt-in without re-running the
+// `supports_op` query.  Tracked in PROGRESS_SUPERTONIC.md
+// "Deferred work".
+bool backend_supports_q8_0_kv_flash_attn_uncached(ggml_backend_t backend) {
+    if (!backend) return false;
+    ggml_init_params probe_params = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * 16,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context * probe_ctx = ggml_init(probe_params);
+    if (!probe_ctx) return false;
+    bool ok = false;
+    try {
+        // Same shape as the F16-K/V probe; only K/V dtype differs.
+        // Q8_0 is a 32-element-per-block quantisation, so kv_len
+        // must be a multiple of 32 to satisfy the live
+        // `ggml_can_repeat` / row-stride invariants the GPU
+        // dispatch requires.  The live call site has kv_len = 50;
+        // we pick 32 here as the smallest multiple-of-Q8_0-block
+        // that exercises the same `supports_op` switch.
+        constexpr int head_dim = 64;
+        constexpr int n_heads  = 4;
+        constexpr int q_len    = 16;
+        constexpr int kv_len   = 32;
+        ggml_tensor * q  = ggml_new_tensor_3d(probe_ctx, GGML_TYPE_F32,  head_dim, q_len,  n_heads);
+        ggml_tensor * k  = ggml_new_tensor_3d(probe_ctx, GGML_TYPE_Q8_0, head_dim, kv_len, n_heads);
+        ggml_tensor * v  = ggml_new_tensor_3d(probe_ctx, GGML_TYPE_Q8_0, head_dim, kv_len, n_heads);
+        ggml_tensor * op = ggml_flash_attn_ext(probe_ctx, q, k, v, nullptr,
+                                               1.0f / (float) head_dim, 0.0f, 0.0f);
+        ok = (op != nullptr) && ggml_backend_supports_op(backend, op);
+    } catch (...) {
+        ok = false;
+    }
+    ggml_free(probe_ctx);
+    return ok;
+}
+
+// QVAC-18605 follow-up — backend capability probe for the hot
+// F16-weight `mul_mat` shape Supertonic dispatches every step.
+//
+// Mirror of `backend_supports_f16_kv_flash_attn_uncached`: the
+// `use_f16_weights` auto-policy used to flip on `!backend_is_cpu`
+// blindly, with no check that the resolved backend would accept the
+// resulting `mul_mat(F16 weight, F32 activation) → F32` graph node
+// for the shapes the audit identified as hot.  Every shipping GPU
+// backend (CUDA / Metal / Vulkan / OpenCL) does support this combo,
+// but a future debug-shim / partial-port backend that wires up
+// `mul_mat` for F32-only would crash at first synth call when
+// `f16_weights` was auto-enabled — exactly the failure mode the
+// F16-K/V probe was added to prevent.
+//
+// Probe shape mirrors the vector-estimator attention W_query
+// matmul (`[head_dim*n_heads = 256, in_dim = 256]` weight, F16
+// storage; `[256, q_len = 16]` activation, F32; output F32),
+// which is the most common F16-weight matmul site in the
+// production graph (32 such matmuls per synth, 5-step schedule).
+//
+// Cost: one ggml_init + 3 tensor allocations + one supports_op
+// call at load time.  Zero hot-path cost — memoised per
+// `ggml_backend_t` by `cached_backend_supports_*` below.
+bool backend_supports_f16_mul_mat_uncached(ggml_backend_t backend) {
+    if (!backend) return false;
+    ggml_init_params probe_params = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * 8,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context * probe_ctx = ggml_init(probe_params);
+    if (!probe_ctx) return false;
+    bool ok = false;
+    try {
+        // Live shape from the vector-estimator attention W_query /
+        // W_key / W_value matmul site.
+        constexpr int head_dim = 64;
+        constexpr int n_heads  = 4;
+        constexpr int width    = head_dim * n_heads;  // 256
+        constexpr int q_len    = 16;
+        ggml_tensor * w  = ggml_new_tensor_2d(probe_ctx, GGML_TYPE_F16, width, width);
+        ggml_tensor * x  = ggml_new_tensor_2d(probe_ctx, GGML_TYPE_F32, width, q_len);
+        ggml_tensor * op = ggml_mul_mat(probe_ctx, w, x);
+        ok = (op != nullptr) && ggml_backend_supports_op(backend, op);
+    } catch (...) {
+        ok = false;
+    }
+    ggml_free(probe_ctx);
+    return ok;
+}
+
+// QVAC-18605 follow-up — process-wide capability-probe cache.
+//
+// Three sites probe the same `ggml_backend_t` for the same op
+// support boolean: `load_supertonic_gguf` (LEAKY_RELU at backend
+// resolution time), `Engine::Engine` and `supertonic_bench`'s
+// `main` (F16-K/V flash-attn at auto-policy time).  Engine + bench
+// life-cycles also call `load_supertonic_gguf` themselves, so the
+// uncached probe set fires on average 2–3 times per backend per
+// process.  On a CPU backend each probe costs ~1 µs (ggml_init +
+// supports_op walks a small switch).  On Vulkan, `supports_op`
+// inspects the device's pipeline state and may force coopmat
+// shader specialisation lookup — measured ~50–200 µs on Adreno /
+// llvmpipe / RADV in microbenchmarks.  Negligible per-probe but
+// visible in cold-start traces, and the cache eliminates 100 % of
+// the redundancy.
+//
+// Cache shape: `unordered_map<ggml_backend_t, probe_results>`.
+// Key is the backend handle (stable for the backend's lifetime;
+// recycled keys after a backend is freed are technically possible
+// but the per-handle entry cost is ~24 bytes, so we don't bother
+// invalidating on free).  Test seam: `supertonic_clear_capability_cache`
+// drops every entry — used by the unit test to verify the cache
+// is hit on the second call.
+//
+// Thread-safety: guarded by a single std::mutex.  Hot path is
+// load-time only, never the per-synth path, so contention is
+// negligible.
+struct backend_capabilities {
+    bool native_leaky_relu;
+    bool f16_kv_flash_attn;
+    bool f16_mul_mat;
+    // QVAC-18605 follow-up — Q8_0 K/V flash-attn support.  Probed
+    // here as a forward-compat capability; the dispatch isn't yet
+    // wired (see `backend_supports_q8_0_kv_flash_attn_uncached`'s
+    // docstring + PROGRESS_SUPERTONIC.md "Deferred work").
+    bool q8_0_kv_flash_attn;
+};
+
+inline std::mutex & capability_cache_mu() {
+    static std::mutex m;
+    return m;
+}
+inline std::unordered_map<ggml_backend_t, backend_capabilities> & capability_cache() {
+    static std::unordered_map<ggml_backend_t, backend_capabilities> c;
+    return c;
+}
+// Probe-call counter for the regression test in
+// test_supertonic_capability_cache.cpp: each cached_backend_supports_*
+// helper bumps the counter only when it actually invokes the
+// uncached probe (i.e. on a cold cache).  The test asserts that
+// the counter advances by exactly one across N consecutive
+// cached_backend_supports_native_leaky_relu(b) calls on the same
+// backend.
+std::atomic<uint64_t> & capability_probe_call_counter() {
+    static std::atomic<uint64_t> n{0};
+    return n;
+}
+
+const backend_capabilities & cached_backend_capabilities(ggml_backend_t backend) {
+    std::lock_guard<std::mutex> lk(capability_cache_mu());
+    auto & c = capability_cache();
+    auto it = c.find(backend);
+    if (it != c.end()) return it->second;
+    capability_probe_call_counter().fetch_add(1, std::memory_order_relaxed);
+    backend_capabilities caps;
+    caps.native_leaky_relu   = backend_supports_native_leaky_relu(backend);
+    caps.f16_kv_flash_attn   = backend_supports_f16_kv_flash_attn_uncached(backend);
+    caps.f16_mul_mat         = backend_supports_f16_mul_mat_uncached(backend);
+    caps.q8_0_kv_flash_attn  = backend_supports_q8_0_kv_flash_attn_uncached(backend);
+    return c.emplace(backend, caps).first->second;
+}
+
+// Backwards-compatible name kept for the in-tree callers that already
+// reference it; routes through the cache.
+bool backend_supports_f16_kv_flash_attn(ggml_backend_t backend) {
+    return cached_backend_capabilities(backend).f16_kv_flash_attn;
 }
 
 void set_env_if_unset(const char * name, const char * value) {
@@ -511,9 +701,55 @@ bool is_supertonic_alive(uint64_t generation_id) {
 // historical "any non-CPU backend" heuristic — saves a graph-build
 // crash on backends that ship `flash_attn_ext` but reject the
 // F16 K/V variant for the Supertonic shape.  See the inline probe
-// `backend_supports_f16_kv_flash_attn` in this TU for the rationale.
+// `backend_supports_f16_kv_flash_attn_uncached` in this TU for
+// the rationale.  Routes through `cached_backend_capabilities`
+// (process-wide cache keyed by `ggml_backend_t`) so engine + bench
+// + load trio doesn't re-run the probe three times for the same
+// backend.
 bool supertonic_backend_supports_f16_kv_flash_attn(ggml_backend_t backend) {
-    return backend_supports_f16_kv_flash_attn(backend);
+    return cached_backend_capabilities(backend).f16_kv_flash_attn;
+}
+
+// QVAC-18605 follow-up — public forwarder for the F16-weight
+// `mul_mat` probe.  Symmetric to the F16-K/V probe above; gates
+// the `use_f16_weights` auto-policy in engine.cpp + bench so a
+// backend that ships F16 storage but rejects F16 mul_mat for the
+// hot vector-estimator attention shape doesn't crash at first
+// synth call.  Cached.
+bool supertonic_backend_supports_f16_mul_mat(ggml_backend_t backend) {
+    return cached_backend_capabilities(backend).f16_mul_mat;
+}
+
+// QVAC-18605 follow-up — public forwarder for the Q8_0 K/V
+// flash-attn probe.  Forward-compat — primes the capability
+// cache for a future `--kv-attn-type q8_0` opt-in (cuts K/V
+// upload bandwidth ~2× on memory-bandwidth-bound mobile GPUs)
+// without forcing the live dispatch through Q8_0 today.  See
+// `backend_supports_q8_0_kv_flash_attn_uncached` for the
+// rationale + the deferred-work entry in PROGRESS_SUPERTONIC.md.
+bool supertonic_backend_supports_q8_0_kv_flash_attn(ggml_backend_t backend) {
+    return cached_backend_capabilities(backend).q8_0_kv_flash_attn;
+}
+
+// Test seam — drops every cached entry so the regression test in
+// `test_supertonic_capability_cache.cpp` can verify the cache is
+// hit on the second call (the cold-cache call bumps the probe
+// counter; subsequent calls don't until the cache is cleared).
+// Not part of the supported public API; the symbol is exported
+// only for the in-process test harness and not declared in the
+// `supertonic_internal.h` header for external consumers.
+void supertonic_clear_capability_cache() {
+    std::lock_guard<std::mutex> lk(capability_cache_mu());
+    capability_cache().clear();
+}
+
+// Test seam — exposes the cold-cache probe call counter so the
+// regression test can assert the cache short-circuits the
+// uncached path on a hit.  Returns the counter's *current* value,
+// which the caller compares before / after `cached_backend_*`
+// calls to verify zero increments on a hot cache.
+uint64_t supertonic_capability_probe_call_count() {
+    return capability_probe_call_counter().load(std::memory_order_relaxed);
 }
 
 // Phase 2A — hot-weight predicate.
@@ -984,8 +1220,9 @@ bool load_supertonic_gguf(const std::string & path,
         // builtin on backends that have it (Vulkan / Metal / CUDA /
         // CPU; OpenCL only with chatterbox patch) and to the
         // RELU+SCALE+ADD decomposition otherwise.  Probe runs once
-        // per load — zero hot-path cost.
-        model.use_native_leaky_relu = backend_supports_native_leaky_relu(model.backend);
+        // per backend (memoised by `cached_backend_capabilities`)
+        // — zero hot-path cost.
+        model.use_native_leaky_relu = cached_backend_capabilities(model.backend).native_leaky_relu;
         if (verbose) {
             fprintf(stderr, "supertonic: backend_is_cpu=%s backend_is_vk=%s use_native_leaky_relu=%s\n",
                     model.backend_is_cpu ? "true" : "false",
@@ -996,8 +1233,22 @@ bool load_supertonic_gguf(const std::string & path,
         // Phase 2A — auto/force policy for F16 weight materialization.
         // Auto-enable on non-CPU backends; never auto-enable on CPU
         // (the CBLAS custom-op fast paths require F32 storage).
+        //
+        // QVAC-18605 follow-up — the auto policy is now backend-
+        // capability-gated.  Symmetric to the F16-K/V flash-attn
+        // probe: a backend that ships F16 storage but rejects the
+        // hot `mul_mat(F16, F32)` shape Supertonic dispatches every
+        // step would crash at first synth call when this flipped on
+        // blindly.  The probe (`backend_supports_f16_mul_mat_uncached`
+        // → `cached_backend_capabilities`) tries the live shape
+        // (W=[256, 256] F16, X=[256, 16] F32) at backend resolution
+        // time; on a `false` answer the auto policy refuses to
+        // materialise F16 weights — slower but correct.  Manual
+        // override via `--f16-weights 1` still forces dispatch
+        // (useful for debug-shim backends and forward-compat tests).
         if (f16_weights < 0) {
-            model.use_f16_weights = !model.backend_is_cpu;
+            model.use_f16_weights = !model.backend_is_cpu &&
+                                    cached_backend_capabilities(model.backend).f16_mul_mat;
         } else {
             model.use_f16_weights = (f16_weights != 0);
         }

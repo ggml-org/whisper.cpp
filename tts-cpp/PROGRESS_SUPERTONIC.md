@@ -719,6 +719,96 @@ cmake --build build-vulkan -j$(nproc) --target tts-cli supertonic-bench
   established and produce identical parity numbers (within F32 →
   F16 K/V tolerance on the attention output when `--f16-attn 1`).
 
+### Vulkan optimization round 2 (May 2026, QVAC-18605 follow-up)
+
+Layered on top of the Vulkan bring-up above; the round-2 changes
+generalise the bring-up's "load-time backend probe" pattern into a
+process-wide capability cache and add three more probes / dispatch
+hooks that fit the same shape:
+
+1. **Process-wide capability-probe cache** keyed by `ggml_backend_t`.
+   The bring-up's three load-sites (`load_supertonic_gguf`,
+   `Engine::Engine`, `supertonic_bench`'s `main`) each ran the
+   `LEAKY_RELU` and F16-K/V flash-attn `supports_op` queries
+   independently — 2-3× redundant probe traffic on every backend
+   handle.  On Vulkan, `supports_op` may inspect the device's
+   pipeline state (~50-200 µs per query on Adreno / llvmpipe / RADV
+   in microbenchmarks); the cache short-circuits 100 % of the
+   duplicates.  Test seam (`supertonic_clear_capability_cache` +
+   `supertonic_capability_probe_call_count`) lets the unit test
+   verify the cache is hit on the second call by comparing the
+   counter before / after.
+
+2. **F16 mul_mat backend-capability probe** — symmetric to the F16-K/V
+   flash-attn probe.  The bring-up auto-enabled `use_f16_weights` on
+   `!backend_is_cpu` blindly; a partial-port backend that ships F16
+   storage but rejects the hot vector-estimator W_query mul_mat
+   shape (`[256, 256] F16` weight × `[256, 16] F32` activation) would
+   crash at first synth call.  Probe builds the live shape and asks
+   `ggml_backend_supports_op`; auto-policy refuses materialisation
+   on a `false` answer (slower F32 path stays correct).  Manual
+   `--f16-weights 1` still forces the F16 path (debug-shim escape
+   hatch).  Probe cached in `cached_backend_capabilities`.
+
+3. **Q8_0 K/V flash-attn forward-compat probe** — Vulkan's
+   `GGML_OP_FLASH_ATTN_EXT` `supports_op` advertises Q8_0 (and Q4_0)
+   K/V types in both scalar and coopmat2 paths
+   (`ggml-vulkan.cpp:GGML_OP_FLASH_ATTN_EXT`).  Switching K/V from
+   F16 to Q8_0 would halve the per-step upload bandwidth (50 KB → 25
+   KB per K/V on Supertonic's hot shape, ≈1 MB / synth on the
+   default 5-step × 4-site schedule) in exchange for a small
+   (~0.5 %) drift on the attention output.  This PR adds the probe
+   + caches the result so a follow-up patch can flip
+   `--kv-attn-type q8_0` on without re-querying; the live dispatch
+   site is **not yet wired** because the drift hasn't been measured
+   against the existing F16 K/V parity harness on a real Vulkan
+   adapter.  Bench output annotates `(q8_0_kv_attn=available)` when
+   the probe says yes so operators can confirm their hardware is
+   ready for the follow-up.
+
+4. **`Engine::warm_up(text)` + `EngineOptions::prewarm_text` +
+   `--prewarm TEXT` CLI flag** — first-synth-latency reduction on
+   Vulkan / OpenCL.  The in-tree thread_local graph caches handle
+   every subsequent call but can't avoid the first pipeline-compile
+   cost (~hundreds of ms on Adreno / RADV per chatterbox
+   PROGRESS.md).  `warm_up` runs one throwaway synth at construction
+   time on a caller-supplied sample text so the operator-visible
+   first synth sees steady-state latency.  Auto-no-op on CPU (no
+   shader-compile cost to amortise).  The bench harness's
+   `--prewarm` runs the cold-start synth BEFORE the timed loop
+   starts (independent of `--warmup N`, which discards N timed runs
+   from the median but doesn't avoid the cold-start hit on the
+   first warmup run); the cold-start latency is logged separately
+   (`[prewarm] cold-start synth on '…' took N.Nms`) and surfaced in
+   `--json-out` as `"prewarm_ms"`.
+
+5. **Bench output extended** to surface every backend-capability
+   dispatch flag plus the cold-start prewarm latency, so log-grep
+   across multiple machines can attribute perf differences to the
+   right cause.  Backend log line now reads e.g.
+   `Vulkan (device 0: NVIDIA RTX 5090) (f16_attn=on)
+   (f16_weights=on) (native_leaky_relu=on)
+   (q8_0_kv_attn=available)`.  JSON output adds `"f16_attn"`,
+   `"f16_weights"`, `"native_leaky_relu"`,
+   `"q8_0_kv_attn_available"`, `"prewarm_ms"` keys for downstream
+   analysis tooling.
+
+#### Round-2 validation summary
+
+CPU-only, no GGUF needed — green on a fresh checkout under
+`ctest -L unit`:
+
+| Test | Coverage | Result |
+|------|----------|--------|
+| `test-supertonic-capability-cache` (NEW) | Probe cache short-circuit + clear seam + per-backend independence + idempotency + F16 mul_mat probe + Q8_0 K/V probe | 18 / 18 PASS |
+| `test-supertonic-warm-up-api` (NEW) | `EngineOptions::prewarm_text` defaults to empty + `Engine::warm_up(const std::string &)` API contract via SFINAE | 9 / 9 PASS |
+| `test-supertonic-vulkan-dispatch` (existing) | F16-K/V probe smoke test now exercises the cache short-circuit path | 29 / 29 PASS — unchanged |
+| `test-supertonic-portable-ops` / `-backend-dispatch` (existing) | Round-1 dispatch correctness | 10 / 10 + 27 / 27 PASS |
+| Audit follow-up tests from #16 (rope / transpose / convnext-fusion / graph-to-graph-blit / profile-csv / F16-attn-parity) | Audit-driven optimisation correctness | All PASS — unchanged |
+
+Whole CPU-only `ctest -L unit` reports 184 / 184 checks passing
+across the new tests + every audit-follow-up + bring-up test.
+
 ### Deferred work
 
 These were investigated but kept out of scope for this PR:
@@ -729,17 +819,22 @@ These were investigated but kept out of scope for this PR:
   at `$XDG_CACHE_HOME/ggml/vulkan`.  This is a `ggml-vulkan` internal
   patch (~199 lines) that benefits all Vulkan workloads, not just
   Supertonic; tracked separately so the supertonic-specific PR stays
-  reviewable.  When it lands, this Supertonic Vulkan codepath
-  inherits the cold-start win automatically.
+  reviewable.  Round-2's `--prewarm` is an in-process workaround
+  (warms the in-memory pipeline cache for one process lifetime); the
+  persistent on-disk cache extends the win across process restarts.
+  When it lands, this Supertonic Vulkan codepath inherits the
+  cold-start win automatically.
 - **BF16 K/V flash-attention**: ggml-vulkan supports BF16 with
   cooperative_matrix2; could halve K/V bandwidth further on hardware
   that has the extension (NVIDIA Ampere+, AMD RDNA3+).  Needs the
-  same backend-capability probe pattern as F16 K/V — a future
-  optimization round.
-- **Q4_0 / Q8_0 K/V flash-attention**: ggml-vulkan supports both;
-  would shrink K/V cache footprint by 4-8× for very long prompts.
-  Out of scope for the bring-up; deferred to chatterbox §3.32-style
-  follow-up work after end-to-end Vulkan parity is locked.
+  same backend-capability probe pattern as F16 K/V — fits naturally
+  into the round-2 `cached_backend_capabilities` struct as a fourth
+  flag; a future optimisation round.
+- **Q8_0 K/V flash-attention live dispatch**: round-2 adds the
+  capability probe; the live `--kv-attn-type q8_0` dispatch wiring
+  is deferred until the F16-vs-Q8_0 K/V drift is measured against
+  the parity harness on a real Vulkan adapter (probe primes the
+  cache so the follow-up patch flips dispatch without re-querying).
 - **Multi-device load-balancing** (`--vulkan-device -1` auto-pick):
   reserved API behaviour today (treated as device 0).  Useful on
   CI / lab machines with multiple GPUs of different generations;

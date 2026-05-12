@@ -642,8 +642,56 @@ bool supertonic_use_native_leaky_relu();
 // Manual override via `EngineOptions::f16_attn=1` still forces
 // dispatch (useful for benchmarking with a debug-shim backend).
 //
-// Defined out of line in supertonic_gguf.cpp.
+// QVAC-18605 follow-up — both probes are now memoised
+// process-wide by `ggml_backend_t` handle, so the engine + bench
+// + load_supertonic_gguf trio doesn't re-run the same probe two
+// or three times per backend.  Defined out of line in
+// supertonic_gguf.cpp.
 bool supertonic_backend_supports_f16_kv_flash_attn(ggml_backend_t backend);
+
+// QVAC-18605 follow-up — load-time backend-capability probe used by
+// the engine + bench + `load_supertonic_gguf` auto-policy for
+// `use_f16_weights`.  Symmetric to the F16-K/V flash-attn probe:
+// returns `true` when the resolved backend would accept the hot
+// `mul_mat(F16 weight, F32 activation) → F32` graph node Supertonic
+// dispatches every step (vector-estimator W_query, vocoder head
+// linear, text-encoder linears, etc.).  The auto-enable policy
+// gates on this so a partial-port backend that ships F16 storage
+// but rejects F16 mul_mat for the hot shape keeps the F32 path
+// — slower but guaranteed not to crash at first synth call.
+// Manual override via `EngineOptions::f16_weights=1` still forces
+// materialisation.
+bool supertonic_backend_supports_f16_mul_mat(ggml_backend_t backend);
+
+// QVAC-18605 follow-up — load-time backend-capability probe for
+// the Q8_0 K/V `FLASH_ATTN_EXT` variant.  Forward-compat: returns
+// `true` when the backend would accept a Supertonic-shaped
+// `ggml_flash_attn_ext(Q=F32, K/V=Q8_0)` graph node.  Vulkan's
+// `supports_op` advertises Q8_0 K/V in both scalar and coopmat2
+// paths (`ggml-vulkan.cpp:GGML_OP_FLASH_ATTN_EXT`), which would
+// halve the per-step K/V upload bandwidth on memory-bandwidth-
+// bound mobile GPUs in exchange for a small (~0.5 %) drift on the
+// attention output.  This PR adds the probe + caches the result;
+// the live dispatch site is not yet wired through Q8_0 because the
+// drift hasn't been measured against the F16 K/V parity harness on
+// a real Vulkan adapter.  See PROGRESS_SUPERTONIC.md "Deferred
+// work" for the follow-up.
+bool supertonic_backend_supports_q8_0_kv_flash_attn(ggml_backend_t backend);
+
+// QVAC-18605 follow-up — test seams for the capability cache.
+// `supertonic_clear_capability_cache` drops every cached entry so
+// the regression test in `test_supertonic_capability_cache.cpp`
+// can verify the cache short-circuits on a hit (the cold-cache
+// call bumps `supertonic_capability_probe_call_count`; subsequent
+// cached calls don't until the cache is cleared).
+//
+// Not part of the supported public API — exported only for the
+// in-process test harness.  Keeping the declaration in this
+// internal header (which production callers don't include) is
+// the cheapest way to avoid the symbol leaking into the public
+// surface while still letting the unit test reach it.
+void supertonic_clear_capability_cache();
+uint64_t supertonic_capability_probe_call_count();
 
 struct supertonic_op_dispatch_scope {
     bool prev_use_cpu_custom_ops;

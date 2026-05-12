@@ -758,6 +758,27 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-vulkan-dispatch)
     tts_cpp_register_test(test-supertonic-vulkan-dispatch LABEL "unit")
 
+    # QVAC-18605 follow-up — process-wide capability-probe cache +
+    # F16 mul_mat probe + Q8_0 K/V flash-attn probe regression test.
+    # CPU-only; runs on a fresh checkout under `ctest -L unit`.
+    add_executable(test-supertonic-capability-cache
+        test/test_supertonic_capability_cache.cpp)
+    target_link_libraries(test-supertonic-capability-cache PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-capability-cache PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-capability-cache)
+    tts_cpp_register_test(test-supertonic-capability-cache LABEL "unit")
+
+    # QVAC-18605 follow-up — Engine::warm_up + EngineOptions::prewarm_text
+    # API-surface lockdown.  CPU-only compile-time + runtime contract test;
+    # the Vulkan-side first-synth-latency reduction is exercised by the
+    # fixture-bound integration tests on a Vulkan-capable host.
+    add_executable(test-supertonic-warm-up-api
+        test/test_supertonic_warm_up_api.cpp)
+    target_link_libraries(test-supertonic-warm-up-api PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-warm-up-api PRIVATE include)
+    tts_cpp_apply_ccache(test-supertonic-warm-up-api)
+    tts_cpp_register_test(test-supertonic-warm-up-api LABEL "unit")
+
     add_executable(test-supertonic-f16-attn-parity
         test/test_supertonic_f16_attn_parity.cpp)
     target_link_libraries(test-supertonic-f16-attn-parity PRIVATE ggml)

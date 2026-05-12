@@ -25,6 +25,10 @@ void usage(const char * argv0) {
         "                            audit-identified hot matmul / pwconv weights;\n"
         "                            defaults to auto: on for GPU, off for CPU)\n"
         "          [--precision f32|f16|q8_0]   (default: f32)\n"
+        "          [--prewarm TEXT] (run one throwaway synth on TEXT at engine\n"
+        "                            construction so first-real-call latency on\n"
+        "                            Vulkan / OpenCL doesn't pay the shader-\n"
+        "                            compile cost; no-op on CPU)\n"
         "          [--noise-npy /path/to/noise.npy]\n"
         "          [--stream-chunk-tokens N]    (0 = batch; >0 enables\n"
         "                            streaming with target ~N text-token chunks)\n"
@@ -117,6 +121,7 @@ int main(int argc, char ** argv) {
         else if (arg == "--f16-attn") opts.f16_attn = std::stoi(next("--f16-attn"));
         else if (arg == "--f16-weights") opts.f16_weights = std::stoi(next("--f16-weights"));
         else if (arg == "--precision") opts.precision = parse_precision(next("--precision"));
+        else if (arg == "--prewarm") opts.prewarm_text = next("--prewarm");
         else if (arg == "--noise-npy") opts.noise_npy_path = next("--noise-npy");
         else if (arg == "--stream-chunk-tokens") {
             opts.stream_chunk_tokens = std::stoi(next("--stream-chunk-tokens"));

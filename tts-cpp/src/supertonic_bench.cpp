@@ -54,6 +54,8 @@ void usage(const char * argv0) {
         "          [--runs 5] [--warmup 1] [--threads N] [--n-gpu-layers N]\n"
         "          [--vulkan-device N] [--f16-attn 0|1] [--f16-weights 0|1]\n"
         "          [--precision f32|f16|q8_0]   (default: f32)\n"
+        "          [--prewarm TEXT] (one cold-start synth before timed loop;\n"
+        "                            independent of --warmup; CPU is no-op)\n"
         "          [--json-out FILE]\n",
         argv0);
 }
@@ -155,6 +157,16 @@ int main(int argc, char ** argv) {
     // at GGUF load against `ggml_backend_vk_get_device_count()`; an
     // out-of-range value is a hard error.
     int vulkan_device = 0;
+    // QVAC-18605 follow-up — first-synth pre-warm.  When non-empty,
+    // a throwaway synth on `prewarm_text` runs after model load + before
+    // the timed runs, forcing every per-stage GPU graph cache + shader
+    // pipeline to populate up-front.  No-op on CPU backends.  Note that
+    // bench's existing `--warmup N` flag is independent: it discards
+    // the first N timed runs from the median, but it doesn't avoid the
+    // shader-compile hit on the first warmup run.  `--prewarm TEXT`
+    // does, so the first warmup run reflects actual steady-state warm
+    // time rather than the cold-start outlier.
+    std::string prewarm_text;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -175,6 +187,7 @@ int main(int argc, char ** argv) {
         else if (a == "--threads") n_threads = std::stoi(next("--threads"));
         else if (a == "--n-gpu-layers") n_gpu_layers = std::stoi(next("--n-gpu-layers"));
         else if (a == "--vulkan-device") vulkan_device = std::stoi(next("--vulkan-device"));
+        else if (a == "--prewarm") prewarm_text = next("--prewarm");
         else if (a == "--f16-attn") f16_attn = std::stoi(next("--f16-attn"));
         else if (a == "--f16-weights") f16_weights = std::stoi(next("--f16-weights"));
         else if (a == "--precision") precision = parse_bench_precision(next("--precision"));
@@ -237,6 +250,54 @@ int main(int argc, char ** argv) {
     Stage st_tot{"total", {}};
     std::vector<double> rtfs;
     double last_audio_s = 0;
+
+    // QVAC-18605 follow-up — first-synth pre-warm.
+    //
+    // Independent of the existing `--warmup N` flag.  `--warmup`
+    // discards the first N timed runs from the median; `--prewarm
+    // TEXT` runs ONE additional throwaway synth here, BEFORE the
+    // timed loop even starts, so the first warmup run reflects the
+    // post-shader-compile steady-state cost rather than the cold-
+    // start outlier.  No-op on CPU (no shader-compile cost to amortise)
+    // and on empty `--prewarm` (the operator didn't ask).
+    double prewarm_ms = 0.0;
+    if (!prewarm_text.empty() && !model.backend_is_cpu) {
+        auto pw_t0 = clk::now();
+        std::string pw_error;
+        std::vector<int32_t> pw_ids_i32;
+        std::string pw_norm;
+        if (supertonic_text_to_ids(model, prewarm_text, language, pw_ids_i32, &pw_norm, &pw_error)) {
+            std::vector<int64_t> pw_ids(pw_ids_i32.begin(), pw_ids_i32.end());
+            float pw_dur = 0;
+            std::vector<float> pw_text_emb;
+            if (supertonic_duration_forward_ggml(model, pw_ids.data(), (int) pw_ids.size(),
+                                                 style_dp.data(), pw_dur, &pw_error) &&
+                supertonic_text_encoder_forward_ggml(model, pw_ids.data(), (int) pw_ids.size(),
+                                                     style_ttl.data(), pw_text_emb, &pw_error)) {
+                const int chunk = model.hparams.base_chunk_size * model.hparams.ttl_chunk_compress_factor;
+                int pw_latent_len = std::max(1, (int) (pw_dur / speed * model.hparams.sample_rate + chunk - 1) / chunk);
+                std::vector<float> pw_latent((size_t) model.hparams.latent_channels * pw_latent_len, 0.0f);
+                std::vector<float> pw_mask((size_t) pw_latent_len, 1.0f);
+                std::vector<float> pw_next;
+                bool pw_ok = true;
+                for (int s = 0; s < steps && pw_ok; ++s) {
+                    pw_ok = supertonic_vector_step_ggml(model, pw_latent.data(), pw_latent_len,
+                                                        pw_text_emb.data(), (int) pw_ids.size(),
+                                                        style_ttl.data(), pw_mask.data(),
+                                                        s, steps, pw_next, &pw_error);
+                    pw_latent.swap(pw_next);
+                }
+                std::vector<float> pw_wav;
+                if (pw_ok) {
+                    supertonic_vocoder_forward_ggml(model, pw_latent.data(), pw_latent_len,
+                                                    pw_wav, &pw_error);
+                }
+            }
+        }
+        prewarm_ms = ms_t(clk::now() - pw_t0).count();
+        fprintf(stderr, "[prewarm] cold-start synth on '%s' took %.1fms\n",
+                prewarm_text.c_str(), prewarm_ms);
+    }
 
     int total_runs = runs + warmup;
     for (int r = 0; r < total_runs; ++r) {
@@ -348,10 +409,22 @@ int main(int argc, char ** argv) {
             }
         }
 #endif
-        printf("  backend: %s%s%s\n",
+        // QVAC-18605 follow-up — surface every backend-capability
+        // dispatch flag plus the cold-start prewarm latency so log
+        // grep'ing across multiple machines can attribute perf
+        // differences to the right cause (e.g. "use_f16_weights=off
+        // on this run because the F16 mul_mat probe rejected the
+        // shape" is much faster to triage than "why is this synth
+        // 30 % slower than the other one").
+        printf("  backend: %s%s%s%s%s\n",
                desc.c_str(),
-               model.use_f16_attn ? " (f16_attn=on)" : "",
-               model.use_native_leaky_relu ? " (native_leaky_relu=on)" : "");
+               model.use_f16_attn        ? " (f16_attn=on)"        : "",
+               model.use_f16_weights     ? " (f16_weights=on)"     : "",
+               model.use_native_leaky_relu ? " (native_leaky_relu=on)" : "",
+               supertonic_backend_supports_q8_0_kv_flash_attn(model.backend) ? " (q8_0_kv_attn=available)" : "");
+        if (prewarm_ms > 0.0) {
+            printf("  prewarm: %.1fms (cold-start, discarded)\n", prewarm_ms);
+        }
     }
     printf("  audio per run: %.3fs @ %d Hz\n", last_audio_s, model.hparams.sample_rate);
     printf("  runs: %d (warmup discarded: %d)\n", runs, warmup);
@@ -389,6 +462,12 @@ int main(int argc, char ** argv) {
         os << "  \"audio_s\": " << last_audio_s << ",\n";
         os << "  \"runs\": " << runs << ",\n";
         os << "  \"warmup\": " << warmup << ",\n";
+        os << "  \"prewarm_ms\": " << prewarm_ms << ",\n";
+        os << "  \"f16_attn\": " << (model.use_f16_attn ? "true" : "false") << ",\n";
+        os << "  \"f16_weights\": " << (model.use_f16_weights ? "true" : "false") << ",\n";
+        os << "  \"native_leaky_relu\": " << (model.use_native_leaky_relu ? "true" : "false") << ",\n";
+        os << "  \"q8_0_kv_attn_available\": "
+           << (supertonic_backend_supports_q8_0_kv_flash_attn(model.backend) ? "true" : "false") << ",\n";
         os << "  \"rtf\": {"
            << "\"min\": " << minv(rtfs)
            << ", \"median\": " << median(rtfs)

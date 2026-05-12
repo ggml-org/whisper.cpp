@@ -187,6 +187,28 @@ struct EngineOptions {
     int stream_first_chunk_tokens  = 0;
     int stream_chunk_tolerance_pct = 20;
     int stream_min_chunk_tokens    = 30;
+
+    // QVAC-18605 follow-up — first-synth-latency pre-warming.
+    //
+    // When non-empty, the Engine ctor invokes `warm_up(prewarm_text)`
+    // immediately after the GGUF load + voice validation, running one
+    // throwaway synth on the supplied text.  On Vulkan / OpenCL this
+    // forces the GPU shader pipelines for every Supertonic stage to
+    // compile up-front (the in-tree thread_local graph caches handle
+    // every subsequent call but can't avoid the first pipeline-compile
+    // cost — measured ~hundreds of ms on first synth on Adreno + RADV
+    // in chatterbox PROGRESS.md), so the operator-visible first synth
+    // call sees ~steady-state latency.  No effect on CPU (no shader
+    // compilation cost; warm_up returns immediately on
+    // `model.backend_is_cpu`).
+    //
+    // Pre-warm text should be similar in length to representative
+    // production input — the per-stage graph caches are keyed on
+    // (text_len, latent_len) tuples, so a too-short pre-warm leaves
+    // a graph-rebuild on the first real call (still saves the
+    // shader-compile cost; only the cgraph allocation is repeated).
+    // Default empty (no pre-warming).
+    std::string prewarm_text;
 };
 
 // Per-chunk PCM callback for streaming synthesis.  Receives a pointer to
@@ -247,6 +269,26 @@ public:
     // happens at the next cancellation check inside the vector-
     // estimator loop (one step is the worst-case cancel latency).
     void cancel();
+
+    // QVAC-18605 follow-up — first-synth-latency pre-warming.
+    //
+    // Runs one throwaway synth on `text` to force every per-stage
+    // GPU graph cache to populate and every Vulkan / OpenCL shader
+    // pipeline to compile up-front.  The PCM result is discarded.
+    // Subsequent `synthesize()` calls hit the warmed caches +
+    // pre-compiled pipelines, so the operator-visible first synth
+    // sees steady-state latency.
+    //
+    // No-op on CPU backends (no pipeline cache to warm).  Auto-
+    // invoked by the ctor when `EngineOptions::prewarm_text` is
+    // non-empty; callers can also invoke explicitly mid-life when
+    // they need to warm a different shape (e.g. switching from a
+    // short-prompt to a long-prompt workload).
+    //
+    // Throws on the same conditions as `synthesize()` — if the
+    // throwaway synth fails for any reason, the failure surfaces
+    // here rather than being swallowed.
+    void warm_up(const std::string & text);
 
     // Return the options the engine was constructed with (convenience
     // for callers that want to introspect the resolved n_gpu_layers /

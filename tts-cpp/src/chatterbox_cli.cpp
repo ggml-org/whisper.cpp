@@ -384,6 +384,10 @@ struct cli_params {
     // throws (no silent CPU fallback).  Has no effect on builds
     // compiled without `GGML_VULKAN` or when `--n-gpu-layers 0`.
     int32_t     supertonic_vulkan_device = 0;
+    // QVAC-18605 follow-up — first-synth pre-warm text.  Empty
+    // disables.  Maps onto EngineOptions::prewarm_text.  Auto no-op
+    // on CPU backends.
+    std::string supertonic_prewarm_text;
     bool        has_supertonic_options = false;
 
     // Streaming synthesis (PROGRESS.md B1).  When > 0, speech tokens from
@@ -529,6 +533,11 @@ static void print_usage(const char * argv0) {
     fprintf(stderr, "                          an out-of-range value is a hard error (no silent\n");
     fprintf(stderr, "                          CPU fallback).  See PROGRESS_SUPERTONIC.md \"Vulkan\n");
     fprintf(stderr, "                          bring-up\" section for the supported-op matrix.\n");
+    fprintf(stderr, "  --prewarm TEXT          Run one throwaway synth on TEXT at engine\n");
+    fprintf(stderr, "                          construction so first-real-call latency on Vulkan /\n");
+    fprintf(stderr, "                          OpenCL doesn't pay the shader-compile cost (~hundreds\n");
+    fprintf(stderr, "                          of ms cold start on Adreno + RADV per chatterbox\n");
+    fprintf(stderr, "                          PROGRESS.md).  No-op on CPU backends.\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "  --stream-chunk-tokens N Synthesize the wav in streaming chunks of N speech\n");
     fprintf(stderr, "                          tokens each (~1 s audio per 25-token chunk).  With\n");
@@ -670,6 +679,7 @@ static bool parse_args(int argc, char ** argv, cli_params & params) {
         else if (arg == "--f16-attn")       { if (!parse_int  ("--f16-attn",       params.supertonic_f16_attn)) return false; params.has_supertonic_options = true; }
         else if (arg == "--f16-weights")    { if (!parse_int  ("--f16-weights",    params.supertonic_f16_weights)) return false; params.has_supertonic_options = true; }
         else if (arg == "--vulkan-device")  { if (!parse_int  ("--vulkan-device",  params.supertonic_vulkan_device)) return false; params.has_supertonic_options = true; }
+        else if (arg == "--prewarm")        { auto v = next("--prewarm");        if (!v) return false; params.supertonic_prewarm_text = v; params.has_supertonic_options = true; }
         else if (arg == "--cfm-f16-kv-attn") { params.cfm_f16_kv_attn = true; }
         else if (arg == "--max-sentence-chars") { if (!parse_int("--max-sentence-chars", params.max_sentence_chars)) return false; }
         else if (arg == "--no-auto-split")  { params.max_sentence_chars = 0; }
@@ -866,6 +876,7 @@ static int run_supertonic_cli_path(const cli_params & params) {
     opts.f16_attn = params.supertonic_f16_attn;
     opts.f16_weights = params.supertonic_f16_weights;
     opts.vulkan_device = params.supertonic_vulkan_device;
+    opts.prewarm_text = params.supertonic_prewarm_text;
     opts.noise_npy_path = params.supertonic_noise_npy;
 
     auto result = tts_cpp::supertonic::synthesize(opts, params.text);
