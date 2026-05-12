@@ -16,7 +16,7 @@ RUN if [ "${GGML_SYCL_F16}" = "ON" ]; then \
     fi && \
     make base.en CMAKE_ARGS="-DGGML_SYCL=1 -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx ${OPT_SYCL_F16}"
 
-FROM intel/deep-learning-essentials:$ONEAPI_VERSION AS build
+FROM intel/deep-learning-essentials:$ONEAPI_VERSION AS runtime
 WORKDIR /app
 
 RUN apt-get update && \
