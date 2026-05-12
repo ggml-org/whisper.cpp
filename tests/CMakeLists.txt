@@ -110,3 +110,8 @@ target_compile_definitions(${VAD_TEST} PRIVATE
     SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
 add_test(NAME ${VAD_TEST} COMMAND ${VAD_TEST})
 set_tests_properties(${VAD_TEST} PROPERTIES LABELS "base;en")
+
+# Test argument parsing (no segfault on missing arg values)
+add_test(NAME test-stream-arg-parsing
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test-arg-parsing.sh $<TARGET_FILE:whisper-stream>)
+set_tests_properties(test-stream-arg-parsing PROPERTIES LABELS "unit")
