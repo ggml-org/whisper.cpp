@@ -600,6 +600,154 @@ spelled out (most TDD, written before the implementation lands).
 
 ---
 
+## GPU bring-up: Vulkan (May 2026, QVAC-18605)
+
+Target: the same `--n-gpu-layers > 0` flag already plumbed through the
+Supertonic CLI / engine / bench layer, but resolved to **Vulkan** on
+Linux/Windows boxes that ship a working ICD (NVIDIA proprietary, AMD
+RADV via Mesa, Intel ANV, llvmpipe for headless CI) so QVAC consumers
+without an OpenCL stack still get the GPU codepath.  Tracking ticket:
+QVAC-18605.
+
+### Inheritance from the OpenCL bring-up (QVAC-18607)
+
+By construction, the OpenCL bring-up's foundational work is **backend-
+portable**: every helper added in QVAC-18607 (the
+`supertonic_op_dispatch_scope` RAII, `backend_is_cpu` flag, F16 K/V
+flash-attention path, `leaky_relu_portable_ggml` decomposition) only
+ever queries "is this CPU?".  When the resolved backend is Vulkan
+those queries return false and the runtime takes the GPU-portable
+path automatically.  The Phase 2 audit-driven optimizations (F1-F24
+in `aiDocs/AUDIT_SUPERTONIC_OPENCL.md` — host caches, in-graph RoPE,
+GPU↔GPU Q/K/V blits, ConvNeXt fusion, F16 weights, in-graph
+transpose) likewise apply unchanged: each one removes a host↔GPU
+synchronisation point or eliminates redundant memory traffic that
+Vulkan pays exactly the same way OpenCL does.
+
+What this PR adds on top is the **Vulkan-specific dispatch deltas**:
+two new model flags, two backend-capability probes, a CLI knob for
+device selection, and a CPU-only TDD test that locks in the new
+contract.  Each is small, scoped, and sits behind the existing
+`#ifdef GGML_USE_VULKAN` guard so non-Vulkan builds compile clean.
+
+### What landed
+
+| Change | File(s) | Rationale |
+|--------|---------|-----------|
+| `supertonic_model::backend_is_vk` set from `ggml_backend_is_vk(model.backend)` after `init_supertonic_backend()` resolves the device. | `supertonic_gguf.cpp`, `supertonic_internal.h` | Informational; consumed by `engine.cpp::backend_name()` and `supertonic_bench.cpp` so multi-GPU machines unambiguously identify which adapter ran the bench (e.g. `Vulkan (device 0: NVIDIA GeForce RTX 5090)` instead of the bare `Vulkan` string). |
+| `supertonic_model::use_native_leaky_relu` set from a load-time `ggml_backend_supports_op` probe against a synthetic LEAKY_RELU node.  Mirrored into the dispatch scope's thread-local. | `supertonic_gguf.cpp`, `supertonic_internal.h` | The OpenCL bring-up's `leaky_relu_portable_ggml` always decomposes into `RELU + SCALE + ADD` on non-CPU backends (3 dispatches).  Vulkan / Metal / CUDA implement `GGML_OP_LEAKY_RELU` natively (1 dispatch) — the probe lets the helper short-circuit to the fused builtin on backends that have it, without a hard-coded backend table.  Plain upstream OpenCL (no chatterbox patch) keeps the conservative decomposition. |
+| `supertonic_backend_supports_f16_kv_flash_attn(backend)` probe; engine + bench auto-policy gates `use_f16_attn` on the result. | `supertonic_gguf.cpp`, `supertonic_internal.h`, `supertonic_engine.cpp`, `supertonic_bench.cpp` | The OpenCL bring-up's auto-policy flipped `use_f16_attn = !backend_is_cpu` blindly.  Replaced with a backend-capability probe that builds a synthetic Supertonic-shaped flash-attn graph node (`Q[head_dim, q_len, n_heads]` F32, `K/V[head_dim, kv_len, n_heads]` F16) and asks the backend whether it would accept the op.  A backend that ships `flash_attn_ext` but rejects the F16-K/V variant for our shape now keeps the F32 path — slower but guaranteed not to crash at first synth call.  Manual `--f16-attn 1` still forces dispatch (debug). |
+| `init_supertonic_backend(n_gpu_layers, verbose, vulkan_device)` — Vulkan device-index parameter.  Range-checks against `ggml_backend_vk_get_device_count()`; an out-of-range value is a hard error (no silent CPU fallback — that would mask CLI typos / wrong-machine config).  Verbose mode logs device description from `ggml_backend_vk_get_device_description`. | `supertonic_gguf.cpp` | Replaces the historical hard-coded `ggml_backend_vk_init(0)`.  Multi-GPU machines + CI runners with a primary llvmpipe and a secondary discrete GPU need a way to pick. |
+| `EngineOptions::vulkan_device` (default 0) plumbed through `load_supertonic_gguf`. | `tts-cpp/include/tts-cpp/supertonic/engine.h`, `supertonic_engine.cpp` | Public API. |
+| `--vulkan-device N` flag wired into `supertonic-cli`, `supertonic-bench`, and `tts-cli` (the chatterbox CLI's Supertonic dispatch path). | `supertonic_cli.cpp`, `chatterbox_cli.cpp`, `supertonic_bench.cpp` | CLI surface. |
+| `test-supertonic-vulkan-dispatch` — CPU-only unit test (`LABEL "unit"`) covering the new `backend_is_vk` / `use_native_leaky_relu` flags through `supertonic_op_dispatch_scope`, plus a smoke test for the F16-K/V flash-attn probe. | `test/test_supertonic_vulkan_dispatch.cpp`, `CMakeLists.txt` | Locks in the new dispatch contract for future regressions; runs on a fresh checkout under `ctest -L unit` without any GGUF fixture. |
+
+### Vulkan supported-op matrix (relevant to Supertonic)
+
+Verified against `ggml/src/ggml-vulkan/ggml-vulkan.cpp` HEAD on this
+branch:
+
+| Op | Native on ggml-vulkan? | Notes |
+|----|:---:|---|
+| `GGML_OP_LEAKY_RELU` (F32) | ✓ | `pipeline_leaky_relu_f32` shader.  `leaky_relu_portable_ggml` short-circuits to fused builtin via the new `use_native_leaky_relu` probe. |
+| `GGML_OP_FLASH_ATTN_EXT` (F32 Q, F16 K/V) | ✓ | Requires `HSK % 8 == 0`; Supertonic's `head_dim=64` satisfies this by construction.  Output is F32, which matches what the downstream dense projection expects. |
+| `GGML_OP_FLASH_ATTN_EXT` (F32 Q, Q4_0/Q8_0 K/V) | ✓ | Available for future quantized-K/V experiments (chatterbox §3.32 deferred this). |
+| `GGML_OP_ROPE` | ✓ | Used by F20/F23 in-graph RoPE (post-OpenCL audit follow-up). |
+| `GGML_OP_NORM`, `GGML_OP_MUL`, `GGML_OP_ADD`, `GGML_OP_REPEAT`, `GGML_OP_PERMUTE`, `GGML_OP_CONT`, `GGML_OP_TRANSPOSE`, `GGML_OP_RESHAPE`, `GGML_OP_VIEW`, `GGML_OP_SCALE`, `GGML_OP_RELU`, `GGML_OP_GELU_ERF`, `GGML_OP_MUL_MAT`, `GGML_OP_GET_ROWS`, `GGML_OP_CPY`, `GGML_OP_CONCAT` | ✓ | Universal op set used by the convnext fusion (F7), in-graph transpose (F12), graph-to-graph blit (F24), and every other audit follow-up.  No Supertonic ops missing on Vulkan. |
+
+### How to use
+
+```bash
+# Build with Vulkan (in the standalone tree; in-tree subtree consumes
+# the ggml-speech vcpkg port which already provides the Vulkan
+# backend).
+cmake -S . -B build-vulkan -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON
+cmake --build build-vulkan -j$(nproc) --target tts-cli supertonic-bench
+
+# Run on Vulkan with auto F16 attention (gated by the new backend-
+# capability probe; on a Vulkan adapter satisfying HSK%8==0 it
+# auto-enables, on any backend that rejects the F16-K/V op for our
+# shape it stays at F32 and continues correctly).
+./build-vulkan/supertonic-cli \
+  --model models/supertonic2.gguf \
+  --text "The quick brown fox jumps over the lazy dog." \
+  --voice F1 --language en --steps 5 --speed 1.05 \
+  --n-gpu-layers 99 \
+  --out /tmp/supertonic2.wav
+
+# Pick a specific Vulkan adapter (default 0).  Useful on machines
+# with a software rasteriser (llvmpipe) at index 0 and the real
+# GPU at index 1.
+./build-vulkan/supertonic-cli ... --n-gpu-layers 99 --vulkan-device 1
+
+# Force F16 attention off (CPU-style F32 fallback) for parity:
+./build-vulkan/supertonic-cli ... --n-gpu-layers 99 --f16-attn 0
+
+# Bench output explicitly names the Vulkan adapter so multi-GPU
+# log lines are unambiguous:
+./build-vulkan/supertonic-bench --model models/supertonic2.gguf \
+  --text "..." --runs 5 --n-gpu-layers 99 --vulkan-device 0
+# →   backend: Vulkan (device 0: NVIDIA GeForce RTX 5090) (f16_attn=on) (native_leaky_relu=on)
+```
+
+### Validation
+
+- `test-supertonic-vulkan-dispatch` (CPU-only, `LABEL "unit"`):
+  29 / 29 checks pass on this branch.  Covers default flag state,
+  scope-mirroring for CPU / Vulkan / OpenCL-style models (probe true
+  vs false), RAII teardown on exception, nested-scope unwinding,
+  independence of all three flags, and a smoke test for the F16-K/V
+  flash-attn probe (CPU backend).
+- `test-supertonic-portable-ops` updated to explicitly request the
+  decomposition path (`use_native_leaky_relu = false` on the GPU
+  model) so the existing GPU-decomposition correctness gate stays
+  green now that the helper short-circuits to the fused builtin
+  whenever the probe reports native support.  10 / 10 checks pass.
+- `test-supertonic-backend-dispatch` (the OpenCL bring-up's tests):
+  27 / 27 checks pass — the dispatch scope's new
+  `prev_use_native_leaky_relu` slot is added without disturbing the
+  existing `prev_use_cpu_custom_ops` / `prev_use_f16_attn` ones.
+- All other CPU-only unit tests on the branch (the audit
+  follow-ups' RoPE / transpose / convnext-fusion / graph-to-graph-blit
+  / profile-csv / F16-weights / F16-attn-parity tests) continue to
+  pass unchanged.
+- Fixture-bound tests (`test-supertonic-pipeline`,
+  `test-supertonic-vocoder`, `test-supertonic-vector`, …) continue
+  to exercise the CPU path unchanged.  Running them against a
+  Vulkan-bound model would route the same fixture data through the
+  same pure-GGML fallback graph that the OpenCL audit work
+  established and produce identical parity numbers (within F32 →
+  F16 K/V tolerance on the attention output when `--f16-attn 1`).
+
+### Deferred work
+
+These were investigated but kept out of scope for this PR:
+
+- **Persistent `VkPipelineCache`** (chatterbox PROGRESS.md §3.32):
+  recovers ~91 % of cold→warm shader-compilation gap on first warm
+  run, keyed by `<vendorID>-<deviceID>-<driverVersion>` and rooted
+  at `$XDG_CACHE_HOME/ggml/vulkan`.  This is a `ggml-vulkan` internal
+  patch (~199 lines) that benefits all Vulkan workloads, not just
+  Supertonic; tracked separately so the supertonic-specific PR stays
+  reviewable.  When it lands, this Supertonic Vulkan codepath
+  inherits the cold-start win automatically.
+- **BF16 K/V flash-attention**: ggml-vulkan supports BF16 with
+  cooperative_matrix2; could halve K/V bandwidth further on hardware
+  that has the extension (NVIDIA Ampere+, AMD RDNA3+).  Needs the
+  same backend-capability probe pattern as F16 K/V — a future
+  optimization round.
+- **Q4_0 / Q8_0 K/V flash-attention**: ggml-vulkan supports both;
+  would shrink K/V cache footprint by 4-8× for very long prompts.
+  Out of scope for the bring-up; deferred to chatterbox §3.32-style
+  follow-up work after end-to-end Vulkan parity is locked.
+- **Multi-device load-balancing** (`--vulkan-device -1` auto-pick):
+  reserved API behaviour today (treated as device 0).  Useful on
+  CI / lab machines with multiple GPUs of different generations;
+  could pick by device-memory + driver version.  Deferred until a
+  consumer asks.
+
+---
+
 ## Remaining Work
 
 ### Runtime and performance

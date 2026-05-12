@@ -744,6 +744,20 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-portable-ops)
     tts_cpp_register_test(test-supertonic-portable-ops LABEL "unit")
 
+    # QVAC-18605 — CPU-only unit test for the Vulkan-specific
+    # dispatch additions: `backend_is_vk`, `use_native_leaky_relu`,
+    # the `supertonic_op_dispatch_scope` mirror for the new flag,
+    # and the `supertonic_backend_supports_f16_kv_flash_attn`
+    # backend probe.  No GGUF / model fixture required — runs on a
+    # fresh checkout under `ctest -L unit`.  See the file header
+    # for the full coverage matrix.
+    add_executable(test-supertonic-vulkan-dispatch
+        test/test_supertonic_vulkan_dispatch.cpp)
+    target_link_libraries(test-supertonic-vulkan-dispatch PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-vulkan-dispatch PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-vulkan-dispatch)
+    tts_cpp_register_test(test-supertonic-vulkan-dispatch LABEL "unit")
+
     add_executable(test-supertonic-f16-attn-parity
         test/test_supertonic_f16_attn_parity.cpp)
     target_link_libraries(test-supertonic-f16-attn-parity PRIVATE ggml)

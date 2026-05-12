@@ -17,6 +17,8 @@ void usage(const char * argv0) {
         "          [--language en] [--voice NAME] [--steps N] [--speed X]\n"
         "          (voice/steps/speed default to GGUF metadata when omitted)\n"
         "          [--seed 42] [--threads N] [--n-gpu-layers N]\n"
+        "          [--vulkan-device N] (Vulkan adapter index; ignored unless\n"
+        "                            built with -DGGML_VULKAN=ON; default 0)\n"
         "          [--f16-attn 0|1] (vector-estimator F16 K/V attention;\n"
         "                            defaults to auto: on for GPU, off for CPU)\n"
         "          [--f16-weights 0|1] (load-time F16 materialization for the\n"
@@ -111,6 +113,7 @@ int main(int argc, char ** argv) {
         else if (arg == "--seed") opts.seed = std::stoi(next("--seed"));
         else if (arg == "--threads") opts.n_threads = std::stoi(next("--threads"));
         else if (arg == "--n-gpu-layers") opts.n_gpu_layers = std::stoi(next("--n-gpu-layers"));
+        else if (arg == "--vulkan-device") opts.vulkan_device = std::stoi(next("--vulkan-device"));
         else if (arg == "--f16-attn") opts.f16_attn = std::stoi(next("--f16-attn"));
         else if (arg == "--f16-weights") opts.f16_weights = std::stoi(next("--f16-weights"));
         else if (arg == "--precision") opts.precision = parse_precision(next("--precision"));

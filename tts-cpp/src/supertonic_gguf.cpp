@@ -229,7 +229,7 @@ void convert_supertonic_tensor_data(const ggml_tensor * src,
     dst_tr->from_float(f32_pivot.data(), out_buf.data(), n);
 }
 
-ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose) {
+ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose, int vulkan_device = 0) {
 #ifdef GGML_USE_CUDA
     if (n_gpu_layers > 0) {
         ggml_backend_t b = ggml_backend_cuda_init(0);
@@ -244,12 +244,48 @@ ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose) {
 #endif
 #ifdef GGML_USE_VULKAN
     if (n_gpu_layers > 0) {
-        ggml_backend_t b = ggml_backend_vk_init(0);
-        if (b) {
-            if (verbose) fprintf(stderr, "supertonic: using Vulkan backend\n");
-            return b;
+        // QVAC-18605 — Vulkan device selection, robust init.
+        //
+        // Range-check the requested index against
+        // `ggml_backend_vk_get_device_count()` so an out-of-range
+        // value (CLI typo / wrong-machine config) fails loud here
+        // rather than silently falling through to CPU and hiding
+        // the perf cliff under a "Vulkan was on, why is it slow?"
+        // mystery.  Negative values are reserved for future
+        // "auto-pick" semantics; treat as device 0 today.
+        const int dev_count = ggml_backend_vk_get_device_count();
+        if (dev_count <= 0) {
+            // No Vulkan adapter visible — try the next backend in the
+            // priority list (OpenCL below, then CPU).  This branch
+            // matters on machines that ship libvulkan + the loader
+            // but no working ICD (e.g. headless CI without llvmpipe).
+            if (verbose) {
+                fprintf(stderr, "supertonic: GGML_USE_VULKAN=1 but ggml_backend_vk_get_device_count()=0; falling through\n");
+            }
+        } else {
+            int idx = vulkan_device < 0 ? 0 : vulkan_device;
+            if (idx >= dev_count) {
+                throw std::runtime_error("supertonic: --vulkan-device " +
+                    std::to_string(idx) + " out of range (visible adapters: " +
+                    std::to_string(dev_count) + ")");
+            }
+            ggml_backend_t b = ggml_backend_vk_init((size_t) idx);
+            if (b) {
+                if (verbose) {
+                    char desc[256] = {0};
+                    ggml_backend_vk_get_device_description(idx, desc, sizeof(desc) - 1);
+                    fprintf(stderr, "supertonic: using Vulkan backend (device %d: %s)\n",
+                            idx, desc[0] ? desc : "unknown");
+                }
+                return b;
+            }
+            if (verbose) {
+                fprintf(stderr, "supertonic: ggml_backend_vk_init(%d) failed; falling through\n", idx);
+            }
         }
     }
+#else
+    (void) vulkan_device;
 #endif
 #ifdef GGML_USE_OPENCL
     if (n_gpu_layers > 0) {
@@ -264,6 +300,133 @@ ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose) {
     if (!b) throw std::runtime_error("ggml_backend_cpu_init failed");
     if (verbose) fprintf(stderr, "supertonic: using CPU backend\n");
     return b;
+}
+
+// QVAC-18605 — backend capability probe for `GGML_OP_LEAKY_RELU`.
+//
+// Builds a throwaway 1-element F32 tensor + a LEAKY_RELU node (no
+// alloc, no compute) inside a tiny `ggml_init` scratch context, then
+// asks the backend whether it would accept the op.  The synthetic
+// node is the same shape Supertonic actually emits (axis-0 contig F32),
+// so a `true` answer guarantees the real graphs in the vocoder will
+// dispatch the fused builtin.
+//
+// Why dynamic instead of a hard-coded backend table?  The set of
+// backends shipping `LEAKY_RELU` shifts with chatterbox-ggml patch
+// state (OpenCL gets it via a vendored patch but plain upstream
+// doesn't).  The dynamic probe keeps the right answer when the patch
+// is added or removed without touching this TU.
+//
+// Costs nothing on the hot path — runs once per `load_supertonic_gguf`
+// call.
+bool backend_supports_native_leaky_relu(ggml_backend_t backend) {
+    if (!backend) return false;
+    ggml_init_params probe_params = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * 8,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context * probe_ctx = ggml_init(probe_params);
+    if (!probe_ctx) return false;
+    bool ok = false;
+    try {
+        ggml_tensor * x  = ggml_new_tensor_1d(probe_ctx, GGML_TYPE_F32, 16);
+        ggml_tensor * op = ggml_leaky_relu(probe_ctx, x, 0.1f, /*inplace=*/false);
+        ok = (op != nullptr) && ggml_backend_supports_op(backend, op);
+    } catch (...) {
+        ok = false;
+    }
+    ggml_free(probe_ctx);
+    return ok;
+}
+
+// QVAC-18605 — runtime check: backend is `ggml-vulkan`.
+//
+// Wraps `ggml_backend_is_vk` behind a `#ifdef GGML_USE_VULKAN` guard so
+// the flag-population code in `load_supertonic_gguf` works on both
+// Vulkan-enabled and Vulkan-disabled builds without `#ifdef` clutter
+// at every consumer site.  Returns `false` on Vulkan-disabled builds
+// so the dispatch helpers behave as if the backend were not Vulkan
+// (which is correct — the backend can't be Vulkan if Vulkan isn't in
+// the build).
+bool backend_is_vulkan(ggml_backend_t backend) {
+#ifdef GGML_USE_VULKAN
+    return backend && ggml_backend_is_vk(backend);
+#else
+    (void) backend;
+    return false;
+#endif
+}
+
+// QVAC-18605 — internal-named alias for the public probe symbol.
+// The anon-namespace function name keeps the local TU references
+// short; the public-symbol forwarder below resolves the
+// `supertonic_backend_supports_f16_kv_flash_attn` declaration in
+// `supertonic_internal.h`.
+//
+// QVAC-18605 — backend capability probe for F16-K/V `FLASH_ATTN_EXT`.
+//
+// The OpenCL bring-up's auto-enable policy (`!backend_is_cpu`) blindly
+// turns on F16 K/V dispatch on any non-CPU backend.  That works for
+// OpenCL (the chatterbox patch unconditionally accepts the op) and
+// for Vulkan when the head dim is a multiple of 8 (Supertonic's
+// head_dim=64 satisfies that), but a future backend / driver / shape
+// combo could reject the op at graph time — and a graph-build failure
+// at the first synth call is much harder to triage than a load-time
+// auto-disable + a clear log line.
+//
+// The probe builds a synthetic `ggml_flash_attn_ext` node with the
+// shape Supertonic actually emits — Q=[head_dim, q_len, n_heads] F32,
+// K/V=[head_dim, kv_len, n_heads] F16, no mask — matching the live
+// call site in `build_text_attention_cache` (supertonic_vector_estimator.cpp).
+// q_len is set to a multiple of n_heads (= 16) so the live `q_len=70`
+// (not divisible by 4) doesn't tickle a probe-only `ggml_can_mul_mat`
+// rejection; the GPU dispatch supports both the divisible and non-
+// divisible cases at runtime, so probe-shape divisibility is purely
+// a probe-API concern.
+//
+// On a `false` answer the auto-policy refuses to enable F16 attention
+// (the F32 path stays correct, just slower).  Manual override via
+// `--f16-attn 1` still forces the F16 path for benchmarking; this
+// probe only gates the *auto* policy.
+//
+// Cost: one ggml_init + ~6 tensor allocations + one supports_op call
+// at load time.  Zero hot-path cost.
+bool backend_supports_f16_kv_flash_attn(ggml_backend_t backend) {
+    if (!backend) return false;
+    ggml_init_params probe_params = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * 16,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context * probe_ctx = ggml_init(probe_params);
+    if (!probe_ctx) return false;
+    bool ok = false;
+    try {
+        constexpr int head_dim = 64;
+        constexpr int n_heads  = 4;
+        // q_len chosen as `n_heads * 4` so `ggml_can_mul_mat(k, q)`'s
+        // probe-only `q.ne[2] % k.ne[2] == 0` constraint is satisfied
+        // (n_heads % n_heads = 0 is the live-call invariant; here we
+        // use a Q with ne[2] = n_heads, ne[1] = q_len, so the same
+        // shape contract holds).
+        constexpr int q_len    = 16;
+        constexpr int kv_len   = 16;
+        // Live shape from `build_text_attention_cache`:
+        //   q_in: [head_dim, q_len, n_heads]  (F32)
+        //   k_in: [head_dim, kv_len, n_heads] (F16 after `ggml_cpy`)
+        //   v_in: [head_dim, kv_len, n_heads] (F16 after `ggml_cpy`)
+        ggml_tensor * q  = ggml_new_tensor_3d(probe_ctx, GGML_TYPE_F32, head_dim, q_len, n_heads);
+        ggml_tensor * k  = ggml_new_tensor_3d(probe_ctx, GGML_TYPE_F16, head_dim, kv_len, n_heads);
+        ggml_tensor * v  = ggml_new_tensor_3d(probe_ctx, GGML_TYPE_F16, head_dim, kv_len, n_heads);
+        ggml_tensor * op = ggml_flash_attn_ext(probe_ctx, q, k, v, nullptr,
+                                               1.0f / (float) head_dim, 0.0f, 0.0f);
+        ok = (op != nullptr) && ggml_backend_supports_op(backend, op);
+    } catch (...) {
+        ok = false;
+    }
+    ggml_free(probe_ctx);
+    return ok;
 }
 
 void set_env_if_unset(const char * name, const char * value) {
@@ -340,6 +503,17 @@ bool is_supertonic_alive(uint64_t generation_id) {
     if (generation_id == 0) return false;
     std::lock_guard<std::mutex> lk(supertonic_alive_mu());
     return supertonic_alive_ids().find(generation_id) != supertonic_alive_ids().end();
+}
+
+// QVAC-18605 — public forwarder for the F16-K/V flash-attn probe.
+// Lets engine.cpp / supertonic_bench.cpp gate the auto-policy on
+// the resolved backend's actual capability instead of the
+// historical "any non-CPU backend" heuristic — saves a graph-build
+// crash on backends that ship `flash_attn_ext` but reject the
+// F16 K/V variant for the Supertonic shape.  See the inline probe
+// `backend_supports_f16_kv_flash_attn` in this TU for the rationale.
+bool supertonic_backend_supports_f16_kv_flash_attn(ggml_backend_t backend) {
+    return backend_supports_f16_kv_flash_attn(backend);
 }
 
 // Phase 2A — hot-weight predicate.
@@ -439,9 +613,17 @@ bool should_materialise_f16_weight(const std::string & source_name) {
 // pick between the CBLAS-backed `ggml_custom_4d` fast paths (CPU only)
 // and the portable pure-GGML fallbacks (any backend).  See the
 // supertonic_op_dispatch_scope comment in supertonic_internal.h.
+//
+// QVAC-18605 — `g_supertonic_use_native_leaky_relu` carries the
+// resolved-backend's `LEAKY_RELU` capability into the
+// `leaky_relu_portable_ggml` helper.  Defaults to `true` so the
+// historical CPU-only path keeps using the fused builtin even when no
+// scope is active (matches `g_supertonic_use_cpu_custom_ops`'s default
+// rationale).
 namespace {
-thread_local bool g_supertonic_use_cpu_custom_ops = true;
-thread_local bool g_supertonic_use_f16_attn      = false;
+thread_local bool g_supertonic_use_cpu_custom_ops    = true;
+thread_local bool g_supertonic_use_f16_attn          = false;
+thread_local bool g_supertonic_use_native_leaky_relu = true;
 }
 
 bool supertonic_use_cpu_custom_ops() {
@@ -452,16 +634,23 @@ bool supertonic_use_f16_attn() {
     return g_supertonic_use_f16_attn;
 }
 
+bool supertonic_use_native_leaky_relu() {
+    return g_supertonic_use_native_leaky_relu;
+}
+
 supertonic_op_dispatch_scope::supertonic_op_dispatch_scope(const supertonic_model & model)
     : prev_use_cpu_custom_ops(g_supertonic_use_cpu_custom_ops),
-      prev_use_f16_attn(g_supertonic_use_f16_attn) {
-    g_supertonic_use_cpu_custom_ops = model.backend_is_cpu;
-    g_supertonic_use_f16_attn       = model.use_f16_attn;
+      prev_use_f16_attn(g_supertonic_use_f16_attn),
+      prev_use_native_leaky_relu(g_supertonic_use_native_leaky_relu) {
+    g_supertonic_use_cpu_custom_ops    = model.backend_is_cpu;
+    g_supertonic_use_f16_attn          = model.use_f16_attn;
+    g_supertonic_use_native_leaky_relu = model.use_native_leaky_relu;
 }
 
 supertonic_op_dispatch_scope::~supertonic_op_dispatch_scope() {
-    g_supertonic_use_cpu_custom_ops = prev_use_cpu_custom_ops;
-    g_supertonic_use_f16_attn       = prev_use_f16_attn;
+    g_supertonic_use_cpu_custom_ops    = prev_use_cpu_custom_ops;
+    g_supertonic_use_f16_attn          = prev_use_f16_attn;
+    g_supertonic_use_native_leaky_relu = prev_use_native_leaky_relu;
 }
 
 // ---------------------------------------------------------------------
@@ -725,7 +914,8 @@ bool load_supertonic_gguf(const std::string & path,
                           int n_gpu_layers,
                           bool verbose,
                           int f16_weights,
-                          supertonic_precision precision) {
+                          supertonic_precision precision,
+                          int vulkan_device) {
     model.generation_id = next_supertonic_generation_id();
     model.precision_id = static_cast<int>(precision);
     // The load path supports F32 / F16 / Q8_0 destination types.
@@ -774,15 +964,33 @@ bool load_supertonic_gguf(const std::string & path,
         model.languages = get_string_array(gguf_ctx, "supertonic.languages");
         model.tts_json = get_string(gguf_ctx, "supertonic.tts_json");
 
-        model.backend = init_supertonic_backend(n_gpu_layers, verbose);
+        model.backend = init_supertonic_backend(n_gpu_layers, verbose, vulkan_device);
         // The graph builders below dispatch between CBLAS-backed
         // `ggml_custom_4d` fast paths (CPU only) and pure-GGML fallbacks
         // (any backend) based on this flag.  Stable for the model's
         // lifetime; see the supertonic_op_dispatch_scope comment in
         // supertonic_internal.h for the threading contract.
         model.backend_is_cpu = ggml_backend_is_cpu(model.backend);
+        // QVAC-18605 — Vulkan-specific dispatch capture.
+        //
+        // `backend_is_vk` is informational (the bench / engine show it
+        // in the human-readable backend description), but it also
+        // documents WHICH non-CPU backend the model resolved to —
+        // useful when triaging "why is leaky_relu slow on this run?"
+        // against the audit's expected fast-path matrix.
+        model.backend_is_vk = backend_is_vulkan(model.backend);
+        // Probe the backend's `LEAKY_RELU` capability so the
+        // `leaky_relu_portable_ggml` helper can route to the fused
+        // builtin on backends that have it (Vulkan / Metal / CUDA /
+        // CPU; OpenCL only with chatterbox patch) and to the
+        // RELU+SCALE+ADD decomposition otherwise.  Probe runs once
+        // per load — zero hot-path cost.
+        model.use_native_leaky_relu = backend_supports_native_leaky_relu(model.backend);
         if (verbose) {
-            fprintf(stderr, "supertonic: backend_is_cpu=%s\n", model.backend_is_cpu ? "true" : "false");
+            fprintf(stderr, "supertonic: backend_is_cpu=%s backend_is_vk=%s use_native_leaky_relu=%s\n",
+                    model.backend_is_cpu ? "true" : "false",
+                    model.backend_is_vk ? "true" : "false",
+                    model.use_native_leaky_relu ? "true" : "false");
         }
 
         // Phase 2A — auto/force policy for F16 weight materialization.

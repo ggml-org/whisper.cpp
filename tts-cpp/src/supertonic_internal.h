@@ -111,6 +111,43 @@ struct supertonic_model {
     // the lifetime of the model.  See `OpenCL bring-up` section in
     // PROGRESS_SUPERTONIC.md for the rationale.
     bool backend_is_cpu = true;
+    // QVAC-18605 / Vulkan bring-up: True when the resolved backend is
+    // ggml-vulkan (`ggml_backend_is_vk`).  Mirrors `backend_is_cpu` in
+    // intent — informational + dispatch-key.  Set once in
+    // load_supertonic_gguf() right after the backend is resolved.
+    // Stable for the model lifetime.  Used by supertonic_bench /
+    // engine.cpp for the human-readable backend description (so the
+    // bench log shows "Vulkan (device 0: NVIDIA RTX 5090)" instead
+    // of just "Vulkan") and by the dispatch helpers below to pick
+    // between the OpenCL-conservative `leaky_relu_portable_ggml`
+    // decomposition and the native `ggml_leaky_relu` op.  See the
+    // PROGRESS_SUPERTONIC.md "Vulkan bring-up" section for the
+    // rationale + supported-op matrix.
+    bool backend_is_vk = false;
+    // QVAC-18605 — backend supports `GGML_OP_LEAKY_RELU` natively.
+    // Resolved at load time via `ggml_backend_supports_op` against
+    // a synthetic LEAKY_RELU node.  Three reasons we don't piggy-
+    // back on `backend_is_cpu`:
+    //   1. CPU obviously supports it (builtin); we want the same flag
+    //      to ride the CPU path through the helper without a special
+    //      case.
+    //   2. Vulkan / Metal / CUDA support it natively (verified against
+    //      ggml-vulkan.cpp:`pipeline_leaky_relu_f32`,
+    //      ggml-metal:`kernel_leaky_relu_f32`,
+    //      ggml-cuda:`leaky_relu`).
+    //   3. Plain upstream ggml-opencl does NOT support it; chatterbox
+    //      ships a patch that adds the kernel (see chatterbox
+    //      PROGRESS.md "What was missing"), but that patch may or may
+    //      not be applied at the consumer's vendored ggml.
+    // The dynamic `ggml_backend_supports_op` query handles all four
+    // cases without a hard-coded backend table.  When the query
+    // returns `false`, `leaky_relu_portable_ggml` decomposes into
+    // RELU + SCALE + ADD (universally supported, slightly more
+    // dispatches).  When it returns `true`, the helper emits the
+    // single fused builtin — fewer dispatches, lower scheduler
+    // overhead on the GPU command-buffer side.  Default `true`
+    // matches the historical CPU-only path.
+    bool use_native_leaky_relu = true;
     // When true, the per-step vector-estimator attention graphs materialise
     // K/V into contiguous F16 before calling ggml_flash_attn_ext so OpenCL
     // (and other backends carrying the mixed-precision kernel) dispatch
@@ -118,7 +155,12 @@ struct supertonic_model {
     // win on Adreno (see chatterbox PROGRESS.md OpenCL log).  Defaults to
     // false on CPU (the cblas attention path is already efficient there);
     // engine.cpp auto-enables it when the resolved backend is non-CPU,
-    // matching chatterbox's --cfm-f16-kv-attn behaviour.
+    // matching chatterbox's --cfm-f16-kv-attn behaviour.  On Vulkan the
+    // F16 K/V path goes through `kernel_flash_attn_*` shaders that
+    // accept any HSK / HSV that's a multiple of 8 (see
+    // ggml-vulkan.cpp `GGML_OP_FLASH_ATTN_EXT` supports_op gate);
+    // Supertonic's head_dim=64 satisfies that constraint by
+    // construction.
     bool use_f16_attn = false;
 
     // Phase 2A — load-time F16 materialization for the hot
@@ -248,12 +290,23 @@ enum class supertonic_precision {
     Q8_0 = 2,
 };
 
+// `vulkan_device` (QVAC-18605):
+//   ≥ 0 → adapter index passed to `ggml_backend_vk_init(idx)`.
+//        Range-checked against `ggml_backend_vk_get_device_count()`;
+//        an out-of-range index is a hard error (no silent CPU
+//        fallback — that would mask CLI typos / wrong-machine
+//        config).  Default 0 (the historical hard-coded value).
+//   < 0 → reserved for future "auto-pick best device" behaviour;
+//        treated as 0 today.
+// Has no effect when the build wasn't compiled with `GGML_VULKAN`
+// or when `n_gpu_layers <= 0`.
 bool load_supertonic_gguf(const std::string & path,
                           supertonic_model & model,
                           int n_gpu_layers = 0,
                           bool verbose = false,
                           int f16_weights = -1,
-                          supertonic_precision precision = supertonic_precision::F32);
+                          supertonic_precision precision = supertonic_precision::F32,
+                          int vulkan_device = 0);
 void free_supertonic_model(supertonic_model & model);
 void supertonic_set_n_threads(supertonic_model & model, int n_threads);
 void supertonic_graph_compute(const supertonic_model & model, ggml_cgraph * graph);
@@ -571,10 +624,31 @@ inline ggml_tensor * leaky_relu_portable_ggml(ggml_context * ctx, ggml_tensor * 
 // still sees the default `true` after a GPU engine's forward returns.
 bool supertonic_use_cpu_custom_ops();
 bool supertonic_use_f16_attn();
+// QVAC-18605 — true when the resolved backend supports
+// `GGML_OP_LEAKY_RELU` natively.  Mirrored from
+// `supertonic_model::use_native_leaky_relu` by
+// `supertonic_op_dispatch_scope` for the duration of each public
+// `*_forward_ggml` / `*_trace_ggml` entry.  Consulted by
+// `leaky_relu_portable_ggml` to skip the RELU+SCALE+ADD
+// decomposition when the backend has the fused op available.
+bool supertonic_use_native_leaky_relu();
+
+// QVAC-18605 — load-time backend-capability probes used by the
+// engine + bench auto-policy for `use_f16_attn`.  Returns `true`
+// when the resolved backend would accept a Supertonic-shaped
+// `ggml_flash_attn_ext(Q=F32, K/V=F16)` graph node — the auto-
+// enable policy gates on this so a backend that doesn't ship the
+// mixed-precision kernel doesn't crash at first synth call.
+// Manual override via `EngineOptions::f16_attn=1` still forces
+// dispatch (useful for benchmarking with a debug-shim backend).
+//
+// Defined out of line in supertonic_gguf.cpp.
+bool supertonic_backend_supports_f16_kv_flash_attn(ggml_backend_t backend);
 
 struct supertonic_op_dispatch_scope {
     bool prev_use_cpu_custom_ops;
     bool prev_use_f16_attn;
+    bool prev_use_native_leaky_relu;
     explicit supertonic_op_dispatch_scope(const supertonic_model & model);
     ~supertonic_op_dispatch_scope();
     supertonic_op_dispatch_scope(const supertonic_op_dispatch_scope &)             = delete;
@@ -1053,14 +1127,36 @@ inline ggml_tensor * transpose_time_channel_ggml(ggml_context * ctx,
 }
 
 // Inline definition of the forward-declared portable leaky-relu helper
-// above.  Must come after `supertonic_use_cpu_custom_ops()` is
-// declared so the dispatcher resolves at every call site.
+// above.  Must come after `supertonic_use_cpu_custom_ops()` and
+// `supertonic_use_native_leaky_relu()` are declared so the dispatcher
+// resolves at every call site.
+//
+// Two-stage dispatch:
+//  1. CPU custom-op fast path — keeps the fused `ggml_leaky_relu`
+//     builtin (one op + one `to_t` worker pass) on the CPU backend.
+//  2. Backend-aware fast path — if the resolved GPU backend reports
+//     it implements `GGML_OP_LEAKY_RELU` natively (Vulkan / Metal /
+//     CUDA, plus chatterbox-patched OpenCL), emit the same single
+//     fused builtin.  This collapses to one shader dispatch per
+//     vocoder leaky-relu site instead of three (relu + scale + add)
+//     and keeps the GPU command buffer ~33 % shorter on the vocoder
+//     post-conv chain.
+//  3. Otherwise, decompose into `(1-α)·relu(x) + α·x` — three
+//     universally-supported ops.  The historical OpenCL bring-up
+//     path (no chatterbox patch) lands here; correctness is bit-
+//     identical to a fused builtin for the F32 path Supertonic uses.
+//
+// The `use_native_leaky_relu` query is set at backend init time by
+// `ggml_backend_supports_op` against a synthetic LEAKY_RELU node, so
+// the helper gets the right answer for every backend without a
+// per-backend table.  See `supertonic_internal.h::supertonic_model::
+// use_native_leaky_relu` for the rationale.
 inline ggml_tensor * leaky_relu_portable_ggml(ggml_context * ctx, ggml_tensor * x, float alpha) {
-    if (supertonic_use_cpu_custom_ops()) {
+    if (supertonic_use_cpu_custom_ops() || supertonic_use_native_leaky_relu()) {
         return ggml_leaky_relu(ctx, x, alpha, /*inplace=*/false);
     }
-    // GPU lowering: (1 - α)·relu(x) + α·x.  Three universally-supported
-    // ops, no GGML_OP_LEAKY_RELU dependency.
+    // Conservative GPU fallback (op not advertised by the backend):
+    // (1 - α)·relu(x) + α·x.  Three universally-supported ops.
     ggml_tensor * pos    = ggml_scale(ctx, ggml_relu(ctx, x), 1.0f - alpha);
     ggml_tensor * scaled = ggml_scale(ctx, x, alpha);
     return ggml_add(ctx, pos, scaled);

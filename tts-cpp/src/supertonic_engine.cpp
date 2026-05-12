@@ -5,6 +5,12 @@
 #include "supertonic_internal.h"
 #include "npy.h"
 
+#ifdef GGML_USE_VULKAN
+// QVAC-18605 — needed for `ggml_backend_vk_get_device_description`
+// in the `backend_name()` annotator (Vulkan-only).
+#include "ggml-vulkan.h"
+#endif
+
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -168,7 +174,8 @@ struct Engine::Impl {
         }
         if (!load_supertonic_gguf(opts.model_gguf_path, model,
                                   opts.n_gpu_layers, /*verbose=*/false,
-                                  opts.f16_weights, internal_precision)) {
+                                  opts.f16_weights, internal_precision,
+                                  opts.vulkan_device)) {
             throw std::runtime_error("Supertonic Engine: failed to load GGUF: " +
                                      opts.model_gguf_path);
         }
@@ -180,8 +187,19 @@ struct Engine::Impl {
             // into the model so supertonic_op_dispatch_scope picks it
             // up on every synthesize() call.  See model.use_f16_attn
             // in supertonic_internal.h.
+            //
+            // QVAC-18605 — auto-policy is now backend-capability-gated.
+            // Probes `ggml_backend_supports_op` for a Supertonic-
+            // shaped F16-K/V flash_attn graph node before flipping
+            // the flag.  A backend that compiles `flash_attn_ext`
+            // but rejects the F16 K/V variant for our shape (head_dim
+            // = 64, n_heads = 4) keeps the F32 path — slower but
+            // guaranteed to not crash at first synth call.  Manual
+            // override via `--f16-attn 1` still forces dispatch
+            // (useful for debug-shim backends).
             if (opts.f16_attn < 0) {
-                model.use_f16_attn = !model.backend_is_cpu;
+                model.use_f16_attn = !model.backend_is_cpu &&
+                                     supertonic_backend_supports_f16_kv_flash_attn(model.backend);
             } else {
                 model.use_f16_attn = opts.f16_attn != 0;
             }
@@ -449,10 +467,24 @@ struct Engine::Impl {
 
     std::string backend_name() const {
         if (!model.backend) return "(unknown)";
-        if (const char * name = ggml_backend_name(model.backend)) {
-            return std::string(name);
+        const char * name = ggml_backend_name(model.backend);
+        std::string out = name ? std::string(name) : "(unknown)";
+        // QVAC-18605 — append device description when Vulkan is the
+        // resolved backend.  Mirrors chatterbox's bench output so a
+        // log line like "backend: Vulkan (device 0: NVIDIA RTX 5090)"
+        // is unambiguous when triaging multi-GPU machines.
+#ifdef GGML_USE_VULKAN
+        if (model.backend_is_vk) {
+            char desc[256] = {0};
+            ggml_backend_vk_get_device_description(opts.vulkan_device < 0 ? 0 : opts.vulkan_device,
+                                                   desc, sizeof(desc) - 1);
+            if (desc[0]) {
+                out += " (device " + std::to_string(opts.vulkan_device < 0 ? 0 : opts.vulkan_device) +
+                       ": " + desc + ")";
+            }
         }
-        return "(unknown)";
+#endif
+        return out;
     }
 };
 

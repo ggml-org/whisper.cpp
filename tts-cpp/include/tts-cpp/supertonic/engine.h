@@ -97,7 +97,20 @@ struct EngineOptions {
     // resolved backend.  Triggers the OpenCL `flash_attn_f32_f16`
     // path on Adreno; mirrors chatterbox's `--cfm-f16-kv-attn`.  No
     // effect on CPU (the cblas attention path is already efficient).
+    // On Vulkan dispatches `kernel_flash_attn_f32_f16_*` (head_dim=64
+    // satisfies the `HSK % 8 == 0` supports_op gate; see
+    // `ggml-vulkan.cpp:GGML_OP_FLASH_ATTN_EXT`).
     int f16_attn = -1;
+
+    // QVAC-18605 — Vulkan adapter index.  Passed verbatim to
+    // `ggml_backend_vk_init(idx)` when the build is compiled with
+    // `GGML_VULKAN=ON` and `n_gpu_layers > 0`.  Range-checked
+    // against `ggml_backend_vk_get_device_count()` at load; an
+    // out-of-range value throws (no silent CPU fallback — that
+    // would mask CLI typos / wrong-machine config).  Default 0
+    // (the historical hard-coded value).  Negative values are
+    // reserved for a future "auto-pick best device" policy.
+    int vulkan_device = 0;
 
     // F16 storage type for the audit-identified hot matmul /
     // pointwise-conv weights (vector-estimator attention W_*,
