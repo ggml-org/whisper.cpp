@@ -352,14 +352,29 @@ ggml_tensor * convnext_block_ggml(ggml_context * ctx,
                                   ggml_tensor * x,
                                   int idx) {
     static const int dilations[10] = {1, 2, 4, 1, 2, 4, 1, 1, 1, 1};
-    ggml_tensor * residual = x;
-    ggml_tensor * y = depthwise_conv1d_causal_ggml(ctx, x, w.dw_w, w.dw_b, dilations[idx]);
-    y = layer_norm_channel_ggml(ctx, y, w.norm_g, w.norm_b);
-    y = conv1d_causal_ggml(ctx, y, w.pw1_w, w.pw1_b);
-    y = ggml_gelu_erf(ctx, y);
-    y = conv1d_causal_ggml(ctx, y, w.pw2_w, w.pw2_b);
-    y = ggml_mul(ctx, y, repeat_like(ctx, w.gamma, y));
-    return ggml_add(ctx, residual, y);
+    // Audit follow-up #6 (F7) — fused LN + pw1 + gelu + pw2 + γ +
+    // residual.  The fused helper keeps the layer-norm output in
+    // `[C, T0]` (channel-major) memory and lowers both K=1 pointwise
+    // convs to direct `ggml_mul_mat` against that layout, eliminating
+    // the LN back-permute/cont and both im2col copies the previous
+    // chain paid (audit cost: ~16.8 MiB / vocoder pass).  The
+    // depthwise op stays in this TU so the CBLAS custom-op fast
+    // path is unaffected.  Trace + pipeline parity preserved — the
+    // fused helper computes the same arithmetic in the same order,
+    // just on a different (compatible) intermediate layout.  See
+    // `supertonic_internal.h::convnext_block_fused_ggml` for the
+    // op-by-op rationale and
+    // `test/test_supertonic_convnext_block_fused.cpp` for the
+    // parity test.
+    ggml_tensor * dw = depthwise_conv1d_causal_ggml(ctx, x, w.dw_w, w.dw_b, dilations[idx]);
+    return convnext_block_fused_ggml(
+        ctx,
+        /*residual=*/x,
+        /*dw_out=*/dw,
+        w.norm_g, w.norm_b,
+        w.pw1_w, w.pw1_b,
+        w.pw2_w, w.pw2_b,
+        w.gamma);
 }
 
 struct vocoder_graph_cache {

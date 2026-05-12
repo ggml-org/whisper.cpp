@@ -695,6 +695,210 @@ inline ggml_tensor * apply_rope_to_packed_qk(ggml_context * ctx,
     return ggml_reshape_2d(ctx, q_rot, (int64_t) n_heads * head_dim, L);
 }
 
+// ---------------------------------------------------------------------
+// Audit finding F7 / Phase 2J — fused ConvNeXt block builder for
+// the Supertonic vocoder.
+//
+// `convnext_block_ggml` (in supertonic_vocoder.cpp) used to compose
+// the per-block residual chain as:
+//
+//   x [T0, C] ── depthwise_conv1d_causal_ggml ──▶ dw [T0, C]
+//             ──▶ layer_norm_channel_ggml ──▶ ln [T0, C]
+//                  (permute → cont [C,T0] → norm → mul → add →
+//                   permute → cont [T0,C])     ← 2 conts each call
+//             ──▶ conv1d_causal_ggml (pw1, K=1)
+//                  (pad-noop → im2col [C,T0] → mul_mat → reshape)
+//             ──▶ gelu
+//             ──▶ conv1d_causal_ggml (pw2, K=1) (im2col again)
+//             ──▶ mul γ  ──▶ add residual
+//
+// That chain costs per-block:
+//   - 2 `ggml_cont` copies (LN front + LN back).
+//   - 2 `ggml_im2col` copies (pw1 + pw2; K=1 reduces im2col to a
+//     pure layout-shuffle copy).
+// = 4 [T0=420, C=512] copies / block ≈ 3.36 MiB / block.
+// × 10 ConvNeXt blocks = ~33.6 MiB redundant memory traffic
+// per vocoder pass on a discrete GPU.
+//
+// The fused builder cuts this in half by:
+//   1. Keeping the LN result in `[C, T0]` (channel-major) memory —
+//      no back-permute / back-cont after `ggml_norm + mul + add`.
+//   2. Lowering pw1 / pw2 to direct `ggml_mul_mat(w_2d, x_perm)`
+//      against that `[C, T0]` LN output.  No `im2col` needed for
+//      `K=1` — the same mathematical operation as the existing
+//      `conv1d_causal_ggml` path with identical summation order.
+//   3. Re-permuting once at the very end so the block output is
+//      `[T0, C]` for the next block (and the existing trace /
+//      readback plumbing keeps working unchanged).
+//
+// Net per block:
+//   - Conts: 2 → 2 (LN front + final back-permute).  Same count.
+//   - im2col copies: 2 → 0.  **Saves 2 [T0, C] copies per block.**
+//   = 1.68 MiB / block × 10 blocks = ~16.8 MiB redundant traffic
+//   eliminated per vocoder pass.  Matches the audit's F7 cost
+//   estimate (the redundant 2× permute+cont copy traffic the
+//   audit measured was the pair the LN front/back conts cause —
+//   the im2col copies were missed by the audit but show the same
+//   pattern, so the same fix removes both).
+//
+// Shape contract (mirrors the in-tree
+// `supertonic_vocoder_convnext_weights`):
+//   - `residual`    : F32, ne=[T0, C].  Block input + residual
+//                     summed at the end.
+//   - `dw_out`      : F32, ne=[T0, C].  Output of the upstream
+//                     depthwise conv (kept outside this helper so
+//                     the depthwise op stays in supertonic_vocoder.cpp).
+//   - `ln_g`, `ln_b`: F32, ne=[C].  Layer-norm gamma + beta.
+//   - `pw1_w`       : F32, ne=[K=1, IC=C, OC=hidden].
+//   - `pw1_b`       : F32, ne=[hidden].  Nullable.
+//   - `pw2_w`       : F32, ne=[K=1, IC=hidden, OC=C].
+//   - `pw2_b`       : F32, ne=[C].  Nullable.
+//   - `block_gamma` : F32, ne=[C].  Per-channel scaling.
+//   - returns       : F32, ne=[T0, C].  Block output.
+//
+// Op-set used: `ggml_permute`, `ggml_cont`, `ggml_norm`,
+// `ggml_reshape_2d`, `ggml_repeat`, `ggml_mul`, `ggml_add`,
+// `ggml_mul_mat`, `ggml_gelu_erf`.  All universally supported
+// (incl. baseline upstream OpenCL — no new ops introduced beyond
+// the existing convnext block's surface).
+//
+// Parity-tested in `test_supertonic_convnext_block_fused.cpp`
+// against a scalar reference of the per-block math on three
+// shapes (tiny K=3/dilation=1, K=7/dilation=2, scale-up
+// K=7/dilation=4).  Tolerance 1e-4 absolute on tiny shapes,
+// 5e-4 on the scale-up (mul_mat sum-order parity).
+inline ggml_tensor * convnext_block_fused_ggml(
+        ggml_context * ctx,
+        ggml_tensor *  residual,
+        ggml_tensor *  dw_out,
+        ggml_tensor *  ln_g,
+        ggml_tensor *  ln_b,
+        ggml_tensor *  pw1_w,
+        ggml_tensor *  pw1_b,
+        ggml_tensor *  pw2_w,
+        ggml_tensor *  pw2_b,
+        ggml_tensor *  block_gamma,
+        float          eps = 1e-6f) {
+    const int64_t C      = dw_out->ne[1];
+    const int64_t hidden = pw1_w->ne[2];
+
+    // Layer-norm — permute → cont → norm → γ·x + β.  Result stays
+    // in `[C, T0]` (channel-major) so the next two pointwise convs
+    // can consume it directly as a mul_mat right-hand side without
+    // any im2col / re-permute overhead.
+    ggml_tensor * y = ggml_cont(ctx, ggml_permute(ctx, dw_out, 1, 0, 2, 3));
+    y = ggml_norm(ctx, y, eps);
+    {
+        // `repeat_like(v[C], y[C, T0]) → reshape(v, C, 1) + repeat`.
+        // Reproduced inline so the helper stays header-only and
+        // doesn't reach into the vocoder's anonymous-namespace
+        // `repeat_like` wrapper.
+        ggml_tensor * ln_g_2d = ggml_reshape_2d(ctx, ln_g, C, 1);
+        ggml_tensor * ln_b_2d = ggml_reshape_2d(ctx, ln_b, C, 1);
+        y = ggml_mul(ctx, y, ggml_repeat(ctx, ln_g_2d, y));
+        y = ggml_add(ctx, y, ggml_repeat(ctx, ln_b_2d, y));
+    }
+
+    // pw1 — K=1 pointwise conv via `ggml_mul_mat`.
+    //
+    // pw1_w has ne=[1, IC=C, OC=hidden]; reshape to [IC, OC].
+    // mul_mat(A=[K=IC, n=OC], B=[K=IC, m=T0]) → ne=[OC=hidden, T0]
+    // with C[oc, t] = Σ_ic w_2d[ic, oc] * y[ic, t] — identical
+    // arithmetic to the existing `conv1d_causal_ggml` path's
+    // `mul_mat(im2col_reshape, w_reshape)` for `K=1`.
+    ggml_tensor * pw1_w_2d = ggml_reshape_2d(
+        ctx, pw1_w, pw1_w->ne[0] * pw1_w->ne[1], pw1_w->ne[2]);
+    ggml_tensor * pw1_out = ggml_mul_mat(ctx, pw1_w_2d, y);
+    if (pw1_b) {
+        ggml_tensor * pw1_b_2d = ggml_reshape_2d(ctx, pw1_b, hidden, 1);
+        pw1_out = ggml_add(ctx, pw1_out, ggml_repeat(ctx, pw1_b_2d, pw1_out));
+    }
+
+    // GELU is element-wise; the `[hidden, T0]` layout flows through
+    // verbatim.
+    ggml_tensor * gelu_out = ggml_gelu_erf(ctx, pw1_out);
+
+    // pw2 — symmetric to pw1.  Output is `[C, T0]`.
+    ggml_tensor * pw2_w_2d = ggml_reshape_2d(
+        ctx, pw2_w, pw2_w->ne[0] * pw2_w->ne[1], pw2_w->ne[2]);
+    ggml_tensor * pw2_out = ggml_mul_mat(ctx, pw2_w_2d, gelu_out);
+    if (pw2_b) {
+        ggml_tensor * pw2_b_2d = ggml_reshape_2d(ctx, pw2_b, C, 1);
+        pw2_out = ggml_add(ctx, pw2_out, ggml_repeat(ctx, pw2_b_2d, pw2_out));
+    }
+
+    // Block-level γ scaling applied per-channel (broadcast over T0)
+    // BEFORE the back-permute — gamma is a per-channel constant so
+    // the multiplication commutes with the layout flip and we save
+    // one ggml_repeat over [T0, C] vs. doing it after.
+    {
+        ggml_tensor * g_2d = ggml_reshape_2d(ctx, block_gamma, C, 1);
+        pw2_out = ggml_mul(ctx, pw2_out, ggml_repeat(ctx, g_2d, pw2_out));
+    }
+
+    // Back to `[T0, C]` for the residual add and the next block.
+    // This is the second (and last) ggml_cont in the helper — the
+    // back-half of the F7 cost / savings pair.
+    ggml_tensor * pw2_back = ggml_cont(
+        ctx, ggml_permute(ctx, pw2_out, 1, 0, 2, 3));
+    return ggml_add(ctx, residual, pw2_back);
+}
+
+// ---------------------------------------------------------------------
+// Audit finding F12 / Phase 2L — in-graph time/channel transpose
+// to kill the per-call `pack_time_channel_for_ggml` CPU loops.
+//
+// Background
+// ----------
+// The vector / text / duration estimator graph caches today hold
+// their primary activation input as `ne=[L, C]` (axis 0 = L = time
+// in GGML semantic).  GGML stores that as channel-major memory
+// (`buf[c*L + t]`), but every caller hands the data in CPU-native
+// time-major form (`x[t*C + c]`).  Callers paper over the
+// mismatch by running `pack_time_channel_for_ggml(x_tc, L, C)` on
+// the host — an `O(L * C)` loop with strided stores — and then
+// uploading the packed buffer.  Audit F12: this is dozens of
+// small CPU transposes per synth that also serialise the GPU
+// dispatch.
+//
+// The fix (audit's recommended Option 2): keep the cache's upload
+// tensor in `ne=[C, L]` (axis 0 = C = channels), so the caller
+// can `ggml_backend_tensor_set` the CPU-native buffer byte-for-
+// byte without any host pack, and have the graph itself emit
+// `ggml_cont(ctx, ggml_transpose(ctx, x_tc_in))` to recover the
+// `[L, C]` view downstream ops already consume.
+//
+// Why bit-exact
+// -------------
+// `ggml_transpose` is a strides-only view (zero arithmetic);
+// `ggml_cont` is a memory rearrangement that materialises the
+// natural-stride layout of `ne=[L, C]` — element (l, c) lands at
+// byte `(l + c*L) * sizeof(float)`.  The host pack
+// `pack_time_channel_for_ggml` writes `out[c*L + t] = x[t*C + c]`,
+// i.e. the SAME byte at offset `(c*L + t) * sizeof(float)` carries
+// the SAME float value.  See
+// `test/test_supertonic_in_graph_transpose.cpp` for the bit-exact
+// parity assertion.
+//
+// Shape contract:
+//   - `x_tc_in` : F32, ne=[C, L].  Uploaded raw from CPU-native
+//                 `x[t*C + c]` buffer (no pack).
+//   - returns   : F32, ne=[L, C], naturally strided
+//                 (`nb=[4, L*4]`).
+//
+// Op-set used: `ggml_transpose` + `ggml_cont`.  Both universally
+// supported (incl. baseline upstream OpenCL).  No new ops.
+inline ggml_tensor * transpose_time_channel_ggml(ggml_context * ctx,
+                                                 ggml_tensor *  x_tc_in) {
+    // `ggml_transpose` swaps axes 0 and 1 by reordering strides
+    // (zero cost — same memory, new view).  `ggml_cont` then
+    // materialises the natural-stride [L, C] layout that
+    // downstream graph builders treat as the canonical
+    // time-major input.  Byte-for-byte identical to
+    // `pack_time_channel_for_ggml` writes.
+    return ggml_cont(ctx, ggml_transpose(ctx, x_tc_in));
+}
+
 // Inline definition of the forward-declared portable leaky-relu helper
 // above.  Must come after `supertonic_use_cpu_custom_ops()` is
 // declared so the dispatcher resolves at every call site.

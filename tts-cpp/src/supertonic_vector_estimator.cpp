@@ -773,6 +773,67 @@ std::vector<float> run_text_attention_cache(vector_text_attention_cache & cache,
     return tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, "vector_attn_out"));
 }
 
+// Audit follow-up #6 (2C-lite) — GPU-input fast path for
+// `run_text_attention_cache`.  Equivalent to the host-vector
+// overload above but replaces the three `ggml_backend_tensor_set`
+// uploads with `ggml_backend_tensor_copy` (same-backend device→
+// device blit) so Q / K / V never round-trip through the host
+// between the producing graph (front-block / group-graph / res-
+// style QKV cache) and this attention cache.
+//
+// Eliminates per call: 3 GPU→host downloads + 3 host→GPU uploads.
+// Across the four attention sites × 5 denoise steps × Q/K/V =
+// 120 sync points / synth on the production path (independent of
+// trace-mode downloads, which still happen for parity harnesses
+// when `include_ggml_trace` is set at the call site).
+//
+// `q_src` / `k_src` / `v_src` MUST point into a graph that has
+// already been computed on the same `model.backend` and whose
+// allocator is still alive.  The current call pattern (one
+// `run_*_cache` per site, computed immediately before this
+// attention call) satisfies both.
+//
+// Test contract: `test/test_supertonic_graph_to_graph_blit.cpp`
+// — two minimal cached graphs sharing one backend, parity vs the
+// download / upload pair across all five vector-estimator attn
+// shapes (front+g1/g2/g3 Q at L=20, style K at kv=50, L=1 trip-
+// wire).
+std::vector<float> run_text_attention_cache_gpu(vector_text_attention_cache & cache,
+                                                const supertonic_model & model,
+                                                ggml_tensor * q_src,
+                                                ggml_tensor * k_src,
+                                                ggml_tensor * v_src,
+                                                int q_len,
+                                                int kv_len,
+                                                int n_heads,
+                                                int head_dim,
+                                                const std::string & out_w_source,
+                                                const std::string & out_b_source,
+                                                int current_step,
+                                                const char * island,
+                                                std::vector<float> * ctx_trace) {
+    if (cache.model != &model || cache.generation_id != model.generation_id ||
+        cache.q_len != q_len || cache.kv_len != kv_len ||
+        cache.n_heads != n_heads || cache.head_dim != head_dim ||
+        cache.f16_kv_attn != supertonic_use_f16_attn() ||
+        cache.out_w_source != out_w_source || cache.out_b_source != out_b_source) {
+        build_text_attention_cache(cache, model, q_len, kv_len, n_heads, head_dim, out_w_source, out_b_source);
+    }
+    // Same-backend device→device blits.  ggml_backend_tensor_copy
+    // checks `ggml_nbytes(src) == ggml_nbytes(dst)` internally and
+    // dispatches the backend's `cpy_tensor_async` path (CPU →
+    // memcpy, OpenCL → clEnqueueCopyBuffer, etc.).  No host
+    // synchronisation between the three copies; the next graph
+    // compute happens-before-orders them via the same backend
+    // queue.
+    ggml_backend_tensor_copy(q_src, cache.q_tc_in);
+    ggml_backend_tensor_copy(k_src, cache.k_tc_in);
+    ggml_backend_tensor_copy(v_src, cache.v_tc_in);
+    profile_vector_compute(model, cache.gf, current_step, island);
+    if (ctx_trace) *ctx_trace = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, "vector_attn_ctx"));
+    return tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, "vector_attn_out"));
+}
+
 void push_trace(std::vector<supertonic_trace_tensor> & trace,
                 const std::string & name,
                 int L,
@@ -792,6 +853,19 @@ struct vector_group_graph_result {
     // legacy fallback path is taken (model lacks `vector_rope_theta`).
     std::vector<float> q_rope;
     std::vector<float> k_rope;
+
+    // Audit follow-up #6 (2C-lite) — GPU-side handles for the
+    // post-RoPE Q/K and raw V tensors.  Pointers are valid as
+    // long as the producing `vector_group_graph_cache` (or
+    // `front_block_proj_cache` for the attn0 site) is still
+    // alive and hasn't been rebuilt.  Call sites feed these
+    // directly into `run_text_attention_cache_gpu` to skip the
+    // download / upload pair.  Null when no graph executed (legacy
+    // path with `apply_rope = false` falls back to the host-vector
+    // members above).
+    ggml_tensor * q_rope_gpu = nullptr;
+    ggml_tensor * k_rope_gpu = nullptr;
+    ggml_tensor * v_gpu      = nullptr;
 };
 
 struct vector_group_graph_cache {
@@ -889,14 +963,24 @@ void build_group_graph_cache(vector_group_graph_cache & cache,
     cache.ctx = ggml_init(p);
     cache.gf = ggml_new_graph_custom(cache.ctx, NODES, false);
 
-    cache.x_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, L, C);
-    ggml_set_name(cache.x_in, "vector_group_in"); ggml_set_input(cache.x_in);
+    // F12: ingest the group graph's primary activation in
+    // CPU-native `[C, L]` (channel-fast) layout so callers can
+    // upload `x_tc` byte-for-byte without the per-call host
+    // `pack_time_channel_for_ggml` loop.  The graph's first op
+    // is an `ggml_cont(ggml_transpose(...))` that materialises
+    // the `[L, C]` layout downstream `vector_convnext_ggml` /
+    // `dense_matmul_time_ggml` builders already consume.  See
+    // `supertonic_internal.h::transpose_time_channel_ggml` for
+    // the bit-exact equivalence proof against the host pack.
+    cache.x_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, C, L);
+    ggml_set_name(cache.x_in, "vector_group_in_tc"); ggml_set_input(cache.x_in);
     cache.temb_in = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_F32, 64);
     ggml_set_name(cache.temb_in, "vector_group_temb"); ggml_set_input(cache.temb_in);
     cache.text_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, text_len, 256);
     ggml_set_name(cache.text_in, "vector_group_text"); ggml_set_input(cache.text_in);
 
-    ggml_tensor * cur = cache.x_in;
+    ggml_tensor * cur = transpose_time_channel_ggml(cache.ctx, cache.x_in);
+    ggml_set_name(cur, "vector_group_in");
     int dils[4] = {1, 2, 4, 8};
     for (int j = 0; j < 4; ++j) {
         cur = vector_convnext_ggml(cache.ctx, model,
@@ -1066,8 +1150,11 @@ vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache
                                 q_name, k_name, v_name,
                                 trace != nullptr);
     }
-    std::vector<float> x_raw = pack_time_channel_for_ggml(x_tc, L, C);
-    ggml_backend_tensor_set(cache.x_in, x_raw.data(), 0, x_raw.size()*sizeof(float));
+    // F12: cache.x_in is now ne=[C, L] (CPU-native time-major).
+    // Upload `x_tc` directly — the host pack loop is gone; the
+    // graph runs `ggml_cont(ggml_transpose(...))` to recover the
+    // [L, C] layout downstream ops expect.
+    ggml_backend_tensor_set(cache.x_in, x_tc.data(), 0, x_tc.size()*sizeof(float));
     ggml_backend_tensor_set(cache.temb_in, temb.data(), 0, temb.size()*sizeof(float));
     ggml_backend_tensor_set(cache.text_in, text_lc_host, 0, (size_t) text_len * 256 * sizeof(float));
     profile_vector_compute(model, cache.gf, current_step, island);
@@ -1090,10 +1177,38 @@ vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache
     // The post-RoPE Q/K (`q_rope` / `k_rope`) are what callers feed
     // into `run_text_attention_cache`, eliminating the per-step
     // host `apply_rope(theta, …)` round-trips entirely.
-    out.q = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, q_name.c_str()));
-    out.k = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, k_name.c_str()));
-    out.v = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, v_name.c_str()));
+    // 2C-lite — expose the GPU-side handles so the attention
+    // call site can `ggml_backend_tensor_copy` directly into its
+    // own cache.  Pointers are valid until the next rebuild of
+    // this cache (i.e., until L/C/text_len/group/... changes).
+    // The host downloads of q_rope/k_rope/v_gpu are now gated on
+    // `trace != nullptr` for the FAST path (apply_rope == true)
+    // because the production path no longer reads `out.q_rope` /
+    // `out.k_rope` / `out.v` — it consumes `*_gpu` instead via
+    // `run_text_attention_cache_gpu`.  The LEGACY path
+    // (apply_rope == false; e.g. malformed GGUF without
+    // vector_rope_theta) still needs q/k/v on the host because it
+    // calls scalar `apply_rope` and the host `run_text_attention_
+    // cache` overload.
     if (cache.apply_rope) {
+        out.q_rope_gpu = ggml_graph_get_tensor(cache.gf, cache.q_rope_name.c_str());
+        out.k_rope_gpu = ggml_graph_get_tensor(cache.gf, cache.k_rope_name.c_str());
+    }
+    out.v_gpu = ggml_graph_get_tensor(cache.gf, v_name.c_str());
+
+    const bool need_host_qkv = (trace != nullptr) || !cache.apply_rope;
+    if (need_host_qkv) {
+        // Trace harnesses want pre-RoPE Q/K + V for the
+        // `push_trace` block below and the call-site
+        // `PUSH_GGML_TRACE({"ve_g*_attn_v", …})` push.  The legacy
+        // host-RoPE fallback consumes them directly.
+        out.q = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, q_name.c_str()));
+        out.k = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, k_name.c_str()));
+        out.v = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, v_name.c_str()));
+    }
+    if (trace && cache.apply_rope) {
+        // Trace-only extra downloads — post-RoPE Q/K mirrors the
+        // call site's `PUSH_GGML_TRACE({"ve_g*_attn_q_rope", …})`.
         out.q_rope = tensor_to_time_channel(
             ggml_graph_get_tensor(cache.gf, cache.q_rope_name.c_str()));
         out.k_rope = tensor_to_time_channel(
@@ -1204,16 +1319,28 @@ void build_res_style_qkv_cache(vector_res_style_qkv_cache & cache,
     cache.ctx = ggml_init(p);
     cache.gf = ggml_new_graph_custom(cache.ctx, NODES, false);
 
-    cache.lhs_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, L, C);
-    ggml_set_name(cache.lhs_in, "res_style_lhs"); ggml_set_input(cache.lhs_in);
-    cache.rhs_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, L, C);
-    ggml_set_name(cache.rhs_in, "res_style_rhs"); ggml_set_input(cache.rhs_in);
+    // F12: lhs / rhs ingested in CPU-native `[C, L]` channel-fast
+    // layout — `run_res_style_qkv_cache` uploads `lhs_tc` / `rhs_tc`
+    // directly, no host pack.  `style_v_in` / `kctx_in` are already
+    // shaped `[50, 256]` (i.e. `[ttl_len=L_ttl, C_style=256]`) and
+    // come from `cached_style_layouts(...)`, which produces stable
+    // c-major buffers shared across all 4 style residual sites —
+    // those keep their existing layout to preserve the F4 pointer-
+    // compare upload-skip optimization.
+    cache.lhs_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, C, L);
+    ggml_set_name(cache.lhs_in, "res_style_lhs_tc"); ggml_set_input(cache.lhs_in);
+    cache.rhs_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, C, L);
+    ggml_set_name(cache.rhs_in, "res_style_rhs_tc"); ggml_set_input(cache.rhs_in);
     cache.style_v_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, 50, 256);
     ggml_set_name(cache.style_v_in, "res_style_ttl_lc"); ggml_set_input(cache.style_v_in);
     cache.kctx_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, 50, 256);
     ggml_set_name(cache.kctx_in, "res_style_kctx_lc"); ggml_set_input(cache.kctx_in);
 
-    ggml_tensor * res = ggml_add(cache.ctx, cache.lhs_in, cache.rhs_in);
+    ggml_tensor * lhs_lc = transpose_time_channel_ggml(cache.ctx, cache.lhs_in);
+    ggml_tensor * rhs_lc = transpose_time_channel_ggml(cache.ctx, cache.rhs_in);
+    ggml_set_name(lhs_lc, "res_style_lhs");
+    ggml_set_name(rhs_lc, "res_style_rhs");
+    ggml_tensor * res = ggml_add(cache.ctx, lhs_lc, rhs_lc);
     ggml_set_name(res, residual_name.c_str());
     if (trace_outputs) {
         ggml_set_output(res);
@@ -1291,10 +1418,11 @@ vector_res_style_qkv_result run_res_style_qkv_cache(vector_res_style_qkv_cache &
                                   residual_name, norm_name, post_name, q_name, k_name, v_name,
                                   want_trace);
     }
-    std::vector<float> lhs_raw = pack_time_channel_for_ggml(lhs_tc, L, C);
-    std::vector<float> rhs_raw = pack_time_channel_for_ggml(rhs_tc, L, C);
-    ggml_backend_tensor_set(cache.lhs_in, lhs_raw.data(), 0, lhs_raw.size() * sizeof(float));
-    ggml_backend_tensor_set(cache.rhs_in, rhs_raw.data(), 0, rhs_raw.size() * sizeof(float));
+    // F12: direct upload of CPU-native `[L, C]` (time-major)
+    // buffers — `cache.lhs_in` / `cache.rhs_in` are now `ne=[C, L]`
+    // and the graph transposes them inside; no host pack.
+    ggml_backend_tensor_set(cache.lhs_in, lhs_tc.data(), 0, lhs_tc.size() * sizeof(float));
+    ggml_backend_tensor_set(cache.rhs_in, rhs_tc.data(), 0, rhs_tc.size() * sizeof(float));
     // F4: pointer-compare against the last successfully uploaded
     // host vector.  Cache rebuilds (above) reset last_*_uploaded
     // to nullptr via `cache = {}`, so the cold-miss path always
@@ -1377,12 +1505,19 @@ inline void build_style_residual_cache(vector_style_residual_graph_cache & cache
     cache.ctx = ggml_init(p);
     cache.gf = ggml_new_graph_custom(cache.ctx, NODES, false);
 
-    cache.lhs_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, L, C);
-    ggml_set_name(cache.lhs_in, "sr_lhs_in"); ggml_set_input(cache.lhs_in);
-    cache.out_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, L, C);
-    ggml_set_name(cache.out_in, "sr_out_in"); ggml_set_input(cache.out_in);
+    // F12: ingest both residual operands in CPU-native `[C, L]`
+    // layout — `run_style_residual_cache` uploads `lhs_tc` /
+    // `out_tc` directly; the graph transposes both inside.
+    cache.lhs_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, C, L);
+    ggml_set_name(cache.lhs_in, "sr_lhs_in_tc"); ggml_set_input(cache.lhs_in);
+    cache.out_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, C, L);
+    ggml_set_name(cache.out_in, "sr_out_in_tc"); ggml_set_input(cache.out_in);
 
-    ggml_tensor * res = ggml_add(cache.ctx, cache.lhs_in, cache.out_in);
+    ggml_tensor * lhs_lc = transpose_time_channel_ggml(cache.ctx, cache.lhs_in);
+    ggml_tensor * out_lc = transpose_time_channel_ggml(cache.ctx, cache.out_in);
+    ggml_set_name(lhs_lc, "sr_lhs");
+    ggml_set_name(out_lc, "sr_out");
+    ggml_tensor * res = ggml_add(cache.ctx, lhs_lc, out_lc);
     ggml_set_name(res, "sr_residual");
     if (trace_outputs) {
         ggml_set_output(res);
@@ -1416,10 +1551,9 @@ inline std::vector<float> run_style_residual_cache(
         cache.norm_block != norm_block || cache.trace_outputs != want_trace) {
         build_style_residual_cache(cache, model, L, C, norm_block, want_trace);
     }
-    std::vector<float> lhs_raw = pack_time_channel_for_ggml(lhs_tc, L, C);
-    std::vector<float> out_raw = pack_time_channel_for_ggml(out_tc, L, C);
-    ggml_backend_tensor_set(cache.lhs_in, lhs_raw.data(), 0, lhs_raw.size()*sizeof(float));
-    ggml_backend_tensor_set(cache.out_in, out_raw.data(), 0, out_raw.size()*sizeof(float));
+    // F12: direct upload — host pack loops eliminated.
+    ggml_backend_tensor_set(cache.lhs_in, lhs_tc.data(), 0, lhs_tc.size()*sizeof(float));
+    ggml_backend_tensor_set(cache.out_in, out_tc.data(), 0, out_tc.size()*sizeof(float));
     profile_vector_compute(model, cache.gf, current_step, island);
     if (residual_trace_out) {
         *residual_trace_out = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, "sr_residual"));
@@ -1518,13 +1652,22 @@ void build_tail_graph_cache(vector_tail_graph_cache & cache,
     cache.ctx = ggml_init(p);
     cache.gf = ggml_new_graph_custom(cache.ctx, NODES, false);
 
-    cache.tail_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, L, C);
-    ggml_set_name(cache.tail_in, "tail_in"); ggml_set_input(cache.tail_in);
+    // F12: ingest `tail_in` in CPU-native `[C, L]` channel-fast
+    // layout — `run_tail_graph_cache` uploads `x_tc` directly; the
+    // graph transposes it inside.  `tail_noise` stays at `[L, Cin]`
+    // because the (non-CPU non-trace) tail update path adds it
+    // directly to `velocity_t` (shape [L, Cin]); see the
+    // accompanying redundancy fix in `run_tail_graph_cache` which
+    // also skips two redundant CPU transposes on `noisy_latent`
+    // that cancel each other out.
+    cache.tail_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, C, L);
+    ggml_set_name(cache.tail_in, "tail_in_tc"); ggml_set_input(cache.tail_in);
     cache.tail_mask = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_F32, L);
     ggml_set_name(cache.tail_mask, "tail_mask"); ggml_set_input(cache.tail_mask);
     cache.tail_noise = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, L, Cin);
     ggml_set_name(cache.tail_noise, "tail_noise"); ggml_set_input(cache.tail_noise);
-    ggml_tensor * tail = cache.tail_in;
+    ggml_tensor * tail = transpose_time_channel_ggml(cache.ctx, cache.tail_in);
+    ggml_set_name(tail, "tail_in");
     for (int j = 0; j < 4; ++j) {
         tail = vector_convnext_ggml(cache.ctx, model,
             "vector_estimator:tts.ttl.vector_field.last_convnext.convnext." + std::to_string(j),
@@ -1591,17 +1734,20 @@ std::vector<float> run_tail_graph_cache(vector_tail_graph_cache & cache,
         cache.trace_outputs != (trace != nullptr)) {
         build_tail_graph_cache(cache, model, L, C, Cin, total_steps, trace != nullptr);
     }
-    std::vector<float> tail_in_raw = pack_time_channel_for_ggml(x_tc, L, C);
-    std::vector<float> noise_tc((size_t)L*Cin);
-    for (int t = 0; t < L; ++t) {
-        for (int c = 0; c < Cin; ++c) {
-            noise_tc[(size_t)t*Cin+c] = noisy_latent[(size_t)c*L+t];
-        }
-    }
-    std::vector<float> noise_raw = pack_time_channel_for_ggml(noise_tc, L, Cin);
-    ggml_backend_tensor_set(cache.tail_in, tail_in_raw.data(), 0, tail_in_raw.size()*sizeof(float));
+    // F12: direct upload of `x_tc` to `cache.tail_in` (now
+    // `ne=[C, L]`).  Also eliminates an inadvertent CPU
+    // double-transpose on `noisy_latent`: the old code unpacked
+    // `noisy_latent[c*L+t]` → `noise_tc[t*Cin+c]` (CPU loop #1)
+    // then packed `noise_tc[t*Cin+c]` → `noise_raw[c*L+t]` (CPU
+    // loop #2), producing `noise_raw` byte-equivalent to
+    // `noisy_latent`.  `noisy_latent` is already in the
+    // channel-major memory layout `ne=[L, Cin]` (with natural
+    // strides) wants — its element (c, t) at byte `c*L + t`
+    // matches GGML's element (l=t, c=c) at memory byte `t + c*L`.
+    // Uploading directly skips both loops.
+    ggml_backend_tensor_set(cache.tail_in, x_tc.data(), 0, x_tc.size()*sizeof(float));
     ggml_backend_tensor_set(cache.tail_mask, latent_mask, 0, (size_t)L*sizeof(float));
-    ggml_backend_tensor_set(cache.tail_noise, noise_raw.data(), 0, noise_raw.size()*sizeof(float));
+    ggml_backend_tensor_set(cache.tail_noise, noisy_latent, 0, (size_t)L*Cin*sizeof(float));
     profile_vector_compute(model, cache.gf, current_step, "tail");
     if (trace) {
         for (int j = 0; j < 4; ++j) {
@@ -2730,33 +2876,48 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             "ve_g1_attn_q", "ve_g1_attn_k", "ve_g1_attn_v",
             "group1_conv_attn_qkv", include_ggml_trace ? &ggml_trace : nullptr);
         std::vector<float> g1_block8 = std::move(g1_group.post);
-        std::vector<float> g1q_out = std::move(g1_group.q);
-        std::vector<float> g1k_out = std::move(g1_group.k);
-        std::vector<float> g1v_out = std::move(g1_group.v);
-        // F23 — `g1_group.q_rope` / `.k_rope` are non-empty iff
-        // the group cache built the in-graph rotation; if so we
-        // skip the host `apply_rope` entirely.
-        std::vector<float> g1q_rotated, g1k_rotated;
-        if (!g1_group.q_rope.empty() && !g1_group.k_rope.empty()) {
-            g1q_rotated = std::move(g1_group.q_rope);
-            g1k_rotated = std::move(g1_group.k_rope);
-        } else {
-            const float * theta_g1 = model.vector_rope_theta.data();
-            g1q_rotated = g1q_out;
-            g1k_rotated = g1k_out;
-            apply_rope(theta_g1, g1q_rotated, L, 4, 64);
-            apply_rope(theta_g1, g1k_rotated, text_len, 4, 64);
-        }
+        // 2C-lite — production fast path: pass GPU tensor handles
+        // straight from the group cache into the attention cache
+        // via `ggml_backend_tensor_copy`.  Host vectors for
+        // q/k/v/q_rope/k_rope are empty in production (gated on
+        // `trace != nullptr` inside `run_group_graph_cache`), so
+        // we MUST use the *_gpu pointers when present.  Falls
+        // back to the legacy host rotation path when the cache
+        // didn't wire RoPE in graph (e.g. malformed GGUF).
         thread_local vector_text_attention_cache g1_attn_cache;
         std::vector<float> g1_attn_ctx_trace;
-        std::vector<float> g1_attn_out = run_text_attention_cache(g1_attn_cache, model, g1q_rotated, g1k_rotated, g1v_out,
-            L, text_len, 4, 64,
-            "vector_estimator:onnx::MatMul_3155",
-            "vector_estimator:tts.ttl.vector_field.main_blocks.9.attn.out_fc.linear.bias",
-            current_step, "g1_attn_flash",
-            include_ggml_trace ? &g1_attn_ctx_trace : nullptr);
-        PUSH_GGML_TRACE({"ve_g1_attn_q_rope", {L, 256}, g1q_rotated});
-        PUSH_GGML_TRACE({"ve_g1_attn_k_rope", {text_len, 256}, g1k_rotated});
+        std::vector<float> g1_attn_out;
+        if (g1_group.q_rope_gpu && g1_group.k_rope_gpu && g1_group.v_gpu) {
+            g1_attn_out = run_text_attention_cache_gpu(g1_attn_cache, model,
+                g1_group.q_rope_gpu, g1_group.k_rope_gpu, g1_group.v_gpu,
+                L, text_len, 4, 64,
+                "vector_estimator:onnx::MatMul_3155",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.9.attn.out_fc.linear.bias",
+                current_step, "g1_attn_flash",
+                include_ggml_trace ? &g1_attn_ctx_trace : nullptr);
+        } else {
+            std::vector<float> g1q_out = std::move(g1_group.q);
+            std::vector<float> g1k_out = std::move(g1_group.k);
+            std::vector<float> g1v_out = std::move(g1_group.v);
+            std::vector<float> g1q_rotated = g1q_out;
+            std::vector<float> g1k_rotated = g1k_out;
+            const float * theta_g1 = model.vector_rope_theta.data();
+            apply_rope(theta_g1, g1q_rotated, L, 4, 64);
+            apply_rope(theta_g1, g1k_rotated, text_len, 4, 64);
+            g1_attn_out = run_text_attention_cache(g1_attn_cache, model,
+                g1q_rotated, g1k_rotated, g1v_out,
+                L, text_len, 4, 64,
+                "vector_estimator:onnx::MatMul_3155",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.9.attn.out_fc.linear.bias",
+                current_step, "g1_attn_flash",
+                include_ggml_trace ? &g1_attn_ctx_trace : nullptr);
+        }
+        // Trace pushes — use the host vectors the group cache
+        // downloaded under its `if (trace)` guard.  Empty when
+        // include_ggml_trace is false (PUSH_GGML_TRACE is a no-op
+        // in that case).
+        PUSH_GGML_TRACE({"ve_g1_attn_q_rope", {L, 256}, g1_group.q_rope});
+        PUSH_GGML_TRACE({"ve_g1_attn_k_rope", {text_len, 256}, g1_group.k_rope});
         PUSH_GGML_TRACE({"ve_g1_attn_ctx", {L, 256}, g1_attn_ctx_trace});
         PUSH_GGML_TRACE({"ve_g1_attn_out", {L, C}, g1_attn_out});
 
@@ -2811,33 +2972,37 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             "ve_g2_attn_q", "ve_g2_attn_k", "ve_g2_attn_v",
             "group2_conv_attn_qkv", include_ggml_trace ? &ggml_trace : nullptr);
         std::vector<float> g2_block14 = std::move(g2_group.post);
-        std::vector<float> g2q_out = std::move(g2_group.q);
-        std::vector<float> g2k_out = std::move(g2_group.k);
-        std::vector<float> g2v_out = std::move(g2_group.v);
-        // F23 — consume the in-graph-rotated Q/K when available;
-        // otherwise fall back to host apply_rope.  Same pattern as
-        // the front-block and g1 sites above.
-        std::vector<float> g2q_rotated, g2k_rotated;
-        if (!g2_group.q_rope.empty() && !g2_group.k_rope.empty()) {
-            g2q_rotated = std::move(g2_group.q_rope);
-            g2k_rotated = std::move(g2_group.k_rope);
-        } else {
-            const float * theta_g2 = model.vector_rope_theta.data();
-            g2q_rotated = g2q_out;
-            g2k_rotated = g2k_out;
-            apply_rope(theta_g2, g2q_rotated, L, 4, 64);
-            apply_rope(theta_g2, g2k_rotated, text_len, 4, 64);
-        }
+        // 2C-lite — same GPU fast-path / host-fallback pattern as g1.
         thread_local vector_text_attention_cache g2_attn_cache;
         std::vector<float> g2_attn_ctx_trace;
-        std::vector<float> g2_attn_out = run_text_attention_cache(g2_attn_cache, model, g2q_rotated, g2k_rotated, g2v_out,
-            L, text_len, 4, 64,
-            "vector_estimator:onnx::MatMul_3200",
-            "vector_estimator:tts.ttl.vector_field.main_blocks.15.attn.out_fc.linear.bias",
-            current_step, "g2_attn_flash",
-            include_ggml_trace ? &g2_attn_ctx_trace : nullptr);
-        PUSH_GGML_TRACE({"ve_g2_attn_q_rope", {L, 256}, g2q_rotated});
-        PUSH_GGML_TRACE({"ve_g2_attn_k_rope", {text_len, 256}, g2k_rotated});
+        std::vector<float> g2_attn_out;
+        if (g2_group.q_rope_gpu && g2_group.k_rope_gpu && g2_group.v_gpu) {
+            g2_attn_out = run_text_attention_cache_gpu(g2_attn_cache, model,
+                g2_group.q_rope_gpu, g2_group.k_rope_gpu, g2_group.v_gpu,
+                L, text_len, 4, 64,
+                "vector_estimator:onnx::MatMul_3200",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.15.attn.out_fc.linear.bias",
+                current_step, "g2_attn_flash",
+                include_ggml_trace ? &g2_attn_ctx_trace : nullptr);
+        } else {
+            std::vector<float> g2q_out = std::move(g2_group.q);
+            std::vector<float> g2k_out = std::move(g2_group.k);
+            std::vector<float> g2v_out = std::move(g2_group.v);
+            std::vector<float> g2q_rotated = g2q_out;
+            std::vector<float> g2k_rotated = g2k_out;
+            const float * theta_g2 = model.vector_rope_theta.data();
+            apply_rope(theta_g2, g2q_rotated, L, 4, 64);
+            apply_rope(theta_g2, g2k_rotated, text_len, 4, 64);
+            g2_attn_out = run_text_attention_cache(g2_attn_cache, model,
+                g2q_rotated, g2k_rotated, g2v_out,
+                L, text_len, 4, 64,
+                "vector_estimator:onnx::MatMul_3200",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.15.attn.out_fc.linear.bias",
+                current_step, "g2_attn_flash",
+                include_ggml_trace ? &g2_attn_ctx_trace : nullptr);
+        }
+        PUSH_GGML_TRACE({"ve_g2_attn_q_rope", {L, 256}, g2_group.q_rope});
+        PUSH_GGML_TRACE({"ve_g2_attn_k_rope", {text_len, 256}, g2_group.k_rope});
         PUSH_GGML_TRACE({"ve_g2_attn_ctx", {L, 256}, g2_attn_ctx_trace});
         PUSH_GGML_TRACE({"ve_g2_attn_out", {L, C}, g2_attn_out});
 
@@ -2892,31 +3057,37 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             "ve_g3_attn_q", "ve_g3_attn_k", "ve_g3_attn_v",
             "group3_conv_attn_qkv", include_ggml_trace ? &ggml_trace : nullptr);
         std::vector<float> g3_block20 = std::move(g3_group.post);
-        std::vector<float> g3q_out = std::move(g3_group.q);
-        std::vector<float> g3k_out = std::move(g3_group.k);
-        std::vector<float> g3v_out = std::move(g3_group.v);
-        // F23 — final RoPE-using attention site; same pattern.
-        std::vector<float> g3q_rotated, g3k_rotated;
-        if (!g3_group.q_rope.empty() && !g3_group.k_rope.empty()) {
-            g3q_rotated = std::move(g3_group.q_rope);
-            g3k_rotated = std::move(g3_group.k_rope);
-        } else {
-            const float * theta_g3 = model.vector_rope_theta.data();
-            g3q_rotated = g3q_out;
-            g3k_rotated = g3k_out;
-            apply_rope(theta_g3, g3q_rotated, L, 4, 64);
-            apply_rope(theta_g3, g3k_rotated, text_len, 4, 64);
-        }
+        // 2C-lite — same GPU fast-path / host-fallback pattern as g1, g2.
         thread_local vector_text_attention_cache g3_attn_cache;
         std::vector<float> g3_attn_ctx_trace;
-        std::vector<float> g3_attn_out = run_text_attention_cache(g3_attn_cache, model, g3q_rotated, g3k_rotated, g3v_out,
-            L, text_len, 4, 64,
-            "vector_estimator:onnx::MatMul_3245",
-            "vector_estimator:tts.ttl.vector_field.main_blocks.21.attn.out_fc.linear.bias",
-            current_step, "g3_attn_flash",
-            include_ggml_trace ? &g3_attn_ctx_trace : nullptr);
-        PUSH_GGML_TRACE({"ve_g3_attn_q_rope", {L, 256}, g3q_rotated});
-        PUSH_GGML_TRACE({"ve_g3_attn_k_rope", {text_len, 256}, g3k_rotated});
+        std::vector<float> g3_attn_out;
+        if (g3_group.q_rope_gpu && g3_group.k_rope_gpu && g3_group.v_gpu) {
+            g3_attn_out = run_text_attention_cache_gpu(g3_attn_cache, model,
+                g3_group.q_rope_gpu, g3_group.k_rope_gpu, g3_group.v_gpu,
+                L, text_len, 4, 64,
+                "vector_estimator:onnx::MatMul_3245",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.21.attn.out_fc.linear.bias",
+                current_step, "g3_attn_flash",
+                include_ggml_trace ? &g3_attn_ctx_trace : nullptr);
+        } else {
+            std::vector<float> g3q_out = std::move(g3_group.q);
+            std::vector<float> g3k_out = std::move(g3_group.k);
+            std::vector<float> g3v_out = std::move(g3_group.v);
+            std::vector<float> g3q_rotated = g3q_out;
+            std::vector<float> g3k_rotated = g3k_out;
+            const float * theta_g3 = model.vector_rope_theta.data();
+            apply_rope(theta_g3, g3q_rotated, L, 4, 64);
+            apply_rope(theta_g3, g3k_rotated, text_len, 4, 64);
+            g3_attn_out = run_text_attention_cache(g3_attn_cache, model,
+                g3q_rotated, g3k_rotated, g3v_out,
+                L, text_len, 4, 64,
+                "vector_estimator:onnx::MatMul_3245",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.21.attn.out_fc.linear.bias",
+                current_step, "g3_attn_flash",
+                include_ggml_trace ? &g3_attn_ctx_trace : nullptr);
+        }
+        PUSH_GGML_TRACE({"ve_g3_attn_q_rope", {L, 256}, g3_group.q_rope});
+        PUSH_GGML_TRACE({"ve_g3_attn_k_rope", {text_len, 256}, g3_group.k_rope});
         PUSH_GGML_TRACE({"ve_g3_attn_ctx", {L, 256}, g3_attn_ctx_trace});
         PUSH_GGML_TRACE({"ve_g3_attn_out", {L, C}, g3_attn_out});
 
