@@ -55,6 +55,11 @@ void usage(const char * argv0) {
         "          [--vulkan-device N] (-1 = auto-pick adapter with most free VRAM)\n"
         "          [--f16-attn 0|1] [--f16-weights 0|1]\n"
         "          [--precision f32|f16|q8_0]   (default: f32)\n"
+        "          [--kv-attn-type auto|f32|f16|bf16|q8_0]\n"
+        "                            (multi-dtype K/V flash-attn dispatch; generalises\n"
+        "                            --f16-attn.  default auto: falls back to --f16-attn.\n"
+        "                            bf16/q8_0 require Vulkan adapter support; silent\n"
+        "                            fallback to f32 on probe miss.)\n"
         "          [--f16-weights-deny PATTERN1,PATTERN2,...] (substring patterns,\n"
         "                            comma-separated; matching tensors stay F32 even\n"
         "                            when --f16-weights is on.  Layered on top of the\n"
@@ -178,6 +183,11 @@ int main(int argc, char ** argv) {
     // `should_materialise_f16_weight()`.  Default empty (zero
     // behaviour change for every existing bench invocation).
     std::vector<std::string> f16_weights_deny_list;
+    // QVAC-18605 round 4 — multi-dtype K/V flash-attn dispatch.
+    // -1 = auto (falls back to --f16-attn for back-compat); 0=f32,
+    // 1=f16, 2=bf16, 3=q8_0.  Probe-gated graceful fallback to f32
+    // on adapters that don't support the requested dtype.
+    int kv_attn_type = -1;
 
     auto split_csv = [](const std::string & s) {
         std::vector<std::string> out;
@@ -215,6 +225,17 @@ int main(int argc, char ** argv) {
         else if (a == "--f16-weights") f16_weights = std::stoi(next("--f16-weights"));
         else if (a == "--precision") precision = parse_bench_precision(next("--precision"));
         else if (a == "--f16-weights-deny") f16_weights_deny_list = split_csv(next("--f16-weights-deny"));
+        else if (a == "--kv-attn-type") {
+            const std::string v = next("--kv-attn-type");
+            if      (v == "auto") kv_attn_type = -1;
+            else if (v == "f32")  kv_attn_type = 0;
+            else if (v == "f16")  kv_attn_type = 1;
+            else if (v == "bf16") kv_attn_type = 2;
+            else if (v == "q8_0") kv_attn_type = 3;
+            else { fprintf(stderr,
+                "--kv-attn-type expects auto|f32|f16|bf16|q8_0 (got: %s)\n", v.c_str());
+                return 2; }
+        }
         else if (a == "--json-out") json_out = next("--json-out");
         else if (a == "-h" || a == "--help") { usage(argv[0]); return 0; }
         else { fprintf(stderr, "unknown arg: %s\n", a.c_str()); usage(argv[0]); return 2; }
@@ -239,6 +260,16 @@ int main(int argc, char ** argv) {
     } else {
         model.use_f16_attn = f16_attn != 0;
     }
+    // QVAC-18605 round 4 — multi-dtype K/V dispatch resolution.
+    // Same plumbing as Engine::Impl ctor; out-of-range throws
+    // (caller surface).  Probes are advisory + cached.
+    model.kv_attn_type = resolve_kv_attn_type(
+        kv_attn_type,
+        model.use_f16_attn,
+        supertonic_backend_supports_f16_kv_flash_attn(model.backend),
+        supertonic_backend_supports_bf16_kv_flash_attn(model.backend),
+        supertonic_backend_supports_q8_0_kv_flash_attn(model.backend));
+    model.use_f16_attn = (model.kv_attn_type == kv_attn_dtype::f16);
 
     auto vit = model.voices.find(voice);
     if (vit == model.voices.end()) {
@@ -446,11 +477,26 @@ int main(int argc, char ** argv) {
         // lets operators verify a future `--kv-attn-type bf16` /
         // `--vulkan-pinned-uploads` opt-in will actually take effect
         // on their machine before they flip the flag.
-        printf("  backend: %s%s%s%s%s%s%s\n",
+        // QVAC-18605 round 4 — surface the resolved K/V dispatch
+        // dtype.  When the operator opts out of `--kv-attn-type`
+        // the resolved value falls through to `f16` / `f32` per
+        // `--f16-attn`, so the existing `f16_attn=on` tag still
+        // matches the historical baseline; new tag fires when
+        // bf16 / q8_0 actually take effect.
+        const char * kv_dtype_str = "f32";
+        switch (model.kv_attn_type) {
+            case kv_attn_dtype::f32:        kv_dtype_str = "f32";  break;
+            case kv_attn_dtype::f16:        kv_dtype_str = "f16";  break;
+            case kv_attn_dtype::bf16:       kv_dtype_str = "bf16"; break;
+            case kv_attn_dtype::q8_0:       kv_dtype_str = "q8_0"; break;
+            case kv_attn_dtype::autoselect: kv_dtype_str = "auto-leaked!"; break;
+        }
+        printf("  backend: %s%s%s%s (kv_attn_type=%s)%s%s%s\n",
                desc.c_str(),
                model.use_f16_attn        ? " (f16_attn=on)"        : "",
                model.use_f16_weights     ? " (f16_weights=on)"     : "",
                model.use_native_leaky_relu ? " (native_leaky_relu=on)" : "",
+               kv_dtype_str,
                supertonic_backend_supports_q8_0_kv_flash_attn(model.backend) ? " (q8_0_kv_attn=available)" : "",
                supertonic_backend_supports_bf16_kv_flash_attn(model.backend) ? " (bf16_kv_attn=available)" : "",
                supertonic_backend_supports_pinned_host_buffer(model.backend) ? " (pinned_host_buffer=available)" : "");
@@ -507,6 +553,22 @@ int main(int argc, char ** argv) {
         os << "  \"prewarm_ms\": " << prewarm_ms << ",\n";
         os << "  \"f16_attn\": " << (model.use_f16_attn ? "true" : "false") << ",\n";
         os << "  \"f16_weights\": " << (model.use_f16_weights ? "true" : "false") << ",\n";
+        // QVAC-18605 round 4 — surface the resolved K/V dispatch
+        // dtype.  Always emitted (string label), so JSON consumers
+        // can attribute drift / perf differences to the right cause
+        // even on the default `auto` path.
+        {
+            const char * kv = "f32";
+            switch (model.kv_attn_type) {
+                case kv_attn_dtype::f32:  kv = "f32";  break;
+                case kv_attn_dtype::f16:  kv = "f16";  break;
+                case kv_attn_dtype::bf16: kv = "bf16"; break;
+                case kv_attn_dtype::q8_0: kv = "q8_0"; break;
+                case kv_attn_dtype::autoselect: kv = "auto-leaked"; break;
+            }
+            os << "  \"kv_attn_type\": \"" << kv << "\",\n";
+            os << "  \"kv_attn_type_requested\": " << kv_attn_type << ",\n";
+        }
         // QVAC-18605 round 6 — surface the user-supplied deny-list +
         // the count of tensors it excluded.  Always emitted (even on
         // the default empty path) so JSON consumers can attribute

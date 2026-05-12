@@ -22,6 +22,12 @@ void usage(const char * argv0) {
         "                            -1 = auto-pick adapter with most free VRAM)\n"
         "          [--f16-attn 0|1] (vector-estimator F16 K/V attention;\n"
         "                            defaults to auto: on for GPU, off for CPU)\n"
+        "          [--kv-attn-type auto|f32|f16|bf16|q8_0]\n"
+        "                            (vector-estimator multi-dtype K/V flash-attn;\n"
+        "                            generalises --f16-attn.  default auto: falls\n"
+        "                            back to --f16-attn for backwards-compat.\n"
+        "                            bf16/q8_0 require Vulkan adapter support;\n"
+        "                            silent fallback to f32 on probe miss.)\n"
         "          [--f16-weights 0|1] (load-time F16 materialization for the\n"
         "                            audit-identified hot matmul / pwconv weights;\n"
         "                            defaults to auto: on for GPU, off for CPU)\n"
@@ -105,6 +111,12 @@ int main(int argc, char ** argv) {
     tts_cpp::supertonic::EngineOptions opts;
     std::string text;
     std::string out;
+    // QVAC-18605 round 4 — wrap arg parse in try/catch so invalid
+    // values (`--kv-attn-type bogus`, `--vulkan-device abc`, etc.)
+    // surface as a clean `error: ...` line + exit 2 instead of an
+    // uncaught-exception backtrace.  Same exit-code convention as
+    // unknown-flag / missing-required handling below.
+    try {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         auto next = [&](const char * flag) -> const char * {
@@ -123,6 +135,16 @@ int main(int argc, char ** argv) {
         else if (arg == "--n-gpu-layers") opts.n_gpu_layers = std::stoi(next("--n-gpu-layers"));
         else if (arg == "--vulkan-device") opts.vulkan_device = std::stoi(next("--vulkan-device"));
         else if (arg == "--f16-attn") opts.f16_attn = std::stoi(next("--f16-attn"));
+        else if (arg == "--kv-attn-type") {
+            const std::string v = next("--kv-attn-type");
+            if      (v == "auto") opts.kv_attn_type = -1;
+            else if (v == "f32")  opts.kv_attn_type = 0;
+            else if (v == "f16")  opts.kv_attn_type = 1;
+            else if (v == "bf16") opts.kv_attn_type = 2;
+            else if (v == "q8_0") opts.kv_attn_type = 3;
+            else throw std::runtime_error(
+                "--kv-attn-type expects one of: auto, f32, f16, bf16, q8_0 (got: " + v + ")");
+        }
         else if (arg == "--f16-weights") opts.f16_weights = std::stoi(next("--f16-weights"));
         else if (arg == "--precision") opts.precision = parse_precision(next("--precision"));
         else if (arg == "--f16-weights-deny") {
@@ -154,6 +176,11 @@ int main(int argc, char ** argv) {
         }
         else if (arg == "-h" || arg == "--help") { usage(argv[0]); return 0; }
         else { fprintf(stderr, "unknown arg: %s\n", arg.c_str()); usage(argv[0]); return 2; }
+    }
+    } catch (const std::exception & e) {
+        fprintf(stderr, "error: %s\n", e.what());
+        usage(argv[0]);
+        return 2;
     }
     if (opts.model_gguf_path.empty() || text.empty() || out.empty()) {
         usage(argv[0]);

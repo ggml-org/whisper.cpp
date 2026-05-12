@@ -808,6 +808,28 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-f16-deny-list-api)
     tts_cpp_register_test(test-supertonic-f16-deny-list-api LABEL "unit")
 
+    # QVAC-18605 round 4 — multi-dtype K/V flash-attention dispatch
+    # resolver (`resolve_kv_attn_type`) — pure-logic policy split
+    # from the Vulkan-only dispatch site so the behaviour matrix
+    # is testable on CPU with synthetic probe inputs.
+    add_executable(test-supertonic-kv-attn-type
+        test/test_supertonic_kv_attn_type.cpp)
+    target_link_libraries(test-supertonic-kv-attn-type PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-kv-attn-type PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-kv-attn-type)
+    tts_cpp_register_test(test-supertonic-kv-attn-type LABEL "unit")
+
+    # QVAC-18605 round 4 — API-surface lockdown for the new
+    # EngineOptions::kv_attn_type field, supertonic_model field,
+    # supertonic_kv_attn_type() thread-local accessor, and the
+    # dispatch-scope `prev_kv_attn_type` for RAII teardown.
+    add_executable(test-supertonic-kv-attn-type-api
+        test/test_supertonic_kv_attn_type_api.cpp)
+    target_link_libraries(test-supertonic-kv-attn-type-api PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-kv-attn-type-api PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-kv-attn-type-api)
+    tts_cpp_register_test(test-supertonic-kv-attn-type-api LABEL "unit")
+
     add_executable(test-supertonic-f16-attn-parity
         test/test_supertonic_f16_attn_parity.cpp)
     target_link_libraries(test-supertonic-f16-attn-parity PRIVATE ggml)

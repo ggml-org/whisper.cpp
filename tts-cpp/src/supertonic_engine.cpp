@@ -205,6 +205,39 @@ struct Engine::Impl {
                 model.use_f16_attn = opts.f16_attn != 0;
             }
 
+            // QVAC-18605 round 4 — multi-dtype K/V dispatch resolution.
+            //
+            // Layered ON TOP of the round-1 `use_f16_attn` boolean:
+            // when `opts.kv_attn_type == -1` (the default), the
+            // resolver falls back to the boolean's value, so every
+            // existing operator config sees zero behaviour change.
+            //
+            // When the operator opts in to a non-default dtype, the
+            // resolved enum drives the vector-estimator dispatch
+            // and the boolean is updated to mirror the F16 case
+            // (so any external code still keying on the boolean
+            // — currently none in tree but kept for forward-compat
+            // — stays consistent).  Out-of-range opts.kv_attn_type
+            // throws inside the resolver; we let the throw
+            // propagate up to the Engine ctor (which already wraps
+            // the body in try/catch and frees the model).
+            //
+            // Probes are advisory: an explicit BF16 / Q8_0 request
+            // on an adapter that doesn't support it falls back to
+            // F32 silently — same advisory-probe pattern as the
+            // round-1 F16 auto-policy fallback above.
+            model.kv_attn_type = resolve_kv_attn_type(
+                opts.kv_attn_type,
+                model.use_f16_attn,
+                supertonic_backend_supports_f16_kv_flash_attn(model.backend),
+                supertonic_backend_supports_bf16_kv_flash_attn(model.backend),
+                supertonic_backend_supports_q8_0_kv_flash_attn(model.backend));
+            // Keep the boolean consistent with the resolved enum.
+            // No-op for the default `kv_attn_type == -1` path (the
+            // resolver already mirrors the boolean).  Becomes a
+            // no-op for explicit `--kv-attn-type 1` too.
+            model.use_f16_attn = (model.kv_attn_type == kv_attn_dtype::f16);
+
             // Validate voice up front so we throw at construction
             // rather than mid-synthesize().
             const std::string voice = opts.voice.empty()

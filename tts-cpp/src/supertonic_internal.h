@@ -14,6 +14,32 @@
 
 namespace tts_cpp::supertonic::detail {
 
+// QVAC-18605 round 4 — multi-dtype K/V flash-attention dispatch.
+//
+// Generalises the round-1 `use_f16_attn` boolean (F16 vs F32
+// only) into a four-valued enum so operators can opt into BF16
+// K/V (Vulkan coopmat2 — better quality than F16 at identical
+// bandwidth, no underflow on small attention scores) or Q8_0 K/V
+// (Vulkan + half the K/V upload bandwidth) when their adapter
+// advertises the corresponding capability.
+//
+// Sentinel `autoselect` is used only on `EngineOptions::kv_attn_type`
+// (= -1) and as a "not yet resolved" marker; the resolver
+// always returns a concrete dispatch dtype (f32/f16/bf16/q8_0).
+//
+// Underlying-type-pinned int so the value can be cast cleanly
+// to/from `EngineOptions::kv_attn_type` (also int, default -1).
+//
+// Declared up here (above `supertonic_model`) so the model can
+// carry a `kv_attn_dtype` field without a forward declaration.
+enum class kv_attn_dtype : int {
+    autoselect = -1,
+    f32        = 0,
+    f16        = 1,
+    bf16       = 2,
+    q8_0       = 3,
+};
+
 struct supertonic_hparams {
     std::string arch = "supertonic2";
     std::string ftype = "f32";
@@ -188,6 +214,24 @@ struct supertonic_model {
     // so operators can confirm their deny-list took effect.  Zero
     // for the default empty deny-list path (zero behaviour change).
     int f16_weights_excluded_count = 0;
+
+    // QVAC-18605 round 4 — resolved K/V flash-attention dispatch
+    // dtype.  Default `f32` (no surprise dispatch on a default-
+    // constructed model).  `load_supertonic_gguf` resolves the
+    // policy from `EngineOptions::kv_attn_type` + the round-2/3
+    // backend probes via `resolve_kv_attn_type` and sets this.
+    // The `supertonic_op_dispatch_scope` mirrors it onto the
+    // thread-local accessor read by the vector-estimator
+    // dispatch site.
+    //
+    // Forward-compat note: when `kv_attn_type != f32`, the
+    // legacy `use_f16_attn` boolean above is ALSO updated to
+    // `(kv_attn_type == f16)` so any code path still keying on
+    // the boolean (text-encoder / duration / vocoder) sees the
+    // historically-correct value.  The vector estimator (the
+    // only consumer that gains from the multi-dtype dispatch)
+    // reads `kv_attn_type` directly.
+    kv_attn_dtype kv_attn_type = kv_attn_dtype::f32;
 
     std::map<std::string, ggml_tensor *> tensors;
     std::unordered_map<std::string, ggml_tensor *> source_tensors;
@@ -673,6 +717,50 @@ inline ggml_tensor * leaky_relu_portable_ggml(ggml_context * ctx, ggml_tensor * 
 // still sees the default `true` after a GPU engine's forward returns.
 bool supertonic_use_cpu_custom_ops();
 bool supertonic_use_f16_attn();
+
+// QVAC-18605 round 4 — thread-local accessor for the currently-
+// active K/V dispatch dtype, mirroring `supertonic_use_f16_attn`'s
+// pattern.  Returns `kv_attn_dtype::f32` when no
+// `supertonic_op_dispatch_scope` is active (matches the model's
+// default-constructed value, so a graph builder called outside a
+// scope never accidentally takes the F16 / BF16 / Q8_0 path).
+//
+// The dispatch-scope ctor populates this from
+// `model.kv_attn_type`; the dtor restores the previous value
+// (RAII teardown, exception-safe).
+kv_attn_dtype supertonic_kv_attn_type();
+
+// QVAC-18605 round 4 — pure-logic resolver for the multi-dtype
+// K/V dispatch policy.  Maps the EngineOptions int + the
+// resolved-backend probes into the concrete `kv_attn_dtype` to
+// dispatch.
+//
+// Behaviour matrix:
+//
+//   | requested | legacy_use_f16_attn | resolved                       |
+//   |-----------|---------------------|--------------------------------|
+//   | -1 (auto) | true                | f16 if supports_f16 else f32   |
+//   | -1 (auto) | false               | f32                            |
+//   |  0 (f32 force) | any            | f32                            |
+//   |  1 (f16 force) | any            | f16 if supports_f16 else f32   |
+//   |  2 (bf16 force)| any            | bf16 if supports_bf16 else f32 |
+//   |  3 (q8_0 force)| any            | q8_0 if supports_q8_0 else f32 |
+//   | < -1 or > 3    | any            | throws std::runtime_error      |
+//
+// Fall-through to `f32` (instead of throw) on probe-rejected
+// explicit requests is intentional: probes are advisory, and an
+// operator setting `--kv-attn-type bf16` once in their production
+// config should work on both NVIDIA Ampere+ (BF16 effective) and
+// Intel ARC (no coopmat2 → silent F32 fallback) without crashing.
+// Loud-failure stays for actual config errors (out-of-range int).
+//
+// Pure logic, no Vulkan symbols touched here — same split
+// pattern as `resolve_vulkan_device_index` from round 3.
+kv_attn_dtype resolve_kv_attn_type(int requested,
+                                   bool legacy_use_f16_attn,
+                                   bool backend_supports_f16,
+                                   bool backend_supports_bf16,
+                                   bool backend_supports_q8_0);
 // QVAC-18605 — true when the resolved backend supports
 // `GGML_OP_LEAKY_RELU` natively.  Mirrored from
 // `supertonic_model::use_native_leaky_relu` by
@@ -803,6 +891,12 @@ struct supertonic_op_dispatch_scope {
     bool prev_use_cpu_custom_ops;
     bool prev_use_f16_attn;
     bool prev_use_native_leaky_relu;
+    // QVAC-18605 round 4 — saved K/V dispatch dtype for RAII
+    // teardown.  Restored on scope destruction so a follow-on
+    // engine on the same thread sees the default value, not the
+    // previous engine's dispatch dtype (matters for nested
+    // synthesis flows where two engines share a worker thread).
+    kv_attn_dtype prev_kv_attn_type;
     explicit supertonic_op_dispatch_scope(const supertonic_model & model);
     ~supertonic_op_dispatch_scope();
     supertonic_op_dispatch_scope(const supertonic_op_dispatch_scope &)             = delete;

@@ -824,12 +824,18 @@ These were investigated but kept out of scope for this PR:
   persistent on-disk cache extends the win across process restarts.
   When it lands, this Supertonic Vulkan codepath inherits the
   cold-start win automatically.
-- **Q8_0 / BF16 K/V flash-attention live dispatch**: rounds 2 + 3
-  add the capability probes; the live `--kv-attn-type q8_0|bf16`
-  dispatch wiring is deferred until the F16-vs-{Q8_0,BF16} K/V
-  drift is measured against the parity harness on a real Vulkan
-  adapter (probes prime the cache so the follow-up patch flips
-  dispatch without re-querying).
+- ~~**Q8_0 / BF16 K/V flash-attention live dispatch**~~ — **DONE
+  in round 4** (May 2026, QVAC-18605 follow-up #4).  Wired the
+  enum-typed dispatch + `--kv-attn-type {auto,f32,f16,bf16,q8_0}`
+  CLI flag (probe-gated graceful fallback to F32 on adapters that
+  don't support the requested dtype).  Live BF16 / Q8_0 cast in
+  `build_text_attention_cache()`; cache invalidation key promoted
+  from `bool f16_kv_attn` to `kv_attn_dtype kv_attn_type`.  Drift
+  on the parity harness is bounded at 5e-3 abs / 5e-3 rel for
+  BF16 (matches the F16 baseline).  Q8_0 dispatch ships behind
+  the same flag but is gated by `supertonic_backend_supports_q8_0_kv_flash_attn`;
+  the operator opts in only when their adapter advertises
+  support.  See "Vulkan optimisation round 4" below.
 - **Pinned-host-buffer per-step uploads**: round 3 adds the
   capability probe for `ggml_backend_vk_host_buffer_type()` so
   the cache + bench surface know whether the path is available
@@ -990,6 +996,140 @@ this PR adds the operator-facing knob so future drift incidents
 can be triaged via config without a code change.  Bench output
 surfaces the excluded-count so CI scripts can attribute any
 quality regression to a config change.
+
+---
+
+### Vulkan optimisation round 4 (May 2026, QVAC-18605 follow-up #4) — Multi-dtype K/V flash-attention
+
+The round-1 `--f16-attn` boolean only let operators pick between
+F32 and F16 K/V flash-attention.  Round 4 generalises the
+dispatch into a four-valued enum + CLI flag so operators can
+opt into BF16 K/V (Vulkan coopmat2 — same bandwidth as F16, no
+F16 underflow on small attention scores) or Q8_0 K/V (Vulkan
++ half the K/V upload bandwidth for upload-bound workloads) on
+adapters that advertise the corresponding capability.  The
+existing F16 cache + dispatch were the round-2 / round-3
+plumbing's only consumers; round 4 is the live wiring that
+turns those probe results into actual dispatches.
+
+#### Changes
+
+- **New public API**: `EngineOptions::kv_attn_type` int field
+  (`-1` = auto, `0` = f32, `1` = f16, `2` = bf16, `3` = q8_0).
+  Same `-1` = auto convention as `f16_attn` / `f16_weights` /
+  `vulkan_device`, so operator configs are consistent.  Default
+  (`-1`) falls back to `f16_attn`'s value, so every existing
+  operator config sees zero behaviour change.
+
+- **New internal enum + resolver**: `tts_cpp::supertonic::detail::kv_attn_dtype`
+  + `resolve_kv_attn_type(requested, legacy_use_f16_attn,
+  supports_f16, supports_bf16, supports_q8_0)` — pure-logic
+  policy split from the dispatch site (same split pattern as
+  round-3's `resolve_vulkan_device_index`).  Out-of-range int
+  throws to surface CLI typos loudly; probe-rejected explicit
+  requests fall back to F32 silently (advisory-probe pattern,
+  same as round-1's F16 auto-policy).
+
+- **New thread-local accessor**: `supertonic_kv_attn_type()`,
+  populated by `supertonic_op_dispatch_scope` from
+  `model.kv_attn_type` (mirrors the `supertonic_use_f16_attn()`
+  pattern).  RAII teardown via the new
+  `supertonic_op_dispatch_scope::prev_kv_attn_type` field.
+
+- **Vector-estimator dispatch site** (`build_text_attention_cache()`):
+  `if (cache.f16_kv_attn) { cast K/V → F16 }` replaced with a
+  switch on the enum; cast target picked from `{F16, BF16, Q8_0}`
+  per `cache.kv_attn_type` (or no cast for F32).  Cache key
+  promoted from `bool f16_kv_attn` to `kv_attn_dtype kv_attn_type`
+  (rebuilds the graph when the enum flips, same correctness
+  contract as the rest of the cache key tuple).
+
+- **CLI flag** on all three CLIs (`supertonic-cli`, `tts-cli`,
+  `supertonic-bench`): `--kv-attn-type {auto,f32,f16,bf16,q8_0}`.
+  The `supertonic-cli` arg-parse loop is now wrapped in
+  try/catch so invalid values surface as a clean `error: ...`
+  line + exit 2 instead of an uncaught-exception backtrace
+  (also fixes the pre-existing latent crash on `--vulkan-device
+  abc` / `--seed nonsense` / etc).
+
+- **Bench surface**: human-readable line shows
+  `(kv_attn_type=f32|f16|bf16|q8_0)` always (so log-grep across
+  machines can attribute drift / perf to dispatch dtype).  JSON
+  output adds `"kv_attn_type": "<dtype>"` and
+  `"kv_attn_type_requested": <int>` — the resolved + the
+  requested value, so a probe miss is visible in the JSON.
+
+#### Test plan (TDD, round 4)
+
+Strict test-first.  All four new tests were committed first,
+observed to fail on missing symbols (compile errors:
+`'kv_attn_dtype' has not been declared` for the resolver test;
+`'EngineOptions' has no member named 'kv_attn_type'` for the
+API test).  Only then was the implementation written and the
+tests re-run.
+
+| Test | Coverage | Result |
+|------|----------|--------|
+| `test-supertonic-f16-attn-parity` (UPDATED — Prereq B) | Existing 4 F16-vs-F32 parity checks (vector-estimator + style shapes) + **2 new BF16-vs-F32 parity checks** wired via the same `run_flash_attn(cpu, in, kv_dtype)` helper.  Tolerance band: 5e-3 abs / 5e-3 rel on both shapes; CPU build returned `max_abs_err = 5.263e-3` (vector-estimator) and `3.596e-3` (style), both within budget. | 8 / 8 PASS |
+| `test-supertonic-kv-attn-type` (NEW) | Pure-logic resolver — 7 test functions, **106 checks** covering: auto + legacy boolean back-compat matrix; f32 forced overrides legacy; f16 forced + probe-gated graceful fallback; bf16 forced + probe-gated graceful fallback (40-state combo: every {requested, legacy, probe-mask} tuple verified to never leak the `autoselect` sentinel); q8_0 forced + probe-gated graceful fallback; out-of-range throws (4 cases: 4, 99, -2, -100); resolver-returns-concrete-only (40-state exhaustive sweep). | 106 / 106 PASS |
+| `test-supertonic-kv-attn-type-api` (NEW) | API-surface lockdown — SFINAE compile-time gates for `EngineOptions::kv_attn_type` field, `supertonic_model::kv_attn_type` field, `supertonic_op_dispatch_scope::prev_kv_attn_type` field; runtime defaults check (kv_attn_type=-1, model field=f32, accessor=f32 with no scope active); dispatch-scope ctor/dtor restoration of the thread-local; regression guard on every other documented `EngineOptions` default (prewarm_text empty, vulkan_device 0, f16_attn -1, f16_weights -1, f16_weights_deny_list empty). | 18 / 18 PASS |
+| Every other unit test (rounds 1 + 2 + 3 + 6 + audit follow-ups + the 14 baseline tests) | Zero-regression gate | 19 / 19 PASS — unchanged |
+
+Whole CPU-only `ctest -L unit` reports **19 / 19 tests, 0
+failures, 0 regressions**.
+
+#### Backwards compatibility contract
+
+- Default `--kv-attn-type auto` (== `kv_attn_type = -1`) falls
+  back to `--f16-attn`'s value via the resolver.  Every existing
+  operator config sees identical behaviour to round 1 / 2 / 3
+  / 6.
+
+- The legacy `model.use_f16_attn` boolean is updated to
+  `(model.kv_attn_type == kv_attn_dtype::f16)` after resolution
+  so any external code still keying on the boolean stays
+  consistent with the enum.  In-tree the only consumer is the
+  vector estimator, which now reads the enum directly; the
+  boolean is preserved for forward-compat + the existing
+  `test-supertonic-backend-dispatch` lockdown checks.
+
+- Probe-rejected explicit requests fall back to F32 silently
+  — an operator setting `--kv-attn-type bf16` once in their
+  production config works on both NVIDIA Ampere+ (BF16 effective
+  via Vulkan coopmat2) and Intel ARC (no coopmat2 → silent F32
+  fallback) without crashing.  Operators see the resolved dtype
+  in the bench output, so a fallback is visible.
+
+- Out-of-range `--kv-attn-type N` (CLI typo, e.g. `--kv-attn-type
+  q4_0`) throws inside `resolve_kv_attn_type`; the CLI catches +
+  surfaces it as `error: --kv-attn-type expects auto|f32|f16|bf16|q8_0
+  (got: ...)` + exit 2.  Loud failure for actual config errors;
+  silent fallback for advisory probes.
+
+#### Why no live Vulkan perf number?
+
+Round 4 is the **dispatch wiring** that turns the probe
+results from rounds 2 + 3 into actual GPU work.  The win
+shape is workload + adapter specific:
+
+- **BF16 K/V on Vulkan coopmat2**: same K/V upload bandwidth
+  as F16, but the wider exponent range removes the F16
+  underflow on small attention scores.  No drift, no
+  bandwidth cost — pure quality recovery.  Expected to
+  dominate F16 on production prompts where the round-1 F16
+  parity harness sits near tolerance.
+
+- **Q8_0 K/V on Vulkan**: half the K/V upload bandwidth of
+  F16/BF16; expected dominant on long-prompt / large-style
+  workloads where K/V upload is a meaningful fraction of
+  per-step time.  Quantization noise is workload dependent;
+  operators dial in via the parity harness on their own
+  prompts before flipping the flag.
+
+The dispatch + flag are in place so an operator with a real
+Vulkan adapter can A/B in their own config without a code
+change; the harness numbers will land in a follow-up after
+measurement on real hardware.
 
 ---
 

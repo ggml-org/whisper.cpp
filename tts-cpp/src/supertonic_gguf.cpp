@@ -1090,6 +1090,11 @@ namespace {
 thread_local bool g_supertonic_use_cpu_custom_ops    = true;
 thread_local bool g_supertonic_use_f16_attn          = false;
 thread_local bool g_supertonic_use_native_leaky_relu = true;
+// QVAC-18605 round 4 — current K/V flash-attn dispatch dtype.
+// Defaults to f32 so a graph builder called outside any
+// `supertonic_op_dispatch_scope` doesn't accidentally take the
+// F16/BF16/Q8_0 path (matches the model's default value).
+thread_local kv_attn_dtype g_supertonic_kv_attn_type  = kv_attn_dtype::f32;
 }
 
 bool supertonic_use_cpu_custom_ops() {
@@ -1104,19 +1109,64 @@ bool supertonic_use_native_leaky_relu() {
     return g_supertonic_use_native_leaky_relu;
 }
 
+kv_attn_dtype supertonic_kv_attn_type() {
+    return g_supertonic_kv_attn_type;
+}
+
 supertonic_op_dispatch_scope::supertonic_op_dispatch_scope(const supertonic_model & model)
     : prev_use_cpu_custom_ops(g_supertonic_use_cpu_custom_ops),
       prev_use_f16_attn(g_supertonic_use_f16_attn),
-      prev_use_native_leaky_relu(g_supertonic_use_native_leaky_relu) {
+      prev_use_native_leaky_relu(g_supertonic_use_native_leaky_relu),
+      prev_kv_attn_type(g_supertonic_kv_attn_type) {
     g_supertonic_use_cpu_custom_ops    = model.backend_is_cpu;
     g_supertonic_use_f16_attn          = model.use_f16_attn;
     g_supertonic_use_native_leaky_relu = model.use_native_leaky_relu;
+    g_supertonic_kv_attn_type          = model.kv_attn_type;
 }
 
 supertonic_op_dispatch_scope::~supertonic_op_dispatch_scope() {
     g_supertonic_use_cpu_custom_ops    = prev_use_cpu_custom_ops;
     g_supertonic_use_f16_attn          = prev_use_f16_attn;
     g_supertonic_use_native_leaky_relu = prev_use_native_leaky_relu;
+    g_supertonic_kv_attn_type          = prev_kv_attn_type;
+}
+
+// QVAC-18605 round 4 — pure-logic resolver for the multi-dtype
+// K/V dispatch policy.  Implementation matches the behaviour
+// matrix documented on the declaration in supertonic_internal.h.
+//
+// Out-of-range inputs throw to surface CLI typos loudly; probe-
+// rejected explicit requests fall back to f32 silently (same
+// "advisory probes" pattern as the round-1 use_f16_attn auto-
+// policy fallback).
+kv_attn_dtype resolve_kv_attn_type(int requested,
+                                   bool legacy_use_f16_attn,
+                                   bool backend_supports_f16,
+                                   bool backend_supports_bf16,
+                                   bool backend_supports_q8_0) {
+    if (requested < -1 || requested > 3) {
+        throw std::runtime_error(
+            "supertonic: --kv-attn-type " + std::to_string(requested) +
+            " out of range (valid: -1=auto, 0=f32, 1=f16, 2=bf16, 3=q8_0)");
+    }
+    switch (requested) {
+        case -1:  // auto
+            if (legacy_use_f16_attn && backend_supports_f16) return kv_attn_dtype::f16;
+            return kv_attn_dtype::f32;
+        case 0:   // f32 forced
+            return kv_attn_dtype::f32;
+        case 1:   // f16 forced (probe-gated fallback)
+            return backend_supports_f16  ? kv_attn_dtype::f16  : kv_attn_dtype::f32;
+        case 2:   // bf16 forced (probe-gated fallback)
+            return backend_supports_bf16 ? kv_attn_dtype::bf16 : kv_attn_dtype::f32;
+        case 3:   // q8_0 forced (probe-gated fallback)
+            return backend_supports_q8_0 ? kv_attn_dtype::q8_0 : kv_attn_dtype::f32;
+        default:
+            // Unreachable — the range check above covers every
+            // valid request.  Defensive throw in case the switch
+            // is extended without updating the range check.
+            throw std::runtime_error("supertonic: resolve_kv_attn_type unreachable");
+    }
 }
 
 // ---------------------------------------------------------------------

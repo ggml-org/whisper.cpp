@@ -146,6 +146,41 @@ struct EngineOptions {
     // operator config).  No effect when `f16_weights == 0`.
     std::vector<std::string> f16_weights_deny_list;
 
+    // QVAC-18605 round 4 — multi-dtype K/V flash-attention dispatch
+    // for the vector estimator's attention sites.  Generalises the
+    // round-1 `f16_attn` boolean (F16 vs F32 only) to:
+    //
+    //   -1 → auto (default — falls back to `f16_attn`'s value;
+    //              identical behaviour to round 1 / 2 / 3 / 5 / 6
+    //              for every existing operator config)
+    //    0 → f32  (force F32 K/V — useful for parity-harness runs
+    //              and for triaging a perf cliff caused by F16
+    //              underflow on a specific model + adapter combo)
+    //    1 → f16  (same as `f16_attn=1`; OpenCL adreno fast path,
+    //              Vulkan `kernel_flash_attn_f32_f16_*`)
+    //    2 → bf16 (Vulkan coopmat2 — wider exponent range than F16,
+    //              same precision; identical bandwidth to F16, no
+    //              underflow on small attention scores; falls back
+    //              to f32 on adapters without coopmat2)
+    //    3 → q8_0 (Vulkan + half the K/V upload bandwidth on
+    //              workloads that are upload-bound; falls back to
+    //              f32 on backends without Q8_0 K/V flash-attn)
+    //
+    // Probe-gated graceful fallback to F32 on adapters that don't
+    // support the requested dtype — same advisory-probe semantics
+    // as `f16_attn`'s round-1 auto-policy, so an operator config
+    // setting `--kv-attn-type bf16` works on both NVIDIA Ampere+
+    // and Intel ARC (BF16 effective on the former; silent F32 on
+    // the latter) without crashing.  Out-of-range values throw
+    // loudly to surface CLI typos.
+    //
+    // When the resolved value is non-f32, the legacy
+    // `model.use_f16_attn` boolean is ALSO updated to
+    // `(resolved == f16)` so any code path still keying on the
+    // boolean (text-encoder / duration / vocoder; not the vector
+    // estimator) sees the historically-correct value.
+    int kv_attn_type = -1;
+
     // Optional path to a .npy file containing the initial noise tensor of
     // shape [1, latent_channels, latent_len] (float32).  When provided,
     // latent_len is taken from the npy file (overriding the duration-

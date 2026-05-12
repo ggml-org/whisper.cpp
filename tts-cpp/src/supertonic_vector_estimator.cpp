@@ -964,11 +964,16 @@ struct vector_text_attention_cache {
     int kv_len = 0;
     int n_heads = 0;
     int head_dim = 0;
-    // Cache key bit for the F16-K/V flash-attention path; rebuilding
-    // the graph when this flips matches the same correctness contract
-    // as the (q_len, kv_len, n_heads, head_dim) cache keys above.  See
-    // f16_attn handling in build_text_attention_cache().
-    bool f16_kv_attn = false;
+    // QVAC-18605 round 4 — generalised cache key for the K/V
+    // flash-attention dispatch dtype.  Replaces the round-1
+    // boolean `f16_kv_attn` (kept the field name for grep
+    // continuity in PROGRESS_SUPERTONIC.md / git history; the
+    // semantics are now an enum carrying f32/f16/bf16/q8_0).
+    // Rebuilding the graph when this flips matches the same
+    // correctness contract as the (q_len, kv_len, n_heads,
+    // head_dim) cache keys above.  See dispatch logic in
+    // `build_text_attention_cache()`.
+    kv_attn_dtype kv_attn_type = kv_attn_dtype::f32;
     std::string out_w_source;
     std::string out_b_source;
     std::vector<uint8_t> buf;
@@ -1001,7 +1006,7 @@ void build_text_attention_cache(vector_text_attention_cache & cache,
     cache.kv_len = kv_len;
     cache.n_heads = n_heads;
     cache.head_dim = head_dim;
-    cache.f16_kv_attn = supertonic_use_f16_attn();
+    cache.kv_attn_type = supertonic_kv_attn_type();
     cache.out_w_source = out_w_source;
     cache.out_b_source = out_b_source;
 
@@ -1029,20 +1034,51 @@ void build_text_attention_cache(vector_text_attention_cache & cache,
     ggml_tensor * v_in = ggml_view_3d(cache.ctx, cache.v_tc_in,
         head_dim, kv_len, n_heads, time_stride, head_stride, 0);
 
-    if (cache.f16_kv_attn) {
-        // Materialise K / V into contiguous F16 so backends with a
-        // `flash_attn_f32_f16` kernel (OpenCL on Adreno, see chatterbox
-        // PROGRESS.md "OpenCL optimization log") dispatch the
-        // mixed-precision path instead of the slower F32-only one.
-        // Q stays F32: cheaper to keep one operand at the higher
-        // precision than to round-trip the post-attention output back
-        // through F32 for the downstream dense projection.  Mirrors
-        // chatterbox's --cfm-f16-kv-attn flag and the basic_tfm()
-        // f16_kv_attn branch in src/chatterbox_tts.cpp.
-        ggml_tensor * k_f16 = ggml_new_tensor_3d(cache.ctx, GGML_TYPE_F16, head_dim, kv_len, n_heads);
-        ggml_tensor * v_f16 = ggml_new_tensor_3d(cache.ctx, GGML_TYPE_F16, head_dim, kv_len, n_heads);
-        k_in = ggml_cpy(cache.ctx, k_in, k_f16);
-        v_in = ggml_cpy(cache.ctx, v_in, v_f16);
+    // QVAC-18605 round 4 — multi-dtype K/V flash-attention
+    // dispatch.  Generalises the round-1 F16-only path:
+    //
+    //   f32  → no cast (backend's F32 flash-attn kernel)
+    //   f16  → cast K / V to F16 (OpenCL `flash_attn_f32_f16`,
+    //          Vulkan `kernel_flash_attn_f32_f16_*`; chatterbox
+    //          --cfm-f16-kv-attn equivalent)
+    //   bf16 → cast K / V to BF16 (Vulkan coopmat2 — wider
+    //          exponent range than F16 at identical bandwidth)
+    //   q8_0 → cast K / V to Q8_0 (Vulkan + half the K/V upload
+    //          bandwidth; row stride of 32 elements is exact for
+    //          our `head_dim = 64` so block alignment is trivially
+    //          satisfied)
+    //
+    // Q stays F32 in every case: cheaper to keep one operand at
+    // the higher precision than to round-trip the post-attention
+    // output back through F32 for the downstream dense projection.
+    //
+    // The decision lives in `model.kv_attn_type` (mirrored onto
+    // the thread-local by `supertonic_op_dispatch_scope` and
+    // captured into `cache.kv_attn_type` above as the cache key).
+    // Probe-gated graceful fallback to f32 happens upstream in
+    // `resolve_kv_attn_type` — by the time we reach this site the
+    // chosen dtype is guaranteed to be one the backend accepts
+    // for our (head_dim, n_heads) shape.
+    ggml_type cast_target = GGML_TYPE_COUNT;  // sentinel "no cast"
+    switch (cache.kv_attn_type) {
+        case kv_attn_dtype::f32:                                   break;
+        case kv_attn_dtype::f16:  cast_target = GGML_TYPE_F16;     break;
+        case kv_attn_dtype::bf16: cast_target = GGML_TYPE_BF16;    break;
+        case kv_attn_dtype::q8_0: cast_target = GGML_TYPE_Q8_0;    break;
+        case kv_attn_dtype::autoselect:
+            // Resolver never returns autoselect; defensive throw
+            // so a future refactor that bypasses the resolver
+            // can't silently take the F32 path.
+            throw std::runtime_error(
+                "vector_text_attention_cache: kv_attn_type=autoselect "
+                "leaked into dispatch (resolver should have produced "
+                "a concrete dtype)");
+    }
+    if (cast_target != GGML_TYPE_COUNT) {
+        ggml_tensor * k_typed = ggml_new_tensor_3d(cache.ctx, cast_target, head_dim, kv_len, n_heads);
+        ggml_tensor * v_typed = ggml_new_tensor_3d(cache.ctx, cast_target, head_dim, kv_len, n_heads);
+        k_in = ggml_cpy(cache.ctx, k_in, k_typed);
+        v_in = ggml_cpy(cache.ctx, v_in, v_typed);
     }
 
     ggml_tensor * attn = ggml_flash_attn_ext(cache.ctx, q_in, k_in, v_in,
@@ -1083,7 +1119,7 @@ std::vector<float> run_text_attention_cache(vector_text_attention_cache & cache,
     if (cache.model != &model || cache.generation_id != model.generation_id ||
         cache.q_len != q_len || cache.kv_len != kv_len ||
         cache.n_heads != n_heads || cache.head_dim != head_dim ||
-        cache.f16_kv_attn != supertonic_use_f16_attn() ||
+        cache.kv_attn_type != supertonic_kv_attn_type() ||
         cache.out_w_source != out_w_source || cache.out_b_source != out_b_source) {
         build_text_attention_cache(cache, model, q_len, kv_len, n_heads, head_dim, out_w_source, out_b_source);
     }
@@ -1137,7 +1173,7 @@ std::vector<float> run_text_attention_cache_gpu(vector_text_attention_cache & ca
     if (cache.model != &model || cache.generation_id != model.generation_id ||
         cache.q_len != q_len || cache.kv_len != kv_len ||
         cache.n_heads != n_heads || cache.head_dim != head_dim ||
-        cache.f16_kv_attn != supertonic_use_f16_attn() ||
+        cache.kv_attn_type != supertonic_kv_attn_type() ||
         cache.out_w_source != out_w_source || cache.out_b_source != out_b_source) {
         build_text_attention_cache(cache, model, q_len, kv_len, n_heads, head_dim, out_w_source, out_b_source);
     }

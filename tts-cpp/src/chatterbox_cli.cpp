@@ -393,6 +393,12 @@ struct cli_params {
     // Maps onto EngineOptions::f16_weights_deny_list (after
     // comma-splitting).
     std::vector<std::string> supertonic_f16_weights_deny_list;
+    // QVAC-18605 round 4 — multi-dtype K/V flash-attention dispatch.
+    // -1 = auto (falls back to --f16-attn for back-compat); 0=f32,
+    // 1=f16, 2=bf16, 3=q8_0.  Maps onto EngineOptions::kv_attn_type.
+    // Probe-gated graceful fallback to f32 on adapters that don't
+    // support the requested dtype.
+    int32_t     supertonic_kv_attn_type = -1;
     bool        has_supertonic_options = false;
 
     // Streaming synthesis (PROGRESS.md B1).  When > 0, speech tokens from
@@ -527,6 +533,12 @@ static void print_usage(const char * argv0) {
     fprintf(stderr, "                          to auto (on for GPU/OpenCL, off for CPU).  Triggers\n");
     fprintf(stderr, "                          the OpenCL `flash_attn_f32_f16` kernel on Adreno;\n");
     fprintf(stderr, "                          see PROGRESS_SUPERTONIC.md OpenCL section.\n");
+    fprintf(stderr, "  --kv-attn-type DTYPE    Vector-estimator multi-dtype K/V flash-attn dispatch.\n");
+    fprintf(stderr, "                          DTYPE in {auto,f32,f16,bf16,q8_0}.  Default auto:\n");
+    fprintf(stderr, "                          falls back to --f16-attn for backwards-compat.\n");
+    fprintf(stderr, "                          bf16 needs Vulkan coopmat2 (NVIDIA Ampere+ / RDNA3+);\n");
+    fprintf(stderr, "                          q8_0 halves the K/V upload bandwidth on Vulkan.\n");
+    fprintf(stderr, "                          Probe-gated graceful fallback to f32 on miss.\n");
     fprintf(stderr, "  --f16-weights 0|1       Load-time F16 materialization for the hot matmul /\n");
     fprintf(stderr, "                          pwconv weights identified by the audit.  Defaults\n");
     fprintf(stderr, "                          to auto (on for GPU, off for CPU).  Halves the GPU\n");
@@ -707,6 +719,22 @@ static bool parse_args(int argc, char ** argv, cli_params & params) {
             params.has_supertonic_options = true;
         }
         else if (arg == "--vulkan-device")  { if (!parse_int  ("--vulkan-device",  params.supertonic_vulkan_device)) return false; params.has_supertonic_options = true; }
+        else if (arg == "--kv-attn-type") {
+            auto v = next("--kv-attn-type"); if (!v) return false;
+            const std::string s = v;
+            if      (s == "auto") params.supertonic_kv_attn_type = -1;
+            else if (s == "f32")  params.supertonic_kv_attn_type = 0;
+            else if (s == "f16")  params.supertonic_kv_attn_type = 1;
+            else if (s == "bf16") params.supertonic_kv_attn_type = 2;
+            else if (s == "q8_0") params.supertonic_kv_attn_type = 3;
+            else {
+                fprintf(stderr,
+                    "error: --kv-attn-type expects one of: auto, f32, f16, bf16, q8_0 (got: %s)\n",
+                    s.c_str());
+                return false;
+            }
+            params.has_supertonic_options = true;
+        }
         else if (arg == "--prewarm")        { auto v = next("--prewarm");        if (!v) return false; params.supertonic_prewarm_text = v; params.has_supertonic_options = true; }
         else if (arg == "--cfm-f16-kv-attn") { params.cfm_f16_kv_attn = true; }
         else if (arg == "--max-sentence-chars") { if (!parse_int("--max-sentence-chars", params.max_sentence_chars)) return false; }
@@ -907,6 +935,7 @@ static int run_supertonic_cli_path(const cli_params & params) {
     opts.prewarm_text = params.supertonic_prewarm_text;
     opts.noise_npy_path = params.supertonic_noise_npy;
     opts.f16_weights_deny_list = params.supertonic_f16_weights_deny_list;
+    opts.kv_attn_type = params.supertonic_kv_attn_type;
 
     auto result = tts_cpp::supertonic::synthesize(opts, params.text);
     stream_write_wav(params.out_wav, result.pcm, result.sample_rate);
