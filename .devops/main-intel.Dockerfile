@@ -1,6 +1,6 @@
-ARG ONEAPI_VERSION=2025.1.1-0-devel-ubuntu24.04
+ARG ONEAPI_VERSION=2025.3.3-0-devel-ubuntu24.04
 
-FROM intel/oneapi-basekit:$ONEAPI_VERSION AS build
+FROM intel/deep-learning-essentials:$ONEAPI_VERSION AS build
 WORKDIR /app
 
 RUN apt-get update && \
@@ -16,7 +16,7 @@ RUN if [ "${GGML_SYCL_F16}" = "ON" ]; then \
     fi && \
     make base.en CMAKE_ARGS="-DGGML_SYCL=1 -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx ${OPT_SYCL_F16}"
 
-FROM intel/oneapi-basekit:$ONEAPI_VERSION AS runtime
+FROM intel/deep-learning-essentials:$ONEAPI_VERSION AS build
 WORKDIR /app
 
 RUN apt-get update && \
