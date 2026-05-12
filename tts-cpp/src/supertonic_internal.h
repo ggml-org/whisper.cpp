@@ -186,6 +186,26 @@ struct supertonic_model {
     // Each ≈ 50 × 256 = 51.2 KiB; saves 2 sync points + ~100 KiB
     // of redundant traffic per synth.
     std::array<std::vector<float>, 2> speech_tanh_k_cache;
+
+    // ----- Audit follow-up #3 cache (F17) -----
+    //
+    // F17: generic lazy host-side cache for any source weight that
+    // a scalar-CPU continuation needs.  The duration stage's
+    // post-graph scalar attention (relpos K/V embeddings, conv_o,
+    // 4 LN pairs, 2 FFN's conv_{1,2} pairs, proj_out weight) — and
+    // any future stage that uses `cached_read_f32` — populates
+    // this on first touch.  Keyed by the source-tensor name; value
+    // is the F32 byte payload sized to `ggml_nelements(src)`.
+    //
+    // Memory cost: bounded by the union of stages' scalar-
+    // continuation weight footprints.  Empirically ~3-5 MB on a
+    // Supertonic-2 GGUF, vs. the savings of ~30 GPU→host syncs per
+    // duration synth (+ ~15 from the text-encoder LN cache (F13)
+    // and the speech tanh_k cache (F16) already shipped).
+    //
+    // `mutable` because the cache populates lazily on const-method
+    // paths; thread-unsafe by design (one engine per thread).
+    mutable std::unordered_map<std::string, std::vector<float>> scalar_weight_cache;
 };
 
 // `f16_weights`:

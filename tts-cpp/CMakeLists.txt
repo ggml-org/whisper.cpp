@@ -646,6 +646,11 @@ if (TTS_CPP_BUILD_TESTS)
     target_include_directories(test-supertonic-profile-csv PRIVATE ggml/include src include)
     tts_cpp_apply_ccache(test-supertonic-profile-csv)
     tts_cpp_register_test(test-supertonic-profile-csv LABEL "unit")
+    # OpenCL audit follow-up #3 — F17 duration scalar-weight
+    # cache + F18 text-encoder convnext-front graph cache +
+    # F19 vector-estimator front-block graph cache.
+    add_supertonic_harness(test-supertonic-audit3-caches
+        test/test_supertonic_audit3_caches.cpp)
 
     # OpenCL bring-up unit tests (QVAC-18607).  Three CPU-only
     # parity / structural tests for the dispatch + portable-op

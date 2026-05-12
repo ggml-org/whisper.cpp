@@ -994,46 +994,76 @@ bool supertonic_text_encoder_forward_ggml(const supertonic_model & model,
             ids[t] = (int32_t) id;
         }
 
-        constexpr int MAX_NODES = 640;
-        static size_t buf_size = ggml_tensor_overhead() * MAX_NODES + ggml_graph_overhead_custom(MAX_NODES, false);
-        thread_local std::vector<uint8_t> buf(buf_size);
-        ggml_init_params gp = { buf_size, buf.data(), true };
-        ggml_context * ctx = ggml_init(gp);
-        ggml_cgraph * gf = ggml_new_graph_custom(ctx, MAX_NODES, false);
-        // F10: graph input is the i32 token-id vector; downstream
-        // ops consume the channel-major embedding gather produced
-        // by `ggml_get_rows` + permute-to-channel-major.
-        ggml_tensor * ids_in = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, L);
-        ggml_set_name(ids_in, "text_encoder_ids"); ggml_set_input(ids_in);
-        ggml_tensor * gathered = ggml_get_rows(ctx, emb_table, ids_in);
-        // get_rows produces ne=[C, L] (time-major data layout).
-        // Convert to ne=[L, C] (channel-major) so the convnext
-        // helpers below see the same shape they had with the old
-        // `pack_time_channel_for_ggml` + `ggml_set_input` pair.
-        ggml_tensor * in = ggml_cont(ctx, ggml_transpose(ctx, gathered));
-        ggml_set_name(in, "text_encoder_embed");
-        ggml_tensor * y = in;
-        for (int i = 0; i < 6; ++i) {
-            y = text_convnext_ggml(ctx, model, "text_encoder:tts.ttl.text_encoder.convnext.convnext." + std::to_string(i), y);
+        // F18 — text-encoder convnext-front graph cache.  Same
+        // pattern as F8 / F11 / F14: build once per (model, L),
+        // survive across synths; the per-synth path becomes
+        // `tensor_set(ids) → compute → tensor_get(output)`.
+        struct text_convnext_front_cache {
+            const supertonic_model * model = nullptr;
+            uint64_t generation_id = 0;
+            int L = 0;
+            std::vector<uint8_t> buf;
+            ggml_context * ctx = nullptr;
+            ggml_cgraph * gf = nullptr;
+            ggml_gallocr_t allocr = nullptr;
+            ggml_tensor * ids_in = nullptr;
+        };
+        thread_local text_convnext_front_cache convnext_cache;
+        if (convnext_cache.model != &model ||
+            convnext_cache.generation_id != model.generation_id ||
+            convnext_cache.L != L) {
+            // Tear down stale state.
+            supertonic_safe_gallocr_free(convnext_cache.allocr, convnext_cache.generation_id);
+            if (convnext_cache.ctx) ggml_free(convnext_cache.ctx);
+            convnext_cache = {};
+            convnext_cache.model = &model;
+            convnext_cache.generation_id = model.generation_id;
+            convnext_cache.L = L;
+
+            constexpr int MAX_NODES = 640;
+            const size_t buf_size = ggml_tensor_overhead() * MAX_NODES +
+                                    ggml_graph_overhead_custom(MAX_NODES, false);
+            convnext_cache.buf.assign(buf_size, 0);
+            ggml_init_params gp = { buf_size, convnext_cache.buf.data(), true };
+            convnext_cache.ctx = ggml_init(gp);
+            convnext_cache.gf  = ggml_new_graph_custom(convnext_cache.ctx, MAX_NODES, false);
+
+            // F10: i32 token-id input, gather → permute → cont →
+            // convnext stack.  Same op sequence as pre-F18; only
+            // the lifetime around it changed.
+            convnext_cache.ids_in = ggml_new_tensor_1d(convnext_cache.ctx, GGML_TYPE_I32, L);
+            ggml_set_name(convnext_cache.ids_in, "text_encoder_ids");
+            ggml_set_input(convnext_cache.ids_in);
+            ggml_tensor * gathered = ggml_get_rows(convnext_cache.ctx, emb_table, convnext_cache.ids_in);
+            ggml_tensor * in_t = ggml_cont(convnext_cache.ctx, ggml_transpose(convnext_cache.ctx, gathered));
+            ggml_set_name(in_t, "text_encoder_embed");
+            ggml_tensor * y_t = in_t;
+            for (int i = 0; i < 6; ++i) {
+                y_t = text_convnext_ggml(convnext_cache.ctx, model,
+                    "text_encoder:tts.ttl.text_encoder.convnext.convnext." + std::to_string(i), y_t);
+            }
+            ggml_set_name(y_t, "text_encoder_convnext5");
+            ggml_set_output(y_t);
+            ggml_build_forward_expand(convnext_cache.gf, y_t);
+
+            convnext_cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
+            if (!convnext_cache.allocr) {
+                ggml_free(convnext_cache.ctx);
+                convnext_cache = {};
+                throw std::runtime_error("ggml_gallocr_new text encoder failed");
+            }
+            if (!ggml_gallocr_reserve(convnext_cache.allocr, convnext_cache.gf)) {
+                ggml_gallocr_free(convnext_cache.allocr);
+                ggml_free(convnext_cache.ctx);
+                convnext_cache = {};
+                throw std::runtime_error("ggml_gallocr_reserve text encoder failed");
+            }
+            ggml_gallocr_alloc_graph(convnext_cache.allocr, convnext_cache.gf);
         }
-        ggml_set_name(y, "text_encoder_convnext5"); ggml_set_output(y);
-        ggml_build_forward_expand(gf, y);
-        ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
-        if (!allocr) {
-            ggml_free(ctx);
-            throw std::runtime_error("ggml_gallocr_new text encoder failed");
-        }
-        if (!ggml_gallocr_reserve(allocr, gf)) {
-            ggml_gallocr_free(allocr);
-            ggml_free(ctx);
-            throw std::runtime_error("ggml_gallocr_reserve text encoder failed");
-        }
-        ggml_gallocr_alloc_graph(allocr, gf);
-        ggml_backend_tensor_set(ids_in, ids.data(), 0, ids.size() * sizeof(int32_t));
-        profile_text_compute(model, gf, "convnext_front");
-        std::vector<float> x = tensor_to_time_channel(ggml_graph_get_tensor(gf, "text_encoder_convnext5"));
-        ggml_gallocr_free(allocr);
-        ggml_free(ctx);
+        ggml_backend_tensor_set(convnext_cache.ids_in, ids.data(), 0, ids.size() * sizeof(int32_t));
+        profile_text_compute(model, convnext_cache.gf, "convnext_front");
+        std::vector<float> x = tensor_to_time_channel(
+            ggml_graph_get_tensor(convnext_cache.gf, "text_encoder_convnext5"));
         profile_text_checkpoint("convnext_readback");
 
         // The text encoder's relative-position and speech-prompted attention

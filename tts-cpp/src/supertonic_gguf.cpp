@@ -1037,6 +1037,7 @@ void free_supertonic_model(supertonic_model & model) {
     model.time_emb_cache.clear();
     model.text_encoder_ln_weights.clear();
     for (auto & v : model.speech_tanh_k_cache) v.clear();
+    model.scalar_weight_cache.clear();
     model.generation_id = 0;
 }
 

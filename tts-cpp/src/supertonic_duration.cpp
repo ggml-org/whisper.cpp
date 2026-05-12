@@ -24,6 +24,33 @@ f32_tensor read_f32(const supertonic_model & m, const std::string & source_name)
     return out;
 }
 
+// F17 — lazy host-side cache for weights consumed by the duration
+// stage's scalar continuation.  First call downloads via
+// `read_f32`, second+ calls reuse the cached vector via copy into
+// a fresh `f32_tensor`.  The vector copy on return is one host
+// memcpy (~25 µs per 256 KiB matmul weight on a modern CPU) vs.
+// the GPU→host sync it replaces (~50–100 µs on a discrete OpenCL
+// GPU).  Net 2–4× win for the matmul weights; ~50× win for the
+// small (~1 KiB) LN / bias tensors that dominate the call count.
+//
+// Returns by value to preserve the `f32_tensor` ABI the rest of
+// this TU expects.  The cache itself lives on `supertonic_model`
+// (`scalar_weight_cache`); see the doc-block in
+// supertonic_internal.h for the lifetime + thread-safety
+// contract.
+f32_tensor cached_read_f32(const supertonic_model & m, const std::string & source_name) {
+    ggml_tensor * t = require_source_tensor(m, source_name);
+    f32_tensor out;
+    for (int i = 0; i < 4; ++i) out.ne[i] = t->ne[i];
+    auto & entry = m.scalar_weight_cache[source_name]; // emplace empty on miss
+    if (entry.empty()) {
+        entry.resize((size_t) ggml_nelements(t));
+        ggml_backend_tensor_get(t, entry.data(), 0, ggml_nbytes(t));
+    }
+    out.data = entry; // one host memcpy; saved sync dwarfs it
+    return out;
+}
+
 inline float relu(float x) { return x > 0.0f ? x : 0.0f; }
 inline float gelu(float x) { return 0.5f * x * (1.0f + std::erff(x * 0.7071067811865475f)); }
 
@@ -234,16 +261,18 @@ void self_attention(const supertonic_model & m, int idx, std::vector<float> & x,
     const float scale = 1.0f / std::sqrt((float) D);
     const std::string p = "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers." + std::to_string(idx);
 
-    f32_tensor q_w = read_f32(m, p + ".conv_q.weight");
-    f32_tensor q_b = read_f32(m, p + ".conv_q.bias");
-    f32_tensor k_w = read_f32(m, p + ".conv_k.weight");
-    f32_tensor k_b = read_f32(m, p + ".conv_k.bias");
-    f32_tensor v_w = read_f32(m, p + ".conv_v.weight");
-    f32_tensor v_b = read_f32(m, p + ".conv_v.bias");
-    f32_tensor o_w = read_f32(m, p + ".conv_o.weight");
-    f32_tensor o_b = read_f32(m, p + ".conv_o.bias");
-    f32_tensor rel_k = read_f32(m, p + ".emb_rel_k"); // [1, 9, D]
-    f32_tensor rel_v = read_f32(m, p + ".emb_rel_v");
+    // F17 — every read goes through the host-side scalar weight
+    // cache; only the first synth pays the backend download.
+    f32_tensor q_w = cached_read_f32(m, p + ".conv_q.weight");
+    f32_tensor q_b = cached_read_f32(m, p + ".conv_q.bias");
+    f32_tensor k_w = cached_read_f32(m, p + ".conv_k.weight");
+    f32_tensor k_b = cached_read_f32(m, p + ".conv_k.bias");
+    f32_tensor v_w = cached_read_f32(m, p + ".conv_v.weight");
+    f32_tensor v_b = cached_read_f32(m, p + ".conv_v.bias");
+    f32_tensor o_w = cached_read_f32(m, p + ".conv_o.weight");
+    f32_tensor o_b = cached_read_f32(m, p + ".conv_o.bias");
+    f32_tensor rel_k = cached_read_f32(m, p + ".emb_rel_k"); // [1, 9, D]
+    f32_tensor rel_v = cached_read_f32(m, p + ".emb_rel_v");
 
     std::vector<float> q, k, v;
     linear1x1(x, L, C, q_w, &q_b, C, q);
@@ -304,10 +333,11 @@ void self_attention(const supertonic_model & m, int idx, std::vector<float> & x,
 
 void ffn_block(const supertonic_model & m, int idx, std::vector<float> & x, int L, int C) {
     const std::string p = "duration:tts.dp.sentence_encoder.attn_encoder.ffn_layers." + std::to_string(idx);
-    f32_tensor w1 = read_f32(m, p + ".conv_1.weight");
-    f32_tensor b1 = read_f32(m, p + ".conv_1.bias");
-    f32_tensor w2 = read_f32(m, p + ".conv_2.weight");
-    f32_tensor b2 = read_f32(m, p + ".conv_2.bias");
+    // F17 — host-cached scalar weights.
+    f32_tensor w1 = cached_read_f32(m, p + ".conv_1.weight");
+    f32_tensor b1 = cached_read_f32(m, p + ".conv_1.bias");
+    f32_tensor w2 = cached_read_f32(m, p + ".conv_2.weight");
+    f32_tensor b2 = cached_read_f32(m, p + ".conv_2.bias");
     std::vector<float> y;
     linear1x1(x, L, C, w1, &b1, (int) w1.ne[2], y);
     for (float & v : y) v = relu(v);
@@ -620,8 +650,9 @@ static bool duration_sentence_proj_ggml_impl(const supertonic_model & model,
         std::vector<float> v0_g = tensor_to_time_channel(ggml_graph_get_tensor(gf, "duration_attn0_v"));
         const int H = 2, D = C / H, half_window = 4;
         const float scale = 1.0f / std::sqrt((float)D);
-        f32_tensor rel_k = read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.emb_rel_k");
-        f32_tensor rel_v = read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.emb_rel_v");
+        // F17 — host-cached scalar weights (relpos K/V embeddings).
+        f32_tensor rel_k = cached_read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.emb_rel_k");
+        f32_tensor rel_v = cached_read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.emb_rel_v");
         std::vector<float> out((size_t)L*C, 0.0f), scores(L), probs(L);
         for (int h = 0; h < H; ++h) {
             for (int qi = 0; qi < L; ++qi) {
@@ -657,8 +688,9 @@ static bool duration_sentence_proj_ggml_impl(const supertonic_model & model,
                 }
             }
         }
-        f32_tensor o_w = read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_o.weight");
-        f32_tensor o_b = read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_o.bias");
+        // F17 — host-cached.
+        f32_tensor o_w = cached_read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_o.weight");
+        f32_tensor o_b = cached_read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.attn_layers.0.conv_o.bias");
         std::vector<float> proj;
         linear1x1(out, L, C, o_w, &o_b, C, proj);
         PUSH_DURATION_GGML({"duration_attn0_out", {L, C}, proj});
@@ -666,20 +698,22 @@ static bool duration_sentence_proj_ggml_impl(const supertonic_model & model,
         std::vector<float> attn_res = proj;
         for (size_t i = 0; i < attn_res.size(); ++i) attn_res[i] += conv_out[i];
         PUSH_DURATION_GGML({"duration_attn0_residual", {L, C}, attn_res});
+        // F17 — host-cached LN weights.
         layer_norm_channel(
             attn_res, L, C,
-            read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.norm_layers_1.0.norm.weight"),
-            read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.norm_layers_1.0.norm.bias"));
+            cached_read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.norm_layers_1.0.norm.weight"),
+            cached_read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.norm_layers_1.0.norm.bias"));
         PUSH_DURATION_GGML({"duration_attn0_norm", {L, C}, attn_res});
         std::vector<float> ffn0_g = attn_res;
         ffn_block(model, 0, ffn0_g, L, C);
         PUSH_DURATION_GGML({"duration_ffn0_out", {L, C}, ffn0_g});
         for (size_t i = 0; i < ffn0_g.size(); ++i) ffn0_g[i] += attn_res[i];
         PUSH_DURATION_GGML({"duration_ffn0_residual", {L, C}, ffn0_g});
+        // F17 — host-cached.
         layer_norm_channel(
             ffn0_g, L, C,
-            read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.norm_layers_2.0.norm.weight"),
-            read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.norm_layers_2.0.norm.bias"));
+            cached_read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.norm_layers_2.0.norm.weight"),
+            cached_read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.norm_layers_2.0.norm.bias"));
         PUSH_DURATION_GGML({"duration_ffn0_norm", {L, C}, ffn0_g});
 
         std::vector<float> attn1_g = ffn0_g;
@@ -687,28 +721,31 @@ static bool duration_sentence_proj_ggml_impl(const supertonic_model & model,
         PUSH_DURATION_GGML({"duration_attn1_out", {L, C}, attn1_g});
         for (size_t i = 0; i < attn1_g.size(); ++i) attn1_g[i] += ffn0_g[i];
         PUSH_DURATION_GGML({"duration_attn1_residual", {L, C}, attn1_g});
+        // F17 — host-cached.
         layer_norm_channel(
             attn1_g, L, C,
-            read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.norm_layers_1.1.norm.weight"),
-            read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.norm_layers_1.1.norm.bias"));
+            cached_read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.norm_layers_1.1.norm.weight"),
+            cached_read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.norm_layers_1.1.norm.bias"));
         PUSH_DURATION_GGML({"duration_attn1_norm", {L, C}, attn1_g});
         std::vector<float> ffn1_g = attn1_g;
         ffn_block(model, 1, ffn1_g, L, C);
         PUSH_DURATION_GGML({"duration_ffn1_out", {L, C}, ffn1_g});
         for (size_t i = 0; i < ffn1_g.size(); ++i) ffn1_g[i] += attn1_g[i];
         PUSH_DURATION_GGML({"duration_ffn1_residual", {L, C}, ffn1_g});
+        // F17 — host-cached.
         layer_norm_channel(
             ffn1_g, L, C,
-            read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.norm_layers_2.1.norm.weight"),
-            read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.norm_layers_2.1.norm.bias"));
+            cached_read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.norm_layers_2.1.norm.weight"),
+            cached_read_f32(model, "duration:tts.dp.sentence_encoder.attn_encoder.norm_layers_2.1.norm.bias"));
         PUSH_DURATION_GGML({"duration_ffn1_norm", {L, C}, ffn1_g});
         for (size_t i = 0; i < ffn1_g.size(); ++i) ffn1_g[i] += conv_out[i];
         PUSH_DURATION_GGML({"duration_encoder_out", {L, C}, ffn1_g});
         std::vector<float> sentence_repr_g(C);
         for (int c = 0; c < C; ++c) sentence_repr_g[c] = ffn1_g[c];
         std::vector<float> projected_g;
+        // F17 — host-cached.
         linear1x1(sentence_repr_g, 1, C,
-                  read_f32(model, "duration:tts.dp.sentence_encoder.proj_out.net.weight"),
+                  cached_read_f32(model, "duration:tts.dp.sentence_encoder.proj_out.net.weight"),
                   nullptr, C, projected_g);
         if (sentence_proj_out) *sentence_proj_out = projected_g;
         PUSH_DURATION_GGML({"duration_sentence_proj", {1, C}, projected_g});
@@ -716,9 +753,10 @@ static bool duration_sentence_proj_ggml_impl(const supertonic_model & model,
         for (int c = 0; c < C; ++c) combined_g[c] = projected_g[c];
         for (int i = 0; i < 128; ++i) combined_g[C + i] = 0.0f;
         std::vector<float> h_g;
+        // F17 — host-cached.
         dense(combined_g,
-              read_f32(model, "duration:tts.dp.predictor.layers.0.weight"),
-              read_f32(model, "duration:tts.dp.predictor.layers.0.bias"),
+              cached_read_f32(model, "duration:tts.dp.predictor.layers.0.weight"),
+              cached_read_f32(model, "duration:tts.dp.predictor.layers.0.bias"),
               192, 128, h_g);
         PUSH_DURATION_GGML({"duration_pred0_no_style", {1, 128}, h_g});
         // F11: ctx + allocr live in `cache` and survive across synths.
@@ -764,16 +802,18 @@ bool supertonic_duration_forward_ggml(const supertonic_model & model,
         for (int c = 0; c < 64; ++c) combined[c] = projected[c];
         for (int i = 0; i < 128; ++i) combined[64 + i] = style_dp[i];
         std::vector<float> h;
+        // F17 — host-cached predictor weights.  Style is per-call
+        // input data, not a backend weight, so it stays uncached.
         dense(combined,
-              read_f32(model, "duration:tts.dp.predictor.layers.0.weight"),
-              read_f32(model, "duration:tts.dp.predictor.layers.0.bias"),
+              cached_read_f32(model, "duration:tts.dp.predictor.layers.0.weight"),
+              cached_read_f32(model, "duration:tts.dp.predictor.layers.0.bias"),
               192, 128, h);
-        float prelu = read_f32(model, "duration:tts.dp.predictor.activation.weight").data[0];
+        float prelu = cached_read_f32(model, "duration:tts.dp.predictor.activation.weight").data[0];
         for (float & v : h) if (v < 0.0f) v *= prelu;
         std::vector<float> out;
         dense(h,
-              read_f32(model, "duration:tts.dp.predictor.layers.1.weight"),
-              read_f32(model, "duration:tts.dp.predictor.layers.1.bias"),
+              cached_read_f32(model, "duration:tts.dp.predictor.layers.1.weight"),
+              cached_read_f32(model, "duration:tts.dp.predictor.layers.1.bias"),
               128, 1, out);
         duration_out = std::exp(out[0]);
         if (error) error->clear();
