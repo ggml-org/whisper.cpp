@@ -77,6 +77,12 @@ void test_null_backend_returns_false() {
     CHECK(supertonic_backend_supports_f16_kv_flash_attn(nullptr)   == false);
     CHECK(supertonic_backend_supports_f16_mul_mat(nullptr)         == false);
     CHECK(supertonic_backend_supports_q8_0_kv_flash_attn(nullptr)  == false);
+    // Round 3 — BF16 K/V probe must also handle null defensively.
+    CHECK(supertonic_backend_supports_bf16_kv_flash_attn(nullptr)  == false);
+    // Round 3 — pinned-host-buffer probe must also handle null
+    // defensively (and is always false off Vulkan, even more so
+    // for null).
+    CHECK(supertonic_backend_supports_pinned_host_buffer(nullptr)  == false);
 }
 
 // Test 2 — Cache short-circuits on a hit.
@@ -274,6 +280,128 @@ void test_q8_0_kv_flash_attn_probe_smoke() {
     ggml_backend_free(cpu);
 }
 
+// Test 8 — BF16 K/V flash-attn probe smoke test (round 3, TDD).
+//
+// Vulkan's `GGML_OP_FLASH_ATTN_EXT` `supports_op` advertises BF16
+// in the coopmat2 path only (`ggml-vulkan.cpp:GGML_OP_FLASH_ATTN_EXT`
+// case branch around line 15257).  Like the Q8_0 probe, we don't
+// pin the CPU answer (depends on whether ggml-cpu was compiled
+// with BF16 dot-product) — we only verify the probe is callable,
+// stable across repeated calls, and shares the cache slot with
+// the other capability probes.
+//
+// Probe shape mirrors the live vector-estimator attention site,
+// with K/V dtype set to GGML_TYPE_BF16.  Same `kv_len = 16` as
+// the F16 probe (BF16 has the same per-element size as F16, so
+// no stride / block-size adjustment is needed).
+//
+// This test is written FIRST (TDD).  It MUST fail before the
+// `supertonic_backend_supports_bf16_kv_flash_attn` symbol is
+// added.  After implementation, the test must pass without any
+// behaviour change to the existing 7 tests above.
+void test_bf16_kv_flash_attn_probe_smoke() {
+    CHECK(supertonic_backend_supports_bf16_kv_flash_attn(nullptr) == false);
+
+    ggml_backend_t cpu = ggml_backend_cpu_init();
+    if (!cpu) {
+        std::fprintf(stderr, "skip: CPU backend init failed\n");
+        return;
+    }
+    supertonic_clear_capability_cache();
+    bool a = supertonic_backend_supports_bf16_kv_flash_attn(cpu);
+    bool b = supertonic_backend_supports_bf16_kv_flash_attn(cpu);
+    CHECK(a == b);
+    std::fprintf(stderr,
+                 "probe(BF16-K/V flash-attn, CPU) = %s\n",
+                 a ? "true" : "false");
+    ggml_backend_free(cpu);
+}
+
+// Test 9 — BF16 K/V probe shares the cache slot (round 3, TDD).
+//
+// After the cold cache populates via any forwarder, calling the
+// BF16-K/V probe must NOT advance the probe-call counter — the
+// 5th flag must live in the same `backend_capabilities` struct
+// the cache stores per backend handle.  Catches a regression
+// where someone adds the new flag but forgets to populate it
+// inside `cached_backend_capabilities`.
+void test_bf16_kv_probe_shares_cache_slot() {
+    ggml_backend_t cpu = ggml_backend_cpu_init();
+    if (!cpu) {
+        std::fprintf(stderr, "skip: CPU backend init failed\n");
+        return;
+    }
+    supertonic_clear_capability_cache();
+    // Cold: any forwarder populates the cache.
+    (void) supertonic_backend_supports_f16_kv_flash_attn(cpu);
+
+    // BF16 K/V probe must hit the cache (counter does not advance).
+    const uint64_t before = supertonic_capability_probe_call_count();
+    (void) supertonic_backend_supports_bf16_kv_flash_attn(cpu);
+    CHECK(supertonic_capability_probe_call_count() == before);
+
+    ggml_backend_free(cpu);
+}
+
+// Test 10 — pinned-host-buffer probe smoke (round 3, TDD).
+//
+// `ggml_backend_vk_host_buffer_type()` returns a host-visible,
+// device-coherent buffer type that lets the CPU fill an input
+// tensor without going through ggml-vulkan's internal staging
+// buffer.  Wiring the actual upload path through that buffer is
+// a follow-up (requires per-engine input-scratchpad refactor);
+// this round only adds the probe so the capability cache is
+// primed.
+//
+// Contract: returns `true` iff the backend is Vulkan AND
+// `ggml_backend_vk_host_buffer_type()` returns non-null (the
+// only failure mode is a Vulkan-disabled build, where the probe
+// returns `false`).  CPU backend → always `false`.
+//
+// Like the BF16 / Q8_0 K/V probes, this test only verifies the
+// probe is callable + idempotent + stable across calls.  The
+// CPU answer is pinned to `false` (CPU backend isn't Vulkan).
+void test_pinned_host_buffer_probe_smoke() {
+    CHECK(supertonic_backend_supports_pinned_host_buffer(nullptr) == false);
+
+    ggml_backend_t cpu = ggml_backend_cpu_init();
+    if (!cpu) {
+        std::fprintf(stderr, "skip: CPU backend init failed\n");
+        return;
+    }
+    supertonic_clear_capability_cache();
+    bool a = supertonic_backend_supports_pinned_host_buffer(cpu);
+    bool b = supertonic_backend_supports_pinned_host_buffer(cpu);
+    CHECK(a == b);
+    // CPU is never Vulkan — pin the answer for CPU.
+    CHECK(a == false);
+    std::fprintf(stderr,
+                 "probe(pinned-host-buffer, CPU) = %s\n",
+                 a ? "true" : "false");
+    ggml_backend_free(cpu);
+}
+
+// Test 11 — pinned-host-buffer probe shares the cache slot (TDD).
+//
+// 6th flag — must hit the cache after cold-populate.  Same
+// regression-catch contract as test 9.
+void test_pinned_host_buffer_probe_shares_cache_slot() {
+    ggml_backend_t cpu = ggml_backend_cpu_init();
+    if (!cpu) {
+        std::fprintf(stderr, "skip: CPU backend init failed\n");
+        return;
+    }
+    supertonic_clear_capability_cache();
+    // Cold: any forwarder populates the cache.
+    (void) supertonic_backend_supports_f16_kv_flash_attn(cpu);
+
+    const uint64_t before = supertonic_capability_probe_call_count();
+    (void) supertonic_backend_supports_pinned_host_buffer(cpu);
+    CHECK(supertonic_capability_probe_call_count() == before);
+
+    ggml_backend_free(cpu);
+}
+
 } // namespace
 
 int main() {
@@ -284,6 +412,10 @@ int main() {
     test_per_backend_cache_independence();
     test_f16_mul_mat_probe_returns_true_on_cpu();
     test_q8_0_kv_flash_attn_probe_smoke();
+    test_bf16_kv_flash_attn_probe_smoke();
+    test_bf16_kv_probe_shares_cache_slot();
+    test_pinned_host_buffer_probe_smoke();
+    test_pinned_host_buffer_probe_shares_cache_slot();
 
     std::fprintf(stderr,
                  "test_supertonic_capability_cache: %d / %d checks passed\n",

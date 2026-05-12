@@ -52,7 +52,8 @@ void usage(const char * argv0) {
         "          [--voice M1] [--language en] [--steps 5] [--speed 1.05]\n"
         "          [--seed 42] [--noise-npy /path/to/noise.npy]\n"
         "          [--runs 5] [--warmup 1] [--threads N] [--n-gpu-layers N]\n"
-        "          [--vulkan-device N] [--f16-attn 0|1] [--f16-weights 0|1]\n"
+        "          [--vulkan-device N] (-1 = auto-pick adapter with most free VRAM)\n"
+        "          [--f16-attn 0|1] [--f16-weights 0|1]\n"
         "          [--precision f32|f16|q8_0]   (default: f32)\n"
         "          [--prewarm TEXT] (one cold-start synth before timed loop;\n"
         "                            independent of --warmup; CPU is no-op)\n"
@@ -416,12 +417,20 @@ int main(int argc, char ** argv) {
         // on this run because the F16 mul_mat probe rejected the
         // shape" is much faster to triage than "why is this synth
         // 30 % slower than the other one").
-        printf("  backend: %s%s%s%s%s\n",
+        // QVAC-18605 round 3 — also surface BF16 K/V availability and
+        // the host-pinned-buffer-type availability.  Both are forward-
+        // compat capabilities (no live dispatch yet); the bench tag
+        // lets operators verify a future `--kv-attn-type bf16` /
+        // `--vulkan-pinned-uploads` opt-in will actually take effect
+        // on their machine before they flip the flag.
+        printf("  backend: %s%s%s%s%s%s%s\n",
                desc.c_str(),
                model.use_f16_attn        ? " (f16_attn=on)"        : "",
                model.use_f16_weights     ? " (f16_weights=on)"     : "",
                model.use_native_leaky_relu ? " (native_leaky_relu=on)" : "",
-               supertonic_backend_supports_q8_0_kv_flash_attn(model.backend) ? " (q8_0_kv_attn=available)" : "");
+               supertonic_backend_supports_q8_0_kv_flash_attn(model.backend) ? " (q8_0_kv_attn=available)" : "",
+               supertonic_backend_supports_bf16_kv_flash_attn(model.backend) ? " (bf16_kv_attn=available)" : "",
+               supertonic_backend_supports_pinned_host_buffer(model.backend) ? " (pinned_host_buffer=available)" : "");
         if (prewarm_ms > 0.0) {
             printf("  prewarm: %.1fms (cold-start, discarded)\n", prewarm_ms);
         }
@@ -468,6 +477,16 @@ int main(int argc, char ** argv) {
         os << "  \"native_leaky_relu\": " << (model.use_native_leaky_relu ? "true" : "false") << ",\n";
         os << "  \"q8_0_kv_attn_available\": "
            << (supertonic_backend_supports_q8_0_kv_flash_attn(model.backend) ? "true" : "false") << ",\n";
+        // QVAC-18605 round 3 — extra capability flags surfaced for the
+        // forward-compat probes (BF16 K/V flash-attn + pinned-host-
+        // buffer-type).  Operators / CI scripts grep on these to
+        // pre-flight whether a future `--kv-attn-type bf16` /
+        // `--vulkan-pinned-uploads` opt-in will be effective on the
+        // resolved backend.
+        os << "  \"bf16_kv_attn_available\": "
+           << (supertonic_backend_supports_bf16_kv_flash_attn(model.backend) ? "true" : "false") << ",\n";
+        os << "  \"pinned_host_buffer_available\": "
+           << (supertonic_backend_supports_pinned_host_buffer(model.backend) ? "true" : "false") << ",\n";
         os << "  \"rtf\": {"
            << "\"min\": " << minv(rtfs)
            << ", \"median\": " << median(rtfs)

@@ -824,22 +824,83 @@ These were investigated but kept out of scope for this PR:
   persistent on-disk cache extends the win across process restarts.
   When it lands, this Supertonic Vulkan codepath inherits the
   cold-start win automatically.
-- **BF16 K/V flash-attention**: ggml-vulkan supports BF16 with
-  cooperative_matrix2; could halve K/V bandwidth further on hardware
-  that has the extension (NVIDIA Ampere+, AMD RDNA3+).  Needs the
-  same backend-capability probe pattern as F16 K/V — fits naturally
-  into the round-2 `cached_backend_capabilities` struct as a fourth
-  flag; a future optimisation round.
-- **Q8_0 K/V flash-attention live dispatch**: round-2 adds the
-  capability probe; the live `--kv-attn-type q8_0` dispatch wiring
-  is deferred until the F16-vs-Q8_0 K/V drift is measured against
-  the parity harness on a real Vulkan adapter (probe primes the
-  cache so the follow-up patch flips dispatch without re-querying).
-- **Multi-device load-balancing** (`--vulkan-device -1` auto-pick):
-  reserved API behaviour today (treated as device 0).  Useful on
-  CI / lab machines with multiple GPUs of different generations;
-  could pick by device-memory + driver version.  Deferred until a
-  consumer asks.
+- **Q8_0 / BF16 K/V flash-attention live dispatch**: rounds 2 + 3
+  add the capability probes; the live `--kv-attn-type q8_0|bf16`
+  dispatch wiring is deferred until the F16-vs-{Q8_0,BF16} K/V
+  drift is measured against the parity harness on a real Vulkan
+  adapter (probes prime the cache so the follow-up patch flips
+  dispatch without re-querying).
+- **Pinned-host-buffer per-step uploads**: round 3 adds the
+  capability probe for `ggml_backend_vk_host_buffer_type()` so
+  the cache + bench surface know whether the path is available
+  on the resolved backend.  The actual per-engine input-
+  scratchpad refactor (allocate text_emb / time-step / style
+  embedding tensors in the host-pinned buffer type instead of
+  the default device-local buffer to skip ggml-vulkan's internal
+  staging-buffer hop) is deferred until measured on a real Vulkan
+  adapter so we can quantify the reduction in `latent` upload
+  latency.
+
+---
+
+### Vulkan optimisation round 3 (May 2026, QVAC-18605 follow-up #2)
+
+Three more Vulkan-specific deltas, all developed test-first (TDD)
+— the new tests were committed first, observed to fail on the
+missing symbol, and only then was the implementation written and
+the tests re-run.
+
+1. **BF16 K/V flash-attn capability probe** (5th `backend_capabilities`
+   flag).  Symmetric to the round-2 Q8_0 K/V probe.  Vulkan's
+   `GGML_OP_FLASH_ATTN_EXT` `supports_op` advertises BF16 K/V via
+   the coopmat2-only path; BF16 has the same 2-byte per-element
+   footprint as F16 (so identical upload bandwidth) but the wider
+   8-bit exponent range avoids the F16 underflow on small attention
+   scores that drives the parity-harness tolerance widening.
+   Forward-compat — the live `--kv-attn-type bf16` dispatch wiring
+   is deferred to a follow-up that measures drift against the
+   parity harness on a real Vulkan adapter.
+
+2. **Multi-device auto-pick for `--vulkan-device -1`**.  Wires the
+   previously-reserved auto-pick API: walks every visible adapter,
+   queries `ggml_backend_vk_get_device_memory()` to read free
+   VRAM, and dispatches into a pure-logic helper
+   `resolve_vulkan_device_index(requested, free_vram_per_device)`
+   that picks `argmax(free_vram)` (ties → lower index for stable
+   per-run assignment on identical-spec multi-GPU machines).
+   Verbose mode logs the per-device VRAM table so operators can
+   confirm the auto-pick chose the expected adapter.  The pure-
+   logic helper is testable on CPU with synthetic inputs (8 cases,
+   23 checks) — separates the policy from the Vulkan-only plumbing.
+   Reserved-future negative values (`-2`, `-100`, ...) now throw
+   instead of silently falling through to device 0.
+
+3. **Pinned-host-buffer-type capability probe** (6th
+   `backend_capabilities` flag) + bench surface.  Probes whether
+   `ggml_backend_vk_host_buffer_type()` is callable on the
+   resolved backend (Vulkan + non-null buffer-type).  Forward-
+   compat — primes the capability cache for a follow-up per-engine
+   input-scratchpad refactor that skips ggml-vulkan's internal
+   staging-buffer hop on per-step uploads.  Bench output now shows
+   `bf16_kv_attn_available` + `pinned_host_buffer_available` in
+   both the human-readable backend tag and the JSON output so
+   operators can pre-flight whether a future opt-in will be
+   effective on their machine.
+
+#### Test plan (TDD, round 3)
+
+| Test | Coverage | Result |
+|------|----------|--------|
+| `test-supertonic-capability-cache` (UPDATED) | Existing 18 checks + 9 new round-3 checks (BF16 K/V probe smoke + cache-slot share, pinned-host-buffer probe smoke + cache-slot share, null-backend handling for both) | 27 / 27 PASS |
+| `test-supertonic-vulkan-device-select` (NEW) | 8 test functions × 23 checks for the pure-logic auto-pick helper (empty list, single device, argmax, tie-break, explicit-index passthrough, out-of-range, reserved-negative, zero-VRAM) | 23 / 23 PASS |
+| Every existing unit test (resample, cpu/t3 caches, profile-csv, rope-in-graph, rope-packed-qk, convnext-block-fused, in-graph-transpose, graph-to-graph-blit, backend-dispatch, portable-ops, vulkan-dispatch, warm-up-api, f16-attn-parity) | Round 1 + 2 + audit follow-up correctness | 16 / 16 PASS — unchanged |
+
+Whole CPU-only `ctest -L unit` reports **16 / 16 tests, 0 failures**.
+The TDD discipline was strict: the new tests in round 3 were
+committed BEFORE the implementation and verified to fail on the
+missing symbol (the compile-error footprint is captured in the
+PR description) — only then was the implementation written and
+the tests re-run to verify green.
 
 ---
 

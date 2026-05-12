@@ -245,15 +245,20 @@ ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose, int vulka
 #endif
 #ifdef GGML_USE_VULKAN
     if (n_gpu_layers > 0) {
-        // QVAC-18605 — Vulkan device selection, robust init.
+        // QVAC-18605 round 3 — Vulkan device selection, robust init
+        // with multi-device auto-pick.
         //
         // Range-check the requested index against
         // `ggml_backend_vk_get_device_count()` so an out-of-range
         // value (CLI typo / wrong-machine config) fails loud here
         // rather than silently falling through to CPU and hiding
         // the perf cliff under a "Vulkan was on, why is it slow?"
-        // mystery.  Negative values are reserved for future
-        // "auto-pick" semantics; treat as device 0 today.
+        // mystery.  `vulkan_device == -1` triggers auto-pick: walk
+        // every visible adapter, query `ggml_backend_vk_get_device_memory`
+        // to read the free VRAM, and dispatch into the pure-logic
+        // `resolve_vulkan_device_index` helper which picks
+        // `argmax(free_vram)` (ties → lower index).  Negative values
+        // other than -1 are reserved for future policies and throw.
         const int dev_count = ggml_backend_vk_get_device_count();
         if (dev_count <= 0) {
             // No Vulkan adapter visible — try the next backend in the
@@ -264,19 +269,39 @@ ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose, int vulka
                 fprintf(stderr, "supertonic: GGML_USE_VULKAN=1 but ggml_backend_vk_get_device_count()=0; falling through\n");
             }
         } else {
-            int idx = vulkan_device < 0 ? 0 : vulkan_device;
-            if (idx >= dev_count) {
-                throw std::runtime_error("supertonic: --vulkan-device " +
-                    std::to_string(idx) + " out of range (visible adapters: " +
-                    std::to_string(dev_count) + ")");
+            std::vector<size_t> free_vram_per_device;
+            free_vram_per_device.reserve((size_t) dev_count);
+            for (int i = 0; i < dev_count; ++i) {
+                size_t free = 0, total = 0;
+                ggml_backend_vk_get_device_memory(i, &free, &total);
+                free_vram_per_device.push_back(free);
+                if (verbose && vulkan_device == -1) {
+                    char desc[256] = {0};
+                    ggml_backend_vk_get_device_description(i, desc, sizeof(desc) - 1);
+                    fprintf(stderr,
+                            "supertonic: vulkan device %d: %s — free %.0f MB / total %.0f MB\n",
+                            i,
+                            desc[0] ? desc : "unknown",
+                            (double) free  / (1024.0 * 1024.0),
+                            (double) total / (1024.0 * 1024.0));
+                }
             }
+            // Throws on invalid input; let it propagate so the CLI
+            // surfaces the message verbatim.
+            const int idx = resolve_vulkan_device_index(vulkan_device, free_vram_per_device);
             ggml_backend_t b = ggml_backend_vk_init((size_t) idx);
             if (b) {
                 if (verbose) {
                     char desc[256] = {0};
                     ggml_backend_vk_get_device_description(idx, desc, sizeof(desc) - 1);
-                    fprintf(stderr, "supertonic: using Vulkan backend (device %d: %s)\n",
-                            idx, desc[0] ? desc : "unknown");
+                    if (vulkan_device == -1) {
+                        fprintf(stderr,
+                                "supertonic: auto-picked Vulkan device %d (%s) — most free VRAM of %d adapter(s)\n",
+                                idx, desc[0] ? desc : "unknown", dev_count);
+                    } else {
+                        fprintf(stderr, "supertonic: using Vulkan backend (device %d: %s)\n",
+                                idx, desc[0] ? desc : "unknown");
+                    }
                 }
                 return b;
             }
@@ -490,6 +515,87 @@ bool backend_supports_q8_0_kv_flash_attn_uncached(ggml_backend_t backend) {
     return ok;
 }
 
+// QVAC-18605 round 3 — backend capability probe for Vulkan's
+// `ggml_backend_vk_host_buffer_type()`.
+//
+// Vulkan exposes a host-visible, device-coherent buffer type
+// that lets the CPU fill an input tensor without going through
+// ggml-vulkan's internal staging buffer.  Wiring the actual
+// upload path through that buffer is a per-engine refactor
+// (input scratchpad allocator separate from the model gallocr);
+// this round only adds the probe so the capability cache is
+// primed for that follow-up.  The bench output surfaces the
+// flag so operators can confirm the host-buffer-type path is
+// available on their adapter before flipping the (future)
+// `--vulkan-pinned-uploads` opt-in.
+//
+// Probe is trivial: succeeds iff the backend is Vulkan AND
+// `ggml_backend_vk_host_buffer_type()` returns non-null.  On a
+// Vulkan-disabled build the entire branch compiles out to
+// `return false`.
+bool backend_supports_pinned_host_buffer_uncached(ggml_backend_t backend) {
+    if (!backend) return false;
+#ifdef GGML_USE_VULKAN
+    if (!ggml_backend_is_vk(backend)) return false;
+    return ggml_backend_vk_host_buffer_type() != nullptr;
+#else
+    return false;
+#endif
+}
+
+// QVAC-18605 round 3 — backend capability probe for the BF16 K/V
+// `FLASH_ATTN_EXT` variant.
+//
+// Vulkan's `GGML_OP_FLASH_ATTN_EXT` `supports_op` advertises
+// BF16 K/V via the coopmat2-only path
+// (`ggml-vulkan.cpp:GGML_OP_FLASH_ATTN_EXT` case branch around
+// line 15257).  BF16 has the same per-element size as F16 (2
+// bytes), so the upload bandwidth is identical, but BF16's
+// wider exponent range (8 bits vs. F16's 5) avoids the
+// occasional underflow on small attention scores that drives
+// F16's ~0.2 % tolerance widening on the parity harness.
+// On hardware with `cooperative_matrix2` (NVIDIA Ampere+, AMD
+// RDNA3+) BF16 K/V is also faster than F16 K/V because the
+// coopmat2 BF16 multiply-accumulate ops are dispatched at
+// hardware-tensor-core throughput.
+//
+// Like the Q8_0 K/V probe, this round adds the probe + caches
+// the result as a forward-compat capability; the live dispatch
+// site isn't yet wired (a follow-up will gate `--kv-attn-type
+// bf16` on the probe so the dispatch flips when the cache says
+// the hardware accepts the op).
+//
+// Probe shape mirrors the F16-K/V probe with the K/V dtype set
+// to `GGML_TYPE_BF16` — same `kv_len = 16` (BF16 row stride is
+// `head_dim * 2` bytes, identical to F16).
+bool backend_supports_bf16_kv_flash_attn_uncached(ggml_backend_t backend) {
+    if (!backend) return false;
+    ggml_init_params probe_params = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * 16,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context * probe_ctx = ggml_init(probe_params);
+    if (!probe_ctx) return false;
+    bool ok = false;
+    try {
+        constexpr int head_dim = 64;
+        constexpr int n_heads  = 4;
+        constexpr int q_len    = 16;
+        constexpr int kv_len   = 16;
+        ggml_tensor * q  = ggml_new_tensor_3d(probe_ctx, GGML_TYPE_F32,  head_dim, q_len,  n_heads);
+        ggml_tensor * k  = ggml_new_tensor_3d(probe_ctx, GGML_TYPE_BF16, head_dim, kv_len, n_heads);
+        ggml_tensor * v  = ggml_new_tensor_3d(probe_ctx, GGML_TYPE_BF16, head_dim, kv_len, n_heads);
+        ggml_tensor * op = ggml_flash_attn_ext(probe_ctx, q, k, v, nullptr,
+                                               1.0f / (float) head_dim, 0.0f, 0.0f);
+        ok = (op != nullptr) && ggml_backend_supports_op(backend, op);
+    } catch (...) {
+        ok = false;
+    }
+    ggml_free(probe_ctx);
+    return ok;
+}
+
 // QVAC-18605 follow-up — backend capability probe for the hot
 // F16-weight `mul_mat` shape Supertonic dispatches every step.
 //
@@ -577,6 +683,21 @@ struct backend_capabilities {
     // wired (see `backend_supports_q8_0_kv_flash_attn_uncached`'s
     // docstring + PROGRESS_SUPERTONIC.md "Deferred work").
     bool q8_0_kv_flash_attn;
+    // QVAC-18605 round 3 — BF16 K/V flash-attn support.  Probed
+    // here as a forward-compat capability; the dispatch isn't yet
+    // wired (see `backend_supports_bf16_kv_flash_attn_uncached`'s
+    // docstring + PROGRESS_SUPERTONIC.md "Deferred work").  BF16
+    // K/V is the wider-exponent alternative to F16 K/V — mostly
+    // useful on Vulkan with cooperative_matrix2 support.
+    bool bf16_kv_flash_attn;
+    // QVAC-18605 round 3 — pinned-host-buffer-type availability.
+    // True iff the backend is Vulkan AND
+    // `ggml_backend_vk_host_buffer_type()` returns non-null.
+    // Forward-compat — primes the cache for a future per-engine
+    // input-scratchpad refactor that uses the host-pinned buffer
+    // to skip ggml-vulkan's internal staging-buffer hop on the
+    // per-step uploads.
+    bool pinned_host_buffer;
 };
 
 inline std::mutex & capability_cache_mu() {
@@ -610,6 +731,8 @@ const backend_capabilities & cached_backend_capabilities(ggml_backend_t backend)
     caps.f16_kv_flash_attn   = backend_supports_f16_kv_flash_attn_uncached(backend);
     caps.f16_mul_mat         = backend_supports_f16_mul_mat_uncached(backend);
     caps.q8_0_kv_flash_attn  = backend_supports_q8_0_kv_flash_attn_uncached(backend);
+    caps.bf16_kv_flash_attn  = backend_supports_bf16_kv_flash_attn_uncached(backend);
+    caps.pinned_host_buffer  = backend_supports_pinned_host_buffer_uncached(backend);
     return c.emplace(backend, caps).first->second;
 }
 
@@ -729,6 +852,75 @@ bool supertonic_backend_supports_f16_mul_mat(ggml_backend_t backend) {
 // rationale + the deferred-work entry in PROGRESS_SUPERTONIC.md.
 bool supertonic_backend_supports_q8_0_kv_flash_attn(ggml_backend_t backend) {
     return cached_backend_capabilities(backend).q8_0_kv_flash_attn;
+}
+
+// QVAC-18605 round 3 — public forwarder for the BF16 K/V flash-
+// attn probe.  Forward-compat — primes the capability cache for
+// a future `--kv-attn-type bf16` opt-in (BF16's wider exponent
+// range avoids the F16 underflow on small attention scores
+// without paying a 2× bandwidth cost).  Mostly useful on Vulkan
+// devices that advertise `cooperative_matrix2` (NVIDIA Ampere+,
+// AMD RDNA3+).  See `backend_supports_bf16_kv_flash_attn_uncached`
+// for the rationale + the deferred-work entry in
+// PROGRESS_SUPERTONIC.md.
+bool supertonic_backend_supports_bf16_kv_flash_attn(ggml_backend_t backend) {
+    return cached_backend_capabilities(backend).bf16_kv_flash_attn;
+}
+
+// QVAC-18605 round 3 — public forwarder for the pinned-host-
+// buffer-type probe.  Symmetric to the BF16 / Q8_0 K/V
+// forwarders above; primes the capability cache with whether
+// `ggml_backend_vk_host_buffer_type()` is callable on this
+// backend so a future per-engine input-scratchpad refactor can
+// gate the host-pinned upload path on the cached answer
+// (avoids re-querying the Vulkan backend per synth step).
+bool supertonic_backend_supports_pinned_host_buffer(ggml_backend_t backend) {
+    return cached_backend_capabilities(backend).pinned_host_buffer;
+}
+
+// QVAC-18605 round 3 — multi-device Vulkan auto-pick policy.
+//
+// Pure logic — no Vulkan symbols touched here.  The Vulkan-only
+// wrapper (`init_supertonic_backend`'s `#ifdef GGML_USE_VULKAN`
+// branch) calls `ggml_backend_vk_get_device_memory()` per device
+// to build the `free_vram_per_device` list, then dispatches into
+// this helper.  Splitting the policy from the plumbing means the
+// behaviour matrix is testable on CPU with synthetic inputs (see
+// test_supertonic_vulkan_device_select.cpp).
+//
+// See the docstring on the declaration in supertonic_internal.h
+// for the behaviour matrix.
+int resolve_vulkan_device_index(int requested,
+                                const std::vector<size_t> & free_vram_per_device) {
+    const int dev_count = (int) free_vram_per_device.size();
+    if (dev_count <= 0) {
+        throw std::runtime_error(
+            "supertonic: cannot resolve --vulkan-device against an empty "
+            "device list (no Vulkan adapter visible)");
+    }
+    // Reserved-future negative value — fail loud instead of
+    // silently treating as 0 (would mask a CLI typo).
+    if (requested < -1) {
+        throw std::runtime_error(
+            "supertonic: --vulkan-device " + std::to_string(requested) +
+            " is reserved (only -1 means auto-pick)");
+    }
+    // Auto-pick: argmax(free VRAM); ties → lower index.  std::max_element
+    // returns the first iterator that compares equal under `<` so the
+    // tie-breaking rule is implicit in the std::less<> default.
+    if (requested == -1) {
+        const auto it = std::max_element(free_vram_per_device.begin(),
+                                         free_vram_per_device.end());
+        return (int) std::distance(free_vram_per_device.begin(), it);
+    }
+    // Explicit index — range-check.
+    if (requested >= dev_count) {
+        throw std::runtime_error(
+            "supertonic: --vulkan-device " + std::to_string(requested) +
+            " out of range (visible adapters: " +
+            std::to_string(dev_count) + ")");
+    }
+    return requested;
 }
 
 // Test seam — drops every cached entry so the regression test in

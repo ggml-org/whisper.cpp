@@ -779,6 +779,19 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-warm-up-api)
     tts_cpp_register_test(test-supertonic-warm-up-api LABEL "unit")
 
+    # QVAC-18605 round 3 — multi-device Vulkan auto-pick policy
+    # (--vulkan-device -1 → pick device with most free VRAM).
+    # CPU-only TDD test for the pure-logic helper; the Vulkan-only
+    # plumbing that calls ggml_backend_vk_get_device_memory() per
+    # device + dispatches into the helper is exercised by the
+    # fixture-bound integration tests on a multi-GPU Vulkan host.
+    add_executable(test-supertonic-vulkan-device-select
+        test/test_supertonic_vulkan_device_select.cpp)
+    target_link_libraries(test-supertonic-vulkan-device-select PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-vulkan-device-select PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-vulkan-device-select)
+    tts_cpp_register_test(test-supertonic-vulkan-device-select LABEL "unit")
+
     add_executable(test-supertonic-f16-attn-parity
         test/test_supertonic_f16_attn_parity.cpp)
     target_link_libraries(test-supertonic-f16-attn-parity PRIVATE ggml)

@@ -678,6 +678,63 @@ bool supertonic_backend_supports_f16_mul_mat(ggml_backend_t backend);
 // work" for the follow-up.
 bool supertonic_backend_supports_q8_0_kv_flash_attn(ggml_backend_t backend);
 
+// QVAC-18605 round 3 — load-time backend-capability probe for the
+// BF16 K/V `FLASH_ATTN_EXT` variant.  Forward-compat: returns
+// `true` when the backend would accept a Supertonic-shaped
+// `ggml_flash_attn_ext(Q=F32, K/V=BF16)` graph node.  Vulkan
+// advertises BF16 K/V in the coopmat2 path only
+// (`ggml-vulkan.cpp:GGML_OP_FLASH_ATTN_EXT`); BF16 has the same
+// 2-byte per-element footprint as F16 (so identical upload
+// bandwidth) but the wider 8-bit exponent range avoids the
+// occasional small-score underflow that drives F16's tolerance
+// widening on the parity harness.  Live dispatch site isn't yet
+// wired (a follow-up gates `--kv-attn-type bf16` on this probe);
+// caching it here primes the cache for that work.
+bool supertonic_backend_supports_bf16_kv_flash_attn(ggml_backend_t backend);
+
+// QVAC-18605 round 3 — backend capability probe for Vulkan's
+// `ggml_backend_vk_host_buffer_type()`.  Returns `true` iff the
+// backend is Vulkan AND the host-pinned buffer type is non-null.
+// Forward-compat — primes the capability cache for a follow-up
+// per-engine input-scratchpad refactor that skips ggml-vulkan's
+// internal staging-buffer hop on per-step uploads (text-emb,
+// time-step encoding, style embedding) by allocating those
+// tensors in the host-pinned buffer type instead of the default
+// device-local buffer.
+bool supertonic_backend_supports_pinned_host_buffer(ggml_backend_t backend);
+
+// QVAC-18605 round 3 — multi-device Vulkan auto-pick policy.
+//
+// `init_supertonic_backend` calls `ggml_backend_vk_get_device_count()`
+// + `ggml_backend_vk_get_device_memory()` per device to build the
+// `free_vram_per_device` list, then dispatches into this pure-
+// logic helper to pick the device index.  Splitting the policy
+// from the Vulkan-only plumbing means the policy is testable on
+// CPU with synthetic inputs (see test_supertonic_vulkan_device_select.cpp).
+//
+// Behaviour matrix:
+//
+//   | requested | dev_count | result                                  |
+//   |-----------|-----------|-----------------------------------------|
+//   | -1        | 0         | throws (no device to pick)              |
+//   | N>=0      | 0         | throws (no device to pick)              |
+//   | -1        | 1         | 0  (only choice)                        |
+//   | -1        | N>1       | argmax(free_vram); ties → lower index   |
+//   | N>=0      | dev_count | N if N<dev_count, else throws           |
+//   | N<-1      | any       | throws (negative != -1 reserved)        |
+//
+// Throws `std::runtime_error` on invalid input; the caller surfaces
+// the message verbatim (same pattern as the existing
+// `--vulkan-device N out of range` error in `init_supertonic_backend`).
+//
+// Tie-breaking on equal free VRAM picks the lower index so
+// identical-spec multi-GPU machines (lab racks of A100s, e.g.)
+// produce stable per-run device assignment instead of depending
+// on driver enumeration order.  Operators who need a different
+// policy can `--vulkan-device N` explicitly.
+int resolve_vulkan_device_index(int requested,
+                                const std::vector<size_t> & free_vram_per_device);
+
 // QVAC-18605 follow-up — test seams for the capability cache.
 // `supertonic_clear_capability_cache` drops every cached entry so
 // the regression test in `test_supertonic_capability_cache.cpp`
