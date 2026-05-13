@@ -3026,7 +3026,6 @@ struct parakeet_state * parakeet_init_state(parakeet_context * ctx) {
 struct parakeet_context_params parakeet_context_default_params() {
     struct parakeet_context_params result = {
         /*.use_gpu              =*/ true,
-        /*.flash_attn           =*/ true,
         /*.gpu_device           =*/ 0,
     };
     return result;
@@ -3117,7 +3116,6 @@ struct parakeet_context * parakeet_init_with_params_no_state(struct parakeet_mod
     ggml_time_init();
 
     PARAKEET_LOG_INFO("%s: use gpu    = %d\n", __func__, params.use_gpu);
-    PARAKEET_LOG_INFO("%s: flash attn = %d\n", __func__, params.flash_attn);
     PARAKEET_LOG_INFO("%s: gpu_device = %d\n", __func__, params.gpu_device);
     PARAKEET_LOG_INFO("%s: devices    = %zu\n", __func__, ggml_backend_dev_count());
     PARAKEET_LOG_INFO("%s: backends   = %zu\n", __func__, ggml_backend_reg_count());

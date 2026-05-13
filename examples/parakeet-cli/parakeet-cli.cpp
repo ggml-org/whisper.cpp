@@ -16,7 +16,6 @@ struct parakeet_params {
     int32_t right_context_ms  = 4960;
 
     bool use_gpu       = true;
-    bool flash_attn    = true;
     int32_t gpu_device = 0;
 
     bool print_segments = false;
@@ -66,8 +65,6 @@ static bool parakeet_params_parse(int argc, char ** argv, parakeet_params & para
         else if (arg == "-f"    || arg == "--file")            { params.fname_inp.emplace_back(ARGV_NEXT); }
         else if (arg == "-ng"   || arg == "--no-gpu")          { params.use_gpu           = false; }
         else if (arg == "-dev"  || arg == "--device")          { params.gpu_device        = std::stoi(ARGV_NEXT); }
-        else if (arg == "-fa"   || arg == "--flash-attn")      { params.flash_attn        = false; }
-        else if (arg == "-nfa"  || arg == "--no-flash-attn")   { params.flash_attn        = false; }
         else if (arg == "-ps"   || arg == "--print-segments")  { params.print_segments    = true; }
         else if (arg == "-otxt" || arg == "--output-txt")      { params.output_txt        = true; }
         else if (arg == "-of"   || arg == "--output-file")     { params.output_file       = ARGV_NEXT; }
@@ -97,8 +94,6 @@ static void parakeet_print_usage(int /*argc*/, char ** argv, const parakeet_para
     fprintf(stderr, "  -f,     --file FILE         [%-7s] input audio file\n",                            "");
     fprintf(stderr, "  -ng,    --no-gpu            [%-7s] disable GPU\n",                                 params.use_gpu ? "false" : "true");
     fprintf(stderr, "  -dev N, --device N          [%-7d] GPU device to use\n",                           params.gpu_device);
-    fprintf(stderr, "  -fa,    --flash-attn        [%-7s] enable flash attention\n",                      params.flash_attn ? "true" : "false");
-    fprintf(stderr, "  -nfa,   --no-flash-attn     [%-7s] disable flash attention\n",                     !params.flash_attn ? "true" : "false");
     fprintf(stderr, "  -ps,    --print-segments    [%-7s] print segment information\n",                   params.print_segments ? "true" : "false");
     fprintf(stderr, "  -otxt,  --output-txt        [%-7s] output result in a text file\n",                params.output_txt ? "true" : "false");
     fprintf(stderr, "  -of,    --output-file FILE  [%-7s] output file path (without file extension)\n",   "");
@@ -141,7 +136,6 @@ int main(int argc, char ** argv) {
 
     struct parakeet_context_params ctx_params = parakeet_context_default_params();
     ctx_params.use_gpu     = params.use_gpu;
-    ctx_params.flash_attn  = params.flash_attn;
     ctx_params.gpu_device  = params.gpu_device;
 
     if (!params.no_prints) {

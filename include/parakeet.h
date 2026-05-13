@@ -47,7 +47,6 @@ extern "C" {
 
     struct parakeet_context_params {
         bool  use_gpu;
-        bool  flash_attn;
         int   gpu_device;  // CUDA device
     };
 
