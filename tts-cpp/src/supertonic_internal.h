@@ -1265,11 +1265,16 @@ inline void make_rope_cos_sin_tables(const float * theta,
 // Cost vs. the pre-fix (broken) helper:
 //   - Adds one `ggml_cont` per site (the head-of-pipeline
 //     transpose).  On CPU it is a single memcpy of `L * HD * 4`
-//     bytes; on GPU backends it is one shader dispatch per
-//     cache build.  The cache is built ONCE and reused across
-//     all 5 denoise steps, so the cost is fully amortised.
+//     bytes; on GPU backends (Vulkan one ~256-thread shader
+//     dispatch, Metal / OpenCL equivalents) it is one shader
+//     dispatch per cache build.  The cache is built ONCE and
+//     reused across all 5 denoise steps, so the cost is fully
+//     amortised.
 //   - Eliminates 40 CPU rotations / synth (~50 µs each ≈ 2 ms
 //     wall-time on the default 5-step × 4-RoPE-site schedule).
+//   - Net (Vulkan branch only): the original rounds-8/9 GPU-
+//     bridge wins are preserved AND now actually run end-to-end
+//     without crashing.
 //
 // Universally-supported ops only: `ggml_transpose`, `ggml_cont`,
 // `ggml_view_3d`, `ggml_reshape_2d` + everything

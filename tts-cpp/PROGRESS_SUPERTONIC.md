@@ -1546,6 +1546,145 @@ faster.
 
 ---
 
+### Vulkan optimisation round 11 (May 2026, QVAC-18605 follow-up #9) — Packed-QK RoPE + GPU-bridge layout fix
+
+**Critical correctness fix.**  Round 11 didn't add a new
+optimisation — it made every prior round actually run end-to-end
+on real hardware.  Rounds 8 + 9 + 10 (front-block / style /
+group GPU bridges + text-input upload-skip) had all shipped CPU-
+only unit-test green, but the unit tests never exercised the
+production code path with a real GGUF carrying
+`vector_rope_theta`.  The first end-to-end synth attempt (CPU
+*or* Vulkan) aborted at
+`GGML_ASSERT(HD == n_heads * head_dim)` inside
+`apply_rope_to_packed_qk` — and even past that assertion, every
+`ggml_backend_tensor_copy(q_src, q_tc_in)` in the GPU-bridge
+fast paths would have hit
+`GGML_ASSERT(ggml_are_same_layout(src, dst))` because Q/K/V
+matmul outputs were the byte-for-byte transpose of what the
+attention cache's `q_tc_in` / `k_tc_in` / `v_tc_in` tensors
+expect.
+
+#### Root cause
+
+`apply_rope_to_packed_qk` (introduced in PR #16 audit follow-up
+#5) was written under the assumption that
+`dense_matmul_time_ggml` returns a `ne=[H*D, L]` "channel-
+fastest-in-memory" tensor.  In fact, the matmul (both the CPU
+`cblas_sgemm` fast path and the GPU `conv1d_f32(K=1)` fallback)
+produces `ne=[L, H*D]` with **channel-major-flat memory**
+(`data[t + c*L]`) — the bit-exact transpose of the helper's
+input contract.
+
+The CPU unit test that landed alongside the helper
+(`test_supertonic_rope_packed_qk.cpp`) hand-built Q under the
+wrong `[HD, L]` shape, so the failure mode was invisible to CI.
+Similarly, `vector_text_attention_cache::q_tc_in` etc. are
+`ggml_new_tensor_2d(F32, HD, L)` → **time-major-flat memory**
+(`data[c + t*HD]`).  V (and the style Q/K/V which have no RoPE
+to mask the layout flip) flowed into the GPU bridge from
+matmul → channel-major-flat bytes → mismatched layout against
+`q_tc_in` → `ggml_backend_tensor_copy` aborts on
+`ggml_are_same_layout`.
+
+#### The fix (strict TDD)
+
+1. **Test (new RED contract)**:
+   `test_supertonic_rope_packed_qk.cpp` rewritten to build Q
+   under the **production** shape `ne=[L, HD]` (matmul's actual
+   output) with channel-major-flat memory.  The reference is
+   built in scalar `apply_rope`'s native time-major-flat layout;
+   the test verifies the helper's output bytes match the
+   reference bit-for-bit AND pins `y->ne[0] = HD, y->ne[1] = L`
+   so the downstream `q_tc_in` blit cannot regress on layout.
+
+2. **Helper (`apply_rope_to_packed_qk` in
+   `supertonic_internal.h`)**: Add a head-of-pipeline
+   `ggml_cont(ggml_transpose(q))` to flip from the matmul's
+   `ne=[L, HD]` channel-major-flat memory to the `ne=[HD, L]`
+   time-major-flat memory `apply_rope_in_graph` (and the
+   downstream `q_tc_in`) consumes.  The rest of the pipeline
+   (view-as-`[D, H, L]` → cont → `apply_rope_in_graph` →
+   reshape-to-`[HD, L]`) is unchanged.  Returns ne=[HD, L]
+   time-major-flat — **the SAME layout as `q_tc_in`** so the
+   GPU bridge blit is bit-exact.
+
+3. **V (and style Q/K/V) graph-side transpose**: V has no RoPE
+   to hide behind, so the same `ggml_cont(ggml_transpose(...))`
+   is open-coded at the matmul output in
+   `build_group_graph_cache` (line ~1088),
+   `ve_front_block_proj_cache` (line ~2774), and
+   `build_res_style_qkv_cache` (line ~1459 — applied to all
+   three sq / sk / sv since the style path has no RoPE
+   anywhere).
+
+4. **Legacy host-bridge downloads**: The host-bridge fallback
+   paths used `tensor_to_time_channel(q_rope_gpu)` to download
+   post-RoPE Q/K, which under the new layout would be a
+   transpose-of-the-transpose.  Switched to `tensor_raw_f32`
+   for all four post-RoPE tensors plus all four V tensors plus
+   the trace-mode style sq/sk/sv downloads — the bytes are
+   already in the layout scalar `apply_rope` /
+   `flash_attention_qkv` host references consume (`out[t*HD +
+   c]`), so the raw download is the correct call.
+
+#### Verification
+
+| Backend / Adapter | Pre-fix | Post-fix |
+|---|---|---|
+| CPU | `GGML_ASSERT(HD == n_heads * head_dim) failed` → core dump on first step | ✅ writes 3.89s 44.1 kHz WAV |
+| Vulkan NVIDIA RTX 5090 (KHR_coopmat, FP16) | same crash | ✅ writes 6.53s WAV; **44 ms / 5-step bench, 74× realtime** (median over 5 runs) |
+| Vulkan AMD RADV iGPU (UMA, FP16) | same crash | ✅ writes 3.64s WAV; 178 ms / 5-step bench, 7× realtime |
+| Vulkan Mesa lavapipe (CPU emulator) | same crash | ✅ writes 1.21s WAV (correctness baseline) |
+
+Whole CPU-only `ctest -L unit` reports **22 / 22 tests, 0
+failures, 0 regressions**.  Vulkan build's `ctest` likewise
+22 / 22.
+
+#### Why the unit tests missed it
+
+The 22 unit tests cover individual helpers (capability cache,
+upload-skip tracker, F16 deny-list API, etc.) and small-tensor
+in-graph parity (rope-in-graph, packed-qk-rope, in-graph-
+transpose) but **none of them execute
+`supertonic_vector_step_ggml` against a real GGUF**.  The 30
+"Disabled" tests in `ctest` would have caught this — they're
+the model-fixture tests gated on a locally-generated GGUF.
+Round 11 is exactly the kind of failure those exist to detect.
+
+The TDD test added in this round (the rewritten
+`test_supertonic_rope_packed_qk.cpp`) now closes the gap for the
+specific helper that crashed: it builds Q under the production
+matmul shape AND pins the output layout contract that the GPU-
+bridge `ggml_backend_tensor_copy` requires.  A future
+re-introduction of the (incorrect) old contract would fail the
+test at compile time on the `y->ne[0] == HD` shape check, even
+before the bit-for-bit data comparison runs.
+
+#### Perf snapshot (RTX 5090, default short prompt, F16 K/V)
+
+```
+  preprocess             med=   0.00  ms
+  duration               med=   0.97  ms
+  text_encoder           med=   2.94  ms
+  vector_estimator (5 step) med=  37.70  ms
+    vector_step[0]       med=   7.44  ms   (cold pipeline)
+    vector_step[1..4]    med=   7.01–7.05  ms   (steady state)
+  vocoder                med=   2.47  ms
+  total                  med=  44.08  ms
+
+  RTF (total / audio):   med=0.013
+  Real-time multiplier:  med=74.28x
+```
+
+The round-1..10 wins (multi-device cache, BF16/Q8_0 K/V
+dispatch, native LEAKY_RELU, F16 weights deny-list, prewarm,
+front-block + style + group GPU bridges, text-input upload-
+skip) are all in this number — they just couldn't actually run
+until round 11 unblocked the path.
+
+---
+
 ## Remaining Work
 
 ### Runtime and performance
