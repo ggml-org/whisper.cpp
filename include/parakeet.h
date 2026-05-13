@@ -116,7 +116,7 @@ extern "C" {
 
     // This can be used to set a custom log mel spectrogram inside the default state of the provided parakeet context.
     // Use this instead of parakeet_pcm_to_mel() if you want to provide your own log mel spectrogram.
-    // n_mel must be 80
+    // n_mel must be 128
     // Returns 0 on success
     PARAKEET_API int parakeet_set_mel(
             struct parakeet_context * ctx,
@@ -187,9 +187,9 @@ extern "C" {
     PARAKEET_API int parakeet_token_to_text(const char * token_str, bool is_first, char * output, int max_len);
 
     // Special tokens
-    PARAKEET_API parakeet_token parakeet_token_blank (struct parakeet_context * ctx);
-    PARAKEET_API parakeet_token parakeet_token_unk (struct parakeet_context * ctx);
-    PARAKEET_API parakeet_token parakeet_token_bos(struct parakeet_context * ctx);
+    PARAKEET_API parakeet_token parakeet_token_blank(struct parakeet_context * ctx);
+    PARAKEET_API parakeet_token parakeet_token_unk  (struct parakeet_context * ctx);
+    PARAKEET_API parakeet_token parakeet_token_bos  (struct parakeet_context * ctx);
 
     // Performance information from the default state.
     struct parakeet_timings {
@@ -216,7 +216,7 @@ extern "C" {
             struct parakeet_context * ctx,
               struct parakeet_state * state,
           const parakeet_token_data * token_data,
-                              void * user_data);
+                               void * user_data);
 
     // Text segment callback
     // Called on every newly generated text segment
