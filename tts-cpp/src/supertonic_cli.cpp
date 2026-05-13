@@ -20,8 +20,16 @@ void usage(const char * argv0) {
         "          [--f16-weights 0|1] (load-time F16 materialization for the\n"
         "                            audit-identified hot matmul / pwconv weights;\n"
         "                            defaults to auto: on for GPU, off for CPU)\n"
+        "          [--precision f32|f16|q8_0]   (default: f32)\n"
         "          [--noise-npy /path/to/noise.npy]\n",
         argv0);
+}
+
+tts_cpp::supertonic::Precision parse_precision(const std::string & s) {
+    if (s == "f32" || s == "F32") return tts_cpp::supertonic::Precision::F32;
+    if (s == "f16" || s == "F16") return tts_cpp::supertonic::Precision::F16;
+    if (s == "q8_0" || s == "Q8_0" || s == "q8") return tts_cpp::supertonic::Precision::Q8_0;
+    throw std::runtime_error("unknown --precision value: " + s + " (expected f32|f16|q8_0)");
 }
 
 void write_wav(const std::string & path, const std::vector<float> & wav, int sr) {
@@ -72,6 +80,7 @@ int main(int argc, char ** argv) {
         else if (arg == "--n-gpu-layers") opts.n_gpu_layers = std::stoi(next("--n-gpu-layers"));
         else if (arg == "--f16-attn") opts.f16_attn = std::stoi(next("--f16-attn"));
         else if (arg == "--f16-weights") opts.f16_weights = std::stoi(next("--f16-weights"));
+        else if (arg == "--precision") opts.precision = parse_precision(next("--precision"));
         else if (arg == "--noise-npy") opts.noise_npy_path = next("--noise-npy");
         else if (arg == "-h" || arg == "--help") { usage(argv[0]); return 0; }
         else { fprintf(stderr, "unknown arg: %s\n", arg.c_str()); usage(argv[0]); return 2; }

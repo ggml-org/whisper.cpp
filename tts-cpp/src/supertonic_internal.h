@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
 #include "ggml.h"
 
 namespace tts_cpp::supertonic::detail {
@@ -131,9 +132,28 @@ struct supertonic_model {
     // Override via `EngineOptions::f16_weights` / `--f16-weights`.
     bool use_f16_weights = false;
 
+    // The compute precision the model was loaded with — set by
+    // `load_supertonic_gguf`.  Lets graph builders dispatch precision-
+    // specific code paths (e.g. asymmetric q8_0 load on Metal).
+    // Orthogonal to `use_f16_weights` above (that's a per-op runtime
+    // selector for the OpenCL hot-weight materialisation; this is the
+    // global storage-type selector).
+    int precision_id = 0; // supertonic_precision::F32
+
     std::map<std::string, ggml_tensor *> tensors;
     std::unordered_map<std::string, ggml_tensor *> source_tensors;
     std::unordered_map<std::string, supertonic_voice_style> voices;
+
+    // Pre-transposed copies of matmul weights, materialized at load time
+    // to eliminate the per-call `cont(transpose(w))` dispatch that
+    // `dense_matmul_time_ggml` issues on every graph compute.  Keyed by
+    // the ORIGINAL weight tensor pointer (i.e. the value in
+    // `source_tensors[<MatMul_*>]`); the mapped value is the transposed
+    // f32 copy with `ne = [IC, OC]` and lives in `ctx_w_extra` /
+    // `buffer_w_extra`.  Lookup via `try_pretransposed_weight(model, w)`.
+    ggml_context * ctx_w_extra = nullptr;
+    ggml_backend_buffer_t buffer_w_extra = nullptr;
+    std::unordered_map<const ggml_tensor *, ggml_tensor *> pretransposed_weights;
 
     std::vector<int32_t> unicode_indexer;
     std::vector<std::string> languages;
@@ -217,17 +237,48 @@ struct supertonic_model {
 //        regardless of backend).
 // See Phase 2A in `aiDocs/PLAN_SUPERTONIC_OPENCL.md` for the
 // roster + auto-policy rationale.
+//
+// `precision` (separate concern): selects the storage type for
+// matmul weights at GGUF load time.  Mirrors the public
+// `tts_cpp::supertonic::Precision` enum.  F32 is the historical
+// default; Q8_0 / F16 trigger asymmetric loads on Metal.
+enum class supertonic_precision {
+    F32 = 0,
+    F16 = 1,
+    Q8_0 = 2,
+};
+
 bool load_supertonic_gguf(const std::string & path,
                           supertonic_model & model,
                           int n_gpu_layers = 0,
                           bool verbose = false,
-                          int f16_weights = -1);
+                          int f16_weights = -1,
+                          supertonic_precision precision = supertonic_precision::F32);
 void free_supertonic_model(supertonic_model & model);
 void supertonic_set_n_threads(supertonic_model & model, int n_threads);
 void supertonic_graph_compute(const supertonic_model & model, ggml_cgraph * graph);
 
+// True when the model's compute backend supports the per-stage CPU fast paths
+// (the `ggml_custom_4d` callbacks in conv1d_f32 / depthwise_same_ggml /
+// layer_norm_ggml etc.).  ggml custom ops are CPU-only by design; on Metal /
+// CUDA / Vulkan the helpers must fall through to their stock-ggml-op paths.
+// Mirrors the `!ggml_backend_is_cpu(backend)` idiom Chatterbox uses to gate
+// its Metal-only batched-CFG path.
+inline bool model_prefers_cpu_kernels(const supertonic_model & model) {
+    return model.backend == nullptr || ggml_backend_is_cpu(model.backend);
+}
+
 ggml_tensor * require_tensor(const supertonic_model & model, const std::string & name);
 ggml_tensor * require_source_tensor(const supertonic_model & model, const std::string & source_name);
+ggml_tensor * try_source_tensor(const supertonic_model & model, const std::string & source_name);
+
+// Look up a pre-transposed copy of a matmul weight.  Returns nullptr if no
+// pre-transposed copy was materialized for `w` at load time (e.g. CPU backend
+// — pre-transposition is a Metal-perf-only optimization).  When non-null, the
+// returned tensor has `ne = [IC, OC]` (the swapped layout of `w`), is f32 and
+// contiguous in `model.buffer_w_extra`.  Callers should reshape it as the
+// conv1d kernel `[K=1, IC, OC]` directly and skip the cont(transpose(w)).
+ggml_tensor * try_pretransposed_weight(const supertonic_model & model, const ggml_tensor * w);
 
 std::string supertonic_preprocess_text(const std::string & text,
                                        const std::string & language,
@@ -400,6 +451,24 @@ void supertonic_profile_csv_record(const char * stage, const char * island,
                                    int step, double wall_ms);
 void supertonic_profile_csv_flush();
 void supertonic_profile_csv_set_path(const char * path);
+
+// Phase A1+A2 (Metal): run ALL `total_steps` CFM denoising steps inside
+// ONE ggml_cgraph, dispatched with a single ggml_backend_graph_compute
+// call.  On non-CPU backends this replaces the engine's per-step loop
+// entirely (latent stays in GPU memory step-to-step, no host round-trip).
+// On CPU it falls back to a per-step loop over `supertonic_vector_step_ggml`
+// so the cblas fastpaths still apply.  Override the GPU path with
+// SUPERTONIC_DISABLE_LOOP_GRAPH=1 to A/B against the per-step path.
+bool supertonic_vector_loop_ggml(const supertonic_model & model,
+                                  const float * initial_noisy_latent,
+                                  int latent_len,
+                                  const float * text_emb,
+                                  int text_len,
+                                  const float * style_ttl,
+                                  const float * latent_mask,
+                                  int total_steps,
+                                  std::vector<float> & final_latent_out,
+                                  std::string * error = nullptr);
 
 bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
                                        const float * noisy_latent,

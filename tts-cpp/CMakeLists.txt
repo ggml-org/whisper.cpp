@@ -115,23 +115,23 @@ if (NOT TARGET ggml)
         endif()
         add_library(ggml ALIAS ggml::ggml)
     else()
-        # In-tree subtree of qvac-ext-lib-whisper.cpp: the standalone
-        # patches/ folder + scripts/setup-ggml.sh tooling is intentionally
-        # absent here.  Without them, an add_subdirectory(ggml) build
-        # would silently miss the ggml-backend-reg-filename-prefix patch
-        # that GGML_BACKEND_DL_PROJECT_PREFIX="speech-" depends on, so
-        # libspeech-ggml-*.so files would exist on disk but the runtime
-        # loader would still search for libggml-*.so under
-        # GGML_BACKEND_DL=ON.  Reject up front with a pointer at the
-        # right consumption path.
-        if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/patches")
+        # Bundled-ggml dev build path (TTS_CPP_USE_SYSTEM_GGML=OFF).
+        # Expects `tts-cpp/ggml/` to be a checkout of the
+        # tetherto/qvac-ext-ggml repo on the `speech` branch — the QVAC
+        # fork carrying every infrastructure patch + the Supertonic 2
+        # fused custom op family as commits (not as a patches/ overlay).
+        #
+        # Run `bash tts-cpp/scripts/setup-ggml.sh` first to clone +
+        # check out the pinned commit.  No patches/ directory is
+        # consulted: the speech branch is already pre-patched at the
+        # commit level.
+        if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ggml/CMakeLists.txt")
             message(FATAL_ERROR
-                "tts-cpp: this in-tree subtree does not ship the patches/ "
-                "directory.  Pass -DTTS_CPP_USE_SYSTEM_GGML=ON to consume "
-                "the QVAC speech-stack `ggml-speech` vcpkg port (which "
-                "carries the pre-applied patches), or use the standalone "
-                "github.com/gianni-cor/chatterbox.cpp repo for a "
-                "bundled-ggml dev build with patches/ present.")
+                "tts-cpp: bundled-ggml build requires tts-cpp/ggml/ to be "
+                "a checkout of tetherto/qvac-ext-ggml@speech.  Run "
+                "`bash tts-cpp/scripts/setup-ggml.sh` first, or pass "
+                "-DTTS_CPP_USE_SYSTEM_GGML=ON to consume the QVAC "
+                "speech-stack `ggml-speech` vcpkg port.")
         endif()
         add_subdirectory(ggml)
     endif()

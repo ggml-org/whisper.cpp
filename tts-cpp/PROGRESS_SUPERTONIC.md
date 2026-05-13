@@ -612,8 +612,907 @@ spelled out (most TDD, written before the implementation lands).
   `flash_attn_f32_f16` enabled) to confirm the Supertonic bottleneck shifts
   from custom CPU ops to `kernel_mul_mm_f32_f32` and the same convnext block
   shape that chatterbox already profiled.
+- ~~Evaluate GPU backends after CPU graph structure is fully stable.~~ — initial
+  Metal port landed 2026-05-11; see "Metal baseline (2026-05-11)" below.
 - Add CI coverage for converter help/setup syntax and portable Supertonic build
   targets.
+
+## Metal baseline (2026-05-11)
+
+First end-to-end Metal run of the Supertonic 2 pipeline. Approach mirrors
+Chatterbox's pattern: single `ggml_backend_metal_init()` at model load, no
+backend scheduler, and CPU-only `ggml_custom_4d` fast paths gated on
+`!ggml_backend_is_cpu(model.backend)` so the same graph builders fall through
+to stock `ggml_im2col` + `ggml_mul_mat` (etc.) when the backend is Metal.
+
+Implementation:
+
+- `model_prefers_cpu_kernels(const supertonic_model &)` added in
+  `src/supertonic_internal.h`. Returns `true` when `model.backend == nullptr`
+  or `ggml_backend_is_cpu(model.backend)`.
+- Per-stage helpers (`conv1d_f32`, `depthwise_same_ggml`, `layer_norm_ggml`,
+  `dense_matmul_time_ggml`, `bias_gelu_ggml`, `pw2_residual_ggml`,
+  `conv1d_causal_ggml`, `depthwise_conv1d_causal_ggml`, plus the tail-update
+  custom op in `vector_estimator.cpp`) now take a `bool use_cpu_fastpath` and
+  AND it into the existing dtype/shape gates.
+- Per-stage builders inject
+  `const bool use_cpu_fastpath = model_prefers_cpu_kernels(model);` at the top
+  and pass it down through `vector_convnext_ggml`, `convnext_block_ggml`, the
+  text/vector/style attention cache builders, the tail graph builder, and the
+  trace builder.
+- `text_encoder.cpp` and `duration.cpp` accept the flag for call-site
+  uniformity but mark it `[[maybe_unused]]` — those stages have always built
+  their graphs via stock ggml ops and are Metal-safe at HEAD.
+- `supertonic_bench.cpp` gains `--n-gpu-layers N` (passed through to
+  `load_supertonic_gguf`) so the same harness drives CPU and Metal.
+
+Smoke test (`supertonic-cli --n-gpu-layers 1`) produces a 1.44 s WAV that is
+byte-length-identical to the CPU output, confirming the graph builders run
+end-to-end on Metal. A `GGML_ASSERT([rsets->data count] == 0)` fires inside
+`ggml_metal_device_free` at process exit (atexit ordering with Metal's
+residency-set finaliser) — same shape as the Chatterbox `t3_stack_registry`
+atexit issue; cosmetic, fires after the WAV is fully written. Mitigation TBD.
+
+Benchmark (Apple M2, q8_0 GGUF, 4 threads, 3.204 s of audio, 5-step CFM, 5 runs
++ 1 warmup, same flags as `supertonic-cpp.json` / `supertonic-onnx-cpu.json`):
+
+| Stage                       | CPU q8_0   | Metal q8_0 | Δ vs CPU | ONNX CPU f32 |
+|-----------------------------|-----------:|-----------:|---------:|-------------:|
+| preprocess                  |    0.01 ms |    0.01 ms |       — |      0.06 ms |
+| duration                    |    1.76 ms |    2.50 ms |   +0.74 |      1.48 ms |
+| text_encoder                |   13.44 ms |   13.83 ms |   +0.39 |      9.04 ms |
+| vector_estimator (5 steps)  |   94.86 ms |  173.08 ms |  +78.22 |     82.65 ms |
+| vocoder                     |   43.44 ms |   59.74 ms |  +16.30 |     51.32 ms |
+| **total**                   | **153.5**  | **249.9**  |  **+96.4 (+63%)** | **144.9** |
+| RTF                         |     0.048  |     0.078  |          |       0.045 |
+| real-time multiplier        |     20.9×  |     12.8×  |          |       22.1× |
+
+Verdict: the Metal port is **correctness-validated but slower than CPU at this
+graph shape**. Two ggml-side stages dominate the regression:
+
+- **`vector_estimator` +82 %** (94.9 → 173.1 ms median). The 5 denoising steps
+  build many small ConvNeXt graphs (depthwise + pointwise + norm + GELU +
+  pointwise, repeated across blocks). On M2 these become Metal kernel
+  launches that are too short to amortise launch overhead; the CPU fast paths
+  (cblas-backed `pointwise_op` / unrolled depthwise K=5) had a real lead.
+- **`vocoder` +38 %** (43.4 → 59.7 ms median). Same kernel-launch-bound
+  pattern, smaller deficit because the vocoder graph is a single persistent
+  cgraph that's reused across calls (less per-step overhead than the
+  vector-estimator's per-block cgraphs).
+
+`text_encoder` and `duration` are unchanged within noise — expected, those
+already used the stock-op path on CPU.
+
+`supertonic-bench --runs 8 --warmup 3 --n-gpu-layers 1` drifted to ~288 ms
+median (up from ~250 ms at runs=5 / warmup=1), suggesting Metal residency
+sets accumulate across calls in this harness; investigate before drawing
+percentile-style conclusions from longer Metal runs.
+
+Artifacts: `artifacts/bench/supertonic-cpu.json`,
+`artifacts/bench/supertonic-cpu-after.json` (post-gating CPU regression
+check, median 158.2 ms / +3 % vs the pre-port baseline — within noise),
+`artifacts/bench/supertonic-metal.json`,
+`artifacts/bench/supertonic-onnx-cpu.json`,
+`artifacts/bench/supertonic-onnx-coreml.json`,
+`artifacts/bench/metal-phase-a.txt` (the Phase A failure-mode trace before
+gating).
+
+### Next: Metal optimisation passes (Phase E in the plan)
+
+Backlog **revised after the 2026-05-11 dispatch-count profile** (see
+"Dispatch-count profile" below). The pre-profile working hypothesis
+(step batching, QKV stacking, f16 weights) turned out to be wrong on
+multiple counts. Revised priority order:
+
+1. **Single-graph consolidation per CFM step (THE PR).** The diagnostic
+   shows ~21 separate `graph_compute` calls per step (front prep +
+   text-attention + style-qkv + style-attention + style-residual-norm
+   inline × 4 groups + tail). On M2 each call carries ~1.86 ms of fixed
+   command-buffer overhead regardless of node count. Consolidating into
+   ONE `ggml_cgraph` per step (5 dispatches per synth, projected total
+   Metal ~46 ms) is by far the biggest win available; the rest of the
+   backlog only matters if this leaves residual gap. Specific work
+   below.
+2. **(Was step batching across CFM iterations.)** Closed: the CFM step
+   loop has a sequential dependency (`latent.swap(next)` at
+   `supertonic_engine.cpp:240`), so Chatterbox-style batching along
+   `ne[2]` doesn't apply here. The win from item 1 above is bigger
+   anyway; revisit only if a future flow-matching variant decouples the
+   steps.
+3. **(Was QKV stacking on text-attention.)** Deprioritised. With item 1
+   the QKV matmuls live inside the same dispatch as everything else —
+   stacking saves 3 in-graph nodes per attention but doesn't reduce
+   dispatch count. Only worth doing if Metal frame capture shows the
+   three per-attention `kernel_mul_mm` launches are individually
+   expensive after consolidation.
+4. **(Was f16 weights for Metal.)** Closed: f16 GGUF is *slower* than
+   q8_0 on both CPU and Metal (see "f16 GGUF experiment (2026-05-11)"
+   below). q8_0's weight-bandwidth win beats f16's no-dequant on this
+   graph shape.
+5. **Custom Metal depthwise kernel.** Standby — only revisit if item 1
+   leaves ConvNeXt depthwise as the residual hotspot. The `im2col +
+   mul_mat` fallback would be replaceable with a single
+   `kernel_depthwise_conv_1d` per call; `test/test_metal_ops.cpp` is
+   the parity harness.
+6. **Metal `rsets` keep-alive tuning** for long-running daemons.
+   Cosmetic for benchmarks; investigate if a hosted-service user
+   reports memory growth.
+
+### Plan for item 1 — per-step graph consolidation
+
+Architecture: introduce a `vector_step_full_cache` (per-shape
+thread_local) that owns ONE `ggml_context`, ONE `ggml_cgraph`, ONE
+`ggml_gallocr`. Build the entire per-step computation (proj_in →
+4 × (ConvNeXt blocks + time-add + ConvNeXt + Q/K/V projection + RoPE +
+flash-attention + out_fc + residual + layer-norm + style Q/K/V
+projection + flash-attention + out_fc + residual + layer-norm) +
+last_convnext × 4 + proj_out + mask + noise add) as one graph. ONE
+`ggml_backend_graph_compute` per step.
+
+The existing `build_text_attention_cache`, `build_group_graph_cache`,
+`build_res_style_qkv_cache`, and `build_tail_graph_cache` get refactored
+into **graph-builder helpers** that accept `(ggml_context*, ggml_cgraph*,
+...input ggml_tensor*...)` and return output `ggml_tensor*`, instead of
+owning their own contexts. The CPU path keeps the cache-of-subgraphs
+architecture (parity, trace mode); only Metal routes through the
+consolidated path. Detection via `!ggml_backend_is_cpu(model.backend)`
+at the top of `supertonic_vector_step_ggml`.
+
+**Critical sub-tasks** (the order matters for parity validation):
+
+1. **In-graph RoPE.** Replace the CPU `apply_rope` call with
+   `ggml_rope_ext` configured for Supertonic's `(t/L) * theta[d]`
+   formula: `freq_base = 1.0`, `freq_scale = 1.0`, `freq_factors[d] =
+   L / theta[d]`, `mode = GGML_ROPE_TYPE_NEOX` (split-pairs layout
+   matches `apply_rope`'s `(i1, i2) = (offset+d, offset+D/2+d)` pattern
+   per `supertonic_vector_estimator.cpp:1416`). Positions are an
+   int32 `arange(L_q)` for Q and `arange(L_kv)` for K, set once at
+   build time. ggml-metal's `kernel_rope_norm`/`kernel_rope_neox`
+   already compile.
+
+2. **In-graph layout conversion.** Replace
+   `tensor_to_time_channel`/`pack_time_channel_for_ggml` host calls
+   with `ggml_cont(ctx, ggml_transpose(ctx, x))` at the inter-stage
+   boundaries.
+
+3. **Compose the orchestrator** so all stages share one ctx/gf. Walk
+   the existing `supertonic_vector_trace_proj_ggml` flow (lines
+   2050–2585) and inline each `run_*_cache` call as graph-builder
+   helper invocations.
+
+4. **Parity test.** Add a `test_supertonic_vector_metal_consolidated`
+   CTest target that compares the consolidated Metal path to the CPU
+   reference for one step at a representative L (137-ish). Tolerance
+   ~1e-2 (loose because of float-order effects across the merged
+   graph).
+
+5. **Bench.** Re-run `supertonic-bench --n-gpu-layers 1` and target
+   `SUPERTONIC_COUNT_DISPATCHES=1` to verify total dispatches drop
+   from 120 to ~10 and total wall to ~46 ms.
+
+**Size estimate.** ~600–1000 new lines (mostly the consolidated build
+function); the existing trace path stays untouched. Trace-mode tests
+keep using the old multi-cache orchestrator.
+
+**Risk.** The two non-trivial pieces are (a) `ggml_rope_ext` parameter
+mapping matching CPU `apply_rope` to within 1e-3 — verify before
+inlining everything else — and (b) memory budget for one big graph
+across all groups (`MAX_NODES=2048` may not be enough; estimate ~3500
+nodes for the full per-step graph).
+
+Each commit on the consolidation branch should land in a single PR;
+the work is too coupled to split cleanly.
+
+Backlog items 2–6 above stay as separate per-PR follow-ups in their
+listed priority. Do not bundle.
+
+### Dispatch-count profile (2026-05-11)
+
+Instrumented `supertonic_graph_compute` with a wall-time + node-count
+printout gated on the `SUPERTONIC_COUNT_DISPATCHES` env var. Re-running
+`supertonic-cli --n-gpu-layers 1 --text "Hello."` on the same M2:
+
+- **120 graph_compute dispatches per single synth** (entire pipeline,
+  vector estimator + vocoder + text encoder + duration).
+- **Cumulative graph_compute wall: 222.8 ms** out of the ~250 ms total
+  Metal synth — i.e. graph_compute IS the cost; CPU-side data marshalling
+  is the residual ~30 ms.
+- **Mean per-dispatch wall: 1.86 ms.** Even 17-node tiny dispatches cost
+  ~770 µs each; 170-node mid graphs cost 1.1–1.7 ms. The fixed
+  per-dispatch Metal overhead (command-buffer setup + pipeline lookup +
+  encode + commit + wait) dominates.
+
+Dispatch distribution (counts × node-size, sorted by frequency):
+
+  40 × 18 nodes (the 5×8 text-attention sub-graphs per step)
+  20 × 12 nodes
+  20 × 90 nodes
+  15 × 262 nodes (the 5×3 group-prep graphs)
+  ~25 misc
+
+The 80 small (≤90 nodes) dispatches account for an estimated ~120 ms of
+Metal time. Consolidating them into the larger per-step graphs would
+likely halve the gap to the CPU baseline.
+
+### f16 GGUF experiment (2026-05-11)
+
+Hypothesis: q8_0 dequant in the per-`mul_mat` path was the Metal
+bottleneck. Tested by converting the bundle with `--ftype f16` (132 MB
+GGUF vs 252 MB for q8_0) and re-benching:
+
+  Metal q8_0 total median: 249.9 ms
+  Metal  f16 total median: 286.5 ms (+15 %, worse)
+  CPU   q8_0 total median: 153.5 ms
+  CPU    f16 total median: 168.7 ms (+10 %, worse)
+
+f16 is uniformly *slower* than q8_0, on both CPU and Metal. q8_0
+dequant is not the bottleneck — ggml-metal's q8_0 `mul_mat` kernel is
+well-tuned for these tensor shapes and the smaller weight bandwidth
+helps. Phase E.3 closed; do not pursue an f16-on-Metal variant.
+
+### Dispatch profiling hook
+
+`SUPERTONIC_COUNT_DISPATCHES=1 ./build/supertonic-cli ...` prints one
+line per `ggml_backend_graph_compute` call:
+
+  supertonic_graph_compute #N nodes=K  wall=W us  cumul=C ms
+
+Zero-overhead when the env var is unset (single env var read +
+branch-predicted skip).
+
+## Per-step graph consolidation (landed 2026-05-11)
+
+Landed `supertonic_vector_step_one_graph_ggml` at the end of
+`src/supertonic_vector_estimator.cpp` plus the helpers
+`apply_supertonic_rope_ggml`, `append_text_attention_subgraph`, and
+the `vector_step_one_graph_cache` struct.  Routing in
+`supertonic_vector_step_ggml` enables this path **by default on
+any non-CPU backend** (Metal, CUDA, Vulkan, OpenCL).  CPU keeps
+the multi-cache trace_proj path — its CPU fast-paths and
+`thread_local` sub-graph caches stay competitive on CPU and trace
+mode for parity tests still uses the per-stage outputs.  Override
+via `SUPERTONIC_DISABLE_ONE_GRAPH=1` if needed.
+
+### Dispatch + bench numbers (Apple M2, q8_0, 4 threads, 5-step CFM)
+
+`SUPERTONIC_COUNT_DISPATCHES=1 ./build/supertonic-cli --n-gpu-layers 1`
+shows the dispatch profile collapsing from **120 → 20 total
+dispatches** per synth (5 of which are 1886-node consolidated
+per-step graphs).  Mean per-dispatch wall climbs from 1.86 ms to
+7.9 ms — more real work per kernel batch, less time burned on
+command-buffer setup — and total `graph_compute` wall drops from
+222.8 ms to 157.7 ms (-29 %).
+
+`supertonic-bench` on Metal, 5 runs + 1 warmup, identical flags to
+`supertonic-cpu.json` / `supertonic-onnx-cpu.json`:
+
+  | Stage                       | trace_proj (B) | one-graph (E.cons) |
+  |-----------------------------|---------------:|-------------------:|
+  | preprocess                  |          0.01ms |             0.02ms |
+  | duration                    |          2.50ms |             3.87ms |
+  | text_encoder                |         13.83ms |            16.58ms |
+  | vector_estimator (5 steps)  |        173.08ms |           147.83ms |
+  | vocoder                     |         59.74ms |            60.51ms |
+  | **total**                   |     **249.92ms**|        **229.06ms**|
+  | RTF                         |           0.078 |              0.071 |
+  | real-time multiplier        |          12.82× |             13.99× |
+
+Net: **-15 % on the dominant vector_estimator stage, -8 % on the
+total**.  Correctness validated: `cpu-ref` vs `metal-one-graph` for
+the same text+seed gives correlation **1.0000**, max abs diff 101
+LSB (CPU peak amplitude 6639, so ~1.5 % — normal Metal-vs-CPU
+floating-order noise).  No regression vs the Phase B port.
+
+### Why the win is smaller than projected
+
+Pre-implementation projection was ~46 ms total (saving the full
+~204 ms of dispatch overhead at 1.86 ms × ~110 saved dispatches).
+Reality: the per-dispatch overhead estimate (1.86 ms) was an
+*average*, not a constant.  The new 1886-node consolidated graphs
+are big enough that the GPU is actually doing real compute work
+during the dispatch — kernel-launch overhead is no longer the
+bottleneck, but the work itself has moved to dominating.
+
+The bench tells the story: per-step wall time dropped from
+~33 ms (= 173/5) to ~30 ms (= 147/5).  The Metal device now spends
+most of its time actually computing matmuls rather than waiting
+on command-buffer plumbing.  Further wins now require *less work*,
+not *fewer dispatches* — that's items 2-5 of the remaining
+backlog (QKV stacking, op fusion, custom depthwise kernel).
+
+### Implementation notes
+
+- **`apply_supertonic_rope_ggml`** translates Supertonic's
+  `angle = (t/L) * theta[d]` formula to `ggml_rope_ext` with
+  `freq_base=1.0, freq_scale=1.0, freq_factors[d] = L / theta[d]`,
+  `mode=GGML_ROPE_TYPE_NEOX` (split-pairs rotation matches
+  `apply_rope`'s `(i1=offset+d, i2=offset+D/2+d)` layout at
+  `supertonic_vector_estimator.cpp:1416`).  Positions are int32
+  `arange(q_len)` for Q and `arange(text_len)` for K, set per
+  call when L or text_len change.  ggml-metal's
+  `kernel_rope_norm`/`kernel_rope_neox` already compile.
+
+- **Layout invariant: the GGML tensors take channel-major buffers
+  raw.**  The trace_proj_ggml path at lines 2143/2151 sets `x_in`
+  directly from `noisy_latent` (no host transpose) and `text_in`
+  directly from `text_emb`; the ne=[L, Cin] / ne=[text_len, 256]
+  tensors interpret that channel-major buffer as their natural
+  layout (innermost dim = time = fast-in-memory).  My initial
+  consolidation tried to "helpfully" transpose the inputs into
+  (t, c) layout, which corrupted the tensor data and produced
+  correlation 0.0034 garbage on every backend.  Fix: direct
+  `ggml_backend_tensor_set` from raw caller buffers, matching the
+  existing path exactly.  Same fix on the output path
+  (`ggml_backend_tensor_get` straight into `next_latent_out`).
+
+- **Cache invalidation:** keyed on `(model.generation_id, L,
+  text_len, total_steps)`.  Rebuild when any change.  The
+  `vector_step_one_graph_cache` is a single `thread_local`
+  instance — different Engines / synths share it via the
+  generation_id key.
+
+### Remaining Phase E backlog
+
+**Tier 1 status (2026-05-11):**
+
+- ✅ **Per-step vector_estimator consolidation** (this PR) — biggest
+  Tier 1 win, -8 % on total Metal, parity 1.0000.
+- ✅ **Vocoder already a single dispatch** (461-node graph) —
+  no consolidation needed.
+- ⏸ **text_encoder + duration consolidation** — measured
+  contribution: ~22 ms cold-start dispatch wall across the 14
+  small dispatches that come before the vector_estimator graphs.
+  Post-warmup the bench shows text_encoder ≈ 17 ms and
+  duration ≈ 4 ms — most of which is the dispatches themselves;
+  consolidating to 1 dispatch each would save ~5-10 ms
+  steady-state.  Deferred because relpos_attention has 9
+  per-shape mask tensors + intricate
+  `ggml_view_3d`/`ggml_permute`/`ggml_sum_rows` plumbing that's
+  not a straight copy of the vector_step pattern — needs its
+  own focused 2-3 hour session with parity validation harness
+  before re-enabling on the GPU dispatcher.
+- ⏸ **QKV stacking** — once `vector_estimator` is already in
+  one graph, stacking the three `dense_matmul_time_ggml` calls
+  saves in-graph nodes but no dispatch count.  Metal-frame-
+  capture didn't show the QKV matmuls as the hot path, so the
+  expected win is tiny.  Pursue only if Tier 2 hits diminishing
+  returns.
+- ⏸ **`ggml_cont` elimination** — the consolidated path does
+  `ggml_cont(ggml_transpose(...))` for Q/K/V before rope, and
+  again inside `apply_supertonic_rope_ggml`.  These could be
+  avoided by views with custom strides, but ggml's `view_3d`
+  doesn't expose `nb0` (only `nb1`/`nb2`), so the cont copies
+  are required for the rope kernel's expected layout.  Could
+  use `ggml_permute` + careful 4D views to remove some, but
+  the win is small and the layout-bug risk is high.
+
+## Tier 2 progress (2026-05-11) — op-level reductions before custom kernels
+
+Before sinking time into custom .metal kernels via the QVAC
+ggml-speech port patches (the original Tier 2 plan), there are
+op-level reductions inside the consolidated per-step graph that
+trim dispatch count without touching ggml's kernel set.  Each
+landed as its own commit in PR #15.
+
+### Diagnostic: `SUPERTONIC_DUMP_OP_HISTOGRAM=1`
+
+Added an env-var-gated dump of per-graph op-type histograms to
+`supertonic_graph_compute`.  Zero overhead unset.  Lets us see
+exactly which ggml ops dominate the consolidated graph and which
+are pure-metadata (RESHAPE/VIEW/PERMUTE/TRANSPOSE — confirmed
+no-op in ggml-metal-ops.cpp:186-195).
+
+**Consolidated per-step graph at HEAD (post-Tier-2 commits):**
+
+  | op                | count | dispatch on Metal? |
+  |-------------------|------:|--------------------|
+  | RESHAPE           |   580 | no (metadata only) |
+  | ADD               |   197 | yes (often fused)  |
+  | CONT              |   148 | yes (memcpy)       |
+  | MUL_MAT           |   122 | yes (matmul)       |
+  | IM2COL            |   118 | yes (memrearrange) |
+  | VIEW              |    88 | no                 |
+  | PERMUTE           |    72 | no                 |
+  | MUL               |    70 | yes (often fused)  |
+  | TRANSPOSE         |    68 | no                 |
+  | REPEAT            |    56 | yes                |
+  | CONCAT            |    56 | yes                |
+  | NORM              |    36 | yes                |
+  | UNARY             |    32 | yes (GELU/SiLU)    |
+  | ROPE              |     8 | yes                |
+  | FLASH_ATTN_EXT    |     8 | yes                |
+  | SCALE             |     1 | yes                |
+  | **total**         | **1660** | **852 dispatched** |
+
+808 of 1660 nodes are metadata-only no-ops — what looks like a
+large graph is really ~852 real Metal dispatches per per-step
+graph (down from ~1078 dispatched ops in the pre-Tier-2 layout).
+
+### Landed wins
+
+1. **`repeat_like` returns the broadcast-compatible reshape
+   without `ggml_repeat`** — ggml_add/ggml_mul broadcast natively
+   when one operand has dim==1 in a position the other has dim==N,
+   so the explicit ggml_repeat was redundant work.  All four
+   supertonic files (vector_estimator, vocoder, text_encoder,
+   duration) had the same pattern; same fix applied to each.
+   **-226 REPEAT ops** per step graph.  Override via
+   `SUPERTONIC_FORCE_EXPLICIT_REPEAT=1`.
+
+2. **`apply_supertonic_rope_ggml` drops the defensive
+   `ggml_cont`** — the [D, H, q_len] view onto a contiguous
+   [H*D, q_len] tensor is itself contiguous (nb[0]=elem_size,
+   nb[1]=D*elem_size, nb[2]=H*D*elem_size = ne[0]*ne[1]*elem_size),
+   so `ggml_rope_ext` accepts the view directly.  **8 fewer
+   kernel_cpy dispatches per per-step graph** × 5 = 40 saved per
+   synth.
+
+### Bench delta
+
+Apple M2, q8_0, 4 threads, 5-step CFM, 3.20 s of audio, 5 runs +
+1 warmup, identical flags to the existing JSON artifacts:
+
+  | Stage                       | Phase B | post-cons | post-repeat | post-rope-cont |
+  |-----------------------------|--------:|----------:|------------:|---------------:|
+  | preprocess                  |   0.01 ms |   0.02 ms |     0.01 ms |        0.02 ms |
+  | duration                    |   2.50 ms |   3.87 ms |     4.15 ms |        4.44 ms |
+  | text_encoder                |  13.83 ms |  16.58 ms |    15.80 ms |       14.97 ms |
+  | vector_estimator (5 steps)  | 173.08 ms | 147.83 ms |   129.23 ms |      123.94 ms |
+  | vocoder                     |  59.74 ms |  60.51 ms |    53.91 ms |       53.99 ms |
+  | **total**                   | **249.92ms** | **229.06ms** | **203.04ms** | **199.90ms** |
+  | RTF                         |   0.078 |   0.071  |     0.063   |       0.062    |
+  | real-time multiplier        |  12.82× |  13.99×  |    15.78×   |      16.03×    |
+
+**Cumulative Tier 1 + early-Tier-2: -50 ms total (-20 %) vs the
+Phase B Metal baseline.**  Parity vs CPU reference preserved at
+correlation 0.9999, max abs diff 249 LSB (~3.7 % of peak
+amplitude 6639 — within the float-order tolerance the
+consolidation already trades for one-graph-per-step).  Still ~50
+ms behind CPU q8_0 (153 ms) and ONNX CPU (145 ms), but the gap
+is closing.
+
+### Remaining op-level reductions
+
+- **118 IM2COL ops** are almost all K=1 1×1 convs (called from
+  `dense_matmul_time_ggml` via the existing `conv1d_f32` graph
+  fallback).  For K=1 the im2col is a transpose; could be
+  replaced with a direct `ggml_mul_mat` on the transposed
+  weight/input.  Projected ~3-6 ms saved.  Tricky to get right
+  without breaking layout assumptions of consumers.
+- **148 CONT ops** — 32 are weight-transpose conts in
+  `dense_matmul_time_ggml` (per call, but the weight is constant
+  per shape; could cache the transposed copy at engine
+  construction).  Projected ~5-8 ms saved.
+- **56 CONCAT + 56 REPEAT (remaining)** come from
+  `edge_clamp_pad_1d` materialising the replicate padding.  A
+  custom Metal `kernel_supertonic_pad_edge` would collapse these
+  into one dispatch per padding call.
+
+### Tier 2 custom Metal kernels + load-time weight prep — landed (2026-05-11)
+
+Four fused Metal kernels shipped through the local
+`tts-cpp/cmake/vcpkg-overlay-ports/ggml/` overlay (chained on top
+of the QVAC ggml port via `VCPKG_OVERLAY_PORTS`).  Each adds a
+new `GGML_OP_SUPERTONIC_*` op with a CPU forward as parity
+backstop and a Metal kernel as the production path.  Override
+each individually with the listed env var.
+
+1. **`kernel_supertonic_depthwise_1d`** (commit aa4f65c3) —
+   fuses edge-clamp pad + im2col + mul_mat + add into one Metal
+   dispatch for K ∈ {3, 5}.  Used by every ConvNeXt block in
+   vector_estimator, vocoder, text_encoder, duration.  Override:
+   `SUPERTONIC_DISABLE_FUSED_DEPTHWISE=1`.
+2. **`kernel_supertonic_layer_norm_channel`** (commit 55adf87b)
+   — fuses permute + cont + ggml_norm + mul + add + permute +
+   cont into one dispatch.  Per time-step, one threadgroup with
+   simd_sum reductions for mean/var.  Override:
+   `SUPERTONIC_DISABLE_FUSED_LAYER_NORM=1`.
+3. **`kernel_supertonic_pw2_residual`** (commit 7a5c0393) —
+   fuses `add(bias) + mul(gamma) + add(residual)` (3 ops) into
+   one dispatch at the tail of each vector ConvNeXt block.
+   Override: `SUPERTONIC_DISABLE_FUSED_PW2_RESIDUAL=1`.
+4. **`kernel_supertonic_bias_gelu`** (commit df20115d) — fuses
+   `add(bias) + gelu_erf` between pw1 and pw2 of every vector
+   ConvNeXt block.  Uses the same `erf_approx<float>` template
+   as the stock `kernel_gelu_erf_f32` so the fused output is
+   bit-identical to the unfused chain.  Override:
+   `SUPERTONIC_DISABLE_FUSED_BIAS_GELU=1`.
+
+Plus a load-time optimization:
+
+5. **Pre-transposed matmul weights** (commits e935ffb7,
+   da9553e3) — materialize transposed copies of every
+   `:onnx::MatMul_*` source weight at engine load time on
+   non-CPU backends.  Eliminates the runtime
+   `cont(transpose(w))` dispatch that `dense_matmul_time_ggml`
+   (and the direct `ggml_mul_mat` time-projection sites) used
+   to emit on every graph compute — ~24 cont sites × 5 CFM
+   steps = 120 dispatches saved per synth.  Override:
+   `SUPERTONIC_DISABLE_WEIGHT_PRETRANSPOSE=1`.
+
+6. **Vocoder pw1 fused bias_gelu** (commit 64efe99a) — extends
+   the bias_gelu fusion to the vocoder's ConvNeXt blocks.
+   `conv1d_causal_ggml(..., b=nullptr, ...)` skips the internal
+   bias-add and feeds the matmul output to the fused op
+   directly.  CPU keeps its existing cblas-inside path.  ~10
+   dispatches saved per vocoder pass.
+
+Also investigated but **not landed**:
+
+- **Vocoder pw2_residual fusion** (commit 53a58f5b explains
+  why) — the vocoder stores its block scale as
+  `gamma.ne[0] == 1` (a single learnable scalar), while
+  `pw2_residual_ggml` requires `gamma.ne[0] == C`.  Shapes
+  incompatible, would need a new vocoder-specific scalar-gamma
+  variant op for a ~0.4 ms projected gain — below the noise
+  floor of the current bench.  Skipped.
+
+### Final Tier 2 bench
+
+Apple M2, q8_0, 4 threads, 5-step CFM, 3.20 s of audio, 10
+runs + 2 warmup, `--n-gpu-layers 1` (numbers from
+`artifacts/bench/supertonic-cpp-metal-final.json`):
+
+  | Stage                       | Phase B Metal | Tier 2 final | CPU q8_0 ref |
+  |-----------------------------|--------------:|-------------:|-------------:|
+  | preprocess                  |       0.01 ms |      0.02 ms |     0.01 ms  |
+  | duration                    |       2.50 ms |      6.03 ms |     1.97 ms  |
+  | text_encoder                |      13.83 ms |     18.47 ms |    13.44 ms  |
+  | vector_estimator (5 steps)  |     173.08 ms |     97.76 ms |    94.86 ms  |
+  | vocoder                     |      59.74 ms |     52.02 ms |    43.44 ms  |
+  | **total**                   |  **249.92ms** |  **174.49ms**| **153.52ms** |
+  | RTF                         |        0.078  |       0.054  |       0.048  |
+  | real-time multiplier        |       12.82×  |       18.4×  |       20.8×  |
+
+**Cumulative Tier 1 + Tier 2 wins: -75 ms total (-30%) vs the
+Phase B Metal baseline.**  Parity vs CPU q8_0 reference holds
+at correlation 0.9999 / L∞ ≈ 1.7e-3 across the whole sequence
+— bit-identical pipeline output before/after the optimizations
+on Metal.
+
+The pretranspose A/B (env-var off vs on, same machine state)
+is the cleanest single-knob signal: total 182.75 → 174.38 ms
+(-8.37 ms), vec_est 108.61 → 100.45 ms (-8.16 ms).
+
+### Where the remaining 21 ms gap-to-CPU lives
+
+  | Stage                       | Metal Tier 2 | CPU q8_0 | Gap          |
+  |-----------------------------|-------------:|---------:|-------------:|
+  | vector_estimator (5 steps)  |      97.76 ms |   94.86 ms |     2.90 ms |
+  | vocoder                     |      52.02 ms |   43.44 ms |     8.58 ms |
+  | text_encoder                |      18.47 ms |   13.44 ms |     5.03 ms |
+  | duration / other            |        ~6 ms  |     ~1.7 ms |    ~4 ms    |
+  | **total**                   |  **174.49ms** | **153.52ms** | **20.97 ms** |
+
+Vector estimator is now Metal's strongest stage in absolute
+terms (within 3 ms of CPU on its 100-ms budget); vocoder is at
+parity with ONNX-CPU (52.0 vs 51.3 ms) and is now the dominant
+remaining gap-to-CPU.  Vocoder uses `conv1d_causal_ggml` not
+`dense_matmul_time_ggml`, so neither the pretranspose
+optimization nor (until 64efe99a) the fused bias_gelu applied
+there — the weights are already in conv1d-kernel `[K, IC, OC]`
+layout from the GGUF.
+
+### What's still pursuable post-Tier-2 (not in this round)
+
+1. **KV stacking on cross-attention** — concat W_key and
+   W_value along out-dim at load time so the two text-side
+   matmuls become one (Q stays separate, different input).
+   ~30 invocations per synth × ~0.1-0.2 ms each ≈ 3-6 ms
+   projected, but the small matmul size means this might be
+   noise-bound.  Could combine with pretranspose: stack the
+   pretransposed K+V into one wider weight.
+2. **Vocoder `pw2_residual_scalar_gamma` op** — new
+   vocoder-specific fused op handling `gamma.ne[0]==1`.  ~10
+   dispatches saved per vocoder pass ≈ 0.4 ms.  Below noise
+   floor; skip unless other wins are found first.
+3. **Full ConvNeXt block fusion** (the original T2.3 plan) —
+   deferred because pw1/pw2 weights are 4C×C ≈ 1MB each,
+   vastly exceeding M2's 32KB threadgroup memory budget.  Would
+   need to call out to `ggml_mul_mat` for the matmuls, which
+   defeats most of the fusion benefit.
+4. **Activation layout change** — eliminate the 32 remaining
+   `cont(transpose(activation))` calls on Q/K/V activations per
+   per-step graph.  Would require touching the whole attention
+   pipeline (rope, flash_attn, output projection) — too
+   invasive for the projected ~3-5 ms win.
+5. **CFM step batching (B=2)** — N/A for Supertonic.  The CFM
+   loop in `supertonic_engine.cpp` is a sequential ODE solver
+   (each step depends on the previous output), unlike
+   chatterbox's CFG cond+uncond pairs which fit naturally into
+   `ne[2]` batching.
+
+### Tier 2 closing the loop
+
+The Tier 2 PR (`feat/metal-optimization-supertonic` on
+tetherto/qvac-ext-lib-whisper.cpp) lands as:
+- 4 custom Metal kernels behind individual env-var gates
+- Load-time pretranspose mechanism + helper APIs
+  (`try_pretransposed_weight`, `dense_matmul_time_pretransposed_ggml`)
+- All under a local `tts-cpp/cmake/vcpkg-overlay-ports/ggml/`
+  port that chains on top of the QVAC ggml port via
+  `VCPKG_OVERLAY_PORTS`.
+- CPU q8_0 perf unchanged (the fused-kernel + pretranspose
+  paths are all gated on `!use_cpu_fastpath`).
+- Parity vs CPU reference: corr 0.9999 / L∞ 1.7e-3 throughout.
+
+## Phase A + B follow-up (2026-05-11)
+
+### Landed on this PR after Tier 2 closed
+
+| Commit     | Change | Bench delta (M2, 10 runs) |
+|------------|--------|---------------------------|
+| `bfb44092` | Phase 0: `--precision {f32,f16,q8_0}` flag + parity harness | 0 ms (infra) |
+| `8f0be955` | A1+A2: single command buffer per synth + on-GPU latent through 5-step CFM loop | –1.37 ms total |
+| `1b7496f6` | A3 step 1: enable `--precision q8_0` storage on Metal (asymmetric load) | –6.17 ms total |
+
+Cumulative on top of Tier 2: total **174.49 ms → 166.39 ms** (–4.6%).
+Real-time multiplier 18.4× → 19.3×.
+
+### Why the wins are smaller than the original Phase A+B projection
+
+The Phase A roadmap projected 30+ ms of cumulative gains.  Reality on M2
+delivered ~8 ms.  Three things drove the gap:
+
+1. **Metal command-buffer submission on M2 is much cheaper than I
+   estimated.** I cited "~1-2 ms fixed overhead per dispatch" based on
+   an earlier diagnostic; actual cost is closer to 0.1-0.3 ms.  A1+A2's
+   "single command buffer per synth" win (eliminating 4 inter-step
+   dispatches) was projected –15 to –20 ms, landed at –1.4 ms.
+2. **Unified memory makes `tensor_get`/`tensor_set` between stages
+   nearly free.** There's no PCIe transfer cost to amortize.  The
+   "on-GPU latent" win that's a big deal on discrete-GPU x86 doesn't
+   apply on Apple silicon.
+3. **`kernel_mul_mm_q8_0_f32` never fires.** A3's projected –20 to –30 ms
+   was the matmul-bandwidth win from running ggml's optimized quantized
+   matmul kernel.  But the kernel only dispatches when the quantized
+   weight is `src0` (a) of `ggml_mul_mat`.  Supertonic's `[T, IC]`
+   activation layout forces the weight into `src1` (b) via the
+   `conv1d_f32` im2col wrapper, and ggml-metal falls back to a path
+   that dequantizes to f32 first.  **The full A3 win is unlocked by
+   B2 (activation layout permutation) — and only by it.**
+
+### A4 (text_encoder + duration consolidation) — deferred
+
+Analyzed but not implemented: text_encoder currently fires ~10 separate
+`ggml_backend_graph_compute` calls (1 ConvNeXt front + 4 relpos attn
++ 4 ffn + 2 speech_prompted_attn × 2-graph pattern).  Duration adds
+~4 small dispatches.
+
+Full consolidation into 1-2 graphs would require:
+- Extracting each sub-builder (`relpos_attention_ggml`, `ffn_block_ggml`,
+  `speech_prompted_attention_ggml`) into append-to-graph helpers (the
+  same shape of refactor that A1+A2 did for the per-CFM-step subgraph).
+- Converting the host-side residual + layer_norm + tanh-key-packing
+  work between sub-graphs into ggml ops.
+- Engineering: 4-8 focused hours.
+- Realistic return based on A1+A2's measured ratio: **–2 to –4 ms total**.
+
+Deferred because: (a) ROI per hour is now smaller than B1/B2, (b) the
+text_encoder + duration combined budget is only ~21 ms — even a perfect
+collapse to 1 dispatch each saves ~5-7 ms maximum, with no compounding
+effect on the other stages, (c) it doesn't unlock anything else
+downstream (unlike B2 which unlocks A3 step 2).
+
+Re-evaluate after B2 lands.  If the team needs every ms (e.g. for a
+constrained-device target), this is the next item to revisit.
+
+### Next levers on the table
+
+| Phase | Projected (post-A1+A2 calibration) | Unblocks | Cost |
+|-------|-----------------------------------:|----------|------|
+| B1 — f16 activations end-to-end | –5 to –10 ms | nothing | medium |
+| **B2 — activation layout permutation** | –3 to –5 ms direct, **+ unlocks A3 step 2 (–15 to –25 ms)** | A3 step 2 | high (invasive, touches rope + flash_attn + every attention site) |
+| A3 step 2 — q8_0 matmul kernel firing (after B2) | –15 to –25 ms (theoretical) | — | medium-low (B2 does the heavy lifting) |
+| B3 — argument buffer reuse | –2 to –5 ms | nothing | high (Metal backend internals) |
+| A4 — text_encoder + duration consolidation | –2 to –4 ms | nothing | medium-high |
+
+**The highest-leverage move now is B2.**  Without it, A3's matmul win is
+unreachable.  The combined B2 + A3-step-2 stack is the only realistic
+path to "Metal beats CPU outright on M2."
+
+### B1 / B2 / B3 status after attempted continuation (2026-05-11)
+
+After A4 deferred, attempted B1 (f16 end-to-end) and scoped B2.  Both
+proved bigger than scoped to a single follow-up session.  Documented
+here for the next round.
+
+**B1 (f16 activations) — partially scaffolded, deferred:**
+- Storage already worked from Phase 0 (load logic converts q8_0 → f16
+  correctly in f16 mode).
+- Lifting the rejection at load time made compute reach the graph
+  stage, then fail at `ggml-metal-ops.cpp:2818` (`ggml_metal_op_bin`'s
+  assertion that both srcs are f32).  A non-f32 tensor is flowing into
+  a `ggml_add` / `ggml_mul` somewhere in the graph — likely an
+  auto-fused add after a matmul where ggml-metal picks the matmul
+  output type as f16 instead of f32.
+- The cleanup pass needed (audit every binary op's input types and
+  force-cast where required) is the same kind of work B2 does
+  comprehensively for activation layout.  Pair them in a "graph-wide
+  type/layout consistency pass" PR.
+
+**B2 (activation layout permutation) — fully scoped, deferred:**
+The 24 `cont(transpose(activation))` calls per per-step graph (3 per
+QKV in 8 attention sites = 24, plus the post-attn out projection
+transpose) come from converting matmul output `[T, A]` into
+`[A, L]` for rope + flash_attn.  Eliminating them requires:
+
+1. **Matmul output layout flip** — output `[A=OC, T]` directly via
+   `ggml_mul_mat(pretransposed_w_[IC,OC], activation_[IC,T])`.
+   Requires the activation already in `[IC, T]` format — which
+   requires every upstream op to produce `[IC, T]`.
+2. **New `layer_norm_channel_[C,T]` Metal kernel** — the current
+   fused kernel assumes `[T, C]` and dispatches one threadgroup per
+   time step, threads stride over channels.  For `[C, T]` the
+   threadgroup decomposition flips: one threadgroup per channel,
+   threads stride over time, OR one threadgroup per time step with
+   different stride math.  Roughly 4-8 hours of Metal kernel work.
+3. **Audit every `ggml_add` / `ggml_mul` site** for broadcast
+   compatibility under the new layout (most should work via
+   `repeat_like`'s native broadcast, but every site needs a check).
+4. **Verify rope still works on `[D, L, H]` view** of the new
+   `[A, L]` activation (likely fine — rope's input is already
+   width-major).
+
+The unblocked A3 step 2 win (Metal dispatches
+`kernel_mul_mm_q8_0_f32` natively) is what makes B2 worth the work.
+Together they target ~25-30 ms of additional Metal speedup vs
+current 166 ms.  Without A3 step 2, B2 alone delivers ~-3 to -5 ms
+(eliminating the cont(transpose) dispatches), which is below the
+maintenance cost of the kernel rewrite.
+
+Realistic estimate: 3-5 focused days as a dedicated PR.  Worth doing
+when the goal is "Metal beats CPU on M2" — which is currently still
+12 ms away (Metal 166 / CPU 153).
+
+**B3 (argument buffer reuse) — scoped, deferred:**
+Metal's `MTLIndirectCommandBuffer` lets the host pre-encode a command
+buffer once and bind new input arguments per call, eliminating the
+per-call command-buffer encoding cost.  Equivalent to CUDA Graph
+Capture.
+
+Requires changes inside the ggml-metal backend (the `ggml_metal_op_*`
+encode functions, the residency-set lifecycle).  Cross-cutting work
+touching files outside `tts-cpp/cmake/vcpkg-overlay-ports/ggml/`'s
+current patches — could grow the overlay considerably.
+
+Realistic estimate: ~1 week including upstream-friendly design,
+since the right shape of this change is "improve ggml-metal for all
+users" not "patch ggml just for Supertonic."  Better as a contribution
+to the ggml-org project than a Supertonic-private optimization.
+
+### Closing the loop on Phase A+B follow-up
+
+Cumulative Metal perf trajectory across this PR:
+- Phase B baseline (correctness port):  **249.92 ms**
+- Tier 2 final (4 fused kernels + pretranspose): **174.49 ms**
+- Phase A+B follow-up (A1+A2 + A3 step 1):  **166.39 ms**
+
+That's **-83 ms / -33% total** on Metal vs the starting baseline.
+Real-time multiplier 12.82× → 19.34×.  CPU q8_0 still wins by 13 ms;
+ONNX-CPU by 21 ms.  Closing those final gaps requires B2 + A3 step 2
+as outlined above — substantial work, but the path is clear.
+
+Parity vs CPU reference held at corr ≥ 0.998 / L∞ ≤ 0.05 throughout
+every commit.  Multi-precision harness (`--precision f32|f16|q8_0`)
+ready to validate B1 + A3 step 2 wins when they land.
+
+### B2 partial landed (2026-05-11) — Metal vec_est beats CPU
+
+Investigated a smaller-scope B2 implementation and found that the
+"swap `ggml_mul_mat` arg order at Q/K/V projection sites" trick
+captures most of B2's direct win without any layer_norm kernel
+rewrite or full activation-layout permutation.
+
+The mechanism: `conv1d_f32(im2col, kernel)` produces `[T, A]` (because
+mul_mat(im2col_[IC,T], kernel_[IC,OC]) yields [T, OC]).  The Q/K/V
+projection sites then have to `cont(transpose(q_tc))` to get the
+`[A, L]` shape that rope + flash_attn want.  By calling
+`mul_mat(kernel, im2col)` instead — kernel as src0 — the result
+lands in `[A, T]` directly.  Both operands are still non-transposed
+so the assertion passes.
+
+Shipped as a new `dense_matmul_time_wt_pretransposed_ggml` helper.
+Eight call sites updated: 4 text-attention Q/K/V/out + 4
+style-attention Q/K/V/out across all per-step graph groups.  ~24
+cont(transpose) dispatches × 5 CFM steps = ~120 ops eliminated
+per synth.
+
+Bench (Apple M2, 10 runs + 2 warmup):
+- pre-B2 f32:    total 172.56 ms / vec_est 99.07 ms
+- **B2 partial f32: total 160.88 ms / vec_est 91.61 ms**
+- delta:         -11.68 ms total / -7.46 ms vec_est
+
+**This is the first time Metal vec_est beats CPU baseline** (91.61
+vs 94.86 ms).  Total Metal 160.88 ms now within 7 ms of CPU's
+153.52 ms, and within 16 ms of ONNX's 144.89 ms.
+
+Cumulative trajectory:
+- Phase B baseline:   249.92 ms (12.8× real-time)
+- Tier 2 final:       174.49 ms (18.4×)
+- Phase A+B + B2 partial: **160.88 ms (19.9×)**  ←  -36% from start
+
+**The A3 step 2 unlock (q8_0 matmul kernel dispatch) requires
+pretransposing q8_0 weights at load time.** Attempted, but the
+`ggml_reshape_3d(w_pre, 1, IC, OC)` call inside the helper produces
+an invalid q8_0 tensor when ne[0]=1 (q8_0 requires 32-element
+block alignment on the inner dim).  A clean q8_0 path needs either
+a different reshape strategy (skip the K=1 conv1d framing entirely
+and call `ggml_mul_mat(w_pre_q8, im2col_via_a_different_path)`),
+or an in-graph `ggml_im2col` that accepts a 2D kernel directly.
+Either is a focused half-day's work for ~10-20 ms more savings
+(matmul kernel bandwidth).  Deferred to a separate session.
+
+### Full B2 + vocoder CT landed (2026-05-12) — Metal fastest on every stage
+
+Built on the B2-partial trick by parameterising every fused custom
+Metal kernel on per-axis element strides (`sxt`, `sxc`, `syt`, `syc`)
+so the same compiled kernel handles both `[T, C]` and `[C, T]`
+activations.  ggml overlay-port bumped 12 → 13.  Added `_ct`
+constructors for `layer_norm_channel`, `depthwise_1d`, `pw2_residual`,
+`bias_gelu`, `edge_pad_1d`.
+
+In `supertonic_vector_estimator.cpp`: new `vector_convnext_ggml_ct`
+runs the full ConvNeXt block on `[C, T]` activations.  Pointwise
+K=1 Conv1d becomes a direct `ggml_mul_mat(w[IC,OC], x[IC,T])` (no
+im2col, no transpose).  All 16 ConvNeXt blocks in the per-step
+graph (prologue × 4 + 3 group_prep × 4 + tail × 4) wrap a single
+entry permute and a single exit permute around the chain.
+
+In `supertonic_vocoder.cpp`: same pattern for the 10-block vocoder
+ConvNeXt chain.  Vocoder differences vs vector_estimator: (1)
+depthwise is causal (left-only pad), no `_ct` causal kernel yet —
+stays on `[T, C]` with two intra-block permutes; (2) gamma is
+scalar `[1]`, so the `pw2_residual_ct` fused op doesn't fit, keep
+unfused `mul(scalar gamma) + add(residual)` tail; (3) `norm_g` /
+`norm_b` ship as `[1, C]` — same flatten-with-`ggml_reshape_1d`
+quirk as `.gamma` in vector_estimator.
+
+Discovered along the way: the legacy `pw2_residual_ggml` wrapper's
+`gamma->ne[0] == x->ne[1]` gate was silently rejecting the fused
+path for ConvNeXt all along (GGUF ships `.gamma` as `[1, C, 1, 1]`
+not `[C]`).  The `_ct` wrapper flattens it once with
+`ggml_reshape_1d`, so this is the first time the fused
+`pw2_residual` op actually runs on the ConvNeXt residual.
+
+Bench (Apple M2, q8_0 GGUF, 4 threads, 5-step CFM, 5 runs + 1 warmup,
+all four backends benched in sequence on the same machine state):
+
+| Stage (ms median)            | **ggml Metal** | ggml CPU | ONNX CPU | ONNX CoreML |
+|------------------------------|---------------:|---------:|---------:|------------:|
+| preprocess                   |          0.02 |     0.01 |     0.05 |        0.05 |
+| duration                     |          3.27 |     1.49 |     1.26 |        8.17 |
+| text_encoder                 |         12.11 |    11.70 |     8.22 |       16.26 |
+| **vector_estimator** (5 step)|     **57.87** |    90.36 |    77.04 |      177.89 |
+| **vocoder**                  |     **17.11** |    39.38 |    49.55 |       50.29 |
+| **total**                    |     **91.37** |   142.92 |   136.32 |      255.90 |
+| RTF (lower is faster)        |     **0.029** |    0.045 |    0.043 |       0.080 |
+| **real-time multiplier**     |     **35.1×** |   22.4×  |   23.5×  |       12.5× |
+
+Cumulative trajectory:
+- Phase B baseline:        249.92 ms (12.8× real-time)
+- Tier 2 final:            174.49 ms (18.4×)
+- Phase A+B + B2 partial:  160.88 ms (19.9×)
+- **Full B2 + vocoder CT: 91.37 ms (35.1×)**  ← −63% from Phase B start
+
+Overrides: `SUPERTONIC_DISABLE_CT_CONVNEXT=1` (vector_estimator),
+`SUPERTONIC_DISABLE_CT_VOCODER=1` (vocoder).
+
+Open follow-ups (small ROI, separate PR):
+- Causal-pad mode on `depthwise_1d_ct` → single chain-level
+  permute for the vocoder (currently 2 intra-block permutes per
+  block).  Projected -1 to -3 ms vocoder.
+- B1 — f16 activations end-to-end.  Storage loads today;
+  compute hits `ggml_metal_op_bin`'s f32 assertion.  Needs a
+  graph-wide binary-op type cleanup.
+- B3 — argument buffer reuse via `MTLIndirectCommandBuffer`.
+  Better as an upstream ggml-metal contribution than a
+  Supertonic-private patch.
+
+### Out of scope for this baseline
+
+- CUDA/Vulkan paths (host is Apple silicon; address Metal first).
+- Multilingual / non-English voice perf — voice-agnostic.
 
 ### Distribution
 

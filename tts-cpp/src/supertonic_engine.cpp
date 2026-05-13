@@ -122,9 +122,17 @@ struct Engine::Impl {
         if (!std::filesystem::exists(opts.model_gguf_path)) {
             throw std::runtime_error(supertonic_setup_hint(opts.model_gguf_path));
         }
+        // Map the public Precision enum onto the internal one (separate
+        // declaration so the engine header doesn't pull in internal.h).
+        supertonic_precision internal_precision = supertonic_precision::F32;
+        switch (opts.precision) {
+            case Precision::F32:  internal_precision = supertonic_precision::F32;  break;
+            case Precision::F16:  internal_precision = supertonic_precision::F16;  break;
+            case Precision::Q8_0: internal_precision = supertonic_precision::Q8_0; break;
+        }
         if (!load_supertonic_gguf(opts.model_gguf_path, model,
                                   opts.n_gpu_layers, /*verbose=*/false,
-                                  opts.f16_weights)) {
+                                  opts.f16_weights, internal_precision)) {
             throw std::runtime_error("Supertonic Engine: failed to load GGUF: " +
                                      opts.model_gguf_path);
         }
@@ -238,20 +246,24 @@ struct Engine::Impl {
 
         std::vector<float> latent_mask((size_t) latent_len, 1.0f);
 
-        std::vector<float> next;
-        for (int step = 0; step < steps; ++step) {
-            if (cancel_flag.load(std::memory_order_acquire)) {
-                throw std::runtime_error("Supertonic Engine: cancelled at vector step "
-                                         + std::to_string(step));
-            }
-            if (!supertonic_vector_step_ggml(model, latent.data(), latent_len,
-                                             text_emb.data(), (int) text_ids.size(),
-                                             style_ttl.data(), latent_mask.data(),
-                                             step, steps, next, &error)) {
-                throw std::runtime_error("Supertonic Engine: vector estimator failed: " + error);
-            }
-            latent.swap(next);
+        if (cancel_flag.load(std::memory_order_acquire)) {
+            throw std::runtime_error("Supertonic Engine: cancelled before vector estimator");
         }
+        // Phase A1+A2: run all CFM steps as ONE ggml graph on non-CPU
+        // backends.  Latent flows step-to-step in GPU memory; on CPU this
+        // falls back to a per-step loop over `supertonic_vector_step_ggml`.
+        // Override via SUPERTONIC_DISABLE_LOOP_GRAPH=1.
+        // NOTE: cancellation granularity is now per-synth on the GPU path
+        // (worst-case cancel latency = whole CFM loop).  CPU keeps per-step
+        // cancellation via the fallback.
+        std::vector<float> final_latent;
+        if (!supertonic_vector_loop_ggml(model, latent.data(), latent_len,
+                                          text_emb.data(), (int) text_ids.size(),
+                                          style_ttl.data(), latent_mask.data(),
+                                          steps, final_latent, &error)) {
+            throw std::runtime_error("Supertonic Engine: vector estimator failed: " + error);
+        }
+        latent = std::move(final_latent);
 
         if (cancel_flag.load(std::memory_order_acquire)) {
             throw std::runtime_error("Supertonic Engine: cancelled before vocoder");

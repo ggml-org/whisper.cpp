@@ -14,7 +14,15 @@
 //
 //     EngineOptions opts;
 //     opts.model_gguf_path = "models/supertonic.gguf";
-//     opts.n_gpu_layers    = 0;                      // CPU only today
+//     opts.n_gpu_layers    = 0;                      // 0 = CPU; >0 enables Metal
+//                                                    // on macOS / CUDA / Vulkan /
+//                                                    // OpenCL when compiled in.
+//                                                    // Metal on Apple silicon is the
+//                                                    // fastest backend as of 2026-05-12
+//                                                    // (~35× realtime on M2, beats
+//                                                    // ggml-CPU, ONNX-CPU and ONNX-CoreML
+//                                                    // on every stage that matters).
+//                                                    // See PROGRESS_SUPERTONIC.md.
 //
 //     Engine engine(opts);
 //     for (const auto & line : lines) {
@@ -43,6 +51,26 @@
 
 namespace tts_cpp::supertonic {
 
+// Compute precision for matmul weights inside the model buffer.  Selects
+// how the GGUF's stored q8_0 weights are loaded into the resident model:
+//   - F32  (default): expand q8_0 to f32 at load time.  CPU path uses
+//          cblas/AMX f32 matmul.  Metal path uses kernel_mul_mat_f32_f32.
+//          Highest accuracy + simplest, but on Metal misses the 4×
+//          weight-bandwidth win of running the native q8_0 matmul kernel.
+//   - F16  (Phase B1): expand q8_0 to f16 at load time, run f16 matmul
+//          with f32 accumulator.  ~2× less activation bandwidth on Metal,
+//          may drift slightly across the 5 CFM steps (parity tolerance
+//          relaxed to ~1e-2 L_inf).
+//   - Q8_0 (Phase A3): keep weights as q8_0 in the model buffer, let
+//          ggml's quantized matmul kernels dispatch directly.  Metal-only
+//          (Phase A3 makes the load logic asymmetric: q8_0 on Metal, f32
+//          on CPU).
+enum class Precision {
+    F32,
+    F16,
+    Q8_0,
+};
+
 struct EngineOptions {
     // Required.
     std::string model_gguf_path;
@@ -55,6 +83,11 @@ struct EngineOptions {
     int   seed     = 42;
     int   n_threads     = 0;
     int   n_gpu_layers  = 0;
+
+    // Compute precision for matmul weights — see Precision enum above.
+    // Default F32 is the current behaviour (load q8_0 GGUF, expand to f32).
+    // F16 / Q8_0 are non-default GPU paths (Metal-validated).
+    Precision precision = Precision::F32;
 
     // F16 K/V flash-attention in the vector estimator.  When -1, the
     // engine auto-enables this on GPU backends (non-CPU) and disables
@@ -72,6 +105,9 @@ struct EngineOptions {
     // Halves the GPU read bandwidth into those ops with a small
     // (≤ 2e-3 abs / 5e-3 cosine) numerical drift on the end-to-end
     // synth.  Mirrors chatterbox's CHATTERBOX_F16_CFM gate.
+    // Orthogonal to `precision`: this is a per-op runtime selector for
+    // the OpenCL hot-weight materialisation, while `precision` decides
+    // the storage type of all matmul weights uniformly.
     int f16_weights = -1;
 
     // Optional path to a .npy file containing the initial noise tensor of

@@ -78,7 +78,14 @@ ggml_tensor * repeat_like(ggml_context * ctx, ggml_tensor * v, ggml_tensor * lik
     if (!ggml_can_repeat(v, like)) {
         throw std::runtime_error("cannot repeat tensor in duration graph");
     }
-    return ggml_repeat(ctx, v, like);
+    // Every caller feeds this into ggml_add/ggml_mul which broadcast natively;
+    // skip the explicit ggml_repeat dispatch.
+    static const bool force_explicit_repeat =
+        std::getenv("SUPERTONIC_FORCE_EXPLICIT_REPEAT") != nullptr;
+    if (force_explicit_repeat) {
+        return ggml_repeat(ctx, v, like);
+    }
+    return v;
 }
 
 ggml_tensor * conv1d_f32(ggml_context * ctx,
@@ -87,6 +94,7 @@ ggml_tensor * conv1d_f32(ggml_context * ctx,
                          int stride,
                          int padding,
                          int dilation) {
+    // duration uses the pure-graph path unconditionally; no CPU fast path.
     ggml_tensor * im2col = ggml_im2col(ctx, kernel, input, stride, 0, padding, 0, dilation, 0, false, GGML_TYPE_F32);
     ggml_tensor * result = ggml_mul_mat(ctx,
         ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1]),
@@ -95,6 +103,15 @@ ggml_tensor * conv1d_f32(ggml_context * ctx,
 }
 
 ggml_tensor * edge_clamp_pad_1d(ggml_context * ctx, ggml_tensor * x, int pad_left, int pad_right) {
+    if (pad_left == 0 && pad_right == 0) return x;
+    static const bool disable_fused_edge_pad =
+        std::getenv("SUPERTONIC_DISABLE_FUSED_EDGE_PAD") != nullptr;
+    if (!disable_fused_edge_pad &&
+        x->type == GGML_TYPE_F32 &&
+        x->ne[2] == 1 && x->ne[3] == 1 &&
+        ggml_is_contiguous(x)) {
+        return ggml_supertonic_edge_pad_1d(ctx, x, pad_left, pad_right);
+    }
     const int64_t L = x->ne[0];
     const int64_t C = x->ne[1];
     ggml_tensor * out = x;
@@ -117,6 +134,16 @@ ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
                                   ggml_tensor * b,
                                   int dilation) {
     const int K = (int) w->ne[0];
+    static const bool disable_fused =
+        std::getenv("SUPERTONIC_DISABLE_FUSED_DEPTHWISE") != nullptr;
+    if (!disable_fused && (K == 3 || K == 5) &&
+        x->type == GGML_TYPE_F32 && w->type == GGML_TYPE_F32 &&
+        b->type == GGML_TYPE_F32 &&
+        x->ne[2] == 1 && x->ne[3] == 1 && w->ne[1] == 1 && w->ne[3] == 1 &&
+        w->ne[2] == x->ne[1] && b->ne[0] == x->ne[1] &&
+        ggml_is_contiguous(x) && ggml_is_contiguous(w) && ggml_is_contiguous(b)) {
+        return ggml_supertonic_depthwise_1d(ctx, x, w, b, dilation);
+    }
     const int pad_left = ((K - 1) * dilation) / 2;
     const int pad_right = (K - 1) * dilation - pad_left;
     ggml_tensor * padded = edge_clamp_pad_1d(ctx, x, pad_left, pad_right);
@@ -128,6 +155,15 @@ ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
 }
 
 ggml_tensor * layer_norm_ggml(ggml_context * ctx, ggml_tensor * x, ggml_tensor * g, ggml_tensor * b) {
+    static const bool disable_fused_layer_norm =
+        std::getenv("SUPERTONIC_DISABLE_FUSED_LAYER_NORM") != nullptr;
+    if (!disable_fused_layer_norm &&
+        x->type == GGML_TYPE_F32 && g->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 &&
+        x->ne[2] == 1 && x->ne[3] == 1 &&
+        g->ne[0] == x->ne[1] && b->ne[0] == x->ne[1] &&
+        ggml_is_contiguous(x) && ggml_is_contiguous(g) && ggml_is_contiguous(b)) {
+        return ggml_supertonic_layer_norm_channel(ctx, x, g, b, 1e-6f);
+    }
     ggml_tensor * xt = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
     xt = ggml_norm(ctx, xt, 1e-6f);
     xt = ggml_mul(ctx, xt, repeat_like(ctx, g, xt));
