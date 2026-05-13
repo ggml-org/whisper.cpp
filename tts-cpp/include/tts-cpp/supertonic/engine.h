@@ -47,6 +47,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -265,6 +266,31 @@ struct EngineOptions {
     // shader-compile cost; only the cgraph allocation is repeated).
     // Default empty (no pre-warming).
     std::string prewarm_text;
+
+    // QVAC-18605 round 7 — Vulkan env-var passthrough.
+    //
+    // Applied to the process environment via `set_env_if_unset`
+    // semantics just before `init_supertonic_backend()` runs.
+    // Each key MUST start with `GGML_VK_` (operator-config typo
+    // guard — invalid keys throw at engine-construction time, no
+    // partial-application).
+    //
+    // Operator-set env vars (already present in the environment
+    // when the Engine ctor runs) WIN over these overrides — lets
+    // a debugging operator force-disable a setting from the shell
+    // without recompiling, while still letting an EngineOptions
+    // configuration set the same knob in production.
+    //
+    // Example use cases (the round-7 CLI flags map onto these):
+    //   {"GGML_VK_PREFER_HOST_MEMORY",      "1"}  // --vulkan-prefer-host-memory
+    //   {"GGML_VK_DISABLE_COOPMAT2",        "1"}  // --vulkan-disable-coopmat2
+    //   {"GGML_VK_DISABLE_BFLOAT16",        "1"}  // --vulkan-disable-bfloat16
+    //   {"GGML_VK_PERF_LOGGER",             "1"}  // --vulkan-perf-logger
+    //   {"GGML_VK_ASYNC_USE_TRANSFER_QUEUE","1"}  // --vulkan-async-transfer
+    //
+    // Default empty (zero behaviour change for every existing
+    // operator config).
+    std::map<std::string, std::string> vulkan_env_overrides;
 };
 
 // Per-chunk PCM callback for streaming synthesis.  Receives a pointer to

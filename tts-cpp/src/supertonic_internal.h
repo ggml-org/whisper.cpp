@@ -60,6 +60,97 @@ struct supertonic_voice_style {
     ggml_tensor * dp  = nullptr; // (16, 8, 1) in ggml axis order for JSON (1, 8, 16)
 };
 
+// QVAC-18605 round 7 — voice ttl/dp host cache.
+//
+// `Engine::Impl::synthesize()` historically downloaded the per-
+// voice style tensors (`ttl`, `dp`) on EVERY call:
+//
+//     std::vector<float> style_ttl = read_tensor_f32(vit->second.ttl);
+//     std::vector<float> style_dp  = read_tensor_f32(vit->second.dp);
+//
+// On Vulkan / OpenCL backends each `read_tensor_f32` is a
+// synchronous GPU→host download.  The voice tensors are part of
+// the load-time GGUF state and never mutate after load, so
+// caching them per-engine keyed by voice name eliminates two sync
+// points per `synthesize()` call after the first per-voice.
+//
+// This helper is intentionally extracted from `Engine::Impl` so
+// the lookup-or-load semantics are testable on CPU without
+// instantiating a full Engine.  See
+// `test-supertonic-voice-host-cache` for the contract.
+//
+// Reference-stability contract: the returned `entry` reference is
+// stable across subsequent `get_or_load` calls for OTHER voices
+// (`std::unordered_map`'s reference-stability guarantee on
+// insert).  Callers may hold the reference across the next
+// `get_or_load` on the same instance, BUT must NOT call `clear()`
+// on the cache while holding the reference.  The Engine::Impl
+// call site captures `e.ttl.data()` / `e.dp.data()` and forwards
+// them to the synthesis pipeline, which expects them to stay
+// valid for the duration of the call — `clear()` is currently
+// only reachable on Engine destruction (post-synthesis).
+struct voice_host_cache {
+    struct entry {
+        std::vector<float> ttl;
+        std::vector<float> dp;
+    };
+
+    // Returns a stable reference to the cached entry for
+    // `voice_name`.  On cache miss, calls `read_tensor_f32` on
+    // `ttl_tensor` and `dp_tensor`, stores the result, and
+    // returns the new entry.  On cache hit, returns the existing
+    // entry without touching the GGML tensors at all (the host
+    // vectors are reused as-is — `ttl_tensor` / `dp_tensor` may
+    // legally be null on a cache hit).
+    //
+    // Throws std::runtime_error if the entry is missing AND
+    // either tensor pointer is null (loud-failure for an Impl
+    // bug; never expected to fire on the production path because
+    // Impl validates `voices.find()` before calling).
+    const entry & get_or_load(const std::string & voice_name,
+                              ggml_tensor * ttl_tensor,
+                              ggml_tensor * dp_tensor);
+
+    // Drops every cached entry.  Currently only reachable on
+    // Engine destruction; included for forward-compat with hot-
+    // swap scenarios where the underlying backend is replaced
+    // while the engine handle is reused.
+    void clear();
+
+    // Diagnostic — number of entries currently cached.  Used by
+    // the test to assert lookup-vs-load semantics (size doesn't
+    // grow on a cache hit).
+    size_t size() const;
+
+private:
+    std::unordered_map<std::string, entry> by_name_;
+};
+
+// QVAC-18605 round 7 — Vulkan env-var passthrough.
+//
+// Applies a map of `GGML_VK_*` env-var overrides via
+// `set_env_if_unset` so the `init_supertonic_backend()` path
+// picks them up at backend construction time.  `set_env_if_unset`
+// semantics: an operator-set env var (already present in the
+// environment when this is called) WINS over the EngineOptions
+// override.  Lets a debugging operator force-disable a setting
+// from the shell without recompiling, while still letting an
+// EngineOptions configuration set the same knob in production.
+//
+// Throws std::runtime_error on a key that doesn't start with
+// `GGML_VK_` (loud-failure for operator-config typos like
+// `GMML_VK_PREFER_HOST_MEMORY`).  ALL-OR-NOTHING: validation
+// happens BEFORE any env var is touched, so a partial-success
+// can't leave the env in a half-applied state.
+//
+// Pass an empty map for a no-op (the default
+// `EngineOptions::vulkan_env_overrides` value).
+//
+// Must be called BEFORE `init_supertonic_backend()` runs; called
+// from `Engine::Impl` ctor and from `supertonic-bench` main right
+// before `load_supertonic_gguf()`.
+void apply_vulkan_env_overrides(const std::map<std::string, std::string> & overrides);
+
 struct supertonic_vocoder_convnext_weights {
     ggml_tensor * dw_w = nullptr;
     ggml_tensor * dw_b = nullptr;

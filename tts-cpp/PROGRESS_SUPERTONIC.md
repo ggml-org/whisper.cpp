@@ -1133,6 +1133,122 @@ measurement on real hardware.
 
 ---
 
+### Vulkan optimisation round 7 (May 2026, QVAC-18605 follow-up #5) — Bench observability + voice cache + Vulkan env-var passthrough
+
+The next-rounds plan
+(`aiDocs/PLAN_VULKAN_NEXT_ROUNDS.md`) identified bench-side
+observability + a small set of trivial wins as the highest
+impact-÷-risk round to land before the bigger structural changes
+of rounds 5 / 8 / 9.  Round 7 ships four sub-features, none
+touching the per-synth hot path beyond a single voice-cache
+lookup.
+
+#### Changes
+
+- **Voice ttl/dp host cache** (`tts_cpp::supertonic::detail::voice_host_cache`).
+  Extracted from `Engine::Impl::synthesize()` so the lookup-or-load
+  semantics are testable on CPU without instantiating a full
+  Engine.  First `synthesize()` per voice does the 2 GPU→host
+  downloads (`read_tensor_f32(ttl)` + `read_tensor_f32(dp)`)
+  and caches the result; subsequent calls return the cached
+  entry without touching the backend.  Eliminates 2 sync points
+  per `synthesize()` after the first per-voice on Vulkan / OpenCL.
+  Tiny (2 small tensors) but free.  Reference-stability contract
+  documented on the struct: caller may hold the reference for
+  the duration of one synthesis, but must not call `clear()`
+  while holding it (currently only reachable on Engine
+  destruction).
+
+- **Vulkan env-var passthrough**
+  (`apply_vulkan_env_overrides(map)` public helper +
+  `EngineOptions::vulkan_env_overrides` field +
+  `--vulkan-prefer-host-memory` / `--vulkan-disable-coopmat2` /
+  `--vulkan-disable-bfloat16` / `--vulkan-perf-logger` /
+  `--vulkan-async-transfer` / `--vulkan-env KEY=VALUE` CLI flags
+  on all three binaries).  ggml-vulkan reads its `GGML_VK_*`
+  env vars at backend-init time; this round lets operators set
+  them via CLI (or `EngineOptions`) without exporting in the
+  shell.  ALL-OR-NOTHING validation: an operator-config typo
+  like `GMML_VK_PREFER_HOST_MEMORY` throws cleanly via
+  `apply_vulkan_env_overrides` BEFORE any env var is touched.
+  `set_env_if_unset` semantics so an operator-set env var still
+  WINS over the EngineOptions override (debugging operators can
+  force-disable from the shell without recompiling).
+
+- **Bench `ggml_backend_synchronize` boundaries**
+  (`--bench-sync` default on, `--no-bench-sync` opt-out).
+  Inserts an explicit backend sync at every per-stage timing
+  boundary so wall-clock attributes to the right stage on async
+  backends.  Cheap on CPU (no-op when no GPU work pending);
+  ensures per-stage breakdowns reflect work-completed-by-the-
+  prior-stage on Vulkan / OpenCL.  Round-7 prerequisite for
+  measuring rounds 5 / 8 / 9 wins on real hardware.
+
+- **Bench per-denoise-step breakdown** (`--bench-per-step`,
+  default off).  Times each `supertonic_vector_step_ggml` call
+  individually so the first-step (cold pipeline) cost can be
+  distinguished from steady-state.  Adds an indented
+  `vector_step[N]` line per step in the human output and a
+  separate JSON entry per step.  Empty array on the default-off
+  path = identical legacy JSON shape.
+
+#### Test plan (TDD, round 7)
+
+Strict test-first.  Two new test executables committed first,
+observed to fail on the missing symbols (compile errors:
+`'apply_vulkan_env_overrides' was not declared in this scope`
+for the env-passthrough test; `'voice_host_cache' has not been
+declared` for the voice-cache test).  TDD also caught a real
+implementation bug: the original validator used `std::string()`
+empty-as-success sentinel which collided with the empty-string-
+as-key edge case; the test pinned the contract and forced the
+fix to a `bool / out-param` API before any production wiring
+went in.
+
+| Test | Coverage | Result |
+|------|----------|--------|
+| `test-supertonic-vulkan-env-overrides` (NEW) | 7 functions, **29 checks** — SFINAE field existence; round-3/4/6 baseline-defaults regression guard; empty-map noop; single-entry sets env; operator-env wins (set_env_if_unset semantics); invalid-key throws (4 negative cases including the empty-string-key edge); ALL-OR-NOTHING on mixed-validity (no partial application); multi-entry happy path. | 29 / 29 PASS |
+| `test-supertonic-voice-host-cache` (NEW) | 6 functions, **25 checks** — empty cache; first-load populates from GGML tensors; second-load hits cache (verified by passing nullptr — a real load attempt would crash); multi-voice independence + reference stability across other-voice lookups; clear-drops-entries; null-tensors-on-miss throws (Impl-bug guard). | 25 / 25 PASS |
+| Every other unit test (rounds 1 + 2 + 3 + 4 + 6 + audit follow-ups + the 14 baseline tests) | Zero-regression gate | 19 / 19 PASS — unchanged |
+
+Whole CPU-only `ctest -L unit` reports **21 / 21 tests, 0
+failures, 0 regressions**.
+
+#### Backwards compatibility
+
+- `EngineOptions::vulkan_env_overrides` defaults to empty —
+  `apply_vulkan_env_overrides({})` is a no-op (regression-
+  guarded by `test_empty_map_is_noop`); no operator-visible
+  behaviour change for existing configs.
+- Voice cache is fully transparent — `Engine::Impl` hits the
+  cache in place of the previous direct `read_tensor_f32` calls;
+  the cached vectors are bit-equal to the originals.
+- `--bench-sync` defaults to ON.  Per-stage times in the bench
+  output may shift slightly upward on Vulkan / OpenCL because
+  they now reflect work-completed-by-the-stage instead of
+  host-return-from-the-stage; the AGGREGATE total stays equal
+  (the work was always being done; the attribution just gets
+  more accurate).  `--no-bench-sync` recovers the historical
+  shape exactly.
+- `--bench-per-step` defaults to OFF — JSON shape unchanged on
+  the default path.
+
+#### Why no live perf number?
+
+Round 7 is **observability + paving** — the wins are:
+- Voice cache: 2 sync points / synth eliminated (small but free).
+- Bench sync + per-step: prerequisites for measuring round 5 / 8
+  / 9 wins on real hardware (no measurable production effect by
+  themselves).
+- Vulkan env passthrough: triage knobs for operators, not
+  production tuning.
+
+The biggest payoff lands in round 8 when the bench surface from
+round 7 starts attributing the front-block GPU-bridge win to the
+right stage column.
+
+---
+
 ## Remaining Work
 
 ### Runtime and performance

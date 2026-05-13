@@ -39,6 +39,14 @@ void usage(const char * argv0) {
         "                            construction so first-real-call latency on\n"
         "                            Vulkan / OpenCL doesn't pay the shader-\n"
         "                            compile cost; no-op on CPU)\n"
+        "          [--vulkan-prefer-host-memory]    (sets GGML_VK_PREFER_HOST_MEMORY=1)\n"
+        "          [--vulkan-disable-coopmat2]      (sets GGML_VK_DISABLE_COOPMAT2=1)\n"
+        "          [--vulkan-disable-bfloat16]      (sets GGML_VK_DISABLE_BFLOAT16=1)\n"
+        "          [--vulkan-perf-logger]           (sets GGML_VK_PERF_LOGGER=1)\n"
+        "          [--vulkan-async-transfer]        (sets GGML_VK_ASYNC_USE_TRANSFER_QUEUE=1)\n"
+        "          [--vulkan-env KEY=VALUE]         (set arbitrary GGML_VK_* env var;\n"
+        "                            may be repeated; operator-set env vars in the shell\n"
+        "                            STILL win over these CLI overrides)\n"
         "          [--noise-npy /path/to/noise.npy]\n"
         "          [--stream-chunk-tokens N]    (0 = batch; >0 enables\n"
         "                            streaming with target ~N text-token chunks)\n"
@@ -161,6 +169,19 @@ int main(int argc, char ** argv) {
             }
         }
         else if (arg == "--prewarm") opts.prewarm_text = next("--prewarm");
+        else if (arg == "--vulkan-prefer-host-memory") opts.vulkan_env_overrides["GGML_VK_PREFER_HOST_MEMORY"]      = "1";
+        else if (arg == "--vulkan-disable-coopmat2")   opts.vulkan_env_overrides["GGML_VK_DISABLE_COOPMAT2"]        = "1";
+        else if (arg == "--vulkan-disable-bfloat16")   opts.vulkan_env_overrides["GGML_VK_DISABLE_BFLOAT16"]        = "1";
+        else if (arg == "--vulkan-perf-logger")        opts.vulkan_env_overrides["GGML_VK_PERF_LOGGER"]             = "1";
+        else if (arg == "--vulkan-async-transfer")     opts.vulkan_env_overrides["GGML_VK_ASYNC_USE_TRANSFER_QUEUE"]= "1";
+        else if (arg == "--vulkan-env") {
+            const std::string raw = next("--vulkan-env");
+            const auto eq = raw.find('=');
+            if (eq == std::string::npos || eq == 0) {
+                throw std::runtime_error("--vulkan-env expects KEY=VALUE (got: " + raw + ")");
+            }
+            opts.vulkan_env_overrides[raw.substr(0, eq)] = raw.substr(eq + 1);
+        }
         else if (arg == "--noise-npy") opts.noise_npy_path = next("--noise-npy");
         else if (arg == "--stream-chunk-tokens") {
             opts.stream_chunk_tokens = std::stoi(next("--stream-chunk-tokens"));

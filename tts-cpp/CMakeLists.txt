@@ -830,6 +830,34 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-kv-attn-type-api)
     tts_cpp_register_test(test-supertonic-kv-attn-type-api LABEL "unit")
 
+    # QVAC-18605 round 7 — Vulkan env-var passthrough mechanism
+    # (EngineOptions::vulkan_env_overrides + apply_vulkan_env_overrides
+    # public helper).  Tests cover: SFINAE field existence, empty-
+    # map noop, single-entry-sets-env, operator-env-wins (set_env_if_unset
+    # semantics), invalid-key-throws (loud-failure for typos), and
+    # all-or-nothing-on-mixed-validity (no partial application).
+    add_executable(test-supertonic-vulkan-env-overrides
+        test/test_supertonic_vulkan_env_overrides.cpp)
+    target_link_libraries(test-supertonic-vulkan-env-overrides PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-vulkan-env-overrides PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-vulkan-env-overrides)
+    tts_cpp_register_test(test-supertonic-vulkan-env-overrides LABEL "unit")
+
+    # QVAC-18605 round 7 — voice ttl/dp host cache
+    # (`tts_cpp::supertonic::detail::voice_host_cache`).  Standalone
+    # helper extracted from Engine::Impl::synthesize() so the
+    # lookup-or-load semantics are testable on CPU without
+    # instantiating a full Engine.  Tests cover: empty / first-load-
+    # populates / second-load-hits-cache (null-tensor passthrough
+    # proves the cache hit) / multi-voice / clear / null-on-miss
+    # throws.
+    add_executable(test-supertonic-voice-host-cache
+        test/test_supertonic_voice_host_cache.cpp)
+    target_link_libraries(test-supertonic-voice-host-cache PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-voice-host-cache PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-voice-host-cache)
+    tts_cpp_register_test(test-supertonic-voice-host-cache LABEL "unit")
+
     add_executable(test-supertonic-f16-attn-parity
         test/test_supertonic_f16_attn_parity.cpp)
     target_link_libraries(test-supertonic-f16-attn-parity PRIVATE ggml)

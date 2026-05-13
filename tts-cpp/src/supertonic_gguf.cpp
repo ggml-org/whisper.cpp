@@ -751,6 +751,31 @@ void set_env_if_unset(const char * name, const char * value) {
 #endif
 }
 
+// QVAC-18605 round 7 — pure-logic key-validator for the
+// `apply_vulkan_env_overrides` ALL-OR-NOTHING contract.  Returns
+// `true` (with `out_bad_key` populated) on the first key that
+// doesn't start with `GGML_VK_`, `false` on success.  Split out
+// so the public helper validates the entire map BEFORE touching
+// any env var.
+//
+// Out-param + bool return (instead of returning `std::string`
+// with empty-as-success) because an empty-string KEY is itself
+// invalid input — a pure-string return would conflate "no bad
+// key found" with "the bad key was the empty string".
+bool find_invalid_vulkan_env_key(const std::map<std::string, std::string> & overrides,
+                                 std::string & out_bad_key) {
+    static const std::string prefix = "GGML_VK_";
+    for (const auto & kv : overrides) {
+        const std::string & key = kv.first;
+        if (key.size() <= prefix.size() ||
+            key.compare(0, prefix.size(), prefix) != 0) {
+            out_bad_key = key;
+            return true;
+        }
+    }
+    return false;
+}
+
 void configure_supertonic_blas_threads_once() {
 #if defined(TTS_CPP_USE_ACCELERATE)
     static bool configured = false;
@@ -942,6 +967,74 @@ void supertonic_clear_capability_cache() {
 // calls to verify zero increments on a hot cache.
 uint64_t supertonic_capability_probe_call_count() {
     return capability_probe_call_counter().load(std::memory_order_relaxed);
+}
+
+// QVAC-18605 round 7 — Vulkan env-var passthrough.
+//
+// ALL-OR-NOTHING: validate every key starts with `GGML_VK_`
+// BEFORE touching the environment.  An operator-config typo like
+// `GMML_VK_PREFER_HOST_MEMORY` throws cleanly without leaving the
+// env in a half-applied state where the good entries took effect
+// but the bad one didn't.  Empty map is a no-op (regression-
+// guarded by `test_empty_map_is_noop`).
+//
+// `set_env_if_unset` semantics: an operator-set env var (already
+// present in the environment when this is called) WINS over the
+// EngineOptions override.  Lets a debugging operator force-disable
+// a setting from the shell without recompiling, while still
+// letting the production EngineOptions configuration set the same
+// knob in the absence of a shell override.
+void apply_vulkan_env_overrides(const std::map<std::string, std::string> & overrides) {
+    if (overrides.empty()) return;
+    std::string bad;
+    if (find_invalid_vulkan_env_key(overrides, bad)) {
+        throw std::runtime_error(
+            "supertonic: invalid Vulkan env-var override key '" + bad +
+            "' — keys must start with 'GGML_VK_' (operator-config typo guard)");
+    }
+    for (const auto & kv : overrides) {
+        set_env_if_unset(kv.first.c_str(), kv.second.c_str());
+    }
+}
+
+// QVAC-18605 round 7 — voice ttl/dp host cache.
+//
+// Implementation matches the contract documented on the struct
+// declaration in supertonic_internal.h.  Inlines the
+// `read_tensor_f32` body (defined in supertonic_engine.cpp, not
+// linkable from here) — three lines, zero abstraction cost.
+const voice_host_cache::entry &
+voice_host_cache::get_or_load(const std::string & voice_name,
+                              ggml_tensor * ttl_tensor,
+                              ggml_tensor * dp_tensor) {
+    auto it = by_name_.find(voice_name);
+    if (it != by_name_.end()) {
+        // Cache HIT: return the existing entry without touching
+        // the GGML tensors.  Caller may legally pass nullptr for
+        // ttl/dp on a hit (see test_second_load_hits_cache).
+        return it->second;
+    }
+    if (!ttl_tensor || !dp_tensor) {
+        throw std::runtime_error(
+            "voice_host_cache: cache miss for voice '" + voice_name +
+            "' but ttl/dp tensor is null (Engine::Impl bug — voices.find() should "
+            "have validated the voice before this call)");
+    }
+    entry e;
+    e.ttl.resize((size_t) ggml_nelements(ttl_tensor));
+    ggml_backend_tensor_get(ttl_tensor, e.ttl.data(), 0, ggml_nbytes(ttl_tensor));
+    e.dp.resize((size_t) ggml_nelements(dp_tensor));
+    ggml_backend_tensor_get(dp_tensor, e.dp.data(), 0, ggml_nbytes(dp_tensor));
+    auto inserted = by_name_.emplace(voice_name, std::move(e));
+    return inserted.first->second;
+}
+
+void voice_host_cache::clear() {
+    by_name_.clear();
+}
+
+size_t voice_host_cache::size() const {
+    return by_name_.size();
 }
 
 // Phase 2A — hot-weight predicate.

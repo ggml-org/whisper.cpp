@@ -33,6 +33,7 @@
 #include <fstream>
 #include <random>
 #include <stdexcept>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -66,6 +67,16 @@ void usage(const char * argv0) {
         "                            curated allow-list.  Default empty.)\n"
         "          [--prewarm TEXT] (one cold-start synth before timed loop;\n"
         "                            independent of --warmup; CPU is no-op)\n"
+        "          [--vulkan-prefer-host-memory]    (sets GGML_VK_PREFER_HOST_MEMORY=1)\n"
+        "          [--vulkan-disable-coopmat2]      (sets GGML_VK_DISABLE_COOPMAT2=1)\n"
+        "          [--vulkan-disable-bfloat16]      (sets GGML_VK_DISABLE_BFLOAT16=1)\n"
+        "          [--vulkan-perf-logger]           (sets GGML_VK_PERF_LOGGER=1)\n"
+        "          [--vulkan-async-transfer]        (sets GGML_VK_ASYNC_USE_TRANSFER_QUEUE=1)\n"
+        "          [--vulkan-env KEY=VALUE]         (set arbitrary GGML_VK_* env var; may repeat)\n"
+        "          [--no-bench-sync]   (skip ggml_backend_synchronize at stage boundaries;\n"
+        "                               default off for accurate per-stage attribution on Vulkan)\n"
+        "          [--bench-per-step]  (time each denoise step individually so the first-step\n"
+        "                               cold-pipeline cost is distinguished from steady-state)\n"
         "          [--json-out FILE]\n",
         argv0);
 }
@@ -188,6 +199,25 @@ int main(int argc, char ** argv) {
     // 1=f16, 2=bf16, 3=q8_0.  Probe-gated graceful fallback to f32
     // on adapters that don't support the requested dtype.
     int kv_attn_type = -1;
+    // QVAC-18605 round 7 — Vulkan env-var overrides applied via
+    // `apply_vulkan_env_overrides` BEFORE `init_supertonic_backend`.
+    std::map<std::string, std::string> vulkan_env_overrides;
+    // QVAC-18605 round 7 — bench observability flags.
+    //
+    // `bench_sync` (default true) inserts an explicit
+    // `ggml_backend_synchronize` at every per-stage boundary so
+    // the wall-clock attributes to the right stage on async
+    // backends (Vulkan / OpenCL).  Cheap on CPU (no-op).
+    // `--no-bench-sync` opts out for the rare case the operator
+    // wants to observe pipelined / overlapped behaviour.
+    //
+    // `bench_per_step` (default false) times each
+    // `supertonic_vector_step_ggml` call individually so the
+    // first-step (cold pipelines) cost can be distinguished from
+    // steady-state.  Adds an extra stage column per step in the
+    // human output and a `vector_step_ms` array in the JSON.
+    bool bench_sync     = true;
+    bool bench_per_step = false;
 
     auto split_csv = [](const std::string & s) {
         std::vector<std::string> out;
@@ -236,11 +266,38 @@ int main(int argc, char ** argv) {
                 "--kv-attn-type expects auto|f32|f16|bf16|q8_0 (got: %s)\n", v.c_str());
                 return 2; }
         }
+        else if (a == "--vulkan-prefer-host-memory") vulkan_env_overrides["GGML_VK_PREFER_HOST_MEMORY"]      = "1";
+        else if (a == "--vulkan-disable-coopmat2")   vulkan_env_overrides["GGML_VK_DISABLE_COOPMAT2"]        = "1";
+        else if (a == "--vulkan-disable-bfloat16")   vulkan_env_overrides["GGML_VK_DISABLE_BFLOAT16"]        = "1";
+        else if (a == "--vulkan-perf-logger")        vulkan_env_overrides["GGML_VK_PERF_LOGGER"]             = "1";
+        else if (a == "--vulkan-async-transfer")     vulkan_env_overrides["GGML_VK_ASYNC_USE_TRANSFER_QUEUE"]= "1";
+        else if (a == "--vulkan-env") {
+            const std::string raw = next("--vulkan-env");
+            const auto eq = raw.find('=');
+            if (eq == std::string::npos || eq == 0) {
+                fprintf(stderr, "--vulkan-env expects KEY=VALUE (got: %s)\n", raw.c_str());
+                return 2;
+            }
+            vulkan_env_overrides[raw.substr(0, eq)] = raw.substr(eq + 1);
+        }
+        else if (a == "--no-bench-sync") bench_sync = false;
+        else if (a == "--bench-sync")    bench_sync = true;  // explicit on; default
+        else if (a == "--bench-per-step") bench_per_step = true;
         else if (a == "--json-out") json_out = next("--json-out");
         else if (a == "-h" || a == "--help") { usage(argv[0]); return 0; }
         else { fprintf(stderr, "unknown arg: %s\n", a.c_str()); usage(argv[0]); return 2; }
     }
     if (model_path.empty() || text.empty()) { usage(argv[0]); return 2; }
+
+    // QVAC-18605 round 7 — apply Vulkan env-var overrides BEFORE
+    // `load_supertonic_gguf` (which calls `init_supertonic_backend`,
+    // which is when ggml-vulkan reads its GGML_VK_* env vars).
+    // Throws on any non-`GGML_VK_` key (operator-config typo
+    // guard); we let the throw propagate to surface as an
+    // uncaught-exception backtrace, since bench is for operators
+    // who can read it (matches the legacy behaviour for `--vulkan-device
+    // abc` and similar).
+    apply_vulkan_env_overrides(vulkan_env_overrides);
 
     supertonic_model model;
     if (!load_supertonic_gguf(model_path, model, n_gpu_layers,
@@ -300,11 +357,36 @@ int main(int argc, char ** argv) {
     Stage st_pre{"preprocess", {}};
     Stage st_dur{"duration", {}};
     Stage st_te {"text_encoder", {}};
-    Stage st_ve {"vector_estimator (5 step)", {}};
+    char st_ve_label[64];
+    std::snprintf(st_ve_label, sizeof(st_ve_label), "vector_estimator (%d step)", steps);
+    Stage st_ve {st_ve_label, {}};
     Stage st_voc{"vocoder", {}};
     Stage st_tot{"total", {}};
+    // QVAC-18605 round 7 — per-denoise-step breakdown.  Populated
+    // only when `--bench-per-step` is on; otherwise stays empty
+    // and is omitted from human + JSON output.  One Stage per
+    // step index (step 0 typically reflects cold-pipeline cost
+    // on Vulkan/OpenCL; steps 1+ reflect steady-state).
+    std::vector<Stage> st_ve_per_step;
+    if (bench_per_step) {
+        st_ve_per_step.reserve((size_t) steps);
+        for (int s = 0; s < steps; ++s) {
+            char lbl[64];
+            std::snprintf(lbl, sizeof(lbl), "  vector_step[%d]", s);
+            st_ve_per_step.push_back(Stage{lbl, {}});
+        }
+    }
     std::vector<double> rtfs;
     double last_audio_s = 0;
+
+    // QVAC-18605 round 7 — explicit backend sync at stage
+    // boundaries.  Cheap on CPU (returns immediately when no GPU
+    // work pending); on Vulkan / OpenCL ensures the next
+    // `clk::now()` reflects work-completed-by-the-prior-stage.
+    // No-op when `bench_sync` is false (operator opt-out).
+    auto bench_sync_now = [&]() {
+        if (bench_sync) ggml_backend_synchronize(model.backend);
+    };
 
     // QVAC-18605 follow-up — first-synth pre-warm.
     //
@@ -359,6 +441,7 @@ int main(int argc, char ** argv) {
         bool record = r >= warmup;
         std::string error;
 
+        bench_sync_now();
         auto t0 = clk::now();
 
         std::vector<int32_t> text_ids_i32;
@@ -368,6 +451,7 @@ int main(int argc, char ** argv) {
             free_supertonic_model(model); return 1;
         }
         std::vector<int64_t> text_ids(text_ids_i32.begin(), text_ids_i32.end());
+        bench_sync_now();
         auto t1 = clk::now();
 
         float duration_raw = 0;
@@ -376,6 +460,7 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "duration failed: %s\n", error.c_str());
             free_supertonic_model(model); return 1;
         }
+        bench_sync_now();
         auto t2 = clk::now();
 
         const int sample_rate = model.hparams.sample_rate;
@@ -401,11 +486,18 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "text encoder failed: %s\n", error.c_str());
             free_supertonic_model(model); return 1;
         }
+        bench_sync_now();
         auto t3 = clk::now();
 
         std::vector<float> latent_mask((size_t) latent_len, 1.0f);
         std::vector<float> next;
+        // QVAC-18605 round 7 — per-step timing.  When
+        // `bench_per_step` is on, a sync + clock sample bracket
+        // each `supertonic_vector_step_ggml` call.  When off, a
+        // single sync at end-of-loop matches the legacy timing
+        // semantics exactly (zero overhead added).
         for (int s = 0; s < steps; ++s) {
+            auto step_t0 = bench_per_step ? clk::now() : clk::time_point{};
             if (!supertonic_vector_step_ggml(model, latent.data(), latent_len,
                                              text_emb.data(), (int) text_ids.size(),
                                              style_ttl.data(), latent_mask.data(),
@@ -414,7 +506,15 @@ int main(int argc, char ** argv) {
                 free_supertonic_model(model); return 1;
             }
             latent.swap(next);
+            if (bench_per_step) {
+                bench_sync_now();
+                auto step_t1 = clk::now();
+                if (record) {
+                    st_ve_per_step[(size_t) s].ms.push_back(ms_t(step_t1 - step_t0).count());
+                }
+            }
         }
+        bench_sync_now();
         auto t4 = clk::now();
 
         std::vector<float> wav;
@@ -422,6 +522,7 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "vocoder failed: %s\n", error.c_str());
             free_supertonic_model(model); return 1;
         }
+        bench_sync_now();
         auto t5 = clk::now();
 
         double audio_s = (double) wav.size() / (double) sample_rate;
@@ -521,6 +622,12 @@ int main(int argc, char ** argv) {
     print_stage(st_dur);
     print_stage(st_te);
     print_stage(st_ve);
+    // QVAC-18605 round 7 — per-step breakdown lines.  Indented
+    // under the aggregate vector-estimator line for visual
+    // grouping.  Only emitted when --bench-per-step is on.
+    for (auto & st : st_ve_per_step) {
+        if (!st.ms.empty()) print_stage(st);
+    }
     print_stage(st_voc);
     print_stage(st_tot);
     if (!rtfs.empty()) {
@@ -593,6 +700,26 @@ int main(int argc, char ** argv) {
            << (supertonic_backend_supports_bf16_kv_flash_attn(model.backend) ? "true" : "false") << ",\n";
         os << "  \"pinned_host_buffer_available\": "
            << (supertonic_backend_supports_pinned_host_buffer(model.backend) ? "true" : "false") << ",\n";
+        // QVAC-18605 round 7 — bench observability surface.
+        // `bench_sync` documents whether the per-stage times
+        // include a `ggml_backend_synchronize` boundary; useful
+        // when comparing JSON across machines / configs.
+        os << "  \"bench_sync\": " << (bench_sync ? "true" : "false") << ",\n";
+        // QVAC-18605 round 7 — Vulkan env-var overrides surfaced
+        // verbatim so the JSON consumer can attribute drift to
+        // a specific override (or its absence).  Always emitted
+        // (object — empty on the default-config path).
+        os << "  \"vulkan_env_overrides\": {";
+        {
+            bool first = true;
+            for (const auto & kv : vulkan_env_overrides) {
+                if (!first) os << ", ";
+                first = false;
+                os << "\"" << json_escape(kv.first) << "\": \""
+                   << json_escape(kv.second) << "\"";
+            }
+        }
+        os << "},\n";
         os << "  \"rtf\": {"
            << "\"min\": " << minv(rtfs)
            << ", \"median\": " << median(rtfs)
@@ -604,7 +731,18 @@ int main(int argc, char ** argv) {
         write_json_stage(os, st_pre, true);
         write_json_stage(os, st_dur, true);
         write_json_stage(os, st_te, true);
-        write_json_stage(os, st_ve, true);
+        // QVAC-18605 round 7 — when --bench-per-step is on, emit
+        // each step as its own stage entry.  When off, the
+        // aggregate `vector_estimator` stage is the only entry
+        // for the vector-estimator buckets (legacy JSON shape).
+        if (!st_ve_per_step.empty()) {
+            write_json_stage(os, st_ve, true);
+            for (auto & st : st_ve_per_step) {
+                if (!st.ms.empty()) write_json_stage(os, st, true);
+            }
+        } else {
+            write_json_stage(os, st_ve, true);
+        }
         write_json_stage(os, st_voc, true);
         write_json_stage(os, st_tot, false);
         os << "  }\n";

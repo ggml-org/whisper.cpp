@@ -399,6 +399,12 @@ struct cli_params {
     // Probe-gated graceful fallback to f32 on adapters that don't
     // support the requested dtype.
     int32_t     supertonic_kv_attn_type = -1;
+    // QVAC-18605 round 7 — Vulkan env-var overrides applied via
+    // `apply_vulkan_env_overrides` just before backend init.
+    // Operator-set env vars in the shell still WIN over these
+    // (set_env_if_unset semantics).  Maps onto
+    // EngineOptions::vulkan_env_overrides.
+    std::map<std::string, std::string> supertonic_vulkan_env_overrides;
     bool        has_supertonic_options = false;
 
     // Streaming synthesis (PROGRESS.md B1).  When > 0, speech tokens from
@@ -556,6 +562,17 @@ static void print_usage(const char * argv0) {
     fprintf(stderr, "                          load time; an out-of-range value is a hard error\n");
     fprintf(stderr, "                          (no silent CPU fallback).  See PROGRESS_SUPERTONIC.md\n");
     fprintf(stderr, "                          \"Vulkan bring-up\" section for the supported-op matrix.\n");
+    fprintf(stderr, "  --vulkan-prefer-host-memory    Sets GGML_VK_PREFER_HOST_MEMORY=1.  Triage knob.\n");
+    fprintf(stderr, "  --vulkan-disable-coopmat2      Sets GGML_VK_DISABLE_COOPMAT2=1.  Useful for A/B-ing\n");
+    fprintf(stderr, "                                 the BF16 K/V dispatch path on coopmat2-capable adapters.\n");
+    fprintf(stderr, "  --vulkan-disable-bfloat16      Sets GGML_VK_DISABLE_BFLOAT16=1.  Forces F16 fallback\n");
+    fprintf(stderr, "                                 even when --kv-attn-type bf16 is requested.\n");
+    fprintf(stderr, "  --vulkan-perf-logger           Sets GGML_VK_PERF_LOGGER=1.  Enables ggml-vulkan's\n");
+    fprintf(stderr, "                                 per-shader timing output (verbose; for triage only).\n");
+    fprintf(stderr, "  --vulkan-async-transfer        Sets GGML_VK_ASYNC_USE_TRANSFER_QUEUE=1.\n");
+    fprintf(stderr, "  --vulkan-env KEY=VALUE         Set arbitrary GGML_VK_* env var.  May be repeated.\n");
+    fprintf(stderr, "                                 Operator-set env vars in the shell STILL win over\n");
+    fprintf(stderr, "                                 these CLI overrides (set_env_if_unset semantics).\n");
     fprintf(stderr, "  --prewarm TEXT          Run one throwaway synth on TEXT at engine\n");
     fprintf(stderr, "                          construction so first-real-call latency on Vulkan /\n");
     fprintf(stderr, "                          OpenCL doesn't pay the shader-compile cost (~hundreds\n");
@@ -736,6 +753,22 @@ static bool parse_args(int argc, char ** argv, cli_params & params) {
             params.has_supertonic_options = true;
         }
         else if (arg == "--prewarm")        { auto v = next("--prewarm");        if (!v) return false; params.supertonic_prewarm_text = v; params.has_supertonic_options = true; }
+        else if (arg == "--vulkan-prefer-host-memory") { params.supertonic_vulkan_env_overrides["GGML_VK_PREFER_HOST_MEMORY"]      = "1"; params.has_supertonic_options = true; }
+        else if (arg == "--vulkan-disable-coopmat2")   { params.supertonic_vulkan_env_overrides["GGML_VK_DISABLE_COOPMAT2"]        = "1"; params.has_supertonic_options = true; }
+        else if (arg == "--vulkan-disable-bfloat16")   { params.supertonic_vulkan_env_overrides["GGML_VK_DISABLE_BFLOAT16"]        = "1"; params.has_supertonic_options = true; }
+        else if (arg == "--vulkan-perf-logger")        { params.supertonic_vulkan_env_overrides["GGML_VK_PERF_LOGGER"]             = "1"; params.has_supertonic_options = true; }
+        else if (arg == "--vulkan-async-transfer")     { params.supertonic_vulkan_env_overrides["GGML_VK_ASYNC_USE_TRANSFER_QUEUE"]= "1"; params.has_supertonic_options = true; }
+        else if (arg == "--vulkan-env") {
+            auto v = next("--vulkan-env"); if (!v) return false;
+            const std::string raw = v;
+            const auto eq = raw.find('=');
+            if (eq == std::string::npos || eq == 0) {
+                fprintf(stderr, "error: --vulkan-env expects KEY=VALUE (got: %s)\n", raw.c_str());
+                return false;
+            }
+            params.supertonic_vulkan_env_overrides[raw.substr(0, eq)] = raw.substr(eq + 1);
+            params.has_supertonic_options = true;
+        }
         else if (arg == "--cfm-f16-kv-attn") { params.cfm_f16_kv_attn = true; }
         else if (arg == "--max-sentence-chars") { if (!parse_int("--max-sentence-chars", params.max_sentence_chars)) return false; }
         else if (arg == "--no-auto-split")  { params.max_sentence_chars = 0; }
@@ -936,6 +969,7 @@ static int run_supertonic_cli_path(const cli_params & params) {
     opts.noise_npy_path = params.supertonic_noise_npy;
     opts.f16_weights_deny_list = params.supertonic_f16_weights_deny_list;
     opts.kv_attn_type = params.supertonic_kv_attn_type;
+    opts.vulkan_env_overrides = params.supertonic_vulkan_env_overrides;
 
     auto result = tts_cpp::supertonic::synthesize(opts, params.text);
     stream_write_wav(params.out_wav, result.pcm, result.sample_rate);
