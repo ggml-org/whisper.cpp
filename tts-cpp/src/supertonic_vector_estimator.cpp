@@ -3195,74 +3195,100 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         PUSH_GGML_TRACE({"ve_time_add0", {L, C}, tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_time_add0"))});
         std::vector<float> block2_ggml = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_block2_convnext0"));
         PUSH_GGML_TRACE({"ve_block2_convnext0", {L, C}, block2_ggml});
-        // QVAC-18966 — `ve_attn0_v` is now `ggml_cont(ggml_
-        // transpose(...))` of the matmul output (ne=[HD, text_len]
-        // time-major-flat memory).  `tensor_raw_f32` downloads
-        // the bytes in the layout scalar `apply_rope` /
-        // `flash_attention_qkv` host references expect
-        // (`v[t*HD + c]`) — bit-identical to what
-        // `run_text_attention_cache`'s host upload writes into
-        // `v_tc_in` (`ggml_new_tensor_2d(F32, HD, kv_len)` natural
-        // strides nb=[elem, HD*elem]).  Using
-        // `tensor_to_time_channel` here would mis-interpret the
-        // swapped ne and silently feed wrong-orientation V into
-        // the attention.  Q/K matmul outputs are UNCHANGED ne=[L,
-        // HD] channel-major-flat so `tensor_to_time_channel` stays
-        // the right call for them.  See the header doc on
-        // `apply_rope_to_packed_qk` in `supertonic_internal.h`.
-        std::vector<float> v_out = tensor_raw_f32(ggml_graph_get_tensor(gf, "ve_attn0_v"));
-        // F23 — when the front-block graph has the in-graph RoPE
-        // wired in (model carries `vector_rope_theta`), feed
-        // `run_text_attention_cache` the already-rotated Q/K from
-        // the `_rope` graph outputs.  Pre-RoPE Q/K are still
-        // downloaded into the GGML trace for scalar parity.  Host
-        // `apply_rope(theta, …)` is fully eliminated on the
-        // production path.
-        std::vector<float> q_out, k_out, q_rotated, k_rotated;
-        if (include_ggml_trace) {
-            q_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_q"));
-            k_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_k"));
-            PUSH_GGML_TRACE({"ve_attn0_q", {L, 256}, q_out});
-            PUSH_GGML_TRACE({"ve_attn0_k", {text_len, 256}, k_out});
-            PUSH_GGML_TRACE({"ve_attn0_v", {text_len, 256}, v_out});
-        }
-        const bool front_in_graph_rope =
-            ggml_graph_get_tensor(gf, "ve_attn0_q_rope") != nullptr;
-        if (front_in_graph_rope) {
-            // QVAC-18966 — post-fix layout contract:
-            // `apply_rope_to_packed_qk` produces ne=[HD, L] with
-            // time-major-flat memory (`data[c + t*HD]`).  Those
-            // bytes ARE scalar `apply_rope`'s native flat layout
-            // (`out[t*HD + c]`), so `tensor_raw_f32` downloads
-            // them directly — no transpose needed.  Using
-            // `tensor_to_time_channel` would mis-interpret the
-            // swapped ne shape and produce the transpose of the
-            // transpose, silently feeding wrong-orientation Q / K
-            // into the attention.  See the header doc on
-            // `apply_rope_to_packed_qk` in `supertonic_internal.h`.
-            q_rotated = tensor_raw_f32(ggml_graph_get_tensor(gf, "ve_attn0_q_rope"));
-            k_rotated = tensor_raw_f32(ggml_graph_get_tensor(gf, "ve_attn0_k_rope"));
-        } else {
-            // Legacy path: GGUF lacks vector_rope_theta-typed wiring.
-            // Materialise Q/K host-side, rotate, then forward.
-            if (q_out.empty()) {
-                q_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_q"));
-                k_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_k"));
-            }
-            const float * theta = model.vector_rope_theta.data();
-            apply_rope(theta, q_out, L, 4, 64);
-            apply_rope(theta, k_out, text_len, 4, 64);
-            q_rotated = std::move(q_out);
-            k_rotated = std::move(k_out);
-        }
+        // QVAC-18605 round 8 — front-block attn0 GPU bridge.
+        //
+        // PR #16's audit follow-up #6 (2C-lite) shipped the GPU
+        // device→device blit infrastructure (`run_text_attention_cache_gpu`)
+        // and wired g1 / g2 / g3 group attentions to use it.  The
+        // front-block attn0 site was deferred because of cache-
+        // lifetime concerns at the time; round 8 picks it up.
+        //
+        // The front_cache (`ve_front_block_graph_cache` in the
+        // outer scope) is `thread_local` and stable across calls
+        // (rebuilds only on shape change L / text_len /
+        // trace_outputs).  After `profile_vector_compute` returns,
+        // the named output tensors `ve_attn0_v` and (when
+        // `apply_rope` is true) `ve_attn0_q_rope` /
+        // `ve_attn0_k_rope` are valid GPU handles for the
+        // duration of the next attention compute.  Same lifetime
+        // guarantee as the g1/g2/g3 caches → safe to pass into
+        // `run_text_attention_cache_gpu`.
+        //
+        // Eliminates per call: 3 GPU→host downloads + 3 host→GPU
+        // uploads.  Across 5 denoise steps × Q/K/V = 30 sync
+        // points / synth.  Production path only — trace mode
+        // still takes the legacy host-bridge path so the trace
+        // dump captures pre-attention Q/K/V host vectors.
+        //
+        // Note: the legacy host-bridge fallback below still uses
+        // `tensor_to_time_channel(v_gpu_attn0)`; round 11's
+        // QVAC-18966 layout fix re-patches that call site to
+        // `tensor_raw_f32(...)` after `ve_attn0_v` becomes
+        // `ggml_cont(ggml_transpose(...))`-shaped.
+        ggml_tensor * v_gpu_attn0      = ggml_graph_get_tensor(gf, "ve_attn0_v");
+        ggml_tensor * q_rope_gpu_attn0 = ggml_graph_get_tensor(gf, "ve_attn0_q_rope");
+        ggml_tensor * k_rope_gpu_attn0 = ggml_graph_get_tensor(gf, "ve_attn0_k_rope");
+        const bool front_in_graph_rope = (q_rope_gpu_attn0 != nullptr);
+        const bool front_use_gpu_bridge = front_in_graph_rope && !include_ggml_trace
+                                          && v_gpu_attn0 && k_rope_gpu_attn0;
+        std::vector<float> q_out, k_out, q_rotated, k_rotated, v_out;
         thread_local vector_text_attention_cache att0_cache;
         std::vector<float> att0_ctx_trace;
-        std::vector<float> attn_out_ggml = run_text_attention_cache(att0_cache, model, q_rotated, k_rotated, v_out,
-            L, text_len, 4, 64,
-            "vector_estimator:onnx::MatMul_3110",
-            "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.out_fc.linear.bias",
-            current_step, "attn0_flash",
-            include_ggml_trace ? &att0_ctx_trace : nullptr);
+        std::vector<float> attn_out_ggml;
+        if (front_use_gpu_bridge) {
+            // Fast path: device→device blit, host never sees Q/K/V.
+            // Mirrors the g1/g2/g3 dispatch at lines 2926-2933.
+            attn_out_ggml = run_text_attention_cache_gpu(att0_cache, model,
+                q_rope_gpu_attn0, k_rope_gpu_attn0, v_gpu_attn0,
+                L, text_len, 4, 64,
+                "vector_estimator:onnx::MatMul_3110",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.out_fc.linear.bias",
+                current_step, "attn0_flash",
+                /*ctx_trace=*/ nullptr);
+        } else {
+            // Legacy / trace-mode host bridge.  Falls back to the
+            // pre-round-8 download + rotate + upload pattern.
+            v_out = tensor_to_time_channel(v_gpu_attn0);
+            if (include_ggml_trace) {
+                q_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_q"));
+                k_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_k"));
+                PUSH_GGML_TRACE({"ve_attn0_q", {L, 256}, q_out});
+                PUSH_GGML_TRACE({"ve_attn0_k", {text_len, 256}, k_out});
+                PUSH_GGML_TRACE({"ve_attn0_v", {text_len, 256}, v_out});
+            }
+            // F23 — when the front-block graph has the in-graph
+            // RoPE wired in (model carries `vector_rope_theta`),
+            // feed `run_text_attention_cache` the already-rotated
+            // Q/K from the `_rope` graph outputs.  Host
+            // `apply_rope(theta, …)` is fully eliminated on the
+            // in-graph-rope path.
+            if (front_in_graph_rope) {
+                q_rotated = tensor_to_time_channel(q_rope_gpu_attn0);
+                k_rotated = tensor_to_time_channel(k_rope_gpu_attn0);
+            } else {
+                // Legacy GGUF path: rotate host-side.
+                if (q_out.empty()) {
+                    q_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_q"));
+                    k_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_k"));
+                }
+                const float * theta = model.vector_rope_theta.data();
+                apply_rope(theta, q_out, L, 4, 64);
+                apply_rope(theta, k_out, text_len, 4, 64);
+                q_rotated = std::move(q_out);
+                k_rotated = std::move(k_out);
+            }
+            attn_out_ggml = run_text_attention_cache(att0_cache, model, q_rotated, k_rotated, v_out,
+                L, text_len, 4, 64,
+                "vector_estimator:onnx::MatMul_3110",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.out_fc.linear.bias",
+                current_step, "attn0_flash",
+                include_ggml_trace ? &att0_ctx_trace : nullptr);
+        }
+        // Trace pushes — `q_rotated` / `k_rotated` are populated
+        // by the legacy branch above; empty on the GPU-bridge
+        // path (in which case `PUSH_GGML_TRACE` is a no-op
+        // because `include_ggml_trace == false`).  Matches the
+        // g1/g2/g3 trace-push pattern at lines 2955-2956.
         PUSH_GGML_TRACE({"ve_attn0_q_rope", {L, 256}, q_rotated});
         PUSH_GGML_TRACE({"ve_attn0_k_rope", {text_len, 256}, k_rotated});
         PUSH_GGML_TRACE({"ve_attn0_ctx", {L, 256}, att0_ctx_trace});

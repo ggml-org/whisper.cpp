@@ -260,7 +260,17 @@ void test_shape(const char * label, int ne0, int ne1, unsigned seed) {
 
 int main() {
     test_shape("attn0_q_rope_L20",     256,  20, 0xA11A1u);   // 4h × 64d  @ L=20
+                                                              // Also covers front-block attn0
+                                                              // Q post-RoPE tensor (round 8 GPU
+                                                              // bridge consumer).
     test_shape("attn0_q_rope_L1",      256,   1, 0xA11A2u);   // L=1 trip-wire
+    // QVAC-18605 round 8 — front-block attn0 K / V shape
+    // (width=256, kv_len=text_len).  Same layout as the round-1
+    // group attentions but different ne1 dimension.  Locks in the
+    // blit primitive for the K / V handles the front-block GPU
+    // bridge passes to `run_text_attention_cache_gpu`.
+    test_shape("attn0_kv_text_len32",  256,  32, 0xA11A4u);   // front-block K / V @ text_len=32
+    test_shape("attn0_kv_text_len50",  256,  50, 0xA11A5u);   // front-block K / V @ text_len=50
     test_shape("style0_q_rope_L20",    256,  20, 0xA11A3u);   // 2h × 128d @ L=20
     test_shape("attn0_k_rope_kv20",    256,  20, 0xA11A4u);   // K side
     test_shape("style0_k_rope_kv50",   256,  50, 0xA11A5u);   // K side, style kv_len

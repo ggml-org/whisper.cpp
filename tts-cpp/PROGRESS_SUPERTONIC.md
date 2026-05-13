@@ -1249,6 +1249,106 @@ right stage column.
 
 ---
 
+### Vulkan optimisation round 8 (May 2026, QVAC-18605 follow-up #6) — Front-block attn0 GPU bridge
+
+The single largest remaining per-step sync hotspot identified in
+the next-rounds plan
+(`aiDocs/PLAN_VULKAN_NEXT_ROUNDS.md`).  PR #16's audit follow-up
+#6 (2C-lite) shipped the GPU device→device blit infrastructure
+(`run_text_attention_cache_gpu`) and wired g1 / g2 / g3 group
+attentions to use it; the front-block `attn0` site was deferred
+because of cache-lifetime concerns at the time.  Round 8 picks
+it up — same exact pattern as g1/g2/g3, ~30 LOC delta in one
+function.
+
+#### Changes
+
+- **Front-block attn0 dispatch site** (`supertonic_vector_estimator.cpp`,
+  `supertonic_vector_trace_proj_ggml`).  The
+  `tensor_to_time_channel(...)` downloads of `ve_attn0_v` /
+  `ve_attn0_q_rope` / `ve_attn0_k_rope` followed by the host-bridge
+  `run_text_attention_cache(...)` call are replaced (in
+  production mode) by a single `run_text_attention_cache_gpu(
+  q_rope_gpu, k_rope_gpu, v_gpu, ...)` call that takes the
+  named GPU tensors from the front cache and blits them
+  device→device into the att0 cache's input tensors.
+  Eliminates 6 sync points × 5 denoise steps = **30 sync points
+  / synth** on the production path.
+
+- **Strict gating on the GPU-bridge fast path** —
+  `front_in_graph_rope && !include_ggml_trace && v_gpu_attn0 &&
+  k_rope_gpu_attn0`.  Trace mode falls back to the legacy host
+  bridge so the trace harness still captures pre-attention
+  Q/K/V host vectors for scalar-parity assertions.  Legacy
+  GGUFs without `vector_rope_theta` (no in-graph RoPE) also
+  fall back — host `apply_rope` continues to work.  Defensive
+  null-guards on `v_gpu_attn0` / `k_rope_gpu_attn0` even though
+  both are unconditionally `set_output` in the cache build
+  (cost: zero; insurance against a future cache rewrite that
+  silently drops one of the named outputs).
+
+#### Test plan (TDD, round 8)
+
+The blit primitive parity gate already shipped with PR #16:
+`test-supertonic-graph-to-graph-blit` covers the device→device
+blit through two minimal cached graphs sharing one backend, and
+asserts bit-exact parity vs the host-download / host-upload pair.
+Round 8 extends it with explicit coverage of the front-block K/V
+shapes:
+
+| Shape | Coverage |
+|------|----------|
+| `attn0_q_rope_L20` (existing) | 4h × 64d Q post-RoPE @ L=20 — already covered front-block Q.  Round-8 doc-comment makes the front-block coverage explicit. |
+| `attn0_kv_text_len32` (NEW) | front-block K / V @ text_len=32 (width=256, kv_len=32) — blit primitive parity for the K / V shape. |
+| `attn0_kv_text_len50` (NEW) | front-block K / V @ text_len=50 (width=256, kv_len=50) — same primitive at the longer text-prompt shape. |
+
+Whole CPU-only `ctest -L unit` reports **21 / 21 tests, 0
+failures, 0 regressions**.  Existing bit-exact parity tests
+covering the non-trace front-block path
+(`test-supertonic-rope-in-graph`, `test-supertonic-rope-packed-qk`,
+`test-supertonic-graph-to-graph-blit`,
+`test-supertonic-f16-attn-parity`) all continue to pass — the
+dispatch-site change preserves the F23 in-graph RoPE outputs
+that those tests pin, and the GPU-bridge path is functionally
+identical to the host-bridge path it replaces (only the
+intermediate transfer pattern changes).
+
+#### Backwards compatibility
+
+- Trace mode unchanged — `include_ggml_trace == true` falls back
+  to the legacy host bridge with all original downloads + trace
+  pushes.
+- Legacy GGUFs (no `vector_rope_theta`) unchanged — falls back
+  to the host-rotate path that PR #16 already preserved.
+- Production path: bit-equivalent output to the pre-round-8
+  path (the GPU bridge blits the same bytes the host bridge
+  would download / upload; the attention compute reads the
+  same input data either way).
+- `cache.kv_attn_type` cache-key (round 4) still applies — F32 /
+  F16 / BF16 / Q8_0 dispatch unchanged on the GPU path.
+
+#### Why no live perf number?
+
+Same shape as round 4: dispatch wiring, not a kernel change.
+The win is workload + adapter specific:
+
+- On Adreno (chatterbox PROGRESS.md §3) each sync point costs
+  several hundred microseconds.  30 sync points / synth × 5
+  steps = a measurable per-synth latency reduction depending on
+  prompt length.
+- On desktop NVIDIA / AMD the per-sync overhead is lower but
+  still real (USB / PCIe round-trip).
+- On CPU the change is strictly equivalent — `ggml_backend_tensor_copy`
+  with same-backend src+dst is a memcpy on the CPU backend; the
+  parity test pins this at `max_abs = 0.0` (bit-equal output).
+
+The dispatch + parity gate are in place so an operator with a
+real Vulkan adapter can A/B `--bench-per-step` (round 7) numbers
+on rounds 6 / 7 / 8 builds and attribute the per-step
+improvement to this exact change.
+
+---
+
 ## Remaining Work
 
 ### Runtime and performance
