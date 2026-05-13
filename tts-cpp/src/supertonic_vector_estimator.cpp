@@ -1635,6 +1635,32 @@ struct vector_res_style_qkv_result {
     std::vector<float> sq;
     std::vector<float> sk;
     std::vector<float> sv;
+
+    // QVAC-18605 round 9 — GPU-side handles for the post-projection
+    // style Q / K / V tensors so the next-stage style flash-attn
+    // call site (`run_text_attention_cache_gpu`) can blit them
+    // device→device instead of round-tripping through `sq` / `sk`
+    // / `sv` host vectors.  Same lifetime + dispatch pattern as
+    // `vector_group_graph_result::q_rope_gpu` / `v_gpu` (round-1
+    // 2C-lite for text attention; rounds 8 + 9 extend to front-
+    // block + style sites).
+    //
+    // Pointers are valid as long as the producing
+    // `vector_res_style_qkv_cache` is alive and hasn't been
+    // rebuilt (cache is `thread_local` at every call site;
+    // rebuild only on shape / matmul-source change).
+    //
+    // Always populated by `run_res_style_qkv_cache` (cheap —
+    // just `ggml_graph_get_tensor`); the host vectors above are
+    // gated on `trace != nullptr` (production path skips the
+    // download because it consumes `*_gpu` instead).  `post`
+    // stays unconditional — consumed by the next-stage
+    // `run_style_residual_cache` which still expects a host
+    // vector (cross-stage GPU bridge for `post` is deferred —
+    // see `aiDocs/PLAN_VULKAN_NEXT_ROUNDS.md`).
+    ggml_tensor * sq_gpu = nullptr;
+    ggml_tensor * sk_gpu = nullptr;
+    ggml_tensor * sv_gpu = nullptr;
 };
 
 struct vector_res_style_qkv_cache {
@@ -1848,11 +1874,31 @@ vector_res_style_qkv_result run_res_style_qkv_cache(vector_res_style_qkv_cache &
         push_trace(*trace, norm_name, L, C, tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, norm_name.c_str())));
     }
     vector_res_style_qkv_result out;
+
+    // QVAC-18605 round 9 — populate GPU handles for the post-
+    // projection Q / K / V tensors unconditionally.  Cheap (no
+    // GPU sync; just a name-to-pointer lookup in the cached
+    // graph).  Lifetime contract documented on the struct.
+    out.sq_gpu = ggml_graph_get_tensor(cache.gf, q_name.c_str());
+    out.sk_gpu = ggml_graph_get_tensor(cache.gf, k_name.c_str());
+    out.sv_gpu = ggml_graph_get_tensor(cache.gf, v_name.c_str());
+
+    // `post` stays a host download — the next-stage
+    // `run_style_residual_cache` still consumes a host vector.
     out.post = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, post_name.c_str()));
-    out.sq = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, q_name.c_str()));
-    out.sk = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, k_name.c_str()));
-    out.sv = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, v_name.c_str()));
+
+    // QVAC-18605 round 9 — gate `sq` / `sk` / `sv` host downloads
+    // on trace mode.  Production path skips them because the
+    // call site uses `out.sq_gpu` / `out.sk_gpu` / `out.sv_gpu`
+    // via `run_text_attention_cache_gpu`.  Eliminates 3 sync
+    // points per call × 4 sites × 5 denoise steps = 60 GPU→host
+    // downloads / synth.  Mirrors the round-1 2C-lite
+    // `need_host_qkv = (trace != nullptr)` gate on the group
+    // graph cache.
     if (trace) {
+        out.sq = tensor_to_time_channel(out.sq_gpu);
+        out.sk = tensor_to_time_channel(out.sk_gpu);
+        out.sv = tensor_to_time_channel(out.sv_gpu);
         push_trace(*trace, post_name, L, C, out.post);
         push_trace(*trace, q_name, L, 256, out.sq);
         push_trace(*trace, k_name, 50, 256, out.sk);
@@ -3314,17 +3360,37 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             "attn0_residual_style_qkv",
             include_ggml_trace ? &ggml_trace : nullptr);
         std::vector<float> post_ggml = std::move(style0_res_qkv.post);
-        std::vector<float> sq_out = std::move(style0_res_qkv.sq);
-        std::vector<float> sk_out = std::move(style0_res_qkv.sk);
-        std::vector<float> sv_out = std::move(style0_res_qkv.sv);
+        // QVAC-18605 round 9 — style flash-attn GPU bridge for
+        // style0 (front-block style residual).  Same dispatch
+        // pattern as the round-8 front-block attn0 bridge:
+        // production path uses `run_text_attention_cache_gpu`
+        // with the GPU handles from the res-style-qkv cache,
+        // trace mode falls back to the legacy host bridge so
+        // the trace harness still gets the host vectors.
         thread_local vector_text_attention_cache style0_attn_cache;
         std::vector<float> style0_ctx_trace;
-        std::vector<float> style_out_ggml = run_text_attention_cache(style0_attn_cache, model, sq_out, sk_out, sv_out,
-            L, 50, 2, 128,
-            "vector_estimator:onnx::MatMul_3119",
-            "vector_estimator:tts.ttl.vector_field.main_blocks.5.attention.out_fc.linear.bias",
-            current_step, "style0_flash",
-            include_ggml_trace ? &style0_ctx_trace : nullptr);
+        std::vector<float> style_out_ggml;
+        const bool style0_use_gpu_bridge = !include_ggml_trace
+            && style0_res_qkv.sq_gpu && style0_res_qkv.sk_gpu && style0_res_qkv.sv_gpu;
+        if (style0_use_gpu_bridge) {
+            style_out_ggml = run_text_attention_cache_gpu(style0_attn_cache, model,
+                style0_res_qkv.sq_gpu, style0_res_qkv.sk_gpu, style0_res_qkv.sv_gpu,
+                L, 50, 2, 128,
+                "vector_estimator:onnx::MatMul_3119",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.5.attention.out_fc.linear.bias",
+                current_step, "style0_flash",
+                /*ctx_trace=*/ nullptr);
+        } else {
+            std::vector<float> sq_out = std::move(style0_res_qkv.sq);
+            std::vector<float> sk_out = std::move(style0_res_qkv.sk);
+            std::vector<float> sv_out = std::move(style0_res_qkv.sv);
+            style_out_ggml = run_text_attention_cache(style0_attn_cache, model, sq_out, sk_out, sv_out,
+                L, 50, 2, 128,
+                "vector_estimator:onnx::MatMul_3119",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.5.attention.out_fc.linear.bias",
+                current_step, "style0_flash",
+                include_ggml_trace ? &style0_ctx_trace : nullptr);
+        }
         PUSH_GGML_TRACE({"ve_style0_ctx", {L, 256}, style0_ctx_trace});
         PUSH_GGML_TRACE({"ve_style0_out", {L, C}, style_out_ggml});
         // F8: cached style-residual graph (lhs + out → add → LN).
@@ -3410,17 +3476,31 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             "g1_attn_residual_style_qkv",
             include_ggml_trace ? &ggml_trace : nullptr);
         std::vector<float> g1_block10 = std::move(g1_res_qkv.post);
-        std::vector<float> g1sq_out = std::move(g1_res_qkv.sq);
-        std::vector<float> g1sk_out = std::move(g1_res_qkv.sk);
-        std::vector<float> g1sv_out = std::move(g1_res_qkv.sv);
+        // QVAC-18605 round 9 — style flash-attn GPU bridge for g1.
         thread_local vector_text_attention_cache g1_style_attn_cache;
         std::vector<float> g1_style_ctx_trace;
-        std::vector<float> g1_style_out = run_text_attention_cache(g1_style_attn_cache, model, g1sq_out, g1sk_out, g1sv_out,
-            L, 50, 2, 128,
-            "vector_estimator:onnx::MatMul_3164",
-            "vector_estimator:tts.ttl.vector_field.main_blocks.11.attention.out_fc.linear.bias",
-            current_step, "g1_style_flash",
-            include_ggml_trace ? &g1_style_ctx_trace : nullptr);
+        std::vector<float> g1_style_out;
+        const bool g1_style_use_gpu_bridge = !include_ggml_trace
+            && g1_res_qkv.sq_gpu && g1_res_qkv.sk_gpu && g1_res_qkv.sv_gpu;
+        if (g1_style_use_gpu_bridge) {
+            g1_style_out = run_text_attention_cache_gpu(g1_style_attn_cache, model,
+                g1_res_qkv.sq_gpu, g1_res_qkv.sk_gpu, g1_res_qkv.sv_gpu,
+                L, 50, 2, 128,
+                "vector_estimator:onnx::MatMul_3164",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.11.attention.out_fc.linear.bias",
+                current_step, "g1_style_flash",
+                /*ctx_trace=*/ nullptr);
+        } else {
+            std::vector<float> g1sq_out = std::move(g1_res_qkv.sq);
+            std::vector<float> g1sk_out = std::move(g1_res_qkv.sk);
+            std::vector<float> g1sv_out = std::move(g1_res_qkv.sv);
+            g1_style_out = run_text_attention_cache(g1_style_attn_cache, model, g1sq_out, g1sk_out, g1sv_out,
+                L, 50, 2, 128,
+                "vector_estimator:onnx::MatMul_3164",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.11.attention.out_fc.linear.bias",
+                current_step, "g1_style_flash",
+                include_ggml_trace ? &g1_style_ctx_trace : nullptr);
+        }
         PUSH_GGML_TRACE({"ve_g1_style_ctx", {L, 256}, g1_style_ctx_trace});
         PUSH_GGML_TRACE({"ve_g1_style_out", {L, C}, g1_style_out});
 
@@ -3495,17 +3575,31 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             "g2_attn_residual_style_qkv",
             include_ggml_trace ? &ggml_trace : nullptr);
         std::vector<float> g2_block16 = std::move(g2_res_qkv.post);
-        std::vector<float> g2sq_out = std::move(g2_res_qkv.sq);
-        std::vector<float> g2sk_out = std::move(g2_res_qkv.sk);
-        std::vector<float> g2sv_out = std::move(g2_res_qkv.sv);
+        // QVAC-18605 round 9 — style flash-attn GPU bridge for g2.
         thread_local vector_text_attention_cache g2_style_attn_cache;
         std::vector<float> g2_style_ctx_trace;
-        std::vector<float> g2_style_out = run_text_attention_cache(g2_style_attn_cache, model, g2sq_out, g2sk_out, g2sv_out,
-            L, 50, 2, 128,
-            "vector_estimator:onnx::MatMul_3209",
-            "vector_estimator:tts.ttl.vector_field.main_blocks.17.attention.out_fc.linear.bias",
-            current_step, "g2_style_flash",
-            include_ggml_trace ? &g2_style_ctx_trace : nullptr);
+        std::vector<float> g2_style_out;
+        const bool g2_style_use_gpu_bridge = !include_ggml_trace
+            && g2_res_qkv.sq_gpu && g2_res_qkv.sk_gpu && g2_res_qkv.sv_gpu;
+        if (g2_style_use_gpu_bridge) {
+            g2_style_out = run_text_attention_cache_gpu(g2_style_attn_cache, model,
+                g2_res_qkv.sq_gpu, g2_res_qkv.sk_gpu, g2_res_qkv.sv_gpu,
+                L, 50, 2, 128,
+                "vector_estimator:onnx::MatMul_3209",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.17.attention.out_fc.linear.bias",
+                current_step, "g2_style_flash",
+                /*ctx_trace=*/ nullptr);
+        } else {
+            std::vector<float> g2sq_out = std::move(g2_res_qkv.sq);
+            std::vector<float> g2sk_out = std::move(g2_res_qkv.sk);
+            std::vector<float> g2sv_out = std::move(g2_res_qkv.sv);
+            g2_style_out = run_text_attention_cache(g2_style_attn_cache, model, g2sq_out, g2sk_out, g2sv_out,
+                L, 50, 2, 128,
+                "vector_estimator:onnx::MatMul_3209",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.17.attention.out_fc.linear.bias",
+                current_step, "g2_style_flash",
+                include_ggml_trace ? &g2_style_ctx_trace : nullptr);
+        }
         PUSH_GGML_TRACE({"ve_g2_style_ctx", {L, 256}, g2_style_ctx_trace});
         PUSH_GGML_TRACE({"ve_g2_style_out", {L, C}, g2_style_out});
 
@@ -3580,17 +3674,31 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             "g3_attn_residual_style_qkv",
             include_ggml_trace ? &ggml_trace : nullptr);
         std::vector<float> g3_block22 = std::move(g3_res_qkv.post);
-        std::vector<float> g3sq_out = std::move(g3_res_qkv.sq);
-        std::vector<float> g3sk_out = std::move(g3_res_qkv.sk);
-        std::vector<float> g3sv_out = std::move(g3_res_qkv.sv);
+        // QVAC-18605 round 9 — style flash-attn GPU bridge for g3.
         thread_local vector_text_attention_cache g3_style_attn_cache;
         std::vector<float> g3_style_ctx_trace;
-        std::vector<float> g3_style_out = run_text_attention_cache(g3_style_attn_cache, model, g3sq_out, g3sk_out, g3sv_out,
-            L, 50, 2, 128,
-            "vector_estimator:onnx::MatMul_3254",
-            "vector_estimator:tts.ttl.vector_field.main_blocks.23.attention.out_fc.linear.bias",
-            current_step, "g3_style_flash",
-            include_ggml_trace ? &g3_style_ctx_trace : nullptr);
+        std::vector<float> g3_style_out;
+        const bool g3_style_use_gpu_bridge = !include_ggml_trace
+            && g3_res_qkv.sq_gpu && g3_res_qkv.sk_gpu && g3_res_qkv.sv_gpu;
+        if (g3_style_use_gpu_bridge) {
+            g3_style_out = run_text_attention_cache_gpu(g3_style_attn_cache, model,
+                g3_res_qkv.sq_gpu, g3_res_qkv.sk_gpu, g3_res_qkv.sv_gpu,
+                L, 50, 2, 128,
+                "vector_estimator:onnx::MatMul_3254",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.23.attention.out_fc.linear.bias",
+                current_step, "g3_style_flash",
+                /*ctx_trace=*/ nullptr);
+        } else {
+            std::vector<float> g3sq_out = std::move(g3_res_qkv.sq);
+            std::vector<float> g3sk_out = std::move(g3_res_qkv.sk);
+            std::vector<float> g3sv_out = std::move(g3_res_qkv.sv);
+            g3_style_out = run_text_attention_cache(g3_style_attn_cache, model, g3sq_out, g3sk_out, g3sv_out,
+                L, 50, 2, 128,
+                "vector_estimator:onnx::MatMul_3254",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.23.attention.out_fc.linear.bias",
+                current_step, "g3_style_flash",
+                include_ggml_trace ? &g3_style_ctx_trace : nullptr);
+        }
         PUSH_GGML_TRACE({"ve_g3_style_ctx", {L, 256}, g3_style_ctx_trace});
         PUSH_GGML_TRACE({"ve_g3_style_out", {L, C}, g3_style_out});
 

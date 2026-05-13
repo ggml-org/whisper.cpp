@@ -271,7 +271,23 @@ int main() {
     // bridge passes to `run_text_attention_cache_gpu`.
     test_shape("attn0_kv_text_len32",  256,  32, 0xA11A4u);   // front-block K / V @ text_len=32
     test_shape("attn0_kv_text_len50",  256,  50, 0xA11A5u);   // front-block K / V @ text_len=50
-    test_shape("style0_q_rope_L20",    256,  20, 0xA11A3u);   // 2h × 128d @ L=20
+
+    // QVAC-18605 round 9 — style flash-attn K / V / Q shapes for
+    // the 4 res-style sites (style0 + g1_style + g2_style +
+    // g3_style).  Style attention runs at n_heads=2, head_dim=128
+    // (vs n_heads=4, head_dim=64 for the text attentions above)
+    // — but the underlying flat ne layout is `[width=256, *_len]`
+    // either way (2 × 128 == 4 × 64 == 256), so the byte-count-
+    // matching contract `ggml_backend_tensor_copy` checks
+    // internally is identical to round 8.  The Q (sq) is
+    // `[256, L=20]`; the K / V (sk / sv) are `[256, 50]` (the
+    // style ttl is fixed at 50 tokens regardless of the input
+    // text length).  These shapes are already covered by
+    // `style0_q_rope_L20` + `style0_k_rope_kv50` below — round 9
+    // adds the explicit doc-comment + a Q at L=1 for the same
+    // trip-wire reason as round 8's `attn0_q_rope_L1`.
+    test_shape("style_sq_L1",          256,   1, 0xA11A6u);   // L=1 trip-wire for style Q
+    test_shape("style0_q_rope_L20",    256,  20, 0xA11A3u);   // 2h × 128d @ L=20  ← style sq
     test_shape("attn0_k_rope_kv20",    256,  20, 0xA11A4u);   // K side
     test_shape("style0_k_rope_kv50",   256,  50, 0xA11A5u);   // K side, style kv_len
 

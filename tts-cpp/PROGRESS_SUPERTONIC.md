@@ -1349,6 +1349,101 @@ improvement to this exact change.
 
 ---
 
+### Vulkan optimisation round 9 (May 2026, QVAC-18605 follow-up #7) — Style flash-attn GPU bridge
+
+Round 8 wired the GPU bridge for the **front-block attn0** site.
+Round 9 extends the same proven pattern to the **4 style flash-
+attn sites** (style0 + g1_style + g2_style + g3_style).  Each
+site previously downloaded `sq` / `sk` / `sv` from the
+res-style-qkv cache then re-uploaded them to the next-stage
+attention cache; round 9 replaces all 4 host bridges with
+`run_text_attention_cache_gpu` device→device blits, gated on
+production mode.
+
+#### Changes
+
+- **`vector_res_style_qkv_result` extended** with
+  `ggml_tensor * sq_gpu / sk_gpu / sv_gpu` GPU handles.  Same
+  shape as `vector_group_graph_result::q_rope_gpu` etc from the
+  round-1 2C-lite work.  Populated unconditionally by
+  `run_res_style_qkv_cache` (cheap — just `ggml_graph_get_tensor`
+  lookups on the cached graph; no GPU sync).
+
+- **`run_res_style_qkv_cache` host-download gating**.  The 3
+  `tensor_to_time_channel(...)` downloads of `sq` / `sk` / `sv`
+  are now gated on `trace != nullptr`.  Production path skips
+  them entirely.  Mirrors the round-1 2C-lite
+  `need_host_qkv = (trace != nullptr)` gate on
+  `vector_group_graph_result`.  `post` stays unconditional —
+  consumed by the next-stage `run_style_residual_cache` which
+  still expects a host vector (cross-stage GPU bridge for `post`
+  is deferred; documented in `aiDocs/PLAN_VULKAN_NEXT_ROUNDS.md`).
+
+- **4 style flash-attn dispatch sites rewired**.  All four sites
+  (`style0` / `g1_style` / `g2_style` / `g3_style`) follow the
+  exact same gating pattern as the round-8 front-block bridge:
+  ```
+  use_gpu_bridge = !include_ggml_trace && sq_gpu && sk_gpu && sv_gpu
+  if (use_gpu_bridge) run_text_attention_cache_gpu(sq_gpu, sk_gpu, sv_gpu, ...)
+  else                run_text_attention_cache(host_sq, host_sk, host_sv, ...)
+  ```
+  Trace mode falls back to the legacy host bridge so the trace
+  harness still gets all the host vectors.
+
+#### Test plan (TDD, round 9)
+
+Strict test-first.  The blit primitive parity test was extended
+BEFORE any production wiring landed:
+
+| Shape | Coverage | Result |
+|------|----------|--------|
+| `style_sq_L1` (NEW) | Style Q at L=1 — trip-wire for stride / shape bugs at the smallest sensible input.  Mirrors round-8's `attn0_q_rope_L1` trip-wire. | `max_abs = 0.0` PASS |
+| `style0_q_rope_L20` (CLARIFIED) | Style sq @ L=20 (width=256, n_heads=2, head_dim=128).  Already covered the underlying byte layout pre-round-9; round 9 adds the explicit doc-comment about which round-9 site this covers. | `max_abs = 0.0` PASS |
+| `style0_k_rope_kv50` (CLARIFIED) | Style sk / sv @ kv_len=50.  Same comment treatment. | `max_abs = 0.0` PASS |
+
+Whole CPU-only `ctest -L unit` reports **21 / 21 tests, 0
+failures, 0 regressions**.  `test-supertonic-graph-to-graph-blit`
+went from 21 / 21 to **24 / 24 checks** (3 new style-shape
+checks, all bit-exact).  All other unit tests unchanged.
+
+#### Backwards compatibility
+
+- Trace mode preserved exactly — `include_ggml_trace == true`
+  triggers the `if (trace)` host-download block in
+  `run_res_style_qkv_cache` and the host-bridge fallback in
+  every dispatch site.  Trace harnesses see identical `sq` /
+  `sk` / `sv` host vectors as before round 9.
+- Production path: bit-equivalent output to the pre-round-9
+  path (the GPU bridge blits the same bytes the host bridge
+  would download / upload; the attention compute reads the
+  same input data either way).
+- `cache.kv_attn_type` (round 4) cache-key still applies —
+  F32 / F16 / BF16 / Q8_0 K/V dispatch unchanged on the GPU
+  path.
+- `last_style_v_raw_uploaded` / `last_kctx_raw_uploaded` F4
+  upload-skip optimization untouched (those are about
+  `style_v_in` / `kctx_in` uploads INTO the res-style-qkv
+  cache, not its outputs).
+
+#### Why no live perf number?
+
+Same shape as rounds 4 + 8: dispatch wiring, not a kernel
+change.  Sync-points eliminated:
+
+- 3 GPU→host downloads + 3 host→GPU uploads = 6 sync points
+  per call
+- 4 sites × 5 denoise steps = 20 calls / synth
+- Total: **120 sync points / synth eliminated** on the
+  production Vulkan / OpenCL path (4× the round-8 win;
+  largest bandwidth-style optimisation that ships from
+  pure-Supertonic-side code).
+
+The bench surface from round 7 (`--bench-per-step` +
+`--bench-sync`) directly attributes the per-step improvement
+to the correct stage column on real hardware.
+
+---
+
 ## Remaining Work
 
 ### Runtime and performance
