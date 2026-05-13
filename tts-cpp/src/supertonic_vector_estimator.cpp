@@ -155,7 +155,18 @@ ggml_tensor * repeat_like(ggml_context * ctx, ggml_tensor * v, ggml_tensor * lik
             std::to_string(like->ne[0]) + "," + std::to_string(like->ne[1]) + "," +
             std::to_string(like->ne[2]) + "," + std::to_string(like->ne[3]) + "]");
     }
-    return ggml_repeat(ctx, v, like);
+    // Every call site in this file feeds the return value straight into
+    // ggml_add / ggml_mul, both of which broadcast natively in ggml.  Skip
+    // the explicit ggml_repeat node so the downstream op handles the
+    // broadcast — saves ~282 REPEAT ops per consolidated per-step graph.
+    // Override with SUPERTONIC_FORCE_EXPLICIT_REPEAT=1 if this regresses
+    // on a backend that doesn't broadcast (none observed today).
+    static const bool force_explicit_repeat =
+        std::getenv("SUPERTONIC_FORCE_EXPLICIT_REPEAT") != nullptr;
+    if (force_explicit_repeat) {
+        return ggml_repeat(ctx, v, like);
+    }
+    return v;
 }
 
 ggml_tensor * conv1d_f32(ggml_context * ctx,
@@ -217,6 +228,19 @@ ggml_tensor * conv1d_f32(ggml_context * ctx,
 }
 
 ggml_tensor * edge_clamp_pad_1d(ggml_context * ctx, ggml_tensor * x, int pad_left, int pad_right) {
+    if (pad_left == 0 && pad_right == 0) return x;
+    // Fused fast path via supertonic_edge_pad_1d.  Same kernel handles
+    // both sides; the legacy view + repeat_4d + concat chain (2 ops
+    // per side) becomes 1 dispatch total.  Override:
+    // SUPERTONIC_DISABLE_FUSED_EDGE_PAD=1.
+    static const bool disable_fused_edge_pad =
+        std::getenv("SUPERTONIC_DISABLE_FUSED_EDGE_PAD") != nullptr;
+    if (!disable_fused_edge_pad &&
+        x->type == GGML_TYPE_F32 &&
+        x->ne[2] == 1 && x->ne[3] == 1 &&
+        ggml_is_contiguous(x)) {
+        return ggml_supertonic_edge_pad_1d(ctx, x, pad_left, pad_right);
+    }
     const int64_t L = x->ne[0];
     const int64_t C = x->ne[1];
     ggml_tensor * out = x;
@@ -337,6 +361,23 @@ ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
         return custom;
     }
     const int K = (int) w->ne[0];
+    // Fused-op fast path (any backend that registers GGML_OP_SUPERTONIC_DEPTHWISE_1D
+    // — Metal does via the local ggml port overlay; CPU's
+    // ggml_compute_forward_supertonic_depthwise_1d is the parity backstop).
+    // Replaces the edge_clamp_pad + im2col + mul_mat + add chain with one
+    // dispatch.  Currently supports K in {3, 5}; the existing graph path is
+    // the fallback for K outside that set.  Override with
+    // SUPERTONIC_DISABLE_FUSED_DEPTHWISE=1 to force the stock-op chain.
+    static const bool disable_fused =
+        std::getenv("SUPERTONIC_DISABLE_FUSED_DEPTHWISE") != nullptr;
+    if (!disable_fused && (K == 3 || K == 5) &&
+        x->type == GGML_TYPE_F32 && w->type == GGML_TYPE_F32 &&
+        b->type == GGML_TYPE_F32 &&
+        x->ne[2] == 1 && x->ne[3] == 1 && w->ne[1] == 1 && w->ne[3] == 1 &&
+        w->ne[2] == x->ne[1] && b->ne[0] == x->ne[1] &&
+        ggml_is_contiguous(x) && ggml_is_contiguous(w) && ggml_is_contiguous(b)) {
+        return ggml_supertonic_depthwise_1d(ctx, x, w, b, dilation);
+    }
     const int pad_left = ((K - 1) * dilation) / 2;
     const int pad_right = (K - 1) * dilation - pad_left;
     ggml_tensor * padded = edge_clamp_pad_1d(ctx, x, pad_left, pad_right);
@@ -351,6 +392,19 @@ ggml_tensor * layer_norm_ggml(ggml_context * ctx,
                               ggml_tensor * x,
                               ggml_tensor * g,
                               ggml_tensor * b) {
+    // Fused-op fast path on non-CPU backends (Metal/Vulkan/CUDA/OpenCL):
+    // GGML_OP_SUPERTONIC_LAYER_NORM_CHANNEL collapses the
+    // permute + cont + ggml_norm + mul + add + permute + cont chain into
+    // a single dispatch.  Override with SUPERTONIC_DISABLE_FUSED_LAYER_NORM=1.
+    static const bool disable_fused_layer_norm =
+        std::getenv("SUPERTONIC_DISABLE_FUSED_LAYER_NORM") != nullptr;
+    if (!supertonic_use_cpu_custom_ops() && !disable_fused_layer_norm &&
+        x->type == GGML_TYPE_F32 && g->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 &&
+        x->ne[2] == 1 && x->ne[3] == 1 &&
+        g->ne[0] == x->ne[1] && b->ne[0] == x->ne[1] &&
+        ggml_is_contiguous(x) && ggml_is_contiguous(g) && ggml_is_contiguous(b)) {
+        return ggml_supertonic_layer_norm_channel(ctx, x, g, b, 1e-6f);
+    }
     // CPU-only direct row-wise layer-norm; falls through to permute +
     // ggml_norm on non-CPU backends so the graph stays GPU-executable.
     if (supertonic_use_cpu_custom_ops() &&
@@ -465,6 +519,13 @@ ggml_tensor * dense_matmul_time_ggml(ggml_context * ctx,
     // tensors are loaded as ne=[OC, IC].  Make that transpose contiguous, then
     // view it as a Conv1d kernel [K=1, IC, OC] so it can consume the repo's
     // standard time-major activation layout [T, IC].
+    //
+    // Tried replacing this conv1d_f32 wrapper with a direct ggml_mul_mat on
+    // 2026-05-11 — it requires cont on BOTH operands to satisfy mul_mat's
+    // !ggml_is_transposed(A) assertion, which yields the SAME dispatch count
+    // (cont + cont + mul_mat + add) as the current conv1d path (cont +
+    // im2col + mul_mat + add).  Net wash; keeping conv1d_f32 because it's
+    // already battle-tested with the CPU fastpath.
     ggml_tensor * wt = ggml_cont(ctx, ggml_transpose(ctx, w));
     ggml_tensor * kernel = ggml_reshape_3d(ctx, wt, 1, w->ne[1], w->ne[0]);
     ggml_tensor * y = conv1d_f32(ctx, kernel, x, 1, 0, 1);
@@ -472,9 +533,146 @@ ggml_tensor * dense_matmul_time_ggml(ggml_context * ctx,
     return y;
 }
 
+// Same as dense_matmul_time_ggml, but `model` is consulted for a pre-
+// transposed copy of `w` (built at load time for `:onnx::MatMul_*` weights
+// on non-CPU backends).  When available, the runtime `cont(transpose(w))`
+// dispatch is skipped — the pre-transposed tensor already has the
+// `[IC, OC]` layout that the conv1d_f32 K=1 kernel expects.  CPU callers
+// fall through to the original path (the cblas pointwise fast path takes
+// the loaded `[OC, IC]` weight directly).
+// Forward decl — defined below.
+ggml_tensor * dense_matmul_time_wt_pretransposed_ggml(ggml_context * ctx,
+                                                      const supertonic_model & model,
+                                                      ggml_tensor * x,
+                                                      ggml_tensor * w,
+                                                      ggml_tensor * b);
+
+ggml_tensor * dense_matmul_time_pretransposed_ggml(ggml_context * ctx,
+                                                   const supertonic_model & model,
+                                                   ggml_tensor * x,
+                                                   ggml_tensor * w,
+                                                   ggml_tensor * b) {
+    if (!supertonic_use_cpu_custom_ops()) {
+        if (ggml_tensor * w_pre = try_pretransposed_weight(model, w)) {
+            if (w_pre->type == GGML_TYPE_F32) {
+                // f32 fast path: reshape w_pre into the conv1d kernel
+                // [K=1, IC, OC] and dispatch via the existing wrapper.
+                // mul_mat(im2col_f32, kernel_f32) hits the optimised
+                // kernel_mul_mm_f32_f32.
+                ggml_tensor * kernel = ggml_reshape_3d(ctx, w_pre, 1, w_pre->ne[0], w_pre->ne[1]);
+                ggml_tensor * y = conv1d_f32(ctx, kernel, x, 1, 0, 1);
+                if (b) y = ggml_add(ctx, y, repeat_like(ctx, b, y));
+                return y;
+            }
+            // Quantized w_pre (q8_0): the f32 fast path's
+            // mul_mat(im2col_f32, kernel_quant) would need a
+            // kernel_mul_mm_f32_q8_0 variant which ggml-metal doesn't ship.
+            // Route through the wt helper (kernel as src0 — dispatches
+            // kernel_mul_mm_q8_0_f32) and transpose the [A, T] result back
+            // to [T, A] so the caller's downstream code (residual adds,
+            // [T, C]-shaped intermediate state) doesn't have to change.
+            ggml_tensor * y_wt = dense_matmul_time_wt_pretransposed_ggml(
+                ctx, model, x, w, b);
+            return ggml_cont(ctx, ggml_transpose(ctx, y_wt));
+        }
+    }
+    return dense_matmul_time_ggml(ctx, x, w, b);
+}
+
+// Phase B2 partial: like dense_matmul_time_pretransposed_ggml but emits
+// the result in *width-major* `[OC, T]` layout instead of `[T, OC]`.
+//
+// The trick is to swap the `ggml_mul_mat` operand order from
+// `mul_mat(im2col_[IC,T], kernel_[IC,OC]) -> [T, OC]` to
+// `mul_mat(kernel_[IC,OC], im2col_[IC,T]) -> [OC, T]`.  Both operands
+// stay non-transposed so the assertion on `a`/`b` is satisfied.  The
+// kernel-as-`src0` ordering is also what `kernel_mul_mm_q8_0_f32`
+// requires, so this single change *also* unlocks A3 step 2 (the
+// optimized quantized matmul kernel will dispatch when `w_pre` is
+// q8_0 — see the asymmetric load logic in supertonic_gguf.cpp).
+//
+// Used at the Q/K/V projection sites in the per-step graph: the
+// downstream rope + flash_attn expect `[A, L]` layout, so the cont
+// (transpose) that used to flip `[L, A]` -> `[A, L]` becomes dead
+// code.  Eliminates ~24 cont dispatches per per-step graph × 5
+// steps = ~120 ops per synth.
+//
+// Bias add: `b` (shape `[OC]`) broadcasts naturally against the
+// new `[OC, T]` output via `repeat_like`'s 1-d → 2-d reshape on the
+// `ne[0]` match.
+//
+// Falls through to the legacy path with a runtime cont(transpose)
+// on the activation when no pretransposed weight is available
+// (e.g. weight not on the `:onnx::MatMul_` allowlist).
+ggml_tensor * dense_matmul_time_wt_pretransposed_ggml(ggml_context * ctx,
+                                                      const supertonic_model & model,
+                                                      ggml_tensor * x,
+                                                      ggml_tensor * w,
+                                                      ggml_tensor * b) {
+    if (!supertonic_use_cpu_custom_ops()) {
+        if (ggml_tensor * w_pre = try_pretransposed_weight(model, w)) {
+            const int IC = (int) w_pre->ne[0];
+            const int OC = (int) w_pre->ne[1];
+
+            // ggml_im2col only reads the kernel's SHAPE (ne[0..3]); it never
+            // touches the kernel data — the output buffer holds the
+            // rearranged activation.  So for the SHAPE we can use:
+            //   - a reshape of w_pre when w_pre is f32 (cheap, just metadata)
+            //   - a tiny phantom f32 tensor allocated in the graph context
+            //     when w_pre is quantized (because reshape_3d(q8_0, 1, IC, OC)
+            //     would set ne[0]=1 < q8_0's 32-element block size and break
+            //     the type's invariants).  The phantom is never read.
+            ggml_tensor * shape_kernel;
+            if (w_pre->type == GGML_TYPE_F32) {
+                shape_kernel = ggml_reshape_3d(ctx, w_pre, 1, IC, OC);
+            } else {
+                shape_kernel = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, IC, OC);
+                // No data needs binding — im2col only consults ne[0..3].
+            }
+
+            ggml_tensor * im2col = ggml_im2col(ctx, shape_kernel, x, 1, 0, 0, 0, 1, 0, false, GGML_TYPE_F32);
+            // im2col has ne=[IC, T, 1, 1].  Reshape to 2D for mul_mat.
+            ggml_tensor * im2col_2d = ggml_reshape_2d(ctx, im2col,
+                                                      im2col->ne[0], im2col->ne[2] * im2col->ne[1]);
+            // Swapped order: w_pre first (src0 = the quantized/f32 weight),
+            // im2col second (src1 = f32 activation).  Result is [M=OC, N=T].
+            // For w_pre=q8_0 this dispatches kernel_mul_mm_q8_0_f32 — the
+            // bandwidth-optimised quantized matmul kernel — which is the
+            // A3 step 2 unlock.
+            ggml_tensor * w_2d = ggml_reshape_2d(ctx, w_pre, IC, OC);
+            ggml_tensor * y = ggml_mul_mat(ctx, w_2d, im2col_2d);
+            // y has ne=[OC, T] — already the wt layout.
+            if (b) y = ggml_add(ctx, y, repeat_like(ctx, b, y));
+            return y;
+        }
+    }
+    // Fallback: legacy [T, OC] matmul + explicit cont(transpose) to
+    // produce [OC, T] for the caller.  CPU also lands here (and gets
+    // the cblas fast path for free via dense_matmul_time_ggml).
+    ggml_tensor * y_tc = dense_matmul_time_ggml(ctx, x, w, b);
+    return ggml_cont(ctx, ggml_transpose(ctx, y_tc));
+}
+
 ggml_tensor * bias_gelu_ggml(ggml_context * ctx, ggml_tensor * x, ggml_tensor * b) {
+    const bool use_cpu_custom = supertonic_use_cpu_custom_ops();
+    // Fused-op fast path (any backend that registers
+    // GGML_OP_SUPERTONIC_BIAS_GELU — Metal does via the local ggml port
+    // overlay; CPU's ggml_compute_forward_supertonic_bias_gelu is the
+    // parity backstop).  Replaces the add(bias) + gelu_erf chain
+    // (2 dispatches on Metal) with one dispatch.  Override with
+    // SUPERTONIC_DISABLE_FUSED_BIAS_GELU=1 to force the stock-op chain.
+    // Skipped on CPU custom-op backends (cblas path below is faster).
+    static const bool disable_fused_bias_gelu =
+        std::getenv("SUPERTONIC_DISABLE_FUSED_BIAS_GELU") != nullptr;
+    if (!use_cpu_custom && !disable_fused_bias_gelu &&
+        x->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 &&
+        x->ne[2] == 1 && x->ne[3] == 1 &&
+        b->ne[0] == x->ne[1] &&
+        ggml_is_contiguous(x) && ggml_is_contiguous(b)) {
+        return ggml_supertonic_bias_gelu(ctx, x, b);
+    }
     // CPU-only fused bias + GELU; falls back to gelu(add(x, b)) on GPU.
-    if (supertonic_use_cpu_custom_ops() &&
+    if (use_cpu_custom &&
         x->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 && x->ne[2] == 1 && x->ne[3] == 1) {
         auto op = [](ggml_tensor * dst, int ith, int nth, void *) {
             const ggml_tensor * src = dst->src[0];
@@ -507,9 +705,29 @@ ggml_tensor * pw2_residual_ggml(ggml_context * ctx,
                                 ggml_tensor * x,
                                 ggml_tensor * b,
                                 ggml_tensor * gamma) {
+    const bool use_cpu_custom = supertonic_use_cpu_custom_ops();
+    // Fused-op fast path (any backend that registers
+    // GGML_OP_SUPERTONIC_PW2_RESIDUAL — Metal does via the local ggml port
+    // overlay; CPU's ggml_compute_forward_supertonic_pw2_residual is the
+    // parity backstop).  Replaces the add(bias) + mul(gamma) + add(residual)
+    // chain with one dispatch.  Override with
+    // SUPERTONIC_DISABLE_FUSED_PW2_RESIDUAL=1 to force the stock-op chain.
+    // Skipped on CPU custom-op backends (cblas fast path below is faster).
+    static const bool disable_fused_pw2_residual =
+        std::getenv("SUPERTONIC_DISABLE_FUSED_PW2_RESIDUAL") != nullptr;
+    if (!use_cpu_custom && !disable_fused_pw2_residual &&
+        residual->type == GGML_TYPE_F32 && x->type == GGML_TYPE_F32 &&
+        b->type == GGML_TYPE_F32 && gamma->type == GGML_TYPE_F32 &&
+        x->ne[2] == 1 && x->ne[3] == 1 &&
+        residual->ne[0] == x->ne[0] && residual->ne[1] == x->ne[1] &&
+        b->ne[0] == x->ne[1] && gamma->ne[0] == x->ne[1] &&
+        ggml_is_contiguous(residual) && ggml_is_contiguous(x) &&
+        ggml_is_contiguous(b) && ggml_is_contiguous(gamma)) {
+        return ggml_supertonic_pw2_residual(ctx, residual, x, b, gamma);
+    }
     // CPU-only fused (bias + gamma + residual); falls back to the
     // 3-step add/mul/add chain on GPU.
-    if (supertonic_use_cpu_custom_ops() &&
+    if (use_cpu_custom &&
         residual->type == GGML_TYPE_F32 && x->type == GGML_TYPE_F32 &&
         b->type == GGML_TYPE_F32 && gamma->type == GGML_TYPE_F32 &&
         x->ne[2] == 1 && x->ne[3] == 1) {
@@ -566,6 +784,109 @@ ggml_tensor * vector_convnext_ggml(ggml_context * ctx,
     return pw2_residual_ggml(ctx, residual, y,
         require_source_tensor(model, p + ".pwconv2.bias"),
         require_source_tensor(model, p + ".gamma"));
+}
+
+// Phase B2 full: [C, T]-layout pointwise (K=1) Conv1d as a direct matmul.
+//
+// pwconv1/pwconv2 weights load as Conv1d kernels with ne=[K=1, IC, OC, 1].
+// With activations already in [C, T] layout (IC inner-most), the K=1
+// dimension is degenerate and the convolution is just:
+//
+//   y[OC, T] = sum_IC w[IC, OC] * x[IC, T]
+//
+// which is exactly `ggml_mul_mat(w_2d=[IC, OC], x_2d=[IC, T])` — no
+// im2col, no transpose, no pretranspose-cache lookup needed.  Result is
+// f32 contiguous and directly consumable by the next [C, T] op.
+//
+// CPU is intentionally NOT routed here: AMX cblas_sgemm in the legacy
+// path is faster than the equivalent ggml_mul_mat dispatch on Apple
+// CPUs.  Caller's `vector_convnext_ggml_ct` already roundtrips on CPU.
+ggml_tensor * pointwise_matmul_ct(ggml_context * ctx,
+                                  ggml_tensor * x_ct,   // [IC, T, 1, 1]
+                                  ggml_tensor * w,      // [1, IC, OC, 1]  (Conv1d K=1)
+                                  ggml_tensor * b) {
+    GGML_ASSERT(w->ne[0] == 1);            // K=1
+    GGML_ASSERT(w->ne[1] == x_ct->ne[0]);  // IC match
+    GGML_ASSERT(ggml_is_contiguous(w));
+    ggml_tensor * w_2d = ggml_reshape_2d(ctx, w, w->ne[1], w->ne[2]);
+    ggml_tensor * x_2d = ggml_reshape_2d(ctx, x_ct, x_ct->ne[0], x_ct->ne[1]);
+    ggml_tensor * y = ggml_mul_mat(ctx, w_2d, x_2d);  // [OC, T]
+    if (b) y = ggml_add(ctx, y, repeat_like(ctx, b, y));
+    return y;
+}
+
+// Phase B2 full: ConvNeXt block operating on `[C, T]` activations end-to-end.
+// All five fused custom Metal kernels have layout-flag plumbing landed in
+// port-version 13; this block strings their `_ct` variants together so the
+// activation tensor never needs to flip layout mid-block.  Used by callers
+// that fuse a chain of N convnext blocks with a single entry permute
+// `[T, C] -> [C, T]` before the loop and a single exit permute after — net
+// savings = (N - 1) intra-block transposes per chain × 5 CFM steps.
+//
+// Input  x:   [C, T, 1, 1]  f32 contiguous
+// Output    : [C, T, 1, 1]  f32 contiguous
+//
+// CPU backends fall through to the legacy `[T, C]` path: the `_ct` ops have
+// CPU forward implementations but they would force AMX-cblas off, so on
+// CPU we permute in/out around the legacy block to keep AMX engaged.
+ggml_tensor * vector_convnext_ggml_ct(ggml_context * ctx,
+                                      const supertonic_model & model,
+                                      const std::string & p,
+                                      ggml_tensor * x_ct,
+                                      int dilation) {
+    if (model_prefers_cpu_kernels(model)) {
+        // CPU: roundtrip to [T, C], run legacy block (AMX cblas fast path),
+        // roundtrip back.  Cheap on CPU because the permute is just a copy.
+        ggml_tensor * x_tc = ggml_cont(ctx, ggml_permute(ctx, x_ct, 1, 0, 2, 3));
+        ggml_tensor * y_tc = vector_convnext_ggml(ctx, model, p, x_tc, dilation);
+        return ggml_cont(ctx, ggml_permute(ctx, y_tc, 1, 0, 2, 3));
+    }
+
+    // Helper: flatten leading-1 dims so per-channel tensors come out as [C].
+    // Supertonic GGUFs ship bias/gamma/norm parameters as [C, 1, 1, 1] or
+    // [1, C, 1, 1] depending on which PyTorch broadcast view they were
+    // exported from.  The `_ct` ctors all assert `param->ne[0] == C_dim`, so
+    // unflattened tensors break them.  This is the same shape mismatch that
+    // has been silently disabling the legacy `pw2_residual_ggml` fused path
+    // for ConvNeXt blocks all along.
+    auto flatten_1d = [&](ggml_tensor * t) -> ggml_tensor * {
+        const int64_t n = ggml_nelements(t);
+        // Skip reshape only when already a literal 1-d view with ne[0] == n
+        // (`ggml_n_dims` is unreliable here — it ignores leading-1 dims and
+        // would return 1 for a [1, C, 1, 1] tensor where ne[0] = 1).
+        if (t->ne[0] == n && t->ne[1] == 1 && t->ne[2] == 1 && t->ne[3] == 1) {
+            return t;
+        }
+        return ggml_reshape_1d(ctx, t, n);
+    };
+
+    ggml_tensor * residual = x_ct;
+    // depthwise_1d_ct: [C, T] -> [C, T]
+    ggml_tensor * y = ggml_supertonic_depthwise_1d_ct(ctx, x_ct,
+        require_source_tensor(model, p + ".dwconv.weight"),
+        flatten_1d(require_source_tensor(model, p + ".dwconv.bias")),
+        dilation);
+    // layer_norm_channel_ct: [C, T] -> [C, T]
+    y = ggml_supertonic_layer_norm_channel_ct(ctx, y,
+        flatten_1d(require_source_tensor(model, p + ".norm.norm.weight")),
+        flatten_1d(require_source_tensor(model, p + ".norm.norm.bias")),
+        1e-6f);
+    // pw1 matmul: [IC=C, T] -> [OC, T]
+    y = pointwise_matmul_ct(ctx, y,
+        require_source_tensor(model, p + ".pwconv1.weight"),
+        nullptr);
+    // bias_gelu_ct: [OC, T] -> [OC, T]
+    y = ggml_supertonic_bias_gelu_ct(ctx, y,
+        flatten_1d(require_source_tensor(model, p + ".pwconv1.bias")));
+    // pw2 matmul: [IC=OC, T] -> [C, T]   (restores channel count)
+    y = pointwise_matmul_ct(ctx, y,
+        require_source_tensor(model, p + ".pwconv2.weight"),
+        nullptr);
+    // pw2_residual_ct: x[C, T] + bias[C] (×) gamma[C] + residual[C, T] -> [C, T]
+    return ggml_supertonic_pw2_residual_ct(ctx, y,
+        flatten_1d(require_source_tensor(model, p + ".pwconv2.bias")),
+        flatten_1d(require_source_tensor(model, p + ".gamma")),
+        residual);
 }
 
 std::vector<float> tensor_to_time_channel(ggml_tensor * t) {
@@ -730,7 +1051,7 @@ void build_text_attention_cache(vector_text_attention_cache & cache,
     ggml_set_name(ctx_tc, "vector_attn_ctx"); ggml_set_output(ctx_tc);
     ggml_build_forward_expand(cache.gf, ctx_tc);
 
-    ggml_tensor * out = dense_matmul_time_ggml(cache.ctx, ctx_tc,
+    ggml_tensor * out = dense_matmul_time_pretransposed_ggml(cache.ctx, model, ctx_tc,
         require_source_tensor(model, out_w_source),
         require_source_tensor(model, out_b_source));
     ggml_set_name(out, "vector_attn_out"); ggml_set_output(out);
@@ -994,18 +1315,20 @@ void build_group_graph_cache(vector_group_graph_cache & cache,
     }
     // F6: pre-transposed companion lives in model.ctx_w under
     // `<matmul_source>__T` (populated at load).  Falls back to the
-    // in-graph `ggml_cont(ggml_transpose(W))` rewrite if the
-    // pre-transpose roster didn't cover this weight (e.g. when
-    // running against a model whose `matmul_source` shape doesn't
-    // match the audit's [512, 64] expectation; see the defensive
-    // check in supertonic_gguf.cpp's F6 hook).
+    // per-pointer `pretransposed_weights` map (Metal's broader Q/K/V
+    // pretranspose roster), and finally to an in-graph
+    // `ggml_cont(ggml_transpose(W))` rewrite if neither covers this
+    // weight.
     ggml_tensor * t_proj;
     {
         auto pretrans_it = model.source_tensors.find(matmul_source + "__T");
         ggml_tensor * w_t = (pretrans_it != model.source_tensors.end()) ? pretrans_it->second : nullptr;
         if (!w_t) {
-            w_t = ggml_cont(cache.ctx, ggml_transpose(cache.ctx,
-                require_source_tensor(model, matmul_source)));
+            ggml_tensor * t_proj_w_orig = require_source_tensor(model, matmul_source);
+            w_t = try_pretransposed_weight(model, t_proj_w_orig);
+            if (!w_t) {
+                w_t = ggml_cont(cache.ctx, ggml_transpose(cache.ctx, t_proj_w_orig));
+            }
         }
         t_proj = ggml_mul_mat(cache.ctx, w_t,
             ggml_reshape_2d(cache.ctx, cache.temb_in, 64, 1));
@@ -1029,13 +1352,13 @@ void build_group_graph_cache(vector_group_graph_cache & cache,
     ggml_build_forward_expand(cache.gf, cur);
 
     const std::string attn_prefix = vector_main_block(post_block + 1) + ".attn.";
-    ggml_tensor * q = dense_matmul_time_ggml(cache.ctx, cur,
+    ggml_tensor * q = dense_matmul_time_pretransposed_ggml(cache.ctx, model, cur,
         require_source_tensor(model, q_matmul_source),
         require_source_tensor(model, attn_prefix + "W_query.linear.bias"));
-    ggml_tensor * k = dense_matmul_time_ggml(cache.ctx, cache.text_in,
+    ggml_tensor * k = dense_matmul_time_pretransposed_ggml(cache.ctx, model, cache.text_in,
         require_source_tensor(model, k_matmul_source),
         require_source_tensor(model, attn_prefix + "W_key.linear.bias"));
-    ggml_tensor * v = dense_matmul_time_ggml(cache.ctx, cache.text_in,
+    ggml_tensor * v = dense_matmul_time_pretransposed_ggml(cache.ctx, model, cache.text_in,
         require_source_tensor(model, v_matmul_source),
         require_source_tensor(model, attn_prefix + "W_value.linear.bias"));
     ggml_set_name(q, q_name.c_str()); ggml_set_output(q); ggml_build_forward_expand(cache.gf, q);
@@ -1361,14 +1684,14 @@ void build_res_style_qkv_cache(vector_res_style_qkv_cache & cache,
     ggml_build_forward_expand(cache.gf, post);
 
     const std::string style_prefix = vector_main_block(style_block) + ".attention.";
-    ggml_tensor * sq = dense_matmul_time_ggml(cache.ctx, post,
+    ggml_tensor * sq = dense_matmul_time_pretransposed_ggml(cache.ctx, model, post,
         require_source_tensor(model, q_matmul_source),
         require_source_tensor(model, style_prefix + "W_query.linear.bias"));
-    ggml_tensor * sk = dense_matmul_time_ggml(cache.ctx, cache.kctx_in,
+    ggml_tensor * sk = dense_matmul_time_pretransposed_ggml(cache.ctx, model, cache.kctx_in,
         require_source_tensor(model, k_matmul_source),
         require_source_tensor(model, style_prefix + "W_key.linear.bias"));
     sk = ggml_tanh(cache.ctx, sk);
-    ggml_tensor * sv = dense_matmul_time_ggml(cache.ctx, cache.style_v_in,
+    ggml_tensor * sv = dense_matmul_time_pretransposed_ggml(cache.ctx, model, cache.style_v_in,
         require_source_tensor(model, v_matmul_source),
         require_source_tensor(model, style_prefix + "W_value.linear.bias"));
     ggml_set_name(sq, q_name.c_str()); ggml_set_output(sq); ggml_build_forward_expand(cache.gf, sq);
@@ -3150,6 +3473,912 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
     }
 }
 
+// Apply Supertonic's non-standard RoPE in-graph.
+// Supertonic uses angle = (t/L) * theta[d_half], where theta is loaded from
+// the GGUF and L is the per-call sequence length.  ggml_rope_ext's formula
+// expands to angle = (pos / freq_factors[d/2]) * freq_scale * freq_base^(-d/n_dims).
+// Setting freq_base=1, freq_scale=1, freq_factors[d_half] = L / theta[d_half],
+// positions = [0..L) reproduces the Supertonic formula exactly.  NEOX mode
+// matches apply_rope's split-pairs layout (x[d] rotates with x[d+D/2]) at
+// supertonic_vector_estimator.cpp:1416.
+//
+// x_tc must be a contiguous 2D tensor of shape ne=[H*D, q_len] (width-major).
+// `positions` is int32 [q_len], `freq_factors` is f32 [D/2]; both are caller-
+// owned input tensors set via ggml_backend_tensor_set before compute.
+ggml_tensor * apply_supertonic_rope_ggml(ggml_context * ctx,
+                                          ggml_tensor * x_tc,
+                                          ggml_tensor * positions,
+                                          ggml_tensor * freq_factors,
+                                          int q_len,
+                                          int H,
+                                          int D) {
+    GGML_ASSERT(x_tc->ne[0] == (int64_t)(H*D));
+    GGML_ASSERT(x_tc->ne[1] == (int64_t)q_len);
+    const size_t row_bytes = (size_t)(H*D) * sizeof(float);
+    const size_t head_bytes = (size_t)D * sizeof(float);
+    // View [H*D, q_len] as [D, H, q_len] so rope's outer dim is time.
+    // Strides: nb1 = head step (D floats), nb2 = time step (H*D floats).
+    // This view is naturally contiguous (nb[0]=elem_size, nb[1]=D*elem_size,
+    // nb[2]=H*D*elem_size = ne[0]*ne[1]*elem_size) so we can skip the
+    // ggml_cont copy that earlier versions inserted defensively.
+    ggml_tensor * x_view = ggml_view_3d(ctx, x_tc, D, H, q_len,
+                                         head_bytes, row_bytes, 0);
+    ggml_tensor * roped = ggml_rope_ext(ctx, x_view, positions, freq_factors,
+                                         D, GGML_ROPE_TYPE_NEOX, 0,
+                                         /*freq_base=*/1.0f,
+                                         /*freq_scale=*/1.0f,
+                                         /*ext_factor=*/0.0f,
+                                         /*attn_factor=*/1.0f,
+                                         /*beta_fast=*/0.0f,
+                                         /*beta_slow=*/0.0f);
+    return ggml_reshape_2d(ctx, roped, (int64_t) H * D, q_len);
+}
+
+// Append a text-attention subgraph (Q, K, V flash-attention + out projection +
+// bias add) to the parent (ctx, gf).  Mirrors build_text_attention_cache but
+// composes into the caller's context instead of owning one.
+//
+// Inputs:
+//   q_tc, k_tc, v_tc: contiguous [H*D, *_len] tensors
+//   out_w_tensor: model tensor for the out projection weight
+//   out_b_tensor: model tensor for the out projection bias
+// Returns: out_tc tensor of shape [out_dim, q_len].
+ggml_tensor * append_text_attention_subgraph(ggml_context * ctx,
+                                              const supertonic_model & model,
+                                              ggml_tensor * q_tc,
+                                              ggml_tensor * k_tc,
+                                              ggml_tensor * v_tc,
+                                              int q_len, int kv_len,
+                                              int n_heads, int head_dim,
+                                              ggml_tensor * out_w_tensor,
+                                              ggml_tensor * out_b_tensor,
+                                              float scale) {
+    const int width = n_heads * head_dim;
+    const size_t time_stride = (size_t)width * sizeof(float);
+    const size_t head_stride = (size_t)head_dim * sizeof(float);
+    ggml_tensor * q_in = ggml_view_3d(ctx, q_tc,
+        head_dim, q_len, n_heads, time_stride, head_stride, 0);
+    ggml_tensor * k_in = ggml_view_3d(ctx, k_tc,
+        head_dim, kv_len, n_heads, time_stride, head_stride, 0);
+    ggml_tensor * v_in = ggml_view_3d(ctx, v_tc,
+        head_dim, kv_len, n_heads, time_stride, head_stride, 0);
+    ggml_tensor * attn = ggml_flash_attn_ext(ctx, q_in, k_in, v_in,
+                                              nullptr, scale, 0.0f, 0.0f);
+    attn = ggml_reshape_2d(ctx, attn, (int64_t) n_heads * head_dim, q_len);
+    ggml_tensor * ctx_tc = ggml_cont(ctx, ggml_transpose(ctx, attn));
+    return dense_matmul_time_pretransposed_ggml(ctx, model, ctx_tc, out_w_tensor, out_b_tensor);
+}
+
+// Per-group MatMul tensor name suffixes (groups 0..3).  See per-group source
+// names in trace_proj_ggml; these tables centralise them for the consolidated
+// path.
+struct vector_step_group_names {
+    int t_linear;    // time-linear (matmul for time embedding projection)
+    int attn_q;
+    int attn_k;
+    int attn_v;
+    int attn_out;
+    int style_q;
+    int style_k;
+    int style_v;
+    int style_out;
+};
+
+static const vector_step_group_names kGroupNames[4] = {
+    {3095, 3101, 3102, 3103, 3110, 3116, 3117, 3118, 3119},
+    {3140, 3146, 3147, 3148, 3155, 3161, 3162, 3163, 3164},
+    {3185, 3191, 3192, 3193, 3200, 3206, 3207, 3208, 3209},
+    {3230, 3236, 3237, 3238, 3245, 3251, 3252, 3253, 3254},
+};
+
+static std::string matmul_name(int suffix) {
+    return "vector_estimator:onnx::MatMul_" + std::to_string(suffix);
+}
+
+// Bundle of input tensors a single CFM step subgraph needs.  Used both by
+// the per-step cache (one step per ggml_cgraph) and by the
+// 5-steps-unrolled-into-one-graph cache (Phase A1+A2).
+//
+// `x_in` / `noise_in` vary per step (x_in = latent for this step,
+// noise_in is the "residual" we add the velocity to — for Supertonic's
+// CFM equation `next = noise_in + velocity * (1 / total_steps)` they
+// happen to be the same tensor for a single step but become DIFFERENT
+// tensors when steps are chained: step N's x_in is step N-1's output,
+// while noise_in is still the original noisy latent that step.  In the
+// per-step path we bind them to the same external buffer; in the
+// unrolled-loop path we wire them as graph edges between steps).
+//
+// `t_emb_in` varies per step (one time embedding per CFM step index).
+// All other inputs are constant across the 5 CFM steps and bind to a
+// single shared input tensor regardless of which path is used.
+struct vector_step_inputs {
+    ggml_tensor * x_in           = nullptr;  // ne=[L, Cin]    f32
+    ggml_tensor * mask_in        = nullptr;  // ne=[L]         f32
+    ggml_tensor * t_emb_in       = nullptr;  // ne=[64]        f32  (per-step)
+    ggml_tensor * text_in        = nullptr;  // ne=[text_len, 256] f32
+    ggml_tensor * style_v_raw_in = nullptr;  // ne=[50, 256]   f32
+    ggml_tensor * style_kctx_in  = nullptr;  // ne=[50, 256]   f32
+    ggml_tensor * noise_in       = nullptr;  // ne=[L, Cin]    f32  (per-step)
+    ggml_tensor * pos_q          = nullptr;  // ne=[L]         i32
+    ggml_tensor * pos_k          = nullptr;  // ne=[text_len]  i32
+    ggml_tensor * freq_factors_q = nullptr;  // ne=[D/2]       f32
+    ggml_tensor * freq_factors_k = nullptr;  // ne=[D/2]       f32
+};
+
+// Append one CFM step's subgraph (proj_in → 4 groups → tail → proj_out
+// → velocity → next = noise + velocity / total_steps) to `gf`.  All
+// inputs are pre-bound by the caller; this function only builds the
+// dataflow and returns the `next` tensor (ne=[L, Cin]) so the caller
+// can either set it as a graph output or feed it as the next step's
+// `x_in`.  The function does NOT call `ggml_set_output` /
+// `ggml_build_forward_expand` on the result — that's the caller's
+// decision.
+//
+// `L`, `text_len` and `total_steps` are passed explicitly because they're
+// used in several places.  CPU vs GPU dispatch lives on the thread-local
+// `supertonic_use_cpu_custom_ops()` flag set by the outer
+// `supertonic_op_dispatch_scope` at the public entry point.
+ggml_tensor * append_supertonic_vector_step_subgraph(
+        ggml_context * gctx,
+        ggml_cgraph * gf,
+        const supertonic_model & model,
+        const vector_step_inputs & inputs,
+        int L,
+        int text_len,
+        int total_steps);
+
+// Consolidated per-step cache: one ctx, one cgraph, one gallocr for the entire
+// per-step computation.  Replaces the ~17 sub-graph dispatches the trace_proj
+// orchestrator emits with a single ggml_backend_graph_compute call.
+struct vector_step_one_graph_cache {
+    const supertonic_model * model = nullptr;
+    uint64_t generation_id = 0;
+    int L = 0;
+    int text_len = 0;
+    int total_steps = 0;
+
+    std::vector<uint8_t> buf;
+    ggml_context * ctx = nullptr;
+    ggml_cgraph * gf = nullptr;
+    ggml_gallocr_t allocr = nullptr;
+
+    // Per-call inputs
+    ggml_tensor * x_in = nullptr;          // noisy_latent (L, Cin) ggml-shape: ne=[L, Cin]
+    ggml_tensor * mask_in = nullptr;       // [L]
+    ggml_tensor * t_emb_in = nullptr;      // [64]
+    ggml_tensor * text_in = nullptr;       // [text_len, 256]
+    ggml_tensor * style_v_raw_in = nullptr; // [50, 256] (style_ttl repacked)
+    ggml_tensor * style_kctx_in = nullptr;  // [50, 256] (model's /Expand_output_0)
+    ggml_tensor * noise_in = nullptr;       // (L, Cin) (same data as x_in but indep slot for tail)
+
+    // Per-build (rope) inputs
+    ggml_tensor * pos_q = nullptr;          // int32 [L]
+    ggml_tensor * pos_k = nullptr;          // int32 [text_len]
+    ggml_tensor * freq_factors_q = nullptr; // f32 [32] (head_dim/2)
+    ggml_tensor * freq_factors_k = nullptr; // f32 [32]
+
+    // Output
+    ggml_tensor * next_latent_out = nullptr; // ne=[L, Cin] in (t, c) order
+};
+
+void free_vector_step_one_graph_cache(vector_step_one_graph_cache & cache) {
+    if (cache.allocr) {
+        supertonic_safe_gallocr_free(cache.allocr, cache.model ? cache.model->generation_id : 0);
+        cache.allocr = nullptr;
+    }
+    if (cache.ctx) {
+        ggml_free(cache.ctx);
+        cache.ctx = nullptr;
+    }
+    cache.gf = nullptr;
+    cache.buf.clear();
+    cache.model = nullptr;
+    cache.generation_id = 0;
+    cache.L = 0;
+    cache.text_len = 0;
+    cache.total_steps = 0;
+    cache.x_in = cache.mask_in = cache.t_emb_in = cache.text_in = nullptr;
+    cache.style_v_raw_in = cache.style_kctx_in = cache.noise_in = nullptr;
+    cache.pos_q = cache.pos_k = cache.freq_factors_q = cache.freq_factors_k = nullptr;
+    cache.next_latent_out = nullptr;
+}
+
+ggml_tensor * append_supertonic_vector_step_subgraph(
+        ggml_context * gctx,
+        ggml_cgraph * gf,
+        const supertonic_model & model,
+        const vector_step_inputs & inputs,
+        int L,
+        int text_len,
+        int total_steps) {
+    const bool use_cpu_custom = supertonic_use_cpu_custom_ops();
+    // Shape constants that aren't dependent on L / text_len.  Mirror the
+    // values from supertonic_vector_step_one_graph_ggml.
+    const int C = 512;
+    const int H = 4;        // text-attention heads
+    const int D = 64;       // text-attention head_dim
+    const int SH = 2;       // style-attention heads
+    const int SD = 128;     // style-attention head_dim
+    const int kv_style = 50; // fixed by /Expand_output_0
+    (void)H; (void)D; (void)SH; (void)SD; (void)kv_style;
+
+    // ===== PHASE 0: proj_in + mask =====
+    ggml_tensor * cur = conv1d_f32(gctx,
+        require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.proj_in.net.weight"),
+        inputs.x_in, 1, 0, 1);
+    cur = ggml_mul(gctx, cur, repeat_like(gctx, inputs.mask_in, cur));
+
+    // ===== PHASE 1: Group 0 prologue — ConvNeXt × 4 on main_blocks.0 + time_add (1) + ConvNeXt (2) =====
+    int dils[4] = {1, 2, 4, 8};
+    // Phase B2 full: permute to [C, T] once before the 4-block chain, run
+    // the chain in [C, T] (which lets each block's two pointwise convs
+    // become a direct ggml_mul_mat with no im2col), permute back to
+    // [T, C] for the downstream time-add.  Saves 2 im2col dispatches per
+    // block × 4 blocks × 5 steps − 2 permutes per chain × 5 steps =
+    // 30 dispatches eliminated per synth.  Override:
+    // SUPERTONIC_DISABLE_CT_CONVNEXT=1.
+    static const bool disable_ct_convnext =
+        std::getenv("SUPERTONIC_DISABLE_CT_CONVNEXT") != nullptr;
+    const bool use_ct_convnext = !disable_ct_convnext && !use_cpu_custom;
+    if (use_ct_convnext) {
+        ggml_tensor * cur_ct = ggml_cont(gctx, ggml_permute(gctx, cur, 1, 0, 2, 3));
+        for (int j = 0; j < 4; ++j) {
+            cur_ct = vector_convnext_ggml_ct(gctx, model,
+                "vector_estimator:tts.ttl.vector_field.main_blocks.0.convnext." + std::to_string(j),
+                cur_ct, dils[j]);
+        }
+        cur = ggml_cont(gctx, ggml_permute(gctx, cur_ct, 1, 0, 2, 3));
+    } else {
+        for (int j = 0; j < 4; ++j) {
+            cur = vector_convnext_ggml(gctx, model,
+                "vector_estimator:tts.ttl.vector_field.main_blocks.0.convnext." + std::to_string(j),
+                cur, dils[j]);
+        }
+    }
+    // Time-add for group 0.
+    {
+        ggml_tensor * w = require_source_tensor(model, matmul_name(kGroupNames[0].t_linear));
+        ggml_tensor * b = require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.1.linear.linear.bias");
+        ggml_tensor * w_t = try_pretransposed_weight(model, w);
+        if (!w_t) w_t = ggml_cont(gctx, ggml_transpose(gctx, w));
+        ggml_tensor * t_proj = ggml_mul_mat(gctx, w_t, ggml_reshape_2d(gctx, inputs.t_emb_in, 64, 1));
+        t_proj = ggml_add(gctx, t_proj, ggml_reshape_2d(gctx, b, C, 1));
+        cur = ggml_add(gctx, cur, repeat_like(gctx, t_proj, cur));
+    }
+    cur = vector_convnext_ggml(gctx, model,
+        "vector_estimator:tts.ttl.vector_field.main_blocks.2.convnext.0",
+        cur, 1);
+    ggml_tensor * block_pre_attn = cur;
+
+    // Per-group attention block.
+    auto run_group = [&](ggml_tensor * x, int group, ggml_tensor * x_pre_attn) -> ggml_tensor * {
+        const auto & names = kGroupNames[group];
+        const int attn_block = group * 6 + 3;
+        const int post_attn_block = group * 6 + 4;
+        const int style_block = group * 6 + 5;
+
+        // Text attention QKV — output directly in [A, T] (width-major)
+        // layout so the cont(transpose) before rope/flash_attn is gone.
+        // The kernel-as-src0 ordering also dispatches the optimized
+        // kernel_mul_mm_q8_0_f32 when weights are q8_0.
+        ggml_tensor * q_wt = dense_matmul_time_wt_pretransposed_ggml(gctx, model, x_pre_attn,
+            require_source_tensor(model, matmul_name(names.attn_q)),
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks." +
+                                         std::to_string(attn_block) + ".attn.W_query.linear.bias"));
+        ggml_tensor * k_wt = dense_matmul_time_wt_pretransposed_ggml(gctx, model, inputs.text_in,
+            require_source_tensor(model, matmul_name(names.attn_k)),
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks." +
+                                         std::to_string(attn_block) + ".attn.W_key.linear.bias"));
+        ggml_tensor * v_wt = dense_matmul_time_wt_pretransposed_ggml(gctx, model, inputs.text_in,
+            require_source_tensor(model, matmul_name(names.attn_v)),
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks." +
+                                         std::to_string(attn_block) + ".attn.W_value.linear.bias"));
+
+        q_wt = apply_supertonic_rope_ggml(gctx, q_wt, inputs.pos_q, inputs.freq_factors_q, L, H, D);
+        k_wt = apply_supertonic_rope_ggml(gctx, k_wt, inputs.pos_k, inputs.freq_factors_k, text_len, H, D);
+
+        ggml_tensor * attn_out = append_text_attention_subgraph(gctx, model,
+            q_wt, k_wt, v_wt, L, text_len, H, D,
+            require_source_tensor(model, matmul_name(names.attn_out)),
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks." +
+                                         std::to_string(attn_block) + ".attn.out_fc.linear.bias"),
+            1.0f / 16.0f);
+
+        ggml_tensor * residual = ggml_add(gctx, x_pre_attn, attn_out);
+        ggml_tensor * normed = layer_norm_ggml(gctx, residual,
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks." +
+                                         std::to_string(attn_block) + ".norm.norm.weight"),
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks." +
+                                         std::to_string(attn_block) + ".norm.norm.bias"));
+
+        ggml_tensor * post = vector_convnext_ggml(gctx, model,
+            "vector_estimator:tts.ttl.vector_field.main_blocks." +
+            std::to_string(post_attn_block) + ".convnext.0",
+            normed, 1);
+
+        ggml_tensor * masked_post = ggml_mul(gctx, post, repeat_like(gctx, inputs.mask_in, post));
+
+        // Style attention QKV — output directly in [A, T] layout.
+        ggml_tensor * sq_wt = dense_matmul_time_wt_pretransposed_ggml(gctx, model, masked_post,
+            require_source_tensor(model, matmul_name(names.style_q)),
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks." +
+                                         std::to_string(style_block) + ".attention.W_query.linear.bias"));
+        ggml_tensor * sk_wt = dense_matmul_time_wt_pretransposed_ggml(gctx, model, inputs.style_kctx_in,
+            require_source_tensor(model, matmul_name(names.style_k)),
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks." +
+                                         std::to_string(style_block) + ".attention.W_key.linear.bias"));
+        sk_wt = ggml_tanh(gctx, sk_wt);
+        ggml_tensor * sv_wt = dense_matmul_time_wt_pretransposed_ggml(gctx, model, inputs.style_v_raw_in,
+            require_source_tensor(model, matmul_name(names.style_v)),
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks." +
+                                         std::to_string(style_block) + ".attention.W_value.linear.bias"));
+
+        ggml_tensor * style_out = append_text_attention_subgraph(gctx, model,
+            sq_wt, sk_wt, sv_wt, L, kv_style, SH, SD,
+            require_source_tensor(model, matmul_name(names.style_out)),
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks." +
+                                         std::to_string(style_block) + ".attention.out_fc.linear.bias"),
+            1.0f / 16.0f);
+
+        ggml_tensor * style_residual = ggml_add(gctx, post, style_out);
+        ggml_tensor * style_normed = layer_norm_ggml(gctx, style_residual,
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks." +
+                                         std::to_string(style_block) + ".norm.norm.weight"),
+            require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks." +
+                                         std::to_string(style_block) + ".norm.norm.bias"));
+        (void)x;
+        return style_normed;
+    };
+
+    // Group prep for groups 1-3.
+    auto group_prep = [&](ggml_tensor * x, int group) -> ggml_tensor * {
+        const int conv_block = group * 6 + 0;
+        const int linear_block = group * 6 + 1;
+        const int post_block = group * 6 + 2;
+        int dils2[4] = {1, 2, 4, 8};
+        ggml_tensor * y = x;
+        if (use_ct_convnext) {
+            ggml_tensor * y_ct = ggml_cont(gctx, ggml_permute(gctx, y, 1, 0, 2, 3));
+            for (int j = 0; j < 4; ++j) {
+                y_ct = vector_convnext_ggml_ct(gctx, model,
+                    "vector_estimator:tts.ttl.vector_field.main_blocks." +
+                    std::to_string(conv_block) + ".convnext." + std::to_string(j),
+                    y_ct, dils2[j]);
+            }
+            y = ggml_cont(gctx, ggml_permute(gctx, y_ct, 1, 0, 2, 3));
+        } else {
+            for (int j = 0; j < 4; ++j) {
+                y = vector_convnext_ggml(gctx, model,
+                    "vector_estimator:tts.ttl.vector_field.main_blocks." +
+                    std::to_string(conv_block) + ".convnext." + std::to_string(j),
+                    y, dils2[j]);
+            }
+        }
+        ggml_tensor * w = require_source_tensor(model, matmul_name(kGroupNames[group].t_linear));
+        ggml_tensor * b = require_source_tensor(model,
+            "vector_estimator:tts.ttl.vector_field.main_blocks." +
+            std::to_string(linear_block) + ".linear.linear.bias");
+        ggml_tensor * w_t = try_pretransposed_weight(model, w);
+        if (!w_t) w_t = ggml_cont(gctx, ggml_transpose(gctx, w));
+        ggml_tensor * t_proj = ggml_mul_mat(gctx, w_t, ggml_reshape_2d(gctx, inputs.t_emb_in, 64, 1));
+        t_proj = ggml_add(gctx, t_proj, ggml_reshape_2d(gctx, b, C, 1));
+        y = ggml_add(gctx, y, repeat_like(gctx, t_proj, y));
+        y = vector_convnext_ggml(gctx, model,
+            "vector_estimator:tts.ttl.vector_field.main_blocks." +
+            std::to_string(post_block) + ".convnext.0",
+            y, 1);
+        return y;
+    };
+
+    ggml_tensor * x_after_g0 = run_group(cur, 0, block_pre_attn);
+    ggml_tensor * x_pre_g1 = group_prep(x_after_g0, 1);
+    ggml_tensor * x_after_g1 = run_group(x_after_g0, 1, x_pre_g1);
+    ggml_tensor * x_pre_g2 = group_prep(x_after_g1, 2);
+    ggml_tensor * x_after_g2 = run_group(x_after_g1, 2, x_pre_g2);
+    ggml_tensor * x_pre_g3 = group_prep(x_after_g2, 3);
+    ggml_tensor * x_after_g3 = run_group(x_after_g2, 3, x_pre_g3);
+
+    // Tail: last_convnext × 4 + proj_out + mask + noise add.
+    ggml_tensor * tail = x_after_g3;
+    if (use_ct_convnext) {
+        ggml_tensor * tail_ct = ggml_cont(gctx, ggml_permute(gctx, tail, 1, 0, 2, 3));
+        for (int j = 0; j < 4; ++j) {
+            tail_ct = vector_convnext_ggml_ct(gctx, model,
+                "vector_estimator:tts.ttl.vector_field.last_convnext.convnext." + std::to_string(j),
+                tail_ct, 1);
+        }
+        tail = ggml_cont(gctx, ggml_permute(gctx, tail_ct, 1, 0, 2, 3));
+    } else {
+        for (int j = 0; j < 4; ++j) {
+            tail = vector_convnext_ggml(gctx, model,
+                "vector_estimator:tts.ttl.vector_field.last_convnext.convnext." + std::to_string(j),
+                tail, 1);
+        }
+    }
+    ggml_tensor * velocity = conv1d_f32(gctx,
+        require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.proj_out.net.weight"),
+        tail, 1, 0, 1);
+    ggml_tensor * masked_velocity = ggml_mul(gctx, velocity, repeat_like(gctx, inputs.mask_in, velocity));
+    ggml_tensor * scaled = ggml_scale(gctx, masked_velocity, 1.0f / (float)total_steps);
+    ggml_tensor * next = ggml_add(gctx, inputs.noise_in, scaled);
+
+    // Mark gf as used so the unused-parameter warning doesn't fire — the
+    // graph build is via the tensors above which inherit gf via ctx.
+    (void)gf;
+    return next;
+}
+
+
+// Compute one CFM denoising step as ONE ggml graph.  Used only when the
+// model's backend isn't CPU (Metal / CUDA / Vulkan / OpenCL).  Replaces the
+// ~21 sub-graph dispatches the trace_proj orchestrator emits with a single
+// ggml_backend_graph_compute call.
+bool supertonic_vector_step_one_graph_ggml(const supertonic_model & model,
+                                            const float * noisy_latent,
+                                            int latent_len,
+                                            const float * text_emb,
+                                            int text_len,
+                                            const float * style_ttl,
+                                            const float * latent_mask,
+                                            int current_step,
+                                            int total_steps,
+                                            std::vector<float> & next_latent_out,
+                                            std::string * error) {
+    // The outer entry point sets `supertonic_op_dispatch_scope`; this
+    // function is only called on non-CPU backends, so the thread-local
+    // `supertonic_use_cpu_custom_ops()` reads false inside the helpers.
+    try {
+        const int L = latent_len;
+        const int Cin = model.hparams.latent_channels;  // typically 16
+        const int C = 512;
+        const int text_C = 256;
+        const int H = 4;        // text-attention heads
+        const int D = 64;       // text-attention head_dim
+        const int A = H * D;    // 256 = attention width
+        const int SH = 2;       // style-attention heads
+        const int SD = 128;     // style-attention head_dim
+        const int kv_style = 50; // style attention kv length (fixed by /Expand_output_0)
+
+        thread_local vector_step_one_graph_cache cache;
+        const bool need_rebuild = cache.model != &model ||
+                                  cache.generation_id != model.generation_id ||
+                                  cache.L != L ||
+                                  cache.text_len != text_len ||
+                                  cache.total_steps != total_steps;
+        if (need_rebuild) {
+            free_vector_step_one_graph_cache(cache);
+            cache.model = &model;
+            cache.generation_id = model.generation_id;
+            cache.L = L;
+            cache.text_len = text_len;
+            cache.total_steps = total_steps;
+
+            // Memory budget for the consolidated graph.  The original
+            // sub-graphs each used 128-512 nodes; the full per-step graph is
+            // roughly the sum (4 groups x ~700 ops/group + tail + front).
+            // Round up generously.
+            constexpr int MAX_NODES = 8192;
+            const size_t buf_size = ggml_tensor_overhead() * MAX_NODES +
+                                     ggml_graph_overhead_custom(MAX_NODES, false);
+            cache.buf.assign(buf_size, 0);
+            ggml_init_params p = { buf_size, cache.buf.data(), true };
+            cache.ctx = ggml_init(p);
+            cache.gf = ggml_new_graph_custom(cache.ctx, MAX_NODES, false);
+
+            // --- Per-call inputs ---
+            cache.x_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, L, Cin);
+            ggml_set_name(cache.x_in, "step_x_in"); ggml_set_input(cache.x_in);
+            cache.mask_in = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_F32, L);
+            ggml_set_name(cache.mask_in, "step_mask"); ggml_set_input(cache.mask_in);
+            cache.t_emb_in = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_F32, 64);
+            ggml_set_name(cache.t_emb_in, "step_temb"); ggml_set_input(cache.t_emb_in);
+            cache.text_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, text_len, text_C);
+            ggml_set_name(cache.text_in, "step_text_in"); ggml_set_input(cache.text_in);
+            cache.style_v_raw_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, kv_style, text_C);
+            ggml_set_name(cache.style_v_raw_in, "step_style_v"); ggml_set_input(cache.style_v_raw_in);
+            cache.style_kctx_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, kv_style, text_C);
+            ggml_set_name(cache.style_kctx_in, "step_style_kctx"); ggml_set_input(cache.style_kctx_in);
+            cache.noise_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, L, Cin);
+            ggml_set_name(cache.noise_in, "step_noise_in"); ggml_set_input(cache.noise_in);
+
+            // --- RoPE inputs ---
+            cache.pos_q = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_I32, L);
+            ggml_set_name(cache.pos_q, "step_pos_q"); ggml_set_input(cache.pos_q);
+            cache.pos_k = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_I32, text_len);
+            ggml_set_name(cache.pos_k, "step_pos_k"); ggml_set_input(cache.pos_k);
+            cache.freq_factors_q = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_F32, D / 2);
+            ggml_set_name(cache.freq_factors_q, "step_ff_q"); ggml_set_input(cache.freq_factors_q);
+            cache.freq_factors_k = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_F32, D / 2);
+            ggml_set_name(cache.freq_factors_k, "step_ff_k"); ggml_set_input(cache.freq_factors_k);
+
+            ggml_context * gctx = cache.ctx;
+            ggml_cgraph * gf = cache.gf;
+
+            vector_step_inputs inputs;
+            inputs.x_in           = cache.x_in;
+            inputs.mask_in        = cache.mask_in;
+            inputs.t_emb_in       = cache.t_emb_in;
+            inputs.text_in        = cache.text_in;
+            inputs.style_v_raw_in = cache.style_v_raw_in;
+            inputs.style_kctx_in  = cache.style_kctx_in;
+            inputs.noise_in       = cache.noise_in;
+            inputs.pos_q          = cache.pos_q;
+            inputs.pos_k          = cache.pos_k;
+            inputs.freq_factors_q = cache.freq_factors_q;
+            inputs.freq_factors_k = cache.freq_factors_k;
+
+            ggml_tensor * next = append_supertonic_vector_step_subgraph(
+                gctx, gf, model, inputs, L, text_len, total_steps);
+
+            ggml_set_name(next, "step_next_latent");
+            ggml_set_output(next);
+            ggml_build_forward_expand(gf, next);
+            cache.next_latent_out = next;
+
+
+            // Allocate.
+            cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
+            if (!cache.allocr) throw std::runtime_error("ggml_gallocr_new vector step one-graph failed");
+            if (!ggml_gallocr_reserve(cache.allocr, gf)) {
+                throw std::runtime_error("ggml_gallocr_reserve vector step one-graph failed");
+            }
+            ggml_gallocr_alloc_graph(cache.allocr, gf);
+        }
+
+        // ===== Per-call inputs =====
+        // The existing trace_proj_ggml at lines 2143/2151 sets these tensors
+        // DIRECTLY from the caller-provided channel-major buffers (no host
+        // transpose), and the views downstream interpret memory accordingly.
+        // Copy that pattern exactly — my earlier transpose loops were a bug
+        // (correlation 0.003 vs CPU reference; root-caused 2026-05-11).
+        ggml_backend_tensor_set(cache.x_in, noisy_latent, 0, (size_t)L * Cin * sizeof(float));
+        ggml_backend_tensor_set(cache.noise_in, noisy_latent, 0, (size_t)L * Cin * sizeof(float));
+        ggml_backend_tensor_set(cache.mask_in, latent_mask, 0, (size_t)L * sizeof(float));
+
+        std::vector<float> te_host = time_embedding(model, current_step, total_steps);
+        ggml_backend_tensor_set(cache.t_emb_in, te_host.data(), 0, te_host.size() * sizeof(float));
+
+        // text_emb is in (C=256, text_len) channel-major; the tensor has
+        // ne=[text_len, 256] which puts t_len fast in memory.  Same raw layout,
+        // so direct memcpy (matches trace_proj_ggml).
+        ggml_backend_tensor_set(cache.text_in, text_emb, 0, (size_t)text_len * 256 * sizeof(float));
+
+        // Style inputs (cached host buffers from existing helper).
+        const std::vector<float> * style_v_raw_ptr = nullptr;
+        const std::vector<float> * kctx_raw_ptr = nullptr;
+        cached_style_layouts(model, style_ttl, style_v_raw_ptr, kctx_raw_ptr);
+        ggml_backend_tensor_set(cache.style_v_raw_in, style_v_raw_ptr->data(), 0, style_v_raw_ptr->size() * sizeof(float));
+        ggml_backend_tensor_set(cache.style_kctx_in, kctx_raw_ptr->data(), 0, kctx_raw_ptr->size() * sizeof(float));
+
+        // RoPE positions + freq_factors.  theta is loaded from the model and
+        // depends on L (sequence length); recompute per call.
+        {
+            std::vector<int32_t> pos_q_host(L);
+            for (int i = 0; i < L; ++i) pos_q_host[i] = i;
+            ggml_backend_tensor_set(cache.pos_q, pos_q_host.data(), 0, pos_q_host.size() * sizeof(int32_t));
+            std::vector<int32_t> pos_k_host(text_len);
+            for (int i = 0; i < text_len; ++i) pos_k_host[i] = i;
+            ggml_backend_tensor_set(cache.pos_k, pos_k_host.data(), 0, pos_k_host.size() * sizeof(int32_t));
+
+            const int half = 32;  // D/2 = 64/2
+            f32_tensor theta = read_f32(model, "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.theta");
+            if ((int)theta.data.size() < half) {
+                throw std::runtime_error("theta tensor has fewer than D/2 elements");
+            }
+            std::vector<float> ff_q(half), ff_k(half);
+            for (int d = 0; d < half; ++d) {
+                ff_q[d] = (float)L / theta.data[d];
+                ff_k[d] = (float)text_len / theta.data[d];
+            }
+            ggml_backend_tensor_set(cache.freq_factors_q, ff_q.data(), 0, ff_q.size() * sizeof(float));
+            ggml_backend_tensor_set(cache.freq_factors_k, ff_k.data(), 0, ff_k.size() * sizeof(float));
+        }
+
+        // ===== ONE compute call =====
+        supertonic_graph_compute(model, cache.gf);
+
+        // ===== Read output =====
+        // The output tensor has ne=[L, Cin] with element (i=t, j=c) at offset
+        // c*L+t — exactly the (c, t) channel-major layout the caller expects.
+        // Direct memcpy, no transpose.
+        next_latent_out.assign((size_t)Cin * L, 0.0f);
+        ggml_backend_tensor_get(cache.next_latent_out, next_latent_out.data(), 0,
+                                 (size_t)Cin * L * sizeof(float));
+        if (error) error->clear();
+        return true;
+    } catch (const std::exception & e) {
+        if (error) *error = e.what();
+        return false;
+    }
+}
+
+// =====================================================================
+// Phase A1+A2 — single-graph CFM loop
+// =====================================================================
+//
+// Unroll all `total_steps` CFM denoising steps into ONE ggml_cgraph and
+// dispatch with a single ggml_backend_graph_compute call.  Each step's
+// `x_in` and `noise_in` is the previous step's output node (no host
+// round-trip), and only `t_emb_in` differs per step (N inputs, one
+// per CFM step).  Replaces the engine's `for (step ...) {
+// supertonic_vector_step_ggml(...) }` loop on non-CPU backends.
+//
+// CPU keeps the per-step path because its cblas fastpaths benefit from
+// the cache-per-shape boundary and the host-side rope/style helpers in
+// trace_proj_ggml expect to see per-step outputs.
+
+struct vector_loop_one_graph_cache {
+    const supertonic_model * model = nullptr;
+    uint64_t generation_id = 0;
+    int L = 0;
+    int text_len = 0;
+    int total_steps = 0;
+
+    std::vector<uint8_t> buf;
+    ggml_context * ctx = nullptr;
+    ggml_cgraph * gf = nullptr;
+    ggml_gallocr_t allocr = nullptr;
+
+    // Shared inputs (constant across CFM steps).
+    ggml_tensor * x0_in = nullptr;          // ne=[L, Cin]  initial noisy latent
+    ggml_tensor * mask_in = nullptr;        // ne=[L]
+    ggml_tensor * text_in = nullptr;        // ne=[text_len, 256]
+    ggml_tensor * style_v_raw_in = nullptr; // ne=[50, 256]
+    ggml_tensor * style_kctx_in = nullptr;  // ne=[50, 256]
+
+    // RoPE inputs (constant across steps).
+    ggml_tensor * pos_q = nullptr;
+    ggml_tensor * pos_k = nullptr;
+    ggml_tensor * freq_factors_q = nullptr;
+    ggml_tensor * freq_factors_k = nullptr;
+
+    // Per-step time embedding (one tensor per CFM step).
+    std::vector<ggml_tensor *> t_emb_in;
+
+    // Final output — last step's `next` tensor.
+    ggml_tensor * final_latent_out = nullptr;
+};
+
+void free_vector_loop_one_graph_cache(vector_loop_one_graph_cache & cache) {
+    if (cache.allocr) {
+        supertonic_safe_gallocr_free(cache.allocr, cache.model ? cache.model->generation_id : 0);
+        cache.allocr = nullptr;
+    }
+    if (cache.ctx) {
+        ggml_free(cache.ctx);
+        cache.ctx = nullptr;
+    }
+    cache.gf = nullptr;
+    cache.buf.clear();
+    cache.model = nullptr;
+    cache.generation_id = 0;
+    cache.L = 0;
+    cache.text_len = 0;
+    cache.total_steps = 0;
+    cache.x0_in = cache.mask_in = cache.text_in = nullptr;
+    cache.style_v_raw_in = cache.style_kctx_in = nullptr;
+    cache.pos_q = cache.pos_k = cache.freq_factors_q = cache.freq_factors_k = nullptr;
+    cache.t_emb_in.clear();
+    cache.final_latent_out = nullptr;
+}
+
+bool supertonic_vector_loop_one_graph_ggml(const supertonic_model & model,
+                                            const float * initial_noisy_latent,
+                                            int latent_len,
+                                            const float * text_emb,
+                                            int text_len,
+                                            const float * style_ttl,
+                                            const float * latent_mask,
+                                            int total_steps,
+                                            std::vector<float> & final_latent_out,
+                                            std::string * error) {
+    // Public entry point — set the thread-local dispatch flag so the
+    // helpers' `supertonic_use_cpu_custom_ops()` reads consistently
+    // (false on non-CPU backends, true on CPU + accelerate/cblas).
+    supertonic_op_dispatch_scope dispatch(model);
+    try {
+        const int L = latent_len;
+        const int Cin = model.hparams.latent_channels;
+        const int text_C = 256;
+        const int D = 64;
+        const int kv_style = 50;
+
+        thread_local vector_loop_one_graph_cache cache;
+        const bool need_rebuild = cache.model != &model ||
+                                  cache.generation_id != model.generation_id ||
+                                  cache.L != L ||
+                                  cache.text_len != text_len ||
+                                  cache.total_steps != total_steps;
+        if (need_rebuild) {
+            free_vector_loop_one_graph_cache(cache);
+            cache.model = &model;
+            cache.generation_id = model.generation_id;
+            cache.L = L;
+            cache.text_len = text_len;
+            cache.total_steps = total_steps;
+
+            // ~5x the per-step node budget.  Each per-step build registered ~1056
+            // ggml nodes pre-Tier-2; post-Tier-2 it's ~928.  Round up to 8192/step
+            // × total_steps = ~40k.  Plus the shared inputs (a few dozen) +
+            // per-step temb input tensors.
+            const int MAX_NODES = 8192 * std::max(1, total_steps) + 256;
+            const size_t buf_size = ggml_tensor_overhead() * (size_t) MAX_NODES +
+                                     ggml_graph_overhead_custom(MAX_NODES, false);
+            cache.buf.assign(buf_size, 0);
+            ggml_init_params p = { buf_size, cache.buf.data(), true };
+            cache.ctx = ggml_init(p);
+            cache.gf = ggml_new_graph_custom(cache.ctx, MAX_NODES, false);
+
+            // --- Shared inputs ---
+            cache.x0_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, L, Cin);
+            ggml_set_name(cache.x0_in, "loop_x0_in"); ggml_set_input(cache.x0_in);
+            cache.mask_in = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_F32, L);
+            ggml_set_name(cache.mask_in, "loop_mask"); ggml_set_input(cache.mask_in);
+            cache.text_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, text_len, text_C);
+            ggml_set_name(cache.text_in, "loop_text_in"); ggml_set_input(cache.text_in);
+            cache.style_v_raw_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, kv_style, text_C);
+            ggml_set_name(cache.style_v_raw_in, "loop_style_v"); ggml_set_input(cache.style_v_raw_in);
+            cache.style_kctx_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, kv_style, text_C);
+            ggml_set_name(cache.style_kctx_in, "loop_style_kctx"); ggml_set_input(cache.style_kctx_in);
+
+            cache.pos_q = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_I32, L);
+            ggml_set_name(cache.pos_q, "loop_pos_q"); ggml_set_input(cache.pos_q);
+            cache.pos_k = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_I32, text_len);
+            ggml_set_name(cache.pos_k, "loop_pos_k"); ggml_set_input(cache.pos_k);
+            cache.freq_factors_q = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_F32, D / 2);
+            ggml_set_name(cache.freq_factors_q, "loop_ff_q"); ggml_set_input(cache.freq_factors_q);
+            cache.freq_factors_k = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_F32, D / 2);
+            ggml_set_name(cache.freq_factors_k, "loop_ff_k"); ggml_set_input(cache.freq_factors_k);
+
+            cache.t_emb_in.resize(total_steps, nullptr);
+            for (int s = 0; s < total_steps; ++s) {
+                cache.t_emb_in[s] = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_F32, 64);
+                const std::string name = "loop_temb_" + std::to_string(s);
+                ggml_set_name(cache.t_emb_in[s], name.c_str());
+                ggml_set_input(cache.t_emb_in[s]);
+            }
+
+            // --- Chain N CFM steps together ---
+            ggml_tensor * cur_latent = cache.x0_in;
+            for (int s = 0; s < total_steps; ++s) {
+                vector_step_inputs inputs;
+                inputs.x_in           = cur_latent;       // previous step's output
+                inputs.mask_in        = cache.mask_in;
+                inputs.t_emb_in       = cache.t_emb_in[s];
+                inputs.text_in        = cache.text_in;
+                inputs.style_v_raw_in = cache.style_v_raw_in;
+                inputs.style_kctx_in  = cache.style_kctx_in;
+                inputs.noise_in       = cur_latent;       // CFM: next = noise_in + v/N
+                inputs.pos_q          = cache.pos_q;
+                inputs.pos_k          = cache.pos_k;
+                inputs.freq_factors_q = cache.freq_factors_q;
+                inputs.freq_factors_k = cache.freq_factors_k;
+
+                ggml_tensor * next = append_supertonic_vector_step_subgraph(
+                    cache.ctx, cache.gf, model, inputs, L, text_len, total_steps);
+                const std::string step_name = "loop_next_" + std::to_string(s);
+                ggml_set_name(next, step_name.c_str());
+                cur_latent = next;
+            }
+            ggml_set_output(cur_latent);
+            ggml_build_forward_expand(cache.gf, cur_latent);
+            cache.final_latent_out = cur_latent;
+
+            cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
+            if (!cache.allocr) throw std::runtime_error("ggml_gallocr_new vector loop one-graph failed");
+            if (!ggml_gallocr_reserve(cache.allocr, cache.gf)) {
+                throw std::runtime_error("ggml_gallocr_reserve vector loop one-graph failed");
+            }
+            ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
+        }
+
+        // --- Per-call inputs (constants across CFM steps) ---
+        ggml_backend_tensor_set(cache.x0_in, initial_noisy_latent, 0,
+                                 (size_t) L * Cin * sizeof(float));
+        ggml_backend_tensor_set(cache.mask_in, latent_mask, 0, (size_t) L * sizeof(float));
+        ggml_backend_tensor_set(cache.text_in, text_emb, 0, (size_t) text_len * 256 * sizeof(float));
+
+        const std::vector<float> * style_v_raw_ptr = nullptr;
+        const std::vector<float> * kctx_raw_ptr = nullptr;
+        cached_style_layouts(model, style_ttl, style_v_raw_ptr, kctx_raw_ptr);
+        ggml_backend_tensor_set(cache.style_v_raw_in, style_v_raw_ptr->data(), 0,
+                                 style_v_raw_ptr->size() * sizeof(float));
+        ggml_backend_tensor_set(cache.style_kctx_in, kctx_raw_ptr->data(), 0,
+                                 kctx_raw_ptr->size() * sizeof(float));
+
+        {
+            std::vector<int32_t> pos_q_host(L);
+            for (int i = 0; i < L; ++i) pos_q_host[i] = i;
+            ggml_backend_tensor_set(cache.pos_q, pos_q_host.data(), 0,
+                                     pos_q_host.size() * sizeof(int32_t));
+            std::vector<int32_t> pos_k_host(text_len);
+            for (int i = 0; i < text_len; ++i) pos_k_host[i] = i;
+            ggml_backend_tensor_set(cache.pos_k, pos_k_host.data(), 0,
+                                     pos_k_host.size() * sizeof(int32_t));
+
+            const int half = 32;
+            f32_tensor theta = read_f32(model, "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.theta");
+            if ((int) theta.data.size() < half) {
+                throw std::runtime_error("theta tensor has fewer than D/2 elements");
+            }
+            std::vector<float> ff_q(half), ff_k(half);
+            for (int d = 0; d < half; ++d) {
+                ff_q[d] = (float) L / theta.data[d];
+                ff_k[d] = (float) text_len / theta.data[d];
+            }
+            ggml_backend_tensor_set(cache.freq_factors_q, ff_q.data(), 0,
+                                     ff_q.size() * sizeof(float));
+            ggml_backend_tensor_set(cache.freq_factors_k, ff_k.data(), 0,
+                                     ff_k.size() * sizeof(float));
+        }
+
+        // --- Per-step time embeddings ---
+        for (int s = 0; s < total_steps; ++s) {
+            std::vector<float> te = time_embedding(model, s, total_steps);
+            ggml_backend_tensor_set(cache.t_emb_in[s], te.data(), 0,
+                                     te.size() * sizeof(float));
+        }
+
+        // --- ONE compute call for ALL CFM steps ---
+        supertonic_graph_compute(model, cache.gf);
+
+        // --- Read final output ---
+        final_latent_out.assign((size_t) Cin * L, 0.0f);
+        ggml_backend_tensor_get(cache.final_latent_out, final_latent_out.data(), 0,
+                                 (size_t) Cin * L * sizeof(float));
+        if (error) error->clear();
+        return true;
+    } catch (const std::exception & e) {
+        if (error) *error = e.what();
+        return false;
+    }
+}
+
+// Public-ish driver: dispatches to the unrolled-loop path on non-CPU
+// backends, falls back to the per-step `supertonic_vector_step_ggml`
+// loop on CPU.  Gate the unrolled path off with
+// SUPERTONIC_DISABLE_LOOP_GRAPH=1 to A/B against the per-step path on
+// the same backend.
+bool supertonic_vector_loop_ggml(const supertonic_model & model,
+                                  const float * initial_noisy_latent,
+                                  int latent_len,
+                                  const float * text_emb,
+                                  int text_len,
+                                  const float * style_ttl,
+                                  const float * latent_mask,
+                                  int total_steps,
+                                  std::vector<float> & final_latent_out,
+                                  std::string * error) {
+    const bool disable_loop =
+        std::getenv("SUPERTONIC_DISABLE_LOOP_GRAPH") != nullptr;
+    if (!disable_loop && !model_prefers_cpu_kernels(model)) {
+        return supertonic_vector_loop_one_graph_ggml(
+            model, initial_noisy_latent, latent_len, text_emb, text_len,
+            style_ttl, latent_mask, total_steps, final_latent_out, error);
+    }
+    // CPU / disabled path: run the per-step loop in the addon's existing way.
+    try {
+        std::vector<float> latent((size_t) model.hparams.latent_channels * latent_len);
+        std::memcpy(latent.data(), initial_noisy_latent, latent.size() * sizeof(float));
+        std::vector<float> next;
+        for (int step = 0; step < total_steps; ++step) {
+            if (!supertonic_vector_step_ggml(model, latent.data(), latent_len,
+                                              text_emb, text_len,
+                                              style_ttl, latent_mask,
+                                              step, total_steps, next, error)) {
+                return false;
+            }
+            latent.swap(next);
+        }
+        final_latent_out = std::move(latent);
+        if (error) error->clear();
+        return true;
+    } catch (const std::exception & e) {
+        if (error) *error = e.what();
+        return false;
+    }
+}
+
 bool supertonic_vector_step_ggml(const supertonic_model & model,
                                  const float * noisy_latent,
                                  int latent_len,
@@ -3162,6 +4391,19 @@ bool supertonic_vector_step_ggml(const supertonic_model & model,
                                  std::vector<float> & next_latent_out,
                                  std::string * error) {
     supertonic_op_dispatch_scope dispatch(model);
+    // Metal / CUDA / Vulkan / OpenCL: use the consolidated one-graph path
+    // (one ggml_backend_graph_compute call per CFM step instead of ~21).
+    // CPU: keep the multi-cache trace_proj path — its CPU fast-paths and
+    // thread_local sub-graph caches stay competitive on CPU and trace mode
+    // relies on the per-stage outputs.  Set SUPERTONIC_DISABLE_ONE_GRAPH=1
+    // to fall back to the multi-cache path on GPU backends if needed.
+    const bool disable_one_graph = std::getenv("SUPERTONIC_DISABLE_ONE_GRAPH") != nullptr;
+    if (!disable_one_graph && !model_prefers_cpu_kernels(model)) {
+        return supertonic_vector_step_one_graph_ggml(model, noisy_latent, latent_len,
+                                                      text_emb, text_len, style_ttl,
+                                                      latent_mask, current_step,
+                                                      total_steps, next_latent_out, error);
+    }
     try {
         std::vector<supertonic_trace_tensor> scalar_trace;
         std::vector<supertonic_trace_tensor> ggml_trace;

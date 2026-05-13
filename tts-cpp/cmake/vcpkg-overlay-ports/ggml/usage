@@ -1,0 +1,10 @@
+The package ggml provides CMake integration:
+
+  find_package(ggml CONFIG REQUIRED)
+  target_link_libraries(main PRIVATE ggml::ggml)
+
+Available vcpkg features:
+  metal  - Metal GPU backend (macOS/iOS, auto-enabled on Apple)
+  vulkan - Vulkan GPU backend
+  cuda   - CUDA GPU backend
+  opencl - OpenCL GPU backend

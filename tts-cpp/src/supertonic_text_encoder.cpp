@@ -116,7 +116,14 @@ ggml_tensor * repeat_like(ggml_context * ctx, ggml_tensor * v, ggml_tensor * lik
         else if (like->ne[1] == v->ne[0]) v = ggml_reshape_2d(ctx, v, 1, v->ne[0]);
     }
     if (!ggml_can_repeat(v, like)) throw std::runtime_error("cannot repeat tensor in text encoder graph");
-    return ggml_repeat(ctx, v, like);
+    // Every caller feeds this into ggml_add/ggml_mul which broadcast natively;
+    // skip the explicit ggml_repeat dispatch.
+    static const bool force_explicit_repeat =
+        std::getenv("SUPERTONIC_FORCE_EXPLICIT_REPEAT") != nullptr;
+    if (force_explicit_repeat) {
+        return ggml_repeat(ctx, v, like);
+    }
+    return v;
 }
 
 ggml_tensor * conv1d_f32(ggml_context * ctx,
@@ -125,6 +132,8 @@ ggml_tensor * conv1d_f32(ggml_context * ctx,
                          int stride,
                          int padding,
                          int dilation) {
+    // text_encoder uses the pure-graph path unconditionally; no CPU fast path
+    // here so no use_cpu_fastpath plumbing.
     ggml_tensor * im2col = ggml_im2col(ctx, kernel, input, stride, 0, padding, 0, dilation, 0, false, GGML_TYPE_F32);
     ggml_tensor * result = ggml_mul_mat(ctx,
         ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1]),
@@ -133,6 +142,15 @@ ggml_tensor * conv1d_f32(ggml_context * ctx,
 }
 
 ggml_tensor * edge_clamp_pad_1d(ggml_context * ctx, ggml_tensor * x, int pad_left, int pad_right) {
+    if (pad_left == 0 && pad_right == 0) return x;
+    static const bool disable_fused_edge_pad =
+        std::getenv("SUPERTONIC_DISABLE_FUSED_EDGE_PAD") != nullptr;
+    if (!disable_fused_edge_pad &&
+        x->type == GGML_TYPE_F32 &&
+        x->ne[2] == 1 && x->ne[3] == 1 &&
+        ggml_is_contiguous(x)) {
+        return ggml_supertonic_edge_pad_1d(ctx, x, pad_left, pad_right);
+    }
     const int64_t L = x->ne[0], C = x->ne[1];
     ggml_tensor * out = x;
     if (pad_left > 0) {
@@ -151,6 +169,16 @@ ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
                                   ggml_tensor * w,
                                   ggml_tensor * b) {
     const int K = (int)w->ne[0];
+    static const bool disable_fused =
+        std::getenv("SUPERTONIC_DISABLE_FUSED_DEPTHWISE") != nullptr;
+    if (!disable_fused && (K == 3 || K == 5) &&
+        x->type == GGML_TYPE_F32 && w->type == GGML_TYPE_F32 &&
+        b->type == GGML_TYPE_F32 &&
+        x->ne[2] == 1 && x->ne[3] == 1 && w->ne[1] == 1 && w->ne[3] == 1 &&
+        w->ne[2] == x->ne[1] && b->ne[0] == x->ne[1] &&
+        ggml_is_contiguous(x) && ggml_is_contiguous(w) && ggml_is_contiguous(b)) {
+        return ggml_supertonic_depthwise_1d(ctx, x, w, b, 1);
+    }
     const int pad_left = (K - 1) / 2;
     const int pad_right = (K - 1) - pad_left;
     ggml_tensor * padded = edge_clamp_pad_1d(ctx, x, pad_left, pad_right);
@@ -162,6 +190,15 @@ ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
 }
 
 ggml_tensor * layer_norm_ggml(ggml_context * ctx, ggml_tensor * x, ggml_tensor * g, ggml_tensor * b) {
+    static const bool disable_fused_layer_norm =
+        std::getenv("SUPERTONIC_DISABLE_FUSED_LAYER_NORM") != nullptr;
+    if (!disable_fused_layer_norm &&
+        x->type == GGML_TYPE_F32 && g->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 &&
+        x->ne[2] == 1 && x->ne[3] == 1 &&
+        g->ne[0] == x->ne[1] && b->ne[0] == x->ne[1] &&
+        ggml_is_contiguous(x) && ggml_is_contiguous(g) && ggml_is_contiguous(b)) {
+        return ggml_supertonic_layer_norm_channel(ctx, x, g, b, 1e-6f);
+    }
     ggml_tensor * xt = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
     xt = ggml_norm(ctx, xt, 1e-6f);
     xt = ggml_mul(ctx, xt, repeat_like(ctx, g, xt));
@@ -683,6 +720,9 @@ void speech_prompted_attention(const supertonic_model & m, int idx,
     dense_time_matmul(merged, L, C, out_w, out_b, C, out_lc);
 }
 
+// `speech_attention_cache` + `build_speech_attention_cache` own the
+// second-of-two graph caches `speech_prompted_attention_ggml` runs
+// (flash-attn + out-proj after host-side q/k/v_pack work).
 struct speech_attention_cache {
     const supertonic_model * model = nullptr;
     uint64_t generation_id = 0;
@@ -700,19 +740,19 @@ struct speech_attention_cache {
     ggml_tensor * v = nullptr;
 };
 
-void free_speech_attention_cache(speech_attention_cache & cache) {
+inline void free_speech_attention_cache(speech_attention_cache & cache) {
     supertonic_safe_gallocr_free(cache.allocr, cache.generation_id);
     if (cache.ctx) ggml_free(cache.ctx);
     cache = {};
 }
 
-void build_speech_attention_cache(speech_attention_cache & cache,
-                                  const supertonic_model & m,
-                                  int idx,
-                                  int L,
-                                  int Lctx,
-                                  const std::string & out_w_source,
-                                  const std::string & out_b_source) {
+inline void build_speech_attention_cache(speech_attention_cache & cache,
+                                         const supertonic_model & m,
+                                         int idx,
+                                         int L,
+                                         int Lctx,
+                                         const std::string & out_w_source,
+                                         const std::string & out_b_source) {
     free_speech_attention_cache(cache);
     cache.model = &m;
     cache.generation_id = m.generation_id;
@@ -744,6 +784,123 @@ void build_speech_attention_cache(speech_attention_cache & cache,
     if (!cache.allocr) throw std::runtime_error("ggml_gallocr_new speech attention cache failed");
     if (!ggml_gallocr_reserve(cache.allocr, cache.gf)) {
         throw std::runtime_error("ggml_gallocr_reserve speech attention cache failed");
+    }
+    ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
+}
+
+// Phase A4: speech_prompted_attention as ONE merged ggml graph.
+//
+// Pre-A4 this function built two separate graphs (QKV proj, then
+// flash-attn+out-proj) with host-side q_pack/v_pack/k_pack head-split
+// work between them.  The merged version does the head-split in-graph
+// via reshape + permute + cont (or relies on ggml's view semantics
+// where it's free), feeds straight into flash_attn, and runs the out
+// projection — all in one `ggml_backend_graph_compute` call.
+//
+// Per call savings: 1 graph dispatch (one fewer command buffer) +
+// host-side pack work (3 round-trips of q/v/k_pack data eliminated).
+// Two calls per synth = 2 dispatches saved.
+struct speech_prompted_merged_cache {
+    const supertonic_model * model = nullptr;
+    uint64_t generation_id = 0;
+    int idx = -1;
+    int L = 0;
+    int Lctx = 0;
+    std::string out_w_source;
+    std::string out_b_source;
+    std::vector<uint8_t> buf;
+    ggml_context * ctx = nullptr;
+    ggml_cgraph * gf = nullptr;
+    ggml_gallocr_t allocr = nullptr;
+    ggml_tensor * x_in = nullptr;       // [L, C]
+    ggml_tensor * style_in = nullptr;   // [Lctx, C]
+    ggml_tensor * out = nullptr;        // [L, C] result
+};
+
+void free_speech_prompted_merged_cache(speech_prompted_merged_cache & cache) {
+    supertonic_safe_gallocr_free(cache.allocr, cache.generation_id);
+    if (cache.ctx) ggml_free(cache.ctx);
+    cache = {};
+}
+
+void build_speech_prompted_merged_cache(speech_prompted_merged_cache & cache,
+                                        const supertonic_model & m,
+                                        int idx,
+                                        int L,
+                                        int Lctx,
+                                        const std::string & q_w_source,
+                                        const std::string & v_w_source,
+                                        const std::string & out_w_source,
+                                        const std::string & out_b_source,
+                                        const std::string & tanh_k_source,
+                                        const std::string & q_b_source,
+                                        const std::string & v_b_source) {
+    const int C = 256;
+    const int half = 128;
+    const int H = 2;
+    (void)H;
+    free_speech_prompted_merged_cache(cache);
+    cache.model = &m;
+    cache.generation_id = m.generation_id;
+    cache.idx = idx;
+    cache.L = L;
+    cache.Lctx = Lctx;
+    cache.out_w_source = out_w_source;
+    cache.out_b_source = out_b_source;
+
+    constexpr int NODES = 512;
+    const size_t buf_size = ggml_tensor_overhead() * NODES + ggml_graph_overhead_custom(NODES, false);
+    cache.buf.assign(buf_size, 0);
+    ggml_init_params gp = { buf_size, cache.buf.data(), true };
+    cache.ctx = ggml_init(gp);
+    cache.gf = ggml_new_graph_custom(cache.ctx, NODES, false);
+
+    cache.x_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, L, C);
+    ggml_set_name(cache.x_in, "spm_x_in"); ggml_set_input(cache.x_in);
+    cache.style_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, Lctx, C);
+    ggml_set_name(cache.style_in, "spm_style_in"); ggml_set_input(cache.style_in);
+
+    // Q proj.  Output ne=[L, C].  Head-split: reshape to [L, half, H]
+    // then permute(1, 0, 2, 3) → cont gives [half, L, H] — the layout
+    // flash_attn views as [head_dim, q_len, n_heads].
+    ggml_tensor * q_tc = dense_matmul_time_ggml(cache.ctx, cache.x_in,
+        require_source_tensor(m, q_w_source),
+        require_source_tensor(m, q_b_source));
+    ggml_tensor * q_3d = ggml_reshape_3d(cache.ctx, q_tc, L, half, 2);
+    ggml_tensor * q_dlh = ggml_cont(cache.ctx, ggml_permute(cache.ctx, q_3d, 1, 0, 2, 3));
+
+    // V proj on style.  Same head-split into [half, Lctx, H].
+    ggml_tensor * v_tc = dense_matmul_time_ggml(cache.ctx, cache.style_in,
+        require_source_tensor(m, v_w_source),
+        require_source_tensor(m, v_b_source));
+    ggml_tensor * v_3d = ggml_reshape_3d(cache.ctx, v_tc, Lctx, half, 2);
+    ggml_tensor * v_dlh = ggml_cont(cache.ctx, ggml_permute(cache.ctx, v_3d, 1, 0, 2, 3));
+
+    // K is the precomputed tanh_k model tensor.  Stored as ne=[Lctx, C].
+    // Same head-split: reshape to [Lctx, half, H] then permute to
+    // [half, Lctx, H] and cont.  No per-call host work needed since
+    // K is constant per model.
+    ggml_tensor * k_orig = require_source_tensor(m, tanh_k_source);
+    ggml_tensor * k_3d = ggml_reshape_3d(cache.ctx, k_orig, Lctx, half, 2);
+    ggml_tensor * k_dlh = ggml_cont(cache.ctx, ggml_permute(cache.ctx, k_3d, 1, 0, 2, 3));
+
+    // Flash attention.  Same call shape as the pre-A4 path.
+    ggml_tensor * attn = ggml_flash_attn_ext(cache.ctx, q_dlh, k_dlh, v_dlh,
+                                              nullptr, 1.0f / 16.0f, 0.0f, 0.0f);
+    attn = ggml_reshape_2d(cache.ctx, attn, C, L);
+    ggml_tensor * ctx_tc = ggml_cont(cache.ctx, ggml_transpose(cache.ctx, attn));
+
+    // Output projection.
+    cache.out = dense_matmul_time_ggml(cache.ctx, ctx_tc,
+        require_source_tensor(m, out_w_source),
+        require_source_tensor(m, out_b_source));
+    ggml_set_name(cache.out, "spm_out"); ggml_set_output(cache.out);
+    ggml_build_forward_expand(cache.gf, cache.out);
+
+    cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
+    if (!cache.allocr) throw std::runtime_error("ggml_gallocr_new speech_prompted_merged failed");
+    if (!ggml_gallocr_reserve(cache.allocr, cache.gf)) {
+        throw std::runtime_error("ggml_gallocr_reserve speech_prompted_merged failed");
     }
     ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
 }
@@ -787,6 +944,8 @@ void speech_prompted_attention_ggml(const supertonic_model & m, int idx,
     const std::string q_w = "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3678" : "onnx::MatMul_3682");
     const std::string v_w = "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3680" : "onnx::MatMul_3684");
     const std::string o_w = "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3681" : "onnx::MatMul_3685");
+    const std::string tanh_k_src = "text_encoder:/speech_prompted_text_encoder/attention" + std::to_string(attn_num) + "/tanh/Tanh_output_0";
+    (void) tanh_k_src; // master's path uses model.speech_tanh_k_cache; tanh_k_src kept for symbolic parity with read_f32 fallback below.
 
     // F14: per-(model, idx, L) cached QKV graph.  Two thread-local
     // slots so the two speech-prompted layers don't fight over a
@@ -879,8 +1038,9 @@ void speech_prompted_attention_ggml(const supertonic_model & m, int idx,
     speech_attention_cache & cache = caches[idx];
     if (cache.model != &m || cache.generation_id != m.generation_id ||
         cache.idx != idx || cache.L != L || cache.Lctx != Lctx ||
-        cache.out_w_source != o_w || cache.out_b_source != p + ".out_fc.linear.bias") {
-        build_speech_attention_cache(cache, m, idx, L, Lctx, o_w, p + ".out_fc.linear.bias");
+        cache.out_w_source != o_w) {
+        build_speech_attention_cache(cache, m, idx, L, Lctx, o_w,
+                                      p + ".out_fc.linear.bias");
     }
     ggml_backend_tensor_set(cache.q, q_pack.data(), 0, q_pack.size()*sizeof(float));
     ggml_backend_tensor_set(cache.k, k_pack.data(), 0, k_pack.size()*sizeof(float));

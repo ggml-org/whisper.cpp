@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <map>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -73,6 +74,89 @@ ggml_tensor * get_tensor_or_null(const supertonic_model & model, const std::stri
     return it == model.tensors.end() ? nullptr : it->second;
 }
 
+// Compute the storage type for a model tensor given the source type from
+// the GGUF and the engine's compute-precision selector.  Non-matmul tensors
+// (biases, norms, embeddings — stored as f32 in the GGUF) are unaffected;
+// only quantized matmul weights actually change destination type.
+//
+// Truth table:
+//   precision \ src_type      | F32  | F16  | Q8_0
+//   --------------------------+------+------+------
+//   F32 (default)             | F32  | F32  | F32
+//   F16  (Phase B1)           | F32  | F16  | F16
+//   Q8_0 (Phase A3)           | F32  | F32  | Q8_0   <-- key win: Metal keeps q8_0
+//
+// F32 row preserves the historical behaviour exactly.
+// Predicate: is `tensor_name` a true matmul weight that lands in a
+// `ggml_mul_mat(weight, activation)` call (weight as src0) where Metal
+// can dispatch `kernel_mul_mm_q8_0_f32` directly?
+//
+// Today this is only the vector_estimator's per-step matmul weights —
+// those go through `dense_matmul_time_wt_pretransposed_ggml` (the
+// B2-partial helper) which uses the pretransposed weight as src0 and
+// dispatches the optimised q8_0 mat-mat kernel.
+//
+// Other GGUF q8_0 sources (text_encoder, duration, speech-prompted
+// attention) still flow through `dense_matmul_time_ggml`, which does
+// `ggml_cont(ggml_transpose(w))` at compute time — and Metal has no
+// CONT kernel for q8_0, so we'd crash.  Phase A3 follow-up: extend
+// the pretranspose-aware helper to those sites and broaden this
+// predicate.
+bool is_supertonic_matmul_weight_name(const std::string & name) {
+    return name.find("vector_estimator:onnx::MatMul_") != std::string::npos;
+}
+
+ggml_type target_supertonic_storage_type(const std::string & name,
+                                         enum ggml_type src_type,
+                                         supertonic_precision precision,
+                                         bool backend_is_cpu) {
+    // Only quantized matmul-weight tensors are subject to the precision
+    // selector.  Everything else (biases, norms, scales, the unicode
+    // indexer i32 lookup, etc.) is passed through unchanged so we don't
+    // attempt a dequant on types that don't have a to_float trait.
+    const bool is_quantized_weight =
+        (src_type == GGML_TYPE_Q8_0) || (src_type == GGML_TYPE_F16);
+    if (!is_quantized_weight) return src_type;
+
+    switch (precision) {
+        case supertonic_precision::F32:  return GGML_TYPE_F32;
+        case supertonic_precision::F16:
+            // Asymmetric like q8_0: on CPU dequant everything to f32 (AMX
+            // cblas takes f32).  On non-CPU keep f16 ONLY for true matmul-
+            // weight tensors that flow through dense_matmul_time_pretransposed_*
+            // — these dispatch ggml-metal's `kernel_mul_mm_f16_f32` directly.
+            // Other quantized GGUF tensors (relpos embeddings, conv1d
+            // kernels, per-channel scales used in plain ggml_mul) flow into
+            // ggml_metal_op_bin which asserts f32 on both srcs, so we dequant
+            // them at load.
+            if (!backend_is_cpu && is_supertonic_matmul_weight_name(name)) {
+                return GGML_TYPE_F16;
+            }
+            return GGML_TYPE_F32;
+        case supertonic_precision::Q8_0:
+            // Asymmetric: on CPU, ALWAYS dequant to f32 so cblas/AMX takes
+            // the weights (q8_0 path on CPU is NEON-only and loses the AMX
+            // advantage; not worth the parity drift).  On non-CPU backends,
+            // keep q8_0 ONLY for true matmul-weight tensors that flow
+            // through `dense_matmul_time_wt_pretransposed_ggml`'s
+            // weight-as-src0 ordering — other quantized GGUF tensors
+            // (relpos embeddings, conv1d kernels) use op patterns that
+            // Metal lacks q8_0 kernels for.
+            if (!backend_is_cpu &&
+                src_type == GGML_TYPE_Q8_0 &&
+                is_supertonic_matmul_weight_name(name)) {
+                return GGML_TYPE_Q8_0;
+            }
+            return GGML_TYPE_F32;
+    }
+    return GGML_TYPE_F32;
+}
+
+bool needs_supertonic_tensor_conversion(enum ggml_type src_type,
+                                        enum ggml_type dst_type) {
+    return src_type != dst_type;
+}
+
 bool should_expand_supertonic_tensor(enum ggml_type type) {
     return type == GGML_TYPE_F16 || type == GGML_TYPE_Q8_0;
 }
@@ -95,6 +179,54 @@ std::vector<float> expand_supertonic_tensor_to_f32(const ggml_tensor * src) {
     }
     tr->to_float(data, out.data(), n);
     return out;
+}
+
+// Convert a GGUF tensor's data into `out_buf`, which the caller has sized
+// to `ggml_row_size(dst_type, n_elems) * (n_rows ...)` — i.e. ggml_nbytes
+// for the destination tensor shape.  Supports any pair the ggml type
+// traits cover: F32 ↔ F16 ↔ Q8_0.  Always converts via f32 as the pivot
+// because that's the only API surface ggml exports publicly.
+void convert_supertonic_tensor_data(const ggml_tensor * src,
+                                    enum ggml_type dst_type,
+                                    std::vector<uint8_t> & out_buf) {
+    const int64_t n = ggml_nelements(src);
+    const void * src_data = ggml_get_data(src);
+
+    if (src->type == dst_type) {
+        // No conversion needed — caller should ideally have skipped this path
+        // and uploaded the raw GGUF bytes, but handle it for completeness.
+        const size_t bytes = ggml_nbytes(src);
+        out_buf.resize(bytes);
+        std::memcpy(out_buf.data(), src_data, bytes);
+        return;
+    }
+
+    // Pivot through f32 using the public ggml_get_type_traits() API.
+    // `ggml_get_type_traits_cpu()->from_float` is also public for the
+    // reverse direction (f32 → quantized).
+    std::vector<float> f32_pivot((size_t) n);
+    const ggml_type_traits * src_tr = ggml_get_type_traits(src->type);
+    if (!src_tr || !src_tr->to_float) {
+        throw std::runtime_error(std::string("Supertonic load: missing to_float for ") +
+                                 ggml_type_name(src->type));
+    }
+    src_tr->to_float(src_data, f32_pivot.data(), n);
+
+    if (dst_type == GGML_TYPE_F32) {
+        out_buf.resize(f32_pivot.size() * sizeof(float));
+        std::memcpy(out_buf.data(), f32_pivot.data(), out_buf.size());
+        return;
+    }
+
+    const size_t dst_bytes = ggml_row_size(dst_type, n);
+    out_buf.resize(dst_bytes);
+
+    const ggml_type_traits_cpu * dst_tr = ggml_get_type_traits_cpu(dst_type);
+    if (!dst_tr || !dst_tr->from_float) {
+        throw std::runtime_error(std::string("Supertonic load: missing from_float for ") +
+                                 ggml_type_name(dst_type));
+    }
+    dst_tr->from_float(f32_pivot.data(), out_buf.data(), n);
 }
 
 ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose) {
@@ -497,6 +629,19 @@ ggml_tensor * require_source_tensor(const supertonic_model & model, const std::s
     return it->second;
 }
 
+ggml_tensor * try_source_tensor(const supertonic_model & model, const std::string & source_name) {
+    auto it = model.source_tensors.find(source_name);
+    if (it == model.source_tensors.end()) return nullptr;
+    return it->second;
+}
+
+ggml_tensor * try_pretransposed_weight(const supertonic_model & model, const ggml_tensor * w) {
+    if (!w) return nullptr;
+    auto it = model.pretransposed_weights.find(w);
+    if (it == model.pretransposed_weights.end()) return nullptr;
+    return it->second;
+}
+
 void supertonic_set_n_threads(supertonic_model & model, int n_threads) {
     configure_supertonic_blas_threads_once();
     if (n_threads <= 0) {
@@ -509,6 +654,38 @@ void supertonic_set_n_threads(supertonic_model & model, int n_threads) {
 void supertonic_graph_compute(const supertonic_model & model, ggml_cgraph * graph) {
     if (ggml_backend_is_cpu(model.backend) && model.n_threads > 0) {
         ggml_backend_cpu_set_n_threads(model.backend, model.n_threads);
+    }
+    static const bool count_dispatches = std::getenv("SUPERTONIC_COUNT_DISPATCHES") != nullptr;
+    static const bool dump_op_histogram = std::getenv("SUPERTONIC_DUMP_OP_HISTOGRAM") != nullptr;
+    if (dump_op_histogram) {
+        static thread_local int hist_call = 0;
+        ++hist_call;
+        const int n = ggml_graph_n_nodes(graph);
+        std::map<std::string, int> hist;
+        for (int i = 0; i < n; ++i) {
+            ggml_tensor * t = ggml_graph_node(graph, i);
+            hist[ggml_op_name(t->op)] += 1;
+        }
+        fprintf(stderr, "=== supertonic_graph_compute #%d op histogram (n_nodes=%d) ===\n", hist_call, n);
+        std::vector<std::pair<int, std::string>> sorted;
+        for (auto & kv : hist) sorted.emplace_back(kv.second, kv.first);
+        std::sort(sorted.rbegin(), sorted.rend());
+        for (auto & p : sorted) {
+            fprintf(stderr, "  %4d  %s\n", p.first, p.second.c_str());
+        }
+    }
+    if (count_dispatches) {
+        static thread_local int n_calls = 0;
+        static thread_local double total_us = 0.0;
+        ++n_calls;
+        const auto t0 = std::chrono::steady_clock::now();
+        ggml_backend_graph_compute(model.backend, graph);
+        const auto t1 = std::chrono::steady_clock::now();
+        const double us = std::chrono::duration<double, std::micro>(t1 - t0).count();
+        total_us += us;
+        fprintf(stderr, "supertonic_graph_compute #%d nodes=%d  wall=%.1fus  cumul=%.2fms\n",
+                n_calls, ggml_graph_n_nodes(graph), us, total_us / 1000.0);
+        return;
     }
     ggml_backend_graph_compute(model.backend, graph);
 }
@@ -547,8 +724,22 @@ bool load_supertonic_gguf(const std::string & path,
                           supertonic_model & model,
                           int n_gpu_layers,
                           bool verbose,
-                          int f16_weights) {
+                          int f16_weights,
+                          supertonic_precision precision) {
     model.generation_id = next_supertonic_generation_id();
+    model.precision_id = static_cast<int>(precision);
+    // The load path supports F32 / F16 / Q8_0 destination types.
+    // - F32: fully wired.
+    // - Q8_0: storage on Metal only for `:onnx::MatMul_*` weights (the
+    //   optimised `kernel_mul_mm_q8_0_f32` dispatches via the swapped-
+    //   args `dense_matmul_time_wt_pretransposed_ggml` helper).  Other
+    //   tensors expand to f32.  On CPU everything expands to f32 so
+    //   cblas/AMX keeps the lead.
+    // - F16: same asymmetric scheme as Q8_0 — `:onnx::MatMul_*` weights
+    //   stay f16 on Metal (dispatches `kernel_mul_mm_f16_f32`), other
+    //   GGUF-f16 tensors (relpos embeddings, per-channel scales used in
+    //   plain `ggml_mul`) expand to f32 so they don't trip `ggml_metal_op_bin`'s
+    //   f32-only assertion.  Pretranspose pass covers f16 alongside f32/q8_0.
     ggml_context * tmp_ctx = nullptr;
     gguf_init_params gp = { /*.no_alloc=*/ false, /*.ctx=*/ &tmp_ctx };
     gguf_context * gguf_ctx = gguf_init_from_file(path.c_str(), gp);
@@ -651,58 +842,76 @@ bool load_supertonic_gguf(const std::string & path,
         // we use `uint16_t` storage to avoid a public-header dep on
         // ggml's f16 typedef.
         std::unordered_map<std::string, std::vector<uint16_t>>   f16_materialised_tensors;
+        // Tensors that need a Metal-specific type conversion (e.g.
+        // f32 → q8_0 for `--precision q8_0`) keep their converted
+        // bytes here, held alive until the backend upload loop runs.
+        std::unordered_map<std::string, std::vector<uint8_t>>    converted_tensors;
+
+        // Ensure the source-alias map is populated even when the
+        // Phase 2A `use_f16_weights` path didn't already build it —
+        // the precision-driven decision below also needs it to
+        // recognise `:onnx::MatMul_` sources for Metal asymmetric load.
+        if (tensor_to_source_for_alloc.empty()) {
+            int64_t id_tn = gguf_find_key(gguf_ctx, "supertonic.tensor_names");
+            int64_t id_sn = gguf_find_key(gguf_ctx, "supertonic.source_names");
+            if (id_tn >= 0 && id_sn >= 0) {
+                const size_t n_tn = gguf_get_arr_n(gguf_ctx, id_tn);
+                const size_t n_sn = gguf_get_arr_n(gguf_ctx, id_sn);
+                if (n_tn == n_sn) {
+                    for (size_t i = 0; i < n_tn; ++i) {
+                        tensor_to_source_for_alloc[gguf_get_arr_str(gguf_ctx, id_tn, i)] =
+                            gguf_get_arr_str(gguf_ctx, id_sn, i);
+                    }
+                }
+            }
+        }
 
         // Decide per-tensor destination type:
-        //  - F16 / Q8_0 sources: expand to F32 (legacy behaviour;
-        //    `should_expand_supertonic_tensor`).
-        //  - F32 sources on the F16-weights hot-path roster:
-        //    materialise as F16 (Phase 2A).
-        //  - Everything else: preserve the source type via dup.
+        //  1. F32 sources on the F16-weights hot-path roster +
+        //     `use_f16_weights` on → materialise as F16 (Phase 2A).
+        //  2. Else fall through to the precision-driven path:
+        //     `target_supertonic_storage_type` returns F32 / F16 / Q8_0
+        //     depending on `--precision` and whether the source name is
+        //     a `:onnx::MatMul_` weight on a non-CPU backend.
+        //  3. Anything else preserves the source type via dup.
         for (int64_t i = 0; i < num_tensors; ++i) {
             const char * name = gguf_get_tensor_name(gguf_ctx, i);
             ggml_tensor * src = ggml_get_tensor(tmp_ctx, name);
             if (!src) throw std::runtime_error(std::string("missing tmp tensor: ") + name);
 
-            // Phase 2A predicate check.  Only fires when
-            // `use_f16_weights` was on and the source resolved to
-            // a hot-roster name AND its current GGML type is
-            // either F32 or one of the expand-to-F32 types
-            // (otherwise the source already carries narrower
-            // precision than F16 and we don't widen).
+            auto src_it = tensor_to_source_for_alloc.find(name);
+            const std::string & decision_name =
+                (src_it != tensor_to_source_for_alloc.end()) ? src_it->second : std::string(name);
+
+            // Phase 2A predicate check (master).
             bool f16_materialise = false;
-            if (model.use_f16_weights) {
-                auto sit = tensor_to_source_for_alloc.find(name);
-                if (sit != tensor_to_source_for_alloc.end() &&
-                    should_materialise_f16_weight(sit->second) &&
-                    (src->type == GGML_TYPE_F32 ||
-                     should_expand_supertonic_tensor(src->type))) {
-                    f16_materialise = true;
-                }
+            if (model.use_f16_weights &&
+                should_materialise_f16_weight(decision_name) &&
+                (src->type == GGML_TYPE_F32 ||
+                 should_expand_supertonic_tensor(src->type))) {
+                f16_materialise = true;
             }
 
             ggml_type dst_type;
             if (f16_materialise) {
                 dst_type = GGML_TYPE_F16;
-            } else if (should_expand_supertonic_tensor(src->type)) {
-                dst_type = GGML_TYPE_F32;
             } else {
-                dst_type = src->type;
+                // Precision-driven path (ours): F32 / F16 / Q8_0 per
+                // the `--precision` flag.  Returns src->type unchanged
+                // for tensors that don't need conversion.
+                dst_type = target_supertonic_storage_type(
+                    decision_name, src->type, precision,
+                    /*backend_is_cpu=*/ ggml_backend_is_cpu(model.backend));
             }
 
-            ggml_tensor * dst = ggml_new_tensor(model.ctx_w, dst_type,
-                                                 ggml_n_dims(src), src->ne);
+            ggml_tensor * dst = (dst_type == src->type)
+                ? ggml_dup_tensor(model.ctx_w, src)
+                : ggml_new_tensor(model.ctx_w, dst_type, ggml_n_dims(src), src->ne);
             ggml_set_name(dst, name);
             model.tensors[name] = dst;
 
             if (f16_materialise) {
-                // Materialise F32 → F16 host-side.  When src was
-                // originally F16/Q8_0 we expand to F32 first via
-                // the existing helper, then convert back to F16
-                // — round-trip is lossless for the F16 case (the
-                // original 16-bit pattern is preserved) and a
-                // one-shot rounding loss for the Q8_0 case
-                // (acceptable; matches what Q4_0 + F16 down-quant
-                // does in chatterbox).
+                // Phase 2A F16 materialise path.
                 std::vector<float> src_f32;
                 if (should_expand_supertonic_tensor(src->type)) {
                     src_f32 = expand_supertonic_tensor_to_f32(src);
@@ -716,7 +925,13 @@ bool load_supertonic_gguf(const std::string & path,
                 ggml_fp32_to_fp16_row(src_f32.data(),
                                       reinterpret_cast<ggml_fp16_t *>(f16.data()),
                                       (int64_t) src_f32.size());
+            } else if (needs_supertonic_tensor_conversion(src->type, dst_type)) {
+                // Precision-driven conversion (ours).  Covers f32 → q8_0,
+                // q8_0 → f32, f16 → f32 etc.  Buffered here, uploaded later.
+                convert_supertonic_tensor_data(src, dst_type, converted_tensors[name]);
             } else if (should_expand_supertonic_tensor(src->type)) {
+                // Legacy fallback: f16/q8_0 src with f32 dst that
+                // didn't go through the conversion helper above.
                 expanded_f32_tensors[name] = expand_supertonic_tensor_to_f32(src);
             }
         }
@@ -779,16 +994,24 @@ bool load_supertonic_gguf(const std::string & path,
                 continue;
             }
             // Phase 2A: F16-materialised tensors take precedence over
-            // the F32 expansion path (they may have been promoted
-            // from either F32 or F16/Q8_0 sources).
+            // the precision-converted / F32-expanded paths (they may
+            // have been promoted from either F32 or F16/Q8_0 sources).
             auto f16_mat = f16_materialised_tensors.find(ggml_get_name(cur));
             if (f16_mat != f16_materialised_tensors.end()) {
                 ggml_backend_tensor_set(cur, f16_mat->second.data(), 0,
                                         f16_mat->second.size() * sizeof(uint16_t));
                 continue;
             }
-            auto expanded = expanded_f32_tensors.find(ggml_get_name(cur));
-            if (expanded != expanded_f32_tensors.end()) {
+            // Precision-driven conversion (`--precision q8_0`/f16 etc.) —
+            // bytes are already in dst-type representation.
+            auto converted = converted_tensors.find(ggml_get_name(cur));
+            if (converted != converted_tensors.end()) {
+                ggml_backend_tensor_set(cur, converted->second.data(), 0,
+                                        converted->second.size());
+            } else if (auto expanded = expanded_f32_tensors.find(ggml_get_name(cur));
+                       expanded != expanded_f32_tensors.end()) {
+                // Legacy f16/q8_0 → f32 expansion (used when the
+                // conversion helper didn't run).
                 ggml_backend_tensor_set(cur, expanded->second.data(), 0,
                                         expanded->second.size() * sizeof(float));
             } else {
@@ -802,14 +1025,21 @@ bool load_supertonic_gguf(const std::string & path,
             ggml_backend_tensor_get(unicode, model.unicode_indexer.data(), 0, ggml_nbytes(unicode));
         }
 
-        std::vector<std::string> tensor_names = get_string_array(gguf_ctx, "supertonic.tensor_names");
-        std::vector<std::string> source_names = get_string_array(gguf_ctx, "supertonic.source_names");
-        if (tensor_names.size() != source_names.size()) {
-            throw std::runtime_error("supertonic tensor/source metadata length mismatch");
-        }
-        for (size_t i = 0; i < tensor_names.size(); ++i) {
-            ggml_tensor * t = require_tensor(model, tensor_names[i]);
-            model.source_tensors[source_names[i]] = t;
+        // Populate the model's source_tensors lookup from the
+        // GGUF's `supertonic.tensor_names` / `supertonic.source_names`
+        // pair (the `tensor_to_source_for_alloc` map above only carries
+        // the same data for the pre-alloc decision; we re-read here so
+        // we don't have to widen its scope).
+        {
+            std::vector<std::string> tensor_names = get_string_array(gguf_ctx, "supertonic.tensor_names");
+            std::vector<std::string> source_names = get_string_array(gguf_ctx, "supertonic.source_names");
+            if (tensor_names.size() != source_names.size()) {
+                throw std::runtime_error("supertonic.tensor_names / source_names length mismatch");
+            }
+            for (size_t i = 0; i < tensor_names.size(); ++i) {
+                ggml_tensor * t = require_tensor(model, tensor_names[i]);
+                model.source_tensors[source_names[i]] = t;
+            }
         }
 
         for (const std::string & voice_name : get_string_array(gguf_ctx, "supertonic.voice_names")) {
@@ -983,6 +1213,128 @@ bool load_supertonic_gguf(const std::string & path,
                                         0, ggml_nbytes(it->second));
             }
         }
+
+        // Materialize pre-transposed copies of matmul weights to drop the
+        // runtime `cont(transpose(w))` dispatch that `dense_matmul_time_ggml`
+        // emits on every graph compute (~32 sites × 5 CFM steps per synth).
+        // CPU's `cblas_sgemm` already handles the transpose via its `Trans`
+        // flag, so this is a Metal-perf-only optimization — skip the extra
+        // memory + load-time cost on CPU.  Override via
+        // `SUPERTONIC_DISABLE_WEIGHT_PRETRANSPOSE=1` to debug the unpacked
+        // path.
+        //
+        // Coexists with the F6 pre-transposed t_proj pass above: that one
+        // handles 4 specific `[512, 64]` `t_proj` weights and registers
+        // them under the `__T` suffix; this one handles every other
+        // `:onnx::MatMul_` weight under the `:T` suffix.  No collisions.
+        static const bool disable_pretranspose =
+            std::getenv("SUPERTONIC_DISABLE_WEIGHT_PRETRANSPOSE") != nullptr;
+        if (!disable_pretranspose && model.backend &&
+            !ggml_backend_is_cpu(model.backend)) {
+            std::vector<std::pair<std::string, ggml_tensor *>> to_pretranspose;
+            for (const auto & [src_name, t] : model.source_tensors) {
+                if (!t) continue;
+                if (src_name.find(":onnx::MatMul_") == std::string::npos) continue;
+                if (ggml_n_dims(t) != 2) continue;
+                // Pretranspose f32 weights (default precision) AND q8_0 / f16
+                // weights (asymmetric load modes).  For q8_0 / f16 we
+                // dequant→transpose→requantize through f32; the round-trip
+                // introduces tiny rounding within the type's existing noise
+                // tolerance.  This is what unlocks A3 step 2
+                // (kernel_mul_mm_q8_0_f32 / kernel_mul_mm_f16_f32 dispatches
+                // when both (a) the pretransposed weight is available as
+                // src0 and (b) the new dense_matmul_time_wt_pretransposed_ggml
+                // swaps the mul_mat args so the weight is src0).
+                if (t->type != GGML_TYPE_F32 &&
+                    t->type != GGML_TYPE_F16  &&
+                    t->type != GGML_TYPE_Q8_0) continue;
+                to_pretranspose.push_back({src_name, t});
+            }
+            if (!to_pretranspose.empty()) {
+                ggml_init_params extra_params = {
+                    /*.mem_size=*/ ggml_tensor_overhead() * to_pretranspose.size(),
+                    /*.mem_buffer=*/ nullptr,
+                    /*.no_alloc=*/ true,
+                };
+                model.ctx_w_extra = ggml_init(extra_params);
+                if (!model.ctx_w_extra) {
+                    throw std::runtime_error("ggml_init ctx_w_extra failed");
+                }
+                std::vector<std::pair<ggml_tensor *, ggml_tensor *>> orig_to_pre;
+                orig_to_pre.reserve(to_pretranspose.size());
+                for (const auto & [src_name, t] : to_pretranspose) {
+                    // Pre tensor has same type as orig (f32 stays f32,
+                    // q8_0 stays q8_0); only the shape swaps.
+                    ggml_tensor * tt = ggml_new_tensor_2d(model.ctx_w_extra,
+                        t->type, t->ne[1], t->ne[0]);
+                    const std::string tt_name = std::string(ggml_get_name(t)) + ":T";
+                    ggml_set_name(tt, tt_name.c_str());
+                    model.source_tensors[src_name + ":T"] = tt;
+                    orig_to_pre.push_back({t, tt});
+                }
+                model.buffer_w_extra =
+                    ggml_backend_alloc_ctx_tensors(model.ctx_w_extra, model.backend);
+                if (!model.buffer_w_extra) {
+                    throw std::runtime_error(
+                        "ggml_backend_alloc_ctx_tensors ctx_w_extra failed");
+                }
+                // Upload the transposed data.  For f32 weights this is a
+                // straight host-side reorder.  For q8_0 weights we dequant
+                // to f32, transpose in f32, then requantize via from_float
+                // into the pretransposed q8_0 tensor.  Both directions go
+                // through the public ggml type-traits APIs.
+                for (const auto & [orig, pre] : orig_to_pre) {
+                    const int OC = (int) orig->ne[0];
+                    const int IC = (int) orig->ne[1];
+                    const size_t n = (size_t) OC * IC;
+
+                    // Step 1: download `orig` data, dequantize to f32 if needed.
+                    std::vector<float> host_orig_f32(n);
+                    if (orig->type == GGML_TYPE_F32) {
+                        ggml_backend_tensor_get(orig, host_orig_f32.data(), 0,
+                                                n * sizeof(float));
+                    } else {
+                        std::vector<uint8_t> raw(ggml_nbytes(orig));
+                        ggml_backend_tensor_get(orig, raw.data(), 0, raw.size());
+                        const ggml_type_traits * tr = ggml_get_type_traits(orig->type);
+                        if (!tr || !tr->to_float) {
+                            throw std::runtime_error(
+                                std::string("pretranspose: missing to_float for ") +
+                                ggml_type_name(orig->type));
+                        }
+                        tr->to_float(raw.data(), host_orig_f32.data(), (int64_t) n);
+                    }
+
+                    // Step 2: transpose in f32.
+                    std::vector<float> host_pre_f32(n);
+                    for (int oc = 0; oc < OC; ++oc) {
+                        for (int ic = 0; ic < IC; ++ic) {
+                            host_pre_f32[(size_t) ic + (size_t) oc * IC] =
+                                host_orig_f32[(size_t) oc + (size_t) ic * OC];
+                        }
+                    }
+
+                    // Step 3: upload (requantizing if needed).
+                    if (pre->type == GGML_TYPE_F32) {
+                        ggml_backend_tensor_set(pre, host_pre_f32.data(), 0,
+                                                n * sizeof(float));
+                    } else {
+                        const size_t dst_bytes = ggml_row_size(pre->type, n);
+                        std::vector<uint8_t> raw(dst_bytes);
+                        const ggml_type_traits_cpu * dtr =
+                            ggml_get_type_traits_cpu(pre->type);
+                        if (!dtr || !dtr->from_float) {
+                            throw std::runtime_error(
+                                std::string("pretranspose: missing from_float for ") +
+                                ggml_type_name(pre->type));
+                        }
+                        dtr->from_float(host_pre_f32.data(), raw.data(), (int64_t) n);
+                        ggml_backend_tensor_set(pre, raw.data(), 0, raw.size());
+                    }
+                    model.pretransposed_weights[orig] = pre;
+                }
+            }
+        }
     } catch (const std::exception & e) {
         fprintf(stderr, "load_supertonic_gguf: %s\n", e.what());
         gguf_free(gguf_ctx);
@@ -1009,6 +1361,10 @@ void free_supertonic_model(supertonic_model & model) {
     if (model.generation_id != 0) {
         unregister_supertonic_alive(model.generation_id);
     }
+    if (model.buffer_w_extra) {
+        ggml_backend_buffer_free(model.buffer_w_extra);
+        model.buffer_w_extra = nullptr;
+    }
     if (model.buffer_w) {
         ggml_backend_buffer_free(model.buffer_w);
         model.buffer_w = nullptr;
@@ -1017,10 +1373,15 @@ void free_supertonic_model(supertonic_model & model) {
         ggml_backend_free(model.backend);
         model.backend = nullptr;
     }
+    if (model.ctx_w_extra) {
+        ggml_free(model.ctx_w_extra);
+        model.ctx_w_extra = nullptr;
+    }
     if (model.ctx_w) {
         ggml_free(model.ctx_w);
         model.ctx_w = nullptr;
     }
+    model.pretransposed_weights.clear();
     model.tensors.clear();
     model.source_tensors.clear();
     model.vocoder = {};

@@ -46,8 +46,27 @@ void usage(const char * argv0) {
         "          [--voice M1] [--language en] [--steps 5] [--speed 1.05]\n"
         "          [--seed 42] [--noise-npy /path/to/noise.npy]\n"
         "          [--runs 5] [--warmup 1] [--threads N] [--n-gpu-layers N]\n"
-        "          [--f16-attn 0|1] [--json-out FILE]\n",
+        "          [--f16-attn 0|1] [--precision f32|f16|q8_0]   (default: f32)\n"
+        "          [--json-out FILE]\n",
         argv0);
+}
+
+tts_cpp::supertonic::detail::supertonic_precision parse_bench_precision(const std::string & s) {
+    using P = tts_cpp::supertonic::detail::supertonic_precision;
+    if (s == "f32" || s == "F32") return P::F32;
+    if (s == "f16" || s == "F16") return P::F16;
+    if (s == "q8_0" || s == "Q8_0" || s == "q8") return P::Q8_0;
+    throw std::runtime_error("unknown --precision value: " + s + " (expected f32|f16|q8_0)");
+}
+
+const char * precision_to_string(tts_cpp::supertonic::detail::supertonic_precision p) {
+    using P = tts_cpp::supertonic::detail::supertonic_precision;
+    switch (p) {
+        case P::F32:  return "f32";
+        case P::F16:  return "f16";
+        case P::Q8_0: return "q8_0";
+    }
+    return "f32";
 }
 
 double percentile(std::vector<double> v, double p) {
@@ -123,6 +142,7 @@ int main(int argc, char ** argv) {
     // Phase 2A — F16 load-time materialization of the hot matmul /
     // pwconv weights.  -1 auto / 0 / 1 force.
     int f16_weights = -1;
+    supertonic_precision precision = supertonic_precision::F32;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -144,6 +164,7 @@ int main(int argc, char ** argv) {
         else if (a == "--n-gpu-layers") n_gpu_layers = std::stoi(next("--n-gpu-layers"));
         else if (a == "--f16-attn") f16_attn = std::stoi(next("--f16-attn"));
         else if (a == "--f16-weights") f16_weights = std::stoi(next("--f16-weights"));
+        else if (a == "--precision") precision = parse_bench_precision(next("--precision"));
         else if (a == "--json-out") json_out = next("--json-out");
         else if (a == "-h" || a == "--help") { usage(argv[0]); return 0; }
         else { fprintf(stderr, "unknown arg: %s\n", a.c_str()); usage(argv[0]); return 2; }
@@ -151,7 +172,8 @@ int main(int argc, char ** argv) {
     if (model_path.empty() || text.empty()) { usage(argv[0]); return 2; }
 
     supertonic_model model;
-    if (!load_supertonic_gguf(model_path, model, n_gpu_layers, /*verbose=*/false, f16_weights)) {
+    if (!load_supertonic_gguf(model_path, model, n_gpu_layers,
+                              /*verbose=*/false, f16_weights, precision)) {
         fprintf(stderr, "failed to load model\n");
         return 1;
     }
@@ -291,7 +313,8 @@ int main(int argc, char ** argv) {
     printf("  text length: %zu chars\n", text.size());
     printf("  voice: %s, language: %s, steps: %d, speed: %.2f\n",
            voice.c_str(), language.c_str(), steps, speed);
-    printf("  threads: %d\n", model.n_threads);
+    printf("  threads: %d, n_gpu_layers: %d, precision: %s\n",
+           model.n_threads, n_gpu_layers, precision_to_string(precision));
     printf("  backend: %s%s\n",
            ggml_backend_name(model.backend) ? ggml_backend_name(model.backend) : "(unknown)",
            model.use_f16_attn ? " (f16_attn=on)" : "");
@@ -326,6 +349,8 @@ int main(int argc, char ** argv) {
         os << "  \"steps\": " << steps << ",\n";
         os << "  \"speed\": " << speed << ",\n";
         os << "  \"threads\": " << model.n_threads << ",\n";
+        os << "  \"n_gpu_layers\": " << n_gpu_layers << ",\n";
+        os << "  \"precision\": \"" << precision_to_string(precision) << "\",\n";
         os << "  \"audio_s\": " << last_audio_s << ",\n";
         os << "  \"runs\": " << runs << ",\n";
         os << "  \"warmup\": " << warmup << ",\n";

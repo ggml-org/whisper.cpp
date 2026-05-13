@@ -1,0 +1,8 @@
+{
+  "name": "tts-cpp-bench-shim",
+  "version-string": "0.0.1",
+  "description": "vcpkg manifest for the tts-cpp standalone dev build (cmake -S tts-cpp -B tts-cpp/build).  Tells vcpkg to install the `ggml` port; the sibling vcpkg-configuration.json wires in the local overlay at cmake/vcpkg-overlay-ports/ggml/ which carries the Supertonic custom-kernel patches.  Used by tts-cpp/README.md §1's dev-build flow.",
+  "dependencies": [
+    "ggml"
+  ]
+}

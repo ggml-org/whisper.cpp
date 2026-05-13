@@ -341,11 +341,16 @@ For development out of this in-tree subtree (running the parity
 harnesses, prototyping API changes, etc.) the canonical build is:
 
 ```bash
-# Install the speech-stack ggml port via vcpkg first; then:
 cmake -S tts-cpp -B tts-cpp/build -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE=<vcpkg_root>/scripts/buildsystems/vcpkg.cmake
 cmake --build tts-cpp/build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 ```
+
+The build uses two manifest files at the `tts-cpp/` root: `vcpkg.json`
+(declares the `ggml` dependency) and `vcpkg-configuration.json` (points
+at the local `cmake/vcpkg-overlay-ports/` directory carrying our
+Supertonic custom-kernel patches).  vcpkg picks up both automatically
+when manifest mode is active — no extra flags needed.
 
 `TTS_CPP_USE_SYSTEM_GGML` defaults to `ON` here so the build picks
 up the patched ggml from vcpkg automatically; flipping it `OFF` in

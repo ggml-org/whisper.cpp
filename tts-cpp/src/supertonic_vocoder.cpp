@@ -88,11 +88,33 @@ ggml_tensor * repeat_like(ggml_context * ctx, ggml_tensor * v, ggml_tensor * lik
             std::to_string(like->ne[0]) + "," + std::to_string(like->ne[1]) + "," +
             std::to_string(like->ne[2]) + "," + std::to_string(like->ne[3]) + "]");
     }
-    return ggml_repeat(ctx, v, like);
+    // Every caller feeds the return value straight into ggml_add / ggml_mul,
+    // both of which broadcast natively in ggml.  Skip the explicit
+    // ggml_repeat node so the downstream op handles the broadcast — saves a
+    // kernel_repeat launch per call on Metal.
+    static const bool force_explicit_repeat =
+        std::getenv("SUPERTONIC_FORCE_EXPLICIT_REPEAT") != nullptr;
+    if (force_explicit_repeat) {
+        return ggml_repeat(ctx, v, like);
+    }
+    return v;
 }
 
 ggml_tensor * causal_replicate_pad_1d(ggml_context * ctx, ggml_tensor * x, int pad_left) {
     if (pad_left <= 0) return x;
+    // Prefer the fused supertonic_edge_pad_1d op when available (Metal
+    // via the overlay port + CPU via the parity backstop) — collapses
+    // the view + repeat_4d + concat triplet into a single dispatch.
+    // Override with SUPERTONIC_DISABLE_FUSED_EDGE_PAD=1 to A/B against
+    // the stock-ops chain.
+    static const bool disable_fused_edge_pad =
+        std::getenv("SUPERTONIC_DISABLE_FUSED_EDGE_PAD") != nullptr;
+    if (!disable_fused_edge_pad &&
+        x->type == GGML_TYPE_F32 &&
+        x->ne[2] == 1 && x->ne[3] == 1 &&
+        ggml_is_contiguous(x)) {
+        return ggml_supertonic_edge_pad_1d(ctx, x, pad_left, 0);
+    }
     const int64_t C = x->ne[1];
     ggml_tensor * first = ggml_view_2d(ctx, x, 1, C, x->nb[1], 0);
     ggml_tensor * rep = ggml_repeat_4d(ctx, first, pad_left, C, 1, 1);
@@ -340,6 +362,15 @@ ggml_tensor * layer_norm_channel_ggml(ggml_context * ctx,
                                       ggml_tensor * gamma,
                                       ggml_tensor * beta,
                                       float eps = 1e-6f) {
+    static const bool disable_fused_layer_norm =
+        std::getenv("SUPERTONIC_DISABLE_FUSED_LAYER_NORM") != nullptr;
+    if (!disable_fused_layer_norm &&
+        x->type == GGML_TYPE_F32 && gamma->type == GGML_TYPE_F32 && beta->type == GGML_TYPE_F32 &&
+        x->ne[2] == 1 && x->ne[3] == 1 &&
+        gamma->ne[0] == x->ne[1] && beta->ne[0] == x->ne[1] &&
+        ggml_is_contiguous(x) && ggml_is_contiguous(gamma) && ggml_is_contiguous(beta)) {
+        return ggml_supertonic_layer_norm_channel(ctx, x, gamma, beta, eps);
+    }
     ggml_tensor * y = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
     y = ggml_norm(ctx, y, eps);
     y = ggml_mul(ctx, y, repeat_like(ctx, gamma, y));
@@ -352,29 +383,128 @@ ggml_tensor * convnext_block_ggml(ggml_context * ctx,
                                   ggml_tensor * x,
                                   int idx) {
     static const int dilations[10] = {1, 2, 4, 1, 2, 4, 1, 1, 1, 1};
-    // Audit follow-up #6 (F7) — fused LN + pw1 + gelu + pw2 + γ +
-    // residual.  The fused helper keeps the layer-norm output in
-    // `[C, T0]` (channel-major) memory and lowers both K=1 pointwise
-    // convs to direct `ggml_mul_mat` against that layout, eliminating
-    // the LN back-permute/cont and both im2col copies the previous
-    // chain paid (audit cost: ~16.8 MiB / vocoder pass).  The
-    // depthwise op stays in this TU so the CBLAS custom-op fast
-    // path is unaffected.  Trace + pipeline parity preserved — the
-    // fused helper computes the same arithmetic in the same order,
-    // just on a different (compatible) intermediate layout.  See
-    // `supertonic_internal.h::convnext_block_fused_ggml` for the
-    // op-by-op rationale and
-    // `test/test_supertonic_convnext_block_fused.cpp` for the
-    // parity test.
+    const bool use_cpu_custom = supertonic_use_cpu_custom_ops();
     ggml_tensor * dw = depthwise_conv1d_causal_ggml(ctx, x, w.dw_w, w.dw_b, dilations[idx]);
-    return convnext_block_fused_ggml(
-        ctx,
-        /*residual=*/x,
-        /*dw_out=*/dw,
-        w.norm_g, w.norm_b,
-        w.pw1_w, w.pw1_b,
-        w.pw2_w, w.pw2_b,
-        w.gamma);
+    if (use_cpu_custom) {
+        // Audit follow-up #6 (F7) — fused LN + pw1 + gelu + pw2 + γ +
+        // residual.  The fused helper keeps the layer-norm output in
+        // `[C, T0]` (channel-major) memory and lowers both K=1 pointwise
+        // convs to direct `ggml_mul_mat` against that layout, eliminating
+        // the LN back-permute/cont and both im2col copies the previous
+        // chain paid (audit cost: ~16.8 MiB / vocoder pass).  The
+        // depthwise op stays in this TU so the CBLAS custom-op fast
+        // path is unaffected.  Trace + pipeline parity preserved — the
+        // fused helper computes the same arithmetic in the same order,
+        // just on a different (compatible) intermediate layout.  See
+        // `supertonic_internal.h::convnext_block_fused_ggml` for the
+        // op-by-op rationale and
+        // `test/test_supertonic_convnext_block_fused.cpp` for the
+        // parity test.
+        return convnext_block_fused_ggml(
+            ctx,
+            /*residual=*/x,
+            /*dw_out=*/dw,
+            w.norm_g, w.norm_b,
+            w.pw1_w, w.pw1_b,
+            w.pw2_w, w.pw2_b,
+            w.gamma);
+    }
+    // Metal / non-CPU backend path: keep the granular chain so the
+    // per-op Metal fused-kernel fast paths inside the helpers (layer
+    // norm, bias+gelu, ...) get a chance to fire.  GGML_OP_CUSTOM is
+    // rejected on GPU backends so the F7 fused helper above isn't
+    // usable here regardless.
+    ggml_tensor * residual = x;
+    ggml_tensor * y = dw;
+    y = layer_norm_channel_ggml(ctx, y, w.norm_g, w.norm_b);
+    // pw1 + bias + GELU.  On Metal we drop the bias from conv1d_causal_ggml
+    // and feed the pre-bias matmul output to the fused bias_gelu op (one
+    // dispatch instead of two: ggml_add + gelu_erf).  CPU keeps its existing
+    // cblas+bias_inside path — the standard library erff in the unfused
+    // chain is already the cheapest there.
+    static const bool disable_fused_bias_gelu =
+        std::getenv("SUPERTONIC_DISABLE_FUSED_BIAS_GELU") != nullptr;
+    if (!disable_fused_bias_gelu &&
+        y->type == GGML_TYPE_F32 && w.pw1_w->type == GGML_TYPE_F32 &&
+        w.pw1_b->type == GGML_TYPE_F32) {
+        y = conv1d_causal_ggml(ctx, y, w.pw1_w, /*b=*/nullptr);
+        if (y->ne[2] == 1 && y->ne[3] == 1 &&
+            w.pw1_b->ne[0] == y->ne[1] &&
+            ggml_is_contiguous(y) && ggml_is_contiguous(w.pw1_b)) {
+            y = ggml_supertonic_bias_gelu(ctx, y, w.pw1_b);
+        } else {
+            y = ggml_add(ctx, y, repeat_like(ctx, w.pw1_b, y));
+            y = ggml_gelu_erf(ctx, y);
+        }
+    } else {
+        y = conv1d_causal_ggml(ctx, y, w.pw1_w, w.pw1_b);
+        y = ggml_gelu_erf(ctx, y);
+    }
+    // NOTE: the vector_estimator's `ggml_supertonic_pw2_residual` op
+    // expects `gamma` to be `[C]` (per-channel scale); the vocoder
+    // however stores `gamma` as a `[1]` scalar (single learnable
+    // scale per ConvNeXt block).  The shapes are incompatible, so we
+    // keep the unfused chain here.  A vocoder-specific fused op with
+    // scalar gamma is possible but the win would be tiny (~10
+    // dispatches × ~40μs = 0.4 ms).
+    y = conv1d_causal_ggml(ctx, y, w.pw2_w, w.pw2_b);
+    y = ggml_mul(ctx, y, repeat_like(ctx, w.gamma, y));
+    return ggml_add(ctx, residual, y);
+}
+
+ggml_tensor * pointwise_matmul_ct_voc(ggml_context * ctx,
+                                      ggml_tensor * x_ct,
+                                      ggml_tensor * w,
+                                      ggml_tensor * b) {
+    GGML_ASSERT(w->ne[0] == 1);
+    GGML_ASSERT(w->ne[1] == x_ct->ne[0]);
+    GGML_ASSERT(ggml_is_contiguous(w));
+    ggml_tensor * w_2d = ggml_reshape_2d(ctx, w, w->ne[1], w->ne[2]);
+    ggml_tensor * x_2d = ggml_reshape_2d(ctx, x_ct, x_ct->ne[0], x_ct->ne[1]);
+    ggml_tensor * y = ggml_mul_mat(ctx, w_2d, x_2d);
+    if (b) y = ggml_add(ctx, y, repeat_like(ctx, b, y));
+    return y;
+}
+
+// Phase B2 follow-up: vocoder ConvNeXt block on `[C, T]` activations
+// end-to-end.  Takes `[C, T]` input and returns `[C, T]` — the caller
+// wraps the 10-block chain in a single `[T, C] -> [C, T]` permute at
+// entry and a single `[C, T] -> [T, C]` permute at exit, so this
+// block has zero intra-block permutes.
+//
+// Vocoder ConvNeXt differs from vector_estimator's: (1) depthwise is
+// **causal** (left-only pad) rather than symmetric edge-clamp — handled
+// by the `_causal_ct` variant of the fused depthwise kernel (port-v14).
+// (2) `gamma` is a scalar `[1]`, not per-channel, so the `pw2_residual_ct`
+// fused op doesn't fit — unfused scalar `mul + add` tail.  (3) `norm_g` /
+// `norm_b` ship as `[1, C]` (same flatten-needed quirk as vector_estimator's
+// `.gamma`).
+//
+// Caller: `SUPERTONIC_DISABLE_CT_VOCODER=1` reverts to legacy
+// `convnext_block_ggml`.
+ggml_tensor * convnext_block_ggml_ct(ggml_context * ctx,
+                                     const supertonic_vocoder_convnext_weights & w,
+                                     ggml_tensor * x_ct,
+                                     int idx) {
+    static const int dilations[10] = {1, 2, 4, 1, 2, 4, 1, 1, 1, 1};
+    ggml_tensor * residual = x_ct;
+
+    auto flatten_1d = [&](ggml_tensor * t) -> ggml_tensor * {
+        const int64_t n = ggml_nelements(t);
+        if (t->ne[0] == n && t->ne[1] == 1 && t->ne[2] == 1 && t->ne[3] == 1) return t;
+        return ggml_reshape_1d(ctx, t, n);
+    };
+
+    ggml_tensor * y_ct = ggml_supertonic_depthwise_1d_causal_ct(ctx, x_ct,
+        w.dw_w, flatten_1d(w.dw_b), dilations[idx]);
+    y_ct = ggml_supertonic_layer_norm_channel_ct(ctx, y_ct,
+        flatten_1d(w.norm_g), flatten_1d(w.norm_b), 1e-6f);
+    y_ct = pointwise_matmul_ct_voc(ctx, y_ct, w.pw1_w, /*bias=*/nullptr);
+    y_ct = ggml_supertonic_bias_gelu_ct(ctx, y_ct, flatten_1d(w.pw1_b));
+    y_ct = pointwise_matmul_ct_voc(ctx, y_ct, w.pw2_w, flatten_1d(w.pw2_b));
+    // Scalar gamma multiply (broadcasts in any layout).
+    y_ct = ggml_mul(ctx, y_ct, repeat_like(ctx, w.gamma, y_ct));
+    return ggml_add(ctx, residual, y_ct);
 }
 
 struct vocoder_graph_cache {
@@ -415,6 +545,10 @@ void free_vocoder_cache(vocoder_graph_cache & cache) {
 void build_supertonic_vocoder_cache(vocoder_graph_cache & cache,
                                     const supertonic_model & model,
                                     int latent_len) {
+    // `supertonic_op_dispatch_scope` is set by the outer
+    // `supertonic_vocoder_forward_ggml` entry point; inside graph builders
+    // we read the thread-local flag directly.
+    const bool use_cpu_custom = supertonic_use_cpu_custom_ops();
     free_vocoder_cache(cache);
     cache.model = &model;
     cache.generation_id = model.generation_id;
@@ -470,9 +604,28 @@ void build_supertonic_vocoder_cache(vocoder_graph_cache & cache,
 
     x = conv1d_causal_ggml(cache.ctx, x, model.vocoder.embed_w, model.vocoder.embed_b);
     ggml_set_name(x, "vocoder_embed");
-    for (int i = 0; i < 10; ++i) {
-        x = convnext_block_ggml(cache.ctx, model.vocoder.convnext[(size_t) i], x, i);
-        ggml_set_name(x, ("vocoder_convnext_" + std::to_string(i)).c_str());
+    // Phase B2 follow-up: route the 10-block ConvNeXt chain through the
+    // `[C, T]` variant on Metal.  Each block runs depthwise (causal_ct) +
+    // layer_norm + pw1 + bias_gelu + pw2 + scalar gamma + residual add
+    // entirely on `[C, T]` — no intra-block permutes.  The single
+    // `[T, C] -> [C, T]` permute happens once before the chain and the
+    // single reverse permute once after.  Override:
+    // SUPERTONIC_DISABLE_CT_VOCODER=1.
+    static const bool disable_ct_vocoder =
+        std::getenv("SUPERTONIC_DISABLE_CT_VOCODER") != nullptr;
+    const bool use_ct_vocoder = !disable_ct_vocoder && !use_cpu_custom;
+    if (use_ct_vocoder) {
+        ggml_tensor * x_ct = ggml_cont(cache.ctx, ggml_permute(cache.ctx, x, 1, 0, 2, 3));
+        for (int i = 0; i < 10; ++i) {
+            x_ct = convnext_block_ggml_ct(cache.ctx, model.vocoder.convnext[(size_t) i], x_ct, i);
+            ggml_set_name(x_ct, ("vocoder_convnext_" + std::to_string(i)).c_str());
+        }
+        x = ggml_cont(cache.ctx, ggml_permute(cache.ctx, x_ct, 1, 0, 2, 3));
+    } else {
+        for (int i = 0; i < 10; ++i) {
+            x = convnext_block_ggml(cache.ctx, model.vocoder.convnext[(size_t) i], x, i);
+            ggml_set_name(x, ("vocoder_convnext_" + std::to_string(i)).c_str());
+        }
     }
 
     // F2: reference the pre-baked weight tensors directly instead
