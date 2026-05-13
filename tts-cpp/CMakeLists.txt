@@ -858,6 +858,24 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-voice-host-cache)
     tts_cpp_register_test(test-supertonic-voice-host-cache LABEL "unit")
 
+    # QVAC-18605 round 10 — pointer-compare upload-skip tracker
+    # (`tts_cpp::supertonic::detail::upload_skip_tracker`).
+    # Generalises the F4 pattern from `vector_res_style_qkv_cache`
+    # (style_v_in / kctx_in upload-skip) to the front-block /
+    # group-graph `text_in` uploads, which receive the same
+    # `text_emb` pointer 5 times per synth.  Tests cover: default
+    # state, upload + skip happy path, pointer-change forces
+    # upload, reset() invalidation (synth-boundary contract),
+    # interleaved-instance independence, cross-synth pointer-
+    # reuse hazard simulation (the bug the synth-boundary reset
+    # exists to prevent), and reset-on-empty no-op.
+    add_executable(test-supertonic-upload-skip-tracker
+        test/test_supertonic_upload_skip_tracker.cpp)
+    target_link_libraries(test-supertonic-upload-skip-tracker PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-upload-skip-tracker PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-upload-skip-tracker)
+    tts_cpp_register_test(test-supertonic-upload-skip-tracker LABEL "unit")
+
     add_executable(test-supertonic-f16-attn-parity
         test/test_supertonic_f16_attn_parity.cpp)
     target_link_libraries(test-supertonic-f16-attn-parity PRIVATE ggml)

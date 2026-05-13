@@ -1266,6 +1266,16 @@ struct vector_group_graph_cache {
     ggml_tensor * k_sin_in = nullptr;
     std::string q_rope_name; // == q_name + "_rope"
     std::string k_rope_name; // == k_name + "_rope"
+
+    // QVAC-18605 round 10 — pointer-compare upload-skip tracker
+    // for `text_in`.  `text_lc_host` is the same `text_emb`
+    // pointer the front-block cache sees: stable within one
+    // synth (5 calls × same pointer), potentially reused-at-same-
+    // address across synths.  Caller resets at `current_step ==
+    // 0` to invalidate the cache.  See upload_skip_tracker
+    // contract in supertonic_internal.h.  Cache rebuild zeroes
+    // this via `cache = {}` (effective reset).
+    upload_skip_tracker text_in_skip;
 };
 
 void free_group_graph_cache(vector_group_graph_cache & cache) {
@@ -1538,7 +1548,19 @@ vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache
     // [L, C] layout downstream ops expect.
     ggml_backend_tensor_set(cache.x_in, x_tc.data(), 0, x_tc.size()*sizeof(float));
     ggml_backend_tensor_set(cache.temb_in, temb.data(), 0, temb.size()*sizeof(float));
-    ggml_backend_tensor_set(cache.text_in, text_lc_host, 0, (size_t) text_len * 256 * sizeof(float));
+    // QVAC-18605 round 10 — text_lc_host upload-skip.  Same
+    // `text_emb` pointer that the front-block cache sees: stable
+    // within one synth (5 calls × same pointer), potentially
+    // reused-at-same-address across synths.  Synth-boundary reset
+    // on `current_step == 0` invalidates the cache so the next
+    // synth's first step always uploads.  Per-synth wins:
+    // 4 (skipped) × 3 (groups) × text_len × 256 × 4 bytes.  See
+    // upload_skip_tracker contract in supertonic_internal.h.
+    if (current_step == 0) cache.text_in_skip.reset();
+    if (cache.text_in_skip.needs_upload(text_lc_host)) {
+        ggml_backend_tensor_set(cache.text_in, text_lc_host, 0, (size_t) text_len * 256 * sizeof(float));
+        cache.text_in_skip.mark_uploaded(text_lc_host);
+    }
     profile_vector_compute(model, cache.gf, current_step, island);
     if (trace) {
         for (int j = 0; j < 4; ++j) {
@@ -3000,6 +3022,21 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             ggml_tensor * q_sin_in = nullptr;
             ggml_tensor * k_cos_in = nullptr;
             ggml_tensor * k_sin_in = nullptr;
+
+            // QVAC-18605 round 10 — pointer-compare upload-skip
+            // tracker for `text_in_t`.  `text_emb` is stable within
+            // one synth (5 calls × same pointer) but the stack-
+            // local `std::vector<float>` may be reallocated to the
+            // SAME address across synths (allocator size-class
+            // reuse).  Caller resets at `current_step == 0` to
+            // avoid leaking synth-N data into synth-N+1.  See the
+            // upload_skip_tracker contract in
+            // supertonic_internal.h.
+            //
+            // Cache rebuild zeroes this via `front_cache = {}`
+            // (the tracker's only field is a pointer that
+            // zero-initialises to nullptr → effective reset).
+            upload_skip_tracker text_in_skip;
         };
         thread_local ve_front_block_graph_cache front_cache;
         if (front_cache.model != &model ||
@@ -3225,11 +3262,27 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         auto te_arr = cached_time_embedding(model, current_step, total_steps);
         std::vector<float> te_host(te_arr.begin(), te_arr.end());
         ggml_backend_tensor_set(t_emb, te_host.data(), 0, te_host.size() * sizeof(float));
-        // text_emb is already in (channel, time) layout so the cache that
-        // used to wrap this set was a verbatim copy keyed on a pointer
-        // that never matched twice.  Removed; set the tensor directly
-        // from the caller-owned text_emb buffer.
-        ggml_backend_tensor_set(text_in, text_emb, 0, (size_t) text_len * 256 * sizeof(float));
+        // QVAC-18605 round 10 — text_emb upload-skip.  `text_emb`
+        // is stable within one synth (5 calls × same pointer); skip
+        // the upload on steps 1..N-1 if the pointer matches the
+        // last successful upload's pointer.  Synth-boundary reset
+        // (`current_step == 0`) invalidates the cache so the next
+        // synth's first step always uploads — protects against
+        // the stack-realloc-same-address hazard documented on
+        // `upload_skip_tracker` in supertonic_internal.h.
+        //
+        // The earlier comment "the cache that used to wrap this
+        // was a verbatim copy keyed on a pointer that never
+        // matched twice" referred to a per-call wrapper that
+        // forgot to use a stable cache instance — round 10 fixes
+        // that by storing the tracker on the (thread_local)
+        // front_cache instance, so consecutive `current_step`
+        // values within the same synth see a populated tracker.
+        if (current_step == 0) front_cache.text_in_skip.reset();
+        if (front_cache.text_in_skip.needs_upload(text_emb)) {
+            ggml_backend_tensor_set(text_in, text_emb, 0, (size_t) text_len * 256 * sizeof(float));
+            front_cache.text_in_skip.mark_uploaded(text_emb);
+        }
         profile_vector_compute(model, gf, current_step, "front_proj_attn0_qkv");
 
         PUSH_GGML_TRACE({"ve_latent_tc", {L, Cin}, in});

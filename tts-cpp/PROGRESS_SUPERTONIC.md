@@ -1444,6 +1444,108 @@ to the correct stage column on real hardware.
 
 ---
 
+### Vulkan optimisation round 10 (May 2026, QVAC-18605 follow-up #8) — Per-step text-input upload-skip
+
+After rounds 8 + 9 wired the GPU bridge for the 5 attention sites
+(front-block attn0 + 4 style attentions), the remaining per-step
+host uploads are the **input tensors fed to each cached graph**:
+`latent` (changes per step), `mask` (constant), `temb` (changes
+per step), and `text_emb` / `text_lc_host` (constant within one
+synth).  Round 10 picks off the largest of those: `text_emb`,
+which is uploaded **4 caches × 5 steps = 20 times / synth** but
+is the same data on every call.
+
+#### Changes
+
+- **`upload_skip_tracker` helper** in `supertonic_internal.h`.
+  Pointer-compare upload-skip generalising the F4 pattern
+  already used for `style_v_in` / `kctx_in` in
+  `vector_res_style_qkv_cache`.  `needs_upload(p) -> bool`,
+  `mark_uploaded(p)`, `reset()`.
+
+- **Front-block cache** (`ve_front_block_graph_cache`) +
+  **group-graph cache** (`vector_group_graph_cache`): add
+  `text_in_skip` field, guard the `ggml_backend_tensor_set` for
+  `text_in` / `text_in_t` with `needs_upload(text_emb)`, and
+  reset on `current_step == 0` to handle the cross-synth
+  pointer-reuse hazard (modern allocators very often re-issue
+  the same address for the next stack-local
+  `std::vector<float>` of the same size — without the reset,
+  the next synth would silently leak prior synth's text-encoder
+  embedding to the GPU).
+
+- **Cache rebuild safety**: `cache = {}` zero-initialises the
+  tracker (its only field is a pointer that defaults to
+  `nullptr`), so a graph rebuild correctly forces the next
+  upload regardless of incoming pointer.
+
+#### Test plan (TDD, round 10)
+
+Strict test-first.  `test-supertonic-upload-skip-tracker` (NEW)
+committed first, observed to fail compile (`upload_skip_tracker
+was not declared`), then implementation added.
+
+| Test | Coverage | Result |
+|------|----------|--------|
+| `test-supertonic-upload-skip-tracker` (NEW) | 7 functions, **41 checks** — default state (fresh tracker always needs upload); upload + skip happy path (5-step pattern); pointer-change forces upload; reset() invalidation (synth-boundary contract); independent-instance non-interference; **cross-synth pointer-reuse hazard simulation** (exact bug the synth-boundary reset prevents — without reset, naive pointer-compare leaks prior synth data); reset-on-empty no-op. | 41 / 41 PASS |
+| Every other unit test (rounds 1-9 + audit follow-ups + the 14 baseline tests) | Zero-regression gate | 21 / 21 PASS — unchanged |
+
+Whole CPU-only `ctest -L unit` reports **22 / 22 tests, 0
+failures, 0 regressions**.
+
+#### Backwards compatibility
+
+- Tracker is initialised to `last_uploaded = nullptr` →
+  `needs_upload(any_ptr) = true` on the first call → cold-miss
+  upload always fires.  No cache cold-start regression.
+- Cache rebuilds (`cache = {}`) zero-init the tracker → next
+  upload fires regardless of pointer.  Same correctness as
+  pre-round-10.
+- Synth-boundary reset (`current_step == 0`) invalidates the
+  tracker → next synth's first step always uploads.  Protects
+  against the documented cross-synth pointer-reuse hazard.
+- Trace mode unaffected (the upload itself is unchanged when
+  it fires; only the redundant re-uploads are skipped).
+
+#### Win
+
+Per synth (5 denoise steps):
+
+| Cache | Uploads pre-round-10 | Uploads post-round-10 | Saved |
+|---|---|---|---|
+| Front block (`text_in_t`) | 5 | 1 (cold-miss) | 4 |
+| g1 group (`text_in`) | 5 | 1 | 4 |
+| g2 group (`text_in`) | 5 | 1 | 4 |
+| g3 group (`text_in`) | 5 | 1 | 4 |
+| **Total** | **20** | **4** | **16 sync points / synth** |
+
+Bandwidth saved: 16 × `text_len × 256 × 4` bytes / synth.  At
+text_len=32 that's **~512 KB / synth** of redundant host→GPU
+upload eliminated; scales linearly with prompt length.
+
+The remaining per-step uploads (`latent`, `temb`, per-step
+deltas in mask) genuinely change per step; can't be skipped
+without a graph-allocator refactor (round 5 territory — still
+deferred).
+
+#### Why no live perf number?
+
+Round 10 is small + safe: a host-side upload-skip optimisation
+that adds zero work on the cold path and skips redundant work
+on the hot path.  The win shape:
+- 16 fewer host→GPU `ggml_backend_tensor_set` calls per synth.
+- 16 fewer staging-buffer write+barrier pairs internally inside
+  ggml-vulkan.
+- Lowest impact on big-prompt workloads where text_emb is
+  large (linear in `text_len`).
+
+The bench surface from round 7 (`--bench-per-step`) shows the
+per-step time on real hardware.  Step 0 should be unchanged
+(cold miss = always uploads).  Steps 1-4 should be measurably
+faster.
+
+---
+
 ## Remaining Work
 
 ### Runtime and performance

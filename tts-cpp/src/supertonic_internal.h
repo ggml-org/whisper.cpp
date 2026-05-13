@@ -126,6 +126,73 @@ private:
     std::unordered_map<std::string, entry> by_name_;
 };
 
+// QVAC-18605 round 10 — pointer-compare upload-skip tracker.
+//
+// Background: per-step uploads of `text_emb` to the front-block
+// cache and to the 3 group-graph caches happen 5 times per synth
+// (once per denoise step), but `text_emb` is a host
+// `std::vector<float>` allocated ONCE in
+// `Engine::Impl::synthesize()` (and once per bench run) — so the
+// SAME pointer flows through 4 caches × 5 steps = 20 uploads /
+// synth, of which 16 are redundant re-uploads of identical data.
+//
+// The F4 pattern (already in `vector_res_style_qkv_cache` for
+// `style_v_in` / `kctx_in`) skips redundant uploads via pointer
+// comparison: if the host vector pointer is the same as the last
+// successful upload's pointer, skip.  This struct generalises
+// that pattern.
+//
+// CROSS-SYNTH HAZARD: `text_emb` lives on the
+// `Engine::Impl::synthesize()` stack (or the bench loop's stack)
+// — destructed at end of call.  Modern heap allocators
+// (jemalloc / tcmalloc / glibc) very often return the SAME
+// address for an immediately-following same-size allocation
+// (size-class reuse, locality optimisation), so synth N+1 may
+// have `text_emb.data() == synth_N.text_emb.data()` despite
+// holding completely different data.  A naive pointer-compare
+// upload-skip would silently send stale text-encoder embeddings
+// to the next synth.
+//
+// MITIGATION: caller MUST invoke `reset()` at every synth
+// boundary (i.e., when `current_step == 0`).  The first step of
+// every synth always uploads (cold-miss), populating the
+// tracker; steps 1..N-1 hit the pointer-compare and skip.
+// Across synths, the reset invalidates the cached pointer so
+// the next synth's upload always fires regardless of pointer
+// match.
+//
+// Reset is also required after a cache rebuild (the underlying
+// GPU buffer is reallocated and any cached upload-skip state is
+// stale).  In tree, cache rebuilds happen via `cache = {}`
+// which zero-initialises the tracker fields and effectively
+// resets it without an explicit `reset()` call.
+struct upload_skip_tracker {
+    const void * last_uploaded = nullptr;
+
+    // True iff `current` differs from the last recorded pointer
+    // (i.e., we MUST upload).  False iff we can skip.  After
+    // the consumer's upload call returns, they MUST call
+    // `mark_uploaded(current)` to update the cached pointer
+    // (else the next call re-uploads).
+    bool needs_upload(const void * current) const {
+        return current != last_uploaded;
+    }
+
+    // Records a successful upload.  Call AFTER the upload
+    // completes (so a failed upload doesn't pin the pointer —
+    // the next call would correctly re-attempt).
+    void mark_uploaded(const void * current) {
+        last_uploaded = current;
+    }
+
+    // Drops the cached pointer.  Caller invokes at synth
+    // boundary (current_step == 0) AND on cache rebuild (cache
+    // = {} also achieves this via zero-init of last_uploaded).
+    void reset() {
+        last_uploaded = nullptr;
+    }
+};
+
 // QVAC-18605 round 7 — Vulkan env-var passthrough.
 //
 // Applies a map of `GGML_VK_*` env-var overrides via
