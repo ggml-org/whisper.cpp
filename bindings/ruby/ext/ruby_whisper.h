@@ -157,4 +157,11 @@ typedef struct {
   } \
 } while (0)
 
+#define GetParakeetSegment(obj, rwps) do { \
+  TypedData_Get_Struct((obj), ruby_whisper_parakeet_segment, &ruby_whisper_parakeet_segment_type, (rwps)); \
+  if (!(rwps)->context) { \
+    rb_raise(rb_eRuntimeError, "Not initialized"); \
+  } \
+} while (0)
+
 #endif
