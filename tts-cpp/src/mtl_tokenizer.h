@@ -30,8 +30,10 @@ public:
     // Tier-1 language codes handled natively by this build.
     static const std::vector<std::string> & supported_languages();
 
-    // Full list of language codes the Python reference tokenizer accepts.
     static const std::vector<std::string> & all_known_languages();
+
+    static void set_mecab_dict_path(const std::string & path);
+    static void set_cangjie_tsv_path(const std::string & path);
 
 private:
     struct added_token {

@@ -7,6 +7,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -15,6 +16,7 @@
 #include <vector>
 
 #include "mtl_unicode_tables.inc"
+#include "text_preprocess.h"
 
 namespace tts_cpp::chatterbox::detail {
 
@@ -445,7 +447,8 @@ struct json_parser {
 // local-static initialisation.
 const std::vector<std::string> & mtl_tokenizer::supported_languages() {
     static const std::vector<std::string> k_supported = {
-        "en","es","fr","de","it","pt","nl","pl","tr","sv","da","fi","no","el","ms","sw","ar","ko"
+        "en","es","fr","de","it","pt","nl","pl","tr","sv","da","fi","no","el",
+        "ms","sw","ar","ko","ja","he","ru","zh","hi"
     };
     return k_supported;
 }
@@ -635,23 +638,102 @@ void mtl_tokenizer::bpe_word(const std::string & word, std::vector<int32_t> & ou
     }
 }
 
-// ---- Encode ----------------------------------------------------------------
+namespace {
+
+std::string g_mecab_dict_path;
+std::string g_cangjie_tsv_path;
+
+std::string resolve_mecab_dict_path() {
+    if (!g_mecab_dict_path.empty()) return g_mecab_dict_path;
+    const char * env = std::getenv("CHATTERBOX_MECAB_DICT");
+    if (env && *env) return env;
+    return {};
+}
+
+std::string resolve_cangjie_tsv_path() {
+    if (!g_cangjie_tsv_path.empty()) return g_cangjie_tsv_path;
+    const char * env = std::getenv("CHATTERBOX_CANGJIE_TSV");
+    if (env && *env) return env;
+    return {};
+}
+
+#ifdef TTS_CPP_HAS_MECAB
+const tts_cpp::chatterbox::text_preprocess::MeCabTagger * mecab_tagger() {
+    static std::once_flag once;
+    static std::unique_ptr<tts_cpp::chatterbox::text_preprocess::MeCabTagger> t;
+    std::call_once(once, [] {
+        const std::string path = resolve_mecab_dict_path();
+        if (path.empty()) return;
+        t = std::make_unique<tts_cpp::chatterbox::text_preprocess::MeCabTagger>();
+        try {
+            t->load(path);
+        } catch (const std::exception & e) {
+            fprintf(stderr, "mtl_tokenizer: warning: failed to load MeCab tagger: %s\n", e.what());
+            t.reset();
+        }
+    });
+    return t.get();
+}
+#endif
+
+const tts_cpp::chatterbox::text_preprocess::CangjieTable * cangjie_table() {
+    static std::once_flag once;
+    static std::unique_ptr<tts_cpp::chatterbox::text_preprocess::CangjieTable> tbl;
+    std::call_once(once, [] {
+        const std::string path = resolve_cangjie_tsv_path();
+        if (path.empty()) return;
+        tbl = std::make_unique<tts_cpp::chatterbox::text_preprocess::CangjieTable>();
+        try {
+            tbl->load(path);
+        } catch (const std::exception & e) {
+            fprintf(stderr, "mtl_tokenizer: warning: failed to load Cangjie table: %s\n", e.what());
+            tbl.reset();
+        }
+    });
+    return tbl.get();
+}
+
+std::string preprocess_japanese(const std::string & text) {
+#ifdef TTS_CPP_HAS_MECAB
+    const auto * tagger = mecab_tagger();
+    if (tagger && tagger->loaded()) return tagger->convert(text);
+    throw std::runtime_error(
+        "mtl_tokenizer: language 'ja' requires MeCab + IPAdic. "
+        "Pass --mecab-dict <path> or set mecab_dict_path in EngineOptions.");
+#else
+    (void)text;
+    throw std::runtime_error(
+        "mtl_tokenizer: language 'ja' requires libmecab at build time "
+        "(install mecab via vcpkg or system package manager).");
+#endif
+}
+
+std::string preprocess_chinese(const std::string & text) {
+    const auto * tbl = cangjie_table();
+    if (tbl && !tbl->empty()) return tbl->convert(text);
+    throw std::runtime_error(
+        "mtl_tokenizer: language 'zh' requires the Cangjie5_TC.tsv mapping. "
+        "Pass --cangjie-tsv <path> or set cangjie_tsv_path in EngineOptions.");
+}
+
+std::string apply_language_preprocessing(const std::string & text,
+                                          const std::string & language_id) {
+    if (language_id == "ja") return preprocess_japanese(text);
+    if (language_id == "zh") return preprocess_chinese(text);
+    return text;
+}
+
+}  // namespace
 
 std::vector<int32_t> mtl_tokenizer::encode(const std::string & text,
                                             const std::string & language_id) const {
     std::string txt = text;
 
     if (!language_id.empty()) {
-        if (language_id == "ja" || language_id == "he" || language_id == "ru" ||
-            language_id == "zh" || language_id == "hi") {
-            throw std::runtime_error(
-                "mtl_tokenizer: language '" + language_id + "' requires preprocessing not "
-                "included in this build (pykakasi / dicta / russian_text_stresser / "
-                "Cangjie mapping). Pre-process the text externally before passing it in.");
-        }
         if (!is_language_supported(language_id)) {
             throw std::runtime_error("mtl_tokenizer: unsupported language '" + language_id + "'");
         }
+        txt = apply_language_preprocessing(txt, language_id);
     }
 
     txt = utf8_lowercase(txt);
@@ -752,6 +834,14 @@ std::string mtl_tokenizer::decode(const std::vector<int32_t> & ids) const {
         out += tok;
     }
     return out;
+}
+
+void mtl_tokenizer::set_mecab_dict_path(const std::string & path) {
+    g_mecab_dict_path = path;
+}
+
+void mtl_tokenizer::set_cangjie_tsv_path(const std::string & path) {
+    g_cangjie_tsv_path = path;
 }
 
 } // namespace tts_cpp::chatterbox::detail
