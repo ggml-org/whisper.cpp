@@ -17,4 +17,24 @@ class TestParakeetSegment < TestBase
     end
     assert_match(/ask not what your country can do for you, ask what you can do for your country/, whole_text)
   end
+
+  def test_deconstruct_keys
+    segment = @parakeet.each_segment.first
+    expected = {
+      start_time: segment.start_time,
+      end_time: segment.end_time,
+      text: segment.text
+    }
+    assert_equal expected, segment.deconstruct_keys([:start_time, :end_time, :text])
+  end
+
+  def test_deconstruct_keys_with_nil
+    segment = @parakeet.each_segment.first
+    expected = {
+      start_time: segment.start_time,
+      end_time: segment.end_time,
+      text: segment.text
+    }
+    assert_equal expected, segment.deconstruct_keys(nil)
+  end
 end
