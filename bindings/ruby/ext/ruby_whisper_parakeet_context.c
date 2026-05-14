@@ -3,6 +3,7 @@
 extern ID id_to_s;
 
 extern VALUE ruby_whisper_normalize_model_path(VALUE model_path);
+extern VALUE ruby_whisper_parakeet_transcribe(VALUE self, VALUE audio_path, VALUE params);
 
 static void
 ruby_whisper_parakeet_context_free(void *p)
@@ -25,7 +26,7 @@ ruby_whisper_parakeet_context_memsize(const void *p)
   return size;
 }
 
-static const rb_data_type_t ruby_whisper_parakeet_context_type = {
+const rb_data_type_t ruby_whisper_parakeet_context_type = {
   "ruby_whisper_parakeet_context",
   {0, ruby_whisper_parakeet_context_free, ruby_whisper_parakeet_context_memsize,},
   0, 0,
@@ -72,4 +73,5 @@ init_ruby_whisper_parakeet_context(VALUE *mParakeet)
   rb_define_alloc_func(cParakeetContext, ruby_whisper_parakeet_context_allocate);
 
   rb_define_method(cParakeetContext, "initialize", ruby_whisper_parakeet_context_initialize, -1);
+  rb_define_method(cParakeetContext, "transcribe", ruby_whisper_parakeet_transcribe, 2);
 }

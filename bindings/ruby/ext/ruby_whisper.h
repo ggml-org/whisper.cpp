@@ -134,6 +134,13 @@ typedef struct {
   } \
 } while (0)
 
+#define GetParakeetContext(obj, rwpc) do { \
+  TypedData_Get_Struct((obj), ruby_whisper_parakeet_context, &ruby_whisper_parakeet_context_type, (rwpc)); \
+  if ((rwpc)->context == NULL) { \
+    rb_raise(rb_eRuntimeError, "Not initialized"); \
+  } \
+} while (0)
+
 #define GetParakeetParams(obj, rwpp) do { \
   TypedData_Get_Struct((obj), ruby_whisper_parakeet_params, &ruby_whisper_parakeet_params_type, (rwpp)); \
   if (!(rwpp)->new_segment_callback_container || \
