@@ -87,7 +87,7 @@ struct whisper_params {
     float logprob_thold   = -1.00f;
     float temperature     =  0.00f;
     float temperature_inc =  0.20f;
-    float no_speech_thold = 0.6f;
+    float no_speech_thold =  0.6f;
 
     bool debug_mode      = false;
     bool translate       = false;
@@ -101,6 +101,7 @@ struct whisper_params {
     bool print_realtime  = false;
     bool print_progress  = false;
     bool no_timestamps   = false;
+    bool token_timestamps = true;
     bool use_gpu         = true;
     bool flash_attn      = true;
     int32_t gpu_device   = 0;
@@ -526,6 +527,10 @@ void get_req_parameters(const Request & req, whisper_params & params)
     {
         params.logprob_thold = std::stof(req.get_file_value("logprob_thold").content);
     }
+    if (req.has_file("no_speech_thold"))
+    {
+        params.no_speech_thold = std::stof(req.get_file_value("no_speech_thold").content);
+    }
     if (req.has_file("debug_mode"))
     {
         params.debug_mode = parse_str_to_bool(req.get_file_value("debug_mode").content);
@@ -549,6 +554,12 @@ void get_req_parameters(const Request & req, whisper_params & params)
     if (req.has_file("no_timestamps"))
     {
         params.no_timestamps = parse_str_to_bool(req.get_file_value("no_timestamps").content);
+    }
+    if (req.has_file("token_timestamps"))
+    {
+        params.token_timestamps = parse_str_to_bool(req.get_file_value("token_timestamps").content);
+    } else {
+        params.token_timestamps = !params.no_timestamps;
     }
     if (req.has_file("language"))
     {
@@ -755,6 +766,7 @@ int main(int argc, char ** argv) {
     -F file="@&lt;file-path&gt;" \
     -F temperature="0.0" \
     -F temperature_inc="0.2" \
+    -F no_speech_thold="0.6" \
     -F response_format="json"
         </pre>
 
@@ -817,7 +829,7 @@ int main(int argc, char ** argv) {
         }
         auto audio_file = req.get_file_value("file");
 
-        // check non-required fields
+        whisper_params params = default_params;
         get_req_parameters(req, params);
 
         std::string filename{audio_file.filename};
@@ -933,13 +945,13 @@ int main(int argc, char ** argv) {
             wparams.beam_search.beam_size = params.beam_size;
 
             wparams.temperature      = params.temperature;
-            wparams.no_speech_thold = params.no_speech_thold;
+            wparams.no_speech_thold  = params.no_speech_thold;
             wparams.temperature_inc  = params.temperature_inc;
             wparams.entropy_thold    = params.entropy_thold;
             wparams.logprob_thold    = params.logprob_thold;
 
             wparams.no_timestamps    = params.no_timestamps;
-            wparams.token_timestamps = !params.no_timestamps;
+            wparams.token_timestamps = params.token_timestamps;
             wparams.no_context       = params.no_context;
 
             wparams.suppress_nst     = params.suppress_nst;
@@ -1096,7 +1108,7 @@ int main(int argc, char ** argv) {
 
                     segment["tokens"].push_back(token.id);
                     json word = json{{"word", whisper_full_get_token_text(ctx, i, j)}};
-                    if (!params.no_timestamps) {
+                    if (!params.no_timestamps && params.token_timestamps) {
                         word["start"] = token.t0 * 0.01;
                         word["end"] = token.t1 * 0.01;
                         word["t_dtw"] = token.t_dtw;
@@ -1128,9 +1140,6 @@ int main(int argc, char ** argv) {
             res.set_content(jres.dump(-1, ' ', false, json::error_handler_t::replace),
                             "application/json");
         }
-
-        // reset params to their defaults
-        params = default_params;
     });
     svr->Post(sparams.request_path + "/load", [&](const Request &req, Response &res){
         std::lock_guard<std::mutex> lock(whisper_mutex);

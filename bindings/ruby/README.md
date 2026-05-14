@@ -360,7 +360,7 @@ Whisper::Context.new("base")
 
 ### Low-level API to transcribe ###
 
-You can also call `Whisper::Context#full` and `#full_parallel` with a Ruby array as samples. Although `#transcribe` with audio file path is recommended because it extracts PCM samples in C++ and is fast, `#full` and `#full_parallel` give you flexibility.
+You can also call `Whisper::Context#full` and `#full_parallel` with a Ruby array as samples. Although `#transcribe` with audio file path is recommended because it extracts PCM samples in C++ and is fast, `#full` and `#full_parallel` give you flexibility. Unlike `#transcribe`, these methods requires 16,000 Hz, 32-bit float audio.
 
 ```ruby
 require "whisper"
@@ -383,16 +383,16 @@ If you can prepare audio data as C array and export it as a MemoryView, whisperc
 
 ```ruby
 require "torchaudio"
-require "arrow-numo-narray"
+require "ndav/torch/tensor"
 require "whisper"
 
 waveform, sample_rate = TorchAudio.load("test/fixtures/jfk.wav")
-# Convert Torch::Tensor to Arrow::Array via Numo::NArray
-samples = waveform.squeeze.numo.to_arrow.to_arrow_array
+# Convert Torch::Tensor to NDAV
+samples = waveform.squeeze.to_ndav
 
 whisper = Whisper::Context.new("base")
 whisper
-  # Arrow::Array exports MemoryView
+  # NDAV exports MemoryView
   .full(Whisper::Params.new, samples)
 ```
 

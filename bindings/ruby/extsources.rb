@@ -5,37 +5,53 @@ ignored_dirs = %w[
   .devops
   .github
   ci
-  examples/wchess/wchess.wasm
+  examples/addon.node
+  examples/bench.wasm
+  examples/command
+  examples/command.wasm
+  examples/lsp
+  examples/main
+  examples/python
+  examples/stream
+  examples/stream.wasm
+  examples/sycl
+  examples/talk-llama
+  examples/wchess
   examples/whisper.android
   examples/whisper.android.java
+  examples/whisper.nvim
   examples/whisper.objc
   examples/whisper.swiftui
+  examples/whisper.wasm
   grammars
   models
   samples
   scripts
+  tests
 ].collect {|dir| root/dir}
 ignored_files = %w[
   AUTHORS
   Makefile
-  README.md
-  README_sycl.md
   .gitignore
   .gitmodules
   .dockerignore
-  whisper.nvim
-  twitch.sh
-  yt-wsp.sh
-  close-issue.yml
-  build-xcframework.sh
+]
+ignored_exts = %w[
+  .yml
+  .sh
+  .md
+  .py
+  .js
+  .nvim
 ]
 
 EXTSOURCES =
   `git ls-files -z #{root}`.split("\x0")
     .collect {|file| Pathname(file)}
     .reject {|file|
-      ignored_dirs.any? {|dir| file.descend.any? {|desc| desc == dir}} ||
+      ignored_exts.include?(file.extname) ||
         ignored_files.include?(file.basename.to_path) ||
-        (file.descend.to_a[1] != root && file.descend.to_a[1] != Pathname("..")/"javascript")
+        ignored_dirs.any? {|dir| file.descend.any? {|desc| desc == dir}} ||
+        (file.descend.to_a[1] != root && file != Pathname("..")/"javascript"/"package-tmpl.json")
     }
     .collect(&:to_path)

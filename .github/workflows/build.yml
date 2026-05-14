@@ -662,6 +662,7 @@ jobs:
         with:
           name: ggml_${{ matrix.arch }}.dll
           path: build/bin/${{ matrix.build }}/ggml.dll
+          overwrite: true
 
       - name: Upload ggml base dll
         uses: actions/upload-artifact@v6

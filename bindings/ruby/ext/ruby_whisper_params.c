@@ -93,21 +93,66 @@ rb_whisper_callback_container_allocate() {
   container->context = NULL;
   container->user_data = Qnil;
   container->callback = Qnil;
-  container->callbacks = rb_ary_new();
+  container->callbacks = Qnil;
   return container;
 }
 
-static void new_segment_callback(struct whisper_context *ctx, struct whisper_state *state, int n_new, void *user_data) {
-  const ruby_whisper_callback_container *container = (ruby_whisper_callback_container *)user_data;
+static void
+rb_whisper_abort_callback_container_mark(ruby_whisper_abort_callback_container *rwc)
+{
+  if (rwc == NULL) return;
+
+  rb_gc_mark(rwc->user_data);
+  rb_gc_mark(rwc->callback);
+  rb_gc_mark(rwc->callbacks);
+}
+
+static ruby_whisper_abort_callback_container*
+rb_whisper_abort_callback_container_allocate() {
+  ruby_whisper_abort_callback_container *container;
+  container = ALLOC(ruby_whisper_abort_callback_container);
+  container->context = NULL;
+  container->user_data = Qnil;
+  container->callback = Qnil;
+  container->callbacks = Qnil;
+  container->is_interrupted = false;
+  return container;
+}
+
+static bool
+ruby_whisper_callback_container_is_present(const ruby_whisper_callback_container *container) {
+  return !NIL_P(container->callback) || !NIL_P(container->callbacks);
+}
+
+static bool
+ruby_whisper_abort_callback_container_is_present(const ruby_whisper_abort_callback_container *container) {
+  return !NIL_P(container->callback) || !NIL_P(container->callbacks);
+}
+
+typedef struct {
+  const ruby_whisper_callback_container *container;
+  struct whisper_state *state;
+  int n_new;
+} call_new_segment_callbacks_args;
+
+static void*
+call_new_segment_callbacks(void *v_args) {
+  call_new_segment_callbacks_args *args = (call_new_segment_callbacks_args *)v_args;
+  const ruby_whisper_callback_container *container = args->container;
+  struct whisper_state *state = args->state;
+  int n_new = args->n_new;
 
   // Currently, doesn't support state because
   // those require to resolve GC-related problems.
   if (!NIL_P(container->callback)) {
     rb_funcall(container->callback, id_call, 4, *container->context, Qnil, INT2NUM(n_new), container->user_data);
   }
+  if (NIL_P(container->callbacks)) {
+    return NULL;
+  }
   const long callbacks_len = RARRAY_LEN(container->callbacks);
   if (0 == callbacks_len) {
-    return;
+    return NULL;
   }
   const int n_segments = whisper_full_n_segments_from_state(state);
   for (int i = n_new; i > 0; i--) {
@@ -118,95 +163,208 @@ static void new_segment_callback(struct whisper_context *ctx, struct whisper_sta
       rb_funcall(cb, id_call, 1, segment);
     }
   }
+
+  return NULL;
+}
+
+static void new_segment_callback(struct whisper_context *ctx, struct whisper_state *state, int n_new, void *user_data) {
+  const ruby_whisper_callback_container *container = (ruby_whisper_callback_container *)user_data;
+  if (!ruby_whisper_callback_container_is_present(container)) {
+    return;
+  }
+
+  call_new_segment_callbacks_args args = {
+    container,
+    state,
+    n_new
+  };
+  rb_thread_call_with_gvl(call_new_segment_callbacks, (void *)&args);
+}
+
+typedef struct {
+  const ruby_whisper_callback_container *container;
+  struct whisper_state *state;
+  int progress_cur;
+} call_progress_callbacks_args;
+
+static void*
+call_progress_callbacks(void *v_args) {
+  call_progress_callbacks_args *args = (call_progress_callbacks_args *)v_args;
+  const ruby_whisper_callback_container *container = args->container;
+  int progress_cur = args->progress_cur;
+
+   // Currently, doesn't support state because
+  // those require to resolve GC-related problems.
+  if (!NIL_P(args->container->callback)) {
+    rb_funcall(container->callback, id_call, 4, *container->context, Qnil, INT2NUM(progress_cur), container->user_data);
+  }
+  if (NIL_P(container->callbacks)) {
+    return NULL;
+  }
+  const long callbacks_len = RARRAY_LEN(container->callbacks);
+  if (0 == callbacks_len) {
+    return NULL;
+  }
+  for (int j = 0; j < callbacks_len; j++) {
+    VALUE cb = rb_ary_entry(container->callbacks, j);
+    rb_funcall(cb, id_call, 1, INT2NUM(progress_cur));
+  }
+
+  return NULL;
 }
 
 static void progress_callback(struct whisper_context *ctx, struct whisper_state *state, int progress_cur, void *user_data) {
   const ruby_whisper_callback_container *container = (ruby_whisper_callback_container *)user_data;
-  const VALUE progress = INT2NUM(progress_cur);
-  // Currently, doesn't support state because
-  // those require to resolve GC-related problems.
-  if (!NIL_P(container->callback)) {
-    rb_funcall(container->callback, id_call, 4, *container->context, Qnil, progress, container->user_data);
-  }
-  const long callbacks_len = RARRAY_LEN(container->callbacks);
-  if (0 == callbacks_len) {
+  if (!ruby_whisper_callback_container_is_present(container)) {
     return;
   }
-  for (int j = 0; j < callbacks_len; j++) {
-    VALUE cb = rb_ary_entry(container->callbacks, j);
-    rb_funcall(cb, id_call, 1, progress);
-  }
+
+  call_progress_callbacks_args args = {
+    container,
+    state,
+    progress_cur
+  };
+  rb_thread_call_with_gvl(call_progress_callbacks, (void *)&args);
 }
 
-static bool encoder_begin_callback(struct whisper_context *ctx, struct whisper_state *state, void *user_data) {
-  const ruby_whisper_callback_container *container = (ruby_whisper_callback_container *)user_data;
-  bool is_aborted = false;
-  VALUE result;
+typedef struct {
+  const ruby_whisper_callback_container *container;
+  struct whisper_state *state;
+  bool is_continued;
+} call_encoder_begin_callbacks_args;
+
+static void*
+call_encoder_begin_callbacks(void *v_args) {
+  call_encoder_begin_callbacks_args *args = (call_encoder_begin_callbacks_args *)v_args;
+  const ruby_whisper_callback_container *container = args->container;
+  VALUE result = Qnil;
 
   // Currently, doesn't support state because
   // those require to resolve GC-related problems.
   if (!NIL_P(container->callback)) {
     result = rb_funcall(container->callback, id_call, 3, *container->context, Qnil, container->user_data);
     if (result == Qfalse) {
-      is_aborted = true;
+      args->is_continued = false;
+      return NULL;
     }
   }
-  const long callbacks_len = RARRAY_LEN(container->callbacks);
-  if (0 == callbacks_len) {
-    return !is_aborted;
-  }
-  for (int j = 0; j < callbacks_len; j++) {
-    VALUE cb = rb_ary_entry(container->callbacks, j);
-    result = rb_funcall(cb, id_call, 0);
-    if (result == Qfalse) {
-      is_aborted = true;
+  if (!NIL_P(container->callbacks)) {
+    const long callbacks_len = RARRAY_LEN(container->callbacks);
+    if (0 == callbacks_len) {
+      return NULL;
+    }
+    for (int j = 0; j < callbacks_len; j++) {
+      VALUE cb = rb_ary_entry(container->callbacks, j);
+      result = rb_funcall(cb, id_call, 0);
+      if (result == Qfalse) {
+        args->is_continued = false;
+        return NULL;
+      }
     }
   }
-  return !is_aborted;
+
+  return NULL;
 }
 
-static bool abort_callback(void * user_data) {
+static bool encoder_begin_callback(struct whisper_context *ctx, struct whisper_state *state, void *user_data) {
   const ruby_whisper_callback_container *container = (ruby_whisper_callback_container *)user_data;
+  if (!ruby_whisper_callback_container_is_present(container)) {
+    return true;
+  }
+
+  call_encoder_begin_callbacks_args args = {
+    container,
+    state,
+    true
+  };
+  rb_thread_call_with_gvl(call_encoder_begin_callbacks, (void *)&args);
+
+  return args.is_continued;
+}
+
+typedef struct {
+  const ruby_whisper_abort_callback_container *container;
+  struct whisper_state *state;
+  bool is_interrupted;
+} call_abort_callbacks_args;
+
+static void*
+call_abort_callbacks(void *v_args) {
+  call_abort_callbacks_args *args = (call_abort_callbacks_args *)v_args;
+  const ruby_whisper_abort_callback_container *container = args->container;
+
+  if (container->is_interrupted) {
+    args->is_interrupted = true;
+    return NULL;
+  }
+
   if (!NIL_P(container->callback)) {
     VALUE result = rb_funcall(container->callback, id_call, 1, container->user_data);
     if (!NIL_P(result) && Qfalse != result) {
-      return true;
+      args->is_interrupted = true;
+      return NULL;
     }
+  }
+  if (NIL_P(container->callbacks)) {
+    return NULL;
   }
   const long callbacks_len = RARRAY_LEN(container->callbacks);
   if (0 == callbacks_len) {
-    return false;
+    return NULL;
   }
   for (int j = 0; j < callbacks_len; j++) {
     VALUE cb = rb_ary_entry(container->callbacks, j);
     VALUE result = rb_funcall(cb, id_call, 1, container->user_data);
     if (!NIL_P(result) && Qfalse != result) {
-      return true;
+      args->is_interrupted = true;
+      return NULL;
     }
   }
-  return false;
+
+  return NULL;
+}
+
+static bool abort_callback(void * user_data) {
+  const ruby_whisper_abort_callback_container *container = (ruby_whisper_abort_callback_container *)user_data;
+
+  if (container->is_interrupted) {
+    return true;
+  }
+
+  if (!ruby_whisper_abort_callback_container_is_present(container)) {
+    return false;
+  }
+
+  call_abort_callbacks_args args = {
+    container,
+    NULL,
+    false
+  };
+  rb_thread_call_with_gvl(call_abort_callbacks, (void *)&args);
+
+  return args.is_interrupted;
 }
 
 static void
-check_thread_safety(ruby_whisper_params *rwp, VALUE *context, int n_processors)
+check_thread_safety(ruby_whisper_params *rwp, int n_processors)
 {
   if (n_processors == 1) {
     return;
   }
 
-  if (!NIL_P(rwp->new_segment_callback_container->callback) || 0 != RARRAY_LEN(rwp->new_segment_callback_container->callbacks)) {
+  if (ruby_whisper_callback_container_is_present(rwp->new_segment_callback_container)) {
     rb_raise(rb_eRuntimeError, "new segment callback not supported on parallel transcription");
   }
 
-  if (!NIL_P(rwp->progress_callback_container->callback) || 0 != RARRAY_LEN(rwp->progress_callback_container->callbacks)) {
+  if (ruby_whisper_callback_container_is_present(rwp->progress_callback_container)) {
     rb_raise(rb_eRuntimeError, "progress callback not supported on parallel transcription");
   }
 
-  if (!NIL_P(rwp->encoder_begin_callback_container->callback) || 0 != RARRAY_LEN(rwp->encoder_begin_callback_container->callbacks)) {
+  if (ruby_whisper_callback_container_is_present(rwp->encoder_begin_callback_container)) {
     rb_raise(rb_eRuntimeError, "encoder begin callback not supported on parallel transcription");
   }
 
-  if (!NIL_P(rwp->abort_callback_container->callback) || 0 != RARRAY_LEN(rwp->abort_callback_container->callbacks)) {
+  if (ruby_whisper_abort_callback_container_is_present(rwp->abort_callback_container)) {
     rb_raise(rb_eRuntimeError, "abort callback not supported on parallel transcription");
   }
 
@@ -217,29 +375,28 @@ check_thread_safety(ruby_whisper_params *rwp, VALUE *context, int n_processors)
 }
 
 static void register_callbacks(ruby_whisper_params * rwp, VALUE * context) {
-  if (!NIL_P(rwp->new_segment_callback_container->callback) || 0 != RARRAY_LEN(rwp->new_segment_callback_container->callbacks)) {
+  if (ruby_whisper_callback_container_is_present(rwp->new_segment_callback_container)) {
     rwp->new_segment_callback_container->context = context;
     rwp->params.new_segment_callback = new_segment_callback;
     rwp->params.new_segment_callback_user_data = rwp->new_segment_callback_container;
   }
 
-  if (!NIL_P(rwp->progress_callback_container->callback) || 0 != RARRAY_LEN(rwp->progress_callback_container->callbacks)) {
+  if (ruby_whisper_callback_container_is_present(rwp->progress_callback_container)) {
     rwp->progress_callback_container->context = context;
     rwp->params.progress_callback = progress_callback;
     rwp->params.progress_callback_user_data = rwp->progress_callback_container;
   }
 
-  if (!NIL_P(rwp->encoder_begin_callback_container->callback) || 0 != RARRAY_LEN(rwp->encoder_begin_callback_container->callbacks)) {
+  if (ruby_whisper_callback_container_is_present(rwp->encoder_begin_callback_container)) {
     rwp->encoder_begin_callback_container->context = context;
     rwp->params.encoder_begin_callback = encoder_begin_callback;
     rwp->params.encoder_begin_callback_user_data = rwp->encoder_begin_callback_container;
   }
 
-  if (!NIL_P(rwp->abort_callback_container->callback) || 0 != RARRAY_LEN(rwp->abort_callback_container->callbacks)) {
-    rwp->abort_callback_container->context = context;
-    rwp->params.abort_callback = abort_callback;
-    rwp->params.abort_callback_user_data = rwp->abort_callback_container;
-  }
+  rwp->abort_callback_container->context = context;
+  rwp->params.abort_callback = abort_callback;
+  rwp->abort_callback_container->is_interrupted = false;
+  rwp->params.abort_callback_user_data = rwp->abort_callback_container;
 }
 
 static void set_vad_params(ruby_whisper_params *rwp)
@@ -255,7 +412,7 @@ static void set_vad_params(ruby_whisper_params *rwp)
 void
 prepare_transcription(ruby_whisper_params *rwp, VALUE *context, int n_processors)
 {
-  check_thread_safety(rwp, context, n_processors);
+  check_thread_safety(rwp, n_processors);
   register_callbacks(rwp, context);
   set_vad_params(rwp);
 }
@@ -267,7 +424,7 @@ rb_whisper_params_mark(void *p)
   rb_whisper_callbcack_container_mark(rwp->new_segment_callback_container);
   rb_whisper_callbcack_container_mark(rwp->progress_callback_container);
   rb_whisper_callbcack_container_mark(rwp->encoder_begin_callback_container);
-  rb_whisper_callbcack_container_mark(rwp->abort_callback_container);
+  rb_whisper_abort_callback_container_mark(rwp->abort_callback_container);
   rb_gc_mark(rwp->vad_params);
 }
 
@@ -338,7 +495,7 @@ ruby_whisper_params_allocate(VALUE klass)
   rwp->new_segment_callback_container = rb_whisper_callback_container_allocate();
   rwp->progress_callback_container = rb_whisper_callback_container_allocate();
   rwp->encoder_begin_callback_container = rb_whisper_callback_container_allocate();
-  rwp->abort_callback_container = rb_whisper_callback_container_allocate();
+  rwp->abort_callback_container = rb_whisper_abort_callback_container_allocate();
   return obj;
 }
 
@@ -1302,6 +1459,9 @@ ruby_whisper_params_on_new_segment(VALUE self)
   ruby_whisper_params *rwp;
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
   const VALUE blk = rb_block_proc();
+  if (NIL_P(rwp->new_segment_callback_container->callbacks)) {
+    rwp->new_segment_callback_container->callbacks = rb_ary_new();
+  }
   rb_ary_push(rwp->new_segment_callback_container->callbacks, blk);
   return Qnil;
 }
@@ -1322,6 +1482,9 @@ ruby_whisper_params_on_progress(VALUE self)
   ruby_whisper_params *rwp;
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
   const VALUE blk = rb_block_proc();
+  if (NIL_P(rwp->progress_callback_container->callbacks)) {
+    rwp->progress_callback_container->callbacks = rb_ary_new();
+  }
   rb_ary_push(rwp->progress_callback_container->callbacks, blk);
   return Qnil;
 }
@@ -1342,6 +1505,9 @@ ruby_whisper_params_on_encoder_begin(VALUE self)
   ruby_whisper_params *rwp;
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
   const VALUE blk = rb_block_proc();
+  if (NIL_P(rwp->encoder_begin_callback_container->callbacks)) {
+    rwp->encoder_begin_callback_container->callbacks = rb_ary_new();
+  }
   rb_ary_push(rwp->encoder_begin_callback_container->callbacks, blk);
   return Qnil;
 }
@@ -1366,6 +1532,9 @@ ruby_whisper_params_abort_on(VALUE self)
   ruby_whisper_params *rwp;
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
   const VALUE blk = rb_block_proc();
+  if (NIL_P(rwp->abort_callback_container->callbacks)) {
+    rwp->abort_callback_container->callbacks = rb_ary_new();
+  }
   rb_ary_push(rwp->abort_callback_container->callbacks, blk);
   return Qnil;
 }
