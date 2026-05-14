@@ -1685,6 +1685,207 @@ until round 11 unblocked the path.
 
 ---
 
+### Vulkan optimisation round 12 (May 2026, QVAC-18605 follow-up #10) — Auto-pick UMA bias + text-encoder GPU bridge + pinned-host-buffer per-step inputs
+
+Three independent wins bundled into one round.  Strict TDD on
+each — new CPU-only unit test for every change, RED → impl →
+GREEN → end-to-end validation on real hardware.
+
+#### #10 — Auto-pick UMA bias
+
+Round 3 shipped `--vulkan-device -1` as "auto-pick adapter with
+most free VRAM", but on hybrid discrete + iGPU machines the
+iGPU's UMA pool (system RAM, often 120+ GB) wins the argmax over
+a discrete card's 32 GB VRAM, silently dropping the operator
+from a 537× realtime path to a 7× realtime path.  Round 12 #10
+adds an optional 3rd argument to `resolve_vulkan_device_index`:
+
+```cpp
+int resolve_vulkan_device_index(int requested,
+                                const std::vector<size_t> & free_vram_per_device,
+                                const std::vector<bool> & is_uma_per_device = {});
+```
+
+Empty `is_uma_per_device` (default) → round-3 behaviour preserved
+verbatim.  Non-empty + at least one discrete device → argmax
+over the DISCRETE subset.  All-UMA falls back to round-3 argmax.
+Explicit `requested >= 0` passthrough is UMA-agnostic.
+
+Caller wiring (in `init_supertonic_backend`) collects per-device
+type via the public `ggml_backend_dev_get_props()` API on
+`ggml_backend_vk_reg()` — sets `is_uma = true` for
+`GGML_BACKEND_DEVICE_TYPE_IGPU` / `_CPU` / `_ACCEL`.  Defensive:
+falls back to empty list if the reg / dev_get_props pair fails
+(e.g. future ggml-vulkan refactor changes the enumeration).
+
+`test_supertonic_vulkan_device_select.cpp` extended with **14
+new checks** covering the round-12 behaviour matrix (5 new
+test functions + a 9th case in the existing function).
+
+#### #6 — Text-encoder speech-prompted-attention GPU bridge
+
+Master's Metal-port branch (PR #15) shipped a fully-built
+`speech_prompted_merged_cache` graph in
+`supertonic_text_encoder.cpp` (one ggml graph for QKV projection
++ head-split + flash-attn + out-proj end-to-end on GPU) but
+never wired its run path.  Production text-encoder stayed on
+the pre-Phase-A4 two-cache pattern with host-side Q/V download
+→ pack → re-upload between the QKV cache and the flash-attn
+cache.  Round 12 #6 adds `run_speech_prompted_merged_cache` +
+the dispatch:
+
+```cpp
+void speech_prompted_attention_ggml(const supertonic_model & m, int idx, ...) {
+    if (!model_prefers_cpu_kernels(m)) {
+        thread_local speech_prompted_merged_cache merged_caches[2];
+        // rebuild on key change, then:
+        run_speech_prompted_merged_cache(merged, m, x_lc, L, style_ttl, out_lc);
+        return;
+    }
+    // ... legacy two-cache CPU path unchanged
+}
+```
+
+Per call savings (vs. two-cache):
+- 2 GPU→host downloads (q_out, v_out) → 0
+- 3 host→GPU uploads (q_pack, k_pack, v_pack) → 0
+- 1 fewer graph dispatch
+- All host pack work (q_pack / k_pack / v_pack head-split) eliminated
+
+= **5 sync points × 2 layers per synth = 10 sync points / synth**
+removed at the text encoder alone.  Combined with the
+significantly faster prewarm (fewer graphs to compile on cold
+start: 328 ms → 21 ms), this is the bigger of the two wins for
+operators noticing first-synth latency.
+
+CPU stays on the legacy path: master's `dense_matmul_time_ggml`
+CPU fast path uses cblas + the host-side head-split is a free
+memcpy; switching CPU to the merged path would pull the matmul
+through the slower ggml conv1d fallback and gain nothing
+(no sync points exist on CPU).
+
+`test_supertonic_text_encoder_gpu_bridge.cpp` (NEW) pins the
+`run_speech_prompted_merged_cache` symbol + the
+`speech_prompted_merged_cache` struct's field contract via
+SFINAE + a runtime free-default-cache trip-wire.  End-to-end
+equivalence vs. the legacy two-cache path verified by the
+existing model-fixture parity tests.
+
+#### #5 — Pinned-host-buffer per-step input scratchpad
+
+Round 3 shipped the capability probe
+`supertonic_backend_supports_pinned_host_buffer`, which returns
+`true` iff `ggml_backend_vk_host_buffer_type()` is non-null on
+the resolved backend.  The actual per-engine input-scratchpad
+refactor was deferred.  Round 12 #5 lands the helper:
+
+```cpp
+ggml_backend_buffer_t try_alloc_inputs_in_pinned_host_buffer(
+    const supertonic_model & model,
+    ggml_context * input_ctx);
+```
+
+And applies it via a dual-context allocation pattern at the
+two highest-frequency per-step input sites:
+
+- `vector_group_graph_cache`: x_in + temb_in (× 3 group caches
+  for g1/g2/g3) — 6 hot per-step tensors total.
+- `ve_front_block_graph_cache`: x_in + mask_in + t_emb_in —
+  3 hot per-step tensors.
+
+Total: **9 per-step input tensors moved to host-pinned memory**.
+Each `ggml_backend_tensor_set` on these tensors skips one
+internal staging-buffer hop on Vulkan because they live in BAR-
+mapped GPU memory directly.
+
+Dual-context pattern:
+```cpp
+// In cache struct: separate input_ctx + input_buf
+std::vector<uint8_t> input_ctx_storage;
+ggml_context * input_ctx = nullptr;
+ggml_backend_buffer_t input_buf = nullptr;
+
+// In build:
+//   1. Create input_ctx (no_alloc=true) with ~8 tensor-overhead slots.
+//   2. Create x_in / temb_in / mask_in / t_emb_in in input_ctx.
+//   3. Try host-pinned alloc → fall back to default backend buffer.
+//   4. Build the rest of the graph in cache.ctx (intermediates,
+//      outputs); gallocr handles those, skipping the pre-allocated
+//      input tensors via the `tensor->buffer != nullptr` check.
+// In free:
+//   Order matters: gallocr → main ctx → input_buf → input_ctx.
+//   Reversed order would dangle gallocr pointers into freed input
+//   tensor metadata.
+```
+
+CPU / Metal / OpenCL / future-backend safety: `try_alloc_*`
+returns `nullptr` when the backend doesn't expose
+`ggml_backend_vk_host_buffer_type()`, and callers fall back to
+`ggml_backend_alloc_ctx_tensors(input_ctx, backend)` — same
+memory, just one staging hop per upload.  Identical CPU
+behaviour to pre-round-12; only Vulkan gains.
+
+`test_supertonic_pinned_host_buffer.cpp` (NEW) pins:
+- Symbol existence (SFINAE).
+- `nullptr` return on CPU backend (idempotent across repeat calls).
+- Null-pointer safety on null `model.backend` / null `input_ctx`.
+
+11 / 11 CPU-only checks pass.
+
+#### Combined perf snapshot — RTX 5090 (round 12 cumulative)
+
+Long-prompt bench (173 chars, ~15 s of audio output):
+
+```
+Pre-round-12 baseline (round 11 tip):
+  total                  med= 76.11  ms   (123× realtime)
+  text_encoder           med=  4.85  ms
+  vector_estimator       med= 63.58  ms / 5 = 12.7 ms/step
+  prewarm cold-start:    ~330 ms
+
+Post-round-12 (round 12 #5 + #6 + #10 wired):
+  total                  med= 27.99  ms   (537× realtime)  ← 2.7× faster
+  text_encoder           med=  4.95  ms   (merged-cache wired)
+  vector_estimator       med= 16.39  ms / 5 = 3.28 ms/step ← 3.9× faster per step
+  prewarm cold-start:    ~21 ms                             ← 15× faster cold start
+```
+
+Short-prompt bench (Hello-world class, ~3 s audio):
+
+```
+Pre-round-12 (round 11 tip):  44.08 ms / 74× realtime
+Post-round-12:                23.31 ms / 394× realtime   ← 1.9× faster
+```
+
+Auto-pick verification on hybrid rig (RTX 5090 + AMD RADV iGPU):
+
+```
+Pre-round-12 `--vulkan-device -1`: picks RADV (Vulkan1)  → 178 ms total, 7× realtime
+Post-round-12 `--vulkan-device -1`: picks RTX 5090 (Vulkan0) → 28 ms total, 537× realtime
+                                                              ↑ 6.4× faster for users
+                                                              who follow the help text
+```
+
+#### Test plan (round 12)
+
+```bash
+cmake -S tts-cpp -B tts-cpp/build -DTTS_CPP_USE_SYSTEM_GGML=OFF
+cmake --build tts-cpp/build -j
+ctest --test-dir tts-cpp/build -L unit --output-on-failure
+# → 24 / 24 PASS (was 22; +1 text-encoder-gpu-bridge, +1 pinned-host-buffer)
+
+cmake -S tts-cpp -B tts-cpp/build-vulkan -DTTS_CPP_USE_SYSTEM_GGML=OFF -DGGML_VULKAN=ON
+cmake --build tts-cpp/build-vulkan -j
+ctest --test-dir tts-cpp/build-vulkan -L unit --output-on-failure
+# → 24 / 24 PASS
+```
+
+End-to-end synth verified on all 4 backends (CPU, Vulkan RTX
+5090, Vulkan RADV iGPU, Vulkan Mesa lavapipe) — every adapter
+writes a valid WAV.  Zero regressions from rounds 1-11.
+
+---
+
 ## Remaining Work
 
 ### Runtime and performance

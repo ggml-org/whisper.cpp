@@ -624,6 +624,83 @@ bool supertonic_text_encoder_forward_ggml(const supertonic_model & model,
                                           std::vector<float> & text_emb_out,
                                           std::string * error = nullptr);
 
+// QVAC-18605 round 12 #6 — text-encoder speech-prompted-attention
+// GPU bridge.
+//
+// Master's Metal-port branch (PR #15) shipped a fully-built
+// `speech_prompted_merged_cache` graph in
+// `supertonic_text_encoder.cpp` — one ggml graph that does QKV
+// projection + head-split + flash-attn + out-proj end-to-end on
+// the GPU.  The graph builder
+// (`build_speech_prompted_merged_cache`) was present + reviewed
+// at the implementation level but the run path was never wired
+// in.  So the production text-encoder path stayed on the pre-
+// Phase-A4 two-cache pattern with host-side Q/V download →
+// pack → re-upload between the QKV cache and the flash-attn
+// cache (5 sync points × 2 layers per synth).
+//
+// Round 12 adds `run_speech_prompted_merged_cache` and switches
+// the dispatch in `speech_prompted_attention_ggml` to use it on
+// non-CPU backends.  CPU stays on the legacy two-cache path
+// because that path leans on the host BLAS fast path for the
+// QKV matmuls and downstream scalar code keeps the host-side
+// head-split as a free-ish memcpy.  Saves 10 sync points /
+// synth on Vulkan / OpenCL / Metal.
+//
+// Struct + helpers exposed via the header so a CPU-only unit
+// test can SFINAE-pin the field contract + free-default
+// destructor without dragging the whole text-encoder TU into
+// the test binary.
+struct speech_prompted_merged_cache {
+    const supertonic_model * model = nullptr;
+    uint64_t generation_id = 0;
+    int idx = -1;
+    int L = 0;
+    int Lctx = 0;
+    std::string out_w_source;
+    std::string out_b_source;
+    std::vector<uint8_t> buf;
+    ggml_context * ctx = nullptr;
+    ggml_cgraph * gf = nullptr;
+    ggml_gallocr_t allocr = nullptr;
+    ggml_tensor * x_in = nullptr;       // ne=[L, C], channel-major-flat memory
+    ggml_tensor * style_in = nullptr;   // ne=[Lctx, C], same memory layout
+    ggml_tensor * out = nullptr;        // ne=[L, C] result, channel-major-flat
+};
+
+void free_speech_prompted_merged_cache(speech_prompted_merged_cache & cache);
+
+void build_speech_prompted_merged_cache(speech_prompted_merged_cache & cache,
+                                        const supertonic_model & m,
+                                        int idx,
+                                        int L,
+                                        int Lctx,
+                                        const std::string & q_w_source,
+                                        const std::string & v_w_source,
+                                        const std::string & out_w_source,
+                                        const std::string & out_b_source,
+                                        const std::string & tanh_k_source,
+                                        const std::string & q_b_source,
+                                        const std::string & v_b_source);
+
+// Round 12: run the merged graph once with the given host-side
+// `x_lc` / `style_ttl` inputs.  Caller MUST have ensured the
+// cache is built (`build_speech_prompted_merged_cache`) AND keyed
+// against the current `(model, idx, L, Lctx)`.  This is the
+// drop-in replacement for the legacy two-cache path inside
+// `speech_prompted_attention_ggml` — same input / output
+// conventions (`x_lc`, `out_lc` are time-major-flat `[t*C + c]`).
+//
+// `style_ttl` is also time-major-flat (`style_ttl[t*C + c]`),
+// matching the layout `speech_prompted_attention_ggml`'s caller
+// in `supertonic_text_encoder_forward_ggml` passes.
+void run_speech_prompted_merged_cache(speech_prompted_merged_cache & cache,
+                                       const supertonic_model & m,
+                                       const std::vector<float> & x_lc,
+                                       int L,
+                                       const float * style_ttl,
+                                       std::vector<float> & out_lc);
+
 bool supertonic_text_encoder_trace_ggml(const supertonic_model & model,
                                         const int64_t * text_ids,
                                         int text_len,
@@ -998,6 +1075,45 @@ bool supertonic_backend_supports_bf16_kv_flash_attn(ggml_backend_t backend);
 // device-local buffer.
 bool supertonic_backend_supports_pinned_host_buffer(ggml_backend_t backend);
 
+// QVAC-18605 round 12 #5 — pinned-host-buffer input allocator.
+//
+// Round 3 shipped the capability probe; round 12 lands the actual
+// per-engine input-scratchpad refactor.  Callers create a small
+// `ggml_context` (with `no_alloc=true`) containing ONLY the hot
+// per-step input tensors (front-block `x_in` / `mask_in` /
+// `t_emb_in`, group-cache `x_in` / `temb_in`, etc.) and pass it
+// here.  On Vulkan (where `ggml_backend_vk_host_buffer_type()`
+// returns non-null) the helper allocates a buffer from the
+// host-pinned buft and binds every tensor in `input_ctx` to it
+// — `ggml_backend_tensor_set` then writes from the host's heap
+// directly into BAR-mapped GPU memory without an intermediate
+// staging-buffer copy.
+//
+// Return contract:
+//   - `nullptr` if `model.backend == nullptr`, `input_ctx == nullptr`,
+//     or the backend doesn't expose `ggml_backend_vk_host_buffer_type()`.
+//     Caller falls back to letting `ggml_gallocr_alloc_graph`
+//     handle the input tensors via the default buffer type —
+//     correct, just one staging-buffer hop per upload.
+//   - Otherwise the returned `ggml_backend_buffer_t` is OWNED by
+//     the caller.  Free at cache destruction with
+//     `ggml_backend_buffer_free(buf)`.
+//
+// On Vulkan adapters that expose a host-coherent BAR-mapped pool
+// (every modern discrete + every UMA iGPU), this skips one
+// memcpy per `ggml_backend_tensor_set` on the bound tensors.
+// Per synth at the 4 attention-feeding caches × 3 small per-step
+// inputs × 5 denoise steps ≈ 60 staging-hops saved.  Each hop
+// is ~5–15 us on the dev rig; aggregate ~0.3–1 ms / synth.
+//
+// CPU-only test (`test_supertonic_pinned_host_buffer.cpp`) pins
+// the symbol + the conservative `nullptr` return contract on
+// CPU backend + null-input safety in error paths.  End-to-end
+// behaviour validated by Vulkan synth + bench on real hardware.
+ggml_backend_buffer_t try_alloc_inputs_in_pinned_host_buffer(
+    const supertonic_model & model,
+    ggml_context * input_ctx);
+
 // QVAC-18605 round 3 — multi-device Vulkan auto-pick policy.
 //
 // `init_supertonic_backend` calls `ggml_backend_vk_get_device_count()`
@@ -1027,8 +1143,37 @@ bool supertonic_backend_supports_pinned_host_buffer(ggml_backend_t backend);
 // produce stable per-run device assignment instead of depending
 // on driver enumeration order.  Operators who need a different
 // policy can `--vulkan-device N` explicitly.
+//
+// QVAC-18605 round 12 — `is_uma_per_device` (optional 3rd arg)
+// biases the auto-pick against UMA / iGPU devices when a
+// discrete device is also present.  Background: on hybrid
+// machines (NVIDIA RTX 5090 discrete + AMD RADV iGPU, or
+// similar), `ggml_backend_vk_get_device_memory()` reports the
+// iGPU's free pool as system RAM (often 120+ GB) because UMA
+// shares the host RAM with the CPU.  The round-3 argmax then
+// picks the iGPU, silently dropping ~40× realtime on synth
+// throughput vs. the discrete card.
+//
+// New policy (when `is_uma_per_device.size() == free_vram_per_device.size()`):
+//
+//   1. If at least one device has `is_uma_per_device[i] == false`,
+//      run argmax(free_vram) over the DISCRETE subset only.
+//   2. Otherwise (all UMA) fall back to argmax over all devices.
+//   3. Explicit `requested >= 0` passthrough is UMA-agnostic
+//      (operator-pinned index always wins).
+//
+// `is_uma_per_device` is OPTIONAL — empty list (default) means
+// "no UMA flags available, use round-3 policy".  Mismatched-
+// length non-empty lists throw (caller bug guard).
+//
+// Caller wiring lives in `init_supertonic_backend`: query
+// `ggml_backend_vk_get_device_type()` per device, set the bool
+// to `true` for `IntegratedGpu` / `Cpu` / `Other` types.  Pure
+// logic, no Vulkan symbols touched here — same split pattern
+// as the round-3 free-VRAM list.
 int resolve_vulkan_device_index(int requested,
-                                const std::vector<size_t> & free_vram_per_device);
+                                const std::vector<size_t> & free_vram_per_device,
+                                const std::vector<bool> & is_uma_per_device = {});
 
 // QVAC-18605 follow-up — test seams for the capability cache.
 // `supertonic_clear_capability_cache` drops every cached entry so

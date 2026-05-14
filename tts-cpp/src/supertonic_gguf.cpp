@@ -271,6 +271,38 @@ ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose, int vulka
         } else {
             std::vector<size_t> free_vram_per_device;
             free_vram_per_device.reserve((size_t) dev_count);
+            // QVAC-18605 round 12 — collect per-device UMA / iGPU
+            // flags via the public `ggml_backend_dev_get_props()`
+            // API.  Routed through the Vulkan backend registry
+            // (`ggml_backend_vk_reg()`) so the order matches
+            // `ggml_backend_vk_get_device_count()` 1:1.  On a hybrid
+            // discrete + iGPU machine this turns the round-3 argmax
+            // into "argmax over the discrete subset" — the iGPU's
+            // UMA-reported free RAM no longer dwarfs the discrete's
+            // 32 GB and silently steals the auto-pick.
+            //
+            // Defensive: if the reg / dev_get_props pair fails for
+            // any reason (e.g. a future ggml-vulkan refactor that
+            // changes the reg's enumeration count), fall through
+            // to an empty UMA list — `resolve_vulkan_device_index`
+            // then degrades to the round-3 policy (loud per-device
+            // dump still tells the operator what was visible).
+            std::vector<bool> is_uma_per_device;
+            ggml_backend_reg_t vk_reg = ggml_backend_vk_reg();
+            const size_t reg_dev_count = vk_reg ? ggml_backend_reg_dev_count(vk_reg) : 0;
+            if (vk_reg && (int) reg_dev_count == dev_count) {
+                is_uma_per_device.reserve((size_t) dev_count);
+                for (int i = 0; i < dev_count; ++i) {
+                    ggml_backend_dev_t dev = ggml_backend_reg_dev_get(vk_reg, (size_t) i);
+                    struct ggml_backend_dev_props props = {};
+                    if (dev) ggml_backend_dev_get_props(dev, &props);
+                    const bool uma =
+                        props.type == GGML_BACKEND_DEVICE_TYPE_IGPU ||
+                        props.type == GGML_BACKEND_DEVICE_TYPE_CPU ||
+                        props.type == GGML_BACKEND_DEVICE_TYPE_ACCEL;
+                    is_uma_per_device.push_back(uma);
+                }
+            }
             for (int i = 0; i < dev_count; ++i) {
                 size_t free = 0, total = 0;
                 ggml_backend_vk_get_device_memory(i, &free, &total);
@@ -278,26 +310,50 @@ ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose, int vulka
                 if (verbose && vulkan_device == -1) {
                     char desc[256] = {0};
                     ggml_backend_vk_get_device_description(i, desc, sizeof(desc) - 1);
+                    const char * uma_tag = "";
+                    if (!is_uma_per_device.empty() && is_uma_per_device[(size_t) i]) {
+                        uma_tag = " [UMA — biased against on hybrid machines]";
+                    }
                     fprintf(stderr,
-                            "supertonic: vulkan device %d: %s — free %.0f MB / total %.0f MB\n",
+                            "supertonic: vulkan device %d: %s — free %.0f MB / total %.0f MB%s\n",
                             i,
                             desc[0] ? desc : "unknown",
                             (double) free  / (1024.0 * 1024.0),
-                            (double) total / (1024.0 * 1024.0));
+                            (double) total / (1024.0 * 1024.0),
+                            uma_tag);
                 }
             }
             // Throws on invalid input; let it propagate so the CLI
             // surfaces the message verbatim.
-            const int idx = resolve_vulkan_device_index(vulkan_device, free_vram_per_device);
+            const int idx = resolve_vulkan_device_index(vulkan_device,
+                                                        free_vram_per_device,
+                                                        is_uma_per_device);
             ggml_backend_t b = ggml_backend_vk_init((size_t) idx);
             if (b) {
                 if (verbose) {
                     char desc[256] = {0};
                     ggml_backend_vk_get_device_description(idx, desc, sizeof(desc) - 1);
                     if (vulkan_device == -1) {
-                        fprintf(stderr,
-                                "supertonic: auto-picked Vulkan device %d (%s) — most free VRAM of %d adapter(s)\n",
-                                idx, desc[0] ? desc : "unknown", dev_count);
+                        // Different message depending on whether the
+                        // UMA bias was applied (i.e., at least one
+                        // discrete device was visible).
+                        bool any_discrete = false;
+                        if (!is_uma_per_device.empty()) {
+                            for (bool u : is_uma_per_device) {
+                                if (!u) { any_discrete = true; break; }
+                            }
+                        }
+                        if (any_discrete) {
+                            fprintf(stderr,
+                                    "supertonic: auto-picked Vulkan device %d (%s) — most free VRAM among %d discrete adapter(s) (round-12 UMA bias)\n",
+                                    idx, desc[0] ? desc : "unknown",
+                                    (int) std::count(is_uma_per_device.begin(),
+                                                     is_uma_per_device.end(), false));
+                        } else {
+                            fprintf(stderr,
+                                    "supertonic: auto-picked Vulkan device %d (%s) — most free VRAM of %d adapter(s)\n",
+                                    idx, desc[0] ? desc : "unknown", dev_count);
+                        }
                     } else {
                         fprintf(stderr, "supertonic: using Vulkan backend (device %d: %s)\n",
                                 idx, desc[0] ? desc : "unknown");
@@ -903,6 +959,68 @@ bool supertonic_backend_supports_pinned_host_buffer(ggml_backend_t backend) {
     return cached_backend_capabilities(backend).pinned_host_buffer;
 }
 
+// QVAC-18605 round 12 #5 — pinned-host-buffer input allocator.
+//
+// Implementation strategy:
+//
+//   1. Defensive null-check (callers in error-handler paths can
+//      hand us a half-constructed model with `.backend == nullptr`
+//      or a stale ctx pointer).  Either case → `nullptr`.
+//
+//   2. Probe-gated dispatch.  We reuse the round-3 capability
+//      probe `supertonic_backend_supports_pinned_host_buffer`
+//      so the wired cache builds can also call the probe
+//      independently (e.g. to decide whether to even create the
+//      input_ctx).  The cache itself is process-wide so the
+//      lookup is constant-time after the first cold miss.
+//
+//   3. `ggml_backend_alloc_ctx_tensors_from_buft(ctx, host_buft)`
+//      walks every tensor in `input_ctx`, allocates one
+//      contiguous buffer from `host_buft` big enough to hold
+//      all of them, and binds each tensor to its slot in that
+//      buffer.  Returns the buffer (owned by caller) or
+//      `nullptr` on alloc failure (e.g. BAR memory exhausted —
+//      rare; caller falls back to gallocr's default-buft path
+//      which uses device memory + staging).
+//
+// On the dev rig (RTX 5090 + 128 GB host RAM), the host buffer
+// for a typical (L=20, text_len=24) synth is ~80 KB total —
+// trivial vs the multi-GB device buffers gallocr would have
+// otherwise produced, but the saving is on the per-step uploads
+// where each `ggml_backend_tensor_set` skips one staging-buffer
+// memcpy on the way to BAR memory.
+ggml_backend_buffer_t try_alloc_inputs_in_pinned_host_buffer(
+    const supertonic_model & model,
+    ggml_context * input_ctx) {
+    if (model.backend == nullptr || input_ctx == nullptr) {
+        return nullptr;
+    }
+    // Probe — bypasses any Vulkan-symbol dependency on backends
+    // that don't ship one (CPU, Metal, OpenCL, accel, BLAS...).
+    if (!supertonic_backend_supports_pinned_host_buffer(model.backend)) {
+        return nullptr;
+    }
+#ifdef GGML_USE_VULKAN
+    ggml_backend_buffer_type_t host_buft = ggml_backend_vk_host_buffer_type();
+    if (host_buft == nullptr) {
+        // Probe said yes but the API now returns null — defensive
+        // race against a backend that lost the capability between
+        // probe and call.  Fall back to nullptr; caller uses
+        // gallocr's default path.
+        return nullptr;
+    }
+    // Allocates one buffer big enough to hold every tensor in
+    // `input_ctx` AND binds each tensor to its slot.  Caller owns
+    // the returned buffer.  Returns nullptr on BAR exhaustion
+    // (extremely rare) — caller falls through.
+    return ggml_backend_alloc_ctx_tensors_from_buft(input_ctx, host_buft);
+#else
+    // No Vulkan compiled in — probe should have already returned
+    // false above.  Belt-and-suspenders.
+    return nullptr;
+#endif
+}
+
 // QVAC-18605 round 3 — multi-device Vulkan auto-pick policy.
 //
 // Pure logic — no Vulkan symbols touched here.  The Vulkan-only
@@ -916,12 +1034,27 @@ bool supertonic_backend_supports_pinned_host_buffer(ggml_backend_t backend) {
 // See the docstring on the declaration in supertonic_internal.h
 // for the behaviour matrix.
 int resolve_vulkan_device_index(int requested,
-                                const std::vector<size_t> & free_vram_per_device) {
+                                const std::vector<size_t> & free_vram_per_device,
+                                const std::vector<bool> & is_uma_per_device) {
     const int dev_count = (int) free_vram_per_device.size();
     if (dev_count <= 0) {
         throw std::runtime_error(
             "supertonic: cannot resolve --vulkan-device against an empty "
             "device list (no Vulkan adapter visible)");
+    }
+    // Round-12 caller-bug guard.  When `is_uma_per_device` is
+    // non-empty its length MUST match `free_vram_per_device`;
+    // otherwise we'd be reading off the end of one of the
+    // vectors below.  Empty (the default) is fine — falls through
+    // to the round-3 policy.
+    if (!is_uma_per_device.empty() &&
+        is_uma_per_device.size() != free_vram_per_device.size()) {
+        throw std::runtime_error(
+            "supertonic: is_uma_per_device.size()=" +
+            std::to_string(is_uma_per_device.size()) +
+            " must equal free_vram_per_device.size()=" +
+            std::to_string(free_vram_per_device.size()) +
+            " when non-empty");
     }
     // Reserved-future negative value — fail loud instead of
     // silently treating as 0 (would mask a CLI typo).
@@ -930,15 +1063,49 @@ int resolve_vulkan_device_index(int requested,
             "supertonic: --vulkan-device " + std::to_string(requested) +
             " is reserved (only -1 means auto-pick)");
     }
-    // Auto-pick: argmax(free VRAM); ties → lower index.  std::max_element
-    // returns the first iterator that compares equal under `<` so the
-    // tie-breaking rule is implicit in the std::less<> default.
+    // Auto-pick.
     if (requested == -1) {
+        // Round-12: when UMA flags are available AND at least
+        // one discrete device exists, restrict the argmax to
+        // the discrete subset.  Discrete-only argmax preserves
+        // round-3's tie-break (lower index) within the subset.
+        //
+        // `is_uma_per_device.empty()` is the round-3 path —
+        // unchanged behaviour for every caller that hasn't yet
+        // wired the UMA flag list.
+        if (!is_uma_per_device.empty()) {
+            bool any_discrete = false;
+            for (bool u : is_uma_per_device) {
+                if (!u) { any_discrete = true; break; }
+            }
+            if (any_discrete) {
+                // argmax over the discrete subset; ties → lower
+                // index.  Manual loop instead of max_element +
+                // predicate because we need the ORIGINAL index
+                // (not the subset's local index).
+                int best_idx = -1;
+                size_t best_free = 0;
+                for (int i = 0; i < dev_count; ++i) {
+                    if (is_uma_per_device[(size_t) i]) continue;
+                    if (best_idx == -1 || free_vram_per_device[(size_t) i] > best_free) {
+                        best_idx  = i;
+                        best_free = free_vram_per_device[(size_t) i];
+                    }
+                }
+                return best_idx;  // can't be -1; any_discrete == true
+            }
+            // Fall through: all-UMA → round-3 argmax over all.
+        }
+        // Round-3 path: argmax(free VRAM); ties → lower index.
+        // std::max_element returns the first iterator that
+        // compares equal under `<` so the tie-breaking rule is
+        // implicit in the std::less<> default.
         const auto it = std::max_element(free_vram_per_device.begin(),
                                          free_vram_per_device.end());
         return (int) std::distance(free_vram_per_device.begin(), it);
     }
-    // Explicit index — range-check.
+    // Explicit index — range-check.  UMA-agnostic (operator-
+    // pinned index always wins, regardless of device type).
     if (requested >= dev_count) {
         throw std::runtime_error(
             "supertonic: --vulkan-device " + std::to_string(requested) +

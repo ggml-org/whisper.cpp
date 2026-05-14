@@ -788,7 +788,14 @@ inline void build_speech_attention_cache(speech_attention_cache & cache,
     ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
 }
 
-// Phase A4: speech_prompted_attention as ONE merged ggml graph.
+} // namespace (close anonymous; below symbols are detail-namespace
+  // scope so the round-12 #6 test can link against them)
+
+// Phase A4 / round-12 #6: speech_prompted_attention as ONE merged
+// ggml graph.  Master's Metal-port branch built the cache + builder
+// but never wired the run path; round 12 adds
+// `run_speech_prompted_merged_cache` and the dispatch in
+// `speech_prompted_attention_ggml` below.
 //
 // Pre-A4 this function built two separate graphs (QKV proj, then
 // flash-attn+out-proj) with host-side q_pack/v_pack/k_pack head-split
@@ -797,25 +804,16 @@ inline void build_speech_attention_cache(speech_attention_cache & cache,
 // where it's free), feeds straight into flash_attn, and runs the out
 // projection — all in one `ggml_backend_graph_compute` call.
 //
-// Per call savings: 1 graph dispatch (one fewer command buffer) +
-// host-side pack work (3 round-trips of q/v/k_pack data eliminated).
-// Two calls per synth = 2 dispatches saved.
-struct speech_prompted_merged_cache {
-    const supertonic_model * model = nullptr;
-    uint64_t generation_id = 0;
-    int idx = -1;
-    int L = 0;
-    int Lctx = 0;
-    std::string out_w_source;
-    std::string out_b_source;
-    std::vector<uint8_t> buf;
-    ggml_context * ctx = nullptr;
-    ggml_cgraph * gf = nullptr;
-    ggml_gallocr_t allocr = nullptr;
-    ggml_tensor * x_in = nullptr;       // [L, C]
-    ggml_tensor * style_in = nullptr;   // [Lctx, C]
-    ggml_tensor * out = nullptr;        // [L, C] result
-};
+// Per call savings (vs. legacy two-cache path):
+//   - 2 GPU→host downloads (q_out, v_out) → 0
+//   - 3 host→GPU uploads (q_pack, k_pack, v_pack) → 0
+//   - 1 fewer graph dispatch (one fewer command buffer)
+//   - host-side pack work eliminated entirely.
+// = 5 sync points saved per call × 2 layers = 10 sync points / synth.
+//
+// Struct + free + build are at detail-namespace scope (not
+// anonymous) so the round-12 CPU-only unit test can SFINAE-pin
+// the field contract.  Forward-declared in supertonic_internal.h.
 
 void free_speech_prompted_merged_cache(speech_prompted_merged_cache & cache) {
     supertonic_safe_gallocr_free(cache.allocr, cache.generation_id);
@@ -905,6 +903,84 @@ void build_speech_prompted_merged_cache(speech_prompted_merged_cache & cache,
     ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
 }
 
+// QVAC-18605 round 12 #6 — run path for the merged graph.
+//
+// Drop-in replacement for the legacy two-cache code path inside
+// `speech_prompted_attention_ggml`.  Caller is responsible for
+// keying the cache against `(model, idx, L, Lctx)` and rebuilding
+// on miss; this function assumes the cache is built + bound to
+// the backend in `m.backend`.
+//
+// Upload contract (matches `pack_time_channel_for_ggml`'s output):
+//   - `x_lc` is time-major-flat `x_lc[t*C + c]`.  We pack it once
+//     into channel-major-flat memory (`out[c*L + t]`) before
+//     uploading to `cache.x_in` (ne=[L, C], natural strides).
+//   - `style_ttl` is also time-major-flat; same packing.
+//
+// Download contract:
+//   - `cache.out` is ne=[L, C] channel-major-flat memory (matches
+//     master's `dense_matmul_time_ggml` output convention).
+//     `tensor_to_time_channel` flattens to time-major-flat
+//     `out_lc[t*C + c]` — same layout the caller in
+//     `supertonic_text_encoder_forward_ggml` expects from the
+//     pre-round-12 path.
+//
+// Compute cost (vs. legacy two-cache):
+//   + 1 cache-rebuild check (free) - already amortised once / synth.
+//   + 1 host pack of x_lc → x_raw (free; same memcpy size as legacy
+//     speech_prompted_attention_ggml does for its own QKV cache
+//     upload at line 1003).
+//   + 1 host pack of style_tc → style_raw (free; same as legacy).
+//   + 1 host→GPU upload each for x_in / style_in (same as legacy).
+//   + 1 graph dispatch.
+//   + 1 GPU→host download of cache.out.
+//   - 2 fewer host→GPU uploads (no q_pack / v_pack / k_pack since
+//     they're computed in-graph).
+//   - 2 fewer GPU→host downloads (no q_out / v_out).
+//   - 1 fewer graph dispatch (one merged graph instead of two
+//     separate qkv + flash-attn graphs).
+//   - All host pack work for q_pack / k_pack / v_pack eliminated
+//     (which scaled with L × head_dim × n_heads — the worst
+//     offender on long prompts).
+void run_speech_prompted_merged_cache(speech_prompted_merged_cache & cache,
+                                       const supertonic_model & m,
+                                       const std::vector<float> & x_lc,
+                                       int L,
+                                       const float * style_ttl,
+                                       std::vector<float> & out_lc) {
+    (void) m; // referenced via cache.model invariant; kept in the
+              // signature to match the legacy
+              // `speech_prompted_attention_ggml(...)` shape.
+    const int C = 256;
+    const int Lctx = 50;
+    if (cache.ctx == nullptr || cache.gf == nullptr ||
+        cache.x_in == nullptr || cache.style_in == nullptr ||
+        cache.out == nullptr) {
+        throw std::runtime_error(
+            "run_speech_prompted_merged_cache: cache not built");
+    }
+    if (cache.L != L || cache.Lctx != Lctx) {
+        throw std::runtime_error(
+            "run_speech_prompted_merged_cache: cache key mismatch "
+            "(L/Lctx don't match the built graph)");
+    }
+    std::vector<float> x_raw = pack_time_channel_for_ggml(x_lc, L, C);
+    std::vector<float> style_tc((size_t) Lctx * C);
+    for (int t = 0; t < Lctx; ++t) {
+        for (int c = 0; c < C; ++c) {
+            style_tc[(size_t) t * C + c] = style_ttl[(size_t) t * C + c];
+        }
+    }
+    std::vector<float> style_raw = pack_time_channel_for_ggml(style_tc, Lctx, C);
+    ggml_backend_tensor_set(cache.x_in,     x_raw.data(),     0, x_raw.size()     * sizeof(float));
+    ggml_backend_tensor_set(cache.style_in, style_raw.data(), 0, style_raw.size() * sizeof(float));
+    std::string island = "speech" + std::to_string(cache.idx) + "_merged";
+    profile_text_compute(*cache.model, cache.gf, island.c_str());
+    out_lc = tensor_to_time_channel(cache.out);
+}
+
+namespace { // re-open anonymous namespace for the rest of the TU
+
 // F14 — cached speech-prompted attention QKV graph.
 //
 // Pre-audit, `speech_prompted_attention_ggml` allocated a fresh
@@ -939,12 +1015,45 @@ void speech_prompted_attention_ggml(const supertonic_model & m, int idx,
     const int C = 256;
     const int half = 128;
     const int Lctx = 50;
+    if (idx < 0 || idx >= 2) throw std::runtime_error("invalid speech attention idx");
     const int attn_num = idx + 1;
     const std::string p = "text_encoder:tts.ttl.speech_prompted_text_encoder.attention" + std::to_string(attn_num);
     const std::string q_w = "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3678" : "onnx::MatMul_3682");
     const std::string v_w = "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3680" : "onnx::MatMul_3684");
     const std::string o_w = "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3681" : "onnx::MatMul_3685");
     const std::string tanh_k_src = "text_encoder:/speech_prompted_text_encoder/attention" + std::to_string(attn_num) + "/tanh/Tanh_output_0";
+
+    // QVAC-18605 round 12 #6 — merged-cache fast path on non-CPU
+    // backends.  Eliminates 5 sync points (2 GPU→host downloads +
+    // 3 host→GPU uploads) and all host-side Q/V/K head-split pack
+    // work per call.  Two layers per synth = 10 sync points / synth
+    // saved at the text encoder.
+    //
+    // CPU stays on the legacy two-cache path: master's
+    // `dense_matmul_time_ggml` CPU fast path uses cblas via the
+    // custom-op dispatch, and the host-side head-split is a free
+    // memcpy.  Switching CPU to the merged path would pull the
+    // matmul through the ggml conv1d fallback (slower on x86) and
+    // gain nothing — sync points don't exist on CPU.
+    if (!model_prefers_cpu_kernels(m)) {
+        thread_local speech_prompted_merged_cache merged_caches[2];
+        speech_prompted_merged_cache & merged = merged_caches[idx];
+        if (merged.model != &m || merged.generation_id != m.generation_id ||
+            merged.idx != idx || merged.L != L || merged.Lctx != Lctx ||
+            merged.out_w_source != o_w) {
+            build_speech_prompted_merged_cache(merged, m, idx, L, Lctx,
+                                                /*q_w_source=*/q_w,
+                                                /*v_w_source=*/v_w,
+                                                /*out_w_source=*/o_w,
+                                                /*out_b_source=*/p + ".out_fc.linear.bias",
+                                                /*tanh_k_source=*/tanh_k_src,
+                                                /*q_b_source=*/p + ".W_query.linear.bias",
+                                                /*v_b_source=*/p + ".W_value.linear.bias");
+        }
+        run_speech_prompted_merged_cache(merged, m, x_lc, L, style_ttl, out_lc);
+        return;
+    }
+
     (void) tanh_k_src; // master's path uses model.speech_tanh_k_cache; tanh_k_src kept for symbolic parity with read_f32 fallback below.
 
     // F14: per-(model, idx, L) cached QKV graph.  Two thread-local
@@ -952,7 +1061,8 @@ void speech_prompted_attention_ggml(const supertonic_model & m, int idx,
     // shared cache key.  The inner flash-attention graph is still
     // cached separately in `speech_attention_cache` below.
     thread_local speech_qkv_graph_cache qkv_caches[2];
-    if (idx < 0 || idx >= 2) throw std::runtime_error("invalid speech attention idx");
+    // idx already range-checked at the top of the function (round-12
+    // dispatch needed it for the merged-cache thread_local array).
     speech_qkv_graph_cache & qkv_cache = qkv_caches[idx];
     if (qkv_cache.model != &m || qkv_cache.generation_id != m.generation_id ||
         qkv_cache.idx != idx || qkv_cache.L != L) {

@@ -876,6 +876,43 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-upload-skip-tracker)
     tts_cpp_register_test(test-supertonic-upload-skip-tracker LABEL "unit")
 
+    # QVAC-18605 round 12 #6 — text-encoder speech-prompted-attention
+    # GPU bridge.  Master's Metal-port branch built
+    # `speech_prompted_merged_cache` (one merged graph for QKV proj +
+    # head-split + flash-attn + out-proj) but never wired its run path
+    # into the production text-encoder loop.  Round 12 adds
+    # `run_speech_prompted_merged_cache` + dispatches to it on non-CPU
+    # backends, eliminating 10 sync points / synth (2 layers × 5
+    # download+pack+reupload steps each) at the text encoder.  This
+    # test pins the new symbol's existence + the merged-cache struct's
+    # field contract via SFINAE; equivalence vs. the scalar reference
+    # is verified end-to-end by the model-fixture tests
+    # `test-supertonic-text-encoder-trace` + `test-supertonic-pipeline`.
+    add_executable(test-supertonic-text-encoder-gpu-bridge
+        test/test_supertonic_text_encoder_gpu_bridge.cpp)
+    target_link_libraries(test-supertonic-text-encoder-gpu-bridge PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-text-encoder-gpu-bridge PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-text-encoder-gpu-bridge)
+    tts_cpp_register_test(test-supertonic-text-encoder-gpu-bridge LABEL "unit")
+
+    # QVAC-18605 round 12 #5 — pinned-host-buffer input allocation
+    # helper.  Round 3 shipped the capability probe but deferred the
+    # per-engine input-scratchpad refactor that actually USES the
+    # host-pinned buffer to skip ggml-vulkan's internal staging-
+    # buffer hop.  Round 12 #5 lands `try_alloc_inputs_in_pinned_host_buffer`
+    # and applies it at the hot per-step input sites
+    # (vector_group_graph_cache + ve_front_block_graph_cache).
+    # The CPU-only test pins the symbol's existence + the
+    # `nullptr` return contract on CPU backend + idempotent
+    # repeat calls + null-pointer safety on null backend / null
+    # ctx (defensive failure modes in error-handler paths).
+    add_executable(test-supertonic-pinned-host-buffer
+        test/test_supertonic_pinned_host_buffer.cpp)
+    target_link_libraries(test-supertonic-pinned-host-buffer PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-pinned-host-buffer PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-pinned-host-buffer)
+    tts_cpp_register_test(test-supertonic-pinned-host-buffer LABEL "unit")
+
     add_executable(test-supertonic-f16-attn-parity
         test/test_supertonic_f16_attn_parity.cpp)
     target_link_libraries(test-supertonic-f16-attn-parity PRIVATE ggml)

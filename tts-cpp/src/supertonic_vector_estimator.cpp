@@ -1248,6 +1248,25 @@ struct vector_group_graph_cache {
     ggml_context * ctx = nullptr;
     ggml_cgraph * gf = nullptr;
     ggml_gallocr_t allocr = nullptr;
+    // QVAC-18605 round 12 #5 — host-pinned input scratchpad.
+    // Holds ONLY `x_in` + `temb_in` (the two hot per-step inputs
+    // uploaded fresh every denoise step).  On Vulkan, allocated
+    // via `try_alloc_inputs_in_pinned_host_buffer` which returns
+    // a buffer from `ggml_backend_vk_host_buffer_type()` — every
+    // `ggml_backend_tensor_set(x_in, ...)` skips one staging-
+    // buffer hop on the way to BAR-mapped GPU memory.  On CPU
+    // / Metal / OpenCL (no host buffer type) the helper returns
+    // nullptr and we fall back to allocating the same tensors
+    // via `ggml_backend_alloc_ctx_tensors(input_ctx, backend)`
+    // — same memory, just one staging hop per upload.
+    //
+    // `text_in` stays in the main `ctx` (gallocr handles it)
+    // because it's upload-skipped by the round-10 tracker on
+    // steps 1..N-1; the marginal staging-hop saving doesn't
+    // amortise across the cold-miss / fast-path mix.
+    std::vector<uint8_t> input_ctx_storage;
+    ggml_context * input_ctx = nullptr;
+    ggml_backend_buffer_t input_buf = nullptr;
     ggml_tensor * x_in = nullptr;
     ggml_tensor * temb_in = nullptr;
     ggml_tensor * text_in = nullptr;
@@ -1280,7 +1299,18 @@ struct vector_group_graph_cache {
 
 void free_group_graph_cache(vector_group_graph_cache & cache) {
     supertonic_safe_gallocr_free(cache.allocr, cache.generation_id);
+    // QVAC-18605 round 12 #5 — tear down the host-pinned input
+    // scratchpad.  Order matters: free the gallocr first (it
+    // owns buffers for the main-ctx tensors), then the main
+    // ctx (which holds the graph metadata referencing x_in /
+    // temb_in pointers from `input_ctx`), then the input
+    // buffer (drops the host-pinned pages), then the input
+    // ctx (drops the tensor metadata).  Freeing input_ctx
+    // BEFORE the gallocr would leave the gallocr with
+    // dangling pointers to tensors that no longer exist.
     if (cache.ctx) ggml_free(cache.ctx);
+    if (cache.input_buf) ggml_backend_buffer_free(cache.input_buf);
+    if (cache.input_ctx) ggml_free(cache.input_ctx);
     cache = {};
 }
 
@@ -1340,10 +1370,52 @@ void build_group_graph_cache(vector_group_graph_cache & cache,
     // `dense_matmul_time_ggml` builders already consume.  See
     // `supertonic_internal.h::transpose_time_channel_ggml` for
     // the bit-exact equivalence proof against the host pack.
-    cache.x_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, C, L);
-    ggml_set_name(cache.x_in, "vector_group_in_tc"); ggml_set_input(cache.x_in);
-    cache.temb_in = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_F32, 64);
-    ggml_set_name(cache.temb_in, "vector_group_temb"); ggml_set_input(cache.temb_in);
+    //
+    // QVAC-18605 round 12 #5 — `x_in` + `temb_in` live in a
+    // SEPARATE ggml_context (`cache.input_ctx`) so they can be
+    // allocated from `ggml_backend_vk_host_buffer_type()` on
+    // Vulkan and skip the staging-buffer hop on every per-step
+    // `ggml_backend_tensor_set`.  Graph tensors in `cache.ctx`
+    // reference these by pointer (ggml stores tensors as `void *`
+    // in the graph regardless of which context allocated them);
+    // gallocr's `ggml_gallocr_reserve` + `ggml_gallocr_alloc_graph`
+    // skips tensors that already have a `tensor->buffer` set, so
+    // pre-binding them in the host buffer doesn't interfere with
+    // gallocr's allocation pass for the intermediates + outputs.
+    //
+    // `text_in` STAYS in `cache.ctx` because the round-10
+    // upload-skip tracker means steps 1..N-1 don't upload at
+    // all; the marginal staging-hop saving for the single cold-
+    // miss step doesn't amortise.
+    {
+        // 8 tensor slots is well over what's needed (2 inputs);
+        // padded so future round-12 follow-ups can add more
+        // host-pinned inputs without re-tuning the size.
+        const size_t INPUT_OVERHEAD = ggml_tensor_overhead() * 8;
+        cache.input_ctx_storage.assign(INPUT_OVERHEAD, 0);
+        ggml_init_params input_p = { INPUT_OVERHEAD, cache.input_ctx_storage.data(), /*no_alloc=*/true };
+        cache.input_ctx = ggml_init(input_p);
+        cache.x_in = ggml_new_tensor_2d(cache.input_ctx, GGML_TYPE_F32, C, L);
+        ggml_set_name(cache.x_in, "vector_group_in_tc"); ggml_set_input(cache.x_in);
+        cache.temb_in = ggml_new_tensor_1d(cache.input_ctx, GGML_TYPE_F32, 64);
+        ggml_set_name(cache.temb_in, "vector_group_temb"); ggml_set_input(cache.temb_in);
+        // Try host-pinned buffer first; fall back to default
+        // backend buffer.  Either way x_in + temb_in end up with
+        // a buffer before gallocr runs on the main graph.
+        cache.input_buf = try_alloc_inputs_in_pinned_host_buffer(model, cache.input_ctx);
+        if (!cache.input_buf) {
+            cache.input_buf = ggml_backend_alloc_ctx_tensors(cache.input_ctx, model.backend);
+            if (!cache.input_buf) {
+                ggml_free(cache.input_ctx);
+                cache.input_ctx = nullptr;
+                cache.x_in = nullptr;
+                cache.temb_in = nullptr;
+                throw std::runtime_error(
+                    "vector_group_graph_cache: failed to allocate input scratchpad "
+                    "(both pinned-host and default-backend paths returned null)");
+            }
+        }
+    }
     cache.text_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, text_len, 256);
     ggml_set_name(cache.text_in, "vector_group_text"); ggml_set_input(cache.text_in);
 
@@ -3049,6 +3121,20 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             ggml_context * ctx = nullptr;
             ggml_cgraph * gf = nullptr;
             ggml_gallocr_t allocr = nullptr;
+            // QVAC-18605 round 12 #5 — host-pinned input scratchpad
+            // for the three hot per-step inputs (x_in, mask_in,
+            // t_emb_in).  Same dispatch pattern as
+            // `vector_group_graph_cache`: helper returns nullptr on
+            // CPU / non-Vulkan backends; we fall back to the
+            // default backend buffer via
+            // `ggml_backend_alloc_ctx_tensors(input_ctx, backend)`.
+            // `text_in_t` stays in `ctx` (gallocr-allocated) — the
+            // round-10 upload-skip tracker handles the per-step
+            // upload elision so the staging-hop saving doesn't
+            // amortise on the cold-miss-only path.
+            std::vector<uint8_t> input_ctx_storage;
+            ggml_context * input_ctx = nullptr;
+            ggml_backend_buffer_t input_buf = nullptr;
             ggml_tensor * x_in = nullptr;
             ggml_tensor * mask_in = nullptr;
             ggml_tensor * t_emb_in = nullptr;
@@ -3086,9 +3172,15 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             front_cache.L != L ||
             front_cache.text_len != text_len ||
             front_cache.trace_outputs != include_ggml_trace) {
-            // Tear down stale state.
+            // Tear down stale state.  Round 12 #5 — same teardown
+            // order as `free_group_graph_cache`: gallocr → main
+            // ctx → input host buffer → input ctx.  Reversing
+            // order would dangle gallocr pointers into freed
+            // input-ctx tensor metadata.
             supertonic_safe_gallocr_free(front_cache.allocr, front_cache.generation_id);
             if (front_cache.ctx) ggml_free(front_cache.ctx);
+            if (front_cache.input_buf) ggml_backend_buffer_free(front_cache.input_buf);
+            if (front_cache.input_ctx) ggml_free(front_cache.input_ctx);
             front_cache = {};
             front_cache.model = &model;
             front_cache.generation_id = model.generation_id;
@@ -3104,15 +3196,41 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             front_cache.ctx = ggml_init(p);
             front_cache.gf  = ggml_new_graph_custom(front_cache.ctx, MAX_NODES, false);
 
-            front_cache.x_in = ggml_new_tensor_2d(front_cache.ctx, GGML_TYPE_F32, L, Cin);
-            ggml_set_name(front_cache.x_in, "ve_latent_tc");
-            ggml_set_input(front_cache.x_in);
-            front_cache.mask_in = ggml_new_tensor_1d(front_cache.ctx, GGML_TYPE_F32, L);
-            ggml_set_name(front_cache.mask_in, "ve_latent_mask");
-            ggml_set_input(front_cache.mask_in);
-            front_cache.t_emb_in = ggml_new_tensor_1d(front_cache.ctx, GGML_TYPE_F32, 64);
-            ggml_set_name(front_cache.t_emb_in, "ve_time_emb");
-            ggml_set_input(front_cache.t_emb_in);
+            // QVAC-18605 round 12 #5 — host-pinned scratchpad for
+            // the 3 hot per-step inputs (x_in, mask_in, t_emb_in).
+            // text_in_t stays in the main ctx (round-10 upload-skip
+            // tracker elides per-step uploads; pinned-host doesn't
+            // amortise on the cold-miss-only path).
+            {
+                const size_t INPUT_OVERHEAD = ggml_tensor_overhead() * 8;
+                front_cache.input_ctx_storage.assign(INPUT_OVERHEAD, 0);
+                ggml_init_params input_p = { INPUT_OVERHEAD, front_cache.input_ctx_storage.data(), /*no_alloc=*/true };
+                front_cache.input_ctx = ggml_init(input_p);
+                front_cache.x_in = ggml_new_tensor_2d(front_cache.input_ctx, GGML_TYPE_F32, L, Cin);
+                ggml_set_name(front_cache.x_in, "ve_latent_tc");
+                ggml_set_input(front_cache.x_in);
+                front_cache.mask_in = ggml_new_tensor_1d(front_cache.input_ctx, GGML_TYPE_F32, L);
+                ggml_set_name(front_cache.mask_in, "ve_latent_mask");
+                ggml_set_input(front_cache.mask_in);
+                front_cache.t_emb_in = ggml_new_tensor_1d(front_cache.input_ctx, GGML_TYPE_F32, 64);
+                ggml_set_name(front_cache.t_emb_in, "ve_time_emb");
+                ggml_set_input(front_cache.t_emb_in);
+                front_cache.input_buf = try_alloc_inputs_in_pinned_host_buffer(model, front_cache.input_ctx);
+                if (!front_cache.input_buf) {
+                    front_cache.input_buf = ggml_backend_alloc_ctx_tensors(front_cache.input_ctx, model.backend);
+                    if (!front_cache.input_buf) {
+                        ggml_free(front_cache.input_ctx);
+                        front_cache.input_ctx = nullptr;
+                        front_cache.x_in = nullptr;
+                        front_cache.mask_in = nullptr;
+                        front_cache.t_emb_in = nullptr;
+                        throw std::runtime_error(
+                            "ve_front_block_graph_cache: failed to allocate input "
+                            "scratchpad (both pinned-host and default-backend paths "
+                            "returned null)");
+                    }
+                }
+            }
             front_cache.text_in_t = ggml_new_tensor_2d(front_cache.ctx, GGML_TYPE_F32, text_len, 256);
             ggml_set_name(front_cache.text_in_t, "ve_text_lc");
             ggml_set_input(front_cache.text_in_t);
