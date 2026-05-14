@@ -68,8 +68,6 @@ ruby_whisper_parakeet_params_free(void *p)
 ITERATE_CALLBACK_PARAMS(FREE_CONTAINER)
 
 #undef FREE_CONTAINER
-
-  xfree(rwpp);
 }
 
 static size_t
