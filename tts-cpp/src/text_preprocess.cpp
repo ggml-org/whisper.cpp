@@ -227,10 +227,11 @@ void CangjieTable::emit_cangjie_tokens(const Entry & entry, std::string & out) {
     for (size_t i = 0; i < entry.code.size(); ++i) {
         out += "[cj_";
         out += entry.code[i];
-        bool is_last_letter = (i + 1 == entry.code.size());
-        if (is_last_letter && !entry.suffix.empty()) {
-            out += entry.suffix;
-        }
+        out += "]";
+    }
+    if (!entry.suffix.empty()) {
+        out += "[cj_";
+        out += entry.suffix;
         out += "]";
     }
     out += "[cj_.]";
