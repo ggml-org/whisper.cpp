@@ -5,6 +5,15 @@
   ITERATOR(end_time, t1, TIME) \
   ITERATOR(text, text, STRING)
 
+enum {
+#define DEF_IDX(name, c_name, type) RUBY_WHISPER_PARAKEET_SEGMENT_##name,
+
+  ITERATE_ATTRS(DEF_IDX)
+  RUBY_WHISPER_PARAKEET_SEGMENT_NUM_ATTRS,
+
+#undef DEF_IDX
+};
+
 #define VAL_FROM_TIME(v) (LONG2NUM((v) * 10))
 #define VAL_FROM_STRING(v) (rb_str_new2(v))
 #define READER(type) VAL_FROM_##type
@@ -20,6 +29,9 @@
   }
 
 extern VALUE cParakeetSegment;
+extern VALUE sym_start_time;
+extern VALUE sym_end_time;
+extern VALUE sym_text;
 extern const rb_data_type_t ruby_whisper_parakeet_context_type;
 
 static void
@@ -72,6 +84,46 @@ ruby_whisper_parakeet_segment_init(VALUE context, int index)
 
 ITERATE_ATTRS(DEF_ATTR)
 
+static VALUE
+ruby_whisper_parakeet_segment_deconstruct_keys(VALUE self, VALUE keys)
+{
+  ruby_whisper_parakeet_segment *rwps;
+  GetParakeetSegment(self, rwps);
+  ruby_whisper_parakeet_context *rwpc;
+  GetParakeetContext(rwps->context, rwpc);
+
+  VALUE hash = rb_hash_new();
+  long n_keys;
+  if (NIL_P(keys)) {
+    keys = rb_ary_new3(
+      RUBY_WHISPER_PARAKEET_SEGMENT_NUM_ATTRS,
+      sym_start_time,
+      sym_end_time,
+      sym_text
+    );
+    n_keys = RUBY_WHISPER_PARAKEET_SEGMENT_NUM_ATTRS;
+  } else {
+    n_keys = RARRAY_LEN(keys);
+    if (n_keys > RUBY_WHISPER_PARAKEET_SEGMENT_NUM_ATTRS) {
+      return hash;
+    }
+  }
+  for (int i = 0; i < n_keys; i++) {
+    VALUE key = rb_ary_entry(keys, i);
+
+#define CHECK_AND_SET_KEY(rb_name, c_name, type) \
+    if (key == sym_##rb_name) { \
+      rb_hash_aset(hash, key, ruby_whisper_parakeet_get_##rb_name(self)); \
+    }
+
+    ITERATE_ATTRS(CHECK_AND_SET_KEY)
+
+#undef CHECK_AND_SET_KEY
+  }
+
+  return hash;
+}
+
 void
 init_ruby_whisper_parakeet_segment(VALUE *mParakeet)
 {
@@ -85,6 +137,8 @@ init_ruby_whisper_parakeet_segment(VALUE *mParakeet)
   ITERATE_ATTRS(REGISTER_ATTR)
 
 #undef REGISTER_ATTR
+
+  rb_define_method(cParakeetSegment, "deconstruct_keys", ruby_whisper_parakeet_segment_deconstruct_keys, 1);
 }
 
 #undef DEF_ATTR

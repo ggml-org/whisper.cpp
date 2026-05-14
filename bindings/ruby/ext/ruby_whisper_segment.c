@@ -4,12 +4,12 @@
 
 extern ID id___method__;
 extern ID id_to_enum;
-static VALUE sym_start_time;
-static VALUE sym_end_time;
-static VALUE sym_text;
-static VALUE sym_no_speech_prob;
-static VALUE sym_speaker_turn_next;
-static VALUE sym_n_tokens;
+VALUE sym_start_time;
+VALUE sym_end_time;
+VALUE sym_text;
+VALUE sym_no_speech_prob;
+VALUE sym_speaker_turn_next;
+VALUE sym_n_tokens;
 
 extern const rb_data_type_t ruby_whisper_type;
 
