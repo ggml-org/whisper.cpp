@@ -98,6 +98,11 @@ typedef struct {
   struct parakeet_context *context;
 } ruby_whisper_parakeet_context;
 
+typedef struct {
+  VALUE context;
+  int index;
+} ruby_whisper_parakeet_segment;
+
 #define GetContext(obj, rw) do { \
   TypedData_Get_Struct((obj), ruby_whisper, &ruby_whisper_type, (rw)); \
   if ((rw)->context == NULL) { \

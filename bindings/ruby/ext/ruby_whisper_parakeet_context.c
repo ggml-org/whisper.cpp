@@ -1,9 +1,14 @@
 #include "ruby_whisper.h"
 
 extern ID id_to_s;
+extern ID id___method__;
+extern ID id_to_enum;
+
+extern VALUE cParakeetContext;
 
 extern VALUE ruby_whisper_normalize_model_path(VALUE model_path);
 extern VALUE ruby_whisper_parakeet_transcribe(VALUE self, VALUE audio_path, VALUE params);
+extern VALUE ruby_whisper_parakeet_segment_init(VALUE context, int index);
 
 static void
 ruby_whisper_parakeet_context_free(void *p)
@@ -65,13 +70,33 @@ ruby_whisper_parakeet_context_initialize(int argc, VALUE *argv, VALUE self)
   return Qnil;
 }
 
+static VALUE
+ruby_whisper_parakeet_context_each_segment(VALUE self)
+{
+  if (!rb_block_given_p()) {
+    const VALUE method_name = rb_funcall(self, id___method__, 0);
+    return rb_funcall(self, id_to_enum, 1, method_name);
+  }
+
+  ruby_whisper_parakeet_context *rwpc;
+  GetParakeetContext(self, rwpc);
+
+  const int n_segments = parakeet_full_n_segments(rwpc->context);
+  for (int i = 0; i < n_segments; ++i) {
+    rb_yield(ruby_whisper_parakeet_segment_init(self, i));
+  }
+
+  return self;
+}
+
 void
 init_ruby_whisper_parakeet_context(VALUE *mParakeet)
 {
-  VALUE cParakeetContext = rb_define_class_under(*mParakeet, "Context", rb_cObject);
+  cParakeetContext = rb_define_class_under(*mParakeet, "Context", rb_cObject);
 
   rb_define_alloc_func(cParakeetContext, ruby_whisper_parakeet_context_allocate);
 
   rb_define_method(cParakeetContext, "initialize", ruby_whisper_parakeet_context_initialize, -1);
   rb_define_method(cParakeetContext, "transcribe", ruby_whisper_parakeet_transcribe, 2);
+  rb_define_method(cParakeetContext, "each_segment", ruby_whisper_parakeet_context_each_segment, 0);
 }

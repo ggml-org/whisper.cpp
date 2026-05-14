@@ -35,6 +35,8 @@ enum {
 #define VAL_TO_BOOL(v) (RTEST(v))
 #define VAL_FROM_BOOL(v) (v ? Qtrue : Qfalse)
 
+extern VALUE cParakeetParams;
+
 extern void ruby_whisper_callback_container_mark(ruby_whisper_callback_container *rwc);
 extern ruby_whisper_callback_container* ruby_whisper_callback_container_allocate(void);
 
@@ -208,7 +210,7 @@ ITERATE_CALLBACK_PARAMS(INIT_CONTAINER)
 void
 init_ruby_whisper_parakeet_params(VALUE *mParakeet)
 {
-  VALUE cParakeetParams = rb_define_class_under(*mParakeet, "Params", rb_cObject);
+  cParakeetParams = rb_define_class_under(*mParakeet, "Params", rb_cObject);
   rb_define_alloc_func(cParakeetParams, ruby_whisper_parakeet_params_s_allocate);
 
   rb_define_method(cParakeetParams, "initialize", ruby_whisper_parakeet_params_initialize, -1);
