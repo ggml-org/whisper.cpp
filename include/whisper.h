@@ -508,6 +508,7 @@ extern "C" {
         int   max_len;          // max segment length in characters
         bool  split_on_word;    // split on word rather than on token (when used with max_len)
         int   max_tokens;       // max tokens per segment (0 = no limit)
+        int   seg_len_hint;     // target segment length in ms — thins timestamps in context to discourage short segments (0 = off)
 
         // [EXPERIMENTAL] speed-up techniques
         // note: these can significantly reduce the quality of the output

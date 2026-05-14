@@ -41,6 +41,7 @@ struct whisper_params {
     int32_t progress_step = 5;
     int32_t max_context   = -1;
     int32_t max_len       = 0;
+    int32_t seg_len_hint  = 0;
     int32_t best_of       = whisper_full_default_params(WHISPER_SAMPLING_GREEDY).greedy.best_of;
     int32_t beam_size     = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH).beam_search.beam_size;
     int32_t audio_ctx     = 0;
@@ -159,6 +160,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-d"    || arg == "--duration")             { params.duration_ms     = std::stoi(ARGV_NEXT); }
         else if (arg == "-mc"   || arg == "--max-context")          { params.max_context     = std::stoi(ARGV_NEXT); }
         else if (arg == "-ml"   || arg == "--max-len")              { params.max_len         = std::stoi(ARGV_NEXT); }
+        else if (arg == "-slh"  || arg == "--seg-len-hint")         { params.seg_len_hint    = std::stoi(ARGV_NEXT); }
         else if (arg == "-bo"   || arg == "--best-of")              { params.best_of         = std::stoi(ARGV_NEXT); }
         else if (arg == "-bs"   || arg == "--beam-size")            { params.beam_size       = std::stoi(ARGV_NEXT); }
         else if (arg == "-ac"   || arg == "--audio-ctx")            { params.audio_ctx       = std::stoi(ARGV_NEXT); }
@@ -241,6 +243,7 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  -d  N,     --duration N           [%-7d] duration of audio to process in milliseconds\n",   params.duration_ms);
     fprintf(stderr, "  -mc N,     --max-context N        [%-7d] maximum number of text context tokens to store\n", params.max_context);
     fprintf(stderr, "  -ml N,     --max-len N            [%-7d] maximum segment length in characters\n",           params.max_len);
+    fprintf(stderr, "  -slh N,    --seg-len-hint N       [%-7d] target segment length in ms\n",                    params.seg_len_hint);
     fprintf(stderr, "  -sow,      --split-on-word        [%-7s] split on word rather than on token\n",             params.split_on_word ? "true" : "false");
     fprintf(stderr, "  -bo N,     --best-of N            [%-7d] number of best candidates to keep\n",              params.best_of);
     fprintf(stderr, "  -bs N,     --beam-size N          [%-7d] beam size for beam search\n",                      params.beam_size);
@@ -1186,6 +1189,7 @@ int main(int argc, char ** argv) {
             wparams.thold_pt         = params.word_thold;
             wparams.max_len          = params.output_wts && params.max_len == 0 ? 60 : params.max_len;
             wparams.split_on_word    = params.split_on_word;
+            wparams.seg_len_hint     = params.seg_len_hint;
             wparams.audio_ctx        = params.audio_ctx;
 
             wparams.debug_mode       = params.debug_mode;
