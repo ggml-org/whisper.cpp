@@ -13,6 +13,23 @@ extern const rb_data_type_t ruby_whisper_parakeet_params_type;
 extern ID id_to_s;
 extern ID id_to_path;
 
+static struct transcribe_without_gvl_args {
+  struct parakeet_context *context;
+  struct parakeet_full_params params;
+  float *samples;
+  size_t n_samples;
+  int result;
+} transcribe_without_gvl_args;
+
+static void*
+transcribe_without_gvl(void *rb_args)
+{
+  struct transcribe_without_gvl_args *args = (struct transcribe_without_gvl_args *)rb_args;
+  args->result = parakeet_full(args->context, args->params, args->samples, args->n_samples);
+
+  return NULL;
+}
+
 VALUE
 ruby_whisper_parakeet_transcribe(VALUE self, VALUE audio_path, VALUE params)
 {
@@ -34,7 +51,16 @@ ruby_whisper_parakeet_transcribe(VALUE self, VALUE audio_path, VALUE params)
   GetParakeetContext(self, rwpc);
   GetParakeetParams(params, rwpp);
 
-  if (parakeet_full(rwpc->context, rwpp->params, pcmf32.data(), pcmf32.size()) != 0) {
+  struct transcribe_without_gvl_args args = {
+    rwpc->context,
+    rwpp->params,
+    pcmf32.data(),
+    pcmf32.size(),
+    0,
+  };
+
+  rb_thread_call_without_gvl(transcribe_without_gvl, (void *)&args, NULL, NULL);
+  if (args.result != 0) {
     rb_raise(rb_eRuntimeError, "Failed to process audio");
     return Qnil;
   }
