@@ -234,13 +234,16 @@ std::vector<std::string> split_for_streaming(
 
         // Wide window — sentence-end search.  Reaches back to half the
         // effective target (so a sentence break that yields a too-small
-        // chunk is rejected by the min_chunk floor) and forward to 3×
-        // the target (so a fairly distant period is still preferred
-        // over a mid-clause whitespace cut).  3× is empirical: covers
-        // typical English sentence-length variance without letting one
-        // runaway sentence destroy streaming latency.
+        // chunk is rejected by the min_chunk floor) and forward to 2×
+        // the target.  2× is empirical: catches a long-but-reasonable
+        // first sentence in multi-sentence text (~75-90 chars at
+        // target=50), but narrow enough that for a genuinely runaway
+        // sentence (>2× target with no internal periods), the chunker
+        // falls through to whitespace and produces multiple sub-
+        // sentence chunks instead of slurping the whole tail as one
+        // huge "sentence-aligned" chunk.
         int sent_lo_rel = std::max(1, target_this / 2);
-        int sent_hi_rel = target_this * 3;
+        int sent_hi_rel = target_this * 2;
         sent_lo_rel     = std::max(sent_lo_rel, min_chunk);
         sent_hi_rel     = std::max(sent_hi_rel, sent_lo_rel);
 
