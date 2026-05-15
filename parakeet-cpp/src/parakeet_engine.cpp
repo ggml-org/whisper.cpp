@@ -1086,6 +1086,14 @@ struct SortformerStreamSession::Impl {
 
     std::vector<StreamingDiarizationSegment> last_pending;
 
+    // Full segments from the previous chunk in ABSOLUTE time, with the
+    // session-stable speaker IDs that this session has emitted. Used by
+    // compute_slot_remap_ to find an overlap-based remap that anchors
+    // slot identity across chunks even when the visible voice set
+    // changes (e.g. a speaker ages out of the rolling history window).
+    // Empty before the first chunk emits.
+    std::vector<StreamingDiarizationSegment> prev_chunk_full_segments;
+
     // Speaking vs silent from Sortformer probs: max probability above opts.threshold.
     // Initial Unknown forces a transition on the first chunk.
     VadState vad_state = VadState::Unknown;
@@ -1096,7 +1104,87 @@ struct SortformerStreamSession::Impl {
                        int64_t emit_start_sample,
                        int64_t emit_end_sample,
                        bool    is_final_chunk);
+
+    // Compute remap[local_id] -> session_id by maximising overlap of
+    // current chunk's local-ID segments against prev_chunk_full_segments
+    // (which carry session IDs). Greedy: highest-overlap pairs first;
+    // unmatched local slots get the lowest unused session ID. Identity
+    // mapping when prev_chunk_full_segments is empty (first chunk).
+    std::vector<int> compute_slot_remap_(
+        const std::vector<StreamingDiarizationSegment> & cur_full,
+        int num_spks) const;
 };
+
+std::vector<int> SortformerStreamSession::Impl::compute_slot_remap_(
+    const std::vector<StreamingDiarizationSegment> & cur_full,
+    int num_spks) const {
+    std::vector<int> remap(num_spks, -1);
+    if (num_spks <= 0) return remap;
+    if (prev_chunk_full_segments.empty()) {
+        for (int i = 0; i < num_spks; ++i) remap[i] = i;
+        return remap;
+    }
+    // Build num_spks x num_spks overlap matrix: O[local_id][session_id]
+    // = total absolute-time overlap between current chunk's segments
+    // labelled `local_id` and previous chunk's session-stable segments
+    // labelled `session_id`. Consecutive windows share `history_ms -
+    // chunk_ms` of audio, so every active speaker has plenty of
+    // co-occurring segments to match.
+    std::vector<std::vector<double>> O(
+        num_spks, std::vector<double>(num_spks, 0.0));
+    for (const auto & c : cur_full) {
+        if (c.speaker_id < 0 || c.speaker_id >= num_spks) continue;
+        for (const auto & p : prev_chunk_full_segments) {
+            if (p.speaker_id < 0 || p.speaker_id >= num_spks) continue;
+            const double a = std::max(c.start_s, p.start_s);
+            const double b = std::min(c.end_s,   p.end_s);
+            if (b > a) O[c.speaker_id][p.speaker_id] += (b - a);
+        }
+    }
+    // Greedy assignment over O: order local IDs by their best available
+    // overlap (descending), then for each pick the highest-overlap
+    // un-taken session ID.
+    std::vector<bool> taken(num_spks, false);
+    std::vector<std::pair<double, int>> order;
+    order.reserve((size_t) num_spks);
+    for (int i = 0; i < num_spks; ++i) {
+        double m = 0.0;
+        for (int j = 0; j < num_spks; ++j) m = std::max(m, O[i][j]);
+        order.emplace_back(m, i);
+    }
+    std::sort(order.begin(), order.end(),
+              [](const std::pair<double, int> & a,
+                 const std::pair<double, int> & b) {
+                  return a.first > b.first;
+              });
+    for (const auto & pr : order) {
+        if (pr.first <= 0.0) continue;
+        const int  i = pr.second;
+        int        best   = -1;
+        double     best_o = 0.0;
+        for (int j = 0; j < num_spks; ++j) {
+            if (taken[j]) continue;
+            if (O[i][j] > best_o) { best_o = O[i][j]; best = j; }
+        }
+        if (best >= 0) { remap[i] = best; taken[best] = true; }
+    }
+    // Unmatched locals (no overlap with any prev segment, or no prev
+    // segments at all) take the lowest unused session ID. This keeps
+    // session IDs stable and predictable across long streams.
+    int next = 0;
+    for (int i = 0; i < num_spks; ++i) {
+        if (remap[i] != -1) continue;
+        while (next < num_spks && taken[next]) ++next;
+        if (next < num_spks) {
+            remap[i] = next;
+            taken[next] = true;
+            ++next;
+        } else {
+            remap[i] = i; // safety; shouldn't fire when num_spks is consistent
+        }
+    }
+    return remap;
+}
 
 void SortformerStreamSession::Impl::process_chunk(int64_t window_start_sample,
                                                   int64_t window_end_sample,
@@ -1123,6 +1211,30 @@ void SortformerStreamSession::Impl::process_chunk(int64_t window_start_sample,
     const double emit_lo_s = (double) emit_start_sample / opts.sample_rate;
     const double emit_hi_s = (double) emit_end_sample   / opts.sample_rate;
 
+    // Materialise the FULL window's segments in absolute-time coordinates
+    // (local speaker IDs from Sortformer's per-chunk output). This is the
+    // input both to the slot-remap computation and to the storage that
+    // anchors the next chunk's IDs.
+    std::vector<StreamingDiarizationSegment> cur_full;
+    cur_full.reserve(diar.segments.size());
+    for (const auto & s : diar.segments) {
+        StreamingDiarizationSegment f;
+        f.speaker_id  = s.speaker_id;
+        f.start_s     = window_offset_s + s.start_s;
+        f.end_s       = window_offset_s + s.end_s;
+        f.chunk_index = chunk_index;
+        f.is_final    = is_final_chunk;
+        cur_full.push_back(f);
+    }
+
+    const std::vector<int> slot_remap =
+        compute_slot_remap_(cur_full, diar.num_spks);
+
+    auto remap_id = [&slot_remap, num_spks = diar.num_spks](int local) -> int {
+        if (local < 0 || local >= num_spks) return local;
+        return slot_remap[local];
+    };
+
     std::vector<StreamingDiarizationSegment> emitted;
     emitted.reserve(diar.segments.size());
 
@@ -1133,7 +1245,7 @@ void SortformerStreamSession::Impl::process_chunk(int64_t window_start_sample,
         if (abs_start >= emit_hi_s) continue;
 
         StreamingDiarizationSegment out;
-        out.speaker_id  = s.speaker_id;
+        out.speaker_id  = remap_id(s.speaker_id);
         out.start_s     = std::max(abs_start, emit_lo_s);
         out.end_s       = std::min(abs_end,   emit_hi_s);
         out.chunk_index = chunk_index;
@@ -1146,6 +1258,14 @@ void SortformerStreamSession::Impl::process_chunk(int64_t window_start_sample,
         for (const auto & seg : emitted) on_segment(seg);
     }
     last_pending = std::move(emitted);
+
+    // Remap cur_full into session-stable IDs and store as the new
+    // baseline so the next chunk's `compute_slot_remap_` can match
+    // against today's emitted identity scheme.
+    for (auto & f : cur_full) {
+        f.speaker_id = remap_id(f.speaker_id);
+    }
+    prev_chunk_full_segments = std::move(cur_full);
 
     // VadStateChanged from speaker_probs: a frame speaks if any speaker exceeds threshold;
     // the chunk speaks if any emitting-frame qualifies; dominant speaker from mean probs.
