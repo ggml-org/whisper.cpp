@@ -45,6 +45,8 @@
 #include "tts-cpp/backend.h"
 #include "tts-cpp/export.h"
 
+#include <cstddef>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -116,7 +118,59 @@ struct EngineOptions {
     // predicted length) and the seeded RNG is bypassed.  Useful for
     // byte-exact reproduction of an ONNX/PyTorch reference run.
     std::string noise_npy_path;
+
+    // ---------------- Streaming synthesis ----------------------------
+    //
+    // When `stream_chunk_tokens > 0` AND a non-empty callback is passed
+    // to synthesize(), the engine splits `text` into chunks of roughly
+    // `stream_chunk_tokens` Unicode code points (Supertonic's text-token
+    // grain — see supertonic_text_to_ids), runs the full pipeline per
+    // chunk, and invokes the callback with each chunk's PCM as it's
+    // produced.  The returned SynthesisResult.pcm still contains the
+    // concatenated audio (the callback is an *addition*, not a
+    // replacement).  Streaming is disabled when stream_chunk_tokens == 0
+    // OR the callback is empty — both paths fall through to the batch
+    // path with no per-chunk overhead.
+    //
+    //   stream_chunk_tokens         Target chunk size in text tokens.
+    //                               ~50 ≈ 1-3 s English audio; CJK
+    //                               languages are denser so a lower
+    //                               target (~25-30) tends to feel
+    //                               better.  0 disables streaming.
+    //
+    //   stream_first_chunk_tokens   Override for the *first* chunk so
+    //                               first audio lands early while later
+    //                               chunks stay at the larger target
+    //                               for steady-state throughput.
+    //                               0 = same as stream_chunk_tokens.
+    //
+    //   stream_chunk_tolerance_pct  Boundary-snap window for CLAUSE and
+    //                               WHITESPACE fallbacks (±N% of target).
+    //                               Sentence-end breaks are searched on a
+    //                               much wider implicit window (target/2
+    //                               to 3× target) regardless of this
+    //                               setting, because sentence prosody
+    //                               dominates audio quality: chunks cut
+    //                               mid-clause receive an artificial
+    //                               terminal period from preprocess and
+    //                               the model emits muddled audio in
+    //                               response.  Default 20.
+    int stream_chunk_tokens        = 0;
+    int stream_first_chunk_tokens  = 0;
+    int stream_chunk_tolerance_pct = 20;
 };
+
+// Per-chunk PCM callback for streaming synthesis.  Receives a pointer to
+// `samples` consecutive float32 mono samples at SynthesisResult::sample_rate
+// (typically 44.1 kHz — read from model metadata, not hard-coded).  The
+// buffer is owned by the engine and must not be retained past the
+// callback; copy out if you need the data.
+//   `chunk_index`  0-based index of the chunk within the current synth.
+//   `is_last`      true on the final chunk (after which synthesize() returns).
+// Throwing from this callback aborts synthesis (the exception propagates
+// out of synthesize()).
+using StreamCallback = std::function<void(
+    const float * pcm, std::size_t samples, int chunk_index, bool is_last)>;
 
 struct SynthesisResult {
     std::vector<float> pcm;
@@ -149,6 +203,15 @@ public:
     //
     // Not safe to call concurrently on the same Engine instance.
     SynthesisResult synthesize(const std::string & text);
+
+    // Same as above, but when `options().stream_chunk_tokens > 0` and
+    // `on_chunk` is non-empty, runs the chunked pipeline and invokes
+    // `on_chunk` with each chunk's PCM in order.  The returned
+    // SynthesisResult.pcm still contains the concatenated audio (the
+    // callback is an *addition*, not a replacement).  Falls through to
+    // the batch path when either condition is false.
+    SynthesisResult synthesize(const std::string & text,
+                               const StreamCallback & on_chunk);
 
     // Best-effort cancel of an in-flight synthesize() call on another
     // thread.  Setting the flag is all this does; actual termination

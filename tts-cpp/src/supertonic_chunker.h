@@ -1,0 +1,43 @@
+#pragma once
+
+// Multilingual streaming chunker for the Supertonic engine.
+//
+// Splits an input string into a list of substrings sized for per-chunk
+// synthesis, preferring natural boundaries when available:
+//
+//   1. sentence-end punctuation  (. ? ! 。 ？ ！ ‼ ⁇ ⁈ ⁉ । ॥)
+//   2. clause-end punctuation    (, ; : ， 、 ； ： ؛ ، and closing brackets)
+//   3. whitespace                (handles CJK/Thai/Lao/Khmer where 1+2 are absent)
+//   4. hard cut                  (last-resort cap at the upper tolerance bound)
+//
+// Token grain matches `supertonic_text_to_ids` (one ID per Unicode code
+// point after normalization), so the input character count IS the token
+// count that the engine will see.  No model tokenizer call is required
+// for sizing.
+
+#include <string>
+#include <vector>
+
+namespace tts_cpp::supertonic::detail {
+
+// Split `text` into chunks sized roughly `target_tokens` code points
+// each, snapping to the best available boundary within ±`tolerance_pct`
+// of the target.  When `first_chunk_tokens > 0`, the first chunk uses
+// that smaller target instead (latency knob — first audio lands earlier
+// while subsequent chunks stay large to keep throughput up).
+//
+// Leading/trailing whitespace on each chunk is trimmed.  Adjacent chunks
+// concatenated back together (modulo trimmed whitespace) reproduce the
+// input.  Empty / whitespace-only chunks are not emitted.
+//
+// Tail-merge: if the last chunk would carry fewer than ~max(8, target/3)
+// tokens, it is merged into the previous chunk to avoid paying full
+// pipeline cost for a handful of trailing tokens (mirrors Chatterbox's
+// chatterbox_engine.cpp:608 heuristic).
+std::vector<std::string> split_for_streaming(
+    const std::string & text,
+    int target_tokens,
+    int first_chunk_tokens = 0,
+    int tolerance_pct      = 20);
+
+} // namespace tts_cpp::supertonic::detail
