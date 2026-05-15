@@ -1,41 +1,54 @@
-// TDD harness for the audit follow-up #5 packed-QK RoPE helper
-// (F23 = F20 integration: bake apply_rope into the Q/K-producing
-// group / front-block graph so the host doesn't run apply_rope
-// between the QKV download and the flash-attention upload).
+// QVAC-18966 — CPU regression fix for `apply_rope_to_packed_qk`.
 //
 // Background
 // ----------
-// `apply_rope_in_graph` (landed in PR #4) operates on a
-// `ne=[head_dim, n_heads, L]` tensor — the natural layout the
-// scalar `apply_rope` indexes into.  But every actual call site
-// in the vector estimator produces Q/K via
-// `dense_matmul_time_ggml`, whose output is a packed 2D tensor
-// with `ne=[H*D, L]` (`H*D` = the attention `A` dimension =
-// `n_heads * head_dim`, packed channel-major along axis 0).
+// `apply_rope_to_packed_qk` is the layout adapter between the
+// natural `ne=[head_dim, n_heads, L]` contract of
+// `apply_rope_in_graph` (PR #4) and the **production** call sites'
+// Q/K-producing matmul output.  Both PR #16 ("RoPE in-graph
+// integration F23") and the front-block GPU bridge plumb the
+// result of this helper through to
+// `vector_text_attention_cache::q_tc_in` via either
+// `ggml_backend_tensor_copy` (GPU bridge, production) or
+// `ggml_backend_tensor_set` from a host vector (legacy bridge,
+// trace-mode + non-RoPE GGUFs).
 //
-// `apply_rope_to_packed_qk` is a thin wrapper that re-views the
-// packed tensor as `[head_dim, n_heads, L]` (zero-cost view via
-// stride trick), materialises a contiguous copy so downstream
-// `ggml_concat` is happy, calls `apply_rope_in_graph`, and
-// reshapes the result back to the original `[H*D, L]` packed
-// shape.  No new ops introduced — just a packing-layout adapter.
+// The original test (PR #16, follow-up #5) built Q under a
+// `ne=[H*D, L]` "channel-fastest-in-memory" assumption.  That
+// matched the helper's INTERNAL layout assumption (view-as-
+// `[D, H, L]` with `nb=[elem, D*elem, HD*elem]`), but it
+// CONTRADICTED what `dense_matmul_time_ggml` actually produces:
+// every Q/K matmul site in the vector estimator hands the helper
+// a tensor with `ne=[L, HD]` (axis 0 = L = time-fastest along
+// natural strides), so memory layout is **channel-major-flat**
+// (`data[t + c*L]`) — the transpose of what the helper expects.
 //
-// Test contract
-// -------------
-// Build a synthetic Q packed in `[H*D, L]` time-major layout
-// (rows = time-frames, channels = `h*D + d` packed).  Verify on
-// the CPU backend that `apply_rope_to_packed_qk(ctx, Q, cos, sin)`
-// produces the same buffer as the scalar `apply_rope` would have
-// written if Q had been laid out as `[t*H + h]*D + d`.
+// On any backend (CPU, OpenCL, Vulkan), the synth path therefore
+// either:
+//   - Crashes on the helper's `GGML_ASSERT(HD == n_heads *
+//     head_dim)` (the new assertion catches the shape mismatch
+//     before the view trick produces garbage), OR
+//   - Pre-assertion, would have produced TRANSPOSED bytes and
+//     silently fed wrong-layout Q / K into
+//     `ggml_flash_attn_ext`.
 //
-// Two parity shapes:
-//   1. Vector-estimator Q: q_len = 20, n_heads = 4, head_dim = 64
-//      → ne[0] = 256, ne[1] = 20.
-//   2. Vector-estimator K: kv_len = 32 (text_len), n_heads = 4,
-//      head_dim = 64 → ne[0] = 256, ne[1] = 32.
+// This test reproduces the real production layout end-to-end on
+// the CPU backend (which has no probe-gating and no per-backend
+// kernel paths to confuse the picture) and verifies the helper:
+//   1. Accepts `ne=[L, HD]` matmul-shaped Q without aborting.
+//   2. Returns post-rotation bytes in the **time-major-flat**
+//      layout (`out[t*HD + c]`) that:
+//        - Matches the scalar `apply_rope(theta, x, L, H, D)`
+//          reference (the SOLE source of truth — every host-side
+//          comparison in the codebase indexes through `t*H*D +
+//          h*D + d` flat).
+//        - Can be uploaded byte-for-byte into
+//          `q_tc_in = ggml_new_tensor_2d(F32, A, L)` whose
+//          natural strides are `nb=[elem, A*elem]` → same flat
+//          layout `data[c + t*A]`.
 //
-// Tolerance: `1e-4` absolute — same band as
-// `test_supertonic_rope_in_graph.cpp` (the inner helper).
+// The L=1 trip-wire is kept (catches a future regression where
+// the helper silently divides by L or swaps the angle formula).
 //
 // Registered with `LABEL "unit"` — no GGUF required.
 
@@ -70,11 +83,11 @@ int g_checks   = 0;
 } while (0)
 
 // Mirror of the in-tree scalar `apply_rope` (private to
-// supertonic_vector_estimator.cpp).  Index layout matches the
-// `data[t*H*D + h*D + d]` arrangement that the dense-matmul
-// output produces when reshaped as `[t * (H*D) + (h*D + d)]` —
-// i.e., the [H*D, L] packed tensor's element (col=h*D+d, row=t)
-// is at the same memory location as scalar's i1 / i2.
+// supertonic_vector_estimator.cpp).  Indexes a single flat buffer
+// as `data[t*H*D + h*D + d]` — the time-major-flat layout every
+// scalar comparison in the vector estimator uses (and the layout
+// `q_tc_in` reads via `ggml_backend_tensor_copy` of
+// `ggml_nbytes(q_tc_in)` bytes).
 void scalar_apply_rope(const float * theta,
                        std::vector<float> & x,
                        int L, int H, int D) {
@@ -96,15 +109,16 @@ void scalar_apply_rope(const float * theta,
     }
 }
 
-// Build a randomized Q in the packed [H*D, L] time-major layout
-// (a single contiguous row-major buffer where element (col, row)
-// sits at `row * H*D + col`).  The same buffer interpreted under
-// the scalar layout `data[t*H*D + h*D + d]` matches when col is
-// decoded as `h*D + d` and row as `t`.  So scalar_apply_rope can
-// be invoked directly on the same buffer for the reference.
-void test_packed_rope_shape(const char * label, int L, int n_heads, int head_dim,
+// Run `apply_rope_to_packed_qk` on a Q with the production matmul
+// shape ne=[L, HD] (channel-major-flat memory `data[t + c*L]`)
+// and verify the rotated output matches the scalar reference's
+// time-major-flat layout (`out[t*HD + c]`) bit-for-bit on the CPU
+// backend.
+void test_production_layout(const char * label, int L, int n_heads, int head_dim,
                             unsigned seed) {
-    std::fprintf(stderr, "[apply_rope_to_packed_qk: %s]  L=%d H=%d D=%d\n",
+    std::fprintf(stderr,
+                 "[apply_rope_to_packed_qk production layout: %s]  "
+                 "L=%d H=%d D=%d  (matmul ne=[L, HD])\n",
                  label, L, n_heads, head_dim);
 
     const int HD = n_heads * head_dim;
@@ -116,33 +130,45 @@ void test_packed_rope_shape(const char * label, int L, int n_heads, int head_dim
     std::vector<float> theta(half);
     for (auto & v : theta) v = std::abs(dist(rng)) * 1000.0f;
 
-    // Packed Q buffer: ne=[HD, L], element (col, row) at memory
-    // index `row * HD + col`.  Random init.
-    std::vector<float> q_packed((size_t) L * HD);
-    for (auto & v : q_packed) v = dist(rng);
+    // Reference: time-major-flat buffer `ref[t*HD + c]`.  Random
+    // init.  This is the source of truth — `scalar_apply_rope`
+    // indexes through `(t*H + h)*D + d` = `t*HD + (h*D + d)`.
+    std::vector<float> ref((size_t) L * HD);
+    for (auto & v : ref) v = dist(rng);
 
-    // Reference: scalar_apply_rope writes via index `t*H*D + h*D + d`
-    // = `t*HD + (h*D + d)`.  For (col=h*D+d, row=t), memory is the
-    // SAME index.  So the scalar in-place rotation applied to a
-    // copy of q_packed gives our reference vector.
-    std::vector<float> ref = q_packed;
+    // Transpose to channel-major-flat for upload to a tensor with
+    // ne=[L, HD] (natural strides nb=[elem, L*elem]).  Element
+    // (t, c) in matmul layout lives at flat index `t + c*L` —
+    // contiguous in t for fixed c.
+    std::vector<float> q_in_buf((size_t) L * HD);
+    for (int t = 0; t < L; ++t) {
+        for (int c = 0; c < HD; ++c) {
+            q_in_buf[(size_t) t + (size_t) c * L] =
+                ref[(size_t) t * HD + c];
+        }
+    }
+
+    // Scalar reference in-place rotation on the time-major-flat
+    // buffer.
     scalar_apply_rope(theta.data(), ref, L, n_heads, head_dim);
 
-    // Host-side cos/sin tables exactly like make_rope_cos_sin_tables
-    // would write: ne=[half, L], element (d, t) at index `t*half + d`.
+    // Cos/sin tables exactly like `make_rope_cos_sin_tables`
+    // writes.
     std::vector<float> cos_host, sin_host;
     make_rope_cos_sin_tables(theta.data(), L, half, cos_host, sin_host);
 
-    // Build the helper's graph on the CPU backend.
-    constexpr int MAX_NODES = 256;
+    // Build the graph on the CPU backend.  Max nodes generous
+    // for the transpose + cont + view chain inside the helper.
+    constexpr int MAX_NODES = 512;
     const size_t buf_size = ggml_tensor_overhead() * MAX_NODES + ggml_graph_overhead();
     std::vector<uint8_t> buf(buf_size);
     ggml_init_params p = { buf_size, buf.data(), /*no_alloc=*/true };
     ggml_context * ctx = ggml_init(p);
     ggml_cgraph * gf = ggml_new_graph(ctx);
 
-    // q input: ne=[HD, L] (axis 0 = packed channels, axis 1 = time).
-    ggml_tensor * q_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, HD, L);
+    // q input with the production matmul shape.  ne=[L, HD]
+    // explicitly DIFFERENT from the pre-fix test's ne=[HD, L].
+    ggml_tensor * q_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, L, HD);
     ggml_set_name(q_in, "q_in"); ggml_set_input(q_in);
     ggml_tensor * cos_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, half, L);
     ggml_set_name(cos_in, "cos_in"); ggml_set_input(cos_in);
@@ -154,7 +180,13 @@ void test_packed_rope_shape(const char * label, int L, int n_heads, int head_dim
     ggml_set_name(y, "y"); ggml_set_output(y);
     ggml_build_forward_expand(gf, y);
 
-    // Run on CPU backend.
+    // Output-shape contract.  The helper MUST produce ne=[HD, L]
+    // (axis 0 = HD = channels-fastest, axis 1 = L = time-slowest)
+    // for `ggml_backend_tensor_copy(y, q_tc_in)` to hit the
+    // matching shape in `vector_text_attention_cache::q_tc_in`.
+    CHECK((int) y->ne[0] == HD);
+    CHECK((int) y->ne[1] == L);
+
     ggml_backend_t cpu = ggml_backend_cpu_init();
     if (!cpu) {
         std::fprintf(stderr, "  SKIP: ggml_backend_cpu_init failed\n");
@@ -165,7 +197,7 @@ void test_packed_rope_shape(const char * label, int L, int n_heads, int head_dim
     ggml_gallocr_reserve(allocr, gf);
     ggml_gallocr_alloc_graph(allocr, gf);
 
-    ggml_backend_tensor_set(q_in,   q_packed.data(), 0, q_packed.size() * sizeof(float));
+    ggml_backend_tensor_set(q_in,   q_in_buf.data(), 0, q_in_buf.size() * sizeof(float));
     ggml_backend_tensor_set(cos_in, cos_host.data(), 0, cos_host.size() * sizeof(float));
     ggml_backend_tensor_set(sin_in, sin_host.data(), 0, sin_host.size() * sizeof(float));
     ggml_backend_graph_compute(cpu, gf);
@@ -176,10 +208,9 @@ void test_packed_rope_shape(const char * label, int L, int n_heads, int head_dim
     ggml_free(ctx);
     ggml_backend_free(cpu);
 
-    // Shape contract: output must have the same total nelements
-    // as q_packed (so a downstream ggml_set_output + tensor_to_time_
-    // channel can consume it identically).
-    CHECK(got.size() == q_packed.size());
+    // Memory-layout contract: helper's output bytes should equal
+    // scalar reference's time-major-flat bytes element-wise.
+    CHECK(got.size() == ref.size());
 
     int bad = 0;
     float max_abs = 0.0f;
@@ -202,35 +233,43 @@ void test_packed_rope_shape(const char * label, int L, int n_heads, int head_dim
     CHECK(bad == 0);
 }
 
-// Trip-wire: when L=1 the helper still needs to work (degenerate
-// time axis matches the way the front-block builds a single-step
-// graph after the convnext + time-add path).
-void test_packed_rope_l1() {
-    std::fprintf(stderr, "[apply_rope_to_packed_qk: L=1 degenerate]\n");
+// L=1 trip-wire (preserved from the original test).  At L=1 the
+// angle is 0/1 * theta = 0, so cos=1, sin=0 and rotation is the
+// identity.  Catches a regression where the helper accidentally
+// divides by L or swaps the angle formula.  Re-cast under the
+// production ne=[L, HD] contract.
+void test_production_layout_l1() {
+    std::fprintf(stderr,
+                 "[apply_rope_to_packed_qk production layout: L=1 degenerate]\n");
     const int L = 1, n_heads = 2, head_dim = 8;
     const int HD = n_heads * head_dim;
     const int half = head_dim / 2;
 
     std::vector<float> theta(half, 100.0f);
-    std::vector<float> q_packed((size_t) L * HD, 1.0f);
 
-    // At L=1 the angle is 0/1 * theta = 0, so cos=1, sin=0, and the
-    // rotation is identity.  Catches a regression where the helper
-    // accidentally divides by L or swaps the angle formula.
-    std::vector<float> ref = q_packed;
+    // Time-major-flat reference; channel-major-flat upload.
+    std::vector<float> ref((size_t) L * HD, 1.0f);
+    std::vector<float> q_in_buf((size_t) L * HD);
+    for (int t = 0; t < L; ++t) {
+        for (int c = 0; c < HD; ++c) {
+            q_in_buf[(size_t) t + (size_t) c * L] =
+                ref[(size_t) t * HD + c];
+        }
+    }
+    // Identity rotation at L=1.
     scalar_apply_rope(theta.data(), ref, L, n_heads, head_dim);
 
     std::vector<float> cos_host, sin_host;
     make_rope_cos_sin_tables(theta.data(), L, half, cos_host, sin_host);
 
-    constexpr int MAX_NODES = 64;
+    constexpr int MAX_NODES = 128;
     const size_t buf_size = ggml_tensor_overhead() * MAX_NODES + ggml_graph_overhead();
     std::vector<uint8_t> buf(buf_size);
     ggml_init_params p = { buf_size, buf.data(), true };
     ggml_context * ctx = ggml_init(p);
     ggml_cgraph * gf = ggml_new_graph(ctx);
 
-    ggml_tensor * q_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, HD, L);
+    ggml_tensor * q_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, L, HD);
     ggml_set_input(q_in);
     ggml_tensor * cos_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, half, L);
     ggml_set_input(cos_in);
@@ -247,7 +286,7 @@ void test_packed_rope_l1() {
     ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(cpu));
     ggml_gallocr_reserve(allocr, gf);
     ggml_gallocr_alloc_graph(allocr, gf);
-    ggml_backend_tensor_set(q_in,   q_packed.data(), 0, q_packed.size() * sizeof(float));
+    ggml_backend_tensor_set(q_in,   q_in_buf.data(), 0, q_in_buf.size() * sizeof(float));
     ggml_backend_tensor_set(cos_in, cos_host.data(), 0, cos_host.size() * sizeof(float));
     ggml_backend_tensor_set(sin_in, sin_host.data(), 0, sin_host.size() * sizeof(float));
     ggml_backend_graph_compute(cpu, gf);
@@ -256,6 +295,9 @@ void test_packed_rope_l1() {
     ggml_gallocr_free(allocr);
     ggml_free(ctx);
     ggml_backend_free(cpu);
+
+    CHECK((int) y->ne[0] == HD);
+    CHECK((int) y->ne[1] == L);
 
     int bad = 0;
     float max_abs = 0.0f;
@@ -268,13 +310,40 @@ void test_packed_rope_l1() {
     CHECK(bad == 0);
 }
 
+// Output-shape regression check.  Even if the helper ever gets
+// re-plumbed to a different internal pipeline, the public contract
+// must remain `ne[0] = n_heads * head_dim`, `ne[1] = L` so the
+// downstream `ggml_backend_tensor_copy` blit into
+// `vector_text_attention_cache::q_tc_in` stays bit-exact.
+void test_output_shape_contract() {
+    std::fprintf(stderr,
+                 "[apply_rope_to_packed_qk output-shape contract]\n");
+    const int L = 20, n_heads = 4, head_dim = 64;
+    const int HD = n_heads * head_dim;
+    const int half = head_dim / 2;
+    const size_t buf_size = ggml_tensor_overhead() * 256 + ggml_graph_overhead();
+    std::vector<uint8_t> buf(buf_size);
+    ggml_init_params p = { buf_size, buf.data(), true };
+    ggml_context * ctx = ggml_init(p);
+    ggml_tensor * q_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, L, HD);
+    ggml_tensor * cos_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, half, L);
+    ggml_tensor * sin_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, half, L);
+    ggml_tensor * y = apply_rope_to_packed_qk(ctx, q_in, cos_in, sin_in,
+                                              n_heads, head_dim);
+    CHECK((int) y->ne[0] == HD);
+    CHECK((int) y->ne[1] == L);
+    CHECK(ggml_nelements(y) == (int64_t) L * HD);
+    ggml_free(ctx);
+}
+
 } // namespace
 
 int main() {
     // Vector-estimator hot shapes (q_len, kv_len typical sizes).
-    test_packed_rope_shape("vector-estimator q", 20, 4, 64, 0xA51C);
-    test_packed_rope_shape("vector-estimator k", 32, 4, 64, 0xC0FF);
-    test_packed_rope_l1();
+    test_production_layout("vector-estimator q", 20, 4, 64, 0xA51C);
+    test_production_layout("vector-estimator k", 32, 4, 64, 0xC0FF);
+    test_production_layout_l1();
+    test_output_shape_contract();
 
     std::fprintf(stderr,
                  "test_supertonic_rope_packed_qk: %d / %d checks passed\n",

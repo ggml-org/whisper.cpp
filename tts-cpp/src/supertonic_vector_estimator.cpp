@@ -1358,9 +1358,31 @@ void build_group_graph_cache(vector_group_graph_cache & cache,
     ggml_tensor * k = dense_matmul_time_pretransposed_ggml(cache.ctx, model, cache.text_in,
         require_source_tensor(model, k_matmul_source),
         require_source_tensor(model, attn_prefix + "W_key.linear.bias"));
-    ggml_tensor * v = dense_matmul_time_pretransposed_ggml(cache.ctx, model, cache.text_in,
+    // QVAC-18966 — pack V into the layout the downstream
+    // `run_text_attention_cache_gpu` consumes via
+    // `ggml_backend_tensor_copy(v_src, v_tc_in)`.  `v_tc_in` is
+    // `ggml_new_tensor_2d(F32, A=HD, kv_len)` → ne=[HD, kv_len]
+    // with natural strides nb=[elem, HD*elem] (time-major-flat
+    // memory `data[c + t*HD]`).  `dense_matmul_time_(pre)ggml`
+    // produces ne=[L_kv, HD] with channel-major-flat memory
+    // (`data[t + c*L_kv]`) — the byte-for-byte transpose of what
+    // the bridge expects.  `ggml_cont(ggml_transpose(...))` flips
+    // the strides + materialises a contiguous fresh tensor with
+    // the right layout.  Mirrors the head-of-pipeline transpose
+    // inside `apply_rope_to_packed_qk` so Q-rope / K-rope / V all
+    // land in `q_tc_in` / `k_tc_in` / `v_tc_in` bit-exactly.  See
+    // the header doc on `apply_rope_to_packed_qk` in
+    // `supertonic_internal.h` for the full layout reasoning.
+    //
+    // Legacy host bridge: `tensor_raw_f32(v_gpu)` downloads the
+    // post-transpose bytes (time-major-flat `out[t*HD + c]`) —
+    // bit-identical to what scalar `apply_rope`'s reference loop
+    // produces and what every legacy `push_trace`-consuming
+    // harness expects (callers updated in lock-step).
+    ggml_tensor * v_matmul = dense_matmul_time_pretransposed_ggml(cache.ctx, model, cache.text_in,
         require_source_tensor(model, v_matmul_source),
         require_source_tensor(model, attn_prefix + "W_value.linear.bias"));
+    ggml_tensor * v = ggml_cont(cache.ctx, ggml_transpose(cache.ctx, v_matmul));
     ggml_set_name(q, q_name.c_str()); ggml_set_output(q); ggml_build_forward_expand(cache.gf, q);
     ggml_set_name(k, k_name.c_str()); ggml_set_output(k); ggml_build_forward_expand(cache.gf, k);
     ggml_set_name(v, v_name.c_str()); ggml_set_output(v); ggml_build_forward_expand(cache.gf, v);
@@ -1525,16 +1547,41 @@ vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache
         // `push_trace` block below and the call-site
         // `PUSH_GGML_TRACE({"ve_g*_attn_v", …})` push.  The legacy
         // host-RoPE fallback consumes them directly.
+        //
+        // Q / K matmul outputs are UNCHANGED ne=[L, HD] / ne=[text_
+        // len, HD] channel-major-flat memory, so `tensor_to_time_
+        // channel` is the right call (decodes col=c, row=t at
+        // `c*L + t` into out[t*HD + c]).
         out.q = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, q_name.c_str()));
         out.k = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, k_name.c_str()));
-        out.v = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, v_name.c_str()));
+        // QVAC-18966 — V is now graph-packed to ne=[HD, text_len]
+        // time-major-flat by the head-of-V transpose in
+        // `build_group_graph_cache`.  `tensor_raw_f32` downloads
+        // the bytes in the layout scalar `apply_rope` /
+        // `flash_attention_qkv` host references expect
+        // (`v[t*HD + c]`).  `tensor_to_time_channel` would now
+        // mis-interpret the swapped ne (reading HD as L_var and
+        // L as C_var) and silently feed wrong-orientation V into
+        // the attention.  See the header doc on
+        // `apply_rope_to_packed_qk` in `supertonic_internal.h`.
+        out.v = tensor_raw_f32(ggml_graph_get_tensor(cache.gf, v_name.c_str()));
     }
     if (trace && cache.apply_rope) {
         // Trace-only extra downloads — post-RoPE Q/K mirrors the
         // call site's `PUSH_GGML_TRACE({"ve_g*_attn_q_rope", …})`.
-        out.q_rope = tensor_to_time_channel(
+        //
+        // QVAC-18966 — post-fix layout contract:
+        // `apply_rope_to_packed_qk` now produces ne=[HD, L] with
+        // time-major-flat memory (`data[c + t*HD]`).  Those bytes
+        // ARE the scalar `apply_rope`'s native flat layout
+        // (`out[t*HD + c]`), so `tensor_raw_f32` downloads them
+        // directly — no transpose needed.  `tensor_to_time_channel`
+        // would mis-interpret the new ne shape and produce the
+        // transpose of the transpose.  See the header doc on
+        // `apply_rope_to_packed_qk` in `supertonic_internal.h`.
+        out.q_rope = tensor_raw_f32(
             ggml_graph_get_tensor(cache.gf, cache.q_rope_name.c_str()));
-        out.k_rope = tensor_to_time_channel(
+        out.k_rope = tensor_raw_f32(
             ggml_graph_get_tensor(cache.gf, cache.k_rope_name.c_str()));
     }
     if (trace) {
@@ -2973,9 +3020,22 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             ggml_set_name(k_t, "ve_attn0_k");
             ggml_set_output(k_t);
             ggml_build_forward_expand(front_cache.gf, k_t);
-            ggml_tensor * v_t = dense_matmul_time_ggml(front_cache.ctx, front_cache.text_in_t,
+            // QVAC-18966 — pack V into the layout
+            // `run_text_attention_cache_gpu` consumes via
+            // `ggml_backend_tensor_copy(v_src, v_tc_in)`.  See the
+            // identical transpose in `build_group_graph_cache` +
+            // the header doc on `apply_rope_to_packed_qk` in
+            // `supertonic_internal.h`.  Matmul output is ne=[L_kv,
+            // HD] channel-major-flat; v_tc_in expects ne=[HD,
+            // L_kv] time-major-flat.  Legacy host bridge
+            // downloads `ve_attn0_v` via `tensor_raw_f32` to get
+            // bytes in the time-major-flat shape scalar
+            // `apply_rope` / `flash_attention_qkv` references.
+            ggml_tensor * v_matmul = dense_matmul_time_ggml(front_cache.ctx, front_cache.text_in_t,
                 require_source_tensor(model, "vector_estimator:onnx::MatMul_3103"),
                 require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.W_value.linear.bias"));
+            ggml_tensor * v_t = ggml_cont(front_cache.ctx,
+                ggml_transpose(front_cache.ctx, v_matmul));
             ggml_set_name(v_t, "ve_attn0_v");
             ggml_set_output(v_t);
             ggml_build_forward_expand(front_cache.gf, v_t);
@@ -3098,7 +3158,22 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         PUSH_GGML_TRACE({"ve_time_add0", {L, C}, tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_time_add0"))});
         std::vector<float> block2_ggml = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_block2_convnext0"));
         PUSH_GGML_TRACE({"ve_block2_convnext0", {L, C}, block2_ggml});
-        std::vector<float> v_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_v"));
+        // QVAC-18966 — `ve_attn0_v` is now `ggml_cont(ggml_
+        // transpose(...))` of the matmul output (ne=[HD, text_len]
+        // time-major-flat memory).  `tensor_raw_f32` downloads
+        // the bytes in the layout scalar `apply_rope` /
+        // `flash_attention_qkv` host references expect
+        // (`v[t*HD + c]`) — bit-identical to what
+        // `run_text_attention_cache`'s host upload writes into
+        // `v_tc_in` (`ggml_new_tensor_2d(F32, HD, kv_len)` natural
+        // strides nb=[elem, HD*elem]).  Using
+        // `tensor_to_time_channel` here would mis-interpret the
+        // swapped ne and silently feed wrong-orientation V into
+        // the attention.  Q/K matmul outputs are UNCHANGED ne=[L,
+        // HD] channel-major-flat so `tensor_to_time_channel` stays
+        // the right call for them.  See the header doc on
+        // `apply_rope_to_packed_qk` in `supertonic_internal.h`.
+        std::vector<float> v_out = tensor_raw_f32(ggml_graph_get_tensor(gf, "ve_attn0_v"));
         // F23 — when the front-block graph has the in-graph RoPE
         // wired in (model carries `vector_rope_theta`), feed
         // `run_text_attention_cache` the already-rotated Q/K from
@@ -3117,8 +3192,19 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         const bool front_in_graph_rope =
             ggml_graph_get_tensor(gf, "ve_attn0_q_rope") != nullptr;
         if (front_in_graph_rope) {
-            q_rotated = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_q_rope"));
-            k_rotated = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_k_rope"));
+            // QVAC-18966 — post-fix layout contract:
+            // `apply_rope_to_packed_qk` produces ne=[HD, L] with
+            // time-major-flat memory (`data[c + t*HD]`).  Those
+            // bytes ARE scalar `apply_rope`'s native flat layout
+            // (`out[t*HD + c]`), so `tensor_raw_f32` downloads
+            // them directly — no transpose needed.  Using
+            // `tensor_to_time_channel` would mis-interpret the
+            // swapped ne shape and produce the transpose of the
+            // transpose, silently feeding wrong-orientation Q / K
+            // into the attention.  See the header doc on
+            // `apply_rope_to_packed_qk` in `supertonic_internal.h`.
+            q_rotated = tensor_raw_f32(ggml_graph_get_tensor(gf, "ve_attn0_q_rope"));
+            k_rotated = tensor_raw_f32(ggml_graph_get_tensor(gf, "ve_attn0_k_rope"));
         } else {
             // Legacy path: GGUF lacks vector_rope_theta-typed wiring.
             // Materialise Q/K host-side, rotate, then forward.
