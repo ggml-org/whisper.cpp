@@ -171,7 +171,8 @@ bool is_supported_language(const std::string & language) {
 
 std::string supertonic_preprocess_text(const std::string & text,
                                        const std::string & language,
-                                       const std::string & language_wrap_mode) {
+                                       const std::string & language_wrap_mode,
+                                       bool is_continuation) {
     if (!is_supported_language(language)) {
         throw std::runtime_error("invalid Supertonic language: " + language);
     }
@@ -211,7 +212,13 @@ std::string supertonic_preprocess_text(const std::string & text,
     while (s.find("``") != std::string::npos) replace_all(s, "``", "`");
 
     s = collapse_spaces(s);
-    if (!has_terminal_punct(s)) s += ".";
+    // Skip the auto-period for continuation chunks (streaming).  The
+    // model was trained on sentence-terminated input; on chunked mid-
+    // utterance text a fake period makes it speak the stub as a
+    // complete sentence with falling intonation + trailing artifacts.
+    // Continuation chunks pass through with their natural ending (word,
+    // comma, etc.) so the model isn't lied to about sentence end.
+    if (!is_continuation && !has_terminal_punct(s)) s += ".";
     if (language_wrap_mode == "none") return s;
     if (language_wrap_mode == "prefix") return "<" + language + ">" + s + " ";
     if (language_wrap_mode == "open_close") return "<" + language + ">" + s + "</" + language + ">";
@@ -223,9 +230,11 @@ bool supertonic_text_to_ids(const supertonic_model & model,
                             const std::string & language,
                             std::vector<int32_t> & ids,
                             std::string * normalized_text,
-                            std::string * error) {
+                            std::string * error,
+                            bool is_continuation) {
     try {
-        std::string normalized = supertonic_preprocess_text(text, language, model.hparams.language_wrap_mode);
+        std::string normalized = supertonic_preprocess_text(
+            text, language, model.hparams.language_wrap_mode, is_continuation);
         std::vector<uint32_t> cps = utf8_to_cps(normalized);
         ids.clear();
         ids.reserve(cps.size());

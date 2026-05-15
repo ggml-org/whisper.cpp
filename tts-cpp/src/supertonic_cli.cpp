@@ -29,6 +29,10 @@ void usage(const char * argv0) {
         "          [--stream-first-chunk-tokens N]  (override 1st-chunk target;\n"
         "                            0 = same as --stream-chunk-tokens)\n"
         "          [--stream-chunk-tolerance-pct N] (boundary-snap window; default 20)\n"
+        "          [--stream-min-chunk-tokens N]    (hard floor on chunk size;\n"
+        "                            default 30 — below this the model glitches\n"
+        "                            on stub input; chunks below the floor are\n"
+        "                            merged with their neighbor)\n"
         "\n"
         "          When --out is '-', the CLI emits raw s16le PCM to stdout as\n"
         "          each chunk completes.  Pipe into a player, e.g.:\n"
@@ -115,6 +119,9 @@ int main(int argc, char ** argv) {
         }
         else if (arg == "--stream-chunk-tolerance-pct") {
             opts.stream_chunk_tolerance_pct = std::stoi(next("--stream-chunk-tolerance-pct"));
+        }
+        else if (arg == "--stream-min-chunk-tokens") {
+            opts.stream_min_chunk_tokens = std::stoi(next("--stream-min-chunk-tokens"));
         }
         else if (arg == "-h" || arg == "--help") { usage(argv[0]); return 0; }
         else { fprintf(stderr, "unknown arg: %s\n", arg.c_str()); usage(argv[0]); return 2; }

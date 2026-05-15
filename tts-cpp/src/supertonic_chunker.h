@@ -26,18 +26,20 @@ namespace tts_cpp::supertonic::detail {
 // that smaller target instead (latency knob — first audio lands earlier
 // while subsequent chunks stay large to keep throughput up).
 //
+// `min_chunk_tokens` is a hard floor on every chunk's size: the
+// effective target is `max(target_tokens, min_chunk_tokens)` (and
+// similarly for first-chunk).  The trailing chunk is merged into the
+// previous one if it ends up below the floor.  Default 30 — empirically
+// the model emits dropped/muddled phonemes when fed shorter stubs.
+//
 // Leading/trailing whitespace on each chunk is trimmed.  Adjacent chunks
 // concatenated back together (modulo trimmed whitespace) reproduce the
 // input.  Empty / whitespace-only chunks are not emitted.
-//
-// Tail-merge: if the last chunk would carry fewer than ~max(8, target/3)
-// tokens, it is merged into the previous chunk to avoid paying full
-// pipeline cost for a handful of trailing tokens (mirrors Chatterbox's
-// chatterbox_engine.cpp:608 heuristic).
 std::vector<std::string> split_for_streaming(
     const std::string & text,
     int target_tokens,
     int first_chunk_tokens = 0,
-    int tolerance_pct      = 20);
+    int tolerance_pct      = 20,
+    int min_chunk_tokens   = 30);
 
 } // namespace tts_cpp::supertonic::detail

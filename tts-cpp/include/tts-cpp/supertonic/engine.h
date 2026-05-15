@@ -146,18 +146,34 @@ struct EngineOptions {
     //
     //   stream_chunk_tolerance_pct  Boundary-snap window for CLAUSE and
     //                               WHITESPACE fallbacks (±N% of target).
-    //                               Sentence-end breaks are searched on a
-    //                               much wider implicit window (target/2
-    //                               to 3× target) regardless of this
-    //                               setting, because sentence prosody
-    //                               dominates audio quality: chunks cut
-    //                               mid-clause receive an artificial
-    //                               terminal period from preprocess and
-    //                               the model emits muddled audio in
-    //                               response.  Default 20.
+    //                               Sentence-end is searched on a much
+    //                               wider implicit window (target/2 to
+    //                               3× target) because sentence-aligned
+    //                               chunks let the per-chunk duration
+    //                               predictor and attention phrase
+    //                               naturally; mid-clause cuts work
+    //                               (continuation flag in preprocess
+    //                               avoids the artificial trailing
+    //                               period that would otherwise make
+    //                               the model speak the stub as a
+    //                               complete sentence) but produce
+    //                               audible pauses + rate shifts at
+    //                               seams since the model is not
+    //                               streaming-trained.  Default 20.
+    //
+    //   stream_min_chunk_tokens     Hard floor on every chunk's size.
+    //                               Effective targets are
+    //                               max(target, min) — below the floor
+    //                               the model glitches on stub input
+    //                               (dropped / muddled phonemes,
+    //                               verified empirically).  Trailing
+    //                               chunks shorter than the floor are
+    //                               merged into the previous chunk.
+    //                               Default 30.
     int stream_chunk_tokens        = 0;
     int stream_first_chunk_tokens  = 0;
     int stream_chunk_tolerance_pct = 20;
+    int stream_min_chunk_tokens    = 30;
 };
 
 // Per-chunk PCM callback for streaming synthesis.  Receives a pointer to

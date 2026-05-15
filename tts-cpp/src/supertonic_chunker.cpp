@@ -128,15 +128,22 @@ size_t scan_for(const std::vector<cp_at> & cps,
 //
 //   `sent_lo..sent_hi`  — wide window for sentence-end punctuation.
 //                          Sentence prosody dominates audio quality on
-//                          this model (chunks that end mid-clause and
-//                          get an artificial trailing period make the
-//                          model emit muddled/dropped words), so we
-//                          search a much larger range for sentences
-//                          than for any other boundary type.
+//                          this model (the duration predictor and
+//                          attention run per-chunk, so chunk-aligned
+//                          sentence breaks let the model phrase
+//                          naturally), so sentence search reaches
+//                          much further than clause/whitespace.
 //
 //   `norm_lo..norm_hi`  — tight user-controlled window for clause and
 //                          whitespace fallbacks when no sentence is in
-//                          reach.  Hard-cut at `norm_hi` as last resort.
+//                          reach.  Hard-cut at `norm_hi` as last
+//                          resort.  Continuation flag in the engine
+//                          makes the resulting mid-clause chunk audio
+//                          tolerable; the bigger seam artifacts (small
+//                          pauses, rate shifts) are inherent to
+//                          per-chunk synthesis on a non-streaming-
+//                          trained model and can't be removed at this
+//                          layer.
 //
 // Returns the index AFTER the break (chunk = cps[start..break)).
 size_t pick_break(const std::vector<cp_at> & cps,
@@ -182,7 +189,8 @@ std::vector<std::string> split_for_streaming(
     const std::string & text,
     int target_tokens,
     int first_chunk_tokens,
-    int tolerance_pct)
+    int tolerance_pct,
+    int min_chunk_tokens)
 {
     std::vector<std::string> out;
     if (target_tokens <= 0 || text.empty()) {
@@ -196,31 +204,45 @@ std::vector<std::string> split_for_streaming(
     const std::vector<cp_at> cps = decode_with_byte_offsets(text);
     if (cps.empty()) return out;
 
-    const int  tol_pct  = std::clamp(tolerance_pct, 0, 100);
+    const int tol_pct        = std::clamp(tolerance_pct, 0, 100);
+    const int min_chunk      = std::max(1, min_chunk_tokens);
+    // Effective targets clamp up to min_chunk so the chunker never aims
+    // for a sub-minimum chunk (the model glitches on stub input below
+    // ~30 tokens — verified empirically on multiple seeds and texts).
+    const int target_eff     = std::max(target_tokens, min_chunk);
+    const int first_eff      = first_chunk_tokens > 0
+                                   ? std::max(first_chunk_tokens, min_chunk)
+                                   : 0;
 
     const size_t total = cps.size();
     size_t       start = 0;
     int          chunk_idx = 0;
 
     while (start < total) {
-        const int target_this = (chunk_idx == 0 && first_chunk_tokens > 0)
-                                    ? first_chunk_tokens
-                                    : target_tokens;
+        const int target_this = (chunk_idx == 0 && first_eff > 0)
+                                    ? first_eff
+                                    : target_eff;
 
         // Tight window — for clause/whitespace boundaries and the
         // hard-cut fallback.  Driven by the user-supplied tolerance.
-        const int norm_lo_rel = std::max(1, target_this - target_this * tol_pct / 100);
-        const int norm_hi_rel = target_this + target_this * tol_pct / 100;
+        // Lower bound is bumped to start + min_chunk so a break can't
+        // produce a sub-minimum chunk on this iteration.
+        int norm_lo_rel = std::max(1, target_this - target_this * tol_pct / 100);
+        int norm_hi_rel = target_this + target_this * tol_pct / 100;
+        norm_lo_rel     = std::max(norm_lo_rel, min_chunk);
+        norm_hi_rel     = std::max(norm_hi_rel, norm_lo_rel);
 
         // Wide window — sentence-end search.  Reaches back to half the
-        // target (so we don't pick a sentence break that makes the chunk
-        // ridiculously short) and forward to 3× the target (so a fairly
-        // distant period is still preferred over a mid-clause whitespace
-        // cut).  3× is empirical: covers typical English sentence-length
-        // variance without letting one runaway sentence destroy
-        // streaming latency.
-        const int sent_lo_rel = std::max(1, target_this / 2);
-        const int sent_hi_rel = target_this * 3;
+        // effective target (so a sentence break that yields a too-small
+        // chunk is rejected by the min_chunk floor) and forward to 3×
+        // the target (so a fairly distant period is still preferred
+        // over a mid-clause whitespace cut).  3× is empirical: covers
+        // typical English sentence-length variance without letting one
+        // runaway sentence destroy streaming latency.
+        int sent_lo_rel = std::max(1, target_this / 2);
+        int sent_hi_rel = target_this * 3;
+        sent_lo_rel     = std::max(sent_lo_rel, min_chunk);
+        sent_hi_rel     = std::max(sent_hi_rel, sent_lo_rel);
 
         const size_t norm_lo = std::min(start + (size_t) norm_lo_rel, total);
         const size_t norm_hi = std::min(start + (size_t) norm_hi_rel, total);
@@ -245,17 +267,15 @@ std::vector<std::string> split_for_streaming(
         ++chunk_idx;
     }
 
-    // Tail-merge heuristic: if the last chunk has fewer than max(8,
-    // target/3) tokens AND we have at least two chunks, fold it into
-    // the previous chunk.  Avoids paying full pipeline cost for a
-    // handful of trailing tokens.  Mirrors chatterbox_engine.cpp:608.
+    // Tail-merge heuristic: if the last chunk has fewer than min_chunk
+    // tokens AND we have at least two chunks, fold it into the previous
+    // chunk.  Avoids paying full pipeline cost for a handful of
+    // trailing tokens AND avoids handing the model a sub-minimum tail
+    // chunk where it glitches.  Mirrors chatterbox_engine.cpp:608.
     if (out.size() >= 2) {
         const std::vector<cp_at> tail_cps = decode_with_byte_offsets(out.back());
-        const int                min_tail = std::max(8, target_tokens / 3);
-        if ((int) tail_cps.size() < min_tail) {
+        if ((int) tail_cps.size() < min_chunk) {
             std::string merged = out[out.size() - 2];
-            // Re-insert a single space between fragments if both sides
-            // are non-empty after trim, so spoken prosody isn't glued.
             if (!merged.empty() && !out.back().empty()) merged.push_back(' ');
             merged += out.back();
             out.pop_back();

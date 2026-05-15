@@ -110,6 +110,44 @@ private:
     }
 };
 
+// Heuristic: does this chunk end at a natural sentence terminator?
+// Used by streaming to decide whether to skip the auto-appended period
+// (continuation chunks) or keep it (complete-sentence chunks).
+// Comma / clause punctuation are NOT sentence terminators here —
+// chunks ending in commas still want is_continuation=true so the model
+// hears them as a continuation, not a mini-sentence.
+bool chunk_ends_with_sentence_term(const std::string & s) {
+    // Trim trailing ASCII whitespace.
+    size_t i = s.size();
+    while (i > 0 && (s[i - 1] == ' ' || s[i - 1] == '\t' ||
+                     s[i - 1] == '\n' || s[i - 1] == '\r')) --i;
+    if (i == 0) return false;
+    if (s[i - 1] == '.' || s[i - 1] == '?' || s[i - 1] == '!') return true;
+    // Decode the final UTF-8 code point: scan back to the leading byte.
+    size_t pos = i - 1;
+    while (pos > 0 && ((uint8_t) s[pos] & 0xC0) == 0x80) --pos;
+    const size_t bytes = i - pos;
+    uint32_t cp = 0;
+    if      (bytes == 1) cp = (uint8_t) s[pos];
+    else if (bytes == 2) cp = ((s[pos] & 0x1F) << 6) | (s[pos + 1] & 0x3F);
+    else if (bytes == 3) cp = ((s[pos] & 0x0F) << 12) |
+                              ((s[pos + 1] & 0x3F) << 6) |
+                              (s[pos + 2] & 0x3F);
+    else if (bytes == 4) cp = ((s[pos] & 0x07) << 18) |
+                              ((s[pos + 1] & 0x3F) << 12) |
+                              ((s[pos + 2] & 0x3F) << 6) |
+                              (s[pos + 3] & 0x3F);
+    switch (cp) {
+        case 0x3002: case 0xFF1F: case 0xFF01:           // 。 ？ ！
+        case 0x203C: case 0x2047: case 0x2048: case 0x2049: // ‼ ⁇ ⁈ ⁉
+        case 0x0964: case 0x0965:                        // । ॥
+        case 0x06D4:                                     // ۔
+            return true;
+        default:
+            return false;
+    }
+}
+
 } // namespace
 
 struct Engine::Impl {
@@ -176,10 +214,12 @@ struct Engine::Impl {
 
     // Single-chunk synthesis worker.  Runs the full Supertonic pipeline
     // (preprocess → duration → noise → text encoder → vector estimator
-    // CFM loop → vocoder) on `text`, using `seed` for the noise RNG so
-    // streaming callers can perturb per-chunk seeds without colliding
-    // on identical starting noise.  Throws on cancel or any stage error.
-    SynthesisResult run_single_chunk(const std::string & text, int seed) {
+    // CFM loop → vocoder) on `text` with the given seed.  When
+    // `is_continuation` is true the preprocess skips the auto-appended
+    // terminal period — used by streaming for mid-utterance chunks so
+    // the model isn't told "this is a complete sentence" when it isn't.
+    SynthesisResult run_single_chunk(const std::string & text, int seed,
+                                     bool is_continuation = false) {
         const std::string voice = opts.voice.empty()
             ? model.hparams.default_voice
             : opts.voice;
@@ -200,7 +240,8 @@ struct Engine::Impl {
         std::vector<int32_t> text_ids_i32;
         std::string normalized;
         std::string error;
-        if (!supertonic_text_to_ids(model, text, opts.language, text_ids_i32, &normalized, &error)) {
+        if (!supertonic_text_to_ids(model, text, opts.language, text_ids_i32,
+                                    &normalized, &error, is_continuation)) {
             throw std::runtime_error("Supertonic Engine: text preprocessing failed: " + error);
         }
         std::vector<int64_t> text_ids(text_ids_i32.begin(), text_ids_i32.end());
@@ -308,7 +349,8 @@ struct Engine::Impl {
             text,
             opts.stream_chunk_tokens,
             opts.stream_first_chunk_tokens,
-            opts.stream_chunk_tolerance_pct);
+            opts.stream_chunk_tolerance_pct,
+            opts.stream_min_chunk_tokens);
 
         if (chunks.empty()) {
             throw std::runtime_error("Supertonic Engine: chunker produced no chunks");
@@ -345,7 +387,20 @@ struct Engine::Impl {
             // nearby seeds where the model produces phantom phoneme
             // artifacts ("park.K" tail).  Keeping the user's chosen
             // seed across chunks gives consistent, controllable output.
-            SynthesisResult chunk_res = run_single_chunk(chunks[k], opts.seed);
+            //
+            // is_continuation: chunks that DON'T end on a natural
+            // sentence terminator (.?! and the CJK / Devanagari / Urdu
+            // equivalents) need preprocess to skip the auto-appended
+            // period.  Otherwise the model hears the stub as a complete
+            // sentence with falling intonation + trailing artifacts —
+            // the failure mode that originally restricted us to
+            // sentence-only chunking.  With the flag, mid-clause /
+            // mid-word chunk endings flow through with their natural
+            // (un-punctuated) tail so the model treats them as a
+            // continuation.
+            const bool is_continuation = !chunk_ends_with_sentence_term(chunks[k]);
+            SynthesisResult chunk_res = run_single_chunk(chunks[k], opts.seed,
+                                                         is_continuation);
 
             // Anti-click raised-cosine fade across inter-chunk seams.
             // Without HiFT cache continuity (Supertonic runs each chunk
