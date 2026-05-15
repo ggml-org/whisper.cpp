@@ -697,70 +697,152 @@ inline void make_rope_cos_sin_tables(const float * theta,
 // n_heads, L]` — the natural layout the scalar `apply_rope`
 // reference indexes into (`data[t*H*D + h*D + d]`).  Every actual
 // call site in the vector estimator produces Q/K via
-// `dense_matmul_time_ggml`, whose output is a 2D packed tensor
-// with `ne=[H*D, L]` (channel-major along axis 0, time along
-// axis 1).  `apply_rope_to_packed_qk` adapts between the two
-// layouts so the graph builders can bake the rotation in-place
-// without reshaping the rest of the QKV plumbing:
+// `dense_matmul_time_ggml`, whose output is a 2D tensor with
+// `ne=[L, HD]` — axis 0 = L (time, fastest along natural strides
+// `nb=[elem, L*elem]`) and axis 1 = HD = n_heads * head_dim
+// (packed channels h*D+d, slowest).  In flat memory the element
+// (t, c) sits at byte offset `(t + c*L)*elem` — i.e. **channel-
+// major-flat** (`data[t + c*L]`), which is the bit-exact transpose
+// of the time-major-flat layout the scalar `apply_rope` reference
+// indexes through (`data[t*H*D + h*D + d]`).
 //
-//   - Re-views the packed tensor as `[head_dim, n_heads, L]` via
-//     a zero-cost stride trick (`nb[0]=elem, nb[1]=D*4, nb[2]=H*D*4`)
-//     — the memory pattern `data[t*H*D + h*D + d]` is preserved
-//     bit-exactly.
-//   - Materialises a contiguous copy (`ggml_cont`) so the
+// QVAC-18966 — same-shape matmul on every backend: confirmed by
+// inspection of the CPU custom-op fast path (`ggml_custom_4d(F32,
+// x->ne[0] /* = L */, w->ne[0] /* = OC */, …)` → `[L, OC]`) and
+// the `conv1d_f32(K=1)` fallback (`ggml_reshape_3d(result,
+// im2col->ne[1] /* = L */, kernel->ne[2] /* = OC */, …)` → also
+// `[L, OC]`).  Both code paths produce the same ne contract — so
+// this helper's adapter has to bridge the **matmul-output**
+// channel-major-flat layout onto `apply_rope_in_graph`'s natural-
+// strides `[D, H, L]` contract.
+//
+// History note: the original (PR #16 follow-up #5) version of
+// this helper assumed `q->ne[0] = HD` and `q->ne[1] = L` — i.e.,
+// the transpose of what the matmul actually produces.  That
+// older contract crashed at the defensive assertion below on
+// every real synth (the moment a GGUF carrying `vector_rope_theta`
+// enabled the in-graph rotation path).  The CPU unit test that
+// landed alongside `apply_rope_to_packed_qk` hand-built Q under
+// the `[HD, L]` assumption, so the failure mode was invisible to
+// CI.  GPU backends (Metal / CUDA / Vulkan / OpenCL) silently
+// dispatched a transposed view through the rotation, masking the
+// shape problem until a CPU `--n-gpu-layers 0` synth hit the
+// assert.  See QVAC-18966.  `test_supertonic_rope_packed_qk.cpp`
+// now reproduces the **production** matmul layout and pins both
+// the input and output shape contracts.
+//
+// Pipeline (production layout):
+//   - Step 1: `ggml_cont(ggml_transpose(q))` — view-swap axes
+//     0/1 (zero-cost stride flip) then materialise to natural
+//     strides.  Result has ne=[HD, L] with **time-major-flat**
+//     memory layout (`data[c + t*HD]`).  This is the SAME layout
+//     `q_tc_in` (`ggml_new_tensor_2d(A, L)` in
+//     `vector_text_attention_cache`) expects for the
+//     `ggml_backend_tensor_copy` device→device blit at the GPU-
+//     bridge dispatch site.
+//   - Step 2: Re-view the packed tensor as `[head_dim, n_heads,
+//     L]` via the zero-cost stride trick `nb[0]=elem,
+//     nb[1]=D*elem, nb[2]=HD*elem` — element (d, h, l) lands at
+//     offset `d + h*D + l*HD` (elem units), identical to the
+//     post-transpose layout's element (col=h*D+d, row=l) at
+//     `col + row*HD`.
+//   - Step 3: Materialise a contiguous `[D, H, L]` copy so the
 //     downstream `ggml_concat` inside `apply_rope_in_graph` sees
 //     monotonically-increasing strides.
-//   - Calls `apply_rope_in_graph(ctx, x_dhl, cos, sin)`.
-//   - Reshapes the rotated `[D, H, L]` result back to `[H*D, L]`
-//     so call sites can keep their existing `ggml_set_output` +
-//     `tensor_to_time_channel` plumbing unchanged.
+//   - Step 4: `apply_rope_in_graph(ctx, x_dhl, cos, sin)`.
+//   - Step 5: Reshape the rotated `[D, H, L]` result back to
+//     `[HD, L]` — same memory, different ne labels.  Bytes are
+//     in time-major-flat layout `data[c + t*HD]`, byte-for-byte
+//     identical to scalar `apply_rope`'s output and to what
+//     `q_tc_in` expects.
 //
-// Cost vs. the current host-side `apply_rope`:
+// Call-site impact for the bytes-out contract:
+//   - GPU bridge (`run_text_attention_cache_gpu`): unchanged.
+//     `ggml_backend_tensor_copy(q_rope, q_tc_in)` already passes
+//     `ggml_nbytes(src) == ggml_nbytes(dst)` (same nelements)
+//     and now also matches the destination's memory layout
+//     bit-for-bit.
+//   - Legacy host bridge: `tensor_to_time_channel(q_rope)` was
+//     designed for the (incorrectly-shaped) old contract and
+//     would now read the transpose-of-the-transpose if called
+//     unchanged.  Use `tensor_raw_f32(q_rope)` instead — the
+//     bytes are already time-major-flat (matches scalar
+//     `apply_rope`'s output buffer contract), and uploading
+//     them via `ggml_backend_tensor_set` to `q_tc_in` lands the
+//     same bytes the GPU-bridge `ggml_backend_tensor_copy`
+//     would.  The four production call sites in
+//     `supertonic_vector_estimator.cpp` are updated in lock-step
+//     with this helper.
+//   - Trace mode: the `PUSH_GGML_TRACE` entries push a
+//     `std::vector<float>` shaped as `{L, HD}` (i.e., flat
+//     `out[t*HD + c]` — scalar `apply_rope`'s native indexing).
+//     `tensor_raw_f32(q_rope)` returns exactly that layout, so
+//     trace parity vs. the scalar harness is preserved without
+//     any further re-pack.
+//
+// Cost vs. the pre-fix (broken) helper:
+//   - Adds one `ggml_cont` per site (the head-of-pipeline
+//     transpose).  On CPU it is a single memcpy of `L * HD * 4`
+//     bytes; on GPU backends it is one shader dispatch per
+//     cache build.  The cache is built ONCE and reused across
+//     all 5 denoise steps, so the cost is fully amortised.
 //   - Eliminates 40 CPU rotations / synth (~50 µs each ≈ 2 ms
 //     wall-time on the default 5-step × 4-RoPE-site schedule).
-//   - Trades for one extra `ggml_cont` per site (small kernel
-//     on GPU; ~0).  No new ops beyond `view + cont + reshape +
-//     ggml_concat` chain already proven by the inner helper.
 //
-// Universally-supported ops only: `ggml_view_3d`, `ggml_cont`,
-// `ggml_reshape_2d` + everything `apply_rope_in_graph` uses.
-// Green on baseline upstream OpenCL.
+// Universally-supported ops only: `ggml_transpose`, `ggml_cont`,
+// `ggml_view_3d`, `ggml_reshape_2d` + everything
+// `apply_rope_in_graph` uses.  Green on baseline upstream OpenCL.
 //
 // Parity-tested in `test_supertonic_rope_packed_qk.cpp` against
 // the scalar `apply_rope` on the two hot vector-estimator shapes
-// (`q_len=20 × H=4 × D=64`, `kv_len=32 × H=4 × D=64`) and a
-// degenerate `L=1` trip-wire.  Tolerance `1e-4` absolute.
+// (`q_len=20 × H=4 × D=64`, `kv_len=32 × H=4 × D=64`), a
+// degenerate `L=1` trip-wire, and an explicit output-shape
+// contract check that pins `ne[0]=HD, ne[1]=L`.  Tolerance
+// `1e-4` absolute.
 inline ggml_tensor * apply_rope_to_packed_qk(ggml_context * ctx,
                                               ggml_tensor * q,
                                               ggml_tensor * cos_table,
                                               ggml_tensor * sin_table,
                                               int n_heads,
                                               int head_dim) {
-    const int64_t L  = q->ne[1];
-    const int64_t HD = q->ne[0];
+    // Step 1 — transpose `ne=[L, HD]` (matmul-output contract,
+    // channel-major-flat memory) into `ne=[HD, L]` with natural
+    // time-major-flat memory.  `ggml_transpose` is a view-only
+    // axis swap (nb[0] ↔ nb[1]); `ggml_cont` materialises the
+    // natural strides `nb=[elem, HD*elem]`.  This is the SAME
+    // memory layout the downstream `q_tc_in` consumes — the
+    // helper's output then plumbs unchanged into both the GPU-
+    // bridge `ggml_backend_tensor_copy` and the legacy host-
+    // bridge `tensor_raw_f32` paths.
+    ggml_tensor * q_packed = ggml_cont(ctx, ggml_transpose(ctx, q));
+
+    const int64_t L  = q_packed->ne[1];
+    const int64_t HD = q_packed->ne[0];
     (void) HD; // assertion-only; compiler may drop in NDEBUG.
     GGML_ASSERT(HD == (int64_t) n_heads * head_dim);
-    // q has natural strides for ne=[HD, L]: nb[0]=elem_size,
-    // nb[1]=HD*elem_size.  A view with ne=[D, H, L] sharing the
-    // same memory needs nb=[elem, D*elem, HD*elem]; element
-    // (d, h, l) lands at offset `d + h*D + l*HD` in 4-byte units
-    // — identical memory pattern to the original packed layout's
-    // element (col=h*D+d, row=l) at `col + row*HD` = `h*D + d + l*HD`.
-    ggml_tensor * q_dhl_view = ggml_view_3d(ctx, q,
+
+    // Step 2 — re-view the `[HD, L]` packed tensor as `[D, H, L]`
+    // via the zero-cost stride trick.  q_packed has natural
+    // strides nb=[elem, HD*elem]; the view nb=[elem, D*elem,
+    // HD*elem] gives element (d, h, l) at offset `d + h*D + l*HD`
+    // (elem units) — bit-identical to (col=h*D+d, row=l) at
+    // `col + row*HD` in the original packed layout.
+    ggml_tensor * q_dhl_view = ggml_view_3d(ctx, q_packed,
         head_dim, n_heads, L,
         /*nb1=*/(size_t) head_dim * sizeof(float),
         /*nb2=*/(size_t) n_heads * head_dim * sizeof(float),
         /*offset=*/0);
-    // Materialise a contiguous [D, H, L] copy so the downstream
-    // concat / repeat ops in `apply_rope_in_graph` see natural
-    // strides (`nb=[elem, D*elem, D*H*elem]`).  The view above is
-    // legal but non-natural (nb[1]<nb[2] with a `D*elem`/`H*D*elem`
+    // Step 3 — materialise a contiguous [D, H, L] copy so the
+    // downstream `ggml_concat` / `ggml_repeat` ops in
+    // `apply_rope_in_graph` see natural strides
+    // (`nb=[elem, D*elem, D*H*elem]`).  The view above is legal
+    // but non-natural (`nb[1]<nb[2]` with a `D*elem`/`H*D*elem`
     // ratio that some backends' op implementations refuse).
     ggml_tensor * q_dhl = ggml_cont(ctx, q_dhl_view);
     ggml_tensor * q_rot = apply_rope_in_graph(ctx, q_dhl, cos_table, sin_table);
-    // Reshape back to the packed [HD, L] shape; same memory,
-    // different ne labels — downstream consumers (flash-attn cache
-    // upload buffers, trace download) see the original layout.
+    // Step 4 — reshape back to the packed `[HD, L]` shape; same
+    // memory, different ne labels.  Bytes are in time-major-flat
+    // layout `data[c + t*HD]`.
     return ggml_reshape_2d(ctx, q_rot, (int64_t) n_heads * head_dim, L);
 }
 
