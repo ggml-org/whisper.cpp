@@ -1114,6 +1114,47 @@ ggml_backend_buffer_t try_alloc_inputs_in_pinned_host_buffer(
     const supertonic_model & model,
     ggml_context * input_ctx);
 
+// QVAC-18605 round 13 #1 — input-scratchpad allocator that
+// consolidates the round-12 boilerplate.
+//
+// Round 12 #5 inlined the "try pinned-host first, fall back to
+// default backend buffer, throw if both fail" idiom at 4 cache
+// sites.  Round 13 extends the pattern to 5+ additional cache
+// sites (vector_loop_one_graph, vocoder, style residual + QKV,
+// merged speech-prompted, ...) — a 5x boilerplate copy is
+// error-prone (the failure-cleanup ordering is subtle:
+// `ggml_free(input_ctx)` BEFORE nulling the input-tensor
+// pointers leaves dangling pointers in the cache struct that a
+// subsequent free path will dereference).
+//
+// Contract:
+//   - Tries `try_alloc_inputs_in_pinned_host_buffer(model, ctx)`
+//     first.  Returns its buffer on success.
+//   - On failure (CPU / non-Vulkan / probe miss), falls back to
+//     `ggml_backend_alloc_ctx_tensors(ctx, model.backend)`.
+//     Returns that buffer on success.
+//   - On BOTH failing (system resource exhaustion, dead backend,
+//     etc.), throws `std::runtime_error` with a message that
+//     includes `cache_name` so operators can attribute the
+//     failure to a specific cache.
+//   - Defensive throws on `model.backend == nullptr`,
+//     `input_ctx == nullptr`, `cache_name == nullptr` — these
+//     are caller-bug guards in error-handler paths.
+//
+// Caller owns the returned buffer.  Standard teardown order
+// remains: gallocr → main ctx → input_buf → input_ctx (reversed
+// would dangle pointers in the cache struct).
+//
+// CPU-only test (`test_supertonic_input_scratchpad.cpp`) pins
+// the symbol + CPU-fallback contract + null-argument throws.
+// End-to-end Vulkan validation lives in the cache-build paths
+// that consume the helper (round 13 #1 wiring at
+// `vector_loop_one_graph_cache`, `vocoder_graph_cache`, etc.).
+ggml_backend_buffer_t alloc_input_scratchpad_or_throw(
+    const supertonic_model & model,
+    ggml_context * input_ctx,
+    const char * cache_name);
+
 // QVAC-18605 round 3 — multi-device Vulkan auto-pick policy.
 //
 // `init_supertonic_backend` calls `ggml_backend_vk_get_device_count()`

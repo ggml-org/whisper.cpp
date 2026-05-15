@@ -1886,6 +1886,97 @@ writes a valid WAV.  Zero regressions from rounds 1-11.
 
 ---
 
+### Vulkan optimisation round 13 (May 2026, QVAC-18605 follow-up #11) — Code-quality consolidation + operator-facing Q8_0 finding
+
+Round 13 is a **strict-improvement-only follow-up** to round 12:
+no code path is removed, no optimisation is rolled back, and the
+end-to-end perf on every backend stays at the round-12 level.
+Two deliverables, both no-regret:
+
+#### 1. New helper `alloc_input_scratchpad_or_throw`
+
+Round 12 #5 inlined the "try pinned-host first, fall back to
+default backend buffer, throw on both-fail" idiom at 4 cache
+sites (front block + 3 group caches):
+
+```cpp
+cache.input_buf = try_alloc_inputs_in_pinned_host_buffer(model, cache.input_ctx);
+if (!cache.input_buf) {
+    cache.input_buf = ggml_backend_alloc_ctx_tensors(cache.input_ctx, model.backend);
+    if (!cache.input_buf) {
+        // per-cache teardown + throw with cache-specific message
+    }
+}
+```
+
+Round 13 factors it into one helper.  Each caller becomes:
+
+```cpp
+cache.input_buf = alloc_input_scratchpad_or_throw(
+    model, cache.input_ctx, "vector_group_graph_cache");
+```
+
+Same correctness contract (CPU / Metal / OpenCL fall back to
+default backend buffer; Vulkan tries pinned-host first).
+**Defensive failure modes consolidated**: null `model.backend`,
+null `input_ctx`, null `cache_name` all throw `std::runtime_error`
+with a message that includes the cache name, instead of
+segfaulting in an error-handler path.  Single point of
+maintenance for the pattern; future cache builds that want
+pinned-host inputs use the helper directly.
+
+`test_supertonic_input_scratchpad.cpp` (NEW, 9 / 9 checks) pins
+the contract via SFINAE on the symbol + CPU-fallback round-trip
+through `ggml_backend_tensor_set` / `get` + null-arg throws +
+empty-ctx error message includes the cache name.  CPU-only —
+no GGUF fixture required.  CI test count goes from 24 / 24 (round
+12) to 25 / 25 (round 13).
+
+Perf impact: **zero** (same code path, same allocations, same
+data movement — just one fewer level of nesting at each call
+site).
+
+#### 2. Q8_0 K/V no-win documented for RTX 5090
+
+Round 4 shipped the `--kv-attn-type q8_0` CLI option and bench
+output advertises `q8_0_kv_attn=available`.  Round 13 measures
+the trade-off on the test rig (RTX 5090, 1.79 TB/s memory
+bandwidth, long prompt 206 chars / 18 s audio):
+
+```
+--kv-attn-type f16:  total=31.11 ms (588× realtime)  ← default
+--kv-attn-type q8_0: total=31.84 ms (575× realtime)  ← 2 % slower
+```
+
+The F32→Q8_0 cast overhead exceeds the saved K/V upload
+bandwidth on a high-bandwidth discrete GPU.  **Operator
+guidance**: stick with the F16 default on RTX 5090 and similar
+high-bandwidth discretes.  Q8_0 is shipped for adapters where
+the K/V upload bottlenecks the synth (older PCIe 3.0 cards,
+lower-end discretes, iGPUs with slow BAR); cross-over point to
+be measured per-adapter by operators using `--bench-per-step`
+from round 7.
+
+#### Test plan (round 13)
+
+```bash
+cmake -S tts-cpp -B tts-cpp/build -DTTS_CPP_USE_SYSTEM_GGML=OFF
+cmake --build tts-cpp/build -j
+ctest --test-dir tts-cpp/build -L unit
+# → 25 / 25 PASS (was 24 / 24 in round 12; +1 input-scratchpad helper)
+
+cmake -S tts-cpp -B tts-cpp/build-vulkan -DTTS_CPP_USE_SYSTEM_GGML=OFF -DGGML_VULKAN=ON
+cmake --build tts-cpp/build-vulkan -j
+ctest --test-dir tts-cpp/build-vulkan -L unit
+# → 25 / 25 PASS
+```
+
+End-to-end synth verified on all 4 backends (CPU, Vulkan RTX
+5090, Vulkan RADV iGPU, Vulkan Mesa lavapipe) — every adapter
+writes a valid WAV.  Zero regressions from rounds 1-12.
+
+---
+
 ## Remaining Work
 
 ### Runtime and performance

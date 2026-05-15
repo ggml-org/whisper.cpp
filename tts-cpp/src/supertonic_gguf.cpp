@@ -1021,6 +1021,61 @@ ggml_backend_buffer_t try_alloc_inputs_in_pinned_host_buffer(
 #endif
 }
 
+// QVAC-18605 round 13 #1 — input-scratchpad allocator that
+// consolidates the round-12 boilerplate.  See the docstring on
+// the declaration in supertonic_internal.h for the contract.
+//
+// Implementation:
+//   1. Defensive null-checks first.  These cover error-handler
+//      paths where the caller hands us a half-constructed state.
+//   2. Try pinned-host via `try_alloc_inputs_in_pinned_host_buffer`.
+//      Returns on success.
+//   3. Fall back to `ggml_backend_alloc_ctx_tensors`.  This
+//      allocates from the backend's default buffer type, which
+//      on Vulkan is device-local memory (with the usual staging
+//      hop per `ggml_backend_tensor_set`); on CPU it's host
+//      memory directly.  Same correctness as pre-round-12.
+//   4. On BOTH failing, throw with a message including the
+//      cache name so operators can correlate the failure with a
+//      specific cache rebuild site.
+ggml_backend_buffer_t alloc_input_scratchpad_or_throw(
+    const supertonic_model & model,
+    ggml_context * input_ctx,
+    const char * cache_name) {
+    if (cache_name == nullptr) {
+        throw std::runtime_error(
+            "supertonic: alloc_input_scratchpad_or_throw: cache_name is null "
+            "(caller-bug: pass a string literal naming the cache)");
+    }
+    if (model.backend == nullptr) {
+        throw std::runtime_error(
+            std::string("supertonic: ") + cache_name +
+            ": cannot allocate input scratchpad without a backend "
+            "(model.backend is null)");
+    }
+    if (input_ctx == nullptr) {
+        throw std::runtime_error(
+            std::string("supertonic: ") + cache_name +
+            ": cannot allocate input scratchpad with a null ggml_context");
+    }
+    // First try pinned-host (Vulkan-only).  Round 12 #5 already
+    // returns nullptr cleanly on CPU / Metal / OpenCL / etc.
+    ggml_backend_buffer_t buf =
+        try_alloc_inputs_in_pinned_host_buffer(model, input_ctx);
+    if (buf) return buf;
+    // Fall back to default backend buffer.  Same correctness as
+    // pre-round-12; just one staging hop per upload on Vulkan.
+    buf = ggml_backend_alloc_ctx_tensors(input_ctx, model.backend);
+    if (buf) return buf;
+    // Both failed — this is a system-level resource issue (BAR
+    // exhaustion AND device-memory exhaustion).  Loud failure so
+    // the operator's logs surface the cache that ran out of room.
+    throw std::runtime_error(
+        std::string("supertonic: ") + cache_name +
+        ": failed to allocate input scratchpad "
+        "(both pinned-host and default-backend paths returned null)");
+}
+
 // QVAC-18605 round 3 — multi-device Vulkan auto-pick policy.
 //
 // Pure logic — no Vulkan symbols touched here.  The Vulkan-only

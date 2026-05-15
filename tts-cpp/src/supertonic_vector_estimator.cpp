@@ -1399,22 +1399,11 @@ void build_group_graph_cache(vector_group_graph_cache & cache,
         ggml_set_name(cache.x_in, "vector_group_in_tc"); ggml_set_input(cache.x_in);
         cache.temb_in = ggml_new_tensor_1d(cache.input_ctx, GGML_TYPE_F32, 64);
         ggml_set_name(cache.temb_in, "vector_group_temb"); ggml_set_input(cache.temb_in);
-        // Try host-pinned buffer first; fall back to default
-        // backend buffer.  Either way x_in + temb_in end up with
-        // a buffer before gallocr runs on the main graph.
-        cache.input_buf = try_alloc_inputs_in_pinned_host_buffer(model, cache.input_ctx);
-        if (!cache.input_buf) {
-            cache.input_buf = ggml_backend_alloc_ctx_tensors(cache.input_ctx, model.backend);
-            if (!cache.input_buf) {
-                ggml_free(cache.input_ctx);
-                cache.input_ctx = nullptr;
-                cache.x_in = nullptr;
-                cache.temb_in = nullptr;
-                throw std::runtime_error(
-                    "vector_group_graph_cache: failed to allocate input scratchpad "
-                    "(both pinned-host and default-backend paths returned null)");
-            }
-        }
+        // QVAC-18605 round 13 #1 — consolidated allocator
+        // (round-12 inlined the try-pinned-host + fallback
+        // boilerplate at 4 sites; this round factors it out).
+        cache.input_buf = alloc_input_scratchpad_or_throw(
+            model, cache.input_ctx, "vector_group_graph_cache");
     }
     cache.text_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, text_len, 256);
     ggml_set_name(cache.text_in, "vector_group_text"); ggml_set_input(cache.text_in);
@@ -3215,21 +3204,12 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
                 front_cache.t_emb_in = ggml_new_tensor_1d(front_cache.input_ctx, GGML_TYPE_F32, 64);
                 ggml_set_name(front_cache.t_emb_in, "ve_time_emb");
                 ggml_set_input(front_cache.t_emb_in);
-                front_cache.input_buf = try_alloc_inputs_in_pinned_host_buffer(model, front_cache.input_ctx);
-                if (!front_cache.input_buf) {
-                    front_cache.input_buf = ggml_backend_alloc_ctx_tensors(front_cache.input_ctx, model.backend);
-                    if (!front_cache.input_buf) {
-                        ggml_free(front_cache.input_ctx);
-                        front_cache.input_ctx = nullptr;
-                        front_cache.x_in = nullptr;
-                        front_cache.mask_in = nullptr;
-                        front_cache.t_emb_in = nullptr;
-                        throw std::runtime_error(
-                            "ve_front_block_graph_cache: failed to allocate input "
-                            "scratchpad (both pinned-host and default-backend paths "
-                            "returned null)");
-                    }
-                }
+                // QVAC-18605 round 13 #1 — consolidated allocator
+                // (round-12 inlined the try-pinned-host + fallback
+                // boilerplate; this round factors it out via
+                // `alloc_input_scratchpad_or_throw`).
+                front_cache.input_buf = alloc_input_scratchpad_or_throw(
+                    model, front_cache.input_ctx, "ve_front_block_graph_cache");
             }
             front_cache.text_in_t = ggml_new_tensor_2d(front_cache.ctx, GGML_TYPE_F32, text_len, 256);
             ggml_set_name(front_cache.text_in_t, "ve_text_lc");
@@ -4728,8 +4708,8 @@ bool supertonic_vector_loop_one_graph_ggml(const supertonic_model & model,
             cache.t_emb_in.resize(total_steps, nullptr);
             for (int s = 0; s < total_steps; ++s) {
                 cache.t_emb_in[s] = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_F32, 64);
-                const std::string name = "loop_temb_" + std::to_string(s);
-                ggml_set_name(cache.t_emb_in[s], name.c_str());
+                const std::string name_te = "loop_temb_" + std::to_string(s);
+                ggml_set_name(cache.t_emb_in[s], name_te.c_str());
                 ggml_set_input(cache.t_emb_in[s]);
             }
 

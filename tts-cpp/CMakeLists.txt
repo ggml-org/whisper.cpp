@@ -913,6 +913,21 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-pinned-host-buffer)
     tts_cpp_register_test(test-supertonic-pinned-host-buffer LABEL "unit")
 
+    # QVAC-18605 round 13 #1 — input-scratchpad allocator helper
+    # that consolidates the pinned-host + default-backend fallback
+    # boilerplate round 12 #5 manually inlined at 4 cache sites.
+    # Round 13 needs to extend the pattern to 5+ more caches
+    # (vector_loop_one_graph, vocoder, style residual + QKV, merged
+    # speech-prompted) — without this helper that's 5x copy-paste.
+    # CPU-only test pins the symbol + CPU-fallback contract + null-
+    # argument throws (defensive failure modes in error paths).
+    add_executable(test-supertonic-input-scratchpad
+        test/test_supertonic_input_scratchpad.cpp)
+    target_link_libraries(test-supertonic-input-scratchpad PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-input-scratchpad PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-input-scratchpad)
+    tts_cpp_register_test(test-supertonic-input-scratchpad LABEL "unit")
+
     add_executable(test-supertonic-f16-attn-parity
         test/test_supertonic_f16_attn_parity.cpp)
     target_link_libraries(test-supertonic-f16-attn-parity PRIVATE ggml)
