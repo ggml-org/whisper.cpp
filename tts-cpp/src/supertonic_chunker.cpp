@@ -267,14 +267,24 @@ std::vector<std::string> split_for_streaming(
         ++chunk_idx;
     }
 
-    // Tail-merge heuristic: if the last chunk has fewer than min_chunk
-    // tokens AND we have at least two chunks, fold it into the previous
-    // chunk.  Avoids paying full pipeline cost for a handful of
-    // trailing tokens AND avoids handing the model a sub-minimum tail
-    // chunk where it glitches.  Mirrors chatterbox_engine.cpp:608.
+    // Tail-merge heuristic: if the last chunk is genuinely tiny, fold
+    // it into the previous chunk to avoid paying full pipeline cost for
+    // a handful of trailing tokens.  Mirrors chatterbox_engine.cpp:608.
+    //
+    // Threshold is intentionally `max(6, target_tokens/3)`, NOT
+    // `min_chunk_tokens` — using min_chunk here would merge any
+    // last-chunk shorter than the floor, which can swallow a complete
+    // final sentence (e.g. Korean "공원에서 산책하기 좋은 날이다."
+    // is 18 code points, below a min_chunk=30 floor, but is itself a
+    // valid sentence-aligned chunk that the model handles fine because
+    // CJK information density per code point is much higher than ASCII).
+    // The min_chunk floor governs what the chunker proactively *aims
+    // for*, not what it does with whatever's left after the last natural
+    // boundary.
     if (out.size() >= 2) {
         const std::vector<cp_at> tail_cps = decode_with_byte_offsets(out.back());
-        if ((int) tail_cps.size() < min_chunk) {
+        const int                tail_thresh = std::max(6, target_tokens / 3);
+        if ((int) tail_cps.size() < tail_thresh) {
             std::string merged = out[out.size() - 2];
             if (!merged.empty() && !out.back().empty()) merged.push_back(' ');
             merged += out.back();
