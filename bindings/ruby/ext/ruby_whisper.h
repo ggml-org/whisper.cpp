@@ -5,6 +5,7 @@
 #include <ruby/version.h>
 #include <ruby/util.h>
 #include <ruby/thread.h>
+#include <ruby/thread_native.h>
 #include <ruby/atomic.h>
 #include <ruby/memory_view.h>
 #include "whisper.h"
@@ -14,6 +15,9 @@
 // Exists but not declared as public API
 int ruby_thread_has_gvl_p(void);
 #endif
+
+#define LOG_QUEUE_CAPACITY 256
+#define LOG_DEFAULT_CAPACITY 1024
 
 typedef struct {
   VALUE *context;
@@ -33,6 +37,25 @@ typedef struct {
 typedef struct ruby_whisper_parakeet_abort_callback_user_data {
   volatile rb_atomic_t is_interrupted;
 } ruby_whisper_parakeet_abort_callback_user_data;
+
+typedef struct ruby_whisper_log {
+  enum ggml_log_level level;
+  char *text;
+  size_t length;
+  size_t capacity;
+} ruby_whisper_log;
+
+typedef struct ruby_whisper_log_queue {
+  rb_nativethread_lock_t lock;
+  rb_nativethread_cond_t cond;
+
+  size_t head;
+  size_t tail;
+  size_t size;
+  bool is_active;
+
+  ruby_whisper_log *logs;
+} ruby_whisper_log_queue;
 
 typedef struct {
   struct whisper_context *context;

@@ -49,6 +49,7 @@ extern void init_ruby_whisper_vad_params(VALUE *mVAD);
 extern void init_ruby_whisper_vad_context(VALUE *mVAD);
 extern void init_ruby_whisper_vad_segment(VALUE *mVAD);
 extern void init_ruby_whisper_vad_segments(VALUE *mVAD);
+extern void init_ruby_whisper_parakeet();
 extern void init_ruby_whisper_parakeet_params(VALUE *mParakeet);
 extern void init_ruby_whisper_parakeet_segment(VALUE *mParakeet);
 extern void init_ruby_whisper_parakeet_context(VALUE *mParakeet);
@@ -244,6 +245,7 @@ void Init_whisper() {
   init_ruby_whisper_vad_segment(&mVAD);
   init_ruby_whisper_vad_segments(&mVAD);
   init_ruby_whisper_vad_context(&mVAD);
+  init_ruby_whisper_parakeet();
   init_ruby_whisper_parakeet_params(&mParakeet);
   init_ruby_whisper_parakeet_segment(&mParakeet);
   init_ruby_whisper_parakeet_context(&mParakeet);

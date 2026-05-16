@@ -18,7 +18,7 @@ extern ID id_new;
 
 extern VALUE eError;
 
-static struct transcribe_without_gvl_args {
+typedef struct transcribe_without_gvl_args {
   struct parakeet_context *context;
   struct parakeet_full_params params;
   float *samples;

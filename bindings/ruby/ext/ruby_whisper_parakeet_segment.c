@@ -10,8 +10,6 @@ enum {
 
   ITERATE_ATTRS(DEF_IDX)
   RUBY_WHISPER_PARAKEET_SEGMENT_NUM_ATTRS,
-
-#undef DEF_IDX
 };
 
 #define VAL_FROM_TIME(v) (LONG2NUM((v) * 10))
@@ -48,15 +46,11 @@ ruby_whisper_parakeet_segment_memsize(const void *p)
   if (!rwps) {
     return 0;
   }
-  size_t size = sizeof(*rwps);
-  if (rwps->index) {
-    size += sizeof(rwps->index);
-  }
-  return size;
+  return sizeof(*rwps);
 }
 
 static const rb_data_type_t ruby_whisper_parakeet_segment_type = {
-  "ruby_whisper_segment",
+  "ruby_whisper_parakeet_segment",
   {rb_whisper_parakeet_segment_mark, RUBY_DEFAULT_FREE, ruby_whisper_parakeet_segment_memsize,},
   0, 0,
   0
@@ -117,8 +111,6 @@ ruby_whisper_parakeet_segment_deconstruct_keys(VALUE self, VALUE keys)
     }
 
     ITERATE_ATTRS(CHECK_AND_SET_KEY)
-
-#undef CHECK_AND_SET_KEY
   }
 
   return hash;
@@ -136,13 +128,5 @@ init_ruby_whisper_parakeet_segment(VALUE *mParakeet)
 
   ITERATE_ATTRS(REGISTER_ATTR)
 
-#undef REGISTER_ATTR
-
   rb_define_method(cParakeetSegment, "deconstruct_keys", ruby_whisper_parakeet_segment_deconstruct_keys, 1);
 }
-
-#undef DEF_ATTR
-#undef READER
-#undef VAL_FROM_STRING
-#undef VAL_FROM_TIME
-#undef ITERATE_ATTRS

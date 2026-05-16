@@ -24,9 +24,7 @@ enum {
   ITERATE_PARAMS(DEF_IDX)
   ITERATE_CALLBACK_PARAMS(DEF_IDX_CALLBACK)
   ITERATE_CALLBACK_PARAMS(DEF_IDX_USER_DATA)
-#undef DEF_IDX
-#undef DEF_IDX_CALLBACK
-#undef DEF_IDX_USER_DATA
+
   RUBY_WHISPER_PARAKEET_NUM_PARAMS
 };
 
@@ -69,8 +67,6 @@ ruby_whisper_parakeet_params_mark(void *p)
 #define MARK_CONTAINER(name) ruby_whisper_callback_container_mark(rwpp->name##_container);
 
   ITERATE_CALLBACK_PARAMS(MARK_CONTAINER)
-
-#undef MARK_CONTAINER
 }
 
 static void
@@ -84,9 +80,7 @@ ruby_whisper_parakeet_params_free(void *p)
     xfree(rwpp->name##_container); \
   }
 
-ITERATE_CALLBACK_PARAMS(FREE_CONTAINER)
-
-#undef FREE_CONTAINER
+  ITERATE_CALLBACK_PARAMS(FREE_CONTAINER)
 }
 
 static size_t
@@ -202,9 +196,7 @@ ruby_whisper_parakeet_params_initialize(int argc, VALUE *argv, VALUE self)
 
 #define INIT_CONTAINER(name) rwpp->name##_container = ruby_whisper_callback_container_allocate();
 
-ITERATE_CALLBACK_PARAMS(INIT_CONTAINER)
-
-#undef INIT_CONTAINER
+  ITERATE_CALLBACK_PARAMS(INIT_CONTAINER)
 
   rb_scan_args_kw(RB_SCAN_ARGS_KEYWORDS, argc, argv, ":", &kw_hash);
   if (NIL_P(kw_hash)) {
@@ -252,27 +244,4 @@ init_ruby_whisper_parakeet_params(VALUE *mParakeet)
   rb_define_method(cParakeetParams, "on_" #name, ruby_whisper_parakeet_params_on_##name, 0);
 
   ITERATE_CALLBACK_PARAMS(REGISTER_HOOK)
-
-#undef REGISTER_PARAM
-#undef REGISTER_PARAM_ATTR
-#undef REGISTER_CALLBACK_PARAM_ATTR
-#undef REGISTER_USER_DATA_PARAM_ATTR
-#undef REGISTER_HOOK
 }
-
-#undef VAL_TO_INT
-#undef VAL_FROM_INT
-#undef VAL_TO_BOOL
-#undef VAL_FROM_BOOL
-#undef DEF_BOOL_PARAM_ATTR
-#undef DEF_INT_PARAM_ATTR
-#undef CALLBACK_CONTAINER_NAME
-#undef DEF_CALLBACK_PARAM_ATTR
-#undef DEF_USER_DATA_PARAM_ATTR
-#undef DEF_HOOK
-#undef READER
-#undef WRITER
-#undef DEF_PARAM_ATTR
-#undef DEF_PARAM_ATTR_I
-#undef ITERATE_PARAMS
-#undef ITERATE_CALLBACK_PARAMS

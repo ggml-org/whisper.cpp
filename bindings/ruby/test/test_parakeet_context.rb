@@ -1,7 +1,11 @@
 require_relative "helper"
+require "stringio"
 
 class TestParakeetContext < TestBase
   def setup
+    Whisper.instance_variable_set "@whisper", nil
+    GC.start
+
     @parakeet = Parakeet::Context.new(File.join(__dir__, "../../../models/parakeet-tdt-0.6b-v3.bin"))
     @params = Parakeet::Params.new
   end

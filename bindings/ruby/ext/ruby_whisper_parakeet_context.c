@@ -49,6 +49,19 @@ ruby_whisper_parakeet_context_allocate(VALUE klass)
   return obj;
 }
 
+typedef struct {
+  struct parakeet_context **context;
+  char *model_path;
+} ruby_whisper_parakeet_context_init_args;
+
+static void*
+ruby_whisper_parakeet_context_init_without_gvl(void *args)
+{
+  ruby_whisper_parakeet_context_init_args *init_args = (ruby_whisper_parakeet_context_init_args *)args;
+  *init_args->context = parakeet_init_from_file_with_params(init_args->model_path, parakeet_context_default_params());
+  return NULL;
+}
+
 static VALUE
 ruby_whisper_parakeet_context_initialize(int argc, VALUE *argv, VALUE self)
 {
@@ -62,7 +75,11 @@ ruby_whisper_parakeet_context_initialize(int argc, VALUE *argv, VALUE self)
   if (!rb_respond_to(model_path, id_to_s)) {
     rb_raise(rb_eRuntimeError, "Expected file path to model to initialize Parakeet::Context");
   }
-  rwpc->context = parakeet_init_from_file_with_params(StringValueCStr(model_path), parakeet_context_default_params());
+  ruby_whisper_parakeet_context_init_args init_args = {
+    &rwpc->context,
+    StringValueCStr(model_path),
+  };
+  rb_thread_call_without_gvl(ruby_whisper_parakeet_context_init_without_gvl, (void *)&init_args, NULL, NULL);
   if (rwpc->context == NULL) {
     rb_raise(rb_eRuntimeError, "Failed to load model");
   }
