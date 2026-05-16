@@ -1,3 +1,5 @@
+#include "text_preprocess.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -10,31 +12,12 @@
 #include <string>
 #include <vector>
 
+using tts_cpp::chatterbox::text_preprocess::decode_utf8;
+
 namespace {
 
 std::vector<uint32_t> utf8_to_codepoints(const std::string & s) {
-    std::vector<uint32_t> out;
-    out.reserve(s.size());
-    size_t i = 0;
-    while (i < s.size()) {
-        const unsigned char c = static_cast<unsigned char>(s[i]);
-        uint32_t cp = 0;
-        size_t   n  = 1;
-        if      (c < 0x80)          { cp = c;          n = 1; }
-        else if ((c & 0xE0) == 0xC0) { cp = c & 0x1F;  n = 2; }
-        else if ((c & 0xF0) == 0xE0) { cp = c & 0x0F;  n = 3; }
-        else if ((c & 0xF8) == 0xF0) { cp = c & 0x07;  n = 4; }
-        else { out.push_back(0xFFFD); ++i; continue; }
-        if (i + n > s.size()) { out.push_back(0xFFFD); break; }
-        bool ok = true;
-        for (size_t k = 1; k < n; ++k) {
-            if ((static_cast<unsigned char>(s[i + k]) & 0xC0) != 0x80) { ok = false; break; }
-            cp = (cp << 6) | (s[i + k] & 0x3F);
-        }
-        out.push_back(ok ? cp : 0xFFFD);
-        i += n;
-    }
-    return out;
+    return decode_utf8(s);
 }
 
 bool is_punct_cp(uint32_t cp) {

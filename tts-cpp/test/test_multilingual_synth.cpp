@@ -168,7 +168,7 @@ void usage(const char * prog) {
 }
 
 struct Args {
-    std::string t3_path, s3gen_path, lang, text, out_path, tokens_dump_path;
+    std::string t3_path, s3gen_path, lang, text, out_path;
     std::string mecab_dict, cangjie_tsv;
     int seed = 42;
     int n_gpu_layers = 99;
@@ -190,7 +190,6 @@ bool parse_args(int argc, char ** argv, Args & args) {
         else if (a == "--seed")         { auto v = next("--seed");         if (!v) return false; args.seed = std::atoi(v); }
         else if (a == "--n-gpu-layers") { auto v = next("--n-gpu-layers"); if (!v) return false; args.n_gpu_layers = std::atoi(v); }
         else if (a == "--verbose" || a == "-v") { args.verbose = true; }
-        else if (a == "--dump-tokens")  { auto v = next("--dump-tokens"); if (!v) return false; args.tokens_dump_path = v; }
         else if (a == "--mecab-dict")  { auto v = next("--mecab-dict");  if (!v) return false; args.mecab_dict = v; }
         else if (a == "--cangjie-tsv") { auto v = next("--cangjie-tsv"); if (!v) return false; args.cangjie_tsv = v; }
         else if (a == "-h" || a == "--help") { usage(argv[0]); return false; }
@@ -251,10 +250,6 @@ int run_synthesis(const Args & args) {
     if (!args.cangjie_tsv.empty()) {
         cli_args.push_back("--cangjie-tsv");
         cli_args.push_back(args.cangjie_tsv);
-    }
-    if (!args.tokens_dump_path.empty()) {
-        cli_args.push_back("--output");
-        cli_args.push_back(args.tokens_dump_path);
     }
 
     std::vector<char *> argv_c;

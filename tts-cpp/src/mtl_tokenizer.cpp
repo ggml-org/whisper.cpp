@@ -642,6 +642,8 @@ namespace {
 
 std::string g_mecab_dict_path;
 std::string g_cangjie_tsv_path;
+bool g_mecab_initialized = false;
+bool g_cangjie_initialized = false;
 
 std::string resolve_mecab_dict_path() {
     if (!g_mecab_dict_path.empty()) return g_mecab_dict_path;
@@ -662,6 +664,7 @@ const tts_cpp::chatterbox::text_preprocess::MeCabTagger * mecab_tagger() {
     static std::once_flag once;
     static std::unique_ptr<tts_cpp::chatterbox::text_preprocess::MeCabTagger> t;
     std::call_once(once, [] {
+        g_mecab_initialized = true;
         const std::string path = resolve_mecab_dict_path();
         if (path.empty()) return;
         t = std::make_unique<tts_cpp::chatterbox::text_preprocess::MeCabTagger>();
@@ -680,6 +683,7 @@ const tts_cpp::chatterbox::text_preprocess::CangjieTable * cangjie_table() {
     static std::once_flag once;
     static std::unique_ptr<tts_cpp::chatterbox::text_preprocess::CangjieTable> tbl;
     std::call_once(once, [] {
+        g_cangjie_initialized = true;
         const std::string path = resolve_cangjie_tsv_path();
         if (path.empty()) return;
         tbl = std::make_unique<tts_cpp::chatterbox::text_preprocess::CangjieTable>();
@@ -837,10 +841,18 @@ std::string mtl_tokenizer::decode(const std::vector<int32_t> & ids) const {
 }
 
 void mtl_tokenizer::set_mecab_dict_path(const std::string & path) {
+    if (g_mecab_initialized && path != g_mecab_dict_path) {
+        fprintf(stderr, "mtl_tokenizer: warning: set_mecab_dict_path called after MeCab "
+                        "was already initialized; new path will be ignored\n");
+    }
     g_mecab_dict_path = path;
 }
 
 void mtl_tokenizer::set_cangjie_tsv_path(const std::string & path) {
+    if (g_cangjie_initialized && path != g_cangjie_tsv_path) {
+        fprintf(stderr, "mtl_tokenizer: warning: set_cangjie_tsv_path called after Cangjie "
+                        "was already initialized; new path will be ignored\n");
+    }
     g_cangjie_tsv_path = path;
 }
 

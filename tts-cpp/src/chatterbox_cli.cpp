@@ -1028,7 +1028,13 @@ int tts_cpp_cli_main(int argc, char ** argv) {
         // runs.  This cuts first-audio-out latency by ~700 ms in streaming
         // mode — by the time T3 emits its first chunk of tokens, S3Gen is
         // already in RAM with its tensors allocated on the right backend.
+        struct thread_join_guard {
+            std::thread & t;
+            ~thread_join_guard() { if (t.joinable()) t.join(); }
+        };
+
         std::thread s3gen_preload_thread;
+        thread_join_guard s3gen_guard{s3gen_preload_thread};
         if (!params.s3gen_gguf.empty()) {
             s3gen_preload_thread = std::thread([path = params.s3gen_gguf,
                                                 ngpu = params.n_gpu_layers]() {
@@ -1954,7 +1960,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                         (int)generated.size() > kMtlMinTokensBeforeCadence) {
                         size_t n = generated.size();
                         if (generated[n - 1] == generated[n - 2]) {
-                            generated.resize(n - 2);
+                            generated.resize(n - 1);
                             stopped_by_repetition = true;
                             break;
                         }

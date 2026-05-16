@@ -163,8 +163,10 @@ mecab_t * create_mecab_tagger(const std::string & dic_str) {
     std::string a0 = "mecab";
     std::string a1 = "-d";
     std::string a2 = dic_str;
-    char * argv[] = { a0.data(), a1.data(), a2.data() };
-    return mecab_new(3, argv);
+    std::string a3 = "-r";
+    std::string a4 = (std::filesystem::path(dic_str) / "mecabrc").string();
+    char * argv[] = { a0.data(), a1.data(), a2.data(), a3.data(), a4.data() };
+    return mecab_new(5, argv);
 }
 #endif
 
