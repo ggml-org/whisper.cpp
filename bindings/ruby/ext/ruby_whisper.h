@@ -5,6 +5,7 @@
 #include <ruby/version.h>
 #include <ruby/util.h>
 #include <ruby/thread.h>
+#include <ruby/atomic.h>
 #include <ruby/memory_view.h>
 #include "whisper.h"
 #include "parakeet.h"
@@ -28,6 +29,10 @@ typedef struct {
   VALUE callbacks;
   bool is_interrupted;
 } ruby_whisper_abort_callback_container;
+
+typedef struct ruby_whisper_parakeet_abort_callback_user_data {
+  volatile rb_atomic_t is_interrupted;
+} ruby_whisper_parakeet_abort_callback_user_data;
 
 typedef struct {
   struct whisper_context *context;

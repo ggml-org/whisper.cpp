@@ -44,6 +44,23 @@ static ID param_names[RUBY_WHISPER_PARAKEET_NUM_PARAMS];
 typedef VALUE (*param_writer_t)(VALUE, VALUE);
 static param_writer_t param_writers[RUBY_WHISPER_PARAKEET_NUM_PARAMS];
 
+static bool
+ruby_whisper_parakeet_abort_callback(void *user_data)
+{
+  ruby_whisper_parakeet_abort_callback_user_data *data = (ruby_whisper_parakeet_abort_callback_user_data *)user_data;
+
+  int is_interrupted = RUBY_ATOMIC_LOAD(data->is_interrupted);
+
+  return is_interrupted == 1;
+}
+
+void
+ruby_whisper_parakeet_prepare_transcription(ruby_whisper_parakeet_params *rwpp, ruby_whisper_parakeet_abort_callback_user_data *abort_callback_user_data)
+{
+  rwpp->params.abort_callback = ruby_whisper_parakeet_abort_callback;
+  rwpp->params.abort_callback_user_data = (void *)abort_callback_user_data;
+}
+
 static void
 ruby_whisper_parakeet_params_mark(void *p)
 {
