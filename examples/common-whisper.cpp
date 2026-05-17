@@ -35,8 +35,9 @@
 #include <fstream>
 
 #ifdef WHISPER_FFMPEG
-// as implemented in ffmpeg_trancode.cpp only embedded in common lib if whisper built with ffmpeg support
-extern bool ffmpeg_decode_audio(const std::string & ifname, std::vector<uint8_t> & wav_data);
+// as implemented in ffmpeg-transcode.cpp only embedded in common lib if whisper built with ffmpeg support
+extern bool ffmpeg_decode_audio(uint8_t * idata, size_t isize, std::vector<uint8_t> & wav_data);
+extern bool ffmpeg_decode_audio_file(const std::string & ifname, std::vector<uint8_t> & wav_data);
 #endif
 
 bool read_audio_data(const std::string & fname, std::vector<float>& pcmf32, std::vector<std::vector<float>>& pcmf32s, bool stereo) {
@@ -62,7 +63,13 @@ bool read_audio_data(const std::string & fname, std::vector<float>& pcmf32, std:
 			}
 			audio_data.insert(audio_data.end(), buf, buf + n);
 		}
+#if defined(WHISPER_FFMPEG)
+		if (ffmpeg_decode_audio(audio_data.data(), audio_data.size(), audio_data) != 0) {
+			fprintf(stderr, "error: failed to ffmpeg decode '%s'\n", fname.c_str());
 
+			return false;
+		}
+#endif
 		if ((result = ma_decoder_init_memory(audio_data.data(), audio_data.size(), &decoder_config, &decoder)) != MA_SUCCESS) {
 
 			fprintf(stderr, "Error: failed to open audio data from stdin (%s)\n", ma_result_description(result));
@@ -74,7 +81,7 @@ bool read_audio_data(const std::string & fname, std::vector<float>& pcmf32, std:
     }
     else if (((result = ma_decoder_init_file(fname.c_str(), &decoder_config, &decoder)) != MA_SUCCESS)) {
 #if defined(WHISPER_FFMPEG)
-		if (ffmpeg_decode_audio(fname, audio_data) != 0) {
+		if (ffmpeg_decode_audio_file(fname, audio_data) != 0) {
 			fprintf(stderr, "error: failed to ffmpeg decode '%s'\n", fname.c_str());
 
 			return false;
