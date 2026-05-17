@@ -20,6 +20,9 @@ mkdir tmp
 # CPU-only build
 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
+# with Vulkan
+GG_BUILD_VULKAN=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+
 # with CUDA support
 GG_BUILD_CUDA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 ```
