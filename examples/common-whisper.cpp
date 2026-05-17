@@ -44,7 +44,18 @@ bool read_audio_data(const std::string & fname, std::vector<float>& pcmf32, std:
 
     ma_result result;
     ma_decoder_config decoder_config;
-    ma_decoder decoder;
+
+    struct decoder_guard {
+        ma_decoder decoder;
+        bool initialized = false;
+        ma_decoder * operator&() { return &decoder; }
+        ~decoder_guard() {
+            if (initialized) {
+                ma_decoder_uninit(&decoder);
+            }
+        }
+    };
+    decoder_guard decoder{};
 
     decoder_config = ma_decoder_config_init(ma_format_f32, stereo ? 2 : 1, WHISPER_SAMPLE_RATE);
 
@@ -63,32 +74,36 @@ bool read_audio_data(const std::string & fname, std::vector<float>& pcmf32, std:
 			audio_data.insert(audio_data.end(), buf, buf + n);
 		}
 
-		if ((result = ma_decoder_init_memory(audio_data.data(), audio_data.size(), &decoder_config, &decoder)) != MA_SUCCESS) {
-
+		result = ma_decoder_init_memory(audio_data.data(), audio_data.size(), &decoder_config, &decoder);
+        if (result != MA_SUCCESS) {
 			fprintf(stderr, "Error: failed to open audio data from stdin (%s)\n", ma_result_description(result));
-
 			return false;
 		}
+        decoder.initialized = true;
 
 		fprintf(stderr, "%s: read %zu bytes from stdin\n", __func__, audio_data.size());
     }
-    else if (((result = ma_decoder_init_file(fname.c_str(), &decoder_config, &decoder)) != MA_SUCCESS)) {
+    else {
+        result = ma_decoder_init_file(fname.c_str(), &decoder_config, &decoder);
+        if (result == MA_SUCCESS) {
+            decoder.initialized = true;
+        }
 #if defined(WHISPER_FFMPEG)
-		if (ffmpeg_decode_audio(fname, audio_data) != 0) {
-			fprintf(stderr, "error: failed to ffmpeg decode '%s'\n", fname.c_str());
-
-			return false;
-		}
-
-		if ((result = ma_decoder_init_memory(audio_data.data(), audio_data.size(), &decoder_config, &decoder)) != MA_SUCCESS) {
-			fprintf(stderr, "error: failed to read audio data as wav (%s)\n", ma_result_description(result));
-
-			return false;
-		}
+        if (!decoder.initialized) {
+            if (ffmpeg_decode_audio(fname, audio_data) != 0) {
+                fprintf(stderr, "error: failed to ffmpeg decode '%s'\n", fname.c_str());
+                return false;
+            }
+            result = ma_decoder_init_memory(audio_data.data(), audio_data.size(), &decoder_config, &decoder);
+            if (result != MA_SUCCESS) {
+                fprintf(stderr, "error: failed to read audio data as wav (%s)\n", ma_result_description(result));
+                return false;
+            }
+            decoder.initialized = true;
+        }
 #else
-		if ((result = ma_decoder_init_memory(fname.c_str(), fname.size(), &decoder_config, &decoder)) != MA_SUCCESS) {
-			fprintf(stderr, "error: failed to read audio data as wav (%s)\n", ma_result_description(result));
-
+        if (!decoder.initialized) {
+			fprintf(stderr, "error: failed to read audio data from (%s)\n", fname.c_str());
 			return false;
 		}
 #endif
@@ -127,8 +142,6 @@ bool read_audio_data(const std::string & fname, std::vector<float>& pcmf32, std:
             pcmf32s[1][i] = stereo_data[2*i + 1];
         }
     }
-
-    ma_decoder_uninit(&decoder);
 
     return true;
 }
