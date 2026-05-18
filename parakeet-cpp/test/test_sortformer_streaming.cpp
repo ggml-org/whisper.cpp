@@ -81,7 +81,11 @@ int run_basic(const std::string & gguf_path,
               const std::string & wav_path,
               int history_ms,
               int chunk_ms,
-              const std::string & rttm_out_path) {
+              const std::string & rttm_out_path,
+              bool  spkcache_enable,
+              int   spkcache_len,
+              int   fifo_len,
+              float threshold) {
 
     std::vector<float> samples; int sr = 0;
     if (!load_wav_pcm16le_mono(wav_path, samples, sr)) {
@@ -131,11 +135,17 @@ int run_basic(const std::string & gguf_path,
     sopts.sample_rate    = sr;
     sopts.chunk_ms       = chunk_ms;
     sopts.history_ms     = history_ms;
-    sopts.threshold      = 0.5f;
+    sopts.threshold      = threshold;
     sopts.min_segment_ms = 200;
+    sopts.spkcache_enable = spkcache_enable;
+    sopts.spkcache_len    = spkcache_len;
+    sopts.fifo_len        = fifo_len;
     std::fprintf(stderr,
-        "[sf-stream-test] streaming opts: chunk_ms=%d history_ms=%d\n",
-        sopts.chunk_ms, sopts.history_ms);
+        "[sf-stream-test] streaming opts: chunk_ms=%d history_ms=%d "
+        "spkcache_enable=%d spkcache_len=%d fifo_len=%d threshold=%.2f\n",
+        sopts.chunk_ms, sopts.history_ms,
+        (int) sopts.spkcache_enable, sopts.spkcache_len, sopts.fifo_len,
+        (double) sopts.threshold);
 
     int n_vad_events       = 0;
     int n_speaking_events  = 0;
@@ -285,6 +295,13 @@ int main(int argc, char ** argv) {
     int         history_ms   = 30000;
     int         chunk_ms     = 2000;
     std::string rttm_out;
+    // Mirror the public SortformerStreamingOptions defaults so the test
+    // binary reflects the production v2.1 AOSC config out of the box.
+    parakeet::SortformerStreamingOptions sopts_defaults;
+    bool        spkcache_enable = sopts_defaults.spkcache_enable;
+    int         spkcache_len    = sopts_defaults.spkcache_len;
+    int         fifo_len        = sopts_defaults.fifo_len;
+    float       threshold       = sopts_defaults.threshold;
     bool gguf_user = false;
     bool wav_user  = false;
     for (int i = 1; i < argc; ++i) {
@@ -294,6 +311,11 @@ int main(int argc, char ** argv) {
         else if (a == "--history-ms" && i + 1 < argc) { history_ms = std::atoi(argv[++i]); }
         else if (a == "--chunk-ms"   && i + 1 < argc) { chunk_ms   = std::atoi(argv[++i]); }
         else if (a == "--rttm-out"   && i + 1 < argc) { rttm_out   = argv[++i]; }
+        else if (a == "--spkcache-enable")            { spkcache_enable = true; }
+        else if (a == "--no-spkcache")                { spkcache_enable = false; }
+        else if (a == "--spkcache-len" && i + 1 < argc) { spkcache_len = std::atoi(argv[++i]); }
+        else if (a == "--fifo-len"     && i + 1 < argc) { fifo_len     = std::atoi(argv[++i]); }
+        else if (a == "--threshold"    && i + 1 < argc) { threshold    = (float) std::atof(argv[++i]); }
         else {
             std::fprintf(stderr, "unknown option: %s\n", a.c_str());
             return 2;
@@ -324,7 +346,8 @@ int main(int argc, char ** argv) {
         return 0;
     }
     try {
-        return run_basic(gguf, wav, history_ms, chunk_ms, rttm_out);
+        return run_basic(gguf, wav, history_ms, chunk_ms, rttm_out,
+                         spkcache_enable, spkcache_len, fifo_len, threshold);
     } catch (const std::exception & e) {
         std::fprintf(stderr, "[sf-stream-test] EXCEPTION: %s\n", e.what());
         return 99;
