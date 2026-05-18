@@ -360,6 +360,25 @@ int run_encoder(ParakeetCtcModel   & model,
                 int                  max_layers = -1,
                 bool                 capture_intermediates = true);
 
+// Run the conformer block stack on pre-subsampled embeddings, skipping the
+// subsampling/pre_encode block. Used by the v2.1 streaming (AOSC) path where
+// the speaker cache + FIFO + new chunk are concatenated in pre-encode space and
+// re-contextualised by the conformer layers in a single forward.
+//
+//   pre_encode_in: row-major (n_pre_encode_frames, d_model)
+//   d_model:       must equal model.encoder_cfg.d_model
+//   out.encoder_out is filled with the post-encoder (n_pre_encode_frames, d_model) slab.
+//
+// Capture-intermediate fields on `out` are always cleared (no per-stage capture
+// in this path -- the production AOSC path only consumes `encoder_out`).
+int run_encoder_bypass_pre_encode(
+    ParakeetCtcModel   & model,
+    const float        * pre_encode_in,
+    int                  n_pre_encode_frames,
+    int                  d_model,
+    EncoderOutputs     & out,
+    int                  max_layers = -1);
+
 std::vector<int32_t> ctc_greedy_decode(const float * logits,
                                        int           n_frames,
                                        int           vocab_size,

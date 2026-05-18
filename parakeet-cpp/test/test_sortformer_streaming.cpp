@@ -2,8 +2,18 @@
 //
 // Usage:
 //   test-sortformer-streaming [--model <gguf>] [--wav <wav>]
+//                             [--history-ms <ms>] [--chunk-ms <ms>]
+//                             [--rttm-out <path>]
 //
 // Exit 0 on success or skip when defaults missing; non-zero on failure.
+//
+// `--history-ms` and `--chunk-ms` override the default streaming knobs
+// (30000 / 2000); used to reproduce drift scenarios at different
+// rolling-window sizes. `--rttm-out` writes a NIST RTTM hypothesis
+// file of every emitted real streaming segment (terminators and
+// `is_final` synthetic markers excluded). The URI column is taken
+// from the WAV path's stem so the JS benchmark's DER evaluator can
+// ingest the file directly against the matching reference RTTM.
 
 #include "parakeet/engine.h"
 
@@ -67,7 +77,15 @@ bool load_wav_pcm16le_mono(const std::string & path, std::vector<float> & sample
 
 using namespace parakeet;
 
-int run_basic(const std::string & gguf_path, const std::string & wav_path) {
+int run_basic(const std::string & gguf_path,
+              const std::string & wav_path,
+              int history_ms,
+              int chunk_ms,
+              const std::string & rttm_out_path,
+              bool  spkcache_enable,
+              int   spkcache_len,
+              int   fifo_len,
+              float threshold) {
 
     std::vector<float> samples; int sr = 0;
     if (!load_wav_pcm16le_mono(wav_path, samples, sr)) {
@@ -115,10 +133,19 @@ int run_basic(const std::string & gguf_path, const std::string & wav_path) {
 
     SortformerStreamingOptions sopts;
     sopts.sample_rate    = sr;
-    sopts.chunk_ms       = 2000;
-    sopts.history_ms     = 30000;
-    sopts.threshold      = 0.5f;
+    sopts.chunk_ms       = chunk_ms;
+    sopts.history_ms     = history_ms;
+    sopts.threshold      = threshold;
     sopts.min_segment_ms = 200;
+    sopts.spkcache_enable = spkcache_enable;
+    sopts.spkcache_len    = spkcache_len;
+    sopts.fifo_len        = fifo_len;
+    std::fprintf(stderr,
+        "[sf-stream-test] streaming opts: chunk_ms=%d history_ms=%d "
+        "spkcache_enable=%d spkcache_len=%d fifo_len=%d threshold=%.2f\n",
+        sopts.chunk_ms, sopts.history_ms,
+        (int) sopts.spkcache_enable, sopts.spkcache_len, sopts.fifo_len,
+        (double) sopts.threshold);
 
     int n_vad_events       = 0;
     int n_speaking_events  = 0;
@@ -151,6 +178,45 @@ int run_basic(const std::string & gguf_path, const std::string & wav_path) {
     std::fprintf(stderr,
         "[sf-stream-test] streaming real=%d terminators=%d final_flags=%d max_end=%.3fs chunks=%d\n",
         n_real_callbacks, n_terminators, n_finals, max_end, max_chunk_index + 1);
+
+    if (!rttm_out_path.empty()) {
+        std::ofstream rttm(rttm_out_path);
+        if (!rttm) {
+            std::fprintf(stderr,
+                "[sf-stream-test] FAIL: could not open --rttm-out path %s\n",
+                rttm_out_path.c_str());
+            return 11;
+        }
+        // Derive a stable URI from the WAV path's stem (filename without
+        // dirs and without the .wav extension). The JS benchmark's DER
+        // evaluator matches reference and hypothesis by this URI.
+        std::string uri = wav_path;
+        const size_t slash = uri.find_last_of("/\\");
+        if (slash != std::string::npos) uri = uri.substr(slash + 1);
+        const size_t dot = uri.find_last_of('.');
+        if (dot != std::string::npos) uri = uri.substr(0, dot);
+
+        int dumped = 0;
+        for (const auto & s : all) {
+            // Skip the synthetic terminator (speaker_id < 0) and zero-
+            // length is_final markers. Real trailing-chunk segments have
+            // is_final=true AND speaker_id>=0 AND positive duration --
+            // those we keep.
+            if (s.speaker_id < 0) continue;
+            const double dur = s.end_s - s.start_s;
+            if (dur <= 0.0) continue;
+            char line[256];
+            std::snprintf(line, sizeof(line),
+                "SPEAKER %s 1 %.3f %.3f <NA> <NA> hyp_%d <NA> <NA>\n",
+                uri.c_str(), s.start_s, dur, s.speaker_id);
+            rttm << line;
+            ++dumped;
+        }
+        rttm.close();
+        std::fprintf(stderr,
+            "[sf-stream-test] wrote %d hypothesis segments to %s (uri=%s)\n",
+            dumped, rttm_out_path.c_str(), uri.c_str());
+    }
 
     if (n_real_callbacks == 0) {
         std::fprintf(stderr, "[sf-stream-test] FAIL: no real segments emitted\n");
@@ -226,16 +292,40 @@ int run_basic(const std::string & gguf_path, const std::string & wav_path) {
 int main(int argc, char ** argv) {
     std::string gguf = "models/sortformer-4spk-v1.f16.gguf";
     std::string wav  = "test/samples/diarization-sample-16k.wav";
+    int         history_ms   = 30000;
+    int         chunk_ms     = 2000;
+    std::string rttm_out;
+    // Mirror the public SortformerStreamingOptions defaults so the test
+    // binary reflects the production v2.1 AOSC config out of the box.
+    parakeet::SortformerStreamingOptions sopts_defaults;
+    bool        spkcache_enable = sopts_defaults.spkcache_enable;
+    int         spkcache_len    = sopts_defaults.spkcache_len;
+    int         fifo_len        = sopts_defaults.fifo_len;
+    float       threshold       = sopts_defaults.threshold;
     bool gguf_user = false;
     bool wav_user  = false;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if      (a == "--model" && i + 1 < argc) { gguf = argv[++i]; gguf_user = true; }
-        else if (a == "--wav"   && i + 1 < argc) { wav  = argv[++i]; wav_user  = true; }
+        if      (a == "--model"      && i + 1 < argc) { gguf = argv[++i]; gguf_user = true; }
+        else if (a == "--wav"        && i + 1 < argc) { wav  = argv[++i]; wav_user  = true; }
+        else if (a == "--history-ms" && i + 1 < argc) { history_ms = std::atoi(argv[++i]); }
+        else if (a == "--chunk-ms"   && i + 1 < argc) { chunk_ms   = std::atoi(argv[++i]); }
+        else if (a == "--rttm-out"   && i + 1 < argc) { rttm_out   = argv[++i]; }
+        else if (a == "--spkcache-enable")            { spkcache_enable = true; }
+        else if (a == "--no-spkcache")                { spkcache_enable = false; }
+        else if (a == "--spkcache-len" && i + 1 < argc) { spkcache_len = std::atoi(argv[++i]); }
+        else if (a == "--fifo-len"     && i + 1 < argc) { fifo_len     = std::atoi(argv[++i]); }
+        else if (a == "--threshold"    && i + 1 < argc) { threshold    = (float) std::atof(argv[++i]); }
         else {
             std::fprintf(stderr, "unknown option: %s\n", a.c_str());
             return 2;
         }
+    }
+    if (history_ms <= 0 || chunk_ms <= 0 || history_ms < chunk_ms) {
+        std::fprintf(stderr,
+            "[sf-stream-test] FAIL: invalid --history-ms / --chunk-ms (history=%d chunk=%d)\n",
+            history_ms, chunk_ms);
+        return 8;
     }
     const bool model_missing = !file_exists(gguf);
     const bool wav_missing   = !file_exists(wav);
@@ -256,7 +346,8 @@ int main(int argc, char ** argv) {
         return 0;
     }
     try {
-        return run_basic(gguf, wav);
+        return run_basic(gguf, wav, history_ms, chunk_ms, rttm_out,
+                         spkcache_enable, spkcache_len, fifo_len, threshold);
     } catch (const std::exception & e) {
         std::fprintf(stderr, "[sf-stream-test] EXCEPTION: %s\n", e.what());
         return 99;

@@ -468,8 +468,13 @@ if (PARAKEET_BUILD_TESTS)
     set(_qvp_sf_q8_gguf    "${PARAKEET_TEST_MODEL_DIR}/diar_sortformer_4spk-v1.q8_0.gguf")
     set(_qvp_sf_f16_gguf   "${PARAKEET_TEST_MODEL_DIR}/diar_sortformer_4spk-v1.f16.gguf")
     set(_qvp_sfs_q8_gguf   "${PARAKEET_TEST_MODEL_DIR}/diar_streaming_sortformer_4spk-v2.q8_0.gguf")
+    set(_qvp_sfsv21_q8_gguf "${PARAKEET_TEST_MODEL_DIR}/diar_streaming_sortformer_4spk-v2.1.q8_0.gguf")
     set(_qvp_jfk_wav       "${PARAKEET_TEST_AUDIO_DIR}/jfk.wav")
     set(_qvp_diar_wav      "${PARAKEET_TEST_AUDIO_DIR}/diarization-sample-16k.wav")
+    set(_qvp_abcba_wav     "${PARAKEET_TEST_AUDIO_DIR}/abcba.wav")
+    set(_qvp_abcba_rttm    "${PARAKEET_TEST_AUDIO_DIR}/abcba.rttm")
+    set(_qvp_abcdba_wav    "${PARAKEET_TEST_AUDIO_DIR}/abcdba.wav")
+    set(_qvp_abcdba_rttm   "${PARAKEET_TEST_AUDIO_DIR}/abcdba.rttm")
     set(_qvp_ctc_ref       "${PARAKEET_TEST_REF_DIR}/ctc-ref")
     set(_qvp_tdt_ref       "${PARAKEET_TEST_REF_DIR}/tdt-ref")
     set(_qvp_sf_ref        "${PARAKEET_TEST_REF_DIR}/sortformer-ref")
@@ -542,6 +547,29 @@ if (PARAKEET_BUILD_TESTS)
         LABEL    "fixture"
         ARGS     "--model" "${_qvp_sfs_q8_gguf}" "--wav" "${_qvp_diar_wav}"
         REQUIRES "${_qvp_sfs_q8_gguf}" "${_qvp_diar_wav}")
+
+    # v2.1 AOSC speaker-correctness regression. Asserts speaker coverage,
+    # re-entry slot continuity (the AOSC contract), and frame-level DER
+    # ceiling against the RTTM ground truth. One binary, two ctest
+    # registrations (one per LIFO re-entry fixture).
+    add_executable(test-sortformer-aosc-speakers test/test_sortformer_aosc_speakers.cpp)
+    target_link_libraries(test-sortformer-aosc-speakers PRIVATE parakeet)
+    target_include_directories(test-sortformer-aosc-speakers PRIVATE include src ggml/include)
+    parakeet_apply_ccache(test-sortformer-aosc-speakers)
+    parakeet_register_test(test-sortformer-aosc-speakers-abcba
+        LABEL    "fixture"
+        EXE      test-sortformer-aosc-speakers
+        ARGS     "--model" "${_qvp_sfsv21_q8_gguf}"
+                 "--wav"   "${_qvp_abcba_wav}"
+                 "--ref-rttm" "${_qvp_abcba_rttm}"
+        REQUIRES "${_qvp_sfsv21_q8_gguf}" "${_qvp_abcba_wav}" "${_qvp_abcba_rttm}")
+    parakeet_register_test(test-sortformer-aosc-speakers-abcdba
+        LABEL    "fixture"
+        EXE      test-sortformer-aosc-speakers
+        ARGS     "--model" "${_qvp_sfsv21_q8_gguf}"
+                 "--wav"   "${_qvp_abcdba_wav}"
+                 "--ref-rttm" "${_qvp_abcdba_rttm}"
+        REQUIRES "${_qvp_sfsv21_q8_gguf}" "${_qvp_abcdba_wav}" "${_qvp_abcdba_rttm}")
 
     add_executable(test-perf-regression test/test_perf_regression.cpp)
     target_link_libraries(test-perf-regression PRIVATE parakeet)
