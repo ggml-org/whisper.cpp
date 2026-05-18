@@ -26,11 +26,14 @@ enum {
     return READER(type)(parakeet_full_get_segment_##c_name(rwpc->context, rwps->index)); \
   }
 
+extern ID id___method__;
+extern ID id_to_enum;
 extern VALUE cParakeetSegment;
 extern VALUE sym_start_time;
 extern VALUE sym_end_time;
 extern VALUE sym_text;
 extern const rb_data_type_t ruby_whisper_parakeet_context_type;
+extern VALUE ruby_whisper_parakeet_token_s_init(struct parakeet_context *context, int i_segment, int i_token);
 
 static void
 rb_whisper_parakeet_segment_mark(void *p)
@@ -77,6 +80,27 @@ ruby_whisper_parakeet_segment_init(VALUE context, int index)
 }
 
 ITERATE_ATTRS(DEF_ATTR)
+
+static VALUE
+ruby_whisper_parakeet_segment_each_token(VALUE self)
+{
+  if (!rb_block_given_p()) {
+    const VALUE method_name = rb_funcall(self, id___method__, 0);
+    return rb_funcall(self, id_to_enum, 1, method_name);
+  }
+
+  ruby_whisper_parakeet_segment *rwps;
+  GetParakeetSegment(self, rwps);
+  ruby_whisper_parakeet_context *rwpc;
+  GetParakeetContext(rwps->context, rwpc);
+
+  const int n_tokens = parakeet_full_n_tokens(rwpc->context, rwps->index);
+  for (int i = 0; i < n_tokens; i++) {
+    rb_yield(ruby_whisper_parakeet_token_s_init(rwpc->context, rwps->index, i));
+  }
+
+  return self;
+}
 
 static VALUE
 ruby_whisper_parakeet_segment_deconstruct_keys(VALUE self, VALUE keys)
@@ -128,5 +152,6 @@ init_ruby_whisper_parakeet_segment(VALUE *mParakeet)
 
   ITERATE_ATTRS(REGISTER_ATTR)
 
+  rb_define_method(cParakeetSegment, "each_token", ruby_whisper_parakeet_segment_each_token, 0);
   rb_define_method(cParakeetSegment, "deconstruct_keys", ruby_whisper_parakeet_segment_deconstruct_keys, 1);
 }
