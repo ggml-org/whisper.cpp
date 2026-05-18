@@ -131,6 +131,11 @@ typedef struct {
   int index;
 } ruby_whisper_parakeet_segment;
 
+typedef struct {
+  parakeet_token_data *token_data;
+  VALUE text;
+} ruby_whisper_parakeet_token;
+
 #define GetContext(obj, rw) do { \
   TypedData_Get_Struct((obj), ruby_whisper, &ruby_whisper_type, (rw)); \
   if ((rw)->context == NULL) { \
@@ -188,6 +193,13 @@ typedef struct {
 #define GetParakeetSegment(obj, rwps) do { \
   TypedData_Get_Struct((obj), ruby_whisper_parakeet_segment, &ruby_whisper_parakeet_segment_type, (rwps)); \
   if (!(rwps)->context) { \
+    rb_raise(rb_eRuntimeError, "Not initialized"); \
+  } \
+} while (0)
+
+#define GetParakeetToken(obj, rwpt) do { \
+  TypedData_Get_Struct((obj), ruby_whisper_parakeet_token, &ruby_whisper_parakeet_token_type, (rwpt)); \
+  if (!(rwpt)->token_data) { \
     rb_raise(rb_eRuntimeError, "Not initialized"); \
   } \
 } while (0)
