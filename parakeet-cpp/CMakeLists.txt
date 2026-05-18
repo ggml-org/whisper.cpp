@@ -63,6 +63,53 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR CMAKE_SYSTEM_NAME STREQUAL "Android")
     endif()
 endif()
 
+# Android default backend stack: dynamic loading of Vulkan + OpenCL +
+# per-arch CPU variants. Mirrors the qvac llm-llamacpp Android config
+# (see qvac-registry-vcpkg/ports/llama-cpp/portfile.cmake) so the
+# parakeet prebuilds drop into the same `qvac__transcription-parakeet/`
+# folder shape as the llamacpp ones: a `.bare` module + sibling
+# `lib<prefix>ggml-{vulkan,opencl,cpu-android_armv*_*}.so` files that
+# `ggml_backend_load_all_from_path()` discovers at runtime.
+#
+# Selection at runtime is centralised in `init_gpu_backend()`
+# (src/parakeet_ctc.cpp): OpenCL when an Adreno 700+ device is
+# present, Vulkan for every other GPU (non-Adreno, Adreno < 700,
+# Mali, Xclipse, ...). No static GPU backend entry points are linked
+# anywhere in libparakeet; the registry walk reaches the right
+# backend in both GGML_BACKEND_DL=ON (Android prebuild) and
+# GGML_BACKEND_DL=OFF (desktop dev) modes.
+#
+# Callers that have specific reasons to deviate (e.g. a desktop bring-
+# up build that wants Vulkan only) can still override any of these
+# at the cmake command line; we only set defaults that haven't already
+# been provided.
+if (CMAKE_SYSTEM_NAME STREQUAL "Android")
+    if (NOT DEFINED CACHE{GGML_BACKEND_DL})
+        set(GGML_BACKEND_DL ON CACHE BOOL "" FORCE)
+    endif()
+    if (NOT DEFINED CACHE{GGML_CPU_ALL_VARIANTS})
+        set(GGML_CPU_ALL_VARIANTS ON CACHE BOOL "" FORCE)
+    endif()
+    if (NOT DEFINED CACHE{GGML_CPU_REPACK})
+        set(GGML_CPU_REPACK ON CACHE BOOL "" FORCE)
+    endif()
+    if (NOT DEFINED CACHE{GGML_VULKAN})
+        set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+    endif()
+    if (NOT DEFINED CACHE{GGML_OPENCL})
+        set(GGML_OPENCL ON CACHE BOOL "" FORCE)
+    endif()
+    # ggml-vulkan's coopmat / coopmat2 shader compile pulls in extensions
+    # that most Android Vulkan drivers don't expose; the upstream llama
+    # Android build disables both for the same reason.
+    if (NOT DEFINED CACHE{GGML_VULKAN_DISABLE_COOPMAT})
+        set(GGML_VULKAN_DISABLE_COOPMAT ON CACHE BOOL "" FORCE)
+    endif()
+    if (NOT DEFINED CACHE{GGML_VULKAN_DISABLE_COOPMAT2})
+        set(GGML_VULKAN_DISABLE_COOPMAT2 ON CACHE BOOL "" FORCE)
+    endif()
+endif()
+
 # Two related workarounds for clang-cl / MSVC builds on Windows. Both
 # come from msys2 sneaking GCC-flavoured libraries onto CMake's search
 # paths and then being mismatched against clang-cl-compiled translation
@@ -108,6 +155,30 @@ if (WIN32 AND NOT MINGW)
     endif()
 endif()
 
+# Bundled-ggml library filename prefix. qvac-ext-ggml's `speech` branch
+# exposes `GGML_LIB_OUTPUT_PREFIX` (commit 4cec2d3a) which handles both
+# the OUTPUT_NAME rename for every ggml target (core + per-backend
+# .so/.dll/.a) AND the runtime loader's filename prefix
+# (`GGML_BACKEND_DL_PROJECT_PREFIX` compile define on ggml-base), so
+# the renamed `libspeech-ggml-{vulkan,opencl,cpu-*}.so` files are
+# actually discovered by `ggml_backend_load_all_from_path()` at
+# runtime.
+#
+# Setting `GGML_LIB_OUTPUT_PREFIX` here (as a cache variable, before
+# `add_subdirectory(ggml)`) is the supported way to override the
+# branch default (`qvac-speech-`) on a per-consumer basis without
+# editing the ggml subtree. The `speech-` prefix is shared across the
+# QVAC speech stack (whisper, parakeet, chatterbox, supertonic, ...)
+# so they can vendor a single ggml file set side-by-side without
+# colliding with the `qvac-` prefix used by the llm fork.
+if (PARAKEET_GGML_LIB_PREFIX AND NOT PARAKEET_USE_SYSTEM_GGML)
+    if (NOT DEFINED CACHE{GGML_LIB_OUTPUT_PREFIX})
+        set(GGML_LIB_OUTPUT_PREFIX "speech-" CACHE STRING
+            "ggml: prefix for built ggml library filenames (parakeet default)" FORCE)
+    endif()
+    message(STATUS "parakeet: bundled ggml libraries will be emitted with prefix '${GGML_LIB_OUTPUT_PREFIX}' (set PARAKEET_GGML_LIB_PREFIX=OFF to use the qvac-ext-ggml@speech default, or override -DGGML_LIB_OUTPUT_PREFIX=<other>)")
+endif()
+
 if (NOT TARGET ggml)
     if (PARAKEET_USE_SYSTEM_GGML)
         find_package(ggml CONFIG REQUIRED)
@@ -118,50 +189,6 @@ if (NOT TARGET ggml)
     else()
         add_subdirectory(ggml)
     endif()
-endif()
-
-function(parakeet_apply_ggml_prefix target)
-    if (NOT TARGET ${target})
-        return()
-    endif()
-    get_target_property(_qpgp_type ${target} TYPE)
-    if (_qpgp_type STREQUAL "INTERFACE_LIBRARY" OR _qpgp_type STREQUAL "OBJECT_LIBRARY")
-        return()
-    endif()
-    get_target_property(_qpgp_old_name ${target} OUTPUT_NAME)
-    if (NOT _qpgp_old_name OR _qpgp_old_name STREQUAL "_qpgp_old_name-NOTFOUND")
-        set(_qpgp_old_name ${target})
-    endif()
-    set_target_properties(${target} PROPERTIES
-        OUTPUT_NAME "speech-${_qpgp_old_name}"
-    )
-endfunction()
-
-if (PARAKEET_GGML_LIB_PREFIX AND NOT PARAKEET_USE_SYSTEM_GGML)
-    foreach (_qpgp_target ggml ggml-base)
-        parakeet_apply_ggml_prefix(${_qpgp_target})
-    endforeach()
-    if (DEFINED GGML_AVAILABLE_BACKENDS)
-        foreach (_qpgp_target ${GGML_AVAILABLE_BACKENDS})
-            parakeet_apply_ggml_prefix(${_qpgp_target})
-        endforeach()
-    endif()
-    # Renaming the bundled backend .so/.dll files alone is not enough:
-    # ggml's runtime loader (`ggml_backend_load_best`) hard-codes the
-    # `libggml-` / `ggml-` filename prefix when scanning for backends
-    # under `GGML_BACKEND_DL=ON`. The companion patch
-    # `patches/ggml-backend-reg-filename-prefix.patch` adds a
-    # `GGML_BACKEND_DL_PROJECT_PREFIX` macro to that loader; defining
-    # it here teaches the runtime to look for our prefixed filenames
-    # instead. Otherwise the renamed .so/.dll files exist on disk but
-    # are never discovered, and Vulkan/OpenCL/CUDA backends silently
-    # fail to load.
-    if (TARGET ggml)
-        target_compile_definitions(ggml PRIVATE
-            GGML_BACKEND_DL_PROJECT_PREFIX="speech-"
-        )
-    endif()
-    message(STATUS "parakeet: bundled ggml libraries will be emitted as libspeech-ggml-* (set PARAKEET_GGML_LIB_PREFIX=OFF to keep upstream filenames)")
 endif()
 
 # Same OpenMP avoidance as for ggml above: on Windows non-MinGW builds
@@ -180,29 +207,25 @@ if (PARAKEET_OPENMP)
     find_package(OpenMP)
 endif()
 
-# Centralised GGML_USE_* backend defines. Anything that compiles
-# parakeet_ctc.cpp (the library target plus the standalone test
-# executables that recompile it) must link against this so the
-# `init_gpu_backend` / BLAS / CUDA / Metal / Vulkan code paths get
-# selected consistently. Without this, e.g. test-encoder would silently
-# build with the GPU branch compiled out and `--n-gpu-layers 1` would
-# be a no-op.
+# Legacy interface library kept for export-set compatibility (it is
+# still part of `install(EXPORT parakeet-cpp-targets)` below and
+# downstream `find_package(parakeet-cpp)` consumers list it as a link
+# dep). Body intentionally empty: parakeet routes every backend
+# decision through the ggml-backend registry
+# (`ggml_backend_load_all` + `ggml_backend_dev_*`, see
+# `init_gpu_backend()` / `init_cpu_backend()` / `init_blas_backend()`
+# in src/parakeet_ctc.cpp) and does NOT call any
+# `ggml_backend_<backend>_init` / `ggml_backend_is_<backend>` entry
+# point directly. The `GGML_USE_VULKAN` / `GGML_USE_OPENCL` /
+# `GGML_USE_METAL` / `GGML_USE_CUDA` / `GGML_USE_BLAS` compile defines
+# that used to live here were only consumed by `#ifdef` cascades that
+# called those static entry points; with the registry-only design
+# they're dead, and shipping them would falsely advertise a static
+# backend dependency that the GGML_BACKEND_DL=ON Android/Linux builds
+# explicitly do not have (their backends live in separately-loadable
+# `.so` files that are dlopen()'d by `ggml_backend_load_all_from_path`
+# at runtime).
 add_library(parakeet-backend-defs INTERFACE)
-if (GGML_CUDA)
-    target_compile_definitions(parakeet-backend-defs INTERFACE GGML_USE_CUDA)
-endif()
-if (GGML_METAL)
-    target_compile_definitions(parakeet-backend-defs INTERFACE GGML_USE_METAL)
-endif()
-if (GGML_VULKAN)
-    target_compile_definitions(parakeet-backend-defs INTERFACE GGML_USE_VULKAN)
-endif()
-if (GGML_BLAS)
-    target_compile_definitions(parakeet-backend-defs INTERFACE GGML_USE_BLAS)
-endif()
-if (GGML_OPENCL)
-    target_compile_definitions(parakeet-backend-defs INTERFACE GGML_USE_OPENCL)
-endif()
 
 set(PARAKEET_LIB_SOURCES
     src/parakeet_ctc.cpp
@@ -421,28 +444,14 @@ if (PARAKEET_BUILD_TESTS)
         endif()
     endfunction()
 
-    # Helper: keep the parakeet_ctc.cpp #ifdefs (BLAS / CUDA / Metal / Vulkan /
-    # OpenCL backend init) consistent across the parakeet library and any
-    # test executable that compiles parakeet_ctc.cpp from source. Without this,
-    # tests that don't link the library would always evaluate the #ifdefs as
-    # "no backend defined", producing link errors against ggml-blas / ggml-vk
-    # / ggml-opencl when the parent build did enable them.
+    # Helper: keep PARAKEET_EXPERIMENTAL_FLASH_ATTN consistent across the
+    # parakeet library and any test executable that recompiles
+    # parakeet_ctc.cpp from source. Backend selection itself goes
+    # through the ggml-backend registry (no per-backend `GGML_USE_*`
+    # #ifdef cascade in parakeet_ctc.cpp anymore -- see the comment on
+    # `parakeet-backend-defs` above), so this helper only carries the
+    # flash-attn gate plus the shared ccache launcher.
     function(parakeet_apply_backend_defs target)
-        if (GGML_BLAS)
-            target_compile_definitions(${target} PRIVATE GGML_USE_BLAS)
-        endif()
-        if (GGML_CUDA)
-            target_compile_definitions(${target} PRIVATE GGML_USE_CUDA)
-        endif()
-        if (GGML_METAL)
-            target_compile_definitions(${target} PRIVATE GGML_USE_METAL)
-        endif()
-        if (GGML_VULKAN)
-            target_compile_definitions(${target} PRIVATE GGML_USE_VULKAN)
-        endif()
-        if (GGML_OPENCL)
-            target_compile_definitions(${target} PRIVATE GGML_USE_OPENCL)
-        endif()
         if (PARAKEET_FLASH_ATTN)
             target_compile_definitions(${target} PRIVATE PARAKEET_EXPERIMENTAL_FLASH_ATTN)
         endif()
