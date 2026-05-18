@@ -1549,6 +1549,10 @@ const SortformerStreamingOptions & SortformerStreamSession::options() const {
     return pimpl_->opts;
 }
 
+bool SortformerStreamSession::aosc_active() const {
+    return pimpl_ && pimpl_->cache_active;
+}
+
 void SortformerStreamSession::feed_pcm_f32(const float * samples, int n_samples) {
     if (!pimpl_) throw std::runtime_error("SortformerStreamSession: moved-from session");
     if (pimpl_->finalized) throw std::runtime_error("feed_pcm_f32: session already finalized");

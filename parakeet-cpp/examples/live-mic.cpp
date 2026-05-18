@@ -65,7 +65,10 @@ void print_usage(const char * argv0) {
         "                                 diarization:   chunk stride in ms (default 2000)\n"
         "  --left-context-ms N            transcription: left context per chunk (default 5000)\n"
         "  --right-lookahead-ms N         transcription: right lookahead per chunk (default 1000)\n"
-        "  --history-ms N                 diarization: sliding history window (default 30000)\n"
+        "  --history-ms N                 diarization (v1 only): sliding history window in ms\n"
+        "                                 (default 30000). Ignored on v2.1 GGUFs, where the\n"
+        "                                 NeMo Audio-Online Speaker Cache (AOSC) replaces the\n"
+        "                                 sliding window and activates automatically.\n"
         "  --list-devices                 list available capture devices and exit\n"
         "  --device N                     use device with this index (default: system default)\n"
         "  --accumulate                   transcription only: accumulate on one line; emit a\n"
@@ -296,10 +299,25 @@ int main(int argc, char ** argv) {
     std::signal(SIGTERM, on_sigint);
 
     if (diarization_mode) {
-        std::fprintf(stderr,
-            "[live-mic] listening at 16 kHz mono (diarization).  "
-            "chunk=%d ms  history=%d ms. Speak, Ctrl-C to stop.\n\n",
-            args.chunk_ms, args.history_ms);
+        // diar_sess->aosc_active() is true on v2.1 GGUFs that took the
+        // NeMo Audio-Online Speaker Cache code path inside diarize_start.
+        // v1 GGUFs (or v2.x with spkcache_enable=false) return false and
+        // keep the sliding-history banner unchanged from earlier releases.
+        if (diar_sess->aosc_active()) {
+            const auto & sopts = diar_sess->options();
+            std::fprintf(stderr,
+                "[live-mic] listening at 16 kHz mono (v2.1 diarization, AOSC).  "
+                "chunk=%d ms  spkcache_len=%d  fifo_len=%d  lc=%d ms  rc=%d ms.  "
+                "Speak, Ctrl-C to stop.\n\n",
+                args.chunk_ms,
+                sopts.spkcache_len, sopts.fifo_len,
+                sopts.chunk_left_context_ms, sopts.chunk_right_context_ms);
+        } else {
+            std::fprintf(stderr,
+                "[live-mic] listening at 16 kHz mono (v1 diarization).  "
+                "chunk=%d ms  history=%d ms. Speak, Ctrl-C to stop.\n\n",
+                args.chunk_ms, args.history_ms);
+        }
     } else {
         std::fprintf(stderr,
             "[live-mic] listening at 16 kHz mono.  "
