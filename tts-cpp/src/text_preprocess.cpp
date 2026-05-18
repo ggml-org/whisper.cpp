@@ -102,6 +102,12 @@ uint32_t katakana_to_hiragana_cp(uint32_t cp) {
     return cp;
 }
 
+std::string strip_trailing_tsv_columns(const std::string & line, size_t first_tab) {
+    const auto second_tab = line.find('\t', first_tab + 1);
+    if (second_tab == std::string::npos) return line.substr(first_tab + 1);
+    return line.substr(first_tab + 1, second_tab - first_tab - 1);
+}
+
 struct TsvRow {
     uint32_t    codepoint;
     std::string code;
@@ -117,7 +123,7 @@ bool parse_tsv_line(const std::string & line, TsvRow & row) {
     if (cps.size() != 1) return false;
 
     row.codepoint = cps[0];
-    row.code = line.substr(tab + 1);
+    row.code = strip_trailing_tsv_columns(line, tab);
     return true;
 }
 
