@@ -305,6 +305,14 @@ struct ParakeetCtcModel {
 // `TdtConfig` + `SortformerConfig`.
 using ParakeetModel = ParakeetCtcModel;
 
+// Backend init configuration. Call before the first `load_from_gguf`
+// (or Engine construction) in the process. Both are no-ops once the
+// ggml-backend registry has been populated (the registry is a
+// process-wide singleton); see implementation comments for the
+// detailed lifetime contract.
+void set_backends_directory(const std::string & dir);
+void set_opencl_cache_dir(const std::string & dir);
+
 int load_from_gguf(const std::string & gguf_path,
                    ParakeetCtcModel  & out_model,
                    int                 n_threads,

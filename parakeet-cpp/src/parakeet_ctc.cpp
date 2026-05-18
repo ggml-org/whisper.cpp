@@ -10,16 +10,23 @@
 #include "gguf.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
+
+#if defined(__ANDROID__) || defined(__unix__) || defined(__APPLE__)
+#include <unistd.h>
+#endif
 
 namespace parakeet {
 
@@ -128,6 +135,34 @@ ggml_context * ParakeetCtcModel::weights_ctx() const {
 
 namespace {
 
+// Backends-dir / OpenCL-cache-dir override + warning state. The
+// setters are intended to be called by the first Engine
+// construction; both are consumed once and then frozen for the rest
+// of the process lifetime (the ggml-backend registry and
+// $GGML_OPENCL_CACHE_DIR are both process-singleton state -- see
+// comment on `ensure_backends_loaded` and the analogous note in
+// `set_opencl_cache_dir`).
+//
+// `g_backends_loaded` is the canonical "registry already populated"
+// flag, set inside `ensure_backends_loaded()` *before* the load-all
+// call returns AND under the mutex so concurrent `set_*` calls
+// either land their write (and have it picked up by the in-flight
+// load) or atomically observe the flag and warn. We track it
+// separately from `g_recorded_backends_dir` because the first
+// Engine may have legitimately constructed with an empty
+// `backends_dir` (default ggml search path), in which case
+// `g_recorded_backends_dir` stays empty and is no longer a reliable
+// "have we loaded?" sentinel -- a subsequent setter would otherwise
+// silently write to `g_backends_dir`, never get re-scanned, and
+// surface zero diagnostic to the caller.
+std::mutex     g_backends_dir_mutex;
+std::string    g_backends_dir;
+std::string    g_recorded_backends_dir;
+std::string    g_recorded_opencl_cache_dir;
+std::atomic<bool> g_backends_loaded{false};
+std::atomic<bool> g_backends_dir_warned{false};
+std::atomic<bool> g_opencl_cache_dir_warned{false};
+
 // Trigger one-time discovery + load of every available ggml backend.
 // Idempotent: repeated calls inside the same process are no-ops once
 // the registry is populated. Routed through a static guard so we don't
@@ -145,23 +180,92 @@ namespace {
 // ggml_backend_load_all() is a cheap no-op. Both modes therefore
 // reach the same registry walk below, matching the convention used
 // by llama.cpp and other ggml-based libraries.
+//
+// The optional backends dir comes from `set_backends_directory()`
+// (typically wired from `EngineOptions::backends_dir`). When set and
+// non-empty, the loader walks that single directory instead of the
+// compile-time defaults so embedded host apps can ship the
+// `lib<prefix>ggml-{vulkan,opencl,cpu-*}.so` files in their own
+// per-module folder rather than relying on `LD_LIBRARY_PATH` /
+// `dlopen()` heuristics.
 void ensure_backends_loaded() {
     static const bool loaded = []() {
-        ggml_backend_load_all();
+        std::string dir;
+        {
+            std::lock_guard<std::mutex> lock(g_backends_dir_mutex);
+            dir = g_backends_dir;
+            g_recorded_backends_dir = g_backends_dir;
+            // Flip the loaded sentinel under the mutex (and *before*
+            // we release it for the load-all call below) so any
+            // concurrent setter that's about to acquire the mutex
+            // sees the registry as already-claimed and falls into
+            // its warn-once branch. Without this, a setter racing
+            // a first Engine construction would land its value
+            // *after* we already captured `dir` into the local --
+            // the registry would scan against the wrong directory
+            // (or the default), and the second Engine would have
+            // no idea its override was lost.
+            g_backends_loaded.store(true, std::memory_order_release);
+        }
+        if (!dir.empty()) {
+            ggml_backend_load_all_from_path(dir.c_str());
+        } else {
+            ggml_backend_load_all();
+        }
         return true;
     }();
     (void) loaded;
 }
 
-bool is_adreno_6xx(const char * s) {
-    if (!s) return false;
-    if (!strstr(s, "Adreno")) return false;
-    for (const char * q = s; *q; ++q) {
-        if (*q == '6' && q[1] >= '0' && q[1] <= '9' && q[2] >= '0' && q[2] <= '9') {
-            return true;
-        }
+// Parse the Adreno generation number from a device name /
+// description string. Returns:
+//   - a 3-or-4-digit generation number ("Adreno (TM) 750" -> 750,
+//     "Adreno 830" -> 830, "Adreno 660" -> 660)
+//   - a synthetic 800 for the "Adreno X<n>" naming used by
+//     Snapdragon X Elite parts (X1-85 / X1-45 etc.). These are
+//     7xx/8xx-tier silicon with kernels that ggml-opencl supports
+//     and outperform Vulkan on. Mapped to 800 here so they take
+//     the OpenCL branch in the tier policy.
+//   - -1 when no Adreno marker is present (Mali, desktop GPUs, ...)
+//
+// Used to drive the OpenCL vs Vulkan tier policy below: Adreno
+// 7xx/8xx/X<n> ship OpenCL kernels that outperform Vulkan on those
+// parts, while Adreno 6xx ggml-opencl is known broken (incorrect
+// results). Mirrors the equivalent helper in llm-llamacpp's
+// BackendSelection.cpp::parseAdrenoVersion so the two stacks reach
+// the same decision on the same hardware.
+int parse_adreno_version(const char * s) {
+    if (!s) return -1;
+    const char * p = strstr(s, "Adreno");
+    if (!p) p = strstr(s, "adreno");
+    if (!p) return -1;
+    p += 6; // strlen("Adreno") == strlen("adreno") == 6
+    // Skip whitespace, "(TM)", punctuation; stop at first letter or digit.
+    while (*p && !(*p >= '0' && *p <= '9') && *p != 'X' && *p != 'x') ++p;
+    if (!*p) return -1;
+    // X1 / X2 ... naming for Snapdragon X Elite -> treat as 800-tier.
+    if (*p == 'X' || *p == 'x') {
+        ++p;
+        if (*p < '0' || *p > '9') return -1; // "Xclipse" etc. is not Adreno-X
+        return 800;
     }
-    return false;
+    int v = 0;
+    while (*p >= '0' && *p <= '9') {
+        v = v * 10 + (*p - '0');
+        ++p;
+        if (v > 100000) return -1;
+    }
+    return v;
+}
+
+bool is_adreno_6xx(const char * s) {
+    const int v = parse_adreno_version(s);
+    return v >= 600 && v < 700;
+}
+
+bool is_adreno_700plus(const char * s) {
+    const int v = parse_adreno_version(s);
+    return v >= 700;
 }
 
 const char * dev_reg_name(ggml_backend_dev_t dev) {
@@ -171,19 +275,42 @@ const char * dev_reg_name(ggml_backend_dev_t dev) {
 }
 
 
+// Pick a GPU backend using the same tier policy as llm-llamacpp's
+// BackendSelection: ggml-opencl is only used when an Adreno 700+
+// device is present (where its kernels are validated and faster than
+// Vulkan); every other GPU (Vulkan, Metal, CUDA, Mali, Intel iGPU,
+// ...) goes through the non-OpenCL preference. Adreno 6xx OpenCL is
+// known broken (incorrect outputs) and is force-skipped unless the
+// caller opts in via `PARAKEET_ALLOW_ADRENO_6XX=1`.
+//
+// Routed exclusively through the ggml-backend registry
+// (`ggml_backend_load_all` + `ggml_backend_dev_*`). No direct calls
+// to `ggml_backend_vulkan_init` / `ggml_backend_opencl_init` /
+// `ggml_backend_metal_init` are made anywhere in parakeet — under
+// the GGML_BACKEND_DL=ON build mode embedded host applications ship
+// with, those entry points live in separate shared libraries that
+// are dlopen()'d at runtime and are not linkable from libparakeet.
+// The registry walk reaches the same backends in both modes.
 ggml_backend_t init_gpu_backend(int n_gpu_layers, bool verbose) {
     if (n_gpu_layers <= 0) return nullptr;
 
     ensure_backends_loaded();
 
-    // Walk the registry in registration order and pick the first
-    // GPU/IGPU device. Registry order is defined by the ggml-backend
-    // registry's static init list (CUDA -> Metal -> Vulkan -> OpenCL
-    // -> ...), so this preserves the priority of the legacy direct-
-    // init cascade. The Adreno-6xx fallback policy stays on top:
-    // ggml-opencl produces incorrect results on Adreno 6xx; force-
-    // skip and continue the walk (or fall through to CPU) unless
-    // `PARAKEET_ALLOW_ADRENO_6XX=1` is set.
+    // Collect GPU/IGPU devices into three buckets so we can apply the
+    // tier policy after the walk. We keep the device handles + their
+    // human-readable names for both the policy decision and the final
+    // log line.
+    struct Cand {
+        ggml_backend_dev_t dev;
+        const char *       name;
+        const char *       desc;
+        const char *       reg_name;
+    };
+    std::vector<Cand> opencl_adreno_700plus;
+    std::vector<Cand> other_gpu;   // Vulkan / Metal / CUDA / Mali / Intel / ...
+    std::vector<Cand> opencl_other; // Non-Adreno OpenCL (e.g. desktop)
+    int max_adreno_version = -1;
+
     const size_t n_dev = ggml_backend_dev_count();
     for (size_t i = 0; i < n_dev; ++i) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
@@ -198,32 +325,72 @@ ggml_backend_t init_gpu_backend(int n_gpu_layers, bool verbose) {
         const char * reg_name = dev_reg_name(dev);
         const bool   is_opencl = std::strcmp(reg_name, "OpenCL") == 0;
 
-        if (is_opencl && (is_adreno_6xx(name) || is_adreno_6xx(desc))) {
-            const char * reported = name ? name : (desc ? desc : "unknown");
-            const char * override_env = getenv("PARAKEET_ALLOW_ADRENO_6XX");
-            if (!override_env || override_env[0] != '1') {
-                if (verbose) PARAKEET_LOG_WARN(
-                    "parakeet: OpenCL device '%s' is Adreno 6xx; "
-                    "skipping (7xx/8xx/X1E supported, set "
-                    "PARAKEET_ALLOW_ADRENO_6XX=1 to override)\n",
-                    reported);
-                continue;
-            }
-            if (verbose) PARAKEET_LOG_INFO(
-                "parakeet: PARAKEET_ALLOW_ADRENO_6XX=1 set; "
-                "keeping OpenCL backend on '%s' anyway\n", reported);
-        }
+        const int adreno_v = std::max(parse_adreno_version(name),
+                                      parse_adreno_version(desc));
+        if (adreno_v > max_adreno_version) max_adreno_version = adreno_v;
 
-        ggml_backend_t b = ggml_backend_dev_init(dev, nullptr);
-        if (!b) continue;
-        if (verbose) PARAKEET_LOG_INFO(
-            "parakeet: using %s backend (%s)\n",
-            reg_name && *reg_name ? reg_name : "GPU",
-            name ? name : (desc ? desc : "unknown"));
-        return b;
+        if (is_opencl) {
+            if (adreno_v >= 700) {
+                opencl_adreno_700plus.push_back({dev, name, desc, reg_name});
+            } else if (adreno_v >= 600 && adreno_v < 700) {
+                const char * reported = name ? name : (desc ? desc : "unknown");
+                const char * override_env = getenv("PARAKEET_ALLOW_ADRENO_6XX");
+                if (!override_env || override_env[0] != '1') {
+                    if (verbose) PARAKEET_LOG_WARN(
+                        "parakeet: OpenCL device '%s' is Adreno 6xx; "
+                        "skipping (7xx/8xx/X1E supported, set "
+                        "PARAKEET_ALLOW_ADRENO_6XX=1 to override)\n",
+                        reported);
+                    continue;
+                }
+                if (verbose) PARAKEET_LOG_INFO(
+                    "parakeet: PARAKEET_ALLOW_ADRENO_6XX=1 set; "
+                    "keeping OpenCL backend on '%s' anyway\n", reported);
+                opencl_other.push_back({dev, name, desc, reg_name});
+            } else {
+                opencl_other.push_back({dev, name, desc, reg_name});
+            }
+        } else {
+            other_gpu.push_back({dev, name, desc, reg_name});
+        }
     }
 
-    if (verbose) PARAKEET_LOG_INFO("parakeet: no GPU backend available, falling back to CPU\n");
+    // Tier policy:
+    //   1. Adreno 700+: prefer OpenCL (validated, faster than Vulkan
+    //      on Snapdragon 8 Gen 2/3/4 etc.).
+    //   2. Anything else with a non-OpenCL GPU: prefer that
+    //      (Vulkan on all non-Adreno Android, Metal on Apple, CUDA
+    //      on Linux/Windows desktop, Mali iGPU via Vulkan, ...).
+    //   3. Last resort: any other OpenCL device (e.g. desktop OpenCL
+    //      or non-Adreno mobile when no Vulkan is registered).
+    auto try_init = [&](const std::vector<Cand> & bucket) -> ggml_backend_t {
+        for (const Cand & c : bucket) {
+            ggml_backend_t b = ggml_backend_dev_init(c.dev, nullptr);
+            if (!b) continue;
+            if (verbose) PARAKEET_LOG_INFO(
+                "parakeet: using %s backend (%s)\n",
+                c.reg_name && *c.reg_name ? c.reg_name : "GPU",
+                c.name ? c.name : (c.desc ? c.desc : "unknown"));
+            return b;
+        }
+        return nullptr;
+    };
+
+    if (!opencl_adreno_700plus.empty()) {
+        if (ggml_backend_t b = try_init(opencl_adreno_700plus)) return b;
+    }
+    if (ggml_backend_t b = try_init(other_gpu)) return b;
+    if (ggml_backend_t b = try_init(opencl_other)) return b;
+
+    if (verbose) {
+        if (max_adreno_version >= 600 && max_adreno_version < 700) {
+            PARAKEET_LOG_INFO(
+                "parakeet: only Adreno 6xx OpenCL detected (broken); "
+                "falling back to CPU\n");
+        } else {
+            PARAKEET_LOG_INFO("parakeet: no GPU backend available, falling back to CPU\n");
+        }
+    }
     return nullptr;
 }
 
@@ -298,6 +465,91 @@ std::vector<float> read_filterbank_to_vector(ggml_tensor * t) {
     return out;
 }
 
+}
+
+void set_backends_directory(const std::string & dir) {
+    std::lock_guard<std::mutex> lock(g_backends_dir_mutex);
+    if (g_backends_loaded.load(std::memory_order_acquire)) {
+        // Registry already populated for this process. We can't
+        // re-scan a different directory mid-flight (ggml's registry
+        // is a process-wide singleton), so log the conflict at most
+        // once and otherwise stay silent on subsequent identical
+        // sets (the common case when a host instantiates several
+        // Engines back-to-back from the same backends folder, or
+        // when the second value happens to match the recorded one).
+        if (dir != g_recorded_backends_dir &&
+            !g_backends_dir_warned.exchange(true)) {
+            if (g_recorded_backends_dir.empty()) {
+                // First Engine constructed without an explicit
+                // backends_dir, so ggml's compile-time default
+                // search path was used. The current caller wanted
+                // a specific dir but missed the window.
+                PARAKEET_LOG_WARN(
+                    "parakeet: set_backends_directory('%s') ignored -- the "
+                    "ggml-backend registry was already populated against "
+                    "ggml's default search path (no explicit backends_dir on "
+                    "the first Engine). Call set_backends_directory() (or "
+                    "construct an Engine with backends_dir set) before the "
+                    "first Engine to influence which directory is scanned.\n",
+                    dir.c_str());
+            } else {
+                PARAKEET_LOG_WARN(
+                    "parakeet: set_backends_directory('%s') ignored -- backends "
+                    "already loaded from '%s' earlier in this process.\n",
+                    dir.c_str(), g_recorded_backends_dir.c_str());
+            }
+        }
+        return;
+    }
+    g_backends_dir = dir;
+}
+
+void set_opencl_cache_dir(const std::string & dir) {
+#if defined(__ANDROID__)
+    // Same "first Engine wins" contract as set_backends_directory:
+    // ggml-opencl reads $GGML_OPENCL_CACHE_DIR once per process at
+    // backend init (before the first kernel build), so a setenv
+    // after init is effectively a no-op on the cache binding. Gate
+    // on the shared g_backends_loaded flag because the OpenCL
+    // backend is registered at the same `ggml_backend_load_all*`
+    // call that flips the flag -- conservative because it might
+    // still take effect when the host hasn't yet instantiated a
+    // GPU device, but matches what the engine-ctor documentation
+    // promises and avoids the same silent-failure mode as
+    // set_backends_directory's previous gate.
+    std::lock_guard<std::mutex> lock(g_backends_dir_mutex);
+    if (g_backends_loaded.load(std::memory_order_acquire)) {
+        if (!dir.empty() && dir != g_recorded_opencl_cache_dir &&
+            !g_opencl_cache_dir_warned.exchange(true)) {
+            if (g_recorded_opencl_cache_dir.empty()) {
+                PARAKEET_LOG_WARN(
+                    "parakeet: set_opencl_cache_dir('%s') ignored -- backends "
+                    "were already loaded with no explicit OpenCL cache dir "
+                    "earlier in this process ($GGML_OPENCL_CACHE_DIR either "
+                    "unset or set by another consumer). Call "
+                    "set_opencl_cache_dir() before the first Engine to take "
+                    "effect.\n",
+                    dir.c_str());
+            } else {
+                PARAKEET_LOG_WARN(
+                    "parakeet: set_opencl_cache_dir('%s') ignored -- "
+                    "$GGML_OPENCL_CACHE_DIR already pinned to '%s' earlier in "
+                    "this process.\n",
+                    dir.c_str(), g_recorded_opencl_cache_dir.c_str());
+            }
+        }
+        return;
+    }
+    if (dir.empty()) return;
+    // ggml-opencl's program-binary-cache patch reads this once per
+    // process at backend init (before the first kernel build). Set
+    // it before constructing the first Engine; later calls don't
+    // re-bind the cache but cost nothing.
+    ::setenv("GGML_OPENCL_CACHE_DIR", dir.c_str(), /*overwrite=*/1);
+    g_recorded_opencl_cache_dir = dir;
+#else
+    (void) dir;
+#endif
 }
 
 int load_from_gguf(const std::string & gguf_path,

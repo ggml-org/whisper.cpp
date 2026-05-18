@@ -141,6 +141,21 @@ static void prewarm_encoder(ParakeetCtcModel & model, float audio_seconds) {
 Engine::Engine(const EngineOptions & opts) : pimpl_(std::make_unique<Impl>()) {
     pimpl_->opts = opts;
 
+    // Apply backend-init knobs before the first ggml call. Both are
+    // process-singleton-scoped (the ggml-backend registry only ever
+    // gets populated once per process; `$GGML_OPENCL_CACHE_DIR` is
+    // read once by ggml-opencl at first init), so this is effectively
+    // a "first Engine wins" race -- a second Engine with a different
+    // backends_dir is logged + ignored by set_backends_directory().
+    // Hosts that need per-Engine isolation should run each Engine in
+    // its own subprocess.
+    if (!opts.backends_dir.empty()) {
+        set_backends_directory(opts.backends_dir);
+    }
+    if (!opts.opencl_cache_dir.empty()) {
+        set_opencl_cache_dir(opts.opencl_cache_dir);
+    }
+
     const int rc = load_from_gguf(opts.model_gguf_path,
                                   pimpl_->model,
                                   opts.n_threads,
