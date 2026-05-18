@@ -282,13 +282,15 @@ ggml_tensor * try_pretransposed_weight(const supertonic_model & model, const ggm
 
 std::string supertonic_preprocess_text(const std::string & text,
                                        const std::string & language,
-                                       const std::string & language_wrap_mode);
+                                       const std::string & language_wrap_mode,
+                                       bool is_continuation = false);
 bool supertonic_text_to_ids(const supertonic_model & model,
                             const std::string & text,
                             const std::string & language,
                             std::vector<int32_t> & ids,
                             std::string * normalized_text = nullptr,
-                            std::string * error = nullptr);
+                            std::string * error = nullptr,
+                            bool is_continuation = false);
 
 bool supertonic_vocoder_forward_cpu(const supertonic_model & model,
                                     const float * latent,

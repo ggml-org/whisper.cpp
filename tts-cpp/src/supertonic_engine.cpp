@@ -1,11 +1,14 @@
 #define TTS_CPP_BUILD
 #include "tts-cpp/supertonic/engine.h"
 
+#include "supertonic_chunker.h"
 #include "supertonic_internal.h"
 #include "npy.h"
 
 #include <atomic>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cstdint>
 #include <filesystem>
@@ -107,6 +110,39 @@ private:
     }
 };
 
+// Heuristic: does this chunk end at a natural sentence terminator?
+// Used by streaming to decide whether to skip the auto-appended period
+// (continuation chunks) or keep it (complete-sentence chunks).  Commas
+// and other clause punctuation are NOT counted here — chunks ending in
+// a comma still want is_continuation=true so the model hears them as
+// a continuation, not a mini-sentence.
+//
+// Trims trailing whitespace, then decodes the final UTF-8 code point
+// and delegates to the chunker's `is_sentence_end_cp` so the
+// terminator table is defined in exactly one place (see
+// supertonic_chunker.cpp).
+bool chunk_ends_with_sentence_term(const std::string & s) {
+    size_t i = s.size();
+    while (i > 0 && (s[i - 1] == ' ' || s[i - 1] == '\t' ||
+                     s[i - 1] == '\n' || s[i - 1] == '\r')) --i;
+    if (i == 0) return false;
+    // Walk back to the leading byte of the final UTF-8 sequence.
+    size_t pos = i - 1;
+    while (pos > 0 && ((uint8_t) s[pos] & 0xC0) == 0x80) --pos;
+    const size_t bytes = i - pos;
+    uint32_t cp = 0;
+    if      (bytes == 1) cp = (uint8_t) s[pos];
+    else if (bytes == 2) cp = ((s[pos] & 0x1F) << 6) | (s[pos + 1] & 0x3F);
+    else if (bytes == 3) cp = ((s[pos] & 0x0F) << 12) |
+                              ((s[pos + 1] & 0x3F) << 6) |
+                              (s[pos + 2] & 0x3F);
+    else if (bytes == 4) cp = ((s[pos] & 0x07) << 18) |
+                              ((s[pos + 1] & 0x3F) << 12) |
+                              ((s[pos + 2] & 0x3F) << 6) |
+                              (s[pos + 3] & 0x3F);
+    return detail::is_sentence_end_cp(cp);
+}
+
 } // namespace
 
 struct Engine::Impl {
@@ -171,11 +207,14 @@ struct Engine::Impl {
     Impl(const Impl &)             = delete;
     Impl & operator=(const Impl &) = delete;
 
-    SynthesisResult synthesize(const std::string & text) {
-        if (text.empty()) {
-            throw std::runtime_error("Supertonic Engine: text is empty");
-        }
-
+    // Single-chunk synthesis worker.  Runs the full Supertonic pipeline
+    // (preprocess → duration → noise → text encoder → vector estimator
+    // CFM loop → vocoder) on `text` with the given seed.  When
+    // `is_continuation` is true the preprocess skips the auto-appended
+    // terminal period — used by streaming for mid-utterance chunks so
+    // the model isn't told "this is a complete sentence" when it isn't.
+    SynthesisResult run_single_chunk(const std::string & text, int seed,
+                                     bool is_continuation = false) {
         const std::string voice = opts.voice.empty()
             ? model.hparams.default_voice
             : opts.voice;
@@ -196,7 +235,8 @@ struct Engine::Impl {
         std::vector<int32_t> text_ids_i32;
         std::string normalized;
         std::string error;
-        if (!supertonic_text_to_ids(model, text, opts.language, text_ids_i32, &normalized, &error)) {
+        if (!supertonic_text_to_ids(model, text, opts.language, text_ids_i32,
+                                    &normalized, &error, is_continuation)) {
             throw std::runtime_error("Supertonic Engine: text preprocessing failed: " + error);
         }
         std::vector<int64_t> text_ids(text_ids_i32.begin(), text_ids_i32.end());
@@ -229,7 +269,7 @@ struct Engine::Impl {
             latent.resize(noise.n_elements());
             std::memcpy(latent.data(), npy_as_f32(noise), latent.size() * sizeof(float));
         } else {
-            numpy_random_state rng((uint32_t) opts.seed);
+            numpy_random_state rng((uint32_t) seed);
             latent.assign((size_t) model.hparams.latent_channels * latent_len, 0.0f);
             for (float & v : latent) v = rng.standard_normal();
         }
@@ -282,6 +322,131 @@ struct Engine::Impl {
         return result;
     }
 
+    SynthesisResult synthesize(const std::string & text) {
+        if (text.empty()) {
+            throw std::runtime_error("Supertonic Engine: text is empty");
+        }
+        return run_single_chunk(text, opts.seed);
+    }
+
+    // Streaming path: chunk text via the multilingual splitter, run the
+    // full per-chunk pipeline, apply an anti-click raised-cosine fade
+    // across inter-chunk seams, invoke `on_chunk` synchronously, and
+    // accumulate the full PCM in the returned result (callback is an
+    // *addition*, not a replacement — matches Chatterbox semantics).
+    SynthesisResult synthesize_streaming(const std::string & text,
+                                         const StreamCallback & on_chunk) {
+        if (text.empty()) {
+            throw std::runtime_error("Supertonic Engine: text is empty");
+        }
+
+        std::vector<std::string> chunks = detail::split_for_streaming(
+            text,
+            opts.stream_chunk_tokens,
+            opts.stream_first_chunk_tokens,
+            opts.stream_chunk_tolerance_pct,
+            opts.stream_min_chunk_tokens);
+
+        if (chunks.empty()) {
+            throw std::runtime_error("Supertonic Engine: chunker produced no chunks");
+        }
+
+        // Optional chunk-boundary trace for debugging the multilingual
+        // splitter.  Off by default; opt-in via env var so production
+        // synthesis isn't slowed by stderr writes.
+        if (const char * env = std::getenv("SUPERTONIC_LOG_CHUNKS"); env && env[0] == '1') {
+            for (size_t i = 0; i < chunks.size(); ++i) {
+                std::fprintf(stderr, "chunk[%zu] (%zu bytes): %s\n",
+                             i, chunks[i].size(), chunks[i].c_str());
+            }
+        }
+
+        SynthesisResult full;
+        full.duration_s = 0.0f;
+
+        const int n_chunks = (int) chunks.size();
+        for (int k = 0; k < n_chunks; ++k) {
+            if (cancel_flag.load(std::memory_order_acquire)) {
+                throw std::runtime_error(
+                    "Supertonic Engine: cancelled during streaming chunk "
+                    + std::to_string(k));
+            }
+
+            // Use opts.seed for every chunk.  Each chunk has a different
+            // predicted latent_len (driven by its own text and duration
+            // model), so the RNG produces different-length noise tensors
+            // for each chunk even with the same seed — there's no risk
+            // of identical starting noise across chunks.  An earlier
+            // version perturbed the seed per chunk (opts.seed + k) as
+            // a defensive measure, but that landed some chunks on
+            // nearby seeds where the model produces phantom phoneme
+            // artifacts ("park.K" tail).  Keeping the user's chosen
+            // seed across chunks gives consistent, controllable output.
+            //
+            // is_continuation: chunks that DON'T end on a natural
+            // sentence terminator (.?! and the CJK / Devanagari / Urdu
+            // equivalents) need preprocess to skip the auto-appended
+            // period.  Otherwise the model hears the stub as a complete
+            // sentence with falling intonation + trailing artifacts —
+            // the failure mode that originally restricted us to
+            // sentence-only chunking.  With the flag, mid-clause /
+            // mid-word chunk endings flow through with their natural
+            // (un-punctuated) tail so the model treats them as a
+            // continuation.
+            const bool is_continuation = !chunk_ends_with_sentence_term(chunks[k]);
+            if (const char * env = std::getenv("SUPERTONIC_LOG_CHUNKS");
+                env && env[0] == '1') {
+                std::fprintf(stderr, "chunk[%d] is_continuation=%d\n",
+                             k, (int) is_continuation);
+            }
+            SynthesisResult chunk_res = run_single_chunk(chunks[k], opts.seed,
+                                                         is_continuation);
+
+            // Anti-click raised-cosine fade across inter-chunk seams.
+            // Without HiFT cache continuity (Supertonic runs each chunk
+            // as a fresh independent pipeline), plain concatenation can
+            // produce a faint click at the boundary.  ~10 ms is enough
+            // to hide the click without audibly attenuating speech.
+            // Applied to the start of every non-first chunk and the end
+            // of every non-last chunk.  The very-first chunk start and
+            // very-last chunk end are left untouched so the streamed
+            // output is acoustically equivalent to the batch output at
+            // those endpoints.
+            const int    sr      = chunk_res.sample_rate;
+            const size_t fade_n  = std::min<size_t>(
+                                       (size_t)(sr * 10 / 1000),
+                                       chunk_res.pcm.size() / 2);
+            const bool   is_first = (k == 0);
+            const bool   is_last  = (k == n_chunks - 1);
+
+            if (!is_first && fade_n > 0) {
+                for (size_t i = 0; i < fade_n; ++i) {
+                    const float t = (float) i / (float) fade_n;
+                    const float w = 0.5f * (1.0f - std::cos((float) M_PI * t));
+                    chunk_res.pcm[i] *= w;
+                }
+            }
+            if (!is_last && fade_n > 0) {
+                const size_t n = chunk_res.pcm.size();
+                for (size_t i = 0; i < fade_n; ++i) {
+                    const float t = (float) i / (float) fade_n;
+                    const float w = 0.5f * (1.0f - std::cos((float) M_PI * t));
+                    chunk_res.pcm[n - 1 - i] *= w;
+                }
+            }
+
+            // Fire callback before accumulating, so the consumer sees
+            // the same buffer it would receive in pure-streaming mode.
+            on_chunk(chunk_res.pcm.data(), chunk_res.pcm.size(), k, is_last);
+
+            full.pcm.insert(full.pcm.end(), chunk_res.pcm.begin(), chunk_res.pcm.end());
+            full.duration_s  += chunk_res.duration_s;
+            full.sample_rate  = chunk_res.sample_rate;
+        }
+
+        return full;
+    }
+
     std::string backend_name() const {
         if (!model.backend) return "(unknown)";
         if (const char * name = ggml_backend_name(model.backend)) {
@@ -301,6 +466,17 @@ Engine & Engine::operator=(Engine &&) noexcept = default;
 
 SynthesisResult Engine::synthesize(const std::string & text) {
     return pimpl_->synthesize(text);
+}
+
+SynthesisResult Engine::synthesize(const std::string & text,
+                                   const StreamCallback & on_chunk) {
+    // Fall through to the batch path when streaming is disabled or no
+    // callback is wired up.  Both conditions match the Chatterbox
+    // semantics — callers can pass a no-op callback safely.
+    if (!on_chunk || pimpl_->opts.stream_chunk_tokens <= 0) {
+        return pimpl_->synthesize(text);
+    }
+    return pimpl_->synthesize_streaming(text, on_chunk);
 }
 
 void Engine::cancel() {

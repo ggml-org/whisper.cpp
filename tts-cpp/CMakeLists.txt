@@ -207,6 +207,7 @@ set(TTS_CPP_LIB_SOURCES
     src/supertonic_text_encoder.cpp
     src/supertonic_vector_estimator.cpp
     src/supertonic_engine.cpp
+    src/supertonic_chunker.cpp
     src/mtl_tokenizer.cpp
 )
 
