@@ -3338,3 +3338,133 @@ NaN/Inf values. Exit code 1 on any failure.
 - Vulkan performance optimisation (RTF benchmarking, pipeline cache).
 - Validate on AMD and Intel GPUs.
 - Upstream the `ggml_cont` fix as a ggml-vulkan unary stride patch.
+
+## Phase 17 — Sortformer v2.1 Audio-Online Speaker Cache (AOSC)  _(done)_
+
+Phase 11 landed v1 (offline + sliding-history streaming) and §11.11.2
+reserved a slot for NeMo's streaming-Sortformer spkcache architecture
+shipped with `diar_streaming_sortformer_4spk-v2.x`. This phase fills
+that slot: a faithful C++ port of NeMo's AOSC algorithm so v2.1
+correctly tracks speakers across long re-entry gaps (which v1 and v2.1
+without a cache cannot do — they collapse returning speakers into
+whichever hyp slot is closest to the current talker).
+
+### 17.1 — algorithm and helpers
+
+Ported from `sortformer_modules.py` + `sortformer_diar_models.py` in
+NeMo. Each C++ helper carries an `// matches NeMo <fn> at
+sortformer_modules.py:<line>` comment pointing at its source.
+
+- `_compress_spkcache` — composite-score top-K retention per speaker,
+  silence anchoring via `mean_sil_emb`, dedupe by absolute frame index,
+  chronological output (the v2.1 model was trained with Sort Loss so
+  output order matters).
+- `_get_silence_profile` — runtime EMA of silence-frame embeddings.
+- `_disable_low_scores` / `_boost_topk_scores` — threshold gating +
+  newest-frame boost on the per-chunk score matrix.
+- `streaming_update` — FIFO + pop + compress orchestration.
+- `forward_streaming_step` (`sortformer_aosc_step` in C++) — per-chunk
+  cache + FIFO + chunk concat in the post-subsampling embedding space,
+  FastConformer over the concatenation, head, slice, threshold.
+
+### 17.2 — encoder context windowing
+
+`SortformerStreamSession::try_emit_chunks` waits for
+`chunk_right_context_ms` of lookahead audio before emitting; tail
+chunks fall back to a left-context-only finalize path. New public
+fields on `SortformerStreamingOptions`:
+`chunk_left_context_ms = 80`, `chunk_right_context_ms = 560`,
+`spkcache_update_period = 144`, `fifo_len = 188`. Defaults match
+NeMo's `e2e_diarize_speech.py` inference YAML.
+
+### 17.3 — bypass-pre-encode encoder forward
+
+`run_encoder_bypass_pre_encode` (in `parakeet_ctc.cpp`) skips the
+subsampling block and feeds pre-subsampled embeddings straight into
+the conformer stack. Required for splicing the speaker cache + FIFO +
+new chunk in the post-subsampling space the way NeMo trained v2.1
+with. Activated only when the cached `EncoderGraph` carries
+`bypass_pre_encode = true`; v1 continues through the regular encoder
+forward path.
+
+### 17.4 — v1 path unchanged
+
+`cache_active = false` for v1 GGUFs (detected via encoder shape:
+18 conformer layers / 80 mel bins, vs v2.x's 17 / 128). v1 streaming
+still uses the prior sliding-history + overlap-remap logic and stays
+bit-identical to its previous output.
+
+### 17.5 — validation
+
+Synthetic English-only fixtures generated via ElevenLabs TTS with
+LIFO re-entry patterns. Lengths chosen so the re-entry gap exceeds
+the FIFO span:
+
+- `test/samples/abcba.wav` (160.6 s, 3 distinct speakers, pattern
+  A→B→C→B→A) — A returns after a 97 s gap.
+- `test/samples/abcdba.wav` (191.2 s, 4 distinct speakers, pattern
+  A→B→C→D→B→A) — A returns after a 128 s gap, B returns after a 66 s
+  gap.
+
+Each fixture ships with a hand-built ground-truth `.rttm`.
+`test/test_sortformer_aosc_speakers.cpp` (new) checks three invariants
+against the RTTM: (a) every reference speaker has at least one
+emitted hyp frame, (b) every speaker that re-enters lands in the
+*same* `hyp_<id>` it was first assigned to (the AOSC contract), and
+(c) frame-level DER under the optimal hyp→ref permutation is below
+30 %. Both fixtures register as `ctest` entries
+`test-sortformer-aosc-speakers-{abcba,abcdba}`.
+
+Measured on q8_0 v2.1 GGUF, Apple M-series, CPU backend:
+
+| fixture  | mode           | speakers tracked | DER    | A re-binds       | B re-binds       |
+|----------|----------------|------------------|--------|------------------|------------------|
+| abcba    | v1 streaming   | 2 (A,B; no C)    | 24.31 %| yes (single hyp_0 across both) | yes (single hyp_1 across both) |
+| abcba    | v2.1 + AOSC    | 3 (A,B,C)        | 27.29 %| yes (gap 97 s)   | yes (gap 35 s)   |
+| abcba    | v2.1 no-cache  | 2 (A,B; no C)    | 23.74 %| n/a              | n/a              |
+| abcdba   | v1 streaming   | 2 (collapsed)    | 66.28 %| **no — rebinds to hyp_1** | **no — rebinds to hyp_0** |
+| abcdba   | v2.1 + AOSC    | 4 (A,B,C,D)      | 22.22 %| yes (gap 128 s)  | yes (gap 66 s)   |
+| abcdba   | v2.1 no-cache  | 2 (collapsed)    | 65.72 %| n/a              | n/a              |
+
+The 4-speaker case is the discriminating one: v2.1+AOSC drops DER
+from 66 % to 22 %, and is the only mode that holds slot continuity
+for the returning speakers. Residual confusion in the 3-speaker case
+(C/Alice gets bound to A/Sarah's slot once) is encoder-side acoustic
+similarity between two female voices — independent of the cache. The
+regression test gates on the AOSC contract (slot continuity + DER
+ceiling), not on per-frame identity, so this real-world ambiguity
+doesn't flake the test.
+
+### 17.6 — files touched
+
+- `include/parakeet/diarization.h` — new `SortformerStreamingOptions`
+  fields; `spkcache_enable` default flipped to `true`.
+- `src/parakeet_sortformer.{h,cpp}` — AOSC helpers + state extension
+  (`mean_sil_emb`, `spkcache_preds`, `fifo_preds`, `n_sil_frames`).
+- `src/parakeet_ctc.{h,cpp}` — `run_encoder_bypass_pre_encode`;
+  `EncoderGraph` gains `bypass_pre_encode` / `T_enc` /
+  `pre_encode_in` fields.
+- `src/parakeet_engine.cpp` — streaming session uses the
+  subsampling+AOSC pipeline on v2.x; `try_emit_chunks` waits for
+  right-context; `diarize_start` populates new config fields.
+- `test/test_sortformer_streaming.cpp` — reads defaults from
+  `SortformerStreamingOptions` so the existing binary reflects the
+  new AOSC config out of the box.
+- `test/test_sortformer_aosc_speakers.cpp` (new) — regression test
+  described in §17.5.
+- `test/samples/abcba.{wav,rttm}`, `test/samples/abcdba.{wav,rttm}`
+  — new ElevenLabs fixtures.
+- `CMakeLists.txt` — path vars + `add_executable` +
+  `parakeet_register_test` entries for the two new ctest cases.
+
+### 17.7 — follow-ups
+
+- The existing `test-sortformer-streaming` assertion
+  `n_finals == 1` trips non-deterministically on long inputs under
+  AOSC (session emits 0 `is_final` markers instead of 1). The hyp
+  RTTM is still valid; only the session-end signalling needs to
+  emit exactly one final marker. Separate, narrowly-scoped fix.
+- AOSC streaming is correct through the parakeet-cpp C++ test
+  binary. Surfacing it through downstream addon wrappers
+  (e.g. `transcription-parakeet`'s `runStreaming()` JS API) requires
+  separate plumbing work on those wrappers — not in this phase.

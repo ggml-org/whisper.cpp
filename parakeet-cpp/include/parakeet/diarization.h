@@ -118,6 +118,13 @@ public:
 
     const SortformerStreamingOptions & options() const;
 
+    // True when the session is running v2.1 NeMo-style speaker-cache
+    // streaming (AOSC). False on v1 sortformer GGUFs, or on v2.x with
+    // `SortformerStreamingOptions::spkcache_enable=false`. Mirrors the
+    // internal `cache_active` flag; useful for CLI banners / logs that
+    // want to differentiate the two streaming modes for the user.
+    bool aosc_active() const;
+
 private:
     std::unique_ptr<Impl> pimpl_;
 };
