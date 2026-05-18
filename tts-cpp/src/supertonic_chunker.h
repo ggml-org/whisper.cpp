@@ -15,6 +15,7 @@
 // count that the engine will see.  No model tokenizer call is required
 // for sizing.
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -41,5 +42,12 @@ std::vector<std::string> split_for_streaming(
     int first_chunk_tokens = 0,
     int tolerance_pct      = 20,
     int min_chunk_tokens   = 30);
+
+// Sentence-end predicate over a Unicode code point.  Public so the
+// engine's per-chunk "does this end on a natural sentence terminator?"
+// helper can share the table with the chunker's boundary search —
+// keeps additions (e.g. Ethiopic ።, Tibetan ། in the future) in one
+// place.  See supertonic_chunker.cpp for the full set.
+bool is_sentence_end_cp(uint32_t cp);
 
 } // namespace tts_cpp::supertonic::detail

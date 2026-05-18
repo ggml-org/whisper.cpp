@@ -112,18 +112,21 @@ private:
 
 // Heuristic: does this chunk end at a natural sentence terminator?
 // Used by streaming to decide whether to skip the auto-appended period
-// (continuation chunks) or keep it (complete-sentence chunks).
-// Comma / clause punctuation are NOT sentence terminators here —
-// chunks ending in commas still want is_continuation=true so the model
-// hears them as a continuation, not a mini-sentence.
+// (continuation chunks) or keep it (complete-sentence chunks).  Commas
+// and other clause punctuation are NOT counted here — chunks ending in
+// a comma still want is_continuation=true so the model hears them as
+// a continuation, not a mini-sentence.
+//
+// Trims trailing whitespace, then decodes the final UTF-8 code point
+// and delegates to the chunker's `is_sentence_end_cp` so the
+// terminator table is defined in exactly one place (see
+// supertonic_chunker.cpp).
 bool chunk_ends_with_sentence_term(const std::string & s) {
-    // Trim trailing ASCII whitespace.
     size_t i = s.size();
     while (i > 0 && (s[i - 1] == ' ' || s[i - 1] == '\t' ||
                      s[i - 1] == '\n' || s[i - 1] == '\r')) --i;
     if (i == 0) return false;
-    if (s[i - 1] == '.' || s[i - 1] == '?' || s[i - 1] == '!') return true;
-    // Decode the final UTF-8 code point: scan back to the leading byte.
+    // Walk back to the leading byte of the final UTF-8 sequence.
     size_t pos = i - 1;
     while (pos > 0 && ((uint8_t) s[pos] & 0xC0) == 0x80) --pos;
     const size_t bytes = i - pos;
@@ -137,15 +140,7 @@ bool chunk_ends_with_sentence_term(const std::string & s) {
                               ((s[pos + 1] & 0x3F) << 12) |
                               ((s[pos + 2] & 0x3F) << 6) |
                               (s[pos + 3] & 0x3F);
-    switch (cp) {
-        case 0x3002: case 0xFF1F: case 0xFF01:           // 。 ？ ！
-        case 0x203C: case 0x2047: case 0x2048: case 0x2049: // ‼ ⁇ ⁈ ⁉
-        case 0x0964: case 0x0965:                        // । ॥
-        case 0x06D4:                                     // ۔
-            return true;
-        default:
-            return false;
-    }
+    return detail::is_sentence_end_cp(cp);
 }
 
 } // namespace

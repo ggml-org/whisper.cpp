@@ -49,15 +49,19 @@ tts_cpp::supertonic::Precision parse_precision(const std::string & s) {
 }
 
 // Emit `pcm` as raw signed-16-bit little-endian samples on stdout.  Used
-// by the streaming path so a consumer like `aplay -f S16_LE -r 44100 -c 1`
-// can begin playback as soon as the first chunk arrives.  Returns once
-// the buffer has been written and flushed.
+// by the streaming path so a consumer like `ffplay -f s16le -ar 44100 ...`
+// can begin playback as soon as the first chunk arrives.  Builds the
+// full chunk's worth of int16 into a contiguous buffer and writes it
+// with a single fwrite — a per-sample fwrite loop would do ~44k-132k
+// syscall-adjacent calls per chunk and noticeably tax streaming
+// throughput on slower terminals / pipes.
 void stream_emit_pcm_stdout(const float * pcm, std::size_t samples) {
+    std::vector<int16_t> buf(samples);
     for (std::size_t i = 0; i < samples; ++i) {
-        float   c = std::max(-1.0f, std::min(1.0f, pcm[i]));
-        int16_t v = (int16_t) std::lrintf(c * 32767.0f);
-        std::fwrite(&v, 2, 1, stdout);
+        float c = std::max(-1.0f, std::min(1.0f, pcm[i]));
+        buf[i] = (int16_t) std::lrintf(c * 32767.0f);
     }
+    std::fwrite(buf.data(), sizeof(int16_t), samples, stdout);
     std::fflush(stdout);
 }
 

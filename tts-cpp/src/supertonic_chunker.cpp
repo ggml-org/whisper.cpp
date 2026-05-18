@@ -54,31 +54,6 @@ bool is_space_cp(uint32_t cp) {
            cp == 0x202F || cp == 0x205F || cp == 0x3000;
 }
 
-// Sentence-end punctuation across ASCII, CJK, Devanagari, and the
-// extended Unicode punctuation range.  Conservative — symbols that
-// can be sentence-terminating but ambiguous (e.g. ellipsis "…") are
-// intentionally excluded since they often continue a thought.
-bool is_sentence_end_cp(uint32_t cp) {
-    switch (cp) {
-        case 0x002E: // .
-        case 0x003F: // ?
-        case 0x0021: // !
-        case 0x3002: // 。  CJK ideographic full stop
-        case 0xFF1F: // ？ fullwidth question mark
-        case 0xFF01: // ！ fullwidth exclamation mark
-        case 0x203C: // ‼ double exclamation
-        case 0x2047: // ⁇ double question
-        case 0x2048: // ⁈ question exclamation
-        case 0x2049: // ⁉ exclamation question
-        case 0x0964: // ।  Devanagari danda
-        case 0x0965: // ॥  Devanagari double danda
-        case 0x06D4: // ۔  Urdu full stop
-            return true;
-        default:
-            return false;
-    }
-}
-
 // Clause-end punctuation (lower priority than sentence-end).  Includes
 // CJK and Arabic equivalents.  Closing brackets count — a clause that
 // just ended a parenthetical is a reasonable break point too.
@@ -184,6 +159,36 @@ std::string slice_to_string(const std::vector<cp_at> & cps,
 }
 
 } // namespace
+
+// Sentence-end punctuation across ASCII, CJK, Devanagari, and the
+// extended Unicode punctuation range.  Conservative — symbols that
+// can be sentence-terminating but ambiguous (e.g. ellipsis "…") are
+// intentionally excluded since they often continue a thought.
+//
+// Public (declared in supertonic_chunker.h) so the engine's per-chunk
+// "does this end on a natural sentence terminator?" helper shares the
+// same table — additions (e.g. Ethiopic ።, Tibetan ། later) land in
+// one place instead of needing to be synced across compilation units.
+bool is_sentence_end_cp(uint32_t cp) {
+    switch (cp) {
+        case 0x002E: // .
+        case 0x003F: // ?
+        case 0x0021: // !
+        case 0x3002: // 。  CJK ideographic full stop
+        case 0xFF1F: // ？ fullwidth question mark
+        case 0xFF01: // ！ fullwidth exclamation mark
+        case 0x203C: // ‼ double exclamation
+        case 0x2047: // ⁇ double question
+        case 0x2048: // ⁈ question exclamation
+        case 0x2049: // ⁉ exclamation question
+        case 0x0964: // ।  Devanagari danda
+        case 0x0965: // ॥  Devanagari double danda
+        case 0x06D4: // ۔  Urdu full stop
+            return true;
+        default:
+            return false;
+    }
+}
 
 std::vector<std::string> split_for_streaming(
     const std::string & text,
