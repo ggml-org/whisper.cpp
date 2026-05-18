@@ -394,6 +394,11 @@ struct Engine::Impl {
             // (un-punctuated) tail so the model treats them as a
             // continuation.
             const bool is_continuation = !chunk_ends_with_sentence_term(chunks[k]);
+            if (const char * env = std::getenv("SUPERTONIC_LOG_CHUNKS");
+                env && env[0] == '1') {
+                std::fprintf(stderr, "chunk[%d] is_continuation=%d\n",
+                             k, (int) is_continuation);
+            }
             SynthesisResult chunk_res = run_single_chunk(chunks[k], opts.seed,
                                                          is_continuation);
 
