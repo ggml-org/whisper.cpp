@@ -1133,6 +1133,27 @@ measurement on real hardware.
 
 ---
 
+### Note on the "round 5" gap
+
+The round-4 plan in `aiDocs/PLAN_VULKAN_NEXT_ROUNDS.md` reserved
+the name **"Round 5 = pinned-host-buffer per-step uploads"** as
+the next deliverable.  We deferred it because the plan called
+out a hard prerequisite (round 7's bench observability — to
+measure win + verify no regression on adapters where pinned-host
+turns out slower).  After landing rounds 6, 7, 8, 9, 10, 11 we
+came back to the pinned-host-buffer work and shipped it as
+**round 12 #5** (bundled with two other items: the auto-pick
+UMA bias fix and the text-encoder GPU-bridge wiring).  No code
+was abandoned; the "round 5" label was a planning placeholder
+that the actual implementation absorbed into round 12.  We kept
+the contiguous round-12 / round-13 numbering instead of
+retroactively renaming round 12 to "round 5 (delayed)" so that
+the commit hashes referenced in PR descriptions and CI logs
+match the round numbers in this PROGRESS log without rebase
+churn.
+
+---
+
 ### Vulkan optimisation round 7 (May 2026, QVAC-18605 follow-up #5) — Bench observability + voice cache + Vulkan env-var passthrough
 
 The next-rounds plan

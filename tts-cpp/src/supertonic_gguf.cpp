@@ -1128,6 +1128,39 @@ int resolve_vulkan_device_index(int requested,
         // `is_uma_per_device.empty()` is the round-3 path —
         // unchanged behaviour for every caller that hasn't yet
         // wired the UMA flag list.
+        //
+        // ASSUMPTION (PR #18 review): `is_uma_per_device[i]` is
+        // populated from `ggml_backend_dev_get_props().type`
+        // mapped through `GGML_BACKEND_DEVICE_TYPE_IGPU / _CPU /
+        // _ACCEL` → UMA, otherwise → discrete.  This is correct
+        // on every test-matrix entry we have (RTX 5090 + AMD
+        // RADV iGPU, single-discrete-only, single-UMA-only,
+        // all-UMA, multi-discrete).  Edge case that can silently
+        // mis-classify: a discrete adapter whose driver
+        // mis-reports its type as `_IGPU` (some Thunderbolt eGPU
+        // configurations; some ARM SoC dGPU paths).  On such a
+        // rig:
+        //   - the discrete is flagged UMA → excluded from the
+        //     discrete-subset argmax;
+        //   - if every other visible adapter is also flagged UMA,
+        //     `any_discrete == false` and we fall through to the
+        //     round-3 all-device argmax → discrete still picked
+        //     by `free_vram` (correct outcome by coincidence).
+        //   - if the rig also has a TRUE UMA iGPU with more
+        //     reported "free VRAM" (system RAM), the round-12
+        //     bias prefers the iGPU over the mis-classified
+        //     discrete → silent regression vs. round 3.  Operator
+        //     escape hatch: `--vulkan-device N` is UMA-agnostic
+        //     (passes through unchanged below) so an explicit
+        //     index always wins.  `--vulkan-perf-logger` exposes
+        //     the chosen device in the bench JSON for
+        //     post-mortem diagnosis.
+        //   - Future hardening: add a "free-VRAM ceiling" filter
+        //     (e.g. UMA reports system-RAM-scale numbers; a
+        //     discrete reporting > 256 GB is implausible and can
+        //     be heuristically re-classified).  Out-of-scope for
+        //     QVAC-18605; tracked in
+        //     `aiDocs/PLAN_VULKAN_NEXT_ROUNDS.md`.
         if (!is_uma_per_device.empty()) {
             bool any_discrete = false;
             for (bool u : is_uma_per_device) {

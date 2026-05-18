@@ -81,14 +81,37 @@ struct supertonic_voice_style {
 //
 // Reference-stability contract: the returned `entry` reference is
 // stable across subsequent `get_or_load` calls for OTHER voices
-// (`std::unordered_map`'s reference-stability guarantee on
-// insert).  Callers may hold the reference across the next
-// `get_or_load` on the same instance, BUT must NOT call `clear()`
-// on the cache while holding the reference.  The Engine::Impl
-// call site captures `e.ttl.data()` / `e.dp.data()` and forwards
-// them to the synthesis pipeline, which expects them to stay
-// valid for the duration of the call — `clear()` is currently
-// only reachable on Engine destruction (post-synthesis).
+// (`std::unordered_map`'s reference-stability guarantee — element
+// references survive `insert` even when the table rehashes; only
+// iterators are invalidated).  Callers may hold the reference
+// across the next `get_or_load` on the same instance, BUT must
+// NOT call `clear()` or `erase()` on the cache while holding the
+// reference.  The Engine::Impl call site captures `e.ttl.data()`
+// / `e.dp.data()` and forwards them to the synthesis pipeline,
+// which expects them to stay valid for the duration of the
+// call — `clear()` is currently only reachable on Engine
+// destruction (post-synthesis).
+//
+// THREAD-SAFETY (PR #18 review): voice_host_cache is NOT
+// internally synchronised.  Concurrent invocations of any
+// non-const method (`get_or_load`, `clear`) from multiple
+// threads on the SAME instance is UB (standard `unordered_map`
+// rules: writes need exclusive access).  The Engine's
+// documented threading model is single-threaded synthesis per
+// Engine instance; concurrent synthesis requires one Engine per
+// thread (each Engine carries its own voice_host_cache), which
+// is also what the iOS load/unload race fix (36a2c56) enforces
+// for the s3gen preload path.  If a future refactor lifts that
+// constraint (e.g. a thread-pool dispatch over a single
+// Engine), the call site MUST add an external mutex around
+// `voice_host_cache::get_or_load` + the downstream `.data()`
+// capture, OR switch this cache to a `std::shared_mutex`-
+// guarded internal lock.  Marked deliberately as caller's
+// responsibility today because the single-threaded model also
+// keeps the cache hot-path zero-cost (no atomic / lock-acquire
+// per call) — the cache exists to eliminate per-call GPU
+// downloads, and giving back any of that saving to internal
+// locking would be premature.
 struct voice_host_cache {
     struct entry {
         std::vector<float> ttl;
