@@ -1,5 +1,6 @@
 # ggml is cloned via scripts/setup-ggml.sh at a pinned commit; don't track it.
 ggml/
+ggml
 
 # Python virtualenv for the converter + reference-dump scripts.
 venv/
