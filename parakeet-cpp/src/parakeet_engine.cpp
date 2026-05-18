@@ -612,6 +612,142 @@ static DiarizationResult engine_impl_diarize_helper(Engine::Impl & impl,
     return result;
 }
 
+// AOSC streaming variant of engine_impl_diarize_helper. NeMo-faithful port of
+// `forward_streaming_step` + `streaming_update`:
+//   1. compute_log_mel on the chunk audio (which already includes lc/rc context)
+//   2. run_subsampling -> chunk_pre_encode_embs (post-subsampling, 512-d)
+//   3. sortformer_aosc_step assembles [spkcache | fifo | chunk_pre_encode],
+//      runs the conformer layers via run_encoder_bypass_pre_encode, then the
+//      diariser head, then streaming_update on the resulting preds + new chunk
+//
+// Returned segments are chunk-relative (start_s == 0 at the START OF THE
+// committed chunk -- the lc_enc frames at the head of the encoder output are
+// dropped before thresholding).
+static DiarizationResult engine_impl_diarize_streaming_helper(
+    Engine::Impl & impl,
+    const float * samples, int n_samples,
+    int sample_rate,
+    const DiarizationOptions & opts,
+    SortformerSpeakerCache & cache,
+    const SortformerStreamingConfig & cfg,
+    int lc_enc_frames_expected, int rc_enc_frames_expected) {
+    if (!samples || n_samples <= 0) {
+        throw std::runtime_error("diarize_streaming: empty input");
+    }
+    if (sample_rate != impl.model.mel_cfg.sample_rate) {
+        throw std::runtime_error("diarize_streaming: input is " +
+                                 std::to_string(sample_rate) + " Hz but model expects " +
+                                 std::to_string(impl.model.mel_cfg.sample_rate) + " Hz");
+    }
+    if (impl.model.model_type != ParakeetModelType::SORTFORMER || !impl.sortformer_ready) {
+        throw std::runtime_error("diarize_streaming: loaded GGUF is not a Sortformer model");
+    }
+
+    impl.cancel_flag.store(false);
+
+    using clock = std::chrono::steady_clock;
+    const auto t_total = clock::now();
+
+    // No per-chunk peak normalisation: amplitude consistency across chunks
+    // matters for the cache embeddings to remain in-distribution.
+    std::vector<float> work(samples, samples + n_samples);
+
+    const auto t_mel = clock::now();
+    std::vector<float> mel;
+    int n_mel_frames = 0;
+    if (int rc = compute_log_mel(work.data(), n_samples, impl.model.mel_cfg,
+                                 impl.mel_state, mel, n_mel_frames); rc != 0) {
+        throw std::runtime_error("diarize_streaming: compute_log_mel failed (rc=" +
+                                 std::to_string(rc) + ")");
+    }
+    const double preprocess_ms = ms_since(t_mel);
+
+    // Subsampling only -- the cache concat happens BEFORE the conformer layers.
+    const auto t_enc = clock::now();
+    std::vector<float> pre_encode;
+    int n_pre_encode_frames = 0;
+    if (int rc = run_subsampling(impl.model, mel.data(), n_mel_frames,
+                                 impl.model.mel_cfg.n_mels,
+                                 pre_encode, n_pre_encode_frames); rc != 0) {
+        throw std::runtime_error("diarize_streaming: run_subsampling failed (rc=" +
+                                 std::to_string(rc) + ")");
+    }
+    const int D = impl.model.encoder_cfg.d_model;
+
+    // Reconcile expected lc/rc encoder frames with what subsampling actually
+    // produced. If subsampling returned fewer frames than expected (tail-chunk
+    // with insufficient right context), shrink rc to what fits and let
+    // chunk_len_eff absorb the leftover.
+    int lc = lc_enc_frames_expected;
+    int rc = rc_enc_frames_expected;
+    if (lc + rc > n_pre_encode_frames) {
+        rc = std::max(0, n_pre_encode_frames - lc);
+        if (lc + rc > n_pre_encode_frames) {
+            lc = std::max(0, n_pre_encode_frames - rc);
+        }
+    }
+    int chunk_len_eff = n_pre_encode_frames - lc - rc;
+    if (chunk_len_eff <= 0) {
+        DiarizationResult result;
+        result.n_frames       = 0;
+        result.num_spks       = impl.model.encoder_cfg.sortformer_num_spks;
+        result.frame_stride_s = (double)(impl.model.mel_cfg.hop_length *
+                                         impl.model.encoder_cfg.subsampling_factor) /
+                                (double)impl.model.mel_cfg.sample_rate;
+        result.audio_samples  = n_samples;
+        result.sample_rate    = sample_rate;
+        result.preprocess_ms  = preprocess_ms;
+        result.encoder_ms     = ms_since(t_enc);
+        result.total_ms       = ms_since(t_total);
+        return result;
+    }
+
+    SortformerDiarizationOptions s_opts;
+    s_opts.threshold = opts.threshold;
+    SortformerDiarizationResult dres;
+
+    ggml_backend_t active_backend = model_active_backend(impl.model);
+    if (!active_backend) {
+        throw std::runtime_error("diarize_streaming: no active ggml backend");
+    }
+
+    if (int rc_ = sortformer_aosc_step(impl.model,
+                                       pre_encode.data(),
+                                       n_pre_encode_frames, D,
+                                       lc, rc, chunk_len_eff,
+                                       cache, cfg, active_backend, s_opts, dres);
+        rc_ != 0) {
+        throw std::runtime_error("diarize_streaming: sortformer_aosc_step failed (rc=" +
+                                 std::to_string(rc_) + ")");
+    }
+
+    const double encoder_ms = ms_since(t_enc) - dres.decode_ms;
+
+    DiarizationResult result;
+    result.n_frames       = dres.n_frames;
+    result.num_spks       = dres.num_spks;
+    result.frame_stride_s = dres.frame_stride_s;
+    result.speaker_probs  = std::move(dres.speaker_probs);
+    result.audio_samples  = n_samples;
+    result.sample_rate    = sample_rate;
+    result.preprocess_ms  = preprocess_ms;
+    result.encoder_ms     = encoder_ms;
+    result.decode_ms      = dres.decode_ms;
+    result.total_ms       = ms_since(t_total);
+
+    const double min_dur = opts.min_segment_ms / 1000.0;
+    for (const auto & s : dres.segments) {
+        if ((s.end_s - s.start_s) < min_dur) continue;
+        DiarizationSegment d;
+        d.speaker_id = s.speaker_id;
+        d.start_s    = s.start_s;
+        d.end_s      = s.end_s;
+        result.segments.push_back(d);
+    }
+
+    return result;
+}
+
 DiarizationResult Engine::diarize_samples(const float * samples,
                                           int n_samples,
                                           int sample_rate,
@@ -1075,6 +1211,17 @@ struct SortformerStreamSession::Impl {
     int    chunk_samples   = 0;
     int    history_samples = 0;
 
+    // AOSC audio-context budgets, in samples and post-subsampling encoder frames.
+    // Populated in diarize_start when cache_active is true; zero otherwise.
+    int    chunk_left_context_samples  = 0;
+    int    chunk_right_context_samples = 0;
+    int    lc_enc_frames_expected      = 0;
+    int    rc_enc_frames_expected      = 0;
+
+    // AOSC compression policy + cache geometry (NeMo defaults). Populated from
+    // opts in diarize_start when cache_active is true.
+    SortformerStreamingConfig  sortformer_cfg;
+
     std::vector<float> ring;
     int64_t            ring_origin_sample = 0;
 
@@ -1086,6 +1233,19 @@ struct SortformerStreamSession::Impl {
 
     std::vector<StreamingDiarizationSegment> last_pending;
 
+    // Full segments from the previous chunk in ABSOLUTE time, with the
+    // session-stable speaker IDs that this session has emitted. Used by
+    // compute_slot_remap_ to find an overlap-based remap that anchors
+    // slot identity across chunks even when the visible voice set
+    // changes (e.g. a speaker ages out of the rolling history window).
+    // Empty before the first chunk emits. Unused on the cache_active path.
+    std::vector<StreamingDiarizationSegment> prev_chunk_full_segments;
+
+    // AOSC speaker cache for v2.1 streaming. Empty/inert when cache_active
+    // is false (v1 models, or v2.1 with spkcache_enable=false).
+    SortformerSpeakerCache cache;
+    bool                   cache_active = false;
+
     // Speaking vs silent from Sortformer probs: max probability above opts.threshold.
     // Initial Unknown forces a transition on the first chunk.
     VadState vad_state = VadState::Unknown;
@@ -1096,7 +1256,87 @@ struct SortformerStreamSession::Impl {
                        int64_t emit_start_sample,
                        int64_t emit_end_sample,
                        bool    is_final_chunk);
+
+    // Compute remap[local_id] -> session_id by maximising overlap of
+    // current chunk's local-ID segments against prev_chunk_full_segments
+    // (which carry session IDs). Greedy: highest-overlap pairs first;
+    // unmatched local slots get the lowest unused session ID. Identity
+    // mapping when prev_chunk_full_segments is empty (first chunk).
+    std::vector<int> compute_slot_remap_(
+        const std::vector<StreamingDiarizationSegment> & cur_full,
+        int num_spks) const;
 };
+
+std::vector<int> SortformerStreamSession::Impl::compute_slot_remap_(
+    const std::vector<StreamingDiarizationSegment> & cur_full,
+    int num_spks) const {
+    std::vector<int> remap(num_spks, -1);
+    if (num_spks <= 0) return remap;
+    if (prev_chunk_full_segments.empty()) {
+        for (int i = 0; i < num_spks; ++i) remap[i] = i;
+        return remap;
+    }
+    // Build num_spks x num_spks overlap matrix: O[local_id][session_id]
+    // = total absolute-time overlap between current chunk's segments
+    // labelled `local_id` and previous chunk's session-stable segments
+    // labelled `session_id`. Consecutive windows share `history_ms -
+    // chunk_ms` of audio, so every active speaker has plenty of
+    // co-occurring segments to match.
+    std::vector<std::vector<double>> O(
+        num_spks, std::vector<double>(num_spks, 0.0));
+    for (const auto & c : cur_full) {
+        if (c.speaker_id < 0 || c.speaker_id >= num_spks) continue;
+        for (const auto & p : prev_chunk_full_segments) {
+            if (p.speaker_id < 0 || p.speaker_id >= num_spks) continue;
+            const double a = std::max(c.start_s, p.start_s);
+            const double b = std::min(c.end_s,   p.end_s);
+            if (b > a) O[c.speaker_id][p.speaker_id] += (b - a);
+        }
+    }
+    // Greedy assignment over O: order local IDs by their best available
+    // overlap (descending), then for each pick the highest-overlap
+    // un-taken session ID.
+    std::vector<bool> taken(num_spks, false);
+    std::vector<std::pair<double, int>> order;
+    order.reserve((size_t) num_spks);
+    for (int i = 0; i < num_spks; ++i) {
+        double m = 0.0;
+        for (int j = 0; j < num_spks; ++j) m = std::max(m, O[i][j]);
+        order.emplace_back(m, i);
+    }
+    std::sort(order.begin(), order.end(),
+              [](const std::pair<double, int> & a,
+                 const std::pair<double, int> & b) {
+                  return a.first > b.first;
+              });
+    for (const auto & pr : order) {
+        if (pr.first <= 0.0) continue;
+        const int  i = pr.second;
+        int        best   = -1;
+        double     best_o = 0.0;
+        for (int j = 0; j < num_spks; ++j) {
+            if (taken[j]) continue;
+            if (O[i][j] > best_o) { best_o = O[i][j]; best = j; }
+        }
+        if (best >= 0) { remap[i] = best; taken[best] = true; }
+    }
+    // Unmatched locals (no overlap with any prev segment, or no prev
+    // segments at all) take the lowest unused session ID. This keeps
+    // session IDs stable and predictable across long streams.
+    int next = 0;
+    for (int i = 0; i < num_spks; ++i) {
+        if (remap[i] != -1) continue;
+        while (next < num_spks && taken[next]) ++next;
+        if (next < num_spks) {
+            remap[i] = next;
+            taken[next] = true;
+            ++next;
+        } else {
+            remap[i] = i; // safety; shouldn't fire when num_spks is consistent
+        }
+    }
+    return remap;
+}
 
 void SortformerStreamSession::Impl::process_chunk(int64_t window_start_sample,
                                                   int64_t window_end_sample,
@@ -1116,12 +1356,63 @@ void SortformerStreamSession::Impl::process_chunk(int64_t window_start_sample,
     DiarizationResult diar;
     {
         const float * win = ring.data() + off;
-        diar = engine_impl_diarize_helper(*engine_impl, win, n, opts.sample_rate, diopts);
+        if (cache_active) {
+            // AOSC: chunk+context encode through the subsampling-bypass forward,
+            // cache supplies long-range speaker identity, identity remap downstream.
+            diar = engine_impl_diarize_streaming_helper(
+                *engine_impl, win, n, opts.sample_rate, diopts, cache, sortformer_cfg,
+                lc_enc_frames_expected, rc_enc_frames_expected);
+        } else {
+            // v1 path: full history_ms re-encoded each chunk; overlap-based
+            // slot remap downstream.
+            diar = engine_impl_diarize_helper(
+                *engine_impl, win, n, opts.sample_rate, diopts);
+        }
     }
 
-    const double window_offset_s = (double) window_start_sample / opts.sample_rate;
+    // AOSC's `sortformer_aosc_step` returns segments + speaker_probs spanning
+    // ONLY the committed chunk (chunk_len_eff frames), with time 0 = start of
+    // committed chunk. v1's helper returns segments + probs over the FULL
+    // rolling window, with time 0 = start of window. The "window_offset_s"
+    // used downstream must match the helper's frame-0 origin.
     const double emit_lo_s = (double) emit_start_sample / opts.sample_rate;
     const double emit_hi_s = (double) emit_end_sample   / opts.sample_rate;
+    const double window_offset_s = cache_active
+        ? emit_lo_s
+        : (double) window_start_sample / opts.sample_rate;
+
+    // Materialise the FULL window's segments in absolute-time coordinates
+    // (local speaker IDs from Sortformer's per-chunk output). This is the
+    // input both to the slot-remap computation and to the storage that
+    // anchors the next chunk's IDs.
+    std::vector<StreamingDiarizationSegment> cur_full;
+    cur_full.reserve(diar.segments.size());
+    for (const auto & s : diar.segments) {
+        StreamingDiarizationSegment f;
+        f.speaker_id  = s.speaker_id;
+        f.start_s     = window_offset_s + s.start_s;
+        f.end_s       = window_offset_s + s.end_s;
+        f.chunk_index = chunk_index;
+        f.is_final    = is_final_chunk;
+        cur_full.push_back(f);
+    }
+
+    // AOSC anchors slot identity via the cache + Sort Loss, so the local
+    // speaker IDs already match session IDs across chunks. Identity remap.
+    // On v1 the overlap-based remap reconciles any per-chunk slot
+    // permutation against prev_chunk_full_segments.
+    std::vector<int> slot_remap;
+    if (cache_active) {
+        slot_remap.resize((size_t) diar.num_spks);
+        for (int i = 0; i < diar.num_spks; ++i) slot_remap[i] = i;
+    } else {
+        slot_remap = compute_slot_remap_(cur_full, diar.num_spks);
+    }
+
+    auto remap_id = [&slot_remap, num_spks = diar.num_spks](int local) -> int {
+        if (local < 0 || local >= num_spks) return local;
+        return slot_remap[local];
+    };
 
     std::vector<StreamingDiarizationSegment> emitted;
     emitted.reserve(diar.segments.size());
@@ -1133,7 +1424,7 @@ void SortformerStreamSession::Impl::process_chunk(int64_t window_start_sample,
         if (abs_start >= emit_hi_s) continue;
 
         StreamingDiarizationSegment out;
-        out.speaker_id  = s.speaker_id;
+        out.speaker_id  = remap_id(s.speaker_id);
         out.start_s     = std::max(abs_start, emit_lo_s);
         out.end_s       = std::min(abs_end,   emit_hi_s);
         out.chunk_index = chunk_index;
@@ -1146,6 +1437,14 @@ void SortformerStreamSession::Impl::process_chunk(int64_t window_start_sample,
         for (const auto & seg : emitted) on_segment(seg);
     }
     last_pending = std::move(emitted);
+
+    // Remap cur_full into session-stable IDs and store as the new
+    // baseline so the next chunk's `compute_slot_remap_` can match
+    // against today's emitted identity scheme.
+    for (auto & f : cur_full) {
+        f.speaker_id = remap_id(f.speaker_id);
+    }
+    prev_chunk_full_segments = std::move(cur_full);
 
     // VadStateChanged from speaker_probs: a frame speaks if any speaker exceeds threshold;
     // the chunk speaks if any emitting-frame qualifies; dominant speaker from mean probs.
@@ -1203,19 +1502,34 @@ void SortformerStreamSession::Impl::try_emit_chunks() {
 
         const int64_t emit_end = emitted_samples + chunk_samples;
 
-        const int64_t window_end   = emit_end;
-        const int64_t window_start = std::max(ring_origin_sample,
-                                              window_end - history_samples);
+        int64_t window_start;
+        int64_t window_end;
+        if (cache_active) {
+            // AOSC: window = [emit_start - lc_samples, emit_end + rc_samples].
+            // Wait for rc audio to arrive after the committed chunk before emitting.
+            const int64_t needed_end = emit_end + chunk_right_context_samples;
+            if (available_end < needed_end) return;
+            window_start = std::max(ring_origin_sample,
+                                    emitted_samples - chunk_left_context_samples);
+            window_end   = needed_end;
+        } else {
+            // v1 path: full rolling history_ms window, no right context.
+            window_end   = emit_end;
+            window_start = std::max(ring_origin_sample,
+                                    window_end - history_samples);
+        }
         process_chunk(window_start, window_end, emitted_samples, emit_end, /*is_final=*/false);
 
-        if (history_samples > 0) {
-            const int64_t keep_from = std::max(ring_origin_sample,
-                                               emit_end - history_samples);
-            if (keep_from > ring_origin_sample) {
-                const size_t drop = (size_t) (keep_from - ring_origin_sample);
-                ring.erase(ring.begin(), ring.begin() + drop);
-                ring_origin_sample = keep_from;
-            }
+        // Trim the ring. v1 keeps the trailing history_ms. AOSC needs to keep
+        // chunk_left_context_samples ahead of emit_end so the NEXT chunk's
+        // window_start (emit_end - lc_samples) is still in the ring.
+        const int64_t keep_min_from = cache_active
+            ? std::max(ring_origin_sample, emit_end - chunk_left_context_samples)
+            : std::max(ring_origin_sample, emit_end - history_samples);
+        if (keep_min_from > ring_origin_sample) {
+            const size_t drop = (size_t) (keep_min_from - ring_origin_sample);
+            ring.erase(ring.begin(), ring.begin() + drop);
+            ring_origin_sample = keep_min_from;
         }
     }
 }
@@ -1233,6 +1547,10 @@ SortformerStreamSession & SortformerStreamSession::operator=(SortformerStreamSes
 
 const SortformerStreamingOptions & SortformerStreamSession::options() const {
     return pimpl_->opts;
+}
+
+bool SortformerStreamSession::aosc_active() const {
+    return pimpl_ && pimpl_->cache_active;
 }
 
 void SortformerStreamSession::feed_pcm_f32(const float * samples, int n_samples) {
@@ -1264,9 +1582,20 @@ void SortformerStreamSession::finalize() {
 
     const int64_t available_end = pimpl_->ring_origin_sample + (int64_t) pimpl_->ring.size();
     if (available_end > pimpl_->emitted_samples) {
-        const int64_t window_end   = available_end;
-        const int64_t window_start = std::max(pimpl_->ring_origin_sample,
-                                              window_end - pimpl_->history_samples);
+        // Tail chunk: drain whatever remains. AOSC also picks up left context
+        // from before emit_start; right context is whatever's left (typically
+        // zero -- the user is finalizing because no more audio is coming).
+        int64_t window_start;
+        int64_t window_end;
+        if (pimpl_->cache_active) {
+            window_start = std::max(pimpl_->ring_origin_sample,
+                                    pimpl_->emitted_samples - pimpl_->chunk_left_context_samples);
+            window_end   = available_end;
+        } else {
+            window_end   = available_end;
+            window_start = std::max(pimpl_->ring_origin_sample,
+                                    window_end - pimpl_->history_samples);
+        }
         pimpl_->process_chunk(window_start, window_end,
                               pimpl_->emitted_samples, available_end,
                               /*is_final_chunk=*/true);
@@ -1311,6 +1640,52 @@ std::unique_ptr<SortformerStreamSession> Engine::diarize_start(
     impl->chunk_samples   = opts.sample_rate * opts.chunk_ms   / 1000;
     impl->history_samples = opts.sample_rate * opts.history_ms / 1000;
     impl->ring.reserve(impl->history_samples);
+
+    // v2.1 detection (Audio-Online Speaker Cache eligibility).
+    // v1 sortformer-4spk-v1.q8_0: encoder.n_layers=18, preproc.n_mels=80.
+    // v2.1 sortformer-streaming-v2.1.q8_0: encoder.n_layers=17, preproc.n_mels=128.
+    // The v2.1 fine-tune is what trained the cache-aware concat-then-graph
+    // forward path; enabling it on v1 would just be untrained noise.
+    const bool model_is_v2_1 =
+        pimpl_->model.encoder_cfg.n_layers == 17 &&
+        pimpl_->model.mel_cfg.n_mels == 128;
+    impl->cache_active = opts.spkcache_enable && model_is_v2_1;
+
+    if (impl->cache_active) {
+        // Populate AOSC config from public options.
+        impl->sortformer_cfg.spkcache_len             = opts.spkcache_len;
+        impl->sortformer_cfg.fifo_len                 = opts.fifo_len;
+        impl->sortformer_cfg.spkcache_update_period   = opts.spkcache_update_period;
+        // chunk_len in encoder frames; derived from chunk_ms.
+        const int enc_frame_ms =
+            1000 * pimpl_->model.mel_cfg.hop_length *
+            pimpl_->model.encoder_cfg.subsampling_factor /
+            pimpl_->model.mel_cfg.sample_rate;
+        impl->sortformer_cfg.chunk_len = std::max(1, opts.chunk_ms / std::max(1, enc_frame_ms));
+        const int lc_ms = std::max(0, opts.chunk_left_context_ms);
+        const int rc_ms = std::max(0, opts.chunk_right_context_ms);
+        impl->sortformer_cfg.chunk_left_context  = lc_ms / std::max(1, enc_frame_ms);
+        impl->sortformer_cfg.chunk_right_context = rc_ms / std::max(1, enc_frame_ms);
+
+        impl->chunk_left_context_samples  = opts.sample_rate * lc_ms / 1000;
+        impl->chunk_right_context_samples = opts.sample_rate * rc_ms / 1000;
+        impl->lc_enc_frames_expected = impl->sortformer_cfg.chunk_left_context;
+        impl->rc_enc_frames_expected = impl->sortformer_cfg.chunk_right_context;
+
+        // Reset cache to a clean state with mean_sil_emb zeros at the model's
+        // fc_d_model dimension.
+        sortformer_cache_reset(impl->cache, pimpl_->model.encoder_cfg.d_model);
+
+        std::fprintf(stderr,
+            "[parakeet] Sortformer AOSC enabled (v2.1; spkcache_len=%d fifo_len=%d "
+            "chunk=%d lc=%d rc=%d update_period=%d)\n",
+            impl->sortformer_cfg.spkcache_len,
+            impl->sortformer_cfg.fifo_len,
+            impl->sortformer_cfg.chunk_len,
+            impl->sortformer_cfg.chunk_left_context,
+            impl->sortformer_cfg.chunk_right_context,
+            impl->sortformer_cfg.spkcache_update_period);
+    }
     return std::make_unique<SortformerStreamSession>(std::move(impl));
 }
 

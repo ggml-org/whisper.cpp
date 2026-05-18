@@ -72,6 +72,26 @@ struct SortformerStreamingOptions {
 
     // Optional StreamEvent delivery (VadStateChanged from speaker_probs); nullptr disables.
     StreamEventCallback on_event = nullptr;
+
+    // === AOSC (Audio-Online Speaker Cache, Sortformer v2.1) ===
+    // Cache-aware streaming forward (port of NeMo's `forward_streaming_step` +
+    // `streaming_update` + `_compress_spkcache`). On v2.1 models (auto-detected
+    // from encoder shape) and spkcache_enable=true, the engine concatenates the
+    // speaker cache + FIFO + current chunk's pre-encode embeddings, runs the
+    // conformer layers over the concat, then the diariser head, before updating
+    // the runtime cache. This preserves speaker identity across silences far
+    // longer than `history_ms`. v1 models always take the legacy path.
+    //
+    // `mean_sil_emb` is RUNTIME state (zeros at session start, EMA of detected
+    // silence frames), NOT a learned tensor -- no converter changes required.
+    // Defaults below are NeMo's inference defaults (see
+    // examples/speaker_tasks/diarization/neural_diarizer/e2e_diarize_speech.py).
+    bool  spkcache_enable        = true;
+    int   spkcache_len           = 188;    // total cache rows (encoder frames)
+    int   fifo_len               = 188;    // FIFO warmup buffer (encoder frames)
+    int   chunk_left_context_ms  = 80;     // ~1 encoder frame at v2.1 (80ms)
+    int   chunk_right_context_ms = 560;    // ~7 encoder frames at v2.1 (560ms)
+    int   spkcache_update_period = 144;    // pop_out_len on FIFO overflow
 };
 
 using SortformerSegmentCallback =
@@ -97,6 +117,13 @@ public:
     void cancel();
 
     const SortformerStreamingOptions & options() const;
+
+    // True when the session is running v2.1 NeMo-style speaker-cache
+    // streaming (AOSC). False on v1 sortformer GGUFs, or on v2.x with
+    // `SortformerStreamingOptions::spkcache_enable=false`. Mirrors the
+    // internal `cache_active` flag; useful for CLI banners / logs that
+    // want to differentiate the two streaming modes for the user.
+    bool aosc_active() const;
 
 private:
     std::unique_ptr<Impl> pimpl_;
