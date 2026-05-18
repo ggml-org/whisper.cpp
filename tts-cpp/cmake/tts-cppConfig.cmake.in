@@ -1,0 +1,9 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(ggml CONFIG)
+@TTS_CPP_OPTIONAL_DEPS@
+
+include("${CMAKE_CURRENT_LIST_DIR}/tts-cppTargets.cmake")
+
+check_required_components(tts-cpp)
