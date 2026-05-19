@@ -8258,9 +8258,6 @@ WHISPER_API const char * whisper_bench_ggml_mul_mat_str(int n_threads) {
     // when F16 is used, there is an extra work buffer of size N*N*sizeof(float)
     std::vector<uint8_t> buf(3llu*N_max*N_max*sizeof(float) + 3*ggml_tensor_overhead() + ggml_graph_overhead());
 
-    // put a bunch of random data in the buffer
-    for (size_t i = 0; i < buf.size(); i++) buf[i] = i;
-
     for (int j = 0; j < (int) sizes.size(); j++) {
         int n_q4_0 = 0;
         int n_q4_1 = 0;
@@ -8303,6 +8300,15 @@ WHISPER_API const char * whisper_bench_ggml_mul_mat_str(int n_threads) {
 
             struct ggml_tensor * a = ggml_new_tensor_2d(ctx0, wtype,         N, N);
             struct ggml_tensor * b = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, N, N);
+
+            // set tensor data after allocation so previous iteration results don't corrupt it.
+            {
+                uint8_t * a_data = (uint8_t *) a->data;
+                for (size_t ii = 0; ii < ggml_nbytes(a); ii++) a_data[ii] = ii & 0x3F;
+
+                uint8_t * b_data = (uint8_t *) b->data;
+                for (size_t ii = 0; ii < ggml_nbytes(b); ii++) b_data[ii] = ii & 0x3F;
+            }
 
             struct ggml_tensor * c = ggml_mul_mat(ctx0, a, b);
 
