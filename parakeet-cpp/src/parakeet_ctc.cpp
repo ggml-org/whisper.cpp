@@ -679,6 +679,9 @@ int load_from_gguf(const std::string & gguf_path,
     else if (mtype_str == "sortformer") out_model.model_type = ParakeetModelType::SORTFORMER;
     else                                out_model.model_type = ParakeetModelType::CTC;
 
+    // Optional variant tag (empty for legacy GGUFs that predate the key).
+    out_model.model_variant = get_str(g, "parakeet.model_variant", "");
+
     if (out_model.model_type == ParakeetModelType::TDT) {
         out_model.encoder_cfg.tdt_pred_hidden     = get_u32(g, "parakeet.tdt.pred_hidden",     640);
         out_model.encoder_cfg.tdt_pred_rnn_layers = get_u32(g, "parakeet.tdt.pred_rnn_layers", 2);

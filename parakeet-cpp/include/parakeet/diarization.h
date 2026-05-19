@@ -75,12 +75,20 @@ struct SortformerStreamingOptions {
 
     // === AOSC (Audio-Online Speaker Cache, Sortformer v2.1) ===
     // Cache-aware streaming forward (port of NeMo's `forward_streaming_step` +
-    // `streaming_update` + `_compress_spkcache`). On v2.1 models (auto-detected
-    // from encoder shape) and spkcache_enable=true, the engine concatenates the
-    // speaker cache + FIFO + current chunk's pre-encode embeddings, runs the
-    // conformer layers over the concat, then the diariser head, before updating
-    // the runtime cache. This preserves speaker identity across silences far
-    // longer than `history_ms`. v1 models always take the legacy path.
+    // `streaming_update` + `_compress_spkcache`). On v2.1 models with
+    // spkcache_enable=true, the engine concatenates the speaker cache + FIFO +
+    // current chunk's pre-encode embeddings, runs the conformer layers over the
+    // concat, then the diariser head, before updating the runtime cache. This
+    // preserves speaker identity across silences far longer than `history_ms`.
+    // v1 and v2 models always take the legacy path.
+    //
+    // Variant detection: prefers the converter's `parakeet.model_variant` GGUF
+    // metadata tag (a stable per-checkpoint string, e.g.
+    // `sortformer-streaming-v2.1-aosc`) so a future variant that happens to
+    // share the v2.1 encoder shape can't silently opt into AOSC. GGUFs that
+    // pre-date the tag fall back to the encoder-shape heuristic: v1 has
+    // n_layers=18 / n_mels=80, v2.1 has n_layers=17 / n_mels=128. Re-run the
+    // converter after upgrading to populate the tag.
     //
     // `mean_sil_emb` is RUNTIME state (zeros at session start, EMA of detected
     // silence frames), NOT a learned tensor -- no converter changes required.
