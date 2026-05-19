@@ -4,10 +4,10 @@
 # as `.nemo` archives, ready for `convert-nemo-to-gguf.py`.
 #
 # Idempotent: skips files that already exist on disk. Re-run any time to top up.
-# Total download budget on a clean machine: ~14 GiB at the time of writing
+# Total download budget on a clean machine: ~14.5 GiB at the time of writing
 # (TDT v3 + TDT 1.1b + CTC 0.6b + CTC 1.1b + TDT_CTC hybrid + EOU 120M +
-# Sortformer v1 + streaming Sortformer v2). Already-cached checkpoints are
-# untouched.
+# Sortformer v1 + streaming Sortformer v2 + streaming Sortformer v2.1).
+# Already-cached checkpoints are untouched.
 #
 # Usage:
 #     ./scripts/download-all-models.sh             # everything
@@ -99,6 +99,11 @@ if [[ "${1:-all}" != "tdt" ]]; then
   echo "== nemo: diar_streaming_sortformer_4spk-v2 (4-speaker, streaming-trained, ~470 MiB)"
   fetch "https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2/resolve/main/diar_streaming_sortformer_4spk-v2.nemo" \
         "$NEMO_DIR/diar_streaming_sortformer_4spk-v2.nemo"
+
+  hr
+  echo "== nemo: diar_streaming_sortformer_4spk-v2.1 (4-speaker, streaming + AOSC fine-tune, ~470 MiB)"
+  fetch "https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1/resolve/main/diar_streaming_sortformer_4spk-v2.1.nemo" \
+        "$NEMO_DIR/diar_streaming_sortformer_4spk-v2.1.nemo"
 fi
 
 hr

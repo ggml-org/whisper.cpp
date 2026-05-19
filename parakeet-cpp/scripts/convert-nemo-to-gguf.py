@@ -199,7 +199,24 @@ def fuse_bn(weight, bias, running_mean, running_var, eps=1e-5):
     return scale.astype(np.float32), shift.astype(np.float32)
 
 
-def write_gguf(out: Path, cfg: dict, sd: dict, tok_bytes: bytes, quant: str):
+def detect_sortformer_variant(ckpt: Path) -> str:
+    """
+    Map a NeMo Sortformer .nemo filename to a stable variant tag the C++
+    loader can match against. The tag is the only thing that distinguishes
+    cache-aware v2.1 from architecturally-identical v1 / v2 at GGUF time
+    (encoder shape alone is ambiguous against future variants).
+    """
+    stem = ckpt.stem
+    if "streaming_sortformer" in stem and "-v2.1" in stem:
+        return "sortformer-streaming-v2.1-aosc"
+    if "streaming_sortformer" in stem and "-v2" in stem:
+        return "sortformer-streaming-v2"
+    if "diar_sortformer" in stem and "-v1" in stem:
+        return "sortformer-v1"
+    return ""
+
+
+def write_gguf(out: Path, ckpt: Path, cfg: dict, sd: dict, tok_bytes: bytes, quant: str):
     model_type = detect_model_type(cfg)
 
     enc = cfg["encoder"]
@@ -331,6 +348,12 @@ def write_gguf(out: Path, cfg: dict, sd: dict, tok_bytes: bytes, quant: str):
         writer.add_uint32("parakeet.sortformer.tf_n_heads",      int(tfe["num_attention_heads"]))
         writer.add_bool  ("parakeet.sortformer.tf_pre_ln",       bool(tfe.get("pre_ln", False)))
         writer.add_string("parakeet.sortformer.tf_hidden_act",   str(tfe.get("hidden_act", "relu")))
+        # Variant tag (preferred over shape-based detection on the C++ side).
+        # Empty string = unknown checkpoint; loader falls back to encoder
+        # shape so older GGUFs continue to load.
+        variant = detect_sortformer_variant(ckpt)
+        if variant:
+            writer.add_string("parakeet.model_variant", variant)
     else:
         pred_hidden      = int(dec["prednet"]["pred_hidden"])
         pred_rnn_layers  = int(dec["prednet"]["pred_rnn_layers"])
@@ -610,7 +633,7 @@ def main():
     ckpt = ensure_ckpt(args.ckpt, args.hf_repo)
     cfg, sd, tok_bytes = load_nemo(ckpt)
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    write_gguf(args.out, cfg, sd, tok_bytes, args.quant)
+    write_gguf(args.out, ckpt, cfg, sd, tok_bytes, args.quant)
 
 
 if __name__ == "__main__":
