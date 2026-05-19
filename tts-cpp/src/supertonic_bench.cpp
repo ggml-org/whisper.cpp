@@ -319,13 +319,30 @@ int main(int argc, char ** argv) {
     }
     // QVAC-18605 round 4 — multi-dtype K/V dispatch resolution.
     // Same plumbing as Engine::Impl ctor; out-of-range throws
-    // (caller surface).  Probes are advisory + cached.
+    // (caller surface).  Probes are advisory + cached.  PR #18
+    // reviewer (Omar) follow-up: surface explicit-request
+    // downgrades via stderr so the bench operator knows their
+    // `--kv-attn-type bf16` ran as f32 on an unsupported adapter
+    // (auto path stays silent).
+    bool kv_dtype_downgraded = false;
     model.kv_attn_type = resolve_kv_attn_type(
         kv_attn_type,
         model.use_f16_attn,
         supertonic_backend_supports_f16_kv_flash_attn(model.backend),
         supertonic_backend_supports_bf16_kv_flash_attn(model.backend),
-        supertonic_backend_supports_q8_0_kv_flash_attn(model.backend));
+        supertonic_backend_supports_q8_0_kv_flash_attn(model.backend),
+        &kv_dtype_downgraded);
+    if (kv_dtype_downgraded) {
+        static const char * const kv_label[] = {
+            "f32", "f16", "bf16", "q8_0"
+        };
+        fprintf(stderr,
+            "supertonic-bench: warning: requested --kv-attn-type %s but the "
+            "resolved backend's flash-attn probe rejected it; falling back to "
+            "f32 (set --kv-attn-type auto to silence)\n",
+            (kv_attn_type >= 0 && kv_attn_type <= 3)
+                ? kv_label[kv_attn_type] : "?");
+    }
     model.use_f16_attn = (model.kv_attn_type == kv_attn_dtype::f16);
 
     auto vit = model.voices.find(voice);

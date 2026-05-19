@@ -285,6 +285,51 @@ void test_hybrid_prefer_discrete_over_uma() {
             std::vector<bool>{true, false}) == 1);
 }
 
+// Test 10b — UMA-aware tiebreak: two discrete cards with EQUAL
+// VRAM should pick the lower index, with the UMA bias active.
+//
+// PR #18 reviewer (Omar) follow-up: the original test 10 used
+// distinct VRAM sizes (32 GB vs 120 GB), so the tiebreak case
+// (two discrete cards with equal VRAM under the UMA bias path)
+// wasn't pinned explicitly.  Test 4 covers the tiebreak in the
+// round-3 (no UMA bias) policy and test 11's second CHECK
+// covers the discrete-subset tiebreak when a UMA is interleaved
+// between the discretes, but neither explicitly exercises the
+// most-common rig: two adjacent discretes with equal VRAM +
+// active UMA bias.  This test pins it.
+void test_uma_aware_tiebreak_equal_vram_discretes() {
+    // Two discretes with identical 32 GB VRAM + one UMA iGPU
+    // with much more reported VRAM.  Discrete subset is
+    // {0, 1}; argmax over that subset picks 0 (lower index).
+    CHECK(resolve_vulkan_device_index(
+            -1,
+            std::vector<size_t>{
+                32ull * 1024 * 1024 * 1024,    // dev0: discrete, 32 GB
+                32ull * 1024 * 1024 * 1024,    // dev1: discrete, 32 GB
+                120ull * 1024 * 1024 * 1024},  // dev2: UMA, 120 GB
+            std::vector<bool>{false, false, true}) == 0);
+
+    // Adjacent discretes (no interleaved UMA) — same expected
+    // outcome (lower index = 0).  Belt-and-suspenders against
+    // a future refactor that walks the discrete subset in a
+    // different order.
+    CHECK(resolve_vulkan_device_index(
+            -1,
+            std::vector<size_t>{
+                32ull * 1024 * 1024 * 1024,
+                32ull * 1024 * 1024 * 1024},
+            std::vector<bool>{false, false}) == 0);
+
+    // Three discretes, all equal: lowest index wins (= 0).
+    CHECK(resolve_vulkan_device_index(
+            -1,
+            std::vector<size_t>{
+                32ull * 1024 * 1024 * 1024,
+                32ull * 1024 * 1024 * 1024,
+                32ull * 1024 * 1024 * 1024},
+            std::vector<bool>{false, false, false}) == 0);
+}
+
 // Test 11 — Multi-discrete + multi-UMA mixed: argmax over the
 // discrete subset.
 //
@@ -391,6 +436,7 @@ int main() {
     // Round 12 — UMA bias.
     test_empty_uma_preserves_round3_behaviour();
     test_hybrid_prefer_discrete_over_uma();
+    test_uma_aware_tiebreak_equal_vram_discretes();
     test_multi_discrete_argmax_over_discrete_subset();
     test_all_uma_falls_back_to_argmax();
     test_explicit_index_ignores_uma_bias();

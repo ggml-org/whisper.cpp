@@ -776,6 +776,46 @@ std::atomic<uint64_t> & capability_probe_call_counter() {
     return n;
 }
 
+// Returns a `const &` to the cached entry.  The reference outlives
+// the `lock_guard` because:
+//   - `std::unordered_map` element references are NOT invalidated by
+//     `insert` / `emplace` even when the table rehashes; only
+//     iterators are.  (Standard guarantee, [unord.req.except].)
+//   - `find` / `emplace` are the only mutators on this cache from
+//     production code.  Production never `erase`s an entry and never
+//     calls `clear()` — the cache lives for the duration of the
+//     process.
+//
+// PR #18 reviewer (Omar) follow-up — UaF risk from test-only
+// `clear()`:
+// `supertonic_clear_capability_cache()` is a test seam exported for
+// `test-supertonic-capability-cache` to drop every cached entry and
+// re-exercise the cold-cache probe path.  If a test ever called
+// `cached_backend_capabilities(b)` (capturing the returned `const
+// &`) on thread A, then called `supertonic_clear_capability_cache()`
+// on thread B WHILE thread A was still dereferencing the reference,
+// the underlying element would be destroyed and thread A would
+// observe a use-after-free.
+//
+// Today this is a no-op risk: every test runs single-threaded, the
+// `clear` call is a single statement at the top of one test
+// (`test_capability_cache_drop_then_repopulate`), and no production
+// path reaches `clear`.  But the contract isn't enforced by the
+// type system, so spelling it out here:
+//   1. Production callers may hold the returned reference across
+//      arbitrary subsequent `cached_backend_capabilities` calls for
+//      DIFFERENT backends (insert-doesn't-invalidate-references).
+//   2. Production callers MUST NOT keep the reference alive across
+//      ANY `supertonic_clear_capability_cache` call (test code's
+//      responsibility).
+//   3. Multi-threaded callers must ensure no thread is dereferencing
+//      a returned reference while another thread calls `clear`
+//      (caller-side synchronisation; the lock here protects the
+//      map structure during insert/find, NOT element lifetime).
+//   4. If a future refactor adds a production-reachable `erase` or
+//      `clear` path, this function should either return-by-value or
+//      switch to `std::shared_ptr<const backend_capabilities>`
+//      ownership.
 const backend_capabilities & cached_backend_capabilities(ggml_backend_t backend) {
     std::lock_guard<std::mutex> lk(capability_cache_mu());
     auto & c = capability_cache();
@@ -1491,7 +1531,9 @@ kv_attn_dtype resolve_kv_attn_type(int requested,
                                    bool legacy_use_f16_attn,
                                    bool backend_supports_f16,
                                    bool backend_supports_bf16,
-                                   bool backend_supports_q8_0) {
+                                   bool backend_supports_q8_0,
+                                   bool * out_was_downgraded) {
+    if (out_was_downgraded) *out_was_downgraded = false;
     if (requested < -1 || requested > 3) {
         throw std::runtime_error(
             "supertonic: --kv-attn-type " + std::to_string(requested) +
@@ -1499,16 +1541,25 @@ kv_attn_dtype resolve_kv_attn_type(int requested,
     }
     switch (requested) {
         case -1:  // auto
+            // No downgrade flag — operator didn't ask for a
+            // specific dtype, so falling back to f32 is the
+            // auto-policy doing its job, not a surprise.
             if (legacy_use_f16_attn && backend_supports_f16) return kv_attn_dtype::f16;
             return kv_attn_dtype::f32;
         case 0:   // f32 forced
             return kv_attn_dtype::f32;
         case 1:   // f16 forced (probe-gated fallback)
-            return backend_supports_f16  ? kv_attn_dtype::f16  : kv_attn_dtype::f32;
+            if (backend_supports_f16) return kv_attn_dtype::f16;
+            if (out_was_downgraded) *out_was_downgraded = true;
+            return kv_attn_dtype::f32;
         case 2:   // bf16 forced (probe-gated fallback)
-            return backend_supports_bf16 ? kv_attn_dtype::bf16 : kv_attn_dtype::f32;
+            if (backend_supports_bf16) return kv_attn_dtype::bf16;
+            if (out_was_downgraded) *out_was_downgraded = true;
+            return kv_attn_dtype::f32;
         case 3:   // q8_0 forced (probe-gated fallback)
-            return backend_supports_q8_0 ? kv_attn_dtype::q8_0 : kv_attn_dtype::f32;
+            if (backend_supports_q8_0) return kv_attn_dtype::q8_0;
+            if (out_was_downgraded) *out_was_downgraded = true;
+            return kv_attn_dtype::f32;
         default:
             // Unreachable — the range check above covers every
             // valid request.  Defensive throw in case the switch

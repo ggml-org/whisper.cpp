@@ -13,10 +13,10 @@
 
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cstdint>
 #include <filesystem>
 #include <stdexcept>
 
@@ -239,14 +239,39 @@ struct Engine::Impl {
             //
             // Probes are advisory: an explicit BF16 / Q8_0 request
             // on an adapter that doesn't support it falls back to
-            // F32 silently — same advisory-probe pattern as the
-            // round-1 F16 auto-policy fallback above.
+            // F32 — same advisory-probe pattern as the round-1
+            // F16 auto-policy fallback above.
+            //
+            // PR #18 reviewer (Omar) follow-up: the silent
+            // fallback was masking operator surprise — someone
+            // pinning `--kv-attn-type bf16` in their production
+            // config on a mixed fleet (some adapters support
+            // BF16 K/V, some don't) would silently see F32 on
+            // the unsupported subset.  The resolver's
+            // `out_was_downgraded` out-param surfaces the
+            // explicit-request + missing-probe case so we can
+            // emit a one-line stderr warning (auto path stays
+            // silent — the operator didn't ask for a specific
+            // dtype, so there's nothing to surprise them with).
+            bool kv_dtype_downgraded = false;
             model.kv_attn_type = resolve_kv_attn_type(
                 opts.kv_attn_type,
                 model.use_f16_attn,
                 supertonic_backend_supports_f16_kv_flash_attn(model.backend),
                 supertonic_backend_supports_bf16_kv_flash_attn(model.backend),
-                supertonic_backend_supports_q8_0_kv_flash_attn(model.backend));
+                supertonic_backend_supports_q8_0_kv_flash_attn(model.backend),
+                &kv_dtype_downgraded);
+            if (kv_dtype_downgraded) {
+                static const char * const kv_label[] = {
+                    "f32", "f16", "bf16", "q8_0"
+                };
+                std::fprintf(stderr,
+                    "supertonic: warning: requested --kv-attn-type %s but the "
+                    "resolved backend's flash-attn probe rejected it; falling "
+                    "back to f32 (set --kv-attn-type auto to silence)\n",
+                    (opts.kv_attn_type >= 0 && opts.kv_attn_type <= 3)
+                        ? kv_label[opts.kv_attn_type] : "?");
+            }
             // Keep the boolean consistent with the resolved enum.
             // No-op for the default `kv_attn_type == -1` path (the
             // resolver already mirrors the boolean).  Becomes a

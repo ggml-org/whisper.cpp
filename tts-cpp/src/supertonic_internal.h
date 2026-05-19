@@ -1012,13 +1012,31 @@ kv_attn_dtype supertonic_kv_attn_type();
 // Intel ARC (no coopmat2 → silent F32 fallback) without crashing.
 // Loud-failure stays for actual config errors (out-of-range int).
 //
+// PR #18 reviewer (Omar) follow-up — the "silent" part of that
+// fallback was hiding an operator surprise.  Optional
+// `out_was_downgraded` pointer is set to `true` IFF the operator
+// explicitly requested f16 / bf16 / q8_0 AND the corresponding
+// backend probe returned false AND the resolver therefore
+// returned `f32` instead.  The CLI-facing call sites (Engine
+// ctor + supertonic-bench) consult this flag and emit a
+// `fprintf(stderr, "warning: ...")` so the operator knows their
+// `--kv-attn-type bf16` config silently degraded.  Auto (`-1`)
+// + missing probe is NOT a downgrade (the operator didn't ask
+// for a specific dtype, so the auto-policy is doing its job) —
+// the flag stays false on that path.
+//
+// Pass `nullptr` (the default) to ignore the downgrade signal
+// — the pure-logic unit tests use this so test runs don't spam
+// stderr with warnings.
+//
 // Pure logic, no Vulkan symbols touched here — same split
 // pattern as `resolve_vulkan_device_index` from round 3.
 kv_attn_dtype resolve_kv_attn_type(int requested,
                                    bool legacy_use_f16_attn,
                                    bool backend_supports_f16,
                                    bool backend_supports_bf16,
-                                   bool backend_supports_q8_0);
+                                   bool backend_supports_q8_0,
+                                   bool * out_was_downgraded = nullptr);
 // QVAC-18605 — true when the resolved backend supports
 // `GGML_OP_LEAKY_RELU` natively.  Mirrored from
 // `supertonic_model::use_native_leaky_relu` by

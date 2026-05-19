@@ -215,14 +215,42 @@ void test_out_of_range_throws() {
     }));
 }
 
-// Test 7 — resolver NEVER returns `autoselect`.
+// Test 7 — resolver NEVER returns `autoselect`, AND every
+// happy-path branch maps to the EXACT expected concrete dtype.
 //
 // `kv_attn_dtype::autoselect` is the EngineOptions sentinel;
 // the resolver always returns a concrete dispatch dtype.  This
 // test pins the contract so a future refactor can't accidentally
 // leak the sentinel through to the dispatch site (which would
 // crash on the switch's default branch).
+//
+// PR #18 reviewer (Omar) follow-up: the original exhaustive
+// 5 × 2 × 8 sweep only asserted `dt != autoselect`, so a typo
+// in the resolver (e.g., returning `f16` when `bf16` was
+// requested + supported) would pass silently.  This test now
+// computes the expected concrete dtype as a pure function of
+// the inputs (mirror of the resolver's behaviour matrix) and
+// `CHECK`s the resolver's return value against that expected
+// dtype on every one of the 80 grid points — a typo in any
+// dispatch branch now fails LOUD with the exact mismatch.
 void test_resolver_returns_concrete_only() {
+    // Reference resolver — same behaviour matrix, separately
+    // implemented so a typo on one side doesn't cancel out
+    // a typo on the other.  Reads like the table in
+    // `supertonic_internal.h`'s docstring on
+    // `resolve_kv_attn_type`.
+    auto expected = [](int requested, bool legacy,
+                       bool sf16, bool sbf16, bool sq8) -> kv_attn_dtype {
+        switch (requested) {
+            case -1: return (legacy && sf16) ? kv_attn_dtype::f16 : kv_attn_dtype::f32;
+            case 0:  return kv_attn_dtype::f32;
+            case 1:  return sf16  ? kv_attn_dtype::f16  : kv_attn_dtype::f32;
+            case 2:  return sbf16 ? kv_attn_dtype::bf16 : kv_attn_dtype::f32;
+            case 3:  return sq8   ? kv_attn_dtype::q8_0 : kv_attn_dtype::f32;
+        }
+        // Unreachable for the request range we sweep below.
+        return kv_attn_dtype::autoselect;
+    };
     for (int requested : { -1, 0, 1, 2, 3 }) {
         for (int legacy_bit : { 0, 1 }) {
             const bool legacy = legacy_bit != 0;
@@ -230,12 +258,111 @@ void test_resolver_returns_concrete_only() {
                 const bool sf16  = (probe_mask & 1) != 0;
                 const bool sbf16 = (probe_mask & 2) != 0;
                 const bool sq8   = (probe_mask & 4) != 0;
-                const auto dt = resolve_kv_attn_type(requested, legacy, sf16, sbf16, sq8);
+                const auto dt  = resolve_kv_attn_type(requested, legacy, sf16, sbf16, sq8);
+                const auto exp = expected(requested, legacy, sf16, sbf16, sq8);
                 CHECK(dt != kv_attn_dtype::autoselect);
-                // Implicit: every other enum value is OK.
+                CHECK(dt == exp);
             }
         }
     }
+
+    // Belt-and-suspenders happy-path spot checks (Omar's
+    // example): the explicit-request paths get the dtype they
+    // asked for when the probe says yes, AND don't accidentally
+    // wander into a neighbouring enum value.
+    CHECK(resolve_kv_attn_type(2, /*legacy=*/false, /*sf16=*/true,
+                               /*sbf16=*/true, /*sq8=*/true) == kv_attn_dtype::bf16);
+    CHECK(resolve_kv_attn_type(3, /*legacy=*/false, /*sf16=*/true,
+                               /*sbf16=*/true, /*sq8=*/true) == kv_attn_dtype::q8_0);
+    CHECK(resolve_kv_attn_type(1, /*legacy=*/false, /*sf16=*/true,
+                               /*sbf16=*/false, /*sq8=*/false) == kv_attn_dtype::f16);
+    // Cross-dtype non-contamination: requesting bf16 with f16 +
+    // q8_0 supported but bf16 NOT supported MUST fall to f32,
+    // not silently to f16 or q8_0.
+    CHECK(resolve_kv_attn_type(2, /*legacy=*/true, /*sf16=*/true,
+                               /*sbf16=*/false, /*sq8=*/true) == kv_attn_dtype::f32);
+    CHECK(resolve_kv_attn_type(3, /*legacy=*/true, /*sf16=*/true,
+                               /*sbf16=*/true, /*sq8=*/false) == kv_attn_dtype::f32);
+}
+
+// Test 8 — `out_was_downgraded` signal on explicit-request +
+// missing-probe paths.
+//
+// PR #18 reviewer (Omar) follow-up: the resolver silently
+// returns f32 when the operator explicitly requests f16/bf16/q8_0
+// and the corresponding backend probe is false.  The operator-
+// facing call sites need a programmatic signal so they can emit
+// a `fprintf(stderr, "warning: ...")` (auto + missing probe is
+// NOT a downgrade — the operator didn't ask for a specific
+// dtype).  This test pins:
+//   - Auto + missing probe → flag stays false.
+//   - Auto + matching probe → flag stays false.
+//   - f32 explicit → flag stays false (no concept of "downgrade
+//     from f32").
+//   - f16 / bf16 / q8_0 explicit + matching probe → flag stays
+//     false (operator got what they asked for).
+//   - f16 / bf16 / q8_0 explicit + missing probe → flag set.
+//   - Optional out-pointer: nullptr (default) MUST be safe.
+void test_downgrade_flag_signal() {
+    bool downgraded = true;  // pre-set to true to detect "no write"
+
+    // Auto + nothing supported.  Not a downgrade — auto policy.
+    (void) resolve_kv_attn_type(-1, /*legacy=*/true,
+                                false, false, false, &downgraded);
+    CHECK(downgraded == false);
+
+    // f32 explicit.  Never a downgrade.
+    downgraded = true;
+    (void) resolve_kv_attn_type(0, /*legacy=*/false,
+                                true, true, true, &downgraded);
+    CHECK(downgraded == false);
+
+    // f16 explicit + supported.  Not a downgrade.
+    downgraded = true;
+    (void) resolve_kv_attn_type(1, /*legacy=*/false,
+                                /*sf16=*/true, false, false, &downgraded);
+    CHECK(downgraded == false);
+
+    // bf16 explicit + supported.  Not a downgrade.
+    downgraded = true;
+    (void) resolve_kv_attn_type(2, /*legacy=*/false,
+                                false, /*sbf16=*/true, false, &downgraded);
+    CHECK(downgraded == false);
+
+    // q8_0 explicit + supported.  Not a downgrade.
+    downgraded = true;
+    (void) resolve_kv_attn_type(3, /*legacy=*/false,
+                                false, false, /*sq8=*/true, &downgraded);
+    CHECK(downgraded == false);
+
+    // f16 explicit + NOT supported.  Downgrade signal.
+    downgraded = false;
+    CHECK(resolve_kv_attn_type(1, /*legacy=*/false,
+                               /*sf16=*/false, true, true, &downgraded)
+          == kv_attn_dtype::f32);
+    CHECK(downgraded == true);
+
+    // bf16 explicit + NOT supported.  Downgrade signal.
+    downgraded = false;
+    CHECK(resolve_kv_attn_type(2, /*legacy=*/false,
+                               true, /*sbf16=*/false, true, &downgraded)
+          == kv_attn_dtype::f32);
+    CHECK(downgraded == true);
+
+    // q8_0 explicit + NOT supported.  Downgrade signal.
+    downgraded = false;
+    CHECK(resolve_kv_attn_type(3, /*legacy=*/false,
+                               true, true, /*sq8=*/false, &downgraded)
+          == kv_attn_dtype::f32);
+    CHECK(downgraded == true);
+
+    // Nullptr default argument must not crash on the same paths.
+    CHECK(resolve_kv_attn_type(2, /*legacy=*/false, true, false, true)
+          == kv_attn_dtype::f32);
+    CHECK(resolve_kv_attn_type(3, /*legacy=*/false, true, true, false)
+          == kv_attn_dtype::f32);
+    CHECK(resolve_kv_attn_type(2, /*legacy=*/false, true, true, false)
+          == kv_attn_dtype::bf16);
 }
 
 } // namespace
@@ -248,6 +375,7 @@ int main() {
     test_q8_0_forced_probe_gated();
     test_out_of_range_throws();
     test_resolver_returns_concrete_only();
+    test_downgrade_flag_signal();
 
     std::fprintf(stderr,
                  "test_supertonic_kv_attn_type: %d / %d checks passed\n",

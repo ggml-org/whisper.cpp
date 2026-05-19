@@ -146,24 +146,65 @@ void test_cpu_fallback_returns_valid_buffer() {
     // graph cache layout: a couple of float tensors).
     ggml_tensor * x_in    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 32, 4);  // ~512 B
     ggml_tensor * temb_in = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 64);     // 256 B
-    (void) x_in; (void) temb_in;
 
     ggml_backend_buffer_t scratchpad =
         alloc_input_scratchpad_or_throw(model, ctx, "test_cpu_fallback");
     CHECK(scratchpad != nullptr);
     if (scratchpad) {
-        // Confirm the tensors were actually bound to addressable memory.
-        std::vector<float> payload(128, 1.0f);
-        ggml_backend_tensor_set(x_in, payload.data(),
-                                 0, payload.size() * sizeof(float));
-        std::vector<float> readback(128, 0.0f);
-        ggml_backend_tensor_get(x_in, readback.data(),
-                                 0, readback.size() * sizeof(float));
-        bool roundtrip_ok = true;
-        for (size_t i = 0; i < payload.size(); ++i) {
-            if (readback[i] != payload[i]) { roundtrip_ok = false; break; }
+        // Confirm EVERY tensor in the context was actually bound
+        // to addressable memory.
+        //
+        // PR #18 reviewer (Omar) follow-up: the original test
+        // only round-tripped `x_in`, so a binding failure on the
+        // SECOND tensor (the helper has to allocate every
+        // ggml_tensor in the input_ctx, not just the first one)
+        // would have slipped through.  Round-tripping BOTH
+        // `x_in` and `temb_in` exercises the entire context's
+        // allocation path.
+        //
+        // x_in: ne[0]=32, ne[1]=4 → 128 F32 elements.
+        const size_t x_n = (size_t) x_in->ne[0] * (size_t) x_in->ne[1];
+        std::vector<float> x_payload(x_n, 1.0f);
+        ggml_backend_tensor_set(x_in, x_payload.data(),
+                                 0, x_payload.size() * sizeof(float));
+        std::vector<float> x_readback(x_n, 0.0f);
+        ggml_backend_tensor_get(x_in, x_readback.data(),
+                                 0, x_readback.size() * sizeof(float));
+        bool x_ok = true;
+        for (size_t i = 0; i < x_payload.size(); ++i) {
+            if (x_readback[i] != x_payload[i]) { x_ok = false; break; }
         }
-        CHECK(roundtrip_ok);
+        CHECK(x_ok);
+
+        // temb_in: ne[0]=64 → 64 F32 elements.  Distinct payload
+        // pattern (2.5f) so a binding-collision bug where both
+        // tensors point at the SAME memory range fails this
+        // check too (x_readback would have read 2.5f back).
+        const size_t t_n = (size_t) temb_in->ne[0];
+        std::vector<float> t_payload(t_n, 2.5f);
+        ggml_backend_tensor_set(temb_in, t_payload.data(),
+                                 0, t_payload.size() * sizeof(float));
+        std::vector<float> t_readback(t_n, 0.0f);
+        ggml_backend_tensor_get(temb_in, t_readback.data(),
+                                 0, t_readback.size() * sizeof(float));
+        bool t_ok = true;
+        for (size_t i = 0; i < t_payload.size(); ++i) {
+            if (t_readback[i] != t_payload[i]) { t_ok = false; break; }
+        }
+        CHECK(t_ok);
+
+        // Cross-aliasing check: after writing 2.5 to temb_in,
+        // x_in must still read back 1.0 (no overlap between the
+        // two tensors' buffer ranges).
+        std::vector<float> x_recheck(x_n, 0.0f);
+        ggml_backend_tensor_get(x_in, x_recheck.data(),
+                                 0, x_recheck.size() * sizeof(float));
+        bool no_overlap = true;
+        for (size_t i = 0; i < x_payload.size(); ++i) {
+            if (x_recheck[i] != x_payload[i]) { no_overlap = false; break; }
+        }
+        CHECK(no_overlap);
+
         ggml_backend_buffer_free(scratchpad);
     }
     ggml_free(ctx);
