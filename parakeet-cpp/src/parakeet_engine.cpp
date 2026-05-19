@@ -13,6 +13,7 @@
 #include "sentencepiece_bpe.h"
 #include "energy_vad.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
