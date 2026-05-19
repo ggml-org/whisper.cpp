@@ -47,6 +47,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -97,7 +98,20 @@ struct EngineOptions {
     // resolved backend.  Triggers the OpenCL `flash_attn_f32_f16`
     // path on Adreno; mirrors chatterbox's `--cfm-f16-kv-attn`.  No
     // effect on CPU (the cblas attention path is already efficient).
+    // On Vulkan dispatches `kernel_flash_attn_f32_f16_*` (head_dim=64
+    // satisfies the `HSK % 8 == 0` supports_op gate; see
+    // `ggml-vulkan.cpp:GGML_OP_FLASH_ATTN_EXT`).
     int f16_attn = -1;
+
+    // QVAC-18605 — Vulkan adapter index.  Passed verbatim to
+    // `ggml_backend_vk_init(idx)` when the build is compiled with
+    // `GGML_VULKAN=ON` and `n_gpu_layers > 0`.  Range-checked
+    // against `ggml_backend_vk_get_device_count()` at load; an
+    // out-of-range value throws (no silent CPU fallback — that
+    // would mask CLI typos / wrong-machine config).  Default 0
+    // (the historical hard-coded value).  Negative values are
+    // reserved for a future "auto-pick best device" policy.
+    int vulkan_device = 0;
 
     // F16 storage type for the audit-identified hot matmul /
     // pointwise-conv weights (vector-estimator attention W_*,
@@ -111,6 +125,62 @@ struct EngineOptions {
     // the OpenCL hot-weight materialisation, while `precision` decides
     // the storage type of all matmul weights uniformly.
     int f16_weights = -1;
+
+    // QVAC-18605 round 6 — extra deny-list for F16 weight
+    // materialization, layered ON TOP of the curated allow-list
+    // in `should_materialise_f16_weight()`.  Each entry is a
+    // substring; if ANY non-empty entry is found inside a
+    // tensor's source name, that tensor stays at its native
+    // storage type (typically F32) even when `f16_weights` is
+    // on.  Empty strings are skipped (no-op) so a stray empty
+    // entry from a config-file typo doesn't silently disable F16
+    // weights for the whole model.
+    //
+    // Use cases:
+    //   - A/B testing a specific tensor pattern without recompiling.
+    //   - Force-keeping a tensor as F32 if drift on a particular
+    //     adapter / driver / shape is observed.
+    //   - Safety net for new tensor patterns added in future
+    //     GGUFs that the curated allow-list inadvertently scoops in.
+    //
+    // Default empty (zero behaviour change for every existing
+    // operator config).  No effect when `f16_weights == 0`.
+    std::vector<std::string> f16_weights_deny_list;
+
+    // QVAC-18605 round 4 — multi-dtype K/V flash-attention dispatch
+    // for the vector estimator's attention sites.  Generalises the
+    // round-1 `f16_attn` boolean (F16 vs F32 only) to:
+    //
+    //   -1 → auto (default — falls back to `f16_attn`'s value;
+    //              identical behaviour to round 1 / 2 / 3 / 5 / 6
+    //              for every existing operator config)
+    //    0 → f32  (force F32 K/V — useful for parity-harness runs
+    //              and for triaging a perf cliff caused by F16
+    //              underflow on a specific model + adapter combo)
+    //    1 → f16  (same as `f16_attn=1`; OpenCL adreno fast path,
+    //              Vulkan `kernel_flash_attn_f32_f16_*`)
+    //    2 → bf16 (Vulkan coopmat2 — wider exponent range than F16,
+    //              same precision; identical bandwidth to F16, no
+    //              underflow on small attention scores; falls back
+    //              to f32 on adapters without coopmat2)
+    //    3 → q8_0 (Vulkan + half the K/V upload bandwidth on
+    //              workloads that are upload-bound; falls back to
+    //              f32 on backends without Q8_0 K/V flash-attn)
+    //
+    // Probe-gated graceful fallback to F32 on adapters that don't
+    // support the requested dtype — same advisory-probe semantics
+    // as `f16_attn`'s round-1 auto-policy, so an operator config
+    // setting `--kv-attn-type bf16` works on both NVIDIA Ampere+
+    // and Intel ARC (BF16 effective on the former; silent F32 on
+    // the latter) without crashing.  Out-of-range values throw
+    // loudly to surface CLI typos.
+    //
+    // When the resolved value is non-f32, the legacy
+    // `model.use_f16_attn` boolean is ALSO updated to
+    // `(resolved == f16)` so any code path still keying on the
+    // boolean (text-encoder / duration / vocoder; not the vector
+    // estimator) sees the historically-correct value.
+    int kv_attn_type = -1;
 
     // Optional path to a .npy file containing the initial noise tensor of
     // shape [1, latent_channels, latent_len] (float32).  When provided,
@@ -174,6 +244,53 @@ struct EngineOptions {
     int stream_first_chunk_tokens  = 0;
     int stream_chunk_tolerance_pct = 20;
     int stream_min_chunk_tokens    = 30;
+
+    // QVAC-18605 follow-up — first-synth-latency pre-warming.
+    //
+    // When non-empty, the Engine ctor invokes `warm_up(prewarm_text)`
+    // immediately after the GGUF load + voice validation, running one
+    // throwaway synth on the supplied text.  On Vulkan / OpenCL this
+    // forces the GPU shader pipelines for every Supertonic stage to
+    // compile up-front (the in-tree thread_local graph caches handle
+    // every subsequent call but can't avoid the first pipeline-compile
+    // cost — measured ~hundreds of ms on first synth on Adreno + RADV
+    // in chatterbox PROGRESS.md), so the operator-visible first synth
+    // call sees ~steady-state latency.  No effect on CPU (no shader
+    // compilation cost; warm_up returns immediately on
+    // `model.backend_is_cpu`).
+    //
+    // Pre-warm text should be similar in length to representative
+    // production input — the per-stage graph caches are keyed on
+    // (text_len, latent_len) tuples, so a too-short pre-warm leaves
+    // a graph-rebuild on the first real call (still saves the
+    // shader-compile cost; only the cgraph allocation is repeated).
+    // Default empty (no pre-warming).
+    std::string prewarm_text;
+
+    // QVAC-18605 round 7 — Vulkan env-var passthrough.
+    //
+    // Applied to the process environment via `set_env_if_unset`
+    // semantics just before `init_supertonic_backend()` runs.
+    // Each key MUST start with `GGML_VK_` (operator-config typo
+    // guard — invalid keys throw at engine-construction time, no
+    // partial-application).
+    //
+    // Operator-set env vars (already present in the environment
+    // when the Engine ctor runs) WIN over these overrides — lets
+    // a debugging operator force-disable a setting from the shell
+    // without recompiling, while still letting an EngineOptions
+    // configuration set the same knob in production.
+    //
+    // Example use cases (the round-7 CLI flags map onto these):
+    //   {"GGML_VK_PREFER_HOST_MEMORY",      "1"}  // --vulkan-prefer-host-memory
+    //   {"GGML_VK_DISABLE_COOPMAT2",        "1"}  // --vulkan-disable-coopmat2
+    //   {"GGML_VK_DISABLE_BFLOAT16",        "1"}  // --vulkan-disable-bfloat16
+    //   {"GGML_VK_PERF_LOGGER",             "1"}  // --vulkan-perf-logger
+    //   {"GGML_VK_ASYNC_USE_TRANSFER_QUEUE","1"}  // --vulkan-async-transfer
+    //
+    // Default empty (zero behaviour change for every existing
+    // operator config).
+    std::map<std::string, std::string> vulkan_env_overrides;
 };
 
 // Per-chunk PCM callback for streaming synthesis.  Receives a pointer to
@@ -234,6 +351,26 @@ public:
     // happens at the next cancellation check inside the vector-
     // estimator loop (one step is the worst-case cancel latency).
     void cancel();
+
+    // QVAC-18605 follow-up — first-synth-latency pre-warming.
+    //
+    // Runs one throwaway synth on `text` to force every per-stage
+    // GPU graph cache to populate and every Vulkan / OpenCL shader
+    // pipeline to compile up-front.  The PCM result is discarded.
+    // Subsequent `synthesize()` calls hit the warmed caches +
+    // pre-compiled pipelines, so the operator-visible first synth
+    // sees steady-state latency.
+    //
+    // No-op on CPU backends (no pipeline cache to warm).  Auto-
+    // invoked by the ctor when `EngineOptions::prewarm_text` is
+    // non-empty; callers can also invoke explicitly mid-life when
+    // they need to warm a different shape (e.g. switching from a
+    // short-prompt to a long-prompt workload).
+    //
+    // Throws on the same conditions as `synthesize()` — if the
+    // throwaway synth fails for any reason, the failure surfaces
+    // here rather than being swallowed.
+    void warm_up(const std::string & text);
 
     // Return the options the engine was constructed with (convenience
     // for callers that want to introspect the resolved n_gpu_layers /

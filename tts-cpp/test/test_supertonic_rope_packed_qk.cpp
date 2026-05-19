@@ -1,4 +1,7 @@
-// QVAC-18966 — CPU regression fix for `apply_rope_to_packed_qk`.
+// QVAC-18966 — CPU regression fix for `apply_rope_to_packed_qk`
+// (also covers the Vulkan / OpenCL synth-path regression on this
+// branch — same root cause; rounds 8 / 9's GPU bridges only run
+// past round 11 once this helper produces the right shape).
 //
 // Background
 // ----------
@@ -6,8 +9,8 @@
 // natural `ne=[head_dim, n_heads, L]` contract of
 // `apply_rope_in_graph` (PR #4) and the **production** call sites'
 // Q/K-producing matmul output.  Both PR #16 ("RoPE in-graph
-// integration F23") and the front-block GPU bridge plumb the
-// result of this helper through to
+// integration F23") and rounds 8 / 9 (front-block + style GPU
+// bridges) plumb the result of this helper through to
 // `vector_text_attention_cache::q_tc_in` via either
 // `ggml_backend_tensor_copy` (GPU bridge, production) or
 // `ggml_backend_tensor_set` from a host vector (legacy bridge,
@@ -114,6 +117,18 @@ void scalar_apply_rope(const float * theta,
 // and verify the rotated output matches the scalar reference's
 // time-major-flat layout (`out[t*HD + c]`) bit-for-bit on the CPU
 // backend.
+//
+// Production-layout parity test (matches `dense_matmul_time_ggml`
+// output on every backend).  Reference is built in time-major-
+// flat layout; upload transposes to channel-major-flat so the
+// graph input matches matmul's contract bit-for-bit.  Scalar
+// apply_rope is applied in-place on the time-major-flat buffer,
+// then compared to the helper's downloaded bytes.  Helper must
+// produce bytes in time-major-flat layout so:
+//   - `ggml_backend_tensor_copy(q_rope, q_tc_in)` blits matching
+//     bytes (q_tc_in has the same `ne=[HD, L]` natural layout).
+//   - The legacy host-bridge path's `tensor_raw_f32` download
+//     yields a `std::vector<float>` indexable as `out[t*HD + c]`.
 void test_production_layout(const char * label, int L, int n_heads, int head_dim,
                             unsigned seed) {
     std::fprintf(stderr,

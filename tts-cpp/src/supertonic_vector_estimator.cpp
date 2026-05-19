@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 
@@ -963,11 +964,16 @@ struct vector_text_attention_cache {
     int kv_len = 0;
     int n_heads = 0;
     int head_dim = 0;
-    // Cache key bit for the F16-K/V flash-attention path; rebuilding
-    // the graph when this flips matches the same correctness contract
-    // as the (q_len, kv_len, n_heads, head_dim) cache keys above.  See
-    // f16_attn handling in build_text_attention_cache().
-    bool f16_kv_attn = false;
+    // QVAC-18605 round 4 — generalised cache key for the K/V
+    // flash-attention dispatch dtype.  Replaces the round-1
+    // boolean `f16_kv_attn` (kept the field name for grep
+    // continuity in PROGRESS_SUPERTONIC.md / git history; the
+    // semantics are now an enum carrying f32/f16/bf16/q8_0).
+    // Rebuilding the graph when this flips matches the same
+    // correctness contract as the (q_len, kv_len, n_heads,
+    // head_dim) cache keys above.  See dispatch logic in
+    // `build_text_attention_cache()`.
+    kv_attn_dtype kv_attn_type = kv_attn_dtype::f32;
     std::string out_w_source;
     std::string out_b_source;
     std::vector<uint8_t> buf;
@@ -1000,7 +1006,7 @@ void build_text_attention_cache(vector_text_attention_cache & cache,
     cache.kv_len = kv_len;
     cache.n_heads = n_heads;
     cache.head_dim = head_dim;
-    cache.f16_kv_attn = supertonic_use_f16_attn();
+    cache.kv_attn_type = supertonic_kv_attn_type();
     cache.out_w_source = out_w_source;
     cache.out_b_source = out_b_source;
 
@@ -1028,20 +1034,51 @@ void build_text_attention_cache(vector_text_attention_cache & cache,
     ggml_tensor * v_in = ggml_view_3d(cache.ctx, cache.v_tc_in,
         head_dim, kv_len, n_heads, time_stride, head_stride, 0);
 
-    if (cache.f16_kv_attn) {
-        // Materialise K / V into contiguous F16 so backends with a
-        // `flash_attn_f32_f16` kernel (OpenCL on Adreno, see chatterbox
-        // PROGRESS.md "OpenCL optimization log") dispatch the
-        // mixed-precision path instead of the slower F32-only one.
-        // Q stays F32: cheaper to keep one operand at the higher
-        // precision than to round-trip the post-attention output back
-        // through F32 for the downstream dense projection.  Mirrors
-        // chatterbox's --cfm-f16-kv-attn flag and the basic_tfm()
-        // f16_kv_attn branch in src/chatterbox_tts.cpp.
-        ggml_tensor * k_f16 = ggml_new_tensor_3d(cache.ctx, GGML_TYPE_F16, head_dim, kv_len, n_heads);
-        ggml_tensor * v_f16 = ggml_new_tensor_3d(cache.ctx, GGML_TYPE_F16, head_dim, kv_len, n_heads);
-        k_in = ggml_cpy(cache.ctx, k_in, k_f16);
-        v_in = ggml_cpy(cache.ctx, v_in, v_f16);
+    // QVAC-18605 round 4 — multi-dtype K/V flash-attention
+    // dispatch.  Generalises the round-1 F16-only path:
+    //
+    //   f32  → no cast (backend's F32 flash-attn kernel)
+    //   f16  → cast K / V to F16 (OpenCL `flash_attn_f32_f16`,
+    //          Vulkan `kernel_flash_attn_f32_f16_*`; chatterbox
+    //          --cfm-f16-kv-attn equivalent)
+    //   bf16 → cast K / V to BF16 (Vulkan coopmat2 — wider
+    //          exponent range than F16 at identical bandwidth)
+    //   q8_0 → cast K / V to Q8_0 (Vulkan + half the K/V upload
+    //          bandwidth; row stride of 32 elements is exact for
+    //          our `head_dim = 64` so block alignment is trivially
+    //          satisfied)
+    //
+    // Q stays F32 in every case: cheaper to keep one operand at
+    // the higher precision than to round-trip the post-attention
+    // output back through F32 for the downstream dense projection.
+    //
+    // The decision lives in `model.kv_attn_type` (mirrored onto
+    // the thread-local by `supertonic_op_dispatch_scope` and
+    // captured into `cache.kv_attn_type` above as the cache key).
+    // Probe-gated graceful fallback to f32 happens upstream in
+    // `resolve_kv_attn_type` — by the time we reach this site the
+    // chosen dtype is guaranteed to be one the backend accepts
+    // for our (head_dim, n_heads) shape.
+    ggml_type cast_target = GGML_TYPE_COUNT;  // sentinel "no cast"
+    switch (cache.kv_attn_type) {
+        case kv_attn_dtype::f32:                                   break;
+        case kv_attn_dtype::f16:  cast_target = GGML_TYPE_F16;     break;
+        case kv_attn_dtype::bf16: cast_target = GGML_TYPE_BF16;    break;
+        case kv_attn_dtype::q8_0: cast_target = GGML_TYPE_Q8_0;    break;
+        case kv_attn_dtype::autoselect:
+            // Resolver never returns autoselect; defensive throw
+            // so a future refactor that bypasses the resolver
+            // can't silently take the F32 path.
+            throw std::runtime_error(
+                "vector_text_attention_cache: kv_attn_type=autoselect "
+                "leaked into dispatch (resolver should have produced "
+                "a concrete dtype)");
+    }
+    if (cast_target != GGML_TYPE_COUNT) {
+        ggml_tensor * k_typed = ggml_new_tensor_3d(cache.ctx, cast_target, head_dim, kv_len, n_heads);
+        ggml_tensor * v_typed = ggml_new_tensor_3d(cache.ctx, cast_target, head_dim, kv_len, n_heads);
+        k_in = ggml_cpy(cache.ctx, k_in, k_typed);
+        v_in = ggml_cpy(cache.ctx, v_in, v_typed);
     }
 
     ggml_tensor * attn = ggml_flash_attn_ext(cache.ctx, q_in, k_in, v_in,
@@ -1082,7 +1119,7 @@ std::vector<float> run_text_attention_cache(vector_text_attention_cache & cache,
     if (cache.model != &model || cache.generation_id != model.generation_id ||
         cache.q_len != q_len || cache.kv_len != kv_len ||
         cache.n_heads != n_heads || cache.head_dim != head_dim ||
-        cache.f16_kv_attn != supertonic_use_f16_attn() ||
+        cache.kv_attn_type != supertonic_kv_attn_type() ||
         cache.out_w_source != out_w_source || cache.out_b_source != out_b_source) {
         build_text_attention_cache(cache, model, q_len, kv_len, n_heads, head_dim, out_w_source, out_b_source);
     }
@@ -1136,7 +1173,7 @@ std::vector<float> run_text_attention_cache_gpu(vector_text_attention_cache & ca
     if (cache.model != &model || cache.generation_id != model.generation_id ||
         cache.q_len != q_len || cache.kv_len != kv_len ||
         cache.n_heads != n_heads || cache.head_dim != head_dim ||
-        cache.f16_kv_attn != supertonic_use_f16_attn() ||
+        cache.kv_attn_type != supertonic_kv_attn_type() ||
         cache.out_w_source != out_w_source || cache.out_b_source != out_b_source) {
         build_text_attention_cache(cache, model, q_len, kv_len, n_heads, head_dim, out_w_source, out_b_source);
     }
@@ -1211,6 +1248,25 @@ struct vector_group_graph_cache {
     ggml_context * ctx = nullptr;
     ggml_cgraph * gf = nullptr;
     ggml_gallocr_t allocr = nullptr;
+    // QVAC-18605 round 12 #5 — host-pinned input scratchpad.
+    // Holds ONLY `x_in` + `temb_in` (the two hot per-step inputs
+    // uploaded fresh every denoise step).  On Vulkan, allocated
+    // via `try_alloc_inputs_in_pinned_host_buffer` which returns
+    // a buffer from `ggml_backend_vk_host_buffer_type()` — every
+    // `ggml_backend_tensor_set(x_in, ...)` skips one staging-
+    // buffer hop on the way to BAR-mapped GPU memory.  On CPU
+    // / Metal / OpenCL (no host buffer type) the helper returns
+    // nullptr and we fall back to allocating the same tensors
+    // via `ggml_backend_alloc_ctx_tensors(input_ctx, backend)`
+    // — same memory, just one staging hop per upload.
+    //
+    // `text_in` stays in the main `ctx` (gallocr handles it)
+    // because it's upload-skipped by the round-10 tracker on
+    // steps 1..N-1; the marginal staging-hop saving doesn't
+    // amortise across the cold-miss / fast-path mix.
+    std::vector<uint8_t> input_ctx_storage;
+    ggml_context * input_ctx = nullptr;
+    ggml_backend_buffer_t input_buf = nullptr;
     ggml_tensor * x_in = nullptr;
     ggml_tensor * temb_in = nullptr;
     ggml_tensor * text_in = nullptr;
@@ -1229,11 +1285,32 @@ struct vector_group_graph_cache {
     ggml_tensor * k_sin_in = nullptr;
     std::string q_rope_name; // == q_name + "_rope"
     std::string k_rope_name; // == k_name + "_rope"
+
+    // QVAC-18605 round 10 — pointer-compare upload-skip tracker
+    // for `text_in`.  `text_lc_host` is the same `text_emb`
+    // pointer the front-block cache sees: stable within one
+    // synth (5 calls × same pointer), potentially reused-at-same-
+    // address across synths.  Caller resets at `current_step ==
+    // 0` to invalidate the cache.  See upload_skip_tracker
+    // contract in supertonic_internal.h.  Cache rebuild zeroes
+    // this via `cache = {}` (effective reset).
+    upload_skip_tracker text_in_skip;
 };
 
 void free_group_graph_cache(vector_group_graph_cache & cache) {
     supertonic_safe_gallocr_free(cache.allocr, cache.generation_id);
+    // QVAC-18605 round 12 #5 — tear down the host-pinned input
+    // scratchpad.  Order matters: free the gallocr first (it
+    // owns buffers for the main-ctx tensors), then the main
+    // ctx (which holds the graph metadata referencing x_in /
+    // temb_in pointers from `input_ctx`), then the input
+    // buffer (drops the host-pinned pages), then the input
+    // ctx (drops the tensor metadata).  Freeing input_ctx
+    // BEFORE the gallocr would leave the gallocr with
+    // dangling pointers to tensors that no longer exist.
     if (cache.ctx) ggml_free(cache.ctx);
+    if (cache.input_buf) ggml_backend_buffer_free(cache.input_buf);
+    if (cache.input_ctx) ggml_free(cache.input_ctx);
     cache = {};
 }
 
@@ -1293,10 +1370,41 @@ void build_group_graph_cache(vector_group_graph_cache & cache,
     // `dense_matmul_time_ggml` builders already consume.  See
     // `supertonic_internal.h::transpose_time_channel_ggml` for
     // the bit-exact equivalence proof against the host pack.
-    cache.x_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, C, L);
-    ggml_set_name(cache.x_in, "vector_group_in_tc"); ggml_set_input(cache.x_in);
-    cache.temb_in = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_F32, 64);
-    ggml_set_name(cache.temb_in, "vector_group_temb"); ggml_set_input(cache.temb_in);
+    //
+    // QVAC-18605 round 12 #5 — `x_in` + `temb_in` live in a
+    // SEPARATE ggml_context (`cache.input_ctx`) so they can be
+    // allocated from `ggml_backend_vk_host_buffer_type()` on
+    // Vulkan and skip the staging-buffer hop on every per-step
+    // `ggml_backend_tensor_set`.  Graph tensors in `cache.ctx`
+    // reference these by pointer (ggml stores tensors as `void *`
+    // in the graph regardless of which context allocated them);
+    // gallocr's `ggml_gallocr_reserve` + `ggml_gallocr_alloc_graph`
+    // skips tensors that already have a `tensor->buffer` set, so
+    // pre-binding them in the host buffer doesn't interfere with
+    // gallocr's allocation pass for the intermediates + outputs.
+    //
+    // `text_in` STAYS in `cache.ctx` because the round-10
+    // upload-skip tracker means steps 1..N-1 don't upload at
+    // all; the marginal staging-hop saving for the single cold-
+    // miss step doesn't amortise.
+    {
+        // 8 tensor slots is well over what's needed (2 inputs);
+        // padded so future round-12 follow-ups can add more
+        // host-pinned inputs without re-tuning the size.
+        const size_t INPUT_OVERHEAD = ggml_tensor_overhead() * 8;
+        cache.input_ctx_storage.assign(INPUT_OVERHEAD, 0);
+        ggml_init_params input_p = { INPUT_OVERHEAD, cache.input_ctx_storage.data(), /*no_alloc=*/true };
+        cache.input_ctx = ggml_init(input_p);
+        cache.x_in = ggml_new_tensor_2d(cache.input_ctx, GGML_TYPE_F32, C, L);
+        ggml_set_name(cache.x_in, "vector_group_in_tc"); ggml_set_input(cache.x_in);
+        cache.temb_in = ggml_new_tensor_1d(cache.input_ctx, GGML_TYPE_F32, 64);
+        ggml_set_name(cache.temb_in, "vector_group_temb"); ggml_set_input(cache.temb_in);
+        // QVAC-18605 round 13 #1 — consolidated allocator
+        // (round-12 inlined the try-pinned-host + fallback
+        // boilerplate at 4 sites; this round factors it out).
+        cache.input_buf = alloc_input_scratchpad_or_throw(
+            model, cache.input_ctx, "vector_group_graph_cache");
+    }
     cache.text_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, text_len, 256);
     ggml_set_name(cache.text_in, "vector_group_text"); ggml_set_input(cache.text_in);
 
@@ -1373,6 +1481,14 @@ void build_group_graph_cache(vector_group_graph_cache & cache,
     // land in `q_tc_in` / `k_tc_in` / `v_tc_in` bit-exactly.  See
     // the header doc on `apply_rope_to_packed_qk` in
     // `supertonic_internal.h` for the full layout reasoning.
+    //
+    // Note (Vulkan branch): master's
+    // `dense_matmul_time_pretransposed_ggml` upgrade only pre-
+    // transposes WEIGHTS, not the activation layout, so the
+    // output ne=[T, OC] channel-major-flat stays identical to
+    // the legacy `dense_matmul_time_ggml`.  The same
+    // `ggml_cont(ggml_transpose(...))` head-of-V-pipeline fix
+    // therefore lands the right bytes for both variants.
     //
     // Legacy host bridge: `tensor_raw_f32(v_gpu)` downloads the
     // post-transpose bytes (time-major-flat `out[t*HD + c]`) —
@@ -1501,7 +1617,19 @@ vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache
     // [L, C] layout downstream ops expect.
     ggml_backend_tensor_set(cache.x_in, x_tc.data(), 0, x_tc.size()*sizeof(float));
     ggml_backend_tensor_set(cache.temb_in, temb.data(), 0, temb.size()*sizeof(float));
-    ggml_backend_tensor_set(cache.text_in, text_lc_host, 0, (size_t) text_len * 256 * sizeof(float));
+    // QVAC-18605 round 10 — text_lc_host upload-skip.  Same
+    // `text_emb` pointer that the front-block cache sees: stable
+    // within one synth (5 calls × same pointer), potentially
+    // reused-at-same-address across synths.  Synth-boundary reset
+    // on `current_step == 0` invalidates the cache so the next
+    // synth's first step always uploads.  Per-synth wins:
+    // 4 (skipped) × 3 (groups) × text_len × 256 × 4 bytes.  See
+    // upload_skip_tracker contract in supertonic_internal.h.
+    if (current_step == 0) cache.text_in_skip.reset();
+    if (cache.text_in_skip.needs_upload(text_lc_host)) {
+        ggml_backend_tensor_set(cache.text_in, text_lc_host, 0, (size_t) text_len * 256 * sizeof(float));
+        cache.text_in_skip.mark_uploaded(text_lc_host);
+    }
     profile_vector_compute(model, cache.gf, current_step, island);
     if (trace) {
         for (int j = 0; j < 4; ++j) {
@@ -1576,8 +1704,9 @@ vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache
         // ARE the scalar `apply_rope`'s native flat layout
         // (`out[t*HD + c]`), so `tensor_raw_f32` downloads them
         // directly — no transpose needed.  `tensor_to_time_channel`
-        // would mis-interpret the new ne shape and produce the
-        // transpose of the transpose.  See the header doc on
+        // would mis-interpret the new ne shape (reading `HD` as
+        // L_var and `L` as C_var) and produce the transpose of
+        // the transpose.  See the header doc on
         // `apply_rope_to_packed_qk` in `supertonic_internal.h`.
         out.q_rope = tensor_raw_f32(
             ggml_graph_get_tensor(cache.gf, cache.q_rope_name.c_str()));
@@ -1598,6 +1727,32 @@ struct vector_res_style_qkv_result {
     std::vector<float> sq;
     std::vector<float> sk;
     std::vector<float> sv;
+
+    // QVAC-18605 round 9 — GPU-side handles for the post-projection
+    // style Q / K / V tensors so the next-stage style flash-attn
+    // call site (`run_text_attention_cache_gpu`) can blit them
+    // device→device instead of round-tripping through `sq` / `sk`
+    // / `sv` host vectors.  Same lifetime + dispatch pattern as
+    // `vector_group_graph_result::q_rope_gpu` / `v_gpu` (round-1
+    // 2C-lite for text attention; rounds 8 + 9 extend to front-
+    // block + style sites).
+    //
+    // Pointers are valid as long as the producing
+    // `vector_res_style_qkv_cache` is alive and hasn't been
+    // rebuilt (cache is `thread_local` at every call site;
+    // rebuild only on shape / matmul-source change).
+    //
+    // Always populated by `run_res_style_qkv_cache` (cheap —
+    // just `ggml_graph_get_tensor`); the host vectors above are
+    // gated on `trace != nullptr` (production path skips the
+    // download because it consumes `*_gpu` instead).  `post`
+    // stays unconditional — consumed by the next-stage
+    // `run_style_residual_cache` which still expects a host
+    // vector (cross-stage GPU bridge for `post` is deferred —
+    // see `aiDocs/PLAN_VULKAN_NEXT_ROUNDS.md`).
+    ggml_tensor * sq_gpu = nullptr;
+    ggml_tensor * sk_gpu = nullptr;
+    ggml_tensor * sv_gpu = nullptr;
 };
 
 struct vector_res_style_qkv_cache {
@@ -1731,16 +1886,42 @@ void build_res_style_qkv_cache(vector_res_style_qkv_cache & cache,
     ggml_build_forward_expand(cache.gf, post);
 
     const std::string style_prefix = vector_main_block(style_block) + ".attention.";
-    ggml_tensor * sq = dense_matmul_time_pretransposed_ggml(cache.ctx, model, post,
+    // Round 11 sq/sk/sv layout fix layered on top of master's
+    // `dense_matmul_time_pretransposed_ggml` upgrade.  Same
+    // reasoning as the front-block V site above: pretransposed
+    // variant still produces ne=[T, OC] channel-major-flat
+    // memory; the round-11 `ggml_cont(ggml_transpose(...))`
+    // below this block remains required to land bytes in the
+    // ne=[HD, L] time-major-flat layout `q_tc_in`/`k_tc_in`/
+    // `v_tc_in` expect for the GPU-bridge blit.
+    ggml_tensor * sq_matmul = dense_matmul_time_pretransposed_ggml(cache.ctx, model, post,
         require_source_tensor(model, q_matmul_source),
         require_source_tensor(model, style_prefix + "W_query.linear.bias"));
-    ggml_tensor * sk = dense_matmul_time_pretransposed_ggml(cache.ctx, model, cache.kctx_in,
+    ggml_tensor * sk_matmul = dense_matmul_time_pretransposed_ggml(cache.ctx, model, cache.kctx_in,
         require_source_tensor(model, k_matmul_source),
         require_source_tensor(model, style_prefix + "W_key.linear.bias"));
-    sk = ggml_tanh(cache.ctx, sk);
-    ggml_tensor * sv = dense_matmul_time_pretransposed_ggml(cache.ctx, model, cache.style_v_in,
+    sk_matmul = ggml_tanh(cache.ctx, sk_matmul);
+    ggml_tensor * sv_matmul = dense_matmul_time_pretransposed_ggml(cache.ctx, model, cache.style_v_in,
         require_source_tensor(model, v_matmul_source),
         require_source_tensor(model, style_prefix + "W_value.linear.bias"));
+    // QVAC-18605 follow-up — pack style Q/K/V into the time-major-
+    // flat layout that `run_text_attention_cache_gpu` consumes via
+    // `ggml_backend_tensor_copy`.  The style attention path has
+    // no RoPE (cos/sin tables are absent for the style sites), so
+    // the head-of-pipeline transpose inside
+    // `apply_rope_to_packed_qk` doesn't run here — we open-code
+    // it for each of the three matmul outputs.  Matmul output is
+    // ne=[L_in, HD] channel-major-flat (`data[t + c*L_in]`);
+    // `q_tc_in` / `k_tc_in` / `v_tc_in` in
+    // `vector_text_attention_cache` are ne=[HD, L_in] time-major-
+    // flat (`data[c + t*HD]`).  `ggml_cont(ggml_transpose(...))`
+    // flips strides + materialises a contiguous fresh tensor
+    // with the right layout.  See the header doc on
+    // `apply_rope_to_packed_qk` in `supertonic_internal.h` for
+    // the full reasoning.
+    ggml_tensor * sq = ggml_cont(cache.ctx, ggml_transpose(cache.ctx, sq_matmul));
+    ggml_tensor * sk = ggml_cont(cache.ctx, ggml_transpose(cache.ctx, sk_matmul));
+    ggml_tensor * sv = ggml_cont(cache.ctx, ggml_transpose(cache.ctx, sv_matmul));
     ggml_set_name(sq, q_name.c_str()); ggml_set_output(sq); ggml_build_forward_expand(cache.gf, sq);
     ggml_set_name(sk, k_name.c_str()); ggml_set_output(sk); ggml_build_forward_expand(cache.gf, sk);
     ggml_set_name(sv, v_name.c_str()); ggml_set_output(sv); ggml_build_forward_expand(cache.gf, sv);
@@ -1811,11 +1992,38 @@ vector_res_style_qkv_result run_res_style_qkv_cache(vector_res_style_qkv_cache &
         push_trace(*trace, norm_name, L, C, tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, norm_name.c_str())));
     }
     vector_res_style_qkv_result out;
+
+    // QVAC-18605 round 9 — populate GPU handles for the post-
+    // projection Q / K / V tensors unconditionally.  Cheap (no
+    // GPU sync; just a name-to-pointer lookup in the cached
+    // graph).  Lifetime contract documented on the struct.
+    out.sq_gpu = ggml_graph_get_tensor(cache.gf, q_name.c_str());
+    out.sk_gpu = ggml_graph_get_tensor(cache.gf, k_name.c_str());
+    out.sv_gpu = ggml_graph_get_tensor(cache.gf, v_name.c_str());
+
+    // `post` stays a host download — the next-stage
+    // `run_style_residual_cache` still consumes a host vector.
     out.post = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, post_name.c_str()));
-    out.sq = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, q_name.c_str()));
-    out.sk = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, k_name.c_str()));
-    out.sv = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, v_name.c_str()));
+
+    // QVAC-18605 round 9 — gate `sq` / `sk` / `sv` host downloads
+    // on trace mode.  Production path skips them because the
+    // call site uses `out.sq_gpu` / `out.sk_gpu` / `out.sv_gpu`
+    // via `run_text_attention_cache_gpu`.  Eliminates 3 sync
+    // points per call × 4 sites × 5 denoise steps = 60 GPU→host
+    // downloads / synth.  Mirrors the round-1 2C-lite
+    // `need_host_qkv = (trace != nullptr)` gate on the group
+    // graph cache.
     if (trace) {
+        // QVAC-18605 follow-up — sq / sk / sv are now graph-packed
+        // to ne=[HD, L] time-major-flat (see the matmul-output
+        // transpose in `build_res_style_qkv_cache`).
+        // `tensor_raw_f32` downloads the bytes in the layout
+        // scalar reference and trace harnesses expect
+        // (`out[t*256 + c]`).  See the header doc on
+        // `apply_rope_to_packed_qk` in `supertonic_internal.h`.
+        out.sq = tensor_raw_f32(out.sq_gpu);
+        out.sk = tensor_raw_f32(out.sk_gpu);
+        out.sv = tensor_raw_f32(out.sv_gpu);
         push_trace(*trace, post_name, L, C, out.post);
         push_trace(*trace, q_name, L, 256, out.sq);
         push_trace(*trace, k_name, 50, 256, out.sk);
@@ -2902,6 +3110,20 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             ggml_context * ctx = nullptr;
             ggml_cgraph * gf = nullptr;
             ggml_gallocr_t allocr = nullptr;
+            // QVAC-18605 round 12 #5 — host-pinned input scratchpad
+            // for the three hot per-step inputs (x_in, mask_in,
+            // t_emb_in).  Same dispatch pattern as
+            // `vector_group_graph_cache`: helper returns nullptr on
+            // CPU / non-Vulkan backends; we fall back to the
+            // default backend buffer via
+            // `ggml_backend_alloc_ctx_tensors(input_ctx, backend)`.
+            // `text_in_t` stays in `ctx` (gallocr-allocated) — the
+            // round-10 upload-skip tracker handles the per-step
+            // upload elision so the staging-hop saving doesn't
+            // amortise on the cold-miss-only path.
+            std::vector<uint8_t> input_ctx_storage;
+            ggml_context * input_ctx = nullptr;
+            ggml_backend_buffer_t input_buf = nullptr;
             ggml_tensor * x_in = nullptr;
             ggml_tensor * mask_in = nullptr;
             ggml_tensor * t_emb_in = nullptr;
@@ -2917,6 +3139,21 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             ggml_tensor * q_sin_in = nullptr;
             ggml_tensor * k_cos_in = nullptr;
             ggml_tensor * k_sin_in = nullptr;
+
+            // QVAC-18605 round 10 — pointer-compare upload-skip
+            // tracker for `text_in_t`.  `text_emb` is stable within
+            // one synth (5 calls × same pointer) but the stack-
+            // local `std::vector<float>` may be reallocated to the
+            // SAME address across synths (allocator size-class
+            // reuse).  Caller resets at `current_step == 0` to
+            // avoid leaking synth-N data into synth-N+1.  See the
+            // upload_skip_tracker contract in
+            // supertonic_internal.h.
+            //
+            // Cache rebuild zeroes this via `front_cache = {}`
+            // (the tracker's only field is a pointer that
+            // zero-initialises to nullptr → effective reset).
+            upload_skip_tracker text_in_skip;
         };
         thread_local ve_front_block_graph_cache front_cache;
         if (front_cache.model != &model ||
@@ -2924,9 +3161,15 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             front_cache.L != L ||
             front_cache.text_len != text_len ||
             front_cache.trace_outputs != include_ggml_trace) {
-            // Tear down stale state.
+            // Tear down stale state.  Round 12 #5 — same teardown
+            // order as `free_group_graph_cache`: gallocr → main
+            // ctx → input host buffer → input ctx.  Reversing
+            // order would dangle gallocr pointers into freed
+            // input-ctx tensor metadata.
             supertonic_safe_gallocr_free(front_cache.allocr, front_cache.generation_id);
             if (front_cache.ctx) ggml_free(front_cache.ctx);
+            if (front_cache.input_buf) ggml_backend_buffer_free(front_cache.input_buf);
+            if (front_cache.input_ctx) ggml_free(front_cache.input_ctx);
             front_cache = {};
             front_cache.model = &model;
             front_cache.generation_id = model.generation_id;
@@ -2942,15 +3185,32 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             front_cache.ctx = ggml_init(p);
             front_cache.gf  = ggml_new_graph_custom(front_cache.ctx, MAX_NODES, false);
 
-            front_cache.x_in = ggml_new_tensor_2d(front_cache.ctx, GGML_TYPE_F32, L, Cin);
-            ggml_set_name(front_cache.x_in, "ve_latent_tc");
-            ggml_set_input(front_cache.x_in);
-            front_cache.mask_in = ggml_new_tensor_1d(front_cache.ctx, GGML_TYPE_F32, L);
-            ggml_set_name(front_cache.mask_in, "ve_latent_mask");
-            ggml_set_input(front_cache.mask_in);
-            front_cache.t_emb_in = ggml_new_tensor_1d(front_cache.ctx, GGML_TYPE_F32, 64);
-            ggml_set_name(front_cache.t_emb_in, "ve_time_emb");
-            ggml_set_input(front_cache.t_emb_in);
+            // QVAC-18605 round 12 #5 — host-pinned scratchpad for
+            // the 3 hot per-step inputs (x_in, mask_in, t_emb_in).
+            // text_in_t stays in the main ctx (round-10 upload-skip
+            // tracker elides per-step uploads; pinned-host doesn't
+            // amortise on the cold-miss-only path).
+            {
+                const size_t INPUT_OVERHEAD = ggml_tensor_overhead() * 8;
+                front_cache.input_ctx_storage.assign(INPUT_OVERHEAD, 0);
+                ggml_init_params input_p = { INPUT_OVERHEAD, front_cache.input_ctx_storage.data(), /*no_alloc=*/true };
+                front_cache.input_ctx = ggml_init(input_p);
+                front_cache.x_in = ggml_new_tensor_2d(front_cache.input_ctx, GGML_TYPE_F32, L, Cin);
+                ggml_set_name(front_cache.x_in, "ve_latent_tc");
+                ggml_set_input(front_cache.x_in);
+                front_cache.mask_in = ggml_new_tensor_1d(front_cache.input_ctx, GGML_TYPE_F32, L);
+                ggml_set_name(front_cache.mask_in, "ve_latent_mask");
+                ggml_set_input(front_cache.mask_in);
+                front_cache.t_emb_in = ggml_new_tensor_1d(front_cache.input_ctx, GGML_TYPE_F32, 64);
+                ggml_set_name(front_cache.t_emb_in, "ve_time_emb");
+                ggml_set_input(front_cache.t_emb_in);
+                // QVAC-18605 round 13 #1 — consolidated allocator
+                // (round-12 inlined the try-pinned-host + fallback
+                // boilerplate; this round factors it out via
+                // `alloc_input_scratchpad_or_throw`).
+                front_cache.input_buf = alloc_input_scratchpad_or_throw(
+                    model, front_cache.input_ctx, "ve_front_block_graph_cache");
+            }
             front_cache.text_in_t = ggml_new_tensor_2d(front_cache.ctx, GGML_TYPE_F32, text_len, 256);
             ggml_set_name(front_cache.text_in_t, "ve_text_lc");
             ggml_set_input(front_cache.text_in_t);
@@ -3142,11 +3402,27 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         auto te_arr = cached_time_embedding(model, current_step, total_steps);
         std::vector<float> te_host(te_arr.begin(), te_arr.end());
         ggml_backend_tensor_set(t_emb, te_host.data(), 0, te_host.size() * sizeof(float));
-        // text_emb is already in (channel, time) layout so the cache that
-        // used to wrap this set was a verbatim copy keyed on a pointer
-        // that never matched twice.  Removed; set the tensor directly
-        // from the caller-owned text_emb buffer.
-        ggml_backend_tensor_set(text_in, text_emb, 0, (size_t) text_len * 256 * sizeof(float));
+        // QVAC-18605 round 10 — text_emb upload-skip.  `text_emb`
+        // is stable within one synth (5 calls × same pointer); skip
+        // the upload on steps 1..N-1 if the pointer matches the
+        // last successful upload's pointer.  Synth-boundary reset
+        // (`current_step == 0`) invalidates the cache so the next
+        // synth's first step always uploads — protects against
+        // the stack-realloc-same-address hazard documented on
+        // `upload_skip_tracker` in supertonic_internal.h.
+        //
+        // The earlier comment "the cache that used to wrap this
+        // was a verbatim copy keyed on a pointer that never
+        // matched twice" referred to a per-call wrapper that
+        // forgot to use a stable cache instance — round 10 fixes
+        // that by storing the tracker on the (thread_local)
+        // front_cache instance, so consecutive `current_step`
+        // values within the same synth see a populated tracker.
+        if (current_step == 0) front_cache.text_in_skip.reset();
+        if (front_cache.text_in_skip.needs_upload(text_emb)) {
+            ggml_backend_tensor_set(text_in, text_emb, 0, (size_t) text_len * 256 * sizeof(float));
+            front_cache.text_in_skip.mark_uploaded(text_emb);
+        }
         profile_vector_compute(model, gf, current_step, "front_proj_attn0_qkv");
 
         PUSH_GGML_TRACE({"ve_latent_tc", {L, Cin}, in});
@@ -3158,74 +3434,125 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         PUSH_GGML_TRACE({"ve_time_add0", {L, C}, tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_time_add0"))});
         std::vector<float> block2_ggml = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_block2_convnext0"));
         PUSH_GGML_TRACE({"ve_block2_convnext0", {L, C}, block2_ggml});
-        // QVAC-18966 — `ve_attn0_v` is now `ggml_cont(ggml_
-        // transpose(...))` of the matmul output (ne=[HD, text_len]
-        // time-major-flat memory).  `tensor_raw_f32` downloads
-        // the bytes in the layout scalar `apply_rope` /
-        // `flash_attention_qkv` host references expect
-        // (`v[t*HD + c]`) — bit-identical to what
-        // `run_text_attention_cache`'s host upload writes into
-        // `v_tc_in` (`ggml_new_tensor_2d(F32, HD, kv_len)` natural
-        // strides nb=[elem, HD*elem]).  Using
-        // `tensor_to_time_channel` here would mis-interpret the
-        // swapped ne and silently feed wrong-orientation V into
-        // the attention.  Q/K matmul outputs are UNCHANGED ne=[L,
-        // HD] channel-major-flat so `tensor_to_time_channel` stays
-        // the right call for them.  See the header doc on
-        // `apply_rope_to_packed_qk` in `supertonic_internal.h`.
-        std::vector<float> v_out = tensor_raw_f32(ggml_graph_get_tensor(gf, "ve_attn0_v"));
-        // F23 — when the front-block graph has the in-graph RoPE
-        // wired in (model carries `vector_rope_theta`), feed
-        // `run_text_attention_cache` the already-rotated Q/K from
-        // the `_rope` graph outputs.  Pre-RoPE Q/K are still
-        // downloaded into the GGML trace for scalar parity.  Host
-        // `apply_rope(theta, …)` is fully eliminated on the
-        // production path.
-        std::vector<float> q_out, k_out, q_rotated, k_rotated;
-        if (include_ggml_trace) {
-            q_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_q"));
-            k_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_k"));
-            PUSH_GGML_TRACE({"ve_attn0_q", {L, 256}, q_out});
-            PUSH_GGML_TRACE({"ve_attn0_k", {text_len, 256}, k_out});
-            PUSH_GGML_TRACE({"ve_attn0_v", {text_len, 256}, v_out});
-        }
-        const bool front_in_graph_rope =
-            ggml_graph_get_tensor(gf, "ve_attn0_q_rope") != nullptr;
-        if (front_in_graph_rope) {
-            // QVAC-18966 — post-fix layout contract:
-            // `apply_rope_to_packed_qk` produces ne=[HD, L] with
-            // time-major-flat memory (`data[c + t*HD]`).  Those
-            // bytes ARE scalar `apply_rope`'s native flat layout
-            // (`out[t*HD + c]`), so `tensor_raw_f32` downloads
-            // them directly — no transpose needed.  Using
-            // `tensor_to_time_channel` would mis-interpret the
-            // swapped ne shape and produce the transpose of the
-            // transpose, silently feeding wrong-orientation Q / K
-            // into the attention.  See the header doc on
-            // `apply_rope_to_packed_qk` in `supertonic_internal.h`.
-            q_rotated = tensor_raw_f32(ggml_graph_get_tensor(gf, "ve_attn0_q_rope"));
-            k_rotated = tensor_raw_f32(ggml_graph_get_tensor(gf, "ve_attn0_k_rope"));
-        } else {
-            // Legacy path: GGUF lacks vector_rope_theta-typed wiring.
-            // Materialise Q/K host-side, rotate, then forward.
-            if (q_out.empty()) {
-                q_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_q"));
-                k_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_k"));
-            }
-            const float * theta = model.vector_rope_theta.data();
-            apply_rope(theta, q_out, L, 4, 64);
-            apply_rope(theta, k_out, text_len, 4, 64);
-            q_rotated = std::move(q_out);
-            k_rotated = std::move(k_out);
-        }
+        // QVAC-18605 round 8 — front-block attn0 GPU bridge.
+        //
+        // PR #16's audit follow-up #6 (2C-lite) shipped the GPU
+        // device→device blit infrastructure (`run_text_attention_cache_gpu`)
+        // and wired g1 / g2 / g3 group attentions to use it.  The
+        // front-block attn0 site was deferred because of cache-
+        // lifetime concerns at the time; round 8 picks it up.
+        //
+        // The front_cache (`ve_front_block_graph_cache` in the
+        // outer scope) is `thread_local` and stable across calls
+        // (rebuilds only on shape change L / text_len /
+        // trace_outputs).  After `profile_vector_compute` returns,
+        // the named output tensors `ve_attn0_v` and (when
+        // `apply_rope` is true) `ve_attn0_q_rope` /
+        // `ve_attn0_k_rope` are valid GPU handles for the
+        // duration of the next attention compute.  Same lifetime
+        // guarantee as the g1/g2/g3 caches → safe to pass into
+        // `run_text_attention_cache_gpu`.
+        //
+        // Eliminates per call: 3 GPU→host downloads + 3 host→GPU
+        // uploads.  Across 5 denoise steps × Q/K/V = 30 sync
+        // points / synth.  Production path only — trace mode
+        // still takes the legacy host-bridge path so the trace
+        // dump captures pre-attention Q/K/V host vectors.
+        //
+        // Note: the legacy host-bridge fallback below still uses
+        // `tensor_to_time_channel(v_gpu_attn0)`; round 11's
+        // QVAC-18966 layout fix re-patches that call site to
+        // `tensor_raw_f32(...)` after `ve_attn0_v` becomes
+        // `ggml_cont(ggml_transpose(...))`-shaped.
+        ggml_tensor * v_gpu_attn0      = ggml_graph_get_tensor(gf, "ve_attn0_v");
+        ggml_tensor * q_rope_gpu_attn0 = ggml_graph_get_tensor(gf, "ve_attn0_q_rope");
+        ggml_tensor * k_rope_gpu_attn0 = ggml_graph_get_tensor(gf, "ve_attn0_k_rope");
+        const bool front_in_graph_rope = (q_rope_gpu_attn0 != nullptr);
+        const bool front_use_gpu_bridge = front_in_graph_rope && !include_ggml_trace
+                                          && v_gpu_attn0 && k_rope_gpu_attn0;
+        std::vector<float> q_out, k_out, q_rotated, k_rotated, v_out;
         thread_local vector_text_attention_cache att0_cache;
         std::vector<float> att0_ctx_trace;
-        std::vector<float> attn_out_ggml = run_text_attention_cache(att0_cache, model, q_rotated, k_rotated, v_out,
-            L, text_len, 4, 64,
-            "vector_estimator:onnx::MatMul_3110",
-            "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.out_fc.linear.bias",
-            current_step, "attn0_flash",
-            include_ggml_trace ? &att0_ctx_trace : nullptr);
+        std::vector<float> attn_out_ggml;
+        if (front_use_gpu_bridge) {
+            // Fast path: device→device blit, host never sees Q/K/V.
+            // Mirrors the g1/g2/g3 dispatch at lines 2926-2933.
+            attn_out_ggml = run_text_attention_cache_gpu(att0_cache, model,
+                q_rope_gpu_attn0, k_rope_gpu_attn0, v_gpu_attn0,
+                L, text_len, 4, 64,
+                "vector_estimator:onnx::MatMul_3110",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.out_fc.linear.bias",
+                current_step, "attn0_flash",
+                /*ctx_trace=*/ nullptr);
+        } else {
+            // Legacy / trace-mode host bridge.  Falls back to the
+            // pre-round-8 download + rotate + upload pattern.
+            //
+            // QVAC-18605 follow-up — post-fix V graph layout:
+            // `ve_attn0_v` is now `ggml_cont(ggml_transpose(...))`
+            // of the matmul output (ne=[HD, text_len] time-major-
+            // flat memory).  `tensor_raw_f32` downloads the bytes
+            // directly in the layout scalar `apply_rope` /
+            // `flash_attention_qkv` host references expect
+            // (`v[t*HD + c]`).  Using `tensor_to_time_channel`
+            // here would mis-interpret the swapped ne.  See the
+            // header doc on `apply_rope_to_packed_qk` in
+            // `supertonic_internal.h`.  Q/K matmul outputs are
+            // UNCHANGED (still ne=[L, HD] channel-major-flat) so
+            // `tensor_to_time_channel` is the right call there.
+            v_out = tensor_raw_f32(v_gpu_attn0);
+            if (include_ggml_trace) {
+                q_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_q"));
+                k_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_k"));
+                PUSH_GGML_TRACE({"ve_attn0_q", {L, 256}, q_out});
+                PUSH_GGML_TRACE({"ve_attn0_k", {text_len, 256}, k_out});
+                PUSH_GGML_TRACE({"ve_attn0_v", {text_len, 256}, v_out});
+            }
+            // F23 — when the front-block graph has the in-graph
+            // RoPE wired in (model carries `vector_rope_theta`),
+            // feed `run_text_attention_cache` the already-rotated
+            // Q/K from the `_rope` graph outputs.  Host
+            // `apply_rope(theta, …)` is fully eliminated on the
+            // in-graph-rope path.
+            if (front_in_graph_rope) {
+                // QVAC-18605 follow-up — post-fix layout contract:
+                // `apply_rope_to_packed_qk` produces ne=[HD, L]
+                // with time-major-flat memory (`data[c + t*HD]`),
+                // which is bit-identical to scalar `apply_rope`'s
+                // output buffer.  `tensor_raw_f32` downloads those
+                // bytes directly — no transpose needed (and using
+                // `tensor_to_time_channel` here would mis-interpret
+                // the ne shape and produce the transpose of the
+                // transpose, silently feeding wrong-orientation
+                // Q/K into the attention).  See the header doc on
+                // `apply_rope_to_packed_qk` in
+                // `supertonic_internal.h`.
+                q_rotated = tensor_raw_f32(q_rope_gpu_attn0);
+                k_rotated = tensor_raw_f32(k_rope_gpu_attn0);
+            } else {
+                // Legacy GGUF path: rotate host-side.
+                if (q_out.empty()) {
+                    q_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_q"));
+                    k_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_k"));
+                }
+                const float * theta = model.vector_rope_theta.data();
+                apply_rope(theta, q_out, L, 4, 64);
+                apply_rope(theta, k_out, text_len, 4, 64);
+                q_rotated = std::move(q_out);
+                k_rotated = std::move(k_out);
+            }
+            attn_out_ggml = run_text_attention_cache(att0_cache, model, q_rotated, k_rotated, v_out,
+                L, text_len, 4, 64,
+                "vector_estimator:onnx::MatMul_3110",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.out_fc.linear.bias",
+                current_step, "attn0_flash",
+                include_ggml_trace ? &att0_ctx_trace : nullptr);
+        }
+        // Trace pushes — `q_rotated` / `k_rotated` are populated
+        // by the legacy branch above; empty on the GPU-bridge
+        // path (in which case `PUSH_GGML_TRACE` is a no-op
+        // because `include_ggml_trace == false`).  Matches the
+        // g1/g2/g3 trace-push pattern at lines 2955-2956.
         PUSH_GGML_TRACE({"ve_attn0_q_rope", {L, 256}, q_rotated});
         PUSH_GGML_TRACE({"ve_attn0_k_rope", {text_len, 256}, k_rotated});
         PUSH_GGML_TRACE({"ve_attn0_ctx", {L, 256}, att0_ctx_trace});
@@ -3251,17 +3578,37 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             "attn0_residual_style_qkv",
             include_ggml_trace ? &ggml_trace : nullptr);
         std::vector<float> post_ggml = std::move(style0_res_qkv.post);
-        std::vector<float> sq_out = std::move(style0_res_qkv.sq);
-        std::vector<float> sk_out = std::move(style0_res_qkv.sk);
-        std::vector<float> sv_out = std::move(style0_res_qkv.sv);
+        // QVAC-18605 round 9 — style flash-attn GPU bridge for
+        // style0 (front-block style residual).  Same dispatch
+        // pattern as the round-8 front-block attn0 bridge:
+        // production path uses `run_text_attention_cache_gpu`
+        // with the GPU handles from the res-style-qkv cache,
+        // trace mode falls back to the legacy host bridge so
+        // the trace harness still gets the host vectors.
         thread_local vector_text_attention_cache style0_attn_cache;
         std::vector<float> style0_ctx_trace;
-        std::vector<float> style_out_ggml = run_text_attention_cache(style0_attn_cache, model, sq_out, sk_out, sv_out,
-            L, 50, 2, 128,
-            "vector_estimator:onnx::MatMul_3119",
-            "vector_estimator:tts.ttl.vector_field.main_blocks.5.attention.out_fc.linear.bias",
-            current_step, "style0_flash",
-            include_ggml_trace ? &style0_ctx_trace : nullptr);
+        std::vector<float> style_out_ggml;
+        const bool style0_use_gpu_bridge = !include_ggml_trace
+            && style0_res_qkv.sq_gpu && style0_res_qkv.sk_gpu && style0_res_qkv.sv_gpu;
+        if (style0_use_gpu_bridge) {
+            style_out_ggml = run_text_attention_cache_gpu(style0_attn_cache, model,
+                style0_res_qkv.sq_gpu, style0_res_qkv.sk_gpu, style0_res_qkv.sv_gpu,
+                L, 50, 2, 128,
+                "vector_estimator:onnx::MatMul_3119",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.5.attention.out_fc.linear.bias",
+                current_step, "style0_flash",
+                /*ctx_trace=*/ nullptr);
+        } else {
+            std::vector<float> sq_out = std::move(style0_res_qkv.sq);
+            std::vector<float> sk_out = std::move(style0_res_qkv.sk);
+            std::vector<float> sv_out = std::move(style0_res_qkv.sv);
+            style_out_ggml = run_text_attention_cache(style0_attn_cache, model, sq_out, sk_out, sv_out,
+                L, 50, 2, 128,
+                "vector_estimator:onnx::MatMul_3119",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.5.attention.out_fc.linear.bias",
+                current_step, "style0_flash",
+                include_ggml_trace ? &style0_ctx_trace : nullptr);
+        }
         PUSH_GGML_TRACE({"ve_style0_ctx", {L, 256}, style0_ctx_trace});
         PUSH_GGML_TRACE({"ve_style0_out", {L, C}, style_out_ggml});
         // F8: cached style-residual graph (lhs + out → add → LN).
@@ -3347,17 +3694,31 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             "g1_attn_residual_style_qkv",
             include_ggml_trace ? &ggml_trace : nullptr);
         std::vector<float> g1_block10 = std::move(g1_res_qkv.post);
-        std::vector<float> g1sq_out = std::move(g1_res_qkv.sq);
-        std::vector<float> g1sk_out = std::move(g1_res_qkv.sk);
-        std::vector<float> g1sv_out = std::move(g1_res_qkv.sv);
+        // QVAC-18605 round 9 — style flash-attn GPU bridge for g1.
         thread_local vector_text_attention_cache g1_style_attn_cache;
         std::vector<float> g1_style_ctx_trace;
-        std::vector<float> g1_style_out = run_text_attention_cache(g1_style_attn_cache, model, g1sq_out, g1sk_out, g1sv_out,
-            L, 50, 2, 128,
-            "vector_estimator:onnx::MatMul_3164",
-            "vector_estimator:tts.ttl.vector_field.main_blocks.11.attention.out_fc.linear.bias",
-            current_step, "g1_style_flash",
-            include_ggml_trace ? &g1_style_ctx_trace : nullptr);
+        std::vector<float> g1_style_out;
+        const bool g1_style_use_gpu_bridge = !include_ggml_trace
+            && g1_res_qkv.sq_gpu && g1_res_qkv.sk_gpu && g1_res_qkv.sv_gpu;
+        if (g1_style_use_gpu_bridge) {
+            g1_style_out = run_text_attention_cache_gpu(g1_style_attn_cache, model,
+                g1_res_qkv.sq_gpu, g1_res_qkv.sk_gpu, g1_res_qkv.sv_gpu,
+                L, 50, 2, 128,
+                "vector_estimator:onnx::MatMul_3164",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.11.attention.out_fc.linear.bias",
+                current_step, "g1_style_flash",
+                /*ctx_trace=*/ nullptr);
+        } else {
+            std::vector<float> g1sq_out = std::move(g1_res_qkv.sq);
+            std::vector<float> g1sk_out = std::move(g1_res_qkv.sk);
+            std::vector<float> g1sv_out = std::move(g1_res_qkv.sv);
+            g1_style_out = run_text_attention_cache(g1_style_attn_cache, model, g1sq_out, g1sk_out, g1sv_out,
+                L, 50, 2, 128,
+                "vector_estimator:onnx::MatMul_3164",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.11.attention.out_fc.linear.bias",
+                current_step, "g1_style_flash",
+                include_ggml_trace ? &g1_style_ctx_trace : nullptr);
+        }
         PUSH_GGML_TRACE({"ve_g1_style_ctx", {L, 256}, g1_style_ctx_trace});
         PUSH_GGML_TRACE({"ve_g1_style_out", {L, C}, g1_style_out});
 
@@ -3432,17 +3793,31 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             "g2_attn_residual_style_qkv",
             include_ggml_trace ? &ggml_trace : nullptr);
         std::vector<float> g2_block16 = std::move(g2_res_qkv.post);
-        std::vector<float> g2sq_out = std::move(g2_res_qkv.sq);
-        std::vector<float> g2sk_out = std::move(g2_res_qkv.sk);
-        std::vector<float> g2sv_out = std::move(g2_res_qkv.sv);
+        // QVAC-18605 round 9 — style flash-attn GPU bridge for g2.
         thread_local vector_text_attention_cache g2_style_attn_cache;
         std::vector<float> g2_style_ctx_trace;
-        std::vector<float> g2_style_out = run_text_attention_cache(g2_style_attn_cache, model, g2sq_out, g2sk_out, g2sv_out,
-            L, 50, 2, 128,
-            "vector_estimator:onnx::MatMul_3209",
-            "vector_estimator:tts.ttl.vector_field.main_blocks.17.attention.out_fc.linear.bias",
-            current_step, "g2_style_flash",
-            include_ggml_trace ? &g2_style_ctx_trace : nullptr);
+        std::vector<float> g2_style_out;
+        const bool g2_style_use_gpu_bridge = !include_ggml_trace
+            && g2_res_qkv.sq_gpu && g2_res_qkv.sk_gpu && g2_res_qkv.sv_gpu;
+        if (g2_style_use_gpu_bridge) {
+            g2_style_out = run_text_attention_cache_gpu(g2_style_attn_cache, model,
+                g2_res_qkv.sq_gpu, g2_res_qkv.sk_gpu, g2_res_qkv.sv_gpu,
+                L, 50, 2, 128,
+                "vector_estimator:onnx::MatMul_3209",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.17.attention.out_fc.linear.bias",
+                current_step, "g2_style_flash",
+                /*ctx_trace=*/ nullptr);
+        } else {
+            std::vector<float> g2sq_out = std::move(g2_res_qkv.sq);
+            std::vector<float> g2sk_out = std::move(g2_res_qkv.sk);
+            std::vector<float> g2sv_out = std::move(g2_res_qkv.sv);
+            g2_style_out = run_text_attention_cache(g2_style_attn_cache, model, g2sq_out, g2sk_out, g2sv_out,
+                L, 50, 2, 128,
+                "vector_estimator:onnx::MatMul_3209",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.17.attention.out_fc.linear.bias",
+                current_step, "g2_style_flash",
+                include_ggml_trace ? &g2_style_ctx_trace : nullptr);
+        }
         PUSH_GGML_TRACE({"ve_g2_style_ctx", {L, 256}, g2_style_ctx_trace});
         PUSH_GGML_TRACE({"ve_g2_style_out", {L, C}, g2_style_out});
 
@@ -3517,17 +3892,31 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             "g3_attn_residual_style_qkv",
             include_ggml_trace ? &ggml_trace : nullptr);
         std::vector<float> g3_block22 = std::move(g3_res_qkv.post);
-        std::vector<float> g3sq_out = std::move(g3_res_qkv.sq);
-        std::vector<float> g3sk_out = std::move(g3_res_qkv.sk);
-        std::vector<float> g3sv_out = std::move(g3_res_qkv.sv);
+        // QVAC-18605 round 9 — style flash-attn GPU bridge for g3.
         thread_local vector_text_attention_cache g3_style_attn_cache;
         std::vector<float> g3_style_ctx_trace;
-        std::vector<float> g3_style_out = run_text_attention_cache(g3_style_attn_cache, model, g3sq_out, g3sk_out, g3sv_out,
-            L, 50, 2, 128,
-            "vector_estimator:onnx::MatMul_3254",
-            "vector_estimator:tts.ttl.vector_field.main_blocks.23.attention.out_fc.linear.bias",
-            current_step, "g3_style_flash",
-            include_ggml_trace ? &g3_style_ctx_trace : nullptr);
+        std::vector<float> g3_style_out;
+        const bool g3_style_use_gpu_bridge = !include_ggml_trace
+            && g3_res_qkv.sq_gpu && g3_res_qkv.sk_gpu && g3_res_qkv.sv_gpu;
+        if (g3_style_use_gpu_bridge) {
+            g3_style_out = run_text_attention_cache_gpu(g3_style_attn_cache, model,
+                g3_res_qkv.sq_gpu, g3_res_qkv.sk_gpu, g3_res_qkv.sv_gpu,
+                L, 50, 2, 128,
+                "vector_estimator:onnx::MatMul_3254",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.23.attention.out_fc.linear.bias",
+                current_step, "g3_style_flash",
+                /*ctx_trace=*/ nullptr);
+        } else {
+            std::vector<float> g3sq_out = std::move(g3_res_qkv.sq);
+            std::vector<float> g3sk_out = std::move(g3_res_qkv.sk);
+            std::vector<float> g3sv_out = std::move(g3_res_qkv.sv);
+            g3_style_out = run_text_attention_cache(g3_style_attn_cache, model, g3sq_out, g3sk_out, g3sv_out,
+                L, 50, 2, 128,
+                "vector_estimator:onnx::MatMul_3254",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.23.attention.out_fc.linear.bias",
+                current_step, "g3_style_flash",
+                include_ggml_trace ? &g3_style_ctx_trace : nullptr);
+        }
         PUSH_GGML_TRACE({"ve_g3_style_ctx", {L, 256}, g3_style_ctx_trace});
         PUSH_GGML_TRACE({"ve_g3_style_out", {L, C}, g3_style_out});
 
@@ -4319,8 +4708,8 @@ bool supertonic_vector_loop_one_graph_ggml(const supertonic_model & model,
             cache.t_emb_in.resize(total_steps, nullptr);
             for (int s = 0; s < total_steps; ++s) {
                 cache.t_emb_in[s] = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_F32, 64);
-                const std::string name = "loop_temb_" + std::to_string(s);
-                ggml_set_name(cache.t_emb_in[s], name.c_str());
+                const std::string name_te = "loop_temb_" + std::to_string(s);
+                ggml_set_name(cache.t_emb_in[s], name_te.c_str());
                 ggml_set_input(cache.t_emb_in[s]);
             }
 

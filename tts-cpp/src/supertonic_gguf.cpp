@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <unordered_map>
 #include <unordered_set>
 #include <stdexcept>
 #include <thread>
@@ -229,7 +230,7 @@ void convert_supertonic_tensor_data(const ggml_tensor * src,
     dst_tr->from_float(f32_pivot.data(), out_buf.data(), n);
 }
 
-ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose) {
+ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose, int vulkan_device = 0) {
 #ifdef GGML_USE_CUDA
     if (n_gpu_layers > 0) {
         ggml_backend_t b = ggml_backend_cuda_init(0);
@@ -244,12 +245,129 @@ ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose) {
 #endif
 #ifdef GGML_USE_VULKAN
     if (n_gpu_layers > 0) {
-        ggml_backend_t b = ggml_backend_vk_init(0);
-        if (b) {
-            if (verbose) fprintf(stderr, "supertonic: using Vulkan backend\n");
-            return b;
+        // QVAC-18605 round 3 — Vulkan device selection, robust init
+        // with multi-device auto-pick.
+        //
+        // Range-check the requested index against
+        // `ggml_backend_vk_get_device_count()` so an out-of-range
+        // value (CLI typo / wrong-machine config) fails loud here
+        // rather than silently falling through to CPU and hiding
+        // the perf cliff under a "Vulkan was on, why is it slow?"
+        // mystery.  `vulkan_device == -1` triggers auto-pick: walk
+        // every visible adapter, query `ggml_backend_vk_get_device_memory`
+        // to read the free VRAM, and dispatch into the pure-logic
+        // `resolve_vulkan_device_index` helper which picks
+        // `argmax(free_vram)` (ties → lower index).  Negative values
+        // other than -1 are reserved for future policies and throw.
+        const int dev_count = ggml_backend_vk_get_device_count();
+        if (dev_count <= 0) {
+            // No Vulkan adapter visible — try the next backend in the
+            // priority list (OpenCL below, then CPU).  This branch
+            // matters on machines that ship libvulkan + the loader
+            // but no working ICD (e.g. headless CI without llvmpipe).
+            if (verbose) {
+                fprintf(stderr, "supertonic: GGML_USE_VULKAN=1 but ggml_backend_vk_get_device_count()=0; falling through\n");
+            }
+        } else {
+            std::vector<size_t> free_vram_per_device;
+            free_vram_per_device.reserve((size_t) dev_count);
+            // QVAC-18605 round 12 — collect per-device UMA / iGPU
+            // flags via the public `ggml_backend_dev_get_props()`
+            // API.  Routed through the Vulkan backend registry
+            // (`ggml_backend_vk_reg()`) so the order matches
+            // `ggml_backend_vk_get_device_count()` 1:1.  On a hybrid
+            // discrete + iGPU machine this turns the round-3 argmax
+            // into "argmax over the discrete subset" — the iGPU's
+            // UMA-reported free RAM no longer dwarfs the discrete's
+            // 32 GB and silently steals the auto-pick.
+            //
+            // Defensive: if the reg / dev_get_props pair fails for
+            // any reason (e.g. a future ggml-vulkan refactor that
+            // changes the reg's enumeration count), fall through
+            // to an empty UMA list — `resolve_vulkan_device_index`
+            // then degrades to the round-3 policy (loud per-device
+            // dump still tells the operator what was visible).
+            std::vector<bool> is_uma_per_device;
+            ggml_backend_reg_t vk_reg = ggml_backend_vk_reg();
+            const size_t reg_dev_count = vk_reg ? ggml_backend_reg_dev_count(vk_reg) : 0;
+            if (vk_reg && (int) reg_dev_count == dev_count) {
+                is_uma_per_device.reserve((size_t) dev_count);
+                for (int i = 0; i < dev_count; ++i) {
+                    ggml_backend_dev_t dev = ggml_backend_reg_dev_get(vk_reg, (size_t) i);
+                    struct ggml_backend_dev_props props = {};
+                    if (dev) ggml_backend_dev_get_props(dev, &props);
+                    const bool uma =
+                        props.type == GGML_BACKEND_DEVICE_TYPE_IGPU ||
+                        props.type == GGML_BACKEND_DEVICE_TYPE_CPU ||
+                        props.type == GGML_BACKEND_DEVICE_TYPE_ACCEL;
+                    is_uma_per_device.push_back(uma);
+                }
+            }
+            for (int i = 0; i < dev_count; ++i) {
+                size_t free = 0, total = 0;
+                ggml_backend_vk_get_device_memory(i, &free, &total);
+                free_vram_per_device.push_back(free);
+                if (verbose && vulkan_device == -1) {
+                    char desc[256] = {0};
+                    ggml_backend_vk_get_device_description(i, desc, sizeof(desc) - 1);
+                    const char * uma_tag = "";
+                    if (!is_uma_per_device.empty() && is_uma_per_device[(size_t) i]) {
+                        uma_tag = " [UMA — biased against on hybrid machines]";
+                    }
+                    fprintf(stderr,
+                            "supertonic: vulkan device %d: %s — free %.0f MB / total %.0f MB%s\n",
+                            i,
+                            desc[0] ? desc : "unknown",
+                            (double) free  / (1024.0 * 1024.0),
+                            (double) total / (1024.0 * 1024.0),
+                            uma_tag);
+                }
+            }
+            // Throws on invalid input; let it propagate so the CLI
+            // surfaces the message verbatim.
+            const int idx = resolve_vulkan_device_index(vulkan_device,
+                                                        free_vram_per_device,
+                                                        is_uma_per_device);
+            ggml_backend_t b = ggml_backend_vk_init((size_t) idx);
+            if (b) {
+                if (verbose) {
+                    char desc[256] = {0};
+                    ggml_backend_vk_get_device_description(idx, desc, sizeof(desc) - 1);
+                    if (vulkan_device == -1) {
+                        // Different message depending on whether the
+                        // UMA bias was applied (i.e., at least one
+                        // discrete device was visible).
+                        bool any_discrete = false;
+                        if (!is_uma_per_device.empty()) {
+                            for (bool u : is_uma_per_device) {
+                                if (!u) { any_discrete = true; break; }
+                            }
+                        }
+                        if (any_discrete) {
+                            fprintf(stderr,
+                                    "supertonic: auto-picked Vulkan device %d (%s) — most free VRAM among %d discrete adapter(s) (round-12 UMA bias)\n",
+                                    idx, desc[0] ? desc : "unknown",
+                                    (int) std::count(is_uma_per_device.begin(),
+                                                     is_uma_per_device.end(), false));
+                        } else {
+                            fprintf(stderr,
+                                    "supertonic: auto-picked Vulkan device %d (%s) — most free VRAM of %d adapter(s)\n",
+                                    idx, desc[0] ? desc : "unknown", dev_count);
+                        }
+                    } else {
+                        fprintf(stderr, "supertonic: using Vulkan backend (device %d: %s)\n",
+                                idx, desc[0] ? desc : "unknown");
+                    }
+                }
+                return b;
+            }
+            if (verbose) {
+                fprintf(stderr, "supertonic: ggml_backend_vk_init(%d) failed; falling through\n", idx);
+            }
         }
     }
+#else
+    (void) vulkan_device;
 #endif
 #ifdef GGML_USE_OPENCL
     if (n_gpu_layers > 0) {
@@ -266,6 +384,460 @@ ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose) {
     return b;
 }
 
+// QVAC-18605 — backend capability probe for `GGML_OP_LEAKY_RELU`.
+//
+// Builds a throwaway 1-element F32 tensor + a LEAKY_RELU node (no
+// alloc, no compute) inside a tiny `ggml_init` scratch context, then
+// asks the backend whether it would accept the op.  The synthetic
+// node is the same shape Supertonic actually emits (axis-0 contig F32),
+// so a `true` answer guarantees the real graphs in the vocoder will
+// dispatch the fused builtin.
+//
+// Why dynamic instead of a hard-coded backend table?  The set of
+// backends shipping `LEAKY_RELU` shifts with chatterbox-ggml patch
+// state (OpenCL gets it via a vendored patch but plain upstream
+// doesn't).  The dynamic probe keeps the right answer when the patch
+// is added or removed without touching this TU.
+//
+// Costs nothing on the hot path — runs once per `load_supertonic_gguf`
+// call.
+bool backend_supports_native_leaky_relu(ggml_backend_t backend) {
+    if (!backend) return false;
+    ggml_init_params probe_params = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * 8,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context * probe_ctx = ggml_init(probe_params);
+    if (!probe_ctx) return false;
+    bool ok = false;
+    try {
+        ggml_tensor * x  = ggml_new_tensor_1d(probe_ctx, GGML_TYPE_F32, 16);
+        ggml_tensor * op = ggml_leaky_relu(probe_ctx, x, 0.1f, /*inplace=*/false);
+        ok = (op != nullptr) && ggml_backend_supports_op(backend, op);
+    } catch (...) {
+        ok = false;
+    }
+    ggml_free(probe_ctx);
+    return ok;
+}
+
+// QVAC-18605 — runtime check: backend is `ggml-vulkan`.
+//
+// Wraps `ggml_backend_is_vk` behind a `#ifdef GGML_USE_VULKAN` guard so
+// the flag-population code in `load_supertonic_gguf` works on both
+// Vulkan-enabled and Vulkan-disabled builds without `#ifdef` clutter
+// at every consumer site.  Returns `false` on Vulkan-disabled builds
+// so the dispatch helpers behave as if the backend were not Vulkan
+// (which is correct — the backend can't be Vulkan if Vulkan isn't in
+// the build).
+bool backend_is_vulkan(ggml_backend_t backend) {
+#ifdef GGML_USE_VULKAN
+    return backend && ggml_backend_is_vk(backend);
+#else
+    (void) backend;
+    return false;
+#endif
+}
+
+// QVAC-18605 — internal-named alias for the public probe symbol.
+// The anon-namespace function name keeps the local TU references
+// short; the public-symbol forwarder below resolves the
+// `supertonic_backend_supports_f16_kv_flash_attn` declaration in
+// `supertonic_internal.h`.
+//
+// QVAC-18605 — backend capability probe for F16-K/V `FLASH_ATTN_EXT`.
+//
+// The OpenCL bring-up's auto-enable policy (`!backend_is_cpu`) blindly
+// turns on F16 K/V dispatch on any non-CPU backend.  That works for
+// OpenCL (the chatterbox patch unconditionally accepts the op) and
+// for Vulkan when the head dim is a multiple of 8 (Supertonic's
+// head_dim=64 satisfies that), but a future backend / driver / shape
+// combo could reject the op at graph time — and a graph-build failure
+// at the first synth call is much harder to triage than a load-time
+// auto-disable + a clear log line.
+//
+// The probe builds a synthetic `ggml_flash_attn_ext` node with the
+// shape Supertonic actually emits — Q=[head_dim, q_len, n_heads] F32,
+// K/V=[head_dim, kv_len, n_heads] F16, no mask — matching the live
+// call site in `build_text_attention_cache` (supertonic_vector_estimator.cpp).
+// q_len is set to a multiple of n_heads (= 16) so the live `q_len=70`
+// (not divisible by 4) doesn't tickle a probe-only `ggml_can_mul_mat`
+// rejection; the GPU dispatch supports both the divisible and non-
+// divisible cases at runtime, so probe-shape divisibility is purely
+// a probe-API concern.
+//
+// On a `false` answer the auto-policy refuses to enable F16 attention
+// (the F32 path stays correct, just slower).  Manual override via
+// `--f16-attn 1` still forces the F16 path for benchmarking; this
+// probe only gates the *auto* policy.
+//
+// Cost: one ggml_init + ~6 tensor allocations + one supports_op call
+// at load time.  Zero hot-path cost — and the result is now memoised
+// per `ggml_backend_t` handle by `cached_backend_supports_*` below so
+// the engine + bench + load_supertonic_gguf trio doesn't re-run the
+// probe three times for the same backend.
+bool backend_supports_f16_kv_flash_attn_uncached(ggml_backend_t backend) {
+    if (!backend) return false;
+    ggml_init_params probe_params = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * 16,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context * probe_ctx = ggml_init(probe_params);
+    if (!probe_ctx) return false;
+    bool ok = false;
+    try {
+        constexpr int head_dim = 64;
+        constexpr int n_heads  = 4;
+        // q_len chosen as `n_heads * 4` so `ggml_can_mul_mat(k, q)`'s
+        // probe-only `q.ne[2] % k.ne[2] == 0` constraint is satisfied
+        // (n_heads % n_heads = 0 is the live-call invariant; here we
+        // use a Q with ne[2] = n_heads, ne[1] = q_len, so the same
+        // shape contract holds).
+        constexpr int q_len    = 16;
+        constexpr int kv_len   = 16;
+        // Live shape from `build_text_attention_cache`:
+        //   q_in: [head_dim, q_len, n_heads]  (F32)
+        //   k_in: [head_dim, kv_len, n_heads] (F16 after `ggml_cpy`)
+        //   v_in: [head_dim, kv_len, n_heads] (F16 after `ggml_cpy`)
+        ggml_tensor * q  = ggml_new_tensor_3d(probe_ctx, GGML_TYPE_F32, head_dim, q_len, n_heads);
+        ggml_tensor * k  = ggml_new_tensor_3d(probe_ctx, GGML_TYPE_F16, head_dim, kv_len, n_heads);
+        ggml_tensor * v  = ggml_new_tensor_3d(probe_ctx, GGML_TYPE_F16, head_dim, kv_len, n_heads);
+        ggml_tensor * op = ggml_flash_attn_ext(probe_ctx, q, k, v, nullptr,
+                                               1.0f / (float) head_dim, 0.0f, 0.0f);
+        ok = (op != nullptr) && ggml_backend_supports_op(backend, op);
+    } catch (...) {
+        ok = false;
+    }
+    ggml_free(probe_ctx);
+    return ok;
+}
+
+// QVAC-18605 follow-up — backend capability probe for the Q8_0
+// K/V `FLASH_ATTN_EXT` variant.
+//
+// Vulkan's `GGML_OP_FLASH_ATTN_EXT` `supports_op` advertises Q8_0
+// (and Q4_0) K/V types in the scalar and coopmat2 paths
+// (`ggml-vulkan.cpp:15257`).  Switching K/V from F16 to Q8_0
+// halves the upload bandwidth into the per-step attention cache
+// (50 KB → 25 KB per K and V on Supertonic's hot shape),
+// equivalently ~1 MB / synth on the default 5-step × 4-site
+// schedule, in exchange for a small (~0.5 %) relative-error drift
+// vs F16 K/V on the attention output.  Worth the trade on memory-
+// bandwidth-bound mobile GPUs (Adreno, Mali) once measured on a
+// real device.
+//
+// This PR adds the probe + caches the result, but does NOT yet
+// wire `model.use_q8_kv_attn` into the live dispatch site — Q8_0
+// K/V drift hasn't been measured against the existing F16 K/V
+// parity harness on a real Vulkan adapter.  The probe primes the
+// capability cache so a follow-up patch can flip the dispatch
+// behind a `--kv-attn-type q8_0` opt-in without re-running the
+// `supports_op` query.  Tracked in PROGRESS_SUPERTONIC.md
+// "Deferred work".
+bool backend_supports_q8_0_kv_flash_attn_uncached(ggml_backend_t backend) {
+    if (!backend) return false;
+    ggml_init_params probe_params = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * 16,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context * probe_ctx = ggml_init(probe_params);
+    if (!probe_ctx) return false;
+    bool ok = false;
+    try {
+        // Same shape as the F16-K/V probe; only K/V dtype differs.
+        // Q8_0 is a 32-element-per-block quantisation, so kv_len
+        // must be a multiple of 32 to satisfy the live
+        // `ggml_can_repeat` / row-stride invariants the GPU
+        // dispatch requires.  The live call site has kv_len = 50;
+        // we pick 32 here as the smallest multiple-of-Q8_0-block
+        // that exercises the same `supports_op` switch.
+        constexpr int head_dim = 64;
+        constexpr int n_heads  = 4;
+        constexpr int q_len    = 16;
+        constexpr int kv_len   = 32;
+        ggml_tensor * q  = ggml_new_tensor_3d(probe_ctx, GGML_TYPE_F32,  head_dim, q_len,  n_heads);
+        ggml_tensor * k  = ggml_new_tensor_3d(probe_ctx, GGML_TYPE_Q8_0, head_dim, kv_len, n_heads);
+        ggml_tensor * v  = ggml_new_tensor_3d(probe_ctx, GGML_TYPE_Q8_0, head_dim, kv_len, n_heads);
+        ggml_tensor * op = ggml_flash_attn_ext(probe_ctx, q, k, v, nullptr,
+                                               1.0f / (float) head_dim, 0.0f, 0.0f);
+        ok = (op != nullptr) && ggml_backend_supports_op(backend, op);
+    } catch (...) {
+        ok = false;
+    }
+    ggml_free(probe_ctx);
+    return ok;
+}
+
+// QVAC-18605 round 3 — backend capability probe for Vulkan's
+// `ggml_backend_vk_host_buffer_type()`.
+//
+// Vulkan exposes a host-visible, device-coherent buffer type
+// that lets the CPU fill an input tensor without going through
+// ggml-vulkan's internal staging buffer.  Wiring the actual
+// upload path through that buffer is a per-engine refactor
+// (input scratchpad allocator separate from the model gallocr);
+// this round only adds the probe so the capability cache is
+// primed for that follow-up.  The bench output surfaces the
+// flag so operators can confirm the host-buffer-type path is
+// available on their adapter before flipping the (future)
+// `--vulkan-pinned-uploads` opt-in.
+//
+// Probe is trivial: succeeds iff the backend is Vulkan AND
+// `ggml_backend_vk_host_buffer_type()` returns non-null.  On a
+// Vulkan-disabled build the entire branch compiles out to
+// `return false`.
+bool backend_supports_pinned_host_buffer_uncached(ggml_backend_t backend) {
+    if (!backend) return false;
+#ifdef GGML_USE_VULKAN
+    if (!ggml_backend_is_vk(backend)) return false;
+    return ggml_backend_vk_host_buffer_type() != nullptr;
+#else
+    return false;
+#endif
+}
+
+// QVAC-18605 round 3 — backend capability probe for the BF16 K/V
+// `FLASH_ATTN_EXT` variant.
+//
+// Vulkan's `GGML_OP_FLASH_ATTN_EXT` `supports_op` advertises
+// BF16 K/V via the coopmat2-only path
+// (`ggml-vulkan.cpp:GGML_OP_FLASH_ATTN_EXT` case branch around
+// line 15257).  BF16 has the same per-element size as F16 (2
+// bytes), so the upload bandwidth is identical, but BF16's
+// wider exponent range (8 bits vs. F16's 5) avoids the
+// occasional underflow on small attention scores that drives
+// F16's ~0.2 % tolerance widening on the parity harness.
+// On hardware with `cooperative_matrix2` (NVIDIA Ampere+, AMD
+// RDNA3+) BF16 K/V is also faster than F16 K/V because the
+// coopmat2 BF16 multiply-accumulate ops are dispatched at
+// hardware-tensor-core throughput.
+//
+// Like the Q8_0 K/V probe, this round adds the probe + caches
+// the result as a forward-compat capability; the live dispatch
+// site isn't yet wired (a follow-up will gate `--kv-attn-type
+// bf16` on the probe so the dispatch flips when the cache says
+// the hardware accepts the op).
+//
+// Probe shape mirrors the F16-K/V probe with the K/V dtype set
+// to `GGML_TYPE_BF16` — same `kv_len = 16` (BF16 row stride is
+// `head_dim * 2` bytes, identical to F16).
+bool backend_supports_bf16_kv_flash_attn_uncached(ggml_backend_t backend) {
+    if (!backend) return false;
+    ggml_init_params probe_params = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * 16,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context * probe_ctx = ggml_init(probe_params);
+    if (!probe_ctx) return false;
+    bool ok = false;
+    try {
+        constexpr int head_dim = 64;
+        constexpr int n_heads  = 4;
+        constexpr int q_len    = 16;
+        constexpr int kv_len   = 16;
+        ggml_tensor * q  = ggml_new_tensor_3d(probe_ctx, GGML_TYPE_F32,  head_dim, q_len,  n_heads);
+        ggml_tensor * k  = ggml_new_tensor_3d(probe_ctx, GGML_TYPE_BF16, head_dim, kv_len, n_heads);
+        ggml_tensor * v  = ggml_new_tensor_3d(probe_ctx, GGML_TYPE_BF16, head_dim, kv_len, n_heads);
+        ggml_tensor * op = ggml_flash_attn_ext(probe_ctx, q, k, v, nullptr,
+                                               1.0f / (float) head_dim, 0.0f, 0.0f);
+        ok = (op != nullptr) && ggml_backend_supports_op(backend, op);
+    } catch (...) {
+        ok = false;
+    }
+    ggml_free(probe_ctx);
+    return ok;
+}
+
+// QVAC-18605 follow-up — backend capability probe for the hot
+// F16-weight `mul_mat` shape Supertonic dispatches every step.
+//
+// Mirror of `backend_supports_f16_kv_flash_attn_uncached`: the
+// `use_f16_weights` auto-policy used to flip on `!backend_is_cpu`
+// blindly, with no check that the resolved backend would accept the
+// resulting `mul_mat(F16 weight, F32 activation) → F32` graph node
+// for the shapes the audit identified as hot.  Every shipping GPU
+// backend (CUDA / Metal / Vulkan / OpenCL) does support this combo,
+// but a future debug-shim / partial-port backend that wires up
+// `mul_mat` for F32-only would crash at first synth call when
+// `f16_weights` was auto-enabled — exactly the failure mode the
+// F16-K/V probe was added to prevent.
+//
+// Probe shape mirrors the vector-estimator attention W_query
+// matmul (`[head_dim*n_heads = 256, in_dim = 256]` weight, F16
+// storage; `[256, q_len = 16]` activation, F32; output F32),
+// which is the most common F16-weight matmul site in the
+// production graph (32 such matmuls per synth, 5-step schedule).
+//
+// Cost: one ggml_init + 3 tensor allocations + one supports_op
+// call at load time.  Zero hot-path cost — memoised per
+// `ggml_backend_t` by `cached_backend_supports_*` below.
+bool backend_supports_f16_mul_mat_uncached(ggml_backend_t backend) {
+    if (!backend) return false;
+    ggml_init_params probe_params = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * 8,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context * probe_ctx = ggml_init(probe_params);
+    if (!probe_ctx) return false;
+    bool ok = false;
+    try {
+        // Live shape from the vector-estimator attention W_query /
+        // W_key / W_value matmul site.
+        constexpr int head_dim = 64;
+        constexpr int n_heads  = 4;
+        constexpr int width    = head_dim * n_heads;  // 256
+        constexpr int q_len    = 16;
+        ggml_tensor * w  = ggml_new_tensor_2d(probe_ctx, GGML_TYPE_F16, width, width);
+        ggml_tensor * x  = ggml_new_tensor_2d(probe_ctx, GGML_TYPE_F32, width, q_len);
+        ggml_tensor * op = ggml_mul_mat(probe_ctx, w, x);
+        ok = (op != nullptr) && ggml_backend_supports_op(backend, op);
+    } catch (...) {
+        ok = false;
+    }
+    ggml_free(probe_ctx);
+    return ok;
+}
+
+// QVAC-18605 follow-up — process-wide capability-probe cache.
+//
+// Three sites probe the same `ggml_backend_t` for the same op
+// support boolean: `load_supertonic_gguf` (LEAKY_RELU at backend
+// resolution time), `Engine::Engine` and `supertonic_bench`'s
+// `main` (F16-K/V flash-attn at auto-policy time).  Engine + bench
+// life-cycles also call `load_supertonic_gguf` themselves, so the
+// uncached probe set fires on average 2–3 times per backend per
+// process.  On a CPU backend each probe costs ~1 µs (ggml_init +
+// supports_op walks a small switch).  On Vulkan, `supports_op`
+// inspects the device's pipeline state and may force coopmat
+// shader specialisation lookup — measured ~50–200 µs on Adreno /
+// llvmpipe / RADV in microbenchmarks.  Negligible per-probe but
+// visible in cold-start traces, and the cache eliminates 100 % of
+// the redundancy.
+//
+// Cache shape: `unordered_map<ggml_backend_t, probe_results>`.
+// Key is the backend handle (stable for the backend's lifetime;
+// recycled keys after a backend is freed are technically possible
+// but the per-handle entry cost is ~24 bytes, so we don't bother
+// invalidating on free).  Test seam: `supertonic_clear_capability_cache`
+// drops every entry — used by the unit test to verify the cache
+// is hit on the second call.
+//
+// Thread-safety: guarded by a single std::mutex.  Hot path is
+// load-time only, never the per-synth path, so contention is
+// negligible.
+struct backend_capabilities {
+    bool native_leaky_relu;
+    bool f16_kv_flash_attn;
+    bool f16_mul_mat;
+    // QVAC-18605 follow-up — Q8_0 K/V flash-attn support.  Probed
+    // here as a forward-compat capability; the dispatch isn't yet
+    // wired (see `backend_supports_q8_0_kv_flash_attn_uncached`'s
+    // docstring + PROGRESS_SUPERTONIC.md "Deferred work").
+    bool q8_0_kv_flash_attn;
+    // QVAC-18605 round 3 — BF16 K/V flash-attn support.  Probed
+    // here as a forward-compat capability; the dispatch isn't yet
+    // wired (see `backend_supports_bf16_kv_flash_attn_uncached`'s
+    // docstring + PROGRESS_SUPERTONIC.md "Deferred work").  BF16
+    // K/V is the wider-exponent alternative to F16 K/V — mostly
+    // useful on Vulkan with cooperative_matrix2 support.
+    bool bf16_kv_flash_attn;
+    // QVAC-18605 round 3 — pinned-host-buffer-type availability.
+    // True iff the backend is Vulkan AND
+    // `ggml_backend_vk_host_buffer_type()` returns non-null.
+    // Forward-compat — primes the cache for a future per-engine
+    // input-scratchpad refactor that uses the host-pinned buffer
+    // to skip ggml-vulkan's internal staging-buffer hop on the
+    // per-step uploads.
+    bool pinned_host_buffer;
+};
+
+inline std::mutex & capability_cache_mu() {
+    static std::mutex m;
+    return m;
+}
+inline std::unordered_map<ggml_backend_t, backend_capabilities> & capability_cache() {
+    static std::unordered_map<ggml_backend_t, backend_capabilities> c;
+    return c;
+}
+// Probe-call counter for the regression test in
+// test_supertonic_capability_cache.cpp: each cached_backend_supports_*
+// helper bumps the counter only when it actually invokes the
+// uncached probe (i.e. on a cold cache).  The test asserts that
+// the counter advances by exactly one across N consecutive
+// cached_backend_supports_native_leaky_relu(b) calls on the same
+// backend.
+std::atomic<uint64_t> & capability_probe_call_counter() {
+    static std::atomic<uint64_t> n{0};
+    return n;
+}
+
+// Returns a `const &` to the cached entry.  The reference outlives
+// the `lock_guard` because:
+//   - `std::unordered_map` element references are NOT invalidated by
+//     `insert` / `emplace` even when the table rehashes; only
+//     iterators are.  (Standard guarantee, [unord.req.except].)
+//   - `find` / `emplace` are the only mutators on this cache from
+//     production code.  Production never `erase`s an entry and never
+//     calls `clear()` — the cache lives for the duration of the
+//     process.
+//
+// PR #18 reviewer (Omar) follow-up — UaF risk from test-only
+// `clear()`:
+// `supertonic_clear_capability_cache()` is a test seam exported for
+// `test-supertonic-capability-cache` to drop every cached entry and
+// re-exercise the cold-cache probe path.  If a test ever called
+// `cached_backend_capabilities(b)` (capturing the returned `const
+// &`) on thread A, then called `supertonic_clear_capability_cache()`
+// on thread B WHILE thread A was still dereferencing the reference,
+// the underlying element would be destroyed and thread A would
+// observe a use-after-free.
+//
+// Today this is a no-op risk: every test runs single-threaded, the
+// `clear` call is a single statement at the top of one test
+// (`test_capability_cache_drop_then_repopulate`), and no production
+// path reaches `clear`.  But the contract isn't enforced by the
+// type system, so spelling it out here:
+//   1. Production callers may hold the returned reference across
+//      arbitrary subsequent `cached_backend_capabilities` calls for
+//      DIFFERENT backends (insert-doesn't-invalidate-references).
+//   2. Production callers MUST NOT keep the reference alive across
+//      ANY `supertonic_clear_capability_cache` call (test code's
+//      responsibility).
+//   3. Multi-threaded callers must ensure no thread is dereferencing
+//      a returned reference while another thread calls `clear`
+//      (caller-side synchronisation; the lock here protects the
+//      map structure during insert/find, NOT element lifetime).
+//   4. If a future refactor adds a production-reachable `erase` or
+//      `clear` path, this function should either return-by-value or
+//      switch to `std::shared_ptr<const backend_capabilities>`
+//      ownership.
+const backend_capabilities & cached_backend_capabilities(ggml_backend_t backend) {
+    std::lock_guard<std::mutex> lk(capability_cache_mu());
+    auto & c = capability_cache();
+    auto it = c.find(backend);
+    if (it != c.end()) return it->second;
+    capability_probe_call_counter().fetch_add(1, std::memory_order_relaxed);
+    backend_capabilities caps;
+    caps.native_leaky_relu   = backend_supports_native_leaky_relu(backend);
+    caps.f16_kv_flash_attn   = backend_supports_f16_kv_flash_attn_uncached(backend);
+    caps.f16_mul_mat         = backend_supports_f16_mul_mat_uncached(backend);
+    caps.q8_0_kv_flash_attn  = backend_supports_q8_0_kv_flash_attn_uncached(backend);
+    caps.bf16_kv_flash_attn  = backend_supports_bf16_kv_flash_attn_uncached(backend);
+    caps.pinned_host_buffer  = backend_supports_pinned_host_buffer_uncached(backend);
+    return c.emplace(backend, caps).first->second;
+}
+
+// Backwards-compatible name kept for the in-tree callers that already
+// reference it; routes through the cache.
+bool backend_supports_f16_kv_flash_attn(ggml_backend_t backend) {
+    return cached_backend_capabilities(backend).f16_kv_flash_attn;
+}
+
 void set_env_if_unset(const char * name, const char * value) {
     if (std::getenv(name) != nullptr) return;
 #if defined(_WIN32)
@@ -273,6 +845,31 @@ void set_env_if_unset(const char * name, const char * value) {
 #else
     setenv(name, value, 0);
 #endif
+}
+
+// QVAC-18605 round 7 — pure-logic key-validator for the
+// `apply_vulkan_env_overrides` ALL-OR-NOTHING contract.  Returns
+// `true` (with `out_bad_key` populated) on the first key that
+// doesn't start with `GGML_VK_`, `false` on success.  Split out
+// so the public helper validates the entire map BEFORE touching
+// any env var.
+//
+// Out-param + bool return (instead of returning `std::string`
+// with empty-as-success) because an empty-string KEY is itself
+// invalid input — a pure-string return would conflate "no bad
+// key found" with "the bad key was the empty string".
+bool find_invalid_vulkan_env_key(const std::map<std::string, std::string> & overrides,
+                                 std::string & out_bad_key) {
+    static const std::string prefix = "GGML_VK_";
+    for (const auto & kv : overrides) {
+        const std::string & key = kv.first;
+        if (key.size() <= prefix.size() ||
+            key.compare(0, prefix.size(), prefix) != 0) {
+            out_bad_key = key;
+            return true;
+        }
+    }
+    return false;
 }
 
 void configure_supertonic_blas_threads_once() {
@@ -340,6 +937,399 @@ bool is_supertonic_alive(uint64_t generation_id) {
     if (generation_id == 0) return false;
     std::lock_guard<std::mutex> lk(supertonic_alive_mu());
     return supertonic_alive_ids().find(generation_id) != supertonic_alive_ids().end();
+}
+
+// QVAC-18605 — public forwarder for the F16-K/V flash-attn probe.
+// Lets engine.cpp / supertonic_bench.cpp gate the auto-policy on
+// the resolved backend's actual capability instead of the
+// historical "any non-CPU backend" heuristic — saves a graph-build
+// crash on backends that ship `flash_attn_ext` but reject the
+// F16 K/V variant for the Supertonic shape.  See the inline probe
+// `backend_supports_f16_kv_flash_attn_uncached` in this TU for
+// the rationale.  Routes through `cached_backend_capabilities`
+// (process-wide cache keyed by `ggml_backend_t`) so engine + bench
+// + load trio doesn't re-run the probe three times for the same
+// backend.
+bool supertonic_backend_supports_f16_kv_flash_attn(ggml_backend_t backend) {
+    return cached_backend_capabilities(backend).f16_kv_flash_attn;
+}
+
+// QVAC-18605 follow-up — public forwarder for the F16-weight
+// `mul_mat` probe.  Symmetric to the F16-K/V probe above; gates
+// the `use_f16_weights` auto-policy in engine.cpp + bench so a
+// backend that ships F16 storage but rejects F16 mul_mat for the
+// hot vector-estimator attention shape doesn't crash at first
+// synth call.  Cached.
+bool supertonic_backend_supports_f16_mul_mat(ggml_backend_t backend) {
+    return cached_backend_capabilities(backend).f16_mul_mat;
+}
+
+// QVAC-18605 follow-up — public forwarder for the Q8_0 K/V
+// flash-attn probe.  Forward-compat — primes the capability
+// cache for a future `--kv-attn-type q8_0` opt-in (cuts K/V
+// upload bandwidth ~2× on memory-bandwidth-bound mobile GPUs)
+// without forcing the live dispatch through Q8_0 today.  See
+// `backend_supports_q8_0_kv_flash_attn_uncached` for the
+// rationale + the deferred-work entry in PROGRESS_SUPERTONIC.md.
+bool supertonic_backend_supports_q8_0_kv_flash_attn(ggml_backend_t backend) {
+    return cached_backend_capabilities(backend).q8_0_kv_flash_attn;
+}
+
+// QVAC-18605 round 3 — public forwarder for the BF16 K/V flash-
+// attn probe.  Forward-compat — primes the capability cache for
+// a future `--kv-attn-type bf16` opt-in (BF16's wider exponent
+// range avoids the F16 underflow on small attention scores
+// without paying a 2× bandwidth cost).  Mostly useful on Vulkan
+// devices that advertise `cooperative_matrix2` (NVIDIA Ampere+,
+// AMD RDNA3+).  See `backend_supports_bf16_kv_flash_attn_uncached`
+// for the rationale + the deferred-work entry in
+// PROGRESS_SUPERTONIC.md.
+bool supertonic_backend_supports_bf16_kv_flash_attn(ggml_backend_t backend) {
+    return cached_backend_capabilities(backend).bf16_kv_flash_attn;
+}
+
+// QVAC-18605 round 3 — public forwarder for the pinned-host-
+// buffer-type probe.  Symmetric to the BF16 / Q8_0 K/V
+// forwarders above; primes the capability cache with whether
+// `ggml_backend_vk_host_buffer_type()` is callable on this
+// backend so a future per-engine input-scratchpad refactor can
+// gate the host-pinned upload path on the cached answer
+// (avoids re-querying the Vulkan backend per synth step).
+bool supertonic_backend_supports_pinned_host_buffer(ggml_backend_t backend) {
+    return cached_backend_capabilities(backend).pinned_host_buffer;
+}
+
+// QVAC-18605 round 12 #5 — pinned-host-buffer input allocator.
+//
+// Implementation strategy:
+//
+//   1. Defensive null-check (callers in error-handler paths can
+//      hand us a half-constructed model with `.backend == nullptr`
+//      or a stale ctx pointer).  Either case → `nullptr`.
+//
+//   2. Probe-gated dispatch.  We reuse the round-3 capability
+//      probe `supertonic_backend_supports_pinned_host_buffer`
+//      so the wired cache builds can also call the probe
+//      independently (e.g. to decide whether to even create the
+//      input_ctx).  The cache itself is process-wide so the
+//      lookup is constant-time after the first cold miss.
+//
+//   3. `ggml_backend_alloc_ctx_tensors_from_buft(ctx, host_buft)`
+//      walks every tensor in `input_ctx`, allocates one
+//      contiguous buffer from `host_buft` big enough to hold
+//      all of them, and binds each tensor to its slot in that
+//      buffer.  Returns the buffer (owned by caller) or
+//      `nullptr` on alloc failure (e.g. BAR memory exhausted —
+//      rare; caller falls back to gallocr's default-buft path
+//      which uses device memory + staging).
+//
+// On the dev rig (RTX 5090 + 128 GB host RAM), the host buffer
+// for a typical (L=20, text_len=24) synth is ~80 KB total —
+// trivial vs the multi-GB device buffers gallocr would have
+// otherwise produced, but the saving is on the per-step uploads
+// where each `ggml_backend_tensor_set` skips one staging-buffer
+// memcpy on the way to BAR memory.
+ggml_backend_buffer_t try_alloc_inputs_in_pinned_host_buffer(
+    const supertonic_model & model,
+    ggml_context * input_ctx) {
+    if (model.backend == nullptr || input_ctx == nullptr) {
+        return nullptr;
+    }
+    // Probe — bypasses any Vulkan-symbol dependency on backends
+    // that don't ship one (CPU, Metal, OpenCL, accel, BLAS...).
+    if (!supertonic_backend_supports_pinned_host_buffer(model.backend)) {
+        return nullptr;
+    }
+#ifdef GGML_USE_VULKAN
+    ggml_backend_buffer_type_t host_buft = ggml_backend_vk_host_buffer_type();
+    if (host_buft == nullptr) {
+        // Probe said yes but the API now returns null — defensive
+        // race against a backend that lost the capability between
+        // probe and call.  Fall back to nullptr; caller uses
+        // gallocr's default path.
+        return nullptr;
+    }
+    // Allocates one buffer big enough to hold every tensor in
+    // `input_ctx` AND binds each tensor to its slot.  Caller owns
+    // the returned buffer.  Returns nullptr on BAR exhaustion
+    // (extremely rare) — caller falls through.
+    return ggml_backend_alloc_ctx_tensors_from_buft(input_ctx, host_buft);
+#else
+    // No Vulkan compiled in — probe should have already returned
+    // false above.  Belt-and-suspenders.
+    return nullptr;
+#endif
+}
+
+// QVAC-18605 round 13 #1 — input-scratchpad allocator that
+// consolidates the round-12 boilerplate.  See the docstring on
+// the declaration in supertonic_internal.h for the contract.
+//
+// Implementation:
+//   1. Defensive null-checks first.  These cover error-handler
+//      paths where the caller hands us a half-constructed state.
+//   2. Try pinned-host via `try_alloc_inputs_in_pinned_host_buffer`.
+//      Returns on success.
+//   3. Fall back to `ggml_backend_alloc_ctx_tensors`.  This
+//      allocates from the backend's default buffer type, which
+//      on Vulkan is device-local memory (with the usual staging
+//      hop per `ggml_backend_tensor_set`); on CPU it's host
+//      memory directly.  Same correctness as pre-round-12.
+//   4. On BOTH failing, throw with a message including the
+//      cache name so operators can correlate the failure with a
+//      specific cache rebuild site.
+ggml_backend_buffer_t alloc_input_scratchpad_or_throw(
+    const supertonic_model & model,
+    ggml_context * input_ctx,
+    const char * cache_name) {
+    if (cache_name == nullptr) {
+        throw std::runtime_error(
+            "supertonic: alloc_input_scratchpad_or_throw: cache_name is null "
+            "(caller-bug: pass a string literal naming the cache)");
+    }
+    if (model.backend == nullptr) {
+        throw std::runtime_error(
+            std::string("supertonic: ") + cache_name +
+            ": cannot allocate input scratchpad without a backend "
+            "(model.backend is null)");
+    }
+    if (input_ctx == nullptr) {
+        throw std::runtime_error(
+            std::string("supertonic: ") + cache_name +
+            ": cannot allocate input scratchpad with a null ggml_context");
+    }
+    // First try pinned-host (Vulkan-only).  Round 12 #5 already
+    // returns nullptr cleanly on CPU / Metal / OpenCL / etc.
+    ggml_backend_buffer_t buf =
+        try_alloc_inputs_in_pinned_host_buffer(model, input_ctx);
+    if (buf) return buf;
+    // Fall back to default backend buffer.  Same correctness as
+    // pre-round-12; just one staging hop per upload on Vulkan.
+    buf = ggml_backend_alloc_ctx_tensors(input_ctx, model.backend);
+    if (buf) return buf;
+    // Both failed — this is a system-level resource issue (BAR
+    // exhaustion AND device-memory exhaustion).  Loud failure so
+    // the operator's logs surface the cache that ran out of room.
+    throw std::runtime_error(
+        std::string("supertonic: ") + cache_name +
+        ": failed to allocate input scratchpad "
+        "(both pinned-host and default-backend paths returned null)");
+}
+
+// QVAC-18605 round 3 — multi-device Vulkan auto-pick policy.
+//
+// Pure logic — no Vulkan symbols touched here.  The Vulkan-only
+// wrapper (`init_supertonic_backend`'s `#ifdef GGML_USE_VULKAN`
+// branch) calls `ggml_backend_vk_get_device_memory()` per device
+// to build the `free_vram_per_device` list, then dispatches into
+// this helper.  Splitting the policy from the plumbing means the
+// behaviour matrix is testable on CPU with synthetic inputs (see
+// test_supertonic_vulkan_device_select.cpp).
+//
+// See the docstring on the declaration in supertonic_internal.h
+// for the behaviour matrix.
+int resolve_vulkan_device_index(int requested,
+                                const std::vector<size_t> & free_vram_per_device,
+                                const std::vector<bool> & is_uma_per_device) {
+    const int dev_count = (int) free_vram_per_device.size();
+    if (dev_count <= 0) {
+        throw std::runtime_error(
+            "supertonic: cannot resolve --vulkan-device against an empty "
+            "device list (no Vulkan adapter visible)");
+    }
+    // Round-12 caller-bug guard.  When `is_uma_per_device` is
+    // non-empty its length MUST match `free_vram_per_device`;
+    // otherwise we'd be reading off the end of one of the
+    // vectors below.  Empty (the default) is fine — falls through
+    // to the round-3 policy.
+    if (!is_uma_per_device.empty() &&
+        is_uma_per_device.size() != free_vram_per_device.size()) {
+        throw std::runtime_error(
+            "supertonic: is_uma_per_device.size()=" +
+            std::to_string(is_uma_per_device.size()) +
+            " must equal free_vram_per_device.size()=" +
+            std::to_string(free_vram_per_device.size()) +
+            " when non-empty");
+    }
+    // Reserved-future negative value — fail loud instead of
+    // silently treating as 0 (would mask a CLI typo).
+    if (requested < -1) {
+        throw std::runtime_error(
+            "supertonic: --vulkan-device " + std::to_string(requested) +
+            " is reserved (only -1 means auto-pick)");
+    }
+    // Auto-pick.
+    if (requested == -1) {
+        // Round-12: when UMA flags are available AND at least
+        // one discrete device exists, restrict the argmax to
+        // the discrete subset.  Discrete-only argmax preserves
+        // round-3's tie-break (lower index) within the subset.
+        //
+        // `is_uma_per_device.empty()` is the round-3 path —
+        // unchanged behaviour for every caller that hasn't yet
+        // wired the UMA flag list.
+        //
+        // ASSUMPTION (PR #18 review): `is_uma_per_device[i]` is
+        // populated from `ggml_backend_dev_get_props().type`
+        // mapped through `GGML_BACKEND_DEVICE_TYPE_IGPU / _CPU /
+        // _ACCEL` → UMA, otherwise → discrete.  This is correct
+        // on every test-matrix entry we have (RTX 5090 + AMD
+        // RADV iGPU, single-discrete-only, single-UMA-only,
+        // all-UMA, multi-discrete).  Edge case that can silently
+        // mis-classify: a discrete adapter whose driver
+        // mis-reports its type as `_IGPU` (some Thunderbolt eGPU
+        // configurations; some ARM SoC dGPU paths).  On such a
+        // rig:
+        //   - the discrete is flagged UMA → excluded from the
+        //     discrete-subset argmax;
+        //   - if every other visible adapter is also flagged UMA,
+        //     `any_discrete == false` and we fall through to the
+        //     round-3 all-device argmax → discrete still picked
+        //     by `free_vram` (correct outcome by coincidence).
+        //   - if the rig also has a TRUE UMA iGPU with more
+        //     reported "free VRAM" (system RAM), the round-12
+        //     bias prefers the iGPU over the mis-classified
+        //     discrete → silent regression vs. round 3.  Operator
+        //     escape hatch: `--vulkan-device N` is UMA-agnostic
+        //     (passes through unchanged below) so an explicit
+        //     index always wins.  `--vulkan-perf-logger` exposes
+        //     the chosen device in the bench JSON for
+        //     post-mortem diagnosis.
+        //   - Future hardening: add a "free-VRAM ceiling" filter
+        //     (e.g. UMA reports system-RAM-scale numbers; a
+        //     discrete reporting > 256 GB is implausible and can
+        //     be heuristically re-classified).  Out-of-scope for
+        //     QVAC-18605; tracked in
+        //     `aiDocs/PLAN_VULKAN_NEXT_ROUNDS.md`.
+        if (!is_uma_per_device.empty()) {
+            bool any_discrete = false;
+            for (bool u : is_uma_per_device) {
+                if (!u) { any_discrete = true; break; }
+            }
+            if (any_discrete) {
+                // argmax over the discrete subset; ties → lower
+                // index.  Manual loop instead of max_element +
+                // predicate because we need the ORIGINAL index
+                // (not the subset's local index).
+                int best_idx = -1;
+                size_t best_free = 0;
+                for (int i = 0; i < dev_count; ++i) {
+                    if (is_uma_per_device[(size_t) i]) continue;
+                    if (best_idx == -1 || free_vram_per_device[(size_t) i] > best_free) {
+                        best_idx  = i;
+                        best_free = free_vram_per_device[(size_t) i];
+                    }
+                }
+                return best_idx;  // can't be -1; any_discrete == true
+            }
+            // Fall through: all-UMA → round-3 argmax over all.
+        }
+        // Round-3 path: argmax(free VRAM); ties → lower index.
+        // std::max_element returns the first iterator that
+        // compares equal under `<` so the tie-breaking rule is
+        // implicit in the std::less<> default.
+        const auto it = std::max_element(free_vram_per_device.begin(),
+                                         free_vram_per_device.end());
+        return (int) std::distance(free_vram_per_device.begin(), it);
+    }
+    // Explicit index — range-check.  UMA-agnostic (operator-
+    // pinned index always wins, regardless of device type).
+    if (requested >= dev_count) {
+        throw std::runtime_error(
+            "supertonic: --vulkan-device " + std::to_string(requested) +
+            " out of range (visible adapters: " +
+            std::to_string(dev_count) + ")");
+    }
+    return requested;
+}
+
+// Test seam — drops every cached entry so the regression test in
+// `test_supertonic_capability_cache.cpp` can verify the cache is
+// hit on the second call (the cold-cache call bumps the probe
+// counter; subsequent calls don't until the cache is cleared).
+// Not part of the supported public API; the symbol is exported
+// only for the in-process test harness and not declared in the
+// `supertonic_internal.h` header for external consumers.
+void supertonic_clear_capability_cache() {
+    std::lock_guard<std::mutex> lk(capability_cache_mu());
+    capability_cache().clear();
+}
+
+// Test seam — exposes the cold-cache probe call counter so the
+// regression test can assert the cache short-circuits the
+// uncached path on a hit.  Returns the counter's *current* value,
+// which the caller compares before / after `cached_backend_*`
+// calls to verify zero increments on a hot cache.
+uint64_t supertonic_capability_probe_call_count() {
+    return capability_probe_call_counter().load(std::memory_order_relaxed);
+}
+
+// QVAC-18605 round 7 — Vulkan env-var passthrough.
+//
+// ALL-OR-NOTHING: validate every key starts with `GGML_VK_`
+// BEFORE touching the environment.  An operator-config typo like
+// `GMML_VK_PREFER_HOST_MEMORY` throws cleanly without leaving the
+// env in a half-applied state where the good entries took effect
+// but the bad one didn't.  Empty map is a no-op (regression-
+// guarded by `test_empty_map_is_noop`).
+//
+// `set_env_if_unset` semantics: an operator-set env var (already
+// present in the environment when this is called) WINS over the
+// EngineOptions override.  Lets a debugging operator force-disable
+// a setting from the shell without recompiling, while still
+// letting the production EngineOptions configuration set the same
+// knob in the absence of a shell override.
+void apply_vulkan_env_overrides(const std::map<std::string, std::string> & overrides) {
+    if (overrides.empty()) return;
+    std::string bad;
+    if (find_invalid_vulkan_env_key(overrides, bad)) {
+        throw std::runtime_error(
+            "supertonic: invalid Vulkan env-var override key '" + bad +
+            "' — keys must start with 'GGML_VK_' (operator-config typo guard)");
+    }
+    for (const auto & kv : overrides) {
+        set_env_if_unset(kv.first.c_str(), kv.second.c_str());
+    }
+}
+
+// QVAC-18605 round 7 — voice ttl/dp host cache.
+//
+// Implementation matches the contract documented on the struct
+// declaration in supertonic_internal.h.  Inlines the
+// `read_tensor_f32` body (defined in supertonic_engine.cpp, not
+// linkable from here) — three lines, zero abstraction cost.
+const voice_host_cache::entry &
+voice_host_cache::get_or_load(const std::string & voice_name,
+                              ggml_tensor * ttl_tensor,
+                              ggml_tensor * dp_tensor) {
+    auto it = by_name_.find(voice_name);
+    if (it != by_name_.end()) {
+        // Cache HIT: return the existing entry without touching
+        // the GGML tensors.  Caller may legally pass nullptr for
+        // ttl/dp on a hit (see test_second_load_hits_cache).
+        return it->second;
+    }
+    if (!ttl_tensor || !dp_tensor) {
+        throw std::runtime_error(
+            "voice_host_cache: cache miss for voice '" + voice_name +
+            "' but ttl/dp tensor is null (Engine::Impl bug — voices.find() should "
+            "have validated the voice before this call)");
+    }
+    entry e;
+    e.ttl.resize((size_t) ggml_nelements(ttl_tensor));
+    ggml_backend_tensor_get(ttl_tensor, e.ttl.data(), 0, ggml_nbytes(ttl_tensor));
+    e.dp.resize((size_t) ggml_nelements(dp_tensor));
+    ggml_backend_tensor_get(dp_tensor, e.dp.data(), 0, ggml_nbytes(dp_tensor));
+    auto inserted = by_name_.emplace(voice_name, std::move(e));
+    return inserted.first->second;
+}
+
+void voice_host_cache::clear() {
+    by_name_.clear();
+}
+
+size_t voice_host_cache::size() const {
+    return by_name_.size();
 }
 
 // Phase 2A — hot-weight predicate.
@@ -435,13 +1425,64 @@ bool should_materialise_f16_weight(const std::string & source_name) {
     return false;
 }
 
+// QVAC-18605 round 6 — 2-arg overload.
+//
+// Two-stage decision:
+//
+//   1. If any non-empty entry in `extra_deny_substrings` is a
+//      substring of `source_name`, return `false` immediately.
+//      Operator-supplied deny patterns short-circuit the curated
+//      allow-list (they're meant to FORCE F32 even for tensors
+//      the curated path would have promoted).
+//
+//   2. Otherwise, forward to the 1-arg version (curated allow-
+//      list).
+//
+// Empty deny-list → behaviour identical to the 1-arg version
+// (zero behaviour change for every existing call site that
+// passes the default empty list).
+//
+// Empty strings inside the deny-list are SKIPPED on purpose:
+// substring `""` would otherwise match every name and silently
+// disable F16 weights for the entire model, which is almost
+// certainly an operator typo (e.g. trailing comma in a config
+// file producing an empty entry).  Surfacing the typo via a
+// loud warning would be nicer, but `should_materialise_f16_weight`
+// is a pure predicate with no logging hook; the defensive skip
+// keeps the predicate honest while a higher-layer config
+// validator can warn separately if desired.
+bool should_materialise_f16_weight(const std::string & source_name,
+                                   const std::vector<std::string> & extra_deny_substrings) {
+    if (source_name.empty()) return false;
+    for (const std::string & pattern : extra_deny_substrings) {
+        if (pattern.empty()) continue;  // defensive skip
+        if (source_name.find(pattern) != std::string::npos) {
+            return false;
+        }
+    }
+    return should_materialise_f16_weight(source_name);
+}
+
 // Thread-local dispatch flags consulted by the GGML graph builders to
 // pick between the CBLAS-backed `ggml_custom_4d` fast paths (CPU only)
 // and the portable pure-GGML fallbacks (any backend).  See the
 // supertonic_op_dispatch_scope comment in supertonic_internal.h.
+//
+// QVAC-18605 — `g_supertonic_use_native_leaky_relu` carries the
+// resolved-backend's `LEAKY_RELU` capability into the
+// `leaky_relu_portable_ggml` helper.  Defaults to `true` so the
+// historical CPU-only path keeps using the fused builtin even when no
+// scope is active (matches `g_supertonic_use_cpu_custom_ops`'s default
+// rationale).
 namespace {
-thread_local bool g_supertonic_use_cpu_custom_ops = true;
-thread_local bool g_supertonic_use_f16_attn      = false;
+thread_local bool g_supertonic_use_cpu_custom_ops    = true;
+thread_local bool g_supertonic_use_f16_attn          = false;
+thread_local bool g_supertonic_use_native_leaky_relu = true;
+// QVAC-18605 round 4 — current K/V flash-attn dispatch dtype.
+// Defaults to f32 so a graph builder called outside any
+// `supertonic_op_dispatch_scope` doesn't accidentally take the
+// F16/BF16/Q8_0 path (matches the model's default value).
+thread_local kv_attn_dtype g_supertonic_kv_attn_type  = kv_attn_dtype::f32;
 }
 
 bool supertonic_use_cpu_custom_ops() {
@@ -452,16 +1493,79 @@ bool supertonic_use_f16_attn() {
     return g_supertonic_use_f16_attn;
 }
 
+bool supertonic_use_native_leaky_relu() {
+    return g_supertonic_use_native_leaky_relu;
+}
+
+kv_attn_dtype supertonic_kv_attn_type() {
+    return g_supertonic_kv_attn_type;
+}
+
 supertonic_op_dispatch_scope::supertonic_op_dispatch_scope(const supertonic_model & model)
     : prev_use_cpu_custom_ops(g_supertonic_use_cpu_custom_ops),
-      prev_use_f16_attn(g_supertonic_use_f16_attn) {
-    g_supertonic_use_cpu_custom_ops = model.backend_is_cpu;
-    g_supertonic_use_f16_attn       = model.use_f16_attn;
+      prev_use_f16_attn(g_supertonic_use_f16_attn),
+      prev_use_native_leaky_relu(g_supertonic_use_native_leaky_relu),
+      prev_kv_attn_type(g_supertonic_kv_attn_type) {
+    g_supertonic_use_cpu_custom_ops    = model.backend_is_cpu;
+    g_supertonic_use_f16_attn          = model.use_f16_attn;
+    g_supertonic_use_native_leaky_relu = model.use_native_leaky_relu;
+    g_supertonic_kv_attn_type          = model.kv_attn_type;
 }
 
 supertonic_op_dispatch_scope::~supertonic_op_dispatch_scope() {
-    g_supertonic_use_cpu_custom_ops = prev_use_cpu_custom_ops;
-    g_supertonic_use_f16_attn       = prev_use_f16_attn;
+    g_supertonic_use_cpu_custom_ops    = prev_use_cpu_custom_ops;
+    g_supertonic_use_f16_attn          = prev_use_f16_attn;
+    g_supertonic_use_native_leaky_relu = prev_use_native_leaky_relu;
+    g_supertonic_kv_attn_type          = prev_kv_attn_type;
+}
+
+// QVAC-18605 round 4 — pure-logic resolver for the multi-dtype
+// K/V dispatch policy.  Implementation matches the behaviour
+// matrix documented on the declaration in supertonic_internal.h.
+//
+// Out-of-range inputs throw to surface CLI typos loudly; probe-
+// rejected explicit requests fall back to f32 silently (same
+// "advisory probes" pattern as the round-1 use_f16_attn auto-
+// policy fallback).
+kv_attn_dtype resolve_kv_attn_type(int requested,
+                                   bool legacy_use_f16_attn,
+                                   bool backend_supports_f16,
+                                   bool backend_supports_bf16,
+                                   bool backend_supports_q8_0,
+                                   bool * out_was_downgraded) {
+    if (out_was_downgraded) *out_was_downgraded = false;
+    if (requested < -1 || requested > 3) {
+        throw std::runtime_error(
+            "supertonic: --kv-attn-type " + std::to_string(requested) +
+            " out of range (valid: -1=auto, 0=f32, 1=f16, 2=bf16, 3=q8_0)");
+    }
+    switch (requested) {
+        case -1:  // auto
+            // No downgrade flag — operator didn't ask for a
+            // specific dtype, so falling back to f32 is the
+            // auto-policy doing its job, not a surprise.
+            if (legacy_use_f16_attn && backend_supports_f16) return kv_attn_dtype::f16;
+            return kv_attn_dtype::f32;
+        case 0:   // f32 forced
+            return kv_attn_dtype::f32;
+        case 1:   // f16 forced (probe-gated fallback)
+            if (backend_supports_f16) return kv_attn_dtype::f16;
+            if (out_was_downgraded) *out_was_downgraded = true;
+            return kv_attn_dtype::f32;
+        case 2:   // bf16 forced (probe-gated fallback)
+            if (backend_supports_bf16) return kv_attn_dtype::bf16;
+            if (out_was_downgraded) *out_was_downgraded = true;
+            return kv_attn_dtype::f32;
+        case 3:   // q8_0 forced (probe-gated fallback)
+            if (backend_supports_q8_0) return kv_attn_dtype::q8_0;
+            if (out_was_downgraded) *out_was_downgraded = true;
+            return kv_attn_dtype::f32;
+        default:
+            // Unreachable — the range check above covers every
+            // valid request.  Defensive throw in case the switch
+            // is extended without updating the range check.
+            throw std::runtime_error("supertonic: resolve_kv_attn_type unreachable");
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -725,7 +1829,9 @@ bool load_supertonic_gguf(const std::string & path,
                           int n_gpu_layers,
                           bool verbose,
                           int f16_weights,
-                          supertonic_precision precision) {
+                          supertonic_precision precision,
+                          int vulkan_device,
+                          const std::vector<std::string> & f16_weights_deny_list) {
     model.generation_id = next_supertonic_generation_id();
     model.precision_id = static_cast<int>(precision);
     // The load path supports F32 / F16 / Q8_0 destination types.
@@ -774,28 +1880,75 @@ bool load_supertonic_gguf(const std::string & path,
         model.languages = get_string_array(gguf_ctx, "supertonic.languages");
         model.tts_json = get_string(gguf_ctx, "supertonic.tts_json");
 
-        model.backend = init_supertonic_backend(n_gpu_layers, verbose);
+        model.backend = init_supertonic_backend(n_gpu_layers, verbose, vulkan_device);
         // The graph builders below dispatch between CBLAS-backed
         // `ggml_custom_4d` fast paths (CPU only) and pure-GGML fallbacks
         // (any backend) based on this flag.  Stable for the model's
         // lifetime; see the supertonic_op_dispatch_scope comment in
         // supertonic_internal.h for the threading contract.
         model.backend_is_cpu = ggml_backend_is_cpu(model.backend);
+        // QVAC-18605 — Vulkan-specific dispatch capture.
+        //
+        // `backend_is_vk` is informational (the bench / engine show it
+        // in the human-readable backend description), but it also
+        // documents WHICH non-CPU backend the model resolved to —
+        // useful when triaging "why is leaky_relu slow on this run?"
+        // against the audit's expected fast-path matrix.
+        model.backend_is_vk = backend_is_vulkan(model.backend);
+        // Probe the backend's `LEAKY_RELU` capability so the
+        // `leaky_relu_portable_ggml` helper can route to the fused
+        // builtin on backends that have it (Vulkan / Metal / CUDA /
+        // CPU; OpenCL only with chatterbox patch) and to the
+        // RELU+SCALE+ADD decomposition otherwise.  Probe runs once
+        // per backend (memoised by `cached_backend_capabilities`)
+        // — zero hot-path cost.
+        model.use_native_leaky_relu = cached_backend_capabilities(model.backend).native_leaky_relu;
         if (verbose) {
-            fprintf(stderr, "supertonic: backend_is_cpu=%s\n", model.backend_is_cpu ? "true" : "false");
+            fprintf(stderr, "supertonic: backend_is_cpu=%s backend_is_vk=%s use_native_leaky_relu=%s\n",
+                    model.backend_is_cpu ? "true" : "false",
+                    model.backend_is_vk ? "true" : "false",
+                    model.use_native_leaky_relu ? "true" : "false");
         }
 
         // Phase 2A — auto/force policy for F16 weight materialization.
         // Auto-enable on non-CPU backends; never auto-enable on CPU
         // (the CBLAS custom-op fast paths require F32 storage).
+        //
+        // QVAC-18605 follow-up — the auto policy is now backend-
+        // capability-gated.  Symmetric to the F16-K/V flash-attn
+        // probe: a backend that ships F16 storage but rejects the
+        // hot `mul_mat(F16, F32)` shape Supertonic dispatches every
+        // step would crash at first synth call when this flipped on
+        // blindly.  The probe (`backend_supports_f16_mul_mat_uncached`
+        // → `cached_backend_capabilities`) tries the live shape
+        // (W=[256, 256] F16, X=[256, 16] F32) at backend resolution
+        // time; on a `false` answer the auto policy refuses to
+        // materialise F16 weights — slower but correct.  Manual
+        // override via `--f16-weights 1` still forces dispatch
+        // (useful for debug-shim backends and forward-compat tests).
         if (f16_weights < 0) {
-            model.use_f16_weights = !model.backend_is_cpu;
+            model.use_f16_weights = !model.backend_is_cpu &&
+                                    cached_backend_capabilities(model.backend).f16_mul_mat;
         } else {
             model.use_f16_weights = (f16_weights != 0);
         }
         if (verbose) {
             fprintf(stderr, "supertonic: use_f16_weights=%s\n",
                     model.use_f16_weights ? "true" : "false");
+            // Round 6 — log the user-supplied deny-list (if any) so
+            // operators can confirm their config got plumbed through.
+            // Empty list (the default) is silent — same baseline as
+            // the round-3 log output.
+            if (model.use_f16_weights && !f16_weights_deny_list.empty()) {
+                fprintf(stderr,
+                        "supertonic: f16_weights_deny_list (%zu pattern%s):\n",
+                        f16_weights_deny_list.size(),
+                        f16_weights_deny_list.size() == 1 ? "" : "s");
+                for (const auto & p : f16_weights_deny_list) {
+                    fprintf(stderr, "  - \"%s\"%s\n", p.c_str(),
+                            p.empty() ? " (empty — skipped at predicate time)" : "");
+                }
+            }
         }
 
         // Phase 2A pre-step: build a (tensor_name → source_name)
@@ -879,17 +2032,57 @@ bool load_supertonic_gguf(const std::string & path,
             ggml_tensor * src = ggml_get_tensor(tmp_ctx, name);
             if (!src) throw std::runtime_error(std::string("missing tmp tensor: ") + name);
 
+            // Phase 2A predicate check.  Only fires when
+            // `use_f16_weights` was on and the source resolved to
+            // a hot-roster name AND its current GGML type is
+            // either F32 or one of the expand-to-F32 types
+            // (otherwise the source already carries narrower
+            // precision than F16 and we don't widen).
+            //
+            // QVAC-18605 round 6 — the 2-arg overload layers the
+            // user-supplied `f16_weights_deny_list` substring
+            // patterns on top of the curated allow-list.  Empty
+            // deny-list (the default) → identical behaviour to
+            // the round-1/2/3 path.  When the deny-list flips a
+            // would-be-hot tensor back to F32 we bump
+            // `model.f16_weights_excluded_count` so bench output
+            // can confirm the user's deny-list took effect.
+            //
+            // Master's Phase 2A keys the decision off the source
+            // name resolved from `tensor_to_source_for_alloc`
+            // (falling back to the dst `name` when absent); round
+            // 6 narrows that to require the map lookup to succeed
+            // so the deny-list operates on a known-stable source
+            // identifier.  Net: a tensor that previously went F16
+            // via the dst-name fallback now stays at its native
+            // precision-path type — the curated allow-list isn't
+            // expected to hit on dst names so this is a no-op in
+            // practice.
+            // Resolve a stable "decision name" up-front.  Used both
+            // by the round-6 deny-list check below and by master's
+            // precision-driven `target_supertonic_storage_type`
+            // dispatch.  Falls back to the dst tensor `name` when
+            // the source-map lookup misses (matches master's Phase
+            // 2A behaviour pre-rebase).
             auto src_it = tensor_to_source_for_alloc.find(name);
-            const std::string & decision_name =
-                (src_it != tensor_to_source_for_alloc.end()) ? src_it->second : std::string(name);
+            const std::string decision_name =
+                (src_it != tensor_to_source_for_alloc.end())
+                    ? src_it->second
+                    : std::string(name);
 
-            // Phase 2A predicate check (master).
             bool f16_materialise = false;
             if (model.use_f16_weights &&
-                should_materialise_f16_weight(decision_name) &&
+                src_it != tensor_to_source_for_alloc.end() &&
                 (src->type == GGML_TYPE_F32 ||
                  should_expand_supertonic_tensor(src->type))) {
-                f16_materialise = true;
+                const bool curated_hot = should_materialise_f16_weight(decision_name);
+                const bool denied      = curated_hot &&
+                    !should_materialise_f16_weight(decision_name, f16_weights_deny_list);
+                if (denied) {
+                    ++model.f16_weights_excluded_count;
+                } else if (curated_hot) {
+                    f16_materialise = true;
+                }
             }
 
             ggml_type dst_type;

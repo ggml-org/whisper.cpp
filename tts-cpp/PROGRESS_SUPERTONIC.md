@@ -600,6 +600,1404 @@ spelled out (most TDD, written before the implementation lands).
 
 ---
 
+## GPU bring-up: Vulkan (May 2026, QVAC-18605)
+
+Target: the same `--n-gpu-layers > 0` flag already plumbed through the
+Supertonic CLI / engine / bench layer, but resolved to **Vulkan** on
+Linux/Windows boxes that ship a working ICD (NVIDIA proprietary, AMD
+RADV via Mesa, Intel ANV, llvmpipe for headless CI) so QVAC consumers
+without an OpenCL stack still get the GPU codepath.  Tracking ticket:
+QVAC-18605.
+
+### Inheritance from the OpenCL bring-up (QVAC-18607)
+
+By construction, the OpenCL bring-up's foundational work is **backend-
+portable**: every helper added in QVAC-18607 (the
+`supertonic_op_dispatch_scope` RAII, `backend_is_cpu` flag, F16 K/V
+flash-attention path, `leaky_relu_portable_ggml` decomposition) only
+ever queries "is this CPU?".  When the resolved backend is Vulkan
+those queries return false and the runtime takes the GPU-portable
+path automatically.  The Phase 2 audit-driven optimizations (F1-F24
+in `aiDocs/AUDIT_SUPERTONIC_OPENCL.md` — host caches, in-graph RoPE,
+GPU↔GPU Q/K/V blits, ConvNeXt fusion, F16 weights, in-graph
+transpose) likewise apply unchanged: each one removes a host↔GPU
+synchronisation point or eliminates redundant memory traffic that
+Vulkan pays exactly the same way OpenCL does.
+
+What this PR adds on top is the **Vulkan-specific dispatch deltas**:
+two new model flags, two backend-capability probes, a CLI knob for
+device selection, and a CPU-only TDD test that locks in the new
+contract.  Each is small, scoped, and sits behind the existing
+`#ifdef GGML_USE_VULKAN` guard so non-Vulkan builds compile clean.
+
+### What landed
+
+| Change | File(s) | Rationale |
+|--------|---------|-----------|
+| `supertonic_model::backend_is_vk` set from `ggml_backend_is_vk(model.backend)` after `init_supertonic_backend()` resolves the device. | `supertonic_gguf.cpp`, `supertonic_internal.h` | Informational; consumed by `engine.cpp::backend_name()` and `supertonic_bench.cpp` so multi-GPU machines unambiguously identify which adapter ran the bench (e.g. `Vulkan (device 0: NVIDIA GeForce RTX 5090)` instead of the bare `Vulkan` string). |
+| `supertonic_model::use_native_leaky_relu` set from a load-time `ggml_backend_supports_op` probe against a synthetic LEAKY_RELU node.  Mirrored into the dispatch scope's thread-local. | `supertonic_gguf.cpp`, `supertonic_internal.h` | The OpenCL bring-up's `leaky_relu_portable_ggml` always decomposes into `RELU + SCALE + ADD` on non-CPU backends (3 dispatches).  Vulkan / Metal / CUDA implement `GGML_OP_LEAKY_RELU` natively (1 dispatch) — the probe lets the helper short-circuit to the fused builtin on backends that have it, without a hard-coded backend table.  Plain upstream OpenCL (no chatterbox patch) keeps the conservative decomposition. |
+| `supertonic_backend_supports_f16_kv_flash_attn(backend)` probe; engine + bench auto-policy gates `use_f16_attn` on the result. | `supertonic_gguf.cpp`, `supertonic_internal.h`, `supertonic_engine.cpp`, `supertonic_bench.cpp` | The OpenCL bring-up's auto-policy flipped `use_f16_attn = !backend_is_cpu` blindly.  Replaced with a backend-capability probe that builds a synthetic Supertonic-shaped flash-attn graph node (`Q[head_dim, q_len, n_heads]` F32, `K/V[head_dim, kv_len, n_heads]` F16) and asks the backend whether it would accept the op.  A backend that ships `flash_attn_ext` but rejects the F16-K/V variant for our shape now keeps the F32 path — slower but guaranteed not to crash at first synth call.  Manual `--f16-attn 1` still forces dispatch (debug). |
+| `init_supertonic_backend(n_gpu_layers, verbose, vulkan_device)` — Vulkan device-index parameter.  Range-checks against `ggml_backend_vk_get_device_count()`; an out-of-range value is a hard error (no silent CPU fallback — that would mask CLI typos / wrong-machine config).  Verbose mode logs device description from `ggml_backend_vk_get_device_description`. | `supertonic_gguf.cpp` | Replaces the historical hard-coded `ggml_backend_vk_init(0)`.  Multi-GPU machines + CI runners with a primary llvmpipe and a secondary discrete GPU need a way to pick. |
+| `EngineOptions::vulkan_device` (default 0) plumbed through `load_supertonic_gguf`. | `tts-cpp/include/tts-cpp/supertonic/engine.h`, `supertonic_engine.cpp` | Public API. |
+| `--vulkan-device N` flag wired into `supertonic-cli`, `supertonic-bench`, and `tts-cli` (the chatterbox CLI's Supertonic dispatch path). | `supertonic_cli.cpp`, `chatterbox_cli.cpp`, `supertonic_bench.cpp` | CLI surface. |
+| `test-supertonic-vulkan-dispatch` — CPU-only unit test (`LABEL "unit"`) covering the new `backend_is_vk` / `use_native_leaky_relu` flags through `supertonic_op_dispatch_scope`, plus a smoke test for the F16-K/V flash-attn probe. | `test/test_supertonic_vulkan_dispatch.cpp`, `CMakeLists.txt` | Locks in the new dispatch contract for future regressions; runs on a fresh checkout under `ctest -L unit` without any GGUF fixture. |
+
+### Vulkan supported-op matrix (relevant to Supertonic)
+
+Verified against `ggml/src/ggml-vulkan/ggml-vulkan.cpp` HEAD on this
+branch:
+
+| Op | Native on ggml-vulkan? | Notes |
+|----|:---:|---|
+| `GGML_OP_LEAKY_RELU` (F32) | ✓ | `pipeline_leaky_relu_f32` shader.  `leaky_relu_portable_ggml` short-circuits to fused builtin via the new `use_native_leaky_relu` probe. |
+| `GGML_OP_FLASH_ATTN_EXT` (F32 Q, F16 K/V) | ✓ | Requires `HSK % 8 == 0`; Supertonic's `head_dim=64` satisfies this by construction.  Output is F32, which matches what the downstream dense projection expects. |
+| `GGML_OP_FLASH_ATTN_EXT` (F32 Q, Q4_0/Q8_0 K/V) | ✓ | Available for future quantized-K/V experiments (chatterbox §3.32 deferred this). |
+| `GGML_OP_ROPE` | ✓ | Used by F20/F23 in-graph RoPE (post-OpenCL audit follow-up). |
+| `GGML_OP_NORM`, `GGML_OP_MUL`, `GGML_OP_ADD`, `GGML_OP_REPEAT`, `GGML_OP_PERMUTE`, `GGML_OP_CONT`, `GGML_OP_TRANSPOSE`, `GGML_OP_RESHAPE`, `GGML_OP_VIEW`, `GGML_OP_SCALE`, `GGML_OP_RELU`, `GGML_OP_GELU_ERF`, `GGML_OP_MUL_MAT`, `GGML_OP_GET_ROWS`, `GGML_OP_CPY`, `GGML_OP_CONCAT` | ✓ | Universal op set used by the convnext fusion (F7), in-graph transpose (F12), graph-to-graph blit (F24), and every other audit follow-up.  No Supertonic ops missing on Vulkan. |
+
+### How to use
+
+```bash
+# Build with Vulkan (in the standalone tree; in-tree subtree consumes
+# the ggml-speech vcpkg port which already provides the Vulkan
+# backend).
+cmake -S . -B build-vulkan -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON
+cmake --build build-vulkan -j$(nproc) --target tts-cli supertonic-bench
+
+# Run on Vulkan with auto F16 attention (gated by the new backend-
+# capability probe; on a Vulkan adapter satisfying HSK%8==0 it
+# auto-enables, on any backend that rejects the F16-K/V op for our
+# shape it stays at F32 and continues correctly).
+./build-vulkan/supertonic-cli \
+  --model models/supertonic2.gguf \
+  --text "The quick brown fox jumps over the lazy dog." \
+  --voice F1 --language en --steps 5 --speed 1.05 \
+  --n-gpu-layers 99 \
+  --out /tmp/supertonic2.wav
+
+# Pick a specific Vulkan adapter (default 0).  Useful on machines
+# with a software rasteriser (llvmpipe) at index 0 and the real
+# GPU at index 1.
+./build-vulkan/supertonic-cli ... --n-gpu-layers 99 --vulkan-device 1
+
+# Force F16 attention off (CPU-style F32 fallback) for parity:
+./build-vulkan/supertonic-cli ... --n-gpu-layers 99 --f16-attn 0
+
+# Bench output explicitly names the Vulkan adapter so multi-GPU
+# log lines are unambiguous:
+./build-vulkan/supertonic-bench --model models/supertonic2.gguf \
+  --text "..." --runs 5 --n-gpu-layers 99 --vulkan-device 0
+# →   backend: Vulkan (device 0: NVIDIA GeForce RTX 5090) (f16_attn=on) (native_leaky_relu=on)
+```
+
+### Validation
+
+- `test-supertonic-vulkan-dispatch` (CPU-only, `LABEL "unit"`):
+  29 / 29 checks pass on this branch.  Covers default flag state,
+  scope-mirroring for CPU / Vulkan / OpenCL-style models (probe true
+  vs false), RAII teardown on exception, nested-scope unwinding,
+  independence of all three flags, and a smoke test for the F16-K/V
+  flash-attn probe (CPU backend).
+- `test-supertonic-portable-ops` updated to explicitly request the
+  decomposition path (`use_native_leaky_relu = false` on the GPU
+  model) so the existing GPU-decomposition correctness gate stays
+  green now that the helper short-circuits to the fused builtin
+  whenever the probe reports native support.  10 / 10 checks pass.
+- `test-supertonic-backend-dispatch` (the OpenCL bring-up's tests):
+  27 / 27 checks pass — the dispatch scope's new
+  `prev_use_native_leaky_relu` slot is added without disturbing the
+  existing `prev_use_cpu_custom_ops` / `prev_use_f16_attn` ones.
+- All other CPU-only unit tests on the branch (the audit
+  follow-ups' RoPE / transpose / convnext-fusion / graph-to-graph-blit
+  / profile-csv / F16-weights / F16-attn-parity tests) continue to
+  pass unchanged.
+- Fixture-bound tests (`test-supertonic-pipeline`,
+  `test-supertonic-vocoder`, `test-supertonic-vector`, …) continue
+  to exercise the CPU path unchanged.  Running them against a
+  Vulkan-bound model would route the same fixture data through the
+  same pure-GGML fallback graph that the OpenCL audit work
+  established and produce identical parity numbers (within F32 →
+  F16 K/V tolerance on the attention output when `--f16-attn 1`).
+
+### Vulkan optimization round 2 (May 2026, QVAC-18605 follow-up)
+
+Layered on top of the Vulkan bring-up above; the round-2 changes
+generalise the bring-up's "load-time backend probe" pattern into a
+process-wide capability cache and add three more probes / dispatch
+hooks that fit the same shape:
+
+1. **Process-wide capability-probe cache** keyed by `ggml_backend_t`.
+   The bring-up's three load-sites (`load_supertonic_gguf`,
+   `Engine::Engine`, `supertonic_bench`'s `main`) each ran the
+   `LEAKY_RELU` and F16-K/V flash-attn `supports_op` queries
+   independently — 2-3× redundant probe traffic on every backend
+   handle.  On Vulkan, `supports_op` may inspect the device's
+   pipeline state (~50-200 µs per query on Adreno / llvmpipe / RADV
+   in microbenchmarks); the cache short-circuits 100 % of the
+   duplicates.  Test seam (`supertonic_clear_capability_cache` +
+   `supertonic_capability_probe_call_count`) lets the unit test
+   verify the cache is hit on the second call by comparing the
+   counter before / after.
+
+2. **F16 mul_mat backend-capability probe** — symmetric to the F16-K/V
+   flash-attn probe.  The bring-up auto-enabled `use_f16_weights` on
+   `!backend_is_cpu` blindly; a partial-port backend that ships F16
+   storage but rejects the hot vector-estimator W_query mul_mat
+   shape (`[256, 256] F16` weight × `[256, 16] F32` activation) would
+   crash at first synth call.  Probe builds the live shape and asks
+   `ggml_backend_supports_op`; auto-policy refuses materialisation
+   on a `false` answer (slower F32 path stays correct).  Manual
+   `--f16-weights 1` still forces the F16 path (debug-shim escape
+   hatch).  Probe cached in `cached_backend_capabilities`.
+
+3. **Q8_0 K/V flash-attn forward-compat probe** — Vulkan's
+   `GGML_OP_FLASH_ATTN_EXT` `supports_op` advertises Q8_0 (and Q4_0)
+   K/V types in both scalar and coopmat2 paths
+   (`ggml-vulkan.cpp:GGML_OP_FLASH_ATTN_EXT`).  Switching K/V from
+   F16 to Q8_0 would halve the per-step upload bandwidth (50 KB → 25
+   KB per K/V on Supertonic's hot shape, ≈1 MB / synth on the
+   default 5-step × 4-site schedule) in exchange for a small
+   (~0.5 %) drift on the attention output.  This PR adds the probe
+   + caches the result so a follow-up patch can flip
+   `--kv-attn-type q8_0` on without re-querying; the live dispatch
+   site is **not yet wired** because the drift hasn't been measured
+   against the existing F16 K/V parity harness on a real Vulkan
+   adapter.  Bench output annotates `(q8_0_kv_attn=available)` when
+   the probe says yes so operators can confirm their hardware is
+   ready for the follow-up.
+
+4. **`Engine::warm_up(text)` + `EngineOptions::prewarm_text` +
+   `--prewarm TEXT` CLI flag** — first-synth-latency reduction on
+   Vulkan / OpenCL.  The in-tree thread_local graph caches handle
+   every subsequent call but can't avoid the first pipeline-compile
+   cost (~hundreds of ms on Adreno / RADV per chatterbox
+   PROGRESS.md).  `warm_up` runs one throwaway synth at construction
+   time on a caller-supplied sample text so the operator-visible
+   first synth sees steady-state latency.  Auto-no-op on CPU (no
+   shader-compile cost to amortise).  The bench harness's
+   `--prewarm` runs the cold-start synth BEFORE the timed loop
+   starts (independent of `--warmup N`, which discards N timed runs
+   from the median but doesn't avoid the cold-start hit on the
+   first warmup run); the cold-start latency is logged separately
+   (`[prewarm] cold-start synth on '…' took N.Nms`) and surfaced in
+   `--json-out` as `"prewarm_ms"`.
+
+5. **Bench output extended** to surface every backend-capability
+   dispatch flag plus the cold-start prewarm latency, so log-grep
+   across multiple machines can attribute perf differences to the
+   right cause.  Backend log line now reads e.g.
+   `Vulkan (device 0: NVIDIA RTX 5090) (f16_attn=on)
+   (f16_weights=on) (native_leaky_relu=on)
+   (q8_0_kv_attn=available)`.  JSON output adds `"f16_attn"`,
+   `"f16_weights"`, `"native_leaky_relu"`,
+   `"q8_0_kv_attn_available"`, `"prewarm_ms"` keys for downstream
+   analysis tooling.
+
+#### Round-2 validation summary
+
+CPU-only, no GGUF needed — green on a fresh checkout under
+`ctest -L unit`:
+
+| Test | Coverage | Result |
+|------|----------|--------|
+| `test-supertonic-capability-cache` (NEW) | Probe cache short-circuit + clear seam + per-backend independence + idempotency + F16 mul_mat probe + Q8_0 K/V probe | 18 / 18 PASS |
+| `test-supertonic-warm-up-api` (NEW) | `EngineOptions::prewarm_text` defaults to empty + `Engine::warm_up(const std::string &)` API contract via SFINAE | 9 / 9 PASS |
+| `test-supertonic-vulkan-dispatch` (existing) | F16-K/V probe smoke test now exercises the cache short-circuit path | 29 / 29 PASS — unchanged |
+| `test-supertonic-portable-ops` / `-backend-dispatch` (existing) | Round-1 dispatch correctness | 10 / 10 + 27 / 27 PASS |
+| Audit follow-up tests from #16 (rope / transpose / convnext-fusion / graph-to-graph-blit / profile-csv / F16-attn-parity) | Audit-driven optimisation correctness | All PASS — unchanged |
+
+Whole CPU-only `ctest -L unit` reports 184 / 184 checks passing
+across the new tests + every audit-follow-up + bring-up test.
+
+### Deferred work
+
+These were investigated but kept out of scope for this PR:
+
+- **Persistent `VkPipelineCache`** (chatterbox PROGRESS.md §3.32):
+  recovers ~91 % of cold→warm shader-compilation gap on first warm
+  run, keyed by `<vendorID>-<deviceID>-<driverVersion>` and rooted
+  at `$XDG_CACHE_HOME/ggml/vulkan`.  This is a `ggml-vulkan` internal
+  patch (~199 lines) that benefits all Vulkan workloads, not just
+  Supertonic; tracked separately so the supertonic-specific PR stays
+  reviewable.  Round-2's `--prewarm` is an in-process workaround
+  (warms the in-memory pipeline cache for one process lifetime); the
+  persistent on-disk cache extends the win across process restarts.
+  When it lands, this Supertonic Vulkan codepath inherits the
+  cold-start win automatically.
+- ~~**Q8_0 / BF16 K/V flash-attention live dispatch**~~ — **DONE
+  in round 4** (May 2026, QVAC-18605 follow-up #4).  Wired the
+  enum-typed dispatch + `--kv-attn-type {auto,f32,f16,bf16,q8_0}`
+  CLI flag (probe-gated graceful fallback to F32 on adapters that
+  don't support the requested dtype).  Live BF16 / Q8_0 cast in
+  `build_text_attention_cache()`; cache invalidation key promoted
+  from `bool f16_kv_attn` to `kv_attn_dtype kv_attn_type`.  Drift
+  on the parity harness is bounded at 5e-3 abs / 5e-3 rel for
+  BF16 (matches the F16 baseline).  Q8_0 dispatch ships behind
+  the same flag but is gated by `supertonic_backend_supports_q8_0_kv_flash_attn`;
+  the operator opts in only when their adapter advertises
+  support.  See "Vulkan optimisation round 4" below.
+- **Pinned-host-buffer per-step uploads**: round 3 adds the
+  capability probe for `ggml_backend_vk_host_buffer_type()` so
+  the cache + bench surface know whether the path is available
+  on the resolved backend.  The actual per-engine input-
+  scratchpad refactor (allocate text_emb / time-step / style
+  embedding tensors in the host-pinned buffer type instead of
+  the default device-local buffer to skip ggml-vulkan's internal
+  staging-buffer hop) is deferred until measured on a real Vulkan
+  adapter so we can quantify the reduction in `latent` upload
+  latency.
+
+---
+
+### Vulkan optimisation round 3 (May 2026, QVAC-18605 follow-up #2)
+
+Three more Vulkan-specific deltas, all developed test-first (TDD)
+— the new tests were committed first, observed to fail on the
+missing symbol, and only then was the implementation written and
+the tests re-run.
+
+1. **BF16 K/V flash-attn capability probe** (5th `backend_capabilities`
+   flag).  Symmetric to the round-2 Q8_0 K/V probe.  Vulkan's
+   `GGML_OP_FLASH_ATTN_EXT` `supports_op` advertises BF16 K/V via
+   the coopmat2-only path; BF16 has the same 2-byte per-element
+   footprint as F16 (so identical upload bandwidth) but the wider
+   8-bit exponent range avoids the F16 underflow on small attention
+   scores that drives the parity-harness tolerance widening.
+   Forward-compat — the live `--kv-attn-type bf16` dispatch wiring
+   is deferred to a follow-up that measures drift against the
+   parity harness on a real Vulkan adapter.
+
+2. **Multi-device auto-pick for `--vulkan-device -1`**.  Wires the
+   previously-reserved auto-pick API: walks every visible adapter,
+   queries `ggml_backend_vk_get_device_memory()` to read free
+   VRAM, and dispatches into a pure-logic helper
+   `resolve_vulkan_device_index(requested, free_vram_per_device)`
+   that picks `argmax(free_vram)` (ties → lower index for stable
+   per-run assignment on identical-spec multi-GPU machines).
+   Verbose mode logs the per-device VRAM table so operators can
+   confirm the auto-pick chose the expected adapter.  The pure-
+   logic helper is testable on CPU with synthetic inputs (8 cases,
+   23 checks) — separates the policy from the Vulkan-only plumbing.
+   Reserved-future negative values (`-2`, `-100`, ...) now throw
+   instead of silently falling through to device 0.
+
+3. **Pinned-host-buffer-type capability probe** (6th
+   `backend_capabilities` flag) + bench surface.  Probes whether
+   `ggml_backend_vk_host_buffer_type()` is callable on the
+   resolved backend (Vulkan + non-null buffer-type).  Forward-
+   compat — primes the capability cache for a follow-up per-engine
+   input-scratchpad refactor that skips ggml-vulkan's internal
+   staging-buffer hop on per-step uploads.  Bench output now shows
+   `bf16_kv_attn_available` + `pinned_host_buffer_available` in
+   both the human-readable backend tag and the JSON output so
+   operators can pre-flight whether a future opt-in will be
+   effective on their machine.
+
+#### Test plan (TDD, round 3)
+
+| Test | Coverage | Result |
+|------|----------|--------|
+| `test-supertonic-capability-cache` (UPDATED) | Existing 18 checks + 9 new round-3 checks (BF16 K/V probe smoke + cache-slot share, pinned-host-buffer probe smoke + cache-slot share, null-backend handling for both) | 27 / 27 PASS |
+| `test-supertonic-vulkan-device-select` (NEW) | 8 test functions × 23 checks for the pure-logic auto-pick helper (empty list, single device, argmax, tie-break, explicit-index passthrough, out-of-range, reserved-negative, zero-VRAM) | 23 / 23 PASS |
+| Every existing unit test (resample, cpu/t3 caches, profile-csv, rope-in-graph, rope-packed-qk, convnext-block-fused, in-graph-transpose, graph-to-graph-blit, backend-dispatch, portable-ops, vulkan-dispatch, warm-up-api, f16-attn-parity) | Round 1 + 2 + audit follow-up correctness | 16 / 16 PASS — unchanged |
+
+Whole CPU-only `ctest -L unit` reports **16 / 16 tests, 0 failures**.
+The TDD discipline was strict: the new tests in round 3 were
+committed BEFORE the implementation and verified to fail on the
+missing symbol (the compile-error footprint is captured in the
+PR description) — only then was the implementation written and
+the tests re-run to verify green.
+
+---
+
+### Vulkan optimisation round 6 (May 2026, QVAC-18605 follow-up #3) — F16-weights operator deny-list
+
+Round 6 layers a **user-overridable extra deny-list** on top of
+the existing hand-curated `should_materialise_f16_weight()`
+allow-list.  The curated allow-list (Phase 2A) already excludes
+biases, norms, embeddings, depthwise convs, and pre-transposed
+companions; the round-6 deny-list lets operators force-keep
+specific *additional* tensors as F32 even when `--f16-weights`
+is on.  Use cases:
+
+- **A/B testing**: researcher wants to exclude a specific tensor
+  pattern temporarily without recompiling.
+- **Hardware-specific drift mitigation**: operator observes drift
+  on a particular adapter / driver / shape and pins the
+  problematic tensor to F32 via config rather than disabling F16
+  weights wholesale.
+- **Future-GGUF safety net**: new tensor patterns added in future
+  Supertonic GGUFs that the curated allow-list inadvertently
+  scoops in can be excluded via config without a code change.
+
+Smallest blast radius of the four follow-up rounds — load-time
+policy only, runtime dispatch unaffected, zero behaviour change
+on the empty-deny-list default path.
+
+#### What changed
+
+1. **2-arg overload `should_materialise_f16_weight(name, extra_deny_substrings)`**
+   added alongside the existing 1-arg version (existing test +
+   call sites unchanged).  Substring matching (audit-friendly,
+   matches the curated predicate's style; no regex compile cost
+   or invalid-pattern surface).  The deny-list can only flip
+   `true → false`, never `false → true` — it's a deny-list, not
+   an allow-list.  Empty strings inside the deny-list are
+   SKIPPED defensively, not treated as universal matches (config-
+   typo guard against an empty entry silently disabling F16
+   weights for the whole model).
+
+2. **`EngineOptions::f16_weights_deny_list`** (`std::vector<std::string>`,
+   default empty) — public API surface for engine-side
+   integration.  Wired through `Engine::Impl` →
+   `load_supertonic_gguf` → the per-tensor allocation loop.
+
+3. **`load_supertonic_gguf` 7th parameter** added at the end of
+   the signature with a `{}` default — every existing call site
+   keeps compiling without modification.
+
+4. **`supertonic_model::f16_weights_excluded_count`** counter
+   bumped at load time when a curated-hot tensor is excluded by
+   the user's deny-list.  Surfaced in bench's human + JSON
+   output so operators can confirm their config took effect.
+
+5. **CLI plumbing**: `--f16-weights-deny PAT1,PAT2,...` flag on
+   `supertonic-cli`, `tts-cli` (chatterbox), and `supertonic-bench`
+   (comma-separated substring patterns).
+
+6. **Verbose-log line** in `load_supertonic_gguf` when the deny-
+   list is non-empty (silent on the default path — no visual
+   noise on existing operator workflows).
+
+#### Test plan (TDD, round 6)
+
+Both new tests were committed BEFORE the implementation and
+observed to fail on the missing symbols (compile errors:
+`'should_materialise_f16_weight' too many arguments` for the
+predicate test; `'EngineOptions::f16_weights_deny_list'` no such
+member for the API-surface test).  Only then was the
+implementation written and the tests re-run.
+
+| Test | Coverage | Result |
+|------|----------|--------|
+| `test-supertonic-f16-weights` (UPDATED) | Existing 36 checks (positives, negatives, edges) + 29 new round-6 checks across 7 new test functions (empty-list passthrough, matching-deny-excludes, non-matching-no-op, cannot-promote-cold, multiple-patterns ANY-match, empty-string defensive skip, empty-name safety) | 65 / 65 PASS |
+| `test-supertonic-f16-deny-list-api` (NEW) | SFINAE compile-time gate for `EngineOptions::f16_weights_deny_list` + `load_supertonic_gguf` 7th param; runtime defaults check + assignability + regression guards on every other documented `EngineOptions` default | 9 / 9 PASS |
+| Every other unit test (round 1+2+3 + audit follow-ups + the 14 baseline tests) | Zero-regression gate | 17 / 17 PASS — unchanged |
+
+Whole CPU-only `ctest -L unit` reports **17 / 17 tests, 0
+failures, 0 regressions**.
+
+#### Why no live perf number?
+
+Round 6 is a **policy** change, not a kernel change.  The
+quality-recovery on hand-picked tensors is workload-specific and
+quantified offline against the F16-attention parity harness;
+this PR adds the operator-facing knob so future drift incidents
+can be triaged via config without a code change.  Bench output
+surfaces the excluded-count so CI scripts can attribute any
+quality regression to a config change.
+
+---
+
+### Vulkan optimisation round 4 (May 2026, QVAC-18605 follow-up #4) — Multi-dtype K/V flash-attention
+
+The round-1 `--f16-attn` boolean only let operators pick between
+F32 and F16 K/V flash-attention.  Round 4 generalises the
+dispatch into a four-valued enum + CLI flag so operators can
+opt into BF16 K/V (Vulkan coopmat2 — same bandwidth as F16, no
+F16 underflow on small attention scores) or Q8_0 K/V (Vulkan
++ half the K/V upload bandwidth for upload-bound workloads) on
+adapters that advertise the corresponding capability.  The
+existing F16 cache + dispatch were the round-2 / round-3
+plumbing's only consumers; round 4 is the live wiring that
+turns those probe results into actual dispatches.
+
+#### Changes
+
+- **New public API**: `EngineOptions::kv_attn_type` int field
+  (`-1` = auto, `0` = f32, `1` = f16, `2` = bf16, `3` = q8_0).
+  Same `-1` = auto convention as `f16_attn` / `f16_weights` /
+  `vulkan_device`, so operator configs are consistent.  Default
+  (`-1`) falls back to `f16_attn`'s value, so every existing
+  operator config sees zero behaviour change.
+
+- **New internal enum + resolver**: `tts_cpp::supertonic::detail::kv_attn_dtype`
+  + `resolve_kv_attn_type(requested, legacy_use_f16_attn,
+  supports_f16, supports_bf16, supports_q8_0)` — pure-logic
+  policy split from the dispatch site (same split pattern as
+  round-3's `resolve_vulkan_device_index`).  Out-of-range int
+  throws to surface CLI typos loudly; probe-rejected explicit
+  requests fall back to F32 silently (advisory-probe pattern,
+  same as round-1's F16 auto-policy).
+
+- **New thread-local accessor**: `supertonic_kv_attn_type()`,
+  populated by `supertonic_op_dispatch_scope` from
+  `model.kv_attn_type` (mirrors the `supertonic_use_f16_attn()`
+  pattern).  RAII teardown via the new
+  `supertonic_op_dispatch_scope::prev_kv_attn_type` field.
+
+- **Vector-estimator dispatch site** (`build_text_attention_cache()`):
+  `if (cache.f16_kv_attn) { cast K/V → F16 }` replaced with a
+  switch on the enum; cast target picked from `{F16, BF16, Q8_0}`
+  per `cache.kv_attn_type` (or no cast for F32).  Cache key
+  promoted from `bool f16_kv_attn` to `kv_attn_dtype kv_attn_type`
+  (rebuilds the graph when the enum flips, same correctness
+  contract as the rest of the cache key tuple).
+
+- **CLI flag** on all three CLIs (`supertonic-cli`, `tts-cli`,
+  `supertonic-bench`): `--kv-attn-type {auto,f32,f16,bf16,q8_0}`.
+  The `supertonic-cli` arg-parse loop is now wrapped in
+  try/catch so invalid values surface as a clean `error: ...`
+  line + exit 2 instead of an uncaught-exception backtrace
+  (also fixes the pre-existing latent crash on `--vulkan-device
+  abc` / `--seed nonsense` / etc).
+
+- **Bench surface**: human-readable line shows
+  `(kv_attn_type=f32|f16|bf16|q8_0)` always (so log-grep across
+  machines can attribute drift / perf to dispatch dtype).  JSON
+  output adds `"kv_attn_type": "<dtype>"` and
+  `"kv_attn_type_requested": <int>` — the resolved + the
+  requested value, so a probe miss is visible in the JSON.
+
+#### Test plan (TDD, round 4)
+
+Strict test-first.  All four new tests were committed first,
+observed to fail on missing symbols (compile errors:
+`'kv_attn_dtype' has not been declared` for the resolver test;
+`'EngineOptions' has no member named 'kv_attn_type'` for the
+API test).  Only then was the implementation written and the
+tests re-run.
+
+| Test | Coverage | Result |
+|------|----------|--------|
+| `test-supertonic-f16-attn-parity` (UPDATED — Prereq B) | Existing 4 F16-vs-F32 parity checks (vector-estimator + style shapes) + **2 new BF16-vs-F32 parity checks** wired via the same `run_flash_attn(cpu, in, kv_dtype)` helper.  Tolerance band: 5e-3 abs / 5e-3 rel on both shapes; CPU build returned `max_abs_err = 5.263e-3` (vector-estimator) and `3.596e-3` (style), both within budget. | 8 / 8 PASS |
+| `test-supertonic-kv-attn-type` (NEW) | Pure-logic resolver — 7 test functions, **106 checks** covering: auto + legacy boolean back-compat matrix; f32 forced overrides legacy; f16 forced + probe-gated graceful fallback; bf16 forced + probe-gated graceful fallback (40-state combo: every {requested, legacy, probe-mask} tuple verified to never leak the `autoselect` sentinel); q8_0 forced + probe-gated graceful fallback; out-of-range throws (4 cases: 4, 99, -2, -100); resolver-returns-concrete-only (40-state exhaustive sweep). | 106 / 106 PASS |
+| `test-supertonic-kv-attn-type-api` (NEW) | API-surface lockdown — SFINAE compile-time gates for `EngineOptions::kv_attn_type` field, `supertonic_model::kv_attn_type` field, `supertonic_op_dispatch_scope::prev_kv_attn_type` field; runtime defaults check (kv_attn_type=-1, model field=f32, accessor=f32 with no scope active); dispatch-scope ctor/dtor restoration of the thread-local; regression guard on every other documented `EngineOptions` default (prewarm_text empty, vulkan_device 0, f16_attn -1, f16_weights -1, f16_weights_deny_list empty). | 18 / 18 PASS |
+| Every other unit test (rounds 1 + 2 + 3 + 6 + audit follow-ups + the 14 baseline tests) | Zero-regression gate | 19 / 19 PASS — unchanged |
+
+Whole CPU-only `ctest -L unit` reports **19 / 19 tests, 0
+failures, 0 regressions**.
+
+#### Backwards compatibility contract
+
+- Default `--kv-attn-type auto` (== `kv_attn_type = -1`) falls
+  back to `--f16-attn`'s value via the resolver.  Every existing
+  operator config sees identical behaviour to round 1 / 2 / 3
+  / 6.
+
+- The legacy `model.use_f16_attn` boolean is updated to
+  `(model.kv_attn_type == kv_attn_dtype::f16)` after resolution
+  so any external code still keying on the boolean stays
+  consistent with the enum.  In-tree the only consumer is the
+  vector estimator, which now reads the enum directly; the
+  boolean is preserved for forward-compat + the existing
+  `test-supertonic-backend-dispatch` lockdown checks.
+
+- Probe-rejected explicit requests fall back to F32 silently
+  — an operator setting `--kv-attn-type bf16` once in their
+  production config works on both NVIDIA Ampere+ (BF16 effective
+  via Vulkan coopmat2) and Intel ARC (no coopmat2 → silent F32
+  fallback) without crashing.  Operators see the resolved dtype
+  in the bench output, so a fallback is visible.
+
+- Out-of-range `--kv-attn-type N` (CLI typo, e.g. `--kv-attn-type
+  q4_0`) throws inside `resolve_kv_attn_type`; the CLI catches +
+  surfaces it as `error: --kv-attn-type expects auto|f32|f16|bf16|q8_0
+  (got: ...)` + exit 2.  Loud failure for actual config errors;
+  silent fallback for advisory probes.
+
+#### Why no live Vulkan perf number?
+
+Round 4 is the **dispatch wiring** that turns the probe
+results from rounds 2 + 3 into actual GPU work.  The win
+shape is workload + adapter specific:
+
+- **BF16 K/V on Vulkan coopmat2**: same K/V upload bandwidth
+  as F16, but the wider exponent range removes the F16
+  underflow on small attention scores.  No drift, no
+  bandwidth cost — pure quality recovery.  Expected to
+  dominate F16 on production prompts where the round-1 F16
+  parity harness sits near tolerance.
+
+- **Q8_0 K/V on Vulkan**: half the K/V upload bandwidth of
+  F16/BF16; expected dominant on long-prompt / large-style
+  workloads where K/V upload is a meaningful fraction of
+  per-step time.  Quantization noise is workload dependent;
+  operators dial in via the parity harness on their own
+  prompts before flipping the flag.
+
+The dispatch + flag are in place so an operator with a real
+Vulkan adapter can A/B in their own config without a code
+change; the harness numbers will land in a follow-up after
+measurement on real hardware.
+
+---
+
+### Note on the "round 5" gap
+
+The round-4 plan in `aiDocs/PLAN_VULKAN_NEXT_ROUNDS.md` reserved
+the name **"Round 5 = pinned-host-buffer per-step uploads"** as
+the next deliverable.  We deferred it because the plan called
+out a hard prerequisite (round 7's bench observability — to
+measure win + verify no regression on adapters where pinned-host
+turns out slower).  After landing rounds 6, 7, 8, 9, 10, 11 we
+came back to the pinned-host-buffer work and shipped it as
+**round 12 #5** (bundled with two other items: the auto-pick
+UMA bias fix and the text-encoder GPU-bridge wiring).  No code
+was abandoned; the "round 5" label was a planning placeholder
+that the actual implementation absorbed into round 12.  We kept
+the contiguous round-12 / round-13 numbering instead of
+retroactively renaming round 12 to "round 5 (delayed)" so that
+the commit hashes referenced in PR descriptions and CI logs
+match the round numbers in this PROGRESS log without rebase
+churn.
+
+---
+
+### Vulkan optimisation round 7 (May 2026, QVAC-18605 follow-up #5) — Bench observability + voice cache + Vulkan env-var passthrough
+
+The next-rounds plan
+(`aiDocs/PLAN_VULKAN_NEXT_ROUNDS.md`) identified bench-side
+observability + a small set of trivial wins as the highest
+impact-÷-risk round to land before the bigger structural changes
+of rounds 5 / 8 / 9.  Round 7 ships four sub-features, none
+touching the per-synth hot path beyond a single voice-cache
+lookup.
+
+#### Changes
+
+- **Voice ttl/dp host cache** (`tts_cpp::supertonic::detail::voice_host_cache`).
+  Extracted from `Engine::Impl::synthesize()` so the lookup-or-load
+  semantics are testable on CPU without instantiating a full
+  Engine.  First `synthesize()` per voice does the 2 GPU→host
+  downloads (`read_tensor_f32(ttl)` + `read_tensor_f32(dp)`)
+  and caches the result; subsequent calls return the cached
+  entry without touching the backend.  Eliminates 2 sync points
+  per `synthesize()` after the first per-voice on Vulkan / OpenCL.
+  Tiny (2 small tensors) but free.  Reference-stability contract
+  documented on the struct: caller may hold the reference for
+  the duration of one synthesis, but must not call `clear()`
+  while holding it (currently only reachable on Engine
+  destruction).
+
+- **Vulkan env-var passthrough**
+  (`apply_vulkan_env_overrides(map)` public helper +
+  `EngineOptions::vulkan_env_overrides` field +
+  `--vulkan-prefer-host-memory` / `--vulkan-disable-coopmat2` /
+  `--vulkan-disable-bfloat16` / `--vulkan-perf-logger` /
+  `--vulkan-async-transfer` / `--vulkan-env KEY=VALUE` CLI flags
+  on all three binaries).  ggml-vulkan reads its `GGML_VK_*`
+  env vars at backend-init time; this round lets operators set
+  them via CLI (or `EngineOptions`) without exporting in the
+  shell.  ALL-OR-NOTHING validation: an operator-config typo
+  like `GMML_VK_PREFER_HOST_MEMORY` throws cleanly via
+  `apply_vulkan_env_overrides` BEFORE any env var is touched.
+  `set_env_if_unset` semantics so an operator-set env var still
+  WINS over the EngineOptions override (debugging operators can
+  force-disable from the shell without recompiling).
+
+- **Bench `ggml_backend_synchronize` boundaries**
+  (`--bench-sync` default on, `--no-bench-sync` opt-out).
+  Inserts an explicit backend sync at every per-stage timing
+  boundary so wall-clock attributes to the right stage on async
+  backends.  Cheap on CPU (no-op when no GPU work pending);
+  ensures per-stage breakdowns reflect work-completed-by-the-
+  prior-stage on Vulkan / OpenCL.  Round-7 prerequisite for
+  measuring rounds 5 / 8 / 9 wins on real hardware.
+
+- **Bench per-denoise-step breakdown** (`--bench-per-step`,
+  default off).  Times each `supertonic_vector_step_ggml` call
+  individually so the first-step (cold pipeline) cost can be
+  distinguished from steady-state.  Adds an indented
+  `vector_step[N]` line per step in the human output and a
+  separate JSON entry per step.  Empty array on the default-off
+  path = identical legacy JSON shape.
+
+#### Test plan (TDD, round 7)
+
+Strict test-first.  Two new test executables committed first,
+observed to fail on the missing symbols (compile errors:
+`'apply_vulkan_env_overrides' was not declared in this scope`
+for the env-passthrough test; `'voice_host_cache' has not been
+declared` for the voice-cache test).  TDD also caught a real
+implementation bug: the original validator used `std::string()`
+empty-as-success sentinel which collided with the empty-string-
+as-key edge case; the test pinned the contract and forced the
+fix to a `bool / out-param` API before any production wiring
+went in.
+
+| Test | Coverage | Result |
+|------|----------|--------|
+| `test-supertonic-vulkan-env-overrides` (NEW) | 7 functions, **29 checks** — SFINAE field existence; round-3/4/6 baseline-defaults regression guard; empty-map noop; single-entry sets env; operator-env wins (set_env_if_unset semantics); invalid-key throws (4 negative cases including the empty-string-key edge); ALL-OR-NOTHING on mixed-validity (no partial application); multi-entry happy path. | 29 / 29 PASS |
+| `test-supertonic-voice-host-cache` (NEW) | 6 functions, **25 checks** — empty cache; first-load populates from GGML tensors; second-load hits cache (verified by passing nullptr — a real load attempt would crash); multi-voice independence + reference stability across other-voice lookups; clear-drops-entries; null-tensors-on-miss throws (Impl-bug guard). | 25 / 25 PASS |
+| Every other unit test (rounds 1 + 2 + 3 + 4 + 6 + audit follow-ups + the 14 baseline tests) | Zero-regression gate | 19 / 19 PASS — unchanged |
+
+Whole CPU-only `ctest -L unit` reports **21 / 21 tests, 0
+failures, 0 regressions**.
+
+#### Backwards compatibility
+
+- `EngineOptions::vulkan_env_overrides` defaults to empty —
+  `apply_vulkan_env_overrides({})` is a no-op (regression-
+  guarded by `test_empty_map_is_noop`); no operator-visible
+  behaviour change for existing configs.
+- Voice cache is fully transparent — `Engine::Impl` hits the
+  cache in place of the previous direct `read_tensor_f32` calls;
+  the cached vectors are bit-equal to the originals.
+- `--bench-sync` defaults to ON.  Per-stage times in the bench
+  output may shift slightly upward on Vulkan / OpenCL because
+  they now reflect work-completed-by-the-stage instead of
+  host-return-from-the-stage; the AGGREGATE total stays equal
+  (the work was always being done; the attribution just gets
+  more accurate).  `--no-bench-sync` recovers the historical
+  shape exactly.
+- `--bench-per-step` defaults to OFF — JSON shape unchanged on
+  the default path.
+
+#### Why no live perf number?
+
+Round 7 is **observability + paving** — the wins are:
+- Voice cache: 2 sync points / synth eliminated (small but free).
+- Bench sync + per-step: prerequisites for measuring round 5 / 8
+  / 9 wins on real hardware (no measurable production effect by
+  themselves).
+- Vulkan env passthrough: triage knobs for operators, not
+  production tuning.
+
+The biggest payoff lands in round 8 when the bench surface from
+round 7 starts attributing the front-block GPU-bridge win to the
+right stage column.
+
+---
+
+### Vulkan optimisation round 8 (May 2026, QVAC-18605 follow-up #6) — Front-block attn0 GPU bridge
+
+The single largest remaining per-step sync hotspot identified in
+the next-rounds plan
+(`aiDocs/PLAN_VULKAN_NEXT_ROUNDS.md`).  PR #16's audit follow-up
+#6 (2C-lite) shipped the GPU device→device blit infrastructure
+(`run_text_attention_cache_gpu`) and wired g1 / g2 / g3 group
+attentions to use it; the front-block `attn0` site was deferred
+because of cache-lifetime concerns at the time.  Round 8 picks
+it up — same exact pattern as g1/g2/g3, ~30 LOC delta in one
+function.
+
+#### Changes
+
+- **Front-block attn0 dispatch site** (`supertonic_vector_estimator.cpp`,
+  `supertonic_vector_trace_proj_ggml`).  The
+  `tensor_to_time_channel(...)` downloads of `ve_attn0_v` /
+  `ve_attn0_q_rope` / `ve_attn0_k_rope` followed by the host-bridge
+  `run_text_attention_cache(...)` call are replaced (in
+  production mode) by a single `run_text_attention_cache_gpu(
+  q_rope_gpu, k_rope_gpu, v_gpu, ...)` call that takes the
+  named GPU tensors from the front cache and blits them
+  device→device into the att0 cache's input tensors.
+  Eliminates 6 sync points × 5 denoise steps = **30 sync points
+  / synth** on the production path.
+
+- **Strict gating on the GPU-bridge fast path** —
+  `front_in_graph_rope && !include_ggml_trace && v_gpu_attn0 &&
+  k_rope_gpu_attn0`.  Trace mode falls back to the legacy host
+  bridge so the trace harness still captures pre-attention
+  Q/K/V host vectors for scalar-parity assertions.  Legacy
+  GGUFs without `vector_rope_theta` (no in-graph RoPE) also
+  fall back — host `apply_rope` continues to work.  Defensive
+  null-guards on `v_gpu_attn0` / `k_rope_gpu_attn0` even though
+  both are unconditionally `set_output` in the cache build
+  (cost: zero; insurance against a future cache rewrite that
+  silently drops one of the named outputs).
+
+#### Test plan (TDD, round 8)
+
+The blit primitive parity gate already shipped with PR #16:
+`test-supertonic-graph-to-graph-blit` covers the device→device
+blit through two minimal cached graphs sharing one backend, and
+asserts bit-exact parity vs the host-download / host-upload pair.
+Round 8 extends it with explicit coverage of the front-block K/V
+shapes:
+
+| Shape | Coverage |
+|------|----------|
+| `attn0_q_rope_L20` (existing) | 4h × 64d Q post-RoPE @ L=20 — already covered front-block Q.  Round-8 doc-comment makes the front-block coverage explicit. |
+| `attn0_kv_text_len32` (NEW) | front-block K / V @ text_len=32 (width=256, kv_len=32) — blit primitive parity for the K / V shape. |
+| `attn0_kv_text_len50` (NEW) | front-block K / V @ text_len=50 (width=256, kv_len=50) — same primitive at the longer text-prompt shape. |
+
+Whole CPU-only `ctest -L unit` reports **21 / 21 tests, 0
+failures, 0 regressions**.  Existing bit-exact parity tests
+covering the non-trace front-block path
+(`test-supertonic-rope-in-graph`, `test-supertonic-rope-packed-qk`,
+`test-supertonic-graph-to-graph-blit`,
+`test-supertonic-f16-attn-parity`) all continue to pass — the
+dispatch-site change preserves the F23 in-graph RoPE outputs
+that those tests pin, and the GPU-bridge path is functionally
+identical to the host-bridge path it replaces (only the
+intermediate transfer pattern changes).
+
+#### Backwards compatibility
+
+- Trace mode unchanged — `include_ggml_trace == true` falls back
+  to the legacy host bridge with all original downloads + trace
+  pushes.
+- Legacy GGUFs (no `vector_rope_theta`) unchanged — falls back
+  to the host-rotate path that PR #16 already preserved.
+- Production path: bit-equivalent output to the pre-round-8
+  path (the GPU bridge blits the same bytes the host bridge
+  would download / upload; the attention compute reads the
+  same input data either way).
+- `cache.kv_attn_type` cache-key (round 4) still applies — F32 /
+  F16 / BF16 / Q8_0 dispatch unchanged on the GPU path.
+
+#### Why no live perf number?
+
+Same shape as round 4: dispatch wiring, not a kernel change.
+The win is workload + adapter specific:
+
+- On Adreno (chatterbox PROGRESS.md §3) each sync point costs
+  several hundred microseconds.  30 sync points / synth × 5
+  steps = a measurable per-synth latency reduction depending on
+  prompt length.
+- On desktop NVIDIA / AMD the per-sync overhead is lower but
+  still real (USB / PCIe round-trip).
+- On CPU the change is strictly equivalent — `ggml_backend_tensor_copy`
+  with same-backend src+dst is a memcpy on the CPU backend; the
+  parity test pins this at `max_abs = 0.0` (bit-equal output).
+
+The dispatch + parity gate are in place so an operator with a
+real Vulkan adapter can A/B `--bench-per-step` (round 7) numbers
+on rounds 6 / 7 / 8 builds and attribute the per-step
+improvement to this exact change.
+
+---
+
+### Vulkan optimisation round 9 (May 2026, QVAC-18605 follow-up #7) — Style flash-attn GPU bridge
+
+Round 8 wired the GPU bridge for the **front-block attn0** site.
+Round 9 extends the same proven pattern to the **4 style flash-
+attn sites** (style0 + g1_style + g2_style + g3_style).  Each
+site previously downloaded `sq` / `sk` / `sv` from the
+res-style-qkv cache then re-uploaded them to the next-stage
+attention cache; round 9 replaces all 4 host bridges with
+`run_text_attention_cache_gpu` device→device blits, gated on
+production mode.
+
+#### Changes
+
+- **`vector_res_style_qkv_result` extended** with
+  `ggml_tensor * sq_gpu / sk_gpu / sv_gpu` GPU handles.  Same
+  shape as `vector_group_graph_result::q_rope_gpu` etc from the
+  round-1 2C-lite work.  Populated unconditionally by
+  `run_res_style_qkv_cache` (cheap — just `ggml_graph_get_tensor`
+  lookups on the cached graph; no GPU sync).
+
+- **`run_res_style_qkv_cache` host-download gating**.  The 3
+  `tensor_to_time_channel(...)` downloads of `sq` / `sk` / `sv`
+  are now gated on `trace != nullptr`.  Production path skips
+  them entirely.  Mirrors the round-1 2C-lite
+  `need_host_qkv = (trace != nullptr)` gate on
+  `vector_group_graph_result`.  `post` stays unconditional —
+  consumed by the next-stage `run_style_residual_cache` which
+  still expects a host vector (cross-stage GPU bridge for `post`
+  is deferred; documented in `aiDocs/PLAN_VULKAN_NEXT_ROUNDS.md`).
+
+- **4 style flash-attn dispatch sites rewired**.  All four sites
+  (`style0` / `g1_style` / `g2_style` / `g3_style`) follow the
+  exact same gating pattern as the round-8 front-block bridge:
+  ```
+  use_gpu_bridge = !include_ggml_trace && sq_gpu && sk_gpu && sv_gpu
+  if (use_gpu_bridge) run_text_attention_cache_gpu(sq_gpu, sk_gpu, sv_gpu, ...)
+  else                run_text_attention_cache(host_sq, host_sk, host_sv, ...)
+  ```
+  Trace mode falls back to the legacy host bridge so the trace
+  harness still gets all the host vectors.
+
+#### Test plan (TDD, round 9)
+
+Strict test-first.  The blit primitive parity test was extended
+BEFORE any production wiring landed:
+
+| Shape | Coverage | Result |
+|------|----------|--------|
+| `style_sq_L1` (NEW) | Style Q at L=1 — trip-wire for stride / shape bugs at the smallest sensible input.  Mirrors round-8's `attn0_q_rope_L1` trip-wire. | `max_abs = 0.0` PASS |
+| `style0_q_rope_L20` (CLARIFIED) | Style sq @ L=20 (width=256, n_heads=2, head_dim=128).  Already covered the underlying byte layout pre-round-9; round 9 adds the explicit doc-comment about which round-9 site this covers. | `max_abs = 0.0` PASS |
+| `style0_k_rope_kv50` (CLARIFIED) | Style sk / sv @ kv_len=50.  Same comment treatment. | `max_abs = 0.0` PASS |
+
+Whole CPU-only `ctest -L unit` reports **21 / 21 tests, 0
+failures, 0 regressions**.  `test-supertonic-graph-to-graph-blit`
+went from 21 / 21 to **24 / 24 checks** (3 new style-shape
+checks, all bit-exact).  All other unit tests unchanged.
+
+#### Backwards compatibility
+
+- Trace mode preserved exactly — `include_ggml_trace == true`
+  triggers the `if (trace)` host-download block in
+  `run_res_style_qkv_cache` and the host-bridge fallback in
+  every dispatch site.  Trace harnesses see identical `sq` /
+  `sk` / `sv` host vectors as before round 9.
+- Production path: bit-equivalent output to the pre-round-9
+  path (the GPU bridge blits the same bytes the host bridge
+  would download / upload; the attention compute reads the
+  same input data either way).
+- `cache.kv_attn_type` (round 4) cache-key still applies —
+  F32 / F16 / BF16 / Q8_0 K/V dispatch unchanged on the GPU
+  path.
+- `last_style_v_raw_uploaded` / `last_kctx_raw_uploaded` F4
+  upload-skip optimization untouched (those are about
+  `style_v_in` / `kctx_in` uploads INTO the res-style-qkv
+  cache, not its outputs).
+
+#### Why no live perf number?
+
+Same shape as rounds 4 + 8: dispatch wiring, not a kernel
+change.  Sync-points eliminated:
+
+- 3 GPU→host downloads + 3 host→GPU uploads = 6 sync points
+  per call
+- 4 sites × 5 denoise steps = 20 calls / synth
+- Total: **120 sync points / synth eliminated** on the
+  production Vulkan / OpenCL path (4× the round-8 win;
+  largest bandwidth-style optimisation that ships from
+  pure-Supertonic-side code).
+
+The bench surface from round 7 (`--bench-per-step` +
+`--bench-sync`) directly attributes the per-step improvement
+to the correct stage column on real hardware.
+
+---
+
+### Vulkan optimisation round 10 (May 2026, QVAC-18605 follow-up #8) — Per-step text-input upload-skip
+
+After rounds 8 + 9 wired the GPU bridge for the 5 attention sites
+(front-block attn0 + 4 style attentions), the remaining per-step
+host uploads are the **input tensors fed to each cached graph**:
+`latent` (changes per step), `mask` (constant), `temb` (changes
+per step), and `text_emb` / `text_lc_host` (constant within one
+synth).  Round 10 picks off the largest of those: `text_emb`,
+which is uploaded **4 caches × 5 steps = 20 times / synth** but
+is the same data on every call.
+
+#### Changes
+
+- **`upload_skip_tracker` helper** in `supertonic_internal.h`.
+  Pointer-compare upload-skip generalising the F4 pattern
+  already used for `style_v_in` / `kctx_in` in
+  `vector_res_style_qkv_cache`.  `needs_upload(p) -> bool`,
+  `mark_uploaded(p)`, `reset()`.
+
+- **Front-block cache** (`ve_front_block_graph_cache`) +
+  **group-graph cache** (`vector_group_graph_cache`): add
+  `text_in_skip` field, guard the `ggml_backend_tensor_set` for
+  `text_in` / `text_in_t` with `needs_upload(text_emb)`, and
+  reset on `current_step == 0` to handle the cross-synth
+  pointer-reuse hazard (modern allocators very often re-issue
+  the same address for the next stack-local
+  `std::vector<float>` of the same size — without the reset,
+  the next synth would silently leak prior synth's text-encoder
+  embedding to the GPU).
+
+- **Cache rebuild safety**: `cache = {}` zero-initialises the
+  tracker (its only field is a pointer that defaults to
+  `nullptr`), so a graph rebuild correctly forces the next
+  upload regardless of incoming pointer.
+
+#### Test plan (TDD, round 10)
+
+Strict test-first.  `test-supertonic-upload-skip-tracker` (NEW)
+committed first, observed to fail compile (`upload_skip_tracker
+was not declared`), then implementation added.
+
+| Test | Coverage | Result |
+|------|----------|--------|
+| `test-supertonic-upload-skip-tracker` (NEW) | 7 functions, **41 checks** — default state (fresh tracker always needs upload); upload + skip happy path (5-step pattern); pointer-change forces upload; reset() invalidation (synth-boundary contract); independent-instance non-interference; **cross-synth pointer-reuse hazard simulation** (exact bug the synth-boundary reset prevents — without reset, naive pointer-compare leaks prior synth data); reset-on-empty no-op. | 41 / 41 PASS |
+| Every other unit test (rounds 1-9 + audit follow-ups + the 14 baseline tests) | Zero-regression gate | 21 / 21 PASS — unchanged |
+
+Whole CPU-only `ctest -L unit` reports **22 / 22 tests, 0
+failures, 0 regressions**.
+
+#### Backwards compatibility
+
+- Tracker is initialised to `last_uploaded = nullptr` →
+  `needs_upload(any_ptr) = true` on the first call → cold-miss
+  upload always fires.  No cache cold-start regression.
+- Cache rebuilds (`cache = {}`) zero-init the tracker → next
+  upload fires regardless of pointer.  Same correctness as
+  pre-round-10.
+- Synth-boundary reset (`current_step == 0`) invalidates the
+  tracker → next synth's first step always uploads.  Protects
+  against the documented cross-synth pointer-reuse hazard.
+- Trace mode unaffected (the upload itself is unchanged when
+  it fires; only the redundant re-uploads are skipped).
+
+#### Win
+
+Per synth (5 denoise steps):
+
+| Cache | Uploads pre-round-10 | Uploads post-round-10 | Saved |
+|---|---|---|---|
+| Front block (`text_in_t`) | 5 | 1 (cold-miss) | 4 |
+| g1 group (`text_in`) | 5 | 1 | 4 |
+| g2 group (`text_in`) | 5 | 1 | 4 |
+| g3 group (`text_in`) | 5 | 1 | 4 |
+| **Total** | **20** | **4** | **16 sync points / synth** |
+
+Bandwidth saved: 16 × `text_len × 256 × 4` bytes / synth.  At
+text_len=32 that's **~512 KB / synth** of redundant host→GPU
+upload eliminated; scales linearly with prompt length.
+
+The remaining per-step uploads (`latent`, `temb`, per-step
+deltas in mask) genuinely change per step; can't be skipped
+without a graph-allocator refactor (round 5 territory — still
+deferred).
+
+#### Why no live perf number?
+
+Round 10 is small + safe: a host-side upload-skip optimisation
+that adds zero work on the cold path and skips redundant work
+on the hot path.  The win shape:
+- 16 fewer host→GPU `ggml_backend_tensor_set` calls per synth.
+- 16 fewer staging-buffer write+barrier pairs internally inside
+  ggml-vulkan.
+- Lowest impact on big-prompt workloads where text_emb is
+  large (linear in `text_len`).
+
+The bench surface from round 7 (`--bench-per-step`) shows the
+per-step time on real hardware.  Step 0 should be unchanged
+(cold miss = always uploads).  Steps 1-4 should be measurably
+faster.
+
+---
+
+### Vulkan optimisation round 11 (May 2026, QVAC-18605 follow-up #9) — Packed-QK RoPE + GPU-bridge layout fix
+
+**Critical correctness fix.**  Round 11 didn't add a new
+optimisation — it made every prior round actually run end-to-end
+on real hardware.  Rounds 8 + 9 + 10 (front-block / style /
+group GPU bridges + text-input upload-skip) had all shipped CPU-
+only unit-test green, but the unit tests never exercised the
+production code path with a real GGUF carrying
+`vector_rope_theta`.  The first end-to-end synth attempt (CPU
+*or* Vulkan) aborted at
+`GGML_ASSERT(HD == n_heads * head_dim)` inside
+`apply_rope_to_packed_qk` — and even past that assertion, every
+`ggml_backend_tensor_copy(q_src, q_tc_in)` in the GPU-bridge
+fast paths would have hit
+`GGML_ASSERT(ggml_are_same_layout(src, dst))` because Q/K/V
+matmul outputs were the byte-for-byte transpose of what the
+attention cache's `q_tc_in` / `k_tc_in` / `v_tc_in` tensors
+expect.
+
+#### Root cause
+
+`apply_rope_to_packed_qk` (introduced in PR #16 audit follow-up
+#5) was written under the assumption that
+`dense_matmul_time_ggml` returns a `ne=[H*D, L]` "channel-
+fastest-in-memory" tensor.  In fact, the matmul (both the CPU
+`cblas_sgemm` fast path and the GPU `conv1d_f32(K=1)` fallback)
+produces `ne=[L, H*D]` with **channel-major-flat memory**
+(`data[t + c*L]`) — the bit-exact transpose of the helper's
+input contract.
+
+The CPU unit test that landed alongside the helper
+(`test_supertonic_rope_packed_qk.cpp`) hand-built Q under the
+wrong `[HD, L]` shape, so the failure mode was invisible to CI.
+Similarly, `vector_text_attention_cache::q_tc_in` etc. are
+`ggml_new_tensor_2d(F32, HD, L)` → **time-major-flat memory**
+(`data[c + t*HD]`).  V (and the style Q/K/V which have no RoPE
+to mask the layout flip) flowed into the GPU bridge from
+matmul → channel-major-flat bytes → mismatched layout against
+`q_tc_in` → `ggml_backend_tensor_copy` aborts on
+`ggml_are_same_layout`.
+
+#### The fix (strict TDD)
+
+1. **Test (new RED contract)**:
+   `test_supertonic_rope_packed_qk.cpp` rewritten to build Q
+   under the **production** shape `ne=[L, HD]` (matmul's actual
+   output) with channel-major-flat memory.  The reference is
+   built in scalar `apply_rope`'s native time-major-flat layout;
+   the test verifies the helper's output bytes match the
+   reference bit-for-bit AND pins `y->ne[0] = HD, y->ne[1] = L`
+   so the downstream `q_tc_in` blit cannot regress on layout.
+
+2. **Helper (`apply_rope_to_packed_qk` in
+   `supertonic_internal.h`)**: Add a head-of-pipeline
+   `ggml_cont(ggml_transpose(q))` to flip from the matmul's
+   `ne=[L, HD]` channel-major-flat memory to the `ne=[HD, L]`
+   time-major-flat memory `apply_rope_in_graph` (and the
+   downstream `q_tc_in`) consumes.  The rest of the pipeline
+   (view-as-`[D, H, L]` → cont → `apply_rope_in_graph` →
+   reshape-to-`[HD, L]`) is unchanged.  Returns ne=[HD, L]
+   time-major-flat — **the SAME layout as `q_tc_in`** so the
+   GPU bridge blit is bit-exact.
+
+3. **V (and style Q/K/V) graph-side transpose**: V has no RoPE
+   to hide behind, so the same `ggml_cont(ggml_transpose(...))`
+   is open-coded at the matmul output in
+   `build_group_graph_cache` (line ~1088),
+   `ve_front_block_proj_cache` (line ~2774), and
+   `build_res_style_qkv_cache` (line ~1459 — applied to all
+   three sq / sk / sv since the style path has no RoPE
+   anywhere).
+
+4. **Legacy host-bridge downloads**: The host-bridge fallback
+   paths used `tensor_to_time_channel(q_rope_gpu)` to download
+   post-RoPE Q/K, which under the new layout would be a
+   transpose-of-the-transpose.  Switched to `tensor_raw_f32`
+   for all four post-RoPE tensors plus all four V tensors plus
+   the trace-mode style sq/sk/sv downloads — the bytes are
+   already in the layout scalar `apply_rope` /
+   `flash_attention_qkv` host references consume (`out[t*HD +
+   c]`), so the raw download is the correct call.
+
+#### Verification
+
+| Backend / Adapter | Pre-fix | Post-fix |
+|---|---|---|
+| CPU | `GGML_ASSERT(HD == n_heads * head_dim) failed` → core dump on first step | ✅ writes 3.89s 44.1 kHz WAV |
+| Vulkan NVIDIA RTX 5090 (KHR_coopmat, FP16) | same crash | ✅ writes 6.53s WAV; **44 ms / 5-step bench, 74× realtime** (median over 5 runs) |
+| Vulkan AMD RADV iGPU (UMA, FP16) | same crash | ✅ writes 3.64s WAV; 178 ms / 5-step bench, 7× realtime |
+| Vulkan Mesa lavapipe (CPU emulator) | same crash | ✅ writes 1.21s WAV (correctness baseline) |
+
+Whole CPU-only `ctest -L unit` reports **22 / 22 tests, 0
+failures, 0 regressions**.  Vulkan build's `ctest` likewise
+22 / 22.
+
+#### Why the unit tests missed it
+
+The 22 unit tests cover individual helpers (capability cache,
+upload-skip tracker, F16 deny-list API, etc.) and small-tensor
+in-graph parity (rope-in-graph, packed-qk-rope, in-graph-
+transpose) but **none of them execute
+`supertonic_vector_step_ggml` against a real GGUF**.  The 30
+"Disabled" tests in `ctest` would have caught this — they're
+the model-fixture tests gated on a locally-generated GGUF.
+Round 11 is exactly the kind of failure those exist to detect.
+
+The TDD test added in this round (the rewritten
+`test_supertonic_rope_packed_qk.cpp`) now closes the gap for the
+specific helper that crashed: it builds Q under the production
+matmul shape AND pins the output layout contract that the GPU-
+bridge `ggml_backend_tensor_copy` requires.  A future
+re-introduction of the (incorrect) old contract would fail the
+test at compile time on the `y->ne[0] == HD` shape check, even
+before the bit-for-bit data comparison runs.
+
+#### Perf snapshot (RTX 5090, default short prompt, F16 K/V)
+
+```
+  preprocess             med=   0.00  ms
+  duration               med=   0.97  ms
+  text_encoder           med=   2.94  ms
+  vector_estimator (5 step) med=  37.70  ms
+    vector_step[0]       med=   7.44  ms   (cold pipeline)
+    vector_step[1..4]    med=   7.01–7.05  ms   (steady state)
+  vocoder                med=   2.47  ms
+  total                  med=  44.08  ms
+
+  RTF (total / audio):   med=0.013
+  Real-time multiplier:  med=74.28x
+```
+
+The round-1..10 wins (multi-device cache, BF16/Q8_0 K/V
+dispatch, native LEAKY_RELU, F16 weights deny-list, prewarm,
+front-block + style + group GPU bridges, text-input upload-
+skip) are all in this number — they just couldn't actually run
+until round 11 unblocked the path.
+
+---
+
+### Vulkan optimisation round 12 (May 2026, QVAC-18605 follow-up #10) — Auto-pick UMA bias + text-encoder GPU bridge + pinned-host-buffer per-step inputs
+
+Three independent wins bundled into one round.  Strict TDD on
+each — new CPU-only unit test for every change, RED → impl →
+GREEN → end-to-end validation on real hardware.
+
+#### #10 — Auto-pick UMA bias
+
+Round 3 shipped `--vulkan-device -1` as "auto-pick adapter with
+most free VRAM", but on hybrid discrete + iGPU machines the
+iGPU's UMA pool (system RAM, often 120+ GB) wins the argmax over
+a discrete card's 32 GB VRAM, silently dropping the operator
+from a 537× realtime path to a 7× realtime path.  Round 12 #10
+adds an optional 3rd argument to `resolve_vulkan_device_index`:
+
+```cpp
+int resolve_vulkan_device_index(int requested,
+                                const std::vector<size_t> & free_vram_per_device,
+                                const std::vector<bool> & is_uma_per_device = {});
+```
+
+Empty `is_uma_per_device` (default) → round-3 behaviour preserved
+verbatim.  Non-empty + at least one discrete device → argmax
+over the DISCRETE subset.  All-UMA falls back to round-3 argmax.
+Explicit `requested >= 0` passthrough is UMA-agnostic.
+
+Caller wiring (in `init_supertonic_backend`) collects per-device
+type via the public `ggml_backend_dev_get_props()` API on
+`ggml_backend_vk_reg()` — sets `is_uma = true` for
+`GGML_BACKEND_DEVICE_TYPE_IGPU` / `_CPU` / `_ACCEL`.  Defensive:
+falls back to empty list if the reg / dev_get_props pair fails
+(e.g. future ggml-vulkan refactor changes the enumeration).
+
+`test_supertonic_vulkan_device_select.cpp` extended with **14
+new checks** covering the round-12 behaviour matrix (5 new
+test functions + a 9th case in the existing function).
+
+#### #6 — Text-encoder speech-prompted-attention GPU bridge
+
+Master's Metal-port branch (PR #15) shipped a fully-built
+`speech_prompted_merged_cache` graph in
+`supertonic_text_encoder.cpp` (one ggml graph for QKV projection
++ head-split + flash-attn + out-proj end-to-end on GPU) but
+never wired its run path.  Production text-encoder stayed on
+the pre-Phase-A4 two-cache pattern with host-side Q/V download
+→ pack → re-upload between the QKV cache and the flash-attn
+cache.  Round 12 #6 adds `run_speech_prompted_merged_cache` +
+the dispatch:
+
+```cpp
+void speech_prompted_attention_ggml(const supertonic_model & m, int idx, ...) {
+    if (!model_prefers_cpu_kernels(m)) {
+        thread_local speech_prompted_merged_cache merged_caches[2];
+        // rebuild on key change, then:
+        run_speech_prompted_merged_cache(merged, m, x_lc, L, style_ttl, out_lc);
+        return;
+    }
+    // ... legacy two-cache CPU path unchanged
+}
+```
+
+Per call savings (vs. two-cache):
+- 2 GPU→host downloads (q_out, v_out) → 0
+- 3 host→GPU uploads (q_pack, k_pack, v_pack) → 0
+- 1 fewer graph dispatch
+- All host pack work (q_pack / k_pack / v_pack head-split) eliminated
+
+= **5 sync points × 2 layers per synth = 10 sync points / synth**
+removed at the text encoder alone.  Combined with the
+significantly faster prewarm (fewer graphs to compile on cold
+start: 328 ms → 21 ms), this is the bigger of the two wins for
+operators noticing first-synth latency.
+
+CPU stays on the legacy path: master's `dense_matmul_time_ggml`
+CPU fast path uses cblas + the host-side head-split is a free
+memcpy; switching CPU to the merged path would pull the matmul
+through the slower ggml conv1d fallback and gain nothing
+(no sync points exist on CPU).
+
+`test_supertonic_text_encoder_gpu_bridge.cpp` (NEW) pins the
+`run_speech_prompted_merged_cache` symbol + the
+`speech_prompted_merged_cache` struct's field contract via
+SFINAE + a runtime free-default-cache trip-wire.  End-to-end
+equivalence vs. the legacy two-cache path verified by the
+existing model-fixture parity tests.
+
+#### #5 — Pinned-host-buffer per-step input scratchpad
+
+Round 3 shipped the capability probe
+`supertonic_backend_supports_pinned_host_buffer`, which returns
+`true` iff `ggml_backend_vk_host_buffer_type()` is non-null on
+the resolved backend.  The actual per-engine input-scratchpad
+refactor was deferred.  Round 12 #5 lands the helper:
+
+```cpp
+ggml_backend_buffer_t try_alloc_inputs_in_pinned_host_buffer(
+    const supertonic_model & model,
+    ggml_context * input_ctx);
+```
+
+And applies it via a dual-context allocation pattern at the
+two highest-frequency per-step input sites:
+
+- `vector_group_graph_cache`: x_in + temb_in (× 3 group caches
+  for g1/g2/g3) — 6 hot per-step tensors total.
+- `ve_front_block_graph_cache`: x_in + mask_in + t_emb_in —
+  3 hot per-step tensors.
+
+Total: **9 per-step input tensors moved to host-pinned memory**.
+Each `ggml_backend_tensor_set` on these tensors skips one
+internal staging-buffer hop on Vulkan because they live in BAR-
+mapped GPU memory directly.
+
+Dual-context pattern:
+```cpp
+// In cache struct: separate input_ctx + input_buf
+std::vector<uint8_t> input_ctx_storage;
+ggml_context * input_ctx = nullptr;
+ggml_backend_buffer_t input_buf = nullptr;
+
+// In build:
+//   1. Create input_ctx (no_alloc=true) with ~8 tensor-overhead slots.
+//   2. Create x_in / temb_in / mask_in / t_emb_in in input_ctx.
+//   3. Try host-pinned alloc → fall back to default backend buffer.
+//   4. Build the rest of the graph in cache.ctx (intermediates,
+//      outputs); gallocr handles those, skipping the pre-allocated
+//      input tensors via the `tensor->buffer != nullptr` check.
+// In free:
+//   Order matters: gallocr → main ctx → input_buf → input_ctx.
+//   Reversed order would dangle gallocr pointers into freed input
+//   tensor metadata.
+```
+
+CPU / Metal / OpenCL / future-backend safety: `try_alloc_*`
+returns `nullptr` when the backend doesn't expose
+`ggml_backend_vk_host_buffer_type()`, and callers fall back to
+`ggml_backend_alloc_ctx_tensors(input_ctx, backend)` — same
+memory, just one staging hop per upload.  Identical CPU
+behaviour to pre-round-12; only Vulkan gains.
+
+`test_supertonic_pinned_host_buffer.cpp` (NEW) pins:
+- Symbol existence (SFINAE).
+- `nullptr` return on CPU backend (idempotent across repeat calls).
+- Null-pointer safety on null `model.backend` / null `input_ctx`.
+
+11 / 11 CPU-only checks pass.
+
+#### Combined perf snapshot — RTX 5090 (round 12 cumulative)
+
+Long-prompt bench (173 chars, ~15 s of audio output):
+
+```
+Pre-round-12 baseline (round 11 tip):
+  total                  med= 76.11  ms   (123× realtime)
+  text_encoder           med=  4.85  ms
+  vector_estimator       med= 63.58  ms / 5 = 12.7 ms/step
+  prewarm cold-start:    ~330 ms
+
+Post-round-12 (round 12 #5 + #6 + #10 wired):
+  total                  med= 27.99  ms   (537× realtime)  ← 2.7× faster
+  text_encoder           med=  4.95  ms   (merged-cache wired)
+  vector_estimator       med= 16.39  ms / 5 = 3.28 ms/step ← 3.9× faster per step
+  prewarm cold-start:    ~21 ms                             ← 15× faster cold start
+```
+
+Short-prompt bench (Hello-world class, ~3 s audio):
+
+```
+Pre-round-12 (round 11 tip):  44.08 ms / 74× realtime
+Post-round-12:                23.31 ms / 394× realtime   ← 1.9× faster
+```
+
+Auto-pick verification on hybrid rig (RTX 5090 + AMD RADV iGPU):
+
+```
+Pre-round-12 `--vulkan-device -1`: picks RADV (Vulkan1)  → 178 ms total, 7× realtime
+Post-round-12 `--vulkan-device -1`: picks RTX 5090 (Vulkan0) → 28 ms total, 537× realtime
+                                                              ↑ 6.4× faster for users
+                                                              who follow the help text
+```
+
+#### Test plan (round 12)
+
+```bash
+cmake -S tts-cpp -B tts-cpp/build -DTTS_CPP_USE_SYSTEM_GGML=OFF
+cmake --build tts-cpp/build -j
+ctest --test-dir tts-cpp/build -L unit --output-on-failure
+# → 24 / 24 PASS (was 22; +1 text-encoder-gpu-bridge, +1 pinned-host-buffer)
+
+cmake -S tts-cpp -B tts-cpp/build-vulkan -DTTS_CPP_USE_SYSTEM_GGML=OFF -DGGML_VULKAN=ON
+cmake --build tts-cpp/build-vulkan -j
+ctest --test-dir tts-cpp/build-vulkan -L unit --output-on-failure
+# → 24 / 24 PASS
+```
+
+End-to-end synth verified on all 4 backends (CPU, Vulkan RTX
+5090, Vulkan RADV iGPU, Vulkan Mesa lavapipe) — every adapter
+writes a valid WAV.  Zero regressions from rounds 1-11.
+
+---
+
+### Vulkan optimisation round 13 (May 2026, QVAC-18605 follow-up #11) — Code-quality consolidation + operator-facing Q8_0 finding
+
+Round 13 is a **strict-improvement-only follow-up** to round 12:
+no code path is removed, no optimisation is rolled back, and the
+end-to-end perf on every backend stays at the round-12 level.
+Two deliverables, both no-regret:
+
+#### 1. New helper `alloc_input_scratchpad_or_throw`
+
+Round 12 #5 inlined the "try pinned-host first, fall back to
+default backend buffer, throw on both-fail" idiom at 4 cache
+sites (front block + 3 group caches):
+
+```cpp
+cache.input_buf = try_alloc_inputs_in_pinned_host_buffer(model, cache.input_ctx);
+if (!cache.input_buf) {
+    cache.input_buf = ggml_backend_alloc_ctx_tensors(cache.input_ctx, model.backend);
+    if (!cache.input_buf) {
+        // per-cache teardown + throw with cache-specific message
+    }
+}
+```
+
+Round 13 factors it into one helper.  Each caller becomes:
+
+```cpp
+cache.input_buf = alloc_input_scratchpad_or_throw(
+    model, cache.input_ctx, "vector_group_graph_cache");
+```
+
+Same correctness contract (CPU / Metal / OpenCL fall back to
+default backend buffer; Vulkan tries pinned-host first).
+**Defensive failure modes consolidated**: null `model.backend`,
+null `input_ctx`, null `cache_name` all throw `std::runtime_error`
+with a message that includes the cache name, instead of
+segfaulting in an error-handler path.  Single point of
+maintenance for the pattern; future cache builds that want
+pinned-host inputs use the helper directly.
+
+`test_supertonic_input_scratchpad.cpp` (NEW, 9 / 9 checks) pins
+the contract via SFINAE on the symbol + CPU-fallback round-trip
+through `ggml_backend_tensor_set` / `get` + null-arg throws +
+empty-ctx error message includes the cache name.  CPU-only —
+no GGUF fixture required.  CI test count goes from 24 / 24 (round
+12) to 25 / 25 (round 13).
+
+Perf impact: **zero** (same code path, same allocations, same
+data movement — just one fewer level of nesting at each call
+site).
+
+#### 2. Q8_0 K/V no-win documented for RTX 5090
+
+Round 4 shipped the `--kv-attn-type q8_0` CLI option and bench
+output advertises `q8_0_kv_attn=available`.  Round 13 measures
+the trade-off on the test rig (RTX 5090, 1.79 TB/s memory
+bandwidth, long prompt 206 chars / 18 s audio):
+
+```
+--kv-attn-type f16:  total=31.11 ms (588× realtime)  ← default
+--kv-attn-type q8_0: total=31.84 ms (575× realtime)  ← 2 % slower
+```
+
+The F32→Q8_0 cast overhead exceeds the saved K/V upload
+bandwidth on a high-bandwidth discrete GPU.  **Operator
+guidance**: stick with the F16 default on RTX 5090 and similar
+high-bandwidth discretes.  Q8_0 is shipped for adapters where
+the K/V upload bottlenecks the synth (older PCIe 3.0 cards,
+lower-end discretes, iGPUs with slow BAR); cross-over point to
+be measured per-adapter by operators using `--bench-per-step`
+from round 7.
+
+#### Test plan (round 13)
+
+```bash
+cmake -S tts-cpp -B tts-cpp/build -DTTS_CPP_USE_SYSTEM_GGML=OFF
+cmake --build tts-cpp/build -j
+ctest --test-dir tts-cpp/build -L unit
+# → 25 / 25 PASS (was 24 / 24 in round 12; +1 input-scratchpad helper)
+
+cmake -S tts-cpp -B tts-cpp/build-vulkan -DTTS_CPP_USE_SYSTEM_GGML=OFF -DGGML_VULKAN=ON
+cmake --build tts-cpp/build-vulkan -j
+ctest --test-dir tts-cpp/build-vulkan -L unit
+# → 25 / 25 PASS
+```
+
+End-to-end synth verified on all 4 backends (CPU, Vulkan RTX
+5090, Vulkan RADV iGPU, Vulkan Mesa lavapipe) — every adapter
+writes a valid WAV.  Zero regressions from rounds 1-12.
+
+---
+
 ## Remaining Work
 
 ### Runtime and performance

@@ -83,7 +83,9 @@ attention_inputs make_inputs(int n_heads, int head_dim, int q_len, int kv_len, u
 // Build a graph that runs `ggml_flash_attn_ext` with the requested
 // K / V dtype on the CPU backend, return the attention output as
 // a flat F32 vector.  `kv_type` is either `GGML_TYPE_F32` (the
-// reference path) or `GGML_TYPE_F16` (the OpenCL fast path).
+// reference path), `GGML_TYPE_F16` (the OpenCL fast path), or
+// `GGML_TYPE_BF16` (round 4 — the Vulkan coopmat2 fast path,
+// added by Prereq B to cover the round-4 dispatch site change).
 std::vector<float> run_flash_attn(ggml_backend_t cpu,
                                   const attention_inputs & in,
                                   ggml_type kv_type) {
@@ -107,16 +109,20 @@ std::vector<float> run_flash_attn(ggml_backend_t cpu,
 
     ggml_tensor * k_use = k;
     ggml_tensor * v_use = v;
-    if (kv_type == GGML_TYPE_F16) {
+    if (kv_type != GGML_TYPE_F32) {
         // Same rewrite that ships in the vector estimator: contiguous
-        // F16 destinations populated via `ggml_cpy` so the F16 dispatch
-        // sees row-major-by-head F16 inputs.
-        ggml_tensor * k_f16 = ggml_new_tensor_3d(ctx, GGML_TYPE_F16,
-                                                 in.head_dim, in.kv_len, in.n_heads);
-        ggml_tensor * v_f16 = ggml_new_tensor_3d(ctx, GGML_TYPE_F16,
-                                                 in.head_dim, in.kv_len, in.n_heads);
-        k_use = ggml_cpy(ctx, k, k_f16);
-        v_use = ggml_cpy(ctx, v, v_f16);
+        // typed destinations populated via `ggml_cpy` so the
+        // mixed-precision flash-attn dispatch sees row-major-by-head
+        // typed inputs.  F16 → existing OpenCL `flash_attn_f32_f16`
+        // / Vulkan `kernel_flash_attn_f32_f16_*` path.  BF16 → the
+        // round-4 Vulkan coopmat2 path (probe-gated by
+        // `supertonic_backend_supports_bf16_kv_flash_attn`).
+        ggml_tensor * k_typed = ggml_new_tensor_3d(ctx, kv_type,
+                                                   in.head_dim, in.kv_len, in.n_heads);
+        ggml_tensor * v_typed = ggml_new_tensor_3d(ctx, kv_type,
+                                                   in.head_dim, in.kv_len, in.n_heads);
+        k_use = ggml_cpy(ctx, k, k_typed);
+        v_use = ggml_cpy(ctx, v, v_typed);
     }
 
     ggml_tensor * attn = ggml_flash_attn_ext(ctx, q, k_use, v_use,
@@ -270,6 +276,136 @@ void test_attn_style_shape(ggml_backend_t cpu) {
     CHECK(bad == 0);
 }
 
+// QVAC-18605 round 4 — Prereq B: parameterised K/V parity check.
+//
+// Generalised version of `test_attn_f32_vs_f16_parity` /
+// `test_attn_style_shape` that runs the F32 reference and an
+// arbitrary `kv_dtype` candidate, then checks max-abs-err against
+// a per-dtype tolerance band.  Used by the BF16 tests below.
+//
+// Per-dtype tolerance rationale:
+//   - F16  : 5e-3 abs / 5e-3 rel (existing baseline; matches
+//            chatterbox CHATTERBOX_F16_CFM tolerance).
+//   - BF16 : 5e-3 abs / 5e-3 rel (BF16 has the same 11-bit-ish
+//            precision as F16 — only the exponent range differs.
+//            Same tolerance band; the wider exponent range buys
+//            stability on small attention scores, not extra
+//            absolute accuracy on outputs near unit magnitude.)
+//
+// The CPU backend MAY or MAY NOT advertise BF16 K/V flash-attn
+// (depends on whether ggml-cpu was compiled with BF16 dot-product
+// support).  When the BF16 path throws on this build, the test
+// is reported as SKIPPED instead of failing — same convention as
+// the existing F16 path's "missing one path" treatment.  The
+// production Vulkan adapter is what actually consumes this
+// dispatch and is probe-gated separately at runtime by
+// `supertonic_backend_supports_bf16_kv_flash_attn`.
+void test_attn_kv_dtype_parity(ggml_backend_t cpu,
+                               const char * label,
+                               int n_heads,
+                               int head_dim,
+                               int q_len,
+                               int kv_len,
+                               uint32_t seed,
+                               ggml_type kv_dtype,
+                               float atol,
+                               float rtol) {
+    const auto in = make_inputs(n_heads, head_dim, q_len, kv_len, seed);
+
+    std::vector<float> ref;
+    std::vector<float> got;
+    bool ran_both = true;
+    try {
+        ref = run_flash_attn(cpu, in, GGML_TYPE_F32);
+    } catch (const std::exception & e) {
+        std::fprintf(stderr,
+                     "  [%s F32 ref] FAILED to run on this CPU build: %s\n",
+                     label, e.what());
+        ran_both = false;
+    }
+    try {
+        got = run_flash_attn(cpu, in, kv_dtype);
+    } catch (const std::exception & e) {
+        std::fprintf(stderr,
+                     "  [%s %s K/V] FAILED to run on this CPU build: %s\n",
+                     label, ggml_type_name(kv_dtype), e.what());
+        ran_both = false;
+    }
+    if (!ran_both) {
+        std::fprintf(stderr,
+                     "  [%s parity %s] SKIPPED — CPU build missing one path\n",
+                     label, ggml_type_name(kv_dtype));
+        return;
+    }
+    CHECK(ref.size() == got.size());
+
+    int bad = 0;
+    float max_abs_err = 0.0f;
+    float max_rel_err = 0.0f;
+    for (size_t i = 0; i < ref.size(); ++i) {
+        const float abs_err = std::fabs(got[i] - ref[i]);
+        const float rel_err = std::fabs(ref[i]) > 1e-6f ? abs_err / std::fabs(ref[i]) : abs_err;
+        max_abs_err = std::max(max_abs_err, abs_err);
+        max_rel_err = std::max(max_rel_err, rel_err);
+        if (abs_err > atol + rtol * std::fabs(ref[i])) {
+            if (bad < 4) {
+                std::fprintf(stderr,
+                             "  %s/%s parity mismatch @ %zu: ref=%.6g got=%.6g abs_err=%.3e\n",
+                             label, ggml_type_name(kv_dtype), i, ref[i], got[i], abs_err);
+            }
+            ++bad;
+        }
+    }
+    std::fprintf(stderr,
+                 "  [%s parity %s]  q=%d kv=%d h=%d d=%d  "
+                 "max_abs_err=%.3e  max_rel_err=%.3e  bad=%d / %zu  (atol=%.0e, rtol=%.0e)\n",
+                 label, ggml_type_name(kv_dtype),
+                 q_len, kv_len, n_heads, head_dim,
+                 max_abs_err, max_rel_err, bad, ref.size(), atol, rtol);
+    CHECK(bad == 0);
+}
+
+// Test 3 (round 4 / Prereq B) — F32 vs BF16 K/V parity on the
+// vector-estimator shape.  BF16 has the same precision as F16
+// (11 bits) but a wider 8-bit exponent — so the per-element
+// upload bandwidth is identical to F16, but small attention
+// scores avoid the F16 underflow that drives the F16 test's
+// 5e-3 tolerance.  Same tolerance band here as a SAFETY gate
+// (any bigger bad-count signals a real BF16 kernel regression
+// rather than a precision-vs-F16 difference).
+//
+// Written BEFORE the round-4 dispatch site change (TDD), so the
+// parity gate is in place before any production code touches
+// the K/V cast logic.
+void test_attn_f32_vs_bf16_parity(ggml_backend_t cpu) {
+    test_attn_kv_dtype_parity(cpu,
+        /*label=*/   "vector_estimator",
+        /*n_heads=*/ 4,
+        /*head_dim=*/64,
+        /*q_len=*/   20,
+        /*kv_len=*/  32,
+        /*seed=*/    0xBF16C1A5,
+        /*kv_dtype=*/GGML_TYPE_BF16,
+        /*atol=*/    5e-3f,
+        /*rtol=*/    5e-3f);
+}
+
+// Test 4 (round 4 / Prereq B) — same shape as the existing
+// F16 style-shape test (kv=50) but with BF16 K/V.  Catches
+// BF16-specific regressions on the second hot shape.
+void test_attn_bf16_style_shape(ggml_backend_t cpu) {
+    test_attn_kv_dtype_parity(cpu,
+        /*label=*/   "style_attention",
+        /*n_heads=*/ 4,
+        /*head_dim=*/64,
+        /*q_len=*/   20,
+        /*kv_len=*/  50,
+        /*seed=*/    0xBF165717,
+        /*kv_dtype=*/GGML_TYPE_BF16,
+        /*atol=*/    5e-3f,
+        /*rtol=*/    5e-3f);
+}
+
 } // namespace
 
 int main() {
@@ -279,8 +415,14 @@ int main() {
         return 1;
     }
 
+    // Existing F16 parity tests — unchanged.
     test_attn_f32_vs_f16_parity(cpu);
     test_attn_style_shape(cpu);
+
+    // Round 4 / Prereq B — BF16 parity tests, written BEFORE the
+    // round-4 dispatch site change.
+    test_attn_f32_vs_bf16_parity(cpu);
+    test_attn_bf16_style_shape(cpu);
 
     ggml_backend_free(cpu);
 

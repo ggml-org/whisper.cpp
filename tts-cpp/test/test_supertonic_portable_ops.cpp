@@ -203,9 +203,17 @@ void test_dispatch_actually_routes(ggml_backend_t cpu) {
     };
 
     supertonic_model cpu_model;
-    cpu_model.backend_is_cpu = true;
+    cpu_model.backend_is_cpu        = true;
+    cpu_model.use_native_leaky_relu = true;
     supertonic_model gpu_model;
     gpu_model.backend_is_cpu = false;
+    // QVAC-18605 — explicit "no native LEAKY_RELU" GPU model so the
+    // decomposition branch fires.  Vulkan / Metal / CUDA models pick
+    // the fused builtin via `use_native_leaky_relu = true` (set at
+    // load time by `backend_supports_native_leaky_relu`); this test
+    // asserts the conservative-fallback path that plain upstream
+    // ggml-opencl + any future backend without `LEAKY_RELU` exercises.
+    gpu_model.use_native_leaky_relu = false;
 
     int n_ref = 0;
     int n_portable_cpu = 0;

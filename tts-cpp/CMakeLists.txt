@@ -744,6 +744,190 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-portable-ops)
     tts_cpp_register_test(test-supertonic-portable-ops LABEL "unit")
 
+    # QVAC-18605 — CPU-only unit test for the Vulkan-specific
+    # dispatch additions: `backend_is_vk`, `use_native_leaky_relu`,
+    # the `supertonic_op_dispatch_scope` mirror for the new flag,
+    # and the `supertonic_backend_supports_f16_kv_flash_attn`
+    # backend probe.  No GGUF / model fixture required — runs on a
+    # fresh checkout under `ctest -L unit`.  See the file header
+    # for the full coverage matrix.
+    add_executable(test-supertonic-vulkan-dispatch
+        test/test_supertonic_vulkan_dispatch.cpp)
+    target_link_libraries(test-supertonic-vulkan-dispatch PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-vulkan-dispatch PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-vulkan-dispatch)
+    tts_cpp_register_test(test-supertonic-vulkan-dispatch LABEL "unit")
+
+    # QVAC-18605 follow-up — process-wide capability-probe cache +
+    # F16 mul_mat probe + Q8_0 K/V flash-attn probe regression test.
+    # CPU-only; runs on a fresh checkout under `ctest -L unit`.
+    add_executable(test-supertonic-capability-cache
+        test/test_supertonic_capability_cache.cpp)
+    target_link_libraries(test-supertonic-capability-cache PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-capability-cache PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-capability-cache)
+    tts_cpp_register_test(test-supertonic-capability-cache LABEL "unit")
+
+    # QVAC-18605 follow-up — Engine::warm_up + EngineOptions::prewarm_text
+    # API-surface lockdown.  CPU-only compile-time + runtime contract test;
+    # the Vulkan-side first-synth-latency reduction is exercised by the
+    # fixture-bound integration tests on a Vulkan-capable host.
+    add_executable(test-supertonic-warm-up-api
+        test/test_supertonic_warm_up_api.cpp)
+    target_link_libraries(test-supertonic-warm-up-api PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-warm-up-api PRIVATE include)
+    tts_cpp_apply_ccache(test-supertonic-warm-up-api)
+    tts_cpp_register_test(test-supertonic-warm-up-api LABEL "unit")
+
+    # QVAC-18605 round 3 — multi-device Vulkan auto-pick policy
+    # (--vulkan-device -1 → pick device with most free VRAM).
+    # CPU-only TDD test for the pure-logic helper; the Vulkan-only
+    # plumbing that calls ggml_backend_vk_get_device_memory() per
+    # device + dispatches into the helper is exercised by the
+    # fixture-bound integration tests on a multi-GPU Vulkan host.
+    add_executable(test-supertonic-vulkan-device-select
+        test/test_supertonic_vulkan_device_select.cpp)
+    target_link_libraries(test-supertonic-vulkan-device-select PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-vulkan-device-select PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-vulkan-device-select)
+    tts_cpp_register_test(test-supertonic-vulkan-device-select LABEL "unit")
+
+    # QVAC-18605 round 6 — F16-weights deny-list API surface
+    # (EngineOptions::f16_weights_deny_list + load_supertonic_gguf
+    # 7th parameter + 2-arg should_materialise_f16_weight overload).
+    # CPU-only compile-time SFINAE + runtime defaults check; the
+    # predicate-level behaviour is covered by the existing
+    # test-supertonic-f16-weights TU.  The fixture-level shape /
+    # dtype check (loads model with deny-list, verifies a denied
+    # tensor stays F32) runs under the same fixture as the
+    # baseline F16-weights test on hosts with the GGUF available.
+    add_executable(test-supertonic-f16-deny-list-api
+        test/test_supertonic_f16_deny_list_api.cpp)
+    target_link_libraries(test-supertonic-f16-deny-list-api PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-f16-deny-list-api PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-f16-deny-list-api)
+    tts_cpp_register_test(test-supertonic-f16-deny-list-api LABEL "unit")
+
+    # QVAC-18605 round 4 — multi-dtype K/V flash-attention dispatch
+    # resolver (`resolve_kv_attn_type`) — pure-logic policy split
+    # from the Vulkan-only dispatch site so the behaviour matrix
+    # is testable on CPU with synthetic probe inputs.
+    add_executable(test-supertonic-kv-attn-type
+        test/test_supertonic_kv_attn_type.cpp)
+    target_link_libraries(test-supertonic-kv-attn-type PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-kv-attn-type PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-kv-attn-type)
+    tts_cpp_register_test(test-supertonic-kv-attn-type LABEL "unit")
+
+    # QVAC-18605 round 4 — API-surface lockdown for the new
+    # EngineOptions::kv_attn_type field, supertonic_model field,
+    # supertonic_kv_attn_type() thread-local accessor, and the
+    # dispatch-scope `prev_kv_attn_type` for RAII teardown.
+    add_executable(test-supertonic-kv-attn-type-api
+        test/test_supertonic_kv_attn_type_api.cpp)
+    target_link_libraries(test-supertonic-kv-attn-type-api PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-kv-attn-type-api PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-kv-attn-type-api)
+    tts_cpp_register_test(test-supertonic-kv-attn-type-api LABEL "unit")
+
+    # QVAC-18605 round 7 — Vulkan env-var passthrough mechanism
+    # (EngineOptions::vulkan_env_overrides + apply_vulkan_env_overrides
+    # public helper).  Tests cover: SFINAE field existence, empty-
+    # map noop, single-entry-sets-env, operator-env-wins (set_env_if_unset
+    # semantics), invalid-key-throws (loud-failure for typos), and
+    # all-or-nothing-on-mixed-validity (no partial application).
+    add_executable(test-supertonic-vulkan-env-overrides
+        test/test_supertonic_vulkan_env_overrides.cpp)
+    target_link_libraries(test-supertonic-vulkan-env-overrides PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-vulkan-env-overrides PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-vulkan-env-overrides)
+    tts_cpp_register_test(test-supertonic-vulkan-env-overrides LABEL "unit")
+
+    # QVAC-18605 round 7 — voice ttl/dp host cache
+    # (`tts_cpp::supertonic::detail::voice_host_cache`).  Standalone
+    # helper extracted from Engine::Impl::synthesize() so the
+    # lookup-or-load semantics are testable on CPU without
+    # instantiating a full Engine.  Tests cover: empty / first-load-
+    # populates / second-load-hits-cache (null-tensor passthrough
+    # proves the cache hit) / multi-voice / clear / null-on-miss
+    # throws.
+    add_executable(test-supertonic-voice-host-cache
+        test/test_supertonic_voice_host_cache.cpp)
+    target_link_libraries(test-supertonic-voice-host-cache PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-voice-host-cache PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-voice-host-cache)
+    tts_cpp_register_test(test-supertonic-voice-host-cache LABEL "unit")
+
+    # QVAC-18605 round 10 — pointer-compare upload-skip tracker
+    # (`tts_cpp::supertonic::detail::upload_skip_tracker`).
+    # Generalises the F4 pattern from `vector_res_style_qkv_cache`
+    # (style_v_in / kctx_in upload-skip) to the front-block /
+    # group-graph `text_in` uploads, which receive the same
+    # `text_emb` pointer 5 times per synth.  Tests cover: default
+    # state, upload + skip happy path, pointer-change forces
+    # upload, reset() invalidation (synth-boundary contract),
+    # interleaved-instance independence, cross-synth pointer-
+    # reuse hazard simulation (the bug the synth-boundary reset
+    # exists to prevent), and reset-on-empty no-op.
+    add_executable(test-supertonic-upload-skip-tracker
+        test/test_supertonic_upload_skip_tracker.cpp)
+    target_link_libraries(test-supertonic-upload-skip-tracker PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-upload-skip-tracker PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-upload-skip-tracker)
+    tts_cpp_register_test(test-supertonic-upload-skip-tracker LABEL "unit")
+
+    # QVAC-18605 round 12 #6 — text-encoder speech-prompted-attention
+    # GPU bridge.  Master's Metal-port branch built
+    # `speech_prompted_merged_cache` (one merged graph for QKV proj +
+    # head-split + flash-attn + out-proj) but never wired its run path
+    # into the production text-encoder loop.  Round 12 adds
+    # `run_speech_prompted_merged_cache` + dispatches to it on non-CPU
+    # backends, eliminating 10 sync points / synth (2 layers × 5
+    # download+pack+reupload steps each) at the text encoder.  This
+    # test pins the new symbol's existence + the merged-cache struct's
+    # field contract via SFINAE; equivalence vs. the scalar reference
+    # is verified end-to-end by the model-fixture tests
+    # `test-supertonic-text-encoder-trace` + `test-supertonic-pipeline`.
+    add_executable(test-supertonic-text-encoder-gpu-bridge
+        test/test_supertonic_text_encoder_gpu_bridge.cpp)
+    target_link_libraries(test-supertonic-text-encoder-gpu-bridge PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-text-encoder-gpu-bridge PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-text-encoder-gpu-bridge)
+    tts_cpp_register_test(test-supertonic-text-encoder-gpu-bridge LABEL "unit")
+
+    # QVAC-18605 round 12 #5 — pinned-host-buffer input allocation
+    # helper.  Round 3 shipped the capability probe but deferred the
+    # per-engine input-scratchpad refactor that actually USES the
+    # host-pinned buffer to skip ggml-vulkan's internal staging-
+    # buffer hop.  Round 12 #5 lands `try_alloc_inputs_in_pinned_host_buffer`
+    # and applies it at the hot per-step input sites
+    # (vector_group_graph_cache + ve_front_block_graph_cache).
+    # The CPU-only test pins the symbol's existence + the
+    # `nullptr` return contract on CPU backend + idempotent
+    # repeat calls + null-pointer safety on null backend / null
+    # ctx (defensive failure modes in error-handler paths).
+    add_executable(test-supertonic-pinned-host-buffer
+        test/test_supertonic_pinned_host_buffer.cpp)
+    target_link_libraries(test-supertonic-pinned-host-buffer PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-pinned-host-buffer PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-pinned-host-buffer)
+    tts_cpp_register_test(test-supertonic-pinned-host-buffer LABEL "unit")
+
+    # QVAC-18605 round 13 #1 — input-scratchpad allocator helper
+    # that consolidates the pinned-host + default-backend fallback
+    # boilerplate round 12 #5 manually inlined at 4 cache sites.
+    # Round 13 needs to extend the pattern to 5+ more caches
+    # (vector_loop_one_graph, vocoder, style residual + QKV, merged
+    # speech-prompted) — without this helper that's 5x copy-paste.
+    # CPU-only test pins the symbol + CPU-fallback contract + null-
+    # argument throws (defensive failure modes in error paths).
+    add_executable(test-supertonic-input-scratchpad
+        test/test_supertonic_input_scratchpad.cpp)
+    target_link_libraries(test-supertonic-input-scratchpad PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-input-scratchpad PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-input-scratchpad)
+    tts_cpp_register_test(test-supertonic-input-scratchpad LABEL "unit")
+
     add_executable(test-supertonic-f16-attn-parity
         test/test_supertonic_f16_attn_parity.cpp)
     target_link_libraries(test-supertonic-f16-attn-parity PRIVATE ggml)

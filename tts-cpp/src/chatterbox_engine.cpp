@@ -149,28 +149,54 @@ struct Engine::Impl {
             throw;
         }
 
+        allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
+        if (!allocr) {
+            free_model();
+            throw std::runtime_error("Engine: ggml_gallocr_new failed");
+        }
+
+        // bake_voice_conditioning() must run BEFORE we spawn the s3gen
+        // preload thread.  Both paths funnel into gguf_init_from_file()
+        // (voice_encoder_load opens the T3 GGUF for the VoiceEncoder
+        // weights; s3gen_preload opens the s3gen GGUF), and the ggml_init
+        // / gguf_init_from_file pair underneath is not safe to invoke
+        // concurrently from two threads against ggml's process-global
+        // state.  Empirically this races on Apple Silicon (Bare iOS Test
+        // Consumer) with a fast SIGABRT inside ggml_abort coming from the
+        // preload thread's ggml_init while the main thread is still
+        // executing voice_encoder_load's gguf_init_from_file.  Serialising
+        // the two GGUF loads removes the data race; we still get the
+        // intended overlap because s3gen_preload now runs in parallel with
+        // the caller's post-construction work (registry wiring, first
+        // synthesize() T3 inference) up to the wait_for_preload() at the
+        // top of synthesize().
+        try {
+            bake_voice_conditioning();
+        } catch (...) {
+            if (allocr) { ggml_gallocr_free(allocr); allocr = nullptr; }
+            free_model();
+            throw;
+        }
+
         s3gen_preload_thread = std::thread([path = opts.s3gen_gguf_path,
                                             ngpu = opts.n_gpu_layers]() {
             s3gen_preload(path, ngpu);
         });
 
-        allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
-        if (!allocr) {
-            wait_for_preload(s3gen_preload_thread);
-            s3gen_unload();
-            free_model();
-            throw std::runtime_error("Engine: ggml_gallocr_new failed");
-        }
-
-        try {
-            bake_voice_conditioning();
-        } catch (...) {
-            wait_for_preload(s3gen_preload_thread);
-            s3gen_unload();
-            if (allocr) { ggml_gallocr_free(allocr); allocr = nullptr; }
-            free_model();
-            throw;
-        }
+        // Block until s3gen_preload finishes its Metal buffer allocation
+        // before returning from the constructor.  This defeats the parallel-
+        // preload optimisation (s3gen_preload no longer overlaps with the
+        // caller's post-construction work / first T3 inference inside
+        // synthesize()), but is required for safe interleaving with the
+        // load -> immediate unload pattern used by the QVAC SDK e2e bootstrap
+        // ("preLoadUnload"): on iOS the destructor's pthread_join would
+        // otherwise race with the preload thread inside
+        // ggml_backend_metal_buffer_type_shared_alloc_buffer ->
+        // ggml_metal_buffer_is_shared (crash, KERN_INVALID_ADDRESS at 0x10).
+        // Reverse this and keep the wait at the top of synthesize() once
+        // ggml-metal's shared buffer-type init is safe to use from a
+        // preload thread concurrent with construction-time teardown.
+        wait_for_preload(s3gen_preload_thread);
     }
 
     ~Impl() {
