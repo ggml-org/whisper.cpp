@@ -29,6 +29,14 @@ namespace parakeet {
 
 namespace {
 
+// Score sentinels for the speaker-cache compression top-K. We use finite
+// extrema (well-defined under FE_DIVBYZERO trapping FP modes that some
+// host builds enable) instead of std::numeric_limits<float>::infinity()
+// purely so that subsequent arithmetic on these values cannot produce
+// NaNs -- they are only stored and compared with == / !=, never added.
+constexpr float k_score_neg_inf = std::numeric_limits<float>::lowest();
+constexpr float k_score_pos_inf = std::numeric_limits<float>::max();
+
 // Threshold speaker probabilities into time-sorted segments.
 void sf_threshold_segments(const std::vector<float> & speaker_probs,
                            int T_enc, int num_spks,
@@ -256,7 +264,7 @@ static void compute_log_pred_scores(const float * preds, int n_frames, int num_s
 static void disable_low_scores(std::vector<float> & scores,
                                const float * preds, int n_frames, int num_spks,
                                int min_pos_scores_per_spk) {
-    const float neg_inf = -1.0e30f /* very-negative sentinel; -inf is UB with current FP flags */;
+    const float neg_inf = k_score_neg_inf;
 
     // First pass: non-speech -> -inf.
     for (int t = 0; t < n_frames; ++t) {
@@ -313,7 +321,7 @@ static void boost_topk_scores(std::vector<float> & scores,
         for (int i = 0; i < k; ++i) {
             const int t = idx_buf[i];
             float & s = scores[(size_t) t * num_spks + spk];
-            if (s != -1.0e30f /* very-negative sentinel; -inf is UB with current FP flags */) {
+            if (s != k_score_neg_inf) {
                 s += boost;
             }
         }
@@ -343,6 +351,24 @@ static void compress_speaker_cache(
 
     const int A_sil = cfg.spkcache_sil_frames_per_spk;
     const int spkcache_len_per_spk = spkcache_len / num_spks - A_sil;
+    if (spkcache_len_per_spk <= 0) {
+        // Degenerate config: num_spks * A_sil >= spkcache_len leaves no
+        // budget for retained frames, so the boost / top-K stages would
+        // run with non-positive k and (for nth_element) a negative
+        // distance. Fall back to a silence-only cache and bail.
+        cache.spkcache.assign((size_t) spkcache_len * D, 0.0f);
+        if (cache.mean_sil_emb.size() == (size_t) D) {
+            for (int r = 0; r < spkcache_len; ++r) {
+                std::memcpy(cache.spkcache.data() + (size_t) r * D,
+                            cache.mean_sil_emb.data(),
+                            (size_t) D * sizeof(float));
+            }
+        }
+        cache.spkcache_preds.assign((size_t) spkcache_len * num_spks, 0.0f);
+        cache.n_rows = spkcache_len;
+        cache.spkcache_preds_valid = true;
+        return;
+    }
     const int strong_boost = (int) std::floor((float) spkcache_len_per_spk * cfg.strong_boost_rate);
     const int weak_boost   = (int) std::floor((float) spkcache_len_per_spk * cfg.weak_boost_rate);
     const int min_pos_per  = (int) std::floor((float) spkcache_len_per_spk * cfg.min_pos_scores_rate);
@@ -360,7 +386,7 @@ static void compress_speaker_cache(
         for (int t = spkcache_len; t < n_frames; ++t) {
             float * s = scores.data() + (size_t) t * num_spks;
             for (int i = 0; i < num_spks; ++i) {
-                if (s[i] != -1.0e30f /* very-negative sentinel; -inf is UB with current FP flags */) {
+                if (s[i] != k_score_neg_inf) {
                     s[i] += cfg.scores_boost_latest;
                 }
             }
@@ -378,7 +404,7 @@ static void compress_speaker_cache(
     const int n_total = n_frames + A_sil;
     if (A_sil > 0) {
         scores.resize((size_t) n_total * num_spks);
-        const float pos_inf = 1.0e30f /* very-positive sentinel; +inf is UB with current FP flags */;
+        const float pos_inf = k_score_pos_inf;
         for (int t = n_frames; t < n_total; ++t) {
             float * s = scores.data() + (size_t) t * num_spks;
             for (int i = 0; i < num_spks; ++i) s[i] = pos_inf;
@@ -409,7 +435,7 @@ static void compress_speaker_cache(
     // speaker blocks contiguous; `torch.remainder(idx, n_frames)` returns the
     // frame index; our `idx % n_total` does the same.)
     for (int & idx : topk) {
-        if (flat_score(idx) == -1.0e30f /* very-negative sentinel; -inf is UB with current FP flags */) {
+        if (flat_score(idx) == k_score_neg_inf) {
             idx = MAX_INDEX;
         }
     }
@@ -467,7 +493,7 @@ static void compress_speaker_cache(
 // `lc` is the left-context offset within the chunk region; the committed-chunk
 // preds start at index `prev_spkcache_n + prev_fifo_n + lc` and span `chunk_committed`.
 static void streaming_update(SortformerSpeakerCache & cache,
-                             const float * chunk_pre_encode_lc, int chunk_committed,
+                             const float * committed_chunk_pre_encode, int chunk_committed,
                              const float * preds_full,
                              int prev_spkcache_len_at_call, int prev_fifo_len_at_call,
                              int lc,
@@ -492,7 +518,7 @@ static void streaming_update(SortformerSpeakerCache & cache,
     const int new_fifo_after_append = cache.n_fifo + chunk_committed;
     cache.fifo.resize((size_t) new_fifo_after_append * D);
     std::memcpy(cache.fifo.data() + (size_t) cache.n_fifo * D,
-                chunk_pre_encode_lc,
+                committed_chunk_pre_encode,
                 (size_t) chunk_committed * D * sizeof(float));
     cache.fifo_preds.resize((size_t) new_fifo_after_append * num_spks);
     std::memcpy(cache.fifo_preds.data() + (size_t) cache.n_fifo * num_spks,

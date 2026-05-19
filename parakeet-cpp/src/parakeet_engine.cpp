@@ -1455,11 +1455,16 @@ void SortformerStreamSession::Impl::process_chunk(int64_t window_start_sample,
 
     // Remap cur_full into session-stable IDs and store as the new
     // baseline so the next chunk's `compute_slot_remap_` can match
-    // against today's emitted identity scheme.
-    for (auto & f : cur_full) {
-        f.speaker_id = remap_id(f.speaker_id);
+    // against today's emitted identity scheme. AOSC anchors slot
+    // identity through the speaker cache, so `compute_slot_remap_`
+    // is never consulted on that path -- skip the storage and the
+    // identity-remap loop entirely.
+    if (!cache_active) {
+        for (auto & f : cur_full) {
+            f.speaker_id = remap_id(f.speaker_id);
+        }
+        prev_chunk_full_segments = std::move(cur_full);
     }
-    prev_chunk_full_segments = std::move(cur_full);
 
     // VadStateChanged from speaker_probs: a frame speaks if any speaker exceeds threshold;
     // the chunk speaks if any emitting-frame qualifies; dominant speaker from mean probs.
@@ -1656,14 +1661,16 @@ std::unique_ptr<SortformerStreamSession> Engine::diarize_start(
     impl->history_samples = opts.sample_rate * opts.history_ms / 1000;
     impl->ring.reserve(impl->history_samples);
 
-    // v2.1 detection (Audio-Online Speaker Cache eligibility).
-    // v1 sortformer-4spk-v1.q8_0: encoder.n_layers=18, preproc.n_mels=80.
-    // v2.1 sortformer-streaming-v2.1.q8_0: encoder.n_layers=17, preproc.n_mels=128.
-    // The v2.1 fine-tune is what trained the cache-aware concat-then-graph
-    // forward path; enabling it on v1 would just be untrained noise.
-    const bool model_is_v2_1 =
-        pimpl_->model.encoder_cfg.n_layers == 17 &&
-        pimpl_->model.mel_cfg.n_mels == 128;
+    // v2.1 detection (Audio-Online Speaker Cache eligibility). Documented
+    // in detail next to SortformerStreamingOptions::spkcache_enable in
+    // include/parakeet/diarization.h. Prefer the explicit variant tag
+    // emitted by the converter; fall back to encoder shape for legacy
+    // GGUFs that pre-date the parakeet.model_variant key.
+    const std::string & variant = pimpl_->model.model_variant;
+    const bool model_is_v2_1 = !variant.empty()
+        ? (variant == "sortformer-streaming-v2.1-aosc")
+        : (pimpl_->model.encoder_cfg.n_layers == 17 &&
+           pimpl_->model.mel_cfg.n_mels == 128);
     impl->cache_active = opts.spkcache_enable && model_is_v2_1;
 
     if (impl->cache_active) {
