@@ -33,7 +33,7 @@ extern VALUE sym_start_time;
 extern VALUE sym_end_time;
 extern VALUE sym_text;
 extern const rb_data_type_t ruby_whisper_parakeet_context_type;
-extern VALUE ruby_whisper_parakeet_token_s_init(struct parakeet_context *context, int i_segment, int i_token);
+extern VALUE ruby_whisper_parakeet_token_s_from_index(struct parakeet_context *context, int i_segment, int i_token);
 
 static void
 rb_whisper_parakeet_segment_mark(void *p)
@@ -96,7 +96,7 @@ ruby_whisper_parakeet_segment_each_token(VALUE self)
 
   const int n_tokens = parakeet_full_n_tokens(rwpc->context, rwps->index);
   for (int i = 0; i < n_tokens; i++) {
-    rb_yield(ruby_whisper_parakeet_token_s_init(rwpc->context, rwps->index, i));
+    rb_yield(ruby_whisper_parakeet_token_s_from_index(rwpc->context, rwps->index, i));
   }
 
   return self;

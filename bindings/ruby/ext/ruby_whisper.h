@@ -36,6 +36,7 @@ typedef struct {
 
 typedef struct ruby_whisper_parakeet_abort_callback_user_data {
   volatile rb_atomic_t is_interrupted;
+  ruby_whisper_callback_container *callback_container;
 } ruby_whisper_parakeet_abort_callback_user_data;
 
 typedef struct ruby_whisper_log {

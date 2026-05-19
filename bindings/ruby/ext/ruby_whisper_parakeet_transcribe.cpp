@@ -10,7 +10,7 @@ extern "C" {
 extern const rb_data_type_t ruby_whisper_parakeet_context_type;
 extern const rb_data_type_t ruby_whisper_parakeet_params_type;
 
-extern void ruby_whisper_parakeet_prepare_transcription(ruby_whisper_parakeet_params *rwpp, ruby_whisper_parakeet_abort_callback_user_data *abort_callback_user_data);
+extern void ruby_whisper_parakeet_prepare_transcription(ruby_whisper_parakeet_params *rwpp, VALUE *context, ruby_whisper_parakeet_abort_callback_user_data *abort_callback_user_data);
 
 extern ID id_to_s;
 extern ID id_to_path;
@@ -70,8 +70,9 @@ ruby_whisper_parakeet_transcribe(VALUE self, VALUE audio_path, VALUE params)
 
   ruby_whisper_parakeet_abort_callback_user_data abort_callback_user_data = {
     0,
+    NULL,
   };
-  ruby_whisper_parakeet_prepare_transcription(rwpp, &abort_callback_user_data);
+  ruby_whisper_parakeet_prepare_transcription(rwpp, &self, &abort_callback_user_data);
 
   struct transcribe_without_gvl_args args = {
     rwpc->context,

@@ -119,7 +119,7 @@ rb_whisper_abort_callback_container_allocate() {
   return container;
 }
 
-static bool
+bool
 ruby_whisper_callback_container_is_present(const ruby_whisper_callback_container *container) {
   return !NIL_P(container->callback) || !NIL_P(container->callbacks);
 }

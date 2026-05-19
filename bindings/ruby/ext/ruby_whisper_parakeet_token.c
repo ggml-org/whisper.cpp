@@ -108,19 +108,27 @@ ruby_whisper_parakeet_token_s_allocate(VALUE klass)
 }
 
 VALUE
-ruby_whisper_parakeet_token_s_init(struct parakeet_context *context, int i_segment, int i_token)
+ruby_whisper_parakeet_token_s_from_token_data(struct parakeet_context *context, const parakeet_token_data *token_data)
 {
   const VALUE token = ruby_whisper_parakeet_token_s_allocate(cParakeetToken);
   ruby_whisper_parakeet_token *rwpt;
   TypedData_Get_Struct(token, ruby_whisper_parakeet_token, &ruby_whisper_parakeet_token_type, rwpt);
 
-  *rwpt->token_data = parakeet_full_get_token_data(context, i_segment, i_token);
-  rwpt->text = rb_utf8_str_new_cstr(parakeet_full_get_token_text(context, i_segment, i_token));
+  *rwpt->token_data = *token_data;
+  rwpt->text = rb_utf8_str_new_cstr(parakeet_token_to_str(context, token_data->id));
 
   return token;
 }
 
+VALUE
+ruby_whisper_parakeet_token_s_from_index(struct parakeet_context *context, int i_segment, int i_token)
+{
+  parakeet_token_data token_data = parakeet_full_get_token_data(context, i_segment, i_token);
+  return ruby_whisper_parakeet_token_s_from_token_data(context, &token_data);
+}
+
 ITERATE_MEMBERS(DEF_MEMBER_ATTR)
+// Define #text using parakeet_token_to_str or parakeet_token_to_text
 ITERATE_ATTRS(DEF_ATTR)
 
 static VALUE
