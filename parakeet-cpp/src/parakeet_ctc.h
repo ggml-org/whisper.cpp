@@ -259,6 +259,13 @@ struct SortformerWeights {
 struct ParakeetCtcModel {
     ParakeetModelType model_type = ParakeetModelType::CTC;
 
+    // Optional GGUF metadata tag (key `parakeet.model_variant`). Carries
+    // a stable identifier for the converted checkpoint that the engine
+    // can match against -- preferred over shape-based heuristics where
+    // two variants share the same encoder shape (e.g. sortformer-v2 vs
+    // sortformer-v2.1-aosc). Empty if the GGUF predates the key.
+    std::string model_variant;
+
     EncoderConfig encoder_cfg;
     MelConfig     mel_cfg;
     BpeVocab      vocab;

@@ -554,8 +554,8 @@ if (PARAKEET_BUILD_TESTS)
     parakeet_apply_ccache(test-sortformer-streaming)
     parakeet_register_test(test-sortformer-streaming
         LABEL    "fixture"
-        ARGS     "--model" "${_qvp_sfs_q8_gguf}" "--wav" "${_qvp_diar_wav}"
-        REQUIRES "${_qvp_sfs_q8_gguf}" "${_qvp_diar_wav}")
+        ARGS     "--model" "${_qvp_sfsv21_q8_gguf}" "--wav" "${_qvp_diar_wav}"
+        REQUIRES "${_qvp_sfsv21_q8_gguf}" "${_qvp_diar_wav}")
 
     # v2.1 AOSC speaker-correctness regression. Asserts speaker coverage,
     # re-entry slot continuity (the AOSC contract), and frame-level DER

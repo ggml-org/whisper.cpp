@@ -47,6 +47,7 @@
 //   ctest fixtures behave when their fixtures aren't on disk.
 
 #include "parakeet/engine.h"
+#include "test_utils.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -64,57 +65,8 @@ namespace {
 
 constexpr double FRAME_S = 0.01;  // 10 ms grid
 
-bool file_exists(const std::string & p) {
-    std::ifstream f(p, std::ios::binary);
-    return f.good();
-}
-
-// Pulled verbatim from test_sortformer_streaming.cpp (line 37-76 of that
-// file). parakeet-cpp has no shared test-util header today, so the
-// helper is duplicated here on purpose; it matches how the existing
-// streaming/parity tests are organised.
-bool load_wav_pcm16le_mono(const std::string & path,
-                           std::vector<float> & samples,
-                           int & sample_rate) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return false;
-    char riff[4]; f.read(riff, 4);
-    if (std::memcmp(riff, "RIFF", 4) != 0) return false;
-    f.ignore(4);
-    char wave[4]; f.read(wave, 4);
-    if (std::memcmp(wave, "WAVE", 4) != 0) return false;
-
-    bool fmt_ok = false; uint16_t channels = 0; uint16_t bits = 0; uint32_t srate = 0;
-    std::vector<char> data;
-    while (f) {
-        char id[4]; f.read(id, 4);
-        if (!f) break;
-        uint32_t sz = 0; f.read((char *) &sz, 4);
-        if (std::memcmp(id, "fmt ", 4) == 0) {
-            std::vector<char> hdr(sz);
-            f.read(hdr.data(), sz);
-            uint16_t fmt = *(uint16_t *) hdr.data();
-            channels    = *(uint16_t *) (hdr.data() + 2);
-            srate       = *(uint32_t *) (hdr.data() + 4);
-            bits        = *(uint16_t *) (hdr.data() + 14);
-            if (fmt != 1 || channels != 1 || bits != 16) return false;
-            fmt_ok = true;
-        } else if (std::memcmp(id, "data", 4) == 0) {
-            data.resize(sz);
-            f.read(data.data(), sz);
-            break;
-        } else {
-            f.ignore(sz);
-        }
-    }
-    if (!fmt_ok || data.empty()) return false;
-    sample_rate = (int) srate;
-    const int n = (int) (data.size() / 2);
-    samples.resize(n);
-    const int16_t * s16 = reinterpret_cast<const int16_t *>(data.data());
-    for (int i = 0; i < n; ++i) samples[i] = (float) s16[i] / 32768.0f;
-    return true;
-}
+using parakeet_test::file_exists;
+using parakeet_test::load_wav_pcm16le_mono;
 
 struct RttmSeg {
     double      start_s;
