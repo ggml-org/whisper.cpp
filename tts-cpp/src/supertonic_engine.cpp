@@ -1,6 +1,7 @@
 #define TTS_CPP_BUILD
 #include "tts-cpp/supertonic/engine.h"
 
+#include "backend_selection.h"
 #include "supertonic_internal.h"
 #include "npy.h"
 
@@ -122,6 +123,18 @@ struct Engine::Impl {
         if (!std::filesystem::exists(opts.model_gguf_path)) {
             throw std::runtime_error(supertonic_setup_hint(opts.model_gguf_path));
         }
+
+        // Wire backends_dir + opencl_cache_dir BEFORE any backend
+        // init. First-Engine-wins across the whole process; second
+        // and later Engines reuse the already-loaded registry. See
+        // backend_selection.cpp.
+        if (!opts.backends_dir.empty()) {
+            ::tts_cpp::detail::set_backends_directory(opts.backends_dir);
+        }
+        if (!opts.opencl_cache_dir.empty()) {
+            ::tts_cpp::detail::set_opencl_cache_dir(opts.opencl_cache_dir);
+        }
+
         if (!load_supertonic_gguf(opts.model_gguf_path, model, opts.n_gpu_layers, false)) {
             throw std::runtime_error("Supertonic Engine: failed to load GGUF: " +
                                      opts.model_gguf_path);

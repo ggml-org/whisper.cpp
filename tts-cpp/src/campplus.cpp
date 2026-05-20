@@ -1,4 +1,5 @@
 #include "campplus.h"
+#include "backend_selection.h"
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"

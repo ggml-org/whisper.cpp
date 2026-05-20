@@ -703,7 +703,9 @@ static bool campplus_embed_ggml(const std::vector<float> & fbank_t_by_c, int T,
     campplus_gctx g;
     g.backend = backend;
     if (!g.backend) {
-        g.backend      = ggml_backend_cpu_init();
+        // Registry-routed CPU init (works under GGML_BACKEND_DL=ON and OFF).
+        // See voice_encoder.cpp for the longer rationale.
+        g.backend      = ::tts_cpp::detail::init_cpu_backend();
         g.owns_backend = true;
         if (!g.backend) { fprintf(stderr, "campplus_ggml: cpu init failed\n"); return false; }
     }
