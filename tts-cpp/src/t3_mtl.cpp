@@ -24,6 +24,7 @@
 #include "chatterbox_t3_internal.h"
 #include "t3_mtl.h"
 
+#include "backend_util.h"
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -1135,9 +1136,12 @@ bool run_prompt_pass(const chatterbox_model & model,
     fill_causal_mask_f16(mask, N);
     set_in("kq_mask", mask.data(), mask.size() * sizeof(ggml_fp16_t));
 
-    if (ggml_backend_is_cpu(model.backend)) {
-        ggml_backend_cpu_set_n_threads(model.backend, n_threads);
-    }
+    // Registry-routed n_threads (works under GGML_BACKEND_DL=ON: the CPU
+    // backend lives in a dlopen'd per-arch .so, so the static
+    // `ggml_backend_cpu_set_n_threads` symbol is unresolvable at link time).
+    // The helper is a no-op on non-CPU backends and on CPU backends that
+    // don't export `ggml_backend_set_n_threads`.
+    ::tts_cpp::detail::backend_set_n_threads(model.backend, n_threads);
     ggml_backend_graph_compute(model.backend, gf);
 
     ggml_tensor * logits = ggml_graph_get_tensor(gf, "logits");
@@ -1202,9 +1206,12 @@ bool run_prompt_pass_b2(const chatterbox_model & model,
     fill_causal_mask_f16(mask, N);
     set_in("kq_mask", mask.data(), mask.size() * sizeof(ggml_fp16_t));
 
-    if (ggml_backend_is_cpu(model.backend)) {
-        ggml_backend_cpu_set_n_threads(model.backend, n_threads);
-    }
+    // Registry-routed n_threads (works under GGML_BACKEND_DL=ON: the CPU
+    // backend lives in a dlopen'd per-arch .so, so the static
+    // `ggml_backend_cpu_set_n_threads` symbol is unresolvable at link time).
+    // The helper is a no-op on non-CPU backends and on CPU backends that
+    // don't export `ggml_backend_set_n_threads`.
+    ::tts_cpp::detail::backend_set_n_threads(model.backend, n_threads);
     ggml_backend_graph_compute(model.backend, gf);
 
     ggml_tensor * logits = ggml_graph_get_tensor(gf, "logits");
@@ -1247,9 +1254,12 @@ bool run_step_pass_b2(const chatterbox_model & model,
     int32_t pos = n_past;
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "pos_ids"), &pos, 0, sizeof(pos));
 
-    if (ggml_backend_is_cpu(model.backend)) {
-        ggml_backend_cpu_set_n_threads(model.backend, n_threads);
-    }
+    // Registry-routed n_threads (works under GGML_BACKEND_DL=ON: the CPU
+    // backend lives in a dlopen'd per-arch .so, so the static
+    // `ggml_backend_cpu_set_n_threads` symbol is unresolvable at link time).
+    // The helper is a no-op on non-CPU backends and on CPU backends that
+    // don't export `ggml_backend_set_n_threads`.
+    ::tts_cpp::detail::backend_set_n_threads(model.backend, n_threads);
     ggml_backend_graph_compute(model.backend, gf);
 
     ggml_tensor * logits = ggml_graph_get_tensor(gf, "logits");
@@ -1301,9 +1311,12 @@ bool run_step_pass(const chatterbox_model & model,
     int32_t pos = n_past;
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "pos_ids"), &pos, 0, sizeof(pos));
 
-    if (ggml_backend_is_cpu(model.backend)) {
-        ggml_backend_cpu_set_n_threads(model.backend, n_threads);
-    }
+    // Registry-routed n_threads (works under GGML_BACKEND_DL=ON: the CPU
+    // backend lives in a dlopen'd per-arch .so, so the static
+    // `ggml_backend_cpu_set_n_threads` symbol is unresolvable at link time).
+    // The helper is a no-op on non-CPU backends and on CPU backends that
+    // don't export `ggml_backend_set_n_threads`.
+    ::tts_cpp::detail::backend_set_n_threads(model.backend, n_threads);
     ggml_backend_graph_compute(model.backend, gf);
 
     ggml_tensor * logits = ggml_graph_get_tensor(gf, "logits");
@@ -1673,7 +1686,7 @@ bool load_model_gguf_mtl(const std::string & path,
         // ggml-cpu's per-kernel overhead is already negligible and the
         // extra weight memory footprint (~75 MB for the multilingual
         // T3) trades unfavourably with thread-cache locality there.
-        if (!ggml_backend_is_cpu(model.backend)) {
+        if (!::tts_cpp::detail::backend_is_cpu(model.backend)) {
             const int n_embd = hp.n_embd;
             const int n_ff   = hp.intermediate_size;
 
@@ -1814,7 +1827,7 @@ bool eval_prompt_mtl(const chatterbox_model & model,
     // op processes B=2 in a tight loop, so batching just doubles the
     // per-op work without saving ops; mirrors §3.20's S3Gen B=2 finding
     // that on CPU the two-call path stayed the winner).
-    const bool use_b2 = !ggml_backend_is_cpu(model.backend);
+    const bool use_b2 = !::tts_cpp::detail::backend_is_cpu(model.backend);
     if (use_b2) {
         return run_prompt_pass_b2(model, allocr, n_threads, text_tokens,
                                   exaggeration, logits_cond_out,
@@ -1860,7 +1873,7 @@ bool eval_step_mtl(const chatterbox_model & model,
         return false;
     }
     // Metal: cond+uncond batched into a single forward.  See eval_prompt_mtl.
-    const bool use_b2 = !ggml_backend_is_cpu(model.backend);
+    const bool use_b2 = !::tts_cpp::detail::backend_is_cpu(model.backend);
     if (use_b2) {
         return run_step_pass_b2(model, allocr, n_threads, n_past, token,
                                 logits_cond_out, logits_uncond_out);
