@@ -3579,6 +3579,12 @@ static int parakeet_stream_process_window(
     const int chunk_mel_frames = n_chunk / PARAKEET_HOP_LENGTH;
 
     state->n_audio_ctx = state->mel.n_len;
+    if (params.encoder_begin_callback) {
+        if (!params.encoder_begin_callback(ctx, state, params.encoder_begin_callback_user_data)) {
+            PARAKEET_LOG_ERROR("%s: encoder_begin_callback returned false - aborting\n", __func__);
+            return -6;
+        }
+    }
     // process entire log mel spectrogram.
     if (!parakeet_encode_internal(*ctx, *state, 0, params.n_threads,
                                   params.abort_callback, params.abort_callback_user_data)) {
@@ -3853,6 +3859,12 @@ int parakeet_full_with_state(
             // Without this there would be hard cutoffs and the encoder might not
             // be able to detect speech near the edges.
             state->n_audio_ctx = total_mel_frames;
+            if (params.encoder_begin_callback) {
+                if (!params.encoder_begin_callback(ctx, state, params.encoder_begin_callback_user_data)) {
+                    PARAKEET_LOG_ERROR("%s: encoder_begin_callback returned false - aborting\n", __func__);
+                    return -6;
+                }
+            }
             if (!parakeet_encode_internal(*ctx, *state, 0, params.n_threads,
                                          params.abort_callback, params.abort_callback_user_data)) {
                 PARAKEET_LOG_ERROR("%s: failed to encode chunk\n", __func__);
@@ -3975,6 +3987,12 @@ int parakeet_chunk(
 
     const int n_frames = parakeet_n_len_from_state(state);
 
+    if (params.encoder_begin_callback) {
+        if (!params.encoder_begin_callback(ctx, state, params.encoder_begin_callback_user_data)) {
+            PARAKEET_LOG_ERROR("%s: encoder_begin_callback returned false - aborting\n", __func__);
+            return -6;
+        }
+    }
     if (!parakeet_encode_internal(*ctx, *state, 0, params.n_threads, params.abort_callback, params.abort_callback_user_data)) {
         PARAKEET_LOG_ERROR("%s: failed to encode\n", __func__);
         return -6;
