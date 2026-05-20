@@ -202,6 +202,8 @@ whisper.transcribe("path/to/audio.wav", params, n_processors: Etc.nprocessors)
 
 Note that transcription occasionally might be low accuracy when it works in parallel.
 
+If n_processors is greater than 1, you cannot set any callbacks including new_segment_callback, progress_callback, encoder_begin_callback, abort_callback, and log_callback set by Whisper.log_set.
+
 ### Segments ###
 
 Once `Whisper::Context#transcribe` called, you can retrieve segments by `#each_segment`:
