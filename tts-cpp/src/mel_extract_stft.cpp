@@ -18,6 +18,8 @@
 // ggml-cpu's mul_mat uses NEON on ARM and AVX on x86, so this path is both
 // faster and more portable than the scalar loops in voice_features.cpp.
 
+#include "backend_selection.h"
+
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -148,10 +150,12 @@ static std::vector<float> mel_graph_run(
     make_dft_basis(n_fft, F, cos_basis, neg_sin_basis);
 
     ggml_ctx gc;
-    gc.backend      = ggml_backend_cpu_init();
+    // Registry-routed CPU init (works under GGML_BACKEND_DL=ON and OFF).
+    // See voice_encoder.cpp for the longer rationale.
+    gc.backend      = ::tts_cpp::detail::init_cpu_backend();
     gc.owns_backend = true;
     if (!gc.backend) {
-        fprintf(stderr, "mel_graph_run: ggml_backend_cpu_init failed\n");
+        fprintf(stderr, "mel_graph_run: init_cpu_backend failed\n");
         return {};
     }
 
