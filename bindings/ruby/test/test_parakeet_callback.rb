@@ -14,19 +14,19 @@ class TestParakeetCallback < TestBase
       assert n_new > 0
       assert_same @parakeet, context
 
-      # n_segments = context.full_n_segments
-      # n_new.times do |i|
-      #   i_segment = n_segments - 1 + i
-      #   start_time = context.full_get_segment_t0(i_segment) * 10
-      #   end_time = context.full_get_segment_t1(i_segment) * 10
-      #   text = context.full_get_segment_text(i_segment)
+      n_segments = context.full_n_segments
+      n_new.times do |i|
+        i_segment = n_segments - 1 + i
+        start_time = context.full_get_segment_t0(i_segment) * 10
+        end_time = context.full_get_segment_t1(i_segment) * 10
+        text = context.full_get_segment_text(i_segment)
 
-      #   assert_kind_of Integer, start_time
-      #   assert start_time >= 0
-      #   assert_kind_of Integer, end_time
-      #   assert end_time > 0
-      #   assert_match(/ask not what your country can do for you, ask what you can do for your country/, text) if i_segment == 0
-      # end
+        assert_kind_of Integer, start_time
+        assert start_time >= 0
+        assert_kind_of Integer, end_time
+        assert end_time > 0
+        assert_match(/ask not what your country can do for you, ask what you can do for your/, text) if i_segment == 0
+      end
     }
 
     @parakeet.transcribe AUDIO, @params
