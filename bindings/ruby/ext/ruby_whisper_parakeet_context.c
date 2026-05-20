@@ -24,6 +24,7 @@ ruby_whisper_parakeet_context_free(void *p)
     parakeet_free(rwpc->context);
     rwpc->context = NULL;
   }
+  xfree(rwpc);
 }
 
 static size_t
