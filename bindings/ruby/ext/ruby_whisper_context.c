@@ -379,7 +379,7 @@ fill_samples(VALUE rb_args)
   return Qnil;
 }
 
-struct parsed_samples_t
+parsed_samples_t
 parse_samples(VALUE *samples, VALUE *n_samples)
 {
   bool memview_available = rb_memory_view_available_p(*samples);
