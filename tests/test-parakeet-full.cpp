@@ -20,6 +20,12 @@ bool encoder_begin_callback(parakeet_context * ctx, parakeet_state * state, void
     return true;
 }
 
+bool abort_callback(void * user_data) {
+    bool * called = static_cast<bool *>(user_data);
+    *called = true;
+    return false; // just continue without aborting.
+}
+
 void token_callback(parakeet_context * ctx, parakeet_state * state, const parakeet_token_data * token_data, void * user_data) {
     static bool is_first = true;
     const char * token_str = parakeet_token_to_str(ctx, token_data->id);
@@ -64,6 +70,9 @@ int main() {
     bool encoder_begin_callback_called = false;
     params.encoder_begin_callback = encoder_begin_callback;
     params.encoder_begin_callback_user_data = &encoder_begin_callback_called;
+    bool abort_callback_called = false;
+    params.abort_callback = abort_callback;
+    params.abort_callback_user_data = &abort_callback_called;
 
     params.chunk_length_ms  = 10000;
     params.left_context_ms  = 10000;
@@ -73,6 +82,7 @@ int main() {
     assert(ret == 0);
     assert(progress_callback_called);
     assert(encoder_begin_callback_called);
+    assert(abort_callback_called);
 
     parakeet_free(pctx);
 

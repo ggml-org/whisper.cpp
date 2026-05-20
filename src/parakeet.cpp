@@ -2329,7 +2329,9 @@ static bool parakeet_decode(
     // run the prediction network for the initial blank token. This will
     // initialize the LSTM state and produce an initial hidden state that can
     // be used in the joint network below.
-    if (!parakeet_predict(pctx, pstate, batch, n_threads, nullptr, nullptr)) {
+    if (!parakeet_predict(pctx, pstate, batch, n_threads,
+            params ? params->abort_callback           : nullptr,
+            params ? params->abort_callback_user_data : nullptr)) {
         return false;
     }
 
@@ -2345,7 +2347,9 @@ static bool parakeet_decode(
         // The joint network outputs logits for all the tokens in the vocabulary
         // plus the blank token, and also n_duration logits for the duration
         // tokens which contain information about how many frames to skip/advance forward.
-        if (!parakeet_joint(pctx, pstate, batch, n_threads, nullptr, nullptr)) {
+        if (!parakeet_joint(pctx, pstate, batch, n_threads,
+                params ? params->abort_callback           : nullptr,
+                params ? params->abort_callback_user_data : nullptr)) {
             return false;
         }
 
@@ -2405,7 +2409,9 @@ static bool parakeet_decode(
 
         // advance predictor for the non-blank token.
         batch.token[0] = last_token;
-        if (!parakeet_predict(pctx, pstate, batch, n_threads, nullptr, nullptr)) {
+        if (!parakeet_predict(pctx, pstate, batch, n_threads,
+                params ? params->abort_callback           : nullptr,
+                params ? params->abort_callback_user_data : nullptr)) {
             return false;
         }
 
@@ -2462,7 +2468,9 @@ static bool parakeet_decode_chunk(
         // run the prediction network for the initial blank token. This will
         // initialize the LSTM state and produce an initial hidden state that can
         // be used in the joint network.
-        if (!parakeet_predict(pctx, pstate, batch, n_threads, nullptr, nullptr)) {
+        if (!parakeet_predict(pctx, pstate, batch, n_threads,
+                params ? params->abort_callback           : nullptr,
+                params ? params->abort_callback_user_data : nullptr)) {
             return false;
         }
         pstate.tdt_stream_state.initialized = true;
@@ -2493,7 +2501,9 @@ static bool parakeet_decode_chunk(
             // The joint network outputs logits for all the tokens in the vocabulary
             // and the blank token, and also addtionally N duration logits for the duration
             // tokens which contain information about how many frames to skip/advance forward.
-            if (!parakeet_joint(pctx, pstate, batch, n_threads, nullptr, nullptr)) {
+            if (!parakeet_joint(pctx, pstate, batch, n_threads,
+                    params ? params->abort_callback           : nullptr,
+                    params ? params->abort_callback_user_data : nullptr)) {
                 return false;
             }
 
@@ -2578,7 +2588,9 @@ static bool parakeet_decode_chunk(
         batch.logits[0] = 0;
         batch.i_time[0] = 0;
 
-        if (!parakeet_predict(pctx, pstate, batch, n_threads, nullptr, nullptr)) {
+        if (!parakeet_predict(pctx, pstate, batch, n_threads,
+                params ? params->abort_callback           : nullptr,
+                params ? params->abort_callback_user_data : nullptr)) {
             return false;
         }
 
