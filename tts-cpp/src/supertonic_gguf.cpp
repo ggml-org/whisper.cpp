@@ -1,20 +1,16 @@
 #include "supertonic_internal.h"
 
+#include "backend_selection.h"
+#include "backend_util.h"
 #include "ggml-cpu.h"
 #include "gguf.h"
 
-#ifdef GGML_USE_CUDA
-#include "ggml-cuda.h"
-#endif
-#ifdef GGML_USE_METAL
-#include "ggml-metal.h"
-#endif
-#ifdef GGML_USE_VULKAN
-#include "ggml-vulkan.h"
-#endif
-#ifdef GGML_USE_OPENCL
-#include "ggml-opencl.h"
-#endif
+// The per-backend `#include "ggml-{cuda,metal,vulkan,opencl}.h"`
+// blocks gated on `GGML_USE_<X>` that used to live here are gone:
+// `init_supertonic_backend` below forwards to `backend_selection`'s
+// registry walk, which reaches every backend through
+// `ggml_backend_dev_*` without linking the per-backend static init
+// symbols. Same shape as parakeet-cpp.
 
 #include <algorithm>
 #include <atomic>
@@ -94,40 +90,17 @@ std::vector<float> expand_supertonic_tensor_to_f32(const ggml_tensor * src) {
 }
 
 ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose) {
-#ifdef GGML_USE_CUDA
-    if (n_gpu_layers > 0) {
-        ggml_backend_t b = ggml_backend_cuda_init(0);
-        if (b) { if (verbose) fprintf(stderr, "supertonic: using CUDA backend\n"); return b; }
+    // GPU cascade is centralised in backend_selection.cpp's
+    // `init_gpu_backend` (Adreno 700+ -> OpenCL, every other GPU ->
+    // Vulkan/Metal/CUDA/Mali, with Adreno 6xx OpenCL force-skipped).
+    if (ggml_backend_t b = ::tts_cpp::detail::init_gpu_backend(n_gpu_layers, verbose, "supertonic")) {
+        return b;
     }
-#endif
-#ifdef GGML_USE_METAL
-    if (n_gpu_layers > 0) {
-        ggml_backend_t b = ggml_backend_metal_init();
-        if (b) { if (verbose) fprintf(stderr, "supertonic: using Metal backend\n"); return b; }
+    if (ggml_backend_t b = ::tts_cpp::detail::init_cpu_backend()) {
+        if (verbose) fprintf(stderr, "supertonic: using CPU backend\n");
+        return b;
     }
-#endif
-#ifdef GGML_USE_VULKAN
-    if (n_gpu_layers > 0) {
-        ggml_backend_t b = ggml_backend_vk_init(0);
-        if (b) {
-            if (verbose) fprintf(stderr, "supertonic: using Vulkan backend\n");
-            return b;
-        }
-    }
-#endif
-#ifdef GGML_USE_OPENCL
-    if (n_gpu_layers > 0) {
-        ggml_backend_reg_t reg = ggml_backend_opencl_reg();
-        if (reg && ggml_backend_reg_dev_count(reg) > 0) {
-            ggml_backend_t b = ggml_backend_opencl_init();
-            if (b) { if (verbose) fprintf(stderr, "supertonic: using OpenCL backend\n"); return b; }
-        }
-    }
-#endif
-    ggml_backend_t b = ggml_backend_cpu_init();
-    if (!b) throw std::runtime_error("ggml_backend_cpu_init failed");
-    if (verbose) fprintf(stderr, "supertonic: using CPU backend\n");
-    return b;
+    throw std::runtime_error("init_supertonic_backend: no CPU device registered");
 }
 
 void set_env_if_unset(const char * name, const char * value) {
@@ -230,8 +203,11 @@ void supertonic_set_n_threads(supertonic_model & model, int n_threads) {
 }
 
 void supertonic_graph_compute(const supertonic_model & model, ggml_cgraph * graph) {
-    if (ggml_backend_is_cpu(model.backend) && model.n_threads > 0) {
-        ggml_backend_cpu_set_n_threads(model.backend, model.n_threads);
+    // Registry-routed n_threads (no-op on non-CPU backends); see
+    // src/t3_mtl.cpp for the GGML_BACKEND_DL=ON unresolvable-symbol
+    // rationale.
+    if (model.n_threads > 0) {
+        ::tts_cpp::detail::backend_set_n_threads(model.backend, model.n_threads);
     }
     ggml_backend_graph_compute(model.backend, graph);
 }

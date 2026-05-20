@@ -21,6 +21,8 @@
 //   chatterbox_tts --s3gen-gguf MODEL.gguf --ref-dir DIR \
 //                  --tokens-file TOKENS.txt --out OUT.wav
 
+#include "backend_selection.h"
+#include "backend_util.h"
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -29,18 +31,12 @@
 #include "npy.h"
 #include "chatterbox_tts_test_hooks.h"
 
-#ifdef GGML_USE_CUDA
-#include "ggml-cuda.h"
-#endif
-#ifdef GGML_USE_METAL
-#include "ggml-metal.h"
-#endif
-#ifdef GGML_USE_VULKAN
-#include "ggml-vulkan.h"
-#endif
-#ifdef GGML_USE_OPENCL
-#include "ggml-opencl.h"
-#endif
+// The per-backend `#include "ggml-{cuda,metal,vulkan,opencl}.h"`
+// blocks gated on `GGML_USE_<X>` that used to live here are gone:
+// `s3gen_init_backend` below forwards to `backend_selection`'s
+// registry walk, which reaches every backend through
+// `ggml_backend_dev_*` without linking the per-backend static init
+// symbols. Same shape as parakeet-cpp.
 
 #include <algorithm>
 #include <atomic>
@@ -71,7 +67,10 @@ static double now_ms() {
 }
 
 static void compute(ggml_backend_t backend, ggml_cgraph * gf) {
-    if (ggml_backend_is_cpu(backend)) ggml_backend_cpu_set_n_threads(backend, g_n_threads);
+    // Registry-routed n_threads (no-op on non-CPU backends); see
+    // src/t3_mtl.cpp for the GGML_BACKEND_DL=ON unresolvable-symbol
+    // rationale.
+    ::tts_cpp::detail::backend_set_n_threads(backend, g_n_threads);
     ggml_backend_graph_compute(backend, gf);
 }
 struct scoped_timer {
@@ -103,55 +102,17 @@ struct model_ctx {
 };
 
 static ggml_backend_t s3gen_init_backend(int n_gpu_layers, bool verbose) {
-#ifdef GGML_USE_CUDA
-    if (n_gpu_layers > 0) {
-        auto * b = ggml_backend_cuda_init(0);
-        if (b) { if (verbose) fprintf(stderr, "s3gen: using CUDA backend\n"); return b; }
+    // GPU cascade is centralised in backend_selection.cpp's
+    // `init_gpu_backend` (Adreno 700+ -> OpenCL, every other GPU ->
+    // Vulkan/Metal/CUDA/Mali, with Adreno 6xx OpenCL force-skipped).
+    if (ggml_backend_t b = ::tts_cpp::detail::init_gpu_backend(n_gpu_layers, verbose, "s3gen")) {
+        return b;
     }
-#endif
-#ifdef GGML_USE_METAL
-    if (n_gpu_layers > 0) {
-        auto * b = ggml_backend_metal_init();
-        if (b) { if (verbose) fprintf(stderr, "s3gen: using Metal backend\n"); return b; }
+    if (ggml_backend_t b = ::tts_cpp::detail::init_cpu_backend()) {
+        if (verbose) fprintf(stderr, "s3gen: using CPU backend\n");
+        return b;
     }
-#endif
-#ifdef GGML_USE_VULKAN
-    if (n_gpu_layers > 0) {
-        auto * b = ggml_backend_vk_init(0);
-        if (b) {
-            if (verbose) {
-                char desc[256] = {0};
-                ggml_backend_vk_get_device_description(0, desc, sizeof(desc));
-                fprintf(stderr, "s3gen: using Vulkan backend (device 0: %s)\n", desc);
-            }
-            return b;
-        }
-    }
-#endif
-#if defined(GGML_USE_OPENCL)
-    if (n_gpu_layers > 0) {
-        ggml_backend_reg_t ocl_reg = ggml_backend_opencl_reg();
-        if (ocl_reg && ggml_backend_reg_dev_count(ocl_reg) > 0) {
-            auto * b = ggml_backend_opencl_init();
-            if (b) {
-                if (verbose) {
-                    fprintf(stderr, "s3gen: using OpenCL backend\n");
-                }
-                return b;
-            }
-        } else if (verbose && ocl_reg) {
-            if (ggml_backend_reg_dev_count(ocl_reg) == 0) {
-                fprintf(stderr, "s3gen: no OpenCL device; using CPU\n");
-            } else {
-                fprintf(stderr, "s3gen: OpenCL init failed; using CPU\n");
-            }
-        }
-    }
-#endif
-    auto * b = ggml_backend_cpu_init();
-    if (!b) throw std::runtime_error("ggml_backend_cpu_init() failed");
-    if (verbose) fprintf(stderr, "s3gen: using CPU backend\n");
-    return b;
+    throw std::runtime_error("s3gen_init_backend: no CPU device registered");
 }
 
 // Process-wide cache of the loaded S3Gen GGUF so repeated calls (streaming
@@ -2661,7 +2622,7 @@ int s3gen_synthesize_to_wav(
     // throughput (measured +11% S3Gen wall time on M4 CPU), so we keep the
     // two-call path there.  Meanflow has no CFG to begin with.
     const bool use_b2 = (!meanflow) && (cfg_rate != 0.0f) &&
-                        !ggml_backend_is_cpu(m.backend);
+                        !::tts_cpp::detail::backend_is_cpu(m.backend);
 
     // Persistent CFM estimator graph cache.  Re-used across synth
     // calls when T matches — multi-synth chunks 2..N skip the graph

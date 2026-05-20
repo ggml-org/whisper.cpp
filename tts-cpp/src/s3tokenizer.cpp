@@ -1,4 +1,6 @@
 #include "s3tokenizer.h"
+#include "backend_selection.h"
+#include "backend_util.h"
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -333,9 +335,11 @@ static bool build_encoder_ctx(encoder_ctx & ec, const s3tokv2_weights & w,
         ec.backend      = backend;
         ec.owns_backend = false;
     } else {
-        ec.backend      = ggml_backend_cpu_init();
+        // Registry-routed CPU init (works under GGML_BACKEND_DL=ON and OFF).
+        // See voice_encoder.cpp for the longer rationale.
+        ec.backend      = ::tts_cpp::detail::init_cpu_backend();
         ec.owns_backend = true;
-        if (!ec.backend) { fprintf(stderr, "s3tokv2: ggml_backend_cpu_init failed\n"); return false; }
+        if (!ec.backend) { fprintf(stderr, "s3tokv2: init_cpu_backend failed\n"); return false; }
     }
 
     // Enough tensors: stem (4) + 16*6 blocks = 100.  Bump a bit for safety.
@@ -643,9 +647,8 @@ bool s3tokv2_tokenize(const std::vector<float> & wav,
     }
 
     if (n_threads <= 0) n_threads = (int)std::thread::hardware_concurrency();
-    if (ggml_backend_is_cpu(ec.backend)) {
-        ggml_backend_cpu_set_n_threads(ec.backend, n_threads);
-    }
+    // Registry-routed n_threads; see t3_mtl.cpp for rationale.
+    ::tts_cpp::detail::backend_set_n_threads(ec.backend, n_threads);
 
     if (ggml_backend_graph_compute(ec.backend, gf) != GGML_STATUS_SUCCESS) {
         fprintf(stderr, "s3tokv2: graph_compute failed\n");
