@@ -224,6 +224,16 @@ public class WhisperFullParams extends Structure {
     /** No speech threshold. */
     public float no_speech_thold;
 
+    /**
+     * RNG seed for reproducible sampling (when temperature &gt; 0).
+     * Each decoder uses {@code seed + decoder_index} so concurrent decoders get
+     * unique seeds. Maps to the {@code seed} field added at
+     * {@code include/whisper.h:553}; without this field declared here the
+     * subsequent {@code greedy} / {@code beam_search} struct offsets shift by
+     * 4 bytes and JNA reads garbage from the C-side defaults.
+     */
+    public int seed;
+
     /** Greedy decoding parameters. */
     public GreedyParams greedy;
 
@@ -331,6 +341,21 @@ public class WhisperFullParams extends Structure {
     public long i_start_rule;
     public float grammar_penalty;
 
+    // Voice Activity Detection (VAD) params -- added by upstream after v1.8.4.
+    // Without these three fields declared here the C struct's tail is missing
+    // from the JNA layout, which is fine for read-only callers but corrupts
+    // the trailing memory whenever a Java caller passes WhisperFullParams
+    // back into the C ABI (e.g. whisper_full).
+
+    /** Enable VAD pre-filtering inside whisper_full. (default = false) */
+    public CBool vad;
+
+    /** Path to the Silero VAD model (only used when {@link #vad} is true). */
+    public String vad_model_path;
+
+    /** VAD tuning knobs, mirrors {@code whisper_vad_params}. */
+    public WhisperVadParams vad_params;
+
     @Override
     protected List<String> getFieldOrder() {
         return Arrays.asList("strategy", "n_threads", "n_max_text_ctx",
@@ -343,13 +368,15 @@ public class WhisperFullParams extends Structure {
                 "prompt_tokens", "prompt_n_tokens", "language", "detect_language",
                 "suppress_blank", "suppress_nst", "temperature",
                 "max_initial_ts", "length_penalty", "temperature_inc",
-                "entropy_thold", "logprob_thold", "no_speech_thold", "greedy",
-                "beam_search", "new_segment_callback", "new_segment_callback_user_data",
-                "progress_callback", "progress_callback_user_data",
-                "encoder_begin_callback", "encoder_begin_callback_user_data",
-                "abort_callback", "abort_callback_user_data",
-                "logits_filter_callback", "logits_filter_callback_user_data",
-                "grammar_rules", "n_grammar_rules", "i_start_rule", "grammar_penalty");
+                "entropy_thold", "logprob_thold", "no_speech_thold", "seed",
+                "greedy", "beam_search", "new_segment_callback",
+                "new_segment_callback_user_data", "progress_callback",
+                "progress_callback_user_data", "encoder_begin_callback",
+                "encoder_begin_callback_user_data", "abort_callback",
+                "abort_callback_user_data", "logits_filter_callback",
+                "logits_filter_callback_user_data", "grammar_rules",
+                "n_grammar_rules", "i_start_rule", "grammar_penalty",
+                "vad", "vad_model_path", "vad_params");
     }
 
     public static class ByValue extends WhisperFullParams implements Structure.ByValue {
