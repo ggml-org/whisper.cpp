@@ -90,7 +90,7 @@ ruby_whisper_parakeet_transcribe(VALUE self, VALUE audio_path, VALUE params)
   if (args.result == 0) {
     return self;
   } else {
-    rb_exc_raise(rb_funcall(eError, id_new, 1, args.result));
+    rb_exc_raise(rb_funcall(eError, id_new, 1, INT2NUM(args.result)));
   }
 }
 
