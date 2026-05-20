@@ -1,5 +1,22 @@
 #include "ruby_whisper.h"
 
+#define ITERATE_SEGMENT_ATTRS(ITERATOR) \
+  ITERATOR(get_segment_t0, LONG) \
+  ITERATOR(get_segment_t1, LONG) \
+  ITERATOR(get_segment_text, STRING) \
+  ITERATOR(n_tokens, INT)
+
+#define ITERATE_TOKEN_ATTRS(ITERATOR) \
+  ITERATOR(get_token_text, STRING) \
+  ITERATOR(get_token_id, INT) \
+  ITERATOR(get_token_p, FLOAT)
+
+#define VAL_FROM_LONG(v) LONG2NUM(v)
+#define VAL_FROM_STRING(v) rb_utf8_str_new_cstr(v)
+#define VAL_FROM_INT(v) INT2NUM(v)
+#define VAL_FROM_FLOAT(v) DBL2NUM(v)
+#define READER(type) VAL_FROM_##type
+
 extern ID id_to_s;
 extern ID id___method__;
 extern ID id_to_enum;
@@ -15,6 +32,7 @@ extern parsed_samples_t parse_samples(VALUE *samples, VALUE *n_samples);
 extern VALUE release_samples(VALUE rb_parsed_args);
 extern void ruby_whisper_parakeet_prepare_transcription(ruby_whisper_parakeet_params *rwpp, VALUE *context, ruby_whisper_parakeet_abort_callback_user_data *abort_callback_user_data);
 extern rb_data_type_t ruby_whisper_parakeet_params_type;
+extern VALUE ruby_whisper_parakeet_token_s_from_token_data(struct parakeet_context *context, const parakeet_token_data *token_data);
 
 static void
 ruby_whisper_parakeet_context_free(void *p)
@@ -92,6 +110,47 @@ ruby_whisper_parakeet_context_initialize(int argc, VALUE *argv, VALUE self)
   }
 
   return Qnil;
+}
+
+static VALUE
+ruby_whisper_parakeet_context_full_n_segments(VALUE self)
+{
+  ruby_whisper_parakeet_context *rwpc;
+  GetParakeetContext(self, rwpc);
+
+  return INT2NUM(parakeet_full_n_segments(rwpc->context));
+}
+
+#define DEF_SEGMENT_ATTR(name, type) \
+  static VALUE \
+  ruby_whisper_parakeet_context_full_##name(VALUE self, VALUE i_segment) \
+  { \
+    ruby_whisper_parakeet_context *rwpc; \
+    GetParakeetContext(self, rwpc); \
+    return READER(type)(parakeet_full_##name(rwpc->context, NUM2INT(i_segment))); \
+  }
+
+ITERATE_SEGMENT_ATTRS(DEF_SEGMENT_ATTR)
+
+#define DEF_TOKEN_ATTR(name, type) \
+  static VALUE \
+  ruby_whisper_parakeet_context_full_##name(VALUE self, VALUE i_segment, VALUE i_token) \
+  { \
+    ruby_whisper_parakeet_context *rwpc;                                  \
+    GetParakeetContext(self, rwpc);                                     \
+    return READER(type)(parakeet_full_##name(rwpc->context, NUM2INT(i_segment), NUM2INT(i_token))); \
+  }
+
+ITERATE_TOKEN_ATTRS(DEF_TOKEN_ATTR)
+
+static VALUE
+ruby_whisper_parakeet_context_full_get_token_data(VALUE self, VALUE i_segment, VALUE i_token)
+{
+  ruby_whisper_parakeet_context *rwpc;
+  GetParakeetContext(self, rwpc);
+  parakeet_token_data token_data = parakeet_full_get_token_data(rwpc->context, NUM2INT(i_segment), NUM2INT(i_token));
+
+  return ruby_whisper_parakeet_token_s_from_token_data(rwpc->context, &token_data);
 }
 
 static VALUE
@@ -213,6 +272,19 @@ init_ruby_whisper_parakeet_context(VALUE *mParakeet)
 
   rb_define_method(cParakeetContext, "initialize", ruby_whisper_parakeet_context_initialize, -1);
   rb_define_method(cParakeetContext, "transcribe", ruby_whisper_parakeet_transcribe, 2);
+  rb_define_method(cParakeetContext, "full_n_segments", ruby_whisper_parakeet_context_full_n_segments, 0);
+  rb_define_method(cParakeetContext, "full_get_token_data", ruby_whisper_parakeet_context_full_get_token_data, 2);
   rb_define_method(cParakeetContext, "each_segment", ruby_whisper_parakeet_context_each_segment, 0);
   rb_define_method(cParakeetContext, "full", ruby_whisper_parakeet_context_full, -1);
+
+#define REGISTER_SEGMENT_ATTR(name, type) \
+  rb_define_method(cParakeetContext, "full_" #name, ruby_whisper_parakeet_context_full_##name, 1);
+
+  ITERATE_SEGMENT_ATTRS(REGISTER_SEGMENT_ATTR)
+
+#define REGISTER_TOKEN_ATTR(name, type) \
+  rb_define_method(cParakeetContext, "full_" #name, ruby_whisper_parakeet_context_full_##name, 2);
+
+  ITERATE_TOKEN_ATTRS(REGISTER_TOKEN_ATTR)
 }
+
