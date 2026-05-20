@@ -468,6 +468,48 @@ module Whisper
       def full: (Whisper::Parakeet::Params, Array[Float] samples, ?Integer n_samples) -> self
               | (Whisper::Parakeet::Params, _Samples, ?Integer n_samples) -> self
 
+      # Number of generated text segments.
+      #
+      def full_n_segments: () -> Integer
+
+      # Start time of a segment indexed by `segment_index` in centiseconds (10 times milliseconds).
+      #
+      #     full_get_segment_t0(3) # => 1668 (16680 ms)
+      #
+      def full_get_segment_t0: (Integer segment_index) -> Integer
+
+      # End time of a segment indexed by `segment_index` in centiseconds (10 times milliseconds).
+      #
+      #     full_get_segment_t1(3) # => 1668 (16680 ms)
+      #
+      def full_get_segment_t1: (Integer segment_index) -> Integer
+
+      # Text of a segment indexed by `segment_index`.
+      #
+      #     full_get_segment_text(3) # => "ask not what your country can do for you, ..."
+      #
+      def full_get_segment_text: (Integer segment_index) -> String
+
+      # Number of tokens in the segment indexed by `segment_index`.
+      #
+      def full_n_tokens: (Integer segment_index) -> Integer
+
+      # Text of the token indexed by `token_index` in the segment indexed by `segment_index`.
+      #
+      def full_get_token_text: (Integer segment_index, Integer token_index) -> String
+
+      # Token id of the token indexed by `token_index` in the segment indexed by `segment_index`.
+      #
+      def full_get_token_id: (Integer segment_index, Integer token_index) -> Integer
+
+      # Probability of the token indexed by `token_index` in the segment indexed by `segment_index`.
+      #
+      def full_get_token_p: (Integer segment_index, Integer token_index) -> Float
+
+      # Token data of the token indexed by `token_index` in the segment indexed by `segment_index`.
+      #
+      def full_get_token_data: (Integer segment_index, Integer token_index) -> Token
+
       # Yields each Whisper::Parakeet::Segment:
       #
       #     parakeet.transcribe("path/to/audio.wav", params)
