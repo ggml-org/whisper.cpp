@@ -9,6 +9,11 @@
 #endif
 #include <cassert>
 
+void progress_callback(parakeet_context * ctx, parakeet_state * state, int progress, void * user_data) {
+    bool * called = static_cast<bool *>(user_data);
+    *called = true;
+}
+
 void token_callback(parakeet_context * ctx, parakeet_state * state, const parakeet_token_data * token_data, void * user_data) {
     static bool is_first = true;
     const char * token_str = parakeet_token_to_str(ctx, token_data->id);
@@ -47,6 +52,9 @@ int main() {
     struct parakeet_full_params params = parakeet_full_default_params(PARAKEET_SAMPLING_GREEDY);
     params.new_token_callback = token_callback;
     params.new_token_callback_user_data = nullptr;
+    bool progress_callback_called = false;
+    params.progress_callback = progress_callback;
+    params.progress_callback_user_data = &progress_callback_called;
 
     params.chunk_length_ms  = 10000;
     params.left_context_ms  = 10000;
@@ -54,6 +62,7 @@ int main() {
 
     int ret = parakeet_full(pctx, params, pcmf32.data(), pcmf32.size());
     assert(ret == 0);
+    assert(progress_callback_called);
 
     parakeet_free(pctx);
 

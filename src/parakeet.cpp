@@ -3816,6 +3816,11 @@ int parakeet_full_with_state(
 
         // Process audio in sliding chunks of raw samples.
         while (left_sample < n_samples) {
+            if (params.progress_callback) {
+                const int progress = (100 * left_sample) / n_samples;
+                params.progress_callback(ctx, state, progress, params.progress_callback_user_data);
+            }
+
             const int buffer_start_sample   = std::max(0, left_sample - left_context_samples);
             const int right_sample          = std::min(left_sample + chunk_samples, n_samples);
             const int buffer_end_sample     = std::min(right_sample + right_context_samples, n_samples);
