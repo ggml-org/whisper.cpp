@@ -14,6 +14,10 @@
 #include "openvino/whisper-openvino-encoder.h"
 #endif
 
+#ifdef WHISPER_USE_VITISAI
+#include "vitisai/whisper-vitisai-encoder.h"
+#endif
+
 #include <atomic>
 #include <algorithm>
 #include <cassert>
@@ -901,6 +905,10 @@ struct whisper_state {
 
 #ifdef WHISPER_USE_OPENVINO
     whisper_openvino_context * ctx_openvino = nullptr;
+#endif
+
+#ifdef WHISPER_USE_VITISAI
+    whisper_vitisai_context * ctx_vitisai = nullptr;
 #endif
 
     // [EXPERIMENTAL] token-level timestamps data
@@ -1970,7 +1978,13 @@ static bool whisper_encode_external(const whisper_state & wstate) {
     const bool use_openvino = wstate.ctx_openvino != nullptr;
 #endif
 
-    return use_coreml || use_openvino;
+#ifndef WHISPER_USE_VITISAI
+    const bool use_vitisai = false;
+#else
+    const bool use_vitisai = wstate.ctx_vitisai != nullptr;
+#endif
+
+    return use_coreml || use_openvino || use_vitisai;
 }
 
 static struct ggml_cgraph * whisper_build_graph_conv(
@@ -2411,6 +2425,8 @@ static bool whisper_encode_internal(
 
 #if defined(WHISPER_USE_COREML)
             whisper_coreml_encode(wstate.ctx_coreml, mel->ne[0], mel->ne[1], (float *) mel->data, (float *) wstate.embd_enc->data);
+#elif defined(WHISPER_USE_VITISAI)
+            whisper_vitisai_encode(wstate.ctx_vitisai, mel, wstate.embd_enc);
 #elif defined(WHISPER_USE_OPENVINO)
             whisper_openvino_encode(wstate.ctx_openvino, mel, wstate.embd_enc);
 #endif
@@ -3346,6 +3362,20 @@ static std::string whisper_get_coreml_path_encoder(std::string path_bin) {
 }
 #endif
 
+#ifdef WHISPER_USE_VITISAI
+// replace extension with Vitis AI encoder artifact
+static std::string whisper_get_vitisai_path_encoder_cache(std::string path_bin) {
+    auto pos = path_bin.rfind('.');
+    if (pos != std::string::npos) {
+        path_bin = path_bin.substr(0, pos);
+    }
+
+    path_bin += "-encoder-vitisai.rai";
+
+    return path_bin;
+}
+#endif
+
 #ifdef WHISPER_USE_OPENVINO
 // replace .bin with-encoder-openvino.xml
 static std::string whisper_openvino_get_path_encoder(std::string path_bin) {
@@ -3452,6 +3482,19 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
 #endif
     } else {
         WHISPER_LOG_INFO("%s: Core ML model loaded\n", __func__);
+    }
+#endif
+
+#ifdef WHISPER_USE_VITISAI
+    const auto path_vitisai = whisper_get_vitisai_path_encoder_cache(ctx->path_model);
+
+    state->ctx_vitisai = whisper_vitisai_init(path_vitisai.c_str());
+    if (!state->ctx_vitisai) {
+        WHISPER_LOG_ERROR("%s: failed to load Vitis AI model from '%s'\n", __func__, path_vitisai.c_str());
+        whisper_free_state(state);
+        return nullptr;
+    } else {
+        WHISPER_LOG_INFO("%s: Vitis AI model loaded\n", __func__);
     }
 #endif
 
@@ -3818,6 +3861,13 @@ void whisper_free_state(struct whisper_state * state) {
         if (state->ctx_openvino != nullptr) {
             whisper_openvino_free(state->ctx_openvino);
             state->ctx_openvino = nullptr;
+        }
+#endif
+
+#ifdef WHISPER_USE_VITISAI
+        if (state->ctx_vitisai != nullptr) {
+            whisper_vitisai_free(state->ctx_vitisai);
+            state->ctx_vitisai = nullptr;
         }
 #endif
 
@@ -4312,11 +4362,20 @@ static int whisper_has_openvino(void) {
 #endif
 }
 
+static int whisper_has_vitisai(void) {
+#ifdef WHISPER_USE_VITISAI
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 const char * whisper_print_system_info(void) {
     static std::string s;
 
     s  = "";
     s += "WHISPER : ";
+    s += "VITISAI = "   + std::to_string(whisper_has_vitisai())    + " | ";
     s += "COREML = "    + std::to_string(whisper_has_coreml())     + " | ";
     s += "OPENVINO = "  + std::to_string(whisper_has_openvino())   + " | ";
 

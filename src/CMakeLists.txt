@@ -48,6 +48,10 @@ if (WHISPER_OPENVINO)
     find_package(OpenVINO REQUIRED COMPONENTS Runtime)
 endif()
 
+if (WHISPER_VITISAI)
+    find_package(FlexmlRT REQUIRED)
+endif()
+
 #
 # libraries
 #
@@ -101,6 +105,30 @@ if (WHISPER_OPENVINO)
     set_target_properties(${TARGET} PROPERTIES FOLDER "libs")
 endif()
 
+if (WHISPER_VITISAI)
+    set(TARGET whisper.vitisai)
+
+    add_library(${TARGET} OBJECT
+        vitisai/whisper-vitisai-encoder.h
+        vitisai/whisper-vitisai-encoder.cpp
+        )
+
+    target_include_directories(${TARGET} PUBLIC
+        .
+        )
+
+    set_property(TARGET ${TARGET} PROPERTY POSITION_INDEPENDENT_CODE ON)
+    set(WHISPER_EXTRA_FLAGS ${WHISPER_EXTRA_FLAGS} -DWHISPER_USE_VITISAI)
+
+    # Add C++17 standard for MSVC
+    if (MSVC)
+        target_compile_options(${TARGET} PRIVATE /std:c++17)
+    endif()
+
+    target_link_libraries(${TARGET} PRIVATE ggml flexmlrt::flexmlrt)
+    set_target_properties(${TARGET} PROPERTIES FOLDER "libs")
+endif()
+
 # whisper
 
 add_library(whisper
@@ -135,6 +163,10 @@ endif()
 
 if (WHISPER_OPENVINO)
     target_link_libraries(whisper PRIVATE whisper.openvino)
+endif()
+
+if (WHISPER_VITISAI)
+    target_link_libraries(whisper PRIVATE whisper.vitisai)
 endif()
 
 if (WHISPER_MKL)
