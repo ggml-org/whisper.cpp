@@ -5,6 +5,8 @@ module Whisper
     extend Mutex_m
 
     class << self
+      private
+
       def start_log_callback_thread
         return if @log_callback_thread&.alive?
 
