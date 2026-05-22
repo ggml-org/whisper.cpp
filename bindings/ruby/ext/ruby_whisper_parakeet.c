@@ -29,11 +29,11 @@ ruby_whisper_parakeet_log_callback(enum ggml_log_level level, const char *text, 
 static VALUE
 ruby_whisper_parakeet_s_log_set(VALUE self, VALUE log_callback, VALUE user_data)
 {
+  rb_iv_set(self, "@log_callback", log_callback);
+  rb_iv_set(self, "@log_callback_user_data", user_data);
   if (NIL_P(log_callback)) {
     parakeet_log_set(NULL, NULL);
   } else {
-    rb_iv_set(self, "@log_callback", log_callback);
-    rb_iv_set(self, "@log_callback_user_data", user_data);
     ruby_whisper_log_queue_open(&parakeet_log_queue);
     rb_funcall(mParakeet, id_start_log_callback_thread, 0);
     parakeet_log_set(ruby_whisper_parakeet_log_callback, NULL);
