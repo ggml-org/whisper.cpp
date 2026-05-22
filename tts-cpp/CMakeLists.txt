@@ -479,7 +479,8 @@ if (TTS_CPP_BUILD_TESTS)
     add_executable(test-voice-features
         test/test_voice_features.cpp
         src/voice_features.cpp
-        src/mel_extract_stft.cpp)
+        src/mel_extract_stft.cpp
+        src/backend_selection.cpp)
     target_link_libraries(test-voice-features PRIVATE ggml)
     target_include_directories(test-voice-features PRIVATE ggml/include src)
     tts_cpp_apply_ccache(test-voice-features)
@@ -491,7 +492,8 @@ if (TTS_CPP_BUILD_TESTS)
     add_executable(test-resample
         test/test_resample.cpp
         src/voice_features.cpp
-        src/mel_extract_stft.cpp)
+        src/mel_extract_stft.cpp
+        src/backend_selection.cpp)
     target_link_libraries(test-resample PRIVATE ggml)
     target_include_directories(test-resample PRIVATE src)
     tts_cpp_apply_ccache(test-resample)
@@ -501,7 +503,8 @@ if (TTS_CPP_BUILD_TESTS)
         test/test_voice_encoder.cpp
         src/voice_encoder.cpp
         src/voice_features.cpp
-        src/mel_extract_stft.cpp)
+        src/mel_extract_stft.cpp
+        src/backend_selection.cpp)
     target_link_libraries(test-voice-encoder PRIVATE ggml)
     target_include_directories(test-voice-encoder PRIVATE ggml/include src)
     tts_cpp_apply_ccache(test-voice-encoder)
@@ -527,7 +530,8 @@ if (TTS_CPP_BUILD_TESTS)
     add_executable(test-fbank
         test/test_fbank.cpp
         src/voice_features.cpp
-        src/mel_extract_stft.cpp)
+        src/mel_extract_stft.cpp
+        src/backend_selection.cpp)
     target_link_libraries(test-fbank PRIVATE ggml)
     target_include_directories(test-fbank PRIVATE ggml/include src)
     tts_cpp_apply_ccache(test-fbank)
@@ -540,7 +544,8 @@ if (TTS_CPP_BUILD_TESTS)
         test/test_voice_embedding.cpp
         src/campplus.cpp
         src/voice_features.cpp
-        src/mel_extract_stft.cpp)
+        src/mel_extract_stft.cpp
+        src/backend_selection.cpp)
     target_link_libraries(test-voice-embedding PRIVATE ggml)
     target_include_directories(test-voice-embedding PRIVATE ggml/include src)
     if (OpenMP_CXX_FOUND)
@@ -554,7 +559,8 @@ if (TTS_CPP_BUILD_TESTS)
 
     add_executable(test-s3tokenizer
         test/test_s3tokenizer.cpp
-        src/s3tokenizer.cpp)
+        src/s3tokenizer.cpp
+        src/backend_selection.cpp)
     target_link_libraries(test-s3tokenizer PRIVATE ggml)
     target_include_directories(test-s3tokenizer PRIVATE ggml/include src)
     tts_cpp_apply_ccache(test-s3tokenizer)
@@ -592,7 +598,8 @@ if (TTS_CPP_BUILD_TESTS)
 
     add_executable(test-streaming
         test/test_streaming.cpp
-        src/chatterbox_tts.cpp)
+        src/chatterbox_tts.cpp
+        src/backend_selection.cpp)
     target_link_libraries(test-streaming PRIVATE ggml tts-cpp-backend-defs)
     target_include_directories(test-streaming PRIVATE ggml/include src include)
     tts_cpp_apply_ccache(test-streaming)
@@ -608,7 +615,8 @@ if (TTS_CPP_BUILD_TESTS)
     # internal test-hook entrypoints.
     add_executable(test-cpu-caches
         test/test_cpu_caches.cpp
-        src/chatterbox_tts.cpp)
+        src/chatterbox_tts.cpp
+        src/backend_selection.cpp)
     target_link_libraries(test-cpu-caches PRIVATE ggml tts-cpp-backend-defs)
     target_include_directories(test-cpu-caches PRIVATE ggml/include src include)
     tts_cpp_apply_ccache(test-cpu-caches)
