@@ -350,7 +350,10 @@ ruby_whisper_parakeet_params_mark(void *p)
 {
   ruby_whisper_parakeet_params *rwpp = (ruby_whisper_parakeet_params *)p;
 
-#define MARK_CONTAINER(name) ruby_whisper_callback_container_mark(rwpp->name##_container);
+#define MARK_CONTAINER(name) \
+  if (rwpp->name##_container) { \
+    ruby_whisper_callback_container_mark(rwpp->name##_container); \
+  }
 
   ITERATE_CALLBACK_PARAMS(MARK_CONTAINER)
 }
