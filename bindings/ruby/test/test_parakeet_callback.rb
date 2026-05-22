@@ -5,7 +5,7 @@ class TestParakeetCallback < TestBase
     Whisper.instance_variable_set "@whisper", nil
     GC.start
     @params = Parakeet::Params.new
-    @parakeet = Parakeet::Context.new(File.join(__dir__, "../../../models/parakeet-tdt-0.6b-v3.bin"))
+    @parakeet = Parakeet::Context.new("parakeet-tdt-0.6b-v3")
   end
 
   def test_new_segment_callback

@@ -1,5 +1,8 @@
 #include "ruby_whisper.h"
 
+#define LOG_QUEUE_CAPACITY 256
+#define LOG_DEFAULT_CAPACITY 1024
+
 void
 ruby_whisper_log_queue_initialize(ruby_whisper_log_queue *log_queue)
 {

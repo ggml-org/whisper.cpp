@@ -2,7 +2,7 @@ require_relative "helper"
 
 class TestParakeetSegment < TestBase
   def setup
-    @parakeet = Parakeet::Context.new(File.join(__dir__, "../../../models/parakeet-tdt-0.6b-v3.bin"))
+    @parakeet = Parakeet::Context.new("parakeet-tdt-0.6b-v3")
     @parakeet.transcribe AUDIO, Parakeet::Params.new
   end
 

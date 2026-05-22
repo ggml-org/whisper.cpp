@@ -18,7 +18,7 @@ class TestParakeetToken < TestBase
     Whisper.instance_variable_set "@whisper", nil
     GC.start
 
-    parakeet = Parakeet::Context.new(File.join(__dir__, "../../../models/parakeet-tdt-0.6b-v3.bin"))
+    parakeet = Parakeet::Context.new("parakeet-tdt-0.6b-v3")
     params = Parakeet::Params.new
     parakeet.transcribe AUDIO, params
     @segment = parakeet.each_segment.first

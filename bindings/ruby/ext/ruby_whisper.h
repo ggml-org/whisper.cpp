@@ -16,9 +16,6 @@
 int ruby_thread_has_gvl_p(void);
 #endif
 
-#define LOG_QUEUE_CAPACITY 256
-#define LOG_DEFAULT_CAPACITY 1024
-
 typedef struct {
   VALUE *context;
   VALUE user_data;
