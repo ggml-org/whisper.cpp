@@ -63,6 +63,8 @@ struct EouDecodeState {
     // started. `eou_decode_window` writes "<EOU>" boundary positions
     // into the result so the caller can later split the transcript.
     int     segment_start_token = 0;
+
+    bool    has_emitted_token_since_last_eou = false;
 };
 
 struct EouSegmentBoundary {
