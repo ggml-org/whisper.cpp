@@ -46,6 +46,8 @@ class TestParams < TestBase
   def test_language
     @params.language = "en"
     assert_equal @params.language, "en"
+    GC.compact
+    assert_equal @params.language, "en"
     @params.language = "auto"
     assert_equal @params.language, "auto"
   end

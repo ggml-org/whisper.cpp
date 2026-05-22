@@ -1,4 +1,5 @@
 #include "voice_encoder.h"
+#include "backend_selection.h"
 #include "voice_features.h"
 #include "ggml.h"
 #include "ggml-alloc.h"
@@ -459,9 +460,15 @@ bool voice_encoder_embed(const std::vector<float> & wav_16k,
     ve_graph G;
     G.backend = backend;
     if (!G.backend) {
-        G.backend = ggml_backend_cpu_init();
+        // Route through the registry so this works under GGML_BACKEND_DL=ON
+        // (Android per-arch CPU dlopen variants) as well as the legacy
+        // statically-linked GGML_BACKEND_DL=OFF builds. Direct
+        // `ggml_backend_cpu_init()` is unresolvable in the dl mode because
+        // the symbol lives in the per-arch dlopen'd .so, not in the link
+        // line.
+        G.backend = ::tts_cpp::detail::init_cpu_backend();
         if (!G.backend) {
-            fprintf(stderr, "voice_encoder_embed: ggml_backend_cpu_init failed\n");
+            fprintf(stderr, "voice_encoder_embed: init_cpu_backend failed\n");
             return false;
         }
         G.owns_backend = true;

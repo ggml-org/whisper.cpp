@@ -12,6 +12,7 @@
 | `nvidia/parakeet-tdt-1.1b`    | TDT  | 80  | 1024 × 42 | 1024 | 1.1 B  | 1225 MiB q8_0               | 0.027-0.079 | English only, lowest WER (no PnC) |
 | `nvidia/diar_sortformer_4spk-v1` | Sortformer (diarization) | 80 | enc 512 × 18 + tf 192 × 18 | n/a (4 spk) | ~123 M | 263 MiB f16 / 141 MiB q8_0 / 75 MiB q4_0 | 0.017-0.097 | Up to 4 speakers, offline |
 | `nvidia/diar_streaming_sortformer_4spk-v2` | Sortformer (diarization) | 128 | enc 512 × 17 + tf 192 × 18 | n/a (4 spk) | ~117 M | 251 MiB f16 / 134 MiB q8_0 / 72 MiB q4_0 | similar to v1 offline | Offline + sliding-history live streaming in-repo; NeMo spkcache-style streaming not implemented |
+| `nvidia/diar_streaming_sortformer_4spk-v2.1` | Sortformer (diarization) | 128 | enc 512 × 17 + tf 192 × 18 | n/a (4 spk) | ~117 M | 251 MiB f16 / 134 MiB q8_0 / 72 MiB q4_0 | similar to v1 offline | Offline + live streaming with NeMo Audio-Online Speaker Cache (AOSC): speakers rebind to their original slot across long gaps. Activated automatically on detection of the v2.x encoder shape (17 layers / 128 mels). |
 | `nvidia/parakeet_realtime_eou_120m-v1` | RNN-T + `<EOU>` | 128 | 512 × 17 (chunked-limited att + causal subsampler + LN-in-conv) | 1027 | 120 M | 246 MiB f16 / 132 MiB q8_0 | enc cosine 0.999997 vs NeMo offline; enc on GPU, LSTM decoder CPU-only | English; `<EOU>` turn detection. NVIDIA Open Model License. Offline + Mode 2/3 on fixtures. NeMo `cache_aware_stream_step` path was prototyped and rejected vs offline quality — see `PROGRESS.md`. |
 
 Encoder topology is selected from GGUF metadata (`conv_norm_type`, causal subsampling, chunked-limited attention, etc.), so EOU shares the same C++ graph path as CTC/TDT where weights allow.
@@ -23,7 +24,7 @@ Encoder topology is selected from GGUF metadata (`conv_norm_type`, causal subsam
 | `Engine::transcribe` | One-shot wav → text (CTC / TDT / EOU) or segments (Sortformer) |
 | `Engine::transcribe_stream` | Mode 2: full encode once, stream segments |
 | `Engine::stream_start` → `StreamSession` | Mode 3: live duplex / cache-aware chunks |
-| `Engine::diarize` / `diarize_start` | Sortformer offline / sliding-history live |
+| `Engine::diarize` / `diarize_start` | Sortformer offline / live streaming (v1: sliding-history; v2.1: speaker-cache / AOSC) |
 | `transcribe_with_speakers` | Sortformer + ASR → attributed transcript |
 
 EOU streaming segments expose `is_eou_boundary`. **`StreamEvent`** (optional callbacks) covers end-of-turn (EOU) and VAD-style signals (Sortformer threshold, optional energy VAD on CTC/TDT). **`Engine::backend_device`** / **`backend_name`** reflect the backend actually used after the load-time cascade.
@@ -314,8 +315,8 @@ Typical f16 stage rel vs NeMo (order of magnitude): mel ~1e-4 inner, blocks ~1e-
 
 ## Current status
 
-- **Shipped:** Offline + Mode 2/3 streaming for CTC/TDT/EOU; Sortformer offline + sliding-history live diarization; optional **`StreamEvent`** callbacks; **`test-vk-vs-cpu`** for Vulkan encoder parity.  
-- **Not in-repo:** NeMo-style Sortformer spkcache streaming; KV-cache speedups for Mode 3 (API shape exists).  
+- **Shipped:** Offline + Mode 2/3 streaming for CTC/TDT/EOU; Sortformer offline + live streaming (v1 sliding-history, v2.1 NeMo Audio-Online Speaker Cache / AOSC); optional **`StreamEvent`** callbacks; **`test-vk-vs-cpu`** for Vulkan encoder parity.  
+- **Not in-repo:** KV-cache speedups for Mode 3 (API shape exists).  
 - **EOU:** NeMo `cache_aware_stream_step` was evaluated and **rejected** for offline transcript parity — details in **`PROGRESS.md`**.
 
 ## Repository layout

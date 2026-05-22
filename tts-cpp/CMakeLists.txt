@@ -70,6 +70,55 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR CMAKE_SYSTEM_NAME STREQUAL "Android")
     endif()
 endif()
 
+# Android default backend stack: dynamic loading of Vulkan + OpenCL +
+# per-arch CPU variants. Mirrors parakeet-cpp's same-repo sibling and
+# the qvac llm-llamacpp Android config (see
+# qvac-registry-vcpkg/ports/llama-cpp/portfile.cmake) so the tts-cpp
+# Android prebuilds drop into the same `qvac__tts-ggml/` folder shape
+# as the parakeet / llamacpp ones: a `.bare` module + sibling
+# `lib<prefix>ggml-{vulkan,opencl,cpu-android_armv*_*}.so` files that
+# `ggml_backend_load_all_from_path()` discovers at runtime.
+#
+# Selection at runtime is centralised in
+# `tts_cpp::detail::init_gpu_backend()` (src/backend_selection.cpp):
+# OpenCL when an Adreno 700+ device is present, Vulkan for every
+# other GPU (non-Adreno, Adreno < 700, Mali, Xclipse, ...). No
+# static GPU backend entry points are linked anywhere in libtts-cpp;
+# the registry walk reaches the right backend in both
+# GGML_BACKEND_DL=ON (Android prebuild) and GGML_BACKEND_DL=OFF
+# (desktop dev) modes.
+#
+# Callers that have specific reasons to deviate (e.g. a desktop
+# bring-up build that wants Vulkan only) can still override any of
+# these at the cmake command line; we only set defaults that haven't
+# already been provided.
+if (CMAKE_SYSTEM_NAME STREQUAL "Android")
+    if (NOT DEFINED CACHE{GGML_BACKEND_DL})
+        set(GGML_BACKEND_DL ON CACHE BOOL "" FORCE)
+    endif()
+    if (NOT DEFINED CACHE{GGML_CPU_ALL_VARIANTS})
+        set(GGML_CPU_ALL_VARIANTS ON CACHE BOOL "" FORCE)
+    endif()
+    if (NOT DEFINED CACHE{GGML_CPU_REPACK})
+        set(GGML_CPU_REPACK ON CACHE BOOL "" FORCE)
+    endif()
+    if (NOT DEFINED CACHE{GGML_VULKAN})
+        set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+    endif()
+    if (NOT DEFINED CACHE{GGML_OPENCL})
+        set(GGML_OPENCL ON CACHE BOOL "" FORCE)
+    endif()
+    # ggml-vulkan's coopmat / coopmat2 shader compile pulls in
+    # extensions that most Android Vulkan drivers don't expose; the
+    # upstream llama Android build disables both for the same reason.
+    if (NOT DEFINED CACHE{GGML_VULKAN_DISABLE_COOPMAT})
+        set(GGML_VULKAN_DISABLE_COOPMAT ON CACHE BOOL "" FORCE)
+    endif()
+    if (NOT DEFINED CACHE{GGML_VULKAN_DISABLE_COOPMAT2})
+        set(GGML_VULKAN_DISABLE_COOPMAT2 ON CACHE BOOL "" FORCE)
+    endif()
+endif()
+
 # Two related workarounds for clang-cl / MSVC builds on Windows.  Both
 # come from msys2 sneaking GCC-flavoured libraries onto CMake's search
 # paths and being mismatched against MSVC-compiled translation units.
@@ -161,33 +210,35 @@ if (MSVC)
     add_compile_definitions(_USE_MATH_DEFINES _CRT_SECURE_NO_WARNINGS)
 endif()
 
-# INTERFACE library that holds the GGML_USE_<BACKEND> compile defines
-# every TU that includes ggml.h needs to dispatch correctly on the
-# enabled backend.  The tts-cpp library AND any test executable that
-# recompiles src/chatterbox_tts.cpp / src/main.cpp from source (i.e.
-# bypasses the tts-cpp link) must link against this; otherwise the
-# #ifdef GGML_USE_<BACKEND> branches inside those TUs evaluate as
-# undefined and the GPU code paths get silently compiled out of the
-# test executable, even when the parent build did enable the backend.
-# Mirrors parakeet-cpp's parakeet-backend-defs INTERFACE lib.
+# Legacy interface library kept for export-set compatibility (it is
+# still part of `install(EXPORT tts-cppTargets)` below and downstream
+# `find_package(tts-cpp)` consumers list it as a link dep).
+#
+# `init_gpu_backend()` / `init_cpu_backend()` / `init_blas_backend()`
+# (src/backend_selection.cpp) route every backend SELECTION decision
+# through the ggml-backend registry and do NOT call any
+# `ggml_backend_<backend>_init` entry point directly — the registry
+# walk reaches the right backend in both GGML_BACKEND_DL=ON
+# (Android/Linux .so prebuild) and GGML_BACKEND_DL=OFF (static-link
+# desktop) modes.
+#
+# `GGML_USE_VULKAN` is the one exception: the QVAC-18605 Supertonic
+# Vulkan optimisation paths (F16 K/V flash-attention, pinned-host
+# upload buffers, `ggml_backend_vk_host_buffer_type()` per-step input
+# uploads, backend_name() device-description annotation, ...) call
+# direct ggml-vulkan entry points that are only linkable when Vulkan
+# is statically linked (GGML_BACKEND_DL=OFF). Define it only in that
+# combination so the desktop perf benefits stay active while the
+# Android DL build silently falls back to the registry-walked
+# non-Vulkan code paths (where those direct symbols wouldn't link
+# anyway). Mirrors parakeet-cpp's `parakeet-backend-defs`.
 add_library(tts-cpp-backend-defs INTERFACE)
-if (GGML_CUDA)
-    target_compile_definitions(tts-cpp-backend-defs INTERFACE GGML_USE_CUDA)
-endif()
-if (GGML_METAL)
-    target_compile_definitions(tts-cpp-backend-defs INTERFACE GGML_USE_METAL)
-endif()
-if (GGML_VULKAN)
+if (GGML_VULKAN AND NOT GGML_BACKEND_DL)
     target_compile_definitions(tts-cpp-backend-defs INTERFACE GGML_USE_VULKAN)
-endif()
-if (GGML_BLAS)
-    target_compile_definitions(tts-cpp-backend-defs INTERFACE GGML_USE_BLAS)
-endif()
-if (GGML_OPENCL)
-    target_compile_definitions(tts-cpp-backend-defs INTERFACE GGML_USE_OPENCL)
 endif()
 
 set(TTS_CPP_LIB_SOURCES
+    src/backend_selection.cpp
     src/main.cpp
     src/chatterbox_cli.cpp
     src/gpt2_bpe.cpp
@@ -595,7 +646,15 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-metal-ops)
     # Metal-only kernel parity check.  Useful only when built with
     # -DGGML_METAL=ON; skipped on CI fleets without Metal via `ctest -LE gpu`.
+    # GGML_USE_METAL is supplied locally here (rather than via
+    # tts-cpp-backend-defs) because the library itself no longer
+    # consumes the macro -- every #ifdef GGML_USE_<X> in src/ was
+    # removed alongside the registry-only refactor. The test still
+    # uses the macro to gate its direct ggml_backend_metal_init()
+    # call site (it's exercising the Metal-backend implementation
+    # directly, not going through tts-cpp's backend selection).
     if (GGML_METAL)
+        target_compile_definitions(test-metal-ops PRIVATE GGML_USE_METAL)
         tts_cpp_register_test(test-metal-ops LABEL "gpu")
     endif()
 

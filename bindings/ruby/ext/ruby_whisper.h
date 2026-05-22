@@ -2,6 +2,7 @@
 #define RUBY_WHISPER_H
 
 #include <ruby.h>
+#include <ruby/util.h>
 #include <ruby/memory_view.h>
 #include "whisper.h"
 

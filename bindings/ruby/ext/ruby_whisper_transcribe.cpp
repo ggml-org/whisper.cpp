@@ -16,7 +16,7 @@ extern ID id_to_path;
 extern ID transcribe_option_names[1];
 
 extern void
-prepare_transcription(ruby_whisper_params * rwp, VALUE * self);
+prepare_transcription(ruby_whisper_params * rwp, VALUE * self, int n_processors);
 
 /*
  * transcribe a single file
@@ -73,7 +73,7 @@ ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self) {
   //   rwp->params.encoder_begin_callback_user_data = &is_aborted;
   // }
 
-  prepare_transcription(rwp, &self);
+  prepare_transcription(rwp, &self, n_processors);
 
   if (whisper_full_parallel(rw->context, rwp->params, pcmf32.data(), pcmf32.size(), n_processors) != 0) {
     fprintf(stderr, "failed to process audio\n");

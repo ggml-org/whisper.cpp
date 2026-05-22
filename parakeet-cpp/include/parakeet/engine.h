@@ -81,6 +81,46 @@ struct EngineOptions {
 
     bool verbose     = false;
 
+    // Directory to scan for dynamically-loaded ggml backends
+    // (`libspeech-ggml-vulkan.so`, `libspeech-ggml-opencl.so`,
+    // `libspeech-ggml-cpu-android_armv8.2_1.so`, ...). Forwarded to
+    // `ggml_backend_load_all_from_path()` on the first Engine
+    // construction in the process; subsequent constructions reuse the
+    // already-populated registry.
+    //
+    // Leave empty to fall back to ggml's default search path
+    // (`ggml_backend_load_all()`), which walks compile-time defaults
+    // (`$EXE_DIR`, `LD_LIBRARY_PATH`, ...). Embedded host applications
+    // built with `GGML_BACKEND_DL=ON` (the Android / Linux non-Apple
+    // default; see CMakeLists.txt) should pass an explicit dir
+    // because the .so files ship next to the host's binary in a
+    // platform-specific subfolder rather than on the system loader's
+    // path.
+    //
+    // No-op on builds where ggml is statically linked
+    // (`GGML_BACKEND_DL=OFF`, e.g. desktop dev cmake builds and the
+    // Apple xcframework). On those, every backend is registered at
+    // constructor time from inside libggml and no filesystem scan
+    // takes place.
+    std::string backends_dir;
+
+    // Sets `$GGML_OPENCL_CACHE_DIR` before the first backend init so
+    // ggml-opencl persists `clCreateProgramWithBinary` blobs across
+    // process restarts (see the program-binary-cache patch on
+    // qvac-ext-ggml@speech). Strongly recommended on Android where
+    // the cold `clBuildProgram` cost dominates first-utterance
+    // latency; pass a writable per-app directory (typically the
+    // app's `cacheDir` from the host platform).
+    //
+    // Honoured only on `__ANDROID__` builds; ignored elsewhere
+    // (desktop OpenCL platforms don't ship the binary-cache patch
+    // and would otherwise pollute the user's tmpdir).
+    //
+    // Leave empty to keep the existing `$GGML_OPENCL_CACHE_DIR` env
+    // value (or no cache at all). Wrapper scripts that already
+    // export the env take precedence.
+    std::string opencl_cache_dir;
+
     // Opt-in cold-start mitigation.
     //
     // When `prewarm == true`, the Engine constructor runs one

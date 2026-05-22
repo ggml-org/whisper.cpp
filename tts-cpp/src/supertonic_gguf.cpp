@@ -1,20 +1,16 @@
 #include "supertonic_internal.h"
 
+#include "backend_selection.h"
+#include "backend_util.h"
 #include "ggml-cpu.h"
 #include "gguf.h"
 
-#ifdef GGML_USE_CUDA
-#include "ggml-cuda.h"
-#endif
-#ifdef GGML_USE_METAL
-#include "ggml-metal.h"
-#endif
-#ifdef GGML_USE_VULKAN
-#include "ggml-vulkan.h"
-#endif
-#ifdef GGML_USE_OPENCL
-#include "ggml-opencl.h"
-#endif
+// The per-backend `#include "ggml-{cuda,metal,vulkan,opencl}.h"`
+// blocks gated on `GGML_USE_<X>` that used to live here are gone:
+// `init_supertonic_backend` below forwards to `backend_selection`'s
+// registry walk, which reaches every backend through
+// `ggml_backend_dev_*` without linking the per-backend static init
+// symbols. Same shape as parakeet-cpp.
 
 #include <algorithm>
 #include <atomic>
@@ -231,157 +227,24 @@ void convert_supertonic_tensor_data(const ggml_tensor * src,
 }
 
 ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose, int vulkan_device = 0) {
-#ifdef GGML_USE_CUDA
-    if (n_gpu_layers > 0) {
-        ggml_backend_t b = ggml_backend_cuda_init(0);
-        if (b) { if (verbose) fprintf(stderr, "supertonic: using CUDA backend\n"); return b; }
+    // GPU cascade is centralised in backend_selection.cpp's
+    // `init_gpu_backend` (Adreno 700+ -> OpenCL, every other GPU ->
+    // Vulkan/Metal/CUDA/Mali, with Adreno 6xx OpenCL force-skipped).
+    // `vulkan_device` (round-3 / round-12) is forwarded so the shared
+    // helper applies the supertonic-side Vulkan device-selection
+    // policy when multiple Vulkan adapters are visible: -1 → auto
+    // (free-VRAM argmax with UMA bias), 0 → first Vulkan device
+    // (registry order), N > 0 → that index in the registry's
+    // Vulkan-device subset.  No-op when only one Vulkan device is
+    // visible or when the chosen backend is non-Vulkan.
+    if (ggml_backend_t b = ::tts_cpp::detail::init_gpu_backend(n_gpu_layers, verbose, "supertonic", vulkan_device)) {
+        return b;
     }
-#endif
-#ifdef GGML_USE_METAL
-    if (n_gpu_layers > 0) {
-        ggml_backend_t b = ggml_backend_metal_init();
-        if (b) { if (verbose) fprintf(stderr, "supertonic: using Metal backend\n"); return b; }
+    if (ggml_backend_t b = ::tts_cpp::detail::init_cpu_backend()) {
+        if (verbose) fprintf(stderr, "supertonic: using CPU backend\n");
+        return b;
     }
-#endif
-#ifdef GGML_USE_VULKAN
-    if (n_gpu_layers > 0) {
-        // QVAC-18605 round 3 — Vulkan device selection, robust init
-        // with multi-device auto-pick.
-        //
-        // Range-check the requested index against
-        // `ggml_backend_vk_get_device_count()` so an out-of-range
-        // value (CLI typo / wrong-machine config) fails loud here
-        // rather than silently falling through to CPU and hiding
-        // the perf cliff under a "Vulkan was on, why is it slow?"
-        // mystery.  `vulkan_device == -1` triggers auto-pick: walk
-        // every visible adapter, query `ggml_backend_vk_get_device_memory`
-        // to read the free VRAM, and dispatch into the pure-logic
-        // `resolve_vulkan_device_index` helper which picks
-        // `argmax(free_vram)` (ties → lower index).  Negative values
-        // other than -1 are reserved for future policies and throw.
-        const int dev_count = ggml_backend_vk_get_device_count();
-        if (dev_count <= 0) {
-            // No Vulkan adapter visible — try the next backend in the
-            // priority list (OpenCL below, then CPU).  This branch
-            // matters on machines that ship libvulkan + the loader
-            // but no working ICD (e.g. headless CI without llvmpipe).
-            if (verbose) {
-                fprintf(stderr, "supertonic: GGML_USE_VULKAN=1 but ggml_backend_vk_get_device_count()=0; falling through\n");
-            }
-        } else {
-            std::vector<size_t> free_vram_per_device;
-            free_vram_per_device.reserve((size_t) dev_count);
-            // QVAC-18605 round 12 — collect per-device UMA / iGPU
-            // flags via the public `ggml_backend_dev_get_props()`
-            // API.  Routed through the Vulkan backend registry
-            // (`ggml_backend_vk_reg()`) so the order matches
-            // `ggml_backend_vk_get_device_count()` 1:1.  On a hybrid
-            // discrete + iGPU machine this turns the round-3 argmax
-            // into "argmax over the discrete subset" — the iGPU's
-            // UMA-reported free RAM no longer dwarfs the discrete's
-            // 32 GB and silently steals the auto-pick.
-            //
-            // Defensive: if the reg / dev_get_props pair fails for
-            // any reason (e.g. a future ggml-vulkan refactor that
-            // changes the reg's enumeration count), fall through
-            // to an empty UMA list — `resolve_vulkan_device_index`
-            // then degrades to the round-3 policy (loud per-device
-            // dump still tells the operator what was visible).
-            std::vector<bool> is_uma_per_device;
-            ggml_backend_reg_t vk_reg = ggml_backend_vk_reg();
-            const size_t reg_dev_count = vk_reg ? ggml_backend_reg_dev_count(vk_reg) : 0;
-            if (vk_reg && (int) reg_dev_count == dev_count) {
-                is_uma_per_device.reserve((size_t) dev_count);
-                for (int i = 0; i < dev_count; ++i) {
-                    ggml_backend_dev_t dev = ggml_backend_reg_dev_get(vk_reg, (size_t) i);
-                    struct ggml_backend_dev_props props = {};
-                    if (dev) ggml_backend_dev_get_props(dev, &props);
-                    const bool uma =
-                        props.type == GGML_BACKEND_DEVICE_TYPE_IGPU ||
-                        props.type == GGML_BACKEND_DEVICE_TYPE_CPU ||
-                        props.type == GGML_BACKEND_DEVICE_TYPE_ACCEL;
-                    is_uma_per_device.push_back(uma);
-                }
-            }
-            for (int i = 0; i < dev_count; ++i) {
-                size_t free = 0, total = 0;
-                ggml_backend_vk_get_device_memory(i, &free, &total);
-                free_vram_per_device.push_back(free);
-                if (verbose && vulkan_device == -1) {
-                    char desc[256] = {0};
-                    ggml_backend_vk_get_device_description(i, desc, sizeof(desc) - 1);
-                    const char * uma_tag = "";
-                    if (!is_uma_per_device.empty() && is_uma_per_device[(size_t) i]) {
-                        uma_tag = " [UMA — biased against on hybrid machines]";
-                    }
-                    fprintf(stderr,
-                            "supertonic: vulkan device %d: %s — free %.0f MB / total %.0f MB%s\n",
-                            i,
-                            desc[0] ? desc : "unknown",
-                            (double) free  / (1024.0 * 1024.0),
-                            (double) total / (1024.0 * 1024.0),
-                            uma_tag);
-                }
-            }
-            // Throws on invalid input; let it propagate so the CLI
-            // surfaces the message verbatim.
-            const int idx = resolve_vulkan_device_index(vulkan_device,
-                                                        free_vram_per_device,
-                                                        is_uma_per_device);
-            ggml_backend_t b = ggml_backend_vk_init((size_t) idx);
-            if (b) {
-                if (verbose) {
-                    char desc[256] = {0};
-                    ggml_backend_vk_get_device_description(idx, desc, sizeof(desc) - 1);
-                    if (vulkan_device == -1) {
-                        // Different message depending on whether the
-                        // UMA bias was applied (i.e., at least one
-                        // discrete device was visible).
-                        bool any_discrete = false;
-                        if (!is_uma_per_device.empty()) {
-                            for (bool u : is_uma_per_device) {
-                                if (!u) { any_discrete = true; break; }
-                            }
-                        }
-                        if (any_discrete) {
-                            fprintf(stderr,
-                                    "supertonic: auto-picked Vulkan device %d (%s) — most free VRAM among %d discrete adapter(s) (round-12 UMA bias)\n",
-                                    idx, desc[0] ? desc : "unknown",
-                                    (int) std::count(is_uma_per_device.begin(),
-                                                     is_uma_per_device.end(), false));
-                        } else {
-                            fprintf(stderr,
-                                    "supertonic: auto-picked Vulkan device %d (%s) — most free VRAM of %d adapter(s)\n",
-                                    idx, desc[0] ? desc : "unknown", dev_count);
-                        }
-                    } else {
-                        fprintf(stderr, "supertonic: using Vulkan backend (device %d: %s)\n",
-                                idx, desc[0] ? desc : "unknown");
-                    }
-                }
-                return b;
-            }
-            if (verbose) {
-                fprintf(stderr, "supertonic: ggml_backend_vk_init(%d) failed; falling through\n", idx);
-            }
-        }
-    }
-#else
-    (void) vulkan_device;
-#endif
-#ifdef GGML_USE_OPENCL
-    if (n_gpu_layers > 0) {
-        ggml_backend_reg_t reg = ggml_backend_opencl_reg();
-        if (reg && ggml_backend_reg_dev_count(reg) > 0) {
-            ggml_backend_t b = ggml_backend_opencl_init();
-            if (b) { if (verbose) fprintf(stderr, "supertonic: using OpenCL backend\n"); return b; }
-        }
-    }
-#endif
-    ggml_backend_t b = ggml_backend_cpu_init();
-    if (!b) throw std::runtime_error("ggml_backend_cpu_init failed");
-    if (verbose) fprintf(stderr, "supertonic: using CPU backend\n");
-    return b;
+    throw std::runtime_error("init_supertonic_backend: no CPU device registered");
 }
 
 // QVAC-18605 — backend capability probe for `GGML_OP_LEAKY_RELU`.
@@ -1756,8 +1619,11 @@ void supertonic_set_n_threads(supertonic_model & model, int n_threads) {
 }
 
 void supertonic_graph_compute(const supertonic_model & model, ggml_cgraph * graph) {
-    if (ggml_backend_is_cpu(model.backend) && model.n_threads > 0) {
-        ggml_backend_cpu_set_n_threads(model.backend, model.n_threads);
+    // Registry-routed n_threads (no-op on non-CPU backends); see
+    // src/t3_mtl.cpp for the GGML_BACKEND_DL=ON unresolvable-symbol
+    // rationale.
+    if (model.n_threads > 0) {
+        ::tts_cpp::detail::backend_set_n_threads(model.backend, model.n_threads);
     }
     static const bool count_dispatches = std::getenv("SUPERTONIC_COUNT_DISPATCHES") != nullptr;
     static const bool dump_op_histogram = std::getenv("SUPERTONIC_DUMP_OP_HISTOGRAM") != nullptr;

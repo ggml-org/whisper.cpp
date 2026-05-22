@@ -67,8 +67,12 @@ if (WHISPER_COREML)
 
     include(DefaultTargetOptions)
 
-    target_include_directories(${TARGET} PUBLIC
-        .
+    # PRIVATE (not PUBLIC) so the raw source-tree include path doesn't
+    # propagate through the install/export interface. whisper.coreml is an
+    # internal helper that only whisper.cpp (in the same directory) consumes;
+    # external users of `whisper` never need to see these headers.
+    target_include_directories(${TARGET} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
         )
 
     target_link_libraries(${TARGET} PRIVATE ${FOUNDATION_FRAMEWORK} ${COREML_FRAMEWORK})
@@ -79,7 +83,12 @@ if (WHISPER_COREML)
         )
 
     set_target_properties(${TARGET} PROPERTIES FOLDER "libs")
-    install(TARGETS ${TARGET} LIBRARY)
+    # Join the whisper-targets export set so that consumers' install(EXPORT)
+    # works when whisper PRIVATE-links to whisper.coreml. Without this the
+    # iOS / xcframework build fails at CMake generate time with
+    #   install(EXPORT "whisper-targets" ...) includes target "whisper" which
+    #   requires target "whisper.coreml" that is not in any export set.
+    install(TARGETS ${TARGET} EXPORT whisper-targets LIBRARY)
 endif()
 
 if (WHISPER_OPENVINO)

@@ -182,6 +182,33 @@ struct EngineOptions {
     // estimator) sees the historically-correct value.
     int kv_attn_type = -1;
 
+    // Directory to scan for dynamically-loaded ggml backends
+    // (`libspeech-ggml-vulkan.so`, `libspeech-ggml-opencl.so`,
+    // `libspeech-ggml-cpu-android_armv8.2_1.so`, ...). Forwarded to
+    // `ggml_backend_load_all_from_path()` on the first Engine
+    // construction in the process; subsequent constructions reuse the
+    // already-populated registry.
+    //
+    // Leave empty to fall back to ggml's default search path
+    // (`ggml_backend_load_all()`). Embedded host applications built
+    // with `GGML_BACKEND_DL=ON` (the Android / Linux non-Apple
+    // default; see CMakeLists.txt) should pass an explicit dir so the
+    // .so files ship next to the host's binary in a per-module
+    // folder rather than relying on `LD_LIBRARY_PATH` / `dlopen()`
+    // heuristics. No-op on `GGML_BACKEND_DL=OFF` (static-link)
+    // builds.
+    std::string backends_dir;
+
+    // Sets `$GGML_OPENCL_CACHE_DIR` before the first backend init so
+    // ggml-opencl persists `clCreateProgramWithBinary` blobs across
+    // process restarts. Strongly recommended on Android where the
+    // cold `clBuildProgram` cost dominates first-utterance latency;
+    // pass a writable per-app directory (typically the app's
+    // `cacheDir` from the host platform).
+    //
+    // Honoured only on `__ANDROID__` builds; ignored elsewhere.
+    std::string opencl_cache_dir;
+
     // Optional path to a .npy file containing the initial noise tensor of
     // shape [1, latent_channels, latent_len] (float32).  When provided,
     // latent_len is taken from the npy file (overriding the duration-

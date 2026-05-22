@@ -68,6 +68,14 @@ void print_usage(const char * argv0) {
         "                       patch under patches/ relaxes the upstream Adreno-only\n"
         "                       device whitelist for dev/CI parity testing). Production\n"
         "                       Adreno deployments leave both at their defaults.\n"
+        "  --backends-dir DIR                 directory to scan for dynamically-loaded\n"
+        "                                     ggml backend .so/.dll/.dylib files\n"
+        "                                     (e.g. libspeech-ggml-vulkan.so,\n"
+        "                                     libspeech-ggml-opencl.so,\n"
+        "                                     libspeech-ggml-cpu-android_armv8.2_1.so).\n"
+        "                                     Forwarded to ggml_backend_load_all_from_path()\n"
+        "                                     on first backend init. Empty => ggml's compile-\n"
+        "                                     time default search path.\n"
         "  --opencl-cache-dir DIR             persistent OpenCL kernel binary cache directory\n"
         "                                     (sets $GGML_OPENCL_CACHE_DIR; consumed by\n"
         "                                     patches/ggml-opencl-program-binary-cache.patch).\n"
@@ -272,6 +280,14 @@ struct ExtraCliOpts {
     std::string opencl_device;       // GGML_OPENCL_DEVICE
     bool        opencl_disable_fusion = false; // GGML_OPENCL_DISABLE_FUSION=1
     bool        opencl_adreno_use_large_buffer = false; // GGML_OPENCL_ADRENO_USE_LARGE_BUFFER=1
+
+    // Forwarded to `parakeet::set_backends_directory()` before any
+    // backend init so `ggml_backend_load_all_from_path()` finds the
+    // `lib<prefix>ggml-{vulkan,opencl,cpu-*}.so` files in a custom
+    // location. Mirrors `--opencl-cache-dir`'s "applied before
+    // backend init" lifetime contract. Empty => use ggml's default
+    // search path (`$LD_LIBRARY_PATH`, exe dir, etc.).
+    std::string backends_dir;
 };
 
 // Apply OpenCL runtime overrides from the CLI to the process env.
@@ -377,6 +393,8 @@ extern "C" int parakeet_cli_main(int argc, char ** argv) {
             opts.n_gpu_layers = std::atoi(argv[++i]);
         } else if (a == "--opencl-cache-dir" && i + 1 < argc) {
             extra.opencl_cache_dir = argv[++i];
+        } else if (a == "--backends-dir" && i + 1 < argc) {
+            extra.backends_dir = argv[++i];
         } else if (a == "--opencl-platform" && i + 1 < argc) {
             extra.opencl_platform = argv[++i];
         } else if (a == "--opencl-device" && i + 1 < argc) {
@@ -465,6 +483,14 @@ extern "C" int parakeet_cli_main(int argc, char ** argv) {
     // when the binary was built without -DGGML_OPENCL=ON (the env vars
     // just aren't read by anything).
     apply_opencl_cli_env(extra);
+
+    // Same lifetime contract as the OpenCL env overrides above:
+    // applied before any backend init so `ggml_backend_load_all_from_path`
+    // runs against the requested directory on first use. Empty =>
+    // fall back to ggml's compile-time default search path.
+    if (!extra.backends_dir.empty()) {
+        set_backends_directory(extra.backends_dir);
+    }
 
     const auto t_load = clock::now();
     ParakeetCtcModel model;
