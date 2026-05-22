@@ -111,6 +111,13 @@ typedef struct parsed_samples_t {
 } parsed_samples_t;
 
 typedef struct {
+  VALUE *context;
+  VALUE *params;
+  float *samples;
+  int n_samples;
+} ruby_whisper_parakeet_context_full_args;
+
+typedef struct {
   struct parakeet_full_params params;
   ruby_whisper_callback_container *new_segment_callback_container;
   ruby_whisper_callback_container *new_token_callback_container;

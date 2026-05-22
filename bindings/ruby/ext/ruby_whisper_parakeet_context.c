@@ -201,17 +201,10 @@ parakeet_full_ubf(void *rb_args)
   RUBY_ATOMIC_SET(args->abort_callback_user_data->is_interrupted, 1);
 }
 
-typedef struct {
-  VALUE *context;
-  VALUE *params;
-  float *samples;
-  int n_samples;
-} parakeet_full_args;
-
-static VALUE
-parakeet_full_body(VALUE rb_args)
+VALUE
+ruby_whisper_parakeet_context_full_body(VALUE rb_args)
 {
-  parakeet_full_args *args = (parakeet_full_args *)rb_args;
+  ruby_whisper_parakeet_context_full_args *args = (ruby_whisper_parakeet_context_full_args *)rb_args;
   ruby_whisper_parakeet_context *rwpc;
   GetParakeetContext(*args->context, rwpc);
   ruby_whisper_parakeet_params *rwpp;
@@ -248,18 +241,18 @@ ruby_whisper_parakeet_context_full(int argc, VALUE *argv, VALUE self)
   VALUE n_samples = argc == 2 ? Qnil : argv[2];
 
   struct parsed_samples_t parsed = parse_samples(&argv[1], &n_samples);
-  parakeet_full_args args = {
+  ruby_whisper_parakeet_context_full_args args = {
     &self,
     &argv[0],
     parsed.samples,
     parsed.n_samples,
   };
-  VALUE rb_result = rb_ensure(parakeet_full_body, (VALUE)&args, release_samples, (VALUE)&parsed);
+  VALUE rb_result = rb_ensure(ruby_whisper_parakeet_context_full_body, (VALUE)&args, release_samples, (VALUE)&parsed);
   const int result = NUM2INT(rb_result);
   if (result == 0) {
     return self;
   } else {
-    rb_exc_raise(rb_funcall(eError, id_new, 1, result));
+    rb_exc_raise(rb_funcall(eError, id_new, 1, rb_result));
   }
 }
 
@@ -287,4 +280,3 @@ init_ruby_whisper_parakeet_context(VALUE *mParakeet)
 
   ITERATE_TOKEN_ATTRS(REGISTER_TOKEN_ATTR)
 }
-
