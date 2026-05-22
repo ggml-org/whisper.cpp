@@ -2991,6 +2991,7 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
         result.workgroup_size = result.subgroup_size * 4;
     }
 
+
     const uint32_t D = hsk | hsv;
 
     const bool reduce_block_rows = D & 8 || n_kv < 1024 || device->vendor_id == VK_VENDOR_ID_INTEL;
@@ -7395,6 +7396,16 @@ static vk_pipeline ggml_vk_guess_matmul_pipeline(ggml_backend_vk_context * ctx, 
     if ((mm_m && (m <= 64 || n <= 64)) || !mm_l) {
         return aligned ? mmp->a_m : mmp->m;
     }
+    // QVAC-19213 Adreno workaround: the matmul `_l` (large) tile variant
+    // (BLOCK_SIZE=128, two Adreno wave64 warps per workgroup) crashes the
+    // Adreno Vulkan driver in vk::Queue::submit on the whisper-medium.en
+    // encoder matmuls (confirmed iQOO 11 / SD8Gen2 / Adreno 740 / driver
+    // E031.41.03.64, 2026-05-22). The M (medium) tile uses BLOCK_SIZE=64
+    // (one Adreno warp per workgroup) and is known-good on this driver.
+    // Costs ~4x more workgroup dispatches on Adreno; no correctness change.
+    if (ctx->device->vendor_id == VK_VENDOR_ID_QUALCOMM && mm_m) {
+        return aligned ? mmp->a_m : mmp->m;
+    }
     return aligned ? mmp->a_l : mmp->l;
 }
 
@@ -7480,6 +7491,16 @@ static vk_pipeline ggml_vk_guess_matmul_id_pipeline(ggml_backend_vk_context * ct
         return aligned ? mmp->a_s : mmp->s;
     }
     if ((mm_m && (m <= 64 || n <= 64)) || !mm_l) {
+        return aligned ? mmp->a_m : mmp->m;
+    }
+    // QVAC-19213 Adreno workaround: the matmul `_l` (large) tile variant
+    // (BLOCK_SIZE=128, two Adreno wave64 warps per workgroup) crashes the
+    // Adreno Vulkan driver in vk::Queue::submit on the whisper-medium.en
+    // encoder matmuls (confirmed iQOO 11 / SD8Gen2 / Adreno 740 / driver
+    // E031.41.03.64, 2026-05-22). The M (medium) tile uses BLOCK_SIZE=64
+    // (one Adreno warp per workgroup) and is known-good on this driver.
+    // Costs ~4x more workgroup dispatches on Adreno; no correctness change.
+    if (ctx->device->vendor_id == VK_VENDOR_ID_QUALCOMM && mm_m) {
         return aligned ? mmp->a_m : mmp->m;
     }
     return aligned ? mmp->a_l : mmp->l;
@@ -9272,6 +9293,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         aligned = false;
     }
 
+
     float scale         = 1.0f;
     float max_bias      = 0.0f;
     float logit_softcap = 0.0f;
@@ -9795,11 +9817,21 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_topk_moe[idx][use_push];
         }
 
+        // QVAC-19213 Adreno workaround: the wg512 softmax variant
+        // (BLOCK_SIZE=512, 8 subgroups × 64-thread Adreno subgroup) hangs
+        // the Adreno Vulkan driver in vk::Queue::waitIdle on the decoder
+        // cross-attention dispatch (confirmed iQOO 11 / SD8Gen2 /
+        // Adreno 740 / Android 16, 2026-05-22). The smaller-wg variant
+        // works. Slight perf cost on large rows on Adreno only; all other
+        // vendors keep the existing behaviour. Inlined to avoid declaring
+        // a var in the switch-case scope (jump-bypasses-init).
         if (src0->type == GGML_TYPE_F32 && (src1 == nullptr || src1->type == GGML_TYPE_F32) && dst->type == GGML_TYPE_F32) {
-            return src0->ne[0] > 1024 ? ctx->device->pipeline_soft_max_f32_wg512 : ctx->device->pipeline_soft_max_f32;
+            const bool use_wg512 = src0->ne[0] > 1024 && ctx->device->vendor_id != VK_VENDOR_ID_QUALCOMM;
+            return use_wg512 ? ctx->device->pipeline_soft_max_f32_wg512 : ctx->device->pipeline_soft_max_f32;
         }
         if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F32) {
-            return src0->ne[0] > 1024 ? ctx->device->pipeline_soft_max_f32_f16_wg512 : ctx->device->pipeline_soft_max_f32_f16;
+            const bool use_wg512 = src0->ne[0] > 1024 && ctx->device->vendor_id != VK_VENDOR_ID_QUALCOMM;
+            return use_wg512 ? ctx->device->pipeline_soft_max_f32_f16_wg512 : ctx->device->pipeline_soft_max_f32_f16;
         }
         return nullptr;
     case GGML_OP_SOFT_MAX_BACK:
@@ -14030,7 +14062,17 @@ static size_t ggml_backend_vk_buffer_type_get_alignment(ggml_backend_buffer_type
 
 static size_t ggml_backend_vk_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
     ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
-    return ctx->device->suballocation_block_size;
+    // QVAC-19213: report the smaller of the suballocation block size and the
+    // per-descriptor storage buffer range. Sub-allocation can carve a huge
+    // buffer into chunks, but a single dispatch can only bind a descriptor up
+    // to maxStorageBufferRange. Tensors larger than that can't be used by any
+    // ggml op except IM2COL (BDA path). Callers that respect get_max_size --
+    // e.g. allocating a kv-cache -- can use this to fall back to CPU buffer.
+    // Spec-mandated minimum is 128 MiB; some Adreno drivers expose exactly
+    // that, breaking whisper-medium's kv-cross which needs >128 MiB tensors.
+    size_t alloc_block = ctx->device->suballocation_block_size;
+    size_t desc_range  = ctx->device->properties.limits.maxStorageBufferRange;
+    return std::min(alloc_block, desc_range);
 }
 
 static size_t ggml_backend_vk_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
@@ -15993,6 +16035,22 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
         case GGML_OP_FLASH_ATTN_EXT:
             {
+                // QVAC-19213 Adreno workaround: the Adreno Vulkan driver
+                // (Adreno 740 / driver E031.41.03.64) fails SPIR-V compile
+                // for every flash_attn_f32_f16 variant we have tested
+                // (aligned / non-aligned, with / without subgroup hints).
+                // vk::Device::createComputePipeline returns ErrorUnknown.
+                // Falling back here causes the scheduler to route FA ops to
+                // CPU. This is necessary for whisper-medium.en + larger:
+                // without FA the explicit attention scores tensor is
+                // 1500 x 1500 x n_audio_head x f32 = 144 MB (medium) /
+                // 180 MB+ (large), which exceeds Adreno's 128 MB
+                // maxStorageBufferRange. Routing FA to CPU keeps Q, K, V on
+                // GPU and copies them out per FA op (acceptable until the FA
+                // shader compile is fixed for Adreno).
+                if (device->vendor_id == VK_VENDOR_ID_QUALCOMM) {
+                    return false;
+                }
                 bool coopmat2 = device->coopmat2;
                 uint32_t HSK = op->src[1]->ne[0];
                 uint32_t HSV = op->src[2]->ne[0];
