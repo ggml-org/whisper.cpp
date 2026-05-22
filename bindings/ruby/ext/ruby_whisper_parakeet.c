@@ -68,5 +68,4 @@ init_ruby_whisper_parakeet()
 
   rb_set_end_proc(ruby_whisper_parakeet_end_proc, Qnil);
   rb_require("whisper/parakeet");
-  rb_funcall(mParakeet, id_start_log_callback_thread, 0);
 }
