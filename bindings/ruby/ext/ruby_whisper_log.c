@@ -14,8 +14,8 @@ ruby_whisper_log_queue_initialize(ruby_whisper_log_queue *log_queue)
   log_queue->is_open = true;
   log_queue->logs = ALLOC_N(ruby_whisper_log, LOG_QUEUE_CAPACITY);
   for (size_t i = 0; i < LOG_QUEUE_CAPACITY; i++) {
-    // we cannot call Ruby API like ALLOC_N because this slot may realloced without GVL
-    // doesn't free this because log queue lives at the end of process
+    // we cannot call Ruby API like ALLOC_N because this slot may be realloced without GVL
+    // this doesn't be freed because log queue lives until the end of process
     char *slot = malloc(sizeof(char) * LOG_QUEUE_CAPACITY);
     if (!slot) {
       rb_raise(rb_eRuntimeError, "Could not allocate memory for log text");
