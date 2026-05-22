@@ -40,7 +40,7 @@ extern bool ffmpeg_decode_audio(const std::string & ifname, std::vector<uint8_t>
 #endif
 
 // extract f32 PCM frames from an initialized decoder, downmix to mono and keep the stereo split
-static bool read_audio_from_decoder(ma_decoder & decoder, std::vector<float>& pcmf32, std::vector<std::vector<float>>& pcmf32s, bool stereo) {
+static bool read_audio_from_decoder(ma_decoder & decoder, std::vector<float> & pcmf32, std::vector<std::vector<float>> & pcmf32s, bool stereo) {
     ma_result result;
     ma_uint64 frame_count;
     ma_uint64 frames_read;
@@ -149,7 +149,7 @@ bool read_audio_data(const std::string & fname, std::vector<float>& pcmf32, std:
 }
 
 // decode audio bytes already held in memory
-bool read_audio_data(const char * buffer, size_t buffer_size, std::vector<float>& pcmf32, std::vector<std::vector<float>>& pcmf32s, bool stereo) {
+bool read_audio_data(const char * buffer, size_t buffer_size, std::vector<float> & pcmf32, std::vector<std::vector<float>> & pcmf32s, bool stereo) {
     ma_decoder_config decoder_config = ma_decoder_config_init(ma_format_f32, stereo ? 2 : 1, WHISPER_SAMPLE_RATE);
     ma_decoder decoder;
 
