@@ -1406,7 +1406,15 @@ void build_group_graph_cache(vector_group_graph_cache & cache,
             model, cache.input_ctx, "vector_group_graph_cache");
     }
     cache.text_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, text_len, 256);
-    ggml_set_name(cache.text_in, "vector_group_text"); ggml_set_input(cache.text_in);
+    ggml_set_name(cache.text_in, "vector_group_text");
+    // Same round-10 upload-skip pattern as the front-cache: `text_in`
+    // is uploaded once per synth (`current_step == 0` resets, every
+    // other step skips).  Mark INPUT + OUTPUT so the buffer survives
+    // gallocr's free pass — without OUTPUT, step 0's compute frees
+    // the buffer for intermediate reuse, and the step-1..N skipped
+    // upload reads stale data.  See the matching note on
+    // `front_cache.text_in_t` in `supertonic_vector_trace_proj_ggml`.
+    ggml_set_input(cache.text_in);  ggml_set_output(cache.text_in);
 
     ggml_tensor * cur = transpose_time_channel_ggml(cache.ctx, cache.x_in);
     ggml_set_name(cur, "vector_group_in");
@@ -3229,7 +3237,16 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             }
             front_cache.text_in_t = ggml_new_tensor_2d(front_cache.ctx, GGML_TYPE_F32, text_len, 256);
             ggml_set_name(front_cache.text_in_t, "ve_text_lc");
-            ggml_set_input(front_cache.text_in_t);
+            // text_in_t is uploaded once per synth (round-10 upload-skip
+            // tracker — `current_step == 0` resets, every other step
+            // skips the upload as the host pointer is stable).  Without
+            // OUTPUT the gallocr-managed buffer is freed after step 0's
+            // last consumer runs and aliased with step 1's intermediates,
+            // silently corrupting the text embedding for steps 1..N-1.
+            // INPUT alone protects the initial allocation but not the
+            // buffer's lifetime across compute passes.  See the matching
+            // notes on the relpos masks + RoPE cos/sin tables.
+            ggml_set_input(front_cache.text_in_t);  ggml_set_output(front_cache.text_in_t);
 
             ggml_tensor * y_t = conv1d_f32(front_cache.ctx,
                 require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.proj_in.net.weight"),
