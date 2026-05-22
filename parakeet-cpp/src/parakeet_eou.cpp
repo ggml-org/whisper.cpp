@@ -264,6 +264,8 @@ int eou_decode_window(const ParakeetCtcModel & model,
     out_steps = 0;
     const size_t n_vocab = model.vocab.pieces.size();
 
+    int last_eou_emit_out_size = static_cast<int>(out_tokens.size());
+
     for (int t = 0; t < n_frames; ++t) {
         const float * enc_frame = encoder_out_window + (size_t) t * D_enc;
         state.symbols_this_step = 0;
@@ -290,11 +292,12 @@ int eou_decode_window(const ParakeetCtcModel & model,
             // back into the predictor; reset h/c to zero and lastToken
             // to blank.
             if (best == eou) {
-                if ((int) out_tokens.size() > state.segment_start_token) {
+                if ((int) out_tokens.size() > last_eou_emit_out_size) {
                     EouSegmentBoundary boundary;
                     boundary.token_index  = (int) out_tokens.size();
                     boundary.is_eou_flush = true;
                     out_segments.push_back(boundary);
+                    last_eou_emit_out_size    = (int) out_tokens.size();
                     state.segment_start_token = (int) out_tokens.size();
                 }
                 state.h_state.assign((size_t) L * H, 0.0f);
