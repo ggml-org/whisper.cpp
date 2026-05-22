@@ -35,7 +35,7 @@ static void replace_all(std::string & s, const std::string & search, const std::
 // on a complete UTF-8 codepoint. Returns 0 if the tail of `s` is already a
 // complete codepoint (or if the tail looks malformed and we should stop merging).
 // Used to merge whisper tokens whose bytes split a multi-byte UTF-8 character
-// (e.g. CJK), so the JSON output stays valid UTF-8. See issue #1798.
+// (e.g. CJK), so the JSON output stays valid UTF-8. See https://github.com/ggml-org/whisper.cpp/issues/1798.
 static int utf8_trailing_bytes_needed(const std::string & s) {
     const int n = (int) s.size();
     int i = n - 1;
@@ -49,11 +49,17 @@ static int utf8_trailing_bytes_needed(const std::string & s) {
     }
     const unsigned char c = (unsigned char) s[i];
     int expected;
-    if      ((c & 0x80) == 0x00) expected = 1; // ASCII
-    else if ((c & 0xE0) == 0xC0) expected = 2;
-    else if ((c & 0xF0) == 0xE0) expected = 3;
-    else if ((c & 0xF8) == 0xF0) expected = 4;
-    else                         return 0;     // malformed lead, give up
+    if ((c & 0x80) == 0x00) {
+        expected = 1; // ASCII
+    } else if ((c & 0xE0) == 0xC0) {
+        expected = 2;
+    } else if ((c & 0xF0) == 0xE0) {
+        expected = 3;
+    } else if ((c & 0xF8) == 0xF0) {
+        expected = 4;
+    } else {
+        return 0;     // malformed lead, give up
+    }
     const int have = n - i;
     return have >= expected ? 0 : (expected - have);
 }
