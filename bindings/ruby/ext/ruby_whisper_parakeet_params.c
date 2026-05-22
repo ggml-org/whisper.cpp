@@ -302,7 +302,7 @@ call_parakeet_abort_callbacks(void *v_args)
 static bool
 ruby_whisper_parakeet_abort_callback(void *user_data)
 {
-  ruby_whisper_parakeet_abort_callback_user_data *data = (ruby_whisper_parakeet_abort_callback_user_data *)user_data;
+  ruby_whisper_abort_callback_user_data *data = (ruby_whisper_abort_callback_user_data *)user_data;
 
   int is_interrupted = RUBY_ATOMIC_LOAD(data->is_interrupted);
   if (is_interrupted) {
@@ -325,7 +325,7 @@ ruby_whisper_parakeet_abort_callback(void *user_data)
 #define CALLBACK_CONTAINER_NAME(name) name ## _container
 
 void
-ruby_whisper_parakeet_prepare_transcription(ruby_whisper_parakeet_params *rwpp, VALUE *context, ruby_whisper_parakeet_abort_callback_user_data *abort_callback_user_data)
+ruby_whisper_parakeet_prepare_transcription(ruby_whisper_parakeet_params *rwpp, VALUE *context, ruby_whisper_abort_callback_user_data *abort_callback_user_data)
 {
 #define PARAM_NAME(name) name
 #define USER_DATA_NAME(name) name##_user_data

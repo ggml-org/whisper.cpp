@@ -30,7 +30,7 @@ extern VALUE ruby_whisper_parakeet_transcribe(VALUE self, VALUE audio_path, VALU
 extern VALUE ruby_whisper_parakeet_segment_init(VALUE context, int index);
 extern parsed_samples_t parse_samples(VALUE *samples, VALUE *n_samples);
 extern VALUE release_samples(VALUE rb_parsed_args);
-extern void ruby_whisper_parakeet_prepare_transcription(ruby_whisper_parakeet_params *rwpp, VALUE *context, ruby_whisper_parakeet_abort_callback_user_data *abort_callback_user_data);
+extern void ruby_whisper_parakeet_prepare_transcription(ruby_whisper_parakeet_params *rwpp, VALUE *context, ruby_whisper_abort_callback_user_data *abort_callback_user_data);
 extern rb_data_type_t ruby_whisper_parakeet_params_type;
 extern VALUE ruby_whisper_parakeet_token_s_from_token_data(struct parakeet_context *context, const parakeet_token_data *token_data);
 
@@ -190,7 +190,7 @@ parakeet_full_without_gvl(void *rb_args)
 }
 
 typedef struct {
-  ruby_whisper_parakeet_abort_callback_user_data *abort_callback_user_data;
+  ruby_whisper_abort_callback_user_data *abort_callback_user_data;
 } parakeet_full_ubf_args;
 
 static void
@@ -210,7 +210,7 @@ ruby_whisper_parakeet_context_full_body(VALUE rb_args)
   ruby_whisper_parakeet_params *rwpp;
   GetParakeetParams(*args->params, rwpp);
 
-  ruby_whisper_parakeet_abort_callback_user_data abort_callback_user_data = {
+  ruby_whisper_abort_callback_user_data abort_callback_user_data = {
     0,
     NULL,
   };
