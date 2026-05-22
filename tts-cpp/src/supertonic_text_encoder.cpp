@@ -476,7 +476,15 @@ void build_relpos_cache(text_relpos_graph_cache & cache,
     for (int i = 0; i < N_MASKS; ++i) {
         cache.masks[i] = ggml_new_tensor_3d(cache.ctx, GGML_TYPE_F32, L, L, 1);
         const std::string name = "relpos_mask_" + std::to_string(i);
-        ggml_set_name(cache.masks[i], name.c_str()); ggml_set_input(cache.masks[i]);
+        ggml_set_name(cache.masks[i], name.c_str());
+        ggml_set_input(cache.masks[i]);
+        // gallocr frees leaf inputs once their last consumer in the graph
+        // runs, which makes the buffer available for intermediate reuse on
+        // subsequent compute passes — by the next run the mask data is
+        // overwritten.  Mark as OUTPUT too so gallocr keeps the buffer
+        // alive across compute passes; the data is then uploaded once in
+        // build_relpos_cache and stable for the cache's lifetime.
+        ggml_set_output(cache.masks[i]);
     }
 
     ggml_tensor * q = conv1d_k1_channel_time_ggml(cache.ctx,

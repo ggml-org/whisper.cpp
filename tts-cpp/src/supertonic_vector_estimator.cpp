@@ -1521,22 +1521,28 @@ void build_group_graph_cache(vector_group_graph_cache & cache,
     const int half = D / 2;
     cache.apply_rope = (int) model.vector_rope_theta.size() == half;
     if (cache.apply_rope) {
+        // RoPE cos/sin tables are constants for the cache's (L, text_len,
+        // θ) key — uploaded once at build time and never per-call.  Mark
+        // as both INPUT and OUTPUT so gallocr doesn't free the buffer
+        // after the first compute pass (without OUTPUT, the leaf-input
+        // buffer is released for intermediate reuse on the next compute,
+        // silently corrupting the cos/sin data on the second call).
         cache.q_cos_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, half, L);
         ggml_set_name(cache.q_cos_in,
             ("vector_group_q_rope_cos_g" + std::to_string(group)).c_str());
-        ggml_set_input(cache.q_cos_in);
+        ggml_set_input(cache.q_cos_in);  ggml_set_output(cache.q_cos_in);
         cache.q_sin_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, half, L);
         ggml_set_name(cache.q_sin_in,
             ("vector_group_q_rope_sin_g" + std::to_string(group)).c_str());
-        ggml_set_input(cache.q_sin_in);
+        ggml_set_input(cache.q_sin_in);  ggml_set_output(cache.q_sin_in);
         cache.k_cos_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, half, text_len);
         ggml_set_name(cache.k_cos_in,
             ("vector_group_k_rope_cos_g" + std::to_string(group)).c_str());
-        ggml_set_input(cache.k_cos_in);
+        ggml_set_input(cache.k_cos_in);  ggml_set_output(cache.k_cos_in);
         cache.k_sin_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, half, text_len);
         ggml_set_name(cache.k_sin_in,
             ("vector_group_k_rope_sin_g" + std::to_string(group)).c_str());
-        ggml_set_input(cache.k_sin_in);
+        ggml_set_input(cache.k_sin_in);  ggml_set_output(cache.k_sin_in);
 
         ggml_tensor * q_rope = apply_rope_to_packed_qk(cache.ctx, q,
             cache.q_cos_in, cache.q_sin_in, H, D);
@@ -1856,10 +1862,20 @@ void build_res_style_qkv_cache(vector_res_style_qkv_cache & cache,
     ggml_set_name(cache.lhs_in, "res_style_lhs_tc"); ggml_set_input(cache.lhs_in);
     cache.rhs_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, C, L);
     ggml_set_name(cache.rhs_in, "res_style_rhs_tc"); ggml_set_input(cache.rhs_in);
+    // style_v_in / kctx_in use the F4 pointer-compare upload-skip — the
+    // host pointer is stable across calls within one synth, so they're
+    // uploaded only on cold miss / pointer change.  That assumption
+    // requires the backend buffer to ALSO be stable.  gallocr frees
+    // leaf inputs once their last consumer runs, releasing the buffer
+    // for intermediate reuse on the next compute pass.  Mark INPUT +
+    // OUTPUT so the buffer is kept alive and the skip-upload optimisation
+    // actually preserves the uploaded data.
     cache.style_v_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, 50, 256);
-    ggml_set_name(cache.style_v_in, "res_style_ttl_lc"); ggml_set_input(cache.style_v_in);
+    ggml_set_name(cache.style_v_in, "res_style_ttl_lc");
+    ggml_set_input(cache.style_v_in);  ggml_set_output(cache.style_v_in);
     cache.kctx_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, 50, 256);
-    ggml_set_name(cache.kctx_in, "res_style_kctx_lc"); ggml_set_input(cache.kctx_in);
+    ggml_set_name(cache.kctx_in, "res_style_kctx_lc");
+    ggml_set_input(cache.kctx_in);  ggml_set_output(cache.kctx_in);
 
     ggml_tensor * lhs_lc = transpose_time_channel_ggml(cache.ctx, cache.lhs_in);
     ggml_tensor * rhs_lc = transpose_time_channel_ggml(cache.ctx, cache.rhs_in);
@@ -3312,22 +3328,26 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             front_cache.apply_rope =
                 (int) model.vector_rope_theta.size() == FRONT_HALF;
             if (front_cache.apply_rope) {
+                // RoPE cos/sin tables are cache-lifetime constants
+                // (depend only on L / text_len / θ).  Mark INPUT + OUTPUT
+                // so gallocr keeps the buffers alive across compute
+                // passes — see the matching note in build_group_graph_cache.
                 front_cache.q_cos_in = ggml_new_tensor_2d(front_cache.ctx,
                     GGML_TYPE_F32, FRONT_HALF, L);
                 ggml_set_name(front_cache.q_cos_in, "ve_attn0_q_rope_cos");
-                ggml_set_input(front_cache.q_cos_in);
+                ggml_set_input(front_cache.q_cos_in);  ggml_set_output(front_cache.q_cos_in);
                 front_cache.q_sin_in = ggml_new_tensor_2d(front_cache.ctx,
                     GGML_TYPE_F32, FRONT_HALF, L);
                 ggml_set_name(front_cache.q_sin_in, "ve_attn0_q_rope_sin");
-                ggml_set_input(front_cache.q_sin_in);
+                ggml_set_input(front_cache.q_sin_in);  ggml_set_output(front_cache.q_sin_in);
                 front_cache.k_cos_in = ggml_new_tensor_2d(front_cache.ctx,
                     GGML_TYPE_F32, FRONT_HALF, text_len);
                 ggml_set_name(front_cache.k_cos_in, "ve_attn0_k_rope_cos");
-                ggml_set_input(front_cache.k_cos_in);
+                ggml_set_input(front_cache.k_cos_in);  ggml_set_output(front_cache.k_cos_in);
                 front_cache.k_sin_in = ggml_new_tensor_2d(front_cache.ctx,
                     GGML_TYPE_F32, FRONT_HALF, text_len);
                 ggml_set_name(front_cache.k_sin_in, "ve_attn0_k_rope_sin");
-                ggml_set_input(front_cache.k_sin_in);
+                ggml_set_input(front_cache.k_sin_in);  ggml_set_output(front_cache.k_sin_in);
                 ggml_tensor * q_rope = apply_rope_to_packed_qk(front_cache.ctx,
                     q_t, front_cache.q_cos_in, front_cache.q_sin_in,
                     FRONT_H, FRONT_D);
