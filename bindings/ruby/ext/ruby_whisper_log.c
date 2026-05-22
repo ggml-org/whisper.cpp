@@ -65,6 +65,11 @@ ruby_whisper_log_queue_enqueue(ruby_whisper_log_queue *log_queue, enum ggml_log_
 {
   rb_nativethread_lock_lock(&log_queue->lock);
 
+  if (!log_queue->is_active) {
+    rb_nativethread_lock_unlock(&log_queue->lock);
+    return;
+  }
+
   size_t len = strlen(text);
   ruby_whisper_log *log = &log_queue->logs[log_queue->head];
   if (len > log->capacity) {
