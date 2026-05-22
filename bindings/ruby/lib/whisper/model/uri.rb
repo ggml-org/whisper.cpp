@@ -216,8 +216,14 @@ module Whisper
       @pre_converted_models[name] = URI.new("https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-#{name}.bin")
     end
 
+    %w[
+      parakeet-tdt-0.6b-v3
+    ].each do |name|
+      @pre_converted_models[name] = URI.new("https://huggingface.co/danbev/parakeet/resolve/main/#{name}.bin")
+    end
+
     @coreml_compiled_models = @pre_converted_models.each_with_object({}) {|(name, uri), models|
-      next if name.end_with?("-tdrz") || name.start_with?("silero-")
+      next if name.end_with?("-tdrz") || name.start_with?("silero-") || name.start_with?("parakeet-")
 
       if matched = name.match(/\A(?<name>.*)-q\d_\d\z/)
         name = matched[:name]
