@@ -5,6 +5,8 @@
 extern VALUE mParakeet;
 
 extern void ruby_whisper_log_queue_initialize(ruby_whisper_log_queue *log_queue);
+extern void ruby_whisper_log_queue_activate(ruby_whisper_log_queue *log_queue);
+extern void ruby_whisper_log_queue_deactivate(ruby_whisper_log_queue *log_queue);
 extern void ruby_whisper_log_queue_enqueue(ruby_whisper_log_queue *log_queue, enum ggml_log_level level, const char *text);
 extern VALUE ruby_whisper_log_queue_drain(ruby_whisper_log_queue *log_queue);
 
@@ -32,7 +34,7 @@ ruby_whisper_parakeet_s_log_set(VALUE self, VALUE log_callback, VALUE user_data)
   } else {
     rb_iv_set(self, "@log_callback", log_callback);
     rb_iv_set(self, "@log_callback_user_data", user_data);
-    parakeet_log_queue.is_active = true;
+    ruby_whisper_log_queue_activate(&parakeet_log_queue);
     rb_funcall(mParakeet, id_start_log_callback_thread, 0);
     parakeet_log_set(ruby_whisper_parakeet_log_callback, NULL);
   }
@@ -47,13 +49,7 @@ ruby_whisper_parakeet_end_proc(VALUE args)
   ID id_alive = rb_intern("alive?");
   ID id_join = rb_intern("join");
 
-  rb_nativethread_lock_lock(&parakeet_log_queue.lock);
-
-  parakeet_log_queue.is_active = false;
-  rb_native_cond_broadcast(&parakeet_log_queue.cond);
-
-  rb_nativethread_lock_unlock(&parakeet_log_queue.lock);
-
+  ruby_whisper_log_queue_deactivate(&parakeet_log_queue);
   VALUE log_callback_thread = rb_ivar_get(mParakeet, id_log_callback_thread);
   if (!NIL_P(log_callback_thread) && RTEST(rb_funcall(log_callback_thread, id_alive, 0))) {
     rb_funcall(log_callback_thread, id_join, 0);

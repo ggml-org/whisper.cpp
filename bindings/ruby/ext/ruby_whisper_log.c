@@ -30,6 +30,27 @@ ruby_whisper_log_queue_initialize(ruby_whisper_log_queue *log_queue)
   }
 }
 
+void
+ruby_whisper_log_queue_activate(ruby_whisper_log_queue *log_queue)
+{
+  rb_nativethread_lock_lock(&log_queue->lock);
+
+  log_queue->is_active = true;
+
+  rb_nativethread_lock_unlock(&log_queue->lock);
+}
+
+void
+ruby_whisper_log_queue_deactivate(ruby_whisper_log_queue *log_queue)
+{
+  rb_nativethread_lock_lock(&log_queue->lock);
+
+  log_queue->is_active = false;
+  rb_native_cond_broadcast(&log_queue->cond);
+
+  rb_nativethread_lock_unlock(&log_queue->lock);
+}
+
 static size_t
 calc_enough_cap(size_t len)
 {
