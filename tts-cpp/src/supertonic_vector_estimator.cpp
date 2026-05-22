@@ -1083,7 +1083,7 @@ void build_text_attention_cache(vector_text_attention_cache & cache,
 
     ggml_tensor * attn = ggml_flash_attn_ext(cache.ctx, q_in, k_in, v_in,
                                              nullptr, 1.0f/16.0f, 0.0f, 0.0f);
-    attn = ggml_reshape_2d(cache.ctx, attn, n_heads * head_dim, q_len);
+    attn = ggml_reshape_2d(cache.ctx, attn, static_cast<int64_t>(n_heads) * head_dim, q_len);
     ggml_tensor * ctx_tc = ggml_cont(cache.ctx, ggml_transpose(cache.ctx, attn));
     ggml_set_name(ctx_tc, "vector_attn_ctx"); ggml_set_output(ctx_tc);
     ggml_build_forward_expand(cache.gf, ctx_tc);
