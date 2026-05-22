@@ -11,7 +11,7 @@ ruby_whisper_log_queue_initialize(ruby_whisper_log_queue *log_queue)
   log_queue->head = 0;
   log_queue->tail = 0;
   log_queue->size = 0;
-  log_queue->is_active = true;
+  log_queue->is_open = true;
   log_queue->logs = ALLOC_N(ruby_whisper_log, LOG_QUEUE_CAPACITY);
   for (size_t i = 0; i < LOG_QUEUE_CAPACITY; i++) {
     // we cannot call Ruby API like ALLOC_N because this slot may realloced without GVL
@@ -31,21 +31,21 @@ ruby_whisper_log_queue_initialize(ruby_whisper_log_queue *log_queue)
 }
 
 void
-ruby_whisper_log_queue_activate(ruby_whisper_log_queue *log_queue)
+ruby_whisper_log_queue_open(ruby_whisper_log_queue *log_queue)
 {
   rb_nativethread_lock_lock(&log_queue->lock);
 
-  log_queue->is_active = true;
+  log_queue->is_open = true;
 
   rb_nativethread_lock_unlock(&log_queue->lock);
 }
 
 void
-ruby_whisper_log_queue_deactivate(ruby_whisper_log_queue *log_queue)
+ruby_whisper_log_queue_close(ruby_whisper_log_queue *log_queue)
 {
   rb_nativethread_lock_lock(&log_queue->lock);
 
-  log_queue->is_active = false;
+  log_queue->is_open = false;
   rb_native_cond_broadcast(&log_queue->cond);
 
   rb_nativethread_lock_unlock(&log_queue->lock);
@@ -65,7 +65,7 @@ ruby_whisper_log_queue_enqueue(ruby_whisper_log_queue *log_queue, enum ggml_log_
 {
   rb_nativethread_lock_lock(&log_queue->lock);
 
-  if (!log_queue->is_active) {
+  if (!log_queue->is_open) {
     rb_nativethread_lock_unlock(&log_queue->lock);
     return;
   }
@@ -133,11 +133,11 @@ ruby_whisper_log_queue_drain(ruby_whisper_log_queue *log_queue)
 
   rb_nativethread_lock_lock(&log_queue->lock);
 
-  while (log_queue->size == 0 && log_queue->is_active) {
+  while (log_queue->size == 0 && log_queue->is_open) {
     rb_thread_call_without_gvl(ruby_whisper_log_queue_wait, (void *)log_queue, ruby_whisper_log_queue_wait_ubf, (void *)log_queue);
   }
 
-  if (log_queue->size == 0 && !log_queue->is_active) {
+  if (log_queue->size == 0 && !log_queue->is_open) {
     rb_native_cond_broadcast(&log_queue->cond);
     rb_nativethread_lock_unlock(&log_queue->lock);
     return Qnil;

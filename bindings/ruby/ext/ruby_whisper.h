@@ -46,7 +46,7 @@ typedef struct ruby_whisper_log {
 typedef struct ruby_whisper_log_queue {
   rb_nativethread_lock_t lock;
   rb_nativethread_cond_t cond;
-  bool is_active;
+  bool is_open;
 
   size_t head;
   size_t tail;
