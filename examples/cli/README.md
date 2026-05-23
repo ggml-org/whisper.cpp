@@ -32,7 +32,7 @@ options:
   -tr,       --translate         [false  ] translate from source language to english
   -di,       --diarize           [false  ] enable speaker diarization
              --diarize-model FNAME [       ] speaker embedding model path (GGML .bin)
-             --diarize-threshold N [0.50   ] clustering distance threshold
+             --diarize-threshold N [0.70   ] clustering distance threshold
              --diarize-speakers N  [0      ] target speaker count (0 = auto)
   -tdrz,     --tinydiarize       [false  ] enable tinydiarize (requires a tdrz model)
   -nf,       --no-fallback       [false  ] do not use temperature fallback while decoding

@@ -31,7 +31,7 @@ options:
   -tr,       --translate         [false  ] translate from source language to english
   -di,       --diarize           [false  ] enable speaker diarization
              --diarize-model FNAME [       ] speaker embedding model path (GGML .bin)
-             --diarize-threshold N [0.50   ] clustering distance threshold
+             --diarize-threshold N [0.70   ] clustering distance threshold
              --diarize-speakers N  [0      ] target speaker count (0 = auto)
   -tdrz,     --tinydiarize       [false  ] enable tinydiarize (requires a tdrz model)
   -nf,       --no-fallback       [false  ] do not use temperature fallback while decoding
@@ -43,6 +43,7 @@ options:
   -l LANG,   --language LANG     [en     ] spoken language ('auto' for auto-detect)
   -dl,       --detect-language   [false  ] exit after automatically detecting language
              --prompt PROMPT     [       ] initial prompt
+             --carry-initial-prompt [false  ] always prepend initial prompt
   -m FNAME,  --model FNAME       [models/ggml-base.en.bin] model path
   -oved D,   --ov-e-device DNAME [CPU    ] the OpenVINO device used for encode inference
   -dtw MODEL --dtw MODEL         [       ] compute token-level timestamps
@@ -85,6 +86,8 @@ curl 127.0.0.1:8080/inference \
 -F file="@<file-path>" \
 -F temperature="0.0" \
 -F temperature_inc="0.2" \
+-F prompt="<prompt>" \
+-F carry_initial_prompt="true" \
 -F diarize="true" \
 -F diarize_model="/absolute/path/on/server/models/ggml-speaker-ecapa-tdnn.bin" \
 -F response_format="json"

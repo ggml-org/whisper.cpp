@@ -1,26 +1,36 @@
+require "fileutils"
+
 class Options
   def initialize(cmake="cmake")
     @cmake = cmake
     @options = {}
 
     configure
+    write_cache_file
+  end
+
+  def to_a
+    [
+      "-D", "BUILD_SHARED_LIBS=OFF",
+      "-D", "WHISPER_BUILD_TESTS=OFF",
+      "-D", "CMAKE_ARCHIVE_OUTPUT_DIRECTORY=#{__dir__}",
+      "-D", "CMAKE_POSITION_INDEPENDENT_CODE=ON",
+      "-C", cache_path
+    ]
   end
 
   def to_s
-    @options
-      .reject {|name, (type, value)| value.nil?}
-      .collect {|name, (type, value)| "-D #{name}=#{value == true ? "ON" : value == false ? "OFF" : value.shellescape}"}
-      .join(" ")
+    command_line(*to_a)
   end
 
-  def cmake_options
-    return @cmake_options if @cmake_options
+  def graphviz_cmake_args
+    []
+  end
 
-    output = nil
-    Dir.chdir __dir__ do
-      output = `#{@cmake.shellescape} -S sources -B build -L`
-    end
-    @cmake_options = output.lines.drop_while {|line| line.chomp != "-- Cache values"}.drop(1)
+  private
+
+  def cmake_options
+    @cmake_options ||= cmake_options_output.lines.drop_while {|line| line.chomp != "-- Cache values"}.drop(1)
                        .filter_map {|line|
                          option, value = line.chomp.split("=", 2)
                          name, type = option.split(":", 2)
@@ -34,7 +44,11 @@ class Options
                        }.to_h
   end
 
-  private
+  def cmake_options_output
+    Dir.chdir(__dir__) do
+      IO.popen([@cmake, "-S", "sources", "-B", "build", "-L"]) {|io| io.read}
+    end
+  end
 
   def configure
     cmake_options.each_pair do |name, (type, default_value)|
@@ -74,12 +88,38 @@ class Options
 
   def enabled?(option)
     op = @options[option]
-    raise "Option not exist: #{option}" unless op
-    raise "Option not boolean: #{option}(#{op[0]})" unless op[0] == "BOOL"
+    return false unless op
+    return false unless op[0] == "BOOL"
     if op[1].nil?
       cmake_options[option][1]
     else
       op[1]
     end
+  end
+
+  def cache_path
+    File.join(__dir__, "sources", "Options.cmake")
+  end
+
+  def write_cache_file
+    FileUtils.mkpath File.dirname(cache_path)
+    File.open cache_path, "w" do |file|
+      @options.reject {|name, (type, value)| value.nil?}.each do |name, (type, value)|
+        line = "set(CACHE{%<name>s} TYPE %<type>s FORCE VALUE %<value>s)" % {
+          name:,
+          type:,
+          value: value == true ? "ON" : value == false ? "OFF" : escape_cmake(value)
+        }
+        file.puts line
+      end
+    end
+  end
+
+  def escape_cmake(str)
+    str.gsub(/[\\"]/, '\\\\\&')
+  end
+
+  def command_line(*args)
+    args.collect {|arg| %|"#{arg.to_s.gsub(/[\\"]/, '\\\\\&')}"|}.join(" ")
   end
 end
