@@ -112,7 +112,7 @@ printf "Downloading ggml model %s from '%s' ...\n" "$model" "$src"
 
 cd "$models_path" || exit
 
-if [ -f "ggml-$model.bin" ]; then
+if [ -f "ggml-$model.bin" ] && [ -s "ggml-$model.bin" ]; then
     printf "Model %s already exists. Skipping download.\n" "$model"
     exit 0
 fi
@@ -129,6 +129,7 @@ else
 fi
 
 if [ $? -ne 0 ]; then
+    rm -f ggml-"$model".bin
     printf "Failed to download ggml model %s \n" "$model"
     printf "Please try again later or download the original Whisper model files and convert them yourself.\n"
     exit 1
