@@ -115,6 +115,7 @@ struct whisper_params {
     bool carry_initial_prompt = false;
 
     std::string language  = "en";
+    std::vector<std::string> language_candidates = {};
     std::string prompt;
     std::string font_path = "/System/Library/Fonts/Supplemental/Courier New Bold.ttf";
     std::string model     = "models/ggml-base.en.bin";
@@ -160,6 +161,38 @@ static char * whisper_param_turn_lowercase(char * in){
 static char * requires_value_error(const std::string & arg) {
     fprintf(stderr, "error: argument %s requires value\n", arg.c_str());
     exit(0);
+}
+
+static std::vector<std::string> split_language_candidates(const std::string & input) {
+    std::vector<std::string> result;
+    size_t start = 0;
+
+    while (start <= input.size()) {
+        const size_t comma = input.find(',', start);
+        const std::string token = input.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+        result.push_back(token);
+
+        if (comma == std::string::npos) {
+            break;
+        }
+
+        start = comma + 1;
+    }
+
+    return result;
+}
+
+static std::string join_language_candidates(const std::vector<std::string> & candidates) {
+    std::string joined;
+
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        if (i > 0) {
+            joined += ",";
+        }
+        joined += candidates[i];
+    }
+
+    return joined;
 }
 
 static bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
@@ -225,6 +258,9 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-nt"   || arg == "--no-timestamps")        { params.no_timestamps   = true; }
         else if (arg == "-l"    || arg == "--language")             { params.language        = whisper_param_turn_lowercase(ARGV_NEXT); }
         else if (arg == "-dl"   || arg == "--detect-language")      { params.detect_language = true; }
+        else if (                  arg == "--language-candidates")  {
+            params.language_candidates = split_language_candidates(whisper_param_turn_lowercase(ARGV_NEXT));
+        }
         else if (                  arg == "--prompt")               { params.prompt          = ARGV_NEXT; }
         else if (                  arg == "--carry-initial-prompt") { params.carry_initial_prompt = true; }
         else if (arg == "-m"    || arg == "--model")                { params.model           = ARGV_NEXT; }
@@ -307,6 +343,7 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  -nt,       --no-timestamps        [%-7s] do not print timestamps\n",                        params.no_timestamps ? "true" : "false");
     fprintf(stderr, "  -l LANG,   --language LANG        [%-7s] spoken language ('auto' for auto-detect)\n",       params.language.c_str());
     fprintf(stderr, "  -dl,       --detect-language      [%-7s] exit after automatically detecting language\n",    params.detect_language ? "true" : "false");
+    fprintf(stderr, "             --language-candidates  [%-7s] comma-separated language codes for constrained auto-detect\n", join_language_candidates(params.language_candidates).c_str());
     fprintf(stderr, "             --prompt PROMPT        [%-7s] initial prompt (max n_text_ctx/2 tokens)\n",       params.prompt.c_str());
     fprintf(stderr, "             --carry-initial-prompt [%-7s] always prepend initial prompt\n",                  params.carry_initial_prompt ? "true" : "false");
     fprintf(stderr, "  -m FNAME,  --model FNAME          [%-7s] model path\n",                                     params.model.c_str());
@@ -715,6 +752,24 @@ static void output_json(
         end_value(end);
     };
 
+    auto value_arr_s = [&](const char * name, const std::vector<std::string> & vals, bool end) {
+        doindent();
+        fout << "\"" << name << "\": [";
+        if (!vals.empty()) {
+            fout << "\n";
+            indent++;
+            for (size_t i = 0; i < vals.size(); ++i) {
+                doindent();
+                char * val_escaped = escape_double_quotes_and_backslashes(vals[i].c_str());
+                fout << "\"" << val_escaped << "\"" << (i + 1 == vals.size() ? "\n" : ",\n");
+                free(val_escaped);
+            }
+            indent--;
+            doindent();
+        }
+        fout << "]" << (end ? "\n" : ",\n");
+    };
+
     auto times_o = [&](int64_t t0, int64_t t1, bool end) {
         start_obj("timestamps");
         value_s("from", to_timestamp(t0, true).c_str(), false);
@@ -750,6 +805,7 @@ static void output_json(
         start_obj("params");
             value_s("model", params.model.c_str(), false);
             value_s("language", params.language.c_str(), false);
+            value_arr_s("language_candidates", params.language_candidates, false);
             value_b("translate", params.translate, true);
         end_obj(false);
         start_obj("result");
@@ -1058,6 +1114,20 @@ int main(int argc, char ** argv) {
         exit(0);
     }
 
+    if (!params.language_candidates.empty() && params.language != "auto" && !params.detect_language) {
+        fprintf(stderr, "error: --language-candidates requires --language auto or --detect-language\n");
+        whisper_print_usage(argc, argv, params);
+        exit(0);
+    }
+
+    for (const auto & candidate : params.language_candidates) {
+        if (candidate.empty() || whisper_lang_id(candidate.c_str()) == -1) {
+            fprintf(stderr, "error: unknown language candidate '%s'\n", candidate.c_str());
+            whisper_print_usage(argc, argv, params);
+            exit(0);
+        }
+    }
+
     if (params.diarize && params.tinydiarize) {
         fprintf(stderr, "error: cannot use both --diarize and --tinydiarize\n");
         whisper_print_usage(argc, argv, params);
@@ -1102,6 +1172,12 @@ int main(int argc, char ** argv) {
 
     if (ctx == nullptr) {
         fprintf(stderr, "error: failed to initialize whisper context\n");
+        return 3;
+    }
+
+    if (!params.language_candidates.empty() && !whisper_is_multilingual(ctx)) {
+        fprintf(stderr, "error: --language-candidates requires a multilingual model\n");
+        whisper_free(ctx);
         return 3;
     }
 
@@ -1202,6 +1278,7 @@ int main(int argc, char ** argv) {
         }
 
         if (!params.no_prints) {
+            const std::string candidate_summary = join_language_candidates(params.language_candidates);
             // print system information
             fprintf(stderr, "\n");
             fprintf(stderr, "system_info: n_threads = %d / %d | %s\n",
@@ -1216,6 +1293,9 @@ int main(int argc, char ** argv) {
                     params.translate ? "translate" : "transcribe",
                     params.tinydiarize ? "tdrz = 1, " : "",
                     params.no_timestamps ? 0 : 1);
+            if (!candidate_summary.empty()) {
+                fprintf(stderr, "%s: constrained auto-detect candidates = %s\n", __func__, candidate_summary.c_str());
+            }
 
             if (params.print_colors) {
                 fprintf(stderr, "%s: color scheme: red (low confidence), yellow (medium), green (high confidence)\n", __func__);
@@ -1228,6 +1308,11 @@ int main(int argc, char ** argv) {
         // run the inference
         {
             whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+            std::vector<const char *> language_candidates;
+            language_candidates.reserve(params.language_candidates.size());
+            for (const auto & candidate : params.language_candidates) {
+                language_candidates.push_back(candidate.c_str());
+            }
 
             const bool use_grammar = (!params.grammar_parsed.rules.empty() && !params.grammar_rule.empty());
             wparams.strategy = (params.beam_size > 1 || use_grammar) ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY;
@@ -1239,6 +1324,8 @@ int main(int argc, char ** argv) {
             wparams.translate        = params.translate;
             wparams.language         = params.language.c_str();
             wparams.detect_language  = params.detect_language;
+            wparams.language_candidates = language_candidates.empty() ? nullptr : language_candidates.data();
+            wparams.n_language_candidates = language_candidates.size();
             wparams.n_threads        = params.n_threads;
             wparams.n_max_text_ctx   = params.max_context >= 0 ? params.max_context : wparams.n_max_text_ctx;
             wparams.offset_ms        = params.offset_t_ms;

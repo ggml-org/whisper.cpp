@@ -381,11 +381,28 @@ extern "C" {
                                int   n_threads,
                              float * lang_probs);
 
+    WHISPER_API int whisper_lang_auto_detect_candidates(
+            struct whisper_context * ctx,
+                               int   offset_ms,
+                               int   n_threads,
+                     const char * const * language_candidates,
+                               int   n_language_candidates,
+                             float * lang_probs);
+
     WHISPER_API int whisper_lang_auto_detect_with_state(
             struct whisper_context * ctx,
               struct whisper_state * state,
                                int   offset_ms,
                                int   n_threads,
+                             float * lang_probs);
+
+    WHISPER_API int whisper_lang_auto_detect_with_state_candidates(
+            struct whisper_context * ctx,
+              struct whisper_state * state,
+                               int   offset_ms,
+                               int   n_threads,
+                     const char * const * language_candidates,
+                               int   n_language_candidates,
                              float * lang_probs);
 
     WHISPER_API int whisper_n_len           (struct whisper_context * ctx); // mel length
@@ -532,6 +549,8 @@ extern "C" {
         // for auto-detection, set to nullptr, "" or "auto"
         const char * language;
         bool detect_language;
+        const char * const * language_candidates;
+        int n_language_candidates;
 
         // common decoding parameters:
         bool suppress_blank; // ref: https://github.com/openai/whisper/blob/f82bc59f5ea234d4b97fb2860842ed38519f7e65/whisper/decoding.py#L89
