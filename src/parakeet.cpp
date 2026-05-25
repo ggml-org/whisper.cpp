@@ -696,7 +696,8 @@ static void read_safe(parakeet_model_loader * loader, T & dest) {
 static bool parakeet_lstm_state_init(
                struct parakeet_state & pstate,
                       ggml_backend_t   backend,
-                                 int   n_layer) {
+                                 int   n_layer,
+                                 int   n_pred_dim) {
     parakeet_lstm_state & lstm_state = pstate.lstm_state;
 
     lstm_state.ctx_buf.resize(ggml_tensor_overhead() * n_layer * 2);
@@ -717,8 +718,8 @@ static bool parakeet_lstm_state_init(
 
 
     for (int il = 0; il < n_layer; ++il) {
-        lstm_state.layer[il].h_state = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 640);
-        lstm_state.layer[il].c_state = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 640);
+        lstm_state.layer[il].h_state = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_pred_dim);
+        lstm_state.layer[il].c_state = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_pred_dim);
     }
 
     lstm_state.buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
@@ -1763,9 +1764,10 @@ static struct ggml_cgraph * parakeet_build_graph_encoder(parakeet_context & pctx
             cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
 
             // use ggml_ssm_conv for f32 precision
-            cur = ggml_pad(ctx0, cur, 4, 0, 0, 0);
-            cur = ggml_roll(ctx0, cur, 4, 0, 0, 0);
-            cur = ggml_pad(ctx0, cur, 4, 0, 0, 0);
+            const int dw_pad = (hparams.n_conv_kernel - 1) / 2;
+            cur = ggml_pad(ctx0, cur, dw_pad, 0, 0, 0);
+            cur = ggml_roll(ctx0, cur, dw_pad, 0, 0, 0);
+            cur = ggml_pad(ctx0, cur, dw_pad, 0, 0, 0);
             ggml_format_name(cur, "enc_%d_conv_dw_pad", il);
 
             cur = ggml_ssm_conv(ctx0, cur, model.layers[il].conv_dw_w);
@@ -2991,7 +2993,7 @@ struct parakeet_state * parakeet_init_state(parakeet_context * ctx) {
         return nullptr;
     }
 
-    if (!parakeet_lstm_state_init(*state, state->backends[0], ctx->model.hparams.n_pred_layers)) {
+    if (!parakeet_lstm_state_init(*state, state->backends[0], ctx->model.hparams.n_pred_layers, ctx->model.hparams.n_pred_dim)) {
         PARAKEET_LOG_ERROR("%s: parakeet_lstm_states_init () failed\n", __func__);
         parakeet_free_state(state);
         return nullptr;
