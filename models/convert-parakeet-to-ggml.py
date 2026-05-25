@@ -148,6 +148,7 @@ def convert_parakeet_to_ggml(nemo_path, output_dir, use_f16=True, out_name=None)
             'n_fft': config['preprocessor']['n_fft'],
             'subsampling_factor': config['encoder']['subsampling_factor'],
             'n_subsampling_channels': config['encoder']['subsampling_conv_channels'],
+            'n_conv_kernel': config['encoder']['conv_kernel_size'],
 
             'n_pred_dim': config['decoder']['prednet']['pred_hidden'],
             'n_pred_layers': config['decoder']['prednet']['pred_rnn_layers'],
@@ -182,6 +183,7 @@ def convert_parakeet_to_ggml(nemo_path, output_dir, use_f16=True, out_name=None)
             fout.write(struct.pack("i", hparams['n_fft']))
             fout.write(struct.pack("i", hparams['subsampling_factor']))
             fout.write(struct.pack("i", hparams['n_subsampling_channels']))
+            fout.write(struct.pack("i", hparams['n_conv_kernel']))
             fout.write(struct.pack("i", hparams['n_pred_dim']))
             fout.write(struct.pack("i", hparams['n_pred_layers']))
             fout.write(struct.pack("i", hparams['n_tdt_durations']))

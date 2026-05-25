@@ -279,6 +279,7 @@ struct parakeet_hparams {
     float   eps                    = 1e-5f;
     int32_t subsampling_factor     = 8;
     int32_t n_subsampling_channels = 256;
+    int32_t n_conv_kernel          = 9;
     int32_t n_pred_dim             = 640;
     int32_t n_pred_layers          = 2;
     int32_t n_tdt_durations        = 5;
@@ -986,6 +987,7 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
         read_safe(loader, hparams.n_fft);
         read_safe(loader, hparams.subsampling_factor);
         read_safe(loader, hparams.n_subsampling_channels);
+        read_safe(loader, hparams.n_conv_kernel);
         read_safe(loader, hparams.n_pred_dim);
         read_safe(loader, hparams.n_pred_layers);
         read_safe(loader, hparams.n_tdt_durations);
@@ -1020,6 +1022,7 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
         PARAKEET_LOG_INFO("%s: qntvr                  = %d\n", __func__, qntvr);
         PARAKEET_LOG_INFO("%s: subsampling_factor     = %d\n", __func__, hparams.subsampling_factor);
         PARAKEET_LOG_INFO("%s: n_subsampling_channels = %d\n", __func__, hparams.n_subsampling_channels);
+        PARAKEET_LOG_INFO("%s: n_conv_kernel          = %d\n", __func__, hparams.n_conv_kernel);
         PARAKEET_LOG_INFO("%s: n_pred_dim             = %d\n", __func__, hparams.n_pred_dim);
         PARAKEET_LOG_INFO("%s: n_pred_layers          = %d\n", __func__, hparams.n_pred_layers);
         PARAKEET_LOG_INFO("%s: n_tdt_durations        = %d\n", __func__, hparams.n_tdt_durations);
@@ -1255,7 +1258,7 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
         ggml_format_name(layer.norm_conv_b, "enc_%d_norm_conv_b", i);
         layer.conv_pw1_w          = create_tensor(PARAKEET_TENSOR_ENC_CONV_PW1_WEIGHT, ggml_new_tensor_2d(ctx, wtype, n_audio_state, 2*n_audio_state), i);
         ggml_format_name(layer.conv_pw1_w, "enc_%d_conv_pw1_w", i);
-        layer.conv_dw_w           = create_tensor(PARAKEET_TENSOR_ENC_CONV_DW_WEIGHT, ggml_new_tensor_2d(ctx, wtype, 9, n_audio_state), i);
+        layer.conv_dw_w           = create_tensor(PARAKEET_TENSOR_ENC_CONV_DW_WEIGHT, ggml_new_tensor_2d(ctx, wtype, hparams.n_conv_kernel, n_audio_state), i);
         ggml_format_name(layer.conv_dw_w, "enc_%d_conv_dw_w", i);
         layer.conv_bn_w           = create_tensor(PARAKEET_TENSOR_ENC_CONV_BN_WEIGHT, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_audio_state), i);
         ggml_format_name(layer.conv_bn_w, "enc_%d_conv_bn_w", i);
