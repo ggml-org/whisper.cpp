@@ -1205,7 +1205,8 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
 
     // Encoder pre_encode
     const int n_subsampling_channels = hparams.n_subsampling_channels;
-    model.enc_pre_out_w = create_tensor(PARAKEET_TENSOR_ENC_PRE_OUT_WEIGHT, ggml_new_tensor_2d(ctx, wtype, 4096, n_audio_state));
+    const int n_pre_enc_features     = (hparams.n_mels / hparams.subsampling_factor) * n_subsampling_channels;
+    model.enc_pre_out_w = create_tensor(PARAKEET_TENSOR_ENC_PRE_OUT_WEIGHT, ggml_new_tensor_2d(ctx, wtype, n_pre_enc_features, n_audio_state));
     ggml_set_name(model.enc_pre_out_w, "enc_pre_out_w");
     model.enc_pre_out_b = create_tensor(PARAKEET_TENSOR_ENC_PRE_OUT_BIAS, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_audio_state));
     ggml_set_name(model.enc_pre_out_b, "enc_pre_out_b");
@@ -1270,8 +1271,8 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
         // Self attention
         layer.norm_attn_w      = create_tensor(PARAKEET_TENSOR_ENC_NORM_ATTN_WEIGHT, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_audio_state), i);
         layer.norm_attn_b      = create_tensor(PARAKEET_TENSOR_ENC_NORM_ATTN_BIAS, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_audio_state), i);
-        layer.attn_pos_bias_u  = create_tensor(PARAKEET_TENSOR_ENC_ATTN_POS_BIAS_U, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 128, 8), i);
-        layer.attn_pos_bias_v  = create_tensor(PARAKEET_TENSOR_ENC_ATTN_POS_BIAS_V, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 128, 8), i);
+        layer.attn_pos_bias_u  = create_tensor(PARAKEET_TENSOR_ENC_ATTN_POS_BIAS_U, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.n_audio_state / hparams.n_audio_head, hparams.n_audio_head), i);
+        layer.attn_pos_bias_v  = create_tensor(PARAKEET_TENSOR_ENC_ATTN_POS_BIAS_V, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.n_audio_state / hparams.n_audio_head, hparams.n_audio_head), i);
         layer.attn_q_w         = create_tensor(PARAKEET_TENSOR_ENC_ATTN_Q_WEIGHT, ggml_new_tensor_2d(ctx, wtype, n_audio_state, n_audio_state), i);
         layer.attn_k_w         = create_tensor(PARAKEET_TENSOR_ENC_ATTN_K_WEIGHT, ggml_new_tensor_2d(ctx, wtype, n_audio_state, n_audio_state), i);
         layer.attn_v_w         = create_tensor(PARAKEET_TENSOR_ENC_ATTN_V_WEIGHT, ggml_new_tensor_2d(ctx, wtype, n_audio_state, n_audio_state), i);
@@ -1292,20 +1293,23 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
 
     // Prediction network (decoder)
     const int dec_hidden = hparams.n_pred_dim;
-    model.prediction.embed_w = create_tensor(PARAKEET_TENSOR_PRED_EMBED_WEIGHT, ggml_new_tensor_2d(ctx, wtype, dec_hidden, 8193));
+    const int n_pred_embed = hparams.n_vocab + 1;                            // vocab + blank token
+    const int n_lstm_gates = 4 * dec_hidden;                                 // 4 LSTM gates
+    const int n_joint_out  = hparams.n_vocab + hparams.n_tdt_durations + 1;  // vocab + durations + blank
+    model.prediction.embed_w = create_tensor(PARAKEET_TENSOR_PRED_EMBED_WEIGHT, ggml_new_tensor_2d(ctx, wtype, dec_hidden, n_pred_embed));
     model.prediction.lstm_layer.resize(hparams.n_pred_layers);
     for (int i = 0; i < hparams.n_pred_layers; ++i) {
         auto & layer = model.prediction.lstm_layer[i];
-        layer.ih_w = create_tensor(PARAKEET_TENSOR_PRED_LSTM_WEIGHT_IH, ggml_new_tensor_2d(ctx, wtype, dec_hidden, 2560), i);
+        layer.ih_w = create_tensor(PARAKEET_TENSOR_PRED_LSTM_WEIGHT_IH, ggml_new_tensor_2d(ctx, wtype, dec_hidden, n_lstm_gates), i);
         ggml_format_name(layer.ih_w, "pred_%d_ih_w", i);
 
-        layer.ih_b = create_tensor(PARAKEET_TENSOR_PRED_LSTM_BIAS_IH, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 2560), i);
+        layer.ih_b = create_tensor(PARAKEET_TENSOR_PRED_LSTM_BIAS_IH, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_lstm_gates), i);
         ggml_format_name(layer.ih_b, "pred_%d_ih_b", i);
 
-        layer.hh_b = create_tensor(PARAKEET_TENSOR_PRED_LSTM_BIAS_HH, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 2560), i);
+        layer.hh_b = create_tensor(PARAKEET_TENSOR_PRED_LSTM_BIAS_HH, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_lstm_gates), i);
         ggml_format_name(layer.hh_b, "pred_%d_hh_b", i);
 
-        layer.hh_w = create_tensor(PARAKEET_TENSOR_PRED_LSTM_WEIGHT_HH, ggml_new_tensor_2d(ctx, wtype, dec_hidden, 2560), i);
+        layer.hh_w = create_tensor(PARAKEET_TENSOR_PRED_LSTM_WEIGHT_HH, ggml_new_tensor_2d(ctx, wtype, dec_hidden, n_lstm_gates), i);
         ggml_format_name(layer.hh_w, "pred_%d_hh_w", i);
     }
 
@@ -1318,9 +1322,9 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
     ggml_set_name(model.joint.enc_w, "enc_w");
     model.joint.enc_b  = create_tensor(PARAKEET_TENSOR_JOINT_ENC_BIAS, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, dec_hidden));
     ggml_set_name(model.joint.enc_b, "enc_b");
-    model.joint.net_w  = create_tensor(PARAKEET_TENSOR_JOINT_NET_WEIGHT, ggml_new_tensor_2d(ctx, wtype, dec_hidden, 8198));
+    model.joint.net_w  = create_tensor(PARAKEET_TENSOR_JOINT_NET_WEIGHT, ggml_new_tensor_2d(ctx, wtype, dec_hidden, n_joint_out));
     ggml_set_name(model.joint.net_w, "net_w");
-    model.joint.net_b  = create_tensor(PARAKEET_TENSOR_JOINT_NET_BIAS, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8198));
+    model.joint.net_b  = create_tensor(PARAKEET_TENSOR_JOINT_NET_BIAS, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_joint_out));
     ggml_set_name(model.joint.net_b, "net_b");
 
     ggml_free(ctx);
