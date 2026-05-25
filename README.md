@@ -21,6 +21,7 @@ High-performance inference of [OpenAI's Whisper](https://github.com/openai/whisp
 - [Vulkan support](#vulkan-gpu-support)
 - Support for CPU-only inference
 - [Efficient GPU support for NVIDIA](#nvidia-gpu-support)
+- [AMD ROCm GPU support](#amd-rocm-gpu-support)
 - [OpenVINO Support](#openvino-support)
 - [Ascend NPU Support](#ascend-npu-support)
 - [Moore Threads GPU Support](#moore-threads-gpu-support)
@@ -339,6 +340,27 @@ Now build `whisper.cpp` with Vulkan support:
 cmake -B build -DGGML_VULKAN=1
 cmake --build build -j --config Release
 ```
+
+## AMD ROCm GPU support
+
+With AMD GPUs the processing can be accelerated via HIP/ROCm.
+First, make sure you have installed [ROCm](https://rocm.docs.amd.com/en/latest/).
+
+Now build `whisper.cpp` with HIP support:
+
+```
+cmake -B build -DGGML_HIP=1 -DAMDGPU_TARGETS="gfx1201"
+cmake --build build -j --config Release
+```
+
+Replace `gfx1201` with your GPU architecture. You can find it with:
+
+```
+rocminfo | grep "gfx"
+```
+
+Common architectures: `gfx1100` (RX 7900 XTX), `gfx1101` (RX 7800 XT), `gfx1201` (RX 9070 XT).
+For multiple GPUs with different architectures: `-DAMDGPU_TARGETS="gfx1100;gfx1201"`.
 
 ## BLAS CPU support via OpenBLAS
 
