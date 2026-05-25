@@ -1019,15 +1019,9 @@ static bool whisper_kv_cache_init(
     cache.k = ggml_new_tensor_1d(ctx, wtype, n_elements);
     cache.v = ggml_new_tensor_1d(ctx, wtype, n_elements);
 
-    // QVAC-19213 Adreno fallback: if a single K or V tensor exceeds the
-    // backend's max single-tensor size (e.g. Vulkan's per-descriptor
-    // storageBufferRange, 128 MiB on Adreno 740), the GPU backend cannot
-    // bind the descriptor at dispatch and graph scheduling will abort with
-    // "pre-allocated tensor in a buffer that cannot run the operation". Fall
-    // back to the host (CPU) buffer type for THIS cache only; ops that
-    // touch K/V will get scheduled on CPU with K/V copy when needed, but
-    // the rest of the graph keeps using the GPU backend. Affects whisper-
-    // medium and larger on Adreno; bigger GPUs and CPU-only are unaffected.
+    // If a single K/V tensor exceeds the backend's max single-tensor size,
+    // the GPU can't bind the descriptor; allocate this cache from the CPU
+    // buffer type so K/V ops run on CPU while the rest stays on GPU.
     const size_t per_tensor_bytes      = ggml_nbytes(cache.k);
     const size_t backend_max           = ggml_backend_get_max_size(backend);
     ggml_backend_buffer_type_t buft    = ggml_backend_get_default_buffer_type(backend);
