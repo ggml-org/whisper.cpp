@@ -3,6 +3,10 @@
 #define LOG_QUEUE_CAPACITY 256
 #define LOG_DEFAULT_CAPACITY 1024
 
+extern ID id_log_callback_thread;
+extern ID id_alive;
+extern ID id_join;
+
 void
 ruby_whisper_log_queue_initialize(ruby_whisper_log_queue *log_queue)
 {
@@ -41,7 +45,7 @@ ruby_whisper_log_queue_open(ruby_whisper_log_queue *log_queue)
 }
 
 void
-ruby_whisper_log_queue_close(ruby_whisper_log_queue *log_queue)
+ruby_whisper_log_queue_close(ruby_whisper_log_queue *log_queue, VALUE *mod)
 {
   rb_nativethread_lock_lock(&log_queue->lock);
 
@@ -49,6 +53,11 @@ ruby_whisper_log_queue_close(ruby_whisper_log_queue *log_queue)
   rb_native_cond_broadcast(&log_queue->cond);
 
   rb_nativethread_lock_unlock(&log_queue->lock);
+
+  VALUE log_callback_thread = rb_ivar_get(*mod, id_log_callback_thread);
+  if (!NIL_P(log_callback_thread) && RTEST(rb_funcall(log_callback_thread, id_alive, 0))) {
+    rb_funcall(log_callback_thread, id_join, 0);
+  }
 }
 
 static size_t
