@@ -3,14 +3,15 @@
 #include <unistd.h>
 
 extern VALUE mParakeet;
+extern VALUE mLogSettable;
+extern ID id_extended;
+extern ID id_start_log_callback_thread;
 
 extern void ruby_whisper_log_queue_initialize(ruby_whisper_log_queue *log_queue);
 extern void ruby_whisper_log_queue_open(ruby_whisper_log_queue *log_queue);
 extern void ruby_whisper_log_queue_close(ruby_whisper_log_queue *log_queue);
 extern void ruby_whisper_log_queue_enqueue(ruby_whisper_log_queue *log_queue, enum ggml_log_level level, const char *text);
 extern VALUE ruby_whisper_log_queue_drain(ruby_whisper_log_queue *log_queue);
-
-ID id_start_log_callback_thread;
 
 static ruby_whisper_log_queue parakeet_log_queue;
 
@@ -67,5 +68,6 @@ init_ruby_whisper_parakeet()
   rb_define_private_method(rb_singleton_class(mParakeet), "drain_logs", ruby_whisper_parakeet_s_drain_logs, 0);
 
   rb_set_end_proc(ruby_whisper_parakeet_end_proc, Qnil);
-  rb_require("whisper/parakeet");
+  rb_extend_object(mParakeet, mLogSettable);
+  rb_funcall(mLogSettable, id_extended, 1, mParakeet);
 }

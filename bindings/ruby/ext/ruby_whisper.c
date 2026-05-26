@@ -1,6 +1,7 @@
 #include "ruby_whisper.h"
 
 VALUE mWhisper;
+VALUE mLogSettable;
 VALUE mVAD;
 VALUE mParakeet;
 VALUE cContext;
@@ -31,6 +32,8 @@ ID id_pre_converted_models;
 ID id_coreml_compiled_models;
 ID id_cache;
 ID id_n_processors;
+ID id_extended;
+ID id_start_log_callback_thread;
 
 static bool is_log_callback_finalized = false;
 static bool is_ruby_log_callback_present = false;
@@ -198,8 +201,12 @@ void Init_whisper() {
   id_coreml_compiled_models = rb_intern("coreml_compiled_models");
   id_cache = rb_intern("cache");
   id_n_processors = rb_intern("n_processors");
+  id_extended = rb_intern("extended");
+  id_start_log_callback_thread = rb_intern("start_log_callback_thread");
 
   mWhisper = rb_define_module("Whisper");
+  rb_require("whisper/log_settable");
+  mLogSettable = rb_path2class("Whisper::LogSettable");
   mVAD = rb_define_module_under(mWhisper, "VAD");
   mParakeet = rb_define_module_under(mWhisper, "Parakeet");
 
