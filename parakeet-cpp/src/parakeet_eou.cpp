@@ -212,7 +212,7 @@ void eou_init_state(const EouRuntimeWeights & W, EouDecodeState & state) {
     state.pred_out.assign(H, 0.0f);
     state.last_token        = -1;
     state.symbols_this_step = 0;
-    state.segment_start_token = 0;
+    state.has_emitted_token_since_last_eou = false;
 
     // Prime the predictor with the blank token so the first joint call
     // sees a sensible context (matches NeMo's `initialize_state` +
@@ -295,7 +295,6 @@ int eou_decode_window(const ParakeetCtcModel & model,
                     boundary.token_index  = (int) out_tokens.size();
                     boundary.is_eou_flush = true;
                     out_segments.push_back(boundary);
-                    state.segment_start_token = (int) out_tokens.size();
                     state.has_emitted_token_since_last_eou = false;
                 }
                 state.h_state.assign((size_t) L * H, 0.0f);

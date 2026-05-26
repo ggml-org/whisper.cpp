@@ -59,11 +59,10 @@ struct EouDecodeState {
     int     symbols_this_step = 0;
     bool    initialized       = false;
 
-    // Index into the running token stream where the current segment
-    // started. `eou_decode_window` writes "<EOU>" boundary positions
-    // into the result so the caller can later split the transcript.
-    int     segment_start_token = 0;
-
+    // Tracks whether the predictor has emitted a non-special token
+    // since the last `<EOU>` flush. Guards `eou_decode_window` against
+    // emitting an empty segment boundary when `<EOU>` fires before any
+    // real token has been appended to `out_tokens`.
     bool    has_emitted_token_since_last_eou = false;
 };
 
