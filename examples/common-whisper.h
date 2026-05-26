@@ -14,6 +14,14 @@ bool read_audio_data(
         std::vector<std::vector<float>> & pcmf32s,
         bool stereo);
 
+// decode audio bytes already held in memory (uploaded file, network buffer)
+bool read_audio_data(
+        const char * buffer,
+        size_t buffer_size,
+        std::vector<float> & pcmf32,
+        std::vector<std::vector<float>> & pcmf32s,
+        bool stereo);
+
 // convert timestamp to string, 6000 -> 01:00.000
 std::string to_timestamp(int64_t t, bool comma = false);
 

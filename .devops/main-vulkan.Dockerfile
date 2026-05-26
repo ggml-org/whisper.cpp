@@ -2,7 +2,7 @@ FROM ubuntu:24.04 AS build
 WORKDIR /app
 
 RUN apt-get update && \
-  apt-get install -y build-essential wget cmake git libvulkan-dev glslc \
+  apt-get install -y build-essential wget cmake git libvulkan-dev spirv-headers glslc \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 COPY .. .

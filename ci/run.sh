@@ -50,6 +50,10 @@ fi
 
 CMAKE_EXTRA="-DWHISPER_FATAL_WARNINGS=ON"
 
+if [[ "$(uname -m)" == "x86_64" ]]; then
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_NATIVE=OFF"
+fi
+
 if [ ! -z ${GG_BUILD_METAL} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=ON"
 fi

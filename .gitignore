@@ -10,6 +10,7 @@
 .DS_Store
 .vimspector.json
 /CMakeSettings.json
+/CMakeUserPresets.json
 /talk-llama.dSYM/
 
 build/
