@@ -8,7 +8,7 @@ class TestParakeet < TestBase
 
     $stdout = StringIO.new
     Parakeet.log_set proc {|level, message, _| puts [level, message].join(": ")}, nil
-    Parakeet::Context.new("parakeet-tdt-0.6b-v3")
+    Parakeet::Context.new("test/fixtures/for-tests-ggml-parakeet-tdt.bin")
     sleep 0.1
     $stdout.rewind
     logs = $stdout.string

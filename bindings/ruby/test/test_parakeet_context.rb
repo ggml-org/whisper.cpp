@@ -3,6 +3,8 @@ require "stringio"
 
 class TestParakeetContext < TestBase
   def setup
+    omit "Skip not to download large model" if ENV["CI"]
+
     Whisper.instance_variable_set "@whisper", nil
     GC.start
 
