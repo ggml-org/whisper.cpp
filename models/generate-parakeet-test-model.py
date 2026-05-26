@@ -131,7 +131,7 @@ def generate(output_path):
             write_tensor(fout, f"{p}.conv.batch_norm.weight",        f32(n_state))
             write_tensor(fout, f"{p}.conv.batch_norm.bias",          f32(n_state))
             write_tensor(fout, f"{p}.conv.batch_norm.running_mean",  f32(n_state))
-            write_tensor(fout, f"{p}.conv.batch_norm.running_var",   f32(n_state))
+            write_tensor(fout, f"{p}.conv.batch_norm.running_var",   np.abs(f32(n_state)))
             num_batches = np.zeros(1, dtype=np.int32)
             write_tensor(fout, f"{p}.conv.batch_norm.num_batches_tracked", num_batches)
             write_tensor(fout, f"{p}.conv.pointwise_conv2.weight",   f32(n_state, n_state))
