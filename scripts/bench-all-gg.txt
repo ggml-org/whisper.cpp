@@ -111,61 +111,61 @@ make -j && ./scripts/bench-all.sh 1 1 0
 
 |      CPU | Config |         Model       |  Th |  FA |    Enc. |    Dec. |    Bch5 |      PP |  Commit |
 |      --- |    --- |           ---       | --- | --- |     --- |     --- |     --- |     --- |     --- |
-| M2 ULTRA |  METAL |          tiny       |   1 |   0 |    8.57 |    1.12 |    0.27 |    0.01 | f5b477ab |
-| M2 ULTRA |  METAL |     tiny-q5_0       |   1 |   0 |    9.17 |    1.10 |    0.28 |    0.01 | f5b477ab |
-| M2 ULTRA |  METAL |     tiny-q5_1       |   1 |   0 |    9.16 |    1.09 |    0.28 |    0.01 | f5b477ab |
-| M2 ULTRA |  METAL |     tiny-q8_0       |   1 |   0 |    8.81 |    1.12 |    0.27 |    0.01 | f5b477ab |
-| M2 ULTRA |  METAL |          base       |   1 |   0 |   15.60 |    1.61 |    0.41 |    0.02 | f5b477ab |
-| M2 ULTRA |  METAL |     base-q5_0       |   1 |   0 |   16.75 |    1.54 |    0.42 |    0.02 | f5b477ab |
-| M2 ULTRA |  METAL |     base-q5_1       |   1 |   0 |   16.64 |    1.54 |    0.43 |    0.02 | f5b477ab |
-| M2 ULTRA |  METAL |     base-q8_0       |   1 |   0 |   16.09 |    1.55 |    0.41 |    0.02 | f5b477ab |
-| M2 ULTRA |  METAL |         small       |   1 |   0 |   46.74 |    3.13 |    0.89 |    0.05 | f5b477ab |
-| M2 ULTRA |  METAL |    small-q5_0       |   1 |   0 |   51.57 |    3.03 |    0.91 |    0.06 | f5b477ab |
-| M2 ULTRA |  METAL |    small-q5_1       |   1 |   0 |   51.85 |    3.03 |    0.92 |    0.06 | f5b477ab |
-| M2 ULTRA |  METAL |    small-q8_0       |   1 |   0 |   48.34 |    3.01 |    0.89 |    0.06 | f5b477ab |
-| M2 ULTRA |  METAL |        medium       |   1 |   0 |  125.82 |    6.46 |    2.01 |    0.12 | f5b477ab |
-| M2 ULTRA |  METAL |   medium-q5_0       |   1 |   0 |  143.44 |    5.97 |    2.07 |    0.14 | f5b477ab |
-| M2 ULTRA |  METAL |   medium-q5_1       |   1 |   0 |  143.41 |    5.97 |    2.09 |    0.14 | f5b477ab |
-| M2 ULTRA |  METAL |   medium-q8_0       |   1 |   0 |  131.23 |    6.30 |    2.01 |    0.13 | f5b477ab |
-| M2 ULTRA |  METAL |    medium-dis       |   1 |   0 |  114.07 |    0.90 |    0.25 |    0.02 | f5b477ab |
-| M2 ULTRA |  METAL |      large-v2       |   1 |   0 |  240.73 |    9.46 |    3.21 |    0.21 | f5b477ab |
-| M2 ULTRA |  METAL | large-v2-q5_0       |   1 |   0 |  276.56 |    8.62 |    3.16 |    0.25 | f5b477ab |
-| M2 ULTRA |  METAL | large-v2-q5_1       |   1 |   0 |  275.90 |    8.98 |    3.16 |    0.25 | f5b477ab |
-| M2 ULTRA |  METAL | large-v2-q8_0       |   1 |   0 |  251.00 |    9.10 |    3.02 |    0.22 | f5b477ab |
-| M2 ULTRA |  METAL |  large-v2-dis       |   1 |   0 |  217.43 |    1.01 |    0.28 |    0.02 | f5b477ab |
-| M2 ULTRA |  METAL | large-v3-turbo      |   1 |   0 |  218.39 |    1.55 |    0.47 |    0.03 | f5b477ab |
-| M2 ULTRA |  METAL | large-v3-turbo-q5_0 |   1 |   0 |  249.41 |    1.39 |    0.47 |    0.04 | f5b477ab |
-| M2 ULTRA |  METAL | large-v3-turbo-q8_0 |   1 |   0 |  227.54 |    1.43 |    0.45 |    0.03 | f5b477ab |
+| M2 ULTRA |  METAL |          tiny       |   1 |   0 |    8.10 |    1.03 |    0.25 |    0.01 | f14ae77f |
+| M2 ULTRA |  METAL |     tiny-q5_0       |   1 |   0 |    8.53 |    1.02 |    0.26 |    0.01 | f14ae77f |
+| M2 ULTRA |  METAL |     tiny-q5_1       |   1 |   0 |    8.67 |    1.00 |    0.26 |    0.01 | f14ae77f |
+| M2 ULTRA |  METAL |     tiny-q8_0       |   1 |   0 |    9.32 |    1.02 |    0.26 |    0.01 | f14ae77f |
+| M2 ULTRA |  METAL |          base       |   1 |   0 |   15.50 |    1.51 |    0.40 |    0.02 | f14ae77f |
+| M2 ULTRA |  METAL |     base-q5_0       |   1 |   0 |   16.63 |    1.45 |    0.40 |    0.02 | f14ae77f |
+| M2 ULTRA |  METAL |     base-q5_1       |   1 |   0 |   16.76 |    1.44 |    0.39 |    0.02 | f14ae77f |
+| M2 ULTRA |  METAL |     base-q8_0       |   1 |   0 |   15.73 |    1.43 |    0.38 |    0.02 | f14ae77f |
+| M2 ULTRA |  METAL |         small       |   1 |   0 |   45.43 |    2.93 |    0.83 |    0.05 | f14ae77f |
+| M2 ULTRA |  METAL |    small-q5_0       |   1 |   0 |   49.78 |    2.85 |    0.84 |    0.06 | f14ae77f |
+| M2 ULTRA |  METAL |    small-q5_1       |   1 |   0 |   50.22 |    2.85 |    0.84 |    0.06 | f14ae77f |
+| M2 ULTRA |  METAL |    small-q8_0       |   1 |   0 |   47.08 |    2.78 |    0.83 |    0.05 | f14ae77f |
+| M2 ULTRA |  METAL |        medium       |   1 |   0 |  125.19 |    6.10 |    1.88 |    0.12 | f14ae77f |
+| M2 ULTRA |  METAL |   medium-q5_0       |   1 |   0 |  142.49 |    5.59 |    1.90 |    0.14 | f14ae77f |
+| M2 ULTRA |  METAL |   medium-q5_1       |   1 |   0 |  142.63 |    5.68 |    1.92 |    0.14 | f14ae77f |
+| M2 ULTRA |  METAL |   medium-q8_0       |   1 |   0 |  130.98 |    5.83 |    1.87 |    0.13 | f14ae77f |
+| M2 ULTRA |  METAL |    medium-dis       |   1 |   0 |  113.95 |    0.88 |    0.24 |    0.02 | f14ae77f |
+| M2 ULTRA |  METAL |      large-v2       |   1 |   0 |  239.27 |    8.97 |    2.92 |    0.21 | f14ae77f |
+| M2 ULTRA |  METAL | large-v2-q5_0       |   1 |   0 |  275.07 |    8.56 |    2.92 |    0.24 | f14ae77f |
+| M2 ULTRA |  METAL | large-v2-q5_1       |   1 |   0 |  274.28 |    8.62 |    2.93 |    0.24 | f14ae77f |
+| M2 ULTRA |  METAL | large-v2-q8_0       |   1 |   0 |  248.90 |    8.32 |    2.81 |    0.22 | f14ae77f |
+| M2 ULTRA |  METAL |  large-v2-dis       |   1 |   0 |  214.26 |    0.97 |    0.27 |    0.02 | f14ae77f |
+| M2 ULTRA |  METAL | large-v3-turbo      |   1 |   0 |  222.47 |    1.49 |    0.45 |    0.03 | f14ae77f |
+| M2 ULTRA |  METAL | large-v3-turbo-q5_0 |   1 |   0 |  250.56 |    1.35 |    0.45 |    0.04 | f14ae77f |
+| M2 ULTRA |  METAL | large-v3-turbo-q8_0 |   1 |   0 |  228.57 |    1.33 |    0.43 |    0.03 | f14ae77f |
 
 make -j && ./scripts/bench-all.sh 1 1 1
 
 |      CPU | Config |         Model       |  Th |  FA |    Enc. |    Dec. |    Bch5 |      PP |  Commit |
 |      --- |    --- |           ---       | --- | --- |     --- |     --- |     --- |     --- |     --- |
-| M2 ULTRA |  METAL |          tiny       |   1 |   1 |    6.06 |    0.96 |    0.22 |    0.01 | f5b477ab |
-| M2 ULTRA |  METAL |     tiny-q5_0       |   1 |   1 |    6.51 |    0.93 |    0.22 |    0.01 | f5b477ab |
-| M2 ULTRA |  METAL |     tiny-q5_1       |   1 |   1 |    6.47 |    0.93 |    0.23 |    0.01 | f5b477ab |
-| M2 ULTRA |  METAL |     tiny-q8_0       |   1 |   1 |    6.16 |    0.94 |    0.21 |    0.01 | f5b477ab |
-| M2 ULTRA |  METAL |          base       |   1 |   1 |   10.63 |    1.37 |    0.32 |    0.01 | f5b477ab |
-| M2 ULTRA |  METAL |     base-q5_0       |   1 |   1 |   11.75 |    1.27 |    0.33 |    0.02 | f5b477ab |
-| M2 ULTRA |  METAL |     base-q5_1       |   1 |   1 |   11.73 |    1.25 |    0.33 |    0.02 | f5b477ab |
-| M2 ULTRA |  METAL |     base-q8_0       |   1 |   1 |   11.17 |    1.28 |    0.32 |    0.02 | f5b477ab |
-| M2 ULTRA |  METAL |         small       |   1 |   1 |   31.74 |    2.55 |    0.67 |    0.04 | f5b477ab |
-| M2 ULTRA |  METAL |    small-q5_0       |   1 |   1 |   36.21 |    2.47 |    0.69 |    0.04 | f5b477ab |
-| M2 ULTRA |  METAL |    small-q5_1       |   1 |   1 |   36.22 |    2.47 |    0.70 |    0.04 | f5b477ab |
-| M2 ULTRA |  METAL |    small-q8_0       |   1 |   1 |   32.73 |    2.45 |    0.66 |    0.04 | f5b477ab |
-| M2 ULTRA |  METAL |        medium       |   1 |   1 |   86.94 |    5.21 |    1.49 |    0.09 | f5b477ab |
-| M2 ULTRA |  METAL |   medium-q5_0       |   1 |   1 |  104.31 |    4.93 |    1.51 |    0.10 | f5b477ab |
-| M2 ULTRA |  METAL |   medium-q5_1       |   1 |   1 |  104.09 |    4.98 |    1.51 |    0.10 | f5b477ab |
-| M2 ULTRA |  METAL |   medium-q8_0       |   1 |   1 |   92.13 |    5.06 |    1.45 |    0.09 | f5b477ab |
-| M2 ULTRA |  METAL |    medium-dis       |   1 |   1 |   76.67 |    0.81 |    0.20 |    0.01 | f5b477ab |
-| M2 ULTRA |  METAL |      large-v2       |   1 |   1 |  167.66 |    7.56 |    2.25 |    0.16 | f5b477ab |
-| M2 ULTRA |  METAL | large-v2-q5_0       |   1 |   1 |  203.09 |    7.13 |    2.29 |    0.20 | f5b477ab |
-| M2 ULTRA |  METAL | large-v2-q5_1       |   1 |   1 |  202.53 |    7.12 |    2.29 |    0.20 | f5b477ab |
-| M2 ULTRA |  METAL | large-v2-q8_0       |   1 |   1 |  177.48 |    6.94 |    2.18 |    0.17 | f5b477ab |
-| M2 ULTRA |  METAL |  large-v2-dis       |   1 |   1 |  145.61 |    0.91 |    0.23 |    0.02 | f5b477ab |
-| M2 ULTRA |  METAL | large-v3-turbo      |   1 |   1 |  146.95 |    1.33 |    0.36 |    0.03 | f5b477ab |
-| M2 ULTRA |  METAL | large-v3-turbo-q5_0 |   1 |   1 |  178.57 |    1.17 |    0.36 |    0.03 | f5b477ab |
-| M2 ULTRA |  METAL | large-v3-turbo-q8_0 |   1 |   1 |  156.19 |    1.21 |    0.34 |    0.03 | f5b477ab |
+| M2 ULTRA |  METAL |          tiny       |   1 |   1 |    6.03 |    0.86 |    0.20 |    0.01 | f14ae77f |
+| M2 ULTRA |  METAL |     tiny-q5_0       |   1 |   1 |    6.46 |    0.84 |    0.21 |    0.01 | f14ae77f |
+| M2 ULTRA |  METAL |     tiny-q5_1       |   1 |   1 |    6.46 |    0.85 |    0.21 |    0.01 | f14ae77f |
+| M2 ULTRA |  METAL |     tiny-q8_0       |   1 |   1 |    6.14 |    0.88 |    0.20 |    0.01 | f14ae77f |
+| M2 ULTRA |  METAL |          base       |   1 |   1 |   10.87 |    1.24 |    0.31 |    0.01 | f14ae77f |
+| M2 ULTRA |  METAL |     base-q5_0       |   1 |   1 |   11.98 |    1.18 |    0.31 |    0.02 | f14ae77f |
+| M2 ULTRA |  METAL |     base-q5_1       |   1 |   1 |   12.07 |    1.18 |    0.31 |    0.02 | f14ae77f |
+| M2 ULTRA |  METAL |     base-q8_0       |   1 |   1 |   11.13 |    1.19 |    0.30 |    0.02 | f14ae77f |
+| M2 ULTRA |  METAL |         small       |   1 |   1 |   31.46 |    2.37 |    0.63 |    0.04 | f14ae77f |
+| M2 ULTRA |  METAL |    small-q5_0       |   1 |   1 |   36.16 |    2.31 |    0.65 |    0.04 | f14ae77f |
+| M2 ULTRA |  METAL |    small-q5_1       |   1 |   1 |   36.57 |    2.31 |    0.65 |    0.04 | f14ae77f |
+| M2 ULTRA |  METAL |    small-q8_0       |   1 |   1 |   32.94 |    2.27 |    0.63 |    0.04 | f14ae77f |
+| M2 ULTRA |  METAL |        medium       |   1 |   1 |   89.86 |    4.92 |    1.41 |    0.09 | f14ae77f |
+| M2 ULTRA |  METAL |   medium-q5_0       |   1 |   1 |  107.12 |    4.72 |    1.42 |    0.10 | f14ae77f |
+| M2 ULTRA |  METAL |   medium-q5_1       |   1 |   1 |  107.00 |    4.70 |    1.42 |    0.10 | f14ae77f |
+| M2 ULTRA |  METAL |   medium-q8_0       |   1 |   1 |   94.93 |    4.56 |    1.37 |    0.09 | f14ae77f |
+| M2 ULTRA |  METAL |    medium-dis       |   1 |   1 |   79.66 |    0.78 |    0.20 |    0.01 | f14ae77f |
+| M2 ULTRA |  METAL |      large-v2       |   1 |   1 |  170.06 |    7.13 |    2.15 |    0.16 | f14ae77f |
+| M2 ULTRA |  METAL | large-v2-q5_0       |   1 |   1 |  205.16 |    6.80 |    2.18 |    0.20 | f14ae77f |
+| M2 ULTRA |  METAL | large-v2-q5_1       |   1 |   1 |  204.22 |    6.69 |    2.16 |    0.20 | f14ae77f |
+| M2 ULTRA |  METAL | large-v2-q8_0       |   1 |   1 |  179.78 |    6.35 |    2.13 |    0.18 | f14ae77f |
+| M2 ULTRA |  METAL |  large-v2-dis       |   1 |   1 |  148.11 |    0.89 |    0.22 |    0.02 | f14ae77f |
+| M2 ULTRA |  METAL | large-v3-turbo      |   1 |   1 |  149.23 |    1.29 |    0.34 |    0.03 | f14ae77f |
+| M2 ULTRA |  METAL | large-v3-turbo-q5_0 |   1 |   1 |  180.77 |    1.13 |    0.35 |    0.03 | f14ae77f |
+| M2 ULTRA |  METAL | large-v3-turbo-q8_0 |   1 |   1 |  158.66 |    1.10 |    0.33 |    0.03 | f14ae77f |
 
 
 ## M4 Max
@@ -235,20 +235,6 @@ make -j && ./scripts/bench-all.sh 1 1 1
 
 |    CPU |  Config |         Model  |  Th |  FA |    Enc. |    Dec. |    Bch5 |      PP |  Commit |
 |    --- |     --- |           ---  | --- | --- |     --- |     --- |     --- |     --- |     --- |
-| M4 Max |   METAL |          tiny  |   1 |   1 |    8.23 |    0.71 |    0.16 |    0.01 | 47fcd7da |
-| M4 Max |   METAL |     tiny-q8_0  |   1 |   1 |    8.47 |    0.67 |    0.16 |    0.01 | 47fcd7da |
-| M4 Max |   METAL |          base  |   1 |   1 |   15.47 |    1.12 |    0.26 |    0.02 | 47fcd7da |
-| M4 Max |   METAL |     base-q8_0  |   1 |   1 |   15.70 |    1.05 |    0.27 |    0.02 | 47fcd7da |
-| M4 Max |   METAL |         small  |   1 |   1 |   49.82 |    2.37 |    0.53 |    0.05 | 47fcd7da |
-| M4 Max |   METAL |    small-q8_0  |   1 |   1 |   51.76 |    1.99 |    0.53 |    0.05 | 47fcd7da |
-| M4 Max |   METAL |        medium  |   1 |   1 |  147.76 |    5.52 |    1.27 |    0.12 | 47fcd7da |
-| M4 Max |   METAL |   medium-q8_0  |   1 |   1 |  153.98 |    4.59 |    1.24 |    0.13 | 47fcd7da |
-| M4 Max |   METAL |      large-v2  |   1 |   1 |  282.89 |    9.06 |    2.11 |    0.22 | 47fcd7da |
-| M4 Max |   METAL | large-v2-q8_0  |   1 |   1 |  296.43 |    7.44 |    2.09 |    0.23 | 47fcd7da |
-| M4 Max |   METAL | large-v3-turbo |   1 |   1 |  249.91 |    1.65 |    0.38 |    0.04 | 47fcd7da |
-
-|    CPU |  Config |         Model  |  Th |  FA |    Enc. |    Dec. |    Bch5 |      PP |  Commit |
-|    --- |     --- |           ---  | --- | --- |     --- |     --- |     --- |     --- |     --- |
 | M4 Max |   METAL |          tiny  |   1 |   1 |    8.23 |    0.72 |    0.16 |    0.01 | 47af2fb7 |
 | M4 Max |   METAL |     tiny-q8_0  |   1 |   1 |    8.38 |    0.68 |    0.16 |    0.01 | 47af2fb7 |
 | M4 Max |   METAL |          base  |   1 |   1 |   15.66 |    1.16 |    0.26 |    0.02 | 47af2fb7 |
@@ -262,41 +248,77 @@ make -j && ./scripts/bench-all.sh 1 1 1
 | M4 Max |   METAL | large-v3-turbo |   1 |   1 |  256.23 |    1.61 |    0.38 |    0.04 | 47af2fb7 |
 
 
+## M5 Max
+
+make -j && ./scripts/bench-all.sh 1 1 0
+
+|    CPU |  Config |         Model  |  Th |  FA |    Enc. |    Dec. |    Bch5 |      PP |  Commit |
+|    --- |     --- |           ---  | --- | --- |     --- |     --- |     --- |     --- |     --- |
+| M5 Max |   METAL |          tiny  |   1 |   0 |    4.88 |    0.65 |    0.17 |    0.01 | f14ae77f |
+| M5 Max |   METAL |     tiny-q8_0  |   1 |   0 |    4.84 |    0.63 |    0.17 |    0.01 | f14ae77f |
+| M5 Max |   METAL |          base  |   1 |   0 |    8.95 |    1.02 |    0.24 |    0.01 | f14ae77f |
+| M5 Max |   METAL |     base-q8_0  |   1 |   0 |    9.12 |    0.94 |    0.24 |    0.01 | f14ae77f |
+| M5 Max |   METAL |         small  |   1 |   0 |   25.61 |    2.15 |    0.52 |    0.03 | f14ae77f |
+| M5 Max |   METAL |    small-q8_0  |   1 |   0 |   25.77 |    1.93 |    0.50 |    0.03 | f14ae77f |
+| M5 Max |   METAL |        medium  |   1 |   0 |   73.96 |    4.61 |    1.16 |    0.08 | f14ae77f |
+| M5 Max |   METAL |   medium-q8_0  |   1 |   0 |   74.89 |    3.94 |    1.12 |    0.08 | f14ae77f |
+| M5 Max |   METAL |      large-v2  |   1 |   0 |  132.06 |    6.91 |    1.86 |    0.13 | f14ae77f |
+| M5 Max |   METAL | large-v2-q8_0  |   1 |   0 |  132.56 |    6.00 |    1.76 |    0.13 | f14ae77f |
+| M5 Max |   METAL | large-v3-turbo |   1 |   0 |  119.34 |    1.30 |    0.32 |    0.02 | f14ae77f |
+
+
+make -j && ./scripts/bench-all.sh 1 1 1
+
+|    CPU |  Config |         Model  |  Th |  FA |    Enc. |    Dec. |    Bch5 |      PP |  Commit |
+|    --- |     --- |           ---  | --- | --- |     --- |     --- |     --- |     --- |     --- |
+| M5 Max |   METAL |          tiny  |   1 |   1 |    4.31 |    0.59 |    0.13 |    0.01 | f14ae77f |
+| M5 Max |   METAL |     tiny-q8_0  |   1 |   1 |    4.51 |    0.55 |    0.12 |    0.01 | f14ae77f |
+| M5 Max |   METAL |          base  |   1 |   1 |    7.77 |    0.91 |    0.20 |    0.01 | f14ae77f |
+| M5 Max |   METAL |     base-q8_0  |   1 |   1 |    7.67 |    0.78 |    0.19 |    0.01 | f14ae77f |
+| M5 Max |   METAL |         small  |   1 |   1 |   20.90 |    1.76 |    0.40 |    0.03 | f14ae77f |
+| M5 Max |   METAL |    small-q8_0  |   1 |   1 |   21.32 |    1.62 |    0.38 |    0.03 | f14ae77f |
+| M5 Max |   METAL |        medium  |   1 |   1 |   60.40 |    3.98 |    0.89 |    0.07 | f14ae77f |
+| M5 Max |   METAL |   medium-q8_0  |   1 |   1 |   60.72 |    3.35 |    0.86 |    0.07 | f14ae77f |
+| M5 Max |   METAL |      large-v2  |   1 |   1 |  110.57 |    6.06 |    1.41 |    0.12 | f14ae77f |
+| M5 Max |   METAL | large-v2-q8_0  |   1 |   1 |  110.92 |    5.00 |    1.31 |    0.12 | f14ae77f |
+| M5 Max |   METAL | large-v3-turbo |   1 |   1 |   98.36 |    1.19 |    0.27 |    0.02 | f14ae77f |
+
+
 # RTX 5090
 
 make -j && ./scripts/bench-all.sh 1 1 0
 
 |      GPU | Config |         Model       |  Th |  FA |    Enc. |    Dec. |    Bch5 |      PP |  Commit |
 |      --- |    --- |           ---       | --- | --- |     --- |     --- |     --- |     --- |     --- |
-| RTX 5090 |   CUDA |          tiny       |   1 |   0 |    2.20 |    0.51 |    0.13 |    0.01 | f5b477ab |
-| RTX 5090 |   CUDA |     tiny-q8_0       |   1 |   0 |    2.35 |    0.52 |    0.14 |    0.01 | f5b477ab |
-| RTX 5090 |   CUDA |          base       |   1 |   0 |    3.97 |    0.77 |    0.20 |    0.01 | f5b477ab |
-| RTX 5090 |   CUDA |     base-q8_0       |   1 |   0 |    4.20 |    0.73 |    0.20 |    0.01 | f5b477ab |
-| RTX 5090 |   CUDA |         small       |   1 |   0 |   11.87 |    1.48 |    0.40 |    0.02 | f5b477ab |
-| RTX 5090 |   CUDA |    small-q8_0       |   1 |   0 |   12.40 |    1.59 |    0.42 |    0.02 | f5b477ab |
-| RTX 5090 |   CUDA |        medium       |   1 |   0 |   32.63 |    3.11 |    0.82 |    0.04 | f5b477ab |
-| RTX 5090 |   CUDA |   medium-q8_0       |   1 |   0 |   31.80 |    3.23 |    0.84 |    0.05 | f5b477ab |
-| RTX 5090 |   CUDA |      large-v2       |   1 |   0 |   52.22 |    4.66 |    1.18 |    0.06 | f5b477ab |
-| RTX 5090 |   CUDA | large-v2-q8_0       |   1 |   0 |   51.11 |    4.37 |    1.15 |    0.07 | f5b477ab |
-| RTX 5090 |   CUDA | large-v3-turbo      |   1 |   0 |   48.72 |    0.70 |    0.18 |    0.01 | f5b477ab |
-| RTX 5090 |   CUDA | large-v3-turbo-q8_0 |   1 |   0 |   47.81 |    0.64 |    0.16 |    0.01 | f5b477ab |
+| RTX 5090 |   CUDA |          tiny       |   1 |   0 |    2.17 |    0.38 |    0.10 |    0.00 | f14ae77f |
+| RTX 5090 |   CUDA |     tiny-q8_0       |   1 |   0 |    2.31 |    0.37 |    0.10 |    0.01 | f14ae77f |
+| RTX 5090 |   CUDA |          base       |   1 |   0 |    3.94 |    0.56 |    0.17 |    0.01 | f14ae77f |
+| RTX 5090 |   CUDA |     base-q8_0       |   1 |   0 |    4.13 |    0.53 |    0.14 |    0.01 | f14ae77f |
+| RTX 5090 |   CUDA |         small       |   1 |   0 |   12.06 |    1.09 |    0.34 |    0.02 | f14ae77f |
+| RTX 5090 |   CUDA |    small-q8_0       |   1 |   0 |   12.50 |    1.11 |    0.30 |    0.02 | f14ae77f |
+| RTX 5090 |   CUDA |        medium       |   1 |   0 |   33.08 |    2.38 |    0.70 |    0.04 | f14ae77f |
+| RTX 5090 |   CUDA |   medium-q8_0       |   1 |   0 |   32.57 |    2.26 |    0.62 |    0.04 | f14ae77f |
+| RTX 5090 |   CUDA |      large-v2       |   1 |   0 |   54.27 |    3.68 |    1.03 |    0.06 | f14ae77f |
+| RTX 5090 |   CUDA | large-v2-q8_0       |   1 |   0 |   53.11 |    3.22 |    0.89 |    0.06 | f14ae77f |
+| RTX 5090 |   CUDA | large-v3-turbo      |   1 |   0 |   50.56 |    0.58 |    0.15 |    0.01 | f14ae77f |
+| RTX 5090 |   CUDA | large-v3-turbo-q8_0 |   1 |   0 |   49.39 |    0.49 |    0.13 |    0.01 | f14ae77f |
 
 make -j && ./scripts/bench-all.sh 1 1 1
 
 |      GPU | Config |         Model       |  Th |  FA |    Enc. |    Dec. |    Bch5 |      PP |  Commit |
 |      --- |    --- |           ---       | --- | --- |     --- |     --- |     --- |     --- |     --- |
-| RTX 5090 |   CUDA |          tiny       |   1 |   1 |    1.37 |    0.44 |    0.11 |    0.00 | f5b477ab |
-| RTX 5090 |   CUDA |     tiny-q8_0       |   1 |   1 |    1.48 |    0.44 |    0.12 |    0.01 | f5b477ab |
-| RTX 5090 |   CUDA |          base       |   1 |   1 |    2.34 |    0.66 |    0.16 |    0.01 | f5b477ab |
-| RTX 5090 |   CUDA |     base-q8_0       |   1 |   1 |    2.51 |    0.62 |    0.17 |    0.01 | f5b477ab |
-| RTX 5090 |   CUDA |         small       |   1 |   1 |    5.53 |    1.23 |    0.32 |    0.01 | f5b477ab |
-| RTX 5090 |   CUDA |    small-q8_0       |   1 |   1 |    5.88 |    1.35 |    0.33 |    0.02 | f5b477ab |
-| RTX 5090 |   CUDA |        medium       |   1 |   1 |   15.09 |    2.55 |    0.65 |    0.03 | f5b477ab |
-| RTX 5090 |   CUDA |   medium-q8_0       |   1 |   1 |   14.06 |    2.72 |    0.67 |    0.03 | f5b477ab |
-| RTX 5090 |   CUDA |      large-v2       |   1 |   1 |   23.24 |    3.94 |    0.97 |    0.04 | f5b477ab |
-| RTX 5090 |   CUDA | large-v2-q8_0       |   1 |   1 |   22.00 |    3.68 |    0.93 |    0.05 | f5b477ab |
-| RTX 5090 |   CUDA | large-v3-turbo      |   1 |   1 |   19.81 |    0.62 |    0.15 |    0.01 | f5b477ab |
-| RTX 5090 |   CUDA | large-v3-turbo-q8_0 |   1 |   1 |   18.62 |    0.56 |    0.14 |    0.01 | f5b477ab |
+| RTX 5090 |   CUDA |          tiny       |   1 |   1 |    1.29 |    0.31 |    0.07 |    0.00 | f14ae77f |
+| RTX 5090 |   CUDA |     tiny-q8_0       |   1 |   1 |    1.45 |    0.31 |    0.07 |    0.00 | f14ae77f |
+| RTX 5090 |   CUDA |          base       |   1 |   1 |    2.15 |    0.44 |    0.13 |    0.01 | f14ae77f |
+| RTX 5090 |   CUDA |     base-q8_0       |   1 |   1 |    2.27 |    0.43 |    0.10 |    0.01 | f14ae77f |
+| RTX 5090 |   CUDA |         small       |   1 |   1 |    5.54 |    0.83 |    0.26 |    0.01 | f14ae77f |
+| RTX 5090 |   CUDA |    small-q8_0       |   1 |   1 |    5.95 |    0.84 |    0.22 |    0.01 | f14ae77f |
+| RTX 5090 |   CUDA |        medium       |   1 |   1 |   15.43 |    1.81 |    0.53 |    0.02 | f14ae77f |
+| RTX 5090 |   CUDA |   medium-q8_0       |   1 |   1 |   14.71 |    1.66 |    0.46 |    0.03 | f14ae77f |
+| RTX 5090 |   CUDA |      large-v2       |   1 |   1 |   24.73 |    2.92 |    0.81 |    0.04 | f14ae77f |
+| RTX 5090 |   CUDA | large-v2-q8_0       |   1 |   1 |   23.35 |    2.43 |    0.67 |    0.04 | f14ae77f |
+| RTX 5090 |   CUDA | large-v3-turbo      |   1 |   1 |   21.36 |    0.49 |    0.13 |    0.01 | f14ae77f |
+| RTX 5090 |   CUDA | large-v3-turbo-q8_0 |   1 |   1 |   20.07 |    0.39 |    0.10 |    0.01 | f14ae77f |
 
 
 # DGX Spark
@@ -318,22 +340,37 @@ make -j && ./scripts/bench-all.sh 1 1 0
 | DGX Spk. |   CUDA | large-v3-turbo      |   1 |   0 |  264.90 |    2.03 |    0.37 |    0.03 | f5b477ab |
 | DGX Spk. |   CUDA | large-v3-turbo-q8_0 |   1 |   0 |  253.56 |    1.48 |    0.27 |    0.03 | f5b477ab |
 
+|      GPU | Config |         Model       |  Th |  FA |    Enc. |    Dec. |    Bch5 |      PP |  Commit |
+|      --- |    --- |           ---       | --- | --- |     --- |     --- |     --- |     --- |     --- |
+| DGX Spk. |   CUDA |          tiny       |   1 |   0 |    9.79 |    0.65 |    0.14 |    0.01 | f14ae77f |
+| DGX Spk. |   CUDA |     tiny-q8_0       |   1 |   0 |    8.97 |    0.56 |    0.12 |    0.01 | f14ae77f |
+| DGX Spk. |   CUDA |          base       |   1 |   0 |   18.58 |    1.04 |    0.22 |    0.01 | f14ae77f |
+| DGX Spk. |   CUDA |     base-q8_0       |   1 |   0 |   17.36 |    0.88 |    0.18 |    0.02 | f14ae77f |
+| DGX Spk. |   CUDA |         small       |   1 |   0 |   56.78 |    2.33 |    0.51 |    0.04 | f14ae77f |
+| DGX Spk. |   CUDA |    small-q8_0       |   1 |   0 |   55.47 |    1.99 |    0.43 |    0.04 | f14ae77f |
+| DGX Spk. |   CUDA |        medium       |   1 |   0 |  158.21 |    5.71 |    1.23 |    0.11 | f14ae77f |
+| DGX Spk. |   CUDA |   medium-q8_0       |   1 |   0 |  151.17 |    4.54 |    0.97 |    0.11 | f14ae77f |
+| DGX Spk. |   CUDA |      large-v2       |   1 |   0 |  269.59 |   10.48 |    2.13 |    0.20 | f14ae77f |
+| DGX Spk. |   CUDA | large-v2-q8_0       |   1 |   0 |  262.82 |    7.43 |    1.61 |    0.20 | f14ae77f |
+| DGX Spk. |   CUDA | large-v3-turbo      |   1 |   0 |  263.91 |    1.80 |    0.37 |    0.03 | f14ae77f |
+| DGX Spk. |   CUDA | large-v3-turbo-q8_0 |   1 |   0 |  252.89 |    1.23 |    0.26 |    0.03 | f14ae77f |
+
 make -j && ./scripts/bench-all.sh 1 1 1
 
 |      GPU | Config |         Model       |  Th |  FA |    Enc. |    Dec. |    Bch5 |      PP |  Commit |
 |      --- |    --- |           ---       | --- | --- |     --- |     --- |     --- |     --- |     --- |
-| DGX Spk. |   CUDA |          tiny       |   1 |   1 |    2.63 |    0.76 |    0.13 |    0.01 | f5b477ab |
-| DGX Spk. |   CUDA |     tiny-q8_0       |   1 |   1 |    2.46 |    0.73 |    0.11 |    0.01 | f5b477ab |
-| DGX Spk. |   CUDA |          base       |   1 |   1 |    4.96 |    1.24 |    0.20 |    0.01 | f5b477ab |
-| DGX Spk. |   CUDA |     base-q8_0       |   1 |   1 |    4.23 |    1.08 |    0.17 |    0.01 | f5b477ab |
-| DGX Spk. |   CUDA |         small       |   1 |   1 |   16.26 |    2.73 |    0.47 |    0.02 | f5b477ab |
-| DGX Spk. |   CUDA |    small-q8_0       |   1 |   1 |   14.94 |    2.38 |    0.39 |    0.02 | f5b477ab |
-| DGX Spk. |   CUDA |        medium       |   1 |   1 |   51.81 |    6.94 |    1.22 |    0.05 | f5b477ab |
-| DGX Spk. |   CUDA |   medium-q8_0       |   1 |   1 |   41.51 |    5.44 |    0.93 |    0.05 | f5b477ab |
-| DGX Spk. |   CUDA |      large-v2       |   1 |   1 |   98.54 |   11.53 |    2.05 |    0.08 | f5b477ab |
-| DGX Spk. |   CUDA | large-v2-q8_0       |   1 |   1 |   91.61 |    8.49 |    1.55 |    0.08 | f5b477ab |
-| DGX Spk. |   CUDA | large-v3-turbo      |   1 |   1 |   87.20 |    1.94 |    0.36 |    0.02 | f5b477ab |
-| DGX Spk. |   CUDA | large-v3-turbo-q8_0 |   1 |   1 |   80.28 |    1.38 |    0.26 |    0.01 | f5b477ab |
+| DGX Spk. |   CUDA |          tiny       |   1 |   1 |    2.72 |    0.56 |    0.13 |    0.01 | f14ae77f |
+| DGX Spk. |   CUDA |     tiny-q8_0       |   1 |   1 |    2.55 |    0.47 |    0.11 |    0.01 | f14ae77f |
+| DGX Spk. |   CUDA |          base       |   1 |   1 |    5.08 |    0.90 |    0.20 |    0.01 | f14ae77f |
+| DGX Spk. |   CUDA |     base-q8_0       |   1 |   1 |    4.38 |    0.72 |    0.16 |    0.01 | f14ae77f |
+| DGX Spk. |   CUDA |         small       |   1 |   1 |   16.95 |    2.00 |    0.47 |    0.02 | f14ae77f |
+| DGX Spk. |   CUDA |    small-q8_0       |   1 |   1 |   15.67 |    1.67 |    0.39 |    0.02 | f14ae77f |
+| DGX Spk. |   CUDA |        medium       |   1 |   1 |   53.12 |    5.10 |    1.24 |    0.06 | f14ae77f |
+| DGX Spk. |   CUDA |   medium-q8_0       |   1 |   1 |   43.64 |    3.87 |    0.91 |    0.05 | f14ae77f |
+| DGX Spk. |   CUDA |      large-v2       |   1 |   1 |  102.15 |    9.58 |    2.02 |    0.08 | f14ae77f |
+| DGX Spk. |   CUDA | large-v2-q8_0       |   1 |   1 |   93.86 |    6.54 |    1.49 |    0.08 | f14ae77f |
+| DGX Spk. |   CUDA | large-v3-turbo      |   1 |   1 |   90.29 |    1.69 |    0.36 |    0.02 | f14ae77f |
+| DGX Spk. |   CUDA | large-v3-turbo-q8_0 |   1 |   1 |   82.79 |    1.13 |    0.25 |    0.01 | f14ae77f |
 
 
 # V100

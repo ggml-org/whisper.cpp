@@ -238,6 +238,8 @@ struct ggml_sycl_device_info {
     std::array<float, GGML_SYCL_MAX_DEVICES> default_tensor_split = {};
 
     int max_work_group_sizes[GGML_SYCL_MAX_DEVICES] = {0};
+
+    bool ext_oneapi_level_zero = true; // sycl::backend::ext_oneapi_level_zero used by all enumerated GPU devices
 };
 
 const ggml_sycl_device_info & ggml_sycl_info();
@@ -309,6 +311,10 @@ struct ggml_tensor_extra_gpu {
                         [GGML_SYCL_MAX_STREAMS]; // events for synchronizing multiple GPUs
   optimize_feature optimized_feature;
 };
+
+extern int g_ggml_sycl_enable_level_zero;
+void * ggml_sycl_malloc_device(size_t size, sycl::queue &q);
+void ggml_sycl_free_device(void *ptr, sycl::queue &q);
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams={});
 
