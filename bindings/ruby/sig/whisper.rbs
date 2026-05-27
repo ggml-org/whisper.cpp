@@ -525,6 +525,9 @@ module Whisper
       #
       def each_segment: { (Segment) -> void } -> void
                       | () -> Enumerator[Segment]
+
+      def to_srt: () -> String
+      def to_webvtt: () -> String
     end
 
     class Params
