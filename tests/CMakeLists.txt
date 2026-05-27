@@ -105,7 +105,7 @@ add_executable(${VAD_TEST} ${VAD_TEST}.cpp)
 target_include_directories(${VAD_TEST} PRIVATE ../include ../ggml/include ../examples)
 target_link_libraries(${VAD_TEST} PRIVATE common)
 target_compile_definitions(${VAD_TEST} PRIVATE
-    WHISPER_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/ggml-base.en.bin"
+    WHISPER_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-ggml-base.en.bin"
     VAD_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-silero-v6.2.0-ggml.bin"
     SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
 add_test(NAME ${VAD_TEST} COMMAND ${VAD_TEST})
