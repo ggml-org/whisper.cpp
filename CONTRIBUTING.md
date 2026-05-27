@@ -33,18 +33,9 @@ Before submitting your PR:
 - whisper.cpp uses the ggml tensor library for model evaluation. If you are unfamiliar with ggml, consider taking a look at the [examples in the ggml repository](https://github.com/ggml-org/ggml/tree/master/examples/). [simple](https://github.com/ggml-org/ggml/tree/master/examples/simple) shows the bare minimum for using ggml. [gpt-2](https://github.com/ggml-org/ggml/tree/master/examples/gpt-2) has minimal implementations for language model inference using GPT-2. [mnist](https://github.com/ggml-org/ggml/tree/master/examples/mnist) demonstrates how to train and evaluate a simple image classifier
 - Test your changes:
   - Execute [the full CI locally on your machine](ci/README.md) before publishing
-  - If you modified the `ggml` source, run the `test-backend-ops` tool to check whether different backend implementations of the `ggml` operators produce consistent results (this requires access to at least two different `ggml` backends)
-  - If you modified a `ggml` operator or added a new one, add the corresponding test cases to `test-backend-ops`
 - Create separate PRs for each feature or fix:
   - Avoid combining unrelated changes in a single PR
   - For intricate features, consider opening a feature request first to discuss and align expectations
-  - When adding support for a new model or feature, focus on **CPU support only** in the initial PR unless you have a good reason not to. Add support for other backends like CUDA in follow-up PRs
-  - In particular, adding new data types (extension of the `ggml_type` enum) carries with it a disproportionate maintenance burden. As such, to add a new quantization type you will need to meet the following *additional* criteria *at minimum*:
-    - convert a small model to GGUF using the new type and upload it to HuggingFace
-    - provide [perplexity](https://github.com/ggml-org/llama.cpp/tree/master/tools/perplexity) comparisons to FP16/BF16 (whichever is the native precision) as well as to types of similar size
-    - provide KL divergence data calculated vs. the FP16/BF16 (whichever is the native precision) version for both the new type as well as types of similar size
-    - provide [performance data](https://github.com/ggml-org/llama.cpp/tree/master/tools/llama-bench) for the new type in comparison to types of similar size on pure CPU
-- Consider allowing write access to your branch for faster reviews, as reviewers can push commits directly
 - If you are a new contributor
     - Limit your open PRs to 1
     - Do not submit trivial fixes (e.g. typos, formatting changes)
@@ -166,16 +157,6 @@ Maintainers reserve the right to decline review or close pull requests for any r
     ```
 
 # Code maintenance
-
-- Existing code should have designated collaborators and/or maintainers specified in the [CODEOWNERS](CODEOWNERS) file responsible for:
-  - Reviewing and merging related PRs
-  - Fixing related bugs
-  - Providing developer guidance/support
-
-- When adding or modifying a large piece of code:
-  - If you are a collaborator, make sure to add yourself to [CODEOWNERS](CODEOWNERS) to indicate your availability for reviewing related PRs
-  - If you are a contributor, find an existing collaborator who is willing to review and maintain your code long-term
-  - Provide the necessary CI workflow (and hardware) to test your changes (see [ci/README.md](https://github.com/ggml-org/whisper.cpp/tree/master/ci))
 
 - New code should follow the guidelines (coding, naming, etc.) outlined in this document. Exceptions are allowed in isolated, backend-specific parts of the code that do not interface directly with the `ggml` interfaces.
   _(NOTE: for legacy reasons, existing code is not required to follow this guideline)_
