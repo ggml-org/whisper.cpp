@@ -21,7 +21,7 @@ def generate(output_path):
 
     hparams = {
         'n_vocab':                10,
-        'n_audio_ctx':            3000,
+        'n_audio_ctx':            3200,
         'n_audio_state':          8,
         'n_audio_head':           2,
         'n_audio_layer':          1,
