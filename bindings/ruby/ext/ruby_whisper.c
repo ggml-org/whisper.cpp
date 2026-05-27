@@ -19,6 +19,9 @@ VALUE cSegment;
 VALUE cToken;
 VALUE cModel;
 
+VALUE mOutputContext;
+VALUE mOutputSegment;
+
 ID id_to_s;
 ID id_call;
 ID id___method__;
@@ -215,6 +218,9 @@ void Init_whisper() {
   mLogSettable = rb_path2class("Whisper::LogSettable");
   mVAD = rb_define_module_under(mWhisper, "VAD");
   mParakeet = rb_define_module_under(mWhisper, "Parakeet");
+  rb_require("whisper/output");
+  mOutputContext = rb_path2class("Whisper::Output::Context");
+  mOutputSegment = rb_path2class("Whisper::Output::Segment");
 
   rb_define_const(mWhisper, "VERSION", rb_str_new2(whisper_version()));
   rb_define_const(mWhisper, "LOG_LEVEL_NONE", INT2NUM(GGML_LOG_LEVEL_NONE));
@@ -265,7 +271,8 @@ void Init_whisper() {
   init_ruby_whisper_parakeet_segment(&mParakeet);
   init_ruby_whisper_parakeet_context(&mParakeet);
 
-  rb_require("whisper/context");
-  rb_require("whisper/segment");
   rb_require("whisper/model/uri");
+
+  rb_include_module(cContext, mOutputContext);
+  rb_include_module(cSegment, mOutputSegment);
 }
