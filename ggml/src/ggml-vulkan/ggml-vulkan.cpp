@@ -14050,10 +14050,14 @@ static size_t ggml_backend_vk_buffer_type_get_alignment(ggml_backend_buffer_type
 
 static size_t ggml_backend_vk_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
     ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
-    // Report min(suballocation block size, maxStorageBufferRange): a single
-    // dispatch can't bind a descriptor larger than maxStorageBufferRange.
     size_t alloc_block = ctx->device->suballocation_block_size;
-    size_t desc_range  = ctx->device->properties.limits.maxStorageBufferRange;
+    // Adreno (Qualcomm) can't bind a single descriptor larger than
+    // maxStorageBufferRange (128 MiB), so cap there; other vendors keep
+    // the full suballocation block size.
+    if (ctx->device->vendor_id != VK_VENDOR_ID_QUALCOMM) {
+        return alloc_block;
+    }
+    size_t desc_range = ctx->device->properties.limits.maxStorageBufferRange;
     return std::min(alloc_block, desc_range);
 }
 
