@@ -4,11 +4,18 @@
 
 extern VALUE mParakeet;
 extern VALUE mLogSettable;
+extern VALUE mOutputContext;
+extern VALUE mOutputSegment;
 extern ID id_extended;
 extern ID id_log_callback_thread;
 extern ID id_start_log_callback_thread;
 extern ID id_alive;
 extern ID id_join;
+
+extern void init_ruby_whisper_parakeet_params(VALUE *mParakeet);
+extern void init_ruby_whisper_parakeet_token(VALUE *mParakeet);
+extern void init_ruby_whisper_parakeet_segment(VALUE *mParakeet);
+extern void init_ruby_whisper_parakeet_context(VALUE *mParakeet);
 
 extern void ruby_whisper_log_queue_initialize(ruby_whisper_log_queue *log_queue);
 extern void ruby_whisper_log_queue_open(ruby_whisper_log_queue *log_queue);
@@ -58,8 +65,10 @@ ruby_whisper_parakeet_end_proc(VALUE args)
 }
 
 void
-init_ruby_whisper_parakeet()
+init_ruby_whisper_parakeet(VALUE *mWhisper)
 {
+  mParakeet = rb_define_module_under(*mWhisper, "Parakeet");
+
   ruby_whisper_log_queue_initialize(&parakeet_log_queue);
 
   rb_define_singleton_method(mParakeet, "log_set", ruby_whisper_parakeet_s_log_set, 2);
@@ -68,4 +77,9 @@ init_ruby_whisper_parakeet()
   rb_set_end_proc(ruby_whisper_parakeet_end_proc, Qnil);
   rb_extend_object(mParakeet, mLogSettable);
   rb_funcall(mLogSettable, id_extended, 1, mParakeet);
+
+  init_ruby_whisper_parakeet_params(&mParakeet);
+  init_ruby_whisper_parakeet_token(&mParakeet);
+  init_ruby_whisper_parakeet_segment(&mParakeet);
+  init_ruby_whisper_parakeet_context(&mParakeet);
 }

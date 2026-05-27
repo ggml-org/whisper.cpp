@@ -58,11 +58,7 @@ extern void init_ruby_whisper_vad_params(VALUE *mVAD);
 extern void init_ruby_whisper_vad_context(VALUE *mVAD);
 extern void init_ruby_whisper_vad_segment(VALUE *mVAD);
 extern void init_ruby_whisper_vad_segments(VALUE *mVAD);
-extern void init_ruby_whisper_parakeet();
-extern void init_ruby_whisper_parakeet_params(VALUE *mParakeet);
-extern void init_ruby_whisper_parakeet_token(VALUE *mParakeet);
-extern void init_ruby_whisper_parakeet_segment(VALUE *mParakeet);
-extern void init_ruby_whisper_parakeet_context(VALUE *mParakeet);
+extern void init_ruby_whisper_parakeet(VALUE *mWhisper);
 extern void register_callbacks(ruby_whisper_params *rwp, VALUE *context);
 
 /*
@@ -217,7 +213,6 @@ void Init_whisper() {
   rb_require("whisper/log_settable");
   mLogSettable = rb_path2class("Whisper::LogSettable");
   mVAD = rb_define_module_under(mWhisper, "VAD");
-  mParakeet = rb_define_module_under(mWhisper, "Parakeet");
   rb_require("whisper/output");
   mOutputContext = rb_path2class("Whisper::Output::Context");
   mOutputSegment = rb_path2class("Whisper::Output::Segment");
@@ -265,11 +260,7 @@ void Init_whisper() {
   init_ruby_whisper_vad_segment(&mVAD);
   init_ruby_whisper_vad_segments(&mVAD);
   init_ruby_whisper_vad_context(&mVAD);
-  init_ruby_whisper_parakeet();
-  init_ruby_whisper_parakeet_params(&mParakeet);
-  init_ruby_whisper_parakeet_token(&mParakeet);
-  init_ruby_whisper_parakeet_segment(&mParakeet);
-  init_ruby_whisper_parakeet_context(&mParakeet);
+  init_ruby_whisper_parakeet(&mWhisper);
 
   rb_require("whisper/model/uri");
 
