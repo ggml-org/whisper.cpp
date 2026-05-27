@@ -4,6 +4,8 @@
 
 extern VALUE mParakeet;
 extern VALUE mLogSettable;
+extern VALUE cParakeetContext;
+extern VALUE cParakeetSegment;
 extern VALUE mOutputContext;
 extern VALUE mOutputSegment;
 extern ID id_extended;
@@ -82,4 +84,7 @@ init_ruby_whisper_parakeet(VALUE *mWhisper)
   init_ruby_whisper_parakeet_token(&mParakeet);
   init_ruby_whisper_parakeet_segment(&mParakeet);
   init_ruby_whisper_parakeet_context(&mParakeet);
+
+  rb_include_module(cParakeetContext, mOutputContext);
+  rb_include_module(cParakeetSegment, mOutputSegment);
 }
