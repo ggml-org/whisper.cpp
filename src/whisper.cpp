@@ -1019,7 +1019,19 @@ static bool whisper_kv_cache_init(
     cache.k = ggml_new_tensor_1d(ctx, wtype, n_elements);
     cache.v = ggml_new_tensor_1d(ctx, wtype, n_elements);
 
-    cache.buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    // If a single K/V tensor exceeds the backend's max single-tensor size,
+    // the GPU can't bind the descriptor; allocate this cache from the CPU
+    // buffer type so K/V ops run on CPU while the rest stays on GPU.
+    const size_t per_tensor_bytes      = ggml_nbytes(cache.k);
+    const size_t backend_max           = ggml_backend_get_max_size(backend);
+    ggml_backend_buffer_type_t buft    = ggml_backend_get_default_buffer_type(backend);
+    if (per_tensor_bytes > backend_max) {
+        WHISPER_LOG_INFO("%s: kv cache tensor %.2f MB exceeds backend max %.2f MB; using CPU buffer\n",
+            __func__, per_tensor_bytes / 1e6, backend_max / 1e6);
+        buft = ggml_backend_cpu_buffer_type();
+    }
+
+    cache.buffer = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
     if (!cache.buffer) {
         WHISPER_LOG_ERROR("%s: failed to allocate memory for the kv cache\n", __func__);
         return false;

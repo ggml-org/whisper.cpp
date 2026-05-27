@@ -2991,6 +2991,7 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
         result.workgroup_size = result.subgroup_size * 4;
     }
 
+
     const uint32_t D = hsk | hsv;
 
     const bool reduce_block_rows = D & 8 || n_kv < 1024 || device->vendor_id == VK_VENDOR_ID_INTEL;
@@ -4303,9 +4304,13 @@ static void ggml_vk_load_shaders(vk_device& device) {
     }
     uint32_t rm_iq = 2 * rm_kq;
 
-    const bool use_subgroups = device->subgroup_arithmetic && device->architecture != vk_device_architecture::AMD_GCN;
+    // Adreno (Qualcomm) crashes compiling the mul_mat_vec subgroup
+    // variant; force the equivalent shmem-reduction path instead.
+    bool use_subgroups = device->subgroup_arithmetic && device->architecture != vk_device_architecture::AMD_GCN;
+    if (device->vendor_id == VK_VENDOR_ID_QUALCOMM) { use_subgroups = false; }
     // Ensure a subgroup size >= 16 is available
-    const bool use_subgroups16 = use_subgroups && subgroup_min_size_16;
+    bool use_subgroups16 = use_subgroups && subgroup_min_size_16;
+    if (device->vendor_id == VK_VENDOR_ID_QUALCOMM) { use_subgroups16 = false; }
 
     const uint32_t subgroup_size = (device->vendor_id == VK_VENDOR_ID_INTEL && device->subgroup_size_control && device->subgroup_min_size <= 16 && device->subgroup_max_size >= 16) ? 16 : device->subgroup_size;
     const uint32_t subgroup_size16 = std::max(subgroup_size, 16u);
@@ -7395,6 +7400,11 @@ static vk_pipeline ggml_vk_guess_matmul_pipeline(ggml_backend_vk_context * ctx, 
     if ((mm_m && (m <= 64 || n <= 64)) || !mm_l) {
         return aligned ? mmp->a_m : mmp->m;
     }
+    // Adreno (Qualcomm) crashes on the matmul `_l` (large) tile;
+    // fall back to the `_m` (medium) tile, which is known-good.
+    if (ctx->device->vendor_id == VK_VENDOR_ID_QUALCOMM && mm_m) {
+        return aligned ? mmp->a_m : mmp->m;
+    }
     return aligned ? mmp->a_l : mmp->l;
 }
 
@@ -7480,6 +7490,11 @@ static vk_pipeline ggml_vk_guess_matmul_id_pipeline(ggml_backend_vk_context * ct
         return aligned ? mmp->a_s : mmp->s;
     }
     if ((mm_m && (m <= 64 || n <= 64)) || !mm_l) {
+        return aligned ? mmp->a_m : mmp->m;
+    }
+    // Adreno (Qualcomm) crashes on the matmul `_l` (large) tile;
+    // fall back to the `_m` (medium) tile, which is known-good.
+    if (ctx->device->vendor_id == VK_VENDOR_ID_QUALCOMM && mm_m) {
         return aligned ? mmp->a_m : mmp->m;
     }
     return aligned ? mmp->a_l : mmp->l;
@@ -9272,6 +9287,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         aligned = false;
     }
 
+
     float scale         = 1.0f;
     float max_bias      = 0.0f;
     float logit_softcap = 0.0f;
@@ -9795,11 +9811,15 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_topk_moe[idx][use_push];
         }
 
+        // Adreno (Qualcomm) hangs on the wg512 softmax variant; fall back to
+        // the smaller-wg variant (inlined to avoid a switch-scope var).
         if (src0->type == GGML_TYPE_F32 && (src1 == nullptr || src1->type == GGML_TYPE_F32) && dst->type == GGML_TYPE_F32) {
-            return src0->ne[0] > 1024 ? ctx->device->pipeline_soft_max_f32_wg512 : ctx->device->pipeline_soft_max_f32;
+            const bool use_wg512 = src0->ne[0] > 1024 && ctx->device->vendor_id != VK_VENDOR_ID_QUALCOMM;
+            return use_wg512 ? ctx->device->pipeline_soft_max_f32_wg512 : ctx->device->pipeline_soft_max_f32;
         }
         if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F32) {
-            return src0->ne[0] > 1024 ? ctx->device->pipeline_soft_max_f32_f16_wg512 : ctx->device->pipeline_soft_max_f32_f16;
+            const bool use_wg512 = src0->ne[0] > 1024 && ctx->device->vendor_id != VK_VENDOR_ID_QUALCOMM;
+            return use_wg512 ? ctx->device->pipeline_soft_max_f32_f16_wg512 : ctx->device->pipeline_soft_max_f32_f16;
         }
         return nullptr;
     case GGML_OP_SOFT_MAX_BACK:
@@ -14030,7 +14050,15 @@ static size_t ggml_backend_vk_buffer_type_get_alignment(ggml_backend_buffer_type
 
 static size_t ggml_backend_vk_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
     ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
-    return ctx->device->suballocation_block_size;
+    size_t alloc_block = ctx->device->suballocation_block_size;
+    // Adreno (Qualcomm) can't bind a single descriptor larger than
+    // maxStorageBufferRange (128 MiB), so cap there; other vendors keep
+    // the full suballocation block size.
+    if (ctx->device->vendor_id != VK_VENDOR_ID_QUALCOMM) {
+        return alloc_block;
+    }
+    size_t desc_range = ctx->device->properties.limits.maxStorageBufferRange;
+    return std::min(alloc_block, desc_range);
 }
 
 static size_t ggml_backend_vk_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
@@ -15993,6 +16021,11 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
         case GGML_OP_FLASH_ATTN_EXT:
             {
+                // Adreno (Qualcomm) fails to compile every flash_attn variant;
+                // return false to route flash-attention ops to CPU.
+                if (device->vendor_id == VK_VENDOR_ID_QUALCOMM) {
+                    return false;
+                }
                 bool coopmat2 = device->coopmat2;
                 uint32_t HSK = op->src[1]->ne[0];
                 uint32_t HSV = op->src[2]->ne[0];
