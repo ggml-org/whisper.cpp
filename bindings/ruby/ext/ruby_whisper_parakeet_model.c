@@ -62,8 +62,8 @@ ruby_whisper_parakeet_model_s_new(VALUE context)
   ruby_whisper_parakeet_model_get_##name(VALUE self) \
   { \
     ruby_whisper_parakeet_model *rwpm; \
-    GetParakeetModel(self, rwpm); \
     ruby_whisper_parakeet_context *rwpc; \
+    GetParakeetModel(self, rwpm); \
     GetParakeetContext(rwpm->context, rwpc); \
     return INT2NUM(parakeet_model_##name(rwpc->context)); \
   }
