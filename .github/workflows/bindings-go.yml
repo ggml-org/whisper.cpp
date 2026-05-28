@@ -3,11 +3,11 @@ on:
   push:
     paths:
       - bindings/go/**
-      - whisper.h
+      - include/whisper.h
   pull_request:
     paths:
       - bindings/go/**
-      - whisper.h
+      - include/whisper.h
 
 jobs:
   ubuntu-22:
