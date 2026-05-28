@@ -7,12 +7,16 @@ on:
     paths:
       - bindings/ruby/**
       - include/whisper.h
+      - examples/common-whisper.h
+      - ggml/include/ggml.h
 
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
       - bindings/ruby/**
       - include/whisper.h
+      - examples/common-whisper.h
+      - ggml/include/ggml.h
 
 jobs:
   ubuntu-22:
