@@ -455,7 +455,12 @@ module Whisper
     def abort_on: { (Object user_data) -> boolish } -> void
   end
 
+  module LogSettable
+  end
+
   module Parakeet
+    extend LogSettable
+
     # Control logging output. The default behavior is to print to stderr.
     #
     def self.log_set: (nil, Object? user_data) -> nil
