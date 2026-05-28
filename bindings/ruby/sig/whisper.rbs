@@ -155,12 +155,12 @@ module Whisper
 
     class Params
       def self.new: (
-        use_gpu: boolish,
-        flash_attn: boolish,
-        gpu_device: Integer,
-        dtw_token_timestamps: boolish,
-        dtw_aheads_preset: Integer,
-        dtw_n_top: Integer | nil,
+        ?use_gpu: boolish,
+        ?flash_attn: boolish,
+        ?gpu_device: Integer,
+        ?dtw_token_timestamps: boolish,
+        ?dtw_aheads_preset: Integer,
+        ?dtw_n_top: Integer | nil,
       ) -> instance
 
       def use_gpu=: (boolish) -> boolish
