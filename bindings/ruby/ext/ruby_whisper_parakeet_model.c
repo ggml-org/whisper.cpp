@@ -21,9 +21,18 @@ ruby_whisper_parakeet_model_mark(void *p)
   }
 }
 
+static size_t
+ruby_whisper_parakeet_model_memsize(const void *p)
+{
+  if (!p) {
+    return 0;
+  }
+  return sizeof(ruby_whisper_parakeet_model);
+}
+
 static const rb_data_type_t ruby_whisper_parakeet_model_type = {
   "ruby_whisper_parakeet_model",
-  {ruby_whisper_parakeet_model_mark, RUBY_DEFAULT_FREE,},
+  {ruby_whisper_parakeet_model_mark, RUBY_DEFAULT_FREE, ruby_whisper_parakeet_model_memsize},
   0, 0,
   0
 };
