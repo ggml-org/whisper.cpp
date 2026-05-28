@@ -40,7 +40,21 @@ module Whisper
   def self.log_set: (log_callback?, Object? user_data) -> log_callback
   def self.system_info_str: () -> String
 
+  module Output
+    module Context
+      def to_srt: () -> String
+      def to_webvtt: () -> String
+    end
+
+    module Segment
+      def to_srt_cue: () -> String
+      def to_webvtt_cue: () -> String
+    end
+  end
+
   class Context
+    include Output::Context
+
     def self.new: (String | path | ::URI::HTTP) -> instance
 
     # transcribe a single file
@@ -138,9 +152,6 @@ module Whisper
     def full_parallel: (Whisper::Params, Array[Float], ?Integer n_samples) -> self
                      | (Whisper::Params, _Samples, ?Integer n_samples) -> self
                      | (Whisper::Params, _Samples, ?Integer? n_samples, Integer n_processors) -> self
-
-    def to_srt: () -> String
-    def to_webvtt: () -> String
 
     class Params
       def self.new: (
@@ -451,6 +462,8 @@ module Whisper
                     | (^(Integer level, String message, Object user_data) -> void, Object? user_data) -> nil
 
     class Context
+      include Output::Context
+
       # Load a Parakeet model from the given file path.
       #
       def self.new: (String | path | ::URI::HTTP) -> instance
@@ -525,9 +538,6 @@ module Whisper
       #
       def each_segment: { (Segment) -> void } -> void
                       | () -> Enumerator[Segment]
-
-      def to_srt: () -> String
-      def to_webvtt: () -> String
     end
 
     class Params
@@ -672,6 +682,8 @@ module Whisper
     end
 
     class Segment
+      include Output::Segment
+
       type deconstructed_keys = {
         start_time: (Integer | nil),
         end_time: (Integer | nil),
@@ -796,6 +808,8 @@ module Whisper
   end
 
   class Segment
+    include Output::Segment
+
     type deconstructed_keys = {
       start_time: (Integer | nil),
       end_time: (Integer | nil),
@@ -836,9 +850,6 @@ module Whisper
     #
     def each_token: { (Token) -> void } -> void
                   | () -> Enumerator[Token]
-    def to_srt_cue: () -> String
-    def to_webvtt_cue: () -> String
-
 
     #  Possible keys: `:start_time`, `:end_time`, `:text`, `:no_speech_prob`, `:speaker_turn_next`
     #
