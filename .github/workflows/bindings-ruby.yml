@@ -4,8 +4,15 @@ on:
   push:
     branches:
       - master
+    paths:
+      - bindings/ruby/**
+      - include/whisper.h
+
   pull_request:
     types: [opened, synchronize, reopened]
+    paths:
+      - bindings/ruby/**
+      - include/whisper.h
 
 jobs:
   ubuntu-22:
