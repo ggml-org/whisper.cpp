@@ -16,7 +16,7 @@ static void
 ruby_whisper_parakeet_model_mark(void *p)
 {
   ruby_whisper_parakeet_model *rwpm = (ruby_whisper_parakeet_model *)p;
-  if (rwpm->context) {
+  if (!NIL_P(rwpm->context)) {
     rb_gc_mark(rwpm->context);
   }
 }
