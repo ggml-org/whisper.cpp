@@ -681,6 +681,8 @@ module Whisper
       #
       def full_get_token_data: (Integer segment_index, Integer token_index) -> Token
 
+      def model: () -> Model
+
       # Yields each Whisper::Parakeet::Segment:
       #
       #     parakeet.transcribe("path/to/audio.wav", params)
