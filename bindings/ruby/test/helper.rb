@@ -2,10 +2,10 @@ require "test/unit"
 require "whisper"
 require_relative "jfk_reader/jfk_reader"
 
-Parakeet = Whisper::Parakeet
-
 class TestBase < Test::Unit::TestCase
   AUDIO = File.join(__dir__, "fixtures", "jfk.wav")
+
+  Parakeet = Whisper::Parakeet
 
   class << self
     def whisper
