@@ -163,33 +163,33 @@ static char * requires_value_error(const std::string & arg) {
     exit(0);
 }
 
-static std::vector<std::string> split_language_candidates(const std::string & input) {
+static std::vector<std::string> string_split(const std::string & input, char separator) {
     std::vector<std::string> result;
     size_t start = 0;
 
     while (start <= input.size()) {
-        const size_t comma = input.find(',', start);
-        const std::string token = input.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+        const size_t next = input.find(separator, start);
+        const std::string token = input.substr(start, next == std::string::npos ? std::string::npos : next - start);
         result.push_back(token);
 
-        if (comma == std::string::npos) {
+        if (next == std::string::npos) {
             break;
         }
 
-        start = comma + 1;
+        start = next + 1;
     }
 
     return result;
 }
 
-static std::string join_language_candidates(const std::vector<std::string> & candidates) {
+static std::string string_join(const std::vector<std::string> & values, const std::string & separator) {
     std::string joined;
 
-    for (size_t i = 0; i < candidates.size(); ++i) {
+    for (size_t i = 0; i < values.size(); ++i) {
         if (i > 0) {
-            joined += ",";
+            joined += separator;
         }
-        joined += candidates[i];
+        joined += values[i];
     }
 
     return joined;
@@ -259,7 +259,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-l"    || arg == "--language")             { params.language        = whisper_param_turn_lowercase(ARGV_NEXT); }
         else if (arg == "-dl"   || arg == "--detect-language")      { params.detect_language = true; }
         else if (                  arg == "--language-candidates")  {
-            params.language_candidates = split_language_candidates(whisper_param_turn_lowercase(ARGV_NEXT));
+            params.language_candidates = string_split(whisper_param_turn_lowercase(ARGV_NEXT), ',');
         }
         else if (                  arg == "--prompt")               { params.prompt          = ARGV_NEXT; }
         else if (                  arg == "--carry-initial-prompt") { params.carry_initial_prompt = true; }
@@ -343,7 +343,7 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  -nt,       --no-timestamps        [%-7s] do not print timestamps\n",                        params.no_timestamps ? "true" : "false");
     fprintf(stderr, "  -l LANG,   --language LANG        [%-7s] spoken language ('auto' for auto-detect)\n",       params.language.c_str());
     fprintf(stderr, "  -dl,       --detect-language      [%-7s] exit after automatically detecting language\n",    params.detect_language ? "true" : "false");
-    fprintf(stderr, "             --language-candidates  [%-7s] comma-separated language codes for constrained auto-detect\n", join_language_candidates(params.language_candidates).c_str());
+    fprintf(stderr, "             --language-candidates  [%-7s] comma-separated language codes for constrained auto-detect\n", string_join(params.language_candidates, ",").c_str());
     fprintf(stderr, "             --prompt PROMPT        [%-7s] initial prompt (max n_text_ctx/2 tokens)\n",       params.prompt.c_str());
     fprintf(stderr, "             --carry-initial-prompt [%-7s] always prepend initial prompt\n",                  params.carry_initial_prompt ? "true" : "false");
     fprintf(stderr, "  -m FNAME,  --model FNAME          [%-7s] model path\n",                                     params.model.c_str());
@@ -1278,7 +1278,7 @@ int main(int argc, char ** argv) {
         }
 
         if (!params.no_prints) {
-            const std::string candidate_summary = join_language_candidates(params.language_candidates);
+            const std::string candidate_summary = string_join(params.language_candidates, ",");
             // print system information
             fprintf(stderr, "\n");
             fprintf(stderr, "system_info: n_threads = %d / %d | %s\n",
