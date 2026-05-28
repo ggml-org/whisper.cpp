@@ -781,6 +781,16 @@ module Whisper
 
       def deconstruct_keys: (Array[:id | :duration_idx | :duration_value | :frame_index | :probability | :log_probability | :start_time | :end_time | :word_start | :text] | nil) -> deconstructed_keys
     end
+
+    class Model
+      def n_vocab: () -> Integer
+      def n_audio_ctx: () -> Integer
+      def n_audio_state: () -> Integer
+      def n_audio_head: () -> Integer
+      def n_audio_layer: () -> Integer
+      def n_mels: () -> Integer
+      def ftype: () -> Integer
+    end
   end
 
   class Model
