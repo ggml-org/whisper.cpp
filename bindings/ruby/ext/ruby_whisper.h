@@ -140,6 +140,10 @@ typedef struct {
   VALUE text;
 } ruby_whisper_parakeet_token;
 
+typedef struct {
+  VALUE context;
+} ruby_whisper_parakeet_model;
+
 #define GetContext(obj, rw) do { \
   TypedData_Get_Struct((obj), ruby_whisper, &ruby_whisper_type, (rw)); \
   if ((rw)->context == NULL) { \
@@ -204,6 +208,13 @@ typedef struct {
 #define GetParakeetToken(obj, rwpt) do { \
   TypedData_Get_Struct((obj), ruby_whisper_parakeet_token, &ruby_whisper_parakeet_token_type, (rwpt)); \
   if (!(rwpt)->token_data) { \
+    rb_raise(rb_eRuntimeError, "Not initialized"); \
+  } \
+} while (0)
+
+#define GetParakeetModel(obj, rwpm) do { \
+  TypedData_Get_Struct((obj), ruby_whisper_parakeet_model, &ruby_whisper_parakeet_model_type, (rwpm)); \
+  if (NIL_P((rwpm)->context)) { \
     rb_raise(rb_eRuntimeError, "Not initialized"); \
   } \
 } while (0)

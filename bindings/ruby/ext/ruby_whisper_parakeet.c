@@ -18,6 +18,7 @@ extern void init_ruby_whisper_parakeet_params(VALUE *mParakeet);
 extern void init_ruby_whisper_parakeet_token(VALUE *mParakeet);
 extern void init_ruby_whisper_parakeet_segment(VALUE *mParakeet);
 extern void init_ruby_whisper_parakeet_context(VALUE *mParakeet);
+extern void init_ruby_whisper_parakeet_model(VALUE *mParakeet);
 
 extern void ruby_whisper_log_queue_initialize(ruby_whisper_log_queue *log_queue);
 extern void ruby_whisper_log_queue_open(ruby_whisper_log_queue *log_queue);
@@ -84,6 +85,7 @@ init_ruby_whisper_parakeet(VALUE *mWhisper)
   init_ruby_whisper_parakeet_token(&mParakeet);
   init_ruby_whisper_parakeet_segment(&mParakeet);
   init_ruby_whisper_parakeet_context(&mParakeet);
+  init_ruby_whisper_parakeet_model(&mParakeet);
 
   rb_include_module(cParakeetContext, mOutputContext);
   rb_include_module(cParakeetSegment, mOutputSegment);

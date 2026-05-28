@@ -13,6 +13,7 @@ VALUE cVADSegment;
 VALUE cParakeetContext;
 VALUE cParakeetParams;
 VALUE cParakeetSegment;
+VALUE cParakeetModel;
 VALUE eError;
 
 VALUE cSegment;

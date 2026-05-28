@@ -33,6 +33,7 @@ extern VALUE release_samples(VALUE rb_parsed_args);
 extern void ruby_whisper_parakeet_prepare_transcription(ruby_whisper_parakeet_params *rwpp, VALUE *context, ruby_whisper_abort_callback_user_data *abort_callback_user_data);
 extern rb_data_type_t ruby_whisper_parakeet_params_type;
 extern VALUE ruby_whisper_parakeet_token_s_from_token_data(struct parakeet_context *context, const parakeet_token_data *token_data);
+extern VALUE ruby_whisper_parakeet_model_s_new(VALUE context);
 
 static void
 ruby_whisper_parakeet_context_free(void *p)
@@ -256,6 +257,12 @@ ruby_whisper_parakeet_context_full(int argc, VALUE *argv, VALUE self)
   }
 }
 
+static VALUE
+ruby_whisper_parakeet_context_get_model(VALUE self)
+{
+  return ruby_whisper_parakeet_model_s_new(self);
+}
+
 void
 init_ruby_whisper_parakeet_context(VALUE *mParakeet)
 {
@@ -267,6 +274,7 @@ init_ruby_whisper_parakeet_context(VALUE *mParakeet)
   rb_define_method(cParakeetContext, "transcribe", ruby_whisper_parakeet_transcribe, 2);
   rb_define_method(cParakeetContext, "full_n_segments", ruby_whisper_parakeet_context_full_n_segments, 0);
   rb_define_method(cParakeetContext, "full_get_token_data", ruby_whisper_parakeet_context_full_get_token_data, 2);
+  rb_define_method(cParakeetContext, "model", ruby_whisper_parakeet_context_get_model, 0);
   rb_define_method(cParakeetContext, "each_segment", ruby_whisper_parakeet_context_each_segment, 0);
   rb_define_method(cParakeetContext, "full", ruby_whisper_parakeet_context_full, -1);
 
