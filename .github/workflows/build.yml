@@ -28,6 +28,9 @@ on:
 
   pull_request:
     types: [opened, synchronize, reopened]
+    paths-ignore:
+      - 'bindings/ruby/**' # handled by bindings-ruby.yml
+      - 'bindings/go/**'   # handled by bindings-go.yml
   workflow_dispatch:
     inputs:
       create_release:
