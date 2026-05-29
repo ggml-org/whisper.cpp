@@ -618,6 +618,7 @@ module Whisper
     #
     def self.log_set: (nil, Object? user_data) -> nil
                     | (^(Integer level, String message, Object user_data) -> void, Object? user_data) -> nil
+    def self.system_info_str: () -> String
 
     class Context
       include Output::Context
