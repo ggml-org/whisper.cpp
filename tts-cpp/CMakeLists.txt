@@ -642,7 +642,8 @@ if (TTS_CPP_BUILD_TESTS)
         "ja|こんにちは、これは多言語の音声合成テストです。|tier2"
         "he|שלום, זוהי בדיקת סינתזת דיבור רב-לשונית.|tier2"
         "ru|Привет, это многоязычный тест синтеза речи.|tier2"
-        "zh|你好，这是一个多语言语音合成测试。|tier2"
+        # zh intentionally omitted: Cangjie preprocessing yields ~97% CER and
+        # is excluded from mtl_tokenizer::supported_languages() until reworked.
         "hi|नमस्ते, यह एक बहुभाषी वाक् संश्लेषण परीक्षण है।|tier2"
     )
     set(_mtl_out_dir "${CMAKE_BINARY_DIR}/test-multilingual-out")

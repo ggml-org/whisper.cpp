@@ -446,9 +446,15 @@ struct json_parser {
 // use (no static-init-order coupling) and benefit from C++11's thread-safe
 // local-static initialisation.
 const std::vector<std::string> & mtl_tokenizer::supported_languages() {
+    // `zh` is intentionally absent: the Cangjie-based Chinese preprocessing
+    // currently yields ~97% CER (effectively unusable) and needs a rework
+    // before it can ship. The CangjieTable infrastructure + build_cangjie_tsv.py
+    // are kept so re-enabling is just adding "zh" back here once the approach
+    // is fixed. `zh` stays in all_known_languages() because the Python
+    // reference tokenizer still accepts it.
     static const std::vector<std::string> k_supported = {
         "en","es","fr","de","it","pt","nl","pl","tr","sv","da","fi","no","el",
-        "ms","sw","ar","ko","ja","he","ru","zh","hi"
+        "ms","sw","ar","ko","ja","he","ru","hi"
     };
     return k_supported;
 }
@@ -722,6 +728,14 @@ std::string preprocess_chinese(const std::string & text) {
 
 std::string apply_language_preprocessing(const std::string & text,
                                           const std::string & language_id) {
+    // Only `ja` (MeCab) and `zh` (Cangjie) need word/character-level
+    // preprocessing applied *before* normalization. `ko` is handled later
+    // in encode() via korean_normalize() (Hangul -> Jamo decomposition with
+    // the reference's trailing-whitespace trim), which is why the otherwise
+    // equivalent text_preprocess::decompose_korean_to_jamo() helper is not
+    // wired in here. That helper is kept in the public text_preprocess header
+    // as a standalone primitive for consumers that want Jamo decomposition
+    // without the full tokenizer pipeline.
     if (language_id == "ja") return preprocess_japanese(text);
     if (language_id == "zh") return preprocess_chinese(text);
     return text;
