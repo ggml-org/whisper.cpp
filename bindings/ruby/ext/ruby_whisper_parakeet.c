@@ -78,6 +78,8 @@ init_ruby_whisper_parakeet(VALUE *mWhisper)
 {
   mParakeet = rb_define_module_under(*mWhisper, "Parakeet");
 
+  rb_define_const(mParakeet, "VERSION", rb_str_new2(parakeet_version()));
+
   ruby_whisper_log_queue_initialize(&parakeet_log_queue);
 
   rb_define_singleton_method(mParakeet, "log_set", ruby_whisper_parakeet_s_log_set, 2);
