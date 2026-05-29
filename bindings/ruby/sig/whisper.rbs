@@ -627,7 +627,7 @@ module Whisper
 
       # Load a Parakeet model from the given file path.
       #
-      def self.new: (String | path | ::URI::HTTP) -> instance
+      def self.new: (String | path | ::URI::HTTP, ?Params) -> instance
 
       # Transcribe a single audio file.
       #
