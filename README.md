@@ -95,6 +95,14 @@ The command downloads the `base.en` model converted to custom `ggml` format and 
 
 For detailed usage instructions, run: `./build/bin/whisper-cli -h`
 
+If you want auto-detect to choose from a known subset of languages, use `--language auto` together with `--language-candidates`. For example, to constrain detection to Indonesian or Arabic and prevent fallback to another languages such as Malay from being selected:
+
+```bash
+./build/bin/whisper-cli -m models/ggml-base.bin --language auto --language-candidates id,ar -f input.wav
+```
+
+If you already know the exact language, prefer a fixed language such as `--language id` instead of auto-detect.
+
 Note that the [whisper-cli](examples/cli) example currently runs only with 16-bit WAV files, so make sure to convert your input before running the tool.
 For example, you can use `ffmpeg` like this:
 
