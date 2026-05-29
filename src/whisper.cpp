@@ -3996,33 +3996,11 @@ int whisper_lang_id(const char * lang) {
     return g_lang.at(lang).first;
 }
 
-const char * whisper_lang_str(int id) {
-    for (const auto & kv : g_lang) {
-        if (kv.second.first == id) {
-            return kv.first.c_str();
-        }
-    }
-
-    WHISPER_LOG_ERROR("%s: unknown language id %d\n", __func__, id);
-    return nullptr;
-}
-
-const char * whisper_lang_str_full(int id) {
-   for (const auto & kv : g_lang) {
-        if (kv.second.first == id) {
-            return kv.second.second.c_str();
-        }
-    }
-
-    WHISPER_LOG_ERROR("%s: unknown language id %d\n", __func__, id);
-    return nullptr;
-}
-
 int whisper_lang_candidates_to_ids(
-        const char * func_name,
-        const char * const * language_candidates,
-        int n_language_candidates,
-        std::vector<int> & lang_ids) {
+                    const char * func_name,
+                    const char * const * language_candidates,
+                           int   n_language_candidates,
+              std::vector<int> & lang_ids) {
     lang_ids.clear();
 
     if (n_language_candidates < 0) {
@@ -4068,6 +4046,28 @@ int whisper_lang_candidates_to_ids(
     return 0;
 }
 
+const char * whisper_lang_str(int id) {
+    for (const auto & kv : g_lang) {
+        if (kv.second.first == id) {
+            return kv.first.c_str();
+        }
+    }
+
+    WHISPER_LOG_ERROR("%s: unknown language id %d\n", __func__, id);
+    return nullptr;
+}
+
+const char * whisper_lang_str_full(int id) {
+   for (const auto & kv : g_lang) {
+        if (kv.second.first == id) {
+            return kv.second.second.c_str();
+        }
+    }
+
+    WHISPER_LOG_ERROR("%s: unknown language id %d\n", __func__, id);
+    return nullptr;
+}
+
 static int whisper_lang_auto_detect_impl(
                     const char * func_name,
         struct whisper_context * ctx,
@@ -4077,11 +4077,6 @@ static int whisper_lang_auto_detect_impl(
             const char * const * language_candidates,
                            int   n_language_candidates,
                          float * lang_probs) {
-    if (n_language_candidates > 0 && !whisper_is_multilingual(ctx)) {
-        WHISPER_LOG_ERROR("%s: constrained auto-detect requires a multilingual model\n", func_name);
-        return -5;
-    }
-
     std::vector<int> lang_ids;
     const int candidates_result = whisper_lang_candidates_to_ids(func_name, language_candidates, n_language_candidates, lang_ids);
     if (candidates_result != 0) {
