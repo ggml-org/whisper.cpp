@@ -17,4 +17,8 @@ class TestParakeet < TestBase
     $stdout = STDOUT
     Parakeet.log_set log_callback, user_data
   end
+
+  def test_system_info_str
+    assert_match /\APARAKEET : MTL : EMBED_LIBRARY = \d \| CPU : NEON = \d \|/, Parakeet.system_info_str
+  end
 end
