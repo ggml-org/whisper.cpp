@@ -114,10 +114,14 @@ struct whisper_params {
     std::string prompt                 = "";
     std::string font_path              = "/System/Library/Fonts/Supplemental/Courier New Bold.ttf";
     std::string model                  = "models/ggml-base.en.bin";
+    std::string diarize_model          = "";
     std::string response_format        = json_format;
     std::string tdrz_speaker_turn      = " [SPEAKER_TURN]"; // TODO: set from command line
     std::string openvino_encode_device = "CPU";
     std::string dtw                    = "";
+
+    float diarize_threshold = 0.70f;
+    int   diarize_speakers  = 0;
 
     // Voice Activity Detection (VAD) parameters
     bool        vad                         = false;
@@ -152,7 +156,10 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -lpt N,    --logprob-thold N           [%-7.2f] log probability threshold for decoder fail\n",   params.logprob_thold);
     fprintf(stderr, "  -debug,    --debug-mode                [%-7s] enable debug mode (eg. dump log_mel)\n",           params.debug_mode ? "true" : "false");
     fprintf(stderr, "  -tr,       --translate                 [%-7s] translate from source language to english\n",      params.translate ? "true" : "false");
-    fprintf(stderr, "  -di,       --diarize                   [%-7s] stereo audio diarization\n",                       params.diarize ? "true" : "false");
+    fprintf(stderr, "  -di,       --diarize                   [%-7s] enable speaker diarization\n",                     params.diarize ? "true" : "false");
+    fprintf(stderr, "             --diarize-model FNAME       [%-7s] speaker embedding model path (GGML .bin)\n",        params.diarize_model.c_str());
+    fprintf(stderr, "             --diarize-threshold N       [%-7.2f] clustering distance threshold\n",                 params.diarize_threshold);
+    fprintf(stderr, "             --diarize-speakers N        [%-7d] target speaker count (0 = auto)\n",                  params.diarize_speakers);
     fprintf(stderr, "  -tdrz,     --tinydiarize               [%-7s] enable tinydiarize (requires a tdrz model)\n",     params.tinydiarize ? "true" : "false");
     fprintf(stderr, "  -nf,       --no-fallback               [%-7s] do not use temperature fallback while decoding\n", params.no_fallback ? "true" : "false");
     fprintf(stderr, "  -ps,       --print-special             [%-7s] print special tokens\n",                           params.print_special ? "true" : "false");
@@ -223,6 +230,9 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params, serve
         else if (arg == "-debug" || arg == "--debug-mode")                { params.debug_mode                = true; }
         else if (arg == "-tr"    || arg == "--translate")                 { params.translate                 = true; }
         else if (arg == "-di"    || arg == "--diarize")                   { params.diarize                   = true; }
+        else if (                   arg == "--diarize-model")             { params.diarize_model             = argv[++i]; params.diarize = true; }
+        else if (                   arg == "--diarize-threshold")         { params.diarize_threshold         = std::stof(argv[++i]); }
+        else if (                   arg == "--diarize-speakers")          { params.diarize_speakers          = std::stoi(argv[++i]); }
         else if (arg == "-tdrz"  || arg == "--tinydiarize")               { params.tinydiarize               = true; }
         else if (arg == "-sow"   || arg == "--split-on-word")             { params.split_on_word             = true; }
         else if (arg == "-nf"    || arg == "--no-fallback")               { params.no_fallback               = true; }
@@ -341,6 +351,16 @@ bool convert_to_wav(const std::string & temp_filename, std::string & error_resp,
     return true;
 }
 
+static bool use_model_diarization(const whisper_params & params) {
+    return params.diarize && !params.diarize_model.empty();
+}
+
+static bool use_stereo_diarization(
+        const whisper_params & params,
+        const std::vector<std::vector<float>> & pcmf32s) {
+    return params.diarize && params.diarize_model.empty() && pcmf32s.size() == 2;
+}
+
 std::string estimate_diarization_speaker(const std::vector<std::vector<float>> & pcmf32s, int64_t t0, int64_t t1, bool id_only = false) {
     std::string speaker = "";
     const int64_t n_samples = pcmf32s[0].size();
@@ -372,6 +392,45 @@ std::string estimate_diarization_speaker(const std::vector<std::vector<float>> &
     }
 
     return speaker;
+}
+
+static std::string get_segment_speaker_id(
+        struct whisper_context * ctx,
+        const whisper_params & params,
+        const std::vector<std::vector<float>> & pcmf32s,
+        int i_segment) {
+    if (!params.diarize) {
+        return "";
+    }
+
+    if (use_model_diarization(params)) {
+        const int speaker_id = whisper_full_get_segment_speaker_id(ctx, i_segment);
+        return speaker_id >= 0 ? std::to_string(speaker_id) : "";
+    }
+
+    if (use_stereo_diarization(params, pcmf32s)) {
+        const int64_t t0 = whisper_full_get_segment_t0(ctx, i_segment);
+        const int64_t t1 = whisper_full_get_segment_t1(ctx, i_segment);
+        return estimate_diarization_speaker(pcmf32s, t0, t1, true);
+    }
+
+    return "";
+}
+
+static std::string format_segment_speaker_label(const std::string & speaker_id) {
+    if (speaker_id.empty()) {
+        return "";
+    }
+
+    return "(speaker " + speaker_id + ")";
+}
+
+static std::string format_segment_speaker_vtt(const std::string & speaker_id) {
+    if (speaker_id.empty()) {
+        return "";
+    }
+
+    return "<v Speaker" + speaker_id + ">";
 }
 
 void whisper_print_progress_callback(struct whisper_context * /*ctx*/, struct whisper_state * /*state*/, int progress, void * user_data) {
@@ -411,9 +470,7 @@ void whisper_print_segment_callback(struct whisper_context * ctx, struct whisper
             printf("[%s --> %s]  ", to_timestamp(t0).c_str(), to_timestamp(t1).c_str());
         }
 
-        if (params.diarize && pcmf32s.size() == 2) {
-            speaker = estimate_diarization_speaker(pcmf32s, t0, t1);
-        }
+        speaker = format_segment_speaker_label(get_segment_speaker_id(ctx, params, pcmf32s, i));
 
         if (params.print_colors) {
             for (int j = 0; j < whisper_full_n_tokens(ctx, i); ++j) {
@@ -456,14 +513,7 @@ std::string output_str(struct whisper_context * ctx, const whisper_params & para
     const int n_segments = whisper_full_n_segments(ctx);
     for (int i = 0; i < n_segments; ++i) {
         const char * text = whisper_full_get_segment_text(ctx, i);
-        std::string speaker = "";
-
-        if (params.diarize && pcmf32s.size() == 2)
-        {
-            const int64_t t0 = whisper_full_get_segment_t0(ctx, i);
-            const int64_t t1 = whisper_full_get_segment_t1(ctx, i);
-            speaker = estimate_diarization_speaker(pcmf32s, t0, t1);
-        }
+        const std::string speaker = format_segment_speaker_label(get_segment_speaker_id(ctx, params, pcmf32s, i));
 
         result << speaker << text << "\n";
     }
@@ -538,6 +588,19 @@ void get_req_parameters(const Request & req, whisper_params & params)
     if (req.has_file("diarize"))
     {
         params.diarize = parse_str_to_bool(req.get_file_value("diarize").content);
+    }
+    if (req.has_file("diarize_model"))
+    {
+        params.diarize_model = req.get_file_value("diarize_model").content;
+        params.diarize = true;
+    }
+    if (req.has_file("diarize_threshold"))
+    {
+        params.diarize_threshold = std::stof(req.get_file_value("diarize_threshold").content);
+    }
+    if (req.has_file("diarize_speakers"))
+    {
+        params.diarize_speakers = std::stoi(req.get_file_value("diarize_speakers").content);
     }
     if (req.has_file("tinydiarize"))
     {
@@ -650,6 +713,12 @@ int main(int argc, char ** argv) {
 
     if (params.diarize && params.tinydiarize) {
         fprintf(stderr, "error: cannot use both --diarize and --tinydiarize\n");
+        whisper_print_usage(argc, argv, params, sparams);
+        exit(0);
+    }
+
+    if (params.diarize_speakers < 0) {
+        fprintf(stderr, "error: --diarize-speakers must be >= 0\n");
         whisper_print_usage(argc, argv, params, sparams);
         exit(0);
     }
@@ -838,6 +907,7 @@ int main(int argc, char ** argv) {
         // audio arrays
         std::vector<float> pcmf32;               // mono-channel F32 PCM
         std::vector<std::vector<float>> pcmf32s; // stereo-channel F32 PCM
+        const bool needs_stereo_diarization = params.diarize && params.diarize_model.empty();
 
         if (sparams.ffmpeg_converter) {
             // if file is not wav, convert to wav
@@ -848,7 +918,7 @@ int main(int argc, char ** argv) {
             temp_file.close();
 
             std::string error_resp = "{\"error\":\"Failed to execute ffmpeg command.\"}";
-            const bool is_converted = convert_to_wav(temp_filename, error_resp, params.diarize);
+            const bool is_converted = convert_to_wav(temp_filename, error_resp, needs_stereo_diarization);
             if (!is_converted) {
                 res.status = 500;
                 res.set_content(error_resp, "application/json");
@@ -856,7 +926,7 @@ int main(int argc, char ** argv) {
             }
 
             // read audio content into pcmf32
-            if (!::read_audio_data(temp_filename, pcmf32, pcmf32s, params.diarize))
+            if (!::read_audio_data(temp_filename, pcmf32, pcmf32s, needs_stereo_diarization))
             {
                 fprintf(stderr, "error: failed to read WAV file '%s'\n", temp_filename.c_str());
                 const std::string error_resp = "{\"error\":\"failed to read WAV file\"}";
@@ -868,7 +938,7 @@ int main(int argc, char ** argv) {
             // remove temp file
             std::remove(temp_filename.c_str());
         } else {
-            if (!::read_audio_data(audio_file.content.data(), audio_file.content.size(), pcmf32, pcmf32s, params.diarize)) {
+            if (!::read_audio_data(audio_file.content.data(), audio_file.content.size(), pcmf32, pcmf32s, needs_stereo_diarization)) {
                 fprintf(stderr, "error: failed to read audio data\n");
                 const std::string error_resp = "{\"error\":\"failed to read audio data\"}";
                 res.status = 400;
@@ -904,7 +974,7 @@ int main(int argc, char ** argv) {
                     params.n_threads, params.n_processors,
                     params.language.c_str(),
                     params.translate ? "translate" : "transcribe",
-                    params.tinydiarize ? "tdrz = 1, " : "",
+                    params.tinydiarize ? "tdrz = 1, " : (params.diarize ? "diarize = 1, " : ""),
                     params.no_timestamps ? 0 : 1);
 
             fprintf(stderr, "\n");
@@ -937,6 +1007,10 @@ int main(int argc, char ** argv) {
             wparams.debug_mode       = params.debug_mode;
 
             wparams.tdrz_enable      = params.tinydiarize; // [TDRZ]
+            wparams.diarize          = use_model_diarization(params);
+            wparams.diarize_model_path = params.diarize_model.empty() ? nullptr : params.diarize_model.c_str();
+            wparams.diarize_threshold = params.diarize_threshold;
+            wparams.diarize_speakers  = params.diarize_speakers;
 
             wparams.initial_prompt   = params.prompt.c_str();
             wparams.carry_initial_prompt = params.carry_initial_prompt;
@@ -1018,12 +1092,7 @@ int main(int argc, char ** argv) {
                 const char * text = whisper_full_get_segment_text(ctx, i);
                 const int64_t t0 = whisper_full_get_segment_t0(ctx, i);
                 const int64_t t1 = whisper_full_get_segment_t1(ctx, i);
-                std::string speaker = "";
-
-                if (params.diarize && pcmf32s.size() == 2)
-                {
-                    speaker = estimate_diarization_speaker(pcmf32s, t0, t1);
-                }
+                const std::string speaker = format_segment_speaker_label(get_segment_speaker_id(ctx, params, pcmf32s, i));
 
                 ss << i + 1 + params.offset_n << "\n";
                 ss << to_timestamp(t0, true) << " --> " << to_timestamp(t1, true) << "\n";
@@ -1040,14 +1109,7 @@ int main(int argc, char ** argv) {
                 const char * text = whisper_full_get_segment_text(ctx, i);
                 const int64_t t0 = whisper_full_get_segment_t0(ctx, i);
                 const int64_t t1 = whisper_full_get_segment_t1(ctx, i);
-                std::string speaker = "";
-
-                if (params.diarize && pcmf32s.size() == 2)
-                {
-                    speaker = estimate_diarization_speaker(pcmf32s, t0, t1, true);
-                    speaker.insert(0, "<v Speaker");
-                    speaker.append(">");
-                }
+                const std::string speaker = format_segment_speaker_vtt(get_segment_speaker_id(ctx, params, pcmf32s, i));
 
                 ss << to_timestamp(t0) << " --> " << to_timestamp(t1) << "\n";
                 ss << speaker << text << "\n\n";
@@ -1084,18 +1146,15 @@ int main(int argc, char ** argv) {
                     {"id", i},
                     {"text", whisper_full_get_segment_text(ctx, i)},
                 };
+                const std::string speaker = get_segment_speaker_id(ctx, params, pcmf32s, i);
 
                 if (!params.no_timestamps) {
                     segment["start"] = whisper_full_get_segment_t0(ctx, i) * 0.01;
                     segment["end"] = whisper_full_get_segment_t1(ctx, i) * 0.01;
                 }
 
-                if (params.diarize && pcmf32s.size() == 2) {
-                    segment["speaker"] = estimate_diarization_speaker(
-                        pcmf32s,
-                        whisper_full_get_segment_t0(ctx, i),
-                        whisper_full_get_segment_t1(ctx, i),
-                        true);
+                if (!speaker.empty()) {
+                    segment["speaker"] = speaker;
                 }
 
                 float total_logprob = 0;

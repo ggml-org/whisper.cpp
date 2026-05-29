@@ -110,3 +110,104 @@ target_compile_definitions(${VAD_TEST} PRIVATE
     SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
 add_test(NAME ${VAD_TEST} COMMAND ${VAD_TEST})
 set_tests_properties(${VAD_TEST} PROPERTIES LABELS "base;en")
+
+function(whisper_add_optional_test_executable TARGET_NAME SOURCE_FILE)
+    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${SOURCE_FILE}")
+        add_executable(${TARGET_NAME} ${SOURCE_FILE} ${ARGN})
+    endif()
+endfunction()
+
+if (WHISPER_DIARIZE)
+    whisper_add_optional_test_executable(
+        test-speaker-embedding
+        test-speaker-embedding.cpp
+        ../src/whisper-diarize.cpp
+        ../src/whisper-speaker.cpp)
+    if (TARGET test-speaker-embedding)
+        target_include_directories(test-speaker-embedding PRIVATE ../include ../ggml/include)
+        target_link_libraries(test-speaker-embedding PRIVATE ggml m)
+        add_test(NAME speaker-embedding COMMAND test-speaker-embedding WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    endif()
+
+    whisper_add_optional_test_executable(
+        test-embedding-quality
+        test-embedding-quality.cpp
+        ../src/whisper-diarize.cpp
+        ../src/whisper-speaker.cpp)
+    if (TARGET test-embedding-quality)
+        target_include_directories(test-embedding-quality PRIVATE ../include ../ggml/include ../src)
+        target_link_libraries(test-embedding-quality PRIVATE ggml m)
+    endif()
+
+    whisper_add_optional_test_executable(
+        test-clustering
+        test-clustering.cpp
+        ../src/whisper-diarize.cpp
+        ../src/whisper-speaker.cpp)
+    if (TARGET test-clustering)
+        target_include_directories(test-clustering PRIVATE ../include ../ggml/include)
+        target_link_libraries(test-clustering PRIVATE ggml m)
+        target_compile_options(test-clustering PRIVATE -std=c++11 -Wall -Wextra)
+        add_test(NAME clustering COMMAND test-clustering WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    endif()
+
+    whisper_add_optional_test_executable(
+        test-diarization-integration
+        test-diarization-integration.cpp)
+    if (TARGET test-diarization-integration)
+        target_include_directories(test-diarization-integration PRIVATE ../include ../ggml/include)
+        target_link_libraries(test-diarization-integration PRIVATE whisper)
+        add_test(NAME diarization-integration COMMAND test-diarization-integration WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    endif()
+
+    whisper_add_optional_test_executable(
+        test-cli-diarization
+        test-cli-diarization.cpp)
+    if (TARGET test-cli-diarization)
+        target_include_directories(test-cli-diarization PRIVATE ../include ../examples)
+        target_link_libraries(test-cli-diarization PRIVATE whisper common)
+        target_compile_options(test-cli-diarization PRIVATE -std=c++17)
+        add_test(NAME cli-diarization COMMAND test-cli-diarization WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    endif()
+
+    whisper_add_optional_test_executable(
+        benchmark-der
+        benchmark-der.cpp)
+    if (TARGET benchmark-der)
+        target_include_directories(benchmark-der PRIVATE ../include ../ggml/include)
+        target_link_libraries(benchmark-der PRIVATE ggml m)
+        target_compile_options(benchmark-der PRIVATE -std=c++17)
+        add_test(NAME benchmark-der COMMAND benchmark-der WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        set_tests_properties(benchmark-der PROPERTIES LABELS "diarization;benchmark")
+
+        if (WHISPER_SANITIZE_ADDRESS)
+            message(STATUS "Enabling AddressSanitizer for benchmark-der")
+            target_compile_options(benchmark-der PRIVATE -fsanitize=address -fno-omit-frame-pointer)
+            target_link_options(benchmark-der PRIVATE -fsanitize=address)
+        endif()
+
+        if (WHISPER_SANITIZE_ADDRESS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            set_tests_properties(benchmark-der PROPERTIES ENVIRONMENT "ASAN_OPTIONS=detect_leaks=1:strip_path_prefix=${CMAKE_SOURCE_DIR}/")
+        endif()
+    endif()
+
+    whisper_add_optional_test_executable(
+        test-ref-compare
+        test-ref-compare.cpp
+        ../src/whisper-diarize.cpp
+        ../src/whisper-speaker.cpp)
+    if (TARGET test-ref-compare)
+        target_include_directories(test-ref-compare PRIVATE ../include ../ggml/include ../src)
+        target_link_libraries(test-ref-compare PRIVATE ggml m)
+    endif()
+
+    whisper_add_optional_test_executable(
+        test-mel-compare
+        test-mel-compare.cpp
+        ../src/whisper-diarize.cpp
+        ../src/whisper-speaker.cpp)
+    if (TARGET test-mel-compare)
+        target_include_directories(test-mel-compare PRIVATE ../include ../ggml/include ../src)
+        target_link_libraries(test-mel-compare PRIVATE ggml m)
+    endif()
+endif()
