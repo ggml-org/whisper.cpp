@@ -4202,6 +4202,14 @@ const char * whisper_token_to_str(struct whisper_context * ctx, whisper_token to
     return ctx->vocab.id_to_token.at(token).c_str();
 }
 
+whisper_token whisper_str_to_token(struct whisper_context * ctx, const char * str) {
+    return ctx->vocab.token_to_id.at(str);
+}
+
+bool whisper_token_exists(struct whisper_context * ctx, const char * str) {
+    return ctx->vocab.token_to_id.find(str) != ctx->vocab.token_to_id.end();
+}
+
 whisper_token whisper_token_eot(struct whisper_context * ctx) {
     return ctx->vocab.token_eot;
 }
