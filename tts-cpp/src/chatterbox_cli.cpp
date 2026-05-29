@@ -21,17 +21,12 @@
 #include "ggml-backend.h"
 #include "gguf.h"
 
-#ifdef GGML_USE_CUDA
-#include "ggml-cuda.h"
-#endif
-
-#ifdef GGML_USE_METAL
-#include "ggml-metal.h"
-#endif
-
-#ifdef GGML_USE_VULKAN
-#include "ggml-vulkan.h"
-#endif
+// Per-backend `#include "ggml-{cuda,metal,vulkan}.h"` blocks used
+// to sit here gated on `GGML_USE_<X>` so callers could reach the
+// static `ggml_backend_<x>_init` entry points directly. Removed
+// alongside the cascade in `main.cpp::init_backend`: every backend
+// decision now routes through the ggml-backend registry
+// (`backend_selection.{h,cpp}`).
 
 #include <algorithm>
 #include <atomic>
@@ -914,9 +909,12 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                 }
             }
 
-            // Voice-cloning preprocessing shares a backend: on Mac we pick
-            // Metal, on Linux + NVIDIA we pick CUDA / Vulkan.  Falls back to
-            // the ggml-cpu NEON/AVX kernels when n_gpu_layers == 0.
+            // Voice-cloning preprocessing shares a backend with T3: the
+            // backend_selection registry walk reaches Metal on Apple,
+            // CUDA/Vulkan on Linux/Windows desktop, OpenCL on Adreno 700+
+            // and Vulkan on every other Android GPU. Falls back to the
+            // ggml-cpu NEON/AVX kernels when n_gpu_layers == 0 or no GPU
+            // device is registered.
             ggml_backend_t vc_backend = init_backend(params.n_gpu_layers);
 
             // (1) speaker_emb via VoiceEncoder (3-layer LSTM + proj + L2-norm
@@ -1955,6 +1953,18 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                         : sample_next_token(logits, generated, params, rng);
                     generated.push_back(current);
 
+                    // Port of the token_repetition check in the Python
+                    // AlignmentStreamAnalyzer. MTL T3 sometimes emits a
+                    // plausible end-of-speech silence cadence mid-utterance
+                    // and then hallucinates more low-energy content before
+                    // eventually stopping. Two consecutive identical tokens
+                    // signal this cadence; gated to MTL because the Turbo
+                    // codebook has a different cadence signature and to a
+                    // 60-token minimum so we don't fire on the first
+                    // utterance of short multilingual inputs. We trim only
+                    // the trailing duplicate (resize(n-1)) and leave the
+                    // legitimate prior token; the downstream pop_back()
+                    // handles the stop-speech token.
                     constexpr int kMtlMinTokensBeforeCadence = 60;
                     if (is_mtl && generated.size() >= 2 &&
                         (int)generated.size() > kMtlMinTokensBeforeCadence) {
@@ -1971,9 +1981,10 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                     generated.pop_back();
 
                 if (stopped_by_repetition && params.verbose) {
-                    fprintf(stderr, "  [t3 segment %zu/%zu] stopped on 2x repeated token "
+                    fprintf(stderr, "  [t3 segment %zu/%zu] stopped on 2x repeated token (%d) "
                                     "at %zu tokens; MTL end-of-speech cadence\n",
-                            si + 1, N_SEG, generated.size());
+                            si + 1, N_SEG, generated.empty() ? -1 : (int)generated.back(),
+                            generated.size());
                 }
 
                 // Keep the longest attempt as the fallback in case every

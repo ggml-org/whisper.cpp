@@ -1,3 +1,5 @@
+#include "backend_selection.h"
+#include "backend_util.h"
 #include "gpt2_bpe.h"
 #include "mtl_tokenizer.h"
 #include "ggml.h"
@@ -6,21 +8,15 @@
 #include "ggml-backend.h"
 #include "gguf.h"
 
-#ifdef GGML_USE_CUDA
-#include "ggml-cuda.h"
-#endif
-
-#ifdef GGML_USE_METAL
-#include "ggml-metal.h"
-#endif
-
-#ifdef GGML_USE_VULKAN
-#include "ggml-vulkan.h"
-#endif
-
-#ifdef GGML_USE_OPENCL
-#include "ggml-opencl.h"
-#endif
+// Per-backend `#include "ggml-{cuda,metal,vulkan,opencl}.h"` blocks
+// used to sit here gated on `GGML_USE_<X>` so the legacy
+// `init_backend` cascade below could call the static
+// `ggml_backend_<x>_init` entry points directly. Removed alongside
+// the cascade: tts-cpp routes every backend decision through the
+// ggml-backend registry (`backend_selection.{h,cpp}`), which reaches
+// the same backends in both `GGML_BACKEND_DL=ON` (Android prebuild)
+// and `=OFF` (desktop dev) modes without linking those static
+// symbols. Mirrors parakeet-cpp's design.
 
 #include <algorithm>
 #include <atomic>
@@ -291,55 +287,20 @@ int g_log_verbose = 0;
 
 ggml_backend_t init_backend(int n_gpu_layers) {
     const bool v = g_log_verbose != 0;
-#ifdef GGML_USE_CUDA
-    if (n_gpu_layers > 0) {
-        auto * b = ggml_backend_cuda_init(0);
-        if (b) { if (v) fprintf(stderr, "%s: using CUDA backend\n", __func__); return b; }
+    // GPU cascade is centralised in backend_selection.cpp's
+    // `init_gpu_backend` (Adreno 700+ -> OpenCL, every other GPU ->
+    // Vulkan/Metal/CUDA/Mali, with Adreno 6xx OpenCL force-skipped).
+    // The registry walk it does reaches the same set of backends in
+    // both `GGML_BACKEND_DL=ON` and `=OFF` modes without linking the
+    // per-backend static `ggml_backend_<x>_init` entry points.
+    if (ggml_backend_t b = ::tts_cpp::detail::init_gpu_backend(n_gpu_layers, v, "chatterbox")) {
+        return b;
     }
-#endif
-#ifdef GGML_USE_METAL
-    if (n_gpu_layers > 0) {
-        auto * b = ggml_backend_metal_init();
-        if (b) { if (v) fprintf(stderr, "%s: using Metal backend\n", __func__); return b; }
+    if (ggml_backend_t b = ::tts_cpp::detail::init_cpu_backend()) {
+        if (v) fprintf(stderr, "chatterbox: using CPU backend\n");
+        return b;
     }
-#endif
-#ifdef GGML_USE_VULKAN
-    if (n_gpu_layers > 0) {
-        auto * b = ggml_backend_vk_init(0);
-        if (b) {
-            if (v) {
-                char desc[256] = {0};
-                ggml_backend_vk_get_device_description(0, desc, sizeof(desc));
-                fprintf(stderr, "%s: using Vulkan backend (device 0: %s)\n", __func__, desc);
-            }
-            return b;
-        }
-    }
-#endif
-#ifdef GGML_USE_OPENCL
-    if (n_gpu_layers > 0) {
-        ggml_backend_reg_t ocl_reg = ggml_backend_opencl_reg();
-        if (ocl_reg && ggml_backend_reg_dev_count(ocl_reg) > 0) {
-            auto * b = ggml_backend_opencl_init();
-            if (b) {
-                if (v) {
-                    fprintf(stderr, "%s: using OpenCL backend\n", __func__);
-                }
-                return b;
-            }
-        } else if (v && ocl_reg) {
-            if (ggml_backend_reg_dev_count(ocl_reg) == 0) {
-                fprintf(stderr, "%s: no OpenCL device; using CPU\n", __func__);
-            } else {
-                fprintf(stderr, "%s: OpenCL init failed; using CPU\n", __func__);
-            }
-        }
-    }
-#endif
-    auto * b = ggml_backend_cpu_init();
-    if (!b) throw std::runtime_error("ggml_backend_cpu_init() failed");
-    if (v) fprintf(stderr, "%s: using CPU backend\n", __func__);
-    return b;
+    throw std::runtime_error("init_backend: no CPU device registered");
 }
 
 // --------------------------------------------------------------------------
@@ -700,7 +661,10 @@ bool eval_prompt(
         }
     }
 
-    if (ggml_backend_is_cpu(model.backend)) ggml_backend_cpu_set_n_threads(model.backend, n_threads);
+    // Registry-routed n_threads (no-op on non-CPU backends); see
+    // src/t3_mtl.cpp for the GGML_BACKEND_DL=ON unresolvable-symbol
+    // rationale.
+    ::tts_cpp::detail::backend_set_n_threads(model.backend, n_threads);
     ggml_backend_graph_compute(model.backend, gf);
 
     ggml_tensor * logits = ggml_graph_get_tensor(gf, "logits");
@@ -723,7 +687,8 @@ bool eval_step(
     int32_t position = n_past;
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "position"), &position, 0, sizeof(position));
 
-    if (ggml_backend_is_cpu(model.backend)) ggml_backend_cpu_set_n_threads(model.backend, n_threads);
+    // Registry-routed n_threads; see src/t3_mtl.cpp for rationale.
+    ::tts_cpp::detail::backend_set_n_threads(model.backend, n_threads);
     ggml_backend_graph_compute(model.backend, gf);
 
     ggml_tensor * logits = ggml_graph_get_tensor(gf, "logits");

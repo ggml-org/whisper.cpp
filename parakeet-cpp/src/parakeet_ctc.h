@@ -259,6 +259,13 @@ struct SortformerWeights {
 struct ParakeetCtcModel {
     ParakeetModelType model_type = ParakeetModelType::CTC;
 
+    // Optional GGUF metadata tag (key `parakeet.model_variant`). Carries
+    // a stable identifier for the converted checkpoint that the engine
+    // can match against -- preferred over shape-based heuristics where
+    // two variants share the same encoder shape (e.g. sortformer-v2 vs
+    // sortformer-v2.1-aosc). Empty if the GGUF predates the key.
+    std::string model_variant;
+
     EncoderConfig encoder_cfg;
     MelConfig     mel_cfg;
     BpeVocab      vocab;
@@ -304,6 +311,14 @@ struct ParakeetCtcModel {
 // TDT- and Sortformer-specific fields) into `EncoderConfig` +
 // `TdtConfig` + `SortformerConfig`.
 using ParakeetModel = ParakeetCtcModel;
+
+// Backend init configuration. Call before the first `load_from_gguf`
+// (or Engine construction) in the process. Both are no-ops once the
+// ggml-backend registry has been populated (the registry is a
+// process-wide singleton); see implementation comments for the
+// detailed lifetime contract.
+void set_backends_directory(const std::string & dir);
+void set_opencl_cache_dir(const std::string & dir);
 
 int load_from_gguf(const std::string & gguf_path,
                    ParakeetCtcModel  & out_model,
@@ -359,6 +374,25 @@ int run_encoder(ParakeetCtcModel   & model,
                 EncoderOutputs     & out,
                 int                  max_layers = -1,
                 bool                 capture_intermediates = true);
+
+// Run the conformer block stack on pre-subsampled embeddings, skipping the
+// subsampling/pre_encode block. Used by the v2.1 streaming (AOSC) path where
+// the speaker cache + FIFO + new chunk are concatenated in pre-encode space and
+// re-contextualised by the conformer layers in a single forward.
+//
+//   pre_encode_in: row-major (n_pre_encode_frames, d_model)
+//   d_model:       must equal model.encoder_cfg.d_model
+//   out.encoder_out is filled with the post-encoder (n_pre_encode_frames, d_model) slab.
+//
+// Capture-intermediate fields on `out` are always cleared (no per-stage capture
+// in this path -- the production AOSC path only consumes `encoder_out`).
+int run_encoder_bypass_pre_encode(
+    ParakeetCtcModel   & model,
+    const float        * pre_encode_in,
+    int                  n_pre_encode_frames,
+    int                  d_model,
+    EncoderOutputs     & out,
+    int                  max_layers = -1);
 
 std::vector<int32_t> ctc_greedy_decode(const float * logits,
                                        int           n_frames,

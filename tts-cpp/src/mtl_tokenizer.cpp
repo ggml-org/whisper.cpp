@@ -729,6 +729,8 @@ std::string apply_language_preprocessing(const std::string & text,
 
 }  // namespace
 
+// ---- Encode ----------------------------------------------------------------
+
 std::vector<int32_t> mtl_tokenizer::encode(const std::string & text,
                                             const std::string & language_id) const {
     std::string txt = text;

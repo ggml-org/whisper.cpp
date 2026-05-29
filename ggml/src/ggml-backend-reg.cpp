@@ -181,6 +181,12 @@ struct ggml_backend_registry {
             return;
         }
 
+        for (auto & entry : backends) {
+            if (entry.reg == reg) {
+                return;
+            }
+        }
+
 #ifndef NDEBUG
         GGML_LOG_DEBUG("%s: registered backend %s (%zu devices)\n",
             __func__, ggml_backend_reg_name(reg), ggml_backend_reg_dev_count(reg));
@@ -192,6 +198,12 @@ struct ggml_backend_registry {
     }
 
     void register_device(ggml_backend_dev_t device) {
+        for (auto & dev : devices) {
+            if (dev == device) {
+                return;
+            }
+        }
+
 #ifndef NDEBUG
         GGML_LOG_DEBUG("%s: registered device %s (%s)\n", __func__, ggml_backend_dev_name(device), ggml_backend_dev_description(device));
 #endif
@@ -534,6 +546,97 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
                 }
             }
         }
+#ifdef __ANDROID__
+        // QVAC-18993: Android app packaging keeps native libraries
+        // compressed inside the APK with no on-disk directory to scan
+        // (the default since AGP 3.6's `useLegacyPackaging=false`).
+        // The directory-iterator loop above therefore finds nothing on
+        // Android and the per-search_path `fs::exists` fallback also
+        // returns false. Try the bare filename instead and let Android's
+        // dynamic linker resolve it via the in-APK lookup.
+        //
+        // For backends that ship as a single library (Vulkan / OpenCL /
+        // ...) the bare `lib<prefix>ggml-<name>.so` filename is enough.
+        // For the CPU backend with `GGML_CPU_ALL_VARIANTS=ON` there is
+        // no plain `lib<prefix>ggml-cpu.so`, only the per-arch
+        // `lib<prefix>ggml-cpu-android_armv*_*.so` files, so we also
+        // try each known per-arch variant and let `ggml_backend_score`
+        // pick the highest-scoring one the device's HWCAP supports.
+        //
+        // Mirrors qvac-ext-ggml@speech commit 9562ed04 ("ggml-backend:
+        // android per-arch CPU variant dlopen fallback") so APK
+        // consumers of the bundled-ggml whisper-cpp port get the same
+        // Android-correct CPU init as ggml-speech consumers (parakeet,
+        // chatterbox, ...).
+        //
+        // TODO: keep this list in sync with the
+        // `ggml_add_cpu_backend_variant(android_armv*_*)` calls in
+        // ggml/src/CMakeLists.txt. New tiers added there must be
+        // appended here as well, or devices on the new tier will
+        // silently fall back to a lower one (perf hit).
+        std::vector<fs::path> candidate_names = { name_path };
+        if (strcmp(name, "cpu") == 0) {
+            candidate_names.emplace_back("cpu-android_armv8.0_1");
+            candidate_names.emplace_back("cpu-android_armv8.2_1");
+            candidate_names.emplace_back("cpu-android_armv8.2_2");
+            candidate_names.emplace_back("cpu-android_armv8.6_1");
+            candidate_names.emplace_back("cpu-android_armv9.0_1");
+            candidate_names.emplace_back("cpu-android_armv9.2_1");
+            candidate_names.emplace_back("cpu-android_armv9.2_2");
+        }
+
+        if (candidate_names.size() == 1) {
+            // Fast path: Vulkan / OpenCL / Metal / ... single-shot dlopen.
+            fs::path filename = backend_filename_prefix().native() +
+                                candidate_names[0].native() +
+                                backend_filename_extension().native();
+            if (auto reg = get_reg().load_backend(filename, silent)) {
+                return reg;
+            }
+            return nullptr;
+        }
+
+        // Multi-candidate (Android CPU today): iterate worst -> best with
+        // a synthetic per-index offset on top of the runtime score so
+        // that on a device that accepts every variant (e.g. armv9.2
+        // phone) the highest tier wins on tie, while a device that
+        // legitimately supports only the baseline still picks armv8.0_1.
+        for (size_t idx = 0; idx < candidate_names.size(); ++idx) {
+            fs::path filename = backend_filename_prefix().native() +
+                                candidate_names[idx].native() +
+                                backend_filename_extension().native();
+            dl_handle_ptr handle { dl_load_library(filename) };
+            if (!handle) {
+                if (!silent) {
+                    GGML_LOG_DEBUG("%s: dlopen(%s) failed: %s\n", __func__,
+                                   path_str(filename).c_str(), dl_error());
+                }
+                continue;
+            }
+            auto score_fn = (ggml_backend_score_t)
+                dl_get_sym(handle.get(), "ggml_backend_score");
+            int s = 1; // base score for backends without ggml_backend_score
+            if (score_fn) {
+                s = score_fn();
+                if (s == 0) {
+                    continue;
+                }
+            }
+            s += static_cast<int>(idx);
+#ifndef NDEBUG
+            GGML_LOG_DEBUG("%s: %s score: %d\n", __func__,
+                           path_str(filename).c_str(), s);
+#endif
+            if (s > best_score) {
+                best_score = s;
+                best_path = filename;
+            }
+        }
+
+        if (best_score > 0) {
+            return get_reg().load_backend(best_path, silent);
+        }
+#endif // __ANDROID__
         return nullptr;
     }
 

@@ -9,6 +9,7 @@
 #include <thread>
 #include <vector>
 
+#include "backend_selection.h"
 #include "chatterbox_t3_internal.h"
 #include "gpt2_bpe.h"
 #include "mtl_tokenizer.h"
@@ -89,6 +90,21 @@ struct Engine::Impl {
 
         ggml_time_init();
         g_log_verbose = opts.verbose ? 1 : 0;
+
+        // Wire backends_dir + opencl_cache_dir BEFORE any backend init.
+        // The ggml-backend registry is a process-singleton: only the
+        // first Engine construction's `set_backends_directory` /
+        // `set_opencl_cache_dir` actually take effect (second + later
+        // Engines log a one-shot warn and reuse the already-loaded
+        // registry; see backend_selection.cpp for the contract). Mirrors
+        // parakeet-cpp's Engine ctor.
+        if (!opts.backends_dir.empty()) {
+            ::tts_cpp::detail::set_backends_directory(opts.backends_dir);
+        }
+        if (!opts.opencl_cache_dir.empty()) {
+            ::tts_cpp::detail::set_opencl_cache_dir(opts.opencl_cache_dir);
+        }
+
         // Note: we deliberately do NOT call ggml_log_set here.  The
         // process-global sink is owned by the host application via
         // tts_cpp_log_set (see <tts-cpp/log.h>); installing one

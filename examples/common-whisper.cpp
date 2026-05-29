@@ -39,12 +39,59 @@
 extern bool ffmpeg_decode_audio(const std::string & ifname, std::vector<uint8_t> & wav_data);
 #endif
 
+// extract f32 PCM frames from an initialized decoder, downmix to mono and keep the stereo split
+static bool read_audio_from_decoder(ma_decoder & decoder, std::vector<float> & pcmf32, std::vector<std::vector<float>> & pcmf32s, bool stereo) {
+    ma_result result;
+    ma_uint64 frame_count;
+    ma_uint64 frames_read;
+
+    if ((result = ma_decoder_get_length_in_pcm_frames(&decoder, &frame_count)) != MA_SUCCESS) {
+        fprintf(stderr, "error: failed to retrieve the length of the audio data (%s)\n", ma_result_description(result));
+        return false;
+    }
+
+    pcmf32.resize(stereo ? frame_count*2 : frame_count);
+
+    if ((result = ma_decoder_read_pcm_frames(&decoder, pcmf32.data(), frame_count, &frames_read)) != MA_SUCCESS) {
+        fprintf(stderr, "error: failed to read the frames of the audio data (%s)\n", ma_result_description(result));
+        return false;
+    }
+
+    if (stereo) {
+        std::vector<float> stereo_data = pcmf32;
+        pcmf32.resize(frame_count);
+        for (uint64_t i = 0; i < frame_count; i++) {
+            pcmf32[i] = (stereo_data[2*i] + stereo_data[2*i + 1]);
+        }
+        pcmf32s.resize(2);
+        pcmf32s[0].resize(frame_count);
+        pcmf32s[1].resize(frame_count);
+        for (uint64_t i = 0; i < frame_count; i++) {
+            pcmf32s[0][i] = stereo_data[2*i];
+            pcmf32s[1][i] = stereo_data[2*i + 1];
+        }
+    }
+
+    return true;
+}
+
 bool read_audio_data(const std::string & fname, std::vector<float>& pcmf32, std::vector<std::vector<float>>& pcmf32s, bool stereo) {
     std::vector<uint8_t> audio_data; // used for pipe input from stdin or ffmpeg decoding output
 
     ma_result result;
     ma_decoder_config decoder_config;
-    ma_decoder decoder;
+
+    struct decoder_guard {
+        ma_decoder decoder;
+        bool initialized = false;
+        ma_decoder * operator&() { return &decoder; }
+        ~decoder_guard() {
+            if (initialized) {
+                ma_decoder_uninit(&decoder);
+            }
+        }
+    };
+    decoder_guard decoder{};
 
     decoder_config = ma_decoder_config_init(ma_format_f32, stereo ? 2 : 1, WHISPER_SAMPLE_RATE);
 
@@ -63,74 +110,57 @@ bool read_audio_data(const std::string & fname, std::vector<float>& pcmf32, std:
 			audio_data.insert(audio_data.end(), buf, buf + n);
 		}
 
-		if ((result = ma_decoder_init_memory(audio_data.data(), audio_data.size(), &decoder_config, &decoder)) != MA_SUCCESS) {
-
+		result = ma_decoder_init_memory(audio_data.data(), audio_data.size(), &decoder_config, &decoder);
+        if (result != MA_SUCCESS) {
 			fprintf(stderr, "Error: failed to open audio data from stdin (%s)\n", ma_result_description(result));
-
 			return false;
 		}
+        decoder.initialized = true;
 
 		fprintf(stderr, "%s: read %zu bytes from stdin\n", __func__, audio_data.size());
     }
-    else if (((result = ma_decoder_init_file(fname.c_str(), &decoder_config, &decoder)) != MA_SUCCESS)) {
+    else {
+        result = ma_decoder_init_file(fname.c_str(), &decoder_config, &decoder);
+        if (result == MA_SUCCESS) {
+            decoder.initialized = true;
+        }
 #if defined(WHISPER_FFMPEG)
-		if (ffmpeg_decode_audio(fname, audio_data) != 0) {
-			fprintf(stderr, "error: failed to ffmpeg decode '%s'\n", fname.c_str());
-
-			return false;
-		}
-
-		if ((result = ma_decoder_init_memory(audio_data.data(), audio_data.size(), &decoder_config, &decoder)) != MA_SUCCESS) {
-			fprintf(stderr, "error: failed to read audio data as wav (%s)\n", ma_result_description(result));
-
-			return false;
-		}
+        if (!decoder.initialized) {
+            if (ffmpeg_decode_audio(fname, audio_data) != 0) {
+                fprintf(stderr, "error: failed to ffmpeg decode '%s'\n", fname.c_str());
+                return false;
+            }
+            result = ma_decoder_init_memory(audio_data.data(), audio_data.size(), &decoder_config, &decoder);
+            if (result != MA_SUCCESS) {
+                fprintf(stderr, "error: failed to read audio data as wav (%s)\n", ma_result_description(result));
+                return false;
+            }
+            decoder.initialized = true;
+        }
 #else
-		if ((result = ma_decoder_init_memory(fname.c_str(), fname.size(), &decoder_config, &decoder)) != MA_SUCCESS) {
-			fprintf(stderr, "error: failed to read audio data as wav (%s)\n", ma_result_description(result));
-
+        if (!decoder.initialized) {
+			fprintf(stderr, "error: failed to read audio data from (%s)\n", fname.c_str());
 			return false;
 		}
 #endif
     }
 
-    ma_uint64 frame_count;
-    ma_uint64 frames_read;
+    return read_audio_from_decoder(decoder.decoder, pcmf32, pcmf32s, stereo);
+}
 
-    if ((result = ma_decoder_get_length_in_pcm_frames(&decoder, &frame_count)) != MA_SUCCESS) {
-		fprintf(stderr, "error: failed to retrieve the length of the audio data (%s)\n", ma_result_description(result));
+// decode audio bytes already held in memory
+bool read_audio_data(const char * buffer, size_t buffer_size, std::vector<float> & pcmf32, std::vector<std::vector<float>> & pcmf32s, bool stereo) {
+    ma_decoder_config decoder_config = ma_decoder_config_init(ma_format_f32, stereo ? 2 : 1, WHISPER_SAMPLE_RATE);
+    ma_decoder decoder;
 
-		return false;
+    if (ma_decoder_init_memory(buffer, buffer_size, &decoder_config, &decoder) != MA_SUCCESS) {
+        fprintf(stderr, "error: failed to decode audio data from memory buffer\n");
+        return false;
     }
 
-    pcmf32.resize(stereo ? frame_count*2 : frame_count);
-
-    if ((result = ma_decoder_read_pcm_frames(&decoder, pcmf32.data(), frame_count, &frames_read)) != MA_SUCCESS) {
-		fprintf(stderr, "error: failed to read the frames of the audio data (%s)\n", ma_result_description(result));
-
-		return false;
-    }
-
-    if (stereo) {
-        std::vector<float> stereo_data = pcmf32;
-        pcmf32.resize(frame_count);
-
-        for (uint64_t i = 0; i < frame_count; i++) {
-            pcmf32[i] = (stereo_data[2*i] + stereo_data[2*i + 1]);
-        }
-
-        pcmf32s.resize(2);
-        pcmf32s[0].resize(frame_count);
-        pcmf32s[1].resize(frame_count);
-        for (uint64_t i = 0; i < frame_count; i++) {
-            pcmf32s[0][i] = stereo_data[2*i];
-            pcmf32s[1][i] = stereo_data[2*i + 1];
-        }
-    }
-
+    bool ok = read_audio_from_decoder(decoder, pcmf32, pcmf32s, stereo);
     ma_decoder_uninit(&decoder);
-
-    return true;
+    return ok;
 }
 
 //  500 -> 00:05.000

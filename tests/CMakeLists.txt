@@ -110,3 +110,18 @@ target_compile_definitions(${VAD_TEST} PRIVATE
     SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
 add_test(NAME ${VAD_TEST} COMMAND ${VAD_TEST})
 set_tests_properties(${VAD_TEST} PROPERTIES LABELS "base;en")
+
+# Streaming VAD test pins the upstream PR #3677 contract:
+# whisper_vad_detect_speech_no_reset + whisper_vad_reset_state must
+# combine to yield exactly the same per-chunk probabilities as the
+# original whisper_vad_detect_speech call. Uses only the silero VAD
+# model (no whisper transcribe model needed).
+set(VAD_TEST test-vad-streaming)
+add_executable(${VAD_TEST} ${VAD_TEST}.cpp)
+target_include_directories(${VAD_TEST} PRIVATE ../include ../ggml/include ../examples)
+target_link_libraries(${VAD_TEST} PRIVATE common)
+target_compile_definitions(${VAD_TEST} PRIVATE
+    VAD_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-silero-v6.2.0-ggml.bin"
+    SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
+add_test(NAME ${VAD_TEST} COMMAND ${VAD_TEST})
+set_tests_properties(${VAD_TEST} PROPERTIES LABELS "unit;vad")

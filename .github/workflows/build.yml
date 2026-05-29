@@ -150,34 +150,21 @@ jobs:
   ubuntu-22-arm64:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
             github.event.inputs.run_type == 'full-ci' }}
-    runs-on: ubuntu-22.04
-
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [linux/arm64]
+    runs-on: ubuntu-22.04-arm
 
     steps:
       - name: Clone
         uses: actions/checkout@v6
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Build ${{ matrix.arch }}
+      - name: Install dependencies
         run: |
-          docker run --platform ${{ matrix.arch }} --rm \
-            -v ${{ github.workspace }}:/workspace \
-            -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
-            set -e
-            export DEBIAN_FRONTEND=noninteractive
-            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+          sudo apt-get update
+          sudo apt-get install -y build-essential libsdl2-dev cmake git
 
-            apt update
-            apt install -y build-essential libsdl2-dev cmake git
-            cmake -B build -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8-a
-            cmake --build build --config Release -j $(nproc)'
+      - name: Build
+        run: |
+          cmake -B build -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8-a
+          cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-arm-v7:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
@@ -305,36 +292,34 @@ jobs:
   ubuntu-22-gcc-arm64:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
             github.event.inputs.run_type == 'full-ci' }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04-arm
 
     strategy:
       fail-fast: false
       matrix:
         build: [Debug, Release]
-        arch: [linux/arm64]
 
     steps:
       - name: Clone
         uses: actions/checkout@v6
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Build ${{ matrix.arch }}
+      - name: Install dependencies
         run: |
-          docker run --platform ${{ matrix.arch }} --rm \
-            -v ${{ github.workspace }}:/workspace \
-            -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
-            set -e
-            export DEBIAN_FRONTEND=noninteractive
-            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libsdl2-dev git
 
-            apt update
-            apt install -y build-essential cmake libsdl2-dev git
-            cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8-a
-            make
-            ctest -L gh --output-on-failure'
+      - name: Configure CMake
+        run: |
+          cmake . \
+            -DWHISPER_SDL2=ON \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ARM_ARCH=armv8-a
+
+      - name: Build and Test
+        run: |
+          make
+          ctest -L gh --output-on-failure
 
   ubuntu-22-gcc-arm-v7:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
@@ -382,7 +367,7 @@ jobs:
         #arch: [linux/amd64, linux/arm64, linux/arm/v7, linux/ppc64le]
         # TODO: arm/v7 disabled due to clang bug
         #       https://github.com/ggerganov/whisper.cpp/actions/runs/9657764109/job/26637633042?pr=2256#step:4:1990
-        arch: [linux/amd64, linux/arm64, linux/ppc64le]
+        arch: [linux/amd64, linux/ppc64le]
 
     steps:
       - name: Clone
@@ -407,6 +392,36 @@ jobs:
             make
             ctest -L gh --output-on-failure'
 
+  ubuntu-22-clang-arm64:
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+            github.event.inputs.run_type == 'full-ci' }}
+    runs-on: ubuntu-22.04-arm
+
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [Debug, Release]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang build-essential cmake libsdl2-dev git
+
+      - name: Build and Test
+        run: |
+          cmake . -DWHISPER_SDL2=ON \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER=clang \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ARM_ARCH=armv8-a
+          make
+          ctest -L gh --output-on-failure
+
   ubuntu-22-gcc-sanitized:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
             github.event.inputs.run_type == 'full-ci' }}
@@ -416,32 +431,23 @@ jobs:
       fail-fast: false
       matrix:
         sanitizer: [ADDRESS, THREAD, UNDEFINED]
-        arch: [linux/amd64]
 
     steps:
       - name: Clone
         uses: actions/checkout@v6
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Build ${{ matrix.arch }}
+      - name: Install dependencies
         run: |
-          docker run --platform ${{ matrix.arch }} --rm \
-            -v ${{ github.workspace }}:/workspace \
-            -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
-            set -e
-            export DEBIAN_FRONTEND=noninteractive
-            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git
 
-            apt update
-            apt install -y build-essential cmake git
-            cmake . -DCMAKE_BUILD_TYPE=Debug \
-              -DWHISPER_SANITIZE_${{ matrix.sanitizer }}=ON \
-              -DGGML_OPENMP=OFF
-            make
-            ctest -L gh --output-on-failure'
+      - name: Build and Test
+        run: |
+          cmake . -DCMAKE_BUILD_TYPE=Debug \
+            -DWHISPER_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DGGML_OPENMP=OFF
+          make
+          ctest -L gh --output-on-failure
 
   ubuntu-22-cmake-sycl:
     if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
@@ -662,6 +668,7 @@ jobs:
         with:
           name: ggml_${{ matrix.arch }}.dll
           path: build/bin/${{ matrix.build }}/ggml.dll
+          overwrite: true
 
       - name: Upload ggml base dll
         uses: actions/upload-artifact@v6
