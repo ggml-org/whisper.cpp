@@ -56,6 +56,12 @@ ruby_whisper_parakeet_s_log_set(VALUE self, VALUE log_callback, VALUE user_data)
   return Qnil;
 }
 
+static VALUE
+ruby_whisper_parakeet_s_system_info_str(VALUE self)
+{
+  return rb_str_new2(parakeet_print_system_info());
+}
+
 static void
 ruby_whisper_parakeet_end_proc(VALUE args)
 {
@@ -75,6 +81,7 @@ init_ruby_whisper_parakeet(VALUE *mWhisper)
   ruby_whisper_log_queue_initialize(&parakeet_log_queue);
 
   rb_define_singleton_method(mParakeet, "log_set", ruby_whisper_parakeet_s_log_set, 2);
+  rb_define_singleton_method(mParakeet, "system_info_str", ruby_whisper_parakeet_s_system_info_str, 0);
   rb_define_private_method(rb_singleton_class(mParakeet), "drain_logs", ruby_whisper_parakeet_s_drain_logs, 0);
 
   rb_set_end_proc(ruby_whisper_parakeet_end_proc, Qnil);
