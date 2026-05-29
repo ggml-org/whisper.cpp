@@ -21,4 +21,8 @@ class TestParakeet < TestBase
   def test_system_info_str
     assert_match /\APARAKEET : MTL : EMBED_LIBRARY = \d \| CPU : NEON = \d \|/, Parakeet.system_info_str
   end
+
+  def test_version
+    assert_instance_of String, Parakeet::VERSION
+  end
 end
