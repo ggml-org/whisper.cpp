@@ -263,7 +263,7 @@ ruby_whisper_parakeet_context_get_model(VALUE self)
   return ruby_whisper_parakeet_model_s_new(self);
 }
 
-void
+VALUE
 init_ruby_whisper_parakeet_context(VALUE *mParakeet)
 {
   cParakeetContext = rb_define_class_under(*mParakeet, "Context", rb_cObject);
@@ -287,4 +287,6 @@ init_ruby_whisper_parakeet_context(VALUE *mParakeet)
   rb_define_method(cParakeetContext, "full_" #name, ruby_whisper_parakeet_context_full_##name, 2);
 
   ITERATE_TOKEN_ATTRS(REGISTER_TOKEN_ATTR)
+
+  return cParakeetContext;
 }

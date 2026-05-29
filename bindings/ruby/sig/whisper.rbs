@@ -701,6 +701,14 @@ module Whisper
       #
       def each_segment: { (Segment) -> void } -> void
                       | () -> Enumerator[Segment]
+
+      class Params
+        def self.new: (?use_gpu: boolish, ?gpu_device: Integer) -> instance
+        def use_gpu: () -> boolish
+        def use_gpu=: (boolish) -> boolish
+        def gpu_device: () -> Integer
+        def gpu_device=: (Integer) -> Integer
+      end
     end
 
     class Params

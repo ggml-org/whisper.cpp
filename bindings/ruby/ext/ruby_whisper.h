@@ -127,6 +127,10 @@ typedef struct {
 } ruby_whisper_parakeet_params;
 
 typedef struct {
+  struct parakeet_context_params params;
+} ruby_whisper_parakeet_context_params;
+
+typedef struct {
   struct parakeet_context *context;
 } ruby_whisper_parakeet_context;
 
@@ -178,6 +182,10 @@ typedef struct {
   if ((rwvss)->segments == NULL) { \
     rb_raise(rb_eRuntimeError, "Not initialized"); \
   } \
+} while (0)
+
+#define GetParakeetContextParams(obj, rwpcp) do { \
+  TypedData_Get_Struct((obj), ruby_whisper_parakeet_context_params, &ruby_whisper_parakeet_context_params_type, (rwpcp)); \
 } while (0)
 
 #define GetParakeetContext(obj, rwpc) do { \
