@@ -614,6 +614,8 @@ module Whisper
   module Parakeet
     extend LogSettable
 
+    VERSION: String
+
     # Control logging output. The default behavior is to print to stderr.
     #
     def self.log_set: (nil, Object? user_data) -> nil
