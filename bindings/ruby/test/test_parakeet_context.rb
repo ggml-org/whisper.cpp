@@ -16,6 +16,21 @@ class TestParakeetContext < TestBase
     assert_instance_of Parakeet::Context, @parakeet
   end
 
+  def test_new_with_params
+    log_callback = Parakeet.instance_variable_get(:@log_callback)
+    user_data = Parakeet.instance_variable_get(:@log_callback_user_data)
+    begin
+      logs = ""
+      Parakeet.log_set proc {|level, message| logs << message}, nil
+      params = Parakeet::Context::Params.new(use_gpu: false)
+      parakeet = Parakeet::Context.new("parakeet-tdt-0.6b-v3", params)
+      assert_instance_of Parakeet::Context, parakeet
+      assert_match /use gpu\s+=\s+0/, logs
+    ensure
+      Parakeet.log_set log_callback, user_data
+    end
+  end
+
   sub_test_case "full" do
     def setup
       super
