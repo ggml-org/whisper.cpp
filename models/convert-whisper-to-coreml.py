@@ -1,4 +1,5 @@
 import argparse
+import numpy as np
 import torch
 import torch.nn.functional as F
 import coremltools as ct
@@ -245,6 +246,77 @@ class WhisperANE(Whisper):
         self.decoder.apply(install_hooks)
         return cache, hooks
 
+class StatefulTextDecoder(nn.Module):
+    def __init__(self, decoder: TextDecoder, hparams: ModelDimensions, max_tokens: int):
+        super().__init__()
+
+        self.decoder = decoder
+        self.max_tokens = max_tokens
+        self.n_head = hparams.n_text_head
+
+        for i in range(hparams.n_text_layer):
+            self.register_buffer(f"k_cache_{i}", torch.zeros((1, max_tokens, hparams.n_text_state), dtype=torch.float16))
+            self.register_buffer(f"v_cache_{i}", torch.zeros((1, max_tokens, hparams.n_text_state), dtype=torch.float16))
+            self.register_buffer(f"cross_k_{i}", torch.zeros((1, hparams.n_audio_ctx, hparams.n_text_state), dtype=torch.float16))
+            self.register_buffer(f"cross_v_{i}", torch.zeros((1, hparams.n_audio_ctx, hparams.n_text_state), dtype=torch.float16))
+
+    def attention(self, q: Tensor, k_cache: Tensor, v_cache: Tensor, mask: Optional[Tensor], k_prescaled: bool):
+        n_batch, n_ctx, n_state = q.shape
+        n_head = self.n_head
+        n_ctx_kv = k_cache.shape[1]
+        n_state_head = n_state // n_head
+        scale = float(n_state_head)**-0.25
+
+        q = q.view(n_batch, n_ctx, n_head, n_state_head).permute(0, 2, 1, 3)
+        k = k_cache.to(q.dtype).view(n_batch, n_ctx_kv, n_head, n_state_head).permute(0, 2, 1, 3)
+        v = v_cache.to(q.dtype).view(n_batch, n_ctx_kv, n_head, n_state_head).permute(0, 2, 1, 3)
+
+        if k_prescaled:
+            qk = (q*scale) @ k.transpose(-1, -2)
+        else:
+            qk = (q*scale) @ (k*scale).transpose(-1, -2)
+
+        if mask is not None:
+            qk = qk + mask[:, None, :, :]
+
+        w = F.softmax(qk.float(), dim=-1).to(q.dtype)
+        return (w @ v).permute(0, 2, 1, 3).flatten(start_dim=2)
+
+    def forward(self, token_data: Tensor, pos_data: Tensor, step_mask: Tensor, self_mask: Tensor):
+        q_len = token_data.shape[-1]
+        end_step = step_mask.shape[-1]
+        past = end_step - q_len
+        pos = pos_data.to(torch.long)
+
+        x = self.decoder.token_embedding(token_data) + self.decoder.positional_embedding.index_select(0, pos).unsqueeze(0)
+        x = x.float()
+
+        for i, block in enumerate(self.decoder.blocks):
+            xn = block.attn_ln(x)
+            k_new = block.attn.key(xn)
+            v_new = block.attn.value(xn)
+
+            k_cache = getattr(self, f"k_cache_{i}")
+            v_cache = getattr(self, f"v_cache_{i}")
+            k_cache[:, past:end_step, :] = k_new.to(torch.float16)
+            v_cache[:, past:end_step, :] = v_new.to(torch.float16)
+
+            x = x + block.attn.out(self.attention(block.attn.query(xn), k_cache, v_cache, self_mask, False))
+
+            xn = block.cross_attn_ln(x)
+            x = x + block.cross_attn.out(self.attention(
+                block.cross_attn.query(xn),
+                getattr(self, f"cross_k_{i}"),
+                getattr(self, f"cross_v_{i}"),
+                None,
+                True,
+            ))
+
+            x = x + block.mlp(block.mlp_ln(x))
+
+        x = self.decoder.ln(x)
+        return (x @ torch.transpose(self.decoder.token_embedding.weight.to(x.dtype), 0, 1)).float()
+
 def convert_encoder(hparams, model, quantize=False):
     model.eval()
 
@@ -265,24 +337,35 @@ def convert_encoder(hparams, model, quantize=False):
 
     return model
 
-def convert_decoder(hparams, model, quantize=False):
+def convert_decoder(hparams, model, quantize=False, max_tokens=0, optimize_ane=False):
     model.eval()
 
-    tokens_shape = (1, 1)
-    audio_shape = (1, hparams.n_audio_ctx, hparams.n_audio_state)
+    trace_tokens = max(1, min(max_tokens, 4)) if max_tokens > 0 else 1
+    tokens_shape = (1, trace_tokens)
+    if optimize_ane:
+        audio_shape = (1, hparams.n_audio_state, 1, hparams.n_audio_ctx)
+    else:
+        audio_shape = (1, hparams.n_audio_ctx, hparams.n_audio_state)
 
     audio_data = torch.randn(audio_shape)
     token_data = torch.randint(hparams.n_vocab, tokens_shape).long()
 
     traced_model = torch.jit.trace(model, (token_data, audio_data))
 
+    if max_tokens > 0:
+        token_shape = (1, ct.RangeDim(lower_bound=1, upper_bound=max_tokens, default=trace_tokens))
+    else:
+        token_shape = tokens_shape
+
     model = ct.convert(
         traced_model,
         convert_to="mlprogram",
         inputs=[
-            ct.TensorType(name="token_data", shape=tokens_shape, dtype=int),
-            ct.TensorType(name="audio_data", shape=audio_shape)
+            ct.TensorType(name="token_data", shape=token_shape, dtype=np.int32),
+            ct.TensorType(name="audio_data", shape=audio_shape, dtype=np.float32)
         ],
+        outputs=[ct.TensorType(name="logits", dtype=np.float32)],
+        compute_units=ct.ComputeUnit.ALL,
     )
 
     if quantize:
@@ -290,17 +373,74 @@ def convert_decoder(hparams, model, quantize=False):
 
     return model
 
+def convert_stateful_decoder(hparams, model, max_tokens):
+    if max_tokens <= 0:
+        raise ValueError("--decoder-max-tokens must be set for --decoder-stateful")
+    if not hasattr(ct, "StateType") or not hasattr(ct.target, "macOS15"):
+        raise RuntimeError("--decoder-stateful requires CoreMLTools with macOS15 stateful model support")
+
+    model = StatefulTextDecoder(model, hparams, max_tokens).eval()
+
+    tokens_shape = (1, 1)
+    token_data = torch.randint(hparams.n_vocab, tokens_shape).long()
+    pos_data = torch.zeros((1,), dtype=torch.long)
+    step_mask = torch.zeros((1, 1, min(max_tokens, 4)), dtype=torch.float32)
+    self_mask = torch.zeros((1, 1, max_tokens), dtype=torch.float32)
+
+    traced_model = torch.jit.trace(model, (token_data, pos_data, step_mask, self_mask))
+    step = ct.RangeDim(lower_bound=1, upper_bound=max_tokens, default=min(max_tokens, 4))
+
+    states = []
+    for i in range(hparams.n_text_layer):
+        states.extend([
+            ct.StateType(wrapped_type=ct.TensorType(shape=(1, max_tokens, hparams.n_text_state), dtype=np.float16), name=f"k_cache_{i}"),
+            ct.StateType(wrapped_type=ct.TensorType(shape=(1, max_tokens, hparams.n_text_state), dtype=np.float16), name=f"v_cache_{i}"),
+            ct.StateType(wrapped_type=ct.TensorType(shape=(1, hparams.n_audio_ctx, hparams.n_text_state), dtype=np.float16), name=f"cross_k_{i}"),
+            ct.StateType(wrapped_type=ct.TensorType(shape=(1, hparams.n_audio_ctx, hparams.n_text_state), dtype=np.float16), name=f"cross_v_{i}"),
+        ])
+
+    return ct.convert(
+        traced_model,
+        convert_to="mlprogram",
+        inputs=[
+            ct.TensorType(name="token_data", shape=tokens_shape, dtype=np.int32),
+            ct.TensorType(name="pos_data", shape=(1,), dtype=np.int32),
+            ct.TensorType(name="step_mask", shape=(1, 1, step), dtype=np.float32),
+            ct.TensorType(name="self_mask", shape=(1, 1, max_tokens), dtype=np.float32),
+        ],
+        outputs=[ct.TensorType(name="logits", dtype=np.float32)],
+        states=states,
+        minimum_deployment_target=ct.target.macOS15,
+        compute_units=ct.ComputeUnit.ALL,
+    )
+
 
 if __name__ == "__main__":
+    def str2bool(value):
+        if isinstance(value, bool):
+            return value
+        value = value.lower()
+        if value in ("yes", "true", "t", "1"):
+            return True
+        if value in ("no", "false", "f", "0"):
+            return False
+        raise argparse.ArgumentTypeError("expected boolean value")
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, help="model to convert (e.g. tiny, tiny.en, base, base.en, small, small.en, medium, medium.en, large-v1, large-v2, large-v3, large-v3-turbo)", required=True)
-    parser.add_argument("--encoder-only", type=bool, help="only convert encoder", default=False)
-    parser.add_argument("--quantize",     type=bool, help="quantize weights to F16", default=False)
-    parser.add_argument("--optimize-ane", type=bool, help="optimize for ANE execution (currently broken)", default=False)
+    parser.add_argument("--encoder-only", type=str2bool, help="only convert encoder", default=False)
+    parser.add_argument("--decoder-only", action="store_true", help="only convert decoder")
+    parser.add_argument("--decoder-stateful", action="store_true", help="export experimental one-token decoder with Core ML self/cross KV state")
+    parser.add_argument("--decoder-max-tokens", type=int, help="maximum token context for experimental decoder export; defaults to the model text context", default=0)
+    parser.add_argument("--quantize",     type=str2bool, help="quantize weights to F16", default=False)
+    parser.add_argument("--optimize-ane", type=str2bool, help="optimize for ANE execution (currently broken)", default=False)
     args = parser.parse_args()
 
     if args.model not in ["tiny", "tiny.en", "base", "base.en", "small", "small.en", "small.en-tdrz", "medium", "medium.en", "large-v1", "large-v2", "large-v3", "large-v3-turbo"]:
         raise ValueError("Invalid model name")
+
+    if args.decoder_stateful and args.optimize_ane:
+        raise ValueError("--decoder-stateful does not support --optimize-ane")
 
     whisper = load_model(args.model).cpu()
     hparams = whisper.dims
@@ -316,13 +456,21 @@ if __name__ == "__main__":
         encoder = whisper.encoder
         decoder = whisper.decoder
 
-    # Convert encoder
-    encoder = convert_encoder(hparams, encoder, quantize=args.quantize)
-    encoder.save(f"models/coreml-encoder-{args.model}.mlpackage")
+    if args.encoder_only and args.decoder_only:
+        raise ValueError("--encoder-only and --decoder-only are mutually exclusive")
+
+    if not args.decoder_only:
+        # Convert encoder
+        encoder = convert_encoder(hparams, encoder, quantize=args.quantize)
+        encoder.save(f"models/coreml-encoder-{args.model}.mlpackage")
 
     if args.encoder_only is False:
         # Convert decoder
-        decoder = convert_decoder(hparams, decoder, quantize=args.quantize)
+        decoder_max_tokens = args.decoder_max_tokens if args.decoder_max_tokens > 0 else hparams.n_text_ctx
+        if args.decoder_stateful:
+            decoder = convert_stateful_decoder(hparams, decoder, max_tokens=decoder_max_tokens)
+        else:
+            decoder = convert_decoder(hparams, decoder, quantize=args.quantize, max_tokens=decoder_max_tokens, optimize_ane=args.optimize_ane)
         decoder.save(f"models/coreml-decoder-{args.model}.mlpackage")
 
     print("done converting")

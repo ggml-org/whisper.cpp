@@ -7,6 +7,7 @@
 #include "ggml-backend.h"
 
 #ifdef WHISPER_USE_COREML
+#include "coreml/whisper-decoder.h"
 #include "coreml/whisper-encoder.h"
 #endif
 
@@ -21,6 +22,7 @@
 #define _USE_MATH_DEFINES
 #include <cmath>
 #include <climits>
+#include <cstdlib>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -897,6 +899,7 @@ struct whisper_state {
 
 #ifdef WHISPER_USE_COREML
     whisper_coreml_context * ctx_coreml = nullptr;
+    whisper_coreml_decoder_context * ctx_coreml_decoder = nullptr;
 #endif
 
 #ifdef WHISPER_USE_OPENVINO
@@ -2977,6 +2980,151 @@ static bool whisper_decode_internal(
     return !(abort_callback && abort_callback(abort_callback_data));
 }
 
+#ifdef WHISPER_USE_COREML
+static bool whisper_coreml_decoder_set_cross_states(
+        whisper_context & wctx,
+          whisper_state & wstate,
+              const int   n_audio_ctx) {
+    if (wstate.kv_cross.k == nullptr || wstate.kv_cross.v == nullptr ||
+            wstate.kv_cross.k->type != GGML_TYPE_F16 || wstate.kv_cross.v->type != GGML_TYPE_F16 ||
+            !ggml_backend_buffer_is_host(wstate.kv_cross.k->buffer) ||
+            !ggml_backend_buffer_is_host(wstate.kv_cross.v->buffer)) {
+        WHISPER_LOG_ERROR("%s: Core ML decoder cross-state initialization requires host F16 ggml cross KV cache\n", __func__);
+        return false;
+    }
+
+    const auto & hparams = wctx.model.hparams;
+    const int n_state = hparams.n_text_state;
+    const int n_layer = hparams.n_text_layer;
+
+    if (!wctx.params.flash_attn) {
+        WHISPER_LOG_ERROR("%s: Core ML decoder cross-state initialization currently requires flash-attention KV layout\n", __func__);
+        return false;
+    }
+
+    const int n_audio_ctx_pad = wctx.params.flash_attn ? GGML_PAD(n_audio_ctx, 256) : n_audio_ctx;
+    const int64_t n_elems = (int64_t) n_audio_ctx*n_state;
+
+    const ggml_fp16_t * k_data = (const ggml_fp16_t *) wstate.kv_cross.k->data;
+    const ggml_fp16_t * v_data = (const ggml_fp16_t *) wstate.kv_cross.v->data;
+
+    for (int il = 0; il < n_layer; ++il) {
+        const int64_t off = (int64_t) il*n_audio_ctx_pad*n_state;
+        const std::string k_name = "cross_k_" + std::to_string(il);
+        const std::string v_name = "cross_v_" + std::to_string(il);
+
+        if (!whisper_coreml_decoder_set_state_f16(wstate.ctx_coreml_decoder, k_name.c_str(), k_data + off, n_elems) ||
+                !whisper_coreml_decoder_set_state_f16(wstate.ctx_coreml_decoder, v_name.c_str(), v_data + off, n_elems)) {
+            WHISPER_LOG_ERROR("%s: failed to initialize Core ML decoder cross KV state for layer %d\n", __func__, il);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool whisper_decode_coreml_full_context(
+        whisper_context              & wctx,
+          whisper_state              & wstate,
+        const std::vector<whisper_token> & tokens,
+                           const bool   is_prompt,
+                        const int64_t   stateful_n_past) {
+    if (wstate.ctx_coreml_decoder == nullptr) {
+        return false;
+    }
+
+    if (tokens.empty()) {
+        WHISPER_LOG_ERROR("%s: empty token input\n", __func__);
+        return false;
+    }
+
+    const auto & hparams = wctx.model.hparams;
+
+    if ((int) tokens.size() > hparams.n_text_ctx) {
+        WHISPER_LOG_ERROR("%s: token input is too long (%d > %d)\n", __func__, (int) tokens.size(), hparams.n_text_ctx);
+        return false;
+    }
+
+    if (wstate.embd_enc == nullptr || wstate.embd_enc->type != GGML_TYPE_F32) {
+        WHISPER_LOG_ERROR("%s: Core ML decoder requires F32 encoder output\n", __func__);
+        return false;
+    }
+
+    if (!ggml_backend_buffer_is_host(wstate.embd_enc->buffer)) {
+        WHISPER_LOG_ERROR("%s: Core ML decoder requires host-resident encoder output; disable GPU offload for this experimental path\n", __func__);
+        return false;
+    }
+
+    const bool is_stateful_decoder = whisper_coreml_decoder_is_stateful(wstate.ctx_coreml_decoder);
+    const bool is_stateful_incremental = is_stateful_decoder && !is_prompt;
+
+    std::vector<int32_t> tokens_i32(tokens.begin(), tokens.end());
+
+    const int64_t t_start_us = ggml_time_us();
+
+    auto & logits_out = wstate.logits;
+    if (is_stateful_incremental) {
+        logits_out.assign(hparams.n_vocab, 0.0f);
+    } else {
+        logits_out.assign(tokens.size()*hparams.n_vocab, 0.0f);
+    }
+
+    float * logits_last = is_stateful_incremental
+        ? logits_out.data()
+        : logits_out.data() + (tokens.size() - 1)*hparams.n_vocab;
+
+    const int n_audio_ctx = wstate.exp_n_audio_ctx > 0 ? wstate.exp_n_audio_ctx : hparams.n_audio_ctx;
+
+    const int32_t * tokens_data = tokens_i32.data();
+    int64_t n_tokens_coreml = tokens_i32.size();
+    if (is_stateful_decoder) {
+        if (is_prompt) {
+            whisper_coreml_decoder_reset(wstate.ctx_coreml_decoder);
+            if (!whisper_coreml_decoder_uses_audio_input(wstate.ctx_coreml_decoder) &&
+                    !whisper_coreml_decoder_set_cross_states(wctx, wstate, n_audio_ctx)) {
+                return false;
+            }
+        } else {
+            const int64_t state_pos = whisper_coreml_decoder_state_pos(wstate.ctx_coreml_decoder);
+            if (state_pos != stateful_n_past) {
+                WHISPER_LOG_ERROR("%s: Core ML decoder state is out of sync (state_pos = %d, n_past = %d)\n",
+                        __func__, (int) state_pos, (int) stateful_n_past);
+                return false;
+            }
+
+            tokens_data = &tokens_i32.back();
+            n_tokens_coreml = 1;
+        }
+    }
+
+    const bool ok = whisper_coreml_decoder_decode(
+            wstate.ctx_coreml_decoder,
+            n_tokens_coreml,
+            hparams.n_vocab,
+            n_audio_ctx,
+            hparams.n_audio_state,
+            tokens_data,
+            (const float *) wstate.embd_enc->data,
+            logits_last);
+
+    if (!ok) {
+        WHISPER_LOG_ERROR("%s: Core ML decoder prediction failed\n", __func__);
+        return false;
+    }
+
+    const int64_t t_elapsed_us = ggml_time_us() - t_start_us;
+    if (is_prompt) {
+        wstate.t_prompt_us += t_elapsed_us;
+        wstate.n_prompt += tokens.size();
+    } else {
+        wstate.t_decode_us += t_elapsed_us;
+        wstate.n_decode++;
+    }
+
+    return true;
+}
+#endif
+
 //  500 -> 00:05.000
 // 6000 -> 01:00.000
 static std::string to_timestamp(int64_t t, bool comma = false) {
@@ -3324,6 +3472,11 @@ static std::vector<whisper_vocab::id> tokenize(const whisper_vocab & vocab, cons
 //
 
 #ifdef WHISPER_USE_COREML
+static bool whisper_env_is_enabled(const char * name) {
+    const char * value = std::getenv(name);
+    return value != nullptr && value[0] != '\0' && strcmp(value, "0") != 0 && strcmp(value, "false") != 0 && strcmp(value, "FALSE") != 0;
+}
+
 // replace .bin with -encoder.mlmodelc
 static std::string whisper_get_coreml_path_encoder(std::string path_bin) {
     auto pos = path_bin.rfind('.');
@@ -3341,6 +3494,27 @@ static std::string whisper_get_coreml_path_encoder(std::string path_bin) {
     }
 
     path_bin += "-encoder.mlmodelc";
+
+    return path_bin;
+}
+
+// replace .bin with -decoder.mlmodelc
+static std::string whisper_get_coreml_path_decoder(std::string path_bin) {
+    auto pos = path_bin.rfind('.');
+    if (pos != std::string::npos) {
+        path_bin = path_bin.substr(0, pos);
+    }
+
+    // match "-qx_x"
+    pos = path_bin.rfind('-');
+    if (pos != std::string::npos) {
+        auto sub = path_bin.substr(pos);
+        if (sub.size() == 5 && sub[1] == 'q' && sub[3] == '_') {
+            path_bin = path_bin.substr(0, pos);
+        }
+    }
+
+    path_bin += "-decoder.mlmodelc";
 
     return path_bin;
 }
@@ -3452,6 +3626,48 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
 #endif
     } else {
         WHISPER_LOG_INFO("%s: Core ML model loaded\n", __func__);
+    }
+
+    if (whisper_env_is_enabled("WHISPER_COREML_DECODER")) {
+        const char * path_decoder_env = std::getenv("WHISPER_COREML_DECODER_MODEL");
+        const auto path_decoder = path_decoder_env != nullptr && path_decoder_env[0] != '\0'
+            ? std::string(path_decoder_env)
+            : whisper_get_coreml_path_decoder(ctx->path_model);
+
+        WHISPER_LOG_INFO("%s: loading experimental Core ML decoder model from '%s'\n", __func__, path_decoder.c_str());
+        WHISPER_LOG_WARN("%s: experimental Core ML decoder supports greedy temperature=0, best_of=1 only\n", __func__);
+
+        state->ctx_coreml_decoder = whisper_coreml_decoder_init(path_decoder.c_str());
+        if (!state->ctx_coreml_decoder) {
+            WHISPER_LOG_ERROR("%s: failed to load experimental Core ML decoder model from '%s'\n", __func__, path_decoder.c_str());
+            whisper_free_state(state);
+            return nullptr;
+        }
+
+        if (whisper_coreml_decoder_is_stateful(state->ctx_coreml_decoder) &&
+                !whisper_coreml_decoder_uses_audio_input(state->ctx_coreml_decoder)) {
+            if (ctx->model.hparams.ftype != GGML_FTYPE_ALL_F32 && ctx->model.hparams.ftype != GGML_FTYPE_MOSTLY_F16) {
+                WHISPER_LOG_ERROR("%s: experimental Core ML decoder cross-KV state requires an F32/F16 ggml model paired with the exported decoder\n", __func__);
+                whisper_free_state(state);
+                return nullptr;
+            }
+
+            if (!ctx->params.flash_attn) {
+                WHISPER_LOG_ERROR("%s: experimental Core ML decoder cross-KV state currently requires flash-attention layout\n", __func__);
+                whisper_free_state(state);
+                return nullptr;
+            }
+
+            if (state->kv_cross.k == nullptr || state->kv_cross.v == nullptr ||
+                    !ggml_backend_buffer_is_host(state->kv_cross.k->buffer) ||
+                    !ggml_backend_buffer_is_host(state->kv_cross.v->buffer)) {
+                WHISPER_LOG_ERROR("%s: experimental Core ML decoder cross-KV state requires host KV cache; disable GPU offload for this mode\n", __func__);
+                whisper_free_state(state);
+                return nullptr;
+            }
+        }
+
+        WHISPER_LOG_INFO("%s: experimental Core ML decoder model loaded\n", __func__);
     }
 #endif
 
@@ -3812,6 +4028,10 @@ void whisper_free_state(struct whisper_state * state) {
             whisper_coreml_free(state->ctx_coreml);
             state->ctx_coreml = nullptr;
         }
+        if (state->ctx_coreml_decoder != nullptr) {
+            whisper_coreml_decoder_free(state->ctx_coreml_decoder);
+            state->ctx_coreml_decoder = nullptr;
+        }
 #endif
 
 #ifdef WHISPER_USE_OPENVINO
@@ -3933,6 +4153,28 @@ int whisper_encode(struct whisper_context * ctx, int offset, int n_threads) {
 }
 
 int whisper_decode_with_state(struct whisper_context * ctx, struct whisper_state * state, const whisper_token * tokens, int n_tokens, int n_past, int n_threads) {
+#ifdef WHISPER_USE_COREML
+    if (state->ctx_coreml_decoder != nullptr) {
+        if (n_past > 0 && !whisper_coreml_decoder_is_stateful(state->ctx_coreml_decoder)) {
+            WHISPER_LOG_ERROR("%s: stateless experimental Core ML decoder requires the full token context with n_past=0\n", __func__);
+            return 1;
+        }
+
+        if (n_past > 0 && n_tokens != 1) {
+            WHISPER_LOG_ERROR("%s: stateful experimental Core ML decoder continuation requires fixed single-token steps\n", __func__);
+            return 1;
+        }
+
+        std::vector<whisper_token> tokens_full(tokens, tokens + n_tokens);
+        if (!whisper_decode_coreml_full_context(*ctx, *state, tokens_full, n_past == 0, n_past)) {
+            WHISPER_LOG_ERROR("%s: failed to eval experimental Core ML decoder\n", __func__);
+            return 1;
+        }
+
+        return 0;
+    }
+#endif
+
     whisper_batch_prep_legacy(state->batch, tokens, n_tokens, n_past, 0);
 
     whisper_kv_cache_seq_rm(state->kv_self, 0, n_past, -1);
@@ -6887,6 +7129,19 @@ int whisper_full_with_state(
         return -4;
     }
 
+#ifdef WHISPER_USE_COREML
+    const bool use_coreml_decoder = state->ctx_coreml_decoder != nullptr;
+    if (use_coreml_decoder) {
+        if (params.strategy != WHISPER_SAMPLING_GREEDY || params.greedy.best_of != 1 ||
+                temperatures.size() != 1 || temperatures[0] > 1e-6f || ctx->params.dtw_token_timestamps) {
+            WHISPER_LOG_ERROR("%s: experimental Core ML decoder requires greedy decoding with best_of=1, temperature=0, no fallback, and no DTW timestamps\n", __func__);
+            return -4;
+        }
+    }
+#else
+    const bool use_coreml_decoder = false;
+#endif
+
     // TAGS: WHISPER_DECODER_INIT
     for (int j = 1; j < n_decoders; j++) {
         auto & decoder = state->decoders[j];
@@ -6953,6 +7208,10 @@ int whisper_full_with_state(
     // overwrite audio_ctx, max allowed is hparams.n_audio_ctx
     if (params.audio_ctx > whisper_n_audio_ctx(ctx)) {
         WHISPER_LOG_ERROR("%s: audio_ctx is larger than the maximum allowed (%d > %d)\n", __func__, params.audio_ctx, whisper_n_audio_ctx(ctx));
+        return -5;
+    }
+    if (use_coreml_decoder && params.audio_ctx > 0 && params.audio_ctx != whisper_n_audio_ctx(ctx)) {
+        WHISPER_LOG_ERROR("%s: experimental Core ML decoder requires the model's full audio context\n", __func__);
         return -5;
     }
     state->exp_n_audio_ctx = params.audio_ctx;
@@ -7150,9 +7409,21 @@ int whisper_full_with_state(
 
                 whisper_batch_prep_legacy(state->batch, prompt.data(), prompt.size(), 0, 0);
 
-                if (!whisper_decode_internal(*ctx, *state, state->batch, params.n_threads, false, params.abort_callback, params.abort_callback_user_data)) {
-                    WHISPER_LOG_ERROR("%s: failed to decode\n", __func__);
-                    return -8;
+                if (use_coreml_decoder) {
+#ifdef WHISPER_USE_COREML
+                    if (!whisper_decode_coreml_full_context(*ctx, *state, prompt, true, 0)) {
+                        WHISPER_LOG_ERROR("%s: failed to decode with experimental Core ML decoder\n", __func__);
+                        return -8;
+                    }
+                    if (params.abort_callback && params.abort_callback(params.abort_callback_user_data)) {
+                        return -8;
+                    }
+#endif
+                } else {
+                    if (!whisper_decode_internal(*ctx, *state, state->batch, params.n_threads, false, params.abort_callback, params.abort_callback_user_data)) {
+                        WHISPER_LOG_ERROR("%s: failed to decode\n", __func__);
+                        return -8;
+                    }
                 }
 
                 // Calculate no_speech probability after first decode.
@@ -7462,9 +7733,35 @@ int whisper_full_with_state(
 
                     assert(batch.n_tokens > 0);
 
-                    if (!whisper_decode_internal(*ctx, *state, state->batch, params.n_threads, false, params.abort_callback, params.abort_callback_user_data)) {
-                        WHISPER_LOG_ERROR("%s: failed to decode\n", __func__);
-                        return -9;
+                    if (use_coreml_decoder) {
+#ifdef WHISPER_USE_COREML
+                        auto & decoder = state->decoders[0];
+                        std::vector<whisper_token> coreml_tokens;
+
+                        coreml_tokens.reserve(prompt.size() + decoder.sequence.tokens.size());
+                        coreml_tokens.insert(coreml_tokens.end(), prompt.begin(), prompt.end());
+                        for (const auto & token : decoder.sequence.tokens) {
+                            coreml_tokens.push_back(token.id);
+                        }
+
+                        decoder.i_batch = coreml_tokens.size() - 1;
+
+                        if (!whisper_decode_coreml_full_context(*ctx, *state, coreml_tokens, false, (int64_t) coreml_tokens.size() - 1)) {
+                            WHISPER_LOG_ERROR("%s: failed to decode with experimental Core ML decoder\n", __func__);
+                            return -9;
+                        }
+                        if (whisper_coreml_decoder_is_stateful(state->ctx_coreml_decoder)) {
+                            decoder.i_batch = 0;
+                        }
+                        if (params.abort_callback && params.abort_callback(params.abort_callback_user_data)) {
+                            return -9;
+                        }
+#endif
+                    } else {
+                        if (!whisper_decode_internal(*ctx, *state, state->batch, params.n_threads, false, params.abort_callback, params.abort_callback_user_data)) {
+                            WHISPER_LOG_ERROR("%s: failed to decode\n", __func__);
+                            return -9;
+                        }
                     }
 
                     const int64_t t_start_sample_us = ggml_time_us();

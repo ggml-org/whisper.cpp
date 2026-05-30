@@ -59,6 +59,8 @@ if (WHISPER_COREML)
 
     add_library(${TARGET}
         coreml/whisper-compat.m
+        coreml/whisper-decoder.h
+        coreml/whisper-decoder.mm
         coreml/whisper-encoder.h
         coreml/whisper-encoder.mm
         coreml/whisper-encoder-impl.h
