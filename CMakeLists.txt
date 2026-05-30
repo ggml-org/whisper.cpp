@@ -208,7 +208,7 @@ configure_file(cmake/whisper.pc.in
         @ONLY)
 
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/whisper.pc"
-        DESTINATION lib/pkgconfig)
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 
 #
 # programs, examples and tests
