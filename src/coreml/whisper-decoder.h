@@ -9,6 +9,10 @@ extern "C" {
 
 struct whisper_coreml_decoder_context;
 
+enum {
+    WHISPER_COREML_DECODER_TRACE_GENERATION_STEPS = 8,
+};
+
 struct whisper_coreml_decoder_trace {
     bool    enabled;
     int64_t state_pos;
@@ -27,6 +31,15 @@ struct whisper_coreml_decoder_trace {
     int64_t generation_step_count;
 };
 
+struct whisper_coreml_decoder_step_trace {
+    bool    is_prompt;
+    bool    is_prefill;
+    int64_t step_index;
+    int64_t state_pos;
+    int64_t n_tokens;
+    int64_t prediction_us;
+};
+
 struct whisper_coreml_decoder_context * whisper_coreml_decoder_init(const char * path_model);
 void whisper_coreml_decoder_free(struct whisper_coreml_decoder_context * ctx);
 void whisper_coreml_decoder_reset(struct whisper_coreml_decoder_context * ctx);
@@ -38,6 +51,8 @@ bool whisper_coreml_decoder_set_state_f16(struct whisper_coreml_decoder_context 
 bool whisper_coreml_decoder_trace_enabled(const struct whisper_coreml_decoder_context * ctx);
 void whisper_coreml_decoder_trace_reset(struct whisper_coreml_decoder_context * ctx);
 void whisper_coreml_decoder_trace_get(const struct whisper_coreml_decoder_context * ctx, struct whisper_coreml_decoder_trace * trace);
+int64_t whisper_coreml_decoder_trace_step_count(const struct whisper_coreml_decoder_context * ctx);
+bool whisper_coreml_decoder_trace_step_get(const struct whisper_coreml_decoder_context * ctx, int64_t index, struct whisper_coreml_decoder_step_trace * step);
 
 bool whisper_coreml_decoder_decode(
         struct whisper_coreml_decoder_context * ctx,

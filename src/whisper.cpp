@@ -4652,6 +4652,27 @@ void whisper_print_timings(struct whisper_context * ctx) {
                     (long long) trace.prompt_step_count,
                     (long long) trace.generation_step_count,
                     (long long) trace.state_pos);
+
+            const int64_t n_step_traces = whisper_coreml_decoder_trace_step_count(ctx->state->ctx_coreml_decoder);
+            if (n_step_traces > 0) {
+                WHISPER_LOG_INFO("%s:   step predicts = %8lld rows (all prompt, first %d generation)\n", __func__,
+                        (long long) n_step_traces,
+                        WHISPER_COREML_DECODER_TRACE_GENERATION_STEPS);
+                WHISPER_LOG_INFO("%s:     step  phase       function  state_pos  tokens  prediction ms\n", __func__);
+                for (int64_t i = 0; i < n_step_traces; ++i) {
+                    whisper_coreml_decoder_step_trace step;
+                    if (!whisper_coreml_decoder_trace_step_get(ctx->state->ctx_coreml_decoder, i, &step)) {
+                        continue;
+                    }
+                    WHISPER_LOG_INFO("%s:     %4lld  %-10s %-8s %9lld %7lld %12.3f\n", __func__,
+                            (long long) step.step_index,
+                            step.is_prompt ? "prompt" : "generation",
+                            step.is_prefill ? "prefill" : "decode",
+                            (long long) step.state_pos,
+                            (long long) step.n_tokens,
+                            step.prediction_us / 1000.0);
+                }
+            }
         }
 #endif
     }
