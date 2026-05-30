@@ -84,12 +84,13 @@ struct whisper_coreml_decoder_context * whisper_coreml_decoder_init(const char *
 
 #if WHISPER_COREML_HAS_STATE
     if (@available(macOS 15.0, *)) {
+        const bool prefill_disabled = whisper_coreml_decoder_env_is_enabled("WHISPER_COREML_DECODER_DISABLE_PREFILL");
         MLModelConfiguration * prefillConfig = [[MLModelConfiguration alloc] init];
         prefillConfig.computeUnits = MLComputeUnitsAll;
         prefillConfig.functionName = @"prefill";
 
         NSError * prefillError = nil;
-        MLModel * model_prefill = [MLModel modelWithContentsOfURL:url_model configuration:prefillConfig error:&prefillError];
+        MLModel * model_prefill = prefill_disabled ? nil : [MLModel modelWithContentsOfURL:url_model configuration:prefillConfig error:&prefillError];
         if (model_prefill != nil) {
             MLFeatureDescription * tokenDescription = model_prefill.modelDescription.inputDescriptionsByName[@"token_data"];
             NSArray<NSNumber *> * tokenShape = tokenDescription.multiArrayConstraint.shape;

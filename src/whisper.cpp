@@ -7573,6 +7573,7 @@ int whisper_full_with_state(
                 if (use_coreml_decoder) {
 #ifdef WHISPER_USE_COREML
                     if (whisper_coreml_decoder_is_stateful(state->ctx_coreml_decoder) &&
+                            !whisper_coreml_decoder_env_is_enabled("WHISPER_COREML_DECODER_DISABLE_PREFILL") &&
                             whisper_coreml_decoder_env_is_enabled("WHISPER_COREML_DECODER_CPU_PREFILL")) {
                         if (!whisper_decode_coreml_prompt_with_ggml_prefill(
                                     *ctx, *state, state->batch, params.n_threads, params.abort_callback, params.abort_callback_user_data)) {
