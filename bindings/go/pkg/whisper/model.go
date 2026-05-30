@@ -23,19 +23,21 @@ var _ Model = (*model)(nil)
 ///////////////////////////////////////////////////////////////////////////////
 // LIFECYCLE
 
-func New(path string) (Model, error) {
-	model := new(model)
+func New(path string, options ...modelOption) (Model, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, err
-	} else if ctx := whisper.Whisper_init(path); ctx == nil {
-		return nil, ErrUnableToLoadModel
-	} else {
-		model.ctx = ctx
-		model.path = path
 	}
 
-	// Return success
-	return model, nil
+	params := whisper.DefaultContextParams()
+	for _, option := range options {
+		option.apply(&params)
+	}
+
+	if ctx := whisper.Whisper_init_with_params(path, params); ctx != nil {
+		return &model{path, ctx}, nil
+	}
+
+	return nil, ErrUnableToLoadModel
 }
 
 func (model *model) Close() error {
