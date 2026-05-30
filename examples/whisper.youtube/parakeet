@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Parakeet V3 transcription launcher.
+# Usage:
+#   ./parakeet <wav-file>
+#   ./parakeet <youtube-url>
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# numba cannot write its cache on the mounted filesystem under this dir
+# (no inode-stable locator); redirect cache to /tmp.
+export NUMBA_CACHE_DIR="${NUMBA_CACHE_DIR:-/tmp/numba-cache-$USER}"
+mkdir -p "$NUMBA_CACHE_DIR"
+exec "$DIR/.venv-parakeet/bin/python" "$DIR/parakeet_transcribe.py" "$@"
