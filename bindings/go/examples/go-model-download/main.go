@@ -18,9 +18,10 @@ import (
 // CONSTANTS
 
 const (
-	srcUrl  = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/" // The location of the models
-	srcExt  = ".bin"                                                       // Filename extension
-	bufSize = 1024 * 64                                                    // Size of the buffer used for downloading the model
+	srcUrl            = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/" // The location of the models
+	srcUrlTinydiarize = "https://huggingface.co/akashmjn/tinydiarize-whisper.cpp/resolve/main/"
+	srcExt            = ".bin"    // Filename extension
+	bufSize           = 1024 * 64 // Size of the buffer used for downloading the model
 )
 
 var (
@@ -38,6 +39,7 @@ var (
 		"large-v2", "large-v2-q5_0", "large-v2-q8_0",
 		"large-v3", "large-v3-q5_0",
 		"large-v3-turbo", "large-v3-turbo-q5_0", "large-v3-turbo-q8_0",
+		"small.en-tdrz",
 	}
 )
 
@@ -217,6 +219,12 @@ func URLForModel(model string) (string, error) {
 	// Ensure ".bin" extension is added only once
 	if filepath.Ext(model) != srcExt {
 		model += srcExt
+	}
+
+	srcUrl := srcUrl
+
+	if strings.Contains(model, "tdrz") {
+		srcUrl = srcUrlTinydiarize
 	}
 
 	// Parse the base URL
