@@ -3004,6 +3004,8 @@ static bool whisper_coreml_decoder_set_cross_states(
     const auto & hparams = wctx.model.hparams;
     const int n_state = hparams.n_text_state;
     const int n_layer = hparams.n_text_layer;
+    const int n_head  = hparams.n_text_head;
+    const bool no_write_sharded = whisper_coreml_decoder_is_no_write_sharded(wstate.ctx_coreml_decoder);
 
     if (!wctx.params.flash_attn) {
         WHISPER_LOG_ERROR("%s: Core ML decoder cross-state initialization currently requires flash-attention KV layout\n", __func__);
@@ -3015,13 +3017,23 @@ static bool whisper_coreml_decoder_set_cross_states(
 
     const ggml_fp16_t * k_data = (const ggml_fp16_t *) wstate.kv_cross.k->data;
     const ggml_fp16_t * v_data = (const ggml_fp16_t *) wstate.kv_cross.v->data;
+    const float k_unscale = no_write_sharded ? 1.0f/powf(float(n_state/n_head), -0.25f) : 1.0f;
+    std::vector<ggml_fp16_t> k_unscaled(no_write_sharded ? n_elems : 0);
 
     for (int il = 0; il < n_layer; ++il) {
         const int64_t off = (int64_t) il*n_audio_ctx_pad*n_state;
         const std::string k_name = "cross_k_" + std::to_string(il);
         const std::string v_name = "cross_v_" + std::to_string(il);
+        const ggml_fp16_t * k_src = k_data + off;
 
-        if (!whisper_coreml_decoder_set_state_f16(wstate.ctx_coreml_decoder, k_name.c_str(), k_data + off, n_elems) ||
+        if (no_write_sharded) {
+            for (int64_t i = 0; i < n_elems; ++i) {
+                k_unscaled[i] = ggml_fp32_to_fp16(ggml_fp16_to_fp32(k_data[off + i])*k_unscale);
+            }
+            k_src = k_unscaled.data();
+        }
+
+        if (!whisper_coreml_decoder_set_state_f16(wstate.ctx_coreml_decoder, k_name.c_str(), k_src, n_elems) ||
                 !whisper_coreml_decoder_set_state_f16(wstate.ctx_coreml_decoder, v_name.c_str(), v_data + off, n_elems)) {
             WHISPER_LOG_ERROR("%s: failed to initialize Core ML decoder cross KV state for layer %d\n", __func__, il);
             return false;
@@ -4699,6 +4711,9 @@ void whisper_print_timings(struct whisper_context * ctx) {
             WHISPER_LOG_INFO("%s:   providers      = %8.2f ms\n", __func__, trace.feature_provider_create_us / 1000.0);
             WHISPER_LOG_INFO("%s:   predictions    = %8.2f ms\n", __func__, trace.prediction_us / 1000.0);
             WHISPER_LOG_INFO("%s:   logits copy    = %8.2f ms\n", __func__, trace.logits_copy_us / 1000.0);
+            if (trace.no_write_sharded) {
+                WHISPER_LOG_INFO("%s:   shard state writes = %8.2f ms\n", __func__, trace.shard_state_write_us / 1000.0);
+            }
             WHISPER_LOG_INFO("%s:   steps          = %8lld prompt / %8lld generation / state_pos %lld\n", __func__,
                     (long long) trace.prompt_step_count,
                     (long long) trace.generation_step_count,
@@ -4709,20 +4724,63 @@ void whisper_print_timings(struct whisper_context * ctx) {
                 WHISPER_LOG_INFO("%s:   step predicts = %8lld rows (all prompt/prewarm, first %d generation)\n", __func__,
                         (long long) n_step_traces,
                         WHISPER_COREML_DECODER_TRACE_GENERATION_STEPS);
-                WHISPER_LOG_INFO("%s:     step  phase       function  state_pos  tokens  prediction ms\n", __func__);
+                if (trace.no_write_sharded) {
+                    WHISPER_LOG_INFO("%s:     step  phase       shard  layer0  state_pos  tokens  predict ms  state ms  logits ms  total ms\n", __func__);
+                } else {
+                    WHISPER_LOG_INFO("%s:     step  phase       function  state_pos  tokens  prediction ms\n", __func__);
+                }
+
+                std::vector<std::pair<int64_t, int64_t>> generation_token_totals_us;
                 for (int64_t i = 0; i < n_step_traces; ++i) {
                     whisper_coreml_decoder_step_trace step;
                     if (!whisper_coreml_decoder_trace_step_get(ctx->state->ctx_coreml_decoder, i, &step)) {
                         continue;
                     }
                     const char * phase = step.is_prewarm ? "prewarm" : (step.is_prompt ? "prompt" : "generation");
-                    WHISPER_LOG_INFO("%s:     %4lld  %-10s %-8s %9lld %7lld %12.3f\n", __func__,
-                            (long long) step.step_index,
-                            phase,
-                            step.is_prefill ? "prefill" : "decode",
-                            (long long) step.state_pos,
-                            (long long) step.n_tokens,
-                            step.prediction_us / 1000.0);
+                    if (trace.no_write_sharded) {
+                        const int64_t total_us = step.prediction_us + step.state_write_us + step.logits_copy_us;
+                        WHISPER_LOG_INFO("%s:     %4lld  %-10s %5lld  %6lld  %9lld %7lld %11.3f %9.3f %10.3f %9.3f\n", __func__,
+                                (long long) step.step_index,
+                                phase,
+                                (long long) step.shard_index,
+                                (long long) step.shard_start_layer,
+                                (long long) step.state_pos,
+                                (long long) step.n_tokens,
+                                step.prediction_us / 1000.0,
+                                step.state_write_us / 1000.0,
+                                step.logits_copy_us / 1000.0,
+                                total_us / 1000.0);
+                        if (!step.is_prompt && !step.is_prewarm) {
+                            if (generation_token_totals_us.empty() || generation_token_totals_us.back().first != step.state_pos) {
+                                generation_token_totals_us.emplace_back(step.state_pos, total_us);
+                            } else {
+                                generation_token_totals_us.back().second += total_us;
+                            }
+                        }
+                    } else {
+                        WHISPER_LOG_INFO("%s:     %4lld  %-10s %-8s %9lld %7lld %12.3f\n", __func__,
+                                (long long) step.step_index,
+                                phase,
+                                step.is_prefill ? "prefill" : "decode",
+                                (long long) step.state_pos,
+                                (long long) step.n_tokens,
+                                step.prediction_us / 1000.0);
+                    }
+                }
+
+                if (trace.no_write_sharded && !generation_token_totals_us.empty()) {
+                    WHISPER_LOG_INFO("%s:   no-write shard generation first token = %8.3f ms\n", __func__,
+                            generation_token_totals_us.front().second / 1000.0);
+                    if (generation_token_totals_us.size() > 1) {
+                        std::vector<int64_t> warm_us;
+                        warm_us.reserve(generation_token_totals_us.size() - 1);
+                        for (size_t i = 1; i < generation_token_totals_us.size(); ++i) {
+                            warm_us.push_back(generation_token_totals_us[i].second);
+                        }
+                        std::sort(warm_us.begin(), warm_us.end());
+                        WHISPER_LOG_INFO("%s:   no-write shard generation warm p50    = %8.3f ms\n", __func__,
+                                warm_us[warm_us.size()/2] / 1000.0);
+                    }
                 }
             }
         }

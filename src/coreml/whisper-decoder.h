@@ -15,6 +15,7 @@ enum {
 
 struct whisper_coreml_decoder_trace {
     bool    enabled;
+    bool    no_write_sharded;
     int64_t state_pos;
     int64_t cross_kv_write_count;
     int64_t cross_kv_bytes_written;
@@ -22,6 +23,7 @@ struct whisper_coreml_decoder_trace {
     int64_t self_kv_write_count;
     int64_t self_kv_bytes_written;
     int64_t self_kv_write_us;
+    int64_t shard_state_write_us;
     int64_t mlstate_create_us;
     int64_t input_array_create_us;
     int64_t feature_provider_create_us;
@@ -36,15 +38,20 @@ struct whisper_coreml_decoder_step_trace {
     bool    is_prefill;
     bool    is_prewarm;
     int64_t step_index;
+    int64_t shard_index;
+    int64_t shard_start_layer;
     int64_t state_pos;
     int64_t n_tokens;
     int64_t prediction_us;
+    int64_t state_write_us;
+    int64_t logits_copy_us;
 };
 
 struct whisper_coreml_decoder_context * whisper_coreml_decoder_init(const char * path_model);
 void whisper_coreml_decoder_free(struct whisper_coreml_decoder_context * ctx);
 void whisper_coreml_decoder_reset(struct whisper_coreml_decoder_context * ctx);
 bool whisper_coreml_decoder_is_stateful(const struct whisper_coreml_decoder_context * ctx);
+bool whisper_coreml_decoder_is_no_write_sharded(const struct whisper_coreml_decoder_context * ctx);
 bool whisper_coreml_decoder_uses_audio_input(const struct whisper_coreml_decoder_context * ctx);
 const char * whisper_coreml_decoder_compute_units_name(const struct whisper_coreml_decoder_context * ctx);
 bool whisper_coreml_decoder_prewarms_state(const struct whisper_coreml_decoder_context * ctx);
