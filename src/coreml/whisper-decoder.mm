@@ -14,8 +14,11 @@
 #endif
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cmath>
+#include <chrono>
+#include <vector>
 
 #if __cplusplus
 extern "C" {
@@ -23,13 +26,29 @@ extern "C" {
 
 struct whisper_coreml_decoder_context {
     const void * model;
+    const void * model_prefill;
     const void * state;
     bool audio_ane_layout;
     bool stateful;
     bool uses_audio_input;
     int64_t state_pos;
     int64_t max_tokens;
+    int64_t prefill_tokens;
+    whisper_coreml_decoder_trace trace;
 };
+
+static int64_t whisper_coreml_decoder_time_us() {
+    using clock = std::chrono::steady_clock;
+    return std::chrono::duration_cast<std::chrono::microseconds>(clock::now().time_since_epoch()).count();
+}
+
+static bool whisper_coreml_decoder_env_is_enabled(const char * name) {
+    const char * value = std::getenv(name);
+    return value != nullptr && value[0] != '\0' &&
+        std::strcmp(value, "0") != 0 &&
+        std::strcmp(value, "false") != 0 &&
+        std::strcmp(value, "FALSE") != 0;
+}
 
 struct whisper_coreml_decoder_context * whisper_coreml_decoder_init(const char * path_model) {
     NSString * path_model_str = [[NSString alloc] initWithUTF8String:path_model];
@@ -49,12 +68,35 @@ struct whisper_coreml_decoder_context * whisper_coreml_decoder_init(const char *
 
     whisper_coreml_decoder_context * ctx = new whisper_coreml_decoder_context;
     ctx->model = CFBridgingRetain(model);
+    ctx->model_prefill = nullptr;
     ctx->state = nullptr;
     ctx->audio_ane_layout = false;
     ctx->stateful = false;
     ctx->uses_audio_input = false;
     ctx->state_pos = 0;
     ctx->max_tokens = 0;
+    ctx->prefill_tokens = 0;
+    std::memset(&ctx->trace, 0, sizeof(ctx->trace));
+    ctx->trace.enabled = whisper_coreml_decoder_env_is_enabled("WHISPER_COREML_DECODER_TRACE");
+
+#if WHISPER_COREML_HAS_STATE
+    if (@available(macOS 15.0, *)) {
+        MLModelConfiguration * prefillConfig = [[MLModelConfiguration alloc] init];
+        prefillConfig.computeUnits = MLComputeUnitsAll;
+        prefillConfig.functionName = @"prefill";
+
+        NSError * prefillError = nil;
+        MLModel * model_prefill = [MLModel modelWithContentsOfURL:url_model configuration:prefillConfig error:&prefillError];
+        if (model_prefill != nil) {
+            MLFeatureDescription * tokenDescription = model_prefill.modelDescription.inputDescriptionsByName[@"token_data"];
+            NSArray<NSNumber *> * tokenShape = tokenDescription.multiArrayConstraint.shape;
+            if (tokenShape.count == 2) {
+                ctx->model_prefill = CFBridgingRetain(model_prefill);
+                ctx->prefill_tokens = tokenShape[1].longLongValue;
+            }
+        }
+    }
+#endif
 
     MLFeatureDescription * audioDescription = model.modelDescription.inputDescriptionsByName[@"audio_data"];
     if (audioDescription != nil) {
@@ -69,7 +111,11 @@ struct whisper_coreml_decoder_context * whisper_coreml_decoder_init(const char *
     if (@available(macOS 15.0, *)) {
         if (model.modelDescription.stateDescriptionsByName.count > 0) {
             ctx->stateful = true;
+            const int64_t t_state_us = ctx->trace.enabled ? whisper_coreml_decoder_time_us() : 0;
             ctx->state = CFBridgingRetain([model newState]);
+            if (ctx->trace.enabled) {
+                ctx->trace.mlstate_create_us += whisper_coreml_decoder_time_us() - t_state_us;
+            }
 
             for (NSString * name in model.modelDescription.stateDescriptionsByName) {
                 MLFeatureDescription * desc = model.modelDescription.stateDescriptionsByName[name];
@@ -100,6 +146,9 @@ void whisper_coreml_decoder_free(struct whisper_coreml_decoder_context * ctx) {
     if (ctx->state != nullptr) {
         CFRelease(ctx->state);
     }
+    if (ctx->model_prefill != nullptr) {
+        CFRelease(ctx->model_prefill);
+    }
     CFRelease(ctx->model);
     delete ctx;
 }
@@ -114,7 +163,11 @@ void whisper_coreml_decoder_reset(struct whisper_coreml_decoder_context * ctx) {
         if (ctx->state != nullptr) {
             CFRelease(ctx->state);
         }
+        const int64_t t_state_us = ctx->trace.enabled ? whisper_coreml_decoder_time_us() : 0;
         ctx->state = CFBridgingRetain([(__bridge MLModel *) ctx->model newState]);
+        if (ctx->trace.enabled) {
+            ctx->trace.mlstate_create_us += whisper_coreml_decoder_time_us() - t_state_us;
+        }
         ctx->state_pos = 0;
     }
 #endif
@@ -132,6 +185,35 @@ int64_t whisper_coreml_decoder_state_pos(const struct whisper_coreml_decoder_con
     return ctx != nullptr ? ctx->state_pos : -1;
 }
 
+bool whisper_coreml_decoder_trace_enabled(const struct whisper_coreml_decoder_context * ctx) {
+    return ctx != nullptr && ctx->trace.enabled;
+}
+
+void whisper_coreml_decoder_trace_reset(struct whisper_coreml_decoder_context * ctx) {
+    if (ctx == nullptr || !ctx->trace.enabled) {
+        return;
+    }
+
+    const bool enabled = ctx->trace.enabled;
+    std::memset(&ctx->trace, 0, sizeof(ctx->trace));
+    ctx->trace.enabled = enabled;
+    ctx->trace.state_pos = ctx->state_pos;
+}
+
+void whisper_coreml_decoder_trace_get(const struct whisper_coreml_decoder_context * ctx, struct whisper_coreml_decoder_trace * trace) {
+    if (trace == nullptr) {
+        return;
+    }
+
+    std::memset(trace, 0, sizeof(*trace));
+    if (ctx == nullptr) {
+        return;
+    }
+
+    *trace = ctx->trace;
+    trace->state_pos = ctx->state_pos;
+}
+
 bool whisper_coreml_decoder_set_state_f16(struct whisper_coreml_decoder_context * ctx, const char * name, const void * data, int64_t n_elems) {
     if (ctx == nullptr || name == nullptr || data == nullptr || !ctx->stateful || ctx->state == nullptr) {
         return false;
@@ -141,6 +223,7 @@ bool whisper_coreml_decoder_set_state_f16(struct whisper_coreml_decoder_context 
     if (@available(macOS 15.0, *)) {
         NSString * stateName = [[NSString alloc] initWithUTF8String:name];
         __block bool ok = false;
+        const int64_t t_write_us = ctx->trace.enabled ? whisper_coreml_decoder_time_us() : 0;
 
         [(__bridge MLState *) ctx->state getMultiArrayForStateNamed:stateName handler:^(MLMultiArray * buffer) {
             if (buffer.dataType == MLMultiArrayDataTypeFloat16 && buffer.count >= n_elems) {
@@ -148,6 +231,14 @@ bool whisper_coreml_decoder_set_state_f16(struct whisper_coreml_decoder_context 
                 ok = true;
             }
         }];
+
+        if (ctx->trace.enabled) {
+            ctx->trace.cross_kv_write_us += whisper_coreml_decoder_time_us() - t_write_us;
+            if (ok) {
+                ctx->trace.cross_kv_write_count++;
+                ctx->trace.cross_kv_bytes_written += n_elems*sizeof(uint16_t);
+            }
+        }
 
         return ok;
     }
@@ -302,8 +393,34 @@ static MLMultiArray * whisper_coreml_make_state_self_mask(const int64_t pos, con
     return result;
 }
 
+static MLMultiArray * whisper_coreml_make_state_self_mask_batch(
+        const int64_t pos,
+        const int64_t n_tokens,
+        const int64_t max_tokens,
+          NSError ** error) {
+    MLMultiArray * result = [[MLMultiArray alloc] initWithShape:@[@1, @(n_tokens), @(max_tokens)]
+                                                       dataType:MLMultiArrayDataTypeFloat32
+                                                          error:error];
+    if (result == nil) {
+        return nil;
+    }
+
+    float * data = (float *) result.dataPointer;
+    const int64_t stride_t = result.strides[1].longLongValue;
+    const int64_t stride_i = result.strides[2].longLongValue;
+    for (int64_t t = 0; t < n_tokens; ++t) {
+        const int64_t visible_pos = pos + t;
+        for (int64_t i = 0; i < max_tokens; ++i) {
+            data[t*stride_t + i*stride_i] = i <= visible_pos ? 0.0f : -INFINITY;
+        }
+    }
+
+    return result;
+}
+
 static bool whisper_coreml_decoder_predict(
         struct whisper_coreml_decoder_context * ctx,
+                                const void * modelPtr,
                               MLMultiArray * tokenArray,
                               MLMultiArray * audioArray,
                               MLMultiArray * posArray,
@@ -313,6 +430,7 @@ static bool whisper_coreml_decoder_predict(
                                    int64_t   n_vocab,
                                     float * out_logits,
                                   NSError ** error) {
+    const int64_t t_feature_provider_us = ctx->trace.enabled ? whisper_coreml_decoder_time_us() : 0;
     NSMutableDictionary<NSString *, MLFeatureValue *> * features = [NSMutableDictionary dictionary];
     features[@"token_data"] = [MLFeatureValue featureValueWithMultiArray:tokenArray];
     if (ctx->uses_audio_input) {
@@ -326,19 +444,27 @@ static bool whisper_coreml_decoder_predict(
     }
 
     MLDictionaryFeatureProvider * input = [[MLDictionaryFeatureProvider alloc] initWithDictionary:features error:error];
+    if (ctx->trace.enabled) {
+        ctx->trace.feature_provider_create_us += whisper_coreml_decoder_time_us() - t_feature_provider_us;
+    }
     if (input == nil) {
         return false;
     }
 
     id<MLFeatureProvider> output = nil;
+    MLModel * model = (__bridge MLModel *) (modelPtr != nullptr ? modelPtr : ctx->model);
+    const int64_t t_prediction_us = ctx->trace.enabled ? whisper_coreml_decoder_time_us() : 0;
     if (ctx->stateful) {
 #if WHISPER_COREML_HAS_STATE
         if (@available(macOS 15.0, *)) {
-            output = [(__bridge MLModel *) ctx->model predictionFromFeatures:input usingState:(__bridge MLState *) ctx->state error:error];
+            output = [model predictionFromFeatures:input usingState:(__bridge MLState *) ctx->state error:error];
         }
 #endif
     } else {
-        output = [(__bridge MLModel *) ctx->model predictionFromFeatures:input error:error];
+        output = [model predictionFromFeatures:input error:error];
+    }
+    if (ctx->trace.enabled) {
+        ctx->trace.prediction_us += whisper_coreml_decoder_time_us() - t_prediction_us;
     }
 
     if (output == nil) {
@@ -353,7 +479,13 @@ static bool whisper_coreml_decoder_predict(
         }
     }
 
-    return whisper_coreml_copy_last_logits(logitsValue.multiArrayValue, n_tokens, n_vocab, out_logits);
+    const int64_t t_logits_copy_us = ctx->trace.enabled ? whisper_coreml_decoder_time_us() : 0;
+    const bool ok = whisper_coreml_copy_last_logits(logitsValue.multiArrayValue, n_tokens, n_vocab, out_logits);
+    if (ctx->trace.enabled) {
+        ctx->trace.logits_copy_us += whisper_coreml_decoder_time_us() - t_logits_copy_us;
+    }
+
+    return ok;
 }
 
 bool whisper_coreml_decoder_decode(
@@ -364,13 +496,15 @@ bool whisper_coreml_decoder_decode(
                                      int64_t   n_audio_state,
                               const int32_t * tokens,
                                 const float * audio,
-                                      float * out_logits) {
+                                      float * out_logits,
+                                        bool   is_prompt) {
     if (ctx == nullptr || tokens == nullptr || audio == nullptr || out_logits == nullptr || n_tokens <= 0) {
         return false;
     }
 
     @autoreleasepool {
         NSError * error = nil;
+        const int64_t t_input_us = ctx->trace.enabled ? whisper_coreml_decoder_time_us() : 0;
 
         MLMultiArray * tokenArray = whisper_coreml_make_token_array(tokens, n_tokens, &error);
         if (tokenArray == nil) {
@@ -381,6 +515,9 @@ bool whisper_coreml_decoder_decode(
         }
 
         MLMultiArray * audioArray = whisper_coreml_make_audio_array(ctx, audio, n_audio_ctx, n_audio_state, &error);
+        if (ctx->trace.enabled) {
+            ctx->trace.input_array_create_us += whisper_coreml_decoder_time_us() - t_input_us;
+        }
         if (ctx->uses_audio_input && audioArray == nil) {
             if (error != nil) {
                 fprintf(stderr, "%s: failed to create audio input: %s\n", __func__, error.localizedDescription.UTF8String);
@@ -389,7 +526,14 @@ bool whisper_coreml_decoder_decode(
         }
 
         if (!ctx->stateful) {
-            if (!whisper_coreml_decoder_predict(ctx, tokenArray, audioArray, nil, nil, nil, n_tokens, n_vocab, out_logits, &error)) {
+            if (ctx->trace.enabled) {
+                if (is_prompt) {
+                    ctx->trace.prompt_step_count++;
+                } else {
+                    ctx->trace.generation_step_count++;
+                }
+            }
+            if (!whisper_coreml_decoder_predict(ctx, ctx->model, tokenArray, audioArray, nil, nil, nil, n_tokens, n_vocab, out_logits, &error)) {
                 if (error != nil) {
                     fprintf(stderr, "%s: Core ML decoder prediction failed: %s\n", __func__, error.localizedDescription.UTF8String);
                 }
@@ -404,14 +548,57 @@ bool whisper_coreml_decoder_decode(
             return false;
         }
 
+        if (is_prompt && ctx->model_prefill != nullptr && n_tokens == ctx->prefill_tokens) {
+            const int64_t state_pos = ctx->state_pos;
+            std::vector<int32_t> pos(n_tokens);
+            for (int64_t i = 0; i < n_tokens; ++i) {
+                pos[i] = (int32_t) (state_pos + i);
+            }
+
+            const int64_t t_prefill_input_us = ctx->trace.enabled ? whisper_coreml_decoder_time_us() : 0;
+            MLMultiArray * posArray = whisper_coreml_make_i32_array(@[@(n_tokens)], pos.data(), n_tokens, &error);
+            MLMultiArray * stepMask = whisper_coreml_make_state_step_mask(state_pos + n_tokens, &error);
+            MLMultiArray * selfMask = whisper_coreml_make_state_self_mask_batch(state_pos, n_tokens, ctx->max_tokens, &error);
+            if (ctx->trace.enabled) {
+                ctx->trace.input_array_create_us += whisper_coreml_decoder_time_us() - t_prefill_input_us;
+                ctx->trace.prompt_step_count++;
+            }
+
+            if (posArray == nil || stepMask == nil || selfMask == nil) {
+                if (error != nil) {
+                    fprintf(stderr, "%s: failed to create stateful decoder prefill inputs: %s\n", __func__, error.localizedDescription.UTF8String);
+                }
+                return false;
+            }
+
+            if (!whisper_coreml_decoder_predict(ctx, ctx->model_prefill, tokenArray, audioArray, posArray, stepMask, selfMask, n_tokens, n_vocab, out_logits, &error)) {
+                if (error != nil) {
+                    fprintf(stderr, "%s: Core ML decoder prefill prediction failed: %s\n", __func__, error.localizedDescription.UTF8String);
+                }
+                return false;
+            }
+
+            ctx->state_pos += n_tokens;
+            return true;
+        }
+
         for (int64_t i = 0; i < n_tokens; ++i) {
             const int32_t token = tokens[i];
             const int32_t pos = (int32_t) ctx->state_pos;
 
+            const int64_t t_step_input_us = ctx->trace.enabled ? whisper_coreml_decoder_time_us() : 0;
             MLMultiArray * tokenStep = whisper_coreml_make_i32_array(@[@1, @1], &token, 1, &error);
             MLMultiArray * posStep = whisper_coreml_make_i32_array(@[@1], &pos, 1, &error);
             MLMultiArray * stepMask = whisper_coreml_make_state_step_mask(ctx->state_pos + 1, &error);
             MLMultiArray * selfMask = whisper_coreml_make_state_self_mask(ctx->state_pos, ctx->max_tokens, &error);
+            if (ctx->trace.enabled) {
+                ctx->trace.input_array_create_us += whisper_coreml_decoder_time_us() - t_step_input_us;
+                if (is_prompt) {
+                    ctx->trace.prompt_step_count++;
+                } else {
+                    ctx->trace.generation_step_count++;
+                }
+            }
 
             if (tokenStep == nil || posStep == nil || stepMask == nil || selfMask == nil) {
                 if (error != nil) {
@@ -420,7 +607,7 @@ bool whisper_coreml_decoder_decode(
                 return false;
             }
 
-            if (!whisper_coreml_decoder_predict(ctx, tokenStep, audioArray, posStep, stepMask, selfMask, 1, n_vocab, out_logits, &error)) {
+            if (!whisper_coreml_decoder_predict(ctx, ctx->model, tokenStep, audioArray, posStep, stepMask, selfMask, 1, n_vocab, out_logits, &error)) {
                 if (error != nil) {
                     fprintf(stderr, "%s: Core ML decoder prediction failed: %s\n", __func__, error.localizedDescription.UTF8String);
                 }

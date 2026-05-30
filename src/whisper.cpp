@@ -3105,7 +3105,8 @@ static bool whisper_decode_coreml_full_context(
             hparams.n_audio_state,
             tokens_data,
             (const float *) wstate.embd_enc->data,
-            logits_last);
+            logits_last,
+            is_prompt);
 
     if (!ok) {
         WHISPER_LOG_ERROR("%s: Core ML decoder prediction failed\n", __func__);
@@ -4517,6 +4518,26 @@ void whisper_print_timings(struct whisper_context * ctx) {
         WHISPER_LOG_INFO("%s:   decode time = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_decode_us, n_decode, 1e-3f * ctx->state->t_decode_us / n_decode);
         WHISPER_LOG_INFO("%s:   batchd time = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_batchd_us, n_batchd, 1e-3f * ctx->state->t_batchd_us / n_batchd);
         WHISPER_LOG_INFO("%s:   prompt time = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_prompt_us, n_prompt, 1e-3f * ctx->state->t_prompt_us / n_prompt);
+#ifdef WHISPER_USE_COREML
+        if (whisper_coreml_decoder_trace_enabled(ctx->state->ctx_coreml_decoder)) {
+            whisper_coreml_decoder_trace trace;
+            whisper_coreml_decoder_trace_get(ctx->state->ctx_coreml_decoder, &trace);
+            WHISPER_LOG_INFO("%s: Core ML decoder trace:\n", __func__);
+            WHISPER_LOG_INFO("%s:   cross KV writes = %8lld writes / %8.2f MB / %8.2f ms\n", __func__,
+                    (long long) trace.cross_kv_write_count,
+                    trace.cross_kv_bytes_written / 1e6,
+                    trace.cross_kv_write_us / 1000.0);
+            WHISPER_LOG_INFO("%s:   MLState create = %8.2f ms\n", __func__, trace.mlstate_create_us / 1000.0);
+            WHISPER_LOG_INFO("%s:   input arrays   = %8.2f ms\n", __func__, trace.input_array_create_us / 1000.0);
+            WHISPER_LOG_INFO("%s:   providers      = %8.2f ms\n", __func__, trace.feature_provider_create_us / 1000.0);
+            WHISPER_LOG_INFO("%s:   predictions    = %8.2f ms\n", __func__, trace.prediction_us / 1000.0);
+            WHISPER_LOG_INFO("%s:   logits copy    = %8.2f ms\n", __func__, trace.logits_copy_us / 1000.0);
+            WHISPER_LOG_INFO("%s:   steps          = %8lld prompt / %8lld generation / state_pos %lld\n", __func__,
+                    (long long) trace.prompt_step_count,
+                    (long long) trace.generation_step_count,
+                    (long long) trace.state_pos);
+        }
+#endif
     }
     WHISPER_LOG_INFO("%s:    total time = %8.2f ms\n", __func__, (t_end_us - ctx->t_start_us)/1000.0f);
 }
@@ -4535,6 +4556,9 @@ void whisper_reset_timings(struct whisper_context * ctx) {
         ctx->state->n_decode = 0;
         ctx->state->n_batchd = 0;
         ctx->state->n_prompt = 0;
+#ifdef WHISPER_USE_COREML
+        whisper_coreml_decoder_trace_reset(ctx->state->ctx_coreml_decoder);
+#endif
     }
 }
 
