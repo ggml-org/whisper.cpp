@@ -185,6 +185,12 @@ int64_t whisper_coreml_decoder_state_pos(const struct whisper_coreml_decoder_con
     return ctx != nullptr ? ctx->state_pos : -1;
 }
 
+void whisper_coreml_decoder_set_state_pos(struct whisper_coreml_decoder_context * ctx, int64_t state_pos) {
+    if (ctx != nullptr) {
+        ctx->state_pos = state_pos;
+    }
+}
+
 bool whisper_coreml_decoder_trace_enabled(const struct whisper_coreml_decoder_context * ctx) {
     return ctx != nullptr && ctx->trace.enabled;
 }
@@ -233,10 +239,17 @@ bool whisper_coreml_decoder_set_state_f16(struct whisper_coreml_decoder_context 
         }];
 
         if (ctx->trace.enabled) {
-            ctx->trace.cross_kv_write_us += whisper_coreml_decoder_time_us() - t_write_us;
+            const int64_t elapsed_us = whisper_coreml_decoder_time_us() - t_write_us;
             if (ok) {
-                ctx->trace.cross_kv_write_count++;
-                ctx->trace.cross_kv_bytes_written += n_elems*sizeof(uint16_t);
+                if (std::strncmp(name, "cross_", 6) == 0) {
+                    ctx->trace.cross_kv_write_count++;
+                    ctx->trace.cross_kv_bytes_written += n_elems*sizeof(uint16_t);
+                    ctx->trace.cross_kv_write_us += elapsed_us;
+                } else if (std::strncmp(name, "k_cache_", 8) == 0 || std::strncmp(name, "v_cache_", 8) == 0) {
+                    ctx->trace.self_kv_write_count++;
+                    ctx->trace.self_kv_bytes_written += n_elems*sizeof(uint16_t);
+                    ctx->trace.self_kv_write_us += elapsed_us;
+                }
             }
         }
 
