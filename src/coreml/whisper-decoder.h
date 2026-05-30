@@ -34,6 +34,7 @@ struct whisper_coreml_decoder_trace {
 struct whisper_coreml_decoder_step_trace {
     bool    is_prompt;
     bool    is_prefill;
+    bool    is_prewarm;
     int64_t step_index;
     int64_t state_pos;
     int64_t n_tokens;
@@ -45,9 +46,18 @@ void whisper_coreml_decoder_free(struct whisper_coreml_decoder_context * ctx);
 void whisper_coreml_decoder_reset(struct whisper_coreml_decoder_context * ctx);
 bool whisper_coreml_decoder_is_stateful(const struct whisper_coreml_decoder_context * ctx);
 bool whisper_coreml_decoder_uses_audio_input(const struct whisper_coreml_decoder_context * ctx);
+const char * whisper_coreml_decoder_compute_units_name(const struct whisper_coreml_decoder_context * ctx);
+bool whisper_coreml_decoder_prewarms_state(const struct whisper_coreml_decoder_context * ctx);
+bool whisper_coreml_decoder_reuses_state(const struct whisper_coreml_decoder_context * ctx);
 int64_t whisper_coreml_decoder_state_pos(const struct whisper_coreml_decoder_context * ctx);
 void whisper_coreml_decoder_set_state_pos(struct whisper_coreml_decoder_context * ctx, int64_t state_pos);
 bool whisper_coreml_decoder_set_state_f16(struct whisper_coreml_decoder_context * ctx, const char * name, const void * data, int64_t n_elems);
+bool whisper_coreml_decoder_prewarm_state(
+        struct whisper_coreml_decoder_context * ctx,
+                                      int64_t   n_vocab,
+                                      int64_t   n_audio_ctx,
+                                      int64_t   n_audio_state,
+                                const float * audio);
 bool whisper_coreml_decoder_trace_enabled(const struct whisper_coreml_decoder_context * ctx);
 void whisper_coreml_decoder_trace_reset(struct whisper_coreml_decoder_context * ctx);
 void whisper_coreml_decoder_trace_get(const struct whisper_coreml_decoder_context * ctx, struct whisper_coreml_decoder_trace * trace);
