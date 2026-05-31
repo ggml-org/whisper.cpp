@@ -36,7 +36,7 @@
 
 #ifdef WHISPER_COMMON_FFMPEG
 // as implemented in ffmpeg-trancode.cpp only embedded in common lib if whisper built with ffmpeg support
-extern bool ffmpeg_decode_audio(const std::string & ifname, std::vector<uint8_t> & wav_data);
+extern bool ffmpeg_decode_audio(const std::string & ifname, std::vector<uint8_t> & wav_data, int out_sample_rate = WHISPER_SAMPLE_RATE);
 #endif
 
 // extract f32 PCM frames from an initialized decoder, downmix to mono and keep the stereo split

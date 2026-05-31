@@ -1,7 +1,5 @@
 #ifdef WHISPER_COMMON_FFMPEG
 
-#include "whisper.h"
-
 #include <string>
 #include <vector>
 #include <cstdio>
@@ -44,7 +42,7 @@ static size_t wav_header_write(uint8_t * buf, int num_channels, int sample_rate,
     return 44;
 }
 
-bool ffmpeg_decode_audio(const std::string & ifname, std::vector<uint8_t> & wav_data) {
+bool ffmpeg_decode_audio(const std::string & ifname, std::vector<uint8_t> & wav_data, int out_sample_rate) {
     {
         const char * verbose = getenv("WHISPER_COMMON_FFMPEG_VERBOSE");
         if (verbose && strcmp(verbose, "2") == 0) {
@@ -116,7 +114,6 @@ bool ffmpeg_decode_audio(const std::string & ifname, std::vector<uint8_t> & wav_
 
     // Setup resampler: convert to 16-bit signed PCM, mono, 16000 Hz
     const enum AVSampleFormat out_sample_fmt = AV_SAMPLE_FMT_S16;
-    const int out_sample_rate = WHISPER_SAMPLE_RATE;
 
     AVChannelLayout out_ch_layout = AV_CHANNEL_LAYOUT_MONO;
 
