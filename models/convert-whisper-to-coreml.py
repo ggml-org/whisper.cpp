@@ -26,6 +26,26 @@ whisper.model.MultiHeadAttention.use_sdpa = False
 
 COREML_DECODER_SHARD_LAYERS = 8
 
+def coreml_decoder_shard_plan(hparams):
+    if hparams.n_text_layer == 4:
+        return [4]
+    if hparams.n_text_layer == 6:
+        return [6]
+    if hparams.n_text_layer == 12:
+        return [12]
+    if hparams.n_text_layer == 24:
+        return [12, 12]
+    if hparams.n_text_layer == 32:
+        return [12, 8, 12]
+
+    plan = []
+    remaining = hparams.n_text_layer
+    while remaining > 0:
+        n_layers = min(COREML_DECODER_SHARD_LAYERS, remaining)
+        plan.append(n_layers)
+        remaining -= n_layers
+    return plan
+
 # Use for changing dim of input in encoder and decoder embeddings
 def linear_to_conv2d_map(state_dict, prefix, local_metadata, strict,
                          missing_keys, unexpected_keys, error_msgs):
@@ -513,8 +533,8 @@ def convert_stateful_no_write_shard_decoder(hparams, model, max_tokens, start_la
     )
 
 def save_coreml_decoder_shards(hparams, decoder, output_prefix):
-    for start_layer in range(0, hparams.n_text_layer, COREML_DECODER_SHARD_LAYERS):
-        n_layers = min(COREML_DECODER_SHARD_LAYERS, hparams.n_text_layer - start_layer)
+    start_layer = 0
+    for n_layers in coreml_decoder_shard_plan(hparams):
         token_input = start_layer == 0
         output_logits = start_layer + n_layers == hparams.n_text_layer
         shard = convert_stateful_no_write_shard_decoder(
@@ -534,6 +554,7 @@ def save_coreml_decoder_shards(hparams, decoder, output_prefix):
         if output_logits:
             suffix += "-logits"
         shard.save(f"{output_prefix}{suffix}.mlpackage")
+        start_layer += n_layers
 
 
 if __name__ == "__main__":
