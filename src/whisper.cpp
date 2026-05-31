@@ -3590,6 +3590,17 @@ static std::string whisper_get_coreml_path_encoder(std::string path_bin) {
 #endif
 
 #ifdef WHISPER_USE_COREML_DECODER
+static int whisper_coreml_decoder_n_layer_first_shard(const int n_text_layer) {
+    switch (n_text_layer) {
+        case  4: return 4;
+        case  6: return 6;
+        case 12: return 12;
+        case 24: return 12;
+        case 32: return 12;
+        default: return std::min(8, n_text_layer);
+    }
+}
+
 // replace .bin with the first Core ML decoder shard
 static std::string whisper_get_coreml_path_decoder(std::string path_bin, const int n_text_layer) {
     auto pos = path_bin.rfind('.');
@@ -3606,7 +3617,7 @@ static std::string whisper_get_coreml_path_decoder(std::string path_bin, const i
         }
     }
 
-    const int n_layers_per_shard = std::min(8, n_text_layer);
+    const int n_layers_per_shard = whisper_coreml_decoder_n_layer_first_shard(n_text_layer);
     path_bin += "-decoder-cross-input-no-write-s0-l" + std::to_string(n_layers_per_shard) + "-token";
     if (n_layers_per_shard >= n_text_layer) {
         path_bin += "-logits";
