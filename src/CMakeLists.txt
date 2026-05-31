@@ -35,6 +35,9 @@ if (WHISPER_COREML)
         message(STATUS "CoreML framework found")
 
         set(WHISPER_EXTRA_FLAGS ${WHISPER_EXTRA_FLAGS} -DWHISPER_USE_COREML)
+        if (WHISPER_COREML_DECODER)
+            set(WHISPER_EXTRA_FLAGS ${WHISPER_EXTRA_FLAGS} -DWHISPER_USE_COREML_DECODER)
+        endif()
     else()
         message(FATAL_ERROR "CoreML framework not found")
     endif()
@@ -57,15 +60,22 @@ endif()
 if (WHISPER_COREML)
     set(TARGET whisper.coreml)
 
-    add_library(${TARGET}
+    set(WHISPER_COREML_SOURCES
         coreml/whisper-compat.m
-        coreml/whisper-decoder.h
-        coreml/whisper-decoder.mm
         coreml/whisper-encoder.h
         coreml/whisper-encoder.mm
         coreml/whisper-encoder-impl.h
         coreml/whisper-encoder-impl.m
         )
+
+    if (WHISPER_COREML_DECODER)
+        list(APPEND WHISPER_COREML_SOURCES
+            coreml/whisper-decoder.h
+            coreml/whisper-decoder.mm
+            )
+    endif()
+
+    add_library(${TARGET} ${WHISPER_COREML_SOURCES})
 
     include(DefaultTargetOptions)
 

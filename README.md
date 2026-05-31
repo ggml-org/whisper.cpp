@@ -199,11 +199,27 @@ speed-up - more than x3 faster compared with CPU-only execution. Here are the in
 
   This will generate the folder `models/ggml-base.en-encoder.mlmodelc`
 
+  To also generate Core ML decoder shards for ANE inference, use:
+
+  ```bash
+  ./models/generate-coreml-model.sh --decoder base.en
+  ```
+
+  This generates the encoder model and decoder shard folders named like `models/ggml-base.en-decoder-cross-input-no-write-*.mlmodelc`.
+
 - Build `whisper.cpp` with Core ML support:
 
   ```bash
   # using CMake
   cmake -B build -DWHISPER_COREML=1
+  cmake --build build -j --config Release
+  ```
+
+  Add `-DWHISPER_COREML_DECODER=1` to compile and run the decoder through Core ML as well.
+
+  ```bash
+  # using CMake
+  cmake -B build -DWHISPER_COREML=1 -DWHISPER_COREML_DECODER=1
   cmake --build build -j --config Release
   ```
 
@@ -222,6 +238,8 @@ speed-up - more than x3 faster compared with CPU-only execution. Here are the in
 
   ...
   ```
+
+  When built with `-DWHISPER_COREML_DECODER=1`, the decoder runs through Core ML automatically. The Core ML decoder path requires the generated decoder shards, greedy decoding with `temperature=0`, the full audio context, flash attention, and an F32/F16 ggml model paired with the exported decoder.
 
   The first run on a device is slow, since the ANE service compiles the Core ML model to some device-specific format.
   Next runs are faster.
