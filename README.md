@@ -239,7 +239,9 @@ speed-up - more than x3 faster compared with CPU-only execution. Here are the in
   ...
   ```
 
-  When built with `-DWHISPER_COREML_DECODER=1`, the decoder runs through Core ML automatically. The Core ML decoder path requires the generated decoder shards, greedy decoding with `temperature=0`, the full audio context, flash attention, and an F32/F16 ggml model paired with the exported decoder.
+  When built with `-DWHISPER_COREML_DECODER=1`, the decoder runs through Core ML automatically. The Core ML decoder path requires macOS 15 / Core ML stateful model support, the generated decoder shards, the full audio context, flash attention, and an F32/F16 ggml model paired with the exported decoder. It supports the standard `whisper_full` decoding paths that operate on decoder logits, including beam search, best-of sampling, temperature sampling, fallback, and grammar penalties.
+
+  DTW token timestamps are not supported by the Core ML decoder path because the exported decoder shards do not return cross-attention alignment outputs. Partial audio context (`-ac`) is also not supported because the exported decoder shards use fixed, unmasked cross-attention KV inputs for the model's full audio context.
 
   The first run on a device is slow, since the ANE service compiles the Core ML model to some device-specific format.
   Next runs are faster.
