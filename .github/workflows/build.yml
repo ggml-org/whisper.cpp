@@ -43,8 +43,6 @@ env:
 
 jobs:
   ubuntu-22:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -75,8 +73,6 @@ jobs:
             cmake --build build --config Release -j $(nproc)'
 
   ubuntu-22-arm64:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
     runs-on: ubuntu-22.04-arm
 
     steps:
@@ -94,8 +90,6 @@ jobs:
           cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-arm-v7:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -126,8 +120,6 @@ jobs:
             cmake --build build --config Release -j $(nproc)'
 
   macOS-latest:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
     runs-on: macOS-latest
 
     strategy:
@@ -183,8 +175,6 @@ jobs:
 #            cmake --build build --config Release
 
   ubuntu-22-gcc:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -217,8 +207,6 @@ jobs:
             ctest -L gh --output-on-failure'
 
   ubuntu-22-gcc-arm64:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
     runs-on: ubuntu-22.04-arm
 
     strategy:
@@ -249,8 +237,6 @@ jobs:
           ctest -L gh --output-on-failure
 
   ubuntu-22-gcc-arm-v7:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -283,8 +269,6 @@ jobs:
             ctest -L gh --output-on-failure'
 
   ubuntu-22-clang:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -320,8 +304,6 @@ jobs:
             ctest -L gh --output-on-failure'
 
   ubuntu-22-clang-arm64:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
     runs-on: ubuntu-22.04-arm
 
     strategy:
@@ -350,8 +332,6 @@ jobs:
           ctest -L gh --output-on-failure
 
   ubuntu-22-gcc-sanitized:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -377,8 +357,6 @@ jobs:
           ctest -L gh --output-on-failure
 
   ubuntu-22-cmake-sycl:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -429,8 +407,6 @@ jobs:
           cmake --build . --config Release -j $(nproc)
 
   ubuntu-22-cmake-sycl-fp16:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -481,8 +457,6 @@ jobs:
           cmake --build . --config Release -j $(nproc)
 
   windows-msys2:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
     runs-on: windows-latest
 
     strategy:
@@ -527,8 +501,6 @@ jobs:
             cmake --build build --config ${{ matrix.build }} -j $(nproc)
 
   emscripten:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
     runs-on: ubuntu-22.04
 
     strategy:
@@ -551,8 +523,6 @@ jobs:
           make
 
   android:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
     runs-on: ubuntu-22.04
 
     steps:
@@ -607,8 +577,6 @@ jobs:
           ./gradlew assembleRelease
 
   quantize:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
     runs-on: ubuntu-22.04
 
     steps:
@@ -661,8 +629,6 @@ jobs:
           ./models/generate-coreml-model.sh ${{ env.MODEL_NAME }}
 
   vad:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
-            github.event.inputs.run_type == 'full-ci' }}
     runs-on: ubuntu-latest
 
     steps:
