@@ -1490,7 +1490,7 @@ jobs:
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
   ggml-ci-x64-nvidia-cuda:
-    runs-on: [self-hosted, Linux, mnt-root, NVIDIA]
+    runs-on: [self-hosted, Linux, NVIDIA]
 
     steps:
       - name: Clone
@@ -1504,7 +1504,7 @@ jobs:
           GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/whisper.cpp /mnt/whisper.cpp
 
   ggml-ci-x64-nvidia-vulkan-cm:
-    runs-on: [self-hosted, Linux, mnt-root, NVIDIA]
+    runs-on: [self-hosted, Linux, NVIDIA]
 
     steps:
       - name: Clone
@@ -1518,7 +1518,7 @@ jobs:
           GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/whisper.cpp /mnt/whisper.cpp
 
   ggml-ci-x64-nvidia-vulkan-cm2:
-    runs-on: [self-hosted, Linux, mnt-root, NVIDIA, COOPMAT2]
+    runs-on: [self-hosted, Linux, NVIDIA, COOPMAT2]
 
     steps:
       - name: Clone
