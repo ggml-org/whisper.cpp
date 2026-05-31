@@ -10,6 +10,7 @@
 #include <ruby/memory_view.h>
 #include "whisper.h"
 #include "parakeet.h"
+#include "ruby_whisper_log_settable.h"
 
 #if RUBY_API_VERSION_MAJOR < 4
 // Exists but not declared as public API
@@ -147,6 +148,17 @@ typedef struct {
 typedef struct {
   VALUE context;
 } ruby_whisper_parakeet_model;
+
+extern ID id_extended;
+extern ID id_log_callback_thread;
+extern ID id_start_log_callback_thread;
+extern ID id_alive_p;
+extern ID id_join;
+extern void ruby_whisper_log_queue_initialize(ruby_whisper_log_queue *log_queue);
+extern void ruby_whisper_log_queue_open(ruby_whisper_log_queue *log_queue);
+extern void ruby_whisper_log_queue_close(ruby_whisper_log_queue *log_queue);
+extern void ruby_whisper_log_queue_enqueue(ruby_whisper_log_queue *log_queue, enum ggml_log_level level, const char *text);
+extern VALUE ruby_whisper_log_queue_drain(ruby_whisper_log_queue *log_queue);
 
 #define GetContext(obj, rw) do { \
   TypedData_Get_Struct((obj), ruby_whisper, &ruby_whisper_type, (rw)); \

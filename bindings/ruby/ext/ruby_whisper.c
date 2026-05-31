@@ -40,7 +40,7 @@ ID id_n_processors;
 ID id_extended;
 ID id_start_log_callback_thread;
 ID id_log_callback_thread;
-ID id_alive;
+ID id_alive_p;
 ID id_join;
 
 static bool is_log_callback_finalized = false;
@@ -208,7 +208,7 @@ void Init_whisper() {
   id_extended = rb_intern("extended");
   id_start_log_callback_thread = rb_intern("start_log_callback_thread");
   id_log_callback_thread = rb_intern("@log_callback_thread");
-  id_alive = rb_intern("alive?");
+  id_alive_p = rb_intern("alive?");
   id_join = rb_intern("join");
 
   mWhisper = rb_define_module("Whisper");

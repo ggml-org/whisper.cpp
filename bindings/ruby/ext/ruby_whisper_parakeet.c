@@ -8,11 +8,6 @@ extern VALUE cParakeetContext;
 extern VALUE cParakeetSegment;
 extern VALUE mOutputContext;
 extern VALUE mOutputSegment;
-extern ID id_extended;
-extern ID id_log_callback_thread;
-extern ID id_start_log_callback_thread;
-extern ID id_alive;
-extern ID id_join;
 
 extern void init_ruby_whisper_parakeet_params(VALUE *mParakeet);
 extern void init_ruby_whisper_parakeet_token(VALUE *mParakeet);
@@ -21,57 +16,14 @@ extern VALUE init_ruby_whisper_parakeet_context(VALUE *mParakeet);
 extern void init_ruby_whisper_parakeet_context_params(VALUE *cParakeetContext);
 extern void init_ruby_whisper_parakeet_model(VALUE *mParakeet);
 
-extern void ruby_whisper_log_queue_initialize(ruby_whisper_log_queue *log_queue);
-extern void ruby_whisper_log_queue_open(ruby_whisper_log_queue *log_queue);
-extern void ruby_whisper_log_queue_close(ruby_whisper_log_queue *log_queue);
-extern void ruby_whisper_log_queue_enqueue(ruby_whisper_log_queue *log_queue, enum ggml_log_level level, const char *text);
-extern VALUE ruby_whisper_log_queue_drain(ruby_whisper_log_queue *log_queue);
-
 static ruby_whisper_log_queue parakeet_log_queue;
 
-static VALUE
-ruby_whisper_parakeet_s_drain_logs(VALUE self)
-{
-  return ruby_whisper_log_queue_drain(&parakeet_log_queue);
-}
-
-static void
-ruby_whisper_parakeet_log_callback(enum ggml_log_level level, const char *text, void *user_data)
-{
-  ruby_whisper_log_queue_enqueue(&parakeet_log_queue, level, text);
-}
-
-static VALUE
-ruby_whisper_parakeet_s_log_set(VALUE self, VALUE log_callback, VALUE user_data)
-{
-  rb_iv_set(self, "@log_callback", log_callback);
-  rb_iv_set(self, "@log_callback_user_data", user_data);
-  if (NIL_P(log_callback)) {
-    parakeet_log_set(NULL, NULL);
-  } else {
-    ruby_whisper_log_queue_open(&parakeet_log_queue);
-    rb_funcall(mParakeet, id_start_log_callback_thread, 0);
-    parakeet_log_set(ruby_whisper_parakeet_log_callback, NULL);
-  }
-
-  return Qnil;
-}
+LOG_SETTABLE_SETUP(parakeet_log_queue, mParakeet, parakeet_log_set)
 
 static VALUE
 ruby_whisper_parakeet_s_system_info_str(VALUE self)
 {
   return rb_str_new2(parakeet_print_system_info());
-}
-
-static void
-ruby_whisper_parakeet_end_proc(VALUE args)
-{
-  ruby_whisper_log_queue_close(&parakeet_log_queue);
-
-  VALUE log_callback_thread = rb_ivar_get(mParakeet, id_log_callback_thread);
-  if (!NIL_P(log_callback_thread) && RTEST(rb_funcall(log_callback_thread, id_alive, 0))) {
-    rb_funcall(log_callback_thread, id_join, 0);
-  }
 }
 
 void
@@ -81,15 +33,9 @@ init_ruby_whisper_parakeet(VALUE *mWhisper)
 
   rb_define_const(mParakeet, "VERSION", rb_str_new2(parakeet_version()));
 
-  ruby_whisper_log_queue_initialize(&parakeet_log_queue);
+  LOG_SETTABLE_INIT(parakeet_log_queue, mParakeet)
 
-  rb_define_singleton_method(mParakeet, "log_set", ruby_whisper_parakeet_s_log_set, 2);
   rb_define_singleton_method(mParakeet, "system_info_str", ruby_whisper_parakeet_s_system_info_str, 0);
-  rb_define_private_method(rb_singleton_class(mParakeet), "drain_logs", ruby_whisper_parakeet_s_drain_logs, 0);
-
-  rb_set_end_proc(ruby_whisper_parakeet_end_proc, Qnil);
-  rb_extend_object(mParakeet, mLogSettable);
-  rb_funcall(mLogSettable, id_extended, 1, mParakeet);
 
   init_ruby_whisper_parakeet_params(&mParakeet);
   init_ruby_whisper_parakeet_token(&mParakeet);
