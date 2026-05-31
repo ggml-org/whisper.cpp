@@ -1114,7 +1114,7 @@ static void whisper_kv_cache_seq_rm(
                 cache.cells[i].seq_id.clear();
             } else if (cache.cells[i].has_seq_id(seq_id)) {
                 cache.cells[i].seq_id.erase(seq_id);
-                } else {
+            } else {
                 continue;
             }
             if (cache.cells[i].seq_id.empty()) {
