@@ -27,19 +27,24 @@ if (WHISPER_ALL_WARNINGS)
     endif()
 endif()
 
-if (WHISPER_COREML)
+if (WHISPER_COREML OR WHISPER_COREML_DECODER)
     find_library(FOUNDATION_FRAMEWORK Foundation)
     find_library(COREML_FRAMEWORK CoreML)
 
     if (COREML_FRAMEWORK)
         message(STATUS "CoreML framework found")
 
-        set(WHISPER_EXTRA_FLAGS ${WHISPER_EXTRA_FLAGS} -DWHISPER_USE_COREML)
+        if (WHISPER_COREML)
+            set(WHISPER_EXTRA_FLAGS ${WHISPER_EXTRA_FLAGS} -DWHISPER_USE_COREML)
+        endif()
+        if (WHISPER_COREML_DECODER)
+            set(WHISPER_EXTRA_FLAGS ${WHISPER_EXTRA_FLAGS} -DWHISPER_USE_COREML_DECODER)
+        endif()
     else()
         message(FATAL_ERROR "CoreML framework not found")
     endif()
 
-    if (WHISPER_COREML_ALLOW_FALLBACK)
+    if (WHISPER_COREML AND WHISPER_COREML_ALLOW_FALLBACK)
         set(WHISPER_EXTRA_FLAGS ${WHISPER_EXTRA_FLAGS} -DWHISPER_COREML_ALLOW_FALLBACK)
     endif()
 endif()
@@ -54,16 +59,30 @@ endif()
 
 # whisper.coreml
 
-if (WHISPER_COREML)
+if (WHISPER_COREML OR WHISPER_COREML_DECODER)
     set(TARGET whisper.coreml)
 
-    add_library(${TARGET}
+    set(WHISPER_COREML_SOURCES
         coreml/whisper-compat.m
-        coreml/whisper-encoder.h
-        coreml/whisper-encoder.mm
-        coreml/whisper-encoder-impl.h
-        coreml/whisper-encoder-impl.m
         )
+
+    if (WHISPER_COREML)
+        list(APPEND WHISPER_COREML_SOURCES
+            coreml/whisper-encoder.h
+            coreml/whisper-encoder.mm
+            coreml/whisper-encoder-impl.h
+            coreml/whisper-encoder-impl.m
+            )
+    endif()
+
+    if (WHISPER_COREML_DECODER)
+        list(APPEND WHISPER_COREML_SOURCES
+            coreml/whisper-decoder.h
+            coreml/whisper-decoder.mm
+            )
+    endif()
+
+    add_library(${TARGET} ${WHISPER_COREML_SOURCES})
 
     include(DefaultTargetOptions)
 
@@ -129,7 +148,7 @@ endif()
 find_package(Threads REQUIRED)
 target_link_libraries(whisper PUBLIC ggml Threads::Threads)
 
-if (WHISPER_COREML)
+if (WHISPER_COREML OR WHISPER_COREML_DECODER)
     target_link_libraries(whisper PRIVATE whisper.coreml)
 endif()
 

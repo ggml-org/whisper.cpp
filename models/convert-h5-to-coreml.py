@@ -82,7 +82,7 @@ if __name__ == "__main__":
     parser.add_argument("--model-path", type=str, help="path to the model (e.g. if published on HuggingFace: Oblivion208/whisper-tiny-cantonese)", required=True)
     parser.add_argument("--encoder-only", type=bool, help="only convert encoder", default=False)
     parser.add_argument("--quantize",     type=bool, help="quantize weights to F16", default=False)
-    parser.add_argument("--optimize-ane", type=bool, help="optimize for ANE execution (currently broken)", default=False)
+    parser.add_argument("--optimize-ane", type=bool, help="optimize for Apple Neural Engine execution", default=False)
     args = parser.parse_args()
 
     if args.model_name not in ["tiny", "tiny.en", "base", "base.en", "small", "small.en", "medium", "medium.en", "large-v1", "large-v2", "large-v3", "large-v3-turbo"]:
