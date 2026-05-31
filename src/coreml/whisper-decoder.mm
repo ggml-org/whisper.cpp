@@ -360,6 +360,59 @@ static bool whisper_coreml_decoder_add_no_write_shard(
     return false;
 }
 
+static bool whisper_coreml_decoder_new_like_shard(
+        whisper_coreml_decoder_context * ctx,
+        const whisper_coreml_decoder_shard & src,
+        const bool allocate_cross_inputs) {
+#if WHISPER_COREML_HAS_STATE
+    if (@available(macOS 15.0, *)) {
+        whisper_coreml_decoder_shard shard = src;
+        shard.model = src.model != nullptr ? CFRetain(src.model) : nullptr;
+        shard.state = nullptr;
+        shard.cross_inputs.clear();
+
+        if (shard.model == nullptr) {
+            return false;
+        }
+
+        MLState * state = [(__bridge MLModel *) shard.model newState];
+        if (state == nil) {
+            CFRelease(shard.model);
+            return false;
+        }
+        shard.state = CFBridgingRetain(state);
+
+        if (allocate_cross_inputs) {
+            for (int64_t i = 0; i < shard.n_layers*2; ++i) {
+                NSError * error = nil;
+                MLMultiArray * input = [[MLMultiArray alloc] initWithShape:@[@1, @(shard.n_state), @1, @(shard.n_audio_ctx)]
+                                                                  dataType:MLMultiArrayDataTypeFloat16
+                                                                     error:&error];
+                if (input == nil) {
+                    for (const void * ptr : shard.cross_inputs) {
+                        CFRelease(ptr);
+                    }
+                    CFRelease(shard.state);
+                    CFRelease(shard.model);
+                    return false;
+                }
+
+                shard.cross_inputs.push_back(CFBridgingRetain(input));
+                whisper_coreml_decoder_zero_f16_multiarray(shard.cross_inputs.back());
+            }
+        }
+
+        ctx->shards.push_back(shard);
+        return true;
+    }
+#else
+    (void) ctx;
+    (void) src;
+#endif
+
+    return false;
+}
+
 static bool whisper_coreml_decoder_load_no_write_shards(
         whisper_coreml_decoder_context * ctx,
         MLModel * first_model,
@@ -504,6 +557,37 @@ struct whisper_coreml_decoder_context * whisper_coreml_decoder_init(const char *
     return ctx;
 }
 
+static whisper_coreml_decoder_context * whisper_coreml_decoder_new_like_impl(
+        const struct whisper_coreml_decoder_context * src,
+        const bool allocate_cross_inputs) {
+    if (src == nullptr || src->model == nullptr || src->shards.empty()) {
+        return nullptr;
+    }
+
+    whisper_coreml_decoder_context * ctx = new whisper_coreml_decoder_context;
+    ctx->model = CFRetain(src->model);
+    ctx->compute_units_name = src->compute_units_name;
+    ctx->state_pos = 0;
+    ctx->max_tokens = src->max_tokens;
+
+    for (const auto & shard : src->shards) {
+        if (!whisper_coreml_decoder_new_like_shard(ctx, shard, allocate_cross_inputs)) {
+            whisper_coreml_decoder_free(ctx);
+            return nullptr;
+        }
+    }
+
+    return ctx;
+}
+
+struct whisper_coreml_decoder_context * whisper_coreml_decoder_new_like(const struct whisper_coreml_decoder_context * src) {
+    return whisper_coreml_decoder_new_like_impl(src, true);
+}
+
+struct whisper_coreml_decoder_context * whisper_coreml_decoder_new_like_self(const struct whisper_coreml_decoder_context * src) {
+    return whisper_coreml_decoder_new_like_impl(src, false);
+}
+
 void whisper_coreml_decoder_free(struct whisper_coreml_decoder_context * ctx) {
     if (ctx == nullptr) {
         return;
@@ -561,6 +645,130 @@ const char * whisper_coreml_decoder_compute_units_name(const struct whisper_core
 
 int64_t whisper_coreml_decoder_state_pos(const struct whisper_coreml_decoder_context * ctx) {
     return ctx != nullptr ? ctx->state_pos : -1;
+}
+
+static bool whisper_coreml_decoder_multiarray_shape_equal(MLMultiArray * dst, MLMultiArray * src) {
+    if (dst == nil || src == nil || dst.shape.count != src.shape.count) {
+        return false;
+    }
+
+    for (NSUInteger i = 0; i < dst.shape.count; ++i) {
+        if (dst.shape[i].longLongValue != src.shape[i].longLongValue) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool whisper_coreml_decoder_copy_multiarray(MLMultiArray * dst, MLMultiArray * src) {
+    if (dst == nil ||
+            src == nil ||
+            dst.dataPointer == nullptr ||
+            src.dataPointer == nullptr ||
+            dst.dataType != src.dataType ||
+            dst.count != src.count ||
+            !whisper_coreml_decoder_multiarray_shape_equal(dst, src)) {
+        return false;
+    }
+
+#if WHISPER_COREML_HAS_STATE
+    if (@available(macOS 15.0, *)) {
+        @try {
+            [src transferToMultiArray:dst];
+            return true;
+        } @catch (NSException * exception) {
+            (void) exception;
+            return false;
+        }
+    }
+#endif
+
+    return false;
+}
+
+static bool whisper_coreml_decoder_copy_state_multiarray(
+        const void * dst_state,
+        const void * src_state,
+        const char * name) {
+    if (dst_state == nullptr || src_state == nullptr || name == nullptr) {
+        return false;
+    }
+
+#if WHISPER_COREML_HAS_STATE
+    if (@available(macOS 15.0, *)) {
+        NSString * stateName = [[NSString alloc] initWithUTF8String:name];
+        __block bool ok = false;
+        [(__bridge MLState *) src_state getMultiArrayForStateNamed:stateName handler:^(MLMultiArray * srcBuffer) {
+            [(__bridge MLState *) dst_state getMultiArrayForStateNamed:stateName handler:^(MLMultiArray * dstBuffer) {
+                ok = whisper_coreml_decoder_copy_multiarray(dstBuffer, srcBuffer);
+            }];
+        }];
+        return ok;
+    }
+#endif
+
+    return false;
+}
+
+static bool whisper_coreml_decoder_copy_state_impl(
+        struct whisper_coreml_decoder_context * dst,
+        const struct whisper_coreml_decoder_context * src,
+        const bool copy_cross_inputs) {
+    if (dst == nullptr ||
+            src == nullptr ||
+            dst->max_tokens != src->max_tokens ||
+            dst->shards.size() != src->shards.size()) {
+        return false;
+    }
+
+    @autoreleasepool {
+        for (size_t i = 0; i < src->shards.size(); ++i) {
+            const auto & src_shard = src->shards[i];
+            auto & dst_shard = dst->shards[i];
+
+            if (dst_shard.start_layer != src_shard.start_layer ||
+                    dst_shard.n_layers != src_shard.n_layers ||
+                    dst_shard.n_state != src_shard.n_state ||
+                    dst_shard.n_audio_ctx != src_shard.n_audio_ctx ||
+                    dst_shard.token_input != src_shard.token_input ||
+                    dst_shard.output_logits != src_shard.output_logits ||
+                    dst_shard.cross_kv_input != src_shard.cross_kv_input ||
+                    (copy_cross_inputs && dst_shard.cross_inputs.size() != src_shard.cross_inputs.size())) {
+                return false;
+            }
+
+            if (copy_cross_inputs) {
+                for (size_t j = 0; j < src_shard.cross_inputs.size(); ++j) {
+                    if (!whisper_coreml_decoder_copy_multiarray(
+                                (__bridge MLMultiArray *) dst_shard.cross_inputs[j],
+                                (__bridge MLMultiArray *) src_shard.cross_inputs[j])) {
+                        return false;
+                    }
+                }
+            }
+
+            for (int64_t il = src_shard.start_layer; il < src_shard.start_layer + src_shard.n_layers; ++il) {
+                const std::string k_name = "k_cache_" + std::to_string(il);
+                const std::string v_name = "v_cache_" + std::to_string(il);
+                if (!whisper_coreml_decoder_copy_state_multiarray(dst_shard.state, src_shard.state, k_name.c_str()) ||
+                        !whisper_coreml_decoder_copy_state_multiarray(dst_shard.state, src_shard.state, v_name.c_str())) {
+                    return false;
+                }
+            }
+        }
+
+        dst->state_pos = src->state_pos;
+        return true;
+    }
+}
+
+bool whisper_coreml_decoder_copy_state(struct whisper_coreml_decoder_context * dst, const struct whisper_coreml_decoder_context * src) {
+    return whisper_coreml_decoder_copy_state_impl(dst, src, true);
+}
+
+bool whisper_coreml_decoder_copy_self_state(struct whisper_coreml_decoder_context * dst, const struct whisper_coreml_decoder_context * src) {
+    return whisper_coreml_decoder_copy_state_impl(dst, src, false);
 }
 
 static bool whisper_coreml_decoder_copy_f16_to_multiarray(MLMultiArray * buffer, const void * data, const int64_t n_elems) {
