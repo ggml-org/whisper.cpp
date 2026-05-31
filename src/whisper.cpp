@@ -3732,6 +3732,7 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
     } else {
         WHISPER_LOG_INFO("%s: Core ML model loaded\n", __func__);
     }
+#endif
 
 #ifdef WHISPER_USE_COREML_DECODER
     const auto path_decoder = whisper_get_coreml_path_decoder(ctx->path_model, ctx->model.hparams.n_text_layer);
@@ -3764,7 +3765,6 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
     }
 
     WHISPER_LOG_INFO("%s: Core ML decoder model loaded\n", __func__);
-#endif
 #endif
 
     state->logits.reserve(ctx->vocab.n_vocab * ctx->model.hparams.n_text_ctx);

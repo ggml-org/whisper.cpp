@@ -207,7 +207,7 @@ speed-up - more than x3 faster compared with CPU-only execution. Here are the in
 
   This generates the encoder model and decoder shard folders named like `models/ggml-base.en-decoder-cross-input-no-write-*.mlmodelc`.
 
-- Build `whisper.cpp` with Core ML support:
+- Build `whisper.cpp` with Core ML encoder support:
 
   ```bash
   # using CMake
@@ -215,11 +215,17 @@ speed-up - more than x3 faster compared with CPU-only execution. Here are the in
   cmake --build build -j --config Release
   ```
 
-  Add `-DWHISPER_COREML_DECODER=1` to compile and run the decoder through Core ML as well.
+  Use `-DWHISPER_COREML_DECODER=1` to compile and run the decoder through Core ML. This can be enabled with the Core ML encoder, or by itself when the encoder should run through ggml or another backend.
 
   ```bash
   # using CMake
   cmake -B build -DWHISPER_COREML=1 -DWHISPER_COREML_DECODER=1
+  cmake --build build -j --config Release
+  ```
+
+  ```bash
+  # using CMake, decoder only
+  cmake -B build -DWHISPER_COREML_DECODER=1
   cmake --build build -j --config Release
   ```
 

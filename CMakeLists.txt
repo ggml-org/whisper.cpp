@@ -88,14 +88,10 @@ if (CMAKE_SYSTEM_NAME MATCHES "Linux")
     option(WHISPER_FFMPEG "whisper: support building and linking with ffmpeg libs (avcodec, swresample, ...)" OFF)
 endif()
 
-option(WHISPER_COREML                "whisper: enable Core ML framework"  OFF)
+option(WHISPER_COREML                "whisper: enable Core ML encoder"    OFF)
 option(WHISPER_COREML_DECODER        "whisper: enable Core ML decoder"    OFF)
 option(WHISPER_COREML_ALLOW_FALLBACK "whisper: allow non-CoreML fallback" OFF)
 option(WHISPER_OPENVINO              "whisper: support for OpenVINO"      OFF)
-
-if (WHISPER_COREML_DECODER AND NOT WHISPER_COREML)
-    message(FATAL_ERROR "WHISPER_COREML_DECODER requires WHISPER_COREML")
-endif()
 
 # Required for relocatable CMake package
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info.cmake)
