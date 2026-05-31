@@ -339,7 +339,8 @@ class StatefulNoWriteShardDecoderANE(nn.Module):
             hparams: ModelDimensions,
             max_tokens: int,
             start_layer: int,
-            output_logits: bool):
+            output_logits: bool,
+            cross_kv_input: bool = False):
         super().__init__()
 
         self.decoder = decoder
@@ -347,13 +348,15 @@ class StatefulNoWriteShardDecoderANE(nn.Module):
         self.n_head = hparams.n_text_head
         self.start_layer = start_layer
         self.output_logits = output_logits
+        self.cross_kv_input = cross_kv_input
 
         for i in range(hparams.n_text_layer):
             il = start_layer + i
             self.register_buffer(f"k_cache_{il}", torch.zeros((1, hparams.n_text_state, 1, max_tokens), dtype=torch.float16))
             self.register_buffer(f"v_cache_{il}", torch.zeros((1, hparams.n_text_state, 1, max_tokens), dtype=torch.float16))
-            self.register_buffer(f"cross_k_{il}", torch.zeros((1, hparams.n_text_state, 1, hparams.n_audio_ctx), dtype=torch.float16))
-            self.register_buffer(f"cross_v_{il}", torch.zeros((1, hparams.n_text_state, 1, hparams.n_audio_ctx), dtype=torch.float16))
+            if not getattr(self, "cross_kv_input", False):
+                self.register_buffer(f"cross_k_{il}", torch.zeros((1, hparams.n_text_state, 1, hparams.n_audio_ctx), dtype=torch.float16))
+                self.register_buffer(f"cross_v_{il}", torch.zeros((1, hparams.n_text_state, 1, hparams.n_audio_ctx), dtype=torch.float16))
 
     def attention(self, q: Tensor, k_cache: Tensor, v_cache: Tensor, mask: Optional[Tensor]):
         _, dim, _, _ = q.size()
@@ -379,10 +382,12 @@ class StatefulNoWriteShardDecoderANE(nn.Module):
         attn = [torch.einsum('bkhq,bchk->bchq', wi, vi) for wi, vi in zip(attn_weights, mh_v)]
         return torch.cat(attn, dim=1)
 
-    def forward_x(self, x_data: Tensor, slot_mask: Tensor, self_mask: Tensor):
+    def forward_x(self, x_data: Tensor, slot_mask: Tensor, self_mask: Tensor, *cross_inputs: Tensor):
         x = x_data.float()
         slot = slot_mask.to(x.dtype)
         outputs = []
+        if getattr(self, "cross_kv_input", False) and len(cross_inputs) != len(self.decoder.blocks)*2:
+            raise RuntimeError("wrong cross input count")
 
         for i, block in enumerate(self.decoder.blocks):
             il = self.start_layer + i
@@ -398,10 +403,16 @@ class StatefulNoWriteShardDecoderANE(nn.Module):
             x = x + block.attn.out(self.attention(block.attn.query(xn), k_eff, v_eff, self_mask))
 
             xn = block.cross_attn_ln(x)
+            if getattr(self, "cross_kv_input", False):
+                cross_k = cross_inputs[2*i]
+                cross_v = cross_inputs[2*i + 1]
+            else:
+                cross_k = getattr(self, f"cross_k_{il}")
+                cross_v = getattr(self, f"cross_v_{il}")
             x = x + block.cross_attn.out(self.attention(
                 block.cross_attn.query(xn),
-                getattr(self, f"cross_k_{il}"),
-                getattr(self, f"cross_v_{il}"),
+                cross_k,
+                cross_v,
                 None,
             ))
 
@@ -417,15 +428,15 @@ class StatefulNoWriteShardDecoderANE(nn.Module):
 
         return tuple([primary] + outputs)
 
-    def forward(self, x_data: Tensor, slot_mask: Tensor, self_mask: Tensor):
-        return self.forward_x(x_data, slot_mask, self_mask)
+    def forward(self, x_data: Tensor, slot_mask: Tensor, self_mask: Tensor, *cross_inputs: Tensor):
+        return self.forward_x(x_data, slot_mask, self_mask, *cross_inputs)
 
 class StatefulNoWriteTokenShardDecoderANE(StatefulNoWriteShardDecoderANE):
-    def forward(self, token_data: Tensor, pos_data: Tensor, slot_mask: Tensor, self_mask: Tensor):
+    def forward(self, token_data: Tensor, pos_data: Tensor, slot_mask: Tensor, self_mask: Tensor, *cross_inputs: Tensor):
         pos = pos_data.to(torch.long)
         x = self.decoder.token_embedding(token_data) + self.decoder.positional_embedding.index_select(0, pos).unsqueeze(0)
         x = x.float().transpose(1, 2).unsqueeze(2)
-        return self.forward_x(x, slot_mask, self_mask)
+        return self.forward_x(x, slot_mask, self_mask, *cross_inputs)
 
 class StatefulSelfKVTextDecoder(nn.Module):
     def __init__(self, decoder: TextDecoder, hparams: ModelDimensions, max_tokens: int):
@@ -596,7 +607,7 @@ def convert_stateful_decoder(hparams, model, max_tokens, input_tokens=1):
         compute_units=ct.ComputeUnit.ALL,
     )
 
-def convert_stateful_no_write_shard_decoder(hparams, model, max_tokens, start_layer, n_layers, output_logits, token_input=False):
+def convert_stateful_no_write_shard_decoder(hparams, model, max_tokens, start_layer, n_layers, output_logits, token_input=False, cross_kv_input=False):
     if max_tokens <= 0:
         raise ValueError("--decoder-max-tokens must be set for --decoder-stateful-no-write-shard")
     if not hasattr(ct, "StateType") or not hasattr(ct.target, "macOS15"):
@@ -616,6 +627,7 @@ def convert_stateful_no_write_shard_decoder(hparams, model, max_tokens, start_la
         max_tokens=max_tokens,
         start_layer=start_layer,
         output_logits=output_logits,
+        cross_kv_input=cross_kv_input,
     ).eval()
 
     x_shape = (1, hparams.n_text_state, 1, 1)
@@ -623,14 +635,16 @@ def convert_stateful_no_write_shard_decoder(hparams, model, max_tokens, start_la
     self_mask_shape = (1, max_tokens, 1, 1)
     slot_mask = torch.zeros(slot_mask_shape, dtype=torch.float32)
     self_mask = torch.zeros(self_mask_shape, dtype=torch.float32)
+    cross_shape = (1, hparams.n_text_state, 1, hparams.n_audio_ctx)
+    cross_args = tuple(torch.zeros(cross_shape, dtype=torch.float16) for _ in range(n_layers*2)) if cross_kv_input else tuple()
     if token_input:
         token_shape = (1, 1)
         token_data = torch.randint(hparams.n_vocab, token_shape).long()
         pos_data = torch.zeros((1,), dtype=torch.long)
-        traced_model = torch.jit.trace(shard, (token_data, pos_data, slot_mask, self_mask))
+        traced_model = torch.jit.trace(shard, (token_data, pos_data, slot_mask, self_mask, *cross_args))
     else:
         x_data = torch.randn(x_shape, dtype=torch.float32)
-        traced_model = torch.jit.trace(shard, (x_data, slot_mask, self_mask))
+        traced_model = torch.jit.trace(shard, (x_data, slot_mask, self_mask, *cross_args))
 
     states = []
     for i in range(n_layers):
@@ -638,9 +652,12 @@ def convert_stateful_no_write_shard_decoder(hparams, model, max_tokens, start_la
         states.extend([
             ct.StateType(wrapped_type=ct.TensorType(shape=(1, hparams.n_text_state, 1, max_tokens), dtype=np.float16), name=f"k_cache_{il}"),
             ct.StateType(wrapped_type=ct.TensorType(shape=(1, hparams.n_text_state, 1, max_tokens), dtype=np.float16), name=f"v_cache_{il}"),
-            ct.StateType(wrapped_type=ct.TensorType(shape=(1, hparams.n_text_state, 1, hparams.n_audio_ctx), dtype=np.float16), name=f"cross_k_{il}"),
-            ct.StateType(wrapped_type=ct.TensorType(shape=(1, hparams.n_text_state, 1, hparams.n_audio_ctx), dtype=np.float16), name=f"cross_v_{il}"),
         ])
+        if not cross_kv_input:
+            states.extend([
+                ct.StateType(wrapped_type=ct.TensorType(shape=(1, hparams.n_text_state, 1, hparams.n_audio_ctx), dtype=np.float16), name=f"cross_k_{il}"),
+                ct.StateType(wrapped_type=ct.TensorType(shape=(1, hparams.n_text_state, 1, hparams.n_audio_ctx), dtype=np.float16), name=f"cross_v_{il}"),
+            ])
 
     outputs = [ct.TensorType(name="logits" if output_logits else "x_out", dtype=np.float32)]
     for i in range(n_layers):
@@ -650,10 +667,7 @@ def convert_stateful_no_write_shard_decoder(hparams, model, max_tokens, start_la
             ct.TensorType(name=f"v_out_{il}", dtype=np.float16),
         ])
 
-    return ct.convert(
-        traced_model,
-        convert_to="mlprogram",
-        inputs=([
+    inputs = ([
             ct.TensorType(name="token_data", shape=token_shape, dtype=np.int32),
             ct.TensorType(name="pos_data", shape=(1,), dtype=np.int32),
             ct.TensorType(name="slot_mask", shape=slot_mask_shape, dtype=np.float32),
@@ -662,7 +676,19 @@ def convert_stateful_no_write_shard_decoder(hparams, model, max_tokens, start_la
             ct.TensorType(name="x_data", shape=x_shape, dtype=np.float32),
             ct.TensorType(name="slot_mask", shape=slot_mask_shape, dtype=np.float32),
             ct.TensorType(name="self_mask", shape=self_mask_shape, dtype=np.float32),
-        ]),
+        ])
+    if cross_kv_input:
+        for i in range(n_layers):
+            il = start_layer + i
+            inputs.extend([
+                ct.TensorType(name=f"cross_k_{il}", shape=cross_shape, dtype=np.float16),
+                ct.TensorType(name=f"cross_v_{il}", shape=cross_shape, dtype=np.float16),
+            ])
+
+    return ct.convert(
+        traced_model,
+        convert_to="mlprogram",
+        inputs=inputs,
         outputs=outputs,
         states=states,
         minimum_deployment_target=ct.target.macOS15,
@@ -759,6 +785,7 @@ if __name__ == "__main__":
     parser.add_argument("--decoder-shard-layers", type=int, help="number of decoder layers for --decoder-stateful-no-write-shard", default=8)
     parser.add_argument("--decoder-shard-logits", action="store_true", help="make --decoder-stateful-no-write-shard return final logits instead of hidden state")
     parser.add_argument("--decoder-shard-token-input", action="store_true", help="make the first no-write shard consume token_data and pos_data instead of x_data")
+    parser.add_argument("--decoder-shard-cross-kv-input", action="store_true", help="make no-write shards consume cross KV as inputs instead of MLState")
     parser.add_argument("--decoder-stateful-prefill-tokens", type=int, help="also export a fixed-token prompt prefill function in a multifunction decoder", default=0)
     parser.add_argument("--decoder-max-tokens", type=int, help="maximum token context for experimental decoder export; defaults to the model text context", default=0)
     parser.add_argument("--quantize",     type=str2bool, help="quantize weights to F16", default=False)
@@ -782,6 +809,8 @@ if __name__ == "__main__":
         raise ValueError("--decoder-stateful-no-write-shard requires --optimize-ane true")
     if args.decoder_shard_token_input and not args.decoder_stateful_no_write_shard:
         raise ValueError("--decoder-shard-token-input requires --decoder-stateful-no-write-shard")
+    if args.decoder_shard_cross_kv_input and not args.decoder_stateful_no_write_shard:
+        raise ValueError("--decoder-shard-cross-kv-input requires --decoder-stateful-no-write-shard")
     if args.decoder_shard_token_input and args.decoder_shard_start != 0:
         raise ValueError("--decoder-shard-token-input is only valid for --decoder-shard-start 0")
     if args.decoder_stateful_prefill_tokens > 0 and (not args.decoder_stateful or args.decoder_stateful_self_kv):
@@ -833,6 +862,7 @@ if __name__ == "__main__":
                 n_layers=args.decoder_shard_layers,
                 output_logits=args.decoder_shard_logits,
                 token_input=args.decoder_shard_token_input,
+                cross_kv_input=args.decoder_shard_cross_kv_input,
             )
         elif args.decoder_stateful_self_kv:
             decoder = convert_stateful_self_kv_decoder(hparams, decoder, max_tokens=decoder_max_tokens)
@@ -843,7 +873,7 @@ if __name__ == "__main__":
         if decoder is not None:
             suffix = "-self-kv" if args.decoder_stateful_self_kv else ""
             if args.decoder_stateful_no_write_shard:
-                suffix = f"-no-write-s{args.decoder_shard_start}-l{args.decoder_shard_layers}"
+                suffix = ("-cross-input" if args.decoder_shard_cross_kv_input else "") + f"-no-write-s{args.decoder_shard_start}-l{args.decoder_shard_layers}"
                 if args.decoder_shard_token_input:
                     suffix += "-token"
                 if args.decoder_shard_logits:

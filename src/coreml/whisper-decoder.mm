@@ -29,11 +29,14 @@ extern "C" {
 struct whisper_coreml_decoder_shard {
     const void * model;
     const void * state;
+    std::vector<const void *> cross_inputs;
     int64_t start_layer;
     int64_t n_layers;
     int64_t n_state;
+    int64_t n_audio_ctx;
     bool token_input;
     bool output_logits;
+    bool cross_kv_input;
 };
 
 struct whisper_coreml_decoder_context {
@@ -164,6 +167,24 @@ static bool whisper_coreml_decoder_parse_layer_suffix(NSString * name, NSString 
     return true;
 }
 
+static bool whisper_coreml_decoder_check_ane_kv_shape(NSArray<NSNumber *> * shape, const int64_t n_state, int64_t * n_ctx) {
+    if (shape.count != 4 || shape[0].longLongValue != 1 ||
+            shape[1].longLongValue != n_state || shape[2].longLongValue != 1 ||
+            shape[3].longLongValue <= 0) {
+        return false;
+    }
+
+    if (n_ctx != nullptr) {
+        if (*n_ctx == 0) {
+            *n_ctx = shape[3].longLongValue;
+        } else if (*n_ctx != shape[3].longLongValue) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static bool whisper_coreml_decoder_parse_no_write_shard(
         MLModel * model,
         whisper_coreml_decoder_shard * shard,
@@ -203,17 +224,23 @@ static bool whisper_coreml_decoder_parse_no_write_shard(
     if (shard != nullptr) {
         shard->model = nullptr;
         shard->state = nullptr;
+        shard->cross_inputs.clear();
         shard->start_layer = min_layer;
         shard->n_layers = n_layers;
         shard->n_state = 0;
+        shard->n_audio_ctx = 0;
         shard->token_input = token_input;
         shard->output_logits = output_logits;
+        shard->cross_kv_input = false;
     }
 
 #if WHISPER_COREML_HAS_STATE
     if (@available(macOS 15.0, *)) {
         NSString * stateName = [[NSString alloc] initWithFormat:@"k_cache_%lld", (long long) min_layer];
         MLFeatureDescription * desc = model.modelDescription.stateDescriptionsByName[stateName];
+        if (desc == nil || desc.stateConstraint.dataType != MLMultiArrayDataTypeFloat16) {
+            return false;
+        }
         NSArray<NSNumber *> * shape = desc.stateConstraint.bufferShape;
         if (shape.count != 4 || shape[0].longLongValue != 1 || shape[2].longLongValue != 1 ||
                 shape[1].longLongValue <= 0 || shape[3].longLongValue <= 0) {
@@ -222,6 +249,9 @@ static bool whisper_coreml_decoder_parse_no_write_shard(
 
         const int64_t n_state = shape[1].longLongValue;
         const int64_t n_self_ctx = shape[3].longLongValue;
+        bool cross_source_known = false;
+        bool cross_kv_input = false;
+        int64_t n_audio_ctx = 0;
         for (int64_t layer = min_layer; layer <= max_layer; ++layer) {
             NSString * kOut = [[NSString alloc] initWithFormat:@"k_out_%lld", (long long) layer];
             NSString * vOut = [[NSString alloc] initWithFormat:@"v_out_%lld", (long long) layer];
@@ -230,17 +260,55 @@ static bool whisper_coreml_decoder_parse_no_write_shard(
                 return false;
             }
 
-            for (NSString * prefix in @[@"k_cache", @"v_cache", @"cross_k", @"cross_v"]) {
+            for (NSString * prefix in @[@"k_cache", @"v_cache"]) {
                 NSString * checkName = [[NSString alloc] initWithFormat:@"%@_%lld", prefix, (long long) layer];
                 MLFeatureDescription * checkDesc = model.modelDescription.stateDescriptionsByName[checkName];
-                NSArray<NSNumber *> * checkShape = checkDesc.stateConstraint.bufferShape;
-                if (checkShape.count != 4 || checkShape[0].longLongValue != 1 ||
-                        checkShape[1].longLongValue != n_state || checkShape[2].longLongValue != 1 ||
-                        checkShape[3].longLongValue <= 0) {
+                if (checkDesc == nil || checkDesc.stateConstraint.dataType != MLMultiArrayDataTypeFloat16) {
                     return false;
                 }
-                if (([prefix isEqualToString:@"k_cache"] || [prefix isEqualToString:@"v_cache"]) &&
-                        checkShape[3].longLongValue != n_self_ctx) {
+                NSArray<NSNumber *> * checkShape = checkDesc.stateConstraint.bufferShape;
+                int64_t self_ctx = n_self_ctx;
+                if (!whisper_coreml_decoder_check_ane_kv_shape(checkShape, n_state, &self_ctx)) {
+                    return false;
+                }
+            }
+
+            NSString * crossKName = [[NSString alloc] initWithFormat:@"cross_k_%lld", (long long) layer];
+            NSString * crossVName = [[NSString alloc] initWithFormat:@"cross_v_%lld", (long long) layer];
+            MLFeatureDescription * crossKState = model.modelDescription.stateDescriptionsByName[crossKName];
+            MLFeatureDescription * crossVState = model.modelDescription.stateDescriptionsByName[crossVName];
+            MLFeatureDescription * crossKInput = model.modelDescription.inputDescriptionsByName[crossKName];
+            MLFeatureDescription * crossVInput = model.modelDescription.inputDescriptionsByName[crossVName];
+            const bool has_cross_state = crossKState != nil || crossVState != nil;
+            const bool has_cross_input = crossKInput != nil || crossVInput != nil;
+            if (has_cross_state == has_cross_input || (crossKState == nil) != (crossVState == nil) ||
+                    (crossKInput == nil) != (crossVInput == nil)) {
+                return false;
+            }
+
+            if (!cross_source_known) {
+                cross_source_known = true;
+                cross_kv_input = has_cross_input;
+            } else if (cross_kv_input != has_cross_input) {
+                return false;
+            }
+
+            if (has_cross_input) {
+                if (crossKInput.multiArrayConstraint.dataType != MLMultiArrayDataTypeFloat16 ||
+                        crossVInput.multiArrayConstraint.dataType != MLMultiArrayDataTypeFloat16) {
+                    return false;
+                }
+                if (!whisper_coreml_decoder_check_ane_kv_shape(crossKInput.multiArrayConstraint.shape, n_state, &n_audio_ctx) ||
+                        !whisper_coreml_decoder_check_ane_kv_shape(crossVInput.multiArrayConstraint.shape, n_state, &n_audio_ctx)) {
+                    return false;
+                }
+            } else {
+                if (crossKState.stateConstraint.dataType != MLMultiArrayDataTypeFloat16 ||
+                        crossVState.stateConstraint.dataType != MLMultiArrayDataTypeFloat16) {
+                    return false;
+                }
+                if (!whisper_coreml_decoder_check_ane_kv_shape(crossKState.stateConstraint.bufferShape, n_state, &n_audio_ctx) ||
+                        !whisper_coreml_decoder_check_ane_kv_shape(crossVState.stateConstraint.bufferShape, n_state, &n_audio_ctx)) {
                     return false;
                 }
             }
@@ -248,6 +316,8 @@ static bool whisper_coreml_decoder_parse_no_write_shard(
 
         if (shard != nullptr) {
             shard->n_state = n_state;
+            shard->n_audio_ctx = n_audio_ctx;
+            shard->cross_kv_input = cross_kv_input;
         }
         if (max_tokens != nullptr) {
             *max_tokens = n_self_ctx;
@@ -299,6 +369,17 @@ static bool whisper_coreml_decoder_path_exists(const std::string & path) {
     return [[NSFileManager defaultManager] fileExistsAtPath:nsPath];
 }
 
+static void whisper_coreml_decoder_zero_f16_multiarray(const void * ptr) {
+    if (ptr == nullptr) {
+        return;
+    }
+
+    MLMultiArray * array = (__bridge MLMultiArray *) ptr;
+    if (array.dataPointer != nullptr && array.dataType == MLMultiArrayDataTypeFloat16 && array.count > 0) {
+        memset(array.dataPointer, 0, array.count*sizeof(uint16_t));
+    }
+}
+
 static bool whisper_coreml_decoder_add_no_write_shard(
         whisper_coreml_decoder_context * ctx,
         MLModel * model,
@@ -317,6 +398,24 @@ static bool whisper_coreml_decoder_add_no_write_shard(
         whisper_coreml_decoder_shard shard = parsed;
         shard.model = CFBridgingRetain(model);
         shard.state = CFBridgingRetain(state);
+        if (shard.cross_kv_input) {
+            for (int64_t i = 0; i < shard.n_layers*2; ++i) {
+                NSError * error = nil;
+                MLMultiArray * input = [[MLMultiArray alloc] initWithShape:@[@1, @(shard.n_state), @1, @(shard.n_audio_ctx)]
+                                                                  dataType:MLMultiArrayDataTypeFloat16
+                                                                     error:&error];
+                if (input == nil) {
+                    for (const void * ptr : shard.cross_inputs) {
+                        CFRelease(ptr);
+                    }
+                    CFRelease(shard.state);
+                    CFRelease(shard.model);
+                    return false;
+                }
+                shard.cross_inputs.push_back(CFBridgingRetain(input));
+                whisper_coreml_decoder_zero_f16_multiarray(shard.cross_inputs.back());
+            }
+        }
         ctx->shards.push_back(shard);
         return true;
     }
@@ -389,6 +488,9 @@ static bool whisper_coreml_decoder_load_no_write_shards(
                 parsed.n_layers != n_layers_per_shard ||
                 parsed.token_input ||
                 parsed.output_logits != logits ||
+                parsed.cross_kv_input != first.cross_kv_input ||
+                parsed.n_state != first.n_state ||
+                parsed.n_audio_ctx != first.n_audio_ctx ||
                 shard_max_tokens != ctx->max_tokens) {
             fprintf(stderr, "%s: no-write decoder shard '%s' has an incompatible interface\n", __func__, shard_path.c_str());
             return false;
@@ -446,10 +548,12 @@ struct whisper_coreml_decoder_context * whisper_coreml_decoder_init(const char *
     ctx->trace.enabled = whisper_coreml_decoder_env_is_enabled("WHISPER_COREML_DECODER_TRACE");
     ctx->trace_generation_steps_recorded = 0;
 
-    if (whisper_coreml_decoder_parse_no_write_shard(model, nullptr, nullptr)) {
-        if (whisper_coreml_decoder_compute_units_may_use_ne(compute_units_name) &&
+    whisper_coreml_decoder_shard first_probe;
+    if (whisper_coreml_decoder_parse_no_write_shard(model, &first_probe, nullptr)) {
+        if (!first_probe.cross_kv_input &&
+                whisper_coreml_decoder_compute_units_may_use_ne(compute_units_name) &&
                 !whisper_coreml_decoder_env_is_enabled("WHISPER_COREML_DECODER_ALLOW_UNVERIFIED_ANE")) {
-            fprintf(stderr, "%s: no-write decoder shards are known to diverge when Neural Engine is eligible; use WHISPER_COREML_DECODER_COMPUTE_UNITS=cpu_only or cpu_gpu, or set WHISPER_COREML_DECODER_ALLOW_UNVERIFIED_ANE=1 for diagnostics\n", __func__);
+            fprintf(stderr, "%s: state-backed no-write decoder shards are known to diverge when Core ML may use Neural Engine; use cross-input no-write shards, cpu_only, or cpu_gpu, or set WHISPER_COREML_DECODER_ALLOW_UNVERIFIED_ANE=1 for diagnostics\n", __func__);
             whisper_coreml_decoder_free(ctx);
             return nullptr;
         }
@@ -531,6 +635,11 @@ void whisper_coreml_decoder_free(struct whisper_coreml_decoder_context * ctx) {
         CFRelease(ctx->state);
     }
     for (auto & shard : ctx->shards) {
+        for (const void * ptr : shard.cross_inputs) {
+            if (ptr != nullptr) {
+                CFRelease(ptr);
+            }
+        }
         if (shard.state != nullptr) {
             CFRelease(shard.state);
         }
@@ -555,6 +664,12 @@ void whisper_coreml_decoder_reset(struct whisper_coreml_decoder_context * ctx) {
 #if WHISPER_COREML_HAS_STATE
     if (@available(macOS 15.0, *)) {
         if (ctx->no_write_sharded) {
+            for (auto & shard : ctx->shards) {
+                for (const void * ptr : shard.cross_inputs) {
+                    whisper_coreml_decoder_zero_f16_multiarray(ptr);
+                }
+            }
+
             if (ctx->reuse_state) {
                 ctx->state_pos = 0;
                 return;
@@ -681,6 +796,36 @@ bool whisper_coreml_decoder_trace_step_get(const struct whisper_coreml_decoder_c
     return true;
 }
 
+static bool whisper_coreml_decoder_copy_f16_to_multiarray(MLMultiArray * buffer, const void * data, const int64_t n_elems) {
+    if (buffer == nil || buffer.dataPointer == nullptr || data == nullptr ||
+            n_elems <= 0 || buffer.dataType != MLMultiArrayDataTypeFloat16 || buffer.count < n_elems) {
+        return false;
+    }
+
+    if (buffer.shape.count == 4 && buffer.shape[2].longLongValue == 1) {
+        const int64_t n_state = buffer.shape[1].longLongValue;
+        const int64_t n_ctx = buffer.shape[3].longLongValue;
+        if (n_state <= 0 || n_elems % n_state != 0 || n_elems/n_state > n_ctx) {
+            return false;
+        }
+
+        const uint16_t * src = (const uint16_t *) data;
+        uint16_t * dst = (uint16_t *) buffer.dataPointer;
+        const int64_t src_n_ctx = n_elems/n_state;
+        const int64_t stride_c = buffer.strides[1].longLongValue;
+        const int64_t stride_t = buffer.strides[3].longLongValue;
+        for (int64_t t = 0; t < src_n_ctx; ++t) {
+            for (int64_t c = 0; c < n_state; ++c) {
+                dst[c*stride_c + t*stride_t] = src[t*n_state + c];
+            }
+        }
+        return true;
+    }
+
+    memcpy(buffer.dataPointer, data, n_elems*sizeof(uint16_t));
+    return true;
+}
+
 static bool whisper_coreml_decoder_copy_state_f16(
         whisper_coreml_decoder_context * ctx,
         const void * statePtr,
@@ -698,30 +843,7 @@ static bool whisper_coreml_decoder_copy_state_f16(
         const int64_t t_write_us = ctx->trace.enabled ? whisper_coreml_decoder_time_us() : 0;
 
         [(__bridge MLState *) statePtr getMultiArrayForStateNamed:stateName handler:^(MLMultiArray * buffer) {
-            if (buffer.dataType != MLMultiArrayDataTypeFloat16 || buffer.count < n_elems) {
-                return;
-            }
-
-            if (buffer.shape.count == 4 && buffer.shape[2].longLongValue == 1) {
-                const int64_t n_state = buffer.shape[1].longLongValue;
-                const int64_t n_ctx = buffer.shape[3].longLongValue;
-                if (n_state > 0 && n_elems % n_state == 0 && n_elems/n_state <= n_ctx) {
-                    const uint16_t * src = (const uint16_t *) data;
-                    uint16_t * dst = (uint16_t *) buffer.dataPointer;
-                    const int64_t src_n_ctx = n_elems/n_state;
-                    const int64_t stride_c = buffer.strides[1].longLongValue;
-                    const int64_t stride_t = buffer.strides[3].longLongValue;
-                    for (int64_t t = 0; t < src_n_ctx; ++t) {
-                        for (int64_t c = 0; c < n_state; ++c) {
-                            dst[c*stride_c + t*stride_t] = src[t*n_state + c];
-                        }
-                    }
-                    ok = true;
-                }
-            } else {
-                memcpy(buffer.dataPointer, data, n_elems*sizeof(uint16_t));
-                ok = true;
-            }
+            ok = whisper_coreml_decoder_copy_f16_to_multiarray(buffer, data, n_elems);
         }];
 
         if (ctx->trace.enabled) {
@@ -746,6 +868,53 @@ static bool whisper_coreml_decoder_copy_state_f16(
     return false;
 }
 
+static bool whisper_coreml_decoder_copy_cross_input_f16(
+        whisper_coreml_decoder_context * ctx,
+        const whisper_coreml_decoder_shard & shard,
+        NSString * name,
+        const void * data,
+        int64_t n_elems) {
+    if (ctx == nullptr || name == nil || data == nullptr || !shard.cross_kv_input) {
+        return false;
+    }
+
+    int64_t layer = -1;
+    bool is_v = false;
+    if (!whisper_coreml_decoder_parse_layer_suffix(name, @"cross_k_", &layer)) {
+        if (!whisper_coreml_decoder_parse_layer_suffix(name, @"cross_v_", &layer)) {
+            return false;
+        }
+        is_v = true;
+    }
+
+    if (layer < shard.start_layer || layer >= shard.start_layer + shard.n_layers) {
+        return false;
+    }
+
+    const int64_t rel = layer - shard.start_layer;
+    const int64_t index = rel*2 + (is_v ? 1 : 0);
+    if (index < 0 || index >= (int64_t) shard.cross_inputs.size()) {
+        return false;
+    }
+
+    if (n_elems != shard.n_state*shard.n_audio_ctx) {
+        return false;
+    }
+
+    const int64_t t_write_us = ctx->trace.enabled ? whisper_coreml_decoder_time_us() : 0;
+    const bool ok = whisper_coreml_decoder_copy_f16_to_multiarray(
+            (__bridge MLMultiArray *) shard.cross_inputs[index],
+            data,
+            n_elems);
+    if (ctx->trace.enabled && ok) {
+        ctx->trace.cross_kv_write_count++;
+        ctx->trace.cross_kv_bytes_written += n_elems*sizeof(uint16_t);
+        ctx->trace.cross_kv_write_us += whisper_coreml_decoder_time_us() - t_write_us;
+    }
+
+    return ok;
+}
+
 bool whisper_coreml_decoder_set_state_f16(struct whisper_coreml_decoder_context * ctx, const char * name, const void * data, int64_t n_elems) {
     if (ctx == nullptr || name == nullptr || data == nullptr || !ctx->stateful) {
         return false;
@@ -758,6 +927,12 @@ bool whisper_coreml_decoder_set_state_f16(struct whisper_coreml_decoder_context 
             for (const auto & shard : ctx->shards) {
                 if (shard.state == nullptr || shard.model == nullptr) {
                     continue;
+                }
+
+                if (shard.cross_kv_input) {
+                    if (whisper_coreml_decoder_copy_cross_input_f16(ctx, shard, stateName, data, n_elems)) {
+                        return true;
+                    }
                 }
 
                 if (!whisper_coreml_decoder_model_has_state((__bridge MLModel *) shard.model, stateName)) {
@@ -1248,6 +1423,18 @@ static bool whisper_coreml_decoder_decode_no_write(
             }
             features[@"slot_mask"] = [MLFeatureValue featureValueWithMultiArray:slotMask];
             features[@"self_mask"] = [MLFeatureValue featureValueWithMultiArray:selfMask];
+            if (shard.cross_kv_input) {
+                if ((int64_t) shard.cross_inputs.size() != shard.n_layers*2) {
+                    return false;
+                }
+                for (int64_t i_layer = 0; i_layer < shard.n_layers; ++i_layer) {
+                    const int64_t il = shard.start_layer + i_layer;
+                    NSString * kName = [[NSString alloc] initWithFormat:@"cross_k_%lld", (long long) il];
+                    NSString * vName = [[NSString alloc] initWithFormat:@"cross_v_%lld", (long long) il];
+                    features[kName] = [MLFeatureValue featureValueWithMultiArray:(__bridge MLMultiArray *) shard.cross_inputs[2*i_layer]];
+                    features[vName] = [MLFeatureValue featureValueWithMultiArray:(__bridge MLMultiArray *) shard.cross_inputs[2*i_layer + 1]];
+                }
+            }
 
             MLDictionaryFeatureProvider * input = [[MLDictionaryFeatureProvider alloc] initWithDictionary:features error:error];
             if (ctx->trace.enabled) {
