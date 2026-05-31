@@ -1,4 +1,4 @@
-#ifdef WHISPER_FFMPEG
+#ifdef WHISPER_COMMON_FFMPEG
 
 #include "whisper.h"
 
@@ -45,7 +45,16 @@ static size_t wav_header_write(uint8_t * buf, int num_channels, int sample_rate,
 }
 
 bool ffmpeg_decode_audio(const std::string & ifname, std::vector<uint8_t> & wav_data) {
-    av_log_set_level(AV_LOG_WARNING);
+    {
+        const char * verbose = getenv("WHISPER_COMMON_FFMPEG_VERBOSE");
+        if (verbose && strcmp(verbose, "2") == 0) {
+            av_log_set_level(AV_LOG_DEBUG);
+        } else if (verbose && strcmp(verbose, "1") == 0) {
+            av_log_set_level(AV_LOG_VERBOSE);
+        } else {
+            av_log_set_level(AV_LOG_WARNING);
+        }
+    }
 
     AVFormatContext * fmt_ctx = nullptr;
     if (avformat_open_input(&fmt_ctx, ifname.c_str(), nullptr, nullptr) != 0) {
@@ -229,4 +238,4 @@ bool ffmpeg_decode_audio(const std::string & ifname, std::vector<uint8_t> & wav_
     return false; // success
 }
 
-#endif // WHISPER_FFMPEG
+#endif // WHISPER_COMMON_FFMPEG

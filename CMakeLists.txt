@@ -85,7 +85,7 @@ option(WHISPER_CURL "whisper: use libcurl to download model from an URL" OFF)
 option(WHISPER_SDL2 "whisper: support for libSDL2" OFF)
 
 if (CMAKE_SYSTEM_NAME MATCHES "Linux")
-    option(WHISPER_FFMPEG "whisper: support building and linking with ffmpeg libs (avcodec, swresample, ...)" OFF)
+    option(WHISPER_COMMON_FFMPEG "whisper: examples link with ffmpeg libs in order to decode more audio formats" OFF)
 endif()
 
 option(WHISPER_COREML                "whisper: enable Core ML framework"  OFF)
@@ -121,6 +121,7 @@ whisper_option_depr(WARNING     WHISPER_RPC                 GGML_RPC)
 whisper_option_depr(WARNING     WHISPER_SYCL                GGML_SYCL)
 whisper_option_depr(WARNING     WHISPER_SYCL_F16            GGML_SYCL_F16)
 whisper_option_depr(WARNING     WHISPER_CCACHE              GGML_CCACHE)
+whisper_option_depr(WARNING     WHISPER_FFMPEG              WHISPER_COMMON_FFMPEG)
 
 if (GGML_CUDA AND NOT MSVC)
     #GGML_CUDA enabled, add the necessary compile options -Wno-deprecated-gpu-targets
