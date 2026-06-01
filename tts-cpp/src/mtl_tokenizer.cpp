@@ -686,19 +686,22 @@ const tts_cpp::chatterbox::text_preprocess::MeCabTagger * mecab_tagger() {
     static std::once_flag once;
     static std::unique_ptr<tts_cpp::chatterbox::text_preprocess::MeCabTagger> t;
     std::call_once(once, [] {
-        {
-            std::lock_guard<std::mutex> lk(path_mutex());
-            g_mecab_initialized = true;
-        }
         const std::string path = resolve_mecab_dict_path();
-        if (path.empty()) return;
-        t = std::make_unique<tts_cpp::chatterbox::text_preprocess::MeCabTagger>();
-        try {
-            t->load(path);
-        } catch (const std::exception & e) {
-            fprintf(stderr, "mtl_tokenizer: warning: failed to load MeCab tagger: %s\n", e.what());
-            t.reset();
+        if (!path.empty()) {
+            auto tagger = std::make_unique<tts_cpp::chatterbox::text_preprocess::MeCabTagger>();
+            try {
+                tagger->load(path);
+                t = std::move(tagger);
+            } catch (const std::exception & e) {
+                fprintf(stderr, "mtl_tokenizer: warning: failed to load MeCab tagger: %s\n", e.what());
+            }
         }
+        // Mark initialized only after the load attempt finishes. If a concurrent
+        // set_mecab_dict_path() runs during init, the flag is still false so it
+        // won't print a misleading "ignored" warning for a path that
+        // resolve_mecab_dict_path() above may legitimately have just picked up.
+        std::lock_guard<std::mutex> lk(path_mutex());
+        g_mecab_initialized = true;
     });
     return t.get();
 }
@@ -708,19 +711,21 @@ const tts_cpp::chatterbox::text_preprocess::CangjieTable * cangjie_table() {
     static std::once_flag once;
     static std::unique_ptr<tts_cpp::chatterbox::text_preprocess::CangjieTable> tbl;
     std::call_once(once, [] {
-        {
-            std::lock_guard<std::mutex> lk(path_mutex());
-            g_cangjie_initialized = true;
-        }
         const std::string path = resolve_cangjie_tsv_path();
-        if (path.empty()) return;
-        tbl = std::make_unique<tts_cpp::chatterbox::text_preprocess::CangjieTable>();
-        try {
-            tbl->load(path);
-        } catch (const std::exception & e) {
-            fprintf(stderr, "mtl_tokenizer: warning: failed to load Cangjie table: %s\n", e.what());
-            tbl.reset();
+        if (!path.empty()) {
+            auto table = std::make_unique<tts_cpp::chatterbox::text_preprocess::CangjieTable>();
+            try {
+                table->load(path);
+                tbl = std::move(table);
+            } catch (const std::exception & e) {
+                fprintf(stderr, "mtl_tokenizer: warning: failed to load Cangjie table: %s\n", e.what());
+            }
         }
+        // Mark initialized only after the load attempt finishes (see mecab_tagger
+        // above): keeps a concurrent set_cangjie_tsv_path() from logging a
+        // misleading "ignored" warning for a path that may actually be used.
+        std::lock_guard<std::mutex> lk(path_mutex());
+        g_cangjie_initialized = true;
     });
     return tbl.get();
 }
