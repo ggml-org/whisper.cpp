@@ -6216,6 +6216,13 @@ static void whisper_process_logits(
             }
         }
 
+        // ref: https://github.com/ggml-org/whisper.cpp/pull/3798
+        if (!params.no_timestamps && !params.single_segment && params.max_tokens > 0 && (int) tokens_cur.size() >= params.max_tokens) {
+            for (int i = 0; i < vocab.token_eot; ++i) {
+                logits[i] = -INFINITY;
+            }
+        }
+
         // suppress sot and nosp tokens
         logits[vocab.token_sot]  = -INFINITY;
         logits[vocab.token_nosp] = -INFINITY;
@@ -7659,11 +7666,14 @@ int whisper_full_with_state(
                             }
                         }
                         text = "";
-                        while (i < (int) tokens_cur.size() && tokens_cur[i].id > whisper_token_beg(ctx)) {
-                            i++;
-                        }
-                        i--;
                         t0 = t1;
+                        while (i + 1 < (int) tokens_cur.size() && tokens_cur[i + 1].id > whisper_token_beg(ctx)) {
+                            i++;
+                            if (params.print_special) {
+                                text += whisper_token_to_str(ctx, tokens_cur[i].id);
+                            }
+                            t0 = seek + 2 * (tokens_cur[i].tid - whisper_token_beg(ctx));
+                        }
                         i0 = i + 1;
                         speaker_turn_next = false;
                     }
@@ -7680,8 +7690,8 @@ int whisper_full_with_state(
                             printf("[%s --> %s]  %s\n", to_timestamp(tt0).c_str(), to_timestamp(tt1).c_str(), text.c_str());
                         } else {
                             printf("%s", text.c_str());
-                            fflush(stdout);
                         }
+                        fflush(stdout);
                     }
 
                     result_all.push_back({ tt0, tt1, text, state->no_speech_prob, {}, speaker_turn_next });
@@ -7722,7 +7732,12 @@ int whisper_full_with_state(
             }
 
             // ref: https://github.com/ggml-org/whisper.cpp/pull/2629
+            const bool max_tokens_timestamp_ending = params.max_tokens > 0 &&
+                !params.single_segment &&
+                tokens_cur.size() > (size_t) params.max_tokens;
+
             const bool single_timestamp_ending = tokens_cur.size() > 1 &&
+                !max_tokens_timestamp_ending &&
                 tokens_cur[tokens_cur.size() - 2].id < whisper_token_beg(ctx) &&
                 tokens_cur[tokens_cur.size() - 1].id > whisper_token_beg(ctx);
             if (single_timestamp_ending) {
@@ -8243,9 +8258,6 @@ WHISPER_API const char * whisper_bench_ggml_mul_mat_str(int n_threads) {
     // when F16 is used, there is an extra work buffer of size N*N*sizeof(float)
     std::vector<uint8_t> buf(3llu*N_max*N_max*sizeof(float) + 3*ggml_tensor_overhead() + ggml_graph_overhead());
 
-    // put a bunch of random data in the buffer
-    for (size_t i = 0; i < buf.size(); i++) buf[i] = i;
-
     for (int j = 0; j < (int) sizes.size(); j++) {
         int n_q4_0 = 0;
         int n_q4_1 = 0;
@@ -8288,6 +8300,15 @@ WHISPER_API const char * whisper_bench_ggml_mul_mat_str(int n_threads) {
 
             struct ggml_tensor * a = ggml_new_tensor_2d(ctx0, wtype,         N, N);
             struct ggml_tensor * b = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, N, N);
+
+            // set tensor data after allocation so previous iteration results don't corrupt it.
+            {
+                uint8_t * a_data = (uint8_t *) a->data;
+                for (size_t ii = 0; ii < ggml_nbytes(a); ii++) a_data[ii] = ii & 0x3F;
+
+                uint8_t * b_data = (uint8_t *) b->data;
+                for (size_t ii = 0; ii < ggml_nbytes(b); ii++) b_data[ii] = ii & 0x3F;
+            }
 
             struct ggml_tensor * c = ggml_mul_mat(ctx0, a, b);
 

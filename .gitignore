@@ -10,6 +10,7 @@
 .DS_Store
 .vimspector.json
 /CMakeSettings.json
+/CMakeUserPresets.json
 /talk-llama.dSYM/
 
 build/
@@ -65,3 +66,5 @@ local.properties
 .log
 .exe
 voice_assistant/conversation.txt
+.pi/SYSTEM.md
+

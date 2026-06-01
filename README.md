@@ -21,6 +21,7 @@ High-performance inference of [OpenAI's Whisper](https://github.com/openai/whisp
 - [Vulkan support](#vulkan-gpu-support)
 - Support for CPU-only inference
 - [Efficient GPU support for NVIDIA](#nvidia-gpu-support)
+- [AMD ROCm GPU support](#amd-rocm-gpu-support)
 - [OpenVINO Support](#openvino-support)
 - [Ascend NPU Support](#ascend-npu-support)
 - [Moore Threads GPU Support](#moore-threads-gpu-support)
@@ -340,6 +341,27 @@ cmake -B build -DGGML_VULKAN=1
 cmake --build build -j --config Release
 ```
 
+## AMD ROCm GPU support
+
+With AMD GPUs the processing can be accelerated via HIP/ROCm.
+First, make sure you have installed [ROCm](https://rocm.docs.amd.com/en/latest/).
+
+Now build `whisper.cpp` with HIP support:
+
+```
+cmake -B build -DGGML_HIP=1 -DAMDGPU_TARGETS="gfx1201"
+cmake --build build -j --config Release
+```
+
+Replace `gfx1201` with your GPU architecture. You can find it with:
+
+```
+rocminfo | grep "gfx"
+```
+
+Common architectures: `gfx1100` (RX 7900 XTX), `gfx1101` (RX 7800 XT), `gfx1201` (RX 9070 XT).
+For multiple GPUs with different architectures: `-DAMDGPU_TARGETS="gfx1100;gfx1201"`.
+
 ## BLAS CPU support via OpenBLAS
 
 Encoder processing can be accelerated on the CPU via OpenBLAS.
@@ -403,9 +425,10 @@ cmake -B build -DGGML_MUSA=1 -DMUSA_ARCHITECTURES="21"
 cmake --build build -j --config Release
 ```
 
-## FFmpeg support (Linux only)
+## FFmpeg support (examples only)
 
-If you want to support more audio formats (such as Opus and AAC), you can turn on the `WHISPER_FFMPEG` build flag to enable FFmpeg integration.
+By default, the examples in this repo use the [miniaudio](https://github.com/mackron/miniaudio) library to decode audio files.
+Some of the examples also can use FFmpeg for decoding and broader format support. To enable that, build with `WHISPER_COMMON_FFMPEG`.
 
 First, you need to install required libraries:
 
@@ -420,7 +443,7 @@ sudo dnf install libavcodec-free-devel libavformat-free-devel libavutil-free-dev
 Then you can build the project as follows:
 
 ```bash
-cmake -B build -D WHISPER_FFMPEG=yes
+cmake -B build -D WHISPER_COMMON_FFMPEG=yes
 cmake --build build
 ```
 
