@@ -84,6 +84,11 @@ size_t levenshtein(const std::vector<uint32_t> & a, const std::vector<uint32_t> 
     return prev[x.size()];
 }
 
+// POSIX single-quote escaping for the std::system() shell command below.
+// cmd.exe uses different quoting rules, so build_whisper_command() / run_asr()
+// are POSIX-only. These optional L3 tests are only built when whisper-cli +
+// a model are present (see CMakeLists.txt) and are run on POSIX CI hosts;
+// revisit this quoting if they ever need to run on Windows.
 std::string sh_quote(const std::string & s) {
     std::string out = "'";
     for (char c : s) {
@@ -169,8 +174,12 @@ int evaluate_transcript(const Args & args) {
         return 2;
     }
 
+    // Standard CER normalizes the edit distance by the reference length
+    // (not max(ref, hyp)), so values stay comparable with published
+    // benchmarks. A hypothesis much longer than the reference can push CER
+    // above 1.0, which is the expected behaviour of the metric.
     const size_t dist  = levenshtein(exp_n, got_n);
-    const size_t denom = std::max(exp_n.size(), got_n.size());
+    const size_t denom = exp_n.size();
     const double cer   = denom == 0 ? 1.0 : double(dist) / double(denom);
 
     fprintf(stderr, "expected: \"%s\"\n", args.expected.c_str());

@@ -8,7 +8,7 @@ CangjieTable::load() expects.
 
 Usage:
     python build_cangjie_tsv.py /tmp/cangjie5.tsv
-    python build_cangjie_tsv.py /tmp/cangjie5.tsv --tag v1.0.0
+    python build_cangjie_tsv.py /tmp/cangjie5.tsv --tag master
 """
 
 import argparse
@@ -16,7 +16,11 @@ import sys
 import urllib.request
 from pathlib import Path
 
-DEFAULT_TAG = "master"
+# Pin to a specific commit for reproducible builds: Jackchows/Cangjie5 has no
+# releases/tags, and fetching `master` means a silent break if upstream renames
+# the file or changes the column format. Override with --tag master (or another
+# ref/SHA) when intentionally refreshing the table.
+DEFAULT_TAG = "b76ed7fd4b8365529c056096b6a3a2ba749f5a40"
 RAW_URL_TEMPLATE = (
     "https://raw.githubusercontent.com/Jackchows/Cangjie5/{tag}/Cangjie5_TC.txt"
 )
@@ -74,7 +78,8 @@ def parse_args():
     parser.add_argument(
         "--tag",
         default=DEFAULT_TAG,
-        help="Git tag or branch to fetch from (default: master)",
+        help="Git ref (tag/branch/commit SHA) to fetch from "
+             f"(default: pinned commit {DEFAULT_TAG})",
     )
     return parser.parse_args()
 

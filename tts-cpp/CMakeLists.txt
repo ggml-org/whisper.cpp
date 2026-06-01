@@ -325,9 +325,14 @@ if (TTS_CPP_BUILD_LIBRARY)
         message(STATUS "MeCab (Japanese preprocess): ENABLED")
         message(STATUS "  library : ${MECAB_LIBRARY}")
         message(STATUS "  include : ${MECAB_INCLUDE_DIR}")
-        target_compile_definitions(tts-cpp PUBLIC TTS_CPP_HAS_MECAB)
+        # MeCab is an implementation detail of src/text_preprocess.cpp; no
+        # public header under include/ exposes MeCab types or symbols. Keep
+        # the define, include dir and link all PRIVATE so consumers doing
+        # find_package(tts-cpp) don't inherit a libmecab dependency (and so
+        # the MinGW mecab.h headers never leak into a consumer's TU).
+        target_compile_definitions(tts-cpp PRIVATE TTS_CPP_HAS_MECAB)
         target_include_directories(tts-cpp PRIVATE ${MECAB_INCLUDE_DIR})
-        target_link_libraries     (tts-cpp PUBLIC ${MECAB_LIBRARY})
+        target_link_libraries     (tts-cpp PRIVATE ${MECAB_LIBRARY})
     else()
         message(STATUS "MeCab (Japanese preprocess): DISABLED (libmecab / mecab.h not found)")
     endif()

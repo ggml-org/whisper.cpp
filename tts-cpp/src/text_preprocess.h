@@ -2,7 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
+#include <iosfwd>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -28,7 +28,7 @@ private:
     struct Entry { std::string code; std::string suffix; };
     std::unordered_map<uint32_t, Entry> m_table;
 
-    void read_tsv_entries(std::ifstream & f,
+    void read_tsv_entries(std::istream & f,
                           std::unordered_map<std::string, std::vector<uint32_t>> & code_to_cps);
     void assign_disambiguation_suffixes(
             const std::unordered_map<std::string, std::vector<uint32_t>> & code_to_cps);

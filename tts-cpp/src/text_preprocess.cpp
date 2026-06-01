@@ -245,7 +245,7 @@ void CangjieTable::emit_cangjie_tokens(const Entry & entry, std::string & out) {
     out += "[cj_.]";
 }
 
-void CangjieTable::read_tsv_entries(std::ifstream & f,
+void CangjieTable::read_tsv_entries(std::istream & f,
                                     std::unordered_map<std::string, std::vector<uint32_t>> & code_to_cps) {
     std::string line;
     while (std::getline(f, line)) {
