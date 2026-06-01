@@ -64,4 +64,4 @@ cmake-build-debug/
 local.properties
 .log
 .exe
-
+voice_assistant/conversation.txt
