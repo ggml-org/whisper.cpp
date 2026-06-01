@@ -16,14 +16,14 @@
 //       --text "..." [--voice M1] [--language en] [--steps 5] [--speed 1.05] \
 //       [--seed 42] [--noise-npy noise.npy] [--runs 5] [--warmup 1] [--json-out result.json]
 
+#include "backend_selection.h"
 #include "supertonic_internal.h"
 #include "npy.h"
-
-#ifdef GGML_USE_VULKAN
-// QVAC-18605 — needed for `ggml_backend_vk_get_device_description`
-// in the bench's backend annotator (Vulkan-only).
-#include "ggml-vulkan.h"
-#endif
+// Vulkan adapter description in the bench backend annotator is now
+// resolved through the registry API
+// (`ggml_backend_get_device` + `ggml_backend_dev_description`); no
+// hard dep on the per-backend `ggml-vulkan.h` header / static
+// `ggml_backend_vk_get_device_description` entry point.
 
 #include <algorithm>
 #include <chrono>
@@ -571,17 +571,14 @@ int main(int argc, char ** argv) {
         // adapter description is appended so multi-GPU machines
         // unambiguously identify which device ran the bench.
         std::string desc = ggml_backend_name(model.backend) ? ggml_backend_name(model.backend) : "(unknown)";
-#ifdef GGML_USE_VULKAN
         if (model.backend_is_vk) {
-            char vk_desc[256] = {0};
-            ggml_backend_vk_get_device_description(vulkan_device < 0 ? 0 : vulkan_device,
-                                                   vk_desc, sizeof(vk_desc) - 1);
-            if (vk_desc[0]) {
-                desc += " (device " + std::to_string(vulkan_device < 0 ? 0 : vulkan_device) +
-                        ": " + vk_desc + ")";
+            ggml_backend_dev_t dev = ggml_backend_get_device(model.backend);
+            const char * vk_desc = dev ? ggml_backend_dev_description(dev) : nullptr;
+            if (vk_desc && *vk_desc) {
+                const int idx = vulkan_device < 0 ? 0 : vulkan_device;
+                desc += " (device " + std::to_string(idx) + ": " + vk_desc + ")";
             }
         }
-#endif
         // QVAC-18605 follow-up — surface every backend-capability
         // dispatch flag plus the cold-start prewarm latency so log
         // grep'ing across multiple machines can attribute perf

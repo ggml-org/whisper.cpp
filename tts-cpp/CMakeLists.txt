@@ -212,30 +212,18 @@ endif()
 
 # Legacy interface library kept for export-set compatibility (it is
 # still part of `install(EXPORT tts-cppTargets)` below and downstream
-# `find_package(tts-cpp)` consumers list it as a link dep).
-#
-# `init_gpu_backend()` / `init_cpu_backend()` / `init_blas_backend()`
-# (src/backend_selection.cpp) route every backend SELECTION decision
-# through the ggml-backend registry and do NOT call any
-# `ggml_backend_<backend>_init` entry point directly — the registry
-# walk reaches the right backend in both GGML_BACKEND_DL=ON
-# (Android/Linux .so prebuild) and GGML_BACKEND_DL=OFF (static-link
-# desktop) modes.
-#
-# `GGML_USE_VULKAN` is the one exception: the QVAC-18605 Supertonic
-# Vulkan optimisation paths (F16 K/V flash-attention, pinned-host
-# upload buffers, `ggml_backend_vk_host_buffer_type()` per-step input
-# uploads, backend_name() device-description annotation, ...) call
-# direct ggml-vulkan entry points that are only linkable when Vulkan
-# is statically linked (GGML_BACKEND_DL=OFF). Define it only in that
-# combination so the desktop perf benefits stay active while the
-# Android DL build silently falls back to the registry-walked
-# non-Vulkan code paths (where those direct symbols wouldn't link
-# anyway). Mirrors parakeet-cpp's `parakeet-backend-defs`.
+# `find_package(tts-cpp)` consumers list it as a link dep). Body is
+# intentionally empty: tts-cpp routes every backend SELECTION and
+# capability query through the ggml-backend registry
+# (`init_gpu_backend()` / `init_cpu_backend()` / `init_blas_backend()`
+# in src/backend_selection.cpp) and does NOT call any
+# `ggml_backend_<backend>_init` / `ggml_backend_is_<backend>` /
+# `ggml_backend_vk_*` entry point directly — the registry walk +
+# `ggml_backend_get_device` / `ggml_backend_dev_*` calls reach the
+# right backend in both `GGML_BACKEND_DL=ON` (Android / Linux .so
+# prebuild) and `GGML_BACKEND_DL=OFF` (static-link desktop) modes.
+# Mirrors parakeet-cpp's `parakeet-backend-defs`.
 add_library(tts-cpp-backend-defs INTERFACE)
-if (GGML_VULKAN AND NOT GGML_BACKEND_DL)
-    target_compile_definitions(tts-cpp-backend-defs INTERFACE GGML_USE_VULKAN)
-endif()
 
 set(TTS_CPP_LIB_SOURCES
     src/backend_selection.cpp

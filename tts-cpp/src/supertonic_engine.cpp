@@ -5,12 +5,11 @@
 #include "supertonic_chunker.h"
 #include "supertonic_internal.h"
 #include "npy.h"
-
-#ifdef GGML_USE_VULKAN
-// QVAC-18605 — needed for `ggml_backend_vk_get_device_description`
-// in the `backend_name()` annotator (Vulkan-only).
-#include "ggml-vulkan.h"
-#endif
+// Vulkan adapter description in `backend_name()` is now resolved
+// through the registry API (`ggml_backend_get_device` +
+// `ggml_backend_dev_description`) so no per-backend header include
+// is needed.  Same change other call sites went through to drop the
+// hard dep on `ggml-vulkan.h` under `GGML_BACKEND_DL=ON`.
 
 #include <atomic>
 #include <cmath>
@@ -588,18 +587,18 @@ struct Engine::Impl {
         // QVAC-18605 — append device description when Vulkan is the
         // resolved backend.  Mirrors chatterbox's bench output so a
         // log line like "backend: Vulkan (device 0: NVIDIA RTX 5090)"
-        // is unambiguous when triaging multi-GPU machines.
-#ifdef GGML_USE_VULKAN
+        // is unambiguous when triaging multi-GPU machines.  Pulled
+        // through `ggml_backend_dev_description(ggml_backend_get_device(b))`
+        // so the lookup links under `GGML_BACKEND_DL=ON` without a
+        // static dep on `ggml_backend_vk_get_device_description`.
         if (model.backend_is_vk) {
-            char desc[256] = {0};
-            ggml_backend_vk_get_device_description(opts.vulkan_device < 0 ? 0 : opts.vulkan_device,
-                                                   desc, sizeof(desc) - 1);
-            if (desc[0]) {
-                out += " (device " + std::to_string(opts.vulkan_device < 0 ? 0 : opts.vulkan_device) +
-                       ": " + desc + ")";
+            ggml_backend_dev_t dev = ggml_backend_get_device(model.backend);
+            const char * desc = dev ? ggml_backend_dev_description(dev) : nullptr;
+            if (desc && *desc) {
+                const int idx = opts.vulkan_device < 0 ? 0 : opts.vulkan_device;
+                out += " (device " + std::to_string(idx) + ": " + desc + ")";
             }
         }
-#endif
         return out;
     }
 };

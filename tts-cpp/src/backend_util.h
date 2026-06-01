@@ -39,6 +39,10 @@ inline bool backend_is_metal(ggml_backend_t b) {
     return std::strcmp(backend_reg_name(b), "Metal") == 0;
 }
 
+inline bool backend_is_vulkan(ggml_backend_t b) {
+    return std::strcmp(backend_reg_name(b), "Vulkan") == 0;
+}
+
 inline void backend_set_n_threads(ggml_backend_t b, int n_threads) {
     if (!b || n_threads <= 0) return;
     ggml_backend_dev_t dev = ggml_backend_get_device(b);

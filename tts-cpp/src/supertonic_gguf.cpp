@@ -287,20 +287,16 @@ bool backend_supports_native_leaky_relu(ggml_backend_t backend) {
 
 // QVAC-18605 — runtime check: backend is `ggml-vulkan`.
 //
-// Wraps `ggml_backend_is_vk` behind a `#ifdef GGML_USE_VULKAN` guard so
-// the flag-population code in `load_supertonic_gguf` works on both
-// Vulkan-enabled and Vulkan-disabled builds without `#ifdef` clutter
-// at every consumer site.  Returns `false` on Vulkan-disabled builds
-// so the dispatch helpers behave as if the backend were not Vulkan
-// (which is correct — the backend can't be Vulkan if Vulkan isn't in
-// the build).
+// Forwarder to the shared `tts_cpp::detail::backend_is_vulkan`
+// helper in backend_util.h (same pattern as `backend_is_metal`
+// / `backend_is_cpu`).  The supertonic anon-namespace name is
+// kept short for local readability; the inline helper resolves
+// the reg-name through the registry API
+// (`ggml_backend_get_device` + `ggml_backend_dev_backend_reg`
+// + `ggml_backend_reg_name`) so it links under both
+// `GGML_BACKEND_DL=ON` and `=OFF` modes.
 bool backend_is_vulkan(ggml_backend_t backend) {
-#ifdef GGML_USE_VULKAN
-    return backend && ggml_backend_is_vk(backend);
-#else
-    (void) backend;
-    return false;
-#endif
+    return ::tts_cpp::detail::backend_is_vulkan(backend);
 }
 
 // QVAC-18605 — internal-named alias for the public probe symbol.
@@ -448,18 +444,18 @@ bool backend_supports_q8_0_kv_flash_attn_uncached(ggml_backend_t backend) {
 // available on their adapter before flipping the (future)
 // `--vulkan-pinned-uploads` opt-in.
 //
-// Probe is trivial: succeeds iff the backend is Vulkan AND
-// `ggml_backend_vk_host_buffer_type()` returns non-null.  On a
-// Vulkan-disabled build the entire branch compiles out to
-// `return false`.
+// Probe is trivial: succeeds iff the backend is Vulkan AND the
+// device's `host_buffer_type` slot is non-null.  Routed through
+// the registry API (`ggml_backend_get_device` +
+// `ggml_backend_dev_host_buffer_type`) so it works under
+// `GGML_BACKEND_DL=ON`; on backends that don't expose a host
+// buffer type (CPU, Metal, OpenCL, …) the device-level slot
+// returns null and we report unsupported.
 bool backend_supports_pinned_host_buffer_uncached(ggml_backend_t backend) {
     if (!backend) return false;
-#ifdef GGML_USE_VULKAN
-    if (!ggml_backend_is_vk(backend)) return false;
-    return ggml_backend_vk_host_buffer_type() != nullptr;
-#else
-    return false;
-#endif
+    if (!::tts_cpp::detail::backend_is_vulkan(backend)) return false;
+    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+    return dev && ggml_backend_dev_host_buffer_type(dev) != nullptr;
 }
 
 // QVAC-18605 round 3 — backend capability probe for the BF16 K/V
@@ -903,12 +899,18 @@ ggml_backend_buffer_t try_alloc_inputs_in_pinned_host_buffer(
     if (!supertonic_backend_supports_pinned_host_buffer(model.backend)) {
         return nullptr;
     }
-#ifdef GGML_USE_VULKAN
-    ggml_backend_buffer_type_t host_buft = ggml_backend_vk_host_buffer_type();
+    // Resolve the host-pinned buffer type through the registry API
+    // (`ggml_backend_dev_host_buffer_type`) so the call links under
+    // `GGML_BACKEND_DL=ON`.  Same value the legacy
+    // `ggml_backend_vk_host_buffer_type()` returns, sourced from the
+    // device-level slot instead of the per-backend static entry.
+    ggml_backend_dev_t dev = ggml_backend_get_device(model.backend);
+    ggml_backend_buffer_type_t host_buft =
+        dev ? ggml_backend_dev_host_buffer_type(dev) : nullptr;
     if (host_buft == nullptr) {
-        // Probe said yes but the API now returns null — defensive
-        // race against a backend that lost the capability between
-        // probe and call.  Fall back to nullptr; caller uses
+        // Probe said yes but the device slot now returns null —
+        // defensive race against a backend that lost the capability
+        // between probe and call.  Fall back to nullptr; caller uses
         // gallocr's default path.
         return nullptr;
     }
@@ -917,11 +919,6 @@ ggml_backend_buffer_t try_alloc_inputs_in_pinned_host_buffer(
     // the returned buffer.  Returns nullptr on BAR exhaustion
     // (extremely rare) — caller falls through.
     return ggml_backend_alloc_ctx_tensors_from_buft(input_ctx, host_buft);
-#else
-    // No Vulkan compiled in — probe should have already returned
-    // false above.  Belt-and-suspenders.
-    return nullptr;
-#endif
 }
 
 // QVAC-18605 round 13 #1 — input-scratchpad allocator that

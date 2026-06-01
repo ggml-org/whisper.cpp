@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
