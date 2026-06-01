@@ -8,9 +8,9 @@
 #include "llama.h"
 
 #include <chrono>
+#include <cctype>
 #include <cstdio>
 #include <fstream>
-#include <regex>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -56,6 +56,7 @@ static std::string llama_token_to_piece(const struct llama_context * ctx, llama_
 struct whisper_params {
     int32_t n_threads  = std::min(4, (int32_t) std::thread::hardware_concurrency());
     int32_t voice_ms   = 10000;
+    int32_t poll_ms    = 50;
     int32_t capture_id = -1;
     int32_t max_tokens = 32;
     int32_t audio_ctx  = 0;
@@ -69,12 +70,17 @@ struct whisper_params {
 
     float vad_thold  = 0.6f;
     float freq_thold = 100.0f;
+    int32_t vad_silence_ms = 400;
+    int32_t tts_chunk_chars = 80;
 
     bool translate      = false;
     bool print_special  = false;
     bool print_energy   = false;
     bool no_timestamps  = true;
     bool verbose_prompt = false;
+    bool latency_log    = false;
+    bool tts_stream     = false;
+    bool defer_session_save = false;
     bool use_gpu        = true;
     bool flash_attn     = true;
 
@@ -87,6 +93,9 @@ struct whisper_params {
     std::string model_llama = "models/ggml-llama-7B.bin";
     std::string speak       = "./examples/talk-llama/speak";
     std::string speak_file  = "./examples/talk-llama/to_speak.txt";
+    std::string tts_mode    = "script";
+    std::string piper_model = "$HOME/en_US-lessac-medium.onnx";
+    std::string piper_output_cmd = "aplay -q -r 22050 -f S16_LE -t raw -";
     std::string prompt      = "";
     std::string fname_out;
     std::string path_session = "";       // path to file for saving/loading model eval state
@@ -104,6 +113,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         }
         else if (arg == "-t"   || arg == "--threads")        { params.n_threads      = std::stoi(argv[++i]); }
         else if (arg == "-vms" || arg == "--voice-ms")       { params.voice_ms       = std::stoi(argv[++i]); }
+        else if (arg == "--poll-ms")                         { params.poll_ms        = std::stoi(argv[++i]); }
         else if (arg == "-c"   || arg == "--capture")        { params.capture_id     = std::stoi(argv[++i]); }
         else if (arg == "-mt"  || arg == "--max-tokens")     { params.max_tokens     = std::stoi(argv[++i]); }
         else if (arg == "-ac"  || arg == "--audio-ctx")      { params.audio_ctx      = std::stoi(argv[++i]); }
@@ -116,10 +126,15 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "--temp")                            { params.temp           = std::stof(argv[++i]); }
         else if (arg == "-vth" || arg == "--vad-thold")      { params.vad_thold      = std::stof(argv[++i]); }
         else if (arg == "-fth" || arg == "--freq-thold")     { params.freq_thold     = std::stof(argv[++i]); }
+        else if (arg == "--vad-silence-ms")                  { params.vad_silence_ms = std::stoi(argv[++i]); }
         else if (arg == "-tr"  || arg == "--translate")      { params.translate      = true; }
         else if (arg == "-ps"  || arg == "--print-special")  { params.print_special  = true; }
         else if (arg == "-pe"  || arg == "--print-energy")   { params.print_energy   = true; }
         else if (arg == "-vp"  || arg == "--verbose-prompt") { params.verbose_prompt = true; }
+        else if (arg == "--latency-log")                     { params.latency_log    = true; }
+        else if (arg == "--tts-stream")                      { params.tts_stream     = true; }
+        else if (arg == "--tts-chunk-chars")                 { params.tts_chunk_chars = std::stoi(argv[++i]); }
+        else if (arg == "--defer-session-save")              { params.defer_session_save = true; }
         else if (arg == "-ng"  || arg == "--no-gpu")         { params.use_gpu        = false; }
         else if (arg == "-fa"  || arg == "--flash-attn")     { params.flash_attn     = true; }
         else if (arg == "-nfa" || arg == "--no-flash-attn")  { params.flash_attn     = false; }
@@ -133,6 +148,9 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-ml"  || arg == "--model-llama")    { params.model_llama    = argv[++i]; }
         else if (arg == "-s"   || arg == "--speak")          { params.speak          = argv[++i]; }
         else if (arg == "-sf"  || arg == "--speak-file")     { params.speak_file     = argv[++i]; }
+        else if (arg == "--tts-mode")                        { params.tts_mode       = argv[++i]; }
+        else if (arg == "--piper-model")                     { params.piper_model    = argv[++i]; }
+        else if (arg == "--piper-output-cmd")                { params.piper_output_cmd = argv[++i]; }
         else if (arg == "--prompt-file")                     {
             std::ifstream file(argv[++i]);
             std::copy(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>(), back_inserter(params.prompt));
@@ -158,7 +176,8 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "options:\n");
     fprintf(stderr, "  -h,       --help           [default] show this help message and exit\n");
     fprintf(stderr, "  -t N,     --threads N      [%-7d] number of threads to use during computation\n", params.n_threads);
-    fprintf(stderr, "  -vms N,   --voice-ms N     [%-7d] voice duration in milliseconds\n",              params.voice_ms);
+    fprintf(stderr, "  -vms N,   --voice-ms N     [%-7d] max retained utterance window in milliseconds\n", params.voice_ms);
+    fprintf(stderr, "            --poll-ms N      [%-7d] polling interval for turn detection\n",         params.poll_ms);
     fprintf(stderr, "  -c ID,    --capture ID     [%-7d] capture device ID\n",                           params.capture_id);
     fprintf(stderr, "  -mt N,    --max-tokens N   [%-7d] maximum number of tokens per audio chunk\n",    params.max_tokens);
     fprintf(stderr, "  -ac N,    --audio-ctx N    [%-7d] audio context size (0 - all)\n",                params.audio_ctx);
@@ -170,11 +189,13 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  --min-p N                  [%-7.2f] min-p sampling\n",                            params.min_p);
     fprintf(stderr, "  --temp N                   [%-7.2f] temperature\n",                               params.temp);
     fprintf(stderr, "  -vth N,   --vad-thold N    [%-7.2f] voice activity detection threshold\n",        params.vad_thold);
+    fprintf(stderr, "            --vad-silence-ms [%-7d] silence window before closing a turn\n",       params.vad_silence_ms);
     fprintf(stderr, "  -fth N,   --freq-thold N   [%-7.2f] high-pass frequency cutoff\n",                params.freq_thold);
     fprintf(stderr, "  -tr,      --translate      [%-7s] translate from source language to english\n",   params.translate ? "true" : "false");
     fprintf(stderr, "  -ps,      --print-special  [%-7s] print special tokens\n",                        params.print_special ? "true" : "false");
     fprintf(stderr, "  -pe,      --print-energy   [%-7s] print sound energy (for debugging)\n",          params.print_energy ? "true" : "false");
     fprintf(stderr, "  -vp,      --verbose-prompt [%-7s] print prompt at start\n",                       params.verbose_prompt ? "true" : "false");
+    fprintf(stderr, "            --latency-log    [%-7s] print per-turn latency breakdown\n",            params.latency_log ? "true" : "false");
     fprintf(stderr, "  -ng,      --no-gpu         [%-7s] disable GPU\n",                                 params.use_gpu ? "false" : "true");
     fprintf(stderr, "  -fa,      --flash-attn     [%-7s] enable flash attention\n",                      params.flash_attn ? "true" : "false");
     fprintf(stderr, "  -nfa,     --no-flash-attn  [%-7s] disable flash attention\n",                     params.flash_attn ? "false" : "true");
@@ -187,8 +208,14 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -ml FILE, --model-llama    [%-7s] llama model file\n",                            params.model_llama.c_str());
     fprintf(stderr, "  -s FILE,  --speak TEXT     [%-7s] command for TTS\n",                             params.speak.c_str());
     fprintf(stderr, "  -sf FILE, --speak-file     [%-7s] file to pass to TTS\n",                         params.speak_file.c_str());
+    fprintf(stderr, "            --tts-mode MODE  [%-7s] TTS mode: script or piper-persistent\n",       params.tts_mode.c_str());
+    fprintf(stderr, "            --tts-stream     [%-7s] stream LLM output to TTS chunks\n",             params.tts_stream ? "true" : "false");
+    fprintf(stderr, "            --tts-chunk-chars [%-7d] minimum buffered chars before speaking a chunk\n", params.tts_chunk_chars);
+    fprintf(stderr, "            --defer-session-save [%-7s] save session after reply completes\n",      params.defer_session_save ? "true" : "false");
     fprintf(stderr, "  --prompt-file FNAME        [%-7s] file with custom prompt to start dialog\n",     "");
     fprintf(stderr, "  --session FNAME                   file to cache model state in (may be large!) (default: none)\n");
+    fprintf(stderr, "  --piper-model FILE         [%-7s] Piper model for persistent mode\n",             params.piper_model.c_str());
+    fprintf(stderr, "  --piper-output-cmd CMD     [%-7s] command that plays Piper raw output\n",         params.piper_output_cmd.c_str());
     fprintf(stderr, "  -f FNAME, --file FNAME     [%-7s] text output file name\n",                       params.fname_out.c_str());
     fprintf(stderr, "\n");
 }
@@ -258,6 +285,86 @@ static std::string transcribe(
     t_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t_end - t_start).count();
 
     return result;
+}
+
+static int64_t monotonic_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+static bool parse_tts_mode(const std::string & value, tts_mode & mode) {
+    if (value == "script") {
+        mode = tts_mode::script;
+        return true;
+    }
+    if (value == "piper-persistent") {
+        mode = tts_mode::piper_persistent;
+        return true;
+    }
+    return false;
+}
+
+static std::string sanitize_heard_text(std::string text) {
+    {
+        std::regex re("\\[.*?\\]");
+        text = std::regex_replace(text, re, "");
+    }
+
+    {
+        std::regex re("\\(.*?\\)");
+        text = std::regex_replace(text, re, "");
+    }
+
+    text = std::regex_replace(text, std::regex("[^a-zA-Z0-9åäöÅÄÖ\\.,\\?!\\s\\:\\'\\-]"), "");
+    text = text.substr(0, text.find_first_of('\n'));
+    text = std::regex_replace(text, std::regex("^\\s+"), "");
+    text = std::regex_replace(text, std::regex("\\s+$"), "");
+
+    return text;
+}
+
+static std::string trim_copy(const std::string & text) {
+    return std::regex_replace(std::regex_replace(text, std::regex("^\\s+"), ""), std::regex("\\s+$"), "");
+}
+
+static std::string extract_tts_chunk(std::string & pending, int min_chars, bool force_flush) {
+    if (pending.empty()) {
+        return "";
+    }
+
+    size_t split_at = std::string::npos;
+    for (size_t i = 0; i < pending.size(); ++i) {
+        const char c = pending[i];
+        const bool sentence_end = c == '.' || c == '!' || c == '?' || c == '\n';
+        const bool soft_break = c == ',' || c == ';' || c == ':';
+        const bool long_enough = static_cast<int>(i + 1) >= min_chars;
+
+        if (sentence_end) {
+            split_at = i + 1;
+        } else if (soft_break && long_enough) {
+            split_at = i + 1;
+        } else if (std::isspace(static_cast<unsigned char>(c)) && long_enough) {
+            split_at = i + 1;
+        }
+    }
+
+    if (split_at == std::string::npos) {
+        if (!force_flush) {
+            return "";
+        }
+        split_at = pending.size();
+    }
+
+    std::string chunk = trim_copy(pending.substr(0, split_at));
+    pending.erase(0, split_at);
+    pending = std::regex_replace(pending, std::regex("^\\s+"), "");
+
+    if (chunk.empty() && force_flush && !pending.empty()) {
+        chunk = trim_copy(pending);
+        pending.clear();
+    }
+
+    return chunk;
 }
 
 static std::vector<std::string> get_words(const std::string &txt) {
@@ -348,6 +455,25 @@ int main(int argc, char ** argv) {
     lcparams.flash_attn_type = params.flash_attn ? LLAMA_FLASH_ATTN_TYPE_AUTO : LLAMA_FLASH_ATTN_TYPE_DISABLED;
 
     struct llama_context * ctx_llama = llama_init_from_model(model_llama, lcparams);
+
+    tts_mode parsed_tts_mode = tts_mode::script;
+    if (!parse_tts_mode(params.tts_mode, parsed_tts_mode)) {
+        fprintf(stderr, "error: unknown TTS mode '%s' (expected script or piper-persistent)\n", params.tts_mode.c_str());
+        return 1;
+    }
+
+    tts_worker speaker(tts_worker_params {
+        parsed_tts_mode,
+        params.speak,
+        params.speak_file,
+        params.piper_model,
+        params.piper_output_cmd,
+        2,
+    });
+    if (!speaker.start()) {
+        fprintf(stderr, "error: failed to start TTS worker\n");
+        return 1;
+    }
 
     // print some info about the processing
     {
@@ -549,7 +675,6 @@ int main(int argc, char ** argv) {
     audio.clear();
 
     // text inference variables
-    const int voice_id = 2;
     const int n_keep   = embd_inp.size();
     const int n_ctx    = llama_n_ctx(ctx_llama);
 
@@ -564,6 +689,10 @@ int main(int argc, char ** argv) {
         params.person + chat_symb,
     };
 
+    bool speech_active = false;
+    int64_t speech_start_ms = 0;
+    int64_t last_voice_ms = 0;
+
     // main loop
     while (is_running) {
         // handle Ctrl + C
@@ -574,23 +703,51 @@ int main(int argc, char ** argv) {
         }
 
         // delay
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(params.poll_ms));
 
         int64_t t_ms = 0;
 
         {
             audio.get(2000, pcmf32_cur);
 
-            if (::vad_simple(pcmf32_cur, WHISPER_SAMPLE_RATE, 1250, params.vad_thold, params.freq_thold, params.print_energy) || force_speak) {
-                //fprintf(stdout, "%s: Speech detected! Processing ...\n", __func__);
+            const int64_t t_now_ms = monotonic_ms();
+            const bool endpoint_ready = ::vad_simple(
+                    pcmf32_cur,
+                    WHISPER_SAMPLE_RATE,
+                    params.vad_silence_ms,
+                    params.vad_thold,
+                    params.freq_thold,
+                    params.print_energy);
 
-                audio.get(params.voice_ms, pcmf32_cur);
+            if (!endpoint_ready) {
+                if (!speech_active) {
+                    speech_active = true;
+                    speech_start_ms = t_now_ms;
+                }
+                last_voice_ms = t_now_ms;
+            }
+
+            if ((endpoint_ready && speech_active) || force_speak) {
+                const int64_t turn_start_ms = monotonic_ms();
+                int64_t endpoint_wait_ms = 0;
+                int capture_ms = params.voice_ms;
+
+                if (!force_speak && speech_active) {
+                    endpoint_wait_ms = std::max<int64_t>(0, t_now_ms - last_voice_ms);
+                    const int64_t utterance_ms = std::max<int64_t>(250, t_now_ms - speech_start_ms + params.vad_silence_ms + params.poll_ms);
+                    capture_ms = std::min<int64_t>(params.voice_ms, utterance_ms);
+                }
+
+                audio.get(capture_ms, pcmf32_cur);
 
                 std::string all_heard;
-
                 if (!force_speak) {
                     all_heard = ::trim(::transcribe(ctx_wsp, params, pcmf32_cur, prompt_whisper, prob0, t_ms));
                 }
+
+                speech_active = false;
+                speech_start_ms = 0;
+                last_voice_ms = 0;
 
                 const auto words = get_words(all_heard);
 
@@ -605,90 +762,58 @@ int main(int argc, char ** argv) {
                     }
                 }
 
-                // check if audio starts with the wake-up command if enabled
                 if (use_wake_cmd) {
                     const float sim = similarity(wake_cmd_heard, wake_cmd);
-
                     if ((sim < 0.7f) || (text_heard.empty())) {
                         audio.clear();
                         continue;
                     }
                 }
 
-                // optionally give audio feedback that the current text is being processed
                 if (!params.heard_ok.empty()) {
-                    speak_with_file(params.speak, params.heard_ok, params.speak_file, voice_id);
+                    speak_with_file(params.speak, params.heard_ok, params.speak_file, 2);
                 }
 
-                // remove text between brackets using regex
-                {
-                    std::regex re("\\[.*?\\]");
-                    text_heard = std::regex_replace(text_heard, re, "");
-                }
-
-                // remove text between brackets using regex
-                {
-                    std::regex re("\\(.*?\\)");
-                    text_heard = std::regex_replace(text_heard, re, "");
-                }
-
-                // remove all characters, except for letters, numbers, punctuation and ':', '\'', '-', ' '
-                text_heard = std::regex_replace(text_heard, std::regex("[^a-zA-Z0-9åäöÅÄÖ\\.,\\?!\\s\\:\\'\\-]"), "");
-
-                // take first line
-                text_heard = text_heard.substr(0, text_heard.find_first_of('\n'));
-
-                // remove leading and trailing whitespace
-                text_heard = std::regex_replace(text_heard, std::regex("^\\s+"), "");
-                text_heard = std::regex_replace(text_heard, std::regex("\\s+$"), "");
-
+                const int64_t prompt_t0_ms = monotonic_ms();
+                text_heard = sanitize_heard_text(text_heard);
                 const std::vector<llama_token> tokens = llama_tokenize(ctx_llama, text_heard.c_str(), false);
+                const int64_t prompt_ms = monotonic_ms() - prompt_t0_ms;
 
                 if (text_heard.empty() || tokens.empty() || force_speak) {
-                    //fprintf(stdout, "%s: Heard nothing, skipping ...\n", __func__);
                     audio.clear();
-
+                    force_speak = false;
                     continue;
                 }
 
                 force_speak = false;
 
-                text_heard.insert(0, 1, ' ');
-                text_heard += "\n" + params.bot_name + chat_symb;
-                fprintf(stdout, "%s%s%s", "\033[1m", text_heard.c_str(), "\033[0m");
+                std::string prompt_for_llama = " " + text_heard + "\n" + params.bot_name + chat_symb;
+                fprintf(stdout, "%s%s%s", "\033[1m", prompt_for_llama.c_str(), "\033[0m");
                 fflush(stdout);
 
-                embd = ::llama_tokenize(ctx_llama, text_heard, false);
+                embd = ::llama_tokenize(ctx_llama, prompt_for_llama, false);
 
-                // Append the new input tokens to the session_tokens vector
                 if (!path_session.empty()) {
                     session_tokens.insert(session_tokens.end(), tokens.begin(), tokens.end());
                 }
 
-                // text inference
+                speaker.begin_turn();
+
                 bool done = false;
+                bool first_token_emitted = false;
+                int64_t first_token_latency_ms = 0;
+                const int64_t generation_start_ms = monotonic_ms();
                 std::string text_to_speak;
+                std::string tts_pending;
+
                 while (true) {
-                    // predict
                     if (embd.size() > 0) {
                         if (n_past + (int) embd.size() > n_ctx) {
                             n_past = n_keep;
-
-                            // insert n_left/2 tokens at the start of embd from last_n_tokens
                             embd.insert(embd.begin(), embd_inp.begin() + embd_inp.size() - n_prev, embd_inp.end());
-                            // stop saving session if we run out of context
                             path_session = "";
-                            //printf("\n---\n");
-                            //printf("resetting: '");
-                            //for (int i = 0; i < (int) embd.size(); i++) {
-                            //    printf("%s", llama_token_to_piece(ctx_llama, embd[i]));
-                            //}
-                            //printf("'\n");
-                            //printf("\n---\n");
                         }
 
-                        // try to reuse a matching prefix from the loaded session instead of re-eval (via n_past)
-                        // REVIEW
                         if (n_session_consumed < (int) session_tokens.size()) {
                             size_t i = 0;
                             for ( ; i < embd.size(); i++) {
@@ -715,17 +840,13 @@ int main(int argc, char ** argv) {
                             n_session_consumed = session_tokens.size();
                         }
 
-                        // prepare batch
-                        {
-                            batch.n_tokens = embd.size();
-
-                            for (int i = 0; i < batch.n_tokens; i++) {
-                                batch.token[i]     = embd[i];
-                                batch.pos[i]       = n_past + i;
-                                batch.n_seq_id[i]  = 1;
-                                batch.seq_id[i][0] = 0;
-                                batch.logits[i]    = i == batch.n_tokens - 1;
-                            }
+                        batch.n_tokens = embd.size();
+                        for (int i = 0; i < batch.n_tokens; i++) {
+                            batch.token[i]     = embd[i];
+                            batch.pos[i]       = n_past + i;
+                            batch.n_seq_id[i]  = 1;
+                            batch.seq_id[i][0] = 0;
+                            batch.logits[i]    = i == batch.n_tokens - 1;
                         }
 
                         if (llama_decode(ctx_llama, batch)) {
@@ -734,46 +855,56 @@ int main(int argc, char ** argv) {
                         }
                     }
 
-
                     embd_inp.insert(embd_inp.end(), embd.begin(), embd.end());
                     n_past += embd.size();
-
                     embd.clear();
 
-                    if (done) break;
+                    if (done) {
+                        break;
+                    }
 
-                    {
-                        // out of user input, sample next token
+                    if (!path_session.empty() && need_to_save_session && !params.defer_session_save) {
+                        need_to_save_session = false;
+                        llama_state_save_file(ctx_llama, path_session.c_str(), session_tokens.data(), session_tokens.size());
+                    }
 
-                        if (!path_session.empty() && need_to_save_session) {
-                            need_to_save_session = false;
-                            llama_state_save_file(ctx_llama, path_session.c_str(), session_tokens.data(), session_tokens.size());
+                    const llama_token id = llama_sampler_sample(smpl, ctx_llama, -1);
+                    if (id != llama_vocab_eos(vocab_llama)) {
+                        embd.push_back(id);
+
+                        const std::string piece = llama_token_to_piece(ctx_llama, id);
+                        text_to_speak += piece;
+                        tts_pending += piece;
+
+                        if (!first_token_emitted) {
+                            first_token_emitted = true;
+                            first_token_latency_ms = monotonic_ms() - generation_start_ms;
                         }
 
-                        const llama_token id = llama_sampler_sample(smpl, ctx_llama, -1);
+                        printf("%s", piece.c_str());
+                        fflush(stdout);
 
-                        if (id != llama_vocab_eos(vocab_llama)) {
-                            // add it to the context
-                            embd.push_back(id);
-
-                            text_to_speak += llama_token_to_piece(ctx_llama, id);
-
-                            printf("%s", llama_token_to_piece(ctx_llama, id).c_str());
-                            fflush(stdout);
+                        if (params.tts_stream) {
+                            std::string chunk = extract_tts_chunk(tts_pending, params.tts_chunk_chars, false);
+                            if (!chunk.empty()) {
+                                speaker.submit(chunk);
+                            }
                         }
                     }
 
-                    {
+                    if (!embd.empty()) {
                         std::string last_output;
-                        for (int i = embd_inp.size() - 16; i < (int) embd_inp.size(); i++) {
+                        for (int i = std::max(0, (int) embd_inp.size() - 16); i < (int) embd_inp.size(); i++) {
                             last_output += llama_token_to_piece(ctx_llama, embd_inp[i]);
                         }
                         last_output += llama_token_to_piece(ctx_llama, embd[0]);
 
                         for (std::string & antiprompt : antiprompts) {
-                            if (last_output.find(antiprompt.c_str(), last_output.length() - antiprompt.length(), antiprompt.length()) != std::string::npos) {
+                            if (last_output.length() >= antiprompt.length() &&
+                                last_output.find(antiprompt.c_str(), last_output.length() - antiprompt.length(), antiprompt.length()) != std::string::npos) {
                                 done = true;
                                 text_to_speak = ::replace(text_to_speak, antiprompt, "");
+                                tts_pending = ::replace(tts_pending, antiprompt, "");
                                 fflush(stdout);
                                 need_to_save_session = true;
                                 break;
@@ -782,13 +913,44 @@ int main(int argc, char ** argv) {
                     }
 
                     is_running = sdl_poll_events();
-
                     if (!is_running) {
                         break;
                     }
                 }
 
-                speak_with_file(params.speak, text_to_speak, params.speak_file, voice_id);
+                if (params.tts_stream) {
+                    std::string final_chunk = extract_tts_chunk(tts_pending, params.tts_chunk_chars, true);
+                    if (!final_chunk.empty()) {
+                        speaker.submit(final_chunk);
+                    }
+                } else {
+                    speaker.submit(trim_copy(text_to_speak));
+                }
+
+                const int64_t generation_total_ms = monotonic_ms() - generation_start_ms;
+
+                if (!path_session.empty() && need_to_save_session && params.defer_session_save) {
+                    need_to_save_session = false;
+                    llama_state_save_file(ctx_llama, path_session.c_str(), session_tokens.data(), session_tokens.size());
+                }
+
+                const tts_worker_turn_metrics tts_metrics = speaker.end_turn();
+
+                if (params.latency_log) {
+                    const int64_t total_turn_ms = monotonic_ms() - turn_start_ms;
+                    fprintf(stderr,
+                            "\n[latency] endpoint=%lldms asr=%lldms prompt=%lldms first_token=%lldms gen=%lldms tts_start=%lldms tts_total=%lldms total=%lldms audio=%dms chunks=%d\n",
+                            (long long) endpoint_wait_ms,
+                            (long long) t_ms,
+                            (long long) prompt_ms,
+                            (long long) first_token_latency_ms,
+                            (long long) generation_total_ms,
+                            (long long) tts_metrics.startup_ms,
+                            (long long) tts_metrics.total_ms,
+                            (long long) total_turn_ms,
+                            capture_ms,
+                            tts_metrics.chunks);
+                }
 
                 audio.clear();
             }
@@ -796,6 +958,7 @@ int main(int argc, char ** argv) {
     }
 
     audio.pause();
+    speaker.stop();
 
     whisper_print_timings(ctx_wsp);
     whisper_free(ctx_wsp);

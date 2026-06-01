@@ -218,61 +218,78 @@ def _run_loop():
             if _stop_event.is_set():
                 break
 
-            _status = "Recording — speak now"
-            _record_with_vad()
-            if _stop_event.is_set():
-                break
+            # Record
+            try:
+                _status = "Recording — speak now"
+                _record_with_vad()
+                if _stop_event.is_set():
+                    break
+            except Exception as exc:
+                _status = f"Recording failed: {exc}"
+                continue
 
-            _status = "Transcribing…"
-            text = _transcribe()
+            # Transcribe
+            try:
+                _status = "Transcribing…"
+                text = _transcribe()
+            except Exception as exc:
+                _status = f"Transcription failed: {exc}"
+                continue
+
             if not text:
                 _status = "Nothing heard — listening again"
                 continue
 
             _status = f"You: {text[:70]}{'…' if len(text) > 70 else ''}"
 
-            tts_buf = ""
-            if _piper_voice:
-                tts_q  = queue.Queue()
-                player = threading.Thread(target=_tts_worker, args=(tts_q,), daemon=True)
-                player.start()
-                _status = "Thinking + Speaking…"
+            # LLM + TTS
+            try:
+                tts_buf = ""
+                if _piper_voice:
+                    tts_q  = queue.Queue()
+                    player = threading.Thread(target=_tts_worker, args=(tts_q,), daemon=True)
+                    player.start()
+                    _status = "Thinking + Speaking…"
 
-                for token in _ollama_tokens(text):
-                    tts_buf += token
-                    while True:
-                        m = _SENTENCE_END.search(tts_buf)
-                        if not m:
-                            break
-                        sentence = tts_buf[:m.start() + 1].strip()
-                        tts_buf  = tts_buf[m.end():]
-                        if sentence:
-                            tts_q.put(sentence)
-                    if len(tts_buf) >= MAX_TTS_CHARS:
-                        for sep in (" ", "，", ",", "、"):
-                            pos = tts_buf.rfind(sep, 0, MAX_TTS_CHARS)
-                            if pos > MAX_TTS_CHARS // 3:
-                                tts_q.put(tts_buf[:pos].strip())
-                                tts_buf = tts_buf[pos + len(sep):]
+                    for token in _ollama_tokens(text):
+                        tts_buf += token
+                        while True:
+                            m = _SENTENCE_END.search(tts_buf)
+                            if not m:
                                 break
-                        else:
-                            tts_q.put(tts_buf.strip())
-                            tts_buf = ""
+                            sentence = tts_buf[:m.start() + 1].strip()
+                            tts_buf  = tts_buf[m.end():]
+                            if sentence:
+                                tts_q.put(sentence)
+                        if len(tts_buf) >= MAX_TTS_CHARS:
+                            for sep in (" ", "，", ",", "、"):
+                                pos = tts_buf.rfind(sep, 0, MAX_TTS_CHARS)
+                                if pos > MAX_TTS_CHARS // 3:
+                                    tts_q.put(tts_buf[:pos].strip())
+                                    tts_buf = tts_buf[pos + len(sep):]
+                                    break
+                            else:
+                                tts_q.put(tts_buf.strip())
+                                tts_buf = ""
 
-                if tts_buf.strip():
-                    tts_q.put(tts_buf.strip())
-                tts_q.put(None)
-                player.join()
-            else:
-                _status = "Thinking…"
-                for _ in _ollama_tokens(text):
-                    pass
+                    if tts_buf.strip():
+                        tts_q.put(tts_buf.strip())
+                    tts_q.put(None)
+                    player.join()
+                else:
+                    _status = "Thinking…"
+                    for _ in _ollama_tokens(text):
+                        pass
 
-            if _chat_history and _chat_history[-1]["role"] == "assistant":
-                _append_transcript(text, _chat_history[-1]["content"])
+                if _chat_history and _chat_history[-1]["role"] == "assistant":
+                    _append_transcript(text, _chat_history[-1]["content"])
+
+            except Exception as exc:
+                _status = f"LLM/TTS error: {exc}"
+                continue
 
     except Exception as exc:
-        _status = f"Error: {exc}"
+        _status = f"Fatal error: {exc}"
     finally:
         _is_running = False
         _status = "Stopped"
@@ -324,7 +341,7 @@ def ui_clear_conversation():
 
 # ── Build UI ───────────────────────────────────────────────────────────────────
 
-with gr.Blocks(title="Voice Assistant", theme=gr.themes.Soft()) as demo:
+with gr.Blocks(title="Voice Assistant") as demo:
     gr.Markdown("# Voice Assistant")
 
     with gr.Row():
@@ -371,4 +388,4 @@ with gr.Blocks(title="Voice Assistant", theme=gr.themes.Soft()) as demo:
 
 
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860, share=False)
+    demo.launch(server_name="0.0.0.0", server_port=7860, share=False, theme=gr.themes.Soft())
