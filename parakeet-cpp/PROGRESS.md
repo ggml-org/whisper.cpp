@@ -2561,8 +2561,10 @@ New `parakeet_eou.{h,cpp}` (~360 lines) modelled on
 (1-layer LSTM, 640 hidden) + joint (`enc 512->640`, `pred 640->640`,
 `out 640->1027`) to f32 once at Engine construction. `EouDecodeState`
 holds `h_state`, `c_state`, `pred_out`, `last_token`,
-`symbols_this_step`, `segment_start_token` -- everything needed to
-carry decoder state across chunked calls.
+`symbols_this_step`, `has_emitted_token_since_last_eou` -- everything
+needed to carry decoder state across chunked calls, including the
+empty-segment guard used by `eou_decode_window` to suppress phantom
+`<EOU>` boundaries.
 
 `eou_decode_window()` runs greedy RNN-T over a span of encoder
 frames with up to `max_symbols_per_step=5` symbols per encoder step
