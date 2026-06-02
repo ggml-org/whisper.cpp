@@ -34,6 +34,7 @@ on:
       - 'bindings/go/**'                        # handled by bindings-go.yml
       - 'examples/addon.node/**'                # handled by examples.yml
       - '.github/workflows/build-sanitize.yml'  # handled by build-sanitize.yml
+      - '.github/workflows/build-linux.yml'     # handled by build-linux.yml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -44,83 +45,6 @@ env:
   ubuntu_image: "ubuntu:22.04"
 
 jobs:
-  ubuntu-22:
-    runs-on: ubuntu-22.04
-
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [linux/amd64, linux/ppc64le]
-
-    steps:
-      - name: Clone
-        uses: actions/checkout@v6
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Build ${{ matrix.arch }}
-        run: |
-          docker run --platform ${{ matrix.arch }} --rm \
-            -v ${{ github.workspace }}:/workspace \
-            -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
-            set -e
-            export DEBIAN_FRONTEND=noninteractive
-            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-
-            apt update
-            apt install -y build-essential libsdl2-dev cmake git
-            cmake -B build
-            cmake --build build --config Release -j $(nproc)'
-
-  ubuntu-22-arm64:
-    runs-on: ubuntu-22.04-arm
-
-    steps:
-      - name: Clone
-        uses: actions/checkout@v6
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libsdl2-dev cmake git
-
-      - name: Build
-        run: |
-          cmake -B build -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8-a
-          cmake --build build --config Release -j $(nproc)
-
-  ubuntu-22-arm-v7:
-    runs-on: ubuntu-22.04
-
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [linux/arm/v7]
-
-    steps:
-      - name: Clone
-        uses: actions/checkout@v6
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Build ${{ matrix.arch }}
-        run: |
-          docker run --platform ${{ matrix.arch }} --rm \
-            -v ${{ github.workspace }}:/workspace \
-            -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
-            set -e
-            export DEBIAN_FRONTEND=noninteractive
-            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
-
-            apt update
-            apt install -y build-essential libsdl2-dev cmake git
-            cmake -B build -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv7-a+fp
-            cmake --build build --config Release -j $(nproc)'
-
   macOS-latest:
     runs-on: macOS-latest
 
