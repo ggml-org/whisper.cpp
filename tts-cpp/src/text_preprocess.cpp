@@ -1,6 +1,7 @@
 #include "text_preprocess.h"
 
 #include <fstream>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 
@@ -305,6 +306,12 @@ std::string CangjieTable::convert(const std::string & text) const {
 
 struct MeCabTagger::Impl {
     mecab_t * tagger = nullptr;
+    // MeCab's C API mutates the tagger's internal lattice on every
+    // mecab_sparse_tonode() call, and the returned node list points into that
+    // lattice until the next call. mecab_tagger() in mtl_tokenizer.cpp hands
+    // out a single process-wide tagger, so convert() must serialize the
+    // tonode + node walk to stay safe when two threads synthesize `ja` at once.
+    std::mutex decode_mutex;
     ~Impl() {
         if (tagger) {
             mecab_destroy(tagger);
@@ -335,6 +342,10 @@ void MeCabTagger::load(const std::filesystem::path & dic_dir) {
 std::string MeCabTagger::convert(const std::string & text) const {
     if (!loaded()) return convert_katakana_to_hiragana(text);
 
+    // Hold the lock across both the tonode call and the node traversal: the
+    // node pointers alias the tagger's lattice, which the next tonode call
+    // (from another thread) would clobber. See Impl::decode_mutex.
+    std::lock_guard<std::mutex> lk(m_impl->decode_mutex);
     const mecab_node_t * node = mecab_sparse_tonode(m_impl->tagger, text.c_str());
     if (!node) return convert_katakana_to_hiragana(text);
 

@@ -651,83 +651,94 @@ std::string g_cangjie_tsv_path;
 bool g_mecab_initialized = false;
 bool g_cangjie_initialized = false;
 
-// Guards the four globals above. The std::call_once flags only serialize the
-// tagger/table *initialization*; the path strings and the initialized bools
-// are read by resolve_*()/written by set_*() and can be touched concurrently
-// when two Engine instances are constructed on different threads, so they need
-// their own lock to avoid a data race (UB).
+// Guards the four globals above plus the lazily-built g_mecab_tagger /
+// g_cangjie_table singletons below. The path strings and initialized bools are
+// read by resolve_*()/written by set_*(), and the singletons are built on first
+// use by mecab_tagger()/cangjie_table(); both can be touched concurrently when
+// two Engine instances are constructed on different threads, so a single lock
+// serializes all of it to avoid a data race (UB).
 std::mutex & path_mutex() {
     static std::mutex m;
     return m;
 }
 
-std::string resolve_mecab_dict_path() {
-    {
-        std::lock_guard<std::mutex> lk(path_mutex());
-        if (!g_mecab_dict_path.empty()) return g_mecab_dict_path;
-    }
+// Precondition: caller holds path_mutex(). Lock-free variants so they can run
+// while mecab_tagger()/cangjie_table() hold the lock without re-locking the
+// non-recursive path_mutex (which would deadlock).
+std::string resolve_mecab_dict_path_locked() {
+    if (!g_mecab_dict_path.empty()) return g_mecab_dict_path;
     const char * env = std::getenv("CHATTERBOX_MECAB_DICT");
     if (env && *env) return env;
     return {};
 }
 
-std::string resolve_cangjie_tsv_path() {
-    {
-        std::lock_guard<std::mutex> lk(path_mutex());
-        if (!g_cangjie_tsv_path.empty()) return g_cangjie_tsv_path;
-    }
+std::string resolve_cangjie_tsv_path_locked() {
+    if (!g_cangjie_tsv_path.empty()) return g_cangjie_tsv_path;
     const char * env = std::getenv("CHATTERBOX_CANGJIE_TSV");
     if (env && *env) return env;
     return {};
 }
 
 #ifdef TTS_CPP_HAS_MECAB
+// Guarded by path_mutex(). Stays null until a load succeeds; mecab_tagger()
+// retries on every call while g_mecab_initialized is false, so a first attempt
+// that runs before the dict path is configured (or with a bad path) no longer
+// wedges Japanese off for the rest of the process -- a later
+// set_mecab_dict_path() can still bring it up.
+std::unique_ptr<tts_cpp::chatterbox::text_preprocess::MeCabTagger> g_mecab_tagger;
+
+// Precondition: caller holds path_mutex(). Returns null on "no path yet" or a
+// failed load; the caller decides whether to memoize.
+std::unique_ptr<tts_cpp::chatterbox::text_preprocess::MeCabTagger> load_mecab_tagger_locked() {
+    const std::string path = resolve_mecab_dict_path_locked();
+    if (path.empty()) return nullptr;
+    auto tagger = std::make_unique<tts_cpp::chatterbox::text_preprocess::MeCabTagger>();
+    try {
+        tagger->load(path);
+    } catch (const std::exception & e) {
+        fprintf(stderr, "mtl_tokenizer: warning: failed to load MeCab tagger: %s\n", e.what());
+        return nullptr;
+    }
+    return tagger;
+}
+
 const tts_cpp::chatterbox::text_preprocess::MeCabTagger * mecab_tagger() {
-    static std::once_flag once;
-    static std::unique_ptr<tts_cpp::chatterbox::text_preprocess::MeCabTagger> t;
-    std::call_once(once, [] {
-        const std::string path = resolve_mecab_dict_path();
-        if (!path.empty()) {
-            auto tagger = std::make_unique<tts_cpp::chatterbox::text_preprocess::MeCabTagger>();
-            try {
-                tagger->load(path);
-                t = std::move(tagger);
-            } catch (const std::exception & e) {
-                fprintf(stderr, "mtl_tokenizer: warning: failed to load MeCab tagger: %s\n", e.what());
-            }
-        }
-        // Mark initialized only after the load attempt finishes. If a concurrent
-        // set_mecab_dict_path() runs during init, the flag is still false so it
-        // won't print a misleading "ignored" warning for a path that
-        // resolve_mecab_dict_path() above may legitimately have just picked up.
-        std::lock_guard<std::mutex> lk(path_mutex());
-        g_mecab_initialized = true;
-    });
-    return t.get();
+    std::lock_guard<std::mutex> lk(path_mutex());
+    if (!g_mecab_initialized) {
+        g_mecab_tagger = load_mecab_tagger_locked();
+        // Memoize *success* only. A null result leaves the flag false so the
+        // next call (e.g. after set_mecab_dict_path) retries instead of being
+        // stuck null for the process lifetime.
+        if (g_mecab_tagger) g_mecab_initialized = true;
+    }
+    return g_mecab_tagger.get();
 }
 #endif
 
+// Same sticky-null-avoidance pattern as mecab_tagger() above. Guarded by
+// path_mutex(); memoized only once a load succeeds.
+std::unique_ptr<tts_cpp::chatterbox::text_preprocess::CangjieTable> g_cangjie_table;
+
+std::unique_ptr<tts_cpp::chatterbox::text_preprocess::CangjieTable> load_cangjie_table_locked() {
+    const std::string path = resolve_cangjie_tsv_path_locked();
+    if (path.empty()) return nullptr;
+    auto table = std::make_unique<tts_cpp::chatterbox::text_preprocess::CangjieTable>();
+    try {
+        table->load(path);
+    } catch (const std::exception & e) {
+        fprintf(stderr, "mtl_tokenizer: warning: failed to load Cangjie table: %s\n", e.what());
+        return nullptr;
+    }
+    return table;
+}
+
 const tts_cpp::chatterbox::text_preprocess::CangjieTable * cangjie_table() {
-    static std::once_flag once;
-    static std::unique_ptr<tts_cpp::chatterbox::text_preprocess::CangjieTable> tbl;
-    std::call_once(once, [] {
-        const std::string path = resolve_cangjie_tsv_path();
-        if (!path.empty()) {
-            auto table = std::make_unique<tts_cpp::chatterbox::text_preprocess::CangjieTable>();
-            try {
-                table->load(path);
-                tbl = std::move(table);
-            } catch (const std::exception & e) {
-                fprintf(stderr, "mtl_tokenizer: warning: failed to load Cangjie table: %s\n", e.what());
-            }
-        }
-        // Mark initialized only after the load attempt finishes (see mecab_tagger
-        // above): keeps a concurrent set_cangjie_tsv_path() from logging a
-        // misleading "ignored" warning for a path that may actually be used.
-        std::lock_guard<std::mutex> lk(path_mutex());
-        g_cangjie_initialized = true;
-    });
-    return tbl.get();
+    std::lock_guard<std::mutex> lk(path_mutex());
+    if (!g_cangjie_initialized) {
+        g_cangjie_table = load_cangjie_table_locked();
+        if (g_cangjie_table) g_cangjie_initialized = true;
+    }
+    return g_cangjie_table.get();
 }
 
 std::string preprocess_japanese(const std::string & text) {
