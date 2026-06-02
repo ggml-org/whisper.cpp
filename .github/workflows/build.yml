@@ -30,9 +30,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths-ignore:
-      - 'bindings/ruby/**'        # handled by bindings-ruby.yml
-      - 'bindings/go/**'          # handled by bindings-go.yml
-      - 'examples/addon.node/**'  # handled by examples.yml
+      - 'bindings/ruby/**'                      # handled by bindings-ruby.yml
+      - 'bindings/go/**'                        # handled by bindings-go.yml
+      - 'examples/addon.node/**'                # handled by examples.yml
+      - '.github/workflows/build-sanitize.yml'  # handled by build-sanitize.yml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -329,31 +330,6 @@ jobs:
             -DCMAKE_C_COMPILER=clang \
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ARM_ARCH=armv8-a
-          make
-          ctest -L gh --output-on-failure
-
-  ubuntu-22-gcc-sanitized:
-    runs-on: ubuntu-22.04
-
-    strategy:
-      fail-fast: false
-      matrix:
-        sanitizer: [ADDRESS, THREAD, UNDEFINED]
-
-    steps:
-      - name: Clone
-        uses: actions/checkout@v6
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake git
-
-      - name: Build and Test
-        run: |
-          cmake . -DCMAKE_BUILD_TYPE=Debug \
-            -DWHISPER_SANITIZE_${{ matrix.sanitizer }}=ON \
-            -DGGML_OPENMP=OFF
           make
           ctest -L gh --output-on-failure
 
