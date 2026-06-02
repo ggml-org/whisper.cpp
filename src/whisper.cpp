@@ -3720,7 +3720,21 @@ struct whisper_context * whisper_init_with_params_no_state(struct whisper_model_
     whisper_context * ctx = new whisper_context;
     ctx->params = params;
 
-    if (!whisper_model_load(loader, *ctx)) {
+    // A C++ exception escaping this extern "C" function aborts non-C++ callers
+    // (Rust via whisper-rs, Go via cgo, ...). whisper_model_load can throw
+    // (std::runtime_error here; vk::SystemError from the Vulkan backend during
+    // device/buffer allocation), so funnel any throw into the existing
+    // NULL-return failure path instead of letting it cross the C ABI.
+    bool model_loaded = false;
+    try {
+        model_loaded = whisper_model_load(loader, *ctx);
+    } catch (const std::exception & e) {
+        WHISPER_LOG_ERROR("%s: exception during model load: %s\n", __func__, e.what());
+    } catch (...) {
+        WHISPER_LOG_ERROR("%s: unknown exception during model load\n", __func__);
+    }
+
+    if (!model_loaded) {
         loader->close(loader->context);
         WHISPER_LOG_ERROR("%s: failed to load model\n", __func__);
         delete ctx;

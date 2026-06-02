@@ -1107,10 +1107,29 @@ int main(int argc, char ** argv) {
                     }
 
                     segment["tokens"].push_back(token.id);
-                    json word = json{{"word", whisper_full_get_token_text(ctx, i, j)}};
+                    std::string word_text = whisper_full_get_token_text(ctx, i, j);
+                    int64_t word_t1 = token.t1;
+
+                    while (j + 1 < n_tokens && utf8_trailing_bytes_needed(word_text) > 0) {
+                        const whisper_token_data next_token = whisper_full_get_token_data(ctx, i, j + 1);
+                        // Keep verbose_json tokens free of EOT ids, matching the pre-merge server behavior.
+                        if (next_token.id >= whisper_token_eot(ctx)) {
+                            break;
+                        }
+
+                        ++j;
+                        segment["tokens"].push_back(next_token.id);
+                        word_text += whisper_full_get_token_text(ctx, i, j);
+                        if (next_token.t1 > -1) {
+                            word_t1 = next_token.t1;
+                        }
+                        total_logprob += next_token.plog;
+                    }
+
+                    json word = json{{"word", word_text}};
                     if (!params.no_timestamps && params.token_timestamps) {
                         word["start"] = token.t0 * 0.01;
-                        word["end"] = token.t1 * 0.01;
+                        word["end"] = word_t1 * 0.01;
                         word["t_dtw"] = token.t_dtw;
                     }
                     word["probability"] = token.p;
