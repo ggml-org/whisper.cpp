@@ -583,6 +583,17 @@ static std::unordered_map<int, std::vector<float>>                       g_stft_
 // live as F32, so a templated variant for F16/Q8_0 isn't needed here.
 static const float * cached_cpu_weights_f32(const ggml_tensor * t) {
     if (!t) return nullptr;
+    // Hard invariant: this path memcpys ggml_nbytes() raw bytes into an F32
+    // buffer and uses them as floats, so a block-quantized tensor would be
+    // byte-reinterpreted as float -> NaN.  Fail loudly (naming the tensor)
+    // so a mis-quantized raw-read weight is caught at load time, not heard.
+    if (t->type != GGML_TYPE_F32) {
+        throw std::runtime_error(
+            std::string("cached_cpu_weights_f32: '") + ggml_get_name(t) +
+            "' must be F32 but is " + ggml_type_name(t->type) +
+            "; this weight is read raw on the CPU side and must not be "
+            "block-quantized (add it to the converter deny-list).");
+    }
     {
         std::lock_guard<std::mutex> lk(g_synth_caches_mu);
         auto it = g_weight_cpu_mirror.find(t);
