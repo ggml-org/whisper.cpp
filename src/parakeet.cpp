@@ -3144,7 +3144,16 @@ struct parakeet_context * parakeet_init_with_params_no_state(struct parakeet_mod
     parakeet_context * ctx = new parakeet_context;
     ctx->params = params;
 
-    if (!parakeet_model_load(loader, *ctx)) {
+    bool model_loaded = false;
+    try {
+        model_loaded = parakeet_model_load(loader, *ctx);
+    } catch (const std::exception & e) {
+        PARAKEET_LOG_ERROR("%s: exception during model load: %s\n", __func__, e.what());
+    } catch (...) {
+        PARAKEET_LOG_ERROR("%s: unknown exception during model load\n", __func__);
+    }
+
+    if (!model_loaded) {
         loader->close(loader->context);
         PARAKEET_LOG_ERROR("%s: failed to load model\n", __func__);
         delete ctx;
