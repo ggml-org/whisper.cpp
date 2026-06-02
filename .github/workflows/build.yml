@@ -35,6 +35,7 @@ on:
       - 'examples/addon.node/**'                # handled by examples.yml
       - '.github/workflows/build-sanitize.yml'  # handled by build-sanitize.yml
       - '.github/workflows/build-linux.yml'     # handled by build-linux.yml
+      - '.github/workflows/build-macos.yml'     # handled by build-macos.yml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -45,43 +46,6 @@ env:
   ubuntu_image: "ubuntu:22.04"
 
 jobs:
-  macOS-latest:
-    runs-on: macOS-latest
-
-    strategy:
-      matrix:
-        destination: ['generic/platform=macOS', 'generic/platform=iOS', 'generic/platform=tvOS']
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
-        with:
-          key: macOS-latest-swift
-          evict-old-files: 1d
-
-      - name: Dependencies
-        run: |
-          brew update
-          cmake --version
-          brew install sdl2
-
-      - name: Build
-        run: |
-          sysctl -a
-          cmake -B build -G Xcode \
-            -DGGML_METAL_USE_BF16=ON \
-            -DGGML_METAL_EMBED_LIBRARY=ON \
-            -DWHISPER_BUILD_EXAMPLES=OFF \
-            -DWHISPER_BUILD_TESTS=OFF \
-            -DWHISPER_BUILD_SERVER=OFF \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
-
-
 #  freeBSD-latest:
 #    runs-on: macos-13
 #
