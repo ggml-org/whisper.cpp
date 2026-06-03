@@ -44,6 +44,7 @@ on:
       - '.github/workflows/build-android.yml'   # handled by build-android.yml
       - '.github/workflows/quantize.yml'        # handled by quantize.yml
       - '.github/workflows/coreml.yml'          # handled by coreml.yml
+      - '.github/workflows/vad.yml'             # handled by vad.yml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -71,24 +72,6 @@ jobs:
 #            sudo pkg install -y gmake sdl2 cmake git
 #            cmake -B build
 #            cmake --build build --config Release
-
-  vad:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Build
-        shell: bash
-        run: |
-          cmake -B build
-          cmake --build build --config Release
-
-      - name: Test
-        shell: bash
-        run: |
-          ctest -R ^test-vad$ --test-dir build --output-on-failure -VV
 
 # TODO: simplify the following workflows using a matrix
   ggml-ci-x64-cpu-low-perf:
