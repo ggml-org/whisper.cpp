@@ -71,6 +71,13 @@ jobs:
       - name: Clone
         uses: actions/checkout@v6
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: linux-arm64
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
       - name: Install dependencies
         run: |
           sudo apt-get update
