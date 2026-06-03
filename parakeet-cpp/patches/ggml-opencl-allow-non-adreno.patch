@@ -1,0 +1,91 @@
+diff --git a/src/ggml-opencl/ggml-opencl.cpp b/src/ggml-opencl/ggml-opencl.cpp
+index 6f3fc588..96942915 100644
+--- a/src/ggml-opencl/ggml-opencl.cpp
++++ b/src/ggml-opencl/ggml-opencl.cpp
+@@ -3020,9 +3020,57 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
+     } else if (strstr(dev_ctx->device_name.c_str(), "Intel")) {
+         backend_ctx->gpu_family = GPU_FAMILY::INTEL;
+     } else {
+-        GGML_LOG_ERROR("Unsupported GPU: %s\n", dev_ctx->device_name.c_str());
++        // parakeet patch: upstream ggml-opencl rejects any GPU that is
++        // not Adreno/Qualcomm or Intel. Parakeet's real OpenCL deployment
++        // target is Adreno (Android); for desktop dev/CI parity on Intel
++        // iGPUs we let the device through with `gpu_family = UNKNOWN`
++        // when the host opts in via `GGML_OPENCL_ALLOW_UNKNOWN_GPU=1`.
++        //
++        // Default (env var unset) preserves upstream behaviour byte-equal,
++        // so production Adreno builds get no behavioural change and a
++        // misconfigured non-Adreno consumer gets the same clear error as
++        // before instead of crashing later in kernel-compile.
++        //
++        // The matmul-vec kernels (mul_mv_q4_0_f32_v.cl etc.) auto-define
++        // INTEL_GPU / ADRENO_GPU based on `cl_intel_required_subgroup_size`
++        // / `cl_qcom_reqd_sub_group_size`. Without one of those extensions
++        // the kernel source has no way to define N_DST / N_SIMDGROUP /
++        // N_SIMDWIDTH and `clBuildProgram` aborts the host process. So we
++        // additionally require one of those two extensions before letting
++        // the device through; AMD/NVIDIA desktop drivers expose neither
++        // and now fall back cleanly to CPU instead of crashing.
++        const char * allow = getenv("GGML_OPENCL_ALLOW_UNKNOWN_GPU");
++        if (!allow || allow[0] != '1') {
++            GGML_LOG_ERROR("Unsupported GPU: %s\n", dev_ctx->device_name.c_str());
++            backend_ctx->gpu_family = GPU_FAMILY::UNKNOWN;
++            return nullptr;
++        }
++
++        size_t ext_size = 0;
++        clGetDeviceInfo(dev_ctx->device, CL_DEVICE_EXTENSIONS, 0, NULL, &ext_size);
++        std::string ext;
++        if (ext_size > 0) {
++            ext.resize(ext_size);
++            clGetDeviceInfo(dev_ctx->device, CL_DEVICE_EXTENSIONS, ext_size, ext.data(), NULL);
++        }
++        const bool has_intel_sg = ext.find("cl_intel_required_subgroup_size") != std::string::npos;
++        const bool has_qcom_sg  = ext.find("cl_qcom_reqd_sub_group_size")     != std::string::npos;
++        if (!has_intel_sg && !has_qcom_sg) {
++            GGML_LOG_ERROR("ggml_opencl: GPU '%s' has neither cl_intel_required_subgroup_size "
++                "nor cl_qcom_reqd_sub_group_size; matmul-vec kernels cannot define "
++                "N_DST/N_SIMDGROUP/N_SIMDWIDTH and clBuildProgram would abort. "
++                "Falling back to host (parakeet patch).\n",
++                dev_ctx->device_name.c_str());
++            backend_ctx->gpu_family = GPU_FAMILY::UNKNOWN;
++            return nullptr;
++        }
++
++        GGML_LOG_WARN("ggml_opencl: GPU '%s' is not Adreno/Qualcomm or Intel; "
++                      "running with generic OpenCL kernels (parakeet patch + "
++                      "GGML_OPENCL_ALLOW_UNKNOWN_GPU=1). "
++                      "Adreno-specific kernels and large-buffer paths stay off.\n",
++                      dev_ctx->device_name.c_str());
+         backend_ctx->gpu_family = GPU_FAMILY::UNKNOWN;
+-        return nullptr;
+     }
+ 
+ #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+@@ -4075,8 +4123,25 @@ static ggml_backend_i ggml_backend_opencl_i = {
+ };
+ 
+ ggml_backend_t ggml_backend_opencl_init(void) {
+-    ggml_backend_dev_t dev = ggml_backend_reg_dev_get(ggml_backend_opencl_reg(), 0);
++    // parakeet patch: bail out cleanly when the OpenCL backend
++    // discovery saw zero usable devices. Upstream calls
++    // ggml_backend_reg_dev_get() unconditionally, which asserts on an
++    // empty device list. Parakeet's host code expects a nullable result
++    // from ggml_backend_opencl_init() (it falls back to CPU when the
++    // returned backend is null); the assertion makes that fallback path
++    // unreachable on hosts where ggml-opencl can't find any GPU it
++    // accepts (Adreno-only environments without an Adreno device,
++    // headless CI runners, etc.).
++    ggml_backend_reg_t reg = ggml_backend_opencl_reg();
++    if (ggml_backend_reg_dev_count(reg) == 0) {
++        return nullptr;
++    }
++
++    ggml_backend_dev_t dev = ggml_backend_reg_dev_get(reg, 0);
+     ggml_backend_opencl_context *backend_ctx = ggml_cl2_init(dev);
++    if (backend_ctx == nullptr) {
++        return nullptr;
++    }
+ 
+     ggml_backend_t backend = new ggml_backend {
+         /* .guid    = */ ggml_backend_opencl_guid(),

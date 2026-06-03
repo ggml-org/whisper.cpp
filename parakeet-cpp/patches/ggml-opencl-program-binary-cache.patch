@@ -1,0 +1,269 @@
+diff --git a/src/ggml-opencl/ggml-opencl.cpp b/src/ggml-opencl/ggml-opencl.cpp
+index 96942915..7c2e4bc2 100644
+--- a/src/ggml-opencl/ggml-opencl.cpp
++++ b/src/ggml-opencl/ggml-opencl.cpp
+@@ -20,6 +20,7 @@
+ 
+ #include <cstddef>
+ #include <cstdint>
++#include <cstdio>
+ #include <fstream>
+ #include <vector>
+ #include <string>
+@@ -29,6 +30,32 @@
+ #include <charconv>
+ #include <mutex>
+ 
++// parakeet patch: persistent kernel binary cache support. The
++// helpers below sit on POSIX file primitives (mkdir/unlink/fsync) but
++// also need to build on MinGW / MSVC where those names map to the
++// `_`-prefixed Windows variants and mkdir takes a single argument.
++// Wrap them in parakeet_* macros so the rest of the patch stays
++// platform-agnostic.
++#include <cerrno>
++#include <fcntl.h>
++#include <sys/stat.h>
++#ifdef _WIN32
++#  include <direct.h>
++#  include <io.h>
++#  define parakeet_mkdir(path)   _mkdir(path)
++#  define parakeet_unlink(path)  _unlink(path)
++#  define parakeet_open_ro(path) _open((path), _O_RDONLY | _O_BINARY)
++#  define parakeet_close(fd)     _close(fd)
++#  define parakeet_fsync(fd)     _commit(fd)
++#else
++#  include <unistd.h>
++#  define parakeet_mkdir(path)   mkdir((path), 0755)
++#  define parakeet_unlink(path)  unlink(path)
++#  define parakeet_open_ro(path) open((path), O_RDONLY)
++#  define parakeet_close(fd)     close(fd)
++#  define parakeet_fsync(fd)     fsync(fd)
++#endif
++
+ #undef MIN
+ #undef MAX
+ #define MIN(a, b) ((a) < (b) ? (a) : (b))
+@@ -755,6 +782,193 @@ inline std::string read_file(const std::string &path) {
+   return text;
+ }
+ 
++// parakeet patch: persistent OpenCL kernel-binary cache.
++// ggml-opencl as shipped at this commit JIT-compiles every embedded
++// kernel via `clBuildProgram(clCreateProgramWithSource)` on each cold
++// start. On Adreno that's tens of seconds of shader compile per
++// process invocation; on Mesa / Mali / iGPU drivers it's similar.
++// This patch caches the device-specific compiled binaries under
++// `$GGML_OPENCL_CACHE_DIR` (or `$XDG_CACHE_HOME/ggml/opencl` →
++// `$HOME/.cache/ggml/opencl` fallback) keyed on a 64-bit FNV-1a hash of
++// (source + compile_opts + driver_version + device_name + ggml_commit).
++// Cache hit -> `clCreateProgramWithBinary`; miss / corrupted blob ->
++// fall through to source compile and write the resulting binary back.
++//
++// The opt-out path is `GGML_OPENCL_CACHE_DIR=""` (empty string) which
++// short-circuits the cache and runs the original source path. With no
++// cache directory writable, the helper logs a warning and falls
++// through to source compile silently.
++//
++// Hosts that already `setenv("GGML_OPENCL_CACHE_DIR", ...)` to point
++// the runtime at a writable location (typical pattern on Android
++// Adreno deployments) get the cache for free; this patch makes that
++// env-var contract take effect rather than being ignored upstream.
++
++static uint64_t fnv1a_hash64(const void * data, size_t n) {
++    const uint8_t * p = static_cast<const uint8_t *>(data);
++    uint64_t h = 0xcbf29ce484222325ULL;
++    for (size_t i = 0; i < n; ++i) {
++        h ^= p[i];
++        h *= 0x100000001b3ULL;
++    }
++    return h;
++}
++
++static std::string opencl_cache_dir(cl_device_id dev) {
++    const char * env = getenv("GGML_OPENCL_CACHE_DIR");
++    if (env && *env == '\0') return ""; // explicit opt-out: empty string
++    if (env && *env != '\0') return env;
++    if (const char * xdg = getenv("XDG_CACHE_HOME"); xdg && *xdg) {
++        return std::string(xdg) + "/ggml/opencl";
++    }
++    if (const char * home = getenv("HOME"); home && *home) {
++        return std::string(home) + "/.cache/ggml/opencl";
++    }
++    GGML_UNUSED(dev);
++    return ""; // no plausible default; opt out gracefully
++}
++
++static bool opencl_mkdir_p(const std::string & path) {
++    // Lightweight `mkdir -p` without C++17 <filesystem> dep on the
++    // ggml-opencl side (some downstream consumers compile against
++    // libstdc++ versions where std::filesystem requires linking
++    // -lstdc++fs explicitly). Returns true if the directory exists
++    // afterwards.
++    if (path.empty()) return false;
++    std::string cur;
++    cur.reserve(path.size());
++    for (size_t i = 0; i <= path.size(); ++i) {
++        const char c = i < path.size() ? path[i] : '/';
++        if ((c == '/' || c == '\\') && !cur.empty()) {
++            if (parakeet_mkdir(cur.c_str()) != 0 && errno != EEXIST) {
++                return false;
++            }
++        }
++        if (i < path.size()) cur.push_back(c);
++    }
++    return true;
++}
++
++static std::string opencl_cache_key(const char * program_buffer,
++                                    size_t program_size,
++                                    const std::string & compile_opts,
++                                    cl_device_id dev) {
++    // Combine source + opts + device + driver into the cache key so a
++    // driver bump or a different SoC reuses different blobs. We hash
++    // each component separately and combine to avoid pathological
++    // FNV behaviour on long buffers.
++    uint64_t h_src    = fnv1a_hash64(program_buffer, program_size);
++    uint64_t h_opts   = fnv1a_hash64(compile_opts.data(), compile_opts.size());
++
++    // Driver version + device name + OpenCL C version pinpoint the
++    // driver instance the binary was emitted by. Pinpointing too
++    // tightly is a feature: a driver bump silently invalidates the
++    // cache, exactly the policy you want.
++    char driver_buf[256] = {0};
++    char devname_buf[256] = {0};
++    char devver_buf[256]  = {0};
++    size_t n;
++    clGetDeviceInfo(dev, CL_DRIVER_VERSION, sizeof(driver_buf) - 1, driver_buf, &n);
++    clGetDeviceInfo(dev, CL_DEVICE_NAME,    sizeof(devname_buf) - 1, devname_buf, &n);
++    clGetDeviceInfo(dev, CL_DEVICE_VERSION, sizeof(devver_buf) - 1,  devver_buf, &n);
++    uint64_t h_drv    = fnv1a_hash64(driver_buf,  strlen(driver_buf));
++    uint64_t h_dev    = fnv1a_hash64(devname_buf, strlen(devname_buf));
++    uint64_t h_devver = fnv1a_hash64(devver_buf,  strlen(devver_buf));
++
++    // Five 16-char hex tokens + 4 underscores + ".bin" + NUL = 89 bytes.
++    // Use PRIx64 + (uint64_t) so the format-spec width is correct on
++    // both LP64 (Linux/Android) and LLP64 (Windows MinGW/MSVC) where
++    // `unsigned long` is 32 bits and `%016lx` would silently truncate
++    // the upper half of each FNV hash.
++    char buf[128];
++    std::snprintf(buf, sizeof(buf),
++                  "%016" PRIx64 "_%016" PRIx64 "_%016" PRIx64
++                  "_%016" PRIx64 "_%016" PRIx64 ".bin",
++                  h_src, h_opts, h_drv, h_dev, h_devver);
++    return buf;
++}
++
++static cl_program opencl_build_program_with_cache(cl_context ctx,
++                                                  cl_device_id dev,
++                                                  const char * program_buffer,
++                                                  size_t program_size,
++                                                  const std::string & compile_opts,
++                                                  const std::string & cache_dir,
++                                                  const std::string & key) {
++    if (cache_dir.empty() || key.empty()) return nullptr;
++    const std::string path = cache_dir + "/" + key;
++    std::ifstream ifs(path, std::ios::binary);
++    if (!ifs) return nullptr;
++    ifs.seekg(0, std::ios::end);
++    const std::streamsize n = ifs.tellg();
++    if (n <= 0) return nullptr;
++    ifs.seekg(0, std::ios::beg);
++    std::vector<unsigned char> blob((size_t) n);
++    if (!ifs.read(reinterpret_cast<char*>(blob.data()), n)) return nullptr;
++
++    cl_int err1 = CL_SUCCESS, err2 = CL_SUCCESS;
++    const unsigned char * data = blob.data();
++    const size_t len = blob.size();
++    cl_program p = clCreateProgramWithBinary(ctx, 1, &dev, &len, &data, &err1, &err2);
++    if (err1 != CL_SUCCESS || err2 != CL_SUCCESS || !p) {
++        if (p) clReleaseProgram(p);
++        return nullptr;
++    }
++    if (clBuildProgram(p, 0, NULL, compile_opts.c_str(), NULL, NULL) != CL_SUCCESS) {
++        clReleaseProgram(p);
++        return nullptr;
++    }
++    GGML_UNUSED(program_buffer);
++    GGML_UNUSED(program_size);
++    return p;
++}
++
++static void opencl_save_program_binary(cl_program p, cl_device_id /*dev*/,
++                                       const std::string & cache_dir,
++                                       const std::string & key) {
++    if (cache_dir.empty() || key.empty()) return;
++    if (!opencl_mkdir_p(cache_dir)) return;
++
++    size_t bin_size = 0;
++    if (clGetProgramInfo(p, CL_PROGRAM_BINARY_SIZES, sizeof(size_t),
++                         &bin_size, nullptr) != CL_SUCCESS || bin_size == 0) return;
++    std::vector<unsigned char> blob(bin_size);
++    unsigned char * blob_ptr = blob.data();
++    if (clGetProgramInfo(p, CL_PROGRAM_BINARIES, sizeof(unsigned char *),
++                         &blob_ptr, nullptr) != CL_SUCCESS) return;
++
++    // Atomic write: tmp + fsync + rename. Without the fsync the kernel
++    // can flush blocks out of order on power loss, leaving the renamed
++    // file pointing at zero/garbage data and forcing the next process
++    // into the source-compile fallback (and the bad blob lives forever
++    // unless explicitly invalidated).
++    const std::string final_path = cache_dir + "/" + key;
++    const std::string tmp_path   = final_path + ".tmp";
++    {
++        std::ofstream ofs(tmp_path, std::ios::binary);
++        if (!ofs) return;
++        ofs.write(reinterpret_cast<const char*>(blob.data()), (std::streamsize) blob.size());
++        ofs.close();
++        if (!ofs) { parakeet_unlink(tmp_path.c_str()); return; }
++    }
++    {
++        int fd = parakeet_open_ro(tmp_path.c_str());
++        if (fd >= 0) {
++            parakeet_fsync(fd);
++            parakeet_close(fd);
++        }
++    }
++    // Windows rename() refuses to overwrite an existing destination, so
++    // unlink it first. POSIX rename is atomic and replaces silently;
++    // the redundant unlink there is a no-op when the target is missing.
++#ifdef _WIN32
++    parakeet_unlink(final_path.c_str());
++#endif
++    if (rename(tmp_path.c_str(), final_path.c_str()) != 0) {
++        parakeet_unlink(tmp_path.c_str());
++    }
++}
++
+ static cl_program build_program_from_source(cl_context ctx, cl_device_id dev, const char* program_buffer, const std::string &compile_opts) {
+     cl_program p;
+     char *program_log;
+@@ -764,6 +978,17 @@ static cl_program build_program_from_source(cl_context ctx, cl_device_id dev, co
+ 
+     program_size = strlen(program_buffer);
+ 
++    // parakeet patch: try the persistent cache first.
++    const std::string cache_dir = opencl_cache_dir(dev);
++    const std::string cache_key = cache_dir.empty()
++        ? std::string()
++        : opencl_cache_key(program_buffer, program_size, compile_opts, dev);
++    if (cl_program cached = opencl_build_program_with_cache(
++            ctx, dev, program_buffer, program_size, compile_opts,
++            cache_dir, cache_key)) {
++        return cached;
++    }
++
+     p = clCreateProgramWithSource(ctx, 1, (const char**)&program_buffer, &program_size, &err);
+     if(err < 0) {
+         GGML_LOG_ERROR("OpenCL error creating program");
+@@ -781,6 +1006,11 @@ static cl_program build_program_from_source(cl_context ctx, cl_device_id dev, co
+         exit(1);
+     }
+ 
++    // parakeet patch: save the freshly compiled binary. Fast path
++    // (cache hit) above avoids re-compiling next time. Failures here
++    // are non-fatal -- next process just re-pays the compile cost.
++    opencl_save_program_binary(p, dev, cache_dir, cache_key);
++
+     return p;
+ }
+ 

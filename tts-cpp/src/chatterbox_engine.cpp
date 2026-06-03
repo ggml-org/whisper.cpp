@@ -145,6 +145,12 @@ struct Engine::Impl {
                         "regenerate with scripts/convert-t3-mtl-to-gguf.py.  "
                         "Path: " + opts.t3_gguf_path);
                 }
+                if (!opts.mecab_dict_path.empty()) {
+                    mtl_tokenizer::set_mecab_dict_path(opts.mecab_dict_path);
+                }
+                if (!opts.cangjie_tsv_path.empty()) {
+                    mtl_tokenizer::set_cangjie_tsv_path(opts.cangjie_tsv_path);
+                }
                 if (!mtl_tok.load_from_json(model.mtl_tokenizer_json)) {
                     throw std::runtime_error(
                         "Engine: failed to parse embedded mtl_tokenizer.json "

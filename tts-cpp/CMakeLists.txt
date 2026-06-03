@@ -252,6 +252,7 @@ set(TTS_CPP_LIB_SOURCES
     src/supertonic_vector_estimator.cpp
     src/supertonic_engine.cpp
     src/mtl_tokenizer.cpp
+    src/text_preprocess.cpp
 )
 
 if (TTS_CPP_BUILD_LIBRARY)
@@ -301,6 +302,40 @@ if (TTS_CPP_BUILD_LIBRARY)
     )
     target_compile_features(tts-cpp PUBLIC cxx_std_17)
     target_link_libraries(tts-cpp PUBLIC ggml)
+
+    # ------------------------------------------------------------------
+    # Optional native preprocessors for the MTL non-Latin tier:
+    #   * `ja` -- libmecab (dictionary path passed at runtime)
+    #   * `zh` -- Cangjie5_TC mapping (TSV path passed at runtime)
+    #
+    # libmecab is autodetected via find_library / find_path. The
+    # dictionary path is no longer baked in at compile time; callers
+    # pass it at runtime via --mecab-dict (CLI) or
+    # EngineOptions::mecab_dict_path (API). Use
+    # scripts/build_mecab_dict.py to materialize the IPAdic dictionary
+    # from the `ipadic` PyPI package.
+    #
+    # Cangjie no longer requires a compile-time TSV path; callers
+    # pass it at runtime via --cangjie-tsv (CLI) or
+    # EngineOptions::cangjie_tsv_path (API).
+    # ------------------------------------------------------------------
+    find_library(MECAB_LIBRARY    NAMES mecab)
+    find_path   (MECAB_INCLUDE_DIR NAMES mecab.h)
+    if (MECAB_LIBRARY AND MECAB_INCLUDE_DIR)
+        message(STATUS "MeCab (Japanese preprocess): ENABLED")
+        message(STATUS "  library : ${MECAB_LIBRARY}")
+        message(STATUS "  include : ${MECAB_INCLUDE_DIR}")
+        # MeCab is an implementation detail of src/text_preprocess.cpp; no
+        # public header under include/ exposes MeCab types or symbols. Keep
+        # the define, include dir and link all PRIVATE so consumers doing
+        # find_package(tts-cpp) don't inherit a libmecab dependency (and so
+        # the MinGW mecab.h headers never leak into a consumer's TU).
+        target_compile_definitions(tts-cpp PRIVATE TTS_CPP_HAS_MECAB)
+        target_include_directories(tts-cpp PRIVATE ${MECAB_INCLUDE_DIR})
+        target_link_libraries     (tts-cpp PRIVATE ${MECAB_LIBRARY})
+    else()
+        message(STATUS "MeCab (Japanese preprocess): DISABLED (libmecab / mecab.h not found)")
+    endif()
 
     # Symbol-export contract for shared builds.  Standard llama-style
     # PAIR: PUBLIC define so consumers see the import side of TTS_CPP_API
@@ -581,6 +616,101 @@ if (TTS_CPP_BUILD_TESTS)
         LABEL    "fixture"
         ARGS     "${_tcb_t3_mtl_gguf}" "${_tcb_t3_mtl_ref}" "ALL"
         REQUIRES "${_tcb_t3_mtl_gguf}" "${_tcb_t3_mtl_ref}")
+
+    # ------------------------------------------------------------------
+    # Multilingual integration tests (23 languages).
+    # ------------------------------------------------------------------
+    add_executable(test-multilingual-synth test/test_multilingual_synth.cpp)
+    target_link_libraries(test-multilingual-synth PRIVATE tts-cpp ggml tts-cpp-backend-defs)
+    target_include_directories(test-multilingual-synth PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-multilingual-synth)
+
+    set(_mtl_phrases
+        "en|Hello, this is a multilingual text-to-speech test.|tier1"
+        "es|Hola, esta es una prueba multilingüe de síntesis de voz.|tier1"
+        "fr|Bonjour, ceci est un test multilingue de synthèse vocale.|tier1"
+        "de|Hallo, dies ist ein mehrsprachiger Sprachsynthese-Test.|tier1"
+        "it|Ciao, questo è un test multilingue di sintesi vocale.|tier1"
+        "pt|Olá, este é um teste multilíngue de síntese de voz.|tier1"
+        "nl|Hallo, dit is een meertalige spraaksynthese-test.|tier1"
+        "pl|Cześć, to jest wielojęzyczny test syntezy mowy.|tier1"
+        "tr|Merhaba, bu çok dilli bir konuşma sentezi testidir.|tier1"
+        "sv|Hej, detta är ett flerspråkigt talsyntestest.|tier1"
+        "da|Hej, dette er en flersproget talesyntese-test.|tier1"
+        "fi|Hei, tämä on monikielinen puhesynteesitesti.|tier1"
+        "no|Hei, dette er en flerspråklig talesyntese-test.|tier1"
+        "el|Γεια σας, αυτή είναι μια πολύγλωσση δοκιμή σύνθεσης ομιλίας.|tier1"
+        "ms|Helo, ini ialah ujian sintesis pertuturan berbilang bahasa.|tier1"
+        "sw|Habari, huu ni mtihani wa usanisi wa sauti wa lugha nyingi.|tier1"
+        "ar|مرحبًا، هذا اختبار متعدد اللغات لتحويل النص إلى كلام.|tier1"
+        "ko|안녕하세요, 이것은 다국어 음성 합성 테스트입니다.|tier1"
+        "ja|こんにちは、これは多言語の音声合成テストです。|tier2"
+        "he|שלום, זוהי בדיקת סינתזת דיבור רב-לשונית.|tier2"
+        "ru|Привет, это многоязычный тест синтеза речи.|tier2"
+        # zh intentionally omitted: Cangjie preprocessing yields ~97% CER and
+        # is excluded from mtl_tokenizer::supported_languages() until reworked.
+        "hi|नमस्ते, यह एक बहुभाषी वाक् संश्लेषण परीक्षण है।|tier2"
+    )
+    set(_mtl_out_dir "${CMAKE_BINARY_DIR}/test-multilingual-out")
+    file(MAKE_DIRECTORY "${_mtl_out_dir}")
+
+    # Optional L3 (ASR) verification via whisper-cli.
+    find_program(WHISPER_CLI NAMES whisper-cli)
+    set(WHISPER_MODEL "${CMAKE_SOURCE_DIR}/models/ggml-large-v3-turbo-q5_0.bin"
+        CACHE FILEPATH "Path to a multilingual Whisper ggml model used by mtl-asr-* tests")
+    if (WHISPER_CLI AND EXISTS "${WHISPER_MODEL}")
+        set(_mtl_asr_enabled ON)
+        message(STATUS "Multilingual L3 (ASR) tests: ENABLED")
+        message(STATUS "  whisper-cli : ${WHISPER_CLI}")
+        message(STATUS "  model       : ${WHISPER_MODEL}")
+        add_executable(test-multilingual-asr test/test_multilingual_asr.cpp)
+        target_include_directories(test-multilingual-asr PRIVATE src include)
+        tts_cpp_apply_ccache(test-multilingual-asr)
+    else()
+        set(_mtl_asr_enabled OFF)
+        message(STATUS "Multilingual L3 (ASR) tests: SKIPPED")
+        if (NOT WHISPER_CLI)
+            message(STATUS "  reason: whisper-cli not found on PATH")
+        endif()
+        if (NOT EXISTS "${WHISPER_MODEL}")
+            message(STATUS "  reason: model missing at ${WHISPER_MODEL}")
+        endif()
+    endif()
+
+    foreach(_entry IN LISTS _mtl_phrases)
+        string(REPLACE "|" ";" _parts "${_entry}")
+        list(GET _parts 0 _lang)
+        list(GET _parts 1 _text)
+        list(GET _parts 2 _tier)
+        add_test(
+            NAME mtl-synth-${_lang}
+            COMMAND $<TARGET_FILE:test-multilingual-synth>
+                --lang  "${_lang}"
+                --text  "${_text}"
+                --out   "${_mtl_out_dir}/${_lang}.wav"
+        )
+        set_tests_properties(mtl-synth-${_lang} PROPERTIES
+            LABELS "multilingual;mtl-${_tier}"
+            TIMEOUT 180
+        )
+        if (_mtl_asr_enabled)
+            add_test(
+                NAME mtl-asr-${_lang}
+                COMMAND $<TARGET_FILE:test-multilingual-asr>
+                    --whisper-cli "${WHISPER_CLI}"
+                    --model       "${WHISPER_MODEL}"
+                    --lang        "${_lang}"
+                    --wav         "${_mtl_out_dir}/${_lang}.wav"
+                    --expected    "${_text}"
+                    --txt-prefix  "${_mtl_out_dir}/${_lang}.asr"
+            )
+            set_tests_properties(mtl-asr-${_lang} PROPERTIES
+                LABELS  "multilingual;asr;mtl-${_tier}-asr"
+                DEPENDS mtl-synth-${_lang}
+                TIMEOUT 120
+            )
+        endif()
+    endforeach()
 
     add_executable(test-streaming
         test/test_streaming.cpp
