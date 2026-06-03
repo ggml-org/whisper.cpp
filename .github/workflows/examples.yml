@@ -42,6 +42,8 @@ jobs:
         run: npx cmake-js compile -T addon.node -B Release
 
       - name: Download test model
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           bash ./models/download-ggml-model.sh base.en
       - name: Test

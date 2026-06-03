@@ -55,6 +55,8 @@ jobs:
 
       - name: Test
         id: ggml-ci
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
@@ -81,6 +83,8 @@ jobs:
 
       - name: Test
         id: ggml-ci
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
@@ -107,6 +111,8 @@ jobs:
 
       - name: Test
         id: ggml-ci
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           LLAMA_ARG_THREADS=$(nproc) bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
@@ -133,6 +139,8 @@ jobs:
 
       - name: Test
         id: ggml-ci
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 
@@ -159,5 +167,7 @@ jobs:
 
       - name: Test
         id: ggml-ci
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt

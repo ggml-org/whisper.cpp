@@ -52,6 +52,8 @@ jobs:
           echo "GEN_MODEL_NAME=whisper-${TAG_NAME}-ggml-base.en-encoder.mlmodelc" >> $GITHUB_ENV
 
       - name: Download model
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           ./models/download-ggml-model.sh ${{ env.MODEL_NAME }}
 

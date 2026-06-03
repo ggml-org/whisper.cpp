@@ -125,6 +125,7 @@ elif [ -x "$(command -v curl)" ]; then
          --retry-delay 5 \
          --retry-all-errors \
          --retry-connrefused \
+         ${HF_TOKEN:+--header "Authorization: Bearer $HF_TOKEN"} \
          --output ggml-"$model".bin $src/$pfx-"$model".bin
 elif [ -x "$(command -v wget)" ]; then
     wget --no-config --quiet --show-progress -O ggml-"$model".bin $src/$pfx-"$model".bin

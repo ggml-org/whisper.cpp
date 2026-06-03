@@ -32,6 +32,8 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Test quantize
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           ./models/download-ggml-model.sh tiny.en
           cmake -B build
