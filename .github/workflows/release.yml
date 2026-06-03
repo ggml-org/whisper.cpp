@@ -85,6 +85,56 @@ jobs:
           echo "name=$TAG_NAME" >> $GITHUB_OUTPUT
           echo "should_release=$SHOULD_RELEASE" >> $GITHUB_OUTPUT
 
+  ubuntu-cpu:
+    runs-on: ${{ matrix.os }}
+    needs: determine-tag
+    if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
+
+    strategy:
+      matrix:
+        include:
+          - build: x64
+            os: ubuntu-22.04
+          - build: arm64
+            os: ubuntu-22.04-arm
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-${{ matrix.os }}-cpu
+          evict-old-files: 1d
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake
+
+      - name: Build
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_NATIVE=OFF \
+            ${{ matrix.build == 'arm64' && '-DGGML_CPU_ARM_ARCH=armv8-a' || '' }}
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Pack artifacts
+        run: |
+          TAG_NAME="${{ needs.determine-tag.outputs.tag_name }}"
+          cp LICENSE ./build/bin/
+          tar -czvf whisper-${TAG_NAME}-bin-ubuntu-${{ matrix.build }}.tar.gz \
+            --transform "s,^\.,whisper-${TAG_NAME}," \
+            -C ./build/bin .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: whisper-${{ needs.determine-tag.outputs.tag_name }}-bin-ubuntu-${{ matrix.build }}.tar.gz
+          name: whisper-bin-ubuntu-${{ matrix.build }}.tar.gz
+
   windows:
     runs-on: windows-latest
     needs: determine-tag
@@ -290,7 +340,7 @@ jobs:
           choco install ninja
 
       - name: Install ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ${{ github.job }}-${{ matrix.cuda-toolkit }}-${{ matrix.build }}
           variant: sccache
@@ -536,6 +586,7 @@ jobs:
 
     needs:
       - determine-tag
+      - ubuntu-cpu
       - ios-xcode-build
       - windows
       - windows-blas
@@ -549,7 +600,7 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: release
           evict-old-files: 1d
@@ -563,7 +614,7 @@ jobs:
 
       - name: Move artifacts
         id: move_artifacts
-        run: mkdir -p ./artifact/release && mv ./artifact/*/*.zip ./artifact/release
+        run: mkdir -p ./artifact/release && mv ./artifact/*/*.zip ./artifact/release && mv ./artifact/*/*.tar.gz ./artifact/release 2>/dev/null || true
 
       - name: Create release
         id: create_release
@@ -585,7 +636,7 @@ jobs:
             const fs = require('fs');
             const release_id = '${{ steps.create_release.outputs.id }}';
             for (let file of await fs.readdirSync('./artifact/release')) {
-              if (path.extname(file) === '.zip') {
+              if (path.extname(file) === '.zip' || file.endsWith('.tar.gz')) {
                 console.log('uploadReleaseAsset', file);
                 await github.repos.uploadReleaseAsset({
                   owner: context.repo.owner,
