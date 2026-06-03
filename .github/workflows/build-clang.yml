@@ -50,6 +50,16 @@ jobs:
       - name: Clone
         uses: actions/checkout@v6
 
+      - name: Set CCACHE_DIR
+        run: echo "CCACHE_DIR=${{ runner.temp }}/ccache" >> $GITHUB_ENV
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: clang-${{ matrix.arch }}-${{ matrix.build }}
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -57,6 +67,8 @@ jobs:
         run: |
           docker run --platform ${{ matrix.arch }} --rm \
             -v ${{ github.workspace }}:/workspace \
+            -v ${CCACHE_DIR}:${CCACHE_DIR} \
+            -e CCACHE_DIR=${CCACHE_DIR} \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
             export DEBIAN_FRONTEND=noninteractive
@@ -64,8 +76,12 @@ jobs:
             sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
 
             apt update
-            apt install -y clang build-essential cmake libsdl2-dev git
-            cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
+            apt install -y clang build-essential cmake libsdl2-dev git ccache
+            cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
+              -DCMAKE_CXX_COMPILER=clang++ \
+              -DCMAKE_C_COMPILER=clang \
+              -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
             make
             ctest -L gh --output-on-failure'
 
