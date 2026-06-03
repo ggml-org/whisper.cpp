@@ -46,6 +46,13 @@ jobs:
       - name: Clone
         uses: actions/checkout@v6
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: linux-${{ matrix.arch }}
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -53,6 +60,8 @@ jobs:
         run: |
           docker run --platform ${{ matrix.arch }} --rm \
             -v ${{ github.workspace }}:/workspace \
+            -v ${CCACHE_DIR}:${CCACHE_DIR} \
+            -e CCACHE_DIR=${CCACHE_DIR} \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
             export DEBIAN_FRONTEND=noninteractive
@@ -60,8 +69,10 @@ jobs:
             sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
 
             apt update
-            apt install -y build-essential libsdl2-dev cmake git
-            cmake -B build
+            apt install -y build-essential libsdl2-dev cmake git ccache
+            cmake -B build \
+              -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
             cmake --build build --config Release -j $(nproc)'
 
   ubuntu-22-arm64:
@@ -100,6 +111,13 @@ jobs:
       - name: Clone
         uses: actions/checkout@v6
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: linux-${{ matrix.arch }}
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -107,6 +125,8 @@ jobs:
         run: |
           docker run --platform ${{ matrix.arch }} --rm \
             -v ${{ github.workspace }}:/workspace \
+            -v ${CCACHE_DIR}:${CCACHE_DIR} \
+            -e CCACHE_DIR=${CCACHE_DIR} \
             -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
             set -e
             export DEBIAN_FRONTEND=noninteractive
@@ -114,6 +134,10 @@ jobs:
             sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
 
             apt update
-            apt install -y build-essential libsdl2-dev cmake git
-            cmake -B build -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv7-a+fp
+            apt install -y build-essential libsdl2-dev cmake git ccache
+            cmake -B build \
+              -DGGML_NATIVE=OFF \
+              -DGGML_CPU_ARM_ARCH=armv7-a+fp \
+              -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
             cmake --build build --config Release -j $(nproc)'
