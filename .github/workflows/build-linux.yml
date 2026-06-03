@@ -123,6 +123,8 @@ jobs:
 
       - name: Build ${{ matrix.arch }}
         run: |
+          echo "CCACHE_DIR=${CCACHE_DIR}"
+          ls -la ${CCACHE_DIR} || echo "CCACHE_DIR does not exist or is empty"
           docker run --platform ${{ matrix.arch }} --rm \
             -v ${{ github.workspace }}:/workspace \
             -v ${CCACHE_DIR}:${CCACHE_DIR} \
@@ -140,4 +142,8 @@ jobs:
               -DGGML_CPU_ARM_ARCH=armv7-a+fp \
               -DCMAKE_C_COMPILER_LAUNCHER=ccache \
               -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-            cmake --build build --config Release -j $(nproc)'
+            cmake --build build --config Release -j $(nproc)
+            echo "=== ccache stats inside container ==="
+            ccache -sv'
+          echo "=== CCACHE_DIR contents after docker ==="
+          ls -la ${CCACHE_DIR} || echo "CCACHE_DIR empty after docker run"
