@@ -125,7 +125,9 @@ jobs:
       - name: Pack artifacts
         run: |
           cp LICENSE ./build/bin/
-          tar -czvf whisper-bin-ubuntu-${{ matrix.build }}.tar.gz -C ./build/bin .
+          tar -czvf whisper-bin-ubuntu-${{ matrix.build }}.tar.gz \
+            --transform "s,^\.,whisper-bin-ubuntu-${{ matrix.build }}," \
+            -C ./build/bin .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
