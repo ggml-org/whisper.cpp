@@ -42,6 +42,7 @@ on:
       - '.github/workflows/build-windows.yml'   # handled by build-windows.yml
       - '.github/workflows/build-wasm.yml'      # handled by build-wasm.yml
       - '.github/workflows/build-android.yml'   # handled by build-android.yml
+      - '.github/workflows/quantize.yml'        # handled by quantize.yml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -69,20 +70,6 @@ jobs:
 #            sudo pkg install -y gmake sdl2 cmake git
 #            cmake -B build
 #            cmake --build build --config Release
-
-  quantize:
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Clone
-        uses: actions/checkout@v6
-
-      - name: Test quantize
-        run: |
-          ./models/download-ggml-model.sh tiny.en
-          cmake -B build
-          cmake --build build --config Release
-          ./build/bin/whisper-quantize models/ggml-tiny.en.bin models/ggml-tiny.en-q4_0.bin q4_0
 
   coreml-base-en:
     if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
