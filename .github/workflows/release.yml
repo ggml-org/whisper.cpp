@@ -340,7 +340,7 @@ jobs:
           choco install ninja
 
       - name: Install ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: ${{ github.job }}-${{ matrix.cuda-toolkit }}-${{ matrix.build }}
           variant: sccache
