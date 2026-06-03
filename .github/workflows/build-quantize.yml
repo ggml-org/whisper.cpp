@@ -5,7 +5,7 @@ on:
   push:
     branches:
       - master
-    paths: ['.github/workflows/quantize.yml',
+    paths: ['.github/workflows/build-quantize.yml',
             '**/CMakeLists.txt',
             '**/*.h',
             '**/*.hpp',

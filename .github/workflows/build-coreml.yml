@@ -7,7 +7,7 @@ on:
       - master
     tags:
       - 'v*'
-    paths: ['.github/workflows/coreml.yml',
+    paths: ['.github/workflows/build-coreml.yml',
             '**/CMakeLists.txt',
             '**/*.h',
             '**/*.hpp',

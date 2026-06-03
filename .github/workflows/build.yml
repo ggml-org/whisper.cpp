@@ -42,9 +42,9 @@ on:
       - '.github/workflows/build-windows.yml'   # handled by build-windows.yml
       - '.github/workflows/build-wasm.yml'      # handled by build-wasm.yml
       - '.github/workflows/build-android.yml'   # handled by build-android.yml
-      - '.github/workflows/quantize.yml'        # handled by quantize.yml
-      - '.github/workflows/coreml.yml'          # handled by coreml.yml
-      - '.github/workflows/vad.yml'             # handled by vad.yml
+      - '.github/workflows/build-quantize.yml'  # handled by build-quantize.yml
+      - '.github/workflows/build-coreml.yml'    # handled by build-coreml.yml
+      - '.github/workflows/build-vad.yml'       # handled by build-vad.yml
       - '.github/workflows/build-cpu.yml'       # handled by build-cpu.yml
 
 concurrency:

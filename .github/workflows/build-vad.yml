@@ -5,7 +5,7 @@ on:
   push:
     branches:
       - master
-    paths: ['.github/workflows/vad.yml',
+    paths: ['.github/workflows/build-vad.yml',
             '**/CMakeLists.txt',
             '**/*.h',
             '**/*.hpp',
