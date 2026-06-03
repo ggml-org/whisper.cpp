@@ -124,16 +124,13 @@ jobs:
 
       - name: Pack artifacts
         run: |
-          TAG_NAME="${{ needs.determine-tag.outputs.tag_name }}"
           cp LICENSE ./build/bin/
-          tar -czvf whisper-${TAG_NAME}-bin-ubuntu-${{ matrix.build }}.tar.gz \
-            --transform "s,^\.,whisper-${TAG_NAME}," \
-            -C ./build/bin .
+          tar -czvf whisper-bin-ubuntu-${{ matrix.build }}.tar.gz -C ./build/bin .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
         with:
-          path: whisper-${{ needs.determine-tag.outputs.tag_name }}-bin-ubuntu-${{ matrix.build }}.tar.gz
+          path: whisper-bin-ubuntu-${{ matrix.build }}.tar.gz
           name: whisper-bin-ubuntu-${{ matrix.build }}.tar.gz
 
   windows:
