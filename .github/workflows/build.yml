@@ -40,6 +40,7 @@ on:
       - '.github/workflows/build-clang.yml'     # handled by build-clang.yml
       - '.github/workflows/build-sycl.yml'      # handled by build-sycl.yml
       - '.github/workflows/build-windows.yml'   # handled by build-windows.yml
+      - '.github/workflows/build-wasm.yml'      # handled by build-wasm.yml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -67,28 +68,6 @@ jobs:
 #            sudo pkg install -y gmake sdl2 cmake git
 #            cmake -B build
 #            cmake --build build --config Release
-
-  emscripten:
-    runs-on: ubuntu-22.04
-
-    strategy:
-      matrix:
-        build: [Release]
-
-    steps:
-      - name: Clone
-        uses: actions/checkout@v6
-
-      - name: Setup emsdk
-        uses: mymindstorm/setup-emsdk@v14
-
-      - name: Verify
-        run: emcc -v
-
-      - name: Build
-        run: |
-          emcmake cmake . -DCMAKE_BUILD_TYPE=${{ matrix.build }}
-          make
 
   android:
     runs-on: ubuntu-22.04

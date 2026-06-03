@@ -1,0 +1,51 @@
+name: CI (wasm)
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: ['.github/workflows/build-wasm.yml',
+            '**/CMakeLists.txt',
+            '**/Makefile',
+            '**/*.mk',
+            '**/*.cmake',
+            '**/*.in',
+            '**/*.h',
+            '**/*.hpp',
+            '**/*.c',
+            '**/*.cpp']
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - 'bindings/ruby/**'        # handled by bindings-ruby.yml
+      - 'bindings/go/**'          # handled by bindings-go.yml
+      - 'examples/addon.node/**'  # handled by examples.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  emscripten:
+    runs-on: ubuntu-22.04
+
+    strategy:
+      matrix:
+        build: [Release]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+
+      - name: Setup emsdk
+        uses: mymindstorm/setup-emsdk@v14
+
+      - name: Verify
+        run: emcc -v
+
+      - name: Build
+        run: |
+          emcmake cmake . -DCMAKE_BUILD_TYPE=${{ matrix.build }}
+          make
