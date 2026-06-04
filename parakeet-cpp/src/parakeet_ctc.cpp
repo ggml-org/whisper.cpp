@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -19,6 +20,7 @@
 #include <fstream>
 #include <limits>
 #include <mutex>
+#include <regex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -231,31 +233,29 @@ void ensure_backends_loaded() {
 // Used to drive the OpenCL vs Vulkan tier policy below: Adreno
 // 7xx/8xx/X<n> ship OpenCL kernels that outperform Vulkan on those
 // parts, while Adreno 6xx ggml-opencl is known broken (incorrect
-// results). Mirrors the equivalent helper in llm-llamacpp's
-// BackendSelection.cpp::parseAdrenoVersion so the two stacks reach
-// the same decision on the same hardware.
+// results). Uses the same lowercase + regex approach as llm-llamacpp's
+// BackendSelection.cpp::parseAdrenoVersion; this variant additionally
+// ignores the "OpenCL 3.0" API-version noise in the combined OpenCL
+// device description and maps the Snapdragon-X "X<n>" naming to 800.
+// (Converging parakeet/tts-cpp/llm-llamacpp/ggml onto one shared parser
+// is tracked separately.)
 int parse_adreno_version(const char * s) {
     if (!s) return -1;
-    const char * p = strstr(s, "Adreno");
-    if (!p) p = strstr(s, "adreno");
-    if (!p) return -1;
-    p += 6; // strlen("Adreno") == strlen("adreno") == 6
-    // Skip whitespace, "(TM)", punctuation; stop at first letter or digit.
-    while (*p && !(*p >= '0' && *p <= '9') && *p != 'X' && *p != 'x') ++p;
-    if (!*p) return -1;
-    // X1 / X2 ... naming for Snapdragon X Elite -> treat as 800-tier.
-    if (*p == 'X' || *p == 'x') {
-        ++p;
-        if (*p < '0' || *p > '9') return -1; // "Xclipse" etc. is not Adreno-X
-        return 800;
+    std::string lowered(s);
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    // After an "adreno" marker (skipping "(tm)", spaces, punctuation), the model
+    // is a 3-4 digit generation ("740"/"830") or the Snapdragon-X "x<n>" token
+    // ("x1-85" -> 800-tier). Scan every marker and keep the highest; requiring
+    // 3-4 digits skips the "opencl 3.0" noise in the combined OpenCL description.
+    static const std::regex re(R"(dreno\D*?(\d{3,4}|x\d))", std::regex::optimize);
+    int best = -1;
+    for (std::sregex_iterator it(lowered.begin(), lowered.end(), re), end; it != end; ++it) {
+        const std::string tok = (*it)[1].str();
+        const int v = (tok[0] == 'x') ? 800 : std::stoi(tok);
+        if (v > best) best = v;
     }
-    int v = 0;
-    while (*p >= '0' && *p <= '9') {
-        v = v * 10 + (*p - '0');
-        ++p;
-        if (v > 100000) return -1;
-    }
-    return v;
+    return best;
 }
 
 bool is_adreno_6xx(const char * s) {
