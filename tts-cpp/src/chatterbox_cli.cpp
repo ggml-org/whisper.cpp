@@ -320,6 +320,7 @@ struct cli_params {
     std::string tokens_file;     // optional pre-tokenized speech tokens (skips T3)
     std::string text;            // input text for T3
     std::string output;          // legacy: speech-tokens output file (if set, write tokens)
+    std::string dump_mel_path;   // optional: dump S3Gen intermediates (_mu/_step0_dxdt/mel) to .npy for debugging
     // S3Gen + HiFT vocoder:
     std::string s3gen_gguf;      // enables full text → wav pipeline
     std::string out_wav;         // wav output path (requires --s3gen-gguf)
@@ -452,6 +453,7 @@ static void print_usage(const char * argv0) {
     fprintf(stderr, "                          With --s3gen-gguf this is interpreted as *speech* tokens\n");
     fprintf(stderr, "                          and the T3 step is skipped.\n");
     fprintf(stderr, "  --output PATH           Write generated speech tokens to PATH (text mode).\n");
+    fprintf(stderr, "  --dump-mel-path PATH    Debug: dump S3Gen mel to PATH, encoder to PATH_mu.npy, CFM step0 to PATH_step0_dxdt.npy.\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "  --s3gen-gguf PATH       Enables the full text -> wav pipeline (S3Gen + HiFT).\n");
     fprintf(stderr, "  --out PATH              Output wav file when --s3gen-gguf is set.\n");
@@ -595,6 +597,7 @@ static bool parse_args(int argc, char ** argv, cli_params & params) {
         else if (arg == "--text")           { auto v = next("--text");           if (!v) return false; params.text = v; }
         else if (arg == "--tokens-file")    { auto v = next("--tokens-file");    if (!v) return false; params.tokens_file = v; }
         else if (arg == "--output")         { auto v = next("--output");         if (!v) return false; params.output = v; }
+        else if (arg == "--dump-mel-path")  { auto v = next("--dump-mel-path");   if (!v) return false; params.dump_mel_path = v; }
         else if (arg == "--s3gen-gguf")     { auto v = next("--s3gen-gguf");     if (!v) return false; params.s3gen_gguf = v; }
         else if (arg == "--out")            { auto v = next("--out");            if (!v) return false; params.out_wav = v; }
         else if (arg == "--ref-dir")        { auto v = next("--ref-dir");        if (!v) return false; params.ref_dir = v; }
@@ -989,6 +992,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
             opts.verbose         = params.verbose;
             opts.n_gpu_layers    = params.n_gpu_layers;
             opts.cfm_steps       = params.cfm_steps;
+            opts.dump_mel_path   = params.dump_mel_path;
             opts.cfm_f16_kv_attn = params.cfm_f16_kv_attn;
             if (!params.reference_audio.empty()) {
                 if (!compute_prompt_feat_native(params.reference_audio, params.s3gen_gguf,
@@ -1278,6 +1282,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
             // chunk; --cfm-steps falls in as the per-chunk default below
             // (`stream_cfm_steps > 0 ? stream_cfm_steps : cfm_steps`).
             opts.cfm_steps       = params.cfm_steps;
+            opts.dump_mel_path   = params.dump_mel_path;
             opts.cfm_f16_kv_attn = params.cfm_f16_kv_attn;
             if (!params.reference_audio.empty()) {
                 if (!compute_prompt_feat_native(params.reference_audio, params.s3gen_gguf,
@@ -2088,6 +2093,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
             // Streaming chunks honour --stream-cfm-steps with --cfm-steps as
             // fallback when copts is set up further below.
             opts.cfm_steps       = params.cfm_steps;
+            opts.dump_mel_path   = params.dump_mel_path;
             opts.cfm_f16_kv_attn = params.cfm_f16_kv_attn;
             if (!params.reference_audio.empty()) {
                 if (!compute_prompt_feat_native(params.reference_audio, params.s3gen_gguf,
