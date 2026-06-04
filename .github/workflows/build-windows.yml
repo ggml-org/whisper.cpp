@@ -38,8 +38,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { sys: UCRT64,  env: ucrt-x86_64,  build: Release }
-          - { sys: CLANG64, env: clang-x86_64, build: Release }
+          - { sys: UCRT64,  env: ucrt-x86_64,  compiler: gcc,   build: Release }
+          - { sys: CLANG64, env: clang-x86_64, compiler: clang, build: Release }
 
     steps:
       - name: Clone
@@ -51,7 +51,7 @@ jobs:
           update: true
           msystem: ${{matrix.sys}}
           install: >-
-            mingw-w64-${{matrix.env}}-toolchain
+            mingw-w64-${{matrix.env}}-${{matrix.compiler}}
             mingw-w64-${{matrix.env}}-cmake
             mingw-w64-${{matrix.env}}-SDL2
             mingw-w64-${{matrix.env}}-openblas
