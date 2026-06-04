@@ -340,10 +340,9 @@ jobs:
           choco install ninja
 
       - name: Install ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: ${{ github.job }}-${{ matrix.cuda-toolkit }}-${{ matrix.build }}
-          variant: sccache
           evict-old-files: 5d
 
       - name: Install Cuda Toolkit 11.8.0
@@ -497,9 +496,9 @@ jobs:
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config ${{ matrix.build }} -j %NUMBER_OF_PROCESSORS%
 
-      - name: Check sccache status after build
+      - name: Check ccache status after build
         run: |
-          sccache --show-stats
+          ccache --show-stats
 
       - name: Copy CUDA DLLs
         run: |
