@@ -177,6 +177,9 @@ struct EngineOptions {
     float       cfg_weight   = 0.5f;
     float       min_p        = 0.0f;
 
+    std::string mecab_dict_path;
+    std::string cangjie_tsv_path;
+
     // S3Gen side.  0 = library default (2-step meanflow).
     int cfm_steps = 0;
 

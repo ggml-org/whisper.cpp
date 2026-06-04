@@ -62,6 +62,18 @@ void profile_vector_compute(const supertonic_model & model,
                             ggml_cgraph * graph,
                             int step,
                             const char * island) {
+    // NOTE: `profile_vector_compute` is invoked from per-cache run
+    // helpers (run_group_graph_cache, run_res_style_qkv_cache, ...)
+    // whose graphs are bound to per-cache `ggml_gallocr_t` storage —
+    // not to the model-level scheduler.  Use
+    // `supertonic_graph_compute` (direct backend compute) so the
+    // tensors' gallocr-bound buffers are honoured.  Routing through
+    // `supertonic_sched_compute` here would force the graph through
+    // the model.sched (which doesn't know about the per-cache
+    // gallocr) and silently corrupt the output.  When a graph
+    // genuinely needs the scheduler (master's QVAC-19254 caches
+    // without their own gallocr), the call site uses
+    // `supertonic_sched_alloc` + `supertonic_sched_compute` directly.
     const bool stderr_on = vector_profile_enabled();
     const bool csv_on    = supertonic_profile_csv_enabled();
     if (!stderr_on && !csv_on) {
@@ -999,6 +1011,16 @@ void build_text_attention_cache(vector_text_attention_cache & cache,
                                 int head_dim,
                                 const std::string & out_w_source,
                                 const std::string & out_b_source) {
+    // Reuse the cached graph when it already matches this shape AND was built on
+    // the direct backend path (cache.allocr non-null). The scheduler path leaves
+    // cache.allocr null, so it always rebuilds from a clean graph
+    // (ggml_backend_sched_alloc_graph mutates node->src[]). Mirrors run_hift_decode.
+    if (cache.ctx && cache.allocr && cache.generation_id == model.generation_id
+        && cache.q_len == q_len && cache.kv_len == kv_len
+        && cache.n_heads == n_heads && cache.head_dim == head_dim
+        && cache.out_w_source == out_w_source && cache.out_b_source == out_b_source) {
+        return;
+    }
     free_text_attention_cache(cache);
     cache.model = &model;
     cache.generation_id = model.generation_id;
@@ -1094,12 +1116,9 @@ void build_text_attention_cache(vector_text_attention_cache & cache,
     ggml_set_name(out, "vector_attn_out"); ggml_set_output(out);
     ggml_build_forward_expand(cache.gf, out);
 
-    cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
-    if (!cache.allocr) throw std::runtime_error("ggml_gallocr_new vector text attention cache failed");
-    if (!ggml_gallocr_reserve(cache.allocr, cache.gf)) {
-        throw std::runtime_error("ggml_gallocr_reserve vector text attention cache failed");
-    }
-    ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
+    // Allocation is per-call via the model scheduler (supertonic_sched_alloc
+    // in run), which routes GGML_OP_CUSTOM ops to CPU. No per-cache gallocr;
+    // cache.allocr stays null (free_*_cache's safe_gallocr_free no-ops on it).
 }
 
 std::vector<float> run_text_attention_cache(vector_text_attention_cache & cache,
@@ -1116,6 +1135,10 @@ std::vector<float> run_text_attention_cache(vector_text_attention_cache & cache,
                                             int current_step,
                                             const char * island,
                                             std::vector<float> * ctx_trace) {
+    // QVAC-18605 round 4 — cache-key check includes kv_attn_type so a
+    // mid-run --kv-attn-type override rebuilds the graph with the new
+    // dtype.  Rebuild only on key mismatch; preserve the shape-cached
+    // graph on every other call.
     if (cache.model != &model || cache.generation_id != model.generation_id ||
         cache.q_len != q_len || cache.kv_len != kv_len ||
         cache.n_heads != n_heads || cache.head_dim != head_dim ||
@@ -1123,10 +1146,31 @@ std::vector<float> run_text_attention_cache(vector_text_attention_cache & cache,
         cache.out_w_source != out_w_source || cache.out_b_source != out_b_source) {
         build_text_attention_cache(cache, model, q_len, kv_len, n_heads, head_dim, out_w_source, out_b_source);
     }
+    // QVAC-19254 — direct backend path when every node is supported by
+    // the primary backend; route through the scheduler when an op must
+    // run on CPU (GGML_OP_CUSTOM etc.).
+    bool direct = true;
+    const int n_nodes = ggml_graph_n_nodes(cache.gf);
+    for (int i = 0; i < n_nodes; ++i) {
+        if (!ggml_backend_supports_op(model.backend, ggml_graph_node(cache.gf, i))) { direct = false; break; }
+    }
+    if (direct) {
+        if (!cache.allocr) {
+            cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
+            if (!cache.allocr) throw std::runtime_error("ggml_gallocr_new supertonic text attention failed");
+            if (!ggml_gallocr_reserve(cache.allocr, cache.gf)) {
+                throw std::runtime_error("ggml_gallocr_reserve supertonic text attention failed");
+            }
+        }
+        ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
+    } else {
+        supertonic_sched_alloc(model, cache.gf);
+    }
     ggml_backend_tensor_set(cache.q_tc_in, q_tc.data(), 0, q_tc.size()*sizeof(float));
     ggml_backend_tensor_set(cache.k_tc_in, k_tc.data(), 0, k_tc.size()*sizeof(float));
     ggml_backend_tensor_set(cache.v_tc_in, v_tc.data(), 0, v_tc.size()*sizeof(float));
-    profile_vector_compute(model, cache.gf, current_step, island);
+    if (direct) supertonic_graph_compute(model, cache.gf);
+    else        profile_vector_compute(model, cache.gf, current_step, island);
     if (ctx_trace) *ctx_trace = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, "vector_attn_ctx"));
     return tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, "vector_attn_out"));
 }
@@ -1177,6 +1221,32 @@ std::vector<float> run_text_attention_cache_gpu(vector_text_attention_cache & ca
         cache.out_w_source != out_w_source || cache.out_b_source != out_b_source) {
         build_text_attention_cache(cache, model, q_len, kv_len, n_heads, head_dim, out_w_source, out_b_source);
     }
+    // QVAC-19254 — direct vs scheduler routing.  build_text_attention_cache
+    // no longer creates a gallocr; the run paths (this GPU-bridge variant
+    // + the host-vector overload above) must do it themselves, otherwise
+    // `cache.q_tc_in` / `k_tc_in` / `v_tc_in` have null backend buffers and
+    // the subsequent `ggml_backend_tensor_copy` aborts with
+    // "tensor buffer not set".  Mirrors the direct/sched dispatch in
+    // `run_text_attention_cache` above.
+    bool direct = true;
+    {
+        const int n_nodes = ggml_graph_n_nodes(cache.gf);
+        for (int i = 0; i < n_nodes; ++i) {
+            if (!ggml_backend_supports_op(model.backend, ggml_graph_node(cache.gf, i))) { direct = false; break; }
+        }
+    }
+    if (direct) {
+        if (!cache.allocr) {
+            cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
+            if (!cache.allocr) throw std::runtime_error("ggml_gallocr_new supertonic text attention (gpu bridge) failed");
+            if (!ggml_gallocr_reserve(cache.allocr, cache.gf)) {
+                throw std::runtime_error("ggml_gallocr_reserve supertonic text attention (gpu bridge) failed");
+            }
+        }
+        ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
+    } else {
+        supertonic_sched_alloc(model, cache.gf);
+    }
     // Same-backend device→device blits.  ggml_backend_tensor_copy
     // checks `ggml_nbytes(src) == ggml_nbytes(dst)` internally and
     // dispatches the backend's `cpy_tensor_async` path (CPU →
@@ -1187,7 +1257,8 @@ std::vector<float> run_text_attention_cache_gpu(vector_text_attention_cache & ca
     ggml_backend_tensor_copy(q_src, cache.q_tc_in);
     ggml_backend_tensor_copy(k_src, cache.k_tc_in);
     ggml_backend_tensor_copy(v_src, cache.v_tc_in);
-    profile_vector_compute(model, cache.gf, current_step, island);
+    if (direct) supertonic_graph_compute(model, cache.gf);
+    else        profile_vector_compute(model, cache.gf, current_step, island);
     if (ctx_trace) *ctx_trace = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, "vector_attn_ctx"));
     return tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, "vector_attn_out"));
 }
@@ -1335,6 +1406,19 @@ void build_group_graph_cache(vector_group_graph_cache & cache,
                              const std::string & k_name,
                              const std::string & v_name,
                              bool trace_outputs) {
+    // Reuse the cached graph when it already matches this shape AND was built on
+    // the direct backend path (cache.allocr non-null). The scheduler path leaves
+    // cache.allocr null, so it always rebuilds. Mirrors run_hift_decode.
+    if (cache.ctx && cache.allocr && cache.generation_id == model.generation_id
+        && cache.L == L && cache.C == C && cache.text_len == text_len
+        && cache.group == group && cache.conv_block == conv_block
+        && cache.linear_block == linear_block && cache.post_block == post_block
+        && cache.trace_outputs == trace_outputs && cache.matmul_source == matmul_source
+        && cache.q_matmul_source == q_matmul_source && cache.k_matmul_source == k_matmul_source
+        && cache.v_matmul_source == v_matmul_source && cache.q_name == q_name
+        && cache.k_name == k_name && cache.v_name == v_name) {
+        return;
+    }
     free_group_graph_cache(cache);
     cache.model = &model;
     cache.generation_id = model.generation_id;
@@ -1612,6 +1696,10 @@ vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache
                                                 const std::string & v_name,
                                                 const char * island,
                                                 std::vector<supertonic_trace_tensor> * trace) {
+    // QVAC-18605 — cache-key check (skip rebuild when shape/sources/
+    // trace flag haven't changed).  Build is expensive on the hot
+    // denoise-step path; the steady-state synth pays one rebuild on
+    // the cold-miss step, zero on every subsequent step.
     if (cache.model != &model || cache.generation_id != model.generation_id ||
         cache.L != L || cache.C != C || cache.text_len != text_len ||
         cache.group != group || cache.conv_block != conv_block ||
@@ -1624,6 +1712,36 @@ vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache
                                 text_len, q_matmul_source, k_matmul_source, v_matmul_source,
                                 q_name, k_name, v_name,
                                 trace != nullptr);
+    }
+    // QVAC-19254 — direct vs scheduler routing: when every node is
+    // supported by the primary backend, use the per-cache gallocr +
+    // direct compute; when an op must run on CPU (GGML_OP_CUSTOM),
+    // fall through to the model scheduler.
+    //
+    // HEAD's `build_group_graph_cache` already creates cache.allocr +
+    // calls `ggml_gallocr_alloc_graph` AND uploads the cache-lifetime
+    // RoPE cos/sin constants right after.  Re-calling alloc_graph
+    // here would clobber those uploaded constants (gallocr rebinds
+    // tensor offsets and the freshly-allocated buffer doesn't carry
+    // build-time data forward).  So on direct path: only allocate
+    // the gallocr lazily IF the build didn't (defensive — every
+    // current build path does), and never re-alloc.
+    bool direct = true;
+    const int n_nodes = ggml_graph_n_nodes(cache.gf);
+    for (int i = 0; i < n_nodes; ++i) {
+        if (!ggml_backend_supports_op(model.backend, ggml_graph_node(cache.gf, i))) { direct = false; break; }
+    }
+    if (direct) {
+        if (!cache.allocr) {
+            cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
+            if (!cache.allocr) throw std::runtime_error("ggml_gallocr_new supertonic group graph failed");
+            if (!ggml_gallocr_reserve(cache.allocr, cache.gf)) {
+                throw std::runtime_error("ggml_gallocr_reserve supertonic group graph failed");
+            }
+            ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
+        }
+    } else {
+        supertonic_sched_alloc(model, cache.gf);
     }
     // F12: cache.x_in is now ne=[C, L] (CPU-native time-major).
     // Upload `x_tc` directly — the host pack loop is gone; the
@@ -1644,7 +1762,8 @@ vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache
         ggml_backend_tensor_set(cache.text_in, text_lc_host, 0, (size_t) text_len * 256 * sizeof(float));
         cache.text_in_skip.mark_uploaded(text_lc_host);
     }
-    profile_vector_compute(model, cache.gf, current_step, island);
+    if (direct) supertonic_graph_compute(model, cache.gf);
+    else        profile_vector_compute(model, cache.gf, current_step, island);
     if (trace) {
         for (int j = 0; j < 4; ++j) {
             const std::string name = "ve_group" + std::to_string(group) + "_convnext" + std::to_string(j);
@@ -1832,6 +1951,19 @@ void build_res_style_qkv_cache(vector_res_style_qkv_cache & cache,
                                const std::string & k_name,
                                const std::string & v_name,
                                bool trace_outputs) {
+    // Reuse the cached graph when it already matches this shape AND was built on
+    // the direct backend path (cache.allocr non-null). The scheduler path leaves
+    // cache.allocr null, so it always rebuilds. Mirrors run_hift_decode.
+    if (cache.ctx && cache.allocr && cache.generation_id == model.generation_id
+        && cache.L == L && cache.C == C && cache.norm_block == norm_block
+        && cache.post_block == post_block && cache.style_block == style_block
+        && cache.trace_outputs == trace_outputs && cache.q_matmul_source == q_matmul_source
+        && cache.k_matmul_source == k_matmul_source && cache.v_matmul_source == v_matmul_source
+        && cache.residual_name == residual_name && cache.norm_name == norm_name
+        && cache.post_name == post_name && cache.q_name == q_name
+        && cache.k_name == k_name && cache.v_name == v_name) {
+        return;
+    }
     free_res_style_qkv_cache(cache);
     cache.model = &model;
     cache.generation_id = model.generation_id;
@@ -1950,12 +2082,8 @@ void build_res_style_qkv_cache(vector_res_style_qkv_cache & cache,
     ggml_set_name(sk, k_name.c_str()); ggml_set_output(sk); ggml_build_forward_expand(cache.gf, sk);
     ggml_set_name(sv, v_name.c_str()); ggml_set_output(sv); ggml_build_forward_expand(cache.gf, sv);
 
-    cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
-    if (!cache.allocr) throw std::runtime_error("ggml_gallocr_new res-style-qkv failed");
-    if (!ggml_gallocr_reserve(cache.allocr, cache.gf)) {
-        throw std::runtime_error("ggml_gallocr_reserve res-style-qkv failed");
-    }
-    ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
+    // Allocation is per-call via the model scheduler (supertonic_sched_alloc
+    // in run), which routes GGML_OP_CUSTOM ops to CPU. No per-cache gallocr.
 }
 
 vector_res_style_qkv_result run_res_style_qkv_cache(vector_res_style_qkv_cache & cache,
@@ -1982,6 +2110,7 @@ vector_res_style_qkv_result run_res_style_qkv_cache(vector_res_style_qkv_cache &
                                                     const char * island,
                                                     std::vector<supertonic_trace_tensor> * trace) {
     const bool want_trace = trace != nullptr;
+    // QVAC-18605 — cache-key check (skip rebuild on hot path).
     if (cache.model != &model || cache.generation_id != model.generation_id ||
         cache.L != L || cache.C != C ||
         cache.norm_block != norm_block || cache.post_block != post_block ||
@@ -1992,6 +2121,24 @@ vector_res_style_qkv_result run_res_style_qkv_cache(vector_res_style_qkv_cache &
                                   q_matmul_source, k_matmul_source, v_matmul_source,
                                   residual_name, norm_name, post_name, q_name, k_name, v_name,
                                   want_trace);
+    }
+    // QVAC-19254 — direct vs scheduler routing.
+    bool direct = true;
+    const int n_nodes = ggml_graph_n_nodes(cache.gf);
+    for (int i = 0; i < n_nodes; ++i) {
+        if (!ggml_backend_supports_op(model.backend, ggml_graph_node(cache.gf, i))) { direct = false; break; }
+    }
+    if (direct) {
+        if (!cache.allocr) {
+            cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
+            if (!cache.allocr) throw std::runtime_error("ggml_gallocr_new supertonic res style qkv failed");
+            if (!ggml_gallocr_reserve(cache.allocr, cache.gf)) {
+                throw std::runtime_error("ggml_gallocr_reserve supertonic res style qkv failed");
+            }
+        }
+        ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
+    } else {
+        supertonic_sched_alloc(model, cache.gf);
     }
     // F12: direct upload of CPU-native `[L, C]` (time-major)
     // buffers — `cache.lhs_in` / `cache.rhs_in` are now `ne=[C, L]`
@@ -2010,7 +2157,8 @@ vector_res_style_qkv_result run_res_style_qkv_cache(vector_res_style_qkv_cache &
         ggml_backend_tensor_set(cache.kctx_in, kctx_raw.data(), 0, kctx_raw.size() * sizeof(float));
         cache.last_kctx_raw_uploaded = &kctx_raw;
     }
-    profile_vector_compute(model, cache.gf, current_step, island);
+    if (direct) supertonic_graph_compute(model, cache.gf);
+    else        profile_vector_compute(model, cache.gf, current_step, island);
     if (trace) {
         push_trace(*trace, residual_name, L, C, tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, residual_name.c_str())));
         push_trace(*trace, norm_name, L, C, tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, norm_name.c_str())));
@@ -2238,6 +2386,14 @@ void build_tail_graph_cache(vector_tail_graph_cache & cache,
                             int Cin,
                             int total_steps,
                             bool trace_outputs) {
+    // Reuse the cached graph when it already matches this shape AND was built on
+    // the direct backend path (cache.allocr non-null). The scheduler path leaves
+    // cache.allocr null, so it always rebuilds. Mirrors run_hift_decode.
+    if (cache.ctx && cache.allocr && cache.generation_id == model.generation_id
+        && cache.L == L && cache.C == C && cache.Cin == Cin
+        && cache.total_steps == total_steps && cache.trace_outputs == trace_outputs) {
+        return;
+    }
     free_tail_graph_cache(cache);
     cache.model = &model;
     cache.generation_id = model.generation_id;
@@ -2311,12 +2467,8 @@ void build_tail_graph_cache(vector_tail_graph_cache & cache,
         ggml_build_forward_expand(cache.gf, next);
     }
 
-    cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
-    if (!cache.allocr) throw std::runtime_error("ggml_gallocr_new vector tail cache failed");
-    if (!ggml_gallocr_reserve(cache.allocr, cache.gf)) {
-        throw std::runtime_error("ggml_gallocr_reserve vector tail cache failed");
-    }
-    ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
+    // Allocation is per-call via the model scheduler (supertonic_sched_alloc
+    // in run), which routes GGML_OP_CUSTOM ops to CPU. No per-cache gallocr.
 }
 
 std::vector<float> run_tail_graph_cache(vector_tail_graph_cache & cache,
@@ -2330,11 +2482,30 @@ std::vector<float> run_tail_graph_cache(vector_tail_graph_cache & cache,
                                         int current_step,
                                         int total_steps,
                                         std::vector<supertonic_trace_tensor> * trace) {
+    // QVAC-18605 — cache-key check (skip rebuild on hot path).
     if (cache.model != &model || cache.generation_id != model.generation_id ||
         cache.L != L || cache.C != C ||
         cache.Cin != Cin || cache.total_steps != total_steps ||
         cache.trace_outputs != (trace != nullptr)) {
         build_tail_graph_cache(cache, model, L, C, Cin, total_steps, trace != nullptr);
+    }
+    // QVAC-19254 — direct vs scheduler routing.
+    bool direct = true;
+    const int n_nodes = ggml_graph_n_nodes(cache.gf);
+    for (int i = 0; i < n_nodes; ++i) {
+        if (!ggml_backend_supports_op(model.backend, ggml_graph_node(cache.gf, i))) { direct = false; break; }
+    }
+    if (direct) {
+        if (!cache.allocr) {
+            cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
+            if (!cache.allocr) throw std::runtime_error("ggml_gallocr_new supertonic tail graph failed");
+            if (!ggml_gallocr_reserve(cache.allocr, cache.gf)) {
+                throw std::runtime_error("ggml_gallocr_reserve supertonic tail graph failed");
+            }
+        }
+        ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
+    } else {
+        supertonic_sched_alloc(model, cache.gf);
     }
     // F12: direct upload of `x_tc` to `cache.tail_in` (now
     // `ne=[C, L]`).  Also eliminates an inadvertent CPU
@@ -2350,7 +2521,8 @@ std::vector<float> run_tail_graph_cache(vector_tail_graph_cache & cache,
     ggml_backend_tensor_set(cache.tail_in, x_tc.data(), 0, x_tc.size()*sizeof(float));
     ggml_backend_tensor_set(cache.tail_mask, latent_mask, 0, (size_t)L*sizeof(float));
     ggml_backend_tensor_set(cache.tail_noise, noisy_latent, 0, (size_t)L*Cin*sizeof(float));
-    profile_vector_compute(model, cache.gf, current_step, "tail");
+    if (direct) supertonic_graph_compute(model, cache.gf);
+    else        profile_vector_compute(model, cache.gf, current_step, "tail");
     if (trace) {
         for (int j = 0; j < 4; ++j) {
             const std::string name = "ve_last_convnext" + std::to_string(j);
@@ -3414,11 +3586,16 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
                                         0, k_sin.size() * sizeof(float));
             }
         }
-        // Reuse-or-rebuild done; expose the cache's compute graph
-        // + input tensors under the variable names the rest of
-        // this scope already uses.  Saves a wholesale rename of
-        // ~150 lines of `tensor_to_time_channel(ggml_graph_get_tensor(gf, …))`
-        // call sites that were authored against the local `gf`.
+        // QVAC-18605 round 12 — reuse-or-rebuild done; expose the
+        // cache's compute graph + input tensors under the variable
+        // names the rest of this scope already uses.  HEAD's
+        // front_cache builds these same nodes (ve_time_add0,
+        // ve_block2_convnext0, ve_attn0_q/k/v, optional rope outputs)
+        // ONCE at cache-build time and reuses them across the 5
+        // denoise-step calls; master's inline-build path is the
+        // non-cached equivalent that rebuilds every call.  We keep
+        // the cache here; the post-`profile_vector_compute` GPU-
+        // bridge path below still reads the same named tensors.
         ggml_cgraph * gf = front_cache.gf;
         ggml_tensor * x = front_cache.x_in;
         ggml_tensor * mask = front_cache.mask_in;
@@ -3650,6 +3827,9 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         PUSH_GGML_TRACE({"ve_style0_out", {L, C}, style_out_ggml});
         // F8: cached style-residual graph (lhs + out → add → LN).
         // norm_block = 5 for the front-block style residual.
+        // QVAC-18605 round 12 — `run_style_residual_cache` keeps a
+        // thread_local graph across calls; master's inline-build
+        // equivalent has been deliberately replaced by the cache.
         thread_local vector_style_residual_graph_cache style0_res_cache;
         std::vector<float> style0_res_trace;
         std::vector<float> style_norm_ggml = run_style_residual_cache(
@@ -3760,6 +3940,8 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         PUSH_GGML_TRACE({"ve_g1_style_out", {L, C}, g1_style_out});
 
         // F8: cached style-residual graph (norm_block = 11 for group 1).
+        // Mirror of style0_residual block; HEAD's cache reused across
+        // calls, master's inline-build equivalent dropped.
         thread_local vector_style_residual_graph_cache g1_style_res_cache;
         std::vector<float> g1_style_res_trace;
         std::vector<float> g1_style_norm_vec = run_style_residual_cache(
@@ -3974,7 +4156,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         if (next_latent_tc_out) *next_latent_tc_out = next_latent_tc;
 
         // F19: front-block ctx + allocr live in `front_cache` and
-        // survive across denoise steps.
+        // survive across denoise steps; no per-call ctx to free.
         profile_vector_step_end(current_step);
         if (error) error->clear();
 #undef PUSH_GGML_TRACE

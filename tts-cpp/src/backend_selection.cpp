@@ -4,10 +4,12 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <regex>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -277,24 +279,22 @@ void ensure_backends_loaded() {
 // reach the same decision on the same hardware.
 int parse_adreno_version(const char * s) {
     if (!s) return -1;
-    const char * p = std::strstr(s, "Adreno");
-    if (!p) p = std::strstr(s, "adreno");
-    if (!p) return -1;
-    p += 6; // strlen("Adreno") == strlen("adreno") == 6
-    while (*p && !(*p >= '0' && *p <= '9') && *p != 'X' && *p != 'x') ++p;
-    if (!*p) return -1;
-    if (*p == 'X' || *p == 'x') {
-        ++p;
-        if (*p < '0' || *p > '9') return -1; // "Xclipse" etc. is not Adreno-X
-        return 800;
+    std::string lowered(s);
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    // After an "adreno" marker (skipping "(tm)", spaces, punctuation), the model
+    // is a 3-4 digit generation ("740"/"830") or the Snapdragon-X "x<n>" token
+    // ("x1-85" -> 800-tier). Scan every marker and keep the highest; requiring
+    // 3-4 digits skips the "opencl 3.0" noise in a combined OpenCL description
+    // like "QUALCOMM Adreno(TM) (OpenCL 3.0 Adreno(TM) 740)" -> 740, not 3.
+    static const std::regex re(R"(dreno\D*?(\d{3,4}|x\d))", std::regex::optimize);
+    int best = -1;
+    for (std::sregex_iterator it(lowered.begin(), lowered.end(), re), end; it != end; ++it) {
+        const std::string tok = (*it)[1].str();
+        const int v = (tok[0] == 'x') ? 800 : std::stoi(tok);
+        if (v > best) best = v;
     }
-    int v = 0;
-    while (*p >= '0' && *p <= '9') {
-        v = v * 10 + (*p - '0');
-        ++p;
-        if (v > 100000) return -1;
-    }
-    return v;
+    return best;
 }
 
 bool is_adreno_6xx(const char * s) {
@@ -307,14 +307,48 @@ bool is_adreno_700plus(const char * s) {
     return v >= 700;
 }
 
+// True if the device name/description identifies a Qualcomm Adreno GPU.
+// Unlike parse_adreno_version (which needs a 3-digit model number and so
+// returns -1 for the bare OpenCL "QUALCOMM Adreno(TM)" string), this is a
+// vendor check used to gate Android GPU selection. ASCII case-insensitive
+// because the strings vary in capitalisation: ggml-opencl reports
+// CL_DEVICE_NAME ("QUALCOMM Adreno(TM)") and ggml-vulkan reports the Vulkan
+// deviceName ("Adreno (TM) 740").
+bool is_qualcomm_adreno(const char * name, const char * desc) {
+    auto contains_ci = [](const char * hay, const char * needle) -> bool {
+        if (!hay || !needle) return false;
+        for (const char * h = hay; *h; ++h) {
+            const char * a = h;
+            const char * b = needle;
+            while (*a && *b) {
+                const char ca = (*a >= 'A' && *a <= 'Z') ? char(*a + 32) : *a;
+                const char cb = (*b >= 'A' && *b <= 'Z') ? char(*b + 32) : *b;
+                if (ca != cb) break;
+                ++a;
+                ++b;
+            }
+            if (!*b) return true;
+        }
+        return false;
+    };
+    return contains_ci(name, "adreno")   || contains_ci(desc, "adreno") ||
+           contains_ci(name, "qualcomm") || contains_ci(desc, "qualcomm");
+}
+
 // Pick a GPU backend using the same tier policy as parakeet-cpp's
 // `init_gpu_backend` / llm-llamacpp's BackendSelection: ggml-opencl
 // is only used when an Adreno 700+ device is present (where its
 // kernels are validated and faster than Vulkan); every other GPU
-// (Vulkan, Metal, CUDA, Mali, Intel iGPU, ...) goes through the
-// non-OpenCL preference. Adreno 6xx OpenCL is known broken
-// (incorrect outputs) and is force-skipped unless the caller opts
-// in via `TTS_CPP_ALLOW_ADRENO_6XX=1`.
+// (Vulkan, Metal, CUDA, Intel iGPU, ...) goes through the non-OpenCL
+// preference. Adreno 6xx OpenCL is known broken (incorrect outputs)
+// and is force-skipped unless the caller opts in via
+// `TTS_CPP_ALLOW_ADRENO_6XX=1`.
+//
+// On Android the device walk is additionally gated to Qualcomm Adreno
+// only: other Android GPU vendors are not validated and at least one
+// (ARM Mali / Tensor) aborts the host process from inside graph
+// compute, so they are skipped and the engine falls back to CPU.
+// Desktop GPU vendors are unaffected.
 //
 // Routed exclusively through the ggml-backend registry
 // (`ggml_backend_load_all` + `ggml_backend_dev_*`). No direct calls
@@ -385,6 +419,29 @@ ggml_backend_t init_gpu_backend(int n_gpu_layers,
             }
         }
 
+#if defined(__ANDROID__)
+        // Android GPU allowlist: only Qualcomm Adreno is validated for the
+        // tts-cpp GPU backends (OpenCL on Adreno 700+, Vulkan as the
+        // bring-up fallback). Other Android GPU vendors are not validated,
+        // and at least one (ARM Mali / Tensor) aborts the whole host
+        // process from inside ggml_backend_graph_compute via GGML_ASSERT ->
+        // ggml_abort(), which cannot be caught from C++. Skip non-Adreno
+        // devices so the policy falls through to CPU instead of risking a
+        // fatal abort on an unvalidated driver.
+        if (!is_qualcomm_adreno(name, desc)) {
+            if (verbose) {
+                fprintf(stderr,
+                    "%s: Android GPU '%s' (%s) is not Qualcomm Adreno; "
+                    "skipping (only Adreno is validated on Android; "
+                    "falling through to CPU)\n",
+                    log_prefix,
+                    name ? name : "?",
+                    desc ? desc : "?");
+            }
+            continue;
+        }
+#endif
+
         const int adreno_v = std::max(parse_adreno_version(name),
                                       parse_adreno_version(desc));
         if (adreno_v > max_adreno_version) max_adreno_version = adreno_v;
@@ -424,10 +481,11 @@ ggml_backend_t init_gpu_backend(int n_gpu_layers,
     //   1. Adreno 700+: prefer OpenCL (validated, faster than Vulkan
     //      on Snapdragon 8 Gen 2/3/4 etc.).
     //   2. Anything else with a non-OpenCL GPU: prefer that
-    //      (Vulkan on all non-Adreno Android, Metal on Apple, CUDA
-    //      on Linux/Windows desktop, Mali iGPU via Vulkan, ...).
-    //   3. Last resort: any other OpenCL device (e.g. desktop OpenCL
-    //      or non-Adreno mobile when no Vulkan is registered).
+    //      (Adreno Vulkan on Android — non-Adreno is filtered out
+    //      above; Metal on Apple; CUDA / Vulkan on Linux/Windows
+    //      desktop).
+    //   3. Last resort: any other OpenCL device (e.g. desktop OpenCL,
+    //      or Adreno OpenCL whose version string lacked a model number).
     auto try_init = [&](const std::vector<Cand> & bucket) -> ggml_backend_t {
         for (const Cand & c : bucket) {
             ggml_backend_t b = ggml_backend_dev_init(c.dev, nullptr);

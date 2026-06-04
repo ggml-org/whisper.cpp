@@ -320,6 +320,7 @@ struct cli_params {
     std::string tokens_file;     // optional pre-tokenized speech tokens (skips T3)
     std::string text;            // input text for T3
     std::string output;          // legacy: speech-tokens output file (if set, write tokens)
+    std::string dump_mel_path;   // optional: dump S3Gen intermediates (_mu/_step0_dxdt/mel) to .npy for debugging
     // S3Gen + HiFT vocoder:
     std::string s3gen_gguf;      // enables full text → wav pipeline
     std::string out_wav;         // wav output path (requires --s3gen-gguf)
@@ -355,6 +356,8 @@ struct cli_params {
     float       cfg_weight   = 0.5f;   // classifier-free guidance strength
     float       min_p        = 0.05f;  // minimum-probability warp (0 = off)
     std::string language;              // tier-1 lang code when variant = t3_mtl
+    std::string mecab_dict;            // runtime path to MeCab IPAdic dictionary dir
+    std::string cangjie_tsv;           // runtime path to Cangjie5_TC.tsv mapping
     float       exaggeration = 0.5f;   // emotion_adv scalar (0..1)
 
     // Supertonic-only knobs.  Supertonic stores built-in voices and default
@@ -486,6 +489,7 @@ static void print_usage(const char * argv0) {
     fprintf(stderr, "                          With --s3gen-gguf this is interpreted as *speech* tokens\n");
     fprintf(stderr, "                          and the T3 step is skipped.\n");
     fprintf(stderr, "  --output PATH           Write generated speech tokens to PATH (text mode).\n");
+    fprintf(stderr, "  --dump-mel-path PATH    Debug: dump S3Gen mel to PATH, encoder to PATH_mu.npy, CFM step0 to PATH_step0_dxdt.npy.\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "  --s3gen-gguf PATH       Enables the full text -> wav pipeline (S3Gen + HiFT).\n");
     fprintf(stderr, "  --out PATH              Output wav file when --s3gen-gguf is set.\n");
@@ -524,6 +528,9 @@ static void print_usage(const char * argv0) {
     fprintf(stderr, "multilingual (variant=t3_mtl) options:\n");
     fprintf(stderr, "  --language CODE         Required for t3_mtl GGUFs. Tier-1: en, es, fr, de, it,\n");
     fprintf(stderr, "                          pt, nl, pl, tr, sv, da, fi, no, el, ms, sw, ar, ko.\n");
+    fprintf(stderr, "  --mecab-dict DIR        Path to MeCab IPAdic dictionary directory (for ja).\n");
+    fprintf(stderr, "                          Use scripts/build_mecab_dict.py to materialize it.\n");
+    fprintf(stderr, "  --cangjie-tsv PATH      Path to Cangjie5_TC.tsv mapping file (for zh).\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Supertonic options (when --model has supertonic.arch metadata):\n");
     fprintf(stderr, "  --voice NAME            Built-in Supertonic voice name. Defaults to GGUF metadata.\n");
@@ -669,6 +676,7 @@ static bool parse_args(int argc, char ** argv, cli_params & params) {
         else if (arg == "--text")           { auto v = next("--text");           if (!v) return false; params.text = v; }
         else if (arg == "--tokens-file")    { auto v = next("--tokens-file");    if (!v) return false; params.tokens_file = v; }
         else if (arg == "--output")         { auto v = next("--output");         if (!v) return false; params.output = v; }
+        else if (arg == "--dump-mel-path")  { auto v = next("--dump-mel-path");   if (!v) return false; params.dump_mel_path = v; }
         else if (arg == "--s3gen-gguf")     { auto v = next("--s3gen-gguf");     if (!v) return false; params.s3gen_gguf = v; }
         else if (arg == "--out")            { auto v = next("--out");            if (!v) return false; params.out_wav = v; }
         else if (arg == "--ref-dir")        { auto v = next("--ref-dir");        if (!v) return false; params.ref_dir = v; }
@@ -707,6 +715,8 @@ static bool parse_args(int argc, char ** argv, cli_params & params) {
             }
         }
         else if (arg == "--language")       { auto v = next("--language");       if (!v) return false; params.language = v; }
+        else if (arg == "--mecab-dict")    { auto v = next("--mecab-dict");    if (!v) return false; params.mecab_dict = v; }
+        else if (arg == "--cangjie-tsv")   { auto v = next("--cangjie-tsv");   if (!v) return false; params.cangjie_tsv = v; }
         else if (arg == "--voice")          { auto v = next("--voice");          if (!v) return false; params.supertonic_voice = v; params.has_supertonic_options = true; }
         else if (arg == "--steps")          { if (!parse_int  ("--steps",          params.supertonic_steps)) return false; params.has_supertonic_options = true; }
         else if (arg == "--speed")          { if (!parse_float("--speed",          params.supertonic_speed)) return false; params.has_supertonic_options = true; }
@@ -1121,6 +1131,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
             opts.verbose         = params.verbose;
             opts.n_gpu_layers    = params.n_gpu_layers;
             opts.cfm_steps       = params.cfm_steps;
+            opts.dump_mel_path   = params.dump_mel_path;
             opts.cfm_f16_kv_attn = params.cfm_f16_kv_attn;
             if (!params.reference_audio.empty()) {
                 if (!compute_prompt_feat_native(params.reference_audio, params.s3gen_gguf,
@@ -1158,7 +1169,13 @@ int tts_cpp_cli_main(int argc, char ** argv) {
         // runs.  This cuts first-audio-out latency by ~700 ms in streaming
         // mode — by the time T3 emits its first chunk of tokens, S3Gen is
         // already in RAM with its tensors allocated on the right backend.
+        struct thread_join_guard {
+            std::thread & t;
+            ~thread_join_guard() { if (t.joinable()) t.join(); }
+        };
+
         std::thread s3gen_preload_thread;
+        thread_join_guard s3gen_guard{s3gen_preload_thread};
         if (!params.s3gen_gguf.empty()) {
             s3gen_preload_thread = std::thread([path = params.s3gen_gguf,
                                                 ngpu = params.n_gpu_layers]() {
@@ -1404,6 +1421,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
             // chunk; --cfm-steps falls in as the per-chunk default below
             // (`stream_cfm_steps > 0 ? stream_cfm_steps : cfm_steps`).
             opts.cfm_steps       = params.cfm_steps;
+            opts.dump_mel_path   = params.dump_mel_path;
             opts.cfm_f16_kv_attn = params.cfm_f16_kv_attn;
             if (!params.reference_audio.empty()) {
                 if (!compute_prompt_feat_native(params.reference_audio, params.s3gen_gguf,
@@ -1871,6 +1889,12 @@ int tts_cpp_cli_main(int argc, char ** argv) {
         const bool is_mtl = (model.hparams.variant == CHBX_VARIANT_MTL);
         if (!params.text.empty()) {
             if (is_mtl) {
+                if (!params.mecab_dict.empty()) {
+                    mtl_tokenizer::set_mecab_dict_path(params.mecab_dict);
+                }
+                if (!params.cangjie_tsv.empty()) {
+                    mtl_tokenizer::set_cangjie_tsv_path(params.cangjie_tsv);
+                }
                 if (model.mtl_tokenizer_json.empty()) {
                     fprintf(stderr,
                         "error: this t3_mtl GGUF has no embedded MTL tokenizer. Re-run\n"
@@ -2074,17 +2098,23 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                     generated.push_back(current);
 
                     // Port of the token_repetition check in the Python
-                    // AlignmentStreamAnalyzer.  MTL T3 sometimes emits a
+                    // AlignmentStreamAnalyzer. MTL T3 sometimes emits a
                     // plausible end-of-speech silence cadence mid-utterance
                     // and then hallucinates more low-energy content before
-                    // eventually stopping.  Three consecutive identical
-                    // tokens cleanly signal this cadence without firing on
-                    // normal speech.  Gated to MTL because the turbo
-                    // codebook has a different cadence signature.
-                    if (is_mtl && generated.size() >= 3) {
+                    // eventually stopping. Two consecutive identical tokens
+                    // signal this cadence; gated to MTL because the Turbo
+                    // codebook has a different cadence signature and to a
+                    // 60-token minimum so we don't fire on the first
+                    // utterance of short multilingual inputs. We trim only
+                    // the trailing duplicate (resize(n-1)) and leave the
+                    // legitimate prior token; the downstream pop_back()
+                    // handles the stop-speech token.
+                    constexpr int kMtlMinTokensBeforeCadence = 60;
+                    if (is_mtl && generated.size() >= 2 &&
+                        (int)generated.size() > kMtlMinTokensBeforeCadence) {
                         size_t n = generated.size();
-                        if (generated[n - 1] == generated[n - 2] &&
-                            generated[n - 2] == generated[n - 3]) {
+                        if (generated[n - 1] == generated[n - 2]) {
+                            generated.resize(n - 1);
                             stopped_by_repetition = true;
                             break;
                         }
@@ -2095,7 +2125,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                     generated.pop_back();
 
                 if (stopped_by_repetition && params.verbose) {
-                    fprintf(stderr, "  [t3 segment %zu/%zu] stopped on 3x repeated token (%d) "
+                    fprintf(stderr, "  [t3 segment %zu/%zu] stopped on 2x repeated token (%d) "
                                     "at %zu tokens; MTL end-of-speech cadence\n",
                             si + 1, N_SEG, generated.empty() ? -1 : (int)generated.back(),
                             generated.size());
@@ -2202,6 +2232,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
             // Streaming chunks honour --stream-cfm-steps with --cfm-steps as
             // fallback when copts is set up further below.
             opts.cfm_steps       = params.cfm_steps;
+            opts.dump_mel_path   = params.dump_mel_path;
             opts.cfm_f16_kv_attn = params.cfm_f16_kv_attn;
             if (!params.reference_audio.empty()) {
                 if (!compute_prompt_feat_native(params.reference_audio, params.s3gen_gguf,

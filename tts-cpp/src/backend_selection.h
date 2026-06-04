@@ -103,4 +103,10 @@ int parse_adreno_version(const char * s);
 bool is_adreno_6xx(const char * s);
 bool is_adreno_700plus(const char * s);
 
+// Vendor check (name OR description, ASCII case-insensitive): true for a
+// Qualcomm Adreno GPU. Unlike parse_adreno_version it does not require a
+// model number, so it also matches the bare OpenCL "QUALCOMM Adreno(TM)"
+// string. Used to gate Android GPU selection to the only validated vendor.
+bool is_qualcomm_adreno(const char * name, const char * desc);
+
 } // namespace tts_cpp::detail

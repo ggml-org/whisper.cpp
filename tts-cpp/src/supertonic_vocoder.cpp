@@ -545,10 +545,21 @@ void free_vocoder_cache(vocoder_graph_cache & cache) {
 void build_supertonic_vocoder_cache(vocoder_graph_cache & cache,
                                     const supertonic_model & model,
                                     int latent_len) {
+    // QVAC-19254 — reuse the cached graph when it already matches this shape
+    // AND was built on the direct backend path (cache.allocr non-null).  The
+    // scheduler path leaves cache.allocr null, so it always rebuilds.
+    // Mirrors run_hift_decode.
+    if (cache.ctx && cache.allocr && cache.generation_id == model.generation_id
+        && cache.latent_len == latent_len) {
+        return;
+    }
     // `supertonic_op_dispatch_scope` is set by the outer
     // `supertonic_vocoder_forward_ggml` entry point; inside graph builders
     // we read the thread-local flag directly.
     const bool use_cpu_custom = supertonic_use_cpu_custom_ops();
+    (void) use_cpu_custom;  // documentation only — graph builders below
+                            // read the flag themselves via
+                            // `supertonic_use_cpu_custom_ops()`.
     free_vocoder_cache(cache);
     cache.model = &model;
     cache.generation_id = model.generation_id;
@@ -645,12 +656,8 @@ void build_supertonic_vocoder_cache(vocoder_graph_cache & cache,
     ggml_build_forward_expand(cache.gf, x);
     cache.wav = x;
 
-    cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
-    if (!cache.allocr) throw std::runtime_error("ggml_gallocr_new vocoder cache failed");
-    if (!ggml_gallocr_reserve(cache.allocr, cache.gf)) {
-        throw std::runtime_error("ggml_gallocr_reserve vocoder cache failed");
-    }
-    ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
+    // Allocation is per-call via the model scheduler (supertonic_sched_alloc in
+    // the forward path), which routes GGML_OP_CUSTOM ops to CPU. No gallocr.
 }
 
 void linear1x1(const std::vector<float> & x, int L, int IC,
@@ -940,17 +947,43 @@ bool supertonic_vocoder_forward_ggml(const supertonic_model & model,
         // compute + 2 uploads is gone; nothing happens here for BN.
 
         thread_local vocoder_graph_cache cache;
-        if (cache.model != &model || cache.generation_id != model.generation_id ||
-            cache.latent_len != latent_len) {
-            build_supertonic_vocoder_cache(cache, model, latent_len);
-        }
+        // Reuse the shape-keyed graph on the direct backend path; rebuild + route
+        // through the scheduler only when an op must run on CPU. Mirrors run_hift_decode.
+        build_supertonic_vocoder_cache(cache, model, latent_len);
         profile_vocoder_checkpoint("graph_cache", profile_last);
 
+        // QVAC-19254 — direct vs scheduler routing.  Re-uses cache.allocr
+        // for direct dispatch; falls through to the model scheduler when
+        // an op must run on CPU (GGML_OP_CUSTOM etc.).
+        bool direct = true;
+        const int n_nodes = ggml_graph_n_nodes(cache.gf);
+        for (int i = 0; i < n_nodes; ++i) {
+            if (!ggml_backend_supports_op(model.backend, ggml_graph_node(cache.gf, i))) { direct = false; break; }
+        }
+        if (direct) {
+            if (!cache.allocr) {
+                cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
+                if (!cache.allocr) throw std::runtime_error("ggml_gallocr_new supertonic vocoder failed");
+                if (!ggml_gallocr_reserve(cache.allocr, cache.gf)) {
+                    throw std::runtime_error("ggml_gallocr_reserve supertonic vocoder failed");
+                }
+            }
+            ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
+        } else {
+            supertonic_sched_alloc(model, cache.gf);
+        }
+        // HEAD F3: upload latent in raw `[latent_len, latent_channels]`
+        // layout.  HEAD F2 pre-baked bn_scale / bn_shift into model
+        // weights at load time (referenced by the graph as
+        // `model.vocoder.bn_scale_pre` / `bn_shift_pre`), so no per-call
+        // BN upload is needed — that's why the struct doesn't carry
+        // `cache.bn_scale` / `cache.bn_shift` fields.
         const size_t latent_bytes = (size_t) ggml_nelements(cache.latent_in) * sizeof(float);
         ggml_backend_tensor_set(cache.latent_in, latent, 0, latent_bytes);
         profile_vocoder_checkpoint("set_inputs", profile_last);
 
-        supertonic_graph_compute(model, cache.gf);
+        if (direct) supertonic_graph_compute(model, cache.gf);
+        else        supertonic_sched_compute(model, cache.gf);
         profile_vocoder_checkpoint("compute", profile_last);
         wav_out = ggml_tensor_to_time_channel(cache.wav);
         profile_vocoder_checkpoint("readback", profile_last);
@@ -1145,23 +1178,15 @@ bool supertonic_vocoder_trace_ggml(const supertonic_model & model,
         ggml_set_output(cur);
         ggml_build_forward_expand(gf, cur);
 
-        ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
-        if (!allocr) {
-            ggml_free(ctx);
-            throw std::runtime_error("ggml_gallocr_new failed");
-        }
-        if (!ggml_gallocr_reserve(allocr, gf)) {
-            ggml_gallocr_free(allocr);
-            ggml_free(ctx);
-            throw std::runtime_error("ggml_gallocr_reserve failed");
-        }
-        ggml_gallocr_alloc_graph(allocr, gf);
+        supertonic_sched_alloc(model, gf);
 
         std::vector<float> x_host = unpack_latent_ggml_layout(model, latent, latent_len);
         ggml_backend_tensor_set(x_in, x_host.data(), 0, x_host.size() * sizeof(float));
-        // F2: trace_bn_scale / trace_bn_shift inputs are gone; the
-        // graph above now folds the pre-baked weights in directly.
-        supertonic_graph_compute(model, gf);
+        // HEAD F2: trace_bn_scale / trace_bn_shift inputs are gone; the
+        // graph above now folds the pre-baked bn_scale_pre /
+        // bn_shift_pre weight tensors in directly.
+        // QVAC-19254 — pair the sched_alloc above with sched_compute here.
+        supertonic_sched_compute(model, gf);
 
         trace_out.push_back({"unpack", {T0, C_latent}, unpack_latent_scalar(model, latent, latent_len)});
         trace_out.push_back({"denorm", {T0, C_latent}, ggml_tensor_to_time_channel(ggml_graph_get_tensor(gf, "denorm"))});
@@ -1180,7 +1205,6 @@ bool supertonic_vocoder_trace_ggml(const supertonic_model & model,
         trace_out.push_back({"head1", {T0, (int) model.vocoder.head1_w->ne[2]}, ggml_tensor_to_time_channel(ggml_graph_get_tensor(gf, "head1"))});
         trace_out.push_back({"prelu", {T0, (int) model.vocoder.head1_w->ne[2]}, ggml_tensor_to_time_channel(ggml_graph_get_tensor(gf, "prelu"))});
         trace_out.push_back({"wav", {T0, (int) model.vocoder.head2_w->ne[2]}, ggml_tensor_to_time_channel(ggml_graph_get_tensor(gf, "wav"))});
-        ggml_gallocr_free(allocr);
         ggml_free(ctx);
         if (error) error->clear();
         return true;

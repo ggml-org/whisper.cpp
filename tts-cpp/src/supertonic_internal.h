@@ -303,6 +303,14 @@ struct supertonic_model {
     uint64_t generation_id = 0;
     int n_threads = 0;
     ggml_backend_t backend = nullptr;
+    // Scheduler so ops the GPU backend can't run (notably GGML_OP_CUSTOM
+    // CPU kernels in the vector estimator / vocoder) auto-route to CPU
+    // instead of being silently skipped on a single backend. Always
+    // created: [backend, cpu_backend] for a GPU primary, or a degenerate
+    // [backend] when the primary is itself CPU. cpu_backend stays null in
+    // the CPU-only case (no second CPU backend).
+    ggml_backend_t cpu_backend = nullptr;
+    ggml_backend_sched_t sched = nullptr;
     ggml_context * ctx_w = nullptr;
     ggml_backend_buffer_t buffer_w = nullptr;
 
@@ -560,6 +568,17 @@ void supertonic_graph_compute(const supertonic_model & model, ggml_cgraph * grap
 inline bool model_prefers_cpu_kernels(const supertonic_model & model) {
     return model.backend == nullptr || ggml_backend_is_cpu(model.backend);
 }
+
+// QVAC-19254 — scheduler-based alloc + compute (Option A), used by stages
+// migrated off the per-graph ggml_gallocr.  Pairing contract at each call
+// site:
+//   supertonic_sched_alloc(model, gf);            // reset + allocate via sched
+//   ggml_backend_tensor_set(input_leaf, ...);     // inputs now have memory
+//   supertonic_sched_compute(model, gf);          // run (routes customs -> CPU)
+// The graph topology may be a reused thread_local cache; sched_reset does not
+// touch the user graph, so caches stay valid across calls.
+void supertonic_sched_alloc(const supertonic_model & model, ggml_cgraph * graph);
+void supertonic_sched_compute(const supertonic_model & model, ggml_cgraph * graph);
 
 ggml_tensor * require_tensor(const supertonic_model & model, const std::string & name);
 ggml_tensor * require_source_tensor(const supertonic_model & model, const std::string & source_name);

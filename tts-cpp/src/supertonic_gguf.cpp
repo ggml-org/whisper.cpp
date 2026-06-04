@@ -1657,6 +1657,24 @@ void supertonic_graph_compute(const supertonic_model & model, ggml_cgraph * grap
     ggml_backend_graph_compute(model.backend, graph);
 }
 
+void supertonic_sched_alloc(const supertonic_model & model, ggml_cgraph * graph) {
+    ggml_backend_sched_reset(model.sched);
+    if (!ggml_backend_sched_alloc_graph(model.sched, graph)) {
+        throw std::runtime_error("supertonic_sched_alloc: ggml_backend_sched_alloc_graph failed");
+    }
+}
+
+void supertonic_sched_compute(const supertonic_model & model, ggml_cgraph * graph) {
+    // CPU work inside the sched runs on cpu_backend (GPU primary) or on the
+    // primary itself (CPU-only model). Set its thread count per-call, mirroring
+    // the single-backend path above.
+    ggml_backend_t cpu_b = model.cpu_backend ? model.cpu_backend : model.backend;
+    if (model.n_threads > 0) {
+        ::tts_cpp::detail::backend_set_n_threads(cpu_b, model.n_threads);
+    }
+    ggml_backend_sched_graph_compute(model.sched, graph);
+}
+
 static void bind_vocoder_weights(supertonic_model & model) {
     auto & v = model.vocoder;
     v.normalizer_scale = require_source_tensor(model, "vocoder:tts.ttl.normalizer.scale");
@@ -2037,6 +2055,15 @@ bool load_supertonic_gguf(const std::string & path,
         model.buffer_w = ggml_backend_alloc_ctx_tensors(model.ctx_w, model.backend);
         if (!model.buffer_w) throw std::runtime_error("ggml_backend_alloc_ctx_tensors failed");
 
+        // Mark the weight buffer as WEIGHTS so the scheduler treats these
+        // tensors as immovable and inserts GPU->CPU copies when a CPU-only op
+        // (the GGML_OP_CUSTOM kernels in the vector estimator / vocoder)
+        // consumes them. Without this they default to USAGE_ANY: sched's
+        // weight-aware split/copy path (ggml-backend.cpp) does not fire, some
+        // weights stay on the GPU buffer, and the CPU custom op dereferences a
+        // device offset -> SIGSEGV. Standard llama.cpp/whisper.cpp pattern.
+        ggml_backend_buffer_set_usage(model.buffer_w, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
         for (ggml_tensor * cur = ggml_get_first_tensor(model.ctx_w);
              cur;
              cur = ggml_get_next_tensor(model.ctx_w, cur)) {
@@ -2391,6 +2418,33 @@ bool load_supertonic_gguf(const std::string & path,
                 }
             }
         }
+
+        // QVAC-19254 — build the scheduler.  With a GPU primary, add a
+        // CPU backend so ops the GPU can't run (GGML_OP_CUSTOM, and any
+        // FA the driver rejects) are routed to CPU rather than silently
+        // skipped.  With a CPU primary, the sched is a single-backend
+        // pass-through (no second CPU backend created).  Consumed by
+        // `supertonic_sched_alloc` / `supertonic_sched_compute` in the
+        // per-stage compute helpers.
+        {
+            ggml_backend_t backends[2] = { model.backend, nullptr };
+            int n_backends = 1;
+            if (!::tts_cpp::detail::backend_is_cpu(model.backend)) {
+                model.cpu_backend = ::tts_cpp::detail::init_cpu_backend();
+                if (!model.cpu_backend) {
+                    throw std::runtime_error("init CPU backend for scheduler failed");
+                }
+                backends[1] = model.cpu_backend;
+                n_backends = 2;
+            }
+            model.sched = ggml_backend_sched_new(backends, /*bufts=*/nullptr,
+                                                 n_backends, /*graph_size=*/ 8192,
+                                                 /*parallel=*/ false,
+                                                 /*op_offload=*/ false);
+            if (!model.sched) {
+                throw std::runtime_error("ggml_backend_sched_new failed");
+            }
+        }
     } catch (const std::exception & e) {
         fprintf(stderr, "load_supertonic_gguf: %s\n", e.what());
         gguf_free(gguf_ctx);
@@ -2417,6 +2471,14 @@ void free_supertonic_model(supertonic_model & model) {
     if (model.generation_id != 0) {
         unregister_supertonic_alive(model.generation_id);
     }
+    // QVAC-19254 — free the scheduler before the backends / buffers it
+    // references; the sched holds non-owning pointers to model.backend +
+    // model.cpu_backend, so tearing those down first would leave the
+    // sched with dangling references during its destructor.
+    if (model.sched) {
+        ggml_backend_sched_free(model.sched);
+        model.sched = nullptr;
+    }
     if (model.buffer_w_extra) {
         ggml_backend_buffer_free(model.buffer_w_extra);
         model.buffer_w_extra = nullptr;
@@ -2428,6 +2490,10 @@ void free_supertonic_model(supertonic_model & model) {
     if (model.backend) {
         ggml_backend_free(model.backend);
         model.backend = nullptr;
+    }
+    if (model.cpu_backend) {
+        ggml_backend_free(model.cpu_backend);
+        model.cpu_backend = nullptr;
     }
     if (model.ctx_w_extra) {
         ggml_free(model.ctx_w_extra);

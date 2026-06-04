@@ -87,6 +87,18 @@ struct scoped_timer {
 
 struct model_ctx {
     ggml_backend_t backend = nullptr;
+    // sched [backend, cpu_backend] routes ops the GPU backend can't run
+    // (GGML_OP_CONV_TRANSPOSE_1D in the HiFT vocoder) to CPU instead of asserting;
+    // stays a single-backend pass-through (cpu_backend null) when the primary is
+    // the CPU. Created lazily on the synthesis thread, not in load_s3gen_gguf —
+    // the latter runs in the preload thread and would race conditioning's init_cpu_backend().
+    mutable ggml_backend_t cpu_backend = nullptr;
+    mutable ggml_backend_sched_t sched = nullptr;
+    // Guards the one-time lazy creation of `sched` / `cpu_backend` in
+    // s3gen_sched_alloc. A unique_ptr (not a bare std::once_flag) so model_ctx
+    // stays move-constructible — it is moved into the process-wide cache via
+    // make_unique<model_ctx>(load_s3gen_gguf(...)).
+    mutable std::unique_ptr<std::once_flag> sched_once = std::make_unique<std::once_flag>();
     ggml_context * ctx_w = nullptr;
     ggml_backend_buffer_t buffer_w = nullptr;
     std::map<std::string, ggml_tensor*> tensors;
@@ -100,6 +112,51 @@ struct model_ctx {
     int   n_timesteps = 2;
     float cfg_rate    = 0.0f;
 };
+
+// Allocate + run a graph through the model scheduler — like the single-backend
+// compute() above, but lets sched route unsupported ops to CPU. sched allocates
+// at alloc time, so callers set inputs AFTER s3gen_sched_alloc and before
+// s3gen_sched_compute (S3Gen sites already follow alloc -> set -> compute).
+static void s3gen_sched_alloc(const model_ctx & m, ggml_cgraph * gf) {
+    // Thread-safe one-time creation via call_once: the sched, cpu_backend and the
+    // buffer_w USAGE_WEIGHTS flag are built exactly once, so a future parallel /
+    // batched-synthesis caller cannot race two scheds into existence (leaking one)
+    // or double-mark the buffer. The work is still deferred to the synthesis thread
+    // (not load_s3gen_gguf on the preload thread) so it doesn't race conditioning's
+    // init_cpu_backend(). call_once re-runs the body if it throws, matching the
+    // previous retry-on-failure behaviour.
+    std::call_once(*m.sched_once, [&] {
+        // Mark weights USAGE_WEIGHTS so sched copies a GPU-resident weight to CPU
+        // when a CPU-routed op (conv_transpose_1d) consumes it.
+        ggml_backend_buffer_set_usage(m.buffer_w, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        ggml_backend_t sched_backends[2] = { m.backend, nullptr };
+        int n_sched_backends = 1;
+        if (!::tts_cpp::detail::backend_is_cpu(m.backend)) {
+            m.cpu_backend = ::tts_cpp::detail::init_cpu_backend();
+            if (!m.cpu_backend) throw std::runtime_error("s3gen: init CPU backend for scheduler failed");
+            sched_backends[1] = m.cpu_backend;
+            n_sched_backends = 2;
+        }
+        // graph_size matches the HiFT graph's ggml_new_graph_custom capacity (it
+        // is the only graph routed through sched, and the largest S3Gen graph).
+        m.sched = ggml_backend_sched_new(sched_backends, /*bufts=*/nullptr,
+                                         n_sched_backends, /*graph_size=*/131072,
+                                         /*parallel=*/false, /*op_offload=*/false);
+        if (!m.sched) throw std::runtime_error("s3gen: ggml_backend_sched_new failed");
+    });
+    ggml_backend_sched_reset(m.sched);
+    if (!ggml_backend_sched_alloc_graph(m.sched, gf)) {
+        throw std::runtime_error("s3gen_sched_alloc: ggml_backend_sched_alloc_graph failed");
+    }
+}
+
+static void s3gen_sched_compute(const model_ctx & m, ggml_cgraph * gf) {
+    // CPU work inside the sched runs on cpu_backend (GPU primary) or the primary
+    // itself (CPU-only model). Set its thread count per call, like compute().
+    ggml_backend_t cpu_b = m.cpu_backend ? m.cpu_backend : m.backend;
+    ::tts_cpp::detail::backend_set_n_threads(cpu_b, g_n_threads);
+    ggml_backend_sched_graph_compute(m.sched, gf);
+}
 
 static ggml_backend_t s3gen_init_backend(int n_gpu_layers, bool verbose) {
     // GPU cascade is centralised in backend_selection.cpp's
@@ -185,9 +242,12 @@ static void s3gen_model_cache_release() {
     if (!g_s3gen_cache_entry) return;
     model_ctx * m = g_s3gen_cache_entry->m.get();
     if (m) {
+        // Free the scheduler before the backends/buffers it references.
+        if (m->sched)    { ggml_backend_sched_free(m->sched);     m->sched    = nullptr; }
         if (m->buffer_w) { ggml_backend_buffer_free(m->buffer_w); m->buffer_w = nullptr; }
         if (m->ctx_w)    { ggml_free(m->ctx_w);                   m->ctx_w    = nullptr; }
         if (m->backend)  { ggml_backend_free(m->backend);         m->backend  = nullptr; }
+        if (m->cpu_backend) { ggml_backend_free(m->cpu_backend);  m->cpu_backend = nullptr; }
         m->tensors.clear();
     }
     g_s3gen_cache_entry.reset();
@@ -258,6 +318,12 @@ static model_ctx load_s3gen_gguf(const std::string & path, int n_gpu_layers, boo
         ggml_tensor * src = ggml_get_tensor(tmp_ctx, ggml_get_name(cur));
         ggml_backend_tensor_set(cur, ggml_get_data(src), 0, ggml_nbytes(src));
     }
+    // NOTE: ALL scheduler setup (m.sched, m.cpu_backend, and the buffer_w
+    // USAGE_WEIGHTS flag) is done lazily in s3gen_sched_alloc on the synthesis
+    // thread — NOT here. load_s3gen_gguf runs in the s3gen_preload background
+    // thread concurrently with the main thread's reference-audio conditioning;
+    // doing backend/buffer setup here disturbs that path
+    // (-> "mel_graph_run: init_cpu_backend failed").
 
     {
         int64_t k_mf = gguf_find_key(g, "s3gen.meanflow");
@@ -583,6 +649,17 @@ static std::unordered_map<int, std::vector<float>>                       g_stft_
 // live as F32, so a templated variant for F16/Q8_0 isn't needed here.
 static const float * cached_cpu_weights_f32(const ggml_tensor * t) {
     if (!t) return nullptr;
+    // Hard invariant: this path memcpys ggml_nbytes() raw bytes into an F32
+    // buffer and uses them as floats, so a block-quantized tensor would be
+    // byte-reinterpreted as float -> NaN.  Fail loudly (naming the tensor)
+    // so a mis-quantized raw-read weight is caught at load time, not heard.
+    if (t->type != GGML_TYPE_F32) {
+        throw std::runtime_error(
+            std::string("cached_cpu_weights_f32: '") + ggml_get_name(t) +
+            "' must be F32 but is " + ggml_type_name(t->type) +
+            "; this weight is read raw on the CPU side and must not be "
+            "block-quantized (add it to the converter deny-list).");
+    }
     {
         std::lock_guard<std::mutex> lk(g_synth_caches_mu);
         auto it = g_weight_cpu_mirror.find(t);
@@ -1908,7 +1985,11 @@ static std::vector<float> run_hift_decode(const model_ctx & m,
 
     graph_cache & cache = g_hift_graph_cache;
     const int64_t cache_key = pack_hift_key(T_mel, T_stft);
-    const bool build_graph = (cache.key != cache_key) || (cache.ctx == nullptr);
+    // Reuse the same-shape HiFT graph only when the direct backend path owns a
+    // cached gallocator. The scheduler path leaves cache.allocr null because
+    // ggml_backend_sched_alloc_graph mutates node->src[] while inserting
+    // GPU<->CPU copies, so scheduler-routed calls must rebuild from a clean graph.
+    const bool build_graph = (cache.key != cache_key) || (cache.ctx == nullptr) || (cache.allocr == nullptr);
     if (build_graph) {
         if (cache.allocr) { ggml_gallocr_free(cache.allocr); cache.allocr = nullptr; }
         if (cache.ctx)    { ggml_free(cache.ctx);            cache.ctx    = nullptr; }
@@ -2062,9 +2143,8 @@ static std::vector<float> run_hift_decode(const model_ctx & m,
     y_trim = ggml_clamp(ctx, y_trim, -0.99f, 0.99f);
     ggml_set_name(y_trim, "wav"); ggml_set_output(y_trim);
     ggml_build_forward_expand(gf, y_trim);
-
-    cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
-    ggml_gallocr_reserve(cache.allocr, gf);
+    // Direct backends allocate cache.allocr below; scheduler-routed backends
+    // allocate via s3gen_sched_alloc so conv_transpose_1d can run on CPU.
     }  // end build_graph
 
     // Cached scaffolding (pulled outside build_graph too — when the graph
@@ -2073,7 +2153,29 @@ static std::vector<float> run_hift_decode(const model_ctx & m,
     const std::vector<float> & ik_data = cached_istft_kernel(n_fft);
     const std::vector<float> & ws_data = cached_window_sum(T_stft, n_fft, hop);
 
-    ggml_gallocr_alloc_graph(cache.allocr, gf);
+    // Capability-gate the scheduler. The [GPU,CPU] ggml_backend_sched exists only
+    // to route CONV_TRANSPOSE_1D to CPU because ggml-opencl / ggml-vulkan lack that
+    // kernel. A backend that can run every op in this graph itself (Metal, CUDA,
+    // CPU) does not need the scheduler — and the scheduler's graph-split aborts on
+    // the iOS Metal driver — so run those directly on the primary backend (the
+    // pre-scheduler path). Only use the scheduler when the primary backend can't
+    // run some op. Generic: asks the actual backend about the actual graph, with
+    // no platform / backend-name hardcoding, so iOS Metal is not regressed by the
+    // Android-motivated routing.
+    bool primary_runs_all = true;
+    const int hift_n_nodes = ggml_graph_n_nodes(gf);
+    for (int i = 0; i < hift_n_nodes; ++i) {
+        if (!ggml_backend_supports_op(m.backend, ggml_graph_node(gf, i))) { primary_runs_all = false; break; }
+    }
+    if (primary_runs_all) {
+        if (!cache.allocr) {
+            cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
+            ggml_gallocr_reserve(cache.allocr, gf);
+        }
+        ggml_gallocr_alloc_graph(cache.allocr, gf);
+    } else {
+        s3gen_sched_alloc(m, gf);
+    }
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "mel_in"),  mel.data(),    0, mel.size()*sizeof(float));
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "s_in"),    s_stft.data(), 0, s_stft.size()*sizeof(float));
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "istft_k"), ik_data.data(),0, ik_data.size()*sizeof(float));
@@ -2100,7 +2202,11 @@ static std::vector<float> run_hift_decode(const model_ctx & m,
         ggml_backend_tensor_set(ggml_graph_get_tensor(gf, e.first.c_str()),
                                 inv.data(), 0, inv.size()*sizeof(float));
     }
-    compute(m.backend, gf);
+    if (primary_runs_all) {
+        compute(m.backend, gf);
+    } else {
+        s3gen_sched_compute(m, gf);
+    }
 
     ggml_tensor * y_trim_out = ggml_graph_get_tensor(gf, "wav");
     std::vector<float> wav(ggml_nelements(y_trim_out));
