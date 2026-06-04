@@ -28,7 +28,7 @@ jobs:
         uses: actions/configure-pages@v5
 
       - name: Setup emsdk
-        uses: mymindstorm/setup-emsdk@v14
+        uses: emscripten-core/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
 
       - name: Build WASM Examples
         # Enable for real build later in whisper.cpp
