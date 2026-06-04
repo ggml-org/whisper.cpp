@@ -445,13 +445,36 @@ ggml_backend_t init_gpu_backend(int n_gpu_layers,
     };
 
     // QVAC-18605 — when a `vulkan_device` override or auto-pick is
-    // requested AND more than one (or any, in the override case)
-    // Vulkan adapter is visible, resolve the chosen Vulkan adapter
-    // and move it to the front of `other_gpu` so `try_init` picks
-    // it first. Default (`vulkan_device == 0`) leaves the registry-
-    // walk order untouched — first Vulkan adapter wins, same as the
-    // pre-QVAC-18605 behaviour.
-    if (vulkan_device != 0) {
+    // requested AND at least one Vulkan adapter is visible, resolve
+    // the chosen Vulkan adapter and move it to the front of
+    // `other_gpu` so `try_init` picks it first.
+    //
+    //   `vulkan_device == 0` (default): tier policy unchanged.
+    //   `vulkan_device == -1`         : auto-pick across Vulkan
+    //                                   adapters; tier policy
+    //                                   unchanged (user asked for
+    //                                   "best Vulkan device", not
+    //                                   "must be Vulkan over OpenCL").
+    //   `vulkan_device  >  0`         : explicit override.  User
+    //                                   asked for Vulkan device N
+    //                                   specifically, so honour it
+    //                                   by trying `other_gpu`
+    //                                   BEFORE `opencl_adreno_700plus`
+    //                                   below — otherwise on a
+    //                                   Snapdragon device that
+    //                                   exposes both backends, the
+    //                                   OpenCL-Adreno tier would
+    //                                   silently shadow the override.
+    //
+    // PR #31 review comment 3355973146: guard on `!vulkan_devs.empty()`
+    // so a `vulkan_device != 0` config doesn't abort `init_gpu_backend`
+    // on a no-Vulkan machine (Metal-only Mac, CUDA-only Linux,
+    // Adreno-OpenCL-only Snapdragon) — without the guard,
+    // `pick_vulkan_device_index` would throw on the empty device list
+    // and prevent the tier policy from falling through to the
+    // available non-Vulkan backend.
+    bool vulkan_override_wins_tier_policy = false;
+    if (vulkan_device != 0 && !vulkan_devs.empty()) {
         const int chosen = pick_vulkan_device_index(vulkan_device,
                                                     vulkan_free_vram,
                                                     vulkan_is_uma);
@@ -463,6 +486,11 @@ ggml_backend_t init_gpu_backend(int n_gpu_layers,
             other_gpu.erase(it);
             other_gpu.insert(other_gpu.begin(), c);
         }
+        // Explicit non-auto override (`vulkan_device > 0`) means the
+        // operator deliberately selected Vulkan; surface that to the
+        // tier dispatch below so the OpenCL-Adreno preference doesn't
+        // silently win on Snapdragon-class devices.
+        if (vulkan_device > 0) vulkan_override_wins_tier_policy = true;
         if (verbose) {
             const Cand & c = vulkan_devs[(size_t) chosen];
             const char * label = c.desc && *c.desc ? c.desc :
@@ -483,12 +511,30 @@ ggml_backend_t init_gpu_backend(int n_gpu_layers,
                     log_prefix, chosen, label);
             }
         }
+    } else if (vulkan_device != 0 && vulkan_devs.empty() && verbose) {
+        // Override requested but no Vulkan adapter present — log and
+        // fall through to the tier policy so the available GPU
+        // (CUDA / Metal / Adreno-OpenCL) still gets used.
+        fprintf(stderr,
+            "%s: vulkan_device=%d requested but no Vulkan adapter visible; "
+            "falling through to the tier policy\n",
+            log_prefix, vulkan_device);
     }
 
+    // Tier dispatch.  When the operator pinned a specific Vulkan
+    // adapter via `vulkan_device > 0`, that explicit choice outranks
+    // the OpenCL-Adreno tier preference (review comment 3355995666):
+    // the user wants Vulkan, give them Vulkan.  Otherwise the tier
+    // policy is unchanged.
+    if (vulkan_override_wins_tier_policy) {
+        if (ggml_backend_t b = try_init(other_gpu)) return b;
+    }
     if (!opencl_adreno_700plus.empty()) {
         if (ggml_backend_t b = try_init(opencl_adreno_700plus)) return b;
     }
-    if (ggml_backend_t b = try_init(other_gpu)) return b;
+    if (!vulkan_override_wins_tier_policy) {
+        if (ggml_backend_t b = try_init(other_gpu)) return b;
+    }
     if (ggml_backend_t b = try_init(opencl_other)) return b;
 
     if (verbose) {
