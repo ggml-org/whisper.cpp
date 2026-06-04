@@ -1,9 +1,10 @@
 name: Publish Docker image
 
 on:
-  push:
-    branches:
-      - master
+  workflow_dispatch: # allows manual triggering
+  schedule:
+    # Rebuild daily rather than on every push because it is expensive
+    - cron: '12 4 * * *'
 
 jobs:
   push_to_registry:
@@ -57,16 +58,14 @@ jobs:
         id: tags
         run: |
           TAGS="ghcr.io/${{ github.repository }}:${{ matrix.config.tag }}"
-          if [ "${{ github.event_name }}" == "push" ]; then
-            TAGS="$TAGS,ghcr.io/${{ github.repository }}:${{ matrix.config.tag }}-${{ env.COMMIT_SHA }}"
-          fi
+          TAGS="$TAGS,ghcr.io/${{ github.repository }}:${{ matrix.config.tag }}-${{ env.COMMIT_SHA }}"
           echo "tags=$TAGS" >> $GITHUB_OUTPUT
 
       - name: Build and push Docker image (tagged)
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ github.event_name == 'push' }}
+          push: true
           platforms: ${{ matrix.config.platform }}
           tags: ${{ steps.tags.outputs.tags }}
           file: ${{ matrix.config.dockerfile }}
