@@ -58,7 +58,7 @@ jobs:
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4
 
       - name: Build ${{ matrix.arch }}
         run: |
@@ -141,7 +141,7 @@ jobs:
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4
 
       - name: Build ${{ matrix.arch }}
         run: |
