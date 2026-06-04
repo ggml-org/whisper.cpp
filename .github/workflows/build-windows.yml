@@ -51,8 +51,6 @@ jobs:
           update: true
           msystem: ${{matrix.sys}}
           install: >-
-            base-devel
-            git
             mingw-w64-${{matrix.env}}-toolchain
             mingw-w64-${{matrix.env}}-cmake
             mingw-w64-${{matrix.env}}-SDL2
