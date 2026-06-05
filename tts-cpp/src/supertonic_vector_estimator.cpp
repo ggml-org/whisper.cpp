@@ -61,29 +61,38 @@ void profile_vector_step_begin(int step) {
 void profile_vector_compute(const supertonic_model & model,
                             ggml_cgraph * graph,
                             int step,
-                            const char * island) {
-    // NOTE: `profile_vector_compute` is invoked from per-cache run
-    // helpers (run_group_graph_cache, run_res_style_qkv_cache, ...)
-    // whose graphs are bound to per-cache `ggml_gallocr_t` storage —
-    // not to the model-level scheduler.  Use
-    // `supertonic_graph_compute` (direct backend compute) so the
-    // tensors' gallocr-bound buffers are honoured.  Routing through
-    // `supertonic_sched_compute` here would force the graph through
-    // the model.sched (which doesn't know about the per-cache
-    // gallocr) and silently corrupt the output.  When a graph
-    // genuinely needs the scheduler (master's QVAC-19254 caches
-    // without their own gallocr), the call site uses
-    // `supertonic_sched_alloc` + `supertonic_sched_compute` directly.
+                            const char * island,
+                            bool use_sched = false) {
+    // Callers pick the compute primitive by allocation strategy:
+    //   use_sched == false : graph is bound to a per-cache
+    //                        `ggml_gallocr_t` (HEAD's F8/F18/F19/...
+    //                        caches).  Use `supertonic_graph_compute`
+    //                        (direct backend compute) so the tensors'
+    //                        gallocr-bound buffers are honoured.
+    //                        Routing through `model.sched` would
+    //                        force the graph through a scheduler that
+    //                        doesn't know about the per-cache gallocr
+    //                        and silently corrupt the output.
+    //   use_sched == true  : graph is allocated by
+    //                        `supertonic_sched_alloc` on the model
+    //                        scheduler (QVAC-19254 fallback when the
+    //                        primary backend doesn't support every
+    //                        op).  Use `supertonic_sched_compute` so
+    //                        the alloc + compute pair is consistent.
+    auto dispatch = [&]() {
+        if (use_sched) supertonic_sched_compute(model, graph);
+        else           supertonic_graph_compute(model, graph);
+    };
     const bool stderr_on = vector_profile_enabled();
     const bool csv_on    = supertonic_profile_csv_enabled();
     if (!stderr_on && !csv_on) {
-        supertonic_graph_compute(model, graph);
+        dispatch();
         return;
     }
     auto & state = vector_profile();
     const auto t0 = std::chrono::steady_clock::now();
     const double pre_ms = std::chrono::duration<double, std::milli>(t0 - state.last).count();
-    supertonic_graph_compute(model, graph);
+    dispatch();
     const auto t1 = std::chrono::steady_clock::now();
     const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     state.last = t1;
@@ -1169,8 +1178,8 @@ std::vector<float> run_text_attention_cache(vector_text_attention_cache & cache,
     ggml_backend_tensor_set(cache.q_tc_in, q_tc.data(), 0, q_tc.size()*sizeof(float));
     ggml_backend_tensor_set(cache.k_tc_in, k_tc.data(), 0, k_tc.size()*sizeof(float));
     ggml_backend_tensor_set(cache.v_tc_in, v_tc.data(), 0, v_tc.size()*sizeof(float));
-    if (direct) supertonic_graph_compute(model, cache.gf);
-    else        profile_vector_compute(model, cache.gf, current_step, island);
+    if (direct) profile_vector_compute(model, cache.gf, current_step, island);
+    else        profile_vector_compute(model, cache.gf, current_step, island, /*use_sched=*/true);
     if (ctx_trace) *ctx_trace = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, "vector_attn_ctx"));
     return tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, "vector_attn_out"));
 }
@@ -1257,8 +1266,8 @@ std::vector<float> run_text_attention_cache_gpu(vector_text_attention_cache & ca
     ggml_backend_tensor_copy(q_src, cache.q_tc_in);
     ggml_backend_tensor_copy(k_src, cache.k_tc_in);
     ggml_backend_tensor_copy(v_src, cache.v_tc_in);
-    if (direct) supertonic_graph_compute(model, cache.gf);
-    else        profile_vector_compute(model, cache.gf, current_step, island);
+    if (direct) profile_vector_compute(model, cache.gf, current_step, island);
+    else        profile_vector_compute(model, cache.gf, current_step, island, /*use_sched=*/true);
     if (ctx_trace) *ctx_trace = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, "vector_attn_ctx"));
     return tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, "vector_attn_out"));
 }
@@ -1762,8 +1771,8 @@ vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache
         ggml_backend_tensor_set(cache.text_in, text_lc_host, 0, (size_t) text_len * 256 * sizeof(float));
         cache.text_in_skip.mark_uploaded(text_lc_host);
     }
-    if (direct) supertonic_graph_compute(model, cache.gf);
-    else        profile_vector_compute(model, cache.gf, current_step, island);
+    if (direct) profile_vector_compute(model, cache.gf, current_step, island);
+    else        profile_vector_compute(model, cache.gf, current_step, island, /*use_sched=*/true);
     if (trace) {
         for (int j = 0; j < 4; ++j) {
             const std::string name = "ve_group" + std::to_string(group) + "_convnext" + std::to_string(j);
@@ -2157,8 +2166,8 @@ vector_res_style_qkv_result run_res_style_qkv_cache(vector_res_style_qkv_cache &
         ggml_backend_tensor_set(cache.kctx_in, kctx_raw.data(), 0, kctx_raw.size() * sizeof(float));
         cache.last_kctx_raw_uploaded = &kctx_raw;
     }
-    if (direct) supertonic_graph_compute(model, cache.gf);
-    else        profile_vector_compute(model, cache.gf, current_step, island);
+    if (direct) profile_vector_compute(model, cache.gf, current_step, island);
+    else        profile_vector_compute(model, cache.gf, current_step, island, /*use_sched=*/true);
     if (trace) {
         push_trace(*trace, residual_name, L, C, tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, residual_name.c_str())));
         push_trace(*trace, norm_name, L, C, tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, norm_name.c_str())));
@@ -2521,8 +2530,8 @@ std::vector<float> run_tail_graph_cache(vector_tail_graph_cache & cache,
     ggml_backend_tensor_set(cache.tail_in, x_tc.data(), 0, x_tc.size()*sizeof(float));
     ggml_backend_tensor_set(cache.tail_mask, latent_mask, 0, (size_t)L*sizeof(float));
     ggml_backend_tensor_set(cache.tail_noise, noisy_latent, 0, (size_t)L*Cin*sizeof(float));
-    if (direct) supertonic_graph_compute(model, cache.gf);
-    else        profile_vector_compute(model, cache.gf, current_step, "tail");
+    if (direct) profile_vector_compute(model, cache.gf, current_step, "tail");
+    else        profile_vector_compute(model, cache.gf, current_step, "tail", /*use_sched=*/true);
     if (trace) {
         for (int j = 0; j < 4; ++j) {
             const std::string name = "ve_last_convnext" + std::to_string(j);
