@@ -37,6 +37,8 @@ ruby_whisper_log_queue_open(ruby_whisper_log_queue *log_queue)
 
   log_queue->is_open = true;
 
+  rb_native_cond_signal(&log_queue->cond);
+
   rb_nativethread_lock_unlock(&log_queue->lock);
 }
 
@@ -104,6 +106,7 @@ ruby_whisper_log_queue_wait(void *args)
   ruby_whisper_log_queue *log_queue = (ruby_whisper_log_queue *)args;
 
   rb_native_cond_wait(&log_queue->cond, &log_queue->lock);
+  rb_nativethread_lock_unlock(&log_queue->lock);
 
   return NULL;
 }
@@ -113,11 +116,7 @@ ruby_whisper_log_queue_wait_ubf(void *args)
 {
   ruby_whisper_log_queue *log_queue = (ruby_whisper_log_queue *)args;
 
-  rb_nativethread_lock_lock(&log_queue->lock);
-
   rb_native_cond_broadcast(&log_queue->cond);
-
-  rb_nativethread_lock_unlock(&log_queue->lock);
 }
 
 typedef struct {
@@ -135,6 +134,7 @@ ruby_whisper_log_queue_drain(ruby_whisper_log_queue *log_queue)
 
   while (log_queue->size == 0 && log_queue->is_open) {
     rb_thread_call_without_gvl(ruby_whisper_log_queue_wait, (void *)log_queue, ruby_whisper_log_queue_wait_ubf, (void *)log_queue);
+    rb_nativethread_lock_lock(&log_queue->lock);
   }
 
   if (log_queue->size == 0 && !log_queue->is_open) {
