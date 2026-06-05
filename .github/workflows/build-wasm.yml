@@ -45,7 +45,21 @@ jobs:
       - name: Verify
         run: emcc -v
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: wasm-ubuntu-22
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
       - name: Build
+        env:
+          CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime
+          CCACHE_COMPILERCHECK: content
         run: |
-          emcmake cmake . -DCMAKE_BUILD_TYPE=${{ matrix.build }}
-          make
+          emcmake cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            "-DCMAKE_C_FLAGS=-ffile-prefix-map=$EMSDK=/emsdk" \
+            "-DCMAKE_CXX_FLAGS=-ffile-prefix-map=$EMSDK=/emsdk"
+          cmake --build build -j $(nproc)
