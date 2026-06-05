@@ -31,11 +31,18 @@ jobs:
       - name: Clone
         uses: actions/checkout@v6
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: quantize-ubuntu-22
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
       - name: Test quantize
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           ./models/download-ggml-model.sh tiny.en
-          cmake -B build
+          cmake -B build -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build --config Release
           ./build/bin/whisper-quantize models/ggml-tiny.en.bin models/ggml-tiny.en-q4_0.bin q4_0
