@@ -31,10 +31,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: vad-ubuntu-latest
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
       - name: Build
         shell: bash
         run: |
-          cmake -B build
+          cmake -B build -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build --config Release
 
       - name: Test
