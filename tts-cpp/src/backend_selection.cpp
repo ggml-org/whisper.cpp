@@ -10,6 +10,7 @@
 #include <cstring>
 #include <mutex>
 #include <regex>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -51,6 +52,70 @@ const char * dev_reg_name(ggml_backend_dev_t dev) {
     if (!dev) return "";
     ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
     return reg ? ggml_backend_reg_name(reg) : "";
+}
+
+// QVAC-18605 — Vulkan multi-adapter pick. Pure logic on the two
+// per-device vectors so the policy stays unit-testable (a richer
+// copy lives in `tts_cpp::supertonic::detail::resolve_vulkan_device_index`
+// with its own DocTest harness; this in-process copy is kept lean so
+// the shared GPU-init helper doesn't introduce a back-edge into the
+// supertonic translation unit).
+//
+//   requested == -1 → auto-pick: argmax(free_vram), but if any
+//                     discrete adapter exists, restrict the argmax
+//                     to the discrete subset (excludes UMA iGPUs
+//                     reporting system RAM as free VRAM).
+//   requested ==  0 → first adapter in registry order.
+//   requested >   0 → that adapter index (0-based against the
+//                     Vulkan-only subset).
+//   requested <  -1 → reserved; throws.
+// Out-of-range positive index throws too. Vectors must be the same
+// length; mismatched non-empty UMA list throws.
+int pick_vulkan_device_index(int requested,
+                             const std::vector<size_t> & free_vram_per_device,
+                             const std::vector<bool> &   is_uma_per_device) {
+    const int dev_count = (int) free_vram_per_device.size();
+    if (dev_count <= 0) {
+        throw std::runtime_error(
+            "tts-cpp: cannot resolve --vulkan-device against an empty "
+            "device list (no Vulkan adapter visible)");
+    }
+    if (!is_uma_per_device.empty() &&
+        is_uma_per_device.size() != free_vram_per_device.size()) {
+        throw std::runtime_error("tts-cpp: is_uma_per_device length mismatch");
+    }
+    if (requested < -1) {
+        throw std::runtime_error(
+            "tts-cpp: --vulkan-device " + std::to_string(requested) +
+            " is reserved (only -1 means auto-pick)");
+    }
+    if (requested == -1) {
+        bool any_discrete = false;
+        if (!is_uma_per_device.empty()) {
+            for (bool u : is_uma_per_device) {
+                if (!u) { any_discrete = true; break; }
+            }
+        }
+        int    best_idx  = 0;
+        size_t best_vram = 0;
+        bool   first     = true;
+        for (int i = 0; i < dev_count; ++i) {
+            if (any_discrete && is_uma_per_device[(size_t) i]) continue;
+            if (first || free_vram_per_device[(size_t) i] > best_vram) {
+                best_idx  = i;
+                best_vram = free_vram_per_device[(size_t) i];
+                first     = false;
+            }
+        }
+        return best_idx;
+    }
+    if (requested >= dev_count) {
+        throw std::runtime_error(
+            "tts-cpp: --vulkan-device " + std::to_string(requested) +
+            " out of range (visible Vulkan adapters: " +
+            std::to_string(dev_count) + ")");
+    }
+    return requested;
 }
 
 } // namespace
@@ -295,7 +360,8 @@ bool is_qualcomm_adreno(const char * name, const char * desc) {
 // The registry walk reaches the same backends in both modes.
 ggml_backend_t init_gpu_backend(int n_gpu_layers,
                                 bool verbose,
-                                const char * log_prefix) {
+                                const char * log_prefix,
+                                int vulkan_device) {
     if (n_gpu_layers <= 0) return nullptr;
     if (!log_prefix) log_prefix = "tts-cpp";
 
@@ -312,6 +378,13 @@ ggml_backend_t init_gpu_backend(int n_gpu_layers,
     std::vector<Cand> opencl_other; // Non-Adreno OpenCL (e.g. desktop)
     int max_adreno_version = -1;
 
+    // QVAC-18605 — track every visible Vulkan adapter so we can apply
+    // the round-12 device-selection policy (vulkan_device index +
+    // free-VRAM auto-pick with UMA bias) before draining the bucket.
+    std::vector<Cand>   vulkan_devs;
+    std::vector<size_t> vulkan_free_vram;
+    std::vector<bool>   vulkan_is_uma;
+
     const size_t n_dev = ggml_backend_dev_count();
     for (size_t i = 0; i < n_dev; ++i) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
@@ -325,6 +398,26 @@ ggml_backend_t init_gpu_backend(int n_gpu_layers,
         const char * desc     = ggml_backend_dev_description(dev);
         const char * reg_name = dev_reg_name(dev);
         const bool   is_opencl = reg_name && std::strcmp(reg_name, "OpenCL") == 0;
+        const bool   is_vulkan = reg_name && std::strcmp(reg_name, "Vulkan") == 0;
+
+        if (is_vulkan) {
+            size_t free = 0, total = 0;
+            ggml_backend_dev_memory(dev, &free, &total);
+            vulkan_devs.push_back({dev, name, desc, reg_name});
+            vulkan_free_vram.push_back(free);
+            vulkan_is_uma.push_back(type == GGML_BACKEND_DEVICE_TYPE_IGPU);
+            if (verbose && vulkan_device == -1) {
+                fprintf(stderr,
+                        "%s: vulkan device %d: %s — free %.0f MB / total %.0f MB%s\n",
+                        log_prefix,
+                        (int) (vulkan_devs.size() - 1),
+                        desc && *desc ? desc : (name && *name ? name : "unknown"),
+                        (double) free  / (1024.0 * 1024.0),
+                        (double) total / (1024.0 * 1024.0),
+                        type == GGML_BACKEND_DEVICE_TYPE_IGPU
+                            ? " [UMA — biased against on hybrid machines]" : "");
+            }
+        }
 
 #if defined(__ANDROID__)
         // Android GPU allowlist: only Qualcomm Adreno is validated for the
@@ -409,10 +502,97 @@ ggml_backend_t init_gpu_backend(int n_gpu_layers,
         return nullptr;
     };
 
+    // QVAC-18605 — when a `vulkan_device` override or auto-pick is
+    // requested AND at least one Vulkan adapter is visible, resolve
+    // the chosen Vulkan adapter and move it to the front of
+    // `other_gpu` so `try_init` picks it first.
+    //
+    //   `vulkan_device == 0` (default): tier policy unchanged.
+    //   `vulkan_device == -1`         : auto-pick across Vulkan
+    //                                   adapters; tier policy
+    //                                   unchanged (user asked for
+    //                                   "best Vulkan device", not
+    //                                   "must be Vulkan over OpenCL").
+    //   `vulkan_device  >  0`         : explicit override.  User
+    //                                   asked for Vulkan device N
+    //                                   specifically, so honour it
+    //                                   by trying `other_gpu`
+    //                                   BEFORE `opencl_adreno_700plus`
+    //                                   below — otherwise on a
+    //                                   Snapdragon device that
+    //                                   exposes both backends, the
+    //                                   OpenCL-Adreno tier would
+    //                                   silently shadow the override.
+    //
+    // PR #31 review comment 3355973146: guard on `!vulkan_devs.empty()`
+    // so a `vulkan_device != 0` config doesn't abort `init_gpu_backend`
+    // on a no-Vulkan machine (Metal-only Mac, CUDA-only Linux,
+    // Adreno-OpenCL-only Snapdragon) — without the guard,
+    // `pick_vulkan_device_index` would throw on the empty device list
+    // and prevent the tier policy from falling through to the
+    // available non-Vulkan backend.
+    bool vulkan_override_wins_tier_policy = false;
+    if (vulkan_device != 0 && !vulkan_devs.empty()) {
+        const int chosen = pick_vulkan_device_index(vulkan_device,
+                                                    vulkan_free_vram,
+                                                    vulkan_is_uma);
+        const ggml_backend_dev_t chosen_dev = vulkan_devs[(size_t) chosen].dev;
+        auto it = std::find_if(other_gpu.begin(), other_gpu.end(),
+                                [&](const Cand & c) { return c.dev == chosen_dev; });
+        if (it != other_gpu.end()) {
+            Cand c = *it;
+            other_gpu.erase(it);
+            other_gpu.insert(other_gpu.begin(), c);
+        }
+        // Explicit non-auto override (`vulkan_device > 0`) means the
+        // operator deliberately selected Vulkan; surface that to the
+        // tier dispatch below so the OpenCL-Adreno preference doesn't
+        // silently win on Snapdragon-class devices.
+        if (vulkan_device > 0) vulkan_override_wins_tier_policy = true;
+        if (verbose) {
+            const Cand & c = vulkan_devs[(size_t) chosen];
+            const char * label = c.desc && *c.desc ? c.desc :
+                                 (c.name && *c.name ? c.name : "unknown");
+            if (vulkan_device == -1) {
+                bool any_discrete = false;
+                for (bool u : vulkan_is_uma) {
+                    if (!u) { any_discrete = true; break; }
+                }
+                fprintf(stderr,
+                    "%s: auto-picked Vulkan device %d (%s) — most free VRAM of %d adapter(s)%s\n",
+                    log_prefix, chosen, label,
+                    (int) vulkan_devs.size(),
+                    any_discrete ? " (round-12 UMA bias)" : "");
+            } else {
+                fprintf(stderr,
+                    "%s: using Vulkan device %d (%s) per --vulkan-device override\n",
+                    log_prefix, chosen, label);
+            }
+        }
+    } else if (vulkan_device != 0 && vulkan_devs.empty() && verbose) {
+        // Override requested but no Vulkan adapter present — log and
+        // fall through to the tier policy so the available GPU
+        // (CUDA / Metal / Adreno-OpenCL) still gets used.
+        fprintf(stderr,
+            "%s: vulkan_device=%d requested but no Vulkan adapter visible; "
+            "falling through to the tier policy\n",
+            log_prefix, vulkan_device);
+    }
+
+    // Tier dispatch.  When the operator pinned a specific Vulkan
+    // adapter via `vulkan_device > 0`, that explicit choice outranks
+    // the OpenCL-Adreno tier preference (review comment 3355995666):
+    // the user wants Vulkan, give them Vulkan.  Otherwise the tier
+    // policy is unchanged.
+    if (vulkan_override_wins_tier_policy) {
+        if (ggml_backend_t b = try_init(other_gpu)) return b;
+    }
     if (!opencl_adreno_700plus.empty()) {
         if (ggml_backend_t b = try_init(opencl_adreno_700plus)) return b;
     }
-    if (ggml_backend_t b = try_init(other_gpu)) return b;
+    if (!vulkan_override_wins_tier_policy) {
+        if (ggml_backend_t b = try_init(other_gpu)) return b;
+    }
     if (ggml_backend_t b = try_init(opencl_other)) return b;
 
     if (verbose) {

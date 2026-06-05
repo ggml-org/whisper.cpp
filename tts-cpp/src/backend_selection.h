@@ -55,9 +55,25 @@ void ensure_backends_loaded();
 // so the existing user-visible logs in the three init sites stay
 // distinguishable; verbose=false suppresses everything except hard
 // errors.
+//
+// `vulkan_device` selects which Vulkan adapter to prefer when more
+// than one is visible in the registry (QVAC-18605 round 3 / 12):
+//   - 0 (default): first Vulkan adapter in registry order.
+//   - N > 0      : the Nth Vulkan adapter (0-indexed); throws on out
+//                  of range so a CLI typo fails loud instead of
+//                  silently falling through to CPU.
+//   - -1         : auto-pick: argmax(free VRAM), with a UMA bias
+//                  that excludes integrated-GPU adapters whenever at
+//                  least one discrete adapter is also visible (avoids
+//                  the iGPU's UMA-reported system RAM dwarfing the
+//                  discrete's true VRAM and silently stealing the
+//                  pick on hybrid desktops/laptops).
+// No effect when zero / one Vulkan adapters are visible, or when the
+// chosen backend is non-Vulkan (CUDA / Metal / OpenCL).
 ggml_backend_t init_gpu_backend(int n_gpu_layers,
                                 bool verbose,
-                                const char * log_prefix);
+                                const char * log_prefix,
+                                int vulkan_device = 0);
 
 // Convenience wrapper that picks up the registered CPU device and
 // returns its init handle. Mirrors parakeet-cpp's

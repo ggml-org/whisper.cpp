@@ -338,28 +338,38 @@ target_link_libraries(my_app PRIVATE tts-cpp::tts-cpp)
 ```
 
 For development out of this in-tree subtree (running the parity
-harnesses, prototyping API changes, etc.) the canonical build is:
+harnesses, prototyping API changes, etc.) the canonical build is the
+**bundled-ggml dev flow**:
 
 ```bash
-# Install the speech-stack ggml port via vcpkg first; then:
+bash tts-cpp/scripts/setup-ggml.sh    # clones qvac-ext-ggml@speech into tts-cpp/ggml/
+cmake -S tts-cpp -B tts-cpp/build -DCMAKE_BUILD_TYPE=Release \
+  -DTTS_CPP_USE_SYSTEM_GGML=OFF
+cmake --build tts-cpp/build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+```
+
+`setup-ggml.sh` checks out the pinned tetherto/qvac-ext-ggml@speech
+commit (which already carries every QVAC infrastructure patch + the
+Supertonic 2 fused custom op family — no `patches/` overlay needed).
+CMakeLists's `add_subdirectory(ggml)` path then consumes it directly
+with `GGML_NATIVE=ON` for native ARM/SIMD codegen — typically ~10%
+faster on M-series than the vcpkg-port flavor's portable build.
+
+Downstream production builds use the system-installed `ggml` instead:
+
+```bash
 cmake -S tts-cpp -B tts-cpp/build -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE=<vcpkg_root>/scripts/buildsystems/vcpkg.cmake
 cmake --build tts-cpp/build -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 ```
 
-`TTS_CPP_USE_SYSTEM_GGML` defaults to `ON` here so the build picks
-up the patched ggml from vcpkg automatically; flipping it `OFF` in
-this subtree is rejected at configure time (no `patches/` to apply).
-GPU acceleration is selected at the ggml-port level - the
-`ggml-speech` port already carries the Metal / Vulkan / OpenCL
-backend support its consumers ask for; pass `--n-gpu-layers 99` at
-runtime to actually use the compiled GPU backend.
-
-If you need a bundled-ggml dev build (`add_subdirectory(ggml)` with
-patches applied locally rather than coming from vcpkg), use the
-standalone [`chatterbox.cpp`](https://github.com/gianni-cor/chatterbox.cpp)
-repo - the source-of-truth this subtree was copied from - which keeps
-`scripts/setup-ggml.sh` + `patches/` for that flow.
+`TTS_CPP_USE_SYSTEM_GGML` defaults to `ON` for this flow, finding
+the `ggml-speech` port from qvac-registry-vcpkg (which pulls
+qvac-ext-ggml@speech with patches as commits).  GPU acceleration is
+selected at the ggml-port level — the port already carries the
+Metal / Vulkan / OpenCL backend support its consumers ask for; pass
+`--n-gpu-layers 99` at runtime to actually use the compiled GPU
+backend.
 
 ### Useful CMake options
 

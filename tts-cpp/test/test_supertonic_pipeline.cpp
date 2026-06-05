@@ -48,18 +48,39 @@ int main(int argc, char ** argv) {
 
         const int n_steps = 5; // matches reference dump
         const int channels = model.hparams.latent_channels;
+        // Mirror dump-supertonic-reference.py: `xt = noise * latent_mask`
+        // (pre-mask the noisy latent before the vector loop) and
+        // `vocoder({"latent": xt * latent_mask})` (post-mask before
+        // vocoder).  The Python harness feeds the ONNX model an already-
+        // masked input, so without these multiplications the C++ test
+        // and the reference dump diverge at every padded tail position.
+        const float * latent_mask_data = npy_as_f32(latent_mask);
         std::vector<float> latent(noise.n_elements());
-        std::memcpy(latent.data(), npy_as_f32(noise), latent.size() * sizeof(float));
+        const float * noise_data = npy_as_f32(noise);
+        for (int c = 0; c < channels; ++c) {
+            for (int t = 0; t < latent_len; ++t) {
+                latent[(size_t) c * latent_len + t] =
+                    noise_data[(size_t) c * latent_len + t] * latent_mask_data[t];
+            }
+        }
 
         std::vector<float> next;
         for (int step = 0; step < n_steps; ++step) {
             if (!supertonic_vector_step_ggml(model, latent.data(), latent_len,
                                              text_emb.data(), text_len,
-                                             npy_as_f32(style_ttl), npy_as_f32(latent_mask),
+                                             npy_as_f32(style_ttl), latent_mask_data,
                                              step, n_steps, next, &error)) {
                 throw std::runtime_error("vector step " + std::to_string(step) + " failed: " + error);
             }
             latent.swap(next);
+        }
+
+        // Post-mask the final latent — the Python harness runs the
+        // vocoder on `xt * latent_mask`, not raw `xt`.
+        for (int c = 0; c < channels; ++c) {
+            for (int t = 0; t < latent_len; ++t) {
+                latent[(size_t) c * latent_len + t] *= latent_mask_data[t];
+            }
         }
 
         std::vector<float> wav;

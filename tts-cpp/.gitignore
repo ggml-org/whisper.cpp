@@ -1,5 +1,8 @@
 # Vendored ggml (cloned separately at setup time; see README)
-ggml/
+/ggml/
+# (We DO commit cmake/vcpkg-overlay-ports/ggml/ — it's the QVAC ggml port
+# overlay carrying our Supertonic custom-op patches.  The `/ggml/` above is
+# anchored to the tts-cpp root only.)
 
 # Build artifacts
 build/
