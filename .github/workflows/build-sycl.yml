@@ -61,24 +61,33 @@ jobs:
         shell: bash
         run: |
           sudo apt update
-          sudo apt install intel-oneapi-compiler-dpcpp-cpp git
+          sudo apt install intel-oneapi-compiler-dpcpp-cpp
 
       - name: install oneAPI MKL library
         shell: bash
         run: |
-          sudo apt install intel-oneapi-mkl-devel git
+          sudo apt install intel-oneapi-mkl-devel
 
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: sycl-${{ matrix.arch }}
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
+        env:
+          CCACHE_SLOPPINESS: time_macros
+          CCACHE_NODIRECT: 1
         run: |
           source /opt/intel/oneapi/setvars.sh
+          export CCACHE_COMPILERCHECK="string:$(icpx --version 2>&1 | head -1)"
           mkdir build
           cd build
-          cmake -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx ..
+          cmake -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache ..
           cmake --build . --config Release -j $(nproc)
 
   ubuntu-22-cmake-sycl-fp16:
@@ -111,22 +120,31 @@ jobs:
         shell: bash
         run: |
           sudo apt update
-          sudo apt install intel-oneapi-compiler-dpcpp-cpp git
+          sudo apt install intel-oneapi-compiler-dpcpp-cpp
 
       - name: install oneAPI MKL library
         shell: bash
         run: |
           sudo apt install intel-oneapi-mkl-devel
 
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: sycl-fp16-${{ matrix.arch }}
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
+        env:
+          CCACHE_SLOPPINESS: time_macros
+          CCACHE_NODIRECT: 1
         run: |
           source /opt/intel/oneapi/setvars.sh
+          export CCACHE_COMPILERCHECK="string:$(icpx --version 2>&1 | head -1)"
           mkdir build
           cd build
-          cmake -DGGML_SYCL_F16=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx ..
+          cmake -DGGML_SYCL_F16=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache ..
           cmake --build . --config Release -j $(nproc)
