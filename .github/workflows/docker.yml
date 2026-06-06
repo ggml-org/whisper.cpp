@@ -69,3 +69,5 @@ jobs:
           platforms: ${{ matrix.config.platform }}
           tags: ${{ steps.tags.outputs.tags }}
           file: ${{ matrix.config.dockerfile }}
+          secrets: |
+            HF_TOKEN=${{ secrets.HF_TOKEN }}

@@ -16,7 +16,7 @@ RUN apt-get update && \
 
 COPY .. .
 # Enable muBLAS
-RUN make base.en CMAKE_ARGS="-DGGML_MUSA=1"
+RUN --mount=type=secret,id=HF_TOKEN,required=false,env=HF_TOKEN make base.en CMAKE_ARGS="-DGGML_MUSA=1"
 
 RUN find /app/build -name "*.o" -delete && \
     find /app/build -name "*.a" -delete && \
