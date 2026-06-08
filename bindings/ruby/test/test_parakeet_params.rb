@@ -6,10 +6,7 @@ class TestParakeetParams < TestBase
     :offset_ms,
     :duration_ms,
     :no_context,
-    :audio_ctx,
-    :chunk_length_ms,
-    :left_context_ms,
-    :right_context_ms
+    :audio_ctx
   ]
 
   def setup
@@ -53,27 +50,6 @@ class TestParakeetParams < TestBase
 
     @params.audio_ctx = 1
     assert_equal 1, @params.audio_ctx
-  end
-
-  def test_chunk_length_ms
-    assert_equal 10_000, @params.chunk_length_ms
-
-    @params.chunk_length_ms = 30_000
-    assert_equal 30_000, @params.chunk_length_ms
-  end
-
-  def test_left_context_ms
-    assert_equal 10_000, @params.left_context_ms
-
-    @params.left_context_ms = 30_000
-    assert_equal 30_000, @params.left_context_ms
-  end
-
-  def test_right_context_ms
-    assert_equal 4_960, @params.right_context_ms
-
-    @params.right_context_ms = 5_000
-    assert_equal 5_000, @params.right_context_ms
   end
 
   def test_new_with_kw_args
