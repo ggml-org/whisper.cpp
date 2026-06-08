@@ -920,6 +920,23 @@ struct whisper_state {
     // [EXPERIMENTAL] speed-up techniques
     int32_t exp_n_audio_ctx = 0; // 0 - use default
 
+    // [resumable / streaming] incremental decoding state
+    bool                       rs_active     = false; // set while a resumable whisper_full_with_state call is running
+    bool                       rs_finalize   = false; // process the trailing (< 30s) window with padding
+    int                        rs_seek       = 0;     // persisted seek position, in mel frames
+    int                        rs_n_frames   = 0;     // number of real mel frames accumulated (== mel.n_len_org)
+    int                        rs_n_pad      = 0;     // extra trailing "straddle" frames generated at finalize
+    std::vector<float>         rs_mel_raw;            // raw (un-normalized) log-mel, frame-major: [frame*n_mel + band]
+    std::vector<float>         rs_pcm_buf;            // unconsumed PCM samples for continuous framing
+    int                        rs_pcm_off    = 0;     // offset into rs_pcm_buf of the next not-yet-produced frame
+    std::vector<float>         rs_lead;               // first samples buffered until the reflective pad can be built
+    bool                       rs_prepad_done = false;// reflective front pad has been emitted
+    int64_t                    rs_n_samples_in = 0;   // total appended samples (diagnostics)
+    bool                       rs_lang_done  = false; // language has been detected/fixed for this stream
+    float                      rs_global_max = -1e20f;// global raw max (WHISPER_MEL_NORM_GLOBAL)
+    float                      rs_prev_ref   = 0.0f;  // previous window reference level (WHISPER_MEL_NORM_WINDOW)
+    bool                       rs_have_ref   = false; // rs_prev_ref initialized
+
     whisper_vad_context * vad_context = nullptr;
 
     struct vad_segment_info {
@@ -6012,6 +6029,10 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
         /*.vad_model_path              =*/ nullptr,
 
         /* vad_params =*/ whisper_vad_default_params(),
+
+        /*.mel_norm_mode               =*/ WHISPER_MEL_NORM_GLOBAL,
+        /*.mel_norm_release            =*/ 0.05f,
+        /*.mel_norm_max_drop           =*/ 0.0f,
     };
 
     switch (strategy) {
@@ -6035,6 +6056,8 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
 }
 
 // forward declarations
+static void whisper_rs_fill_mel_window(
+        whisper_context * ctx, whisper_state * state, const whisper_full_params & params, int seek);
 static std::vector<float> get_signal_energy(const float * signal, int n_samples, int n_samples_per_half_window);
 static void whisper_exp_compute_token_level_timestamps(
         struct whisper_context & ctx,
@@ -6819,7 +6842,10 @@ int whisper_full_with_state(
     // clear old results
     auto & result_all = state->result_all;
 
-    result_all.clear();
+    // in resumable mode the results accumulate across calls
+    if (!state->rs_active) {
+        result_all.clear();
+    }
 
     if (n_samples > 0) {
         // compute log mel spectrogram
@@ -7030,11 +7056,23 @@ int whisper_full_with_state(
             break;
         }
 
+        // [resumable] only decode windows that are fully backed by real audio;
+        // defer the trailing (< 30s) window until finalize.
+        if (state->rs_active && !state->rs_finalize && seek + WHISPER_CHUNK_SIZE*100 > seek_end) {
+            state->rs_seek = seek;
+            break;
+        }
+
         if (params.encoder_begin_callback) {
             if (params.encoder_begin_callback(ctx, state, params.encoder_begin_callback_user_data) == false) {
                 WHISPER_LOG_ERROR("%s: encoder_begin_callback returned false - aborting\n", __func__);
                 break;
             }
+        }
+
+        // [resumable] materialize the normalized mel for the current window
+        if (state->rs_active) {
+            whisper_rs_fill_mel_window(ctx, state, params, seek);
         }
 
         // encode audio features starting at offset seek
@@ -7762,11 +7800,325 @@ int whisper_full_with_state(
             // update audio window
             seek += seek_delta;
 
+            // [resumable] persist the resume position
+            if (state->rs_active) {
+                state->rs_seek = seek;
+            }
+
             WHISPER_LOG_DEBUG("seek = %d, seek_delta = %d\n", seek, seek_delta);
         }
     }
 
     return 0;
+}
+
+// =====================================================================================
+// Resumable / streaming transcription
+// =====================================================================================
+
+// Compute a single log-mel frame from `frame_size` contiguous samples and append the
+// `n_mel` raw (un-normalized) log10 values to state->rs_mel_raw (frame-major layout).
+static void whisper_rs_append_frame(whisper_context * ctx, whisper_state * state, const float * src) {
+    const whisper_filters & filters = ctx->model.filters;
+
+    const int frame_size = WHISPER_N_FFT;     // 400
+    const int n_fft      = filters.n_fft;     // 201 (= 1 + frame_size/2)
+    const int n_mel      = filters.n_mel;     // 80
+
+    const float * hann = global_cache.hann_window;
+
+    std::vector<float> fft_in (frame_size * 2, 0.0f);
+    std::vector<float> fft_out(frame_size * 2 * 2 * 2);
+
+    // apply Hann window
+    for (int j = 0; j < frame_size; j++) {
+        fft_in[j] = hann[j] * src[j];
+    }
+
+    fft(fft_in.data(), frame_size, fft_out.data());
+
+    // modulus^2 of the complex bins
+    for (int j = 0; j < n_fft; j++) {
+        fft_out[j] = (fft_out[2 * j + 0] * fft_out[2 * j + 0] + fft_out[2 * j + 1] * fft_out[2 * j + 1]);
+    }
+
+    // mel filterbank -> log10 (raw, before normalization)
+    const size_t base = state->rs_mel_raw.size();
+    state->rs_mel_raw.resize(base + n_mel);
+    for (int j = 0; j < n_mel; j++) {
+        double sum = 0.0;
+        int k = 0;
+        for (k = 0; k < n_fft - 3; k += 4) {
+            sum +=
+                    fft_out[k + 0] * filters.data[j * n_fft + k + 0] +
+                    fft_out[k + 1] * filters.data[j * n_fft + k + 1] +
+                    fft_out[k + 2] * filters.data[j * n_fft + k + 2] +
+                    fft_out[k + 3] * filters.data[j * n_fft + k + 3];
+        }
+        for (; k < n_fft; k++) {
+            sum += fft_out[k] * filters.data[j * n_fft + k];
+        }
+        sum = log10(std::max(sum, 1e-10));
+        state->rs_mel_raw[base + j] = (float) sum;
+
+        if ((float) sum > state->rs_global_max) {
+            state->rs_global_max = (float) sum;
+        }
+    }
+}
+
+void whisper_resumable_reset_with_state(struct whisper_context * /*ctx*/, struct whisper_state * state) {
+    state->rs_active       = false;
+    state->rs_finalize     = false;
+    state->rs_seek         = 0;
+    state->rs_n_frames     = 0;
+    state->rs_n_pad        = 0;
+    state->rs_mel_raw.clear();
+    state->rs_pcm_buf.clear();
+    state->rs_pcm_off      = 0;
+    state->rs_lead.clear();
+    state->rs_prepad_done  = false;
+    state->rs_n_samples_in = 0;
+    state->rs_lang_done    = false;
+    state->rs_global_max   = -1e20f;
+    state->rs_prev_ref     = 0.0f;
+    state->rs_have_ref     = false;
+
+    state->result_all.clear();
+    state->prompt_past0.clear();
+    state->prompt_past1.clear();
+
+    state->mel.data.clear();
+    state->mel.n_len     = 0;
+    state->mel.n_len_org = 0;
+}
+
+void whisper_resumable_reset(struct whisper_context * ctx) {
+    whisper_resumable_reset_with_state(ctx, ctx->state);
+}
+
+int whisper_append_audio_with_state(
+        struct whisper_context * ctx,
+          struct whisper_state * state,
+                   const float * samples,
+                           int   n_samples) {
+    if (n_samples < 0 || (n_samples > 0 && samples == nullptr)) {
+        WHISPER_LOG_ERROR("%s: invalid arguments\n", __func__);
+        return -1;
+    }
+
+    const int frame_size  = WHISPER_N_FFT;     // 400
+    const int frame_step  = WHISPER_HOP_LENGTH; // 160
+    const int stage_2_pad = frame_size / 2;     // 200 (reflective front pad)
+
+    state->rs_n_samples_in += n_samples;
+
+    if (!state->rs_prepad_done) {
+        // buffer the first samples until we can build the reflective front pad
+        state->rs_lead.insert(state->rs_lead.end(), samples, samples + n_samples);
+        if ((int) state->rs_lead.size() < stage_2_pad + 1) {
+            return 0; // wait for more audio
+        }
+
+        // reflective pad: reverse of lead[1 .. stage_2_pad] -> lead[200],199,...,1
+        for (int k = 0; k < stage_2_pad; k++) {
+            state->rs_pcm_buf.push_back(state->rs_lead[stage_2_pad - k]);
+        }
+        state->rs_pcm_buf.insert(state->rs_pcm_buf.end(), state->rs_lead.begin(), state->rs_lead.end());
+        state->rs_lead.clear();
+        state->rs_lead.shrink_to_fit();
+        state->rs_prepad_done = true;
+    } else {
+        state->rs_pcm_buf.insert(state->rs_pcm_buf.end(), samples, samples + n_samples);
+    }
+
+    // produce as many complete frames as the available samples allow
+    while ((int) state->rs_pcm_buf.size() - state->rs_pcm_off >= frame_size) {
+        whisper_rs_append_frame(ctx, state, state->rs_pcm_buf.data() + state->rs_pcm_off);
+        state->rs_pcm_off += frame_step;
+        state->rs_n_frames++;
+    }
+
+    // compact the consumed prefix (keep the overlap needed for the next frame)
+    if (state->rs_pcm_off > 0) {
+        state->rs_pcm_buf.erase(state->rs_pcm_buf.begin(), state->rs_pcm_buf.begin() + state->rs_pcm_off);
+        state->rs_pcm_off = 0;
+    }
+
+    return 0;
+}
+
+int whisper_append_audio(struct whisper_context * ctx, const float * samples, int n_samples) {
+    return whisper_append_audio_with_state(ctx, ctx->state, samples, n_samples);
+}
+
+// Fill the normalized, band-major mel slice [seek, seek+2*n_audio_ctx) of state->mel.data
+// from the raw frame-major accumulation, using the configured normalization mode.
+// Columns beyond the real audio (rs_n_frames) are filled with the normalized floor,
+// matching how batch processing pads the trailing window with zero samples.
+static void whisper_rs_fill_mel_window(
+        whisper_context * ctx, whisper_state * state, const whisper_full_params & params, int seek) {
+    const int n_mel   = ctx->model.filters.n_mel;
+    const int n_len   = state->mel.n_len;             // stride (>= rs_n_frames, may include pad)
+    const int n_data  = state->rs_n_frames + state->rs_n_pad; // frames with real mel data (incl. straddle)
+    const int win     = 2 * whisper_n_audio_ctx(ctx); // 3000 frames (30s)
+
+    const int i0      = std::min(seek,       n_len);
+    const int i1      = std::min(seek + win, n_len);  // end of the encode window (incl. pad)
+    const int i1_real = std::min(i1, n_data);         // end of frames backed by real mel data
+    if (i1 <= i0) {
+        return;
+    }
+
+    // reference level for this window
+    float ref;
+    if (params.mel_norm_mode == WHISPER_MEL_NORM_WINDOW) {
+        // raw, un-clamped peak of the current window (computed over the real frames only).
+        // this honest value is what feeds the release average.
+        float wmax = -1e20f;
+        for (int i = i0; i < i1_real; i++) {
+            const float * f = state->rs_mel_raw.data() + (size_t) i * n_mel;
+            for (int j = 0; j < n_mel; j++) {
+                if (f[j] > wmax) wmax = f[j];
+            }
+        }
+
+        if (!state->rs_have_ref) {
+            ref = wmax;                          // first window seeds the envelope
+        } else if (wmax >= state->rs_prev_ref) {
+            ref = wmax;                          // attack: instantaneous / free movement up
+        } else {
+            // release: exponential moving average toward the (lower) current peak
+            float a = params.mel_norm_release;
+            if (a <= 0.0f || a > 1.0f) a = 1.0f;
+            ref = a * wmax + (1.0f - a) * state->rs_prev_ref;
+            // optional hard cap on how far the reference may drop in one window
+            if (params.mel_norm_max_drop > 0.0f) {
+                ref = std::max(ref, state->rs_prev_ref - params.mel_norm_max_drop);
+            }
+        }
+        state->rs_prev_ref = ref;
+        state->rs_have_ref = true;
+    } else {
+        ref = state->rs_global_max;
+    }
+
+    const float floor_v = ref - 8.0f;
+    const float pad_val = (floor_v + 4.0f) / 4.0f; // normalized floor (== batch zero-sample padding)
+
+    for (int j = 0; j < n_mel; j++) {
+        // real audio frames
+        for (int i = i0; i < i1_real; i++) {
+            float v = state->rs_mel_raw[(size_t) i * n_mel + j];
+            if (v < floor_v) v = floor_v;
+            state->mel.data[(size_t) j * n_len + i] = (v + 4.0f) / 4.0f;
+        }
+        // trailing pad frames (finalize)
+        for (int i = std::max(i0, i1_real); i < i1; i++) {
+            state->mel.data[(size_t) j * n_len + i] = pad_val;
+        }
+    }
+}
+
+int whisper_full_resumable_with_state(
+        struct whisper_context * ctx,
+          struct whisper_state * state,
+    struct whisper_full_params   params,
+                          bool   finalize) {
+    const int win = 2 * whisper_n_audio_ctx(ctx); // 3000 frames (30s)
+
+    // nothing to do yet: not enough audio for even a single complete window
+    if (!finalize && state->rs_n_frames - state->rs_seek < win) {
+        return 0;
+    }
+    if (state->rs_n_frames <= state->rs_seek) {
+        return 0;
+    }
+
+    // [finalize] generate the trailing "straddle" frames whose 25ms window overlaps the
+    // real-audio / zero-pad boundary. Batch processing computes these from real audio +
+    // zero padding; we reproduce them by padding the unconsumed PCM tail with one frame of
+    // zeros. The remaining (fully-zero) pad frames are emitted as a constant by the fill.
+    if (finalize && state->rs_n_pad == 0 &&
+        (int) state->rs_pcm_buf.size() - state->rs_pcm_off > 0) {
+        std::vector<float> tail(state->rs_pcm_buf.begin() + state->rs_pcm_off, state->rs_pcm_buf.end());
+        tail.insert(tail.end(), WHISPER_N_FFT, 0.0f);
+        int off = 0;
+        while ((int) tail.size() - off >= WHISPER_N_FFT) {
+            whisper_rs_append_frame(ctx, state, tail.data() + off);
+            off += WHISPER_HOP_LENGTH;
+            state->rs_n_pad++;
+        }
+    }
+
+    // expose the accumulated frames as the (band-major) mel buffer for the encoder.
+    // the per-window normalized values are written lazily by whisper_rs_fill_mel_window().
+    // on finalize we reserve an extra window of pad columns so the trailing (< 30s)
+    // window can be padded exactly like batch processing does (zero-sample padding).
+    const int pad = finalize ? win : 0;
+    state->mel.n_mel     = ctx->model.filters.n_mel;
+    state->mel.n_len     = state->rs_n_frames + pad;
+    state->mel.n_len_org = state->rs_n_frames; // seek_end: the decode loop stops at real audio
+    state->mel.data.assign((size_t) state->mel.n_mel * state->mel.n_len, 0.0f);
+
+    // resume seek + context
+    params.offset_ms  = state->rs_seek * 10;
+    params.duration_ms = 0; // up to rs_n_frames
+    if (state->rs_seek > 0) {
+        params.no_context = false; // keep the rolling context already in the state
+    }
+
+    // resolve the language once, on the first processing call (the in-function
+    // auto-detect cannot be used here because the mel is materialized lazily)
+    if (!state->rs_lang_done) {
+        const bool want_detect = (params.language == nullptr || strlen(params.language) == 0 ||
+                                  strcmp(params.language, "auto") == 0 || params.detect_language);
+        if (want_detect && whisper_is_multilingual(ctx)) {
+            whisper_full_params dp = params;
+            dp.mel_norm_mode = WHISPER_MEL_NORM_GLOBAL; // stable normalization for detection
+            whisper_rs_fill_mel_window(ctx, state, dp, state->rs_seek);
+
+            std::vector<float> probs(whisper_lang_max_id() + 1, 0.0f);
+            const int lang_id = whisper_lang_auto_detect_with_state(ctx, state, 0, params.n_threads, probs.data());
+            if (lang_id < 0) {
+                WHISPER_LOG_ERROR("%s: failed to auto-detect language\n", __func__);
+                return -3;
+            }
+            state->lang_id = lang_id;
+            WHISPER_LOG_INFO("%s: auto-detected language: %s\n", __func__, whisper_lang_str(lang_id));
+        } else if (params.language != nullptr && strlen(params.language) > 0 && strcmp(params.language, "auto") != 0) {
+            state->lang_id = whisper_lang_id(params.language);
+        } else {
+            state->lang_id = whisper_lang_id("en");
+        }
+    }
+    params.language        = whisper_lang_str(state->lang_id);
+    params.detect_language = false;
+
+    const int n_seg_before = (int) state->result_all.size();
+
+    state->rs_active   = true;
+    state->rs_finalize = finalize;
+
+    const int ret = whisper_full_with_state(ctx, state, params, nullptr, 0);
+
+    state->rs_active   = false;
+    state->rs_finalize = false;
+
+    if (ret != 0) {
+        return ret < 0 ? ret : -1;
+    }
+
+    state->rs_lang_done = true;
+
+    return (int) state->result_all.size() - n_seg_before;
+}
+
+int whisper_full_resumable(
+        struct whisper_context * ctx,
+    struct whisper_full_params   params,
+                          bool   finalize) {
+    return whisper_full_resumable_with_state(ctx, ctx->state, params, finalize);
 }
 
 int whisper_full(
