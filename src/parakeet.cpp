@@ -3457,9 +3457,6 @@ struct parakeet_full_params parakeet_full_default_params(enum parakeet_sampling_
         /*.duration_ms                      =*/ 0,
         /*.no_context                       =*/ true,
         /*.audio_ctx                        =*/ 0,
-        /*.chunk_length_ms                  =*/ 10000,  // 10 second chunks
-        /*.left_context_ms                  =*/ 10000,  // 10 second left context
-        /*.right_context_ms                 =*/ 4960,   // 4.96 second right context
         /*.new_token_callback               =*/ nullptr,
         /*.new_token_callback_user_data     =*/ nullptr,
         /*.new_segment_callback             =*/ nullptr,
@@ -3470,6 +3467,17 @@ struct parakeet_full_params parakeet_full_default_params(enum parakeet_sampling_
         /*.encoder_begin_callback_user_data =*/ nullptr,
         /*.abort_callback                   =*/ nullptr,
         /*.abort_callback_user_data         =*/ nullptr,
+    };
+
+    return result;
+}
+
+struct parakeet_stream_params parakeet_stream_default_params(enum parakeet_sampling_strategy strategy) {
+    struct parakeet_stream_params result = {
+        /*.full_params                      =*/ parakeet_full_default_params(strategy),
+        /*.chunk_length_ms                  =*/ 10000,  // 10 second chunks
+        /*.left_context_ms                  =*/ 10000,  // 10 second left context
+        /*.right_context_ms                 =*/ 4960,   // 4.96 second right context
     };
 
     return result;
@@ -3624,14 +3632,14 @@ static int ms_to_n_samples(int ms) {
 int parakeet_stream_init(
         struct parakeet_context * ctx,
           struct parakeet_state * state,
-    struct parakeet_full_params   params) {
+    struct parakeet_stream_params   stream_params) {
     if (ctx == nullptr || state == nullptr) {
         return -1;
     }
 
-    const int n_left_ctx  = ms_to_n_samples(params.left_context_ms);
-    const int n_chunk     = ms_to_n_samples(params.chunk_length_ms);
-    const int n_right_ctx = ms_to_n_samples(params.right_context_ms);
+    const int n_left_ctx  = ms_to_n_samples(stream_params.left_context_ms);
+    const int n_chunk     = ms_to_n_samples(stream_params.chunk_length_ms);
+    const int n_right_ctx = ms_to_n_samples(stream_params.right_context_ms);
 
     if (n_left_ctx < 0 || n_chunk <= 0 || n_right_ctx < 0) {
         return -1;
@@ -3642,7 +3650,7 @@ int parakeet_stream_init(
     state->stream.n_left_ctx  = n_left_ctx;
     state->stream.n_chunk     = n_chunk;
     state->stream.n_right_ctx = n_right_ctx;
-    state->stream.params      = params;
+    state->stream.params      = stream_params.full_params;
     state->stream.initialized = true;
 
     if (n_left_ctx > 0) {
@@ -3739,8 +3747,8 @@ int parakeet_stream_flush(
 
 // Encode and decode the mel spectrogram already in state, without recomputing it.
 static int parakeet_chunk_with_state(
-        struct parakeet_context * ctx,
-          struct parakeet_state * state,
+      struct parakeet_context   * ctx,
+        struct parakeet_state   * state,
     struct parakeet_full_params   params) {
     return parakeet_chunk(ctx, state, params, nullptr, 0);
 }

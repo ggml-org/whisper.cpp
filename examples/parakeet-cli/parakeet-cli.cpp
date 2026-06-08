@@ -11,9 +11,6 @@
 // command-line parameters
 struct parakeet_params {
     int32_t n_threads         = std::min(4, (int32_t) std::thread::hardware_concurrency());
-    int32_t chunk_length_ms   = 10000;
-    int32_t left_context_ms   = 10000;
-    int32_t right_context_ms  = 4960;
 
     bool use_gpu       = true;
     int32_t gpu_device = 0;
@@ -58,9 +55,6 @@ static bool parakeet_params_parse(int argc, char ** argv, parakeet_params & para
         }
         #define ARGV_NEXT (((i + 1) < argc) ? argv[++i] : requires_value_error(arg))
         else if (arg == "-t"    || arg == "--threads")         { params.n_threads         = std::stoi(ARGV_NEXT); }
-        else if (arg == "-cl"   || arg == "--chunk-length")    { params.chunk_length_ms   = std::stoi(ARGV_NEXT); }
-        else if (arg == "-lc"   || arg == "--left-context")    { params.left_context_ms   = std::stoi(ARGV_NEXT); }
-        else if (arg == "-rc"   || arg == "--right-context")   { params.right_context_ms  = std::stoi(ARGV_NEXT); }
         else if (arg == "-m"    || arg == "--model")           { params.model             = ARGV_NEXT; }
         else if (arg == "-f"    || arg == "--file")            { params.fname_inp.emplace_back(ARGV_NEXT); }
         else if (arg == "-ng"   || arg == "--no-gpu")          { params.use_gpu           = false; }
@@ -87,9 +81,6 @@ static void parakeet_print_usage(int /*argc*/, char ** argv, const parakeet_para
     fprintf(stderr, "options:\n");
     fprintf(stderr, "  -h,     --help              [default] show this help message and exit\n");
     fprintf(stderr, "  -t N,   --threads N         [%-7d] number of threads to use during computation\n", params.n_threads);
-    fprintf(stderr, "  -cl N,  --chunk-length N    [%-7d] chunk length in milliseconds\n",                 params.chunk_length_ms);
-    fprintf(stderr, "  -lc N,  --left-context N    [%-7d] left context in milliseconds\n",                params.left_context_ms);
-    fprintf(stderr, "  -rc N,  --right-context N   [%-7d] right context in milliseconds\n",               params.right_context_ms);
     fprintf(stderr, "  -m,     --model FILE        [%-7s] model path\n",                                  params.model.c_str());
     fprintf(stderr, "  -f,     --file FILE         [%-7s] input audio file\n",                            "");
     fprintf(stderr, "  -ng,    --no-gpu            [%-7s] disable GPU\n",                                 params.use_gpu ? "false" : "true");
@@ -176,17 +167,10 @@ int main(int argc, char ** argv) {
         bool is_first = true;
         struct parakeet_full_params full_params = parakeet_full_default_params(PARAKEET_SAMPLING_GREEDY);
         full_params.n_threads           = params.n_threads;
-        full_params.chunk_length_ms     = params.chunk_length_ms;
-        full_params.left_context_ms     = params.left_context_ms;
-        full_params.right_context_ms    = params.right_context_ms;
         full_params.new_token_callback  = token_callback;
         full_params.new_token_callback_user_data = &is_first;
 
         const int mel_frames = (int)(pcmf32.size() / PARAKEET_HOP_LENGTH);
-        if (mel_frames <= parakeet_n_audio_ctx(pctx)) {
-            full_params.chunk_length_ms = 0;
-        }
-
         int ret = parakeet_full(pctx, full_params, pcmf32.data(), pcmf32.size());
 
         if (ret != 0) {

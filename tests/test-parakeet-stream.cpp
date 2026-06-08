@@ -72,17 +72,17 @@ int main() {
     struct parakeet_context * pctx = parakeet_init_from_file_with_params_no_state(model_path.c_str(), ctx_params);
     if (pctx == nullptr) { return 1; }
 
-    struct parakeet_full_params params = parakeet_full_default_params(PARAKEET_SAMPLING_GREEDY);
-    params.new_token_callback = token_callback;
+    struct parakeet_stream_params stream_params = parakeet_stream_default_params(PARAKEET_SAMPLING_GREEDY);
+    stream_params.full_params.new_token_callback = token_callback;
 
-    params.left_context_ms  = 10000;
-    params.chunk_length_ms  = 10000;
-    params.right_context_ms = 4960;
+    stream_params.left_context_ms  = 10000;
+    stream_params.chunk_length_ms  = 10000;
+    stream_params.right_context_ms = 4960;
 
     parakeet_state * state = parakeet_init_state(pctx);
 
     // initialize streaming state
-    assert(parakeet_stream_init(pctx, state, params) == 0);
+    assert(parakeet_stream_init(pctx, state, stream_params) == 0);
 
     const int samples_batch_size = 1600;
     int position = 0;

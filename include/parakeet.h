@@ -244,10 +244,6 @@ extern "C" {
 
         int  audio_ctx;         // overwrite the audio context size (0 = use default)
 
-        int  chunk_length_ms;  // length of each chunk in ms
-        int  left_context_ms;  // left context in ms
-        int  right_context_ms; // right context in ms
-
         // called for every newly generated text segment
         parakeet_new_segment_callback new_segment_callback;
         void * new_segment_callback_user_data;
@@ -269,12 +265,22 @@ extern "C" {
         void * abort_callback_user_data;
     };
 
+    struct parakeet_stream_params {
+        struct parakeet_full_params full_params;
+
+        int  chunk_length_ms;  // length of each chunk in ms
+        int  left_context_ms;  // left context in ms
+        int  right_context_ms; // right context in ms
+    };
+
     // NOTE: this function allocates memory, and it is the responsibility of the caller to free the pointer - see parakeet_free_context_params() & parakeet_free_params()
     PARAKEET_API struct parakeet_context_params * parakeet_context_default_params_by_ref(void);
     PARAKEET_API struct parakeet_context_params   parakeet_context_default_params       (void);
 
     PARAKEET_API struct parakeet_full_params * parakeet_full_default_params_by_ref(enum parakeet_sampling_strategy strategy);
     PARAKEET_API struct parakeet_full_params   parakeet_full_default_params       (enum parakeet_sampling_strategy strategy);
+
+    PARAKEET_API struct parakeet_stream_params   parakeet_stream_default_params(enum parakeet_sampling_strategy strategy);
 
     // Run the entire model: PCM -> log mel spectrogram -> encoder -> decoder -> text
     // Not thread safe for same context
@@ -304,7 +310,7 @@ extern "C" {
     PARAKEET_API int parakeet_stream_init(
                 struct parakeet_context * ctx,
                   struct parakeet_state * state,
-            struct parakeet_full_params   params);
+          struct parakeet_stream_params   params);
 
     // Push audio samples in streaming mode. Internally this function will structure
     // the samples in a buffer where with a left context, a center chunk, and a

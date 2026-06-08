@@ -74,10 +74,6 @@ int main() {
     params.abort_callback = abort_callback;
     params.abort_callback_user_data = &abort_callback_called;
 
-    params.chunk_length_ms  = 10000;
-    params.left_context_ms  = 10000;
-    params.right_context_ms = 4960;
-
     int ret = parakeet_full(pctx, params, pcmf32.data(), pcmf32.size());
     assert(ret == 0);
     assert(progress_callback_called);
