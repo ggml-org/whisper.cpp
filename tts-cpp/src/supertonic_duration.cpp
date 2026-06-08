@@ -4,11 +4,24 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace tts_cpp::supertonic::detail {
 namespace {
+
+// See `release_duration_thread_local_caches` below.  Mirrors the
+// registry in supertonic_vector_estimator.cpp.
+thread_local std::vector<std::function<void()>> g_tl_release_thunks;
+
+struct tl_register_once {
+    template <typename F>
+    explicit tl_register_once(F && f) {
+        g_tl_release_thunks.push_back(std::forward<F>(f));
+    }
+};
 
 struct f32_tensor {
     std::vector<float> data;
@@ -613,6 +626,8 @@ static bool duration_sentence_proj_ggml_impl(const supertonic_model & model,
         // registry to skip `gallocr_free` against a backend that's
         // already been torn down, same pattern as the other stages.
         thread_local duration_graph_cache cache;
+        thread_local tl_register_once _tl_reg_cache(
+            [&]() { free_duration_graph_cache(cache); });
         if (cache.model != &model || cache.generation_id != model.generation_id ||
             cache.L != L) {
             free_duration_graph_cache(cache);
@@ -857,6 +872,13 @@ bool supertonic_duration_forward_ggml(const supertonic_model & model,
     } catch (const std::exception & e) {
         if (error) *error = e.what();
         return false;
+    }
+}
+
+void release_duration_thread_local_caches() {
+    // See `release_vector_estimator_thread_local_caches` for the contract.
+    for (auto & fn : g_tl_release_thunks) {
+        if (fn) fn();
     }
 }
 

@@ -2464,10 +2464,29 @@ bool load_supertonic_gguf(const std::string & path,
 }
 
 void free_supertonic_model(supertonic_model & model) {
+    // Drive every per-stage thread_local graph cache populated on this
+    // thread through its normal `free_<type>_cache` path WHILE the
+    // backend is still alive — that way the gallocr inside each
+    // cache gets its complete `ggml_gallocr_free` (CPU bookkeeping +
+    // backend buffer release), not the dead-backend skip path in
+    // `supertonic_safe_gallocr_free` which leaks the gallocr's hash
+    // tables / per-leaf records (several KB per cache, 22+ caches on
+    // a single supertonic synth → tens of MB / engine cycle without
+    // this).  Only releases caches on the CALLING thread; other
+    // threads that populated their own thread_local caches fall back
+    // to the lazy-on-next-miss path (unchanged from prior behaviour;
+    // matches the documented one-Engine-per-thread contract).
+    if (model.backend) {
+        release_vector_estimator_thread_local_caches();
+        release_text_encoder_thread_local_caches();
+        release_vocoder_thread_local_caches();
+        release_duration_thread_local_caches();
+    }
     // Unregister BEFORE freeing the backend so any concurrent / subsequent
-    // free_*_cache() call on a stale thread_local cache sees the
-    // generation as no-longer-alive and skips ggml_gallocr_free against
-    // the soon-to-be-dead backend.
+    // free_*_cache() call on a stale thread_local cache (e.g. on another
+    // thread that didn't get its caches released by the calls above)
+    // sees the generation as no-longer-alive and skips ggml_gallocr_free
+    // against the soon-to-be-dead backend.
     if (model.generation_id != 0) {
         unregister_supertonic_alive(model.generation_id);
     }

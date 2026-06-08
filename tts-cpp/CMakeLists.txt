@@ -815,6 +815,7 @@ if (TTS_CPP_BUILD_TESTS)
     add_supertonic_harness(test-supertonic-vector test/test_supertonic_vector.cpp)
     add_supertonic_harness(test-supertonic-vector-trace test/test_supertonic_vector_trace.cpp)
     add_supertonic_harness(test-supertonic-pipeline test/test_supertonic_pipeline.cpp)
+    add_supertonic_harness(test-supertonic-engine-cycle test/test_supertonic_engine_cycle.cpp)
     # OpenCL optimization audit follow-up harnesses (F1–F11).
     add_supertonic_harness(test-supertonic-load-caches    test/test_supertonic_load_caches.cpp)
     add_supertonic_harness(test-supertonic-graph-rewrites test/test_supertonic_graph_rewrites.cpp)

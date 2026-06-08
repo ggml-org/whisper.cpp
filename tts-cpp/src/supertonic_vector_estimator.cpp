@@ -14,11 +14,45 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace tts_cpp::supertonic::detail {
 namespace {
+
+// Per-thread registry of release-thunks for the thread_local graph
+// caches that live in this TU.  Each cache use-site registers exactly
+// once per thread (guarded by a static thread_local once-flag) so the
+// engine destructor's `release_vector_estimator_thread_local_caches()`
+// can drive every populated cache through its normal `free_*_cache`
+// path against the still-live backend — instead of leaving the
+// gallocr's internal hash tables / per-leaf records resident under
+// the dead-backend skip in `supertonic_safe_gallocr_free`.
+thread_local std::vector<std::function<void()>> g_tl_release_thunks;
+
+inline void supertonic_register_tl_cache(std::function<void()> fn) {
+    g_tl_release_thunks.push_back(std::move(fn));
+}
+
+// Sentinel: a `thread_local` instance of this struct constructed
+// next to each `thread_local <cache_type> cache;` declaration runs
+// its constructor exactly once per thread (at first reach of the
+// host function), registering a thunk that drives `cache` through
+// its normal `free_<type>_cache` path on engine teardown.
+struct tl_register_once {
+    template <typename F>
+    explicit tl_register_once(F && f) { supertonic_register_tl_cache(std::forward<F>(f)); }
+};
+
+// One-line registration macro for the thread_local graph caches
+// scattered through the vector-estimator pipeline.  The companion
+// `tl_register_once` sentinel pushes the lambda onto `g_tl_release_thunks`
+// exactly once per thread on first reach of the host function.
+#define SUPERTONIC_REGISTER_TL_CACHE(cache_var, free_fn) \
+    thread_local tl_register_once _tl_reg_##cache_var( \
+        [&]() { free_fn(cache_var); })
 
 struct f32_tensor { std::vector<float> data; int64_t ne[4] = {1,1,1,1}; };
 
@@ -3361,6 +3395,13 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             upload_skip_tracker text_in_skip;
         };
         thread_local ve_front_block_graph_cache front_cache;
+        thread_local tl_register_once _tl_reg_front_cache([&]() {
+            supertonic_safe_gallocr_free(front_cache.allocr, front_cache.generation_id);
+            if (front_cache.ctx) ggml_free(front_cache.ctx);
+            if (front_cache.input_buf) ggml_backend_buffer_free(front_cache.input_buf);
+            if (front_cache.input_ctx) ggml_free(front_cache.input_ctx);
+            front_cache = {};
+        });
         if (front_cache.model != &model ||
             front_cache.generation_id != model.generation_id ||
             front_cache.L != L ||
@@ -3695,6 +3736,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
                                           && v_gpu_attn0 && k_rope_gpu_attn0;
         std::vector<float> q_out, k_out, q_rotated, k_rotated, v_out;
         thread_local vector_text_attention_cache att0_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(att0_cache, free_text_attention_cache);
         std::vector<float> att0_ctx_trace;
         std::vector<float> attn_out_ggml;
         if (front_use_gpu_bridge) {
@@ -3785,6 +3827,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         const std::vector<float> * kctx_raw = nullptr;
         cached_style_layouts(model, style_ttl, style_v_raw, kctx_raw);
         thread_local vector_res_style_qkv_cache style0_res_qkv_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(style0_res_qkv_cache, free_res_style_qkv_cache);
         vector_res_style_qkv_result style0_res_qkv = run_res_style_qkv_cache(
             style0_res_qkv_cache, model, block2_ggml, attn_out_ggml, L, C,
             *style_v_raw, *kctx_raw, current_step,
@@ -3809,6 +3852,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         // trace mode falls back to the legacy host bridge so
         // the trace harness still gets the host vectors.
         thread_local vector_text_attention_cache style0_attn_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(style0_attn_cache, free_text_attention_cache);
         std::vector<float> style0_ctx_trace;
         std::vector<float> style_out_ggml;
         const bool style0_use_gpu_bridge = !include_ggml_trace
@@ -3840,6 +3884,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         // thread_local graph across calls; master's inline-build
         // equivalent has been deliberately replaced by the cache.
         thread_local vector_style_residual_graph_cache style0_res_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(style0_res_cache, free_style_residual_cache);
         std::vector<float> style0_res_trace;
         std::vector<float> style_norm_ggml = run_style_residual_cache(
             style0_res_cache, model, post_ggml, style_out_ggml,
@@ -3849,6 +3894,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         PUSH_GGML_TRACE({"ve_style0_norm", {L, C}, style_norm_ggml});
 
         thread_local vector_group_graph_cache g1_group_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(g1_group_cache, free_group_graph_cache);
         vector_group_graph_result g1_group = run_group_graph_cache(g1_group_cache, model, style_norm_ggml,
             L, C, te_host, text_emb, text_len, current_step,
             1, 6, 7, "vector_estimator:onnx::MatMul_3140", 8,
@@ -3867,6 +3913,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         // back to the legacy host rotation path when the cache
         // didn't wire RoPE in graph (e.g. malformed GGUF).
         thread_local vector_text_attention_cache g1_attn_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(g1_attn_cache, free_text_attention_cache);
         std::vector<float> g1_attn_ctx_trace;
         std::vector<float> g1_attn_out;
         if (g1_group.q_rope_gpu && g1_group.k_rope_gpu && g1_group.v_gpu) {
@@ -3904,6 +3951,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         PUSH_GGML_TRACE({"ve_g1_attn_out", {L, C}, g1_attn_out});
 
         thread_local vector_res_style_qkv_cache g1_res_qkv_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(g1_res_qkv_cache, free_res_style_qkv_cache);
         vector_res_style_qkv_result g1_res_qkv = run_res_style_qkv_cache(
             g1_res_qkv_cache, model, g1_block8, g1_attn_out, L, C,
             *style_v_raw, *kctx_raw, current_step,
@@ -3922,6 +3970,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         std::vector<float> g1_block10 = std::move(g1_res_qkv.post);
         // QVAC-18605 round 9 — style flash-attn GPU bridge for g1.
         thread_local vector_text_attention_cache g1_style_attn_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(g1_style_attn_cache, free_text_attention_cache);
         std::vector<float> g1_style_ctx_trace;
         std::vector<float> g1_style_out;
         const bool g1_style_use_gpu_bridge = !include_ggml_trace
@@ -3952,6 +4001,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         // Mirror of style0_residual block; HEAD's cache reused across
         // calls, master's inline-build equivalent dropped.
         thread_local vector_style_residual_graph_cache g1_style_res_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(g1_style_res_cache, free_style_residual_cache);
         std::vector<float> g1_style_res_trace;
         std::vector<float> g1_style_norm_vec = run_style_residual_cache(
             g1_style_res_cache, model, g1_block10, g1_style_out,
@@ -3961,6 +4011,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         PUSH_GGML_TRACE({"ve_g1_style_norm", {L, C}, g1_style_norm_vec});
 
         thread_local vector_group_graph_cache g2_group_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(g2_group_cache, free_group_graph_cache);
         vector_group_graph_result g2_group = run_group_graph_cache(g2_group_cache, model, g1_style_norm_vec,
             L, C, te_host, text_emb, text_len, current_step,
             2, 12, 13, "vector_estimator:onnx::MatMul_3185", 14,
@@ -3972,6 +4023,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         std::vector<float> g2_block14 = std::move(g2_group.post);
         // 2C-lite — same GPU fast-path / host-fallback pattern as g1.
         thread_local vector_text_attention_cache g2_attn_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(g2_attn_cache, free_text_attention_cache);
         std::vector<float> g2_attn_ctx_trace;
         std::vector<float> g2_attn_out;
         if (g2_group.q_rope_gpu && g2_group.k_rope_gpu && g2_group.v_gpu) {
@@ -4005,6 +4057,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         PUSH_GGML_TRACE({"ve_g2_attn_out", {L, C}, g2_attn_out});
 
         thread_local vector_res_style_qkv_cache g2_res_qkv_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(g2_res_qkv_cache, free_res_style_qkv_cache);
         vector_res_style_qkv_result g2_res_qkv = run_res_style_qkv_cache(
             g2_res_qkv_cache, model, g2_block14, g2_attn_out, L, C,
             *style_v_raw, *kctx_raw, current_step,
@@ -4023,6 +4076,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         std::vector<float> g2_block16 = std::move(g2_res_qkv.post);
         // QVAC-18605 round 9 — style flash-attn GPU bridge for g2.
         thread_local vector_text_attention_cache g2_style_attn_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(g2_style_attn_cache, free_text_attention_cache);
         std::vector<float> g2_style_ctx_trace;
         std::vector<float> g2_style_out;
         const bool g2_style_use_gpu_bridge = !include_ggml_trace
@@ -4051,6 +4105,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
 
         // F8: cached style-residual graph (norm_block = 17 for group 2).
         thread_local vector_style_residual_graph_cache g2_style_res_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(g2_style_res_cache, free_style_residual_cache);
         std::vector<float> g2_style_res_trace;
         std::vector<float> g2_style_norm_vec = run_style_residual_cache(
             g2_style_res_cache, model, g2_block16, g2_style_out,
@@ -4060,6 +4115,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         PUSH_GGML_TRACE({"ve_g2_style_norm", {L, C}, g2_style_norm_vec});
 
         thread_local vector_group_graph_cache g3_group_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(g3_group_cache, free_group_graph_cache);
         vector_group_graph_result g3_group = run_group_graph_cache(g3_group_cache, model, g2_style_norm_vec,
             L, C, te_host, text_emb, text_len, current_step,
             3, 18, 19, "vector_estimator:onnx::MatMul_3230", 20,
@@ -4071,6 +4127,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         std::vector<float> g3_block20 = std::move(g3_group.post);
         // 2C-lite — same GPU fast-path / host-fallback pattern as g1, g2.
         thread_local vector_text_attention_cache g3_attn_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(g3_attn_cache, free_text_attention_cache);
         std::vector<float> g3_attn_ctx_trace;
         std::vector<float> g3_attn_out;
         if (g3_group.q_rope_gpu && g3_group.k_rope_gpu && g3_group.v_gpu) {
@@ -4104,6 +4161,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         PUSH_GGML_TRACE({"ve_g3_attn_out", {L, C}, g3_attn_out});
 
         thread_local vector_res_style_qkv_cache g3_res_qkv_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(g3_res_qkv_cache, free_res_style_qkv_cache);
         vector_res_style_qkv_result g3_res_qkv = run_res_style_qkv_cache(
             g3_res_qkv_cache, model, g3_block20, g3_attn_out, L, C,
             *style_v_raw, *kctx_raw, current_step,
@@ -4122,6 +4180,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         std::vector<float> g3_block22 = std::move(g3_res_qkv.post);
         // QVAC-18605 round 9 — style flash-attn GPU bridge for g3.
         thread_local vector_text_attention_cache g3_style_attn_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(g3_style_attn_cache, free_text_attention_cache);
         std::vector<float> g3_style_ctx_trace;
         std::vector<float> g3_style_out;
         const bool g3_style_use_gpu_bridge = !include_ggml_trace
@@ -4150,6 +4209,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
 
         // F8: cached style-residual graph (norm_block = 23 for group 3).
         thread_local vector_style_residual_graph_cache g3_style_res_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(g3_style_res_cache, free_style_residual_cache);
         std::vector<float> g3_style_res_trace;
         std::vector<float> g3_style_norm_vec = run_style_residual_cache(
             g3_style_res_cache, model, g3_block22, g3_style_out,
@@ -4159,6 +4219,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         PUSH_GGML_TRACE({"ve_g3_style_norm", {L, C}, g3_style_norm_vec});
 
         thread_local vector_tail_graph_cache tail_cache;
+        SUPERTONIC_REGISTER_TL_CACHE(tail_cache, free_tail_graph_cache);
         std::vector<float> next_latent_tc = run_tail_graph_cache(tail_cache, model, g3_style_norm_vec,
             noisy_latent, latent_mask, L, C, Cin, current_step, total_steps,
             include_ggml_trace ? &ggml_trace : nullptr);
@@ -4643,6 +4704,7 @@ bool supertonic_vector_step_one_graph_ggml(const supertonic_model & model,
         const int kv_style = 50; // style attention kv length (fixed by /Expand_output_0)
 
         thread_local vector_step_one_graph_cache cache;
+        SUPERTONIC_REGISTER_TL_CACHE(cache, free_vector_step_one_graph_cache);
         const bool need_rebuild = cache.model != &model ||
                                   cache.generation_id != model.generation_id ||
                                   cache.L != L ||
@@ -4887,6 +4949,7 @@ bool supertonic_vector_loop_one_graph_ggml(const supertonic_model & model,
         const int kv_style = 50;
 
         thread_local vector_loop_one_graph_cache cache;
+        SUPERTONIC_REGISTER_TL_CACHE(cache, free_vector_loop_one_graph_cache);
         const bool need_rebuild = cache.model != &model ||
                                   cache.generation_id != model.generation_id ||
                                   cache.L != L ||
@@ -5132,6 +5195,22 @@ bool supertonic_vector_step_ggml(const supertonic_model & model,
     } catch (const std::exception & e) {
         if (error) *error = e.what();
         return false;
+    }
+}
+
+void release_vector_estimator_thread_local_caches() {
+    // Walk every registered release thunk on the calling thread.  DO NOT
+    // `clear()` the registry afterwards — each `thread_local tl_register_once`
+    // sentinel only constructs once per thread (on first reach of its host
+    // function), so a clear here would leave the registry empty for every
+    // subsequent engine cycle, re-leaking the gallocrs.  The thunks
+    // themselves are cheap (one `std::function` slot each, ~64 bytes) and
+    // safe to re-invoke: each `free_*_cache` is idempotent (cache = {}
+    // after the first call, and the gallocr/ctx are nullptr-guarded), so
+    // a second invocation on the same registry entry from a later engine
+    // cycle's destructor finds an already-empty cache and no-ops.
+    for (auto & fn : g_tl_release_thunks) {
+        if (fn) fn();
     }
 }
 

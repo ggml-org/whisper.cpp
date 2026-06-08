@@ -7,11 +7,38 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace tts_cpp::supertonic::detail {
 namespace {
+
+// See `release_text_encoder_thread_local_caches` below for the
+// contract.  Mirrors the registry in supertonic_vector_estimator.cpp.
+thread_local std::vector<std::function<void()>> g_tl_release_thunks;
+
+inline void supertonic_register_tl_cache(std::function<void()> fn) {
+    g_tl_release_thunks.push_back(std::move(fn));
+}
+
+struct tl_register_once {
+    template <typename F>
+    explicit tl_register_once(F && f) { supertonic_register_tl_cache(std::forward<F>(f)); }
+};
+
+#define SUPERTONIC_REGISTER_TL_CACHE(cache_var, free_fn) \
+    thread_local tl_register_once _tl_reg_##cache_var( \
+        [&]() { free_fn(cache_var); })
+
+// Array-valued caches register one thunk per slot — `caches[0..N-1]`
+// are independent thread_local instances; freeing only the first
+// would leak the rest.
+#define SUPERTONIC_REGISTER_TL_CACHE_ARRAY(arr_var, N, free_fn) \
+    thread_local tl_register_once _tl_reg_##arr_var([&]() { \
+        for (int _i = 0; _i < (N); ++_i) free_fn((arr_var)[_i]); \
+    })
 
 struct f32_tensor {
     std::vector<float> data;
@@ -564,6 +591,7 @@ void relpos_attention_ggml(const supertonic_model & m, int idx,
                            std::vector<float> & out_lc) {
     if (idx < 0 || idx >= 4) throw std::runtime_error("invalid text relpos layer index");
     thread_local text_relpos_graph_cache caches[4];
+    SUPERTONIC_REGISTER_TL_CACHE_ARRAY(caches, 4, free_relpos_cache);
     text_relpos_graph_cache & cache = caches[idx];
     if (cache.model != &m || cache.generation_id != m.generation_id ||
         cache.idx != idx || cache.L != L || cache.C != C) {
@@ -647,6 +675,7 @@ void build_ffn_cache(text_ffn_graph_cache & cache,
 void ffn_block_ggml(const supertonic_model & m, int idx, std::vector<float> & x, int L, int C) {
     if (idx < 0 || idx >= 4) throw std::runtime_error("invalid text ffn layer index");
     thread_local text_ffn_graph_cache caches[4];
+    SUPERTONIC_REGISTER_TL_CACHE_ARRAY(caches, 4, free_ffn_cache);
     text_ffn_graph_cache & cache = caches[idx];
     if (cache.model != &m || cache.generation_id != m.generation_id ||
         cache.idx != idx || cache.L != L || cache.C != C) {
@@ -1045,6 +1074,7 @@ void speech_prompted_attention_ggml(const supertonic_model & m, int idx,
     // gain nothing — sync points don't exist on CPU.
     if (!model_prefers_cpu_kernels(m)) {
         thread_local speech_prompted_merged_cache merged_caches[2];
+        SUPERTONIC_REGISTER_TL_CACHE_ARRAY(merged_caches, 2, free_speech_prompted_merged_cache);
         speech_prompted_merged_cache & merged = merged_caches[idx];
         if (merged.model != &m || merged.generation_id != m.generation_id ||
             merged.idx != idx || merged.L != L || merged.Lctx != Lctx ||
@@ -1069,6 +1099,7 @@ void speech_prompted_attention_ggml(const supertonic_model & m, int idx,
     // shared cache key.  The inner flash-attention graph is still
     // cached separately in `speech_attention_cache` below.
     thread_local speech_qkv_graph_cache qkv_caches[2];
+    SUPERTONIC_REGISTER_TL_CACHE_ARRAY(qkv_caches, 2, free_speech_qkv_cache);
     // idx already range-checked at the top of the function (round-12
     // dispatch needed it for the merged-cache thread_local array).
     speech_qkv_graph_cache & qkv_cache = qkv_caches[idx];
@@ -1153,6 +1184,7 @@ void speech_prompted_attention_ggml(const supertonic_model & m, int idx,
         }
     }
     thread_local speech_attention_cache caches[2];
+    SUPERTONIC_REGISTER_TL_CACHE_ARRAY(caches, 2, free_speech_attention_cache);
     speech_attention_cache & cache = caches[idx];
     if (cache.model != &m || cache.generation_id != m.generation_id ||
         cache.idx != idx || cache.L != L || cache.Lctx != Lctx ||
@@ -1287,6 +1319,11 @@ bool supertonic_text_encoder_forward_ggml(const supertonic_model & model,
             ggml_tensor * ids_in = nullptr;
         };
         thread_local text_convnext_front_cache convnext_cache;
+        thread_local tl_register_once _tl_reg_convnext_cache([&]() {
+            supertonic_safe_gallocr_free(convnext_cache.allocr, convnext_cache.generation_id);
+            if (convnext_cache.ctx) ggml_free(convnext_cache.ctx);
+            convnext_cache = {};
+        });
         if (convnext_cache.model != &model ||
             convnext_cache.generation_id != model.generation_id ||
             convnext_cache.L != L) {
@@ -1528,6 +1565,13 @@ bool supertonic_text_encoder_trace_ggml(const supertonic_model & model,
     } catch (const std::exception & e) {
         if (error) *error = e.what();
         return false;
+    }
+}
+
+void release_text_encoder_thread_local_caches() {
+    // See `release_vector_estimator_thread_local_caches` for the contract.
+    for (auto & fn : g_tl_release_thunks) {
+        if (fn) fn();
     }
 }
 
