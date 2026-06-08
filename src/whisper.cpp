@@ -935,6 +935,7 @@ struct whisper_state {
     bool                       rs_lang_done  = false; // language has been detected/fixed for this stream
     float                      rs_global_max = -1e20f;// global raw max (WHISPER_MEL_NORM_GLOBAL)
     float                      rs_prev_ref   = 0.0f;  // previous window reference level (WHISPER_MEL_NORM_WINDOW)
+    int                        rs_prev_ref_seek = 0;  // seek (frames) at which rs_prev_ref was last updated
     bool                       rs_have_ref   = false; // rs_prev_ref initialized
 
     whisper_vad_context * vad_context = nullptr;
@@ -6031,7 +6032,7 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
         /* vad_params =*/ whisper_vad_default_params(),
 
         /*.mel_norm_mode               =*/ WHISPER_MEL_NORM_GLOBAL,
-        /*.mel_norm_release            =*/ 0.05f,
+        /*.mel_norm_half_life          =*/ 3.0f,
         /*.mel_norm_max_drop           =*/ 0.0f,
     };
 
@@ -7882,6 +7883,7 @@ void whisper_resumable_reset_with_state(struct whisper_context * /*ctx*/, struct
     state->rs_lang_done    = false;
     state->rs_global_max   = -1e20f;
     state->rs_prev_ref     = 0.0f;
+    state->rs_prev_ref_seek = 0;
     state->rs_have_ref     = false;
 
     state->result_all.clear();
@@ -7988,17 +7990,26 @@ static void whisper_rs_fill_mel_window(
         } else if (wmax >= state->rs_prev_ref) {
             ref = wmax;                          // attack: instantaneous / free movement up
         } else {
-            // release: exponential moving average toward the (lower) current peak
-            float a = params.mel_norm_release;
-            if (a <= 0.0f || a > 1.0f) a = 1.0f;
-            ref = a * wmax + (1.0f - a) * state->rs_prev_ref;
-            // optional hard cap on how far the reference may drop in one window
-            if (params.mel_norm_max_drop > 0.0f) {
-                ref = std::max(ref, state->rs_prev_ref - params.mel_norm_max_drop);
+            // release: exponential decay toward the (lower) current peak, parameterized by a
+            // half-life in audio seconds. dt is the audio time since the last reference update
+            // (= the seek advance of the previous window), so the behavior is independent of the
+            // model-chosen window stride and of any pauses between calls.
+            const float dt = (seek - state->rs_prev_ref_seek) * 0.01f; // 1 frame = 10 ms
+            float decay = 0.0f; // <= 0 half-life => instantaneous release
+            if (params.mel_norm_half_life > 0.0f && dt > 0.0f) {
+                decay = powf(0.5f, dt / params.mel_norm_half_life);
+            } else if (params.mel_norm_half_life > 0.0f) {
+                decay = 1.0f; // no time elapsed => keep previous reference
+            }
+            ref = wmax + (state->rs_prev_ref - wmax) * decay;
+            // optional cap on the drop rate (log10 power per second)
+            if (params.mel_norm_max_drop > 0.0f && dt > 0.0f) {
+                ref = std::max(ref, state->rs_prev_ref - params.mel_norm_max_drop * dt);
             }
         }
-        state->rs_prev_ref = ref;
-        state->rs_have_ref = true;
+        state->rs_prev_ref      = ref;
+        state->rs_prev_ref_seek = seek;
+        state->rs_have_ref      = true;
     } else {
         ref = state->rs_global_max;
     }

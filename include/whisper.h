@@ -606,12 +606,12 @@ extern "C" {
         int   mel_norm_mode;        // enum whisper_mel_norm_mode; default WHISPER_MEL_NORM_GLOBAL (0)
         // WINDOW mode reference-level envelope follower (in log10 power units):
         //  - attack (when a window gets louder) is instantaneous / free, so we never over-drive
-        //  - release (when it gets quieter) follows an exponential moving average, so a brief
-        //    silence does not amplify background noise and a long steady source (e.g. a generator)
-        //    that stops is forgotten only gradually
-        // The EMA is fed the raw (un-clamped) per-window max, so the history stays honest.
-        float mel_norm_release;     // EMA coefficient for release, in (0,1]; smaller = slower / longer memory
-        float mel_norm_max_drop;    // optional hard cap on how much the reference may drop per window; <= 0 => unlimited
+        //  - release (when it gets quieter) decays exponentially in *audio time* toward the raw
+        //    per-window peak, so a brief silence does not amplify background noise and a long
+        //    steady source (e.g. a generator) that stops is forgotten only gradually
+        // The decay is fed the raw (un-clamped) per-window peak, so the history stays honest.
+        float mel_norm_half_life;   // release half-life in seconds (audio time); <= 0 => instantaneous release
+        float mel_norm_max_drop;    // optional cap on the reference drop rate (log10 power per second); <= 0 => unlimited
     };
 
     // NOTE: this function allocates memory, and it is the responsibility of the caller to free the pointer - see whisper_free_context_params & whisper_free_params()
