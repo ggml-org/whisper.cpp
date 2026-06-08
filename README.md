@@ -199,11 +199,33 @@ speed-up - more than x3 faster compared with CPU-only execution. Here are the in
 
   This will generate the folder `models/ggml-base.en-encoder.mlmodelc`
 
-- Build `whisper.cpp` with Core ML support:
+  To also generate Core ML decoder shards for ANE inference, use:
+
+  ```bash
+  ./models/generate-coreml-model.sh --decoder base.en
+  ```
+
+  This generates the encoder model and decoder shard folders named like `models/ggml-base.en-decoder-cross-input-no-write-*.mlmodelc`.
+
+- Build `whisper.cpp` with Core ML encoder support:
 
   ```bash
   # using CMake
   cmake -B build -DWHISPER_COREML=1
+  cmake --build build -j --config Release
+  ```
+
+  Use `-DWHISPER_COREML_DECODER=1` to compile and run the decoder through Core ML. This can be enabled with the Core ML encoder, or by itself when the encoder should run through ggml or another backend.
+
+  ```bash
+  # using CMake
+  cmake -B build -DWHISPER_COREML=1 -DWHISPER_COREML_DECODER=1
+  cmake --build build -j --config Release
+  ```
+
+  ```bash
+  # using CMake, decoder only
+  cmake -B build -DWHISPER_COREML_DECODER=1
   cmake --build build -j --config Release
   ```
 
@@ -222,6 +244,10 @@ speed-up - more than x3 faster compared with CPU-only execution. Here are the in
 
   ...
   ```
+
+  When built with `-DWHISPER_COREML_DECODER=1`, the decoder runs through Core ML automatically. The Core ML decoder path requires macOS 15 / Core ML stateful model support, the generated decoder shards, the full audio context, flash attention, and an F32/F16 ggml model paired with the exported decoder. It supports the standard `whisper_full` decoding paths that operate on decoder logits, including beam search, best-of sampling, temperature sampling, fallback, and grammar penalties.
+
+  DTW token timestamps are not supported by the Core ML decoder path because the exported decoder shards do not return cross-attention alignment outputs. Partial audio context (`-ac`) is also not supported because the exported decoder shards use fixed, unmasked cross-attention KV inputs for the model's full audio context.
 
   The first run on a device is slow, since the ANE service compiles the Core ML model to some device-specific format.
   Next runs are faster.
