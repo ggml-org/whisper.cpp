@@ -1689,7 +1689,6 @@ static struct ggml_cgraph * parakeet_build_graph_encoder(parakeet_context & pctx
                 rel_pos_scores = ggml_roll(ctx0, rel_pos_scores, 1, 0, 0, 0);
 
                 rel_pos_scores = ggml_reshape_3d(ctx0, rel_pos_scores, n_frame, pos_window + 1, n_head);
-                rel_pos_scores = ggml_cont(ctx0, rel_pos_scores);
                 ggml_format_name(rel_pos_scores, "enc_%d_attn_rel_pos_reshaped", il);
 
                 int center = pos_window / 2;
@@ -1716,7 +1715,6 @@ static struct ggml_cgraph * parakeet_build_graph_encoder(parakeet_context & pctx
             }
 
             struct ggml_tensor * attn_scores = ggml_add(ctx0, content_scores, rel_pos_scores);
-            attn_scores = ggml_cont(ctx0, attn_scores);
             ggml_format_name(attn_scores, "enc_%d_attn_scores", il);
             attn_scores = ggml_scale(ctx0, attn_scores, 1.0f / std::sqrt(d_head));
             attn_scores = ggml_add(ctx0, attn_scores, attn_mask);
