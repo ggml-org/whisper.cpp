@@ -435,12 +435,10 @@ struct parakeet_state {
 
     std::vector<ggml_backend_t> backends;
 
-    parakeet_sched sched_conv;
     parakeet_sched sched_encode;
     parakeet_sched sched_decode;
 
     // outputs from encoder stages
-    struct ggml_tensor * pre_enc_out = nullptr;
     struct ggml_tensor * enc_out     = nullptr;
     struct ggml_tensor * pred_out    = nullptr;
 
@@ -1447,31 +1445,29 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
     return true;
 }
 
-//
-// This function builds the computation graph for the pre-encoder stage.
-//
-// It takes the generated mel spectrogram as an input tensor, which will be set
-// during processing, and performs a number of convolutions to detect/filter
-// features, reduces the time dimension by a factor of 8, and finally projects
-// this information into the models abstract feature space.
-//
-static struct ggml_cgraph * parakeet_build_graph_conv(parakeet_context & pctx, parakeet_state & pstate) {
-    const auto & model   = pctx.model;
-    const auto & hparams = model.hparams;
-    const int n_time     = pstate.n_audio_ctx > 0 ? pstate.n_audio_ctx : hparams.n_audio_ctx;
-    const int n_mels     = hparams.n_mels;
+// conv subsampling + conformer encoder
+static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx, parakeet_state & pstate) {
+    const auto & model    = pctx.model;
+    const auto & hparams  = model.hparams;
+    const int n_mel_time  = pstate.n_audio_ctx > 0 ? pstate.n_audio_ctx : hparams.n_audio_ctx;
+    const int n_mels      = hparams.n_mels;
+    const int n_layer     = hparams.n_audio_layer;
+    const int n_state     = hparams.n_audio_state;
+    const float fc_factor = 0.5f;
 
     struct ggml_init_params params = {
-        /*.mem_size   =*/ pstate.sched_conv.meta.size(),
-        /*.mem_buffer =*/ pstate.sched_conv.meta.data(),
+        /*.mem_size   =*/ pstate.sched_encode.meta.size(),
+        /*.mem_buffer =*/ pstate.sched_encode.meta.data(),
         /*.no_alloc   =*/ true,
     };
 
     struct ggml_context * ctx0 = ggml_init(params);
-    ggml_cgraph * gf = ggml_new_graph(ctx0);
+    ggml_cgraph * gf = ggml_new_graph_custom(ctx0, PARAKEET_MAX_NODES, false);
+
+    // Conv subsampling
 
     // [freq, time]
-    struct ggml_tensor * mel = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_mels, n_time, 1, 1);
+    struct ggml_tensor * mel = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_mels, n_mel_time, 1, 1);
     ggml_set_name(mel, "mel");
     ggml_set_input(mel);
 
@@ -1526,42 +1522,11 @@ static struct ggml_cgraph * parakeet_build_graph_conv(parakeet_context & pctx, p
     cur = ggml_add(ctx0, cur, model.enc_pre_out_b);
 
     ggml_set_name(cur, "pre_enc_out");
-    ggml_set_output(cur);
-    pstate.pre_enc_out = cur;
 
-    ggml_build_forward_expand(gf, cur);
+    // Encoder
+    // cur: [n_state, n_enc_time]
 
-    ggml_free(ctx0);
-
-    return gf;
-}
-
-// This function builds the graph for the encoder part of the model.
-//
-// It takes the output of the pre-encoder convolution above which will have the
-// shape of [hidden_dim, time_frames]
-static struct ggml_cgraph * parakeet_build_graph_encoder(parakeet_context & pctx, parakeet_state & pstate) {
-    const auto & model    = pctx.model;
-    const auto & hparams  = model.hparams;
-    const int n_layer     = hparams.n_audio_layer;
-    const int n_state     = hparams.n_audio_state;
-    const float fc_factor = 0.5f;
-
-    struct ggml_init_params params = {
-        /*.mem_size   =*/ pstate.sched_encode.meta.size(),
-        /*.mem_buffer =*/ pstate.sched_encode.meta.data(),
-        /*.no_alloc   =*/ true,
-    };
-
-    struct ggml_context * ctx0 = ggml_init(params);
-    ggml_cgraph * gf = ggml_new_graph_custom(ctx0, PARAKEET_MAX_NODES, false);
-
-    // Create a view of the output produced by parakeet_build_graph_conv
-    // [feat, time_frames, 1, 1]
-    struct ggml_tensor * cur = ggml_view_tensor(ctx0, pstate.pre_enc_out);
-    ggml_set_name(cur, "encoder_inp");
-
-    // [time_frames, time_frames, 1, 1]]
+    // [time_frames, time_frames]
     struct ggml_tensor * attn_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, cur->ne[1], cur->ne[1]);
     ggml_set_name(attn_mask, "attn_mask");
     ggml_set_input(attn_mask);
@@ -1621,7 +1586,6 @@ static struct ggml_cgraph * parakeet_build_graph_encoder(parakeet_context & pctx
 
             const int n_head = hparams.n_audio_head;
             const int d_head = n_state / n_head;
-            const int n_time = cur->ne[1];
 
             // [feat, time_frames, 1, 1]
             struct ggml_tensor * Q_cur = ggml_mul_mat(ctx0, model.layers[il].attn_q_w, cur);
@@ -1825,78 +1789,59 @@ static bool parakeet_encode_internal(
                    void * abort_callback_data) {
     const int64_t t_start_us = ggml_time_us();
 
-    // conv
-    {
-        auto & sched = pstate.sched_conv.sched;
-
-        ggml_cgraph * gf = parakeet_build_graph_conv(pctx, pstate);
-
-        if (!ggml_backend_sched_alloc_graph(sched, gf)) {
-            // should never happen as we pre-allocate the memory
-            return false;
-        }
-
-        struct ggml_tensor * mel = ggml_graph_get_tensor(gf, "mel");
-
-        // set the input
-        {
-            const auto & mel_inp = pstate.mel;
-            const int n_ctx      = pstate.n_audio_ctx > 0 ? pstate.n_audio_ctx : pctx.model.hparams.n_audio_ctx;
-
-            assert(mel->type == GGML_TYPE_F32);
-            assert(mel_inp.n_mel == pctx.model.hparams.n_mels);
-
-            pstate.inp_mel.resize(ggml_nelements(mel));
-
-            float * dst = pstate.inp_mel.data();
-            memset(dst, 0, ggml_nbytes(mel));
-
-            const int i0 = std::min(mel_offset,         mel_inp.n_len);
-            const int i1 = std::min(mel_offset + n_ctx, mel_inp.n_len);
-
-            const int n_frames_to_copy = i1 - i0;
-            memcpy(dst, mel_inp.data.data() + i0 * mel_inp.n_mel, n_frames_to_copy * mel_inp.n_mel * sizeof(float));
-
-            ggml_backend_tensor_set(mel, pstate.inp_mel.data(), 0, ggml_nelements(mel)*sizeof(float));
-        }
-
-        if (!ggml_graph_compute_helper(sched, gf, n_threads)) {
-            return false;
-        }
-    }
-
-    // encoder
     auto & sched = pstate.sched_encode.sched;
 
-    ggml_cgraph * gf = parakeet_build_graph_encoder(pctx, pstate);
+    ggml_cgraph * gf = parakeet_build_graph_encode(pctx, pstate);
 
     if (!ggml_backend_sched_alloc_graph(sched, gf)) {
         // should never happen as we pre-allocate the memory
         return false;
     }
 
-    // set the inputs
+    // set mel input
+    {
+        struct ggml_tensor * mel = ggml_graph_get_tensor(gf, "mel");
+
+        const auto & mel_inp = pstate.mel;
+        const int n_ctx      = pstate.n_audio_ctx > 0 ? pstate.n_audio_ctx : pctx.model.hparams.n_audio_ctx;
+
+        assert(mel->type == GGML_TYPE_F32);
+        assert(mel_inp.n_mel == pctx.model.hparams.n_mels);
+
+        pstate.inp_mel.resize(ggml_nelements(mel));
+
+        float * dst = pstate.inp_mel.data();
+        memset(dst, 0, ggml_nbytes(mel));
+
+        const int i0 = std::min(mel_offset,         mel_inp.n_len);
+        const int i1 = std::min(mel_offset + n_ctx, mel_inp.n_len);
+
+        memcpy(dst, mel_inp.data.data() + i0 * mel_inp.n_mel, (i1 - i0) * mel_inp.n_mel * sizeof(float));
+
+        ggml_backend_tensor_set(mel, pstate.inp_mel.data(), 0, ggml_nelements(mel)*sizeof(float));
+    }
+
+    // set attention mask
     {
         struct ggml_tensor * attn_mask = ggml_graph_get_tensor(gf, "attn_mask");
         const int n_q = attn_mask->ne[1];
         const int n_k = attn_mask->ne[0];
 
         const int32_t subsampl_factor = pctx.model.hparams.subsampling_factor;
-        const int n_tokens_real = (pstate.mel.n_len_org + subsampl_factor-1) / subsampl_factor;
+        const int n_tokens_real = (pstate.mel.n_len_org + subsampl_factor - 1) / subsampl_factor;
 
         std::vector<float> mask_data(n_q * n_k);
         const float mask_value = -1e30f;
 
         for (int q = 0; q < n_q; ++q) {
             for (int k = 0; k < n_k; ++k) {
-                bool is_padding = (k >= n_tokens_real);
-
-                mask_data[q * n_k + k] = (is_padding) ? mask_value : 0.0f;
+                mask_data[q * n_k + k] = (k >= n_tokens_real) ? mask_value : 0.0f;
             }
         }
         ggml_backend_tensor_set(attn_mask, mask_data.data(), 0, mask_data.size() * sizeof(float));
     }
 
+    // set positional frequency
     {
         struct ggml_tensor * pos_freqs_t = ggml_graph_get_tensor(gf, "pos_freqs");
         const int d_half      = pos_freqs_t->ne[0];
@@ -1909,6 +1854,7 @@ static bool parakeet_encode_internal(
         ggml_backend_tensor_set(pos_freqs_t, freqs.data(), 0, freqs.size() * sizeof(float));
     }
 
+    // set relative position offsets
     {
         struct ggml_tensor * rel_pos_t = ggml_graph_get_tensor(gf, "rel_positions");
         const int window_size = rel_pos_t->ne[1];
@@ -2962,30 +2908,14 @@ struct parakeet_state * parakeet_init_state(parakeet_context * ctx) {
 
     state->batch = parakeet_batch_init(batch_size);
 
-    // conv allocator
-    {
-        bool ok = parakeet_sched_graph_init(state->sched_conv, state->backends,
-                [&]() {
-                    return parakeet_build_graph_conv(*ctx, *state);
-                });
-
-        if (!ok) {
-            PARAKEET_LOG_ERROR("%s: failed to init conv allocator\n", __func__);
-            parakeet_free_state(state);
-            return nullptr;
-        }
-
-        PARAKEET_LOG_INFO("%s: compute buffer (conv)   = %7.2f MB\n", __func__, parakeet_sched_size(state->sched_conv) / 1e6);
-    }
-
-    // encoder allocator
+    // conv/encoder allocator
     bool ok = parakeet_sched_graph_init(state->sched_encode, state->backends,
             [&]() {
-                return parakeet_build_graph_encoder(*ctx, *state);
+                return parakeet_build_graph_encode(*ctx, *state);
             });
 
     if (!ok) {
-        PARAKEET_LOG_ERROR("%s: failed to init encoder allocator\n", __func__);
+        PARAKEET_LOG_ERROR("%s: failed to init encode allocator\n", __func__);
         parakeet_free_state(state);
         return nullptr;
     }
@@ -3218,7 +3148,6 @@ void parakeet_free_state(struct parakeet_state * state) {
 
         parakeet_batch_free(state->batch);
 
-        ggml_backend_sched_free(state->sched_conv.sched);
         ggml_backend_sched_free(state->sched_encode.sched);
         ggml_backend_sched_free(state->sched_decode.sched);
 
@@ -3823,9 +3752,104 @@ int parakeet_full_with_state(
         parakeet_reset_state(state);
     }
 
-    // If no chunking specified, delegate to parakeet_chunk (processes entire audio as one chunk)
+    // If no chunking specified, use mel-chunk encoding to handle audio longer than n_audio_ctx.
     if (params.chunk_length_ms == 0) {
-        return parakeet_chunk(ctx, state, params, samples, n_samples);
+        // Compute mel once for the full audio.
+        if (n_samples > 0) {
+            if (parakeet_pcm_to_mel_with_state(ctx, state, samples, n_samples, params.n_threads) != 0) {
+                PARAKEET_LOG_ERROR("%s: failed to compute log mel spectrogram\n", __func__);
+                return -2;
+            }
+        }
+
+        const int n_mel_total  = state->mel.n_len;
+        const int n_audio_ctx  = ctx->model.hparams.n_audio_ctx;
+        const int subsampling  = ctx->model.hparams.subsampling_factor;
+        const int d_enc        = ctx->model.hparams.n_audio_state;
+
+        if (n_mel_total <= n_audio_ctx) {
+            return parakeet_chunk(ctx, state, params, nullptr, 0);
+        }
+
+        PARAKEET_LOG_DEBUG("%s: audio too long (%d mel > n_audio_ctx=%d), chunked encoding\n",
+                           __func__, n_mel_total, n_audio_ctx);
+
+        if (params.encoder_begin_callback) {
+            if (!params.encoder_begin_callback(ctx, state, params.encoder_begin_callback_user_data)) {
+                PARAKEET_LOG_ERROR("%s: encoder_begin_callback returned false\n", __func__);
+                return -6;
+            }
+        }
+
+        state->enc_out_buffer.clear();
+        int total_enc_frames = 0;
+
+        for (int mel_offset = 0; mel_offset < n_mel_total; mel_offset += n_audio_ctx) {
+            const int chunk_mel = std::min(n_audio_ctx, n_mel_total - mel_offset);
+
+            state->n_audio_ctx   = n_audio_ctx;
+            state->mel.n_len_org = chunk_mel;
+
+            if (!parakeet_encode_internal(*ctx, *state, mel_offset, params.n_threads,
+                                          params.abort_callback, params.abort_callback_user_data)) {
+                PARAKEET_LOG_ERROR("%s: failed to encode chunk at mel_offset=%d\n", __func__, mel_offset);
+                return -6;
+            }
+
+            const int chunk_enc_frames = (chunk_mel + subsampling - 1) / subsampling;
+            const size_t prev_size = state->enc_out_buffer.size();
+            state->enc_out_buffer.resize(prev_size + (size_t)chunk_enc_frames * d_enc);
+            ggml_backend_tensor_get(state->enc_out,
+                                    state->enc_out_buffer.data() + prev_size,
+                                    0,
+                                    (size_t)chunk_enc_frames * d_enc * sizeof(float));
+            total_enc_frames += chunk_enc_frames;
+        }
+
+        state->enc_out_frames = total_enc_frames;
+        state->n_frames       = total_enc_frames;
+
+        const size_t tokens_before = state->decoded_tokens.size();
+
+        if (!parakeet_decode(*ctx, *state, state->batch, params.n_threads, &params)) {
+            PARAKEET_LOG_ERROR("%s: failed to decode\n", __func__);
+            return -7;
+        }
+
+        const size_t tokens_after    = state->decoded_tokens.size();
+        const size_t new_token_count = tokens_after - tokens_before;
+
+        if (new_token_count > 0) {
+            std::string text;
+            std::vector<parakeet_token_data> result_tokens;
+
+            for (size_t i = tokens_before; i < tokens_after; i++) {
+                const auto token_id  = state->decoded_tokens[i];
+                const char * tok_str = parakeet_token_to_str(ctx, token_id);
+                if (tok_str) {
+                    const bool is_first = (tokens_before == 0) && text.empty();
+                    text += sentencepiece_piece_to_text(tok_str, is_first);
+                }
+                result_tokens.push_back(state->decoded_token_data[i]);
+            }
+
+            refine_timestamps_tdt(ctx->vocab, result_tokens);
+
+            if (!text.empty()) {
+                parakeet_segment seg;
+                seg.t0     = 0;
+                seg.t1     = total_enc_frames;
+                seg.text   = text;
+                seg.tokens = result_tokens;
+                result_all.push_back(std::move(seg));
+
+                if (params.new_segment_callback) {
+                    params.new_segment_callback(ctx, state, 1, params.new_segment_callback_user_data);
+                }
+            }
+        }
+
+        return 0;
     }
 
     // Nemo sliding window chunking (chunk raw samples)
