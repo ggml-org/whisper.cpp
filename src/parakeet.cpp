@@ -1700,7 +1700,6 @@ static struct ggml_cgraph * parakeet_build_graph_encoder(parakeet_context & pctx
                                               rel_pos_scores->nb[2],
                                               offset);
 
-                rel_pos_scores = ggml_cont(ctx0, rel_pos_scores);
                 ggml_format_name(rel_pos_scores, "enc_%d_attn_rel_pos_shifted", il);
 
                 rel_pos_scores = ggml_view_3d(ctx0, rel_pos_scores,
