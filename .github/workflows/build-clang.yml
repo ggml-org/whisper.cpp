@@ -48,7 +48,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Set CCACHE_DIR
         run: echo "CCACHE_DIR=${{ runner.temp }}/ccache" >> $GITHUB_ENV
@@ -95,7 +95,7 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
