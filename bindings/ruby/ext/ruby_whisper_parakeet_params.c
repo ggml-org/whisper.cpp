@@ -5,10 +5,7 @@
   ITERATOR(offset_ms, INT) \
   ITERATOR(duration_ms, INT) \
   ITERATOR(no_context, BOOL) \
-  ITERATOR(audio_ctx, INT) \
-  ITERATOR(chunk_length_ms, INT) \
-  ITERATOR(left_context_ms, INT) \
-  ITERATOR(right_context_ms, INT)
+  ITERATOR(audio_ctx, INT)
 
 #define ITERATE_NORMAL_CALLBACK_NAMES(ITERATOR, DATA) \
   ITERATOR(new_segment, DATA) \
