@@ -1,0 +1,148 @@
+name: Sync Upstream & Auto-Release
+
+# Runs daily to detect new upstream whisper.cpp releases.
+# When a new release is found:
+#   - clean merge  → pushes main + creates tag vX.Y.Z → triggers build.yml
+#   - conflict     → opens a PR for manual resolution, does NOT tag
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # daily at 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: 'Force a specific upstream tag (e.g. v1.8.5). Leave blank to auto-detect latest.'
+        required: false
+        type: string
+      dry_run:
+        description: 'Dry run — merge locally but do not push or tag'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-and-tag:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/ggerganov/whisper.cpp || true
+
+      # ── Detect which upstream release to target ──────────────────────────
+      - name: Detect upstream release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ -n "${{ github.event.inputs.upstream_tag }}" ]]; then
+            UPSTREAM_TAG="${{ github.event.inputs.upstream_tag }}"
+            echo "Using manually specified tag: $UPSTREAM_TAG"
+          else
+            UPSTREAM_TAG=$(gh api repos/ggerganov/whisper.cpp/releases/latest --jq '.tag_name')
+            echo "Latest upstream release: $UPSTREAM_TAG"
+          fi
+
+          # Strip leading 'v' for use in artifact filenames
+          VERSION="${UPSTREAM_TAG#v}"
+
+          echo "tag=$UPSTREAM_TAG"   >> $GITHUB_OUTPUT
+          echo "version=$VERSION"    >> $GITHUB_OUTPUT
+
+      # ── Check if we already have a release for this upstream version ──────
+      - name: Check if already released
+        id: check
+        run: |
+          git fetch --tags
+          # Our tags match the upstream tag exactly (e.g. v1.8.4)
+          EXISTING=$(git tag -l "${{ steps.upstream.outputs.tag }}" | head -1)
+          if [[ -n "$EXISTING" ]]; then
+            echo "already_released=true"  >> $GITHUB_OUTPUT
+            echo "::notice::Already have release $EXISTING — nothing to do."
+          else
+            echo "already_released=false" >> $GITHUB_OUTPUT
+            echo "New upstream release detected: ${{ steps.upstream.outputs.tag }}"
+          fi
+
+      # ── Merge upstream tag into main ─────────────────────────────────────
+      - name: Fetch upstream tags
+        if: steps.check.outputs.already_released == 'false'
+        run: git fetch upstream --tags
+
+      - name: Attempt merge
+        if: steps.check.outputs.already_released == 'false'
+        run: |
+          git merge "${{ steps.upstream.outputs.tag }}" --no-edit || echo "CONFLICT=true" >> $GITHUB_ENV
+
+      # ── Conflict path: open PR, do NOT tag ───────────────────────────────
+      - name: Open conflict PR
+        if: steps.check.outputs.already_released == 'false' && env.CONFLICT == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CONFLICT_FILES=$(git diff --name-only --diff-filter=U | tr '\n' ', ')
+          git merge --abort
+
+          BRANCH="sync/${{ steps.upstream.outputs.tag }}"
+          git checkout -b "$BRANCH"
+          # Resolve conflicts by preferring upstream (theirs) so the branch is pushable
+          git merge "${{ steps.upstream.outputs.tag }}" --no-edit --strategy-option=theirs || true
+          git add -A
+          git commit -m "chore: merge upstream ${{ steps.upstream.outputs.tag }} (auto-resolved via theirs)" --allow-empty
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --title "Sync upstream ${{ steps.upstream.outputs.tag }} — conflict resolution needed" \
+            --body "## Upstream sync: ${{ steps.upstream.outputs.tag }}
+
+Conflicts were detected during automatic merge. Files affected:
+
+\`\`\`
+$CONFLICT_FILES
+\`\`\`
+
+**This PR was auto-resolved using upstream (theirs) as a baseline — please review the diff carefully before merging.**
+
+Once merged, manually create tag \`${{ steps.upstream.outputs.tag }}\` on main to trigger the release build:
+\`\`\`bash
+git tag ${{ steps.upstream.outputs.tag }}
+git push origin ${{ steps.upstream.outputs.tag }}
+\`\`\`
+" \
+            --base main \
+            --head "$BRANCH"
+
+          echo "::warning::Merge conflict detected — PR opened for manual resolution. Release build NOT triggered."
+
+      # ── Clean merge path: push main + tag → triggers build.yml ───────────
+      - name: Push merged main
+        if: steps.check.outputs.already_released == 'false' && env.CONFLICT != 'true' && github.event.inputs.dry_run != 'true'
+        run: git push origin HEAD:main
+
+      - name: Create and push release tag
+        if: steps.check.outputs.already_released == 'false' && env.CONFLICT != 'true' && github.event.inputs.dry_run != 'true'
+        run: |
+          TAG="${{ steps.upstream.outputs.tag }}"
+          git tag "$TAG" -m "AMD builds for upstream $TAG"
+          git push origin "$TAG"
+          echo "::notice::Pushed tag $TAG — build.yml will now run and publish the release."
+
+      - name: Dry-run summary
+        if: github.event.inputs.dry_run == 'true' && steps.check.outputs.already_released == 'false' && env.CONFLICT != 'true'
+        run: |
+          echo "DRY RUN — merge was clean. Would have pushed main and tagged ${{ steps.upstream.outputs.tag }}."
+          echo "Re-run with dry_run=false to publish."
