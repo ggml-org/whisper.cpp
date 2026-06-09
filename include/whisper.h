@@ -459,8 +459,14 @@ extern "C" {
 
     // Log-mel normalization mode (used by the resumable/streaming API)
     enum whisper_mel_norm_mode {
-        // Normalize using the global maximum over the whole spectrogram.
-        // This matches whisper_full() / batch behavior and is the default.
+        // Normalize using the maximum log-mel value seen across all audio
+        // appended so far. This is the default.
+        // NOTE: it matches whisper_full() / batch behavior exactly only if the
+        // entire signal is appended before the first whisper_full_resumable()
+        // call. When decoding incrementally, early windows are normalized
+        // against the running max (not the whole-signal max), so a louder
+        // section that arrives later cannot retroactively change an already
+        // decoded window. For most speech this difference is negligible.
         WHISPER_MEL_NORM_GLOBAL = 0,
 
         // Normalize each 30s encode window locally, using a reference level that

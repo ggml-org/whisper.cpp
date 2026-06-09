@@ -40,8 +40,11 @@ microphone / network source.
 
 `whisper_full_params.mel_norm_mode` selects how the log-mel is normalized:
 
-- `WHISPER_MEL_NORM_GLOBAL` (default): normalize against the global maximum,
-  matching `whisper_full()` / batch behavior.
+- `WHISPER_MEL_NORM_GLOBAL` (default): normalize against the maximum seen across
+  all audio appended so far. This matches `whisper_full()` / batch behavior
+  exactly only when the whole signal is appended before the first decode; when
+  decoding incrementally, early windows use the running max rather than the
+  whole-signal max (the difference is negligible for typical speech).
 - `WHISPER_MEL_NORM_WINDOW`: normalize each window against a reference level
   with an envelope follower — instantaneous attack (so loud passages never
   over-drive) and an exponential release with a half-life in audio seconds

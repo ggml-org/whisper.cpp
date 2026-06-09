@@ -937,6 +937,7 @@ struct whisper_state {
     float                      rs_prev_ref   = 0.0f;  // previous window reference level (WHISPER_MEL_NORM_WINDOW)
     int                        rs_prev_ref_seek = 0;  // seek (frames) at which rs_prev_ref was last updated
     bool                       rs_have_ref   = false; // rs_prev_ref initialized
+    bool                       rs_finalized  = false; // a finalize() pass has run; further appends are rejected until reset
 
     whisper_vad_context * vad_context = nullptr;
 
@@ -7885,6 +7886,7 @@ void whisper_resumable_reset_with_state(struct whisper_context * /*ctx*/, struct
     state->rs_prev_ref     = 0.0f;
     state->rs_prev_ref_seek = 0;
     state->rs_have_ref     = false;
+    state->rs_finalized    = false;
 
     state->result_all.clear();
     state->prompt_past0.clear();
@@ -7906,6 +7908,14 @@ int whisper_append_audio_with_state(
                            int   n_samples) {
     if (n_samples < 0 || (n_samples > 0 && samples == nullptr)) {
         WHISPER_LOG_ERROR("%s: invalid arguments\n", __func__);
+        return -1;
+    }
+
+    // appending after a finalize pass would interleave real frames behind the
+    // trailing zero-pad/straddle frames and desync the mel layout. The contract
+    // is finalize-then-reset; reject the misuse loudly instead of corrupting state.
+    if (state->rs_finalized) {
+        WHISPER_LOG_ERROR("%s: cannot append after finalize; call whisper_resumable_reset() first\n", __func__);
         return -1;
     }
 
@@ -7991,9 +8001,10 @@ static void whisper_rs_fill_mel_window(
             ref = wmax;                          // attack: instantaneous / free movement up
         } else {
             // release: exponential decay toward the (lower) current peak, parameterized by a
-            // half-life in audio seconds. dt is the audio time since the last reference update
-            // (= the seek advance of the previous window), so the behavior is independent of the
-            // model-chosen window stride and of any pauses between calls.
+            // half-life in audio seconds. dt is the audio time since the last reference update,
+            // i.e. the previous window's seek advance. This keeps the decay tied to elapsed
+            // audio time (not wall-clock or call frequency); note the stride itself is chosen by
+            // the decoder, so dt can vary from window to window.
             const float dt = (seek - state->rs_prev_ref_seek) * 0.01f; // 1 frame = 10 ms
             float decay = 0.0f; // <= 0 half-life => instantaneous release
             if (params.mel_norm_half_life > 0.0f && dt > 0.0f) {
@@ -8043,6 +8054,12 @@ int whisper_full_resumable_with_state(
         return 0;
     }
     if (state->rs_n_frames <= state->rs_seek) {
+        // on finalize, warn if audio was fed but too short to produce any frame
+        // (fewer than ~200 samples / 12.5ms never clears the reflective-pad gate)
+        if (finalize && state->rs_n_samples_in > 0 && state->rs_n_frames == 0) {
+            WHISPER_LOG_WARN("%s: audio too short (%lld samples); nothing transcribed\n",
+                             __func__, (long long) state->rs_n_samples_in);
+        }
         return 0;
     }
 
@@ -8087,7 +8104,10 @@ int whisper_full_resumable_with_state(
         if (want_detect && whisper_is_multilingual(ctx)) {
             whisper_full_params dp = params;
             dp.mel_norm_mode = WHISPER_MEL_NORM_GLOBAL; // stable normalization for detection
-            whisper_rs_fill_mel_window(ctx, state, dp, state->rs_seek);
+            // detection encodes the window at offset 0, so materialize the mel at 0 too.
+            // (language is resolved on the first processing call, where rs_seek == 0; filling
+            // at 0 keeps the fill/encode offsets consistent regardless of that assumption.)
+            whisper_rs_fill_mel_window(ctx, state, dp, 0);
 
             std::vector<float> probs(whisper_lang_max_id() + 1, 0.0f);
             const int lang_id = whisper_lang_auto_detect_with_state(ctx, state, 0, params.n_threads, probs.data());
@@ -8121,6 +8141,9 @@ int whisper_full_resumable_with_state(
     }
 
     state->rs_lang_done = true;
+    if (finalize) {
+        state->rs_finalized = true; // reject further appends until reset
+    }
 
     return (int) state->result_all.size() - n_seg_before;
 }
