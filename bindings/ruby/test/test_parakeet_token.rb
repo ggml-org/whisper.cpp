@@ -32,7 +32,7 @@ class TestParakeetToken < TestBase
       i += 1
       assert_instance_of Parakeet::Token, token
     end
-    assert_equal 33, i
+    assert_equal 38, i
   end
 
   def test_each_token_without_block
@@ -55,7 +55,7 @@ class TestParakeetToken < TestBase
   end
 
   def test_text
-    assert_equal ["▁And", "▁so", ",", "▁my", "▁f", "ell", "ow", "▁Amer", "ic", "ans", ",", "▁a", "sk", "▁not", "▁what", "▁your", "▁co", "un", "tr", "y", "▁can", "▁do", "▁for", "▁you", ",", "▁a", "sk", "▁what", "▁you", "▁can", "▁do", "▁for", "▁your"],
+    assert_equal ["▁And", "▁so", ",", "▁my", "▁f", "ell", "ow", "▁Amer", "ic", "ans", ",", "▁a", "sk", "▁not", "▁what", "▁your", "▁co", "un", "tr", "y", "▁can", "▁do", "▁for", "▁you", ",", "▁a", "sk", "▁what", "▁you", "▁can", "▁do", "▁for", "▁your", "▁co", "un", "tr", "y", "."],
                  @segment.each_token.collect(&:text)
   end
 

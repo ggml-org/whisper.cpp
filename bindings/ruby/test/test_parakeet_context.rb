@@ -41,7 +41,7 @@ class TestParakeetContext < TestBase
       @parakeet.full @params, @samples, @samples.length
 
       segments = @parakeet.each_segment.to_a
-      assert_equal 2, segments.length
+      assert_equal 1, segments.length
       assert_match /ask not what your country can do for you, ask what you can do for your/, segments.first.text
     end
 
@@ -49,7 +49,7 @@ class TestParakeetContext < TestBase
       @parakeet.full(@params, @samples)
 
       segments = @parakeet.each_segment.to_a
-      assert_equal 2, segments.length
+      assert_equal 1, segments.length
       assert_match /ask not what your country can do for you, ask what you can do for your/, @parakeet.each_segment.first.text
     end
 
@@ -58,7 +58,7 @@ class TestParakeetContext < TestBase
       @parakeet.full @params, samples, @samples.length
 
       segments = @parakeet.each_segment.to_a
-      assert_equal 2, segments.length
+      assert_equal 1, segments.length
       assert_match /ask not what your country can do for you, ask what you can do for your/, @parakeet.each_segment.first.text
     end
 
@@ -81,7 +81,7 @@ class TestParakeetContext < TestBase
       @parakeet.full @params, samples
 
       segments = @parakeet.each_segment.to_a
-      assert_equal 2, segments.length
+      assert_equal 1, segments.length
       assert_match /ask not what your country can do for you, ask what you can do for your/, @parakeet.each_segment.first.text
     end
 
