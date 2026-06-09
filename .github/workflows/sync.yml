@@ -105,24 +105,26 @@ jobs:
           git commit -m "chore: merge upstream ${{ steps.upstream.outputs.tag }} (auto-resolved via theirs)" --allow-empty
           git push origin "$BRANCH"
 
-          gh pr create \
-            --title "Sync upstream ${{ steps.upstream.outputs.tag }} — conflict resolution needed" \
-            --body "## Upstream sync: ${{ steps.upstream.outputs.tag }}
+          TAG="${{ steps.upstream.outputs.tag }}"
+          cat > /tmp/pr-body.md << EOF
+## Upstream sync: ${TAG}
 
 Conflicts were detected during automatic merge. Files affected:
 
-\`\`\`
-$CONFLICT_FILES
-\`\`\`
+    ${CONFLICT_FILES}
 
-**This PR was auto-resolved using upstream (theirs) as a baseline — please review the diff carefully before merging.**
+This PR was auto-resolved using upstream (theirs) as a baseline.
+Please review the diff carefully before merging.
 
-Once merged, manually create tag \`${{ steps.upstream.outputs.tag }}\` on main to trigger the release build:
-\`\`\`bash
-git tag ${{ steps.upstream.outputs.tag }}
-git push origin ${{ steps.upstream.outputs.tag }}
-\`\`\`
-" \
+Once merged, manually create the release tag on main to trigger the build:
+
+    git tag ${TAG}
+    git push origin ${TAG}
+EOF
+
+          gh pr create \
+            --title "Sync upstream ${TAG} - conflict resolution needed" \
+            --body-file /tmp/pr-body.md \
             --base main \
             --head "$BRANCH"
 

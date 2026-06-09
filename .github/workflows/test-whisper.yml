@@ -1,0 +1,196 @@
+name: Test whisper-cli
+
+# Tests the whisper-cli binary from completed release builds.
+# Three trigger modes:
+#   workflow_run  - auto-runs after "AMD Build & Release" succeeds, downloads artifacts
+#   workflow_dispatch - manual, supply the build run-id to download artifacts from
+#   pull_request  - builds from source (no artifact available yet) and tests
+
+on:
+  workflow_run:
+    workflows: ["AMD Build & Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'build.yml run ID to download artifacts from (found in the Actions tab URL)'
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'ggml/**'
+      - 'CMakeLists.txt'
+      - '**.cmake'
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+
+  # -------------------------------------------------------------------------
+  # Test real release artifact on Linux (CPU build)
+  # Only runs when triggered by a successful build.yml run or manual dispatch
+  # -------------------------------------------------------------------------
+  test-linux-artifact:
+    if: >
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (for samples/ and models/ scripts)
+        uses: actions/checkout@v4
+
+      - name: Download linux-cpu artifact
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.inputs.run_id || github.event.workflow_run.id }}
+          pattern: 'whisper-*-linux-cpu-x86_64.tar.gz'
+          merge-multiple: true
+          path: ./artifact
+
+      - name: Extract artifact
+        run: |
+          mkdir -p ./bin
+          TARBALL=$(ls artifact/whisper-*-linux-cpu-x86_64.tar.gz | head -1)
+          echo "Extracting: $TARBALL"
+          tar -xzf "$TARBALL" --strip-components=1 -C ./bin
+          chmod +x ./bin/whisper-cli
+          echo "Binaries in ./bin:"
+          ls -lh ./bin/whisper-cli
+
+      - name: Download tiny model
+        run: |
+          mkdir -p models
+          bash ./models/download-ggml-model.sh tiny
+
+      - name: Run transcription
+        run: |
+          ./bin/whisper-cli -m models/ggml-tiny.bin -f samples/jfk.wav -otxt -of jfk-result
+          echo "--- Transcription output ---"
+          cat jfk-result.txt
+
+      - name: Verify transcription correctness
+        run: |
+          if grep -qi "country\|ask not\|nation\|kennedy" jfk-result.txt; then
+            echo "PASS: transcription contains expected words"
+          else
+            echo "FAIL: expected words not found in transcription"
+            echo "--- Full output ---"
+            cat jfk-result.txt
+            exit 1
+          fi
+
+  # -------------------------------------------------------------------------
+  # Test real release artifact on Windows (CPU build)
+  # -------------------------------------------------------------------------
+  test-windows-artifact:
+    if: >
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout (for samples/)
+        uses: actions/checkout@v4
+
+      - name: Download windows-cpu artifact
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.inputs.run_id || github.event.workflow_run.id }}
+          pattern: 'whisper-*-windows-cpu-x64.zip'
+          merge-multiple: true
+          path: ./artifact
+
+      - name: Extract artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path ./bin | Out-Null
+          $zip = Get-ChildItem artifact -Filter "whisper-*-windows-cpu-x64.zip" | Select-Object -First 1
+          Write-Host "Extracting: $($zip.FullName)"
+          Expand-Archive -Path $zip.FullName -DestinationPath ./bin -Force
+          Write-Host "Binaries:"
+          Get-ChildItem ./bin -Filter "*.exe" | Format-Table Name, Length
+
+      - name: Download tiny model
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path models | Out-Null
+          $url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin"
+          Write-Host "Downloading ggml-tiny.bin..."
+          Invoke-WebRequest -Uri $url -OutFile "models\ggml-tiny.bin"
+          $mb = [math]::Round((Get-Item "models\ggml-tiny.bin").Length / 1MB, 2)
+          Write-Host "Downloaded: $mb MB"
+
+      - name: Run transcription
+        shell: pwsh
+        run: |
+          .\bin\whisper-cli.exe -m models\ggml-tiny.bin -f samples\jfk.wav -otxt -of jfk-result
+          Write-Host "--- Transcription output ---"
+          Get-Content jfk-result.txt
+
+      - name: Verify transcription correctness
+        shell: pwsh
+        run: |
+          $text = Get-Content "jfk-result.txt" -Raw -ErrorAction SilentlyContinue
+          if (-not $text) { Write-Error "jfk-result.txt is empty or missing"; exit 1 }
+          if ($text -match "country|ask not|nation|kennedy") {
+            Write-Host "PASS: transcription contains expected words" -ForegroundColor Green
+          } else {
+            Write-Error "FAIL: expected words not found in transcription"
+            Write-Host "--- Full output ---"
+            Write-Host $text
+            exit 1
+          }
+
+  # -------------------------------------------------------------------------
+  # Build from source and test (pull_request only - no artifact available yet)
+  # -------------------------------------------------------------------------
+  test-from-source:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git libsdl2-dev pkg-config
+
+      - name: Build from source
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWHISPER_BUILD_EXAMPLES=ON \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_SERVER=OFF
+          cmake --build build --config Release -j$(nproc)
+          echo "Built whisper-cli:"
+          ls -lh build/bin/whisper-cli
+
+      - name: Download tiny model
+        run: |
+          mkdir -p models
+          bash ./models/download-ggml-model.sh tiny
+
+      - name: Run transcription
+        run: |
+          ./build/bin/whisper-cli -m models/ggml-tiny.bin -f samples/jfk.wav -otxt -of jfk-result
+          echo "--- Transcription output ---"
+          cat jfk-result.txt
+
+      - name: Verify transcription correctness
+        run: |
+          if grep -qi "country\|ask not\|nation\|kennedy" jfk-result.txt; then
+            echo "PASS: transcription contains expected words"
+          else
+            echo "FAIL: expected words not found in transcription"
+            cat jfk-result.txt
+            exit 1
+          fi

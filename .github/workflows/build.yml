@@ -402,7 +402,11 @@ jobs:
       - name: Validate Vulkan artifacts
         run: |
           VFILES=$(find build -type f \( -iname "*vulkan*.so*" -o -iname "*vulkan*" \) 2>/dev/null | wc -l)
-          [ "$VFILES" -eq 0 ] && echo "::warning::No Vulkan-related artifacts found"
+          if [ "$VFILES" -eq 0 ]; then
+            echo "::warning::No Vulkan-related artifacts found"
+          else
+            echo "Vulkan artifacts found: $VFILES file(s)"
+          fi
 
       - name: Package
         run: |
@@ -482,7 +486,7 @@ jobs:
 # 6. NPU (VitisAI / RyzenAI) — Windows only (self-hosted runner)
 # ════════════════════════════════════════════════════════════════════════════════
   windows-npu:
-    runs-on: [rai-170-sdk, Windows]
+    runs-on: [stx-halo, Windows]
     needs: determine-tag
     continue-on-error: true   # runner may be offline; don't block release
 
