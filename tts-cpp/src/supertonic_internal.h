@@ -559,6 +559,33 @@ void free_supertonic_model(supertonic_model & model);
 void supertonic_set_n_threads(supertonic_model & model, int n_threads);
 void supertonic_graph_compute(const supertonic_model & model, ggml_cgraph * graph);
 
+// Per-TU thread-local cache release helpers — called from
+// `free_supertonic_model` BEFORE `ggml_backend_free`, so the
+// gallocators inside each per-stage thread_local graph cache
+// hit their normal `ggml_gallocr_free` path against a live
+// backend instead of the dead-backend skip in
+// `supertonic_safe_gallocr_free` (the skip is correct — it
+// avoids a crash in the backend dylib finaliser — but each
+// skipped free leaks the gallocr's internal hash tables /
+// per-leaf records / per-buffer-type allocators, on the order
+// of several KB per cache).
+//
+// Multi-thread caveat: each helper only releases caches on
+// the CALLING thread.  Other threads that have populated their
+// own thread_local caches (multi-threaded synth hosts that
+// share an Engine across threads) fall back to the lazy
+// release-on-next-cache-miss path with the skip-and-leak
+// semantics.  This matches the documented Engine threading
+// contract (one Engine per thread; concurrent `synthesize()`
+// on the same Engine is not safe) so the SDK pattern is
+// fully covered.  See `register_supertonic_alive` for the
+// per-engine generation_id machinery the dead-backend skip
+// hangs off of.
+void release_vector_estimator_thread_local_caches();
+void release_text_encoder_thread_local_caches();
+void release_vocoder_thread_local_caches();
+void release_duration_thread_local_caches();
+
 // True when the model's compute backend supports the per-stage CPU fast paths
 // (the `ggml_custom_4d` callbacks in conv1d_f32 / depthwise_same_ggml /
 // layer_norm_ggml etc.).  ggml custom ops are CPU-only by design; on Metal /
@@ -915,16 +942,32 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
 // its generation_id with this set on success and unregisters at the
 // start of free_supertonic_model.  The thread_local graph caches in
 // supertonic_vocoder.cpp / supertonic_text_encoder.cpp /
-// supertonic_vector_estimator.cpp own ggml_gallocr_t handles allocated
-// against a specific model's ggml_backend_t; on a cache miss the
-// existing teardown code calls ggml_gallocr_free(cache.allocr).  When
-// the model that backed the cache has already been destroyed, that
-// free path asserts inside the GPU-backend dylib finaliser.  The
-// is_supertonic_alive() check at every free_*_cache() site lets the
-// teardown skip the gallocr_free call for a generation that's no
-// longer alive (the underlying GPU buffers were freed when the
-// model's backend was freed; we only leak the gallocr bookkeeping
-// struct itself, ~80 bytes per cache type).
+// supertonic_vector_estimator.cpp / supertonic_duration.cpp own
+// ggml_gallocr_t handles allocated against a specific model's
+// ggml_backend_t; on a cache miss the existing teardown code calls
+// ggml_gallocr_free(cache.allocr).  When the model that backed the
+// cache has already been destroyed, that free path asserts inside
+// the GPU-backend dylib finaliser.  The is_supertonic_alive() check
+// at every free_*_cache() site lets the teardown SKIP the gallocr_free
+// call for a generation that's no longer alive.
+//
+// IMPORTANT: the skip path leaks the gallocr's full internal state —
+// not just the ~80-byte struct previously documented, but its
+// node→buffer hash tables, per-leaf records, and per-buffer-type
+// allocators (~83 KB per skipped gallocr at our graph sizes).
+// Across the ~30 per-stage caches a single Supertonic synth
+// populates, that's tens of MB leaked per Engine cycle.
+//
+// The primary fix for the SDK pattern (one Engine per thread,
+// loaded + run + destroyed on the same thread) is the
+// `release_*_thread_local_caches` machinery declared at the top of
+// this header: free_supertonic_model invokes those BEFORE the
+// backend is freed, so every cache on the destruction thread gets
+// its normal ggml_gallocr_free path against a live backend.  The
+// skip-and-leak fallback below remains for the harder multi-thread
+// pattern (Engine on thread A populates caches, then thread B
+// destroys it without first releasing thread A's caches — not safe
+// per the Engine contract, but the skip keeps us from crashing).
 //
 // Thread-safe: backed by a single std::mutex.  Lookup is on the
 // hot per-call path inside free_*_cache(), but the lock is held only

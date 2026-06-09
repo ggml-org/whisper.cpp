@@ -12,11 +12,24 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace tts_cpp::supertonic::detail {
 namespace {
+
+// See `release_vocoder_thread_local_caches` below.  Mirrors the
+// registry in supertonic_vector_estimator.cpp / supertonic_text_encoder.cpp.
+thread_local std::vector<std::function<void()>> g_tl_release_thunks;
+
+struct tl_register_once {
+    template <typename F>
+    explicit tl_register_once(F && f) {
+        g_tl_release_thunks.push_back(std::forward<F>(f));
+    }
+};
 
 struct f32_tensor {
     std::vector<float> data;
@@ -947,6 +960,8 @@ bool supertonic_vocoder_forward_ggml(const supertonic_model & model,
         // compute + 2 uploads is gone; nothing happens here for BN.
 
         thread_local vocoder_graph_cache cache;
+        thread_local tl_register_once _tl_reg_cache(
+            [&]() { free_vocoder_cache(cache); });
         // Reuse the shape-keyed graph on the direct backend path; rebuild + route
         // through the scheduler only when an op must run on CPU. Mirrors run_hift_decode.
         build_supertonic_vocoder_cache(cache, model, latent_len);
@@ -1211,6 +1226,13 @@ bool supertonic_vocoder_trace_ggml(const supertonic_model & model,
     } catch (const std::exception & e) {
         if (error) *error = e.what();
         return false;
+    }
+}
+
+void release_vocoder_thread_local_caches() {
+    // See `release_vector_estimator_thread_local_caches` for the contract.
+    for (auto & fn : g_tl_release_thunks) {
+        if (fn) fn();
     }
 }
 
