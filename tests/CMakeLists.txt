@@ -122,22 +122,50 @@ target_compile_definitions(${PARAKEET_TEST} PRIVATE
 add_test(NAME ${PARAKEET_TEST} COMMAND ${PARAKEET_TEST})
 set_tests_properties(${PARAKEET_TEST} PROPERTIES LABELS "parakeet;gh")
 
-set(PARAKEET_TEST test-parakeet-stream)
-add_executable(${PARAKEET_TEST} ${PARAKEET_TEST}.cpp)
-target_include_directories(${PARAKEET_TEST} PRIVATE ../include ../ggml/include ../examples)
-target_link_libraries(${PARAKEET_TEST} PRIVATE parakeet common)
-target_compile_definitions(${PARAKEET_TEST} PRIVATE
-    PARAKEET_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-ggml-parakeet-tdt.bin"
-    SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
-add_test(NAME ${PARAKEET_TEST} COMMAND ${PARAKEET_TEST})
-set_tests_properties(${PARAKEET_TEST} PROPERTIES LABELS "parakeet;gh")
+# The following parakeet test require a real ggml-parakeet-tdt model to have
+# been converted or downloaded:
+# $ hf download danbev/parakeet parakeet-tdt-0.6b-v3.bin --local-dir models
+#
+# And also required more audio samples that are shipped by default. These can
+# downloaded by running:
+# $ make samples
+function(add_parakeet_transcription_test TEST_TARGET TEST_SOURCE SAMPLE_PATH EXPECTED_TRANSCRIPTION_PATH)
+    set(TRANSCRIPTION_SIMILARITY_THRESHOLD "1.0")
+    if (ARGC GREATER 4)
+        set(TRANSCRIPTION_SIMILARITY_THRESHOLD "${ARGV4}")
+    endif()
 
-set(PARAKEET_TEST test-parakeet-full)
-add_executable(${PARAKEET_TEST} ${PARAKEET_TEST}.cpp)
-target_include_directories(${PARAKEET_TEST} PRIVATE ../include ../ggml/include ../examples)
-target_link_libraries(${PARAKEET_TEST} PRIVATE parakeet common)
-target_compile_definitions(${PARAKEET_TEST} PRIVATE
-    PARAKEET_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-ggml-parakeet-tdt.bin"
-    SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
-add_test(NAME ${PARAKEET_TEST} COMMAND ${PARAKEET_TEST})
-set_tests_properties(${PARAKEET_TEST} PROPERTIES LABELS "parakeet;unit;gh")
+    add_executable(${TEST_TARGET} ${TEST_SOURCE})
+    target_include_directories(${TEST_TARGET} PRIVATE ../include ../ggml/include ../examples)
+    target_link_libraries(${TEST_TARGET} PRIVATE parakeet common)
+    target_compile_definitions(${TEST_TARGET} PRIVATE
+        PARAKEET_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/ggml-parakeet-tdt-0.6b-v3.bin"
+        SAMPLE_PATH="${PROJECT_SOURCE_DIR}/${SAMPLE_PATH}"
+        EXPECTED_TRANSCRIPTION_PATH="${PROJECT_SOURCE_DIR}/${EXPECTED_TRANSCRIPTION_PATH}"
+        TRANSCRIPTION_SIMILARITY_THRESHOLD=${TRANSCRIPTION_SIMILARITY_THRESHOLD})
+
+    add_custom_target(run-${TEST_TARGET}
+        COMMAND $<TARGET_FILE:${TEST_TARGET}>
+        DEPENDS ${TEST_TARGET}
+        WORKING_DIRECTORY ${PROJECT_BINARY_DIR})
+endfunction()
+
+add_parakeet_transcription_test(
+    test-parakeet-full-jfk
+    test-parakeet-full.cpp
+    samples/jfk.wav
+    tests/parakeet-expected-jfk-output.txt)
+
+add_parakeet_transcription_test(
+    test-parakeet-full-gb1
+    test-parakeet-full.cpp
+    samples/gb1.wav
+    tests/parakeet-expected-gb1-output.txt)
+
+add_parakeet_transcription_test(
+    test-parakeet-full-diffusion
+    test-parakeet-full.cpp
+    samples/diffusion2023-07-03.flac
+    tests/parakeet-expected-diffusion-output.txt
+    0.95)
+

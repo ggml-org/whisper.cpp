@@ -1,5 +1,6 @@
 #include "parakeet.h"
 #include "common-whisper.h"
+#include "parakeet-verification.h"
 
 #include <cstdio>
 #include <string>
@@ -8,6 +9,11 @@
 #undef NDEBUG
 #endif
 #include <cassert>
+
+struct test_state {
+    bool is_first = true;
+    std::string transcript;
+};
 
 void progress_callback(parakeet_context * ctx, parakeet_state * state, int progress, void * user_data) {
     bool * called = static_cast<bool *>(user_data);
@@ -27,17 +33,17 @@ bool abort_callback(void * user_data) {
 }
 
 void token_callback(parakeet_context * ctx, parakeet_state * state, const parakeet_token_data * token_data, void * user_data) {
-    static bool is_first = true;
+    test_state * tstate = static_cast<test_state *>(user_data);
+
     const char * token_str = parakeet_token_to_str(ctx, token_data->id);
     char text_buf[256];
-    parakeet_token_to_text(token_str, is_first, text_buf, sizeof(text_buf));
-
-    int32_t time_ms = token_data->frame_index * 10;
+    parakeet_token_to_text(token_str, tstate->is_first, text_buf, sizeof(text_buf));
 
     printf("%s", text_buf);
     fflush(stdout);
 
-    is_first = false;
+    tstate->transcript += text_buf;
+    tstate->is_first = false;
 }
 
 int main() {
@@ -62,8 +68,9 @@ int main() {
     printf("Successfully loaded Parakeet model\n");
 
     struct parakeet_full_params params = parakeet_full_default_params(PARAKEET_SAMPLING_GREEDY);
+    test_state tstate;
     params.new_token_callback = token_callback;
-    params.new_token_callback_user_data = nullptr;
+    params.new_token_callback_user_data = &tstate;
     bool progress_callback_called = false;
     params.progress_callback = progress_callback;
     params.progress_callback_user_data = &progress_callback_called;
@@ -80,7 +87,14 @@ int main() {
     assert(encoder_begin_callback_called);
     assert(abort_callback_called);
 
+    const std::string expected = read_expected_transcription(EXPECTED_TRANSCRIPTION_PATH);
+    const bool transcript_matches = verify_transcription(expected, tstate.transcript);
+
     parakeet_free(pctx);
+
+    if (!transcript_matches) {
+        return 1;
+    }
 
     printf("\nTest passed: parakeet_full succeeded!\n");
     return 0;

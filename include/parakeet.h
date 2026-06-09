@@ -265,22 +265,12 @@ extern "C" {
         void * abort_callback_user_data;
     };
 
-    struct parakeet_stream_params {
-        struct parakeet_full_params full_params;
-
-        int  chunk_length_ms;  // length of each chunk in ms
-        int  left_context_ms;  // left context in ms
-        int  right_context_ms; // right context in ms
-    };
-
     // NOTE: this function allocates memory, and it is the responsibility of the caller to free the pointer - see parakeet_free_context_params() & parakeet_free_params()
     PARAKEET_API struct parakeet_context_params * parakeet_context_default_params_by_ref(void);
     PARAKEET_API struct parakeet_context_params   parakeet_context_default_params       (void);
 
     PARAKEET_API struct parakeet_full_params * parakeet_full_default_params_by_ref(enum parakeet_sampling_strategy strategy);
     PARAKEET_API struct parakeet_full_params   parakeet_full_default_params       (enum parakeet_sampling_strategy strategy);
-
-    PARAKEET_API struct parakeet_stream_params   parakeet_stream_default_params(enum parakeet_sampling_strategy strategy);
 
     // Run the entire model: PCM -> log mel spectrogram -> encoder -> decoder -> text
     // Not thread safe for same context
@@ -305,29 +295,6 @@ extern "C" {
             struct parakeet_full_params   params,
                             const float * samples,
                                    int    n_samples);
-
-    // Initialize streaming state for a new stream.
-    PARAKEET_API int parakeet_stream_init(
-                struct parakeet_context * ctx,
-                  struct parakeet_state * state,
-          struct parakeet_stream_params   params);
-
-    // Push audio samples in streaming mode. Internally this function will structure
-    // the samples in a buffer where with a left context, a center chunk, and a
-    // right context. The encoder will see the complete buffer which enables it
-    // to get boundry context for the target/center audio chunk. This avoids hard
-    // cut offs at the chunk boundaries. The joint network then only sees the
-    // center chunk and this function internally handles the context windowing.
-    PARAKEET_API int parakeet_stream_push(
-                struct parakeet_context * ctx,
-                  struct parakeet_state * state,
-                            const float * samples,
-                                    int   n_samples);
-
-    // Flush the final partial chunk at end-of-stream.
-    PARAKEET_API int parakeet_stream_flush(
-                struct parakeet_context * ctx,
-                  struct parakeet_state * state);
 
     // Number of generated text segments
     PARAKEET_API int parakeet_full_n_segments           (struct parakeet_context * ctx);
