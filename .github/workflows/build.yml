@@ -486,7 +486,7 @@ jobs:
 # 6. NPU (VitisAI / RyzenAI) — Windows only (self-hosted runner)
 # ════════════════════════════════════════════════════════════════════════════════
   windows-npu:
-    runs-on: [stx-halo, Windows]
+    runs-on: [self-hosted, Windows, rai300_400]
     needs: determine-tag
     continue-on-error: true   # runner may be offline; don't block release
 
