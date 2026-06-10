@@ -141,36 +141,30 @@ jobs:
 # 2. ROCm — Linux
 # ════════════════════════════════════════════════════════════════════════════════
   linux-rocm:
-    runs-on: [self-hosted, Linux, stx-halo]
+    runs-on: ubuntu-22.04
     needs: [determine-tag, prepare-rocm-matrix]
     strategy:
       matrix: ${{ fromJson(needs.prepare-rocm-matrix.outputs.ubuntu_matrix) }}
       fail-fast: false
 
     steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/share/boost \
+            /usr/share/dotnet /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force 2>/dev/null || true
+
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: |
-          APT="apt-get"
-          if command -v sudo &>/dev/null && sudo -n apt-get -h &>/dev/null 2>&1; then
-            APT="sudo apt-get"
-          fi
-          $APT update && $APT install -y cmake ninja-build curl build-essential libsdl2-dev git patchelf
-          echo "--- Verifying installs ---"
-          cmake --version || { echo "::error::cmake not found"; exit 1; }
-          ninja --version || { echo "::error::ninja not found"; exit 1; }
-          curl --version | head -1
-          gcc --version | head -1
-          patchelf --version || { echo "::error::patchelf not found"; exit 1; }
-          git --version
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build curl build-essential libsdl2-dev git patchelf
 
       - name: Download ROCm tarball
         run: |
           source ci/resolve-rocm-version.sh linux "${{ matrix.gfx_target }}" "${{ env.ROCM_VERSION }}"
           echo "DETECTED_ROCM_VERSION=$ROCM_RESOLVED_VERSION" >> $GITHUB_ENV
-          mkdir -p /opt/rocm
-          curl -L "$ROCM_TARBALL_URL" | tar --use-compress-program=gzip -xf - -C /opt/rocm --strip-components=1
+          sudo mkdir -p /opt/rocm
+          curl -L "$ROCM_TARBALL_URL" | sudo tar --use-compress-program=gzip -xf - -C /opt/rocm --strip-components=1
 
       - name: Set ROCm env
         run: |
@@ -276,7 +270,7 @@ jobs:
 # 3. ROCm — Windows
 # ════════════════════════════════════════════════════════════════════════════════
   windows-rocm:
-    runs-on: [self-hosted, Windows, stx-halo]
+    runs-on: windows-latest
     needs: [determine-tag, prepare-rocm-matrix]
     strategy:
       matrix: ${{ fromJson(needs.prepare-rocm-matrix.outputs.windows_matrix) }}
