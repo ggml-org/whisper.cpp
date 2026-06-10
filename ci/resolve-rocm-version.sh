@@ -41,18 +41,20 @@ if ! echo "$rocm_version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+'; then
     return 1 2>/dev/null || exit 1
 fi
 
-# For the AMD tarball distribution, use gfx1151 as the base target
-# The tarball contains ROCm tools/libraries for all supported GPUs
-# GPU targets are specified during build via GPU_TARGETS CMake variable
-# Group targets (gfx110X, gfx120X) should use gfx1151 as the base
-base_target="gfx1151"
-if [ "$gfx_target" != "gfx110X" ] && [ "$gfx_target" != "gfx120X" ] && [ "$gfx_target" != "gfx1150" ] && [ "$gfx_target" != "gfx1100" ]; then
-    # Use the specific target if it's an individual target
-    base_target="$gfx_target"
-fi
+# Exact tarball names published at repo.amd.com/rocm/tarball/ for 7.12.0:
+#   linux:   gfx110X-all, gfx120X-all, gfx1150, gfx1151, gfx1152
+#   windows: gfx110X-all, gfx120X-all, gfx1150, gfx1151, gfx1152
+case "$gfx_target" in
+    gfx110X)  tarball_target="gfx110X-all" ;;
+    gfx120X)  tarball_target="gfx120X-all" ;;
+    gfx1150)  tarball_target="gfx1150"     ;;
+    gfx1151)  tarball_target="gfx1151"     ;;
+    gfx1152)  tarball_target="gfx1152"     ;;
+    *)        tarball_target="$gfx_target" ;;
+esac
 
 # Construct the AMD official repo URL
-ROCM_TARBALL_URL="https://repo.amd.com/rocm/tarball/therock-dist-${platform}-${base_target}-${rocm_version}.tar.gz"
+ROCM_TARBALL_URL="https://repo.amd.com/rocm/tarball/therock-dist-${platform}-${tarball_target}-${rocm_version}.tar.gz"
 
 export ROCM_RESOLVED_VERSION="$rocm_version"
 echo "ROCm version: $ROCM_RESOLVED_VERSION"

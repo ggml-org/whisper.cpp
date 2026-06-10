@@ -1,0 +1,282 @@
+name: Test whisper-cli
+
+# Downloads a published release artifact and runs whisper-cli against jfk.wav.
+# Tests on real self-hosted GPU hardware (stx-halo runners).
+# Trigger manually after a release, or let it run automatically via workflow_dispatch
+# from build.yml once artifacts are published.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to test (e.g. v1.8.4) or "latest"'
+        required: false
+        default: 'latest'
+        type: string
+      gfx_target:
+        description: 'ROCm GPU target to test'
+        required: false
+        default: 'gfx1151'
+        type: string
+
+env:
+  RELEASE_TAG: ${{ github.event.inputs.release_tag || 'latest' }}
+  GFX_TARGET:  ${{ github.event.inputs.gfx_target  || 'gfx1151' }}
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # Resolve release tag (latest or specific)
+  # ---------------------------------------------------------------------------
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+    steps:
+      - name: Resolve release tag
+        id: resolve
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ env.RELEASE_TAG }}" = "latest" ]; then
+            TAG=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/latest" \
+              | jq -r '.tag_name')
+            echo "Resolved latest release: $TAG"
+          else
+            TAG="${{ env.RELEASE_TAG }}"
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG")
+            if [ "$STATUS" != "200" ]; then
+              echo "Error: Release $TAG not found (HTTP $STATUS)"
+              exit 1
+            fi
+            echo "Using specified release: $TAG"
+          fi
+          echo "release_tag=$TAG" >> $GITHUB_OUTPUT
+
+  # ---------------------------------------------------------------------------
+  # Test ROCm artifact on Windows (self-hosted stx-halo GPU runner)
+  # ---------------------------------------------------------------------------
+  test-windows-rocm:
+    runs-on: [self-hosted, Windows, stx-halo]
+    needs: prepare
+
+    steps:
+      - name: Checkout (for samples/jfk.wav and models/ scripts)
+        uses: actions/checkout@v4
+
+      - name: Download ROCm Windows artifact
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag    = "${{ needs.prepare.outputs.release_tag }}"
+          $target = "${{ env.GFX_TARGET }}"
+          # strip leading 'v' for artifact filename (e.g. v1.8.4 -> 1.8.4)
+          $ver    = $tag.TrimStart('v')
+          $asset  = "whisper-${ver}-windows-rocm-${target}.zip"
+          $repo   = "${{ github.repository }}"
+
+          Write-Host "Downloading: $asset from release $tag"
+
+          $headers  = @{ "Authorization" = "token $env:GITHUB_TOKEN" }
+          $release  = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/tags/$tag" -Headers $headers
+          $found    = $release.assets | Where-Object { $_.name -eq $asset }
+
+          if (-not $found) {
+            Write-Error "Asset '$asset' not found in release '$tag'"
+            Write-Host "Available assets:"
+            $release.assets | ForEach-Object { Write-Host "  $($_.name)" }
+            exit 1
+          }
+
+          Write-Host "Found: $($found.name) ($([math]::Round($found.size/1MB,2)) MB)"
+          Invoke-WebRequest -Uri $found.browser_download_url -OutFile $asset -Headers $headers
+
+          Write-Host "Extracting..."
+          Expand-Archive -Path $asset -DestinationPath whisper-bin -Force
+          Write-Host "Binaries:"
+          Get-ChildItem whisper-bin -Filter "*.exe" | Format-Table Name, Length
+
+      - name: Download tiny model
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path models | Out-Null
+          $url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin"
+          Write-Host "Downloading ggml-tiny.bin..."
+          Invoke-WebRequest -Uri $url -OutFile "models\ggml-tiny.bin"
+          $mb = [math]::Round((Get-Item "models\ggml-tiny.bin").Length/1MB,2)
+          Write-Host "Downloaded: $mb MB"
+
+      - name: Run transcription
+        shell: pwsh
+        run: |
+          $cli = "whisper-bin\whisper-cli.exe"
+          if (-not (Test-Path $cli)) {
+            Write-Error "whisper-cli.exe not found. Contents of whisper-bin:"
+            Get-ChildItem -Recurse whisper-bin | Format-Table Name, Length
+            exit 1
+          }
+          Write-Host "Running whisper-cli against samples\jfk.wav ..."
+          & $cli -m models\ggml-tiny.bin -f samples\jfk.wav -otxt -of jfk-result
+          Write-Host "--- Transcription output ---"
+          Get-Content jfk-result.txt
+
+      - name: Verify transcription
+        shell: pwsh
+        run: |
+          $text = Get-Content "jfk-result.txt" -Raw -ErrorAction SilentlyContinue
+          if (-not $text) { Write-Error "jfk-result.txt is empty or missing"; exit 1 }
+          if ($text -match "country|ask not|nation|kennedy") {
+            Write-Host "PASS: transcription contains expected words" -ForegroundColor Green
+          } else {
+            Write-Error "FAIL: expected words not found in transcription"
+            Write-Host $text
+            exit 1
+          }
+
+  # ---------------------------------------------------------------------------
+  # Test ROCm artifact on Linux (self-hosted stx-halo GPU runner)
+  # ---------------------------------------------------------------------------
+  test-linux-rocm:
+    runs-on: [self-hosted, Linux, stx-halo]
+    needs: prepare
+
+    steps:
+      - name: Checkout (for samples/jfk.wav)
+        uses: actions/checkout@v4
+
+      - name: Install jq if needed
+        run: |
+          if ! command -v jq &>/dev/null; then
+            mkdir -p ~/bin
+            curl -L -o ~/bin/jq https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64
+            chmod +x ~/bin/jq
+            echo "$HOME/bin" >> $GITHUB_PATH
+          fi
+
+      - name: Download ROCm Linux artifact
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.prepare.outputs.release_tag }}"
+          TARGET="${{ env.GFX_TARGET }}"
+          VER="${TAG#v}"
+          ASSET="whisper-${VER}-linux-rocm-${TARGET}.tar.gz"
+          REPO="${{ github.repository }}"
+
+          echo "Downloading: $ASSET from release $TAG"
+
+          RELEASE=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/$REPO/releases/tags/$TAG")
+
+          URL=$(echo "$RELEASE" | jq -r ".assets[] | select(.name == \"$ASSET\") | .browser_download_url")
+
+          if [ -z "$URL" ] || [ "$URL" = "null" ]; then
+            echo "Asset '$ASSET' not found in release '$TAG'"
+            echo "Available assets:"
+            echo "$RELEASE" | jq -r '.assets[].name'
+            exit 1
+          fi
+
+          SIZE=$(echo "$RELEASE" | jq -r ".assets[] | select(.name == \"$ASSET\") | .size")
+          echo "Found: $ASSET ($SIZE bytes)"
+
+          curl -L -H "Authorization: token $GITHUB_TOKEN" -o "$ASSET" "$URL"
+
+          echo "Extracting..."
+          mkdir -p whisper-bin
+          tar -xzf "$ASSET" --strip-components=1 -C whisper-bin
+          chmod +x whisper-bin/whisper-cli
+          echo "Binaries:"
+          ls -lh whisper-bin/whisper-cli
+
+      - name: Download tiny model
+        run: |
+          mkdir -p models
+          curl -L -o models/ggml-tiny.bin \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin"
+          echo "Downloaded: $(du -h models/ggml-tiny.bin | cut -f1)"
+
+      - name: Set library path
+        run: echo "LD_LIBRARY_PATH=$(pwd)/whisper-bin:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+
+      - name: Run transcription
+        run: |
+          echo "Running whisper-cli against samples/jfk.wav ..."
+          ./whisper-bin/whisper-cli -m models/ggml-tiny.bin -f samples/jfk.wav -otxt -of jfk-result
+          echo "--- Transcription output ---"
+          cat jfk-result.txt
+
+      - name: Verify transcription
+        run: |
+          if grep -qi "country\|ask not\|nation\|kennedy" jfk-result.txt; then
+            echo "PASS: transcription contains expected words"
+          else
+            echo "FAIL: expected words not found in transcription"
+            cat jfk-result.txt
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Test CPU artifact on Linux (GitHub-hosted runner - no GPU needed)
+  # ---------------------------------------------------------------------------
+  test-linux-cpu:
+    runs-on: ubuntu-latest
+    needs: prepare
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download CPU Linux artifact
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.prepare.outputs.release_tag }}"
+          VER="${TAG#v}"
+          ASSET="whisper-${VER}-linux-cpu-x86_64.tar.gz"
+          REPO="${{ github.repository }}"
+
+          echo "Downloading: $ASSET from release $TAG"
+
+          RELEASE=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/$REPO/releases/tags/$TAG")
+
+          URL=$(echo "$RELEASE" | jq -r ".assets[] | select(.name == \"$ASSET\") | .browser_download_url")
+
+          if [ -z "$URL" ] || [ "$URL" = "null" ]; then
+            echo "Asset '$ASSET' not found. Available:"
+            echo "$RELEASE" | jq -r '.assets[].name'
+            exit 1
+          fi
+
+          curl -L -H "Authorization: token $GITHUB_TOKEN" -o "$ASSET" "$URL"
+          mkdir -p whisper-bin
+          tar -xzf "$ASSET" --strip-components=1 -C whisper-bin
+          chmod +x whisper-bin/whisper-cli
+          ls -lh whisper-bin/whisper-cli
+
+      - name: Download tiny model
+        run: |
+          mkdir -p models
+          curl -L -o models/ggml-tiny.bin \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin"
+
+      - name: Run transcription
+        run: |
+          ./whisper-bin/whisper-cli -m models/ggml-tiny.bin -f samples/jfk.wav -otxt -of jfk-result
+          echo "--- Transcription output ---"
+          cat jfk-result.txt
+
+      - name: Verify transcription
+        run: |
+          if grep -qi "country\|ask not\|nation\|kennedy" jfk-result.txt; then
+            echo "PASS: transcription contains expected words"
+          else
+            echo "FAIL: expected words not found"
+            cat jfk-result.txt
+            exit 1
+          fi
