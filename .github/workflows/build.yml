@@ -152,13 +152,17 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y cmake ninja-build curl build-essential libsdl2-dev git patchelf
+          APT="apt-get"
+          if command -v sudo &>/dev/null && sudo -n apt-get -h &>/dev/null 2>&1; then
+            APT="sudo apt-get"
+          fi
+          $APT update && $APT install -y cmake ninja-build curl build-essential libsdl2-dev git patchelf
           echo "--- Verifying installs ---"
-          cmake --version
-          ninja --version
+          cmake --version || { echo "::error::cmake not found"; exit 1; }
+          ninja --version || { echo "::error::ninja not found"; exit 1; }
           curl --version | head -1
           gcc --version | head -1
-          patchelf --version
+          patchelf --version || { echo "::error::patchelf not found"; exit 1; }
           git --version
 
       - name: Download ROCm tarball
