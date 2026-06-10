@@ -168,7 +168,7 @@ jobs:
           source ci/resolve-rocm-version.sh linux "${{ matrix.gfx_target }}" "${{ env.ROCM_VERSION }}"
           echo "DETECTED_ROCM_VERSION=$ROCM_RESOLVED_VERSION" >> $GITHUB_ENV
           sudo mkdir -p /opt/rocm
-          curl -sL "$ROCM_TARBALL_URL" | sudo tar --use-compress-program=gzip -xf - -C /opt/rocm --strip-components=1
+          curl -L "$ROCM_TARBALL_URL" | sudo tar --use-compress-program=gzip -xf - -C /opt/rocm --strip-components=1
 
       - name: Set ROCm env
         run: |
@@ -366,7 +366,7 @@ jobs:
         run: |
           cmake --build build --config ${{ matrix.build }} -j $env:NUMBER_OF_PROCESSORS > build.log 2>&1
           $exit = $LASTEXITCODE
-          # Show only errors and link steps — keeps log under GitHub's line limit
+          # Show only errors and link steps - keeps log under GitHub's line limit
           Get-Content build.log | Select-String -Pattern "error:|FAILED|Linking|Built target|warning: " | Write-Host
           if ($exit -ne 0) {
             Write-Host "--- Last 100 lines of build log ---"
@@ -401,7 +401,7 @@ jobs:
         run: |
           $bin = "build/bin/${{ matrix.build }}"
           if (-not (Test-Path "$bin/whisper-cli.exe")) {
-            Write-Error "whisper-cli.exe not found in $bin — build likely truncated"
+            Write-Error "whisper-cli.exe not found in $bin - build likely truncated"
             Get-ChildItem $bin -ErrorAction SilentlyContinue | Format-Table Name, Length
             exit 1
           }
@@ -906,7 +906,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download ROCm artifact (gfx1151 — stx-halo GPU target)
+      - name: Download ROCm artifact (gfx1151 - stx-halo GPU target)
         uses: actions/download-artifact@v4
         with:
           name: whisper-${{ needs.determine-tag.outputs.version }}-windows-rocm-gfx1151.zip
@@ -1090,7 +1090,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name:     ${{ needs.determine-tag.outputs.tag_name }}
-          release_name: "whisper.cpp ${{ needs.determine-tag.outputs.tag_name }} — AMD Builds"
+          release_name: "whisper.cpp ${{ needs.determine-tag.outputs.tag_name }} - AMD Builds"
           prerelease:   ${{ github.event.inputs.pre_release_tag != '' }}
           draft: false
 
