@@ -36,23 +36,12 @@ on:
         type: string
         default: '7.12.0'
   push:
-    branches:
-      - main
-      - master
-    paths:
-      - '.github/workflows/build.yml'
-      - '**/CMakeLists.txt'
-      - '**/*.cmake'
-      - '**/*.h'
-      - '**/*.hpp'
-      - '**/*.c'
-      - '**/*.cpp'
-      - '**/*.cu'
-      - '**/*.cuh'
-      - '**/*.comp'
     tags:
       - 'v*'
   pull_request:
+    branches:
+      - master
+      - main
     types: [opened, synchronize, reopened]
 
 concurrency:
@@ -486,7 +475,7 @@ jobs:
 # 6. NPU (VitisAI / RyzenAI) — Windows only (self-hosted runner)
 # ════════════════════════════════════════════════════════════════════════════════
   windows-npu:
-    runs-on: [self-hosted, Windows, stx-halo]
+    runs-on: [self-hosted, Windows, rai300_400]
     needs: determine-tag
     continue-on-error: true   # runner may be offline; don't block release
 
