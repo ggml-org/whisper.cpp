@@ -698,11 +698,11 @@ void speech_prompted_attention(const supertonic_model & m, int idx,
     const float scale = 1.0f / 16.0f;
     const int attn_num = idx + 1;
     const std::string p = "text_encoder:tts.ttl.speech_prompted_text_encoder.attention" + std::to_string(attn_num);
-    f32_tensor q_w = read_f32(m, "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3678" : "onnx::MatMul_3682"));
+    f32_tensor q_w = read_f32(m, p + ".W_query.linear.weight");
     f32_tensor q_b = read_f32(m, p + ".W_query.linear.bias");
-    f32_tensor kv_w = read_f32(m, "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3680" : "onnx::MatMul_3684"));
+    f32_tensor kv_w = read_f32(m, p + ".W_value.linear.weight");
     f32_tensor kv_b = read_f32(m, p + ".W_value.linear.bias");
-    f32_tensor out_w = read_f32(m, "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3681" : "onnx::MatMul_3685"));
+    f32_tensor out_w = read_f32(m, p + ".out_fc.linear.weight");
     f32_tensor out_b = read_f32(m, p + ".out_fc.linear.bias");
     f32_tensor tanh_k = read_f32(m, "text_encoder:/speech_prompted_text_encoder/attention" + std::to_string(attn_num) + "/tanh/Tanh_output_0");
 
@@ -1055,9 +1055,9 @@ void speech_prompted_attention_ggml(const supertonic_model & m, int idx,
     if (idx < 0 || idx >= 2) throw std::runtime_error("invalid speech attention idx");
     const int attn_num = idx + 1;
     const std::string p = "text_encoder:tts.ttl.speech_prompted_text_encoder.attention" + std::to_string(attn_num);
-    const std::string q_w = "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3678" : "onnx::MatMul_3682");
-    const std::string v_w = "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3680" : "onnx::MatMul_3684");
-    const std::string o_w = "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3681" : "onnx::MatMul_3685");
+    const std::string q_w = p + ".W_query.linear.weight";
+    const std::string v_w = p + ".W_value.linear.weight";
+    const std::string o_w = p + ".out_fc.linear.weight";
     const std::string tanh_k_src = "text_encoder:/speech_prompted_text_encoder/attention" + std::to_string(attn_num) + "/tanh/Tanh_output_0";
 
     // QVAC-18605 round 12 #6 — merged-cache fast path on non-CPU

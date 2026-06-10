@@ -39,6 +39,12 @@ uint32_t get_u32(const gguf_context * ctx, const char * key) {
     return gguf_get_val_u32(ctx, require_key(ctx, key));
 }
 
+uint32_t get_u32(const gguf_context * ctx, const char * key, uint32_t fallback) {
+    int64_t id = gguf_find_key(ctx, key);
+    if (id < 0) return fallback;
+    return gguf_get_val_u32(ctx, id);
+}
+
 float get_f32(const gguf_context * ctx, const char * key) {
     return gguf_get_val_f32(ctx, require_key(ctx, key));
 }
@@ -1680,8 +1686,8 @@ static void bind_vocoder_weights(supertonic_model & model) {
     v.normalizer_scale = require_source_tensor(model, "vocoder:tts.ttl.normalizer.scale");
     v.latent_mean = require_source_tensor(model, "vocoder:tts.ae.latent_mean");
     v.latent_std = require_source_tensor(model, "vocoder:tts.ae.latent_std");
-    v.embed_w = require_source_tensor(model, "vocoder:onnx::Conv_1440");
-    v.embed_b = require_source_tensor(model, "vocoder:onnx::Conv_1441");
+    v.embed_w = require_source_tensor(model, "vocoder:node:/decoder/embed/net/Conv#1");
+    v.embed_b = require_source_tensor(model, "vocoder:node:/decoder/embed/net/Conv#2");
     for (int i = 0; i < 10; ++i) {
         const std::string p = "vocoder:tts.ae.decoder.convnext." + std::to_string(i);
         auto & c = v.convnext[(size_t) i];
@@ -1701,7 +1707,7 @@ static void bind_vocoder_weights(supertonic_model & model) {
     v.final_norm_running_var = require_source_tensor(model, "vocoder:tts.ae.decoder.final_norm.norm.running_var");
     v.head1_w = require_source_tensor(model, "vocoder:tts.ae.decoder.head.layer1.net.weight");
     v.head1_b = require_source_tensor(model, "vocoder:tts.ae.decoder.head.layer1.net.bias");
-    v.head_prelu = require_source_tensor(model, "vocoder:onnx::PRelu_1505");
+    v.head_prelu = require_source_tensor(model, "vocoder:node:/decoder/head/act/PRelu#1");
     v.head2_w = require_source_tensor(model, "vocoder:tts.ae.decoder.head.layer2.weight");
 }
 
@@ -1738,7 +1744,7 @@ bool load_supertonic_gguf(const std::string & path,
 
     try {
         std::string arch = get_string(gguf_ctx, "supertonic.arch");
-        if (arch != "supertonic2" && arch != "supertonic") {
+        if (arch != "supertonic3" && arch != "supertonic2" && arch != "supertonic") {
             throw std::runtime_error("unexpected supertonic.arch: " + arch);
         }
 
@@ -1752,10 +1758,14 @@ bool load_supertonic_gguf(const std::string & path,
         model.hparams.latent_channels = (int) get_u32(gguf_ctx, "supertonic.latent_channels");
         model.hparams.default_steps = (int) get_u32(gguf_ctx, "supertonic.default_steps");
         model.hparams.default_speed = get_f32(gguf_ctx, "supertonic.default_speed");
+        // v3 doubles the vector-estimator text cross-attention heads (4 -> 8),
+        // keeping head_dim=64.  Older bundles omit the key, so default to 4.
+        model.hparams.vector_text_attn_heads =
+            (int) get_u32(gguf_ctx, "supertonic.vector_text_attn_heads", 4);
         model.hparams.language_wrap_mode = get_string(gguf_ctx, "supertonic.language_wrap_mode");
         if (model.hparams.language_wrap_mode.empty()) {
             bool language_wrap = get_bool_u32(gguf_ctx, "supertonic.language_wrap", arch != "supertonic");
-            model.hparams.language_wrap_mode = language_wrap ? (arch == "supertonic2" ? "open_close" : "prefix") : "none";
+            model.hparams.language_wrap_mode = language_wrap ? (arch == "supertonic" ? "prefix" : "open_close") : "none";
         }
         model.hparams.default_voice = get_string(gguf_ctx, "supertonic.default_voice", "F1");
         model.languages = get_string_array(gguf_ctx, "supertonic.languages");
@@ -2415,6 +2425,39 @@ bool load_supertonic_gguf(const std::string & path,
                         ggml_backend_tensor_set(pre, raw.data(), 0, raw.size());
                     }
                     model.pretransposed_weights[orig] = pre;
+                }
+            }
+        }
+
+        // QVAC-19305 — register cross-family stable aliases.  The
+        // converter emits `supertonic.source_aliases[i]` (a canonical,
+        // version-independent key such as
+        // `vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.W_query.linear.weight`)
+        // alongside `supertonic.source_alias_targets[i]` (the primary
+        // `<stage>:<onnx-name>` key the tensor already lives under, e.g.
+        // `vector_estimator:onnx::MatMul_3101`).  Registering both keys
+        // against the same tensor lets the runtime bind weights by their
+        // stable names regardless of how the ONNX exporter numbered them
+        // (Supertonic 2 vs 3).  Done here — after every weight,
+        // pre-transposed companion and materialised constant is already in
+        // `source_tensors` — so aliases are pure additive lookups and never
+        // perturb the load-time F6 / tanh_k / pretranspose passes above.
+        {
+            int64_t id_a = gguf_find_key(gguf_ctx, "supertonic.source_aliases");
+            int64_t id_t = gguf_find_key(gguf_ctx, "supertonic.source_alias_targets");
+            if (id_a >= 0 && id_t >= 0) {
+                std::vector<std::string> aliases = get_string_array(gguf_ctx, "supertonic.source_aliases");
+                std::vector<std::string> targets = get_string_array(gguf_ctx, "supertonic.source_alias_targets");
+                if (aliases.size() != targets.size()) {
+                    throw std::runtime_error("supertonic.source_aliases / source_alias_targets length mismatch");
+                }
+                for (size_t i = 0; i < aliases.size(); ++i) {
+                    auto it = model.source_tensors.find(targets[i]);
+                    if (it == model.source_tensors.end() || !it->second) continue;
+                    // Don't clobber a real primary entry with an alias.
+                    if (model.source_tensors.find(aliases[i]) == model.source_tensors.end()) {
+                        model.source_tensors[aliases[i]] = it->second;
+                    }
                 }
             }
         }

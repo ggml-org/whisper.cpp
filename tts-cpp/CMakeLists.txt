@@ -1016,6 +1016,21 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-kv-attn-type-api)
     tts_cpp_register_test(test-supertonic-kv-attn-type-api LABEL "unit")
 
+    # QVAC-19305 — Supertonic v3 language-coverage contract.
+    # Pins the runtime language validator against the v3 bundle
+    # (31 languages + the language-agnostic `na`) shipped in the
+    # GGUF `supertonic.languages` array; asserts the built-in
+    # fallback still only accepts the legacy v1/v2 5-language set.
+    # CPU-only unit test (no model); an optional fixture sub-test
+    # cross-checks a loaded model's advertised languages when a
+    # GGUF path is passed as argv[1].
+    add_executable(test-supertonic-languages
+        test/test_supertonic_languages.cpp)
+    target_link_libraries(test-supertonic-languages PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-languages PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-languages)
+    tts_cpp_register_test(test-supertonic-languages LABEL "unit")
+
     # QVAC-18605 round 7 — Vulkan env-var passthrough mechanism
     # (EngineOptions::vulkan_env_overrides + apply_vulkan_env_overrides
     # public helper).  Tests cover: SFINAE field existence, empty-

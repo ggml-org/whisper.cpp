@@ -16,12 +16,13 @@ usage() {
 usage: bash scripts/setup-supertonic2.sh [options] [converter options]
 
 options:
-  --arch supertonic2|supertonic  Which upstream bundle to download.
+  --arch supertonic3|supertonic2|supertonic
+                                Which upstream bundle to download.
                                 default: supertonic2
   --repo-id REPO                Hugging Face repo override.
-                                default: Supertone/supertonic-2 or Supertone/supertonic
+                                default: Supertone/supertonic-3, -2, or -1 by arch
   --out PATH                    Output GGUF path.
-                                default: models/supertonic2.gguf or models/supertonic.gguf
+                                default: models/<arch>.gguf
   --python PATH                 Python interpreter. default: $PYTHON or python3
   -h, --help                    Show this help.
 
@@ -69,6 +70,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$ARCH" in
+    supertonic3)
+        REPO_ID="${REPO_ID:-Supertone/supertonic-3}"
+        OUT="${OUT:-$ROOT/models/supertonic3.gguf}"
+        ;;
     supertonic2)
         REPO_ID="${REPO_ID:-Supertone/supertonic-2}"
         OUT="${OUT:-$ROOT/models/supertonic2.gguf}"
@@ -78,7 +83,7 @@ case "$ARCH" in
         OUT="${OUT:-$ROOT/models/supertonic.gguf}"
         ;;
     *)
-        echo "error: --arch must be 'supertonic2' or 'supertonic'" >&2
+        echo "error: --arch must be 'supertonic3', 'supertonic2', or 'supertonic'" >&2
         exit 2
         ;;
 esac

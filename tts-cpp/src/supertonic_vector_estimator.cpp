@@ -1651,7 +1651,7 @@ void build_group_graph_cache(vector_group_graph_cache & cache,
     // the GGUF didn't ship a `vector_rope_theta` (cache.apply_rope
     // stays false; call sites then keep the legacy host
     // apply_rope call).
-    const int H = 4;
+    const int H = model.hparams.vector_text_attn_heads;  // v1/v2=4, v3=8
     const int D = 64;
     const int half = D / 2;
     cache.apply_rope = (int) model.vector_rope_theta.size() == half;
@@ -2692,7 +2692,12 @@ void apply_rope(const float * theta, std::vector<float> & x, int L, int H, int D
 void rope_attn(const supertonic_model & m, int group, std::vector<float> & x, int L,
                const float * text_emb, int LT, std::vector<float> & out) {
     static const int qids[4]={3101,3146,3191,3236}, kids[4]={3102,3147,3192,3237}, vids[4]={3103,3148,3193,3238}, oids[4]={3110,3155,3200,3245};
-    int C=512, A=256, H=4, D=64;
+    // Text cross-attention head count differs across families (v1/v2: 4 heads,
+    // v3: 8 heads); head_dim stays 64 so the internal width A = H*64 grows
+    // 256 -> 512 in v3.  Bound from GGUF metadata.
+    const int D=64;
+    const int H=m.hparams.vector_text_attn_heads;
+    int C=512, A=H*D;
     std::string base="vector_estimator:tts.ttl.vector_field.main_blocks."+std::to_string(group*6+3)+".attn.";
     std::vector<float> q,k,v;
     dense_matmul_time(x,L,C,read_f32(m,"vector_estimator:onnx::MatMul_"+std::to_string(qids[group])),read_f32(m,base+"W_query.linear.bias"),A,q);
@@ -2806,6 +2811,10 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         const int L = latent_len;
         const int Cin = model.hparams.latent_channels;
         const int C = 512;
+        // Text cross-attention head count: v1/v2=4, v3=8.  head_dim stays 64,
+        // so the internal attention width A = H_text*64 (256 -> 512 in v3).
+        const int H_text = model.hparams.vector_text_attn_heads;
+        const int A_text = H_text * 64;
 #define PUSH_GGML_TRACE(...) do { if (include_ggml_trace) ggml_trace.push_back(supertonic_trace_tensor __VA_ARGS__); } while (0)
         profile_vector_step_begin(current_step);
         std::vector<float> in((size_t) L * Cin);
@@ -2850,7 +2859,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             convnext(model, "vector_estimator:tts.ttl.vector_field.main_blocks.2.convnext.0", block, L, C, 1);
             push_trace(scalar_trace, "ve_block2_convnext0", L, C, block);
 
-            const int A = 256;
+            const int A = A_text;
             std::string base = "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.";
             std::vector<float> q, k, v;
             dense_matmul_time(block, L, C, read_f32(model, "vector_estimator:onnx::MatMul_3101"),
@@ -2870,13 +2879,13 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             push_trace(scalar_trace, "ve_attn0_v", text_len, A, v);
             // F1: theta lives in model.vector_rope_theta (populated at load).
             const float * theta_t = model.vector_rope_theta.data();
-            apply_rope(theta_t, q, L, 4, 64);
-            apply_rope(theta_t, k, text_len, 4, 64);
+            apply_rope(theta_t, q, L, H_text, 64);
+            apply_rope(theta_t, k, text_len, H_text, 64);
             push_trace(scalar_trace, "ve_attn0_q_rope", L, A, q);
             push_trace(scalar_trace, "ve_attn0_k_rope", text_len, A, k);
 
             std::vector<float> attn_ctx((size_t)L*A, 0.0f), scores(text_len), probs(text_len);
-            const int H = 4, D = 64;
+            const int H = H_text, D = 64;
             const float scale = 1.0f / 16.0f;
             for (int h = 0; h < H; ++h) for (int qi = 0; qi < L; ++qi) {
                 float mx = -INFINITY;
@@ -2988,7 +2997,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         push_trace(scalar_trace, "ve_group1_block8_convnext0", L, C, residual);
 
         {
-            const int A1 = 256;
+            const int A1 = A_text;
             std::string base1 = "vector_estimator:tts.ttl.vector_field.main_blocks.9.attn.";
             std::vector<float> q1, k1, v1;
             dense_matmul_time(residual, L, C, read_f32(model, "vector_estimator:onnx::MatMul_3146"),
@@ -3002,23 +3011,23 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             push_trace(scalar_trace, "ve_g1_attn_v", text_len, A1, v1);
             // F1: theta lives in model.vector_rope_theta (populated at load).
             const float * theta1 = model.vector_rope_theta.data();
-            apply_rope(theta1, q1, L, 4, 64);
-            apply_rope(theta1, k1, text_len, 4, 64);
+            apply_rope(theta1, q1, L, H_text, 64);
+            apply_rope(theta1, k1, text_len, H_text, 64);
             push_trace(scalar_trace, "ve_g1_attn_q_rope", L, A1, q1);
             push_trace(scalar_trace, "ve_g1_attn_k_rope", text_len, A1, k1);
             std::vector<float> ctx1((size_t)L*A1, 0.0f), scores1(text_len), probs1(text_len);
-            for (int h = 0; h < 4; ++h) for (int qi = 0; qi < L; ++qi) {
+            for (int h = 0; h < H_text; ++h) for (int qi = 0; qi < L; ++qi) {
                 float mx = -INFINITY;
                 for (int kj = 0; kj < text_len; ++kj) {
                     float s = 0.0f;
-                    for (int d = 0; d < 64; ++d) s += q1[((size_t)qi*4+h)*64+d] * k1[((size_t)kj*4+h)*64+d] * (1.0f/16.0f);
+                    for (int d = 0; d < 64; ++d) s += q1[((size_t)qi*H_text+h)*64+d] * k1[((size_t)kj*H_text+h)*64+d] * (1.0f/16.0f);
                     scores1[kj] = s; mx = std::max(mx, s);
                 }
                 float den = 0.0f;
                 for (int kj = 0; kj < text_len; ++kj) { probs1[kj] = std::exp(scores1[kj]-mx); den += probs1[kj]; }
                 for (int d = 0; d < 64; ++d) {
                     float sum = 0.0f;
-                    for (int kj = 0; kj < text_len; ++kj) sum += (probs1[kj]/den) * v1[((size_t)kj*4+h)*64+d];
+                    for (int kj = 0; kj < text_len; ++kj) sum += (probs1[kj]/den) * v1[((size_t)kj*H_text+h)*64+d];
                     ctx1[(size_t)qi*A1 + h*64 + d] = sum;
                 }
             }
@@ -3100,7 +3109,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         push_trace(scalar_trace, "ve_group2_block14_convnext0", L, C, residual);
 
         {
-            const int A2 = 256;
+            const int A2 = A_text;
             std::string base2 = "vector_estimator:tts.ttl.vector_field.main_blocks.15.attn.";
             std::vector<float> q2, k2, v2;
             dense_matmul_time(residual, L, C, read_f32(model, "vector_estimator:onnx::MatMul_3191"),
@@ -3114,23 +3123,23 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             push_trace(scalar_trace, "ve_g2_attn_v", text_len, A2, v2);
             // F1: theta lives in model.vector_rope_theta (populated at load).
             const float * theta2 = model.vector_rope_theta.data();
-            apply_rope(theta2, q2, L, 4, 64);
-            apply_rope(theta2, k2, text_len, 4, 64);
+            apply_rope(theta2, q2, L, H_text, 64);
+            apply_rope(theta2, k2, text_len, H_text, 64);
             push_trace(scalar_trace, "ve_g2_attn_q_rope", L, A2, q2);
             push_trace(scalar_trace, "ve_g2_attn_k_rope", text_len, A2, k2);
             std::vector<float> ctx2((size_t)L*A2, 0.0f), scores2(text_len), probs2(text_len);
-            for (int h = 0; h < 4; ++h) for (int qi = 0; qi < L; ++qi) {
+            for (int h = 0; h < H_text; ++h) for (int qi = 0; qi < L; ++qi) {
                 float mx = -INFINITY;
                 for (int kj = 0; kj < text_len; ++kj) {
                     float s = 0.0f;
-                    for (int d = 0; d < 64; ++d) s += q2[((size_t)qi*4+h)*64+d] * k2[((size_t)kj*4+h)*64+d] * (1.0f/16.0f);
+                    for (int d = 0; d < 64; ++d) s += q2[((size_t)qi*H_text+h)*64+d] * k2[((size_t)kj*H_text+h)*64+d] * (1.0f/16.0f);
                     scores2[kj] = s; mx = std::max(mx, s);
                 }
                 float den = 0.0f;
                 for (int kj = 0; kj < text_len; ++kj) { probs2[kj] = std::exp(scores2[kj]-mx); den += probs2[kj]; }
                 for (int d = 0; d < 64; ++d) {
                     float sum = 0.0f;
-                    for (int kj = 0; kj < text_len; ++kj) sum += (probs2[kj]/den) * v2[((size_t)kj*4+h)*64+d];
+                    for (int kj = 0; kj < text_len; ++kj) sum += (probs2[kj]/den) * v2[((size_t)kj*H_text+h)*64+d];
                     ctx2[(size_t)qi*A2 + h*64 + d] = sum;
                 }
             }
@@ -3212,7 +3221,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         push_trace(scalar_trace, "ve_group3_block20_convnext0", L, C, residual);
 
         {
-            const int A3 = 256;
+            const int A3 = A_text;
             std::string base3 = "vector_estimator:tts.ttl.vector_field.main_blocks.21.attn.";
             std::vector<float> q3, k3, v3;
             dense_matmul_time(residual, L, C, read_f32(model, "vector_estimator:onnx::MatMul_3236"),
@@ -3226,23 +3235,23 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             push_trace(scalar_trace, "ve_g3_attn_v", text_len, A3, v3);
             // F1: theta lives in model.vector_rope_theta (populated at load).
             const float * theta3 = model.vector_rope_theta.data();
-            apply_rope(theta3, q3, L, 4, 64);
-            apply_rope(theta3, k3, text_len, 4, 64);
+            apply_rope(theta3, q3, L, H_text, 64);
+            apply_rope(theta3, k3, text_len, H_text, 64);
             push_trace(scalar_trace, "ve_g3_attn_q_rope", L, A3, q3);
             push_trace(scalar_trace, "ve_g3_attn_k_rope", text_len, A3, k3);
             std::vector<float> ctx3((size_t)L*A3, 0.0f), scores3(text_len), probs3(text_len);
-            for (int h = 0; h < 4; ++h) for (int qi = 0; qi < L; ++qi) {
+            for (int h = 0; h < H_text; ++h) for (int qi = 0; qi < L; ++qi) {
                 float mx = -INFINITY;
                 for (int kj = 0; kj < text_len; ++kj) {
                     float s = 0.0f;
-                    for (int d = 0; d < 64; ++d) s += q3[((size_t)qi*4+h)*64+d] * k3[((size_t)kj*4+h)*64+d] * (1.0f/16.0f);
+                    for (int d = 0; d < 64; ++d) s += q3[((size_t)qi*H_text+h)*64+d] * k3[((size_t)kj*H_text+h)*64+d] * (1.0f/16.0f);
                     scores3[kj] = s; mx = std::max(mx, s);
                 }
                 float den = 0.0f;
                 for (int kj = 0; kj < text_len; ++kj) { probs3[kj] = std::exp(scores3[kj]-mx); den += probs3[kj]; }
                 for (int d = 0; d < 64; ++d) {
                     float sum = 0.0f;
-                    for (int kj = 0; kj < text_len; ++kj) sum += (probs3[kj]/den) * v3[((size_t)kj*4+h)*64+d];
+                    for (int kj = 0; kj < text_len; ++kj) sum += (probs3[kj]/den) * v3[((size_t)kj*H_text+h)*64+d];
                     ctx3[(size_t)qi*A3 + h*64 + d] = sum;
                 }
             }
@@ -3561,7 +3570,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             // call site below can drop the host `apply_rope`
             // round-trips.  Falls through to the legacy host
             // rotation path when the GGUF didn't ship theta.
-            const int FRONT_H = 4;
+            const int FRONT_H = H_text;
             const int FRONT_D = 64;
             const int FRONT_HALF = FRONT_D / 2;
             front_cache.apply_rope =
@@ -3744,7 +3753,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             // Mirrors the g1/g2/g3 dispatch at lines 2926-2933.
             attn_out_ggml = run_text_attention_cache_gpu(att0_cache, model,
                 q_rope_gpu_attn0, k_rope_gpu_attn0, v_gpu_attn0,
-                L, text_len, 4, 64,
+                L, text_len, H_text, 64,
                 "vector_estimator:onnx::MatMul_3110",
                 "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.out_fc.linear.bias",
                 current_step, "attn0_flash",
@@ -3801,13 +3810,13 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
                     k_out = tensor_to_time_channel(ggml_graph_get_tensor(gf, "ve_attn0_k"));
                 }
                 const float * theta = model.vector_rope_theta.data();
-                apply_rope(theta, q_out, L, 4, 64);
-                apply_rope(theta, k_out, text_len, 4, 64);
+                apply_rope(theta, q_out, L, H_text, 64);
+                apply_rope(theta, k_out, text_len, H_text, 64);
                 q_rotated = std::move(q_out);
                 k_rotated = std::move(k_out);
             }
             attn_out_ggml = run_text_attention_cache(att0_cache, model, q_rotated, k_rotated, v_out,
-                L, text_len, 4, 64,
+                L, text_len, H_text, 64,
                 "vector_estimator:onnx::MatMul_3110",
                 "vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.out_fc.linear.bias",
                 current_step, "attn0_flash",
@@ -3919,7 +3928,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         if (g1_group.q_rope_gpu && g1_group.k_rope_gpu && g1_group.v_gpu) {
             g1_attn_out = run_text_attention_cache_gpu(g1_attn_cache, model,
                 g1_group.q_rope_gpu, g1_group.k_rope_gpu, g1_group.v_gpu,
-                L, text_len, 4, 64,
+                L, text_len, H_text, 64,
                 "vector_estimator:onnx::MatMul_3155",
                 "vector_estimator:tts.ttl.vector_field.main_blocks.9.attn.out_fc.linear.bias",
                 current_step, "g1_attn_flash",
@@ -3931,11 +3940,11 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             std::vector<float> g1q_rotated = g1q_out;
             std::vector<float> g1k_rotated = g1k_out;
             const float * theta_g1 = model.vector_rope_theta.data();
-            apply_rope(theta_g1, g1q_rotated, L, 4, 64);
-            apply_rope(theta_g1, g1k_rotated, text_len, 4, 64);
+            apply_rope(theta_g1, g1q_rotated, L, H_text, 64);
+            apply_rope(theta_g1, g1k_rotated, text_len, H_text, 64);
             g1_attn_out = run_text_attention_cache(g1_attn_cache, model,
                 g1q_rotated, g1k_rotated, g1v_out,
-                L, text_len, 4, 64,
+                L, text_len, H_text, 64,
                 "vector_estimator:onnx::MatMul_3155",
                 "vector_estimator:tts.ttl.vector_field.main_blocks.9.attn.out_fc.linear.bias",
                 current_step, "g1_attn_flash",
@@ -4029,7 +4038,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         if (g2_group.q_rope_gpu && g2_group.k_rope_gpu && g2_group.v_gpu) {
             g2_attn_out = run_text_attention_cache_gpu(g2_attn_cache, model,
                 g2_group.q_rope_gpu, g2_group.k_rope_gpu, g2_group.v_gpu,
-                L, text_len, 4, 64,
+                L, text_len, H_text, 64,
                 "vector_estimator:onnx::MatMul_3200",
                 "vector_estimator:tts.ttl.vector_field.main_blocks.15.attn.out_fc.linear.bias",
                 current_step, "g2_attn_flash",
@@ -4041,11 +4050,11 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             std::vector<float> g2q_rotated = g2q_out;
             std::vector<float> g2k_rotated = g2k_out;
             const float * theta_g2 = model.vector_rope_theta.data();
-            apply_rope(theta_g2, g2q_rotated, L, 4, 64);
-            apply_rope(theta_g2, g2k_rotated, text_len, 4, 64);
+            apply_rope(theta_g2, g2q_rotated, L, H_text, 64);
+            apply_rope(theta_g2, g2k_rotated, text_len, H_text, 64);
             g2_attn_out = run_text_attention_cache(g2_attn_cache, model,
                 g2q_rotated, g2k_rotated, g2v_out,
-                L, text_len, 4, 64,
+                L, text_len, H_text, 64,
                 "vector_estimator:onnx::MatMul_3200",
                 "vector_estimator:tts.ttl.vector_field.main_blocks.15.attn.out_fc.linear.bias",
                 current_step, "g2_attn_flash",
@@ -4133,7 +4142,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         if (g3_group.q_rope_gpu && g3_group.k_rope_gpu && g3_group.v_gpu) {
             g3_attn_out = run_text_attention_cache_gpu(g3_attn_cache, model,
                 g3_group.q_rope_gpu, g3_group.k_rope_gpu, g3_group.v_gpu,
-                L, text_len, 4, 64,
+                L, text_len, H_text, 64,
                 "vector_estimator:onnx::MatMul_3245",
                 "vector_estimator:tts.ttl.vector_field.main_blocks.21.attn.out_fc.linear.bias",
                 current_step, "g3_attn_flash",
@@ -4145,11 +4154,11 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
             std::vector<float> g3q_rotated = g3q_out;
             std::vector<float> g3k_rotated = g3k_out;
             const float * theta_g3 = model.vector_rope_theta.data();
-            apply_rope(theta_g3, g3q_rotated, L, 4, 64);
-            apply_rope(theta_g3, g3k_rotated, text_len, 4, 64);
+            apply_rope(theta_g3, g3q_rotated, L, H_text, 64);
+            apply_rope(theta_g3, g3k_rotated, text_len, H_text, 64);
             g3_attn_out = run_text_attention_cache(g3_attn_cache, model,
                 g3q_rotated, g3k_rotated, g3v_out,
-                L, text_len, 4, 64,
+                L, text_len, H_text, 64,
                 "vector_estimator:onnx::MatMul_3245",
                 "vector_estimator:tts.ttl.vector_field.main_blocks.21.attn.out_fc.linear.bias",
                 current_step, "g3_attn_flash",
@@ -4459,8 +4468,8 @@ ggml_tensor * append_supertonic_vector_step_subgraph(
     // Shape constants that aren't dependent on L / text_len.  Mirror the
     // values from supertonic_vector_step_one_graph_ggml.
     const int C = 512;
-    const int H = 4;        // text-attention heads
-    const int D = 64;       // text-attention head_dim
+    const int H = model.hparams.vector_text_attn_heads;  // text-attn heads: v1/v2=4, v3=8
+    const int D = 64;       // text-attention head_dim (constant; width A = H*D)
     const int SH = 2;       // style-attention heads
     const int SD = 128;     // style-attention head_dim
     const int kv_style = 50; // fixed by /Expand_output_0
@@ -4696,9 +4705,9 @@ bool supertonic_vector_step_one_graph_ggml(const supertonic_model & model,
         const int Cin = model.hparams.latent_channels;  // typically 16
         const int C = 512;
         const int text_C = 256;
-        const int H = 4;        // text-attention heads
+        const int H = model.hparams.vector_text_attn_heads;  // v1/v2=4, v3=8
         const int D = 64;       // text-attention head_dim
-        const int A = H * D;    // 256 = attention width
+        const int A = H * D;    // attention width: 256 (v1/v2) or 512 (v3)
         const int SH = 2;       // style-attention heads
         const int SD = 128;     // style-attention head_dim
         const int kv_style = 50; // style attention kv length (fixed by /Expand_output_0)

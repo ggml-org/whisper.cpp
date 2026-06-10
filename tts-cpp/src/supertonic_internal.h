@@ -50,6 +50,11 @@ struct supertonic_hparams {
     int latent_channels = 144;
     int default_steps = 5;
     float default_speed = 1.05f;
+    // Vector-estimator text cross-attention head count.  The only internal
+    // topology dim that differs across families (v1/v2: 4 heads, v3: 8 heads;
+    // head_dim stays 64).  Read from GGUF `supertonic.vector_text_attn_heads`,
+    // defaulting to 4 for bundles converted before the key existed.
+    int vector_text_attn_heads = 4;
     std::string language_wrap_mode = "open_close";
     std::string default_voice = "F1";
 };
@@ -619,10 +624,15 @@ ggml_tensor * try_source_tensor(const supertonic_model & model, const std::strin
 // conv1d kernel `[K=1, IC, OC]` directly and skip the cont(transpose(w)).
 ggml_tensor * try_pretransposed_weight(const supertonic_model & model, const ggml_tensor * w);
 
+// `supported_languages`, when non-null and non-empty, is the authoritative set
+// of accepted language codes (the model's `supertonic.languages` GGUF array).
+// When null/empty the function falls back to the legacy built-in 5-language
+// allowlist so direct callers/tests without a model keep working.
 std::string supertonic_preprocess_text(const std::string & text,
                                        const std::string & language,
                                        const std::string & language_wrap_mode,
-                                       bool is_continuation = false);
+                                       bool is_continuation = false,
+                                       const std::vector<std::string> * supported_languages = nullptr);
 bool supertonic_text_to_ids(const supertonic_model & model,
                             const std::string & text,
                             const std::string & language,
