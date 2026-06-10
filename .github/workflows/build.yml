@@ -141,11 +141,14 @@ jobs:
 # 2. ROCm — Linux
 # ════════════════════════════════════════════════════════════════════════════════
   linux-rocm:
-    if: false   # temporarily disabled — windows-rocm gfx1151 only
     runs-on: ubuntu-22.04
     needs: [determine-tag, prepare-rocm-matrix]
     strategy:
-      matrix: ${{ fromJson(needs.prepare-rocm-matrix.outputs.ubuntu_matrix) }}
+      matrix:
+        gfx_target: [gfx1151]   # temporarily pinned — full matrix restored once CI passes
+        build: [Release]
+        sdl2: [ON]
+        arch: [linux/amd64]
       fail-fast: false
 
     steps:
@@ -195,7 +198,26 @@ jobs:
             -DWHISPER_SDL2=${{ matrix.sdl2 }}
 
       - name: Build
-        run: cmake --build build --config ${{ matrix.build }} -j$(nproc)
+        run: |
+          cmake --build build --config ${{ matrix.build }} -j$(nproc) > build.log 2>&1
+          exit_code=$?
+          grep -E "error:|FAILED|Linking|Built target|warning:" build.log || true
+          if [ $exit_code -ne 0 ]; then
+            echo "--- Last 100 lines of build log ---"
+            tail -100 build.log
+            echo "Build failed with exit code $exit_code"
+            exit $exit_code
+          fi
+          echo "Build succeeded."
+
+      - name: Verify build output
+        run: |
+          if [ ! -f build/bin/whisper-cli ]; then
+            echo "::error::whisper-cli not found — build likely truncated"
+            ls -lh build/bin/ 2>/dev/null || true
+            exit 1
+          fi
+          echo "Build output:"; ls -lh build/bin/whisper-cli
 
       - name: Copy ROCm runtime libs
         run: |
@@ -268,11 +290,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Ninja
-        run: choco install ninja
+        shell: powershell
+        run: choco install ninja -y
 
       - name: Fetch SDL2 and patch header
         if: matrix.sdl2 == 'ON'
-        shell: pwsh
+        shell: powershell
         run: |
           $url = "https://github.com/libsdl-org/SDL/releases/download/release-${{ matrix.s2ver }}/SDL2-devel-${{ matrix.s2ver }}-VC.zip"
           Invoke-WebRequest -Uri $url -OutFile sdl2.zip
@@ -289,28 +312,36 @@ jobs:
             }
           } else { Write-Error "SDL_endian.h not found"; exit 1 }
 
-      - name: Download ROCm tarball
-        shell: bash
+      - name: Download and extract ROCm tarball
+        shell: powershell
         run: |
-          source ci/resolve-rocm-version.sh windows "${{ matrix.gfx_target }}" "${{ env.ROCM_VERSION }}"
-          echo "DETECTED_ROCM_VERSION=$ROCM_RESOLVED_VERSION" >> $GITHUB_ENV
-          curl -sL "$ROCM_TARBALL_URL" -o rocm.tar.gz
-
-      - name: Extract ROCm
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path "C:\opt\rocm"
+          $gfx    = "${{ matrix.gfx_target }}"
+          $ver    = "${{ env.ROCM_VERSION }}"
+          # resolve base target (group targets always use gfx1151 tarball)
+          $base   = if ($gfx -in @("gfx110X","gfx120X","gfx1150","gfx1100")) { "gfx1151" } else { $gfx }
+          $url    = "https://repo.amd.com/rocm/tarball/therock-dist-windows-${base}-${ver}.tar.gz"
+          Write-Host "ROCm version: $ver"
+          Write-Host "ROCm URL: $url"
+          "DETECTED_ROCM_VERSION=$ver" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          Invoke-WebRequest -Uri $url -OutFile rocm.tar.gz
+          New-Item -ItemType Directory -Force -Path "C:\opt\rocm" | Out-Null
           tar -xzf rocm.tar.gz -C C:\opt\rocm --strip-components=1
 
       - name: Map GPU target
         id: gpu
-        shell: bash
+        shell: powershell
         run: |
-          source ci/map-gpu-target.sh "${{ matrix.gfx_target }}"
-          echo "mapped=$MAPPED_GPU_TARGET" >> $GITHUB_OUTPUT
+          $gfx = "${{ matrix.gfx_target }}"
+          $mapped = switch ($gfx) {
+            "gfx110X" { "gfx1100;gfx1101;gfx1102" }
+            "gfx120X" { "gfx1200;gfx1201" }
+            default   { $gfx }
+          }
+          Write-Host "Mapped GPU target: $gfx -> $mapped"
+          "mapped=$mapped" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Configure CMake
-        shell: pwsh
+        shell: powershell
         run: |
           $env:HIP_PATH   = "C:\opt\rocm"
           $env:HIP_PLATFORM = "amd"
@@ -331,11 +362,22 @@ jobs:
             -DWHISPER_SDL2=${{ matrix.sdl2 }}
 
       - name: Build
-        shell: pwsh
-        run: cmake --build build --config ${{ matrix.build }} -j $env:NUMBER_OF_PROCESSORS
+        shell: powershell
+        run: |
+          cmake --build build --config ${{ matrix.build }} -j $env:NUMBER_OF_PROCESSORS > build.log 2>&1
+          $exit = $LASTEXITCODE
+          # Show only errors and link steps — keeps log under GitHub's line limit
+          Get-Content build.log | Select-String -Pattern "error:|FAILED|Linking|Built target|warning: " | Write-Host
+          if ($exit -ne 0) {
+            Write-Host "--- Last 100 lines of build log ---"
+            Get-Content build.log -Tail 100
+            Write-Error "Build failed with exit code $exit"
+            exit $exit
+          }
+          Write-Host "Build succeeded."
 
       - name: Copy ROCm DLLs
-        shell: pwsh
+        shell: powershell
         run: |
           $bin    = "build/bin/${{ matrix.build }}"
           $rocBin = "C:\opt\rocm\bin"
@@ -351,11 +393,23 @@ jobs:
 
       - name: Copy SDL2.dll
         if: matrix.sdl2 == 'ON'
-        shell: pwsh
+        shell: powershell
         run: copy "$env:SDL2_DIR/../lib/${{ matrix.s2arc }}/SDL2.dll" "build/bin/${{ matrix.build }}"
 
+      - name: Verify build output
+        shell: powershell
+        run: |
+          $bin = "build/bin/${{ matrix.build }}"
+          if (-not (Test-Path "$bin/whisper-cli.exe")) {
+            Write-Error "whisper-cli.exe not found in $bin — build likely truncated"
+            Get-ChildItem $bin -ErrorAction SilentlyContinue | Format-Table Name, Length
+            exit 1
+          }
+          Write-Host "Build output:"
+          Get-ChildItem $bin -Filter "*.exe" | Format-Table Name, Length
+
       - name: Package
-        shell: pwsh
+        shell: powershell
         run: |
           $a = "whisper-${{ needs.determine-tag.outputs.version }}-windows-rocm-${{ matrix.gfx_target }}.zip"
           Compress-Archive -Path "build/bin/${{ matrix.build }}/*" -DestinationPath $a -Force
@@ -370,7 +424,6 @@ jobs:
 # 4. Vulkan — Linux
 # ════════════════════════════════════════════════════════════════════════════════
   linux-vulkan:
-    if: false   # temporarily disabled — windows-rocm gfx1151 only
     runs-on: ubuntu-latest
     needs: determine-tag
 
@@ -812,9 +865,9 @@ jobs:
 # 12. Test — Vulkan Linux (stx-halo, has Vulkan driver)
 # ════════════════════════════════════════════════════════════════════════════════
   test-vulkan-linux:
-    if: false   # temporarily disabled
     runs-on: [self-hosted, Linux, stx-halo]
     needs: [determine-tag, linux-vulkan]
+    if: needs.linux-vulkan.result == 'success'
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -884,9 +937,9 @@ jobs:
 # 14. Test — ROCm Linux (stx-halo, gfx1151)
 # ════════════════════════════════════════════════════════════════════════════════
   test-rocm-linux:
-    if: false   # temporarily disabled
     runs-on: [self-hosted, Linux, stx-halo]
     needs: [determine-tag, linux-rocm]
+    if: needs.linux-rocm.result == 'success'
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
