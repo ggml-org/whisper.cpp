@@ -124,7 +124,7 @@ set_tests_properties(${PARAKEET_TEST} PROPERTIES LABELS "parakeet;gh")
 
 # The following parakeet test require a real ggml-parakeet-tdt model to have
 # been converted or downloaded:
-# $ hf download danbev/parakeet parakeet-tdt-0.6b-v3.bin --local-dir models
+# $ hf download danbev/parakeet parakeet-tdt-0.6b-v3-f32.bin --local-dir models
 #
 # And also required more audio samples that are shipped by default. These can
 # downloaded by running:
@@ -139,7 +139,7 @@ function(add_parakeet_transcription_test TEST_TARGET TEST_SOURCE SAMPLE_PATH EXP
     target_include_directories(${TEST_TARGET} PRIVATE ../include ../ggml/include ../examples)
     target_link_libraries(${TEST_TARGET} PRIVATE parakeet common)
     target_compile_definitions(${TEST_TARGET} PRIVATE
-        PARAKEET_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/ggml-parakeet-tdt-0.6b-v3.bin"
+        PARAKEET_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/ggml-parakeet-tdt-0.6b-v3-f32.bin"
         SAMPLE_PATH="${PROJECT_SOURCE_DIR}/${SAMPLE_PATH}"
         EXPECTED_TRANSCRIPTION_PATH="${PROJECT_SOURCE_DIR}/${EXPECTED_TRANSCRIPTION_PATH}"
         TRANSCRIPTION_SIMILARITY_THRESHOLD=${TRANSCRIPTION_SIMILARITY_THRESHOLD})

@@ -4,7 +4,7 @@ This is an example of using the [Parakeet] model in whisper.cpp.
 
 ### Download converted model
 ```console
-$ hf download danbev/parakeet parakeet-tdt-0.6b-v3.bin --local-dir models
+$ hf download danbev/parakeet-GGUF parakeet-tdt-0.6b-v3-f16.bin --local-dir models
 ```
 
 ### Building
@@ -23,9 +23,6 @@ supported audio formats: flac, mp3, ogg, wav
 options:
   -h,     --help              [default] show this help message and exit
   -t N,   --threads N         [4      ] number of threads to use during computation
-  -cl N,  --chunk-length N    [10000  ] chunk length in milliseconds
-  -lc N,  --left-context N    [10000  ] left context in milliseconds
-  -rc N,  --right-context N   [4960   ] right context in milliseconds
   -m,     --model FILE        [models/ggml-parakeet-tdt-0.6b-v3.bin] model path
   -f,     --file FILE         [       ] input audio file
   -ng,    --no-gpu            [false  ] disable GPU
@@ -35,7 +32,7 @@ options:
 
 ### Example
 ```console
-$ ./build/bin/parakeet-cli -m models/parakeet-tdt-0.6b-v3.bin -f samples/jfk.wav
+$ ./build/bin/parakeet-cli -m models/parakeet-tdt-0.6b-v3-f16.bin -f samples/jfk.wav
 Processing audio (176000 samples, 11.00 seconds)
 Processing audio: total_frames=1101, chunk_size=1101
 parakeet_decode: starting decode with n_frames=138
@@ -44,7 +41,7 @@ And so, my fellow Americans, ask not what your country can do for you, ask what 
 
 To print segment information:
 ```console
-$ ./build/bin/parakeet-cli -m models/parakeet-tdt-0.6b-v3.bin -f samples/jfk.wav --print-segments
+$ ./build/bin/parakeet-cli -m models/parakeet-tdt-0.6b-v3-f16.bin -f samples/jfk.wav --print-segments
 Processing audio (176000 samples, 11.00 seconds)
 Processing audio: total_frames=1101, chunk_size=1101
 parakeet_decode: starting decode with n_frames=138
@@ -102,9 +99,8 @@ Convert the model:
 ```console
 (venv) $ python models/convert-parakeet-to-ggml.py \
     --model <path to cloned model> \
-    --use-f32 \
     --out-dir models \
-    --out-name ggml-parakeet-tdt-0.6b-v3.bin
+    --out-name ggml-parakeet-tdt-0.6b-v3-f16.bin
 ```
 
 [Parakeet]: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3

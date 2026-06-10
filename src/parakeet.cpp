@@ -1121,7 +1121,7 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
     }
 
     const ggml_type wtype = wctx.wtype;
-    const ggml_type vtype = wctx.wtype == GGML_TYPE_F32 ? GGML_TYPE_F32 : GGML_TYPE_F16; // conv type
+    const ggml_type vtype = GGML_TYPE_F32; // ggml_conv2d_dw CUDA kernel requires F32
 
     const int n_audio_layer = hparams.n_audio_layer;
 
@@ -1244,7 +1244,7 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
         ggml_format_name(layer.norm_conv_b, "enc_%d_norm_conv_b", i);
         layer.conv_pw1_w          = create_tensor(PARAKEET_TENSOR_ENC_CONV_PW1_WEIGHT, ggml_new_tensor_2d(ctx, wtype, n_audio_state, 2*n_audio_state), i);
         ggml_format_name(layer.conv_pw1_w, "enc_%d_conv_pw1_w", i);
-        layer.conv_dw_w           = create_tensor(PARAKEET_TENSOR_ENC_CONV_DW_WEIGHT, ggml_new_tensor_2d(ctx, wtype, hparams.n_conv_kernel, n_audio_state), i);
+        layer.conv_dw_w           = create_tensor(PARAKEET_TENSOR_ENC_CONV_DW_WEIGHT, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.n_conv_kernel, n_audio_state), i);
         ggml_format_name(layer.conv_dw_w, "enc_%d_conv_dw_w", i);
         layer.conv_bn_w           = create_tensor(PARAKEET_TENSOR_ENC_CONV_BN_WEIGHT, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_audio_state), i);
         ggml_format_name(layer.conv_bn_w, "enc_%d_conv_bn_w", i);
