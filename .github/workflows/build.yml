@@ -893,6 +893,7 @@ jobs:
   test-npu-windows:
     runs-on: [self-hosted, Windows, rai300_400]
     needs: [determine-tag, windows-npu]
+
     if: needs.windows-npu.result == 'success'
     continue-on-error: true
     steps:
