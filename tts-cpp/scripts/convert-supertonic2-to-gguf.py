@@ -608,6 +608,35 @@ def main() -> int:
                     stage_aliases[f"{stage}:{canon_name}"] = f"{stage}:{cand}"
                     break
 
+        # QVAC-19305 — convert-time guarantee that every vector-estimator
+        # bridge the runtime depends on is resolvable.  The bridge maps each
+        # v2 logical id (`onnx::MatMul_<v2id>`) to a weight via its stable
+        # canonical (PyTorch) name, and that canonical name is recovered from
+        # the MatMul's adjacent bias-`Add` (see `canonical_source_name`).  If a
+        # v3 export drops the adjacent bias for a projection (e.g. a bias-free
+        # `W_key`), the canonical lookup misses, no bridge alias is emitted,
+        # and the runtime would later fail to bind `onnx::MatMul_<v2id>`.  A
+        # logical id is resolvable when it is either emitted as a primary
+        # source (the v2 case, where the id *is* the weight's name) or
+        # recorded as a bridge alias (the v3 case).  Fail loudly here — naming
+        # the offending ids — rather than shipping an unloadable GGUF.
+        missing_bridges = sorted(
+            logical
+            for canon, logical in CANONICAL_TO_LOGICAL.get(stage, {}).items()
+            if logical not in emitted_sources
+            and f"{stage}:{logical}" not in stage_aliases
+        )
+        if missing_bridges:
+            raise RuntimeError(
+                f"{stage}: {len(missing_bridges)} vector-estimator bridge "
+                f"alias(es) could not be derived: {missing_bridges}.  These "
+                f"weights are bound by their v2 logical id at runtime; the "
+                f"likely cause is a projection whose canonical name could not "
+                f"be recovered (e.g. a MatMul with no adjacent bias-Add in "
+                f"this export).  Extend canonical_source_name / "
+                f"CANONICAL_TO_LOGICAL to cover it before converting."
+            )
+
         for alias_key, target_key in stage_aliases.items():
             source_aliases.append(alias_key)
             source_alias_targets.append(target_key)

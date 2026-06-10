@@ -2135,6 +2135,73 @@ bool load_supertonic_gguf(const std::string & path,
             }
         }
 
+        // QVAC-19305 — register cross-family stable aliases *before* any
+        // load-time pass that binds weights by their canonical names
+        // (`bind_vocoder_weights` below binds the vocoder embed/head conv
+        // weights this way, and the speech-prompted text-encoder reads its
+        // projections by canonical name at synth time).  The converter
+        // emits `supertonic.source_aliases[i]` (a canonical,
+        // version-independent key such as
+        // `vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.W_query.linear.weight`
+        // or `vocoder:node:/decoder/embed/net/Conv#1`) alongside
+        // `supertonic.source_alias_targets[i]` (the primary
+        // `<stage>:<onnx-name>` key the tensor already lives under, e.g.
+        // `vector_estimator:onnx::MatMul_3101`).  Registering both keys
+        // against the same tensor lets the runtime bind weights by their
+        // stable names regardless of how the ONNX exporter numbered them
+        // (Supertonic 2 vs 3).  The pretranspose pass below dedupes by
+        // tensor pointer, so the extra `onnx::MatMul_` bridge keys never
+        // cause a weight to be pre-transposed (or re-allocated) twice.
+        {
+            int64_t id_a = gguf_find_key(gguf_ctx, "supertonic.source_aliases");
+            int64_t id_t = gguf_find_key(gguf_ctx, "supertonic.source_alias_targets");
+            if (id_a >= 0 && id_t >= 0) {
+                std::vector<std::string> aliases = get_string_array(gguf_ctx, "supertonic.source_aliases");
+                std::vector<std::string> targets = get_string_array(gguf_ctx, "supertonic.source_alias_targets");
+                if (aliases.size() != targets.size()) {
+                    throw std::runtime_error("supertonic.source_aliases / source_alias_targets length mismatch");
+                }
+                for (size_t i = 0; i < aliases.size(); ++i) {
+                    auto it = model.source_tensors.find(targets[i]);
+                    if (it == model.source_tensors.end() || !it->second) continue;
+                    // Don't clobber a real primary entry with an alias.
+                    if (model.source_tensors.find(aliases[i]) == model.source_tensors.end()) {
+                        model.source_tensors[aliases[i]] = it->second;
+                    }
+                }
+            }
+        }
+
+        // QVAC-19305 — backward compatibility for GGUFs produced by the
+        // pre-v3 converter, which ship *no* alias arrays.  The v3 runtime
+        // binds the vocoder embed/head conv weights and the speech-prompted
+        // text-encoder projections by stable canonical names; on an older
+        // GGUF those canonical keys are absent and only the legacy
+        // Supertonic-1/2 ONNX auto-ids exist.  Map each canonical name to
+        // its v2 primary so existing GGUFs keep loading without a
+        // re-conversion.  This is a no-op for v3 / freshly re-converted v2
+        // models, where the converter already registered the canonical key
+        // in the alias pass above (the `find(canonical)` guard skips them).
+        {
+            static const std::pair<const char *, const char *> kLegacyV2Aliases[] = {
+                { "vocoder:node:/decoder/embed/net/Conv#1",                                             "vocoder:onnx::Conv_1440" },
+                { "vocoder:node:/decoder/embed/net/Conv#2",                                             "vocoder:onnx::Conv_1441" },
+                { "vocoder:node:/decoder/head/act/PRelu#1",                                             "vocoder:onnx::PRelu_1505" },
+                { "text_encoder:tts.ttl.speech_prompted_text_encoder.attention1.W_query.linear.weight", "text_encoder:onnx::MatMul_3678" },
+                { "text_encoder:tts.ttl.speech_prompted_text_encoder.attention1.W_value.linear.weight", "text_encoder:onnx::MatMul_3680" },
+                { "text_encoder:tts.ttl.speech_prompted_text_encoder.attention1.out_fc.linear.weight",  "text_encoder:onnx::MatMul_3681" },
+                { "text_encoder:tts.ttl.speech_prompted_text_encoder.attention2.W_query.linear.weight", "text_encoder:onnx::MatMul_3682" },
+                { "text_encoder:tts.ttl.speech_prompted_text_encoder.attention2.W_value.linear.weight", "text_encoder:onnx::MatMul_3684" },
+                { "text_encoder:tts.ttl.speech_prompted_text_encoder.attention2.out_fc.linear.weight",  "text_encoder:onnx::MatMul_3685" },
+            };
+            for (const auto & [canonical, legacy] : kLegacyV2Aliases) {
+                if (model.source_tensors.find(canonical) != model.source_tensors.end()) continue;
+                auto it = model.source_tensors.find(legacy);
+                if (it == model.source_tensors.end() || !it->second) continue;
+                model.source_tensors[canonical] = it->second;
+            }
+        }
+
         for (const std::string & voice_name : get_string_array(gguf_ctx, "supertonic.voice_names")) {
             supertonic_voice_style voice;
             voice.name = voice_name;
@@ -2325,9 +2392,17 @@ bool load_supertonic_gguf(const std::string & path,
         if (!disable_pretranspose && model.backend &&
             !ggml_backend_is_cpu(model.backend)) {
             std::vector<std::pair<std::string, ggml_tensor *>> to_pretranspose;
+            // Dedupe by tensor pointer: cross-family bridge aliases register
+            // a second `:onnx::MatMul_` key (the v2 logical id) against the
+            // same physical tensor as its v3 primary, so a plain name scan
+            // would otherwise pre-transpose — and re-allocate — the weight
+            // twice.  The runtime looks pretransposed copies up by pointer
+            // (`pretransposed_weights`), so one entry per tensor suffices.
+            std::unordered_set<const ggml_tensor *> seen_pre;
             for (const auto & [src_name, t] : model.source_tensors) {
                 if (!t) continue;
                 if (src_name.find(":onnx::MatMul_") == std::string::npos) continue;
+                if (!seen_pre.insert(t).second) continue;
                 if (ggml_n_dims(t) != 2) continue;
                 // Pretranspose f32 weights (default precision) AND q8_0 / f16
                 // weights (asymmetric load modes).  For q8_0 / f16 we
@@ -2425,39 +2500,6 @@ bool load_supertonic_gguf(const std::string & path,
                         ggml_backend_tensor_set(pre, raw.data(), 0, raw.size());
                     }
                     model.pretransposed_weights[orig] = pre;
-                }
-            }
-        }
-
-        // QVAC-19305 — register cross-family stable aliases.  The
-        // converter emits `supertonic.source_aliases[i]` (a canonical,
-        // version-independent key such as
-        // `vector_estimator:tts.ttl.vector_field.main_blocks.3.attn.W_query.linear.weight`)
-        // alongside `supertonic.source_alias_targets[i]` (the primary
-        // `<stage>:<onnx-name>` key the tensor already lives under, e.g.
-        // `vector_estimator:onnx::MatMul_3101`).  Registering both keys
-        // against the same tensor lets the runtime bind weights by their
-        // stable names regardless of how the ONNX exporter numbered them
-        // (Supertonic 2 vs 3).  Done here — after every weight,
-        // pre-transposed companion and materialised constant is already in
-        // `source_tensors` — so aliases are pure additive lookups and never
-        // perturb the load-time F6 / tanh_k / pretranspose passes above.
-        {
-            int64_t id_a = gguf_find_key(gguf_ctx, "supertonic.source_aliases");
-            int64_t id_t = gguf_find_key(gguf_ctx, "supertonic.source_alias_targets");
-            if (id_a >= 0 && id_t >= 0) {
-                std::vector<std::string> aliases = get_string_array(gguf_ctx, "supertonic.source_aliases");
-                std::vector<std::string> targets = get_string_array(gguf_ctx, "supertonic.source_alias_targets");
-                if (aliases.size() != targets.size()) {
-                    throw std::runtime_error("supertonic.source_aliases / source_alias_targets length mismatch");
-                }
-                for (size_t i = 0; i < aliases.size(); ++i) {
-                    auto it = model.source_tensors.find(targets[i]);
-                    if (it == model.source_tensors.end() || !it->second) continue;
-                    // Don't clobber a real primary entry with an alias.
-                    if (model.source_tensors.find(aliases[i]) == model.source_tensors.end()) {
-                        model.source_tensors[aliases[i]] = it->second;
-                    }
                 }
             }
         }
