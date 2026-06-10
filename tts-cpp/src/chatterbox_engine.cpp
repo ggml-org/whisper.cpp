@@ -334,7 +334,11 @@ struct Engine::Impl {
                 }
                 normalise_lufs(wav, sr, -27.0);
                 if (sr != 16000) wav = resample_sinc(wav, sr, 16000);
-                if (!voice_encoder_embed(wav, vew, model.backend, se_data)) {
+                // CPU regardless of model backend: a one-time LSTM conditioning
+                // step with strided-view activations + a >128MB gate matmul, which
+                // are invalid under single-backend GPU compute (see
+                // chatterbox_cli.cpp). nullptr -> own CPU backend.
+                if (!voice_encoder_embed(wav, vew, /*backend=*/nullptr, se_data)) {
                     throw std::runtime_error("Engine: VoiceEncoder forward failed");
                 }
                 have_se = true;

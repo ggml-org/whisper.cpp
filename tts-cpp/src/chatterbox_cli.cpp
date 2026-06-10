@@ -1071,7 +1071,12 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                         throw std::runtime_error("failed to load --reference-audio");
                     normalise_lufs(wav, sr, -27.0);
                     if (sr != 16000) wav = resample_sinc(wav, sr, 16000);
-                    if (!voice_encoder_embed(wav, vew, vc_backend, se_bake))
+                    // Voice-encoder on CPU (nullptr -> own CPU backend): same
+                    // one-time LSTM with strided-view activations + a >128MB gate
+                    // matmul that single-backend GPU compute can't do (see the
+                    // synthesis paths). S3TokenizerV2 / CAMPPlus below stay on
+                    // vc_backend -- they run fine on GPU.
+                    if (!voice_encoder_embed(wav, vew, /*backend=*/nullptr, se_bake))
                         throw std::runtime_error("VoiceEncoder forward failed");
                 }
                 fprintf(stderr, "BENCH: VC_STAGE_speaker_emb_ms=%lld\n", (long long)((ggml_time_us() - _t0)/1000));
@@ -1223,9 +1228,13 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                     throw std::runtime_error("failed to load --reference-audio for VoiceEncoder");
                 normalise_lufs(wav, sr, -27.0);
                 if (sr != 16000) wav = resample_sinc(wav, sr, 16000);
-                // Reuse the T3 backend — already loaded & sitting on the GPU
-                // at this point in the flow.
-                if (!voice_encoder_embed(wav, vew, model.backend, se_data))
+                // Voice-encoder runs on CPU (nullptr -> its own CPU backend): a
+                // one-time conditioning step whose LSTM feeds strided views to
+                // activations and builds a >128MB gate matmul -- neither is valid
+                // under single-backend GPU compute (Vulkan's unary shaders are
+                // contiguous-only; Adreno caps a descriptor at 128MB). The
+                // skip-reference path already computes it on CPU.
+                if (!voice_encoder_embed(wav, vew, /*backend=*/nullptr, se_data))
                     throw std::runtime_error("VoiceEncoder forward failed");
                 have_se = true;
             } else {

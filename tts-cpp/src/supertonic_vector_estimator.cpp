@@ -291,7 +291,7 @@ ggml_tensor * edge_clamp_pad_1d(ggml_context * ctx, ggml_tensor * x, int pad_lef
     // SUPERTONIC_DISABLE_FUSED_EDGE_PAD=1.
     static const bool disable_fused_edge_pad =
         std::getenv("SUPERTONIC_DISABLE_FUSED_EDGE_PAD") != nullptr;
-    if (!disable_fused_edge_pad &&
+    if (!disable_fused_edge_pad && supertonic_use_fused_supertonic_ops() &&
         x->type == GGML_TYPE_F32 &&
         x->ne[2] == 1 && x->ne[3] == 1 &&
         ggml_is_contiguous(x)) {
@@ -426,7 +426,7 @@ ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
     // SUPERTONIC_DISABLE_FUSED_DEPTHWISE=1 to force the stock-op chain.
     static const bool disable_fused =
         std::getenv("SUPERTONIC_DISABLE_FUSED_DEPTHWISE") != nullptr;
-    if (!disable_fused && (K == 3 || K == 5) &&
+    if (!disable_fused && supertonic_use_fused_supertonic_ops() && (K == 3 || K == 5) &&
         x->type == GGML_TYPE_F32 && w->type == GGML_TYPE_F32 &&
         b->type == GGML_TYPE_F32 &&
         x->ne[2] == 1 && x->ne[3] == 1 && w->ne[1] == 1 && w->ne[3] == 1 &&
@@ -454,7 +454,7 @@ ggml_tensor * layer_norm_ggml(ggml_context * ctx,
     // a single dispatch.  Override with SUPERTONIC_DISABLE_FUSED_LAYER_NORM=1.
     static const bool disable_fused_layer_norm =
         std::getenv("SUPERTONIC_DISABLE_FUSED_LAYER_NORM") != nullptr;
-    if (!supertonic_use_cpu_custom_ops() && !disable_fused_layer_norm &&
+    if (!supertonic_use_cpu_custom_ops() && supertonic_use_fused_supertonic_ops() && !disable_fused_layer_norm &&
         x->type == GGML_TYPE_F32 && g->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 &&
         x->ne[2] == 1 && x->ne[3] == 1 &&
         g->ne[0] == x->ne[1] && b->ne[0] == x->ne[1] &&
@@ -720,7 +720,7 @@ ggml_tensor * bias_gelu_ggml(ggml_context * ctx, ggml_tensor * x, ggml_tensor * 
     // Skipped on CPU custom-op backends (cblas path below is faster).
     static const bool disable_fused_bias_gelu =
         std::getenv("SUPERTONIC_DISABLE_FUSED_BIAS_GELU") != nullptr;
-    if (!use_cpu_custom && !disable_fused_bias_gelu &&
+    if (!use_cpu_custom && supertonic_use_fused_supertonic_ops() && !disable_fused_bias_gelu &&
         x->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 &&
         x->ne[2] == 1 && x->ne[3] == 1 &&
         b->ne[0] == x->ne[1] &&
@@ -771,7 +771,7 @@ ggml_tensor * pw2_residual_ggml(ggml_context * ctx,
     // Skipped on CPU custom-op backends (cblas fast path below is faster).
     static const bool disable_fused_pw2_residual =
         std::getenv("SUPERTONIC_DISABLE_FUSED_PW2_RESIDUAL") != nullptr;
-    if (!use_cpu_custom && !disable_fused_pw2_residual &&
+    if (!use_cpu_custom && supertonic_use_fused_supertonic_ops() && !disable_fused_pw2_residual &&
         residual->type == GGML_TYPE_F32 && x->type == GGML_TYPE_F32 &&
         b->type == GGML_TYPE_F32 && gamma->type == GGML_TYPE_F32 &&
         x->ne[2] == 1 && x->ne[3] == 1 &&
@@ -890,7 +890,11 @@ ggml_tensor * vector_convnext_ggml_ct(ggml_context * ctx,
                                       const std::string & p,
                                       ggml_tensor * x_ct,
                                       int dilation) {
-    if (model_prefers_cpu_kernels(model)) {
+    // CPU rounds-trips to the legacy [T,C] block for the AMX-cblas fast path;
+    // backends WITHOUT the fused _ct supertonic ops (Vulkan / OpenCL) must also
+    // take the legacy path, whose helpers carry pure-GGML fallbacks — otherwise
+    // the _ct custom ops below are silently skipped on those backends.
+    if (model_prefers_cpu_kernels(model) || !supertonic_use_fused_supertonic_ops()) {
         // CPU: roundtrip to [T, C], run legacy block (AMX cblas fast path),
         // roundtrip back.  Cheap on CPU because the permute is just a copy.
         ggml_tensor * x_tc = ggml_cont(ctx, ggml_permute(ctx, x_ct, 1, 0, 2, 3));

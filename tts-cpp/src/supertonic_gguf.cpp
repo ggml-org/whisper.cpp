@@ -285,6 +285,39 @@ bool backend_supports_native_leaky_relu(ggml_backend_t backend) {
     return ok;
 }
 
+// Backend capability probe for the Supertonic fused custom ops
+// (GGML_OP_SUPERTONIC_*).  Builds a throwaway depthwise_1d node with the
+// minimal valid shape (a=[L,C] F32, w=[K=3,1,C,1] F32, b=[C] F32) inside a
+// no-alloc scratch context and asks the backend whether it would accept it.
+// ggml-cpu and ggml-metal implement the supertonic ops; ggml-vulkan and
+// ggml-opencl do not, so they return false here and the graph-build helpers
+// take the pure-GGML decomposition instead of emitting an op the backend
+// would silently skip.  The 5 fused ops ship as one overlay set (port-version
+// 13), so probing depthwise_1d is representative of all of them.  Runs once
+// per load via the capability cache; zero hot-path cost.
+bool backend_supports_fused_supertonic_ops(ggml_backend_t backend) {
+    if (!backend) return false;
+    ggml_init_params probe_params = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * 8,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context * probe_ctx = ggml_init(probe_params);
+    if (!probe_ctx) return false;
+    bool ok = false;
+    try {
+        ggml_tensor * a  = ggml_new_tensor_2d(probe_ctx, GGML_TYPE_F32, 8, 4);       // [L=8, C=4]
+        ggml_tensor * w  = ggml_new_tensor_4d(probe_ctx, GGML_TYPE_F32, 3, 1, 4, 1); // [K=3,1,C=4,1]
+        ggml_tensor * b  = ggml_new_tensor_1d(probe_ctx, GGML_TYPE_F32, 4);          // [C=4]
+        ggml_tensor * op = ggml_supertonic_depthwise_1d(probe_ctx, a, w, b, /*dilation=*/1);
+        ok = (op != nullptr) && ggml_backend_supports_op(backend, op);
+    } catch (...) {
+        ok = false;
+    }
+    ggml_free(probe_ctx);
+    return ok;
+}
+
 // QVAC-18605 — runtime check: backend is `ggml-vulkan`.
 //
 // Forwarder to the shared `tts_cpp::detail::backend_is_vulkan`
@@ -613,6 +646,10 @@ struct backend_capabilities {
     // to skip ggml-vulkan's internal staging-buffer hop on the
     // per-step uploads.
     bool pinned_host_buffer;
+    // True iff the backend implements the GGML_OP_SUPERTONIC_* fused ops
+    // (ggml-cpu / ggml-metal yes; ggml-vulkan / ggml-opencl no).  Gates the
+    // fused-op fast paths vs the pure-GGML decomposition in the graph builders.
+    bool fused_supertonic_ops;
 };
 
 inline std::mutex & capability_cache_mu() {
@@ -688,6 +725,7 @@ const backend_capabilities & cached_backend_capabilities(ggml_backend_t backend)
     caps.q8_0_kv_flash_attn  = backend_supports_q8_0_kv_flash_attn_uncached(backend);
     caps.bf16_kv_flash_attn  = backend_supports_bf16_kv_flash_attn_uncached(backend);
     caps.pinned_host_buffer  = backend_supports_pinned_host_buffer_uncached(backend);
+    caps.fused_supertonic_ops = backend_supports_fused_supertonic_ops(backend);
     return c.emplace(backend, caps).first->second;
 }
 
@@ -1338,6 +1376,9 @@ namespace {
 thread_local bool g_supertonic_use_cpu_custom_ops    = true;
 thread_local bool g_supertonic_use_f16_attn          = false;
 thread_local bool g_supertonic_use_native_leaky_relu = true;
+// Defaults to false (pure-GGML) so a helper called outside any dispatch scope
+// never emits a backend-unsupported fused supertonic op.
+thread_local bool g_supertonic_use_fused_supertonic_ops = false;
 // QVAC-18605 round 4 — current K/V flash-attn dispatch dtype.
 // Defaults to f32 so a graph builder called outside any
 // `supertonic_op_dispatch_scope` doesn't accidentally take the
@@ -1357,6 +1398,10 @@ bool supertonic_use_native_leaky_relu() {
     return g_supertonic_use_native_leaky_relu;
 }
 
+bool supertonic_use_fused_supertonic_ops() {
+    return g_supertonic_use_fused_supertonic_ops;
+}
+
 kv_attn_dtype supertonic_kv_attn_type() {
     return g_supertonic_kv_attn_type;
 }
@@ -1365,18 +1410,21 @@ supertonic_op_dispatch_scope::supertonic_op_dispatch_scope(const supertonic_mode
     : prev_use_cpu_custom_ops(g_supertonic_use_cpu_custom_ops),
       prev_use_f16_attn(g_supertonic_use_f16_attn),
       prev_use_native_leaky_relu(g_supertonic_use_native_leaky_relu),
+      prev_use_fused_supertonic_ops(g_supertonic_use_fused_supertonic_ops),
       prev_kv_attn_type(g_supertonic_kv_attn_type) {
-    g_supertonic_use_cpu_custom_ops    = model.backend_is_cpu;
-    g_supertonic_use_f16_attn          = model.use_f16_attn;
-    g_supertonic_use_native_leaky_relu = model.use_native_leaky_relu;
-    g_supertonic_kv_attn_type          = model.kv_attn_type;
+    g_supertonic_use_cpu_custom_ops       = model.backend_is_cpu;
+    g_supertonic_use_f16_attn             = model.use_f16_attn;
+    g_supertonic_use_native_leaky_relu    = model.use_native_leaky_relu;
+    g_supertonic_use_fused_supertonic_ops = model.backend_supports_fused_supertonic_ops;
+    g_supertonic_kv_attn_type             = model.kv_attn_type;
 }
 
 supertonic_op_dispatch_scope::~supertonic_op_dispatch_scope() {
-    g_supertonic_use_cpu_custom_ops    = prev_use_cpu_custom_ops;
-    g_supertonic_use_f16_attn          = prev_use_f16_attn;
-    g_supertonic_use_native_leaky_relu = prev_use_native_leaky_relu;
-    g_supertonic_kv_attn_type          = prev_kv_attn_type;
+    g_supertonic_use_cpu_custom_ops       = prev_use_cpu_custom_ops;
+    g_supertonic_use_f16_attn             = prev_use_f16_attn;
+    g_supertonic_use_native_leaky_relu    = prev_use_native_leaky_relu;
+    g_supertonic_use_fused_supertonic_ops = prev_use_fused_supertonic_ops;
+    g_supertonic_kv_attn_type             = prev_kv_attn_type;
 }
 
 // QVAC-18605 round 4 — pure-logic resolver for the multi-dtype
@@ -1784,11 +1832,14 @@ bool load_supertonic_gguf(const std::string & path,
         // per backend (memoised by `cached_backend_capabilities`)
         // — zero hot-path cost.
         model.use_native_leaky_relu = cached_backend_capabilities(model.backend).native_leaky_relu;
+        model.backend_supports_fused_supertonic_ops =
+            cached_backend_capabilities(model.backend).fused_supertonic_ops;
         if (verbose) {
-            fprintf(stderr, "supertonic: backend_is_cpu=%s backend_is_vk=%s use_native_leaky_relu=%s\n",
+            fprintf(stderr, "supertonic: backend_is_cpu=%s backend_is_vk=%s use_native_leaky_relu=%s fused_supertonic_ops=%s\n",
                     model.backend_is_cpu ? "true" : "false",
                     model.backend_is_vk ? "true" : "false",
-                    model.use_native_leaky_relu ? "true" : "false");
+                    model.use_native_leaky_relu ? "true" : "false",
+                    model.backend_supports_fused_supertonic_ops ? "true" : "false");
         }
 
         // Phase 2A — auto/force policy for F16 weight materialization.
