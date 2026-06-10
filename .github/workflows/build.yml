@@ -906,13 +906,13 @@ jobs:
           path: ./artifact
 
       - name: Extract
-        shell: pwsh
+        shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path bin | Out-Null
           Expand-Archive -Path (Get-ChildItem artifact -Filter "*.zip" | Select-Object -First 1).FullName -DestinationPath bin -Force
 
       - name: Download FlexML Runtime and setup environment
-        shell: pwsh
+        shell: powershell
         run: |
           Invoke-WebRequest -Uri "${{ env.FLEXML_URL }}" -OutFile flexmlrt.zip
           tar xvf flexmlrt.zip
@@ -926,7 +926,7 @@ jobs:
           if errorlevel 1 ( echo ERROR: FlexML setup failed! & exit /b 1 )
 
       - name: Copy FlexML DLLs to bin
-        shell: pwsh
+        shell: powershell
         run: |
           $flexml = Get-ChildItem -Directory | Where-Object { $_.Name -like "flexmlrt*" } | Select-Object -First 1
           foreach ($sub in @("bin","lib")) {
@@ -938,24 +938,20 @@ jobs:
           }
 
       - name: Download models (ggml weights + .rai NPU encoder)
-        shell: pwsh
+        shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path models | Out-Null
-          # GGML weights for decoder (runs on CPU)
           Invoke-WebRequest -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin" -OutFile "models\ggml-tiny.bin"
-          # Pre-compiled NPU encoder -- must be named ggml-tiny-encoder-vitisai.rai
-          # alongside ggml-tiny.bin so whisper-cli auto-detects it
           Invoke-WebRequest -Uri "https://huggingface.co/amd/whisper-tiny-onnx-npu/resolve/main/ggml-tiny-encoder-vitisai.rai" -OutFile "models\ggml-tiny-encoder-vitisai.rai"
           Write-Host "Models:"
           Get-ChildItem models | Format-Table Name, Length
 
       - name: Run and verify (NPU encoder + CPU decoder)
-        shell: pwsh
+        shell: powershell
         run: |
           .\bin\whisper-cli.exe -m models\ggml-tiny.bin -f samples\jfk.wav -otxt -of jfk-result
           $text = Get-Content "jfk-result.txt" -Raw
           Write-Host $text
-          # Also check stdout for the VitisAI inference confirmation line
           if ($text -match "country|ask not|nation|kennedy") { Write-Host "PASS: transcription correct" -ForegroundColor Green }
           else { Write-Error "FAIL: expected words not found"; exit 1 }
 
