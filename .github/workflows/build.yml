@@ -236,7 +236,6 @@ jobs:
           echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
 
       - uses: actions/upload-artifact@v4
-        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
         with:
           name: ${{ env.ARCHIVE }}
           path: ${{ env.ARCHIVE }}
@@ -349,7 +348,6 @@ jobs:
           "ARCHIVE=$a" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
       - uses: actions/upload-artifact@v4
-        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
         with:
           name: ${{ env.ARCHIVE }}
           path: ${{ env.ARCHIVE }}
@@ -409,7 +407,6 @@ jobs:
           echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
 
       - uses: actions/upload-artifact@v4
-        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
         with:
           name: ${{ env.ARCHIVE }}
           path: ${{ env.ARCHIVE }}
@@ -466,7 +463,6 @@ jobs:
           "ARCHIVE=$a" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
       - uses: actions/upload-artifact@v4
-        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
         with:
           name: ${{ env.ARCHIVE }}
           path: ${{ env.ARCHIVE }}
@@ -566,7 +562,6 @@ jobs:
           Write-Host "NPU build complete. Artifact: $env:ARCHIVE"
 
       - uses: actions/upload-artifact@v4
-        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
         with:
           name: ${{ env.ARCHIVE }}
           path: ${{ env.ARCHIVE }}
@@ -618,7 +613,6 @@ jobs:
           echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
 
       - uses: actions/upload-artifact@v4
-        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
         with:
           name: ${{ env.ARCHIVE }}
           path: ${{ env.ARCHIVE }}
@@ -665,7 +659,6 @@ jobs:
           "ARCHIVE=$a" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
       - uses: actions/upload-artifact@v4
-        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
         with:
           name: ${{ env.ARCHIVE }}
           path: ${{ env.ARCHIVE }}
@@ -673,8 +666,312 @@ jobs:
 # ════════════════════════════════════════════════════════════════════════════════
 # 9. Publish GitHub Release
 # ════════════════════════════════════════════════════════════════════════════════
+# Shared model download step (reused across all test jobs via inline steps)
+# Models: ggml-tiny.bin from HuggingFace ggerganov/whisper.cpp
+#         ggml-tiny-encoder-vitisai.rai from amd/whisper-tiny-onnx-npu
+# ════════════════════════════════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════════════════════════════════
+# 9. Test — CPU Windows (GitHub-hosted, no GPU needed)
+# ════════════════════════════════════════════════════════════════════════════════
+  test-cpu-windows:
+    runs-on: windows-latest
+    needs: [determine-tag, windows-cpu]
+    if: needs.windows-cpu.result == 'success'
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: whisper-${{ needs.determine-tag.outputs.version }}-windows-cpu-x64.zip
+          path: ./artifact
+
+      - name: Extract
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          Expand-Archive -Path (Get-ChildItem artifact -Filter "*.zip" | Select-Object -First 1).FullName -DestinationPath bin -Force
+
+      - name: Download tiny model
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path models | Out-Null
+          Invoke-WebRequest -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin" -OutFile "models\ggml-tiny.bin"
+
+      - name: Run and verify
+        shell: pwsh
+        run: |
+          .\bin\whisper-cli.exe -m models\ggml-tiny.bin -f samples\jfk.wav -otxt -of jfk-result
+          $text = Get-Content "jfk-result.txt" -Raw
+          Write-Host $text
+          if ($text -match "country|ask not|nation|kennedy") { Write-Host "PASS" -ForegroundColor Green }
+          else { Write-Error "FAIL: expected words not found"; exit 1 }
+
+# ════════════════════════════════════════════════════════════════════════════════
+# 10. Test — CPU Linux (GitHub-hosted, no GPU needed)
+# ════════════════════════════════════════════════════════════════════════════════
+  test-cpu-linux:
+    runs-on: ubuntu-latest
+    needs: [determine-tag, linux-cpu]
+    if: needs.linux-cpu.result == 'success'
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: whisper-${{ needs.determine-tag.outputs.version }}-linux-cpu-x86_64.tar.gz
+          path: ./artifact
+
+      - name: Extract
+        run: |
+          mkdir -p bin
+          tar -xzf artifact/*.tar.gz --strip-components=1 -C bin
+          chmod +x bin/whisper-cli
+
+      - name: Download tiny model
+        run: |
+          mkdir -p models
+          curl -L -o models/ggml-tiny.bin "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin"
+
+      - name: Run and verify
+        run: |
+          LD_LIBRARY_PATH=$(pwd)/bin:$LD_LIBRARY_PATH ./bin/whisper-cli -m models/ggml-tiny.bin -f samples/jfk.wav -otxt -of jfk-result
+          cat jfk-result.txt
+          grep -qi "country\|ask not\|nation\|kennedy" jfk-result.txt && echo "PASS" || { echo "FAIL"; exit 1; }
+
+# ════════════════════════════════════════════════════════════════════════════════
+# 11. Test — Vulkan Windows (stx-halo, has Vulkan driver)
+# ════════════════════════════════════════════════════════════════════════════════
+  test-vulkan-windows:
+    runs-on: [self-hosted, Windows, stx-halo]
+    needs: [determine-tag, windows-vulkan]
+    if: needs.windows-vulkan.result == 'success'
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: whisper-${{ needs.determine-tag.outputs.version }}-windows-vulkan-x64.zip
+          path: ./artifact
+
+      - name: Extract
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          Expand-Archive -Path (Get-ChildItem artifact -Filter "*.zip" | Select-Object -First 1).FullName -DestinationPath bin -Force
+
+      - name: Download tiny model
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path models | Out-Null
+          Invoke-WebRequest -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin" -OutFile "models\ggml-tiny.bin"
+
+      - name: Run and verify
+        shell: pwsh
+        run: |
+          .\bin\whisper-cli.exe -m models\ggml-tiny.bin -f samples\jfk.wav -otxt -of jfk-result
+          $text = Get-Content "jfk-result.txt" -Raw
+          Write-Host $text
+          if ($text -match "country|ask not|nation|kennedy") { Write-Host "PASS" -ForegroundColor Green }
+          else { Write-Error "FAIL: expected words not found"; exit 1 }
+
+# ════════════════════════════════════════════════════════════════════════════════
+# 12. Test — Vulkan Linux (stx-halo, has Vulkan driver)
+# ════════════════════════════════════════════════════════════════════════════════
+  test-vulkan-linux:
+    runs-on: [self-hosted, Linux, stx-halo]
+    needs: [determine-tag, linux-vulkan]
+    if: needs.linux-vulkan.result == 'success'
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: whisper-${{ needs.determine-tag.outputs.version }}-linux-vulkan-x86_64.tar.gz
+          path: ./artifact
+
+      - name: Extract
+        run: |
+          mkdir -p bin
+          tar -xzf artifact/*.tar.gz --strip-components=1 -C bin
+          chmod +x bin/whisper-cli
+
+      - name: Download tiny model
+        run: |
+          mkdir -p models
+          curl -L -o models/ggml-tiny.bin "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin"
+
+      - name: Run and verify
+        run: |
+          LD_LIBRARY_PATH=$(pwd)/bin:$LD_LIBRARY_PATH ./bin/whisper-cli -m models/ggml-tiny.bin -f samples/jfk.wav -otxt -of jfk-result
+          cat jfk-result.txt
+          grep -qi "country\|ask not\|nation\|kennedy" jfk-result.txt && echo "PASS" || { echo "FAIL"; exit 1; }
+
+# ════════════════════════════════════════════════════════════════════════════════
+# 13. Test — ROCm Windows (stx-halo, gfx1150 — tests gfx1151 artifact on halo)
+# ════════════════════════════════════════════════════════════════════════════════
+  test-rocm-windows:
+    runs-on: [self-hosted, Windows, stx-halo]
+    needs: [determine-tag, windows-rocm]
+    if: needs.windows-rocm.result == 'success'
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download ROCm artifact (gfx1151 - closest to stx-halo gfx1150)
+        uses: actions/download-artifact@v4
+        with:
+          name: whisper-${{ needs.determine-tag.outputs.version }}-windows-rocm-gfx1151.zip
+          path: ./artifact
+
+      - name: Extract
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          Expand-Archive -Path (Get-ChildItem artifact -Filter "*.zip" | Select-Object -First 1).FullName -DestinationPath bin -Force
+
+      - name: Download tiny model
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path models | Out-Null
+          Invoke-WebRequest -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin" -OutFile "models\ggml-tiny.bin"
+
+      - name: Run and verify
+        shell: pwsh
+        run: |
+          .\bin\whisper-cli.exe -m models\ggml-tiny.bin -f samples\jfk.wav -otxt -of jfk-result
+          $text = Get-Content "jfk-result.txt" -Raw
+          Write-Host $text
+          if ($text -match "country|ask not|nation|kennedy") { Write-Host "PASS" -ForegroundColor Green }
+          else { Write-Error "FAIL: expected words not found"; exit 1 }
+
+# ════════════════════════════════════════════════════════════════════════════════
+# 14. Test — ROCm Linux (stx-halo Linux, gfx1151)
+# ════════════════════════════════════════════════════════════════════════════════
+  test-rocm-linux:
+    runs-on: [self-hosted, Linux, stx-halo]
+    needs: [determine-tag, linux-rocm]
+    if: needs.linux-rocm.result == 'success'
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download ROCm artifact (gfx1151)
+        uses: actions/download-artifact@v4
+        with:
+          name: whisper-${{ needs.determine-tag.outputs.version }}-linux-rocm-gfx1151.tar.gz
+          path: ./artifact
+
+      - name: Extract
+        run: |
+          mkdir -p bin
+          tar -xzf artifact/*.tar.gz --strip-components=1 -C bin
+          chmod +x bin/whisper-cli
+
+      - name: Download tiny model
+        run: |
+          mkdir -p models
+          curl -L -o models/ggml-tiny.bin "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin"
+
+      - name: Run and verify
+        run: |
+          LD_LIBRARY_PATH=$(pwd)/bin:$LD_LIBRARY_PATH ./bin/whisper-cli -m models/ggml-tiny.bin -f samples/jfk.wav -otxt -of jfk-result
+          cat jfk-result.txt
+          grep -qi "country\|ask not\|nation\|kennedy" jfk-result.txt && echo "PASS" || { echo "FAIL"; exit 1; }
+
+# ════════════════════════════════════════════════════════════════════════════════
+# 15. Test — NPU Windows (rai300_400 runner, needs FlexML + .rai model)
+# ════════════════════════════════════════════════════════════════════════════════
+  test-npu-windows:
+    runs-on: [self-hosted, Windows, rai300_400]
+    needs: [determine-tag, windows-npu]
+    if: needs.windows-npu.result == 'success'
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download NPU artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: whisper-${{ needs.determine-tag.outputs.version }}-windows-npu-x64.zip
+          path: ./artifact
+
+      - name: Extract
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
+          Expand-Archive -Path (Get-ChildItem artifact -Filter "*.zip" | Select-Object -First 1).FullName -DestinationPath bin -Force
+
+      - name: Download FlexML Runtime and setup environment
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "${{ env.FLEXML_URL }}" -OutFile flexmlrt.zip
+          tar xvf flexmlrt.zip
+          Remove-Item flexmlrt.zip
+
+      - name: Setup FlexML environment
+        shell: cmd
+        run: |
+          cd flexmlrt
+          call setup.bat
+          if errorlevel 1 ( echo ERROR: FlexML setup failed! & exit /b 1 )
+
+      - name: Copy FlexML DLLs to bin
+        shell: pwsh
+        run: |
+          $flexml = Get-ChildItem -Directory | Where-Object { $_.Name -like "flexmlrt*" } | Select-Object -First 1
+          foreach ($sub in @("bin","lib")) {
+            $path = Join-Path $flexml.FullName $sub
+            if (Test-Path $path) {
+              Get-ChildItem "$path\*.dll" -ErrorAction SilentlyContinue |
+                ForEach-Object { Copy-Item $_.FullName "bin\" -Force }
+            }
+          }
+
+      - name: Download models (ggml weights + .rai NPU encoder)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path models | Out-Null
+          # GGML weights for decoder (runs on CPU)
+          Invoke-WebRequest -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin" -OutFile "models\ggml-tiny.bin"
+          # Pre-compiled NPU encoder -- must be named ggml-tiny-encoder-vitisai.rai
+          # alongside ggml-tiny.bin so whisper-cli auto-detects it
+          Invoke-WebRequest -Uri "https://huggingface.co/amd/whisper-tiny-onnx-npu/resolve/main/ggml-tiny-encoder-vitisai.rai" -OutFile "models\ggml-tiny-encoder-vitisai.rai"
+          Write-Host "Models:"
+          Get-ChildItem models | Format-Table Name, Length
+
+      - name: Run and verify (NPU encoder + CPU decoder)
+        shell: pwsh
+        run: |
+          .\bin\whisper-cli.exe -m models\ggml-tiny.bin -f samples\jfk.wav -otxt -of jfk-result
+          $text = Get-Content "jfk-result.txt" -Raw
+          Write-Host $text
+          # Also check stdout for the VitisAI inference confirmation line
+          if ($text -match "country|ask not|nation|kennedy") { Write-Host "PASS: transcription correct" -ForegroundColor Green }
+          else { Write-Error "FAIL: expected words not found"; exit 1 }
+
+# ════════════════════════════════════════════════════════════════════════════════
+# 16. Publish GitHub Release (only after all tests pass or are skipped)
+# ════════════════════════════════════════════════════════════════════════════════
   release:
-    if: always() && needs.determine-tag.outputs.should_release == 'true'
+    if: |
+      always() &&
+      needs.determine-tag.outputs.should_release == 'true' &&
+      (needs.test-cpu-windows.result == 'success' || needs.test-cpu-windows.result == 'skipped') &&
+      (needs.test-cpu-linux.result == 'success' || needs.test-cpu-linux.result == 'skipped') &&
+      (needs.test-vulkan-windows.result == 'success' || needs.test-vulkan-windows.result == 'skipped') &&
+      (needs.test-vulkan-linux.result == 'success' || needs.test-vulkan-linux.result == 'skipped') &&
+      (needs.test-rocm-windows.result == 'success' || needs.test-rocm-windows.result == 'skipped') &&
+      (needs.test-rocm-linux.result == 'success' || needs.test-rocm-linux.result == 'skipped') &&
+      (needs.test-npu-windows.result == 'success' || needs.test-npu-windows.result == 'skipped')
     runs-on: ubuntu-latest
     needs:
       - determine-tag
@@ -685,6 +982,13 @@ jobs:
       - windows-npu
       - linux-cpu
       - windows-cpu
+      - test-cpu-windows
+      - test-cpu-linux
+      - test-vulkan-windows
+      - test-vulkan-linux
+      - test-rocm-windows
+      - test-rocm-linux
+      - test-npu-windows
 
     steps:
       - uses: actions/checkout@v4
