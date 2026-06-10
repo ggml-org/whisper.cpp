@@ -307,7 +307,14 @@ jobs:
         run: |
           $gfx  = "${{ matrix.gfx_target }}"
           $ver  = "${{ env.ROCM_VERSION }}"
-          $base = $gfx
+          $base = switch ($gfx) {
+            "gfx110X" { "gfx110X-all" }
+            "gfx120X" { "gfx120X-all" }
+            "gfx1150" { "gfx1150"     }
+            "gfx1151" { "gfx1151"     }
+            "gfx1152" { "gfx1152"     }
+            default   { $gfx          }
+          }
           $url  = "https://repo.amd.com/rocm/tarball/therock-dist-windows-${base}-${ver}.tar.gz"
           Write-Host "ROCm URL: $url"
           "DETECTED_ROCM_VERSION=$ver" | Out-File $env:GITHUB_ENV -Append -Encoding utf8

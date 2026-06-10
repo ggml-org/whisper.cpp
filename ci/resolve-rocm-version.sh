@@ -41,19 +41,15 @@ if ! echo "$rocm_version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+'; then
     return 1 2>/dev/null || exit 1
 fi
 
-# Map our GFX target shorthand to the exact tarball name AMD publishes.
-# Each GPU family has its own tarball with the right prebuilt kernel libraries.
-# Using the wrong tarball (e.g. gfx1151 for gfx110X) gives you gfx1151 rocBLAS/hipBLASLT
-# kernels in a gfx1100 package — builds succeed but fail silently on user hardware.
+# Exact tarball names published at repo.amd.com/rocm/tarball/ for 7.12.0:
+#   linux:   gfx110X-all, gfx120X-all, gfx1150, gfx1151, gfx1152
+#   windows: gfx110X-all, gfx120X-all, gfx1150, gfx1151, gfx1152
 case "$gfx_target" in
-    gfx110X)  tarball_target="gfx110X" ;;   # RDNA3 dGPU: RX 7900/7800/7700/7600
-    gfx120X)  tarball_target="gfx120X" ;;   # RDNA4 dGPU: RX 9070/9060
-    gfx1150)  tarball_target="gfx1150" ;;   # RDNA3.5 APU: Strix Point
-    gfx1151)  tarball_target="gfx1151" ;;   # RDNA3.5 APU: Strix Halo
-    gfx1100)  tarball_target="gfx1100" ;;   # RDNA3 dGPU specific
-    gfx1101)  tarball_target="gfx1101" ;;
-    gfx1200)  tarball_target="gfx1200" ;;
-    gfx1201)  tarball_target="gfx1201" ;;
+    gfx110X)  tarball_target="gfx110X-all" ;;
+    gfx120X)  tarball_target="gfx120X-all" ;;
+    gfx1150)  tarball_target="gfx1150"     ;;
+    gfx1151)  tarball_target="gfx1151"     ;;
+    gfx1152)  tarball_target="gfx1152"     ;;
     *)        tarball_target="$gfx_target" ;;
 esac
 
