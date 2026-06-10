@@ -17,6 +17,21 @@ MODELS = {
         "remote_name":  "parakeet-tdt-0.6b-v3-f16.bin",
         "description":  "Half precision (F16)",
     },
+    "q8_0": {
+        "local_path":   "models/ggml-parakeet-tdt-0.6b-v3-q8_0.bin",
+        "remote_name":  "parakeet-tdt-0.6b-v3-q8_0.bin",
+        "description":  "8-bit quantized (Q8_0)",
+    },
+    "q4_0": {
+        "local_path":   "models/ggml-parakeet-tdt-0.6b-v3-q4_0.bin",
+        "remote_name":  "parakeet-tdt-0.6b-v3-q4_0.bin",
+        "description":  "4-bit quantized (Q4_0)",
+    },
+    "q4_k": {
+        "local_path":   "models/ggml-parakeet-tdt-0.6b-v3-q4_k.bin",
+        "remote_name":  "parakeet-tdt-0.6b-v3-q4_k.bin",
+        "description":  "4-bit K-quantized (Q4_k)",
+    },
 }
 
 def build_model_card(uploaded_variants):
@@ -55,7 +70,7 @@ def build_model_card(uploaded_variants):
         f"",
         f"Download a model (e.g. F16):",
         f"```console",
-        f"$ huggingface-cli download {REPO_ID} {MODELS['f16']['remote_name']} --local-dir models",
+        f"$ hf download {REPO_ID} {MODELS['f16']['remote_name']} --local-dir models",
         f"```",
         f"",
         f"Run:",
@@ -123,8 +138,6 @@ def main():
 
     if not args.no_model_card:
         print("Updating model card...")
-        # Build the card reflecting everything that has been uploaded to the repo,
-        # not just this run, so list all variants whose remote files exist.
         existing = [k for k in MODELS if k in uploaded or
                     any(f.rfilename == MODELS[k]["remote_name"]
                         for f in api.list_repo_files(REPO_ID, repo_type="model")

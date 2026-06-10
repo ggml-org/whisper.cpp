@@ -1121,7 +1121,7 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
     }
 
     const ggml_type wtype = wctx.wtype;
-    const ggml_type vtype = GGML_TYPE_F32; // ggml_conv2d_dw CUDA kernel requires F32
+
 
     const int n_audio_layer = hparams.n_audio_layer;
 
@@ -1200,27 +1200,27 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
     model.enc_pre_out_b = create_tensor(PARAKEET_TENSOR_ENC_PRE_OUT_BIAS, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_audio_state));
     ggml_set_name(model.enc_pre_out_b, "enc_pre_out_b");
 
-    model.enc_pre_conv_0_w = create_tensor(PARAKEET_TENSOR_ENC_PRE_CONV_0_WEIGHT, ggml_new_tensor_4d(ctx, vtype, 3, 3, 1, n_subsampling_channels));
+    model.enc_pre_conv_0_w = create_tensor(PARAKEET_TENSOR_ENC_PRE_CONV_0_WEIGHT, ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 3, 3, 1, n_subsampling_channels));
     ggml_set_name(model.enc_pre_conv_0_w, "enc_pre_conv_0_w");
     model.enc_pre_conv_0_b = create_tensor(PARAKEET_TENSOR_ENC_PRE_CONV_0_BIAS, ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, 1, n_subsampling_channels, 1));
     ggml_set_name(model.enc_pre_conv_0_b, "enc_pre_conv_0_b");
 
-    model.enc_pre_conv_2_w = create_tensor(PARAKEET_TENSOR_ENC_PRE_CONV_2_WEIGHT, ggml_new_tensor_4d(ctx, vtype, 3, 3, 1, n_subsampling_channels));
+    model.enc_pre_conv_2_w = create_tensor(PARAKEET_TENSOR_ENC_PRE_CONV_2_WEIGHT, ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 3, 3, 1, n_subsampling_channels));
     ggml_set_name(model.enc_pre_conv_2_w, "enc_pre_conv_2_w");
     model.enc_pre_conv_2_b = create_tensor(PARAKEET_TENSOR_ENC_PRE_CONV_2_BIAS, ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, 1, n_subsampling_channels, 1));
     ggml_set_name(model.enc_pre_conv_2_b, "enc_pre_conv_2_b");
 
-    model.enc_pre_conv_3_w = create_tensor(PARAKEET_TENSOR_ENC_PRE_CONV_3_WEIGHT, ggml_new_tensor_4d(ctx, wtype, 1, 1, n_subsampling_channels, n_subsampling_channels));
+    model.enc_pre_conv_3_w = create_tensor(PARAKEET_TENSOR_ENC_PRE_CONV_3_WEIGHT, ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, 1, n_subsampling_channels, n_subsampling_channels));
     ggml_set_name(model.enc_pre_conv_3_w, "enc_pre_conv_3_w");
     model.enc_pre_conv_3_b = create_tensor(PARAKEET_TENSOR_ENC_PRE_CONV_3_BIAS, ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, 1, n_subsampling_channels, 1));
     ggml_set_name(model.enc_pre_conv_3_b, "enc_pre_conv_3_b");
 
-    model.enc_pre_conv_5_w = create_tensor(PARAKEET_TENSOR_ENC_PRE_CONV_5_WEIGHT, ggml_new_tensor_4d(ctx, vtype, 3, 3, 1, n_subsampling_channels));
+    model.enc_pre_conv_5_w = create_tensor(PARAKEET_TENSOR_ENC_PRE_CONV_5_WEIGHT, ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 3, 3, 1, n_subsampling_channels));
     ggml_set_name(model.enc_pre_conv_5_w, "enc_pre_conv_5_w");
     model.enc_pre_conv_5_b = create_tensor(PARAKEET_TENSOR_ENC_PRE_CONV_5_BIAS, ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, 1, n_subsampling_channels, 1));
     ggml_set_name(model.enc_pre_conv_5_b, "enc_pre_conv_5_b");
 
-    model.enc_pre_conv_6_w = create_tensor(PARAKEET_TENSOR_ENC_PRE_CONV_6_WEIGHT, ggml_new_tensor_4d(ctx, wtype, 1, 1, n_subsampling_channels, n_subsampling_channels));
+    model.enc_pre_conv_6_w = create_tensor(PARAKEET_TENSOR_ENC_PRE_CONV_6_WEIGHT, ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, 1, n_subsampling_channels, n_subsampling_channels));
     ggml_set_name(model.enc_pre_conv_6_w, "enc_pre_conv_6_w");
     model.enc_pre_conv_6_b = create_tensor(PARAKEET_TENSOR_ENC_PRE_CONV_6_BIAS, ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, 1, n_subsampling_channels, 1));
     ggml_set_name(model.enc_pre_conv_6_b, "enc_pre_conv_6_b");
@@ -1281,15 +1281,22 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
     }
 
     // Prediction network (decoder)
-    const int dec_hidden = hparams.n_pred_dim;
+    const int dec_hidden   = hparams.n_pred_dim;
     const int n_pred_embed = hparams.n_vocab + 1;                            // vocab + blank token
     const int n_lstm_gates = 4 * dec_hidden;                                 // 4 LSTM gates
     const int n_joint_out  = hparams.n_vocab + hparams.n_tdt_durations + 1;  // vocab + durations + blank
-    model.prediction.embed_w = create_tensor(PARAKEET_TENSOR_PRED_EMBED_WEIGHT, ggml_new_tensor_2d(ctx, wtype, dec_hidden, n_pred_embed));
+
+    // The prediction/joint hidden dimension is 640, which is not a multiple of the
+    // K-quant block size (256). For K-quant models, we keep these tensors at F32.
+    const int blck         = ggml_blck_size(wtype);
+    const ggml_type pred_wtype = (blck > 1 && dec_hidden % blck != 0) ? GGML_TYPE_F32 : wtype;
+    const ggml_type join_wtype = pred_wtype;
+
+    model.prediction.embed_w = create_tensor(PARAKEET_TENSOR_PRED_EMBED_WEIGHT, ggml_new_tensor_2d(ctx, pred_wtype, dec_hidden, n_pred_embed));
     model.prediction.lstm_layer.resize(hparams.n_pred_layers);
     for (int i = 0; i < hparams.n_pred_layers; ++i) {
         auto & layer = model.prediction.lstm_layer[i];
-        layer.ih_w = create_tensor(PARAKEET_TENSOR_PRED_LSTM_WEIGHT_IH, ggml_new_tensor_2d(ctx, wtype, dec_hidden, n_lstm_gates), i);
+        layer.ih_w = create_tensor(PARAKEET_TENSOR_PRED_LSTM_WEIGHT_IH, ggml_new_tensor_2d(ctx, pred_wtype, dec_hidden, n_lstm_gates), i);
         ggml_format_name(layer.ih_w, "pred_%d_ih_w", i);
 
         layer.ih_b = create_tensor(PARAKEET_TENSOR_PRED_LSTM_BIAS_IH, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_lstm_gates), i);
@@ -1298,12 +1305,12 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
         layer.hh_b = create_tensor(PARAKEET_TENSOR_PRED_LSTM_BIAS_HH, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_lstm_gates), i);
         ggml_format_name(layer.hh_b, "pred_%d_hh_b", i);
 
-        layer.hh_w = create_tensor(PARAKEET_TENSOR_PRED_LSTM_WEIGHT_HH, ggml_new_tensor_2d(ctx, wtype, dec_hidden, n_lstm_gates), i);
+        layer.hh_w = create_tensor(PARAKEET_TENSOR_PRED_LSTM_WEIGHT_HH, ggml_new_tensor_2d(ctx, pred_wtype, dec_hidden, n_lstm_gates), i);
         ggml_format_name(layer.hh_w, "pred_%d_hh_w", i);
     }
 
     // Joint network
-    model.joint.pred_w = create_tensor(PARAKEET_TENSOR_JOINT_PRED_WEIGHT, ggml_new_tensor_2d(ctx, wtype, dec_hidden, dec_hidden));
+    model.joint.pred_w = create_tensor(PARAKEET_TENSOR_JOINT_PRED_WEIGHT, ggml_new_tensor_2d(ctx, join_wtype, dec_hidden, dec_hidden));
     ggml_set_name(model.joint.pred_w, "pred_w");
     model.joint.pred_b = create_tensor(PARAKEET_TENSOR_JOINT_PRED_BIAS, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, dec_hidden));
     ggml_set_name(model.joint.pred_b, "pred_b");
@@ -1311,7 +1318,7 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
     ggml_set_name(model.joint.enc_w, "enc_w");
     model.joint.enc_b  = create_tensor(PARAKEET_TENSOR_JOINT_ENC_BIAS, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, dec_hidden));
     ggml_set_name(model.joint.enc_b, "enc_b");
-    model.joint.net_w  = create_tensor(PARAKEET_TENSOR_JOINT_NET_WEIGHT, ggml_new_tensor_2d(ctx, wtype, dec_hidden, n_joint_out));
+    model.joint.net_w  = create_tensor(PARAKEET_TENSOR_JOINT_NET_WEIGHT, ggml_new_tensor_2d(ctx, join_wtype, dec_hidden, n_joint_out));
     ggml_set_name(model.joint.net_w, "net_w");
     model.joint.net_b  = create_tensor(PARAKEET_TENSOR_JOINT_NET_BIAS, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_joint_out));
     ggml_set_name(model.joint.net_b, "net_b");

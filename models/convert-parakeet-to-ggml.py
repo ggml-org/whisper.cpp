@@ -86,7 +86,7 @@ def write_tensor(fout, name, data, use_f16=True, force_f32=False):
         data = data.astype(np.float32)
     elif use_f16:
         if n_dims < 2 or 'bias' in name or 'norm' in name or \
-                ('pre_encode.conv' in name and n_dims == 4 and data.shape[2] == 3) or \
+                ('pre_encode.conv' in name and n_dims == 4) or \
                 'depthwise_conv.weight' in name:
             data = data.astype(np.float32)
             ftype = 0
