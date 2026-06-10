@@ -441,6 +441,13 @@ jobs:
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_NATIVE=OFF \
+            -DGGML_AVX=ON \
+            -DGGML_AVX2=ON \
+            -DGGML_FMA=ON \
+            -DGGML_AVX512=OFF \
+            -DCMAKE_C_FLAGS="-march=x86-64-v3" \
+            -DCMAKE_CXX_FLAGS="-march=x86-64-v3" \
             -DGGML_VULKAN=ON \
             -DWHISPER_BUILD_EXAMPLES=ON \
             -DWHISPER_BUILD_TESTS=OFF \
@@ -654,6 +661,9 @@ jobs:
             -DGGML_AVX=ON \
             -DGGML_AVX2=ON \
             -DGGML_FMA=ON \
+            -DGGML_AVX512=OFF \
+            -DCMAKE_C_FLAGS="-march=x86-64-v3" \
+            -DCMAKE_CXX_FLAGS="-march=x86-64-v3" \
             -DWHISPER_BUILD_EXAMPLES=ON \
             -DWHISPER_BUILD_TESTS=OFF \
             -DWHISPER_BUILD_SERVER=ON
