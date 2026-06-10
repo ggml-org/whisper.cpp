@@ -21,12 +21,20 @@ cd `dirname $0`
 # Whisper models
 models=( "tiny.en" "tiny" "base.en" "base" "small.en" "small" "medium.en" "medium" "large-v1" "large-v2" "large-v3" "large-v3-turbo" )
 
+# Parakeet model variants
+parakeet_models=( "f16" "f32" "q2_k" "q4_0" "q4_k" "q8_0" )
+
 # list available models
 function list_models {
     printf "\n"
-    printf "  Available models:"
+    printf "  Available whisper models:"
     for model in "${models[@]}"; do
         printf " $model"
+    done
+    printf "\n"
+    printf "  Available parakeet models:"
+    for model in "${parakeet_models[@]}"; do
+        printf " parakeet-$model"
     done
     printf "\n\n"
 }
@@ -39,15 +47,37 @@ if [ $# -eq 0 ]; then
 fi
 
 model=$1
-main="../build/bin/whisper-cli"
 
 threads=""
 if [ $# -eq 2 ]; then
     threads="-t $2"
 fi
 
-if [ ! -f ../models/ggml-$model.bin ]; then
-    printf "Model $model not found. Aborting\n"
+# Detect parakeet model (prefix "parakeet-" or a bare variant like "f32")
+is_parakeet=0
+parakeet_variant=""
+if [[ $model == parakeet-* ]]; then
+    is_parakeet=1
+    parakeet_variant="${model#parakeet-}"
+fi
+for v in "${parakeet_models[@]}"; do
+    if [[ $model == "$v" ]]; then
+        is_parakeet=1
+        parakeet_variant="$v"
+        break
+    fi
+done
+
+if [ $is_parakeet -eq 1 ]; then
+    main="../build/bin/parakeet-cli"
+    model_path="../models/ggml-parakeet-tdt-0.6b-v3-${parakeet_variant}.bin"
+else
+    main="../build/bin/whisper-cli"
+    model_path="../models/ggml-${model}.bin"
+fi
+
+if [ ! -f $model_path ]; then
+    printf "Model $model not found ($model_path). Aborting\n"
     list_models
     exit 1
 fi
@@ -110,7 +140,11 @@ function run_lang() {
             fi
         fi
 
-        $main -m ../models/ggml-$model.bin $threads -f $fname_dst -l $lang -otxt 2> /dev/null
+        if [ $is_parakeet -eq 1 ]; then
+            $main -m $model_path $threads -f $fname_dst -otxt 2> /dev/null
+        else
+            $main -m $model_path $threads -f $fname_dst -l $lang -otxt 2> /dev/null
+        fi
 
         git diff --no-index --word-diff=color --word-diff-regex=. $lang-$i-ref.txt $fname_dst.txt
 
@@ -120,7 +154,7 @@ function run_lang() {
 
 run_lang "en" "${urls_en[@]}"
 
-if [[ $model != *.en* ]]; then
+if [ $is_parakeet -eq 0 ] && [[ $model != *.en* ]]; then
     run_lang "es" "${urls_es[@]}"
     run_lang "it" "${urls_it[@]}"
     run_lang "pt" "${urls_pt[@]}"
