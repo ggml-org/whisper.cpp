@@ -3726,7 +3726,7 @@ static void parakeet_log_internal(ggml_log_level level, const char * format, ...
 static void parakeet_log_callback_default(ggml_log_level level, const char * text, void * user_data) {
     (void) level;
     (void) user_data;
-#ifndef WHISPER_DEBUG
+#ifndef PARAKEET_DEBUG
     if (level == GGML_LOG_LEVEL_DEBUG) {
         return;
     }
