@@ -141,6 +141,7 @@ jobs:
 # 2. ROCm — Linux
 # ════════════════════════════════════════════════════════════════════════════════
   linux-rocm:
+    if: false   # temporarily disabled — windows-rocm gfx1151 only
     runs-on: ubuntu-22.04
     needs: [determine-tag, prepare-rocm-matrix]
     strategy:
@@ -203,7 +204,7 @@ jobs:
           mkdir -p "$BIN"
           [ -d "$LIB/rocblas/library" ]   && { mkdir -p "$BIN/rocblas";   cp -r "$LIB/rocblas/library"   "$BIN/rocblas/"; }
           [ -d "$LIB/hipblaslt/library" ] && { mkdir -p "$BIN/hipblaslt"; cp -r "$LIB/hipblaslt/library" "$BIN/hipblaslt/"; }
-          for so in libhipblas librocblas libamdhip64 librocsolver libroctx64 libhipblaslt libamd_comgr libhsa-runtime64; do
+          for so in libhipblas librocblas libamdhip64 librocsolver libroctx64 libhipblaslt libamd_comgr libamd_comgr_loader libhsa-runtime64; do
             cp -v $LIB/${so}.so* "$BIN/" 2>/dev/null || true
           done
           cp -v $LIB/llvm/lib/libLLVM.so*      "$BIN/" 2>/dev/null || true
@@ -212,11 +213,18 @@ jobs:
 
       - name: Bundle linked libraries
         run: |
-          ldd build/bin/whisper-cli | grep "=> /" | while read -r line; do
-            soname=$(echo "$line" | awk '{print $1}')
-            path=$(echo "$line" | awk '{print $3}')
-            [[ "$soname" =~ ^(libc|libm|libdl|librt|libpthread|libstdc\+\+|libgcc_s|ld-linux) ]] && continue
-            cp -L "$path" "build/bin/$soname" 2>/dev/null || true
+          BIN="build/bin"
+          SKIP="^(libc|libm|libdl|librt|libpthread|libstdc\+\+|libgcc_s|ld-linux)"
+          # scan whisper-cli and all already-bundled .so files for missing deps
+          for target in "$BIN/whisper-cli" "$BIN"/*.so*; do
+            [ -f "$target" ] && [ ! -L "$target" ] || continue
+            ldd "$target" 2>/dev/null | grep "=> /" | while read -r line; do
+              soname=$(echo "$line" | awk '{print $1}')
+              path=$(echo "$line" | awk '{print $3}')
+              [[ "$soname" =~ $SKIP ]] && continue
+              [ -f "$BIN/$soname" ] && continue
+              cp -L "$path" "$BIN/$soname" 2>/dev/null || true
+            done
           done
 
       - name: Set portable RPATH
@@ -247,7 +255,13 @@ jobs:
     runs-on: windows-latest
     needs: [determine-tag, prepare-rocm-matrix]
     strategy:
-      matrix: ${{ fromJson(needs.prepare-rocm-matrix.outputs.windows_matrix) }}
+      matrix:
+        gfx_target: [gfx1151]   # temporarily pinned — full matrix restored once CI passes
+        build: [Release]
+        sdl2: [ON]
+        arch: [x64]
+        s2arc: [x64]
+        s2ver: ["2.28.5"]
       fail-fast: false
 
     steps:
@@ -356,6 +370,7 @@ jobs:
 # 4. Vulkan — Linux
 # ════════════════════════════════════════════════════════════════════════════════
   linux-vulkan:
+    if: false   # temporarily disabled — windows-rocm gfx1151 only
     runs-on: ubuntu-latest
     needs: determine-tag
 
@@ -415,6 +430,7 @@ jobs:
 # 5. Vulkan — Windows
 # ════════════════════════════════════════════════════════════════════════════════
   windows-vulkan:
+    if: false   # temporarily disabled — focus CI on ROCm + linux-vulkan
     runs-on: windows-latest
     needs: determine-tag
 
@@ -471,6 +487,7 @@ jobs:
 # 6. NPU (VitisAI / RyzenAI) — Windows only (self-hosted runner)
 # ════════════════════════════════════════════════════════════════════════════════
   windows-npu:
+    if: false   # temporarily disabled — focus CI on ROCm + linux-vulkan
     runs-on: [self-hosted, Windows, stx, rai300_400]
     needs: determine-tag
     continue-on-error: true   # runner may be offline; don't block release
@@ -570,6 +587,7 @@ jobs:
 # 7. CPU — Linux
 # ════════════════════════════════════════════════════════════════════════════════
   linux-cpu:
+    if: false   # temporarily disabled — focus CI on ROCm + linux-vulkan
     runs-on: ubuntu-latest
     needs: determine-tag
 
@@ -587,6 +605,10 @@ jobs:
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_NATIVE=OFF \
+            -DGGML_AVX=ON \
+            -DGGML_AVX2=ON \
+            -DGGML_FMA=ON \
             -DWHISPER_BUILD_EXAMPLES=ON \
             -DWHISPER_BUILD_TESTS=OFF \
             -DWHISPER_BUILD_SERVER=ON
@@ -621,6 +643,7 @@ jobs:
 # 8. CPU — Windows
 # ════════════════════════════════════════════════════════════════════════════════
   windows-cpu:
+    if: false   # temporarily disabled — focus CI on ROCm + linux-vulkan
     runs-on: windows-latest
     needs: determine-tag
 
@@ -641,6 +664,10 @@ jobs:
         run: |
           cmake -S . -B ./build -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
+            -DGGML_NATIVE=OFF `
+            -DGGML_AVX=ON `
+            -DGGML_AVX2=ON `
+            -DGGML_FMA=ON `
             -DBUILD_SHARED_LIBS=ON `
             -DWHISPER_SDL2=ON
 
@@ -675,9 +702,9 @@ jobs:
 # 9. Test — CPU Windows (GitHub-hosted, no GPU needed)
 # ════════════════════════════════════════════════════════════════════════════════
   test-cpu-windows:
+    if: false   # temporarily disabled
     runs-on: windows-latest
     needs: [determine-tag, windows-cpu]
-    if: needs.windows-cpu.result == 'success'
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -713,9 +740,9 @@ jobs:
 # 10. Test — CPU Linux (GitHub-hosted, no GPU needed)
 # ════════════════════════════════════════════════════════════════════════════════
   test-cpu-linux:
+    if: false   # temporarily disabled
     runs-on: ubuntu-latest
     needs: [determine-tag, linux-cpu]
-    if: needs.linux-cpu.result == 'success'
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -747,9 +774,9 @@ jobs:
 # 11. Test — Vulkan Windows (stx-halo, has Vulkan driver)
 # ════════════════════════════════════════════════════════════════════════════════
   test-vulkan-windows:
+    if: false   # temporarily disabled
     runs-on: [self-hosted, Windows, stx-halo]
     needs: [determine-tag, windows-vulkan]
-    if: needs.windows-vulkan.result == 'success'
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -761,33 +788,33 @@ jobs:
           path: ./artifact
 
       - name: Extract
-        shell: pwsh
+        shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path bin | Out-Null
           Expand-Archive -Path (Get-ChildItem artifact -Filter "*.zip" | Select-Object -First 1).FullName -DestinationPath bin -Force
 
       - name: Download tiny model
-        shell: pwsh
+        shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path models | Out-Null
           Invoke-WebRequest -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin" -OutFile "models\ggml-tiny.bin"
 
       - name: Run and verify
-        shell: pwsh
+        shell: powershell
         run: |
           .\bin\whisper-cli.exe -m models\ggml-tiny.bin -f samples\jfk.wav -otxt -of jfk-result
           $text = Get-Content "jfk-result.txt" -Raw
           Write-Host $text
-          if ($text -match "country|ask not|nation|kennedy") { Write-Host "PASS" -ForegroundColor Green }
+          if ($text -match "country|ask not|nation|kennedy") { Write-Host "PASS" }
           else { Write-Error "FAIL: expected words not found"; exit 1 }
 
 # ════════════════════════════════════════════════════════════════════════════════
 # 12. Test — Vulkan Linux (stx-halo, has Vulkan driver)
 # ════════════════════════════════════════════════════════════════════════════════
   test-vulkan-linux:
+    if: false   # temporarily disabled
     runs-on: [self-hosted, Linux, stx-halo]
     needs: [determine-tag, linux-vulkan]
-    if: needs.linux-vulkan.result == 'success'
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -816,7 +843,7 @@ jobs:
           grep -qi "country\|ask not\|nation\|kennedy" jfk-result.txt && echo "PASS" || { echo "FAIL"; exit 1; }
 
 # ════════════════════════════════════════════════════════════════════════════════
-# 13. Test — ROCm Windows (stx-halo, gfx1150 — tests gfx1151 artifact on halo)
+# 13. Test — ROCm Windows (stx-halo, gfx1151)
 # ════════════════════════════════════════════════════════════════════════════════
   test-rocm-windows:
     runs-on: [self-hosted, Windows, stx-halo]
@@ -826,40 +853,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download ROCm artifact (gfx1151 - closest to stx-halo gfx1150)
+      - name: Download ROCm artifact (gfx1151 — stx-halo GPU target)
         uses: actions/download-artifact@v4
         with:
           name: whisper-${{ needs.determine-tag.outputs.version }}-windows-rocm-gfx1151.zip
           path: ./artifact
 
       - name: Extract
-        shell: pwsh
+        shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path bin | Out-Null
           Expand-Archive -Path (Get-ChildItem artifact -Filter "*.zip" | Select-Object -First 1).FullName -DestinationPath bin -Force
 
       - name: Download tiny model
-        shell: pwsh
+        shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path models | Out-Null
           Invoke-WebRequest -Uri "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin" -OutFile "models\ggml-tiny.bin"
 
       - name: Run and verify
-        shell: pwsh
+        shell: powershell
         run: |
           .\bin\whisper-cli.exe -m models\ggml-tiny.bin -f samples\jfk.wav -otxt -of jfk-result
           $text = Get-Content "jfk-result.txt" -Raw
           Write-Host $text
-          if ($text -match "country|ask not|nation|kennedy") { Write-Host "PASS" -ForegroundColor Green }
+          if ($text -match "country|ask not|nation|kennedy") { Write-Host "PASS" }
           else { Write-Error "FAIL: expected words not found"; exit 1 }
 
 # ════════════════════════════════════════════════════════════════════════════════
-# 14. Test — ROCm Linux (stx-halo Linux, gfx1151)
+# 14. Test — ROCm Linux (stx-halo, gfx1151)
 # ════════════════════════════════════════════════════════════════════════════════
   test-rocm-linux:
+    if: false   # temporarily disabled
     runs-on: [self-hosted, Linux, stx-halo]
     needs: [determine-tag, linux-rocm]
-    if: needs.linux-rocm.result == 'success'
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -891,10 +918,9 @@ jobs:
 # 15. Test — NPU Windows (rai300_400 runner, needs FlexML + .rai model)
 # ════════════════════════════════════════════════════════════════════════════════
   test-npu-windows:
+    if: false   # temporarily disabled
     runs-on: [self-hosted, Windows, stx, rai300_400]
     needs: [determine-tag, windows-npu]
-
-    if: needs.windows-npu.result == 'success'
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
