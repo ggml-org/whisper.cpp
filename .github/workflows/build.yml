@@ -141,14 +141,10 @@ jobs:
 # 2. ROCm — Linux
 # ════════════════════════════════════════════════════════════════════════════════
   linux-rocm:
-    runs-on: ubuntu-22.04
+    runs-on: [self-hosted, Linux, stx-halo]
     needs: [determine-tag, prepare-rocm-matrix]
     strategy:
-      matrix:
-        gfx_target: [gfx1151]   # temporarily pinned — full matrix restored once CI passes
-        build: [Release]
-        sdl2: [ON]
-        arch: [linux/amd64]
+      matrix: ${{ fromJson(needs.prepare-rocm-matrix.outputs.ubuntu_matrix) }}
       fail-fast: false
 
     steps:
@@ -274,16 +270,10 @@ jobs:
 # 3. ROCm — Windows
 # ════════════════════════════════════════════════════════════════════════════════
   windows-rocm:
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, stx-halo]
     needs: [determine-tag, prepare-rocm-matrix]
     strategy:
-      matrix:
-        gfx_target: [gfx1151]   # temporarily pinned — full matrix restored once CI passes
-        build: [Release]
-        sdl2: [ON]
-        arch: [x64]
-        s2arc: [x64]
-        s2ver: ["2.28.5"]
+      matrix: ${{ fromJson(needs.prepare-rocm-matrix.outputs.windows_matrix) }}
       fail-fast: false
 
     steps:
@@ -315,12 +305,10 @@ jobs:
       - name: Download and extract ROCm tarball
         shell: powershell
         run: |
-          $gfx    = "${{ matrix.gfx_target }}"
-          $ver    = "${{ env.ROCM_VERSION }}"
-          # resolve base target (group targets always use gfx1151 tarball)
-          $base   = if ($gfx -in @("gfx110X","gfx120X","gfx1150","gfx1100")) { "gfx1151" } else { $gfx }
-          $url    = "https://repo.amd.com/rocm/tarball/therock-dist-windows-${base}-${ver}.tar.gz"
-          Write-Host "ROCm version: $ver"
+          $gfx  = "${{ matrix.gfx_target }}"
+          $ver  = "${{ env.ROCM_VERSION }}"
+          $base = $gfx
+          $url  = "https://repo.amd.com/rocm/tarball/therock-dist-windows-${base}-${ver}.tar.gz"
           Write-Host "ROCm URL: $url"
           "DETECTED_ROCM_VERSION=$ver" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           Invoke-WebRequest -Uri $url -OutFile rocm.tar.gz
@@ -483,7 +471,6 @@ jobs:
 # 5. Vulkan — Windows
 # ════════════════════════════════════════════════════════════════════════════════
   windows-vulkan:
-    if: false   # temporarily disabled — focus CI on ROCm + linux-vulkan
     runs-on: windows-latest
     needs: determine-tag
 
@@ -540,7 +527,6 @@ jobs:
 # 6. NPU (VitisAI / RyzenAI) — Windows only (self-hosted runner)
 # ════════════════════════════════════════════════════════════════════════════════
   windows-npu:
-    if: false   # temporarily disabled — focus CI on ROCm + linux-vulkan
     runs-on: [self-hosted, Windows, stx, rai300_400]
     needs: determine-tag
     continue-on-error: true   # runner may be offline; don't block release
@@ -640,7 +626,6 @@ jobs:
 # 7. CPU — Linux
 # ════════════════════════════════════════════════════════════════════════════════
   linux-cpu:
-    if: false   # temporarily disabled — focus CI on ROCm + linux-vulkan
     runs-on: ubuntu-latest
     needs: determine-tag
 
@@ -696,7 +681,6 @@ jobs:
 # 8. CPU — Windows
 # ════════════════════════════════════════════════════════════════════════════════
   windows-cpu:
-    if: false   # temporarily disabled — focus CI on ROCm + linux-vulkan
     runs-on: windows-latest
     needs: determine-tag
 
@@ -755,9 +739,9 @@ jobs:
 # 9. Test — CPU Windows (GitHub-hosted, no GPU needed)
 # ════════════════════════════════════════════════════════════════════════════════
   test-cpu-windows:
-    if: false   # temporarily disabled
     runs-on: windows-latest
     needs: [determine-tag, windows-cpu]
+    if: needs.windows-cpu.result == 'success'
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -793,9 +777,9 @@ jobs:
 # 10. Test — CPU Linux (GitHub-hosted, no GPU needed)
 # ════════════════════════════════════════════════════════════════════════════════
   test-cpu-linux:
-    if: false   # temporarily disabled
     runs-on: ubuntu-latest
     needs: [determine-tag, linux-cpu]
+    if: needs.linux-cpu.result == 'success'
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -827,9 +811,9 @@ jobs:
 # 11. Test — Vulkan Windows (stx-halo, has Vulkan driver)
 # ════════════════════════════════════════════════════════════════════════════════
   test-vulkan-windows:
-    if: false   # temporarily disabled
     runs-on: [self-hosted, Windows, stx-halo]
     needs: [determine-tag, windows-vulkan]
+    if: needs.windows-vulkan.result == 'success'
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -971,9 +955,9 @@ jobs:
 # 15. Test — NPU Windows (rai300_400 runner, needs FlexML + .rai model)
 # ════════════════════════════════════════════════════════════════════════════════
   test-npu-windows:
-    if: false   # temporarily disabled
     runs-on: [self-hosted, Windows, stx, rai300_400]
     needs: [determine-tag, windows-npu]
+    if: needs.windows-npu.result == 'success'
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4

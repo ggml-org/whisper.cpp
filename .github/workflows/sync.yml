@@ -6,8 +6,10 @@ name: Sync Upstream & Auto-Release
 #   - conflict     → opens a PR for manual resolution, does NOT tag
 
 on:
-  schedule:
-    - cron: '0 6 * * *'   # daily at 06:00 UTC
+  # schedule disabled until v1.8.4 release is confirmed good
+  # re-enable by uncommenting the schedule block below
+  # schedule:
+  #   - cron: '0 6 * * *'   # daily at 06:00 UTC
   workflow_dispatch:
     inputs:
       upstream_tag:
@@ -106,21 +108,20 @@ jobs:
           git push origin "$BRANCH"
 
           TAG="${{ steps.upstream.outputs.tag }}"
-          cat > /tmp/pr-body.md << EOF
-## Upstream sync: ${TAG}
-
-Conflicts were detected during automatic merge. Files affected:
-
-    ${CONFLICT_FILES}
-
-This PR was auto-resolved using upstream (theirs) as a baseline.
-Please review the diff carefully before merging.
-
-Once merged, manually create the release tag on main to trigger the build:
-
-    git tag ${TAG}
-    git push origin ${TAG}
-EOF
+          python3 -c "
+import sys
+tag = sys.argv[1]
+files = sys.argv[2]
+body = '## Upstream sync: ' + tag + '\n\n'
+body += 'Conflicts were detected during automatic merge. Files affected:\n\n'
+body += '    ' + files + '\n\n'
+body += 'This PR was auto-resolved using upstream (theirs) as a baseline.\n'
+body += 'Please review the diff carefully before merging.\n\n'
+body += 'Once merged, manually create the release tag on main to trigger the build:\n\n'
+body += '    git tag ' + tag + '\n'
+body += '    git push origin ' + tag + '\n'
+open('/tmp/pr-body.md', 'w').write(body)
+" "$TAG" "$CONFLICT_FILES"
 
           gh pr create \
             --title "Sync upstream ${TAG} - conflict resolution needed" \
