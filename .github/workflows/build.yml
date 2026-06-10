@@ -471,7 +471,7 @@ jobs:
 # 6. NPU (VitisAI / RyzenAI) — Windows only (self-hosted runner)
 # ════════════════════════════════════════════════════════════════════════════════
   windows-npu:
-    runs-on: [self-hosted, Windows, rai300_400]
+    runs-on: [self-hosted, Windows, stx, rai300_400]
     needs: determine-tag
     continue-on-error: true   # runner may be offline; don't block release
 
@@ -891,7 +891,7 @@ jobs:
 # 15. Test — NPU Windows (rai300_400 runner, needs FlexML + .rai model)
 # ════════════════════════════════════════════════════════════════════════════════
   test-npu-windows:
-    runs-on: [self-hosted, Windows, rai300_400]
+    runs-on: [self-hosted, Windows, stx, rai300_400]
     needs: [determine-tag, windows-npu]
 
     if: needs.windows-npu.result == 'success'
