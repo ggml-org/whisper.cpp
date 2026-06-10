@@ -148,23 +148,25 @@ jobs:
       fail-fast: false
 
     steps:
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/share/boost \
-            /usr/share/dotnet /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force 2>/dev/null || true
-
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo apt update && sudo apt install -y cmake ninja-build curl build-essential libsdl2-dev git patchelf
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake ninja-build curl build-essential libsdl2-dev git patchelf
+          echo "--- Verifying installs ---"
+          cmake --version
+          ninja --version
+          curl --version | head -1
+          gcc --version | head -1
+          patchelf --version
+          git --version
 
       - name: Download ROCm tarball
         run: |
           source ci/resolve-rocm-version.sh linux "${{ matrix.gfx_target }}" "${{ env.ROCM_VERSION }}"
           echo "DETECTED_ROCM_VERSION=$ROCM_RESOLVED_VERSION" >> $GITHUB_ENV
-          sudo mkdir -p /opt/rocm
-          curl -L "$ROCM_TARBALL_URL" | sudo tar --use-compress-program=gzip -xf - -C /opt/rocm --strip-components=1
+          mkdir -p /opt/rocm
+          curl -L "$ROCM_TARBALL_URL" | tar --use-compress-program=gzip -xf - -C /opt/rocm --strip-components=1
 
       - name: Set ROCm env
         run: |
