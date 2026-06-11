@@ -225,22 +225,11 @@ jobs:
         run: |
           BIN="build/bin"
           LIB="/opt/rocm/lib"
-          mkdir -p "$BIN"
-          [ -d "$LIB/rocblas/library" ]   && { mkdir -p "$BIN/rocblas";   cp -r "$LIB/rocblas/library"   "$BIN/rocblas/"; }
-          [ -d "$LIB/hipblaslt/library" ] && { mkdir -p "$BIN/hipblaslt"; cp -r "$LIB/hipblaslt/library" "$BIN/hipblaslt/"; }
-          for so in libhipblas librocblas libamdhip64 librocsolver libroctx64 libhipblaslt libamd_comgr libamd_comgr_loader libhsa-runtime64; do
-            cp -v $LIB/${so}.so* "$BIN/" 2>/dev/null || true
-          done
-          cp -v $LIB/llvm/lib/libLLVM.so*      "$BIN/" 2>/dev/null || true
-          cp -v $LIB/llvm/lib/libclang-cpp.so* "$BIN/" 2>/dev/null || true
-          [ -d "$LIB/rocm_sysdeps/lib" ] && cp -v $LIB/rocm_sysdeps/lib/librocm_sysdeps_*.so* "$BIN/" || true
-
-      - name: Bundle linked libraries
-        run: |
-          BIN="build/bin"
           SKIP="^(libc|libm|libdl|librt|libpthread|libstdc\+\+|libgcc_s|ld-linux)"
-          # scan whisper-cli and all already-bundled .so files for missing deps
-          for target in "$BIN/whisper-cli" "$BIN"/*.so*; do
+          mkdir -p "$BIN"
+
+          # ldd-based: scan all whisper binaries and bundled .so files
+          for target in "$BIN"/whisper-* "$BIN"/*.so*; do
             [ -f "$target" ] && [ ! -L "$target" ] || continue
             ldd "$target" 2>/dev/null | grep "=> /" | while read -r line; do
               soname=$(echo "$line" | awk '{print $1}')
@@ -250,6 +239,10 @@ jobs:
               cp -L "$path" "$BIN/$soname" 2>/dev/null || true
             done
           done
+
+          # Kernel library data dirs (not picked up by ldd — loaded at runtime by path)
+          [ -d "$LIB/rocblas/library" ]   && { mkdir -p "$BIN/rocblas";   cp -r "$LIB/rocblas/library"   "$BIN/rocblas/"; }
+          [ -d "$LIB/hipblaslt/library" ] && { mkdir -p "$BIN/hipblaslt"; cp -r "$LIB/hipblaslt/library" "$BIN/hipblaslt/"; }
 
       - name: Set portable RPATH
         run: |
@@ -276,7 +269,7 @@ jobs:
 # 3. ROCm — Windows
 # ════════════════════════════════════════════════════════════════════════════════
   windows-rocm:
-    runs-on: windows-latest
+    runs-on: windows-2022
     needs: [determine-tag, prepare-rocm-matrix]
     strategy:
       matrix: ${{ fromJson(needs.prepare-rocm-matrix.outputs.windows_matrix) }}
@@ -528,6 +521,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DBUILD_SHARED_LIBS=ON `
             -DGGML_VULKAN=ON `
+            -DWHISPER_BUILD_SERVER=ON `
             -DWHISPER_SDL2=ON `
             -DVULKAN_SDK="$env:VULKAN_SDK"
 
@@ -603,7 +597,7 @@ jobs:
           call setup.bat
           if errorlevel 1 ( echo ERROR: FlexML setup.bat failed! & exit /b 1 )
           cd ..
-          cmake -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DWHISPER_VITISAI=ON
+          cmake -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DWHISPER_VITISAI=ON -DWHISPER_BUILD_SERVER=ON
           if errorlevel 1 ( echo ERROR: CMake configure failed! & exit /b 1 )
           cmake --build build --config Release -j
           if errorlevel 1 ( echo ERROR: Build failed! & exit /b 1 )
@@ -792,7 +786,9 @@ jobs:
             -DGGML_AVX=ON `
             -DGGML_AVX2=ON `
             -DGGML_FMA=ON `
+            -DGGML_AVX512=OFF `
             -DBUILD_SHARED_LIBS=ON `
+            -DWHISPER_BUILD_SERVER=ON `
             -DWHISPER_SDL2=ON
 
       - name: Build

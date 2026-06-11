@@ -6,10 +6,6 @@ name: Sync Upstream & Auto-Release
 #   - conflict     → opens a PR for manual resolution, does NOT tag
 
 on:
-  # schedule disabled until v1.8.4 release is confirmed good
-  # re-enable by uncommenting the schedule block below
-  # schedule:
-  #   - cron: '0 6 * * *'   # daily at 06:00 UTC
   workflow_dispatch:
     inputs:
       upstream_tag:
@@ -108,8 +104,19 @@ jobs:
           git push origin "$BRANCH"
 
           TAG="${{ steps.upstream.outputs.tag }}"
-          printf '## Upstream sync: %s\n\nConflicts were detected during automatic merge. Files affected:\n\n    %s\n\nThis PR was auto-resolved using upstream (theirs) as a baseline.\nPlease review the diff carefully before merging.\n\nOnce merged, manually create the release tag on main to trigger the build:\n\n    git tag %s\n    git push origin %s\n' \
-            "$TAG" "$CONFLICT_FILES" "$TAG" "$TAG" > /tmp/pr-body.md
+          echo "## Upstream sync: ${TAG}" > /tmp/pr-body.md
+          echo "" >> /tmp/pr-body.md
+          echo "Conflicts were detected during automatic merge. Files affected:" >> /tmp/pr-body.md
+          echo "" >> /tmp/pr-body.md
+          echo "    ${CONFLICT_FILES}" >> /tmp/pr-body.md
+          echo "" >> /tmp/pr-body.md
+          echo "This PR was auto-resolved using upstream (theirs) as a baseline." >> /tmp/pr-body.md
+          echo "Please review the diff carefully before merging." >> /tmp/pr-body.md
+          echo "" >> /tmp/pr-body.md
+          echo "Once merged, manually create the release tag on main to trigger the build:" >> /tmp/pr-body.md
+          echo "" >> /tmp/pr-body.md
+          echo "    git tag ${TAG}" >> /tmp/pr-body.md
+          echo "    git push origin ${TAG}" >> /tmp/pr-body.md
 
           gh pr create \
             --title "Sync upstream ${TAG} - conflict resolution needed" \
@@ -117,7 +124,7 @@ jobs:
             --base main \
             --head "$BRANCH"
 
-          echo "::warning::Merge conflict detected — PR opened for manual resolution. Release build NOT triggered."
+          echo "::warning::Merge conflict detected - PR opened for manual resolution. Release build NOT triggered."
 
       # ── Clean merge path: push main + tag → triggers build.yml ───────────
       - name: Push merged main
