@@ -105,9 +105,9 @@ jobs:
             SHOULD_RELEASE="false"
           fi
 
-          # Version = tag without leading 'v', used in artifact filenames
-          # e.g. v1.8.4 → 1.8.4,  b1234 → b1234 (unchanged for dev builds)
-          VERSION="${TAG_NAME#v}"
+          # Version used in artifact filenames — keep leading 'v' to match lemonade expectations
+          # e.g. v1.8.4 → v1.8.4,  b1234 → b1234
+          VERSION="${TAG_NAME}"
 
           echo "name=$TAG_NAME"                >> $GITHUB_OUTPUT
           echo "version=$VERSION"              >> $GITHUB_OUTPUT
