@@ -1526,8 +1526,10 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
     const int  att_right   = local_attn ? PARAKEET_LOCAL_ATTN_WINDOW : n_time - 1;
     const int  window_size = local_attn ? att_left + att_right + 1 : 2 * n_time - 1;
     const int  d_half      = n_state / 2;
+    const int  mask_dim    = local_attn ? window_size : n_time;
 
-    struct ggml_tensor * attn_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, local_attn ? window_size : n_time, n_time);
+    // mask [key, n_time]
+    struct ggml_tensor * attn_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, mask_dim, n_time);
     ggml_set_name(attn_mask, "attn_mask");
     ggml_set_input(attn_mask);
 
@@ -1618,20 +1620,29 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
                 K_cur = ggml_cont(ctx0, ggml_permute(ctx0, K_cur, 0, 2, 1, 3));
                 V_cur = ggml_cont(ctx0, ggml_permute(ctx0, V_cur, 0, 2, 1, 3));
 
+                // content bias
                 struct ggml_tensor * bias_u = ggml_reshape_3d(ctx0, layer.attn_pos_bias_u, d_head, 1, n_head);
-                struct ggml_tensor * bias_v = ggml_reshape_3d(ctx0, layer.attn_pos_bias_v, d_head, 1, n_head);
                 struct ggml_tensor * Q_u = ggml_add(ctx0, Q_cur, bias_u);
+
+                // position bias
+                struct ggml_tensor * bias_v = ggml_reshape_3d(ctx0, layer.attn_pos_bias_v, d_head, 1, n_head);
                 struct ggml_tensor * Q_v = ggml_add(ctx0, Q_cur, bias_v);
 
+                // right pad the time_frame.
                 struct ggml_tensor * Q_u_padded = need_padding ?
                     ggml_pad_ext(ctx0, Q_u, 0, 0, 0, n_time_padded - n_time, 0, 0, 0, 0) : Q_u;
                 Q_u_padded = ggml_reshape_4d(ctx0, Q_u_padded, d_head, chunk, n_group, n_head);
 
+                // Add padding to front and back (for the first timeframe and the last timeframe).
                 struct ggml_tensor * K_padded = ggml_pad_ext(ctx0, K_cur, 0, 0, att_left, att_right, 0, 0, 0, 0);
+
+                // pad time axis to match n_kv_dense if needed.
                 if (n_kv_dense > K_padded->ne[1]) {
                     K_padded = ggml_pad_ext(ctx0, K_padded, 0, 0, 0, n_kv_dense - K_padded->ne[1], 0, 0, 0, 0);
                 }
 
+                // Each group reads a window of keys (n_kv_chunk) but stepping to
+                // the next group only moves the pointer forward by chunk elements.
                 struct ggml_tensor * K_chunk = ggml_view_4d(ctx0, K_padded,
                         d_head, n_kv_chunk, n_group, n_head,
                         K_padded->nb[1],
@@ -1641,6 +1652,8 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
                 K_chunk = ggml_cont(ctx0, K_chunk);
 
                 struct ggml_tensor * content_scores = ggml_mul_mat(ctx0, K_chunk, Q_u_padded);
+
+                // stride shift.
                 content_scores = ggml_view_4d(ctx0, content_scores,
                         window_size, chunk, n_group, n_head,
                         (size_t) (chunk + window_size) * content_scores->nb[0],
@@ -1648,7 +1661,11 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
                         content_scores->nb[3],
                         0);
                 content_scores = ggml_cont(ctx0, content_scores);
+
+                // ungrouping.
                 content_scores = ggml_reshape_3d(ctx0, content_scores, window_size, n_time_padded, n_head);
+
+                // remove padding if padding was applied (truncating to n_time).
                 if (need_padding) {
                     content_scores = ggml_view_3d(ctx0, content_scores,
                             window_size, n_time, n_head,
@@ -1658,11 +1675,16 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
                 }
 
                 struct ggml_tensor * rel_pos_scores = ggml_mul_mat(ctx0, pos, Q_v);
+
+                // attention_score = content similarity + relative position scores
                 struct ggml_tensor * attn_scores = ggml_add(ctx0, content_scores, rel_pos_scores);
+
                 attn_scores = ggml_soft_max_ext(ctx0, attn_scores, attn_mask, 1.0f / std::sqrt(d_head), 0.0f);
 
+                // right pad the probabilites.
                 struct ggml_tensor * probs_padded = need_padding ?
                     ggml_pad_ext(ctx0, attn_scores, 0, 0, 0, n_time_padded - n_time, 0, 0, 0, 0) : attn_scores;
+
                 probs_padded = ggml_reshape_4d(ctx0, probs_padded, window_size, chunk, n_group, n_head);
                 probs_padded = ggml_pad_ext(ctx0, probs_padded, 0, chunk, 0, 0, 0, 0, 0, 0);
                 probs_padded = ggml_view_4d(ctx0, probs_padded,
@@ -1674,11 +1696,16 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
                 probs_padded = ggml_cont(ctx0, probs_padded);
                 probs_padded = ggml_mul(ctx0, probs_padded, local_mask);
 
+                // Add padding to front and back (for the first timeframe and the last timeframe).
                 struct ggml_tensor * V_padded = ggml_pad_ext(ctx0, V_cur, 0, 0, att_left, att_right, 0, 0, 0, 0);
+
+                // pad time axis to match n_kv_dense if needed.
                 if (n_kv_dense > V_padded->ne[1]) {
                     V_padded = ggml_pad_ext(ctx0, V_padded, 0, 0, 0, n_kv_dense - V_padded->ne[1], 0, 0, 0, 0);
                 }
-                V_padded = ggml_cont(ctx0, ggml_permute(ctx0, V_padded, 1, 0, 2, 3));
+
+                V_padded = ggml_cont(ctx0, ggml_transpose(ctx0, V_padded));
+
                 struct ggml_tensor * V_chunk = ggml_view_4d(ctx0, V_padded,
                         n_kv_chunk, d_head, n_group, n_head,
                         V_padded->nb[1],
@@ -1688,7 +1715,9 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
                 V_chunk = ggml_cont(ctx0, V_chunk);
 
                 cur = ggml_mul_mat(ctx0, V_chunk, probs_padded);
+                // ungroup.
                 cur = ggml_reshape_3d(ctx0, cur, d_head, n_time_padded, n_head);
+                // unpad
                 if (need_padding) {
                     cur = ggml_view_3d(ctx0, cur, d_head, n_time, n_head, cur->nb[1], cur->nb[2], 0);
                 }
