@@ -143,8 +143,23 @@ ggml_type target_supertonic_storage_type(const std::string & name,
     // selector.  Everything else (biases, norms, scales, the unicode
     // indexer i32 lookup, etc.) is passed through unchanged so we don't
     // attempt a dequant on types that don't have a to_float trait.
+    //
+    // Q4_0 is recognised here purely so the switch below maps it to F32
+    // (there is no `supertonic_precision::Q4_0`, and the Q8_0 case gates
+    // on `src_type == GGML_TYPE_Q8_0`).  A Q4_0 GGUF therefore ALWAYS
+    // dequantizes to F32 at load on every backend.  This is deliberate:
+    // (a) the scalar-CPU continuation reads these weights via raw read_f32,
+    //     so a packed Q4_0 tensor would be byte-reinterpreted -> NaN, and
+    // (b) keeping Q4_0 live in the graph hit a SIGBUS in
+    //     `ggml_compute_forward_dup` on Metal (no Q4_0 CONT/DUP kernel for
+    //     the transposed matmul-weight path).  Block-quant only buys ~5 %
+    //     on this conv/raw-read-dominated model anyway, so dequant-at-load
+    //     is the correct trade: a Q4_0 GGUF loads + runs (slightly smaller
+    //     on disk, F32 in RAM) instead of crashing.
     const bool is_quantized_weight =
-        (src_type == GGML_TYPE_Q8_0) || (src_type == GGML_TYPE_F16);
+        (src_type == GGML_TYPE_Q8_0) ||
+        (src_type == GGML_TYPE_Q4_0) ||
+        (src_type == GGML_TYPE_F16);
     if (!is_quantized_weight) return src_type;
 
     switch (precision) {
@@ -187,7 +202,13 @@ bool needs_supertonic_tensor_conversion(enum ggml_type src_type,
 }
 
 bool should_expand_supertonic_tensor(enum ggml_type type) {
-    return type == GGML_TYPE_F16 || type == GGML_TYPE_Q8_0;
+    // Q4_0 is included so a Q4_0 GGUF loaded with `use_f16_weights` (or any
+    // path that expands a quantized source to f32) dequantizes via the
+    // `to_float` trait instead of falling through to the raw-memcpy branch
+    // that reinterprets packed Q4_0 blocks as floats.
+    return type == GGML_TYPE_F16 ||
+           type == GGML_TYPE_Q8_0 ||
+           type == GGML_TYPE_Q4_0;
 }
 
 std::vector<float> expand_supertonic_tensor_to_f32(const ggml_tensor * src) {
@@ -1956,6 +1977,25 @@ bool load_supertonic_gguf(const std::string & path,
             }
         }
 
+        // Pointwise (1x1) conv re-expansion roster.  The requantizer stores
+        // these ConvNeXt pwconv weights squeezed from 3-D ggml ne=[1,IC,OC]
+        // down to 2-D [IC,OC] so ggml can block-quantize along ne0=IC (a K=1
+        // leading axis is un-quantizable — the 32-element block needs
+        // ne0 % 32 == 0).  We re-expand them to the original [1,IC,OC] here
+        // so every conv/matmul call site sees the same shape it would for an
+        // F32/F16 GGUF (where these stay natively 3-D).  Absent on
+        // f32/f16/v1/v2 GGUFs -> empty set -> no-op.
+        std::unordered_set<std::string> pwconv_squeezed;
+        {
+            int64_t id_pw = gguf_find_key(gguf_ctx, "supertonic.pwconv_squeezed");
+            if (id_pw >= 0 && gguf_get_kv_type(gguf_ctx, id_pw) == GGUF_TYPE_ARRAY) {
+                const size_t n_pw = gguf_get_arr_n(gguf_ctx, id_pw);
+                for (size_t i = 0; i < n_pw; ++i) {
+                    pwconv_squeezed.insert(gguf_get_arr_str(gguf_ctx, id_pw, i));
+                }
+            }
+        }
+
         // Decide per-tensor destination type:
         //  1. F32 sources on the F16-weights hot-path roster +
         //     `use_f16_weights` on → materialise as F16 (Phase 2A).
@@ -2034,9 +2074,21 @@ bool load_supertonic_gguf(const std::string & path,
                     /*backend_is_cpu=*/ ggml_backend_is_cpu(model.backend));
             }
 
-            ggml_tensor * dst = (dst_type == src->type)
-                ? ggml_dup_tensor(model.ctx_w, src)
-                : ggml_new_tensor(model.ctx_w, dst_type, ggml_n_dims(src), src->ne);
+            ggml_tensor * dst;
+            if (pwconv_squeezed.count(name)) {
+                // Requantizer squeezed this pointwise conv 3-D [1,IC,OC] ->
+                // 2-D [IC,OC] so it could be block-quantized.  Re-expand to
+                // [1, IC, OC] (= [1, src->ne[0], src->ne[1]]); the dequantized
+                // upload below is byte-identical to the original 3-D tensor.
+                // dst_type is F32 here (pwconv names aren't matmul-weight
+                // names, so the storage selector always dequantizes them).
+                const int64_t ne3[3] = { 1, src->ne[0], src->ne[1] };
+                dst = ggml_new_tensor(model.ctx_w, dst_type, 3, ne3);
+            } else {
+                dst = (dst_type == src->type)
+                    ? ggml_dup_tensor(model.ctx_w, src)
+                    : ggml_new_tensor(model.ctx_w, dst_type, ggml_n_dims(src), src->ne);
+            }
             ggml_set_name(dst, name);
             model.tensors[name] = dst;
 

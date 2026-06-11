@@ -300,7 +300,23 @@ def should_quantize(name: str, shape: tuple[int, ...], qtype: gguf.GGMLQuantizat
     # path stays a no-op and the caller logs the kept-as-source-dtype
     # tensors via stats.kept.
     if len(shape) == 3:
-        return shape[-1] % block == 0
+        # Genuine K-aligned conv kernels (K a multiple of the block).  Rare
+        # in this stack (HiFT K in {3,7,11,16} never qualifies).
+        if shape[-1] % block == 0:
+            return True
+        # Pointwise (1x1) conv: stored 3-D as ggml ne=[K=1, IC, OC] (numpy
+        # (OC, IC, 1)).  Algebraically it's a 2-D matmul [IC, OC]; the K=1
+        # axis is trivial.  Squeeze the singleton and gate on the real
+        # reduction dim (IC).  When quantized we store it squeezed-2D and the
+        # C++ loader re-expands it to [1, IC, OC] at load (driven by the
+        # `supertonic.pwconv_squeezed` roster this script emits).  This is
+        # where the bulk of a Supertonic GGUF lives (ConvNeXt pwconv1/pwconv2
+        # in the vocoder + vector_estimator), so unlocking it is what takes a
+        # Q8_0 GGUF from ~96% of F32 down to ~32%.
+        squeezed = tuple(d for d in shape if d != 1)
+        if len(squeezed) == 2 and squeezed[-1] % block == 0:
+            return True
+        return False
 
     return False
 
@@ -380,6 +396,10 @@ def main() -> int:
     kept_count = 0
     src_bytes = 0
     dst_bytes = 0
+    # Storage names of pointwise (K=1) convs we squeezed 3-D [1,IC,OC] -> 2-D
+    # [IC,OC] before quantizing.  The C++ loader re-expands these to 3-D at
+    # load so the conv/matmul call sites see the original shape.
+    pwconv_squeezed_names: list[str] = []
 
     for t in src.tensors:
         # GGUFReader returns shape in numpy-style reversed order.
@@ -398,9 +418,23 @@ def main() -> int:
             # Reshape to natural (shape).  GGUF raw data is contiguous in
             # the original order, but reversed() above gives element-shape
             # which is what `quantize()` expects.
-            arr = data.astype(np.float32).reshape(shape)
+            #
+            # Pointwise (1x1) conv: squeeze the singleton K dim so `quantize`
+            # sees a 2-D [.., IC] matrix it can block-quantize along IC.  The
+            # squeezed-2D bytes are layout-identical to the 3-D [1,IC,OC]
+            # tensor, so the loader re-expands by name (no permutation).
+            quant_shape = shape
+            q_block = gguf.GGML_QUANT_SIZES[qtype][0]
+            squeezed_pwconv = (
+                len(shape) == 3 and (shape[-1] % q_block != 0) and (1 in shape)
+            )
+            if squeezed_pwconv:
+                quant_shape = tuple(d for d in shape if d != 1)
+            arr = data.astype(np.float32).reshape(quant_shape)
             qdata = gguf.quants.quantize(arr, qtype)
             writer.add_tensor(t.name, qdata, raw_shape=qdata.shape, raw_dtype=qtype)
+            if squeezed_pwconv:
+                pwconv_squeezed_names.append(t.name)
             quantized_count += 1
             dst_bytes += qdata.nbytes
         else:
@@ -431,6 +465,12 @@ def main() -> int:
             kept_count += 1
             dst_bytes += data.nbytes
 
+    # Emit the pointwise-conv re-expansion roster so the C++ loader restores
+    # the original 3-D [1,IC,OC] shape for these squeezed-2-D quantized
+    # tensors.  Only present when we actually squeezed something.
+    if pwconv_squeezed_names:
+        writer.add_array("supertonic.pwconv_squeezed", pwconv_squeezed_names)
+
     writer.write_header_to_file()
     writer.write_kv_data_to_file()
     writer.write_tensors_to_file()
@@ -438,6 +478,9 @@ def main() -> int:
 
     print(f"arch: {arch_name!r}")
     print(f"quantized: {quantized_count} tensors to {args.dtype.upper()}")
+    if pwconv_squeezed_names:
+        print(f"           ({len(pwconv_squeezed_names)} of them pointwise K=1 convs "
+              f"squeezed 3D->2D; loader re-expands via supertonic.pwconv_squeezed)")
     print(f"kept:      {kept_count} tensors as source dtype")
     if keep_f32_storage:
         print(f"           ({len(keep_f32_storage)} of them via the Supertonic "

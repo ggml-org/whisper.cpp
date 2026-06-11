@@ -88,6 +88,11 @@ int main(int argc, char ** argv) {
             throw std::runtime_error("vocoder failed: " + error);
         }
 
+        if (const char * dump = std::getenv("SUPERTONIC_DUMP_WAV")) {
+            npy_save_f32(dump, {(int) wav.size()}, wav.data());
+            fprintf(stderr, "dumped wav (%zu samples) -> %s\n", wav.size(), dump);
+        }
+
         const size_t n = std::min((size_t) wav.size(), wav_ref.n_elements());
         compare_stats s = compare_f32(wav.data(), npy_as_f32(wav_ref), n);
         print_compare("supertonic_pipeline_wav", s);
