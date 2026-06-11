@@ -638,7 +638,64 @@ jobs:
           path: ${{ env.ARCHIVE }}
 
 # ════════════════════════════════════════════════════════════════════════════════
-# 7. CPU — Linux
+# 7. Metal — macOS (arm64)
+# ════════════════════════════════════════════════════════════════════════════════
+  macos-metal:
+    runs-on: macos-latest
+    needs: determine-tag
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install cmake ninja
+
+      - name: Configure CMake
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_METAL=ON \
+            -DWHISPER_BUILD_EXAMPLES=ON \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_SERVER=ON
+
+      - name: Build
+        run: |
+          cmake --build build --config Release -j$(sysctl -n hw.logicalcpu) > build.log 2>&1
+          exit_code=$?
+          grep -E "error:|FAILED|Linking|Built target" build.log || true
+          if [ $exit_code -ne 0 ]; then
+            tail -100 build.log
+            exit $exit_code
+          fi
+          echo "Build succeeded."
+
+      - name: Verify build output
+        run: |
+          if [ ! -f build/bin/whisper-cli ]; then
+            echo "::error::whisper-cli not found"
+            ls -lh build/bin/ 2>/dev/null || true
+            exit 1
+          fi
+          ls -lh build/bin/whisper-cli
+
+      - name: Package
+        run: |
+          VER="${{ needs.determine-tag.outputs.version }}"
+          ARCHIVE="whisper-${VER}-darwin-metal-arm64.tar.gz"
+          STAGE="whisper-${VER}-darwin-metal-arm64"
+          mkdir -p "$STAGE"
+          cp -r build/bin/* "$STAGE/" 2>/dev/null || true
+          tar -czf "$ARCHIVE" "$STAGE"
+          echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}
+
+# ════════════════════════════════════════════════════════════════════════════════
+# 8. CPU — Linux
 # ════════════════════════════════════════════════════════════════════════════════
   linux-cpu:
     runs-on: ubuntu-latest
@@ -1049,7 +1106,8 @@ jobs:
       (needs.test-vulkan-linux.result == 'success' || needs.test-vulkan-linux.result == 'skipped') &&
       (needs.test-rocm-windows.result == 'success' || needs.test-rocm-windows.result == 'skipped') &&
       (needs.test-rocm-linux.result == 'success' || needs.test-rocm-linux.result == 'skipped') &&
-      (needs.test-npu-windows.result == 'success' || needs.test-npu-windows.result == 'skipped')
+      (needs.test-npu-windows.result == 'success' || needs.test-npu-windows.result == 'skipped') &&
+      (needs.macos-metal.result == 'success' || needs.macos-metal.result == 'skipped')
     runs-on: ubuntu-latest
     needs:
       - determine-tag
@@ -1058,6 +1116,7 @@ jobs:
       - linux-vulkan
       - windows-vulkan
       - windows-npu
+      - macos-metal
       - linux-cpu
       - windows-cpu
       - test-cpu-windows
