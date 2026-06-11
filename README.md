@@ -1,13 +1,13 @@
-# whisper-cpp-amd
+# whisper.cpp-rocm
 
-<a href="https://github.com/lemonade-sdk/whisper-cpp-amd/releases/latest" title="Download the latest release">
-  <img src="https://img.shields.io/github/v/release/lemonade-sdk/whisper-cpp-amd?logo=github&logoColor=white" alt="GitHub release (latest by date)" />
+<a href="https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest" title="Download the latest release">
+  <img src="https://img.shields.io/github/v/release/lemonade-sdk/whisper.cpp-rocm?logo=github&logoColor=white" alt="GitHub release (latest by date)" />
 </a>
-<a href="https://github.com/lemonade-sdk/whisper-cpp-amd/releases/latest" title="View latest release date">
-  <img src="https://img.shields.io/github/release-date/lemonade-sdk/whisper-cpp-amd?logo=github&logoColor=white" alt="Latest release date" />
+<a href="https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest" title="View latest release date">
+  <img src="https://img.shields.io/github/release-date/lemonade-sdk/whisper.cpp-rocm?logo=github&logoColor=white" alt="Latest release date" />
 </a>
 <a href="LICENSE" title="View license">
-  <img src="https://img.shields.io/github/license/lemonade-sdk/whisper-cpp-amd?logo=opensourceinitiative&logoColor=white" alt="License" />
+  <img src="https://img.shields.io/github/license/lemonade-sdk/whisper.cpp-rocm?logo=opensourceinitiative&logoColor=white" alt="License" />
 </a>
 <a href="https://github.com/ROCm/ROCm" title="Powered by ROCm">
   <img src="https://img.shields.io/badge/ROCm-7.x-blue?logo=amd&logoColor=white" alt="ROCm 7.x" />
@@ -72,22 +72,22 @@ All builds are self-contained — no separate driver or runtime installation nee
 
 | GPU Target | Linux | Windows |
 |---|---|---|
-| **gfx1151** (Ryzen AI MAX+ Pro 395) | [![Linux gfx1151](https://img.shields.io/badge/Download-Linux%20gfx1151-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper-cpp-amd/releases/latest) | [![Windows gfx1151](https://img.shields.io/badge/Download-Windows%20gfx1151-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper-cpp-amd/releases/latest) |
-| **gfx1150** (Ryzen AI 300) | [![Linux gfx1150](https://img.shields.io/badge/Download-Linux%20gfx1150-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper-cpp-amd/releases/latest) | [![Windows gfx1150](https://img.shields.io/badge/Download-Windows%20gfx1150-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper-cpp-amd/releases/latest) |
-| **gfx120X** (RDNA4 dGPU) | [![Linux gfx120X](https://img.shields.io/badge/Download-Linux%20gfx120X-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper-cpp-amd/releases/latest) | [![Windows gfx120X](https://img.shields.io/badge/Download-Windows%20gfx120X-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper-cpp-amd/releases/latest) |
-| **gfx110X** (RDNA3 dGPU & iGPU) | [![Linux gfx110X](https://img.shields.io/badge/Download-Linux%20gfx110X-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper-cpp-amd/releases/latest) | [![Windows gfx110X](https://img.shields.io/badge/Download-Windows%20gfx110X-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper-cpp-amd/releases/latest) |
+| **gfx1151** (Ryzen AI MAX+ Pro 395) | [![Linux gfx1151](https://img.shields.io/badge/Download-Linux%20gfx1151-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) | [![Windows gfx1151](https://img.shields.io/badge/Download-Windows%20gfx1151-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) |
+| **gfx1150** (Ryzen AI 300) | [![Linux gfx1150](https://img.shields.io/badge/Download-Linux%20gfx1150-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) | [![Windows gfx1150](https://img.shields.io/badge/Download-Windows%20gfx1150-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) |
+| **gfx120X** (RDNA4 dGPU) | [![Linux gfx120X](https://img.shields.io/badge/Download-Linux%20gfx120X-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) | [![Windows gfx120X](https://img.shields.io/badge/Download-Windows%20gfx120X-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) |
+| **gfx110X** (RDNA3 dGPU & iGPU) | [![Linux gfx110X](https://img.shields.io/badge/Download-Linux%20gfx110X-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) | [![Windows gfx110X](https://img.shields.io/badge/Download-Windows%20gfx110X-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) |
 
 ### Vulkan — Cross-Vendor GPU
 
 | Linux | Windows |
 |---|---|
-| [![Linux Vulkan](https://img.shields.io/badge/Download-Linux%20Vulkan-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper-cpp-amd/releases/latest) | [![Windows Vulkan](https://img.shields.io/badge/Download-Windows%20Vulkan-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper-cpp-amd/releases/latest) |
+| [![Linux Vulkan](https://img.shields.io/badge/Download-Linux%20Vulkan-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) | [![Windows Vulkan](https://img.shields.io/badge/Download-Windows%20Vulkan-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) |
 
 ### NPU — RyzenAI (Windows only)
 
 | Windows |
 |---|
-| [![Windows NPU](https://img.shields.io/badge/Download-Windows%20NPU%20(RyzenAI)-red?logo=amd&logoColor=white)](https://github.com/lemonade-sdk/whisper-cpp-amd/releases/latest) |
+| [![Windows NPU](https://img.shields.io/badge/Download-Windows%20NPU%20(RyzenAI)-red?logo=amd&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) |
 
 > Requires NPU driver ≥ `.280` and a pre-compiled `.rai` encoder model from [AMD's Hugging Face collection](https://huggingface.co/collections/amd/ryzen-ai-16-whisper-npu-optimized-onnx-models). Place the `.rai` file alongside your `ggml-*.bin` model — whisper-cli picks it up automatically.
 
@@ -95,7 +95,7 @@ All builds are self-contained — no separate driver or runtime installation nee
 
 | Linux | Windows |
 |---|---|
-| [![Linux CPU](https://img.shields.io/badge/Download-Linux%20CPU-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper-cpp-amd/releases/latest) | [![Windows CPU](https://img.shields.io/badge/Download-Windows%20CPU-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper-cpp-amd/releases/latest) |
+| [![Linux CPU](https://img.shields.io/badge/Download-Linux%20CPU-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) | [![Windows CPU](https://img.shields.io/badge/Download-Windows%20CPU-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) |
 
 ---
 
@@ -245,7 +245,7 @@ Reproduce any CI build locally using the bundled PowerShell script. Produces ide
 ## 🏗️ Repository Structure
 
 ```
-whisper-cpp-amd/
+whisper.cpp-rocm/
 ├── .github/
 │   └── workflows/
 │       ├── build.yml           # All AMD backends — builds + publishes releases

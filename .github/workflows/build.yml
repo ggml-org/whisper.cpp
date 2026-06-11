@@ -191,6 +191,7 @@ jobs:
             -DGPU_TARGETS="$MAPPED_GPU_TARGET" \
             -DBUILD_SHARED_LIBS=ON \
             -DGGML_HIP=ON \
+            -DWHISPER_BUILD_SERVER=ON \
             -DWHISPER_SDL2=${{ matrix.sdl2 }}
 
       - name: Build
@@ -209,11 +210,16 @@ jobs:
       - name: Verify build output
         run: |
           if [ ! -f build/bin/whisper-cli ]; then
-            echo "::error::whisper-cli not found — build likely truncated"
+            echo "::error::whisper-cli not found - build likely truncated"
             ls -lh build/bin/ 2>/dev/null || true
             exit 1
           fi
-          echo "Build output:"; ls -lh build/bin/whisper-cli
+          if [ ! -f build/bin/whisper-server ]; then
+            echo "::error::whisper-server not found - build likely truncated"
+            ls -lh build/bin/ 2>/dev/null || true
+            exit 1
+          fi
+          echo "Build output:"; ls -lh build/bin/whisper-cli build/bin/whisper-server
 
       - name: Copy ROCm runtime libs
         run: |
@@ -355,6 +361,7 @@ jobs:
             -DCMAKE_PREFIX_PATH="$env:HIP_PATH" `
             -DCMAKE_BUILD_TYPE=${{ matrix.build }} `
             -DBUILD_SHARED_LIBS=ON `
+            -DWHISPER_BUILD_SERVER=ON `
             -DWHISPER_SDL2=${{ matrix.sdl2 }}
 
       - name: Build
@@ -398,6 +405,11 @@ jobs:
           $bin = "build/bin/${{ matrix.build }}"
           if (-not (Test-Path "$bin/whisper-cli.exe")) {
             Write-Error "whisper-cli.exe not found in $bin - build likely truncated"
+            Get-ChildItem $bin -ErrorAction SilentlyContinue | Format-Table Name, Length
+            exit 1
+          }
+          if (-not (Test-Path "$bin/whisper-server.exe")) {
+            Write-Error "whisper-server.exe not found in $bin - build likely truncated"
             Get-ChildItem $bin -ErrorAction SilentlyContinue | Format-Table Name, Length
             exit 1
           }

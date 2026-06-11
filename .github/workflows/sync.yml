@@ -108,20 +108,8 @@ jobs:
           git push origin "$BRANCH"
 
           TAG="${{ steps.upstream.outputs.tag }}"
-          python3 -c "
-import sys
-tag = sys.argv[1]
-files = sys.argv[2]
-body = '## Upstream sync: ' + tag + '\n\n'
-body += 'Conflicts were detected during automatic merge. Files affected:\n\n'
-body += '    ' + files + '\n\n'
-body += 'This PR was auto-resolved using upstream (theirs) as a baseline.\n'
-body += 'Please review the diff carefully before merging.\n\n'
-body += 'Once merged, manually create the release tag on main to trigger the build:\n\n'
-body += '    git tag ' + tag + '\n'
-body += '    git push origin ' + tag + '\n'
-open('/tmp/pr-body.md', 'w').write(body)
-" "$TAG" "$CONFLICT_FILES"
+          printf '## Upstream sync: %s\n\nConflicts were detected during automatic merge. Files affected:\n\n    %s\n\nThis PR was auto-resolved using upstream (theirs) as a baseline.\nPlease review the diff carefully before merging.\n\nOnce merged, manually create the release tag on main to trigger the build:\n\n    git tag %s\n    git push origin %s\n' \
+            "$TAG" "$CONFLICT_FILES" "$TAG" "$TAG" > /tmp/pr-body.md
 
           gh pr create \
             --title "Sync upstream ${TAG} - conflict resolution needed" \
