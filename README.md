@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/github/license/lemonade-sdk/whisper.cpp-rocm?logo=opensourceinitiative&logoColor=white" alt="License" />
 </a>
 <a href="https://github.com/ROCm/ROCm" title="Powered by ROCm">
-  <img src="https://img.shields.io/badge/ROCm-7.x-blue?logo=amd&logoColor=white" alt="ROCm 7.12" />
+  <img src="https://img.shields.io/badge/ROCm-7.12-blue?logo=amd&logoColor=white" alt="ROCm 7.12" />
 </a>
 <a href="https://github.com/ggerganov/whisper.cpp" title="Powered by whisper.cpp">
   <img src="https://img.shields.io/badge/🎤 Powered%20by-whisper.cpp-blue" alt="Powered by whisper.cpp" />
