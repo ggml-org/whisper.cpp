@@ -169,6 +169,93 @@ _QUANT_TYPE = {
 }
 
 
+# Supertonic (v1/v2/v3) keep-as-source-dtype roster.  Unlike the chatterbox
+# _DENY_SUBSTRINGS roster above, Supertonic tensors are stored under OPAQUE
+# names (`supertonic/<stage>/tNNNN`) plus the descriptive `voices/<id>/ttl`,
+# so a substring deny against the storage name catches nothing.  Instead we
+# resolve each opaque name back to its *logical* PyTorch/ONNX source name via
+# the converter-emitted alias arrays (supertonic.source_names /
+# .tensor_names / .source_aliases / .source_alias_targets) and deny by
+# logical-name substring.
+#
+# The roster targets exactly the tensors the C++ loader reads as **raw F32**
+# (uploaded as graph inputs / constants, NOT consumed through ggml's
+# dequantizing matmul/get_rows paths).  Block-quantizing those reinterprets
+# Q4/Q8 bytes as floats -> NaN -> a crash (q4_0) or decorrelated audio
+# (q8_0).  The genuine projection weights (`onnx::MatMul_*`, `*.linear.weight`)
+# stay quantizable because ggml dequantizes them in-op.
+#
+# Why this only began biting in v3: the CFG `uncond_masker.*_special_token`
+# tensors are [50, 256] (last-dim 256 % 32 == 0 -> quantizable) AND read raw,
+# and they simply do not exist in v1/v2 (no classifier-free guidance there).
+_SUPERTONIC_KEEP_F32_LOGICAL = (
+    "Expand_output",        # vector_estimator style-key constant (/Expand_output_0)
+    "uncond_masker",        # v3 CFG null text/style tokens (read raw)
+    "special_token",        # ditto (style_key/value/text_special_token)
+    "char_embedder",        # text/duration char embedding tables
+    "text_embedder",        # embedder wrappers
+    "sentence_token",       # duration sentence-encoder learned token
+    "style_key",            # style-token-layer learned key (read raw)
+    "style_value",
+    "style_token",
+    "rope",                 # rotary position frequencies
+    "theta",
+)
+# Storage-name (opaque) substrings — for tensors with no logical alias.
+_SUPERTONIC_KEEP_F32_STORAGE = (
+    "/voices/",             # per-voice conditioning embeddings (ttl), read raw
+    # The duration predictor runs as a scalar CPU continuation that reads
+    # EVERY weight through `read_f32` / `cached_read_f32` (a raw F32 byte
+    # copy, no in-op dequant), so any block-quantized duration weight is
+    # reinterpreted as floats -> SIGBUS (q4_0) / corrupted phoneme timings
+    # -> fully decorrelated audio (q8_0).  The stage is tiny, so keeping it
+    # at source dtype costs almost nothing.  (The text/vector matmuls stay
+    # quantizable: those flow through ggml mul_mat, which dequantizes in-op.)
+    "supertonic/duration/",
+)
+
+
+def build_supertonic_keep_f32(src: gguf.GGUFReader) -> set[str]:
+    """Resolve the Supertonic raw-read roster to a set of opaque storage
+    tensor names that must NOT be quantized.  Returns empty set when the
+    alias metadata is absent (non-Supertonic GGUF)."""
+    def _arr(key: str) -> list[str]:
+        fld = src.fields.get(key)
+        if fld is None:
+            return []
+        return [bytes(fld.parts[i]).decode("utf-8", "replace") for i in fld.data]
+
+    source_names = _arr("supertonic.source_names")
+    tensor_names = _arr("supertonic.tensor_names")
+    alias_names = _arr("supertonic.source_aliases")
+    alias_targets = _arr("supertonic.source_alias_targets")
+
+    # opaque storage name -> set of logical source names pointing at it.
+    storage_to_logical: dict[str, set[str]] = {}
+    for logical, storage in zip(source_names, tensor_names):
+        storage_to_logical.setdefault(storage, set()).add(logical)
+    # aliases map an extra logical name onto an existing source name; chase
+    # them to the same storage tensor so e.g. `...W_key.linear.weight` and its
+    # `onnx::MatMul_*` bridge alias both resolve.
+    logical_to_storage: dict[str, str] = {
+        logical: storage for logical, storage in zip(source_names, tensor_names)
+    }
+    for alias, target in zip(alias_names, alias_targets):
+        storage = logical_to_storage.get(target)
+        if storage is not None:
+            storage_to_logical.setdefault(storage, set()).add(alias)
+
+    keep: set[str] = set()
+    for storage, logicals in storage_to_logical.items():
+        if any(any(p in lg for p in _SUPERTONIC_KEEP_F32_LOGICAL) for lg in logicals):
+            keep.add(storage)
+    # Storage-name fallback (voices have no logical alias).
+    for t in src.tensors:
+        if any(p in t.name for p in _SUPERTONIC_KEEP_F32_STORAGE):
+            keep.add(t.name)
+    return keep
+
+
 def should_quantize(name: str, shape: tuple[int, ...], qtype: gguf.GGMLQuantizationType) -> bool:
     # Keep tiny tensors at full precision.
     n_elements = 1
@@ -243,6 +330,14 @@ def main() -> int:
     if arch is not None:
         arch_name = bytes(arch.parts[arch.data[0]]).decode("utf-8")
 
+    # Supertonic stores weights under opaque `tNNNN` names; resolve the
+    # raw-read roster via the alias arrays so we never block-quantize a
+    # tensor the C++ loader reads as raw F32 (voices, CFG null tokens,
+    # style/expand constants, embedding tables).  Empty for other archs.
+    keep_f32_storage: set[str] = set()
+    if arch_name.startswith("supertonic"):
+        keep_f32_storage = build_supertonic_keep_f32(src)
+
     writer = gguf.GGUFWriter(args.dst, arch_name or "chatterbox-s3gen")
 
     # Copy all metadata (KV fields) verbatim.  Skip the ones the writer
@@ -296,7 +391,8 @@ def main() -> int:
         src_bytes += data.nbytes
 
         in_filter = name_filter is None or name_filter in t.name
-        if (in_filter and t.tensor_type in _QUANTIZABLE_SRC_DTYPES
+        if (in_filter and t.name not in keep_f32_storage
+                      and t.tensor_type in _QUANTIZABLE_SRC_DTYPES
                       and t.tensor_type != qtype
                       and should_quantize(t.name, shape, qtype)):
             # Reshape to natural (shape).  GGUF raw data is contiguous in
@@ -343,6 +439,10 @@ def main() -> int:
     print(f"arch: {arch_name!r}")
     print(f"quantized: {quantized_count} tensors to {args.dtype.upper()}")
     print(f"kept:      {kept_count} tensors as source dtype")
+    if keep_f32_storage:
+        print(f"           ({len(keep_f32_storage)} of them via the Supertonic "
+              f"raw-read roster: voices / CFG null tokens / style+expand "
+              f"constants / embeddings)")
     print(f"size:      {src_bytes / 1e6:.1f} MB  →  {dst_bytes / 1e6:.1f} MB  "
           f"({dst_bytes / src_bytes * 100:.1f}%)")
     return 0

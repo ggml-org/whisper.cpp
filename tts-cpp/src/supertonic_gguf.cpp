@@ -61,6 +61,32 @@ std::string get_string(const gguf_context * ctx, const char * key, const std::st
     return gguf_get_val_str(ctx, id);
 }
 
+// Reads a GGUF array of any integer width into ints.  Returns empty when the
+// key is absent or not an integer array, so callers can fall back cleanly.
+std::vector<int> get_int_array(const gguf_context * ctx, const char * key) {
+    int64_t id = gguf_find_key(ctx, key);
+    if (id < 0 || gguf_get_kv_type(ctx, id) != GGUF_TYPE_ARRAY) return {};
+    const size_t n = gguf_get_arr_n(ctx, id);
+    const enum gguf_type t = gguf_get_arr_type(ctx, id);
+    const void * data = gguf_get_arr_data(ctx, id);
+    std::vector<int> out;
+    out.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        switch (t) {
+            case GGUF_TYPE_INT8:   out.push_back((int) ((const int8_t *) data)[i]); break;
+            case GGUF_TYPE_UINT8:  out.push_back((int) ((const uint8_t *) data)[i]); break;
+            case GGUF_TYPE_INT16:  out.push_back((int) ((const int16_t *) data)[i]); break;
+            case GGUF_TYPE_UINT16: out.push_back((int) ((const uint16_t *) data)[i]); break;
+            case GGUF_TYPE_INT32:  out.push_back((int) ((const int32_t *) data)[i]); break;
+            case GGUF_TYPE_UINT32: out.push_back((int) ((const uint32_t *) data)[i]); break;
+            case GGUF_TYPE_INT64:  out.push_back((int) ((const int64_t *) data)[i]); break;
+            case GGUF_TYPE_UINT64: out.push_back((int) ((const uint64_t *) data)[i]); break;
+            default: return {};
+        }
+    }
+    return out;
+}
+
 std::vector<std::string> get_string_array(const gguf_context * ctx, const char * key) {
     int64_t id = require_key(ctx, key);
     size_t n = gguf_get_arr_n(ctx, id);
@@ -1372,7 +1398,16 @@ supertonic_op_dispatch_scope::supertonic_op_dispatch_scope(const supertonic_mode
       prev_use_f16_attn(g_supertonic_use_f16_attn),
       prev_use_native_leaky_relu(g_supertonic_use_native_leaky_relu),
       prev_kv_attn_type(g_supertonic_kv_attn_type) {
-    g_supertonic_use_cpu_custom_ops    = model.backend_is_cpu;
+    // The CPU custom-op fast paths (CBLAS sgemm, fused depthwise/layernorm,
+    // tail update) read their weight args as raw F32, so they cannot consume
+    // block-quantized (Q4_0/Q8_0) weights — doing so reinterprets the packed
+    // blocks as floats (SIGBUS / garbage).  `SUPERTONIC_DISABLE_CPU_CUSTOM_OPS`
+    // forces the pure-GGML decomposition instead, whose mul_mat/get_rows
+    // dequantize in-op.  Lets a CPU-only box validate quantized GGUFs (which
+    // otherwise only run on GPU/Metal backends).
+    static const bool disable_cpu_custom_ops =
+        std::getenv("SUPERTONIC_DISABLE_CPU_CUSTOM_OPS") != nullptr;
+    g_supertonic_use_cpu_custom_ops    = model.backend_is_cpu && !disable_cpu_custom_ops;
     g_supertonic_use_f16_attn          = model.use_f16_attn;
     g_supertonic_use_native_leaky_relu = model.use_native_leaky_relu;
     g_supertonic_kv_attn_type          = model.kv_attn_type;
@@ -1762,6 +1797,17 @@ bool load_supertonic_gguf(const std::string & path,
         // keeping head_dim=64.  Older bundles omit the key, so default to 4.
         model.hparams.vector_text_attn_heads =
             (int) get_u32(gguf_ctx, "supertonic.vector_text_attn_heads", 4);
+        // Per-block text-encoder ConvNeXt dilations (v3 dilates this stack).
+        // Absent on v1/v2 (and pre-key) bundles -> empty -> dilation 1 per block.
+        model.hparams.text_convnext_dilations =
+            get_int_array(gguf_ctx, "supertonic.text_convnext_dilations");
+        // Classifier-free-guidance scales (v3).  Default (1, 0) = no guidance.
+        {
+            int64_t kc = gguf_find_key(gguf_ctx, "supertonic.cfg_cond_scale");
+            int64_t ku = gguf_find_key(gguf_ctx, "supertonic.cfg_uncond_scale");
+            if (kc >= 0) model.hparams.cfg_cond_scale = gguf_get_val_f32(gguf_ctx, kc);
+            if (ku >= 0) model.hparams.cfg_uncond_scale = gguf_get_val_f32(gguf_ctx, ku);
+        }
         model.hparams.language_wrap_mode = get_string(gguf_ctx, "supertonic.language_wrap_mode");
         if (model.hparams.language_wrap_mode.empty()) {
             bool language_wrap = get_bool_u32(gguf_ctx, "supertonic.language_wrap", arch != "supertonic");

@@ -448,6 +448,109 @@ def materialize_intermediates(model_path: Path, names: list[str]) -> dict[str, n
     return {nm: as_contiguous(np.asarray(arr)) for nm, arr in zip(names, outs)}
 
 
+def extract_text_convnext_dilations(onnx_path: Path) -> list[int]:
+    """Per-block dwconv dilations of the text-encoder ConvNeXt stack.
+
+    Supertonic 3 introduced a *dilated* text-encoder ConvNeXt (dilation grows
+    per block, e.g. 1,1,2,2,4,4) whereas v1/v2 used dilation 1 everywhere.  The
+    dilation is a structural parameter (not a weight), so the runtime cannot
+    recover it from the tensors alone; we read it from the ONNX `Conv` attrs at
+    convert time and stash it in metadata.  Blocks are ordered by the numeric
+    index in `/text_encoder/convnext/convnext.<i>/dwconv/Conv`.
+    """
+    model = onnx.load(str(onnx_path), load_external_data=False)
+    prefix = "/text_encoder/convnext/convnext."
+    suffix = "/dwconv/Conv"
+    found: dict[int, int] = {}
+    for node in model.graph.node:
+        if node.op_type != "Conv" or not node.name.startswith(prefix) or not node.name.endswith(suffix):
+            continue
+        try:
+            idx = int(node.name[len(prefix):-len(suffix)])
+        except ValueError:
+            continue
+        dil = 1
+        for attr in node.attribute:
+            if attr.name == "dilations" and len(attr.ints) >= 1:
+                dil = int(attr.ints[0])
+        found[idx] = dil
+    if not found:
+        return []
+    return [found[i] for i in sorted(found)]
+
+
+def extract_cfg_scales(onnx_path: Path) -> tuple[float, float] | None:
+    """Classifier-free-guidance scales baked into the vector estimator.
+
+    Supertonic 3's vector_estimator runs the field on a batch-2 input
+    (conditional + unconditional, the latter fed learned `uncond_masker`
+    null tokens) and forms the velocity as
+    `v = cond_scale * v_cond - uncond_scale * v_uncond`
+    (e.g. 4*cond - 3*uncond, i.e. guidance scale 4).  v1/v2 have no such
+    combination.  We locate the two scalar `Mul` constants that scale the
+    conditional/unconditional `Slice`s of `proj_out` and return them so the
+    runtime can replicate the guidance.  Returns None when the graph has no
+    CFG (no `uncond_masker`), so the runtime falls back to a single pass.
+    """
+    model = onnx.load(str(onnx_path), load_external_data=False)
+    has_uncond = any("uncond_masker" in i.name for i in model.graph.initializer)
+    if not has_uncond:
+        return None
+    prod = {o: n for n in model.graph.node for o in n.output}
+
+    def scalar_const(name: str):
+        n = prod.get(name)
+        if n is not None and n.op_type == "Constant":
+            for a in n.attribute:
+                if a.name == "value":
+                    arr = onnx.numpy_helper.to_array(a.t)
+                    if arr.size == 1:
+                        return float(arr.reshape(-1)[0])
+        for i in model.graph.initializer:
+            if i.name == name:
+                arr = onnx.numpy_helper.to_array(i)
+                if arr.size == 1:
+                    return float(arr.reshape(-1)[0])
+        return None
+
+    # Find Sub = Mul_cond - Mul_uncond where each Mul scales a Slice by a scalar.
+    for n in model.graph.node:
+        if n.op_type != "Sub":
+            continue
+        muls = [prod.get(i) for i in n.input]
+        if len(muls) != 2 or any(m is None or m.op_type != "Mul" for m in muls):
+            continue
+        scales = []
+        slice_starts = []
+        ok = True
+        for m in muls:
+            scalar = None
+            slice_node = None
+            for i in m.input:
+                v = scalar_const(i)
+                if v is not None:
+                    scalar = v
+                p = prod.get(i)
+                if p is not None and p.op_type == "Slice":
+                    slice_node = p
+            if scalar is None or slice_node is None:
+                ok = False
+                break
+            scales.append(scalar)
+            # Slice start (input[1]) tells cond (start 0) from uncond (start B).
+            start = scalar_const(slice_node.input[1]) if len(slice_node.input) > 1 else None
+            slice_starts.append(start)
+        if not ok:
+            continue
+        # cond = the Mul whose Slice starts at 0; uncond = the other.
+        if slice_starts[0] == 0 or (slice_starts[1] not in (0, None)):
+            cond_scale, uncond_scale = scales[0], scales[1]
+        else:
+            cond_scale, uncond_scale = scales[1], scales[0]
+        return (cond_scale, uncond_scale)
+    return None
+
+
 def add_json_metadata(writer: "gguf.GGUFWriter", prefix: str, data: dict) -> None:
     writer.add_string(prefix, json.dumps(data, ensure_ascii=False, separators=(",", ":")))
 
@@ -503,6 +606,26 @@ def main() -> int:
     # tts.json omits the key.
     text_cond = cfg.get("ttl", {}).get("vector_field", {}).get("main_blocks", {}).get("text_cond_layer", {})
     writer.add_uint32("supertonic.vector_text_attn_heads", int(text_cond.get("n_heads", 4)))
+    # Per-block dwconv dilations of the text-encoder ConvNeXt stack.  v1/v2 use
+    # dilation 1 everywhere; Supertonic 3 dilates it (e.g. 1,1,2,2,4,4).  The
+    # runtime reads this array and applies it per block; bundles without the key
+    # (older conversions) default to dilation 1, preserving v1/v2 behaviour.
+    text_convnext_dilations = extract_text_convnext_dilations(args.onnx_dir / "text_encoder.onnx")
+    if text_convnext_dilations:
+        writer.add_array(
+            "supertonic.text_convnext_dilations",
+            [int(d) for d in text_convnext_dilations],
+        )
+        print(f"text-encoder ConvNeXt dilations: {text_convnext_dilations}")
+    # Classifier-free guidance scales baked into the v3 vector estimator
+    # (`v = cond_scale*v_cond - uncond_scale*v_uncond`).  Absent on v1/v2,
+    # where the runtime defaults to cond_scale=1, uncond_scale=0 (no guidance).
+    cfg_scales = extract_cfg_scales(args.onnx_dir / "vector_estimator.onnx")
+    if cfg_scales is not None:
+        cond_scale, uncond_scale = cfg_scales
+        writer.add_float32("supertonic.cfg_cond_scale", float(cond_scale))
+        writer.add_float32("supertonic.cfg_uncond_scale", float(uncond_scale))
+        print(f"vector-estimator CFG scales: cond={cond_scale} uncond={uncond_scale}")
     wrap_mode = "none" if args.no_language_wrap else (args.language_wrap_mode or ("none" if args.arch == "supertonic" else "open_close"))
     default_steps = args.default_steps if args.default_steps is not None else 5
 

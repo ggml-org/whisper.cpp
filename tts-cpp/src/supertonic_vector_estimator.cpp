@@ -2720,14 +2720,19 @@ void rope_attn(const supertonic_model & m, int group, std::vector<float> & x, in
     dense_matmul_time(attn_out,L,A,read_f32(m,"vector_estimator:onnx::MatMul_"+std::to_string(oids[group])),read_f32(m,base+"out_fc.linear.bias"),C,out);
 }
 
-void style_attn(const supertonic_model & m, int group, std::vector<float> & x, int L, const float * style_ttl, std::vector<float> & out) {
+// `style_ttl` is the style value input (V).  `style_key` overrides the key
+// input (K); when null the conditional path's `/Expand_output_0` constant is
+// used.  CFG's unconditional pass passes the learned `style_key_special_token`.
+void style_attn(const supertonic_model & m, int group, std::vector<float> & x, int L,
+                const float * style_ttl, const float * style_key, std::vector<float> & out) {
     static const int qids[4]={3116,3161,3206,3251}, kids[4]={3117,3162,3207,3252}, vids[4]={3118,3163,3208,3253}, oids[4]={3119,3164,3209,3254};
     int C=512,A=256,H=2,D=128,LC=50;
     std::string base="vector_estimator:tts.ttl.vector_field.main_blocks."+std::to_string(group*6+5)+".attention.";
     std::vector<float> q,k,v,ctx((size_t)LC*256),kctx((size_t)LC*256);
     for(int t=0;t<LC;++t) for(int c=0;c<256;++c) ctx[(size_t)t*256+c]=style_ttl[(size_t)t*256+c];
-    auto kconst=read_f32(m,"vector_estimator:/Expand_output_0");
-    for(int t=0;t<LC;++t) for(int c=0;c<256;++c) kctx[(size_t)t*256+c]=kconst.data[(size_t)t*256+c];
+    f32_tensor kconst;
+    if(!style_key) kconst=read_f32(m,"vector_estimator:/Expand_output_0");
+    for(int t=0;t<LC;++t) for(int c=0;c<256;++c) kctx[(size_t)t*256+c]= style_key ? style_key[(size_t)t*256+c] : kconst.data[(size_t)t*256+c];
     dense_matmul_time(x,L,C,read_f32(m,"vector_estimator:onnx::MatMul_"+std::to_string(qids[group])),read_f32(m,base+"W_query.linear.bias"),A,q);
     dense_matmul_time(kctx,LC,256,read_f32(m,"vector_estimator:onnx::MatMul_"+std::to_string(kids[group])),read_f32(m,base+"W_key.linear.bias"),A,k);
     for(float &vv:k) vv=std::tanh(vv);
@@ -2753,36 +2758,70 @@ bool supertonic_vector_step_cpu(const supertonic_model & model, const float * no
         int L=latent_len,Cin=144,C=512;
         std::vector<float> in((size_t)L*Cin);
         for(int t=0;t<L;++t) for(int c=0;c<Cin;++c) in[(size_t)t*Cin+c]=noisy_latent[(size_t)c*L+t];
-        std::vector<float> x;
-        conv1x1(in,L,Cin,read_f32(model,"vector_estimator:tts.ttl.vector_field.proj_in.net.weight"),nullptr,C,x);
-        for(int t=0;t<L;++t) for(int c=0;c<C;++c) x[(size_t)t*C+c]*=latent_mask[t];
         // F9: cached time-embedding (5 distinct keys per default schedule).
         auto te_arr = cached_time_embedding(model, current_step, total_steps);
         std::vector<float> te(te_arr.begin(), te_arr.end());
         static const int time_ids[4]={3095,3140,3185,3230};
-        for(int group=0;group<4;++group){
-            int ob=group*6;
-            int dils[4]={1,2,4,8};
-            for(int j=0;j<4;++j) convnext(model,"vector_estimator:tts.ttl.vector_field.main_blocks."+std::to_string(ob)+".convnext."+std::to_string(j),x,L,C,dils[j]);
-            std::vector<float> tb;
-            dense_matmul_vec(te,read_f32(model,"vector_estimator:onnx::MatMul_"+std::to_string(time_ids[group])),
-                             read_f32(model,"vector_estimator:tts.ttl.vector_field.main_blocks."+std::to_string(ob+1)+".linear.linear.bias"),64,C,tb);
-            for(int t=0;t<L;++t) for(int c=0;c<C;++c) x[(size_t)t*C+c]+=tb[c];
-            convnext(model,"vector_estimator:tts.ttl.vector_field.main_blocks."+std::to_string(ob+2)+".convnext.0",x,L,C,1);
-            std::vector<float> a; rope_attn(model,group,x,L,text_emb,text_len,a);
-            for(size_t i=0;i<x.size();++i) x[i]+=a[i];
-            layer_norm(x,L,C,read_f32(model,"vector_estimator:tts.ttl.vector_field.main_blocks."+std::to_string(ob+3)+".norm.norm.weight"),read_f32(model,"vector_estimator:tts.ttl.vector_field.main_blocks."+std::to_string(ob+3)+".norm.norm.bias"));
-            convnext(model,"vector_estimator:tts.ttl.vector_field.main_blocks."+std::to_string(ob+4)+".convnext.0",x,L,C,1);
-            style_attn(model,group,x,L,style_ttl,a);
-            for(size_t i=0;i<x.size();++i) x[i]+=a[i];
-            layer_norm(x,L,C,read_f32(model,"vector_estimator:tts.ttl.vector_field.main_blocks."+std::to_string(ob+5)+".norm.norm.weight"),read_f32(model,"vector_estimator:tts.ttl.vector_field.main_blocks."+std::to_string(ob+5)+".norm.norm.bias"));
-        }
-        for(int j=0;j<4;++j) convnext(model,"vector_estimator:tts.ttl.vector_field.last_convnext.convnext."+std::to_string(j),x,L,C,1);
-        std::vector<float> v;
-        conv1x1(x,L,C,read_f32(model,"vector_estimator:tts.ttl.vector_field.proj_out.net.weight"),nullptr,Cin,v);
+
+        // One conditional/unconditional pass of the vector field.  `text_cond`
+        // is [256, text_len] channel-major; `style_v` is the [50,256] style
+        // value input; `style_k` overrides the style key input (null => the
+        // conditional `/Expand_output_0` constant).  Returns the per-step
+        // velocity-applied latent (channel-major [Cin, L]).
+        auto run_field = [&](const float * text_cond, const float * style_v,
+                             const float * style_k, std::vector<float> & out_cl) {
+            std::vector<float> xf;
+            conv1x1(in,L,Cin,read_f32(model,"vector_estimator:tts.ttl.vector_field.proj_in.net.weight"),nullptr,C,xf);
+            for(int t=0;t<L;++t) for(int c=0;c<C;++c) xf[(size_t)t*C+c]*=latent_mask[t];
+            for(int group=0;group<4;++group){
+                int ob=group*6;
+                int dils[4]={1,2,4,8};
+                for(int j=0;j<4;++j) convnext(model,"vector_estimator:tts.ttl.vector_field.main_blocks."+std::to_string(ob)+".convnext."+std::to_string(j),xf,L,C,dils[j]);
+                std::vector<float> tb;
+                dense_matmul_vec(te,read_f32(model,"vector_estimator:onnx::MatMul_"+std::to_string(time_ids[group])),
+                                 read_f32(model,"vector_estimator:tts.ttl.vector_field.main_blocks."+std::to_string(ob+1)+".linear.linear.bias"),64,C,tb);
+                for(int t=0;t<L;++t) for(int c=0;c<C;++c) xf[(size_t)t*C+c]+=tb[c];
+                convnext(model,"vector_estimator:tts.ttl.vector_field.main_blocks."+std::to_string(ob+2)+".convnext.0",xf,L,C,1);
+                std::vector<float> a; rope_attn(model,group,xf,L,text_cond,text_len,a);
+                for(size_t i=0;i<xf.size();++i) xf[i]+=a[i];
+                layer_norm(xf,L,C,read_f32(model,"vector_estimator:tts.ttl.vector_field.main_blocks."+std::to_string(ob+3)+".norm.norm.weight"),read_f32(model,"vector_estimator:tts.ttl.vector_field.main_blocks."+std::to_string(ob+3)+".norm.norm.bias"));
+                convnext(model,"vector_estimator:tts.ttl.vector_field.main_blocks."+std::to_string(ob+4)+".convnext.0",xf,L,C,1);
+                style_attn(model,group,xf,L,style_v,style_k,a);
+                for(size_t i=0;i<xf.size();++i) xf[i]+=a[i];
+                layer_norm(xf,L,C,read_f32(model,"vector_estimator:tts.ttl.vector_field.main_blocks."+std::to_string(ob+5)+".norm.norm.weight"),read_f32(model,"vector_estimator:tts.ttl.vector_field.main_blocks."+std::to_string(ob+5)+".norm.norm.bias"));
+            }
+            for(int j=0;j<4;++j) convnext(model,"vector_estimator:tts.ttl.vector_field.last_convnext.convnext."+std::to_string(j),xf,L,C,1);
+            conv1x1(xf,L,C,read_f32(model,"vector_estimator:tts.ttl.vector_field.proj_out.net.weight"),nullptr,Cin,out_cl);
+        };
+
+        // Conditional pass (style value = style_ttl, key = /Expand_output_0).
+        std::vector<float> v_cond;
+        run_field(text_emb, style_ttl, nullptr, v_cond);
+
         next_latent_out.assign((size_t)Cin*L,0.0f);
+        if (!model.hparams.cfg_enabled()) {
+            for(int c=0;c<Cin;++c) for(int t=0;t<L;++t) {
+                float vel=v_cond[(size_t)t*Cin+c]*latent_mask[t];
+                next_latent_out[(size_t)c*L+t]=noisy_latent[(size_t)c*L+t]+vel/(float)total_steps;
+            }
+            if(error) error->clear(); return true;
+        }
+
+        // Unconditional pass — learned null tokens replace text / style K+V.
+        // velocity = cond_scale*v_cond - uncond_scale*v_uncond; the noise term
+        // cancels under `next = noise + velocity/N`, so we combine `next`s with
+        // the same coefficients (cond_scale - uncond_scale == 1).
+        f32_tensor tst = read_f32(model, "vector_estimator:tts.ttl.uncond_masker.text_special_token");  // [256]
+        f32_tensor skt = read_f32(model, "vector_estimator:tts.ttl.uncond_masker.style_key_special_token");   // [50,256]
+        f32_tensor svt = read_f32(model, "vector_estimator:tts.ttl.uncond_masker.style_value_special_token"); // [50,256]
+        std::vector<float> uncond_text((size_t)256*text_len);
+        for(int c=0;c<256;++c) for(int t=0;t<text_len;++t) uncond_text[(size_t)c*text_len+t]=tst.data[c];
+        std::vector<float> v_uncond;
+        run_field(uncond_text.data(), svt.data.data(), skt.data.data(), v_uncond);
+
+        const float cs = model.hparams.cfg_cond_scale, us = model.hparams.cfg_uncond_scale;
         for(int c=0;c<Cin;++c) for(int t=0;t<L;++t) {
-            float vel=v[(size_t)t*Cin+c]*latent_mask[t];
+            float vel=(cs*v_cond[(size_t)t*Cin+c] - us*v_uncond[(size_t)t*Cin+c])*latent_mask[t];
             next_latent_out[(size_t)c*L+t]=noisy_latent[(size_t)c*L+t]+vel/(float)total_steps;
         }
         if(error) error->clear(); return true;
@@ -2803,7 +2842,9 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
                                        std::string * error,
                                        bool include_scalar_trace,
                                        bool include_ggml_trace,
-                                       std::vector<float> * next_latent_tc_out) {
+                                       std::vector<float> * next_latent_tc_out,
+                                       const std::vector<float> * style_v_raw_override,
+                                       const std::vector<float> * kctx_raw_override) {
     supertonic_op_dispatch_scope dispatch(model);
     try {
         scalar_trace.clear();
@@ -3834,7 +3875,15 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
 
         const std::vector<float> * style_v_raw = nullptr;
         const std::vector<float> * kctx_raw = nullptr;
-        cached_style_layouts(model, style_ttl, style_v_raw, kctx_raw);
+        if (style_v_raw_override && kctx_raw_override) {
+            // CFG unconditional pass: caller supplies the learned null-token
+            // style V/K layouts (already in the channel-major [50,256] form
+            // that `cached_style_layouts` produces for the conditional path).
+            style_v_raw = style_v_raw_override;
+            kctx_raw    = kctx_raw_override;
+        } else {
+            cached_style_layouts(model, style_ttl, style_v_raw, kctx_raw);
+        }
         thread_local vector_res_style_qkv_cache style0_res_qkv_cache;
         SUPERTONIC_REGISTER_TL_CACHE(style0_res_qkv_cache, free_res_style_qkv_cache);
         vector_res_style_qkv_result style0_res_qkv = run_res_style_qkv_cache(
@@ -4423,6 +4472,11 @@ struct vector_step_one_graph_cache {
     ggml_tensor * style_v_raw_in = nullptr; // [50, 256] (style_ttl repacked)
     ggml_tensor * style_kctx_in = nullptr;  // [50, 256] (model's /Expand_output_0)
     ggml_tensor * noise_in = nullptr;       // (L, Cin) (same data as x_in but indep slot for tail)
+    // CFG unconditional-pass inputs (v3 only; null when cfg disabled): learned
+    // null tokens replacing text / style-K / style-V.
+    ggml_tensor * text_in_u = nullptr;       // [text_len, 256]
+    ggml_tensor * style_v_raw_in_u = nullptr; // [50, 256]
+    ggml_tensor * style_kctx_in_u = nullptr;  // [50, 256]
 
     // Per-build (rope) inputs
     ggml_tensor * pos_q = nullptr;          // int32 [L]
@@ -4452,6 +4506,7 @@ void free_vector_step_one_graph_cache(vector_step_one_graph_cache & cache) {
     cache.total_steps = 0;
     cache.x_in = cache.mask_in = cache.t_emb_in = cache.text_in = nullptr;
     cache.style_v_raw_in = cache.style_kctx_in = cache.noise_in = nullptr;
+    cache.text_in_u = cache.style_v_raw_in_u = cache.style_kctx_in_u = nullptr;
     cache.pos_q = cache.pos_k = cache.freq_factors_q = cache.freq_factors_k = nullptr;
     cache.next_latent_out = nullptr;
 }
@@ -4700,6 +4755,9 @@ bool supertonic_vector_step_one_graph_ggml(const supertonic_model & model,
     // The outer entry point sets `supertonic_op_dispatch_scope`; this
     // function is only called on non-CPU backends, so the thread-local
     // `supertonic_use_cpu_custom_ops()` reads false inside the helpers.
+    if (std::getenv("SUPERTONIC_VE_DEBUG"))
+        std::fprintf(stderr, "[ve-cfg] one_graph entry: cfg_enabled=%d cond=%g uncond=%g\n",
+            (int)model.hparams.cfg_enabled(), model.hparams.cfg_cond_scale, model.hparams.cfg_uncond_scale);
     try {
         const int L = latent_len;
         const int Cin = model.hparams.latent_channels;  // typically 16
@@ -4731,7 +4789,8 @@ bool supertonic_vector_step_one_graph_ggml(const supertonic_model & model,
             // sub-graphs each used 128-512 nodes; the full per-step graph is
             // roughly the sum (4 groups x ~700 ops/group + tail + front).
             // Round up generously.
-            constexpr int MAX_NODES = 8192;
+            // CFG (v3) builds the field twice (cond + uncond) in one graph.
+            const int MAX_NODES = model.hparams.cfg_enabled() ? 16384 : 8192;
             const size_t buf_size = ggml_tensor_overhead() * MAX_NODES +
                                      ggml_graph_overhead_custom(MAX_NODES, false);
             cache.buf.assign(buf_size, 0);
@@ -4754,6 +4813,14 @@ bool supertonic_vector_step_one_graph_ggml(const supertonic_model & model,
             ggml_set_name(cache.style_kctx_in, "step_style_kctx"); ggml_set_input(cache.style_kctx_in);
             cache.noise_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, L, Cin);
             ggml_set_name(cache.noise_in, "step_noise_in"); ggml_set_input(cache.noise_in);
+            if (model.hparams.cfg_enabled()) {
+                cache.text_in_u = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, text_len, text_C);
+                ggml_set_name(cache.text_in_u, "step_text_in_u"); ggml_set_input(cache.text_in_u);
+                cache.style_v_raw_in_u = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, kv_style, text_C);
+                ggml_set_name(cache.style_v_raw_in_u, "step_style_v_u"); ggml_set_input(cache.style_v_raw_in_u);
+                cache.style_kctx_in_u = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, kv_style, text_C);
+                ggml_set_name(cache.style_kctx_in_u, "step_style_kctx_u"); ggml_set_input(cache.style_kctx_in_u);
+            }
 
             // --- RoPE inputs ---
             cache.pos_q = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_I32, L);
@@ -4783,6 +4850,21 @@ bool supertonic_vector_step_one_graph_ggml(const supertonic_model & model,
 
             ggml_tensor * next = append_supertonic_vector_step_subgraph(
                 gctx, gf, model, inputs, L, text_len, total_steps);
+
+            if (model.hparams.cfg_enabled()) {
+                // Unconditional pass shares everything but the conditioning.
+                vector_step_inputs inputs_u = inputs;
+                inputs_u.text_in        = cache.text_in_u;
+                inputs_u.style_v_raw_in = cache.style_v_raw_in_u;
+                inputs_u.style_kctx_in  = cache.style_kctx_in_u;
+                ggml_tensor * next_u = append_supertonic_vector_step_subgraph(
+                    gctx, gf, model, inputs_u, L, text_len, total_steps);
+                // next = cond_scale*next_cond - uncond_scale*next_uncond
+                // (noise term cancels because cond_scale - uncond_scale == 1).
+                next = ggml_sub(gctx,
+                    ggml_scale(gctx, next,   model.hparams.cfg_cond_scale),
+                    ggml_scale(gctx, next_u, model.hparams.cfg_uncond_scale));
+            }
 
             ggml_set_name(next, "step_next_latent");
             ggml_set_output(next);
@@ -4823,6 +4905,25 @@ bool supertonic_vector_step_one_graph_ggml(const supertonic_model & model,
         cached_style_layouts(model, style_ttl, style_v_raw_ptr, kctx_raw_ptr);
         ggml_backend_tensor_set(cache.style_v_raw_in, style_v_raw_ptr->data(), 0, style_v_raw_ptr->size() * sizeof(float));
         ggml_backend_tensor_set(cache.style_kctx_in, kctx_raw_ptr->data(), 0, kctx_raw_ptr->size() * sizeof(float));
+
+        if (model.hparams.cfg_enabled()) {
+            // Learned null tokens, repacked to the same channel-major layouts
+            // (text [256,text_len] c*Lt+t; style [256,50] c*50+t) as the cond
+            // inputs above.
+            f32_tensor tst = read_f32(model, "vector_estimator:tts.ttl.uncond_masker.text_special_token");   // [256]
+            f32_tensor skt = read_f32(model, "vector_estimator:tts.ttl.uncond_masker.style_key_special_token");   // [50,256] (t,c)
+            f32_tensor svt = read_f32(model, "vector_estimator:tts.ttl.uncond_masker.style_value_special_token"); // [50,256] (t,c)
+            std::vector<float> text_u((size_t)256 * text_len);
+            for (int c = 0; c < 256; ++c) for (int t = 0; t < text_len; ++t) text_u[(size_t)c*text_len+t] = tst.data[c];
+            std::vector<float> sv_u((size_t)256 * 50), sk_u((size_t)256 * 50);
+            for (int c = 0; c < 256; ++c) for (int t = 0; t < 50; ++t) {
+                sv_u[(size_t)c*50+t] = svt.data[(size_t)t*256+c];
+                sk_u[(size_t)c*50+t] = skt.data[(size_t)t*256+c];
+            }
+            ggml_backend_tensor_set(cache.text_in_u, text_u.data(), 0, text_u.size() * sizeof(float));
+            ggml_backend_tensor_set(cache.style_v_raw_in_u, sv_u.data(), 0, sv_u.size() * sizeof(float));
+            ggml_backend_tensor_set(cache.style_kctx_in_u, sk_u.data(), 0, sk_u.size() * sizeof(float));
+        }
 
         // RoPE positions + freq_factors.  theta is loaded from the model and
         // depends on L (sequence length); recompute per call.
@@ -4899,6 +5000,10 @@ struct vector_loop_one_graph_cache {
     ggml_tensor * text_in = nullptr;        // ne=[text_len, 256]
     ggml_tensor * style_v_raw_in = nullptr; // ne=[50, 256]
     ggml_tensor * style_kctx_in = nullptr;  // ne=[50, 256]
+    // CFG unconditional-pass inputs (v3 only; null when disabled).
+    ggml_tensor * text_in_u = nullptr;
+    ggml_tensor * style_v_raw_in_u = nullptr;
+    ggml_tensor * style_kctx_in_u = nullptr;
 
     // RoPE inputs (constant across steps).
     ggml_tensor * pos_q = nullptr;
@@ -4931,6 +5036,7 @@ void free_vector_loop_one_graph_cache(vector_loop_one_graph_cache & cache) {
     cache.total_steps = 0;
     cache.x0_in = cache.mask_in = cache.text_in = nullptr;
     cache.style_v_raw_in = cache.style_kctx_in = nullptr;
+    cache.text_in_u = cache.style_v_raw_in_u = cache.style_kctx_in_u = nullptr;
     cache.pos_q = cache.pos_k = cache.freq_factors_q = cache.freq_factors_k = nullptr;
     cache.t_emb_in.clear();
     cache.final_latent_out = nullptr;
@@ -4976,7 +5082,8 @@ bool supertonic_vector_loop_one_graph_ggml(const supertonic_model & model,
             // ggml nodes pre-Tier-2; post-Tier-2 it's ~928.  Round up to 8192/step
             // × total_steps = ~40k.  Plus the shared inputs (a few dozen) +
             // per-step temb input tensors.
-            const int MAX_NODES = 8192 * std::max(1, total_steps) + 256;
+            const int per_step_nodes = model.hparams.cfg_enabled() ? 16384 : 8192;
+            const int MAX_NODES = per_step_nodes * std::max(1, total_steps) + 256;
             const size_t buf_size = ggml_tensor_overhead() * (size_t) MAX_NODES +
                                      ggml_graph_overhead_custom(MAX_NODES, false);
             cache.buf.assign(buf_size, 0);
@@ -4995,6 +5102,14 @@ bool supertonic_vector_loop_one_graph_ggml(const supertonic_model & model,
             ggml_set_name(cache.style_v_raw_in, "loop_style_v"); ggml_set_input(cache.style_v_raw_in);
             cache.style_kctx_in = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, kv_style, text_C);
             ggml_set_name(cache.style_kctx_in, "loop_style_kctx"); ggml_set_input(cache.style_kctx_in);
+            if (model.hparams.cfg_enabled()) {
+                cache.text_in_u = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, text_len, text_C);
+                ggml_set_name(cache.text_in_u, "loop_text_in_u"); ggml_set_input(cache.text_in_u);
+                cache.style_v_raw_in_u = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, kv_style, text_C);
+                ggml_set_name(cache.style_v_raw_in_u, "loop_style_v_u"); ggml_set_input(cache.style_v_raw_in_u);
+                cache.style_kctx_in_u = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, kv_style, text_C);
+                ggml_set_name(cache.style_kctx_in_u, "loop_style_kctx_u"); ggml_set_input(cache.style_kctx_in_u);
+            }
 
             cache.pos_q = ggml_new_tensor_1d(cache.ctx, GGML_TYPE_I32, L);
             ggml_set_name(cache.pos_q, "loop_pos_q"); ggml_set_input(cache.pos_q);
@@ -5031,6 +5146,17 @@ bool supertonic_vector_loop_one_graph_ggml(const supertonic_model & model,
 
                 ggml_tensor * next = append_supertonic_vector_step_subgraph(
                     cache.ctx, cache.gf, model, inputs, L, text_len, total_steps);
+                if (model.hparams.cfg_enabled()) {
+                    vector_step_inputs inputs_u = inputs;
+                    inputs_u.text_in        = cache.text_in_u;
+                    inputs_u.style_v_raw_in = cache.style_v_raw_in_u;
+                    inputs_u.style_kctx_in  = cache.style_kctx_in_u;
+                    ggml_tensor * next_u = append_supertonic_vector_step_subgraph(
+                        cache.ctx, cache.gf, model, inputs_u, L, text_len, total_steps);
+                    next = ggml_sub(cache.ctx,
+                        ggml_scale(cache.ctx, next,   model.hparams.cfg_cond_scale),
+                        ggml_scale(cache.ctx, next_u, model.hparams.cfg_uncond_scale));
+                }
                 const std::string step_name = "loop_next_" + std::to_string(s);
                 ggml_set_name(next, step_name.c_str());
                 cur_latent = next;
@@ -5060,6 +5186,22 @@ bool supertonic_vector_loop_one_graph_ggml(const supertonic_model & model,
                                  style_v_raw_ptr->size() * sizeof(float));
         ggml_backend_tensor_set(cache.style_kctx_in, kctx_raw_ptr->data(), 0,
                                  kctx_raw_ptr->size() * sizeof(float));
+
+        if (model.hparams.cfg_enabled()) {
+            f32_tensor tst = read_f32(model, "vector_estimator:tts.ttl.uncond_masker.text_special_token");
+            f32_tensor skt = read_f32(model, "vector_estimator:tts.ttl.uncond_masker.style_key_special_token");
+            f32_tensor svt = read_f32(model, "vector_estimator:tts.ttl.uncond_masker.style_value_special_token");
+            std::vector<float> text_u((size_t)256 * text_len);
+            for (int c = 0; c < 256; ++c) for (int t = 0; t < text_len; ++t) text_u[(size_t)c*text_len+t] = tst.data[c];
+            std::vector<float> sv_u((size_t)256 * 50), sk_u((size_t)256 * 50);
+            for (int c = 0; c < 256; ++c) for (int t = 0; t < 50; ++t) {
+                sv_u[(size_t)c*50+t] = svt.data[(size_t)t*256+c];
+                sk_u[(size_t)c*50+t] = skt.data[(size_t)t*256+c];
+            }
+            ggml_backend_tensor_set(cache.text_in_u, text_u.data(), 0, text_u.size() * sizeof(float));
+            ggml_backend_tensor_set(cache.style_v_raw_in_u, sv_u.data(), 0, sv_u.size() * sizeof(float));
+            ggml_backend_tensor_set(cache.style_kctx_in_u, sk_u.data(), 0, sk_u.size() * sizeof(float));
+        }
 
         {
             std::vector<int32_t> pos_q_host(L);
@@ -5182,6 +5324,11 @@ bool supertonic_vector_step_ggml(const supertonic_model & model,
     try {
         std::vector<supertonic_trace_tensor> scalar_trace;
         std::vector<supertonic_trace_tensor> ggml_trace;
+        const int L = latent_len;
+        const int C = model.hparams.latent_channels;
+
+        // Conditional pass (text = real embeddings, style derived from
+        // `style_ttl` + `/Expand_output_0`).
         std::vector<float> next_tc;
         if (!supertonic_vector_trace_proj_ggml(model, noisy_latent, text_emb, text_len,
                                                style_ttl, latent_mask, latent_len,
@@ -5190,13 +5337,55 @@ bool supertonic_vector_step_ggml(const supertonic_model & model,
                                                false, false, &next_tc)) {
             return false;
         }
-        const int L = latent_len;
-        const int C = model.hparams.latent_channels;
         if (next_tc.size() != (size_t)L*C) throw std::runtime_error("bad ve_next_latent_tc size");
+
+        if (!model.hparams.cfg_enabled()) {
+            next_latent_out.assign((size_t)C*L, 0.0f);
+            for (int c = 0; c < C; ++c) {
+                for (int t = 0; t < L; ++t) {
+                    next_latent_out[(size_t)c*L + t] = next_tc[(size_t)t*C + c];
+                }
+            }
+            if (error) error->clear();
+            return true;
+        }
+
+        // Classifier-Free Guidance (Supertonic 3) — second, unconditional
+        // pass using the learned null text / style tokens, then combine.
+        // `next = noise + velocity/N` is affine in the velocity, and the
+        // exported guidance uses cond_scale - uncond_scale == 1, so combining
+        // the two integrated latents with the same coefficients reproduces
+        // `velocity = cs*v_cond - us*v_uncond` exactly (the residual
+        // `(1 - cs + us)*noise` term below covers any non-unit gap).
+        f32_tensor tst = read_f32(model, "vector_estimator:tts.ttl.uncond_masker.text_special_token");   // [256]
+        f32_tensor skt = read_f32(model, "vector_estimator:tts.ttl.uncond_masker.style_key_special_token");   // [50,256] (t,c)
+        f32_tensor svt = read_f32(model, "vector_estimator:tts.ttl.uncond_masker.style_value_special_token"); // [50,256] (t,c)
+        std::vector<float> text_u((size_t)256 * text_len);
+        for (int c = 0; c < 256; ++c) for (int t = 0; t < text_len; ++t) text_u[(size_t)c*text_len+t] = tst.data[c];
+        std::vector<float> sv_u((size_t)256 * 50), sk_u((size_t)256 * 50);
+        for (int c = 0; c < 256; ++c) for (int t = 0; t < 50; ++t) {
+            sv_u[(size_t)c*50+t] = svt.data[(size_t)t*256+c];
+            sk_u[(size_t)c*50+t] = skt.data[(size_t)t*256+c];
+        }
+        std::vector<float> next_tc_u;
+        if (!supertonic_vector_trace_proj_ggml(model, noisy_latent, text_u.data(), text_len,
+                                               /*style_ttl=*/nullptr, latent_mask, latent_len,
+                                               current_step, total_steps,
+                                               scalar_trace, ggml_trace, error,
+                                               false, false, &next_tc_u,
+                                               &sv_u, &sk_u)) {
+            return false;
+        }
+        if (next_tc_u.size() != (size_t)L*C) throw std::runtime_error("bad ve_next_latent_tc (uncond) size");
+
+        const float cs = model.hparams.cfg_cond_scale, us = model.hparams.cfg_uncond_scale;
+        const float kn = 1.0f - cs + us; // == 0 when cond_scale - uncond_scale == 1
         next_latent_out.assign((size_t)C*L, 0.0f);
         for (int c = 0; c < C; ++c) {
             for (int t = 0; t < L; ++t) {
-                next_latent_out[(size_t)c*L + t] = next_tc[(size_t)t*C + c];
+                float combined = cs * next_tc[(size_t)t*C + c] - us * next_tc_u[(size_t)t*C + c];
+                if (kn != 0.0f) combined += kn * noisy_latent[(size_t)c*L + t];
+                next_latent_out[(size_t)c*L + t] = combined;
             }
         }
         if (error) error->clear();
