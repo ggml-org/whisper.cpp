@@ -119,7 +119,7 @@ ggml_tensor * edge_clamp_pad_1d(ggml_context * ctx, ggml_tensor * x, int pad_lef
     if (pad_left == 0 && pad_right == 0) return x;
     static const bool disable_fused_edge_pad =
         std::getenv("SUPERTONIC_DISABLE_FUSED_EDGE_PAD") != nullptr;
-    if (!disable_fused_edge_pad &&
+    if (!disable_fused_edge_pad && supertonic_use_fused_supertonic_ops() &&
         x->type == GGML_TYPE_F32 &&
         x->ne[2] == 1 && x->ne[3] == 1 &&
         ggml_is_contiguous(x)) {
@@ -149,7 +149,7 @@ ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
     const int K = (int) w->ne[0];
     static const bool disable_fused =
         std::getenv("SUPERTONIC_DISABLE_FUSED_DEPTHWISE") != nullptr;
-    if (!disable_fused && (K == 3 || K == 5) &&
+    if (!disable_fused && supertonic_use_fused_supertonic_ops() && (K == 3 || K == 5) &&
         x->type == GGML_TYPE_F32 && w->type == GGML_TYPE_F32 &&
         b->type == GGML_TYPE_F32 &&
         x->ne[2] == 1 && x->ne[3] == 1 && w->ne[1] == 1 && w->ne[3] == 1 &&
@@ -170,7 +170,7 @@ ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
 ggml_tensor * layer_norm_ggml(ggml_context * ctx, ggml_tensor * x, ggml_tensor * g, ggml_tensor * b) {
     static const bool disable_fused_layer_norm =
         std::getenv("SUPERTONIC_DISABLE_FUSED_LAYER_NORM") != nullptr;
-    if (!disable_fused_layer_norm &&
+    if (!disable_fused_layer_norm && supertonic_use_fused_supertonic_ops() &&
         x->type == GGML_TYPE_F32 && g->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 &&
         x->ne[2] == 1 && x->ne[3] == 1 &&
         g->ne[0] == x->ne[1] && b->ne[0] == x->ne[1] &&

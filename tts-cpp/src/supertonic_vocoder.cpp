@@ -122,7 +122,7 @@ ggml_tensor * causal_replicate_pad_1d(ggml_context * ctx, ggml_tensor * x, int p
     // the stock-ops chain.
     static const bool disable_fused_edge_pad =
         std::getenv("SUPERTONIC_DISABLE_FUSED_EDGE_PAD") != nullptr;
-    if (!disable_fused_edge_pad &&
+    if (!disable_fused_edge_pad && supertonic_use_fused_supertonic_ops() &&
         x->type == GGML_TYPE_F32 &&
         x->ne[2] == 1 && x->ne[3] == 1 &&
         ggml_is_contiguous(x)) {
@@ -377,7 +377,7 @@ ggml_tensor * layer_norm_channel_ggml(ggml_context * ctx,
                                       float eps = 1e-6f) {
     static const bool disable_fused_layer_norm =
         std::getenv("SUPERTONIC_DISABLE_FUSED_LAYER_NORM") != nullptr;
-    if (!disable_fused_layer_norm &&
+    if (!disable_fused_layer_norm && supertonic_use_fused_supertonic_ops() &&
         x->type == GGML_TYPE_F32 && gamma->type == GGML_TYPE_F32 && beta->type == GGML_TYPE_F32 &&
         x->ne[2] == 1 && x->ne[3] == 1 &&
         gamma->ne[0] == x->ne[1] && beta->ne[0] == x->ne[1] &&
@@ -437,7 +437,7 @@ ggml_tensor * convnext_block_ggml(ggml_context * ctx,
     // chain is already the cheapest there.
     static const bool disable_fused_bias_gelu =
         std::getenv("SUPERTONIC_DISABLE_FUSED_BIAS_GELU") != nullptr;
-    if (!disable_fused_bias_gelu &&
+    if (!disable_fused_bias_gelu && supertonic_use_fused_supertonic_ops() &&
         y->type == GGML_TYPE_F32 && w.pw1_w->type == GGML_TYPE_F32 &&
         w.pw1_b->type == GGML_TYPE_F32) {
         y = conv1d_causal_ggml(ctx, y, w.pw1_w, /*b=*/nullptr);
@@ -637,7 +637,13 @@ void build_supertonic_vocoder_cache(vocoder_graph_cache & cache,
     // SUPERTONIC_DISABLE_CT_VOCODER=1.
     static const bool disable_ct_vocoder =
         std::getenv("SUPERTONIC_DISABLE_CT_VOCODER") != nullptr;
-    const bool use_ct_vocoder = !disable_ct_vocoder && !use_cpu_custom;
+    // The _ct block strings the fused supertonic _ct ops together; only run it
+    // when the backend implements them (CPU rounds-trips, Metal native).  On
+    // backends that lack them (Vulkan/OpenCL) take the non-_ct block, whose
+    // helpers carry pure-GGML fallbacks — otherwise the _ct ops are silently
+    // skipped and the vocoder emits garbage.
+    const bool use_ct_vocoder =
+        !disable_ct_vocoder && !use_cpu_custom && supertonic_use_fused_supertonic_ops();
     if (use_ct_vocoder) {
         ggml_tensor * x_ct = ggml_cont(cache.ctx, ggml_permute(cache.ctx, x, 1, 0, 2, 3));
         for (int i = 0; i < 10; ++i) {

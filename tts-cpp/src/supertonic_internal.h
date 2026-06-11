@@ -387,6 +387,21 @@ struct supertonic_model {
     // overhead on the GPU command-buffer side.  Default `true`
     // matches the historical CPU-only path.
     bool use_native_leaky_relu = true;
+    // True when the resolved backend implements the Supertonic fused custom
+    // ops (GGML_OP_SUPERTONIC_DEPTHWISE_1D / LAYER_NORM_CHANNEL / EDGE_PAD_1D /
+    // BIAS_GELU / PW2_RESIDUAL).  Those are implemented in ggml-cpu and
+    // ggml-metal only — NOT ggml-vulkan / ggml-opencl.  Resolved at load time
+    // via `ggml_backend_supports_op` against a synthetic depthwise_1d node
+    // (the 5 ops ship as one overlay set, so one probe is representative).
+    // The graph-build helpers (depthwise_same_ggml / layer_norm_ggml /
+    // edge_clamp_pad_1d / bias_gelu_ggml / pw2_residual_ggml in both the text
+    // encoder and vector estimator, plus vector_convnext_ggml_ct) gate the
+    // fused fast path on this; when false they emit the pure-GGML decomposition
+    // (im2col+mul_mat / ggml_norm / concat+repeat / add+gelu / matmul+scale+add)
+    // which every backend executes.  Without this gate the fused ops are
+    // silently skipped on Vulkan/OpenCL single-backend graphs → garbage output.
+    // Default false = safe (pure-GGML) until the load-time probe runs.
+    bool backend_supports_fused_supertonic_ops = false;
     // When true, the per-step vector-estimator attention graphs materialise
     // K/V into contiguous F16 before calling ggml_flash_attn_ext so OpenCL
     // (and other backends carrying the mixed-precision kernel) dispatch
@@ -1074,6 +1089,15 @@ inline ggml_tensor * leaky_relu_portable_ggml(ggml_context * ctx, ggml_tensor * 
 // still sees the default `true` after a GPU engine's forward returns.
 bool supertonic_use_cpu_custom_ops();
 bool supertonic_use_f16_attn();
+// Thread-local mirror of `supertonic_model::backend_supports_fused_supertonic_ops`,
+// set by `supertonic_op_dispatch_scope` for the duration of each public
+// `*_forward_ggml` / `*_trace_ggml` entry (same RAII pattern as
+// `supertonic_use_cpu_custom_ops` / `supertonic_use_native_leaky_relu`).
+// Graph-build helpers consult it to choose the fused custom op vs the
+// pure-GGML decomposition.  Defaults to `false` (pure-GGML) when no scope
+// is active, so a helper called outside a scope never emits a backend-
+// unsupported fused op.
+bool supertonic_use_fused_supertonic_ops();
 
 // QVAC-18605 round 4 — thread-local accessor for the currently-
 // active K/V dispatch dtype, mirroring `supertonic_use_f16_attn`'s
@@ -1375,6 +1399,7 @@ struct supertonic_op_dispatch_scope {
     bool prev_use_cpu_custom_ops;
     bool prev_use_f16_attn;
     bool prev_use_native_leaky_relu;
+    bool prev_use_fused_supertonic_ops;
     // QVAC-18605 round 4 — saved K/V dispatch dtype for RAII
     // teardown.  Restored on scope destruction so a follow-on
     // engine on the same thread sees the default value, not the
