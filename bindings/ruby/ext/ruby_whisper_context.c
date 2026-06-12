@@ -28,7 +28,7 @@ extern const rb_data_type_t ruby_whisper_context_params_type;
 extern VALUE ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self);
 extern VALUE rb_whisper_model_s_new(VALUE context);
 extern VALUE rb_whisper_segment_s_new(VALUE context, int index);
-extern void prepare_transcription(ruby_whisper_params *rwp, VALUE *context, int n_processors);
+extern void prepare_transcription(ruby_whisper_params *rwp, VALUE *context, int n_processors, ruby_whisper_abort_callback_user_data *abort_callback_user_data);
 
 ID transcribe_option_names[1];
 
@@ -37,13 +37,6 @@ typedef struct fill_samples_args {
   VALUE *src;
   int n_samples;
 } fill_samples_args;
-
-typedef struct full_args {
-  VALUE *context;
-  VALUE *params;
-  float *samples;
-  int n_samples;
-} full_args;
 
 typedef struct full_parallel_args {
   VALUE *context;
@@ -71,7 +64,7 @@ typedef struct full_parallel_without_gvl_args {
 } full_parallel_without_gvl_args;
 
 typedef struct full_ubf_args {
-  ruby_whisper_abort_callback_container *abort_callback_container;
+  ruby_whisper_abort_callback_user_data *abort_callback_user_data;
 } full_ubf_args;
 
 static void
@@ -480,10 +473,10 @@ full_ubf(void *rb_args)
 {
   full_ubf_args *args = (full_ubf_args *)rb_args;
 
-  args->abort_callback_container->is_interrupted = true;
+  RUBY_ATOMIC_SET(args->abort_callback_user_data->is_interrupted, 1);
 }
 
-static VALUE
+VALUE
 full_body(VALUE rb_args)
 {
   full_args *args = (full_args *)rb_args;
@@ -493,7 +486,11 @@ full_body(VALUE rb_args)
   GetContext(*args->context, rw);
   TypedData_Get_Struct(*args->params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
 
-  prepare_transcription(rwp, args->context, 1);
+  ruby_whisper_abort_callback_user_data abort_callback_user_data = {
+    0,
+    NULL,
+  };
+  prepare_transcription(rwp, args->context, 1, &abort_callback_user_data);
 
   struct full_without_gvl_args full_without_gvl_args = {
     rw->context,
@@ -503,7 +500,7 @@ full_body(VALUE rb_args)
     0,
   };
   full_ubf_args full_ubf_args = {
-    rwp->abort_callback_container,
+    &abort_callback_user_data,
   };
   rb_thread_call_without_gvl(full_without_gvl, (void *)&full_without_gvl_args, full_ubf, (void *)&full_ubf_args);
   return INT2NUM(full_without_gvl_args.result);
@@ -562,7 +559,11 @@ full_parallel_body(VALUE rb_args)
   GetContext(*args->context, rw);
   TypedData_Get_Struct(*args->params, ruby_whisper_params, &ruby_whisper_params_type, rwp);
 
-  prepare_transcription(rwp, args->context, args->n_processors);
+  ruby_whisper_abort_callback_user_data abort_callback_user_data = {
+    0,
+    NULL,
+  };
+  prepare_transcription(rwp, args->context, args->n_processors, &abort_callback_user_data);
 
   struct full_parallel_without_gvl_args full_parallel_without_gvl_args = {
     rw->context,
@@ -573,7 +574,7 @@ full_parallel_body(VALUE rb_args)
     0,
   };
   full_ubf_args full_ubf_args = {
-    rwp->abort_callback_container,
+    &abort_callback_user_data,
   };
   rb_thread_call_without_gvl(full_parallel_without_gvl, (void *)&full_parallel_without_gvl_args, full_ubf, (void *)&full_ubf_args);
   return INT2NUM(full_parallel_without_gvl_args.result);

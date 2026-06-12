@@ -24,14 +24,6 @@ typedef struct {
   VALUE callbacks;
 } ruby_whisper_callback_container;
 
-typedef struct {
-  VALUE *context;
-  VALUE user_data;
-  VALUE callback;
-  VALUE callbacks;
-  bool is_interrupted;
-} ruby_whisper_abort_callback_container;
-
 typedef struct ruby_whisper_abort_callback_user_data {
   volatile rb_atomic_t is_interrupted;
   ruby_whisper_callback_container *callback_container;
@@ -69,7 +61,7 @@ typedef struct {
   ruby_whisper_callback_container *new_segment_callback_container;
   ruby_whisper_callback_container *progress_callback_container;
   ruby_whisper_callback_container *encoder_begin_callback_container;
-  ruby_whisper_abort_callback_container *abort_callback_container;
+  ruby_whisper_callback_container *abort_callback_container;
   VALUE vad_params;
 } ruby_whisper_params;
 
@@ -110,6 +102,13 @@ typedef struct parsed_samples_t {
   rb_memory_view_t memview;
   bool memview_exported;
 } parsed_samples_t;
+
+typedef struct full_args {
+  VALUE *context;
+  VALUE *params;
+  float *samples;
+  int n_samples;
+} full_args;
 
 typedef struct {
   VALUE *context;
