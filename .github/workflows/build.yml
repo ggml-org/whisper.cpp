@@ -193,7 +193,6 @@ jobs:
             -DCMAKE_PREFIX_PATH=/opt/rocm \
             -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
             -DGPU_TARGETS="$MAPPED_GPU_TARGET" \
-            -DBUILD_SHARED_LIBS=ON \
             -DGGML_HIP=ON \
             -DWHISPER_BUILD_SERVER=ON \
             -DWHISPER_SDL2=${{ matrix.sdl2 }}
@@ -224,6 +223,35 @@ jobs:
             exit 1
           fi
           echo "Build output:"; ls -lh build/bin/whisper-cli build/bin/whisper-server
+
+      - name: Inspect shared library dependencies
+        run: |
+          echo "======================================================"
+          echo "  ldd whisper-cli"
+          echo "======================================================"
+          ldd build/bin/whisper-cli || true
+          echo ""
+          echo "======================================================"
+          echo "  ldd whisper-server"
+          echo "======================================================"
+          ldd build/bin/whisper-server || true
+          echo ""
+          echo "======================================================"
+          echo "  MISSING dependencies (not found)"
+          echo "======================================================"
+          MISSING_CLI=$(ldd build/bin/whisper-cli 2>/dev/null | grep "not found" || true)
+          MISSING_SRV=$(ldd build/bin/whisper-server 2>/dev/null | grep "not found" || true)
+          if [ -z "$MISSING_CLI" ] && [ -z "$MISSING_SRV" ]; then
+            echo "All dependencies resolved — no missing libs."
+          else
+            [ -n "$MISSING_CLI" ] && echo "whisper-cli missing:" && echo "$MISSING_CLI"
+            [ -n "$MISSING_SRV" ] && echo "whisper-server missing:" && echo "$MISSING_SRV"
+          fi
+          echo ""
+          echo "======================================================"
+          echo "  All .so* files currently in build/bin/"
+          echo "======================================================"
+          ls -lh build/bin/*.so* 2>/dev/null || echo "(none)"
 
       - name: Copy ROCm runtime libs
         run: |
