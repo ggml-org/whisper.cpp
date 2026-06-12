@@ -33,6 +33,11 @@ reference wav (T3 + S3Gen + HiFT, warm runs, excludes model load):
 | CPU (CI · Linux x86-64, Q4_0)        | 4 577 ms  | 1.25   | 0.80×        |
 | CPU (Mac Studio M3 Ultra, NEON)      | 7 568 ms  | 1.05   | 0.96×        |
 
+> Rows are independent warm runs on different machines/backends, so **`RTF`** —
+> not wall time — is the comparable metric; wall time tracks each run's own
+> generated audio length. The Linux x86-64 rows are CI numbers (see the
+> [Performance](#performance) section for the full CI table + provenance).
+
 **Multilingual** (same Spanish prompt, seed 42, built-in voice):
 
 | Backend                              | Wall      | `RTF` | vs real-time |
