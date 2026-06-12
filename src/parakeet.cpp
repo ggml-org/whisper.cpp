@@ -407,11 +407,13 @@ struct parakeet_state {
     int64_t t_sample_us = 0;
     int64_t t_encode_us = 0;
     int64_t t_decode_us = 0;
+    int64_t t_predict_us = 0;
     int64_t t_mel_us = 0;
 
     int32_t n_sample = 0; // number of tokens sampled
     int32_t n_encode = 0; // number of encoder calls
     int32_t n_decode = 0; // number of decoder calls with n_tokens == 1  (text-generation)
+    int32_t n_predict = 0; // number of prediction network calls
     int32_t n_fail_p = 0; // number of logprob threshold failures
     int32_t n_fail_h = 0; // number of entropy threshold failures
 
@@ -2227,6 +2229,8 @@ static bool parakeet_predict(
 
     const int n_tokens   = batch.n_tokens;
 
+    const int64_t t_start_us = ggml_time_us();
+
     {
         auto & sched = pstate.sched_decode.sched;
 
@@ -2254,6 +2258,9 @@ static bool parakeet_predict(
         }
 
     }
+
+    pstate.t_predict_us += ggml_time_us() - t_start_us;
+    pstate.n_predict++;
 
     return !(abort_callback && abort_callback(abort_callback_data));
 }
@@ -2469,6 +2476,8 @@ static bool parakeet_decode(
             return false;
         }
 
+        const int64_t t_start_sample_us = ggml_time_us();
+
         // find the best token (greedy).
         // TODO: implement beam search?
         int best_token = 0;
@@ -2508,6 +2517,7 @@ static bool parakeet_decode(
 
         // Emit non-blank token at current frame t.
         pstate.decoded_tokens.push_back(best_token);
+        pstate.t_sample_us += ggml_time_us() - t_start_sample_us;
         pstate.n_sample++;
 
         parakeet_token_data token_data = create_token_data(
@@ -3346,15 +3356,17 @@ void parakeet_print_timings(struct parakeet_context * ctx) {
     PARAKEET_LOG_INFO("%s:     load time = %8.2f ms\n", __func__, ctx->t_load_us / 1000.0f);
     if (ctx->state != nullptr) {
 
-        const int32_t n_sample = std::max(1, ctx->state->n_sample);
-        const int32_t n_encode = std::max(1, ctx->state->n_encode);
-        const int32_t n_decode = std::max(1, ctx->state->n_decode);
+        const int32_t n_sample  = std::max(1, ctx->state->n_sample);
+        const int32_t n_encode  = std::max(1, ctx->state->n_encode);
+        const int32_t n_decode  = std::max(1, ctx->state->n_decode);
+        const int32_t n_predict = std::max(1, ctx->state->n_predict);
 
         PARAKEET_LOG_INFO("%s:     fallbacks = %3d p / %3d h\n", __func__, ctx->state->n_fail_p, ctx->state->n_fail_h);
         PARAKEET_LOG_INFO("%s:      mel time = %8.2f ms\n", __func__, ctx->state->t_mel_us / 1000.0f);
         PARAKEET_LOG_INFO("%s:   sample time = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_sample_us, n_sample, 1e-3f * ctx->state->t_sample_us / n_sample);
         PARAKEET_LOG_INFO("%s:   encode time = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_encode_us, n_encode, 1e-3f * ctx->state->t_encode_us / n_encode);
         PARAKEET_LOG_INFO("%s:   decode time = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_decode_us, n_decode, 1e-3f * ctx->state->t_decode_us / n_decode);
+        PARAKEET_LOG_INFO("%s:  predict time = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_predict_us, n_predict, 1e-3f * ctx->state->t_predict_us / n_predict);
 
     }
     PARAKEET_LOG_INFO("%s:    total time = %8.2f ms\n", __func__, (t_end_us - ctx->t_start_us)/1000.0f);
@@ -3367,10 +3379,12 @@ void parakeet_reset_timings(struct parakeet_context * ctx) {
         ctx->state->t_sample_us = 0;
         ctx->state->t_encode_us = 0;
         ctx->state->t_decode_us = 0;
+        ctx->state->t_predict_us = 0;
 
         ctx->state->n_sample = 0;
         ctx->state->n_encode = 0;
         ctx->state->n_decode = 0;
+        ctx->state->n_predict = 0;
     }
 }
 
