@@ -136,8 +136,11 @@ backend-comparable metric, wall time is workload-specific).
 | Sortformer  |   0.026 |   526 ms |     0.0019 |       39 ms |
 
 _Source: workflow run [#27206914378](https://github.com/tetherto/qvac/actions/runs/27206914378)
-(2026-06-09, `ggml-speech` `bec032cd`), runner `qvac-ubuntu2404-x64-gpu`
-(`backend=vulkan`; the exact GPU model is not yet surfaced in the CI artifacts)._
+(run 2026-06-09), runner `qvac-ubuntu2404-x64-gpu` (`backend=vulkan`; the exact
+GPU model is not yet surfaced in the CI artifacts). Built the vcpkg-pinned
+`parakeet-cpp` / `ggml-speech` (whisper.cpp `0b446740`, ggml-speech `de7a55e3`);
+the registry pin still trails the current `ggml-speech` tip, so a port bump +
+re-run is needed to benchmark the very latest._
 
 ## 3. CLI and examples
 

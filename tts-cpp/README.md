@@ -843,8 +843,11 @@ backend-comparable metric, wall time is workload-specific).
 | Supertonic              |   0.106 |      0.024 |      116 ms |          603 |
 
 _Source: workflow run [#27200521076](https://github.com/tetherto/qvac/actions/runs/27200521076)
-(2026-06-09, `ggml-speech` `bec032cd`), runner `qvac-ubuntu2404-x64-gpu`
-(`backend=vulkan`; the exact GPU model is not yet surfaced in the CI artifacts)._
+(run 2026-06-09), runner `qvac-ubuntu2404-x64-gpu` (`backend=vulkan`; the exact
+GPU model is not yet surfaced in the CI artifacts). Built the vcpkg-pinned
+`tts-cpp` / `ggml-speech` (whisper.cpp `c1fd35d8`, ggml-speech `9bca9b3d`);
+the registry pin still trails the current `ggml-speech` tip, so a port bump +
+re-run is needed to benchmark the very latest._
 
 ### Mac Studio M3 Ultra (96 GB unified memory)
 
