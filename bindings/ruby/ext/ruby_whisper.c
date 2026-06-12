@@ -29,6 +29,7 @@ ID id_cache;
 ID id_n_processors;
 
 static bool is_log_callback_finalized = false;
+static bool is_ruby_log_callback_present = false;
 
 // High level API
 extern VALUE ruby_whisper_segment_allocate(VALUE klass);
@@ -106,14 +107,43 @@ static VALUE ruby_whisper_s_finalize_log_callback(VALUE self, VALUE id) {
   return Qnil;
 }
 
+typedef struct {
+  int level;
+  const char * buffer;
+} call_log_callbacks_args;
+
+static void*
+call_log_callbacks(void *v_args) {
+  VALUE log_callback = rb_iv_get(mWhisper, "log_callback");
+  if (NIL_P(log_callback)) {
+    return NULL;
+  }
+
+  call_log_callbacks_args *args = (call_log_callbacks_args *)v_args;
+  VALUE user_data = rb_iv_get(mWhisper, "user_data");
+  rb_funcall(log_callback, id_call, 3, INT2NUM(args->level), rb_str_new2(args->buffer), user_data);
+
+  return NULL;
+}
+
 static void
 ruby_whisper_log_callback(enum ggml_log_level level, const char * buffer, void * user_data) {
   if (is_log_callback_finalized) {
     return;
   }
-  VALUE log_callback = rb_iv_get(mWhisper, "log_callback");
-  VALUE udata = rb_iv_get(mWhisper, "user_data");
-  rb_funcall(log_callback, id_call, 3, INT2NUM(level), rb_str_new2(buffer), udata);
+  if (!is_ruby_log_callback_present) {
+    return;
+  }
+
+  call_log_callbacks_args args = {
+    level,
+    buffer,
+  };
+  if (ruby_thread_has_gvl_p()) {
+    call_log_callbacks((void *)&args);
+  } else {
+    rb_thread_call_with_gvl(call_log_callbacks, (void *)&args);
+  }
 }
 
 /*
@@ -129,10 +159,18 @@ static VALUE ruby_whisper_s_log_set(VALUE self, VALUE log_callback, VALUE user_d
   rb_iv_set(self, "log_callback", log_callback);
   rb_iv_set(self, "user_data", user_data);
 
-  VALUE finalize_log_callback = rb_funcall(mWhisper, rb_intern("method"), 1, rb_str_new2("finalize_log_callback"));
-  rb_define_finalizer(log_callback, finalize_log_callback);
+  if (!NIL_P(log_callback)) {
+    VALUE finalize_log_callback = rb_funcall(mWhisper, rb_intern("method"), 1, rb_str_new2("finalize_log_callback"));
+    rb_define_finalizer(log_callback, finalize_log_callback);
+  }
 
-  whisper_log_set(ruby_whisper_log_callback, NULL);
+  if (NIL_P(log_callback)) {
+    whisper_log_set(NULL, NULL);
+    is_ruby_log_callback_present = false;
+  } else {
+    whisper_log_set(ruby_whisper_log_callback, NULL);
+    is_ruby_log_callback_present = true;
+  }
 
   return Qnil;
 }

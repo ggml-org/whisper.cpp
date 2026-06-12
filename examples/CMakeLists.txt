@@ -20,7 +20,7 @@ set(TARGET common)
 
 unset(COMMON_EXTRA_LIBS)
 
-if (WHISPER_FFMPEG)
+if (WHISPER_COMMON_FFMPEG)
     # As of cmake 3.27, there is no official cmake support for FindFFmpeg.
     # Consequnelty we added a FindFFmpeg.cmake script the cmake subfolder:
     # whisper.cpp does not need the full ffmpeg libs, just AVFORMAT AVCODEC AVUTIL SWRESAMPLE
@@ -39,7 +39,7 @@ if (WHISPER_FFMPEG)
     message(STATUS "Found avformat           ${AVFORMAT_VERSION}")
 
     include_directories(${FFMPEG_INCLUDE_DIRS})
-    add_compile_definitions(WHISPER_FFMPEG)
+    add_compile_definitions(WHISPER_COMMON_FFMPEG)
 
     list(APPEND COMMON_EXTRA_LIBS ${FFMPEG_LIBRARIES})
 

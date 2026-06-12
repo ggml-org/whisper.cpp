@@ -85,33 +85,38 @@ static int whisper_bench_full(const whisper_params & params) {
         fprintf(stderr, "error: failed to set mel: %d\n", ret);
         return 3;
     }
-    // heat encoder
-    if (int ret = whisper_encode(ctx, 0, params.n_threads) != 0) {
-        fprintf(stderr, "error: failed to encode: %d\n", ret);
-        return 4;
-    }
 
     whisper_token tokens[512];
     memset(tokens, 0, sizeof(tokens));
 
-    // prompt heat
-    if (int ret = whisper_decode(ctx, tokens, 256, 0, params.n_threads) != 0) {
-        fprintf(stderr, "error: failed to decode: %d\n", ret);
-        return 4;
-    }
+    // TODO: need 2 loops because of the current graph capture logic in the CUDA backend
+    //       https://github.com/ggml-org/llama.cpp/pull/19754
+    for (int h = 0; h < 2; ++h) {
+        // heat encoder
+        if (int ret = whisper_encode(ctx, 0, params.n_threads) != 0) {
+            fprintf(stderr, "error: failed to encode: %d\n", ret);
+            return 4;
+        }
 
-    // text-generation heat
-    for (int i = 0; i < 256; i++) {
-        if (int ret = whisper_decode(ctx, tokens, 1, i, params.n_threads) != 0) {
+        // prompt heat
+        if (int ret = whisper_decode(ctx, tokens, 256, 0, params.n_threads) != 0) {
             fprintf(stderr, "error: failed to decode: %d\n", ret);
             return 4;
         }
-    }
 
-    // batched heat
-    if (int ret = whisper_decode(ctx, tokens, 5, 0, params.n_threads) != 0) {
-        fprintf(stderr, "error: failed to decode: %d\n", ret);
-        return 4;
+        // text-generation heat
+        for (int i = 0; i < 256; i++) {
+            if (int ret = whisper_decode(ctx, tokens, 1, i, params.n_threads) != 0) {
+                fprintf(stderr, "error: failed to decode: %d\n", ret);
+                return 4;
+            }
+        }
+
+        // batched heat
+        if (int ret = whisper_decode(ctx, tokens, 5, 0, params.n_threads) != 0) {
+            fprintf(stderr, "error: failed to decode: %d\n", ret);
+            return 4;
+        }
     }
 
     whisper_reset_timings(ctx);
@@ -152,7 +157,7 @@ static int whisper_bench_full(const whisper_params & params) {
     fprintf(stderr, "\n");
     fprintf(stderr, "If you wish, you can submit these results here:\n");
     fprintf(stderr, "\n");
-    fprintf(stderr, "  https://github.com/ggerganov/whisper.cpp/issues/89\n");
+    fprintf(stderr, "  https://github.com/ggml-org/whisper.cpp/issues/89\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Please include the following information:\n");
     fprintf(stderr, "\n");

@@ -78,7 +78,7 @@ add_test(NAME ${TEST_TARGET}
     -f ${PROJECT_SOURCE_DIR}/samples/jfk.wav)
 set_tests_properties(${TEST_TARGET} PROPERTIES LABELS "large")
 
-if (WHISPER_FFMPEG)
+if (WHISPER_COMMON_FFMPEG)
     set(TEST_TARGET test-whisper-cli-tiny-mp3)
     # Check with reviewers: any way to check the output transcription via ctest (diff, ...)?
     add_test(NAME ${TEST_TARGET}

@@ -1,13 +1,15 @@
 name: Examples Tests
 on:
   push:
+    branches:
+      - master
     paths:
       - examples/addon.node/**
-      - whisper.h
+      - include/whisper.h
   pull_request:
     paths:
       - examples/addon.node/**
-      - whisper.h
+      - include/whisper.h
 
 jobs:
   addon_node-ubuntu-22:

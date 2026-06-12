@@ -100,12 +100,14 @@ for model in "${models[@]}"; do
 
     if [[ $system_info == *"CUDA = 1"* ]]; then
         config="$config CUDA"
+    elif [[ $system_info == *"CUDA : ARCHS"* ]]; then
+        config="$config CUDA"
     fi
 
-    if [[ $system_info == *"METAL = 1"* ]]; then
-        config="$config METAL"
-    elif [[ $system_info == *"Metal : EMBED_LIBRARY = 1"* ]]; then
-        config="$config METAL"
+    if [[ $system_info == *"MTL = 1"* ]]; then
+        config="$config MTL"
+    elif [[ $system_info == *"MTL : EMBED_LIBRARY = 1"* ]]; then
+        config="$config MTL"
     fi
 
     commit=$(git rev-parse --short HEAD)
