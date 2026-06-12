@@ -121,54 +121,23 @@ Default **`--quant`** is **`q8_0`**. Use **`f16`** for parity-calibrated harness
 
 Small tensors and shapes not divisible by 32 may stay f16; see `PROGRESS.md` for quant sweep detail.
 
-### Benchmarks vs onnxruntime (`sample-16k.wav`, 20 s, 5 warmup + 15 runs)
+### CI benchmarks (latest `ggml-speech`, Linux x86-64)
 
-**CPU f16**
+End-to-end RTF measured in CI on the `tetherto/qvac` self-hosted runners, using
+the q8_0 GGUFs from the QVAC model registry, 1 warmup + 5 timed runs.
+`RTF = inference_time / audio_duration` (lower is faster; RTF is the
+backend-comparable metric, wall time is workload-specific).
 
-```
-                   onnxruntime-f16    ggml-cpu-f16
-  -----------------------------------------------
-  model size           2.3 GiB         1.3 GiB
-  load ms              16 736            416      (40x faster)
-  inf best ms             948            917      (3 % faster)
-  inf median ms         1 007            982      (2 % faster)
-  inf stdev ms             52             29      (2x tighter)
-  RTF best               0.047          0.046
-  RTF median             0.050          0.049
-  Transcripts            match          match
-```
+| Model       | CPU RTF | CPU wall | Vulkan RTF | Vulkan wall |
+|-------------|--------:|---------:|-----------:|------------:|
+| CTC         |   0.074 |  1495 ms |     0.0023 |       46 ms |
+| TDT         |   0.084 |  1696 ms |     0.0036 |       73 ms |
+| EOU         |   0.031 |   633 ms |     0.0053 |      106 ms |
+| Sortformer  |   0.026 |   526 ms |     0.0019 |       39 ms |
 
-**CPU int8**
-
-```
-                   onnxruntime-int8    ggml-cpu-q8_0
-  -------------------------------------------------
-  model size          583.9 MiB         697 MiB
-  load ms               2 054             359      (5.7x faster)
-  inf best ms             677             690      (2 % slower)
-  inf median ms           721             715      (1 % faster)
-  inf stdev ms             55              16      (3.4x tighter)
-  RTF best               0.034           0.040
-  RTF median             0.036           0.041
-  Transcripts            match           match
-```
-
-**Metal vs onnx int8** (same GGUF, `--n-gpu-layers 1`)
-
-```
-                   onnxruntime-int8    ggml-metal-q8_0
-  ---------------------------------------------------
-  model size          583.9 MiB         697 MiB
-  load ms               2 295              251      (9.1x faster)
-  inf best ms             682              284      (2.4x faster)
-  inf median ms           712              286      (2.5x faster)
-  inf stdev ms             18             0.55     (33x tighter)
-  RTF best               0.034           0.014
-  RTF median             0.035           0.014
-  Transcripts            match           match
-```
-
-On Metal, ggml is ~**2.4–2.5×** faster than onnx int8 with much lower latency variance; encoder runs ~**70×** realtime on the clip. Metal throughput is largely insensitive to quant tier (compute-bound).
+_Source: workflow run [#27206914378](https://github.com/tetherto/qvac/actions/runs/27206914378)
+(2026-06-09, `ggml-speech` `bec032cd`), runner `qvac-ubuntu2404-x64-gpu`
+(`backend=vulkan`; the exact GPU model is not yet surfaced in the CI artifacts)._
 
 ## 3. CLI and examples
 
