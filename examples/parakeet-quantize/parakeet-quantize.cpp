@@ -155,19 +155,29 @@ static bool parakeet_model_quantize(const std::string & fname_inp, const std::st
     // ggml_ssm_conv / ggml_conv2d_dw CUDA kernels require F32 weights.
     // pos_bias_u / pos_bias_v are declared F32 in the loader.
     const std::vector<std::string> to_quant = { ".*" };
-    const std::vector<std::string> to_skip  = {
+    std::vector<std::string> to_skip = {
         // CUDA kernel constraints (ggml_ssm_conv / ggml_conv2d_dw require F32 weights)
         "encoder\\.layers\\..+\\.conv\\.depthwise_conv\\.weight",
         // Declared F32 in loader (pos_bias tensors)
         "encoder\\.layers\\..+\\.self_attn\\.pos_bias_u",
         "encoder\\.layers\\..+\\.self_attn\\.pos_bias_v",
-        // n_pred_dim=640 is not a multiple of K-quant block size (256); keep F32
-        "decoder\\.prediction\\.embed\\.weight",
-        "decoder\\.prediction\\.dec_rnn\\.lstm\\.weight_ih_l.*",
-        "decoder\\.prediction\\.dec_rnn\\.lstm\\.weight_hh_l.*",
-        "joint\\.pred\\.weight",
-        "joint\\.joint_net\\.2\\.weight",
     };
+
+    // Prediction/joint tensors use n_pred_dim as their inner dimension. K-quant
+    // types (block size 256) cannot quantize 640 evenly, so keep them F32. For
+    // other types (Q8_0, Q4_0, block size 32) 640 is divisible and they can be
+    // quantized normally. The loader mirrors this logic at load time.
+    {
+        const ggml_type qtype = ggml_ftype_to_ggml_type(ftype);
+        const int32_t   blck  = ggml_blck_size(qtype);
+        if (blck > 1 && hparams.n_pred_dim % blck != 0) {
+            to_skip.push_back("decoder\\.prediction\\.embed\\.weight");
+            to_skip.push_back("decoder\\.prediction\\.dec_rnn\\.lstm\\.weight_ih_l.*");
+            to_skip.push_back("decoder\\.prediction\\.dec_rnn\\.lstm\\.weight_hh_l.*");
+            to_skip.push_back("joint\\.pred\\.weight");
+            to_skip.push_back("joint\\.joint_net\\.2\\.weight");
+        }
+    }
 
     if (!ggml_common_quantize_0(finp, fout, ftype, to_quant, to_skip)) {
         fprintf(stderr, "%s: failed to quantize tensors\n", __func__);
