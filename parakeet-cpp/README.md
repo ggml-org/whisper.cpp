@@ -130,17 +130,17 @@ backend-comparable metric, wall time is workload-specific).
 
 | Model       | CPU RTF | CPU wall | Vulkan RTF | Vulkan wall |
 |-------------|--------:|---------:|-----------:|------------:|
-| CTC         |   0.074 |  1495 ms |     0.0023 |       46 ms |
-| TDT         |   0.084 |  1696 ms |     0.0036 |       73 ms |
-| EOU         |   0.031 |   633 ms |     0.0053 |      106 ms |
-| Sortformer  |   0.026 |   526 ms |     0.0019 |       39 ms |
+| CTC         |   0.078 |  1572 ms |     0.0023 |       47 ms |
+| TDT         |   0.083 |  1670 ms |     0.0035 |       71 ms |
+| EOU         |   0.030 |   607 ms |     0.0052 |      105 ms |
+| Sortformer  |   0.025 |   508 ms |     0.0020 |       40 ms |
 
-_Source: workflow run [#27206914378](https://github.com/tetherto/qvac/actions/runs/27206914378)
-(run 2026-06-09), runner `qvac-ubuntu2404-x64-gpu` (`backend=vulkan`; the exact
-GPU model is not yet surfaced in the CI artifacts). Built the vcpkg-pinned
-`parakeet-cpp` / `ggml-speech` (whisper.cpp `0b446740`, ggml-speech `de7a55e3`);
-the registry pin still trails the current `ggml-speech` tip, so a port bump +
-re-run is needed to benchmark the very latest._
+_Source: workflow run [#27415598451](https://github.com/tetherto/qvac/actions/runs/27415598451)
+(2026-06-12), runner `qvac-ubuntu2204-x64-gpu`, GPU **NVIDIA RTX 4000 SFF Ada
+Generation** (`backend=vulkan`). Built `parakeet-cpp` `2026-06-10` (whisper.cpp
+`1c75d6e9`) against `ggml-speech` `bec032cd` — the current speech-branch tip.
+parakeet-cpp's C++ is unchanged vs the prior pin, so these track earlier runs
+within CI variance (Vulkan stable; CPU RTF varies with shared-runner load)._
 
 ## 3. CLI and examples
 

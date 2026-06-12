@@ -843,16 +843,18 @@ backend-comparable metric, wall time is workload-specific).
 
 | Engine                  | CPU RTF | Vulkan RTF | Vulkan wall | Vulkan tok/s |
 |-------------------------|--------:|-----------:|------------:|-------------:|
-| Chatterbox (Turbo)      |    1.25 |      0.090 |      419 ms |          176 |
-| Chatterbox Multilingual |    4.13 |      0.184 |     1336 ms |           61 |
-| Supertonic              |   0.106 |      0.024 |      116 ms |          603 |
+| Chatterbox (Turbo)      |    1.34 |      0.090 |      368 ms |          186 |
+| Chatterbox Multilingual |    4.31 |      0.189 |     1097 ms |           73 |
+| Supertonic              |   0.079 |      n/a¹  |       n/a¹  |         n/a¹ |
 
-_Source: workflow run [#27200521076](https://github.com/tetherto/qvac/actions/runs/27200521076)
-(run 2026-06-09), runner `qvac-ubuntu2404-x64-gpu` (`backend=vulkan`; the exact
-GPU model is not yet surfaced in the CI artifacts). Built the vcpkg-pinned
-`tts-cpp` / `ggml-speech` (whisper.cpp `c1fd35d8`, ggml-speech `9bca9b3d`);
-the registry pin still trails the current `ggml-speech` tip, so a port bump +
-re-run is needed to benchmark the very latest._
+_Source: workflow run [#27415600049](https://github.com/tetherto/qvac/actions/runs/27415600049)
+(2026-06-12), runner `qvac-ubuntu2204-x64-gpu`, GPU **NVIDIA RTX 4000 SFF Ada
+Generation** (`backend=vulkan`). Chatterbox built against `tts-cpp` `1c75d6e9`
+on a benchmark branch; the shipped `tts-ggml` pin stays at the Android-safe
+`2026-06-03` revision. ¹ Supertonic runs **CPU-only** on the current package
+(the `0.2.2` Android revert), so its Vulkan figures (and the ~34× Supertonic GPU
+optimisations) are pending the GPU re-enablement in #2506 + the upstream Android
+CPU-backend fix._
 
 ### Mac Studio M3 Ultra (96 GB unified memory)
 
