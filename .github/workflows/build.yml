@@ -243,9 +243,13 @@ jobs:
           BIN="build/bin"
           mkdir -p "$BIN"
 
-          # Collect only the ROCm libs actually needed by our binaries via ldd.
-          # This avoids bundling massive unused libs (libMIOpen, libMLIR, librocroller, etc.)
-          # that would inflate the artifact by 1+ GB.
+          cp -a build/src/libwhisper.so*                "$BIN"/ 2>/dev/null || true
+          cp -a build/ggml/src/libggml.so*              "$BIN"/ 2>/dev/null || true
+          cp -a build/ggml/src/libggml-base.so*         "$BIN"/ 2>/dev/null || true
+          cp -a build/ggml/src/libggml-cpu.so*          "$BIN"/ 2>/dev/null || true
+          cp -a build/ggml/src/ggml-hip/libggml-hip.so* "$BIN"/ 2>/dev/null || true
+          export LD_LIBRARY_PATH="$PWD/$BIN:/opt/rocm/lib:/opt/rocm/lib/llvm/lib:/opt/rocm/lib/rocm_sysdeps/lib:${LD_LIBRARY_PATH:-}"
+
           ROCM_ROOTS="/opt/rocm/lib /opt/rocm/lib/llvm/lib /opt/rocm/lib/rocm_sysdeps/lib"
 
           for binary in "$BIN"/*; do
