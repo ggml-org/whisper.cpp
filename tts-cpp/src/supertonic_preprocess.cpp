@@ -162,9 +162,19 @@ bool has_terminal_punct(const std::string & s) {
     }
 }
 
+// Legacy built-in allowlist (Supertonic v1/v2).  Used only as the fallback
+// when the caller does not supply the model's `supertonic.languages` array.
 bool is_supported_language(const std::string & language) {
     return language == "en" || language == "ko" || language == "es" ||
            language == "pt" || language == "fr";
+}
+
+bool is_language_allowed(const std::string & language,
+                         const std::vector<std::string> * supported) {
+    if (supported == nullptr || supported->empty()) {
+        return is_supported_language(language);
+    }
+    return std::find(supported->begin(), supported->end(), language) != supported->end();
 }
 
 } // namespace
@@ -172,8 +182,9 @@ bool is_supported_language(const std::string & language) {
 std::string supertonic_preprocess_text(const std::string & text,
                                        const std::string & language,
                                        const std::string & language_wrap_mode,
-                                       bool is_continuation) {
-    if (!is_supported_language(language)) {
+                                       bool is_continuation,
+                                       const std::vector<std::string> * supported_languages) {
+    if (!is_language_allowed(language, supported_languages)) {
         throw std::runtime_error("invalid Supertonic language: " + language);
     }
 
@@ -234,7 +245,8 @@ bool supertonic_text_to_ids(const supertonic_model & model,
                             bool is_continuation) {
     try {
         std::string normalized = supertonic_preprocess_text(
-            text, language, model.hparams.language_wrap_mode, is_continuation);
+            text, language, model.hparams.language_wrap_mode, is_continuation,
+            &model.languages);
         std::vector<uint32_t> cps = utf8_to_cps(normalized);
         ids.clear();
         ids.reserve(cps.size());

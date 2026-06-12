@@ -50,8 +50,32 @@ struct supertonic_hparams {
     int latent_channels = 144;
     int default_steps = 5;
     float default_speed = 1.05f;
+    // Vector-estimator text cross-attention head count.  The only internal
+    // topology dim that differs across families (v1/v2: 4 heads, v3: 8 heads;
+    // head_dim stays 64).  Read from GGUF `supertonic.vector_text_attn_heads`,
+    // defaulting to 4 for bundles converted before the key existed.
+    int vector_text_attn_heads = 4;
+    // Per-block dwconv dilations of the text-encoder ConvNeXt stack.  v1/v2 use
+    // dilation 1 everywhere; Supertonic 3 dilates it (e.g. {1,1,2,2,4,4}).  Read
+    // from GGUF `supertonic.text_convnext_dilations`.  Empty => every block uses
+    // dilation 1 (the v1/v2 behaviour, and the fallback for older bundles whose
+    // converter predates the key).
+    std::vector<int> text_convnext_dilations;
+    // Classifier-free-guidance scales for the vector estimator.  v3 bakes a
+    // batch-2 (conditional + unconditional) field whose velocity is
+    // `cfg_cond_scale*v_cond - cfg_uncond_scale*v_uncond` (e.g. 4*cond-3*uncond).
+    // v1/v2 (and pre-key bundles) default to (1, 0) = single conditional pass.
+    float cfg_cond_scale = 1.0f;
+    float cfg_uncond_scale = 0.0f;
+    bool cfg_enabled() const { return cfg_uncond_scale != 0.0f; }
     std::string language_wrap_mode = "open_close";
     std::string default_voice = "F1";
+
+    // Dilation for text-encoder ConvNeXt block `block`, defaulting to 1 when the
+    // bundle does not pin a per-block schedule (v1/v2, or pre-key conversions).
+    int text_convnext_dilation(size_t block) const {
+        return block < text_convnext_dilations.size() ? text_convnext_dilations[block] : 1;
+    }
 };
 
 struct supertonic_voice_style {
@@ -634,10 +658,15 @@ ggml_tensor * try_source_tensor(const supertonic_model & model, const std::strin
 // conv1d kernel `[K=1, IC, OC]` directly and skip the cont(transpose(w)).
 ggml_tensor * try_pretransposed_weight(const supertonic_model & model, const ggml_tensor * w);
 
+// `supported_languages`, when non-null and non-empty, is the authoritative set
+// of accepted language codes (the model's `supertonic.languages` GGUF array).
+// When null/empty the function falls back to the legacy built-in 5-language
+// allowlist so direct callers/tests without a model keep working.
 std::string supertonic_preprocess_text(const std::string & text,
                                        const std::string & language,
                                        const std::string & language_wrap_mode,
-                                       bool is_continuation = false);
+                                       bool is_continuation = false,
+                                       const std::vector<std::string> * supported_languages = nullptr);
 bool supertonic_text_to_ids(const supertonic_model & model,
                             const std::string & text,
                             const std::string & language,
@@ -951,7 +980,15 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
                                        std::string * error = nullptr,
                                        bool include_scalar_trace = true,
                                        bool include_ggml_trace = true,
-                                       std::vector<float> * next_latent_tc_out = nullptr);
+                                       std::vector<float> * next_latent_tc_out = nullptr,
+                                       // CFG (Supertonic 3): when both provided, the
+                                       // production ggml path uses these channel-major
+                                       // [50,256] style layouts instead of deriving the
+                                       // conditional ones from `style_ttl` /
+                                       // `/Expand_output_0`.  Lets the caller run an
+                                       // unconditional pass with the learned null tokens.
+                                       const std::vector<float> * style_v_raw_override = nullptr,
+                                       const std::vector<float> * kctx_raw_override = nullptr);
 
 // Process-wide alive registry: each loaded supertonic_model registers
 // its generation_id with this set on success and unregisters at the

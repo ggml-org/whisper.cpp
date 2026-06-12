@@ -816,6 +816,57 @@ if (TTS_CPP_BUILD_TESTS)
     add_supertonic_harness(test-supertonic-vector-trace test/test_supertonic_vector_trace.cpp)
     add_supertonic_harness(test-supertonic-pipeline test/test_supertonic_pipeline.cpp)
     add_supertonic_harness(test-supertonic-engine-cycle test/test_supertonic_engine_cycle.cpp)
+
+    # ------------------------------------------------------------------
+    # QVAC-19305 — Supertonic 3 fixture suite.
+    #
+    # The harnesses above are arch-agnostic: they take (MODEL.gguf REF_DIR)
+    # and don't care which Supertonic generation produced them.  We re-use
+    # those same binaries (via `EXE`) to also run them against a Supertonic
+    # 3 GGUF plus per-language ONNX-Runtime references.  Stage the data with
+    #     scripts/fetch-supertonic3-testdata.sh
+    # (or, once published, the QVAC S3 model registry) and point the build
+    # at it:
+    #     -DTTS_CPP_TEST_MODEL_DIR=<staging>/models
+    #     -DTTS_CPP_TEST_REF_DIR=<staging>/artifacts
+    # Each registration auto-DISABLEs when its GGUF / reference dump is
+    # missing, exactly like the v2 fixtures, so a checkout without the data
+    # still configures cleanly.
+    #
+    # We deliberately run the *Supertonic 2* language set (en/ko/es/pt/fr)
+    # through the v3 model — the v3-only languages are covered by the
+    # model-free test-supertonic-languages unit test — so that both the old
+    # and the new languages get exercised end-to-end on Supertonic 3.
+    set(_tcb_super3_gguf "${TTS_CPP_TEST_MODEL_DIR}/supertonic3.gguf")
+    set(SUPERTONIC3_REF_LANGS en ko es pt fr
+        CACHE STRING "tts-cpp: languages exercised end-to-end against the Supertonic 3 fixture")
+
+    # Per-stage parity on English (the default reference language).  The
+    # full pipeline is covered per-language below, so it is omitted here.
+    foreach (_st3 IN ITEMS
+            test-supertonic-preprocess
+            test-supertonic-text-encoder
+            test-supertonic-vector
+            test-supertonic-vocoder
+            test-supertonic-duration)
+        set(_st3_ref "${TTS_CPP_TEST_REF_DIR}/supertonic3-ref-en")
+        tts_cpp_register_test(${_st3}-v3
+            EXE      ${_st3}
+            LABEL    "fixture"
+            ARGS     "${_tcb_super3_gguf}" "${_st3_ref}"
+            REQUIRES "${_tcb_super3_gguf}" "${_st3_ref}/noise.npy")
+    endforeach()
+
+    # Full-pipeline parity per language — old + new languages on Supertonic 3.
+    foreach (_st3lang IN LISTS SUPERTONIC3_REF_LANGS)
+        set(_st3_ref "${TTS_CPP_TEST_REF_DIR}/supertonic3-ref-${_st3lang}")
+        tts_cpp_register_test(test-supertonic-pipeline-v3-${_st3lang}
+            EXE      test-supertonic-pipeline
+            LABEL    "fixture"
+            ARGS     "${_tcb_super3_gguf}" "${_st3_ref}"
+            REQUIRES "${_tcb_super3_gguf}" "${_st3_ref}/noise.npy")
+    endforeach()
+
     # OpenCL optimization audit follow-up harnesses (F1–F11).
     add_supertonic_harness(test-supertonic-load-caches    test/test_supertonic_load_caches.cpp)
     add_supertonic_harness(test-supertonic-graph-rewrites test/test_supertonic_graph_rewrites.cpp)
@@ -1015,6 +1066,21 @@ if (TTS_CPP_BUILD_TESTS)
     target_include_directories(test-supertonic-kv-attn-type-api PRIVATE ggml/include src include)
     tts_cpp_apply_ccache(test-supertonic-kv-attn-type-api)
     tts_cpp_register_test(test-supertonic-kv-attn-type-api LABEL "unit")
+
+    # QVAC-19305 — Supertonic v3 language-coverage contract.
+    # Pins the runtime language validator against the v3 bundle
+    # (31 languages + the language-agnostic `na`) shipped in the
+    # GGUF `supertonic.languages` array; asserts the built-in
+    # fallback still only accepts the legacy v1/v2 5-language set.
+    # CPU-only unit test (no model); an optional fixture sub-test
+    # cross-checks a loaded model's advertised languages when a
+    # GGUF path is passed as argv[1].
+    add_executable(test-supertonic-languages
+        test/test_supertonic_languages.cpp)
+    target_link_libraries(test-supertonic-languages PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-languages PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-languages)
+    tts_cpp_register_test(test-supertonic-languages LABEL "unit")
 
     # QVAC-18605 round 7 — Vulkan env-var passthrough mechanism
     # (EngineOptions::vulkan_env_overrides + apply_vulkan_env_overrides

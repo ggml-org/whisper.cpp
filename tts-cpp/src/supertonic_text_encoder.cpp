@@ -194,7 +194,8 @@ ggml_tensor * edge_clamp_pad_1d(ggml_context * ctx, ggml_tensor * x, int pad_lef
 ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
                                   ggml_tensor * x,
                                   ggml_tensor * w,
-                                  ggml_tensor * b) {
+                                  ggml_tensor * b,
+                                  int dilation) {
     const int K = (int)w->ne[0];
     static const bool disable_fused =
         std::getenv("SUPERTONIC_DISABLE_FUSED_DEPTHWISE") != nullptr;
@@ -204,13 +205,15 @@ ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
         x->ne[2] == 1 && x->ne[3] == 1 && w->ne[1] == 1 && w->ne[3] == 1 &&
         w->ne[2] == x->ne[1] && b->ne[0] == x->ne[1] &&
         ggml_is_contiguous(x) && ggml_is_contiguous(w) && ggml_is_contiguous(b)) {
-        return ggml_supertonic_depthwise_1d(ctx, x, w, b, 1);
+        return ggml_supertonic_depthwise_1d(ctx, x, w, b, dilation);
     }
-    const int pad_left = (K - 1) / 2;
-    const int pad_right = (K - 1) - pad_left;
+    // "Same" padding under dilation: effective kernel span is (K-1)*dilation+1.
+    const int total_pad = (K - 1) * dilation;
+    const int pad_left = total_pad / 2;
+    const int pad_right = total_pad - pad_left;
     ggml_tensor * padded = edge_clamp_pad_1d(ctx, x, pad_left, pad_right);
     ggml_tensor * new_b = ggml_reshape_4d(ctx, padded, padded->ne[0], 1, padded->ne[1], padded->ne[2]);
-    ggml_tensor * im2col = ggml_im2col(ctx, w, new_b, 1, 0, 0, 0, 1, 0, false, GGML_TYPE_F32);
+    ggml_tensor * im2col = ggml_im2col(ctx, w, new_b, 1, 0, 0, 0, dilation, 0, false, GGML_TYPE_F32);
     ggml_tensor * y = ggml_mul_mat(ctx, im2col, w);
     y = ggml_reshape_3d(ctx, y, y->ne[0], y->ne[2], 1);
     return ggml_add(ctx, y, repeat_like(ctx, b, y));
@@ -258,11 +261,13 @@ ggml_tensor * conv1d_k1_channel_time_ggml(ggml_context * ctx,
 ggml_tensor * text_convnext_ggml(ggml_context * ctx,
                                 const supertonic_model & model,
                                 const std::string & p,
-                                ggml_tensor * x) {
+                                ggml_tensor * x,
+                                int dilation) {
     ggml_tensor * residual = x;
     ggml_tensor * y = depthwise_same_ggml(ctx, x,
         require_source_tensor(model, p + ".dwconv.weight"),
-        require_source_tensor(model, p + ".dwconv.bias"));
+        require_source_tensor(model, p + ".dwconv.bias"),
+        dilation);
     y = layer_norm_ggml(ctx, y,
         require_source_tensor(model, p + ".norm.norm.weight"),
         require_source_tensor(model, p + ".norm.norm.bias"));
@@ -367,7 +372,7 @@ void layer_norm_channel(std::vector<float> & x, int L, int C,
 }
 
 void convnext_block(const supertonic_model & m, const std::string & p,
-                    std::vector<float> & x, int L, int C) {
+                    std::vector<float> & x, int L, int C, int dilation) {
     f32_tensor dw_w = read_f32(m, p + ".dwconv.weight");
     f32_tensor dw_b = read_f32(m, p + ".dwconv.bias");
     f32_tensor ln_g = read_f32(m, p + ".norm.norm.weight");
@@ -379,7 +384,7 @@ void convnext_block(const supertonic_model & m, const std::string & p,
     f32_tensor gamma = read_f32(m, p + ".gamma");
     std::vector<float> residual = x;
     std::vector<float> y, z;
-    depthwise_conv1d_same(x, L, C, dw_w, dw_b, (int) dw_w.ne[0], 1, y);
+    depthwise_conv1d_same(x, L, C, dw_w, dw_b, (int) dw_w.ne[0], dilation, y);
     layer_norm_channel(y, L, C, ln_g, ln_b);
     linear1x1(y, L, C, pw1_w, &pw1_b, (int) pw1_w.ne[2], z);
     for (float & v : z) v = gelu(v);
@@ -698,11 +703,11 @@ void speech_prompted_attention(const supertonic_model & m, int idx,
     const float scale = 1.0f / 16.0f;
     const int attn_num = idx + 1;
     const std::string p = "text_encoder:tts.ttl.speech_prompted_text_encoder.attention" + std::to_string(attn_num);
-    f32_tensor q_w = read_f32(m, "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3678" : "onnx::MatMul_3682"));
+    f32_tensor q_w = read_f32(m, p + ".W_query.linear.weight");
     f32_tensor q_b = read_f32(m, p + ".W_query.linear.bias");
-    f32_tensor kv_w = read_f32(m, "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3680" : "onnx::MatMul_3684"));
+    f32_tensor kv_w = read_f32(m, p + ".W_value.linear.weight");
     f32_tensor kv_b = read_f32(m, p + ".W_value.linear.bias");
-    f32_tensor out_w = read_f32(m, "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3681" : "onnx::MatMul_3685"));
+    f32_tensor out_w = read_f32(m, p + ".out_fc.linear.weight");
     f32_tensor out_b = read_f32(m, p + ".out_fc.linear.bias");
     f32_tensor tanh_k = read_f32(m, "text_encoder:/speech_prompted_text_encoder/attention" + std::to_string(attn_num) + "/tanh/Tanh_output_0");
 
@@ -1055,9 +1060,9 @@ void speech_prompted_attention_ggml(const supertonic_model & m, int idx,
     if (idx < 0 || idx >= 2) throw std::runtime_error("invalid speech attention idx");
     const int attn_num = idx + 1;
     const std::string p = "text_encoder:tts.ttl.speech_prompted_text_encoder.attention" + std::to_string(attn_num);
-    const std::string q_w = "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3678" : "onnx::MatMul_3682");
-    const std::string v_w = "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3680" : "onnx::MatMul_3684");
-    const std::string o_w = "text_encoder:" + std::string(idx == 0 ? "onnx::MatMul_3681" : "onnx::MatMul_3685");
+    const std::string q_w = p + ".W_query.linear.weight";
+    const std::string v_w = p + ".W_value.linear.weight";
+    const std::string o_w = p + ".out_fc.linear.weight";
     const std::string tanh_k_src = "text_encoder:/speech_prompted_text_encoder/attention" + std::to_string(attn_num) + "/tanh/Tanh_output_0";
 
     // QVAC-18605 round 12 #6 — merged-cache fast path on non-CPU
@@ -1222,7 +1227,8 @@ bool supertonic_text_encoder_forward_cpu(const supertonic_model & model,
         }
 
         for (int i = 0; i < 6; ++i) {
-            convnext_block(model, "text_encoder:tts.ttl.text_encoder.convnext.convnext." + std::to_string(i), x, L, C);
+            convnext_block(model, "text_encoder:tts.ttl.text_encoder.convnext.convnext." + std::to_string(i),
+                           x, L, C, model.hparams.text_convnext_dilation((size_t) i));
         }
         std::vector<float> convnext_out = x;
 
@@ -1355,7 +1361,8 @@ bool supertonic_text_encoder_forward_ggml(const supertonic_model & model,
             ggml_tensor * y_t = in_t;
             for (int i = 0; i < 6; ++i) {
                 y_t = text_convnext_ggml(convnext_cache.ctx, model,
-                    "text_encoder:tts.ttl.text_encoder.convnext.convnext." + std::to_string(i), y_t);
+                    "text_encoder:tts.ttl.text_encoder.convnext.convnext." + std::to_string(i), y_t,
+                    model.hparams.text_convnext_dilation((size_t) i));
             }
             ggml_set_name(y_t, "text_encoder_convnext5");
             ggml_set_output(y_t);
@@ -1475,7 +1482,8 @@ bool supertonic_text_encoder_trace_ggml(const supertonic_model & model,
         push_trace(scalar_trace, "text_encoder_embed", L, C, x);
         std::vector<float> cur = x;
         for (int i = 0; i < 6; ++i) {
-            convnext_block(model, "text_encoder:tts.ttl.text_encoder.convnext.convnext." + std::to_string(i), cur, L, C);
+            convnext_block(model, "text_encoder:tts.ttl.text_encoder.convnext.convnext." + std::to_string(i),
+                           cur, L, C, model.hparams.text_convnext_dilation((size_t) i));
             push_trace(scalar_trace, "text_encoder_convnext" + std::to_string(i), L, C, cur);
         }
         std::vector<float> q0, k0, v0;
@@ -1502,7 +1510,8 @@ bool supertonic_text_encoder_trace_ggml(const supertonic_model & model,
         ggml_set_name(in, "text_encoder_embed"); ggml_set_input(in);
         ggml_tensor * y = in;
         for (int i = 0; i < 6; ++i) {
-            y = text_convnext_ggml(ctx, model, "text_encoder:tts.ttl.text_encoder.convnext.convnext." + std::to_string(i), y);
+            y = text_convnext_ggml(ctx, model, "text_encoder:tts.ttl.text_encoder.convnext.convnext." + std::to_string(i), y,
+                                   model.hparams.text_convnext_dilation((size_t) i));
             const std::string name = "text_encoder_convnext" + std::to_string(i);
             ggml_set_name(y, name.c_str()); ggml_set_output(y);
             ggml_build_forward_expand(gf, y);
