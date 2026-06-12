@@ -1641,8 +1641,10 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
                     K_padded = ggml_pad_ext(ctx0, K_padded, 0, 0, 0, n_kv_dense - K_padded->ne[1], 0, 0, 0, 0);
                 }
 
-                // Each group reads a window of keys (n_kv_chunk) but stepping to
-                // the next group only moves the pointer forward by chunk elements.
+                // Create a 4d tensor where each group spans a wide window of
+                // 512 keys (n_kv_chunk), but moving to the next group (nb[2])
+                // only jumps forward by 256 frames (chunk * nb[1]). This creates
+                // a 256 frame overlap, shared keys in RAM without copies.
                 struct ggml_tensor * K_chunk = ggml_view_4d(ctx0, K_padded,
                         d_head, n_kv_chunk, n_group, n_head,
                         K_padded->nb[1],
@@ -1653,7 +1655,11 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
 
                 struct ggml_tensor * content_scores = ggml_mul_mat(ctx0, K_chunk, Q_u_padded);
 
-                // stride shift.
+                // The above mul_mat operation, combined with K_chunk's overlapping
+                // frames, produces a dense matrix. But some of the results in
+                // this matrix were computed for keys that aren't part of that
+                // query's window. So we shift each row to keep only the results
+                // that we want.
                 content_scores = ggml_view_4d(ctx0, content_scores,
                         window_size, chunk, n_group, n_head,
                         (size_t) (chunk + window_size) * content_scores->nb[0],
