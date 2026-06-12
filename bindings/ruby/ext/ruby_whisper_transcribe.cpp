@@ -81,7 +81,7 @@ ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self) {
     return self;
   }
 
-  full_args args = {
+  ruby_whisper_full_args args = {
     &self,
     &params,
     pcmf32.data(),

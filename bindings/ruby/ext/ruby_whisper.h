@@ -103,19 +103,12 @@ typedef struct parsed_samples_t {
   bool memview_exported;
 } parsed_samples_t;
 
-typedef struct full_args {
-  VALUE *context;
-  VALUE *params;
-  float *samples;
-  int n_samples;
-} full_args;
-
 typedef struct {
   VALUE *context;
   VALUE *params;
   float *samples;
   int n_samples;
-} ruby_whisper_parakeet_context_full_args;
+} ruby_whisper_full_args;
 
 typedef struct {
   struct parakeet_full_params params;

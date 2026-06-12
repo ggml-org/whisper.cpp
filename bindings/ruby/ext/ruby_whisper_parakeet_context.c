@@ -217,7 +217,7 @@ parakeet_full_ubf(void *rb_args)
 VALUE
 ruby_whisper_parakeet_context_full_body(VALUE rb_args)
 {
-  ruby_whisper_parakeet_context_full_args *args = (ruby_whisper_parakeet_context_full_args *)rb_args;
+  ruby_whisper_full_args *args = (ruby_whisper_full_args *)rb_args;
   ruby_whisper_parakeet_context *rwpc;
   GetParakeetContext(*args->context, rwpc);
   ruby_whisper_parakeet_params *rwpp;
@@ -254,7 +254,7 @@ ruby_whisper_parakeet_context_full(int argc, VALUE *argv, VALUE self)
   VALUE n_samples = argc == 2 ? Qnil : argv[2];
 
   struct parsed_samples_t parsed = parse_samples(&argv[1], &n_samples);
-  ruby_whisper_parakeet_context_full_args args = {
+  ruby_whisper_full_args args = {
     &self,
     &argv[0],
     parsed.samples,

@@ -38,7 +38,7 @@ ruby_whisper_parakeet_transcribe(VALUE self, VALUE audio_path, VALUE params)
   GetParakeetContext(self, rwpc);
   GetParakeetParams(params, rwpp);
 
-  ruby_whisper_parakeet_context_full_args args = {
+  ruby_whisper_full_args args = {
     &self,
     &params,
     pcmf32.data(),
