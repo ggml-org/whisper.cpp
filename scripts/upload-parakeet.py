@@ -9,27 +9,27 @@ REPO_ID   = f"{USER_NAME}/parakeet-GGUF"
 MODELS = {
     "f32": {
         "local_path":   "models/ggml-parakeet-tdt-0.6b-v3-f32.bin",
-        "remote_name":  "parakeet-tdt-0.6b-v3-f32.bin",
+        "remote_name":  "ggml-parakeet-tdt-0.6b-v3-f32.bin",
         "description":  "Full precision (F32)",
     },
     "f16": {
         "local_path":   "models/ggml-parakeet-tdt-0.6b-v3-f16.bin",
-        "remote_name":  "parakeet-tdt-0.6b-v3-f16.bin",
+        "remote_name":  "ggml-parakeet-tdt-0.6b-v3-f16.bin",
         "description":  "Half precision (F16)",
     },
     "q8_0": {
         "local_path":   "models/ggml-parakeet-tdt-0.6b-v3-q8_0.bin",
-        "remote_name":  "parakeet-tdt-0.6b-v3-q8_0.bin",
+        "remote_name":  "ggml-parakeet-tdt-0.6b-v3-q8_0.bin",
         "description":  "8-bit quantized (Q8_0)",
     },
     "q4_0": {
         "local_path":   "models/ggml-parakeet-tdt-0.6b-v3-q4_0.bin",
-        "remote_name":  "parakeet-tdt-0.6b-v3-q4_0.bin",
+        "remote_name":  "ggml-parakeet-tdt-0.6b-v3-q4_0.bin",
         "description":  "4-bit quantized (Q4_0)",
     },
     "q4_k": {
         "local_path":   "models/ggml-parakeet-tdt-0.6b-v3-q4_k.bin",
-        "remote_name":  "parakeet-tdt-0.6b-v3-q4_k.bin",
+        "remote_name":  "ggml-parakeet-tdt-0.6b-v3-q4_k.bin",
         "description":  "4-bit K-quantized (Q4_k)",
     },
 }
