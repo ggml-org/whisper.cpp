@@ -144,7 +144,11 @@ jobs:
     runs-on: ubuntu-22.04
     needs: [determine-tag, prepare-rocm-matrix]
     strategy:
-      matrix: ${{ fromJson(needs.prepare-rocm-matrix.outputs.ubuntu_matrix) }}
+      matrix:
+        gfx_target: [gfx1151]
+        build: [Release]
+        sdl2: [ON]
+        arch: [linux/amd64]
       fail-fast: false
 
     steps:
@@ -228,19 +232,12 @@ jobs:
           SKIP="^(libc|libm|libdl|librt|libpthread|libstdc\+\+|libgcc_s|ld-linux)"
           mkdir -p "$BIN"
 
-          # ldd-based: scan all whisper binaries and bundled .so files
-          for target in "$BIN"/whisper-* "$BIN"/*.so*; do
-            [ -f "$target" ] && [ ! -L "$target" ] || continue
-            ldd "$target" 2>/dev/null | grep "=> /" | while read -r line; do
-              soname=$(echo "$line" | awk '{print $1}')
-              path=$(echo "$line" | awk '{print $3}')
-              [[ "$soname" =~ $SKIP ]] && continue
-              [ -f "$BIN/$soname" ] && continue
-              cp -L "$path" "$BIN/$soname" 2>/dev/null || true
-            done
-          done
+          # Copy all .so* from ROCm lib dir — preserves symlinks so soname chains work
+          find "$LIB" -maxdepth 1 -name "*.so*" -exec cp -P {} "$BIN/" \; 2>/dev/null || true
+          find "$LIB/llvm/lib" -maxdepth 1 -name "*.so*" -exec cp -P {} "$BIN/" \; 2>/dev/null || true
+          [ -d "$LIB/rocm_sysdeps/lib" ] && find "$LIB/rocm_sysdeps/lib" -maxdepth 1 -name "*.so*" -exec cp -P {} "$BIN/" \; 2>/dev/null || true
 
-          # Kernel library data dirs (not picked up by ldd — loaded at runtime by path)
+          # Kernel library data dirs (loaded at runtime by path, not via soname)
           [ -d "$LIB/rocblas/library" ]   && { mkdir -p "$BIN/rocblas";   cp -r "$LIB/rocblas/library"   "$BIN/rocblas/"; }
           [ -d "$LIB/hipblaslt/library" ] && { mkdir -p "$BIN/hipblaslt"; cp -r "$LIB/hipblaslt/library" "$BIN/hipblaslt/"; }
 
@@ -269,6 +266,7 @@ jobs:
 # 3. ROCm — Windows
 # ════════════════════════════════════════════════════════════════════════════════
   windows-rocm:
+    if: false
     runs-on: windows-2022
     needs: [determine-tag, prepare-rocm-matrix]
     strategy:
@@ -425,6 +423,7 @@ jobs:
 # 4. Vulkan — Linux
 # ════════════════════════════════════════════════════════════════════════════════
   linux-vulkan:
+    if: false
     runs-on: ubuntu-latest
     needs: determine-tag
 
@@ -491,6 +490,7 @@ jobs:
 # 5. Vulkan — Windows
 # ════════════════════════════════════════════════════════════════════════════════
   windows-vulkan:
+    if: false
     runs-on: windows-latest
     needs: determine-tag
 
@@ -548,6 +548,7 @@ jobs:
 # 6. NPU (VitisAI / RyzenAI) — Windows only (self-hosted runner)
 # ════════════════════════════════════════════════════════════════════════════════
   windows-npu:
+    if: false
     runs-on: [self-hosted, Windows, stx, rai300_400]
     needs: determine-tag
     continue-on-error: true   # runner may be offline; don't block release
@@ -647,6 +648,7 @@ jobs:
 # 7. Metal — macOS (arm64)
 # ════════════════════════════════════════════════════════════════════════════════
   macos-metal:
+    if: false
     runs-on: macos-latest
     needs: determine-tag
 
