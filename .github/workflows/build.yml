@@ -144,11 +144,7 @@ jobs:
     runs-on: ubuntu-22.04
     needs: [determine-tag, prepare-rocm-matrix]
     strategy:
-      matrix:
-        gfx_target: [gfx1151]
-        build: [Release]
-        sdl2: [ON]
-        arch: [linux/amd64]
+      matrix: ${{ fromJson(needs.prepare-rocm-matrix.outputs.ubuntu_matrix) }}
       fail-fast: false
 
     steps:
@@ -226,48 +222,58 @@ jobs:
 
       - name: Inspect shared library dependencies
         run: |
-          echo "======================================================"
-          echo "  ldd whisper-cli"
-          echo "======================================================"
+          echo "--- ldd whisper-cli ---"
           ldd build/bin/whisper-cli || true
-          echo ""
-          echo "======================================================"
-          echo "  ldd whisper-server"
-          echo "======================================================"
+          echo "--- ldd whisper-server ---"
           ldd build/bin/whisper-server || true
-          echo ""
-          echo "======================================================"
-          echo "  MISSING dependencies (not found)"
-          echo "======================================================"
+          echo "--- missing libs ---"
           MISSING_CLI=$(ldd build/bin/whisper-cli 2>/dev/null | grep "not found" || true)
           MISSING_SRV=$(ldd build/bin/whisper-server 2>/dev/null | grep "not found" || true)
           if [ -z "$MISSING_CLI" ] && [ -z "$MISSING_SRV" ]; then
-            echo "All dependencies resolved — no missing libs."
+            echo "All dependencies resolved."
           else
             [ -n "$MISSING_CLI" ] && echo "whisper-cli missing:" && echo "$MISSING_CLI"
             [ -n "$MISSING_SRV" ] && echo "whisper-server missing:" && echo "$MISSING_SRV"
           fi
-          echo ""
-          echo "======================================================"
-          echo "  All .so* files currently in build/bin/"
-          echo "======================================================"
+          echo "--- .so* files in build/bin/ ---"
           ls -lh build/bin/*.so* 2>/dev/null || echo "(none)"
 
       - name: Copy ROCm runtime libs
         run: |
           BIN="build/bin"
-          LIB="/opt/rocm/lib"
-          SKIP="^(libc|libm|libdl|librt|libpthread|libstdc\+\+|libgcc_s|ld-linux)"
           mkdir -p "$BIN"
 
-          # Copy all .so* from ROCm lib dir — preserves symlinks so soname chains work
-          find "$LIB" -maxdepth 1 -name "*.so*" -exec cp -P {} "$BIN/" \; 2>/dev/null || true
-          find "$LIB/llvm/lib" -maxdepth 1 -name "*.so*" -exec cp -P {} "$BIN/" \; 2>/dev/null || true
-          [ -d "$LIB/rocm_sysdeps/lib" ] && find "$LIB/rocm_sysdeps/lib" -maxdepth 1 -name "*.so*" -exec cp -P {} "$BIN/" \; 2>/dev/null || true
+          # Collect only the ROCm libs actually needed by our binaries via ldd.
+          # This avoids bundling massive unused libs (libMIOpen, libMLIR, librocroller, etc.)
+          # that would inflate the artifact by 1+ GB.
+          ROCM_ROOTS="/opt/rocm/lib /opt/rocm/lib/llvm/lib /opt/rocm/lib/rocm_sysdeps/lib"
+
+          for binary in "$BIN"/*; do
+            [ -f "$binary" ] && [ -x "$binary" ] && file "$binary" | grep -q ELF || continue
+            ldd "$binary" 2>/dev/null | awk '{print $3}' | grep -E "^/opt/rocm" | while read lib; do
+              [ -f "$lib" ] || continue
+              cp -n "$lib" "$BIN/" 2>/dev/null || true
+              # Also copy the soname symlink if it exists alongside the real file
+              dir=$(dirname "$lib")
+              base=$(basename "$lib")
+              find "$dir" -maxdepth 1 -name "${base%%.*}.so*" -exec cp -Pn {} "$BIN/" \; 2>/dev/null || true
+            done
+          done
+
+          # Transitive deps: repeat ldd over any newly copied ROCm .so to catch indirect deps
+          for pass in 1 2; do
+            for lib in "$BIN"/lib*.so*; do
+              [ -f "$lib" ] && [ ! -L "$lib" ] || continue
+              ldd "$lib" 2>/dev/null | awk '{print $3}' | grep -E "^/opt/rocm" | while read dep; do
+                [ -f "$dep" ] || continue
+                cp -n "$dep" "$BIN/" 2>/dev/null || true
+              done
+            done
+          done
 
           # Kernel library data dirs (loaded at runtime by path, not via soname)
-          [ -d "$LIB/rocblas/library" ]   && { mkdir -p "$BIN/rocblas";   cp -r "$LIB/rocblas/library"   "$BIN/rocblas/"; }
-          [ -d "$LIB/hipblaslt/library" ] && { mkdir -p "$BIN/hipblaslt"; cp -r "$LIB/hipblaslt/library" "$BIN/hipblaslt/"; }
+          [ -d /opt/rocm/lib/rocblas/library ]   && { mkdir -p "$BIN/rocblas";   cp -r /opt/rocm/lib/rocblas/library   "$BIN/rocblas/"; }
+          [ -d /opt/rocm/lib/hipblaslt/library ] && { mkdir -p "$BIN/hipblaslt"; cp -r /opt/rocm/lib/hipblaslt/library "$BIN/hipblaslt/"; }
 
       - name: Set portable RPATH
         run: |
@@ -294,7 +300,6 @@ jobs:
 # 3. ROCm — Windows
 # ════════════════════════════════════════════════════════════════════════════════
   windows-rocm:
-    if: false
     runs-on: windows-2022
     needs: [determine-tag, prepare-rocm-matrix]
     strategy:
@@ -379,7 +384,6 @@ jobs:
             "-DCMAKE_HIP_FLAGS=--rocm-path=C:/opt/rocm" `
             -DCMAKE_PREFIX_PATH="$env:HIP_PATH" `
             -DCMAKE_BUILD_TYPE=${{ matrix.build }} `
-            -DBUILD_SHARED_LIBS=ON `
             -DWHISPER_BUILD_SERVER=ON `
             -DWHISPER_SDL2=${{ matrix.sdl2 }}
 
@@ -451,7 +455,6 @@ jobs:
 # 4. Vulkan — Linux
 # ════════════════════════════════════════════════════════════════════════════════
   linux-vulkan:
-    if: false
     runs-on: ubuntu-latest
     needs: determine-tag
 
@@ -518,7 +521,6 @@ jobs:
 # 5. Vulkan — Windows
 # ════════════════════════════════════════════════════════════════════════════════
   windows-vulkan:
-    if: false
     runs-on: windows-latest
     needs: determine-tag
 
@@ -576,7 +578,6 @@ jobs:
 # 6. NPU (VitisAI / RyzenAI) — Windows only (self-hosted runner)
 # ════════════════════════════════════════════════════════════════════════════════
   windows-npu:
-    if: false
     runs-on: [self-hosted, Windows, stx, rai300_400]
     needs: determine-tag
     continue-on-error: true   # runner may be offline; don't block release
@@ -676,7 +677,6 @@ jobs:
 # 7. Metal — macOS (arm64)
 # ════════════════════════════════════════════════════════════════════════════════
   macos-metal:
-    if: false
     runs-on: macos-latest
     needs: determine-tag
 
@@ -1182,6 +1182,34 @@ jobs:
           echo "Release assets:"
           ls -lh release/
 
+      - name: Generate release notes
+        id: notes
+        run: |
+          TAG="${{ needs.determine-tag.outputs.tag_name }}"
+          ROCM_VER="${{ env.ROCM_VERSION }}"
+
+          cat > /tmp/release-notes.md <<NOTES
+          ## AMD whisper.cpp ${TAG}
+
+          AMD-based pre-built binaries of [whisper.cpp ${TAG}](https://github.com/ggerganov/whisper.cpp/releases/tag/${TAG}) with full hardware acceleration across ROCm GPU (iGPU and dGPU), NPU (RyzenAI), and CPU — for Linux and Windows.
+          All ROCm runtime libraries (ROCm ${ROCM_VER}) are bundled. No drivers or separate installs required — download, extract, and run.
+
+          ### Packages
+
+          | Target | Linux | Windows |
+          |---|---|---|
+          | ROCm gfx1151 (Ryzen AI MAX+ Pro 395) | \`whisper-${TAG}-linux-rocm-gfx1151.tar.gz\` | \`whisper-${TAG}-windows-rocm-gfx1151.zip\` |
+          | ROCm gfx1150 (Ryzen AI 300) | \`whisper-${TAG}-linux-rocm-gfx1150.tar.gz\` | \`whisper-${TAG}-windows-rocm-gfx1150.zip\` |
+          | ROCm gfx120X (RDNA4 dGPU) | \`whisper-${TAG}-linux-rocm-gfx120X.tar.gz\` | \`whisper-${TAG}-windows-rocm-gfx120X.zip\` |
+          | ROCm gfx110X (RDNA3 dGPU & iGPU) | \`whisper-${TAG}-linux-rocm-gfx110X.tar.gz\` | \`whisper-${TAG}-windows-rocm-gfx110X.zip\` |
+          | Vulkan (cross-vendor) | \`whisper-${TAG}-linux-vulkan-x86_64.tar.gz\` | \`whisper-${TAG}-windows-vulkan-x64.zip\` |
+          | NPU (RyzenAI) | — | \`whisper-${TAG}-windows-npu-x64.zip\` |
+          | Metal (Apple Silicon) | \`whisper-${TAG}-darwin-metal-arm64.tar.gz\` | — |
+          | CPU only | \`whisper-${TAG}-linux-cpu-x86_64.tar.gz\` | \`whisper-${TAG}-windows-cpu-x64.zip\` |
+          NOTES
+
+          echo "notes_file=/tmp/release-notes.md" >> $GITHUB_OUTPUT
+
       - name: Create release
         id: create_release
         uses: ggml-org/action-create-release@v1
@@ -1191,6 +1219,7 @@ jobs:
           tag_name:     ${{ needs.determine-tag.outputs.tag_name }}
           release_name: "whisper.cpp ${{ needs.determine-tag.outputs.tag_name }} - AMD Builds"
           prerelease:   ${{ github.event.inputs.pre_release_tag != '' }}
+          body_path:    ${{ steps.notes.outputs.notes_file }}
           draft: false
 
       - name: Upload release assets
@@ -1212,3 +1241,14 @@ jobs:
                 data: fs.readFileSync(`./release/${file}`),
               });
             }
+
+      - name: Update README download links
+        run: |
+          TAG="${{ needs.determine-tag.outputs.tag_name }}"
+          # Replace the placeholder tag in all download URLs with the actual release tag
+          sed -i "s|/releases/download/[^/]*/whisper-[^-]*-|/releases/download/${TAG}/whisper-${TAG}-|g" README.md
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git diff --cached --quiet || git commit -m "docs: update download links to ${TAG}"
+          git push

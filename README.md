@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/🎤 Powered%20by-whisper.cpp-blue" alt="Powered by whisper.cpp" />
 </a>
 <a href="#-supported-devices" title="Platform support">
-  <img src="https://img.shields.io/badge/OS-Windows%20%7C%20Linux-0078D6?logo=windows&logoColor=white" alt="Platform: Windows | Linux" />
+  <img src="https://img.shields.io/badge/OS-Windows%20%7C%20Linux%20%7C%20macOS-0078D6?logo=windows&logoColor=white" alt="Platform: Windows | Linux | macOS" />
 </a>
 <a href="#-supported-devices" title="GPU targets">
   <img src="https://img.shields.io/badge/GPU-gfx110X%20%7C%20gfx1150%20%7C%20gfx1151%20%7C%20gfx120X-00B04F?logo=amd&logoColor=white" alt="GPU Targets" />
@@ -72,30 +72,36 @@ All builds are self-contained — no separate driver or runtime installation nee
 
 | GPU Target | Linux | Windows |
 |---|---|---|
-| **gfx1151** (Ryzen AI MAX+ Pro 395) | [![Linux gfx1151](https://img.shields.io/badge/Download-Linux%20gfx1151-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) | [![Windows gfx1151](https://img.shields.io/badge/Download-Windows%20gfx1151-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) |
-| **gfx1150** (Ryzen AI 300) | [![Linux gfx1150](https://img.shields.io/badge/Download-Linux%20gfx1150-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) | [![Windows gfx1150](https://img.shields.io/badge/Download-Windows%20gfx1150-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) |
-| **gfx120X** (RDNA4 dGPU) | [![Linux gfx120X](https://img.shields.io/badge/Download-Linux%20gfx120X-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) | [![Windows gfx120X](https://img.shields.io/badge/Download-Windows%20gfx120X-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) |
-| **gfx110X** (RDNA3 dGPU & iGPU) | [![Linux gfx110X](https://img.shields.io/badge/Download-Linux%20gfx110X-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) | [![Windows gfx110X](https://img.shields.io/badge/Download-Windows%20gfx110X-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) |
+| **gfx1151** (Ryzen AI MAX+ Pro 395) | [![Linux gfx1151](https://img.shields.io/badge/Download-Linux%20gfx1151-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/latest-release/whisper-latest-release-linux-rocm-gfx1151.tar.gz) | [![Windows gfx1151](https://img.shields.io/badge/Download-Windows%20gfx1151-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/latest-release/whisper-latest-release-windows-rocm-gfx1151.zip) |
+| **gfx1150** (Ryzen AI 300) | [![Linux gfx1150](https://img.shields.io/badge/Download-Linux%20gfx1150-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/latest-release/whisper-latest-release-linux-rocm-gfx1150.tar.gz) | [![Windows gfx1150](https://img.shields.io/badge/Download-Windows%20gfx1150-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/latest-release/whisper-latest-release-windows-rocm-gfx1150.zip) |
+| **gfx120X** (RDNA4 dGPU) | [![Linux gfx120X](https://img.shields.io/badge/Download-Linux%20gfx120X-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/latest-release/whisper-latest-release-linux-rocm-gfx120X.tar.gz) | [![Windows gfx120X](https://img.shields.io/badge/Download-Windows%20gfx120X-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/latest-release/whisper-latest-release-windows-rocm-gfx120X.zip) |
+| **gfx110X** (RDNA3 dGPU & iGPU) | [![Linux gfx110X](https://img.shields.io/badge/Download-Linux%20gfx110X-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/latest-release/whisper-latest-release-linux-rocm-gfx110X.tar.gz) | [![Windows gfx110X](https://img.shields.io/badge/Download-Windows%20gfx110X-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/latest-release/whisper-latest-release-windows-rocm-gfx110X.zip) |
 
 ### Vulkan — Cross-Vendor GPU
 
 | Linux | Windows |
 |---|---|
-| [![Linux Vulkan](https://img.shields.io/badge/Download-Linux%20Vulkan-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) | [![Windows Vulkan](https://img.shields.io/badge/Download-Windows%20Vulkan-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) |
+| [![Linux Vulkan](https://img.shields.io/badge/Download-Linux%20Vulkan-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/latest-release/whisper-latest-release-linux-vulkan-x86_64.tar.gz) | [![Windows Vulkan](https://img.shields.io/badge/Download-Windows%20Vulkan-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/latest-release/whisper-latest-release-windows-vulkan-x64.zip) |
 
 ### NPU — RyzenAI (Windows only)
 
 | Windows |
 |---|
-| [![Windows NPU](https://img.shields.io/badge/Download-Windows%20NPU%20(RyzenAI)-red?logo=amd&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) |
+| [![Windows NPU](https://img.shields.io/badge/Download-Windows%20NPU%20(RyzenAI)-red?logo=amd&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/latest-release/whisper-latest-release-windows-npu-x64.zip) |
 
 > Requires NPU driver ≥ `.280` and a pre-compiled `.rai` encoder model from [AMD's Hugging Face collection](https://huggingface.co/collections/amd/ryzen-ai-16-whisper-npu-optimized-onnx-models). Place the `.rai` file alongside your `ggml-*.bin` model — whisper-cli picks it up automatically.
+
+### macOS — Metal GPU
+
+| macOS (Apple Silicon) |
+|---|
+| [![macOS Metal](https://img.shields.io/badge/Download-macOS%20Metal%20(arm64)-lightgrey?logo=apple&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/latest-release/whisper-latest-release-darwin-metal-arm64.tar.gz) |
 
 ### CPU — No GPU Required
 
 | Linux | Windows |
 |---|---|
-| [![Linux CPU](https://img.shields.io/badge/Download-Linux%20CPU-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) | [![Windows CPU](https://img.shields.io/badge/Download-Windows%20CPU-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/latest) |
+| [![Linux CPU](https://img.shields.io/badge/Download-Linux%20CPU-blue?logo=linux&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/latest-release/whisper-latest-release-linux-cpu-x86_64.tar.gz) | [![Windows CPU](https://img.shields.io/badge/Download-Windows%20CPU-green?logo=windows&logoColor=white)](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/latest-release/whisper-latest-release-windows-cpu-x64.zip) |
 
 ---
 
@@ -167,7 +173,7 @@ upstream whisper.cpp releases vX.Y.Z
   with 13 artifacts across all backends and OS targets
 ```
 
-**Every release ships 13 artifacts:**
+**Every release ships up to 14 artifacts:**
 
 ```
 whisper-{version}-linux-rocm-gfx1151.tar.gz
@@ -183,6 +189,7 @@ whisper-{version}-windows-vulkan-x64.zip
 whisper-{version}-windows-npu-x64.zip         (may be absent if NPU runner offline)
 whisper-{version}-linux-cpu-x86_64.tar.gz
 whisper-{version}-windows-cpu-x64.zip
+whisper-{version}-darwin-metal-arm64.tar.gz
 ```
 
 > [!TIP]
@@ -225,6 +232,7 @@ Reproduce any CI build locally using the bundled PowerShell script. Produces ide
 |---|---|
 | ROCm | `amdhip64`, `rocblas`, `hipblaslt` + library data, LLVM runtime, all system deps; RPATH=`$ORIGIN` on Linux |
 | Vulkan | SPIR-V shaders embedded at build time; links against system Vulkan loader |
+| Metal | Uses macOS system Metal framework; no extra bundling needed |
 | NPU | FlexML Runtime DLLs (`flexmlrt/bin` + `flexmlrt/lib`) |
 | CPU | SDL2.dll included on Windows |
 
