@@ -26,44 +26,36 @@ reference wav (T3 + S3Gen + HiFT, warm runs, excludes model load):
 
 **Turbo:**
 
-| Backend                              | Wall      | `RTF`  | vs real-time | vs ONNX Runtime |
-|--------------------------------------|----------:|-------:|-------------:|----------------:|
-| Vulkan (RTX 5090, Q4_0)              |   463 ms  | 0.07   | **14.2×**    | **13.8× faster** |
-| Metal (Mac Studio M3 Ultra, Q4_0)    |   985 ms  | 0.16   | 6.4×         | 17.5× faster    |
-| CPU (AMD Ryzen 9 9950X, AVX, Q4_0)   | 5 397 ms  | 0.82   | 1.2×         | 1.2× faster     |
-| CPU (Mac Studio M3 Ultra, NEON)      | 7 568 ms  | 1.05   | 0.96×        | 2.3× faster     |
-| Reference (ONNX Runtime, CPU Q4)     | 6.4–17 s  | 1.2–3.2 | 0.3–0.85×   | —               |
+| Backend                              | Wall      | `RTF`  | vs real-time |
+|--------------------------------------|----------:|-------:|-------------:|
+| Vulkan (CI · Linux x86-64, Q4_0)     |   419 ms  | 0.090  | **11.1×**    |
+| Metal (Mac Studio M3 Ultra, Q4_0)    |   985 ms  | 0.16   | 6.4×         |
+| CPU (CI · Linux x86-64, Q4_0)        | 4 577 ms  | 1.25   | 0.80×        |
+| CPU (Mac Studio M3 Ultra, NEON)      | 7 568 ms  | 1.05   | 0.96×        |
 
-**Multilingual** (same Spanish prompt, seed 42, built-in voice;
-ONNX reference uses `jfk.wav` via the [multilingual-bench][bench] script):
+> Rows are independent warm runs on different machines/backends, so **`RTF`** —
+> not wall time — is the comparable metric; wall time tracks each run's own
+> generated audio length. The Linux x86-64 rows are CI numbers (see the
+> [Performance](#performance) section for the full CI table + provenance).
 
-| Backend                              | Wall      | `RTF` | vs real-time | vs ONNX Runtime |
-|--------------------------------------|----------:|------:|-------------:|----------------:|
-| **Metal (M3 Ultra, Q4_0, `--cfm-steps 7`)** | **1.05 s**| **0.30** | **3.3×**     | **48.4× faster**¹ |
-| Metal (M3 Ultra, Q4_0)               |  **1.22 s** | 0.35  | 2.9×        | **42.0× faster**¹ |
-| Metal (M3 Ultra, F16, `--cfm-steps 7`)| 1.16 s   |  0.32  | 3.2×        | **45.9× faster**¹ |
-| Metal (M3 Ultra, F16)                |  1.41 s   |  0.38  | 2.6×        | **37.5× faster**¹ |
-| **Metal (M4, Q4_0)**                 |  **3.0 s**| 1.37  | 0.73×        | **10.6× faster**¹ |
-| Metal (M4, F16)                      |   4.0 s   | 1.65  | 0.61×        | **14.2× faster**¹ |
-| CPU (M4, 4t NEON, Q4_0)              |  10.7 s²  | 4.32² | 0.23×        | **3.0× faster**¹  |
-| CPU (M4, 4t NEON, F16)               |  17.1 s²  | 6.70² | 0.15×        | **3.1× faster**¹  |
-| Reference (ONNX Runtime, CPU 4t, q4) |  31.7 s   |14.55  | 0.07×        | —                |
-| Reference (ONNX Runtime, CPU 4t, fp16)|53.3 s   |23.50  | 0.04×        | —                |
+**Multilingual** (same Spanish prompt, seed 42, built-in voice):
+
+| Backend                              | Wall      | `RTF` | vs real-time |
+|--------------------------------------|----------:|------:|-------------:|
+| **Metal (M3 Ultra, Q4_0, `--cfm-steps 7`)** | **1.05 s**| **0.30** | **3.3×**     |
+| Metal (M3 Ultra, Q4_0)               |  **1.22 s** | 0.35  | 2.9×        |
+| Metal (M3 Ultra, F16, `--cfm-steps 7`)| 1.16 s   |  0.32  | 3.2×        |
+| Metal (M3 Ultra, F16)                |  1.41 s   |  0.38  | 2.6×        |
+| **Metal (M4, Q4_0)**                 |  **3.0 s**| 1.37  | 0.73×        |
+| Metal (M4, F16)                      |   4.0 s   | 1.65  | 0.61×        |
+| CPU (M4, 4t NEON, Q4_0)              |  10.7 s²  | 4.32² | 0.23×        |
+| CPU (M4, 4t NEON, F16)               |  17.1 s²  | 6.70² | 0.15×        |
 
 The M3 Ultra rows reflect the §3.21 optimisation pass — CFG cond+uncond
 batched into one Metal forward (B=2) on T3, the new `--cfm-steps N` knob
 on the standard 10-step CFM (N=7 is the recommended quality knee, log-mel
 cosine vs N=10 = **0.995**), and `ggml_swiglu_split` on the Llama MLP.
 The M4 rows are kept for continuity with §3.19/§3.20.
-
-¹ ONNX Runtime's multilingual ONNX export ships **without** the
-`text_emb_weight.bin` tensor and logs `CFG disabled` at load, so it's
-running half the compute of the ggml pipeline (1 T3 forward per token
-instead of 2 — no classifier-free guidance, no CFG-combined CFM). If
-the ONNX CFG path were wired up, its RTF would roughly double and the
-gap vs ggml would widen to ~10–14× (CPU) / ~20–28× (Metal). ggml runs
-the full CFG pipeline in every row above. Reproduction + per-stage
-breakdown in [`PROGRESS.md §3.19–3.20`](PROGRESS.md).
 
 ² **CPU multilingual rows re-measured after restoring CFG on the
 non-Metal CFM path.**  The previous numbers in this row (`6.0 s / 2.69`
@@ -76,8 +68,8 @@ with CFG correctly applied (12 CFM steps × 2 forward calls).
 S3Gen wall-time roughly doubled, RTF went up ~2×.  Metal rows are
 unaffected (the `use_b2` branched path always carried the CFG combine).
 
-See the [full benchmark](#performance) section below for the per-stage
-breakdown, or [`PROGRESS.md`](PROGRESS.md) for the full chronological
+See the [full benchmark](#performance) section below for the CI benchmark
+table, or [`PROGRESS.md`](PROGRESS.md) for the full chronological
 development journal — every numerical-parity stage and optimization pass
 (T3 Flash Attention, KV-cache layout rework, Metal kernel patches,
 CAMPPlus + VoiceEncoder + S3TokenizerV2 ported to ggml graphs, mel
@@ -832,13 +824,37 @@ inference cost (well under real-time on any GPU backend).
 <a id="performance"></a>
 ## Performance
 
-Reproducible perf check vs an ONNX Runtime Q4 baseline (same
-architecture) on the same machine.  Shared setup:
+End-to-end speed; `RTF = generation_time / audio_duration` (lower is faster).
+The authoritative Linux x86-64 numbers come from CI (table below); the
+Apple-silicon figures are maintainer measurements (no CI Metal runner). Shared
+setup for the Apple rows:
 
 - Text: *"Hello from native C plus plus. This audio was generated end
   to end on CPU using ggml."*
 - Reference voice: `test/reference-audio/jfk.wav` (11 s mono 16 kHz)
 - Seed: 42, warm 3-run average, inference only (excludes model load)
+
+### CI benchmarks (latest `ggml-speech`, Linux x86-64)
+
+End-to-end RTF measured in CI on the `tetherto/qvac` self-hosted runners, using
+the q4 GGUFs from the QVAC model registry, 1 warmup + 5 timed runs.
+`RTF = generation_time / audio_duration` (lower is faster; RTF is the
+backend-comparable metric, wall time is workload-specific).
+
+| Engine                  | CPU RTF | Vulkan RTF | Vulkan wall | Vulkan tok/s |
+|-------------------------|--------:|-----------:|------------:|-------------:|
+| Chatterbox (Turbo)      |    1.34 |      0.090 |      368 ms |          186 |
+| Chatterbox Multilingual |    4.31 |      0.189 |     1097 ms |           73 |
+| Supertonic              |   0.079 |      n/a¹  |       n/a¹  |         n/a¹ |
+
+_Source: workflow run [#27415600049](https://github.com/tetherto/qvac/actions/runs/27415600049)
+(2026-06-12), runner `qvac-ubuntu2204-x64-gpu`, GPU **NVIDIA RTX 4000 SFF Ada
+Generation** (`backend=vulkan`). Chatterbox built against `tts-cpp` `1c75d6e9`
+on a benchmark branch; the shipped `tts-ggml` pin stays at the Android-safe
+`2026-06-03` revision. ¹ Supertonic runs **CPU-only** on the current package
+(the `0.2.2` Android revert), so its Vulkan figures (and the ~34× Supertonic GPU
+optimisations) are pending the GPU re-enablement in #2506 + the upstream Android
+CPU-backend fix._
 
 ### Mac Studio M3 Ultra (96 GB unified memory)
 
@@ -846,42 +862,9 @@ architecture) on the same machine.  Shared setup:
 |---------------------------------------|-----------------|-------------------:|---------------:|----------------:|------:|-------------:|
 | **`tts-cpp` Q4_0**                    | **Metal**       |  573 ms / 155 tok  |    412 ms      |   **985 ms**    | 0.16  | **6.4×**     |
 | `tts-cpp` Q4_0                        | CPU (NEON+Accel)| 2 045 ms / 178 tok |  5 523 ms      |    7 568 ms     | 1.05  | 0.96×        |
-| ONNX Runtime Q4 baseline              | CPU             |        —           |      —         |   17 190 ms     | 3.18  | 0.31×        |
 
-`tts-cpp` (Metal) is **17.5× faster than ONNX Runtime** on the
-same machine; the CPU-only build is still 2.3× faster.
-
-### Linux RTX 5090 + AMD Ryzen 9 9950X
-
-| Implementation                        | Backend         | T3 gen             | S3Gen+HiFT gen | Total inference | RTF   | vs real-time |
-|---------------------------------------|-----------------|-------------------:|---------------:|----------------:|------:|-------------:|
-| **`tts-cpp` Q4_0**                    | **Vulkan**      |  241 ms / 161 tok  |    222 ms      |    **463 ms**   | 0.07  | **14.2×**    |
-| `tts-cpp` Q4_0                        | CPU (AVX)       | 2 161 ms / 161 tok |  3 236 ms      |    5 397 ms     | 0.82  | 1.2×         |
-| ONNX Runtime Q4 baseline              | CPU             |        —           |      —         |    6 373 ms     | 1.18  | 0.85×        |
-
-`tts-cpp` (Vulkan) is **13.8× faster than ONNX Runtime** on the
-same machine.  Note that the ONNX Runtime baseline here only uses the
-CPU execution provider; a CUDA build would narrow the gap, but is not
-included in this comparison.
-
-### Per-stage S3Gen + HiFT breakdown (GPU builds)
-
-| Stage           | M3 Ultra Metal  | RTX 5090 Vulkan |
-|-----------------|----------------:|----------------:|
-| T3 per token    | 3.70 ms / tok   | **1.50 ms/tok** |
-| encoder         |    38 ms        |    35 ms        |
-| cfm_step0       |    69 ms        |    84 ms        |
-| cfm_step1       |    49 ms        |    13 ms        |
-| cfm_total       |   124 ms        |   100 ms        |
-| f0_predictor    |   3.1 ms        |   1.1 ms        |
-| sinegen (CPU)   |    15 ms        |    16 ms        |
-| stft            |   3.1 ms        |   1.0 ms        |
-| **hift_decode** |   225 ms        |    66 ms        |
-| hift_total      |   246 ms        |    84 ms        |
-
-HiFT `conv_transpose_1d` upsampling is the single biggest stage on
-Metal today; the 5090 chews through it 3.4× faster, which is where the
-remaining end-to-end gap comes from.
+On Apple Silicon the Metal build runs end to end at **6.4× real time**; the
+CPU-only build stays just under real time.
 
 ### Multilingual (Apple M4, F16 weights)
 
@@ -985,43 +968,6 @@ M3 Ultra CFM time specifically drops from 541.9 ms → 534.0 ms
 is very low; expected to be larger on bandwidth-limited silicon
 (M4 / A-series) where each saved `ggml_add` dispatch is worth more
 relative to compute.
-
-### Reference comparison vs onnxruntime (Multilingual, M4 CPU, F16)
-
-Same prompt, seed, and reference audio fed through ONNX Runtime and
-our ggml build back-to-back, 4 CPU threads on both.  ONNX Runtime's
-multilingual export currently ships without the `text_emb_weight.bin`
-tensor and emits `CFG disabled` at load — so its numbers are already
-against a half-compute pipeline:
-
-```
-                     onnxruntime-fp16   ggml-cpu-f16⁴
-  -------------------------------------------------
-  cold load               42 829 ms        ~500 ms   (85x faster)
-  inference wall          51 447 ms     10 168 ms   (5.06x faster)
-  audio produced           2 740 ms      2 400 ms
-  RTF                        18.78          4.24
-  CFG enabled                  no           yes⁴
-```
-
-ggml is **5.06× faster per utterance and ~85× faster on cold load**,
-while doing the full CFG pipeline (2 CFM estimator passes + 2 T3 passes
-per step) that ONNX skips.  If the ONNX CFG path were wired up, its RTF
-would roughly double and the gap would be ~10×.  Quality is comparable
-— the two wavs (`bench-onnx.wav` / `bench-ggml.wav`) sound like the same
-Spanish sentence in the JFK-cloned voice.
-
-⁴ The ggml-cpu-f16 column above was captured during the same Apr 23–May 4
-window where the non-`use_b2` CFM path was silently dropping the
-unconditional pass on CPU; "CFG enabled: yes" overstated what was running
-in this specific column.  After commit `6d9b42b` restored CFG on the CPU
-path, the per-utterance ggml number on M4 CPU F16 should roughly double
-(see footnotes ² and ³ above for the 2× ratio observed on standalone CPU
-runs).  Re-running the bench against current `multilingual_merged`
-will produce a corrected column; the ONNX side is unchanged so the
-ratio should land near `~2.5–3× faster` rather than the historical
-`5.06×`.  Cold-load (`~85×`) is a load-time figure and unaffected by
-the runtime fix.
 
 ### Reproducing these numbers
 
