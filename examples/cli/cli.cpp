@@ -151,6 +151,10 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
             whisper_print_usage(argc, argv, params);
             exit(0);
         }
+        if (arg == "--version") {
+            fprintf(stdout, "whisper.cpp version: %s\n", whisper_version());
+            exit(0);
+        }
         #define ARGV_NEXT (((i + 1) < argc) ? argv[++i] : requires_value_error(arg))
         else if (arg == "-t"    || arg == "--threads")              { params.n_threads       = std::stoi(ARGV_NEXT); }
         else if (arg == "-p"    || arg == "--processors")           { params.n_processors    = std::stoi(ARGV_NEXT); }
@@ -234,6 +238,7 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "\n");
     fprintf(stderr, "options:\n");
     fprintf(stderr, "  -h,        --help                 [default] show this help message and exit\n");
+    fprintf(stderr, "             --version              show version information and exit\n");
     fprintf(stderr, "  -t N,      --threads N            [%-7d] number of threads to use during computation\n",    params.n_threads);
     fprintf(stderr, "  -p N,      --processors N         [%-7d] number of processors to use during computation\n", params.n_processors);
     fprintf(stderr, "  -ot N,     --offset-t N           [%-7d] time offset in milliseconds\n",                    params.offset_t_ms);
