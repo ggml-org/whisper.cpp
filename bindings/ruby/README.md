@@ -412,8 +412,7 @@ Parakeet = Whisper::Parakeet
 parakeet = Parakeet::Context.new("path/to/model")
 
 params = Parakeet::Params.new(
-  no_context: true,
-  chunk_length_ms: 10_000
+  no_context: true
 )
 
 parakeet
@@ -426,7 +425,6 @@ parakeet
 The main differences are:
 
 * Namespace is `Whisper::Parakeet`.
-* `Whisper::Parakeet::Params` has Parakeet-specific chunk and context settings such as `chunk_length_ms`, `left_context_ms`, and `right_context_ms`.
 * Parakeet also supports `on_new_token` / `new_token_callback` in addition to segment and progress callbacks.
 
 Custom context params
