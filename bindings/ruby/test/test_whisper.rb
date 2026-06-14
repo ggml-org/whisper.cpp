@@ -149,6 +149,7 @@ class TestWhisper < TestBase
     }
     Whisper.log_set log_callback, user_data
     Whisper::Context.new("base.en")
+    sleep 0.1 # wait for logs dequeued
 
     assert logs.length > 30
     logs.each do |log|
