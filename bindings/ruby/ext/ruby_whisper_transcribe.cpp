@@ -81,17 +81,7 @@ ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self) {
     fprintf(stderr, "error: failed to open '%s' as WAV file\n", fname_inp.c_str());
     return self;
   }
-/*
- * 
- typedef struct full_parallel_args {
-   VALUE *context;
-   VALUE *params;
-   float *samples;
-   int n_samples;
-   int n_processors;
- } full_parallel_args;
 
- */
   VALUE rb_result;
   if (n_processors == 1) {
     ruby_whisper_full_args args = {
