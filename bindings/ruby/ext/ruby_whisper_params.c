@@ -336,7 +336,7 @@ check_thread_safety(ruby_whisper_params *rwp, int n_processors)
     rb_raise(rb_eRuntimeError, "abort callback not supported on parallel transcription");
   }
 
-  VALUE log_callback = rb_iv_get(mWhisper, "log_callback");
+  VALUE log_callback = rb_iv_get(mWhisper, "@log_callback");
   if (!NIL_P(log_callback)) {
     rb_raise(rb_eRuntimeError, "log callback not supported for parallel transcription");
   }
