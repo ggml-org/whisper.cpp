@@ -788,7 +788,7 @@ static bool parakeet_enc_state_init(
     return true;
 }
 
-static ggml_backend_t whisper_backend_init_gpu(const parakeet_context_params & params) {
+static ggml_backend_t parakeet_backend_init_gpu(const parakeet_context_params & params) {
     ggml_log_set(g_state.log_callback, g_state.log_callback_user_data);
 
     ggml_backend_dev_t dev = nullptr;
@@ -827,10 +827,10 @@ static ggml_backend_t whisper_backend_init_gpu(const parakeet_context_params & p
     return result;
 }
 
-static std::vector<ggml_backend_t> whisper_backend_init(const parakeet_context_params & params) {
+static std::vector<ggml_backend_t> parakeet_backend_init(const parakeet_context_params & params) {
     std::vector<ggml_backend_t> result;
 
-    ggml_backend_t backend_gpu = whisper_backend_init_gpu(params);
+    ggml_backend_t backend_gpu = parakeet_backend_init_gpu(params);
 
     if (backend_gpu) {
         result.push_back(backend_gpu);
@@ -2905,9 +2905,9 @@ static std::vector<parakeet_vocab::id> tokenize(const parakeet_vocab & vocab, co
 struct parakeet_state * parakeet_init_state(parakeet_context * ctx) {
     parakeet_state * state = new parakeet_state;
 
-    state->backends = whisper_backend_init(ctx->params);
+    state->backends = parakeet_backend_init(ctx->params);
     if (state->backends.empty()) {
-        PARAKEET_LOG_ERROR("%s: whisper_backend_init() failed\n", __func__);
+        PARAKEET_LOG_ERROR("%s: parakeet_backend_init() failed\n", __func__);
         parakeet_free_state(state);
         return nullptr;
     }
