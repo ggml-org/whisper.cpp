@@ -320,13 +320,8 @@ check_thread_safety(ruby_whisper_params *rwp, int n_processors)
     return;
   }
 
-  if (ruby_whisper_callback_container_is_present(rwp->new_segment_callback_container)) {
-    rb_raise(rb_eRuntimeError, "new segment callback not supported on parallel transcription");
-  }
-
-  if (ruby_whisper_callback_container_is_present(rwp->progress_callback_container)) {
-    rb_raise(rb_eRuntimeError, "progress callback not supported on parallel transcription");
-  }
+  // new_segment_callback is called only after multiple threads are joined
+  // progress_callback is not called when parallel
 
   if (ruby_whisper_callback_container_is_present(rwp->encoder_begin_callback_container)) {
     rb_raise(rb_eRuntimeError, "encoder begin callback not supported on parallel transcription");
@@ -334,11 +329,6 @@ check_thread_safety(ruby_whisper_params *rwp, int n_processors)
 
   if (ruby_whisper_callback_container_is_present(rwp->abort_callback_container)) {
     rb_raise(rb_eRuntimeError, "abort callback not supported on parallel transcription");
-  }
-
-  VALUE log_callback = rb_iv_get(mWhisper, "@log_callback");
-  if (!NIL_P(log_callback)) {
-    rb_raise(rb_eRuntimeError, "log callback not supported for parallel transcription");
   }
 }
 
