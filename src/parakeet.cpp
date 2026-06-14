@@ -432,6 +432,9 @@ struct parakeet_state {
     struct ggml_tensor * enc_out     = nullptr;
     struct ggml_tensor * pred_out    = nullptr;
 
+    std::vector<uint8_t> enc_out_buf;
+    ggml_backend_buffer_t enc_out_buffer = nullptr;
+
     std::vector<uint8_t> pred_out_buf;
     ggml_backend_buffer_t pred_out_buffer = nullptr;
 
@@ -744,6 +747,38 @@ static bool parakeet_pred_state_init(
     pstate.pred_out_buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
     if (!pstate.pred_out_buffer) {
         PARAKEET_LOG_ERROR("%s: failed to allocate memory for pred tensor\n", __func__);
+        ggml_free(ctx);
+        return false;
+    }
+
+    ggml_free(ctx);
+
+    return true;
+}
+
+static bool parakeet_enc_state_init(
+               struct parakeet_state & pstate,
+                      ggml_backend_t   backend,
+                                 int   n_audio_state,
+                                 int   n_frames_max) {
+    pstate.enc_out_buf.resize(ggml_tensor_overhead());
+
+    struct ggml_init_params params = {
+        /*.mem_size   =*/ pstate.enc_out_buf.size(),
+        /*.mem_buffer =*/ pstate.enc_out_buf.data(),
+        /*.no_alloc   =*/ true,
+    };
+
+    struct ggml_context * ctx = ggml_init(params);
+    if (!ctx) {
+        PARAKEET_LOG_ERROR("%s: failed to allocate memory for enc_out tensor context\n", __func__);
+        return false;
+    }
+
+    pstate.enc_out = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_audio_state, n_frames_max);
+    pstate.enc_out_buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    if (!pstate.enc_out_buffer) {
+        PARAKEET_LOG_ERROR("%s: failed to allocate memory for enc_out tensor\n", __func__);
         ggml_free(ctx);
         return false;
     }
@@ -1881,11 +1916,10 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
     }
 
     ggml_set_name(cur, "encoder_out");
-    ggml_set_output(cur);
-    pstate.enc_out = cur;
     pstate.n_frames = cur->ne[1];
 
-    ggml_build_forward_expand(gf, cur);
+    struct ggml_tensor * enc_out_view = ggml_view_2d(ctx0, pstate.enc_out, n_state, pstate.n_frames, pstate.enc_out->nb[1], 0);
+    ggml_build_forward_expand(gf, ggml_cpy(ctx0, cur, enc_out_view));
 
     ggml_free(ctx0);
 
@@ -2033,6 +2067,20 @@ static bool parakeet_ensure_encode_sched(
     const int32_t prev_n_audio_ctx = pstate.n_audio_ctx;
     pstate.n_audio_ctx = n_audio_ctx;
 
+    const int subsampl_factor = pctx.model.hparams.subsampling_factor;
+    const int n_frames_max = (n_audio_ctx + subsampl_factor - 1) / subsampl_factor;
+    if (n_frames_max > pstate.enc_out->ne[1]) {
+        ggml_backend_buffer_free(pstate.enc_out_buffer);
+        pstate.enc_out_buffer = nullptr;
+        pstate.enc_out = nullptr;
+
+        if (!parakeet_enc_state_init(pstate, pstate.backends[0], pctx.model.hparams.n_audio_state, n_frames_max)) {
+            pstate.sched_encode_n_audio_ctx = 0;
+            pstate.n_audio_ctx = prev_n_audio_ctx;
+            return false;
+        }
+    }
+
     const bool ok = parakeet_sched_graph_init(pstate.sched_encode, pstate.backends,
             [&]() {
                 return parakeet_build_graph_encode(pctx, pstate);
@@ -2172,7 +2220,6 @@ static struct ggml_cgraph * parakeet_build_graph_joint(
      const parakeet_batch & batch,
                      bool   worst_case) {
     GGML_UNUSED(worst_case);
-    GGML_UNUSED(batch);
     const auto & model   = pctx.model;
     const auto & hparams = model.hparams;
 
@@ -2189,9 +2236,10 @@ static struct ggml_cgraph * parakeet_build_graph_joint(
     ggml_set_name(pred, "pred");
     ggml_set_input(pred);
 
-    struct ggml_tensor * enc_out = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, hparams.n_audio_state);
-    ggml_set_name(enc_out, "enc_out");
-    ggml_set_input(enc_out);
+    const int t_idx = batch.i_time[0];
+    struct ggml_tensor * enc_out = ggml_view_1d(ctx0, pstate.enc_out, hparams.n_audio_state,
+            (size_t) t_idx * pstate.enc_out->nb[1]);
+    ggml_format_name(enc_out, "enc_out_view");
 
     // Project the encoder output to the joint network hidden dimension.
     struct ggml_tensor * enc  = ggml_mul_mat(ctx0, model.joint.enc_w, enc_out);
@@ -2297,18 +2345,6 @@ static bool parakeet_joint(
             struct ggml_tensor * pred = ggml_graph_get_tensor(gf, "pred");
             if (n_tokens == 1) {
                 ggml_backend_tensor_copy(pstate.pred_out, pred);
-            }
-
-            struct ggml_tensor * enc_out_inp = ggml_graph_get_tensor(gf, "enc_out");
-            if (n_tokens == 1) {
-                const int t_idx = batch.i_time[0];
-                const int d_enc = hparams.n_audio_state;
-
-                std::vector<float> frame_buf(d_enc);
-
-                ggml_backend_tensor_get(pstate.enc_out, frame_buf.data(), t_idx * d_enc * sizeof(float), d_enc * sizeof(float));
-
-                ggml_backend_tensor_set(enc_out_inp, frame_buf.data(), 0, d_enc * sizeof(float));
             }
         }
 
@@ -2882,6 +2918,23 @@ struct parakeet_state * parakeet_init_state(parakeet_context * ctx) {
 
     state->batch = parakeet_batch_init(batch_size);
 
+    {
+        const int n_audio_state    = ctx->model.hparams.n_audio_state;
+        const int subsampl_factor  = ctx->model.hparams.subsampling_factor;
+        const int n_frames_max     = (batch_size + subsampl_factor - 1) / subsampl_factor;
+
+        if (!parakeet_enc_state_init(*state, state->backends[0], n_audio_state, n_frames_max)) {
+            PARAKEET_LOG_ERROR("%s: parakeet_enc_state_init() failed\n", __func__);
+            parakeet_free_state(state);
+            return nullptr;
+        }
+
+        const size_t mem_enc_ctx = state->enc_out_buf.size();
+        const size_t mem_enc_out_buf = ggml_backend_buffer_get_size(state->enc_out_buffer);
+        PARAKEET_LOG_INFO("%s: enc_out state: %7.2f MB (meta) + %7.2f MB (data)\n", __func__,
+                mem_enc_ctx / 1024.0 / 1024.0, mem_enc_out_buf / 1024.0 / 1024.0);
+    }
+
     // conv/encoder allocator
     bool ok = parakeet_sched_graph_init(state->sched_encode, state->backends,
             [&]() {
@@ -3120,6 +3173,7 @@ void parakeet_free_state(struct parakeet_state * state) {
     if (state) {
         ggml_backend_buffer_free(state->lstm_state.buffer);
         ggml_backend_buffer_free(state->pred_out_buffer);
+        ggml_backend_buffer_free(state->enc_out_buffer);
 
         parakeet_batch_free(state->batch);
 
