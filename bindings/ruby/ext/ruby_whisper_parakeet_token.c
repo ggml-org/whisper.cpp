@@ -101,7 +101,7 @@ ruby_whisper_parakeet_token_s_allocate(VALUE klass)
   ruby_whisper_parakeet_token *rwpt;
   VALUE token = TypedData_Make_Struct(klass, ruby_whisper_parakeet_token, &ruby_whisper_parakeet_token_type, rwpt);
 
-  rwpt->token_data = ALLOC(parakeet_token_data);
+  rwpt->token_data = NULL;
   rwpt->text = Qnil;
 
   return token;
@@ -114,6 +114,7 @@ ruby_whisper_parakeet_token_s_from_token_data(struct parakeet_context *context, 
   ruby_whisper_parakeet_token *rwpt;
   TypedData_Get_Struct(token, ruby_whisper_parakeet_token, &ruby_whisper_parakeet_token_type, rwpt);
 
+  rwpt->token_data = ALLOC(parakeet_token_data);
   *rwpt->token_data = *token_data;
   rwpt->text = rb_utf8_str_new_cstr(parakeet_token_to_str(context, token_data->id));
 
