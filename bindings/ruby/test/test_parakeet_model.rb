@@ -1,6 +1,6 @@
 require_relative "helper"
 
-class TestModel < TestBase
+class TestParakeetModel < TestBase
   def test_model
     parakeet = Parakeet::Context.new("test/fixtures/for-tests-ggml-parakeet-tdt.bin")
     assert_instance_of Parakeet::Model, parakeet.model
