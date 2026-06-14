@@ -110,6 +110,14 @@ typedef struct {
   int n_samples;
 } ruby_whisper_full_args;
 
+typedef struct ruby_whisper_full_parallel_args {
+  VALUE *context;
+  VALUE *params;
+  float *samples;
+  int n_samples;
+  int n_processors;
+} ruby_whisper_full_parallel_args;
+
 typedef struct {
   struct parakeet_full_params params;
   ruby_whisper_callback_container *new_segment_callback_container;

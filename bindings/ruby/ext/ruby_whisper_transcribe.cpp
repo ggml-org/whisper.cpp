@@ -17,6 +17,7 @@ extern ID transcribe_option_names[1];
 
 extern void prepare_transcription(ruby_whisper_params * rwp, VALUE * self, int n_processors);
 extern VALUE full_body(VALUE rb_args);
+extern VALUE full_parallel_body(VALUE rb_args);
 
 typedef struct{
   struct whisper_context *context;
@@ -80,14 +81,36 @@ ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self) {
     fprintf(stderr, "error: failed to open '%s' as WAV file\n", fname_inp.c_str());
     return self;
   }
+/*
+ * 
+ typedef struct full_parallel_args {
+   VALUE *context;
+   VALUE *params;
+   float *samples;
+   int n_samples;
+   int n_processors;
+ } full_parallel_args;
 
-  ruby_whisper_full_args args = {
-    &self,
-    &params,
-    pcmf32.data(),
-    (int)pcmf32.size(),
-  };
-  VALUE rb_result = full_body((VALUE)&args);
+ */
+  VALUE rb_result;
+  if (n_processors == 1) {
+    ruby_whisper_full_args args = {
+      &self,
+      &params,
+      pcmf32.data(),
+      (int)pcmf32.size(),
+    };
+    rb_result = full_body((VALUE)&args);
+  } else {
+    ruby_whisper_full_parallel_args parallel_args = {
+      &self,
+      &params,
+      pcmf32.data(),
+      (int)pcmf32.size(),
+      n_processors,
+    };
+    rb_result = full_parallel_body((VALUE)&parallel_args);
+  }
   const int result = NUM2INT(rb_result);
   if (result != 0) {
     fprintf(stderr, "failed to process audio\n");

@@ -38,14 +38,6 @@ typedef struct fill_samples_args {
   int n_samples;
 } fill_samples_args;
 
-typedef struct full_parallel_args {
-  VALUE *context;
-  VALUE *params;
-  float *samples;
-  int n_samples;
-  int n_processors;
-} full_parallel_args;
-
 typedef struct full_without_gvl_args {
   struct whisper_context *context;
   struct whisper_full_params *params;
@@ -549,10 +541,10 @@ full_parallel_without_gvl(void *rb_args)
   return NULL;
 }
 
-static VALUE
+VALUE
 full_parallel_body(VALUE rb_args)
 {
-  full_parallel_args *args = (full_parallel_args *)rb_args;
+  ruby_whisper_full_parallel_args *args = (ruby_whisper_full_parallel_args *)rb_args;
 
   ruby_whisper *rw;
   ruby_whisper_params *rwp;
@@ -614,7 +606,7 @@ ruby_whisper_full_parallel(int argc, VALUE *argv,VALUE self)
     break;
   }
   struct parsed_samples_t parsed = parse_samples(&argv[1], &n_samples);
-  const full_parallel_args args = {
+  const ruby_whisper_full_parallel_args args = {
     &self,
     &argv[0],
     parsed.samples,
