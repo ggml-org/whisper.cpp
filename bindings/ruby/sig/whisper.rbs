@@ -718,9 +718,6 @@ module Whisper
         ?duration_ms: Integer,
         ?no_context: boolish,
         ?audio_ctx: Integer,
-        ?chunk_length_ms: Integer,
-        ?left_context_ms: Integer,
-        ?right_context_ms: Integer,
         ?new_segment_callback: ^(Whisper::Parakeet::Context, untyped, Integer n_new, Object user_data) -> void,
         ?new_segment_callback_user_data: Object,
         ?new_token_callback: ^(Whisper::Parakeet::Context, untyped, Whisper::Parakeet::Token, Object user_data) -> void,
@@ -757,21 +754,6 @@ module Whisper
       #
       def audio_ctx=: (Integer) -> Integer
       def audio_ctx: () -> Integer
-
-      # Length of each chunk in ms.
-      #
-      def chunk_length_ms=: (Integer) -> Integer
-      def chunk_length_ms: () -> Integer
-
-      # Left context in ms.
-      #
-      def left_context_ms=: (Integer) -> Integer
-      def left_context_ms: () -> Integer
-
-      # Right context in ms.
-      #
-      def right_context_ms=: (Integer) -> Integer
-      def right_context_ms: () -> Integer
 
       # Sets new segment callback, called for every newly generated text segment.
       #
