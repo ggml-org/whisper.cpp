@@ -1,4 +1,5 @@
 require_relative "helper"
+require "etc"
 
 class TestParakeetParams < TestBase
   PARAM_NAMES = [
