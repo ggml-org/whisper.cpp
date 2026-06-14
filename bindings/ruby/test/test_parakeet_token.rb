@@ -20,7 +20,7 @@ class TestParakeetToken < TestBase
     Whisper.instance_variable_set "@whisper", nil
     GC.start
 
-    parakeet = Parakeet::Context.new("parakeet-tdt-0.6b-v3")
+    parakeet = Parakeet::Context.new("parakeet-tdt-0.6b-v3-q4_0")
     params = Parakeet::Params.new
     parakeet.transcribe AUDIO, params
     @segment = parakeet.each_segment.first

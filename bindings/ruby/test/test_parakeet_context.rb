@@ -8,7 +8,7 @@ class TestParakeetContext < TestBase
     Whisper.instance_variable_set "@whisper", nil
     GC.start
 
-    @parakeet = Parakeet::Context.new("parakeet-tdt-0.6b-v3")
+    @parakeet = Parakeet::Context.new("parakeet-tdt-0.6b-v3-q4_0")
     @params = Parakeet::Params.new
   end
 
@@ -23,7 +23,7 @@ class TestParakeetContext < TestBase
       logs = ""
       Parakeet.log_set proc {|level, message| logs << message}, nil
       params = Parakeet::Context::Params.new(use_gpu: false)
-      parakeet = Parakeet::Context.new("parakeet-tdt-0.6b-v3", params)
+      parakeet = Parakeet::Context.new("parakeet-tdt-0.6b-v3-q4_0", params)
       assert_instance_of Parakeet::Context, parakeet
       assert_match /use gpu\s+=\s+0/, logs
     ensure

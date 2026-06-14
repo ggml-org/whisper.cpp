@@ -4,7 +4,7 @@ class TestParakeetSegment < TestBase
   def setup
     omit "Skip not to download large model" if ENV["CI"]
 
-    @parakeet = Parakeet::Context.new("parakeet-tdt-0.6b-v3")
+    @parakeet = Parakeet::Context.new("parakeet-tdt-0.6b-v3-q4_0")
     @parakeet.transcribe AUDIO, Parakeet::Params.new
   end
 
