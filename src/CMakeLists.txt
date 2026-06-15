@@ -103,10 +103,20 @@ endif()
 
 # whisper
 
+# Add diarization sources conditionally
+set(WHISPER_DIARIZE_SOURCES)
+if (WHISPER_DIARIZE)
+    list(APPEND WHISPER_DIARIZE_SOURCES
+        whisper-diarize.cpp
+        whisper-speaker.cpp
+    )
+endif()
+
 add_library(whisper
             ../include/whisper.h
             whisper-arch.h
             whisper.cpp
+            ${WHISPER_DIARIZE_SOURCES}
             )
 
 # Set the version numbers
@@ -139,6 +149,10 @@ endif()
 
 if (WHISPER_MKL)
     target_link_libraries(whisper PRIVATE MKL::MKL)
+endif()
+
+if (WHISPER_DIARIZE)
+    target_compile_definitions(whisper PRIVATE WHISPER_DIARIZE)
 endif()
 
 if (BUILD_SHARED_LIBS)
