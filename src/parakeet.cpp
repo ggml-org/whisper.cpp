@@ -2204,10 +2204,9 @@ static struct ggml_cgraph * parakeet_build_graph_prediction(
     // Project the prediction network output to the joint network hidden dimension.
     struct ggml_tensor * pred = ggml_mul_mat(ctx0, model.joint.pred_w, pred_out);
     pred = ggml_add(ctx0, pred, model.joint.pred_b);
-    ggml_set_output(pred);
     ggml_set_name(pred, "h_pred");
 
-    ggml_build_forward_expand(gf, pred);
+    ggml_build_forward_expand(gf, ggml_cpy(ctx0, pred, pstate.pred_out));
 
     ggml_free(ctx0);
 
@@ -2232,9 +2231,8 @@ static struct ggml_cgraph * parakeet_build_graph_joint(
     struct ggml_context * ctx0 = ggml_init(params);
     ggml_cgraph * gf = ggml_new_graph_custom(ctx0, PARAKEET_MAX_NODES, false);
 
-    struct ggml_tensor * pred = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, hparams.n_pred_dim);
-    ggml_set_name(pred, "pred");
-    ggml_set_input(pred);
+    struct ggml_tensor * pred = pstate.pred_out;
+    ggml_format_name(pred, "pred");
 
     const int t_idx = batch.i_time[0];
     struct ggml_tensor * enc_out = ggml_view_1d(ctx0, pstate.enc_out, hparams.n_audio_state,
@@ -2298,13 +2296,6 @@ static bool parakeet_predict(
         if (!ggml_graph_compute_helper(sched, gf, n_threads)) {
             return false;
         }
-
-        // Copy h_pred output to pstate.pred_out for use in joint network
-        {
-            struct ggml_tensor * h_pred = ggml_graph_get_tensor(gf, "h_pred");
-            ggml_backend_tensor_copy(h_pred, pstate.pred_out);
-        }
-
     }
 
     pstate.t_predict_us += ggml_time_us() - t_start_us;
@@ -2338,14 +2329,6 @@ static bool parakeet_joint(
         if (!ggml_backend_sched_alloc_graph(sched, gf)) {
             // should never happen as we pre-allocate the memory
             return false;
-        }
-
-        // set the inputs
-        {
-            struct ggml_tensor * pred = ggml_graph_get_tensor(gf, "pred");
-            if (n_tokens == 1) {
-                ggml_backend_tensor_copy(pstate.pred_out, pred);
-            }
         }
 
         logits = ggml_graph_node(gf, -1);
