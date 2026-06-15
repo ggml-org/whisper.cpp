@@ -364,9 +364,6 @@ static void set_vad_params(ruby_whisper_params *rwp)
   rwp->params.vad_params = rwvp->params;
 }
 
-/*
-  TODO: Set abort callback to trap SIGINT and SIGTERM
-*/
 void
 prepare_transcription(ruby_whisper_params *rwp, VALUE *context, int n_processors, ruby_whisper_abort_callback_user_data *abort_callback_user_data)
 {
