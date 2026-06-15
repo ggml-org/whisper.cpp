@@ -408,6 +408,9 @@ struct parakeet_state {
     int64_t t_encode_us = 0;
     int64_t t_decode_us = 0;
     int64_t t_predict_us = 0;
+    int64_t t_predict_build_us   = 0; // time spent building the prediction graph
+    int64_t t_predict_alloc_us   = 0; // time spent in ggml_backend_sched_alloc_graph
+    int64_t t_predict_compute_us = 0; // time spent in ggml_graph_compute_helper
     int64_t t_mel_us = 0;
 
     int32_t n_sample = 0; // number of tokens sampled
@@ -2183,7 +2186,6 @@ static struct ggml_cgraph * parakeet_build_graph_prediction(
     ggml_set_input(token);
 
     struct ggml_tensor * token_embd = ggml_get_rows(ctx0, model.prediction.embed_w, token);
-    ggml_set_input(token_embd);
 
     struct ggml_tensor * inpL = token_embd;
 
@@ -2280,12 +2282,16 @@ static bool parakeet_predict(
     {
         auto & sched = pstate.sched_decode.sched;
 
+        const int64_t t_build_start_us = ggml_time_us();
         ggml_cgraph * gf = parakeet_build_graph_prediction(pctx, pstate, batch, false);
+        pstate.t_predict_build_us += ggml_time_us() - t_build_start_us;
 
+        const int64_t t_alloc_start_us = ggml_time_us();
         if (!ggml_backend_sched_alloc_graph(sched, gf)) {
             // should never happen as we pre-allocate the memory
             return false;
         }
+        pstate.t_predict_alloc_us += ggml_time_us() - t_alloc_start_us;
 
         // set the inputs
         {
@@ -2293,9 +2299,11 @@ static bool parakeet_predict(
             ggml_backend_tensor_set(token_inp, batch.token, 0, n_tokens * ggml_element_size(token_inp));
         }
 
+        const int64_t t_compute_start_us = ggml_time_us();
         if (!ggml_graph_compute_helper(sched, gf, n_threads)) {
             return false;
         }
+        pstate.t_predict_compute_us += ggml_time_us() - t_compute_start_us;
     }
 
     pstate.t_predict_us += ggml_time_us() - t_start_us;
@@ -3404,6 +3412,9 @@ void parakeet_print_timings(struct parakeet_context * ctx) {
         PARAKEET_LOG_INFO("%s:   encode time = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_encode_us, n_encode, 1e-3f * ctx->state->t_encode_us / n_encode);
         PARAKEET_LOG_INFO("%s:   decode time = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_decode_us, n_decode, 1e-3f * ctx->state->t_decode_us / n_decode);
         PARAKEET_LOG_INFO("%s:  predict time = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_predict_us, n_predict, 1e-3f * ctx->state->t_predict_us / n_predict);
+        PARAKEET_LOG_INFO("%s:    - build     = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_predict_build_us, n_predict, 1e-3f * ctx->state->t_predict_build_us / n_predict);
+        PARAKEET_LOG_INFO("%s:    - alloc     = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_predict_alloc_us, n_predict, 1e-3f * ctx->state->t_predict_alloc_us / n_predict);
+        PARAKEET_LOG_INFO("%s:    - compute   = %8.2f ms / %5d runs ( %8.2f ms per run)\n", __func__, 1e-3f * ctx->state->t_predict_compute_us, n_predict, 1e-3f * ctx->state->t_predict_compute_us / n_predict);
 
     }
     PARAKEET_LOG_INFO("%s:    total time = %8.2f ms\n", __func__, (t_end_us - ctx->t_start_us)/1000.0f);
@@ -3417,6 +3428,9 @@ void parakeet_reset_timings(struct parakeet_context * ctx) {
         ctx->state->t_encode_us = 0;
         ctx->state->t_decode_us = 0;
         ctx->state->t_predict_us = 0;
+        ctx->state->t_predict_build_us = 0;
+        ctx->state->t_predict_alloc_us = 0;
+        ctx->state->t_predict_compute_us = 0;
 
         ctx->state->n_sample = 0;
         ctx->state->n_encode = 0;
