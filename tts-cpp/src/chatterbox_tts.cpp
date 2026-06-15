@@ -2509,7 +2509,8 @@ int s3gen_synthesize_to_wav(
     vlog("Running encoder (T=%d)...\n", n_total);
     double encoder_t0 = now_ms();
     std::vector<float> mu_T = run_encoder(m, input_embed, n_total, D);
-    vlog("  [encoder] %.1f ms\n", now_ms() - encoder_t0);
+    double prof_encoder_ms = now_ms() - encoder_t0;
+    vlog("  [encoder] %.1f ms\n", prof_encoder_ms);
     int T_mu = 2 * n_total;
     vlog("  encoder output: (%d, 80) = %zu floats\n", T_mu, mu_T.size());
 
@@ -2854,7 +2855,8 @@ int s3gen_synthesize_to_wav(
             for (size_t i = 0; i < z.size(); ++i) z[i] = z[i] + dt * dxdt[i];
         }
     }
-    vlog("  [cfm_total] %.1f ms\n", now_ms() - cfm_t0);
+    double prof_cfm_ms = now_ms() - cfm_t0;
+    vlog("  [cfm_total] %.1f ms\n", prof_cfm_ms);
 
     // 8) Slice mel = z[:, mel_len1:] -> shape (80, T_mu - mel_len1).
     //
@@ -2970,7 +2972,8 @@ int s3gen_synthesize_to_wav(
     t0 = now_ms();
     auto wav = run_hift_decode(m_hift, mel, T_mel, s_stft, T_stft);
     vlog("  [hift_decode] %.1f ms\n", now_ms() - t0);
-    vlog("  [hift_total] %.1f ms\n", now_ms() - hift_t0);
+    double prof_hift_ms = now_ms() - hift_t0;
+    vlog("  [hift_total] %.1f ms\n", prof_hift_ms);
     vlog("  wav: %zu samples (%.3fs @ %d Hz)\n", wav.size(), (float)wav.size() / sr, sr);
 
     // First-chunk / batch-mode: apply raised-cosine fade-in to mask HiFT's
@@ -2993,6 +2996,17 @@ int s3gen_synthesize_to_wav(
     double pipeline_total = now_ms() - pipeline_t0;
     double audio_ms = 1000.0 * wav.size() / sr;
     fprintf(stderr, "BENCH: S3GEN_INFER_MS=%.0f AUDIO_MS=%.0f\n", pipeline_total, audio_ms);
+    // Opt-in per-chunk streaming profile (CHATTERBOX_CHUNK_PROFILE=1).  One
+    // machine-parseable line per S3Gen call exposing how the encoder + CFM
+    // cost scales with the input token window (n_total) vs the bounded HiFT
+    // stage — used to measure streaming TTFT / inter-chunk-latency growth.
+    if (const char * pf = getenv("CHATTERBOX_CHUNK_PROFILE"); pf && pf[0] && pf[0] != '0') {
+        fprintf(stderr,
+                "CHUNK_PROFILE n_total=%d T_mu=%d T_mel=%d enc_ms=%.1f cfm_ms=%.1f "
+                "hift_ms=%.1f pipeline_ms=%.1f audio_ms=%.0f\n",
+                n_total, T_mu, T_mel, prof_encoder_ms, prof_cfm_ms, prof_hift_ms,
+                pipeline_total, audio_ms);
+    }
     vlog("\n=== pipeline: %.1f ms for %.1f ms of audio (RTF=%.2f, %.1fx %s) ===\n",
          pipeline_total, audio_ms,
          pipeline_total / audio_ms,
