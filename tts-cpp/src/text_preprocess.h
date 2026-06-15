@@ -16,6 +16,20 @@ std::string           encode_codepoint(uint32_t cp);
 std::string decompose_korean_to_jamo(const std::string & text);
 std::string convert_katakana_to_hiragana(const std::string & text);
 
+// Split `text` into TTS-friendly segments of at most `max_chars` bytes:
+// sentence-split on . ? !, soft-break over-long sentences at , : ;, then
+// greedily merge short fragments.  Byte-oriented (max_chars counts bytes,
+// not codepoints).  Returns {text} unchanged when text is empty or
+// max_chars <= 0.  Bounds T3 sequence length (prosody) and per-chunk
+// streaming cost; shared by the CLI and the Engine.
+std::vector<std::string> split_text_for_tts(const std::string & text, int max_chars);
+
+// Append `src` PCM onto `dst`, crossfading the trailing/leading `fade_ms`
+// via a raised-cosine ramp to remove clicks at segment seams.  Falls back to
+// a plain append when `dst` is empty or `fade_ms <= 0`.
+void append_pcm_crossfade(std::vector<float> & dst, const std::vector<float> & src,
+                          int sr, int fade_ms);
+
 class CangjieTable {
 public:
     CangjieTable() = default;

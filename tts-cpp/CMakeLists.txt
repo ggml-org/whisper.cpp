@@ -726,6 +726,28 @@ if (TTS_CPP_BUILD_TESTS)
         ARGS     "${_tcb_s3gen_gguf}" "${_tcb_streaming_ref}"
         REQUIRES "${_tcb_s3gen_gguf}" "${_tcb_streaming_ref}")
 
+    # Pure sentence-splitter unit test (no model/fixture) -- always runs.
+    # Pins split_text_for_tts after it was lifted into the shared
+    # text_preprocess unit (used by both the CLI and the Engine).
+    add_executable(test-text-split test/test_text_split.cpp)
+    target_link_libraries(test-text-split PRIVATE tts-cpp)
+    target_include_directories(test-text-split PRIVATE src)
+    tts_cpp_apply_ccache(test-text-split)
+    tts_cpp_register_test(test-text-split LABEL "cpu")
+
+    # Engine-level streaming-callback contract test for the per-sentence
+    # segmentation path (Fix #2): monotonic global chunk_index, single final
+    # is_last, result.pcm == concat(callbacks), accumulated stats.  Gated on
+    # the chatterbox Turbo T3 + S3Gen GGUFs.
+    add_executable(test-chatterbox-engine-stream test/test_chatterbox_engine_stream.cpp)
+    target_link_libraries(test-chatterbox-engine-stream PRIVATE tts-cpp ggml tts-cpp-backend-defs)
+    target_include_directories(test-chatterbox-engine-stream PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-chatterbox-engine-stream)
+    tts_cpp_register_test(test-chatterbox-engine-stream
+        LABEL    "fixture"
+        ARGS     "${_tcb_t3_turbo_gguf}" "${_tcb_s3gen_gguf}"
+        REQUIRES "${_tcb_t3_turbo_gguf}" "${_tcb_s3gen_gguf}")
+
     # CPU-side persistent-cache validation.
     # Exercises the time_mlp / time_emb / cfm_estimator / weight_mirror
     # caches that amortise per-synth overhead on the multilingual CPU
