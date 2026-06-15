@@ -209,6 +209,30 @@ struct EngineOptions {
     int stream_first_chunk_tokens = 0;
     int stream_cfm_steps          = 0;
 
+    // Sliding-window S3Gen: retain only this many already-emitted speech
+    // tokens of left context per chunk instead of re-synthesizing the whole
+    // cumulative prefix.  Bounds per-chunk encoder+CFM cost — the cumulative
+    // prefix otherwise makes per-chunk cost grow with elapsed output (~O(N^2)
+    // over a long utterance / paragraph).  0 = disabled (legacy cumulative
+    // behaviour).  Typical: 25-50 (one or two chunks of context).
+    int stream_left_context_tokens = 0;
+
+    // Sentence-level auto-split (parity with the CLI's --max-sentence-chars).
+    // When > 0, synthesize() splits `text` into segments of at most this many
+    // bytes and runs T3 + S3Gen independently per sentence, bounding the T3
+    // sequence length (prosody + O(N^2) decode cost) and letting first audio
+    // start after the first sentence instead of the whole paragraph.  Adopted
+    // only when it yields >1 segment (else the whole text is one segment).
+    // 0 = disabled: a single pass over the whole text == legacy behaviour.
+    // The CLI uses 180.
+    int max_sentence_chars = 0;
+    // Raised-cosine crossfade (ms) applied between sentence segments on the
+    // non-streaming (batch) path to mask seams.  Only consulted when
+    // max_sentence_chars actually splits into >1 segment.  Ignored on the
+    // streaming-callback path, which stays gapless so the documented
+    // `result.pcm == concat(callback chunks)` invariant holds.
+    int crossfade_ms = 30;
+
     // Pass-through of the CLI's --verbose behaviour: per-stage wall times
     // on stderr.  Errors always go through regardless of this flag.
     bool verbose = false;
@@ -217,8 +241,14 @@ struct EngineOptions {
 // Per-chunk PCM callback.  Receives a pointer to `samples` consecutive
 // 24 kHz float32 mono samples.  The buffer is owned by the engine and
 // must not be retained past the callback; copy out if you need the data.
-//   `chunk_index`  0-based index of the chunk within the current utterance.
-//   `is_last`      true on the final chunk (after which synthesize() returns).
+//   `chunk_index`  0-based; increments by exactly 1 per chunk across the whole
+//                  synthesize() call.  With max_sentence_chars auto-split it
+//                  keeps counting across sentence segments (it does NOT reset
+//                  per sentence); with auto-split off there is one segment, so
+//                  it is the plain per-utterance index as before.  No synthetic
+//                  silence chunk is ever emitted between segments.
+//   `is_last`      true only on the final chunk of the final segment (after
+//                  which synthesize() returns).
 // Throwing from this callback aborts synthesis (the exception propagates
 // out of synthesize()).
 using StreamCallback = std::function<void(

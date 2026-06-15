@@ -16,6 +16,7 @@
 #include "npy.h"
 #include "t3_mtl.h"
 #include "tts-cpp/chatterbox/s3gen_pipeline.h"
+#include "text_preprocess.h"
 #include "voice_encoder.h"
 #include "voice_features.h"
 
@@ -582,8 +583,12 @@ struct Engine::Impl {
         sopts.cancel_flag = &cancel_flag;
     }
 
-    SynthesisResult synthesize_batch(const std::vector<int32_t> & speech_tokens,
-                                     SynthesisResult && partial) {
+    // Renders ONE segment in batch (non-streaming) mode, appending its PCM
+    // into result.pcm (crossfaded into the previous segment's tail when not
+    // the first) and accumulating stats.  All per-segment s3gen state is local
+    // to this call, so consecutive calls reset naturally.
+    void synthesize_batch_segment(const std::vector<int32_t> & speech_tokens,
+                                  SynthesisResult & result) {
         s3gen_synthesize_opts sopts;
         fill_common_s3gen_opts(sopts);
         sopts.cfm_steps = opts.cfm_steps;
@@ -607,8 +612,8 @@ struct Engine::Impl {
             !opts.reference_audio.empty() || !opts.voice_dir.empty();
         sopts.apply_trim_fade = has_voice_override;
 
-        SynthesisResult result = std::move(partial);
-        sopts.pcm_out = &result.pcm;
+        std::vector<float> seg_pcm;
+        sopts.pcm_out = &seg_pcm;
 
         const auto s3_t0 = std::chrono::steady_clock::now();
         const int rc = s3gen_synthesize_to_wav(speech_tokens, sopts);
@@ -621,23 +626,32 @@ struct Engine::Impl {
                                      + std::to_string(rc));
         }
 
-        result.sample_rate   = 24000;
-        result.t3_tokens     = (int) speech_tokens.size();
-        result.audio_samples = (int) result.pcm.size();
-        result.s3gen_ms      = std::chrono::duration<double, std::milli>(s3_t1 - s3_t0).count();
-        return result;
+        // First segment: result.pcm is empty, so this is a plain append.
+        // Later segments: raised-cosine crossfade the seam (a no-op when
+        // crossfade_ms == 0).  Only the batch path crossfades; the streaming
+        // path stays gapless to preserve result.pcm == concat(callbacks).
+        tts_cpp::chatterbox::text_preprocess::append_pcm_crossfade(
+            result.pcm, seg_pcm, 24000, opts.crossfade_ms);
+        result.t3_tokens += (int) speech_tokens.size();
+        result.s3gen_ms  += std::chrono::duration<double, std::milli>(s3_t1 - s3_t0).count();
     }
 
-    // Ports main.cpp's --stream-chunk-tokens loop.  Splits speech_tokens
-    // into chunks of stream_chunk_tokens (with an optional smaller first
-    // chunk), carries `hift_cache_source` and `skip_mel_frames` across
-    // chunks for phase-continuous seams, and invokes `on_chunk` with
-    // each chunk's PCM as it's produced.  Accumulates the full PCM in
-    // the returned SynthesisResult so batch callers get the same shape.
-    SynthesisResult synthesize_streaming(
+    // Renders ONE segment in streaming mode: chunks speech_tokens, invokes
+    // on_chunk per chunk (global_chunk_idx is monotonic across segments;
+    // is_last fires only on the final chunk of the final segment), and
+    // plain-concatenates each chunk's PCM into result.pcm so the documented
+    // `result.pcm == concat(callback chunks)` invariant holds.  boundaries,
+    // win_start, hift_cache_source and prev_mels_emitted are all function-local
+    // so per-segment reset is automatic -- this is load-bearing for the
+    // skip_mel_frames = prev_mels_emitted - 2*win_start arithmetic, which is
+    // only correct because BOTH terms are segment-local.
+    void synthesize_streaming_segment(
         const std::vector<int32_t> & speech_tokens,
         const StreamCallback & on_chunk,
-        SynthesisResult && partial) {
+        SynthesisResult & result,
+        bool is_first_segment,
+        bool is_last_segment,
+        int & global_chunk_idx) {
 
         std::vector<int32_t> seg_toks = speech_tokens;
         for (int i = 0; i < kS3GenLookaheadTokens; ++i) {
@@ -646,7 +660,10 @@ struct Engine::Impl {
         const int total_n = (int) seg_toks.size();
 
         const int chunk_n       = opts.stream_chunk_tokens;
-        const int first_chunk_n = opts.stream_first_chunk_tokens > 0
+        // The smaller first chunk minimises first-audio latency, but only for
+        // the very first segment; later segments use the full chunk size for
+        // their first chunk (matches the CLI's per-segment behaviour).
+        const int first_chunk_n = (is_first_segment && opts.stream_first_chunk_tokens > 0)
                                     ? opts.stream_first_chunk_tokens
                                     : chunk_n;
 
@@ -669,9 +686,6 @@ struct Engine::Impl {
         std::vector<float> hift_cache_source;
         int prev_mels_emitted = 0;
 
-        SynthesisResult result = std::move(partial);
-        result.pcm.clear();
-
         const int n_chunks = (int) boundaries.size() - 1;
         double s3gen_ms_total = 0.0;
 
@@ -681,7 +695,15 @@ struct Engine::Impl {
             }
             const int end              = boundaries[k];
             const bool is_last_in_seg  = (end == total_n);
-            std::vector<int32_t> toks(seg_toks.begin(), seg_toks.begin() + end);
+            // Sliding left-context window: feed S3Gen only [win_start, end)
+            // instead of the whole [0, end) prefix so per-chunk encoder+CFM
+            // cost stays bounded.  The cumulative prefix otherwise makes
+            // per-chunk cost grow with elapsed output (~O(N^2) over the
+            // utterance).  L == 0 preserves the exact legacy cumulative slice.
+            const int L_ctx     = opts.stream_left_context_tokens;
+            const int win_start = (L_ctx > 0) ? std::max(0, boundaries[k - 1] - L_ctx) : 0;
+            std::vector<int32_t> toks(seg_toks.begin() + win_start,
+                                      seg_toks.begin() + end);
 
             s3gen_synthesize_opts copts;
             fill_common_s3gen_opts(copts);
@@ -689,7 +711,11 @@ struct Engine::Impl {
             copts.pcm_out                   = &chunk_pcm;
             copts.append_lookahead_silence  = false;
             copts.finalize                  = is_last_in_seg;
-            copts.skip_mel_frames           = prev_mels_emitted;
+            // Drop the already-emitted left-context mels (2 per token) still
+            // inside the window; reduces to prev_mels_emitted when win_start==0.
+            // Correct only because prev_mels_emitted AND win_start are both
+            // segment-local (reset each call).
+            copts.skip_mel_frames           = prev_mels_emitted - 2 * win_start;
             copts.apply_trim_fade           = (k == 1);
             copts.hift_cache_source         = hift_cache_source;
             std::vector<float> tail_out;
@@ -712,7 +738,12 @@ struct Engine::Impl {
             }
             s3gen_ms_total += std::chrono::duration<double, std::milli>(s3_t1 - s3_t0).count();
 
-            on_chunk(chunk_pcm.data(), chunk_pcm.size(), k - 1, is_last_in_seg);
+            // is_last is true only on the final chunk of the final segment.
+            // chunk_index is the global monotonic counter (post-incremented so
+            // the first chunk is index 0, matching the single-segment legacy).
+            const bool is_final_chunk = is_last_in_seg && is_last_segment;
+            on_chunk(chunk_pcm.data(), chunk_pcm.size(), global_chunk_idx, is_final_chunk);
+            ++global_chunk_idx;
 
             result.pcm.insert(result.pcm.end(), chunk_pcm.begin(), chunk_pcm.end());
             hift_cache_source = std::move(tail_out);
@@ -720,11 +751,8 @@ struct Engine::Impl {
             prev_mels_emitted += (int)(chunk_samples / 480);
         }
 
-        result.sample_rate   = 24000;
-        result.t3_tokens     = (int) speech_tokens.size();
-        result.audio_samples = (int) result.pcm.size();
-        result.s3gen_ms      = s3gen_ms_total;
-        return result;
+        result.t3_tokens += (int) speech_tokens.size();
+        result.s3gen_ms  += s3gen_ms_total;
     }
 
     SynthesisResult synthesize(const std::string & text,
@@ -734,19 +762,53 @@ struct Engine::Impl {
         }
         cancel_flag.store(false, std::memory_order_relaxed);
 
-        const auto t3_t0 = std::chrono::steady_clock::now();
-        std::vector<int32_t> speech_tokens = run_t3(text);
-        const auto t3_t1 = std::chrono::steady_clock::now();
+        // Sentence-level auto-split (parity with the CLI).  Adopt the split
+        // only when it yields >1 segment; otherwise treat the whole text as a
+        // single segment -- which, at max_sentence_chars == 0, reproduces the
+        // legacy single-pass behaviour byte-for-byte (one run_t3, chunk_index
+        // 0..n-1, is_last on the final chunk).
+        std::vector<std::string> segments;
+        if (opts.max_sentence_chars > 0) {
+            auto segs = tts_cpp::chatterbox::text_preprocess::split_text_for_tts(
+                text, opts.max_sentence_chars);
+            if (segs.size() > 1) segments = std::move(segs);
+        }
+        if (segments.empty()) segments.push_back(text);
 
+        // S3Gen weights finish loading on a background thread (usually already
+        // joined in the constructor); ensure they're ready before any S3Gen.
         wait_for_preload(s3gen_preload_thread);
 
-        SynthesisResult partial;
-        partial.t3_ms = std::chrono::duration<double, std::milli>(t3_t1 - t3_t0).count();
-
         const bool use_streaming = on_chunk && opts.stream_chunk_tokens > 0;
-        return use_streaming
-            ? synthesize_streaming(speech_tokens, on_chunk, std::move(partial))
-            : synthesize_batch(speech_tokens, std::move(partial));
+
+        SynthesisResult result;
+        result.sample_rate   = 24000;
+        int global_chunk_idx = 0;  // monotonic across all segments
+
+        for (size_t si = 0; si < segments.size(); ++si) {
+            // Bound cancel latency to a sentence boundary (run_t3 and the
+            // chunk loop also poll cancel_flag internally).
+            if (cancel_flag.load(std::memory_order_relaxed)) {
+                throw std::runtime_error("Engine: synthesis cancelled");
+            }
+            const auto t3_t0 = std::chrono::steady_clock::now();
+            std::vector<int32_t> speech_tokens = run_t3(segments[si]);
+            const auto t3_t1 = std::chrono::steady_clock::now();
+            result.t3_ms += std::chrono::duration<double, std::milli>(t3_t1 - t3_t0).count();
+
+            if (use_streaming) {
+                synthesize_streaming_segment(
+                    speech_tokens, on_chunk, result,
+                    /*is_first_segment=*/si == 0,
+                    /*is_last_segment=*/si + 1 == segments.size(),
+                    global_chunk_idx);
+            } else {
+                synthesize_batch_segment(speech_tokens, result);
+            }
+        }
+
+        result.audio_samples = (int) result.pcm.size();
+        return result;
     }
 
     SynthesisResult synthesize(const std::string & text) {

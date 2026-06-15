@@ -61,6 +61,7 @@
 #include "campplus.h"
 #include "s3tokenizer.h"
 #include "gguf.h"
+#include "text_preprocess.h"
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -127,133 +128,11 @@ static void stream_emit_pcm_stdout(const std::vector<float> & wav) {
     std::fflush(stdout);
 }
 
-// Split `text` into TTS-friendly segments of at most `max_chars` characters.
-//
-// Motivation: Chatterbox Turbo's T3 was trained on utterances of 5–15 s and
-// degrades (prosody drift, hallucinated phonemes, timbre wandering) on much
-// longer autoregressive outputs.  Reproducible on every backend (ggml / ONNX
-// / upstream Python).  The only reliable fix is sentence-level segmentation
-// above the model.
-//
-// The splitter does three passes:
-//   1. Break at `. ? !` followed by whitespace / EOF.
-//   2. For any sentence longer than `max_chars`, break further at `, : ;`
-//      (preferring boundaries past max_chars/2 so we don't fragment into
-//      unpronouncable stubs).  Last-resort: hard-break every max_chars.
-//   3. Greedily merge consecutive short fragments forward while their
-//      combined length stays <= max_chars, so very short sentences ride
-//      with their neighbours rather than stand alone.
-//
-// Abbreviations like "e.g." are not treated specially; in practice the
-// greedy merge pass absorbs false splits on them back into the next segment.
-static std::vector<std::string> split_text_for_tts(const std::string & text, int max_chars) {
-    std::vector<std::string> out;
-    if (text.empty() || max_chars <= 0) { out.push_back(text); return out; }
-
-    auto is_ws = [](unsigned char c) { return std::isspace(c) != 0; };
-
-    // Pass 1: sentence split.
-    std::vector<std::string> sentences;
-    {
-        std::string cur;
-        size_t i = 0;
-        while (i < text.size()) {
-            cur += text[i];
-            const char c = text[i];
-            const bool at_end = (i + 1 == text.size());
-            const bool nx_ws  = !at_end && is_ws((unsigned char)text[i + 1]);
-            if ((c == '.' || c == '?' || c == '!') && (at_end || nx_ws)) {
-                size_t j = i + 1;
-                while (j < text.size() && is_ws((unsigned char)text[j])) { cur += text[j]; ++j; }
-                sentences.push_back(cur);
-                cur.clear();
-                i = j;
-            } else {
-                ++i;
-            }
-        }
-        if (!cur.empty()) sentences.push_back(cur);
-    }
-
-    // Pass 2: refine any sentence longer than max_chars.
-    std::vector<std::string> refined;
-    refined.reserve(sentences.size());
-    for (auto & s : sentences) {
-        if ((int)s.size() <= max_chars) { refined.push_back(std::move(s)); continue; }
-        std::string acc;
-        size_t k = 0;
-        while (k < s.size()) {
-            acc += s[k];
-            const char c = s[k];
-            const bool nx_ws = (k + 1 < s.size()) && is_ws((unsigned char)s[k + 1]);
-            const bool soft_break = (c == ',' || c == ':' || c == ';') && nx_ws &&
-                                    (int)acc.size() > max_chars / 2;
-            if (soft_break) {
-                size_t j = k + 1;
-                while (j < s.size() && is_ws((unsigned char)s[j])) { acc += s[j]; ++j; }
-                refined.push_back(acc);
-                acc.clear();
-                k = j;
-                continue;
-            }
-            if ((int)acc.size() >= max_chars) {
-                // Last-resort hard break at a space if we can find one in the
-                // tail quarter; otherwise just cut.
-                size_t back = acc.size();
-                while (back > (size_t)(max_chars * 3 / 4) && !is_ws((unsigned char)acc[back - 1])) --back;
-                if (back <= (size_t)(max_chars / 2)) back = acc.size();
-                refined.push_back(acc.substr(0, back));
-                acc.erase(0, back);
-            }
-            ++k;
-        }
-        if (!acc.empty()) refined.push_back(acc);
-    }
-
-    // Pass 3: greedy forward merge of short fragments.
-    for (auto & s : refined) {
-        if (!out.empty() && (int)(out.back().size() + s.size()) <= max_chars) {
-            out.back() += s;
-        } else {
-            out.push_back(std::move(s));
-        }
-    }
-
-    // Strip trailing whitespace per segment.
-    for (auto & s : out) {
-        while (!s.empty() && is_ws((unsigned char)s.back())) s.pop_back();
-    }
-    // Drop empty segments (paranoia).
-    out.erase(std::remove_if(out.begin(), out.end(),
-                             [](const std::string & s) { return s.empty(); }),
-              out.end());
-    if (out.empty()) out.push_back(text);
-    return out;
-}
-
-// Append `src` PCM to `dst`, crossfading the last `fade_ms` of `dst` with the
-// leading `fade_ms` of `src` via a raised-cosine ramp.  Removes clicks at
-// segment seams in auto-split mode.
-static void append_pcm_crossfade(std::vector<float> & dst, const std::vector<float> & src,
-                                 int sr, int fade_ms) {
-    if (src.empty()) return;
-    if (dst.empty() || fade_ms <= 0) {
-        dst.insert(dst.end(), src.begin(), src.end());
-        return;
-    }
-    int fade_n = sr * fade_ms / 1000;
-    fade_n = std::min(fade_n, (int)dst.size());
-    fade_n = std::min(fade_n, (int)src.size());
-    if (fade_n <= 0) { dst.insert(dst.end(), src.begin(), src.end()); return; }
-
-    const size_t ofs = dst.size() - fade_n;
-    for (int i = 0; i < fade_n; ++i) {
-        const float t = (float)(i + 1) / (float)(fade_n + 1);
-        const float w = 0.5f * (1.0f - std::cos((float)M_PI * t));  // 0 → 1 cosine ramp
-        dst[ofs + i] = dst[ofs + i] * (1.0f - w) + src[i] * w;
-    }
-    dst.insert(dst.end(), src.begin() + fade_n, src.end());
-}
+// split_text_for_tts and append_pcm_crossfade now live in text_preprocess
+// (shared with the Engine streaming path); import them so the call sites in
+// this file stay unqualified.
+using tts_cpp::chatterbox::text_preprocess::split_text_for_tts;
+using tts_cpp::chatterbox::text_preprocess::append_pcm_crossfade;
 
 // Save the five voice-conditioning tensors to a directory as .npy so later
 // runs can reuse them via --ref-dir (no --reference-audio needed), skipping
@@ -421,6 +300,14 @@ struct cli_params {
     // to 2 (matches Python's meanflow); setting 1 halves CFM cost at the
     // price of a bit of extra high-frequency noise.
     int32_t stream_cfm_steps          = 0;
+    // Streaming S3Gen sliding-window: number of already-emitted speech tokens
+    // of left context to retain when synthesizing each chunk.  When > 0, chunk
+    // k feeds S3Gen only [chunk_start - N, chunk_end) instead of the full
+    // [0, chunk_end) prefix, so per-chunk encoder+CFM cost stays bounded.  The
+    // cumulative prefix otherwise makes per-chunk cost grow with elapsed output
+    // (O(N^2) over a segment).  0 = disabled (exact legacy cumulative
+    // behaviour).  Larger N preserves more attention context at the chunk seam.
+    int32_t stream_left_context_tokens = 0;
     // Override CFM Euler step count for non-streaming synthesis.  Defaults
     // to 0 (= use the GGUF's `n_timesteps`: 10 for Multilingual standard
     // CFM, 2 for Turbo's meanflow).  Lowering N (e.g. 7-8 on Multilingual)
@@ -590,6 +477,10 @@ static void print_usage(const char * argv0) {
     fprintf(stderr, "  --stream-first-chunk-tokens N  Override first-chunk size to minimise first-audio\n");
     fprintf(stderr, "                          latency.  Typical value: 10-15.  (default: 0 = same\n");
     fprintf(stderr, "                          as --stream-chunk-tokens)\n");
+    fprintf(stderr, "  --stream-left-context-tokens N  Sliding-window S3Gen: keep only N tokens of left\n");
+    fprintf(stderr, "                          context per chunk instead of the whole prefix, bounding\n");
+    fprintf(stderr, "                          per-chunk encoder+CFM cost (fixes the O(N^2) streaming\n");
+    fprintf(stderr, "                          slowdown).  0 = disabled (default).  Try 25-50.\n");
     fprintf(stderr, "  --stream-cfm-steps N    CFM Euler step count per chunk.  Python uses 2 for\n");
     fprintf(stderr, "                          meanflow; 1 halves CFM cost.  (default: 0 = 2)\n");
     fprintf(stderr, "  --cfm-steps N           Non-streaming CFM Euler step count.  Multilingual's\n");
@@ -781,6 +672,7 @@ static bool parse_args(int argc, char ** argv, cli_params & params) {
         else if (arg == "--stream-chunk-tokens")       { if (!parse_int("--stream-chunk-tokens",       params.stream_chunk_tokens))       return false; }
         else if (arg == "--stream-first-chunk-tokens") { if (!parse_int("--stream-first-chunk-tokens", params.stream_first_chunk_tokens)) return false; }
         else if (arg == "--stream-cfm-steps")          { if (!parse_int("--stream-cfm-steps",          params.stream_cfm_steps))          return false; }
+        else if (arg == "--stream-left-context-tokens"){ if (!parse_int("--stream-left-context-tokens", params.stream_left_context_tokens)) return false; }
         else if (arg == "--cfm-steps")                 { if (!parse_int("--cfm-steps",                 params.cfm_steps))                 return false; }
         else if (arg == "--input-file")       { auto v = next("--input-file");       if (!v) return false; params.input_file = v; }
         else if (arg == "--input-eof-marker") { auto v = next("--input-eof-marker"); if (!v) return false; params.input_eof_marker = v; }
@@ -1723,7 +1615,13 @@ int tts_cpp_cli_main(int argc, char ** argv) {
 
                     const int end    = boundaries[k];
                     const bool is_last = (end == total_n);
-                    std::vector<int32_t> toks(seg_toks.begin(), seg_toks.begin() + end);
+                    // Sliding left-context window (see --stream-left-context-tokens):
+                    // feed S3Gen only [win_start, end) so per-chunk cost is bounded.
+                    const int L_ctx     = params.stream_left_context_tokens;
+                    const int win_start = (L_ctx > 0)
+                                        ? std::max(0, boundaries[k - 1] - L_ctx) : 0;
+                    std::vector<int32_t> toks(seg_toks.begin() + win_start,
+                                              seg_toks.begin() + end);
 
                     s3gen_synthesize_opts copts = opts;
                     std::vector<float> chunk_pcm;
@@ -1731,7 +1629,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                     copts.pcm_out                  = &chunk_pcm;
                     copts.append_lookahead_silence = false;
                     copts.finalize                 = is_last;
-                    copts.skip_mel_frames          = prev_mels_emitted;
+                    copts.skip_mel_frames          = prev_mels_emitted - 2 * win_start;
                     copts.apply_trim_fade          = (k == 1);
                     copts.hift_cache_source        = hift_cache_source;
                     std::vector<float> tail_out;
@@ -2424,7 +2322,13 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                     for (int k = 1; k < (int)boundaries.size(); ++k) {
                         const int end    = boundaries[k];
                         const bool is_last_in_seg = (end == total_n);
-                        std::vector<int32_t> toks(seg_toks.begin(), seg_toks.begin() + end);
+                        // Sliding left-context window (see --stream-left-context-tokens):
+                        // feed S3Gen only [win_start, end) so per-chunk cost is bounded.
+                        const int L_ctx     = params.stream_left_context_tokens;
+                        const int win_start = (L_ctx > 0)
+                                            ? std::max(0, boundaries[k - 1] - L_ctx) : 0;
+                        std::vector<int32_t> toks(seg_toks.begin() + win_start,
+                                                  seg_toks.begin() + end);
 
                         s3gen_synthesize_opts copts = opts;
                         std::vector<float> chunk_pcm;
@@ -2432,7 +2336,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                         copts.pcm_out                   = &chunk_pcm;
                         copts.append_lookahead_silence  = false;
                         copts.finalize                  = is_last_in_seg;
-                        copts.skip_mel_frames           = prev_mels_emitted;
+                        copts.skip_mel_frames           = prev_mels_emitted - 2 * win_start;
                         // First chunk of EACH segment gets trim_fade, masking
                         // HiFT's per-utterance resnet cold start.
                         copts.apply_trim_fade           = (k == 1);
