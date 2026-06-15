@@ -421,6 +421,14 @@ struct cli_params {
     // to 2 (matches Python's meanflow); setting 1 halves CFM cost at the
     // price of a bit of extra high-frequency noise.
     int32_t stream_cfm_steps          = 0;
+    // Streaming S3Gen sliding-window: number of already-emitted speech tokens
+    // of left context to retain when synthesizing each chunk.  When > 0, chunk
+    // k feeds S3Gen only [chunk_start - N, chunk_end) instead of the full
+    // [0, chunk_end) prefix, so per-chunk encoder+CFM cost stays bounded.  The
+    // cumulative prefix otherwise makes per-chunk cost grow with elapsed output
+    // (O(N^2) over a segment).  0 = disabled (exact legacy cumulative
+    // behaviour).  Larger N preserves more attention context at the chunk seam.
+    int32_t stream_left_context_tokens = 0;
     // Override CFM Euler step count for non-streaming synthesis.  Defaults
     // to 0 (= use the GGUF's `n_timesteps`: 10 for Multilingual standard
     // CFM, 2 for Turbo's meanflow).  Lowering N (e.g. 7-8 on Multilingual)
@@ -590,6 +598,10 @@ static void print_usage(const char * argv0) {
     fprintf(stderr, "  --stream-first-chunk-tokens N  Override first-chunk size to minimise first-audio\n");
     fprintf(stderr, "                          latency.  Typical value: 10-15.  (default: 0 = same\n");
     fprintf(stderr, "                          as --stream-chunk-tokens)\n");
+    fprintf(stderr, "  --stream-left-context-tokens N  Sliding-window S3Gen: keep only N tokens of left\n");
+    fprintf(stderr, "                          context per chunk instead of the whole prefix, bounding\n");
+    fprintf(stderr, "                          per-chunk encoder+CFM cost (fixes the O(N^2) streaming\n");
+    fprintf(stderr, "                          slowdown).  0 = disabled (default).  Try 25-50.\n");
     fprintf(stderr, "  --stream-cfm-steps N    CFM Euler step count per chunk.  Python uses 2 for\n");
     fprintf(stderr, "                          meanflow; 1 halves CFM cost.  (default: 0 = 2)\n");
     fprintf(stderr, "  --cfm-steps N           Non-streaming CFM Euler step count.  Multilingual's\n");
@@ -781,6 +793,7 @@ static bool parse_args(int argc, char ** argv, cli_params & params) {
         else if (arg == "--stream-chunk-tokens")       { if (!parse_int("--stream-chunk-tokens",       params.stream_chunk_tokens))       return false; }
         else if (arg == "--stream-first-chunk-tokens") { if (!parse_int("--stream-first-chunk-tokens", params.stream_first_chunk_tokens)) return false; }
         else if (arg == "--stream-cfm-steps")          { if (!parse_int("--stream-cfm-steps",          params.stream_cfm_steps))          return false; }
+        else if (arg == "--stream-left-context-tokens"){ if (!parse_int("--stream-left-context-tokens", params.stream_left_context_tokens)) return false; }
         else if (arg == "--cfm-steps")                 { if (!parse_int("--cfm-steps",                 params.cfm_steps))                 return false; }
         else if (arg == "--input-file")       { auto v = next("--input-file");       if (!v) return false; params.input_file = v; }
         else if (arg == "--input-eof-marker") { auto v = next("--input-eof-marker"); if (!v) return false; params.input_eof_marker = v; }
@@ -1723,7 +1736,13 @@ int tts_cpp_cli_main(int argc, char ** argv) {
 
                     const int end    = boundaries[k];
                     const bool is_last = (end == total_n);
-                    std::vector<int32_t> toks(seg_toks.begin(), seg_toks.begin() + end);
+                    // Sliding left-context window (see --stream-left-context-tokens):
+                    // feed S3Gen only [win_start, end) so per-chunk cost is bounded.
+                    const int L_ctx     = params.stream_left_context_tokens;
+                    const int win_start = (L_ctx > 0)
+                                        ? std::max(0, boundaries[k - 1] - L_ctx) : 0;
+                    std::vector<int32_t> toks(seg_toks.begin() + win_start,
+                                              seg_toks.begin() + end);
 
                     s3gen_synthesize_opts copts = opts;
                     std::vector<float> chunk_pcm;
@@ -1731,7 +1750,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                     copts.pcm_out                  = &chunk_pcm;
                     copts.append_lookahead_silence = false;
                     copts.finalize                 = is_last;
-                    copts.skip_mel_frames          = prev_mels_emitted;
+                    copts.skip_mel_frames          = prev_mels_emitted - 2 * win_start;
                     copts.apply_trim_fade          = (k == 1);
                     copts.hift_cache_source        = hift_cache_source;
                     std::vector<float> tail_out;
@@ -2424,7 +2443,13 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                     for (int k = 1; k < (int)boundaries.size(); ++k) {
                         const int end    = boundaries[k];
                         const bool is_last_in_seg = (end == total_n);
-                        std::vector<int32_t> toks(seg_toks.begin(), seg_toks.begin() + end);
+                        // Sliding left-context window (see --stream-left-context-tokens):
+                        // feed S3Gen only [win_start, end) so per-chunk cost is bounded.
+                        const int L_ctx     = params.stream_left_context_tokens;
+                        const int win_start = (L_ctx > 0)
+                                            ? std::max(0, boundaries[k - 1] - L_ctx) : 0;
+                        std::vector<int32_t> toks(seg_toks.begin() + win_start,
+                                                  seg_toks.begin() + end);
 
                         s3gen_synthesize_opts copts = opts;
                         std::vector<float> chunk_pcm;
@@ -2432,7 +2457,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                         copts.pcm_out                   = &chunk_pcm;
                         copts.append_lookahead_silence  = false;
                         copts.finalize                  = is_last_in_seg;
-                        copts.skip_mel_frames           = prev_mels_emitted;
+                        copts.skip_mel_frames           = prev_mels_emitted - 2 * win_start;
                         // First chunk of EACH segment gets trim_fade, masking
                         // HiFT's per-utterance resnet cold start.
                         copts.apply_trim_fade           = (k == 1);

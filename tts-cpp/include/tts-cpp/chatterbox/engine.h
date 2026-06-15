@@ -209,6 +209,14 @@ struct EngineOptions {
     int stream_first_chunk_tokens = 0;
     int stream_cfm_steps          = 0;
 
+    // Sliding-window S3Gen: retain only this many already-emitted speech
+    // tokens of left context per chunk instead of re-synthesizing the whole
+    // cumulative prefix.  Bounds per-chunk encoder+CFM cost — the cumulative
+    // prefix otherwise makes per-chunk cost grow with elapsed output (~O(N^2)
+    // over a long utterance / paragraph).  0 = disabled (legacy cumulative
+    // behaviour).  Typical: 25-50 (one or two chunks of context).
+    int stream_left_context_tokens = 0;
+
     // Pass-through of the CLI's --verbose behaviour: per-stage wall times
     // on stderr.  Errors always go through regardless of this flag.
     bool verbose = false;

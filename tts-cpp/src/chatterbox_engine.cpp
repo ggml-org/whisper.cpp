@@ -681,7 +681,15 @@ struct Engine::Impl {
             }
             const int end              = boundaries[k];
             const bool is_last_in_seg  = (end == total_n);
-            std::vector<int32_t> toks(seg_toks.begin(), seg_toks.begin() + end);
+            // Sliding left-context window: feed S3Gen only [win_start, end)
+            // instead of the whole [0, end) prefix so per-chunk encoder+CFM
+            // cost stays bounded.  The cumulative prefix otherwise makes
+            // per-chunk cost grow with elapsed output (~O(N^2) over the
+            // utterance).  L == 0 preserves the exact legacy cumulative slice.
+            const int L_ctx     = opts.stream_left_context_tokens;
+            const int win_start = (L_ctx > 0) ? std::max(0, boundaries[k - 1] - L_ctx) : 0;
+            std::vector<int32_t> toks(seg_toks.begin() + win_start,
+                                      seg_toks.begin() + end);
 
             s3gen_synthesize_opts copts;
             fill_common_s3gen_opts(copts);
@@ -689,7 +697,9 @@ struct Engine::Impl {
             copts.pcm_out                   = &chunk_pcm;
             copts.append_lookahead_silence  = false;
             copts.finalize                  = is_last_in_seg;
-            copts.skip_mel_frames           = prev_mels_emitted;
+            // Drop the already-emitted left-context mels (2 per token) still
+            // inside the window; reduces to prev_mels_emitted when win_start==0.
+            copts.skip_mel_frames           = prev_mels_emitted - 2 * win_start;
             copts.apply_trim_fade           = (k == 1);
             copts.hift_cache_source         = hift_cache_source;
             std::vector<float> tail_out;
