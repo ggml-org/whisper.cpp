@@ -2127,7 +2127,7 @@ static struct ggml_tensor * parakeet_build_graph_lstm_layer(
     const int h_dim = h_state->ne[0];
     const size_t row_size = ggml_row_size(gates->type, h_dim);
 
-    // The gates are packed as [i, f, o, c] (reordered at load time, see
+    // The gates are packed as [i, f, o, c] (reordered at convert time, see
     // parakeet_model_load), so the three sigmoid-gated outputs (i, f, o) are
     // contiguous and can be computed with a single ggml_sigmoid call.
     struct ggml_tensor * ifo = ggml_sigmoid(ctx0, ggml_view_1d(ctx0, gates, 3 * h_dim, 0));
