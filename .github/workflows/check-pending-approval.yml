@@ -1,4 +1,4 @@
-name: Count Pending Approvals
+name: Check Approvals
 
 on:
   issue_comment:
@@ -12,8 +12,8 @@ permissions:
   issues: write
 
 jobs:
-  count-reviews:
-    name: Count Pending Approvals
+  check-approvals:
+    name: Check Approvals
     runs-on: ubuntu-latest
     continue-on-error: true
     if: >-
@@ -33,7 +33,7 @@ jobs:
       - name: Install @qvac/ci
         run: npm install -g @qvac/ci@0.1.0
 
-      - name: Count Pending Approvals
+      - name: Check Approvals
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -42,6 +42,6 @@ jobs:
         run: |
           qvac-ci pending-approvals \
             --pr-number "${{ github.event.pull_request.number || github.event.issue.number }}" \
-            --maintainers-team 'ai-runtime-merge-mgmt' \
+            --maintainers-team 'qvac-internal-mgmt' \
             --team-leads-team 'qvac-internal-merge' \
             --min-approvals '2'
