@@ -157,12 +157,15 @@ def generate(output_path):
 
         write_tensor(fout, "decoder.prediction.embed.weight", f32(n_pred_embed, dec_dim))
 
+        def reorder_gates(data):
+            h = data.shape[0] // 4
+            return np.concatenate([data[:h], data[h:2*h], data[3*h:], data[2*h:3*h]], axis=0)
+
         for i in range(n_pred_l):
             base = f"decoder.prediction.dec_rnn.lstm"
-            write_tensor(fout, f"{base}.weight_ih_l{i}", f32(n_lstm_gates, dec_dim))
-            write_tensor(fout, f"{base}.bias_ih_l{i}",   f32(n_lstm_gates))
-            write_tensor(fout, f"{base}.bias_hh_l{i}",   f32(n_lstm_gates))
-            write_tensor(fout, f"{base}.weight_hh_l{i}", f32(n_lstm_gates, dec_dim))
+            write_tensor(fout, f"{base}.weight_ih_l{i}", reorder_gates(f32(n_lstm_gates, dec_dim)))
+            write_tensor(fout, f"{base}.weight_hh_l{i}", reorder_gates(f32(n_lstm_gates, dec_dim)))
+            write_tensor(fout, f"{base}.bias_h_l{i}",    reorder_gates(f32(n_lstm_gates) + f32(n_lstm_gates)))
 
         write_tensor(fout, "joint.pred.weight",        f32(dec_dim, dec_dim))
         write_tensor(fout, "joint.pred.bias",          f32(dec_dim))
