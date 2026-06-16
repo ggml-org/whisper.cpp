@@ -54,8 +54,7 @@ enum parakeet_tensor {
     PARAKEET_TENSOR_PRED_EMBED_WEIGHT,
     PARAKEET_TENSOR_PRED_LSTM_WEIGHT_IH,
     PARAKEET_TENSOR_PRED_LSTM_WEIGHT_HH,
-    PARAKEET_TENSOR_PRED_LSTM_BIAS_IH,
-    PARAKEET_TENSOR_PRED_LSTM_BIAS_HH,
+    PARAKEET_TENSOR_PRED_LSTM_BIAS_H,
 
     // Joint network
     PARAKEET_TENSOR_JOINT_PRED_WEIGHT,
@@ -116,8 +115,7 @@ static const std::map<parakeet_tensor, const char *> PARAKEET_TENSOR_NAMES = {
     {PARAKEET_TENSOR_PRED_EMBED_WEIGHT,            "decoder.prediction.embed.weight"},
     {PARAKEET_TENSOR_PRED_LSTM_WEIGHT_IH,          "decoder.prediction.dec_rnn.lstm.weight_ih_l%d"},
     {PARAKEET_TENSOR_PRED_LSTM_WEIGHT_HH,          "decoder.prediction.dec_rnn.lstm.weight_hh_l%d"},
-    {PARAKEET_TENSOR_PRED_LSTM_BIAS_IH,            "decoder.prediction.dec_rnn.lstm.bias_ih_l%d"},
-    {PARAKEET_TENSOR_PRED_LSTM_BIAS_HH,            "decoder.prediction.dec_rnn.lstm.bias_hh_l%d"},
+    {PARAKEET_TENSOR_PRED_LSTM_BIAS_H,             "decoder.prediction.dec_rnn.lstm.bias_h_l%d"},
 
     // Joint network
     {PARAKEET_TENSOR_JOINT_PRED_WEIGHT,           "joint.pred.weight"},
@@ -178,8 +176,7 @@ static const std::map<parakeet_tensor, ggml_op> PARAKEET_TENSOR_INFO = {
     {PARAKEET_TENSOR_PRED_EMBED_WEIGHT,            GGML_OP_GET_ROWS},
     {PARAKEET_TENSOR_PRED_LSTM_WEIGHT_IH,          GGML_OP_MUL_MAT},
     {PARAKEET_TENSOR_PRED_LSTM_WEIGHT_HH,          GGML_OP_MUL_MAT},
-    {PARAKEET_TENSOR_PRED_LSTM_BIAS_IH,            GGML_OP_ADD},
-    {PARAKEET_TENSOR_PRED_LSTM_BIAS_HH,            GGML_OP_ADD},
+    {PARAKEET_TENSOR_PRED_LSTM_BIAS_H,             GGML_OP_ADD},
 
     // Joint network
     {PARAKEET_TENSOR_JOINT_PRED_WEIGHT,           GGML_OP_MUL_MAT},

@@ -268,6 +268,15 @@ def convert_parakeet_to_ggml(nemo_path, output_dir, use_f16=True, out_name=None)
                 fout.write(struct.pack("i", len(token_bytes)))
                 fout.write(token_bytes)
 
+            # Pre-collect prediction LSTM input-hidden biases so they can be
+            # folded into the hidden-hidden bias during the main write loop.
+            lstm_prefix = 'decoder.prediction.dec_rnn.lstm'
+            pred_bias_ih = {}
+            for key, t in state_dict.items():
+                if f'{lstm_prefix}.bias_ih_l' in key:
+                    layer_idx = int(key.rsplit('bias_ih_l', 1)[1])
+                    pred_bias_ih[layer_idx] = t.squeeze().numpy().astype(np.float32)
+
             print("\nConverting model weights...")
             for name, tensor in state_dict.items():
                 # Skip the filterbank and window - already written in preprocessing section
@@ -276,11 +285,28 @@ def convert_parakeet_to_ggml(nemo_path, output_dir, use_f16=True, out_name=None)
                 if name == window_key:
                     continue
 
+                # bias_ih is folded into bias_hh below; skip writing it separately
+                if f'{lstm_prefix}.bias_ih_l' in name:
+                    continue
+
                 # Don't squeeze Conv2d weights - they need to preserve all 4 dimensions
                 if 'conv' in name and 'weight' in name and len(tensor.shape) == 4:
                     data = tensor.numpy()
                 else:
                     data = tensor.squeeze().numpy()
+
+                # For prediction LSTM weights/biases:
+                # Fold bias_ih into bias_hh (bias_ih already skipped above).
+                # Reorder gates (input, forget, cell, output) from PyTorch layout
+                # [i, f, g, o] to [i, f, o, g] so the three sigmoid-gated outputs
+                # (i, f, o) are contiguous.
+                if name.startswith(f'{lstm_prefix}.'):
+                    if f'{lstm_prefix}.bias_hh_l' in name:
+                        layer_idx = int(name.rsplit('bias_hh_l', 1)[1])
+                        data = data.astype(np.float32) + pred_bias_ih[layer_idx]
+                        name = name.replace('bias_hh_l', 'bias_h_l')
+                    h = data.shape[0] // 4
+                    data = np.concatenate([data[:h], data[h:2*h], data[3*h:], data[2*h:3*h]], axis=0)
 
                 write_tensor(fout, name, data, use_f16=use_f16)
 

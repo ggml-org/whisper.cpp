@@ -337,9 +337,8 @@ struct parakeet_layer_encoder {
 
 struct parakeet_lsmt_layer {
     struct ggml_tensor * ih_w = nullptr;  // input-to-hidden weight
-    struct ggml_tensor * ih_b = nullptr;  // input-to-hidden bias
     struct ggml_tensor * hh_w = nullptr;  // hidden-to-hidden weight
-    struct ggml_tensor * hh_b = nullptr;  // hidden-to-hidden bias
+    struct ggml_tensor * b_h = nullptr;   // bias (ih folded into hh at conversion time)
 };
 
 struct parakeet_prediction_network {
@@ -975,6 +974,7 @@ static ggml_backend_buffer_type_t select_weight_buft(const parakeet_hparams & hp
     return nullptr;
 }
 
+
 // load the model from a ggml file
 //
 
@@ -1339,14 +1339,11 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
         layer.ih_w = create_tensor(PARAKEET_TENSOR_PRED_LSTM_WEIGHT_IH, ggml_new_tensor_2d(ctx, pred_wtype, dec_hidden, n_lstm_gates), i);
         ggml_format_name(layer.ih_w, "pred_%d_ih_w", i);
 
-        layer.ih_b = create_tensor(PARAKEET_TENSOR_PRED_LSTM_BIAS_IH, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_lstm_gates), i);
-        ggml_format_name(layer.ih_b, "pred_%d_ih_b", i);
-
-        layer.hh_b = create_tensor(PARAKEET_TENSOR_PRED_LSTM_BIAS_HH, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_lstm_gates), i);
-        ggml_format_name(layer.hh_b, "pred_%d_hh_b", i);
-
         layer.hh_w = create_tensor(PARAKEET_TENSOR_PRED_LSTM_WEIGHT_HH, ggml_new_tensor_2d(ctx, pred_wtype, dec_hidden, n_lstm_gates), i);
         ggml_format_name(layer.hh_w, "pred_%d_hh_w", i);
+
+        layer.b_h = create_tensor(PARAKEET_TENSOR_PRED_LSTM_BIAS_H, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_lstm_gates), i);
+        ggml_format_name(layer.b_h, "pred_%d_b_h", i);
     }
 
     // Joint network
@@ -2104,9 +2101,8 @@ static struct ggml_tensor * parakeet_build_graph_lstm_layer(
          struct ggml_cgraph * gf,
          struct ggml_tensor * x_t,       // the current input token embedding
          struct ggml_tensor * w_ih,      // input to hidden weights (4 weight tensors packed)
-         struct ggml_tensor * b_ih,      // input to hidden bias (4 bias packed together)
          struct ggml_tensor * w_hh,      // hidden to hidden weights (4 weight tensors packed)
-         struct ggml_tensor * b_hh,      // hidden to hidden bias (4 bias tensors packed)
+         struct ggml_tensor * b_h,       // folded ih+hh bias (4 bias tensors packed)
          struct ggml_tensor * h_state,   // this layers hidden state
          struct ggml_tensor * c_state,   // this layers cell state
                         int   li) {      // layer index (for tensor naming)
@@ -2115,13 +2111,14 @@ static struct ggml_tensor * parakeet_build_graph_lstm_layer(
     ggml_format_name(h_state, "lstm_layer_%d_h_state", li);
     ggml_format_name(c_state, "lstm_layer_%d_c_state", li);
 
-    // Input/Forget/Cell/Output gates are packed in the same weight tensor.
+    // The 4 gates (i, f, o, c) are packed in the same weight tensor.
     struct ggml_tensor * inp_gates = ggml_mul_mat(ctx0, w_ih, x_t);
-    inp_gates = ggml_add(ctx0, inp_gates, b_ih);
 
     // Hidden-to-Hidden Projections are also packed in the same weight tensor.
+    // b_h holds the folded ih+hh bias (see parakeet_model_load), so it is
+    // the only bias that needs to be added here.
     struct ggml_tensor * hid_gates = ggml_mul_mat(ctx0, w_hh, h_state);
-    hid_gates = ggml_add(ctx0, hid_gates, b_hh);
+    hid_gates = ggml_add(ctx0, hid_gates, b_h);
 
     // Combine the input and hidden contributions of the gates.
     struct ggml_tensor * gates = ggml_add(ctx0, inp_gates, hid_gates);
@@ -2130,21 +2127,27 @@ static struct ggml_tensor * parakeet_build_graph_lstm_layer(
     const int h_dim = h_state->ne[0];
     const size_t row_size = ggml_row_size(gates->type, h_dim);
 
+    // The gates are packed as [i, f, o, c] (reordered at load time, see
+    // parakeet_model_load), so the three sigmoid-gated outputs (i, f, o) are
+    // contiguous and can be computed with a single ggml_sigmoid call.
+    struct ggml_tensor * ifo = ggml_sigmoid(ctx0, ggml_view_1d(ctx0, gates, 3 * h_dim, 0));
+    ggml_format_name(ifo, "lstm_layer_%d_ifo", li);
+
     // 1. Input Gate at time t.
-    struct ggml_tensor * i_t = ggml_sigmoid(ctx0, ggml_view_1d(ctx0, gates, h_dim, 0 * row_size));
+    struct ggml_tensor * i_t = ggml_view_1d(ctx0, ifo, h_dim, 0 * row_size);
     ggml_format_name(i_t, "lstm_layer_%d_i_t", li);
 
     // Forget gate.
-    struct ggml_tensor * f_t = ggml_sigmoid(ctx0, ggml_view_1d(ctx0, gates, h_dim, 1 * row_size));
+    struct ggml_tensor * f_t = ggml_view_1d(ctx0, ifo, h_dim, 1 * row_size);
     ggml_format_name(f_t, "lstm_layer_%d_f_t", li);
 
-    // Cell gate.
-    struct ggml_tensor * c_t = ggml_tanh(ctx0,    ggml_view_1d(ctx0, gates, h_dim, 2 * row_size));
-    ggml_format_name(c_t, "lstm_layer_%d_c_t", li);
-
     // Output gate.
-    struct ggml_tensor * o_t = ggml_sigmoid(ctx0, ggml_view_1d(ctx0, gates, h_dim, 3 * row_size));
+    struct ggml_tensor * o_t = ggml_view_1d(ctx0, ifo, h_dim, 2 * row_size);
     ggml_format_name(o_t, "lstm_layer_%d_o_t", li);
+
+    // Cell gate.
+    struct ggml_tensor * c_t = ggml_tanh(ctx0, ggml_view_1d(ctx0, gates, h_dim, 3 * row_size));
+    ggml_format_name(c_t, "lstm_layer_%d_c_t", li);
 
     // Calculate the new cell state.
     struct ggml_tensor * c_new = ggml_add(ctx0,
@@ -2192,9 +2195,8 @@ static struct ggml_cgraph * parakeet_build_graph_prediction(
     for (int il = 0; il < hparams.n_pred_layers; ++il) {
         inpL = parakeet_build_graph_lstm_layer(ctx0, gf, inpL,
                 model.prediction.lstm_layer[il].ih_w,
-                model.prediction.lstm_layer[il].ih_b,
                 model.prediction.lstm_layer[il].hh_w,
-                model.prediction.lstm_layer[il].hh_b,
+                model.prediction.lstm_layer[il].b_h,
                 pstate.lstm_state.layer[il].h_state,
                 pstate.lstm_state.layer[il].c_state,
                 il);
