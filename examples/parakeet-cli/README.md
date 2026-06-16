@@ -4,7 +4,7 @@ This is an example of using the [Parakeet] model in whisper.cpp.
 
 ### Download converted model
 ```console
-$ hf download danbev/parakeet-GGUF parakeet-tdt-0.6b-v3-f16.bin --local-dir models
+$ hf download ggml-org/parakeet-GGUF parakeet-tdt-0.6b-v3-f16.bin --local-dir models
 ```
 
 ### Building

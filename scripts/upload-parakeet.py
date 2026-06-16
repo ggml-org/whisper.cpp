@@ -2,8 +2,7 @@ import argparse
 import os
 from huggingface_hub import HfApi, create_repo
 
-# TODO: change to ggml-org once merged.
-USER_NAME = "danbev"
+USER_NAME = "ggml-org"
 REPO_ID   = f"{USER_NAME}/parakeet-GGUF"
 
 MODELS = {
