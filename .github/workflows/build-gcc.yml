@@ -75,6 +75,7 @@ jobs:
             apt update
             apt install -y build-essential cmake libsdl2-dev git ccache
             cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
+              -DGGML_NATIVE=OFF \
               -DCMAKE_C_COMPILER_LAUNCHER=ccache \
               -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
             make
