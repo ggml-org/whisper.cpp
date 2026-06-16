@@ -457,6 +457,25 @@ extern "C" {
         WHISPER_SAMPLING_BEAM_SEARCH, // similar to OpenAI's BeamSearchDecoder
     };
 
+    // Log-mel normalization mode (used by the resumable/streaming API)
+    enum whisper_mel_norm_mode {
+        // Normalize using the maximum log-mel value seen across all audio
+        // appended so far. This is the default.
+        // NOTE: it matches whisper_full() / batch behavior exactly only if the
+        // entire signal is appended before the first whisper_full_resumable()
+        // call. When decoding incrementally, early windows are normalized
+        // against the running max (not the whole-signal max), so a louder
+        // section that arrives later cannot retroactively change an already
+        // decoded window. For most speech this difference is negligible.
+        WHISPER_MEL_NORM_GLOBAL = 0,
+
+        // Normalize each 30s encode window locally, using a reference level that
+        // is slew-rate limited relative to the previous window (asymmetric:
+        // fast attack when it gets louder, slow release so a brief silence does
+        // not amplify background noise). Intended for live transcription.
+        WHISPER_MEL_NORM_WINDOW = 1,
+    };
+
     // Text segment callback
     // Called on every newly generated text segment
     // Use the whisper_full_...() functions to obtain the text segments
@@ -588,6 +607,17 @@ extern "C" {
         const char * vad_model_path;              // Path to VAD model
 
         whisper_vad_params vad_params;
+
+        // Log-mel normalization (used by the resumable/streaming API; ignored by whisper_full)
+        int   mel_norm_mode;        // enum whisper_mel_norm_mode; default WHISPER_MEL_NORM_GLOBAL (0)
+        // WINDOW mode reference-level envelope follower (in log10 power units):
+        //  - attack (when a window gets louder) is instantaneous / free, so we never over-drive
+        //  - release (when it gets quieter) decays exponentially in *audio time* toward the raw
+        //    per-window peak, so a brief silence does not amplify background noise and a long
+        //    steady source (e.g. a generator) that stops is forgotten only gradually
+        // The decay is fed the raw (un-clamped) per-window peak, so the history stays honest.
+        float mel_norm_half_life;   // release half-life in seconds (audio time); <= 0 => instantaneous release
+        float mel_norm_max_drop;    // optional cap on the reference drop rate (log10 power per second); <= 0 => unlimited
     };
 
     // NOTE: this function allocates memory, and it is the responsibility of the caller to free the pointer - see whisper_free_context_params & whisper_free_params()
@@ -612,6 +642,64 @@ extern "C" {
             struct whisper_full_params   params,
                            const float * samples,
                                    int   n_samples);
+
+    // -------------------------------------------------------------------------
+    // Resumable / streaming transcription
+    //
+    // These functions let you feed audio incrementally and decode it in a way
+    // that is consistent with a single batch run: the seek position and the
+    // rolling text context are persisted in the state across calls, and audio
+    // is only ever decoded once (no sliding-window re-decoding / divergence).
+    //
+    // Typical usage from a worker thread that owns its own whisper_state:
+    //
+    //     whisper_resumable_reset_with_state(ctx, state);
+    //     while (recording) {
+    //         whisper_append_audio_with_state(ctx, state, pcm, n);   // as audio arrives
+    //         int n_new = whisper_full_resumable_with_state(ctx, state, params, false);
+    //         // ... consume the n_new newly produced segments ...
+    //     }
+    //     whisper_full_resumable_with_state(ctx, state, params, true); // flush the tail
+    // -------------------------------------------------------------------------
+
+    // Reset the resumable accumulation (clears accumulated audio, seek, context
+    // and results). Call this before starting a new stream/utterance.
+    WHISPER_API void whisper_resumable_reset_with_state(
+                struct whisper_context * ctx,
+                  struct whisper_state * state);
+    WHISPER_API void whisper_resumable_reset(struct whisper_context * ctx);
+
+    // Append PCM (16 kHz, mono, f32) to the resumable accumulation. The log-mel
+    // spectrogram is computed incrementally; the raw samples are not retained.
+    // Returns 0 on success, < 0 on error.
+    WHISPER_API int whisper_append_audio_with_state(
+                struct whisper_context * ctx,
+                  struct whisper_state * state,
+                           const float * samples,
+                                   int   n_samples);
+    WHISPER_API int whisper_append_audio(
+                struct whisper_context * ctx,
+                           const float * samples,
+                                   int   n_samples);
+
+    // Decode every complete 30s window currently available in the accumulated
+    // audio, resuming seek + context from the state. Newly produced segments are
+    // appended to the state's result list (so whisper_full_n_segments() returns
+    // the running total). If finalize is true, the trailing (< 30s) window is
+    // also decoded with zero-padding, matching batch behavior at end-of-audio.
+    //
+    // Returns the number of NEW segments produced by this call (>= 0), or < 0 on
+    // error. When finalize is false and less than 30s of undecoded audio is
+    // available, returns 0 without decoding a partial window ("need more audio").
+    WHISPER_API int whisper_full_resumable_with_state(
+                struct whisper_context * ctx,
+                  struct whisper_state * state,
+            struct whisper_full_params   params,
+                                  bool   finalize);
+    WHISPER_API int whisper_full_resumable(
+                struct whisper_context * ctx,
+            struct whisper_full_params   params,
+                                  bool   finalize);
 
     // Split the input audio in chunks and process each chunk separately using whisper_full_with_state()
     // Result is stored in the default state of the context
