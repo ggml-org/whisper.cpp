@@ -225,7 +225,7 @@ module Whisper
       parakeet-tdt-0.6b-v3-q4_k
       parakeet-tdt-0.6b-v3-q8_0
     ].each do |name|
-      @pre_converted_models[name] = URI.new("https://huggingface.co/danbev/parakeet-GGUF/resolve/main/ggml-#{name}.bin")
+      @pre_converted_models[name] = URI.new("https://huggingface.co/ggml-org/parakeet-GGUF/resolve/main/ggml-#{name}.bin")
     end
 
     @coreml_compiled_models = @pre_converted_models.each_with_object({}) {|(name, uri), models|
