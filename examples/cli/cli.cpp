@@ -31,39 +31,6 @@ static void replace_all(std::string & s, const std::string & search, const std::
     }
 }
 
-// Returns the number of trailing continuation bytes still needed for `s` to end
-// on a complete UTF-8 codepoint. Returns 0 if the tail of `s` is already a
-// complete codepoint (or if the tail looks malformed and we should stop merging).
-// Used to merge whisper tokens whose bytes split a multi-byte UTF-8 character
-// (e.g. CJK), so the JSON output stays valid UTF-8. See https://github.com/ggml-org/whisper.cpp/issues/1798.
-static int utf8_trailing_bytes_needed(const std::string & s) {
-    const int n = (int) s.size();
-    int i = n - 1;
-    // walk back past continuation bytes (10xxxxxx)
-    while (i >= 0 && ((unsigned char) s[i] & 0xC0) == 0x80) {
-        --i;
-    }
-    if (i < 0) {
-        // all continuation bytes, or empty — nothing we can do
-        return 0;
-    }
-    const unsigned char c = (unsigned char) s[i];
-    int expected;
-    if ((c & 0x80) == 0x00) {
-        expected = 1; // ASCII
-    } else if ((c & 0xE0) == 0xC0) {
-        expected = 2;
-    } else if ((c & 0xF0) == 0xE0) {
-        expected = 3;
-    } else if ((c & 0xF8) == 0xF0) {
-        expected = 4;
-    } else {
-        return 0;     // malformed lead, give up
-    }
-    const int have = n - i;
-    return have >= expected ? 0 : (expected - have);
-}
-
 // command-line parameters
 struct whisper_params {
     int32_t n_threads     = std::min(4, (int32_t) std::thread::hardware_concurrency());
@@ -184,6 +151,10 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
             whisper_print_usage(argc, argv, params);
             exit(0);
         }
+        if (arg == "--version") {
+            fprintf(stdout, "whisper.cpp version: %s\n", whisper_version());
+            exit(0);
+        }
         #define ARGV_NEXT (((i + 1) < argc) ? argv[++i] : requires_value_error(arg))
         else if (arg == "-t"    || arg == "--threads")              { params.n_threads       = std::stoi(ARGV_NEXT); }
         else if (arg == "-p"    || arg == "--processors")           { params.n_processors    = std::stoi(ARGV_NEXT); }
@@ -267,6 +238,7 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "\n");
     fprintf(stderr, "options:\n");
     fprintf(stderr, "  -h,        --help                 [default] show this help message and exit\n");
+    fprintf(stderr, "             --version              show version information and exit\n");
     fprintf(stderr, "  -t N,      --threads N            [%-7d] number of threads to use during computation\n",    params.n_threads);
     fprintf(stderr, "  -p N,      --processors N         [%-7d] number of processors to use during computation\n", params.n_processors);
     fprintf(stderr, "  -ot N,     --offset-t N           [%-7d] time offset in milliseconds\n",                    params.offset_t_ms);

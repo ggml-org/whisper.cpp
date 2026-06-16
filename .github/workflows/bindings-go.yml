@@ -13,10 +13,10 @@ jobs:
   ubuntu-22:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version: '^1.23'
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - run: |
           cd bindings/go
           make test

@@ -78,7 +78,7 @@ add_test(NAME ${TEST_TARGET}
     -f ${PROJECT_SOURCE_DIR}/samples/jfk.wav)
 set_tests_properties(${TEST_TARGET} PROPERTIES LABELS "large")
 
-if (WHISPER_FFMPEG)
+if (WHISPER_COMMON_FFMPEG)
     set(TEST_TARGET test-whisper-cli-tiny-mp3)
     # Check with reviewers: any way to check the output transcription via ctest (diff, ...)?
     add_test(NAME ${TEST_TARGET}
@@ -87,6 +87,14 @@ if (WHISPER_FFMPEG)
       -f ${PROJECT_SOURCE_DIR}/samples/jfk.mp3)
     set_tests_properties(${TEST_TARGET} PROPERTIES LABELS "tiny;mp3")
 endif()
+
+# UTF-8 helper unit test
+set(UTF8_TEST test-common-utf8)
+add_executable(${UTF8_TEST} ${UTF8_TEST}.cpp)
+target_include_directories(${UTF8_TEST} PRIVATE ../examples)
+target_link_libraries(${UTF8_TEST} PRIVATE common)
+add_test(NAME ${UTF8_TEST} COMMAND ${UTF8_TEST})
+set_tests_properties(${UTF8_TEST} PROPERTIES LABELS "unit")
 
 # VAD test tests VAD in isolation
 set(VAD_TEST test-vad)

@@ -1,0 +1,173 @@
+name: CI (cpu)
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: ['.github/workflows/build-cpu.yml',
+            '**/CMakeLists.txt',
+            '**/Makefile',
+            '**/*.mk',
+            '**/*.cmake',
+            '**/*.in',
+            '**/*.h',
+            '**/*.hpp',
+            '**/*.c',
+            '**/*.cpp',
+            '**/*.cu',
+            '**/*.cuh',
+            '**/*.cl']
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - 'bindings/ruby/**'        # handled by bindings-ruby.yml
+      - 'bindings/go/**'          # handled by bindings-go.yml
+      - 'examples/addon.node/**'  # handled by examples.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+# TODO: simplify the following jobs using a matrix
+jobs:
+  ggml-ci-x64-cpu-low-perf:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ggml-ci-x64-cpu-low-perf
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
+      - name: Test
+        id: ggml-ci
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+
+  ggml-ci-arm64-cpu-low-perf:
+    runs-on: ubuntu-22.04-arm
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ggml-ci-arm64-cpu-low-perf
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
+      - name: Test
+        id: ggml-ci
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+
+  ggml-ci-x64-cpu-high-perf:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ggml-ci-x64-cpu-high-perf
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
+      - name: Test
+        id: ggml-ci
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) bash ./ci/run.sh ./tmp/results ./tmp/mnt
+
+  ggml-ci-arm64-cpu-high-perf:
+    runs-on: ubuntu-22.04-arm
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ggml-ci-arm64-cpu-high-perf
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
+      - name: Test
+        id: ggml-ci
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_SVE=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+
+  ggml-ci-arm64-cpu-high-perf-sve:
+    runs-on: ubuntu-22.04-arm
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ggml-ci-arm64-cpu-high-perf-sve
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
+      - name: Test
+        id: ggml-ci
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt

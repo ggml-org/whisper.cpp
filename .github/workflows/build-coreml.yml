@@ -1,0 +1,65 @@
+name: CI (coreml)
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*'
+    paths: ['.github/workflows/build-coreml.yml',
+            '**/CMakeLists.txt',
+            '**/*.h',
+            '**/*.hpp',
+            '**/*.c',
+            '**/*.cpp',
+            '**/*.swift',
+            '**/*.m',
+            '**/*.mm',
+            '**/*.metal']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+
+jobs:
+  coreml-base-en:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout with full history
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Set environment variables
+        id: set_vars
+        run: |
+          BUILD_NUMBER=$(git rev-list --count HEAD)
+          SHORT_HASH=$(git rev-parse --short=7 HEAD)
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            TAG_NAME="${{ github.ref_name }}"
+          elif [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
+            TAG_NAME="b${BUILD_NUMBER}"
+          else
+            SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
+            TAG_NAME="${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}"
+          fi
+          echo "MODEL_NAME=base.en" >> $GITHUB_ENV
+          echo "GEN_MODEL_NAME=whisper-${TAG_NAME}-ggml-base.en-encoder.mlmodelc" >> $GITHUB_ENV
+
+      - name: Download model
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          ./models/download-ggml-model.sh ${{ env.MODEL_NAME }}
+
+      - name: Generate CoreML model
+        run: |
+          python3.11 -m venv venv
+          source venv/bin/activate
+          pip install ane_transformers openai-whisper coremltools
+          ./models/generate-coreml-model.sh ${{ env.MODEL_NAME }}

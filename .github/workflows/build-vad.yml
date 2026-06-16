@@ -1,0 +1,50 @@
+name: CI (vad)
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: ['.github/workflows/build-vad.yml',
+            '**/CMakeLists.txt',
+            '**/*.h',
+            '**/*.hpp',
+            '**/*.c',
+            '**/*.cpp']
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - 'bindings/ruby/**'        # handled by bindings-ruby.yml
+      - 'bindings/go/**'          # handled by bindings-go.yml
+      - 'examples/addon.node/**'  # handled by examples.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  vad:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: vad-ubuntu-latest
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Build
+        shell: bash
+        run: |
+          cmake -B build -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build --config Release
+
+      - name: Test
+        shell: bash
+        run: |
+          ctest -R ^test-vad$ --test-dir build --output-on-failure -VV

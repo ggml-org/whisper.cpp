@@ -25,8 +25,8 @@ jobs:
       run:
         working-directory: bindings/ruby
     steps:
-      - uses: ruby/setup-ruby@v1
+      - uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f # v1.310.0
         with:
           ruby-version: '3.2'
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - run: rake test

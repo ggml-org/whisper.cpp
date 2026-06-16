@@ -1,0 +1,47 @@
+name: CI (freebsd)
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: ['.github/workflows/build-freebsd.yml',
+            '**/CMakeLists.txt',
+            '**/Makefile',
+            '**/*.mk',
+            '**/*.cmake',
+            '**/*.in',
+            '**/*.h',
+            '**/*.hpp',
+            '**/*.c',
+            '**/*.cpp']
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - 'bindings/ruby/**'        # handled by bindings-ruby.yml
+      - 'bindings/go/**'          # handled by bindings-go.yml
+      - 'examples/addon.node/**'  # handled by examples.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  freeBSD-latest:
+    runs-on: macos-13
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Build
+        uses: cross-platform-actions/action@fe0167d8082ac584754ef3ffb567fded22642c7d # v0.27.0
+        with:
+          operating_system: freebsd
+          version: '14.2'
+          run: |
+            sudo pkg update
+            sudo pkg install -y gmake sdl2 cmake git
+            cmake -B build
+            cmake --build build --config Release
