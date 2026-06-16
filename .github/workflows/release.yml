@@ -13,8 +13,6 @@ on:
         type: string
 
   push:
-    branches:
-      - master
     tags:
       - 'v*'
 
