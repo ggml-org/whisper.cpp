@@ -1,0 +1,44 @@
+name: Check Approvals
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, synchronize]
+    branches: [main, master]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  check-approvals:
+    name: Check Approvals
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    if: >-
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.comment.body == 'pending_reviews' &&
+        github.event.issue.pull_request != null
+      ) || (
+        github.event_name == 'pull_request_target' &&
+        (github.event.action == 'opened' || github.event.action == 'synchronize')
+      )
+    steps:
+      - name: Install @qvac/ci
+        run: npm install -g @qvac/ci@0.1.0
+
+      - name: Check Approvals
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_APP_ID: ${{ secrets.APP_ID }}
+          GITHUB_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+        run: |
+          qvac-ci pending-approvals \
+            --pr-number "${{ github.event.pull_request.number || github.event.issue.number }}" \
+            --maintainers-team 'qvac-internal-mgmt' \
+            --team-leads-team 'qvac-internal-merge' \
+            --min-approvals '2'
