@@ -290,6 +290,9 @@ struct ParakeetCtcModel {
     TdtWeights                tdt;
     EouWeights                eou;
     SortformerWeights         sortformer;
+    // CPU-resident copies of the Sortformer head weights; populated at load only
+    // on Mali-Vulkan, where the head runs on CPU while the encoder stays on GPU.
+    SortformerWeights         sortformer_cpu;
 
     ggml_tensor * mel_filterbank = nullptr;
     ggml_tensor * window         = nullptr;
@@ -329,8 +332,19 @@ int load_from_gguf(const std::string & gguf_path,
 void print_model_summary(const ParakeetCtcModel & m);
 
 bool        model_has_gpu_backend(const ParakeetCtcModel & m);
+// True when a GPU was detected but routed to CPU as a known-bad backend (Mali).
+// Lets hosts treat the CPU backend as expected, not a GPU regression.
+bool        model_gpu_unsupported(const ParakeetCtcModel & m);
 std::string model_active_backend_name(const ParakeetCtcModel & m);
 ggml_backend_t model_active_backend(ParakeetCtcModel & m);
+
+// Backend for the Sortformer head: the active backend normally, but CPU on
+// Mali-Vulkan (its transformer block 0 miscomputes to NaN; encoder stays on GPU).
+ggml_backend_t model_sortformer_backend(ParakeetCtcModel & m);
+
+// True when the head is routed to CPU (Mali-Vulkan); the graph then reads the
+// CPU-resident weight copies (model.sortformer_cpu), not the GPU originals.
+bool model_sortformer_on_cpu(const ParakeetCtcModel & m);
 
 int run_subsampling(ParakeetCtcModel   & model,
                     const float        * mel,

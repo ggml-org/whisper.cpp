@@ -248,6 +248,11 @@ public:
     // the lifetime of the Engine.
     std::string backend_name() const;
 
+    // True when a GPU was detected but the engine fell back to CPU because it is
+    // a known-bad backend (Mali). A CPU backend with this set is expected, not a
+    // regression.
+    bool gpu_unsupported() const;
+
     struct Impl;
 
 private:

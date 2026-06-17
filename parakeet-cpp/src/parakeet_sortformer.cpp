@@ -183,6 +183,7 @@ int sf_exec_graph(ggml_context * ctx, ggml_backend_t backend,
     speaker_probs.resize((size_t)T_enc * num_spks);
     ggml_backend_tensor_get(x_out, speaker_probs.data(), 0,
                             speaker_probs.size() * sizeof(float));
+
     ggml_gallocr_free(alloc);
     return 0;
 }
@@ -645,9 +646,14 @@ int sortformer_diarize_ggml(const ParakeetCtcModel & model,
     ggml_context * ctx = ggml_init(gp);
     if (!ctx) return -1;
 
-    // 2. Build graph
+    // 2. Build graph. On Mali-Vulkan the head runs on CPU while its encoder
+    // stays on the GPU; read the CPU-resident head weights there so the graph's
+    // weights match its backend (GPU originals would segfault a CPU matmul).
+    const SortformerWeights & sw = model_sortformer_on_cpu(model)
+                                       ? model.sortformer_cpu
+                                       : model.sortformer;
     ggml_tensor * x_in  = nullptr;
-    ggml_tensor * x_out = sf_build_graph(ctx, model.sortformer,
+    ggml_tensor * x_out = sf_build_graph(ctx, sw,
                                          n_layers, n_heads, head_dim,
                                          tf_d, D_in, T_enc, &x_in);
 

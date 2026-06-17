@@ -269,10 +269,10 @@ LstmBodyOuts build_lstm_body(TdtRuntimeWeights & rt,
 // readback is ~17 us); on a discrete GPU PCIe bus it's an
 // order-of-magnitude saving per emission step (~250 / call).
 struct JointBodyOuts {
-    ggml_tensor * token_argmax;  // i32[1], over logits[0 : V_plus_1]
-    ggml_tensor * dur_argmax;    // i32[1], over logits[V_plus_1 : V_plus_1 + num_durations]
+    ggml_tensor * token_out;  // argmax i32[1] (argmax_on_gpu) OR token logits f32[V_plus_1]
+    ggml_tensor * dur_out;    // argmax i32[1] (argmax_on_gpu) OR dur logits f32[num_durations]
 };
-JointBodyOuts build_joint_body(const TdtRuntimeWeights & rt,
+JointBodyOuts build_joint_body(TdtRuntimeWeights & rt,
                                ggml_context * gctx,
                                ggml_tensor * pred_src,
                                ggml_tensor * frame_idx_in) {
@@ -314,9 +314,20 @@ JointBodyOuts build_joint_body(const TdtRuntimeWeights & rt,
     tok_logits = ggml_cont(gctx, tok_logits);
     dur_logits = ggml_cont(gctx, dur_logits);
 
+    // ggml-opencl has no ARGMAX kernel (graph_compute would abort), so gate the
+    // on-device argmax on backend support and fall back to a host argmax of the
+    // logit slices otherwise. tok_am is unused on that path (never expanded).
+    ggml_tensor * tok_am = ggml_argmax(gctx, tok_logits);  // i32[1]
+    rt.argmax_on_gpu = ggml_backend_supports_op(rt.backend, tok_am);
+
     JointBodyOuts outs{};
-    outs.token_argmax = ggml_argmax(gctx, tok_logits);  // i32[1]
-    outs.dur_argmax   = ggml_argmax(gctx, dur_logits);  // i32[1]
+    if (rt.argmax_on_gpu) {
+        outs.token_out = tok_am;
+        outs.dur_out   = ggml_argmax(gctx, dur_logits);  // i32[1]
+    } else {
+        outs.token_out = tok_logits;
+        outs.dur_out   = dur_logits;
+    }
     return outs;
 }
 
@@ -360,10 +371,10 @@ void build_joint_graph(TdtRuntimeWeights & rt) {
     ggml_set_input(rt.joint_frame_idx_in);
 
     JointBodyOuts outs = build_joint_body(rt, gctx, rt.pred_persist, rt.joint_frame_idx_in);
-    rt.joint_token_out = outs.token_argmax;
-    rt.joint_dur_out   = outs.dur_argmax;
-    ggml_set_name(rt.joint_token_out, "joint.token_argmax");
-    ggml_set_name(rt.joint_dur_out,   "joint.dur_argmax");
+    rt.joint_token_out = outs.token_out;
+    rt.joint_dur_out   = outs.dur_out;
+    ggml_set_name(rt.joint_token_out, rt.argmax_on_gpu ? "joint.token_argmax" : "joint.token_logits");
+    ggml_set_name(rt.joint_dur_out,   rt.argmax_on_gpu ? "joint.dur_argmax"   : "joint.dur_logits");
     ggml_set_output(rt.joint_token_out);
     ggml_set_output(rt.joint_dur_out);
 
@@ -399,10 +410,10 @@ void build_lstm_joint_graph(TdtRuntimeWeights & rt) {
     // Use the pred_cpy node (not pred_persist directly) so the joint mat_muls
     // depend on the LSTM update finishing first.
     JointBodyOuts joint_outs = build_joint_body(rt, gctx, lstm_outs.pred_cpy, rt.lj_frame_idx_in);
-    rt.lj_token_out = joint_outs.token_argmax;
-    rt.lj_dur_out   = joint_outs.dur_argmax;
-    ggml_set_name(rt.lj_token_out, "lstm_joint.token_argmax");
-    ggml_set_name(rt.lj_dur_out,   "lstm_joint.dur_argmax");
+    rt.lj_token_out = joint_outs.token_out;
+    rt.lj_dur_out   = joint_outs.dur_out;
+    ggml_set_name(rt.lj_token_out, rt.argmax_on_gpu ? "lstm_joint.token_argmax" : "lstm_joint.token_logits");
+    ggml_set_name(rt.lj_dur_out,   rt.argmax_on_gpu ? "lstm_joint.dur_argmax"   : "lstm_joint.dur_logits");
     ggml_set_output(rt.lj_token_out);
     ggml_set_output(rt.lj_dur_out);
     // Mark the LSTM cpy nodes as outputs too so gallocr keeps them alive
@@ -619,6 +630,15 @@ int tdt_prepare_runtime(const ParakeetCtcModel & model, TdtRuntimeWeights & W) {
     // because of native quantised matmul and faster argmax / large gemvs.
     W.use_graphs = !backend_is_cpu(W.backend);
 
+    // ggml-opencl drops the in-place ggml_cpy writes that update the TDT LSTM
+    // persistent state (h/c/pred), so the state never advances and the decode
+    // emits one constant token per frame. Run the per-step decode on the host on
+    // OpenCL; the encoder still runs on the GPU. (EOU/Sortformer don't use this
+    // persistent-state pattern and stay on the GPU.)
+    if (W.use_graphs && std::strcmp(backend_reg_name(W.backend), "OpenCL") == 0) {
+        W.use_graphs = false;
+    }
+
     if (!W.use_graphs) {
         // ---- CPU fallback: dequantise weights to host f32 ----
         dequantize_to_f32(model.tdt.predict_embed, W.embed);
@@ -732,6 +752,30 @@ bool run_lstm_init_step(TdtRuntimeWeights & rt, int token_id) {
     return true;
 }
 
+// Read the joint token/dur outputs into host ints: i32 argmax indices when
+// argmax_on_gpu, else the raw f32 logit slices (ggml-opencl) argmaxed on host.
+// thread_local scratch keeps the per-step readback allocation-free.
+void resolve_joint_step(TdtRuntimeWeights & rt,
+                        ggml_tensor * tok_t, ggml_tensor * dur_t,
+                        int * tok_out, int * dur_out) {
+    if (rt.argmax_on_gpu) {
+        int32_t tok_val = 0, dur_val = 0;
+        ggml_backend_tensor_get(tok_t, &tok_val, 0, sizeof(int32_t));
+        ggml_backend_tensor_get(dur_t, &dur_val, 0, sizeof(int32_t));
+        *tok_out = (int) tok_val;
+        *dur_out = (int) dur_val;
+        return;
+    }
+    static thread_local std::vector<float> tok_logits;
+    static thread_local std::vector<float> dur_logits;
+    tok_logits.resize((size_t) rt.V_plus_1);
+    dur_logits.resize((size_t) rt.num_durations);
+    ggml_backend_tensor_get(tok_t, tok_logits.data(), 0, (size_t) rt.V_plus_1 * sizeof(float));
+    ggml_backend_tensor_get(dur_t, dur_logits.data(), 0, (size_t) rt.num_durations * sizeof(float));
+    *tok_out = argmax_f32(tok_logits.data(), rt.V_plus_1);
+    *dur_out = argmax_f32(dur_logits.data(), rt.num_durations);
+}
+
 // Joint-only step (used after a blank emission). pred_persist is unchanged
 // from the previous step; only enc_proj_persist[frame_idx] varies.  The
 // graph runs token + duration argmax on-device, so the host reads
@@ -750,11 +794,7 @@ bool run_joint_step(TdtRuntimeWeights & rt,
         return false;
     }
 
-    int32_t tok_val = 0, dur_val = 0;
-    ggml_backend_tensor_get(rt.joint_token_out, &tok_val, 0, sizeof(int32_t));
-    ggml_backend_tensor_get(rt.joint_dur_out,   &dur_val, 0, sizeof(int32_t));
-    *tok_out = (int) tok_val;
-    *dur_out = (int) dur_val;
+    resolve_joint_step(rt, rt.joint_token_out, rt.joint_dur_out, tok_out, dur_out);
     return true;
 }
 
@@ -777,11 +817,7 @@ bool run_lstm_joint_step(TdtRuntimeWeights & rt,
         return false;
     }
 
-    int32_t tok_val = 0, dur_val = 0;
-    ggml_backend_tensor_get(rt.lj_token_out, &tok_val, 0, sizeof(int32_t));
-    ggml_backend_tensor_get(rt.lj_dur_out,   &dur_val, 0, sizeof(int32_t));
-    *tok_out = (int) tok_val;
-    *dur_out = (int) dur_val;
+    resolve_joint_step(rt, rt.lj_token_out, rt.lj_dur_out, tok_out, dur_out);
     return true;
 }
 

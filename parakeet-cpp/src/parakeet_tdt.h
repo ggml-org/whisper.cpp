@@ -61,6 +61,9 @@ struct TdtRuntimeWeights {
     ggml_backend_t     backend = nullptr;
     int                n_threads = 0;
     bool               use_graphs = false;
+    // false on ggml-opencl (no ARGMAX kernel): the joint graph emits raw logits
+    // for the host to argmax; true elsewhere keeps the argmax on-device.
+    bool               argmax_on_gpu = true;
 
     // ---- CPU-fallback host weights (populated only when !use_graphs) ----
     std::vector<float>             embed;
@@ -111,8 +114,8 @@ struct TdtRuntimeWeights {
     ggml_cgraph *  g_joint     = nullptr;
     ggml_gallocr_t alloc_joint = nullptr;
     ggml_tensor *  joint_frame_idx_in = nullptr;  // i32[1]
-    ggml_tensor *  joint_token_out    = nullptr;  // i32[1] — token argmax
-    ggml_tensor *  joint_dur_out      = nullptr;  // i32[1] — duration argmax
+    ggml_tensor *  joint_token_out    = nullptr;  // i32 argmax, or f32 token logits when !argmax_on_gpu
+    ggml_tensor *  joint_dur_out      = nullptr;  // i32 argmax, or f32 dur logits when !argmax_on_gpu
 
     // (3) Fused LSTM + joint graph: used after a non-blank emission.
     //     LSTM updates h/c/pred from the last emitted token, then joint
@@ -123,8 +126,8 @@ struct TdtRuntimeWeights {
     ggml_gallocr_t alloc_lstm_joint = nullptr;
     ggml_tensor *  lj_token_in        = nullptr;  // i32[1]
     ggml_tensor *  lj_frame_idx_in    = nullptr;  // i32[1]
-    ggml_tensor *  lj_token_out       = nullptr;  // i32[1] — token argmax
-    ggml_tensor *  lj_dur_out         = nullptr;  // i32[1] — duration argmax
+    ggml_tensor *  lj_token_out       = nullptr;  // i32 argmax, or f32 token logits when !argmax_on_gpu
+    ggml_tensor *  lj_dur_out         = nullptr;  // i32 argmax, or f32 dur logits when !argmax_on_gpu
 
     struct EncProjGraph {
         // Each cached graph owns its own ggml_context for the cgraph + tensor

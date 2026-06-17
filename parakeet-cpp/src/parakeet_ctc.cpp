@@ -108,6 +108,18 @@ struct ParakeetCtcModel::Impl {
     ggml_backend_t         backend_blas   = nullptr;
     ggml_backend_t         backend_gpu    = nullptr;
     ggml_backend_t         backend_active = nullptr;
+    // True when a GPU was detected but skipped as known-bad (Mali), so
+    // backend_active fell back to CPU.
+    bool                   gpu_unsupported = false;
+    // True when the active GPU backend is Mali-Vulkan: the Sortformer head is
+    // routed to CPU there (its transformer block 0 miscomputes to NaN on the
+    // Valhall driver) while the encoder + CTC/TDT/EOU heads stay on the Mali GPU.
+    bool                   sortformer_force_cpu = false;
+    // CPU-resident copies of the Sortformer head weights (Mali-Vulkan only), so
+    // the CPU head graph reads them from the CPU backend instead of
+    // dereferencing the GPU-resident originals.
+    ggml_context         * sortformer_cpu_ctx    = nullptr;
+    ggml_backend_buffer_t  sortformer_cpu_buffer = nullptr;
     ggml_backend_buffer_t  weights_buffer = nullptr;
     std::vector<std::unique_ptr<EncoderGraph>> encoder_graphs;
     static constexpr size_t k_encoder_graph_cache_max = 3;
@@ -118,6 +130,8 @@ struct ParakeetCtcModel::Impl {
         }
         encoder_graphs.clear();
         if (weights_buffer) ggml_backend_buffer_free(weights_buffer);
+        if (sortformer_cpu_buffer) ggml_backend_buffer_free(sortformer_cpu_buffer);
+        if (sortformer_cpu_ctx)    ggml_free(sortformer_cpu_ctx);
         if (ctx)            ggml_free(ctx);
         if (gguf)           gguf_free(gguf);
         if (backend_blas)   ggml_backend_free(backend_blas);
@@ -268,6 +282,16 @@ bool is_adreno_700plus(const char * s) {
     return v >= 700;
 }
 
+// True when a device name/description identifies an ARM Mali GPU ("Mali-G715",
+// "ARM Mali-G78", ...). Used to route the Sortformer head to CPU on Mali-Vulkan.
+bool desc_is_mali(const char * s) {
+    if (!s) return false;
+    std::string lowered(s);
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return lowered.find("mali") != std::string::npos;
+}
+
 const char * dev_reg_name(ggml_backend_dev_t dev) {
     if (!dev) return "";
     ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
@@ -291,7 +315,11 @@ const char * dev_reg_name(ggml_backend_dev_t dev) {
 // with, those entry points live in separate shared libraries that
 // are dlopen()'d at runtime and are not linkable from libparakeet.
 // The registry walk reaches the same backends in both modes.
-ggml_backend_t init_gpu_backend(int n_gpu_layers, bool verbose) {
+ggml_backend_t init_gpu_backend(int n_gpu_layers, bool verbose,
+                                bool & out_skipped_unsupported_gpu,
+                                bool & out_is_mali_vulkan) {
+    out_skipped_unsupported_gpu = false;
+    out_is_mali_vulkan = false;
     if (n_gpu_layers <= 0) return nullptr;
 
     ensure_backends_loaded();
@@ -341,6 +369,8 @@ ggml_backend_t init_gpu_backend(int n_gpu_layers, bool verbose) {
                         "skipping (7xx/8xx/X1E supported, set "
                         "PARAKEET_ALLOW_ADRENO_6XX=1 to override)\n",
                         reported);
+                    // GPU detected but routed to CPU as known-bad (model_gpu_unsupported).
+                    out_skipped_unsupported_gpu = true;
                     continue;
                 }
                 if (verbose) PARAKEET_LOG_INFO(
@@ -351,6 +381,10 @@ ggml_backend_t init_gpu_backend(int n_gpu_layers, bool verbose) {
                 opencl_other.push_back({dev, name, desc, reg_name});
             }
         } else {
+            // Non-OpenCL GPUs (Vulkan, Metal, CUDA, Mali iGPU, Intel, ...). Mali
+            // (Valhall) Vulkan runs the encoder + CTC/TDT/EOU heads correctly;
+            // only its Sortformer head is routed to CPU (see sortformer_force_cpu),
+            // so unlike the Adreno-6xx skip above it is not guarded out here.
             other_gpu.push_back({dev, name, desc, reg_name});
         }
     }
@@ -371,6 +405,8 @@ ggml_backend_t init_gpu_backend(int n_gpu_layers, bool verbose) {
                 "parakeet: using %s backend (%s)\n",
                 c.reg_name && *c.reg_name ? c.reg_name : "GPU",
                 c.name ? c.name : (c.desc ? c.desc : "unknown"));
+            out_is_mali_vulkan = c.reg_name && std::strcmp(c.reg_name, "Vulkan") == 0
+                              && (desc_is_mali(c.desc) || desc_is_mali(c.name));
             return b;
         }
         return nullptr;
@@ -552,6 +588,75 @@ void set_opencl_cache_dir(const std::string & dir) {
 #endif
 }
 
+// Tripwire: build_sortformer_cpu_weights() hand-enumerates every field; fail the build if one is added/removed.
+static_assert(sizeof(SortformerTransformerBlock) == 16 * sizeof(ggml_tensor *),
+              "SortformerTransformerBlock layout changed; update build_sortformer_cpu_weights()");
+static_assert(sizeof(SortformerWeights) ==
+                  6 * sizeof(ggml_tensor *) + sizeof(std::vector<SortformerTransformerBlock>),
+              "SortformerWeights layout changed; update build_sortformer_cpu_weights()");
+
+// Duplicate the Sortformer head weights into a fresh context + buffer on the
+// CPU backend. Used on Mali-Vulkan, where the head runs on CPU while its encoder
+// stays on the GPU: the head graph must read weights that live on the same
+// backend it executes on. Returns false on allocation failure.
+static bool build_sortformer_cpu_weights(ParakeetCtcModel::Impl * impl,
+                                         const SortformerWeights & src,
+                                         SortformerWeights & dst) {
+    dst = SortformerWeights{};
+    dst.transformer.resize(src.transformer.size());
+
+    struct Field { ggml_tensor * src; ggml_tensor ** dst; };
+    std::vector<Field> fields;
+    auto add = [&](ggml_tensor * s, ggml_tensor ** d) {
+        if (s) fields.push_back({ s, d });
+    };
+    add(src.encoder_proj_w, &dst.encoder_proj_w);
+    add(src.encoder_proj_b, &dst.encoder_proj_b);
+    for (size_t i = 0; i < src.transformer.size(); ++i) {
+        const SortformerTransformerBlock & sb = src.transformer[i];
+        SortformerTransformerBlock       & db = dst.transformer[i];
+        add(sb.attn_q_w,  &db.attn_q_w);   add(sb.attn_q_b,  &db.attn_q_b);
+        add(sb.attn_k_w,  &db.attn_k_w);   add(sb.attn_k_b,  &db.attn_k_b);
+        add(sb.attn_v_w,  &db.attn_v_w);   add(sb.attn_v_b,  &db.attn_v_b);
+        add(sb.attn_o_w,  &db.attn_o_w);   add(sb.attn_o_b,  &db.attn_o_b);
+        add(sb.ln1_w,     &db.ln1_w);      add(sb.ln1_b,     &db.ln1_b);
+        add(sb.ffn_in_w,  &db.ffn_in_w);   add(sb.ffn_in_b,  &db.ffn_in_b);
+        add(sb.ffn_out_w, &db.ffn_out_w);  add(sb.ffn_out_b, &db.ffn_out_b);
+        add(sb.ln2_w,     &db.ln2_w);      add(sb.ln2_b,     &db.ln2_b);
+    }
+    add(src.head_h2h_w, &dst.head_h2h_w);  add(src.head_h2h_b, &dst.head_h2h_b);
+    add(src.head_h2s_w, &dst.head_h2s_w);  add(src.head_h2s_b, &dst.head_h2s_b);
+
+    const size_t n = fields.size();
+    ggml_init_params p = {
+        /*mem_size=*/   ggml_tensor_overhead() * (n + 8),
+        /*mem_buffer=*/ nullptr,
+        /*no_alloc=*/   true,
+    };
+    impl->sortformer_cpu_ctx = ggml_init(p);
+    if (!impl->sortformer_cpu_ctx) return false;
+
+    for (Field & f : fields) {
+        ggml_tensor * t = ggml_new_tensor(impl->sortformer_cpu_ctx, f.src->type,
+                                          GGML_MAX_DIMS, f.src->ne);
+        ggml_set_name(t, ggml_get_name(f.src));
+        *f.dst = t;
+    }
+
+    impl->sortformer_cpu_buffer =
+        ggml_backend_alloc_ctx_tensors(impl->sortformer_cpu_ctx, impl->backend_cpu);
+    if (!impl->sortformer_cpu_buffer) return false;
+
+    std::vector<uint8_t> buf;
+    for (Field & f : fields) {
+        const size_t nb = ggml_nbytes(f.src);
+        buf.resize(nb);
+        ggml_backend_tensor_get(f.src, buf.data(), 0, nb);
+        ggml_backend_tensor_set(*f.dst, buf.data(), 0, nb);
+    }
+    return true;
+}
+
 int load_from_gguf(const std::string & gguf_path,
                    ParakeetCtcModel  & out_model,
                    int                 n_threads,
@@ -576,8 +681,21 @@ int load_from_gguf(const std::string & gguf_path,
         backend_set_n_threads(impl->backend_blas, resolved_threads);
     }
 
-    impl->backend_gpu    = init_gpu_backend(n_gpu_layers, verbose);
+    bool skipped_unsupported_gpu = false;
+    bool gpu_is_mali_vulkan = false;
+    impl->backend_gpu    = init_gpu_backend(n_gpu_layers, verbose, skipped_unsupported_gpu,
+                                            gpu_is_mali_vulkan);
     impl->backend_active = impl->backend_gpu ? impl->backend_gpu : impl->backend_cpu;
+    impl->gpu_unsupported = skipped_unsupported_gpu && impl->backend_gpu == nullptr;
+    // On Mali-Vulkan the Sortformer head miscomputes (transformer block 0 -> NaN);
+    // route only that head to CPU while the encoder + CTC/TDT/EOU heads stay on GPU.
+    impl->sortformer_force_cpu =
+        gpu_is_mali_vulkan && impl->backend_active == impl->backend_gpu;
+    if (impl->sortformer_force_cpu && verbose) {
+        PARAKEET_LOG_INFO(
+            "parakeet: Sortformer diarization head -> CPU on Mali-Vulkan "
+            "(encoder + CTC/TDT/EOU stay on the GPU)\n");
+    }
 
     gguf_init_params params = { /*no_alloc=*/ true, &impl->ctx };
     impl->gguf = gguf_init_from_file(gguf_path.c_str(), params);
@@ -932,6 +1050,19 @@ int load_from_gguf(const std::string & gguf_path,
 
     out_model.impl = impl;
 
+    if (out_model.model_type == ParakeetModelType::SORTFORMER &&
+        impl->sortformer_force_cpu) {
+        if (!build_sortformer_cpu_weights(impl.get(), out_model.sortformer,
+                                          out_model.sortformer_cpu)) {
+            PARAKEET_LOG_ERROR(
+                "parakeet: failed to build CPU-resident Sortformer head weights\n");
+            return 15;
+        }
+        if (verbose) PARAKEET_LOG_INFO(
+            "parakeet: built CPU-resident Sortformer head weights "
+            "(diarization head runs on CPU; encoder stays on the Mali GPU)\n");
+    }
+
     if (verbose) {
         print_model_summary(out_model);
         const char * be = impl->backend_gpu
@@ -946,6 +1077,10 @@ bool model_has_gpu_backend(const ParakeetCtcModel & m) {
     return m.impl && m.impl->backend_gpu != nullptr;
 }
 
+bool model_gpu_unsupported(const ParakeetCtcModel & m) {
+    return m.impl && m.impl->gpu_unsupported;
+}
+
 std::string model_active_backend_name(const ParakeetCtcModel & m) {
     if (!m.impl) return "CPU";
     ggml_backend_t b = m.impl->backend_active;
@@ -957,6 +1092,16 @@ std::string model_active_backend_name(const ParakeetCtcModel & m) {
 ggml_backend_t model_active_backend(ParakeetCtcModel & m) {
     if (!m.impl) return nullptr;
     return m.impl->backend_active;
+}
+
+ggml_backend_t model_sortformer_backend(ParakeetCtcModel & m) {
+    if (!m.impl) return nullptr;
+    return m.impl->sortformer_force_cpu ? m.impl->backend_cpu
+                                        : m.impl->backend_active;
+}
+
+bool model_sortformer_on_cpu(const ParakeetCtcModel & m) {
+    return m.impl && m.impl->sortformer_force_cpu;
 }
 
 void print_model_summary(const ParakeetCtcModel & m) {
@@ -1067,6 +1212,29 @@ ggml_tensor * subsampling_graph(ggml_context    * gctx,
     };
     const int conv_pad = causal_downsampling ? 0 : 1;
 
+    // Mali-Vulkan fix: the subsampler depthwise conv, lowered by hand like the
+    // portable ggml_conv_2d_dw. Upstream finishes the lowering with a broadcast
+    // ggml_mul_mat (kernel batched per-channel, broadcast over the input batch)
+    // that miscomputes to inf on Mali-G715/Valhall Vulkan. Express the identical
+    // per-channel contraction WITHOUT a mul_mat instead: an elementwise ggml_mul
+    // (kernel broadcast over the spatial + batch dims) then ggml_sum_rows over the
+    // KH*KW dim. The im2col stays F32 (ggml-vulkan SUM_ROWS needs an F32,
+    // contiguous-rows src0). Adreno/OpenCL and Apple/Metal compute the depthwise
+    // correctly already and stay bit-identical.
+    auto conv_2d_dw_f32 = [&](ggml_tensor * a, ggml_tensor * b,
+                              int s0, int s1, int p0, int p1, int d0, int d1) -> ggml_tensor * {
+        ggml_tensor * kf32 = a->type == GGML_TYPE_F32 ? a : ggml_cast(gctx, a, GGML_TYPE_F32);
+        ggml_tensor * new_a = ggml_reshape_4d(gctx, kf32, kf32->ne[0], kf32->ne[1], 1, kf32->ne[2] * kf32->ne[3]);
+        ggml_tensor * im2col = ggml_im2col(gctx, new_a,
+                                  ggml_reshape_4d(gctx, b, b->ne[0], b->ne[1], 1, b->ne[2] * b->ne[3]),
+                                  s0, s1, p0, p1, d0, d1, true, GGML_TYPE_F32);
+        ggml_tensor * new_b = ggml_reshape_4d(gctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1], b->ne[2], b->ne[3]);
+        new_a = ggml_reshape_4d(gctx, new_a, new_a->ne[0] * new_a->ne[1], new_a->ne[2], new_a->ne[3], 1);
+        ggml_tensor * prod = ggml_mul(gctx, new_b, new_a);   // [KH*KW, OH*OW, C, N]: kernel bcast over spatial + batch
+        ggml_tensor * summed = ggml_sum_rows(gctx, prod);    // [1, OH*OW, C, N]: contract over the KH*KW dim
+        return ggml_reshape_4d(gctx, summed, im2col->ne[1], im2col->ne[2], b->ne[2], b->ne[3]);
+    };
+
     x = maybe_mask(x, mask_t0);
     x = causal_pad(x);
     x = ggml_conv_2d(gctx, S.conv0_w, x, 2, 2, conv_pad, conv_pad, 1, 1);
@@ -1076,7 +1244,7 @@ ggml_tensor * subsampling_graph(ggml_context    * gctx,
 
     x = maybe_mask(x, mask_t1);
     x = causal_pad(x);
-    x = ggml_conv_2d_dw(gctx, S.conv1_dw_w, x, 2, 2, conv_pad, conv_pad, 1, 1);
+    x = conv_2d_dw_f32(S.conv1_dw_w, x, 2, 2, conv_pad, conv_pad, 1, 1);
     x = ggml_add(gctx, x, conv_bias_bcast(gctx, S.conv1_dw_b, subsampling_channels));
     x = maybe_mask(x, mask_t2);
     x = ggml_conv_2d(gctx, S.conv1_pw_w, x, 1, 1, 0, 0, 1, 1);
@@ -1086,7 +1254,7 @@ ggml_tensor * subsampling_graph(ggml_context    * gctx,
 
     x = maybe_mask(x, mask_t2);
     x = causal_pad(x);
-    x = ggml_conv_2d_dw(gctx, S.conv2_dw_w, x, 2, 2, conv_pad, conv_pad, 1, 1);
+    x = conv_2d_dw_f32(S.conv2_dw_w, x, 2, 2, conv_pad, conv_pad, 1, 1);
     x = ggml_add(gctx, x, conv_bias_bcast(gctx, S.conv2_dw_b, subsampling_channels));
     x = maybe_mask(x, mask_t3);
     x = ggml_conv_2d(gctx, S.conv2_pw_w, x, 1, 1, 0, 0, 1, 1);

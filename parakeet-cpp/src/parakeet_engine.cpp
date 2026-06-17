@@ -227,6 +227,10 @@ std::string Engine::backend_name() const {
     return model_active_backend_name(pimpl_->model);
 }
 
+bool Engine::gpu_unsupported() const {
+    return model_gpu_unsupported(pimpl_->model);
+}
+
 void Engine::cancel() {
     pimpl_->cancel_flag.store(true);
 }
@@ -589,15 +593,15 @@ static DiarizationResult engine_impl_diarize_helper(Engine::Impl & impl,
     sopts.threshold = opts.threshold;
     SortformerDiarizationResult dres;
 
-    ggml_backend_t active_backend = model_active_backend(impl.model);
-    if (!active_backend) {
-        throw std::runtime_error("diarize: no active ggml backend");
+    ggml_backend_t head_backend = model_sortformer_backend(impl.model);
+    if (!head_backend) {
+        throw std::runtime_error("diarize: no ggml backend for the diarization head");
     }
 
     int diarize_rc = sortformer_diarize_ggml(impl.model,
                                              enc_out.encoder_out.data(),
                                              enc_out.n_enc_frames, enc_out.d_model,
-                                             active_backend, sopts, dres);
+                                             head_backend, sopts, dres);
     if (diarize_rc != 0) {
         throw std::runtime_error("diarize: sortformer_diarize failed (rc=" +
                                  std::to_string(diarize_rc) + ")");
@@ -722,16 +726,16 @@ static DiarizationResult engine_impl_diarize_streaming_helper(
     s_opts.threshold = opts.threshold;
     SortformerDiarizationResult dres;
 
-    ggml_backend_t active_backend = model_active_backend(impl.model);
-    if (!active_backend) {
-        throw std::runtime_error("diarize_streaming: no active ggml backend");
+    ggml_backend_t head_backend = model_sortformer_backend(impl.model);
+    if (!head_backend) {
+        throw std::runtime_error("diarize_streaming: no ggml backend for the diarization head");
     }
 
     if (int rc_ = sortformer_aosc_step(impl.model,
                                        pre_encode.data(),
                                        n_pre_encode_frames, D,
                                        lc, rc, chunk_len_eff,
-                                       cache, cfg, active_backend, s_opts, dres);
+                                       cache, cfg, head_backend, s_opts, dres);
         rc_ != 0) {
         throw std::runtime_error("diarize_streaming: sortformer_aosc_step failed (rc=" +
                                  std::to_string(rc_) + ")");
