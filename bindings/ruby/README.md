@@ -398,7 +398,7 @@ whisper
 
 ### Parakeet ###
 
-Now whispercpp supports NVIDIA's ASR model Parakeet.
+whispercpp gem now supports NVIDIA's ASR model Parakeet.
 
 If you want to use Parakeet instead of Whisper, the API should feel familiar.  
 In most cases, replace `Whisper::Context` and `Whisper::Params` with `Whisper::Parakeet::Context` and `Whisper::Parakeet::Params`, then use `#transcribe`, `#full`, `#each_segment`, and `#each_token` in the same way.
