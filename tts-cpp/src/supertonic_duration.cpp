@@ -109,7 +109,7 @@ ggml_tensor * conv1d_f32(ggml_context * ctx,
                          int dilation) {
     // duration uses the pure-graph path unconditionally; no CPU fast path.
     ggml_tensor * im2col = ggml_im2col(ctx, kernel, input, stride, 0, padding, 0, dilation, 0, false, GGML_TYPE_F32);
-    ggml_tensor * result = ggml_mul_mat(ctx,
+    ggml_tensor * result = st_mul_mat(ctx,
         ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1]),
         ggml_reshape_2d(ctx, kernel, kernel->ne[0] * kernel->ne[1], kernel->ne[2]));
     return ggml_reshape_3d(ctx, result, im2col->ne[1], kernel->ne[2], im2col->ne[2]);
@@ -162,7 +162,7 @@ ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
     ggml_tensor * padded = edge_clamp_pad_1d(ctx, x, pad_left, pad_right);
     ggml_tensor * new_b = ggml_reshape_4d(ctx, padded, padded->ne[0], 1, padded->ne[1], padded->ne[2]);
     ggml_tensor * im2col = ggml_im2col(ctx, w, new_b, 1, 0, 0, 0, dilation, 0, false, GGML_TYPE_F32);
-    ggml_tensor * y = ggml_mul_mat(ctx, im2col, w);
+    ggml_tensor * y = st_mul_mat(ctx, im2col, w);
     y = ggml_reshape_3d(ctx, y, y->ne[0], y->ne[2], 1);
     return ggml_add(ctx, y, repeat_like(ctx, b, y));
 }

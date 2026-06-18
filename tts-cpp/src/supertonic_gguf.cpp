@@ -271,15 +271,15 @@ void convert_supertonic_tensor_data(const ggml_tensor * src,
     const size_t dst_bytes = ggml_row_size(dst_type, n);
     out_buf.resize(dst_bytes);
 
-    const ggml_type_traits_cpu * dst_tr = ggml_get_type_traits_cpu(dst_type);
-    if (!dst_tr || !dst_tr->from_float) {
-        throw std::runtime_error(std::string("Supertonic load: missing from_float for ") +
-                                 ggml_type_name(dst_type));
-    }
-    dst_tr->from_float(f32_pivot.data(), out_buf.data(), n);
+    // from_float lives in the CPU backend shlib, unlinkable under GGML_BACKEND_DL.
+    // Quantize via ggml-base ggml_quantize_chunk (one row of `n` elements) instead.
+    ggml_quantize_chunk(dst_type, f32_pivot.data(), out_buf.data(),
+                        /*start=*/0, /*nrows=*/1, /*n_per_row=*/n, /*imatrix=*/nullptr);
 }
 
-ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose, int vulkan_device = 0) {
+ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose, int vulkan_device = 0,
+                                       bool * out_gpu_unsupported = nullptr) {
+    if (out_gpu_unsupported) *out_gpu_unsupported = false;
     // GPU cascade is centralised in backend_selection.cpp's
     // `init_gpu_backend` (Adreno 700+ -> OpenCL, every other GPU ->
     // Vulkan/Metal/CUDA/Mali, with Adreno 6xx OpenCL force-skipped).
@@ -290,9 +290,13 @@ ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose, int vulka
     // (registry order), N > 0 → that index in the registry's
     // Vulkan-device subset.  No-op when only one Vulkan device is
     // visible or when the chosen backend is non-Vulkan.
-    if (ggml_backend_t b = ::tts_cpp::detail::init_gpu_backend(n_gpu_layers, verbose, "supertonic", vulkan_device)) {
+    bool gpu_present_but_unused = false;
+    if (ggml_backend_t b = ::tts_cpp::detail::init_gpu_backend(
+            n_gpu_layers, verbose, "supertonic", vulkan_device,
+            /*allow_arm_mali=*/true, &gpu_present_but_unused)) {
         return b;
     }
+    if (out_gpu_unsupported) *out_gpu_unsupported = gpu_present_but_unused;
     if (ggml_backend_t b = ::tts_cpp::detail::init_cpu_backend()) {
         if (verbose) fprintf(stderr, "supertonic: using CPU backend\n");
         return b;
@@ -1432,6 +1436,9 @@ thread_local bool g_supertonic_use_native_leaky_relu = true;
 // Defaults to false (pure-GGML) so a helper called outside any dispatch scope
 // never emits a backend-unsupported fused supertonic op.
 thread_local bool g_supertonic_use_fused_supertonic_ops = false;
+// Small-output-dim mul_mat-miscompute flag. Defaults to false so a builder outside
+// any dispatch scope emits a plain ggml_mul_mat; only the broken backend flips it on.
+thread_local bool g_supertonic_mulmat_needs_pad = false;
 // QVAC-18605 round 4 — current K/V flash-attn dispatch dtype.
 // Defaults to f32 so a graph builder called outside any
 // `supertonic_op_dispatch_scope` doesn't accidentally take the
@@ -1455,6 +1462,10 @@ bool supertonic_use_fused_supertonic_ops() {
     return g_supertonic_use_fused_supertonic_ops;
 }
 
+bool supertonic_mulmat_needs_pad() {
+    return g_supertonic_mulmat_needs_pad;
+}
+
 kv_attn_dtype supertonic_kv_attn_type() {
     return g_supertonic_kv_attn_type;
 }
@@ -1464,6 +1475,7 @@ supertonic_op_dispatch_scope::supertonic_op_dispatch_scope(const supertonic_mode
       prev_use_f16_attn(g_supertonic_use_f16_attn),
       prev_use_native_leaky_relu(g_supertonic_use_native_leaky_relu),
       prev_use_fused_supertonic_ops(g_supertonic_use_fused_supertonic_ops),
+      prev_mulmat_needs_pad(g_supertonic_mulmat_needs_pad),
       prev_kv_attn_type(g_supertonic_kv_attn_type) {
     // The CPU custom-op fast paths (CBLAS sgemm, fused depthwise/layernorm,
     // tail update) read their weight args as raw F32, so they cannot consume
@@ -1478,6 +1490,7 @@ supertonic_op_dispatch_scope::supertonic_op_dispatch_scope(const supertonic_mode
     g_supertonic_use_f16_attn             = model.use_f16_attn;
     g_supertonic_use_native_leaky_relu    = model.use_native_leaky_relu;
     g_supertonic_use_fused_supertonic_ops = model.backend_supports_fused_supertonic_ops;
+    g_supertonic_mulmat_needs_pad         = model.mulmat_needs_pad;
     g_supertonic_kv_attn_type             = model.kv_attn_type;
 }
 
@@ -1486,6 +1499,7 @@ supertonic_op_dispatch_scope::~supertonic_op_dispatch_scope() {
     g_supertonic_use_f16_attn             = prev_use_f16_attn;
     g_supertonic_use_native_leaky_relu    = prev_use_native_leaky_relu;
     g_supertonic_use_fused_supertonic_ops = prev_use_fused_supertonic_ops;
+    g_supertonic_mulmat_needs_pad         = prev_mulmat_needs_pad;
     g_supertonic_kv_attn_type             = prev_kv_attn_type;
 }
 
@@ -1886,13 +1900,13 @@ bool load_supertonic_gguf(const std::string & path,
         model.languages = get_string_array(gguf_ctx, "supertonic.languages");
         model.tts_json = get_string(gguf_ctx, "supertonic.tts_json");
 
-        model.backend = init_supertonic_backend(n_gpu_layers, verbose, vulkan_device);
+        model.backend = init_supertonic_backend(n_gpu_layers, verbose, vulkan_device, &model.gpu_unsupported);
         // The graph builders below dispatch between CBLAS-backed
         // `ggml_custom_4d` fast paths (CPU only) and pure-GGML fallbacks
         // (any backend) based on this flag.  Stable for the model's
         // lifetime; see the supertonic_op_dispatch_scope comment in
         // supertonic_internal.h for the threading contract.
-        model.backend_is_cpu = ggml_backend_is_cpu(model.backend);
+        model.backend_is_cpu = ::tts_cpp::detail::backend_is_cpu(model.backend);
         // QVAC-18605 — Vulkan-specific dispatch capture.
         //
         // `backend_is_vk` is informational (the bench / engine show it
@@ -1911,12 +1925,17 @@ bool load_supertonic_gguf(const std::string & path,
         model.use_native_leaky_relu = cached_backend_capabilities(model.backend).native_leaky_relu;
         model.backend_supports_fused_supertonic_ops =
             cached_backend_capabilities(model.backend).fused_supertonic_ops;
+        // ARM Mali Valhall Vulkan miscomputes/hangs on small-output-dim mul_mat, so
+        // st_mul_mat pads those dims to 64 here. Device-identity gate (DL-safe, no
+        // compute) since an at-load compute probe hung the driver. False elsewhere.
+        model.mulmat_needs_pad = ::tts_cpp::detail::backend_is_arm_mali_vulkan(model.backend);
         if (verbose) {
-            fprintf(stderr, "supertonic: backend_is_cpu=%s backend_is_vk=%s use_native_leaky_relu=%s fused_supertonic_ops=%s\n",
+            fprintf(stderr, "supertonic: backend_is_cpu=%s backend_is_vk=%s use_native_leaky_relu=%s fused_supertonic_ops=%s mulmat_needs_pad=%s\n",
                     model.backend_is_cpu ? "true" : "false",
                     model.backend_is_vk ? "true" : "false",
                     model.use_native_leaky_relu ? "true" : "false",
-                    model.backend_supports_fused_supertonic_ops ? "true" : "false");
+                    model.backend_supports_fused_supertonic_ops ? "true" : "false",
+                    model.mulmat_needs_pad ? "true" : "false");
         }
 
         // Phase 2A — auto/force policy for F16 weight materialization.
@@ -1936,7 +1955,15 @@ bool load_supertonic_gguf(const std::string & path,
         // override via `--f16-weights 1` still forces dispatch
         // (useful for debug-shim backends and forward-compat tests).
         if (f16_weights < 0) {
+            // ggml-opencl mat-vec asserts src1t == GGML_TYPE_F32, so an F16 weight as
+            // mul_mat src1 aborts at compute. Keep weights F32 on OpenCL (negligible cost).
+            // Same on ARM Mali (mulmat_needs_pad): the st_mul_mat output-pad only covers F32
+            // operands, so an F16 weight with a <64 output dim would re-expose the Valhall
+            // small-output miscompute. Gating on the same flag keeps "pad on" and "F16 off"
+            // from ever drifting apart.
             model.use_f16_weights = !model.backend_is_cpu &&
+                                    !::tts_cpp::detail::backend_is_opencl(model.backend) &&
+                                    !model.mulmat_needs_pad &&
                                     cached_backend_capabilities(model.backend).f16_mul_mat;
         } else {
             model.use_f16_weights = (f16_weights != 0);
@@ -2122,7 +2149,7 @@ bool load_supertonic_gguf(const std::string & path,
                 // for tensors that don't need conversion.
                 dst_type = target_supertonic_storage_type(
                     decision_name, src->type, precision,
-                    /*backend_is_cpu=*/ ggml_backend_is_cpu(model.backend));
+                    /*backend_is_cpu=*/ ::tts_cpp::detail::backend_is_cpu(model.backend));
             }
 
             ggml_tensor * dst;
@@ -2539,7 +2566,7 @@ bool load_supertonic_gguf(const std::string & path,
         static const bool disable_pretranspose =
             std::getenv("SUPERTONIC_DISABLE_WEIGHT_PRETRANSPOSE") != nullptr;
         if (!disable_pretranspose && model.backend &&
-            !ggml_backend_is_cpu(model.backend)) {
+            !::tts_cpp::detail::backend_is_cpu(model.backend)) {
             std::vector<std::pair<std::string, ggml_tensor *>> to_pretranspose;
             // Dedupe by tensor pointer: cross-family bridge aliases register
             // a second `:onnx::MatMul_` key (the v2 logical id) against the
@@ -2638,14 +2665,11 @@ bool load_supertonic_gguf(const std::string & path,
                     } else {
                         const size_t dst_bytes = ggml_row_size(pre->type, n);
                         std::vector<uint8_t> raw(dst_bytes);
-                        const ggml_type_traits_cpu * dtr =
-                            ggml_get_type_traits_cpu(pre->type);
-                        if (!dtr || !dtr->from_float) {
-                            throw std::runtime_error(
-                                std::string("pretranspose: missing from_float for ") +
-                                ggml_type_name(pre->type));
-                        }
-                        dtr->from_float(host_pre_f32.data(), raw.data(), (int64_t) n);
+                        // from_float lives in the DL CPU backend; quantize via
+                        // the ggml-base ggml_quantize_chunk() API instead.
+                        ggml_quantize_chunk(pre->type, host_pre_f32.data(),
+                                            raw.data(), /*start=*/0, /*nrows=*/1,
+                                            /*n_per_row=*/(int64_t) n, /*imatrix=*/nullptr);
                         ggml_backend_tensor_set(pre, raw.data(), 0, raw.size());
                     }
                     model.pretransposed_weights[orig] = pre;

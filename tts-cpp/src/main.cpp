@@ -285,7 +285,8 @@ static ggml_tensor * require_tensor(const chatterbox_model & m, const char * nam
 // so chatterbox_engine.cpp can flip it from its Engine ctor without a copy.
 int g_log_verbose = 0;
 
-ggml_backend_t init_backend(int n_gpu_layers) {
+ggml_backend_t init_backend(int n_gpu_layers, bool * out_gpu_unsupported) {
+    if (out_gpu_unsupported) *out_gpu_unsupported = false;
     const bool v = g_log_verbose != 0;
     // GPU cascade is centralised in backend_selection.cpp's
     // `init_gpu_backend` (Adreno 700+ -> OpenCL, every other GPU ->
@@ -293,9 +294,13 @@ ggml_backend_t init_backend(int n_gpu_layers) {
     // The registry walk it does reaches the same set of backends in
     // both `GGML_BACKEND_DL=ON` and `=OFF` modes without linking the
     // per-backend static `ggml_backend_<x>_init` entry points.
-    if (ggml_backend_t b = ::tts_cpp::detail::init_gpu_backend(n_gpu_layers, v, "chatterbox")) {
+    bool gpu_present_but_unused = false;
+    if (ggml_backend_t b = ::tts_cpp::detail::init_gpu_backend(
+            n_gpu_layers, v, "chatterbox", 0,
+            /*allow_arm_mali=*/false, &gpu_present_but_unused)) {
         return b;
     }
+    if (out_gpu_unsupported) *out_gpu_unsupported = gpu_present_but_unused;
     if (ggml_backend_t b = ::tts_cpp::detail::init_cpu_backend()) {
         if (v) fprintf(stderr, "chatterbox: using CPU backend\n");
         return b;
@@ -350,7 +355,7 @@ bool load_model_gguf(const std::string & path, chatterbox_model & model, int req
         hp.n_layer = (int32_t) gguf_get_val_u32(gguf_ctx, require_key(gguf_ctx, KEY_N_LAYER));
         if (requested_ctx > 0) hp.n_ctx = std::min(hp.n_ctx, requested_ctx);
 
-        model.backend = init_backend(n_gpu_layers);
+        model.backend = init_backend(n_gpu_layers, &model.gpu_unsupported);
 
         const int64_t num_tensors = gguf_get_n_tensors(gguf_ctx);
         ggml_init_params params = { ggml_tensor_overhead() * (size_t) num_tensors, nullptr, true };

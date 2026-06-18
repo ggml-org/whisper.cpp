@@ -12,6 +12,8 @@
 #include "ggml-cpu.h"
 #include "ggml.h"
 
+#include "backend_util.h"
+
 namespace tts_cpp::supertonic::detail {
 
 // QVAC-18605 round 4 — multi-dtype K/V flash-attention dispatch.
@@ -350,6 +352,9 @@ struct supertonic_model {
     // the lifetime of the model.  See `OpenCL bring-up` section in
     // PROGRESS_SUPERTONIC.md for the rationale.
     bool backend_is_cpu = true;
+    // True when GPU was requested but a present GPU device was unusable (e.g. an
+    // Android GPU outside the allowlist) and we fell back to CPU; distinct from a GPU-less host.
+    bool gpu_unsupported = false;
     // QVAC-18605 / Vulkan bring-up: True when the resolved backend is
     // ggml-vulkan (`ggml_backend_is_vk`).  Mirrors `backend_is_cpu` in
     // intent — informational + dispatch-key.  Set once in
@@ -402,6 +407,9 @@ struct supertonic_model {
     // silently skipped on Vulkan/OpenCL single-backend graphs → garbage output.
     // Default false = safe (pure-GGML) until the load-time probe runs.
     bool backend_supports_fused_supertonic_ops = false;
+    // ARM Mali/Valhall Vulkan miscomputes a GEMM mul_mat whose output dim < ~48; set via
+    // device-identity (not supports_op: driver claims support). st_mul_mat pads to 64; harmless elsewhere.
+    bool mulmat_needs_pad = false;
     // When true, the per-step vector-estimator attention graphs materialise
     // K/V into contiguous F16 before calling ggml_flash_attn_ext so OpenCL
     // (and other backends carrying the mixed-precision kernel) dispatch
@@ -632,7 +640,9 @@ void release_duration_thread_local_caches();
 // Mirrors the `!ggml_backend_is_cpu(backend)` idiom Chatterbox uses to gate
 // its Metal-only batched-CFG path.
 inline bool model_prefers_cpu_kernels(const supertonic_model & model) {
-    return model.backend == nullptr || ggml_backend_is_cpu(model.backend);
+    // `ggml_backend_is_cpu` lives in the CPU backend shared library, which is
+    // unlinkable under GGML_BACKEND_DL. Route through the registry-based shim.
+    return model.backend == nullptr || ::tts_cpp::detail::backend_is_cpu(model.backend);
 }
 
 // QVAC-19254 — scheduler-based alloc + compute (Option A), used by stages
@@ -1099,6 +1109,44 @@ bool supertonic_use_f16_attn();
 // unsupported fused op.
 bool supertonic_use_fused_supertonic_ops();
 
+// Thread-local mirror of `supertonic_model::mulmat_needs_pad`, set by the dispatch scope.
+// Defaults to false outside any scope, so st_mul_mat emits a plain ggml_mul_mat.
+bool supertonic_mulmat_needs_pad();
+
+// Drop-in for ggml_mul_mat: when mulmat_needs_pad, zero-pad a GEMM output dim < 64 up to 64,
+// then slice back the [M,N] block (exact). No-op on healthy backends, mat-vec, or non-F32 operands.
+inline ggml_tensor * st_mul_mat(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b) {
+    if (!supertonic_mulmat_needs_pad()) return ggml_mul_mat(ctx, a, b);
+    const int64_t M = a->ne[1];
+    const int64_t N = b->ne[1];
+    // GEMM-path predicate (the only path that miscomputes).  Anything that would
+    // dispatch as mat-vec is correct on the driver and must not be perturbed.
+    // The N<=8 carve-out mirrors ggml-vulkan's mat-vec dispatch (mul_mat_vec_max_cols,
+    // currently 8: mul_mat_vec when dst->ne[1]==1 || (dst->ne[1]<=8 && src1 batch==1)).
+    // Revisit if that upstream threshold changes.
+    const bool is_gemm = (N != 1) && !(N <= 8 && b->ne[2] * b->ne[3] == 1);
+    if (!is_gemm) return ggml_mul_mat(ctx, a, b);
+    const bool pad_a = (M < 64 && a->type == GGML_TYPE_F32);
+    const bool pad_b = (N < 64 && b->type == GGML_TYPE_F32);
+    if (!pad_a && !pad_b) return ggml_mul_mat(ctx, a, b);  // nothing paddable (e.g. non-F32 src)
+    ggml_tensor * ap = a;
+    ggml_tensor * bp = b;
+    if (pad_a) {
+        // Materialise strided/permuted views first so ggml_pad sees a simple
+        // contiguous layout. Only on the pad path, so healthy backends pay nothing.
+        if (!ggml_is_contiguous(ap)) ap = ggml_cont(ctx, ap);
+        ap = ggml_pad(ctx, ap, 0, (int) (64 - M), 0, 0);
+    }
+    if (pad_b) {
+        if (!ggml_is_contiguous(bp)) bp = ggml_cont(ctx, bp);
+        bp = ggml_pad(ctx, bp, 0, (int) (64 - N), 0, 0);
+    }
+    ggml_tensor * r = ggml_mul_mat(ctx, ap, bp);             // [Mpad, Npad, ne2, ne3], contiguous F32
+    ggml_tensor * v = ggml_view_4d(ctx, r, M, N, r->ne[2], r->ne[3],
+                                   r->nb[1], r->nb[2], r->nb[3], 0);  // real top-left sub-block
+    return ggml_cont(ctx, v);  // repack tight: downstream consumers require contiguity
+}
+
 // QVAC-18605 round 4 — thread-local accessor for the currently-
 // active K/V dispatch dtype, mirroring `supertonic_use_f16_attn`'s
 // pattern.  Returns `kv_attn_dtype::f32` when no
@@ -1400,6 +1448,8 @@ struct supertonic_op_dispatch_scope {
     bool prev_use_f16_attn;
     bool prev_use_native_leaky_relu;
     bool prev_use_fused_supertonic_ops;
+    // saved `mulmat_needs_pad` flag for RAII teardown.
+    bool prev_mulmat_needs_pad;
     // QVAC-18605 round 4 — saved K/V dispatch dtype for RAII
     // teardown.  Restored on scope destruction so a follow-on
     // engine on the same thread sees the default value, not the
@@ -1797,7 +1847,7 @@ inline ggml_tensor * convnext_block_fused_ggml(
     // `mul_mat(im2col_reshape, w_reshape)` for `K=1`.
     ggml_tensor * pw1_w_2d = ggml_reshape_2d(
         ctx, pw1_w, pw1_w->ne[0] * pw1_w->ne[1], pw1_w->ne[2]);
-    ggml_tensor * pw1_out = ggml_mul_mat(ctx, pw1_w_2d, y);
+    ggml_tensor * pw1_out = st_mul_mat(ctx, pw1_w_2d, y);
     if (pw1_b) {
         ggml_tensor * pw1_b_2d = ggml_reshape_2d(ctx, pw1_b, hidden, 1);
         pw1_out = ggml_add(ctx, pw1_out, ggml_repeat(ctx, pw1_b_2d, pw1_out));
@@ -1810,7 +1860,7 @@ inline ggml_tensor * convnext_block_fused_ggml(
     // pw2 — symmetric to pw1.  Output is `[C, T0]`.
     ggml_tensor * pw2_w_2d = ggml_reshape_2d(
         ctx, pw2_w, pw2_w->ne[0] * pw2_w->ne[1], pw2_w->ne[2]);
-    ggml_tensor * pw2_out = ggml_mul_mat(ctx, pw2_w_2d, gelu_out);
+    ggml_tensor * pw2_out = st_mul_mat(ctx, pw2_w_2d, gelu_out);
     if (pw2_b) {
         ggml_tensor * pw2_b_2d = ggml_reshape_2d(ctx, pw2_b, C, 1);
         pw2_out = ggml_add(ctx, pw2_out, ggml_repeat(ctx, pw2_b_2d, pw2_out));

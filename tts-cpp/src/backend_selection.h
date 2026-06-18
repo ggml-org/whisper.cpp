@@ -70,10 +70,16 @@ void ensure_backends_loaded();
 //                  pick on hybrid desktops/laptops).
 // No effect when zero / one Vulkan adapters are visible, or when the
 // chosen backend is non-Vulkan (CUDA / Metal / OpenCL).
+// `out_gpu_present_but_unused` (optional): set true only when CPU fallback is by
+// policy (GPU present but off-allowlist, e.g. Mali / Adreno 6xx); NOT on init failure.
+// `allow_arm_mali` (default false): opt-in to ARM Mali/Immortalis (Valhall) Vulkan.
+// Only Supertonic sets it — its st_mul_mat output-pad dodges the Valhall mul_mat bug.
 ggml_backend_t init_gpu_backend(int n_gpu_layers,
                                 bool verbose,
                                 const char * log_prefix,
-                                int vulkan_device = 0);
+                                int vulkan_device = 0,
+                                bool allow_arm_mali = false,
+                                bool * out_gpu_present_but_unused = nullptr);
 
 // Convenience wrapper that picks up the registered CPU device and
 // returns its init handle. Mirrors parakeet-cpp's

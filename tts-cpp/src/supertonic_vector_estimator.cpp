@@ -277,7 +277,7 @@ ggml_tensor * conv1d_f32(ggml_context * ctx,
     }
 #endif
     ggml_tensor * im2col = ggml_im2col(ctx, kernel, input, stride, 0, padding, 0, dilation, 0, false, GGML_TYPE_F32);
-    ggml_tensor * result = ggml_mul_mat(ctx,
+    ggml_tensor * result = st_mul_mat(ctx,
         ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1]),
         ggml_reshape_2d(ctx, kernel, kernel->ne[0] * kernel->ne[1], kernel->ne[2]));
     return ggml_reshape_3d(ctx, result, im2col->ne[1], kernel->ne[2], im2col->ne[2]);
@@ -439,7 +439,7 @@ ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
     ggml_tensor * padded = edge_clamp_pad_1d(ctx, x, pad_left, pad_right);
     ggml_tensor * new_b = ggml_reshape_4d(ctx, padded, padded->ne[0], 1, padded->ne[1], padded->ne[2]);
     ggml_tensor * im2col = ggml_im2col(ctx, w, new_b, 1, 0, 0, 0, dilation, 0, false, GGML_TYPE_F32);
-    ggml_tensor * y = ggml_mul_mat(ctx, im2col, w);
+    ggml_tensor * y = st_mul_mat(ctx, im2col, w);
     y = ggml_reshape_3d(ctx, y, y->ne[0], y->ne[2], 1);
     return ggml_add(ctx, y, repeat_like(ctx, b, y));
 }
@@ -696,7 +696,7 @@ ggml_tensor * dense_matmul_time_wt_pretransposed_ggml(ggml_context * ctx,
             // bandwidth-optimised quantized matmul kernel — which is the
             // A3 step 2 unlock.
             ggml_tensor * w_2d = ggml_reshape_2d(ctx, w_pre, IC, OC);
-            ggml_tensor * y = ggml_mul_mat(ctx, w_2d, im2col_2d);
+            ggml_tensor * y = st_mul_mat(ctx, w_2d, im2col_2d);
             // y has ne=[OC, T] — already the wt layout.
             if (b) y = ggml_add(ctx, y, repeat_like(ctx, b, y));
             return y;
@@ -866,7 +866,7 @@ ggml_tensor * pointwise_matmul_ct(ggml_context * ctx,
     GGML_ASSERT(ggml_is_contiguous(w));
     ggml_tensor * w_2d = ggml_reshape_2d(ctx, w, w->ne[1], w->ne[2]);
     ggml_tensor * x_2d = ggml_reshape_2d(ctx, x_ct, x_ct->ne[0], x_ct->ne[1]);
-    ggml_tensor * y = ggml_mul_mat(ctx, w_2d, x_2d);  // [OC, T]
+    ggml_tensor * y = st_mul_mat(ctx, w_2d, x_2d);  // [OC, T]
     if (b) y = ggml_add(ctx, y, repeat_like(ctx, b, y));
     return y;
 }
@@ -1050,6 +1050,35 @@ void free_text_attention_cache(vector_text_attention_cache & cache) {
     cache = {};
 }
 
+// Attention context for the out-projection. Normally flash_attn_ext; when a backend
+// routes FA to CPU the bridge goes stale on per-step graph reuse, so use explicit ops.
+static ggml_tensor * supertonic_attention_ctx_ggml(ggml_context * ctx,
+                                                    const supertonic_model & model,
+                                                    ggml_tensor * q_in,
+                                                    ggml_tensor * k_in,
+                                                    ggml_tensor * v_in,
+                                                    int q_len,
+                                                    int n_heads,
+                                                    int head_dim,
+                                                    float scale) {
+    ggml_tensor * attn = ggml_flash_attn_ext(ctx, q_in, k_in, v_in,
+                                             nullptr, scale, 0.0f, 0.0f);
+    if (!ggml_backend_supports_op(model.backend, attn)) {
+        // Explicit per-head attention; cont the strided q/k/v views first because the
+        // GPU mul_mat kernels reject non-contiguous operands (time stride > head stride).
+        ggml_tensor * q_c = ggml_cont(ctx, q_in);                                 // [head_dim, q_len,  n_heads]
+        ggml_tensor * k_c = ggml_cont(ctx, k_in);                                 // [head_dim, kv_len, n_heads]
+        ggml_tensor * v_c = ggml_cont(ctx, v_in);                                 // [head_dim, kv_len, n_heads]
+        ggml_tensor * kq  = st_mul_mat(ctx, k_c, q_c);                          // [kv_len, q_len, n_heads]
+        kq = ggml_soft_max_ext(ctx, kq, nullptr, scale, 0.0f);                    // softmax(scale*kq) over kv
+        ggml_tensor * v_t = ggml_cont(ctx, ggml_permute(ctx, v_c, 1, 0, 2, 3));   // [kv_len, head_dim, n_heads]
+        ggml_tensor * kqv = st_mul_mat(ctx, v_t, kq);                           // [head_dim, q_len, n_heads]
+        attn = ggml_cont(ctx, ggml_permute(ctx, kqv, 0, 2, 1, 3));                // [head_dim, n_heads, q_len] (== FA layout)
+    }
+    attn = ggml_reshape_2d(ctx, attn, (int64_t) n_heads * head_dim, q_len);
+    return ggml_cont(ctx, ggml_transpose(ctx, attn));
+}
+
 void build_text_attention_cache(vector_text_attention_cache & cache,
                                 const supertonic_model & model,
                                 int q_len,
@@ -1150,10 +1179,8 @@ void build_text_attention_cache(vector_text_attention_cache & cache,
         v_in = ggml_cpy(cache.ctx, v_in, v_typed);
     }
 
-    ggml_tensor * attn = ggml_flash_attn_ext(cache.ctx, q_in, k_in, v_in,
-                                             nullptr, 1.0f/16.0f, 0.0f, 0.0f);
-    attn = ggml_reshape_2d(cache.ctx, attn, static_cast<int64_t>(n_heads) * head_dim, q_len);
-    ggml_tensor * ctx_tc = ggml_cont(cache.ctx, ggml_transpose(cache.ctx, attn));
+    ggml_tensor * ctx_tc = supertonic_attention_ctx_ggml(cache.ctx, model,
+        q_in, k_in, v_in, q_len, n_heads, head_dim, 1.0f/16.0f);
     ggml_set_name(ctx_tc, "vector_attn_ctx"); ggml_set_output(ctx_tc);
     ggml_build_forward_expand(cache.gf, ctx_tc);
 
@@ -1577,7 +1604,7 @@ void build_group_graph_cache(vector_group_graph_cache & cache,
                 w_t = ggml_cont(cache.ctx, ggml_transpose(cache.ctx, t_proj_w_orig));
             }
         }
-        t_proj = ggml_mul_mat(cache.ctx, w_t,
+        t_proj = st_mul_mat(cache.ctx, w_t,
             ggml_reshape_2d(cache.ctx, cache.temb_in, 64, 1));
     }
     t_proj = ggml_add(cache.ctx, t_proj,
@@ -3558,7 +3585,7 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
                         require_source_tensor(model, "vector_estimator:onnx::MatMul_3095")));
                 }
             }
-            ggml_tensor * t_proj = ggml_mul_mat(front_cache.ctx, t_proj_w_t,
+            ggml_tensor * t_proj = st_mul_mat(front_cache.ctx, t_proj_w_t,
                 ggml_reshape_2d(front_cache.ctx, front_cache.t_emb_in, 64, 1));
             t_proj = ggml_add(front_cache.ctx, t_proj,
                 ggml_reshape_2d(front_cache.ctx,
@@ -4368,10 +4395,8 @@ ggml_tensor * append_text_attention_subgraph(ggml_context * ctx,
         head_dim, kv_len, n_heads, time_stride, head_stride, 0);
     ggml_tensor * v_in = ggml_view_3d(ctx, v_tc,
         head_dim, kv_len, n_heads, time_stride, head_stride, 0);
-    ggml_tensor * attn = ggml_flash_attn_ext(ctx, q_in, k_in, v_in,
-                                              nullptr, scale, 0.0f, 0.0f);
-    attn = ggml_reshape_2d(ctx, attn, (int64_t) n_heads * head_dim, q_len);
-    ggml_tensor * ctx_tc = ggml_cont(ctx, ggml_transpose(ctx, attn));
+    ggml_tensor * ctx_tc = supertonic_attention_ctx_ggml(ctx, model,
+        q_in, k_in, v_in, q_len, n_heads, head_dim, scale);
     return dense_matmul_time_pretransposed_ggml(ctx, model, ctx_tc, out_w_tensor, out_b_tensor);
 }
 
@@ -4573,7 +4598,7 @@ ggml_tensor * append_supertonic_vector_step_subgraph(
         ggml_tensor * b = require_source_tensor(model, "vector_estimator:tts.ttl.vector_field.main_blocks.1.linear.linear.bias");
         ggml_tensor * w_t = try_pretransposed_weight(model, w);
         if (!w_t) w_t = ggml_cont(gctx, ggml_transpose(gctx, w));
-        ggml_tensor * t_proj = ggml_mul_mat(gctx, w_t, ggml_reshape_2d(gctx, inputs.t_emb_in, 64, 1));
+        ggml_tensor * t_proj = st_mul_mat(gctx, w_t, ggml_reshape_2d(gctx, inputs.t_emb_in, 64, 1));
         t_proj = ggml_add(gctx, t_proj, ggml_reshape_2d(gctx, b, C, 1));
         cur = ggml_add(gctx, cur, repeat_like(gctx, t_proj, cur));
     }
@@ -4692,7 +4717,7 @@ ggml_tensor * append_supertonic_vector_step_subgraph(
             std::to_string(linear_block) + ".linear.linear.bias");
         ggml_tensor * w_t = try_pretransposed_weight(model, w);
         if (!w_t) w_t = ggml_cont(gctx, ggml_transpose(gctx, w));
-        ggml_tensor * t_proj = ggml_mul_mat(gctx, w_t, ggml_reshape_2d(gctx, inputs.t_emb_in, 64, 1));
+        ggml_tensor * t_proj = st_mul_mat(gctx, w_t, ggml_reshape_2d(gctx, inputs.t_emb_in, 64, 1));
         t_proj = ggml_add(gctx, t_proj, ggml_reshape_2d(gctx, b, C, 1));
         y = ggml_add(gctx, y, repeat_like(gctx, t_proj, y));
         y = vector_convnext_ggml(gctx, model,

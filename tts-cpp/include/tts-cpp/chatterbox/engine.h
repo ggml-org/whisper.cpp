@@ -341,6 +341,10 @@ public:
     // of the Engine.
     BackendDevice backend_device() const;
 
+    // True iff a GPU was present but declined by policy (vendor off the validated
+    // allowlist, e.g. Mali), so we fell back to CPU. Distinguishes this from a GPU-less host.
+    bool gpu_unsupported() const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> pimpl_;

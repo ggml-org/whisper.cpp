@@ -897,4 +897,8 @@ BackendDevice Engine::backend_device() const {
                : BackendDevice::GPU;
 }
 
+bool Engine::gpu_unsupported() const {
+    return pimpl_ && pimpl_->model.gpu_unsupported;
+}
+
 } // namespace tts_cpp::chatterbox

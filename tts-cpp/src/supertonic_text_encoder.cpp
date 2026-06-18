@@ -162,7 +162,7 @@ ggml_tensor * conv1d_f32(ggml_context * ctx,
     // text_encoder uses the pure-graph path unconditionally; no CPU fast path
     // here so no use_cpu_fastpath plumbing.
     ggml_tensor * im2col = ggml_im2col(ctx, kernel, input, stride, 0, padding, 0, dilation, 0, false, GGML_TYPE_F32);
-    ggml_tensor * result = ggml_mul_mat(ctx,
+    ggml_tensor * result = st_mul_mat(ctx,
         ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1]),
         ggml_reshape_2d(ctx, kernel, kernel->ne[0] * kernel->ne[1], kernel->ne[2]));
     return ggml_reshape_3d(ctx, result, im2col->ne[1], kernel->ne[2], im2col->ne[2]);
@@ -214,7 +214,7 @@ ggml_tensor * depthwise_same_ggml(ggml_context * ctx,
     ggml_tensor * padded = edge_clamp_pad_1d(ctx, x, pad_left, pad_right);
     ggml_tensor * new_b = ggml_reshape_4d(ctx, padded, padded->ne[0], 1, padded->ne[1], padded->ne[2]);
     ggml_tensor * im2col = ggml_im2col(ctx, w, new_b, 1, 0, 0, 0, dilation, 0, false, GGML_TYPE_F32);
-    ggml_tensor * y = ggml_mul_mat(ctx, im2col, w);
+    ggml_tensor * y = st_mul_mat(ctx, im2col, w);
     y = ggml_reshape_3d(ctx, y, y->ne[0], y->ne[2], 1);
     return ggml_add(ctx, y, repeat_like(ctx, b, y));
 }
@@ -253,7 +253,7 @@ ggml_tensor * conv1d_k1_channel_time_ggml(ggml_context * ctx,
                                           ggml_tensor * bias) {
     ggml_tensor * x_cl = ggml_cont(ctx, ggml_transpose(ctx, x_lc));
     ggml_tensor * w2d = ggml_reshape_2d(ctx, kernel, kernel->ne[1], kernel->ne[2]);
-    ggml_tensor * y = ggml_mul_mat(ctx, w2d, x_cl);
+    ggml_tensor * y = st_mul_mat(ctx, w2d, x_cl);
     if (bias) y = ggml_add(ctx, y, repeat_like(ctx, bias, y));
     return y;
 }
@@ -535,9 +535,9 @@ void build_relpos_cache(text_relpos_graph_cache & cache,
     ggml_tensor * k_dlh = ggml_view_3d(cache.ctx, k, D, L, H, time_stride, head_stride, 0);
     ggml_tensor * v_dlh = ggml_view_3d(cache.ctx, v, D, L, H, time_stride, head_stride, 0);
 
-    ggml_tensor * scores = ggml_scale(cache.ctx, ggml_mul_mat(cache.ctx, k_dlh, q_dlh), scale);
+    ggml_tensor * scores = ggml_scale(cache.ctx, st_mul_mat(cache.ctx, k_dlh, q_dlh), scale);
     ggml_tensor * rel_k = require_source_tensor(m, p + ".emb_rel_k");
-    ggml_tensor * rel_scores = ggml_mul_mat(cache.ctx, rel_k, q_dlh);
+    ggml_tensor * rel_scores = st_mul_mat(cache.ctx, rel_k, q_dlh);
     for (int ri = 0; ri < N_MASKS; ++ri) {
         ggml_tensor * rel_delta = ggml_view_3d(cache.ctx, rel_scores, 1, L, H,
                                                rel_scores->nb[1], rel_scores->nb[2],
@@ -549,7 +549,7 @@ void build_relpos_cache(text_relpos_graph_cache & cache,
 
     ggml_tensor * attn = ggml_soft_max(cache.ctx, scores);
     ggml_tensor * v_for_mm = ggml_cont(cache.ctx, ggml_permute(cache.ctx, v_dlh, 1, 0, 2, 3));
-    ggml_tensor * out = ggml_mul_mat(cache.ctx, v_for_mm, attn);
+    ggml_tensor * out = st_mul_mat(cache.ctx, v_for_mm, attn);
 
     ggml_tensor * rel_v = require_source_tensor(m, p + ".emb_rel_v");
     ggml_tensor * rel_out = ggml_scale(cache.ctx, out, 0.0f);

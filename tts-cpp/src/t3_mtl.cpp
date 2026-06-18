@@ -1700,7 +1700,7 @@ bool load_model_gguf_mtl(const std::string & path,
 
         if (requested_ctx > 0) hp.n_ctx = std::min(hp.n_ctx, requested_ctx);
 
-        model.backend = init_backend(n_gpu_layers);
+        model.backend = init_backend(n_gpu_layers, &model.gpu_unsupported);
 
         const int64_t num_tensors = gguf_get_n_tensors(gguf_ctx);
         ggml_init_params p = { ggml_tensor_overhead() * (size_t)(num_tensors + 1), nullptr, true };

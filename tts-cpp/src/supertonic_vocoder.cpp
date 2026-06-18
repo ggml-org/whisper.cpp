@@ -269,7 +269,7 @@ ggml_tensor * conv1d_causal_ggml(ggml_context * ctx,
 #endif
     ggml_tensor * padded = causal_replicate_pad_1d(ctx, x, (K - 1) * dilation);
     ggml_tensor * im2col = ggml_im2col(ctx, w, padded, 1, 0, 0, 0, dilation, 0, false, GGML_TYPE_F32);
-    ggml_tensor * y = ggml_mul_mat(ctx,
+    ggml_tensor * y = st_mul_mat(ctx,
         ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1]),
         ggml_reshape_2d(ctx, w, w->ne[0] * w->ne[1], w->ne[2]));
     y = ggml_reshape_3d(ctx, y, im2col->ne[1], w->ne[2], im2col->ne[2]);
@@ -365,7 +365,7 @@ ggml_tensor * depthwise_conv1d_causal_ggml(ggml_context * ctx,
     ggml_tensor * padded = causal_replicate_pad_1d(ctx, x, (K - 1) * dilation);
     ggml_tensor * new_b = ggml_reshape_4d(ctx, padded, padded->ne[0], 1, padded->ne[1], padded->ne[2]);
     ggml_tensor * im2col = ggml_im2col(ctx, w, new_b, 1, 0, 0, 0, dilation, 0, false, GGML_TYPE_F32);
-    ggml_tensor * y = ggml_mul_mat(ctx, im2col, w);
+    ggml_tensor * y = st_mul_mat(ctx, im2col, w);
     y = ggml_reshape_3d(ctx, y, y->ne[0], y->ne[2], 1);
     return ggml_add(ctx, y, repeat_like(ctx, b, y));
 }
@@ -474,7 +474,7 @@ ggml_tensor * pointwise_matmul_ct_voc(ggml_context * ctx,
     GGML_ASSERT(ggml_is_contiguous(w));
     ggml_tensor * w_2d = ggml_reshape_2d(ctx, w, w->ne[1], w->ne[2]);
     ggml_tensor * x_2d = ggml_reshape_2d(ctx, x_ct, x_ct->ne[0], x_ct->ne[1]);
-    ggml_tensor * y = ggml_mul_mat(ctx, w_2d, x_2d);
+    ggml_tensor * y = st_mul_mat(ctx, w_2d, x_2d);
     if (b) y = ggml_add(ctx, y, repeat_like(ctx, b, y));
     return y;
 }
