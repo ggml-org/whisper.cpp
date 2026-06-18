@@ -173,7 +173,7 @@ jobs:
           -DBUILD_SHARED_LIBS=ON
           -DWHISPER_SDL2=${{ matrix.sdl2 }}
           -DGGML_NATIVE=OFF
-          -DGGML_BMI2=OFF
+          ${{ matrix.arch == 'x64' && '-DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON' || '-DGGML_BMI2=OFF' }}
 
       - name: Build
         run: |
@@ -287,6 +287,8 @@ jobs:
           -DBLAS_LIBRARIES="$env:GITHUB_WORKSPACE/OpenBLAS-${{matrix.blasver}}/lib/libopenblas.lib"
           -DBLAS_INCLUDE_DIRS="$env:GITHUB_WORKSPACE/OpenBLAS-${{matrix.blasver}}/include"
           -DWHISPER_SDL2=${{ matrix.sdl2 }}
+          -DGGML_NATIVE=OFF
+          ${{ matrix.arch == 'x64' && '-DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON' || '-DGGML_BMI2=OFF' }}
 
       - name: Build
         run: |
@@ -490,7 +492,10 @@ jobs:
             -DWHISPER_SDL2=${{ matrix.sdl2 }} ^
             -DSDL2_DIR="%SDL2_DIR%" ^
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ^
-            -DCMAKE_CUDA_FLAGS="%CUDA_FLAGS%"
+            -DCMAKE_CUDA_FLAGS="%CUDA_FLAGS%" ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_CPU_ALL_VARIANTS=ON
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config ${{ matrix.build }} -j %NUMBER_OF_PROCESSORS%
 
