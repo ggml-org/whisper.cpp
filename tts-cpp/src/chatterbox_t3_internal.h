@@ -361,12 +361,19 @@ void t3_release_caches();
 // cascade), returns `stop_token` so the caller's stop check fires cleanly
 // instead of emitting a pseudo-random in-vocab id.  Pass
 // `model.hparams.stop_speech_token` from the speech-decode loop.
+// `suppress_stop_token` (Phase 2): when true, the stop token's
+// (CFG-combined) logit is forced to -inf before the sampling cascade so it
+// cannot be drawn this step.  The alignment analyzer sets this while the text
+// is still being spoken (alignment has not reached the end), preventing the
+// model from truncating the utterance early (the "dropped first/last word /
+// near-empty output" failure mode on out-of-distribution cloned voices).
 int32_t sample_next_token_mtl(
     const std::vector<float> &         logits_cond,
     const std::vector<float> &         logits_uncond,
     const std::vector<int32_t> &       generated,
     const chatterbox_sampling_params & params,
     std::mt19937 &                     rng,
-    int32_t                            stop_token);
+    int32_t                            stop_token,
+    bool                               suppress_stop_token = false);
 
 } // namespace tts_cpp::chatterbox::detail

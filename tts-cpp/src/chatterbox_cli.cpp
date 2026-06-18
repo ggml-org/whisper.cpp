@@ -54,6 +54,9 @@
 #include "tts-cpp/chatterbox/s3gen_pipeline.h"
 #include "tts-cpp/supertonic/engine.h"
 #include "chatterbox_t3_internal.h"
+#include "t3_alignment_analyzer.h"
+#include "t3_mtl.h"
+#include "t3_stop_controller.h"
 #include "t3_mtl.h"
 #include "npy.h"
 #include "voice_features.h"
@@ -1956,10 +1959,35 @@ int tts_cpp_cli_main(int argc, char ** argv) {
             constexpr int MAX_RETRIES = 3;
             auto rng_snapshot = rng;
 
+            // Shared end-of-speech stop controller (same logic as
+            // chatterbox::Engine::run_t3).  Disabled for Turbo so that path is
+            // unchanged.  Params depend only on the (constant-across-retries)
+            // segment text length, so build once and reset per attempt.
+            const t3_stop_params stop_p = is_mtl
+                ? make_mtl_stop_params(model.hparams.stop_speech_token, sp_mtl.cfg_weight,
+                                       (int) seg_text_tokens[si].size(), params.n_predict)
+                : t3_stop_params{};
+            t3_stop_controller stop_ctrl;
+
             std::vector<int32_t> generated, best_generated;
             for (int attempt = 0; attempt <= MAX_RETRIES; ++attempt) {
                 rng = rng_snapshot;
                 rng.discard((size_t)attempt * 1009);   // move to a different RNG stream each retry
+
+                // Phase 2: alignment-based EOS.  Configure the
+                // in-graph probe and reset the analyzer for this segment.  The
+                // probe leaves the forward graph unchanged when alignment is
+                // disabled / unsupported (Turbo, very short text, env override,
+                // or the batched GPU path where the probe is not wired yet); the
+                // analyzer then stays dormant and the Phase 1 controller is the
+                // sole stop signal.
+                const int align_S = t3_align_begin_generation(model, (int) seg_text_tokens[si].size());
+                t3_alignment_analyzer align_az;
+                const bool align_on = (align_S > 0);
+                if (align_on) {
+                    align_az.reset(t3_align_params_for_language(params.language, align_S));
+                }
+                bool align_forced_eos = false;
 
                 std::vector<float> logits;
                 std::vector<float> logits_c, logits_u;
@@ -1977,6 +2005,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                 int n_past = prompt_len;
                 generated.clear();
                 generated.reserve(params.n_predict + 1);
+                stop_ctrl.reset(stop_p);
 
                 int32_t current = is_mtl
                     ? sample_next_token_mtl(logits_c, logits_u, generated, sp_mtl, rng,
@@ -1985,7 +2014,8 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                 generated.push_back(current);
 
                 bool stopped_by_stop_token = false;
-                bool stopped_by_repetition  = false;
+                bool ctrl_forced_eos       = false;
+                t3_stop_reason ctrl_reason = t3_stop_reason::none;
                 for (int i = 0; i < params.n_predict; ++i) {
                     if (current == model.hparams.stop_speech_token) { stopped_by_stop_token = true; break; }
                     if (n_past + 1 > model.hparams.n_ctx) { fprintf(stderr, "KV cache full\n"); break; }
@@ -1998,44 +2028,68 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                     }
                     if (!step_ok) throw std::runtime_error("step eval failed");
                     ++n_past;
-                    current = is_mtl
-                        ? sample_next_token_mtl(logits_c, logits_u, generated, sp_mtl, rng,
-                                                model.hparams.stop_speech_token)
-                        : sample_next_token(logits, generated, params, rng);
-                    generated.push_back(current);
 
-                    // Port of the token_repetition check in the Python
-                    // AlignmentStreamAnalyzer. MTL T3 sometimes emits a
-                    // plausible end-of-speech silence cadence mid-utterance
-                    // and then hallucinates more low-energy content before
-                    // eventually stopping. Two consecutive identical tokens
-                    // signal this cadence; gated to MTL because the Turbo
-                    // codebook has a different cadence signature and to a
-                    // 60-token minimum so we don't fire on the first
-                    // utterance of short multilingual inputs. We trim only
-                    // the trailing duplicate (resize(n-1)) and leave the
-                    // legitimate prior token; the downstream pop_back()
-                    // handles the stop-speech token.
-                    constexpr int kMtlMinTokensBeforeCadence = 60;
-                    if (is_mtl && generated.size() >= 2 &&
-                        (int)generated.size() > kMtlMinTokensBeforeCadence) {
-                        size_t n = generated.size();
-                        if (generated[n - 1] == generated[n - 2]) {
-                            generated.resize(n - 1);
-                            stopped_by_repetition = true;
-                            break;
-                        }
+                    // Phase 2: alignment-based force-EOS.  Feed the
+                    // alignment row for the just-evaluated position (token
+                    // `current`); if the analyzer reports the text is fully
+                    // spoken (long tail / backtracking), emit the stop token
+                    // instead of sampling.  Falls back to the Phase 1
+                    // controller's EOS-confidence when the probe is unavailable.
+                    const t3_align_action aa = align_on
+                        ? align_az.step(t3_align_last_row(), current)
+                        : t3_align_action::none;
+                    bool force_eos_now = (aa == t3_align_action::force_eos);
+                    if (force_eos_now) align_forced_eos = true;
+                    if (!force_eos_now && is_mtl &&
+                        stop_ctrl.force_eos((int) generated.size(), logits_c, logits_u)) {
+                        force_eos_now   = true;
+                        ctrl_forced_eos = true;
+                    }
+                    if (force_eos_now) {
+                        current = model.hparams.stop_speech_token;
+                    } else {
+                        const bool suppress = (aa == t3_align_action::suppress_eos);
+                        current = is_mtl
+                            ? sample_next_token_mtl(logits_c, logits_u, generated, sp_mtl, rng,
+                                                    model.hparams.stop_speech_token, suppress)
+                            : sample_next_token(logits, generated, params, rng);
+                    }
+                    generated.push_back(current);
+                    if (current == model.hparams.stop_speech_token) { stopped_by_stop_token = true; break; }
+
+                    // Repetition cadence / budget backstop (MTL only).
+                    const t3_post_result pr = stop_ctrl.post_check(generated);
+                    if (pr.reason != t3_stop_reason::none) {
+                        if (pr.trim_tail > 0 && (int) generated.size() >= pr.trim_tail)
+                            generated.resize(generated.size() - (size_t) pr.trim_tail);
+                        ctrl_reason = pr.reason;
+                        break;
                     }
                 }
+
+                if (align_on) t3_align_reset();
 
                 if (!generated.empty() && generated.back() == model.hparams.stop_speech_token)
                     generated.pop_back();
 
-                if (stopped_by_repetition && params.verbose) {
-                    fprintf(stderr, "  [t3 segment %zu/%zu] stopped on 2x repeated token (%d) "
-                                    "at %zu tokens; MTL end-of-speech cadence\n",
-                            si + 1, N_SEG, generated.empty() ? -1 : (int)generated.back(),
-                            generated.size());
+                if (params.verbose && (align_forced_eos || ctrl_forced_eos ||
+                                       ctrl_reason != t3_stop_reason::none)) {
+                    const char * why = align_forced_eos                          ? "alignment end-of-text"
+                                     : ctrl_forced_eos                           ? "EOS confidence"
+                                     : ctrl_reason == t3_stop_reason::repetition ? "repetition cadence"
+                                     : ctrl_reason == t3_stop_reason::budget     ? "token budget"
+                                     :                                             "?";
+                    fprintf(stderr, "  [t3 segment %zu/%zu] stop: %s at %zu tokens\n",
+                            si + 1, N_SEG, why, generated.size());
+                }
+                // Self-check observability: alignment was active but never
+                // reached end-of-text -> the probed heads may not be tracking
+                // alignment for this model (we relied on the Phase 1 fallback).
+                if (params.verbose && align_on && !align_az.complete() &&
+                    generated.size() > 8) {
+                    fprintf(stderr, "  [t3 segment %zu/%zu] note: alignment never completed; "
+                                    "relied on fallback (aligned heads may need recalibration)\n",
+                            si + 1, N_SEG);
                 }
 
                 // Keep the longest attempt as the fallback in case every

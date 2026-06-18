@@ -239,6 +239,8 @@ set(TTS_CPP_LIB_SOURCES
     src/campplus.cpp
     src/s3tokenizer.cpp
     src/t3_mtl.cpp
+    src/t3_stop_controller.cpp
+    src/t3_alignment_analyzer.cpp
     src/supertonic_gguf.cpp
     src/supertonic_preprocess.cpp
     src/supertonic_vocoder.cpp
@@ -479,6 +481,7 @@ if (TTS_CPP_BUILD_TESTS)
     # DISABLED tests via tts_cpp_register_test(REQUIRES ...).
     set(_tcb_t3_turbo_gguf      "${TTS_CPP_TEST_MODEL_DIR}/chatterbox-t3-turbo.gguf")
     set(_tcb_t3_mtl_gguf        "${TTS_CPP_TEST_MODEL_DIR}/chatterbox-t3-mtl.gguf")
+    set(_tcb_t3_mtl_q4_gguf     "${TTS_CPP_TEST_MODEL_DIR}/chatterbox-t3-mtl-q4_0.gguf")
     set(_tcb_s3gen_gguf         "${TTS_CPP_TEST_MODEL_DIR}/chatterbox-s3gen.gguf")
     set(_tcb_s3gen_mtl_gguf     "${TTS_CPP_TEST_MODEL_DIR}/chatterbox-s3gen-mtl.gguf")
     set(_tcb_super_gguf         "${TTS_CPP_TEST_MODEL_DIR}/supertonic.gguf")
@@ -591,6 +594,33 @@ if (TTS_CPP_BUILD_TESTS)
         LABEL    "fixture"
         ARGS     "${_tcb_s3gen_gguf}" "${_tcb_s3gen_ref}/wav_16k.npy" "${_tcb_s3gen_ref}/log_mel.npy" "${_tcb_s3gen_ref}/speech_tokens.npy"
         REQUIRES "${_tcb_s3gen_gguf}" "${_tcb_s3gen_ref}/wav_16k.npy" "${_tcb_s3gen_ref}/log_mel.npy" "${_tcb_s3gen_ref}/speech_tokens.npy")
+
+    # Attention-free end-of-speech stop controller.  Pure host
+    # logic with no model / ggml dependency, so it links only its own source
+    # and always runs (no fixture REQUIRES).
+    add_executable(test-t3-stop-controller
+        test/test_t3_stop_controller.cpp
+        src/t3_stop_controller.cpp)
+    target_include_directories(test-t3-stop-controller PRIVATE src)
+    tts_cpp_apply_ccache(test-t3-stop-controller)
+    tts_cpp_register_test(test-t3-stop-controller LABEL "cpu")
+
+    # Phase 2: alignment analyzer state machine.  Pure host logic,
+    # no model / ggml dependency, so it always runs.
+    add_executable(test-t3-alignment-analyzer
+        test/test_t3_alignment_analyzer.cpp
+        src/t3_alignment_analyzer.cpp)
+    target_include_directories(test-t3-alignment-analyzer PRIVATE src)
+    tts_cpp_apply_ccache(test-t3-alignment-analyzer)
+    tts_cpp_register_test(test-t3-alignment-analyzer LABEL "cpu")
+
+    # MTL sampler EOS-suppression.  Pure logit math but links the
+    # library (sample_next_token_mtl lives in the t3_mtl TU); no model required.
+    add_executable(test-mtl-sampler test/test_mtl_sampler.cpp)
+    target_link_libraries(test-mtl-sampler PRIVATE tts-cpp ggml tts-cpp-backend-defs)
+    target_include_directories(test-mtl-sampler PRIVATE ggml/include src)
+    tts_cpp_apply_ccache(test-mtl-sampler)
+    tts_cpp_register_test(test-mtl-sampler LABEL "cpu")
 
     add_executable(test-mtl-tokenizer test/test_mtl_tokenizer.cpp)
     target_link_libraries(test-mtl-tokenizer PRIVATE tts-cpp)
@@ -713,6 +743,46 @@ if (TTS_CPP_BUILD_TESTS)
             )
         endif()
     endforeach()
+
+    # End-to-end EOS round-trip regression.  Drives tts-cli to
+    # synthesize a set of English phrases, transcribes with whisper-cli, and
+    # asserts the transcription is close to the input (CER guard -> catches
+    # clipping) and not much longer (ramble guard -> catches the trailing-token
+    # bug re-appearing).  Pure orchestration; auto-disabled unless the MTL
+    # GGUFs + whisper-cli + a Whisper model + tts-cli are all present.
+    add_executable(test-eos-roundtrip test/test_eos_roundtrip.cpp)
+    target_include_directories(test-eos-roundtrip PRIVATE src)
+    tts_cpp_apply_ccache(test-eos-roundtrip)
+    if (_mtl_asr_enabled AND TARGET tts-cli)
+        tts_cpp_register_test(test-eos-roundtrip
+            LABEL    "fixture;asr"
+            ARGS     --tts-cli       "$<TARGET_FILE:tts-cli>"
+                     --t3            "${_tcb_t3_mtl_gguf}"
+                     --s3gen         "${_tcb_s3gen_mtl_gguf}"
+                     --whisper-cli   "${WHISPER_CLI}"
+                     --whisper-model "${WHISPER_MODEL}"
+                     --lang          "en"
+                     --tmp           "${_mtl_out_dir}"
+            REQUIRES "${_tcb_t3_mtl_gguf}" "${_tcb_s3gen_mtl_gguf}")
+
+        # Same round-trip on the quantized (Q4_0) T3 the mobile
+        # app ships, to confirm the aligned heads still track under
+        # quantization.  Uses the f16 S3Gen (the S3Gen Q4_0 path is a separate
+        # converter limitation).  Auto-disabled until the Q4_0 T3 GGUF exists.
+        tts_cpp_register_test(test-eos-roundtrip-q4_0
+            EXE      test-eos-roundtrip
+            LABEL    "fixture;asr"
+            ARGS     --tts-cli       "$<TARGET_FILE:tts-cli>"
+                     --t3            "${_tcb_t3_mtl_q4_gguf}"
+                     --s3gen         "${_tcb_s3gen_mtl_gguf}"
+                     --whisper-cli   "${WHISPER_CLI}"
+                     --whisper-model "${WHISPER_MODEL}"
+                     --lang          "en"
+                     --tmp           "${_mtl_out_dir}"
+            REQUIRES "${_tcb_t3_mtl_q4_gguf}" "${_tcb_s3gen_mtl_gguf}")
+    else()
+        message(STATUS "tts-cpp: test-eos-roundtrip built but not registered (needs whisper-cli + model + tts-cli)")
+    endif()
 
     add_executable(test-streaming
         test/test_streaming.cpp

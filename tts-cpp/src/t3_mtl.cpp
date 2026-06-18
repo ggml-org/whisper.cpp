@@ -23,6 +23,7 @@
 
 #include "chatterbox_t3_internal.h"
 #include "t3_mtl.h"
+#include "t3_alignment_analyzer.h"
 
 #include "backend_util.h"
 #include "ggml.h"
@@ -47,6 +48,49 @@
 namespace tts_cpp::chatterbox::detail {
 
 namespace {
+
+// ---------------------------------------------------------------------------
+// Phase 2: alignment-probe state (thread-local, one generation per
+// thread).  Set via t3_align_configure(); read back via t3_align_last_row().
+// See t3_mtl.h for the rationale.
+// ---------------------------------------------------------------------------
+struct t3_align_state {
+    bool enabled = false;
+    int  text_i  = 0;
+    int  text_j  = 0;
+    std::vector<std::pair<int, int>> layer_heads;   // (layer_idx, head_idx)
+    std::vector<float> last_row;                     // averaged softmax row (len text_j-text_i)
+};
+thread_local t3_align_state g_t3_align;
+
+// Average the "align_L<layer>" probe outputs (newest query column) of the
+// cond pass into g_t3_align.last_row.
+void t3_align_capture_from_graph(ggml_cgraph * gf) {
+    const int nt = g_t3_align.text_j - g_t3_align.text_i;
+    if (nt <= 0) { g_t3_align.last_row.clear(); return; }
+    std::vector<double> acc((size_t) nt, 0.0);
+    int cnt = 0;
+    for (const auto & lh : g_t3_align.layer_heads) {
+        char nm[24];
+        std::snprintf(nm, sizeof(nm), "align_L%d", lh.first);
+        ggml_tensor * t = ggml_graph_get_tensor(gf, nm);
+        if (!t) continue;
+        const int rows = (int) t->ne[0];   // n_text
+        const int cols = (int) t->ne[1];   // N queries
+        if (rows != nt || cols < 1) continue;
+        std::vector<float> buf((size_t) rows * (size_t) cols);
+        ggml_backend_tensor_get(t, buf.data(), 0, ggml_nbytes(t));
+        const float * last_col = buf.data() + (size_t)(cols - 1) * (size_t) rows;
+        for (int r = 0; r < nt; ++r) acc[(size_t) r] += last_col[r];
+        ++cnt;
+    }
+    // Leave the row empty (not all-zeros) when no probe output was found so the
+    // analyzer takes its empty-row fast path and falls back to Phase 1.
+    if (cnt == 0) { g_t3_align.last_row.clear(); return; }
+    g_t3_align.last_row.assign((size_t) nt, 0.0f);
+    for (int r = 0; r < nt; ++r)
+        g_t3_align.last_row[(size_t) r] = (float) (acc[(size_t) r] / cnt);
+}
 
 // Process-wide registry of the Phase-15 stacked-weight buffers, with an
 // atexit hook that frees them before Metal's static device destructors
@@ -628,6 +672,46 @@ ggml_tensor * build_llama_block(ggml_context * ctx, ggml_cgraph * gf,
                       HD, rope_mode, hp.rope_orig_max_pos,
                       hp.rope_theta, 1.0f, 0.0f, 1.0f, 32.0f, 1.0f);
 
+    // Phase 2: alignment probe (cond pass, B==1 only).  Recompute
+    // softmax(scale * q . K_text^T) over the text-token key columns for the
+    // configured (layer, head) and export it as "align_L<il>".  Uses the
+    // post-RoPE Q/K (pre-permute) so it matches what flash-attention consumes.
+    // Cheap: one head, (text_j - text_i) keys.  Restricted to the decode step
+    // (N == 1) and the cond pass / cond batch (b_offset_elems == 0; batch 0 for
+    // the B==2 GPU path).  No-op (and graph byte-identical) when disabled.
+    if (N == 1 && b_offset_elems == 0 && g_t3_align.enabled) {
+        const int probe_head = t3_align_head_for_layer(il);
+        const int n_text = g_t3_align.text_j - g_t3_align.text_i;
+        if (probe_head >= 0 && probe_head < NH && n_text > 0) {
+            const int ti = g_t3_align.text_i;
+            // q for this head, all N queries: (HD, N).
+            ggml_tensor * q_h = ggml_cont(ctx,
+                ggml_view_2d(ctx, Q, HD, N, Q->nb[2], (size_t) probe_head * Q->nb[1]));
+            // K_text for this head: (HD, n_text).  Text keys are in the current
+            // pass for the prompt (n_past covers them) and in the KV cache for
+            // a decode step.
+            ggml_tensor * k_text;
+            const bool text_in_pass = (ti >= n_past && g_t3_align.text_j <= n_past + N);
+            if (text_in_pass) {
+                k_text = ggml_view_2d(ctx, K, HD, n_text, K->nb[2],
+                    (size_t) probe_head * K->nb[1] + (size_t) (ti - n_past) * K->nb[2]);
+            } else {
+                k_text = ggml_view_2d(ctx, memory_k, HD, n_text, kv_pos_stride,
+                    layer_off + (size_t) probe_head * kv_head_stride
+                              + (size_t) ti * kv_pos_stride);
+            }
+            k_text = ggml_cont(ctx, k_text);
+            ggml_tensor * scores = ggml_mul_mat(ctx, k_text, q_h);        // (n_text, N)
+            scores = ggml_scale(ctx, scores, 1.0f / std::sqrt((float) HD));
+            ggml_tensor * aprobs = ggml_soft_max(ctx, scores);           // softmax over n_text
+            char nm[24];
+            std::snprintf(nm, sizeof(nm), "align_L%d", il);
+            ggml_set_name(aprobs, nm);
+            ggml_set_output(aprobs);
+            ggml_build_forward_expand(gf, aprobs);
+        }
+    }
+
     // Flash attention expects (HD, N, NH[, B]).  Permute (0, 2, 1, 3) lifts
     // N to ne[1] so the KV cache keeps a [HD, n_ctx, n_kv_head] inner-3D
     // layout that flash_attn can read contiguously per (head, batch).
@@ -1147,6 +1231,8 @@ bool run_prompt_pass(const chatterbox_model & model,
     ggml_tensor * logits = ggml_graph_get_tensor(gf, "logits");
     logits_out.resize(ggml_nelements(logits));
     ggml_backend_tensor_get(logits, logits_out.data(), 0, ggml_nbytes(logits));
+    // (No alignment capture here: the probe is gated to the decode step
+    //  graph; the prompt's BOS row is intentionally not fed to the analyzer.)
     return true;
 }
 
@@ -1268,6 +1354,12 @@ bool run_step_pass_b2(const chatterbox_model & model,
     logits_uncond_out.resize(hp.n_speech_vocab);
     ggml_backend_tensor_get(logits, logits_cond_out.data(),   0,                per_batch_bytes);
     ggml_backend_tensor_get(logits, logits_uncond_out.data(), per_batch_bytes, per_batch_bytes);
+
+    // Phase 2: capture the cond-batch (b=0) alignment row from the
+    // batched GPU step graph so the analyzer works on Metal/Vulkan/OpenCL too.
+    if (g_t3_align.enabled) {
+        t3_align_capture_from_graph(gf);
+    }
     return true;
 }
 
@@ -1288,8 +1380,11 @@ bool run_step_pass(const chatterbox_model & model,
     // Default-disabled because in single-utterance workloads every
     // step call is a unique n_past — the cache fills up but nothing
     // is re-used.  See the t3_step_cache_enabled() comment above.
+    // The step-graph cache keys on (n_past, is_uncond) only; the alignment
+    // probe adds text-slice-dependent nodes, so bypass the cache while probing
+    // to avoid serving a graph built for a different generation's text slice.
     t3_step_cache_entry * entry = nullptr;
-    if (t3_step_cache_enabled()) {
+    if (!g_t3_align.enabled && t3_step_cache_enabled()) {
         entry = t3_step_cache_lookup(n_past, is_uncond);
         if (!entry) {
             entry = t3_step_cache_insert_or_get(model, n_past, is_uncond);
@@ -1322,10 +1417,69 @@ bool run_step_pass(const chatterbox_model & model,
     ggml_tensor * logits = ggml_graph_get_tensor(gf, "logits");
     logits_out.resize(ggml_nelements(logits));
     ggml_backend_tensor_get(logits, logits_out.data(), 0, ggml_nbytes(logits));
+
+    if (g_t3_align.enabled && !is_uncond) {
+        t3_align_capture_from_graph(gf);
+    }
     return true;
 }
 
 } // namespace
+
+// -- Phase 2 alignment-probe hooks (see t3_mtl.h) ----------------
+
+void t3_align_configure(bool enabled, int text_i, int text_j,
+                        const std::vector<std::pair<int, int>> & layer_heads) {
+    g_t3_align.enabled     = enabled;
+    g_t3_align.text_i      = text_i;
+    g_t3_align.text_j      = text_j;
+    g_t3_align.layer_heads = layer_heads;
+    g_t3_align.last_row.clear();
+}
+
+bool t3_align_enabled() { return g_t3_align.enabled; }
+
+void t3_align_reset() {
+    g_t3_align.enabled = false;
+    g_t3_align.text_i  = 0;
+    g_t3_align.text_j  = 0;
+    g_t3_align.layer_heads.clear();
+    g_t3_align.last_row.clear();
+}
+
+const std::vector<float> & t3_align_last_row() { return g_t3_align.last_row; }
+
+int t3_align_head_for_layer(int il) {
+    for (const auto & lh : g_t3_align.layer_heads) {
+        if (lh.first == il) return lh.second;
+    }
+    return -1;
+}
+
+int t3_align_begin_generation(const chatterbox_model & model, int n_text_tokens) {
+    if (model.hparams.variant != CHBX_VARIANT_MTL) { t3_align_reset(); return 0; }
+    const char * dis = std::getenv("CHATTERBOX_ALIGN_DISABLE");
+    if (dis && dis[0] != '\0' && std::strcmp(dis, "0") != 0) { t3_align_reset(); return 0; }
+    // Very short inputs do not produce a reliable monotonic alignment; leave
+    // them to the natural stop token + the Phase 1 controller.
+    if (n_text_tokens < 6) { t3_align_reset(); return 0; }
+    // Self-check: only probe (layer, head) pairs that exist in this model.  A
+    // future conversion that shrinks or permutes the layer/head geometry would
+    // leave no valid heads -> disable alignment and fall back to Phase 1 rather
+    // than read out-of-range KV/Q tensors.
+    auto heads = t3_align_valid_heads(model.hparams.n_layer, model.hparams.n_head);
+    if (heads.empty()) {
+        fprintf(stderr, "t3_align: no in-range aligned heads for n_layer=%d n_head=%d; "
+                        "alignment disabled (Phase 1 controller still active)\n",
+                model.hparams.n_layer, model.hparams.n_head);
+        t3_align_reset();
+        return 0;
+    }
+    const int len_cond = 1 + model.hparams.perceiver_queries
+                       + (model.hparams.emotion_adv ? 1 : 0);
+    t3_align_configure(/*enabled=*/true, len_cond, len_cond + n_text_tokens, heads);
+    return n_text_tokens;
+}
 
 // -- Stage builders for parity validation (see t3_mtl.h) --------------------
 
@@ -1893,11 +2047,18 @@ int32_t sample_next_token_mtl(const std::vector<float> & logits_cond,
                               const std::vector<int32_t> & generated,
                               const chatterbox_sampling_params & p,
                               std::mt19937 & rng,
-                              int32_t stop_token) {
+                              int32_t stop_token,
+                              bool suppress_stop_token) {
     const size_t V = logits_cond.size();
     std::vector<float> l(V);
     for (size_t i = 0; i < V; ++i) {
         l[i] = logits_cond[i] + p.cfg_weight * (logits_cond[i] - logits_uncond[i]);
+    }
+
+    // Hard-suppress the stop token while the text is mid-utterance
+    // so sampling cannot terminate before the alignment reaches the end.
+    if (suppress_stop_token && stop_token >= 0 && (size_t) stop_token < V) {
+        l[(size_t) stop_token] = -INFINITY;
     }
 
     if (p.repeat_penalty != 1.0f) {

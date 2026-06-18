@@ -9,7 +9,51 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 
+#include <utility>
+#include <vector>
+
 namespace tts_cpp::chatterbox::detail {
+
+// ---------------------------------------------------------------------------
+// Phase 2: text<->speech alignment probe.
+//
+// Some self-attention heads of the T3 Llama backbone implicitly solve the
+// monotonic text->speech alignment.  The Python reference
+// (AlignmentStreamAnalyzer) averages a small set of (layer, head) cross-
+// attention maps over the text-token columns and uses the resulting
+// alignment to force EOS once the text is fully spoken.
+//
+// The production forward uses fused flash-attention, which does not expose
+// attention weights, so we add a tiny side computation: for each configured
+// (layer, head) we recompute softmax(scale * qK_text^T) over just the
+// text-token key columns [text_i, text_j) of the COND pass and export it as
+// a graph output named "align_L<layer>".  run_prompt_pass / run_step_pass
+// average those rows (newest query) into t3_align_last_row().
+//
+// Configure once per generation (set the text-token column range and the
+// aligned (layer, head) pairs); call t3_align_reset() between generations.
+// When disabled (the default) the forward graph is byte-for-byte unchanged.
+void t3_align_configure(bool enabled, int text_i, int text_j,
+                        const std::vector<std::pair<int, int>> & layer_heads);
+bool t3_align_enabled();
+void t3_align_reset();
+
+// Averaged, softmaxed alignment row (length text_j - text_i) captured by the
+// most recent cond prompt/step pass.  Empty if disabled or not yet captured.
+const std::vector<float> & t3_align_last_row();
+
+// Head index probed for layer `il`, or -1 if `il` is not a configured
+// alignment layer.  Used internally by the layer builder.
+int t3_align_head_for_layer(int il);
+
+// Convenience: configure the probe for one generation using the default
+// reference aligned heads ((9,2),(12,15),(13,11)) and the text-token column
+// slice [len_cond, len_cond + n_text_tokens).  No-op (returns 0) for the Turbo
+// variant, for very short inputs, or when CHATTERBOX_ALIGN_DISABLE is set.
+// Returns the text length S (== n_text_tokens) the analyzer should use, or 0
+// when alignment is disabled.
+int t3_align_begin_generation(const chatterbox_model & model, int n_text_tokens);
+
 
 // Phase 15: drop a (buffer_stack, ctx_stack) pair from the process-wide
 // atexit registry. Called from main()'s free_t3() lambda on error-path

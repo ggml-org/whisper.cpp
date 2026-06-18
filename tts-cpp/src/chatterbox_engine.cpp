@@ -14,7 +14,9 @@
 #include "gpt2_bpe.h"
 #include "mtl_tokenizer.h"
 #include "npy.h"
+#include "t3_alignment_analyzer.h"
 #include "t3_mtl.h"
+#include "t3_stop_controller.h"
 #include "tts-cpp/chatterbox/s3gen_pipeline.h"
 #include "text_preprocess.h"
 #include "voice_encoder.h"
@@ -496,6 +498,34 @@ struct Engine::Impl {
         std::vector<int32_t> generated;
         generated.reserve((size_t) opts.n_predict + 1);
 
+        // Attention-free end-of-speech stop controller.  The MTL
+        // T3 often fails to emit stop_speech_token after it has finished the
+        // input text and rambles — a repeated near-silent cadence (audible as
+        // gutural / empty sounds) or fresh hallucinated content — until it
+        // hits n_predict (~40 s of audio).  The controller folds three
+        // signals into one place: (1) force EOS once the model's own argmax
+        // has preferred the stop token for several consecutive steps but
+        // sampling kept missing it, (2) detect a stuck repetition cadence,
+        // (3) a generous text-length-derived budget as a last-resort backstop.
+        // It is disabled for Turbo (default-constructed params) so that path
+        // is unchanged.  See src/t3_stop_controller.h.
+        t3_stop_controller stop_ctrl;
+        stop_ctrl.reset(is_mtl
+            ? make_mtl_stop_params(model.hparams.stop_speech_token, sp.cfg_weight,
+                                   (int) text_tokens.size(), opts.n_predict)
+            : t3_stop_params{});
+
+        // Phase 2: alignment-based EOS (primary signal on the CPU
+        // path).  Configures the in-graph probe; a no-op (graph unchanged) for
+        // Turbo / short text / the batched GPU path, where the Phase 1
+        // controller above remains the stop signal.
+        const int align_S = t3_align_begin_generation(model, (int) text_tokens.size());
+        t3_alignment_analyzer align_az;
+        const bool align_on = (align_S > 0);
+        if (align_on) {
+            align_az.reset(t3_align_params_for_language(opts.language, align_S));
+        }
+
         int32_t current = is_mtl
             ? sample_next_token_mtl(logits_c, logits_u, generated, sp, rng,
                                     model.hparams.stop_speech_token)
@@ -516,29 +546,36 @@ struct Engine::Impl {
                 throw std::runtime_error("Engine: T3 step eval failed");
             }
             ++n_past;
-            current = is_mtl
-                ? sample_next_token_mtl(logits_c, logits_u, generated, sp, rng,
-                                        model.hparams.stop_speech_token)
-                : sample_next_token_ex(logits, generated, sp, rng);
+            const t3_align_action aa = align_on
+                ? align_az.step(t3_align_last_row(), current)
+                : t3_align_action::none;
+            bool force_eos_now = (aa == t3_align_action::force_eos);
+            if (!force_eos_now && is_mtl &&
+                stop_ctrl.force_eos((int) generated.size(), logits_c, logits_u)) {
+                force_eos_now = true;
+            }
+            if (force_eos_now) {
+                current = model.hparams.stop_speech_token;
+            } else {
+                const bool suppress = (aa == t3_align_action::suppress_eos);
+                current = is_mtl
+                    ? sample_next_token_mtl(logits_c, logits_u, generated, sp, rng,
+                                            model.hparams.stop_speech_token, suppress)
+                    : sample_next_token_ex(logits, generated, sp, rng);
+            }
             generated.push_back(current);
+            if (current == model.hparams.stop_speech_token) break;
 
-            // Port of AlignmentStreamAnalyzer's token_repetition guard
-            // (mirrors chatterbox_cli.cpp).  MTL T3 sometimes emits a
-            // plausible end-of-speech silence cadence mid-utterance and
-            // then hallucinates low-energy content (silence -> hissing
-            // -> garbage tokens) until n_predict, producing tens of
-            // seconds of trailing junk.  Three consecutive identical
-            // tokens cleanly signal the cadence without firing on normal
-            // speech; gated to MTL because Turbo's codebook has a
-            // different signature.
-            if (is_mtl && generated.size() >= 3) {
-                const size_t n = generated.size();
-                if (generated[n - 1] == generated[n - 2] &&
-                    generated[n - 2] == generated[n - 3]) {
-                    break;
+            const t3_post_result pr = stop_ctrl.post_check(generated);
+            if (pr.reason != t3_stop_reason::none) {
+                if (pr.trim_tail > 0 && (int) generated.size() >= pr.trim_tail) {
+                    generated.resize(generated.size() - (size_t) pr.trim_tail);
                 }
+                break;
             }
         }
+
+        if (align_on) t3_align_reset();
 
         if (!generated.empty() && generated.back() == model.hparams.stop_speech_token) {
             generated.pop_back();
