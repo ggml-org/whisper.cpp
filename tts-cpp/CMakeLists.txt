@@ -857,6 +857,22 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-vector-estimator-backward)
     tts_cpp_register_test(test-supertonic-vector-estimator-backward LABEL "unit")
 
+    # QVAC-20983 — analytic backward of the vocoder (latent unpack, denorm,
+    # causal conv1d, causal depthwise, channel layer norm, gelu, scalar-gamma
+    # convnext, affine batch norm, leaky-relu head, full chain d(loss)/d(latent)).
+    # The "transposed convolution" upsampling is a fixed reshape+permute (the
+    # latent unpack), so its backward is a pure permutation. Model-free: every
+    # analytic gradient is gradchecked against finite differences via the Task 2
+    # harness, so it ALWAYS runs on a fresh checkout (no-skip policy).
+    add_executable(test-supertonic-vocoder-backward
+        test/test_supertonic_vocoder_backward.cpp
+        src/supertonic_vocoder_backward.cpp
+        src/supertonic_vector_estimator_backward.cpp
+        src/voiceclone_gradcheck.cpp)
+    target_include_directories(test-supertonic-vocoder-backward PRIVATE src)
+    tts_cpp_apply_ccache(test-supertonic-vocoder-backward)
+    tts_cpp_register_test(test-supertonic-vocoder-backward LABEL "unit")
+
     # Engine-level streaming-callback contract test for the per-sentence
     # segmentation path (Fix #2): monotonic global chunk_index, single final
     # is_last, result.pcm == concat(callbacks), accumulated stats.  Gated on
