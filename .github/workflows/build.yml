@@ -694,6 +694,9 @@ jobs:
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_MACOSX_RPATH=ON \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DCMAKE_INSTALL_RPATH="@loader_path" \
             -DGGML_METAL=ON \
             -DWHISPER_BUILD_EXAMPLES=ON \
             -DWHISPER_BUILD_TESTS=OFF \
@@ -717,17 +720,95 @@ jobs:
             ls -lh build/bin/ 2>/dev/null || true
             exit 1
           fi
-          ls -lh build/bin/whisper-cli
+
+          if [ ! -f build/bin/whisper-server ]; then
+            echo "::error::whisper-server not found"
+            ls -lh build/bin/ 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "--- build/bin ---"
+          ls -lh build/bin/
+
+          echo "--- macOS dylibs produced by build ---"
+          find build -name "*.dylib" -print | sort
+
+          echo "--- whisper-server dependencies before packaging ---"
+          otool -L build/bin/whisper-server
 
       - name: Package
         run: |
+          set -euo pipefail
+
           VER="${{ needs.determine-tag.outputs.version }}"
           ARCHIVE="whisper-${VER}-darwin-metal-arm64.tar.gz"
           STAGE="whisper-${VER}-darwin-metal-arm64"
+
+          rm -rf "$STAGE" "$ARCHIVE"
           mkdir -p "$STAGE"
-          cp -r build/bin/* "$STAGE/" 2>/dev/null || true
+
+          cp -R build/bin/* "$STAGE/" 2>/dev/null || true
+
+          # whisper-server depends on libwhisper / ggml dylibs that CMake may
+          # leave under build/src and build/ggml/src rather than build/bin.
+          # Package all produced dylibs next to the executables so @loader_path
+          # can resolve them on downstream machines and GitHub macOS runners.
+          while IFS= read -r lib; do
+            cp -P "$lib" "$STAGE/"
+          done < <(find build -name "*.dylib" -print | sort)
+
+          # Make dylib lookup portable inside the extracted archive.
+          for target in "$STAGE"/whisper-* "$STAGE"/*.dylib; do
+            [ -e "$target" ] || continue
+
+            install_name_tool -add_rpath "@loader_path" "$target" 2>/dev/null || true
+
+            if [ "${target##*.}" = "dylib" ] && [ ! -L "$target" ]; then
+              install_name_tool -id "@rpath/$(basename "$target")" "$target" 2>/dev/null || true
+            fi
+
+            while IFS= read -r dep; do
+              case "$dep" in
+                "$PWD"/build/*|/Users/runner/work/whisper.cpp-rocm/*)
+                  install_name_tool -change "$dep" "@rpath/$(basename "$dep")" "$target" 2>/dev/null || true
+                  ;;
+              esac
+            done < <(otool -L "$target" 2>/dev/null | awk 'NR > 1 {print $1}')
+          done
+
+          echo "--- packaged files ---"
+          find "$STAGE" -maxdepth 1 -type f -o -type l | sort
+
+          echo "--- whisper-server dependencies after packaging ---"
+          otool -L "$STAGE/whisper-server"
+          otool -l "$STAGE/whisper-server" | grep -A2 LC_RPATH || true
+
+          if otool -L "$STAGE/whisper-server" | grep -q "/Users/runner/work/whisper.cpp-rocm"; then
+            echo "::error::whisper-server still references non-portable build paths"
+            exit 1
+          fi
+
+          if ! find "$STAGE" -maxdepth 1 \( -type f -o -type l \) -name "libwhisper*.dylib" | grep -q .; then
+            echo "::error::packaged archive is missing libwhisper dylib"
+            exit 1
+          fi
+
+          set +e
+          DYLD_LIBRARY_PATH="$PWD/$STAGE" "$STAGE/whisper-server" --help > whisper-server-smoke.log 2>&1
+          smoke_status=$?
+          set -e
+
+          cat whisper-server-smoke.log
+
+          if grep -q "Library not loaded" whisper-server-smoke.log; then
+            echo "::error::whisper-server has unresolved dylib dependencies"
+            exit 1
+          fi
+
+          echo "whisper-server smoke command exited with status ${smoke_status}"
+
           tar -czf "$ARCHIVE" "$STAGE"
-          echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
         with:
