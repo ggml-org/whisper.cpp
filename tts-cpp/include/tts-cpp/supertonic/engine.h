@@ -80,6 +80,35 @@ struct EngineOptions {
 
     // Empty / zero values use the defaults stored in the GGUF metadata.
     std::string voice;
+
+    // QVAC-20978 — external (cloned) voice injection.  A Supertonic voice
+    // is just two small float tensors (`style_ttl` timbre + `style_dp`
+    // pacing); the baked-in presets are these tensors stored in the GGUF.
+    // When an external voice is supplied here it overrides the `voice`
+    // name lookup, letting the engine synthesize an arbitrary (e.g.
+    // cloned) voice while synthesis stays fully on-device and
+    // format-agnostic.  Resolution precedence, highest first:
+    //
+    //   1. voice_style_ttl + voice_style_dp  (both non-empty: in-memory tensors)
+    //   2. voice_json_path                   (load a voice JSON from disk)
+    //   3. voice                             (baked-in preset name)
+    //
+    // The flattened element order of the tensors / JSON `data` arrays is
+    // the same row-major layout the synthesis pipeline consumes, so
+    // injecting a preset's tensors is bit-for-bit identical to selecting
+    // that preset by name.  Element counts are validated against the
+    // model's baked voice tensors at construction time (a mismatch throws).
+    //
+    // Path to a voice JSON:
+    //   { "style_ttl": { "data": [...] }, "style_dp": { "data": [...] },
+    //     "metadata": { ... } }
+    std::string voice_json_path;
+    // Or inject the style tensors directly (flattened, row-major).  Both
+    // must be non-empty to take effect; takes precedence over
+    // voice_json_path.
+    std::vector<float> voice_style_ttl;
+    std::vector<float> voice_style_dp;
+
     std::string language = "en";
     int   steps    = 0;
     float speed    = 0.0f;

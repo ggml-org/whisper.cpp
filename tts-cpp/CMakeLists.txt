@@ -248,6 +248,7 @@ set(TTS_CPP_LIB_SOURCES
     src/supertonic_text_encoder.cpp
     src/supertonic_vector_estimator.cpp
     src/supertonic_engine.cpp
+    src/supertonic_voice_json.cpp
     src/supertonic_chunker.cpp
     src/mtl_tokenizer.cpp
     src/text_preprocess.cpp
@@ -1256,6 +1257,30 @@ if (TTS_CPP_BUILD_TESTS)
     target_include_directories(test-supertonic-voice-host-cache PRIVATE ggml/include src include)
     tts_cpp_apply_ccache(test-supertonic-voice-host-cache)
     tts_cpp_register_test(test-supertonic-voice-host-cache LABEL "unit")
+
+    # QVAC-20978 — external (cloned) voice injection.  The voice-JSON
+    # parser + schema validation run as a model-free unit test (always on
+    # a fresh checkout under `ctest -L unit`).  The preset-as-JSON parity
+    # check — synthesize with a baked preset by name, then with the same
+    # voice injected as in-memory tensors and via a voice JSON, and assert
+    # bit-identical PCM — needs a Supertonic GGUF and is auto-disabled when
+    # the fixture is absent (registered against both the v2 and v3 GGUFs).
+    add_executable(test-supertonic-external-voice
+        test/test_supertonic_external_voice.cpp)
+    target_link_libraries(test-supertonic-external-voice PRIVATE tts-cpp)
+    target_include_directories(test-supertonic-external-voice PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-external-voice)
+    tts_cpp_register_test(test-supertonic-external-voice LABEL "unit")
+    tts_cpp_register_test(test-supertonic-external-voice-parity
+        EXE      test-supertonic-external-voice
+        LABEL    "fixture"
+        ARGS     "${_tcb_super_gguf}"
+        REQUIRES "${_tcb_super_gguf}")
+    tts_cpp_register_test(test-supertonic-external-voice-parity-v3
+        EXE      test-supertonic-external-voice
+        LABEL    "fixture"
+        ARGS     "${_tcb_super3_gguf}"
+        REQUIRES "${_tcb_super3_gguf}")
 
     # QVAC-18605 round 10 — pointer-compare upload-skip tracker
     # (`tts_cpp::supertonic::detail::upload_skip_tracker`).

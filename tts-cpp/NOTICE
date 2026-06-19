@@ -40,6 +40,14 @@ C++ Dependencies
     scripts/setup-ggml.sh; chatterbox.cpp ships its local fixes as
     standalone patches under patches/ rather than maintaining a fork.
 
+--- mit (MIT License) ---
+
+  JSON for Modern C++ (nlohmann/json)
+    src/json.hpp
+    https://github.com/nlohmann/json
+    Single-header build (v3.11.2) vendored for parsing external Supertonic
+    voice JSON in src/supertonic_voice_json.cpp.
+
 --- dual-license (Unlicense or MIT-0; recipient may choose either; see file) ---
 
   dr_wav (dr_libs)

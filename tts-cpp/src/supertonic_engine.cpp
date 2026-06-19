@@ -4,6 +4,7 @@
 #include "backend_selection.h"
 #include "supertonic_chunker.h"
 #include "supertonic_internal.h"
+#include "supertonic_voice_json.h"
 #include "npy.h"
 // Vulkan adapter description in `backend_name()` is now resolved
 // through the registry API (`ggml_backend_get_device` +
@@ -162,6 +163,15 @@ struct Engine::Impl {
     // contract on `voice_host_cache` in supertonic_internal.h.
     voice_host_cache voices_host;
 
+    // QVAC-20978 — resolved external (cloned) voice.  When
+    // `use_external_voice` is set, synthesis feeds these host vectors
+    // directly instead of looking the voice up by name in `model.voices`
+    // (and so bypasses `voices_host`, which only caches baked tensors).
+    // Parsed + dimension-validated once in the ctor.
+    bool               use_external_voice = false;
+    std::vector<float> ext_style_ttl;
+    std::vector<float> ext_style_dp;
+
     explicit Impl(const EngineOptions & o)
         : opts(o) {
         if (opts.model_gguf_path.empty()) {
@@ -292,14 +302,9 @@ struct Engine::Impl {
             // no-op for explicit `--kv-attn-type 1` too.
             model.use_f16_attn = (model.kv_attn_type == kv_attn_dtype::f16);
 
-            // Validate voice up front so we throw at construction
-            // rather than mid-synthesize().
-            const std::string voice = opts.voice.empty()
-                ? model.hparams.default_voice
-                : opts.voice;
-            if (model.voices.find(voice) == model.voices.end()) {
-                throw std::runtime_error("Supertonic Engine: unknown voice: " + voice);
-            }
+            // QVAC-20978 — resolve + validate the voice source up front so
+            // construction throws instead of synthesize().
+            resolve_voice_source();
 
             // QVAC-18605 follow-up — opt-in first-synth pre-warm.
             // Skipped on CPU (no shader-compile cost to amortise)
@@ -324,6 +329,93 @@ struct Engine::Impl {
         free_supertonic_model(model);
     }
 
+    // QVAC-20978 — pick the voice source (in-memory tensors > voice JSON
+    // file > baked-in preset name) and validate it.
+    void resolve_voice_source() {
+        // A voice is the *pair* (style_ttl, style_dp).  Supplying only one
+        // tensor is a caller bug: fail loudly instead of silently falling
+        // through to voice_json_path / the baked preset (which would
+        // synthesize a different voice than intended).
+        const bool has_ttl = !opts.voice_style_ttl.empty();
+        const bool has_dp  = !opts.voice_style_dp.empty();
+        if (has_ttl != has_dp) {
+            throw std::runtime_error(
+                "Supertonic Engine: voice_style_ttl and voice_style_dp must "
+                "both be set or both be empty (got only " +
+                std::string(has_ttl ? "voice_style_ttl" : "voice_style_dp") + ")");
+        }
+
+        if (has_ttl && has_dp) {
+            ext_style_ttl      = opts.voice_style_ttl;
+            ext_style_dp       = opts.voice_style_dp;
+            use_external_voice = true;
+        } else if (!opts.voice_json_path.empty()) {
+            load_external_voice_from_json(opts.voice_json_path);
+            use_external_voice = true;
+        }
+
+        if (use_external_voice) {
+            validate_external_voice_dims();
+        } else {
+            validate_baked_voice_name();
+        }
+    }
+
+    void load_external_voice_from_json(const std::string & path) {
+        external_voice ev;
+        std::string    err;
+        if (!load_supertonic_voice_json_file(path, ev, &err)) {
+            throw std::runtime_error("Supertonic Engine: " + err);
+        }
+        ext_style_ttl = std::move(ev.ttl);
+        ext_style_dp  = std::move(ev.dp);
+    }
+
+    // The presets all share the same voice tensor shapes, so any baked
+    // voice serves as the reference for cross-checking an external one.
+    std::string reference_voice_name() const {
+        if (model.voices.count(model.hparams.default_voice)) {
+            return model.hparams.default_voice;
+        }
+        if (!model.voices.empty()) {
+            return model.voices.begin()->first;
+        }
+        return std::string();
+    }
+
+    static void check_style_size(const char * which, size_t got, size_t expected) {
+        if (got != expected) {
+            throw std::runtime_error(
+                std::string("Supertonic Engine: external voice ") + which + " has " +
+                std::to_string(got) + " values, expected " + std::to_string(expected));
+        }
+    }
+
+    void validate_external_voice_dims() const {
+        const std::string ref_voice = reference_voice_name();
+        if (ref_voice.empty()) {
+            // No baked preset to cross-check the external voice against.
+            // Every shipped Supertonic GGUF bundles its presets, so an
+            // empty voice table means a malformed / unexpected model; fail
+            // loudly rather than injecting an unvalidated voice.
+            throw std::runtime_error(
+                "Supertonic Engine: model has no baked voices to validate the "
+                "external voice dimensions against");
+        }
+        const auto & rv = model.voices.at(ref_voice);
+        check_style_size("style_ttl", ext_style_ttl.size(), (size_t) ggml_nelements(rv.ttl));
+        check_style_size("style_dp", ext_style_dp.size(), (size_t) ggml_nelements(rv.dp));
+    }
+
+    void validate_baked_voice_name() const {
+        const std::string voice = opts.voice.empty()
+            ? model.hparams.default_voice
+            : opts.voice;
+        if (model.voices.find(voice) == model.voices.end()) {
+            throw std::runtime_error("Supertonic Engine: unknown voice: " + voice);
+        }
+    }
+
     Impl(const Impl &)             = delete;
     Impl & operator=(const Impl &) = delete;
 
@@ -335,30 +427,42 @@ struct Engine::Impl {
     // the model isn't told "this is a complete sentence" when it isn't.
     SynthesisResult run_single_chunk(const std::string & text, int seed,
                                      bool is_continuation = false) {
-        const std::string voice = opts.voice.empty()
-            ? model.hparams.default_voice
-            : opts.voice;
         const int   steps = opts.steps > 0 ? opts.steps : model.hparams.default_steps;
         const float speed = opts.speed > 0.0f ? opts.speed : model.hparams.default_speed;
         if (steps <= 0) throw std::runtime_error("Supertonic Engine: steps must be positive");
         if (speed <= 0.0f) throw std::runtime_error("Supertonic Engine: speed must be positive");
 
-        auto vit = model.voices.find(voice);
-        if (vit == model.voices.end()) {
-            // Re-validated here in case opts.voice was hot-swapped after
-            // construction (not currently supported but guard anyway).
-            throw std::runtime_error("Supertonic Engine: unknown voice: " + voice);
+        const float * style_ttl = nullptr;
+        const float * style_dp  = nullptr;
+        if (use_external_voice) {
+            // QVAC-20978 — externally supplied (cloned) voice.  The host
+            // vectors were parsed + dimension-validated in the ctor and
+            // live for the Engine's lifetime, so they're valid for the
+            // duration of this call.  No GPU→host download / cache needed:
+            // these never came from a device tensor.
+            style_ttl = ext_style_ttl.data();
+            style_dp  = ext_style_dp.data();
+        } else {
+            const std::string voice = opts.voice.empty()
+                ? model.hparams.default_voice
+                : opts.voice;
+            auto vit = model.voices.find(voice);
+            if (vit == model.voices.end()) {
+                // Re-validated here in case opts.voice was hot-swapped after
+                // construction (not currently supported but guard anyway).
+                throw std::runtime_error("Supertonic Engine: unknown voice: " + voice);
+            }
+            // QVAC-18605 round 7 — `voices_host.get_or_load` returns
+            // a stable reference into the per-engine cache.  First
+            // call per voice does the 2 GPU→host downloads + caches;
+            // subsequent calls return the cached entry without
+            // touching the backend.  Pointers + size below are valid
+            // for the duration of this `synthesize()` call (cache is
+            // never `clear()`ed during synthesis).
+            const auto & voice_entry = voices_host.get_or_load(voice, vit->second.ttl, vit->second.dp);
+            style_ttl = voice_entry.ttl.data();
+            style_dp  = voice_entry.dp.data();
         }
-        // QVAC-18605 round 7 — `voices_host.get_or_load` returns
-        // a stable reference into the per-engine cache.  First
-        // call per voice does the 2 GPU→host downloads + caches;
-        // subsequent calls return the cached entry without
-        // touching the backend.  Pointers + size below are valid
-        // for the duration of this `synthesize()` call (cache is
-        // never `clear()`ed during synthesis).
-        const auto & voice_entry = voices_host.get_or_load(voice, vit->second.ttl, vit->second.dp);
-        const float * style_ttl  = voice_entry.ttl.data();
-        const float * style_dp   = voice_entry.dp.data();
 
         std::vector<int32_t> text_ids_i32;
         std::string normalized;
