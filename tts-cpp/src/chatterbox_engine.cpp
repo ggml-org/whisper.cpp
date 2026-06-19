@@ -120,7 +120,8 @@ struct Engine::Impl {
             throw std::runtime_error("Engine: reference_audio failed validation: " + opts.reference_audio);
         }
 
-        if (!load_model_gguf(opts.t3_gguf_path, model, opts.n_ctx, opts.n_gpu_layers)) {
+        if (!load_model_gguf(opts.t3_gguf_path, model, opts.n_ctx, opts.n_gpu_layers,
+                             chatterbox_kv_type_from_str(opts.kv_cache_type))) {
             throw std::runtime_error("Engine: failed to load T3 GGUF: " + opts.t3_gguf_path);
         }
 

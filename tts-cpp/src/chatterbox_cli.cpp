@@ -218,6 +218,7 @@ struct cli_params {
     int32_t n_predict      = 1000;   // matches Python's default-ish output budget for paragraph-length text
     int32_t n_ctx          = 0;
     int32_t n_gpu_layers   = 0;
+    std::string kv_cache_type;       // --kv-cache-type f32|f16|q8_0 (default f32)
     // Sampling defaults matched to ChatterboxTurboTTS.generate() in tts_turbo.py:
     //   temperature=0.8, top_k=1000, top_p=0.95, repetition_penalty=1.2
     // The previous greedy defaults (top_k=1) collapse into silence-token
@@ -582,6 +583,7 @@ static bool parse_args(int argc, char ** argv, cli_params & params) {
         else if (arg == "--threads")        { if (!parse_int  ("--threads",        params.n_threads))      return false; }
         else if (arg == "--n-predict")      { if (!parse_int  ("--n-predict",      params.n_predict))      return false; }
         else if (arg == "--context")        { if (!parse_int  ("--context",        params.n_ctx))          return false; }
+        else if (arg == "--kv-cache-type")  { if (++i >= argc) { fprintf(stderr, "--kv-cache-type needs a value (f32|f16|q8_0)\n"); return false; } params.kv_cache_type = argv[i]; }
         else if (arg == "--n-gpu-layers")   { if (!parse_int  ("--n-gpu-layers",   params.n_gpu_layers))   return false; }
         else if (arg == "--top-k")          { if (!parse_int  ("--top-k",          params.top_k))          return false; }
         else if (arg == "--top-p")          { if (!parse_float("--top-p",          params.top_p))          return false; }
@@ -1061,7 +1063,8 @@ int tts_cpp_cli_main(int argc, char ** argv) {
         // Load model first so we can use the GGUF-embedded tokenizer (if any).
         chatterbox_model model;
         const int64_t _t3_load_t0 = ggml_time_us();
-        if (!load_model_gguf(params.model, model, params.n_ctx, params.n_gpu_layers)) return 1;
+        if (!load_model_gguf(params.model, model, params.n_ctx, params.n_gpu_layers,
+                             chatterbox_kv_type_from_str(params.kv_cache_type))) return 1;
         const int64_t _t3_load_ms = (ggml_time_us() - _t3_load_t0) / 1000;
         fprintf(stderr, "BENCH: T3_LOAD_MS=%lld\n", (long long)_t3_load_ms);
 

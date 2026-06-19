@@ -846,6 +846,23 @@ if (TTS_CPP_BUILD_TESTS)
         ARGS     "${_tcb_s3gen_mtl_gguf}"
         REQUIRES "${_tcb_s3gen_mtl_gguf}")
 
+    # Streaming GGUF loader parity (QVAC-19557).  Self-contained: writes
+    # its own synthetic GGUF fixture to $TMPDIR, no model download needed.
+    add_executable(test-gguf-stream test/test_gguf_stream.cpp)
+    target_link_libraries(test-gguf-stream PRIVATE tts-cpp ggml)
+    target_include_directories(test-gguf-stream PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-gguf-stream)
+    tts_cpp_register_test(test-gguf-stream LABEL "unit")
+
+    # KV-cache dtype parse + backend capability probe (QVAC-19557).
+    # Fixture-free: drives chatterbox_kv_type_from_str / resolve_kv_type
+    # against a CPU backend (which supports f32/f16/q8_0 flash attention).
+    add_executable(test-kv-cache-type test/test_kv_cache_type.cpp)
+    target_link_libraries(test-kv-cache-type PRIVATE tts-cpp ggml)
+    target_include_directories(test-kv-cache-type PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-kv-cache-type)
+    tts_cpp_register_test(test-kv-cache-type LABEL "unit")
+
     # T3 step-graph cache validation.
     add_executable(test-t3-caches test/test_t3_caches.cpp)
     target_link_libraries(test-t3-caches PRIVATE tts-cpp ggml)

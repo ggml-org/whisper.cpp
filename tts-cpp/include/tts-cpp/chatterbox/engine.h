@@ -140,6 +140,16 @@ struct EngineOptions {
     // Optional T3 context-size cap (0 = use the GGUF's value).
     int n_ctx = 0;
 
+    // T3 KV-cache storage type: "f32" (default), "f16", or "q8_0".
+    // The cache is allocated up-front at n_ctx, so the dtype directly
+    // scales resident memory: f16 halves it, q8_0 cuts it to ~27% of
+    // f32 (one fp16 scale per 32 values).  Both attention paths read
+    // K/V through ggml_flash_attn_ext, which consumes f16/q8_0 K/V
+    // natively on CPU and Metal; the per-step cache append quantises
+    // on write.  q8_0 is lossy — validate audio parity for a new model
+    // before defaulting to it.  Empty/unknown strings fall back to f32.
+    std::string kv_cache_type;
+
     // Sampling knobs (mirrors the CLI defaults, which match Python's
     // ChatterboxTurboTTS.generate()).
     int   top_k          = 1000;

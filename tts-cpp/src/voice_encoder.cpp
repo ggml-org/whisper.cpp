@@ -1,5 +1,6 @@
 #include "voice_encoder.h"
 #include "backend_selection.h"
+#include "gguf_stream.h"
 #include "voice_features.h"
 #include "ggml.h"
 #include "ggml-alloc.h"
@@ -17,24 +18,37 @@
 // GGUF loader
 // ============================================================================
 
-static bool copy_tensor_f32(ggml_context * ctx, const char * name,
+static bool copy_tensor_f32(ggml_context * ctx,
+                            tts_cpp::detail::gguf_stream_reader & rd,
+                            const char * name,
                             std::vector<float> & out)
 {
     ggml_tensor * t = ggml_get_tensor(ctx, name);
     if (!t) return false;
     out.resize(ggml_nelements(t));
-    std::memcpy(out.data(), ggml_get_data(t), ggml_nbytes(t));
-    return true;
+    return rd.to_host(name, out.data(), ggml_nbytes(t));
 }
 
 bool voice_encoder_load(const std::string & t3_gguf_path,
                         voice_encoder_weights & out)
 {
+    // no_alloc=true + streamed reads: the VE weights are a few MB inside
+    // the T3 GGUF, but staging (no_alloc=false) would materialise the
+    // whole ~0.5-1 GB T3 data section in host memory while the T3 backend
+    // weights are ALREADY resident (this runs from bake_voice_conditioning
+    // right after load_model_gguf) — pure peak-footprint waste
+    // (QVAC-19557, see gguf_stream.h).
     ggml_context * tmp_ctx = nullptr;
-    gguf_init_params gp = { /*.no_alloc=*/ false, /*.ctx=*/ &tmp_ctx };
+    gguf_init_params gp = { /*.no_alloc=*/ true, /*.ctx=*/ &tmp_ctx };
     gguf_context * g = gguf_init_from_file(t3_gguf_path.c_str(), gp);
     if (!g) {
         fprintf(stderr, "voice_encoder_load: failed to open %s\n", t3_gguf_path.c_str());
+        return false;
+    }
+    tts_cpp::detail::gguf_stream_reader reader(g, t3_gguf_path);
+    if (!reader.ok()) {
+        gguf_free(g);
+        if (tmp_ctx) ggml_free(tmp_ctx);
         return false;
     }
 
@@ -69,7 +83,7 @@ bool voice_encoder_load(const std::string & t3_gguf_path,
     out.min_coverage   = get_f32("voice_encoder.min_coverage",       0.8f);
 
     auto load_or_fail = [&](const char * name, std::vector<float> & dst) {
-        if (copy_tensor_f32(tmp_ctx, name, dst)) return true;
+        if (copy_tensor_f32(tmp_ctx, reader, name, dst)) return true;
         fprintf(stderr, "voice_encoder_load: missing expected tensor '%s' in %s\n",
                 name, t3_gguf_path.c_str());
         return false;

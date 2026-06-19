@@ -1,5 +1,6 @@
 #include "backend_selection.h"
 #include "backend_util.h"
+#include "gguf_stream.h"
 #include "gpt2_bpe.h"
 #include "mtl_tokenizer.h"
 #include "ggml.h"
@@ -118,8 +119,10 @@ bool compute_prompt_feat_native(const std::string & wav_path,
     if ((int)wav.size() > dec_cond_samples) wav.resize(dec_cond_samples);
 
     // Pull the precomputed mel filterbank out of chatterbox-s3gen.gguf.
+    // no_alloc=true + streamed read: this used to stage the whole ~1 GB
+    // s3gen data section in host memory just to copy one 80-row matrix.
     ggml_context * tmp_ctx = nullptr;
-    gguf_init_params gp = { /*.no_alloc=*/ false, /*.ctx=*/ &tmp_ctx };
+    gguf_init_params gp = { /*.no_alloc=*/ true, /*.ctx=*/ &tmp_ctx };
     gguf_context * g = gguf_init_from_file(s3gen_gguf_path.c_str(), gp);
     if (!g) {
         fprintf(stderr, "voice: failed to open %s\n", s3gen_gguf_path.c_str());
@@ -132,7 +135,13 @@ bool compute_prompt_feat_native(const std::string & wav_path,
         return false;
     }
     std::vector<float> mel_fb(ggml_nelements(fb));
-    std::memcpy(mel_fb.data(), ggml_get_data(fb), ggml_nbytes(fb));
+    {
+        ::tts_cpp::detail::gguf_stream_reader reader(g, s3gen_gguf_path);
+        if (!reader.ok() || !reader.to_host("s3gen/mel_fb/24k_80", mel_fb.data(), ggml_nbytes(fb))) {
+            gguf_free(g); if (tmp_ctx) ggml_free(tmp_ctx);
+            return false;
+        }
+    }
     gguf_free(g);
     if (tmp_ctx) ggml_free(tmp_ctx);
 
@@ -160,9 +169,10 @@ bool compute_embedding_native(const std::string & wav_path,
     }
 
     // Mel filterbank for the Kaldi-style fbank lives alongside CAMPPlus in
-    // the s3gen GGUF (baked in by the converter).
+    // the s3gen GGUF (baked in by the converter).  Streamed read — no
+    // full-file staging (see gguf_stream.h).
     ggml_context * tmp_ctx = nullptr;
-    gguf_init_params gp = { /*.no_alloc=*/ false, /*.ctx=*/ &tmp_ctx };
+    gguf_init_params gp = { /*.no_alloc=*/ true, /*.ctx=*/ &tmp_ctx };
     gguf_context * g = gguf_init_from_file(s3gen_gguf_path.c_str(), gp);
     if (!g) return false;
     ggml_tensor * fb_t = ggml_get_tensor(tmp_ctx, "campplus/mel_fb_kaldi_80");
@@ -172,7 +182,13 @@ bool compute_embedding_native(const std::string & wav_path,
         return false;
     }
     std::vector<float> mel_fb(ggml_nelements(fb_t));
-    std::memcpy(mel_fb.data(), ggml_get_data(fb_t), ggml_nbytes(fb_t));
+    {
+        ::tts_cpp::detail::gguf_stream_reader reader(g, s3gen_gguf_path);
+        if (!reader.ok() || !reader.to_host("campplus/mel_fb_kaldi_80", mel_fb.data(), ggml_nbytes(fb_t))) {
+            gguf_free(g); if (tmp_ctx) ggml_free(tmp_ctx);
+            return false;
+        }
+    }
     gguf_free(g); if (tmp_ctx) ggml_free(tmp_ctx);
 
     std::vector<float> wav;
@@ -312,7 +328,81 @@ ggml_backend_t init_backend(int n_gpu_layers, bool * out_gpu_unsupported) {
 // Model loading
 // --------------------------------------------------------------------------
 
-bool load_model_gguf(const std::string & path, chatterbox_model & model, int requested_ctx, int n_gpu_layers) {
+ggml_type chatterbox_kv_type_from_str(const std::string & s) {
+    if (s.empty() || s == "f32") return GGML_TYPE_F32;
+    if (s == "f16")  return GGML_TYPE_F16;
+    if (s == "q8_0") return GGML_TYPE_Q8_0;
+    fprintf(stderr, "chatterbox: unknown kv_cache_type '%s' (expected f32|f16|q8_0); using f32\n",
+            s.c_str());
+    return GGML_TYPE_F32;
+}
+
+// Resolve the effective KV-cache dtype for `backend`: returns `requested`
+// when the backend accepts a flash-attention node with K/V of that type at
+// the model's head geometry, else falls back to F32 with a stderr warning.
+//
+// F32 is always supported, so it short-circuits.  For f16/q8_0 we build a
+// throwaway, no_alloc flash_attn_ext node shaped like the real T3 attention
+// (Q=F32 [HD, 1, n_head], K/V=kv_type [HD, 8, n_kv_head], F16 mask) and ask
+// ggml_backend_supports_op.  This stops an f16/q8_0 request from asserting
+// deep inside a backend that genuinely rejects quantized K/V (the graph
+// would otherwise fail at first compute, long after load).
+//
+// CAVEAT: a backend that ADVERTISES support via supports_op but faults at
+// compute is not caught here — notably ggml-vulkan reports q8_0 K/V FA as
+// supported on both its scalar and coopmat2 paths (see ggml-vulkan.cpp
+// GGML_OP_FLASH_ATTN_EXT and the supertonic notes in supertonic_internal.h).
+// That advertise-vs-actual gap is an upstream ggml concern; this probe is
+// the load-time guard for honest backends and future ports.
+ggml_type chatterbox_resolve_kv_type(ggml_backend_t backend, ggml_type requested,
+                                     int head_dim, int n_head, int n_kv_head) {
+    if (requested == GGML_TYPE_F32 || !backend) return GGML_TYPE_F32;
+
+    // ggml-vulkan's supports_op ADVERTISES quantized K/V flash-attention
+    // but the NV_coopmat2 kernel faults at compute on quantized K/V:
+    // toggle-confirmed in CI (QVAC-19557) — a q8_0 KV cache SIGSEGVs the
+    // chatterbox GPU smoke on NVIDIA coopmat2 runners where the identical
+    // f32 run passes.  MoltenVK (scalar FA, no coopmat) runs q8_0 fine, so
+    // this is specific to the coopmat2 dequant-in-shader path.  The probe
+    // below can't catch an advertise-vs-actual gap, so force quantized K/V
+    // to f32 on Vulkan until the upstream coopmat2 FA kernel is fixed.
+    // f16 (the native FA input type, not dequantized in-shader) is left
+    // intact.  Metal / CPU keep quantized K/V (validated byte-identical).
+    if (ggml_is_quantized(requested) && ::tts_cpp::detail::backend_is_vulkan(backend)) {
+        fprintf(stderr, "chatterbox: quantized (%s) KV cache is not yet reliable on the "
+                        "Vulkan backend (coopmat2 flash-attn faults); using f32 KV cache\n",
+                ggml_type_name(requested));
+        return GGML_TYPE_F32;
+    }
+
+    bool supported = false;
+    ggml_init_params pp = { ggml_tensor_overhead() * 8, nullptr, /*no_alloc=*/true };
+    if (ggml_context * pc = ggml_init(pp)) {
+        try {
+            const int kv = 8;  // any small length; supports_op checks types + head geometry
+            // Null mask mirrors the real single-step (N=1) attention call,
+            // which avoids ggml's mask-padding constraints in the probe.
+            ggml_tensor * Q = ggml_new_tensor_3d(pc, GGML_TYPE_F32, head_dim, 1,  n_head);
+            ggml_tensor * K = ggml_new_tensor_3d(pc, requested,     head_dim, kv, n_kv_head);
+            ggml_tensor * V = ggml_new_tensor_3d(pc, requested,     head_dim, kv, n_kv_head);
+            ggml_tensor * op = ggml_flash_attn_ext(pc, Q, K, V, /*mask=*/nullptr,
+                                                   1.0f / std::sqrt((float) head_dim), 0.0f, 0.0f);
+            supported = (op != nullptr) && ggml_backend_supports_op(backend, op);
+        } catch (...) {
+            supported = false;
+        }
+        ggml_free(pc);
+    }
+
+    if (!supported) {
+        fprintf(stderr, "chatterbox: backend does not support %s K/V flash-attention; "
+                        "falling back to f32 KV cache\n", ggml_type_name(requested));
+        return GGML_TYPE_F32;
+    }
+    return requested;
+}
+
+bool load_model_gguf(const std::string & path, chatterbox_model & model, int requested_ctx, int n_gpu_layers, ggml_type kv_type) {
     {
         gguf_init_params peek_params = { /*.no_alloc=*/ true, /*.ctx=*/ nullptr };
         gguf_context * peek_ctx = gguf_init_from_file(path.c_str(), peek_params);
@@ -330,12 +420,15 @@ bool load_model_gguf(const std::string & path, chatterbox_model & model, int req
             }
             gguf_free(peek_ctx);
             if (variant == "t3_mtl") {
-                return load_model_gguf_mtl(path, model, requested_ctx, n_gpu_layers);
+                return load_model_gguf_mtl(path, model, requested_ctx, n_gpu_layers, kv_type);
             }
         }
     }
+    // no_alloc=true: tmp_ctx carries tensor METADATA only; payloads are
+    // streamed straight from the file into the backend buffer below so the
+    // full data section is never staged in host memory (see gguf_stream.h).
     ggml_context * tmp_ctx = nullptr;
-    gguf_init_params gguf_params = { /*.no_alloc=*/ false, /*.ctx=*/ &tmp_ctx };
+    gguf_init_params gguf_params = { /*.no_alloc=*/ true, /*.ctx=*/ &tmp_ctx };
     gguf_context * gguf_ctx = gguf_init_from_file(path.c_str(), gguf_params);
     if (!gguf_ctx) { fprintf(stderr, "%s: failed to open '%s'\n", __func__, path.c_str()); return false; }
 
@@ -370,9 +463,15 @@ bool load_model_gguf(const std::string & path, chatterbox_model & model, int req
             model.tensors[name] = dst;
         }
         model.buffer_w = ggml_backend_alloc_ctx_tensors(model.ctx_w, model.backend);
-        for (ggml_tensor * cur = ggml_get_first_tensor(model.ctx_w); cur; cur = ggml_get_next_tensor(model.ctx_w, cur)) {
-            ggml_tensor * src = ggml_get_tensor(tmp_ctx, ggml_get_name(cur));
-            ggml_backend_tensor_set(cur, ggml_get_data(src), 0, ggml_nbytes(src));
+        {
+            ::tts_cpp::detail::gguf_stream_reader reader(gguf_ctx, path);
+            if (!reader.ok()) throw std::runtime_error("failed to reopen GGUF for tensor data: " + path);
+            for (ggml_tensor * cur = ggml_get_first_tensor(model.ctx_w); cur; cur = ggml_get_next_tensor(model.ctx_w, cur)) {
+                if (!reader.to_backend(ggml_get_name(cur), cur)) {
+                    throw std::runtime_error(std::string("failed to stream tensor '") +
+                                             ggml_get_name(cur) + "' from " + path);
+                }
+            }
         }
 
         model.wpe              = require_tensor(model, "model/wpe");
@@ -405,11 +504,21 @@ bool load_model_gguf(const std::string & path, chatterbox_model & model, int req
             l.c_mlp_proj_b  = require_tensor(model, (p + "/mlp/c_proj/b").c_str());
         }
 
+        // Token-major KV slab: per (layer) the cache is [n_embd, n_ctx]
+        // rows (one row per cached position), so the per-step append is
+        // a contiguous span — required for quantised kv_type (ggml-cpu's
+        // dup→quantized path aborts on a non-contiguous dst) and what
+        // lets f16/q8_0 shrink the cache (f16 ½, q8_0 ~27% of f32).
+        // Fall back to F32 KV if the resolved backend can't run flash
+        // attention with the requested quantized/f16 K/V (turbo uses
+        // n_head == n_kv_head; head_dim = n_embd / n_head).
+        hp.kv_type = chatterbox_resolve_kv_type(model.backend, kv_type,
+                                                hp.n_embd / hp.n_head, hp.n_head, hp.n_head);
         ggml_init_params kv_params = { ggml_tensor_overhead() * 2, nullptr, true };
         model.ctx_kv = ggml_init(kv_params);
         int64_t n_elements = (int64_t) hp.n_embd * hp.n_layer * hp.n_ctx;
-        model.memory_k = ggml_new_tensor_1d(model.ctx_kv, GGML_TYPE_F32, n_elements);
-        model.memory_v = ggml_new_tensor_1d(model.ctx_kv, GGML_TYPE_F32, n_elements);
+        model.memory_k = ggml_new_tensor_1d(model.ctx_kv, hp.kv_type, n_elements);
+        model.memory_v = ggml_new_tensor_1d(model.ctx_kv, hp.kv_type, n_elements);
         model.buffer_kv = ggml_backend_alloc_ctx_tensors(model.ctx_kv, model.backend);
 
         if (g_log_verbose) fprintf(stderr, "%s: ctx=%d embd=%d layers=%d heads=%d text_vocab=%d speech_vocab=%d cond_prompt=%d\n",
@@ -466,15 +575,21 @@ static ggml_tensor * build_transformer_core(
     const int HD = n_embd / n_head;
     const int64_t L = n_past + N;
 
-    // KV cache layout: each layer is interpreted as [HD, n_ctx, n_head] instead
-    // of the older [n_embd, n_ctx].  The total size is unchanged (HD*n_ctx*n_head
-    // == n_embd*n_ctx), but new-in-[seq, head] stride lets ggml_flash_attn_ext
-    // read the K/V slice as a [HD, L, n_head] view without a per-step
-    // permute+cont — which was the main reason an earlier FA attempt regressed
-    // on the T3 step path.
-    const size_t kv_layer_elems  = (size_t) HD * n_ctx * n_head;  // same as n_embd * n_ctx
-    const size_t kv_head_stride  = (size_t) HD * n_ctx * sizeof(float);
-    const size_t kv_pos_stride   = (size_t) HD * sizeof(float);
+    // KV cache layout: token-major — each layer is [n_embd, n_ctx]: one
+    // ggml_row_size(kv_type, n_embd) row per cached position, heads
+    // packed [HD-head0 ‖ HD-head1 ‖ ...] inside the row (the natural
+    // order of the fused-QKV projection output, so the append needs no
+    // permute).  Two wins over the older head-major [HD, n_ctx, n_head]
+    // slab: the per-step append at position n_past is a CONTIGUOUS span
+    // (which is what allows a quantised kv_type — ggml-cpu's
+    // dup→quantized path aborts on non-contiguous dst), and
+    // ggml_flash_attn_ext still reads the [HD, L, n_head] slice with
+    // plain strides (pos stride = one token row, head stride = one
+    // HD-row inside it; llama.cpp's KV views have the same shape).
+    const ggml_type kvt = model.memory_k->type;
+    const size_t kv_tok_row     = ggml_row_size(kvt, n_embd);  // bytes per cached position
+    const size_t kv_head_row    = ggml_row_size(kvt, HD);      // bytes per head inside a row
+    const size_t kv_layer_bytes = (size_t) n_ctx * kv_tok_row;
 
     // Causal attention mask for flash_attn_ext.  Shape [n_kv, N] broadcast
     // over heads, F16 (Metal FA requires F16 masks; CPU / CUDA / Vulkan all
@@ -505,44 +620,44 @@ static ggml_tensor * build_transformer_core(
             qkv_col_stride,
             qkv_head_stride,
             0);  // Qcur slot
-        ggml_tensor * Kcur_QNH = ggml_view_3d(ctx, cur, HD, N, n_head,
+        // K/V slots viewed as [n_embd, N]: one row per position, heads
+        // packed inside — already the token-major cache row layout, so
+        // the append below is a single contiguous-destination copy.
+        ggml_tensor * Kcur = ggml_view_2d(ctx, cur, n_embd, N,
             qkv_col_stride,
-            qkv_head_stride,
             (size_t) n_embd * sizeof(float));  // Kcur slot
-        ggml_tensor * Vcur_QNH = ggml_view_3d(ctx, cur, HD, N, n_head,
+        ggml_tensor * Vcur = ggml_view_2d(ctx, cur, n_embd, N,
             qkv_col_stride,
-            qkv_head_stride,
             (size_t) 2 * n_embd * sizeof(float));  // Vcur slot
 
-        // KV cache append: write the [HD, N, n_head] source into a strided
-        // [HD, N, n_head] view of the cache starting at position n_past.
-        // One kernel launch per tensor.
-        const size_t layer_off = (size_t) il * kv_layer_elems * sizeof(float);
+        // KV cache append: positions [n_past, n_past+N) are consecutive
+        // token rows, so the destination view is contiguous and ggml_cpy
+        // converts/quantises f32 → kv_type on write.  One kernel launch
+        // per tensor.
+        const size_t layer_off = (size_t) il * kv_layer_bytes;
         {
-            ggml_tensor * k_dst = ggml_view_3d(ctx, model.memory_k,
-                HD, N, n_head,
-                kv_pos_stride,
-                kv_head_stride,
-                layer_off + (size_t) n_past * kv_pos_stride);
-            ggml_tensor * v_dst = ggml_view_3d(ctx, model.memory_v,
-                HD, N, n_head,
-                kv_pos_stride,
-                kv_head_stride,
-                layer_off + (size_t) n_past * kv_pos_stride);
+            ggml_tensor * k_dst = ggml_view_2d(ctx, model.memory_k,
+                n_embd, N,
+                kv_tok_row,
+                layer_off + (size_t) n_past * kv_tok_row);
+            ggml_tensor * v_dst = ggml_view_2d(ctx, model.memory_v,
+                n_embd, N,
+                kv_tok_row,
+                layer_off + (size_t) n_past * kv_tok_row);
 
-            ggml_build_forward_expand(gf, ggml_cpy(ctx, Kcur_QNH, k_dst));
-            ggml_build_forward_expand(gf, ggml_cpy(ctx, Vcur_QNH, v_dst));
+            ggml_build_forward_expand(gf, ggml_cpy(ctx, Kcur, k_dst));
+            ggml_build_forward_expand(gf, ggml_cpy(ctx, Vcur, v_dst));
         }
 
         ggml_tensor * K = ggml_view_3d(ctx, model.memory_k,
             HD, L, n_head,
-            kv_pos_stride,
-            kv_head_stride,
+            kv_tok_row,
+            kv_head_row,
             layer_off);
         ggml_tensor * V = ggml_view_3d(ctx, model.memory_v,
             HD, L, n_head,
-            kv_pos_stride,
-            kv_head_stride,
+            kv_tok_row,
+            kv_head_row,
             layer_off);
 
         ggml_tensor * attn = ggml_flash_attn_ext(ctx, Q, K, V, kq_mask,

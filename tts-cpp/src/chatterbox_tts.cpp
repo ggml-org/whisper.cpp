@@ -23,6 +23,7 @@
 
 #include "backend_selection.h"
 #include "backend_util.h"
+#include "gguf_stream.h"
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -298,8 +299,14 @@ static double s3gen_model_cache_last_load_ms() { return g_s3gen_cache_last_load_
 
 static model_ctx load_s3gen_gguf(const std::string & path, int n_gpu_layers, bool verbose) {
     model_ctx m;
+    // no_alloc=true: tmp_ctx carries tensor METADATA only; payloads are
+    // streamed straight from the file into the backend buffer below so the
+    // full ~1 GB data section is never staged in host memory.  This load
+    // runs on the s3gen_preload background thread while the T3 weights are
+    // already resident, so the staging blob used to land right on the
+    // process's peak footprint (QVAC-19557, see gguf_stream.h).
     ggml_context * tmp_ctx = nullptr;
-    gguf_init_params gp = { /*.no_alloc=*/ false, /*.ctx=*/ &tmp_ctx };
+    gguf_init_params gp = { /*.no_alloc=*/ true, /*.ctx=*/ &tmp_ctx };
     gguf_context * g = gguf_init_from_file(path.c_str(), gp);
     if (!g) throw std::runtime_error("gguf_init_from_file failed: " + path);
     m.backend = s3gen_init_backend(n_gpu_layers, verbose);
@@ -314,9 +321,25 @@ static model_ctx load_s3gen_gguf(const std::string & path, int n_gpu_layers, boo
         m.tensors[name] = dst;
     }
     m.buffer_w = ggml_backend_alloc_ctx_tensors(m.ctx_w, m.backend);
-    for (ggml_tensor * cur = ggml_get_first_tensor(m.ctx_w); cur; cur = ggml_get_next_tensor(m.ctx_w, cur)) {
-        ggml_tensor * src = ggml_get_tensor(tmp_ctx, ggml_get_name(cur));
-        ggml_backend_tensor_set(cur, ggml_get_data(src), 0, ggml_nbytes(src));
+    {
+        auto fail = [&](const std::string & what) {
+            gguf_free(g);
+            ggml_free(tmp_ctx);
+            if (m.buffer_w) ggml_backend_buffer_free(m.buffer_w);
+            ggml_free(m.ctx_w);
+            ggml_backend_free(m.backend);
+            throw std::runtime_error(what);
+        };
+        ::tts_cpp::detail::gguf_stream_reader reader(g, path);
+        if (!reader.ok()) {
+            fail("failed to reopen GGUF for tensor data: " + path);
+        }
+        for (ggml_tensor * cur = ggml_get_first_tensor(m.ctx_w); cur; cur = ggml_get_next_tensor(m.ctx_w, cur)) {
+            if (!reader.to_backend(ggml_get_name(cur), cur)) {
+                fail(std::string("failed to stream tensor '") +
+                     ggml_get_name(cur) + "' from " + path);
+            }
+        }
     }
     // NOTE: ALL scheduler setup (m.sched, m.cpu_backend, and the buffer_w
     // USAGE_WEIGHTS flag) is done lazily in s3gen_sched_alloc on the synthesis

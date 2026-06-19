@@ -1,6 +1,7 @@
 #include "s3tokenizer.h"
 #include "backend_selection.h"
 #include "backend_util.h"
+#include "gguf_stream.h"
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -22,23 +23,32 @@
 // GGUF loader
 // =============================================================================
 
-static bool copy_f32(ggml_context * ctx, const char * name,
+static bool copy_f32(ggml_context * ctx,
+                     tts_cpp::detail::gguf_stream_reader & rd,
+                     const char * name,
                      std::vector<float> & out)
 {
     ggml_tensor * t = ggml_get_tensor(ctx, name);
     if (!t) { fprintf(stderr, "s3tokv2_load: missing tensor %s\n", name); return false; }
     out.resize(ggml_nelements(t));
-    std::memcpy(out.data(), ggml_get_data(t), ggml_nbytes(t));
-    return true;
+    return rd.to_host(name, out.data(), ggml_nbytes(t));
 }
 
 bool s3tokv2_load(const std::string & path, s3tokv2_weights & w)
 {
+    // no_alloc=true + streamed reads: the tokenizer weights are a small
+    // slice of the s3gen GGUF; staging the whole ~1 GB data section just
+    // to memcpy them out was pure peak-footprint waste (QVAC-19557, see
+    // gguf_stream.h).
     ggml_context * tmp = nullptr;
-    gguf_init_params gp = { /*.no_alloc=*/ false, /*.ctx=*/ &tmp };
+    gguf_init_params gp = { /*.no_alloc=*/ true, /*.ctx=*/ &tmp };
     gguf_context * g = gguf_init_from_file(path.c_str(), gp);
     if (!g) { fprintf(stderr, "s3tokv2_load: cannot open %s\n", path.c_str()); return false; }
     if (gguf_find_key(g, "s3tokv2.n_audio_state") < 0) {
+        gguf_free(g); if (tmp) ggml_free(tmp); return false;
+    }
+    tts_cpp::detail::gguf_stream_reader reader(g, path);
+    if (!reader.ok()) {
         gguf_free(g); if (tmp) ggml_free(tmp); return false;
     }
     auto u32 = [&](const char * k, uint32_t fb) {
@@ -67,34 +77,34 @@ bool s3tokv2_load(const std::string & path, s3tokv2_weights & w)
     w.rope_max_pos = (int)u32("s3tokv2.rope_max_pos",  2048);
 
     bool ok = true;
-    ok &= copy_f32(tmp, "s3tokv2/mel_fb",              w.mel_fb);
-    ok &= copy_f32(tmp, "s3tokv2/encoder/conv1/weight", w.conv1_w);
-    ok &= copy_f32(tmp, "s3tokv2/encoder/conv1/bias",   w.conv1_b);
-    ok &= copy_f32(tmp, "s3tokv2/encoder/conv2/weight", w.conv2_w);
-    ok &= copy_f32(tmp, "s3tokv2/encoder/conv2/bias",   w.conv2_b);
+    ok &= copy_f32(tmp, reader, "s3tokv2/mel_fb",              w.mel_fb);
+    ok &= copy_f32(tmp, reader, "s3tokv2/encoder/conv1/weight", w.conv1_w);
+    ok &= copy_f32(tmp, reader, "s3tokv2/encoder/conv1/bias",   w.conv1_b);
+    ok &= copy_f32(tmp, reader, "s3tokv2/encoder/conv2/weight", w.conv2_w);
+    ok &= copy_f32(tmp, reader, "s3tokv2/encoder/conv2/bias",   w.conv2_b);
     w.blocks.clear(); w.blocks.resize(w.n_layer);
     for (int i = 0; i < w.n_layer; ++i) {
         auto & b = w.blocks[i];
         const std::string p = "s3tokv2/encoder/blocks/" + std::to_string(i);
-        ok &= copy_f32(tmp, (p + "/attn_ln/weight").c_str(), b.attn_ln_w);
-        ok &= copy_f32(tmp, (p + "/attn_ln/bias").c_str(),   b.attn_ln_b);
-        ok &= copy_f32(tmp, (p + "/attn/query/weight").c_str(), b.q_w);
-        ok &= copy_f32(tmp, (p + "/attn/query/bias").c_str(),   b.q_b);
-        ok &= copy_f32(tmp, (p + "/attn/key/weight").c_str(),   b.k_w);
-        ok &= copy_f32(tmp, (p + "/attn/value/weight").c_str(), b.v_w);
-        ok &= copy_f32(tmp, (p + "/attn/value/bias").c_str(),   b.v_b);
-        ok &= copy_f32(tmp, (p + "/attn/out/weight").c_str(),   b.out_w);
-        ok &= copy_f32(tmp, (p + "/attn/out/bias").c_str(),     b.out_b);
-        ok &= copy_f32(tmp, (p + "/attn/fsmn_block/weight").c_str(), b.fsmn_w);
-        ok &= copy_f32(tmp, (p + "/mlp_ln/weight").c_str(), b.mlp_ln_w);
-        ok &= copy_f32(tmp, (p + "/mlp_ln/bias").c_str(),   b.mlp_ln_b);
-        ok &= copy_f32(tmp, (p + "/mlp/0/weight").c_str(), b.mlp0_w);
-        ok &= copy_f32(tmp, (p + "/mlp/0/bias").c_str(),   b.mlp0_b);
-        ok &= copy_f32(tmp, (p + "/mlp/2/weight").c_str(), b.mlp2_w);
-        ok &= copy_f32(tmp, (p + "/mlp/2/bias").c_str(),   b.mlp2_b);
+        ok &= copy_f32(tmp, reader, (p + "/attn_ln/weight").c_str(), b.attn_ln_w);
+        ok &= copy_f32(tmp, reader, (p + "/attn_ln/bias").c_str(),   b.attn_ln_b);
+        ok &= copy_f32(tmp, reader, (p + "/attn/query/weight").c_str(), b.q_w);
+        ok &= copy_f32(tmp, reader, (p + "/attn/query/bias").c_str(),   b.q_b);
+        ok &= copy_f32(tmp, reader, (p + "/attn/key/weight").c_str(),   b.k_w);
+        ok &= copy_f32(tmp, reader, (p + "/attn/value/weight").c_str(), b.v_w);
+        ok &= copy_f32(tmp, reader, (p + "/attn/value/bias").c_str(),   b.v_b);
+        ok &= copy_f32(tmp, reader, (p + "/attn/out/weight").c_str(),   b.out_w);
+        ok &= copy_f32(tmp, reader, (p + "/attn/out/bias").c_str(),     b.out_b);
+        ok &= copy_f32(tmp, reader, (p + "/attn/fsmn_block/weight").c_str(), b.fsmn_w);
+        ok &= copy_f32(tmp, reader, (p + "/mlp_ln/weight").c_str(), b.mlp_ln_w);
+        ok &= copy_f32(tmp, reader, (p + "/mlp_ln/bias").c_str(),   b.mlp_ln_b);
+        ok &= copy_f32(tmp, reader, (p + "/mlp/0/weight").c_str(), b.mlp0_w);
+        ok &= copy_f32(tmp, reader, (p + "/mlp/0/bias").c_str(),   b.mlp0_b);
+        ok &= copy_f32(tmp, reader, (p + "/mlp/2/weight").c_str(), b.mlp2_w);
+        ok &= copy_f32(tmp, reader, (p + "/mlp/2/bias").c_str(),   b.mlp2_b);
     }
-    ok &= copy_f32(tmp, "s3tokv2/quantizer/_codebook/project_down/weight", w.fsq_w);
-    ok &= copy_f32(tmp, "s3tokv2/quantizer/_codebook/project_down/bias",   w.fsq_b);
+    ok &= copy_f32(tmp, reader, "s3tokv2/quantizer/_codebook/project_down/weight", w.fsq_w);
+    ok &= copy_f32(tmp, reader, "s3tokv2/quantizer/_codebook/project_down/bias",   w.fsq_b);
 
     gguf_free(g); if (tmp) ggml_free(tmp);
     return ok;

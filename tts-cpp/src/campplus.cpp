@@ -1,5 +1,6 @@
 #include "campplus.h"
 #include "backend_selection.h"
+#include "gguf_stream.h"
 #include "ggml.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -27,24 +28,33 @@ static bool campplus_embed_ggml(const std::vector<float> & fbank_t_by_c, int T,
 // GGUF loader helpers
 // =============================================================================
 
-static bool copy_f32(ggml_context * ctx, const char * name,
+// Metadata ctx (no_alloc=true, shapes/types only) + streaming reader pair
+// the loader helpers below pull tensor payloads through.  Replaces the old
+// no_alloc=false staging ctx that materialised the whole ~1 GB s3gen data
+// section in host memory just to memcpy the CAMPPlus slice out of it
+// (QVAC-19557, see gguf_stream.h).
+struct gguf_src {
+    ggml_context * meta;
+    tts_cpp::detail::gguf_stream_reader * rd;
+};
+
+static bool copy_f32(const gguf_src & ctx, const char * name,
                      std::vector<float> & out)
 {
-    ggml_tensor * t = ggml_get_tensor(ctx, name);
+    ggml_tensor * t = ggml_get_tensor(ctx.meta, name);
     if (!t) { fprintf(stderr, "campplus_load: missing tensor %s\n", name); return false; }
     out.resize(ggml_nelements(t));
-    std::memcpy(out.data(), ggml_get_data(t), ggml_nbytes(t));
-    return true;
+    return ctx.rd->to_host(name, out.data(), ggml_nbytes(t));
 }
 
-static bool load_bn(ggml_context * ctx, const std::string & base, campplus_bn & bn)
+static bool load_bn(const gguf_src & ctx, const std::string & base, campplus_bn & bn)
 {
     if (!copy_f32(ctx, (base + "/s").c_str(), bn.scale)) return false;
     if (!copy_f32(ctx, (base + "/b").c_str(), bn.shift)) return false;
     return true;
 }
 
-static bool load_conv1d(ggml_context * ctx,
+static bool load_conv1d(const gguf_src & ctx,
                         const std::string & w_name,
                         const std::string & b_name_or_empty,
                         int k, int C_in, int C_out,
@@ -70,7 +80,7 @@ static bool load_conv1d(ggml_context * ctx,
     return true;
 }
 
-static bool load_conv2d(ggml_context * ctx,
+static bool load_conv2d(const gguf_src & ctx,
                         const std::string & w_name,
                         int kH, int kW, int C_in, int C_out,
                         int sH, int sW, int pH, int pW,
@@ -91,7 +101,7 @@ static bool load_conv2d(ggml_context * ctx,
     return true;
 }
 
-static bool load_res_block(ggml_context * ctx,
+static bool load_res_block(const gguf_src & ctx,
                            const std::string & base,
                            bool has_shortcut,
                            int in_planes, int planes, int stride,
@@ -109,7 +119,7 @@ static bool load_res_block(ggml_context * ctx,
     return true;
 }
 
-static bool load_cam_block(ggml_context * ctx,
+static bool load_cam_block(const gguf_src & ctx,
                            const std::string & base,
                            int num_layers, int kernel_size, int dilation,
                            int init_C_in, int growth_rate, int bn_channels,
@@ -146,12 +156,17 @@ static bool load_cam_block(ggml_context * ctx,
 bool campplus_load(const std::string & path, campplus_weights & w)
 {
     ggml_context * tmp = nullptr;
-    gguf_init_params gp = { /*.no_alloc=*/ false, /*.ctx=*/ &tmp };
+    gguf_init_params gp = { /*.no_alloc=*/ true, /*.ctx=*/ &tmp };
     gguf_context * g = gguf_init_from_file(path.c_str(), gp);
     if (!g) { fprintf(stderr, "campplus_load: cannot open %s\n", path.c_str()); return false; }
     if (gguf_find_key(g, "campplus.embedding_size") < 0) {
         gguf_free(g); if (tmp) ggml_free(tmp); return false;
     }
+    tts_cpp::detail::gguf_stream_reader reader(g, path);
+    if (!reader.ok()) {
+        gguf_free(g); if (tmp) ggml_free(tmp); return false;
+    }
+    const gguf_src src = { tmp, &reader };
     auto u32 = [&](const char * k, uint32_t fb) {
         int64_t id = gguf_find_key(g, k);
         return id < 0 ? fb : gguf_get_val_u32(g, id);
@@ -175,53 +190,53 @@ bool campplus_load(const std::string & path, campplus_weights & w)
 
     // FCM head.
     bool ok = true;
-    ok &= load_conv2d(tmp, "campplus/head/conv1/weight", 3, 3, 1, 32, 1, 1, 1, 1, w.head.conv1);
-    ok &= load_bn    (tmp, "campplus/head/bn1", w.head.bn1);
+    ok &= load_conv2d(src, "campplus/head/conv1/weight", 3, 3, 1, 32, 1, 1, 1, 1, w.head.conv1);
+    ok &= load_bn    (src, "campplus/head/bn1", w.head.bn1);
     // layer1: 2 blocks, first stride=2 with shortcut; second stride=1 no shortcut (in==planes).
     w.head.layer1.resize(2);
-    ok &= load_res_block(tmp, "campplus/head/layer1/0", /*has_shortcut=*/true,  32, 32, 2, w.head.layer1[0]);
-    ok &= load_res_block(tmp, "campplus/head/layer1/1", /*has_shortcut=*/false, 32, 32, 1, w.head.layer1[1]);
+    ok &= load_res_block(src, "campplus/head/layer1/0", /*has_shortcut=*/true,  32, 32, 2, w.head.layer1[0]);
+    ok &= load_res_block(src, "campplus/head/layer1/1", /*has_shortcut=*/false, 32, 32, 1, w.head.layer1[1]);
     w.head.layer2.resize(2);
-    ok &= load_res_block(tmp, "campplus/head/layer2/0", /*has_shortcut=*/true,  32, 32, 2, w.head.layer2[0]);
-    ok &= load_res_block(tmp, "campplus/head/layer2/1", /*has_shortcut=*/false, 32, 32, 1, w.head.layer2[1]);
-    ok &= load_conv2d(tmp, "campplus/head/conv2/weight", 3, 3, 32, 32, 2, 1, 1, 1, w.head.conv2);
-    ok &= load_bn    (tmp, "campplus/head/bn2", w.head.bn2);
+    ok &= load_res_block(src, "campplus/head/layer2/0", /*has_shortcut=*/true,  32, 32, 2, w.head.layer2[0]);
+    ok &= load_res_block(src, "campplus/head/layer2/1", /*has_shortcut=*/false, 32, 32, 1, w.head.layer2[1]);
+    ok &= load_conv2d(src, "campplus/head/conv2/weight", 3, 3, 32, 32, 2, 1, 1, 1, w.head.conv2);
+    ok &= load_bn    (src, "campplus/head/bn2", w.head.bn2);
 
     // FCM output channels: 32 * (80 / 8) = 320, then tdnn.
     const int fcm_out_ch = 32 * (w.feat_dim / 8);
-    ok &= load_conv1d(tmp, "campplus/xvector/tdnn/linear/weight", "",
+    ok &= load_conv1d(src, "campplus/xvector/tdnn/linear/weight", "",
                       /*k=*/5, fcm_out_ch, init_channels, /*s=*/2, /*p=*/2, /*d=*/1, w.tdnn_linear);
-    ok &= load_bn(tmp, "campplus/xvector/tdnn/nonlinear/batchnorm", w.tdnn_bn);
+    ok &= load_bn(src, "campplus/xvector/tdnn/nonlinear/batchnorm", w.tdnn_bn);
 
-    ok &= load_cam_block(tmp, "campplus/xvector/block1", b1_layers, k_size, b1_dil,
+    ok &= load_cam_block(src, "campplus/xvector/block1", b1_layers, k_size, b1_dil,
                          /*init_C_in=*/init_channels, growth_rate, bn_channels, w.block1);
     const int after_b1_ch = init_channels + b1_layers * growth_rate;  // 128 + 12*32 = 512
-    ok &= load_bn(tmp, "campplus/xvector/transit1/nonlinear/batchnorm", w.transit1.bn);
-    ok &= load_conv1d(tmp, "campplus/xvector/transit1/linear/weight", "",
+    ok &= load_bn(src, "campplus/xvector/transit1/nonlinear/batchnorm", w.transit1.bn);
+    ok &= load_conv1d(src, "campplus/xvector/transit1/linear/weight", "",
                       1, after_b1_ch, after_b1_ch / 2, 1, 0, 1, w.transit1.linear);
 
     const int b2_in_ch = after_b1_ch / 2;  // 256
-    ok &= load_cam_block(tmp, "campplus/xvector/block2", b2_layers, k_size, b2_dil,
+    ok &= load_cam_block(src, "campplus/xvector/block2", b2_layers, k_size, b2_dil,
                          b2_in_ch, growth_rate, bn_channels, w.block2);
     const int after_b2_ch = b2_in_ch + b2_layers * growth_rate;  // 256 + 24*32 = 1024
-    ok &= load_bn(tmp, "campplus/xvector/transit2/nonlinear/batchnorm", w.transit2.bn);
-    ok &= load_conv1d(tmp, "campplus/xvector/transit2/linear/weight", "",
+    ok &= load_bn(src, "campplus/xvector/transit2/nonlinear/batchnorm", w.transit2.bn);
+    ok &= load_conv1d(src, "campplus/xvector/transit2/linear/weight", "",
                       1, after_b2_ch, after_b2_ch / 2, 1, 0, 1, w.transit2.linear);
 
     const int b3_in_ch = after_b2_ch / 2;  // 512
-    ok &= load_cam_block(tmp, "campplus/xvector/block3", b3_layers, k_size, b3_dil,
+    ok &= load_cam_block(src, "campplus/xvector/block3", b3_layers, k_size, b3_dil,
                          b3_in_ch, growth_rate, bn_channels, w.block3);
     const int after_b3_ch = b3_in_ch + b3_layers * growth_rate;  // 512 + 16*32 = 1024
-    ok &= load_bn(tmp, "campplus/xvector/transit3/nonlinear/batchnorm", w.transit3.bn);
-    ok &= load_conv1d(tmp, "campplus/xvector/transit3/linear/weight", "",
+    ok &= load_bn(src, "campplus/xvector/transit3/nonlinear/batchnorm", w.transit3.bn);
+    ok &= load_conv1d(src, "campplus/xvector/transit3/linear/weight", "",
                       1, after_b3_ch, after_b3_ch / 2, 1, 0, 1, w.transit3.linear);
 
     const int final_ch = after_b3_ch / 2;  // 512
-    ok &= load_bn(tmp, "campplus/xvector/out_nonlinear/batchnorm", w.out_nonlinear_bn);
+    ok &= load_bn(src, "campplus/xvector/out_nonlinear/batchnorm", w.out_nonlinear_bn);
 
-    ok &= load_conv1d(tmp, "campplus/xvector/dense/linear/weight", "",
+    ok &= load_conv1d(src, "campplus/xvector/dense/linear/weight", "",
                       1, /*C_in=*/final_ch * 2, /*C_out=*/w.embedding_size, 1, 0, 1, w.dense_linear);
-    ok &= load_bn(tmp, "campplus/xvector/dense/nonlinear/batchnorm", w.dense_bn);
+    ok &= load_bn(src, "campplus/xvector/dense/nonlinear/batchnorm", w.dense_bn);
 
     gguf_free(g); if (tmp) ggml_free(tmp);
     return ok;
