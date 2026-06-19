@@ -844,6 +844,19 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-text-encoder-backward)
     tts_cpp_register_test(test-supertonic-text-encoder-backward LABEL "unit")
 
+    # QVAC-20982 — analytic backward of the vector estimator / CFM step
+    # (convnext, depthwise conv, layer norm, gelu, rope + style cross-attention,
+    # full field and per-step d_in/d_style).  Model-free: every analytic
+    # gradient is gradchecked against finite differences via the Task 2 harness,
+    # so it ALWAYS runs on a fresh checkout (no-skip policy, no model/fixtures).
+    add_executable(test-supertonic-vector-estimator-backward
+        test/test_supertonic_vector_estimator_backward.cpp
+        src/supertonic_vector_estimator_backward.cpp
+        src/voiceclone_gradcheck.cpp)
+    target_include_directories(test-supertonic-vector-estimator-backward PRIVATE src)
+    tts_cpp_apply_ccache(test-supertonic-vector-estimator-backward)
+    tts_cpp_register_test(test-supertonic-vector-estimator-backward LABEL "unit")
+
     # Engine-level streaming-callback contract test for the per-sentence
     # segmentation path (Fix #2): monotonic global chunk_index, single final
     # is_last, result.pcm == concat(callbacks), accumulated stats.  Gated on
