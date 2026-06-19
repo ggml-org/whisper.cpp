@@ -1267,33 +1267,17 @@ jobs:
           echo "Release assets:"
           ls -lh release/
 
-      - name: Generate release notes
-        id: notes
+      - name: Delete existing release/tag if present
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ needs.determine-tag.outputs.tag_name }}"
-          ROCM_VER="${{ env.ROCM_VERSION }}"
-
-          cat > /tmp/release-notes.md <<NOTES
-          ## AMD whisper.cpp ${TAG}
-
-          AMD-based pre-built binaries of [whisper.cpp ${TAG}](https://github.com/ggerganov/whisper.cpp/releases/tag/${TAG}) with full hardware acceleration across ROCm GPU (iGPU and dGPU), NPU (RyzenAI), and CPU — for Linux and Windows.
-          All ROCm runtime libraries (ROCm ${ROCM_VER}) are bundled. No drivers or separate installs required — download, extract, and run.
-
-          ### Packages
-
-          | Target | Linux | Windows |
-          |---|---|---|
-          | ROCm gfx1151 (Ryzen AI MAX+ Pro 395) | \`whisper-${TAG}-linux-rocm-gfx1151.tar.gz\` | \`whisper-${TAG}-windows-rocm-gfx1151.zip\` |
-          | ROCm gfx1150 (Ryzen AI 300) | \`whisper-${TAG}-linux-rocm-gfx1150.tar.gz\` | \`whisper-${TAG}-windows-rocm-gfx1150.zip\` |
-          | ROCm gfx120X (RDNA4 dGPU) | \`whisper-${TAG}-linux-rocm-gfx120X.tar.gz\` | \`whisper-${TAG}-windows-rocm-gfx120X.zip\` |
-          | ROCm gfx110X (RDNA3 dGPU & iGPU) | \`whisper-${TAG}-linux-rocm-gfx110X.tar.gz\` | \`whisper-${TAG}-windows-rocm-gfx110X.zip\` |
-          | Vulkan (cross-vendor) | \`whisper-${TAG}-linux-vulkan-x86_64.tar.gz\` | \`whisper-${TAG}-windows-vulkan-x64.zip\` |
-          | NPU (RyzenAI) | — | \`whisper-${TAG}-windows-npu-x64.zip\` |
-          | Metal (Apple Silicon) | \`whisper-${TAG}-darwin-metal-arm64.tar.gz\` | — |
-          | CPU only | \`whisper-${TAG}-linux-cpu-x86_64.tar.gz\` | \`whisper-${TAG}-windows-cpu-x64.zip\` |
-          NOTES
-
-          echo "notes_file=/tmp/release-notes.md" >> $GITHUB_OUTPUT
+          RELEASE_ID=$(gh api repos/${{ github.repository }}/releases/tags/"$TAG" --jq '.id' 2>/dev/null || true)
+          if [ -n "$RELEASE_ID" ]; then
+            echo "Deleting existing release $RELEASE_ID for tag $TAG"
+            gh api -X DELETE repos/${{ github.repository }}/releases/"$RELEASE_ID"
+          fi
+          git push --delete origin "refs/tags/$TAG" 2>/dev/null || true
 
       - name: Create release
         id: create_release
@@ -1304,8 +1288,25 @@ jobs:
           tag_name:     ${{ needs.determine-tag.outputs.tag_name }}
           release_name: "whisper.cpp ${{ needs.determine-tag.outputs.tag_name }} - AMD Builds"
           prerelease:   ${{ github.event.inputs.pre_release_tag != '' }}
-          body_path:    ${{ steps.notes.outputs.notes_file }}
           draft: false
+          body: |
+            ## AMD whisper.cpp ${{ needs.determine-tag.outputs.tag_name }}
+
+            AMD-based pre-built binaries of [whisper.cpp ${{ needs.determine-tag.outputs.tag_name }}](https://github.com/ggerganov/whisper.cpp/releases/tag/${{ needs.determine-tag.outputs.tag_name }}) with full hardware acceleration across ROCm GPU (iGPU and dGPU), NPU (RyzenAI), and CPU — for Linux and Windows.
+            All ROCm runtime libraries (ROCm ${{ env.ROCM_VERSION }}) are bundled. No drivers or separate installs required — download, extract, and run.
+
+            ### Packages
+
+            | Target | Linux | Windows |
+            |---|---|---|
+            | ROCm gfx1151 (Ryzen AI MAX+ Pro 395) | `whisper-${{ needs.determine-tag.outputs.tag_name }}-linux-rocm-gfx1151.tar.gz` | `whisper-${{ needs.determine-tag.outputs.tag_name }}-windows-rocm-gfx1151.zip` |
+            | ROCm gfx1150 (Ryzen AI 300) | `whisper-${{ needs.determine-tag.outputs.tag_name }}-linux-rocm-gfx1150.tar.gz` | `whisper-${{ needs.determine-tag.outputs.tag_name }}-windows-rocm-gfx1150.zip` |
+            | ROCm gfx120X (RDNA4 dGPU) | `whisper-${{ needs.determine-tag.outputs.tag_name }}-linux-rocm-gfx120X.tar.gz` | `whisper-${{ needs.determine-tag.outputs.tag_name }}-windows-rocm-gfx120X.zip` |
+            | ROCm gfx110X (RDNA3 dGPU & iGPU) | `whisper-${{ needs.determine-tag.outputs.tag_name }}-linux-rocm-gfx110X.tar.gz` | `whisper-${{ needs.determine-tag.outputs.tag_name }}-windows-rocm-gfx110X.zip` |
+            | Vulkan (cross-vendor) | `whisper-${{ needs.determine-tag.outputs.tag_name }}-linux-vulkan-x86_64.tar.gz` | `whisper-${{ needs.determine-tag.outputs.tag_name }}-windows-vulkan-x64.zip` |
+            | NPU (RyzenAI) | — | `whisper-${{ needs.determine-tag.outputs.tag_name }}-windows-npu-x64.zip` |
+            | Metal (Apple Silicon) | `whisper-${{ needs.determine-tag.outputs.tag_name }}-darwin-metal-arm64.tar.gz` | — |
+            | CPU only | `whisper-${{ needs.determine-tag.outputs.tag_name }}-linux-cpu-x86_64.tar.gz` | `whisper-${{ needs.determine-tag.outputs.tag_name }}-windows-cpu-x64.zip` |
 
       - name: Upload release assets
         uses: actions/github-script@v7
