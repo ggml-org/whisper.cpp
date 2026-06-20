@@ -142,6 +142,11 @@ int main(int argc, char ** argv) {
     ctx_params.use_gpu     = params.use_gpu;
     ctx_params.gpu_device  = params.gpu_device;
 
+    struct parakeet_stream_params stream_params = parakeet_stream_default_params();
+    stream_params.left_context_ms  = params.left_context_ms;
+    stream_params.chunk_ms         = params.chunk_ms;
+    stream_params.right_context_ms = params.right_context_ms;
+
     if (!params.no_prints) {
         fprintf(stderr, "Loading Parakeet model from: %s\n", params.model.c_str());
     }
