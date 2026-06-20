@@ -265,12 +265,21 @@ extern "C" {
         void * abort_callback_user_data;
     };
 
+    // Parameters for parakeet_full_stream(). All durations are in milliseconds.
+    // Values must be multiples of the encoder frame duration (80 ms).
+    struct parakeet_stream_params {
+        int left_context_ms;
+        int chunk_ms;
+        int right_context_ms;
+    };
+
     // NOTE: this function allocates memory, and it is the responsibility of the caller to free the pointer - see parakeet_free_context_params() & parakeet_free_params()
     PARAKEET_API struct parakeet_context_params * parakeet_context_default_params_by_ref(void);
     PARAKEET_API struct parakeet_context_params   parakeet_context_default_params       (void);
 
     PARAKEET_API struct parakeet_full_params * parakeet_full_default_params_by_ref(enum parakeet_sampling_strategy strategy);
     PARAKEET_API struct parakeet_full_params   parakeet_full_default_params       (enum parakeet_sampling_strategy strategy);
+    PARAKEET_API struct parakeet_stream_params parakeet_stream_default_params     (void);
 
     // Run the entire model: PCM -> log mel spectrogram -> encoder -> decoder -> text
     // Not thread safe for same context
@@ -284,6 +293,24 @@ extern "C" {
                 struct parakeet_context * ctx,
                   struct parakeet_state * state,
             struct parakeet_full_params   params,
+                            const float * samples,
+                                    int   n_samples);
+
+    // Process a finite PCM buffer in overlapping [left | chunk | right] windows.
+    // Only tokens beginning in each chunk are emitted. Results and callbacks use
+    // timestamps relative to the original PCM buffer.
+    PARAKEET_API int parakeet_full_stream(
+                struct parakeet_context * ctx,
+            struct parakeet_full_params   params,
+            struct parakeet_stream_params stream_params,
+                            const float * samples,
+                                    int   n_samples);
+
+    PARAKEET_API int parakeet_full_stream_with_state(
+                struct parakeet_context * ctx,
+                  struct parakeet_state * state,
+            struct parakeet_full_params   params,
+            struct parakeet_stream_params stream_params,
                             const float * samples,
                                     int   n_samples);
 

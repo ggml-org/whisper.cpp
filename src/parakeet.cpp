@@ -2453,7 +2453,11 @@ static bool parakeet_decode(
                 parakeet_state & pstate,
                 parakeet_batch & batch,
                      const int   n_threads,
-    const parakeet_full_params * params = nullptr) {
+    const parakeet_full_params * params = nullptr,
+                     int         frame_begin = 0,
+                     int         frame_end = -1,
+                     int         frame_offset = 0,
+                     int         time_offset = 0) {
     const auto & hparams       = pctx.model.hparams;
     const auto & tdt_durations = pctx.model.tdt_durations;
 
@@ -2463,20 +2467,28 @@ static bool parakeet_decode(
     const int  n_vocab_logits           = blank_id + 1;
     const int  max_tokens_per_timestep = hparams.n_max_tokens;
 
+    if (frame_end < 0) {
+        frame_end = n_frames;
+    }
+    if (frame_begin < 0 || frame_begin > frame_end || frame_end > n_frames) {
+        PARAKEET_LOG_ERROR("%s: invalid decode range [%d, %d) for %d frames\n", __func__, frame_begin, frame_end, n_frames);
+        return false;
+    }
+
     // time index into the encoder frame (current time frame)
-    int t = 0;
+    int t = frame_begin;
     // number of symbols emitted for the current time frame
     int tokens_emitted = 0;
 
     // Start with the blank token (8192)
     parakeet_token last_token = blank_id;
 
-    PARAKEET_LOG_DEBUG("parakeet_decode: starting decode with n_frames=%d\n", n_frames);
+    PARAKEET_LOG_DEBUG("parakeet_decode: starting decode in [%d, %d) of %d frames\n", frame_begin, frame_end, n_frames);
 
     batch.n_tokens  = 1;
     batch.token[0]  = last_token;
     batch.logits[0] = 1;
-    batch.i_time[0] = 0;
+    batch.i_time[0] = frame_begin;
 
     // run the prediction network for the initial blank token. This will
     // initialize the LSTM state and produce an initial hidden state that can
@@ -2488,7 +2500,7 @@ static bool parakeet_decode(
     }
 
     // process all time frames of the encoder output
-    while (t < n_frames) {
+    while (t < frame_end) {
         batch.n_tokens  = 1;
         batch.i_time[0] = t;
         batch.logits[0] = 1;
@@ -2552,6 +2564,9 @@ static bool parakeet_decode(
         parakeet_token_data token_data = create_token_data(
             pctx, pstate, best_token, best_duration_idx, duration, t,
             max_logit, n_vocab_logits);
+        token_data.frame_index += frame_offset;
+        token_data.t0 += time_offset;
+        token_data.t1 += time_offset;
 
         pstate.decoded_token_data.push_back(token_data);
 
@@ -3504,6 +3519,14 @@ struct parakeet_full_params parakeet_full_default_params(enum parakeet_sampling_
     return result;
 }
 
+struct parakeet_stream_params parakeet_stream_default_params(void) {
+    return {
+        /*.left_context_ms  =*/ 10000,
+        /*.chunk_ms         =*/  2000,
+        /*.right_context_ms =*/  2000,
+    };
+}
+
 static void parakeet_reset_state(struct parakeet_state * state) {
     state->decoded_tokens.clear();
     state->decoded_token_data.clear();
@@ -3632,6 +3655,138 @@ int parakeet_full(
                     const float * samples,
                             int   n_samples) {
     return parakeet_full_with_state(ctx, ctx->state, params, samples, n_samples);
+}
+
+int parakeet_full_stream_with_state(
+        struct parakeet_context * ctx,
+          struct parakeet_state * state,
+    struct parakeet_full_params   params,
+    struct parakeet_stream_params stream_params,
+                    const float * samples,
+                            int   n_samples) {
+    const int frame_stride_samples = PARAKEET_HOP_LENGTH * ctx->model.hparams.subsampling_factor;
+    const int frame_stride_ms = frame_stride_samples * 1000 / PARAKEET_SAMPLE_RATE;
+
+    if (!samples || n_samples <= 0 ||
+            stream_params.left_context_ms < 0 ||
+            stream_params.chunk_ms <= 0 ||
+            stream_params.right_context_ms < 0 ||
+            stream_params.left_context_ms % frame_stride_ms != 0 ||
+            stream_params.chunk_ms % frame_stride_ms != 0 ||
+            stream_params.right_context_ms % frame_stride_ms != 0 ||
+            params.audio_ctx != 0) {
+        PARAKEET_LOG_ERROR("%s: invalid streaming parameters\n", __func__);
+        return -1;
+    }
+
+    const int left_samples  = stream_params.left_context_ms  * PARAKEET_SAMPLE_RATE / 1000;
+    const int chunk_samples = stream_params.chunk_ms         * PARAKEET_SAMPLE_RATE / 1000;
+    const int right_samples = stream_params.right_context_ms * PARAKEET_SAMPLE_RATE / 1000;
+    const int max_window_mel_frames = (left_samples + chunk_samples + right_samples) / PARAKEET_HOP_LENGTH + 1;
+    const int model_audio_ctx = parakeet_n_audio_ctx(ctx);
+
+    if (model_audio_ctx > 0 && max_window_mel_frames > model_audio_ctx) {
+        PARAKEET_LOG_ERROR("%s: streaming window (%d mel frames) exceeds model context (%d)\n",
+                __func__, max_window_mel_frames, model_audio_ctx);
+        return -1;
+    }
+
+    state->result_all.clear();
+
+    if (params.progress_callback) {
+        params.progress_callback(ctx, state, 0, params.progress_callback_user_data);
+    }
+
+    for (int chunk_start = 0; chunk_start < n_samples;) {
+        const int chunk_end = std::min(n_samples, chunk_start + chunk_samples);
+        const int buffer_start = std::max(0, chunk_start - left_samples);
+        const int buffer_end = std::min(n_samples, chunk_end + right_samples);
+        const int buffer_samples = buffer_end - buffer_start;
+
+        parakeet_reset_state(state);
+
+        if (parakeet_pcm_to_mel_with_state(ctx, state, samples + buffer_start, buffer_samples, params.n_threads) != 0) {
+            PARAKEET_LOG_ERROR("%s: failed to compute log mel spectrogram\n", __func__);
+            return -2;
+        }
+
+        state->n_audio_ctx = state->mel.n_len;
+        if (!parakeet_ensure_encode_sched(*ctx, *state, state->n_audio_ctx)) {
+            PARAKEET_LOG_ERROR("%s: failed to allocate encoder graph for %d mel frames\n",
+                    __func__, state->n_audio_ctx);
+            return -6;
+        }
+
+        if (params.encoder_begin_callback &&
+                !params.encoder_begin_callback(ctx, state, params.encoder_begin_callback_user_data)) {
+            PARAKEET_LOG_ERROR("%s: encoder_begin_callback returned false - aborting\n", __func__);
+            return -6;
+        }
+
+        if (!parakeet_encode_internal(*ctx, *state, 0, params.n_threads,
+                params.abort_callback, params.abort_callback_user_data)) {
+            PARAKEET_LOG_ERROR("%s: failed to encode\n", __func__);
+            return -6;
+        }
+
+        const int decode_begin = (chunk_start - buffer_start) / frame_stride_samples;
+        const int decode_end = std::min(state->n_frames,
+                (chunk_end - buffer_start + frame_stride_samples - 1) / frame_stride_samples);
+        const int frame_offset = buffer_start / frame_stride_samples;
+        const int time_offset = buffer_start / PARAKEET_HOP_LENGTH;
+
+        if (!parakeet_decode(*ctx, *state, state->batch, params.n_threads, &params,
+                decode_begin, decode_end, frame_offset, time_offset)) {
+            PARAKEET_LOG_ERROR("%s: failed to decode\n", __func__);
+            return -7;
+        }
+
+        if (!state->decoded_tokens.empty()) {
+            std::string text;
+            std::vector<parakeet_token_data> result_tokens;
+            result_tokens.reserve(state->decoded_tokens.size());
+
+            for (size_t i = 0; i < state->decoded_tokens.size(); ++i) {
+                const char * tok_str = parakeet_token_to_str(ctx, state->decoded_tokens[i]);
+                if (tok_str) {
+                    text += sentencepiece_piece_to_text(tok_str, text.empty());
+                }
+                result_tokens.push_back(state->decoded_token_data[i]);
+            }
+
+            refine_timestamps_tdt(ctx->vocab, result_tokens);
+
+            if (!text.empty()) {
+                parakeet_segment segment;
+                segment.t0 = chunk_start / PARAKEET_HOP_LENGTH;
+                segment.t1 = (chunk_end + PARAKEET_HOP_LENGTH - 1) / PARAKEET_HOP_LENGTH;
+                segment.text = text;
+                segment.tokens = std::move(result_tokens);
+                state->result_all.push_back(std::move(segment));
+
+                if (params.new_segment_callback) {
+                    params.new_segment_callback(ctx, state, 1, params.new_segment_callback_user_data);
+                }
+            }
+        }
+
+        if (params.progress_callback) {
+            params.progress_callback(ctx, state, 100 * chunk_end / n_samples,
+                    params.progress_callback_user_data);
+        }
+        chunk_start = chunk_end;
+    }
+
+    return 0;
+}
+
+int parakeet_full_stream(
+        struct parakeet_context * ctx,
+    struct parakeet_full_params   params,
+    struct parakeet_stream_params stream_params,
+                    const float * samples,
+                            int   n_samples) {
+    return parakeet_full_stream_with_state(ctx, ctx->state, params, stream_params, samples, n_samples);
 }
 
 int parakeet_chunk(

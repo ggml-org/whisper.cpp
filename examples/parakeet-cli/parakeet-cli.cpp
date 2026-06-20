@@ -1,6 +1,7 @@
 #include "parakeet.h"
 #include "common-whisper.h"
 
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <thread>
@@ -18,6 +19,11 @@ struct parakeet_params {
     bool print_segments = false;
     bool output_txt     = false;
     bool no_prints      = false;
+    bool stream         = false;
+
+    int32_t left_context_ms  = 10000;
+    int32_t chunk_ms         =  2000;
+    int32_t right_context_ms =  2000;
 
     std::string model       = "models/ggml-parakeet-tdt-0.6b-v3.bin";
     std::string output_file = "";
@@ -29,6 +35,26 @@ static void parakeet_print_usage(int argc, char ** argv, const parakeet_params &
 static char * requires_value_error(const std::string & arg) {
     fprintf(stderr, "error: argument %s requires value\n", arg.c_str());
     exit(1);
+}
+
+static int32_t parse_stream_duration_ms(const std::string & value, const std::string & arg) {
+    const float seconds = std::stof(value);
+    if (!std::isfinite(seconds) || seconds < 0.0f) {
+        fprintf(stderr, "error: %s must be a non-negative multiple of 0.08 seconds\n", arg.c_str());
+        exit(1);
+    }
+
+    const float milliseconds = seconds * 1000.0f;
+    const int32_t rounded_milliseconds = (int32_t) std::lround(milliseconds);
+
+    if (
+            std::fabs(milliseconds - rounded_milliseconds) > 0.001f ||
+            rounded_milliseconds % 80 != 0) {
+        fprintf(stderr, "error: %s must be a non-negative multiple of 0.08 seconds\n", arg.c_str());
+        exit(1);
+    }
+
+    return rounded_milliseconds;
 }
 
 static bool parakeet_params_parse(int argc, char ** argv, parakeet_params & params) {
@@ -63,6 +89,10 @@ static bool parakeet_params_parse(int argc, char ** argv, parakeet_params & para
         else if (arg == "-otxt" || arg == "--output-txt")      { params.output_txt        = true; }
         else if (arg == "-of"   || arg == "--output-file")     { params.output_file       = ARGV_NEXT; }
         else if (arg == "-np"   || arg == "--no-prints")       { params.no_prints         = true; }
+        else if (arg == "--stream")                              { params.stream            = true; }
+        else if (arg == "--left-context")                        { params.left_context_ms   = parse_stream_duration_ms(ARGV_NEXT, arg); }
+        else if (arg == "--chunk")                               { params.chunk_ms          = parse_stream_duration_ms(ARGV_NEXT, arg); }
+        else if (arg == "--right-context")                       { params.right_context_ms  = parse_stream_duration_ms(ARGV_NEXT, arg); }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             parakeet_print_usage(argc, argv, params);
@@ -89,6 +119,10 @@ static void parakeet_print_usage(int /*argc*/, char ** argv, const parakeet_para
     fprintf(stderr, "  -otxt,  --output-txt        [%-7s] output result in a text file\n",                params.output_txt ? "true" : "false");
     fprintf(stderr, "  -of,    --output-file FILE  [%-7s] output file path (without file extension)\n",   "");
     fprintf(stderr, "  -np,    --no-prints         [%-7s] do not print anything other than the results\n", params.no_prints ? "true" : "false");
+    fprintf(stderr, "          --stream            [%-7s] process audio in overlapping windows\n",          params.stream ? "true" : "false");
+    fprintf(stderr, "          --left-context SEC  [%-7.2f] left context per stream window\n",          params.left_context_ms / 1000.0f);
+    fprintf(stderr, "          --chunk SEC         [%-7.2f] emitted audio per stream window\n",          params.chunk_ms / 1000.0f);
+    fprintf(stderr, "          --right-context SEC [%-7.2f] right context per stream window\n",          params.right_context_ms / 1000.0f);
     fprintf(stderr, "\n");
 }
 
@@ -170,8 +204,14 @@ int main(int argc, char ** argv) {
         full_params.new_token_callback  = token_callback;
         full_params.new_token_callback_user_data = &is_first;
 
-        const int mel_frames = (int)(pcmf32.size() / PARAKEET_HOP_LENGTH);
-        int ret = parakeet_full(pctx, full_params, pcmf32.data(), pcmf32.size());
+        const parakeet_stream_params stream_params = {
+            params.left_context_ms,
+            params.chunk_ms,
+            params.right_context_ms,
+        };
+        const int ret = params.stream
+            ? parakeet_full_stream(pctx, full_params, stream_params, pcmf32.data(), pcmf32.size())
+            : parakeet_full(pctx, full_params, pcmf32.data(), pcmf32.size());
 
         if (ret != 0) {
             fprintf(stderr, "error: failed to process audio file '%s'\n", fname.c_str());

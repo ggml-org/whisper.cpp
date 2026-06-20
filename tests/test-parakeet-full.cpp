@@ -90,6 +90,37 @@ int main() {
     const std::string expected = read_expected_transcription(EXPECTED_TRANSCRIPTION_PATH);
     const bool transcript_matches = verify_transcription(expected, tstate.transcript);
 
+    const parakeet_stream_params stream_params = parakeet_stream_default_params();
+    assert(stream_params.left_context_ms == 10000);
+    assert(stream_params.chunk_ms == 2000);
+    assert(stream_params.right_context_ms == 2000);
+
+    ret = parakeet_full_stream(pctx, params, stream_params, pcmf32.data(), pcmf32.size());
+    assert(ret == 0);
+
+    const int n_stream_segments = parakeet_full_n_segments(pctx);
+    assert(n_stream_segments >= 2);
+    int64_t previous_t1 = 0;
+    for (int i = 0; i < n_stream_segments; ++i) {
+        const int64_t t0 = parakeet_full_get_segment_t0(pctx, i);
+        const int64_t t1 = parakeet_full_get_segment_t1(pctx, i);
+        assert(t0 >= previous_t1);
+        assert(t1 > t0);
+
+        const int n_tokens = parakeet_full_n_tokens(pctx, i);
+        for (int j = 0; j < n_tokens; ++j) {
+            const parakeet_token_data token = parakeet_full_get_token_data(pctx, i, j);
+            assert(token.t0 >= t0);
+            assert(token.t0 < t1);
+        }
+        previous_t1 = t1;
+    }
+
+    parakeet_stream_params invalid_stream_params = stream_params;
+    invalid_stream_params.chunk_ms = 100;
+    ret = parakeet_full_stream(pctx, params, invalid_stream_params, pcmf32.data(), pcmf32.size());
+    assert(ret == -1);
+
     parakeet_free(pctx);
 
     if (!transcript_matches) {
