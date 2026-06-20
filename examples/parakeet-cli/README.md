@@ -29,9 +29,9 @@ options:
   -dev N, --device N          [0      ] GPU device to use
   -ps,    --print-segments    [false  ] print segment information
   --stream                   process audio in overlapping windows
-  --left-context SEC         left context per stream window (default: 10.00)
-  --chunk SEC                emitted audio per stream window (default: 2.00)
-  --right-context SEC        right context per stream window (default: 2.00)
+  -lc N,   --left-context-ms N   left context per stream window (ms) (default: 10000)
+  -cs N,   --chunk-ms N          emitted audio per stream window (ms) (default: 2000)
+  -rc N,   --right-context-ms N  right context per stream window (ms) (default: 2000)
 ```
 
 ### Example
@@ -43,9 +43,9 @@ parakeet_decode: starting decode with n_frames=138
 And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.
 ```
 
-Streaming is opt-in. It encodes overlapping `[left | chunk | right]` windows and emits only tokens that begin in the chunk. The defaults are 10 seconds of left context, 2 seconds of emitted audio, and 2 seconds of right context. Overrides must be multiples of 0.08 seconds:
+Streaming is opt-in. It encodes overlapping `[left | chunk | right]` windows and emits only tokens that begin in the chunk. The defaults are 10 seconds of left context, 2 seconds of emitted audio, and 2 seconds of right context. Values are in milliseconds:
 ```console
-$ ./build/bin/parakeet-cli -m models/parakeet-tdt-0.6b-v3-f16.bin -f samples/jfk.wav --stream --left-context 8.00 --chunk 1.60 --right-context 2.40
+$ ./build/bin/parakeet-cli -m models/parakeet-tdt-0.6b-v3-f16.bin -f samples/jfk.wav --stream --left-context-ms 8000 --chunk-ms 1600 --right-context-ms 2400
 ```
 
 This mode uses the existing encoder attention implementation. It does not reproduce NeMo configurable limited-right-context attention.

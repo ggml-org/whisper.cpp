@@ -1,7 +1,6 @@
 #include "parakeet.h"
 #include "common-whisper.h"
 
-#include <cmath>
 #include <cstdio>
 #include <string>
 #include <thread>
@@ -37,26 +36,6 @@ static char * requires_value_error(const std::string & arg) {
     exit(1);
 }
 
-static int32_t parse_stream_duration_ms(const std::string & value, const std::string & arg) {
-    const float seconds = std::stof(value);
-    if (!std::isfinite(seconds) || seconds < 0.0f) {
-        fprintf(stderr, "error: %s must be a non-negative multiple of 0.08 seconds\n", arg.c_str());
-        exit(1);
-    }
-
-    const float milliseconds = seconds * 1000.0f;
-    const int32_t rounded_milliseconds = (int32_t) std::lround(milliseconds);
-
-    if (
-            std::fabs(milliseconds - rounded_milliseconds) > 0.001f ||
-            rounded_milliseconds % 80 != 0) {
-        fprintf(stderr, "error: %s must be a non-negative multiple of 0.08 seconds\n", arg.c_str());
-        exit(1);
-    }
-
-    return rounded_milliseconds;
-}
-
 static bool parakeet_params_parse(int argc, char ** argv, parakeet_params & params) {
     if (const char * env_device = std::getenv("PARAKEET_ARG_DEVICE")) {
         params.gpu_device = std::stoi(env_device);
@@ -90,9 +69,9 @@ static bool parakeet_params_parse(int argc, char ** argv, parakeet_params & para
         else if (arg == "-of"   || arg == "--output-file")     { params.output_file       = ARGV_NEXT; }
         else if (arg == "-np"   || arg == "--no-prints")       { params.no_prints         = true; }
         else if (arg == "--stream")                              { params.stream            = true; }
-        else if (arg == "--left-context")                        { params.left_context_ms   = parse_stream_duration_ms(ARGV_NEXT, arg); }
-        else if (arg == "--chunk")                               { params.chunk_ms          = parse_stream_duration_ms(ARGV_NEXT, arg); }
-        else if (arg == "--right-context")                       { params.right_context_ms  = parse_stream_duration_ms(ARGV_NEXT, arg); }
+        else if (arg == "-lc"   || arg == "--left-context-ms")   { params.left_context_ms   = std::stoi(ARGV_NEXT); }
+        else if (arg == "-cs"   || arg == "--chunk-ms")          { params.chunk_ms          = std::stoi(ARGV_NEXT); }
+        else if (arg == "-rc"   || arg == "--right-context-ms")  { params.right_context_ms  = std::stoi(ARGV_NEXT); }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             parakeet_print_usage(argc, argv, params);
@@ -120,9 +99,9 @@ static void parakeet_print_usage(int /*argc*/, char ** argv, const parakeet_para
     fprintf(stderr, "  -of,    --output-file FILE  [%-7s] output file path (without file extension)\n",   "");
     fprintf(stderr, "  -np,    --no-prints         [%-7s] do not print anything other than the results\n", params.no_prints ? "true" : "false");
     fprintf(stderr, "          --stream            [%-7s] process audio in overlapping windows\n",          params.stream ? "true" : "false");
-    fprintf(stderr, "          --left-context SEC  [%-7.2f] left context per stream window\n",          params.left_context_ms / 1000.0f);
-    fprintf(stderr, "          --chunk SEC         [%-7.2f] emitted audio per stream window\n",          params.chunk_ms / 1000.0f);
-    fprintf(stderr, "          --right-context SEC [%-7.2f] right context per stream window\n",          params.right_context_ms / 1000.0f);
+    fprintf(stderr, "  -lc N,   --left-context-ms N   [%-7d] left context per stream window (ms)\n",     params.left_context_ms);
+    fprintf(stderr, "  -cs N,   --chunk-ms N          [%-7d] emitted audio per stream window (ms)\n",     params.chunk_ms);
+    fprintf(stderr, "  -rc N,   --right-context-ms N  [%-7d] right context per stream window (ms)\n",     params.right_context_ms);
     fprintf(stderr, "\n");
 }
 
