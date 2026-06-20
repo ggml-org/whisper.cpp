@@ -183,11 +183,7 @@ int main(int argc, char ** argv) {
         full_params.new_token_callback  = token_callback;
         full_params.new_token_callback_user_data = &is_first;
 
-        const parakeet_stream_params stream_params = {
-            params.left_context_ms,
-            params.chunk_ms,
-            params.right_context_ms,
-        };
+        const int mel_frames = (int)(pcmf32.size() / PARAKEET_HOP_LENGTH);
         const int ret = params.stream
             ? parakeet_full_stream(pctx, full_params, stream_params, pcmf32.data(), pcmf32.size())
             : parakeet_full(pctx, full_params, pcmf32.data(), pcmf32.size());
