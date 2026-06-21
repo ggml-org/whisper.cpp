@@ -296,9 +296,9 @@ extern "C" {
                             const float * samples,
                                     int   n_samples);
 
-    // Process a finite PCM buffer in overlapping [left | chunk | right] windows.
-    // Only tokens beginning in each chunk are emitted. Results and callbacks use
-    // timestamps relative to the original PCM buffer.
+    // Nvidia Nemo example of parakeet streaming
+    // https://github.com/NVIDIA-NeMo/NeMo/blob/main/examples/asr/asr_chunked_inference/rnnt/speech_to_text_streaming_infer_rnnt.py
+    // Example of 10-2-3 window: encoder (full 15s) -> decoder (middle 2s) -> text (middle s)
     PARAKEET_API int parakeet_full_stream(
                 struct parakeet_context * ctx,
             struct parakeet_full_params   params,
