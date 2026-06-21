@@ -3712,7 +3712,9 @@ int parakeet_full_stream_with_state(
     const int left_samples  = stream_params.left_context_ms  * PARAKEET_SAMPLE_RATE / 1000;
     const int chunk_samples = stream_params.chunk_ms         * PARAKEET_SAMPLE_RATE / 1000;
     const int right_samples = stream_params.right_context_ms * PARAKEET_SAMPLE_RATE / 1000;
-    const int max_window_mel_frames = (left_samples + chunk_samples + right_samples) / PARAKEET_HOP_LENGTH + 1;
+    const int total_samples = left_samples + chunk_samples + right_samples;
+    // Calculation derived from PyTorch torch.stft docs : `T = 1 + L // hop_length`  if center=True
+    const int max_window_mel_frames = 1 + total_samples / PARAKEET_HOP_LENGTH ;
     const int model_audio_ctx = parakeet_n_audio_ctx(ctx);
 
     if (model_audio_ctx > 0 && max_window_mel_frames > model_audio_ctx) {
@@ -3728,9 +3730,10 @@ int parakeet_full_stream_with_state(
     }
 
     for (int chunk_start = 0; chunk_start < n_samples;) {
+        // [0---------------------------full audio--------------------------n_samples]
+        //  buffer_start [----------encode-----------] buffer_end
+        //           chunk_start [---decode---] chunk_end
         const int chunk_end = std::min(n_samples, chunk_start + chunk_samples);
-        // Encode full window : left context + chunk + right context.
-        // Only the middle chunk is decoded below.
         const int buffer_start = std::max(0, chunk_start - left_samples);
         const int buffer_end = std::min(n_samples, chunk_end + right_samples);
         const int buffer_samples = buffer_end - buffer_start;
@@ -3763,6 +3766,8 @@ int parakeet_full_stream_with_state(
             return -6;
         }
 
+        // Encoded full window : left context + chunk + right context.
+        // Only the middle chunk is decoded below.
         const int decode_begin = (chunk_start - buffer_start) / frame_stride_samples;
         const int decode_end = std::min(state->n_frames,
                 (chunk_end - buffer_start + frame_stride_samples - 1) / frame_stride_samples);
@@ -3780,7 +3785,7 @@ int parakeet_full_stream_with_state(
             std::vector<parakeet_token_data> result_tokens;
             result_tokens.reserve(state->decoded_tokens.size());
 
-            for (size_t i = 0; i < state->decoded_tokens.size(); ++i) {
+            for (size_t i = 0; i < state->decoded_tokens.size(); i++) {
                 const char * tok_str = parakeet_token_to_str(ctx, state->decoded_tokens[i]);
                 if (tok_str) {
                     text += sentencepiece_piece_to_text(tok_str, text.empty());
