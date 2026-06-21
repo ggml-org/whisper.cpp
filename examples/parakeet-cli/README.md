@@ -29,9 +29,9 @@ options:
   -dev N, --device N          [0      ] GPU device to use
   -ps,    --print-segments    [false  ] print segment information
   --stream                   process audio in overlapping windows
-  -lc N,   --left-context-ms N   left context per stream window (ms) (default: 10000)
-  -cs N,   --chunk-ms N          emitted audio per stream window (ms) (default: 2000)
-  -rc N,   --right-context-ms N  right context per stream window (ms) (default: 2000)
+  -lc N,   --left-context-ms N   left context per stream window (ms) in multiple of 80ms (default: 10000)
+  -cs N,   --chunk-ms N          emitted audio per stream window (ms) in multiple of 80ms (default: 2000)
+  -rc N,   --right-context-ms N  right context per stream window (ms) in multiple of 80ms (default: 2000)
 ```
 
 ### Example

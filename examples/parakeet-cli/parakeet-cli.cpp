@@ -99,9 +99,9 @@ static void parakeet_print_usage(int /*argc*/, char ** argv, const parakeet_para
     fprintf(stderr, "  -of,    --output-file FILE  [%-7s] output file path (without file extension)\n",   "");
     fprintf(stderr, "  -np,    --no-prints         [%-7s] do not print anything other than the results\n", params.no_prints ? "true" : "false");
     fprintf(stderr, "          --stream            [%-7s] process audio in overlapping windows\n",          params.stream ? "true" : "false");
-    fprintf(stderr, "  -lc N,   --left-context-ms N   [%-7d] left context per stream window (ms)\n",     params.left_context_ms);
-    fprintf(stderr, "  -cs N,   --chunk-ms N          [%-7d] emitted audio per stream window (ms)\n",     params.chunk_ms);
-    fprintf(stderr, "  -rc N,   --right-context-ms N  [%-7d] right context per stream window (ms)\n",     params.right_context_ms);
+    fprintf(stderr, "  -lc N,   --left-context-ms N   [%-7d] left context per stream window (ms) in multiple of 80ms\n",     params.left_context_ms);
+    fprintf(stderr, "  -cs N,   --chunk-ms N          [%-7d] emitted audio per stream window (ms) in multiple of 80ms\n",     params.chunk_ms);
+    fprintf(stderr, "  -rc N,   --right-context-ms N  [%-7d] right context per stream window (ms) in multiple of 80ms\n",     params.right_context_ms);
     fprintf(stderr, "\n");
 }
 
