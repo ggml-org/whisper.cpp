@@ -3692,12 +3692,14 @@ int parakeet_full_stream_with_state(
                             int   n_samples) {
 
     const int frame_stride_samples = PARAKEET_HOP_LENGTH * ctx->model.hparams.subsampling_factor;
-    const int frame_stride_ms = frame_stride_samples * 1000 / PARAKEET_SAMPLE_RATE;
+    const int frame_stride_ms = frame_stride_samples * 1000 / PARAKEET_SAMPLE_RATE; // 80ms
     // Check if it is multiple of frame_stride_ms (80ms)
     const auto is_valid_duration = [frame_stride_ms](int duration_ms) {
             return duration_ms > 0 && duration_ms % frame_stride_ms == 0;
     };
 
+    // Streaming slices the caller-provided PCM buffer with samples + buffer_start,
+    // non-null input buffer with at least one sample is required.
     if (!samples || n_samples <= 0 ||
             !is_valid_duration(stream_params.left_context_ms) ||
             !is_valid_duration(stream_params.chunk_ms) ||
@@ -3727,6 +3729,8 @@ int parakeet_full_stream_with_state(
 
     for (int chunk_start = 0; chunk_start < n_samples;) {
         const int chunk_end = std::min(n_samples, chunk_start + chunk_samples);
+        // Encode full window : left context + chunk + right context.
+        // Only the middle chunk is decoded below.
         const int buffer_start = std::max(0, chunk_start - left_samples);
         const int buffer_end = std::min(n_samples, chunk_end + right_samples);
         const int buffer_samples = buffer_end - buffer_start;
@@ -3736,7 +3740,7 @@ int parakeet_full_stream_with_state(
         parakeet_reset_state(state);
 
         if (parakeet_pcm_to_mel_with_state(ctx, state, samples + buffer_start, buffer_samples, params.n_threads) != 0) {
-            PARAKEET_LOG_ERROR("%s: failed to compute log mel spectrogram\n", __func__);
+            PARAKEET_LOG_ERROR("%s: failed to compute mel spectrogram\n", __func__);
             return -2;
         }
 
