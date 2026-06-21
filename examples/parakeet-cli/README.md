@@ -43,9 +43,9 @@ parakeet_decode: starting decode with n_frames=138
 And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.
 ```
 
-Streaming is opt-in. It encodes overlapping `[left | chunk | right]` windows and emits only tokens that begin in the chunk. The defaults are 10 seconds of left context, 2 seconds of emitted audio, and 2 seconds of right context. Values are in milliseconds:
+Streaming mode encodes overlapping `[left | chunk | right]` windows and emits only tokens that begin in the chunk. Defaults are `[10000 | 2000 | 2000]` (ms):
 ```console
-$ ./build/bin/parakeet-cli -m models/parakeet-tdt-0.6b-v3-f16.bin -f samples/jfk.wav --stream --left-context-ms 8000 --chunk-ms 1600 --right-context-ms 2400
+$ ./build/bin/parakeet-cli -m models/parakeet-tdt-0.6b-v3-f16.bin -f samples/jfk.wav --stream --left-context-ms 10000 --chunk-ms 2000 --right-context-ms 2000
 ```
 
 This mode uses the existing encoder attention implementation. It does not reproduce NeMo configurable limited-right-context attention.
