@@ -3729,6 +3729,8 @@ int parakeet_full_stream_with_state(
         const int buffer_end = std::min(n_samples, chunk_end + right_samples);
         const int buffer_samples = buffer_end - buffer_start;
 
+        // TODO: preserve the RNN-T predictor state across chunks in one stream.
+        // Current streaming resets the predictor and starts each chunk from blank.
         parakeet_reset_state(state);
 
         if (parakeet_pcm_to_mel_with_state(ctx, state, samples + buffer_start, buffer_samples, params.n_threads) != 0) {
