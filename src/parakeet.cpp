@@ -2448,16 +2448,16 @@ static parakeet_token_data create_token_data(
     return token_data;
 }
 
-static bool parakeet_decode(
+static bool parakeet_decode_internal(
               parakeet_context & pctx,
                 parakeet_state & pstate,
                 parakeet_batch & batch,
                      const int   n_threads,
-    const parakeet_full_params * params = nullptr,
-                     int         frame_begin = 0,
-                     int         frame_end = -1,
-                     int         frame_offset = 0,
-                     int         time_offset = 0) {
+    const parakeet_full_params * params,
+                     int         frame_begin,
+                     int         frame_end,
+                     int         frame_offset,
+                     int         time_offset) {
     const auto & hparams       = pctx.model.hparams;
     const auto & tdt_durations = pctx.model.tdt_durations;
 
@@ -2602,6 +2602,32 @@ static bool parakeet_decode(
     }
 
     return true;
+}
+
+static bool parakeet_decode(
+              parakeet_context & pctx,
+                parakeet_state & pstate,
+                parakeet_batch & batch,
+                     const int   n_threads,
+    const parakeet_full_params * params = nullptr) {
+    return parakeet_decode_internal(
+            pctx, pstate, batch, n_threads, params,
+            0, pstate.n_frames, 0, 0);
+}
+
+static bool parakeet_decode_stream(
+              parakeet_context & pctx,
+                parakeet_state & pstate,
+                parakeet_batch & batch,
+                     const int   n_threads,
+    const parakeet_full_params * params,
+                     int         frame_begin,
+                     int         frame_end,
+                     int         frame_offset,
+                     int         time_offset) {
+    return parakeet_decode_internal(
+            pctx, pstate, batch, n_threads, params,
+            frame_begin, frame_end, frame_offset, time_offset);
 }
 
 //  500 -> 00:05.000
@@ -3735,7 +3761,7 @@ int parakeet_full_stream_with_state(
         const int frame_offset = buffer_start / frame_stride_samples;
         const int time_offset = buffer_start / PARAKEET_HOP_LENGTH;
 
-        if (!parakeet_decode(*ctx, *state, state->batch, params.n_threads, &params,
+        if (!parakeet_decode_stream(*ctx, *state, state->batch, params.n_threads, &params,
                 decode_begin, decode_end, frame_offset, time_offset)) {
             PARAKEET_LOG_ERROR("%s: failed to decode\n", __func__);
             return -7;
