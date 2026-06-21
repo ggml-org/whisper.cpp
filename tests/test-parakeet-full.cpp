@@ -95,9 +95,15 @@ int main() {
     assert(stream_params.chunk_ms == 2000);
     assert(stream_params.right_context_ms == 2000);
 
+    stream_params.left_context_ms  = 8000;
+    stream_params.chunk_ms         = 1600;
+    stream_params.right_context_ms = 2400;
+
+    test_state stream_tstate;
+    params.new_token_callback_user_data = &stream_tstate;
     ret = parakeet_full_stream(pctx, params, stream_params, pcmf32.data(), pcmf32.size());
     assert(ret == 0);
-
+    const bool stream_transcript_matches = verify_transcription(expected, stream_tstate.transcript);
     const int n_stream_segments = parakeet_full_n_segments(pctx);
     assert(n_stream_segments >= 2);
     int64_t previous_t1 = 0;
@@ -117,13 +123,19 @@ int main() {
     }
 
     parakeet_stream_params invalid_stream_params = stream_params;
+    test_state repeated_stream_tstate;
+    params.new_token_callback_user_data = &repeated_stream_tstate;
+    ret = parakeet_full_stream(pctx, params, stream_params, pcmf32.data(), pcmf32.size());
+    assert(ret == 0);
+    const bool repeated_stream_transcript_matches = verify_transcription(expected, repeated_stream_tstate.transcript);
+
     invalid_stream_params.chunk_ms = 100;
     ret = parakeet_full_stream(pctx, params, invalid_stream_params, pcmf32.data(), pcmf32.size());
     assert(ret == -1);
 
     parakeet_free(pctx);
 
-    if (!transcript_matches) {
+    if (!transcript_matches || !stream_transcript_matches || !repeated_stream_transcript_matches) {
         return 1;
     }
 

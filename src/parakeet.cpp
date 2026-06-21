@@ -2457,7 +2457,8 @@ static bool parakeet_decode_internal(
                      int         frame_begin,
                      int         frame_end,
                      int         frame_offset,
-                     int         time_offset) {
+                     int         time_offset,
+                     bool        init_predictor_from_blank) {
     const auto & hparams       = pctx.model.hparams;
     const auto & tdt_durations = pctx.model.tdt_durations;
 
@@ -2485,18 +2486,19 @@ static bool parakeet_decode_internal(
 
     PARAKEET_LOG_DEBUG("parakeet_decode: starting decode in [%d, %d) of %d frames\n", frame_begin, frame_end, n_frames);
 
-    batch.n_tokens  = 1;
-    batch.token[0]  = last_token;
-    batch.logits[0] = 1;
-    batch.i_time[0] = frame_begin;
-
-    // run the prediction network for the initial blank token. This will
-    // initialize the LSTM state and produce an initial hidden state that can
-    // be used in the joint network below.
-    if (!parakeet_predict(pctx, pstate, batch, n_threads,
-            params ? params->abort_callback           : nullptr,
-            params ? params->abort_callback_user_data : nullptr)) {
-        return false;
+    // Control whether to reuse the predictor state from the prior chunk (streaming)
+    // or start with blank
+    if (init_predictor_from_blank) {
+        batch.n_tokens  = 1;
+        batch.token[0]  = last_token;
+        batch.logits[0] = 1;
+        batch.i_time[0] = frame_begin;
+        // Initialize the predictor state from the blank token.
+        if (!parakeet_predict(pctx, pstate, batch, n_threads,
+                params ? params->abort_callback           : nullptr,
+                params ? params->abort_callback_user_data : nullptr)) {
+            return false;
+        }
     }
 
     // process all time frames of the encoder output
@@ -2612,7 +2614,7 @@ static bool parakeet_decode(
     const parakeet_full_params * params = nullptr) {
     return parakeet_decode_internal(
             pctx, pstate, batch, n_threads, params,
-            0, pstate.n_frames, 0, 0);
+            0, pstate.n_frames, 0, 0, true);
 }
 
 static bool parakeet_decode_stream(
@@ -2624,10 +2626,12 @@ static bool parakeet_decode_stream(
                      int         frame_begin,
                      int         frame_end,
                      int         frame_offset,
-                     int         time_offset) {
+                     int         time_offset,
+                     bool        init_predictor_from_blank) {
     return parakeet_decode_internal(
             pctx, pstate, batch, n_threads, params,
-            frame_begin, frame_end, frame_offset, time_offset);
+            frame_begin, frame_end, frame_offset, time_offset,
+            init_predictor_from_blank);
 }
 
 //  500 -> 00:05.000
@@ -3553,9 +3557,13 @@ struct parakeet_stream_params parakeet_stream_default_params(void) {
     };
 }
 
-static void parakeet_reset_state(struct parakeet_state * state) {
+static void parakeet_clear_decoded_output(struct parakeet_state * state) {
     state->decoded_tokens.clear();
     state->decoded_token_data.clear();
+}
+
+static void parakeet_reset_state(struct parakeet_state * state) {
+    parakeet_clear_decoded_output(state);
 
     if (state->lstm_state.buffer) {
         ggml_backend_buffer_clear(state->lstm_state.buffer, 0);
@@ -3724,6 +3732,9 @@ int parakeet_full_stream_with_state(
     }
 
     state->result_all.clear();
+    parakeet_reset_state(state);
+
+    bool init_predictor_from_blank = true;
 
     if (params.progress_callback) {
         params.progress_callback(ctx, state, 0, params.progress_callback_user_data);
@@ -3738,9 +3749,7 @@ int parakeet_full_stream_with_state(
         const int buffer_end = std::min(n_samples, chunk_end + right_samples);
         const int buffer_samples = buffer_end - buffer_start;
 
-        // TODO: preserve the RNN-T predictor state across chunks in one stream.
-        // Current streaming resets the predictor and starts each chunk from blank.
-        parakeet_reset_state(state);
+        parakeet_clear_decoded_output(state);
 
         if (parakeet_pcm_to_mel_with_state(ctx, state, samples + buffer_start, buffer_samples, params.n_threads) != 0) {
             PARAKEET_LOG_ERROR("%s: failed to compute mel spectrogram\n", __func__);
@@ -3775,10 +3784,13 @@ int parakeet_full_stream_with_state(
         const int time_offset = buffer_start / PARAKEET_HOP_LENGTH;
 
         if (!parakeet_decode_stream(*ctx, *state, state->batch, params.n_threads, &params,
-                decode_begin, decode_end, frame_offset, time_offset)) {
+                decode_begin, decode_end, frame_offset, time_offset,
+                init_predictor_from_blank)) {
             PARAKEET_LOG_ERROR("%s: failed to decode\n", __func__);
             return -7;
         }
+
+        init_predictor_from_blank = false;
 
         if (!state->decoded_tokens.empty()) {
             std::string text;
