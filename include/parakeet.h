@@ -265,7 +265,7 @@ extern "C" {
         void * abort_callback_user_data;
     };
 
-    // Parameters for parakeet_full_stream(). All durations are in milliseconds.
+    // Parameters for parakeet_full_stream(). All durations are positive milliseconds.
     // Values must be multiples of the encoder frame duration (80 ms).
     struct parakeet_stream_params {
         int left_context_ms;

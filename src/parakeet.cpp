@@ -3690,16 +3690,18 @@ int parakeet_full_stream_with_state(
     struct parakeet_stream_params stream_params,
                     const float * samples,
                             int   n_samples) {
+
     const int frame_stride_samples = PARAKEET_HOP_LENGTH * ctx->model.hparams.subsampling_factor;
     const int frame_stride_ms = frame_stride_samples * 1000 / PARAKEET_SAMPLE_RATE;
+    // Check if it is multiple of frame_stride_ms (80ms)
+    const auto is_valid_duration = [frame_stride_ms](int duration_ms) {
+            return duration_ms > 0 && duration_ms % frame_stride_ms == 0;
+    };
 
     if (!samples || n_samples <= 0 ||
-            stream_params.left_context_ms < 0 ||
-            stream_params.chunk_ms <= 0 ||
-            stream_params.right_context_ms < 0 ||
-            stream_params.left_context_ms % frame_stride_ms != 0 ||
-            stream_params.chunk_ms % frame_stride_ms != 0 ||
-            stream_params.right_context_ms % frame_stride_ms != 0 ||
+            !is_valid_duration(stream_params.left_context_ms) ||
+            !is_valid_duration(stream_params.chunk_ms) ||
+            !is_valid_duration(stream_params.right_context_ms) ||
             params.audio_ctx != 0) {
         PARAKEET_LOG_ERROR("%s: invalid streaming parameters\n", __func__);
         return -1;
