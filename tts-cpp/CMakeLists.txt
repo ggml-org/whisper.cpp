@@ -857,6 +857,35 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-vector-estimator-backward)
     tts_cpp_register_test(test-supertonic-vector-estimator-backward LABEL "unit")
 
+    # QVAC-20984 — analytic backward of the CAMPPlus speaker encoder (FCM Conv2d
+    # head + residual blocks, TDNN, CAM dense-TDNN blocks with context-attention
+    # gating and dense concat, statistics pooling, dense head). Model-free: every
+    # analytic input-gradient is gradchecked against finite differences via the
+    # Task 2 harness, so it ALWAYS runs on a fresh checkout (no-skip policy, no
+    # model/fixtures needed).
+    add_executable(test-campplus-backward
+        test/test_campplus_backward.cpp
+        src/campplus_backward.cpp
+        src/voiceclone_gradcheck.cpp)
+    target_include_directories(test-campplus-backward PRIVATE src)
+    tts_cpp_apply_ccache(test-campplus-backward)
+    tts_cpp_register_test(test-campplus-backward LABEL "unit")
+
+    # Forward-parity: the analytic double forward must match the production scalar
+    # CAMPPlus forward (campplus_embed_cpu) on synthetic weights, anchoring the
+    # gradcheck to the real model. Links campplus.cpp -> ggml.
+    add_executable(test-campplus-backward-parity
+        test/test_campplus_backward_parity.cpp
+        src/campplus_backward.cpp
+        src/campplus.cpp)
+    target_link_libraries(test-campplus-backward-parity PRIVATE ggml)
+    target_include_directories(test-campplus-backward-parity PRIVATE ggml/include src)
+    if (OpenMP_CXX_FOUND)
+        target_link_libraries(test-campplus-backward-parity PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+    tts_cpp_apply_ccache(test-campplus-backward-parity)
+    tts_cpp_register_test(test-campplus-backward-parity LABEL "unit")
+
     # Engine-level streaming-callback contract test for the per-sentence
     # segmentation path (Fix #2): monotonic global chunk_index, single final
     # is_last, result.pcm == concat(callbacks), accumulated stats.  Gated on
