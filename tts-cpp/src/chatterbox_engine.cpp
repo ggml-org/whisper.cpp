@@ -760,6 +760,7 @@ struct Engine::Impl {
             copts.hift_source_tail_out      = &tail_out;
             copts.source_tail_samples       = 480;
             copts.cfm_steps                 = opts.stream_cfm_steps;
+            copts.streaming                 = true;  // QVAC-21118: floor CFM steps for standard CFM
 
             const auto s3_t0 = std::chrono::steady_clock::now();
             const int rc = s3gen_synthesize_to_wav(toks, copts);

@@ -2730,8 +2730,29 @@ int s3gen_synthesize_to_wav(
     //                   estimator calls per step (cond + uncond with zeroed
     //                   mu/spks/cond) combined via cfg_rate.
     std::vector<float> t_span;
-    const int cfm_steps = opts.cfm_steps > 0 ? opts.cfm_steps :
+    int cfm_steps = opts.cfm_steps > 0 ? opts.cfm_steps :
                           (meanflow ? 2 : m.n_timesteps);
+    // QVAC-21118: low CFM step counts (1-2) are a meanflow-only (Turbo)
+    // streaming optimisation.  The Multilingual model uses standard CFM with a
+    // cosine schedule that needs its full step budget (n_timesteps); a lower
+    // count under-integrates the flow ODE.  The batch path tolerates it, but
+    // the chunk-streaming path re-integrates per chunk and its newest tokens
+    // lack right-context, so a low count collapses the later chunks -> hot,
+    // wobbly output.  Floor the *streaming* step count to n_timesteps for
+    // standard CFM (batch keeps its --cfm-steps knob; Turbo meanflow is
+    // unaffected).
+    if (opts.streaming && !meanflow && cfm_steps < m.n_timesteps) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            fprintf(stderr,
+                "s3gen: stream cfm_steps=%d is too low for the standard-CFM "
+                "(non-meanflow) model; flooring to n_timesteps=%d (low CFM step "
+                "counts are a meanflow-only optimisation).\n",
+                cfm_steps, m.n_timesteps);
+        }
+        cfm_steps = m.n_timesteps;
+    }
     t_span.reserve(cfm_steps + 1);
     for (int i = 0; i <= cfm_steps; ++i) {
         float tau = (float)i / (float)cfm_steps;

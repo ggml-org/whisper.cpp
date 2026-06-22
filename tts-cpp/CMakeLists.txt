@@ -785,6 +785,21 @@ if (TTS_CPP_BUILD_TESTS)
         message(STATUS "tts-cpp: test-eos-roundtrip built but not registered (needs whisper-cli + model + tts-cli)")
     endif()
 
+    # QVAC-21118: chunk-streaming loudness regression.  Drives the Engine API
+    # directly (the path the qvac tts-ggml addon uses): batch vs streaming with
+    # a low stream_cfm_steps, asserting the streaming output matches batch
+    # loudness and does not clip.  PRE-FIX this FAILS (streaming ~full scale,
+    # RMS 4-9x batch).  Uses the S3Gen built-in voice (no voice dir), so it
+    # only needs the MTL GGUFs; auto-disabled otherwise.
+    add_executable(test-streaming-loudness test/test_streaming_loudness.cpp)
+    target_link_libraries(test-streaming-loudness PRIVATE tts-cpp ggml tts-cpp-backend-defs)
+    target_include_directories(test-streaming-loudness PRIVATE include ggml/include src)
+    tts_cpp_apply_ccache(test-streaming-loudness)
+    tts_cpp_register_test(test-streaming-loudness
+        LABEL    "fixture"
+        ARGS     --t3 "${_tcb_t3_mtl_gguf}" --s3gen "${_tcb_s3gen_mtl_gguf}" --cfm-steps 2
+        REQUIRES "${_tcb_t3_mtl_gguf}" "${_tcb_s3gen_mtl_gguf}")
+
     add_executable(test-streaming
         test/test_streaming.cpp
         src/chatterbox_tts.cpp

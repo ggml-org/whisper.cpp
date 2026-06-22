@@ -189,6 +189,14 @@ struct s3gen_synthesize_opts {
     // some extra high-frequency noise.  0 → use the default (2).
     int                  cfm_steps             = 0;
 
+    // Set by the chunk-streaming caller.  For standard-CFM (non-meanflow,
+    // e.g. Multilingual) models the per-chunk CFM step count is floored to the
+    // model's n_timesteps here (QVAC-21118): a low cfm_steps under-integrates
+    // the flow ODE and, with no right-context for a chunk's newest tokens,
+    // collapses later chunks into hot/wobbly audio.  Batch leaves this false so
+    // its --cfm-steps knob is honoured; Turbo (meanflow) is unaffected.
+    bool                 streaming             = false;
+
     // Experimental OpenCL/mobile latency option: run CFM flash attention with
     // F32 Q and F16 K/V.  This may trade a small amount of quality for speed.
     bool                 cfm_f16_kv_attn       = false;

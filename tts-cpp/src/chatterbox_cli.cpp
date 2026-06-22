@@ -1643,6 +1643,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                     copts.source_tail_samples      = 480;
                     copts.cfm_steps                = params.stream_cfm_steps > 0 ? params.stream_cfm_steps : params.cfm_steps;
                     copts.cfm_f16_kv_attn          = params.cfm_f16_kv_attn;
+                    copts.streaming                = true;  // QVAC-21118: floor CFM steps for standard CFM
 
                     int rc = s3gen_synthesize_to_wav(toks, copts);
                     if (rc != 0) return rc;
@@ -2403,6 +2404,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                         copts.source_tail_samples       = 480;
                         copts.cfm_steps                 = params.stream_cfm_steps > 0 ? params.stream_cfm_steps : params.cfm_steps;
                         copts.cfm_f16_kv_attn           = params.cfm_f16_kv_attn;
+                        copts.streaming                 = true;  // QVAC-21118: floor CFM steps for standard CFM
 
                         ++global_chunk_idx;
                         if (params.verbose) {
