@@ -102,6 +102,8 @@ struct whisper_vitisai_context * whisper_vitisai_init(const char * path_model) {
 
     auto * ctx = new whisper_vitisai_context;
     ctx->model_path = path_model;
+    ctx->fbs_buffer = nullptr;
+    ctx->fbs_buffer_size = 0;
 
     // Override the model path with the environment variable if it is set
     if (const char * env_model_path = std::getenv("OVERRIDE_VITISAI_MODEL_PATH")) {
@@ -113,7 +115,6 @@ struct whisper_vitisai_context * whisper_vitisai_init(const char * path_model) {
     // Step 1: Set up the model
     flexmlrt::client::Options options;
     options.modelPath = ctx->model_path;
-    options.deviceName = "stx";
     options.debug = false;
     options.executeMode = 2;
     options.extOptions["enable_preemption"] = true;
@@ -121,18 +122,20 @@ struct whisper_vitisai_context * whisper_vitisai_init(const char * path_model) {
     // Check if model_path is rai file and if so, add fbs_buffer and fbs_buffer_size to the options
     if (ctx->model_path.find(".rai") != std::string::npos) {
         // mmap rai file for both Linux and Windows and pass the buffer to the options
-        ctx->fbs_buffer = nullptr;
-        ctx->fbs_buffer_size = 0;
         if (map_rai_file(ctx->model_path.c_str(), &ctx->fbs_buffer, &ctx->fbs_buffer_size)) {
             options.extOptions["fbs_buffer"] = ctx->fbs_buffer;
             options.extOptions["fbs_buffer_size"] = ctx->fbs_buffer_size;
-            options.subgraphName = "vaiml_par_0";
             options.extOptions["cache_dir"] = std::string(".");
         } else {
             std::fprintf(stderr, "%s: Failed to mmap rai file '%s'\n", __func__, ctx->model_path.c_str());
             delete ctx;
             return nullptr;
         }
+    } else {
+        options.deviceName = "stx";
+#if defined(WHISPER_DEBUG)
+        std::fprintf(stderr, "%s: Using default device name 'stx'\n", __func__);
+#endif
     }
 
     try {
