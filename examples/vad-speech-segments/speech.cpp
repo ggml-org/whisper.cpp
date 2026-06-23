@@ -26,6 +26,7 @@ static void vad_print_usage(int /*argc*/, char ** argv, const cli_params & param
     fprintf(stderr, "\n");
     fprintf(stderr, "usage: %s [options] file\n", argv[0]);
     fprintf(stderr, "supported audio formats: flac, mp3, ogg, wav\n");
+    fprintf(stderr, "Note: Output timestamps are in centiseconds (1/100th of a second).\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "options:\n");
     fprintf(stderr, "  -h,        --help                          [default] show this help message and exit\n");
@@ -64,7 +65,7 @@ static bool vad_params_parse(int argc, char ** argv, cli_params & params) {
         else if (arg == "-ug"   || arg == "--use-gpu")                     { params.use_gpu                     = true; }
         else if (arg == "-vm"   || arg == "--vad-model")                   { params.vad_model                   = ARGV_NEXT; }
         else if (arg == "-vt"   || arg == "--vad-threshold")               { params.vad_threshold               = std::stof(ARGV_NEXT); }
-        else if (arg == "-vsd"  || arg == "--vad-min-speech-duration-ms")  { params.vad_min_speech_duration_ms  = std::stoi(ARGV_NEXT); }
+        else if (arg == "-vspd" || arg == "--vad-min-speech-duration-ms")  { params.vad_min_speech_duration_ms  = std::stoi(ARGV_NEXT); }
         else if (arg == "-vsd"  || arg == "--vad-min-silence-duration-ms") { params.vad_min_speech_duration_ms  = std::stoi(ARGV_NEXT); }
         else if (arg == "-vmsd" || arg == "--vad-max-speech-duration-s")   { params.vad_max_speech_duration_s   = std::stof(ARGV_NEXT); }
         else if (arg == "-vp"   || arg == "--vad-speech-pad-ms")           { params.vad_speech_pad_ms           = std::stoi(ARGV_NEXT); }
@@ -122,7 +123,7 @@ int main(int argc, char ** argv) {
         return 3;
     }
 
-    // Get the the vad segements using the probabilities that have been computed
+    // Get the the vad segments using the probabilities that have been computed
     // previously and stored in the whisper_vad_context.
     struct whisper_vad_params params = whisper_vad_default_params();
     params.threshold = cli_params.vad_threshold;
