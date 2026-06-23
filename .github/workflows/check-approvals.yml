@@ -12,15 +12,20 @@ permissions:
   pull-requests: write
   issues: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   check-approvals:
     name: Check Approvals
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     continue-on-error: true
     if: >-
       (
         github.event_name == 'issue_comment' &&
-        github.event.comment.body == 'pending_reviews' &&
+        contains(github.event.comment.body, 'review') &&
         github.event.issue.pull_request != null
       ) || (
         github.event_name == 'pull_request_target' &&
