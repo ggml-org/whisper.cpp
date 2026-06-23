@@ -4,7 +4,7 @@ This is an example of using the [Parakeet] model in whisper.cpp.
 
 ### Download converted model
 ```console
-$ hf download ggml-org/parakeet-GGUF parakeet-tdt-0.6b-v3-f16.bin --local-dir models
+$ hf download ggml-org/parakeet-GGUF ggml-parakeet-tdt-0.6b-v3-f16.bin --local-dir models
 ```
 
 ### Building
@@ -32,7 +32,7 @@ options:
 
 ### Example
 ```console
-$ ./build/bin/parakeet-cli -m models/parakeet-tdt-0.6b-v3-f16.bin -f samples/jfk.wav
+$ ./build/bin/parakeet-cli -m models/ggml-parakeet-tdt-0.6b-v3-f16.bin -f samples/jfk.wav
 Processing audio (176000 samples, 11.00 seconds)
 Processing audio: total_frames=1101, chunk_size=1101
 parakeet_decode: starting decode with n_frames=138
@@ -41,7 +41,7 @@ And so, my fellow Americans, ask not what your country can do for you, ask what 
 
 To print segment information:
 ```console
-$ ./build/bin/parakeet-cli -m models/parakeet-tdt-0.6b-v3-f16.bin -f samples/jfk.wav --print-segments
+$ ./build/bin/parakeet-cli -m models/ggml-parakeet-tdt-0.6b-v3-f16.bin -f samples/jfk.wav --print-segments
 Processing audio (176000 samples, 11.00 seconds)
 Processing audio: total_frames=1101, chunk_size=1101
 parakeet_decode: starting decode with n_frames=138
