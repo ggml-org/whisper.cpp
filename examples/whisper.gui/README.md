@@ -47,6 +47,32 @@ How it works and what to expect — read this before relying on it:
   function to replace with a neural speaker-embedding model (e.g. ECAPA-TDNN) for a
   large accuracy jump, without touching the clustering or the UI.
 
+### Accurate diarization (neural, via sherpa-onnx)
+
+The built-in MFCC diarization is lightweight but weak on real recordings (it
+tends to collapse similar voices into one speaker). For **production-quality**
+results, use the included [`diarize.py`](diarize.py) helper, which runs proper
+neural diarization ([sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx): a
+pyannote segmentation model + a neural speaker-embedding model) and labels the
+GUI's transcript. Fully offline once the models are downloaded; no HuggingFace
+account needed (models come from GitHub).
+
+```bash
+# one-time setup
+pip install sherpa-onnx numpy
+./download-diarization-models.sh        # ~47 MB, into ./models/
+
+# 1) transcribe in the GUI and Export .json   (e.g. audio.json next to audio.wav)
+# 2) label it by speaker:
+python3 diarize.py audio.wav --json audio.json --speakers 3
+#    -> writes audio.spk.txt  (Speaker N: text)
+#    -> adds a "speaker" field to audio.json
+```
+
+Use `--speakers N` when you know the count (most reliable), or omit it to
+auto-detect. Run `python3 diarize.py -h` for all options. Audio must be 16 kHz
+mono WAV (same as the tool).
+
 ## Building
 
 The GUI is **off by default**. Enable it with `-DWHISPER_GUI=ON`:
