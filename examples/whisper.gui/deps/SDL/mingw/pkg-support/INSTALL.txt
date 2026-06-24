@@ -1,0 +1,18 @@
+
+The 32-bit files are in i686-w64-mingw32
+The 64-bit files are in x86_64-w64-mingw32
+
+To install SDL for native development:
+    make native
+
+To install SDL for cross-compiling development:
+    make cross
+
+Look at the example programs in ./test, and check out online documentation:
+    http://wiki.libsdl.org/
+
+Join the SDL developer mailing list if you want to join the community:
+    http://www.libsdl.org/mailing-list.php
+
+That's it!
+Sam Lantinga <slouken@libsdl.org>

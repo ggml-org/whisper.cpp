@@ -1,0 +1,108 @@
+{
+  "name": "SDL2",
+  "remote": "libsdl-org/SDL",
+  "version": {
+    "file": "include/SDL_version.h",
+    "re_major": "^#define SDL_MAJOR_VERSION\\s+([0-9]+)$",
+    "re_minor": "^#define SDL_MINOR_VERSION\\s+([0-9]+)$",
+    "re_micro": "^#define SDL_PATCHLEVEL\\s+([0-9]+)$"
+  },
+  "source": {
+    "checks": [
+      "src/SDL.c",
+      "include/SDL.h",
+      "test/testsprite2.c",
+      "android-project/app/src/main/java/org/libsdl/app/SDLActivity.java"
+    ]
+  },
+  "dmg": {
+    "project": "Xcode/SDL/SDL.xcodeproj",
+    "path": "Xcode/SDL/build/SDL2.dmg",
+    "target": "Standard DMG"
+  },
+  "mingw": {
+    "autotools": {
+      "archs": ["x86", "x64"],
+      "args": [
+      ],
+      "files": {
+        "@<@TRIPLET@>@/include/SDL2": [
+          "include/SDL_config*.h"
+        ]
+      }
+    },
+    "files": {
+      "": [
+        "mingw/pkg-support/INSTALL.txt",
+        "mingw/pkg-support/Makefile",
+        "BUGS.txt",
+        "CREDITS.txt",
+        "README-SDL.txt",
+        "WhatsNew.txt",
+        "LICENSE.txt",
+        "README.md"
+      ],
+      "cmake": [
+        "mingw/pkg-support/cmake/sdl2-config.cmake",
+        "mingw/pkg-support/cmake/sdl2-config-version.cmake"
+      ],
+      "docs": [
+        "docs/*"
+      ],
+      "test": [
+        "test/*"
+      ]
+    }
+  },
+  "msvc": {
+    "msbuild": {
+      "archs": [
+        "x86",
+        "x64"
+      ],
+      "projects": [
+        "VisualC/SDL/SDL.vcxproj",
+        "VisualC/SDLmain/SDLmain.vcxproj",
+        "VisualC/SDLtest/SDLtest.vcxproj"
+      ],
+      "files-lib": {
+        "": [
+          "VisualC/SDL/@<@PLATFORM@>@/@<@CONFIGURATION@>@/SDL2.dll"
+        ]
+      },
+      "files-devel": {
+        "lib/@<@ARCH@>@": [
+          "VisualC/SDL/@<@PLATFORM@>@/@<@CONFIGURATION@>@/SDL2.dll",
+          "VisualC/SDL/@<@PLATFORM@>@/@<@CONFIGURATION@>@/SDL2.lib",
+          "VisualC/SDL/@<@PLATFORM@>@/@<@CONFIGURATION@>@/SDL2.pdb",
+          "VisualC/SDLmain/@<@PLATFORM@>@/@<@CONFIGURATION@>@/SDL2main.lib",
+          "VisualC/SDLtest/@<@PLATFORM@>@/@<@CONFIGURATION@>@/SDL2test.lib"
+        ]
+      }
+    },
+    "files-lib": {
+      "": [
+        "README-SDL.txt"
+      ]
+    },
+    "files-devel": {
+      "": [
+        "README-SDL.txt",
+        "BUGS.txt",
+        "LICENSE.txt",
+        "README.md",
+        "WhatsNew.txt"
+      ],
+      "cmake": [
+        "VisualC/pkg-support/cmake/sdl2-config.cmake",
+        "VisualC/pkg-support/cmake/sdl2-config-version.cmake"
+      ],
+      "docs": [
+        "docs/*"
+      ],
+      "include": [
+        "include/*.h"
+      ]
+    }
+  }
+}

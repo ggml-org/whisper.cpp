@@ -1,0 +1,403 @@
+name: 'release'
+run-name: 'Create SDL release artifacts for ${{ inputs.commit }}'
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Commit of SDL'
+        required: true
+
+jobs:
+
+  src:
+    runs-on: ubuntu-latest
+    outputs:
+      project: ${{ steps.releaser.outputs.project }}
+      version: ${{ steps.releaser.outputs.version }}
+      src-tar-gz: ${{ steps.releaser.outputs.src-tar-gz }}
+      src-tar-xz: ${{ steps.releaser.outputs.src-tar-xz }}
+      src-zip: ${{ steps.releaser.outputs.src-zip }}
+    steps:
+      - name: 'Set up Python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 'Fetch build-release.py'
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: 'build-scripts/build-release.py'
+      - name: 'Set up SDL sources'
+        uses: actions/checkout@v4
+        with:
+          path: 'SDL'
+          fetch-depth: 0
+      - name: 'Build Source archive'
+        id: releaser
+        shell: bash
+        run: |
+          python build-scripts/build-release.py \
+            --actions source \
+            --commit ${{ inputs.commit }} \
+            --root "${{ github.workspace }}/SDL" \
+            --github \
+            --debug
+      - name: 'Store source archives'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sources
+          path: '${{ github.workspace}}/dist'
+
+  linux-verify:
+    needs: [src]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 'Download source archives'
+        uses: actions/download-artifact@v4
+        with:
+          name: sources
+          path: '${{ github.workspace }}'
+      - name: 'Unzip ${{ needs.src.outputs.src-zip }}'
+        id: zip
+        run: |
+          mkdir /tmp/zipdir
+          cd /tmp/zipdir
+          unzip "${{ github.workspace }}/${{ needs.src.outputs.src-zip }}"
+          echo "path=/tmp/zipdir/${{ needs.src.outputs.project }}-${{ needs.src.outputs.version }}" >>$GITHUB_OUTPUT
+      - name: 'Untar ${{ needs.src.outputs.src-tar-gz }}'
+        id: tar
+        run: |
+          mkdir -p /tmp/tardir
+          tar -C /tmp/tardir -v -x -f "${{ github.workspace }}/${{ needs.src.outputs.src-tar-gz }}"
+          echo "path=/tmp/tardir/${{ needs.src.outputs.project }}-${{ needs.src.outputs.version }}" >>$GITHUB_OUTPUT
+      - name: 'Compare contents of ${{ needs.src.outputs.src-zip }} and  ${{ needs.src.outputs.src-tar-gz }}'
+        run: |
+          diff /tmp/zipdir /tmp/tardir
+      - name: 'Test versioning'
+        shell: bash
+        run: |
+          ${{ steps.tar.outputs.path }}/build-scripts/test-versioning.sh
+      - name: 'CMake (configure + build + tests + examples)'
+        run: |
+          cmake -S ${{ steps.tar.outputs.path }} -B /tmp/build -DSDL_TEST_LIBRARY=TRUE -DSDL_TESTS=TRUE -DSDL_EXAMPLES=TRUE
+          cmake --build /tmp/build --verbose
+          ctest --test-dir /tmp/build --no-tests=error --output-on-failure
+
+  dmg:
+    needs: [src]
+    runs-on: macos-latest
+    outputs:
+      dmg: ${{ steps.releaser.outputs.dmg }}
+    steps:
+      - name: 'Set up Python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 'Fetch build-release.py'
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: 'build-scripts/build-release.py'
+      - name: 'Download source archives'
+        uses: actions/download-artifact@v4
+        with:
+          name: sources
+          path: '${{ github.workspace }}'
+      - name: 'Untar ${{ needs.src.outputs.src-tar-gz }}'
+        id: tar
+        run: |
+          mkdir -p "${{ github.workspace }}/tardir"
+          tar -C "${{ github.workspace }}/tardir" -v -x -f "${{ github.workspace }}/${{ needs.src.outputs.src-tar-gz }}"
+          echo "path=${{ github.workspace }}/tardir/${{ needs.src.outputs.project }}-${{ needs.src.outputs.version }}" >>$GITHUB_OUTPUT
+      - name: 'Build SDL2.dmg'
+        id: releaser
+        shell: bash
+        run: |
+          python build-scripts/build-release.py \
+            --actions dmg \
+            --commit ${{ inputs.commit }} \
+            --root "${{ steps.tar.outputs.path }}" \
+            --github \
+            --debug
+      - name: 'Store DMG image file'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dmg
+          path: '${{ github.workspace }}/dist'
+
+  dmg-verify:
+    needs: [dmg, src]
+    runs-on: macos-latest
+    steps:
+      - name: 'Download source archives'
+        uses: actions/download-artifact@v4
+        with:
+          name: sources
+          path: '${{ github.workspace }}'
+      - name: 'Download ${{ needs.dmg.outputs.dmg }}'
+        uses: actions/download-artifact@v4
+        with:
+          name: dmg
+          path: '${{ github.workspace }}'
+      - name: 'Untar ${{ needs.src.outputs.src-tar-gz }}'
+        id: src
+        run: |
+          mkdir -p /tmp/tardir
+          tar -C /tmp/tardir -v -x -f "${{ github.workspace }}/${{ needs.src.outputs.src-tar-gz }}"
+          echo "path=/tmp/tardir/${{ needs.src.outputs.project }}-${{ needs.src.outputs.version }}" >>$GITHUB_OUTPUT
+      - name: 'Mount ${{ needs.dmg.outputs.dmg }}'
+        id: mount
+        run: |
+          hdiutil attach '${{ github.workspace }}/${{ needs.dmg.outputs.dmg }}'
+          mount_point="/Volumes/${{ needs.src.outputs.project }}"
+          if [ ! -d "$mount_point/${{ needs.src.outputs.project }}.framework" ]; then
+            echo "Cannot find ${{ needs.src.outputs.project }}.framework!"
+            exit 1
+          fi
+          echo "mount_point=$mount_point">>$GITHUB_OUTPUT
+      - name: 'CMake (configure + build) Darwin'
+        run: |
+          set -e
+          cmake -S "${{ steps.src.outputs.path }}/cmake/test"               \
+              -DTEST_FULL=FALSE                                             \
+              -DTEST_STATIC=FALSE                                           \
+              -DTEST_TEST=FALSE                                             \
+              -DCMAKE_PREFIX_PATH="${{ steps.mount.outputs.mount_point }}"  \
+              -DCMAKE_SYSTEM_NAME=Darwin                                    \
+              -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"                      \
+              -Werror=dev                                                   \
+              -B build_darwin
+          cmake --build build_darwin --config Release --verbose
+
+          cmake -S "${{ steps.src.outputs.path }}/cmake/test"               \
+              -DTEST_FULL=FALSE                                             \
+              -DTEST_STATIC=FALSE                                           \
+              -DTEST_TEST=FALSE                                             \
+              -DCMAKE_PREFIX_PATH="${{ steps.mount.outputs.mount_point }}"  \
+              -DCMAKE_SYSTEM_NAME=Darwin                                    \
+              -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"                      \
+              -Werror=dev                                                   \
+              -B build_darwin_2
+          cmake --build build_darwin --config Release --verbose
+
+  msvc:
+    needs: [src]
+    runs-on: windows-2019
+    outputs:
+      VC-x86: ${{ steps.releaser.outputs.VC-x86 }}
+      VC-x64: ${{ steps.releaser.outputs.VC-x64 }}
+      VC-devel: ${{ steps.releaser.outputs.VC-devel }}
+    steps:
+      - name: 'Set up Python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 'Fetch build-release.py'
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: 'build-scripts/build-release.py'
+      - name: 'Download source archives'
+        uses: actions/download-artifact@v4
+        with:
+          name: sources
+          path: '${{ github.workspace }}'
+      - name: 'Unzip ${{ needs.src.outputs.src-zip }}'
+        id: zip
+        run: |
+          New-Item C:\temp -ItemType Directory -ErrorAction SilentlyContinue
+          cd C:\temp
+          unzip "${{ github.workspace }}/${{ needs.src.outputs.src-zip }}"
+          echo "path=C:\temp\${{ needs.src.outputs.project }}-${{ needs.src.outputs.version }}" >>$Env:GITHUB_OUTPUT
+      - name: 'Build MSVC binary archives'
+        id: releaser
+        run: |
+          python build-scripts/build-release.py     `
+            --actions msvc                         `
+            --commit ${{ inputs.commit }}           `
+            --root "${{ steps.zip.outputs.path }}"  `
+            --github                                `
+            --debug
+      - name: 'Store MSVC archives'
+        uses: actions/upload-artifact@v4
+        with:
+          name: win32
+          path: '${{ github.workspace }}/dist'
+
+  msvc-verify:
+    needs: [msvc, src]
+    runs-on: windows-latest
+    steps:
+      - name: 'Fetch .github/actions/setup-ninja/action.yml'
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: '.github/actions/setup-ninja/action.yml'
+      - name: 'Download source archives'
+        uses: actions/download-artifact@v4
+        with:
+          name: sources
+          path: '${{ github.workspace }}'
+      - name: 'Download MSVC binaries'
+        uses: actions/download-artifact@v4
+        with:
+          name: win32
+          path: '${{ github.workspace }}'
+      - name: 'Unzip ${{ needs.src.outputs.src-zip }}'
+        id: src
+        run: |
+          mkdir '${{ github.workspace }}/sources'
+          cd '${{ github.workspace }}/sources'
+          unzip "${{ github.workspace }}/${{ needs.src.outputs.src-zip }}"
+          echo "path=${{ github.workspace }}/sources/${{ needs.src.outputs.project }}-${{ needs.src.outputs.version }}" >>$env:GITHUB_OUTPUT
+      - name: 'Unzip ${{ needs.msvc.outputs.VC-devel }}'
+        id: bin
+        run: |
+          mkdir '${{ github.workspace }}/vc'
+          cd '${{ github.workspace }}/vc'
+          unzip "${{ github.workspace }}/${{ needs.msvc.outputs.VC-devel }}"
+          echo "path=${{ github.workspace }}/vc/${{ needs.src.outputs.project }}-${{ needs.src.outputs.version }}" >>$env:GITHUB_OUTPUT
+      - name: Set up ninja
+        uses: ./.github/actions/setup-ninja
+      - name: 'Configure vcvars x86'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64_x86
+      - name: 'CMake (configure + build + tests) x86'
+        run: |
+          cmake -S "${{ steps.src.outputs.path }}/cmake/test"     `
+              -B build_x86                                        `
+              -GNinja                                             `
+              -DCMAKE_BUILD_TYPE=Debug                            `
+              -Werror=dev                                         `
+              -DTEST_FULL=FALSE                                   `
+              -DTEST_STATIC=FALSE                                 `
+              -DTEST_SHARED=TRUE                                  `
+              -DTEST_TEST=TRUE                                    `
+              -DCMAKE_SUPPRESS_REGENERATION=TRUE                  `
+              -DCMAKE_PREFIX_PATH="${{ steps.bin.outputs.path }}"
+          Start-Sleep -Seconds 2
+          cmake --build build_x86 --config Release --verbose
+          #ctest --test-dir build_x86 --no-tests=error -C Release --output-on-failure
+      - name: 'Configure vcvars x64'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: 'CMake (configure + build + tests) x64'
+        run: |
+          cmake -S "${{ steps.src.outputs.path }}/cmake/test"     `
+              -B build_x64                                        `
+              -GNinja                                             `
+              -DCMAKE_BUILD_TYPE=Debug                            `
+              -Werror=dev                                         `
+              -DTEST_FULL=FALSE                                   `
+              -DTEST_STATIC=FALSE                                 `
+              -DTEST_SHARED=TRUE                                  `
+              -DTEST_TEST=TRUE                                    `
+              -DCMAKE_SUPPRESS_REGENERATION=TRUE                  `
+              -DCMAKE_PREFIX_PATH="${{ steps.bin.outputs.path }}"
+          Start-Sleep -Seconds 2
+          cmake --build build_x64 --config Release --verbose
+          #ctest --test-dir build_x64 --no-tests=error -C Release --output-on-failure
+
+  mingw:
+    needs: [src]
+    runs-on: ubuntu-24.04  # FIXME: current ubuntu-latest ships an outdated mingw, replace with ubuntu-latest once 24.04 becomes the new default
+    outputs:
+      mingw-devel-tar-gz: ${{ steps.releaser.outputs.mingw-devel-tar-gz }}
+      mingw-devel-tar-xz: ${{ steps.releaser.outputs.mingw-devel-tar-xz }}
+    steps:
+      - name: 'Set up Python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 'Fetch build-release.py'
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: 'build-scripts/build-release.py'
+      - name: 'Install Mingw toolchain'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y gcc-mingw-w64 g++-mingw-w64 ninja-build
+      - name: 'Download source archives'
+        uses: actions/download-artifact@v4
+        with:
+          name: sources
+          path: '${{ github.workspace }}'
+      - name: 'Untar ${{ needs.src.outputs.src-tar-gz }}'
+        id: tar
+        run: |
+          mkdir -p /tmp/tardir
+          tar -C /tmp/tardir -v -x -f "${{ github.workspace }}/${{ needs.src.outputs.src-tar-gz }}"
+          echo "path=/tmp/tardir/${{ needs.src.outputs.project }}-${{ needs.src.outputs.version }}" >>$GITHUB_OUTPUT
+      - name: 'Build MinGW binary archives'
+        id: releaser
+        run: |
+          python build-scripts/build-release.py     \
+            --actions mingw                         \
+            --commit ${{ inputs.commit }}           \
+            --root "${{ steps.tar.outputs.path }}"  \
+            --github                                \
+            --debug
+      - name: 'Store MinGW archives'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mingw
+          path: '${{ github.workspace }}/dist'
+
+  mingw-verify:
+    needs: [mingw, src]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 'Install Mingw toolchain'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y gcc-mingw-w64 g++-mingw-w64 ninja-build
+      - name: 'Download source archives'
+        uses: actions/download-artifact@v4
+        with:
+          name: sources
+          path: '${{ github.workspace }}'
+      - name: 'Download MinGW binaries'
+        uses: actions/download-artifact@v4
+        with:
+          name: mingw
+          path: '${{ github.workspace }}'
+      - name: 'Untar ${{ needs.src.outputs.src-tar-gz }}'
+        id: src
+        run: |
+          mkdir -p /tmp/tardir
+          tar -C /tmp/tardir -v -x -f "${{ github.workspace }}/${{ needs.src.outputs.src-tar-gz }}"
+          echo "path=/tmp/tardir/${{ needs.src.outputs.project }}-${{ needs.src.outputs.version }}" >>$GITHUB_OUTPUT
+      - name: 'Untar and install ${{ needs.mingw.outputs.mingw-devel-tar-gz }}'
+        id: bin
+        run: |
+          mkdir -p /tmp/mingw-tardir
+          tar -C /tmp/mingw-tardir -v -x -f "${{ github.workspace }}/${{ needs.mingw.outputs.mingw-devel-tar-gz }}"
+          make -C /tmp/mingw-tardir/${{ needs.src.outputs.project }}-${{ needs.src.outputs.version }} cross CROSS_PATH=/tmp/deps-mingw
+          echo "path=/tmp/deps-mingw" >>$GITHUB_OUTPUT
+      - name: 'CMake (configure + build) i686'
+        run: |
+          set -e
+          cmake -S "${{ steps.src.outputs.path }}/cmake/test"                                                           \
+              -DCMAKE_BUILD_TYPE="Release"                                                                              \
+              -DTEST_FULL=FALSE                                                                                         \
+              -DTEST_STATIC=TRUE                                                                                        \
+              -DTEST_TEST=TRUE                                                                                          \
+              -DCMAKE_PREFIX_PATH="${{ steps.bin.outputs.path }}"                                                       \
+              -DCMAKE_TOOLCHAIN_FILE="${{ steps.src.outputs.path }}/build-scripts/cmake-toolchain-mingw64-i686.cmake"   \
+              -DCMAKE_C_FLAGS="-DSDL_DISABLE_SSE4_2"                                                                    \
+              -Werror=dev                                                                                               \
+              -B build_x86
+          cmake --build build_x86 --config Release --verbose
+      - name: 'CMake (configure + build) x86_64'
+        run: |
+          set -e
+          cmake -S "${{ steps.src.outputs.path }}/cmake/test"                                                           \
+              -DCMAKE_BUILD_TYPE="Release"                                                                              \
+              -DTEST_FULL=FALSE                                                                                         \
+              -DTEST_STATIC=TRUE                                                                                        \
+              -DTEST_TEST=TRUE                                                                                          \
+              -DCMAKE_PREFIX_PATH="${{ steps.bin.outputs.path }}"                                                       \
+              -DCMAKE_TOOLCHAIN_FILE="${{ steps.src.outputs.path }}/build-scripts/cmake-toolchain-mingw64-x86_64.cmake" \
+              -DCMAKE_C_FLAGS="-DSDL_DISABLE_SSE4_2"                                                                    \
+              -Werror=dev                                                                                               \
+              -B build_x64
+          cmake --build build_x64 --config Release --verbose

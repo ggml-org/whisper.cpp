@@ -1,0 +1,48 @@
+name: 'Build (All)'
+
+on: [push, pull_request]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  controller:
+    name: 'Create test plan'
+    runs-on: 'ubuntu-latest'
+    outputs:
+      platforms-level1: ${{ steps.plan.outputs.platforms-level1 }}
+      platforms-others: ${{ steps.plan.outputs.platforms-others }}
+    steps:
+      - uses: actions/setup-python@main
+        with:
+          python-version: 3.x
+      - uses: actions/checkout@main
+        with:
+          sparse-checkout: '.github/workflows/create-test-plan.py'
+      - name: 'Create plan'
+        id: plan
+        run: |
+          # Adding [sdl-ci-filter GLOB] to the commit message will limit the jobs
+          # e.g. [sdl-ci-filter msvc-*]
+          EOF=$(openssl rand -hex 32)
+          cat >/tmp/commit_message.txt <<$EOF
+          ${{ github.event.head_commit.message }}
+          $EOF
+
+          python .github/workflows/create-test-plan.py \
+            --github-variable-prefix platforms \
+            --github-ci \
+            --verbose \
+            ${{ (github.repository_owner != 'libsdl-org' && '--no-artifact') || '' }} \
+            --commit-message-file /tmp/commit_message.txt
+  level1:
+    needs: [controller]
+    uses: './.github/workflows/generic.yml'
+    with:
+      platforms: ${{ needs.controller.outputs.platforms-level1 }}
+  level2:
+    needs: [controller, level1]
+    uses: './.github/workflows/generic.yml'
+    with:
+      platforms: ${{ needs.controller.outputs.platforms-others }}

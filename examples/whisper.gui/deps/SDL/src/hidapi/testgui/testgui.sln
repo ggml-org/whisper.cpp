@@ -1,0 +1,20 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 10.00
+# Visual C++ Express 2008
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "testgui", "testgui.vcproj", "{08769AC3-785A-4DDC-BFC7-1775414B7AB7}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Win32 = Debug|Win32
+		Release|Win32 = Release|Win32
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{08769AC3-785A-4DDC-BFC7-1775414B7AB7}.Debug|Win32.ActiveCfg = Debug|Win32
+		{08769AC3-785A-4DDC-BFC7-1775414B7AB7}.Debug|Win32.Build.0 = Debug|Win32
+		{08769AC3-785A-4DDC-BFC7-1775414B7AB7}.Release|Win32.ActiveCfg = Release|Win32
+		{08769AC3-785A-4DDC-BFC7-1775414B7AB7}.Release|Win32.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

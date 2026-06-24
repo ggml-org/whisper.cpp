@@ -1,0 +1,298 @@
+# Open Watcom makefile to build SDL2.dll for OS/2:
+# wmake -f Makefile.os2
+#
+# If you have GNU libiconv installed (iconv2.dll), you
+# can compile against it by specifying LIBICONV=1, e.g.:
+# wmake -f Makefile.os2 LIBICONV=1
+#
+# If you have libusb-1.0 installed (usb100.dll, libusb.h), you
+# can compile hidapi joystick support against it (experimental)
+# by specifying HIDAPI=1, e.g.:
+# wmake -f Makefile.os2 HIDAPI=1
+#
+# To error out upon warnings: wmake -f Makefile.os2 ENABLE_WERROR=1
+
+LIBNAME = SDL2
+MAJOR_VERSION = 2
+MINOR_VERSION = 30
+MICRO_VERSION = 11
+VERSION = $(MAJOR_VERSION).$(MINOR_VERSION).$(MICRO_VERSION)
+DESCRIPTION = Simple DirectMedia Layer 2
+
+LIBICONV=0
+ICONVLIB=$(LIBICONV_LIB)
+
+LIBHOME = .
+DLLFILE = $(LIBHOME)/$(LIBNAME).dll
+LIBFILE = $(LIBHOME)/$(LIBNAME).lib
+LNKFILE = $(LIBNAME).lnk
+
+INCPATH = -I"$(%WATCOM)/h/os2" -I"$(%WATCOM)/h"
+INCPATH+= -Iinclude
+
+LIBM = SDL2libm.lib
+TLIB = SDL2test.lib
+LIBS = mmpm2.lib $(LIBM)
+CFLAGS = -bt=os2 -d0 -q -bm -5s -fp5 -fpi87 -sg -oeatxhn -ei
+# Debug options:
+# - debug messages from OS/2 related code to stdout:
+#CFLAGS+= -DOS2DEBUG
+# - debug messages from OS/2 code via SDL_LogDebug():
+#CFLAGS+= -DOS2DEBUG=2
+
+# max warnings:
+CFLAGS+= -wx
+!ifeq ENABLE_WERROR 1
+CFLAGS+= -we
+!endif
+# newer OpenWatcom versions enable W303 by default
+CFLAGS+= -wcd=303
+# the include paths :
+CFLAGS+= $(INCPATH)
+CFLAGS_STATIC=$(CFLAGS)
+# building dll:
+CFLAGS_DLL =$(CFLAGS)
+CFLAGS_DLL+= -bd
+# iconv:
+LIBICONV_LIB=iconv2.lib
+!ifeq LIBICONV 1
+CFLAGS_DLL+= -DHAVE_ICONV=1 -DHAVE_ICONV_H=1 -DSDL_USE_LIBICONV
+LIBS+= $(ICONVLIB)
+!else
+LIBS+= libuls.lib libconv.lib
+!endif
+# hidapi (libusb):
+!ifeq HIDAPI 1
+CFLAGS_DLL+= -DHAVE_LIBUSB_H=1
+!endif
+# building SDL itself (for DECLSPEC):
+CFLAGS_DLL+= -DBUILD_SDL
+
+CFLAGS_DLL+= -DSDL_BUILD_MAJOR_VERSION=$(MAJOR_VERSION)
+CFLAGS_DLL+= -DSDL_BUILD_MINOR_VERSION=$(MINOR_VERSION)
+CFLAGS_DLL+= -DSDL_BUILD_MICRO_VERSION=$(MICRO_VERSION)
+
+SRCS = SDL.c SDL_assert.c SDL_error.c SDL_guid.c SDL_log.c SDL_dataqueue.c SDL_hints.c SDL_list.c SDL_utils.c
+SRCS+= SDL_getenv.c SDL_iconv.c SDL_malloc.c SDL_qsort.c SDL_stdlib.c SDL_string.c SDL_strtokr.c SDL_crc16.c SDL_crc32.c
+SRCS+= SDL_cpuinfo.c SDL_atomic.c SDL_spinlock.c SDL_thread.c SDL_timer.c
+SRCS+= SDL_rwops.c SDL_power.c
+SRCS+= SDL_audio.c SDL_audiocvt.c SDL_audiodev.c SDL_audiotypecvt.c SDL_mixer.c SDL_wave.c
+SRCS+= SDL_events.c SDL_quit.c SDL_keyboard.c SDL_mouse.c SDL_windowevents.c &
+       SDL_clipboardevents.c SDL_dropevents.c SDL_displayevents.c SDL_gesture.c &
+       SDL_sensor.c SDL_touch.c
+SRCS+= SDL_haptic.c SDL_hidapi.c SDL_gamecontroller.c SDL_joystick.c controller_type.c
+SRCS+= SDL_render.c yuv_rgb_sse.c yuv_rgb_std.c SDL_yuv.c SDL_yuv_sw.c SDL_blendfillrect.c &
+       SDL_blendline.c SDL_blendpoint.c SDL_drawline.c SDL_drawpoint.c &
+       SDL_render_sw.c SDL_rotate.c SDL_triangle.c
+SRCS+= SDL_blit.c SDL_blit_0.c SDL_blit_1.c SDL_blit_A.c SDL_blit_auto.c &
+       SDL_blit_copy.c SDL_blit_N.c SDL_blit_slow.c SDL_fillrect.c SDL_bmp.c &
+       SDL_pixels.c SDL_rect.c SDL_RLEaccel.c SDL_shape.c SDL_stretch.c &
+       SDL_surface.c SDL_video.c SDL_clipboard.c SDL_vulkan_utils.c SDL_egl.c
+
+SRCS+= SDL_syscond.c SDL_sysmutex.c SDL_syssem.c SDL_systhread.c SDL_systls.c
+SRCS+= SDL_systimer.c
+SRCS+= SDL_sysloadso.c
+SRCS+= SDL_sysfilesystem.c
+SRCS+= SDL_os2joystick.c SDL_syshaptic.c SDL_sysjoystick.c SDL_virtualjoystick.c
+SRCS+= SDL_hidapijoystick.c SDL_hidapi_rumble.c SDL_hidapi_combined.c SDL_hidapi_gamecube.c SDL_hidapi_luna.c SDL_hidapi_ps3.c SDL_hidapi_ps4.c SDL_hidapi_ps5.c SDL_hidapi_shield.c SDL_hidapi_stadia.c SDL_hidapi_switch.c SDL_hidapi_wii.c SDL_hidapi_xbox360.c SDL_hidapi_xbox360w.c SDL_hidapi_xboxone.c SDL_hidapi_steam.c SDL_hidapi_steamdeck.c SDL_steam_virtual_gamepad.c
+SRCS+= SDL_dummyaudio.c SDL_diskaudio.c
+SRCS+= SDL_nullvideo.c SDL_nullframebuffer.c SDL_nullevents.c
+SRCS+= SDL_dummysensor.c
+SRCS+= SDL_locale.c SDL_syslocale.c
+SRCS+= SDL_url.c SDL_sysurl.c
+
+SRCS+= SDL_os2.c
+!ifeq LIBICONV 0
+SRCS+= geniconv.c os2cp.c os2iconv.c sys2utf8.c
+!endif
+SRCS+= SDL_os2audio.c
+SRCS+= SDL_os2video.c SDL_os2util.c SDL_os2dive.c SDL_os2vman.c &
+       SDL_os2mouse.c SDL_os2messagebox.c
+
+SRCS+= SDL_dynapi.c
+
+OBJS = $(SRCS:.c=.obj)
+
+.extensions:
+.extensions: .lib .dll .obj .c .asm
+
+.c: ./src;./src/dynapi;./src/audio;./src/cpuinfo;./src/events;./src/file;./src/haptic;./src/joystick;./src/power;./src/render;./src/render/software;./src/sensor;./src/stdlib;./src/thread;./src/timer;./src/video;./src/video/yuv2rgb;./src/atomic;./src/audio/disk;
+.c: ./src/haptic/dummy;./src/joystick/dummy;./src/joystick/virtual;./src/audio/dummy;./src/video/dummy;./src/sensor/dummy;
+.c: ./src/core/os2;./src/audio/os2;./src/loadso/os2;./src/filesystem/os2;./src/joystick/os2;./src/thread/os2;./src/timer/os2;./src/video/os2;
+.c: ./src/core/os2/geniconv;
+.c: ./src/locale/;./src/locale/unix;./src/misc;./src/misc/dummy;./src/joystick/hidapi;./src/hidapi
+
+all: $(DLLFILE) $(LIBFILE) $(TLIB) .symbolic
+
+build_dll: .symbolic
+    @echo * Compiling dll objects
+
+$(DLLFILE): build_dll $(OBJS) $(LIBM) $(LIBICONV_LIB) $(LNKFILE)
+    @echo * Linking: $@
+    wlink @$(LNKFILE)
+
+$(LIBFILE): $(DLLFILE)
+    @echo * Creating LIB file: $@
+    wlib -q -b -n -c -pa -s -t -zld -ii -io $* $(DLLFILE)
+
+.c.obj:
+    wcc386 $(CFLAGS_DLL) -fo=$^@ $<
+
+SDL_syscond.obj: "src/thread/generic/SDL_syscond.c"
+    wcc386 $(CFLAGS_DLL) -fo=$^@ $<
+SDL_cpuinfo.obj: SDL_cpuinfo.c
+    wcc386 $(CFLAGS_DLL) -wcd=200 -fo=$^@ $<
+SDL_wave.obj: SDL_wave.c
+    wcc386 $(CFLAGS_DLL) -wcd=124 -fo=$^@ $<
+SDL_blendfillrect.obj: SDL_blendfillrect.c
+    wcc386 $(CFLAGS_DLL) -wcd=200 -fo=$^@ $<
+SDL_blendline.obj: SDL_blendline.c
+    wcc386 $(CFLAGS_DLL) -wcd=200 -fo=$^@ $<
+SDL_blendpoint.obj: SDL_blendpoint.c
+    wcc386 $(CFLAGS_DLL) -wcd=200 -fo=$^@ $<
+SDL_RLEaccel.obj: SDL_RLEaccel.c
+    wcc386 $(CFLAGS_DLL) -wcd=201 -fo=$^@ $<
+yuv_rgb_sse.obj: yuv_rgb_sse.c
+    wcc386 $(CFLAGS_DLL) -wcd=202 -fo=$^@ $<
+!ifeq HIDAPI 1
+# c99 mode needed because of structs with flexible array members in libusb.h
+SDL_hidapi.obj: SDL_hidapi.c
+    wcc386 $(CFLAGS_DLL) -za99 -fo=$^@ $<
+!endif
+
+$(LIBICONV_LIB):  "src/core/os2/iconv2.lbc"
+    @echo * Creating: $@
+    wlib -q -b -n -c -pa -s -t -zld -ii -io $@ @$<
+
+# SDL2libm
+MSRCS= e_atan2.c e_exp.c e_fmod.c e_log10.c e_log.c e_pow.c e_rem_pio2.c e_sqrt.c &
+       k_cos.c k_rem_pio2.c k_sin.c k_tan.c &
+       s_atan.c s_copysign.c s_cos.c s_fabs.c s_floor.c s_scalbn.c s_sin.c s_tan.c
+MOBJS= $(MSRCS:.c=.obj)
+
+.c: ./src/libm;
+e_atan2.obj: e_atan2.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+e_exp.obj: e_exp.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+e_fmod.obj: e_fmod.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+e_log10.obj: e_log10.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+e_log.obj: e_log.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+e_pow.obj: e_pow.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+e_rem_pio2.obj: e_rem_pio2.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+e_sqrt.obj: e_sqrt.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+k_cos.obj: k_cos.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+k_rem_pio2.obj: k_rem_pio2.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+k_sin.obj: k_sin.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+k_tan.obj: k_tan.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+s_atan.obj: s_atan.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+s_copysign.obj: s_copysign.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+s_cos.obj: s_cos.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+s_fabs.obj: s_fabs.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+s_floor.obj: s_floor.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+s_scalbn.obj: s_scalbn.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+s_sin.obj: s_sin.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+s_tan.obj: s_tan.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+
+build_libm: .symbolic
+    @echo * Compiling libm objects
+$(LIBM): build_libm $(MOBJS)
+    @echo * Creating: $@
+    wlib -q -b -n -c -pa -s -t -zld -ii -io $@ $(MOBJS)
+
+# SDL2test
+TSRCS = SDL_test_assert.c SDL_test_common.c SDL_test_compare.c &
+        SDL_test_crc32.c SDL_test_font.c SDL_test_fuzzer.c SDL_test_harness.c &
+        SDL_test_imageBlit.c SDL_test_imageBlitBlend.c SDL_test_imageFace.c &
+        SDL_test_imagePrimitives.c SDL_test_imagePrimitivesBlend.c &
+        SDL_test_log.c SDL_test_md5.c SDL_test_random.c SDL_test_memory.c
+TOBJS= $(TSRCS:.c=.obj)
+
+.c: ./src/test;
+SDL_test_assert.obj: SDL_test_assert.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+SDL_test_common.obj: SDL_test_common.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+SDL_test_compare.obj: SDL_test_compare.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+SDL_test_crc32.obj: SDL_test_crc32.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+SDL_test_font.obj: SDL_test_font.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+SDL_test_fuzzer.obj: SDL_test_fuzzer.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+SDL_test_harness.obj: SDL_test_harness.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+SDL_test_imageBlit.obj: SDL_test_imageBlit.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+SDL_test_imageBlitBlend.obj: SDL_test_imageBlitBlend.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+SDL_test_imageFace.obj: SDL_test_imageFace.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+SDL_test_imagePrimitives.obj: SDL_test_imagePrimitives.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+SDL_test_imagePrimitivesBlend.obj: SDL_test_imagePrimitivesBlend.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+SDL_test_log.obj: SDL_test_log.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+SDL_test_md5.obj: SDL_test_md5.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+SDL_test_random.obj: SDL_test_random.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+SDL_test_memory.obj: SDL_test_memory.c
+    wcc386 $(CFLAGS_STATIC) -fo=$^@ $<
+
+build_tlib: .symbolic
+    @echo * Compiling testlib objects
+$(TLIB): build_tlib $(TOBJS)
+    @echo * Creating: $@
+    wlib -q -b -n -c -pa -s -t -zld -ii -io $@ $(TOBJS)
+
+$(LNKFILE):
+    @echo * Creating linker file: $@
+    @%create $@
+    @%append $@ SYSTEM os2v2_dll INITINSTANCE TERMINSTANCE
+    @%append $@ NAME $(DLLFILE)
+    @for %i in ($(OBJS)) do @%append $@ FILE %i
+    @for %i in ($(LIBS)) do @%append $@ LIB %i
+    @%append $@ OPTION QUIET
+    @%append $@ OPTION IMPF=$(LIBHOME)/$^&.exp
+    @%append $@ OPTION MAP=$(LIBHOME)/$^&.map
+    @%append $@ OPTION DESCRIPTION '@$#libsdl org:$(VERSION)$#@$(DESCRIPTION)'
+    @%append $@ OPTION ELIMINATE
+    @%append $@ OPTION MANYAUTODATA
+    @%append $@ OPTION OSNAME='OS/2 and eComStation'
+    @%append $@ OPTION SHOWDEAD
+
+clean: .SYMBOLIC
+    @echo * Clean: $(LIBNAME)
+    @if exist *.obj rm *.obj
+    @if exist *.err rm *.err
+    @if exist $(LNKFILE) rm $(LNKFILE)
+    @if exist $(LIBM) rm $(LIBM)
+    @if exist $(LIBICONV_LIB) rm $(LIBICONV_LIB)
+
+distclean: .SYMBOLIC clean
+    @if exist $(LIBHOME)/*.exp rm $(LIBHOME)/*.exp
+    @if exist $(LIBHOME)/*.map rm $(LIBHOME)/*.map
+    @if exist $(LIBFILE) rm $(LIBFILE)
+    @if exist $(DLLFILE) rm $(DLLFILE)
+    @if exist $(TLIB) rm $(TLIB)

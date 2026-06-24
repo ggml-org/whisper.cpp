@@ -3,11 +3,12 @@
 A minimal cross-platform desktop GUI for whisper.cpp, built with
 [Dear ImGui](https://github.com/ocornut/imgui) on the SDL2 + OpenGL3 backend.
 
-It stays lightweight: the core inference and audio decoding are reused unchanged,
-and Dear ImGui is fetched at configure time (via CMake `FetchContent`) rather than
-vendored into the tree.
-
-![overview](https://upload.wikimedia.org/wikipedia/commons/thumb/2/26/Blank.png)
+It is **self-contained / air-gapped friendly**: both Dear ImGui and SDL2 are
+vendored under [`deps/`](deps/) and built from source, so a fresh `git clone`
+builds with **no network access** and **no SDL2/ImGui system packages**. The
+only things the build machine must provide are the OS windowing + OpenGL
+*development headers* (X11/Wayland + GL) — these ship with any desktop's base
+dev packages and cannot be vendored (OpenGL is your GPU driver).
 
 ## Features
 
@@ -24,20 +25,58 @@ Video files (e.g. `.mp4`) must be converted to audio first — see the
 
 ## Building
 
-The GUI requires **SDL2** and **OpenGL** development libraries, and network access at
-configure time to fetch Dear ImGui.
+The GUI is **off by default**. Enable it with `-DWHISPER_GUI=ON`:
 
 ```bash
-# install dependencies (example for Debian/Ubuntu)
-sudo apt install libsdl2-dev libgl1-mesa-dev
-
-# configure with SDL2 enabled and build
-cmake -B build -DWHISPER_SDL2=ON
+cmake -B build -DWHISPER_GUI=ON
 cmake --build build --target whisper-gui -j
+./build/bin/whisper-gui
 ```
 
-On macOS: `brew install sdl2`. On Windows, provide SDL2 (e.g. via vcpkg) and a
-recent MSVC/CMake.
+This builds the vendored SDL2 statically and the vendored Dear ImGui directly
+into the executable. No `FetchContent`, no system SDL2.
+
+> `WHISPER_GUI` is independent of `WHISPER_SDL2` (which links a *system* SDL2 for
+> the `stream`/`command`/etc. examples). You do **not** need `WHISPER_SDL2` for
+> the GUI.
+
+### Required system development headers
+
+You still need the OS windowing + OpenGL dev headers so SDL2 can compile its
+video backend. These are the only things that are not vendored:
+
+```bash
+# Fedora / RHEL
+sudo dnf install gcc-c++ cmake mesa-libGL-devel libX11-devel libXext-devel \
+                 libxkbcommon-devel wayland-devel
+
+# Debian / Ubuntu
+sudo apt install g++ cmake libgl1-mesa-dev libx11-dev libxext-dev \
+                 libxkbcommon-dev libwayland-dev
+
+# macOS (Xcode command line tools provide OpenGL + Cocoa)
+xcode-select --install
+```
+
+(The `wayland`/`xkbcommon` packages are optional but recommended so the window
+works under Wayland as well as X11.)
+
+## Air-gapped workflow
+
+1. On a **connected** machine, `git clone` this repository (or your fork). The
+   clone already contains SDL2 and Dear ImGui under `examples/whisper.gui/deps/`,
+   so nothing else needs downloading.
+2. Stage the system dev headers above as offline packages (e.g. `dnf download`
+   / `apt-get download`) and carry them across with the repo.
+3. On the **air-gapped** machine, install those packages, then:
+   ```bash
+   cmake -B build -DWHISPER_GUI=ON
+   cmake --build build --target whisper-gui -j
+   ```
+
+The resulting binary links SDL2 statically; at runtime it needs only the OS
+OpenGL driver and windowing libraries (`libGL`, `libX11`/Wayland), which are
+present on any desktop.
 
 ## Running
 
@@ -45,8 +84,18 @@ recent MSVC/CMake.
 ./build/bin/whisper-gui
 ```
 
-Then set the model path (e.g. `models/ggml-base.en.bin`), choose or drag an audio
-file, and click **Transcribe**. Exported files are written next to the audio file.
+Set the model path (e.g. `models/ggml-base.en.bin` — fetch one with
+`sh ./models/download-ggml-model.sh base.en`), choose or drag an audio file, and
+click **Transcribe**. Exported files are written next to the audio file.
 
-> Offline ImGui fetch: if the build machine has no network, pre-fetch Dear ImGui and
-> point CMake at it with `-DFETCHCONTENT_SOURCE_DIR_IMGUI=/path/to/imgui`.
+> Needs a real display. Over SSH or on WSL, use X/Wayland forwarding or WSLg.
+
+## Vendored dependencies
+
+| Path             | Upstream                                            | Version  |
+| ---------------- | --------------------------------------------------- | -------- |
+| `deps/imgui/`    | [ocornut/imgui](https://github.com/ocornut/imgui)   | v1.91.5  |
+| `deps/SDL/`      | [libsdl-org/SDL](https://github.com/libsdl-org/SDL) | 2.30.11  |
+
+The SDL2 tree is trimmed to the library sources (tests, IDE projects and docs
+removed) to keep the checkout small.
