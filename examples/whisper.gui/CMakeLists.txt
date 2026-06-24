@@ -1,50 +1,66 @@
-if (WHISPER_SDL2)
-    set(TARGET whisper-gui)
+# whisper-gui: a minimal desktop GUI built on Dear ImGui (SDL2 + OpenGL3).
+#
+# This target is fully self-contained / air-gapped friendly: both Dear ImGui
+# and SDL2 are vendored under deps/ and built from source, so a fresh clone
+# builds with no network and no SDL2/ImGui system packages. The only thing the
+# build machine must provide are the OS windowing + OpenGL development headers
+# (X11/Wayland + GL on Linux), which ship with any desktop's base dev packages
+# and cannot be vendored.
+#
+# It is intentionally decoupled from WHISPER_SDL2 (which uses a *system* SDL2
+# via find_package) so it can build on machines that have no SDL2 installed.
 
-    # the GUI renders with OpenGL (via the Dear ImGui SDL2 + OpenGL3 backend)
-    find_package(OpenGL QUIET)
-    if (NOT OpenGL_FOUND)
-        message(WARNING "whisper-gui: OpenGL not found - skipping target")
-        return()
-    endif()
+option(WHISPER_GUI "whisper: build the self-contained desktop GUI (vendored SDL2 + Dear ImGui)" OFF)
 
-    # Dear ImGui is a small, header-light immediate-mode GUI library.
-    # It ships no CMakeLists, so we fetch the sources and compile the few
-    # files we need directly into this target - nothing is vendored in-tree.
-    include(FetchContent)
-    FetchContent_Declare(
-        imgui
-        GIT_REPOSITORY https://github.com/ocornut/imgui.git
-        GIT_TAG        v1.91.5
-        GIT_SHALLOW    TRUE
-    )
-    FetchContent_MakeAvailable(imgui)
+if (NOT WHISPER_GUI)
+    return()
+endif()
 
-    add_executable(${TARGET}
-        main.cpp
-        ${imgui_SOURCE_DIR}/imgui.cpp
-        ${imgui_SOURCE_DIR}/imgui_draw.cpp
-        ${imgui_SOURCE_DIR}/imgui_tables.cpp
-        ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-        ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
-        ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
-    )
+set(TARGET whisper-gui)
 
-    include(DefaultTargetOptions)
+set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/deps/imgui)
+set(SDL_DIR   ${CMAKE_CURRENT_SOURCE_DIR}/deps/SDL)
 
-    target_include_directories(${TARGET} PRIVATE
-        ${imgui_SOURCE_DIR}
-        ${imgui_SOURCE_DIR}/backends
-        ${SDL2_INCLUDE_DIRS}
-    )
+# --- vendored SDL2 (static) ---------------------------------------------------
+# build a static SDL2, no shared lib, no tests, and don't install it.
+set(SDL_SHARED          OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC          ON  CACHE BOOL "" FORCE)
+set(SDL_STATIC_PIC      ON  CACHE BOOL "" FORCE)
+set(SDL_TEST            OFF CACHE BOOL "" FORCE)
+set(SDL2_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
 
-    target_link_libraries(${TARGET} PRIVATE
-        common
-        whisper
-        ${SDL2_LIBRARIES}
-        OpenGL::GL
-        ${CMAKE_THREAD_LIBS_INIT}
-    )
+if (NOT TARGET SDL2-static)
+    add_subdirectory(${SDL_DIR} ${CMAKE_CURRENT_BINARY_DIR}/SDL EXCLUDE_FROM_ALL)
+endif()
 
-    install(TARGETS ${TARGET} RUNTIME)
-endif ()
+# --- OpenGL (provided by the OS / GPU driver, never vendored) ------------------
+find_package(OpenGL REQUIRED)
+
+# --- the executable -----------------------------------------------------------
+add_executable(${TARGET}
+    main.cpp
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+)
+
+include(DefaultTargetOptions)
+
+target_include_directories(${TARGET} PRIVATE
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+)
+
+target_link_libraries(${TARGET} PRIVATE
+    common
+    whisper
+    SDL2::SDL2-static
+    SDL2::SDL2main
+    OpenGL::GL
+    ${CMAKE_THREAD_LIBS_INIT}
+)
+
+install(TARGETS ${TARGET} RUNTIME)

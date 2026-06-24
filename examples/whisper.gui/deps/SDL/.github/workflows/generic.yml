@@ -1,0 +1,352 @@
+name: 'Build'
+run-name: 'Configure, Build and Test SDL'
+
+on:
+  workflow_call:
+    inputs:
+      platforms:
+        description: 'JSON-encoded test properties'
+        type: string
+        required: true
+
+jobs:
+  build:
+    name: ${{ matrix.platform.name }}
+    runs-on: ${{ matrix.platform.os }}
+    container: ${{ matrix.platform.container }}
+    defaults:
+      run:
+        shell: ${{ matrix.platform.shell }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(inputs.platforms) }}
+    steps:
+      - name: 'Set up MSYS2'
+        if: ${{ matrix.platform.platform == 'msys2' }}
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.platform.msys2-msystem }}
+          install: >-
+            ${{ matrix.platform.msys2-env }}-cc
+            ${{ matrix.platform.msys2-env }}-cmake
+            ${{ matrix.platform.msys2-env }}-ninja
+            ${{ (!matrix.platform.msys2-no-perl && format('{0}-perl', matrix.platform.msys2-env)) || '' }}
+            ${{ matrix.platform.msys2-env }}-pkg-config
+            ${{ matrix.platform.msys2-env }}-clang-tools-extra
+      - name: 'About this job'
+        run: |
+          echo "key=${{ matrix.platform.key }}"
+          echo "name=${{ matrix.platform.name }}"
+          echo "os=${{ matrix.platform.os }}"
+          echo ""
+          echo "Add [sdl-ci-filter ${{ matrix.platform.key }}] to your commit message to reduce the number of jobs."
+      - uses: actions/checkout@v4
+      - name: 'Set up ninja'
+        if: ${{ matrix.platform.setup-ninja }}
+        uses: ./.github/actions/setup-ninja
+      - uses: mymindstorm/setup-emsdk@v14
+        if: ${{ matrix.platform.platform == 'emscripten' }}
+        with:
+          version: 3.1.35
+      - uses: nttld/setup-ndk@v1
+        if: ${{ matrix.platform.android-ndk }}
+        id: setup-ndk
+        with:
+          local-cache: true
+          ndk-version: r21e
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: ${{ matrix.platform.platform == 'msvc' }}
+        with:
+          arch: ${{ matrix.platform.msvc-vcvars-arch }}
+          sdk: ${{ matrix.platform.msvc-vcvars-sdk }}
+      - name: 'Set up Windows GDK Desktop'
+        uses: ./.github/actions/setup-gdk-desktop
+        if: ${{ matrix.platform.setup-gdk-folder != '' }}
+        with:
+          folder: '${{ matrix.platform.setup-gdk-folder }}'
+      - name: 'Setup Intel oneAPI toolchain'
+        id: intel
+        if: ${{ matrix.platform.intel }}
+        run: |
+          # Download the key to system keyring
+          wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
+            | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
+          
+          # Add signed entry to apt sources and configure the APT client to use Intel repository:
+          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list
+          
+          # Update package list
+          sudo apt-get update -y
+          
+          # Install oneAPI
+          sudo apt-get install -y intel-oneapi-compiler-dpcpp-cpp-and-cpp-classic
+      - name: 'Install apk packages'
+        if: ${{ matrix.platform.apk-packages != '' }}
+        run: |
+          ${{ matrix.platform.sudo }} apk update
+          ${{ matrix.platform.sudo }} apk add ${{ matrix.platform.apk-packages }}
+      - name: 'Install apt packages'
+        if: ${{ matrix.platform.apt-packages != '' }}
+        run: |
+          ${{ matrix.platform.sudo }} apt-get update
+          ${{ matrix.platform.sudo }} apt-get install -y ${{ matrix.platform.apt-packages }}
+      - name: 'Install brew packages'
+        if: ${{ matrix.platform.brew-packages != '' }}
+        run: |
+          export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
+          brew update
+          brew install ${{ matrix.platform.brew-packages }}
+      - name: 'Set up GLES for VITA'  # Must be after apk
+        if: ${{ matrix.platform.setup-vita-gles-type != '' }}
+        uses: ./.github/actions/setup-vita-gles
+        with:
+          type: ${{ matrix.platform.setup-vita-gles-type }}
+
+      - name: 'Configure (Autotools)'
+        if: ${{ !matrix.platform.no-autotools }}
+        run: |
+          ${{ matrix.platform.source_cmd }}
+          set -eu
+          rm -rf build-autotools
+          mkdir build-autotools
+          ./autogen.sh
+          (
+            cd build-autotools
+            ../configure \
+              --enable-vendor-info="Github Workflow" \
+              --enable-werror \
+              --prefix=${{ github.workspace }}/autotools_prefix \
+          )
+          if test "x${{ (matrix.platform.build-autotools-tests && 'yes') || 'no' }}" = "xyes" ; then
+            curdir="$(pwd)"
+            multiarch="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
+            (
+              mkdir -p build-autotools/test
+              cd build-autotools/test
+              ../../test/configure \
+                --enable-werror \
+                --x-includes=/usr/include \
+                --x-libraries="/usr/lib/${multiarch}" \
+                --prefix=${{ github.workspace }}/autotools_prefix \
+                SDL_CFLAGS="-I${curdir}/include" \
+                SDL_LIBS="-L${curdir}/build-autotools/build/.libs -lSDL2" \
+                ac_cv_lib_SDL2_ttf_TTF_Init=no \
+                ${NULL+}
+          )
+          fi
+      - name: 'Build (Autotools)'
+        if: ${{ !matrix.platform.no-autotools }}
+        run: |
+          ${{ matrix.platform.source_cmd }}
+          set -eu
+          parallel="$(getconf _NPROCESSORS_ONLN)"
+          make -j"${parallel}" -C build-autotools V=1
+          if test "x${{ (matrix.platform.build-autotools-tests && 'yes') || 'no' }}" = "xyes" ; then
+            make -j"${parallel}" -C build-autotools/test V=1
+          fi
+      - name: 'Run build-time tests (Autotools)'
+        if: ${{ !matrix.platform.no-autotools && matrix.platform.build-autotools-tests && matrix.platform.run-tests }}
+        run: |
+          ${{ matrix.platform.source_cmd }}
+          set -eu
+          curdir="$(pwd)"
+          parallel="$(getconf _NPROCESSORS_ONLN)"
+          export SDL_TESTS_QUICK=1
+          make -j"${parallel}" -C build-autotools/test check LD_LIBRARY_PATH="${curdir}/build-autotools/build/.libs"
+          if test "${{ runner.os }}" = "Linux"; then
+            # This should show us the SDL_REVISION
+            strings "${curdir}/build-autotools/build/.libs/libSDL2-2.0.so.0" | grep SDL-
+          fi
+      - name: 'Install (Autotools)'
+        if: ${{ !matrix.platform.no-autotools }}
+        run: |
+          ${{ matrix.platform.source_cmd }}
+          set -eu
+          curdir="$(pwd)"
+          parallel="$(getconf _NPROCESSORS_ONLN)"
+          make -j"${parallel}" -C build-autotools install V=1
+          if test "x${{ (matrix.platform.build-autotools-tests && 'yes') || 'no' }}" = "xyes" ; then
+            make -j"${parallel}" -C build-autotools/test install V=1
+          fi
+          ( cd autotools_prefix; find . ) | LC_ALL=C sort -u
+          echo "prefix=$(pwd)/autotools_prefix" >> $GITHUB_OUTPUT
+
+      - name: 'Configure (CMake)'
+        if: ${{ !matrix.platform.no-cmake }}
+        #shell: ${{ matrix.platform.shell }}
+        run: |
+          ${{ matrix.platform.source-cmd }}
+          ${{ matrix.platform.cmake-config-emulator }} cmake -S . -B build -GNinja \
+            -Wdeprecated -Wdev -Werror \
+            ${{ matrix.platform.cmake-toolchain-file != '' && format('-DCMAKE_TOOLCHAIN_FILE={0}', matrix.platform.cmake-toolchain-file) || '' }} \
+            -DSDL_WERROR=${{ matrix.platform.werror }} \
+            -DSDL_TESTS=${{ matrix.platform.build-tests }} \
+            -DSDLTEST_TRACKMEM=OFF \
+            -DSDL_INSTALL_TESTS=${{ matrix.platform.build-tests }} \
+            -DSDL_DISABLE_INSTALL_DOCS=OFF \
+            -DSDL_DISABLE_INSTALL_DOCS=OFF \
+            ${{ matrix.platform.cmake-arguments }} \
+            -DSDL_SHARED=${{ matrix.platform.shared }} \
+            -DSDL_STATIC=${{ matrix.platform.static  }} \
+            -DSDL_TEST=ON \
+            -DSDL_VENDOR_INFO="Github Workflow" \
+            -DCMAKE_INSTALL_PREFIX=prefix \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DSDL_CMAKE_DEBUG_POSTFIX="" \
+            -DCMAKE_BUILD_TYPE=${{ matrix.platform.cmake-build-type }}
+      - name: 'Build (CMake)'
+        id: cmake-build
+        if: ${{ !matrix.platform.no-cmake }}
+#        shell: ${{ matrix.platform.shell }}
+        run: |
+          ${{ matrix.platform.source-cmd }}
+          cmake --build build --config ${{ matrix.platform.cmake-build-type }} --verbose -- ${{ matrix.platform.cmake-build-arguments }}
+      - name: 'Verify SDL_REVISION'
+        if: ${{ !matrix.platform.no-cmake }}
+        run: |
+          echo "This should show us the SDL_REVISION"
+          echo "Shared library:"
+          ${{ (matrix.platform.shared-lib && format('strings build/{0} | grep "Github Workflow"', matrix.platform.shared-lib)) || 'echo "<Shared library not supported by platform>"' }}
+          echo "Static library:"
+          ${{ (matrix.platform.static-lib && format('strings build/{0} | grep "Github Workflow"', matrix.platform.static-lib)) || 'echo "<Static library not supported by platform>"' }}
+      - name: 'Run build-time tests (CMake)'
+        id: cmake-tests
+        if: ${{ !matrix.platform.no-cmake && matrix.platform.run-tests }}
+#        shell: ${{ matrix.platform.shell }}
+        run: |
+          ${{ matrix.platform.source-cmd }}
+          ${{ matrix.platform.pretest-cmd }}
+          set -eu
+          export SDL_TESTS_QUICK=1
+          ctest -VV --test-dir build/ -j2
+      - name: 'Install (CMake)'
+        id: cmake-install
+        if: ${{ steps.build.outcome == 'success' }}
+#        shell: ${{ matrix.platform.shell }}
+        run: |
+          ${{ matrix.platform.source-cmd }}
+          cmake --install build --config ${{ matrix.platform.cmake-build-type }}
+          echo "prefix=$(pwd)/prefix" >> $GITHUB_OUTPUT
+          ( cd prefix; find . ) | LC_ALL=C sort -u
+      - name: 'Verify CMake configuration files (CMake)'
+        if: ${{ steps.cmake-install.outcome == 'success' }}
+#        shell: ${{ matrix.platform.shell }}
+        run: |
+          ${{ matrix.platform.source-cmd }}
+          ${{ matrix.platform.cmake-config-emulator }} cmake -S cmake/test -B cmake_test_build -GNinja \
+            ${{ matrix.platform.cmake-toolchain-file != '' && format('-DCMAKE_TOOLCHAIN_FILE={0}', matrix.platform.cmake-toolchain-file) || '' }} \
+            -DTEST_SHARED=${{ matrix.platform.shared }} \
+            -DTEST_STATIC=${{ matrix.platform.static }} \
+            ${{ matrix.platform.cmake-arguments }} \
+            -DCMAKE_BUILD_TYPE=${{ matrix.platform.cmake-build-type }} \
+            -DCMAKE_PREFIX_PATH="${{ steps.cmake-install.outputs.prefix }}"
+          cmake --build cmake_test_build --verbose --config ${{ matrix.platform.cmake-build-type }} -- ${{ matrix.platform.cmake-build-arguments }}
+      - name: 'Extract CC/CXX/CFLAGS/CXXFLAGS from CMake toolchain'
+        if: ${{ steps.cmake-install.outcome == 'success' && matrix.platform.cc-from-cmake }}
+#        shell: ${{ matrix.platform.shell }}
+        run: |
+          cmake -S .github/cmake -B /tmp/cmake_extract \
+            ${{ matrix.platform.cmake-toolchain-file != '' && format('-DCMAKE_TOOLCHAIN_FILE={0}', matrix.platform.cmake-toolchain-file) || '' }} \
+            -DCMAKE_BUILD_TYPE=${{ matrix.platform.cmake-build-type }} \
+            -DVAR_PATH=/tmp/env.txt
+          cat /tmp/env.txt >> $GITHUB_ENV
+      - name: 'Verify sdl2.pc (CMake)'
+#        shell: ${{ matrix.platform.shell }}
+        if: ${{ steps.cmake-install.outcome == 'success' && matrix.platform.test-pkg-config }}
+        run: |
+          ${{ matrix.platform.source-cmd }}
+          ${{ matrix.platform.cc && format('export CC="{0}"', matrix.platform.cc) || '' }}
+          ${{ matrix.platform.cflags && format('export CFLAGS="{0}"', matrix.platform.cflags) || '' }}
+          ${{ matrix.platform.ldflags && format('export LDFLAGS="{0}"', matrix.platform.ldflags) || '' }}
+          export PKG_CONFIG_PATH=${{ steps.cmake-install.outputs.prefix }}/lib/pkgconfig
+          cmake/test/test_pkgconfig.sh
+      - name: 'Build (cross-platform-actions, BSD)'
+        id: cpactions
+        if: ${{ matrix.platform.cpactions }}
+        uses: cross-platform-actions/action@v0.25.0
+        with:
+          operating_system: ${{ matrix.platform.cpactions-os }}
+          architecture: ${{ matrix.platform.cpactions-arch }}
+          version: ${{ matrix.platform.cpactions-version }}
+          run: |
+            ${{ matrix.platform.cpactions-setup-cmd }}
+            ${{ matrix.platform.cpactions-install-cmd }}
+            cmake -S . -B build -GNinja  \
+              ${{ matrix.platform.cmake-toolchain-file != '' && format('-DCMAKE_TOOLCHAIN_FILE={0}', matrix.platform.cmake-toolchain-file) || '' }} \
+              -Wdeprecated -Wdev -Werror \
+              -DSDL_WERROR=${{ matrix.platform.werror }} \
+              -DSDL_DISABLE_INSTALL_DOCS=OFF \
+              ${{ matrix.platform.cmake-arguments }} \
+              -DSDL_SHARED=${{ matrix.platform.shared }} \
+              -DSDL_STATIC=${{ matrix.platform.static  }} \
+              -DSDL_TEST=ON \
+              -DSDL_VENDOR_INFO="Github Workflow" \
+              -DCMAKE_INSTALL_PREFIX=prefix \
+              -DCMAKE_INSTALL_LIBDIR=lib \
+              -DCMAKE_BUILD_TYPE=${{ matrix.platform.cmake-build-type }}
+            cmake --build build/ --config ${{ matrix.platform.cmake-build-type }} --verbose
+
+            cmake --build build/ --config ${{ matrix.platform.cmake-build-type }} --target clean
+            rm -rf build/CMakeFiles
+            rm -rf build/docs
+      - name: 'Set up Watcom'
+        uses: open-watcom/setup-watcom@v0
+        if: ${{ matrix.platform.watcom-makefile != '' }}
+      - name: 'Build (Watcom)'
+        if: ${{ matrix.platform.watcom-makefile != '' }}
+        run: |
+          wmake -f ${{ matrix.platform.watcom-makefile }} ENABLE_WERROR=1
+      - name: 'Build tests (Watcom)'
+        if: ${{ matrix.platform.watcom-makefile != '' }}
+        run: |
+          cd test
+          wmake -f ${{ matrix.platform.watcom-makefile }} ENABLE_WERROR=1
+      - name: 'Run tests (Watcom)'
+        if: ${{ matrix.platform.watcom-makefile != '' && matrix.platform.run-tests }}
+        run: |
+          cd test
+          wmake -f ${{ matrix.platform.watcom-makefile }} check-quick
+      - name: 'Distclean (Watcom)'
+        if: ${{ matrix.platform.watcom-makefile != '' }}
+        run: |
+          wmake -f ${{ matrix.platform.watcom-makefile }} distclean
+          cd test
+          wmake -f ${{ matrix.platform.watcom-makefile }} distclean
+      - name: 'Add msbuild to PATH'
+        id: setup-msbuild
+        if: ${{ matrix.platform.msvc-project != '' }}
+        uses: microsoft/setup-msbuild@v2
+      - name: Build msbuild
+        if: ${{ matrix.platform.msvc-project != '' }}
+        run: |
+          "$(cygpath -u '${{ steps.setup-msbuild.outputs.msbuildPath }}\msbuild.exe')" ${{ matrix.platform.msvc-project }} -m -p:BuildInParallel=true -p:Configuration=Release ${{ matrix.platform.msvc-project-flags }}
+      - name: 'Build (Android.mk)'
+        if: ${{ matrix.platform.android-mk }}
+        run: |
+          ./build-scripts/androidbuildlibs.sh
+      - name: 'Build (xcode)'
+        if: ${{ matrix.platform.xcode-sdk != '' }}
+        run: |
+          xcodebuild -project Xcode/SDL/SDL.xcodeproj -target "${{ matrix.platform.xcode-target }}" -configuration Release -sdk ${{ matrix.platform.xcode-sdk }} clean build
+      - name: 'Setup Python'
+        uses: 'actions/setup-python@main'
+        if: ${{ matrix.platform.check-sources }}
+        with:
+          python-version: '3.x'
+      - name: 'Check Sources'
+        if: ${{ matrix.platform.check-sources }}
+        run: |
+          set -e
+          build-scripts/test-versioning.sh
+      - name: 'Upload binary package'
+        uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.cmake-tests.outcome == 'failure' }}
+        with:
+          if-no-files-found: ignore
+          name: '${{ matrix.platform.artifact }}-minidumps'
+          path: |
+            build/**/*.dmp
+            build/**/*.exe
+            build/**/*.dll
+            build/**/*.pdb

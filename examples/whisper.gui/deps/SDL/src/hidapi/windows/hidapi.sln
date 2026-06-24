@@ -1,0 +1,29 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 10.00
+# Visual C++ Express 2008
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "hidapi", "hidapi.vcproj", "{A107C21C-418A-4697-BB10-20C3AA60E2E4}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "hidtest", "hidtest.vcproj", "{23E9FF6A-49D1-4993-B2B5-BBB992C6C712}"
+	ProjectSection(ProjectDependencies) = postProject
+		{A107C21C-418A-4697-BB10-20C3AA60E2E4} = {A107C21C-418A-4697-BB10-20C3AA60E2E4}
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Win32 = Debug|Win32
+		Release|Win32 = Release|Win32
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A107C21C-418A-4697-BB10-20C3AA60E2E4}.Debug|Win32.ActiveCfg = Debug|Win32
+		{A107C21C-418A-4697-BB10-20C3AA60E2E4}.Debug|Win32.Build.0 = Debug|Win32
+		{A107C21C-418A-4697-BB10-20C3AA60E2E4}.Release|Win32.ActiveCfg = Release|Win32
+		{A107C21C-418A-4697-BB10-20C3AA60E2E4}.Release|Win32.Build.0 = Release|Win32
+		{23E9FF6A-49D1-4993-B2B5-BBB992C6C712}.Debug|Win32.ActiveCfg = Debug|Win32
+		{23E9FF6A-49D1-4993-B2B5-BBB992C6C712}.Debug|Win32.Build.0 = Debug|Win32
+		{23E9FF6A-49D1-4993-B2B5-BBB992C6C712}.Release|Win32.ActiveCfg = Release|Win32
+		{23E9FF6A-49D1-4993-B2B5-BBB992C6C712}.Release|Win32.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

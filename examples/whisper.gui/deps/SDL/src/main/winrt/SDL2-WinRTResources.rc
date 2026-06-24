@@ -1,0 +1,3 @@
+#include "winres.h"
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+5000 CURSOR "SDL2-WinRTResource_BlankCursor.cur"

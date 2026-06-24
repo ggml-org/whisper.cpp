@@ -1,0 +1,93 @@
+name: 'Setup GLES for PlayStation Vita'
+description: 'Download GLES for VITA (PVR or PIB), and copy it into the vita sdk'
+inputs:
+  pib-version:
+    description: 'PIB version'
+    default: '1.1.4'
+  pvr-version:
+    description: 'PVR_PSP2 version'
+    default: '3.9'
+  type:
+    description: '"pib" or "pvr"'
+    default: ''
+runs:
+  using: 'composite'
+  steps:
+    - name: 'Calculate variables'
+      id: calc
+      shell: sh
+      run: |
+        if test "x${VITASDK}" = "x"; then
+          echo "VITASDK must be defined"
+          exit 1;
+        fi
+        case "x${{ inputs.type }}" in
+          "xpvr")
+            echo "cache-key=SDL-vita-gles-pvr-${{ inputs.pvr-version}}" >> ${GITHUB_OUTPUT}
+            ;;
+          "xpib")
+            echo "cache-key=SDL-vita-gles-pib-${{ inputs.pib-version}}" >> ${GITHUB_OUTPUT}
+            ;;
+          *)
+            echo "Invalid type. Must be 'pib' or 'pvr'."
+            exit 1
+            ;;
+        esac
+    - uses: actions/cache/restore@v4
+      id: restore-cache
+      with:
+        path: /vita/dependencies
+        key: '${{ steps.calc.outputs.cache-key }}'
+    - name: 'Download PVR_PSP2 (GLES)'
+      if: ${{ !steps.restore-cache.outputs.cache-hit && inputs.type == 'pvr' }}
+      shell: sh
+      run: |
+        pvr_psp2_version=${{ inputs.pvr-version }}
+        
+        mkdir -p /vita/dependencies/include
+        mkdir -p /vita/dependencies/lib
+        
+        # Configure PVR_PSP2 headers
+        wget https://github.com/GrapheneCt/PVR_PSP2/archive/refs/tags/v$pvr_psp2_version.zip -P/tmp
+        unzip /tmp/v$pvr_psp2_version.zip -d/tmp
+        cp -r /tmp/PVR_PSP2-$pvr_psp2_version/include/* /vita/dependencies/include
+        rm /tmp/v$pvr_psp2_version.zip
+        
+        # include guard of PVR_PSP2's khrplatform.h does not match the usual one
+        sed -i -e s/__drvkhrplatform_h_/__khrplatform_h_/ /vita/dependencies/include/KHR/khrplatform.h
+        
+        # Configure PVR_PSP2 stub libraries
+        wget https://github.com/GrapheneCt/PVR_PSP2/releases/download/v$pvr_psp2_version/vitasdk_stubs.zip -P/tmp
+        unzip /tmp/vitasdk_stubs.zip -d/tmp/pvr_psp2_stubs
+        find /tmp/pvr_psp2_stubs -type f -name "*.a" -exec cp {} /vita/dependencies/lib \;
+        rm /tmp/vitasdk_stubs.zip
+        rm -rf /tmp/pvr_psp2_stubs
+
+    - name: 'Download gl4es4vita (OpenGL)'
+      if: ${{ !steps.restore-cache.outputs.cache-hit && inputs.type == 'pib' }}
+      shell: sh
+      run: |
+        gl4es4vita_version=${{ inputs.pib-version }}
+        
+        mkdir -p /vita/dependencies/include
+        mkdir -p /vita/dependencies/lib
+        
+        # Configure gl4es4vita headers
+        wget https://github.com/SonicMastr/gl4es4vita/releases/download/v$gl4es4vita_version-vita/include.zip -P/tmp
+        unzip -o /tmp/include.zip -d/vita/dependencies/include
+        rm /tmp/include.zip
+        
+        # Configure gl4es4vita stub libraries
+        wget https://github.com/SonicMastr/gl4es4vita/releases/download/v$gl4es4vita_version-vita/vitasdk_stubs.zip -P/tmp
+        unzip /tmp/vitasdk_stubs.zip -d/vita/dependencies/lib
+
+    - uses: actions/cache/save@v4
+      if: ${{ !steps.restore-cache.outputs.cache-hit }}
+      with:
+        path: /vita/dependencies
+        key: '${{ steps.calc.outputs.cache-key }}'
+
+    - name: Copy PVR_PSP2 (GLES) or gl4es4vita (OpenGL) to vita toolchain dir
+      shell: sh
+      run: |
+        cp -rv /vita/dependencies/* ${VITASDK}/arm-vita-eabi

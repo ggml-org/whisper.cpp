@@ -1,0 +1,64 @@
+# Makefile to build the pandora SDL library
+
+AR	= arm-none-linux-gnueabi-ar
+RANLIB	= arm-none-linux-gnueabi-ranlib
+CC = arm-none-linux-gnueabi-gcc
+CXX = arm-none-linux-gnueabi-g++
+STRIP = arm-none-linux-gnueabi-strip
+
+CFLAGS  = -O3 -march=armv7-a -mcpu=cortex-a8 -mtune=cortex-a8 -mfloat-abi=softfp \
+	-mfpu=neon -ftree-vectorize -ffast-math -fomit-frame-pointer -fno-strict-aliasing -fsingle-precision-constant \
+	-I./include -I$(PNDSDK)/usr/include
+
+TARGET  = libSDL2.a
+
+SOURCES = 
+	./src/*.c \
+	./src/atomic/*.c \
+	./src/audio/*.c \
+	./src/audio/disk/*.c \
+	./src/audio/dsp/*.c \
+	./src/audio/dummy/*.c \
+	./src/cpuinfo/*.c \
+	./src/events/*.c \
+	./src/file/*.c \
+	./src/filesystem/unix/*.c \
+	./src/haptic/*.c \
+	./src/haptic/linux/*.c \
+	./src/hidapi/*.c \
+	./src/joystick/*.c \
+	./src/joystick/linux/*.c \
+	./src/loadso/dlopen/*.c \
+	./src/locale/*.c \
+	./src/locale/unix/*.c \
+	./src/misc/*.c \
+	./src/misc/unix/*.c \
+	./src/power/*.c \
+	./src/sensor/*.c \
+	./src/sensor/dummy/*.c \
+	./src/stdlib/*.c \
+	./src/thread/*.c \
+	./src/thread/pthread/SDL_syscond.c \
+	./src/thread/pthread/SDL_sysmutex.c \
+	./src/thread/pthread/SDL_syssem.c \
+	./src/thread/pthread/SDL_systhread.c \
+	./src/timer/*.c \
+	./src/timer/unix/*.c \
+	./src/video/*.c \
+	./src/video/yuv2rgb/*.c \
+	./src/video/dummy/*.c \
+	./src/video/x11/*.c \
+	./src/video/pandora/*.c
+
+OBJECTS = $(shell echo $(SOURCES) | sed -e 's,\.c,\.o,g')
+
+CONFIG_H = $(shell cp include/SDL_config_pandora.h include/SDL_config.h)
+
+all: $(TARGET)
+
+$(TARGET): $(CONFIG_H) $(OBJECTS)
+	$(AR) crv $@ $^
+	$(RANLIB) $@
+
+clean:
+	rm -f $(TARGET) $(OBJECTS)

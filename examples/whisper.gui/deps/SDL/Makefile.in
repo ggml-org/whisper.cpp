@@ -1,0 +1,263 @@
+# Makefile to build and install the SDL library
+
+top_builddir = .
+srcdir  = @srcdir@
+objects = build
+gen = gen
+prefix = @prefix@
+exec_prefix = @exec_prefix@
+bindir	= @bindir@
+libdir  = @libdir@
+includedir = @includedir@
+datarootdir = @datarootdir@
+datadir	= @datadir@
+auxdir	= @ac_aux_dir@
+distpath = $(srcdir)/..
+distdir = SDL2-@SDL_VERSION@
+distfile = $(distdir).tar.gz
+
+@SET_MAKE@
+SHELL	= @SHELL@
+CC      = @CC@
+CXX     = @CXX@
+INCLUDE = @INCLUDE@
+CFLAGS  = @BUILD_CFLAGS@
+EXTRA_CFLAGS = @EXTRA_CFLAGS@
+LDFLAGS = @BUILD_LDFLAGS@
+EXTRA_LDFLAGS = @EXTRA_LDFLAGS@
+LIBTOOL = @LIBTOOL@
+INSTALL = @INSTALL@
+FGREP	= @FGREP@
+AR	= @AR@
+RANLIB	= @RANLIB@
+RC	= @RC@
+LINKER = @LINKER@
+LIBTOOLLINKERTAG = @LIBTOOLLINKERTAG@
+SDL_VENDOR_INFO = @SDL_VENDOR_INFO@
+
+TARGET  = libSDL2.la
+OBJECTS = @OBJECTS@
+GEN_HEADERS = @GEN_HEADERS@
+GEN_OBJECTS = @GEN_OBJECTS@
+VERSION_OBJECTS = @VERSION_OBJECTS@
+
+SDLMAIN_TARGET = libSDL2main.la
+SDLMAIN_OBJECTS = @SDLMAIN_OBJECTS@
+
+SDLTEST_TARGET = libSDL2_test.la
+SDLTEST_OBJECTS = @SDLTEST_OBJECTS@
+
+WAYLAND_SCANNER = @WAYLAND_SCANNER@
+WAYLAND_SCANNER_CODE_MODE = @WAYLAND_SCANNER_CODE_MODE@
+
+INSTALL_SDL2_CONFIG = @INSTALL_SDL2_CONFIG@
+
+SRC_DIST = *.md *.txt acinclude Android.mk autogen.sh android-project build-scripts cmake cmake_uninstall.cmake.in configure configure.ac docs include Makefile.* mingw sdl2-config.cmake.in sdl2-config-version.cmake.in sdl2-config.in sdl2.m4 sdl2.pc.in SDL2.spec.in SDL2Config.cmake.in src test VisualC VisualC-GDK VisualC-WinRT Xcode Xcode-iOS wayland-protocols
+GEN_DIST = SDL2.spec
+
+ifneq ($V,1)
+RUN_CMD_AR     = @echo "  AR    " $@;
+RUN_CMD_CC     = @echo "  CC    " $@;
+RUN_CMD_CXX    = @echo "  CXX   " $@;
+RUN_CMD_LTLINK = @echo "  LTLINK" $@;
+RUN_CMD_RANLIB = @echo "  RANLIB" $@;
+RUN_CMD_RC     = @echo "  RC    " $@;
+RUN_CMD_GEN    = @echo "  GEN   " $@;
+LIBTOOL += --quiet
+endif
+
+HDRS = \
+	SDL.h \
+	SDL_assert.h \
+	SDL_atomic.h \
+	SDL_audio.h \
+	SDL_bits.h \
+	SDL_blendmode.h \
+	SDL_clipboard.h \
+	SDL_cpuinfo.h \
+	SDL_egl.h \
+	SDL_endian.h \
+	SDL_error.h \
+	SDL_events.h \
+	SDL_filesystem.h \
+	SDL_gamecontroller.h \
+	SDL_gesture.h \
+	SDL_guid.h \
+	SDL_haptic.h \
+	SDL_hidapi.h \
+	SDL_hints.h \
+	SDL_joystick.h \
+	SDL_keyboard.h \
+	SDL_keycode.h \
+	SDL_loadso.h \
+	SDL_locale.h \
+	SDL_log.h \
+	SDL_main.h \
+	SDL_messagebox.h \
+	SDL_metal.h \
+	SDL_misc.h \
+	SDL_mouse.h \
+	SDL_mutex.h \
+	SDL_name.h \
+	SDL_opengl.h \
+	SDL_opengl_glext.h \
+	SDL_opengles.h \
+	SDL_opengles2_gl2ext.h \
+	SDL_opengles2_gl2.h \
+	SDL_opengles2_gl2platform.h \
+	SDL_opengles2.h \
+	SDL_opengles2_khrplatform.h \
+	SDL_pixels.h \
+	SDL_platform.h \
+	SDL_power.h \
+	SDL_quit.h \
+	SDL_rect.h \
+	SDL_render.h \
+	SDL_rwops.h \
+	SDL_scancode.h \
+	SDL_sensor.h \
+	SDL_shape.h \
+	SDL_stdinc.h \
+	SDL_surface.h \
+	SDL_system.h \
+	SDL_syswm.h \
+	SDL_thread.h \
+	SDL_timer.h \
+	SDL_touch.h \
+	SDL_types.h \
+	SDL_version.h \
+	SDL_video.h \
+	SDL_vulkan.h \
+	begin_code.h \
+	close_code.h
+
+SDLTEST_HDRS = $(shell ls $(srcdir)/include | $(FGREP) SDL_test)
+
+LT_AGE      = @LT_AGE@
+LT_CURRENT  = @LT_CURRENT@
+LT_RELEASE  = @LT_RELEASE@
+LT_REVISION = @LT_REVISION@
+LT_LDFLAGS  = -no-undefined -rpath $(libdir) -release $(LT_RELEASE) -version-info $(LT_CURRENT):$(LT_REVISION):$(LT_AGE)
+
+all: $(srcdir)/configure Makefile $(objects)/$(TARGET) $(objects)/$(SDLMAIN_TARGET) $(objects)/$(SDLTEST_TARGET)
+
+$(srcdir)/configure: $(srcdir)/configure.ac
+	@echo "Warning, configure is out of date, please re-run autogen.sh"
+
+Makefile: $(srcdir)/Makefile.in
+	$(SHELL) config.status $@
+
+Makefile.in:;
+
+$(objects)/.created:
+	$(SHELL) $(auxdir)/mkinstalldirs $(objects)
+	touch $@
+
+update-revision:
+	$(SHELL) $(auxdir)/updaterev.sh --vendor "$(SDL_VENDOR_INFO)"
+
+.PHONY: all update-revision install install-bin install-hdrs install-lib install-data uninstall uninstall-bin uninstall-hdrs uninstall-lib uninstall-data clean distclean dist $(OBJECTS:.lo=.d)
+
+$(objects)/$(TARGET): $(GEN_HEADERS) $(GEN_OBJECTS) $(OBJECTS) $(VERSION_OBJECTS)
+	$(RUN_CMD_LTLINK)$(LIBTOOL) --tag=$(LIBTOOLLINKERTAG) --mode=link $(LINKER) -o $@ $(OBJECTS) $(GEN_OBJECTS) $(VERSION_OBJECTS) $(LDFLAGS) $(EXTRA_LDFLAGS) $(LT_LDFLAGS)
+
+$(objects)/$(SDLMAIN_TARGET): $(SDLMAIN_OBJECTS)
+	$(RUN_CMD_LTLINK)$(LIBTOOL) --tag=$(LIBTOOLLINKERTAG) --mode=link $(LINKER) -static -o $@ $(SDLMAIN_OBJECTS) -rpath $(libdir)
+
+$(objects)/$(SDLTEST_TARGET): $(SDLTEST_OBJECTS)
+	$(RUN_CMD_LTLINK)$(LIBTOOL) --tag=$(LIBTOOLLINKERTAG) --mode=link $(LINKER) -static -o $@ $(SDLTEST_OBJECTS) -rpath $(libdir)
+
+install: all install-bin install-hdrs install-lib install-data
+install-bin:
+ifeq ($(INSTALL_SDL2_CONFIG),TRUE)
+	$(SHELL) $(auxdir)/mkinstalldirs $(DESTDIR)$(bindir)
+	$(INSTALL) -m 755 sdl2-config $(DESTDIR)$(bindir)/sdl2-config
+endif
+
+install-hdrs: update-revision
+	$(SHELL) $(auxdir)/mkinstalldirs $(DESTDIR)$(includedir)/SDL2
+	for file in $(HDRS) $(SDLTEST_HDRS); do \
+	    $(INSTALL) -m 644 $(srcdir)/include/$$file $(DESTDIR)$(includedir)/SDL2/$$file; \
+	done
+	$(INSTALL) -m 644 include/SDL_config.h $(DESTDIR)$(includedir)/SDL2/SDL_config.h
+	if test -f include/SDL_revision.h; then \
+	    $(INSTALL) -m 644 include/SDL_revision.h $(DESTDIR)$(includedir)/SDL2/SDL_revision.h; \
+	else \
+	    $(INSTALL) -m 644 $(srcdir)/include/SDL_revision.h $(DESTDIR)$(includedir)/SDL2/SDL_revision.h; \
+	fi
+
+install-lib: $(objects)/$(TARGET) $(objects)/$(SDLMAIN_TARGET) $(objects)/$(SDLTEST_TARGET)
+	$(SHELL) $(auxdir)/mkinstalldirs $(DESTDIR)$(libdir)
+	$(LIBTOOL) --mode=install $(INSTALL) $(objects)/$(TARGET) $(DESTDIR)$(libdir)/$(TARGET)
+	$(LIBTOOL) --mode=install $(INSTALL) $(objects)/$(SDLMAIN_TARGET) $(DESTDIR)$(libdir)/$(SDLMAIN_TARGET)
+	$(LIBTOOL) --mode=install $(INSTALL) $(objects)/$(SDLTEST_TARGET) $(DESTDIR)$(libdir)/$(SDLTEST_TARGET)
+install-data:
+	$(SHELL) $(auxdir)/mkinstalldirs $(DESTDIR)$(datadir)/aclocal
+	$(INSTALL) -m 644 $(srcdir)/sdl2.m4 $(DESTDIR)$(datadir)/aclocal/sdl2.m4
+	$(SHELL) $(auxdir)/mkinstalldirs $(DESTDIR)$(libdir)/pkgconfig
+	$(INSTALL) -m 644 sdl2.pc $(DESTDIR)$(libdir)/pkgconfig
+ifeq ($(INSTALL_SDL2_CONFIG),TRUE)
+	$(SHELL) $(auxdir)/mkinstalldirs $(DESTDIR)$(libdir)/cmake/SDL2
+	$(INSTALL) -m 644 sdl2-config.cmake $(DESTDIR)$(libdir)/cmake/SDL2
+	$(INSTALL) -m 644 sdl2-config-version.cmake $(DESTDIR)$(libdir)/cmake/SDL2
+endif
+
+uninstall: uninstall-bin uninstall-hdrs uninstall-lib uninstall-data
+uninstall-bin:
+	rm -f $(DESTDIR)$(bindir)/sdl2-config
+uninstall-hdrs:
+	for file in $(HDRS) $(SDLTEST_HDRS); do \
+	    rm -f $(DESTDIR)$(includedir)/SDL2/$$file; \
+	done
+	rm -f $(DESTDIR)$(includedir)/SDL2/SDL_config.h
+	rm -f $(DESTDIR)$(includedir)/SDL2/SDL_revision.h
+	-rmdir $(DESTDIR)$(includedir)/SDL2
+uninstall-lib:
+	$(LIBTOOL) --mode=uninstall rm -f $(DESTDIR)$(libdir)/$(TARGET)
+	rm -f $(DESTDIR)$(libdir)/$(SDLMAIN_TARGET)
+	rm -f $(DESTDIR)$(libdir)/$(SDLTEST_TARGET)
+uninstall-data:
+	rm -f $(DESTDIR)$(datadir)/aclocal/sdl2.m4
+	rm -f $(DESTDIR)$(libdir)/pkgconfig/sdl2.pc
+	rm -f $(DESTDIR)$(libdir)/cmake/SDL2/sdl2-config.cmake
+	rm -f $(DESTDIR)$(libdir)/cmake/SDL2/sdl2-config-version.cmake
+
+clean:
+	rm -rf $(objects)
+	rm -rf $(gen)
+	if test -f test/Makefile; then (cd test; $(MAKE) $@); fi
+
+distclean: clean
+	rm -f Makefile Makefile.rules sdl2-config
+	rm -f config.status config.cache config.log libtool
+	rm -rf $(srcdir)/autom4te*
+	find $(srcdir) \( \
+	    -name '*~' -o \
+	    -name '*.bak' -o \
+	    -name '*.old' -o \
+	    -name '*.rej' -o \
+	    -name '*.orig' -o \
+	    -name '.#*' \) \
+	    -exec rm -f {} \;
+	if test -f test/Makefile; then (cd test; $(MAKE) $@); fi
+
+dist $(distfile):
+	$(SHELL) $(auxdir)/mkinstalldirs $(distdir)
+	(cd $(srcdir); tar cf - $(SRC_DIST)) | (cd $(distdir); tar xf -)
+	tar cf - $(GEN_DIST) | (cd $(distdir); tar xf -)
+	find $(distdir) \( \
+	    -name '*~' -o \
+	    -name '*.bak' -o \
+	    -name '*.old' -o \
+	    -name '*.rej' -o \
+	    -name '*.orig' -o \
+	    -name '.#*' \) \
+	    -exec rm -f {} \;
+	if test -f $(distdir)/test/Makefile; then (cd $(distdir)/test && make distclean); fi
+	# Intentionally no vendor suffix: that's a property of the build, not the source
+	(cd $(distdir); $(srcdir)/build-scripts/updaterev.sh --dist)
+	tar cvf - $(distdir) | gzip --best >$(distfile)
+	rm -rf $(distdir)
+
+rpm: $(distfile)
+	rpmbuild -ta $?

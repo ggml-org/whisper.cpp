@@ -1,0 +1,4 @@
+# OpenWatcom exports file for libiconv
+++'libiconv'.'ICONV2'..'_libiconv'
+++'libiconv_close'.'ICONV2'..'_libiconv_close'
+++'libiconv_open'.'ICONV2'..'_libiconv_open'

@@ -114,11 +114,14 @@ else()
         add_subdirectory(command)
         add_subdirectory(talk-llama)
         add_subdirectory(lsp)
-        add_subdirectory(whisper.gui)
         if (GGML_SYCL)
             add_subdirectory(sycl)
         endif()
     endif (WHISPER_SDL2)
+
+    # whisper.gui is self-contained (vendored SDL2 + Dear ImGui) and gated by its
+    # own WHISPER_GUI option, so it is registered independently of WHISPER_SDL2.
+    add_subdirectory(whisper.gui)
 
     add_subdirectory(deprecation-warning)
 endif()

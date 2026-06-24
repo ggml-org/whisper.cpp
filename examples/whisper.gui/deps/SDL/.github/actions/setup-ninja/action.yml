@@ -1,0 +1,62 @@
+name: 'Setup ninja'
+description: 'Download ninja and add it to the PATH environment variable'
+inputs:
+  version:
+    description: 'Ninja version'
+    default: '1.12.1'
+runs:
+  using: 'composite'
+  steps:
+    - name: 'Calculate variables'
+      id: calc
+      shell: sh
+      run: |
+        case "${{ runner.os }}-${{ runner.arch }}" in
+          "Linux-X86" | "Linux-X64")
+            archive="ninja-linux.zip"
+            ;;
+          "Linux-ARM64")
+            archive="ninja-linux-aarch64.zip"
+            ;;
+          "macOS-X86" | "macOS-X64" | "macOS-ARM64")
+            archive="ninja-mac.zip"
+            ;;
+          "Windows-X86" | "Windows-X64")
+            archive="ninja-win.zip"
+            ;;
+          "Windows-ARM64")
+            archive="ninja-winarm64.zip"
+            ;;
+          *)
+            echo "Unsupported ${{ runner.os }}-${{ runner.arch }}"
+            exit 1;
+            ;;
+        esac
+        echo "archive=${archive}" >> ${GITHUB_OUTPUT}
+        echo "cache-key=${archive}-${{ inputs.version }}-${{ runner.os }}-${{ runner.arch }}" >> ${GITHUB_OUTPUT}
+    - name: 'Restore cached ${{ steps.calc.outputs.archive }}'
+      id: cache-restore
+      uses: actions/cache/restore@v4
+      with:
+        path: '${{ runner.temp }}/${{ steps.calc.outputs.archive }}'
+        key: ${{ steps.calc.outputs.cache-key }}
+    - name: 'Download ninja ${{ inputs.version }} for ${{ runner.os }} (${{ runner.arch }})'
+      if: ${{ !steps.cache-restore.outputs.cache-hit }}
+      shell: pwsh
+      run: |
+        Invoke-WebRequest "https://github.com/ninja-build/ninja/releases/download/v${{ inputs.version }}/${{ steps.calc.outputs.archive }}" -OutFile "${{ runner.temp }}/${{ steps.calc.outputs.archive }}"
+    - name: 'Cache ${{ steps.calc.outputs.archive }}'
+      if: ${{ !steps.cache-restore.outputs.cache-hit }}
+      uses: actions/cache/save@v4
+      with:
+        path: '${{ runner.temp }}/${{ steps.calc.outputs.archive }}'
+        key: ${{ steps.calc.outputs.cache-key }}
+    - name: 'Extract libusb'
+      shell: pwsh
+      run: |
+        7z "-o${{ runner.temp }}/ninja-${{ inputs.version }}-${{ runner.arch }}" x "${{ runner.temp }}/${{ steps.calc.outputs.archive }}"
+    - name: 'Set output variables'
+      id: final
+      shell: pwsh
+      run: |
+        echo "${{ runner.temp }}/ninja-${{ inputs.version }}-${{ runner.arch }}" >> $env:GITHUB_PATH

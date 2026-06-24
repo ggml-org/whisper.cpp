@@ -1,0 +1,82 @@
+name: 'Setup GDK (Game Development Kit) for Windows Desktop'
+description: 'Download GDK and install into MSBuild'
+inputs:
+  # Keep edition and ref in sync!
+  edition:
+    description: 'GDK edition'
+    default: '240601'  # YYMMUU (Year Month Update)
+  ref:
+    description: 'Git reference'
+    default: 'June_2024_Update_1'
+  folder:
+    description: 'Folder where to create Directory.Build.props'
+    required: true
+    default: '${{ github.workspace }}'
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/setup-python@main
+      with:
+        python-version: 3.x
+    - name: 'Calculate variables'
+      id: calc
+      shell: pwsh
+      run: |
+        $vs_folder=@(vswhere -latest -property installationPath)
+        echo "vs-folder=${vs_folder}" >> $Env:GITHUB_OUTPUT
+        
+        echo "gdk-path=${{ runner.temp }}\GDK-${{ inputs.edition }}" >> $Env:GITHUB_OUTPUT
+
+        echo "cache-key=gdk-${{ inputs.ref }}-${{ inputs.edition }}" >> $Env:GITHUB_OUTPUT
+    - name: 'Restore cached GDK'
+      id: cache-restore
+      uses: actions/cache/restore@v4
+      with:
+        path: '${{ steps.calc.outputs.gdk-path }}'
+        key: ${{ steps.calc.outputs.cache-key }}
+    - name: 'Download GDK'
+      if: ${{ !steps.cache-restore.outputs.cache-hit }}
+      shell: pwsh
+      run: |
+        python build-scripts/setup-gdk-desktop.py                 `
+          --download                                              `
+          --temp-folder "${{ runner.temp }}"                      `
+          --gdk-path="${{ steps.calc.outputs.gdk-path }}"         `
+          --ref-edition "${{ inputs.ref }},${{ inputs.edition }}" `
+          --vs-folder="${{ steps.calc.outputs.vs-folder }}"       `
+          --no-user-props
+    - name: 'Extract GDK'
+      if: ${{ !steps.cache-restore.outputs.cache-hit }}
+      shell: pwsh
+      run: |
+        python build-scripts/setup-gdk-desktop.py                 `
+          --extract                                               `
+          --ref-edition "${{ inputs.ref }},${{ inputs.edition }}" `
+          --temp-folder "${{ runner.temp }}"                      `
+          --gdk-path="${{ steps.calc.outputs.gdk-path }}"         `
+          --vs-folder="${{ steps.calc.outputs.vs-folder }}"       `
+          --no-user-props
+    - name: 'Cache GDK'
+      if: ${{ !steps.cache-restore.outputs.cache-hit }}
+      uses: actions/cache/save@v4
+      with:
+        path: '${{ steps.calc.outputs.gdk-path }}'
+        key: ${{ steps.calc.outputs.cache-key }}
+    - name: 'Copy MSBuild files into GDK'
+      shell: pwsh
+      run: |
+        python build-scripts/setup-gdk-desktop.py                 `
+          --ref-edition "${{ inputs.ref }},${{ inputs.edition }}" `
+          --gdk-path="${{ steps.calc.outputs.gdk-path }}"         `
+          --vs-folder="${{ steps.calc.outputs.vs-folder }}"       `
+          --copy-msbuild                                          `
+          --no-user-props
+    - name: 'Write user props'
+      shell: pwsh
+      run: |
+        python build-scripts/setup-gdk-desktop.py                 `
+          --ref-edition "${{ inputs.ref }},${{ inputs.edition }}" `
+          --temp-folder "${{ runner.temp }}"                      `
+          --vs-folder="${{ steps.calc.outputs.vs-folder }}"       `
+          --gdk-path="${{ steps.calc.outputs.gdk-path }}"         `
+          "--props-folder=${{ inputs.folder }}"
