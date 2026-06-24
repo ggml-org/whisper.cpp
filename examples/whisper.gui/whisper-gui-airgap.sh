@@ -27,7 +27,9 @@ BUNDLE="$(cd "$BUNDLE" && pwd)"
 GH=https://github.com/k2-fsa/sherpa-onnx/releases/download
 EMB="$GH/speaker-recongition-models/nemo_en_titanet_small.onnx"
 SEG="$GH/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
-WHISPER_MODEL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
+# whisper model to bundle (override: WHISPER_MODEL_NAME=large-v3 ./... stage)
+WHISPER_MODEL_NAME="${WHISPER_MODEL_NAME:-large-v3-turbo}"
+WHISPER_MODEL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${WHISPER_MODEL_NAME}.bin"
 
 PKGS_DNF="gcc-c++ cmake mesa-libGL-devel libX11-devel libXext-devel libxkbcommon-devel wayland-devel python3 python3-pip"
 PKGS_APT="g++ cmake libgl1-mesa-dev libx11-dev libxext-dev libxkbcommon-dev libwayland-dev python3 python3-pip python3-venv"
@@ -50,7 +52,7 @@ do_stage() {
         || die "pip download failed"
 
     say "downloading models (~190 MB)"
-    [ -f "$BUNDLE/models/ggml-base.en.bin" ]           || curl -fL -o "$BUNDLE/models/ggml-base.en.bin" "$WHISPER_MODEL"
+    [ -f "$BUNDLE/models/ggml-${WHISPER_MODEL_NAME}.bin" ] || curl -fL -o "$BUNDLE/models/ggml-${WHISPER_MODEL_NAME}.bin" "$WHISPER_MODEL"
     [ -f "$BUNDLE/models/nemo_en_titanet_small.onnx" ] || curl -fL -o "$BUNDLE/models/nemo_en_titanet_small.onnx" "$EMB"
     [ -f "$BUNDLE/models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2" ] || \
         curl -fL -o "$BUNDLE/models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2" "$SEG"
@@ -114,7 +116,7 @@ do_install() {
 
     # 3. models into repo/models (+ extract segmentation)
     mkdir -p "$repo/models"
-    cp -f "$BUNDLE/models/ggml-base.en.bin" "$BUNDLE/models/nemo_en_titanet_small.onnx" "$repo/models/"
+    cp -f "$BUNDLE"/models/ggml-*.bin "$BUNDLE/models/nemo_en_titanet_small.onnx" "$repo/models/"
     [ -f "$repo/models/sherpa-onnx-pyannote-segmentation-3-0/model.onnx" ] || \
         tar -xf "$BUNDLE/models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2" -C "$repo/models"
 
