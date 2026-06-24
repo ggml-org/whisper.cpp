@@ -125,6 +125,38 @@ works under Wayland as well as X11.)
 
 ## Air-gapped workflow
 
+### Linux (scripted)
+
+[`whisper-gui-airgap.sh`](whisper-gui-airgap.sh) automates the whole two-stage
+flow, including the **neural diarization** dependencies (Python wheels + models),
+which the manual steps below do not:
+
+```bash
+# 1) on a CONNECTED machine, from the repo root:
+examples/whisper.gui/whisper-gui-airgap.sh stage ./whisper-gui-bundle
+#    -> bundles the python wheels (sherpa-onnx, numpy), the whisper +
+#       diarization models, the OS dev packages (dnf/apt, best-effort), and a
+#       copy of the repo.
+
+# 2) copy ./whisper-gui-bundle to the OFFLINE machine, then:
+./whisper-gui-bundle/whisper-gui-airgap.sh install ./whisper-gui-bundle
+#    -> installs the deps offline, builds whisper-gui, sets up an isolated venv
+#       for diarization, and writes run-whisper-gui.sh
+
+# then launch (the launcher wires the venv's python + repo-root cwd):
+./whisper-gui-bundle/repo/run-whisper-gui.sh
+```
+
+Staging the OS dev packages is the one distro-specific, best-effort part; if it
+can't resolve them, install the build deps on the target the normal way (or set
+`SKIP_PKGS=1` when staging) — everything else is handled. Wheels are matched to
+the staging machine's Python, so stage on a box whose Python minor version
+matches the target.
+
+### Linux (manual, build only)
+
+If you only need the GUI (no neural diarization) and will handle deps yourself:
+
 1. On a **connected** machine, `git clone` this repository (or your fork). The
    clone already contains SDL2 and Dear ImGui under `examples/whisper.gui/deps/`,
    so nothing else needs downloading.
