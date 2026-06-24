@@ -66,3 +66,84 @@ options:
   --grammar-rule RULE            [       ] top-level GBNF grammar rule name
   --grammar-penalty N            [100.0  ] scales down logits of nongrammar tokens
 ```
+
+## Converting audio & video to WAV
+
+The Whisper model expects **16 kHz, mono, 16-bit PCM** audio. `whisper-cli` can read
+`flac`, `mp3`, `ogg` and `wav` directly, but converting to a 16 kHz mono WAV first is
+the most reliable path and is **required** for video files (e.g. `.mp4`), whose audio
+track must be extracted first.
+
+All examples below use [`ffmpeg`](https://ffmpeg.org/), which handles virtually every
+audio and video format.
+
+### Install ffmpeg
+
+```bash
+# macOS (Homebrew)
+brew install ffmpeg
+
+# Debian / Ubuntu
+sudo apt install ffmpeg
+
+# Windows (winget)  -- or download a build from https://ffmpeg.org/download.html
+winget install Gyan.FFmpeg
+```
+
+### Convert an MP3 to WAV
+
+```bash
+ffmpeg -i input.mp3 -ar 16000 -ac 1 -c:a pcm_s16le output.wav
+```
+
+### Extract the audio from an MP4 (or any video) to WAV
+
+```bash
+ffmpeg -i input.mp4 -vn -ar 16000 -ac 1 -c:a pcm_s16le output.wav
+```
+
+What the flags mean:
+
+| Flag             | Meaning                                                        |
+| ---------------- | ------------------------------------------------------------- |
+| `-i input`       | input file (any format ffmpeg supports)                       |
+| `-ar 16000`      | resample to **16 kHz** (the rate Whisper expects)             |
+| `-ac 1`          | downmix to **mono** (1 channel)                               |
+| `-c:a pcm_s16le` | encode as **16-bit** little-endian PCM (standard WAV)         |
+| `-vn`            | drop the video stream — keep audio only (use for `.mp4` etc.) |
+
+Then run the tool on the result:
+
+```bash
+./build/bin/whisper-cli -m models/ggml-base.en.bin -f output.wav
+```
+
+### Convert a whole folder
+
+```bash
+# converts every .mp3 in the current directory to a 16 kHz mono .wav
+for f in *.mp3; do
+    ffmpeg -i "$f" -ar 16000 -ac 1 -c:a pcm_s16le "${f%.*}.wav"
+done
+```
+
+### Convert only part of a file
+
+Use `-ss` (start) and `-t` (duration) to extract a clip — useful for quick tests:
+
+```bash
+# 30 seconds starting at 1 minute 5 seconds
+ffmpeg -ss 00:01:05 -t 30 -i input.mp4 -vn -ar 16000 -ac 1 -c:a pcm_s16le clip.wav
+```
+
+### Verify the result
+
+```bash
+ffprobe output.wav
+```
+
+Confirm the stream reads `pcm_s16le`, `16000 Hz`, `mono`. If it does, the file is ready
+for `whisper-cli`.
+
+> Tip: stereo audio can be transcribed with two-speaker diarization (`-di`). In that
+> case keep both channels — convert with `-ac 2` instead of `-ac 1`.
