@@ -33,6 +33,13 @@
 #include <vector>
 #include <algorithm>
 
+// python launcher used for the neural-diarization helper
+#ifdef _WIN32
+static const char * kPython = "python";
+#else
+static const char * kPython = "python3";
+#endif
+
 struct segment {
     int64_t     t0;
     int64_t     t1;
@@ -210,7 +217,7 @@ static void transcribe_worker(app_state * s,
         for (size_t i = 0; i < segs.size(); ++i) spans[i] = {segs[i].t0, segs[i].t1};
         std::vector<int> labels;
         std::string err;
-        if (neural_diarize("python3", diarize_script, pcmf32, spans, num_speakers, "", labels, err)) {
+        if (neural_diarize(kPython, diarize_script, pcmf32, spans, num_speakers, "", labels, err)) {
             int n_spk = 0;
             for (size_t i = 0; i < segs.size() && i < labels.size(); ++i) {
                 segs[i].speaker = labels[i];

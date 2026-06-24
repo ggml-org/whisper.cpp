@@ -12,8 +12,19 @@
 using json = nlohmann::json;
 namespace fs = std::filesystem;
 
-// POSIX single-quote a string so paths with spaces/specials survive the shell
+// Quote a command argument so paths with spaces survive the shell that
+// std::system() uses (cmd.exe on Windows, /bin/sh elsewhere).
 static std::string shq(const std::string & s) {
+#ifdef _WIN32
+    // cmd.exe: wrap in double quotes, double any embedded quote
+    std::string out = "\"";
+    for (char c : s) {
+        if (c == '"') out += "\"\"";
+        else          out += c;
+    }
+    out += "\"";
+    return out;
+#else
     std::string out = "'";
     for (char c : s) {
         if (c == '\'') out += "'\\''";
@@ -21,6 +32,7 @@ static std::string shq(const std::string & s) {
     }
     out += "'";
     return out;
+#endif
 }
 
 // write mono float PCM as a 16-bit little-endian WAV at the given sample rate
