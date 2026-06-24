@@ -50,7 +50,7 @@ struct segment {
 // state shared between the UI thread and the transcription worker
 struct app_state {
     // inputs (owned by the UI thread)
-    char  model_path[1024] = "models/ggml-base.en.bin";
+    char  model_path[1024] = "models/ggml-large-v3-turbo.bin";
     char  audio_path[1024] = "";
     int   n_threads        = std::min(4, (int) std::thread::hardware_concurrency());
     bool  translate        = false;

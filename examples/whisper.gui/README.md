@@ -206,9 +206,14 @@ for all options.
 ./build/bin/whisper-gui
 ```
 
-Set the model (e.g. `models/ggml-base.en.bin` — fetch one with
-`sh ./models/download-ggml-model.sh base.en`), pick an audio file with **Browse**,
-and click **Transcribe**. Exported files are written next to the audio file.
+Set the model (the GUI defaults to `models/ggml-large-v3-turbo.bin` — fetch it
+with `sh ./models/download-ggml-model.sh large-v3-turbo`, or grab a smaller one
+like `base.en` for low-powered machines), pick an audio file with **Browse**, and
+click **Transcribe**. Exported files are written next to the audio file.
+
+> The air-gap bundlers download `large-v3-turbo` by default; pass `-WhisperModel`
+> (PowerShell) or `WHISPER_MODEL_NAME=...` (Linux) at the Stage step to bundle a
+> different one.
 
 > Needs a real display. Over SSH or on WSL, use X/Wayland forwarding or WSLg.
 

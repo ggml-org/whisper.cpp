@@ -44,6 +44,10 @@ param(
     # Tool versions / sources (override if you need a different pin).
     [string] $CMakeVersion = '3.30.5',
 
+    # whisper model to bundle (any ggml model name, e.g. large-v3-turbo,
+    # large-v3, medium.en, base.en). The GUI defaults to large-v3-turbo.
+    [string] $WhisperModel = 'large-v3-turbo',
+
     # Skip the (large) ffmpeg download if you don't need video->wav conversion.
     [switch] $SkipFfmpeg,
 
@@ -92,7 +96,7 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $GH  = 'https://github.com/k2-fsa/sherpa-onnx/releases/download'
 $EMB = "$GH/speaker-recongition-models/nemo_en_titanet_small.onnx"
 $SEG = "$GH/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
-$WHISPER_MODEL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin'
+$WHISPER_MODEL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-$WhisperModel.bin"
 $CMAKE_URL = "https://github.com/Kitware/CMake/releases/download/v$CMakeVersion/cmake-$CMakeVersion-windows-x86_64.zip"
 $PY_URL    = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-amd64.exe"
 $FFMPEG_URL = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
@@ -131,7 +135,7 @@ function Invoke-Stage {
     }
 
     # --- models ---
-    Get-File $WHISPER_MODEL (Join-Path $BundleDir 'models\ggml-base.en.bin')
+    Get-File $WHISPER_MODEL (Join-Path $BundleDir "models\ggml-$WhisperModel.bin")
     Get-File $EMB           (Join-Path $BundleDir 'models\nemo_en_titanet_small.onnx')
     Get-File $SEG           (Join-Path $BundleDir 'models\sherpa-onnx-pyannote-segmentation-3-0.tar.bz2')
 
@@ -220,7 +224,7 @@ function Invoke-Install {
     $repo = Join-Path $BundleDir 'repo'
     $mdst = Join-Path $repo 'models'
     New-Item -ItemType Directory -Force -Path $mdst | Out-Null
-    Copy-Item (Join-Path $BundleDir 'models\ggml-base.en.bin')           $mdst -Force
+    Copy-Item (Join-Path $BundleDir 'models\ggml-*.bin')                 $mdst -Force  # whisper model
     Copy-Item (Join-Path $BundleDir 'models\nemo_en_titanet_small.onnx') $mdst -Force
     $segTar = Join-Path $BundleDir 'models\sherpa-onnx-pyannote-segmentation-3-0.tar.bz2'
     if (-not (Test-Path (Join-Path $mdst 'sherpa-onnx-pyannote-segmentation-3-0\model.onnx'))) {
@@ -295,7 +299,7 @@ Run it FROM THE REPO ROOT so the model + helper paths resolve:
     .\build\bin\Release\whisper-gui.exe
 
 In the app: Browse a .wav -> Diarize = Accurate (sherpa-onnx) -> Speakers = 3 -> Transcribe.
-(Model: models\ggml-base.en.bin   Diarization models: models\)
+(Model: models\ggml-$WhisperModel.bin   Diarization models: models\)
 "@ -ForegroundColor Green
 }
 
