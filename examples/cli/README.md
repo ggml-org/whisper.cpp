@@ -42,6 +42,7 @@ options:
   -ocsv,     --output-csv        [false  ] output result in a CSV file
   -oj,       --output-json       [false  ] output result in a JSON file
   -ojf,      --output-json-full  [false  ] include more information in the JSON file
+  -oa,       --output-all        [false  ] output result in all formats (txt,vtt,srt,csv,json,lrc)
   -of FNAME, --output-file FNAME [       ] output file path (without file extension)
   -np,       --no-prints         [false  ] do not print anything other than the results
   -ps,       --print-special     [false  ] print special tokens
