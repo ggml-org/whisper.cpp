@@ -27,38 +27,40 @@ Video files (e.g. `.mp4`) must be converted to audio first — see the
 
 ## Speaker diarization
 
-Enable **Diarize speakers** to have the transcript split by who is talking. Each
-segment is turned into an acoustic fingerprint and the fingerprints are clustered,
-so segments spoken by the same voice get the same colored **Speaker N** label
-(also written into the exported files).
+The **Diarize** dropdown splits the transcript by who is talking: segments get a
+colored **Speaker N** label (also written into the exported files). Set
+**Speakers** to the known number of people for the best result, or `0` to
+auto-detect. Two modes:
 
-Set **Speakers** to the known number of people for the best result, or `0` to
-auto-detect.
+- **Fast (built-in)** — classic **MFCC** clustering, no setup, fully offline and
+  dependency-free. Separates clearly different voices but is weak on similar
+  voices and noisy/real-world audio. Good for a quick pass.
+- **Accurate (sherpa-onnx)** — proper **neural** diarization (a pyannote
+  segmentation model + a neural speaker-embedding model). Much better on real
+  recordings. The GUI runs the bundled [`diarize.py`](diarize.py) helper for you
+  after transcription. One-time setup:
 
-How it works and what to expect — read this before relying on it:
+  ```bash
+  pip install sherpa-onnx numpy
+  ./download-diarization-models.sh        # ~47 MB, into ./models/
+  ```
 
-- The fingerprint is built from classic **MFCC features** (no extra model, fully
-  offline). This is deliberately **lightweight**, not state-of-the-art.
-- It separates **clearly different voices** (e.g. a deep voice vs. a higher one)
-  reasonably well, and struggles when voices are **similar**. Auto speaker-count
-  is approximate — providing the count helps a lot.
-- It is **content-agnostic and pluggable**: the embedding step
-  (`diarize::compute_embedding` in [`diarization.cpp`](diarization.cpp)) is the one
-  function to replace with a neural speaker-embedding model (e.g. ECAPA-TDNN) for a
-  large accuracy jump, without touching the clustering or the UI.
+  Launch `whisper-gui` from the repo root (so `examples/whisper.gui/diarize.py`
+  and `models/` resolve), choose **Accurate**, set the speaker count, and
+  Transcribe. The `diarize.py` field lets you point at the helper if it lives
+  elsewhere. If setup is missing, the transcript still appears and the status
+  line shows what failed.
 
-### Accurate diarization (neural, via sherpa-onnx)
+The **Fast** embedding step (`diarize::compute_embedding` in
+[`diarization.cpp`](diarization.cpp)) is a pluggable seam — but for accuracy,
+prefer the **Accurate** mode above.
 
-The built-in MFCC diarization is lightweight but weak on real recordings (it
-tends to collapse similar voices into one speaker). For **production-quality**
-results, use the included [`diarize.py`](diarize.py) helper, which runs proper
-neural diarization ([sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx): a
-pyannote segmentation model + a neural speaker-embedding model) and labels the
-GUI's transcript. Fully offline once the models are downloaded; no HuggingFace
-account needed (models come from GitHub).
+### Using diarize.py directly (CLI)
+
+You can also run the neural helper outside the GUI on a transcript exported as
+JSON (no HuggingFace account needed — models come from GitHub):
 
 ```bash
-# one-time setup
 pip install sherpa-onnx numpy
 ./download-diarization-models.sh        # ~47 MB, into ./models/
 
