@@ -30,13 +30,21 @@ import sherpa_onnx
 
 
 def read_wav(path):
+    # accept any sample rate / channel count: downmix to mono and resample to 16 kHz
     with wave.open(path) as w:
-        if w.getframerate() != 16000 or w.getnchannels() != 1:
-            sys.exit(f"error: {path} must be 16 kHz mono WAV "
-                     f"(got {w.getframerate()} Hz, {w.getnchannels()} ch). "
-                     f"Convert with: ffmpeg -i in -ar 16000 -ac 1 -c:a pcm_s16le out.wav")
-        raw = w.readframes(w.getnframes())
-    return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        sr, ch, width, n = w.getframerate(), w.getnchannels(), w.getsampwidth(), w.getnframes()
+        raw = w.readframes(n)
+    if width != 2:
+        sys.exit(f"error: {path} is {width*8}-bit; only 16-bit PCM WAV is supported. "
+                 f"Convert with: ffmpeg -i in -ar 16000 -ac 1 -c:a pcm_s16le out.wav")
+    a = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    if ch > 1:
+        a = a.reshape(-1, ch).mean(axis=1)         # downmix to mono
+    if sr != 16000:                                # linear resample to 16 kHz
+        n_out = int(round(len(a) * 16000 / sr))
+        a = np.interp(np.linspace(0, len(a), n_out, endpoint=False),
+                      np.arange(len(a)), a).astype(np.float32)
+    return a
 
 
 def diarize(audio, seg_model, emb_model, num_speakers, threshold):
