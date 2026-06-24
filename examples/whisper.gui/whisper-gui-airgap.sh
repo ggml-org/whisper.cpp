@@ -110,9 +110,20 @@ do_install() {
     # 2. isolated venv for the diarization helper (avoids PEP 668 / system pollution)
     say "creating venv + installing sherpa-onnx, numpy (offline)"
     python3 -m venv "$repo/.venv" || die "python3 -m venv failed - install python3-venv"
-    "$repo/.venv/bin/python" -m pip install --no-index --find-links "$BUNDLE/wheels" sherpa-onnx numpy \
-        || die "offline pip install failed (wheel/python-version mismatch is the usual cause)"
-    "$repo/.venv/bin/python" -c "import sherpa_onnx, numpy; print('python deps OK', sherpa_onnx.__version__)"
+    local vpy="$repo/.venv/bin/python"
+    if "$vpy" -m pip install --no-index --find-links "$BUNDLE/wheels" sherpa-onnx numpy; then
+        :  # installed from the bundle, fully offline
+    else
+        local tag; tag="$("$vpy" -c 'import sys;print("cp%d%d"%sys.version_info[:2])')"
+        warn "no bundled wheel matches this machine's Python ($tag). Bundle has: $(ls "$BUNDLE/wheels" 2>/dev/null | tr '\n' ' ')"
+        warn "(binary wheels are Python-version-specific - stage on a machine whose Python matches the target)"
+        if "$vpy" -m pip install sherpa-onnx numpy; then   # online fallback if a network is up
+            warn "installed sherpa-onnx/numpy from the internet - this run was NOT fully offline."
+        else
+            die "could not install sherpa-onnx/numpy offline or online. For a true air-gapped build, re-stage on a CONNECTED machine running the SAME Python version as this one ($tag)."
+        fi
+    fi
+    "$vpy" -c "import sherpa_onnx, numpy; print('python deps OK', sherpa_onnx.__version__)"
 
     # 3. models into repo/models (+ extract segmentation)
     mkdir -p "$repo/models"
