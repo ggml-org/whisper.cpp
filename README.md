@@ -102,6 +102,8 @@ For example, you can use `ffmpeg` like this:
 ffmpeg -i input.mp3 -ar 16000 -ac 1 -c:a pcm_s16le output.wav
 ```
 
+See [examples/cli/README.md](examples/cli/README.md#converting-audio--video-to-wav) for a fuller guide, including extracting audio from video (`.mp4`), batch conversion and verifying the result.
+
 ## More audio samples
 
 If you want some extra audio samples to play with, simply run:
