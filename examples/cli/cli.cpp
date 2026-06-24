@@ -13,6 +13,7 @@
 #include <vector>
 #include <cstring>
 #include <cfloat>
+#include <stdexcept>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -83,7 +84,13 @@ struct whisper_params {
 
     std::string language  = "en";
     std::string prompt;
+#if defined(__APPLE__)
     std::string font_path = "/System/Library/Fonts/Supplemental/Courier New Bold.ttf";
+#elif defined(_WIN32)
+    std::string font_path = "C:\\Windows\\Fonts\\courbd.ttf";
+#else
+    std::string font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf";
+#endif
     std::string model     = "models/ggml-base.en.bin";
     std::string grammar;
     std::string grammar_rule;
@@ -126,7 +133,7 @@ static char * whisper_param_turn_lowercase(char * in){
 
 static char * requires_value_error(const std::string & arg) {
     fprintf(stderr, "error: argument %s requires value\n", arg.c_str());
-    exit(0);
+    exit(1);
 }
 
 static bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
@@ -147,6 +154,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
             continue;
         }
 
+        try {
         if (arg == "-h" || arg == "--help") {
             whisper_print_usage(argc, argv, params);
             exit(0);
@@ -187,6 +195,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-ocsv" || arg == "--output-csv")           { params.output_csv      = true; }
         else if (arg == "-oj"   || arg == "--output-json")          { params.output_jsn      = true; }
         else if (arg == "-ojf"  || arg == "--output-json-full")     { params.output_jsn_full = params.output_jsn = true; }
+        else if (arg == "-oa"   || arg == "--output-all")           { params.output_txt = params.output_vtt = params.output_srt = params.output_csv = params.output_jsn = params.output_lrc = true; }
         else if (arg == "-of"   || arg == "--output-file")          { params.fname_out.emplace_back(ARGV_NEXT); }
         else if (arg == "-np"   || arg == "--no-prints")            { params.no_prints       = true; }
         else if (arg == "-ps"   || arg == "--print-special")        { params.print_special   = true; }
@@ -224,7 +233,11 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             whisper_print_usage(argc, argv, params);
-            exit(0);
+            exit(1);
+        }
+        } catch (const std::exception & e) {
+            fprintf(stderr, "error: invalid value for argument %s: %s\n", arg.c_str(), e.what());
+            exit(1);
         }
     }
 
@@ -270,6 +283,7 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  -ocsv,     --output-csv           [%-7s] output result in a CSV file\n",                    params.output_csv ? "true" : "false");
     fprintf(stderr, "  -oj,       --output-json          [%-7s] output result in a JSON file\n",                   params.output_jsn ? "true" : "false");
     fprintf(stderr, "  -ojf,      --output-json-full     [%-7s] include more information in the JSON file\n",      params.output_jsn_full ? "true" : "false");
+    fprintf(stderr, "  -oa,       --output-all           [%-7s] output result in all formats (txt,vtt,srt,csv,json,lrc)\n", "false");
     fprintf(stderr, "  -of FNAME, --output-file FNAME    [%-7s] output file path (without file extension)\n",      "");
     fprintf(stderr, "  -np,       --no-prints            [%-7s] do not print anything other than the results\n",   params.no_prints ? "true" : "false");
     fprintf(stderr, "  -ps,       --print-special        [%-7s] print special tokens\n",                           params.print_special ? "true" : "false");
@@ -1027,13 +1041,13 @@ int main(int argc, char ** argv) {
     if (params.language != "auto" && whisper_lang_id(params.language.c_str()) == -1) {
         fprintf(stderr, "error: unknown language '%s'\n", params.language.c_str());
         whisper_print_usage(argc, argv, params);
-        exit(0);
+        exit(1);
     }
 
     if (params.diarize && params.tinydiarize) {
         fprintf(stderr, "error: cannot use both --diarize and --tinydiarize\n");
         whisper_print_usage(argc, argv, params);
-        exit(0);
+        exit(1);
     }
 
     if (params.no_prints) {
