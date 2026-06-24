@@ -140,6 +140,34 @@ The resulting binary links SDL2 statically; at runtime it needs only the OS
 OpenGL driver and windowing libraries (`libGL`, `libX11`/Wayland), which are
 present on any desktop.
 
+### Native Windows, air-gapped (PowerShell)
+
+To build a native Windows `whisper-gui.exe` (no WSL) for an offline target, use
+[`whisper-gui-airgap.ps1`](whisper-gui-airgap.ps1). It is a two-stage bundler:
+
+```powershell
+# 1) On a CONNECTED Windows machine, from the repo root:
+.\examples\whisper.gui\whisper-gui-airgap.ps1 -Mode Stage
+#    -> downloads CMake, Python, the wheels (sherpa-onnx, numpy), ffmpeg,
+#       the whisper + diarization models, and a copy of the repo into
+#       .\whisper-gui-bundle\
+
+# 2) Copy whisper-gui-bundle\ to the OFFLINE machine, then from inside it:
+.\whisper-gui-airgap.ps1 -Mode Install
+#    -> installs Python + wheels offline, places the models, and builds
+#       whisper-gui.exe with MSVC. No network needed.
+```
+
+The offline target must have **Visual Studio 2022 Build Tools** with the
+"Desktop development with C++" workload (the MSVC compiler CMake uses). To stage
+that offline too, pass `-VsBootstrapper C:\path\to\vs_BuildTools.exe` to the
+`-Mode Stage` run (a multi-GB layout). Run `Get-Help .\whisper-gui-airgap.ps1`
+for all options.
+
+> The native-Windows build path is newer and not yet author-verified on Windows
+> — treat the first Stage/Install as a shakedown. On native Windows,
+> drag-and-drop **does** work (unlike under WSLg).
+
 ## Running
 
 ```bash
