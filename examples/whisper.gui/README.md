@@ -190,11 +190,17 @@ To build a native Windows `whisper-gui.exe` (no WSL) for an offline target, use
 #       whisper-gui.exe with MSVC. No network needed.
 ```
 
+When the build finishes, `-Mode Install` drops a double-clickable
+**`WhisperGUI.exe`** at the repo root. It sets the working directory to the repo
+root (so the model and `diarize.py` resolve) and starts the GUI — no shell
+needed. (Building `whisper-gui` directly also produces it as
+`build\bin\Release\WhisperGUI.exe`.)
+
 The offline target must have **Visual Studio 2022 Build Tools** with the
 "Desktop development with C++" workload (the MSVC compiler CMake uses). To stage
 that offline too, pass `-VsBootstrapper C:\path\to\vs_BuildTools.exe` to the
-`-Mode Stage` run (a multi-GB layout). Run `Get-Help .\whisper-gui-airgap.ps1`
-for all options.
+`-Mode Stage` run (a multi-GB layout); `-Mode Install` then installs it before
+building. Run `Get-Help .\whisper-gui-airgap.ps1` for all options.
 
 > The native-Windows build path is newer and not yet author-verified on Windows
 > — treat the first Stage/Install as a shakedown. On native Windows,

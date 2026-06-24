@@ -74,3 +74,12 @@ target_link_libraries(${TARGET} PRIVATE
 )
 
 install(TARGETS ${TARGET} RUNTIME)
+
+# Windows: a tiny double-clickable launcher that sets the working directory to
+# the repo root (so models\ and diarize.py resolve) and starts whisper-gui.exe.
+if (WIN32)
+    add_executable(whisper-gui-launcher WIN32 launcher.cpp)
+    include(DefaultTargetOptions)
+    set_target_properties(whisper-gui-launcher PROPERTIES OUTPUT_NAME "WhisperGUI")
+    install(TARGETS whisper-gui-launcher RUNTIME)
+endif()

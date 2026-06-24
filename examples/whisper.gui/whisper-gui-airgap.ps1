@@ -284,17 +284,23 @@ function Invoke-Install {
             Die "cmake configure failed. The usual cause is missing MSVC: install Visual Studio 2022 Build Tools with 'Desktop development with C++'."
         }
         Say "building (this compiles SDL2 from source the first time - a few minutes)"
-        & cmake --build build --config Release --target whisper-gui --parallel
+        & cmake --build build --config Release --target whisper-gui whisper-gui-launcher --parallel
         if ($LASTEXITCODE -ne 0) { Die "build failed - see errors above." }
     } finally { Pop-Location }
 
-    $exe = Get-ChildItem $repo -Recurse -Filter 'whisper-gui.exe' | Select-Object -First 1
+    # drop the double-clickable launcher at the repo root
+    $launcher = Get-ChildItem $repo -Recurse -Filter 'WhisperGUI.exe' | Select-Object -First 1
+    if ($launcher) { Copy-Item $launcher.FullName (Join-Path $repo 'WhisperGUI.exe') -Force }
+
     Say "INSTALL COMPLETE."
     Write-Host @"
 
-Built: $($exe.FullName)
+Built: $repo\build\bin\Release\whisper-gui.exe
 
-Run it FROM THE REPO ROOT so the model + helper paths resolve:
+Just double-click:  $repo\WhisperGUI.exe
+(it sets the working directory and starts the GUI for you)
+
+Or from a shell, FROM THE REPO ROOT:
     cd "$repo"
     .\build\bin\Release\whisper-gui.exe
 
