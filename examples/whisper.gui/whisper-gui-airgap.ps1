@@ -48,6 +48,12 @@ param(
     # large-v3, medium.en, base.en). The GUI defaults to large-v3-turbo.
     [string] $WhisperModel = 'large-v3-turbo',
 
+    # C++ toolchain to bundle: 'mingw' = portable MinGW-w64 + Ninja (~150 MB,
+    # no Visual Studio needed); 'msvc' = use the target's VS Build Tools (or a
+    # -VsBootstrapper offline layout).
+    [ValidateSet('msvc', 'mingw')]
+    [string] $Toolchain = 'msvc',
+
     # Skip the (large) ffmpeg download if you don't need video->wav conversion.
     [switch] $SkipFfmpeg,
 
@@ -100,6 +106,9 @@ $WHISPER_MODEL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml
 $CMAKE_URL = "https://github.com/Kitware/CMake/releases/download/v$CMakeVersion/cmake-$CMakeVersion-windows-x86_64.zip"
 $PY_URL    = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-amd64.exe"
 $FFMPEG_URL = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
+# portable MinGW-w64 (posix threads -> std::thread works) + Ninja, for -Toolchain mingw
+$MINGW_URL = 'https://github.com/brechtsanders/winlibs_mingw/releases/download/16.1.0posix-14.0.0-ucrt-r3/winlibs-x86_64-posix-seh-gcc-16.1.0-mingw-w64ucrt-14.0.0-r3.zip'
+$NINJA_URL = 'https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-win.zip'
 
 # =============================================================== STAGE =========
 function Invoke-Stage {
@@ -114,6 +123,11 @@ function Invoke-Stage {
     Get-File $CMAKE_URL (Join-Path $BundleDir "tools\cmake-$CMakeVersion-windows-x86_64.zip")
     Get-File $PY_URL    (Join-Path $BundleDir "tools\python-$PythonVersion-amd64.exe")
     if (-not $SkipFfmpeg) { Get-File $FFMPEG_URL (Join-Path $BundleDir 'tools\ffmpeg-win64-gpl.zip') }
+    if ($Toolchain -eq 'mingw') {
+        # bundle a portable compiler so the target needs no Visual Studio at all
+        Get-File $MINGW_URL (Join-Path $BundleDir 'tools\winlibs-mingw.zip')
+        Get-File $NINJA_URL (Join-Path $BundleDir 'tools\ninja-win.zip')
+    }
 
     # --- python wheels (sherpa-onnx + numpy) for the target's python ---
     $pip = Find-Exe 'python'
@@ -166,9 +180,10 @@ Copy that whole folder to the air-gapped machine, then run from inside it:
 
     .\whisper-gui-airgap.ps1 -Mode Install
 
-$(if (-not $VsBootstrapper) { "NOTE: the target must already have Visual Studio 2022 Build Tools with the
-C++ workload. To stage MSVC offline too, re-run Stage with:
-    -VsBootstrapper C:\path\to\vs_BuildTools.exe" })
+$(if ($Toolchain -eq 'mingw') { "COMPILER: a portable MinGW-w64 toolchain is bundled - the target needs NO Visual Studio." }
+  elseif (-not $VsBootstrapper) { "NOTE: the target must already have Visual Studio 2022 Build Tools with the
+C++ workload. For a no-VS option, re-run Stage with -Toolchain mingw (portable, ~150 MB).
+To stage MSVC offline instead, re-run Stage with -VsBootstrapper C:\path\to\vs_BuildTools.exe" })
 "@ -ForegroundColor Green
 }
 
@@ -242,50 +257,62 @@ function Invoke-Install {
         if ($ffBin) { $env:PATH = "$ffBin;$env:PATH"; Say "ffmpeg available this session: $ffBin" }
     }
 
-    # --- confirm an MSVC C++ toolchain exists before the long build ---
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    $haveVc  = $false
-    if (Test-Path $vswhere) {
-        $vc = & $vswhere -latest -products * `
-            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-            -property installationPath
-        if ($vc) { $haveVc = $true; Say "MSVC toolchain: $vc" }
-    }
-    # if MSVC is absent but a VS Build Tools offline layout was staged
-    # (Stage -VsBootstrapper), install the C++ workload from it - no network.
-    if (-not $haveVc) {
-        $layout = Join-Path $BundleDir 'vs_buildtools'
-        $bs = Get-ChildItem $layout -Filter 'vs_*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($bs) {
-            Say "installing VS Build Tools (C++) from the offline layout - this takes a while..."
-            Start-Process $bs.FullName -Wait -ArgumentList `
-                '--quiet', '--wait', '--norestart', `
-                '--add', 'Microsoft.VisualStudio.Workload.VCTools', '--includeRecommended'
+    # --- build: prefer a staged portable MinGW toolchain, else MSVC ---
+    $mingwZip = Get-ChildItem (Join-Path $BundleDir 'tools') -Filter 'winlibs-*.zip' -ErrorAction SilentlyContinue | Select-Object -First 1
+    Push-Location $repo
+    try {
+        if ($mingwZip) {
+            # portable MinGW-w64 + Ninja (no Visual Studio needed)
+            $mingwDir = Join-Path $BundleDir 'tools\mingw'
+            if (-not (Test-Path $mingwDir)) { Expand-Archive $mingwZip.FullName $mingwDir -Force }
+            $gccBin = (Get-ChildItem $mingwDir -Recurse -Filter 'g++.exe' | Select-Object -First 1).DirectoryName
+            if (-not $gccBin) { Die "g++ not found in the extracted MinGW toolchain" }
+            $ninjaZip = Join-Path $BundleDir 'tools\ninja-win.zip'
+            $ninjaDir = Join-Path $BundleDir 'tools\ninja'
+            if ((Test-Path $ninjaZip) -and -not (Test-Path $ninjaDir)) { Expand-Archive $ninjaZip $ninjaDir -Force }
+            $env:PATH = "$gccBin;$ninjaDir;$env:PATH"
+            Say "MinGW: $((& gcc --version | Select-Object -First 1))"
+            Say "configuring (cmake + Ninja, MinGW)"
+            & cmake -B build -G Ninja -DWHISPER_GUI=ON -DCMAKE_BUILD_TYPE=Release `
+                -DCMAKE_C_COMPILER=gcc.exe -DCMAKE_CXX_COMPILER=g++.exe
+            if ($LASTEXITCODE -ne 0) { Die "cmake configure (MinGW) failed - see errors above." }
+            Say "building (compiles SDL2 from source the first time - a few minutes)"
+            & cmake --build build --target whisper-gui whisper-gui-launcher --parallel
+            if ($LASTEXITCODE -ne 0) { Die "build failed - see errors above." }
+        } else {
+            # MSVC (Visual Studio Build Tools)
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            $haveVc  = $false
             if (Test-Path $vswhere) {
                 $vc = & $vswhere -latest -products * `
                     -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-                if ($vc) { $haveVc = $true; Say "MSVC installed: $vc" }
+                if ($vc) { $haveVc = $true; Say "MSVC toolchain: $vc" }
             }
+            # install from a staged offline VS layout (Stage -VsBootstrapper) if present
+            if (-not $haveVc) {
+                $bs = Get-ChildItem (Join-Path $BundleDir 'vs_buildtools') -Filter 'vs_*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($bs) {
+                    Say "installing VS Build Tools (C++) from the offline layout - this takes a while..."
+                    Start-Process $bs.FullName -Wait -ArgumentList `
+                        '--quiet', '--wait', '--norestart', '--add', 'Microsoft.VisualStudio.Workload.VCTools', '--includeRecommended'
+                    if (Test-Path $vswhere) {
+                        $vc = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+                        if ($vc) { $haveVc = $true; Say "MSVC installed: $vc" }
+                    }
+                }
+            }
+            if (-not $haveVc) {
+                Die "No C++ toolchain. Install VS 2022 Build Tools (C++ workload), or re-Stage on the " +
+                    "connected machine with -Toolchain mingw (portable, ~150 MB, no VS) or " +
+                    "-VsBootstrapper C:\path\to\vs_BuildTools.exe (offline MSVC layout)."
+            }
+            Say "configuring (cmake)"
+            & cmake -B build -DWHISPER_GUI=ON -DCMAKE_BUILD_TYPE=Release
+            if ($LASTEXITCODE -ne 0) { Die "cmake configure failed - see errors above." }
+            Say "building (compiles SDL2 from source the first time - a few minutes)"
+            & cmake --build build --config Release --target whisper-gui whisper-gui-launcher --parallel
+            if ($LASTEXITCODE -ne 0) { Die "build failed - see errors above." }
         }
-    }
-    if (-not $haveVc) {
-        Die "No MSVC C++ toolchain found. Either install Visual Studio 2022 Build Tools with " +
-            "the 'Desktop development with C++' workload on this machine, or (for a fully offline " +
-            "path) re-run Stage on the connected machine with -VsBootstrapper C:\path\to\vs_BuildTools.exe " +
-            "to bundle the compiler, then copy the bundle over and re-run -Mode Install."
-    }
-
-    # --- build whisper-gui.exe ---
-    Say "configuring (cmake)"
-    Push-Location $repo
-    try {
-        & cmake -B build -DWHISPER_GUI=ON -DCMAKE_BUILD_TYPE=Release
-        if ($LASTEXITCODE -ne 0) {
-            Die "cmake configure failed. The usual cause is missing MSVC: install Visual Studio 2022 Build Tools with 'Desktop development with C++'."
-        }
-        Say "building (this compiles SDL2 from source the first time - a few minutes)"
-        & cmake --build build --config Release --target whisper-gui whisper-gui-launcher --parallel
-        if ($LASTEXITCODE -ne 0) { Die "build failed - see errors above." }
     } finally { Pop-Location }
 
     # drop the double-clickable launcher at the repo root

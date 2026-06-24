@@ -196,11 +196,24 @@ root (so the model and `diarize.py` resolve) and starts the GUI — no shell
 needed. (Building `whisper-gui` directly also produces it as
 `build\bin\Release\WhisperGUI.exe`.)
 
-The offline target must have **Visual Studio 2022 Build Tools** with the
-"Desktop development with C++" workload (the MSVC compiler CMake uses). To stage
-that offline too, pass `-VsBootstrapper C:\path\to\vs_BuildTools.exe` to the
-`-Mode Stage` run (a multi-GB layout); `-Mode Install` then installs it before
-building. Run `Get-Help .\whisper-gui-airgap.ps1` for all options.
+### Compiler on the target
+
+By default the build uses the target's **Visual Studio 2022 Build Tools**
+("Desktop development with C++"). Two ways to avoid needing VS pre-installed:
+
+- **Portable MinGW (recommended, no VS):** stage with `-Toolchain mingw`. This
+  bundles a ~150 MB portable MinGW-w64 + Ninja; `-Mode Install` builds with it,
+  no Visual Studio required.
+  ```powershell
+  .\examples\whisper.gui\whisper-gui-airgap.ps1 -Mode Stage -Toolchain mingw
+  ```
+- **Offline MSVC layout:** stage with `-VsBootstrapper C:\path\to\vs_BuildTools.exe`.
+  This runs `--layout` to pre-download the C++ workload (multi-GB) into the
+  bundle; `-Mode Install` installs it before building. (The bare
+  `vs_BuildTools.exe` is only a downloader — it can't install offline by itself,
+  which is why the `--layout` step is required.)
+
+Run `Get-Help .\whisper-gui-airgap.ps1` for all options.
 
 > The native-Windows build path is newer and not yet author-verified on Windows
 > — treat the first Stage/Install as a shakedown. On native Windows,
