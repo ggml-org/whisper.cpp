@@ -39,7 +39,11 @@ def read_wav(path):
                  f"Convert with: ffmpeg -i in -ar 16000 -ac 1 -c:a pcm_s16le out.wav")
     a = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
     if ch > 1:
+        if len(a) % ch:                            # truncated/corrupt frame data
+            a = a[:len(a) - (len(a) % ch)]
         a = a.reshape(-1, ch).mean(axis=1)         # downmix to mono
+    if len(a) == 0:
+        sys.exit(f"error: {path} contains no audio samples")
     if sr != 16000:                                # linear resample to 16 kHz
         n_out = int(round(len(a) * 16000 / sr))
         a = np.interp(np.linspace(0, len(a), n_out, endpoint=False),

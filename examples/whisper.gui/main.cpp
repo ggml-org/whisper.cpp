@@ -210,7 +210,7 @@ static void transcribe_worker(app_state * s,
         for (size_t i = 0; i < segs.size(); ++i) spans[i] = {segs[i].t0, segs[i].t1};
         std::vector<int> labels;
         std::string err;
-        if (neural_diarize("python3", diarize_script, audio_path, spans, num_speakers, "", labels, err)) {
+        if (neural_diarize("python3", diarize_script, pcmf32, spans, num_speakers, "", labels, err)) {
             int n_spk = 0;
             for (size_t i = 0; i < segs.size() && i < labels.size(); ++i) {
                 segs[i].speaker = labels[i];
@@ -356,11 +356,13 @@ int main(int, char **) {
                 done = true;
             }
             // drag a file onto the window to set the audio path
-            if (event.type == SDL_DROPFILE && !state.running.load()) {
+            if (event.type == SDL_DROPFILE) {
                 char * dropped = event.drop.file;
                 if (dropped) {
-                    snprintf(state.audio_path, sizeof(state.audio_path), "%s", dropped);
-                    SDL_free(dropped);
+                    if (!state.running.load()) {
+                        snprintf(state.audio_path, sizeof(state.audio_path), "%s", dropped);
+                    }
+                    SDL_free(dropped); // must always free, even while a run is in progress
                 }
             }
         }
@@ -449,6 +451,11 @@ int main(int, char **) {
             if (!can_run) ImGui::BeginDisabled();
             if (ImGui::Button("Transcribe", ImVec2(120, 0))) {
                 if (state.worker.joinable()) state.worker.join();
+                // set running on the UI thread *before* spawning so the button
+                // flips to Cancel on the very next frame (avoids a join-on-click race)
+                state.running    = true;
+                state.abort_flag = false;
+                state.progress   = 0;
                 state.worker = std::thread(transcribe_worker, &state,
                                            std::string(state.model_path),
                                            std::string(state.audio_path),

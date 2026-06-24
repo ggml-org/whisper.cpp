@@ -2,6 +2,8 @@
 
 #include "json.hpp"
 
+#include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -21,9 +23,29 @@ static std::string shq(const std::string & s) {
     return out;
 }
 
+// write mono float PCM as a 16-bit little-endian WAV at the given sample rate
+static bool write_wav16(const fs::path & path, const std::vector<float> & pcm, uint32_t sr) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f) return false;
+    const uint32_t n          = (uint32_t) pcm.size();
+    const uint32_t data_bytes = n * 2;
+    auto w32 = [&](uint32_t v) { for (int i = 0; i < 4; ++i) f.put((char) ((v >> (8 * i)) & 0xff)); };
+    auto w16 = [&](uint16_t v) { f.put((char) (v & 0xff)); f.put((char) ((v >> 8) & 0xff)); };
+    f.write("RIFF", 4); w32(36 + data_bytes); f.write("WAVE", 4);
+    f.write("fmt ", 4); w32(16); w16(1); w16(1); w32(sr); w32(sr * 2); w16(2); w16(16);
+    f.write("data", 4); w32(data_bytes);
+    for (float s : pcm) {
+        long v = std::lround(s * 32767.0f);
+        if (v >  32767) v =  32767;
+        if (v < -32768) v = -32768;
+        w16((uint16_t) (int16_t) v);
+    }
+    return (bool) f;
+}
+
 bool neural_diarize(const std::string & python,
                     const std::string & script,
-                    const std::string & audio_path,
+                    const std::vector<float> & pcm16k_mono,
                     const std::vector<std::pair<int64_t, int64_t>> & spans_cs,
                     int num_speakers,
                     const std::string & emb_model,
@@ -34,11 +56,22 @@ bool neural_diarize(const std::string & python,
         error = "nothing to diarize (no segments)";
         return false;
     }
+    if (pcm16k_mono.empty()) {
+        error = "no audio to diarize";
+        return false;
+    }
 
     std::error_code ec;
     const fs::path tmp = fs::temp_directory_path(ec);
     const fs::path in_json = tmp / "whisper-gui-diar.json";
+    const fs::path in_wav  = tmp / "whisper-gui-diar.wav";
     const fs::path log     = tmp / "whisper-gui-diar.log";
+
+    // write the exact audio whisper saw as a 16 kHz mono WAV for the helper
+    if (!write_wav16(in_wav, pcm16k_mono, 16000)) {
+        error = "cannot write temp audio " + in_wav.string();
+        return false;
+    }
 
     // write the whisper-format JSON the helper expects (timestamps only)
     {
@@ -53,7 +86,7 @@ bool neural_diarize(const std::string & python,
     }
 
     std::ostringstream cmd;
-    cmd << shq(python) << ' ' << shq(script) << ' ' << shq(audio_path)
+    cmd << shq(python) << ' ' << shq(script) << ' ' << shq(in_wav.string())
         << " --json " << shq(in_json.string());
     if (num_speakers > 0)     cmd << " --speakers " << num_speakers;
     if (!emb_model.empty())   cmd << " --emb-model " << shq(emb_model);
