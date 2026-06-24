@@ -247,10 +247,28 @@ function Invoke-Install {
             -property installationPath
         if ($vc) { $haveVc = $true; Say "MSVC toolchain: $vc" }
     }
+    # if MSVC is absent but a VS Build Tools offline layout was staged
+    # (Stage -VsBootstrapper), install the C++ workload from it - no network.
     if (-not $haveVc) {
-        Die "No MSVC C++ toolchain found. Install Visual Studio 2022 Build Tools with the " +
-            "'Desktop development with C++' workload, then re-run -Mode Install. " +
-            "(To stage it offline, re-run Stage with -VsBootstrapper.)"
+        $layout = Join-Path $BundleDir 'vs_buildtools'
+        $bs = Get-ChildItem $layout -Filter 'vs_*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($bs) {
+            Say "installing VS Build Tools (C++) from the offline layout - this takes a while..."
+            Start-Process $bs.FullName -Wait -ArgumentList `
+                '--quiet', '--wait', '--norestart', `
+                '--add', 'Microsoft.VisualStudio.Workload.VCTools', '--includeRecommended'
+            if (Test-Path $vswhere) {
+                $vc = & $vswhere -latest -products * `
+                    -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+                if ($vc) { $haveVc = $true; Say "MSVC installed: $vc" }
+            }
+        }
+    }
+    if (-not $haveVc) {
+        Die "No MSVC C++ toolchain found. Either install Visual Studio 2022 Build Tools with " +
+            "the 'Desktop development with C++' workload on this machine, or (for a fully offline " +
+            "path) re-run Stage on the connected machine with -VsBootstrapper C:\path\to\vs_BuildTools.exe " +
+            "to bundle the compiler, then copy the bundle over and re-run -Mode Install."
     }
 
     # --- build whisper-gui.exe ---
