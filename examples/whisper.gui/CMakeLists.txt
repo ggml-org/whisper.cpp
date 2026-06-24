@@ -53,6 +53,11 @@ include(DefaultTargetOptions)
 
 target_compile_features(${TARGET} PRIVATE cxx_std_17) # std::filesystem
 
+if (MSVC)
+    # json.hpp / Dear ImGui translation units need /bigobj; /utf-8 for sources
+    target_compile_options(${TARGET} PRIVATE /bigobj /utf-8)
+endif()
+
 target_include_directories(${TARGET} PRIVATE
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
