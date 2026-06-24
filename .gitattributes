@@ -1,0 +1,5 @@
+# Keep line-ending-sensitive scripts as LF on every platform. Without this,
+# a checkout on Windows (core.autocrlf=true) rewrites them to CRLF, and copying
+# them to Linux then breaks the shebang ("env: 'bash\r': No such file ...").
+*.sh   text eol=lf
+*.py   text eol=lf
