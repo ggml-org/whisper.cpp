@@ -69,9 +69,19 @@ python3 diarize.py audio.wav --json audio.json --speakers 3
 #    -> adds a "speaker" field to audio.json
 ```
 
-Use `--speakers N` when you know the count (most reliable), or omit it to
-auto-detect. Run `python3 diarize.py -h` for all options. Audio must be 16 kHz
-mono WAV (same as the tool).
+**Set `--speakers N` to the real number of voices** — this is the single most
+important knob. Auto-detect (omitting it) tends to over-split into many spurious
+speakers. Run `python3 diarize.py -h` for all options. Any WAV is accepted
+(it is downmixed and resampled to 16 kHz automatically).
+
+**Hard audio?** For recordings with similar voices or background noise, try a
+stronger embedding model. Download one and pass it with `--emb-model`:
+
+```bash
+./download-diarization-models.sh models resnet152   # or: titanet-large, campplus, resnet34
+python3 diarize.py audio.wav --json audio.json --speakers 4 \
+        --emb-model models/wespeaker_en_voxceleb_resnet152_LM.onnx
+```
 
 ## Building
 
