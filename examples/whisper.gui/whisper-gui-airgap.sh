@@ -63,16 +63,28 @@ do_stage() {
     else
         case "$(pm)" in
             dnf)
-                say "staging RPMs via 'dnf download --resolve'"
+                say "staging RPMs via 'dnf download --resolve' (incl. gcc-c++ + cmake)"
+                # 'dnf download' comes from dnf-plugins-core (dnf4) / dnf5-plugins (dnf5)
+                if ! dnf download --help >/dev/null 2>&1; then
+                    sudo dnf install -y dnf-plugins-core >/dev/null 2>&1 \
+                        || sudo dnf install -y dnf5-plugins >/dev/null 2>&1 || true
+                fi
                 dnf download --resolve --alldeps --destdir "$BUNDLE/pkgs" $PKGS_DNF \
-                    || warn "dnf download failed (need dnf-plugins-core). Stage RPMs manually into $BUNDLE/pkgs, or set SKIP_PKGS=1." ;;
+                    || warn "dnf download failed - run 'sudo dnf install dnf-plugins-core' (or 'dnf5-plugins'), then re-stage; or SKIP_PKGS=1." ;;
             apt)
-                say "staging .debs via apt-get"
+                say "staging .debs via apt-get (incl. g++ + cmake)"
                 ( cd "$BUNDLE/pkgs" && apt-get download $(apt-cache depends --recurse --no-recommends --no-suggests \
                     --no-conflicts --no-breaks --no-replaces --no-enhances -i $PKGS_APT 2>/dev/null | grep '^\w' | sort -u) ) \
                     || warn "apt download incomplete. Stage .debs manually into $BUNDLE/pkgs, or set SKIP_PKGS=1." ;;
             *)  warn "no dnf/apt found - skipping system packages" ;;
         esac
+        # tell the user NOW (not after they carry the bundle) whether it worked
+        n=$(ls "$BUNDLE"/pkgs/*.rpm "$BUNDLE"/pkgs/*.deb 2>/dev/null | wc -l)
+        if [ "$n" -eq 0 ]; then
+            warn "no OS packages were staged - the offline target will need gcc-c++/g++ + cmake by other means."
+        else
+            say "staged $n OS package file(s) (compiler + build deps) into pkgs/"
+        fi
     fi
 
     say "copying repo into bundle (excluding build dirs / .git)"
@@ -106,6 +118,9 @@ do_install() {
         warn "no staged packages - assuming the build deps are already installed"
     fi
     have cmake || die "cmake not found - install it (or stage its package) and re-run"
+    if ! { have gcc || have g++ || have cc || have clang; }; then
+        die "no C++ compiler found. Install gcc-c++ / g++ (or stage it on a connected machine via 'stage'), then re-run."
+    fi
 
     # 2. isolated venv for the diarization helper (avoids PEP 668 / system pollution)
     say "creating venv + installing sherpa-onnx, numpy (offline)"
