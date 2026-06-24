@@ -16,12 +16,35 @@ dev packages and cannot be vendored (OpenGL is your GPU driver).
 - Transcription runs on a **background thread**, so the UI never freezes — with a
   live progress bar and a **Cancel** button
 - Timestamped transcript view
-- Export the result to **`.txt` / `.srt` / `.json`**
+- **Speaker diarization** — group segments by voice and label them Speaker 1/2/3 (see below)
+- Export the result to **`.txt` / `.srt` / `.json`** (with speaker labels when diarizing)
 - Language selection and optional translate-to-English
 
 Supported input formats are the same as the CLI: `wav`, `mp3`, `flac`, `ogg`.
 Video files (e.g. `.mp4`) must be converted to audio first — see the
 [conversion guide](../cli/README.md#converting-audio--video-to-wav).
+
+## Speaker diarization
+
+Enable **Diarize speakers** to have the transcript split by who is talking. Each
+segment is turned into an acoustic fingerprint and the fingerprints are clustered,
+so segments spoken by the same voice get the same colored **Speaker N** label
+(also written into the exported files).
+
+Set **Speakers** to the known number of people for the best result, or `0` to
+auto-detect.
+
+How it works and what to expect — read this before relying on it:
+
+- The fingerprint is built from classic **MFCC features** (no extra model, fully
+  offline). This is deliberately **lightweight**, not state-of-the-art.
+- It separates **clearly different voices** (e.g. a deep voice vs. a higher one)
+  reasonably well, and struggles when voices are **similar**. Auto speaker-count
+  is approximate — providing the count helps a lot.
+- It is **content-agnostic and pluggable**: the embedding step
+  (`diarize::compute_embedding` in [`diarization.cpp`](diarization.cpp)) is the one
+  function to replace with a neural speaker-embedding model (e.g. ECAPA-TDNN) for a
+  large accuracy jump, without touching the clustering or the UI.
 
 ## Building
 

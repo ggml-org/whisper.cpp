@@ -39,6 +39,7 @@ find_package(OpenGL REQUIRED)
 # --- the executable -----------------------------------------------------------
 add_executable(${TARGET}
     main.cpp
+    diarization.cpp
     ${IMGUI_DIR}/imgui.cpp
     ${IMGUI_DIR}/imgui_draw.cpp
     ${IMGUI_DIR}/imgui_tables.cpp
