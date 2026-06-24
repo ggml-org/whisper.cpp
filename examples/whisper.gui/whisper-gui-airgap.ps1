@@ -72,6 +72,20 @@ function Find-Exe($name) {
     if ($c) { $c.Source } else { $null }
 }
 
+# Return a full path to a *working* Python 3, ignoring the Microsoft Store stub
+# (which lives under ...\WindowsApps\ and silently does nothing offline). $null
+# if no real interpreter is found.
+function Get-RealPython {
+    $cands = @()
+    $c = Get-Command python -ErrorAction SilentlyContinue
+    if ($c) { $cands += $c.Source }
+    foreach ($p in $cands) {
+        if ($p -like '*\WindowsApps\*') { continue }   # Store alias stub - not real
+        try { if ((& $p --version 2>&1) -match 'Python 3\.') { return $p } } catch { }
+    }
+    return $null
+}
+
 # repo root = two levels up from examples/whisper.gui
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
@@ -174,20 +188,33 @@ function Invoke-Install {
     Say "cmake: $(& cmake --version | Select-Object -First 1)"
 
     # --- Python (install silently if absent), then offline wheels ---
-    if (-not (Find-Exe 'python')) {
+    $tag    = ($PythonVersion -split '\.')[0..1] -join ''   # 3.11.9 -> 311
+    $python = Get-RealPython
+    if (-not $python) {
         $pyExe = Get-ChildItem (Join-Path $BundleDir 'tools') -Filter 'python-*-amd64.exe' | Select-Object -First 1
-        if (-not $pyExe) { Die "no Python installer in bundle\tools" }
-        Say "installing Python silently..."
+        if (-not $pyExe) { Die "no real Python found and no installer in bundle\tools" }
+        Say "installing Python silently (no working interpreter / only the Store stub was found)..."
         Start-Process $pyExe.FullName -Wait -ArgumentList `
             '/quiet', 'InstallAllUsers=0', 'PrependPath=1', 'Include_pip=1'
-        $env:PATH = "$env:LOCALAPPDATA\Programs\Python\Python$((($PythonVersion -split '\.')[0..1] -join ''))\;" +
-                    "$env:LOCALAPPDATA\Programs\Python\Python$((($PythonVersion -split '\.')[0..1] -join ''))\Scripts\;$env:PATH"
+        # resolve by full path - the installer's PATH change doesn't reach this session
+        $cand = Join-Path $env:LOCALAPPDATA "Programs\Python\Python$tag\python.exe"
+        if (Test-Path $cand) { $python = $cand } else { $python = Get-RealPython }
     }
-    if (-not (Find-Exe 'python')) { Die "Python still not on PATH - open a new shell or install manually." }
+    if (-not $python) { Die "Python still not found after install - open a new shell, or install Python $PythonVersion manually." }
+    Say "python: $(& $python --version)"
+
+    # sanity: do the staged wheels match this interpreter's version?
+    $whlDir = Join-Path $BundleDir 'wheels'
+    if (-not (Get-ChildItem $whlDir -Filter 'sherpa_onnx*.whl' -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -match "cp$tag|py3-none" })) {
+        Warn "no sherpa_onnx wheel in the bundle matches Python $PythonVersion (cp$tag)."
+        Warn "Re-stage with -PythonVersion matching the wheels, or install a matching Python."
+    }
+
     Say "pip install (offline) sherpa-onnx + numpy"
-    & python -m pip install --no-index --find-links (Join-Path $BundleDir 'wheels') sherpa-onnx numpy
-    if ($LASTEXITCODE -ne 0) { Die "offline pip install failed." }
-    & python -c "import sherpa_onnx, numpy; print('python deps OK', sherpa_onnx.__version__)"
+    & $python -m pip install --no-index --find-links $whlDir sherpa-onnx numpy
+    if ($LASTEXITCODE -ne 0) { Die "offline pip install failed (wheel/version mismatch is the usual cause)." }
+    & $python -c "import sherpa_onnx, numpy; print('python deps OK', sherpa_onnx.__version__)"
 
     # --- place models into repo\models (+ extract segmentation) ---
     $repo = Join-Path $BundleDir 'repo'
@@ -211,8 +238,23 @@ function Invoke-Install {
         if ($ffBin) { $env:PATH = "$ffBin;$env:PATH"; Say "ffmpeg available this session: $ffBin" }
     }
 
+    # --- confirm an MSVC C++ toolchain exists before the long build ---
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    $haveVc  = $false
+    if (Test-Path $vswhere) {
+        $vc = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+        if ($vc) { $haveVc = $true; Say "MSVC toolchain: $vc" }
+    }
+    if (-not $haveVc) {
+        Die "No MSVC C++ toolchain found. Install Visual Studio 2022 Build Tools with the " +
+            "'Desktop development with C++' workload, then re-run -Mode Install. " +
+            "(To stage it offline, re-run Stage with -VsBootstrapper.)"
+    }
+
     # --- build whisper-gui.exe ---
-    Say "configuring (cmake) - needs Visual Studio 2022 C++ Build Tools"
+    Say "configuring (cmake)"
     Push-Location $repo
     try {
         & cmake -B build -DWHISPER_GUI=ON -DCMAKE_BUILD_TYPE=Release
