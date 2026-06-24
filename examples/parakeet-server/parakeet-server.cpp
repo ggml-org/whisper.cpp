@@ -24,7 +24,7 @@ struct parakeet_params {
     int32_t offset_ms   = 0;
     int32_t duration_ms = 0;
 
-    bool no_context      = false;
+    bool no_context      = true;
     int32_t audio_ctx    = 0;  // 0 = use default
 
     bool use_gpu         = true;
