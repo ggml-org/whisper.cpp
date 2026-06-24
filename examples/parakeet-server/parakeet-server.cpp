@@ -24,7 +24,6 @@ struct parakeet_params {
     int32_t offset_ms   = 0;
     int32_t duration_ms = 0;
 
-    bool no_context      = true;
     int32_t audio_ctx    = 0;  // 0 = use default
 
     bool use_gpu         = true;
@@ -44,7 +43,6 @@ static void parakeet_print_usage(int /*argc*/, char ** argv, const parakeet_para
     fprintf(stderr, "  -ot N,     --offset-t N  [%-7d] time offset in milliseconds\n", params.offset_ms);
     fprintf(stderr, "  -d N,      --duration N  [%-7d] duration of audio to process in milliseconds\n", params.duration_ms);
     fprintf(stderr, "  -ac N,     --audio-ctx N [%-7d] audio context size (0 = use default)\n", params.audio_ctx);
-    fprintf(stderr, "  -nc,       --no-context  [%-7s] do not use past transcription as context\n", params.no_context ? "true" : "false");
     fprintf(stderr, "  -m FNAME,  --model FNAME [%-7s] model path\n", params.model.c_str());
     fprintf(stderr, "  -ng,       --no-gpu      [%-7s] do not use GPU\n", params.use_gpu ? "false" : "true");
     fprintf(stderr, "  -dev N,    --device N    [%-7d] GPU device ID\n", params.gpu_device);
@@ -75,7 +73,6 @@ static bool parakeet_params_parse(int argc, char ** argv, parakeet_params & para
         else if (arg == "-ot"   || arg == "--offset-t")    { params.offset_ms       = std::stoi(argv[++i]); }
         else if (arg == "-d"    || arg == "--duration")    { params.duration_ms     = std::stoi(argv[++i]); }
         else if (arg == "-ac"   || arg == "--audio-ctx")   { params.audio_ctx       = std::stoi(argv[++i]); }
-        else if (arg == "-nc"   || arg == "--no-context")  { params.no_context      = true; }
         else if (arg == "-m"    || arg == "--model")       { params.model           = argv[++i]; }
         else if (arg == "-ng"   || arg == "--no-gpu")      { params.use_gpu         = false; }
         else if (arg == "-dev"  || arg == "--device")      { params.gpu_device      = std::stoi(argv[++i]); }
@@ -105,9 +102,6 @@ static void get_req_parameters(const Request & req, parakeet_params & params) {
     }
     if (req.has_file("audio_ctx")) {
         params.audio_ctx = std::stoi(req.get_file_value("audio_ctx").content);
-    }
-    if (req.has_file("no_context")) {
-        params.no_context = parse_str_to_bool(req.get_file_value("no_context").content);
     }
     if (req.has_file("response_format")) {
         params.response_format = req.get_file_value("response_format").content;
@@ -309,7 +303,7 @@ int main(int argc, char ** argv) {
             fparams.n_threads    = cur_params.n_threads;
             fparams.offset_ms    = cur_params.offset_ms;
             fparams.duration_ms  = cur_params.duration_ms;
-            fparams.no_context   = cur_params.no_context;
+            fparams.no_context   = true;
             fparams.audio_ctx    = cur_params.audio_ctx;
 
             // Abort callback for HTTP disconnect
