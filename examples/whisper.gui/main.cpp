@@ -20,6 +20,7 @@
 #include "common-whisper.h"
 
 #include "diarization.h"
+#include "file_browser.h"
 
 #include <atomic>
 #include <cstdio>
@@ -91,9 +92,20 @@ static void transcribe_worker(app_state * s,
     // 1. decode the audio file (wav/mp3/flac/ogg)
     std::vector<float>              pcmf32;
     std::vector<std::vector<float>> pcmf32s;
+    {
+        std::error_code ec;
+        if (!std::filesystem::exists(audio_path, ec)) {
+            set_status(*s, "File not found: '" + audio_path +
+                           "'. On WSL use /mnt/<drive>/... with forward slashes and no quotes "
+                           "(e.g. /mnt/f/folder/clip.wav), or use the Browse button.");
+            s->running = false;
+            return;
+        }
+    }
     if (!read_audio_data(audio_path, pcmf32, pcmf32s, false)) {
-        set_status(*s, "Failed to read '" + audio_path +
-                       "'. Supported: wav/mp3/flac/ogg. Convert video (.mp4) to audio first.");
+        set_status(*s, "Could not decode '" + audio_path +
+                       "'. Supported audio formats: wav/mp3/flac/ogg. "
+                       "If this is a video (.mp4), extract the audio to a .wav first.");
         s->running = false;
         return;
     }
@@ -308,6 +320,8 @@ int main(int, char **) {
     ImGui_ImplOpenGL3_Init(glsl_version);
 
     app_state state;
+    fb::FileBrowser model_browser;
+    fb::FileBrowser audio_browser;
 
     bool done = false;
     while (!done) {
@@ -346,16 +360,32 @@ int main(int, char **) {
 
         const bool running = state.running.load();
 
+        const float browse_w = 90.0f;
+        const float input_w  = -(browse_w + ImGui::GetStyle().ItemSpacing.x);
+
         ImGui::TextUnformatted("Model");
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(-1);
+        ImGui::SetNextItemWidth(input_w);
         ImGui::InputText("##model", state.model_path, sizeof(state.model_path));
+        ImGui::SameLine();
+        if (ImGui::Button("Browse##m", ImVec2(browse_w, 0))) model_browser.Open(state.model_path);
 
         ImGui::TextUnformatted("Audio");
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(-1);
+        ImGui::SetNextItemWidth(input_w);
         ImGui::InputText("##audio", state.audio_path, sizeof(state.audio_path));
-        ImGui::TextDisabled("Tip: drag a file onto the window. Video (.mp4) must be converted to audio first.");
+        ImGui::SameLine();
+        if (ImGui::Button("Browse##a", ImVec2(browse_w, 0))) audio_browser.Open(state.audio_path);
+
+        // file-picker modals (must be drawn every frame); apply the picked path
+        {
+            std::string picked;
+            if (model_browser.Draw("Select model", picked))
+                std::snprintf(state.model_path, sizeof(state.model_path), "%s", picked.c_str());
+            if (audio_browser.Draw("Select audio", picked))
+                std::snprintf(state.audio_path, sizeof(state.audio_path), "%s", picked.c_str());
+        }
+        ImGui::TextDisabled("Tip: click Browse, or paste a path. On WSL use /mnt/<drive>/... (e.g. /mnt/f/...), not F:\\...");
 
         ImGui::Separator();
 

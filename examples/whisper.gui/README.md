@@ -12,7 +12,8 @@ dev packages and cannot be vendored (OpenGL is your GPU driver).
 
 ## Features
 
-- Pick a model and an audio file (or **drag a file onto the window**)
+- Pick a model and an audio file with a built-in **Browse** dialog (or drag a
+  file onto the window — native builds only; see the WSL note below)
 - Transcription runs on a **background thread**, so the UI never freezes — with a
   live progress bar and a **Cancel** button
 - Timestamped transcript view
@@ -107,11 +108,21 @@ present on any desktop.
 ./build/bin/whisper-gui
 ```
 
-Set the model path (e.g. `models/ggml-base.en.bin` — fetch one with
-`sh ./models/download-ggml-model.sh base.en`), choose or drag an audio file, and
-click **Transcribe**. Exported files are written next to the audio file.
+Set the model (e.g. `models/ggml-base.en.bin` — fetch one with
+`sh ./models/download-ggml-model.sh base.en`), pick an audio file with **Browse**,
+and click **Transcribe**. Exported files are written next to the audio file.
 
 > Needs a real display. Over SSH or on WSL, use X/Wayland forwarding or WSLg.
+
+### WSL notes
+
+- **Use the Browse button**, not drag-and-drop: dragging a file from *Windows*
+  Explorer into a *Linux* (WSLg) window is not supported by WSLg. The in-app
+  Browse dialog has no such limitation.
+- **Paths are Linux paths.** A Windows file at `F:\folder\clip.wav` is
+  `/mnt/f/folder/clip.wav` here — forward slashes, `/mnt/<drive>/`, and no
+  surrounding quotes. (Browse handles this for you, including filenames with
+  Unicode characters that are awkward to type.)
 
 ## Vendored dependencies
 

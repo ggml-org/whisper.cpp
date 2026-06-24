@@ -50,6 +50,8 @@ add_executable(${TARGET}
 
 include(DefaultTargetOptions)
 
+target_compile_features(${TARGET} PRIVATE cxx_std_17) # std::filesystem
+
 target_include_directories(${TARGET} PRIVATE
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
