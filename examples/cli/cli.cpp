@@ -14,6 +14,9 @@
 #include <cstring>
 #include <cfloat>
 #include <stdexcept>
+#include <sstream>
+#include <set>
+#include <cctype>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -42,6 +45,7 @@ struct whisper_params {
     int32_t progress_step = 5;
     int32_t max_context   = -1;
     int32_t max_len       = 0;
+    int32_t txt_wrap      = 0;
     int32_t best_of       = whisper_full_default_params(WHISPER_SAMPLING_GREEDY).greedy.best_of;
     int32_t beam_size     = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH).beam_search.beam_size;
     int32_t audio_ctx     = 0;
@@ -171,6 +175,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-d"    || arg == "--duration")             { params.duration_ms     = std::stoi(ARGV_NEXT); }
         else if (arg == "-mc"   || arg == "--max-context")          { params.max_context     = std::stoi(ARGV_NEXT); }
         else if (arg == "-ml"   || arg == "--max-len")              { params.max_len         = std::stoi(ARGV_NEXT); }
+        else if (arg == "-tw"   || arg == "--txt-wrap")             { params.txt_wrap        = std::stoi(ARGV_NEXT); }
         else if (arg == "-bo"   || arg == "--best-of")              { params.best_of         = std::stoi(ARGV_NEXT); }
         else if (arg == "-bs"   || arg == "--beam-size")            { params.beam_size       = std::stoi(ARGV_NEXT); }
         else if (arg == "-ac"   || arg == "--audio-ctx")            { params.audio_ctx       = std::stoi(ARGV_NEXT); }
@@ -275,6 +280,7 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  -tdrz,     --tinydiarize          [%-7s] enable tinydiarize (requires a tdrz model)\n",     params.tinydiarize ? "true" : "false");
     fprintf(stderr, "  -nf,       --no-fallback          [%-7s] do not use temperature fallback while decoding\n", params.no_fallback ? "true" : "false");
     fprintf(stderr, "  -otxt,     --output-txt           [%-7s] output result in a text file\n",                   params.output_txt ? "true" : "false");
+    fprintf(stderr, "  -tw N,     --txt-wrap N           [%-7d] reflow .txt into paragraphs wrapped at N columns (0 = off)\n", params.txt_wrap);
     fprintf(stderr, "  -ovtt,     --output-vtt           [%-7s] output result in a vtt file\n",                    params.output_vtt ? "true" : "false");
     fprintf(stderr, "  -osrt,     --output-srt           [%-7s] output result in a srt file\n",                    params.output_srt ? "true" : "false");
     fprintf(stderr, "  -olrc,     --output-lrc           [%-7s] output result in a lrc file\n",                    params.output_lrc ? "true" : "false");
@@ -466,8 +472,82 @@ static void whisper_print_segment_callback(struct whisper_context * ctx, struct 
     }
 }
 
+// a word ending in '.' that is likely an abbreviation or initial rather than a sentence end
+static bool is_abbreviation(const std::string & w) {
+    if (w.size() < 2 || w.back() != '.') {
+        return false;
+    }
+    std::string core = w.substr(0, w.size() - 1);
+    // single-letter initial, e.g. "F." in "John F. Kennedy"
+    if (core.size() == 1 && std::isalpha((unsigned char) core[0])) {
+        return true;
+    }
+    for (auto & c : core) {
+        c = (char) std::tolower((unsigned char) c);
+    }
+    static const std::set<std::string> abbr = {
+        "mr", "mrs", "ms", "dr", "st", "sr", "jr", "prof", "gen", "sen", "gov",
+        "vs", "etc", "e.g", "i.e", "a.m", "p.m", "u.s", "u.k", "no", "vol", "fig",
+    };
+    return abbr.count(core) > 0;
+}
+
+// reflow a continuous string into paragraphs word-wrapped at `width` columns,
+// starting a new paragraph after sentence-final punctuation
+static void output_txt_wrapped(std::ofstream & fout, const std::string & text, int width) {
+    std::istringstream iss(text);
+    std::string word;
+    int col = 0;
+    while (iss >> word) {
+        if (col == 0) {
+            fout << word;
+            col = (int) word.size();
+        } else if (col + 1 + (int) word.size() <= width) {
+            fout << ' ' << word;
+            col += 1 + (int) word.size();
+        } else {
+            fout << '\n' << word;
+            col = (int) word.size();
+        }
+
+        // detect sentence end, ignoring trailing closing quotes/brackets
+        std::string w = word;
+        while (!w.empty() && (w.back() == '"' || w.back() == '\'' || w.back() == ')' || w.back() == ']')) {
+            w.pop_back();
+        }
+        if (!w.empty()) {
+            const char c = w.back();
+            if (c == '!' || c == '?' || (c == '.' && !is_abbreviation(w))) {
+                fout << "\n\n";
+                col = 0;
+            }
+        }
+    }
+    if (col > 0) {
+        fout << '\n';
+    }
+}
+
 static void output_txt(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, std::vector<std::vector<float>> pcmf32s) {
     const int n_segments = whisper_full_n_segments(ctx);
+
+    // readable reflow: join segments and word-wrap into paragraphs
+    // (skipped when diarizing, since per-segment speaker lines must be preserved)
+    if (params.txt_wrap > 0 && !(params.diarize && pcmf32s.size() == 2)) {
+        std::string text;
+        for (int i = 0; i < n_segments; ++i) {
+            const char * seg = whisper_full_get_segment_text(ctx, i);
+            if (seg) {
+                if (!text.empty()) {
+                    text += ' ';
+                }
+                text += seg;
+            }
+        }
+        output_txt_wrapped(fout, text, params.txt_wrap);
+        return;
+    }
+
     for (int i = 0; i < n_segments; ++i) {
         const char * text = whisper_full_get_segment_text(ctx, i);
         std::string speaker = "";

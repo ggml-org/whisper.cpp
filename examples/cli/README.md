@@ -34,6 +34,7 @@ options:
   -tdrz,     --tinydiarize       [false  ] enable tinydiarize (requires a tdrz model)
   -nf,       --no-fallback       [false  ] do not use temperature fallback while decoding
   -otxt,     --output-txt        [false  ] output result in a text file
+  -tw N,     --txt-wrap N        [0      ] reflow .txt into paragraphs wrapped at N columns (0 = off)
   -ovtt,     --output-vtt        [false  ] output result in a vtt file
   -osrt,     --output-srt        [false  ] output result in a srt file
   -olrc,     --output-lrc        [false  ] output result in a lrc file
