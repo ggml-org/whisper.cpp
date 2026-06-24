@@ -20,6 +20,7 @@
 #include "common-whisper.h"
 
 #include "diarization.h"
+#include "neural_diarize.h"
 #include "file_browser.h"
 
 #include <atomic>
@@ -47,8 +48,9 @@ struct app_state {
     int   n_threads        = std::min(4, (int) std::thread::hardware_concurrency());
     bool  translate        = false;
     int   lang_index       = 0; // index into k_languages
-    bool  diarize          = false;
+    int   diarize_mode     = 0; // 0 = off, 1 = fast (built-in MFCC), 2 = accurate (sherpa-onnx)
     int   num_speakers     = 2; // 0 = auto-detect
+    char  diarize_script[1024] = "examples/whisper.gui/diarize.py";
 
     // model is kept loaded between runs and reloaded only when the path changes
     whisper_context * ctx          = nullptr;
@@ -83,8 +85,9 @@ static void transcribe_worker(app_state * s,
                               std::string language,
                               bool translate,
                               int n_threads,
-                              bool diarize,
-                              int num_speakers) {
+                              int diarize_mode,
+                              int num_speakers,
+                              std::string diarize_script) {
     s->running    = true;
     s->abort_flag = false;
     s->progress   = 0;
@@ -179,14 +182,14 @@ static void transcribe_worker(app_state * s,
         segs.push_back(std::move(seg));
     }
 
-    // 5. optional speaker diarization: embed each segment's audio span and cluster
+    // 5. optional speaker diarization
     std::string done_msg = "Done - " + std::to_string(n) + " segment(s).";
-    if (diarize && n > 0) {
-        set_status(*s, "Diarizing...");
+    if (diarize_mode == 1 && n > 0) {
+        // fast, built-in: embed each segment's audio span (MFCC) and cluster
+        set_status(*s, "Diarizing (fast)...");
         std::vector<std::vector<float>> embeddings(segs.size());
         const int total = (int) pcmf32.size();
         for (size_t i = 0; i < segs.size(); ++i) {
-            // whisper timestamps are in centiseconds -> sample index
             int beg = (int) (segs[i].t0 * WHISPER_SAMPLE_RATE / 100);
             int end = (int) (segs[i].t1 * WHISPER_SAMPLE_RATE / 100);
             beg = std::max(0, std::min(beg, total));
@@ -200,6 +203,23 @@ static void transcribe_worker(app_state * s,
             n_spk = std::max(n_spk, labels[i] + 1);
         }
         done_msg += " " + std::to_string(n_spk) + " speaker(s).";
+    } else if (diarize_mode == 2 && n > 0) {
+        // accurate: run the sherpa-onnx helper (diarize.py) as a subprocess
+        set_status(*s, "Diarizing (neural, this can take a moment)...");
+        std::vector<std::pair<int64_t, int64_t>> spans(segs.size());
+        for (size_t i = 0; i < segs.size(); ++i) spans[i] = {segs[i].t0, segs[i].t1};
+        std::vector<int> labels;
+        std::string err;
+        if (neural_diarize("python3", diarize_script, audio_path, spans, num_speakers, "", labels, err)) {
+            int n_spk = 0;
+            for (size_t i = 0; i < segs.size() && i < labels.size(); ++i) {
+                segs[i].speaker = labels[i];
+                n_spk = std::max(n_spk, labels[i] + 1);
+            }
+            done_msg += " " + std::to_string(n_spk) + " speaker(s) [neural].";
+        } else {
+            done_msg += "  (neural diarization failed - transcript only. " + err.substr(0, 200) + ")";
+        }
     }
 
     {
@@ -398,19 +418,29 @@ int main(int, char **) {
         ImGui::SameLine();
         ImGui::Checkbox("Translate to English", &state.translate);
 
-        ImGui::Checkbox("Diarize speakers", &state.diarize);
-        if (state.diarize) {
+        ImGui::SetNextItemWidth(220);
+        ImGui::Combo("Diarize", &state.diarize_mode,
+                     "Off\0Fast (built-in)\0Accurate (sherpa-onnx)\0");
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "Label who is speaking.\n"
+                "  Fast      - built-in MFCC, no setup, weak on similar voices.\n"
+                "  Accurate  - neural (sherpa-onnx) via diarize.py; needs:\n"
+                "                pip install sherpa-onnx numpy\n"
+                "                ./examples/whisper.gui/download-diarization-models.sh\n"
+                "Set the known speaker count for best results.");
+        }
+        if (state.diarize_mode != 0) {
             ImGui::SameLine();
-            ImGui::SetNextItemWidth(160);
+            ImGui::SetNextItemWidth(150);
             ImGui::InputInt("Speakers (0 = auto)", &state.num_speakers);
             if (state.num_speakers < 0) state.num_speakers = 0;
-            ImGui::SameLine();
-            ImGui::TextDisabled("(?)");
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Groups segments by voice using MFCC features.\n"
-                                  "Set the known number of speakers for best results,\n"
-                                  "or 0 to auto-detect. Works best with distinct voices.");
-            }
+        }
+        if (state.diarize_mode == 2) {
+            ImGui::SetNextItemWidth(-1);
+            ImGui::InputText("diarize.py", state.diarize_script, sizeof(state.diarize_script));
         }
 
         // begin / cancel
@@ -424,7 +454,8 @@ int main(int, char **) {
                                            std::string(state.audio_path),
                                            std::string(k_languages[state.lang_index]),
                                            state.translate, state.n_threads,
-                                           state.diarize, state.num_speakers);
+                                           state.diarize_mode, state.num_speakers,
+                                           std::string(state.diarize_script));
             }
             if (!can_run) ImGui::EndDisabled();
         } else {

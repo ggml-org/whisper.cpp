@@ -40,6 +40,7 @@ find_package(OpenGL REQUIRED)
 add_executable(${TARGET}
     main.cpp
     diarization.cpp
+    neural_diarize.cpp
     ${IMGUI_DIR}/imgui.cpp
     ${IMGUI_DIR}/imgui_draw.cpp
     ${IMGUI_DIR}/imgui_tables.cpp
@@ -55,6 +56,7 @@ target_compile_features(${TARGET} PRIVATE cxx_std_17) # std::filesystem
 target_include_directories(${TARGET} PRIVATE
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
+    ${CMAKE_CURRENT_SOURCE_DIR}/..   # examples/json.hpp
 )
 
 target_link_libraries(${TARGET} PRIVATE
