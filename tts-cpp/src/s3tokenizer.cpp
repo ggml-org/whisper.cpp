@@ -76,33 +76,16 @@ bool s3tokv2_load(const std::string & path, s3tokv2_weights & w)
     w.rope_theta   = f32("s3tokv2.rope_theta",         10000.0f);
     w.rope_max_pos = (int)u32("s3tokv2.rope_max_pos",  2048);
 
+    // Remember where the encoder weights live; build_encoder_ctx streams them
+    // straight into the backend buffer (no host mirror) from this file.
+    w.gguf_path = path;
+
+    // Host-resident tensors are only the small ones the C++ paths read
+    // directly: the mel filterbank (~103 KB, log-mel) and the FSQ
+    // project_down weight/bias (~41 KB, codebook math).  The ~458 MB of
+    // encoder weights are NOT staged here — see build_encoder_ctx.
     bool ok = true;
-    ok &= copy_f32(tmp, reader, "s3tokv2/mel_fb",              w.mel_fb);
-    ok &= copy_f32(tmp, reader, "s3tokv2/encoder/conv1/weight", w.conv1_w);
-    ok &= copy_f32(tmp, reader, "s3tokv2/encoder/conv1/bias",   w.conv1_b);
-    ok &= copy_f32(tmp, reader, "s3tokv2/encoder/conv2/weight", w.conv2_w);
-    ok &= copy_f32(tmp, reader, "s3tokv2/encoder/conv2/bias",   w.conv2_b);
-    w.blocks.clear(); w.blocks.resize(w.n_layer);
-    for (int i = 0; i < w.n_layer; ++i) {
-        auto & b = w.blocks[i];
-        const std::string p = "s3tokv2/encoder/blocks/" + std::to_string(i);
-        ok &= copy_f32(tmp, reader, (p + "/attn_ln/weight").c_str(), b.attn_ln_w);
-        ok &= copy_f32(tmp, reader, (p + "/attn_ln/bias").c_str(),   b.attn_ln_b);
-        ok &= copy_f32(tmp, reader, (p + "/attn/query/weight").c_str(), b.q_w);
-        ok &= copy_f32(tmp, reader, (p + "/attn/query/bias").c_str(),   b.q_b);
-        ok &= copy_f32(tmp, reader, (p + "/attn/key/weight").c_str(),   b.k_w);
-        ok &= copy_f32(tmp, reader, (p + "/attn/value/weight").c_str(), b.v_w);
-        ok &= copy_f32(tmp, reader, (p + "/attn/value/bias").c_str(),   b.v_b);
-        ok &= copy_f32(tmp, reader, (p + "/attn/out/weight").c_str(),   b.out_w);
-        ok &= copy_f32(tmp, reader, (p + "/attn/out/bias").c_str(),     b.out_b);
-        ok &= copy_f32(tmp, reader, (p + "/attn/fsmn_block/weight").c_str(), b.fsmn_w);
-        ok &= copy_f32(tmp, reader, (p + "/mlp_ln/weight").c_str(), b.mlp_ln_w);
-        ok &= copy_f32(tmp, reader, (p + "/mlp_ln/bias").c_str(),   b.mlp_ln_b);
-        ok &= copy_f32(tmp, reader, (p + "/mlp/0/weight").c_str(), b.mlp0_w);
-        ok &= copy_f32(tmp, reader, (p + "/mlp/0/bias").c_str(),   b.mlp0_b);
-        ok &= copy_f32(tmp, reader, (p + "/mlp/2/weight").c_str(), b.mlp2_w);
-        ok &= copy_f32(tmp, reader, (p + "/mlp/2/bias").c_str(),   b.mlp2_b);
-    }
+    ok &= copy_f32(tmp, reader, "s3tokv2/mel_fb",                                  w.mel_fb);
     ok &= copy_f32(tmp, reader, "s3tokv2/quantizer/_codebook/project_down/weight", w.fsq_w);
     ok &= copy_f32(tmp, reader, "s3tokv2/quantizer/_codebook/project_down/bias",   w.fsq_b);
 
@@ -398,39 +381,58 @@ static bool build_encoder_ctx(encoder_ctx & ec, const s3tokv2_weights & w,
     ec.buffer = ggml_backend_alloc_ctx_tensors(ec.ctx, ec.backend);
     if (!ec.buffer) { fprintf(stderr, "s3tokv2: alloc weights buffer failed\n"); return false; }
 
-    // Copy host data into the backend tensors.
-    auto set = [&](ggml_tensor * t, const std::vector<float> & src) {
-        size_t bytes = src.size() * sizeof(float);
-        if (bytes != ggml_nbytes(t)) {
-            fprintf(stderr, "s3tokv2: size mismatch for %s: expected %zu bytes, got %zu\n",
-                    ggml_get_name(t), ggml_nbytes(t), bytes);
-            return false;
-        }
-        ggml_backend_tensor_set(t, src.data(), 0, bytes);
-        return true;
+    // Stream the encoder weights straight from the GGUF into the freshly
+    // allocated backend tensors, 8 MiB at a time (gguf_stream.h) — no full-
+    // size host std::vector mirror, so the bake never holds host(458 MB) +
+    // backend(449 MB) co-resident.  Re-open with no_alloc=true so the GGUF
+    // metadata carries no data blob; the reader resolves offsets against `g`
+    // and pulls bytes from the file handle.  The backend tensors keep the
+    // ec.ctx names; the GGUF names differ, so each stream is keyed by its
+    // GGUF tensor name (identical bytes either way → numerically identical).
+    ggml_context * gmeta = nullptr;
+    gguf_init_params gp = { /*.no_alloc=*/ true, /*.ctx=*/ &gmeta };
+    gguf_context * g = gguf_init_from_file(w.gguf_path.c_str(), gp);
+    if (!g) {
+        fprintf(stderr, "s3tokv2: cannot reopen %s for weight streaming\n", w.gguf_path.c_str());
+        return false;
+    }
+    tts_cpp::detail::gguf_stream_reader reader(g, w.gguf_path);
+    if (!reader.ok()) { gguf_free(g); if (gmeta) ggml_free(gmeta); return false; }
+
+    // dst's nbytes must equal the GGUF entry's payload (to_backend asserts
+    // this); shapes/dtypes match s3tokv2_load's host layout exactly, so the
+    // raw bytes written are identical to the previous host-vector copy.
+    auto stream = [&](ggml_tensor * dst, const std::string & gguf_name) {
+        return reader.to_backend(gguf_name.c_str(), dst);
     };
 
     bool ok = true;
-    ok &= set(ec.conv1_w, w.conv1_w);
-    ok &= set(ec.conv1_b, w.conv1_b);
-    ok &= set(ec.conv2_w, w.conv2_w);
-    ok &= set(ec.conv2_b, w.conv2_b);
+    ok &= stream(ec.conv1_w, "s3tokv2/encoder/conv1/weight");
+    ok &= stream(ec.conv1_b, "s3tokv2/encoder/conv1/bias");
+    ok &= stream(ec.conv2_w, "s3tokv2/encoder/conv2/weight");
+    ok &= stream(ec.conv2_b, "s3tokv2/encoder/conv2/bias");
     for (int i = 0; i < w.n_layer; ++i) {
         auto & B = ec.blocks[i];
-        const auto & src = w.blocks[i];
-        ok &= set(B.attn_ln_w, src.attn_ln_w);
-        ok &= set(B.attn_ln_b, src.attn_ln_b);
-        ok &= set(B.q_w, src.q_w); ok &= set(B.q_b, src.q_b);
-        ok &= set(B.k_w, src.k_w);
-        ok &= set(B.v_w, src.v_w); ok &= set(B.v_b, src.v_b);
-        ok &= set(B.out_w, src.out_w); ok &= set(B.out_b, src.out_b);
-        ok &= set(B.fsmn_w, src.fsmn_w);
-        ok &= set(B.mlp_ln_w, src.mlp_ln_w);
-        ok &= set(B.mlp_ln_b, src.mlp_ln_b);
-        ok &= set(B.mlp0_w, src.mlp0_w); ok &= set(B.mlp0_b, src.mlp0_b);
-        ok &= set(B.mlp2_w, src.mlp2_w); ok &= set(B.mlp2_b, src.mlp2_b);
+        const std::string p = "s3tokv2/encoder/blocks/" + std::to_string(i);
+        ok &= stream(B.attn_ln_w, p + "/attn_ln/weight");
+        ok &= stream(B.attn_ln_b, p + "/attn_ln/bias");
+        ok &= stream(B.q_w,       p + "/attn/query/weight");
+        ok &= stream(B.q_b,       p + "/attn/query/bias");
+        ok &= stream(B.k_w,       p + "/attn/key/weight");
+        ok &= stream(B.v_w,       p + "/attn/value/weight");
+        ok &= stream(B.v_b,       p + "/attn/value/bias");
+        ok &= stream(B.out_w,     p + "/attn/out/weight");
+        ok &= stream(B.out_b,     p + "/attn/out/bias");
+        ok &= stream(B.fsmn_w,    p + "/attn/fsmn_block/weight");
+        ok &= stream(B.mlp_ln_w,  p + "/mlp_ln/weight");
+        ok &= stream(B.mlp_ln_b,  p + "/mlp_ln/bias");
+        ok &= stream(B.mlp0_w,    p + "/mlp/0/weight");
+        ok &= stream(B.mlp0_b,    p + "/mlp/0/bias");
+        ok &= stream(B.mlp2_w,    p + "/mlp/2/weight");
+        ok &= stream(B.mlp2_b,    p + "/mlp/2/bias");
     }
 
+    gguf_free(g); if (gmeta) ggml_free(gmeta);
     return ok;
 }
 

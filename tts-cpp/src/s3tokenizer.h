@@ -29,27 +29,14 @@
 struct ggml_tensor;
 typedef struct ggml_backend * ggml_backend_t;
 
-// Flat pointer-to-(cloned-f32-vector) model.  Every tensor is loaded eagerly
-// into a std::vector<float> so we don't keep the GGUF mmap pinned.
-struct s3tokv2_block {
-    // attn_ln (LayerNorm before the attention block).
-    std::vector<float> attn_ln_w;
-    std::vector<float> attn_ln_b;
-
-    // FSMN multi-head attention.
-    std::vector<float> q_w, q_b;
-    std::vector<float> k_w;            // no bias in the reference
-    std::vector<float> v_w, v_b;
-    std::vector<float> out_w, out_b;
-    std::vector<float> fsmn_w;         // depth-wise conv1d, k=31, groups=D, no bias
-
-    // mlp_ln + MLP.
-    std::vector<float> mlp_ln_w;
-    std::vector<float> mlp_ln_b;
-    std::vector<float> mlp0_w, mlp0_b; // Linear D → 4D
-    std::vector<float> mlp2_w, mlp2_b; // Linear 4D → D
-};
-
+// Hyperparameters + the few small tensors host code touches directly
+// (mel filterbank for log-mel, FSQ project_down for the codebook math).
+//
+// The ~458 MB of encoder weights (convs + 6 transformer blocks) are NOT
+// mirrored here: build_encoder_ctx streams them straight from the GGUF into
+// the backend weight buffer in 8 MiB chunks (see s3tokenizer.cpp /
+// gguf_stream.h), so they are never dual-resident on the host.  `gguf_path`
+// is the file those streamed reads target.
 struct s3tokv2_weights {
     int n_mels       = 128;
     int n_state      = 1280;
@@ -68,18 +55,14 @@ struct s3tokv2_weights {
     float rope_theta = 10000.0f;
     int rope_max_pos = 2048;
 
-    // Mel filterbank (n_mels, n_fft/2 + 1) = (128, 201).
+    // GGUF file the encoder weights are streamed from at ctx-build time.
+    std::string gguf_path;
+
+    // Mel filterbank (n_mels, n_fft/2 + 1) = (128, 201).  Used by log-mel.
     std::vector<float> mel_fb;
 
-    // Encoder stem.
-    std::vector<float> conv1_w;        // (out=1280, in=128, k=3)
-    std::vector<float> conv1_b;
-    std::vector<float> conv2_w;        // (1280, 1280, k=3)
-    std::vector<float> conv2_b;
-
-    std::vector<s3tokv2_block> blocks;
-
-    // FSQ quantizer's project_down (dim=1280 → 8).
+    // FSQ quantizer's project_down (dim=1280 → 8).  Used by the FSQ codebook
+    // math on the host (s3tokv2_tokenize).
     std::vector<float> fsq_w;
     std::vector<float> fsq_b;
 };
