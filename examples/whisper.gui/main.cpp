@@ -19,6 +19,8 @@
 #include "whisper.h"
 #include "common-whisper.h"
 
+#include "diarization.h"
+
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -33,6 +35,7 @@ struct segment {
     int64_t     t0;
     int64_t     t1;
     std::string text;
+    int         speaker = -1; // -1 = not diarized
 };
 
 // state shared between the UI thread and the transcription worker
@@ -43,6 +46,8 @@ struct app_state {
     int   n_threads        = std::min(4, (int) std::thread::hardware_concurrency());
     bool  translate        = false;
     int   lang_index       = 0; // index into k_languages
+    bool  diarize          = false;
+    int   num_speakers     = 2; // 0 = auto-detect
 
     // model is kept loaded between runs and reloaded only when the path changes
     whisper_context * ctx          = nullptr;
@@ -76,7 +81,9 @@ static void transcribe_worker(app_state * s,
                               std::string audio_path,
                               std::string language,
                               bool translate,
-                              int n_threads) {
+                              int n_threads,
+                              bool diarize,
+                              int num_speakers) {
     s->running    = true;
     s->abort_flag = false;
     s->progress   = 0;
@@ -149,20 +156,52 @@ static void transcribe_worker(app_state * s,
 
     // 4. collect the result
     const int n = whisper_full_n_segments(s->ctx);
+    std::vector<segment> segs;
+    segs.reserve(n);
+    for (int i = 0; i < n; ++i) {
+        segment seg;
+        seg.t0   = whisper_full_get_segment_t0(s->ctx, i);
+        seg.t1   = whisper_full_get_segment_t1(s->ctx, i);
+        const char * txt = whisper_full_get_segment_text(s->ctx, i);
+        seg.text = txt ? txt : "";
+        segs.push_back(std::move(seg));
+    }
+
+    // 5. optional speaker diarization: embed each segment's audio span and cluster
+    std::string done_msg = "Done - " + std::to_string(n) + " segment(s).";
+    if (diarize && n > 0) {
+        set_status(*s, "Diarizing...");
+        std::vector<std::vector<float>> embeddings(segs.size());
+        const int total = (int) pcmf32.size();
+        for (size_t i = 0; i < segs.size(); ++i) {
+            // whisper timestamps are in centiseconds -> sample index
+            int beg = (int) (segs[i].t0 * WHISPER_SAMPLE_RATE / 100);
+            int end = (int) (segs[i].t1 * WHISPER_SAMPLE_RATE / 100);
+            beg = std::max(0, std::min(beg, total));
+            end = std::max(beg, std::min(end, total));
+            embeddings[i] = diarize::compute_embedding(pcmf32.data() + beg, end - beg, WHISPER_SAMPLE_RATE);
+        }
+        const std::vector<int> labels = diarize::cluster(embeddings, num_speakers, 0.15f);
+        int n_spk = 0;
+        for (size_t i = 0; i < segs.size(); ++i) {
+            segs[i].speaker = labels[i];
+            n_spk = std::max(n_spk, labels[i] + 1);
+        }
+        done_msg += " " + std::to_string(n_spk) + " speaker(s).";
+    }
+
     {
         std::lock_guard<std::mutex> lock(s->mtx);
-        for (int i = 0; i < n; ++i) {
-            segment seg;
-            seg.t0   = whisper_full_get_segment_t0(s->ctx, i);
-            seg.t1   = whisper_full_get_segment_t1(s->ctx, i);
-            const char * txt = whisper_full_get_segment_text(s->ctx, i);
-            seg.text = txt ? txt : "";
-            s->segments.push_back(std::move(seg));
-        }
-        s->status = "Done - " + std::to_string(n) + " segment(s).";
+        s->segments = std::move(segs);
+        s->status   = done_msg;
     }
     s->progress = 100;
     s->running  = false;
+}
+
+// "Speaker N" (1-based) for display/export; empty when not diarized
+static std::string speaker_label(int speaker) {
+    return speaker >= 0 ? "Speaker " + std::to_string(speaker + 1) : std::string();
 }
 
 // export helpers (called from the UI thread while no worker is running)
@@ -172,6 +211,7 @@ static bool export_txt(const std::string & path, const std::vector<segment> & se
     for (const auto & s : segs) {
         const char * t = s.text.c_str();
         while (*t == ' ') ++t; // trim leading space whisper adds
+        if (s.speaker >= 0) f << speaker_label(s.speaker) << ": ";
         f << t << "\n";
     }
     return true;
@@ -183,6 +223,7 @@ static bool export_srt(const std::string & path, const std::vector<segment> & se
     for (size_t i = 0; i < segs.size(); ++i) {
         f << (i + 1) << "\n";
         f << to_timestamp(segs[i].t0, true) << " --> " << to_timestamp(segs[i].t1, true) << "\n";
+        if (segs[i].speaker >= 0) f << speaker_label(segs[i].speaker) << ":";
         f << segs[i].text << "\n\n";
     }
     return true;
@@ -211,6 +252,7 @@ static bool export_json(const std::string & path, const std::vector<segment> & s
         f << "    {\n";
         f << "      \"from\": " << segs[i].t0 << ",\n";
         f << "      \"to\": "   << segs[i].t1 << ",\n";
+        if (segs[i].speaker >= 0) f << "      \"speaker\": " << (segs[i].speaker + 1) << ",\n";
         f << "      \"text\": \"" << json_escape(segs[i].text) << "\"\n";
         f << "    }" << (i + 1 < segs.size() ? "," : "") << "\n";
     }
@@ -326,6 +368,21 @@ int main(int, char **) {
         ImGui::SameLine();
         ImGui::Checkbox("Translate to English", &state.translate);
 
+        ImGui::Checkbox("Diarize speakers", &state.diarize);
+        if (state.diarize) {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(160);
+            ImGui::InputInt("Speakers (0 = auto)", &state.num_speakers);
+            if (state.num_speakers < 0) state.num_speakers = 0;
+            ImGui::SameLine();
+            ImGui::TextDisabled("(?)");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Groups segments by voice using MFCC features.\n"
+                                  "Set the known number of speakers for best results,\n"
+                                  "or 0 to auto-detect. Works best with distinct voices.");
+            }
+        }
+
         // begin / cancel
         if (!running) {
             const bool can_run = state.audio_path[0] != '\0' && state.model_path[0] != '\0';
@@ -336,7 +393,8 @@ int main(int, char **) {
                                            std::string(state.model_path),
                                            std::string(state.audio_path),
                                            std::string(k_languages[state.lang_index]),
-                                           state.translate, state.n_threads);
+                                           state.translate, state.n_threads,
+                                           state.diarize, state.num_speakers);
             }
             if (!can_run) ImGui::EndDisabled();
         } else {
@@ -373,10 +431,22 @@ int main(int, char **) {
         // transcript
         ImGui::BeginChild("transcript", ImVec2(0, 0), true);
         {
+            // a small palette so each speaker gets a distinct, stable color
+            static const ImVec4 spk_colors[] = {
+                ImVec4(0.40f, 0.75f, 1.00f, 1.0f), ImVec4(1.00f, 0.65f, 0.40f, 1.0f),
+                ImVec4(0.55f, 0.90f, 0.55f, 1.0f), ImVec4(0.95f, 0.60f, 0.85f, 1.0f),
+                ImVec4(0.90f, 0.85f, 0.45f, 1.0f), ImVec4(0.70f, 0.70f, 1.00f, 1.0f),
+            };
+            const int n_colors = IM_ARRAYSIZE(spk_colors);
+
             std::lock_guard<std::mutex> lock(state.mtx);
             for (const auto & seg : state.segments) {
                 ImGui::TextDisabled("[%s -> %s]", to_timestamp(seg.t0).c_str(), to_timestamp(seg.t1).c_str());
                 ImGui::SameLine();
+                if (seg.speaker >= 0) {
+                    ImGui::TextColored(spk_colors[seg.speaker % n_colors], "Speaker %d:", seg.speaker + 1);
+                    ImGui::SameLine();
+                }
                 ImGui::TextWrapped("%s", seg.text.c_str());
             }
         }
