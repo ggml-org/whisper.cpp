@@ -269,7 +269,7 @@ int main(int argc, char ** argv) {
 
             std::ofstream temp_file{temp_filename, std::ios::binary};
             temp_file.write(audio_file.content.data(),
-                            static_cast<std::streamsize>(audio_file.content.size()));
+                static_cast<std::streamsize>(audio_file.content.size()));
         }
 
         if (sparams.ffmpeg_converter) {
