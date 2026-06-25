@@ -30,6 +30,7 @@ struct server_params {
     int32_t write_timeout = 600;
 
     bool ffmpeg_converter = false;
+    bool keep_input_audio = false;
 };
 
 struct segment_token {
