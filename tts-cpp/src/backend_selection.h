@@ -115,4 +115,9 @@ bool is_adreno_700plus(const char * s);
 // string. Used to gate Android GPU selection to the only validated vendor.
 bool is_qualcomm_adreno(const char * name, const char * desc);
 
+// Vendor check (name OR description, ASCII case-insensitive): true for an ARM
+// Mali / Immortalis (Valhall) GPU. Exposed so the Chatterbox S3Gen graph can
+// route the CFM attention off the (Mali-miscomputing) f32 flash_attn_ext kernel.
+bool is_arm_mali(const char * name, const char * desc);
+
 } // namespace tts_cpp::detail
