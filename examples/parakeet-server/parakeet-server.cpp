@@ -53,6 +53,7 @@ static void parakeet_print_usage(int /*argc*/, char ** argv, const parakeet_para
     fprintf(stderr, "  --request-path PATH,     [%-7s] Request path prefix\n", sparams.request_path.c_str());
     fprintf(stderr, "  --inference-path PATH,   [%-7s] Inference endpoint path\n", sparams.inference_path.c_str());
     fprintf(stderr, "  --convert,               [%-7s] Convert audio to WAV via ffmpeg\n", sparams.ffmpeg_converter ? "true" : "false");
+    fprintf(stderr, "  --keep-input-audio,      [%-7s] Keep input audio in --tmp-dir\n", sparams.keep_input_audio ? "true" : "false");
     fprintf(stderr, "  --tmp-dir PATH,          [%-7s] Temporary directory for converted files\n", sparams.tmp_dir.c_str());
     fprintf(stderr, "\n");
 }
@@ -82,6 +83,7 @@ static bool parakeet_params_parse(int argc, char ** argv, parakeet_params & para
         else if (arg == "--request-path")                  { sparams.request_path   = argv[++i]; }
         else if (arg == "--inference-path")                { sparams.inference_path = argv[++i]; }
         else if (arg == "--convert")                       { sparams.ffmpeg_converter = true; }
+        else if (arg == "--keep-input-audio")              { sparams.keep_input_audio = true; }
         else if (arg == "--tmp-dir")                       { sparams.tmp_dir        = argv[++i]; }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
@@ -260,12 +262,17 @@ int main(int argc, char ** argv) {
         std::vector<float> pcmf32;
         std::vector<std::vector<float>> pcmf32s;
 
-        if (sparams.ffmpeg_converter) {
-            const std::string temp_filename = generate_temp_filename(sparams.tmp_dir, "parakeet-server", ".wav");
-            std::ofstream temp_file{temp_filename, std::ios::binary};
-            temp_file << audio_file.content;
-            temp_file.close();
+        std::string temp_filename;
 
+        if (sparams.keep_input_audio || sparams.ffmpeg_converter) {
+            temp_filename = generate_temp_filename(sparams.tmp_dir, "parakeet-server", ".wav");
+
+            std::ofstream temp_file{temp_filename, std::ios::binary};
+            temp_file.write(audio_file.content.data(),
+                            static_cast<std::streamsize>(audio_file.content.size()));
+        }
+
+        if (sparams.ffmpeg_converter) {
             std::string error_resp;
             if (!convert_to_wav(temp_filename, error_resp, false)) {
                 res.status = 500;
@@ -277,10 +284,11 @@ int main(int argc, char ** argv) {
                 fprintf(stderr, "error: failed to read WAV file '%s'\n", temp_filename.c_str());
                 res.status = 400;
                 res.set_content("{\"error\":\"failed to read WAV file\"}", "application/json");
-                std::remove(temp_filename.c_str());
+                if (!sparams.keep_input_audio) {
+                    std::remove(temp_filename.c_str());
+                }
                 return;
             }
-            std::remove(temp_filename.c_str());
         } else {
             if (!::read_audio_data(audio_file.content.data(), audio_file.content.size(), pcmf32, pcmf32s, false)) {
                 fprintf(stderr, "error: failed to read audio data\n");
@@ -288,6 +296,10 @@ int main(int argc, char ** argv) {
                 res.set_content("{\"error\":\"failed to read audio data\"}", "application/json");
                 return;
             }
+        }
+
+        if (!sparams.keep_input_audio) {
+            std::remove(temp_filename.c_str());
         }
 
         printf("Successfully loaded %s\n", filename.c_str());
