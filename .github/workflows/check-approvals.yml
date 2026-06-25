@@ -33,7 +33,7 @@ jobs:
       )
     steps:
       - name: Install @qvac/ci
-        run: npm install -g @qvac/ci@0.1.0
+        run: npm install -g @qvac/ci@0.2.0
 
       - name: Check Approvals
         continue-on-error: true
