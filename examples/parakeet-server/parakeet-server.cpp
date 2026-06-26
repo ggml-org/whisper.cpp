@@ -22,10 +22,8 @@ using json = nlohmann::ordered_json;
 struct parakeet_params {
     int32_t n_threads   = std::min(4, (int32_t) std::thread::hardware_concurrency());
     int32_t offset_ms   = 0;
-    int32_t duration_ms = 0;
-
-    bool use_gpu         = true;
-    int32_t gpu_device   = 0;
+    bool    use_gpu     = true;
+    int32_t gpu_device  = 0;
 
     std::string model           = "models/ggml-parakeet-tdt-0.6b-v3.bin";
     std::string response_format = json_format;
@@ -39,7 +37,6 @@ static void parakeet_print_usage(int /*argc*/, char ** argv, const parakeet_para
     fprintf(stderr, "  -h,        --help        [default] show this help message and exit\n");
     fprintf(stderr, "  -t N,      --threads N   [%-7d] number of threads to use during computation\n", params.n_threads);
     fprintf(stderr, "  -ot N,     --offset-t N  [%-7d] time offset in milliseconds\n", params.offset_ms);
-    fprintf(stderr, "  -d N,      --duration N  [%-7d] duration of audio to process in milliseconds\n", params.duration_ms);
     fprintf(stderr, "  -m FNAME,  --model FNAME [%-7s] model path\n", params.model.c_str());
     fprintf(stderr, "  -ng,       --no-gpu      [%-7s] do not use GPU\n", params.use_gpu ? "false" : "true");
     fprintf(stderr, "  -dev N,    --device N    [%-7d] GPU device ID\n", params.gpu_device);
@@ -69,7 +66,6 @@ static bool parakeet_params_parse(int argc, char ** argv, parakeet_params & para
         }
         else if (arg == "-t"    || arg == "--threads")     { params.n_threads       = std::stoi(argv[++i]); }
         else if (arg == "-ot"   || arg == "--offset-t")    { params.offset_ms       = std::stoi(argv[++i]); }
-        else if (arg == "-d"    || arg == "--duration")    { params.duration_ms     = std::stoi(argv[++i]); }
         else if (arg == "-m"    || arg == "--model")       { params.model           = argv[++i]; }
         else if (arg == "-ng"   || arg == "--no-gpu")      { params.use_gpu         = false; }
         else if (arg == "-dev"  || arg == "--device")      { params.gpu_device      = std::stoi(argv[++i]); }
@@ -94,9 +90,6 @@ static bool parakeet_params_parse(int argc, char ** argv, parakeet_params & para
 static void get_req_parameters(const Request & req, parakeet_params & params) {
     if (req.has_file("offset_t")) {
         params.offset_ms = std::stoi(req.get_file_value("offset_t").content);
-    }
-    if (req.has_file("duration")) {
-        params.duration_ms = std::stoi(req.get_file_value("duration").content);
     }
     if (req.has_file("response_format")) {
         params.response_format = req.get_file_value("response_format").content;
@@ -307,7 +300,6 @@ int main(int argc, char ** argv) {
             parakeet_full_params fparams = parakeet_full_default_params(PARAKEET_SAMPLING_GREEDY);
             fparams.n_threads    = cur_params.n_threads;
             fparams.offset_ms    = cur_params.offset_ms;
-            fparams.duration_ms  = cur_params.duration_ms;
             fparams.no_context   = true;
 
             // Abort callback for HTTP disconnect
