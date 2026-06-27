@@ -8139,6 +8139,30 @@ int64_t whisper_full_get_token_t1(struct whisper_context * ctx, int i_segment, i
     return whisper_full_get_token_t1_from_state(ctx->state, i_segment, i_token);
 }
 
+int whisper_full_n_vad_segments_from_state(struct whisper_state * state) {
+    return (int) state->vad_segments.size();
+}
+
+int whisper_full_n_vad_segments(struct whisper_context * ctx) {
+    return (int) ctx->state->vad_segments.size();
+}
+
+int64_t whisper_full_get_vad_segment_t0_from_state(struct whisper_state * state, int i) {
+    return state->vad_segments[i].orig_start;
+}
+
+int64_t whisper_full_get_vad_segment_t0(struct whisper_context * ctx, int i) {
+    return ctx->state->vad_segments[i].orig_start;
+}
+
+int64_t whisper_full_get_vad_segment_t1_from_state(struct whisper_state * state, int i) {
+    return state->vad_segments[i].orig_end;
+}
+
+int64_t whisper_full_get_vad_segment_t1(struct whisper_context * ctx, int i) {
+    return ctx->state->vad_segments[i].orig_end;
+}
+
 float whisper_full_get_token_p_from_state(struct whisper_state * state, int i_segment, int i_token) {
     return state->result_all[i_segment].tokens[i_token].p;
 }

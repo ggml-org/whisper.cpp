@@ -62,6 +62,18 @@ int main() {
         prev_t0 = t0;
     }
 
+    // internal VAD speech segments, on the original audio timeline (centiseconds)
+    const int n_vad = whisper_full_n_vad_segments(wctx);
+    assert(n_vad > 0);
+    int64_t vad_prev_end = -1;
+    for (int i = 0; i < n_vad; ++i) {
+        const int64_t t0 = whisper_full_get_vad_segment_t0(wctx, i);
+        const int64_t t1 = whisper_full_get_vad_segment_t1(wctx, i);
+        assert(t1 > t0);
+        assert(t0 >= vad_prev_end); // segments are ordered and non-overlapping
+        vad_prev_end = t1;
+    }
+
     whisper_free(wctx);
 
     return 0;
