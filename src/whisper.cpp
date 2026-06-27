@@ -8075,6 +8075,70 @@ struct whisper_token_data whisper_full_get_token_data(struct whisper_context * c
     return ctx->state->result_all[i_segment].tokens[i_token];
 }
 
+// map a token time (centiseconds) from the VAD-processed timeline back to the original
+// audio. a token inside a speech segment is interpolated within that segment; a token that
+// falls in the silence removed between two segments snaps to the nearer boundary, so it
+// never ends up in the middle of a cut-out gap (which a single global interpolation over
+// the whole mapping table would do).
+static int64_t whisper_map_token_time_segment_aware(
+        int64_t t,
+        const std::vector<whisper_state::vad_segment_info> & segs) {
+    if (segs.empty()) {
+        return t;
+    }
+    if (t <= segs.front().vad_start) {
+        return segs.front().orig_start;
+    }
+    if (t >= segs.back().vad_end) {
+        return segs.back().orig_end;
+    }
+    for (size_t i = 0; i < segs.size(); ++i) {
+        const auto & s = segs[i];
+        if (t >= s.vad_start && t <= s.vad_end) {
+            const int64_t vd = s.vad_end - s.vad_start;
+            const int64_t od = s.orig_end - s.orig_start;
+            if (vd <= 0) {
+                return s.orig_start;
+            }
+            return s.orig_start + (t - s.vad_start) * od / vd;
+        }
+        if (i + 1 < segs.size() && t > s.vad_end && t < segs[i + 1].vad_start) {
+            const int64_t mid = (s.vad_end + segs[i + 1].vad_start) / 2;
+            return (t <= mid) ? s.orig_end : segs[i + 1].orig_start;
+        }
+    }
+    return t;
+}
+
+int64_t whisper_full_get_token_t0_from_state(struct whisper_state * state, int i_segment, int i_token) {
+    const int64_t t0 = state->result_all[i_segment].tokens[i_token].t0;
+    if (!state->has_vad_segments || state->vad_segments.empty()) {
+        return t0;
+    }
+    return whisper_map_token_time_segment_aware(t0, state->vad_segments);
+}
+
+int64_t whisper_full_get_token_t0(struct whisper_context * ctx, int i_segment, int i_token) {
+    return whisper_full_get_token_t0_from_state(ctx->state, i_segment, i_token);
+}
+
+int64_t whisper_full_get_token_t1_from_state(struct whisper_state * state, int i_segment, int i_token) {
+    const int64_t t1 = state->result_all[i_segment].tokens[i_token].t1;
+    if (!state->has_vad_segments || state->vad_segments.empty()) {
+        return t1;
+    }
+    const int64_t orig_t0 = whisper_full_get_token_t0_from_state(state, i_segment, i_token);
+    int64_t orig_t1 = whisper_map_token_time_segment_aware(t1, state->vad_segments);
+    if (orig_t1 < orig_t0 + 1) {
+        orig_t1 = orig_t0 + 1; // keep a strictly positive duration after snapping
+    }
+    return orig_t1;
+}
+
+int64_t whisper_full_get_token_t1(struct whisper_context * ctx, int i_segment, int i_token) {
+    return whisper_full_get_token_t1_from_state(ctx->state, i_segment, i_token);
+}
+
 float whisper_full_get_token_p_from_state(struct whisper_state * state, int i_segment, int i_token) {
     return state->result_all[i_segment].tokens[i_token].p;
 }

@@ -50,6 +50,18 @@ int main() {
     assert(whisper_full_get_segment_t0(wctx, 0) == 32);
     assert(whisper_full_get_segment_t1(wctx, 0) == 1051);
 
+    // token times mapped back to the original timeline: ordered, non-negative duration
+    const int n_tokens = whisper_full_n_tokens(wctx, 0);
+    assert(n_tokens > 0);
+    int64_t prev_t0 = -1;
+    for (int j = 0; j < n_tokens; ++j) {
+        const int64_t t0 = whisper_full_get_token_t0(wctx, 0, j);
+        const int64_t t1 = whisper_full_get_token_t1(wctx, 0, j);
+        assert(t0 >= 0 && t1 >= t0);
+        assert(t0 >= prev_t0);
+        prev_t0 = t0;
+    }
+
     whisper_free(wctx);
 
     return 0;
