@@ -13,6 +13,29 @@
 #include <cstdint>
 #include <cfloat>
 
+// True if `s` does not end in the middle of a UTF-8 multi-byte sequence. Used to
+// merge whisper byte-fallback tokens (rare CJK chars are split into 1-byte tokens)
+// back into whole characters before crossing the JS string boundary, which would
+// otherwise turn each partial byte into U+FFFD.
+static bool utf8_complete(const std::string & s) {
+    size_t i = 0;
+    const size_t n = s.size();
+    while (i < n) {
+        const unsigned char c = (unsigned char) s[i];
+        size_t len;
+        if (c < 0x80)             len = 1; // 0xxxxxxx
+        else if ((c >> 5) == 0x6) len = 2; // 110xxxxx
+        else if ((c >> 4) == 0xE) len = 3; // 1110xxxx
+        else if ((c >> 3) == 0x1E) len = 4; // 11110xxx
+        else                      len = 1; // stray continuation/invalid lead: don't stall
+        if (i + len > n) {
+            return false; // not enough continuation bytes yet
+        }
+        i += len;
+    }
+    return true;
+}
+
 struct whisper_params {
     int32_t n_threads    = std::min(4, (int32_t) std::thread::hardware_concurrency());
     int32_t n_processors = 1;
@@ -45,6 +68,7 @@ struct whisper_params {
     bool use_gpu        = true;
     bool flash_attn     = false;
     bool comma_in_time  = true;
+    bool token_timestamps = false; // emit per-token text + segment-aware mapped times
 
     std::string language = "en";
     std::string prompt;
@@ -145,7 +169,24 @@ void whisper_print_segment_callback(struct whisper_context * ctx, struct whisper
 void cb_log_disable(enum ggml_log_level, const char *, void *) {}
 
 struct whisper_result {
+    struct token_result {
+        std::string text;
+        int64_t     t0; // ms, original timeline (segment-aware mapped when VAD is on)
+        int64_t     t1; // ms
+        float       p;  // token probability
+    };
+
     std::vector<std::vector<std::string>> segments;
+
+    // Per-token output (populated only when params.token_timestamps is set). Lets the
+    // caller build subtitle cues from real token boundaries instead of abusing max_len=1.
+    std::vector<token_result> tokens;
+
+    // Speech segments detected by the internal VAD, on the original timeline (ms).
+    // Empty when VAD was not used, so the caller can reuse these instead of running a
+    // second, separate VAD pass over the same audio.
+    std::vector<std::pair<int64_t, int64_t>> vad_segments;
+
     std::string language;
 };
 
@@ -201,6 +242,30 @@ class ProgressWorker : public Napi::AsyncWorker {
             transcriptionArray[i] = tmp;
          }
          returnObj.Set("transcription", transcriptionArray);
+
+         // Per-token rows: { text, t0, t1, p } with t0/t1 in ms on the original timeline.
+         Napi::Array tokensArray = Napi::Array::New(Env(), result.tokens.size());
+         for (uint64_t i = 0; i < result.tokens.size(); ++i) {
+             const auto & t = result.tokens[i];
+             Napi::Object tokenObj = Napi::Object::New(Env());
+             tokenObj.Set("text", Napi::String::New(Env(), t.text));
+             tokenObj.Set("t0", Napi::Number::New(Env(), (double) t.t0));
+             tokenObj.Set("t1", Napi::Number::New(Env(), (double) t.t1));
+             tokenObj.Set("p", Napi::Number::New(Env(), (double) t.p));
+             tokensArray[i] = tokenObj;
+         }
+         returnObj.Set("tokens", tokensArray);
+
+         // Internal VAD speech segments: { t0, t1 } in ms on the original timeline.
+         Napi::Array vadArray = Napi::Array::New(Env(), result.vad_segments.size());
+         for (uint64_t i = 0; i < result.vad_segments.size(); ++i) {
+             Napi::Object vadObj = Napi::Object::New(Env());
+             vadObj.Set("t0", Napi::Number::New(Env(), (double) result.vad_segments[i].first));
+             vadObj.Set("t1", Napi::Number::New(Env(), (double) result.vad_segments[i].second));
+             vadArray[i] = vadObj;
+         }
+         returnObj.Set("vadSegments", vadArray);
+
          Callback().Call({Env().Null(), returnObj});
     }
 
@@ -320,7 +385,7 @@ class ProgressWorker : public Napi::AsyncWorker {
                 wparams.offset_ms        = params.offset_t_ms;
                 wparams.duration_ms      = params.duration_ms;
 
-                wparams.token_timestamps = params.output_wts || params.max_len > 0;
+                wparams.token_timestamps = params.output_wts || params.max_len > 0 || params.token_timestamps;
                 wparams.thold_pt         = params.word_thold;
                 wparams.entropy_thold    = params.entropy_thold;
                 wparams.logprob_thold    = params.logprob_thold;
@@ -403,6 +468,72 @@ class ProgressWorker : public Napi::AsyncWorker {
             result.segments[i].emplace_back(text);
         }
 
+        // Per-token output: token text + segment-aware mapped times (original timeline).
+        // Skips special/timestamp tokens (id >= eot). Times are converted cs -> ms.
+        //
+        // whisper emits rare CJK characters as byte-fallback tokens (1 raw byte each),
+        // so a single character is spread over 2-3 tokens whose individual bytes are not
+        // valid UTF-8. Emitting them one-by-one would corrupt the character into U+FFFD at
+        // the JS string boundary, so accumulate raw bytes and only flush a display-token
+        // once the buffer is complete UTF-8: t0 from the first contributing token, t1 from
+        // the last, p averaged over the contributors.
+        if (params.token_timestamps) {
+            const whisper_token eot = whisper_token_eot(ctx);
+            for (int i = 0; i < n_segments; ++i) {
+                const int n_tokens = whisper_full_n_tokens(ctx, i);
+
+                std::string acc_text;
+                int64_t     acc_t0   = 0;
+                int64_t     acc_t1   = 0;
+                float       acc_psum = 0.0f;
+                int         acc_n    = 0;
+
+                for (int j = 0; j < n_tokens; ++j) {
+                    if (whisper_full_get_token_id(ctx, i, j) >= eot) {
+                        continue;
+                    }
+                    if (acc_n == 0) {
+                        acc_t0 = whisper_full_get_token_t0(ctx, i, j) * 10;
+                    }
+                    acc_text += whisper_full_get_token_text(ctx, i, j);
+                    acc_t1    = whisper_full_get_token_t1(ctx, i, j) * 10;
+                    acc_psum += whisper_full_get_token_p(ctx, i, j);
+                    acc_n    += 1;
+
+                    if (utf8_complete(acc_text)) {
+                        whisper_result::token_result tr;
+                        tr.text = acc_text;
+                        tr.t0   = acc_t0;
+                        tr.t1   = acc_t1;
+                        tr.p    = acc_psum / acc_n;
+                        result.tokens.push_back(std::move(tr));
+                        acc_text.clear();
+                        acc_psum = 0.0f;
+                        acc_n    = 0;
+                    }
+                }
+
+                // Defensive flush of any dangling bytes at segment end (normally empty).
+                if (!acc_text.empty()) {
+                    whisper_result::token_result tr;
+                    tr.text = acc_text;
+                    tr.t0   = acc_t0;
+                    tr.t1   = acc_t1;
+                    tr.p    = acc_n > 0 ? acc_psum / acc_n : 0.0f;
+                    result.tokens.push_back(std::move(tr));
+                }
+            }
+        }
+
+        // Expose the internal VAD speech boundaries (original timeline, ms). Empty if VAD off.
+        const int n_vad = whisper_full_n_vad_segments(ctx);
+        result.vad_segments.reserve(n_vad);
+        for (int i = 0; i < n_vad; ++i) {
+            result.vad_segments.emplace_back(
+                whisper_full_get_vad_segment_t0(ctx, i) * 10,
+                whisper_full_get_vad_segment_t1(ctx, i) * 10);
+        }
+
         whisper_print_timings(ctx);
         whisper_free(ctx);
 
@@ -455,6 +586,11 @@ Napi::Value whisper(const Napi::CallbackInfo& info) {
   bool comma_in_time = true;
   if (whisper_params.Has("comma_in_time") && whisper_params.Get("comma_in_time").IsBoolean()) {
     comma_in_time = whisper_params.Get("comma_in_time").As<Napi::Boolean>();
+  }
+
+  bool token_timestamps = false;
+  if (whisper_params.Has("token_timestamps") && whisper_params.Get("token_timestamps").IsBoolean()) {
+    token_timestamps = whisper_params.Get("token_timestamps").As<Napi::Boolean>();
   }
 
   int32_t max_len = 0;
@@ -547,6 +683,7 @@ Napi::Value whisper(const Napi::CallbackInfo& info) {
   params.audio_ctx = audio_ctx;
   params.pcmf32 = pcmf32_vec;
   params.comma_in_time = comma_in_time;
+  params.token_timestamps = token_timestamps;
   params.max_len = max_len;
   params.max_context = max_context;
   params.print_progress = print_progress;
