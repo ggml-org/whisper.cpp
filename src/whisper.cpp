@@ -8397,24 +8397,75 @@ static int64_t sample_to_timestamp(int i_sample) {
 
 // a cost-function / heuristic that is high for text that takes longer to pronounce
 // obviously, can be improved
+//
+// iterate over utf-8 code points rather than raw bytes: a CJK glyph is 3 bytes, so the
+// old per-byte loop counted every Han/kana/hangul character ~3x and never matched
+// full-width punctuation, skewing how a segment's time is shared between its tokens for
+// Chinese/Japanese. full-width punctuation gets the same weight as its ASCII form and
+// pure-ASCII text decodes to the same weights as before.
 static float voice_length(const std::string & text) {
     float res = 0.0f;
 
-    for (char c : text) {
-        if (c == ' ') {
-            res += 0.01f;
-        } else if (c == ',') {
-            res += 2.00f;
-        } else if (c == '.') {
-            res += 3.00f;
-        } else if (c == '!') {
-            res += 3.00f;
-        } else if (c == '?') {
-            res += 3.00f;
-        } else if (c >= '0' && c <= '9') {
-            res += 3.00f;
+    const unsigned char * s = (const unsigned char *) text.data();
+    const size_t n = text.size();
+
+    for (size_t i = 0; i < n; ) {
+        const unsigned char c = s[i];
+        uint32_t cp = c;
+        int len = 1;
+        if (c < 0x80) {
+            len = 1;
+        } else if ((c >> 5) == 0x6) {
+            cp = c & 0x1F; len = 2;
+        } else if ((c >> 4) == 0xE) {
+            cp = c & 0x0F; len = 3;
+        } else if ((c >> 3) == 0x1E) {
+            cp = c & 0x07; len = 4;
         } else {
-            res += 1.00f;
+            cp = c; len = 1; // stray continuation / invalid lead byte
+        }
+        if (i + (size_t) len <= n) {
+            bool ok = true;
+            for (int k = 1; k < len; ++k) {
+                const unsigned char cc = s[i + k];
+                if ((cc & 0xC0) != 0x80) { ok = false; break; }
+                cp = (cp << 6) | (cc & 0x3F);
+            }
+            if (!ok) { cp = c; len = 1; }
+        } else {
+            cp = c; len = 1;
+        }
+        i += (size_t) len;
+
+        switch (cp) {
+            case ' ':
+            case 0x3000: // ideographic space
+                res += 0.01f;
+                break;
+            case ',':
+            case 0xFF0C: // ，
+            case 0x3001: // 、
+            case 0xFF1B: // ；
+            case 0xFF1A: // ：
+                res += 2.00f;
+                break;
+            case '.':
+            case '!':
+            case '?':
+            case 0x3002: // 。
+            case 0xFF0E: // ．
+            case 0xFF01: // ！
+            case 0xFF1F: // ？
+            case 0x2026: // …
+                res += 3.00f;
+                break;
+            default:
+                if ((cp >= '0' && cp <= '9') || (cp >= 0xFF10 && cp <= 0xFF19)) {
+                    res += 3.00f; // half/full-width digits
+                } else {
+                    res += 1.00f; // letters, CJK ideographs, kana, hangul, ...
+                }
+                break;
         }
     }
 
