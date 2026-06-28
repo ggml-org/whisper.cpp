@@ -340,6 +340,11 @@ Now build `whisper.cpp` with Vulkan support:
 cmake -B build -DGGML_VULKAN=1
 cmake --build build -j --config Release
 ```
+with cmake
+```
+cmake -B build -DGGML_VULKAN=1
+cmake --build build -j --config Release
+```
 
 ## AMD ROCm GPU support
 
