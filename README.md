@@ -7,7 +7,7 @@
 [![Conan Center](https://shields.io/conan/v/whisper-cpp)](https://conan.io/center/whisper-cpp)
 [![npm](https://img.shields.io/npm/v/whisper.cpp.svg)](https://www.npmjs.com/package/whisper.cpp/)
 
-Stable: [v1.8.1](https://github.com/ggml-org/whisper.cpp/releases/tag/v1.8.1) / [Roadmap](https://github.com/orgs/ggml-org/projects/4/)
+Stable: [v1.9.1](https://github.com/ggml-org/whisper.cpp/releases/tag/v1.9.1) / [Roadmap](https://github.com/orgs/ggml-org/projects/4/)
 
 High-performance inference of [OpenAI's Whisper](https://github.com/openai/whisper) automatic speech recognition (ASR) model:
 
@@ -443,9 +443,10 @@ cmake -B build -DGGML_MUSA=1 -DMUSA_ARCHITECTURES="21"
 cmake --build build -j --config Release
 ```
 
-## FFmpeg support (Linux only)
+## FFmpeg support (examples only)
 
-If you want to support more audio formats (such as Opus and AAC), you can turn on the `WHISPER_FFMPEG` build flag to enable FFmpeg integration.
+By default, the examples in this repo use the [miniaudio](https://github.com/mackron/miniaudio) library to decode audio files.
+Some of the examples also can use FFmpeg for decoding and broader format support. To enable that, build with `WHISPER_COMMON_FFMPEG`.
 
 First, you need to install required libraries:
 
@@ -460,7 +461,7 @@ sudo dnf install libavcodec-free-devel libavformat-free-devel libavutil-free-dev
 Then you can build the project as follows:
 
 ```bash
-cmake -B build -D WHISPER_FFMPEG=yes
+cmake -B build -D WHISPER_COMMON_FFMPEG=yes
 cmake --build build
 ```
 

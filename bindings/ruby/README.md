@@ -396,6 +396,37 @@ whisper
   .full(Whisper::Params.new, samples)
 ```
 
+### Parakeet ###
+
+whispercpp gem now supports NVIDIA's ASR model Parakeet.
+
+If you want to use Parakeet instead of Whisper, the API should feel familiar.  
+In most cases, replace `Whisper::Context` and `Whisper::Params` with `Whisper::Parakeet::Context` and `Whisper::Parakeet::Params`, then use `#transcribe`, `#full`, `#each_segment`, and `#each_token` in the same way.
+
+```ruby
+require "whisper"
+
+# It's useful to assign Whisper::Parakeet to top-level Parakeet constant unless you use Parakeet gem.
+Parakeet = Whisper::Parakeet
+
+parakeet = Parakeet::Context.new("path/to/model")
+
+params = Parakeet::Params.new(
+  no_context: true
+)
+
+parakeet
+  .transcribe("path/to/audio.wav", params)
+  .each_segment do |segment|
+    puts "[#{segment.start_time} --> #{segment.end_time}] #{segment.text}"
+  end
+```
+
+The main differences are:
+
+* Namespace is `Whisper::Parakeet`.
+* Parakeet also supports `on_new_token` / `new_token_callback` in addition to segment and progress callbacks.
+
 Custom context params
 ---------------------
 

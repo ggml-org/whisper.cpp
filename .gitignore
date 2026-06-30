@@ -65,3 +65,6 @@ cmake-build-debug/
 local.properties
 .log
 .exe
+
+# AGENTS
+.pi/SYSTEM.md

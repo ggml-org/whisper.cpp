@@ -40,7 +40,21 @@ module Whisper
   def self.log_set: (log_callback?, Object? user_data) -> log_callback
   def self.system_info_str: () -> String
 
+  module Output
+    module Context
+      def to_srt: () -> String
+      def to_webvtt: () -> String
+    end
+
+    module Segment
+      def to_srt_cue: () -> String
+      def to_webvtt_cue: () -> String
+    end
+  end
+
   class Context
+    include Output::Context
+
     def self.new: (String | path | ::URI::HTTP) -> instance
 
     # transcribe a single file
@@ -139,17 +153,14 @@ module Whisper
                      | (Whisper::Params, _Samples, ?Integer n_samples) -> self
                      | (Whisper::Params, _Samples, ?Integer? n_samples, Integer n_processors) -> self
 
-    def to_srt: () -> String
-    def to_webvtt: () -> String
-
     class Params
       def self.new: (
-        use_gpu: boolish,
-        flash_attn: boolish,
-        gpu_device: Integer,
-        dtw_token_timestamps: boolish,
-        dtw_aheads_preset: Integer,
-        dtw_n_top: Integer | nil,
+        ?use_gpu: boolish,
+        ?flash_attn: boolish,
+        ?gpu_device: Integer,
+        ?dtw_token_timestamps: boolish,
+        ?dtw_aheads_preset: Integer,
+        ?dtw_n_top: Integer | nil,
       ) -> instance
 
       def use_gpu=: (boolish) -> boolish
@@ -444,6 +455,9 @@ module Whisper
     def abort_on: { (Object user_data) -> boolish } -> void
   end
 
+  module LogSettable
+  end
+
   class Model
     def self.pre_converted_models: () -> Hash[String, Model::URI]
     def self.coreml_compiled_models: () -> Hash[Model::URI, Model::ZipURI]
@@ -474,6 +488,8 @@ module Whisper
   end
 
   class Segment
+    include Output::Segment
+
     type deconstructed_keys = {
       start_time: (Integer | nil),
       end_time: (Integer | nil),
@@ -514,9 +530,6 @@ module Whisper
     #
     def each_token: { (Token) -> void } -> void
                   | () -> Enumerator[Token]
-    def to_srt_cue: () -> String
-    def to_webvtt_cue: () -> String
-
 
     #  Possible keys: `:start_time`, `:end_time`, `:text`, `:no_speech_prob`, `:speaker_turn_next`
     #
@@ -528,7 +541,7 @@ module Whisper
     def deconstruct_keys: (Array[:start_time | :end_time | :text | :no_speech_prob | :speaker_turn_next | :n_tokens] | nil) -> deconstructed_keys
   end
 
-  module Token
+  class Token
     type deconstructed_keys = {
       id: (Integer | nil),
       tid: (Integer | nil),
@@ -596,6 +609,336 @@ module Whisper
     #
     def text: () -> String
     def deconstruct_keys: (Array[:id | :tid | :probability | :log_probability | :pt | :ptsum | :t_dtw | :voice_length | :start_time | :end_time | :text] | nil) -> deconstructed_keys
+  end
+
+  module Parakeet
+    extend LogSettable
+
+    VERSION: String
+
+    # Control logging output. The default behavior is to print to stderr.
+    #
+    def self.log_set: (nil, Object? user_data) -> nil
+                    | (^(Integer level, String message, Object user_data) -> void, Object? user_data) -> nil
+    def self.system_info_str: () -> String
+
+    class Context
+      include Output::Context
+
+      # Load a Parakeet model from the given file path.
+      #
+      def self.new: (String | path | ::URI::HTTP, ?Params) -> instance
+
+      # Transcribe a single audio file.
+      #
+      def transcribe: (path audio_file_path, Whisper::Parakeet::Params) -> self
+
+      # Run the entire model: PCM -> log mel spectrogram -> encoder -> decoder -> text.
+      # Not thread safe for the same context.
+      #
+      # The second argument `samples` must be an array of samples, respond to `:length`,
+      # or be a MemoryView of an array of float. It must be 32 bit float PCM audio data.
+      #
+      def full: (Whisper::Parakeet::Params, Array[Float] samples, ?Integer n_samples) -> self
+              | (Whisper::Parakeet::Params, _Samples, ?Integer n_samples) -> self
+
+      # Number of generated text segments.
+      #
+      def full_n_segments: () -> Integer
+
+      # Start time of a segment indexed by `segment_index` in centiseconds (10 times milliseconds).
+      #
+      #     full_get_segment_t0(3) # => 1668 (16680 ms)
+      #
+      def full_get_segment_t0: (Integer segment_index) -> Integer
+
+      # End time of a segment indexed by `segment_index` in centiseconds (10 times milliseconds).
+      #
+      #     full_get_segment_t1(3) # => 1668 (16680 ms)
+      #
+      def full_get_segment_t1: (Integer segment_index) -> Integer
+
+      # Text of a segment indexed by `segment_index`.
+      #
+      #     full_get_segment_text(3) # => "ask not what your country can do for you, ..."
+      #
+      def full_get_segment_text: (Integer segment_index) -> String
+
+      # Number of tokens in the segment indexed by `segment_index`.
+      #
+      def full_n_tokens: (Integer segment_index) -> Integer
+
+      # Text of the token indexed by `token_index` in the segment indexed by `segment_index`.
+      #
+      def full_get_token_text: (Integer segment_index, Integer token_index) -> String
+
+      # Token id of the token indexed by `token_index` in the segment indexed by `segment_index`.
+      #
+      def full_get_token_id: (Integer segment_index, Integer token_index) -> Integer
+
+      # Probability of the token indexed by `token_index` in the segment indexed by `segment_index`.
+      #
+      def full_get_token_p: (Integer segment_index, Integer token_index) -> Float
+
+      # Token data of the token indexed by `token_index` in the segment indexed by `segment_index`.
+      #
+      def full_get_token_data: (Integer segment_index, Integer token_index) -> Token
+
+      def model: () -> Model
+
+      # Yields each Whisper::Parakeet::Segment:
+      #
+      #     parakeet.transcribe("path/to/audio.wav", params)
+      #     parakeet.each_segment do |segment|
+      #       puts segment.text
+      #     end
+      #
+      # Returns an `Enumerator` if no block given:
+      #
+      #     parakeet.transcribe("path/to/audio.wav", params)
+      #     enum = parakeet.each_segment
+      #     enum.to_a # => [#<Whisper::Parakeet::Segment>, ...]
+      #
+      def each_segment: { (Segment) -> void } -> void
+                      | () -> Enumerator[Segment]
+
+      class Params
+        def self.new: (?use_gpu: boolish, ?gpu_device: Integer) -> instance
+        def use_gpu: () -> boolish
+        def use_gpu=: (boolish) -> boolish
+        def gpu_device: () -> Integer
+        def gpu_device=: (Integer) -> Integer
+      end
+    end
+
+    class Params
+      def self.new: (
+        ?n_threads: Integer,
+        ?offset_ms: Integer,
+        ?duration_ms: Integer,
+        ?no_context: boolish,
+        ?audio_ctx: Integer,
+        ?new_segment_callback: ^(Whisper::Parakeet::Context, untyped, Integer n_new, Object user_data) -> void,
+        ?new_segment_callback_user_data: Object,
+        ?new_token_callback: ^(Whisper::Parakeet::Context, untyped, Whisper::Parakeet::Token, Object user_data) -> void,
+        ?new_token_callback_user_data: Object,
+        ?progress_callback: ^(Whisper::Parakeet::Context, untyped, Integer progress, Object user_data) -> void,
+        ?progress_callback_user_data: Object,
+        ?encoder_begin_callback: ^(Whisper::Parakeet::Context, untyped, Object user_data) -> boolish,
+        ?encoder_begin_callback_user_data: Object,
+        ?abort_callback: ^(Object user_data) -> boolish,
+        ?abort_callback_user_data: Object
+      ) -> instance
+
+      # Number of threads to use.
+      #
+      def n_threads=: (Integer) -> Integer
+      def n_threads: () -> Integer
+
+      # Start offset in ms.
+      #
+      def offset_ms=: (Integer) -> Integer
+      def offset_ms: () -> Integer
+
+      # Audio duration to process in ms.
+      #
+      def duration_ms=: (Integer) -> Integer
+      def duration_ms: () -> Integer
+
+      # If `true`, does not use past transcription (if any) as context.
+      #
+      def no_context=: (boolish) -> boolish
+      def no_context: () -> (true | false)
+
+      # Overwrite the audio context size. `0` uses the default value.
+      #
+      def audio_ctx=: (Integer) -> Integer
+      def audio_ctx: () -> Integer
+
+      # Sets new segment callback, called for every newly generated text segment.
+      #
+      #     params.new_segment_callback = ->(context, _, n_new, user_data) {
+      #       # ...
+      #     }
+      #
+      def new_segment_callback=: (^(Whisper::Parakeet::Context, untyped, Integer n_new, Object user_data) -> void) -> (^(Whisper::Parakeet::Context, untyped, Integer n_new, Object user_data) -> void)
+      def new_segment_callback: () -> ((^(Whisper::Parakeet::Context, untyped, Integer n_new, Object user_data) -> void) | nil)
+
+      # Sets user data passed to the last argument of new segment callback.
+      #
+      def new_segment_callback_user_data=: (Object?) -> Object?
+      def new_segment_callback_user_data: () -> Object?
+
+      # Sets token callback, called for every newly predicted token.
+      #
+      def new_token_callback=: (^(Whisper::Parakeet::Context, untyped, Whisper::Parakeet::Token, Object user_data) -> void) -> (^(Whisper::Parakeet::Context, untyped, Whisper::Parakeet::Token, Object user_data) -> void)
+      def new_token_callback: () -> ((^(Whisper::Parakeet::Context, untyped, Whisper::Parakeet::Token, Object user_data) -> void) | nil)
+
+      # Sets user data passed to the last argument of token callback.
+      #
+      def new_token_callback_user_data=: (Object?) -> Object?
+      def new_token_callback_user_data: () -> Object?
+
+      # Sets progress callback, called on each progress update.
+      #
+      # +progress+ is an Integer between 0 and 100.
+      #
+      def progress_callback=: (^(Whisper::Parakeet::Context, untyped, Integer progress, Object user_data) -> void) -> (^(Whisper::Parakeet::Context, untyped, Integer progress, Object user_data) -> void)
+      def progress_callback: () -> ((^(Whisper::Parakeet::Context, untyped, Integer progress, Object user_data) -> void) | nil)
+
+      # Sets user data passed to the last argument of progress callback.
+      #
+      def progress_callback_user_data=: (Object?) -> Object?
+      def progress_callback_user_data: () -> Object?
+
+      # Sets encoder begin callback, called each time before the encoder starts.
+      #
+      # If it returns `false`, the computation is aborted.
+      #
+      def encoder_begin_callback=: (^(Whisper::Parakeet::Context, untyped, Object user_data) -> boolish) -> (^(Whisper::Parakeet::Context, untyped, Object user_data) -> boolish)
+      def encoder_begin_callback: () -> ((^(Whisper::Parakeet::Context, untyped, Object user_data) -> boolish) | nil)
+
+      # Sets user data passed to the last argument of encoder begin callback.
+      #
+      def encoder_begin_callback_user_data=: (Object?) -> Object?
+      def encoder_begin_callback_user_data: () -> Object?
+
+      # Sets abort callback, called each time before ggml computation starts.
+      #
+      def abort_callback=: (^(Object user_data) -> boolish) -> (^(Object user_data) -> boolish)
+      def abort_callback: () -> ((^(Object user_data) -> boolish) | nil)
+
+      # Sets user data passed to the last argument of abort callback.
+      #
+      def abort_callback_user_data=: (Object?) -> Object?
+      def abort_callback_user_data: () -> Object?
+
+      # Hook called on new segment. Yields each Whisper::Parakeet::Segment.
+      #
+      def on_new_segment: { (Segment) -> void } -> void
+
+      # Hook called on new token. Yields each Whisper::Parakeet::Token.
+      #
+      def on_new_token: { (Token) -> void } -> void
+
+      # Hook called on progress update. Yields each progress `Integer` between 0 and 100.
+      #
+      def on_progress: { (Integer progress) -> void } -> void
+
+      # Hook called each time before the encoder starts.
+      #
+      def on_encoder_begin: { () -> boolish } -> void
+
+      # Call block to determine whether abort or not. Return `true` when you want to abort.
+      #
+      def abort_on: { () -> boolish } -> void
+    end
+
+    class Segment
+      include Output::Segment
+
+      type deconstructed_keys = {
+        start_time: (Integer | nil),
+        end_time: (Integer | nil),
+        text: (String | nil)
+      }
+
+      # Start time in milliseconds.
+      #
+      def start_time: () -> Integer
+
+      # End time in milliseconds.
+      #
+      def end_time: () -> Integer
+
+      # Text of the segment.
+      #
+      def text: () -> String
+
+      # Yields each Whisper::Parakeet::Token:
+      #
+      #     parakeet.each_segment.first.each_token do |token|
+      #       p token
+      #     end
+      #
+      # Returns an `Enumerator` if no block is given:
+      #
+      #     parakeet.each_segment.first.each_token.to_a # => [#<Whisper::Parakeet::Token>, ...]
+      #
+      def each_token: { (Token) -> void } -> void
+                    | () -> Enumerator[Token]
+
+      # Possible keys: `:start_time`, `:end_time`, `:text`
+      #
+      def deconstruct_keys: (Array[:start_time | :end_time | :text] | nil) -> deconstructed_keys
+    end
+
+    class Token
+      type deconstructed_keys = {
+        id: (Integer | nil),
+        duration_idx: (Integer | nil),
+        duration_value: (Integer | nil),
+        frame_index: (Integer | nil),
+        probability: (Float | nil),
+        log_probability: (Float | nil),
+        start_time: (Integer | nil),
+        end_time: (Integer | nil),
+        word_start: ((true | false) | nil),
+        text: (String | nil),
+      }
+
+      # Token ID.
+      #
+      def id: () -> Integer
+
+      # Index into the model's durations array.
+      #
+      def duration_idx: () -> Integer
+
+      # Actual duration value.
+      #
+      def duration_value: () -> Integer
+
+      # Frame index of the token.
+      #
+      def frame_index: () -> Integer
+
+      # Probability of the token.
+      #
+      def probability: () -> Float
+
+      # Log probability of the token.
+      #
+      def log_probability: () -> Float
+
+      # Start time of the token in milliseconds.
+      #
+      def start_time: () -> Integer
+
+      # End time of the token in milliseconds.
+      #
+      def end_time: () -> Integer
+
+      # Whether this token is the start of a word.
+      #
+      def word_start?: () -> (true | false)
+
+      # Get the token text of the token.
+      #
+      def text: () -> String
+
+      def deconstruct_keys: (Array[:id | :duration_idx | :duration_value | :frame_index | :probability | :log_probability | :start_time | :end_time | :word_start | :text] | nil) -> deconstructed_keys
+    end
+
+    class Model
+      def n_vocab: () -> Integer
+      def n_audio_ctx: () -> Integer
+      def n_audio_state: () -> Integer
+      def n_audio_head: () -> Integer
+      def n_audio_layer: () -> Integer
+      def n_mels: () -> Integer
+      def ftype: () -> Integer
+    end
   end
 
   module VAD

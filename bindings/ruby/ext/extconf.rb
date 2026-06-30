@@ -30,6 +30,6 @@ create_makefile "whisper" do |conf|
     #{libs}: cmake-targets
     cmake-targets:
     #{"\t"}"#{cmake}" -S sources -B build #{options}
-    #{"\t"}"#{cmake}" --build build --config Release --target common whisper
+    #{"\t"}"#{cmake}" --build build --config Release --target common whisper parakeet
   EOF
 end

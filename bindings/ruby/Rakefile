@@ -84,6 +84,21 @@ else
   end
 end
 
+TEST_PARAKEET_MODEL = "test/fixtures/for-tests-ggml-parakeet-tdt.bin"
+TEST_PARAKEET_MODEL_SRC = File.expand_path(File.join(__dir__, "..", "..", "models", "for-tests-ggml-parakeet-tdt.bin"))
+TEST_PARAKEET_MODEL_DIR = TEST_PARAKEET_MODEL.pathmap("%d")
+directory TEST_PARAKEET_MODEL_DIR
+if File.exist? TEST_PARAKEET_MODEL_SRC
+  file TEST_PARAKEET_MODEL => [TEST_PARAKEET_MODEL_SRC, TEST_PARAKEET_MODEL_DIR] do |t|
+    symlink t.source, t.name
+  end
+else
+  require "open-uri"
+  file TEST_PARAKEET_MODEL => TEST_PARAKEET_MODEL_DIR do |t|
+    File.write t.name, URI("https://github.com/ggml-org/whisper.cpp/raw/refs/heads/master/models/for-tests-ggml-parakeet-tdt.bin").read
+  end
+end
+
 TEST_MEMORY_VIEW = "test/jfk_reader/jfk_reader.#{RbConfig::CONFIG['DLEXT']}"
 file TEST_MEMORY_VIEW => "test/jfk_reader/jfk_reader.c" do |t|
   chdir "test/jfk_reader" do
@@ -93,4 +108,4 @@ file TEST_MEMORY_VIEW => "test/jfk_reader/jfk_reader.c" do |t|
 end
 CLEAN.include TEST_MEMORY_VIEW
 
-task test: [LIB_FILE, TEST_MEMORY_VIEW, TEST_FIXTURE_AUDIO]
+task test: [LIB_FILE, TEST_MEMORY_VIEW, TEST_FIXTURE_AUDIO, TEST_PARAKEET_MODEL]

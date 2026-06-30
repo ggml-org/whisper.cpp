@@ -129,6 +129,7 @@ class TestCallback < TestBase
       return false
     }
     @whisper.transcribe(@audio, @params)
+    sleep 0.5 # wait for logs dequeued
     assert_match(/encoder_begin_callback returned false - aborting/, logs.join)
     Whisper.log_set ->(level, buffer, user_data) {}, nil
   end

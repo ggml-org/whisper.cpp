@@ -120,7 +120,13 @@ fi
 if [ -x "$(command -v wget2)" ]; then
     wget2 --no-config --progress bar -O ggml-"$model".bin $src/$pfx-"$model".bin
 elif [ -x "$(command -v curl)" ]; then
-    curl -L --output ggml-"$model".bin $src/$pfx-"$model".bin
+    curl -L --fail \
+         --retry 5 \
+         --retry-delay 5 \
+         --retry-all-errors \
+         --retry-connrefused \
+         ${HF_TOKEN:+--header "Authorization: Bearer $HF_TOKEN"} \
+         --output ggml-"$model".bin $src/$pfx-"$model".bin
 elif [ -x "$(command -v wget)" ]; then
     wget --no-config --quiet --show-progress -O ggml-"$model".bin $src/$pfx-"$model".bin
 else

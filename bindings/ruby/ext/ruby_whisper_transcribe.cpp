@@ -16,6 +16,8 @@ extern ID id_to_path;
 extern ID transcribe_option_names[1];
 
 extern void prepare_transcription(ruby_whisper_params * rwp, VALUE * self, int n_processors);
+extern VALUE full_body(VALUE rb_args);
+extern VALUE full_parallel_body(VALUE rb_args);
 
 typedef struct{
   struct whisper_context *context;
@@ -33,18 +35,6 @@ transcribe_without_gvl(void *rb_args)
   args->result = whisper_full_parallel(args->context, *args->params, args->samples, args->n_samples, args->n_processors);
 
   return NULL;
-}
-
-typedef struct {
-  ruby_whisper_abort_callback_container *abort_callback_container;
-} transcribe_ubf_args;
-
-static void
-transcribe_ubf(void *rb_args)
-{
-  transcribe_ubf_args *args = (transcribe_ubf_args *)rb_args;
-
-  args->abort_callback_container->is_interrupted = true;
 }
 
 /*
@@ -91,32 +81,28 @@ ruby_whisper_transcribe(int argc, VALUE *argv, VALUE self) {
     fprintf(stderr, "error: failed to open '%s' as WAV file\n", fname_inp.c_str());
     return self;
   }
-  // Commented out because it is work in progress
-  // {
-  //   static bool is_aborted = false; // NOTE: this should be atomic to avoid data race
 
-  //   rwp->params.encoder_begin_callback = [](struct whisper_context * /*ctx*/, struct whisper_state * /*state*/, void * user_data) {
-  //     bool is_aborted = *(bool*)user_data;
-  //     return !is_aborted;
-  //   };
-  //   rwp->params.encoder_begin_callback_user_data = &is_aborted;
-  // }
-
-  prepare_transcription(rwp, &self, n_processors);
-
-  transcribe_without_gvl_args args = {
-    rw->context,
-    &rwp->params,
-    pcmf32.data(),
-    pcmf32.size(),
-    n_processors,
-    0,
-  };
-  transcribe_ubf_args ubf_args = {
-    rwp->abort_callback_container,
-  };
-  rb_thread_call_without_gvl(transcribe_without_gvl, (void *)&args, transcribe_ubf, (void *)&ubf_args);
-  if (args.result != 0) {
+  VALUE rb_result;
+  if (n_processors == 1) {
+    ruby_whisper_full_args args = {
+      &self,
+      &params,
+      pcmf32.data(),
+      (int)pcmf32.size(),
+    };
+    rb_result = full_body((VALUE)&args);
+  } else {
+    ruby_whisper_full_parallel_args parallel_args = {
+      &self,
+      &params,
+      pcmf32.data(),
+      (int)pcmf32.size(),
+      n_processors,
+    };
+    rb_result = full_parallel_body((VALUE)&parallel_args);
+  }
+  const int result = NUM2INT(rb_result);
+  if (result != 0) {
     fprintf(stderr, "failed to process audio\n");
     return self;
   }
