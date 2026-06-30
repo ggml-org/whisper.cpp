@@ -107,8 +107,8 @@ void append_pcm_crossfade(std::vector<float> & dst, const std::vector<float> & s
         return;
     }
     int fade_n = sr * fade_ms / 1000;
-    fade_n = std::min(fade_n, (int)dst.size());
-    fade_n = std::min(fade_n, (int)src.size());
+    fade_n = (std::min)(fade_n, (int)dst.size());
+    fade_n = (std::min)(fade_n, (int)src.size());
     if (fade_n <= 0) { dst.insert(dst.end(), src.begin(), src.end()); return; }
 
     const size_t ofs = dst.size() - fade_n;
