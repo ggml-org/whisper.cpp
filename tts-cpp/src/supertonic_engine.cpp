@@ -6,6 +6,7 @@
 #include "supertonic_internal.h"
 #include "supertonic_voice_json.h"
 #include "npy.h"
+#include "voice_features.h"  // resample_for_output / validate_output_sample_rate (QVAC-21483)
 // Vulkan adapter description in `backend_name()` is now resolved
 // through the registry API (`ggml_backend_get_device` +
 // `ggml_backend_dev_description`) so no per-backend header include
@@ -180,6 +181,8 @@ struct Engine::Impl {
         if (!std::filesystem::exists(opts.model_gguf_path)) {
             throw std::runtime_error(supertonic_setup_hint(opts.model_gguf_path));
         }
+        // QVAC-21483 — fail fast on an unsupported output frequency.
+        validate_output_sample_rate(opts.output_sample_rate, "supertonic::Engine");
         // Wire backends_dir + opencl_cache_dir BEFORE any backend
         // init. First-Engine-wins across the whole process; second
         // and later Engines reuse the already-loaded registry. See
@@ -555,10 +558,19 @@ struct Engine::Impl {
         }
 
         SynthesisResult result;
-        result.sample_rate = sample_rate;
         result.duration_s  = duration_s;
         result.pcm.assign(wav_full.begin(),
                           wav_full.begin() + std::min((size_t) wav_len, wav_full.size()));
+
+        // QVAC-21483 — run_single_chunk always returns audio at the model's
+        // NATIVE rate.  Output-frequency conversion is the callers' job:
+        // synthesize() resamples the whole utterance once (batch); and
+        // synthesize_streaming() flows every chunk through a single
+        // utterance-spanning OutputResampler so the streamed output equals the
+        // batch resample with no per-chunk seams (mirrors chatterbox::Engine).
+        // Resampling per-chunk here would restart the output grid at every chunk
+        // edge and inject a seam + length drift at non-native output rates.
+        result.sample_rate = sample_rate;
         return result;
     }
 
@@ -566,7 +578,15 @@ struct Engine::Impl {
         if (text.empty()) {
             throw std::runtime_error("Supertonic Engine: text is empty");
         }
-        return run_single_chunk(text, opts.seed);
+        SynthesisResult result = run_single_chunk(text, opts.seed);
+        // QVAC-21483 — batch path resamples the whole utterance once at the end
+        // (run_single_chunk returns native PCM).  0 / native == passthrough.
+        const int native_sr = result.sample_rate;
+        const int out_sr    = opts.output_sample_rate > 0
+                                ? opts.output_sample_rate : native_sr;
+        result.pcm         = resample_for_output(std::move(result.pcm), native_sr, out_sr);
+        result.sample_rate = out_sr;
+        return result;
     }
 
     // Streaming path: chunk text via the multilingual splitter, run the
@@ -601,8 +621,20 @@ struct Engine::Impl {
             }
         }
 
+        // QVAC-21483 — one utterance-spanning output resampler for the whole
+        // stream.  run_single_chunk now returns NATIVE PCM; feeding every chunk
+        // through a single OutputResampler makes the streamed (resampled) output
+        // bit-identical to resampling the assembled native utterance once, with
+        // no per-chunk seam or length drift (mirrors chatterbox::Engine).  0 /
+        // native == passthrough.
+        const int native_sr = model.hparams.sample_rate;
+        const int out_sr    = opts.output_sample_rate > 0
+                                ? opts.output_sample_rate : native_sr;
+        OutputResampler out_resampler(native_sr, opts.output_sample_rate);
+
         SynthesisResult full;
-        full.duration_s = 0.0f;
+        full.duration_s  = 0.0f;
+        full.sample_rate = out_sr;
 
         const int n_chunks = (int) chunks.size();
         for (int k = 0; k < n_chunks; ++k) {
@@ -675,13 +707,21 @@ struct Engine::Impl {
                 }
             }
 
-            // Fire callback before accumulating, so the consumer sees
-            // the same buffer it would receive in pure-streaming mode.
-            on_chunk(chunk_res.pcm.data(), chunk_res.pcm.size(), k, is_last);
+            // QVAC-21483 — feed the faded NATIVE chunk through the utterance-
+            // spanning resampler.  process() returns only the now-stable output
+            // samples; finish() flushes the right-edge tail on the final chunk.
+            // Concatenated they equal resampling the whole native utterance once
+            // (passthrough when the output rate is 0 / native).  Fire the
+            // callback with the emitted buffer so result.pcm == concat(chunks).
+            std::vector<float> emit = out_resampler.process(chunk_res.pcm);
+            if (is_last) {
+                std::vector<float> tail = out_resampler.finish();
+                emit.insert(emit.end(), tail.begin(), tail.end());
+            }
+            on_chunk(emit.data(), emit.size(), k, is_last);
 
-            full.pcm.insert(full.pcm.end(), chunk_res.pcm.begin(), chunk_res.pcm.end());
-            full.duration_s  += chunk_res.duration_s;
-            full.sample_rate  = chunk_res.sample_rate;
+            full.pcm.insert(full.pcm.end(), emit.begin(), emit.end());
+            full.duration_s += chunk_res.duration_s;
         }
 
         return full;

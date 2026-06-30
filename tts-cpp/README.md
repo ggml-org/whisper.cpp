@@ -403,7 +403,8 @@ harnesses:
 | `build/supertonic-cli`        | Supertonic-only end-to-end CLI (text → wav) — the same engine `tts-cli` invokes when it sees a Supertonic GGUF, exposed standalone for scripting and parity work |
 | `build/supertonic-bench`      | Per-stage Supertonic benchmark harness (`--text` / `--out` / `--runs`); machine-readable RTF + per-stage timings |
 | `build/test-s3gen`            | Staged numerical validation of S3Gen encoder + CFM vs Python dumps |
-| `build/test-resample`         | Round-trip SNR of the C++ Kaiser-windowed sinc resampler |
+| `build/test-resample`         | Round-trip SNR of the C++ Kaiser-windowed sinc resampler + output-frequency helpers (validate / passthrough / ratio) |
+| `build/test-output-sample-rate` | `--output-sample-rate` on `chatterbox::Engine`: native/16 kHz batch, out-of-range rejection, streaming `pcm == concat(chunks)` invariant (needs the MTL GGUFs) |
 | `build/test-voice-features`   | 24 kHz 80-ch mel parity (prompt_feat) |
 | `build/test-fbank`            | 16 kHz 80-ch Kaldi fbank parity |
 | `build/test-voice-encoder`    | VoiceEncoder 256-d speaker embedding parity |
@@ -633,6 +634,17 @@ the recommended quality knee on M3 Ultra (see [`PROGRESS.md §3.21`](PROGRESS.md
 N=6 is too aggressive (cosine 0.990 right at the threshold, PCM cosine
 drops to 0.88).  Streaming chunks ignore this flag and use
 `--stream-cfm-steps` instead.
+
+`--output-sample-rate HZ` (QVAC-21483) selects the output frequency.  The
+pipeline natively emits 24 kHz (Chatterbox) / the model's metadata rate
+(Supertonic); pass a positive rate in `8000..192000` to resample the final
+PCM with the in-tree Kaiser-windowed sinc resampler before it's written or
+streamed (e.g. `--output-sample-rate 16000` for a 16 kHz wav).  `0` (the
+default) keeps the native rate — zero behaviour change.  Works on the
+single-shot, auto-split, and streaming paths and on both engines (the
+`tts_cpp::*::EngineOptions::output_sample_rate` field exposes the same knob
+to library callers; `SynthesisResult::sample_rate` always reports the actual
+rate).
 
 Everything is self-contained in the two `.gguf` files:
 

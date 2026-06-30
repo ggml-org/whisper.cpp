@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #define DR_WAV_IMPLEMENTATION
@@ -116,6 +118,92 @@ std::vector<float> resample_sinc(const std::vector<float> & in,
         }
         out[n] = acc;
     }
+    return out;
+}
+
+// ============================================================================
+// Output-frequency selection (QVAC-21483)
+// ============================================================================
+
+void validate_output_sample_rate(int sr, const char * who) {
+    if (sr == 0) return;  // keep native rate
+    if (sr < kOutputSampleRateMin || sr > kOutputSampleRateMax) {
+        throw std::runtime_error(
+            std::string(who ? who : "tts-cpp") +
+            ": output_sample_rate must be 0 (native) or in [" +
+            std::to_string(kOutputSampleRateMin) + ", " +
+            std::to_string(kOutputSampleRateMax) + "] Hz, got " +
+            std::to_string(sr));
+    }
+}
+
+std::vector<float> resample_for_output(std::vector<float> pcm,
+                                       int native_sr, int target_sr) {
+    if (target_sr <= 0 || target_sr == native_sr) {
+        return pcm;  // keep native rate (moved out — no copy)
+    }
+    return resample_sinc(pcm, native_sr, target_sr);
+}
+
+// --- Stateful streaming resampler -------------------------------------------
+
+// taps_half must equal resample_sinc's default so the stability window below
+// matches the actual filter support (and the batch-equality property holds).
+static constexpr int kOutputResamplerTapsHalf = 16;
+
+OutputResampler::OutputResampler(int native_sr, int target_sr)
+    : native_sr_(native_sr),
+      target_sr_(target_sr <= 0 ? native_sr : target_sr),
+      passthrough_(target_sr <= 0 || target_sr == native_sr),
+      taps_half_(kOutputResamplerTapsHalf) {}
+
+std::vector<float> OutputResampler::process(const std::vector<float> & native_chunk) {
+    if (passthrough_) {
+        return native_chunk;  // identical bytes to the input (zero behaviour change)
+    }
+    native_.insert(native_.end(), native_chunk.begin(), native_chunk.end());
+
+    // An output sample n reads native indices [center - taps_half, center +
+    // taps_half] with center = floor(n / rate).  Its value is final ("stable")
+    // once center + taps_half is in range, i.e. center <= size - 1 - taps_half;
+    // appending more native audio then cannot change it (same in-range taps, in
+    // the same accumulation order) — that is what makes the streamed output
+    // bit-identical to the batch resample.  We emit only that stable prefix.
+    if (native_.size() < (std::size_t) taps_half_ + 1) {
+        return {};
+    }
+    const double rate = (double) target_sr_ / (double) native_sr_;
+    const long long max_center = (long long) native_.size() - 1 - taps_half_;
+    if (max_center < 0) {
+        return {};
+    }
+    // Conservative count of stable outputs: every n < stable has n < (max_center
+    // + 1) * rate, hence floor(n / rate) <= max_center.
+    std::size_t stable = (std::size_t) std::floor((double) (max_center + 1) * rate);
+    if (stable <= emitted_) {
+        return {};
+    }
+
+    std::vector<float> full_out = resample_sinc(native_, native_sr_, target_sr_, taps_half_);
+    if (stable > full_out.size()) {
+        stable = full_out.size();
+    }
+    std::vector<float> out(full_out.begin() + emitted_, full_out.begin() + stable);
+    emitted_ = stable;
+    return out;
+}
+
+std::vector<float> OutputResampler::finish() {
+    if (passthrough_) {
+        return {};
+    }
+    std::vector<float> full_out = resample_sinc(native_, native_sr_, target_sr_, taps_half_);
+    if (emitted_ >= full_out.size()) {
+        emitted_ = full_out.size();
+        return {};
+    }
+    std::vector<float> out(full_out.begin() + emitted_, full_out.end());
+    emitted_ = full_out.size();
     return out;
 }
 

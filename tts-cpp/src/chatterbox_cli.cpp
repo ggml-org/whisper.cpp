@@ -116,6 +116,20 @@ static void stream_write_wav(const std::string & path, const std::vector<float> 
     }
 }
 
+// QVAC-21483 — egress output-rate conversion for the Chatterbox CLI path.
+// The pipeline produces native 24 kHz PCM; these helpers resample at the
+// final write/emit step (internal bookkeeping — mel hop counts, crossfades —
+// stays at 24 kHz).  `out_sr <= 0` or `== 24000` is a passthrough.
+static void write_wav_out_rate(const std::string & path,
+                               const std::vector<float> & wav, int out_sr) {
+    if (out_sr > 0 && out_sr != 24000) {
+        std::vector<float> r = resample_sinc(wav, 24000, out_sr);
+        stream_write_wav(path, r, out_sr);
+    } else {
+        stream_write_wav(path, wav, 24000);
+    }
+}
+
 // Emit a chunk of float samples to stdout as raw 16-bit little-endian PCM
 // and flush so downstream players hear it immediately (stdio buffers would
 // otherwise hold up to 4-8 KB, stalling real-time playback at chunk
@@ -340,6 +354,13 @@ struct cli_params {
     int32_t max_sentence_chars        = 180;
     int32_t crossfade_ms              = 30;
 
+    // QVAC-21483 — desired output sample rate in Hz.  0 = native 24 kHz (the
+    // historical CLI behaviour); a positive value (8000..192000) resamples the
+    // final PCM before it is written / streamed.  Applied at egress for the
+    // Chatterbox path here and forwarded to EngineOptions on the Supertonic
+    // path.
+    int32_t output_sample_rate        = 0;
+
     // Incremental streaming input.  When --input-file PATH is set, the binary
     // opens PATH for reading and follows it with tail -f semantics: as soon as
     // a complete sentence (ending in . ! ? or \n) has been read, it's
@@ -524,6 +545,9 @@ static void print_usage(const char * argv0) {
     fprintf(stderr, "                          degradation on > ~15 s outputs.  (default: 180)\n");
     fprintf(stderr, "  --no-auto-split         Disable the above (single-shot T3 over the full text).\n");
     fprintf(stderr, "  --crossfade-ms N        Crossfade length between segments in ms.  (default: 30)\n");
+    fprintf(stderr, "  --output-sample-rate HZ Resample the output to HZ before writing/streaming.\n");
+    fprintf(stderr, "                          0 = native 24 kHz (Chatterbox) / model rate (Supertonic);\n");
+    fprintf(stderr, "                          otherwise 8000..192000.  (default: 0)\n");
     fprintf(stderr, "  -h, --help\n");
 }
 
@@ -674,6 +698,16 @@ static bool parse_args(int argc, char ** argv, cli_params & params) {
         else if (arg == "--max-sentence-chars") { if (!parse_int("--max-sentence-chars", params.max_sentence_chars)) return false; }
         else if (arg == "--no-auto-split")  { params.max_sentence_chars = 0; }
         else if (arg == "--crossfade-ms")   { if (!parse_int("--crossfade-ms",   params.crossfade_ms))   return false; }
+        else if (arg == "--output-sample-rate") {
+            if (!parse_int("--output-sample-rate", params.output_sample_rate)) return false;
+            if (params.output_sample_rate != 0 &&
+                (params.output_sample_rate < kOutputSampleRateMin ||
+                 params.output_sample_rate > kOutputSampleRateMax)) {
+                fprintf(stderr, "error: --output-sample-rate must be 0 (native) or %d..%d (got %d)\n",
+                        kOutputSampleRateMin, kOutputSampleRateMax, params.output_sample_rate);
+                return false;
+            }
+        }
         else if (arg == "--stream-chunk-tokens")       { if (!parse_int("--stream-chunk-tokens",       params.stream_chunk_tokens))       return false; }
         else if (arg == "--stream-first-chunk-tokens") { if (!parse_int("--stream-first-chunk-tokens", params.stream_first_chunk_tokens)) return false; }
         else if (arg == "--stream-cfm-steps")          { if (!parse_int("--stream-cfm-steps",          params.stream_cfm_steps))          return false; }
@@ -872,6 +906,7 @@ static int run_supertonic_cli_path(const cli_params & params) {
     opts.f16_weights_deny_list = params.supertonic_f16_weights_deny_list;
     opts.kv_attn_type = params.supertonic_kv_attn_type;
     opts.vulkan_env_overrides = params.supertonic_vulkan_env_overrides;
+    opts.output_sample_rate = params.output_sample_rate;  // QVAC-21483
 
     auto result = tts_cpp::supertonic::synthesize(opts, params.text);
     stream_write_wav(params.out_wav, result.pcm, result.sample_rate);
@@ -2231,6 +2266,12 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                 //                 stdout (so it can be piped into `play` /
                 //                 `ffplay` without streaming mode).
                 ensure_t3(0);
+                // QVAC-21483 — when a non-native output rate is requested we
+                // must capture PCM (rather than let s3gen write the file) so we
+                // can resample at egress.  osr<=0 / ==24000 keeps the legacy
+                // direct-write path.
+                const int osr = params.output_sample_rate;
+                const bool resample_out = osr > 0 && osr != 24000;
                 if (params.out_wav == "-") {
                     std::vector<float> pcm;
                     s3gen_synthesize_opts so = opts;
@@ -2238,8 +2279,23 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                     so.pcm_out      = &pcm;
                     int rc = s3gen_synthesize_to_wav(seg_generated[0], so);
                     if (rc != 0) return rc;
-                    stream_emit_pcm_stdout(pcm);
-                    fprintf(stderr, "Streamed to stdout (raw s16le @ 24 kHz mono)\n");
+                    if (resample_out) {
+                        std::vector<float> r = resample_sinc(pcm, 24000, osr);
+                        stream_emit_pcm_stdout(r);
+                        fprintf(stderr, "Streamed to stdout (raw s16le @ %d Hz mono)\n", osr);
+                    } else {
+                        stream_emit_pcm_stdout(pcm);
+                        fprintf(stderr, "Streamed to stdout (raw s16le @ 24 kHz mono)\n");
+                    }
+                } else if (resample_out) {
+                    std::vector<float> pcm;
+                    s3gen_synthesize_opts so = opts;
+                    so.out_wav_path = "";
+                    so.pcm_out      = &pcm;
+                    int rc = s3gen_synthesize_to_wav(seg_generated[0], so);
+                    if (rc != 0) return rc;
+                    write_wav_out_rate(params.out_wav, pcm, osr);
+                    fprintf(stderr, "Wrote %s (@ %d Hz)\n", params.out_wav.c_str(), osr);
                 } else {
                     int rc = s3gen_synthesize_to_wav(seg_generated[0], opts);
                     if (rc != 0) return rc;
@@ -2269,12 +2325,22 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                         "\n=== auto-split: %zu segments, %.0f ms for %.0f ms audio (RTF=%.2f) ===\n",
                         N_SEG, seg_total_ms, audio_ms,
                         audio_ms > 0.0 ? seg_total_ms / audio_ms : 0.0);
+                // QVAC-21483 — resample the assembled utterance once at egress.
+                const int osr = params.output_sample_rate;
+                const bool resample_out = osr > 0 && osr != 24000;
                 if (params.out_wav == "-") {
-                    stream_emit_pcm_stdout(full_pcm);
-                    fprintf(stderr, "Streamed to stdout (raw s16le @ 24 kHz mono)\n");
+                    if (resample_out) {
+                        std::vector<float> r = resample_sinc(full_pcm, 24000, osr);
+                        stream_emit_pcm_stdout(r);
+                        fprintf(stderr, "Streamed to stdout (raw s16le @ %d Hz mono)\n", osr);
+                    } else {
+                        stream_emit_pcm_stdout(full_pcm);
+                        fprintf(stderr, "Streamed to stdout (raw s16le @ 24 kHz mono)\n");
+                    }
                 } else {
-                    stream_write_wav(params.out_wav, full_pcm, sr);
-                    fprintf(stderr, "Wrote %s\n", params.out_wav.c_str());
+                    write_wav_out_rate(params.out_wav, full_pcm, osr);
+                    fprintf(stderr, "Wrote %s%s\n", params.out_wav.c_str(),
+                            resample_out ? (" (@ " + std::to_string(osr) + " Hz)").c_str() : "");
                 }
             } else {
                 // Streaming synthesis.  Runs the chunked S3Gen+HiFT loop on
@@ -2302,15 +2368,28 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                                         : chunk_n;
                 const bool to_stdout    = (params.out_wav == "-");
                 const int  sr           = opts.sr ? opts.sr : 24000;
+                // QVAC-21483 — egress output-rate.  Internal accumulation +
+                // mel bookkeeping stay at the native `sr`; only the bytes that
+                // leave (stdout chunks, the final file) are resampled.
+                const int  osr          = params.output_sample_rate;
+                const bool resample_out = osr > 0 && osr != sr;
+                const int  egress_sr    = resample_out ? osr : sr;
+                // QVAC-21483 — one utterance-spanning resampler for the stdout
+                // egress stream, so streamed bytes equal a whole-utterance
+                // resample (no per-chunk seam artifacts).  Passthrough when osr
+                // is 0/native.  File mode (below) resamples the assembled buffer
+                // once via write_wav_out_rate, so it doesn't use this.
+                OutputResampler stdout_rs(sr, osr);
+                const std::string stdout_note = to_stdout
+                    ? " → stdout (raw s16le @ " + std::to_string(egress_sr) + " Hz mono)"
+                    : std::string();
 
                 if (multi_seg) {
                     fprintf(stderr, "\n=== streaming synthesis: %zu segments, %d-token chunks%s ===\n",
-                            N_SEG, chunk_n,
-                            to_stdout ? " → stdout (raw s16le @ 24 kHz mono)" : "");
+                            N_SEG, chunk_n, stdout_note.c_str());
                 } else {
                     fprintf(stderr, "\n=== streaming synthesis: %d-token chunks%s ===\n",
-                            chunk_n,
-                            to_stdout ? " → stdout (raw s16le @ 24 kHz mono)" : "");
+                            chunk_n, stdout_note.c_str());
                 }
 
                 std::vector<float> full_streamed_wav;   // only used in file mode
@@ -2419,7 +2498,15 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                         if (first_chunk_t_ms < 0.0)
                             first_chunk_t_ms = 1e-3 * ggml_time_us() - stream_t0_ms;
 
-                        if (to_stdout) stream_emit_pcm_stdout(chunk_pcm);
+                        if (to_stdout) {
+                            // Stream through the utterance-spanning resampler;
+                            // it returns only the now-stable output samples (no
+                            // per-chunk seams).  The native chunk_pcm is still
+                            // accumulated below so the mel hop bookkeeping stays
+                            // correct.
+                            std::vector<float> e = stdout_rs.process(chunk_pcm);
+                            if (!e.empty()) stream_emit_pcm_stdout(e);
+                        }
                         seg_streamed_wav.insert(seg_streamed_wav.end(),
                                                 chunk_pcm.begin(), chunk_pcm.end());
                         hift_cache_source = std::move(tail_out);
@@ -2448,9 +2535,15 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                         const bool more = (si + 1 < N_SEG);
                         if (more && params.crossfade_ms > 0) {
                             const int gap_ms = std::max(150, 2 * params.crossfade_ms);
-                            const int gap_samples = sr * gap_ms / 1000;
-                            std::vector<float> gap(gap_samples, 0.0f);
-                            stream_emit_pcm_stdout(gap);
+                            // QVAC-21483 — feed the inter-segment silence through
+                            // the same resampler as native-rate silence, so it
+                            // slots into the continuous egress stream in order
+                            // (flushing the previous segment's tail) and comes
+                            // out at the egress rate.
+                            const int gap_native = sr * gap_ms / 1000;
+                            std::vector<float> gap(gap_native, 0.0f);
+                            std::vector<float> e = stdout_rs.process(gap);
+                            if (!e.empty()) stream_emit_pcm_stdout(e);
                         }
                     } else {
                         // File mode: concatenate segments with a raised-cosine
@@ -2461,14 +2554,20 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                     }
                 }
 
-                if (!to_stdout) stream_write_wav(params.out_wav, full_streamed_wav, sr);
+                if (to_stdout) {
+                    // QVAC-21483 — flush the resampler's final tail samples.
+                    std::vector<float> e = stdout_rs.finish();
+                    if (!e.empty()) stream_emit_pcm_stdout(e);
+                } else {
+                    write_wav_out_rate(params.out_wav, full_streamed_wav, osr);
+                }
                 fprintf(stderr, "\n=== streaming done: %d chunks, first-chunk latency=%.1f ms, total=%.1f ms ===\n",
                         global_chunk_idx, first_chunk_t_ms,
                         1e-3 * ggml_time_us() - stream_t0_ms);
                 if (to_stdout)
-                    fprintf(stderr, "Streamed to stdout (raw s16le @ 24 kHz mono)\n");
+                    fprintf(stderr, "Streamed to stdout (raw s16le @ %d Hz mono)\n", egress_sr);
                 else
-                    fprintf(stderr, "Wrote %s\n", params.out_wav.c_str());
+                    fprintf(stderr, "Wrote %s (@ %d Hz)\n", params.out_wav.c_str(), egress_sr);
             }
         } else {
             // Legacy: print the tokens to stdout too (handy for piping).

@@ -981,6 +981,31 @@ if (TTS_CPP_BUILD_TESTS)
         ARGS     "${_tcb_t3_turbo_gguf}" "${_tcb_s3gen_gguf}"
         REQUIRES "${_tcb_t3_turbo_gguf}" "${_tcb_s3gen_gguf}")
 
+    # QVAC-21483 — output-frequency selection on the chatterbox::Engine API
+    # (batch + streaming + validation).  Uses the multilingual fixtures so it
+    # runs anywhere the mtl-synth tests do; auto-disabled when they're absent.
+    add_executable(test-output-sample-rate test/test_output_sample_rate.cpp)
+    target_link_libraries(test-output-sample-rate PRIVATE tts-cpp ggml tts-cpp-backend-defs)
+    target_include_directories(test-output-sample-rate PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-output-sample-rate)
+    tts_cpp_register_test(test-output-sample-rate
+        LABEL    "fixture"
+        ARGS     "${_tcb_t3_mtl_gguf}" "${_tcb_s3gen_mtl_gguf}"
+        REQUIRES "${_tcb_t3_mtl_gguf}" "${_tcb_s3gen_mtl_gguf}")
+
+    # QVAC-21483 — Supertonic sibling of the above: native rate, 16 kHz batch
+    # ratio, construction rejection, streaming result.pcm == concat, and the
+    # streaming-equals-whole-buffer-resample batch-exact property.  Gated on the
+    # Supertonic GGUF fixture; auto-disabled when it's absent.
+    add_executable(test-output-sample-rate-supertonic test/test_output_sample_rate_supertonic.cpp)
+    target_link_libraries(test-output-sample-rate-supertonic PRIVATE tts-cpp ggml tts-cpp-backend-defs)
+    target_include_directories(test-output-sample-rate-supertonic PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-output-sample-rate-supertonic)
+    tts_cpp_register_test(test-output-sample-rate-supertonic
+        LABEL    "fixture"
+        ARGS     "${_tcb_super_gguf}"
+        REQUIRES "${_tcb_super_gguf}")
+
     # CPU-side persistent-cache validation.
     # Exercises the time_mlp / time_emb / cfm_estimator / weight_mirror
     # caches that amortise per-synth overhead on the multilingual CPU

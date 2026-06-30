@@ -15,6 +15,7 @@
 //   mel_extract_16k_40  — 40-ch power mel @ 16 kHz (VoiceEncoder input)
 //   fbank_kaldi_80      — Kaldi-style fbank @ 16 kHz (CAMPPlus input)
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -40,6 +41,74 @@ bool wav_load(const std::string & path,
 std::vector<float> resample_sinc(const std::vector<float> & in,
                                  int sr_in, int sr_out,
                                  int taps_half = 16);
+
+// -----------------------------------------------------------------------------
+// Output-frequency selection (QVAC-21483)
+// -----------------------------------------------------------------------------
+
+// Supported explicit output sample-rate window, in Hz.  A value of 0 is also
+// accepted everywhere and means "keep the engine's native rate".  The bounds
+// mirror the @qvac/tts-ggml addon's JS-side validation so the contract is
+// identical from the JS API down through the C++ engines and CLIs.
+constexpr int kOutputSampleRateMin = 8000;
+constexpr int kOutputSampleRateMax = 192000;
+
+// Validate a requested output sample rate.  Accepts 0 (keep native) or any
+// rate in [kOutputSampleRateMin, kOutputSampleRateMax]; throws
+// std::runtime_error (prefixed with `who`) on anything else so callers fail
+// fast at construction / arg-parse time rather than emitting a malformed wav.
+void validate_output_sample_rate(int sr, const char * who = "tts-cpp");
+
+// Resample final synthesized `pcm` from `native_sr` to `target_sr`.  Returns
+// `pcm` unchanged (moved through) when `target_sr <= 0` or
+// `target_sr == native_sr` — the "keep native rate" fast path — otherwise
+// delegates to resample_sinc.  Centralises the output-frequency policy shared
+// by the Chatterbox and Supertonic engines so both behave identically.
+std::vector<float> resample_for_output(std::vector<float> pcm,
+                                       int native_sr, int target_sr);
+
+// Stateful streaming output-frequency converter (QVAC-21483).
+//
+// `resample_sinc` is stateless and whole-buffer: resampling each streaming
+// chunk independently restarts the output grid at t=0 and truncates the sinc
+// window at every chunk edge, so concatenating per-chunk resamples introduces a
+// discontinuity at every seam (and the total length drifts) unless each chunk
+// happens to be an exact multiple of the resample ratio's denominator — which
+// the synthesis pipeline does not guarantee (e.g. the trim-faded first chunk,
+// the finalized last chunk, or output rates such as 11025 Hz).
+//
+// OutputResampler removes those seams: feed native-rate chunks via `process()`
+// and it returns only the output samples whose sinc window is fully covered by
+// the native audio seen so far (the "stable" prefix); `finish()` flushes the
+// final right-edge samples once no more input is coming.  Because a stable
+// sample's window is identical whether computed on the prefix or on the full
+// buffer, the concatenation of every `process()` result followed by `finish()`
+// is bit-for-bit identical to resample_for_output(<all native samples>) — the
+// streamed output equals the batch resample, with no per-chunk artifacts and no
+// length drift.  When `target_sr` is 0 or equals `native_sr` the converter is a
+// passthrough: `process()` returns its input unchanged and `finish()` is empty.
+class OutputResampler {
+public:
+    OutputResampler(int native_sr, int target_sr);
+
+    // Append `native_chunk` and return the newly-stable output samples.
+    std::vector<float> process(const std::vector<float> & native_chunk);
+
+    // Flush the remaining (right-edge) output samples.  Call once, after the
+    // last process(); further process()/finish() calls return nothing new.
+    std::vector<float> finish();
+
+    bool passthrough() const { return passthrough_; }
+    int  target_rate() const { return target_sr_; }   // resolved (== native when passthrough)
+
+private:
+    int                native_sr_;
+    int                target_sr_;
+    bool               passthrough_;
+    int                taps_half_;   // mirrors resample_sinc's window half-width
+    std::vector<float> native_;      // every native sample seen so far
+    std::size_t        emitted_ = 0; // output samples already returned
+};
 
 // -----------------------------------------------------------------------------
 // Loudness normalisation (ITU-R BS.1770-4 / EBU R 128)

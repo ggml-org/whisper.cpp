@@ -116,6 +116,15 @@ struct EngineOptions {
     int   n_threads     = 0;
     int   n_gpu_layers  = 0;
 
+    // QVAC-21483 — desired output sample rate in Hz.  Supertonic natively
+    // emits at the model's metadata rate (typically 44.1 kHz); when this is a
+    // positive rate other than the native one the engine resamples the final
+    // PCM (Kaiser-windowed sinc) and reports it on
+    // SynthesisResult::sample_rate.  Honoured on both the batch and streaming
+    // paths.  0 keeps the native rate (default; zero behaviour change).
+    // Validated at construction to 0 or [8000, 192000] Hz.
+    int   output_sample_rate = 0;
+
     // Compute precision for matmul weights — see Precision enum above.
     // Default F32 is the current behaviour (load q8_0 GGUF, expand to f32).
     // F16 / Q8_0 are non-default GPU paths (Metal-validated).

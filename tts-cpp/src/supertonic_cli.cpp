@@ -1,4 +1,5 @@
 #include "tts-cpp/supertonic/engine.h"
+#include "voice_features.h"  // kOutputSampleRateMin / kOutputSampleRateMax (QVAC-21483)
 
 #include <algorithm>
 #include <cmath>
@@ -17,6 +18,8 @@ void usage(const char * argv0) {
         "          [--language en] [--voice NAME] [--steps N] [--speed X]\n"
         "          (voice/steps/speed default to GGUF metadata when omitted)\n"
         "          [--seed 42] [--threads N] [--n-gpu-layers N]\n"
+        "          [--output-sample-rate HZ] (resample output; 0 = native model\n"
+        "                            rate, else 8000..192000; default 0)\n"
         "          [--vulkan-device N] (Vulkan adapter index; ignored unless\n"
         "                            built with -DGGML_VULKAN=ON; default 0,\n"
         "                            -1 = auto-pick adapter with most free VRAM)\n"
@@ -141,6 +144,21 @@ int main(int argc, char ** argv) {
         else if (arg == "--seed") opts.seed = std::stoi(next("--seed"));
         else if (arg == "--threads") opts.n_threads = std::stoi(next("--threads"));
         else if (arg == "--n-gpu-layers") opts.n_gpu_layers = std::stoi(next("--n-gpu-layers"));
+        else if (arg == "--output-sample-rate") {
+            // QVAC-21483 — validate at parse time (mirrors chatterbox_cli /
+            // tts-cli) so a bad rate fails fast with a friendly message rather
+            // than aborting later in validate_output_sample_rate at ctor.
+            opts.output_sample_rate = std::stoi(next("--output-sample-rate"));
+            if (opts.output_sample_rate != 0 &&
+                (opts.output_sample_rate < kOutputSampleRateMin ||
+                 opts.output_sample_rate > kOutputSampleRateMax)) {
+                throw std::runtime_error(
+                    "--output-sample-rate must be 0 (native) or "
+                    + std::to_string(kOutputSampleRateMin) + ".."
+                    + std::to_string(kOutputSampleRateMax) + " (got "
+                    + std::to_string(opts.output_sample_rate) + ")");
+            }
+        }
         else if (arg == "--vulkan-device") opts.vulkan_device = std::stoi(next("--vulkan-device"));
         else if (arg == "--f16-attn") opts.f16_attn = std::stoi(next("--f16-attn"));
         else if (arg == "--kv-attn-type") {
