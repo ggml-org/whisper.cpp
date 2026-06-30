@@ -33,6 +33,7 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
+          cache-dependency-path: examples/addon.node/package-lock.json
 
       - name: Install package.json dependencies
         working-directory: ./examples/addon.node
