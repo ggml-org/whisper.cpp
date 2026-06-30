@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-22.04
     strategy:
       matrix:
-        node-version: [ 16.x, 18.x ]
+        node-version: [ 20.x, 22.x ]
     steps:
       - name: Clone
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
