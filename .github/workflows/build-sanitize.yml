@@ -58,6 +58,7 @@ jobs:
         run: |
           cmake . -DCMAKE_BUILD_TYPE=Debug \
             -DWHISPER_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DGGML_NATIVE=OFF \
             -DGGML_OPENMP=OFF
           make
 
@@ -65,7 +66,8 @@ jobs:
         if: ${{ matrix.sanitizer == 'ADDRESS' }}
         run: |
           cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DWHISPER_SANITIZE_${{ matrix.sanitizer }}=ON
+            -DWHISPER_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DGGML_NATIVE=OFF
           make
 
       - name: Build (no OpenMP)
@@ -73,6 +75,7 @@ jobs:
         run: |
           cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DWHISPER_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DGGML_NATIVE=OFF \
             -DGGML_OPENMP=OFF
           make
 
