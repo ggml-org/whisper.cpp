@@ -1580,7 +1580,23 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         read_safe(loader, filters.n_mel);
         read_safe(loader, filters.n_fft);
 
-        filters.data.resize(filters.n_mel * filters.n_fft);
+        // Validate dimensions to prevent integer overflow in the resize() multiplication
+        // below and to ensure consistency with hparams.n_mels.
+        if (filters.n_mel <= 0 || filters.n_mel > 1024 ||
+            filters.n_fft <= 0 || filters.n_fft > WHISPER_N_FFT) {
+            WHISPER_LOG_ERROR("%s: invalid mel filter dimensions (n_mel=%d, n_fft=%d)\n",
+                              __func__, filters.n_mel, filters.n_fft);
+            return false;
+        }
+
+        if (filters.n_mel != hparams.n_mels) {
+            WHISPER_LOG_ERROR("%s: mel filter n_mel=%d does not match hparams n_mels=%d\n",
+                              __func__, filters.n_mel, hparams.n_mels);
+            return false;
+        }
+
+        const size_t total_size = (size_t)filters.n_mel * (size_t)filters.n_fft;
+        filters.data.resize(total_size);
         loader->read(loader->context, filters.data.data(), filters.data.size() * sizeof(float));
         BYTESWAP_FILTERS(filters);
     }
