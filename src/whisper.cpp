@@ -8416,24 +8416,35 @@ static float voice_length(const std::string & text) {
         if (c < 0x80) {
             len = 1;
         } else if ((c >> 5) == 0x6) {
-            cp = c & 0x1F; len = 2;
+            cp = c & 0x1F;
+            len = 2;
         } else if ((c >> 4) == 0xE) {
-            cp = c & 0x0F; len = 3;
+            cp = c & 0x0F;
+            len = 3;
         } else if ((c >> 3) == 0x1E) {
-            cp = c & 0x07; len = 4;
+            cp = c & 0x07;
+            len = 4;
         } else {
-            cp = c; len = 1; // stray continuation / invalid lead byte
+            cp = c; // stray continuation / invalid lead byte
+            len = 1;
         }
         if (i + (size_t) len <= n) {
             bool ok = true;
             for (int k = 1; k < len; ++k) {
                 const unsigned char cc = s[i + k];
-                if ((cc & 0xC0) != 0x80) { ok = false; break; }
+                if ((cc & 0xC0) != 0x80) {
+                    ok = false;
+                    break;
+                }
                 cp = (cp << 6) | (cc & 0x3F);
             }
-            if (!ok) { cp = c; len = 1; }
+            if (!ok) {
+                cp = c;
+                len = 1;
+            }
         } else {
-            cp = c; len = 1;
+            cp = c;
+            len = 1;
         }
         i += (size_t) len;
 
