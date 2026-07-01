@@ -10,6 +10,8 @@
 #include "coreml/whisper-encoder.h"
 #endif
 
+#include "aneforge/whisper-aneforge.h"
+
 #ifdef WHISPER_USE_OPENVINO
 #include "openvino/whisper-openvino-encoder.h"
 #endif
@@ -898,6 +900,8 @@ struct whisper_state {
 #ifdef WHISPER_USE_COREML
     whisper_coreml_context * ctx_coreml = nullptr;
 #endif
+
+    whisper_aneforge_context * ctx_aneforge = nullptr;
 
 #ifdef WHISPER_USE_OPENVINO
     whisper_openvino_context * ctx_openvino = nullptr;
@@ -1970,7 +1974,9 @@ static bool whisper_encode_external(const whisper_state & wstate) {
     const bool use_openvino = wstate.ctx_openvino != nullptr;
 #endif
 
-    return use_coreml || use_openvino;
+    const bool use_aneforge = wstate.ctx_aneforge != nullptr;
+
+    return use_coreml || use_openvino || use_aneforge;
 }
 
 static struct ggml_cgraph * whisper_build_graph_conv(
@@ -2409,11 +2415,15 @@ static bool whisper_encode_internal(
         } else {
             ggml_backend_sched_reset(sched);
 
+            if (wstate.ctx_aneforge != nullptr) {
+                whisper_aneforge_encode(wstate.ctx_aneforge, mel->ne[0], mel->ne[1], (float *) mel->data, (float *) wstate.embd_enc->data);
+            } else {
 #if defined(WHISPER_USE_COREML)
-            whisper_coreml_encode(wstate.ctx_coreml, mel->ne[0], mel->ne[1], (float *) mel->data, (float *) wstate.embd_enc->data);
+                whisper_coreml_encode(wstate.ctx_coreml, mel->ne[0], mel->ne[1], (float *) mel->data, (float *) wstate.embd_enc->data);
 #elif defined(WHISPER_USE_OPENVINO)
-            whisper_openvino_encode(wstate.ctx_openvino, mel, wstate.embd_enc);
+                whisper_openvino_encode(wstate.ctx_openvino, mel, wstate.embd_enc);
 #endif
+            }
         }
     }
 
@@ -3455,6 +3465,18 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
     }
 #endif
 
+    if (const char * aneforge_dir = getenv("ANEFORGE_ENCODER")) {
+        WHISPER_LOG_INFO("%s: loading ANEForge encoder from '%s'\n", __func__, aneforge_dir);
+        WHISPER_LOG_INFO("%s: compiling for the ANE (one time) ...\n", __func__);
+        state->ctx_aneforge = whisper_aneforge_init(aneforge_dir);
+        if (!state->ctx_aneforge) {
+            WHISPER_LOG_ERROR("%s: failed to load ANEForge encoder from '%s'\n", __func__, aneforge_dir);
+            whisper_free_state(state);
+            return nullptr;
+        }
+        WHISPER_LOG_INFO("%s: ANEForge encoder loaded\n", __func__);
+    }
+
     state->logits.reserve(ctx->vocab.n_vocab * ctx->model.hparams.n_text_ctx);
 
     state->batch = whisper_batch_init(ctx->model.hparams.n_text_ctx, WHISPER_MAX_DECODERS);
@@ -3827,6 +3849,11 @@ void whisper_free_state(struct whisper_state * state) {
             state->ctx_coreml = nullptr;
         }
 #endif
+
+        if (state->ctx_aneforge != nullptr) {
+            whisper_aneforge_free(state->ctx_aneforge);
+            state->ctx_aneforge = nullptr;
+        }
 
 #ifdef WHISPER_USE_OPENVINO
         if (state->ctx_openvino != nullptr) {
