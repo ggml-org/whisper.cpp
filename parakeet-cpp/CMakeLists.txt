@@ -647,6 +647,57 @@ if (PARAKEET_BUILD_TESTS)
         ARGS     "--model" "${_qvp_sf_q8_gguf}" "--wav" "${_qvp_diar_wav}"
         REQUIRES "${_qvp_sf_q8_gguf}" "${_qvp_diar_wav}")
 
+    # Regression gate for cached-encoder-graph reuse determinism. Compiles the
+    # sources directly (run_encoder is internal, not exported). Runs run_encoder 20x
+    # on the same cached graph and asserts the output stays byte-identical across
+    # every reuse; the -gpu variant locks the Adreno OpenCL/Vulkan reuse path that
+    # regressed under the shared scheduler and is fixed by the persistent gallocr.
+    add_executable(test-sched-encoder-determinism
+        test/test_sched_encoder_determinism.cpp
+        src/parakeet_ctc.cpp
+        src/parakeet_log.cpp
+        src/mel_preprocess.cpp
+        src/sentencepiece_bpe.cpp)
+    target_link_libraries(test-sched-encoder-determinism PRIVATE ggml parakeet-backend-defs)
+    target_include_directories(test-sched-encoder-determinism PRIVATE include src ggml/include)
+    parakeet_apply_backend_defs(test-sched-encoder-determinism)
+    parakeet_register_test(test-sched-encoder-determinism
+        LABEL    "fixture"
+        ARGS     "--model" "${_qvp_ctc_q8_gguf}" "--wav" "${_qvp_jfk_wav}"
+        REQUIRES "${_qvp_ctc_q8_gguf}" "${_qvp_jfk_wav}")
+    parakeet_register_test(test-sched-encoder-determinism-gpu
+        LABEL    "gpu"
+        EXE      test-sched-encoder-determinism
+        ARGS     "--model" "${_qvp_ctc_q8_gguf}" "--wav" "${_qvp_jfk_wav}" "--n-gpu-layers" "1"
+        REQUIRES "${_qvp_ctc_q8_gguf}" "${_qvp_jfk_wav}")
+
+    # Regression gate for the shared-scheduler lifecycle: subsampling -> encoder ->
+    # Sortformer head through one sched must match a clean encoder -> head reference,
+    # byte-identical, across reuse. Locks reset-at-head / download-before-reset order.
+    add_executable(test-sched-diarize-lifecycle
+        test/test_sched_diarize_lifecycle.cpp
+        src/parakeet_ctc.cpp
+        src/parakeet_engine.cpp
+        src/parakeet_log.cpp
+        src/parakeet_tdt.cpp
+        src/parakeet_eou.cpp
+        src/parakeet_sortformer.cpp
+        src/mel_preprocess.cpp
+        src/sentencepiece_bpe.cpp
+        src/energy_vad.cpp)
+    target_link_libraries(test-sched-diarize-lifecycle PRIVATE ggml parakeet-backend-defs)
+    target_include_directories(test-sched-diarize-lifecycle PRIVATE include src ggml/include)
+    parakeet_apply_backend_defs(test-sched-diarize-lifecycle)
+    parakeet_register_test(test-sched-diarize-lifecycle
+        LABEL    "fixture"
+        ARGS     "--model" "${_qvp_sf_q8_gguf}" "--wav" "${_qvp_diar_wav}"
+        REQUIRES "${_qvp_sf_q8_gguf}" "${_qvp_diar_wav}")
+    parakeet_register_test(test-sched-diarize-lifecycle-gpu
+        LABEL    "gpu"
+        EXE      test-sched-diarize-lifecycle
+        ARGS     "--model" "${_qvp_sf_q8_gguf}" "--wav" "${_qvp_diar_wav}" "--n-gpu-layers" "1"
+        REQUIRES "${_qvp_sf_q8_gguf}" "${_qvp_diar_wav}")
+
     add_executable(test-tdt-encoder-parity
         test/test_tdt_encoder_parity.cpp
         src/parakeet_ctc.cpp

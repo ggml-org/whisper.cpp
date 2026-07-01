@@ -158,7 +158,11 @@ ggml_tensor * sf_build_graph(ggml_context * ctx,
 
 // Allocate, upload input, compute, and download output for a Sortformer graph.
 // Returns 0 on success, negative on failure.  Caller must free ctx afterwards.
+// `backend` must be the head backend (model_sortformer_backend): it is used only
+// by the force_cpu branch, which requires the CPU backend; the normal path runs
+// through `sched`. sortformer_diarize_ggml resolves it so callers cannot mismatch.
 int sf_exec_graph(ggml_context * ctx, ggml_backend_t backend,
+                  ggml_backend_sched_t sched, bool force_cpu,
                   ggml_tensor * x_in, ggml_tensor * x_out,
                   const float * encoder_out,
                   int D_in, int T_enc, int num_spks,
@@ -167,24 +171,45 @@ int sf_exec_graph(ggml_context * ctx, ggml_backend_t backend,
     ggml_cgraph * cg = ggml_new_graph_custom(ctx, graph_slots, false);
     ggml_build_forward_expand(cg, x_out);
 
-    ggml_gallocr_t alloc = ggml_gallocr_new(
-        ggml_backend_get_default_buffer_type(backend));
-    if (!ggml_gallocr_reserve(alloc, cg))  { ggml_gallocr_free(alloc); return -2; }
-    if (!ggml_gallocr_alloc_graph(alloc, cg)) { ggml_gallocr_free(alloc); return -3; }
+    // Reset the shared scheduler at the head: the encoder already downloaded its
+    // output to host, so freeing its scheduler allocation here is safe (and the
+    // normal path below reuses the scheduler to allocate this head graph).
+    // The normal path needs the scheduler; the force-CPU head bypasses it. Guard
+    // both the requirement and the reset so a null scheduler can't crash here.
+    if (!force_cpu && !sched) return -2;
+    if (sched) ggml_backend_sched_reset(sched);
 
-    ggml_backend_tensor_set(x_in, encoder_out, 0,
-                            (size_t)D_in * T_enc * sizeof(float));
-
-    if (ggml_backend_graph_compute(backend, cg) != GGML_STATUS_SUCCESS) {
-        ggml_gallocr_free(alloc);
-        return -4;
+    ggml_gallocr_t alloc = nullptr;
+    if (!force_cpu) {
+        // Normal path: per-op CPU fallback via the shared scheduler.
+        if (!ggml_backend_sched_alloc_graph(sched, cg)) return -3;
+        ggml_backend_tensor_set(x_in, encoder_out, 0,
+                                (size_t)D_in * T_enc * sizeof(float));
+        if (ggml_backend_sched_graph_compute(sched, cg) != GGML_STATUS_SUCCESS) {
+            return -4;
+        }
+    } else {
+        // Force-CPU path (Mali-Vulkan miscompute workaround): run the head
+        // directly on the CPU backend with the CPU-resident weights, bypassing
+        // the scheduler -- supports_op is true for these ops, so the scheduler
+        // would route them back to the GPU and reproduce the block-0 NaN.
+        alloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
+        if (!ggml_gallocr_reserve(alloc, cg))     { ggml_gallocr_free(alloc); return -2; }
+        if (!ggml_gallocr_alloc_graph(alloc, cg)) { ggml_gallocr_free(alloc); return -3; }
+        ggml_backend_tensor_set(x_in, encoder_out, 0,
+                                (size_t)D_in * T_enc * sizeof(float));
+        if (ggml_backend_graph_compute(backend, cg) != GGML_STATUS_SUCCESS) {
+            ggml_gallocr_free(alloc);
+            return -4;
+        }
     }
 
     speaker_probs.resize((size_t)T_enc * num_spks);
     ggml_backend_tensor_get(x_out, speaker_probs.data(), 0,
                             speaker_probs.size() * sizeof(float));
-
-    ggml_gallocr_free(alloc);
+    // Free the head gallocr only AFTER the output is downloaded -- x_out lives in
+    // this buffer (the scheduler path keeps its tensors until the next reset).
+    if (alloc) ggml_gallocr_free(alloc);
     return 0;
 }
 
@@ -611,7 +636,6 @@ void sortformer_cache_reset(SortformerSpeakerCache & cache, int D) {
 int sortformer_diarize_ggml(const ParakeetCtcModel & model,
                             const float * encoder_out,
                             int T_enc, int D_enc,
-                            ggml_backend_t backend,
                             const SortformerDiarizationOptions & opts,
                             SortformerDiarizationResult & out) {
     const auto & enc   = model.encoder_cfg;
@@ -638,6 +662,16 @@ int sortformer_diarize_ggml(const ParakeetCtcModel & model,
     const int head_dim = tf_d / n_heads;
     const auto t0 = std::chrono::steady_clock::now();
 
+    // Resolve the head backend from the model itself (CPU on Mali-Vulkan, the
+    // active backend otherwise). Resolving here -- rather than trusting a caller-
+    // supplied argument -- makes it impossible to drive the force-CPU workaround's
+    // CPU-resident weights through the GPU.
+    ggml_backend_t backend = model_sortformer_backend(model);
+    if (!backend) {
+        std::fprintf(stderr, "sortformer_diarize_ggml: no ggml backend for the diarization head\n");
+        return 1;
+    }
+
     // 1. Context for graph construction (no-alloc)
     const size_t graph_slots = 4096;
     const size_t overhead = ggml_tensor_overhead() * graph_slots
@@ -658,7 +692,11 @@ int sortformer_diarize_ggml(const ParakeetCtcModel & model,
                                          tf_d, D_in, T_enc, &x_in);
 
     // 3. Execute on backend
-    int rc = sf_exec_graph(ctx, backend, x_in, x_out,
+    // Force-CPU (Mali-Vulkan) bypasses the scheduler and computes directly on the
+    // CPU backend; otherwise run through the shared sched for per-op CPU fallback.
+    int rc = sf_exec_graph(ctx, backend, model_sched(model),
+                           model_sortformer_on_cpu(model),
+                           x_in, x_out,
                            encoder_out, D_in, T_enc, num_spks,
                            out.speaker_probs);
     ggml_free(ctx);
@@ -685,7 +723,6 @@ int sortformer_aosc_step(ParakeetCtcModel & model,
                          int lc, int rc, int chunk_len_eff,
                          SortformerSpeakerCache & cache,
                          const SortformerStreamingConfig & cfg,
-                         ggml_backend_t backend,
                          const SortformerDiarizationOptions & opts,
                          SortformerDiarizationResult & out) {
     const auto & enc   = model.encoder_cfg;
@@ -759,7 +796,7 @@ int sortformer_aosc_step(ParakeetCtcModel & model,
     // 3. Run the diariser over the full cat.
     SortformerDiarizationResult diar_cat;
     if (int rc_ = sortformer_diarize_ggml(model, enc_cat.encoder_out.data(),
-                                          T_cat, D, backend, opts, diar_cat); rc_ != 0) {
+                                          T_cat, D, opts, diar_cat); rc_ != 0) {
         return rc_;
     }
     if (diar_cat.num_spks != num_spks) {
