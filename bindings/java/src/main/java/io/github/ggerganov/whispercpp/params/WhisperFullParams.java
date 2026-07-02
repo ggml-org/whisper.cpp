@@ -331,6 +331,38 @@ public class WhisperFullParams extends Structure {
     public long i_start_rule;
     public float grammar_penalty;
 
+    /** Voice Activity Detection (VAD) parameters */
+
+    /** Enable VAD (default = false) */
+    public CBool vad;
+
+    /** Enable VAD */
+    public void enableVAD(boolean enable) {
+        vad = enable ? CBool.TRUE : CBool.FALSE;
+    }
+
+    /** Path to VAD model file */
+    public String vad_model_path;
+
+    /** Set VAD model path */
+    public void setVADModelPath(String path) {
+        this.vad_model_path = path;
+    }
+
+    /** VAD parameters */
+    public WhisperVADParams.ByValue vad_params;
+
+    /** Set VAD parameters */
+    public void setVADParams(WhisperVADParams params) {
+        this.vad_params = new WhisperVADParams.ByValue();
+        this.vad_params.threshold = params.threshold;
+        this.vad_params.min_speech_duration_ms = params.min_speech_duration_ms;
+        this.vad_params.min_silence_duration_ms = params.min_silence_duration_ms;
+        this.vad_params.max_speech_duration_s = params.max_speech_duration_s;
+        this.vad_params.speech_pad_ms = params.speech_pad_ms;
+        this.vad_params.samples_overlap = params.samples_overlap;
+    }
+
     @Override
     protected List<String> getFieldOrder() {
         return Arrays.asList("strategy", "n_threads", "n_max_text_ctx",
@@ -349,7 +381,8 @@ public class WhisperFullParams extends Structure {
                 "encoder_begin_callback", "encoder_begin_callback_user_data",
                 "abort_callback", "abort_callback_user_data",
                 "logits_filter_callback", "logits_filter_callback_user_data",
-                "grammar_rules", "n_grammar_rules", "i_start_rule", "grammar_penalty");
+                "grammar_rules", "n_grammar_rules", "i_start_rule", "grammar_penalty",
+                "vad", "vad_model_path", "vad_params");
     }
 
     public static class ByValue extends WhisperFullParams implements Structure.ByValue {
