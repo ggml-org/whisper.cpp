@@ -47,6 +47,10 @@ if (WHISPER_COMMON_FFMPEG)
 endif()
 
 
+# add json lib (used by the HF cache/download subsystem)
+add_library(json_cpp INTERFACE)
+target_include_directories(json_cpp INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+
 add_library(${TARGET} STATIC
     common.h
     common.cpp
@@ -56,12 +60,21 @@ add_library(${TARGET} STATIC
     common-whisper.cpp
     grammar-parser.h
     grammar-parser.cpp
+    http.h
+    hf-cache.h
+    hf-cache.cpp
     ${COMMON_SOURCES_FFMPEG}
     )
 
 include(DefaultTargetOptions)
 
-target_link_libraries(${TARGET} PRIVATE whisper ${COMMON_EXTRA_LIBS} ${CMAKE_DL_LIBS})
+# the ported HF cache subsystem (hf-cache.cpp) uses std::filesystem / std::string_view
+target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+# vendored cpp-httplib header lives under examples/server/ (used by http.h)
+target_include_directories(${TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server)
+
+target_link_libraries(${TARGET} PRIVATE whisper json_cpp ${COMMON_EXTRA_LIBS} ${CMAKE_DL_LIBS})
 
 set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set_target_properties(${TARGET} PROPERTIES FOLDER "libs")
@@ -84,10 +97,6 @@ if (WHISPER_SDL2)
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
     set_target_properties(${TARGET} PROPERTIES FOLDER "libs")
 endif()
-
-# add json lib
-add_library(json_cpp INTERFACE)
-target_include_directories(json_cpp INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # examples
 

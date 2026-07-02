@@ -3,6 +3,7 @@
 #include "common-whisper.h"
 
 #include "common.h"
+#include "hf-cache.h"
 
 #include "whisper.h"
 
@@ -32,6 +33,7 @@
 #endif
 
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 
 #ifdef WHISPER_COMMON_FFMPEG
@@ -241,6 +243,39 @@ bool speak_with_file(const std::string & command, const std::string & text, cons
         }
     }
     return true;
+}
+
+std::string whisper_hf_resolve_model(const std::string & hf_repo, const std::string & hf_file) {
+    // Phase 1: cache-only resolution. Scan the on-disk HF hub cache for the repo.
+    const hf_cache::hf_files files = hf_cache::get_cached_files(hf_repo);
+    if (files.empty()) {
+        return "";
+    }
+
+    const hf_cache::hf_file * chosen = nullptr;
+
+    for (const auto & file : files) {
+        if (!hf_file.empty()) {
+            if (file.path == hf_file) {
+                chosen = &file;
+                break;
+            }
+        } else {
+            // no explicit file: pick the first ggml-*.bin in the snapshot
+            const std::string name = std::filesystem::path(file.path).filename().string();
+            if (name.rfind("ggml-", 0) == 0 && name.size() >= 4 &&
+                name.compare(name.size() - 4, 4, ".bin") == 0) {
+                chosen = &file;
+                break;
+            }
+        }
+    }
+
+    if (chosen == nullptr) {
+        return "";
+    }
+
+    return hf_cache::finalize_file(*chosen);
 }
 
 #undef STB_VORBIS_HEADER_ONLY
