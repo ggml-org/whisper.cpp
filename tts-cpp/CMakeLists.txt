@@ -261,6 +261,13 @@ set(TTS_CPP_LIB_SOURCES
     src/lavasr/enhancer.cpp
     src/lavasr/enhancer_gguf.cpp
     src/lavasr/enhancer_api.cpp
+    # LavaSR denoiser stage (QVAC-16579 follow-up) — SCAFFOLD: structure + public
+    # API + GGUF/converter layout only; the UL-UNAS forward is a TODO (load()
+    # throws until it lands).  See src/lavasr/denoiser*.{h,cpp}.
+    src/lavasr/denoiser_core.cpp
+    src/lavasr/denoiser.cpp
+    src/lavasr/denoiser_gguf.cpp
+    src/lavasr/denoiser_api.cpp
 )
 
 if (TTS_CPP_BUILD_LIBRARY)
