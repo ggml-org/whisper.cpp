@@ -1080,8 +1080,7 @@ int main(int argc, char ** argv) {
     if (!params.hf_repo.empty() && params.model == "models/ggml-base.en.bin") {
         params.model = whisper_hf_resolve_model(params.hf_repo, params.hf_file);
         if (params.model.empty()) {
-            fprintf(stderr, "error: model %s (%s) not found in HF cache\n",
-                    params.hf_repo.c_str(), params.hf_file.c_str());
+            // whisper_hf_resolve_model prints a specific diagnostic for every failure mode
             return 3;
         }
     }

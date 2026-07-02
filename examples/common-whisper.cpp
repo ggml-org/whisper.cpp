@@ -32,6 +32,7 @@
 #include <io.h>
 #endif
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -246,6 +247,12 @@ bool speak_with_file(const std::string & command, const std::string & text, cons
     return true;
 }
 
+// filename test for whisper GGML models: ggml-*.bin
+static bool whisper_hf_is_ggml_bin(const std::string & name) {
+    return name.rfind("ggml-", 0) == 0 && name.size() >= 4 &&
+           name.compare(name.size() - 4, 4, ".bin") == 0;
+}
+
 // pick the primary file from a listing: exact hf_file match, else the first ggml-*.bin
 static const hf_cache::hf_file * whisper_hf_pick_primary(const hf_cache::hf_files & files, const std::string & hf_file) {
     for (const auto & file : files) {
@@ -255,13 +262,37 @@ static const hf_cache::hf_file * whisper_hf_pick_primary(const hf_cache::hf_file
             }
         } else {
             const std::string name = std::filesystem::path(file.path).filename().string();
-            if (name.rfind("ggml-", 0) == 0 && name.size() >= 4 &&
-                name.compare(name.size() - 4, 4, ".bin") == 0) {
+            if (whisper_hf_is_ggml_bin(name)) {
                 return &file;
             }
         }
     }
     return nullptr;
+}
+
+// collect the entries whose filename matches ggml-*.bin
+static hf_cache::hf_files whisper_hf_ggml_candidates(const hf_cache::hf_files & files) {
+    hf_cache::hf_files out;
+    for (const auto & file : files) {
+        const std::string name = std::filesystem::path(file.path).filename().string();
+        if (whisper_hf_is_ggml_bin(name)) {
+            out.push_back(file);
+        }
+    }
+    return out;
+}
+
+// print an error message followed by the sorted list of candidate filenames
+static void whisper_hf_print_candidates(const std::string & msg, const hf_cache::hf_files & candidates) {
+    fprintf(stderr, "%s\n", msg.c_str());
+    std::vector<std::string> names;
+    for (const auto & file : candidates) {
+        names.push_back(std::filesystem::path(file.path).filename().string());
+    }
+    std::sort(names.begin(), names.end());
+    for (const auto & name : names) {
+        fprintf(stderr, "  - %s\n", name.c_str());
+    }
 }
 
 std::string whisper_hf_resolve_model(const std::string & hf_repo, const std::string & hf_file) {
@@ -271,6 +302,37 @@ std::string whisper_hf_resolve_model(const std::string & hf_repo, const std::str
     // honor an HF offline mode (huggingface_hub convention): skip the network path entirely
     const char * offline_env = std::getenv("HF_HUB_OFFLINE");
     const bool offline = offline_env && *offline_env && std::string(offline_env) != "0";
+
+    // -hf alone (no --hf-file): cache-first, and refuse ambiguity rather than guess.
+    if (hf_file.empty()) {
+        const hf_cache::hf_files cached = whisper_hf_ggml_candidates(hf_cache::get_cached_files(hf_repo));
+        if (cached.size() == 1) {
+            return hf_cache::finalize_file(cached.front());
+        }
+        if (cached.size() > 1) {
+            whisper_hf_print_candidates(
+                "error: multiple models cached for " + hf_repo + "; specify one with -hff/--hf-file:", cached);
+            return "";
+        }
+
+        // none cached
+        if (offline) {
+            fprintf(stderr, "error: %s not found in HF cache\n", hf_repo.c_str());
+            return "";
+        }
+
+        const hf_cache::hf_files remote = whisper_hf_ggml_candidates(hf_cache::get_repo_files(hf_repo, token));
+        if (remote.empty()) {
+            fprintf(stderr, "error: no models found in %s\n", hf_repo.c_str());
+            return "";
+        }
+        // don't auto-pick/download a multi-model repo; list what's available instead
+        whisper_hf_print_candidates(
+            "error: multiple models available in " + hf_repo + "; specify one with -hff/--hf-file:", remote);
+        return "";
+    }
+
+    // explicit --hf-file: download-first with cache fall-back (Phase 2, unchanged).
 
     // 1. try download first: list the repo over the network and fetch the primary file.
     //    get_repo_files swallows network errors into an empty result (graceful degradation).
@@ -289,6 +351,7 @@ std::string whisper_hf_resolve_model(const std::string & hf_repo, const std::str
         return hf_cache::finalize_file(*primary);
     }
 
+    fprintf(stderr, "error: file '%s' not found in %s (cache or network)\n", hf_file.c_str(), hf_repo.c_str());
     return "";
 }
 

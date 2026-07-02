@@ -6,7 +6,7 @@
 # models--org--repo/{refs,snapshots} layout that the `hf` CLI / huggingface_hub
 # produces, using an existing local `for-tests` model as the payload, then checks:
 #   1. `-hf <repo> --hf-file <file>` resolves the cached snapshot and runs (exit 0)
-#   2. a missing --hf-file prints the "not found in HF cache" error and exits 3
+#   2. a missing --hf-file prints the "file ... not found" error and exits 3
 #   3. `-m <path>` regression: an explicit model path still works unchanged
 #   4. bare invocation (no -hf/-m) still uses the models/ggml-base.en.bin default
 #   5. (optional) a no-OpenSSL build attempting an https resolve with an empty
@@ -65,11 +65,36 @@ fi
 # 2. missing file -> exit 3 with clear error
 HF_HUB_OFFLINE=1 HF_HUB_CACHE="$tmp_cache" "$main" -hf "$repo" --hf-file ggml-missing.bin -f "$sample" >/tmp/hf_resolve_miss.log 2>&1
 rc=$?
-if [ "$rc" -eq 3 ] && grep -qi "not found in HF cache" /tmp/hf_resolve_miss.log; then
-    printf "PASS: missing --hf-file reports 'not found in HF cache' and exits 3\n"
+if [ "$rc" -eq 3 ] && grep -qi "file 'ggml-missing.bin' not found" /tmp/hf_resolve_miss.log; then
+    printf "PASS: missing --hf-file reports 'file ... not found' and exits 3\n"
 else
     printf "FAIL: missing --hf-file expected exit 3 + error message, got exit %s\n" "$rc"; fail=1
 fi
+
+# 2b. -hf alone (no --hf-file), single cached model -> resolves and runs (exit 0)
+if HF_HUB_OFFLINE=1 HF_HUB_CACHE="$tmp_cache" "$main" -hf "$repo" -f "$sample" >/tmp/hf_resolve_single.log 2>&1; then
+    if grep -qi "failed to open" /tmp/hf_resolve_single.log; then
+        printf "FAIL: -hf alone resolved but model failed to open\n"; fail=1
+    else
+        printf "PASS: -hf %s (no --hf-file) resolved single cached model (exit 0)\n" "$repo"
+    fi
+else
+    printf "FAIL: -hf alone with a single cached model exited non-zero\n"; cat /tmp/hf_resolve_single.log; fail=1
+fi
+
+# 2c. -hf alone (no --hf-file), multiple cached models -> exit 3 + "multiple models cached" + both filenames
+second_file="ggml-tiny.en.bin"
+cp "$seed_model" "$snapshot_dir/$second_file"
+HF_HUB_OFFLINE=1 HF_HUB_CACHE="$tmp_cache" "$main" -hf "$repo" -f "$sample" >/tmp/hf_resolve_multi.log 2>&1
+rc=$?
+if [ "$rc" -eq 3 ] && grep -qi "multiple models cached" /tmp/hf_resolve_multi.log \
+    && grep -q "$hf_file" /tmp/hf_resolve_multi.log && grep -q "$second_file" /tmp/hf_resolve_multi.log; then
+    printf "PASS: -hf alone with multiple cached models reports 'multiple models cached' + lists both, exits 3\n"
+else
+    printf "FAIL: -hf alone with multiple cached models expected exit 3 + list, got exit %s\n" "$rc"
+    cat /tmp/hf_resolve_multi.log; fail=1
+fi
+rm -f "$snapshot_dir/$second_file"
 
 # 3. -m regression: explicit path still works
 if "$main" -m "$seed_model" -f "$sample" >/tmp/hf_resolve_m.log 2>&1; then
