@@ -874,6 +874,112 @@ jobs:
           path: ${{ env.ARCHIVE }}
 
 # ════════════════════════════════════════════════════════════════════════════════
+# 8b. CPU / Vulkan — Linux musl (Alpine)
+# Compiled inside an Alpine container so it links musl; libstdc++/libgcc are
+# static so the archive is self-contained. arm64 drops the x86-only march/AVX
+# flags. Runs on native ARM runners for arm64 (no QEMU).
+# ════════════════════════════════════════════════════════════════════════════════
+  linux-musl-cpu:
+    runs-on: ${{ matrix.runner }}
+    needs: determine-tag
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+            cpu_flags: "-DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_AVX512=OFF -DCMAKE_C_FLAGS=-march=x86-64-v3 -DCMAKE_CXX_FLAGS=-march=x86-64-v3"
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            cpu_flags: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (Alpine / musl)
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src alpine:latest sh -euxc '
+            apk add --no-cache build-base cmake git sdl2-dev
+            cmake -B build \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DGGML_NATIVE=OFF \
+              ${{ matrix.cpu_flags }} \
+              -DWHISPER_BUILD_EXAMPLES=ON \
+              -DWHISPER_BUILD_TESTS=OFF \
+              -DWHISPER_BUILD_SERVER=ON \
+              -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++" \
+              -DCMAKE_SHARED_LINKER_FLAGS="-static-libgcc -static-libstdc++"
+            cmake --build build --config Release -j"$(nproc)"
+            chmod -R a+rwX build
+          '
+
+      - name: Package
+        run: |
+          VER="${{ needs.determine-tag.outputs.version }}"
+          ARCHIVE="whisper-${VER}-linux-musl-cpu-${{ matrix.arch }}.tar.gz"
+          STAGE="whisper-${VER}-linux-musl-cpu-${{ matrix.arch }}"
+          mkdir -p "$STAGE"
+          cp -r build/bin/* "$STAGE/" 2>/dev/null || true
+          find build -name "*.so*" -exec cp {} "$STAGE/" \; 2>/dev/null || true
+          tar -czf "$ARCHIVE" "$STAGE"
+          echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}
+
+  linux-musl-vulkan:
+    runs-on: ${{ matrix.runner }}
+    needs: determine-tag
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+            cpu_flags: "-DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_AVX512=OFF -DCMAKE_C_FLAGS=-march=x86-64-v3 -DCMAKE_CXX_FLAGS=-march=x86-64-v3"
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+            cpu_flags: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (Alpine / musl)
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src alpine:latest sh -euxc '
+            apk add --no-cache build-base cmake git sdl2-dev \
+              vulkan-loader-dev vulkan-headers glslang shaderc spirv-tools
+            cmake -B build \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DGGML_NATIVE=OFF \
+              ${{ matrix.cpu_flags }} \
+              -DGGML_VULKAN=ON \
+              -DWHISPER_BUILD_EXAMPLES=ON \
+              -DWHISPER_BUILD_TESTS=OFF \
+              -DWHISPER_BUILD_SERVER=ON \
+              -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++" \
+              -DCMAKE_SHARED_LINKER_FLAGS="-static-libgcc -static-libstdc++"
+            cmake --build build --config Release -j"$(nproc)"
+            chmod -R a+rwX build
+          '
+
+      - name: Package
+        run: |
+          VER="${{ needs.determine-tag.outputs.version }}"
+          ARCHIVE="whisper-${VER}-linux-musl-vulkan-${{ matrix.arch }}.tar.gz"
+          STAGE="whisper-${VER}-linux-musl-vulkan-${{ matrix.arch }}"
+          mkdir -p "$STAGE"
+          cp -r build/bin/* "$STAGE/" 2>/dev/null || true
+          find build -name "*.so*" -exec cp {} "$STAGE/" \; 2>/dev/null || true
+          tar -czf "$ARCHIVE" "$STAGE"
+          echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}
+
+# ════════════════════════════════════════════════════════════════════════════════
 # 8. CPU — Windows
 # ════════════════════════════════════════════════════════════════════════════════
   windows-cpu:
@@ -1242,6 +1348,8 @@ jobs:
       - macos-metal
       - linux-cpu
       - windows-cpu
+      - linux-musl-cpu
+      - linux-musl-vulkan
       - test-cpu-windows
       - test-cpu-linux
       - test-vulkan-windows
