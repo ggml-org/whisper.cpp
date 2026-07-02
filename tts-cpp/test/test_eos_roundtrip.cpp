@@ -81,6 +81,7 @@ size_t levenshtein(const std::vector<char> & a, const std::vector<char> & b) {
 struct Args {
     std::string tts_cli, t3, s3gen, ref_dir, whisper_cli, whisper_model;
     std::string lang = "en";
+    std::string kv_cache_type;  // "" -> tts-cli default (f32); "q8_0"/"f16" stress the quantized-KV align path
     std::string tmp = "/tmp";
     int    gpu_layers = 0;
     int    seed = 0;
@@ -107,6 +108,7 @@ bool parse_args(int argc, char ** argv, Args & a) {
         else if (k == "--seed")          { auto v = val(k.c_str()); if (!v) return false; a.seed = std::atoi(v); }
         else if (k == "--max-cer")       { auto v = val(k.c_str()); if (!v) return false; a.max_cer = std::atof(v); }
         else if (k == "--max-ramble")    { auto v = val(k.c_str()); if (!v) return false; a.max_ramble = std::atof(v); }
+        else if (k == "--kv-cache-type") { auto v = val(k.c_str()); if (!v) return false; a.kv_cache_type = v; }
         else { fprintf(stderr, "unknown arg: %s\n", k.c_str()); return false; }
     }
     return !a.tts_cli.empty() && !a.t3.empty() && !a.s3gen.empty() &&
@@ -136,6 +138,7 @@ int synth(const Args & a, const std::string & text, const std::string & wav) {
         + " --threads 16";
     if (!a.ref_dir.empty()) cmd += " --ref-dir " + sh_quote(a.ref_dir);
     if (a.gpu_layers > 0)   cmd += " --n-gpu-layers " + std::to_string(a.gpu_layers);
+    if (!a.kv_cache_type.empty()) cmd += " --kv-cache-type " + sh_quote(a.kv_cache_type);
     cmd += " >/dev/null 2>&1";
     return std::system(cmd.c_str());
 }

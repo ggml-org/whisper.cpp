@@ -66,6 +66,30 @@ int main() {
     CHECK(chatterbox_resolve_kv_type(cpu, GGML_TYPE_Q8_0, head_dim, n_head, n_kv_head)
               == GGML_TYPE_Q8_0, "cpu retains q8_0 KV");
 
+    // ---- MTL resolve (QVAC-19557): also probes the align-probe cast(q8->f32) ----
+    // The CPU backend supports the strided q8->f32 cast, so q8 is retained; a
+    // backend lacking that cast kernel would be downgraded to f32 (the branch
+    // that stops the single-backend MTL graph SIGABRT'ing at compute).  f32
+    // requests are unaffected.
+    CHECK(chatterbox_mtl_resolve_kv_type(cpu, GGML_TYPE_F32, head_dim, n_head, n_kv_head)
+              == GGML_TYPE_F32, "mtl resolve: f32 stays f32 on cpu");
+    CHECK(chatterbox_mtl_resolve_kv_type(cpu, GGML_TYPE_Q8_0, head_dim, n_head, n_kv_head)
+              == GGML_TYPE_Q8_0, "mtl resolve: cpu retains q8_0 (supports the cast)");
+    CHECK(chatterbox_mtl_resolve_kv_type(nullptr, GGML_TYPE_Q8_0, head_dim, n_head, n_kv_head)
+              == GGML_TYPE_F32, "mtl resolve: null backend -> f32");
+
+    // The cross-backend safety net — quantized + backend-can't-encode-the-cast ->
+    // f32 — can't be reached with a CPU/Metal backend (both encode the cast), so
+    // exercise the pure decision directly to cover the OpenCL/Adreno/Mali case.
+    CHECK(chatterbox_mtl_kv_type_for_cast_support(GGML_TYPE_Q8_0, /*cast_supported=*/false)
+              == GGML_TYPE_F32, "mtl cast-fallback: q8 + no cast -> f32 (the non-Metal-GPU net)");
+    CHECK(chatterbox_mtl_kv_type_for_cast_support(GGML_TYPE_Q8_0, /*cast_supported=*/true)
+              == GGML_TYPE_Q8_0, "mtl cast-fallback: q8 + cast supported -> q8");
+    CHECK(chatterbox_mtl_kv_type_for_cast_support(GGML_TYPE_F16, /*cast_supported=*/false)
+              == GGML_TYPE_F16, "mtl cast-fallback: f16 (non-quantized) unaffected");
+    CHECK(chatterbox_mtl_kv_type_for_cast_support(GGML_TYPE_F32, /*cast_supported=*/false)
+              == GGML_TYPE_F32, "mtl cast-fallback: f32 unaffected");
+
     ggml_backend_free(cpu);
 
     if (g_failures) {

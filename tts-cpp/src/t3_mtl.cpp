@@ -714,7 +714,16 @@ ggml_tensor * build_llama_block(ggml_context * ctx, ggml_cgraph * gf,
                     layer_off + (size_t) probe_head * kv_head_row
                               + (size_t) ti * kv_tok_row);
             }
-            k_text = ggml_cont(ctx, k_text);
+            // Dequantize-and-pack the text-key slice to contiguous f32 for the
+            // mul_mat.  When the KV cache is quantized (q8_0), a plain ggml_cont
+            // would produce a quantized CONT, which ggml-metal can't encode (no
+            // quantized CONT kernel) — it SIGABRTs the whole decode.  ggml_cast
+            // to f32 is a dequantizing copy that Metal *does* support for a
+            // strided quantized view (QVAC-19557), and for an f32/f16 cache it
+            // degrades to a cheap cont/upcast.  This slice is tiny (HD × n_text
+            // for one head) and off the hot path, so the dequant cost is
+            // negligible.
+            k_text = ggml_cast(ctx, k_text, GGML_TYPE_F32);
             ggml_tensor * scores = ggml_mul_mat(ctx, k_text, q_h);        // (n_text, N)
             scores = ggml_scale(ctx, scores, 1.0f / std::sqrt((float) HD));
             ggml_tensor * aprobs = ggml_soft_max(ctx, scores);           // softmax over n_text
@@ -1828,8 +1837,18 @@ bool load_model_gguf_mtl(const std::string & path,
         // kv_layer_elems * sizeof(float).
         // Fall back to F32 KV if the resolved backend can't run flash
         // attention with the requested quantized/f16 K/V.
-        hp.kv_type = chatterbox_resolve_kv_type(model.backend, kv_type,
-                                                hp.head_dim, hp.n_head, hp.n_kv_head);
+        // QVAC-19557: a quantized (q8_0) KV cache used to SIGABRT on Metal
+        // ("unsupported op 'CONT'").  The cause was NOT flash-attention (which
+        // reads the q8 strided cache fine on Metal) but the per-(layer,head)
+        // alignment probe in build_llama_block, which ggml_cont'd a strided view
+        // of the quantized K cache to feed a mul_mat — and ggml-metal has no CONT
+        // kernel for quantized tensors.  That cont is now a dequantizing
+        // ggml_cast to f32 (Metal-supported), so quantized K/V runs on the GPU.
+        // chatterbox_mtl_resolve_kv_type probes that cast per-backend and falls
+        // back to f32 on any GPU backend that can't encode it (Vulkan coopmat2 is
+        // separately force-f32'd inside the shared resolve).
+        hp.kv_type = chatterbox_mtl_resolve_kv_type(model.backend, kv_type,
+                                                    hp.head_dim, hp.n_head, hp.n_kv_head);
         ggml_init_params kv_params = { ggml_tensor_overhead() * 4, nullptr, true };
         model.ctx_kv = ggml_init(kv_params);
         const int64_t kv_elements_b2 =

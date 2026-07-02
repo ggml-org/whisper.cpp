@@ -335,6 +335,73 @@ static int test_mul_mm_fused(ggml_backend_t cpu, ggml_backend_t gpu,
     return 1;
 }
 
+// QVAC-19557: regression sentinel for the MTL Metal q8-KV SIGABRT.  With a
+// quantized KV cache, the multilingual Chatterbox variant's per-(layer,head)
+// alignment probe (build_llama_block) read a strided view of the q8 K cache and
+// CONT'd it to feed a mul_mat.  ggml-metal has no CONT kernel for quantized
+// tensors, so that op is unsupported on Metal — and because the MTL path runs a
+// single-backend graph_compute (no scheduler fallback) it crashed at encode
+// time.  The fix replaced that ggml_cont with a dequantizing ggml_cast to f32.
+// This test pins the two ggml facts the fix depends on:
+//   1. CONT(q8_0 strided) is STILL unsupported on Metal — i.e. the plain cont we
+//      removed really would crash (if this ever flips, the cast can become a
+//      cheaper cont again).
+//   2. CAST(q8_0 strided -> f32) IS supported on Metal — the op the fix relies
+//      on.  If this ever regresses, the align probe would crash again, so the
+//      test must fail loudly.
+// CPU must support both (the MTL variant also runs on CPU).
+static int test_quantized_cont_unsupported(ggml_backend_t cpu, ggml_backend_t gpu) {
+    fprintf(stderr, "[quantized_cont] ");
+    // Mirror the REAL op exactly: the align probe (build_llama_block) and the
+    // chatterbox_mtl_resolve_kv_type probe both build a strided 2D
+    // [head_dim, n_text] view of the token-major K cache, stride = one token row
+    // (ggml_row_size(t, head_dim * n_kv_head)).  Keep all three shapes identical.
+    auto make_view = [](ggml_context * ctx, ggml_type t) {
+        const int HD = 64, NKV = 16;
+        const size_t tok_row = ggml_row_size(t, (size_t) HD * NKV);
+        ggml_tensor * cache = ggml_new_tensor_1d(ctx, t, (int64_t) HD * NKV * 8);
+        return ggml_view_2d(ctx, cache, HD, 4, tok_row, 0);
+    };
+    auto supports_cont = [&](ggml_backend_t b, ggml_type t) {
+        ggml_init_params p = { ggml_tensor_overhead() * 8, nullptr, /*no_alloc=*/true };
+        ggml_context * ctx = ggml_init(p);
+        bool sup = ggml_backend_supports_op(b, ggml_cont(ctx, make_view(ctx, t)));
+        ggml_free(ctx);
+        return sup;
+    };
+    auto supports_cast_f32 = [&](ggml_backend_t b, ggml_type t) {
+        ggml_init_params p = { ggml_tensor_overhead() * 8, nullptr, /*no_alloc=*/true };
+        ggml_context * ctx = ggml_init(p);
+        bool sup = ggml_backend_supports_op(b, ggml_cast(ctx, make_view(ctx, t), GGML_TYPE_F32));
+        ggml_free(ctx);
+        return sup;
+    };
+    int fails = 0;
+    if (supports_cont(gpu, GGML_TYPE_Q8_0)) {
+        fprintf(stderr, "\n  NOTE: Metal now advertises CONT(q8_0) — the align-probe cast "
+                        "could be simplified back to a cont (not a failure, but revisit)\n");
+        // informational only; not a hard failure
+    }
+    if (!supports_cast_f32(gpu, GGML_TYPE_Q8_0)) {
+        fprintf(stderr, "\n  FAIL: Metal CAST(q8_0 strided -> f32) unsupported — the align-probe "
+                        "dequant fix (build_llama_block) would SIGABRT again\n");
+        ++fails;
+    }
+    if (!supports_cast_f32(cpu, GGML_TYPE_Q8_0)) {
+        fprintf(stderr, "\n  FAIL: CPU CAST(q8_0 strided -> f32) unsupported — MTL on CPU would break\n");
+        ++fails;
+    }
+    if (!supports_cont(cpu, GGML_TYPE_Q8_0)) {
+        fprintf(stderr, "\n  FAIL: CPU CONT(q8_0) unsupported (unexpected)\n");
+        ++fails;
+    }
+    if (!fails) {
+        fprintf(stderr, "ok (Metal CAST(q8_0->f32) supported; the align-probe dequant fix holds)\n");
+        return 0;
+    }
+    return 1;
+}
+
 int main() {
     ggml_backend_t cpu = ggml_backend_cpu_init();
     if (!cpu) { fprintf(stderr, "CPU backend init failed\n"); return 1; }
@@ -350,6 +417,7 @@ int main() {
     }
 
     int rc = 0;
+    rc |= test_quantized_cont_unsupported(cpu, gpu);
     rc |= test_diag_mask_inf(cpu, gpu);
     rc |= test_pad_ext(cpu, gpu);
     // HiFT-sized shapes:

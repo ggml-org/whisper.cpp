@@ -170,6 +170,7 @@ void usage(const char * prog) {
 struct Args {
     std::string t3_path, s3gen_path, lang, text, out_path;
     std::string mecab_dict, cangjie_tsv;
+    std::string kv_cache_type;   // "" -> CLI default (f32); "q8_0"/"f16" exercise the quantized KV path
     int seed = 42;
     int n_gpu_layers = 99;
     bool verbose = false;
@@ -189,6 +190,7 @@ bool parse_args(int argc, char ** argv, Args & args) {
         else if (a == "--out")          { auto v = next("--out");          if (!v) return false; args.out_path = v; }
         else if (a == "--seed")         { auto v = next("--seed");         if (!v) return false; args.seed = std::atoi(v); }
         else if (a == "--n-gpu-layers") { auto v = next("--n-gpu-layers"); if (!v) return false; args.n_gpu_layers = std::atoi(v); }
+        else if (a == "--kv-cache-type") { auto v = next("--kv-cache-type"); if (!v) return false; args.kv_cache_type = v; }
         else if (a == "--verbose" || a == "-v") { args.verbose = true; }
         else if (a == "--mecab-dict")  { auto v = next("--mecab-dict");  if (!v) return false; args.mecab_dict = v; }
         else if (a == "--cangjie-tsv") { auto v = next("--cangjie-tsv"); if (!v) return false; args.cangjie_tsv = v; }
@@ -215,6 +217,11 @@ void resolve_env_fallbacks(Args & args) {
         const char * env = std::getenv("CHATTERBOX_CANGJIE_TSV");
         if (env && *env) args.cangjie_tsv = env;
     }
+    // NOTE: kv_cache_type is intentionally NOT env-resolved.  A global
+    // CHATTERBOX_KV_CACHE_TYPE=q8_0 would silently turn the f32 baseline
+    // mtl-synth-* ctests into q8 runs and collapse the f32-vs-q8 matrix this
+    // suite establishes.  It must be set per-test via the explicit
+    // --kv-cache-type flag the ctest variants pass.
 }
 
 int check_language_registry(const std::string & lang) {
@@ -243,6 +250,10 @@ int run_synthesis(const Args & args) {
         "--n-gpu-layers", std::to_string(args.n_gpu_layers),
     };
     if (args.verbose) cli_args.push_back("--verbose");
+    if (!args.kv_cache_type.empty()) {
+        cli_args.push_back("--kv-cache-type");
+        cli_args.push_back(args.kv_cache_type);
+    }
     if (!args.mecab_dict.empty()) {
         cli_args.push_back("--mecab-dict");
         cli_args.push_back(args.mecab_dict);
@@ -309,9 +320,20 @@ int main(int argc, char ** argv) {
     if (!parse_args(argc, argv, args)) return 64;
     resolve_env_fallbacks(args);
 
-    if (args.t3_path.empty() || args.s3gen_path.empty() ||
-        args.lang.empty() || args.text.empty() || args.out_path.empty()) {
+    if (args.lang.empty() || args.text.empty() || args.out_path.empty()) {
         usage(argv[0]); return 64;
+    }
+    // Skip (don't fail) when the MTL GGUFs aren't staged on this runner.  ctest
+    // registers these with SKIP_RETURN_CODE 77, so a fleet that simply lacks the
+    // models reports SKIPPED instead of going red (matching test-eos-roundtrip's
+    // REQUIRES gating, which we can't use here since the paths come from env).
+    auto have_model = [](const std::string & p) {
+        return !p.empty() && std::ifstream(p).good();
+    };
+    if (!have_model(args.t3_path) || !have_model(args.s3gen_path)) {
+        fprintf(stderr, "SKIP: MTL models unavailable (set CHATTERBOX_T3_MTL / "
+                        "CHATTERBOX_S3GEN to existing GGUFs)\n");
+        return 77;
     }
 
     fprintf(stderr, "test-multilingual-synth: lang=%s text=\"%s\" out=%s\n",

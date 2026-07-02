@@ -375,6 +375,24 @@ ggml_type chatterbox_resolve_kv_type(ggml_backend_t backend, ggml_type requested
         return GGML_TYPE_F32;
     }
 
+    // ggml-opencl (Adreno) has the same advertise-vs-actual gap: supports_op
+    // reports both the q8_0 flash-attn and the align-probe's strided q8->f32
+    // cast as supported, but the driver SIGSEGVs on the quantized cache at load
+    // (clEnqueueWriteBuffer inside ChatterboxEngine construction).  Device-farm
+    // confirmed (QVAC-19557): a q8_0 KV cache crashes the multilingual GPU load
+    // on a Samsung Galaxy S25 Ultra (Adreno) where the identical f16/f32 cache
+    // passes, and the same model loads fine on a Pixel 9 (Mali-Vulkan, force-f32'd
+    // above).  The probe below can't catch this, so force quantized K/V to f32 on
+    // OpenCL.  f16 (the native FA input type) is left intact; Metal / CPU keep
+    // quantized K/V (validated).
+    if (ggml_is_quantized(requested) && ::tts_cpp::detail::backend_is_opencl(backend)) {
+        fprintf(stderr, "chatterbox: quantized (%s) KV cache faults on the OpenCL/Adreno "
+                        "backend (advertises support but SIGSEGVs on the q8 cache at load); "
+                        "using f32 KV cache\n",
+                ggml_type_name(requested));
+        return GGML_TYPE_F32;
+    }
+
     bool supported = false;
     ggml_init_params pp = { ggml_tensor_overhead() * 8, nullptr, /*no_alloc=*/true };
     if (ggml_context * pc = ggml_init(pp)) {
@@ -400,6 +418,54 @@ ggml_type chatterbox_resolve_kv_type(ggml_backend_t backend, ggml_type requested
         return GGML_TYPE_F32;
     }
     return requested;
+}
+
+ggml_type chatterbox_mtl_kv_type_for_cast_support(ggml_type resolved, bool cast_supported) {
+    // Pure decision split out of chatterbox_mtl_resolve_kv_type so the
+    // cross-backend safety net is unit-testable without a GPU that actually
+    // lacks the cast: a quantized KV type is downgraded to f32 when the backend
+    // cannot encode the align-probe's strided q8->f32 cast; non-quantized types
+    // (and the cast-supported case) pass through unchanged.
+    if (ggml_is_quantized(resolved) && !cast_supported) return GGML_TYPE_F32;
+    return resolved;
+}
+
+ggml_type chatterbox_mtl_resolve_kv_type(ggml_backend_t backend, ggml_type requested,
+                                         int head_dim, int n_head, int n_kv_head) {
+    // Start from the shared resolve (flash_attn_ext probe + Vulkan coopmat2
+    // force-f32).  The MTL decode graph emits one MORE quantized-cache op the
+    // shared probe doesn't cover: the per-(layer,head) alignment probe
+    // dequantizes a STRIDED view of the quantized K cache via ggml_cast(...->f32)
+    // (build_llama_block).  ggml-metal supports that cast (which is why q8 KV now
+    // runs on Metal), but a GPU backend with thinner op coverage
+    // (e.g. some OpenCL/Adreno or Mali-Vulkan builds) can advertise q8 flash-attn
+    // yet be unable to encode the strided q8->f32 cast — and the MTL path runs a
+    // single-backend graph_compute with no scheduler fallback, so that would
+    // SIGABRT at compute.  Probe the cast op directly and fall back to f32 when
+    // the backend can't encode it, instead of the old blanket "force f32 on any
+    // non-CPU backend" guard (which also blocked Metal, the whole bug).
+    ggml_type t = chatterbox_resolve_kv_type(backend, requested, head_dim, n_head, n_kv_head);
+    if (!ggml_is_quantized(t) || !backend) return t;
+
+    bool cast_ok = false;
+    ggml_init_params pp = { ggml_tensor_overhead() * 8, nullptr, /*no_alloc=*/true };
+    if (ggml_context * pc = ggml_init(pp)) {
+        // Mirror the align probe: a strided [head_dim, k] view of the token-major
+        // q8 cache, cast to f32.  Strides come from ggml_row_size so the view is
+        // block-aligned exactly as build_llama_block builds it.
+        const size_t tok_row = ggml_row_size(t, (size_t) head_dim * n_kv_head);
+        ggml_tensor * cache  = ggml_new_tensor_1d(pc, t, (int64_t) head_dim * n_kv_head * 8);
+        ggml_tensor * view   = ggml_view_2d(pc, cache, head_dim, 4, tok_row, 0);
+        ggml_tensor * cast   = ggml_cast(pc, view, GGML_TYPE_F32);
+        cast_ok = (cast != nullptr) && ggml_backend_supports_op(backend, cast);
+        ggml_free(pc);
+    }
+    const ggml_type eff = chatterbox_mtl_kv_type_for_cast_support(t, cast_ok);
+    if (eff != t) {
+        fprintf(stderr, "chatterbox(mtl): backend cannot encode the quantized-KV alignment "
+                        "cast (%s strided -> f32); using f32 KV cache\n", ggml_type_name(t));
+    }
+    return eff;
 }
 
 bool load_model_gguf(const std::string & path, chatterbox_model & model, int requested_ctx, int n_gpu_layers, ggml_type kv_type) {

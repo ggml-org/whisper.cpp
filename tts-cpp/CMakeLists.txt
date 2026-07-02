@@ -746,6 +746,7 @@ if (TTS_CPP_BUILD_TESTS)
         )
         set_tests_properties(mtl-synth-${_lang} PROPERTIES
             LABELS "multilingual;mtl-${_tier}"
+            SKIP_RETURN_CODE 77
             TIMEOUT 180
         )
         if (_mtl_asr_enabled)
@@ -765,6 +766,44 @@ if (TTS_CPP_BUILD_TESTS)
                 TIMEOUT 120
             )
         endif()
+    endforeach()
+
+    # QVAC-19557: q8_0 KV-cache regression for the MTL variant.  A quantized KV
+    # cache used to SIGABRT on Metal ("unsupported op 'CONT'") via the alignment
+    # probe; the dequantizing-cast fix recovers q8 KV on the GPU.  These run the
+    # full synth with --kv-cache-type q8_0 and validate the WAV is real audio
+    # (RMS/peak/clipping/duration) — an end-to-end regression the op-level
+    # test_metal_ops sentinel can't cover.  A diverse script subset
+    # (Latin/Arabic/Cyrillic/Devanagari) doubles as cross-language coverage.
+    # IMPORTANT: these only exercise the *original crash path* on a Metal/GPU
+    # fleet — on a CPU-only runner q8 KV never crashed, so q8-vs-f32 there only
+    # checks the dequant-cast is numerically sane, not the SIGABRT.  Labelled
+    # `mtl-q8;gpu` so CI selects them on a Metal runner (`ctest -L mtl-q8`); the
+    # alignment-drift regression (CER) is covered by test-eos-roundtrip-q8-kv
+    # below.  Missing GGUFs -> SKIP (77), not fail, like the f32 tests above.
+    set(_mtl_q8_phrases
+        "en|Hello, this is a multilingual text-to-speech test."
+        "ar|مرحبًا، هذا اختبار متعدد اللغات لتحويل النص إلى كلام."
+        "ru|Привет, это многоязычный тест синтеза речи."
+        "hi|नमस्ते, यह एक बहुभाषी वाक् संश्लेषण परीक्षण है।"
+    )
+    foreach(_entry IN LISTS _mtl_q8_phrases)
+        string(REPLACE "|" ";" _parts "${_entry}")
+        list(GET _parts 0 _lang)
+        list(GET _parts 1 _text)
+        add_test(
+            NAME mtl-synth-q8-${_lang}
+            COMMAND $<TARGET_FILE:test-multilingual-synth>
+                --lang           "${_lang}"
+                --text           "${_text}"
+                --kv-cache-type  q8_0
+                --out            "${_mtl_out_dir}/${_lang}-q8.wav"
+        )
+        set_tests_properties(mtl-synth-q8-${_lang} PROPERTIES
+            LABELS "multilingual;mtl-q8;gpu"
+            SKIP_RETURN_CODE 77
+            TIMEOUT 180
+        )
     endforeach()
 
     # End-to-end EOS round-trip regression.  Drives tts-cli to
@@ -803,6 +842,25 @@ if (TTS_CPP_BUILD_TESTS)
                      --lang          "en"
                      --tmp           "${_mtl_out_dir}"
             REQUIRES "${_tcb_t3_mtl_q4_gguf}" "${_tcb_s3gen_mtl_gguf}")
+
+        # QVAC-19557: same EOS round-trip but with a q8_0 KV CACHE (not a quantized
+        # T3).  The align-probe fix feeds the alignment mul_mat *dequantized* q8
+        # keys (ggml_cast), which could shift the argmax/softmax over text columns
+        # and thus EOS timing — something the WAV-sanity mtl-synth-q8-* tests can't
+        # see.  This drives the CER/ramble guards under q8 KV to catch alignment
+        # drift (clipping / early-cutoff / rambling) vs the f32 baseline above.
+        tts_cpp_register_test(test-eos-roundtrip-q8-kv
+            EXE      test-eos-roundtrip
+            LABEL    "fixture;asr"
+            ARGS     --tts-cli       "$<TARGET_FILE:tts-cli>"
+                     --t3            "${_tcb_t3_mtl_gguf}"
+                     --s3gen         "${_tcb_s3gen_mtl_gguf}"
+                     --whisper-cli   "${WHISPER_CLI}"
+                     --whisper-model "${WHISPER_MODEL}"
+                     --lang          "en"
+                     --kv-cache-type q8_0
+                     --tmp           "${_mtl_out_dir}"
+            REQUIRES "${_tcb_t3_mtl_gguf}" "${_tcb_s3gen_mtl_gguf}")
     else()
         message(STATUS "tts-cpp: test-eos-roundtrip built but not registered (needs whisper-cli + model + tts-cli)")
     endif()

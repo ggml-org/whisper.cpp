@@ -119,6 +119,21 @@ ggml_type chatterbox_kv_type_from_str(const std::string & s);
 ggml_type chatterbox_resolve_kv_type(ggml_backend_t backend, ggml_type requested,
                                      int head_dim, int n_head, int n_kv_head);
 
+// MTL-variant resolve: chatterbox_resolve_kv_type plus a probe of the extra
+// quantized-cache op the multilingual decode graph emits — the alignment
+// probe's dequantizing cast of a strided q8 K-cache view to f32
+// (build_llama_block).  Returns f32 when the backend can't encode that cast, so
+// q8 KV stays enabled on backends that support it (Metal) and safely degrades on
+// those that don't, without the single-backend MTL graph SIGABRT'ing at compute.
+ggml_type chatterbox_mtl_resolve_kv_type(ggml_backend_t backend, ggml_type requested,
+                                         int head_dim, int n_head, int n_kv_head);
+
+// Pure decision behind chatterbox_mtl_resolve_kv_type's cross-backend safety net,
+// exposed for unit testing: returns GGML_TYPE_F32 when `resolved` is quantized
+// and the backend cannot encode the align-probe's strided q8->f32 cast, else
+// returns `resolved` unchanged.
+ggml_type chatterbox_mtl_kv_type_for_cast_support(ggml_type resolved, bool cast_supported);
+
 struct gpt2_layer {
     ggml_tensor * ln_1_g = nullptr;
     ggml_tensor * ln_1_b = nullptr;
