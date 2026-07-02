@@ -74,6 +74,15 @@ target_compile_features(${TARGET} PRIVATE cxx_std_17)
 # vendored cpp-httplib header lives under examples/server/ (used by http.h)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/server)
 
+# HTTPS support for the HF download path (cpp-httplib + OpenSSL). Off by default;
+# when OFF an https:// attempt prints a rebuild hint (see http.h).
+option(WHISPER_OPENSSL "whisper: enable OpenSSL for HTTPS HuggingFace downloads" OFF)
+if (WHISPER_OPENSSL)
+    find_package(OpenSSL REQUIRED)
+    target_compile_definitions(${TARGET} PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+    target_link_libraries(${TARGET} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+endif()
+
 target_link_libraries(${TARGET} PRIVATE whisper json_cpp ${COMMON_EXTRA_LIBS} ${CMAKE_DL_LIBS})
 
 set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)

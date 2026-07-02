@@ -487,6 +487,128 @@ hf_files get_cached_files(const std::string & repo_id) {
     return files;
 }
 
+bool download_file(const hf_file & file, const std::string & token) {
+    if (file.url.empty() || file.local_path.empty()) {
+        return false;
+    }
+
+    std::error_code ec;
+    fs::path local_path(file.local_path);
+
+    // already downloaded (blob present) -> nothing to do
+    if (fs::exists(local_path, ec)) {
+        return true;
+    }
+
+    try {
+        if (local_path.has_parent_path()) {
+            fs::create_directories(local_path.parent_path(), ec);
+        }
+
+        fs::path path_tmp = local_path.string() + ".tmp";
+
+        std::ofstream ofs(path_tmp, std::ios::binary);
+        if (!ofs.is_open()) {
+            LOG_ERR("%s: failed to open '%s' for writing\n", __func__, path_tmp.string().c_str());
+            return false;
+        }
+
+        httplib::Headers headers = {
+            {"User-Agent", "whisper-cpp/" + std::string(whisper_version())}
+        };
+
+        const bool have_auth = is_valid_hf_token(token);
+        if (have_auth) {
+            headers.emplace("Authorization", "Bearer " + token);
+        } else if (!token.empty()) {
+            LOG_WRN("%s: invalid token, authentication disabled\n", __func__);
+        }
+
+        const char * func = __func__; // avoid __func__ inside a lambda
+        const std::string origin_host = common_http_parse_url(file.url).host;
+
+        // cpp-httplib 0.20 mishandles cross-host redirects to signed CDN URLs
+        // (the presigned query string is lost, yielding a 403), so follow them
+        // manually here, re-issuing the request against the exact Location URL.
+        std::string url         = file.url;
+        bool        status_ok   = false;
+        bool        got_response = false;
+
+        for (int redirect = 0; redirect <= 10; ++redirect) {
+            auto [cli, parts] = common_http_client(url);
+            cli.set_follow_location(false);
+            // the signed CDN Location already carries a fully percent-encoded
+            // query string; httplib's default url-encoding would re-encode '+'
+            // (and ',', ';', ...) inside the signature and break it, so send the
+            // path verbatim (matching curl) to avoid a 403 from the CDN.
+            cli.set_url_encode(false);
+
+            // never forward the HF bearer token to a different (CDN) host
+            httplib::Headers req_headers = headers;
+            if (have_auth && parts.host != origin_host) {
+                req_headers.erase("Authorization");
+            }
+
+            std::string location;
+            bool is_redirect = false;
+            status_ok    = false;
+            got_response = false;
+
+            auto res = cli.Get(parts.path, req_headers,
+                [&](const httplib::Response & response) {
+                    got_response = true;
+                    if (response.status >= 300 && response.status < 400 &&
+                        response.has_header("Location")) {
+                        location    = response.get_header_value("Location");
+                        is_redirect = true;
+                        return false; // stop before streaming the redirect body
+                    }
+                    if (response.status != 200) {
+                        LOG_WRN("%s: download failed (%d) for %s\n", func, response.status, url.c_str());
+                        return false;
+                    }
+                    status_ok = true;
+                    return true;
+                },
+                [&](const char * data, size_t len) {
+                    ofs.write(data, len);
+                    return (bool) ofs;
+                });
+
+            if (is_redirect && !location.empty()) {
+                url = location;
+                continue;
+            }
+
+            if (!got_response) {
+                LOG_ERR("%s: HTTP error: %s\n", __func__, httplib::to_string(res.error()).c_str());
+            }
+            break;
+        }
+
+        ofs.close();
+
+        if (!status_ok || ofs.fail()) {
+            fs::remove(path_tmp, ec);
+            return false;
+        }
+
+        fs::rename(path_tmp, local_path, ec);
+        if (ec) {
+            LOG_ERR("%s: failed to move '%s' to '%s': %s\n", __func__,
+                    path_tmp.string().c_str(), local_path.string().c_str(), ec.message().c_str());
+            fs::remove(path_tmp, ec);
+            return false;
+        }
+
+        return true;
+
+    } catch (const std::exception & e) {
+        LOG_ERR("%s: error: %s\n", __func__, e.what());
+    }
+    return false;
+}
+
 std::string finalize_file(const hf_file & file) {
     static std::atomic<bool> symlinks_disabled{false};
 

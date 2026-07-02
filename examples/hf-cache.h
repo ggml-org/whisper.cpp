@@ -26,6 +26,10 @@ hf_files get_repo_files(
 
 hf_files get_cached_files(const std::string & repo_id = {});
 
+// Download file.url -> file.local_path (blobs/<oid>), skipping if already present.
+// Returns false on network failure. HTTPS requires CPPHTTPLIB_OPENSSL_SUPPORT.
+bool download_file(const hf_file & file, const std::string & token);
+
 // Create snapshot path (link or move/copy) and return it
 std::string finalize_file(const hf_file & file);
 

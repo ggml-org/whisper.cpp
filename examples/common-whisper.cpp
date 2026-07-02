@@ -32,6 +32,7 @@
 #include <io.h>
 #endif
 
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -245,37 +246,50 @@ bool speak_with_file(const std::string & command, const std::string & text, cons
     return true;
 }
 
-std::string whisper_hf_resolve_model(const std::string & hf_repo, const std::string & hf_file) {
-    // Phase 1: cache-only resolution. Scan the on-disk HF hub cache for the repo.
-    const hf_cache::hf_files files = hf_cache::get_cached_files(hf_repo);
-    if (files.empty()) {
-        return "";
-    }
-
-    const hf_cache::hf_file * chosen = nullptr;
-
+// pick the primary file from a listing: exact hf_file match, else the first ggml-*.bin
+static const hf_cache::hf_file * whisper_hf_pick_primary(const hf_cache::hf_files & files, const std::string & hf_file) {
     for (const auto & file : files) {
         if (!hf_file.empty()) {
             if (file.path == hf_file) {
-                chosen = &file;
-                break;
+                return &file;
             }
         } else {
-            // no explicit file: pick the first ggml-*.bin in the snapshot
             const std::string name = std::filesystem::path(file.path).filename().string();
             if (name.rfind("ggml-", 0) == 0 && name.size() >= 4 &&
                 name.compare(name.size() - 4, 4, ".bin") == 0) {
-                chosen = &file;
-                break;
+                return &file;
+            }
+        }
+    }
+    return nullptr;
+}
+
+std::string whisper_hf_resolve_model(const std::string & hf_repo, const std::string & hf_file) {
+    const char * token_env = std::getenv("HF_TOKEN");
+    const std::string token = token_env ? token_env : "";
+
+    // honor an HF offline mode (huggingface_hub convention): skip the network path entirely
+    const char * offline_env = std::getenv("HF_HUB_OFFLINE");
+    const bool offline = offline_env && *offline_env && std::string(offline_env) != "0";
+
+    // 1. try download first: list the repo over the network and fetch the primary file.
+    //    get_repo_files swallows network errors into an empty result (graceful degradation).
+    if (!offline) {
+        const hf_cache::hf_files remote = hf_cache::get_repo_files(hf_repo, token);
+        if (const hf_cache::hf_file * primary = whisper_hf_pick_primary(remote, hf_file)) {
+            if (hf_cache::download_file(*primary, token)) {
+                return hf_cache::finalize_file(*primary);
             }
         }
     }
 
-    if (chosen == nullptr) {
-        return "";
+    // 2. fall back to the on-disk HF hub cache scan (Phase 1 behavior).
+    const hf_cache::hf_files cached = hf_cache::get_cached_files(hf_repo);
+    if (const hf_cache::hf_file * primary = whisper_hf_pick_primary(cached, hf_file)) {
+        return hf_cache::finalize_file(*primary);
     }
 
-    return hf_cache::finalize_file(*chosen);
+    return "";
 }
 
 #undef STB_VORBIS_HEADER_ONLY
