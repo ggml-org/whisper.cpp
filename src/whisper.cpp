@@ -171,6 +171,13 @@ static bool ggml_graph_compute_helper(
          ggml_abort_callback   abort_callback,
                         void * abort_callback_data) {
     ggml_backend_ptr backend { ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr) };
+    if (!backend) {
+        // No CPU backend registered (GGML_BACKEND_DL=ON without a prior
+        // ggml_backend_load_all() call). Avoid the NULL deref a few lines
+        // below and surface the failure instead of aborting.
+        WHISPER_LOG_ERROR("%s: failed to initialize CPU backend\n", __func__);
+        return false;
+    }
 
     auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get()));
 
@@ -1386,6 +1393,20 @@ static buft_list_t make_buft_list(whisper_context_params & params) {
 
     // CPU Extra
     auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (cpu_dev == nullptr) {
+        // No CPU backend registered in the GGML registry. This can happen with
+        // GGML_BACKEND_DL=ON builds when the host process has not loaded any
+        // CPU backend DLL via `ggml_backend_load*()` before reaching this code
+        // path (e.g. `whisper_init_*` or `whisper_vad_init_*` called before any
+        // explicit backend load). Without this guard, the next line aborts
+        // the process via `GGML_ASSERT(device != NULL)`. Returning an empty
+        // buft_list lets the caller surface a NULL whisper context instead.
+        WHISPER_LOG_ERROR("%s: no CPU backend device registered; "
+            "load a CPU backend with ggml_backend_load_all() or "
+            "ggml_backend_load() before initializing the whisper context\n",
+            __func__);
+        return {};
+    }
     auto * cpu_reg = ggml_backend_dev_backend_reg(cpu_dev);
     auto get_extra_bufts_fn = (ggml_backend_dev_get_extra_bufts_t)
         ggml_backend_reg_get_proc_address(cpu_reg, "ggml_backend_dev_get_extra_bufts");
@@ -9101,6 +9122,13 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
     ggml_build_forward_expand(gf, w);
 
     ggml_backend_ptr backend { ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr) };
+    if (!backend) {
+        // No CPU backend registered (GGML_BACKEND_DL=ON without a prior
+        // ggml_backend_load_all() call). Skip DTW alignment for this
+        // segment instead of aborting the whole process.
+        WHISPER_LOG_ERROR("%s: failed to initialize CPU backend for DTW; skipping token-level timestamps\n", __func__);
+        return;
+    }
     ggml_backend_graph_compute(backend.get(), gf);
 
     ggml_tensor * alignment = dtw_and_backtrace(gctx, w);
