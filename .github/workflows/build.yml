@@ -513,6 +513,12 @@ jobs:
           mkdir -p "$STAGE"
           cp -r build/bin/* "$STAGE/" 2>/dev/null || true
           find build -name "*.so*" -exec cp {} "$STAGE/" \; 2>/dev/null || true
+          # Rewrite the absolute build-tree rpath to $ORIGIN so the relocated musl
+          # binaries find their sibling .so files (musl doesn't search the exe dir).
+          if ! command -v patchelf >/dev/null; then sudo apt-get update -qq && sudo apt-get install -y -qq patchelf; fi
+          for f in "$STAGE"/*; do
+            [ -f "$f" ] && [ ! -L "$f" ] && file "$f" | grep -q ELF && patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true
+          done
           tar -czf "$ARCHIVE" "$STAGE"
           echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
 
@@ -920,6 +926,12 @@ jobs:
           mkdir -p "$STAGE"
           cp -r build/bin/* "$STAGE/" 2>/dev/null || true
           find build -name "*.so*" -exec cp {} "$STAGE/" \; 2>/dev/null || true
+          # Rewrite the absolute build-tree rpath to $ORIGIN so the relocated musl
+          # binaries find their sibling .so files (musl doesn't search the exe dir).
+          if ! command -v patchelf >/dev/null; then sudo apt-get update -qq && sudo apt-get install -y -qq patchelf; fi
+          for f in "$STAGE"/*; do
+            [ -f "$f" ] && [ ! -L "$f" ] && file "$f" | grep -q ELF && patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true
+          done
           tar -czf "$ARCHIVE" "$STAGE"
           echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
 
@@ -948,7 +960,7 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/src" -w /src alpine:latest sh -euxc '
             apk add --no-cache build-base cmake git sdl2-dev \
-              vulkan-loader-dev vulkan-headers glslang shaderc spirv-tools
+              vulkan-loader-dev vulkan-headers glslang shaderc spirv-tools spirv-headers
             cmake -B build \
               -DCMAKE_BUILD_TYPE=Release \
               -DGGML_NATIVE=OFF \
@@ -971,6 +983,12 @@ jobs:
           mkdir -p "$STAGE"
           cp -r build/bin/* "$STAGE/" 2>/dev/null || true
           find build -name "*.so*" -exec cp {} "$STAGE/" \; 2>/dev/null || true
+          # Rewrite the absolute build-tree rpath to $ORIGIN so the relocated musl
+          # binaries find their sibling .so files (musl doesn't search the exe dir).
+          if ! command -v patchelf >/dev/null; then sudo apt-get update -qq && sudo apt-get install -y -qq patchelf; fi
+          for f in "$STAGE"/*; do
+            [ -f "$f" ] && [ ! -L "$f" ] && file "$f" | grep -q ELF && patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true
+          done
           tar -czf "$ARCHIVE" "$STAGE"
           echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
 
