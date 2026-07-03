@@ -27,7 +27,8 @@ public:
     int32_t unk_id() const;
     int32_t vocab_size() const;
 
-    // Tier-1 language codes handled natively by this build.
+    // Language codes handled by this build. Some entries, e.g. ja/zh, require
+    // external preprocessing resources configured before encode().
     static const std::vector<std::string> & supported_languages();
 
     // Full list of language codes the Python reference tokenizer accepts.

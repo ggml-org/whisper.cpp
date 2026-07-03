@@ -447,6 +447,12 @@ if (TTS_CPP_BUILD_TESTS)
     set(TTS_CPP_TEST_MODEL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/models"               CACHE PATH "tts-cpp: directory containing .gguf fixtures used by the test suite")
     set(TTS_CPP_TEST_AUDIO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/test/reference-audio" CACHE PATH "tts-cpp: directory containing .wav fixtures used by the test suite")
     set(TTS_CPP_TEST_REF_DIR   "${CMAKE_CURRENT_SOURCE_DIR}/artifacts"            CACHE PATH "tts-cpp: directory containing PyTorch / ONNX .npy reference dumps")
+    if (DEFINED ENV{CHATTERBOX_CANGJIE_TSV} AND NOT "$ENV{CHATTERBOX_CANGJIE_TSV}" STREQUAL "")
+        set(_tcb_default_cangjie_tsv "$ENV{CHATTERBOX_CANGJIE_TSV}")
+    else()
+        set(_tcb_default_cangjie_tsv "${TTS_CPP_TEST_MODEL_DIR}/Cangjie5_TC.tsv")
+    endif()
+    set(TTS_CPP_TEST_CANGJIE_TSV "${_tcb_default_cangjie_tsv}"                    CACHE FILEPATH "tts-cpp: Cangjie5_TC TSV used by zh multilingual tests")
 
     # Helper: register a built test target with CTest.  Mirrors the
     # standard llama-style `<project>_test()` macro: every harness ends
@@ -702,10 +708,14 @@ if (TTS_CPP_BUILD_TESTS)
         "ja|こんにちは、これは多言語の音声合成テストです。|tier2"
         "he|שלום, זוהי בדיקת סינתזת דיבור רב-לשונית.|tier2"
         "ru|Привет, это многоязычный тест синтеза речи.|tier2"
-        # zh intentionally omitted: Cangjie preprocessing yields ~97% CER and
-        # is excluded from mtl_tokenizer::supported_languages() until reworked.
         "hi|नमस्ते, यह एक बहुभाषी वाक् संश्लेषण परीक्षण है।|tier2"
     )
+    if (EXISTS "${TTS_CPP_TEST_CANGJIE_TSV}")
+        list(APPEND _mtl_phrases "zh|你好，这是一个多语言语音合成测试。|tier2")
+    else()
+        message(STATUS "Multilingual zh synth test: SKIPPED")
+        message(STATUS "  reason: Cangjie TSV missing at ${TTS_CPP_TEST_CANGJIE_TSV}")
+    endif()
     set(_mtl_out_dir "${CMAKE_BINARY_DIR}/test-multilingual-out")
     file(MAKE_DIRECTORY "${_mtl_out_dir}")
 
@@ -737,12 +747,17 @@ if (TTS_CPP_BUILD_TESTS)
         list(GET _parts 0 _lang)
         list(GET _parts 1 _text)
         list(GET _parts 2 _tier)
+        set(_mtl_synth_extra_args)
+        if (_lang STREQUAL "zh")
+            list(APPEND _mtl_synth_extra_args --cangjie-tsv "${TTS_CPP_TEST_CANGJIE_TSV}")
+        endif()
         add_test(
             NAME mtl-synth-${_lang}
             COMMAND $<TARGET_FILE:test-multilingual-synth>
                 --lang  "${_lang}"
                 --text  "${_text}"
                 --out   "${_mtl_out_dir}/${_lang}.wav"
+                ${_mtl_synth_extra_args}
         )
         set_tests_properties(mtl-synth-${_lang} PROPERTIES
             LABELS "multilingual;mtl-${_tier}"

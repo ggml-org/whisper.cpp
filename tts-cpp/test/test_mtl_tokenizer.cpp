@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -226,6 +227,53 @@ static std::string format_ids(const std::vector<int32_t> & ids) {
     return s;
 }
 
+static bool vector_contains(const std::vector<std::string> & values,
+                            const std::string & needle) {
+    return std::find(values.begin(), values.end(), needle) != values.end();
+}
+
+static int check_supported_language_tables() {
+    const auto & supported = mtl_tokenizer::supported_languages();
+    const auto & known = mtl_tokenizer::all_known_languages();
+    if (!vector_contains(supported, "zh")) {
+        fprintf(stderr, "supported_languages() missing zh\n");
+        return 1;
+    }
+    if (!vector_contains(known, "zh")) {
+        fprintf(stderr, "all_known_languages() missing zh\n");
+        return 1;
+    }
+    return 0;
+}
+
+static std::filesystem::path write_cangjie_smoke_tsv() {
+    auto path = std::filesystem::temp_directory_path() /
+        "tts-cpp-cangjie-smoke.tsv";
+    std::ofstream f(path, std::ios::binary);
+    // U+65E5 (sun/day) -> Cangjie code "a". This is enough to prove the zh
+    // tokenizer path reaches Cangjie preprocessing instead of the old allowlist
+    // rejection.
+    f << "\xE6\x97\xA5\ta\n";
+    return path;
+}
+
+static int check_zh_cangjie_encode(mtl_tokenizer & tok) {
+    const auto cangjie_path = write_cangjie_smoke_tsv();
+    mtl_tokenizer::set_cangjie_tsv_path(cangjie_path.string());
+    try {
+        const std::vector<int32_t> ids = tok.encode("\xE6\x97\xA5", "zh");
+        if (ids.empty()) {
+            fprintf(stderr, "zh encode produced no tokens\n");
+            return 1;
+        }
+        fprintf(stderr, "zh Cangjie smoke PASS (%zu ids)\n", ids.size());
+    } catch (const std::exception & e) {
+        fprintf(stderr, "zh Cangjie smoke FAIL: %s\n", e.what());
+        return 1;
+    }
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char ** argv) {
@@ -243,6 +291,9 @@ int main(int argc, char ** argv) {
     }
     fprintf(stderr, "loaded tokenizer: vocab_size=%d sot=%d eot=%d unk=%d\n",
             tok.vocab_size(), tok.sot_id(), tok.eot_id(), tok.unk_id());
+
+    if (check_supported_language_tables() != 0) return 1;
+    if (check_zh_cangjie_encode(tok) != 0) return 1;
 
     bool exists = false;
     std::vector<test_case> cases;

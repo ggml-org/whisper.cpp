@@ -446,15 +446,12 @@ struct json_parser {
 // use (no static-init-order coupling) and benefit from C++11's thread-safe
 // local-static initialisation.
 const std::vector<std::string> & mtl_tokenizer::supported_languages() {
-    // `zh` is intentionally absent: the Cangjie-based Chinese preprocessing
-    // currently yields ~97% CER (effectively unusable) and needs a rework
-    // before it can ship. The CangjieTable infrastructure + build_cangjie_tsv.py
-    // are kept so re-enabling is just adding "zh" back here once the approach
-    // is fixed. `zh` stays in all_known_languages() because the Python
-    // reference tokenizer still accepts it.
+    // `zh` requires the Cangjie5_TC TSV mapping at runtime; encode() throws a
+    // clear error if the caller enables Chinese without setting
+    // cangjie_tsv_path / CHATTERBOX_CANGJIE_TSV.
     static const std::vector<std::string> k_supported = {
         "en","es","fr","de","it","pt","nl","pl","tr","sv","da","fi","no","el",
-        "ms","sw","ar","ko","ja","he","ru","hi"
+        "ms","sw","ar","ko","ja","he","ru","zh","hi"
     };
     return k_supported;
 }
