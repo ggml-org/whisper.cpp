@@ -465,7 +465,6 @@ static void output_txt(struct whisper_context * ctx, std::ofstream & fout, const
             speaker = estimate_diarization_speaker(pcmf32s, t0, t1);
         }
 
-        // strip leading whitespace from each segment (#587)
         if (!speaker.empty()) {
             fout << speaker << text;
         } else {
