@@ -1,25 +1,23 @@
 #pragma once
 
-// Public LavaSR denoiser API — QVAC-16579 follow-up (deferred denoiser stage).
+// Public LavaSR denoiser API — QVAC-16579 follow-up (denoiser stage).
 //
-// SCAFFOLD / SKELETON ONLY.  This lays down the file structure, the public
-// contract and the GGUF/converter layout for the LavaSR denoiser, mirroring the
-// shipped enhancer (tts-cpp/lavasr/enhancer.h).  The forward math is NOT
-// implemented yet: Denoiser::load() throws std::runtime_error until the UL-UNAS
-// port lands.  This PR exists to land the structure/API so the implementation
-// can follow in focused commits (see the module docstrings + the converter).
+// Mirrors the shipped enhancer (tts-cpp/lavasr/enhancer.h): a pure-CPU scalar
+// forward of the UL-UNAS neural denoiser, with ggml used only to parse the GGUF.
 //
 // LavaSR is a two-stage pipeline:
 //   (1) UL-UNAS denoiser (this file) removes noise from the input, then
 //   (2) the Vocos bandwidth-extension enhancer upsamples to 48 kHz.
-// Only the enhancer shipped in QVAC-16579; this is the explicitly deferred stage
-// ("The denoiser stage is a planned follow-up" — enhancer.h).
 //
-// Reference: UL-UNAS (arXiv:2503.00340, github.com/Xiaobin-Rong/ul-unas) as used
-// by LavaSR (github.com/ysharma3501/LavaSR; ONNX family Topping1/LavaSRcpp) —
-// the same release family the enhancer GGUF came from.
+// The network is UL-UNAS (arXiv:2503.00340, github.com/Xiaobin-Rong/ul-unas), a
+// GTCRN-family TF-domain U-Net operating on 16 kHz STFT frames (ERB band-merge ->
+// grouped depthwise-separable conv encoder with affine-PReLU + causal
+// time-frequency attention -> 2x dual-path grouped RNN -> decoder -> ratio mask).
+// The weights come from Topping1/LavaSRcpp (`denoiser_core_legacy_fixed63.onnx`)
+// — the same release family the enhancer GGUF came from — via
+// scripts/convert-lavasr-denoiser-to-gguf.py.
 //
-// Intended usage (denoise BEFORE enhance):
+// Usage (denoise BEFORE enhance):
 //
 //     auto dn = tts_cpp::lavasr::Denoiser::load("lavasr-denoiser.gguf");
 //     pcm = dn->denoise(pcm, sr);          // cleaned, SAME sample rate
@@ -39,10 +37,7 @@ namespace tts_cpp::lavasr {
 class TTS_CPP_API Denoiser {
 public:
     // Load the denoiser GGUF.  Throws std::runtime_error on failure (file
-    // missing, wrong architecture, missing tensors).
-    //
-    // SCAFFOLD: currently always throws "not yet implemented" until the
-    // UL-UNAS GGUF loader (denoiser_gguf) is ported.
+    // missing, wrong architecture, missing/mis-shaped tensors).
     static std::unique_ptr<Denoiser> load(const std::string & gguf_path);
 
     ~Denoiser();

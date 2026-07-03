@@ -261,9 +261,8 @@ set(TTS_CPP_LIB_SOURCES
     src/lavasr/enhancer.cpp
     src/lavasr/enhancer_gguf.cpp
     src/lavasr/enhancer_api.cpp
-    # LavaSR denoiser stage (QVAC-16579 follow-up) — SCAFFOLD: structure + public
-    # API + GGUF/converter layout only; the UL-UNAS forward is a TODO (load()
-    # throws until it lands).  See src/lavasr/denoiser*.{h,cpp}.
+    # LavaSR denoiser stage (QVAC-16579 follow-up) — UL-UNAS neural denoiser
+    # (runs BEFORE the enhancer, rate-preserving).  See src/lavasr/denoiser*.{h,cpp}.
     src/lavasr/denoiser_core.cpp
     src/lavasr/denoiser.cpp
     src/lavasr/denoiser_gguf.cpp
@@ -390,6 +389,15 @@ if (TTS_CPP_BUILD_LIBRARY)
             $<$<COMPILE_LANGUAGE:C>:-O3>
             $<$<COMPILE_LANGUAGE:CXX>:-ffast-math>
             $<$<COMPILE_LANGUAGE:C>:-ffast-math>
+            # -ffast-math implies -ffinite-math-only, which lets the compiler
+            # assume no NaN/Inf and optimise away the LavaSR DSP's numerical
+            # guards (e.g. the sinc `x != 0` and `weight_sum > 0` guards in the
+            # resampler). On the denoiser -> enhancer chain that produced NaNs in
+            # the denoiser output which the FastLR FFT merge then spread across
+            # the whole enhancer result -> silent output. Keep the fast-math
+            # speedups but restore IEEE NaN/Inf handling so those guards hold.
+            $<$<COMPILE_LANGUAGE:CXX>:-fno-finite-math-only>
+            $<$<COMPILE_LANGUAGE:C>:-fno-finite-math-only>
             $<$<COMPILE_LANGUAGE:CXX>:-funroll-loops>
             $<$<COMPILE_LANGUAGE:C>:-funroll-loops>
         )
@@ -967,6 +975,24 @@ if (TTS_CPP_BUILD_TESTS)
         LABEL    "fixture"
         ARGS     "${TTS_CPP_TEST_MODEL_DIR}/lavasr-enhancer.gguf" "${TTS_CPP_TEST_REF_DIR}/lavasr-enhancer"
         REQUIRES "${TTS_CPP_TEST_MODEL_DIR}/lavasr-enhancer.gguf" "${TTS_CPP_TEST_REF_DIR}/lavasr-enhancer/real.npy")
+
+    # LavaSR denoiser GGUF round-trip (QVAC-16579 follow-up): load the converted
+    # GGUF via load_denoiser_gguf() + the public tts_cpp::lavasr::Denoiser API,
+    # compare the UL-UNAS neural core (denoiser_net_forward) against the
+    # onnxruntime golden (spec_in.npy -> spec_out.npy), and run a full denoise()
+    # pipeline smoke (rate-preserving length + finite output). Links ggml for
+    # GGUF I/O. DISABLED until the GGUF + fixtures exist
+    # (convert-lavasr-denoiser-to-gguf.py + dump-lavasr-denoiser-fixtures.py).
+    add_executable(test-lavasr-denoiser-gguf test/test_lavasr_denoiser_gguf.cpp)
+    target_link_libraries(test-lavasr-denoiser-gguf PRIVATE tts-cpp ggml)
+    target_include_directories(test-lavasr-denoiser-gguf PRIVATE include src ggml/include)
+    tts_cpp_apply_ccache(test-lavasr-denoiser-gguf)
+    tts_cpp_register_test(test-lavasr-denoiser-gguf
+        LABEL    "fixture"
+        ARGS     "${TTS_CPP_TEST_MODEL_DIR}/lavasr-denoiser.gguf" "${TTS_CPP_TEST_REF_DIR}/lavasr-denoiser"
+        REQUIRES "${TTS_CPP_TEST_MODEL_DIR}/lavasr-denoiser.gguf"
+                 "${TTS_CPP_TEST_REF_DIR}/lavasr-denoiser/spec_in.npy"
+                 "${TTS_CPP_TEST_REF_DIR}/lavasr-denoiser/pcm_in.npy")
 
     # QVAC-20979 — voice-clone test harness.
     #

@@ -2,11 +2,9 @@
 
 // Load LavaSR denoiser weights from the GGUF produced by
 // scripts/convert-lavasr-denoiser-to-gguf.py into a DenoiserWeights struct.
-// Mirrors enhancer_gguf.h — this will be the only denoiser translation unit that
+// Mirrors enhancer_gguf.h — this is the only denoiser translation unit that
 // depends on ggml/gguf; the forward math (denoiser_core) and the pipeline
 // (denoiser) stay pure C++.
-//
-// SCAFFOLD: not yet implemented (returns false with an explanatory error).
 
 #include "denoiser_core.h"
 
