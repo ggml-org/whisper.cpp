@@ -745,6 +745,33 @@ ruby_whisper_full_get_segment_no_speech_prob(VALUE self, VALUE i_segment)
   return DBL2NUM(no_speech_prob);
 }
 
+static VALUE
+ruby_whisper_full_n_vad_segments(VALUE self)
+{
+  ruby_whisper *rw;
+  GetContext(self, rw);
+
+  return INT2NUM(whisper_full_n_vad_segments(rw->context));
+}
+
+static VALUE
+ruby_whisper_full_get_vad_segment_t0(VALUE self, VALUE i_segment)
+{
+  ruby_whisper *rw;
+  GetContext(self, rw);
+
+  return LONG2NUM(whisper_full_get_vad_segment_t0(rw->context, NUM2INT(i_segment)));
+}
+
+static VALUE
+ruby_whisper_full_get_vad_segment_t1(VALUE self, VALUE i_segment)
+{
+  ruby_whisper *rw;
+  GetContext(self, rw);
+
+  return LONG2NUM(whisper_full_get_vad_segment_t1(rw->context, NUM2INT(i_segment)));
+}
+
 // High level API
 
 static VALUE
@@ -830,6 +857,9 @@ init_ruby_whisper_context(VALUE *mWhisper)
   rb_define_method(cContext, "full_get_segment_speaker_turn_next", ruby_whisper_full_get_segment_speaker_turn_next, 1);
   rb_define_method(cContext, "full_get_segment_text", ruby_whisper_full_get_segment_text, 1);
   rb_define_method(cContext, "full_get_segment_no_speech_prob", ruby_whisper_full_get_segment_no_speech_prob, 1);
+  rb_define_method(cContext, "full_n_vad_segments", ruby_whisper_full_n_vad_segments, 0);
+  rb_define_method(cContext, "full_get_vad_segment_t0", ruby_whisper_full_get_vad_segment_t0, 1);
+  rb_define_method(cContext, "full_get_vad_segment_t1", ruby_whisper_full_get_vad_segment_t1, 1);
   rb_define_method(cContext, "full", ruby_whisper_full, -1);
   rb_define_method(cContext, "full_parallel", ruby_whisper_full_parallel, -1);
 
