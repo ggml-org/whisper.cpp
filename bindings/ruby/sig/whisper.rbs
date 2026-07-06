@@ -131,6 +131,12 @@ module Whisper
 
     def full_get_segment_no_speech_prob: (Integer) -> Float
 
+    def full_n_vad_segments: () -> Integer
+
+    def full_get_vad_segment_t0: (Integer) -> Integer
+
+    def full_get_vad_segment_t1: (Integer) -> Integer
+
     # Run the entire model: PCM -> log mel spectrogram -> encoder -> decoder -> text  
     # Not thread safe for same context  
     # Uses the specified decoding strategy to obtain the text.
