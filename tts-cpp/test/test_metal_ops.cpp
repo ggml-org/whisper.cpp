@@ -335,7 +335,7 @@ static int test_mul_mm_fused(ggml_backend_t cpu, ggml_backend_t gpu,
     return 1;
 }
 
-// QVAC-19557: regression sentinel for the MTL Metal q8-KV SIGABRT.  With a
+// regression sentinel for the MTL Metal q8-KV SIGABRT. With a
 // quantized KV cache, the multilingual Chatterbox variant's per-(layer,head)
 // alignment probe (build_llama_block) read a strided view of the q8 K cache and
 // CONT'd it to feed a mul_mat.  ggml-metal has no CONT kernel for quantized

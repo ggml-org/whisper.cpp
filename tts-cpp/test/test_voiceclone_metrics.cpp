@@ -1,4 +1,4 @@
-// Self-tests for the voice-clone metrics module (QVAC-20979).  Pure host logic;
+// Self-tests for the voice-clone metrics module. Pure host logic;
 // runs in the always-on `unit` ctest tier.  Two layers of coverage:
 //
 //   1. Closed-form self-tests with values computed by hand, so the metric

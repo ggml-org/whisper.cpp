@@ -1,4 +1,4 @@
-// QVAC-18605 round 10 — CPU-only TDD test for the pointer-compare
+// round 10 — CPU-only TDD test for the pointer-compare
 // upload-skip tracker.
 //
 // Background

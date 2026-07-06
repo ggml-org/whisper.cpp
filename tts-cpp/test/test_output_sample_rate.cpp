@@ -1,4 +1,4 @@
-// QVAC-21483 — end-to-end coverage of the output-frequency selection on the
+// end-to-end coverage of the output-frequency selection on the
 // chatterbox::Engine API (the surface the @qvac/tts-ggml addon consumes).
 // Gated on the multilingual GGUF fixtures; auto-disabled when they're absent.
 //
@@ -12,7 +12,7 @@
 //     `result.pcm == concat(chunks)` invariant and reports the requested rate.
 
 #include "tts-cpp/chatterbox/engine.h"
-#include "voice_features.h"  // resample_for_output (QVAC-21483)
+#include "voice_features.h"  // resample_for_output
 
 #include <cmath>
 #include <cstddef>

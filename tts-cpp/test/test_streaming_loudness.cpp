@@ -1,4 +1,4 @@
-// QVAC-21118: engine-level regression test for chunk-streaming loudness.
+// engine-level regression test for chunk-streaming loudness.
 //
 // Synthesizes the same text twice through one tts_cpp::chatterbox::Engine --
 // the exact API the qvac tts-ggml addon uses:

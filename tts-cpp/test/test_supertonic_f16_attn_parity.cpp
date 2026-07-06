@@ -1,5 +1,5 @@
 // CPU-backend parity test for the F16 K/V flash-attention path
-// added to the Supertonic vector estimator in QVAC-18607.
+// added to the Supertonic vector estimator in.
 //
 // On OpenCL the goal of the rewrite is to dispatch the
 // `flash_attn_f32_f16` kernel instead of `flash_attn_f32` (Adreno
@@ -276,7 +276,7 @@ void test_attn_style_shape(ggml_backend_t cpu) {
     CHECK(bad == 0);
 }
 
-// QVAC-18605 round 4 — Prereq B: parameterised K/V parity check.
+// round 4 — Prereq B: parameterised K/V parity check.
 //
 // Generalised version of `test_attn_f32_vs_f16_parity` /
 // `test_attn_style_shape` that runs the F32 reference and an

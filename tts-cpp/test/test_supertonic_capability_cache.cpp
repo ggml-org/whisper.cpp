@@ -1,4 +1,4 @@
-// QVAC-18605 follow-up — CPU-only unit test for the process-wide
+// follow-up — CPU-only unit test for the process-wide
 // backend-capability probe cache and the new probes added to it.
 //
 // Three optimizations are exercised here:

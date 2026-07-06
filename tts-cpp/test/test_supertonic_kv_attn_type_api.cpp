@@ -1,4 +1,4 @@
-// QVAC-18605 round 4 — CPU-only TDD test for the multi-dtype
+// round 4 — CPU-only TDD test for the multi-dtype
 // K/V flash-attention API surface.
 //
 // Pins:

@@ -1,8 +1,8 @@
-// QVAC-18605 round 3 — CPU-only TDD test for the multi-device
+// round 3 — CPU-only TDD test for the multi-device
 // Vulkan auto-pick helper.
 //
 // `--vulkan-device -1` was reserved for "auto-pick best device"
-// behaviour in the QVAC-18605 bring-up but treated as 0 (the
+// behaviour in the bring-up but treated as 0 (the
 // historical hard-coded value).  Round 3 wires the auto-pick
 // logic via a pure-logic helper that takes the per-device free-
 // VRAM list as input — keeps the policy decoupled from the
@@ -13,7 +13,7 @@
 // dispatches into the helper lives behind `#ifdef GGML_USE_VULKAN`
 // in `init_supertonic_backend`.
 //
-// QVAC-18605 round 12 — extend the policy to bias against UMA
+// round 12 — extend the policy to bias against UMA
 // (unified-memory-architecture, i.e., integrated) GPUs when a
 // discrete GPU is present.  Background: on the dev rig (RTX 5090
 // discrete + AMD RADV iGPU), the iGPU reports system RAM (128+

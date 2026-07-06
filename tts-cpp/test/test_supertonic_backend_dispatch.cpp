@@ -1,5 +1,5 @@
 // Unit tests for the OpenCL bring-up dispatch helpers landed in
-// QVAC-18607: `supertonic_op_dispatch_scope`, the thread-local
+// `supertonic_op_dispatch_scope`, the thread-local
 // `supertonic_use_cpu_custom_ops()` / `supertonic_use_f16_attn()`
 // queries, and the `supertonic_model::backend_is_cpu`
 // + `supertonic_model::use_f16_attn` fields they mirror.

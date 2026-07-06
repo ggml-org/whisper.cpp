@@ -304,7 +304,7 @@ ggml_backend_t init_supertonic_backend(int n_gpu_layers, bool verbose, int vulka
     throw std::runtime_error("init_supertonic_backend: no CPU device registered");
 }
 
-// QVAC-18605 — backend capability probe for `GGML_OP_LEAKY_RELU`.
+// backend capability probe for `GGML_OP_LEAKY_RELU`.
 //
 // Builds a throwaway 1-element F32 tensor + a LEAKY_RELU node (no
 // alloc, no compute) inside a tiny `ggml_init` scratch context, then
@@ -375,7 +375,7 @@ bool backend_supports_fused_supertonic_ops(ggml_backend_t backend) {
     return ok;
 }
 
-// QVAC-18605 — runtime check: backend is `ggml-vulkan`.
+// runtime check: backend is `ggml-vulkan`.
 //
 // Forwarder to the shared `tts_cpp::detail::backend_is_vulkan`
 // helper in backend_util.h (same pattern as `backend_is_metal`
@@ -389,13 +389,13 @@ bool backend_is_vulkan(ggml_backend_t backend) {
     return ::tts_cpp::detail::backend_is_vulkan(backend);
 }
 
-// QVAC-18605 — internal-named alias for the public probe symbol.
+// internal-named alias for the public probe symbol.
 // The anon-namespace function name keeps the local TU references
 // short; the public-symbol forwarder below resolves the
 // `supertonic_backend_supports_f16_kv_flash_attn` declaration in
 // `supertonic_internal.h`.
 //
-// QVAC-18605 — backend capability probe for F16-K/V `FLASH_ATTN_EXT`.
+// backend capability probe for F16-K/V `FLASH_ATTN_EXT`.
 //
 // The OpenCL bring-up's auto-enable policy (`!backend_is_cpu`) blindly
 // turns on F16 K/V dispatch on any non-CPU backend.  That works for
@@ -463,7 +463,7 @@ bool backend_supports_f16_kv_flash_attn_uncached(ggml_backend_t backend) {
     return ok;
 }
 
-// QVAC-18605 follow-up — backend capability probe for the Q8_0
+// follow-up — backend capability probe for the Q8_0
 // K/V `FLASH_ATTN_EXT` variant.
 //
 // Vulkan's `GGML_OP_FLASH_ATTN_EXT` `supports_op` advertises Q8_0
@@ -520,7 +520,7 @@ bool backend_supports_q8_0_kv_flash_attn_uncached(ggml_backend_t backend) {
     return ok;
 }
 
-// QVAC-18605 round 3 — backend capability probe for Vulkan's
+// round 3 — backend capability probe for Vulkan's
 // `ggml_backend_vk_host_buffer_type()`.
 //
 // Vulkan exposes a host-visible, device-coherent buffer type
@@ -548,7 +548,7 @@ bool backend_supports_pinned_host_buffer_uncached(ggml_backend_t backend) {
     return dev && ggml_backend_dev_host_buffer_type(dev) != nullptr;
 }
 
-// QVAC-18605 round 3 — backend capability probe for the BF16 K/V
+// round 3 — backend capability probe for the BF16 K/V
 // `FLASH_ATTN_EXT` variant.
 //
 // Vulkan's `GGML_OP_FLASH_ATTN_EXT` `supports_op` advertises
@@ -601,7 +601,7 @@ bool backend_supports_bf16_kv_flash_attn_uncached(ggml_backend_t backend) {
     return ok;
 }
 
-// QVAC-18605 follow-up — backend capability probe for the hot
+// follow-up — backend capability probe for the hot
 // F16-weight `mul_mat` shape Supertonic dispatches every step.
 //
 // Mirror of `backend_supports_f16_kv_flash_attn_uncached`: the
@@ -652,7 +652,7 @@ bool backend_supports_f16_mul_mat_uncached(ggml_backend_t backend) {
     return ok;
 }
 
-// QVAC-18605 follow-up — process-wide capability-probe cache.
+// follow-up — process-wide capability-probe cache.
 //
 // Three sites probe the same `ggml_backend_t` for the same op
 // support boolean: `load_supertonic_gguf` (LEAKY_RELU at backend
@@ -683,19 +683,19 @@ struct backend_capabilities {
     bool native_leaky_relu;
     bool f16_kv_flash_attn;
     bool f16_mul_mat;
-    // QVAC-18605 follow-up — Q8_0 K/V flash-attn support.  Probed
+    // follow-up — Q8_0 K/V flash-attn support. Probed
     // here as a forward-compat capability; the dispatch isn't yet
     // wired (see `backend_supports_q8_0_kv_flash_attn_uncached`'s
     // docstring + PROGRESS_SUPERTONIC.md "Deferred work").
     bool q8_0_kv_flash_attn;
-    // QVAC-18605 round 3 — BF16 K/V flash-attn support.  Probed
+    // round 3 — BF16 K/V flash-attn support. Probed
     // here as a forward-compat capability; the dispatch isn't yet
     // wired (see `backend_supports_bf16_kv_flash_attn_uncached`'s
     // docstring + PROGRESS_SUPERTONIC.md "Deferred work").  BF16
     // K/V is the wider-exponent alternative to F16 K/V — mostly
     // useful on Vulkan with cooperative_matrix2 support.
     bool bf16_kv_flash_attn;
-    // QVAC-18605 round 3 — pinned-host-buffer-type availability.
+    // round 3 — pinned-host-buffer-type availability.
     // True iff the backend is Vulkan AND
     // `ggml_backend_vk_host_buffer_type()` returns non-null.
     // Forward-compat — primes the cache for a future per-engine
@@ -801,7 +801,7 @@ void set_env_if_unset(const char * name, const char * value) {
 #endif
 }
 
-// QVAC-18605 round 7 — pure-logic key-validator for the
+// round 7 — pure-logic key-validator for the
 // `apply_vulkan_env_overrides` ALL-OR-NOTHING contract.  Returns
 // `true` (with `out_bad_key` populated) on the first key that
 // doesn't start with `GGML_VK_`, `false` on success.  Split out
@@ -893,7 +893,7 @@ bool is_supertonic_alive(uint64_t generation_id) {
     return supertonic_alive_ids().find(generation_id) != supertonic_alive_ids().end();
 }
 
-// QVAC-18605 — public forwarder for the F16-K/V flash-attn probe.
+// public forwarder for the F16-K/V flash-attn probe.
 // Lets engine.cpp / supertonic_bench.cpp gate the auto-policy on
 // the resolved backend's actual capability instead of the
 // historical "any non-CPU backend" heuristic — saves a graph-build
@@ -908,7 +908,7 @@ bool supertonic_backend_supports_f16_kv_flash_attn(ggml_backend_t backend) {
     return cached_backend_capabilities(backend).f16_kv_flash_attn;
 }
 
-// QVAC-18605 follow-up — public forwarder for the F16-weight
+// follow-up — public forwarder for the F16-weight
 // `mul_mat` probe.  Symmetric to the F16-K/V probe above; gates
 // the `use_f16_weights` auto-policy in engine.cpp + bench so a
 // backend that ships F16 storage but rejects F16 mul_mat for the
@@ -918,7 +918,7 @@ bool supertonic_backend_supports_f16_mul_mat(ggml_backend_t backend) {
     return cached_backend_capabilities(backend).f16_mul_mat;
 }
 
-// QVAC-18605 follow-up — public forwarder for the Q8_0 K/V
+// follow-up — public forwarder for the Q8_0 K/V
 // flash-attn probe.  Forward-compat — primes the capability
 // cache for a future `--kv-attn-type q8_0` opt-in (cuts K/V
 // upload bandwidth ~2× on memory-bandwidth-bound mobile GPUs)
@@ -929,7 +929,7 @@ bool supertonic_backend_supports_q8_0_kv_flash_attn(ggml_backend_t backend) {
     return cached_backend_capabilities(backend).q8_0_kv_flash_attn;
 }
 
-// QVAC-18605 round 3 — public forwarder for the BF16 K/V flash-
+// round 3 — public forwarder for the BF16 K/V flash-
 // attn probe.  Forward-compat — primes the capability cache for
 // a future `--kv-attn-type bf16` opt-in (BF16's wider exponent
 // range avoids the F16 underflow on small attention scores
@@ -942,7 +942,7 @@ bool supertonic_backend_supports_bf16_kv_flash_attn(ggml_backend_t backend) {
     return cached_backend_capabilities(backend).bf16_kv_flash_attn;
 }
 
-// QVAC-18605 round 3 — public forwarder for the pinned-host-
+// round 3 — public forwarder for the pinned-host-
 // buffer-type probe.  Symmetric to the BF16 / Q8_0 K/V
 // forwarders above; primes the capability cache with whether
 // `ggml_backend_vk_host_buffer_type()` is callable on this
@@ -953,7 +953,7 @@ bool supertonic_backend_supports_pinned_host_buffer(ggml_backend_t backend) {
     return cached_backend_capabilities(backend).pinned_host_buffer;
 }
 
-// QVAC-18605 round 12 #5 — pinned-host-buffer input allocator.
+// round 12 #5 — pinned-host-buffer input allocator.
 //
 // Implementation strategy:
 //
@@ -1016,7 +1016,7 @@ ggml_backend_buffer_t try_alloc_inputs_in_pinned_host_buffer(
     return ggml_backend_alloc_ctx_tensors_from_buft(input_ctx, host_buft);
 }
 
-// QVAC-18605 round 13 #1 — input-scratchpad allocator that
+// round 13 #1 — input-scratchpad allocator that
 // consolidates the round-12 boilerplate.  See the docstring on
 // the declaration in supertonic_internal.h for the contract.
 //
@@ -1071,7 +1071,7 @@ ggml_backend_buffer_t alloc_input_scratchpad_or_throw(
         "(both pinned-host and default-backend paths returned null)");
 }
 
-// QVAC-18605 round 3 — multi-device Vulkan auto-pick policy.
+// round 3 — multi-device Vulkan auto-pick policy.
 //
 // Pure logic — no Vulkan symbols touched here.  The Vulkan-only
 // wrapper (`init_supertonic_backend`'s `#ifdef GGML_USE_VULKAN`
@@ -1154,7 +1154,7 @@ int resolve_vulkan_device_index(int requested,
         //     (e.g. UMA reports system-RAM-scale numbers; a
         //     discrete reporting > 256 GB is implausible and can
         //     be heuristically re-classified).  Out-of-scope for
-        //     QVAC-18605; tracked in
+        //; tracked in
         //     `aiDocs/PLAN_VULKAN_NEXT_ROUNDS.md`.
         if (!is_uma_per_device.empty()) {
             bool any_discrete = false;
@@ -1219,7 +1219,7 @@ uint64_t supertonic_capability_probe_call_count() {
     return capability_probe_call_counter().load(std::memory_order_relaxed);
 }
 
-// QVAC-18605 round 7 — Vulkan env-var passthrough.
+// round 7 — Vulkan env-var passthrough.
 //
 // ALL-OR-NOTHING: validate every key starts with `GGML_VK_`
 // BEFORE touching the environment.  An operator-config typo like
@@ -1247,7 +1247,7 @@ void apply_vulkan_env_overrides(const std::map<std::string, std::string> & overr
     }
 }
 
-// QVAC-18605 round 7 — voice ttl/dp host cache.
+// round 7 — voice ttl/dp host cache.
 //
 // Implementation matches the contract documented on the struct
 // declaration in supertonic_internal.h.  Inlines the
@@ -1380,7 +1380,7 @@ bool should_materialise_f16_weight(const std::string & source_name) {
     return false;
 }
 
-// QVAC-18605 round 6 — 2-arg overload.
+// round 6 — 2-arg overload.
 //
 // Two-stage decision:
 //
@@ -1423,7 +1423,7 @@ bool should_materialise_f16_weight(const std::string & source_name,
 // and the portable pure-GGML fallbacks (any backend).  See the
 // supertonic_op_dispatch_scope comment in supertonic_internal.h.
 //
-// QVAC-18605 — `g_supertonic_use_native_leaky_relu` carries the
+// `g_supertonic_use_native_leaky_relu` carries the
 // resolved-backend's `LEAKY_RELU` capability into the
 // `leaky_relu_portable_ggml` helper.  Defaults to `true` so the
 // historical CPU-only path keeps using the fused builtin even when no
@@ -1439,7 +1439,7 @@ thread_local bool g_supertonic_use_fused_supertonic_ops = false;
 // Small-output-dim mul_mat-miscompute flag. Defaults to false so a builder outside
 // any dispatch scope emits a plain ggml_mul_mat; only the broken backend flips it on.
 thread_local bool g_supertonic_mulmat_needs_pad = false;
-// QVAC-18605 round 4 — current K/V flash-attn dispatch dtype.
+// round 4 — current K/V flash-attn dispatch dtype.
 // Defaults to f32 so a graph builder called outside any
 // `supertonic_op_dispatch_scope` doesn't accidentally take the
 // F16/BF16/Q8_0 path (matches the model's default value).
@@ -1503,7 +1503,7 @@ supertonic_op_dispatch_scope::~supertonic_op_dispatch_scope() {
     g_supertonic_kv_attn_type             = prev_kv_attn_type;
 }
 
-// QVAC-18605 round 4 — pure-logic resolver for the multi-dtype
+// round 4 — pure-logic resolver for the multi-dtype
 // K/V dispatch policy.  Implementation matches the behaviour
 // matrix documented on the declaration in supertonic_internal.h.
 //
@@ -1907,7 +1907,7 @@ bool load_supertonic_gguf(const std::string & path,
         // lifetime; see the supertonic_op_dispatch_scope comment in
         // supertonic_internal.h for the threading contract.
         model.backend_is_cpu = ::tts_cpp::detail::backend_is_cpu(model.backend);
-        // QVAC-18605 — Vulkan-specific dispatch capture.
+        // Vulkan-specific dispatch capture.
         //
         // `backend_is_vk` is informational (the bench / engine show it
         // in the human-readable backend description), but it also
@@ -1942,7 +1942,7 @@ bool load_supertonic_gguf(const std::string & path,
         // Auto-enable on non-CPU backends; never auto-enable on CPU
         // (the CBLAS custom-op fast paths require F32 storage).
         //
-        // QVAC-18605 follow-up — the auto policy is now backend-
+        // follow-up — the auto policy is now backend-
         // capability-gated.  Symmetric to the F16-K/V flash-attn
         // probe: a backend that ships F16 storage but rejects the
         // hot `mul_mat(F16, F32)` shape Supertonic dispatches every
@@ -2094,7 +2094,7 @@ bool load_supertonic_gguf(const std::string & path,
             // (otherwise the source already carries narrower
             // precision than F16 and we don't widen).
             //
-            // QVAC-18605 round 6 — the 2-arg overload layers the
+            // round 6 — the 2-arg overload layers the
             // user-supplied `f16_weights_deny_list` substring
             // patterns on top of the curated allow-list.  Empty
             // deny-list (the default) → identical behaviour to
@@ -2311,7 +2311,7 @@ bool load_supertonic_gguf(const std::string & path,
             }
         }
 
-        // QVAC-19305 — register cross-family stable aliases *before* any
+        // register cross-family stable aliases *before* any
         // load-time pass that binds weights by their canonical names
         // (`bind_vocoder_weights` below binds the vocoder embed/head conv
         // weights this way, and the speech-prompted text-encoder reads its
@@ -2348,7 +2348,7 @@ bool load_supertonic_gguf(const std::string & path,
             }
         }
 
-        // QVAC-19305 — backward compatibility for GGUFs produced by the
+        // backward compatibility for GGUFs produced by the
         // pre-v3 converter, which ship *no* alias arrays.  The v3 runtime
         // binds the vocoder embed/head conv weights and the speech-prompted
         // text-encoder projections by stable canonical names; on an older
@@ -2677,7 +2677,7 @@ bool load_supertonic_gguf(const std::string & path,
             }
         }
 
-        // QVAC-19254 — build the scheduler.  With a GPU primary, add a
+        // build the scheduler. With a GPU primary, add a
         // CPU backend so ops the GPU can't run (GGML_OP_CUSTOM, and any
         // FA the driver rejects) are routed to CPU rather than silently
         // skipped.  With a CPU primary, the sched is a single-backend
@@ -2748,7 +2748,7 @@ void free_supertonic_model(supertonic_model & model) {
     if (model.generation_id != 0) {
         unregister_supertonic_alive(model.generation_id);
     }
-    // QVAC-19254 — free the scheduler before the backends / buffers it
+    // free the scheduler before the backends / buffers it
     // references; the sched holds non-owning pointers to model.backend +
     // model.cpu_backend, so tearing those down first would leave the
     // sched with dangling references during its destructor.

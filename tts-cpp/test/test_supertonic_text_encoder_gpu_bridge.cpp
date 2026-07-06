@@ -1,4 +1,4 @@
-// QVAC-18605 round 12 — CPU-only TDD test for the text-encoder
+// round 12 — CPU-only TDD test for the text-encoder
 // speech-prompted-attention GPU bridge (`run_speech_prompted_merged_cache`).
 //
 // Background

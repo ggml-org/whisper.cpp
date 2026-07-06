@@ -6,7 +6,7 @@
 #include "supertonic_internal.h"
 #include "supertonic_voice_json.h"
 #include "npy.h"
-#include "voice_features.h"  // resample_for_output / validate_output_sample_rate (QVAC-21483)
+#include "voice_features.h"  // resample_for_output / validate_output_sample_rate
 // Vulkan adapter description in `backend_name()` is now resolved
 // through the registry API (`ggml_backend_get_device` +
 // `ggml_backend_dev_description`) so no per-backend header include
@@ -157,14 +157,14 @@ struct Engine::Impl {
     EngineOptions    opts;
     supertonic_model model;
     std::atomic<bool> cancel_flag{false};
-    // QVAC-18605 round 7 — voice ttl/dp host cache.  Populated
+    // round 7 — voice ttl/dp host cache. Populated
     // lazily on first `synthesize()` call per voice; subsequent
     // calls hit the cache and skip the GPU→host download (2 sync
     // points per call eliminated on Vulkan / OpenCL).  See the
     // contract on `voice_host_cache` in supertonic_internal.h.
     voice_host_cache voices_host;
 
-    // QVAC-20978 — resolved external (cloned) voice.  When
+    // resolved external (cloned) voice. When
     // `use_external_voice` is set, synthesis feeds these host vectors
     // directly instead of looking the voice up by name in `model.voices`
     // (and so bypasses `voices_host`, which only caches baked tensors).
@@ -181,7 +181,7 @@ struct Engine::Impl {
         if (!std::filesystem::exists(opts.model_gguf_path)) {
             throw std::runtime_error(supertonic_setup_hint(opts.model_gguf_path));
         }
-        // QVAC-21483 — fail fast on an unsupported output frequency.
+        // fail fast on an unsupported output frequency.
         validate_output_sample_rate(opts.output_sample_rate, "supertonic::Engine");
         // Wire backends_dir + opencl_cache_dir BEFORE any backend
         // init. First-Engine-wins across the whole process; second
@@ -202,7 +202,7 @@ struct Engine::Impl {
             case Precision::F16:  internal_precision = supertonic_precision::F16;  break;
             case Precision::Q8_0: internal_precision = supertonic_precision::Q8_0; break;
         }
-        // QVAC-18605 round 7 — apply Vulkan env-var overrides
+        // round 7 — apply Vulkan env-var overrides
         // BEFORE `load_supertonic_gguf` (which calls
         // `init_supertonic_backend`).  ggml-vulkan reads its
         // GGML_VK_* env vars at backend init, so the overrides
@@ -228,7 +228,7 @@ struct Engine::Impl {
             // up on every synthesize() call.  See model.use_f16_attn
             // in supertonic_internal.h.
             //
-            // QVAC-18605 — auto-policy is now backend-capability-gated.
+            // auto-policy is now backend-capability-gated.
             // Probes `ggml_backend_supports_op` for a Supertonic-
             // shaped F16-K/V flash_attn graph node before flipping
             // the flag.  A backend that compiles `flash_attn_ext`
@@ -247,7 +247,7 @@ struct Engine::Impl {
                 model.use_f16_attn = opts.f16_attn != 0;
             }
 
-            // QVAC-18605 round 4 — multi-dtype K/V dispatch resolution.
+            // round 4 — multi-dtype K/V dispatch resolution.
             //
             // Layered ON TOP of the round-1 `use_f16_attn` boolean:
             // when `opts.kv_attn_type == -1` (the default), the
@@ -305,11 +305,11 @@ struct Engine::Impl {
             // no-op for explicit `--kv-attn-type 1` too.
             model.use_f16_attn = (model.kv_attn_type == kv_attn_dtype::f16);
 
-            // QVAC-20978 — resolve + validate the voice source up front so
+            // resolve + validate the voice source up front so
             // construction throws instead of synthesize().
             resolve_voice_source();
 
-            // QVAC-18605 follow-up — opt-in first-synth pre-warm.
+            // follow-up — opt-in first-synth pre-warm.
             // Skipped on CPU (no shader-compile cost to amortise)
             // and on empty `prewarm_text` (the caller didn't ask).
             // On Vulkan / OpenCL this runs one throwaway synth to
@@ -332,7 +332,7 @@ struct Engine::Impl {
         free_supertonic_model(model);
     }
 
-    // QVAC-20978 — pick the voice source (in-memory tensors > voice JSON
+    // pick the voice source (in-memory tensors > voice JSON
     // file > baked-in preset name) and validate it.
     void resolve_voice_source() {
         // A voice is the *pair* (style_ttl, style_dp).  Supplying only one
@@ -438,7 +438,7 @@ struct Engine::Impl {
         const float * style_ttl = nullptr;
         const float * style_dp  = nullptr;
         if (use_external_voice) {
-            // QVAC-20978 — externally supplied (cloned) voice.  The host
+            // externally supplied (cloned) voice. The host
             // vectors were parsed + dimension-validated in the ctor and
             // live for the Engine's lifetime, so they're valid for the
             // duration of this call.  No GPU→host download / cache needed:
@@ -455,7 +455,7 @@ struct Engine::Impl {
                 // construction (not currently supported but guard anyway).
                 throw std::runtime_error("Supertonic Engine: unknown voice: " + voice);
             }
-            // QVAC-18605 round 7 — `voices_host.get_or_load` returns
+            // round 7 — `voices_host.get_or_load` returns
             // a stable reference into the per-engine cache.  First
             // call per voice does the 2 GPU→host downloads + caches;
             // subsequent calls return the cached entry without
@@ -562,7 +562,7 @@ struct Engine::Impl {
         result.pcm.assign(wav_full.begin(),
                           wav_full.begin() + std::min((size_t) wav_len, wav_full.size()));
 
-        // QVAC-21483 — run_single_chunk always returns audio at the model's
+        // run_single_chunk always returns audio at the model's
         // NATIVE rate.  Output-frequency conversion is the callers' job:
         // synthesize() resamples the whole utterance once (batch); and
         // synthesize_streaming() flows every chunk through a single
@@ -579,7 +579,7 @@ struct Engine::Impl {
             throw std::runtime_error("Supertonic Engine: text is empty");
         }
         SynthesisResult result = run_single_chunk(text, opts.seed);
-        // QVAC-21483 — batch path resamples the whole utterance once at the end
+        // batch path resamples the whole utterance once at the end
         // (run_single_chunk returns native PCM).  0 / native == passthrough.
         const int native_sr = result.sample_rate;
         const int out_sr    = opts.output_sample_rate > 0
@@ -621,7 +621,7 @@ struct Engine::Impl {
             }
         }
 
-        // QVAC-21483 — one utterance-spanning output resampler for the whole
+        // one utterance-spanning output resampler for the whole
         // stream.  run_single_chunk now returns NATIVE PCM; feeding every chunk
         // through a single OutputResampler makes the streamed (resampled) output
         // bit-identical to resampling the assembled native utterance once, with
@@ -707,7 +707,7 @@ struct Engine::Impl {
                 }
             }
 
-            // QVAC-21483 — feed the faded NATIVE chunk through the utterance-
+            // feed the faded NATIVE chunk through the utterance-
             // spanning resampler.  process() returns only the now-stable output
             // samples; finish() flushes the right-edge tail on the final chunk.
             // Concatenated they equal resampling the whole native utterance once
@@ -731,7 +731,7 @@ struct Engine::Impl {
         if (!model.backend) return "(unknown)";
         const char * name = ggml_backend_name(model.backend);
         std::string out = name ? std::string(name) : "(unknown)";
-        // QVAC-18605 — append device description when Vulkan is the
+        // append device description when Vulkan is the
         // resolved backend.  Mirrors chatterbox's bench output so a
         // log line like "backend: Vulkan (device 0: NVIDIA RTX 5090)"
         // is unambiguous when triaging multi-GPU machines.  Pulled
@@ -777,7 +777,7 @@ void Engine::cancel() {
     pimpl_->cancel_flag.store(true, std::memory_order_release);
 }
 
-// QVAC-18605 follow-up — explicit first-synth pre-warm.
+// follow-up — explicit first-synth pre-warm.
 // Forwards to the in-place `synthesize` and discards the PCM,
 // gated on the same `backend_is_cpu` short-circuit the auto-
 // invoked path at the end of `Impl::Impl` uses.  See the

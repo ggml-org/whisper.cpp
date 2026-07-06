@@ -1,5 +1,5 @@
 // TDD harness for the graph-side optimizations added in the
-// QVAC-18607 audit follow-up (audit findings F3, F8, F11).
+// audit follow-up (audit findings F3, F8, F11).
 //
 // Each of these findings is a graph rewrite or new cache: the output
 // of the stage must stay bit-exact (or within F32 ULP tolerance) vs

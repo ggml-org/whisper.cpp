@@ -173,12 +173,12 @@ int main(int argc, char ** argv) {
     // pwconv weights.  -1 auto / 0 / 1 force.
     int f16_weights = -1;
     supertonic_precision precision = supertonic_precision::F32;
-    // QVAC-18605 — Vulkan adapter index.  Default 0 (the historical
+    // Vulkan adapter index. Default 0 (the historical
     // hard-coded value in `init_supertonic_backend`).  Range-checked
     // at GGUF load against `ggml_backend_vk_get_device_count()`; an
     // out-of-range value is a hard error.
     int vulkan_device = 0;
-    // QVAC-18605 follow-up — first-synth pre-warm.  When non-empty,
+    // follow-up — first-synth pre-warm. When non-empty,
     // a throwaway synth on `prewarm_text` runs after model load + before
     // the timed runs, forcing every per-stage GPU graph cache + shader
     // pipeline to populate up-front.  No-op on CPU backends.  Note that
@@ -188,21 +188,21 @@ int main(int argc, char ** argv) {
     // does, so the first warmup run reflects actual steady-state warm
     // time rather than the cold-start outlier.
     std::string prewarm_text;
-    // QVAC-18605 round 6 — comma-separated list of substring patterns
+    // round 6 — comma-separated list of substring patterns
     // that force matching tensors to stay F32 even when --f16-weights
     // is on.  Layered on top of the curated allow-list in
     // `should_materialise_f16_weight()`.  Default empty (zero
     // behaviour change for every existing bench invocation).
     std::vector<std::string> f16_weights_deny_list;
-    // QVAC-18605 round 4 — multi-dtype K/V flash-attn dispatch.
+    // round 4 — multi-dtype K/V flash-attn dispatch.
     // -1 = auto (falls back to --f16-attn for back-compat); 0=f32,
     // 1=f16, 2=bf16, 3=q8_0.  Probe-gated graceful fallback to f32
     // on adapters that don't support the requested dtype.
     int kv_attn_type = -1;
-    // QVAC-18605 round 7 — Vulkan env-var overrides applied via
+    // round 7 — Vulkan env-var overrides applied via
     // `apply_vulkan_env_overrides` BEFORE `init_supertonic_backend`.
     std::map<std::string, std::string> vulkan_env_overrides;
-    // QVAC-18605 round 7 — bench observability flags.
+    // round 7 — bench observability flags.
     //
     // `bench_sync` (default true) inserts an explicit
     // `ggml_backend_synchronize` at every per-stage boundary so
@@ -289,7 +289,7 @@ int main(int argc, char ** argv) {
     }
     if (model_path.empty() || text.empty()) { usage(argv[0]); return 2; }
 
-    // QVAC-18605 round 7 — apply Vulkan env-var overrides BEFORE
+    // round 7 — apply Vulkan env-var overrides BEFORE
     // `load_supertonic_gguf` (which calls `init_supertonic_backend`,
     // which is when ggml-vulkan reads its GGML_VK_* env vars).
     // Throws on any non-`GGML_VK_` key (operator-config typo
@@ -310,14 +310,14 @@ int main(int argc, char ** argv) {
     // F16 K/V flash-attention dispatch: same auto policy as Engine
     // (auto ⇒ on for GPU backends that pass the F16-K/V probe, off
     // for CPU; user can force).  See `supertonic_backend_supports_f16_kv_flash_attn`
-    // in supertonic_gguf.cpp for the rationale (QVAC-18605).
+    // in supertonic_gguf.cpp for the rationale.
     if (f16_attn < 0) {
         model.use_f16_attn = !model.backend_is_cpu &&
                              supertonic_backend_supports_f16_kv_flash_attn(model.backend);
     } else {
         model.use_f16_attn = f16_attn != 0;
     }
-    // QVAC-18605 round 4 — multi-dtype K/V dispatch resolution.
+    // round 4 — multi-dtype K/V dispatch resolution.
     // Same plumbing as Engine::Impl ctor; out-of-range throws
     // (caller surface).  Probes are advisory + cached.  PR #18
     // reviewer (Omar) follow-up: surface explicit-request
@@ -379,7 +379,7 @@ int main(int argc, char ** argv) {
     Stage st_ve {st_ve_label, {}};
     Stage st_voc{"vocoder", {}};
     Stage st_tot{"total", {}};
-    // QVAC-18605 round 7 — per-denoise-step breakdown.  Populated
+    // round 7 — per-denoise-step breakdown. Populated
     // only when `--bench-per-step` is on; otherwise stays empty
     // and is omitted from human + JSON output.  One Stage per
     // step index (step 0 typically reflects cold-pipeline cost
@@ -396,7 +396,7 @@ int main(int argc, char ** argv) {
     std::vector<double> rtfs;
     double last_audio_s = 0;
 
-    // QVAC-18605 round 7 — explicit backend sync at stage
+    // round 7 — explicit backend sync at stage
     // boundaries.  Cheap on CPU (returns immediately when no GPU
     // work pending); on Vulkan / OpenCL ensures the next
     // `clk::now()` reflects work-completed-by-the-prior-stage.
@@ -405,7 +405,7 @@ int main(int argc, char ** argv) {
         if (bench_sync) ggml_backend_synchronize(model.backend);
     };
 
-    // QVAC-18605 follow-up — first-synth pre-warm.
+    // follow-up — first-synth pre-warm.
     //
     // Independent of the existing `--warmup N` flag.  `--warmup`
     // discards the first N timed runs from the median; `--prewarm
@@ -508,7 +508,7 @@ int main(int argc, char ** argv) {
 
         std::vector<float> latent_mask((size_t) latent_len, 1.0f);
         std::vector<float> next;
-        // QVAC-18605 round 7 — per-step timing.  When
+        // round 7 — per-step timing. When
         // `bench_per_step` is on, a sync + clock sample bracket
         // each `supertonic_vector_step_ggml` call.  When off, a
         // single sync at end-of-loop matches the legacy timing
@@ -567,7 +567,7 @@ int main(int argc, char ** argv) {
     printf("  threads: %d, n_gpu_layers: %d, precision: %s\n",
            model.n_threads, n_gpu_layers, precision_to_string(precision));
     {
-        // QVAC-18605 — bench backend description.  On Vulkan the
+        // bench backend description. On Vulkan the
         // adapter description is appended so multi-GPU machines
         // unambiguously identify which device ran the bench.
         std::string desc = ggml_backend_name(model.backend) ? ggml_backend_name(model.backend) : "(unknown)";
@@ -579,20 +579,20 @@ int main(int argc, char ** argv) {
                 desc += " (device " + std::to_string(idx) + ": " + vk_desc + ")";
             }
         }
-        // QVAC-18605 follow-up — surface every backend-capability
+        // follow-up — surface every backend-capability
         // dispatch flag plus the cold-start prewarm latency so log
         // grep'ing across multiple machines can attribute perf
         // differences to the right cause (e.g. "use_f16_weights=off
         // on this run because the F16 mul_mat probe rejected the
         // shape" is much faster to triage than "why is this synth
         // 30 % slower than the other one").
-        // QVAC-18605 round 3 — also surface BF16 K/V availability and
+        // round 3 — also surface BF16 K/V availability and
         // the host-pinned-buffer-type availability.  Both are forward-
         // compat capabilities (no live dispatch yet); the bench tag
         // lets operators verify a future `--kv-attn-type bf16` /
         // `--vulkan-pinned-uploads` opt-in will actually take effect
         // on their machine before they flip the flag.
-        // QVAC-18605 round 4 — surface the resolved K/V dispatch
+        // round 4 — surface the resolved K/V dispatch
         // dtype.  When the operator opts out of `--kv-attn-type`
         // the resolved value falls through to `f16` / `f32` per
         // `--f16-attn`, so the existing `f16_attn=on` tag still
@@ -615,7 +615,7 @@ int main(int argc, char ** argv) {
                supertonic_backend_supports_q8_0_kv_flash_attn(model.backend) ? " (q8_0_kv_attn=available)" : "",
                supertonic_backend_supports_bf16_kv_flash_attn(model.backend) ? " (bf16_kv_attn=available)" : "",
                supertonic_backend_supports_pinned_host_buffer(model.backend) ? " (pinned_host_buffer=available)" : "");
-        // QVAC-18605 round 6 — confirm the F16-weights deny-list took
+        // round 6 — confirm the F16-weights deny-list took
         // effect.  Silent when the operator didn't supply one (no
         // visual noise on the default path).
         if (!f16_weights_deny_list.empty()) {
@@ -636,7 +636,7 @@ int main(int argc, char ** argv) {
     print_stage(st_dur);
     print_stage(st_te);
     print_stage(st_ve);
-    // QVAC-18605 round 7 — per-step breakdown lines.  Indented
+    // round 7 — per-step breakdown lines. Indented
     // under the aggregate vector-estimator line for visual
     // grouping.  Only emitted when --bench-per-step is on.
     for (auto & st : st_ve_per_step) {
@@ -674,7 +674,7 @@ int main(int argc, char ** argv) {
         os << "  \"prewarm_ms\": " << prewarm_ms << ",\n";
         os << "  \"f16_attn\": " << (model.use_f16_attn ? "true" : "false") << ",\n";
         os << "  \"f16_weights\": " << (model.use_f16_weights ? "true" : "false") << ",\n";
-        // QVAC-18605 round 4 — surface the resolved K/V dispatch
+        // round 4 — surface the resolved K/V dispatch
         // dtype.  Always emitted (string label), so JSON consumers
         // can attribute drift / perf differences to the right cause
         // even on the default `auto` path.
@@ -690,7 +690,7 @@ int main(int argc, char ** argv) {
             os << "  \"kv_attn_type\": \"" << kv << "\",\n";
             os << "  \"kv_attn_type_requested\": " << kv_attn_type << ",\n";
         }
-        // QVAC-18605 round 6 — surface the user-supplied deny-list +
+        // round 6 — surface the user-supplied deny-list +
         // the count of tensors it excluded.  Always emitted (even on
         // the default empty path) so JSON consumers can attribute
         // any quality regression observed in CI to a config change.
@@ -704,7 +704,7 @@ int main(int argc, char ** argv) {
         os << "  \"native_leaky_relu\": " << (model.use_native_leaky_relu ? "true" : "false") << ",\n";
         os << "  \"q8_0_kv_attn_available\": "
            << (supertonic_backend_supports_q8_0_kv_flash_attn(model.backend) ? "true" : "false") << ",\n";
-        // QVAC-18605 round 3 — extra capability flags surfaced for the
+        // round 3 — extra capability flags surfaced for the
         // forward-compat probes (BF16 K/V flash-attn + pinned-host-
         // buffer-type).  Operators / CI scripts grep on these to
         // pre-flight whether a future `--kv-attn-type bf16` /
@@ -714,12 +714,12 @@ int main(int argc, char ** argv) {
            << (supertonic_backend_supports_bf16_kv_flash_attn(model.backend) ? "true" : "false") << ",\n";
         os << "  \"pinned_host_buffer_available\": "
            << (supertonic_backend_supports_pinned_host_buffer(model.backend) ? "true" : "false") << ",\n";
-        // QVAC-18605 round 7 — bench observability surface.
+        // round 7 — bench observability surface.
         // `bench_sync` documents whether the per-stage times
         // include a `ggml_backend_synchronize` boundary; useful
         // when comparing JSON across machines / configs.
         os << "  \"bench_sync\": " << (bench_sync ? "true" : "false") << ",\n";
-        // QVAC-18605 round 7 — Vulkan env-var overrides surfaced
+        // round 7 — Vulkan env-var overrides surfaced
         // verbatim so the JSON consumer can attribute drift to
         // a specific override (or its absence).  Always emitted
         // (object — empty on the default-config path).
@@ -745,7 +745,7 @@ int main(int argc, char ** argv) {
         write_json_stage(os, st_pre, true);
         write_json_stage(os, st_dur, true);
         write_json_stage(os, st_te, true);
-        // QVAC-18605 round 7 — when --bench-per-step is on, emit
+        // round 7 — when --bench-per-step is on, emit
         // each step as its own stage entry.  When off, the
         // aggregate `vector_estimator` stage is the only entry
         // for the vector-estimator buckets (legacy JSON shape).

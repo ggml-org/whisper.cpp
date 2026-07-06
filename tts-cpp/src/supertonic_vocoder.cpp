@@ -558,7 +558,7 @@ void free_vocoder_cache(vocoder_graph_cache & cache) {
 void build_supertonic_vocoder_cache(vocoder_graph_cache & cache,
                                     const supertonic_model & model,
                                     int latent_len) {
-    // QVAC-19254 — reuse the cached graph when it already matches this shape
+    // reuse the cached graph when it already matches this shape
     // AND was built on the direct backend path (cache.allocr non-null).  The
     // scheduler path leaves cache.allocr null, so it always rebuilds.
     // Mirrors run_hift_decode.
@@ -973,7 +973,7 @@ bool supertonic_vocoder_forward_ggml(const supertonic_model & model,
         build_supertonic_vocoder_cache(cache, model, latent_len);
         profile_vocoder_checkpoint("graph_cache", profile_last);
 
-        // QVAC-19254 — direct vs scheduler routing.  Re-uses cache.allocr
+        // direct vs scheduler routing. Re-uses cache.allocr
         // for direct dispatch; falls through to the model scheduler when
         // an op must run on CPU (GGML_OP_CUSTOM etc.).
         bool direct = true;
@@ -1206,7 +1206,7 @@ bool supertonic_vocoder_trace_ggml(const supertonic_model & model,
         // HEAD F2: trace_bn_scale / trace_bn_shift inputs are gone; the
         // graph above now folds the pre-baked bn_scale_pre /
         // bn_shift_pre weight tensors in directly.
-        // QVAC-19254 — pair the sched_alloc above with sched_compute here.
+        // pair the sched_alloc above with sched_compute here.
         supertonic_sched_compute(model, gf);
 
         trace_out.push_back({"unpack", {T0, C_latent}, unpack_latent_scalar(model, latent, latent_len)});

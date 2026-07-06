@@ -1,7 +1,7 @@
 #pragma once
 
 // Analytic backward pass for the CAMPPlus speaker encoder — voice-clone roadmap,
-// ticket "GGML backward pass: CAMPPlus speaker encoder" (QVAC-20984).
+// ticket "GGML backward pass: CAMPPlus speaker encoder".
 //
 // Scope: CAMPPlus maps an 80-channel Kaldi-fbank spectrogram to a 192-d speaker
 // embedding. In the enrollment loop it provides the speaker-similarity loss
@@ -17,7 +17,7 @@
 // sum_rows / repeat chain, ...). The math here is the standard conv / batch-norm
 // (pre-fused affine) / pooling / gating backward, computed in double for a
 // well-conditioned reference and validated component-wise against central finite
-// differences by the voiceclone gradcheck harness (Task 2 / QVAC-20979).
+// differences by the voiceclone gradcheck harness (Task 2).
 //
 // Layout convention (mirrors `campplus_embed_cpu` in campplus.cpp):
 //   1-D feature map: channel-major (C, T), access x[c * T + t].

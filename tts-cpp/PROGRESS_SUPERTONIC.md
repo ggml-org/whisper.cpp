@@ -475,7 +475,7 @@ python scripts/convert-supertonic2-to-gguf.py \
 
 Target: the same `--n-gpu-layers > 0` flag already exposed by the
 Supertonic CLI, but resolved to **OpenCL** instead of falling back to
-CPU.  Tracking ticket: QVAC-18607.
+CPU. Tracking ticket:.
 
 ### What was missing
 
@@ -600,19 +600,18 @@ spelled out (most TDD, written before the implementation lands).
 
 ---
 
-## GPU bring-up: Vulkan (May 2026, QVAC-18605)
+## GPU bring-up: Vulkan (May 2026)
 
 Target: the same `--n-gpu-layers > 0` flag already plumbed through the
 Supertonic CLI / engine / bench layer, but resolved to **Vulkan** on
 Linux/Windows boxes that ship a working ICD (NVIDIA proprietary, AMD
 RADV via Mesa, Intel ANV, llvmpipe for headless CI) so QVAC consumers
-without an OpenCL stack still get the GPU codepath.  Tracking ticket:
-QVAC-18605.
+without an OpenCL stack still get the GPU codepath.
 
-### Inheritance from the OpenCL bring-up (QVAC-18607)
+### Inheritance from the OpenCL bring-up
 
 By construction, the OpenCL bring-up's foundational work is **backend-
-portable**: every helper added in QVAC-18607 (the
+portable**: every helper added (the
 `supertonic_op_dispatch_scope` RAII, `backend_is_cpu` flag, F16 K/V
 flash-attention path, `leaky_relu_portable_ggml` decomposition) only
 ever queries "is this CPU?".  When the resolved backend is Vulkan
@@ -719,7 +718,7 @@ cmake --build build-vulkan -j$(nproc) --target tts-cli supertonic-bench
   established and produce identical parity numbers (within F32 →
   F16 K/V tolerance on the attention output when `--f16-attn 1`).
 
-### Vulkan optimization round 2 (May 2026, QVAC-18605 follow-up)
+### Vulkan optimization round 2 (May 2026, follow-up)
 
 Layered on top of the Vulkan bring-up above; the round-2 changes
 generalise the bring-up's "load-time backend probe" pattern into a
@@ -825,7 +824,7 @@ These were investigated but kept out of scope for this PR:
   When it lands, this Supertonic Vulkan codepath inherits the
   cold-start win automatically.
 - ~~**Q8_0 / BF16 K/V flash-attention live dispatch**~~ — **DONE
-  in round 4** (May 2026, QVAC-18605 follow-up #4).  Wired the
+  in round 4** (May 2026, follow-up #4). Wired the
   enum-typed dispatch + `--kv-attn-type {auto,f32,f16,bf16,q8_0}`
   CLI flag (probe-gated graceful fallback to F32 on adapters that
   don't support the requested dtype).  Live BF16 / Q8_0 cast in
@@ -849,7 +848,7 @@ These were investigated but kept out of scope for this PR:
 
 ---
 
-### Vulkan optimisation round 3 (May 2026, QVAC-18605 follow-up #2)
+### Vulkan optimisation round 3 (May 2026, follow-up #2)
 
 Three more Vulkan-specific deltas, all developed test-first (TDD)
 — the new tests were committed first, observed to fail on the
@@ -910,7 +909,7 @@ the tests re-run to verify green.
 
 ---
 
-### Vulkan optimisation round 6 (May 2026, QVAC-18605 follow-up #3) — F16-weights operator deny-list
+### Vulkan optimisation round 6 (May 2026, follow-up #3) — F16-weights operator deny-list
 
 Round 6 layers a **user-overridable extra deny-list** on top of
 the existing hand-curated `should_materialise_f16_weight()`
@@ -999,7 +998,7 @@ quality regression to a config change.
 
 ---
 
-### Vulkan optimisation round 4 (May 2026, QVAC-18605 follow-up #4) — Multi-dtype K/V flash-attention
+### Vulkan optimisation round 4 (May 2026, follow-up #4) — Multi-dtype K/V flash-attention
 
 The round-1 `--f16-attn` boolean only let operators pick between
 F32 and F16 K/V flash-attention.  Round 4 generalises the
@@ -1154,7 +1153,7 @@ churn.
 
 ---
 
-### Vulkan optimisation round 7 (May 2026, QVAC-18605 follow-up #5) — Bench observability + voice cache + Vulkan env-var passthrough
+### Vulkan optimisation round 7 (May 2026, follow-up #5) — Bench observability + voice cache + Vulkan env-var passthrough
 
 The next-rounds plan
 (`aiDocs/PLAN_VULKAN_NEXT_ROUNDS.md`) identified bench-side
@@ -1270,7 +1269,7 @@ right stage column.
 
 ---
 
-### Vulkan optimisation round 8 (May 2026, QVAC-18605 follow-up #6) — Front-block attn0 GPU bridge
+### Vulkan optimisation round 8 (May 2026, follow-up #6) — Front-block attn0 GPU bridge
 
 The single largest remaining per-step sync hotspot identified in
 the next-rounds plan
@@ -1370,7 +1369,7 @@ improvement to this exact change.
 
 ---
 
-### Vulkan optimisation round 9 (May 2026, QVAC-18605 follow-up #7) — Style flash-attn GPU bridge
+### Vulkan optimisation round 9 (May 2026, follow-up #7) — Style flash-attn GPU bridge
 
 Round 8 wired the GPU bridge for the **front-block attn0** site.
 Round 9 extends the same proven pattern to the **4 style flash-
@@ -1465,7 +1464,7 @@ to the correct stage column on real hardware.
 
 ---
 
-### Vulkan optimisation round 10 (May 2026, QVAC-18605 follow-up #8) — Per-step text-input upload-skip
+### Vulkan optimisation round 10 (May 2026, follow-up #8) — Per-step text-input upload-skip
 
 After rounds 8 + 9 wired the GPU bridge for the 5 attention sites
 (front-block attn0 + 4 style attentions), the remaining per-step
@@ -1567,7 +1566,7 @@ faster.
 
 ---
 
-### Vulkan optimisation round 11 (May 2026, QVAC-18605 follow-up #9) — Packed-QK RoPE + GPU-bridge layout fix
+### Vulkan optimisation round 11 (May 2026, follow-up #9) — Packed-QK RoPE + GPU-bridge layout fix
 
 **Critical correctness fix.**  Round 11 didn't add a new
 optimisation — it made every prior round actually run end-to-end
@@ -1706,7 +1705,7 @@ until round 11 unblocked the path.
 
 ---
 
-### Vulkan optimisation round 12 (May 2026, QVAC-18605 follow-up #10) — Auto-pick UMA bias + text-encoder GPU bridge + pinned-host-buffer per-step inputs
+### Vulkan optimisation round 12 (May 2026, follow-up #10) — Auto-pick UMA bias + text-encoder GPU bridge + pinned-host-buffer per-step inputs
 
 Three independent wins bundled into one round.  Strict TDD on
 each — new CPU-only unit test for every change, RED → impl →
@@ -1907,7 +1906,7 @@ writes a valid WAV.  Zero regressions from rounds 1-11.
 
 ---
 
-### Vulkan optimisation round 13 (May 2026, QVAC-18605 follow-up #11) — Code-quality consolidation + operator-facing Q8_0 finding
+### Vulkan optimisation round 13 (May 2026, follow-up #11) — Code-quality consolidation + operator-facing Q8_0 finding
 
 Round 13 is a **strict-improvement-only follow-up** to round 12:
 no code path is removed, no optimisation is rolled back, and the

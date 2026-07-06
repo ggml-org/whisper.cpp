@@ -1,5 +1,5 @@
-// Self-tests for the voice-clone finite-difference gradient checker
-// (QVAC-20979).  Pure host logic — no model, no fixture — so it builds and runs
+// Self-tests for the voice-clone finite-difference gradient checker.
+// Pure host logic — no model, no fixture — so it builds and runs
 // standalone and in the always-on `unit` ctest tier:
 //
 //   g++ -std=c++17 -I src test/test_voiceclone_gradcheck.cpp src/voiceclone_gradcheck.cpp -o /tmp/t

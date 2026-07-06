@@ -122,7 +122,7 @@ std::vector<float> resample_sinc(const std::vector<float> & in,
 }
 
 // ============================================================================
-// Output-frequency selection (QVAC-21483)
+// Output-frequency selection
 // ============================================================================
 
 void validate_output_sample_rate(int sr, const char * who) {

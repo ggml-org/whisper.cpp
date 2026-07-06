@@ -1,5 +1,5 @@
 // TDD harness for the host-side + GPU-side caches added in the
-// QVAC-18607 audit follow-up (audit findings F1, F2, F6, F9).
+// audit follow-up (audit findings F1, F2, F6, F9).
 //
 // Validates the *structural* properties of each cache so a regression
 // in the load-time precompute or the lazy cache populator is caught

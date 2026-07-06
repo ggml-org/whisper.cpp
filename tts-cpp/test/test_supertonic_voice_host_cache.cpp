@@ -1,4 +1,4 @@
-// QVAC-18605 round 7 — CPU-only TDD test for the voice ttl/dp host
+// round 7 — CPU-only TDD test for the voice ttl/dp host
 // cache.
 //
 // Background

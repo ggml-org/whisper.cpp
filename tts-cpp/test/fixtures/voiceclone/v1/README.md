@@ -1,4 +1,4 @@
-# Voice-clone test-harness fixtures — v1 (QVAC-20979)
+# Voice-clone test-harness fixtures — v1
 
 Golden fixtures for the voice-clone metrics self-tests
 (`test/test_voiceclone_metrics.cpp`). Everything here is **small, committed, and

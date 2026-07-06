@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the voice-clone test-harness golden fixtures (QVAC-20979).
+"""Generate the voice-clone test-harness golden fixtures.
 
 The harness has two fixture tiers:
 

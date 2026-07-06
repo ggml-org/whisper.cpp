@@ -1,4 +1,4 @@
-// QVAC-18605 follow-up — CPU-only API-surface test for the
+// follow-up — CPU-only API-surface test for the
 // first-synth pre-warm hook added alongside the Vulkan bring-up:
 //
 //   - `tts_cpp::supertonic::EngineOptions::prewarm_text` exists,
@@ -93,7 +93,7 @@ void test_engine_options_defaults() {
     CHECK(o.model_gguf_path.empty());
     CHECK(o.prewarm_text.empty());
     CHECK(o.vulkan_device == 0);
-    // QVAC-18605 follow-up — the default values for f16_attn /
+    // follow-up — the default values for f16_attn /
     // f16_weights are -1 (auto: gated on the new probe set).
     // The probes themselves are exercised by
     // test_supertonic_capability_cache.cpp; here we just lock

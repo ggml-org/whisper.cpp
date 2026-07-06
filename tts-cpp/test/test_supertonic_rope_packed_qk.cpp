@@ -1,4 +1,4 @@
-// QVAC-18966 — CPU regression fix for `apply_rope_to_packed_qk`
+// CPU regression fix for `apply_rope_to_packed_qk`
 // (also covers the Vulkan / OpenCL synth-path regression on this
 // branch — same root cause; rounds 8 / 9's GPU bridges only run
 // past round 11 once this helper produces the right shape).

@@ -1,7 +1,6 @@
 #pragma once
 
-// Speaker-similarity + WER metrics for the voice-clone test harness
-// (QVAC-20979).
+// Speaker-similarity + WER metrics for the voice-clone test harness.
 //
 // Three families of metric, all of them pure host arithmetic so they run in the
 // always-on `unit` test tier (no model, no fixture download required):

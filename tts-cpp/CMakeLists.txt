@@ -252,7 +252,7 @@ set(TTS_CPP_LIB_SOURCES
     src/supertonic_chunker.cpp
     src/mtl_tokenizer.cpp
     src/text_preprocess.cpp
-    # LavaSR neural speech enhancement (QVAC-16579) — CPU/GGML post-process.
+    # LavaSR neural speech enhancement — CPU/GGML post-process.
     src/lavasr/dsp/resampler.cpp
     src/lavasr/dsp/stft_processor.cpp
     src/lavasr/dsp/mel_filterbank.cpp
@@ -261,7 +261,7 @@ set(TTS_CPP_LIB_SOURCES
     src/lavasr/enhancer.cpp
     src/lavasr/enhancer_gguf.cpp
     src/lavasr/enhancer_api.cpp
-    # LavaSR denoiser stage (QVAC-16579 follow-up) — UL-UNAS neural denoiser
+    # LavaSR denoiser stage (follow-up) — UL-UNAS neural denoiser
     # (runs BEFORE the enhancer, rate-preserving).  See src/lavasr/denoiser*.{h,cpp}.
     src/lavasr/denoiser_core.cpp
     src/lavasr/denoiser.cpp
@@ -791,7 +791,7 @@ if (TTS_CPP_BUILD_TESTS)
         endif()
     endforeach()
 
-    # QVAC-19557: q8_0 KV-cache regression for the MTL variant.  A quantized KV
+    # q8_0 KV-cache regression for the MTL variant. A quantized KV
     # cache used to SIGABRT on Metal ("unsupported op 'CONT'") via the alignment
     # probe; the dequantizing-cast fix recovers q8 KV on the GPU.  These run the
     # full synth with --kv-cache-type q8_0 and validate the WAV is real audio
@@ -866,7 +866,7 @@ if (TTS_CPP_BUILD_TESTS)
                      --tmp           "${_mtl_out_dir}"
             REQUIRES "${_tcb_t3_mtl_q4_gguf}" "${_tcb_s3gen_mtl_gguf}")
 
-        # QVAC-19557: same EOS round-trip but with a q8_0 KV CACHE (not a quantized
+        # same EOS round-trip but with a q8_0 KV CACHE (not a quantized
         # T3).  The align-probe fix feeds the alignment mul_mat *dequantized* q8
         # keys (ggml_cast), which could shift the argmax/softmax over text columns
         # and thus EOS timing — something the WAV-sanity mtl-synth-q8-* tests can't
@@ -888,7 +888,7 @@ if (TTS_CPP_BUILD_TESTS)
         message(STATUS "tts-cpp: test-eos-roundtrip built but not registered (needs whisper-cli + model + tts-cli)")
     endif()
 
-    # QVAC-21118: chunk-streaming loudness regression.  Drives the Engine API
+    # chunk-streaming loudness regression. Drives the Engine API
     # directly (the path the qvac tts-ggml addon uses): batch vs streaming with
     # a low stream_cfm_steps, asserting the streaming output matches batch
     # loudness and does not clip.  PRE-FIX this FAILS (streaming ~full scale,
@@ -924,7 +924,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-text-split)
     tts_cpp_register_test(test-text-split LABEL "cpu")
 
-    # LavaSR DSP primitives (QVAC-16579): resampler, STFT/ISTFT, Slaney mel,
+    # LavaSR DSP primitives: resampler, STFT/ISTFT, Slaney mel,
     # FastLR crossover merge.  Pure host math (no model / no ggml), compiled
     # straight from the lavasr/dsp sources so it always runs in CI.
     add_executable(test-lavasr-dsp
@@ -937,7 +937,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-lavasr-dsp)
     tts_cpp_register_test(test-lavasr-dsp LABEL "unit")
 
-    # LavaSR enhancer scalar-core parity test (QVAC-16579): numerical parity of
+    # LavaSR enhancer scalar-core parity test: numerical parity of
     # the neural core (mel -> backbone -> spec head -> real/imag) against an
     # onnxruntime golden, plus a finite/length smoke test of the full enhance()
     # pipeline. Pure host math (no ggml); fixtures from
@@ -960,7 +960,7 @@ if (TTS_CPP_BUILD_TESTS)
         ARGS     "${TTS_CPP_TEST_REF_DIR}/lavasr-enhancer"
         REQUIRES "${TTS_CPP_TEST_REF_DIR}/lavasr-enhancer/real.npy")
 
-    # LavaSR enhancer GGUF round-trip (QVAC-16579): load the converted GGUF via
+    # LavaSR enhancer GGUF round-trip: load the converted GGUF via
     # load_enhancer_gguf() + the public tts_cpp::lavasr::Enhancer API, compare
     # the neural core to the onnxruntime golden, AND compare the full
     # enhance(pcm_in) output (resampler + mel + ISTFT + FastLR + neural) against
@@ -976,7 +976,7 @@ if (TTS_CPP_BUILD_TESTS)
         ARGS     "${TTS_CPP_TEST_MODEL_DIR}/lavasr-enhancer.gguf" "${TTS_CPP_TEST_REF_DIR}/lavasr-enhancer"
         REQUIRES "${TTS_CPP_TEST_MODEL_DIR}/lavasr-enhancer.gguf" "${TTS_CPP_TEST_REF_DIR}/lavasr-enhancer/real.npy")
 
-    # LavaSR denoiser GGUF round-trip (QVAC-16579 follow-up): load the converted
+    # LavaSR denoiser GGUF round-trip (follow-up): load the converted
     # GGUF via load_denoiser_gguf() + the public tts_cpp::lavasr::Denoiser API,
     # compare the UL-UNAS neural core (denoiser_net_forward) against the
     # onnxruntime golden (spec_in.npy -> spec_out.npy), and run a full denoise()
@@ -994,7 +994,7 @@ if (TTS_CPP_BUILD_TESTS)
                  "${TTS_CPP_TEST_REF_DIR}/lavasr-denoiser/spec_in.npy"
                  "${TTS_CPP_TEST_REF_DIR}/lavasr-denoiser/pcm_in.npy")
 
-    # QVAC-20979 — voice-clone test harness.
+    # voice-clone test harness.
     #
     # Two header-only, model-free harnesses that every later cloning task builds
     # on: a finite-difference gradient checker (validates future Supertonic
@@ -1032,7 +1032,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-text-encoder-backward)
     tts_cpp_register_test(test-supertonic-text-encoder-backward LABEL "unit")
 
-    # QVAC-20982 — analytic backward of the vector estimator / CFM step
+    # analytic backward of the vector estimator / CFM step
     # (convnext, depthwise conv, layer norm, gelu, rope + style cross-attention,
     # full field and per-step d_in/d_style).  Model-free: every analytic
     # gradient is gradchecked against finite differences via the Task 2 harness,
@@ -1045,7 +1045,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-vector-estimator-backward)
     tts_cpp_register_test(test-supertonic-vector-estimator-backward LABEL "unit")
 
-    # QVAC-20984 — analytic backward of the CAMPPlus speaker encoder (FCM Conv2d
+    # analytic backward of the CAMPPlus speaker encoder (FCM Conv2d
     # head + residual blocks, TDNN, CAM dense-TDNN blocks with context-attention
     # gating and dense concat, statistics pooling, dense head). Model-free: every
     # analytic input-gradient is gradchecked against finite differences via the
@@ -1087,7 +1087,7 @@ if (TTS_CPP_BUILD_TESTS)
         ARGS     "${_tcb_t3_turbo_gguf}" "${_tcb_s3gen_gguf}"
         REQUIRES "${_tcb_t3_turbo_gguf}" "${_tcb_s3gen_gguf}")
 
-    # QVAC-21483 — output-frequency selection on the chatterbox::Engine API
+    # output-frequency selection on the chatterbox::Engine API
     # (batch + streaming + validation).  Uses the multilingual fixtures so it
     # runs anywhere the mtl-synth tests do; auto-disabled when they're absent.
     add_executable(test-output-sample-rate test/test_output_sample_rate.cpp)
@@ -1099,7 +1099,7 @@ if (TTS_CPP_BUILD_TESTS)
         ARGS     "${_tcb_t3_mtl_gguf}" "${_tcb_s3gen_mtl_gguf}"
         REQUIRES "${_tcb_t3_mtl_gguf}" "${_tcb_s3gen_mtl_gguf}")
 
-    # QVAC-21483 — Supertonic sibling of the above: native rate, 16 kHz batch
+    # Supertonic sibling of the above: native rate, 16 kHz batch
     # ratio, construction rejection, streaming result.pcm == concat, and the
     # streaming-equals-whole-buffer-resample batch-exact property.  Gated on the
     # Supertonic GGUF fixture; auto-disabled when it's absent.
@@ -1140,7 +1140,7 @@ if (TTS_CPP_BUILD_TESTS)
         ARGS     "${_tcb_s3gen_mtl_gguf}"
         REQUIRES "${_tcb_s3gen_mtl_gguf}")
 
-    # Streaming GGUF loader parity (QVAC-19557).  Self-contained: writes
+    # Streaming GGUF loader parity. Self-contained: writes
     # its own synthetic GGUF fixture to $TMPDIR, no model download needed.
     add_executable(test-gguf-stream test/test_gguf_stream.cpp)
     target_link_libraries(test-gguf-stream PRIVATE tts-cpp ggml)
@@ -1148,7 +1148,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-gguf-stream)
     tts_cpp_register_test(test-gguf-stream LABEL "unit")
 
-    # KV-cache dtype parse + backend capability probe (QVAC-19557).
+    # KV-cache dtype parse + backend capability probe.
     # Fixture-free: drives chatterbox_kv_type_from_str / resolve_kv_type
     # against a CPU backend (which supports f32/f16/q8_0 flash attention).
     add_executable(test-kv-cache-type test/test_kv_cache_type.cpp)
@@ -1221,7 +1221,7 @@ if (TTS_CPP_BUILD_TESTS)
     add_supertonic_harness(test-supertonic-engine-cycle test/test_supertonic_engine_cycle.cpp)
 
     # ------------------------------------------------------------------
-    # QVAC-19305 — Supertonic 3 fixture suite.
+    # Supertonic 3 fixture suite.
     #
     # The harnesses above are arch-agnostic: they take (MODEL.gguf REF_DIR)
     # and don't care which Supertonic generation produced them.  We re-use
@@ -1364,7 +1364,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-graph-to-graph-blit)
     tts_cpp_register_test(test-supertonic-graph-to-graph-blit LABEL "unit")
 
-    # OpenCL bring-up unit tests (QVAC-18607).  Three CPU-only
+    # OpenCL bring-up unit tests. Three CPU-only
     # parity / structural tests for the dispatch + portable-op
     # primitives.  No GGUF needed; register as "unit" label so a
     # fresh checkout's ctest exercises them.  Links against tts-cpp
@@ -1384,7 +1384,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-portable-ops)
     tts_cpp_register_test(test-supertonic-portable-ops LABEL "unit")
 
-    # QVAC-18605 — CPU-only unit test for the Vulkan-specific
+    # CPU-only unit test for the Vulkan-specific
     # dispatch additions: `backend_is_vk`, `use_native_leaky_relu`,
     # the `supertonic_op_dispatch_scope` mirror for the new flag,
     # and the `supertonic_backend_supports_f16_kv_flash_attn`
@@ -1398,7 +1398,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-vulkan-dispatch)
     tts_cpp_register_test(test-supertonic-vulkan-dispatch LABEL "unit")
 
-    # QVAC-18605 follow-up — process-wide capability-probe cache +
+    # follow-up — process-wide capability-probe cache +
     # F16 mul_mat probe + Q8_0 K/V flash-attn probe regression test.
     # CPU-only; runs on a fresh checkout under `ctest -L unit`.
     add_executable(test-supertonic-capability-cache
@@ -1408,7 +1408,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-capability-cache)
     tts_cpp_register_test(test-supertonic-capability-cache LABEL "unit")
 
-    # QVAC-18605 follow-up — Engine::warm_up + EngineOptions::prewarm_text
+    # follow-up — Engine::warm_up + EngineOptions::prewarm_text
     # API-surface lockdown.  CPU-only compile-time + runtime contract test;
     # the Vulkan-side first-synth-latency reduction is exercised by the
     # fixture-bound integration tests on a Vulkan-capable host.
@@ -1419,7 +1419,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-warm-up-api)
     tts_cpp_register_test(test-supertonic-warm-up-api LABEL "unit")
 
-    # QVAC-18605 round 3 — multi-device Vulkan auto-pick policy
+    # round 3 — multi-device Vulkan auto-pick policy
     # (--vulkan-device -1 → pick device with most free VRAM).
     # CPU-only TDD test for the pure-logic helper; the Vulkan-only
     # plumbing that calls ggml_backend_vk_get_device_memory() per
@@ -1432,7 +1432,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-vulkan-device-select)
     tts_cpp_register_test(test-supertonic-vulkan-device-select LABEL "unit")
 
-    # QVAC-18605 round 6 — F16-weights deny-list API surface
+    # round 6 — F16-weights deny-list API surface
     # (EngineOptions::f16_weights_deny_list + load_supertonic_gguf
     # 7th parameter + 2-arg should_materialise_f16_weight overload).
     # CPU-only compile-time SFINAE + runtime defaults check; the
@@ -1448,7 +1448,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-f16-deny-list-api)
     tts_cpp_register_test(test-supertonic-f16-deny-list-api LABEL "unit")
 
-    # QVAC-18605 round 4 — multi-dtype K/V flash-attention dispatch
+    # round 4 — multi-dtype K/V flash-attention dispatch
     # resolver (`resolve_kv_attn_type`) — pure-logic policy split
     # from the Vulkan-only dispatch site so the behaviour matrix
     # is testable on CPU with synthetic probe inputs.
@@ -1459,7 +1459,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-kv-attn-type)
     tts_cpp_register_test(test-supertonic-kv-attn-type LABEL "unit")
 
-    # QVAC-18605 round 4 — API-surface lockdown for the new
+    # round 4 — API-surface lockdown for the new
     # EngineOptions::kv_attn_type field, supertonic_model field,
     # supertonic_kv_attn_type() thread-local accessor, and the
     # dispatch-scope `prev_kv_attn_type` for RAII teardown.
@@ -1470,7 +1470,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-kv-attn-type-api)
     tts_cpp_register_test(test-supertonic-kv-attn-type-api LABEL "unit")
 
-    # QVAC-19305 — Supertonic v3 language-coverage contract.
+    # Supertonic v3 language-coverage contract.
     # Pins the runtime language validator against the v3 bundle
     # (31 languages + the language-agnostic `na`) shipped in the
     # GGUF `supertonic.languages` array; asserts the built-in
@@ -1485,7 +1485,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-languages)
     tts_cpp_register_test(test-supertonic-languages LABEL "unit")
 
-    # QVAC-18605 round 7 — Vulkan env-var passthrough mechanism
+    # round 7 — Vulkan env-var passthrough mechanism
     # (EngineOptions::vulkan_env_overrides + apply_vulkan_env_overrides
     # public helper).  Tests cover: SFINAE field existence, empty-
     # map noop, single-entry-sets-env, operator-env-wins (set_env_if_unset
@@ -1498,7 +1498,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-vulkan-env-overrides)
     tts_cpp_register_test(test-supertonic-vulkan-env-overrides LABEL "unit")
 
-    # QVAC-18605 round 7 — voice ttl/dp host cache
+    # round 7 — voice ttl/dp host cache
     # (`tts_cpp::supertonic::detail::voice_host_cache`).  Standalone
     # helper extracted from Engine::Impl::synthesize() so the
     # lookup-or-load semantics are testable on CPU without
@@ -1513,7 +1513,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-voice-host-cache)
     tts_cpp_register_test(test-supertonic-voice-host-cache LABEL "unit")
 
-    # QVAC-20978 — external (cloned) voice injection.  The voice-JSON
+    # external (cloned) voice injection. The voice-JSON
     # parser + schema validation run as a model-free unit test (always on
     # a fresh checkout under `ctest -L unit`).  The preset-as-JSON parity
     # check — synthesize with a baked preset by name, then with the same
@@ -1537,7 +1537,7 @@ if (TTS_CPP_BUILD_TESTS)
         ARGS     "${_tcb_super3_gguf}"
         REQUIRES "${_tcb_super3_gguf}")
 
-    # QVAC-18605 round 10 — pointer-compare upload-skip tracker
+    # round 10 — pointer-compare upload-skip tracker
     # (`tts_cpp::supertonic::detail::upload_skip_tracker`).
     # Generalises the F4 pattern from `vector_res_style_qkv_cache`
     # (style_v_in / kctx_in upload-skip) to the front-block /
@@ -1555,7 +1555,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-upload-skip-tracker)
     tts_cpp_register_test(test-supertonic-upload-skip-tracker LABEL "unit")
 
-    # QVAC-18605 round 12 #6 — text-encoder speech-prompted-attention
+    # round 12 #6 — text-encoder speech-prompted-attention
     # GPU bridge.  Master's Metal-port branch built
     # `speech_prompted_merged_cache` (one merged graph for QKV proj +
     # head-split + flash-attn + out-proj) but never wired its run path
@@ -1574,7 +1574,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-text-encoder-gpu-bridge)
     tts_cpp_register_test(test-supertonic-text-encoder-gpu-bridge LABEL "unit")
 
-    # QVAC-18605 round 12 #5 — pinned-host-buffer input allocation
+    # round 12 #5 — pinned-host-buffer input allocation
     # helper.  Round 3 shipped the capability probe but deferred the
     # per-engine input-scratchpad refactor that actually USES the
     # host-pinned buffer to skip ggml-vulkan's internal staging-
@@ -1592,7 +1592,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-pinned-host-buffer)
     tts_cpp_register_test(test-supertonic-pinned-host-buffer LABEL "unit")
 
-    # QVAC-18605 round 13 #1 — input-scratchpad allocator helper
+    # round 13 #1 — input-scratchpad allocator helper
     # that consolidates the pinned-host + default-backend fallback
     # boilerplate round 12 #5 manually inlined at 4 cache sites.
     # Round 13 needs to extend the pattern to 5+ more caches

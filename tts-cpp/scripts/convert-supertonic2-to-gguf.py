@@ -389,7 +389,7 @@ CANONICAL_TO_LOGICAL: dict[str, dict[str, str]] = {
 # into initializers / Constant nodes (so `iter_onnx_tensors` already emits
 # them); in v3 they remain *live* graph outputs and must be materialised by
 # running the input-independent subgraph once at convert time.  Validated
-# input-independent (identical for arbitrary dummy inputs) — see QVAC-19305.
+# input-independent (identical for arbitrary dummy inputs) — see.
 MATERIALIZE_INTERMEDIATES: dict[str, list[str]] = {
     "text_encoder": [
         "/speech_prompted_text_encoder/attention1/tanh/Tanh_output_0",
@@ -731,7 +731,7 @@ def main() -> int:
                     stage_aliases[f"{stage}:{canon_name}"] = f"{stage}:{cand}"
                     break
 
-        # QVAC-19305 — convert-time guarantee that every vector-estimator
+        # convert-time guarantee that every vector-estimator
         # bridge the runtime depends on is resolvable.  The bridge maps each
         # v2 logical id (`onnx::MatMul_<v2id>`) to a weight via its stable
         # canonical (PyTorch) name, and that canonical name is recovered from

@@ -1,4 +1,4 @@
-// QVAC-19305 — Supertonic v3 language-coverage tests.
+// Supertonic v3 language-coverage tests.
 //
 // v3 widened the supported-language set from the v1/v2 5-language
 // bundle (en, ko, es, pt, fr) to a 31-language bundle plus the

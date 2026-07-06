@@ -1,6 +1,6 @@
 #pragma once
 
-// Streaming GGUF tensor-data access (QVAC-19557).
+// Streaming GGUF tensor-data access.
 //
 // gguf_init_from_file(no_alloc=false) materialises the ENTIRE tensor-data
 // section of the file in host memory (one I8 blob tensor inside the

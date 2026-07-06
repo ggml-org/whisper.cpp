@@ -360,7 +360,7 @@ ggml_type chatterbox_resolve_kv_type(ggml_backend_t backend, ggml_type requested
 
     // ggml-vulkan's supports_op ADVERTISES quantized K/V flash-attention
     // but the NV_coopmat2 kernel faults at compute on quantized K/V:
-    // toggle-confirmed in CI (QVAC-19557) — a q8_0 KV cache SIGSEGVs the
+    // toggle-confirmed in CI — a q8_0 KV cache SIGSEGVs the
     // chatterbox GPU smoke on NVIDIA coopmat2 runners where the identical
     // f32 run passes.  MoltenVK (scalar FA, no coopmat) runs q8_0 fine, so
     // this is specific to the coopmat2 dequant-in-shader path.  The probe
@@ -379,7 +379,7 @@ ggml_type chatterbox_resolve_kv_type(ggml_backend_t backend, ggml_type requested
     // reports both the q8_0 flash-attn and the align-probe's strided q8->f32
     // cast as supported, but the driver SIGSEGVs on the quantized cache at load
     // (clEnqueueWriteBuffer inside ChatterboxEngine construction).  Device-farm
-    // confirmed (QVAC-19557): a q8_0 KV cache crashes the multilingual GPU load
+    // confirmed: a q8_0 KV cache crashes the multilingual GPU load
     // on a Samsung Galaxy S25 Ultra (Adreno) where the identical f16/f32 cache
     // passes, and the same model loads fine on a Pixel 9 (Mali-Vulkan, force-f32'd
     // above).  The probe below can't catch this, so force quantized K/V to f32 on

@@ -1,6 +1,6 @@
 #pragma once
 
-// QVAC-20978 — external voice injection.
+// external voice injection.
 //
 // A Supertonic "voice" is just two small float tensors: `style_ttl`
 // (timbre / identity, e.g. [1,50,256]) and `style_dp` (rhythm / pacing,

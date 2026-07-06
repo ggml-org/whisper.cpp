@@ -1,4 +1,4 @@
-// QVAC-18605 round 6 — CPU-only TDD test for the F16-weights
+// round 6 — CPU-only TDD test for the F16-weights
 // deny-list API surface.
 //
 // Round 6 layers a user-overridable extra deny-list on top of

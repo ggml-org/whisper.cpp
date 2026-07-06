@@ -1,4 +1,4 @@
-// QVAC-18605 round 4 — CPU-only TDD test for the multi-dtype
+// round 4 — CPU-only TDD test for the multi-dtype
 // K/V flash-attention dispatch resolver.
 //
 // Round 4 generalises the round-1 `use_f16_attn` boolean (F16 vs

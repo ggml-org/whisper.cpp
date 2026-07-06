@@ -1,5 +1,5 @@
 #include "tts-cpp/supertonic/engine.h"
-#include "voice_features.h"  // kOutputSampleRateMin / kOutputSampleRateMax (QVAC-21483)
+#include "voice_features.h"  // kOutputSampleRateMin / kOutputSampleRateMax
 
 #include <algorithm>
 #include <cmath>
@@ -122,7 +122,7 @@ int main(int argc, char ** argv) {
     tts_cpp::supertonic::EngineOptions opts;
     std::string text;
     std::string out;
-    // QVAC-18605 round 4 — wrap arg parse in try/catch so invalid
+    // round 4 — wrap arg parse in try/catch so invalid
     // values (`--kv-attn-type bogus`, `--vulkan-device abc`, etc.)
     // surface as a clean `error: ...` line + exit 2 instead of an
     // uncaught-exception backtrace.  Same exit-code convention as
@@ -145,7 +145,7 @@ int main(int argc, char ** argv) {
         else if (arg == "--threads") opts.n_threads = std::stoi(next("--threads"));
         else if (arg == "--n-gpu-layers") opts.n_gpu_layers = std::stoi(next("--n-gpu-layers"));
         else if (arg == "--output-sample-rate") {
-            // QVAC-21483 — validate at parse time (mirrors chatterbox_cli /
+            // validate at parse time (mirrors chatterbox_cli /
             // tts-cli) so a bad rate fails fast with a friendly message rather
             // than aborting later in validate_output_sample_rate at ctor.
             opts.output_sample_rate = std::stoi(next("--output-sample-rate"));

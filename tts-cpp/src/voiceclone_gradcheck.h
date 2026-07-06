@@ -1,7 +1,7 @@
 #pragma once
 
 // Finite-difference gradient checker for the voice-clone inverse-optimization
-// stack (QVAC-20979).
+// stack.
 //
 // The voice-cloning method we are building extracts a Supertonic style vector
 // (`style_ttl`, see the QVAC voice-clone design / Kim, "Extracting Voice Styles

@@ -81,7 +81,7 @@ struct EngineOptions {
     // Empty / zero values use the defaults stored in the GGUF metadata.
     std::string voice;
 
-    // QVAC-20978 — external (cloned) voice injection.  A Supertonic voice
+    // external (cloned) voice injection. A Supertonic voice
     // is just two small float tensors (`style_ttl` timbre + `style_dp`
     // pacing); the baked-in presets are these tensors stored in the GGUF.
     // When an external voice is supplied here it overrides the `voice`
@@ -116,7 +116,7 @@ struct EngineOptions {
     int   n_threads     = 0;
     int   n_gpu_layers  = 0;
 
-    // QVAC-21483 — desired output sample rate in Hz.  Supertonic natively
+    // desired output sample rate in Hz. Supertonic natively
     // emits at the model's metadata rate (typically 44.1 kHz); when this is a
     // positive rate other than the native one the engine resamples the final
     // PCM (Kaiser-windowed sinc) and reports it on
@@ -141,7 +141,7 @@ struct EngineOptions {
     // `ggml-vulkan.cpp:GGML_OP_FLASH_ATTN_EXT`).
     int f16_attn = -1;
 
-    // QVAC-18605 — Vulkan adapter index.  Passed verbatim to
+    // Vulkan adapter index. Passed verbatim to
     // `ggml_backend_vk_init(idx)` when the build is compiled with
     // `GGML_VULKAN=ON` and `n_gpu_layers > 0`.  Range-checked
     // against `ggml_backend_vk_get_device_count()` at load; an
@@ -164,7 +164,7 @@ struct EngineOptions {
     // the storage type of all matmul weights uniformly.
     int f16_weights = -1;
 
-    // QVAC-18605 round 6 — extra deny-list for F16 weight
+    // round 6 — extra deny-list for F16 weight
     // materialization, layered ON TOP of the curated allow-list
     // in `should_materialise_f16_weight()`.  Each entry is a
     // substring; if ANY non-empty entry is found inside a
@@ -185,7 +185,7 @@ struct EngineOptions {
     // operator config).  No effect when `f16_weights == 0`.
     std::vector<std::string> f16_weights_deny_list;
 
-    // QVAC-18605 round 4 — multi-dtype K/V flash-attention dispatch
+    // round 4 — multi-dtype K/V flash-attention dispatch
     // for the vector estimator's attention sites.  Generalises the
     // round-1 `f16_attn` boolean (F16 vs F32 only) to:
     //
@@ -310,7 +310,7 @@ struct EngineOptions {
     int stream_chunk_tolerance_pct = 20;
     int stream_min_chunk_tokens    = 30;
 
-    // QVAC-18605 follow-up — first-synth-latency pre-warming.
+    // follow-up — first-synth-latency pre-warming.
     //
     // When non-empty, the Engine ctor invokes `warm_up(prewarm_text)`
     // immediately after the GGUF load + voice validation, running one
@@ -332,7 +332,7 @@ struct EngineOptions {
     // Default empty (no pre-warming).
     std::string prewarm_text;
 
-    // QVAC-18605 round 7 — Vulkan env-var passthrough.
+    // round 7 — Vulkan env-var passthrough.
     //
     // Applied to the process environment via `set_env_if_unset`
     // semantics just before `init_supertonic_backend()` runs.
@@ -417,7 +417,7 @@ public:
     // estimator loop (one step is the worst-case cancel latency).
     void cancel();
 
-    // QVAC-18605 follow-up — first-synth-latency pre-warming.
+    // follow-up — first-synth-latency pre-warming.
     //
     // Runs one throwaway synth on `text` to force every per-stage
     // GPU graph cache to populate and every Vulkan / OpenCL shader

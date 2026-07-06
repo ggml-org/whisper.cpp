@@ -80,7 +80,7 @@ not break:
    generation as no-longer-alive and the skip-and-leak path in
    `supertonic_safe_gallocr_free` kicks in to keep us from
    crashing.
-3. `ggml_backend_sched_free(model.sched)` — the QVAC-19254
+3. `ggml_backend_sched_free(model.sched)` — the
    scheduler holds non-owning pointers to the backends, must die
    first.
 4. `ggml_backend_buffer_free(model.buffer_w_extra)` /

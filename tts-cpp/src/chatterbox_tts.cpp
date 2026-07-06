@@ -333,7 +333,7 @@ static model_ctx load_s3gen_gguf(const std::string & path, int n_gpu_layers, boo
     // full ~1 GB data section is never staged in host memory.  This load
     // runs on the s3gen_preload background thread while the T3 weights are
     // already resident, so the staging blob used to land right on the
-    // process's peak footprint (QVAC-19557, see gguf_stream.h).
+    // process's peak footprint (see gguf_stream.h).
     ggml_context * tmp_ctx = nullptr;
     gguf_init_params gp = { /*.no_alloc=*/ true, /*.ctx=*/ &tmp_ctx };
     gguf_context * g = gguf_init_from_file(path.c_str(), gp);
@@ -2795,7 +2795,7 @@ int s3gen_synthesize_to_wav(
     std::vector<float> t_span;
     int cfm_steps = opts.cfm_steps > 0 ? opts.cfm_steps :
                           (meanflow ? 2 : m.n_timesteps);
-    // QVAC-21118: low CFM step counts (1-2) are a meanflow-only (Turbo)
+    // low CFM step counts (1-2) are a meanflow-only (Turbo)
     // streaming optimisation.  The Multilingual model uses standard CFM with a
     // cosine schedule that needs its full step budget (n_timesteps); a lower
     // count under-integrates the flow ODE.  The batch path tolerates it, but

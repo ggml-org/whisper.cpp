@@ -55,7 +55,7 @@ const char * dev_reg_name(ggml_backend_dev_t dev) {
     return reg ? ggml_backend_reg_name(reg) : "";
 }
 
-// QVAC-18605 — Vulkan multi-adapter pick. Pure logic on the two
+// Vulkan multi-adapter pick. Pure logic on the two
 // per-device vectors so the policy stays unit-testable (a richer
 // copy lives in `tts_cpp::supertonic::detail::resolve_vulkan_device_index`
 // with its own DocTest harness; this in-process copy is kept lean so
@@ -378,7 +378,7 @@ ggml_backend_t init_gpu_backend(int n_gpu_layers,
     std::vector<Cand> opencl_other; // Non-Adreno OpenCL (e.g. desktop)
     int max_adreno_version = -1;
 
-    // QVAC-18605 — track every visible Vulkan adapter so we can apply
+    // track every visible Vulkan adapter so we can apply
     // the round-12 device-selection policy (vulkan_device index +
     // free-VRAM auto-pick with UMA bias) before draining the bucket.
     std::vector<Cand>   vulkan_devs;
@@ -503,7 +503,7 @@ ggml_backend_t init_gpu_backend(int n_gpu_layers,
         return nullptr;
     };
 
-    // QVAC-18605 — when a `vulkan_device` override or auto-pick is
+    // when a `vulkan_device` override or auto-pick is
     // requested AND at least one Vulkan adapter is visible, resolve
     // the chosen Vulkan adapter and move it to the front of
     // `other_gpu` so `try_init` picks it first.

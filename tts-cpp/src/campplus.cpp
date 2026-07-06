@@ -32,7 +32,7 @@ static bool campplus_embed_ggml(const std::vector<float> & fbank_t_by_c, int T,
 // the loader helpers below pull tensor payloads through.  Replaces the old
 // no_alloc=false staging ctx that materialised the whole ~1 GB s3gen data
 // section in host memory just to memcpy the CAMPPlus slice out of it
-// (QVAC-19557, see gguf_stream.h).
+// (see gguf_stream.h).
 struct gguf_src {
     ggml_context * meta;
     tts_cpp::detail::gguf_stream_reader * rd;

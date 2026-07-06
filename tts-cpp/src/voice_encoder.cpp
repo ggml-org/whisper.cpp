@@ -37,7 +37,7 @@ bool voice_encoder_load(const std::string & t3_gguf_path,
     // whole ~0.5-1 GB T3 data section in host memory while the T3 backend
     // weights are ALREADY resident (this runs from bake_voice_conditioning
     // right after load_model_gguf) — pure peak-footprint waste
-    // (QVAC-19557, see gguf_stream.h).
+    // (see gguf_stream.h).
     ggml_context * tmp_ctx = nullptr;
     gguf_init_params gp = { /*.no_alloc=*/ true, /*.ctx=*/ &tmp_ctx };
     gguf_context * g = gguf_init_from_file(t3_gguf_path.c_str(), gp);

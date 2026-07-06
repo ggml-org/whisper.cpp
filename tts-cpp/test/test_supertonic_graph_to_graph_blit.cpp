@@ -264,7 +264,7 @@ int main() {
                                                               // Q post-RoPE tensor (round 8 GPU
                                                               // bridge consumer).
     test_shape("attn0_q_rope_L1",      256,   1, 0xA11A2u);   // L=1 trip-wire
-    // QVAC-18605 round 8 — front-block attn0 K / V shape
+    // round 8 — front-block attn0 K / V shape
     // (width=256, kv_len=text_len).  Same layout as the round-1
     // group attentions but different ne1 dimension.  Locks in the
     // blit primitive for the K / V handles the front-block GPU
@@ -272,7 +272,7 @@ int main() {
     test_shape("attn0_kv_text_len32",  256,  32, 0xA11A4u);   // front-block K / V @ text_len=32
     test_shape("attn0_kv_text_len50",  256,  50, 0xA11A5u);   // front-block K / V @ text_len=50
 
-    // QVAC-18605 round 9 — style flash-attn K / V / Q shapes for
+    // round 9 — style flash-attn K / V / Q shapes for
     // the 4 res-style sites (style0 + g1_style + g2_style +
     // g3_style).  Style attention runs at n_heads=2, head_dim=128
     // (vs n_heads=4, head_dim=64 for the text attentions above)

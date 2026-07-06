@@ -1,4 +1,4 @@
-// Unit test for src/gguf_stream.h (QVAC-19557).
+// Unit test for src/gguf_stream.h.
 //
 // Verifies that gguf_stream_reader produces byte-identical tensor payloads
 // to the legacy no_alloc=false staging path, without materialising the

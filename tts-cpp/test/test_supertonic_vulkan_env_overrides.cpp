@@ -1,4 +1,4 @@
-// QVAC-18605 round 7 — CPU-only TDD test for the Vulkan env-var
+// round 7 — CPU-only TDD test for the Vulkan env-var
 // passthrough mechanism.
 //
 // Background

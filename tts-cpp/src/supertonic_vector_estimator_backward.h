@@ -15,7 +15,7 @@
 // depthwise op, and the attention path).  The math here is the standard
 // conv / layer-norm / attention backward, computed in double for a
 // well-conditioned reference, validated component-wise and per-step against
-// finite differences by the voiceclone gradcheck harness (Task 2 / QVAC-20979).
+// finite differences by the voiceclone gradcheck harness (Task 2).
 //
 // All functions are pure: they operate on flat std::vector<double> buffers and
 // explicit dimensions, with no dependency on `supertonic_model`.  A thin adapter

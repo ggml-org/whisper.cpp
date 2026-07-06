@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Golden fixtures for the FULL LavaSR denoiser pipeline (QVAC-16579).
+"""Golden fixtures for the FULL LavaSR denoiser pipeline.
 
 The spec-level fixtures (dump-lavasr-denoiser-fixtures.py) only exercise the
 UL-UNAS neural core on a pre-computed [1,2,63,257] spectrogram. This script

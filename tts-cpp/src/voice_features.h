@@ -43,7 +43,7 @@ std::vector<float> resample_sinc(const std::vector<float> & in,
                                  int taps_half = 16);
 
 // -----------------------------------------------------------------------------
-// Output-frequency selection (QVAC-21483)
+// Output-frequency selection
 // -----------------------------------------------------------------------------
 
 // Supported explicit output sample-rate window, in Hz.  A value of 0 is also
@@ -67,7 +67,7 @@ void validate_output_sample_rate(int sr, const char * who = "tts-cpp");
 std::vector<float> resample_for_output(std::vector<float> pcm,
                                        int native_sr, int target_sr);
 
-// Stateful streaming output-frequency converter (QVAC-21483).
+// Stateful streaming output-frequency converter.
 //
 // `resample_sinc` is stateless and whole-buffer: resampling each streaming
 // chunk independently restarts the output grid at t=0 and truncates the sinc

@@ -1,4 +1,4 @@
-// QVAC-18605 round 12 #5 — CPU-only TDD test for the pinned-host-
+// round 12 #5 — CPU-only TDD test for the pinned-host-
 // buffer input-allocation helper.
 //
 // Background

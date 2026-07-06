@@ -945,7 +945,7 @@ void build_speech_prompted_merged_cache(speech_prompted_merged_cache & cache,
     ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
 }
 
-// QVAC-18605 round 12 #6 — run path for the merged graph.
+// round 12 #6 — run path for the merged graph.
 //
 // Drop-in replacement for the legacy two-cache code path inside
 // `speech_prompted_attention_ggml`.  Caller is responsible for
@@ -1065,7 +1065,7 @@ void speech_prompted_attention_ggml(const supertonic_model & m, int idx,
     const std::string o_w = p + ".out_fc.linear.weight";
     const std::string tanh_k_src = "text_encoder:/speech_prompted_text_encoder/attention" + std::to_string(attn_num) + "/tanh/Tanh_output_0";
 
-    // QVAC-18605 round 12 #6 — merged-cache fast path on non-CPU
+    // round 12 #6 — merged-cache fast path on non-CPU
     // backends.  Eliminates 5 sync points (2 GPU→host downloads +
     // 3 host→GPU uploads) and all host-side Q/V/K head-split pack
     // work per call.  Two layers per synth = 10 sync points / synth

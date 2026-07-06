@@ -1,4 +1,4 @@
-// QVAC-18605 — CPU-only unit test for the Vulkan-specific dispatch
+// CPU-only unit test for the Vulkan-specific dispatch
 // additions landed alongside the Vulkan bring-up:
 //
 //   1. `supertonic_model::backend_is_vk` — informational flag set

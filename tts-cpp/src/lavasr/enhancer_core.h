@@ -12,7 +12,7 @@
 //              mag=clip(exp(.),max=clip_max); real=mag*cos(phase); imag=mag*sin(phase)
 //
 // The enhancer is tiny (512-dim, 8 blocks) so the scalar path is already very
-// fast — this matches the "CPU only, lightweight" target for QVAC-16579 and
+// fast — this matches the "CPU only, lightweight" target and
 // mirrors the supertonic vector-estimator's scalar reference path.
 //
 // Weights are held orientation-matched to the GGUF produced by

@@ -636,7 +636,7 @@ N=6 is too aggressive (cosine 0.990 right at the threshold, PCM cosine
 drops to 0.88).  Streaming chunks ignore this flag and use
 `--stream-cfm-steps` instead.
 
-`--output-sample-rate HZ` (QVAC-21483) selects the output frequency.  The
+`--output-sample-rate HZ` selects the output frequency. The
 pipeline natively emits 24 kHz (Chatterbox) / the model's metadata rate
 (Supertonic); pass a positive rate in `8000..192000` to resample the final
 PCM with the in-tree Kaiser-windowed sinc resampler before it's written or

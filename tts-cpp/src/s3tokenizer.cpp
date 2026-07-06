@@ -38,7 +38,7 @@ bool s3tokv2_load(const std::string & path, s3tokv2_weights & w)
 {
     // no_alloc=true + streamed reads: the tokenizer weights are a small
     // slice of the s3gen GGUF; staging the whole ~1 GB data section just
-    // to memcpy them out was pure peak-footprint waste (QVAC-19557, see
+    // to memcpy them out was pure peak-footprint waste (see
     // gguf_stream.h).
     ggml_context * tmp = nullptr;
     gguf_init_params gp = { /*.no_alloc=*/ true, /*.ctx=*/ &tmp };

@@ -1,6 +1,6 @@
 #pragma once
 
-// Public LavaSR denoiser API — QVAC-16579 follow-up (denoiser stage).
+// Public LavaSR denoiser API — follow-up (denoiser stage).
 //
 // Mirrors the shipped enhancer (tts-cpp/lavasr/enhancer.h): a pure-CPU scalar
 // forward of the UL-UNAS neural denoiser, with ggml used only to parse the GGUF.

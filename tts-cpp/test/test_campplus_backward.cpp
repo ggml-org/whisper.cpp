@@ -1,5 +1,5 @@
 // Gradcheck self-tests for the CAMPPlus speaker-encoder backward (voice-clone
-// ticket "GGML backward pass: CAMPPlus speaker encoder", QVAC-20984).  Pure host
+// ticket "GGML backward pass: CAMPPlus speaker encoder"). Pure host
 // logic, model-free: every analytic input-gradient is checked component-wise
 // against a central finite-difference numeric gradient of the matching forward,
 // using the Task 2 gradcheck harness.  Runs in the always-on `unit` ctest tier.

@@ -171,7 +171,7 @@ void test_predicate_edges() {
     CHECK(!should_materialise_f16_weight("vocoder:tts.ae.decoder.convnext.weight_stats"));
 }
 
-// QVAC-18605 round 6 — TDD test for the 2-arg
+// round 6 — TDD test for the 2-arg
 // `should_materialise_f16_weight(name, extra_deny_substrings)`
 // overload.  Lets operators force-keep specific tensors as F32
 // even when the auto/curated allow-list would have promoted them
@@ -315,7 +315,7 @@ int main(int argc, char ** argv) {
     test_predicate_positives();
     test_predicate_negatives();
     test_predicate_edges();
-    // QVAC-18605 round 6 — 2-arg overload tests (TDD: these are
+    // round 6 — 2-arg overload tests (TDD: these are
     // the new symbol; whole block must fail compilation before
     // implementation, then pass after).
     test_predicate_deny_list_empty_passthrough();

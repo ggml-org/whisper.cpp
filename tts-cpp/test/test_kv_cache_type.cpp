@@ -1,4 +1,4 @@
-// KV-cache dtype selection + capability-probe coverage (QVAC-19557).
+// KV-cache dtype selection + capability-probe coverage.
 //
 // Exercises the two pure helpers that gate the chatterbox T3 KV-cache
 // dtype, without needing a model fixture:
@@ -66,7 +66,7 @@ int main() {
     CHECK(chatterbox_resolve_kv_type(cpu, GGML_TYPE_Q8_0, head_dim, n_head, n_kv_head)
               == GGML_TYPE_Q8_0, "cpu retains q8_0 KV");
 
-    // ---- MTL resolve (QVAC-19557): also probes the align-probe cast(q8->f32) ----
+    // ---- MTL resolve: also probes the align-probe cast(q8->f32) ----
     // The CPU backend supports the strided q8->f32 cast, so q8 is retained; a
     // backend lacking that cast kernel would be downgraded to f32 (the branch
     // that stops the single-backend MTL graph SIGABRT'ing at compute).  f32

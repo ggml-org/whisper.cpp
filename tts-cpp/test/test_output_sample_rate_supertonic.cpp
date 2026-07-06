@@ -1,4 +1,4 @@
-// QVAC-21483 — end-to-end coverage of output-frequency selection on the
+// end-to-end coverage of output-frequency selection on the
 // supertonic::Engine API.  Sibling of test_output_sample_rate.cpp (which covers
 // chatterbox::Engine) so both engines stay symmetric as the feature evolves.
 // Gated on the Supertonic GGUF fixture; auto-disabled when it's absent.
@@ -17,7 +17,7 @@
 //     (seams + length drift); test_resample proves the same property model-free.
 
 #include "tts-cpp/supertonic/engine.h"
-#include "voice_features.h"  // resample_for_output (QVAC-21483)
+#include "voice_features.h"  // resample_for_output
 
 #include <cmath>
 #include <cstddef>

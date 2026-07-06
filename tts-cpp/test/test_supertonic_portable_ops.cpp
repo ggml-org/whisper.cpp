@@ -207,7 +207,7 @@ void test_dispatch_actually_routes(ggml_backend_t cpu) {
     cpu_model.use_native_leaky_relu = true;
     supertonic_model gpu_model;
     gpu_model.backend_is_cpu = false;
-    // QVAC-18605 — explicit "no native LEAKY_RELU" GPU model so the
+    // explicit "no native LEAKY_RELU" GPU model so the
     // decomposition branch fires.  Vulkan / Metal / CUDA models pick
     // the fused builtin via `use_native_leaky_relu = true` (set at
     // load time by `backend_supports_native_leaky_relu`); this test

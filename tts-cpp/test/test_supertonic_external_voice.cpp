@@ -1,4 +1,4 @@
-// QVAC-20978 — external voice injection.
+// external voice injection.
 //
 // Two modes, selected by argv:
 //

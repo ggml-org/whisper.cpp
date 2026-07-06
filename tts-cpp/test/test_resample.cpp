@@ -2,7 +2,7 @@
 // in memory, round-trips it through 24 kHz -> 48 kHz -> 24 kHz, and reports
 // SNR in the middle of the buffer (well past the filter transient).
 //
-// Also covers the QVAC-21483 output-frequency helpers layered on top of
+// Also covers the output-frequency helpers layered on top of
 // resample_sinc: validate_output_sample_rate (bounds) and resample_for_output
 // (the "0 / native == passthrough, otherwise resample" engine policy).
 
@@ -14,7 +14,7 @@
 #include <stdexcept>
 #include <vector>
 
-// --- QVAC-21483: output-frequency helper coverage --------------------------
+// --- output-frequency helper coverage --------------------------
 
 static int g_failures = 0;
 #define CHECK(cond, msg) do {                                            \
@@ -29,7 +29,7 @@ static bool validate_throws(int sr) {
 }
 
 static void test_output_helpers() {
-    std::printf("\nQVAC-21483 output-frequency helpers:\n");
+    std::printf("\noutput-frequency helpers:\n");
 
     // validate_output_sample_rate: 0 (native) + the documented window pass;
     // sub-floor / super-ceiling / negative throw.
@@ -70,7 +70,7 @@ static void test_output_helpers() {
     CHECK(up.size() == expect_up, "44.1k->48k output length matches ratio");
 }
 
-// --- QVAC-21483: stateful streaming resampler ------------------------------
+// --- stateful streaming resampler ------------------------------
 
 // Stream `in` through an OutputResampler, cutting it into chunks whose sizes
 // cycle through `sizes`; `trim` samples are dropped from the very first chunk to
@@ -100,7 +100,7 @@ static std::vector<float> stream_all(const std::vector<float> & in,
 }
 
 static void test_streaming_resampler() {
-    std::printf("\nQVAC-21483 streaming resampler (batch-exact, seam-free):\n");
+    std::printf("\nstreaming resampler (batch-exact, seam-free):\n");
 
     // Broadband signal with energy up near the 24 kHz Nyquist, so any per-chunk
     // seam (window truncation / fractional-phase reset / length drift) would

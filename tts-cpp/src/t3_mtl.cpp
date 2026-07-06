@@ -719,7 +719,7 @@ ggml_tensor * build_llama_block(ggml_context * ctx, ggml_cgraph * gf,
             // would produce a quantized CONT, which ggml-metal can't encode (no
             // quantized CONT kernel) — it SIGABRTs the whole decode.  ggml_cast
             // to f32 is a dequantizing copy that Metal *does* support for a
-            // strided quantized view (QVAC-19557), and for an f32/f16 cache it
+            // strided quantized view, and for an f32/f16 cache it
             // degrades to a cheap cont/upcast.  This slice is tiny (HD × n_text
             // for one head) and off the hot path, so the dequant cost is
             // negligible.
@@ -1837,7 +1837,7 @@ bool load_model_gguf_mtl(const std::string & path,
         // kv_layer_elems * sizeof(float).
         // Fall back to F32 KV if the resolved backend can't run flash
         // attention with the requested quantized/f16 K/V.
-        // QVAC-19557: a quantized (q8_0) KV cache used to SIGABRT on Metal
+        // a quantized (q8_0) KV cache used to SIGABRT on Metal
         // ("unsupported op 'CONT'").  The cause was NOT flash-attention (which
         // reads the q8 strided cache fine on Metal) but the per-(layer,head)
         // alignment probe in build_llama_block, which ggml_cont'd a strided view
@@ -1858,7 +1858,7 @@ bool load_model_gguf_mtl(const std::string & path,
         // M3 Ultra (Q4_0 502 → 507 ms; ggml-metal's flash-attn already
         // runs its matmul at F16 internally regardless of storage dtype).
         // The host opts into f16 / q8_0 via EngineOptions::kv_cache_type
-        // when memory matters more than bit-exactness (QVAC-19557): the
+        // when memory matters more than bit-exactness: the
         // token-major slab layout in build_llama_block keeps the per-step
         // append contiguous so ggml_cpy converts/quantises on write.
         model.memory_k = ggml_new_tensor_1d(model.ctx_kv, hp.kv_type, kv_elements_b2);

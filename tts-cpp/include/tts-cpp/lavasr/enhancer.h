@@ -1,6 +1,6 @@
 #pragma once
 
-// Public LavaSR enhancer API (QVAC-16579).
+// Public LavaSR enhancer API.
 //
 // Opt-in neural speech enhancement applied to a synthesized PCM signal:
 // bandwidth-extends the engine output to 48 kHz using the LavaSR Vocos

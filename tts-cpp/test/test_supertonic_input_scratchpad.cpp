@@ -1,4 +1,4 @@
-// QVAC-18605 round 13 #1 — CPU-only TDD test for the
+// round 13 #1 — CPU-only TDD test for the
 // `alloc_input_scratchpad_or_throw` helper.
 //
 // Background

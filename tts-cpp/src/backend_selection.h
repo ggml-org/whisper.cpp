@@ -57,7 +57,7 @@ void ensure_backends_loaded();
 // errors.
 //
 // `vulkan_device` selects which Vulkan adapter to prefer when more
-// than one is visible in the registry (QVAC-18605 round 3 / 12):
+// than one is visible in the registry (round 3 / 12):
 //   - 0 (default): first Vulkan adapter in registry order.
 //   - N > 0      : the Nth Vulkan adapter (0-indexed); throws on out
 //                  of range so a CLI typo fails loud instead of

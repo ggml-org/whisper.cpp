@@ -1,4 +1,4 @@
-// Forward-parity check for the CAMPPlus backward module (QVAC-20984).
+// Forward-parity check for the CAMPPlus backward module.
 //
 // The gradcheck self-test (test_campplus_backward.cpp) validates the analytic
 // backward against finite differences of the SAME double forward. That proves

@@ -1,4 +1,4 @@
-// LavaSR denoiser GGUF round-trip parity test (QVAC-16579 follow-up).
+// LavaSR denoiser GGUF round-trip parity test (follow-up).
 //
 // Loads the converted denoiser GGUF, runs the UL-UNAS neural core
 // (denoiser_net_forward) on the onnxruntime golden input and compares against
