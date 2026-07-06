@@ -70,6 +70,29 @@ public:
     bool to_backend(const char * name, ggml_tensor * dst) {
         size_t nbytes = 0;
         if (!locate(name, ggml_nbytes(dst), nbytes)) return false;
+
+        // Quantized tensors must be uploaded in a SINGLE whole-tensor call.
+        // The OpenCL backend's Q4_0/Q8_0 set_tensor path rebuilds a struct-of-
+        // arrays (scale/quant) layout from the ENTIRE tensor and ignores the
+        // (offset, size) window — it reads ggml_nbytes(dst) from `data`
+        // regardless of `size` (unlike the plain path, which honours it). A
+        // chunked partial upload therefore makes it read past the end of the
+        // CHUNK-sized scratch; on Adreno that copy lands straight in GPU shared
+        // memory and SIGSEGVs in the driver at model load (QVAC-19557). Upload
+        // quantized weights whole (peak overhead = largest quantized tensor,
+        // still far below the old full-file staging) and keep chunk streaming
+        // for f32/f16, where every backend honours (offset, size).
+        if (ggml_is_quantized(dst->type)) {
+            scratch_.resize(nbytes);
+            if (nbytes != 0 && std::fread(scratch_.data(), 1, nbytes, f_) != nbytes) {
+                std::fprintf(stderr, "gguf_stream_reader: short read on tensor '%s' "
+                             "(%zu bytes)\n", name, nbytes);
+                return false;
+            }
+            ggml_backend_tensor_set(dst, scratch_.data(), 0, nbytes);
+            return true;
+        }
+
         scratch_.resize(std::min(nbytes, (size_t) CHUNK));
         size_t done = 0;
         while (done < nbytes) {

@@ -1932,29 +1932,36 @@ bool load_model_gguf_mtl(const std::string & path,
             // equality guard above implies wq/wk/wv have identical sizes
             // today, but max over all three so a future shape divergence
             // can't silently truncate a per-layer copy.
+            // Assemble each stacked wqkv fully in host scratch, then upload it
+            // in a SINGLE whole-tensor set_tensor. The OpenCL Q4_0 SOA path
+            // rebuilds the struct-of-arrays (scale/quant) layout from the
+            // ENTIRE tensor and ignores the (offset, size) window — it reads
+            // ggml_nbytes(dst) from `data` regardless of `size`. Writing the
+            // three matrices with per-Q/K/V partial set_tensor calls therefore
+            // made it read past the end of the single-matrix scratch and
+            // SIGSEGV on Adreno at chatterbox-mtl load (QVAC-19557). Q4_0 rows
+            // are M-major and packed contiguously, so concatenating wq|wk|wv
+            // bytes is exactly the wqkv layout.
             size_t scratch_bytes = 0;
             for (int i = 0; i < hp.n_layer; ++i) {
                 auto & l = model.layers_mtl[i];
                 if (!l.wqkv) continue;
-                scratch_bytes = std::max({scratch_bytes,
-                                          ggml_nbytes(l.wq),
-                                          ggml_nbytes(l.wk),
-                                          ggml_nbytes(l.wv)});
+                scratch_bytes = std::max(scratch_bytes, ggml_nbytes(l.wqkv));
             }
             std::vector<char> scratch(scratch_bytes);
             for (int i = 0; i < hp.n_layer; ++i) {
                 auto & l = model.layers_mtl[i];
                 if (!l.wqkv) continue;
                 size_t off = 0;
-                auto copy_into = [&](ggml_tensor * src, ggml_tensor * dst) {
+                auto copy_into = [&](ggml_tensor * src) {
                     const size_t nb = ggml_nbytes(src);
-                    ggml_backend_tensor_get(src, scratch.data(), 0, nb);
-                    ggml_backend_tensor_set(dst, scratch.data(), off, nb);
+                    ggml_backend_tensor_get(src, scratch.data() + off, 0, nb);
                     off += nb;
                 };
-                copy_into(l.wq, l.wqkv);
-                copy_into(l.wk, l.wqkv);
-                copy_into(l.wv, l.wqkv);
+                copy_into(l.wq);
+                copy_into(l.wk);
+                copy_into(l.wv);
+                ggml_backend_tensor_set(l.wqkv, scratch.data(), 0, off);
             }
         }
 
