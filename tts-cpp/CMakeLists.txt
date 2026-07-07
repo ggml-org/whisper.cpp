@@ -260,6 +260,7 @@ set(TTS_CPP_LIB_SOURCES
     src/lavasr/dsp/fastlr_merge.cpp
     src/lavasr/enhancer_core.cpp
     src/lavasr/enhancer.cpp
+    src/lavasr/enhancer_ggml.cpp
     src/lavasr/enhancer_gguf.cpp
     src/lavasr/enhancer_api.cpp
     # LavaSR denoiser stage (follow-up) — UL-UNAS neural denoiser
@@ -1030,6 +1031,23 @@ if (TTS_CPP_BUILD_TESTS)
         LABEL    "fixture"
         ARGS     "${TTS_CPP_TEST_MODEL_DIR}/lavasr-enhancer.gguf" "${TTS_CPP_TEST_REF_DIR}/lavasr-enhancer"
         REQUIRES "${TTS_CPP_TEST_MODEL_DIR}/lavasr-enhancer.gguf" "${TTS_CPP_TEST_REF_DIR}/lavasr-enhancer/real.npy")
+
+    # LavaSR enhancer GGML/GPU parity: the ggml compute-graph forward
+    # (enhancer_ggml_spec_forward) vs the scalar CPU core (validated against the
+    # onnx golden by test-lavasr-enhancer-core, so scalar==golden and this makes
+    # ggml==scalar transitively validate the GPU port).  Self-contained (random
+    # weights), so it ALWAYS runs in CI with no model download — exercising the
+    # ggml CPU backend plus any registered GPU backend (Vulkan on
+    # Windows/Linux, Metal, CUDA, OpenCL).  When the real enhancer fixtures are
+    # present it additionally checks the production weights against the onnx
+    # golden.  Links ggml for the backend registry + ggml_backend_free.
+    add_executable(test-lavasr-enhancer-ggml test/test_lavasr_enhancer_ggml.cpp)
+    target_link_libraries(test-lavasr-enhancer-ggml PRIVATE tts-cpp ggml)
+    target_include_directories(test-lavasr-enhancer-ggml PRIVATE include src ggml/include)
+    tts_cpp_apply_ccache(test-lavasr-enhancer-ggml)
+    tts_cpp_register_test(test-lavasr-enhancer-ggml
+        LABEL "unit"
+        ARGS  "${TTS_CPP_TEST_REF_DIR}/lavasr-enhancer")
 
     # LavaSR denoiser GGUF round-trip (follow-up): load the converted
     # GGUF via load_denoiser_gguf() + the public tts_cpp::lavasr::Denoiser API,

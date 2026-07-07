@@ -25,6 +25,19 @@
 //
 // Like Enhancer, the Denoiser is immutable after load and safe to share across
 // threads for concurrent denoise() calls (it holds only const weights).
+//
+// Why CPU-only (while the enhancer has a ggml GPU graph): UL-UNAS is dominated
+// by two recurrent stages — the causal time-frequency attention's temporal GRU
+// and the 2x dual-path grouped RNN (DPGRNN), both GRUs stepped sequentially over
+// the frame axis. ggml has no fused GRU/scan op, so a graph port would unroll
+// per timestep into thousands of tiny gate matmuls whose per-dispatch latency
+// and cross-step syncs typically make the GPU SLOWER than the cache-friendly
+// scalar loop for utterance-length inputs; the recurrent state dependency also
+// defeats the batch parallelism a GPU relies on. The enhancer, by contrast, is a
+// feed-forward ConvNeXt + spectral head that maps cleanly onto ggml conv/mul_mat
+// kernels, so that is the stage that was moved to the GPU first. A GPU denoiser
+// (fused GRU kernel or a non-recurrent reformulation) is left as a follow-up;
+// nothing here precludes adding a use_gpu option later, mirroring EnhancerOptions.
 
 #include "tts-cpp/export.h"
 

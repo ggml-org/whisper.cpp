@@ -15,14 +15,30 @@
 
 #include "enhancer_core.h"
 
+#include <functional>
 #include <string>
 #include <vector>
 
 namespace tts_cpp::lavasr {
 
+// Neural core signature: mel[n_mels*T] (mel[c*T+t]) -> real/imag[spec_bins*T]
+// (x[f*T+t]).  Lets the DSP pipeline run either the scalar core
+// (enhancer_spec_forward) or the GGML/GPU core (enhancer_ggml_spec_forward)
+// without duplicating the resample/mel/ISTFT/FastLR stages.
+using SpecForwardFn = std::function<void(const std::vector<float> & mel, int T,
+                                         std::vector<float> & real,
+                                         std::vector<float> & imag)>;
+
+// Shared enhance() pipeline: upsample -> log-mel -> `spec_fwd` (neural core) ->
+// ISTFT -> FastLR crossover.  Returns empty on empty input.  This TU has no
+// ggml dependency; the GPU core is injected via `spec_fwd`.
+std::vector<float> enhance_with(const EnhancerWeights & w,
+                                const std::vector<float> & pcm_in, int sr_in,
+                                const SpecForwardFn & spec_fwd);
+
 // Enhance `pcm_in` (mono float32 at `sr_in` Hz, the engine's native rate) to a
-// 48 kHz enhanced signal.  Returns empty on empty input.  Throws
-// std::runtime_error if a required weight tensor is missing.
+// 48 kHz enhanced signal.  Uses the scalar CPU core.  Returns empty on empty
+// input.  Throws std::runtime_error if a required weight tensor is missing.
 std::vector<float> enhance(const EnhancerWeights & w,
                            const std::vector<float> & pcm_in, int sr_in);
 

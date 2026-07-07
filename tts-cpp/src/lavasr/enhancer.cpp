@@ -15,8 +15,9 @@ int enhancer_work_sample_rate(const EnhancerWeights & w) {
     return w.work_sample_rate;
 }
 
-std::vector<float> enhance(const EnhancerWeights & w,
-                           const std::vector<float> & pcm_in, int sr_in) {
+std::vector<float> enhance_with(const EnhancerWeights & w,
+                                const std::vector<float> & pcm_in, int sr_in,
+                                const SpecForwardFn & spec_fwd) {
     if (pcm_in.empty()) {
         return {};
     }
@@ -44,9 +45,9 @@ std::vector<float> enhance(const EnhancerWeights & w,
         }
     }
 
-    // 3) Backbone + spec head -> real/imag [spec_bins][T].
+    // 3) Backbone + spec head -> real/imag [spec_bins][T] (scalar or GPU core).
     std::vector<float> real, imag;
-    enhancer_spec_forward(w, mel_flat, T, real, imag);
+    spec_fwd(mel_flat, T, real, imag);
 
     // 4) ISTFT back to a 48 kHz waveform.
     dsp::Spectrogram spec(T, std::vector<std::complex<float>>(w.spec_bins));
@@ -64,6 +65,15 @@ std::vector<float> enhance(const EnhancerWeights & w,
     //    Nyquist), take the synthesised high band from the network.
     const int cutoff_hz = sr_in / 2;
     return dsp::FastLRMerge::merge(enhanced, wav, work_sr, cutoff_hz);
+}
+
+std::vector<float> enhance(const EnhancerWeights & w,
+                           const std::vector<float> & pcm_in, int sr_in) {
+    return enhance_with(w, pcm_in, sr_in,
+                        [&w](const std::vector<float> & mel, int T,
+                             std::vector<float> & real, std::vector<float> & imag) {
+                            enhancer_spec_forward(w, mel, T, real, imag);
+                        });
 }
 
 } // namespace tts_cpp::lavasr
