@@ -1,0 +1,49 @@
+name: Security baseline
+
+# Canonical security baseline (TruffleHog secret scan + CodeQL static analysis)
+# rolled out to Tier-1 repos per QVAC-21550. This is a thin caller that
+# delegates to the org's reusable workflow (authored under QVAC-19055); its
+# inputs and behavior are documented in
+# tetherto/qvac-actions/docs/security-baseline.md.
+#
+# Uses plain `pull_request` (never `pull_request_target`): fork PRs run with a
+# read-only token and no secrets, and this baseline needs none of the
+# privileged context (`codeql-upload: never` below), so the "pwn request"
+# surface of `pull_request_target` buys nothing here.
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  baseline:
+    # Pinned to the qvac-actions 0.2.0 release commit (immutable SHA + version
+    # comment, per the org freeze-and-pin convention).
+    uses: tetherto/qvac-actions/.github/workflows/public-reusable-security.yml@be1d22629cc48b6dcc36645acc9e6d89cfaf54d8 # 0.2.0
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+      actions: read
+    with:
+      # C/C++ fork: set languages explicitly (CodeQL autodetect misses C/C++).
+      languages: c-cpp
+      severity-threshold: high
+      # These repos use GitHub "Default setup" for code scanning, which rejects
+      # SARIF from advanced workflows. Skip the upload; the severity gate and
+      # TruffleHog still run (SARIF is written locally for the gate to read).
+      codeql-upload: never
+      # Buildless C/C++ extraction (no compilation / submodule checkout).
+      # Uniform across every Tier-1 C/C++ caller and robust vs autobuild on
+      # native/submodule projects. Requires qvac-actions >= 0.2.0.
+      codeql-build-mode: none
