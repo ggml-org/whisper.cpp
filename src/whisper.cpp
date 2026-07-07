@@ -7633,8 +7633,19 @@ int whisper_full_with_state(
                     //        ctx->vocab.id_to_token[tokens_cur[i].id].c_str(), tokens_cur[i].p,
                     //        ctx->vocab.id_to_token[tokens_cur[i].tid].c_str(), tokens_cur[i].pt);
 
-                    if (params.print_special || tokens_cur[i].id < whisper_token_eot(ctx)) {
-                        text += whisper_token_to_str(ctx, tokens_cur[i].id);
+                    if (params.print_special || (tokens_cur[i].id < whisper_token_eot(ctx))) {
+                        // absolute time of this token in centiseconds (10ms units)
+                        const int64_t t_current = seek + 2*(tokens_cur[i].tid - whisper_token_beg(ctx));
+
+                        // keep the token only if it falls inside the requested
+                        // [offset_ms, offset_ms + duration_ms] window (in ms)
+                        const bool before_offset = t_current*10 < params.offset_ms;
+                        const bool after_duration = params.duration_ms > 0 &&
+                                                    t_current*10 > params.offset_ms + params.duration_ms;
+
+                        if (!before_offset && !after_duration) {
+                            text += whisper_token_to_str(ctx, tokens_cur[i].id);
+                        }
                     }
 
                     // [TDRZ] record if speaker turn was predicted after current segment
