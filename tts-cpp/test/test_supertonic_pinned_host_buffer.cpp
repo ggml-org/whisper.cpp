@@ -115,15 +115,16 @@ void test_helper_symbol_exists() {
 // pointer the helper needs.  Synth code paths aren't exercised
 // here — the helper just queries `model.backend` for the host-
 // buffer-type capability.
-supertonic_model make_cpu_model() {
-    supertonic_model m;
+// In-place init/teardown: supertonic_model is non-copyable/non-movable now
+// that it carries the sched_fallback bundle (sched_dispatch.h), so the old
+// return-by-value make_cpu_model() no longer compiles.
+void init_cpu_model(supertonic_model & m) {
     m.backend = ggml_backend_cpu_init();
-    return m;
 }
 
 void free_cpu_model(supertonic_model & m) {
     if (m.backend) ggml_backend_free(m.backend);
-    m = {};
+    m.backend = nullptr;
 }
 
 // Round-12 #5 contract on CPU backend: helper returns nullptr
@@ -131,7 +132,7 @@ void free_cpu_model(supertonic_model & m) {
 // the default gallocr path.
 void test_cpu_backend_returns_nullptr() {
     std::fprintf(stderr, "[Round 12 #5: CPU backend → nullptr]\n");
-    supertonic_model model = make_cpu_model();
+    supertonic_model model; init_cpu_model(model);
     CHECK(model.backend != nullptr);
 
     // Empty input ctx — should still return nullptr without
@@ -174,7 +175,7 @@ void test_cpu_backend_returns_nullptr() {
 // double-frees on the second call.
 void test_idempotent_on_cpu_backend() {
     std::fprintf(stderr, "[Round 12 #5: idempotent on CPU backend]\n");
-    supertonic_model model = make_cpu_model();
+    supertonic_model model; init_cpu_model(model);
     const size_t buf_size = ggml_tensor_overhead() * 32;
     std::vector<uint8_t> buf(buf_size);
     ggml_init_params p = { buf_size, buf.data(), /*no_alloc=*/true };
@@ -214,7 +215,7 @@ void test_null_backend_returns_nullptr() {
 // ctx and verify the helper returns nullptr without crashing.
 void test_null_ctx_returns_nullptr() {
     std::fprintf(stderr, "[Round 12 #5: null ctx → nullptr]\n");
-    supertonic_model model = make_cpu_model();
+    supertonic_model model; init_cpu_model(model);
     ggml_backend_buffer_t res = try_alloc_inputs_in_pinned_host_buffer(model, nullptr);
     CHECK(res == nullptr);
     free_cpu_model(model);

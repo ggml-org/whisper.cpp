@@ -810,6 +810,59 @@ static ggml_cgraph * build_step_graph(const chatterbox_model & model, int n_past
 // Evaluation
 // --------------------------------------------------------------------------
 
+// Dual-path dispatch shared with t3_mtl.cpp (declared in
+// chatterbox_t3_internal.h): direct single-backend compute when the primary
+// backend supports every op, sched over [backend, CPU-last] otherwise so an
+// unsupported op degrades to a per-op CPU fallback instead of a backend
+// assert inside graph_compute.
+
+bool t3_use_sched(const chatterbox_model & model, const ggml_cgraph * gf) {
+    return ::tts_cpp::detail::sched_force_enabled() ||
+           !::tts_cpp::detail::graph_fully_supported(model.backend, gf);
+}
+
+bool t3_sched_prepare(const chatterbox_model & model, ggml_cgraph * gf,
+                      const char * caller) {
+    // An op that writes a pre-allocated buffer (the persistent KV slab) and
+    // is runnable by no backend would GGML_ABORT inside the scheduler's
+    // split pass — fail gracefully instead.
+    if (::tts_cpp::detail::graph_has_unsupported_preallocated_op(model.backend, gf)) {
+        fprintf(stderr, "%s: an op writing a persistent (KV) buffer is unsupported by the "
+                        "backend; scheduler fallback impossible\n", caller);
+        return false;
+    }
+    if (!::tts_cpp::detail::sched_fallback_ensure(model.sched_fb, model.backend,
+            /*graph_size=*/2 * CHBX_MAX_NODES,
+            {model.buffer_w, model.buffer_stack, model.buffer_override})) {
+        fprintf(stderr, "%s: scheduler creation failed\n", caller);
+        return false;
+    }
+    if (!::tts_cpp::detail::sched_fallback_alloc(model.sched_fb, gf)) {
+        fprintf(stderr, "%s: ggml_backend_sched_alloc_graph failed\n", caller);
+        return false;
+    }
+    return true;
+}
+
+bool t3_dispatch_compute(const chatterbox_model & model, ggml_cgraph * gf,
+                         int n_threads, bool use_sched,
+                         const char * caller, int n_past) {
+    const ggml_status status = use_sched
+        ? ::tts_cpp::detail::sched_fallback_compute(model.sched_fb, model.backend, gf, n_threads)
+        : ::tts_cpp::detail::direct_compute(model.backend, gf, n_threads);
+    if (status != GGML_STATUS_SUCCESS) {
+        if (n_past >= 0) {
+            fprintf(stderr, "%s: graph compute failed (n_past=%d, ggml_status=%d)\n",
+                    caller, n_past, (int)status);
+        } else {
+            fprintf(stderr, "%s: graph compute failed (ggml_status=%d)\n",
+                    caller, (int)status);
+        }
+        return false;
+    }
+    return true;
+}
+
 bool eval_prompt(
     const chatterbox_model & model, ggml_gallocr_t allocr, int n_threads,
     const std::vector<int32_t> & text_tokens, std::vector<float> & logits_out, int & prompt_len) {
@@ -820,8 +873,13 @@ bool eval_prompt(
         return false;
     }
     ggml_cgraph * gf = build_prompt_graph(model, (int)text_tokens.size());
-    ggml_gallocr_reserve(allocr, gf);
-    ggml_gallocr_alloc_graph(allocr, gf);
+    const bool use_sched = t3_use_sched(model, gf);
+    if (!use_sched) {
+        ggml_gallocr_reserve(allocr, gf);
+        ggml_gallocr_alloc_graph(allocr, gf);
+    } else if (!t3_sched_prepare(model, gf, __func__)) {
+        return false;
+    }
 
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "text_tokens"), text_tokens.data(), 0, text_tokens.size()*sizeof(int32_t));
     int32_t st = model.hparams.start_speech_token;
@@ -847,11 +905,7 @@ bool eval_prompt(
         }
     }
 
-    // Registry-routed n_threads (no-op on non-CPU backends); see
-    // src/t3_mtl.cpp for the GGML_BACKEND_DL=ON unresolvable-symbol
-    // rationale.
-    ::tts_cpp::detail::backend_set_n_threads(model.backend, n_threads);
-    ggml_backend_graph_compute(model.backend, gf);
+    if (!t3_dispatch_compute(model, gf, n_threads, use_sched, __func__)) return false;
 
     ggml_tensor * logits = ggml_graph_get_tensor(gf, "logits");
     logits_out.resize(model.hparams.n_speech_vocab);
@@ -866,16 +920,19 @@ bool eval_step(
     int n_past, int32_t token, std::vector<float> & logits_out) {
 
     ggml_cgraph * gf = build_step_graph(model, n_past);
-    ggml_gallocr_reserve(allocr, gf);
-    ggml_gallocr_alloc_graph(allocr, gf);
+    const bool use_sched = t3_use_sched(model, gf);
+    if (!use_sched) {
+        ggml_gallocr_reserve(allocr, gf);
+        ggml_gallocr_alloc_graph(allocr, gf);
+    } else if (!t3_sched_prepare(model, gf, __func__)) {
+        return false;
+    }
 
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "speech_token"), &token, 0, sizeof(token));
     int32_t position = n_past;
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "position"), &position, 0, sizeof(position));
 
-    // Registry-routed n_threads; see src/t3_mtl.cpp for rationale.
-    ::tts_cpp::detail::backend_set_n_threads(model.backend, n_threads);
-    ggml_backend_graph_compute(model.backend, gf);
+    if (!t3_dispatch_compute(model, gf, n_threads, use_sched, __func__, n_past)) return false;
 
     ggml_tensor * logits = ggml_graph_get_tensor(gf, "logits");
     logits_out.resize(model.hparams.n_speech_vocab);

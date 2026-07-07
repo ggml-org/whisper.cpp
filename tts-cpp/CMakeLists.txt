@@ -227,6 +227,7 @@ add_library(tts-cpp-backend-defs INTERFACE)
 
 set(TTS_CPP_LIB_SOURCES
     src/backend_selection.cpp
+    src/sched_dispatch.cpp
     src/main.cpp
     src/chatterbox_cli.cpp
     src/gpt2_bpe.cpp
@@ -522,6 +523,7 @@ if (TTS_CPP_BUILD_TESTS)
     set(_tcb_s3gen_gguf         "${TTS_CPP_TEST_MODEL_DIR}/chatterbox-s3gen.gguf")
     set(_tcb_s3gen_mtl_gguf     "${TTS_CPP_TEST_MODEL_DIR}/chatterbox-s3gen-mtl.gguf")
     set(_tcb_super_gguf         "${TTS_CPP_TEST_MODEL_DIR}/supertonic.gguf")
+    set(_tcb_super2_gguf        "${TTS_CPP_TEST_MODEL_DIR}/supertonic2.gguf")
     set(_tcb_super_ref          "${TTS_CPP_TEST_REF_DIR}/supertonic-ref-quick")
     set(_tcb_super_ref_noise    "${_tcb_super_ref}/noise.npy")
     set(_tcb_s3gen_ref          "${TTS_CPP_TEST_REF_DIR}/s3gen-ref")
@@ -685,6 +687,58 @@ if (TTS_CPP_BUILD_TESTS)
         LABEL    "fixture"
         ARGS     "${_tcb_t3_mtl_gguf}" "${_tcb_t3_mtl_ref}" "ALL"
         REQUIRES "${_tcb_t3_mtl_gguf}" "${_tcb_t3_mtl_ref}")
+
+    # T3 dual-path dispatch equivalence: the forced scheduler path
+    # (TTS_CPP_FORCE_SCHED) must be bit-identical to the direct path,
+    # and a sched run must not poison the step-graph cache.  Two
+    # registrations share one binary: with and without the opt-in
+    # CHATTERBOX_T3_STEP_CACHE (latched per process on first use).
+    add_executable(test-t3-sched-equivalence test/test_t3_sched_equivalence.cpp)
+    target_link_libraries(test-t3-sched-equivalence PRIVATE tts-cpp ggml tts-cpp-backend-defs)
+    target_include_directories(test-t3-sched-equivalence PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-t3-sched-equivalence)
+    tts_cpp_register_test(test-t3-sched-equivalence
+        LABEL    "fixture"
+        ARGS     "${_tcb_t3_mtl_gguf}"
+        REQUIRES "${_tcb_t3_mtl_gguf}")
+    tts_cpp_register_test(test-t3-sched-equivalence-step-cache
+        EXE      test-t3-sched-equivalence
+        LABEL    "fixture"
+        ARGS     "${_tcb_t3_mtl_gguf}" "--step-cache"
+        REQUIRES "${_tcb_t3_mtl_gguf}")
+
+    # S3Gen dual-path dispatch equivalence: forced-sched full synth
+    # (TTS_CPP_FORCE_SCHED) must be bit-identical to the direct path,
+    # A/B/A' with a model-cache teardown between phases.  Built-in voice
+    # + synthetic tokens, so the only fixture is the S3Gen GGUF.
+    add_executable(test-s3gen-sched-equivalence test/test_s3gen_sched_equivalence.cpp)
+    target_link_libraries(test-s3gen-sched-equivalence PRIVATE tts-cpp ggml tts-cpp-backend-defs)
+    target_include_directories(test-s3gen-sched-equivalence PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-s3gen-sched-equivalence)
+    tts_cpp_register_test(test-s3gen-sched-equivalence
+        LABEL    "fixture"
+        ARGS     "${_tcb_s3gen_gguf}"
+        REQUIRES "${_tcb_s3gen_gguf}")
+
+    # Supertonic dual-path dispatch equivalence: forced-sched synth
+    # (TTS_CPP_FORCE_SCHED) must be bit-identical to direct — every
+    # dual-path graph rebuilds per sched pass (sched graphs are single-use
+    # for allocation).  Two registrations share one binary: CPU (degenerate
+    # [primary] sched) and GPU (real [metal, cpu] multi-backend sched, the
+    # configuration that used to SIGSEGV on reuse).
+    add_executable(test-supertonic-sched-equivalence test/test_supertonic_sched_equivalence.cpp)
+    target_link_libraries(test-supertonic-sched-equivalence PRIVATE tts-cpp ggml tts-cpp-backend-defs)
+    target_include_directories(test-supertonic-sched-equivalence PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-sched-equivalence)
+    tts_cpp_register_test(test-supertonic-sched-equivalence
+        LABEL    "fixture"
+        ARGS     "${_tcb_super2_gguf}"
+        REQUIRES "${_tcb_super2_gguf}")
+    tts_cpp_register_test(test-supertonic-sched-equivalence-gpu
+        EXE      test-supertonic-sched-equivalence
+        LABEL    "fixture"
+        ARGS     "${_tcb_super2_gguf}" "99"
+        REQUIRES "${_tcb_super2_gguf}")
 
     # ------------------------------------------------------------------
     # Multilingual integration tests (23 languages).
@@ -906,6 +960,7 @@ if (TTS_CPP_BUILD_TESTS)
     add_executable(test-streaming
         test/test_streaming.cpp
         src/chatterbox_tts.cpp
+        src/sched_dispatch.cpp
         src/backend_selection.cpp)
     target_link_libraries(test-streaming PRIVATE ggml tts-cpp-backend-defs)
     target_include_directories(test-streaming PRIVATE ggml/include src include)
@@ -1120,6 +1175,7 @@ if (TTS_CPP_BUILD_TESTS)
     add_executable(test-cpu-caches
         test/test_cpu_caches.cpp
         src/chatterbox_tts.cpp
+        src/sched_dispatch.cpp
         src/backend_selection.cpp)
     target_link_libraries(test-cpu-caches PRIVATE ggml tts-cpp-backend-defs)
     target_include_directories(test-cpu-caches PRIVATE ggml/include src include)
@@ -1326,7 +1382,10 @@ if (TTS_CPP_BUILD_TESTS)
     # weights; no GGUF, no fixture; runs in <50 ms.
     add_executable(test-supertonic-convnext-block-fused
         test/test_supertonic_convnext_block_fused.cpp)
-    target_link_libraries(test-supertonic-convnext-block-fused PRIVATE ggml)
+    # tts-cpp is needed for supertonic_mulmat_needs_pad(): the header-inline
+    # st_mul_mat (supertonic_internal.h) calls it since the Mali output-pad
+    # change, and it is defined in supertonic_gguf.cpp inside libtts-cpp.
+    target_link_libraries(test-supertonic-convnext-block-fused PRIVATE tts-cpp ggml)
     target_include_directories(test-supertonic-convnext-block-fused PRIVATE ggml/include src)
     tts_cpp_apply_ccache(test-supertonic-convnext-block-fused)
     tts_cpp_register_test(test-supertonic-convnext-block-fused LABEL "unit")
@@ -1376,6 +1435,36 @@ if (TTS_CPP_BUILD_TESTS)
     target_include_directories(test-supertonic-backend-dispatch PRIVATE ggml/include src include)
     tts_cpp_apply_ccache(test-supertonic-backend-dispatch)
     tts_cpp_register_test(test-supertonic-backend-dispatch LABEL "unit")
+
+    # T3 dual-path dispatch helper unit tests (src/sched_dispatch.{h,cpp}):
+    # supports_op walk, force-env escape hatch, sched_fallback lifecycle,
+    # pre-allocated-op abort guard.  CPU-only, no GGUF needed.
+    add_executable(test-t3-sched-dispatch test/test_t3_sched_dispatch.cpp)
+    target_link_libraries(test-t3-sched-dispatch PRIVATE tts-cpp ggml tts-cpp-backend-defs)
+    target_include_directories(test-t3-sched-dispatch PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-t3-sched-dispatch)
+    tts_cpp_register_test(test-t3-sched-dispatch LABEL "unit")
+
+    # Same binary, guard bypassed: passes only while ggml still ABORTs on the
+    # rejected graph, so a ggml sync that un-mirrors the abort guard fails here.
+    tts_cpp_register_test(test-t3-sched-dispatch-abort-repro
+                          EXE test-t3-sched-dispatch
+                          ARGS --sched-abort-repro
+                          LABEL "unit")
+    set_property(TEST test-t3-sched-dispatch-abort-repro PROPERTY PASS_REGULAR_EXPRESSION
+                 "pre-allocated tensor" "SKIP: no cpu-unsupported set_rows dst type")
+    set_property(TEST test-t3-sched-dispatch-abort-repro PROPERTY FAIL_REGULAR_EXPRESSION
+                 "ERROR:")
+
+    # Real per-op migration through sched_dispatch: a BLAS (ACCEL) primary
+    # rejects everything but matmul-class ops, so add/scale/cpy nodes
+    # genuinely migrate to the CPU-last backend (multi-split schedule with
+    # cross-backend traffic).  Self-skips when no ACCEL device is built in.
+    add_executable(test-t3-sched-migration test/test_t3_sched_migration.cpp)
+    target_link_libraries(test-t3-sched-migration PRIVATE tts-cpp ggml tts-cpp-backend-defs)
+    target_include_directories(test-t3-sched-migration PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-t3-sched-migration)
+    tts_cpp_register_test(test-t3-sched-migration LABEL "unit")
 
     add_executable(test-supertonic-portable-ops
         test/test_supertonic_portable_ops.cpp)

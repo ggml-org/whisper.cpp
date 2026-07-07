@@ -117,15 +117,16 @@ void test_helper_symbol_exists() {
     ++g_checks;
 }
 
-supertonic_model make_cpu_model() {
-    supertonic_model m;
+// In-place init/teardown: supertonic_model is non-copyable/non-movable now
+// that it carries the sched_fallback bundle (sched_dispatch.h), so the old
+// return-by-value make_cpu_model() no longer compiles.
+void init_cpu_model(supertonic_model & m) {
     m.backend = ggml_backend_cpu_init();
-    return m;
 }
 
 void free_cpu_model(supertonic_model & m) {
     if (m.backend) ggml_backend_free(m.backend);
-    m = {};
+    m.backend = nullptr;
 }
 
 // On CPU backend the pinned-host path returns null; helper MUST
@@ -134,7 +135,7 @@ void free_cpu_model(supertonic_model & m) {
 // confirm the binding actually works (not just non-null).
 void test_cpu_fallback_returns_valid_buffer() {
     std::fprintf(stderr, "[Round 13 #1: CPU backend falls through to default-backend alloc]\n");
-    supertonic_model model = make_cpu_model();
+    supertonic_model model; init_cpu_model(model);
     CHECK(model.backend != nullptr);
 
     const size_t buf_size = ggml_tensor_overhead() * 16;
@@ -225,7 +226,7 @@ void test_cpu_fallback_returns_valid_buffer() {
 // contract: caller-bug guards in error paths > silent success.
 void test_empty_ctx_throws_loud_with_name() {
     std::fprintf(stderr, "[Round 13 #1: empty input_ctx throws with cache_name]\n");
-    supertonic_model model = make_cpu_model();
+    supertonic_model model; init_cpu_model(model);
     const size_t buf_size = ggml_tensor_overhead() * 8;
     std::vector<uint8_t> buf(buf_size);
     ggml_init_params p = { buf_size, buf.data(), true };
@@ -266,7 +267,7 @@ void test_null_arguments_throw() {
 
     // Null input_ctx.
     {
-        supertonic_model model = make_cpu_model();
+        supertonic_model model; init_cpu_model(model);
         CHECK(throws_runtime_error([&] {
             (void) alloc_input_scratchpad_or_throw(model, nullptr, "null_ctx");
         }));
@@ -276,7 +277,7 @@ void test_null_arguments_throw() {
     // Null cache_name — keep the error message useful; throw
     // rather than dereference a null format-string later.
     {
-        supertonic_model model = make_cpu_model();
+        supertonic_model model; init_cpu_model(model);
         const size_t buf_size = ggml_tensor_overhead() * 4;
         std::vector<uint8_t> buf(buf_size);
         ggml_init_params p = { buf_size, buf.data(), true };
@@ -298,7 +299,7 @@ void test_null_arguments_throw() {
 // distinct (or null) buffer without crashing.
 void test_repeated_calls_safe() {
     std::fprintf(stderr, "[Round 13 #1: repeated calls do not crash]\n");
-    supertonic_model model = make_cpu_model();
+    supertonic_model model; init_cpu_model(model);
     const size_t buf_size = ggml_tensor_overhead() * 8;
     std::vector<uint8_t> buf(buf_size);
     ggml_init_params p = { buf_size, buf.data(), true };

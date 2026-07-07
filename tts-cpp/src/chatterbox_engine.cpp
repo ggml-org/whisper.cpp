@@ -261,6 +261,8 @@ struct Engine::Impl {
         // against a dead backend asserts inside the GPU-backend dylib
         // finalisers.
         tts_cpp::chatterbox::detail::t3_release_caches();
+        // Same ordering contract for the eval-side fallback scheduler.
+        tts_cpp::detail::sched_fallback_free(model.sched_fb);
         if (model.buffer_w)        { ggml_backend_buffer_free(model.buffer_w);        model.buffer_w        = nullptr; }
         if (model.buffer_kv)       { ggml_backend_buffer_free(model.buffer_kv);       model.buffer_kv       = nullptr; }
         if (model.buffer_stack)    { ggml_backend_buffer_free(model.buffer_stack);    model.buffer_stack    = nullptr; }

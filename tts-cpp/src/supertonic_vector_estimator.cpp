@@ -1087,11 +1087,16 @@ void build_text_attention_cache(vector_text_attention_cache & cache,
                                 int head_dim,
                                 const std::string & out_w_source,
                                 const std::string & out_b_source) {
-    // Reuse the cached graph when it already matches this shape AND was built on
-    // the direct backend path (cache.allocr non-null). The scheduler path leaves
-    // cache.allocr null, so it always rebuilds from a clean graph
-    // (ggml_backend_sched_alloc_graph mutates node->src[]). Mirrors run_hift_decode.
-    if (cache.ctx && cache.allocr && cache.generation_id == model.generation_id
+    // SINGLE source of truth for reuse-vs-rebuild (run_* call this
+    // unconditionally): reuse the cached graph only when it matches every key
+    // AND was built on the direct backend path (cache.allocr non-null).  The
+    // scheduler path leaves cache.allocr null, so it rebuilds EVERY call —
+    // sched graphs are single-use for allocation (ggml-backend.h: alloc
+    // rewires node->src[] into sched-owned copies that the next pass frees).
+    // Mirrors run_hift_decode.
+    if (cache.ctx && cache.allocr && cache.model == &model
+        && cache.generation_id == model.generation_id
+        && cache.kv_attn_type == supertonic_kv_attn_type()
         && cache.q_len == q_len && cache.kv_len == kv_len
         && cache.n_heads == n_heads && cache.head_dim == head_dim
         && cache.out_w_source == out_w_source && cache.out_b_source == out_b_source) {
@@ -1209,25 +1214,15 @@ std::vector<float> run_text_attention_cache(vector_text_attention_cache & cache,
                                             int current_step,
                                             const char * island,
                                             std::vector<float> * ctx_trace) {
-    // round 4 — cache-key check includes kv_attn_type so a
-    // mid-run --kv-attn-type override rebuilds the graph with the new
-    // dtype.  Rebuild only on key mismatch; preserve the shape-cached
-    // graph on every other call.
-    if (cache.model != &model || cache.generation_id != model.generation_id ||
-        cache.q_len != q_len || cache.kv_len != kv_len ||
-        cache.n_heads != n_heads || cache.head_dim != head_dim ||
-        cache.kv_attn_type != supertonic_kv_attn_type() ||
-        cache.out_w_source != out_w_source || cache.out_b_source != out_b_source) {
-        build_text_attention_cache(cache, model, q_len, kv_len, n_heads, head_dim, out_w_source, out_b_source);
-    }
+    // Unconditional: build's internal early-return is the single reuse-vs-
+    // rebuild check (keys + the allocr-null sched poison marker).  On the
+    // sched route this rebuilds every call — sched graphs are single-use for
+    // allocation.  Also keeps the supports_op probe below off dangling srcs.
+    build_text_attention_cache(cache, model, q_len, kv_len, n_heads, head_dim, out_w_source, out_b_source);
     // direct backend path when every node is supported by
     // the primary backend; route through the scheduler when an op must
     // run on CPU (GGML_OP_CUSTOM etc.).
-    bool direct = true;
-    const int n_nodes = ggml_graph_n_nodes(cache.gf);
-    for (int i = 0; i < n_nodes; ++i) {
-        if (!ggml_backend_supports_op(model.backend, ggml_graph_node(cache.gf, i))) { direct = false; break; }
-    }
+    const bool direct = !supertonic_use_sched(model, cache.gf);
     if (direct) {
         if (!cache.allocr) {
             cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
@@ -1238,6 +1233,12 @@ std::vector<float> run_text_attention_cache(vector_text_attention_cache & cache,
         }
         ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
     } else {
+        if (cache.allocr) {
+            // Route flipped direct -> sched (force-env change): the cached
+            // graph was direct-built; rebuild before feeding it to the sched.
+            free_text_attention_cache(cache);
+            build_text_attention_cache(cache, model, q_len, kv_len, n_heads, head_dim, out_w_source, out_b_source);
+        }
         supertonic_sched_alloc(model, cache.gf);
     }
     ggml_backend_tensor_set(cache.q_tc_in, q_tc.data(), 0, q_tc.size()*sizeof(float));
@@ -1288,27 +1289,19 @@ std::vector<float> run_text_attention_cache_gpu(vector_text_attention_cache & ca
                                                 int current_step,
                                                 const char * island,
                                                 std::vector<float> * ctx_trace) {
-    if (cache.model != &model || cache.generation_id != model.generation_id ||
-        cache.q_len != q_len || cache.kv_len != kv_len ||
-        cache.n_heads != n_heads || cache.head_dim != head_dim ||
-        cache.kv_attn_type != supertonic_kv_attn_type() ||
-        cache.out_w_source != out_w_source || cache.out_b_source != out_b_source) {
-        build_text_attention_cache(cache, model, q_len, kv_len, n_heads, head_dim, out_w_source, out_b_source);
-    }
-    // direct vs scheduler routing. build_text_attention_cache
+    // Unconditional build — see run_text_attention_cache.  NOTE: callers of
+    // this GPU-bridge variant must pass q/k/v handles from a DIRECT-run
+    // producer graph only (a sched-allocated producer's tensors live in
+    // sched-owned slabs that this graph's own sched pass resets/replans).
+    build_text_attention_cache(cache, model, q_len, kv_len, n_heads, head_dim, out_w_source, out_b_source);
+    // direct vs scheduler routing.  build_text_attention_cache
     // no longer creates a gallocr; the run paths (this GPU-bridge variant
     // + the host-vector overload above) must do it themselves, otherwise
     // `cache.q_tc_in` / `k_tc_in` / `v_tc_in` have null backend buffers and
     // the subsequent `ggml_backend_tensor_copy` aborts with
     // "tensor buffer not set".  Mirrors the direct/sched dispatch in
     // `run_text_attention_cache` above.
-    bool direct = true;
-    {
-        const int n_nodes = ggml_graph_n_nodes(cache.gf);
-        for (int i = 0; i < n_nodes; ++i) {
-            if (!ggml_backend_supports_op(model.backend, ggml_graph_node(cache.gf, i))) { direct = false; break; }
-        }
-    }
+    const bool direct = !supertonic_use_sched(model, cache.gf);
     if (direct) {
         if (!cache.allocr) {
             cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
@@ -1319,6 +1312,10 @@ std::vector<float> run_text_attention_cache_gpu(vector_text_attention_cache & ca
         }
         ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
     } else {
+        if (cache.allocr) {
+            free_text_attention_cache(cache);
+            build_text_attention_cache(cache, model, q_len, kv_len, n_heads, head_dim, out_w_source, out_b_source);
+        }
         supertonic_sched_alloc(model, cache.gf);
     }
     // Same-backend device→device blits.  ggml_backend_tensor_copy
@@ -1480,10 +1477,13 @@ void build_group_graph_cache(vector_group_graph_cache & cache,
                              const std::string & k_name,
                              const std::string & v_name,
                              bool trace_outputs) {
-    // Reuse the cached graph when it already matches this shape AND was built on
-    // the direct backend path (cache.allocr non-null). The scheduler path leaves
-    // cache.allocr null, so it always rebuilds. Mirrors run_hift_decode.
-    if (cache.ctx && cache.allocr && cache.generation_id == model.generation_id
+    // SINGLE source of truth for reuse-vs-rebuild (run_* calls this
+    // unconditionally): reuse only when every key matches AND the graph was
+    // built on the direct backend path (cache.allocr non-null — the sched
+    // path leaves it null, so it rebuilds EVERY call; sched graphs are
+    // single-use for allocation). Mirrors run_hift_decode.
+    if (cache.ctx && cache.allocr && cache.model == &model
+        && cache.generation_id == model.generation_id
         && cache.L == L && cache.C == C && cache.text_len == text_len
         && cache.group == group && cache.conv_block == conv_block
         && cache.linear_block == linear_block && cache.post_block == post_block
@@ -1724,28 +1724,12 @@ void build_group_graph_cache(vector_group_graph_cache & cache,
         ggml_build_forward_expand(cache.gf, k_rope);
     }
 
-    cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
-    if (!cache.allocr) throw std::runtime_error("ggml_gallocr_new vector group cache failed");
-    if (!ggml_gallocr_reserve(cache.allocr, cache.gf)) {
-        throw std::runtime_error("ggml_gallocr_reserve vector group cache failed");
-    }
-    ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
-
-    // Upload the cos/sin tables — these inputs are stable for the
-    // entire cache lifetime (cos/sin depend only on L / text_len /
-    // θ, all encoded in the cache key + the model), so this is a
-    // one-shot population.
-    if (cache.apply_rope) {
-        std::vector<float> q_cos, q_sin, k_cos, k_sin;
-        make_rope_cos_sin_tables(model.vector_rope_theta.data(), L, half,
-                                 q_cos, q_sin);
-        make_rope_cos_sin_tables(model.vector_rope_theta.data(), text_len, half,
-                                 k_cos, k_sin);
-        ggml_backend_tensor_set(cache.q_cos_in, q_cos.data(), 0, q_cos.size() * sizeof(float));
-        ggml_backend_tensor_set(cache.q_sin_in, q_sin.data(), 0, q_sin.size() * sizeof(float));
-        ggml_backend_tensor_set(cache.k_cos_in, k_cos.data(), 0, k_cos.size() * sizeof(float));
-        ggml_backend_tensor_set(cache.k_sin_in, k_sin.data(), 0, k_sin.size() * sizeof(float));
-    }
+    // NOTE: the gallocr + RoPE cos/sin upload moved to
+    // run_group_graph_cache's DIRECT branch (one-shot, inside its
+    // `if (!cache.allocr)`) — build must leave the graph UNALLOCATED so the
+    // sched route hands ggml_backend_sched a fresh graph every pass (sched
+    // graphs are single-use for allocation; the sched uploads RoPE after
+    // each of its own allocs).
 }
 
 vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache,
@@ -1770,41 +1754,42 @@ vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache
                                                 const std::string & v_name,
                                                 const char * island,
                                                 std::vector<supertonic_trace_tensor> * trace) {
-    // cache-key check (skip rebuild when shape/sources/
-    // trace flag haven't changed).  Build is expensive on the hot
-    // denoise-step path; the steady-state synth pays one rebuild on
-    // the cold-miss step, zero on every subsequent step.
-    if (cache.model != &model || cache.generation_id != model.generation_id ||
-        cache.L != L || cache.C != C || cache.text_len != text_len ||
-        cache.group != group || cache.conv_block != conv_block ||
-        cache.linear_block != linear_block || cache.post_block != post_block ||
-        cache.trace_outputs != (trace != nullptr) ||
-        cache.matmul_source != matmul_source ||
-        cache.q_matmul_source != q_matmul_source || cache.k_matmul_source != k_matmul_source ||
-        cache.v_matmul_source != v_matmul_source) {
-        build_group_graph_cache(cache, model, L, C, group, conv_block, linear_block, matmul_source, post_block,
-                                text_len, q_matmul_source, k_matmul_source, v_matmul_source,
-                                q_name, k_name, v_name,
-                                trace != nullptr);
-    }
+    // Unconditional: build's internal early-return is the single reuse-vs-
+    // rebuild check (keys + the allocr-null sched poison marker; sched
+    // graphs are single-use for allocation, so the sched route rebuilds
+    // every call).
+    build_group_graph_cache(cache, model, L, C, group, conv_block, linear_block, matmul_source, post_block,
+                            text_len, q_matmul_source, k_matmul_source, v_matmul_source,
+                            q_name, k_name, v_name,
+                            trace != nullptr);
+    // RoPE cos/sin tables are graph INPUTS that must be (re)populated after
+    // whichever allocator binds them: once per cache lifetime on the direct
+    // path (constants survive in the gallocr buffer because the direct
+    // branch never re-allocs), and after EVERY sched alloc (the sched
+    // allocates fresh each pass).  Table sizes come from the tensors.
+    auto upload_rope_tables = [&]() {
+        if (!cache.apply_rope) return;
+        const int half_q = (int) cache.q_cos_in->ne[0];
+        const int len_q  = (int) cache.q_cos_in->ne[1];
+        const int len_k  = (int) cache.k_cos_in->ne[1];
+        std::vector<float> q_cos, q_sin, k_cos, k_sin;
+        make_rope_cos_sin_tables(model.vector_rope_theta.data(), len_q, half_q, q_cos, q_sin);
+        make_rope_cos_sin_tables(model.vector_rope_theta.data(), len_k, half_q, k_cos, k_sin);
+        ggml_backend_tensor_set(cache.q_cos_in, q_cos.data(), 0, q_cos.size() * sizeof(float));
+        ggml_backend_tensor_set(cache.q_sin_in, q_sin.data(), 0, q_sin.size() * sizeof(float));
+        ggml_backend_tensor_set(cache.k_cos_in, k_cos.data(), 0, k_cos.size() * sizeof(float));
+        ggml_backend_tensor_set(cache.k_sin_in, k_sin.data(), 0, k_sin.size() * sizeof(float));
+    };
     // direct vs scheduler routing: when every node is
     // supported by the primary backend, use the per-cache gallocr +
     // direct compute; when an op must run on CPU (GGML_OP_CUSTOM),
     // fall through to the model scheduler.
     //
-    // HEAD's `build_group_graph_cache` already creates cache.allocr +
-    // calls `ggml_gallocr_alloc_graph` AND uploads the cache-lifetime
-    // RoPE cos/sin constants right after.  Re-calling alloc_graph
-    // here would clobber those uploaded constants (gallocr rebinds
-    // tensor offsets and the freshly-allocated buffer doesn't carry
-    // build-time data forward).  So on direct path: only allocate
-    // the gallocr lazily IF the build didn't (defensive — every
-    // current build path does), and never re-alloc.
-    bool direct = true;
-    const int n_nodes = ggml_graph_n_nodes(cache.gf);
-    for (int i = 0; i < n_nodes; ++i) {
-        if (!ggml_backend_supports_op(model.backend, ggml_graph_node(cache.gf, i))) { direct = false; break; }
-    }
+    // Direct path: single alloc per cache lifetime, then never re-alloc —
+    // re-calling alloc_graph would clobber the uploaded RoPE constants
+    // (gallocr rebinds tensor offsets; the fresh buffer doesn't carry data
+    // forward).
+    const bool direct = !supertonic_use_sched(model, cache.gf);
     if (direct) {
         if (!cache.allocr) {
             cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
@@ -1813,9 +1798,20 @@ vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache
                 throw std::runtime_error("ggml_gallocr_reserve supertonic group graph failed");
             }
             ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
+            upload_rope_tables();
         }
     } else {
+        if (cache.allocr) {
+            // Route flipped direct -> sched (force-env change): rebuild
+            // before feeding the direct-built graph to the sched.
+            free_group_graph_cache(cache);
+            build_group_graph_cache(cache, model, L, C, group, conv_block, linear_block, matmul_source, post_block,
+                                    text_len, q_matmul_source, k_matmul_source, v_matmul_source,
+                                    q_name, k_name, v_name,
+                                    trace != nullptr);
+        }
         supertonic_sched_alloc(model, cache.gf);
+        upload_rope_tables();
     }
     // F12: cache.x_in is now ne=[C, L] (CPU-native time-major).
     // Upload `x_tc` directly — the host pack loop is gone; the
@@ -1870,13 +1866,19 @@ vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache
     // vector_rope_theta) still needs q/k/v on the host because it
     // calls scalar `apply_rope` and the host `run_text_attention_
     // cache` overload.
-    if (cache.apply_rope) {
-        out.q_rope_gpu = ggml_graph_get_tensor(cache.gf, cache.q_rope_name.c_str());
-        out.k_rope_gpu = ggml_graph_get_tensor(cache.gf, cache.k_rope_name.c_str());
+    // GPU handles are only valid from a DIRECT-run producer: on the sched
+    // route these tensors live in sched-owned slabs that the CONSUMER
+    // graph's own sched pass (reset + re-plan) would reuse/alias before the
+    // copy happens.  Sched-route consumers take the host path instead.
+    if (direct) {
+        if (cache.apply_rope) {
+            out.q_rope_gpu = ggml_graph_get_tensor(cache.gf, cache.q_rope_name.c_str());
+            out.k_rope_gpu = ggml_graph_get_tensor(cache.gf, cache.k_rope_name.c_str());
+        }
+        out.v_gpu = ggml_graph_get_tensor(cache.gf, v_name.c_str());
     }
-    out.v_gpu = ggml_graph_get_tensor(cache.gf, v_name.c_str());
 
-    const bool need_host_qkv = (trace != nullptr) || !cache.apply_rope;
+    const bool need_host_qkv = (trace != nullptr) || !cache.apply_rope || !direct;
     if (need_host_qkv) {
         // Trace harnesses want pre-RoPE Q/K + V for the
         // `push_trace` block below and the call-site
@@ -1901,9 +1903,13 @@ vector_group_graph_result run_group_graph_cache(vector_group_graph_cache & cache
         // `apply_rope_to_packed_qk` in `supertonic_internal.h`.
         out.v = tensor_raw_f32(ggml_graph_get_tensor(cache.gf, v_name.c_str()));
     }
-    if (trace && cache.apply_rope) {
-        // Trace-only extra downloads — post-RoPE Q/K mirrors the
-        // call site's `PUSH_GGML_TRACE({"ve_g*_attn_q_rope", …})`.
+    if ((trace || !direct) && cache.apply_rope) {
+        // Post-RoPE Q/K downloads: trace harnesses mirror the call site's
+        // `PUSH_GGML_TRACE({"ve_g*_attn_q_rope", …})`; the sched route needs
+        // them on the host because its consumers can't take the GPU bridge
+        // (handles gated on `direct` above) — they feed the host attention
+        // overload with these in-graph-RoPE outputs, keeping forced-sched
+        // bit-identical to direct.
         //
         // post-fix layout contract:
         // `apply_rope_to_packed_qk` now produces ne=[HD, L] with
@@ -2025,10 +2031,13 @@ void build_res_style_qkv_cache(vector_res_style_qkv_cache & cache,
                                const std::string & k_name,
                                const std::string & v_name,
                                bool trace_outputs) {
-    // Reuse the cached graph when it already matches this shape AND was built on
-    // the direct backend path (cache.allocr non-null). The scheduler path leaves
-    // cache.allocr null, so it always rebuilds. Mirrors run_hift_decode.
-    if (cache.ctx && cache.allocr && cache.generation_id == model.generation_id
+    // SINGLE source of truth for reuse-vs-rebuild (run_* calls this
+    // unconditionally): reuse only when every key matches AND the graph was
+    // built on the direct backend path (cache.allocr non-null — the sched
+    // path leaves it null, so it rebuilds EVERY call; sched graphs are
+    // single-use for allocation). Mirrors run_hift_decode.
+    if (cache.ctx && cache.allocr && cache.model == &model
+        && cache.generation_id == model.generation_id
         && cache.L == L && cache.C == C && cache.norm_block == norm_block
         && cache.post_block == post_block && cache.style_block == style_block
         && cache.trace_outputs == trace_outputs && cache.q_matmul_source == q_matmul_source
@@ -2184,24 +2193,16 @@ vector_res_style_qkv_result run_res_style_qkv_cache(vector_res_style_qkv_cache &
                                                     const char * island,
                                                     std::vector<supertonic_trace_tensor> * trace) {
     const bool want_trace = trace != nullptr;
-    // cache-key check (skip rebuild on hot path).
-    if (cache.model != &model || cache.generation_id != model.generation_id ||
-        cache.L != L || cache.C != C ||
-        cache.norm_block != norm_block || cache.post_block != post_block ||
-        cache.style_block != style_block || cache.trace_outputs != want_trace ||
-        cache.q_matmul_source != q_matmul_source || cache.k_matmul_source != k_matmul_source ||
-        cache.v_matmul_source != v_matmul_source) {
-        build_res_style_qkv_cache(cache, model, L, C, norm_block, post_block, style_block,
-                                  q_matmul_source, k_matmul_source, v_matmul_source,
-                                  residual_name, norm_name, post_name, q_name, k_name, v_name,
-                                  want_trace);
-    }
+    // Unconditional: build's internal early-return is the single reuse-vs-
+    // rebuild check (keys + the allocr-null sched poison marker; sched
+    // graphs are single-use for allocation, so the sched route rebuilds
+    // every call).
+    build_res_style_qkv_cache(cache, model, L, C, norm_block, post_block, style_block,
+                              q_matmul_source, k_matmul_source, v_matmul_source,
+                              residual_name, norm_name, post_name, q_name, k_name, v_name,
+                              want_trace);
     // direct vs scheduler routing.
-    bool direct = true;
-    const int n_nodes = ggml_graph_n_nodes(cache.gf);
-    for (int i = 0; i < n_nodes; ++i) {
-        if (!ggml_backend_supports_op(model.backend, ggml_graph_node(cache.gf, i))) { direct = false; break; }
-    }
+    const bool direct = !supertonic_use_sched(model, cache.gf);
     if (direct) {
         if (!cache.allocr) {
             cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
@@ -2212,6 +2213,15 @@ vector_res_style_qkv_result run_res_style_qkv_cache(vector_res_style_qkv_cache &
         }
         ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
     } else {
+        if (cache.allocr) {
+            // Route flipped direct -> sched (force-env change): rebuild
+            // before feeding the direct-built graph to the sched.
+            free_res_style_qkv_cache(cache);
+            build_res_style_qkv_cache(cache, model, L, C, norm_block, post_block, style_block,
+                                      q_matmul_source, k_matmul_source, v_matmul_source,
+                                      residual_name, norm_name, post_name, q_name, k_name, v_name,
+                                      want_trace);
+        }
         supertonic_sched_alloc(model, cache.gf);
     }
     // F12: direct upload of CPU-native `[L, C]` (time-major)
@@ -2239,27 +2249,29 @@ vector_res_style_qkv_result run_res_style_qkv_cache(vector_res_style_qkv_cache &
     }
     vector_res_style_qkv_result out;
 
-    // round 9 — populate GPU handles for the post-
-    // projection Q / K / V tensors unconditionally.  Cheap (no
-    // GPU sync; just a name-to-pointer lookup in the cached
-    // graph).  Lifetime contract documented on the struct.
-    out.sq_gpu = ggml_graph_get_tensor(cache.gf, q_name.c_str());
-    out.sk_gpu = ggml_graph_get_tensor(cache.gf, k_name.c_str());
-    out.sv_gpu = ggml_graph_get_tensor(cache.gf, v_name.c_str());
+    // round 9 — GPU handles for the post-projection Q / K / V
+    // tensors (cheap name-to-pointer lookups).  Only from a DIRECT-run
+    // producer: on the sched route these live in sched-owned slabs that the
+    // consumer graph's own sched pass would reuse/alias before the copy —
+    // sched-route consumers fall back to the host sq/sk/sv below.
+    if (direct) {
+        out.sq_gpu = ggml_graph_get_tensor(cache.gf, q_name.c_str());
+        out.sk_gpu = ggml_graph_get_tensor(cache.gf, k_name.c_str());
+        out.sv_gpu = ggml_graph_get_tensor(cache.gf, v_name.c_str());
+    }
 
     // `post` stays a host download — the next-stage
     // `run_style_residual_cache` still consumes a host vector.
     out.post = tensor_to_time_channel(ggml_graph_get_tensor(cache.gf, post_name.c_str()));
 
-    // round 9 — gate `sq` / `sk` / `sv` host downloads
-    // on trace mode.  Production path skips them because the
-    // call site uses `out.sq_gpu` / `out.sk_gpu` / `out.sv_gpu`
-    // via `run_text_attention_cache_gpu`.  Eliminates 3 sync
-    // points per call × 4 sites × 5 denoise steps = 60 GPU→host
-    // downloads / synth.  Mirrors the round-1 2C-lite
-    // `need_host_qkv = (trace != nullptr)` gate on the group
-    // graph cache.
-    if (trace) {
+    // round 9 — gate `sq` / `sk` / `sv` host downloads on trace
+    // mode OR the sched route (whose consumers can't take the GPU bridge —
+    // handles gated on `direct` above — and consume sq/sk/sv verbatim via
+    // the host attention overload).  The direct production path skips them
+    // because the call site uses the `*_gpu` handles via
+    // `run_text_attention_cache_gpu` (3 sync points per call × 4 sites ×
+    // 5 denoise steps = 60 GPU→host downloads / synth saved).
+    if (trace || !direct) {
         // follow-up — sq / sk / sv are now graph-packed
         // to ne=[HD, L] time-major-flat (see the matmul-output
         // transpose in `build_res_style_qkv_cache`).
@@ -2267,9 +2279,11 @@ vector_res_style_qkv_result run_res_style_qkv_cache(vector_res_style_qkv_cache &
         // scalar reference and trace harnesses expect
         // (`out[t*256 + c]`).  See the header doc on
         // `apply_rope_to_packed_qk` in `supertonic_internal.h`.
-        out.sq = tensor_raw_f32(out.sq_gpu);
-        out.sk = tensor_raw_f32(out.sk_gpu);
-        out.sv = tensor_raw_f32(out.sv_gpu);
+        out.sq = tensor_raw_f32(ggml_graph_get_tensor(cache.gf, q_name.c_str()));
+        out.sk = tensor_raw_f32(ggml_graph_get_tensor(cache.gf, k_name.c_str()));
+        out.sv = tensor_raw_f32(ggml_graph_get_tensor(cache.gf, v_name.c_str()));
+    }
+    if (trace) {
         push_trace(*trace, post_name, L, C, out.post);
         push_trace(*trace, q_name, L, 256, out.sq);
         push_trace(*trace, k_name, 50, 256, out.sk);
@@ -2460,10 +2474,13 @@ void build_tail_graph_cache(vector_tail_graph_cache & cache,
                             int Cin,
                             int total_steps,
                             bool trace_outputs) {
-    // Reuse the cached graph when it already matches this shape AND was built on
-    // the direct backend path (cache.allocr non-null). The scheduler path leaves
-    // cache.allocr null, so it always rebuilds. Mirrors run_hift_decode.
-    if (cache.ctx && cache.allocr && cache.generation_id == model.generation_id
+    // SINGLE source of truth for reuse-vs-rebuild (run_* calls this
+    // unconditionally): reuse only when every key matches AND the graph was
+    // built on the direct backend path (cache.allocr non-null — the sched
+    // path leaves it null, so it rebuilds EVERY call; sched graphs are
+    // single-use for allocation). Mirrors run_hift_decode.
+    if (cache.ctx && cache.allocr && cache.model == &model
+        && cache.generation_id == model.generation_id
         && cache.L == L && cache.C == C && cache.Cin == Cin
         && cache.total_steps == total_steps && cache.trace_outputs == trace_outputs) {
         return;
@@ -2556,19 +2573,13 @@ std::vector<float> run_tail_graph_cache(vector_tail_graph_cache & cache,
                                         int current_step,
                                         int total_steps,
                                         std::vector<supertonic_trace_tensor> * trace) {
-    // cache-key check (skip rebuild on hot path).
-    if (cache.model != &model || cache.generation_id != model.generation_id ||
-        cache.L != L || cache.C != C ||
-        cache.Cin != Cin || cache.total_steps != total_steps ||
-        cache.trace_outputs != (trace != nullptr)) {
-        build_tail_graph_cache(cache, model, L, C, Cin, total_steps, trace != nullptr);
-    }
+    // Unconditional: build's internal early-return is the single reuse-vs-
+    // rebuild check (keys + the allocr-null sched poison marker; sched
+    // graphs are single-use for allocation, so the sched route rebuilds
+    // every call).
+    build_tail_graph_cache(cache, model, L, C, Cin, total_steps, trace != nullptr);
     // direct vs scheduler routing.
-    bool direct = true;
-    const int n_nodes = ggml_graph_n_nodes(cache.gf);
-    for (int i = 0; i < n_nodes; ++i) {
-        if (!ggml_backend_supports_op(model.backend, ggml_graph_node(cache.gf, i))) { direct = false; break; }
-    }
+    const bool direct = !supertonic_use_sched(model, cache.gf);
     if (direct) {
         if (!cache.allocr) {
             cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
@@ -2579,6 +2590,12 @@ std::vector<float> run_tail_graph_cache(vector_tail_graph_cache & cache,
         }
         ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
     } else {
+        if (cache.allocr) {
+            // Route flipped direct -> sched (force-env change): rebuild
+            // before feeding the direct-built graph to the sched.
+            free_tail_graph_cache(cache);
+            build_tail_graph_cache(cache, model, L, C, Cin, total_steps, trace != nullptr);
+        }
         supertonic_sched_alloc(model, cache.gf);
     }
     // F12: direct upload of `x_tc` to `cache.tail_in` (now
@@ -4013,6 +4030,19 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
                 "vector_estimator:tts.ttl.vector_field.main_blocks.9.attn.out_fc.linear.bias",
                 current_step, "g1_attn_flash",
                 include_ggml_trace ? &g1_attn_ctx_trace : nullptr);
+        } else if (!g1_group.q_rope.empty()) {
+            // Sched-route producer: GPU handles are withheld (the group
+            // graph's tensors live in sched-owned slabs), but the in-graph
+            // RoPE outputs were downloaded to the host — feed them to the
+            // host attention overload verbatim (NO host apply_rope) so the
+            // sched route stays bit-identical to the direct/bridge path.
+            g1_attn_out = run_text_attention_cache(g1_attn_cache, model,
+                g1_group.q_rope, g1_group.k_rope, g1_group.v,
+                L, text_len, H_text, 64,
+                "vector_estimator:onnx::MatMul_3155",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.9.attn.out_fc.linear.bias",
+                current_step, "g1_attn_flash",
+                include_ggml_trace ? &g1_attn_ctx_trace : nullptr);
         } else {
             std::vector<float> g1q_out = std::move(g1_group.q);
             std::vector<float> g1k_out = std::move(g1_group.k);
@@ -4123,6 +4153,15 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
                 "vector_estimator:tts.ttl.vector_field.main_blocks.15.attn.out_fc.linear.bias",
                 current_step, "g2_attn_flash",
                 include_ggml_trace ? &g2_attn_ctx_trace : nullptr);
+        } else if (!g2_group.q_rope.empty()) {
+            // Sched-route producer — see the g1 branch for the rationale.
+            g2_attn_out = run_text_attention_cache(g2_attn_cache, model,
+                g2_group.q_rope, g2_group.k_rope, g2_group.v,
+                L, text_len, H_text, 64,
+                "vector_estimator:onnx::MatMul_3200",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.15.attn.out_fc.linear.bias",
+                current_step, "g2_attn_flash",
+                include_ggml_trace ? &g2_attn_ctx_trace : nullptr);
         } else {
             std::vector<float> g2q_out = std::move(g2_group.q);
             std::vector<float> g2k_out = std::move(g2_group.k);
@@ -4222,6 +4261,15 @@ bool supertonic_vector_trace_proj_ggml(const supertonic_model & model,
         if (g3_group.q_rope_gpu && g3_group.k_rope_gpu && g3_group.v_gpu) {
             g3_attn_out = run_text_attention_cache_gpu(g3_attn_cache, model,
                 g3_group.q_rope_gpu, g3_group.k_rope_gpu, g3_group.v_gpu,
+                L, text_len, H_text, 64,
+                "vector_estimator:onnx::MatMul_3245",
+                "vector_estimator:tts.ttl.vector_field.main_blocks.21.attn.out_fc.linear.bias",
+                current_step, "g3_attn_flash",
+                include_ggml_trace ? &g3_attn_ctx_trace : nullptr);
+        } else if (!g3_group.q_rope.empty()) {
+            // Sched-route producer — see the g1 branch for the rationale.
+            g3_attn_out = run_text_attention_cache(g3_attn_cache, model,
+                g3_group.q_rope, g3_group.k_rope, g3_group.v,
                 L, text_len, H_text, 64,
                 "vector_estimator:onnx::MatMul_3245",
                 "vector_estimator:tts.ttl.vector_field.main_blocks.21.attn.out_fc.linear.bias",

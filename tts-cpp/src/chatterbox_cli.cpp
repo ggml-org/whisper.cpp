@@ -915,6 +915,47 @@ static int run_supertonic_cli_path(const cli_params & params) {
     return 0;
 }
 
+// Free all T3-owned backend resources.  Without this Metal's static device
+// destructor asserts at process exit ("rsets->data count != 0") because the
+// residency sets attached to model.buffer_w / buffer_kv are still live when
+// the dylib tears the device down.  (S3Gen's cache registers its own atexit
+// hook; T3 has no such hook, tts_cpp_cli_main is its owner.)
+//
+// Ordering matters: the step-graph cache and the eval-side fallback scheduler
+// carry backend references, so both are dropped BEFORE the backend — freeing
+// them against a dead backend would assert inside the ggml-metal /
+// ggml-vulkan / ggml-cuda dylib finalisers.
+//
+// Idempotent (every free below is NULL-safe and every pointer is nulled), so
+// it is safe to run both explicitly on the happy path and again from the
+// unwind guard in tts_cpp_cli_main.
+static void cli_free_t3(tts_cpp::chatterbox::detail::chatterbox_model & model) {
+    if (model.buffer_stack || model.ctx_stack) {
+        tts_cpp::chatterbox::detail::t3_stack_unregister(
+            model.buffer_stack, model.ctx_stack);
+    }
+    tts_cpp::chatterbox::detail::t3_release_caches();
+    tts_cpp::detail::sched_fallback_free(model.sched_fb);
+    ggml_backend_buffer_free(model.buffer_w);
+    ggml_backend_buffer_free(model.buffer_kv);
+    ggml_backend_buffer_free(model.buffer_stack);
+    ggml_backend_buffer_free(model.buffer_override);
+    ggml_backend_free(model.backend);
+    ggml_free(model.ctx_w);
+    ggml_free(model.ctx_kv);
+    ggml_free(model.ctx_stack);
+    ggml_free(model.ctx_override);
+    model.buffer_w = nullptr;
+    model.buffer_kv = nullptr;
+    model.buffer_stack = nullptr;
+    model.buffer_override = nullptr;
+    model.backend = nullptr;
+    model.ctx_w = nullptr;
+    model.ctx_kv = nullptr;
+    model.ctx_stack = nullptr;
+    model.ctx_override = nullptr;
+}
+
 int tts_cpp_cli_main(int argc, char ** argv) {
     ggml_time_init();
     cli_params params;
@@ -1103,6 +1144,19 @@ int tts_cpp_cli_main(int argc, char ** argv) {
         const int64_t _t3_load_ms = (ggml_time_us() - _t3_load_t0) / 1000;
         fprintf(stderr, "BENCH: T3_LOAD_MS=%lld\n", (long long)_t3_load_ms);
 
+        // Unwind guard: a graceful eval failure below is thrown as
+        // std::runtime_error and lands in the terminal catch, which would
+        // otherwise skip every explicit teardown (cli_free_t3 keeps the
+        // "caches + fallback sched before backend" ordering).  Idempotent —
+        // the happy-path explicit cli_free_t3 calls null everything first.
+        // Declared before the gallocr guards below so it runs LAST on unwind
+        // (allocators are freed before the backend they reference).
+        struct t3_model_guard {
+            chatterbox_model & m;
+            ~t3_model_guard() { cli_free_t3(m); }
+        };
+        t3_model_guard t3_guard{model};
+
         // Warm the S3Gen GGUF cache in the background while T3 inference
         // runs.  This cuts first-audio-out latency by ~700 ms in streaming
         // mode — by the time T3 emits its first chunk of tokens, S3Gen is
@@ -1274,42 +1328,9 @@ int tts_cpp_cli_main(int argc, char ** argv) {
             // destruction.
             if (s3gen_preload_thread.joinable()) s3gen_preload_thread.join();
 
-            // Free all T3-owned GPU resources before an early return.  Without
-            // this Metal's static device destructor asserts at process exit
-            // ("rsets->data count != 0") because the residency sets attached
-            // to model.buffer_w / buffer_kv are still live when the dylib
-            // tears the device down.  (S3Gen's cache registers its own
-            // atexit hook; T3 has no such hook, main() is its owner.)
-            auto free_t3 = [&]() {
-                if (model.buffer_stack || model.ctx_stack) {
-                    tts_cpp::chatterbox::detail::t3_stack_unregister(
-                        model.buffer_stack, model.ctx_stack);
-                }
-                // Drop the T3 step-graph cache BEFORE freeing the
-                // backend.  The cache holds gallocators that carry
-                // backend references; freeing them against a dead
-                // backend would assert inside the
-                // ggml-metal / ggml-vulkan / ggml-cuda dylib finalisers.
-                tts_cpp::chatterbox::detail::t3_release_caches();
-                ggml_backend_buffer_free(model.buffer_w);
-                ggml_backend_buffer_free(model.buffer_kv);
-                if (model.buffer_stack)    ggml_backend_buffer_free(model.buffer_stack);
-                if (model.buffer_override) ggml_backend_buffer_free(model.buffer_override);
-                ggml_backend_free(model.backend);
-                ggml_free(model.ctx_w);
-                ggml_free(model.ctx_kv);
-                if (model.ctx_stack)    ggml_free(model.ctx_stack);
-                if (model.ctx_override) ggml_free(model.ctx_override);
-                model.buffer_w = nullptr;
-                model.buffer_kv = nullptr;
-                model.buffer_stack = nullptr;
-                model.buffer_override = nullptr;
-                model.backend = nullptr;
-                model.ctx_w = nullptr;
-                model.ctx_kv = nullptr;
-                model.ctx_stack = nullptr;
-                model.ctx_override = nullptr;
-            };
+            // Free all T3-owned GPU resources before an early return (see
+            // cli_free_t3 for the why + ordering contract).
+            auto free_t3 = [&]() { cli_free_t3(model); };
 
             if (model.tok_tokens.empty()) {
                 fprintf(stderr,
@@ -1400,6 +1421,12 @@ int tts_cpp_cli_main(int argc, char ** argv) {
 
             ggml_gallocr_t allocr_live = ggml_gallocr_new(
                 ggml_backend_get_default_buffer_type(model.backend));
+            // Freed by the guard at scope exit (incl. the eval-failure
+            // unwind), BEFORE t3_guard tears the backend down.
+            struct allocr_live_guard {
+                ggml_gallocr_t & a;
+                ~allocr_live_guard() { ggml_gallocr_free(a); a = nullptr; }
+            } allocr_live_g{allocr_live};
             std::mt19937 rng_live(params.seed);
 
             constexpr int S3GEN_SIL = tts_cpp::chatterbox::kS3GenSilenceToken;
@@ -1821,6 +1848,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                     (long long)t3_total_ms_live, t3_tokens_total_live);
 
             ggml_gallocr_free(allocr_live);
+            allocr_live = nullptr;
             free_t3();
             return loop_rc;
 #endif
@@ -1960,6 +1988,12 @@ int tts_cpp_cli_main(int argc, char ** argv) {
         // The per-segment T3 loop is wrapped in this closure so both the
         // batch and streaming S3Gen branches can call it uniformly.
         ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
+        // Freed by the guard at scope exit (incl. the eval-failure unwind),
+        // BEFORE t3_guard tears the backend down.
+        struct allocr_guard {
+            ggml_gallocr_t & a;
+            ~allocr_guard() { ggml_gallocr_free(a); a = nullptr; }
+        } allocr_g{allocr};
         std::mt19937 rng(params.seed);
         const size_t N_SEG = seg_text_tokens.size();
         std::vector<std::vector<int32_t>> seg_generated(N_SEG);
@@ -2583,16 +2617,8 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                 (long long)t3_total_ms, t3_tokens_total);
 
         ggml_gallocr_free(allocr);
-        // Drop T3 step-graph cache BEFORE freeing the backend
-        // (gallocators in cached entries reference it).
-        tts_cpp::chatterbox::detail::t3_release_caches();
-        ggml_backend_buffer_free(model.buffer_w);
-        ggml_backend_buffer_free(model.buffer_kv);
-        if (model.buffer_override) ggml_backend_buffer_free(model.buffer_override);
-        ggml_backend_free(model.backend);
-        ggml_free(model.ctx_w);
-        ggml_free(model.ctx_kv);
-        if (model.ctx_override) ggml_free(model.ctx_override);
+        allocr = nullptr;
+        cli_free_t3(model);
     } catch (const std::exception & e) {
         fprintf(stderr, "error: %s\n", e.what());
         return 1;

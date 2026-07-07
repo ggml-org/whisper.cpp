@@ -13,6 +13,7 @@
 #include "ggml.h"
 
 #include "backend_util.h"
+#include "sched_dispatch.h"
 
 namespace tts_cpp::supertonic::detail {
 
@@ -329,14 +330,16 @@ struct supertonic_model {
     uint64_t generation_id = 0;
     int n_threads = 0;
     ggml_backend_t backend = nullptr;
-    // Scheduler so ops the GPU backend can't run (notably GGML_OP_CUSTOM
-    // CPU kernels in the vector estimator / vocoder) auto-route to CPU
-    // instead of being silently skipped on a single backend. Always
-    // created: [backend, cpu_backend] for a GPU primary, or a degenerate
-    // [backend] when the primary is itself CPU. cpu_backend stays null in
-    // the CPU-only case (no second CPU backend).
-    ggml_backend_t cpu_backend = nullptr;
-    ggml_backend_sched_t sched = nullptr;
+    // Scheduler bundle [backend, CPU-last] (sched_dispatch.h) so ops the GPU
+    // backend can't run (notably GGML_OP_CUSTOM CPU kernels in the vector
+    // estimator / vocoder) auto-route to CPU instead of being silently
+    // skipped on a single backend; degenerate [backend]-only sched when the
+    // primary is itself CPU (cpu_backend stays null).  Created lazily by
+    // supertonic_sched_alloc on the first sched-needing dispatch, not at
+    // load.  mutable: the dispatch helpers take const supertonic_model &
+    // (same precedent as chatterbox).  supertonic_model is never
+    // moved/copied, so the non-movable sched_fallback is a plain member.
+    mutable ::tts_cpp::detail::sched_fallback sched_fb;
     ggml_context * ctx_w = nullptr;
     ggml_backend_buffer_t buffer_w = nullptr;
 
@@ -651,10 +654,27 @@ inline bool model_prefers_cpu_kernels(const supertonic_model & model) {
 //   supertonic_sched_alloc(model, gf);            // reset + allocate via sched
 //   ggml_backend_tensor_set(input_leaf, ...);     // inputs now have memory
 //   supertonic_sched_compute(model, gf);          // run (routes customs -> CPU)
-// The graph topology may be a reused thread_local cache; sched_reset does not
-// touch the user graph, so caches stay valid across calls.
+// GRAPH LIFETIME CONTRACT: a graph fed to supertonic_sched_alloc is
+// SINGLE-USE — sched alloc rewires node->src[] into sched-owned copy
+// tensors that the NEXT sched pass frees, and tensor buffer/data bindings
+// survive sched_reset, so re-feeding the same graph computes garbage
+// deterministically (or crashes on a multi-backend sched).  Every dual-path
+// run_* site therefore REBUILDS its graph before each sched pass (the sched
+// route leaves cache.allocr null, so the build early-return never reuses),
+// and *_gpu cross-graph tensor handles must only ever come from a
+// DIRECT-run producer (sched-owned slabs are reset/re-planned by the
+// consumer's own sched pass).  See ggml-backend.h ("single-use in terms of
+// allocation" / sched_reset docs) and
+// docs/supertonic-sched-graph-reuse-investigation.md.
 void supertonic_sched_alloc(const supertonic_model & model, ggml_cgraph * graph);
 void supertonic_sched_compute(const supertonic_model & model, ggml_cgraph * graph);
+
+// Dispatch gate shared by every dual-path stage: supports_op walk over the
+// graph + the TTS_CPP_FORCE_SCHED escape hatch (safe: every dual-path site
+// rebuilds its graph before a sched pass — see the contract note above —
+// so the forced path is bit-identical to direct;
+// test-supertonic-sched-equivalence enforces that on CPU and Metal).
+bool supertonic_use_sched(const supertonic_model & model, const ggml_cgraph * graph);
 
 ggml_tensor * require_tensor(const supertonic_model & model, const std::string & name);
 ggml_tensor * require_source_tensor(const supertonic_model & model, const std::string & source_name);

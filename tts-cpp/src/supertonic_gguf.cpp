@@ -1739,13 +1739,18 @@ void supertonic_set_n_threads(supertonic_model & model, int n_threads) {
     model.n_threads = std::max(1, n_threads);
 }
 
-void supertonic_graph_compute(const supertonic_model & model, ggml_cgraph * graph) {
-    // Registry-routed n_threads (no-op on non-CPU backends); see
-    // src/t3_mtl.cpp for the GGML_BACKEND_DL=ON unresolvable-symbol
-    // rationale.
-    if (model.n_threads > 0) {
-        ::tts_cpp::detail::backend_set_n_threads(model.backend, model.n_threads);
+// Throw boundary for both compute paths: Supertonic is exception-based, the
+// sched_dispatch helper reports ggml_status.
+static void supertonic_check_compute_status(ggml_status status, const char * caller) {
+    if (status != GGML_STATUS_SUCCESS) {
+        throw std::runtime_error(std::string(caller) + ": graph compute failed (ggml_status="
+                                 + std::to_string((int) status) + ")");
     }
+}
+
+void supertonic_graph_compute(const supertonic_model & model, ggml_cgraph * graph) {
+    // direct_compute's backend_set_n_threads is registry-routed (no-op on
+    // non-CPU backends) and skips n_threads <= 0 itself (backend_util.h).
     static const bool count_dispatches = std::getenv("SUPERTONIC_COUNT_DISPATCHES") != nullptr;
     static const bool dump_op_histogram = std::getenv("SUPERTONIC_DUMP_OP_HISTOGRAM") != nullptr;
     if (dump_op_histogram) {
@@ -1770,33 +1775,59 @@ void supertonic_graph_compute(const supertonic_model & model, ggml_cgraph * grap
         static thread_local double total_us = 0.0;
         ++n_calls;
         const auto t0 = std::chrono::steady_clock::now();
-        ggml_backend_graph_compute(model.backend, graph);
+        const ggml_status status =
+            ::tts_cpp::detail::direct_compute(model.backend, graph, model.n_threads);
         const auto t1 = std::chrono::steady_clock::now();
         const double us = std::chrono::duration<double, std::micro>(t1 - t0).count();
         total_us += us;
         fprintf(stderr, "supertonic_graph_compute #%d nodes=%d  wall=%.1fus  cumul=%.2fms\n",
                 n_calls, ggml_graph_n_nodes(graph), us, total_us / 1000.0);
+        supertonic_check_compute_status(status, "supertonic_graph_compute");
         return;
     }
-    ggml_backend_graph_compute(model.backend, graph);
+    supertonic_check_compute_status(
+        ::tts_cpp::detail::direct_compute(model.backend, graph, model.n_threads),
+        "supertonic_graph_compute");
 }
 
 void supertonic_sched_alloc(const supertonic_model & model, ggml_cgraph * graph) {
-    ggml_backend_sched_reset(model.sched);
-    if (!ggml_backend_sched_alloc_graph(model.sched, graph)) {
+    namespace det = ::tts_cpp::detail;
+    if (det::graph_has_unsupported_preallocated_op(model.backend, graph)) {
+        throw std::runtime_error("supertonic_sched_alloc: op writing a pre-allocated buffer "
+                                 "is unsupported by every backend; scheduler fallback impossible");
+    }
+    // Lazy creation on first sched-needing dispatch (walk sites and the
+    // vocoder trace path all come through here).  buffer_w is already marked
+    // USAGE_WEIGHTS at load; buffer_w_extra is deliberately NOT passed — it is
+    // unmarked today and the sched path is proven bit-identical with it
+    // unmarked, so marking it would be a separate, tested change.
+    if (!det::sched_fallback_ensure(model.sched_fb, model.backend, /*graph_size=*/8192,
+                                    {model.buffer_w})) {
+        throw std::runtime_error("supertonic_sched_alloc: scheduler creation failed");
+    }
+    if (!det::sched_fallback_alloc(model.sched_fb, graph)) {
         throw std::runtime_error("supertonic_sched_alloc: ggml_backend_sched_alloc_graph failed");
     }
 }
 
 void supertonic_sched_compute(const supertonic_model & model, ggml_cgraph * graph) {
-    // CPU work inside the sched runs on cpu_backend (GPU primary) or on the
-    // primary itself (CPU-only model). Set its thread count per-call, mirroring
-    // the single-backend path above.
-    ggml_backend_t cpu_b = model.cpu_backend ? model.cpu_backend : model.backend;
-    if (model.n_threads > 0) {
-        ::tts_cpp::detail::backend_set_n_threads(cpu_b, model.n_threads);
-    }
-    ggml_backend_sched_graph_compute(model.sched, graph);
+    supertonic_check_compute_status(
+        ::tts_cpp::detail::sched_fallback_compute(model.sched_fb, model.backend,
+                                                  graph, model.n_threads),
+        "supertonic_sched_compute");
+}
+
+// Honors TTS_CPP_FORCE_SCHED like the T3 / S3Gen gates: every dual-path
+// Supertonic site rebuilds its graph before any sched pass (the sched route
+// leaves cache.allocr null, so the build early-return never reuses a
+// sched-mutated graph — sched graphs are single-use for allocation, see the
+// contract note above supertonic_sched_alloc's declaration), and *_gpu
+// cross-graph handles are withheld from sched-run producers.  The
+// front-block and style-residual islands never consult this gate and stay
+// direct even when the flag is set.
+bool supertonic_use_sched(const supertonic_model & model, const ggml_cgraph * graph) {
+    return ::tts_cpp::detail::sched_force_enabled() ||
+           !::tts_cpp::detail::graph_fully_supported(model.backend, graph);
 }
 
 static void bind_vocoder_weights(supertonic_model & model) {
@@ -2677,32 +2708,10 @@ bool load_supertonic_gguf(const std::string & path,
             }
         }
 
-        // build the scheduler. With a GPU primary, add a
-        // CPU backend so ops the GPU can't run (GGML_OP_CUSTOM, and any
-        // FA the driver rejects) are routed to CPU rather than silently
-        // skipped.  With a CPU primary, the sched is a single-backend
-        // pass-through (no second CPU backend created).  Consumed by
-        // `supertonic_sched_alloc` / `supertonic_sched_compute` in the
-        // per-stage compute helpers.
-        {
-            ggml_backend_t backends[2] = { model.backend, nullptr };
-            int n_backends = 1;
-            if (!::tts_cpp::detail::backend_is_cpu(model.backend)) {
-                model.cpu_backend = ::tts_cpp::detail::init_cpu_backend();
-                if (!model.cpu_backend) {
-                    throw std::runtime_error("init CPU backend for scheduler failed");
-                }
-                backends[1] = model.cpu_backend;
-                n_backends = 2;
-            }
-            model.sched = ggml_backend_sched_new(backends, /*bufts=*/nullptr,
-                                                 n_backends, /*graph_size=*/ 8192,
-                                                 /*parallel=*/ false,
-                                                 /*op_offload=*/ false);
-            if (!model.sched) {
-                throw std::runtime_error("ggml_backend_sched_new failed");
-            }
-        }
+        // The scheduler (model.sched_fb) is created lazily by
+        // supertonic_sched_alloc via sched_fallback_ensure on the first
+        // sched-needing dispatch; CPU-only / fully-supported-GPU models that
+        // never route through it never build one.
     } catch (const std::exception & e) {
         fprintf(stderr, "load_supertonic_gguf: %s\n", e.what());
         gguf_free(gguf_ctx);
@@ -2748,14 +2757,11 @@ void free_supertonic_model(supertonic_model & model) {
     if (model.generation_id != 0) {
         unregister_supertonic_alive(model.generation_id);
     }
-    // free the scheduler before the backends / buffers it
-    // references; the sched holds non-owning pointers to model.backend +
-    // model.cpu_backend, so tearing those down first would leave the
-    // sched with dangling references during its destructor.
-    if (model.sched) {
-        ggml_backend_sched_free(model.sched);
-        model.sched = nullptr;
-    }
+    // Free the scheduler bundle before the backends / buffers
+    // it references (ordering contract in sched_dispatch.h); the sched holds
+    // non-owning pointers to model.backend, so tearing that down first would
+    // leave the sched with dangling references during its destructor.
+    ::tts_cpp::detail::sched_fallback_free(model.sched_fb);
     if (model.buffer_w_extra) {
         ggml_backend_buffer_free(model.buffer_w_extra);
         model.buffer_w_extra = nullptr;
@@ -2767,10 +2773,6 @@ void free_supertonic_model(supertonic_model & model) {
     if (model.backend) {
         ggml_backend_free(model.backend);
         model.backend = nullptr;
-    }
-    if (model.cpu_backend) {
-        ggml_backend_free(model.cpu_backend);
-        model.cpu_backend = nullptr;
     }
     if (model.ctx_w_extra) {
         ggml_free(model.ctx_w_extra);
