@@ -480,6 +480,7 @@ if (PARAKEET_BUILD_TESTS)
     set(_qvp_sfsv21_q8_gguf "${PARAKEET_TEST_MODEL_DIR}/diar_streaming_sortformer_4spk-v2.1.q8_0.gguf")
     set(_qvp_jfk_wav       "${PARAKEET_TEST_AUDIO_DIR}/jfk.wav")
     set(_qvp_diar_wav      "${PARAKEET_TEST_AUDIO_DIR}/diarization-sample-16k.wav")
+    set(_qvp_fr_multipiece_wav "${PARAKEET_TEST_AUDIO_DIR}/fr-multipiece-16k.wav")
     set(_qvp_abcba_wav     "${PARAKEET_TEST_AUDIO_DIR}/abcba.wav")
     set(_qvp_abcba_rttm    "${PARAKEET_TEST_AUDIO_DIR}/abcba.rttm")
     set(_qvp_abcdba_wav    "${PARAKEET_TEST_AUDIO_DIR}/abcdba.wav")
@@ -735,6 +736,16 @@ if (PARAKEET_BUILD_TESTS)
         LABEL    "fixture"
         ARGS     "${_qvp_tdt_q8_gguf}" "${_qvp_jfk_wav}" "${_qvp_tdt_ref}"
         REQUIRES "${_qvp_tdt_q8_gguf}" "${_qvp_jfk_wav}")
+    # Multi-piece French guard for the on-device predictor (QVAC-21005): the gpu0
+    # scalar path and the gpu1 graph path must produce identical token IDs on a
+    # word with multiple word-final sub-words (e.g. "analyses"). English jfk does
+    # not exercise this, and the divergence only surfaces when the graph path runs
+    # on a real GPU -> gpu tier. No ref-dir: this is a CPU-vs-graph cross-check.
+    parakeet_register_test(test-tdt-decoder-parity-fr-gpu
+        LABEL    "gpu"
+        EXE      test-tdt-decoder-parity
+        ARGS     "${_qvp_tdt_q8_gguf}" "${_qvp_fr_multipiece_wav}"
+        REQUIRES "${_qvp_tdt_q8_gguf}" "${_qvp_fr_multipiece_wav}")
 
     add_executable(test-sortformer-parity
         test/test_sortformer_parity.cpp
