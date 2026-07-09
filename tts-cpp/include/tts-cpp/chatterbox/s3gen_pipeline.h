@@ -189,6 +189,8 @@ struct s3gen_synthesize_opts {
     // some extra high-frequency noise.  0 → use the default (2).
     int                  cfm_steps             = 0;
 
+    float                cfg_rate              = -1.0f;
+
     // Set by the chunk-streaming caller.  For standard-CFM (non-meanflow,
     // e.g. Multilingual) models the per-chunk CFM step count is floored to the
     // model's n_timesteps here: a low cfm_steps under-integrates
@@ -216,6 +218,10 @@ struct s3gen_synthesize_opts {
     // decode loop and the S3Gen + HiFT path.
     const std::atomic<bool> * cancel_flag       = nullptr;
 };
+
+inline float resolve_s3gen_cfg_rate(float caller_cfg_rate, float model_cfg_rate) {
+    return caller_cfg_rate >= 0.0f ? caller_cfg_rate : model_cfg_rate;
+}
 
 // Runs encoder + CFM + HiFT on the given T3 speech tokens and writes a WAV.
 // Returns 0 on success, non-zero on error.
