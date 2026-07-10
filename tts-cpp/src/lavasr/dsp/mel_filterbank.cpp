@@ -65,12 +65,17 @@ MelFilterbank::mel_spectrogram(const std::vector<float> & wav,
     const int n_freqs = n_fft_ / 2 + 1;
     std::vector<std::vector<float>> mel(n_mels_, std::vector<float>(T, 0.0f));
 
+    // Magnitude spectrogram (not power) — matches Vocos/LavaSR.  Compute |spec| once per (t,f)
+    // into a scratch row, then apply the mel filters (avoids the redundant per-filter sqrt).
+    std::vector<float> mag(n_freqs);
     for (int t = 0; t < T; t++) {
+        for (int f = 0; f < n_freqs; f++) {
+            mag[f] = std::abs(spec[t][f]);
+        }
         for (int m = 0; m < n_mels_; m++) {
             float sum = 0.0f;
             for (int f = 0; f < n_freqs; f++) {
-                // Magnitude spectrogram (not power) — matches Vocos/LavaSR.
-                sum += filters_[m][f] * std::abs(spec[t][f]);
+                sum += filters_[m][f] * mag[f];
             }
             mel[m][t] = std::log(std::max(sum, 1e-5f));
         }

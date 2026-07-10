@@ -32,17 +32,22 @@ std::vector<float> FastLRMerge::merge(const std::vector<float> & enhanced,
         n_pow2 <<= 1;
     }
 
-    ComplexVec spec1(n_pow2, {0.0f, 0.0f});
-    ComplexVec spec2(n_pow2, {0.0f, 0.0f});
+    // Two-for-one real FFT: pack the two real signals as (enhanced + i*original), transform
+    // once, and recover the individual spectra from the combined transform's Hermitian symmetry.
+    ComplexVec comb(n_pow2, {0.0f, 0.0f});
     for (int i = 0; i < N; i++) {
-        spec1[i] = {enhanced[i], 0.0f};
+        comb[i] = {enhanced[i], original[i]};
     }
-    for (int i = 0; i < M; i++) {
-        spec2[i] = {original[i], 0.0f};
-    }
+    StftProcessor::fft(comb, false);
 
-    StftProcessor::fft(spec1, false);
-    StftProcessor::fft(spec2, false);
+    auto spec1_at = [&](int k) {           // FFT(enhanced)[k]
+        const int km = (n_pow2 - k) % n_pow2;
+        return (comb[k] + std::conj(comb[km])) * 0.5f;
+    };
+    auto spec2_at = [&](int k) {           // FFT(original)[k]
+        const int km = (n_pow2 - k) % n_pow2;
+        return (comb[k] - std::conj(comb[km])) * std::complex<float>(0.0f, -0.5f);
+    };
 
     const int n_bins = n_pow2 / 2 + 1;
     const int cutoff_bin =
@@ -70,19 +75,22 @@ std::vector<float> FastLRMerge::merge(const std::vector<float> & enhanced,
 
     // Blend spectra: original low-freq + enhanced high-freq, keeping the
     // result Hermitian-symmetric so the inverse FFT is real.
+    ComplexVec blended(n_pow2, {0.0f, 0.0f});
     for (int i = 0; i < n_bins; i++) {
-        spec2[i] = spec2[i] + (spec1[i] - spec2[i]) * mask[i];
+        const std::complex<float> s1 = spec1_at(i);
+        const std::complex<float> s2 = spec2_at(i);
+        blended[i] = s2 + (s1 - s2) * mask[i];
         if (i > 0 && i < n_pow2 / 2) {
-            spec2[n_pow2 - i] = std::conj(spec2[i]);
+            blended[n_pow2 - i] = std::conj(blended[i]);
         }
     }
-    spec2[n_pow2 / 2] = {spec2[n_pow2 / 2].real(), 0.0f};
+    blended[n_pow2 / 2] = {blended[n_pow2 / 2].real(), 0.0f};
 
-    StftProcessor::fft(spec2, true);
+    StftProcessor::fft(blended, true);
 
     std::vector<float> out(N);
     for (int i = 0; i < N; i++) {
-        out[i] = spec2[i].real();
+        out[i] = blended[i].real();
     }
     return out;
 }

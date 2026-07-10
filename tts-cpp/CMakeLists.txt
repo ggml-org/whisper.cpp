@@ -269,6 +269,7 @@ set(TTS_CPP_LIB_SOURCES
     src/lavasr/denoiser.cpp
     src/lavasr/denoiser_gguf.cpp
     src/lavasr/denoiser_api.cpp
+    src/lavasr/denoiser_ggml.cpp
 )
 
 if (TTS_CPP_BUILD_LIBRARY)
@@ -1048,6 +1049,21 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_register_test(test-lavasr-enhancer-ggml
         LABEL "unit"
         ARGS  "${TTS_CPP_TEST_REF_DIR}/lavasr-enhancer")
+
+    # LavaSR denoiser ggml-graph parity: denoiser_ggml.cpp graph vs the scalar
+    # denoiser_core.cpp.  Self-contained host math (no GGUF fixture), always runs in CI.
+    add_executable(test-lavasr-denoiser-ggml test/test_lavasr_denoiser_ggml.cpp)
+    target_link_libraries(test-lavasr-denoiser-ggml PRIVATE tts-cpp ggml)
+    target_include_directories(test-lavasr-denoiser-ggml PRIVATE include src ggml/include)
+    tts_cpp_apply_ccache(test-lavasr-denoiser-ggml)
+    tts_cpp_register_test(test-lavasr-denoiser-ggml LABEL "unit")
+    # Same binary with the real GGUF: adds the production-weights e2e + batch parity
+    # where the model fixture is present.
+    tts_cpp_register_test(test-lavasr-denoiser-ggml-e2e
+        EXE      test-lavasr-denoiser-ggml
+        LABEL    "fixture"
+        ARGS     "${TTS_CPP_TEST_MODEL_DIR}/lavasr-denoiser.gguf"
+        REQUIRES "${TTS_CPP_TEST_MODEL_DIR}/lavasr-denoiser.gguf")
 
     # LavaSR denoiser GGUF round-trip (follow-up): load the converted
     # GGUF via load_denoiser_gguf() + the public tts_cpp::lavasr::Denoiser API,

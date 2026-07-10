@@ -25,19 +25,6 @@
 //
 // Like Enhancer, the Denoiser is immutable after load and safe to share across
 // threads for concurrent denoise() calls (it holds only const weights).
-//
-// Why CPU-only (while the enhancer has a ggml GPU graph): UL-UNAS is dominated
-// by two recurrent stages — the causal time-frequency attention's temporal GRU
-// and the 2x dual-path grouped RNN (DPGRNN), both GRUs stepped sequentially over
-// the frame axis. ggml has no fused GRU/scan op, so a graph port would unroll
-// per timestep into thousands of tiny gate matmuls whose per-dispatch latency
-// and cross-step syncs typically make the GPU SLOWER than the cache-friendly
-// scalar loop for utterance-length inputs; the recurrent state dependency also
-// defeats the batch parallelism a GPU relies on. The enhancer, by contrast, is a
-// feed-forward ConvNeXt + spectral head that maps cleanly onto ggml conv/mul_mat
-// kernels, so that is the stage that was moved to the GPU first. A GPU denoiser
-// (fused GRU kernel or a non-recurrent reformulation) is left as a follow-up;
-// nothing here precludes adding a use_gpu option later, mirroring EnhancerOptions.
 
 #include "tts-cpp/export.h"
 
@@ -50,8 +37,9 @@ namespace tts_cpp::lavasr {
 class TTS_CPP_API Denoiser {
 public:
     // Load the denoiser GGUF.  Throws std::runtime_error on failure (file
-    // missing, wrong architecture, missing/mis-shaped tensors).
-    static std::unique_ptr<Denoiser> load(const std::string & gguf_path);
+    // missing, wrong architecture, missing/mis-shaped tensors).  n_gpu_layers: 0 = scalar
+    // CPU (default); >0 = ggml GPU graph (Adreno OpenCL); <0 = ggml-CPU (the GPU graph's twin).
+    static std::unique_ptr<Denoiser> load(const std::string & gguf_path, int n_gpu_layers = 0);
 
     ~Denoiser();
     Denoiser(const Denoiser &)             = delete;
@@ -65,6 +53,11 @@ public:
     // Internal working sample rate the UL-UNAS network operates at (read from
     // GGUF metadata).  Informational — denoise() itself is rate-preserving.
     int native_sample_rate() const;
+
+    // Compute backend of the neural core, mirroring Enhancer::backend_name():
+    // the ggml backend name (e.g. "OpenCL", "CPU") when a ggml engine is
+    // active, "scalar" for the pure-scalar path.
+    std::string backend_name() const;
 
 private:
     Denoiser();

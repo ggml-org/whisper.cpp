@@ -5,11 +5,13 @@
 // included).  These mirror the @qvac/tts-onnx DSP unit tests so the GGML
 // enhancer's pre/post-processing stays bit-comparable with the ONNX addon.
 
+#include "lavasr/dsp/dsp_constants.h"
 #include "lavasr/dsp/fastlr_merge.h"
 #include "lavasr/dsp/mel_filterbank.h"
 #include "lavasr/dsp/resampler.h"
 #include "lavasr/dsp/stft_processor.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -96,6 +98,103 @@ static void test_resampler() {
     }
 }
 
+// Naive per-sample Lanczos resampler, copied verbatim from the pre-polyphase
+// implementation at master @ df54e37d, kept here as the parity reference.
+static std::vector<float> naive_lanczos_resample_ref(
+    const std::vector<float> & input, int sr_in, int sr_out) {
+    constexpr int LANCZOS_A = 5;
+    if (sr_in == sr_out || input.empty()) {
+        return input;
+    }
+
+    const double ratio  = static_cast<double>(sr_out) / sr_in;
+    const auto   out_len = static_cast<size_t>(std::round(input.size() * ratio));
+    std::vector<float> output(out_len, 0.0f);
+    const double scale = std::min(1.0, ratio);
+
+    for (size_t i = 0; i < out_len; i++) {
+        const double center = i / ratio;
+        const auto   left   = static_cast<int>(
+            std::max(0.0, std::floor(center - LANCZOS_A / scale)));
+        const auto right = static_cast<int>(
+            std::min(static_cast<double>(input.size()) - 1,
+                     std::floor(center + LANCZOS_A / scale)));
+
+        float sum       = 0.0f;
+        float weight_sum = 0.0f;
+
+        for (int j = left; j <= right; j++) {
+            const double x      = (center - j) * scale;
+            double       weight = 1.0;
+            if (x != 0.0) {
+                const double pi_x = PI * x;
+                weight = std::sin(pi_x) * std::sin(pi_x / LANCZOS_A) /
+                         (pi_x * pi_x / LANCZOS_A);
+            }
+            sum        += input[j] * static_cast<float>(weight);
+            weight_sum += static_cast<float>(weight);
+        }
+
+        output[i] = (weight_sum > 0.0f) ? sum / weight_sum : 0.0f;
+    }
+
+    return output;
+}
+
+// Deterministic two-tone + ramp + DC probe, amplitude <= 1.
+static std::vector<float> make_parity_signal(int n, int sr_in) {
+    std::vector<float> x(n);
+    for (int i = 0; i < n; i++) {
+        x[i] = static_cast<float>(0.45f * std::sin(2 * PI * 393.7 * i / sr_in) +
+                                  0.3f * std::sin(2 * PI * 1531.1 * i / sr_in) +
+                                  0.2f * (i / (float) n) + 0.05f);
+    }
+    return x;
+}
+
+static void test_resampler_polyphase_matches_naive() {
+    // Identity early-return is bit-exact; every resampled pair matches within
+    // 1e-6 (tap windows/weights agree, FMA contraction perturbs ~1 float ulp).
+    struct Case { int sr_in, sr_out; bool exact; };
+    const Case cases[] = {
+        {16000, 16000, true},
+        {24000, 48000, false}, {48000, 24000, false},
+        {48000, 16000, false}, {16000, 24000, false},
+        // 441-family: naive floor(center - A/scale) could flip one ~5e-3 boundary tap
+        // at exact-integer phases (bound: count <= out_len/320+1, max_abs <= 1e-2).
+        // No flip occurs on this signal, so hold them to the tight 1e-6 bound too.
+        {44100, 16000, false}, {22050, 16000, false},
+    };
+    for (const auto & c : cases) {
+        // n=16 keeps the signal narrower than the kernel to hit the edge path.
+        for (int n : {4001, 16}) {
+            auto x   = make_parity_signal(n, c.sr_in);
+            auto ref = naive_lanczos_resample_ref(x, c.sr_in, c.sr_out);
+            auto out = Resampler::resample(x, c.sr_in, c.sr_out);
+            CHECK(out.size() == ref.size(),
+                  "polyphase output length matches naive reference");
+            if (out.size() != ref.size()) {
+                continue;
+            }
+            float max_abs = max_abs_diff(out, ref, 0, (int) out.size());
+            int   count   = 0;
+            for (size_t i = 0; i < out.size(); i++) {
+                if (std::fabs(out[i] - ref[i]) > 1e-6f) {
+                    count++;
+                }
+            }
+            std::printf(
+                "resampler parity %5d->%5d n=%4d: max_abs=%.3g count>1e-6=%d\n",
+                c.sr_in, c.sr_out, n, max_abs, count);
+            if (c.exact) {
+                CHECK(max_abs == 0.0f, "polyphase identity is bit-exact vs naive");
+            } else {
+                CHECK(max_abs <= 1e-6f, "polyphase within 1e-6 of naive");
+            }
+        }
+    }
+}
+
 static void test_fft() {
     ComplexVec x(64);
     for (int i = 0; i < 64; i++) {
@@ -127,6 +226,22 @@ static void test_stft_istft() {
           "stft->istft reconstructs the interior");
     float r = rms(recon) / std::max(rms(x), 1e-9f);
     CHECK(r > 0.9f && r < 1.1f, "stft->istft preserves energy");
+}
+
+static void test_istft_complex_dc_nyquist() {
+    // A half-spectrum whose ONLY content is imaginary DC/Nyquist represents no real signal
+    // (irfft drops it), so istft must reconstruct ~zero — guards the two-for-one frame pairing.
+    StftProcessor stft(2048, 512, 2048, false);
+    Spectrogram   spec(2, std::vector<std::complex<float>>(1025, {0.0f, 0.0f}));
+    spec[0][0]    = {0.0f, 100.0f}; // imaginary DC in the first frame
+    spec[0][1024] = {0.0f, 60.0f};  // imaginary Nyquist in the first frame
+
+    auto  out = stft.istft(spec, 0);
+    float m   = 0.0f;
+    for (float v : out) {
+        m = std::max(m, std::fabs(v));
+    }
+    CHECK(m < 1e-4f, "istft drops imag DC/Nyquist (no partner-frame leak)");
 }
 
 static void test_mel() {
@@ -191,8 +306,10 @@ static void test_fastlr_merge() {
 
 int main() {
     test_resampler();
+    test_resampler_polyphase_matches_naive();
     test_fft();
     test_stft_istft();
+    test_istft_complex_dc_nyquist();
     test_mel();
     test_fastlr_merge();
 
