@@ -149,6 +149,9 @@ struct ParakeetCtcModel::Impl {
     ggml_context         * sortformer_cpu_ctx    = nullptr;
     ggml_backend_buffer_t  sortformer_cpu_buffer = nullptr;
     ggml_backend_buffer_t  weights_buffer = nullptr;
+    // CPU "extra" buffer-type (CPU_REPACK) buffers holding the repack-eligible
+    // encoder GEMM weights on CPU-only runs. See alloc_cpu_repack_weights.
+    std::vector<ggml_backend_buffer_t> weights_extra_buffers;
     // Compute scheduler over [active backend, CPU] (CPU last). Routes ops the
     // active backend cannot run to CPU per-op; a single-split pass-through when
     // every op is supported. Must be freed before the backends it references.
@@ -163,6 +166,10 @@ struct ParakeetCtcModel::Impl {
         encoder_graphs.clear();
         if (sched)          ggml_backend_sched_free(sched);
         if (weights_buffer) ggml_backend_buffer_free(weights_buffer);
+        for (ggml_backend_buffer_t b : weights_extra_buffers) {
+            ggml_backend_buffer_free(b);
+        }
+        weights_extra_buffers.clear();
         if (sortformer_cpu_buffer) ggml_backend_buffer_free(sortformer_cpu_buffer);
         if (sortformer_cpu_ctx)    ggml_free(sortformer_cpu_ctx);
         if (ctx)            ggml_free(ctx);
@@ -690,6 +697,156 @@ static bool build_sortformer_cpu_weights(ParakeetCtcModel::Impl * impl,
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// CPU "extra" buffer-type (repack) weight placement.
+//
+// ggml's CPU backend exposes optional extra buffer types (CPU_REPACK) that
+// rewrite quantized weights at upload time into an interleaved layout
+// (e.g. q4_0 -> q4_0x8) so mul_mat runs on the block-parallel
+// dotprod/i8mm/AVX2 GEMM kernels instead of the generic row-wise vec_dot
+// path; without it q4_0 is measurably *slower* than q8_0 on CPU.
+//
+// A repacked tensor is only valid as the direct src0 of ggml_mul_mat: the
+// buffer has no get_tensor readback, and reshape/view nodes drop the repack
+// traits (the view computes on the repacked bytes as if they were plain
+// q4_0). Placement is therefore allowlisted to the encoder GEMM weights.
+// Everything else must stay in the default buffer:
+//   - TDT/EOU predictor+joint weights: read back via ggml_backend_tensor_get
+//     (dequantize_to_f32) on the CPU decode path,
+//   - tdt/eou predict embeddings: consumed by ggml_get_rows,
+//   - ctc.decoder.weight: 1025 rows, repack needs a multiple of 4/8,
+//   - subsampling / depthwise conv kernels: consumed by conv ops,
+//   - Sortformer head weights: cloned via tensor_get on Mali-Vulkan.
+
+static bool repack_allowlisted(const char * name) {
+    // encoder.blk.*.conv.pw{1,2}.weight are eligible because
+    // conformer_conv_graph uses the 2D weight directly (no reshape) when the
+    // GGUF already stores it squeezed to (d_model, N).
+    static const char * const k_suffixes[] = {
+        ".ff1.linear1.weight", ".ff1.linear2.weight",
+        ".ff2.linear1.weight", ".ff2.linear2.weight",
+        ".attn.q.weight", ".attn.k.weight", ".attn.v.weight",
+        ".attn.qkv.weight", ".attn.out.weight", ".attn.pos.weight",
+        ".conv.pw1.weight", ".conv.pw2.weight",
+    };
+    if (std::strcmp(name, "encoder.subsampling.out.weight") == 0) {
+        return true;
+    }
+    if (std::strncmp(name, "encoder.blk.", 12) != 0) {
+        return false;
+    }
+    const size_t len = std::strlen(name);
+    for (const char * suf : k_suffixes) {
+        const size_t slen = std::strlen(suf);
+        if (len > slen && std::strcmp(name + len - slen, suf) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// True when `dev` can run mul_mat(w, f32) with `w` placed in `buft`.
+// Mirrors whisper.cpp's weight_buft_supported: whether an extra buffer type
+// applies depends on runtime CPU features (dotprod/i8mm/AVX2) and the
+// weight's type/shape, and it only answers through
+// ggml_backend_dev_supports_op with the weight's buffer assigned, so probe
+// with a dummy op instead of duplicating the layout rules here.
+static bool cpu_extra_buft_supports_mul_mat(ggml_backend_dev_t dev,
+                                            ggml_backend_buffer_type_t buft,
+                                            ggml_tensor * w) {
+    ggml_init_params ip = {
+        /*mem_size=*/   3 * ggml_tensor_overhead(),
+        /*mem_buffer=*/ nullptr,
+        /*no_alloc=*/   true,
+    };
+    ggml_context * c = ggml_init(ip);
+    if (!c) {
+        return false;
+    }
+    ggml_tensor * b  = ggml_new_tensor_2d(c, GGML_TYPE_F32, w->ne[0], 512);
+    ggml_tensor * op = ggml_mul_mat(c, w, b);
+    bool ok = false;
+    w->buffer = ggml_backend_buft_alloc_buffer(buft, 0);
+    if (w->buffer) {
+        ok = ggml_backend_dev_supports_op(dev, op);
+        ggml_backend_buffer_free(w->buffer);
+        w->buffer = nullptr;
+    }
+    ggml_free(c);
+    return ok;
+}
+
+// Allocate the repack-eligible weights of `ctx` into CPU extra buffer types.
+// Must run before ggml_backend_alloc_ctx_tensors, which then sweeps up every
+// tensor this pass left unallocated. Returns the buffers it created (empty
+// when the platform has no repack kernels for these weights). The subsequent
+// whole-tensor ggml_backend_tensor_set in the GGUF data loop performs the
+// actual repack on upload.
+static std::vector<ggml_backend_buffer_t> alloc_cpu_repack_weights(
+        ggml_context * ctx, ggml_backend_t backend_cpu, bool verbose) {
+    std::vector<ggml_backend_buffer_t> buffers;
+
+    ggml_backend_dev_t cpu_dev = ggml_backend_get_device(backend_cpu);
+    ggml_backend_reg_t cpu_reg = cpu_dev ? ggml_backend_dev_backend_reg(cpu_dev) : nullptr;
+    if (!cpu_reg) {
+        return buffers;
+    }
+    // Registry proc lookup, not a direct ggml-cpu symbol: parakeet must stay
+    // linkable under GGML_BACKEND_DL where ggml-cpu is a runtime-loaded module.
+    auto get_extra_bufts_fn = (ggml_backend_dev_get_extra_bufts_t)
+        ggml_backend_reg_get_proc_address(cpu_reg, "ggml_backend_dev_get_extra_bufts");
+    ggml_backend_buffer_type_t * extra_bufts =
+        get_extra_bufts_fn ? get_extra_bufts_fn(cpu_dev) : nullptr;
+
+    for (; extra_bufts && *extra_bufts; ++extra_bufts) {
+        ggml_backend_buffer_type_t buft = *extra_bufts;
+        const size_t align = ggml_backend_buft_get_alignment(buft);
+
+        std::vector<ggml_tensor *> group;
+        size_t group_bytes = 0;
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->data || t->view_src)                     continue; // claimed by an earlier buft
+            if (!ggml_is_quantized(t->type))                continue;
+            if (!repack_allowlisted(ggml_get_name(t)))      continue;
+            if (!cpu_extra_buft_supports_mul_mat(cpu_dev, buft, t)) continue;
+            group.push_back(t);
+            group_bytes += GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), align);
+        }
+        if (group.empty()) {
+            continue;
+        }
+
+        ggml_backend_buffer_t buf = ggml_backend_buft_alloc_buffer(buft, group_bytes);
+        if (!buf) {
+            PARAKEET_LOG_WARN("gguf: failed to allocate %zu MB %s buffer; "
+                              "falling back to the default CPU buffer\n",
+                              group_bytes / (1024 * 1024), ggml_backend_buft_name(buft));
+            continue;
+        }
+        ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+        ggml_tallocr talloc = ggml_tallocr_new(buf);
+        size_t placed = 0;
+        for (ggml_tensor * t : group) {
+            // Cannot fail: group_bytes reserves each tensor's alloc size padded
+            // to the buffer alignment, matching ggml_tallocr's placement math.
+            if (ggml_tallocr_alloc(&talloc, t) != GGML_STATUS_SUCCESS) {
+                PARAKEET_LOG_ERROR("gguf: tensor '%s' did not fit the %s buffer\n",
+                                   ggml_get_name(t), ggml_backend_buft_name(buft));
+                break;
+            }
+            placed++;
+        }
+        buffers.push_back(buf);
+        if (verbose) {
+            PARAKEET_LOG_INFO("parakeet: %zu encoder weights -> %s (%.1f MB)\n",
+                              placed, ggml_backend_buft_name(buft),
+                              group_bytes / (1024.0 * 1024.0));
+        }
+    }
+    return buffers;
+}
+
 int load_from_gguf(const std::string & gguf_path,
                    ParakeetCtcModel  & out_model,
                    int                 n_threads,
@@ -762,6 +919,15 @@ int load_from_gguf(const std::string & gguf_path,
     }
 
     gguf_context * g = impl->gguf;
+
+    // CPU-only runs: place repack-eligible encoder GEMM weights in the CPU
+    // extra buffer type first; the default allocation below picks up every
+    // tensor this pass leaves unallocated. Skipped when the model lives on a
+    // GPU backend (the weights aren't in CPU memory at all).
+    if (impl->backend_active == impl->backend_cpu) {
+        impl->weights_extra_buffers =
+            alloc_cpu_repack_weights(impl->ctx, impl->backend_cpu, verbose);
+    }
 
     impl->weights_buffer = ggml_backend_alloc_ctx_tensors(impl->ctx, impl->backend_active);
     if (!impl->weights_buffer) {
@@ -1572,7 +1738,16 @@ ggml_tensor * conformer_conv_graph(ggml_context * ctx, ggml_tensor * xn,
                                    ConvNormType conv_norm_type,
                                    bool conv_causal,
                                    float layer_norm_eps) {
-    ggml_tensor * pw1_w_2d = ggml_reshape_2d(ctx, W.conv_pw1_w, d_model, 2 * d_model);
+    // Use the weight directly when the GGUF already stores it squeezed to
+    // (d_model, 2*d_model): a reshape is a view node, and a view over a
+    // CPU-repack weight drops the repack traits (the mul_mat would then read
+    // the interleaved bytes as plain q4_0). Legacy 3D GGUFs still reshape --
+    // those tensors are never placed in a repack buffer.
+    ggml_tensor * pw1_w_2d = W.conv_pw1_w;
+    if (!(ggml_n_dims(pw1_w_2d) == 2 &&
+          pw1_w_2d->ne[0] == d_model && pw1_w_2d->ne[1] == 2 * d_model)) {
+        pw1_w_2d = ggml_reshape_2d(ctx, W.conv_pw1_w, d_model, 2 * d_model);
+    }
     ggml_tensor * y = ggml_mul_mat(ctx, pw1_w_2d, xn);
     y = maybe_add_bias(ctx, y, W.conv_pw1_b);
 
@@ -1637,7 +1812,12 @@ ggml_tensor * conformer_conv_graph(ggml_context * ctx, ggml_tensor * xn,
         y  = ggml_cont(ctx, ggml_permute(ctx, yt, 1, 0, 2, 3));
     }
 
-    ggml_tensor * pw2_w_2d = ggml_reshape_2d(ctx, W.conv_pw2_w, d_model, d_model);
+    // Same repack-traits consideration as pw1 above.
+    ggml_tensor * pw2_w_2d = W.conv_pw2_w;
+    if (!(ggml_n_dims(pw2_w_2d) == 2 &&
+          pw2_w_2d->ne[0] == d_model && pw2_w_2d->ne[1] == d_model)) {
+        pw2_w_2d = ggml_reshape_2d(ctx, W.conv_pw2_w, d_model, d_model);
+    }
     y = ggml_mul_mat(ctx, pw2_w_2d, y);
     y = maybe_add_bias(ctx, y, W.conv_pw2_b);
 
