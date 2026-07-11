@@ -96,6 +96,14 @@ target_link_libraries(${UTF8_TEST} PRIVATE common)
 add_test(NAME ${UTF8_TEST} COMMAND ${UTF8_TEST})
 set_tests_properties(${UTF8_TEST} PROPERTIES LABELS "unit")
 
+# Model loading unit test
+set(MODEL_LOAD_TEST test-model-load)
+add_executable(${MODEL_LOAD_TEST} ${MODEL_LOAD_TEST}.cpp)
+target_include_directories(${MODEL_LOAD_TEST} PRIVATE ../include ../ggml/include)
+target_link_libraries(${MODEL_LOAD_TEST} PRIVATE whisper)
+add_test(NAME ${MODEL_LOAD_TEST} COMMAND ${MODEL_LOAD_TEST})
+set_tests_properties(${MODEL_LOAD_TEST} PROPERTIES LABELS "unit")
+
 # VAD test tests VAD in isolation
 set(VAD_TEST test-vad)
 add_executable(${VAD_TEST} ${VAD_TEST}.cpp)

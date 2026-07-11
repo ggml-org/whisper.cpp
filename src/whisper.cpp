@@ -602,6 +602,39 @@ struct whisper_hparams {
     float   eps           = 1e-5f;
 };
 
+static bool whisper_is_valid_ftype(int32_t ftype) {
+    switch ((ggml_ftype) ftype) {
+        case GGML_FTYPE_ALL_F32:
+        case GGML_FTYPE_MOSTLY_F16:
+        case GGML_FTYPE_MOSTLY_BF16:
+        case GGML_FTYPE_MOSTLY_Q4_0:
+        case GGML_FTYPE_MOSTLY_Q4_1:
+        case GGML_FTYPE_MOSTLY_Q1_0:
+        case GGML_FTYPE_MOSTLY_Q5_0:
+        case GGML_FTYPE_MOSTLY_Q5_1:
+        case GGML_FTYPE_MOSTLY_Q8_0:
+        case GGML_FTYPE_MOSTLY_MXFP4:
+        case GGML_FTYPE_MOSTLY_NVFP4:
+        case GGML_FTYPE_MOSTLY_Q2_K:
+        case GGML_FTYPE_MOSTLY_Q3_K:
+        case GGML_FTYPE_MOSTLY_Q4_K:
+        case GGML_FTYPE_MOSTLY_Q5_K:
+        case GGML_FTYPE_MOSTLY_Q6_K:
+        case GGML_FTYPE_MOSTLY_IQ2_XXS:
+        case GGML_FTYPE_MOSTLY_IQ2_XS:
+        case GGML_FTYPE_MOSTLY_IQ3_XXS:
+        case GGML_FTYPE_MOSTLY_IQ1_S:
+        case GGML_FTYPE_MOSTLY_IQ1_M:
+        case GGML_FTYPE_MOSTLY_IQ4_NL:
+        case GGML_FTYPE_MOSTLY_IQ4_XS:
+        case GGML_FTYPE_MOSTLY_IQ3_S:
+        case GGML_FTYPE_MOSTLY_IQ2_S:
+            return true;
+        default:
+            return false;
+    }
+}
+
 // audio encoding layer
 struct whisper_layer_encoder {
     // encoder.blocks.*.attn_ln
@@ -1552,11 +1585,11 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
 
         // for the big tensors, we have the option to store the data in 16-bit floats or quantized
         // in order to save memory and also to speed up the computation
-        wctx.wtype = ggml_ftype_to_ggml_type((ggml_ftype) (model.hparams.ftype));
-        if (wctx.wtype == GGML_TYPE_COUNT) {
+        if (!whisper_is_valid_ftype(model.hparams.ftype)) {
             WHISPER_LOG_ERROR("%s: invalid model (bad ftype value %d)\n", __func__, model.hparams.ftype);
             return false;
         }
+        wctx.wtype = ggml_ftype_to_ggml_type((ggml_ftype) (model.hparams.ftype));
 
         WHISPER_LOG_INFO("%s: n_vocab       = %d\n", __func__, hparams.n_vocab);
         WHISPER_LOG_INFO("%s: n_audio_ctx   = %d\n", __func__, hparams.n_audio_ctx);
