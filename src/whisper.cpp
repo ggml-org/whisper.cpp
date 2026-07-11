@@ -6833,6 +6833,13 @@ int whisper_full_with_state(
     if (params.language == nullptr || strlen(params.language) == 0 || strcmp(params.language, "auto") == 0 || params.detect_language) {
         std::vector<float> probs(whisper_lang_max_id() + 1, 0.0f);
 
+        if (params.encoder_begin_callback) {
+            if (params.encoder_begin_callback(ctx, state, params.encoder_begin_callback_user_data) == false) {
+                WHISPER_LOG_ERROR("%s: encoder_begin_callback returned false - aborting\n", __func__);
+                return -3;
+            }
+        }
+
         const auto lang_id = whisper_lang_auto_detect_with_state(ctx, state, 0, params.n_threads, probs.data());
         if (lang_id < 0) {
             WHISPER_LOG_ERROR("%s: failed to auto-detect language\n", __func__);
