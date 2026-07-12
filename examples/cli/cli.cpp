@@ -85,6 +85,8 @@ struct whisper_params {
     std::string prompt;
     std::string font_path = "/System/Library/Fonts/Supplemental/Courier New Bold.ttf";
     std::string model     = "models/ggml-base.en.bin";
+    std::string hf_repo;
+    std::string hf_file;
     std::string grammar;
     std::string grammar_rule;
 
@@ -199,6 +201,8 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (                  arg == "--prompt")               { params.prompt          = ARGV_NEXT; }
         else if (                  arg == "--carry-initial-prompt") { params.carry_initial_prompt = true; }
         else if (arg == "-m"    || arg == "--model")                { params.model           = ARGV_NEXT; }
+        else if (arg == "-hf"   || arg == "--hf-repo")              { params.hf_repo         = ARGV_NEXT; }
+        else if (arg == "-hff"  || arg == "--hf-file")              { params.hf_file         = ARGV_NEXT; }
         else if (arg == "-f"    || arg == "--file")                 { params.fname_inp.emplace_back(ARGV_NEXT); }
         else if (arg == "-oved" || arg == "--ov-e-device")          { params.openvino_encode_device = ARGV_NEXT; }
         else if (arg == "-dtw"  || arg == "--dtw")                  { params.dtw             = ARGV_NEXT; }
@@ -282,6 +286,8 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "             --prompt PROMPT        [%-7s] initial prompt (max n_text_ctx/2 tokens)\n",       params.prompt.c_str());
     fprintf(stderr, "             --carry-initial-prompt [%-7s] always prepend initial prompt\n",                  params.carry_initial_prompt ? "true" : "false");
     fprintf(stderr, "  -m FNAME,  --model FNAME          [%-7s] model path\n",                                     params.model.c_str());
+    fprintf(stderr, "  -hf REPO,  --hf-repo REPO         [%-7s] HuggingFace repo (org/repo) to resolve from cache\n", params.hf_repo.c_str());
+    fprintf(stderr, "  -hff FILE, --hf-file FILE         [%-7s] file within the HuggingFace repo (e.g. ggml-base.en.bin)\n", params.hf_file.c_str());
     fprintf(stderr, "  -f FNAME,  --file FNAME           [%-7s] input audio file path\n",                          "");
     fprintf(stderr, "  -oved D,   --ov-e-device DNAME    [%-7s] the OpenVINO device used for encode inference\n",  params.openvino_encode_device.c_str());
     fprintf(stderr, "  -dtw MODEL --dtw MODEL            [%-7s] compute token-level timestamps\n",                 params.dtw.c_str());
@@ -1074,6 +1080,15 @@ int main(int argc, char ** argv) {
 
         if (cparams.dtw_aheads_preset == WHISPER_AHEADS_NONE) {
             fprintf(stderr, "error: unknown DTW preset '%s'\n", params.dtw.c_str());
+            return 3;
+        }
+    }
+
+    // resolve HF repo-id -> cached model path if -hf given and -m was left at its default
+    if (!params.hf_repo.empty() && params.model == "models/ggml-base.en.bin") {
+        params.model = whisper_hf_resolve_model(params.hf_repo, params.hf_file);
+        if (params.model.empty()) {
+            // whisper_hf_resolve_model prints a specific diagnostic for every failure mode
             return 3;
         }
     }
