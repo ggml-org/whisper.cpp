@@ -96,6 +96,16 @@ target_link_libraries(${UTF8_TEST} PRIVATE common)
 add_test(NAME ${UTF8_TEST} COMMAND ${UTF8_TEST})
 set_tests_properties(${UTF8_TEST} PROPERTIES LABELS "unit")
 
+# Audio byte-buffer decode regression test
+set(AUDIO_BUFFER_TEST test-read-audio-data-buffer)
+add_executable(${AUDIO_BUFFER_TEST} ${AUDIO_BUFFER_TEST}.cpp)
+target_include_directories(${AUDIO_BUFFER_TEST} PRIVATE ../examples)
+target_link_libraries(${AUDIO_BUFFER_TEST} PRIVATE common)
+target_compile_definitions(${AUDIO_BUFFER_TEST} PRIVATE
+    SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
+add_test(NAME ${AUDIO_BUFFER_TEST} COMMAND ${AUDIO_BUFFER_TEST})
+set_tests_properties(${AUDIO_BUFFER_TEST} PROPERTIES LABELS "unit")
+
 # VAD test tests VAD in isolation
 set(VAD_TEST test-vad)
 add_executable(${VAD_TEST} ${VAD_TEST}.cpp)
