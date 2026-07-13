@@ -56,7 +56,7 @@ ruby_whisper_vad_params_set_threshold(VALUE self, VALUE value)
 {
   ruby_whisper_vad_params *rwvp;
   TypedData_Get_Struct(self, ruby_whisper_vad_params, &ruby_whisper_vad_params_type, rwvp);
-  rwvp->params.threshold = RFLOAT_VALUE(value);
+  rwvp->params.threshold = NUM2DBL(value);
   return value;
 }
 
@@ -125,7 +125,7 @@ ruby_whisper_vad_params_set_max_speech_duration_s(VALUE self, VALUE value)
 {
   ruby_whisper_vad_params *rwvp;
   TypedData_Get_Struct(self, ruby_whisper_vad_params, &ruby_whisper_vad_params_type, rwvp);
-  rwvp->params.max_speech_duration_s = RFLOAT_VALUE(value);
+  rwvp->params.max_speech_duration_s = NUM2DBL(value);
   return value;
 }
 
@@ -171,7 +171,7 @@ ruby_whisper_vad_params_set_samples_overlap(VALUE self, VALUE value)
 {
   ruby_whisper_vad_params *rwvp;
   TypedData_Get_Struct(self, ruby_whisper_vad_params, &ruby_whisper_vad_params_type, rwvp);
-  rwvp->params.samples_overlap = RFLOAT_VALUE(value);
+  rwvp->params.samples_overlap = NUM2DBL(value);
   return value;
 }
 
