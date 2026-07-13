@@ -1,13 +1,5 @@
-require "mutex_m"
-
 module Whisper
   module LogSettable
-    class << self
-      def extended(base)
-        base.extend Mutex_m
-      end
-    end
-
     private
 
     def start_log_callback_thread
@@ -31,6 +23,11 @@ module Whisper
           $stderr.puts err
         end
       }
+    end
+
+    def synchronize(&block)
+      @mutex ||= Thread::Mutex.new
+      @mutex.synchronize &block 
     end
   end
 end

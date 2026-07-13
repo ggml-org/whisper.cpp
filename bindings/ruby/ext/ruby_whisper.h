@@ -149,7 +149,6 @@ typedef struct {
   VALUE context;
 } ruby_whisper_parakeet_model;
 
-extern ID id_extended;
 extern ID id_log_callback_thread;
 extern ID id_start_log_callback_thread;
 extern ID id_alive_p;
