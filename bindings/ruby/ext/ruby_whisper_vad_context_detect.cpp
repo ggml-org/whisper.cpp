@@ -40,7 +40,7 @@ ruby_whisper_vad_detect(VALUE self, VALUE file_path, VALUE params) {
 
   segments = whisper_vad_segments_from_samples(rwvc->context, rwvp->params, pcmf32.data(), pcmf32.size());
   if (segments == nullptr) {
-    rb_raise(rb_eRuntimeError, "Failed to process audio\n");
+    rb_raise(rb_eRuntimeError, "Failed to process audio");
   }
 
   return ruby_whisper_vad_segments_s_init(segments);
