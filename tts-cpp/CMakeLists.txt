@@ -1258,6 +1258,12 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-kv-cache-type)
     tts_cpp_register_test(test-kv-cache-type LABEL "unit")
 
+    add_executable(test-s3gen-cfg-rate test/test_s3gen_cfg_rate.cpp)
+    target_link_libraries(test-s3gen-cfg-rate PRIVATE tts-cpp ggml)
+    target_include_directories(test-s3gen-cfg-rate PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-s3gen-cfg-rate)
+    tts_cpp_register_test(test-s3gen-cfg-rate LABEL "unit")
+
     # T3 step-graph cache validation.
     add_executable(test-t3-caches test/test_t3_caches.cpp)
     target_link_libraries(test-t3-caches PRIVATE tts-cpp ggml)

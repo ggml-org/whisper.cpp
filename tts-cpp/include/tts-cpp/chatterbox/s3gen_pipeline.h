@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -189,6 +190,8 @@ struct s3gen_synthesize_opts {
     // some extra high-frequency noise.  0 → use the default (2).
     int                  cfm_steps             = 0;
 
+    float                cfg_rate              = -1.0f;
+
     // Set by the chunk-streaming caller.  For standard-CFM (non-meanflow,
     // e.g. Multilingual) models the per-chunk CFM step count is floored to the
     // model's n_timesteps here: a low cfm_steps under-integrates
@@ -216,6 +219,25 @@ struct s3gen_synthesize_opts {
     // decode loop and the S3Gen + HiFT path.
     const std::atomic<bool> * cancel_flag       = nullptr;
 };
+
+inline float resolve_s3gen_cfg_rate(float caller_cfg_rate, float model_cfg_rate) {
+    return caller_cfg_rate >= 0.0f ? caller_cfg_rate : model_cfg_rate;
+}
+
+// Debug knob: CHATTERBOX_CFG_RATE overrides the resolved cfg_rate at runtime.
+// Unset/empty, unparseable, or negative (sentinel) values leave `current`
+// untouched; a valid non-negative value replaces it (0 disables CFG).
+inline float apply_cfg_rate_env_override(float current, const char * env) {
+    if (env == nullptr || env[0] == '\0') {
+        return current;
+    }
+    char * end = nullptr;
+    const double parsed = std::strtod(env, &end);
+    if (end == env || *end != '\0' || parsed < 0.0) {
+        return current;
+    }
+    return (float) parsed;
+}
 
 // Runs encoder + CFM + HiFT on the given T3 speech tokens and writes a WAV.
 // Returns 0 on success, non-zero on error.

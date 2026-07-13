@@ -332,6 +332,9 @@ struct cli_params {
     // reduces S3Gen wall-clock proportionally; the §3.21 sweep documents
     // the audio-cosine knee.  Streaming uses --stream-cfm-steps instead.
     int32_t cfm_steps                 = 0;
+    // S3Gen classifier-free-guidance rate.  -1 (sentinel) keeps the model's
+    // baked-in rate; 0 skips the unconditional pass (single batch, faster).
+    float   cfg_rate                  = -1.0f;
 
     // Auto-split the input text into sentences before running the pipeline.
     // Chatterbox Turbo's T3 degrades badly on autoregressive outputs longer
@@ -513,6 +516,9 @@ static void print_usage(const char * argv0) {
     fprintf(stderr, "                          trades small audio quality for proportional S3Gen\n");
     fprintf(stderr, "                          speedup.  Turbo's meanflow defaults to 2 steps.\n");
     fprintf(stderr, "                          See PROGRESS.md §3.21 for the quality knee sweep.\n");
+    fprintf(stderr, "  --cfg-rate X            S3Gen classifier-free-guidance rate.  <0 keeps the\n");
+    fprintf(stderr, "                          model default; 0 skips the unconditional pass\n");
+    fprintf(stderr, "                          (single batch, ~1.4x faster synthesis).\n");
     fprintf(stderr, "                          (default: 0 = GGUF's n_timesteps)\n");
     fprintf(stderr, "  --cfm-f16-kv-attn       Experimental: CFM flash-attn uses F32 Q + F16 K/V so\n");
     fprintf(stderr, "                          OpenCL/Adreno can dispatch flash_attn_f32_f16.\n");
@@ -713,6 +719,7 @@ static bool parse_args(int argc, char ** argv, cli_params & params) {
         else if (arg == "--stream-cfm-steps")          { if (!parse_int("--stream-cfm-steps",          params.stream_cfm_steps))          return false; }
         else if (arg == "--stream-left-context-tokens"){ if (!parse_int("--stream-left-context-tokens", params.stream_left_context_tokens)) return false; }
         else if (arg == "--cfm-steps")                 { if (!parse_int("--cfm-steps",                 params.cfm_steps))                 return false; }
+        else if (arg == "--cfg-rate")                  { if (!parse_float("--cfg-rate",               params.cfg_rate))                  return false; }
         else if (arg == "--input-file")       { auto v = next("--input-file");       if (!v) return false; params.input_file = v; }
         else if (arg == "--input-eof-marker") { auto v = next("--input-eof-marker"); if (!v) return false; params.input_eof_marker = v; }
         else if (arg == "--input-by-line")    { params.input_by_line = true; }
@@ -1109,6 +1116,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
             opts.verbose         = params.verbose;
             opts.n_gpu_layers    = params.n_gpu_layers;
             opts.cfm_steps       = params.cfm_steps;
+            opts.cfg_rate        = params.cfg_rate;
             opts.dump_mel_path   = params.dump_mel_path;
             opts.cfm_f16_kv_attn = params.cfm_f16_kv_attn;
             if (!params.reference_audio.empty()) {
@@ -1384,6 +1392,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
             // chunk; --cfm-steps falls in as the per-chunk default below
             // (`stream_cfm_steps > 0 ? stream_cfm_steps : cfm_steps`).
             opts.cfm_steps       = params.cfm_steps;
+            opts.cfg_rate        = params.cfg_rate;
             opts.dump_mel_path   = params.dump_mel_path;
             opts.cfm_f16_kv_attn = params.cfm_f16_kv_attn;
             if (!params.reference_audio.empty()) {
@@ -1704,6 +1713,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                     copts.hift_source_tail_out     = &tail_out;
                     copts.source_tail_samples      = 480;
                     copts.cfm_steps                = params.stream_cfm_steps > 0 ? params.stream_cfm_steps : params.cfm_steps;
+                    copts.cfg_rate                 = params.cfg_rate;
                     copts.cfm_f16_kv_attn          = params.cfm_f16_kv_attn;
                     copts.streaming = true;  // floor CFM steps for standard CFM
 
@@ -2266,6 +2276,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
             // Streaming chunks honour --stream-cfm-steps with --cfm-steps as
             // fallback when copts is set up further below.
             opts.cfm_steps       = params.cfm_steps;
+            opts.cfg_rate        = params.cfg_rate;
             opts.dump_mel_path   = params.dump_mel_path;
             opts.cfm_f16_kv_attn = params.cfm_f16_kv_attn;
             if (!params.reference_audio.empty()) {
@@ -2516,6 +2527,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                         copts.hift_source_tail_out      = &tail_out;
                         copts.source_tail_samples       = 480;
                         copts.cfm_steps                 = params.stream_cfm_steps > 0 ? params.stream_cfm_steps : params.cfm_steps;
+                        copts.cfg_rate                  = params.cfg_rate;
                         copts.cfm_f16_kv_attn           = params.cfm_f16_kv_attn;
                         copts.streaming = true;  // floor CFM steps for standard CFM
 

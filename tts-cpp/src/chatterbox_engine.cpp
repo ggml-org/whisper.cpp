@@ -599,6 +599,7 @@ struct Engine::Impl {
         sopts.n_threads       = resolve_thread_count(opts.n_threads);
         sopts.verbose         = opts.verbose;
         sopts.n_gpu_layers    = opts.n_gpu_layers;
+        sopts.cfg_rate        = opts.s3gen_cfg_rate;
 
         // Use the non-owning view fields rather than the *_override
         // vectors so the streaming path doesn't pay a per-chunk MB-

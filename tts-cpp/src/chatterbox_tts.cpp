@@ -2820,7 +2820,18 @@ int s3gen_synthesize_to_wav(
         t_span.push_back(tau);
     }
 
-    const float cfg_rate = m.cfg_rate;
+    float cfg_rate = resolve_s3gen_cfg_rate(opts.cfg_rate, m.cfg_rate);
+    {
+        const float overridden = apply_cfg_rate_env_override(cfg_rate, getenv("CHATTERBOX_CFG_RATE"));
+        if (overridden != cfg_rate) {
+            cfg_rate = overridden;
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                fprintf(stderr, "s3gen: CHATTERBOX_CFG_RATE override -> cfg_rate=%.3f\n", cfg_rate);
+            }
+        }
+    }
     const std::vector<float> zero_mu  (T_mu * MEL, 0.0f);
     const std::vector<float> zero_cond(T_mu * MEL, 0.0f);
     const std::vector<float> zero_spks(MEL, 0.0f);

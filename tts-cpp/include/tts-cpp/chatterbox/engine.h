@@ -193,6 +193,8 @@ struct EngineOptions {
     // S3Gen side.  0 = library default (2-step meanflow).
     int cfm_steps = 0;
 
+    float s3gen_cfg_rate = -1.0f;
+
     // desired output sample rate in Hz. The Chatterbox pipeline
     // natively emits 24 kHz mono float32; when this is a positive rate other
     // than 24000 the engine resamples the final PCM (Kaiser-windowed sinc, the
