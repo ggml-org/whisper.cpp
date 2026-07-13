@@ -52,8 +52,11 @@ ggml_tensor * dpgrnn(ggml_context * ctx, ggml_tensor * x, const std::string & pr
 
 // Causal time-frequency attention (denoiser_core.cpp ctfa): out = at(temporal) * x * af(freq),
 // each gate a GRU/BiGRU + FC + sigmoid over an energy-mean.  x:[F,T,C] -> [F,T,C].
+// With gf, the gate subtrees are pinned into the graph first so the two mask
+// multiplies come out adjacent (lets the backend fuse the pair).
 ggml_tensor * ctfa(ggml_context * ctx, ggml_tensor * x, const std::string & prefix,
-                   const WResolver & W, int freq_comp_ratio, bool fused = true);
+                   const WResolver & W, int freq_comp_ratio, bool fused = true,
+                   ggml_cgraph * gf = nullptr);
 
 } // namespace detail
 

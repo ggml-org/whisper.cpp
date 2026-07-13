@@ -258,6 +258,7 @@ set(TTS_CPP_LIB_SOURCES
     src/lavasr/dsp/stft_processor.cpp
     src/lavasr/dsp/mel_filterbank.cpp
     src/lavasr/dsp/fastlr_merge.cpp
+    src/lavasr/dsp/overlap_add.cpp
     src/lavasr/enhancer_core.cpp
     src/lavasr/enhancer.cpp
     src/lavasr/enhancer_ggml.cpp
@@ -435,6 +436,12 @@ if (TTS_CPP_BUILD_EXECUTABLES)
     add_executable(supertonic-cli src/supertonic_cli.cpp)
     target_link_libraries(supertonic-cli PRIVATE tts-cpp)
     tts_cpp_apply_ccache(supertonic-cli)
+
+    # LavaSR two-stage (denoiser -> enhancer) bench + by-ear harness.
+    add_executable(lavasr-bench src/lavasr/lavasr_bench.cpp)
+    target_link_libraries(lavasr-bench PRIVATE tts-cpp)
+    target_include_directories(lavasr-bench PRIVATE include ggml/include src)
+    tts_cpp_apply_ccache(lavasr-bench)
 endif()
 
 if (TTS_CPP_BUILD_TESTS)
@@ -989,8 +996,12 @@ if (TTS_CPP_BUILD_TESTS)
         src/lavasr/dsp/resampler.cpp
         src/lavasr/dsp/stft_processor.cpp
         src/lavasr/dsp/mel_filterbank.cpp
-        src/lavasr/dsp/fastlr_merge.cpp)
+        src/lavasr/dsp/fastlr_merge.cpp
+        src/lavasr/dsp/overlap_add.cpp)
     target_include_directories(test-lavasr-dsp PRIVATE src)
+    if (OpenMP_CXX_FOUND)
+        target_link_libraries(test-lavasr-dsp PRIVATE OpenMP::OpenMP_CXX)
+    endif()
     tts_cpp_apply_ccache(test-lavasr-dsp)
     tts_cpp_register_test(test-lavasr-dsp LABEL "unit")
 

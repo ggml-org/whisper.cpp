@@ -67,8 +67,10 @@ MelFilterbank::mel_spectrogram(const std::vector<float> & wav,
 
     // Magnitude spectrogram (not power) — matches Vocos/LavaSR.  Compute |spec| once per (t,f)
     // into a scratch row, then apply the mel filters (avoids the redundant per-filter sqrt).
-    std::vector<float> mag(n_freqs);
+    // Frames are independent -> parallel (per-frame math unchanged).
+    #pragma omp parallel for schedule(static)
     for (int t = 0; t < T; t++) {
+        std::vector<float> mag(n_freqs);
         for (int f = 0; f < n_freqs; f++) {
             mag[f] = std::abs(spec[t][f]);
         }

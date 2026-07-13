@@ -8,13 +8,21 @@
 #include "lavasr/dsp/dsp_constants.h"
 #include "lavasr/dsp/fastlr_merge.h"
 #include "lavasr/dsp/mel_filterbank.h"
+#include "lavasr/dsp/overlap_add.h"
 #include "lavasr/dsp/resampler.h"
 #include "lavasr/dsp/stft_processor.h"
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstdio>
+#include <stdexcept>
+#include <utility>
 #include <vector>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 using namespace tts_cpp::lavasr::dsp;
 
@@ -304,6 +312,238 @@ static void test_fastlr_merge() {
     }
 }
 
+// Full-Hermitian reference inverse for FastLRMerge, reconstructed from the
+// pre-two-for-one implementation (fc89ffe4^); the parity oracle for the fast path.
+static std::vector<float> fastlr_merge_hermitian_ref(
+    const std::vector<float> & enhanced, const std::vector<float> & original,
+    int sample_rate, int cutoff_hz, int transition_bins) {
+    const int N = (int) enhanced.size();
+    const int M = (int) original.size();
+    if (N == 0) {
+        return {};
+    }
+    if (M == 0) {
+        return enhanced;
+    }
+    if (N != M) {
+        throw std::invalid_argument("size mismatch");
+    }
+
+    int n_pow2 = 1;
+    while (n_pow2 < std::max(N, M)) {
+        n_pow2 <<= 1;
+    }
+
+    ComplexVec comb(n_pow2, {0.0f, 0.0f});
+    for (int i = 0; i < N; i++) {
+        comb[i] = {enhanced[i], original[i]};
+    }
+    StftProcessor::fft(comb, false);
+
+    auto spec1_at = [&](int k) {
+        const int km = (n_pow2 - k) % n_pow2;
+        return (comb[k] + std::conj(comb[km])) * 0.5f;
+    };
+    auto spec2_at = [&](int k) {
+        const int km = (n_pow2 - k) % n_pow2;
+        return (comb[k] - std::conj(comb[km])) * std::complex<float>(0.0f, -0.5f);
+    };
+
+    const int n_bins     = n_pow2 / 2 + 1;
+    const int cutoff_bin = (int) (cutoff_hz / (sample_rate / 2.0f) * n_bins);
+    const int half       = transition_bins / 2;
+    const int start      = std::max(0, cutoff_bin - half);
+    const int end        = std::min(n_bins, cutoff_bin + half);
+
+    std::vector<float> mask(n_bins, 1.0f);
+    for (int i = 0; i < start; i++) {
+        mask[i] = 0.0f;
+    }
+    if (end - start > 1) {
+        for (int i = start; i < end; i++) {
+            const float x = -1.0f + 2.0f * (i - start) / (float) (end - start - 1);
+            const float t = (x + 1.0f) / 2.0f;
+            mask[i]       = 3.0f * t * t - 2.0f * t * t * t;
+        }
+    } else if (end == start + 1) {
+        mask[start] = 0.5f;
+    }
+
+    // Fill the full n_pow2-bin Hermitian spectrum and invert with one length-N FFT.
+    ComplexVec blended(n_pow2, {0.0f, 0.0f});
+    for (int i = 0; i < n_bins; i++) {
+        const std::complex<float> s1 = spec1_at(i);
+        const std::complex<float> s2 = spec2_at(i);
+        blended[i]                   = s2 + (s1 - s2) * mask[i];
+        if (i > 0 && i < n_pow2 / 2) {
+            blended[n_pow2 - i] = std::conj(blended[i]);
+        }
+    }
+    blended[n_pow2 / 2] = {blended[n_pow2 / 2].real(), 0.0f};
+    StftProcessor::fft(blended, true);
+
+    std::vector<float> out(N);
+    for (int i = 0; i < N; i++) {
+        out[i] = blended[i].real();
+    }
+    return out;
+}
+
+static void test_fastlr_merge_parity() {
+    const int   sr  = 48000;
+    // Observed max on host ~5.6e-6 (N=8192; N<=2 exact); 1e-4 leaves cross-platform headroom.
+    const float TOL = 1e-4f;
+    // Edge cases the two-for-one inverse must still match: n_pow2==1 (N=1),
+    // n_pow2==2 (N=2), non-pow2 pad (N=5), and the general case (N=8192).
+    for (int N : {1, 2, 5, 8192}) {
+        auto e    = make_parity_signal(N, sr);
+        auto o    = generate_sine(N, 777.0f, sr, 0.3f);
+        auto fast = FastLRMerge::merge(e, o, sr, 4000, 256);
+        auto ref  = fastlr_merge_hermitian_ref(e, o, sr, 4000, 256);
+        CHECK(fast.size() == ref.size(), "fastlr parity length matches reference");
+        const float m = (fast.size() == ref.size())
+                            ? max_abs_diff(fast, ref, 0, (int) fast.size())
+                            : 1e9f;
+        std::printf("fastlr parity N=%5d: max_abs=%.3g (tol %.1g)\n", N, m, TOL);
+        CHECK(m <= TOL,
+              "fastlr two-for-one matches the full-Hermitian reference within tolerance");
+    }
+}
+
+// The parallel DSP (stft/istft/fft/mel and the fastlr twiddle) is designed to be
+// bit-identical regardless of thread count; assert that 1 thread == many threads.
+static void test_dsp_thread_invariance() {
+#ifdef _OPENMP
+    // Large FFT that trips the parallel butterfly branch (N >= 65536).
+    auto run_fft = []() {
+        ComplexVec x(131072);
+        for (int i = 0; i < (int) x.size(); i++) {
+            x[i] = {std::sin(2.0f * (float) kPi * 13 * i / (int) x.size()), 0.0f};
+        }
+        StftProcessor::fft(x, false);
+        StftProcessor::fft(x, true);
+        return x;
+    };
+    omp_set_num_threads(1);
+    ComplexVec f1 = run_fft();
+    omp_set_num_threads(8);
+    ComplexVec f8 = run_fft();
+    bool fft_id = (f1.size() == f8.size());
+    for (size_t i = 0; fft_id && i < f1.size(); i++) {
+        fft_id = (f1[i].real() == f8[i].real()) && (f1[i].imag() == f8[i].imag());
+    }
+    CHECK(fft_id, "fft is bit-identical across thread counts");
+
+    // stft -> istft round-trip long enough to span multiple istft pair-tiles.
+    auto run_stft_istft = []() {
+        StftProcessor stft(2048, 512, 2048, false);
+        auto          x    = generate_sine(300000, 440.0f, 48000);
+        auto          spec = stft.stft(x);
+        return stft.istft(spec, (int) x.size());
+    };
+    omp_set_num_threads(1);
+    auto s1 = run_stft_istft();
+    omp_set_num_threads(8);
+    auto s8 = run_stft_istft();
+    CHECK(s1 == s8, "stft->istft is bit-identical across thread counts");
+
+    auto run_mel = []() {
+        MelFilterbank mel(44100, 2048, 80, 0.0f, 8000.0f);
+        auto          tone = generate_sine(48000, 1000.0f, 48000);
+        return mel.mel_spectrogram(tone, 512);
+    };
+    omp_set_num_threads(1);
+    auto m1 = run_mel();
+    omp_set_num_threads(8);
+    auto m8 = run_mel();
+    bool mel_id = (m1.size() == m8.size());
+    for (size_t b = 0; mel_id && b < m1.size(); b++) {
+        mel_id = (m1[b] == m8[b]);
+    }
+    CHECK(mel_id, "mel is bit-identical across thread counts");
+
+    auto run_merge = []() {
+        auto e = make_parity_signal(16384, 48000);
+        auto o = generate_sine(16384, 777.0f, 48000, 0.3f);
+        return FastLRMerge::merge(e, o, 48000, 4000, 256);
+    };
+    omp_set_num_threads(1);
+    auto r1 = run_merge();
+    omp_set_num_threads(8);
+    auto r8 = run_merge();
+    CHECK(r1 == r8, "fastlr merge is bit-identical across thread counts");
+#else
+    std::printf("thread-invariance: OpenMP not enabled, skipped\n");
+#endif
+}
+
+// The denoiser overlap-add gather claims a bit-identical, thread-count-independent
+// accumulation (ascending-c order, per-row single-writer); assert it on synthetic planes.
+static void test_overlap_add_thread_invariance() {
+    const int F = 4;
+    auto run = [&](int T, int L, const std::vector<int> & starts,
+                   const std::vector<std::vector<float>> & pr,
+                   const std::vector<std::vector<float>> & pi, std::vector<float> & outRe,
+                   std::vector<float> & outIm) {
+        overlap_add_normalize(
+            starts, T, F, L,
+            [&](int c) { return std::make_pair(pr[c].data(), pi[c].data()); }, outRe, outIm);
+    };
+    // Overlap path (T > L): deterministic per-chunk planes, hop-spaced starts + tail.
+    {
+        const int        L = 8, H = 4, T = 40;
+        std::vector<int> starts;
+        for (int s = 0; s <= T - L; s += H) {
+            starts.push_back(s);
+        }
+        if (starts.back() != T - L) {
+            starts.push_back(T - L);
+        }
+        const int                       Nc = (int) starts.size();
+        std::vector<std::vector<float>> pr(Nc, std::vector<float>(L * F));
+        std::vector<std::vector<float>> pi(Nc, std::vector<float>(L * F));
+        for (int c = 0; c < Nc; c++) {
+            for (int i = 0; i < L * F; i++) {
+                pr[c][i] = std::sin(0.1f * (c * 131 + i));
+                pi[c][i] = std::cos(0.07f * (c * 57 + i));
+            }
+        }
+        std::vector<float> r1, i1, r8, i8;
+#ifdef _OPENMP
+        omp_set_num_threads(1);
+#endif
+        run(T, L, starts, pr, pi, r1, i1);
+#ifdef _OPENMP
+        omp_set_num_threads(8);
+#endif
+        run(T, L, starts, pr, pi, r8, i8);
+        CHECK(r1 == r8 && i1 == i8,
+              "overlap-add gather is bit-identical across thread counts");
+    }
+    // Copy path (T <= L): chunk 0's first T frames pass straight through.
+    {
+        const int                       L = 8, T = 5;
+        std::vector<int>                starts = {0};
+        std::vector<std::vector<float>> pr(1, std::vector<float>(L * F));
+        std::vector<std::vector<float>> pi(1, std::vector<float>(L * F));
+        for (int i = 0; i < L * F; i++) {
+            pr[0][i] = 0.5f * i;
+            pi[0][i] = -0.3f * i;
+        }
+        std::vector<float> r, im;
+        run(T, L, starts, pr, pi, r, im);
+        CHECK(r.size() == (size_t) T * F, "overlap-add copy path length");
+        bool ok = r.size() == (size_t) T * F;
+        for (int t = 0; ok && t < T; t++) {
+            for (int f = 0; f < F; f++) {
+                ok = ok && (r[t * F + f] == pr[0][t * F + f]) &&
+                     (im[t * F + f] == pi[0][t * F + f]);
+            }
+        }
+        CHECK(ok, "overlap-add copy path passes chunk 0 through");
+    }
+}
+
 int main() {
     test_resampler();
     test_resampler_polyphase_matches_naive();
@@ -312,6 +552,9 @@ int main() {
     test_istft_complex_dc_nyquist();
     test_mel();
     test_fastlr_merge();
+    test_fastlr_merge_parity();
+    test_dsp_thread_invariance();
+    test_overlap_add_thread_invariance();
 
     if (g_failures == 0) {
         std::printf("OK: all LavaSR DSP tests passed\n");

@@ -14,6 +14,14 @@
 namespace tts_cpp::lavasr {
 namespace detail {
 
+// fp32-precise matmul: parity with the scalar core requires fp32 arithmetic
+// even on GPUs whose default F32 matmul multiplies in fp16 (e.g. Vulkan).
+static ggml_tensor * mul_mat_f32(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b) {
+    ggml_tensor * r = ggml_mul_mat(ctx, a, b);
+    ggml_mul_mat_set_prec(r, GGML_PREC_F32);
+    return r;
+}
+
 // [n, B] slice of rows [r0, r0+n) from a [3H, B] gate tensor, as a strided view
 // (the consuming add/mul emit a contiguous result, so no cont is needed).
 static ggml_tensor * gate_rows(ggml_context * ctx, ggml_tensor * g, int64_t r0, int64_t n) {
@@ -33,7 +41,7 @@ ggml_tensor * gru_batched(ggml_context * ctx, ggml_tensor * x, ggml_tensor * Wih
 
     // Precompute the state-independent input transform Wih*x for ALL timesteps in one wide
     // [3H, B*L] GEMM (bias broadcast once); bit-identical to the per-step transform.
-    ggml_tensor * gi_all = ggml_add(ctx, ggml_mul_mat(ctx, Wih, ggml_reshape_2d(ctx, x, I, B * L)), bih);
+    ggml_tensor * gi_all = ggml_add(ctx, mul_mat_f32(ctx, Wih, ggml_reshape_2d(ctx, x, I, B * L)), bih);
     gi_all               = ggml_reshape_3d(ctx, gi_all, 3 * H, B, L);          // [3H, B, L]
 
     // Fused GRU op: the whole recurrent sweep in one dispatch; the per-step path below is
@@ -49,7 +57,7 @@ ggml_tensor * gru_batched(ggml_context * ctx, ggml_tensor * x, ggml_tensor * Wih
         ggml_tensor * gi = ggml_view_2d(ctx, gi_all, 3 * H, B, gi_all->nb[1],
                                         (size_t) t * gi_all->nb[2]);           // [3H, B] at time t
         // h == 0 on the first step: Whh*0 = 0, so gh = Bhh broadcast over B.
-        ggml_tensor * gh = h ? ggml_add(ctx, ggml_mul_mat(ctx, Whh, h), bhh)
+        ggml_tensor * gh = h ? ggml_add(ctx, mul_mat_f32(ctx, Whh, h), bhh)
                              : ggml_add(ctx, ggml_scale(ctx, gi, 0.0f), bhh);   // [3H, B]
 
         ggml_tensor * r = ggml_sigmoid(ctx, ggml_add(ctx, gate_rows(ctx, gi, 0, H),
@@ -183,7 +191,7 @@ static ggml_tensor * grnn(ggml_context * ctx, ggml_tensor * x, const std::string
 static ggml_tensor * fc_hidden(ggml_context * ctx, ggml_tensor * y, ggml_tensor * Wfc,
                                ggml_tensor * bias) {
     const int64_t hy = y->ne[0], B = y->ne[1], L = y->ne[2], Cout = Wfc->ne[1];
-    ggml_tensor * r  = ggml_mul_mat(ctx, Wfc, ggml_reshape_2d(ctx, ggml_cont(ctx, y), hy, B * L)); // [Cout, B*L]
+    ggml_tensor * r  = mul_mat_f32(ctx, Wfc, ggml_reshape_2d(ctx, ggml_cont(ctx, y), hy, B * L)); // [Cout, B*L]
     if (bias) r = ggml_add(ctx, r, ggml_reshape_2d(ctx, bias, Cout, 1));
     return ggml_reshape_3d(ctx, r, Cout, B, L);                                // [Cout, B, L]
 }
@@ -221,7 +229,7 @@ ggml_tensor * dpgrnn(ggml_context * ctx, ggml_tensor * x, const std::string & pr
 }
 
 ggml_tensor * ctfa(ggml_context * ctx, ggml_tensor * x, const std::string & p,
-                   const WResolver & W, int r, bool fused) {
+                   const WResolver & W, int r, bool fused, ggml_cgraph * gf) {
     const int64_t F = x->ne[0], T = x->ne[1], C = x->ne[2], Bc = x->ne[3];
 
     // ---- TA: energy-mean over freq -> GRU over time (batch=chunk) -> FC -> sigmoid ----
@@ -254,6 +262,10 @@ ggml_tensor * ctfa(ggml_context * ctx, ggml_tensor * x, const std::string & p,
     ggml_tensor * afF  = ggml_cont(ctx, ggml_view_2d(ctx, afp, F, T * Bc, afp->nb[1], 0)); // [F, T*Bc]
     ggml_tensor * af_b = ggml_reshape_4d(ctx, afF, F, T, 1, Bc);             // [F, T, 1, Bc]
 
+    if (gf) { // pin the gates so the two mask muls are adjacent (fusable pair)
+        ggml_build_forward_expand(gf, at_b);
+        ggml_build_forward_expand(gf, af_b);
+    }
     return ggml_mul(ctx, ggml_mul(ctx, x, at_b), af_b);                      // [F, T, C, Bc]
 }
 
@@ -264,7 +276,7 @@ static ggml_tensor * erb_bm(ggml_context * ctx, ggml_tensor * x, ggml_tensor * E
     ggml_tensor * lo = ggml_cont(ctx, ggml_view_4d(ctx, x, low, T, C, Bc, x->nb[1], x->nb[2], x->nb[3], 0));
     ggml_tensor * hg = ggml_cont(ctx, ggml_view_4d(ctx, x, in, T, C, Bc, x->nb[1], x->nb[2], x->nb[3],
                                                    (size_t) low * x->nb[0]));            // [in, T, C, Bc]
-    ggml_tensor * hc = ggml_mul_mat(ctx, E, ggml_reshape_2d(ctx, hg, in, T * C * Bc));   // [hi, T*C*Bc]
+    ggml_tensor * hc = mul_mat_f32(ctx, E, ggml_reshape_2d(ctx, hg, in, T * C * Bc));    // [hi, T*C*Bc]
     return ggml_concat(ctx, lo, ggml_reshape_4d(ctx, hc, hi, T, C, Bc), 0);              // [low+hi, T, C, Bc]
 }
 
@@ -274,15 +286,19 @@ static ggml_tensor * erb_bs(ggml_context * ctx, ggml_tensor * m, ggml_tensor * E
     ggml_tensor * lo = ggml_cont(ctx, ggml_view_4d(ctx, m, low, T, C, Bc, m->nb[1], m->nb[2], m->nb[3], 0));
     ggml_tensor * hg = ggml_cont(ctx, ggml_view_4d(ctx, m, hi, T, C, Bc, m->nb[1], m->nb[2], m->nb[3],
                                                    (size_t) low * m->nb[0]));            // [hi, T, C, Bc]
-    ggml_tensor * hc = ggml_mul_mat(ctx, E, ggml_reshape_2d(ctx, hg, hi, T * C * Bc));   // [out, T*C*Bc]
+    ggml_tensor * hc = mul_mat_f32(ctx, E, ggml_reshape_2d(ctx, hg, hi, T * C * Bc));    // [out, T*C*Bc]
     return ggml_concat(ctx, lo, ggml_reshape_4d(ctx, hc, out, T, C, Bc), 0);             // [low+out, T, C, Bc]
 }
 
 // BatchNorm folded to per-channel scale/shift (precomputed at load).  x:[F,T,C].
-static ggml_tensor * batchnorm(ggml_context * ctx, ggml_tensor * x, ggml_tensor * scale, ggml_tensor * shift) {
-    const int64_t C = x->ne[2];
-    return ggml_add(ctx, ggml_mul(ctx, x, ggml_reshape_3d(ctx, scale, 1, 1, C)),
-                    ggml_reshape_3d(ctx, shift, 1, 1, C));
+// With gf, the shift operand is pinned into the graph before the mul so the
+// mul and add come out adjacent (fusable pair) — same ops, bit-identical.
+static ggml_tensor * batchnorm(ggml_context * ctx, ggml_tensor * x, ggml_tensor * scale, ggml_tensor * shift,
+                               ggml_cgraph * gf = nullptr) {
+    const int64_t C  = x->ne[2];
+    ggml_tensor * sh = ggml_reshape_3d(ctx, shift, 1, 1, C);
+    if (gf) ggml_build_forward_expand(gf, sh);
+    return ggml_add(ctx, ggml_mul(ctx, x, ggml_reshape_3d(ctx, scale, 1, 1, C)), sh);
 }
 
 // Per-(c,f) affine + per-channel PReLU.  aw,ab: ggml [F,C] (PyTorch [C,F]); slope [C].
@@ -314,7 +330,8 @@ ggml_tensor * shuffle2(ggml_context * ctx, ggml_tensor * x, bool fused) {
 // One encoder/decoder block (denoiser_core.cpp run_block).  type 0=XConv 1=XDWS 2=XMB.
 static ggml_tensor * run_block(ggml_context * ctx, ggml_tensor * x, const std::string & base,
                                int type, int cout, int kf, int stride, int groups, bool deconv,
-                               bool is_last, const WResolver & W, int r, bool fused) {
+                               bool is_last, const WResolver & W, int r, bool fused,
+                               ggml_cgraph * gf = nullptr) {
     (void) cout;
     const int pf = kf / 2;
     auto conv = [&](ggml_tensor * in, const std::string & wn, int st, int grp) -> ggml_tensor * {
@@ -322,7 +339,7 @@ static ggml_tensor * run_block(ggml_context * ctx, ggml_tensor * x, const std::s
                       : conv2d(ctx, in, W(wn + ".weight"), W(wn + ".bias"), st, pf, grp, fused);
     };
     auto bn = [&](ggml_tensor * h, const std::string & p) {
-        return batchnorm(ctx, h, W(p + ".bn_scale"), W(p + ".bn_shift"));
+        return batchnorm(ctx, h, W(p + ".bn_scale"), W(p + ".bn_shift"), gf);
     };
     auto ap = [&](ggml_tensor * h, const std::string & p) {
         return affine_prelu(ctx, h, W(p + ".affine_weight"), W(p + ".affine_bias"), W(p + ".slope_weight"), fused);
@@ -331,7 +348,7 @@ static ggml_tensor * run_block(ggml_context * ctx, ggml_tensor * x, const std::s
         ggml_tensor * h = conv(x, base + ".ops.1", stride, groups);
         h               = bn(h, base + ".ops.2");
         if (!is_last) h = ap(h, base + ".ops.3");
-        h               = ctfa(ctx, h, base + ".ops.4", W, r, fused);
+        h               = ctfa(ctx, h, base + ".ops.4", W, r, fused, gf);
         if (!is_last && groups == 2) h = shuffle2(ctx, h, fused);
         return h;
     }
@@ -343,7 +360,7 @@ static ggml_tensor * run_block(ggml_context * ctx, ggml_tensor * x, const std::s
         h = conv(h, base + ".dconv.1", stride, (int) h->ne[2]); // depthwise (groups == channels)
         h = bn(h, base + ".dconv.2");
         if (!is_last) h = ap(h, base + ".dconv.3");
-        return ctfa(ctx, h, base + ".dconv.4", W, r, fused);
+        return ctfa(ctx, h, base + ".dconv.4", W, r, fused, gf);
     }
     // type == 2: XMB
     ggml_tensor * h = conv2d(ctx, x, W(base + ".pconv1.0.weight"), W(base + ".pconv1.0.bias"), 1, 0, groups, fused);
@@ -355,7 +372,7 @@ static ggml_tensor * run_block(ggml_context * ctx, ggml_tensor * x, const std::s
     h = ap(h, base + ".dconv.3");
     h = conv2d(ctx, h, W(base + ".pconv2.0.weight"), W(base + ".pconv2.0.bias"), 1, 0, groups, fused);
     h = bn(h, base + ".pconv2.1");
-    h = ctfa(ctx, h, base + ".pconv2.2", W, r, fused);
+    h = ctfa(ctx, h, base + ".pconv2.2", W, r, fused, gf);
     if (h->ne[0] == x->ne[0] && h->ne[1] == x->ne[1] && h->ne[2] == x->ne[2]) h = ggml_add(ctx, h, x);
     if (!is_last && groups == 2) h = shuffle2(ctx, h, fused);
     return h;
@@ -441,7 +458,9 @@ std::vector<Pend> stage_weights(const DenoiserWeights & w) {
 std::vector<float> compute_log_features(const std::vector<float> & real_in,
                                         const std::vector<float> & imag_in, size_t n) {
     std::vector<float> feat(n);
-    for (size_t i = 0; i < n; i++) {
+    const int64_t      nn = (int64_t) n;
+    #pragma omp parallel for schedule(static)
+    for (int64_t i = 0; i < nn; i++) {
         const float rr = real_in[i], ii = imag_in[i];
         float       mg = std::sqrt(rr * rr + ii * ii);
         if (mg < 1e-12f) mg = 1e-12f;
@@ -457,7 +476,7 @@ struct DenoiserGgml::Impl {
     float bn_eps = 1e-5f, ln_eps = 1e-8f;
 
     ggml_backend_t        backend = nullptr;
-    bool                  gpu = false, opencl = false;
+    bool                  gpu = false, opencl = false, vulkan = false;
     ggml_context *        wctx   = nullptr;
     ggml_backend_buffer_t wbuf   = nullptr;
     ggml_gallocr_t        galloc = nullptr;
@@ -493,6 +512,7 @@ void DenoiserGgml::Impl::init_backend(int n_gpu_layers, bool verbose) {
     if (!backend) { backend = ::tts_cpp::detail::init_cpu_backend(); gpu = false; }
     if (!backend) throw std::runtime_error("denoiser_ggml: no backend available");
     opencl = ::tts_cpp::detail::backend_is_opencl(backend);
+    vulkan = ::tts_cpp::detail::backend_is_vulkan(backend);
 }
 
 void DenoiserGgml::Impl::upload_weights(const std::vector<Pend> & pend) {
@@ -515,9 +535,9 @@ void DenoiserGgml::Impl::upload_weights(const std::vector<Pend> & pend) {
 
 GraphIO DenoiserGgml::Impl::build_graph(ggml_context * ctx, ggml_cgraph * gf, int L, int Bc) const {
     const int F = spec_bins, r = freq_comp_ratio;
-    // Fused ops where the backend implements them (OpenCL + CPU); Metal/Vulkan use the
+    // Fused ops where the backend implements them (OpenCL + Vulkan + CPU); Metal uses the
     // standard-op fallback, which the supports_op preflight would otherwise reject.
-    const bool fused = opencl || !gpu;
+    const bool fused = opencl || vulkan || !gpu;
     auto       W     = [this](const std::string & n) { return this->W(n); };
 
     // Inputs must come from the graph ctx so gallocr assigns them backing buffers.
@@ -530,7 +550,7 @@ GraphIO DenoiserGgml::Impl::build_graph(ggml_context * ctx, ggml_cgraph * gf, in
     std::vector<ggml_tensor *> en;
     for (int i = 0; i < 5; i++) {
         x = detail::run_block(ctx, x, "encoder.en_convs." + std::to_string(i), kTypes[i], kChans[i],
-                              kKf[i], kStrides[i], kGroups[i], false, false, W, r, fused);
+                              kKf[i], kStrides[i], kGroups[i], false, false, W, r, fused, gf);
         en.push_back(x);
     }
     x = detail::dpgrnn(ctx, x, "dpgrnn.0", W, ln_eps, fused);
@@ -540,11 +560,11 @@ GraphIO DenoiserGgml::Impl::build_graph(ggml_context * ctx, ggml_cgraph * gf, in
     for (int i = 4; i >= 1; i--, j++) {
         x = ggml_add(ctx, x, en[4 - j]);
         x = detail::run_block(ctx, x, "decoder.de_convs." + std::to_string(j), kTypes[i], kChans[i - 1],
-                              kKf[i], kStrides[i], kGroups[i], true, false, W, r, fused);
+                              kKf[i], kStrides[i], kGroups[i], true, false, W, r, fused, gf);
     }
     x = ggml_add(ctx, x, en[0]);
     x = detail::run_block(ctx, x, "decoder.de_convs." + std::to_string(j), kTypes[0], 1,
-                          kKf[0], kStrides[0], kGroups[0], true, true, W, r, fused);
+                          kKf[0], kStrides[0], kGroups[0], true, true, W, r, fused, gf);
 
     x                = ggml_sigmoid(ctx, x);                                        // ratio mask [129, L, 1]
     ggml_tensor * m  = detail::erb_bs(ctx, x, W("erb.ierb_fc.weight"), erb_low, erb_high); // [F, L, 1]

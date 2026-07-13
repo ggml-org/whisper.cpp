@@ -44,7 +44,6 @@ std::vector<float> enhance_with(const EnhancerWeights & w,
             mel_flat[static_cast<size_t>(c) * T + t] = mel[c][t];
         }
     }
-
     // 3) Backbone + spec head -> real/imag [spec_bins][T] (scalar or GPU core).
     std::vector<float> real, imag;
     spec_fwd(mel_flat, T, real, imag);
