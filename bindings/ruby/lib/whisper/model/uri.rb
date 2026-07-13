@@ -44,7 +44,7 @@ module Whisper
         return path if cache_path.exist?
 
         headers = {}
-        headers["if-modified-since"] = path.mtime.httpdate if path.exist?
+        headers["if-modified-since"] = path.mtime.httpdate
         request @uri, headers
         path
       end
