@@ -15,27 +15,8 @@ extern ID id_call;
 extern ID id_to_path;
 extern ID transcribe_option_names[1];
 
-extern void prepare_transcription(ruby_whisper_params * rwp, VALUE * self, int n_processors);
 extern VALUE full_body(VALUE rb_args);
 extern VALUE full_parallel_body(VALUE rb_args);
-
-typedef struct{
-  struct whisper_context *context;
-  struct whisper_full_params *params;
-  float *samples;
-  size_t n_samples;
-  int n_processors;
-  int result;
-} transcribe_without_gvl_args;
-
-static void*
-transcribe_without_gvl(void *rb_args)
-{
-  transcribe_without_gvl_args *args = (transcribe_without_gvl_args *)rb_args;
-  args->result = whisper_full_parallel(args->context, *args->params, args->samples, args->n_samples, args->n_processors);
-
-  return NULL;
-}
 
 /*
  * transcribe a single file
