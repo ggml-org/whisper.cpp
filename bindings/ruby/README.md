@@ -117,7 +117,7 @@ Whisper::Params.new(
     threshold: 1.0, # defaults to 0.5
     min_speech_duration_ms: 500, # defaults to 250
     min_silence_duration_ms: 200, # defaults to 100
-    max_speech_duration_s: 30000, # default is FLT_MAX,
+    max_speech_duration_s: 30000.0, # default is FLT_MAX,
     speech_pad_ms: 50, # defaults to 30
     samples_overlap: 0.5 # defaults to 0.1
   ),
