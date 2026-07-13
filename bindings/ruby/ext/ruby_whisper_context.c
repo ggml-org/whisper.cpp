@@ -349,7 +349,11 @@ fill_samples(VALUE rb_args)
 
   if (RB_TYPE_P(*args->src, T_ARRAY)) {
     for (int i = 0; i < args->n_samples; i++) {
-      args->dest[i] = RFLOAT_VALUE(rb_ary_entry(*args->src, i));
+      VALUE sample = rb_ary_entry(*args->src, i);
+      if (!RB_FLOAT_TYPE_P(sample)) {
+        sample = rb_to_float(sample);
+      }
+      args->dest[i] = RFLOAT_VALUE(sample);
     }
   } else {
     // TODO: use rb_block_call
@@ -357,6 +361,9 @@ fill_samples(VALUE rb_args)
     for (int i = 0; i < args->n_samples; i++) {
       // TODO: check if iter is exhausted and raise ArgumentError appropriately
       VALUE sample = rb_funcall(iter, id_next, 0);
+      if (!RB_FLOAT_TYPE_P(sample)) {
+        sample = rb_to_float(sample);
+      }
       args->dest[i] = RFLOAT_VALUE(sample);
     }
   }
