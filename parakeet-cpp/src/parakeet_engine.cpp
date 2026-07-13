@@ -427,7 +427,9 @@ EngineResult Engine::transcribe_samples_stream(const float * samples,
     TdtDecodeState tdt_state;
     EouDecodeState eou_state;
     if (is_tdt) tdt_init_state(pimpl_->tdt_rt, (int) pimpl_->model.blank_id, tdt_state);
-    if (is_eou) eou_init_state(pimpl_->eou_rt, eou_state);
+    if (is_eou && eou_init_state(pimpl_->eou_rt, eou_state) != 0) {
+        throw std::runtime_error("Engine: eou_init_state failed");
+    }
 
     int chunk_index = 0;
     bool first_segment = true;
@@ -1206,8 +1208,9 @@ std::unique_ptr<StreamSession> Engine::stream_start(const StreamingOptions & opt
             opts.energy_vad_hangover_ms,
             opts.energy_vad_threshold_db);
     }
-    if (pimpl_->model.model_type == ParakeetModelType::EOU) {
-        eou_init_state(pimpl_->eou_rt, impl->eou_state);
+    if (pimpl_->model.model_type == ParakeetModelType::EOU &&
+        eou_init_state(pimpl_->eou_rt, impl->eou_state) != 0) {
+        throw std::runtime_error("Engine::open_stream: eou_init_state failed");
     }
 
     return std::make_unique<StreamSession>(std::move(impl));

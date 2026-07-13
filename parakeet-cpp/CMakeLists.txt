@@ -747,6 +747,35 @@ if (PARAKEET_BUILD_TESTS)
         ARGS     "${_qvp_tdt_q8_gguf}" "${_qvp_fr_multipiece_wav}"
         REQUIRES "${_qvp_tdt_q8_gguf}" "${_qvp_fr_multipiece_wav}")
 
+    add_executable(test-eou-decoder-parity
+        test/test_eou_decoder_parity.cpp
+        src/parakeet_ctc.cpp
+        src/parakeet_engine.cpp
+        src/parakeet_log.cpp
+        src/parakeet_tdt.cpp
+        src/parakeet_eou.cpp
+        src/parakeet_sortformer.cpp
+        src/mel_preprocess.cpp
+        src/sentencepiece_bpe.cpp
+        src/energy_vad.cpp)
+    target_link_libraries(test-eou-decoder-parity PRIVATE ggml parakeet-backend-defs)
+    target_include_directories(test-eou-decoder-parity PRIVATE include src ggml/include)
+    parakeet_apply_backend_defs(test-eou-decoder-parity)
+    parakeet_register_test(test-eou-decoder-parity
+        LABEL    "fixture"
+        ARGS     "${_qvp_eou_q8_gguf}" "${_qvp_jfk_wav}"
+        REQUIRES "${_qvp_eou_q8_gguf}" "${_qvp_jfk_wav}")
+    # Multi-utterance guard for the on-device EOU decode (span-batched joint +
+    # <EOU> state reset): abcba is long multi-speaker audio that emits several
+    # mid-file <EOU> boundaries, so the gpu1 graph path must reproduce the gpu0
+    # host path's token IDs AND segment splits exactly. The divergence risk only
+    # surfaces when the graph path runs on a real GPU -> gpu tier.
+    parakeet_register_test(test-eou-decoder-parity-multiutt-gpu
+        LABEL    "gpu"
+        EXE      test-eou-decoder-parity
+        ARGS     "${_qvp_eou_q8_gguf}" "${_qvp_abcba_wav}"
+        REQUIRES "${_qvp_eou_q8_gguf}" "${_qvp_abcba_wav}")
+
     add_executable(test-sortformer-parity
         test/test_sortformer_parity.cpp
         src/parakeet_ctc.cpp
