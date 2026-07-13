@@ -88,6 +88,9 @@ segments_from_samples_body(VALUE rb_args)
   GetVADParams(*args->params, rwvp);
 
   struct whisper_vad_segments *segments = whisper_vad_segments_from_samples(rwvc->context, rwvp->params, args->samples, args->n_samples);
+  if (!segments) {
+    rb_raise(rb_eRuntimeError, "Failed to process audio");
+  }
 
   return ruby_whisper_vad_segments_s_init(segments);
 }
