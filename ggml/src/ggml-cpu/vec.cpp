@@ -414,6 +414,39 @@ void ggml_vec_silu_f32(const int n, float * y, const float * x) {
     }
 }
 
+void ggml_vec_gelu_f32(const int n, float * y, const float * x) {
+    int i = 0;
+#if defined(__AVX512F__) && defined(__AVX512DQ__)
+    for (; i + 15 < n; i += 16) {
+        _mm512_storeu_ps(y + i, ggml_v_gelu(_mm512_loadu_ps(x + i)));
+    }
+#elif defined(__AVX2__) && defined(__FMA__)
+    for (; i + 7 < n; i += 8) {
+        _mm256_storeu_ps(y + i, ggml_v_gelu(_mm256_loadu_ps(x + i)));
+    }
+#elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+    const int vlen = svcntw();
+    for (; i < n; i += vlen) {
+        const svbool_t pg = svwhilelt_b32_s32(i, n);
+        svst1_f32(pg, y + i, ggml_v_gelu(pg, svld1_f32(pg, x + i)));
+    }
+#elif defined(__ARM_NEON) && defined(__aarch64__)
+    for (; i + 3 < n; i += 4) {
+        vst1q_f32(y + i, ggml_v_gelu(vld1q_f32(x + i)));
+    }
+#elif defined(GGML_GELU_FP16)
+    // Narrow SIMD (e.g. SSE2, only 4 lanes) does not beat the f16 lookup table here,
+    // so on architectures without wide (>=8 lane) SIMD fall back to the table.
+    for (; i < n; ++i) {
+        y[i] = ggml_gelu_f32_table(x[i]);
+    }
+    return; // table path handled every element
+#endif
+    for (; i < n; ++i) {
+        y[i] = ggml_gelu_f32(x[i]);
+    }
+}
+
 void ggml_vec_swiglu_f32(const int n, float * y, const float * x, const float * g) {
     int i = 0;
 #if defined(__AVX512F__) && defined(__AVX512DQ__)
