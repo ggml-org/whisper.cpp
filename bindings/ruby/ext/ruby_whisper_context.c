@@ -759,8 +759,9 @@ ruby_whisper_full_get_vad_segment_t0(VALUE self, VALUE i_segment)
 {
   ruby_whisper *rw;
   GetContext(self, rw);
+  const int c_i_segment = ruby_whisper_full_check_segment_index(rw, i_segment);
 
-  return LONG2NUM(whisper_full_get_vad_segment_t0(rw->context, NUM2INT(i_segment)));
+  return LONG2NUM(whisper_full_get_vad_segment_t0(rw->context, c_i_segment));
 }
 
 static VALUE
@@ -768,8 +769,9 @@ ruby_whisper_full_get_vad_segment_t1(VALUE self, VALUE i_segment)
 {
   ruby_whisper *rw;
   GetContext(self, rw);
+  const int c_i_segment = ruby_whisper_full_check_segment_index(rw, i_segment);
 
-  return LONG2NUM(whisper_full_get_vad_segment_t1(rw->context, NUM2INT(i_segment)));
+  return LONG2NUM(whisper_full_get_vad_segment_t1(rw->context, c_i_segment));
 }
 
 // High level API
