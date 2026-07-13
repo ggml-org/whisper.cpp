@@ -3189,6 +3189,14 @@ static bool log_mel_spectrogram(
     int64_t stage_1_pad = WHISPER_SAMPLE_RATE * 30;
     int64_t stage_2_pad = frame_size / 2;
 
+    // The reflective padding below reads samples[1 .. stage_2_pad], so an input
+    // shorter than stage_2_pad + 1 would read past the end of the buffer.
+    if (n_samples < stage_2_pad + 1) {
+        WHISPER_LOG_ERROR("%s: audio too short: %d samples, need at least %d\n",
+                __func__, n_samples, (int) stage_2_pad + 1);
+        return false;
+    }
+
     // Initialize a vector and copy data from C array to it.
     std::vector<float> samples_padded;
     samples_padded.resize(n_samples + stage_1_pad + stage_2_pad * 2);

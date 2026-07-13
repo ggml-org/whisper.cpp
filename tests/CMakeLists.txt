@@ -177,3 +177,13 @@ add_parakeet_transcription_test(
     tests/parakeet-expected-diffusion-output.txt
     0.95)
 
+# log_mel_spectrogram out-of-bounds read on very short audio (issue #3923)
+set(MEL_OOB_TEST test-log-mel-oob)
+add_executable(${MEL_OOB_TEST} ${MEL_OOB_TEST}.cpp)
+target_include_directories(${MEL_OOB_TEST} PRIVATE ../include ../ggml/include ../examples)
+target_link_libraries(${MEL_OOB_TEST} PRIVATE common)
+target_compile_definitions(${MEL_OOB_TEST} PRIVATE
+    WHISPER_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-ggml-tiny.bin")
+add_test(NAME ${MEL_OOB_TEST} COMMAND ${MEL_OOB_TEST})
+set_tests_properties(${MEL_OOB_TEST} PROPERTIES LABELS "unit;gh")
+
