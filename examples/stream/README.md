@@ -25,6 +25,20 @@ It's best to tune it to the specific use case, but a value around `0.6` should b
 When silence is detected, it will transcribe the last `--length` milliseconds of audio and output
 a transcription block that is suitable for parsing.
 
+## Interactive start/stop
+
+By default `whisper-stream` transcribes continuously from launch. Pass `-i` (`--interactive`) to
+control capture from the keyboard instead: the tool starts paused, **SPACE** starts/stops recording,
+and **Q** quits.
+
+```bash
+./build/bin/whisper-stream -m ./models/ggml-base.en.bin -i
+```
+
+This is handy for dictation / push-to-talk style usage where you only want to transcribe the audio
+you explicitly record. It works in both the default and sliding-window (`--step 0`) modes, and only
+takes effect when stdin is a terminal (piped/redirected input is unaffected).
+
 ## Building
 
 The `whisper-stream` tool depends on SDL2 library to capture audio from the microphone. You can build it like this:
