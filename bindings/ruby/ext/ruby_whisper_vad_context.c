@@ -12,13 +12,6 @@ extern VALUE release_samples(VALUE parsed);
 
 extern VALUE ruby_whisper_vad_segments_s_init(struct whisper_vad_segments *segments);
 
-typedef struct segments_from_samples_args {
-  VALUE *context;
-  VALUE *params;
-  float *samples;
-  int n_samples;
-} segments_from_samples_args;
-
 static size_t
 ruby_whisper_vad_context_memsize(const void *p)
 {
@@ -77,7 +70,7 @@ ruby_whisper_vad_context_initialize(VALUE self, VALUE model_path)
   return Qnil;
 }
 
-static VALUE
+VALUE
 segments_from_samples_body(VALUE rb_args)
 {
   segments_from_samples_args *args = (segments_from_samples_args *)rb_args;

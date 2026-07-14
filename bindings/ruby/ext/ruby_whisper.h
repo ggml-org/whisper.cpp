@@ -110,6 +110,13 @@ typedef struct {
   int n_samples;
 } ruby_whisper_full_args;
 
+typedef struct segments_from_samples_args {
+  VALUE *context;
+  VALUE *params;
+  float *samples;
+  int n_samples;
+} segments_from_samples_args;
+
 typedef struct ruby_whisper_full_parallel_args {
   VALUE *context;
   VALUE *params;
