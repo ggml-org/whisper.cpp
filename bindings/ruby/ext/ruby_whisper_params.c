@@ -446,7 +446,7 @@ ruby_whisper_params_allocate(VALUE klass)
     rwp->params.vad_model_path = ruby_strdup(rwp->params.vad_model_path);
   }
   rwp->diarize = false;
-  rwp->vad_params = TypedData_Wrap_Struct(cVADParams, &ruby_whisper_vad_params_type, (void *)&rwp->params.vad_params);
+  rwp->vad_params = rb_class_new_instance(0, NULL, cVADParams);
   rwp->new_segment_callback_container = ruby_whisper_callback_container_allocate();
   rwp->progress_callback_container = ruby_whisper_callback_container_allocate();
   rwp->encoder_begin_callback_container = ruby_whisper_callback_container_allocate();
@@ -1307,6 +1307,7 @@ static VALUE
 ruby_whisper_params_set_vad_params(VALUE self, VALUE value)
 {
   ruby_whisper_params *rwp;
+  rb_check_typeddata(value, &ruby_whisper_vad_params_type);
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
   rwp->vad_params = value;
   return value;

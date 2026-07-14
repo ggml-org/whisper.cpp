@@ -31,7 +31,7 @@ static ID id_samples_overlap;
 
 const rb_data_type_t ruby_whisper_vad_params_type = {
   "ruby_whisper_vad_params",
-  {0, 0, ruby_whisper_vad_params_memsize,},
+  {0, RUBY_DEFAULT_FREE, ruby_whisper_vad_params_memsize,},
   0, 0,
   0
 };
