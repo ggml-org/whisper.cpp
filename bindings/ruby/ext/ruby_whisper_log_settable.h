@@ -41,7 +41,6 @@
   rb_define_singleton_method(mod, "drain_logs", ruby_whisper_##log_queue##_s_drain_logs, 0); \
   rb_define_singleton_method(mod, "log_set", ruby_whisper_##log_queue##_s_log_set, 2); \
   rb_set_end_proc(ruby_whisper_##log_queue##_end_proc, Qnil); \
-  rb_extend_object(mod, mLogSettable); \
-  rb_funcall(mLogSettable, id_extended, 1, mod);
+  rb_extend_object(mod, mLogSettable);
 
 #endif

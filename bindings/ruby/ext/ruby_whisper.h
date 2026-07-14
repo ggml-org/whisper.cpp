@@ -110,6 +110,13 @@ typedef struct {
   int n_samples;
 } ruby_whisper_full_args;
 
+typedef struct segments_from_samples_args {
+  VALUE *context;
+  VALUE *params;
+  float *samples;
+  int n_samples;
+} segments_from_samples_args;
+
 typedef struct ruby_whisper_full_parallel_args {
   VALUE *context;
   VALUE *params;
@@ -149,7 +156,6 @@ typedef struct {
   VALUE context;
 } ruby_whisper_parakeet_model;
 
-extern ID id_extended;
 extern ID id_log_callback_thread;
 extern ID id_start_log_callback_thread;
 extern ID id_alive_p;

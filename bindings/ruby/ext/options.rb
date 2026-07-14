@@ -105,7 +105,7 @@ class Options
     FileUtils.mkpath File.dirname(cache_path)
     File.open cache_path, "w" do |file|
       @options.reject {|name, (type, value)| value.nil?}.each do |name, (type, value)|
-        line = "set(CACHE{%<name>s} TYPE %<type>s FORCE VALUE %<value>s)" % {
+        line = 'set(%<name>s %<value>s CACHE %<type>s "" FORCE)' %{
           name:,
           type:,
           value: value == true ? "ON" : value == false ? "OFF" : escape_cmake(value)

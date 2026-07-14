@@ -117,7 +117,7 @@ Whisper::Params.new(
     threshold: 1.0, # defaults to 0.5
     min_speech_duration_ms: 500, # defaults to 250
     min_silence_duration_ms: 200, # defaults to 100
-    max_speech_duration_s: 30000, # default is FLT_MAX,
+    max_speech_duration_s: 30000.0, # default is FLT_MAX,
     speech_pad_ms: 50, # defaults to 30
     samples_overlap: 0.5 # defaults to 0.1
   ),
@@ -176,7 +176,7 @@ See whisper.cpp's [README](https://github.com/ggml-org/whisper.cpp/blob/master/R
 Boolean options:
 
 * `-DGGML_BLAS=1` -> `--enable-ggml-blas`
-* `-DWHISER_COREML=OFF` -> `--disable-whisper-coreml`
+* `-DWHISPER_COREML=OFF` -> `--disable-whisper-coreml`
 
 Argument options:
 
@@ -184,7 +184,7 @@ Argument options:
 
 Combination:
 
-* `-DGGML_CUDA=1 -DCMAKE_CUDA_ARCHITECTURES="86"` -> `--enable-ggml-cuda --cmake_cuda-architectures="86"`
+* `-DGGML_CUDA=1 -DCMAKE_CUDA_ARCHITECTURES="86"` -> `--enable-ggml-cuda --cmake-cuda-architectures="86"`
 
 For boolean options like `GGML_CUDA`, the README says `-DGGML_CUDA=1`. You need strip `-D`, prepend `--enable-` for `1` or `ON` (`--disable-` for `0` or `OFF`) and make it kebab-case: `--enable-ggml-cuda`.  
 For options which require arguments like `CMAKE_CUDA_ARCHITECTURES`, the README says `-DCMAKE_CUDA_ARCHITECTURES="86"`. You need strip `-D`, prepend `--`, make it kebab-case, append `=` and append argument: `--cmake-cuda-architectures="86"`.
@@ -478,13 +478,14 @@ Development
     % cd whisper.cpp/bindings/ruby
     % rake test
 
-First call of `rake test` builds an extension and downloads a model for testing. After that, you add tests in `tests` directory and modify `ext/ruby_whisper.cpp`.
+First call of `rake test` builds an extension and downloads a model for testing. After that, you add tests in `test` directory and modify `ext/*.{h,c,cpp}`.
 
 If something seems wrong on build, running `rake clean` solves some cases.
 
 ### Need help ###
 
 * Windows support
+* Check of compilation with various hardware
 * Refinement of C/C++ code, especially memory management
 
 License

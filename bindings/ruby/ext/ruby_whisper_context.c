@@ -349,7 +349,11 @@ fill_samples(VALUE rb_args)
 
   if (RB_TYPE_P(*args->src, T_ARRAY)) {
     for (int i = 0; i < args->n_samples; i++) {
-      args->dest[i] = RFLOAT_VALUE(rb_ary_entry(*args->src, i));
+      VALUE sample = rb_ary_entry(*args->src, i);
+      if (!RB_FLOAT_TYPE_P(sample)) {
+        sample = rb_to_float(sample);
+      }
+      args->dest[i] = RFLOAT_VALUE(sample);
     }
   } else {
     // TODO: use rb_block_call
@@ -357,6 +361,9 @@ fill_samples(VALUE rb_args)
     for (int i = 0; i < args->n_samples; i++) {
       // TODO: check if iter is exhausted and raise ArgumentError appropriately
       VALUE sample = rb_funcall(iter, id_next, 0);
+      if (!RB_FLOAT_TYPE_P(sample)) {
+        sample = rb_to_float(sample);
+      }
       args->dest[i] = RFLOAT_VALUE(sample);
     }
   }
@@ -745,6 +752,45 @@ ruby_whisper_full_get_segment_no_speech_prob(VALUE self, VALUE i_segment)
   return DBL2NUM(no_speech_prob);
 }
 
+static VALUE
+ruby_whisper_full_n_vad_segments(VALUE self)
+{
+  ruby_whisper *rw;
+  GetContext(self, rw);
+
+  return INT2NUM(whisper_full_n_vad_segments(rw->context));
+}
+
+static int
+ruby_whisper_full_check_vad_segment_index(const ruby_whisper *rw, const VALUE i_segment)
+{
+    const int c_i_segment = NUM2INT(i_segment);
+    if (c_i_segment < 0 || c_i_segment >= whisper_full_n_vad_segments(rw->context)) {
+      rb_raise(rb_eIndexError, "segment index %d out of range", c_i_segment);
+    }
+    return c_i_segment;
+}
+
+static VALUE
+ruby_whisper_full_get_vad_segment_t0(VALUE self, VALUE i_segment)
+{
+  ruby_whisper *rw;
+  GetContext(self, rw);
+  const int c_i_segment = ruby_whisper_full_check_vad_segment_index(rw, i_segment);
+
+  return LONG2NUM(whisper_full_get_vad_segment_t0(rw->context, c_i_segment));
+}
+
+static VALUE
+ruby_whisper_full_get_vad_segment_t1(VALUE self, VALUE i_segment)
+{
+  ruby_whisper *rw;
+  GetContext(self, rw);
+  const int c_i_segment = ruby_whisper_full_check_vad_segment_index(rw, i_segment);
+
+  return LONG2NUM(whisper_full_get_vad_segment_t1(rw->context, c_i_segment));
+}
+
 // High level API
 
 static VALUE
@@ -830,6 +876,9 @@ init_ruby_whisper_context(VALUE *mWhisper)
   rb_define_method(cContext, "full_get_segment_speaker_turn_next", ruby_whisper_full_get_segment_speaker_turn_next, 1);
   rb_define_method(cContext, "full_get_segment_text", ruby_whisper_full_get_segment_text, 1);
   rb_define_method(cContext, "full_get_segment_no_speech_prob", ruby_whisper_full_get_segment_no_speech_prob, 1);
+  rb_define_method(cContext, "full_n_vad_segments", ruby_whisper_full_n_vad_segments, 0);
+  rb_define_method(cContext, "full_get_vad_segment_t0", ruby_whisper_full_get_vad_segment_t0, 1);
+  rb_define_method(cContext, "full_get_vad_segment_t1", ruby_whisper_full_get_vad_segment_t1, 1);
   rb_define_method(cContext, "full", ruby_whisper_full, -1);
   rb_define_method(cContext, "full_parallel", ruby_whisper_full_parallel, -1);
 

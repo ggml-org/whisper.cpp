@@ -446,7 +446,7 @@ ruby_whisper_params_allocate(VALUE klass)
     rwp->params.vad_model_path = ruby_strdup(rwp->params.vad_model_path);
   }
   rwp->diarize = false;
-  rwp->vad_params = TypedData_Wrap_Struct(cVADParams, &ruby_whisper_vad_params_type, (void *)&rwp->params.vad_params);
+  rwp->vad_params = rb_class_new_instance(0, NULL, cVADParams);
   rwp->new_segment_callback_container = ruby_whisper_callback_container_allocate();
   rwp->progress_callback_container = ruby_whisper_callback_container_allocate();
   rwp->encoder_begin_callback_container = ruby_whisper_callback_container_allocate();
@@ -918,7 +918,7 @@ ruby_whisper_params_set_temperature(VALUE self, VALUE value)
 {
   ruby_whisper_params *rwp;
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
-  rwp->params.temperature = RFLOAT_VALUE(value);
+  rwp->params.temperature = NUM2DBL(value);
   return value;
 }
 /*
@@ -943,7 +943,7 @@ ruby_whisper_params_set_max_initial_ts(VALUE self, VALUE value)
 {
   ruby_whisper_params *rwp;
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
-  rwp->params.max_initial_ts = RFLOAT_VALUE(value);
+  rwp->params.max_initial_ts = NUM2DBL(value);
   return value;
 }
 /*
@@ -966,7 +966,7 @@ ruby_whisper_params_set_length_penalty(VALUE self, VALUE value)
 {
   ruby_whisper_params *rwp;
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
-  rwp->params.length_penalty = RFLOAT_VALUE(value);
+  rwp->params.length_penalty = NUM2DBL(value);
   return value;
 }
 /*
@@ -989,7 +989,7 @@ ruby_whisper_params_set_temperature_inc(VALUE self, VALUE value)
 {
   ruby_whisper_params *rwp;
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
-  rwp->params.temperature_inc = RFLOAT_VALUE(value);
+  rwp->params.temperature_inc = NUM2DBL(value);
   return value;
 }
 /*
@@ -1014,7 +1014,7 @@ ruby_whisper_params_set_entropy_thold(VALUE self, VALUE value)
 {
   ruby_whisper_params *rwp;
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
-  rwp->params.entropy_thold = RFLOAT_VALUE(value);
+  rwp->params.entropy_thold = NUM2DBL(value);
   return value;
 }
 /*
@@ -1037,7 +1037,7 @@ ruby_whisper_params_set_logprob_thold(VALUE self, VALUE value)
 {
   ruby_whisper_params *rwp;
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
-  rwp->params.logprob_thold = RFLOAT_VALUE(value);
+  rwp->params.logprob_thold = NUM2DBL(value);
   return value;
 }
 /*
@@ -1060,7 +1060,7 @@ ruby_whisper_params_set_no_speech_thold(VALUE self, VALUE value)
 {
   ruby_whisper_params *rwp;
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
-  rwp->params.no_speech_thold = RFLOAT_VALUE(value);
+  rwp->params.no_speech_thold = NUM2DBL(value);
   return value;
 }
 static VALUE
@@ -1307,6 +1307,7 @@ static VALUE
 ruby_whisper_params_set_vad_params(VALUE self, VALUE value)
 {
   ruby_whisper_params *rwp;
+  rb_check_typeddata(value, &ruby_whisper_vad_params_type);
   TypedData_Get_Struct(self, ruby_whisper_params, &ruby_whisper_params_type, rwp);
   rwp->vad_params = value;
   return value;

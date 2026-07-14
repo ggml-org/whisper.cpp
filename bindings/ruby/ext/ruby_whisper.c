@@ -133,7 +133,6 @@ void Init_whisper() {
   id_coreml_compiled_models = rb_intern("coreml_compiled_models");
   id_cache = rb_intern("cache");
   id_n_processors = rb_intern("n_processors");
-  id_extended = rb_intern("extended");
   id_start_log_callback_thread = rb_intern("start_log_callback_thread");
   id_log_callback_thread = rb_intern("@log_callback_thread");
   id_alive_p = rb_intern("alive?");
