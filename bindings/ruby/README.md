@@ -478,13 +478,14 @@ Development
     % cd whisper.cpp/bindings/ruby
     % rake test
 
-First call of `rake test` builds an extension and downloads a model for testing. After that, you add tests in `test` directory and modify `ext/ruby_whisper.cpp`.
+First call of `rake test` builds an extension and downloads a model for testing. After that, you add tests in `test` directory and modify `ext/*.{h,c,cpp}`.
 
 If something seems wrong on build, running `rake clean` solves some cases.
 
 ### Need help ###
 
 * Windows support
+* Check of compilation with various hardware
 * Refinement of C/C++ code, especially memory management
 
 License
