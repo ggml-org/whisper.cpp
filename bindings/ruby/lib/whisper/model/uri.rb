@@ -53,17 +53,11 @@ module Whisper
           request = Net::HTTP::Get.new(uri, headers)
           http.request request do |response|
             case response
-            when Net::HTTPNotModified
-              # noop
             when Net::HTTPOK
-              return if !response.key?("last-modified") && cache_path.exist?
-
               download response
             when Net::HTTPRedirection
               request URI(response["location"]), headers
             else
-              return if headers.key?("if-modified-since") # Use cache file
-
               raise "#{response.code} #{response.message}\n#{response.body}"
             end
           end
