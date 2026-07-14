@@ -70,6 +70,23 @@ ruby_whisper_vad_context_initialize(VALUE self, VALUE model_path)
   return Qnil;
 }
 
+typedef struct {
+  struct whisper_vad_context *context;
+  struct whisper_vad_params *params;
+  float *samples;
+  int n_samples;
+  struct whisper_vad_segments *result;
+} segments_from_samples_without_gvl_args;
+
+static void*
+segments_from_samples_without_gvl(void *rb_args)
+{
+  segments_from_samples_without_gvl_args *args = (segments_from_samples_without_gvl_args *)rb_args;
+  args->result = whisper_vad_segments_from_samples(args->context, *args->params, args->samples, args->n_samples);
+
+  return NULL;
+}
+
 VALUE
 segments_from_samples_body(VALUE rb_args)
 {
@@ -80,12 +97,19 @@ segments_from_samples_body(VALUE rb_args)
   GetVADContext(*args->context, rwvc);
   GetVADParams(*args->params, rwvp);
 
-  struct whisper_vad_segments *segments = whisper_vad_segments_from_samples(rwvc->context, rwvp->params, args->samples, args->n_samples);
-  if (!segments) {
+  segments_from_samples_without_gvl_args segments_from_samples_without_gvl_args = {
+    rwvc->context,
+    &rwvp->params,
+    args->samples,
+    args->n_samples,
+    NULL
+  };
+  rb_thread_call_without_gvl(segments_from_samples_without_gvl, (void *)&segments_from_samples_without_gvl_args, NULL, NULL);
+  if (!segments_from_samples_without_gvl_args.result) {
     rb_raise(rb_eRuntimeError, "Failed to process audio");
   }
 
-  return ruby_whisper_vad_segments_s_init(segments);
+  return ruby_whisper_vad_segments_s_init(segments_from_samples_without_gvl_args.result);
 }
 
 static VALUE
