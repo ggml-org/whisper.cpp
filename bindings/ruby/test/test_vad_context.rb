@@ -44,8 +44,8 @@ class TestVADContext < TestBase
     assert_instance_of Enumerator, segments.each
 
     segment = segments.each.first
-    assert_instance_of Float, segment.start_time
-    assert_instance_of Float, segment.end_time
+    assert_instance_of Integer, segment.start_time
+    assert_instance_of Integer, segment.end_time
 
     segment => {start_time:, end_time:}
     assert_equal segment.start_time, start_time
