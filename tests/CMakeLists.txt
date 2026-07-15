@@ -96,6 +96,13 @@ target_link_libraries(${UTF8_TEST} PRIVATE common)
 add_test(NAME ${UTF8_TEST} COMMAND ${UTF8_TEST})
 set_tests_properties(${UTF8_TEST} PROPERTIES LABELS "unit")
 
+# decoder logits-slice suffix-offset unit test (header-only, no model needed)
+set(LOGITS_SLICE_TEST test-whisper-logits-slice)
+add_executable(${LOGITS_SLICE_TEST} ${LOGITS_SLICE_TEST}.cpp)
+target_include_directories(${LOGITS_SLICE_TEST} PRIVATE ../src)
+add_test(NAME ${LOGITS_SLICE_TEST} COMMAND ${LOGITS_SLICE_TEST})
+set_tests_properties(${LOGITS_SLICE_TEST} PROPERTIES LABELS "unit;gh")
+
 # VAD test tests VAD in isolation
 set(VAD_TEST test-vad)
 add_executable(${VAD_TEST} ${VAD_TEST}.cpp)

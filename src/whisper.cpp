@@ -1,5 +1,6 @@
 #include "whisper.h"
 #include "whisper-arch.h"
+#include "whisper-logits-slice.h"
 
 #include "ggml.h"
 #include "ggml-cpp.h"
@@ -660,6 +661,9 @@ struct whisper_layer_decoder {
     // decoder.blocks.*.attn.value
     struct ggml_tensor * attn_v_w;
     struct ggml_tensor * attn_v_b;
+
+    // fused Q+K+V projection weight (attn_q_w ++ attn_k_w ++ attn_v_w rows); one matmul instead of three
+    struct ggml_tensor * attn_qkv_w;
 
     // decoder.blocks.*.cross_attn_ln
     struct ggml_tensor * cross_attn_ln_0_w;
@@ -1742,7 +1746,7 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
     const int n_audio_layer = hparams.n_audio_layer;
     const int n_text_layer  = hparams.n_text_layer;
 
-    const size_t n_tensors = 10 /* input */ + 15 + 15*n_audio_layer + 24*n_text_layer;
+    const size_t n_tensors = 10 /* input */ + 15 + 15*n_audio_layer + 25*n_text_layer;
 
     std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
     auto get_ctx = [&](ggml_backend_buffer_type_t buft) -> ggml_context * {
@@ -1784,6 +1788,16 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         model.tensors[format(ASR_TENSOR_NAMES.at(system).at(type), layer)] = tensor;
 
         return tensor;
+    };
+
+    // fused weight built at load from existing weights (not in the GGUF), so it must NOT be
+    // registered in model.tensors or the loader's n_loaded == tensors.size() check would fail.
+    auto create_tensor_fused = [&](ggml_tensor * meta, ggml_op op) -> ggml_tensor * {
+        ggml_backend_buffer_type_t buft = select_weight_buft(hparams, meta, op, buft_list);
+        if (!buft) {
+            throw std::runtime_error("failed to find a compatible buffer type for fused tensor");
+        }
+        return ggml_dup_tensor(get_ctx(buft), meta);
     };
 
 
@@ -1884,6 +1898,8 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
             layer.attn_v_w = create_tensor(ASR_TENSOR_ATTN_VALUE_WEIGHT, ASR_SYSTEM_DECODER, ggml_new_tensor_2d(ctx, wtype, n_text_state, n_text_state), i);
             layer.attn_v_b = create_tensor(ASR_TENSOR_ATTN_VALUE_BIAS, ASR_SYSTEM_DECODER, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_text_state), i);
 
+            layer.attn_qkv_w = create_tensor_fused(ggml_new_tensor_2d(ctx, wtype, n_text_state, 3*n_text_state), ASR_TENSOR_INFO.at(ASR_TENSOR_ATTN_QUERY_WEIGHT));
+
             layer.attn_ln_1_w = create_tensor(ASR_TENSOR_ATTN_OUT_WEIGHT, ASR_SYSTEM_DECODER, ggml_new_tensor_2d(ctx, wtype, n_text_state, n_text_state), i);
             layer.attn_ln_1_b = create_tensor(ASR_TENSOR_ATTN_OUT_BIAS, ASR_SYSTEM_DECODER, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_text_state), i);
 
@@ -1916,6 +1932,15 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
             size_t size_main = ggml_backend_buffer_get_size(buf);
             WHISPER_LOG_INFO("%s: %12s total size = %8.2f MB\n", __func__, ggml_backend_buffer_name(buf), size_main / 1e6);
         }
+    }
+
+    // stage plain file bytes of the decoder q/k/v weights so the fused attn_qkv_w can be built with
+    // set_tensor alone (get_tensor is null on the CPU repack buffer q8_0 uses -> a readback segfaults).
+    std::map<const ggml_tensor *, std::vector<char>> qkv_src_bytes;
+    for (auto & layer : model.layers_decoder) {
+        qkv_src_bytes.emplace(layer.attn_q_w, std::vector<char>());
+        qkv_src_bytes.emplace(layer.attn_k_w, std::vector<char>());
+        qkv_src_bytes.emplace(layer.attn_v_w, std::vector<char>());
     }
 
     // load weights
@@ -1983,11 +2008,21 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
                 // for the CPU and Metal backend, we can read directly into the tensor
                 loader->read(loader->context, tensor->data, ggml_nbytes(tensor));
                 BYTESWAP_TENSOR(tensor);
+
+                auto qit = qkv_src_bytes.find(tensor);
+                if (qit != qkv_src_bytes.end()) {
+                    qit->second.assign((const char *) tensor->data, (const char *) tensor->data + ggml_nbytes(tensor));
+                }
             } else {
                 // read into a temporary buffer first, then copy to device memory
                 read_buf.resize(ggml_nbytes(tensor));
 
                 loader->read(loader->context, read_buf.data(), read_buf.size());
+
+                auto qit = qkv_src_bytes.find(tensor);
+                if (qit != qkv_src_bytes.end()) {
+                    qit->second.assign(read_buf.begin(), read_buf.begin() + ggml_nbytes(tensor));
+                }
 
                 ggml_backend_tensor_set(tensor, read_buf.data(), 0, ggml_nbytes(tensor));
             }
@@ -2003,6 +2038,20 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         } else if (model.n_loaded != (int) model.tensors.size()) {
             WHISPER_LOG_ERROR("%s: ERROR not all tensors loaded from model file - expected %zu, got %d\n", __func__, model.tensors.size(), model.n_loaded);
             return false;
+        }
+    }
+
+    // assemble the fused Q+K+V decoder weight from the staged plain bytes: byte-concat the per-projection
+    // rows along ne[1] and set once (set_tensor re-applies the destination buffer layout; bit-exact).
+    if (model.n_loaded > 0) {
+        std::vector<char> qkv_buf;
+        for (auto & layer : model.layers_decoder) {
+            const size_t nb_w = ggml_nbytes(layer.attn_q_w);
+            qkv_buf.resize(3*nb_w);
+            memcpy(qkv_buf.data(),          qkv_src_bytes[layer.attn_q_w].data(), nb_w);
+            memcpy(qkv_buf.data() +   nb_w, qkv_src_bytes[layer.attn_k_w].data(), nb_w);
+            memcpy(qkv_buf.data() + 2*nb_w, qkv_src_bytes[layer.attn_v_w].data(), nb_w);
+            ggml_backend_tensor_set(layer.attn_qkv_w, qkv_buf.data(), 0, 3*nb_w);
         }
     }
 
@@ -2625,9 +2674,13 @@ static struct ggml_cgraph * whisper_build_graph_decoder(
 
         // self-attention
         {
-            struct ggml_tensor * Qcur = ggml_mul_mat(ctx0,
-                    layer.attn_q_w,
+            // fused Q+K+V projection: one matmul, then split into Q/K/V (rows [0,n)/[n,2n)/[2n,3n))
+            struct ggml_tensor * QKVcur = ggml_mul_mat(ctx0,
+                    layer.attn_qkv_w,
                     cur);
+
+            struct ggml_tensor * Qcur = ggml_view_2d(ctx0, QKVcur, n_state, n_tokens,
+                    QKVcur->nb[1], 0);
 
             Qcur = ggml_add(ctx0,
                         Qcur,
@@ -2635,18 +2688,17 @@ static struct ggml_cgraph * whisper_build_graph_decoder(
 
             Qcur = ggml_scale(ctx0, Qcur, KQscale);
 
-            // note: no bias for Key
-            struct ggml_tensor * Kcur = ggml_mul_mat(ctx0,
-                    layer.attn_k_w,
-                    cur);
+            // note: no bias for Key; cont() materializes the strided view so scale (contiguous-only) can run
+            struct ggml_tensor * Kcur = ggml_cont(ctx0,
+                    ggml_view_2d(ctx0, QKVcur, n_state, n_tokens,
+                        QKVcur->nb[1], n_state*QKVcur->nb[0]));
 
             Kcur = ggml_scale(ctx0, Kcur, KQscale);
 
             // store key and value to memory
             {
-                struct ggml_tensor * Vcur = ggml_mul_mat(ctx0,
-                        layer.attn_v_w,
-                        cur);
+                struct ggml_tensor * Vcur = ggml_view_2d(ctx0, QKVcur, n_state, n_tokens,
+                        QKVcur->nb[1], 2*n_state*QKVcur->nb[0]);
 
                 Vcur = ggml_add(ctx0,
                             Vcur,
@@ -2897,10 +2949,14 @@ static struct ggml_cgraph * whisper_build_graph_decoder(
                 model.d_ln_b);
     }
 
-    // compute logits only for the last token
-    // comment this line to compute logits for all n_tokens
-    // might be useful in the future
-    //cur = ggml_view_2d(ctx0, cur, cur->ne[0], 1, cur->nb[1], (cur->ne[1] - 1)*cur->nb[1]);
+    // compute logits only for the tokens that request them (batch.logits flags a trailing
+    // suffix) — the vocab matmul is the largest decode op, so slicing unused rows off matters
+    {
+        const int i0 = whisper_logits_suffix_offset(batch.logits, n_tokens);
+        if (i0 > 0) {
+            cur = ggml_view_2d(ctx0, cur, cur->ne[0], n_tokens - i0, cur->nb[1], i0*cur->nb[1]);
+        }
+    }
 
     struct ggml_tensor * logits = ggml_mul_mat(ctx0, model.d_te, cur);
 
@@ -3033,11 +3089,13 @@ static bool whisper_decode_internal(
     }
 
     logits_out.resize(n_tokens*n_vocab);
+    const int n_logits_rows = (int) logits->ne[1]; // < n_tokens when the graph sliced unused rows off
     for (int i = 0; i < n_tokens; i++) {
         if (batch.logits[i] == 0) {
             continue;
         }
-        ggml_backend_tensor_get(logits, logits_out.data() + (n_vocab*i), sizeof(float)*(n_vocab*i), sizeof(float)*n_vocab);
+        const int src_row = i - (n_tokens - n_logits_rows);
+        ggml_backend_tensor_get(logits, logits_out.data() + (n_vocab*i), sizeof(float)*(n_vocab*src_row), sizeof(float)*n_vocab);
     }
 
     if (batch.n_tokens > 1) {
@@ -3614,6 +3672,12 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
                     const int n_past   = 0;
 
                     whisper_batch_prep_legacy(state->batch, nullptr, n_tokens, n_past, 0);
+
+                    // worst case: every row requests logits (beam-search batches flag all rows),
+                    // so the measured graph must keep the full-width vocab matmul
+                    for (int i = 0; i < n_tokens; ++i) {
+                        state->batch.logits[i] = 1;
+                    }
 
                     return whisper_build_graph_decoder(*ctx, *state, state->batch, ctx->params.dtw_token_timestamps, true);
                 });
