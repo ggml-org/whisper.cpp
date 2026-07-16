@@ -2068,6 +2068,18 @@ static struct ggml_cgraph * whisper_build_graph_encoder(
 
     const float KQscale = 1.0f/sqrtf(float(n_state_head));
 
+    // with flash attention the self-attention K/V are viewed zero-padded to
+    // n_ctx_pad, but only n_ctx rows are written - the padding holds stale
+    // data from previous calls, so it must be masked out
+    struct ggml_tensor * KQ_mask_f16 = nullptr;
+    if (wctx.params.flash_attn) {
+        struct ggml_tensor * KQ_mask = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_ctx_pad, n_ctx, 1);
+        ggml_set_name(KQ_mask, "KQ_mask_enc");
+        ggml_set_input(KQ_mask);
+
+        KQ_mask_f16 = ggml_cast(ctx0, KQ_mask, GGML_TYPE_F16);
+    }
+
     // ===================================================================
     // NOTE: experimenting with partial evaluation of the encoder (ignore)
     //static int iter = -1;
@@ -2156,7 +2168,7 @@ static struct ggml_cgraph * whisper_build_graph_encoder(
                             ggml_element_size(kv_pad.v)*n_state_head,
                             0);
 
-                cur = ggml_flash_attn_ext(ctx0, Q, K, V, nullptr, KQscale, 0.0f, 0.0f);
+                cur = ggml_flash_attn_ext(ctx0, Q, K, V, KQ_mask_f16, KQscale, 0.0f, 0.0f);
 
                 cur = ggml_reshape_2d(ctx0, cur, n_state, n_ctx);
             } else {
@@ -2428,6 +2440,28 @@ static bool whisper_encode_internal(
             return false;
         }
 
+        // mask out the padded part of the flash-attention K/V views
+        {
+            struct ggml_tensor * KQ_mask = ggml_graph_get_tensor(gf, "KQ_mask_enc");
+            if (KQ_mask) {
+                const int n_ctx     = wstate.exp_n_audio_ctx > 0 ? wstate.exp_n_audio_ctx : wctx.model.hparams.n_audio_ctx;
+                const int n_ctx_pad = GGML_PAD(n_ctx, 256);
+
+                wstate.inp_mask.resize(ggml_nelements(KQ_mask));
+
+                float * data = wstate.inp_mask.data();
+                memset(data, 0, ggml_nbytes(KQ_mask));
+
+                for (int j = 0; j < n_ctx; ++j) {
+                    for (int i = n_ctx; i < n_ctx_pad; ++i) {
+                        data[j*n_ctx_pad + i] = -INFINITY;
+                    }
+                }
+
+                ggml_backend_tensor_set(KQ_mask, wstate.inp_mask.data(), 0, ggml_nelements(KQ_mask)*sizeof(float));
+            }
+        }
+
         if (!ggml_graph_compute_helper(sched, gf, n_threads)) {
             return false;
         }
@@ -2510,6 +2544,18 @@ static struct ggml_cgraph * whisper_build_graph_decoder(
     ggml_set_input(KQ_mask);
 
     struct ggml_tensor * KQ_mask_f16 = ggml_cast(ctx0, KQ_mask, GGML_TYPE_F16);
+
+    // with flash attention the cross-attention K/V are viewed zero-padded to
+    // n_audio_ctx_pad, but only n_audio_ctx rows are written - the padding
+    // holds stale data from previous calls, so it must be masked out
+    struct ggml_tensor * KQ_mask_cross_f16 = nullptr;
+    if (wctx.params.flash_attn) {
+        struct ggml_tensor * KQ_mask_cross = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_audio_ctx_pad, n_tokens, 1);
+        ggml_set_name(KQ_mask_cross, "KQ_mask_cross");
+        ggml_set_input(KQ_mask_cross);
+
+        KQ_mask_cross_f16 = ggml_cast(ctx0, KQ_mask_cross, GGML_TYPE_F16);
+    }
 
     // token encoding + position encoding
     struct ggml_tensor * cur =
@@ -2692,7 +2738,7 @@ static struct ggml_cgraph * whisper_build_graph_decoder(
                             ggml_element_size(wstate.kv_cross.v)*n_state_head,
                             ggml_element_size(wstate.kv_cross.v)*n_state*n_audio_ctx_pad*il);
 
-                cur = ggml_flash_attn_ext(ctx0, Q, Kcross, Vcross, nullptr, KQscale, 0.0f, 0.0f);
+                cur = ggml_flash_attn_ext(ctx0, Q, Kcross, Vcross, KQ_mask_cross_f16, KQscale, 0.0f, 0.0f);
 
                 cur = ggml_reshape_2d(ctx0, cur, n_state, n_tokens);
             } else {
@@ -2937,6 +2983,28 @@ static bool whisper_decode_internal(
             }
 
             ggml_backend_tensor_set(KQ_mask, wstate.inp_mask.data(), 0, ggml_nelements(KQ_mask)*sizeof(float));
+        }
+
+        // mask out the padded part of the flash-attention cross K/V views
+        {
+            struct ggml_tensor * KQ_mask_cross = ggml_graph_get_tensor(gf, "KQ_mask_cross");
+            if (KQ_mask_cross) {
+                const int n_audio_ctx     = wstate.exp_n_audio_ctx > 0 ? wstate.exp_n_audio_ctx : wctx.model.hparams.n_audio_ctx;
+                const int n_audio_ctx_pad = GGML_PAD(n_audio_ctx, 256);
+
+                wstate.inp_mask.resize(ggml_nelements(KQ_mask_cross));
+
+                float * data = wstate.inp_mask.data();
+                memset(data, 0, ggml_nbytes(KQ_mask_cross));
+
+                for (int j = 0; j < n_tokens; ++j) {
+                    for (int i = n_audio_ctx; i < n_audio_ctx_pad; ++i) {
+                        data[j*n_audio_ctx_pad + i] = -INFINITY;
+                    }
+                }
+
+                ggml_backend_tensor_set(KQ_mask_cross, wstate.inp_mask.data(), 0, ggml_nelements(KQ_mask_cross)*sizeof(float));
+            }
         }
 
         logits = ggml_graph_node(gf, -1);
