@@ -271,6 +271,28 @@ set(TTS_CPP_LIB_SOURCES
     src/lavasr/denoiser_gguf.cpp
     src/lavasr/denoiser_api.cpp
     src/lavasr/denoiser_ggml.cpp
+    # ACE-Step music generation — Oobleck VAE stage (CPU).  Uses the custom
+    # ggml-speech ops COL2IM_1D + SNAKE (decoder transposed convs + snake).
+    src/acestep/vae_gguf.cpp
+    src/acestep/vae_ggml.cpp
+    src/acestep/vae_api.cpp
+    # ACE-Step DiT (Diffusion Transformer) stage (CPU). No new ggml ops.
+    src/acestep/dit_gguf.cpp
+    src/acestep/dit_ggml.cpp
+    # ACE-Step text encoder (Qwen3-Embedding). Standard Qwen3, no new ggml ops.
+    src/acestep/textenc_ggml.cpp
+    # ACE-Step condition encoder (lyric/timbre encoders + text projector).
+    src/acestep/cond_ggml.cpp
+    # ACE-Step LM (ace-lm Qwen3 + KV cache). Standard Qwen3, no new ggml ops.
+    src/acestep/lm_ggml.cpp
+    # ACE-Step BPE tokenizer (Qwen3/GPT-2 byte-level). CPU-only, no ggml.
+    src/acestep/bpe_tokenizer.cpp
+    # ACE-Step LM pipeline (CoT/prompt + top-k/p sampling + Phase-2 codes).
+    src/acestep/lm_pipeline.cpp
+    # ACE-Step FSQ detokenizer (LM codes -> DiT context latents). No new op.
+    src/acestep/detok_ggml.cpp
+    # ACE-Step end-to-end engine (text -> LM -> detok -> DiT -> VAE -> pcm).
+    src/acestep/engine.cpp
 )
 
 if (TTS_CPP_BUILD_LIBRARY)
@@ -308,6 +330,15 @@ if (TTS_CPP_BUILD_LIBRARY)
         CXX_VISIBILITY_PRESET     hidden
         VISIBILITY_INLINES_HIDDEN ON
     )
+
+    # Make the linked ggml's headers win over any unrelated ggml.h sitting in a
+    # system prefix that another dependency drags in (e.g. a homebrew ggml under
+    # /opt/homebrew/include pulled in transitively via MeCab's include dir). BEFORE
+    # prepends it ahead of those, so ggml-speech's ggml.h/gguf.h are always used.
+    if (TARGET ggml)
+        target_include_directories(tts-cpp BEFORE PRIVATE
+            $<TARGET_PROPERTY:ggml,INTERFACE_INCLUDE_DIRECTORIES>)
+    endif()
 
     target_include_directories(tts-cpp
         PUBLIC
@@ -349,7 +380,10 @@ if (TTS_CPP_BUILD_LIBRARY)
         # find_package(tts-cpp) don't inherit a libmecab dependency (and so
         # the MinGW mecab.h headers never leak into a consumer's TU).
         target_compile_definitions(tts-cpp PRIVATE TTS_CPP_HAS_MECAB)
-        target_include_directories(tts-cpp PRIVATE ${MECAB_INCLUDE_DIR})
+        # SYSTEM so this external prefix (often /opt/homebrew/include, which may
+        # also carry an unrelated stale ggml.h) is searched AFTER the project's
+        # own -I dirs and the ggml-speech include, instead of shadowing them.
+        target_include_directories(tts-cpp SYSTEM PRIVATE ${MECAB_INCLUDE_DIR})
         if (TARGET mecab::mecab)
             # The vcpkg mecab target carries the Windows static-library
             # compile definitions needed to avoid dllimport references.
@@ -442,6 +476,56 @@ if (TTS_CPP_BUILD_EXECUTABLES)
     target_link_libraries(lavasr-bench PRIVATE tts-cpp)
     target_include_directories(lavasr-bench PRIVATE include ggml/include src)
     tts_cpp_apply_ccache(lavasr-bench)
+
+    # ACE-Step Oobleck VAE harness: --decode (synthetic latent) / --roundtrip (WAV).
+    add_executable(acestep-cli src/acestep/acestep_cli.cpp)
+    target_link_libraries(acestep-cli PRIVATE tts-cpp)
+    target_include_directories(acestep-cli PRIVATE include ggml/include src)
+    tts_cpp_apply_ccache(acestep-cli)
+
+    # ACE-Step DiT smoke harness: load real weights + run one forward.
+    add_executable(dit-smoke src/acestep/dit_smoke.cpp)
+    target_link_libraries(dit-smoke PRIVATE tts-cpp)
+    target_include_directories(dit-smoke PRIVATE include ggml/include src)
+    tts_cpp_apply_ccache(dit-smoke)
+
+    # ACE-Step text-encoder smoke harness: load real weights + run one forward.
+    add_executable(textenc-smoke src/acestep/textenc_smoke.cpp)
+    target_link_libraries(textenc-smoke PRIVATE tts-cpp)
+    target_include_directories(textenc-smoke PRIVATE include ggml/include src)
+    tts_cpp_apply_ccache(textenc-smoke)
+
+    # ACE-Step cond-encoder smoke harness: load real weights + run one forward.
+    add_executable(cond-smoke src/acestep/cond_smoke.cpp)
+    target_link_libraries(cond-smoke PRIVATE tts-cpp)
+    target_include_directories(cond-smoke PRIVATE include ggml/include src)
+    tts_cpp_apply_ccache(cond-smoke)
+
+    # ACE-Step LM smoke harness: load real weights + prefill + greedy decode.
+    add_executable(lm-smoke src/acestep/lm_smoke.cpp)
+    target_link_libraries(lm-smoke PRIVATE tts-cpp)
+    target_include_directories(lm-smoke PRIVATE include ggml/include src)
+    tts_cpp_apply_ccache(lm-smoke)
+
+    add_executable(bpe-smoke src/acestep/bpe_smoke.cpp)
+    target_link_libraries(bpe-smoke PRIVATE tts-cpp)
+    target_include_directories(bpe-smoke PRIVATE include ggml/include src)
+    tts_cpp_apply_ccache(bpe-smoke)
+
+    add_executable(lmgen-smoke src/acestep/lmgen_smoke.cpp)
+    target_link_libraries(lmgen-smoke PRIVATE tts-cpp)
+    target_include_directories(lmgen-smoke PRIVATE include ggml/include src)
+    tts_cpp_apply_ccache(lmgen-smoke)
+
+    add_executable(detok-smoke src/acestep/detok_smoke.cpp)
+    target_link_libraries(detok-smoke PRIVATE tts-cpp)
+    target_include_directories(detok-smoke PRIVATE include ggml/include src)
+    tts_cpp_apply_ccache(detok-smoke)
+
+    add_executable(music-cli src/acestep/music_cli.cpp)
+    target_link_libraries(music-cli PRIVATE tts-cpp)
+    target_include_directories(music-cli PRIVATE include ggml/include src)
+    tts_cpp_apply_ccache(music-cli)
 endif()
 
 if (TTS_CPP_BUILD_TESTS)
