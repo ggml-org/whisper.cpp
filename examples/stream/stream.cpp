@@ -37,6 +37,7 @@ struct whisper_params {
     bool save_audio    = false; // save audio to wav file
     bool use_gpu       = true;
     bool flash_attn    = true;
+    bool file_no_dup   = true; // avoid duplicates in file output
 
     std::string language  = "en";
     std::string model     = "models/ggml-base.en.bin";
@@ -75,6 +76,8 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-ng"   || arg == "--no-gpu")        { params.use_gpu       = false; }
         else if (arg == "-fa"   || arg == "--flash-attn")    { params.flash_attn    = true; }
         else if (arg == "-nfa"  || arg == "--no-flash-attn") { params.flash_attn    = false; }
+        else if (arg == "-fnd"  || arg == "--file-no-dup")   { params.file_no_dup  = true; }
+        else if (arg == "-fd"   || arg == "--file-dup")      { params.file_no_dup  = false; }
 
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
@@ -114,6 +117,8 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -ng,      --no-gpu        [%-7s] disable GPU inference\n",                          params.use_gpu ? "false" : "true");
     fprintf(stderr, "  -fa,      --flash-attn    [%-7s] enable flash attention during inference\n",        params.flash_attn ? "true" : "false");
     fprintf(stderr, "  -nfa,     --no-flash-attn [%-7s] disable flash attention during inference\n",       params.flash_attn ? "false" : "true");
+    fprintf(stderr, "  -fnd,     --file-no-dup    [%-7s] do not print duplicate lines in file output\n",     params.file_no_dup ? "true" : "false");
+    fprintf(stderr, "  -fd,      --file-dup       [%-7s] print all lines in file output (including duplicates)\n", params.file_no_dup ? "false" : "true");
     fprintf(stderr, "\n");
 }
 
@@ -207,6 +212,7 @@ int main(int argc, char ** argv) {
     }
 
     int n_iter = 0;
+    int n_segments_written = 0;
 
     bool is_running = true;
 
@@ -369,7 +375,7 @@ int main(int argc, char ** argv) {
                         printf("%s", text);
                         fflush(stdout);
 
-                        if (params.fname_out.length() > 0) {
+                        if (params.fname_out.length() > 0 && !params.file_no_dup) {
                             fout << text;
                         }
                     } else {
@@ -387,13 +393,13 @@ int main(int argc, char ** argv) {
                         printf("%s", output.c_str());
                         fflush(stdout);
 
-                        if (params.fname_out.length() > 0) {
+                        if (params.fname_out.length() > 0 && !params.file_no_dup) {
                             fout << output;
                         }
                     }
                 }
 
-                if (params.fname_out.length() > 0) {
+                if (params.fname_out.length() > 0 && !params.file_no_dup) {
                     fout << std::endl;
                 }
 
@@ -407,6 +413,32 @@ int main(int argc, char ** argv) {
 
             if (!use_vad && (n_iter % n_new_line) == 0) {
                 printf("\n");
+
+                // write finalized segments to file (avoids duplicates)
+                if (params.fname_out.length() > 0 && params.file_no_dup) {
+                    const int n_segments = whisper_full_n_segments(ctx);
+                    for (int i = n_segments_written; i < n_segments; ++i) {
+                        const char * text = whisper_full_get_segment_text(ctx, i);
+
+                        if (params.no_timestamps) {
+                            fout << text;
+                        } else {
+                            const int64_t t0 = whisper_full_get_segment_t0(ctx, i);
+                            const int64_t t1 = whisper_full_get_segment_t1(ctx, i);
+
+                            std::string output = "[" + to_timestamp(t0, false) + " --> " + to_timestamp(t1, false) + "]  " + text;
+
+                            if (whisper_full_get_segment_speaker_turn_next(ctx, i)) {
+                                output += " [SPEAKER_TURN]";
+                            }
+
+                            output += "\n";
+                            fout << output;
+                        }
+                    }
+                    fout << std::endl;
+                    n_segments_written = n_segments;
+                }
 
                 // keep part of the audio for next iteration to try to mitigate word boundary issues
                 pcmf32_old = std::vector<float>(pcmf32.end() - n_samples_keep, pcmf32.end());
