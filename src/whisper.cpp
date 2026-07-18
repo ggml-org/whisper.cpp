@@ -7164,6 +7164,11 @@ int whisper_full_with_state(
 
                 whisper_batch_prep_legacy(state->batch, prompt.data(), prompt.size(), 0, 0);
 
+                // Identify the SOT position: The first token after prompt
+                const int sot_index = (int) prompt.size() - (int) prompt_init.size();
+                // Include SOT in the decode mask so whisper_decode_internal() will copy to state->logits
+                state->batch.logits[sot_index] = 1;
+
                 if (!whisper_decode_internal(*ctx, *state, state->batch, params.n_threads, false, params.abort_callback, params.abort_callback_user_data)) {
                     WHISPER_LOG_ERROR("%s: failed to decode\n", __func__);
                     return -8;
@@ -7176,8 +7181,13 @@ int whisper_full_with_state(
                     std::vector<float> logprobs(n_logits);
                     std::vector<float> probs(n_logits);
 
-                    whisper_compute_logprobs(state->logits, n_logits, logprobs);
-                    whisper_compute_probs(state->logits, n_logits, logprobs, probs);
+                    // Get the SOT logits, which aren't at position 0 if there was a prompt prefix
+                    const std::vector<float> sot_logits = state->logits;(
+                        state->logits.begin() + (size_t) sot_index * n_logits,
+                        state->logits.begin() + (size_t) (sot_index + 1) * n_logits);
+
+                    whisper_compute_logprobs(sot_logits, n_logits, logprobs);
+                    whisper_compute_probs(sot_logits, n_logits, logprobs, probs);
                     state->no_speech_prob = probs[whisper_token_nosp(ctx)];
                 }
 
