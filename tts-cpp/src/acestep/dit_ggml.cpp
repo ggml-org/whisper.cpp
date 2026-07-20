@@ -20,8 +20,9 @@
 // mul_mat. The sliding-window / cross-attn masks are built by the caller
 // (sampler) and passed in via DitForwardInputs, matching the header contract.
 //
-// NOTE: this translation still needs a compile + numerical-parity pass against
-// the acestep.cpp reference (fixed seed) before it is wired into the engine.
+// Wired into the engine (engine.cpp) and parity-checked against acestep.cpp
+// --dump tensors on a fixed seed: feeding upstream noise/context/enc_hidden
+// reproduces the reference DiT latent (corr ~0.999).
 
 namespace tts_cpp::acestep {
 
@@ -727,7 +728,11 @@ bool dit_sample(DitModel * m, const DitSampleParams & p, std::vector<float> & la
         fin.enc_S         = enc_S;
         fin.H_enc         = p.H_enc;
         fin.t             = t_curr;
-        fin.t_r           = t_curr;  // turbo: t_r == t
+        // t_r == t (t_diff == 0, so time_embed_r sees 0). Holds for turbo
+        // text2music, which is also why the sampler runs a single conditional
+        // pass (N == 1, no CFG). base/sft (50-step, CFG) parity is not yet
+        // verified against the reference and would need t_r / uncond wiring.
+        fin.t_r           = t_curr;
         fin.sa_mask_sw    = sa_mask.data();
         fin.ca_mask       = ca_mask.data();
 

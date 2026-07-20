@@ -38,9 +38,12 @@
 
 namespace tts_cpp::acestep {
 
-// --- QVAC-21921 synth-parity debug hooks (env-gated, no-op by default) --------
+// --- QVAC-21921 synth-parity debug hooks (compiled out by default) -----------
 // Isolate DiT vs VAE by injecting acestep.cpp --dump tensors and dumping ours.
 // Dump .bin format: 3x int32 header [ndim, d0, d1] + float32 payload.
+// Build with -DACESTEP_PARITY_DEBUG to enable; otherwise these are absent from
+// the production generate() path.
+#ifdef ACESTEP_PARITY_DEBUG
 namespace {
 bool dbg_load_dump(const char * path, std::vector<float> & dst) {
     FILE * f = fopen(path, "rb");
@@ -75,6 +78,7 @@ const char * dbg_env(const char * k) {
     return (v && *v) ? v : nullptr;
 }
 }  // namespace
+#endif  // ACESTEP_PARITY_DEBUG
 
 // DiT instruction headers (task-types.h). COVER is used whenever LM codes exist.
 static const char * DIT_INSTR_COVER = "Generate audio semantic tokens based on the given conditions:";
@@ -117,7 +121,9 @@ static std::string to_lower(std::string s) {
 }
 
 // Classify the four GGUFs in models_dir by filename substring. Explicit paths in
-// EngineOptions win over the scan.
+// EngineOptions win over the scan, so pass them when the filenames are ambiguous.
+// NOTE: matching is order-dependent and heuristic (e.g. the short "lm" token can
+// hit unrelated names); the checks run embedding -> lm -> vae -> dit on purpose.
 static void resolve_paths(EngineOptions & o) {
     if (o.models_dir.empty()) return;
     std::error_code ec;
@@ -254,6 +260,9 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
         lp.top_p       = params.lm_top_p;
         lp.top_k       = params.lm_top_k;
         lp.cfg_scale   = params.lm_cfg_scale;
+        // The LM sampler RNG is std::mt19937 (32-bit seed), so truncating here
+        // is intentional and lossless for its purpose; only the DiT noise needs
+        // the full int64 seed (Philox, torch.randn parity), which it gets below.
         lp.seed        = (uint32_t) seed;
 
         // Phase 1: fill missing metadata (bpm/keyscale/duration/timesignature)
@@ -304,6 +313,7 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     const int        S_text    = (int) text_ids.size();
     const int        S_lyric   = (int) lyric_ids.size();
 
+#ifdef ACESTEP_PARITY_DEBUG
     if (dbg_env("ACESTEP_DUMP_DIR")) {
         fprintf(stderr, "[acestep-dbg] S_text=%d S_lyric=%d (enc_S=%d)\n", S_text, S_lyric, S_text + S_lyric);
         fprintf(stderr, "[acestep-dbg] text_ids[0..8]:");
@@ -316,6 +326,7 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
         for (int i = std::max(0, S_lyric - 4); i < S_lyric; i++) fprintf(stderr, " %d", lyric_ids[i]);
         fprintf(stderr, "\n");
     }
+#endif
 
     std::vector<int32_t> text_ids32(text_ids.begin(), text_ids.end());
     std::vector<int32_t> lyric_ids32(lyric_ids.begin(), lyric_ids.end());
@@ -345,10 +356,12 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     std::vector<float> noise((size_t) Oc * T);
     philox_randn(seed, noise.data(), (int) noise.size(), /*bf16_round=*/true);
 
+#ifdef ACESTEP_PARITY_DEBUG
     // Debug (env-gated): inject acestep.cpp --dump inputs to isolate the DiT graph.
     if (const char * p = dbg_env("ACESTEP_INJECT_NOISE"))   dbg_load_dump(p, noise);
     if (const char * p = dbg_env("ACESTEP_INJECT_CONTEXT")) dbg_load_dump(p, context);
     if (const char * p = dbg_env("ACESTEP_INJECT_ENC"))     dbg_load_dump(p, enc_hidden);
+#endif
 
     // ---- 7. DiT flow-matching sample -> latent [64, T] ----
     // Resolve steps/shift from the model type when the caller left them at auto
@@ -378,6 +391,7 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     if (!dit_sample(m->dit, sp, latent)) throw std::runtime_error("acestep engine: DiT sample failed");
     if (!report("dit", n_steps, n_steps)) return result;
 
+#ifdef ACESTEP_PARITY_DEBUG
     // Debug (env-gated): dump our DiT output + inputs for parity vs acestep.cpp.
     if (const char * dir = dbg_env("ACESTEP_DUMP_DIR")) {
         const std::string d(dir);
@@ -386,6 +400,7 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
         dbg_write_dump(d + "/our_context.bin", context, T, ctx_ch);
         dbg_write_dump(d + "/our_enc_hidden.bin", enc_hidden, enc_S, H_enc);
     }
+#endif
 
     // ---- 8. VAE decode -> stereo 48 kHz PCM ----
     if (!report("vae", 0, 1)) return result;
