@@ -55,7 +55,8 @@ struct CondModel {
 
     ggml_tensor * text_proj_w = nullptr;  // [1024, 2048]
 
-    std::vector<float> null_emb;  // [2048] dequantized
+    std::vector<float> null_emb;       // [2048] dequantized
+    std::vector<float> silence_frame;  // [64] first frame of silence_latent (text2music timbre)
 };
 
 static void dequant_to_f32(const DitGGUF & g, const std::string & name, std::vector<float> & out) {
@@ -88,7 +89,17 @@ CondModel * cond_model_load(const std::string & path, ggml_backend_t backend, bo
     m->backend      = backend;
     m->lyric_cfg    = lyric_config();
     m->timbre_cfg   = timbre_config();
-    m->use_timbre_cls = dit_gguf_has(g, "encoder.timbre_encoder.special_token");
+    // acestep.cpp gates the CLS prepend on acestep.encoder_hidden_size > 0 (XL
+    // models), not merely on the special_token tensor being present (the
+    // converter may still emit it). Match that rule to keep the timbre token
+    // identical: 2B/SFT take the raw first frame, XL take the learned CLS.
+    const bool has_special = dit_gguf_has(g, "encoder.timbre_encoder.special_token");
+    uint32_t   enc_hid     = 0;
+    try { enc_hid = dit_gguf_u32(g, "acestep.encoder_hidden_size"); } catch (const std::exception &) { enc_hid = 0; }
+    m->use_timbre_cls      = enc_hid > 0;
+    if (verbose)
+        fprintf(stderr, "[acestep-cond] encoder_hidden_size=%u special_token=%d -> use_timbre_cls=%d\n", enc_hid,
+                (int) has_special, (int) m->use_timbre_cls);
 
     const size_t n_tensors = (size_t) (m->lyric_cfg.n_layers + m->timbre_cfg.n_layers) * 11 + 16;
     ggml_init_params ip{ ggml_tensor_overhead() * n_tensors, nullptr, /*no_alloc=*/true };
@@ -146,6 +157,20 @@ CondModel * cond_model_load(const std::string & path, ggml_backend_t backend, bo
 
     dequant_to_f32(g, "null_condition_emb", m->null_emb);
 
+    // silence_latent [15000, 64] F32: the canonical VAE encoding of audio silence.
+    // For text2music (no reference audio) acestep.cpp feeds its first frame to the
+    // timbre encoder to emit the single timbre conditioning token (see engine).
+    {
+        ggml_tensor * sm = dit_gmeta(g, "silence_latent");
+        const void *  sd = dit_gdata(g, "silence_latent");
+        if (sm && sd && sm->type == GGML_TYPE_F32 && ggml_nelements(sm) >= 64) {
+            m->silence_frame.resize(64);
+            std::memcpy(m->silence_frame.data(), sd, 64 * sizeof(float));
+        } else {
+            fprintf(stderr, "[acestep-cond] WARNING: silence_latent unavailable; timbre token disabled\n");
+        }
+    }
+
     if (verbose) {
         fprintf(stderr, "[acestep-cond] loaded %s: %.1f MB, lyric(%dL) timbre(%dL%s) text_proj null_emb(%zu)\n",
                 path.c_str(), cond_model_weight_bytes(m) / 1048576.0, m->lyric_cfg.n_layers, m->timbre_cfg.n_layers,
@@ -168,6 +193,8 @@ size_t cond_model_weight_bytes(const CondModel * m) {
 }
 
 const std::vector<float> & cond_model_null_emb(const CondModel * m) { return m->null_emb; }
+
+const std::vector<float> & cond_model_silence_frame(const CondModel * m) { return m->silence_frame; }
 
 // Bidirectional sliding-window mask [S, S] F16: 0 if |i-j| <= W else -inf.
 static void fill_slide_mask(std::vector<uint16_t> & md, int S, int W) {

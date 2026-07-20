@@ -120,7 +120,7 @@ int main(int argc, char ** argv) {
     p.duration        = arg_val(argc, argv, "--dur")   ? (float) atof(arg_val(argc, argv, "--dur"))   : 8.0f;
     p.inference_steps = arg_val(argc, argv, "--steps") ? atoi(arg_val(argc, argv, "--steps"))         : 0;
     p.shift           = arg_val(argc, argv, "--shift") ? (float) atof(arg_val(argc, argv, "--shift")) : 0.0f;
-    p.seed            = arg_val(argc, argv, "--seed")  ? atoi(arg_val(argc, argv, "--seed"))          : 42;
+    p.seed            = arg_val(argc, argv, "--seed")  ? strtoll(arg_val(argc, argv, "--seed"), nullptr, 10) : 42;
     if (arg_val(argc, argv, "--bpm"))  p.bpm = atoi(arg_val(argc, argv, "--bpm"));
     if (arg_val(argc, argv, "--key"))  p.keyscale = arg_val(argc, argv, "--key");
     if (arg_val(argc, argv, "--tsig")) p.timesignature = arg_val(argc, argv, "--tsig");
@@ -146,7 +146,7 @@ int main(int argc, char ** argv) {
         if (json_field(j, "duration", v)) p.duration = (float) atof(v.c_str());
         if (json_field(j, "shift", v)) p.shift = (float) atof(v.c_str());
         if (json_field(j, "inference_steps", v)) p.inference_steps = atoi(v.c_str());
-        if (json_field(j, "seed", v)) p.seed = atoi(v.c_str());
+        if (json_field(j, "seed", v)) p.seed = strtoll(v.c_str(), nullptr, 10);
         if (json_field(j, "audio_codes", v) && !v.empty()) {
             size_t start = 0;
             while (start < v.size()) {

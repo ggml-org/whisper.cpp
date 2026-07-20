@@ -28,6 +28,10 @@ size_t      cond_model_weight_bytes(const CondModel * m);
 // null_condition_emb [2048] (F32), used by CFG on non-turbo runs.
 const std::vector<float> & cond_model_null_emb(const CondModel * m);
 
+// First frame [64] of the DiT GGUF's silence_latent. Fed to the timbre encoder
+// as the text2music timbre input (empty if the GGUF lacks silence_latent).
+const std::vector<float> & cond_model_silence_frame(const CondModel * m);
+
 // Encode conditioning into `enc_hidden` [2048, S_total] (2048 contiguous per
 // token). Set timbre_feats=nullptr / S_ref=0 to skip timbre (text2music path).
 // Writes S_total to *out_enc_S. Returns false on failure.

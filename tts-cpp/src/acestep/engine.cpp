@@ -18,6 +18,7 @@
 #include <atomic>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <random>
@@ -36,6 +37,44 @@
 // instruction and detokenized codes as the conditioning context.
 
 namespace tts_cpp::acestep {
+
+// --- QVAC-21921 synth-parity debug hooks (env-gated, no-op by default) --------
+// Isolate DiT vs VAE by injecting acestep.cpp --dump tensors and dumping ours.
+// Dump .bin format: 3x int32 header [ndim, d0, d1] + float32 payload.
+namespace {
+bool dbg_load_dump(const char * path, std::vector<float> & dst) {
+    FILE * f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "[acestep-dbg] cannot open %s\n", path); return false; }
+    int32_t hdr[3] = {0, 0, 0};
+    if (fread(hdr, sizeof(int32_t), 3, f) != 3) { fclose(f); return false; }
+    const int    ndim = hdr[0];
+    const size_t n    = (size_t) hdr[1] * (size_t) ((ndim >= 2) ? hdr[2] : 1);
+    if (n != dst.size()) {
+        fprintf(stderr, "[acestep-dbg] size mismatch %s: dump=%zu ours=%zu\n", path, n, dst.size());
+        fclose(f);
+        return false;
+    }
+    const size_t got = fread(dst.data(), sizeof(float), n, f);
+    fclose(f);
+    fprintf(stderr, "[acestep-dbg] injected %s (%zu floats)\n", path, got);
+    return got == n;
+}
+
+void dbg_write_dump(const std::string & path, const std::vector<float> & src, int d0, int d1) {
+    FILE * f = fopen(path.c_str(), "wb");
+    if (!f) { fprintf(stderr, "[acestep-dbg] cannot write %s\n", path.c_str()); return; }
+    int32_t hdr[3] = {2, d0, d1};
+    fwrite(hdr, sizeof(int32_t), 3, f);
+    fwrite(src.data(), sizeof(float), src.size(), f);
+    fclose(f);
+    fprintf(stderr, "[acestep-dbg] wrote %s ([%d, %d], %zu floats)\n", path.c_str(), d0, d1, src.size());
+}
+
+const char * dbg_env(const char * k) {
+    const char * v = getenv(k);
+    return (v && *v) ? v : nullptr;
+}
+}  // namespace
 
 // DiT instruction headers (task-types.h). COVER is used whenever LM codes exist.
 static const char * DIT_INSTR_COVER = "Generate audio semantic tokens based on the given conditions:";
@@ -265,6 +304,19 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     const int        S_text    = (int) text_ids.size();
     const int        S_lyric   = (int) lyric_ids.size();
 
+    if (dbg_env("ACESTEP_DUMP_DIR")) {
+        fprintf(stderr, "[acestep-dbg] S_text=%d S_lyric=%d (enc_S=%d)\n", S_text, S_lyric, S_text + S_lyric);
+        fprintf(stderr, "[acestep-dbg] text_ids[0..8]:");
+        for (int i = 0; i < 8 && i < S_text; i++) fprintf(stderr, " %d", text_ids[i]);
+        fprintf(stderr, " ... tail:");
+        for (int i = std::max(0, S_text - 4); i < S_text; i++) fprintf(stderr, " %d", text_ids[i]);
+        fprintf(stderr, "\n[acestep-dbg] lyric_ids[0..8]:");
+        for (int i = 0; i < 8 && i < S_lyric; i++) fprintf(stderr, " %d", lyric_ids[i]);
+        fprintf(stderr, " ... tail:");
+        for (int i = std::max(0, S_lyric - 4); i < S_lyric; i++) fprintf(stderr, " %d", lyric_ids[i]);
+        fprintf(stderr, "\n");
+    }
+
     std::vector<int32_t> text_ids32(text_ids.begin(), text_ids.end());
     std::vector<int32_t> lyric_ids32(lyric_ids.begin(), lyric_ids.end());
 
@@ -275,16 +327,28 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
         throw std::runtime_error("acestep engine: lyric embed lookup failed");
 
     // ---- 5. cond-encoder: -> enc_hidden [2048, S_total] ----
+    // text2music feeds one frame of the silence latent to the timbre encoder so
+    // the enc sequence carries the timbre token (packed lyric|timbre|text),
+    // matching acestep.cpp. Without it we drop a token and misalign cross-attn.
+    const std::vector<float> & silence_frame = cond_model_silence_frame(m->cond);
+    const float *              timbre_feats  = silence_frame.empty() ? nullptr : silence_frame.data();
+    const int                  timbre_S_ref  = silence_frame.empty() ? 0 : 1;
+
     std::vector<float> enc_hidden;
     int                enc_S = 0;
-    if (!cond_model_forward(m->cond, text_hidden.data(), S_text, lyric_embed.data(), S_lyric, nullptr, 0, enc_hidden,
-                            &enc_S))
+    if (!cond_model_forward(m->cond, text_hidden.data(), S_text, lyric_embed.data(), S_lyric, timbre_feats,
+                            timbre_S_ref, enc_hidden, &enc_S))
         throw std::runtime_error("acestep engine: cond-encoder forward failed");
     const int H_enc = (int) (enc_hidden.size() / (size_t) enc_S);  // 2048
 
     // ---- 6. noise [64, T] (Philox, torch.randn parity) ----
     std::vector<float> noise((size_t) Oc * T);
     philox_randn(seed, noise.data(), (int) noise.size(), /*bf16_round=*/true);
+
+    // Debug (env-gated): inject acestep.cpp --dump inputs to isolate the DiT graph.
+    if (const char * p = dbg_env("ACESTEP_INJECT_NOISE"))   dbg_load_dump(p, noise);
+    if (const char * p = dbg_env("ACESTEP_INJECT_CONTEXT")) dbg_load_dump(p, context);
+    if (const char * p = dbg_env("ACESTEP_INJECT_ENC"))     dbg_load_dump(p, enc_hidden);
 
     // ---- 7. DiT flow-matching sample -> latent [64, T] ----
     // Resolve steps/shift from the model type when the caller left them at auto
@@ -313,6 +377,15 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     std::vector<float> latent;
     if (!dit_sample(m->dit, sp, latent)) throw std::runtime_error("acestep engine: DiT sample failed");
     if (!report("dit", n_steps, n_steps)) return result;
+
+    // Debug (env-gated): dump our DiT output + inputs for parity vs acestep.cpp.
+    if (const char * dir = dbg_env("ACESTEP_DUMP_DIR")) {
+        const std::string d(dir);
+        dbg_write_dump(d + "/our_dit_output.bin", latent, T, Oc);
+        dbg_write_dump(d + "/our_noise.bin", noise, T, Oc);
+        dbg_write_dump(d + "/our_context.bin", context, T, ctx_ch);
+        dbg_write_dump(d + "/our_enc_hidden.bin", enc_hidden, enc_S, H_enc);
+    }
 
     // ---- 8. VAE decode -> stereo 48 kHz PCM ----
     if (!report("vae", 0, 1)) return result;
