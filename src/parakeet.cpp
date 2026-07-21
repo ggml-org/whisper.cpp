@@ -2341,7 +2341,15 @@ static bool parakeet_joint(
             return false;
         }
 
-        logits = ggml_graph_node(gf, -1);
+        // Prefer the raw joint logits (named "logits") over the final log(softmax)
+        // graph node. Duration slots often carry vanishing mass after the full-row
+        // softmax, so log(softmax) underflows those slots to -inf and the duration
+        // argmax silently returns index 0 (see #3932). Argmax on raw logits is
+        // equivalent for finite values and remains defined when log-probs are not.
+        logits = ggml_graph_get_tensor(gf, "logits");
+        if (logits == nullptr) {
+            logits = ggml_graph_node(gf, -1);
+        }
 
         if (!ggml_graph_compute_helper(sched, gf, n_threads)) {
             return false;
@@ -2428,11 +2436,20 @@ static parakeet_token_data create_token_data(
                         float   token_logit,
                           int   n_vocab_logits) {
 
+    // pstate.logits holds raw joint logits (see parakeet_joint). Compute a stable
+    // softmax over the token/blank slice for p and plog.
+    float max_logit = token_logit;
+    for (int i = 0; i < n_vocab_logits; ++i) {
+        if (pstate.logits[i] > max_logit) {
+            max_logit = pstate.logits[i];
+        }
+    }
     float token_sum = 0.0f;
     for (int i = 0; i < n_vocab_logits; ++i) {
-        token_sum += expf(pstate.logits[i]);
+        token_sum += expf(pstate.logits[i] - max_logit);
     }
-    float token_p = expf(token_logit) / token_sum;
+    const float log_z = max_logit + logf(token_sum);
+    const float token_p = expf(token_logit - log_z);
 
     parakeet_token_data token_data;
     token_data.id = token_id;
@@ -2440,7 +2457,7 @@ static parakeet_token_data create_token_data(
     token_data.duration_value = duration_value;
     token_data.frame_index = frame_index;
     token_data.p = token_p;
-    token_data.plog = token_logit;
+    token_data.plog = token_logit - log_z;
     token_data.t0 = frame_index * pctx.model.hparams.subsampling_factor;
     token_data.t1 = (frame_index + duration_value) * pctx.model.hparams.subsampling_factor;
     token_data.is_word_start = is_word_start_token(pctx.vocab, token_id);
@@ -2518,11 +2535,12 @@ static bool parakeet_decode(
             }
         }
 
-        // find the max index of the duration logits, and look up that index
-        // value in the tdt_durations array to get the actual duration value.
+        // Argmax over raw duration logits (not log-probs). Using log(softmax) here
+        // can leave every duration slot at -inf after fp32 underflow, which would
+        // leave best_duration_idx stuck at the sentinel-initialized 0 (#3932).
         int best_duration_idx = 0;
-        float best_duration_logit = -1e10f;
-        for (int i = 0; i < n_tdt_durations; ++i) {
+        float best_duration_logit = pstate.logits[n_vocab_logits];
+        for (int i = 1; i < n_tdt_durations; ++i) {
             if (pstate.logits[n_vocab_logits + i] > best_duration_logit) {
                 best_duration_logit = pstate.logits[n_vocab_logits + i];
                 best_duration_idx = i;
