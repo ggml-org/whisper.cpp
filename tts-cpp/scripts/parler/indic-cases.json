@@ -1,0 +1,12 @@
+[
+ {
+  "name": "case0",
+  "description": "Rohit speaks with a clear, warm voice at a moderate pace, very close up, studio quality with no background noise.",
+  "prompt": "मेरा नाम प्रतीक है। नमस्ते।"
+ },
+ {
+  "name": "case1",
+  "description": "Yash speaks with a clear, warm voice at a moderate pace, very close up, studio quality with no background noise.",
+  "prompt": "મારું નામ પ્રતિક છે. કેમ છો?"
+ }
+]

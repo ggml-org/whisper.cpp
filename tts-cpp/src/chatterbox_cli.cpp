@@ -53,6 +53,7 @@
 #include "tts-cpp/tts-cpp.h"
 #include "tts-cpp/chatterbox/s3gen_pipeline.h"
 #include "tts-cpp/supertonic/engine.h"
+#include "tts-cpp/parler/engine.h"
 #include "chatterbox_t3_internal.h"
 #include "t3_alignment_analyzer.h"
 #include "t3_mtl.h"
@@ -302,6 +303,10 @@ struct cli_params {
     std::map<std::string, std::string> supertonic_vulkan_env_overrides;
     bool        has_supertonic_options = false;
 
+    // Parler-TTS: natural-language voice description (required for parler
+    // GGUFs; routed through the T5 encoder / cross-attention).
+    std::string parler_description;
+
     // Streaming synthesis (PROGRESS.md B1).  When > 0, speech tokens from
     // T3 are fed to S3Gen+HiFT in chunks of this size, with `cache_source`
     // carried across chunks for phase continuity and `trim_fade` only on
@@ -446,6 +451,12 @@ static void print_usage(const char * argv0) {
     fprintf(stderr, "  --mecab-dict DIR        Path to MeCab IPAdic dictionary directory (for ja).\n");
     fprintf(stderr, "                          Use scripts/build_mecab_dict.py to materialize it.\n");
     fprintf(stderr, "  --cangjie-tsv PATH      Path to Cangjie5_TC.tsv mapping file (for zh).\n");
+    fprintf(stderr, "\n");
+    fprintf(stderr, "Parler-TTS options (when --model has parler.arch metadata):\n");
+    fprintf(stderr, "  --description DESC      Required. Natural-language voice description,\n");
+    fprintf(stderr, "                          e.g. \"A female speaker with a calm, clear voice.\"\n");
+    fprintf(stderr, "                          Use parler-cli for the full Parler flag surface\n");
+    fprintf(stderr, "                          (--greedy, --max-frames, --temperature, ...).\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Supertonic options (when --model has supertonic.arch metadata):\n");
     fprintf(stderr, "  --voice NAME            Built-in Supertonic voice name. Defaults to GGUF metadata.\n");
@@ -643,6 +654,7 @@ static bool parse_args(int argc, char ** argv, cli_params & params) {
         else if (arg == "--language")       { auto v = next("--language");       if (!v) return false; params.language = v; }
         else if (arg == "--mecab-dict")    { auto v = next("--mecab-dict");    if (!v) return false; params.mecab_dict = v; }
         else if (arg == "--cangjie-tsv")   { auto v = next("--cangjie-tsv");   if (!v) return false; params.cangjie_tsv = v; }
+        else if (arg == "--description")    { auto v = next("--description");    if (!v) return false; params.parler_description = v; }
         else if (arg == "--voice")          { auto v = next("--voice");          if (!v) return false; params.supertonic_voice = v; params.has_supertonic_options = true; }
         else if (arg == "--steps")          { if (!parse_int  ("--steps",          params.supertonic_steps)) return false; params.has_supertonic_options = true; }
         else if (arg == "--speed")          { if (!parse_float("--speed",          params.supertonic_speed)) return false; params.has_supertonic_options = true; }
@@ -829,6 +841,7 @@ enum class cli_model_family {
     unknown,
     chatterbox,
     supertonic,
+    parler,
 };
 
 static cli_model_family detect_model_family(const std::string & path) {
@@ -840,6 +853,10 @@ static cli_model_family detect_model_family(const std::string & path) {
     cli_model_family family = cli_model_family::unknown;
     if (gguf_find_key(g, "supertonic.arch") >= 0) {
         family = cli_model_family::supertonic;
+    } else if (gguf_find_key(g, "parler.arch") >= 0) {
+        // must be sniffed BEFORE the tokenizer.ggml.tokens fallback below:
+        // parler GGUFs also carry a tokenizer.ggml token table.
+        family = cli_model_family::parler;
     } else if (gguf_find_key(g, KEY_VARIANT) >= 0 ||
                gguf_find_key(g, KEY_TEXT_VOCAB_SIZE) >= 0 ||
                gguf_find_key(g, "tokenizer.ggml.tokens") >= 0) {
@@ -854,6 +871,51 @@ static bool path_looks_supertonic(const std::string & path) {
     std::transform(lower.begin(), lower.end(), lower.begin(),
                    [](unsigned char c) { return (char) std::tolower(c); });
     return lower.find("supertonic") != std::string::npos;
+}
+
+static int run_parler_cli_path(const cli_params & params) {
+    if (!params.tokens_file.empty() || !params.output.empty() || !params.s3gen_gguf.empty() ||
+        !params.ref_dir.empty() || !params.reference_audio.empty() ||
+        !params.save_voice_dir.empty() || params.debug || params.dump_tokens_only ||
+        params.has_supertonic_options) {
+        fprintf(stderr,
+                "error: --model was detected as a Parler-TTS GGUF; token files, voice\n"
+                "       cloning, --s3gen-gguf and Supertonic options do not apply to it.\n");
+        return 1;
+    }
+    if (params.text.empty()) {
+        fprintf(stderr, "error: Parler-TTS requires --text TEXT\n");
+        return 1;
+    }
+    if (params.parler_description.empty()) {
+        fprintf(stderr, "error: Parler-TTS requires --description DESC (the natural-language\n"
+                        "       voice description, e.g. \"A female speaker with a calm voice...\")\n");
+        return 1;
+    }
+    if (params.out_wav.empty() || params.out_wav == "-") {
+        fprintf(stderr, "error: Parler-TTS requires --out PATH.wav\n");
+        return 1;
+    }
+
+    tts_cpp::parler::EngineOptions opts;
+    opts.model_gguf_path = params.model;
+    opts.default_description = params.parler_description;
+    if (params.seed_set) opts.seed = params.seed;
+    opts.n_threads = params.n_threads;
+
+    auto result = tts_cpp::parler::synthesize(opts, params.text, params.parler_description);
+    const int osr = params.output_sample_rate;
+    if (osr > 0 && osr != result.sample_rate) {
+        std::vector<float> resampled = resample_sinc(result.pcm, result.sample_rate, osr);
+        stream_write_wav(params.out_wav, resampled, osr);
+        fprintf(stderr, "wrote %s (%.2fs @ %d Hz, %zu samples)\n",
+                params.out_wav.c_str(), result.duration_s, osr, resampled.size());
+    } else {
+        stream_write_wav(params.out_wav, result.pcm, result.sample_rate);
+        fprintf(stderr, "wrote %s (%.2fs @ %d Hz, %zu samples)\n",
+                params.out_wav.c_str(), result.duration_s, result.sample_rate, result.pcm.size());
+    }
+    return 0;
 }
 
 static int run_supertonic_cli_path(const cli_params & params) {
@@ -992,6 +1054,14 @@ int tts_cpp_cli_main(int argc, char ** argv) {
         if (family == cli_model_family::supertonic ||
             (family == cli_model_family::unknown && path_looks_supertonic(params.model))) {
             return run_supertonic_cli_path(params);
+        }
+        if (family == cli_model_family::parler) {
+            return run_parler_cli_path(params);
+        }
+        if (!params.parler_description.empty()) {
+            fprintf(stderr, "error: --description is a Parler-TTS-only option, but --model was\n"
+                            "       not detected as a Parler GGUF.\n");
+            return 1;
         }
         if (params.has_supertonic_options) {
             fprintf(stderr,

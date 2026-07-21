@@ -271,6 +271,18 @@ set(TTS_CPP_LIB_SOURCES
     src/lavasr/denoiser_gguf.cpp
     src/lavasr/denoiser_api.cpp
     src/lavasr/denoiser_ggml.cpp
+    # Parler-TTS engine (T5 encoder + delay-pattern decoder LM + DAC codec).
+    src/parler/gguf.cpp
+    src/parler/description.cpp
+    src/parler/text_norm.cpp
+    src/parler/tokenizer.cpp
+    src/parler/bpe_tokenizer.cpp
+    src/parler/t5.cpp
+    src/parler/decoder.cpp
+    src/parler/delay.cpp
+    src/parler/sampler.cpp
+    src/parler/dac.cpp
+    src/parler/engine.cpp
 )
 
 if (TTS_CPP_BUILD_LIBRARY)
@@ -437,6 +449,10 @@ if (TTS_CPP_BUILD_EXECUTABLES)
     target_link_libraries(supertonic-cli PRIVATE tts-cpp)
     tts_cpp_apply_ccache(supertonic-cli)
 
+    add_executable(parler-cli src/parler/cli.cpp)
+    target_link_libraries(parler-cli PRIVATE tts-cpp)
+    tts_cpp_apply_ccache(parler-cli)
+
     # LavaSR two-stage (denoiser -> enhancer) bench + by-ear harness.
     add_executable(lavasr-bench src/lavasr/lavasr_bench.cpp)
     target_link_libraries(lavasr-bench PRIVATE tts-cpp)
@@ -540,6 +556,156 @@ if (TTS_CPP_BUILD_TESTS)
     set(_tcb_t3_mtl_ref         "${TTS_CPP_TEST_REF_DIR}/t3-mtl-ref")
     set(_tcb_streaming_ref      "${TTS_CPP_TEST_REF_DIR}/streaming-ref")
     set(_tcb_jfk_wav            "${TTS_CPP_TEST_AUDIO_DIR}/jfk.wav")
+    set(_tcb_parler_gguf        "${TTS_CPP_TEST_MODEL_DIR}/parler-mini-v1-f32.gguf")
+    set(_tcb_parler_ref         "${TTS_CPP_TEST_REF_DIR}/parler-ref")
+    set(_tcb_parler_indic_gguf  "${TTS_CPP_TEST_MODEL_DIR}/parler-indic-f32.gguf")
+    set(_tcb_parler_indic_ref   "${TTS_CPP_TEST_REF_DIR}/parler-indic-ref")
+
+    # ---- Parler-TTS tests (fixtures from scripts/parler/dump-reference.py) ----
+    set(_tcb_parler_core_srcs
+        src/parler/gguf.cpp
+        src/backend_selection.cpp
+        src/sched_dispatch.cpp
+        src/log.cpp)
+
+    add_executable(test-parler-delay test/parler/test_delay.cpp src/parler/delay.cpp)
+    target_include_directories(test-parler-delay PRIVATE src)
+    tts_cpp_apply_ccache(test-parler-delay)
+    tts_cpp_register_test(test-parler-delay
+        LABEL    "fixture"
+        ARGS     "${_tcb_parler_ref}"
+        REQUIRES "${_tcb_parler_ref}/delay_mask_len24.npy")
+
+    add_executable(test-parler-text-norm test/parler/test_text_norm.cpp
+        src/parler/text_norm.cpp)
+    target_include_directories(test-parler-text-norm PRIVATE src)
+    tts_cpp_apply_ccache(test-parler-text-norm)
+    tts_cpp_register_test(test-parler-text-norm)
+
+    add_executable(test-parler-description test/parler/test_description.cpp
+        src/parler/description.cpp)
+    target_include_directories(test-parler-description PRIVATE include)
+    tts_cpp_apply_ccache(test-parler-description)
+    tts_cpp_register_test(test-parler-description)
+
+    add_executable(test-parler-tokenizer test/parler/test_tokenizer.cpp src/parler/tokenizer.cpp)
+    target_link_libraries(test-parler-tokenizer PRIVATE ggml)
+    target_include_directories(test-parler-tokenizer PRIVATE ggml/include src)
+    tts_cpp_apply_ccache(test-parler-tokenizer)
+    tts_cpp_register_test(test-parler-tokenizer
+        LABEL    "fixture"
+        ARGS     "${_tcb_parler_gguf}" "${_tcb_parler_ref}"
+        REQUIRES "${_tcb_parler_gguf}" "${_tcb_parler_ref}/tokenizer_corpus.json")
+
+    add_executable(test-parler-t5 test/parler/test_t5.cpp
+        src/parler/t5.cpp ${_tcb_parler_core_srcs})
+    target_link_libraries(test-parler-t5 PRIVATE ggml)
+    target_include_directories(test-parler-t5 PRIVATE ggml/include include src)
+    tts_cpp_apply_ccache(test-parler-t5)
+    tts_cpp_register_test(test-parler-t5
+        LABEL    "fixture"
+        ARGS     "${_tcb_parler_gguf}" "${_tcb_parler_ref}"
+        REQUIRES "${_tcb_parler_gguf}" "${_tcb_parler_ref}/case0_cross_states.npy")
+
+    add_executable(test-parler-decoder test/parler/test_decoder.cpp
+        src/parler/t5.cpp src/parler/decoder.cpp src/parler/delay.cpp
+        ${_tcb_parler_core_srcs})
+    target_link_libraries(test-parler-decoder PRIVATE ggml)
+    target_include_directories(test-parler-decoder PRIVATE ggml/include include src)
+    tts_cpp_apply_ccache(test-parler-decoder)
+    tts_cpp_register_test(test-parler-decoder
+        LABEL    "fixture"
+        ARGS     "${_tcb_parler_gguf}" "${_tcb_parler_ref}"
+        REQUIRES "${_tcb_parler_gguf}" "${_tcb_parler_ref}/case0_step_logits.npy")
+
+    add_executable(test-parler-dac test/parler/test_dac.cpp
+        src/parler/dac.cpp ${_tcb_parler_core_srcs})
+    target_link_libraries(test-parler-dac PRIVATE ggml)
+    target_include_directories(test-parler-dac PRIVATE ggml/include include src)
+    tts_cpp_apply_ccache(test-parler-dac)
+    tts_cpp_register_test(test-parler-dac
+        LABEL    "fixture"
+        ARGS     "${_tcb_parler_gguf}" "${_tcb_parler_ref}"
+        REQUIRES "${_tcb_parler_gguf}" "${_tcb_parler_ref}/dacrand_wav.npy")
+
+    add_executable(test-parler-e2e test/parler/test_e2e.cpp
+        src/parler/t5.cpp src/parler/decoder.cpp src/parler/delay.cpp
+        src/parler/dac.cpp src/parler/sampler.cpp src/parler/tokenizer.cpp
+        src/parler/bpe_tokenizer.cpp
+        src/parler/text_norm.cpp src/parler/engine.cpp ${_tcb_parler_core_srcs})
+    target_link_libraries(test-parler-e2e PRIVATE ggml)
+    target_include_directories(test-parler-e2e PRIVATE ggml/include include src)
+    tts_cpp_apply_ccache(test-parler-e2e)
+    tts_cpp_register_test(test-parler-e2e
+        LABEL    "fixture"
+        ARGS     "${_tcb_parler_gguf}" "${_tcb_parler_ref}"
+        REQUIRES "${_tcb_parler_gguf}" "${_tcb_parler_ref}/case0_greedy_delayed.npy")
+
+    add_executable(test-parler-sched-equivalence test/parler/test_sched_equivalence.cpp)
+    target_link_libraries(test-parler-sched-equivalence PRIVATE tts-cpp)
+    target_include_directories(test-parler-sched-equivalence PRIVATE include)
+    tts_cpp_apply_ccache(test-parler-sched-equivalence)
+    tts_cpp_register_test(test-parler-sched-equivalence
+        LABEL    "fixture"
+        ARGS     "${_tcb_parler_gguf}"
+        REQUIRES "${_tcb_parler_gguf}")
+
+    add_executable(test-parler-engine test/parler/test_engine.cpp)
+    target_link_libraries(test-parler-engine PRIVATE tts-cpp)
+    target_include_directories(test-parler-engine PRIVATE include)
+    tts_cpp_apply_ccache(test-parler-engine)
+    tts_cpp_register_test(test-parler-engine
+        LABEL    "fixture"
+        ARGS     "${_tcb_parler_gguf}" "${_tcb_super2_gguf}"
+        REQUIRES "${_tcb_parler_gguf}")
+
+    # ---- Indic Parler-TTS (same binaries, indic fixtures; separate BPE
+    #      prompt tokenizer gets its own parity test) ----
+    add_executable(test-parler-bpe-tokenizer test/parler/test_bpe_tokenizer.cpp
+        src/parler/bpe_tokenizer.cpp)
+    target_link_libraries(test-parler-bpe-tokenizer PRIVATE ggml)
+    target_include_directories(test-parler-bpe-tokenizer PRIVATE ggml/include src)
+    tts_cpp_apply_ccache(test-parler-bpe-tokenizer)
+    tts_cpp_register_test(test-parler-bpe-tokenizer
+        LABEL    "fixture"
+        ARGS     "${_tcb_parler_indic_gguf}" "${_tcb_parler_indic_ref}"
+        REQUIRES "${_tcb_parler_indic_gguf}" "${_tcb_parler_indic_ref}/prompt_tokenizer_corpus.json")
+
+    tts_cpp_register_test(test-parler-tokenizer-indic
+        EXE      test-parler-tokenizer
+        LABEL    "fixture"
+        ARGS     "${_tcb_parler_indic_gguf}" "${_tcb_parler_indic_ref}"
+        REQUIRES "${_tcb_parler_indic_gguf}" "${_tcb_parler_indic_ref}/tokenizer_corpus.json")
+
+    tts_cpp_register_test(test-parler-t5-indic
+        EXE      test-parler-t5
+        LABEL    "fixture"
+        ARGS     "${_tcb_parler_indic_gguf}" "${_tcb_parler_indic_ref}"
+        REQUIRES "${_tcb_parler_indic_gguf}" "${_tcb_parler_indic_ref}/case0_cross_states.npy")
+
+    tts_cpp_register_test(test-parler-decoder-indic
+        EXE      test-parler-decoder
+        LABEL    "fixture"
+        ARGS     "${_tcb_parler_indic_gguf}" "${_tcb_parler_indic_ref}"
+        REQUIRES "${_tcb_parler_indic_gguf}" "${_tcb_parler_indic_ref}/case0_step_logits.npy")
+
+    tts_cpp_register_test(test-parler-dac-indic
+        EXE      test-parler-dac
+        LABEL    "fixture"
+        ARGS     "${_tcb_parler_indic_gguf}" "${_tcb_parler_indic_ref}"
+        REQUIRES "${_tcb_parler_indic_gguf}" "${_tcb_parler_indic_ref}/dacrand_wav.npy")
+
+    tts_cpp_register_test(test-parler-e2e-indic
+        EXE      test-parler-e2e
+        LABEL    "fixture"
+        ARGS     "${_tcb_parler_indic_gguf}" "${_tcb_parler_indic_ref}"
+        REQUIRES "${_tcb_parler_indic_gguf}" "${_tcb_parler_indic_ref}/case0_greedy_delayed.npy")
+
+    tts_cpp_register_test(test-parler-sched-equivalence-indic
+        EXE      test-parler-sched-equivalence
+        LABEL    "fixture"
+        ARGS     "${_tcb_parler_indic_gguf}"
+        REQUIRES "${_tcb_parler_indic_gguf}")
 
     add_executable(test-s3gen test/test_s3gen.cpp)
     target_link_libraries(test-s3gen PRIVATE ggml)
