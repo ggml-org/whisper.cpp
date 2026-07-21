@@ -1,5 +1,5 @@
-# Cross-platform lanes for the engines (parakeet-cpp/, tts-cpp/ — engines/*
-# after the repo reorg QIP; update the path filters + SRC map when it lands).
+# Cross-platform lanes for the engines (engines/parakeet/, engines/tts/ —
+# moved from parakeet-cpp/, tts-cpp/ by the repo reorg QIP, PR 1).
 #
 # Complements parakeet-ci.yml / tts-ci.yml (linux+mac build+test):
 #   - windows: full build + non-GPU ctest (MSVC, static ggml)
@@ -14,13 +14,13 @@ on:
   push:
     branches: [master]
     paths:
-      - 'parakeet-cpp/**'
-      - 'tts-cpp/**'
+      - 'engines/parakeet/**'
+      - 'engines/tts/**'
       - '.github/workflows/engines-cross-ci.yml'
   pull_request:
     paths:
-      - 'parakeet-cpp/**'
-      - 'tts-cpp/**'
+      - 'engines/parakeet/**'
+      - 'engines/tts/**'
       - '.github/workflows/engines-cross-ci.yml'
   workflow_dispatch:
 
@@ -43,10 +43,10 @@ jobs:
         engine: [parakeet, tts]
         include:
           - engine: parakeet
-            src: parakeet-cpp
+            src: engines/parakeet
             cmake_flags: -DPARAKEET_USE_SYSTEM_GGML=ON -DPARAKEET_BUILD_TESTS=ON -DPARAKEET_BUILD_EXAMPLES=OFF
           - engine: tts
-            src: tts-cpp
+            src: engines/tts
             cmake_flags: -DTTS_CPP_BUILD_TESTS=ON
     runs-on: windows-2022
     timeout-minutes: 90
@@ -65,7 +65,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ggml-install
-          key: ggml-install-windows-2022-msvc-static-${{ steps.ggml.outputs.sha }}
+          key: ggml-install-portable-windows-2022-msvc-static-${{ steps.ggml.outputs.sha }}
 
       # Static ggml on Windows sidesteps DLL discovery for the test exes.
       - name: Build ggml (MSVC, static, CPU-only)
@@ -79,6 +79,7 @@ jobs:
           git -C ggml-src checkout -q FETCH_HEAD
           cmake -S ggml-src -B ggml-src/build -A x64 \
             -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_NATIVE=OFF \
             -DGGML_BUILD_TESTS=OFF \
             -DGGML_BUILD_EXAMPLES=OFF \
             -DCMAKE_INSTALL_PREFIX="$PWD/ggml-install"
@@ -104,10 +105,10 @@ jobs:
         engine: [parakeet, tts]
         include:
           - engine: parakeet
-            src: parakeet-cpp
+            src: engines/parakeet
             cmake_flags: -DPARAKEET_USE_SYSTEM_GGML=ON -DPARAKEET_BUILD_TESTS=OFF -DPARAKEET_BUILD_EXAMPLES=OFF
           - engine: tts
-            src: tts-cpp
+            src: engines/tts
             cmake_flags: -DTTS_CPP_BUILD_TESTS=OFF
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -168,10 +169,10 @@ jobs:
         engine: [parakeet, tts]
         include:
           - engine: parakeet
-            src: parakeet-cpp
+            src: engines/parakeet
             cmake_flags: -DPARAKEET_USE_SYSTEM_GGML=ON -DPARAKEET_BUILD_TESTS=OFF -DPARAKEET_BUILD_EXAMPLES=OFF
           - engine: tts
-            src: tts-cpp
+            src: engines/tts
             cmake_flags: -DTTS_CPP_BUILD_TESTS=OFF
     runs-on: macos-14
     timeout-minutes: 60

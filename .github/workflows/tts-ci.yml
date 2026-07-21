@@ -1,5 +1,5 @@
-# CI for the TTS engines (tts-cpp/ — engines/tts/ after the repo reorg QIP
-# lands; update the path filters below when it does).
+# CI for the TTS engines (engines/tts/ — moved from tts-cpp/ by the repo
+# reorg QIP, PR 1).
 #
 # Scope (QIP "PR 0" lane): build chatterbox + supertonic + lavasr and every
 # test harness against system ggml (qvac-ext-ggml @ speech — mandatory here:
@@ -13,11 +13,11 @@ on:
   push:
     branches: [master]
     paths:
-      - 'tts-cpp/**'
+      - 'engines/tts/**'
       - '.github/workflows/tts-ci.yml'
   pull_request:
     paths:
-      - 'tts-cpp/**'
+      - 'engines/tts/**'
       - '.github/workflows/tts-ci.yml'
   workflow_dispatch:
     inputs:
@@ -62,7 +62,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ggml-install
-          key: ggml-install-${{ matrix.os }}-${{ steps.ggml.outputs.sha }}
+          key: ggml-install-portable-${{ matrix.os }}-${{ steps.ggml.outputs.sha }}
 
       - name: Cache ccache
         uses: actions/cache@v4
@@ -89,6 +89,7 @@ jobs:
           cmake -S ggml-src -B ggml-src/build \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=ON \
+            -DGGML_NATIVE=OFF \
             -DGGML_METAL=OFF \
             -DGGML_BUILD_TESTS=OFF \
             -DGGML_BUILD_EXAMPLES=OFF \
@@ -98,7 +99,7 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -S tts-cpp -B build \
+          cmake -S engines/tts -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DTTS_CPP_BUILD_TESTS=ON \
             -DCMAKE_PREFIX_PATH="$PWD/ggml-install"
@@ -139,7 +140,7 @@ jobs:
             -DGGML_VULKAN=ON \
             -DCMAKE_INSTALL_PREFIX="$PWD/ggml-install"
           cmake --build ggml-src/build -j && cmake --install ggml-src/build
-          cmake -S tts-cpp -B build -DCMAKE_BUILD_TYPE=Release \
+          cmake -S engines/tts -B build -DCMAKE_BUILD_TYPE=Release \
             -DTTS_CPP_BUILD_TESTS=ON \
             -DCMAKE_PREFIX_PATH="$PWD/ggml-install"
           cmake --build build -j

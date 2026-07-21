@@ -2,6 +2,7 @@
 // same greedy input as A (direct), B (TTS_CPP_FORCE_SCHED=1) and A' (direct
 // again); all three PCM buffers must be bit-identical.
 
+#include "../test_env_portable.h"
 #include "tts-cpp/parler/engine.h"
 
 #include <cstdio>

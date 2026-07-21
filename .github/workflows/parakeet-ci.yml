@@ -1,5 +1,5 @@
-# CI for the parakeet engine (parakeet-cpp/ — engines/parakeet/ after the
-# repo reorg QIP lands; update the path filters below when it does).
+# CI for the parakeet engine (engines/parakeet/ — moved from parakeet-cpp/
+# by the repo reorg QIP, PR 1).
 #
 # Scope (QIP "PR 0" lane): build the engine + every test harness against
 # system ggml (qvac-ext-ggml @ speech, the same fork the ggml-speech vcpkg
@@ -14,11 +14,11 @@ on:
   push:
     branches: [master]
     paths:
-      - 'parakeet-cpp/**'
+      - 'engines/parakeet/**'
       - '.github/workflows/parakeet-ci.yml'
   pull_request:
     paths:
-      - 'parakeet-cpp/**'
+      - 'engines/parakeet/**'
       - '.github/workflows/parakeet-ci.yml'
   workflow_dispatch:
     inputs:
@@ -36,7 +36,7 @@ concurrency:
 
 env:
   GGML_REPO: https://github.com/tetherto/qvac-ext-ggml.git
-  GGML_BRANCH: speech # keep in sync with parakeet-cpp/scripts/setup-ggml.sh
+  GGML_BRANCH: speech # keep in sync with engines/parakeet/scripts/setup-ggml.sh
 
 jobs:
   build-test:
@@ -63,7 +63,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ggml-install
-          key: ggml-install-${{ matrix.os }}-${{ steps.ggml.outputs.sha }}
+          key: ggml-install-portable-${{ matrix.os }}-${{ steps.ggml.outputs.sha }}
 
       - name: Cache ccache
         uses: actions/cache@v4
@@ -88,6 +88,7 @@ jobs:
           cmake -S ggml-src -B ggml-src/build \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=ON \
+            -DGGML_NATIVE=OFF \
             -DGGML_METAL=OFF \
             -DGGML_BUILD_TESTS=OFF \
             -DGGML_BUILD_EXAMPLES=OFF \
@@ -97,7 +98,7 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -S parakeet-cpp -B build \
+          cmake -S engines/parakeet -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DPARAKEET_USE_SYSTEM_GGML=ON \
             -DPARAKEET_BUILD_TESTS=ON \
@@ -139,7 +140,7 @@ jobs:
             -DGGML_VULKAN=ON \
             -DCMAKE_INSTALL_PREFIX="$PWD/ggml-install"
           cmake --build ggml-src/build -j && cmake --install ggml-src/build
-          cmake -S parakeet-cpp -B build -DCMAKE_BUILD_TYPE=Release \
+          cmake -S engines/parakeet -B build -DCMAKE_BUILD_TYPE=Release \
             -DPARAKEET_USE_SYSTEM_GGML=ON -DPARAKEET_BUILD_TESTS=ON \
             -DCMAKE_PREFIX_PATH="$PWD/ggml-install"
           cmake --build build -j
