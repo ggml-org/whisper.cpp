@@ -25,6 +25,7 @@
 //
 // usage: test-supertonic-sched-equivalence MODEL.gguf [n_gpu_layers]
 
+#include "test_env_portable.h"
 #include "tts-cpp/supertonic/engine.h"
 
 #include <cmath>

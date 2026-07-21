@@ -8,6 +8,7 @@
 // chunk boundary) into a temp file, loads it through both paths, and
 // compares.
 
+#include "test_env_portable.h"
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
@@ -47,8 +48,7 @@ static const spec SPECS[] = {
 static const size_t N_SPECS = sizeof(SPECS) / sizeof(SPECS[0]);
 
 static std::string write_fixture() {
-    const char * tmpdir = getenv("TMPDIR");
-    std::string path = std::string(tmpdir ? tmpdir : "/tmp") + "/test-gguf-stream-fixture.gguf";
+    std::string path = test_tmpdir() + "/test-gguf-stream-fixture.gguf";
 
     size_t total = 0;
     for (size_t i = 0; i < N_SPECS; ++i) {

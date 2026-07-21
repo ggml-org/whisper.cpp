@@ -11,6 +11,7 @@
 //   - token repetition only forces EOS once complete (avoids #519/#587 early cut)
 //   - short text / empty row / disabled => no force
 
+#include "test_env_portable.h"
 #include "t3_alignment_analyzer.h"
 
 #include <cstdio>

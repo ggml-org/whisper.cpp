@@ -23,6 +23,7 @@
 // it, phase B must BYPASS the cached graphs, and phase A' proves they
 // were left intact.
 
+#include "test_env_portable.h"
 #include "chatterbox_t3_internal.h"
 
 #include "ggml.h"

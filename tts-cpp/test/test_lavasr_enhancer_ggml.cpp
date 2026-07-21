@@ -17,6 +17,7 @@
 // is present it additionally compares the ggml forward against the onnxruntime
 // golden real/imag with the real model weights.
 
+#include "test_env_portable.h"
 #include "backend_selection.h"
 #include "lavasr/enhancer.h"      // scalar enhance() + enhance_with()
 #include "lavasr/enhancer_core.h"
@@ -505,9 +506,7 @@ static std::string write_enhancer_gguf(const EnhancerWeights & w) {
         add_gguf_tensor(ctx, g, w, e.name, e.ne);
     }
 
-    const char * tmpdir = std::getenv("TMPDIR");
-    std::string  path =
-        std::string(tmpdir ? tmpdir : "/tmp") + "/test-lavasr-enhancer-load.gguf";
+    std::string path = test_tmpdir() + "/test-lavasr-enhancer-load.gguf";
     const bool ok = gguf_write_to_file(g, path.c_str(), /*only_meta=*/false);
     gguf_free(g);
     ggml_free(ctx);

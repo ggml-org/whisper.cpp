@@ -1,0 +1,146 @@
+# CI for the TTS engines (tts-cpp/ — engines/tts/ after the repo reorg QIP
+# lands; update the path filters below when it does).
+#
+# Scope (QIP "PR 0" lane): build chatterbox + supertonic + lavasr and every
+# test harness against system ggml (qvac-ext-ggml @ speech — mandatory here:
+# TTS_CPP_USE_SYSTEM_GGML defaults ON and the bundled path is rejected in
+# this tree), then run the non-GPU ctest suites (~68 pass with committed
+# fixtures; model-dependent ones auto-DISABLE to "Not Run"). GPU suites need
+# real GPUs → self-hosted lane, see the gpu job stub at the bottom.
+name: tts CI
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'tts-cpp/**'
+      - '.github/workflows/tts-ci.yml'
+  pull_request:
+    paths:
+      - 'tts-cpp/**'
+      - '.github/workflows/tts-ci.yml'
+  workflow_dispatch:
+    inputs:
+      run_gpu:
+        description: 'Also run the GPU ctest lane (needs a [self-hosted, gpu] runner)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tts-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GGML_REPO: https://github.com/tetherto/qvac-ext-ggml.git
+  GGML_BRANCH: speech # single ggml pin shared with parakeet-ci.yml
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ccache
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then brew install ccache; else sudo apt-get update -q && sudo apt-get install -y ccache; fi
+          echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> "$GITHUB_ENV"
+
+      - name: Resolve ggml pin (tip of ${{ env.GGML_BRANCH }})
+        id: ggml
+        run: echo "sha=$(git ls-remote "$GGML_REPO" "refs/heads/$GGML_BRANCH" | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache ggml install
+        id: ggml-cache
+        uses: actions/cache@v4
+        with:
+          path: ggml-install
+          key: ggml-install-${{ matrix.os }}-${{ steps.ggml.outputs.sha }}
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-tts-${{ matrix.os }}-${{ github.sha }}
+          restore-keys: ccache-tts-${{ matrix.os }}-
+
+      # CPU-only ggml: this lane runs `-LE gpu` tests, and hosted runners
+      # have no Vulkan/OpenCL; Metal is exercised by the gpu lane instead.
+      # Cache key is shared with parakeet-ci.yml so whichever lane builds
+      # first serves both.
+      - name: Build ggml (system ggml, qvac-ext-ggml@${{ env.GGML_BRANCH }})
+        if: steps.ggml-cache.outputs.cache-hit != 'true'
+        run: |
+          # Fetch the exact SHA the cache key was derived from — the branch
+          # tip may have advanced since the ls-remote resolution, and a
+          # tip-only shallow clone would then silently build (and cache)
+          # a different commit than the key claims.
+          git init -q ggml-src
+          git -C ggml-src remote add origin "$GGML_REPO"
+          git -C ggml-src fetch --depth 1 origin ${{ steps.ggml.outputs.sha }}
+          git -C ggml-src checkout -q FETCH_HEAD
+          cmake -S ggml-src -B ggml-src/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DGGML_METAL=OFF \
+            -DGGML_BUILD_TESTS=OFF \
+            -DGGML_BUILD_EXAMPLES=OFF \
+            -DCMAKE_INSTALL_PREFIX="$PWD/ggml-install"
+          cmake --build ggml-src/build -j4
+          cmake --install ggml-src/build
+
+      - name: Configure
+        run: |
+          cmake -S tts-cpp -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DTTS_CPP_BUILD_TESTS=ON \
+            -DCMAKE_PREFIX_PATH="$PWD/ggml-install"
+
+      - name: Build
+        run: cmake --build build -j4
+
+      # Excludes gpu (no GPU on hosted runners) and perf (timing gates are
+      # meaningless on shared runners). Model-dependent tests are DISABLED
+      # at configure time when fixtures are absent and report as "Not Run".
+      # LD_LIBRARY_PATH: the ggml install ships libqvac-speech-ggml.so whose
+      # own dependency on the ggml-cpu/base siblings is resolved transitively
+      # — Linux RUNPATH doesn't apply to transitive loads, so the loader
+      # needs the directory explicitly (macOS @rpath chains handle it).
+      - name: Test (non-GPU)
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/ggml-install/lib
+        run: ctest --test-dir build -LE 'gpu|perf' --output-on-failure --timeout 600
+
+  # GPU lane stub: opt-in until self-hosted GPU runners exist. Trial note:
+  # hosted macos-14 exposes Metal, so moving `-L gpu` / the mtl-* suites
+  # into the macOS build-test job is a cheap first experiment.
+  gpu:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_gpu
+    runs-on: [self-hosted, gpu]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      # GGML_VULKAN=ON is the backend the -L gpu suites primarily target
+      # (test_vk_vs_cpu et al); Metal is on by default on Apple hosts.
+      # Revisit the flag set (OpenCL? CUDA?) when the GPU runner fleet is
+      # provisioned — a CPU-only ggml here would skip or falsely pass the
+      # GPU suites.
+      - name: Build ggml + engine (native backends) and run GPU suites
+        run: |
+          git clone --depth 1 --branch "$GGML_BRANCH" "$GGML_REPO" ggml-src
+          cmake -S ggml-src -B ggml-src/build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+            -DGGML_VULKAN=ON \
+            -DCMAKE_INSTALL_PREFIX="$PWD/ggml-install"
+          cmake --build ggml-src/build -j && cmake --install ggml-src/build
+          cmake -S tts-cpp -B build -DCMAKE_BUILD_TYPE=Release \
+            -DTTS_CPP_BUILD_TESTS=ON \
+            -DCMAKE_PREFIX_PATH="$PWD/ggml-install"
+          cmake --build build -j
+          ctest --test-dir build -L gpu --output-on-failure --timeout 1200

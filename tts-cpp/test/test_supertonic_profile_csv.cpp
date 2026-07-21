@@ -37,6 +37,7 @@
 // Registered with `LABEL "unit"` in CMakeLists.txt — no GGUF
 // required.
 
+#include "test_env_portable.h"
 #include "supertonic_internal.h"
 
 #include <cstdio>

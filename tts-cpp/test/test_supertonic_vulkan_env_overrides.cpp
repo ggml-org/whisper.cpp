@@ -51,6 +51,7 @@
 // Whole TU MUST fail to compile before the symbols are added,
 // then pass after.
 
+#include "test_env_portable.h"
 #include "tts-cpp/supertonic/engine.h"
 #include "supertonic_internal.h"
 

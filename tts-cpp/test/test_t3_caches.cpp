@@ -28,6 +28,7 @@
 // Without arguments, runs only the lightweight default-state
 // invariants (no model load required).
 
+#include "test_env_portable.h"
 #include "chatterbox_t3_internal.h"
 #include "chatterbox_tts_test_hooks.h"
 

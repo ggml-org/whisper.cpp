@@ -16,6 +16,7 @@
 //     EOS, no post-check stop.
 //   - make_mtl_stop_params budget scaling + env overrides.
 
+#include "test_env_portable.h"
 #include "t3_stop_controller.h"
 
 #include <cstdint>

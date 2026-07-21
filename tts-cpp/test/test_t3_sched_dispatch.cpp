@@ -12,6 +12,7 @@
 // Registered with `LABEL "unit"` in CMakeLists.txt so a fresh
 // checkout's `ctest` exercises this without needing any fixture.
 
+#include "test_env_portable.h"
 #include "backend_selection.h"
 #include "sched_dispatch.h"
 

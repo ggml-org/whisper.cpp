@@ -23,6 +23,7 @@
 //
 // usage: test-s3gen-sched-equivalence MODEL.gguf [n_gpu_layers]
 
+#include "test_env_portable.h"
 #include "tts-cpp/chatterbox/s3gen_pipeline.h"
 
 #include <cmath>
