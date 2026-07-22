@@ -65,6 +65,23 @@ enum parakeet_tensor {
     PARAKEET_TENSOR_JOINT_NET_BIAS,
 };
 
+enum parakeet_hparam {
+    PARAKEET_HPARAM_N_VOCAB,
+    PARAKEET_HPARAM_N_AUDIO_CTX,
+    PARAKEET_HPARAM_N_AUDIO_STATE,
+    PARAKEET_HPARAM_N_AUDIO_HEAD,
+    PARAKEET_HPARAM_N_AUDIO_LAYER,
+    PARAKEET_HPARAM_N_MELS,
+    PARAKEET_HPARAM_N_FFT,
+    PARAKEET_HPARAM_SUBSAMPLING_FACTOR,
+    PARAKEET_HPARAM_N_SUBSAMPLING_CHANNELS,
+    PARAKEET_HPARAM_N_CONV_KERNEL,
+    PARAKEET_HPARAM_N_PRED_DIM,
+    PARAKEET_HPARAM_N_PRED_LAYERS,
+    PARAKEET_HPARAM_N_TDT_DURATIONS,
+    PARAKEET_HPARAM_N_MAX_TOKENS,
+};
+
 static const std::map<parakeet_tensor, const char *> PARAKEET_TENSOR_NAMES = {
     // Encoder pre_encode
     {PARAKEET_TENSOR_ENC_PRE_OUT_WEIGHT,          "encoder.pre_encode.out.weight"},
@@ -185,4 +202,38 @@ static const std::map<parakeet_tensor, ggml_op> PARAKEET_TENSOR_INFO = {
     {PARAKEET_TENSOR_JOINT_ENC_BIAS,              GGML_OP_ADD},
     {PARAKEET_TENSOR_JOINT_NET_WEIGHT,            GGML_OP_MUL_MAT},
     {PARAKEET_TENSOR_JOINT_NET_BIAS,              GGML_OP_ADD},
+};
+
+static const std::map<parakeet_hparam, const char *> PARAKEET_HPARAM_NAMES = {
+    {PARAKEET_HPARAM_N_VOCAB,                "n_vocab"},
+    {PARAKEET_HPARAM_N_AUDIO_CTX,            "n_audio_ctx"},
+    {PARAKEET_HPARAM_N_AUDIO_STATE,          "n_audio_state"},
+    {PARAKEET_HPARAM_N_AUDIO_HEAD,           "n_audio_head"},
+    {PARAKEET_HPARAM_N_AUDIO_LAYER,          "n_audio_layer"},
+    {PARAKEET_HPARAM_N_MELS,                 "n_mels"},
+    {PARAKEET_HPARAM_N_FFT,                  "n_fft"},
+    {PARAKEET_HPARAM_SUBSAMPLING_FACTOR,     "subsampling_factor"},
+    {PARAKEET_HPARAM_N_SUBSAMPLING_CHANNELS, "n_subsampling_channels"},
+    {PARAKEET_HPARAM_N_CONV_KERNEL,          "n_conv_kernel"},
+    {PARAKEET_HPARAM_N_PRED_DIM,             "n_pred_dim"},
+    {PARAKEET_HPARAM_N_PRED_LAYERS,          "n_pred_layers"},
+    {PARAKEET_HPARAM_N_TDT_DURATIONS,        "n_tdt_durations"},
+    {PARAKEET_HPARAM_N_MAX_TOKENS,           "n_max_tokens"},
+};
+
+static const std::map<parakeet_hparam, int32_t> PARAKEET_HPARAM_MODEL_VALUES = {
+    {PARAKEET_HPARAM_N_VOCAB,                8192},
+    {PARAKEET_HPARAM_N_AUDIO_CTX,            5000},
+    {PARAKEET_HPARAM_N_AUDIO_STATE,          1024},
+    {PARAKEET_HPARAM_N_AUDIO_HEAD,              8},
+    {PARAKEET_HPARAM_N_AUDIO_LAYER,            24},
+    {PARAKEET_HPARAM_N_MELS,                  128},
+    {PARAKEET_HPARAM_N_FFT,                   512},
+    {PARAKEET_HPARAM_SUBSAMPLING_FACTOR,        8},
+    {PARAKEET_HPARAM_N_SUBSAMPLING_CHANNELS,  256},
+    {PARAKEET_HPARAM_N_CONV_KERNEL,             9},
+    {PARAKEET_HPARAM_N_PRED_DIM,              640},
+    {PARAKEET_HPARAM_N_PRED_LAYERS,             2},
+    {PARAKEET_HPARAM_N_TDT_DURATIONS,           5},
+    {PARAKEET_HPARAM_N_MAX_TOKENS,             10},
 };
