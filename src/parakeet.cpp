@@ -685,6 +685,29 @@ static void read_safe(parakeet_model_loader * loader, T & dest) {
     BYTESWAP_VALUE(dest);
 }
 
+
+static bool parakeet_validate_hparams(const std::map<parakeet_hparam, int32_t> & hparam_values) {
+    for (const auto & hparam_expected : PARAKEET_HPARAM_MODEL_VALUES) {
+        const parakeet_hparam hparam = hparam_expected.first;
+        const auto hparam_value = hparam_values.find(hparam);
+        if (hparam_value == hparam_values.end()) {
+            PARAKEET_LOG_ERROR("%s: missing Parakeet metadata: %s\n",
+                    __func__, PARAKEET_HPARAM_NAMES.at(hparam));
+            return false;
+        }
+
+        const int32_t actual = hparam_value->second;
+        const int32_t expected = hparam_expected.second;
+        if (actual != expected) {
+            PARAKEET_LOG_ERROR("%s: invalid Parakeet metadata: %s = %d, expected %d\n",
+                    __func__, PARAKEET_HPARAM_NAMES.at(hparam), actual, expected);
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static bool parakeet_lstm_state_init(
                struct parakeet_state & pstate,
                       ggml_backend_t   backend,
@@ -1003,21 +1026,35 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
     //load hparams
     parakeet_hparams hparams;
     {
-        read_safe(loader, hparams.n_vocab);
-        read_safe(loader, hparams.n_audio_ctx);
-        read_safe(loader, hparams.n_audio_state);
-        read_safe(loader, hparams.n_audio_head);
-        read_safe(loader, hparams.n_audio_layer);
-        read_safe(loader, hparams.n_mels);
+        std::map<parakeet_hparam, int32_t>hparam_values;
+        auto read_hparam = [&] (parakeet_hparam hparam, int32_t &value){
+            read_safe(loader, value);
+            hparam_values[hparam] = value;
+        };
+        read_hparam(PARAKEET_HPARAM_N_VOCAB, hparams.n_vocab);
+        read_hparam(PARAKEET_HPARAM_N_AUDIO_CTX, hparams.n_audio_ctx);
+        read_hparam(PARAKEET_HPARAM_N_AUDIO_STATE, hparams.n_audio_state);
+        read_hparam(PARAKEET_HPARAM_N_AUDIO_HEAD, hparams.n_audio_head);
+        read_hparam(PARAKEET_HPARAM_N_AUDIO_LAYER, hparams.n_audio_layer);
+        read_hparam(PARAKEET_HPARAM_N_MELS, hparams.n_mels);
+        /*
+        For ftype, it's better to leave it out of strict checks, because once quantized the ftype can vary or even be mixed.
+        This is taken care of, during the tensor type checks. Here it just checks, if present, if it is one of the supported types.
+        Check ggml_ftype_to_ggml_type call for this check. @danbev alrady added it.
+        */ 
         read_safe(loader, hparams.ftype);
-        read_safe(loader, hparams.n_fft);
-        read_safe(loader, hparams.subsampling_factor);
-        read_safe(loader, hparams.n_subsampling_channels);
-        read_safe(loader, hparams.n_conv_kernel);
-        read_safe(loader, hparams.n_pred_dim);
-        read_safe(loader, hparams.n_pred_layers);
-        read_safe(loader, hparams.n_tdt_durations);
-        read_safe(loader, hparams.n_max_tokens);
+        read_hparam(PARAKEET_HPARAM_N_FFT, hparams.n_fft);
+        read_hparam(PARAKEET_HPARAM_SUBSAMPLING_FACTOR, hparams.subsampling_factor);
+        read_hparam(PARAKEET_HPARAM_N_SUBSAMPLING_CHANNELS, hparams.n_subsampling_channels);
+        read_hparam(PARAKEET_HPARAM_N_CONV_KERNEL, hparams.n_conv_kernel);
+        read_hparam(PARAKEET_HPARAM_N_PRED_DIM, hparams.n_pred_dim);
+        read_hparam(PARAKEET_HPARAM_N_PRED_LAYERS, hparams.n_pred_layers);
+        read_hparam(PARAKEET_HPARAM_N_TDT_DURATIONS, hparams.n_tdt_durations);
+        read_hparam(PARAKEET_HPARAM_N_MAX_TOKENS, hparams.n_max_tokens);
+
+        if(!parakeet_validate_hparams(hparam_values)) {
+            return false;
+        }
 
         hparams.arch = PARAKEET_ARCH_TDT;
         wctx.model.hparams = hparams;
