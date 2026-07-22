@@ -1,0 +1,15 @@
+# Build artifacts
+build/
+build-*/
+*.o
+*.obj
+
+# Debug-only harnesses (kept local for parity dumps; not part of the library)
+src/acestep/dit_decode_bin.cpp
+src/acestep/vae_decode_bin.cpp
+
+# Model files (too big for git)
+*.gguf
+
+# macOS
+.DS_Store

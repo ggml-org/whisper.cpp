@@ -1,5 +1,6 @@
-# Cross-platform lanes for the engines (engines/parakeet/, engines/tts/ —
-# moved from parakeet-cpp/, tts-cpp/ by the repo reorg QIP, PR 1).
+# Cross-platform lanes for the engines (engines/parakeet/, engines/tts/,
+# engines/audiogen/ — parakeet/tts moved from parakeet-cpp/, tts-cpp/ by the
+# repo reorg QIP PR 1; audiogen (ACE-Step) added as its own engine folder).
 #
 # Complements parakeet-ci.yml / tts-ci.yml (linux+mac build+test):
 #   - windows: full build + non-GPU ctest (MSVC, static ggml)
@@ -16,11 +17,13 @@ on:
     paths:
       - 'engines/parakeet/**'
       - 'engines/tts/**'
+      - 'engines/audiogen/**'
       - '.github/workflows/engines-cross-ci.yml'
   pull_request:
     paths:
       - 'engines/parakeet/**'
       - 'engines/tts/**'
+      - 'engines/audiogen/**'
       - '.github/workflows/engines-cross-ci.yml'
   workflow_dispatch:
 
@@ -40,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        engine: [parakeet, tts]
+        engine: [parakeet, tts, audiogen]
         include:
           - engine: parakeet
             src: engines/parakeet
@@ -48,6 +51,9 @@ jobs:
           - engine: tts
             src: engines/tts
             cmake_flags: -DTTS_CPP_BUILD_TESTS=ON
+          - engine: audiogen
+            src: engines/audiogen
+            cmake_flags: -DAUDIOGEN_BUILD_TESTS=ON -DAUDIOGEN_BUILD_EXECUTABLES=OFF
     runs-on: windows-2022
     timeout-minutes: 90
     defaults:
@@ -102,7 +108,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        engine: [parakeet, tts]
+        engine: [parakeet, tts, audiogen]
         include:
           - engine: parakeet
             src: engines/parakeet
@@ -110,6 +116,9 @@ jobs:
           - engine: tts
             src: engines/tts
             cmake_flags: -DTTS_CPP_BUILD_TESTS=OFF
+          - engine: audiogen
+            src: engines/audiogen
+            cmake_flags: -DAUDIOGEN_BUILD_TESTS=OFF -DAUDIOGEN_BUILD_EXECUTABLES=OFF
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -166,7 +175,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        engine: [parakeet, tts]
+        engine: [parakeet, tts, audiogen]
         include:
           - engine: parakeet
             src: engines/parakeet
@@ -174,6 +183,9 @@ jobs:
           - engine: tts
             src: engines/tts
             cmake_flags: -DTTS_CPP_BUILD_TESTS=OFF
+          - engine: audiogen
+            src: engines/audiogen
+            cmake_flags: -DAUDIOGEN_BUILD_TESTS=OFF -DAUDIOGEN_BUILD_EXECUTABLES=OFF
     runs-on: macos-14
     timeout-minutes: 60
     steps:
