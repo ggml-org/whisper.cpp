@@ -830,6 +830,28 @@ if (PARAKEET_BUILD_TESTS)
         ARGS     "--model" "${_qvp_sf_q8_gguf}" "--wav" "${_qvp_diar_wav}"
         REQUIRES "${_qvp_sf_q8_gguf}" "${_qvp_diar_wav}")
 
+    # Long-form encoder windowing. The model-free unit test (planner + resolver
+    # + seam trim/append) runs on every checkout; the parity test is
+    # fixture-gated and auto-disables when the GGUF/wav aren't staged.
+    add_executable(test-long-form-windows test/test_long_form_windows.cpp)
+    target_include_directories(test-long-form-windows PRIVATE src include)
+    parakeet_apply_ccache(test-long-form-windows)
+    parakeet_register_test(test-long-form-windows LABEL "unit")
+
+    add_executable(test-long-form test/test_long_form.cpp)
+    target_link_libraries(test-long-form PRIVATE parakeet)
+    target_include_directories(test-long-form PRIVATE include src ggml/include)
+    parakeet_apply_ccache(test-long-form)
+    parakeet_register_test(test-long-form
+        LABEL    "fixture"
+        ARGS     "--model" "${_qvp_ctc_q8_gguf}" "--wav" "${_qvp_jfk_wav}"
+        REQUIRES "${_qvp_ctc_q8_gguf}" "${_qvp_jfk_wav}")
+    parakeet_register_test(test-long-form-tdt
+        LABEL    "fixture"
+        EXE      test-long-form
+        ARGS     "--model" "${_qvp_tdt_q8_gguf}" "--wav" "${_qvp_jfk_wav}"
+        REQUIRES "${_qvp_tdt_q8_gguf}" "${_qvp_jfk_wav}")
+
     if (GGML_VULKAN)
         add_executable(test-vk-vs-cpu
             test/test_vk_vs_cpu.cpp

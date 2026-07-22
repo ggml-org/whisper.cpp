@@ -12,6 +12,7 @@
 #include "mel_preprocess.h"
 #include "sentencepiece_bpe.h"
 #include "energy_vad.h"
+#include "long_form.h"
 
 #include <algorithm>
 #include <atomic>
@@ -44,6 +45,156 @@ inline double encoder_frame_stride_ms(const ParakeetCtcModel & model) {
 double ms_since(std::chrono::steady_clock::time_point a) {
     using namespace std::chrono;
     return duration_cast<microseconds>(steady_clock::now() - a).count() / 1000.0;
+}
+
+// ── Long-form offline encoder windowing ───────────────────────────────────
+// See EngineOptions::long_form_window_frames and src/long_form.h.
+
+// Auto per-window encoder-frame ceiling (~300 s at 80 ms/frame). Caps the
+// O(T_enc^2) attention score tensor at a few hundred MB per window while still
+// giving the decoder long committed spans, so a multi-hour input needs only a
+// handful of windows. Overridden downward by the model's pos_emb_max_len.
+constexpr int kLongFormAutoWindowFrames  = 3750;
+// Shared context each side (~20 s at 80 ms/frame). Comfortably exceeds the
+// deepest shipped encoder's convolutional receptive field (24 conformer layers
+// x depthwise kernel 9 ~= 100 frames each side) plus the subsampling stack, so
+// committed centre frames closely match the single-pass encoder.
+constexpr int kLongFormAutoContextFrames = 256;
+// Floor so a pathologically small pos_emb_max_len can't collapse the centre.
+constexpr int kLongFormMinWindowFrames   = 256;
+
+struct LongFormPlan {
+    bool enabled        = false;
+    int  window_frames  = 0;  // encoder frames per window (center + 2 * context)
+    int  context_frames = 0;  // encoder frames of shared context each side
+    int  center_frames  = 0;  // committed encoder frames per window
+    int  sub            = 0;  // subsampling factor (mel frames per encoder frame)
+};
+
+// Resolve the effective long-form window from EngineOptions + model config and
+// decide whether the mel-spectrogram is long enough to need windowing at all.
+// Inputs that fit within a single window keep the bit-identical single-pass path.
+LongFormPlan resolve_long_form_plan(const ParakeetCtcModel & model,
+                                    const EngineOptions & opts,
+                                    int n_mel_frames) {
+    LongFormPlan plan;
+
+    if (opts.long_form_window_frames < 0) {
+        return plan;
+    }
+
+    const int sub = model.encoder_cfg.subsampling_factor > 0
+                  ? model.encoder_cfg.subsampling_factor : 8;
+    if (sub <= 0) {
+        return plan;
+    }
+    plan.sub = sub;
+
+    const int window_frames = resolve_long_form_window_frames(
+        opts.long_form_window_frames, model.encoder_cfg.pos_emb_max_len,
+        kLongFormAutoWindowFrames, kLongFormMinWindowFrames);
+
+    int context_frames = opts.long_form_context_frames;
+    if (context_frames == 0) {
+        context_frames = kLongFormAutoContextFrames;
+    }
+    if (context_frames < 0) {
+        context_frames = 0;
+    }
+    if (context_frames > window_frames / 4) {
+        context_frames = window_frames / 4;
+    }
+
+    // Defense-in-depth: the window/4 context clamp above keeps
+    // center = window - 2*context >= window/2 > 0, so this cannot trigger under
+    // the current policy; it guards a future window/context tuning that could.
+    const int center_frames = window_frames - 2 * context_frames;
+    if (center_frames <= 0) {
+        return plan;
+    }
+
+    // Only window when a single-pass encoder run would exceed the ceiling; the
+    // encoder emits roughly n_mel_frames / sub frames.
+    if ((long long) n_mel_frames <= (long long) window_frames * sub) {
+        return plan;
+    }
+
+    plan.enabled        = true;
+    plan.window_frames  = window_frames;
+    plan.context_frames = context_frames;
+    plan.center_frames  = center_frames;
+    return plan;
+}
+
+struct WindowedEncoderStats {
+    double encoder_ms = 0.0;
+};
+
+// Bounded-memory replacement for a single full-length run_encoder() call on long
+// inputs. The caller computes the mel once (so per-feature CMVN statistics are
+// global, matching the single-pass path); this slides the encoder over that mel
+// in overlapping windows (plan_long_form_windows), trims the shared context at
+// the seams (compute_window_trim), and concatenates the committed encoder frames
+// (and CTC logits) into `out` so the decoder consumes them exactly as a
+// single-pass result. Returns the run_encoder rc contract (0 = ok), or -6 if a
+// committed range ever escapes its window buffer; honours `cancel_flag` between
+// windows.
+int run_encoder_windowed(ParakeetCtcModel & model,
+                         const float * mel, int n_mel_frames, int n_mels,
+                         const LongFormPlan & plan,
+                         std::atomic<bool> & cancel_flag,
+                         EncoderOutputs & out,
+                         WindowedEncoderStats & stats) {
+    using clock = std::chrono::steady_clock;
+
+    const int center_mel = plan.center_frames  * plan.sub;
+    const int ctx_mel    = plan.context_frames * plan.sub;
+    const std::vector<LongFormWindow> windows =
+        plan_long_form_windows(n_mel_frames, center_mel, ctx_mel);
+
+    out = EncoderOutputs{};
+
+    for (const LongFormWindow & w : windows) {
+        if (cancel_flag.load()) {
+            break;
+        }
+
+        const float * win_mel = mel + (size_t) w.window_start * (size_t) n_mels;
+
+        const auto t_enc = clock::now();
+        EncoderOutputs win_out;
+        if (int rc = run_encoder(model, win_mel, w.window_len, n_mels, win_out,
+                                 /*max_layers=*/-1,
+                                 /*capture_intermediates=*/false);
+            rc != 0) {
+            return rc;
+        }
+        stats.encoder_ms += ms_since(t_enc);
+
+        if (out.d_model == 0) {
+            out.d_model    = win_out.d_model;
+            out.vocab_size = win_out.vocab_size;
+        }
+
+        const WindowTrim trim =
+            compute_window_trim(w, win_out.n_enc_frames, plan.sub);
+        if (trim.center_cnt <= 0) {
+            continue;
+        }
+
+        if (!append_committed_frames(out.encoder_out, win_out.encoder_out,
+                                     trim.left_drop, trim.center_cnt, out.d_model)) {
+            return -6;
+        }
+        if (!win_out.logits.empty() && out.vocab_size > 0 &&
+            !append_committed_frames(out.logits, win_out.logits,
+                                     trim.left_drop, trim.center_cnt, out.vocab_size)) {
+            return -6;
+        }
+        out.n_enc_frames += trim.center_cnt;
+    }
+
+    return 0;
 }
 
 }
@@ -276,16 +427,48 @@ EngineResult Engine::transcribe_samples(const float * samples, int n_samples, in
     }
     const double preprocess_ms = ms_since(t_mel);
 
-    const auto t_enc = clock::now();
+    double encoder_ms = 0.0;
     EncoderOutputs enc_out;
-    if (int rc = run_encoder(pimpl_->model, mel.data(), n_mel_frames,
-                             pimpl_->model.mel_cfg.n_mels, enc_out,
-                             /*max_layers=*/-1,
-                             /*capture_intermediates=*/false); rc != 0) {
-        throw std::runtime_error("parakeet::Engine::transcribe_samples: run_encoder failed (rc=" +
-                                 std::to_string(rc) + ")");
+    const LongFormPlan lf =
+        resolve_long_form_plan(pimpl_->model, pimpl_->opts, n_mel_frames);
+    if (lf.enabled) {
+        // Long input: window the encoder over the (global-CMVN) mel so the
+        // O(T_enc^2) attention never allocates the full-length score tensor.
+        WindowedEncoderStats wstats;
+        if (int rc = run_encoder_windowed(pimpl_->model, mel.data(), n_mel_frames,
+                                          pimpl_->model.mel_cfg.n_mels, lf,
+                                          pimpl_->cancel_flag, enc_out, wstats);
+            rc != 0) {
+            throw std::runtime_error("parakeet::Engine::transcribe_samples: "
+                                     "run_encoder_windowed failed (rc=" +
+                                     std::to_string(rc) + ")");
+        }
+        encoder_ms = wstats.encoder_ms;
+    } else {
+        const auto t_enc = clock::now();
+        if (int rc = run_encoder(pimpl_->model, mel.data(), n_mel_frames,
+                                 pimpl_->model.mel_cfg.n_mels, enc_out,
+                                 /*max_layers=*/-1,
+                                 /*capture_intermediates=*/false); rc != 0) {
+            throw std::runtime_error("parakeet::Engine::transcribe_samples: run_encoder failed (rc=" +
+                                     std::to_string(rc) + ")");
+        }
+        encoder_ms = ms_since(t_enc);
     }
-    const double encoder_ms = ms_since(t_enc);
+
+    // A cancel() during the windowed encoder loop can leave no committed
+    // frames; decoding zero frames is meaningless, so return an empty result.
+    if (enc_out.n_enc_frames <= 0) {
+        EngineResult result;
+        result.preprocess_ms  = preprocess_ms;
+        result.encoder_ms     = encoder_ms;
+        result.total_ms       = ms_since(t_total);
+        result.audio_samples  = n_samples;
+        result.sample_rate    = sample_rate;
+        result.mel_frames     = n_mel_frames;
+        result.encoder_frames = 0;
+        return result;
+    }
 
     const auto t_dec = clock::now();
     std::vector<int32_t> ids;
@@ -391,16 +574,34 @@ EngineResult Engine::transcribe_samples_stream(const float * samples,
     }
     const double preprocess_ms = ms_since(t_mel);
 
-    const auto t_enc = clock::now();
+    double encoder_ms = 0.0;
     EncoderOutputs enc_out;
-    if (int rc = run_encoder(pimpl_->model, mel.data(), n_mel_frames,
-                             pimpl_->model.mel_cfg.n_mels, enc_out,
-                             /*max_layers=*/-1,
-                             /*capture_intermediates=*/false); rc != 0) {
-        throw std::runtime_error("parakeet::Engine::transcribe_samples_stream: run_encoder failed (rc=" +
-                                 std::to_string(rc) + ")");
+    const LongFormPlan lf =
+        resolve_long_form_plan(pimpl_->model, pimpl_->opts, n_mel_frames);
+    if (lf.enabled) {
+        // Long input: window the encoder over the (global-CMVN) mel for bounded
+        // memory. The per-window decode below walks the stitched encoder output.
+        WindowedEncoderStats wstats;
+        if (int rc = run_encoder_windowed(pimpl_->model, mel.data(), n_mel_frames,
+                                          pimpl_->model.mel_cfg.n_mels, lf,
+                                          pimpl_->cancel_flag, enc_out, wstats);
+            rc != 0) {
+            throw std::runtime_error("parakeet::Engine::transcribe_samples_stream: "
+                                     "run_encoder_windowed failed (rc=" +
+                                     std::to_string(rc) + ")");
+        }
+        encoder_ms = wstats.encoder_ms;
+    } else {
+        const auto t_enc = clock::now();
+        if (int rc = run_encoder(pimpl_->model, mel.data(), n_mel_frames,
+                                 pimpl_->model.mel_cfg.n_mels, enc_out,
+                                 /*max_layers=*/-1,
+                                 /*capture_intermediates=*/false); rc != 0) {
+            throw std::runtime_error("parakeet::Engine::transcribe_samples_stream: run_encoder failed (rc=" +
+                                     std::to_string(rc) + ")");
+        }
+        encoder_ms = ms_since(t_enc);
     }
-    const double encoder_ms = ms_since(t_enc);
 
     const int T_enc = enc_out.n_enc_frames;
     const int vocab = pimpl_->model.vocab_size;
