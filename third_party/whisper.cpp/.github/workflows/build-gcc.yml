@@ -1,0 +1,167 @@
+name: CI (gcc)
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: ['.github/workflows/build-gcc.yml',
+            '**/CMakeLists.txt',
+            '**/Makefile',
+            '**/*.mk',
+            '**/*.cmake',
+            '**/*.in',
+            '**/*.h',
+            '**/*.hpp',
+            '**/*.c',
+            '**/*.cpp',
+            '**/*.cu',
+            '**/*.cuh',
+            '**/*.cl']
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - 'bindings/ruby/**'        # handled by bindings-ruby.yml
+      - 'bindings/go/**'          # handled by bindings-go.yml
+      - 'examples/addon.node/**'  # handled by examples.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  ubuntu_image: "ubuntu:22.04"
+
+jobs:
+  ubuntu-22-gcc:
+    runs-on: ubuntu-22.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [Debug, Release]
+        arch: [linux/amd64, linux/ppc64le]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Set CCACHE_DIR
+        run: echo "CCACHE_DIR=${{ runner.temp }}/ccache" >> $GITHUB_ENV
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: gcc-${{ matrix.arch }}-${{ matrix.build }}
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4
+
+      - name: Build ${{ matrix.arch }}
+        run: |
+          docker run --platform ${{ matrix.arch }} --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -v ${CCACHE_DIR}:${CCACHE_DIR} \
+            -e CCACHE_DIR=${CCACHE_DIR} \
+            -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
+            apt update
+            apt install -y build-essential cmake libsdl2-dev git ccache
+            cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
+              -DGGML_NATIVE=OFF \
+              -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+            make
+            ctest -L gh --output-on-failure'
+
+  ubuntu-22-gcc-arm64:
+    runs-on: ubuntu-22.04-arm
+
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [Debug, Release]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: gcc-arm64-${{ matrix.build }}
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libsdl2-dev git
+
+      - name: Configure CMake
+        run: |
+          cmake . \
+            -DWHISPER_SDL2=ON \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ARM_ARCH=armv8-a
+
+      - name: Build and Test
+        run: |
+          make
+          ctest -L gh --output-on-failure
+
+  ubuntu-22-gcc-arm-v7:
+    runs-on: ubuntu-22.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [Debug, Release]
+        arch: [linux/arm/v7]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Set CCACHE_DIR
+        run: echo "CCACHE_DIR=${{ runner.temp }}/ccache" >> $GITHUB_ENV
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: gcc-${{ matrix.arch }}-${{ matrix.build }}
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4
+
+      - name: Build ${{ matrix.arch }}
+        run: |
+          docker run --platform ${{ matrix.arch }} --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -v ${CCACHE_DIR}:${CCACHE_DIR} \
+            -e CCACHE_DIR=${CCACHE_DIR} \
+            -w /workspace ${{ env.ubuntu_image }} /bin/sh -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            sed -i "s|archive.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+            sed -i "s|security.ubuntu.com|mirrors.kernel.org|g" /etc/apt/sources.list
+
+            apt update
+            apt install -y build-essential cmake libsdl2-dev git ccache
+            cmake . -DWHISPER_SDL2=ON -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
+              -DGGML_NATIVE=OFF \
+              -DGGML_CPU_ARM_ARCH=armv7-a+fp \
+              -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+            make
+            ctest -L gh --output-on-failure'

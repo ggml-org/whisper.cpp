@@ -92,7 +92,7 @@ Run with GPU layers:
 | `PARAKEET_FLASH_ATTN` | `ON` on Metal, `OFF` elsewhere | Fused flash-attn in the encoder MHA (per-backend A/B pending) |
 | `PARAKEET_CCACHE` | `ON` | Use ccache as compiler launcher for parakeet targets when found |
 
-With tests enabled, the build emits **`parakeet`** (CLI), **`test-mel`**, **`test-encoder`**, **`test-streaming`**, **`test-vk-vs-cpu`** (if Vulkan), etc. Full list is in CMake / build output.
+With tests enabled, the build emits **`parakeet`** (CLI), **`test-mel`**, **`test-encoder`**, **`test-parakeet-streaming`**, **`test-vk-vs-cpu`** (if Vulkan), etc. Full list is in CMake / build output.
 
 ## 2. Convert weights (`.nemo` → `.gguf`)
 

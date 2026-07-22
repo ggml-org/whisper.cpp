@@ -1,315 +1,64 @@
-cmake_minimum_required(VERSION 3.5) # for add_link_options and implicit target directories.
-project("whisper.cpp" C CXX)
-project("whisper.cpp" VERSION 1.9.1)
-include(CheckIncludeFileCXX)
+# QVAC speech superbuild: feature-gated umbrella over the vendored
+# whisper.cpp (third_party/, git subtree, see third_party/whisper.cpp/PATCHES.md)
+# and our engines (engines/). Every component consumes ONE system ggml —
+# the ggml-speech vcpkg port built from qvac-ext-ggml@speech — so the
+# stack shares a single ggml pin and file set; the ggml/ tree vendored
+# inside the whisper subtree is never compiled.
+#
+# Each engine also stays independently configurable standalone
+# (cmake -S engines/<name>), which is what the per-engine vcpkg ports and
+# CI lanes use today; this umbrella is additive and is the base for the
+# future single speech port (QIP #94, Ticket 4).
+cmake_minimum_required(VERSION 3.19)
+project(qvac-speech LANGUAGES C CXX)
 
-set(SOVERSION 1)
+option(SPEECH_BUILD_WHISPER     "speech: build the whisper engine (third_party/whisper.cpp)" ON)
+option(SPEECH_BUILD_PARAKEET    "speech: build the parakeet engine (engines/parakeet)"       ON)
+option(SPEECH_BUILD_TTS         "speech: build the TTS engines (engines/tts)"                ON)
+option(SPEECH_BUILD_TESTS       "speech: build the engines' test harnesses"                  OFF)
+option(SPEECH_BUILD_WHISPER_TESTS "speech: build whisper's test harnesses too (fixture-only tests run model-free; the transcription tests additionally need downloaded whisper models — filter by label)" OFF)
+option(SPEECH_BUILD_EXECUTABLES "speech: build the engines' CLI executables"                 ON)
 
-#set(CMAKE_WARN_DEPRECATED YES)
-set(CMAKE_WARN_UNUSED_CLI YES)
-
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-if (NOT XCODE AND NOT MSVC AND NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
-    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
+if (SPEECH_BUILD_TESTS)
+    enable_testing()
 endif()
 
-# Add path to modules
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
+# One ggml for everything. Resolved from the ggml-speech vcpkg port (or
+# any qvac-ext-ggml@speech install on CMAKE_PREFIX_PATH). Every
+# subproject below guards its own ggml acquisition with
+# `if (NOT TARGET ggml)`, so defining the target here short-circuits
+# all of them onto this single import.
+find_package(ggml CONFIG REQUIRED)
+add_library(ggml ALIAS ggml::ggml)
 
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-
-if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    set(WHISPER_STANDALONE ON)
-
-    find_package(Git QUIET)
-    if(GIT_FOUND)
-        include(git-vars)
-    else()
-        set(GIT_SHA1 "unknown")
-        set(GIT_DATE "unknown")
-        set(GIT_COMMIT_SUBJECT "unknown")
-    endif()
-
-    if(EXISTS ${CMAKE_SOURCE_DIR}/bindings/javascript/package-tmpl.json)
-        configure_file(${CMAKE_SOURCE_DIR}/bindings/javascript/package-tmpl.json ${CMAKE_SOURCE_DIR}/bindings/javascript/package.json @ONLY)
-    endif()
-else()
-    set(WHISPER_STANDALONE OFF)
+if (SPEECH_BUILD_WHISPER)
+    # CACHE FORCE throughout this block: whisper's cmake_minimum_required(3.5)
+    # leaves CMP0077 OLD in its scope, so its option() defaults would clobber
+    # plain normal-variable set()s on the first configure.
+    set(WHISPER_USE_SYSTEM_GGML ON  CACHE BOOL "umbrella: one shared system ggml" FORCE)
+    set(WHISPER_BUILD_TESTS     ${SPEECH_BUILD_WHISPER_TESTS} CACHE BOOL "umbrella: see SPEECH_BUILD_WHISPER_TESTS" FORCE)
+    set(WHISPER_BUILD_EXAMPLES  ${SPEECH_BUILD_EXECUTABLES} CACHE BOOL "umbrella: whisper-cli lives in examples/" FORCE)
+    # Upstream ships its own C-API parakeet (target names `parakeet`,
+    # `parakeet-cli`) which collides with engines/parakeet — gate it off
+    # (QVAC patch in the subtree, see third_party/whisper.cpp/PATCHES.md).
+    # CACHE FORCE because whisper's cmake_minimum_required(3.5) leaves
+    # CMP0077 OLD in its scope: a plain normal-variable set() here would
+    # be clobbered by its option() default on the first configure.
+    set(WHISPER_BUILD_PARAKEET OFF CACHE BOOL "umbrella: upstream parakeet collides with engines/parakeet" FORCE)
+    add_subdirectory(third_party/whisper.cpp)
 endif()
 
-if (EMSCRIPTEN)
-    set(BUILD_SHARED_LIBS_DEFAULT OFF)
-
-    set(CMAKE_CXX_STANDARD 17)
-    set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-    option(WHISPER_WASM_SINGLE_FILE "whisper: embed WASM inside the generated whisper.js" ON)
-
-    # TODO: without these, we get the following error:
-    #       wasm-ld: error: --shared-memory is disallowed by whisper.cpp.o because it was not compiled with 'atomics' or 'bulk-memory' features.
-    set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -pthread")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread")
-
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -s TOTAL_STACK=5242880")
-    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -s TOTAL_STACK=5242880")
-
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-deprecated")
-else()
-    if (MINGW)
-        set(BUILD_SHARED_LIBS_DEFAULT OFF)
-    else()
-        set(BUILD_SHARED_LIBS_DEFAULT ON)
-    endif()
+if (SPEECH_BUILD_PARAKEET)
+    set(PARAKEET_USE_SYSTEM_GGML ON)
+    set(PARAKEET_BUILD_TESTS       ${SPEECH_BUILD_TESTS})
+    set(PARAKEET_BUILD_EXECUTABLES ${SPEECH_BUILD_EXECUTABLES})
+    set(PARAKEET_BUILD_EXAMPLES    OFF)
+    add_subdirectory(engines/parakeet)
 endif()
 
-option(BUILD_SHARED_LIBS "build shared libraries" ${BUILD_SHARED_LIBS_DEFAULT})
-
-#
-# option list
-#
-
-# debug
-option(WHISPER_ALL_WARNINGS           "whisper: enable all compiler warnings"                   ON)
-option(WHISPER_ALL_WARNINGS_3RD_PARTY "whisper: enable all compiler warnings in 3rd party libs" OFF)
-
-# build
-option(WHISPER_FATAL_WARNINGS  "whisper: enable -Werror flag"               OFF)
-option(WHISPER_USE_SYSTEM_GGML "whisper: use system-installed GGML library" OFF)
-
-# sanitizers
-option(WHISPER_SANITIZE_THREAD    "whisper: enable thread sanitizer"    OFF)
-option(WHISPER_SANITIZE_ADDRESS   "whisper: enable address sanitizer"   OFF)
-option(WHISPER_SANITIZE_UNDEFINED "whisper: enable undefined sanitizer" OFF)
-
-# extra artifacts
-option(WHISPER_BUILD_TESTS    "whisper: build tests"          ${WHISPER_STANDALONE})
-option(WHISPER_BUILD_EXAMPLES "whisper: build examples"       ${WHISPER_STANDALONE})
-option(WHISPER_BUILD_SERVER   "whisper: build server example" ${WHISPER_STANDALONE})
-
-# 3rd party libs
-option(WHISPER_CURL "whisper: use libcurl to download model from an URL" OFF)
-option(WHISPER_SDL2 "whisper: support for libSDL2" OFF)
-
-if (CMAKE_SYSTEM_NAME MATCHES "Linux")
-    option(WHISPER_COMMON_FFMPEG "whisper: examples link with ffmpeg libs in order to decode more audio formats" OFF)
-endif()
-
-option(WHISPER_COREML                "whisper: enable Core ML framework"  OFF)
-option(WHISPER_COREML_ALLOW_FALLBACK "whisper: allow non-CoreML fallback" OFF)
-option(WHISPER_OPENVINO              "whisper: support for OpenVINO"      OFF)
-
-# Required for relocatable CMake package
-include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info.cmake)
-
-# override ggml options
-set(GGML_SANITIZE_THREAD    ${WHISPER_SANITIZE_THREAD})
-set(GGML_SANITIZE_ADDRESS   ${WHISPER_SANITIZE_ADDRESS})
-set(GGML_SANITIZE_UNDEFINED ${WHISPER_SANITIZE_UNDEFINED})
-set(GGML_ALL_WARNINGS       ${WHISPER_ALL_WARNINGS})
-set(GGML_FATAL_WARNINGS     ${WHISPER_FATAL_WARNINGS})
-
-# transition helpers
-function (whisper_option_depr TYPE OLD NEW)
-    if (${OLD})
-        message(${TYPE} "${OLD} is deprecated and will be removed in the future.\nUse ${NEW} instead\n")
-        set(${NEW} ON)
-    endif()
-endfunction()
-
-whisper_option_depr(FATAL_ERROR WHISPER_CUBLAS              GGML_CUDA)
-whisper_option_depr(WARNING     WHISPER_CUDA                GGML_CUDA)
-whisper_option_depr(WARNING     WHISPER_KOMPUTE             GGML_KOMPUTE)
-whisper_option_depr(WARNING     WHISPER_METAL               GGML_METAL)
-whisper_option_depr(WARNING     WHISPER_METAL_EMBED_LIBRARY GGML_METAL_EMBED_LIBRARY)
-whisper_option_depr(WARNING     WHISPER_NATIVE              GGML_NATIVE)
-whisper_option_depr(WARNING     WHISPER_OPENMP              GGML_OPENMP)
-whisper_option_depr(WARNING     WHISPER_RPC                 GGML_RPC)
-whisper_option_depr(WARNING     WHISPER_SYCL                GGML_SYCL)
-whisper_option_depr(WARNING     WHISPER_SYCL_F16            GGML_SYCL_F16)
-whisper_option_depr(WARNING     WHISPER_CCACHE              GGML_CCACHE)
-whisper_option_depr(WARNING     WHISPER_FFMPEG              WHISPER_COMMON_FFMPEG)
-
-if (GGML_CUDA AND NOT MSVC)
-    #GGML_CUDA enabled, add the necessary compile options -Wno-deprecated-gpu-targets
-    add_compile_options(-Wno-deprecated-gpu-targets)
-endif()
-
-#
-# build the library
-#
-
-if (NOT TARGET ggml)
-    if (WHISPER_USE_SYSTEM_GGML)
-        find_package(ggml REQUIRED)
-        if (NOT ggml_FOUND)
-            message(FATAL_ERROR "System-installed GGML library not found.")
-        endif()
-        add_library(ggml ALIAS ggml::ggml)
-    else()
-        add_subdirectory(ggml)
-        if(WIN32)
-            # The following adds a _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR macro and is a workaround for
-            # the Windows C++ standard library which does not support constexpr mutexes.
-            # From the release notes://github.com/microsoft/STL/wiki/Changelog
-            #  Disable constexpr mutex constructor on Windows
-            #  Fixed mutex's constructor to be constexpr. #3824 #4000 #4339
-            #  Note: Programs that aren't following the documented restrictions on binary compatibility may encounter
-            #  null dereferences in mutex machinery. You must follow this rule:
-            #  When you mix binaries built by different supported versions of the toolset, the Redistributable version
-            #  must be at least as new as the latest toolset used by any app component.
-            #  You can define _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR as an escape hatch.
-            #
-            # Specifically to whisper.cpp this would cause a crash when using the Java bindings.
-            # resulting in a Invalid memory access error.
-            target_compile_definitions(ggml-base PRIVATE _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
-        endif()
-    endif()
-    # ... otherwise assume ggml is added by a parent CMakeLists.txt
-endif()
-add_subdirectory(src)
-
-#
-# install
-#
-
-include(GNUInstallDirs)
-include(CMakePackageConfigHelpers)
-
-set(WHISPER_BUILD_NUMBER        ${BUILD_NUMBER})
-set(WHISPER_BUILD_COMMIT        ${BUILD_COMMIT})
-set(WHISPER_INSTALL_VERSION     ${CMAKE_PROJECT_VERSION})
-
-set(WHISPER_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR}/whisper CACHE PATH "Location of header  files")
-set(WHISPER_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
-set(WHISPER_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of binary  files")
-
-get_directory_property(WHISPER_TRANSIENT_DEFINES COMPILE_DEFINITIONS)
-
-set_target_properties(whisper PROPERTIES PUBLIC_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/include/whisper.h)
-
-install(
-  TARGETS whisper
-  EXPORT whisper-targets
-  PUBLIC_HEADER
-    DESTINATION ${WHISPER_INCLUDE_INSTALL_DIR})
-
-install(
-  EXPORT whisper-targets
-  FILE whisper-targets.cmake
-  NAMESPACE whisper::
-  DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/whisper)
-
-install(
-  FILES ${CMAKE_CURRENT_BINARY_DIR}/whisper-config.cmake
-  DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/whisper)
-
-target_compile_definitions(whisper PRIVATE
-    WHISPER_VERSION="${PROJECT_VERSION}"
-)
-
-set_target_properties(parakeet PROPERTIES PUBLIC_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/include/parakeet.h)
-install(TARGETS parakeet LIBRARY PUBLIC_HEADER)
-
-target_compile_definitions(parakeet PRIVATE
-    PARAKEET_VERSION="${PROJECT_VERSION}"
-)
-
-configure_package_config_file(
-  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/whisper-config.cmake.in
-  ${CMAKE_CURRENT_BINARY_DIR}/whisper-config.cmake
-  INSTALL_DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/whisper)
-
-write_basic_package_version_file(
-    ${CMAKE_CURRENT_BINARY_DIR}/whisper-version.cmake
-    VERSION ${WHISPER_INSTALL_VERSION}
-    COMPATIBILITY SameMajorVersion)
-
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/whisper-config.cmake
-              ${CMAKE_CURRENT_BINARY_DIR}/whisper-version.cmake
-        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/whisper)
-
-configure_file(cmake/whisper.pc.in
-        "${CMAKE_CURRENT_BINARY_DIR}/whisper.pc"
-        @ONLY)
-
-install(FILES "${CMAKE_CURRENT_BINARY_DIR}/whisper.pc"
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
-
-set(PARAKEET_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of header  files")
-set(PARAKEET_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
-set(PARAKEET_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of binary  files")
-
-configure_package_config_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/parakeet-config.cmake.in
-        ${CMAKE_CURRENT_BINARY_DIR}/parakeet-config.cmake
-    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/parakeet
-    PATH_VARS
-    PARAKEET_INCLUDE_INSTALL_DIR
-    PARAKEET_LIB_INSTALL_DIR
-    PARAKEET_BIN_INSTALL_DIR)
-
-write_basic_package_version_file(
-    ${CMAKE_CURRENT_BINARY_DIR}/parakeet-version.cmake
-    VERSION ${WHISPER_INSTALL_VERSION}
-    COMPATIBILITY SameMajorVersion)
-
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/parakeet-config.cmake
-              ${CMAKE_CURRENT_BINARY_DIR}/parakeet-version.cmake
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/parakeet)
-
-configure_file(cmake/parakeet.pc.in
-        "${CMAKE_CURRENT_BINARY_DIR}/parakeet.pc"
-        @ONLY)
-
-install(FILES "${CMAKE_CURRENT_BINARY_DIR}/parakeet.pc"
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
-
-#
-# programs, examples and tests
-#
-
-if (WHISPER_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
-    include(CTest)
-    add_subdirectory(tests)
-endif ()
-
-if (WHISPER_BUILD_EXAMPLES)
-    add_subdirectory(examples)
-endif()
-
-if (MSVC)
-    set(MSVC_WARNING_FLAGS
-        /wd4101  # Unreferenced local variable
-        /wd4005  # Macro redefinition
-        /wd4065  # switch statement contains 'default' but no 'case' labels
-        /wd4267  # Conversion from 'size_t' to a smaller type, possible loss of data
-        /wd4244  # Conversion from one type to another type, possible loss of ata
-        /wd4805  # Unsafe mix of type
-        /wd4305  # Truncation from 'type1' to 'type2' (often double to float)
-        /wd4996  # Function or variable may be unsafe/deprecated
-    )
-    function(disable_msvc_warnings target_name)
-        if(TARGET ${target_name})
-            target_compile_options(${target_name} PRIVATE ${MSVC_WARNING_FLAGS})
-        endif()
-    endfunction()
-
-    if (WHISPER_BUILD_EXAMPLES)
-        disable_msvc_warnings(whisper)
-        disable_msvc_warnings(common)
-        disable_msvc_warnings(common-sdl)
-        disable_msvc_warnings(lsp)
-        disable_msvc_warnings(wchess-core)
-        disable_msvc_warnings(whisper-command)
-        disable_msvc_warnings(whisper-cli)
-        disable_msvc_warnings(whisper-server)
-        disable_msvc_warnings(whisper-stream)
-        disable_msvc_warnings(whisper-talk-llama)
-        disable_msvc_warnings(whisper-bench)
-        disable_msvc_warnings(quantize)
-        disable_msvc_warnings(vad-speech-segments)
-    endif()
+if (SPEECH_BUILD_TTS)
+    # TTS_CPP_USE_SYSTEM_GGML already defaults ON in this tree.
+    set(TTS_CPP_BUILD_TESTS       ${SPEECH_BUILD_TESTS})
+    set(TTS_CPP_BUILD_EXECUTABLES ${SPEECH_BUILD_EXECUTABLES})
+    add_subdirectory(engines/tts)
 endif()

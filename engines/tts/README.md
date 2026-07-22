@@ -540,7 +540,7 @@ harnesses:
 | `build/test-campplus`         | CAMPPlus 192-d embedding parity |
 | `build/test-voice-embedding`  | wav → fbank → CAMPPlus end-to-end parity |
 | `build/test-s3tokenizer`      | S3TokenizerV2 log-mel + speech-token parity |
-| `build/test-streaming`        | Per-chunk CFM + HiFT parity for the streaming pipeline (B1) |
+| `build/test-tts-streaming`        | Per-chunk CFM + HiFT parity for the streaming pipeline (B1) |
 | `build/test-mtl-tokenizer`    | Multilingual grapheme tokenizer parity vs the HF reference |
 | `build/test-t3-mtl`           | End-to-end MTL T3 (Llama-520M) forward-pass parity |
 | `build/test-t3-mtl-stages`    | Staged MTL T3 parity (cond/text/inputs/layers/head) |

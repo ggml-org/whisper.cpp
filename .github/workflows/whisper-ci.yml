@@ -1,0 +1,141 @@
+# CI for the vendored whisper engine (third_party/whisper.cpp — git subtree
+# + QVAC delta, see PATCHES.md there) and the root umbrella superbuild.
+#
+# Replaces the useful slice of upstream's build.yml (which went inert when
+# the upstream tree moved under third_party/ — GitHub only runs root
+# .github/workflows). Two jobs per OS:
+#   - umbrella: configure the root superbuild with ALL engines against one
+#     system ggml — proves the shared-ggml invariant — then whisper-cli
+#     transcription smoke on the bundled jfk.wav with ggml-tiny.en.
+# Cross-platform coverage for the engines lives in engines-cross-ci.yml.
+name: whisper CI
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'third_party/whisper.cpp/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/whisper-ci.yml'
+  pull_request:
+    paths:
+      - 'third_party/whisper.cpp/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/whisper-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: whisper-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GGML_REPO: https://github.com/tetherto/qvac-ext-ggml.git
+  GGML_BRANCH: speech # single ggml pin shared with the engine lanes
+
+jobs:
+  umbrella:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ccache
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then brew install ccache; else sudo apt-get update -q && sudo apt-get install -y ccache; fi
+          echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> "$GITHUB_ENV"
+
+      - name: Resolve ggml pin (tip of ${{ env.GGML_BRANCH }})
+        id: ggml
+        run: echo "sha=$(git ls-remote "$GGML_REPO" "refs/heads/$GGML_BRANCH" | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache ggml install
+        id: ggml-cache
+        uses: actions/cache@v4
+        with:
+          path: ggml-install
+          key: ggml-install-portable-${{ matrix.os }}-${{ steps.ggml.outputs.sha }}
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-umbrella-${{ matrix.os }}-${{ github.sha }}
+          restore-keys: ccache-umbrella-${{ matrix.os }}-
+
+      - name: Build ggml (system ggml, qvac-ext-ggml@${{ env.GGML_BRANCH }})
+        if: steps.ggml-cache.outputs.cache-hit != 'true'
+        run: |
+          # Fetch the exact SHA the cache key was derived from (the branch
+          # tip may advance between ls-remote and this step).
+          git init -q ggml-src
+          git -C ggml-src remote add origin "$GGML_REPO"
+          git -C ggml-src fetch --depth 1 origin ${{ steps.ggml.outputs.sha }}
+          git -C ggml-src checkout -q FETCH_HEAD
+          cmake -S ggml-src -B ggml-src/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_METAL=OFF \
+            -DGGML_BUILD_TESTS=OFF \
+            -DGGML_BUILD_EXAMPLES=OFF \
+            -DCMAKE_INSTALL_PREFIX="$PWD/ggml-install"
+          cmake --build ggml-src/build -j4
+          cmake --install ggml-src/build
+
+      # All engines + whisper in one configure: the shared-ggml invariant.
+      # SPEECH_BUILD_WHISPER_TESTS also builds whisper's test harnesses —
+      # the fixture-only ones (logits-slice, VAD contract tests) run below.
+      - name: Configure umbrella (all engines, one ggml)
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSPEECH_BUILD_TESTS=ON \
+            -DSPEECH_BUILD_WHISPER_TESTS=ON \
+            -DCMAKE_PREFIX_PATH="$PWD/ggml-install"
+
+      - name: Build
+        run: cmake --build build -j4
+
+      # Excludes gpu/perf (runner limits) and whisper's transcription tests
+      # (tiny/base/... labels need downloaded whisper models); whisper's
+      # fixture-only unit tests (logits-slice, VAD contract) run here.
+      - name: Tests (non-GPU, model-free)
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/ggml-install/lib
+        run: ctest --test-dir build -LE 'gpu|perf|tiny|base|small|medium|large' --output-on-failure --timeout 600
+
+      - name: Cache whisper tiny model
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: models-cache
+          key: whisper-tiny-en-v1
+
+      # -f: fail on HTTP errors instead of writing the error page into the
+      # model file. URL pinned to a fixed HF revision + sha256-verified so
+      # the smoke can't silently drift with upstream re-uploads.
+      - name: Fetch ggml-tiny.en
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p models-cache
+          curl -fL -o models-cache/ggml-tiny.en.bin \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.en.bin
+          echo "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f  models-cache/ggml-tiny.en.bin" | shasum -a 256 -c -
+
+      - name: whisper-cli transcription smoke (jfk.wav)
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/ggml-install/lib
+        run: |
+          out=$(./build/bin/whisper-cli \
+            -m models-cache/ggml-tiny.en.bin \
+            -f third_party/whisper.cpp/samples/jfk.wav -nt 2>/dev/null | tr '[:upper:]' '[:lower:]')
+          echo "$out"
+          echo "$out" | grep -q "ask not what your country can do for you" \
+            || { echo "::error::expected JFK transcript not found"; exit 1; }

@@ -1,0 +1,52 @@
+name: Examples Tests
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - examples/addon.node/**
+      - include/whisper.h
+  pull_request:
+    paths:
+      - examples/addon.node/**
+      - include/whisper.h
+
+jobs:
+  addon_node-ubuntu-22:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        node-version: [ 16.x, 18.x ]
+    steps:
+      - name: Clone
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential git
+          sudo apt-get install cmake
+          sudo apt-get install libsdl2-dev
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install package.json dependencies
+        working-directory: ./examples/addon.node
+        run: npm install
+
+      - name: Compile addon.node
+        run: npx cmake-js compile -T addon.node -B Release
+
+      - name: Download test model
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          bash ./models/download-ggml-model.sh base.en
+      - name: Test
+        run: |
+          cd examples/addon.node
+          npm run test

@@ -531,11 +531,11 @@ if (PARAKEET_BUILD_TESTS)
         ARGS     "${_qvp_ctc_q8_gguf}" "${_qvp_ctc_ref}/logits.npy" "${_qvp_ctc_ref}/decoded.txt"
         REQUIRES "${_qvp_ctc_q8_gguf}" "${_qvp_ctc_ref}/logits.npy" "${_qvp_ctc_ref}/decoded.txt")
 
-    add_executable(test-streaming test/test_streaming.cpp)
-    target_link_libraries(test-streaming PRIVATE parakeet)
-    target_include_directories(test-streaming PRIVATE include src ggml/include)
-    parakeet_apply_ccache(test-streaming)
-    parakeet_register_test(test-streaming
+    add_executable(test-parakeet-streaming test/test_streaming.cpp)
+    target_link_libraries(test-parakeet-streaming PRIVATE parakeet)
+    target_include_directories(test-parakeet-streaming PRIVATE include src ggml/include)
+    parakeet_apply_ccache(test-parakeet-streaming)
+    parakeet_register_test(test-parakeet-streaming
         LABEL    "fixture"
         ARGS     "--model" "${_qvp_ctc_q8_gguf}" "--wav" "${_qvp_jfk_wav}"
         REQUIRES "${_qvp_ctc_q8_gguf}" "${_qvp_jfk_wav}")

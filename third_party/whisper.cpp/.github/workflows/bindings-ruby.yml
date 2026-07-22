@@ -1,0 +1,32 @@
+name: Bindings Tests (Ruby)
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - bindings/ruby/**
+      - include/whisper.h
+      - examples/common-whisper.h
+      - ggml/include/ggml.h
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - bindings/ruby/**
+      - include/whisper.h
+      - examples/common-whisper.h
+      - ggml/include/ggml.h
+
+jobs:
+  ubuntu-22:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: bindings/ruby
+    steps:
+      - uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f # v1.310.0
+        with:
+          ruby-version: '3.3'
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - run: rake test

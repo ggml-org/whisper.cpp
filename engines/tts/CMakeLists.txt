@@ -1133,15 +1133,15 @@ if (TTS_CPP_BUILD_TESTS)
         ARGS     --t3 "${_tcb_t3_mtl_gguf}" --s3gen "${_tcb_s3gen_mtl_gguf}" --cfm-steps 2
         REQUIRES "${_tcb_t3_mtl_gguf}" "${_tcb_s3gen_mtl_gguf}")
 
-    add_executable(test-streaming
+    add_executable(test-tts-streaming
         test/test_streaming.cpp
         src/chatterbox_tts.cpp
         src/sched_dispatch.cpp
         src/backend_selection.cpp)
-    target_link_libraries(test-streaming PRIVATE ggml tts-cpp-backend-defs)
-    target_include_directories(test-streaming PRIVATE ggml/include src include)
-    tts_cpp_apply_ccache(test-streaming)
-    tts_cpp_register_test(test-streaming
+    target_link_libraries(test-tts-streaming PRIVATE ggml tts-cpp-backend-defs)
+    target_include_directories(test-tts-streaming PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-tts-streaming)
+    tts_cpp_register_test(test-tts-streaming
         LABEL    "fixture"
         ARGS     "${_tcb_s3gen_gguf}" "${_tcb_streaming_ref}"
         REQUIRES "${_tcb_s3gen_gguf}" "${_tcb_streaming_ref}")
@@ -1647,7 +1647,7 @@ if (TTS_CPP_BUILD_TESTS)
     # primitives.  No GGUF needed; register as "unit" label so a
     # fresh checkout's ctest exercises them.  Links against tts-cpp
     # (STATIC) so the detail-namespace symbols are reachable, same
-    # pattern as test-mtl-tokenizer / test-t3-mtl / test-streaming.
+    # pattern as test-mtl-tokenizer / test-t3-mtl / test-tts-streaming.
     add_executable(test-supertonic-backend-dispatch
         test/test_supertonic_backend_dispatch.cpp)
     target_link_libraries(test-supertonic-backend-dispatch PRIVATE tts-cpp)
