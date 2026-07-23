@@ -284,6 +284,17 @@ public:
     // the lifetime of the Engine.
     std::string backend_name() const;
 
+    // Compute backend of the FastConformer encoder specifically. Returns
+    // "coreml" when the Apple Core ML (Neural Engine) sidecar is active;
+    // otherwise identical to backend_name(). The decoder (TDT/CTC) always
+    // runs on the ggml backend reported by backend_name().
+    std::string encoder_backend() const;
+
+    // True when the FastConformer encoder runs on the Apple Core ML (Neural
+    // Engine) sidecar rather than the ggml backend. Always false on non-Apple
+    // builds and whenever the sidecar is absent or failed to initialise.
+    bool encoder_on_coreml() const;
+
     // True when a GPU was detected but the engine fell back to CPU because it is
     // a known-bad backend (Mali). A CPU backend with this set is expected, not a
     // regression.

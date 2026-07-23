@@ -340,6 +340,13 @@ bool        model_gpu_unsupported(const ParakeetCtcModel & m);
 std::string model_active_backend_name(const ParakeetCtcModel & m);
 ggml_backend_t model_active_backend(ParakeetCtcModel & m);
 
+// True when the FastConformer encoder runs on the Apple Core ML sidecar (ANE/GPU)
+// instead of the ggml backend. Always false on non-Apple / non-Core ML builds.
+bool        model_encoder_on_coreml(const ParakeetCtcModel & m);
+// Encoder compute-backend label for stats/logging: the Core ML label (e.g. "coreml")
+// when the sidecar is active, otherwise the ggml active-backend name.
+std::string model_encoder_backend_name(const ParakeetCtcModel & m);
+
 // Backend for the Sortformer head: the active backend normally, but CPU on
 // Mali-Vulkan (its transformer block 0 miscomputes to NaN; encoder stays on GPU).
 ggml_backend_t model_sortformer_backend(const ParakeetCtcModel & m);

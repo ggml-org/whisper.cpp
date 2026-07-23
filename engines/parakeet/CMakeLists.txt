@@ -21,6 +21,24 @@ option(PARAKEET_INSTALL           "parakeet: generate install rules"            
 option(PARAKEET_USE_SYSTEM_GGML   "parakeet: use system-installed GGML library"                      OFF)
 option(PARAKEET_CCACHE            "parakeet: use ccache as compiler launcher if available"           ON)
 option(PARAKEET_GGML_LIB_PREFIX   "parakeet: rename bundled ggml libraries to libspeech-ggml-* (filename only; CMake target names and C symbols are unchanged). Prevents shared-library filename collisions with other ggml consumers in the same host process; the `speech-` prefix is shared with the rest of the QVAC speech stack (whisper, parakeet, chatterbox, supertonic, ...) so they vendor a single ggml file set. Has no effect when PARAKEET_USE_SYSTEM_GGML=ON." ON)
+option(PARAKEET_COREML            "parakeet: enable the Apple Core ML (Neural Engine) encoder sidecar (Apple-only, additive; the FastConformer encoder runs on a <model>-encoder.mlmodelc when present, else falls back to the ggml encoder)." OFF)
+
+# Enable Objective-C and Objective-C++ up front (before add_subdirectory(ggml))
+# for the Apple Core ML encoder sidecar. Both must happen here:
+#   - enabling OBJCXX only after ggml pulls in the Metal toolchain leaves
+#     CMAKE_OBJCXX_COMPILE_OBJECT unset under CMake 4.x (the .mm wrapper then
+#     gets no compile rule at generate time);
+#   - ggml-metal ships Objective-C (.m) sources; enabling OBJCXX without OBJC
+#     makes CMake compile those .m files as Objective-C++, whose C++ semantics
+#     reject ggml-metal's implicit void* conversions. Enabling OBJC keeps the
+#     .m sources on Objective-C (C) semantics.
+if (PARAKEET_COREML)
+    if (NOT APPLE)
+        message(FATAL_ERROR "PARAKEET_COREML is Apple-only (requires the CoreML framework); leave it OFF on ${CMAKE_SYSTEM_NAME}.")
+    endif()
+    enable_language(OBJC)
+    enable_language(OBJCXX)
+endif()
 
 # ccache shaves ~30 % off iterative rebuild time on developer machines.
 # Opt-out via -DPARAKEET_CCACHE=OFF for clean reproducibility runs.
@@ -229,6 +247,8 @@ add_library(parakeet-backend-defs INTERFACE)
 
 set(PARAKEET_LIB_SOURCES
     src/parakeet_ctc.cpp
+    src/parakeet_coreml_path.cpp
+    src/coreml/parakeet_coreml_shape.cpp
     src/parakeet_engine.cpp
     src/parakeet_tdt.cpp
     src/parakeet_eou.cpp
@@ -317,6 +337,47 @@ if (PARAKEET_BUILD_LIBRARY)
     option(PARAKEET_FLASH_ATTN "parakeet: enable fused flash-attn in MHA (default ON for Metal; OFF elsewhere pending per-backend A/B)" ${PARAKEET_FLASH_ATTN_DEFAULT})
     if (PARAKEET_FLASH_ATTN)
         target_compile_definitions(parakeet PRIVATE PARAKEET_EXPERIMENTAL_FLASH_ATTN)
+    endif()
+
+    # -----------------------------------------------------------------------
+    # Apple Core ML encoder sidecar.
+    #
+    # Optional, Apple-only, additive. Compiles the Objective-C++ Core ML wrapper
+    # (src/coreml/parakeet-encoder.mm) into the parakeet library and defines
+    # PARAKEET_USE_COREML so run_encoder can route the offline FastConformer
+    # forward through a `<model>-encoder.mlmodelc` on the Apple Neural Engine.
+    # Mel preprocessing, TDT/CTC decode and the tokenizer stay on ggml, and any
+    # non-Apple build or missing/incompatible sidecar falls back to the ggml
+    # encoder. Modelled on the whisper.cpp WHISPER_COREML pattern; the encoder
+    # I/O contract the exported .mlmodelc must honour is documented in
+    # src/coreml/parakeet-encoder.h.
+    if (PARAKEET_COREML)
+        # OBJCXX is enabled up front (see the top-level PARAKEET_COREML block);
+        # here we only bind the frameworks and fold the wrapper into libparakeet.
+        find_library(PARAKEET_FOUNDATION_FRAMEWORK Foundation REQUIRED)
+        find_library(PARAKEET_COREML_FRAMEWORK     CoreML     REQUIRED)
+
+        # OBJECT library so the ARC-compiled Core ML objects fold into libparakeet
+        # (a single archive for the static vcpkg build; no extra install/export target).
+        add_library(parakeet.coreml OBJECT src/coreml/parakeet-encoder.mm)
+        parakeet_apply_ccache(parakeet.coreml)
+        target_include_directories(parakeet.coreml PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/ggml/include
+        )
+        set_target_properties(parakeet.coreml PROPERTIES
+            POSITION_INDEPENDENT_CODE ON
+            COMPILE_FLAGS "-fobjc-arc"
+            XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC YES
+        )
+
+        target_sources(parakeet PRIVATE $<TARGET_OBJECTS:parakeet.coreml>)
+        target_compile_definitions(parakeet PRIVATE PARAKEET_USE_COREML)
+        target_link_libraries(parakeet PUBLIC
+            ${PARAKEET_FOUNDATION_FRAMEWORK}
+            ${PARAKEET_COREML_FRAMEWORK}
+        )
+        message(STATUS "parakeet: Core ML encoder sidecar enabled (PARAKEET_USE_COREML)")
     endif()
 
     set_target_properties(parakeet PROPERTIES
@@ -647,6 +708,79 @@ if (PARAKEET_BUILD_TESTS)
         EXE      test-encoder-capture-parity
         ARGS     "--model" "${_qvp_sf_q8_gguf}" "--wav" "${_qvp_diar_wav}"
         REQUIRES "${_qvp_sf_q8_gguf}" "${_qvp_diar_wav}")
+
+    # Core ML encoder parity gate. Compiles run_encoder directly (internal symbol)
+    # and compares the Apple Neural Engine encoder against the ggml encoder via
+    # per-frame cosine similarity. Skips at runtime when the Core ML sidecar isn't
+    # active, so it is a no-op on non-Apple / no-sidecar CI and a real gate on Apple.
+    # When PARAKEET_COREML is on, the ObjC++ wrapper + CoreML/Foundation frameworks
+    # are compiled/linked into the harness so the directly-compiled run_encoder gets
+    # its Core ML branch.
+    add_executable(test-encoder-coreml-parity
+        test/test_encoder_coreml_parity.cpp
+        src/parakeet_ctc.cpp
+        src/parakeet_coreml_path.cpp
+        src/coreml/parakeet_coreml_shape.cpp
+        src/parakeet_log.cpp
+        src/mel_preprocess.cpp
+        src/sentencepiece_bpe.cpp)
+    target_link_libraries(test-encoder-coreml-parity PRIVATE ggml parakeet-backend-defs)
+    target_include_directories(test-encoder-coreml-parity PRIVATE include src ggml/include)
+    parakeet_apply_backend_defs(test-encoder-coreml-parity)
+    if (PARAKEET_COREML)
+        find_library(PARAKEET_FOUNDATION_FRAMEWORK Foundation REQUIRED)
+        find_library(PARAKEET_COREML_FRAMEWORK     CoreML     REQUIRED)
+        target_sources(test-encoder-coreml-parity PRIVATE src/coreml/parakeet-encoder.mm)
+        set_source_files_properties(src/coreml/parakeet-encoder.mm
+            PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+        target_compile_definitions(test-encoder-coreml-parity PRIVATE PARAKEET_USE_COREML)
+        target_link_libraries(test-encoder-coreml-parity PRIVATE
+            ${PARAKEET_FOUNDATION_FRAMEWORK} ${PARAKEET_COREML_FRAMEWORK})
+    endif()
+    parakeet_register_test(test-encoder-coreml-parity
+        LABEL    "fixture"
+        ARGS     "--model" "${_qvp_tdt_q8_gguf}" "--wav" "${_qvp_jfk_wav}"
+        REQUIRES "${_qvp_tdt_q8_gguf}" "${_qvp_jfk_wav}")
+
+    # Portable unit test for the Core ML sidecar path derivation
+    # (coreml_encoder_sidecar_path). Pure string logic -- no ggml, model, or
+    # Apple frameworks -- so it runs on every CI regardless of PARAKEET_COREML
+    # and locks the `<model>-encoder.mlmodelc` naming (quant tag stripped).
+    add_executable(test-coreml-paths
+        test/test_coreml_paths.cpp
+        src/parakeet_coreml_path.cpp)
+    target_include_directories(test-coreml-paths PRIVATE src)
+    parakeet_apply_ccache(test-coreml-paths)
+    parakeet_register_test(test-coreml-paths LABEL "cpu")
+
+    # Portable unit test for the Core ML input-shape resolution
+    # (coreml_resolve_input_dims). Pure integer logic -- no ggml, model, or Apple
+    # frameworks -- so it runs on every CI regardless of PARAKEET_COREML and locks
+    # the wrapper's variable-length behaviour (fixed verbatim / flexible rebuild /
+    # features-major default).
+    add_executable(test-coreml-shapes
+        test/test_coreml_shapes.cpp
+        src/coreml/parakeet_coreml_shape.cpp)
+    target_include_directories(test-coreml-shapes PRIVATE src)
+    parakeet_apply_ccache(test-coreml-shapes)
+    parakeet_register_test(test-coreml-shapes LABEL "cpu")
+
+    # End-to-end transcription parity: full Engine::transcribe() with the Core ML
+    # encoder vs the ggml encoder (forced via PARAKEET_COREML_DISABLE) must yield
+    # identical text. Links libparakeet for the public Engine API. Skips at runtime
+    # when the Core ML sidecar is inactive, so it is a no-op on non-Apple /
+    # no-sidecar CI and a real gate on Apple with a sidecar present.
+    if (TARGET parakeet)
+        add_executable(test-transcribe-coreml-parity
+            test/test_transcribe_coreml_parity.cpp)
+        target_link_libraries(test-transcribe-coreml-parity PRIVATE parakeet)
+        target_include_directories(test-transcribe-coreml-parity PRIVATE include)
+        parakeet_apply_ccache(test-transcribe-coreml-parity)
+        parakeet_register_test(test-transcribe-coreml-parity
+            LABEL    "fixture"
+            ARGS     "${_qvp_tdt_q8_gguf}" "${_qvp_jfk_wav}"
+            REQUIRES "${_qvp_tdt_q8_gguf}" "${_qvp_jfk_wav}")
+    endif()
 
     # Regression gate for cached-encoder-graph reuse determinism. Compiles the
     # sources directly (run_encoder is internal, not exported). Runs run_encoder 20x

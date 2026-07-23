@@ -378,6 +378,14 @@ std::string Engine::backend_name() const {
     return model_active_backend_name(pimpl_->model);
 }
 
+std::string Engine::encoder_backend() const {
+    return model_encoder_backend_name(pimpl_->model);
+}
+
+bool Engine::encoder_on_coreml() const {
+    return model_encoder_on_coreml(pimpl_->model);
+}
+
 bool Engine::gpu_unsupported() const {
     return model_gpu_unsupported(pimpl_->model);
 }

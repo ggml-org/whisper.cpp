@@ -9,6 +9,12 @@
 #include "ggml-backend.h"
 #include "gguf.h"
 
+#ifdef PARAKEET_USE_COREML
+#include "coreml/parakeet-encoder.h"
+#include "parakeet_coreml_path.h"
+#include <sys/stat.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -159,7 +165,18 @@ struct ParakeetCtcModel::Impl {
     std::vector<std::unique_ptr<EncoderGraph>> encoder_graphs;
     static constexpr size_t k_encoder_graph_cache_max = 3;
 
+#ifdef PARAKEET_USE_COREML
+    // Optional Apple Neural Engine encoder sidecar. Non-null only on
+    // Apple builds when a `<model>-encoder.mlmodelc` loaded successfully; run_encoder
+    // then routes the full-utterance offline FastConformer forward through Core ML
+    // instead of the ggml graph. Null keeps the ggml encoder (the universal path).
+    parakeet_coreml_context * ctx_coreml = nullptr;
+#endif
+
     ~Impl() {
+#ifdef PARAKEET_USE_COREML
+        if (ctx_coreml) parakeet_coreml_free(ctx_coreml);
+#endif
         for (auto & g : encoder_graphs) {
             if (g) g->free_();
         }
@@ -847,6 +864,39 @@ static std::vector<ggml_backend_buffer_t> alloc_cpu_repack_weights(
     return buffers;
 }
 
+#ifdef PARAKEET_USE_COREML
+static bool path_is_directory(const std::string & path) {
+    struct stat st{};
+    return ::stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+// Presence-driven, additive loader: loads the Core ML encoder sidecar
+// when one sits next to the GGUF. Any miss (env override, CTC model, absent
+// directory, load failure) silently leaves ctx_coreml null so the ggml encoder runs.
+static void maybe_init_coreml_encoder(const std::string & gguf_path,
+                                      ParakeetCtcModel  & model,
+                                      bool                verbose) {
+    if (std::getenv("PARAKEET_COREML_DISABLE") != nullptr) {
+        if (verbose) PARAKEET_LOG_INFO("parakeet: Core ML encoder disabled via PARAKEET_COREML_DISABLE; using ggml\n");
+        return;
+    }
+    if (model.model_type == ParakeetModelType::CTC) {
+        return;  // CTC greedy decode reads ggml CTC-head logits, which the sidecar does not emit
+    }
+    const std::string path = coreml_encoder_sidecar_path(gguf_path);
+    if (!path_is_directory(path)) {
+        if (verbose) PARAKEET_LOG_INFO("parakeet: no Core ML encoder at '%s'; using ggml encoder\n", path.c_str());
+        return;
+    }
+    model.impl->ctx_coreml = parakeet_coreml_init(path.c_str());
+    if (model.impl->ctx_coreml == nullptr) {
+        PARAKEET_LOG_WARN("parakeet: failed to load Core ML encoder at '%s'; falling back to ggml encoder\n", path.c_str());
+        return;
+    }
+    PARAKEET_LOG_INFO("parakeet: Core ML encoder loaded from '%s'\n", path.c_str());
+}
+#endif  // PARAKEET_USE_COREML
+
 int load_from_gguf(const std::string & gguf_path,
                    ParakeetCtcModel  & out_model,
                    int                 n_threads,
@@ -1273,6 +1323,10 @@ int load_from_gguf(const std::string & gguf_path,
 
     out_model.impl = impl;
 
+#ifdef PARAKEET_USE_COREML
+    maybe_init_coreml_encoder(gguf_path, out_model, verbose);
+#endif
+
     if (out_model.model_type == ParakeetModelType::SORTFORMER &&
         impl->sortformer_force_cpu) {
         if (!build_sortformer_cpu_weights(impl.get(), out_model.sortformer,
@@ -1310,6 +1364,24 @@ std::string model_active_backend_name(const ParakeetCtcModel & m) {
     if (!b) return "CPU";
     const char * name = ggml_backend_name(b);
     return name ? std::string(name) : std::string("CPU");
+}
+
+bool model_encoder_on_coreml(const ParakeetCtcModel & m) {
+#ifdef PARAKEET_USE_COREML
+    return m.impl && m.impl->ctx_coreml != nullptr;
+#else
+    (void) m;
+    return false;
+#endif
+}
+
+std::string model_encoder_backend_name(const ParakeetCtcModel & m) {
+#ifdef PARAKEET_USE_COREML
+    if (m.impl && m.impl->ctx_coreml) {
+        return parakeet_coreml_backend_label(m.impl->ctx_coreml);
+    }
+#endif
+    return model_active_backend_name(m);
 }
 
 ggml_backend_t model_active_backend(ParakeetCtcModel & m) {
@@ -2254,6 +2326,72 @@ static int build_encoder_graph_cached(const ParakeetCtcModel & model,
     return 0;
 }
 
+#ifdef PARAKEET_USE_COREML
+// Post-subsampling encoder frame count (T_enc), derived purely from the mel frame
+// count via the three stride-2 subsampling convs -- the same recurrence run_encoder
+// uses to size the ggml graph, so the Core ML output slab matches frame-for-frame.
+static int coreml_encoder_out_frames(const EncoderConfig & enc, int n_mel_frames) {
+    auto next = [&](int len) {
+        return enc.causal_downsampling ? (len / 2 + 1) : _conv_out_len(len, 3, 2, 1);
+    };
+    return next(next(next(n_mel_frames)));
+}
+
+// The exported sidecar is the offline, full-context FastConformer. Cache-aware /
+// chunked / causal encoders (EOU streaming) compute different activations, so only
+// the offline configuration is routed through Core ML; everything else stays on ggml.
+static bool encoder_is_offline(const EncoderConfig & enc) {
+    return enc.att_context_left  < 0
+        && enc.att_context_right < 0
+        && !enc.att_chunked_limited
+        && !enc.conv_causal
+        && !enc.causal_downsampling;
+}
+
+static bool should_use_coreml_encoder(const ParakeetCtcModel & model,
+                                      bool all_valid,
+                                      bool capture_intermediates) {
+    if (!model.impl || model.impl->ctx_coreml == nullptr) return false;
+    if (!all_valid)            return false;  // partial / streaming windows -> ggml (time masks not replicated)
+    if (capture_intermediates) return false;  // per-stage parity harnesses stay on ggml
+    if (model.model_type == ParakeetModelType::CTC) return false;  // CTC logits come from the ggml head
+    return encoder_is_offline(model.encoder_cfg);
+}
+
+// Fills out.encoder_out from the Core ML sidecar, honouring run_encoder's contract
+// (encoder_out only; per-stage captures + CTC logits cleared). Returns 0 when handled
+// on Core ML; non-zero lets the caller fall back to the ggml encoder.
+static int run_encoder_coreml(ParakeetCtcModel & model,
+                              const float      * mel,
+                              int                n_mel_frames,
+                              int                n_mels,
+                              EncoderOutputs   & out) {
+    const EncoderConfig & enc     = model.encoder_cfg;
+    const int             d_model = enc.d_model;
+    const int             T       = coreml_encoder_out_frames(enc, n_mel_frames);
+
+    out.n_enc_frames = T;
+    out.d_model      = d_model;
+    out.vocab_size   = model.vocab_size;
+    out.encoder_out.resize((size_t) T * d_model);
+
+    const int rc = parakeet_coreml_encode(model.impl->ctx_coreml,
+                                           n_mel_frames, n_mels, mel,
+                                           T, d_model, out.encoder_out.data());
+    if (rc != 0) return rc;
+
+    out.subsampling_out.clear();
+    out.block_0_post_ff1.clear();
+    out.block_0_post_attn.clear();
+    out.block_0_post_conv.clear();
+    out.block_0_post_ff2.clear();
+    out.block_0_out.clear();
+    out.block_last_out.clear();
+    out.logits.clear();
+    return 0;
+}
+#endif  // PARAKEET_USE_COREML
+
 int run_encoder(ParakeetCtcModel   & model,
                 const float        * mel,
                 int                  n_mel_frames,
@@ -2285,6 +2423,17 @@ int run_encoder(ParakeetCtcModel   & model,
     }
     if (mel_valid == 0) mel_valid = n_mel_frames;
     const bool all_valid = (mel_valid == n_mel_frames);
+
+#ifdef PARAKEET_USE_COREML
+    // Apple Neural Engine sidecar: run the offline FastConformer encoder
+    // on Core ML and hand encoder_out back to the ggml TDT/EOU/Sortformer decoders. On
+    // any failure fall through to the ggml encoder below (silent, presence-driven).
+    if (should_use_coreml_encoder(model, all_valid, capture_intermediates)) {
+        const int rc = run_encoder_coreml(model, mel, n_mel_frames, n_mels, out);
+        if (rc == 0) return 0;
+        PARAKEET_LOG_WARN("parakeet: Core ML encoder failed (rc=%d); falling back to ggml encoder\n", rc);
+    }
+#endif
 
     auto & cache = model.impl->encoder_graphs;
     const int layers_key = (max_layers >= 0) ? max_layers : -1;
