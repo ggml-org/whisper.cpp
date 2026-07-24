@@ -36,7 +36,9 @@ inline bool backend_is_cpu(ggml_backend_t b) {
 }
 
 inline bool backend_is_metal(ggml_backend_t b) {
-    return std::strcmp(backend_reg_name(b), "Metal") == 0;
+    // ggml-metal's registry name is "MTL" (GGML_METAL_NAME); older ggml reported "Metal".
+    const char * n = backend_reg_name(b);
+    return std::strcmp(n, "MTL") == 0 || std::strcmp(n, "Metal") == 0;
 }
 
 inline bool backend_is_vulkan(ggml_backend_t b) {

@@ -120,9 +120,14 @@ t5_graph build_t5_graph(const parler_model & model, int T) {
         const parler_dec_layer & dl = model.dec_layers[il];
         ggml_tensor * ck = ggml_mul_mat(ctx, dl.ck, x);               // [dec_d, T]
         ggml_tensor * cv = ggml_mul_mat(ctx, dl.cv, x);               // [dec_d, T]
-        ggml_tensor * cvt = ggml_cont(ctx, ggml_transpose(ctx, cv));  // [T, dec_d]
-        ggml_build_forward_expand(gf, ggml_cpy(ctx, ck,  model.cross_k[il]));
-        ggml_build_forward_expand(gf, ggml_cpy(ctx, cvt, model.cross_v_t[il]));
+        ggml_build_forward_expand(gf, ggml_cpy(ctx, ck, model.cross_k[il]));
+        if (model.use_fa) {
+            // FA reads V as [HD, T, H] from a non-transposed [dec_d, T] buffer.
+            ggml_build_forward_expand(gf, ggml_cpy(ctx, cv, model.cross_v_t[il]));
+        } else {
+            ggml_tensor * cvt = ggml_cont(ctx, ggml_transpose(ctx, cv)); // [T, dec_d]
+            ggml_build_forward_expand(gf, ggml_cpy(ctx, cvt, model.cross_v_t[il]));
+        }
     }
 
     ggml_free(ctx);
@@ -153,9 +158,14 @@ bool parler_encode_description(parler_model & model,
         if (!model.ctx_cross) return false;
         model.cross_k.assign(hp.dec_n_layer, nullptr);
         model.cross_v_t.assign(hp.dec_n_layer, nullptr);
+        // FA path keeps cross-K/V in F16 and stores V non-transposed [dec_d, T] so
+        // both view as [HD, T, H]; manual path keeps F32 K and transposed V^T [T, dec_d].
+        const ggml_type ct = model.use_fa ? GGML_TYPE_F16 : GGML_TYPE_F32;
         for (int il = 0; il < hp.dec_n_layer; ++il) {
-            model.cross_k[il]   = ggml_new_tensor_2d(model.ctx_cross, GGML_TYPE_F32, hp.dec_d_model, T);
-            model.cross_v_t[il] = ggml_new_tensor_2d(model.ctx_cross, GGML_TYPE_F32, T, hp.dec_d_model);
+            model.cross_k[il]   = ggml_new_tensor_2d(model.ctx_cross, ct, hp.dec_d_model, T);
+            model.cross_v_t[il] = model.use_fa
+                ? ggml_new_tensor_2d(model.ctx_cross, ct, hp.dec_d_model, T)
+                : ggml_new_tensor_2d(model.ctx_cross, ct, T, hp.dec_d_model);
         }
         model.buffer_cross = ggml_backend_alloc_ctx_tensors(model.ctx_cross, model.backend);
         if (!model.buffer_cross) {

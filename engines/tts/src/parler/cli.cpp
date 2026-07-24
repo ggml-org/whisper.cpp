@@ -24,6 +24,7 @@ void usage(const char * argv0) {
         "          [--noise clear|noisy] [--reverb close|distant]\n"
         "          [--quality basic|high|\"very high\"]\n"
         "          [--seed 42] [--threads N]\n"
+        "          [--n-gpu-layers N] (offload to GPU: Metal/Vulkan/...; 0 = CPU)\n"
         "          [--greedy] (deterministic argmax decoding; default is the\n"
         "                      model's sampled decoding: temp 1.0, top-k 50)\n"
         "          [--temperature X] [--top-k N] [--top-p X]\n"
@@ -93,6 +94,7 @@ int main(int argc, char ** argv) {
         else if (a == "--out")            out = next();
         else if (a == "--seed")           opts.seed = atoi(next());
         else if (a == "--threads")        opts.n_threads = atoi(next());
+        else if (a == "--n-gpu-layers")   opts.n_gpu_layers = atoi(next());
         else if (a == "--greedy")         opts.greedy = true;
         else if (a == "--temperature")    opts.temperature = (float) atof(next());
         else if (a == "--top-k")          opts.top_k = atoi(next());

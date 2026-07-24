@@ -68,7 +68,7 @@ int main(int argc, char ** argv) {
 
     parler_model model;
     std::string err;
-    if (!parler_load_gguf(model_path, model, &err)) {
+    if (!parler_load_gguf(model_path, model, 0, &err)) {
         fprintf(stderr, "load failed: %s\n", err.c_str());
         return 1;
     }

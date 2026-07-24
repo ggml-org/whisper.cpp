@@ -40,8 +40,8 @@ ggml_tensor * build_dec_core(ggml_context * ctx, ggml_cgraph * gf,
     const int L  = n_past + N;
     const int Tc = model.cross_len;
 
-    const size_t kv_tok_row  = ggml_row_size(GGML_TYPE_F32, d);
-    const size_t kv_head_row = ggml_row_size(GGML_TYPE_F32, HD);
+    const size_t kv_tok_row  = ggml_row_size(model.kv_type, d);
+    const size_t kv_head_row = ggml_row_size(model.kv_type, HD);
     const size_t kv_layer    = (size_t) hp.n_ctx * kv_tok_row;
     const float  scale       = 1.0f / std::sqrt((float) HD);
 
@@ -50,9 +50,26 @@ ggml_tensor * build_dec_core(ggml_context * ctx, ggml_cgraph * gf,
 
         // ---- self attention ----
         ggml_tensor * cur = layer_norm(ctx, inpL, l.attn_norm_w, l.attn_norm_b, hp.dec_ln_eps);
-        ggml_tensor * q = ggml_mul_mat(ctx, l.q, cur); // [d, N]
-        ggml_tensor * k = ggml_mul_mat(ctx, l.k, cur);
-        ggml_tensor * v = ggml_mul_mat(ctx, l.v, cur);
+        ggml_tensor * q, * k, * v;
+        if (l.qkv) {
+            // one fused mul_mat -> [3d, N], split back into q|k|v (byte-exact).
+            ggml_tensor * qkv = ggml_mul_mat(ctx, l.qkv, cur);
+            if (N == 1) {
+                ggml_tensor * r = ggml_reshape_2d(ctx, qkv, d, 3);          // contiguous columns
+                q = ggml_view_2d(ctx, r, d, 1, r->nb[1], 0);
+                k = ggml_view_2d(ctx, r, d, 1, r->nb[1], (size_t) r->nb[1]);
+                v = ggml_view_2d(ctx, r, d, 1, r->nb[1], (size_t) 2 * r->nb[1]);
+            } else {
+                ggml_tensor * r = ggml_reshape_3d(ctx, qkv, d, 3, N);       // [d,3,N] strided split
+                q = ggml_cont(ctx, ggml_view_2d(ctx, r, d, N, r->nb[2], 0));
+                k = ggml_cont(ctx, ggml_view_2d(ctx, r, d, N, r->nb[2], (size_t) r->nb[1]));
+                v = ggml_cont(ctx, ggml_view_2d(ctx, r, d, N, r->nb[2], (size_t) 2 * r->nb[1]));
+            }
+        } else {
+            q = ggml_mul_mat(ctx, l.q, cur); // [d, N]
+            k = ggml_mul_mat(ctx, l.k, cur);
+            v = ggml_mul_mat(ctx, l.v, cur);
+        }
 
         const size_t layer_off = (size_t) il * kv_layer;
         {
@@ -64,37 +81,56 @@ ggml_tensor * build_dec_core(ggml_context * ctx, ggml_cgraph * gf,
             ggml_build_forward_expand(gf, ggml_cpy(ctx, v, v_dst));
         }
 
-        ggml_tensor * q3 = ggml_cont(ctx, ggml_permute(ctx,
-            ggml_reshape_3d(ctx, q, HD, H, N), 0, 2, 1, 3));            // [HD, N, H]
-        ggml_tensor * K = ggml_cont(ctx, ggml_view_3d(ctx, model.memory_k,
-            HD, L, H, kv_tok_row, kv_head_row, layer_off));             // [HD, L, H]
-        ggml_tensor * Vt = ggml_cont(ctx, ggml_permute(ctx,
-            ggml_view_3d(ctx, model.memory_v, HD, L, H, kv_tok_row, kv_head_row, layer_off),
-            1, 0, 2, 3));                                               // [L, HD, H]
-
-        ggml_tensor * kq = ggml_mul_mat(ctx, K, q3);                    // [L, N, H]
-        kq = ggml_soft_max_ext(ctx, kq, kq_mask, scale, 0.0f);
-        ggml_tensor * kqv = ggml_mul_mat(ctx, Vt, kq);                  // [HD, N, H]
-        kqv = ggml_cont(ctx, ggml_permute(ctx, kqv, 0, 2, 1, 3));       // [HD, H, N]
-        kqv = ggml_reshape_2d(ctx, kqv, d, N);
+        ggml_tensor * kqv;
+        if (model.use_fa) {
+            ggml_tensor * Q = ggml_cont(ctx, ggml_permute(ctx,
+                ggml_reshape_3d(ctx, q, HD, H, N), 0, 2, 1, 3));        // [HD, N, H]
+            ggml_tensor * K = ggml_view_3d(ctx, model.memory_k,
+                HD, L, H, kv_tok_row, kv_head_row, layer_off);         // [HD, L, H]
+            ggml_tensor * V = ggml_view_3d(ctx, model.memory_v,
+                HD, L, H, kv_tok_row, kv_head_row, layer_off);         // [HD, L, H]
+            ggml_tensor * attn = ggml_flash_attn_ext(ctx, Q, K, V, kq_mask, scale, 0.0f, 0.0f);
+            kqv = ggml_reshape_2d(ctx, attn, d, N);                     // [HD,H,N,1] -> [d, N]
+        } else {
+            ggml_tensor * q3 = ggml_cont(ctx, ggml_permute(ctx,
+                ggml_reshape_3d(ctx, q, HD, H, N), 0, 2, 1, 3));        // [HD, N, H]
+            ggml_tensor * K = ggml_cont(ctx, ggml_view_3d(ctx, model.memory_k,
+                HD, L, H, kv_tok_row, kv_head_row, layer_off));        // [HD, L, H]
+            ggml_tensor * Vt = ggml_cont(ctx, ggml_permute(ctx,
+                ggml_view_3d(ctx, model.memory_v, HD, L, H, kv_tok_row, kv_head_row, layer_off),
+                1, 0, 2, 3));                                          // [L, HD, H]
+            ggml_tensor * kq = ggml_mul_mat(ctx, K, q3);               // [L, N, H]
+            kq = ggml_soft_max_ext(ctx, kq, kq_mask, scale, 0.0f);
+            ggml_tensor * kqv3 = ggml_mul_mat(ctx, Vt, kq);            // [HD, N, H]
+            kqv3 = ggml_cont(ctx, ggml_permute(ctx, kqv3, 0, 2, 1, 3));// [HD, H, N]
+            kqv = ggml_reshape_2d(ctx, kqv3, d, N);
+        }
         inpL = ggml_add(ctx, inpL, ggml_mul_mat(ctx, l.o, kqv));
 
         // ---- cross attention (description; no mask, unpadded) ----
         cur = layer_norm(ctx, inpL, l.cross_norm_w, l.cross_norm_b, hp.dec_ln_eps);
-        ggml_tensor * cq3 = ggml_cont(ctx, ggml_permute(ctx,
-            ggml_reshape_3d(ctx, ggml_mul_mat(ctx, l.cq, cur), HD, H, N), 0, 2, 1, 3));
-        ggml_tensor * cK = ggml_cont(ctx, ggml_view_3d(ctx, model.cross_k[il],
-            HD, Tc, H, model.cross_k[il]->nb[1], kv_head_row, 0));      // [HD, Tc, H]
-        ggml_tensor * cVt = ggml_view_3d(ctx, model.cross_v_t[il],
-            Tc, HD, H,
-            (size_t) Tc * sizeof(float),
-            (size_t) Tc * HD * sizeof(float), 0);                       // [Tc, HD, H]
-
-        ggml_tensor * ckq = ggml_mul_mat(ctx, cK, cq3);                 // [Tc, N, H]
-        ckq = ggml_soft_max_ext(ctx, ckq, nullptr, scale, 0.0f);
-        ggml_tensor * ckqv = ggml_mul_mat(ctx, cVt, ckq);               // [HD, N, H]
-        ckqv = ggml_cont(ctx, ggml_permute(ctx, ckqv, 0, 2, 1, 3));
-        ckqv = ggml_reshape_2d(ctx, ckqv, d, N);
+        ggml_tensor * cQ = ggml_cont(ctx, ggml_permute(ctx,
+            ggml_reshape_3d(ctx, ggml_mul_mat(ctx, l.cq, cur), HD, H, N), 0, 2, 1, 3)); // [HD, N, H]
+        ggml_tensor * ckqv;
+        if (model.use_fa) {
+            ggml_tensor * cK = ggml_view_3d(ctx, model.cross_k[il],
+                HD, Tc, H, model.cross_k[il]->nb[1], kv_head_row, 0);    // [HD, Tc, H] F16
+            ggml_tensor * cV = ggml_view_3d(ctx, model.cross_v_t[il],
+                HD, Tc, H, model.cross_v_t[il]->nb[1], kv_head_row, 0);  // [HD, Tc, H] F16 (non-transposed)
+            ggml_tensor * cattn = ggml_flash_attn_ext(ctx, cQ, cK, cV, nullptr, scale, 0.0f, 0.0f);
+            ckqv = ggml_reshape_2d(ctx, cattn, d, N);
+        } else {
+            ggml_tensor * cK = ggml_cont(ctx, ggml_view_3d(ctx, model.cross_k[il],
+                HD, Tc, H, model.cross_k[il]->nb[1],
+                (size_t) HD * sizeof(float), 0));                        // [HD, Tc, H] F32
+            ggml_tensor * cVt = ggml_view_3d(ctx, model.cross_v_t[il],
+                Tc, HD, H,
+                (size_t) Tc * sizeof(float),
+                (size_t) Tc * HD * sizeof(float), 0);                    // [Tc, HD, H]
+            ggml_tensor * ckq = ggml_soft_max_ext(ctx, ggml_mul_mat(ctx, cK, cQ), nullptr, scale, 0.0f);
+            ggml_tensor * ckqv3 = ggml_cont(ctx, ggml_permute(ctx, ggml_mul_mat(ctx, cVt, ckq), 0, 2, 1, 3));
+            ckqv = ggml_reshape_2d(ctx, ckqv3, d, N);
+        }
         inpL = ggml_add(ctx, inpL, ggml_mul_mat(ctx, l.co, ckqv));
 
         // ---- ffn (exact-erf gelu) ----
@@ -118,10 +154,17 @@ void build_dec_heads(ggml_context * ctx, ggml_cgraph * gf,
     ggml_tensor * last = ggml_view_2d(ctx, hidden, hp.dec_d_model, 1, hidden->nb[1],
                                       (size_t) (N - 1) * hidden->nb[1]);
     last = ggml_cont(ctx, last);
-    ggml_tensor * logits = nullptr;
-    for (int k = 0; k < hp.n_codebooks; ++k) {
-        ggml_tensor * lk = ggml_mul_mat(ctx, model.lm_heads[k], last); // [vocab, 1]
-        logits = logits ? ggml_concat(ctx, logits, lk, 1) : lk;
+    ggml_tensor * logits;
+    if (model.lm_head_stacked) {
+        // one stacked mul_mat -> [vocab*n_codebooks, 1] -> [vocab, n_codebooks] (byte-exact).
+        logits = ggml_mul_mat(ctx, model.lm_head_stacked, last);
+        logits = ggml_reshape_2d(ctx, logits, hp.dec_vocab, hp.n_codebooks);
+    } else {
+        logits = nullptr;
+        for (int k = 0; k < hp.n_codebooks; ++k) {
+            ggml_tensor * lk = ggml_mul_mat(ctx, model.lm_heads[k], last); // [vocab, 1]
+            logits = logits ? ggml_concat(ctx, logits, lk, 1) : lk;
+        }
     }
     ggml_set_name(logits, "logits");
     ggml_set_output(logits);
@@ -193,7 +236,7 @@ bool parler_dec_prefill(const parler_model & model,
     ggml_set_name(fids, "frame_ids"); ggml_set_input(fids);
     ggml_tensor * pos = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, N);
     ggml_set_name(pos, "positions"); ggml_set_input(pos);
-    ggml_tensor * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, N, N);
+    ggml_tensor * mask = ggml_new_tensor_2d(ctx, model.use_fa ? GGML_TYPE_F16 : GGML_TYPE_F32, N, N);
     ggml_set_name(mask, "kq_mask"); ggml_set_input(mask);
 
     ggml_tensor * fe = build_frame_embed(ctx, model, fids);            // [d, 1]
@@ -223,12 +266,22 @@ bool parler_dec_prefill(const parler_model & model,
     for (int i = 0; i < N; ++i) positions[i] = i;
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "positions"),
                             positions.data(), 0, positions.size() * sizeof(int32_t));
-    std::vector<float> m((size_t) N * N, 0.0f);
-    for (int q = 0; q < N; ++q) {
-        for (int k = q + 1; k < N; ++k) m[(size_t) q * N + k] = -INFINITY;
+    ggml_tensor * mask_t = ggml_graph_get_tensor(gf, "kq_mask");
+    if (model.use_fa) {
+        const ggml_fp16_t zero_h = ggml_fp32_to_fp16(0.0f);
+        const ggml_fp16_t ninf_h = ggml_fp32_to_fp16(-INFINITY);
+        std::vector<ggml_fp16_t> m((size_t) N * N, zero_h);
+        for (int q = 0; q < N; ++q) {
+            for (int k = q + 1; k < N; ++k) m[(size_t) q * N + k] = ninf_h;
+        }
+        ggml_backend_tensor_set(mask_t, m.data(), 0, m.size() * sizeof(ggml_fp16_t));
+    } else {
+        std::vector<float> m((size_t) N * N, 0.0f);
+        for (int q = 0; q < N; ++q) {
+            for (int k = q + 1; k < N; ++k) m[(size_t) q * N + k] = -INFINITY;
+        }
+        ggml_backend_tensor_set(mask_t, m.data(), 0, m.size() * sizeof(float));
     }
-    ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "kq_mask"),
-                            m.data(), 0, m.size() * sizeof(float));
 
     if (!parler_graph_compute(model, gf, use_sched, n_threads, __func__)) return false;
     if (!read_logits(gf, model, logits_out)) return false;

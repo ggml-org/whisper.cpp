@@ -1,11 +1,13 @@
 #include "internal.h"
 
 #include "backend_selection.h"
+#include "backend_util.h"
 #include "gguf_stream.h"
 #include "gguf.h"
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace tts_cpp {
@@ -44,9 +46,26 @@ bool kv_bool(const gguf_context * g, const char * key, bool & out, std::string *
     return true;
 }
 
+// FA probe: build a representative flash_attn_ext node and ask the backend if
+// it supports it. CPU returns false so it keeps the validated manual F32 path.
+bool parler_probe_fa_f16(ggml_backend_t backend, int head_dim, int n_heads) {
+    if (::tts_cpp::detail::backend_is_cpu(backend)) return false;
+    ggml_init_params ip = { 8 * ggml_tensor_overhead(), nullptr, /*no_alloc=*/ true };
+    ggml_context * c = ggml_init(ip);
+    if (!c) return false;
+    ggml_tensor * q = ggml_new_tensor_3d(c, GGML_TYPE_F32, head_dim, 16, n_heads);
+    ggml_tensor * k = ggml_new_tensor_3d(c, GGML_TYPE_F16, head_dim, 16, n_heads);
+    ggml_tensor * v = ggml_new_tensor_3d(c, GGML_TYPE_F16, head_dim, 16, n_heads);
+    ggml_tensor * op = ggml_flash_attn_ext(c, q, k, v, nullptr, 1.0f / (float) head_dim, 0.0f, 0.0f);
+    const bool ok = op && ggml_backend_supports_op(backend, op);
+    ggml_free(c);
+    return ok;
+}
+
 } // namespace
 
-bool parler_load_gguf(const std::string & path, parler_model & model, std::string * error) {
+bool parler_load_gguf(const std::string & path, parler_model & model,
+                      int n_gpu_layers, std::string * error) {
     ggml_context * ctx_meta = nullptr;
     gguf_init_params gp = { /*.no_alloc=*/ true, /*.ctx=*/ &ctx_meta };
     gguf_context * g = gguf_init_from_file(path.c_str(), gp);
@@ -183,8 +202,20 @@ bool parler_load_gguf(const std::string & path, parler_model & model, std::strin
     }
 
     ::tts_cpp::detail::ensure_backends_loaded();
-    model.backend = ::tts_cpp::detail::init_cpu_backend();
-    if (!model.backend) return fail("failed to init CPU backend");
+    model.backend = ::tts_cpp::detail::init_gpu_backend(n_gpu_layers, /*verbose=*/false, "parler");
+    // Parler's GPU path (FA + fused weights + DAC phase-GEMM) is validated on Metal only;
+    // other GPU backends fall back to CPU until validated (PR #103).
+    if (model.backend && !::tts_cpp::detail::backend_is_metal(model.backend)) {
+        ggml_backend_free(model.backend);
+        model.backend = nullptr;
+    }
+    if (!model.backend) model.backend = ::tts_cpp::detail::init_cpu_backend();
+    if (!model.backend) return fail("failed to init backend");
+
+    model.on_gpu  = !::tts_cpp::detail::backend_is_cpu(model.backend);
+    model.use_fa  = parler_probe_fa_f16(model.backend, hp.dec_d_model / hp.dec_n_head, hp.dec_n_head)
+                    && std::getenv("PARLER_NO_FA") == nullptr;
+    model.kv_type = model.use_fa ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
     model.buffer_w = ggml_backend_alloc_ctx_tensors(model.ctx_w, model.backend);
     if (!model.buffer_w) return fail("failed to allocate weight buffer");
@@ -323,12 +354,69 @@ bool parler_load_gguf(const std::string & path, parler_model & model, std::strin
         model.ctx_kv = ggml_init(ip);
         if (!model.ctx_kv) return fail("ggml_init(ctx_kv) failed");
         const int64_t rows = (int64_t) hp.n_ctx * hp.dec_n_layer;
-        model.memory_k = ggml_new_tensor_2d(model.ctx_kv, GGML_TYPE_F32, hp.dec_d_model, rows);
-        model.memory_v = ggml_new_tensor_2d(model.ctx_kv, GGML_TYPE_F32, hp.dec_d_model, rows);
+        model.memory_k = ggml_new_tensor_2d(model.ctx_kv, model.kv_type, hp.dec_d_model, rows);
+        model.memory_v = ggml_new_tensor_2d(model.ctx_kv, model.kv_type, hp.dec_d_model, rows);
         ggml_set_name(model.memory_k, "parler_kv_k");
         ggml_set_name(model.memory_v, "parler_kv_v");
         model.buffer_kv = ggml_backend_alloc_ctx_tensors(model.ctx_kv, model.backend);
         if (!model.buffer_kv) return fail("failed to allocate KV buffer");
+    }
+
+    // ---- GPU: fused weights (fewer N=1 decode dispatches; byte-exact row concat) ----
+    // qkv[l] = q|k|v stacked on the output dim -> one mul_mat/layer; lm_head_stacked
+    // = the n_codebooks heads stacked -> one mul_mat/step. Gated on GPU; the CPU path
+    // keeps the separate weights so the reference parity tests stay byte-identical.
+    if (model.on_gpu) {
+        const int nl = hp.dec_n_layer, nq = hp.n_codebooks;
+        const int64_t d = hp.dec_d_model, vocab = model.lm_heads[0]->ne[1];
+        bool fuse_qkv = true;
+        for (int i = 0; i < nl; ++i) {
+            const auto & l = model.dec_layers[i];
+            if (l.q->type != l.k->type || l.q->type != l.v->type ||
+                l.q->ne[0] != d || l.q->ne[1] != d ||
+                l.k->ne[0] != d || l.k->ne[1] != d ||
+                l.v->ne[0] != d || l.v->ne[1] != d) { fuse_qkv = false; break; }
+        }
+        bool fuse_heads = true;
+        for (int k = 0; k < nq; ++k) {
+            if (model.lm_heads[k]->type != model.lm_heads[0]->type ||
+                model.lm_heads[k]->ne[0] != d || model.lm_heads[k]->ne[1] != vocab) { fuse_heads = false; break; }
+        }
+        // Skip the fused context entirely when nothing fuses: an empty ctx makes
+        // ggml_backend_alloc_ctx_tensors return NULL (0 buffers) and abort the load.
+        if (fuse_qkv || fuse_heads) {
+            ggml_init_params ip = { (size_t)(nl + 2) * ggml_tensor_overhead(), nullptr, /*no_alloc=*/ true };
+            model.ctx_fused = ggml_init(ip);
+            if (!model.ctx_fused) return fail("ggml_init(ctx_fused) failed");
+            std::vector<ggml_tensor *> qkv(nl, nullptr);
+            if (fuse_qkv) {
+                for (int i = 0; i < nl; ++i)
+                    qkv[i] = ggml_new_tensor_2d(model.ctx_fused, model.dec_layers[i].q->type, d, 3 * d);
+            }
+            ggml_tensor * heads = fuse_heads
+                ? ggml_new_tensor_2d(model.ctx_fused, model.lm_heads[0]->type, d, vocab * nq) : nullptr;
+            model.buffer_fused = ggml_backend_alloc_ctx_tensors(model.ctx_fused, model.backend);
+            if (!model.buffer_fused) return fail("failed to allocate fused-weight buffer");
+            std::vector<uint8_t> tmp;
+            auto copy_into = [&](ggml_tensor * dst, size_t off, ggml_tensor * src) {
+                tmp.resize(ggml_nbytes(src));
+                ggml_backend_tensor_get(src, tmp.data(), 0, tmp.size());
+                ggml_backend_tensor_set(dst, tmp.data(), off, tmp.size());
+            };
+            if (fuse_qkv) {
+                for (int i = 0; i < nl; ++i) {
+                    auto & l = model.dec_layers[i];
+                    const size_t nb = ggml_nbytes(l.q);
+                    copy_into(qkv[i], 0, l.q); copy_into(qkv[i], nb, l.k); copy_into(qkv[i], 2 * nb, l.v);
+                    l.qkv = qkv[i];
+                }
+            }
+            if (fuse_heads) {
+                const size_t nb = ggml_nbytes(model.lm_heads[0]);
+                for (int k = 0; k < nq; ++k) copy_into(heads, (size_t) k * nb, model.lm_heads[k]);
+                model.lm_head_stacked = heads;
+            }
+        }
     }
 
     gguf_free(g);
@@ -340,6 +428,8 @@ void parler_free_model(parler_model & model) {
     ::tts_cpp::detail::sched_fallback_free(model.sched_fb);
     if (model.buffer_cross) { ggml_backend_buffer_free(model.buffer_cross); model.buffer_cross = nullptr; }
     if (model.ctx_cross)    { ggml_free(model.ctx_cross); model.ctx_cross = nullptr; }
+    if (model.buffer_fused) { ggml_backend_buffer_free(model.buffer_fused); model.buffer_fused = nullptr; }
+    if (model.ctx_fused)    { ggml_free(model.ctx_fused); model.ctx_fused = nullptr; }
     if (model.buffer_kv)    { ggml_backend_buffer_free(model.buffer_kv); model.buffer_kv = nullptr; }
     if (model.ctx_kv)       { ggml_free(model.ctx_kv); model.ctx_kv = nullptr; }
     if (model.buffer_w)     { ggml_backend_buffer_free(model.buffer_w); model.buffer_w = nullptr; }

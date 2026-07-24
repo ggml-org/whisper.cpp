@@ -1,4 +1,5 @@
 #include "parler/internal.h"
+#include <cstdlib>
 #include "npy.h"
 
 #include "ggml-alloc.h"
@@ -82,17 +83,22 @@ static bool load_codes_i32(const std::string & path, std::vector<int32_t> & code
     return true;
 }
 
-// returns SNR in dB; also prints compare stats
-static double wav_snr(const char * name, const std::vector<float> & got, const float * ref, size_t n) {
+// returns SNR in dB; also prints compare stats and reports peak error
+static double wav_snr(const char * name, const std::vector<float> & got, const float * ref,
+                      size_t n, double & max_abs_out) {
     compare_stats s = compare_f32(got.data(), ref, n);
     print_compare(name, s);
+    max_abs_out = s.max_abs_err;
     double sig = 0, noise = 0;
     for (size_t i = 0; i < n; ++i) {
         sig += (double) ref[i] * ref[i];
         double d = (double) got[i] - ref[i];
         noise += d * d;
     }
-    const double snr = noise > 0 ? 10.0 * log10(sig / noise) : INFINITY;
+    // A NaN/Inf sample makes noise non-finite; surface it as NaN so the caller rejects it
+    // (without this, `noise > 0` is false and snr would take the INFINITY "perfect" branch).
+    const double snr = !std::isfinite(noise) ? NAN
+                     : (noise > 0 ? 10.0 * log10(sig / noise) : INFINITY);
     fprintf(stderr, "  [%s] SNR = %.2f dB  max_abs = %.3e\n", name, snr, s.max_abs_err);
     return snr;
 }
@@ -116,9 +122,17 @@ static bool test_wav_case(const parler_model & model, const std::string & ref_di
                 codes_name, pcm.size(), wav_ref.n_elements());
         return false;
     }
-    const double snr = wav_snr(wav_name, pcm, npy_as_f32(wav_ref), pcm.size());
-    if (snr < 60.0) {
-        fprintf(stderr, "%s: FAIL (SNR %.2f dB < 60 dB)\n", wav_name, snr);
+    double wav_max_abs = 0;
+    const double snr = wav_snr(wav_name, pcm, npy_as_f32(wav_ref), pcm.size(), wav_max_abs);
+    if (std::isnan(snr)) {
+        fprintf(stderr, "%s: FAIL non-finite audio\n", wav_name);
+        return false;
+    }
+    // GPU FP32 reorder diverges from CPU; accept high whole-signal SNR OR inaudible peak error
+    // (quiet clips show low SNR at negligible abs error). CPU keeps the strict bit-parity bar.
+    const bool ok = model.on_gpu ? (snr >= 50.0 || wav_max_abs <= 5e-4) : (snr >= 60.0);
+    if (!ok) {
+        fprintf(stderr, "%s: FAIL (SNR %.2f dB, max_abs %.3e)\n", wav_name, snr, wav_max_abs);
         return false;
     }
     return true;
@@ -133,7 +147,8 @@ int main(int argc, char ** argv) {
 
     parler_model model;
     std::string error;
-    if (!parler_load_gguf(argv[1], model, &error)) {
+    const int ngl = std::getenv("PARLER_TEST_GPU") ? 99 : 0;
+    if (!parler_load_gguf(argv[1], model, ngl, &error)) {
         fprintf(stderr, "parler_load_gguf failed: %s\n", error.c_str());
         return 1;
     }

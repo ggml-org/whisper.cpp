@@ -1,4 +1,5 @@
 // Decoder parity vs HF fixtures: prefill hidden states + prefill logits +
+#include <cstdlib>
 // the fixture's teacher-forced step trace, on both fixture cases (exercises
 // KV cache, positions and the delay-mask input path together).
 // Bars: L_inf <= 5e-3 AND per-codebook argmax equality.
@@ -16,6 +17,7 @@ using namespace tts_cpp::parler::detail;
 // PARLER_TEST_REPORT_ONLY=1: print metrics + argmax agreement without
 // enforcing the bars (for measuring quantized GGUFs). NaN still fails.
 static bool g_report_only = false;
+static bool g_gpu = false;
 static long g_agree = 0, g_total = 0;
 
 static std::vector<int32_t> load_ids(const std::string & path) {
@@ -34,9 +36,18 @@ static bool check_logits(const char * tag, const std::vector<float> & got,
         fprintf(stderr, "%s: FAIL non-finite logits\n", tag);
         return false;
     }
-    if (s.max_abs_err > 5e-3 && !g_report_only) {
-        fprintf(stderr, "%s: FAIL logits tolerance\n", tag);
-        return false;
+    // CPU: strict absolute-L_inf bar. GPU: FP32 reorder diverges, so bar the relative logit error
+    // and require argmax agreement (checked over all steps in main). Report-only enforces neither.
+    if (!g_report_only) {
+        if (g_gpu) {
+            if (s.rel_err > 3e-3) {
+                fprintf(stderr, "%s: FAIL gpu logits rel-tolerance (%.3e > 3e-3)\n", tag, s.rel_err);
+                return false;
+            }
+        } else if (s.max_abs_err > 5e-3) {
+            fprintf(stderr, "%s: FAIL logits tolerance\n", tag);
+            return false;
+        }
     }
     int agree = 0;
     for (int k = 0; k < n_cb; ++k) {
@@ -47,14 +58,14 @@ static bool check_logits(const char * tag, const std::vector<float> & got,
         }
         if (ag == ar) {
             agree++;
-        } else if (!g_report_only) {
+        } else if (!g_report_only && !g_gpu) {
             fprintf(stderr, "%s: FAIL argmax codebook %d: got %d ref %d\n", tag, k, ag, ar);
             return false;
         }
     }
     g_agree += agree;
     g_total += n_cb;
-    if (g_report_only && agree != n_cb) {
+    if ((g_report_only || g_gpu) && agree != n_cb) {
         fprintf(stderr, "%s: REPORT argmax agree %d/%d\n", tag, agree, n_cb);
     }
     return true;
@@ -135,10 +146,12 @@ int main(int argc, char ** argv) {
 
     parler_model model;
     std::string err;
-    if (!parler_load_gguf(argv[1], model, &err)) {
+    const int ngl = std::getenv("PARLER_TEST_GPU") ? 99 : 0;
+    if (!parler_load_gguf(argv[1], model, ngl, &err)) {
         fprintf(stderr, "load failed: %s\n", err.c_str());
         return 1;
     }
+    g_gpu = model.on_gpu;  // GPU-aware bars apply only when the load actually landed on a GPU
     int rc = 1;
 
     ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
@@ -154,6 +167,13 @@ int main(int argc, char ** argv) {
     if (g_total > 0) {
         fprintf(stderr, "argmax agreement: %ld/%ld (%.2f%%)\n",
                 g_agree, g_total, 100.0 * (double) g_agree / (double) g_total);
+    }
+    if (rc == 0 && g_gpu && !g_report_only && g_total > 0) {
+        const double frac = (double) g_agree / (double) g_total;
+        if (frac < 0.995) {
+            fprintf(stderr, "parler decoder: FAIL gpu argmax agreement %.2f%% < 99.5%%\n", 100.0 * frac);
+            rc = 1;
+        }
     }
     if (rc == 0) fprintf(stderr, g_report_only ? "parler decoder: REPORT DONE\n"
                                                : "parler decoder: PASS\n");

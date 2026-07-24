@@ -483,6 +483,11 @@ if (TTS_CPP_BUILD_EXECUTABLES)
     target_link_libraries(parler-cli PRIVATE tts-cpp)
     tts_cpp_apply_ccache(parler-cli)
 
+    add_executable(parler-bench src/parler/bench.cpp)
+    target_link_libraries(parler-bench PRIVATE tts-cpp)
+    target_include_directories(parler-bench PRIVATE ggml/include src src/parler include)
+    tts_cpp_apply_ccache(parler-bench)
+
     # LavaSR two-stage (denoiser -> enhancer) bench + by-ear harness.
     add_executable(lavasr-bench src/lavasr/lavasr_bench.cpp)
     target_link_libraries(lavasr-bench PRIVATE tts-cpp)
@@ -744,6 +749,15 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_register_test(test-parler-engine
         LABEL    "fixture"
         ARGS     "${_tcb_parler_gguf}" "${_tcb_super2_gguf}"
+        REQUIRES "${_tcb_parler_gguf}")
+
+    add_executable(test-parler-engine-stream test/parler/test_engine_stream.cpp)
+    target_link_libraries(test-parler-engine-stream PRIVATE tts-cpp)
+    target_include_directories(test-parler-engine-stream PRIVATE include)
+    tts_cpp_apply_ccache(test-parler-engine-stream)
+    tts_cpp_register_test(test-parler-engine-stream
+        LABEL    "fixture"
+        ARGS     "${_tcb_parler_gguf}"
         REQUIRES "${_tcb_parler_gguf}")
 
     # ---- Indic Parler-TTS (same binaries, indic fixtures; separate BPE
