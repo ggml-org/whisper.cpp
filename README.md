@@ -323,37 +323,36 @@ On AMD's Ryzen™ AI 300 Series with dedicated NPUs for acceleration, you can no
 
 ### Setup environment (Windows only)
 
-- **Driver:** Make sure you have NPU drivers version **.280 or newer** installed. [Download latest drivers from here](https://account.amd.com/en/forms/downloads/ryzenai-eula-public-xef.html?filename=NPU_RAI1.5_280_WHQL.zip)
-- **Runtime libraries:** Download and install the necessary [runtime dependencies from here](https://account.amd.com/en/forms/downloads/ryzenai-eula-public-xef.html?filename=flexmlrt1.7.0-win.zip).
-- **Environment:** Extract the runtime package and set up the environment:
-  ```powershell
-  tar xvf flexmlrt1.7.0-win.zip
-  flexmlrt\setup.bat
+  - Obtain the XRT package and the FlexmlRT package from AMD. Both are distributed as tarballs or wheels.
+  - Copy the downloaded archives to a local path, extract them, and run the setup script from each extracted package in your shell (for example `source /path/to/xrt/setup.sh` and `source /path/to/flexmlrt/setup.sh`). Run these in every new shell you use to build or run `whisper.cpp`.
+
+- Fetch the matching ggml model and prebuilt VitisAI encoder cache:
+
+  ```bash
+  sh ./models/download-ggml-model.sh base
+  sh ./models/download-vitisai-model.sh base
+  ```
+
+  ```cmd
+  .\models\download-ggml-model.cmd base
+  .\models\download-vitisai-model.cmd base
+  ```
+
+  Use the same model name with both scripts. The VitisAI script queries the AMD collection on Hugging Face to list available caches, then downloads the selected `.rai` file as `ggml-<model>-encoder-vitisai.rai` alongside the matching `ggml-<model>.bin` file. You can also browse the collection manually at https://huggingface.co/collections/amd/ryzen-ai-whisper-npu-optimized-onnx-models.
+
+- Build `whisper.cpp` with VitisAI support:
+
+  ```bash
+  cmake -B build -DWHISPER_VITISAI=1
+  cmake --build build -j --config Release
   ```
 Your environment is now ready.
 
 ### Build Whisper.cpp for Ryzen™ AI support
 
-```bash
-cmake -B build -DWHISPER_VITISAI=1
-cmake --build build -j --config Release
-```
-
-### Download NPU-optimized models
-
-- All NPU-supported Whisper models and their compiled `.rai` cache files are available in this collection:  
-  https://huggingface.co/collections/amd/ryzen-ai-16-whisper-npu-optimized-onnx-models
-- Download the pre-compiled `.rai` cache file matching your desired model, and place it in your `models/` directory alongside its corresponding `ggml-<...>.bin` file.
-  The cache file must be named with the `-encoder-vitisai.rai` suffix. For example, if your model file is named `ggml-small.bin`, the cache file should be named `ggml-small-encoder-vitisai.rai`.
-
-
-> **Note:** The ".rai" models from Hugging Face are pre-optimized for Ryzen™ AI NPUs, delivering acceleration benefits from the very first run (aside from any initial CPU-side caching overhead).
-
-Run the examples as usual:
-
-```bash
-./build/bin/whisper-cli -m models/ggml-small.bin -f samples/jfk.wav
-```
+  ```text
+  $ ./build/bin/whisper-cli -m models/ggml-base.bin -f samples/jfk.wav
+  ```
 
 
 ## NVIDIA GPU support
