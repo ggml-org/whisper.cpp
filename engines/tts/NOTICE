@@ -28,6 +28,20 @@ Upstream model code
     ONNX inference path on top of ggml; the model weights themselves
     ship under their own license (consult the HuggingFace repo).
 
+--- apache-2.0 (Apache License 2.0) ---
+
+  CosyVoice / Fun-CosyVoice3 (FunAudioLLM, Alibaba)
+    https://github.com/FunAudioLLM/CosyVoice
+    https://huggingface.co/FunAudioLLM/Fun-CosyVoice3-0.5B-2512
+    The C++ port in src/cosyvoice_engine.cpp (and, as the pipeline lands,
+    the Qwen2.5 LM / DiT flow / CausalHiFT graphs) re-implements the
+    CosyVoice3 PyTorch inference path on top of ggml. Code and weights are
+    Apache-2.0, including the constituent Qwen2.5-0.5B LM and the CAM++
+    speaker encoder. Text normalization is planned to use the Apache-2.0
+    wetext / WeTextProcessing frontend (https://github.com/wenet-e2e/WeTextProcessing)
+    -- not yet integrated/linked (the `language` option is reserved); the
+    closed-source CosyVoice-ttsfrd frontend is deliberately NOT used.
+
 =========================================================================
 C++ Dependencies
 =========================================================================
