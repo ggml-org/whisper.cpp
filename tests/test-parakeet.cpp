@@ -59,7 +59,19 @@ void segment_callback(parakeet_context * ctx, parakeet_state * state, int n_new,
     printf("\n");
 }
 
-int main() {
+static int test_invalid_model_load(){
+    struct parakeet_context_params ctx_params = parakeet_context_default_params();
+    struct parakeet_context* pctx = 
+        parakeet_init_from_file_with_params_no_state(PARAKEET_BAD_MODEL_PATH, ctx_params);
+    if(pctx != nullptr){
+        fprintf(stderr, "Expected invalid Parakeet model to fail loading \n");
+        parakeet_free(pctx);
+        return 1;
+    }
+    return 0;
+}
+
+static int test_valid_model() {
     std::string model_path  = PARAKEET_MODEL_PATH;
     std::string sample_path = SAMPLE_PATH;
 
@@ -95,5 +107,18 @@ int main() {
     parakeet_free(pctx);
 
     printf("\nTest passed: Parakeet model loaded and freed successfully\n");
+    return 0;
+}
+
+int main(){
+    if(test_valid_model() != 0){
+        return 1;
+    }
+
+    if(test_invalid_model_load() != 0){
+        return 1;
+    }
+
+    printf("\nTest passed: Parakeet model load tests completed successfully\n");
     return 0;
 }

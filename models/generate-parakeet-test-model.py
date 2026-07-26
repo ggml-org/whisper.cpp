@@ -3,6 +3,7 @@ import struct
 import sys
 import numpy as np
 from pathlib import Path
+import argparse
 
 def write_tensor(fout, name, data):
     n_dims = len(data.shape)
@@ -16,7 +17,7 @@ def write_tensor(fout, name, data):
     fout.write(name_bytes)
     data.tofile(fout)
 
-def generate(output_path):
+def generate(output_path, n_fft_override=None):
     rng = np.random.default_rng(42)
 
     hparams = {
@@ -36,6 +37,9 @@ def generate(output_path):
         'n_tdt_durations':        2,
         'n_max_tokens':           5,
     }
+
+    if n_fft_override is not None:
+        hparams['n_fft'] = n_fft_override
 
     n_vocab    = hparams['n_vocab']
     n_state    = hparams['n_audio_state']
@@ -178,5 +182,8 @@ def generate(output_path):
     print(f"Generated {output_path} ({size / 1024:.1f} KB)")
 
 if __name__ == '__main__':
-    output = sys.argv[1] if len(sys.argv) > 1 else 'models/for-tests-ggml-parakeet-tdt.bin'
-    generate(output)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('output', nargs='?', default='models/for-tests-ggml-parakeet-tdt.bin')
+    parser.add_argument('--n-fft',type=int, default=None)
+    args = parser.parse_args()
+    generate(args.output, args.n_fft)

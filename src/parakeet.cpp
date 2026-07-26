@@ -698,11 +698,17 @@ static bool parakeet_validate_hparams(const std::map<parakeet_hparam, int32_t> &
 
         const int32_t actual = hparam_value->second;
         const int32_t expected = hparam_expected.second;
-        if (actual != expected) {
-            PARAKEET_LOG_ERROR("%s: invalid Parakeet metadata: %s = %d, expected %d\n",
-                    __func__, PARAKEET_HPARAM_NAMES.at(hparam), actual, expected);
+        
+        if(actual <=0 || actual > expected){
+            PARAKEET_LOG_ERROR("%s: invalid Parakeet metadata: %s = %d, expected > 0 and <= %d\n. Unsafe parameter loaded. ",
+                __func__, PARAKEET_HPARAM_NAMES.at(hparam), actual, expected);
             return false;
         }
+        if(actual != expected){
+            PARAKEET_LOG_WARN("%s: non-standard Parakeet metadata: %s = %d, expected %d\n. Transcription will be affected. ",
+                __func__, PARAKEET_HPARAM_NAMES.at(hparam), actual, expected);
+        }
+
     }
 
     return true;
