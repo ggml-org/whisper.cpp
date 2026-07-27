@@ -1879,6 +1879,12 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
                 break;
             }
 
+             if (n_dims < 0 || n_dims > 4) {
+                  WHISPER_LOG_ERROR("%s: invalid n_dims %d in model file (expected 0 <= n_dims <= 4)\n", __func__, n_dims);
+                  return false;
+              }
+
+
             int32_t nelements = 1;
             int32_t ne[4] = { 1, 1, 1, 1 };
             for (int i = 0; i < n_dims; ++i) {
@@ -5020,6 +5026,12 @@ struct whisper_vad_context * whisper_vad_init_with_params(
             if (loader->eof(loader->context)) {
                 break;
             }
+
+            if (n_dims < 0 || n_dims > 4) {
+                  WHISPER_LOG_ERROR("%s: invalid n_dims %d in model file (expected 0 <= n_dims <= 4)\n", __func__, n_dims);
+                  return nullptr;
+            }
+
 
             int32_t nelements = 1;
             int32_t ne[4] = { 1, 1, 1, 1 };
