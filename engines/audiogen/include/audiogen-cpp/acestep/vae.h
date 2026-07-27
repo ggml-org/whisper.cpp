@@ -38,6 +38,10 @@ struct VaeOptions {
                                // (Metal/CUDA/...); the custom snake / col2im_1d ops
                                // have GPU kernels in the ggml-speech fork. Falls
                                // back to CPU when no GPU backend is available.
+    std::string backends_dir;  // dlopen'd ggml backend modules dir; see
+                               // EngineOptions::backends_dir. Empty when loaded
+                               // via Engine (which loads the modules once up
+                               // front); set for a standalone Vae::load on arm64.
 };
 
 class AUDIOGEN_API Vae {

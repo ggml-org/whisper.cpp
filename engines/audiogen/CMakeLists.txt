@@ -15,6 +15,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
+# Windows: <windows.h> (pulled in via gguf_mmap.h's memory-mapping path) defines
+# `min` / `max` as function-like macros, which mangle std::min / std::max in the
+# VAE chunked-decode path (vae_ggml.cpp) into a C2589 "illegal token" compile
+# error. NOMINMAX suppresses those macros; WIN32_LEAN_AND_MEAN / NOGDI trim the
+# rest of the Win32 surface. Mirrors qvac/packages/audiogen-ggml's addon
+# CMakeLists (and the tts-cpp / tts-ggml engines).
+if (WIN32)
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN NOGDI)
+endif()
+
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(AUDIOGEN_STANDALONE_DEFAULT ON)
 else()

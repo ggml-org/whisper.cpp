@@ -2,9 +2,10 @@
 
 #include "vae_gguf.h"
 
+#include "acestep/backend_registry.h"
+
 #include "ggml.h"
 #include "ggml-alloc.h"
-#include "ggml-cpu.h"
 
 #include <algorithm>
 #include <cmath>
@@ -369,7 +370,7 @@ static int vae_decode_window(VaeModel * m, const float * latent, int T_latent, s
     // computing on m->backend directly.
     const bool backend_is_cpu =
         ggml_backend_dev_type(ggml_backend_get_device(m->backend)) == GGML_BACKEND_DEVICE_TYPE_CPU;
-    ggml_backend_t cpu_fallback = backend_is_cpu ? nullptr : ggml_backend_cpu_init();
+    ggml_backend_t cpu_fallback = backend_is_cpu ? nullptr : backend_cpu_init();
     ggml_backend_t backends[2]  = { m->backend, cpu_fallback };
     const int      n_backends   = backend_is_cpu ? 1 : 2;
 

@@ -53,6 +53,14 @@ struct EngineOptions {
     int  n_threads     = 0;   // 0 = hardware concurrency
     int  n_gpu_layers  = 0;   // 0 = CPU-only (CPU target)
     bool verbose       = false;
+    // Directory holding the dlopen'd ggml backend modules the addon staged next
+    // to its `.bare` (the per-arch `<bare-target>/<module>` subdir). Required on
+    // arm64 (Android + Linux), where the ggml-speech port ships the CPU backend
+    // as per-microarch MODULE .so files (GGML_BACKEND_DL) rather than static
+    // archives; the engine calls `ggml_backend_load_all_from_path()` on it before
+    // acquiring any backend from the registry. Empty -> rely on ggml's built-in
+    // search path (static-linked desktop / Apple builds need nothing here).
+    std::string backends_dir;
     // NOTE: VAE tiling (windowed decode for bounded memory on long tracks) is
     // handled internally by vae_model_decode with values tuned to the Metal
     // buffer limit; it is intentionally not exposed as config to avoid a footgun

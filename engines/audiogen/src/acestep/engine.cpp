@@ -11,8 +11,9 @@
 #include "acestep/philox.h"
 #include "acestep/textenc_ggml.h"
 
+#include "acestep/backend_registry.h"
+
 #include "ggml-backend.h"
-#include "ggml-cpu.h"
 
 #include <algorithm>
 #include <atomic>
@@ -172,6 +173,12 @@ std::unique_ptr<Engine> Engine::create(const EngineOptions & opts_in) {
 
     const bool v = opts.verbose;
 
+    // Load the dlopen'd ggml backend modules (per-microarch CPU variants on
+    // arm64, plus any GPU MODULE .so) the addon staged next to its `.bare`, so
+    // the registry-based backend init below can find a CPU/GPU device. No-op on
+    // static-linked desktop / Apple builds. Must run before any backend init.
+    load_backends(opts.backends_dir);
+
     int nth = opts.n_threads > 0 ? opts.n_threads : (int) std::thread::hardware_concurrency();
     if (nth < 1) nth = 4;
 
@@ -187,17 +194,17 @@ std::unique_ptr<Engine> Engine::create(const EngineOptions & opts_in) {
         on_gpu     = (m->backend != nullptr);
         if (!on_gpu && v) fprintf(stderr, "[acestep-engine] GPU requested but no GPU backend available; using CPU\n");
     }
-    if (!m->backend) m->backend = ggml_backend_cpu_init();
+    if (!m->backend) m->backend = backend_cpu_init();
     if (!m->backend) throw std::runtime_error("acestep engine: backend init failed");
     if (on_gpu) {
         if (v) fprintf(stderr, "[acestep-engine] DiT/VAE on GPU backend: %s\n", ggml_backend_name(m->backend));
         // The FSQ detokenizer emits a CPY variant our Metal backend lacks a
         // kernel for, so it always runs on a dedicated CPU backend.
-        m->backend_cpu = ggml_backend_cpu_init();
+        m->backend_cpu = backend_cpu_init();
         if (!m->backend_cpu) throw std::runtime_error("acestep engine: CPU backend init failed");
-        ggml_backend_cpu_set_n_threads(m->backend_cpu, nth);
+        backend_set_n_threads(m->backend_cpu, nth);
     } else {
-        ggml_backend_cpu_set_n_threads(m->backend, nth);
+        backend_set_n_threads(m->backend, nth);
         m->backend_cpu = m->backend;  // single CPU backend serves every stage
     }
 
@@ -244,6 +251,8 @@ std::unique_ptr<Engine> Engine::create(const EngineOptions & opts_in) {
     vo.with_encoder = false;  // generation only decodes
     vo.n_threads    = nth;
     vo.n_gpu_layers = opts.n_gpu_layers;  // snake / col2im_1d now have Metal kernels
+    // Modules already loaded above; leave vo.backends_dir empty (load is
+    // idempotent, but no need to rescan for the engine-driven Vae::load).
     // Debug hook: force the VAE backend independently of the other stages so the
     // decode can be compared CPU-vs-GPU on an identical latent (ACESTEP_VAE_GPU=1
     // -> GPU, =0 -> CPU). Leaves the LM/DiT backend untouched (=deterministic).
