@@ -7182,7 +7182,7 @@ int whisper_full_with_state(
                     std::vector<float> probs(n_logits);
 
                     // Get the SOT logits, which aren't at position 0 if there was a prompt prefix
-                    const std::vector<float> sot_logits = state->logits;(
+                    const std::vector<float> sot_logits(
                         state->logits.begin() + (size_t) sot_index * n_logits,
                         state->logits.begin() + (size_t) (sot_index + 1) * n_logits);
 
