@@ -27,7 +27,7 @@ module Whisper
 
     def synchronize(&block)
       @mutex ||= Thread::Mutex.new
-      @mutex.synchronize &block 
+      @mutex.synchronize &block
     end
   end
 end
