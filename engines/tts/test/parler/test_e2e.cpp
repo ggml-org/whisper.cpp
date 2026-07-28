@@ -17,6 +17,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -68,7 +69,8 @@ int main(int argc, char ** argv) {
 
     parler_model model;
     std::string err;
-    if (!parler_load_gguf(model_path, model, 0, &err)) {
+    const int ngl = std::getenv("PARLER_TEST_GPU") ? 99 : 0;
+    if (!parler_load_gguf(model_path, model, ngl, &err)) {
         fprintf(stderr, "load failed: %s\n", err.c_str());
         return 1;
     }

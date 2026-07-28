@@ -45,6 +45,21 @@ struct t5_graph {
     ggml_cgraph  * gf  = nullptr;
 };
 
+// T5 carries large-magnitude activations in its residual stream and is unusable in
+// pure fp16. Every reduction in the encoder therefore has to accumulate in f32, so
+// each matmul says so explicitly instead of leaving it to the backend's default.
+//
+// Backends are free to reduce precision for GGML_PREC_DEFAULT and both GPU backends do:
+// ggml-vulkan picks an f16 accumulator for any matmul whose weights are f16 or quantized,
+// and on coopmat2 hardware it also rewrites an f32 x f32 matmul into f16 operands;
+// ggml-metal accumulates in f32 but stages both operands as half. Either way T5 loses
+// roughly three orders of magnitude of accuracy. Requesting f32 is a no-op on CPU.
+ggml_tensor * mul_mat_f32acc(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b) {
+    ggml_tensor * out = ggml_mul_mat(ctx, a, b);
+    ggml_mul_mat_set_prec(out, GGML_PREC_F32);
+    return out;
+}
+
 t5_graph build_t5_graph(const parler_model & model, int T) {
     const parler_hparams & hp = model.hparams;
     const int inner = hp.t5_n_head * hp.t5_d_kv;
@@ -77,9 +92,9 @@ t5_graph build_t5_graph(const parler_model & model, int T) {
         ggml_tensor * cur = ggml_rms_norm(ctx, x, hp.t5_rms_eps);
         cur = ggml_mul(ctx, cur, l.attn_norm);
 
-        ggml_tensor * q = ggml_mul_mat(ctx, l.q, cur); // [inner, T]
-        ggml_tensor * k = ggml_mul_mat(ctx, l.k, cur);
-        ggml_tensor * v = ggml_mul_mat(ctx, l.v, cur);
+        ggml_tensor * q = mul_mat_f32acc(ctx, l.q, cur); // [inner, T]
+        ggml_tensor * k = mul_mat_f32acc(ctx, l.k, cur);
+        ggml_tensor * v = mul_mat_f32acc(ctx, l.v, cur);
 
         ggml_tensor * q3 = ggml_cont(ctx, ggml_permute(ctx,
             ggml_reshape_3d(ctx, q, HD, H, T), 0, 2, 1, 3));          // [HD, T, H]
@@ -88,18 +103,18 @@ t5_graph build_t5_graph(const parler_model & model, int T) {
         ggml_tensor * vt = ggml_cont(ctx, ggml_permute(ctx,
             ggml_reshape_3d(ctx, v, HD, H, T), 1, 2, 0, 3));          // [T, HD, H]
 
-        ggml_tensor * kq = ggml_mul_mat(ctx, k3, q3);                 // [Tk, Tq, H]
+        ggml_tensor * kq = mul_mat_f32acc(ctx, k3, q3);               // [Tk, Tq, H]
         kq = ggml_soft_max_ext(ctx, kq, bias, 1.0f, 0.0f);            // T5: no 1/sqrt(d)
-        ggml_tensor * kqv = ggml_mul_mat(ctx, vt, kq);                // [HD, Tq, H]
+        ggml_tensor * kqv = mul_mat_f32acc(ctx, vt, kq);              // [HD, Tq, H]
         kqv = ggml_cont(ctx, ggml_permute(ctx, kqv, 0, 2, 1, 3));     // [HD, H, Tq]
         kqv = ggml_reshape_2d(ctx, kqv, inner, T);
-        x = ggml_add(ctx, x, ggml_mul_mat(ctx, l.o, kqv));
+        x = ggml_add(ctx, x, mul_mat_f32acc(ctx, l.o, kqv));
 
         cur = ggml_rms_norm(ctx, x, hp.t5_rms_eps);
         cur = ggml_mul(ctx, cur, l.ffn_norm);
-        ggml_tensor * gate = ggml_gelu(ctx, ggml_mul_mat(ctx, l.gate, cur));
-        ggml_tensor * up   = ggml_mul_mat(ctx, l.up, cur);
-        cur = ggml_mul_mat(ctx, l.down, ggml_mul(ctx, gate, up));
+        ggml_tensor * gate = ggml_gelu(ctx, mul_mat_f32acc(ctx, l.gate, cur));
+        ggml_tensor * up   = mul_mat_f32acc(ctx, l.up, cur);
+        cur = mul_mat_f32acc(ctx, l.down, ggml_mul(ctx, gate, up));
         x = ggml_add(ctx, x, cur);
     }
 
@@ -107,7 +122,7 @@ t5_graph build_t5_graph(const parler_model & model, int T) {
     x = ggml_mul(ctx, x, model.t5_output_norm);
 
     if (hp.enc_to_dec) {
-        x = ggml_mul_mat(ctx, model.enc_to_dec_w, x);
+        x = mul_mat_f32acc(ctx, model.enc_to_dec_w, x);
         x = ggml_add(ctx, x, model.enc_to_dec_b);
     }
     ggml_set_name(x, "cross_states"); // [dec_d_model, T]
@@ -118,8 +133,8 @@ t5_graph build_t5_graph(const parler_model & model, int T) {
     // cross buffers (model.cross_k / model.cross_v_t must be allocated for T).
     for (int il = 0; il < hp.dec_n_layer; ++il) {
         const parler_dec_layer & dl = model.dec_layers[il];
-        ggml_tensor * ck = ggml_mul_mat(ctx, dl.ck, x);               // [dec_d, T]
-        ggml_tensor * cv = ggml_mul_mat(ctx, dl.cv, x);               // [dec_d, T]
+        ggml_tensor * ck = mul_mat_f32acc(ctx, dl.ck, x);             // [dec_d, T]
+        ggml_tensor * cv = mul_mat_f32acc(ctx, dl.cv, x);             // [dec_d, T]
         ggml_build_forward_expand(gf, ggml_cpy(ctx, ck, model.cross_k[il]));
         if (model.use_fa) {
             // FA reads V as [HD, T, H] from a non-transposed [dec_d, T] buffer.

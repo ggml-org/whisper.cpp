@@ -15,6 +15,10 @@ namespace {
 
 // F32 conv1d via im2col + mul_mat (ggml_conv_1d's F16 im2col loses too much
 // precision over the 26-conv DAC stack).  kernel ne=[K, IC, OC].
+//
+// Keeping im2col in F32 only helps if the matmul that consumes it stays in F32 too, so
+// the contraction asks for it explicitly: backends are free to multiply f32 operands in
+// fp16 for GGML_PREC_DEFAULT, and over 26 convolutions that dominates the output error.
 ggml_tensor * conv1d_f32(ggml_context * ctx, ggml_tensor * kernel, ggml_tensor * input,
                          int stride, int padding, int dilation) {
     ggml_tensor * im2col = ggml_im2col(ctx, kernel, input, stride, 0, padding, 0, dilation, 0,
@@ -22,6 +26,7 @@ ggml_tensor * conv1d_f32(ggml_context * ctx, ggml_tensor * kernel, ggml_tensor *
     ggml_tensor * result = ggml_mul_mat(ctx,
         ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1]),
         ggml_reshape_2d(ctx, kernel, kernel->ne[0] * kernel->ne[1], kernel->ne[2]));
+    ggml_mul_mat_set_prec(result, GGML_PREC_F32);
     return ggml_reshape_3d(ctx, result, im2col->ne[1], kernel->ne[2], im2col->ne[2]);
 }
 
@@ -137,7 +142,9 @@ bool parler_dac_decode(const parler_model & model, const int32_t * codes, int n_
         ggml_tensor * z   = ggml_get_rows(ctx, q.codebook, ids);                   // [8, T]
         ggml_tensor * w2  = ggml_reshape_2d(ctx, q.out_proj_w,
                                             q.out_proj_w->ne[1], q.out_proj_w->ne[2]);
-        ggml_tensor * p   = ggml_add(ctx, ggml_mul_mat(ctx, w2, z), q.out_proj_b); // [1024, T]
+        ggml_tensor * proj = ggml_mul_mat(ctx, w2, z);
+        ggml_mul_mat_set_prec(proj, GGML_PREC_F32); // latent feeds the precision-sensitive conv stack
+        ggml_tensor * p   = ggml_add(ctx, proj, q.out_proj_b);                     // [1024, T]
         latent = latent ? ggml_add(ctx, latent, p) : p;
     }
     ggml_set_name(latent, "latent");

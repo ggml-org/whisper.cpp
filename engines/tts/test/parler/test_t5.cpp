@@ -4,6 +4,7 @@
 #include "npy.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -66,7 +67,8 @@ int main(int argc, char ** argv) {
     if (g_report_only) fprintf(stderr, "REPORT-ONLY MODE: tolerance bars not enforced\n");
     parler_model model;
     std::string err;
-    if (!parler_load_gguf(argv[1], model, 0, &err)) {
+    const int ngl = std::getenv("PARLER_TEST_GPU") ? 99 : 0;
+    if (!parler_load_gguf(argv[1], model, ngl, &err)) {
         fprintf(stderr, "load failed: %s\n", err.c_str());
         return 1;
     }
