@@ -14,6 +14,12 @@
 #  ifndef WIN32_LEAN_AND_MEAN
 #    define WIN32_LEAN_AND_MEAN
 #  endif
+// Without NOMINMAX, <windows.h> defines min/max as function-like macros and any
+// later std::min(a, b) / std::max(a, b) in a TU that includes this header fails
+// to compile under MSVC (C2589: '(' illegal token on right side of '::').
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
 #  include <windows.h>
 #else
 #  include <fcntl.h>
