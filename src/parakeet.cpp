@@ -698,7 +698,6 @@ static bool parakeet_validate_hparams(const std::map<parakeet_hparam, int32_t> &
 
         const int32_t actual = hparam_value->second;
         const int32_t expected = hparam_expected.second;
-        
         if(actual <=0 || actual > expected){
             PARAKEET_LOG_ERROR("%s: invalid Parakeet metadata: %s = %d, expected > 0 and <= %d\n. Unsafe parameter loaded. ",
                 __func__, PARAKEET_HPARAM_NAMES.at(hparam), actual, expected);
@@ -1044,10 +1043,8 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
         read_hparam(PARAKEET_HPARAM_N_AUDIO_LAYER, hparams.n_audio_layer);
         read_hparam(PARAKEET_HPARAM_N_MELS, hparams.n_mels);
         /*
-        For ftype, it's better to leave it out of strict checks, because once quantized the ftype can vary or even be mixed.
-        This is taken care of, during the tensor type checks. Here it just checks, if present, if it is one of the supported types.
-        Check ggml_ftype_to_ggml_type call for this check. @danbev alrady added it.
-        */ 
+        ftype just requires the type check already being done in the loading process.
+        */
         read_safe(loader, hparams.ftype);
         read_hparam(PARAKEET_HPARAM_N_FFT, hparams.n_fft);
         read_hparam(PARAKEET_HPARAM_SUBSAMPLING_FACTOR, hparams.subsampling_factor);

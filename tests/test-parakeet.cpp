@@ -61,7 +61,7 @@ void segment_callback(parakeet_context * ctx, parakeet_state * state, int n_new,
 
 static int test_invalid_model_load(){
     struct parakeet_context_params ctx_params = parakeet_context_default_params();
-    struct parakeet_context* pctx = 
+    struct parakeet_context * pctx =
         parakeet_init_from_file_with_params_no_state(PARAKEET_BAD_MODEL_PATH, ctx_params);
     if(pctx != nullptr){
         fprintf(stderr, "Expected invalid Parakeet model to fail loading \n");
