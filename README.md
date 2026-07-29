@@ -340,6 +340,8 @@ On AMD's Ryzen™ AI 300 Series with dedicated NPUs for acceleration, you can no
 
   Use the same model name with both scripts. The VitisAI script queries the AMD collection on Hugging Face to list available caches, then downloads the selected `.rai` file as `ggml-<model>-encoder-vitisai.rai` alongside the matching `ggml-<model>.bin` file. You can also browse the collection manually at https://huggingface.co/collections/amd/ryzen-ai-whisper-npu-optimized-onnx-models.
 
+  Depending on the downloaded `.rai` cache, VitisAI may offload either the encoder only or the encoder plus cross-projection layers to the AMD NPU. `whisper.cpp` detects the cache contents at runtime and logs the selected offload mode during model initialization.
+
 - Build `whisper.cpp` with VitisAI support:
 
   ```bash
