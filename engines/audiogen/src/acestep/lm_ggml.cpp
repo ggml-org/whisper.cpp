@@ -22,6 +22,13 @@ struct LMModel {
     ggml_context *        weight_ctx = nullptr;
     ggml_backend_buffer_t weight_buf = nullptr;
 
+    // CPU map-in-place: verbatim weights backed by `gguf`'s mmap via `map_buf`
+    // (see dit_gguf_cpu_map_buffer). `gguf` is kept open for the model's lifetime.
+    DitGGUF               gguf;
+    ggml_backend_buffer_t map_buf = nullptr;
+    bool                  mapped  = false;
+    size_t                mapped_bytes = 0;  // sum of mmapped weight nbytes
+
     LMConfig    cfg;
     Qwen3Config q3;
 
@@ -103,22 +110,31 @@ LMModel * lm_model_load(const std::string & path, ggml_backend_t backend, int ma
         return nullptr;
     }
 
+    // CPU backend: map the quantised weights straight off the mmap (no dirty RAM).
+    const bool            mapped  = ggml_backend_buft_is_host(ggml_backend_get_default_buffer_type(backend));
+    ggml_backend_buffer_t map_buf = mapped ? dit_gguf_cpu_map_buffer(g) : nullptr;
+
     // Allocate + load weights.
     const size_t n_tensors = (size_t) 2 + (size_t) c.n_layers * 11 + 8;
     ggml_init_params ip{ ggml_tensor_overhead() * n_tensors, nullptr, /*no_alloc=*/true };
     m->weight_ctx = ggml_init(ip);
     ggml_context * ctx = m->weight_ctx;
 
-    m->embed_tokens = q3_create_like(ctx, g, "model.embed_tokens.weight");
+    m->embed_tokens = q3_create_like(ctx, g, "model.embed_tokens.weight", map_buf);
     m->final_norm   = q3_create_f32_like(ctx, g, "model.norm.weight");
     m->layers.resize(c.n_layers);
     for (int i = 0; i < c.n_layers; i++) {
-        q3_create_layer(ctx, g, "model.layers." + std::to_string(i), m->layers[i]);
+        q3_create_layer(ctx, g, "model.layers." + std::to_string(i), m->layers[i], map_buf);
     }
 
+    // NB: ggml_backend_alloc_ctx_tensors returns NULL if EVERY tensor is already
+    // allocated (i.e. all mapped). Safe to treat as failure here because each
+    // stage always has F32 norms that need real allocation; revisit this guard if
+    // an all-quantised stage is ever added.
     m->weight_buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
     if (!m->weight_buf) {
         fprintf(stderr, "[acestep-lm] failed to allocate weight buffer\n");
+        if (map_buf) ggml_backend_buffer_free(map_buf);
         ggml_free(ctx);
         dit_gguf_close(g);
         delete m;
@@ -130,6 +146,9 @@ LMModel * lm_model_load(const std::string & path, ggml_backend_t backend, int ma
     for (int i = 0; i < c.n_layers; i++) {
         q3_load_layer(g, "model.layers." + std::to_string(i), m->layers[i]);
     }
+    // Exact mmapped weight footprint (see dit_gguf_mapped_bytes); reported by
+    // lm_model_weight_bytes below so mapped loads don't look like a few-MB stub.
+    m->mapped_bytes = mapped ? dit_gguf_mapped_bytes(ctx, g) : 0;
 
     // KV cache: n_sets * n_layers tensors.
     const int D = c.head_dim, Nkv = c.n_kv_heads, S = c.max_seq_len, Lc = c.n_layers, NS = m->n_sets;
@@ -149,6 +168,8 @@ LMModel * lm_model_load(const std::string & path, ggml_backend_t backend, int ma
     m->kv_buf = ggml_backend_alloc_ctx_tensors(m->kv_ctx, backend);
     if (!m->kv_buf) {
         fprintf(stderr, "[acestep-lm] failed to allocate KV cache\n");
+        if (map_buf) ggml_backend_buffer_free(map_buf);
+        if (m->weight_buf) ggml_backend_buffer_free(m->weight_buf);  // ggml_free(ctx) drops descriptors, not the buffer
         ggml_free(ctx);
         ggml_free(m->kv_ctx);
         dit_gguf_close(g);
@@ -166,7 +187,13 @@ LMModel * lm_model_load(const std::string & path, ggml_backend_t backend, int ma
                 c.n_kv_heads, c.head_dim, kv_bytes / 1048576.0, NS);
     }
 
-    dit_gguf_close(g);
+    if (mapped) {
+        m->mapped  = true;
+        m->map_buf = map_buf;
+        m->gguf    = g;  // keep the mmap alive; mapped weights point into it
+    } else {
+        dit_gguf_close(g);
+    }
     return m;
 }
 
@@ -176,12 +203,16 @@ void lm_model_free(LMModel * m) {
     if (m->kv_ctx) ggml_free(m->kv_ctx);
     if (m->weight_buf) ggml_backend_buffer_free(m->weight_buf);
     if (m->weight_ctx) ggml_free(m->weight_ctx);
+    if (m->map_buf) ggml_backend_buffer_free(m->map_buf);
+    if (m->mapped) dit_gguf_close(m->gguf);
     delete m;
 }
 
 const LMConfig & lm_model_config(const LMModel * m) { return m->cfg; }
 size_t           lm_model_weight_bytes(const LMModel * m) {
-    return m->weight_buf ? ggml_backend_buffer_get_size(m->weight_buf) : 0;
+    if (!m) return 0;
+    const size_t alloc = m->weight_buf ? ggml_backend_buffer_get_size(m->weight_buf) : 0;
+    return alloc + m->mapped_bytes;  // allocated (F32) + mmapped weights
 }
 int  lm_num_kv_sets(const LMModel * m) { return m->n_sets; }
 void lm_reset(LMModel * m, int set) { if (set >= 0 && set < m->n_sets) m->kv_pos[set] = 0; }

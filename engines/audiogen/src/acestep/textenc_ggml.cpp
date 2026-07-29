@@ -28,6 +28,12 @@ struct TextEncModel {
     ggml_tensor *           embed_tokens = nullptr;  // [H, V]
     ggml_tensor *           final_norm   = nullptr;  // [H] F32
     std::vector<Qwen3Layer> layers;
+
+    // CPU map-in-place: verbatim weights backed by `gguf`'s mmap via `map_buf`.
+    DitGGUF               gguf;
+    ggml_backend_buffer_t map_buf = nullptr;
+    bool                  mapped  = false;
+    size_t                mapped_bytes = 0;  // sum of mmapped weight nbytes
 };
 
 static Qwen3Config to_q3(const TextEncConfig & c) {
@@ -56,21 +62,26 @@ TextEncModel * textenc_model_load(const std::string & path, ggml_backend_t backe
     m->q3            = to_q3(m->cfg);
     const Qwen3Config & c = m->q3;
 
+    // CPU backend: map the quantised weights straight off the mmap (no dirty RAM).
+    const bool            mapped  = ggml_backend_buft_is_host(ggml_backend_get_default_buffer_type(backend));
+    ggml_backend_buffer_t map_buf = mapped ? dit_gguf_cpu_map_buffer(g) : nullptr;
+
     const size_t     n_tensors = (size_t) 2 + (size_t) c.n_layers * 11 + 8;
     ggml_init_params ip{ ggml_tensor_overhead() * n_tensors, nullptr, /*no_alloc=*/true };
     m->weight_ctx = ggml_init(ip);
     ggml_context * ctx = m->weight_ctx;
 
-    m->embed_tokens = q3_create_like(ctx, g, "embed_tokens.weight");
+    m->embed_tokens = q3_create_like(ctx, g, "embed_tokens.weight", map_buf);
     m->final_norm   = q3_create_f32_like(ctx, g, "norm.weight");
     m->layers.resize(c.n_layers);
     for (int i = 0; i < c.n_layers; i++) {
-        q3_create_layer(ctx, g, "layers." + std::to_string(i), m->layers[i]);
+        q3_create_layer(ctx, g, "layers." + std::to_string(i), m->layers[i], map_buf);
     }
 
     m->weight_buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
     if (!m->weight_buf) {
         fprintf(stderr, "[acestep-txt] failed to allocate weight buffer\n");
+        if (map_buf) ggml_backend_buffer_free(map_buf);
         ggml_free(ctx);
         dit_gguf_close(g);
         delete m;
@@ -82,6 +93,7 @@ TextEncModel * textenc_model_load(const std::string & path, ggml_backend_t backe
     for (int i = 0; i < c.n_layers; i++) {
         q3_load_layer(g, "layers." + std::to_string(i), m->layers[i]);
     }
+    m->mapped_bytes = mapped ? dit_gguf_mapped_bytes(ctx, g) : 0;
 
     if (verbose) {
         fprintf(stderr, "[acestep-txt] loaded %s: %.1f MB, %d layers H=%d Nh=%d/%d D=%d\n", path.c_str(),
@@ -89,7 +101,13 @@ TextEncModel * textenc_model_load(const std::string & path, ggml_backend_t backe
                 c.head_dim);
     }
 
-    dit_gguf_close(g);
+    if (mapped) {
+        m->mapped  = true;
+        m->map_buf = map_buf;
+        m->gguf    = g;  // keep the mmap alive; mapped weights point into it
+    } else {
+        dit_gguf_close(g);
+    }
     return m;
 }
 
@@ -97,13 +115,17 @@ void textenc_model_free(TextEncModel * m) {
     if (!m) return;
     if (m->weight_buf) ggml_backend_buffer_free(m->weight_buf);
     if (m->weight_ctx) ggml_free(m->weight_ctx);
+    if (m->map_buf) ggml_backend_buffer_free(m->map_buf);
+    if (m->mapped) dit_gguf_close(m->gguf);
     delete m;
 }
 
 const TextEncConfig & textenc_model_config(const TextEncModel * m) { return m->cfg; }
 
 size_t textenc_model_weight_bytes(const TextEncModel * m) {
-    return m->weight_buf ? ggml_backend_buffer_get_size(m->weight_buf) : 0;
+    if (!m) return 0;
+    const size_t alloc = m->weight_buf ? ggml_backend_buffer_get_size(m->weight_buf) : 0;
+    return alloc + m->mapped_bytes;  // allocated (F32) + mmapped weights
 }
 
 bool textenc_model_forward(TextEncModel * m, const int32_t * token_ids, int S, std::vector<float> & hidden_out) {

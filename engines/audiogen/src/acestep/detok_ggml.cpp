@@ -62,6 +62,12 @@ struct DetokModel {
     ggml_tensor * norm        = nullptr;  // [2048] F32
     ggml_tensor * proj_out_w  = nullptr;  // [64, 2048]
     ggml_tensor * proj_out_b  = nullptr;  // [64] F32
+
+    // CPU map-in-place: verbatim weights backed by `gguf`'s mmap via `map_buf`.
+    DitGGUF               gguf;
+    ggml_backend_buffer_t map_buf = nullptr;
+    bool                  mapped  = false;
+    size_t                mapped_bytes = 0;  // sum of mmapped weight nbytes
 };
 
 DetokModel * detok_model_load(const std::string & path, ggml_backend_t backend, bool verbose) {
@@ -76,28 +82,33 @@ DetokModel * detok_model_load(const std::string & path, ggml_backend_t backend, 
     m->cfg         = detok_config();
     m->layers.resize(m->cfg.n_layers);
 
+    // CPU backend: map the quantised weights straight off the mmap (no dirty RAM).
+    const bool            mapped  = ggml_backend_buft_is_host(ggml_backend_get_default_buffer_type(backend));
+    ggml_backend_buffer_t map_buf = mapped ? dit_gguf_cpu_map_buffer(g) : nullptr;
+
     const size_t n_tensors = (size_t) m->cfg.n_layers * 11 + 12;
     ggml_init_params ip{ ggml_tensor_overhead() * n_tensors, nullptr, /*no_alloc=*/true };
     m->weight_ctx      = ggml_init(ip);
     ggml_context * ctx = m->weight_ctx;
 
-    m->fsq_proj_w  = q3_create_like(ctx, g, "tokenizer.quantizer.project_out.weight");
+    m->fsq_proj_w  = q3_create_like(ctx, g, "tokenizer.quantizer.project_out.weight", map_buf);
     m->fsq_proj_b  = q3_create_f32_like(ctx, g, "tokenizer.quantizer.project_out.bias");
-    m->embed_w     = q3_create_like(ctx, g, "detokenizer.embed_tokens.weight");
+    m->embed_w     = q3_create_like(ctx, g, "detokenizer.embed_tokens.weight", map_buf);
     m->embed_b     = q3_create_f32_like(ctx, g, "detokenizer.embed_tokens.bias");
     // special_tokens is stored in the model's native type (e.g. BF16/Q8_0);
     // keep it raw and cast to F32 in the graph (q3_as_f32) like upstream.
-    m->special_tok = q3_create_like(ctx, g, "detokenizer.special_tokens");
+    m->special_tok = q3_create_like(ctx, g, "detokenizer.special_tokens", map_buf);
     m->norm        = q3_create_f32_like(ctx, g, "detokenizer.norm.weight");
-    m->proj_out_w  = q3_create_like(ctx, g, "detokenizer.proj_out.weight");
+    m->proj_out_w  = q3_create_like(ctx, g, "detokenizer.proj_out.weight", map_buf);
     m->proj_out_b  = q3_create_f32_like(ctx, g, "detokenizer.proj_out.bias");
     for (int i = 0; i < m->cfg.n_layers; i++) {
-        q3_create_layer(ctx, g, "detokenizer.layers." + std::to_string(i), m->layers[i]);
+        q3_create_layer(ctx, g, "detokenizer.layers." + std::to_string(i), m->layers[i], map_buf);
     }
 
     m->weight_buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
     if (!m->weight_buf) {
         fprintf(stderr, "[acestep-detok] failed to allocate weight buffer\n");
+        if (map_buf) ggml_backend_buffer_free(map_buf);
         ggml_free(ctx);
         dit_gguf_close(g);
         delete m;
@@ -115,13 +126,20 @@ DetokModel * detok_model_load(const std::string & path, ggml_backend_t backend, 
     for (int i = 0; i < m->cfg.n_layers; i++) {
         q3_load_layer(g, "detokenizer.layers." + std::to_string(i), m->layers[i]);
     }
+    m->mapped_bytes = mapped ? dit_gguf_mapped_bytes(ctx, g) : 0;
 
     if (verbose) {
         fprintf(stderr, "[acestep-detok] loaded %s: %.1f MB, FSQ(6->2048) + %dL encoder(S=5, 2048->64)\n",
                 path.c_str(), detok_model_weight_bytes(m) / 1048576.0, m->cfg.n_layers);
     }
 
-    dit_gguf_close(g);
+    if (mapped) {
+        m->mapped  = true;
+        m->map_buf = map_buf;
+        m->gguf    = g;  // keep the mmap alive; mapped weights point into it
+    } else {
+        dit_gguf_close(g);
+    }
     return m;
 }
 
@@ -129,11 +147,15 @@ void detok_model_free(DetokModel * m) {
     if (!m) return;
     if (m->weight_buf) ggml_backend_buffer_free(m->weight_buf);
     if (m->weight_ctx) ggml_free(m->weight_ctx);
+    if (m->map_buf) ggml_backend_buffer_free(m->map_buf);
+    if (m->mapped) dit_gguf_close(m->gguf);
     delete m;
 }
 
 size_t detok_model_weight_bytes(const DetokModel * m) {
-    return m->weight_buf ? ggml_backend_buffer_get_size(m->weight_buf) : 0;
+    if (!m) return 0;
+    const size_t alloc = m->weight_buf ? ggml_backend_buffer_get_size(m->weight_buf) : 0;
+    return alloc + m->mapped_bytes;  // allocated (F32) + mmapped weights
 }
 
 int detok_model_decode(DetokModel * m, const int * codes, int T_5Hz, float * context_out) {

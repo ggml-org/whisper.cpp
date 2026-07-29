@@ -57,6 +57,12 @@ struct CondModel {
 
     std::vector<float> null_emb;       // [2048] dequantized
     std::vector<float> silence_frame;  // [64] first frame of silence_latent (text2music timbre)
+
+    // CPU map-in-place: verbatim weights backed by `gguf`'s mmap via `map_buf`.
+    DitGGUF               gguf;
+    ggml_backend_buffer_t map_buf = nullptr;
+    bool                  mapped  = false;
+    size_t                mapped_bytes = 0;  // sum of mmapped weight nbytes
 };
 
 static void dequant_to_f32(const DitGGUF & g, const std::string & name, std::vector<float> & out) {
@@ -101,38 +107,43 @@ CondModel * cond_model_load(const std::string & path, ggml_backend_t backend, bo
         fprintf(stderr, "[acestep-cond] encoder_hidden_size=%u special_token=%d -> use_timbre_cls=%d\n", enc_hid,
                 (int) has_special, (int) m->use_timbre_cls);
 
+    // CPU backend: map the quantised weights straight off the mmap (no dirty RAM).
+    const bool            mapped  = ggml_backend_buft_is_host(ggml_backend_get_default_buffer_type(backend));
+    ggml_backend_buffer_t map_buf = mapped ? dit_gguf_cpu_map_buffer(g) : nullptr;
+
     const size_t n_tensors = (size_t) (m->lyric_cfg.n_layers + m->timbre_cfg.n_layers) * 11 + 16;
     ggml_init_params ip{ ggml_tensor_overhead() * n_tensors, nullptr, /*no_alloc=*/true };
     m->weight_ctx = ggml_init(ip);
     ggml_context * ctx = m->weight_ctx;
 
     // lyric encoder
-    m->lyric_embed_w = q3_create_like(ctx, g, "encoder.lyric_encoder.embed_tokens.weight");
+    m->lyric_embed_w = q3_create_like(ctx, g, "encoder.lyric_encoder.embed_tokens.weight", map_buf);
     m->lyric_embed_b = q3_create_f32_like(ctx, g, "encoder.lyric_encoder.embed_tokens.bias");
     m->lyric_norm    = q3_create_f32_like(ctx, g, "encoder.lyric_encoder.norm.weight");
     m->lyric_layers.resize(m->lyric_cfg.n_layers);
     for (int i = 0; i < m->lyric_cfg.n_layers; i++) {
-        q3_create_layer(ctx, g, "encoder.lyric_encoder.layers." + std::to_string(i), m->lyric_layers[i]);
+        q3_create_layer(ctx, g, "encoder.lyric_encoder.layers." + std::to_string(i), m->lyric_layers[i], map_buf);
     }
 
     // timbre encoder
-    m->timbre_embed_w = q3_create_like(ctx, g, "encoder.timbre_encoder.embed_tokens.weight");
+    m->timbre_embed_w = q3_create_like(ctx, g, "encoder.timbre_encoder.embed_tokens.weight", map_buf);
     m->timbre_embed_b = q3_create_f32_like(ctx, g, "encoder.timbre_encoder.embed_tokens.bias");
     m->timbre_norm    = q3_create_f32_like(ctx, g, "encoder.timbre_encoder.norm.weight");
     m->timbre_layers.resize(m->timbre_cfg.n_layers);
     for (int i = 0; i < m->timbre_cfg.n_layers; i++) {
-        q3_create_layer(ctx, g, "encoder.timbre_encoder.layers." + std::to_string(i), m->timbre_layers[i]);
+        q3_create_layer(ctx, g, "encoder.timbre_encoder.layers." + std::to_string(i), m->timbre_layers[i], map_buf);
     }
     if (m->use_timbre_cls) {
         m->timbre_cls = q3_create_f32_like(ctx, g, "encoder.timbre_encoder.special_token");
     }
 
     // text projector
-    m->text_proj_w = q3_create_like(ctx, g, "encoder.text_projector.weight");
+    m->text_proj_w = q3_create_like(ctx, g, "encoder.text_projector.weight", map_buf);
 
     m->weight_buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
     if (!m->weight_buf) {
         fprintf(stderr, "[acestep-cond] failed to allocate weight buffer\n");
+        if (map_buf) ggml_backend_buffer_free(map_buf);
         ggml_free(ctx);
         dit_gguf_close(g);
         delete m;
@@ -154,6 +165,7 @@ CondModel * cond_model_load(const std::string & path, ggml_backend_t backend, bo
     }
     if (m->use_timbre_cls) q3_load_f32(m->timbre_cls, g, "encoder.timbre_encoder.special_token");
     q3_load_raw(m->text_proj_w, g, "encoder.text_projector.weight");
+    m->mapped_bytes = mapped ? dit_gguf_mapped_bytes(ctx, g) : 0;
 
     dequant_to_f32(g, "null_condition_emb", m->null_emb);
 
@@ -177,7 +189,13 @@ CondModel * cond_model_load(const std::string & path, ggml_backend_t backend, bo
                 m->use_timbre_cls ? ",CLS" : "", m->null_emb.size());
     }
 
-    dit_gguf_close(g);
+    if (mapped) {
+        m->mapped  = true;
+        m->map_buf = map_buf;
+        m->gguf    = g;  // keep the mmap alive; mapped weights point into it
+    } else {
+        dit_gguf_close(g);
+    }
     return m;
 }
 
@@ -185,11 +203,15 @@ void cond_model_free(CondModel * m) {
     if (!m) return;
     if (m->weight_buf) ggml_backend_buffer_free(m->weight_buf);
     if (m->weight_ctx) ggml_free(m->weight_ctx);
+    if (m->map_buf) ggml_backend_buffer_free(m->map_buf);
+    if (m->mapped) dit_gguf_close(m->gguf);
     delete m;
 }
 
 size_t cond_model_weight_bytes(const CondModel * m) {
-    return m->weight_buf ? ggml_backend_buffer_get_size(m->weight_buf) : 0;
+    if (!m) return 0;
+    const size_t alloc = m->weight_buf ? ggml_backend_buffer_get_size(m->weight_buf) : 0;
+    return alloc + m->mapped_bytes;  // allocated (F32) + mmapped weights
 }
 
 const std::vector<float> & cond_model_null_emb(const CondModel * m) { return m->null_emb; }

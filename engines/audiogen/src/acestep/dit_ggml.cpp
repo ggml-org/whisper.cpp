@@ -67,6 +67,15 @@ struct DitModel {
     ggml_context *        weight_ctx = nullptr;
     ggml_backend_buffer_t weight_buf = nullptr;
 
+    // CPU map-in-place: when `mapped`, the bulk (quantised) weights are backed
+    // directly by `gguf`'s mmap via `map_buf` instead of `weight_buf`, so they
+    // cost no dirty RAM. `gguf` (and its mmap) must outlive the model, so it is
+    // kept open here and closed in dit_model_free. Unused on the GPU path.
+    DitGGUF               gguf;
+    ggml_backend_buffer_t map_buf = nullptr;
+    bool                  mapped  = false;
+    size_t                mapped_bytes = 0;  // sum of mmapped weight nbytes
+
     DitConfig cfg;
 
     DitTemb time_embed;
@@ -96,8 +105,13 @@ static float bf16_to_f32(uint16_t v) {
     return ggml_bf16_to_fp32(b);
 }
 
-// Create a weight tensor mirroring the GGUF meta tensor's type + shape.
-static ggml_tensor * create_like(ggml_context * ctx, const DitGGUF & g, const std::string & name) {
+// Create a weight tensor mirroring the GGUF meta tensor's type + shape. When
+// `map_buf` is non-null (CPU backend), the tensor is also mapped in-place onto
+// the GGUF mmap so no backend buffer is allocated for it and no copy is needed
+// (its matching load_raw becomes a no-op). map_buf is null on the GPU path, where
+// weights are allocated + uploaded as before.
+static ggml_tensor * create_like(ggml_context * ctx, const DitGGUF & g, const std::string & name,
+                                 ggml_backend_buffer_t map_buf = nullptr) {
     ggml_tensor * mt = dit_gmeta(g, name);
     if (!mt) {
         fprintf(stderr, "[acestep-dit] missing tensor: %s\n", name.c_str());
@@ -105,6 +119,7 @@ static ggml_tensor * create_like(ggml_context * ctx, const DitGGUF & g, const st
     }
     ggml_tensor * t = ggml_new_tensor(ctx, mt->type, ggml_n_dims(mt), mt->ne);
     ggml_set_name(t, name.c_str());
+    if (map_buf) dit_gguf_map_tensor(t, g, name, map_buf);
     return t;
 }
 
@@ -121,9 +136,11 @@ static ggml_tensor * create_f32_like(ggml_context * ctx, const DitGGUF & g, cons
 }
 
 // Upload raw bytes verbatim (dst type == GGUF type). Used for mul_mat operands
-// (kept in their native quant/precision type).
+// (kept in their native quant/precision type). A tensor already backed by the
+// mmap (create_like mapped it) needs no copy — derived per-tensor via
+// dit_gguf_is_mapped so no caller flag can drift and memcpy into a PROT_READ page.
 static void load_raw(ggml_tensor * dst, const DitGGUF & g, const std::string & name) {
-    if (!dst) return;
+    if (!dst || dit_gguf_is_mapped(dst, g)) return;
     const void * src = dit_gdata(g, name);
     ggml_tensor * mt = dit_gmeta(g, name);
     if (!src || !mt) {
@@ -226,12 +243,13 @@ static ggml_tensor * create_2d_f32(ggml_context * ctx, int64_t ne0, int64_t ne1,
     return t;
 }
 
-static void temb_create(DitTemb & w, ggml_context * ctx, const DitGGUF & g, const std::string & pfx) {
-    w.linear_1_w  = create_like(ctx, g, pfx + ".linear_1.weight");
+static void temb_create(DitTemb & w, ggml_context * ctx, const DitGGUF & g, const std::string & pfx,
+                        ggml_backend_buffer_t map_buf = nullptr) {
+    w.linear_1_w  = create_like(ctx, g, pfx + ".linear_1.weight", map_buf);
     w.linear_1_b  = create_f32_like(ctx, g, pfx + ".linear_1.bias");
-    w.linear_2_w  = create_like(ctx, g, pfx + ".linear_2.weight");
+    w.linear_2_w  = create_like(ctx, g, pfx + ".linear_2.weight", map_buf);
     w.linear_2_b  = create_f32_like(ctx, g, pfx + ".linear_2.bias");
-    w.time_proj_w = create_like(ctx, g, pfx + ".time_proj.weight");
+    w.time_proj_w = create_like(ctx, g, pfx + ".time_proj.weight", map_buf);
     w.time_proj_b = create_f32_like(ctx, g, pfx + ".time_proj.bias");
 }
 
@@ -416,17 +434,26 @@ DitModel * dit_model_load(const std::string & path, ggml_backend_t backend, bool
     const DitConfig & c = m->cfg;
     const int         H = c.hidden_size;
 
+    // CPU backend: map the bulk (quantised) weights straight off the GGUF mmap
+    // instead of copying them into a backend buffer, so they stay clean/evictable
+    // (see dit_gguf_cpu_map_buffer). `map_buf` is passed to create_like for the
+    // verbatim weights and left null for the F32-converted / permuted tensors,
+    // which are still allocated + uploaded. On a GPU backend map_buf stays null
+    // and behaviour is unchanged (weights uploaded to device memory).
+    const bool            mapped  = ggml_backend_buft_is_host(ggml_backend_get_default_buffer_type(backend));
+    ggml_backend_buffer_t map_buf = mapped ? dit_gguf_cpu_map_buffer(g) : nullptr;
+
     // enough overhead for all descriptors
     ggml_init_params ip{ ggml_tensor_overhead() * (size_t) (64 + 40 * c.n_layers), nullptr, /*no_alloc=*/true };
     m->weight_ctx = ggml_init(ip);
     ggml_context * ctx = m->weight_ctx;
 
-    temb_create(m->time_embed, ctx, g, "decoder.time_embed");
-    temb_create(m->time_embed_r, ctx, g, "decoder.time_embed_r");
+    temb_create(m->time_embed, ctx, g, "decoder.time_embed", map_buf);
+    temb_create(m->time_embed_r, ctx, g, "decoder.time_embed_r", map_buf);
 
     m->proj_in_w = create_2d_f32(ctx, (int64_t) c.in_channels * c.patch_size, H, "decoder.proj_in.1.weight");
     m->proj_in_b = create_f32_like(ctx, g, "decoder.proj_in.1.bias");
-    m->cond_emb_w = create_like(ctx, g, "decoder.condition_embedder.weight");
+    m->cond_emb_w = create_like(ctx, g, "decoder.condition_embedder.weight", map_buf);
     m->cond_emb_b = create_f32_like(ctx, g, "decoder.condition_embedder.bias");
     m->cfg.enc_hidden_size = (int) m->cond_emb_w->ne[0];  // [H_enc, H] -> H_enc
 
@@ -435,23 +462,23 @@ DitModel * dit_model_load(const std::string & path, ggml_backend_t backend, bool
         DitLayer &  ly = m->layers[i];
         std::string p  = "decoder.layers." + std::to_string(i);
         ly.self_attn_norm = create_f32_like(ctx, g, p + ".self_attn_norm.weight");
-        ly.sa_q_proj      = create_like(ctx, g, p + ".self_attn.q_proj.weight");
-        ly.sa_k_proj      = create_like(ctx, g, p + ".self_attn.k_proj.weight");
-        ly.sa_v_proj      = create_like(ctx, g, p + ".self_attn.v_proj.weight");
+        ly.sa_q_proj      = create_like(ctx, g, p + ".self_attn.q_proj.weight", map_buf);
+        ly.sa_k_proj      = create_like(ctx, g, p + ".self_attn.k_proj.weight", map_buf);
+        ly.sa_v_proj      = create_like(ctx, g, p + ".self_attn.v_proj.weight", map_buf);
         ly.sa_q_norm      = create_f32_like(ctx, g, p + ".self_attn.q_norm.weight");
         ly.sa_k_norm      = create_f32_like(ctx, g, p + ".self_attn.k_norm.weight");
-        ly.sa_o_proj      = create_like(ctx, g, p + ".self_attn.o_proj.weight");
+        ly.sa_o_proj      = create_like(ctx, g, p + ".self_attn.o_proj.weight", map_buf);
         ly.cross_attn_norm = create_f32_like(ctx, g, p + ".cross_attn_norm.weight");
-        ly.ca_q_proj      = create_like(ctx, g, p + ".cross_attn.q_proj.weight");
-        ly.ca_k_proj      = create_like(ctx, g, p + ".cross_attn.k_proj.weight");
-        ly.ca_v_proj      = create_like(ctx, g, p + ".cross_attn.v_proj.weight");
+        ly.ca_q_proj      = create_like(ctx, g, p + ".cross_attn.q_proj.weight", map_buf);
+        ly.ca_k_proj      = create_like(ctx, g, p + ".cross_attn.k_proj.weight", map_buf);
+        ly.ca_v_proj      = create_like(ctx, g, p + ".cross_attn.v_proj.weight", map_buf);
         ly.ca_q_norm      = create_f32_like(ctx, g, p + ".cross_attn.q_norm.weight");
         ly.ca_k_norm      = create_f32_like(ctx, g, p + ".cross_attn.k_norm.weight");
-        ly.ca_o_proj      = create_like(ctx, g, p + ".cross_attn.o_proj.weight");
+        ly.ca_o_proj      = create_like(ctx, g, p + ".cross_attn.o_proj.weight", map_buf);
         ly.mlp_norm       = create_f32_like(ctx, g, p + ".mlp_norm.weight");
-        ly.gate_proj      = create_like(ctx, g, p + ".mlp.gate_proj.weight");
-        ly.up_proj        = create_like(ctx, g, p + ".mlp.up_proj.weight");
-        ly.down_proj      = create_like(ctx, g, p + ".mlp.down_proj.weight");
+        ly.gate_proj      = create_like(ctx, g, p + ".mlp.gate_proj.weight", map_buf);
+        ly.up_proj        = create_like(ctx, g, p + ".mlp.up_proj.weight", map_buf);
+        ly.down_proj      = create_like(ctx, g, p + ".mlp.down_proj.weight", map_buf);
         ly.scale_shift_table = create_f32_like(ctx, g, p + ".scale_shift_table");
         ly.layer_type     = (i % 2 == 0) ? 0 : 1;
     }
@@ -463,16 +490,20 @@ DitModel * dit_model_load(const std::string & path, ggml_backend_t backend, bool
     m->scalar_one      = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
     ggml_set_name(m->scalar_one, "scalar_one");
 
+    // Allocates only the tensors still lacking data (the F32-converted / permuted
+    // ones); every mapped weight has ->data set already and is skipped.
     m->weight_buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
     if (!m->weight_buf) {
         fprintf(stderr, "[acestep-dit] failed to allocate weight buffer\n");
+        if (map_buf) ggml_backend_buffer_free(map_buf);
         ggml_free(ctx);
         dit_gguf_close(g);
         delete m;
         return nullptr;
     }
 
-    // upload
+    // upload — load_raw is a per-tensor no-op for mapped weights (already backed
+    // by the mmap); the F32-converted / permuted tensors are always uploaded.
     temb_load(m->time_embed, g, "decoder.time_embed");
     temb_load(m->time_embed_r, g, "decoder.time_embed_r");
     load_proj_in(m->proj_in_w, g, "decoder.proj_in.1.weight", H, c.in_channels, c.patch_size);
@@ -511,12 +542,25 @@ DitModel * dit_model_load(const std::string & path, ggml_backend_t backend, bool
     const float one = 1.0f;
     ggml_backend_tensor_set(m->scalar_one, &one, 0, sizeof(float));
 
-    dit_gguf_close(g);
+    // Exact mmapped weight footprint (sum of mapped tensor nbytes — excludes the
+    // allocated F32/permuted tensors and GGUF metadata, so it does not double-count).
+    m->mapped_bytes = mapped ? dit_gguf_mapped_bytes(ctx, g) : 0;
+
+    if (mapped) {
+        // Keep the mmap (and its backing buffer) alive for the model's lifetime;
+        // the mapped weights point into it. Freed in dit_model_free.
+        m->mapped  = true;
+        m->map_buf = map_buf;
+        m->gguf    = g;
+    } else {
+        dit_gguf_close(g);
+    }
 
     if (verbose) {
-        fprintf(stderr, "[acestep-dit] loaded %s: %.1f MB, %d layers H=%d Nh=%d/%d D=%d\n", path.c_str(),
-                (float) ggml_backend_buffer_get_size(m->weight_buf) / (1024 * 1024), c.n_layers, H, c.n_heads,
-                c.n_kv_heads, c.head_dim);
+        const float owned = (float) ggml_backend_buffer_get_size(m->weight_buf) / (1024 * 1024);
+        const float mapsz = (float) m->mapped_bytes / (1024 * 1024);
+        fprintf(stderr, "[acestep-dit] loaded %s: %.1f MB alloc + %.1f MB mmapped, %d layers H=%d Nh=%d/%d D=%d\n",
+                path.c_str(), owned, mapsz, c.n_layers, H, c.n_heads, c.n_kv_heads, c.head_dim);
     }
     return m;
 }
@@ -525,13 +569,18 @@ void dit_model_free(DitModel * m) {
     if (!m) return;
     if (m->weight_buf) ggml_backend_buffer_free(m->weight_buf);
     if (m->weight_ctx) ggml_free(m->weight_ctx);
+    // Order: drop the CPU map buffer, then munmap/close the GGUF it wrapped.
+    if (m->map_buf) ggml_backend_buffer_free(m->map_buf);
+    if (m->mapped) dit_gguf_close(m->gguf);
     delete m;
 }
 
 const DitConfig & dit_model_config(const DitModel * m) { return m->cfg; }
 
 size_t dit_model_weight_bytes(const DitModel * m) {
-    return (m && m->weight_buf) ? ggml_backend_buffer_get_size(m->weight_buf) : 0;
+    if (!m) return 0;
+    const size_t alloc = m->weight_buf ? ggml_backend_buffer_get_size(m->weight_buf) : 0;
+    return alloc + m->mapped_bytes;  // allocated (F32/permuted) + mmapped weights
 }
 
 bool dit_model_forward(DitModel * m, const DitForwardInputs & in, std::vector<float> & velocity_out) {
