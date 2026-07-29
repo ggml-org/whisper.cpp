@@ -98,8 +98,8 @@ int main(int argc, char ** argv) {
     const char * model = arg_val(argc, argv, "--model");
     if (!model) {
         fprintf(stderr,
-            "usage: acestep-cli --model vae.gguf [--decode] [--t-latent 32] [--out out.wav]\n"
-            "       acestep-cli --model vae.gguf --roundtrip --in in.wav [--seconds 2.56] [--out out.wav]\n");
+            "usage: acestep-cli --model vae.gguf [--decode] [--t-latent 32] [--out out.wav] [--gpu]\n"
+            "       acestep-cli --model vae.gguf --roundtrip --in in.wav [--seconds 2.56] [--out out.wav] [--gpu]\n");
         return 1;
     }
     const bool   roundtrip = arg_flag(argc, argv, "--roundtrip");
@@ -108,6 +108,11 @@ int main(int argc, char ** argv) {
     tts_cpp::acestep::VaeOptions opts;
     opts.verbose      = true;
     opts.with_encoder = roundtrip;  // decode mode does not need the encoder
+    // Run the decode/encode graph on a GPU backend. This exercises the whole real
+    // VAE graph (including the snake / col2im_1d custom ops at production shapes)
+    // in isolation from the LM and DiT, which is what makes it usable as a
+    // backend-parity target under GGML_VULKAN_CHECK_RESULTS.
+    opts.n_gpu_layers = arg_flag(argc, argv, "--gpu") ? 1 : 0;
 
     std::unique_ptr<tts_cpp::acestep::Vae> vae;
     try {

@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -25,6 +26,7 @@
 #include <random>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 
 // ACE-Step end-to-end music engine. Wires the ported stages behind
 // tts_cpp::acestep::Engine::generate():
@@ -89,11 +91,10 @@ namespace fs = std::filesystem;
 struct Engine::Impl {
     EngineOptions opts;
 
-    ggml_backend_t backend     = nullptr;  // primary backend (GPU or CPU) for textenc/cond/DiT
-    ggml_backend_t backend_cpu = nullptr;  // CPU backend for detok (uses a CPY variant Metal lacks); null when primary is CPU
-    ggml_backend_t backend_lm  = nullptr;  // backend the LM loads on (CPU when on GPU; see create)
-    ggml_backend_t backend_enc = nullptr;  // backend for textenc + cond (CPU when on GPU; see create)
-
+    ggml_backend_t backend       = nullptr;  // primary backend (GPU or CPU) for textenc/cond/DiT
+    ggml_backend_t backend_cpu   = nullptr;  // CPU backend for the stages pinned off the GPU; == backend when primary is CPU
+    ggml_backend_t backend_lm    = nullptr;  // backend the LM loads on (see create)
+    ggml_backend_t backend_enc   = nullptr;  // backend for textenc + cond (see create)
     TextEncModel * textenc = nullptr;
     LMModel *      lm      = nullptr;
     CondModel *    cond    = nullptr;
@@ -198,8 +199,7 @@ std::unique_ptr<Engine> Engine::create(const EngineOptions & opts_in) {
     if (!m->backend) throw std::runtime_error("acestep engine: backend init failed");
     if (on_gpu) {
         if (v) fprintf(stderr, "[acestep-engine] DiT/VAE on GPU backend: %s\n", ggml_backend_name(m->backend));
-        // The FSQ detokenizer emits a CPY variant our Metal backend lacks a
-        // kernel for, so it always runs on a dedicated CPU backend.
+        // Dedicated CPU backend for whichever stages are pinned off the GPU below.
         m->backend_cpu = backend_cpu_init();
         if (!m->backend_cpu) throw std::runtime_error("acestep engine: CPU backend init failed");
         backend_set_n_threads(m->backend_cpu, nth);
@@ -208,24 +208,49 @@ std::unique_ptr<Engine> Engine::create(const EngineOptions & opts_in) {
         m->backend_cpu = m->backend;  // single CPU backend serves every stage
     }
 
-    // Backend layout when a GPU is active. Almost everything runs on the GPU, but
-    // the autoregressive LM is the exception: on iOS A-series Metal it produces
-    // empty/garbage logits -> the sampler yields zero audio codes ("LM produced
-    // no audio codes"), while the SAME weights decode correctly on CPU. This is a
-    // NUMERICAL issue, not memory (unified RAM doesn't help), confirmed by testing
-    // the full-GPU path on device. So the LM defaults to the CPU backend whenever
-    // a GPU is active; the one-shot text/cond encoders stay on the GPU with the
-    // DiT + VAE. Env escape hatches (no rebuild needed):
-    //   ACESTEP_LM_GPU=1        -> force the LM back onto the GPU (desktop bench)
+    // Stage placement when a GPU is active. The DiT, the VAE and the one-shot
+    // text/cond encoders always run on it. The autoregressive LM and the FSQ
+    // detokenizer are allowlisted per backend instead, because each has a backend
+    // where it is known-wrong or simply unmeasured:
+    //
+    //   * LM: iOS/macOS A-series Metal produces empty/garbage logits, so the
+    //     sampler yields zero audio codes ("LM produced no audio codes") while the
+    //     SAME weights decode correctly on CPU. Numerical, not memory (unified RAM
+    //     does not help), confirmed against the full-GPU path on device.
+    //   * detokenizer: `detokenizer.special_tokens` ships quantized, so q3_as_f32
+    //     becomes ggml_cast(Q8_0 -> F32) and Metal had no kernel for that CPY
+    //     variant. It has one now (ggml-metal-device.m), but the stage has not been
+    //     run there since, so it stays off the Metal GPU.
+    //
+    // Allowlist rather than denylist: Vulkan is the only GPU backend either stage has
+    // actually been measured on (LM logits against an F32 reference, detokenizer
+    // latents against CPU). Every other backend therefore keeps the CPU placement
+    // that ships today, so adding one cannot silently regress generated audio.
+    // Widen the allowlist per backend once it is measured — ACESTEP_LM_GPU /
+    // ACESTEP_DETOK_GPU are how you take that measurement without a rebuild.
+    //
+    // Env escape hatches (applied after the allowlist; CPU wins if both are set):
+    //   ACESTEP_LM_GPU=1        -> LM on the GPU, whatever the backend
+    //   ACESTEP_LM_CPU=1        -> LM on the CPU, whatever the backend
+    //   ACESTEP_DETOK_GPU=1     -> detokenizer on the GPU, whatever the backend
+    //   ACESTEP_DETOK_CPU=1     -> detokenizer on the CPU, whatever the backend
     //   ACESTEP_ENCODERS_CPU=1  -> move the encoders to the CPU (trim wired mem)
-    ggml_backend_t enc_backend = m->backend;
-    ggml_backend_t lm_backend  = m->backend;
+    ggml_backend_t enc_backend   = m->backend;
+    ggml_backend_t lm_backend    = m->backend;
+    ggml_backend_t detok_backend = m->backend;
     if (on_gpu) {
-        lm_backend = m->backend_cpu;  // A-series Metal LM is numerically broken
-        if (std::getenv("ACESTEP_LM_GPU"))       lm_backend  = m->backend;
-        if (std::getenv("ACESTEP_ENCODERS_CPU")) enc_backend = m->backend_cpu;
-        if (v) fprintf(stderr, "[acestep-engine] backends: enc=%s lm=%s dit/vae=%s\n",
-                       ggml_backend_name(enc_backend), ggml_backend_name(lm_backend), ggml_backend_name(m->backend));
+        if (!backend_is_vulkan(m->backend)) {
+            lm_backend    = m->backend_cpu;
+            detok_backend = m->backend_cpu;
+        }
+        if (std::getenv("ACESTEP_LM_GPU"))       lm_backend    = m->backend;
+        if (std::getenv("ACESTEP_LM_CPU"))       lm_backend    = m->backend_cpu;
+        if (std::getenv("ACESTEP_DETOK_GPU"))    detok_backend = m->backend;
+        if (std::getenv("ACESTEP_DETOK_CPU"))    detok_backend = m->backend_cpu;
+        if (std::getenv("ACESTEP_ENCODERS_CPU")) enc_backend   = m->backend_cpu;
+        if (v) fprintf(stderr, "[acestep-engine] backends: enc=%s lm=%s detok=%s dit/vae=%s\n",
+                       ggml_backend_name(enc_backend), ggml_backend_name(lm_backend),
+                       ggml_backend_name(detok_backend), ggml_backend_name(m->backend));
     }
     m->backend_enc = enc_backend;
     m->backend_lm  = lm_backend;
@@ -240,7 +265,7 @@ std::unique_ptr<Engine> Engine::create(const EngineOptions & opts_in) {
     m->cond = cond_model_load(opts.dit_model_path, enc_backend, v);
     if (!m->cond) throw std::runtime_error("acestep engine: cond-encoder load failed");
 
-    m->detok = detok_model_load(opts.dit_model_path, m->backend_cpu, v);
+    m->detok = detok_model_load(opts.dit_model_path, detok_backend, v);
     if (!m->detok) throw std::runtime_error("acestep engine: FSQ detokenizer load failed");
 
     m->dit = dit_model_load(opts.dit_model_path, m->backend, v);
@@ -276,6 +301,80 @@ std::unique_ptr<Engine> Engine::create(const EngineOptions & opts_in) {
     return eng;
 }
 
+// ------------------------------------------------------------ stage timing
+// The ProgressFn only carries cumulative wall-clock at stage boundaries, which
+// leaves detok + text-encoder + cond-encoder inside a single unmeasured gap.
+// Recording each stage explicitly is what lets the "speed up each stage" vs
+// "overlap the stages" question be answered with measurements. Printed when
+// EngineOptions::verbose is set.
+namespace {
+class StageTimes {
+public:
+    void mark(const char * name) {
+        const auto now = std::chrono::steady_clock::now();
+        entries_.emplace_back(name, std::chrono::duration<double, std::milli>(now - last_).count());
+        last_ = now;
+    }
+
+    void dump(FILE * f) const {
+        double total = 0.0;
+        for (const auto & e : entries_) total += e.second;
+        fprintf(f, "[acestep-timing] per-stage wall clock (total %.0f ms)\n", total);
+        for (const auto & e : entries_)
+            fprintf(f, "[acestep-timing]   %-12s %9.1f ms  %5.1f%%\n", e.first, e.second,
+                    total > 0.0 ? 100.0 * e.second / total : 0.0);
+    }
+
+private:
+    std::chrono::steady_clock::time_point       last_ = std::chrono::steady_clock::now();
+    std::vector<std::pair<const char *, double>> entries_;
+};
+
+// Per-stage tensor dumps for cross-backend parity work. Inactive (and free)
+// unless EngineOptions::dump_stages_dir is set, so this lives in the normal
+// build instead of behind a compile flag: localising a backend divergence
+// should not require rebuilding the engine.
+class StageDump {
+public:
+    explicit StageDump(std::string dir, bool verbose) : dir_(std::move(dir)), verbose_(verbose) {}
+
+    bool active() const { return !dir_.empty(); }
+
+    // d0 = row count (slow axis), d1 = row length (fastest-varying axis), which
+    // is the convention dbg_write_dump and acestep.cpp's --dump already use.
+    void write(const char * name, const float * data, size_t n, int d0, int d1) const {
+        if (!active()) return;
+        const std::string path = dir_ + "/" + name + ".bin";
+        FILE *            f    = fopen(path.c_str(), "wb");
+        if (!f) {
+            fprintf(stderr, "[acestep-dump] cannot write %s\n", path.c_str());
+            return;
+        }
+        const int32_t hdr[3] = {2, d0, d1};
+        fwrite(hdr, sizeof(int32_t), 3, f);
+        fwrite(data, sizeof(float), n, f);
+        fclose(f);
+        if (verbose_) fprintf(stderr, "[acestep-dump] %s [%d, %d] %zu floats\n", path.c_str(), d0, d1, n);
+    }
+
+    void write(const char * name, const std::vector<float> & v, int d0, int d1) const {
+        write(name, v.data(), v.size(), d0, d1);
+    }
+
+    // Integer stages (LM codes) are stored as float32 so one reader handles every
+    // dump; code ids are well inside the exactly-representable range.
+    void write_ints(const char * name, const std::vector<int> & v) const {
+        if (!active()) return;
+        std::vector<float> f(v.begin(), v.end());
+        write(name, f, (int) f.size(), 1);
+    }
+
+private:
+    std::string dir_;
+    bool        verbose_ = false;
+};
+}  // namespace
+
 // ------------------------------------------------------------ generate
 static std::string build_metas(int bpm, const std::string & timesig, const std::string & keyscale, float dur) {
     char bpm_b[16] = "N/A";
@@ -299,6 +398,9 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
         if (progress && !progress(stage, step, total)) { m->cancel_flag.store(true); return false; }
         return !m->cancel_flag.load();
     };
+
+    StageTimes timing;
+    StageDump  dump(m->opts.dump_stages_dir, m->opts.verbose);
 
     // Low-memory mode: free each stage model as soon as it is no longer needed so
     // the peak resident set stays small enough for memory-constrained devices
@@ -335,6 +437,7 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
             if (!m->cond) throw std::runtime_error("acestep engine: cond-encoder reload failed");
         }
     }
+    timing.mark("reload");
 
     long long seed = params.seed;
     if (seed < 0) { std::random_device rd; seed = (long long) rd(); }
@@ -394,6 +497,8 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
         lm_model_free(m->lm);
         m->lm = nullptr;
     }
+    timing.mark("lm");
+    dump.write_ints("01_lm_codes", codes);
 
     // ---- 2. FSQ detok: codes -> context latents [64, T_25Hz] ----
     const int          T_5Hz  = (int) codes.size();
@@ -401,6 +506,8 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     std::vector<float> detok_latent((size_t) 64 * T_25Hz);
     if (detok_model_decode(m->detok, codes.data(), T_5Hz, detok_latent.data()) != T_25Hz)
         throw std::runtime_error("acestep engine: FSQ detokenizer failed");
+    timing.mark("detok");
+    dump.write("02_detok_latent", detok_latent, T_25Hz, 64);
 
     // ---- 3. context [ctx_ch=128, T] = [detok latent[64] | mask[64]=1] ----
     const DitConfig & dc     = dit_model_config(m->dit);
@@ -461,6 +568,9 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
         throw std::runtime_error("acestep engine: text-encoder forward failed");
     if (!textenc_model_embed_lookup(m->textenc, lyric_ids32.data(), S_lyric, lyric_embed))
         throw std::runtime_error("acestep engine: lyric embed lookup failed");
+    timing.mark("textenc");
+    dump.write("04_text_hidden", text_hidden, S_text, (int) (text_hidden.size() / (size_t) S_text));
+    dump.write("05_lyric_embed", lyric_embed, S_lyric, (int) (lyric_embed.size() / (size_t) S_lyric));
 
     // ---- 5. cond-encoder: -> enc_hidden [2048, S_total] ----
     // text2music feeds one frame of the silence latent to the timbre encoder so
@@ -494,9 +604,15 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
         }
     }
 
+    timing.mark("cond");
+    dump.write("03_context", context, T, ctx_ch);
+    dump.write("06_enc_hidden", enc_hidden, enc_S, H_enc);
+
     // ---- 6. noise [64, T] (Philox, torch.randn parity) ----
     std::vector<float> noise((size_t) Oc * T);
     philox_randn(seed, noise.data(), (int) noise.size(), /*bf16_round=*/true);
+    timing.mark("noise");
+    dump.write("07_noise", noise, T, Oc);
 
 #ifdef ACESTEP_PARITY_DEBUG
     // Debug (env-gated): inject acestep.cpp --dump inputs to isolate the DiT graph.
@@ -543,6 +659,8 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
         throw std::runtime_error("acestep engine: DiT sample failed");
     }
     if (!report("dit", n_steps, n_steps)) return result;
+    timing.mark("dit");
+    dump.write("08_dit_latent", latent, T, Oc);
 
 #ifdef ACESTEP_PARITY_DEBUG
     // Debug (env-gated): dump our DiT output + inputs for parity vs acestep.cpp.
@@ -567,6 +685,9 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     if (!vae_ok) return result;  // cancelled mid-decode
     if (result.pcm.empty()) throw std::runtime_error("acestep engine: VAE decode failed");
     report("vae", 1, 1);
+    timing.mark("vae");
+    dump.write("09_vae_pcm", result.pcm, (int) (result.pcm.size() / 2), 2);
+    if (m->opts.verbose) timing.dump(stderr);
 
     // ---- metadata ----
     // Read back from prompt.*, not params.*: Phase 1 gap-fills the prompt in

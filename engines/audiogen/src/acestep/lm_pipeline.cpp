@@ -465,10 +465,26 @@ bool lm_generate_codes(LMModel *              m,
         return sample_top_k_p(lc.data(), V, params.temperature, params.top_p, params.top_k, rng);
     };
 
+    const char *       dump_layers_path = std::getenv("ACESTEP_LM_DUMP_LAYERS");
+    std::vector<float> layer_states;
+
     lm_reset(m, 0);
-    if (!lm_model_forward(m, tokens.data(), (int) tokens.size(), lc, 0)) {
+    if (!lm_model_forward(m, tokens.data(), (int) tokens.size(), lc, 0,
+                          dump_layers_path ? &layer_states : nullptr)) {
         fprintf(stderr, "[lm-pipeline] cond prefill failed\n");
         return false;
+    }
+    if (dump_layers_path && !layer_states.empty()) {
+        const int32_t n_layers  = lm_model_config(m).n_layers;
+        const int32_t per_layer = (int32_t) (layer_states.size() / (size_t) n_layers);
+        const int32_t hdr[3]    = { 2, n_layers, per_layer };
+        if (FILE * f = fopen(dump_layers_path, "wb")) {
+            fwrite(hdr, sizeof(hdr), 1, f);
+            fwrite(layer_states.data(), sizeof(float), layer_states.size(), f);
+            fclose(f);
+            fprintf(stderr, "[lm-dbg] wrote layer states -> %s (%zu floats)\n", dump_layers_path,
+                    layer_states.size());
+        }
     }
     if (use_cfg) {
         lm_reset(m, 1);

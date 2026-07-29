@@ -28,6 +28,7 @@
 
 #include "ggml-backend.h"
 
+#include <cstring>
 #include <string>
 
 namespace tts_cpp::acestep {
@@ -58,6 +59,22 @@ inline void backend_set_n_threads(ggml_backend_t backend, int n_threads) {
     auto set_n_threads =
         (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
     if (set_n_threads) set_n_threads(backend, n_threads);
+}
+
+// Registry name of the backend implementation ("CPU", "Vulkan", "MTL", ...).
+// Unlike `ggml_backend_name()` this carries no device-index suffix ("Vulkan0"), so
+// stage-placement policies can compare it exactly. Mirrors the helper in
+// engines/tts/src/backend_util.h; duplicated so audiogen stays self-contained.
+inline const char * backend_reg_name(ggml_backend_t backend) {
+    if (!backend) return "";
+    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+    const char * name = reg ? ggml_backend_reg_name(reg) : nullptr;
+    return name ? name : "";
+}
+
+inline bool backend_is_vulkan(ggml_backend_t backend) {
+    return std::strcmp(backend_reg_name(backend), "Vulkan") == 0;
 }
 
 }  // namespace tts_cpp::acestep

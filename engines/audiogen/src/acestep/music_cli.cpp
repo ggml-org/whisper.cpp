@@ -10,6 +10,7 @@
 //   music-cli --dit dit.gguf --lm lm.gguf --text emb.gguf --vae vae.gguf ...
 //   optional: --caption "..." --lyrics "..." --steps 8 --shift 3.0
 //             --bpm 128 --key "C major" --tsig 4/4 --lang en
+//             --gpu --threads N --dump-stages <existing dir>
 
 #include "audiogen-cpp/acestep/engine.h"
 
@@ -108,13 +109,25 @@ int main(int argc, char ** argv) {
     if (arg_val(argc, argv, "--lm"))     o.lm_model_path = arg_val(argc, argv, "--lm");
     if (arg_val(argc, argv, "--text"))   o.text_enc_model_path = arg_val(argc, argv, "--text");
     if (arg_val(argc, argv, "--vae"))    o.vae_model_path = arg_val(argc, argv, "--vae");
-    // Run every stage (text-encoder, LM, cond, DiT and the VAE) on a GPU backend
-    // (Metal/CUDA/Vulkan) when available; the custom snake / col2im_1d ops now
-    // have Metal kernels, so the VAE decode runs on GPU too. Detok stays on CPU.
+    // Offer every stage to a GPU backend (Metal/CUDA/Vulkan) when one is available.
+    // Engine::create makes the final placement call: the DiT, VAE and encoders always
+    // take the GPU, while the LM and the FSQ detokenizer are allowlisted per backend
+    // and currently only move off the CPU on Vulkan.
     if (arg_flag(argc, argv, "--gpu"))   o.n_gpu_layers = 99;
+    if (arg_val(argc, argv, "--threads")) o.n_threads = atoi(arg_val(argc, argv, "--threads"));
+    // Parity aid: write one .bin per stage so a CPU/GPU divergence can be traced
+    // to the stage that introduces it rather than inferred from the final WAV.
+    if (arg_val(argc, argv, "--dump-stages")) o.dump_stages_dir = arg_val(argc, argv, "--dump-stages");
 
     if (o.models_dir.empty() && o.dit_model_path.empty()) {
-        fprintf(stderr, "usage: music-cli --models <dir> [--out song.wav] [--dur 8] [--seed 42]\n");
+        fprintf(stderr,
+                "usage: music-cli --models <dir> [--out song.wav] [--dur 8] [--seed 42]\n"
+                "   or: music-cli --dit dit.gguf --lm lm.gguf --text emb.gguf --vae vae.gguf\n"
+                "  prompt:  [--caption \"...\"] [--lyrics \"...\"] [--bpm 128] [--key \"C major\"]\n"
+                "           [--tsig 4/4] [--lang en] [--req request.json]\n"
+                "  sampler: [--steps 8] [--shift 3.0] [--temp 1.0] [--cfg 1.5] [--topk 50]\n"
+                "           [--topp 0.95] [--no-phase1]\n"
+                "  backend: [--gpu] [--threads N] [--dump-stages <existing dir>]\n");
         return 1;
     }
 

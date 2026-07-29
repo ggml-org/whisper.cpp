@@ -61,6 +61,11 @@ struct EngineOptions {
     // acquiring any backend from the registry. Empty -> rely on ggml's built-in
     // search path (static-linked desktop / Apple builds need nothing here).
     std::string backends_dir;
+    // When non-empty, generate() writes one .bin per pipeline stage into this
+    // directory (3x int32 header [ndim, d0, d1] then float32 payload). Used to
+    // localise a backend divergence to the stage that introduces it; the
+    // directory must already exist. Empty = no dumping and no overhead.
+    std::string dump_stages_dir;
     // NOTE: VAE tiling (windowed decode for bounded memory on long tracks) is
     // handled internally by vae_model_decode with values tuned to the Metal
     // buffer limit; it is intentionally not exposed as config to avoid a footgun

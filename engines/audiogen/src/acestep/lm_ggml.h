@@ -51,7 +51,11 @@ int  lm_kv_pos(const LMModel * m, int set = 0);
 // Run one forward over `n_tokens` (prefill: n_tokens>1, decode: 1) at the
 // current KV position of `set`, appending to that cache. Writes the last token's
 // logits [vocab_size] to `logits_out`. Returns false on failure.
+// When `layer_states_out` is non-null it receives each layer's hidden state
+// [hidden_size * n_tokens] concatenated in layer order, for CPU/GPU parity
+// debugging. It forces those tensors to stay resident, so leave it null in
+// production paths.
 bool lm_model_forward(LMModel * m, const int32_t * token_ids, int n_tokens, std::vector<float> & logits_out,
-                      int set = 0);
+                      int set = 0, std::vector<float> * layer_states_out = nullptr);
 
 } // namespace tts_cpp::acestep
