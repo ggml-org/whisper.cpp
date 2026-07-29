@@ -1,0 +1,22 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(ggml CONFIG)
+
+# OpenMP is linked PRIVATE on the parakeet target, but a STATIC archive
+# does not carry transitive private deps the way a shared library does:
+# CMake exports them into the target's link interface as
+# $<LINK_ONLY:OpenMP::OpenMP_CXX>. The imported target therefore has to
+# exist in the consumer's scope or find_package(qvac-parakeet) fails at
+# generate time with "target was not found". Recorded at configure time
+# (rather than probed unconditionally) so consumers of a build that did
+# NOT use OpenMP are not forced to have it installed.
+set(QVAC_PARAKEET_WITH_OPENMP @QVAC_PARAKEET_WITH_OPENMP@)
+if (QVAC_PARAKEET_WITH_OPENMP)
+    find_dependency(OpenMP COMPONENTS CXX)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/qvac-parakeet-targets.cmake")
+
+check_required_components(qvac-parakeet)

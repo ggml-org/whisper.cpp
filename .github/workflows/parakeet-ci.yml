@@ -119,6 +119,19 @@ jobs:
           LD_LIBRARY_PATH: ${{ github.workspace }}/ggml-install/lib
         run: ctest --test-dir build -LE 'gpu|perf' --output-on-failure --timeout 600
 
+      # Guards the *installed* artifact contract, which no in-tree ctest
+      # can see: the qvac-parakeet package/target names, a static-only
+      # install with no dead bin/ reference, a self-sufficient .pc
+      # (including Libs.private for the PRIVATE OpenMP / Core ML deps —
+      # OpenMP is found on the ubuntu runner, so this lane is where that
+      # path is exercised), and the absence of any bare-`parakeet`
+      # artifact that would collide with upstream whisper.cpp's own
+      # parakeet in a shared vcpkg prefix.
+      - name: Package-consumption contract (find_package + pkg-config)
+        run: |
+          bash engines/parakeet/scripts/test-package-consumption.sh \
+            --ggml-prefix "$PWD/ggml-install"
+
   # GPU lane stub: opt-in until self-hosted GPU runners exist. Trial note:
   # hosted macos-14 exposes Metal, so moving `-L gpu` into the macOS
   # build-test job is a cheap first experiment.

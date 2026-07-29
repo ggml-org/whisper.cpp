@@ -4,7 +4,7 @@
 // GGML_BACKEND_DL=ON and GGML_BACKEND_DL=OFF. The legacy
 // ggml_backend_is_cpu / ggml_backend_is_metal entry points live in
 // the per-backend shared libraries (libggml-cpu.* / libggml-metal.*),
-// so they are unlinkable from libparakeet under the dynamic-loader
+// so they are unlinkable from libqvac-parakeet under the dynamic-loader
 // build mode embedded host applications typically ship with. Routing
 // through the registry (ggml_backend_get_device + ggml_backend_dev_*)
 // reaches the same answer in both modes.

@@ -85,7 +85,7 @@ Run with GPU layers:
 | `PARAKEET_BUILD_EXECUTABLES` | `ON` standalone / `OFF` subdir | `parakeet-cli` (binary `parakeet`) |
 | `PARAKEET_BUILD_TESTS` | `ON` standalone / `OFF` subdir | `test-*` parity / unit harnesses |
 | `PARAKEET_BUILD_EXAMPLES` | `ON` standalone / `OFF` subdir | `live-mic`, `live-mic-attributed` |
-| `PARAKEET_INSTALL` | `ON` | Generate `install` rules + the `parakeet-cpp` CMake package config |
+| `PARAKEET_INSTALL` | `ON` | Generate `install` rules + the `qvac-parakeet` CMake package config (`find_package(qvac-parakeet)` → `qvac::parakeet`) |
 | `PARAKEET_USE_SYSTEM_GGML` | `OFF` | Link system ggml instead of `ggml/` submodule |
 | `PARAKEET_GGML_LIB_PREFIX` | `ON` | Prefix bundled ggml libs as `speech-ggml-*` (shared with whisper / chatterbox / supertonic so the QVAC speech stack vendors a single ggml file set; no-op when `PARAKEET_USE_SYSTEM_GGML=ON`) |
 | `PARAKEET_OPENMP` | `ON` (auto-OFF on Windows non-MinGW) | Try `find_package(OpenMP)` and link the parakeet target against it |
@@ -296,12 +296,12 @@ Typical f16 stage rel vs NeMo (order of magnitude): mel ~1e-4 inner, blocks ~1e-
 | Path | Role |
 |------|------|
 | `CMakeLists.txt` | Top-level build (library, CLI, tests, examples, install/package config) |
-| `cmake/` | Package-config template (`parakeet-cppConfig.cmake.in`) |
+| `cmake/` | Package templates (`qvac-parakeet-config.cmake.in`, `qvac-parakeet.pc.in`) |
 | `src/` | Engine, decoders, mel, CLI |
 | `include/parakeet/` | Public headers (`parakeet.h`, `engine.h`, `streaming.h`, …) |
-| `test/` | `test_*.cpp` CTest sources |
+| `test/` | `test_*.cpp` CTest sources; `consumer/` is the downstream fixture used by the package-consumption test |
 | `examples/` | `live-mic`, `live-mic-attributed`, vendored miniaudio |
-| `scripts/` | `setup-ggml.sh`, conversion, NeMo dumps, `download-all-models.sh`; optional tools in §4 |
+| `scripts/` | `setup-ggml.sh`, `test-package-consumption.sh` (installed-package contract: `find_package(qvac-parakeet)` + `qvac::parakeet`, pkg-config `--static`, no bare-`parakeet` artifacts), conversion, NeMo dumps, `download-all-models.sh`; optional tools in §4 |
 | `patches/` | ggml patches applied by `setup-ggml.sh` (filename-prefix loader, OpenCL relax, OpenCL kernel-binary cache) |
 | `ggml/` | Pinned upstream clone (or `-DPARAKEET_USE_SYSTEM_GGML=ON`) |
 | `models/`, `artifacts/`, `test/samples/` | Local fixtures (not tracked) |

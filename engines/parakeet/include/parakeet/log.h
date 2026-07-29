@@ -1,6 +1,6 @@
 #pragma once
 
-// Install a ggml_log_callback for libparakeet; nullptr restores stderr.
+// Install a ggml_log_callback for libqvac-parakeet; nullptr restores stderr.
 //
 // Also forwards to ggml_log_set so ggml and parakeet share one sink. Uses ggml.h types.
 

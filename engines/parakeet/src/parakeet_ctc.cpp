@@ -247,7 +247,7 @@ std::atomic<bool> g_opencl_cache_dir_warned{false};
 // ship with) the CUDA / Metal / Vulkan / OpenCL / BLAS / ggml-cpu
 // backends live in separate shared libraries that are dlopened at
 // runtime; their concrete init symbols are not linkable from
-// libparakeet, and the only supported entry point is the registry.
+// libqvac-parakeet, and the only supported entry point is the registry.
 // With GGML_BACKEND_DL=OFF the backends are statically linked into
 // libggml, registered at constructor time, and
 // ggml_backend_load_all() is a cheap no-op. Both modes therefore
@@ -370,7 +370,7 @@ const char * dev_reg_name(ggml_backend_dev_t dev) {
 // `ggml_backend_metal_init` are made anywhere in parakeet — under
 // the GGML_BACKEND_DL=ON build mode embedded host applications ship
 // with, those entry points live in separate shared libraries that
-// are dlopen()'d at runtime and are not linkable from libparakeet.
+// are dlopen()'d at runtime and are not linkable from libqvac-parakeet.
 // The registry walk reaches the same backends in both modes.
 ggml_backend_t init_gpu_backend(int n_gpu_layers, bool verbose,
                                 bool & out_skipped_unsupported_gpu,

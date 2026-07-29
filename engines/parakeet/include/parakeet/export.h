@@ -2,7 +2,7 @@
 
 // PARAKEET_API marks exported symbols when building/using a shared library; empty for static.
 //
-// PARAKEET_SHARED — define when linking against or building libparakeet as a DLL/shared object.
+// PARAKEET_SHARED — define when linking against or building libqvac-parakeet as a DLL/shared object.
 // PARAKEET_BUILD — define only in translation units that compile the library (export vs import on Windows).
 
 #ifdef PARAKEET_SHARED

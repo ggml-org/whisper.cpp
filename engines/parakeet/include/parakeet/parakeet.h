@@ -1,6 +1,6 @@
 #pragma once
 
-// Umbrella include for libparakeet (each header below can also be included alone).
+// Umbrella include for libqvac-parakeet (each header below can also be included alone).
 //
 //   <parakeet/export.h>      - PARAKEET_API visibility macro
 //   <parakeet/cli.h>         - parakeet_cli_main C entry point

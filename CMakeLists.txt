@@ -38,9 +38,15 @@ if (SPEECH_BUILD_WHISPER)
     set(WHISPER_USE_SYSTEM_GGML ON  CACHE BOOL "umbrella: one shared system ggml" FORCE)
     set(WHISPER_BUILD_TESTS     ${SPEECH_BUILD_WHISPER_TESTS} CACHE BOOL "umbrella: see SPEECH_BUILD_WHISPER_TESTS" FORCE)
     set(WHISPER_BUILD_EXAMPLES  ${SPEECH_BUILD_EXECUTABLES} CACHE BOOL "umbrella: whisper-cli lives in examples/" FORCE)
-    # Upstream ships its own C-API parakeet (target names `parakeet`,
-    # `parakeet-cli`) which collides with engines/parakeet — gate it off
-    # (QVAC patch in the subtree, see third_party/whisper.cpp/PATCHES.md).
+    # Upstream ships its own C-API parakeet which collides with
+    # engines/parakeet — gate it off (QVAC patch in the subtree, see
+    # third_party/whisper.cpp/PATCHES.md). engines/parakeet's library
+    # artifacts moved to the qvac-parakeet namespace, but upstream's
+    # `parakeet-cli` target name still clashes with ours, and its
+    # install payload (lib/libparakeet.*, lib/cmake/parakeet/,
+    # parakeet.pc) is owned by the standalone whisper-cpp vcpkg port —
+    # shipping it from here too would recreate the file-ownership
+    # conflict this gate exists to avoid.
     # CACHE FORCE because whisper's cmake_minimum_required(3.5) leaves
     # CMP0077 OLD in its scope: a plain normal-variable set() here would
     # be clobbered by its option() default on the first configure.

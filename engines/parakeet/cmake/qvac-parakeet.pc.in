@@ -1,0 +1,11 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+exec_prefix=${prefix}
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: qvac-parakeet
+Description: NVIDIA Parakeet (FastConformer ASR + Sortformer diarization) inference in C++/ggml
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -lqvac-parakeet @PARAKEET_PC_GGML_LIBS@
+@PARAKEET_PC_LIBS_PRIVATE@
+Cflags: -I${includedir} @PARAKEET_PC_GGML_CFLAGS@
