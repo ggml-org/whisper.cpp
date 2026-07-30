@@ -6,6 +6,7 @@
 #include "acestep/cond_ggml.h"
 #include "acestep/detok_ggml.h"
 #include "acestep/dit_ggml.h"
+#include "acestep/dit_gguf.h"  // DitGGUF: read DiT config + validate GGUF headers at create()
 #include "acestep/lm_ggml.h"
 #include "acestep/lm_pipeline.h"
 #include "acestep/philox.h"
@@ -95,6 +96,7 @@ struct Engine::Impl {
     ggml_backend_t backend_cpu   = nullptr;  // CPU backend for the stages pinned off the GPU; == backend when primary is CPU
     ggml_backend_t backend_lm    = nullptr;  // backend the LM loads on (see create)
     ggml_backend_t backend_enc   = nullptr;  // backend for textenc + cond (see create)
+    ggml_backend_t backend_detok = nullptr;  // backend the FSQ detok loads on (CPU off-GPU, GPU on Vulkan; see create)
     TextEncModel * textenc = nullptr;
     LMModel *      lm      = nullptr;
     CondModel *    cond    = nullptr;
@@ -108,16 +110,76 @@ struct Engine::Impl {
 
     mutable std::atomic<bool> cancel_flag{ false };
 
+    // Sequential-loading state (see create()/generate()). In the default low-mem
+    // mode no stage is resident after create(); generate() loads each stage right
+    // before its step and frees it right after, so the peak resident set is one
+    // stage — not all six at once. dit_cfg is read from the DiT GGUF metadata at
+    // create() so the context-build step needs no resident DiT; sr lets
+    // sample_rate() answer before the VAE is loaded.
+    DitConfig  dit_cfg{};
+    int        sr          = 48000;
+    int        nth         = 4;
+    bool       keep_stages = false;  // ACESTEP_KEEP_STAGES: eager-load + never free
+    VaeOptions vae_opts{};           // saved so the VAE can be (re)loaded lazily
+
     ~Impl() {
-        if (dit) dit_model_free(dit);
-        if (detok) detok_model_free(detok);
-        if (cond) cond_model_free(cond);
-        if (lm) lm_model_free(lm);
-        if (textenc) textenc_model_free(textenc);
-        vae.reset();
+        free_dit();
+        free_detok();
+        free_cond();
+        free_lm();
+        free_textenc();
+        free_vae();
         if (backend_cpu && backend_cpu != backend) ggml_backend_free(backend_cpu);
         if (backend) ggml_backend_free(backend);
     }
+
+    // --- per-stage lazy load / free -----------------------------------------
+    // ensure_*() loads a stage if it is not already resident (idempotent, so it
+    // serves both the eager keep-stages path and the lazy per-generate reload);
+    // free_*() releases it. All throw on a genuine load failure.
+    void ensure_textenc() {
+        if (textenc) return;
+        if (opts.verbose) fprintf(stderr, "[acestep-engine] loading text-encoder\n");
+        textenc = textenc_model_load(opts.text_enc_model_path, backend_enc, opts.verbose);
+        if (!textenc) throw std::runtime_error("acestep engine: text-encoder load failed");
+    }
+    void ensure_lm() {
+        if (lm) return;
+        if (opts.verbose) fprintf(stderr, "[acestep-engine] loading LM\n");
+        lm = lm_model_load(opts.lm_model_path, backend_lm, /*max_seq_len=*/2048, opts.verbose, /*n_kv_sets=*/2);
+        if (!lm) throw std::runtime_error("acestep engine: LM load failed");
+    }
+    void ensure_cond() {
+        if (cond) return;
+        if (opts.verbose) fprintf(stderr, "[acestep-engine] loading cond-encoder\n");
+        cond = cond_model_load(opts.dit_model_path, backend_enc, opts.verbose);
+        if (!cond) throw std::runtime_error("acestep engine: cond-encoder load failed");
+    }
+    void ensure_detok() {
+        if (detok) return;
+        if (opts.verbose) fprintf(stderr, "[acestep-engine] loading FSQ detokenizer\n");
+        detok = detok_model_load(opts.dit_model_path, backend_detok, opts.verbose);
+        if (!detok) throw std::runtime_error("acestep engine: FSQ detokenizer load failed");
+    }
+    void ensure_dit() {
+        if (dit) return;
+        if (opts.verbose) fprintf(stderr, "[acestep-engine] loading DiT\n");
+        dit = dit_model_load(opts.dit_model_path, backend, opts.verbose);
+        if (!dit) throw std::runtime_error("acestep engine: DiT load failed");
+    }
+    void ensure_vae() {
+        if (vae) return;
+        if (opts.verbose) fprintf(stderr, "[acestep-engine] loading VAE\n");
+        vae = Vae::load(opts.vae_model_path, vae_opts);
+        if (!vae) throw std::runtime_error("acestep engine: VAE load failed");
+        sr = vae->sample_rate();
+    }
+    void free_textenc() { if (textenc) { textenc_model_free(textenc); textenc = nullptr; } }
+    void free_lm()      { if (lm)      { lm_model_free(lm);           lm      = nullptr; } }
+    void free_cond()    { if (cond)    { cond_model_free(cond);       cond    = nullptr; } }
+    void free_detok()   { if (detok)   { detok_model_free(detok);     detok   = nullptr; } }
+    void free_dit()     { if (dit)     { dit_model_free(dit);         dit     = nullptr; } }
+    void free_vae()     { vae.reset(); }
 };
 
 // ------------------------------------------------------------ path resolution
@@ -252,44 +314,53 @@ std::unique_ptr<Engine> Engine::create(const EngineOptions & opts_in) {
                        ggml_backend_name(enc_backend), ggml_backend_name(lm_backend),
                        ggml_backend_name(detok_backend), ggml_backend_name(m->backend));
     }
-    m->backend_enc = enc_backend;
-    m->backend_lm  = lm_backend;
+    m->backend_enc   = enc_backend;
+    m->backend_lm    = lm_backend;
+    m->backend_detok = detok_backend;  // Vulkan-aware (QVAC-22613): GPU on Vulkan, CPU otherwise
+    m->nth           = nth;
 
-    m->textenc = textenc_model_load(opts.text_enc_model_path, enc_backend, v);
-    if (!m->textenc) throw std::runtime_error("acestep engine: text-encoder load failed");
+    // ACE-Step loads six weight sets (text-enc, LM, cond, detok, DiT, VAE). Held
+    // resident at once they peak well past a non-entitled iOS app's memory ceiling
+    // and the OS jetsam-kills the process mid-load. So by default the engine loads
+    // each stage lazily inside generate() — right before its step, freed right
+    // after — bounding the peak to a single stage (QVAC-22955). Opt out with
+    // ACESTEP_KEEP_STAGES=1 (servers that generate back-to-back and prefer to pay
+    // the load cost once and keep everything resident).
+    m->keep_stages = [] {
+        const char * e = std::getenv("ACESTEP_KEEP_STAGES");
+        return e && (e[0] == '1' || e[0] == 't' || e[0] == 'T' || e[0] == 'y' || e[0] == 'Y');
+    }();
 
-    // 2 KV sets: cond + uncond for classifier-free guidance on Phase-2 codes.
-    m->lm = lm_model_load(opts.lm_model_path, lm_backend, /*max_seq_len=*/2048, v, /*n_kv_sets=*/2);
-    if (!m->lm) throw std::runtime_error("acestep engine: LM load failed");
-
-    m->cond = cond_model_load(opts.dit_model_path, enc_backend, v);
-    if (!m->cond) throw std::runtime_error("acestep engine: cond-encoder load failed");
-
-    m->detok = detok_model_load(opts.dit_model_path, detok_backend, v);
-    if (!m->detok) throw std::runtime_error("acestep engine: FSQ detokenizer load failed");
-
-    m->dit = dit_model_load(opts.dit_model_path, m->backend, v);
-    if (!m->dit) throw std::runtime_error("acestep engine: DiT load failed");
-
+    // VAE load options, saved so generate() can (re)load the VAE lazily. Decode
+    // only (no encoder). ACESTEP_VAE_GPU forces the VAE backend independently of
+    // the other stages so a decode can be compared CPU-vs-GPU on an identical
+    // latent (=1 -> GPU, =0 -> CPU); leaves the LM/DiT backend untouched.
     VaeOptions vo;
     vo.verbose      = v;
-    vo.with_encoder = false;  // generation only decodes
+    vo.with_encoder = false;
     vo.n_threads    = nth;
     vo.n_gpu_layers = opts.n_gpu_layers;  // snake / col2im_1d now have Metal kernels
-    // Modules already loaded above; leave vo.backends_dir empty (load is
-    // idempotent, but no need to rescan for the engine-driven Vae::load).
-    // Debug hook: force the VAE backend independently of the other stages so the
-    // decode can be compared CPU-vs-GPU on an identical latent (ACESTEP_VAE_GPU=1
-    // -> GPU, =0 -> CPU). Leaves the LM/DiT backend untouched (=deterministic).
     if (const char * e = std::getenv("ACESTEP_VAE_GPU")) {
         vo.n_gpu_layers = (e[0] == '1') ? 99 : 0;
     }
-    m->vae          = Vae::load(opts.vae_model_path, vo);
-    if (!m->vae) throw std::runtime_error("acestep engine: VAE load failed");
+    m->vae_opts = vo;
+
+    // Read the DiT config from GGUF metadata up front so the context-build step in
+    // generate() needs no resident DiT (the full DiT is loaded lazily just before
+    // the diffusion step). This also validates the DiT GGUF header at create().
+    {
+        DitGGUF g;
+        if (!dit_gguf_open(g, opts.dit_model_path))
+            throw std::runtime_error("acestep engine: cannot open DiT GGUF: " + opts.dit_model_path);
+        const bool cfg_ok = dit_gguf_read_config(g, m->dit_cfg);
+        dit_gguf_close(g);
+        if (!cfg_ok) throw std::runtime_error("acestep engine: bad DiT config in " + opts.dit_model_path);
+    }
 
     // Tokenizers: LM prompt uses the LM vocab; DiT text prompt + lyric lookup use
     // the text-encoder vocab. Fall back to the LM tokenizer if the text-encoder
-    // GGUF has no tokenizer KV (same Qwen text vocab in the shared range).
+    // GGUF has no tokenizer KV (same Qwen text vocab in the shared range). Loading
+    // them here also validates the LM + text-encoder GGUF headers at create().
     if (!bpe_load_from_gguf(m->bpe_lm, opts.lm_model_path))
         throw std::runtime_error("acestep engine: LM tokenizer load failed");
     if (!bpe_load_from_gguf(m->bpe_text, opts.text_enc_model_path)) {
@@ -297,7 +368,30 @@ std::unique_ptr<Engine> Engine::create(const EngineOptions & opts_in) {
         m->bpe_text = m->bpe_lm;
     }
 
-    if (v) fprintf(stderr, "[acestep-engine] ready (threads=%d)\n", nth);
+    // Validate the VAE GGUF header too (a no_alloc metadata parse), so create()
+    // still fails fast on a missing/corrupt file instead of only at first
+    // generate(). The other three GGUFs were validated above.
+    {
+        DitGGUF g;
+        if (!dit_gguf_open(g, opts.vae_model_path))
+            throw std::runtime_error("acestep engine: cannot open VAE GGUF: " + opts.vae_model_path);
+        dit_gguf_close(g);
+    }
+
+    // ACESTEP_KEEP_STAGES: eager-load every stage now and keep it resident (the
+    // pre-QVAC-22955 behaviour). Default (lazy) leaves all stages unloaded here;
+    // generate() loads/frees them per step.
+    if (m->keep_stages) {
+        m->ensure_textenc();
+        m->ensure_lm();
+        m->ensure_cond();
+        m->ensure_detok();
+        m->ensure_dit();
+        m->ensure_vae();
+    }
+
+    if (v) fprintf(stderr, "[acestep-engine] ready (threads=%d, %s)\n", nth,
+                   m->keep_stages ? "stages resident" : "stages lazy/low-mem");
     return eng;
 }
 
@@ -390,7 +484,7 @@ static std::string build_metas(int bpm, const std::string & timesig, const std::
 GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn & progress) const {
     Impl *         m = impl_.get();
     GenerateResult result;
-    result.sample_rate = m->vae->sample_rate();
+    result.sample_rate = m->sr;  // VAE may not be resident yet (loaded lazily below)
     result.channels    = 2;
     m->cancel_flag.store(false);
 
@@ -402,42 +496,15 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     StageTimes timing;
     StageDump  dump(m->opts.dump_stages_dir, m->opts.verbose);
 
-    // Low-memory mode: free each stage model as soon as it is no longer needed so
-    // the peak resident set stays small enough for memory-constrained devices
-    // (e.g. iOS, where the whole system shares ~8 GB of unified RAM and jetsam
-    // kills the app on a system-wide page shortage — Metal weight buffers are
-    // wired/non-pageable). The LM (Phase 1/2) and the text-encoder + cond-encoder
-    // are only used up front (codes + DiT conditioning); freeing them before the
-    // DiT/VAE run frees ~2 GB. They are lazily reloaded at the top of the next
-    // generate(). Opt out with ACESTEP_KEEP_STAGES=1 (e.g. servers that generate
-    // back-to-back and prefer to avoid the per-call reload).
-    const bool keep_stages = [] {
-        const char * e = std::getenv("ACESTEP_KEEP_STAGES");
-        return e && (e[0] == '1' || e[0] == 't' || e[0] == 'T' || e[0] == 'y' || e[0] == 'Y');
-    }();
-    const bool low_mem = !keep_stages;
-
-    // Reload any stage model a previous low-mem generation freed. On the first
-    // generate() after create() everything is still resident, so this is a no-op.
-    {
-        const bool vv = m->opts.verbose;
-        if (!m->textenc) {
-            if (vv) fprintf(stderr, "[acestep-engine] reloading text-encoder\n");
-            m->textenc = textenc_model_load(m->opts.text_enc_model_path, m->backend_enc, vv);
-            if (!m->textenc) throw std::runtime_error("acestep engine: text-encoder reload failed");
-        }
-        if (!m->lm) {
-            if (vv) fprintf(stderr, "[acestep-engine] reloading LM\n");
-            m->lm = lm_model_load(m->opts.lm_model_path, m->backend_lm, /*max_seq_len=*/2048, vv, /*n_kv_sets=*/2);
-            if (!m->lm) throw std::runtime_error("acestep engine: LM reload failed");
-        }
-        if (!m->cond) {
-            if (vv) fprintf(stderr, "[acestep-engine] reloading cond-encoder\n");
-            m->cond = cond_model_load(m->opts.dit_model_path, m->backend_enc, vv);
-            if (!m->cond) throw std::runtime_error("acestep engine: cond-encoder reload failed");
-        }
-    }
-    timing.mark("reload");
+    // Sequential loading (default): each stage is loaded via m->ensure_*() right
+    // before its step and freed via m->free_*() right after, so the peak resident
+    // set is a single stage rather than all six at once — small enough for a
+    // non-entitled iOS app not to be jetsam-killed (QVAC-22955). With
+    // ACESTEP_KEEP_STAGES=1 every stage is already resident (create() eager-loaded
+    // it), ensure_*() is a no-op, and the free_*() calls are skipped so nothing is
+    // released between generate() calls. Each stage's lazy-load cost is attributed
+    // to its own timing.mark() below — there is no separate up-front reload phase.
+    const bool low_mem = !m->keep_stages;
 
     long long seed = params.seed;
     if (seed < 0) { std::random_device rd; seed = (long long) rd(); }
@@ -460,6 +527,7 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
         codes = params.audio_codes;  // parity / cached codes: skip the LM
         if (m->opts.verbose) fprintf(stderr, "[acestep-engine] using %zu pre-supplied codes (LM skipped)\n", codes.size());
     } else {
+        m->ensure_lm();  // load the LM just before its step (freed right after)
         LmSampleParams lp;
         lp.temperature = params.lm_temperature;
         lp.top_p       = params.lm_top_p;
@@ -491,16 +559,16 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     if (!report("lm", 1, 1)) return result;
 
     // The LM is done (codes in hand). Free it now so its weights + KV (~1.1 GB)
-    // are not resident during the DiT/VAE. Reloaded on the next generate().
-    if (low_mem && m->lm) {
-        if (m->opts.verbose) fprintf(stderr, "[acestep-engine] freeing LM (low-mem)\n");
-        lm_model_free(m->lm);
-        m->lm = nullptr;
+    // are not resident during the rest of the pipeline. Reloaded next generate().
+    if (low_mem) {
+        if (m->lm && m->opts.verbose) fprintf(stderr, "[acestep-engine] freeing LM (low-mem)\n");
+        m->free_lm();
     }
     timing.mark("lm");
     dump.write_ints("01_lm_codes", codes);
 
     // ---- 2. FSQ detok: codes -> context latents [64, T_25Hz] ----
+    m->ensure_detok();  // load the detokenizer just before its (only) use
     const int          T_5Hz  = (int) codes.size();
     const int          T_25Hz = T_5Hz * 5;
     std::vector<float> detok_latent((size_t) 64 * T_25Hz);
@@ -509,12 +577,24 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     timing.mark("detok");
     dump.write("02_detok_latent", detok_latent, T_25Hz, 64);
 
+    // Detok latents are in hand; the detokenizer is not needed again. Free it.
+    if (low_mem) {
+        if (m->detok && m->opts.verbose) fprintf(stderr, "[acestep-engine] freeing FSQ detokenizer (low-mem)\n");
+        m->free_detok();
+    }
+
     // ---- 3. context [ctx_ch=128, T] = [detok latent[64] | mask[64]=1] ----
-    const DitConfig & dc     = dit_model_config(m->dit);
+    // dit_cfg was read from GGUF metadata at create() so no resident DiT is needed
+    // to size the context (the DiT itself is loaded lazily just before step 7).
+    const DitConfig & dc     = m->dit_cfg;
     const int         Oc     = dc.out_channels;            // 64
     const int         ctx_ch = dc.in_channels - Oc;        // 128
     const int         patch  = dc.patch_size;              // 2
     int               T      = ((T_25Hz + patch - 1) / patch) * patch;
+
+    // The cond-encoder supplies the silence frame here and runs its forward at
+    // step 5, so it is needed from now through step 5; load it once, up front.
+    m->ensure_cond();
 
     std::vector<float> context((size_t) ctx_ch * T, 0.0f);
     // Padded frames in [T_25Hz, T) are filled with the silence latent (not left
@@ -563,6 +643,7 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     std::vector<int32_t> text_ids32(text_ids.begin(), text_ids.end());
     std::vector<int32_t> lyric_ids32(lyric_ids.begin(), lyric_ids.end());
 
+    m->ensure_textenc();  // load the text-encoder just before its step
     std::vector<float> text_hidden, lyric_embed;
     if (!textenc_model_forward(m->textenc, text_ids32.data(), S_text, text_hidden))
         throw std::runtime_error("acestep engine: text-encoder forward failed");
@@ -571,6 +652,14 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     timing.mark("textenc");
     dump.write("04_text_hidden", text_hidden, S_text, (int) (text_hidden.size() / (size_t) S_text));
     dump.write("05_lyric_embed", lyric_embed, S_lyric, (int) (lyric_embed.size() / (size_t) S_lyric));
+
+    // text_hidden + lyric_embed are on the host now; the text-encoder (~742 MB) is
+    // done. Free it before the cond-encoder forward so only one of the two is
+    // resident at a time.
+    if (low_mem) {
+        if (m->textenc && m->opts.verbose) fprintf(stderr, "[acestep-engine] freeing text-encoder (low-mem)\n");
+        m->free_textenc();
+    }
 
     // ---- 5. cond-encoder: -> enc_hidden [2048, S_total] ----
     // text2music feeds one frame of the silence latent to the timbre encoder so
@@ -588,20 +677,12 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     const int H_enc = (int) (enc_hidden.size() / (size_t) enc_S);  // 2048
 
     // Cross-attention conditioning (enc_hidden) is now materialised on the host,
-    // so the text-encoder (~742 MB, GPU) and cond-encoder (~352 MB) are no longer
-    // needed. Free them before the DiT/VAE so their (wired) buffers don't count
-    // against the device memory ceiling. Reloaded on the next generate().
+    // so the cond-encoder (~352 MB) is no longer needed. Free it before the
+    // DiT/VAE so its (wired) buffers don't count against the device memory
+    // ceiling. Reloaded on the next generate().
     if (low_mem) {
-        if (m->textenc) {
-            if (m->opts.verbose) fprintf(stderr, "[acestep-engine] freeing text-encoder (low-mem)\n");
-            textenc_model_free(m->textenc);
-            m->textenc = nullptr;
-        }
-        if (m->cond) {
-            if (m->opts.verbose) fprintf(stderr, "[acestep-engine] freeing cond-encoder (low-mem)\n");
-            cond_model_free(m->cond);
-            m->cond = nullptr;
-        }
+        if (m->cond && m->opts.verbose) fprintf(stderr, "[acestep-engine] freeing cond-encoder (low-mem)\n");
+        m->free_cond();
     }
 
     timing.mark("cond");
@@ -628,6 +709,8 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     const float shift   = params.shift > 0.0f ? params.shift : (dc.is_turbo ? 3.0f : 1.0f);
     if (m->opts.verbose)
         fprintf(stderr, "[acestep-engine] DiT: turbo=%d steps=%d shift=%.2f T=%d\n", (int) dc.is_turbo, n_steps, shift, T);
+
+    m->ensure_dit();  // load the DiT (the largest stage) just before diffusion
 
     std::vector<float> schedule;
     dit_build_schedule(shift, n_steps, schedule);
@@ -662,6 +745,13 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     timing.mark("dit");
     dump.write("08_dit_latent", latent, T, Oc);
 
+    // The denoised latent is on the host; the DiT (the largest stage) is done.
+    // Free it before the VAE decode so only the VAE is resident for the last step.
+    if (low_mem) {
+        if (m->dit && m->opts.verbose) fprintf(stderr, "[acestep-engine] freeing DiT (low-mem)\n");
+        m->free_dit();
+    }
+
 #ifdef ACESTEP_PARITY_DEBUG
     // Debug (env-gated): dump our DiT output + inputs for parity vs acestep.cpp.
     if (const char * dir = dbg_env("ACESTEP_DUMP_DIR")) {
@@ -676,6 +766,7 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     // ---- 8. VAE decode -> stereo 48 kHz PCM ----
     // The decode reports per-node graph progress so the (otherwise opaque) VAE
     // stage advances the bar instead of freezing at the last DiT step.
+    m->ensure_vae();  // load the VAE just before decode
     if (!report("vae", 0, 1)) return result;
     bool vae_ok = true;
     result.pcm  = m->vae->decode(latent, T, [&](int done, int total) {
@@ -688,6 +779,13 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     timing.mark("vae");
     dump.write("09_vae_pcm", result.pcm, (int) (result.pcm.size() / 2), 2);
     if (m->opts.verbose) timing.dump(stderr);
+
+    // The VAE is the last stage; free it so nothing is resident between
+    // generate() calls (each stage is reloaded on demand next time).
+    if (low_mem) {
+        if (m->vae && m->opts.verbose) fprintf(stderr, "[acestep-engine] freeing VAE (low-mem)\n");
+        m->free_vae();
+    }
 
     // ---- metadata ----
     // Read back from prompt.*, not params.*: Phase 1 gap-fills the prompt in
@@ -707,7 +805,7 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
 }
 
 void        Engine::cancel() const { impl_->cancel_flag.store(true); }
-int         Engine::sample_rate() const { return impl_->vae ? impl_->vae->sample_rate() : 48000; }
+int         Engine::sample_rate() const { return impl_->sr; }  // cached; VAE loaded lazily
 std::string Engine::backend_name() const { return impl_->backend ? ggml_backend_name(impl_->backend) : "cpu"; }
 
 } // namespace tts_cpp::acestep
