@@ -181,9 +181,7 @@ jobs:
       - name: Download ggml model
         shell: cmd
         run: |
-          cd models
-          call download-ggml-model.cmd %MODEL%
-          cd ..
+          call models\download-ggml-model.cmd %MODEL% models
           if not exist models\ggml-%MODEL%.bin ( echo ERROR: model download failed & exit /b 1 )
 
       - name: Download NPU encoder cache
