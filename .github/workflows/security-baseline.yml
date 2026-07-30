@@ -16,6 +16,9 @@ on:
     branches:
       - master
   pull_request:
+  schedule:
+    # Weekly full scan (QVAC-19056 rollout). Staggered per repo across weekdays.
+    - cron: "0 7 * * 4"
   workflow_dispatch:
 
 permissions:
