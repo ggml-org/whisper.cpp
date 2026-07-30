@@ -121,7 +121,7 @@ jobs:
     continue-on-error: true   # advisory while the runner pool is new; revisit later
 
     env:
-      FLEXML_URL: https://github.com/lemonade-sdk/whisper.cpp/releases/download/deps/flexmlrt1.7.0-win.zip
+      FLEXML_URL: https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/deps/flexmlrt-1.7.0-win.zip
       MODEL: base
 
     steps:
@@ -214,7 +214,7 @@ jobs:
     continue-on-error: true   # advisory while the runner pool is new; revisit later
 
     env:
-      FLEXML_LINUX_URL: <URL-to-linux-flexmlrt-package>    # TODO: fill in Linux FlexML runtime URL
+      FLEXML_LINUX_URL: https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/deps/flexmlrt-1.8.0-linux.tar.gz
       MODEL: base
 
     steps:
@@ -229,8 +229,9 @@ jobs:
       - name: Download FlexML runtime (Linux)
         run: |
           curl -L --fail -o flexmlrt.tar.gz "$FLEXML_LINUX_URL"
-          tar xf flexmlrt.tar.gz
-          # TODO: add Linux FlexML environment setup (equivalent of Windows setup.bat)
+          mkdir -p flexmlrt
+          tar xf flexmlrt.tar.gz -C flexmlrt
+          source flexmlrt/setup.sh
           echo "FlexmlRT_DIR=$PWD/flexmlrt/share/cmake/FlexmlRT" >> $GITHUB_ENV
           echo "LD_LIBRARY_PATH=$PWD/flexmlrt/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
 
