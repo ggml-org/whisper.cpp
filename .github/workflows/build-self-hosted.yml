@@ -116,7 +116,7 @@ jobs:
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/whisper.cpp ~/mnt/whisper.cpp
 
   amd-npu-windows:
-    runs-on: [self-hosted, Windows, stx, rai300_400]
+    runs-on: [self-hosted, Windows, X64, stx, rai300-400]
     timeout-minutes: 60
     continue-on-error: true   # advisory while the runner pool is new; revisit later
 
