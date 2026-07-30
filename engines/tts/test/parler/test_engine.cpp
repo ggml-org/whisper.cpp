@@ -68,7 +68,7 @@ int main(int argc, char ** argv) {
 
     EngineOptions opts;
     opts.model_gguf_path = model;
-    opts.greedy = true;
+    opts.seed = 42;
     opts.max_frames = 24;
     opts.n_threads = 4;
     Engine engine(opts);

@@ -4,10 +4,13 @@
 
 #include "ggml-alloc.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace tts_cpp::parler::detail;
@@ -138,6 +141,110 @@ static bool test_wav_case(const parler_model & model, const std::string & ref_di
     return true;
 }
 
+// The DAC is decoded in bounded windows (PARLER_DAC_WINDOW_FRAMES) padded with
+// PARLER_DAC_RF_FRAMES of real context. Pins the invariant that makes that legal:
+// a partial-range decode is BIT-IDENTICAL to slicing a full decode, for ranges
+// that straddle window boundaries, sit at the sequence ends, and are empty.
+// This is what streaming relies on, and it is what would silently regress if the
+// context/keep arithmetic were ever wrong.
+static bool test_range_equivalence(const parler_model & model, const std::string & ref_dir,
+                                   const char * codes_name) {
+    std::vector<int32_t> codes;
+    int n_frames = 0;
+    if (!load_codes_i32(ref_dir + "/" + codes_name, codes, n_frames)) return false;
+    fprintf(stderr, "  [range-equivalence] %s: %d frames\n", codes_name, n_frames);
+
+    const int hop = model.hparams.dac_hop;
+    const int lat = model.hparams.dac_latent;
+    std::vector<float> full, full_lat;
+    if (!parler_dac_decode(model, codes.data(), n_frames, 4, full, &full_lat)) {
+        fprintf(stderr, "range-equivalence: full decode failed\n");
+        return false;
+    }
+    if (full.size() != (size_t) n_frames * hop) {
+        fprintf(stderr, "range-equivalence: full length %zu != %d frames * %d hop\n",
+                full.size(), n_frames, hop);
+        return false;
+    }
+
+    const int W = PARLER_DAC_WINDOW_FRAMES;
+    const int R = parler_dac_rf_frames(model);
+    const std::vector<std::pair<int, int>> ranges = {
+        {0, n_frames},                                          // whole sequence
+        {0, 1},                                                 // first frame only
+        {n_frames - 1, n_frames},                               // last frame only
+        {5, 5},                                                 // empty
+        {std::min(W - 1, n_frames), std::min(W + 1, n_frames)}, // straddles a window edge
+        {std::min(W, n_frames), n_frames},                      // starts on a window edge
+        {std::min(R / 2, n_frames), std::min(2 * W + 3, n_frames)}, // spans >1 window
+    };
+
+    bool ok = true;
+    for (const auto & r : ranges) {
+        const int a = r.first, b = r.second;
+        if (a < 0 || b > n_frames || a > b) continue;
+        std::vector<float> part, part_lat;
+        if (!parler_dac_decode(model, codes.data(), n_frames, 4, part, &part_lat, a, b)) {
+            fprintf(stderr, "range-equivalence: decode [%d, %d) failed\n", a, b);
+            ok = false;
+            continue;
+        }
+        const size_t want = (size_t) (b - a) * hop;
+        if (part.size() != want) {
+            fprintf(stderr, "range-equivalence: [%d, %d) length %zu, want %zu\n",
+                    a, b, part.size(), want);
+            ok = false;
+            continue;
+        }
+        if (want != 0 &&
+            memcmp(part.data(), full.data() + (size_t) a * hop, want * sizeof(float)) != 0) {
+            fprintf(stderr, "range-equivalence: [%d, %d) NOT bit-identical to the full decode\n",
+                    a, b);
+            ok = false;
+            continue;
+        }
+        // same for the latent, whose per-window offset uses dac_latent rather than dac_hop
+        const size_t want_lat = (size_t) (b - a) * lat;
+        if (part_lat.size() != want_lat) {
+            fprintf(stderr, "range-equivalence: [%d, %d) latent length %zu, want %zu\n",
+                    a, b, part_lat.size(), want_lat);
+            ok = false;
+            continue;
+        }
+        if (want_lat != 0 &&
+            memcmp(part_lat.data(), full_lat.data() + (size_t) a * lat,
+                   want_lat * sizeof(float)) != 0) {
+            fprintf(stderr, "range-equivalence: [%d, %d) latent NOT bit-identical\n", a, b);
+            ok = false;
+            continue;
+        }
+        fprintf(stderr, "  [range %d, %d) bit-identical (%zu samples, %zu latent)\n",
+                a, b, want, want_lat);
+    }
+    return ok;
+}
+
+// The point of the windowed decode: peak compute memory must not grow with output
+// length. A revert to a whole-sequence graph stays bit-exact and would pass every
+// other test here, so this is the only guard against it.
+static bool test_bounded_memory(const parler_model & model) {
+    const int lo = 512, hi = 8192;   // both well past one window + context
+    const size_t s_lo = parler_dac_compute_buffer_size(model, lo);
+    const size_t s_hi = parler_dac_compute_buffer_size(model, hi);
+    fprintf(stderr, "  [bounded-memory] %d frames = %.2f MiB, %d frames = %.2f MiB\n",
+            lo, s_lo / 1024.0 / 1024.0, hi, s_hi / 1024.0 / 1024.0);
+    if (s_lo == 0 || s_hi == 0) {
+        fprintf(stderr, "bounded-memory: FAIL (could not measure)\n");
+        return false;
+    }
+    if (s_hi != s_lo) {
+        fprintf(stderr, "bounded-memory: FAIL DAC buffer grows with output length "
+                        "(%zu -> %zu bytes for %dx the frames)\n", s_lo, s_hi, hi / lo);
+        return false;
+    }
+    return true;
+}
+
 int main(int argc, char ** argv) {
     if (argc < 3) {
         fprintf(stderr, "usage: %s MODEL.gguf REF_DIR\n", argv[0]);
@@ -187,6 +294,15 @@ int main(int argc, char ** argv) {
         }
 
         if (rc == 0 && !test_wav_case(model, ref_dir, "case0_codes.npy", "case0_wav_greedy.npy", nullptr)) rc = 1;
+
+        // short set exercises n_frames < one window; the long one straddles window edges
+        if (rc == 0 && !test_range_equivalence(model, ref_dir, "dacrand_codes.npy")) rc = 1;
+        if (rc == 0 && !test_range_equivalence(model, ref_dir, "case0_codes.npy")) rc = 1;
+
+        if (rc == 0) {
+            fprintf(stderr, "  [receptive-field] %d frames per side\n", parler_dac_rf_frames(model));
+        }
+        if (rc == 0 && !test_bounded_memory(model)) rc = 1;
     } catch (const std::exception & e) {
         fprintf(stderr, "test failed: %s\n", e.what());
         rc = 1;

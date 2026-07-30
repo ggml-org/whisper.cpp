@@ -223,11 +223,10 @@ int main(int argc, char ** argv) {
             }
         }
 
-        // public Engine smoke on the same inputs (short, greedy)
+        // public Engine smoke on the same inputs (short)
         {
             tts_cpp::parler::EngineOptions opts;
             opts.model_gguf_path = model_path;
-            opts.greedy = true;
             opts.max_frames = 60;
             opts.n_threads = n_threads;
             tts_cpp::parler::Engine engine(opts);

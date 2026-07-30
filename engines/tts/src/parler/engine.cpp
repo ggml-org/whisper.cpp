@@ -10,6 +10,7 @@
 #include "backend_util.h"
 
 #include <atomic>
+#include <cstdio>
 #include <random>
 #include <stdexcept>
 #include <thread>
@@ -19,16 +20,15 @@ namespace parler {
 
 using namespace ::tts_cpp::parler::detail;
 
-// DAC right receptive field ~10 frames; the extra margin also covers the
-// near-EOS drop region so streamed chunks match the whole-sequence decode.
-static constexpr int kDacStreamRfMargin = 16;
-
 struct Engine::Impl {
     EngineOptions        opts;
     parler_model         model;
     parler_tokenizer     tokenizer;         // descriptions (and prompts when shared)
     parler_bpe_tokenizer prompt_tokenizer;  // prompts, iff the GGUF ships one
     ggml_gallocr_t       allocr = nullptr;
+    // Resolved once at construction (see Engine::Engine) -- opts stays as the
+    // caller wrote it so options() keeps reporting the request, not the repair.
+    parler_sampling_params sampling;
     std::string        cached_description;
     bool               has_cached_description = false;
     std::atomic<bool>  cancel_requested{false};
@@ -106,11 +106,7 @@ struct Engine::Impl {
                                                        : hp.gen_min_new_tokens;
         delay_state st(dcfg);
 
-        parler_sampling_params sp;
-        sp.greedy      = opts.greedy || !hp.gen_do_sample;
-        sp.temperature = opts.temperature > 0.0f ? opts.temperature : hp.gen_temperature;
-        sp.top_k       = opts.top_k > 0 ? opts.top_k : hp.gen_top_k;
-        sp.top_p       = opts.top_p;
+        const parler_sampling_params & sp = sampling;
         std::mt19937 rng((uint32_t) opts.seed);
 
         std::vector<float> logits;
@@ -127,21 +123,27 @@ struct Engine::Impl {
         // steps and emits the newly-stable samples (holding back the DAC right
         // receptive field so each chunk matches the whole-sequence decode).
         const bool streaming = on_chunk != nullptr && opts.stream_chunk_frames > 0;
+        // hold back the DAC right receptive field so each chunk matches the
+        // whole-sequence decode exactly
+        const int rf_margin = parler_dac_rf_frames(model);
         int emitted_frames = 0;
         int chunk_index    = 0;
         auto emit = [&](bool final_flush) {
             int nf = 0;
             const std::vector<int32_t> c = st.undelay(hp.dac_codebook_size, &nf);
-            const int emit_end = final_flush ? nf : nf - kDacStreamRfMargin;
+            const int emit_end = final_flush ? nf : nf - rf_margin;
             if (emit_end <= emitted_frames) return;
+            // decode only the newly-stable frames; the frames outside the range
+            // are still consulted as convolution context, so each chunk is
+            // bit-identical to slicing a whole-sequence decode
             std::vector<float> pcm;
-            if (!parler_dac_decode(model, c.data(), nf, n_threads, pcm)) {
-                throw std::runtime_error("parler: DAC decode failed");
+            std::string dac_err;
+            if (!parler_dac_decode(model, c.data(), nf, n_threads, pcm, nullptr,
+                                   emitted_frames, emit_end, &dac_err)) {
+                throw std::runtime_error("parler: DAC decode failed: " + dac_err);
             }
-            const std::size_t a = (std::size_t) emitted_frames * hp.dac_hop;
-            const std::size_t b = (std::size_t) emit_end       * hp.dac_hop;
-            (*on_chunk)(pcm.data() + a, b - a, chunk_index++, final_flush);
-            res.pcm.insert(res.pcm.end(), pcm.begin() + a, pcm.begin() + b);
+            (*on_chunk)(pcm.data(), pcm.size(), chunk_index++, final_flush);
+            res.pcm.insert(res.pcm.end(), pcm.begin(), pcm.end());
             emitted_frames = emit_end;
         };
 
@@ -177,8 +179,10 @@ struct Engine::Impl {
             return res;
         }
 
-        if (!parler_dac_decode(model, codes.data(), n_frames, n_threads, res.pcm)) {
-            throw std::runtime_error("parler: DAC decode failed");
+        std::string dac_err;
+        if (!parler_dac_decode(model, codes.data(), n_frames, n_threads, res.pcm,
+                               nullptr, 0, -1, &dac_err)) {
+            throw std::runtime_error("parler: DAC decode failed: " + dac_err);
         }
         res.duration_s  = res.pcm.empty() ? 0.0f
                         : (float) res.pcm.size() / (float) hp.dac_sample_rate;
@@ -210,6 +214,28 @@ Engine::Engine(const EngineOptions & opts) : pimpl_(new Impl()) {
         ggml_backend_get_default_buffer_type(pimpl_->model.backend));
     if (!pimpl_->allocr) {
         throw std::runtime_error("parler: graph allocator creation failed");
+    }
+
+    const parler_hparams & hp = pimpl_->model.hparams;
+    parler_gen_defaults def;
+    def.do_sample   = hp.gen_do_sample;
+    def.temperature = hp.gen_temperature;
+    def.top_k       = hp.gen_top_k;
+    parler_sampling_request req;
+    req.greedy      = opts.greedy;
+    req.temperature = opts.temperature;
+    req.top_k       = opts.top_k;
+    req.top_p       = opts.top_p;
+
+    std::string repaired;
+    pimpl_->sampling = parler_resolve_sampling(req, def, &repaired);
+    if (!repaired.empty()) {
+        fprintf(stderr,
+            "parler: warning: %s selects argmax decoding, which this model family "
+            "cannot terminate (EOS is gated on codebook 0's argmax and the decoder "
+            "collapses to silence); falling back to sampling (temperature %.2f, "
+            "top-k %d). Use seed for reproducible output.\n",
+            repaired.c_str(), pimpl_->sampling.temperature, pimpl_->sampling.top_k);
     }
 }
 

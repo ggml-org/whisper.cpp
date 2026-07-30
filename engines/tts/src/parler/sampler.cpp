@@ -79,6 +79,33 @@ int32_t sample_row(const float * row, int vocab, const parler_sampling_params & 
 
 } // namespace
 
+parler_sampling_params parler_resolve_sampling(const parler_sampling_request & req,
+                                               const parler_gen_defaults & def,
+                                               std::string * repaired) {
+    parler_sampling_params p;
+    p.temperature = req.temperature > 0.0f ? req.temperature : def.temperature;
+    p.top_k       = req.top_k > 0 ? req.top_k : def.top_k;
+    // A small top_p also narrows toward the argmax, but only on peaked steps,
+    // so it stays a genuine nucleus knob rather than a repaired one.
+    p.top_p       = req.top_p;
+
+    // top_k == 1 masks every logit below the largest, leaving the multinomial
+    // draw a single candidate -- identical to greedy.
+    const char * reason = req.greedy      ? "greedy = true"
+                        : p.top_k == 1    ? "top_k = 1"
+                        : !def.do_sample  ? "the GGUF's do_sample = false"
+                                          : nullptr;
+    p.greedy = false;
+    if (p.top_k == 1) {
+        p.top_k = def.top_k > 1 ? def.top_k : 0;  // 0 => no top-k filter
+    }
+    if (repaired) {
+        if (reason) *repaired = reason;
+        else        repaired->clear();
+    }
+    return p;
+}
+
 std::vector<int32_t> parler_sample_frame(const float * logits, int n_codebooks, int vocab,
                                          const parler_sampling_params & params,
                                          std::mt19937 & rng) {

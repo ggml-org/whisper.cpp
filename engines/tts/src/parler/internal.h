@@ -17,6 +17,12 @@ namespace detail {
 // graph-node budget for every parler graph builder (t5 / decoder / dac)
 constexpr int PARLER_MAX_NODES = 4096;
 
+// Frames per DAC decode window. The DAC is fully convolutional, so a whole-sequence
+// graph grows the compute buffer without bound (~1.96 MiB/frame); windowing makes the
+// peak O(1) in output length. Context of parler_dac_rf_frames() on each side keeps
+// every emitted sample bit-identical to a whole-sequence decode.
+constexpr int PARLER_DAC_WINDOW_FRAMES = 128;
+
 struct parler_hparams {
     // t5 encoder
     int   t5_n_layer      = 0;
@@ -136,6 +142,10 @@ struct parler_model {
     std::vector<parler_dac_block> dac_blocks;
     ggml_tensor * dac_snake_out_alpha = nullptr;
     ggml_tensor * dac_conv_out_w = nullptr, * dac_conv_out_b = nullptr;
+    // Reused across windows AND across calls: one bounded arena for the whole
+    // process instead of a fresh large allocation per decode (streaming makes one
+    // call per chunk). Created on first decode; freed by parler_free_model.
+    mutable ggml_gallocr_t dac_allocr = nullptr;
 
     // decoder self-attention KV cache (token-major slab, one per K/V):
     // [d_model, n_ctx] rows per layer, stacked layer-major.
@@ -211,14 +221,29 @@ bool parler_dec_step(const parler_model & model,
                      std::vector<float> & logits_out);
 
 // ---- parler_dac.cpp ----
+// DAC receptive field in latent frames, derived from the loaded conv geometry.
+// Windows carry this much real context per side; the streaming emitter holds back
+// the same amount so a chunk matches the whole-sequence decode bit for bit.
+int parler_dac_rf_frames(const parler_model & model);
+
+// Peak DAC compute-buffer bytes for a decode of n_frames; must not grow once
+// n_frames exceeds one window plus context. Measures without allocating.
+size_t parler_dac_compute_buffer_size(const parler_model & model, int n_frames);
+
 // codes: [n_codebooks, n_frames] row-major, values in [0, codebook_size).
-// latent_out (optional, tests): summed RVQ latent, [latent_dim, T] ggml
-// layout (element (c, t) at t*latent_dim + c).
+// Decodes frames [out_begin, out_end) — the default (0, -1) means the whole
+// sequence — and writes (out_end - out_begin) * dac_hop samples. Frames outside
+// the requested range are still consulted as convolution context, so the result
+// is bit-identical to decoding the whole sequence and slicing.
+// latent_out (optional, tests): summed RVQ latent for the same frame range,
+// [latent_dim, T] ggml layout (element (c, t) at t*latent_dim + c).
 bool parler_dac_decode(const parler_model & model,
                        const int32_t * codes, int n_frames,
                        int n_threads,
                        std::vector<float> & pcm_out,
-                       std::vector<float> * latent_out = nullptr);
+                       std::vector<float> * latent_out = nullptr,
+                       int out_begin = 0, int out_end = -1,
+                       std::string * err_out = nullptr);
 
 } // namespace detail
 } // namespace parler

@@ -433,6 +433,7 @@ bool parler_load_gguf(const std::string & path, parler_model & model,
 
 void parler_free_model(parler_model & model) {
     ::tts_cpp::detail::sched_fallback_free(model.sched_fb);
+    if (model.dac_allocr)   { ggml_gallocr_free(model.dac_allocr); model.dac_allocr = nullptr; }
     if (model.buffer_cross) { ggml_backend_buffer_free(model.buffer_cross); model.buffer_cross = nullptr; }
     if (model.ctx_cross)    { ggml_free(model.ctx_cross); model.ctx_cross = nullptr; }
     if (model.buffer_fused) { ggml_backend_buffer_free(model.buffer_fused); model.buffer_fused = nullptr; }

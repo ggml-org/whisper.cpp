@@ -1,5 +1,5 @@
 // Direct-vs-sched dispatch equivalence for the Parler engine: synthesize the
-// same greedy input as A (direct), B (TTS_CPP_FORCE_SCHED=1) and A' (direct
+// same seeded input as A (direct), B (TTS_CPP_FORCE_SCHED=1) and A' (direct
 // again); all three PCM buffers must be bit-identical.
 
 #include "../test_env_portable.h"
@@ -19,7 +19,7 @@ static std::vector<float> synth(const char * model, bool force_sched) {
     }
     tts_cpp::parler::EngineOptions opts;
     opts.model_gguf_path = model;
-    opts.greedy = true;
+    opts.seed = 42;
     opts.max_frames = 48;
     opts.n_threads = 4;
     tts_cpp::parler::Engine engine(opts);

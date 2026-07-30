@@ -9,7 +9,8 @@
 // Reports min / median / mean / p95 / max across --runs iterations (after
 // --warmup dropped runs), plus RTF (total / audio). Greedy by default so
 // CPU vs GPU do identical, deterministic work; set --max-frames for a bounded,
-// reproducible run (greedy does not emit natural EOS).
+// reproducible run (greedy does not emit natural EOS). Unlike the Engine, this
+// keeps argmax: it measures throughput, and the audio it makes is degenerate.
 //
 // Usage:
 //   ./parler-bench --model parler-indic-q8_0.gguf --text "..." \

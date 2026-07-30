@@ -6,7 +6,7 @@
 //     within tolerance on GPU (mul_mat kernel dispatch varies with the sequence
 //     length, so interior samples can differ in the last ULP).
 //
-// Greedy decoding makes the AR codes identical between the streamed and batch
+// A fixed seed makes the AR codes identical between the streamed and batch
 // runs, so the only difference under test is windowed-vs-whole DAC decode.  Both
 // legs run: n_gpu_layers=0 forces CPU; n_gpu_layers>0 uses the GPU where present
 // and falls back to CPU otherwise (assertion picks itself via backend_device()).
@@ -45,7 +45,7 @@ static void run_case(const std::string & model, int n_gpu_layers) {
 
     EngineOptions opts;
     opts.model_gguf_path           = model;
-    opts.greedy                    = true;   // deterministic AR -> identical codes
+    opts.seed                      = 42;     // deterministic AR -> identical codes
     opts.max_frames                = 400;    // a few seconds -> several chunks
     opts.n_threads                 = 4;
     opts.n_gpu_layers              = n_gpu_layers;
@@ -80,7 +80,7 @@ static void run_case(const std::string & model, int n_gpu_layers) {
     CHECK(sres.pcm.size() == total, "result.pcm == concat(callback chunks)");
 
     // Batch reference: same engine, no callback -> whole-utterance decode of the
-    // same greedy codes.
+    // same codes (same seed).
     SynthesisResult bres = eng.synthesize(prompt, desc);
     CHECK(bres.pcm.size() == sres.pcm.size(), "streamed vs batch length match");
     if (bres.pcm.size() == sres.pcm.size()) {

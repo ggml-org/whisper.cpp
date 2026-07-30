@@ -668,6 +668,11 @@ if (TTS_CPP_BUILD_TESTS)
         ARGS     "${_tcb_parler_ref}"
         REQUIRES "${_tcb_parler_ref}/delay_mask_len24.npy")
 
+    add_executable(test-parler-sampler test/parler/test_sampler.cpp src/parler/sampler.cpp)
+    target_include_directories(test-parler-sampler PRIVATE src)
+    tts_cpp_apply_ccache(test-parler-sampler)
+    tts_cpp_register_test(test-parler-sampler)
+
     add_executable(test-parler-text-norm test/parler/test_text_norm.cpp
         src/parler/text_norm.cpp)
     target_include_directories(test-parler-text-norm PRIVATE src)
@@ -719,6 +724,17 @@ if (TTS_CPP_BUILD_TESTS)
         LABEL    "fixture"
         ARGS     "${_tcb_parler_gguf}" "${_tcb_parler_ref}"
         REQUIRES "${_tcb_parler_gguf}" "${_tcb_parler_ref}/dacrand_wav.npy")
+
+    # Same binary on the GPU transposed-conv path (conv_transpose_1d_matmul), which
+    # the CPU run never reaches.  Skipped on GPU-less fleets via `ctest -LE gpu`.
+    if (GGML_METAL OR GGML_VULKAN OR GGML_CUDA)
+        tts_cpp_register_test(test-parler-dac-gpu
+            EXE      test-parler-dac
+            LABEL    "gpu"
+            ARGS     "${_tcb_parler_gguf}" "${_tcb_parler_ref}"
+            REQUIRES "${_tcb_parler_gguf}" "${_tcb_parler_ref}/dacrand_wav.npy")
+        set_property(TEST test-parler-dac-gpu APPEND PROPERTY ENVIRONMENT "PARLER_TEST_GPU=1")
+    endif()
 
     add_executable(test-parler-e2e test/parler/test_e2e.cpp
         src/parler/t5.cpp src/parler/decoder.cpp src/parler/delay.cpp
@@ -795,6 +811,15 @@ if (TTS_CPP_BUILD_TESTS)
         LABEL    "fixture"
         ARGS     "${_tcb_parler_indic_gguf}" "${_tcb_parler_indic_ref}"
         REQUIRES "${_tcb_parler_indic_gguf}" "${_tcb_parler_indic_ref}/dacrand_wav.npy")
+
+    if (GGML_METAL OR GGML_VULKAN OR GGML_CUDA)
+        tts_cpp_register_test(test-parler-dac-indic-gpu
+            EXE      test-parler-dac
+            LABEL    "gpu"
+            ARGS     "${_tcb_parler_indic_gguf}" "${_tcb_parler_indic_ref}"
+            REQUIRES "${_tcb_parler_indic_gguf}" "${_tcb_parler_indic_ref}/dacrand_wav.npy")
+        set_property(TEST test-parler-dac-indic-gpu APPEND PROPERTY ENVIRONMENT "PARLER_TEST_GPU=1")
+    endif()
 
     tts_cpp_register_test(test-parler-e2e-indic
         EXE      test-parler-e2e

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <random>
+#include <string>
 #include <vector>
 
 namespace tts_cpp {
@@ -16,6 +17,29 @@ struct parler_sampling_params {
     int   top_k       = 50;
     float top_p       = 1.0f;
 };
+
+// The model's own generation defaults, read from the GGUF's parler.gen.* keys.
+struct parler_gen_defaults {
+    bool  do_sample   = true;
+    float temperature = 1.0f;
+    int   top_k       = 50;
+};
+
+// What the caller asked for; 0 (or <= 0) defers to the model default.
+struct parler_sampling_request {
+    bool  greedy      = false;
+    float temperature = 0.0f;
+    int   top_k       = 0;
+    float top_p       = 1.0f;
+};
+
+// Resolve a request against the model defaults.  Argmax decoding never
+// terminates for this architecture, so a request that is statically argmax is
+// repaired to sampling and the trigger is reported through `repaired` (cleared
+// when nothing was changed).  Only the argmax-forcing knob is repaired.
+parler_sampling_params parler_resolve_sampling(const parler_sampling_request & req,
+                                               const parler_gen_defaults & def,
+                                               std::string * repaired = nullptr);
 
 // logits: [n_codebooks, vocab] row-major (already logits-processed);
 // returns one token id per codebook.
