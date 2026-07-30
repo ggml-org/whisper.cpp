@@ -105,6 +105,19 @@ endif()
 
 target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing")
 
+# Generate a PDB (debug symbols) for ggml-sycl.dll so cdb/WinDbg can resolve
+# source lines + frames inside ggml_backend_sycl_init (otherwise the UAF/crash
+# in this DLL shows only as a raw offset — no PDB, because icpx under a VS
+# generator doesn't emit one by default).  /Zi emits debug info during
+# compile; /DEBUG at link writes the .pdb beside the .dll.  Both are
+# config-agnostic so Release builds also carry symbols (the PDB is read by
+# cdb from the .dll's side; runtime perf is unaffected).  icpx on Windows
+# uses the MSVC codegen back-end, so these cdb-loadable PDBs carry line info.
+if (WIN32)
+    target_compile_options(ggml-sycl PRIVATE "/Zi")
+    target_link_options(ggml-sycl PRIVATE "/DEBUG")
+endif()
+
 message(STATUS "GGML_SYCL_SUPPORT_LEVEL_ZERO_API ${GGML_SYCL_SUPPORT_LEVEL_ZERO_API}")
 if (GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
     # Link against Level Zero loader for direct device memory allocation.
