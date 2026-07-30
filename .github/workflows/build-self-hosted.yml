@@ -229,8 +229,7 @@ jobs:
       - name: Download FlexML runtime (Linux)
         run: |
           curl -L --fail -o flexmlrt.tar.gz "$FLEXML_LINUX_URL"
-          mkdir -p flexmlrt
-          tar xf flexmlrt.tar.gz -C flexmlrt
+          tar xf flexmlrt.tar.gz
           source flexmlrt/setup.sh
           echo "FlexmlRT_DIR=$PWD/flexmlrt/share/cmake/FlexmlRT" >> $GITHUB_ENV
           echo "LD_LIBRARY_PATH=$PWD/flexmlrt/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
