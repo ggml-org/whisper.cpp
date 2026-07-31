@@ -185,13 +185,10 @@ jobs:
           if not exist models\ggml-%MODEL%.bin ( echo ERROR: model download failed & exit /b 1 )
 
       - name: Download NPU encoder cache
-        shell: powershell
+        shell: cmd
         run: |
-          curl.exe -L --fail -o "models/ggml-$env:MODEL-encoder-vitisai.rai" `
-            "https://huggingface.co/amd/whisper-$env:MODEL-onnx-npu/resolve/main/ggml-$env:MODEL-encoder-vitisai.rai"
-          $f = Get-Item "models/ggml-$env:MODEL-encoder-vitisai.rai"
-          Write-Host ".rai size: $([math]::Round($f.Length/1MB,2)) MB"
-          if ($f.Length -lt 1MB) { Write-Error ".rai suspiciously small - wrong URL or LFS pointer?"; exit 1 }
+          .\models\download-vitisai-model.cmd %MODEL%
+          if not exist models\ggml-%MODEL%-encoder-vitisai.rai ( echo ERROR: VitisAI encoder cache download failed & exit /b 1 )
 
       - name: Run NPU smoke test
         shell: cmd
@@ -245,9 +242,8 @@ jobs:
 
       - name: Download NPU encoder cache
         run: |
-          curl -L --fail -o "models/ggml-$MODEL-encoder-vitisai.rai" \
-            "https://huggingface.co/amd/whisper-$MODEL-onnx-npu/resolve/main/ggml-$MODEL-encoder-vitisai.rai"
-          [ $(stat -c%s "models/ggml-$MODEL-encoder-vitisai.rai") -gt 1000000 ] || { echo "ERROR: .rai too small"; exit 1; }
+          sh ./models/download-vitisai-model.sh $MODEL
+          [ -f "models/ggml-$MODEL-encoder-vitisai.rai" ] || { echo "ERROR: VitisAI encoder cache download failed"; exit 1; }
 
       - name: Run NPU smoke test
         run: |
