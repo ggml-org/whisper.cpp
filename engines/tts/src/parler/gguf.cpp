@@ -206,12 +206,13 @@ bool parler_load_gguf(const std::string & path, parler_model & model,
     // Parler's GPU path (FA + fused weights + DAC phase-GEMM) is enabled only on
     // backends it has been validated against end-to-end (reference-fixture parity
     // per stage, plus greedy-token identity); anything else falls back to CPU.
-    // Metal was validated in PR #103, Vulkan here. Feature-level probes such as
-    // parler_probe_fa_f16() still apply on top, so a validated backend that lacks
-    // an individual capability degrades rather than breaking.
+    // Metal was validated in PR #103, Vulkan and OpenCL (Adreno) since. Feature-level
+    // probes such as parler_probe_fa_f16() still apply on top, so a validated backend
+    // that lacks an individual capability degrades rather than breaking.
     const bool backend_validated = model.backend &&
         (::tts_cpp::detail::backend_is_metal(model.backend) ||
-         ::tts_cpp::detail::backend_is_vulkan(model.backend));
+         ::tts_cpp::detail::backend_is_vulkan(model.backend) ||
+         ::tts_cpp::detail::backend_is_opencl(model.backend));
     if (model.backend && !backend_validated) {
         ggml_backend_free(model.backend);
         model.backend = nullptr;
@@ -404,23 +405,31 @@ bool parler_load_gguf(const std::string & path, parler_model & model,
                 ? ggml_new_tensor_2d(model.ctx_fused, model.lm_heads[0]->type, d, vocab * nq) : nullptr;
             model.buffer_fused = ggml_backend_alloc_ctx_tensors(model.ctx_fused, model.backend);
             if (!model.buffer_fused) return fail("failed to allocate fused-weight buffer");
+            // Assemble the row concat in host memory and upload it in one whole-tensor
+            // call: backends that repack quantized weights on set_tensor (OpenCL's
+            // struct-of-arrays) rebuild from the entire tensor and ignore a byte window.
             std::vector<uint8_t> tmp;
-            auto copy_into = [&](ggml_tensor * dst, size_t off, ggml_tensor * src) {
-                tmp.resize(ggml_nbytes(src));
-                ggml_backend_tensor_get(src, tmp.data(), 0, tmp.size());
-                ggml_backend_tensor_set(dst, tmp.data(), off, tmp.size());
+            auto fuse_rows = [&](ggml_tensor * dst, const ggml_tensor * const * parts, int n) {
+                tmp.resize(ggml_nbytes(dst));
+                size_t off = 0;
+                for (int p = 0; p < n; ++p) {
+                    const size_t nb = ggml_nbytes(parts[p]);
+                    ggml_backend_tensor_get(parts[p], tmp.data() + off, 0, nb);
+                    off += nb;
+                }
+                GGML_ASSERT(off == tmp.size() && "fused weight size mismatch");
+                ggml_backend_tensor_set(dst, tmp.data(), 0, tmp.size());
             };
             if (fuse_qkv) {
                 for (int i = 0; i < nl; ++i) {
                     auto & l = model.dec_layers[i];
-                    const size_t nb = ggml_nbytes(l.q);
-                    copy_into(qkv[i], 0, l.q); copy_into(qkv[i], nb, l.k); copy_into(qkv[i], 2 * nb, l.v);
+                    const ggml_tensor * parts[3] = { l.q, l.k, l.v };
+                    fuse_rows(qkv[i], parts, 3);
                     l.qkv = qkv[i];
                 }
             }
             if (fuse_heads) {
-                const size_t nb = ggml_nbytes(model.lm_heads[0]);
-                for (int k = 0; k < nq; ++k) copy_into(heads, (size_t) k * nb, model.lm_heads[k]);
+                fuse_rows(heads, model.lm_heads.data(), nq);
                 model.lm_head_stacked = heads;
             }
         }
