@@ -32,7 +32,7 @@ jobs:
   baseline:
     # Pinned to the qvac-actions 0.2.0 release commit (immutable SHA + version
     # comment, per the org freeze-and-pin convention).
-    uses: tetherto/qvac-actions/.github/workflows/public-reusable-security.yml@be1d22629cc48b6dcc36645acc9e6d89cfaf54d8 # 0.2.0
+    uses: tetherto/qvac-actions/.github/workflows/public-reusable-security.yml@bbb0740e2a16b94371c7439e0e06945c5b68e759 # 0.3.0
     permissions:
       contents: read
       security-events: write
