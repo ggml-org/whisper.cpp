@@ -15,6 +15,7 @@ project(qvac-speech LANGUAGES C CXX)
 option(SPEECH_BUILD_WHISPER     "speech: build the whisper engine (third_party/whisper.cpp)" ON)
 option(SPEECH_BUILD_PARAKEET    "speech: build the parakeet engine (engines/parakeet)"       ON)
 option(SPEECH_BUILD_TTS         "speech: build the TTS engines (engines/tts)"                ON)
+option(SPEECH_BUILD_AUDIOGEN    "speech: build the audiogen engine (engines/audiogen)"       ON)
 option(SPEECH_BUILD_TESTS       "speech: build the engines' test harnesses"                  OFF)
 option(SPEECH_BUILD_WHISPER_TESTS "speech: build whisper's test harnesses too (fixture-only tests run model-free; the transcription tests additionally need downloaded whisper models — filter by label)" OFF)
 option(SPEECH_BUILD_EXECUTABLES "speech: build the engines' CLI executables"                 ON)
@@ -67,4 +68,13 @@ if (SPEECH_BUILD_TTS)
     set(TTS_CPP_BUILD_TESTS       ${SPEECH_BUILD_TESTS})
     set(TTS_CPP_BUILD_EXECUTABLES ${SPEECH_BUILD_EXECUTABLES})
     add_subdirectory(engines/tts)
+endif()
+
+if (SPEECH_BUILD_AUDIOGEN)
+    # AUDIOGEN_USE_SYSTEM_GGML already defaults ON in this tree, and the
+    # engine short-circuits onto the umbrella's shared ggml via its own
+    # `if (NOT TARGET ggml)` guard.
+    set(AUDIOGEN_BUILD_TESTS       ${SPEECH_BUILD_TESTS})
+    set(AUDIOGEN_BUILD_EXECUTABLES ${SPEECH_BUILD_EXECUTABLES})
+    add_subdirectory(engines/audiogen)
 endif()
