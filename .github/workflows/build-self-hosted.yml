@@ -115,7 +115,7 @@ jobs:
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/whisper.cpp ~/mnt/whisper.cpp
 
-  amd-npu-windows:
+  npu-amd-windows:
     runs-on: [self-hosted, Windows, X64, stx, rai300-400]
     timeout-minutes: 60
     continue-on-error: true   # advisory while the runner pool is new; revisit later
@@ -208,7 +208,7 @@ jobs:
           name: vitisai-smoke-log-windows
           path: vitisai.log
 
-  amd-npu-linux:
+  npu-amd-linux:
     runs-on: [self-hosted, Linux, X64, stx, rai300-400]
     timeout-minutes: 60
     continue-on-error: true   # advisory while the runner pool is new; revisit later
