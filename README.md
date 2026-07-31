@@ -322,7 +322,7 @@ On AMD Ryzen™ AI 300 and 400 Series processors with a dedicated NPU, whisper.c
 
 Install the XRT runtime and FlexML runtime for your platform:
 
-- **XRT**: provides the NPU kernel driver and `xrt-smi` diagnostic tool
+- **XRT**: provides the NPU kernel driver and `xrt-smi` diagnostic tool — on Windows this is bundled with the NPU driver; on Linux install it separately following the [NPU driver installation guide](https://ryzenai.docs.amd.com/en/latest/linux.html#install-npu-drivers)
 - **FlexML runtime** (`flexmlrt`): VitisAI inference engine used by whisper.cpp — download from the [FlexML runtime releases](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/tag/deps)
 
 After installing, source the setup scripts in every shell you use to build or run whisper.cpp:
