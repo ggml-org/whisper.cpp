@@ -3111,25 +3111,8 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
             if (src1_on_device && src1_is_contiguous) {
                 scope_op_debug_print scope_dbg_print(__func__, "/quantize_row_q8_1_sycl", dst,
                                                      /*num_src=*/2, " : converting src1 to Q8_1");
-                fprintf(stderr, "[DBG quantize] line 3103: quantize_f called, ne10=%lld nrows1=%lld padded=%lld\n",
-                        (long long)ne10, (long long)nrows1, (long long)src1_padded_col_size);
                 try {
                     quantize_row_q8_1_sycl<quantize_f>(dev[i].src1_ddf, dev[i].src1_ddq, ne10, nrows1, src1_padded_col_size, stream);
-                    // Dump first 16 bytes of quantized output
-                    {
-                        char dbg_buf[16];
-                        SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dbg_buf, dev[i].src1_ddq, 16).wait()));
-                        fprintf(stderr, "[DBG quantize] first 16 bytes: ");
-                        for (int dbg = 0; dbg < 16; dbg++) fprintf(stderr, "%02x ", (unsigned char)dbg_buf[dbg]);
-                        fprintf(stderr, "\n");
-                        // Also dump bytes at offset ncols (ds section)
-                        int dbg_ds_off = ne10;
-                        char dbg_ds[8];
-                        SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dbg_ds, (char*)dev[i].src1_ddq + dbg_ds_off, 8).wait()));
-                        fprintf(stderr, "[DBG quantize] ds at offset %d: ", dbg_ds_off);
-                        for (int dbg = 0; dbg < 8; dbg++) fprintf(stderr, "%02x ", (unsigned char)dbg_ds[dbg]);
-                        fprintf(stderr, "\n");
-                    }
                 } catch (sycl::exception const &exc) {
                     std::cerr << "Quantize_row_q8_1_sycl error" << exc.what() << "Exception caught at file:" << __FILE__
                               << ", line:" << __LINE__ << std::endl;
@@ -3223,17 +3206,9 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
                     }
 
                     if constexpr (quantize_enabled) {
-                        fprintf(stderr, "[DBG quantize] quantize_f called, ne10=%lld src1_ncols=%lld padded=%lld\n",
-                                (long long)ne10, (long long)src1_ncols, (long long)src1_padded_col_size);
                         try {
                             quantize_row_q8_1_sycl<quantize_f>(src1_ddf_i, src1_ddq_i, ne10, src1_ncols,
                                                                   src1_padded_col_size, stream);
-                            // dump first 16 bytes of quantized output
-                            std::vector<char> dbg_buf(16);
-                            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dbg_buf.data(), src1_ddq_i, 16).wait()));
-                            fprintf(stderr, "[DBG quantize] first 16 bytes: ");
-                            for (int dbg = 0; dbg < 16; dbg++) fprintf(stderr, "%02x ", (unsigned char)dbg_buf[dbg]);
-                            fprintf(stderr, "\n");
                         } catch (const sycl::exception & exc) {
                             std::cerr << "Quantize_row_q8_1_sycl error" << exc.what()
                                       << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
@@ -4357,7 +4332,6 @@ static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor *
 
     ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
     if (!extra) {
-        fprintf(stderr, "[DBG opt_for_reorder] src0->extra is NULL! type=%d\n", (int)src0->type);
         return;
     }
     if (extra->optimized_feature.reorder) {
@@ -4383,9 +4357,6 @@ static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor *
     }
 
     bool ok = reorder_qw(src0, ctx->stream());
-    fprintf(stderr, "[DBG opt_for_reorder] type=%d algo=%d reorder_qw=%d ncols=%lld nrows=%lld\n",
-            (int)src0->type, (int)mm_algorithm, (int)ok,
-            (long long)src0->ne[0], (long long)src0->ne[1]);
     if (ok) {
         extra->optimized_feature.reorder = true;  // Used to decode/dequan in next steps and avoid re-reordering
     }
@@ -4500,14 +4471,9 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     } else if (use_mul_mat_vec_q) {
         opt_for_reorder(&ctx, src0, src1, dst, mul_mat_algo::MMVQ);
         ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-        fprintf(stderr, "[DBG dispatch] MMVQ: type=%d extra=%p reorder=%d src1_ncols=%lld\n",
-                (int)src0->type, (void*)extra, extra ? (int)extra->optimized_feature.reorder : -1,
-                (long long)src1->ne[1]);
         if (extra && extra->optimized_feature.reorder) {
-            fprintf(stderr, "[DBG dispatch] → reorder path (quantize_and_reorder_q8_1_soa)\n");
             ggml_sycl_op_mul_mat<quantize_and_reorder_q8_1_soa>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q);
         } else {
-            fprintf(stderr, "[DBG dispatch] → non-reorder path (quantize_q8_1)\n");
             ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q);
         }
     } else if (use_mul_mat_q) {
