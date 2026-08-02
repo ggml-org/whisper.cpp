@@ -96,14 +96,6 @@ static void k_get_rows_reorder(
 }
 
 
-// ── K-quant reorder get_rows kernels ──
-// K-quants (Q3_K/Q4_K/Q5_K/Q6_K) use block-cooperative dequantize (scales
-// shared across the 32/64/128-thread work-group). After opt_for_reorder the
-// src0 buffer is split into [qs|qh/hmask|scales|d] regions indexed by GLOBAL
-// block index. get_rows must read block (src1[batch]*nblocks_per_row + block_in_row)
-// and write to dst_row + block_in_row*QK_K. These kernels launch one
-// work-group per (batch, block_in_row); group(2)=block_in_row, group(1)=batch.
-
 template <typename dst_t>
 static void k_get_rows_q4_K_reorder(
             const void * src0, const int32_t * src1, dst_t * dst,
