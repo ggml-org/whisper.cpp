@@ -114,3 +114,146 @@ jobs:
         run: |
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/whisper.cpp ~/mnt/whisper.cpp
+
+  npu-amd-windows:
+    runs-on: [self-hosted, Windows, X64, stx, rai300-400]
+    timeout-minutes: 60
+    continue-on-error: true   # advisory while the runner pool is new; revisit later
+
+    env:
+      FLEXML_URL: https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/deps/flexmlrt-1.7.0-win.zip
+      MODEL: base
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Install CMake if not available
+        shell: powershell
+        run: |
+          $installed = Get-Command cmake -ErrorAction SilentlyContinue
+          if (-not $installed) {
+            $ver = "3.28.1"
+            $url = "https://github.com/Kitware/CMake/releases/download/v$ver/cmake-$ver-windows-x86_64.msi"
+            Invoke-WebRequest -Uri $url -OutFile cmake.msi
+            Start-Process msiexec.exe -ArgumentList "/i cmake.msi /quiet /norestart" -Wait
+            $p = "C:\Program Files\CMake\bin"
+            $env:PATH = "$p;$env:PATH"
+            echo $p >> $env:GITHUB_PATH
+            cmake --version
+            if ($LASTEXITCODE -ne 0) { Write-Error "CMake install failed"; exit 1 }
+          } else { cmake --version }
+
+      - name: Download FlexML runtime
+        shell: powershell
+        run: |
+          Invoke-WebRequest -Uri "${{ env.FLEXML_URL }}" -OutFile flexmlrt.zip
+          if (-Not (Test-Path "flexmlrt.zip")) { Write-Error "flexmlrt.zip not downloaded"; exit 1 }
+          if ((Get-Item "flexmlrt.zip").Length -eq 0) { Write-Error "flexmlrt.zip is empty"; exit 1 }
+          tar xf flexmlrt.zip
+          if ($LASTEXITCODE -ne 0) { Write-Error "Extraction failed"; exit 1 }
+          if (-not (Test-Path "flexmlrt")) { Write-Error "No flexmlrt directory after extraction"; exit 1 }
+
+      - name: Setup FlexML, configure and build
+        shell: cmd
+        run: |
+          cd flexmlrt
+          call setup.bat
+          if errorlevel 1 ( echo ERROR: FlexML setup.bat failed & exit /b 1 )
+          cd ..
+          cmake -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DWHISPER_VITISAI=ON
+          if errorlevel 1 ( echo ERROR: CMake configure failed & exit /b 1 )
+          cmake --build build --config Release -j
+          if errorlevel 1 ( echo ERROR: Build failed & exit /b 1 )
+
+      - name: Copy FlexML DLLs to build output
+        shell: powershell
+        run: |
+          foreach ($d in "flexmlrt/bin", "flexmlrt/lib") {
+            if (Test-Path "$d/*.dll") { Copy-Item "$d/*.dll" "build/bin/Release/" -Force }
+          }
+          if (-not (Test-Path "build/bin/Release/flexmlrt.dll")) {
+            Write-Error "flexmlrt.dll not staged next to binaries"; exit 1
+          }
+
+      - name: Download ggml model
+        shell: cmd
+        run: |
+          call models\download-ggml-model.cmd %MODEL% models
+          if not exist models\ggml-%MODEL%.bin ( echo ERROR: model download failed & exit /b 1 )
+
+      - name: Download NPU encoder cache
+        shell: cmd
+        run: |
+          .\models\download-vitisai-model.cmd %MODEL%
+          if not exist models\ggml-%MODEL%-encoder-vitisai.rai ( echo ERROR: VitisAI encoder cache download failed & exit /b 1 )
+
+      - name: Run NPU smoke test
+        shell: cmd
+        run: |
+          build\bin\Release\whisper-cli.exe -m models\ggml-%MODEL%.bin -f samples\jfk.wav > vitisai.log 2>&1
+          type vitisai.log
+          findstr /I /C:"vitisai" vitisai.log || ( echo ERROR: no VitisAI activity - encoder likely fell back to CPU & exit /b 1 )
+          findstr /I /C:"ask not what your country" vitisai.log || ( echo ERROR: incorrect transcription & exit /b 1 )
+
+      - name: Upload smoke test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitisai-smoke-log-windows
+          path: vitisai.log
+
+  npu-amd-linux:
+    runs-on: [self-hosted, Linux, X64, stx, rai300-400]
+    timeout-minutes: 60
+    continue-on-error: true   # advisory while the runner pool is new; revisit later
+
+    env:
+      FLEXML_LINUX_URL: https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/deps/flexmlrt-1.8.0-linux.tar.gz
+      MODEL: base
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Verify NPU device
+        run: |
+          lsmod | grep -q amdxdna || { echo "ERROR: amdxdna driver not loaded"; exit 1; }
+          ls /dev/accel/accel* || { echo "ERROR: no NPU accel device node"; exit 1; }
+
+      - name: Download FlexML runtime (Linux)
+        run: |
+          curl -L --fail -o flexmlrt.tar.gz "$FLEXML_LINUX_URL"
+          tar xf flexmlrt.tar.gz
+          source flexmlrt/setup.sh
+          echo "FlexmlRT_DIR=$PWD/flexmlrt/share/cmake/FlexmlRT" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$PWD/flexmlrt/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+
+      - name: Configure and build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DWHISPER_VITISAI=ON
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Download ggml model
+        run: |
+          ./models/download-ggml-model.sh $MODEL
+
+      - name: Download NPU encoder cache
+        run: |
+          sh ./models/download-vitisai-model.sh $MODEL
+          [ -f "models/ggml-$MODEL-encoder-vitisai.rai" ] || { echo "ERROR: VitisAI encoder cache download failed"; exit 1; }
+
+      - name: Run NPU smoke test
+        run: |
+          ./build/bin/whisper-cli -m "models/ggml-$MODEL.bin" -f samples/jfk.wav 2>&1 | tee vitisai.log
+          grep -qi "vitisai" vitisai.log || { echo "ERROR: no VitisAI activity - CPU fallback?"; exit 1; }
+          grep -qi "ask not what your country" vitisai.log || { echo "ERROR: incorrect transcription"; exit 1; }
+
+      - name: Upload smoke test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitisai-smoke-log-linux
+          path: vitisai.log
