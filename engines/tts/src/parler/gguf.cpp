@@ -202,7 +202,11 @@ bool parler_load_gguf(const std::string & path, parler_model & model,
     }
 
     ::tts_cpp::detail::ensure_backends_loaded();
-    model.backend = ::tts_cpp::detail::init_gpu_backend(n_gpu_layers, /*verbose=*/false, "parler");
+    // Pixel 9-class Mali GPUs are validated through Vulkan for the complete
+    // Parler pipeline, including T5, autoregressive decode, and DAC synthesis.
+    model.backend = ::tts_cpp::detail::init_gpu_backend(
+        n_gpu_layers, /*verbose=*/false, "parler", /*vulkan_device=*/0,
+        /*allow_arm_mali=*/true);
     // Parler's GPU path (FA + fused weights + DAC phase-GEMM) is enabled only on
     // backends it has been validated against end-to-end (reference-fixture parity
     // per stage, plus greedy-token identity); anything else falls back to CPU.

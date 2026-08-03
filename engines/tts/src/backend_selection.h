@@ -73,7 +73,8 @@ void ensure_backends_loaded();
 // `out_gpu_present_but_unused` (optional): set true only when CPU fallback is by
 // policy (GPU present but off-allowlist, e.g. Mali / Adreno 6xx); NOT on init failure.
 // `allow_arm_mali` (default false): opt-in to ARM Mali/Immortalis (Valhall) Vulkan.
-// Only Supertonic sets it — its st_mul_mat output-pad dodges the Valhall mul_mat bug.
+// Engines enable it only after validating their complete graph on Mali; any
+// engine-specific driver workarounds remain the caller's responsibility.
 ggml_backend_t init_gpu_backend(int n_gpu_layers,
                                 bool verbose,
                                 const char * log_prefix,

@@ -424,7 +424,7 @@ ggml_backend_t init_gpu_backend(int n_gpu_layers,
         }
 
 #if defined(__ANDROID__)
-        // Android allowlist: Adreno + Xclipse always; Mali only with allow_arm_mali (Supertonic).
+        // Android allowlist: Adreno + Xclipse always; Mali only when the engine opts in.
         // Others fall through to CPU: unvalidated drivers can miscompute or ggml_abort() (uncatchable).
         if (!is_qualcomm_adreno(name, desc) && !is_samsung_xclipse(name, desc) &&
             !(is_arm_mali(name, desc) && allow_arm_mali)) {
@@ -433,7 +433,7 @@ ggml_backend_t init_gpu_backend(int n_gpu_layers,
                 fprintf(stderr,
                     "%s: Android GPU '%s' (%s) is not a validated vendor for this "
                     "engine (Qualcomm Adreno / Samsung Xclipse; ARM Mali is "
-                    "Supertonic-only); skipping (falling through to CPU)\n",
+                    "engine opt-in only); skipping (falling through to CPU)\n",
                     log_prefix,
                     name ? name : "?",
                     desc ? desc : "?");
