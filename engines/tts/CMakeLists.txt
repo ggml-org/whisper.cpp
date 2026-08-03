@@ -436,6 +436,15 @@ if (TTS_CPP_BUILD_LIBRARY)
     )
 endif()
 
+# cosyvoice_pipeline.cpp reaches into tts_cpp::detail for the registry-routed
+# CPU backend init (ggml_backend_cpu_init is a libggml-cpu symbol, absent under
+# GGML_BACKEND_DL=ON) and for the sched dual-path dispatch.  Declared outside the
+# executables/tests blocks because both consume it.  Mirrors _tcb_parler_core_srcs.
+set(_tcb_cosy_core_srcs
+    src/cosyvoice_pipeline.cpp
+    src/backend_selection.cpp
+    src/sched_dispatch.cpp)
+
 if (TTS_CPP_BUILD_EXECUTABLES)
     if (NOT TTS_CPP_BUILD_LIBRARY)
         message(FATAL_ERROR "TTS_CPP_BUILD_EXECUTABLES requires TTS_CPP_BUILD_LIBRARY=ON")
@@ -454,7 +463,7 @@ if (TTS_CPP_BUILD_EXECUTABLES)
     # HiFTGenerator lineage as Chatterbox's mel2wav with CosyVoice3's causal
     # semantics + SineGen2. Validated at 0.989 log-mel corr vs the PyTorch
     # reference (0.996 waveform corr after the source-excitation phase fix).
-    add_executable(cosyvoice-hift src/cosyvoice_hift.cpp src/cosyvoice_pipeline.cpp src/backend_selection.cpp)
+    add_executable(cosyvoice-hift src/cosyvoice_hift.cpp ${_tcb_cosy_core_srcs})
     target_link_libraries(cosyvoice-hift PRIVATE ggml)
     target_include_directories(cosyvoice-hift PRIVATE ggml/include src)
     tts_cpp_apply_ccache(cosyvoice-hift)
@@ -462,7 +471,7 @@ if (TTS_CPP_BUILD_EXECUTABLES)
     # CosyVoice3 flow (stage 4): 22-layer DiT + CFM Euler loop (speech tokens ->
     # mel). Parity-gated against the PyTorch reference (flow_mel cosine
     # 1.000000). Uses only standard ggml ops.
-    add_executable(cosyvoice-flow src/cosyvoice_flow.cpp src/cosyvoice_pipeline.cpp src/backend_selection.cpp)
+    add_executable(cosyvoice-flow src/cosyvoice_flow.cpp ${_tcb_cosy_core_srcs})
     target_link_libraries(cosyvoice-flow PRIVATE ggml)
     target_include_directories(cosyvoice-flow PRIVATE ggml/include src)
     tts_cpp_apply_ccache(cosyvoice-flow)
@@ -470,7 +479,7 @@ if (TTS_CPP_BUILD_EXECUTABLES)
     # CosyVoice3 LLM (stage 5): Qwen2.5-0.5B speech LM (text -> speech tokens),
     # autoregressive decode + RAS sampling + Qwen2 BPE tokenizer (qwen_tokenizer.h).
     # Prefill logits cosine 1.000000 vs the PyTorch reference.
-    add_executable(cosyvoice-llm src/cosyvoice_llm.cpp src/cosyvoice_pipeline.cpp src/backend_selection.cpp)
+    add_executable(cosyvoice-llm src/cosyvoice_llm.cpp ${_tcb_cosy_core_srcs})
     target_link_libraries(cosyvoice-llm PRIVATE ggml)
     target_include_directories(cosyvoice-llm PRIVATE ggml/include src)
     tts_cpp_apply_ccache(cosyvoice-llm)
@@ -499,6 +508,13 @@ if (TTS_CPP_BUILD_EXECUTABLES)
     add_executable(cosyvoice-cli src/cosyvoice_cli.cpp)
     target_link_libraries(cosyvoice-cli PRIVATE tts-cpp)
     tts_cpp_apply_ccache(cosyvoice-cli)
+
+    # CosyVoice3 per-stage benchmark.  Same --json-out schema as parler-bench so
+    # the .diag summarisers read it unchanged; --tokens-out/--tokens-in pin the
+    # LM trajectory so a CPU leg and a GPU leg do provably equal work.
+    add_executable(cosyvoice-bench src/cosyvoice_bench.cpp)
+    target_link_libraries(cosyvoice-bench PRIVATE tts-cpp)
+    tts_cpp_apply_ccache(cosyvoice-bench)
 endif()
 
 if (TTS_CPP_BUILD_TESTS)
@@ -612,7 +628,7 @@ if (TTS_CPP_BUILD_TESTS)
     set(_tcb_cosy_hift_gguf  "${TTS_CPP_TEST_MODEL_DIR}/cosyvoice3-hift-f32.gguf")
     set(_tcb_cosy_ref        "${TTS_CPP_TEST_REF_DIR}/cosyvoice3-ref")
 
-    add_executable(test-cosyvoice-flow test/test_cosyvoice_flow.cpp src/cosyvoice_pipeline.cpp src/backend_selection.cpp)
+    add_executable(test-cosyvoice-flow test/test_cosyvoice_flow.cpp ${_tcb_cosy_core_srcs})
     target_link_libraries(test-cosyvoice-flow PRIVATE ggml)
     target_include_directories(test-cosyvoice-flow PRIVATE ggml/include src)
     tts_cpp_apply_ccache(test-cosyvoice-flow)
@@ -621,7 +637,7 @@ if (TTS_CPP_BUILD_TESTS)
         ARGS     "--flow-gguf" "${_tcb_cosy_flow_gguf}" "--in-dir" "${_tcb_cosy_ref}"
         REQUIRES "${_tcb_cosy_flow_gguf}" "${_tcb_cosy_ref}/flow_mel.npy")
 
-    add_executable(test-cosyvoice-llm test/test_cosyvoice_llm.cpp src/cosyvoice_pipeline.cpp src/backend_selection.cpp)
+    add_executable(test-cosyvoice-llm test/test_cosyvoice_llm.cpp ${_tcb_cosy_core_srcs})
     target_link_libraries(test-cosyvoice-llm PRIVATE ggml)
     target_include_directories(test-cosyvoice-llm PRIVATE ggml/include src)
     tts_cpp_apply_ccache(test-cosyvoice-llm)
@@ -630,7 +646,7 @@ if (TTS_CPP_BUILD_TESTS)
         ARGS     "--llm-gguf" "${_tcb_cosy_llm_gguf}" "--in-dir" "${_tcb_cosy_ref}"
         REQUIRES "${_tcb_cosy_llm_gguf}" "${_tcb_cosy_ref}/gen_tokens.npy")
 
-    add_executable(test-cosyvoice-hift test/test_cosyvoice_hift.cpp src/cosyvoice_pipeline.cpp src/backend_selection.cpp)
+    add_executable(test-cosyvoice-hift test/test_cosyvoice_hift.cpp ${_tcb_cosy_core_srcs})
     target_link_libraries(test-cosyvoice-hift PRIVATE ggml)
     target_include_directories(test-cosyvoice-hift PRIVATE ggml/include src)
     tts_cpp_apply_ccache(test-cosyvoice-hift)

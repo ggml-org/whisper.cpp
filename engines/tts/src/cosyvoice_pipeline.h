@@ -18,9 +18,11 @@
 
 #include "ggml.h"
 #include "ggml-backend.h"
+#include "sched_dispatch.h"
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -30,21 +32,49 @@
 // in cosyvoice_engine.cpp keeps the public constant in lock-step with this one).
 constexpr int kCosyvoiceNativeSampleRate = 24000;
 
-// ---- resident model (weights + CPU backend) -------------------------------
+// ---- resident model (weights + compute backend) ----------------------------
+// Move-only: owns a sched bundle that cannot be copied.
 struct model_ctx {
-    ggml_backend_t        backend  = nullptr;
-    ggml_context *        ctx_w    = nullptr;
+    // Compute backend.  Borrowed when owns_backend is false — the creator frees
+    // it, and only after cosyvoice_free() has run on every model_ctx borrowing
+    // it (the sched holds backend refs; see sched_dispatch.h).
+    ggml_backend_t        backend      = nullptr;
+    bool                  owns_backend = false;
+
+    ggml_context *        ctx_w    = nullptr;   // graph-visible weights
     ggml_backend_buffer_t buffer_w = nullptr;
-    std::map<std::string, ggml_tensor*> tensors;
+
+    // Host-resident lookup tables (see cosyvoice_host_resident in the .cpp).
+    // Null when the GGUF carries none, and unused when the backend is the CPU.
+    ggml_context *        ctx_h    = nullptr;
+    ggml_backend_buffer_t buffer_h = nullptr;
+
+    std::map<std::string, ggml_tensor*> tensors;   // spans both contexts
     // GGUF scalar metadata captured at load (e.g. cosyvoice3.llm.sos,
     // cosyvoice3.llm.depth, ...), so the graph reads the ids/sizes the weights
     // were converted with instead of trusting hardcoded constants.
     std::map<std::string, int64_t> kv_i;   // uint/int-typed KV
     std::map<std::string, float>   kv_f;   // float-typed KV
+
+    // Lazily-built [backend, CPU-last] scheduler, used only for graphs the
+    // backend cannot fully run (HiFT decode's CONV_TRANSPOSE_1D on OpenCL).
+    // unique_ptr because sched_fallback is non-copyable and non-movable.
+    std::unique_ptr<::tts_cpp::detail::sched_fallback> sched_fb;
+    // Hash-set size the cached sched was built with.  One model_ctx feeds
+    // several graphs of different sizes (flow: front-end + DiT; hift: f0 +
+    // STFT + decode), and ggml_backend_sched_alloc_graph asserts
+    // hash_set.size >= n_nodes + n_leafs -- so a sched built for the smallest
+    // graph must be rebuilt before a larger one runs through it.
+    size_t sched_graph_size = 0;
+
+    int n_threads = 0;   // 0 = leave the backend default
 };
 
-// Load a GGUF into a resident CPU model_ctx (all tensors materialised).
-model_ctx cosyvoice_load_gguf(const std::string & path);
+// Load a GGUF into a resident model_ctx (all tensors materialised).
+//   backend == nullptr : create and OWN a CPU backend.
+//   backend != nullptr : borrow it; the caller owns it and must outlive every
+//                        model_ctx that borrows it.
+model_ctx cosyvoice_load_gguf(const std::string & path, ggml_backend_t backend = nullptr);
 // Free the backend + weight context held by a model_ctx.
 void cosyvoice_free(model_ctx & m);
 // Tensor lookup by name (throws std::runtime_error if absent).
@@ -85,9 +115,31 @@ ggml_tensor * build_qwen(ggml_context * c, const model_ctx & m, const qwen_hp & 
 ggml_tensor * build_dit(ggml_context * c, const model_ctx & m, const dit_hp & hp,
                         ggml_tensor * x, ggml_tensor * mu, ggml_tensor * cond,
                         ggml_tensor * spks, ggml_tensor * time_sin, ggml_tensor * pos,
-                        ggml_tensor * one, int N, int B);
+                        int N, int B);
 // SinusPositionEmbedding(dim, scale=1000); returns [dim, B] (b outer).
 std::vector<float> sinus_time_emb(const std::vector<float> & t, int dim);
+
+// ---- optional per-stage instrumentation -----------------------------------
+// Pass nullptr (the default) and nothing is measured.  Times are wall-clock
+// milliseconds taken AFTER ggml_backend_synchronize, so a GPU backend's async
+// submission cannot be mistaken for speed.  The counters exist so a CPU leg and
+// a GPU leg can be proven to have done the same work before their times are
+// compared -- a leg that decoded a different number of tokens is void, not slow.
+struct cosyvoice_timings {
+    double lm_prefill_ms    = 0;
+    double lm_decode_ms     = 0;   // summed over all decode steps
+    double flow_frontend_ms = 0;
+    double dit_euler_ms     = 0;   // summed over the 10 Euler steps
+    double hift_f0_ms       = 0;
+    double hift_source_ms   = 0;   // CPU-side SineGen2 excitation
+    double hift_stft_ms     = 0;
+    double hift_decode_ms   = 0;
+
+    int n_decode_steps  = 0;   // LM decode iterations actually run
+    int n_speech_tokens = 0;   // tokens the LM emitted
+    int tm              = 0;   // flow frames in  (prompt + generated)
+    int mel_len         = 0;   // mel frames out  (after the prompt trim)
+};
 
 // ---- high-level engine stages (in-memory, no file I/O) --------------------
 // Autoregressive speech-token decode.  `text_ids` = tokenized (prompt+tts)
@@ -96,7 +148,8 @@ std::vector<float> sinus_time_emb(const std::vector<float> & t, int dim);
 std::vector<int> cosyvoice_llm_generate(model_ctx & m, const qwen_hp & hp,
                                         const std::vector<int> & text_ids,
                                         const std::vector<int> & prompt_stok,
-                                        int max_steps, bool greedy, int seed, int min_len);
+                                        int max_steps, bool greedy, int seed, int min_len,
+                                        cosyvoice_timings * tmg = nullptr);
 
 // DiT flow: (prompt_token ++ speech_tokens) -> mel.  prompt_feat is the prompt
 // mel [mel_len1][80] row-major (mel-fastest); embedding is the 192-d CAM++
@@ -105,9 +158,11 @@ std::vector<float> cosyvoice_flow_run(model_ctx & m,
                                       const std::vector<int> & prompt_token,
                                       const std::vector<int> & speech_tokens,
                                       const std::vector<float> & prompt_feat, int mel_len1,
-                                      const std::vector<float> & embedding, int & out_mel_len);
+                                      const std::vector<float> & embedding, int & out_mel_len,
+                                      cosyvoice_timings * tmg = nullptr);
 
 // CausalHiFT vocoder: mel [80, mel_len] channel-major (mel[ch*T + t]) -> 24 kHz
 // float PCM.  Runs f0_predictor + SineGen2 excitation + STFT + decode.
 std::vector<float> cosyvoice_hift_synth(model_ctx & m,
-                                        const std::vector<float> & mel, int mel_len, int seed);
+                                        const std::vector<float> & mel, int mel_len, int seed,
+                                        cosyvoice_timings * tmg = nullptr);

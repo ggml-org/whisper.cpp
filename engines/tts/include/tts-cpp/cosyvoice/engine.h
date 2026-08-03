@@ -98,8 +98,21 @@ struct EngineOptions {
     std::string language = "en";
 
     int seed         = 42;
-    int n_threads    = 0;   // Reserved: not yet forwarded to ggml (default pool).
-    int n_gpu_layers = 0;   // 0 = CPU.  Iteration 1 is CPU-only; >0 reserved.
+    int n_threads    = 0;   // 0 = leave the backend's default thread pool.
+    int n_gpu_layers = 0;   // 0 = CPU; >0 selects the GPU path (OpenCL/Adreno only).
+
+    // Argmax speech-token decode instead of RAS nucleus sampling.  Sampling is
+    // chaotic in the logits -- a 1-ulp difference re-rolls the whole token
+    // trajectory -- so greedy is what makes a CPU-vs-GPU comparison meaningful.
+    // Off by default: sampling is the better-sounding production path.
+    bool greedy      = false;
+
+    // Pin the LM speech-token trajectory instead of decoding one.  Sampling is
+    // chaotic in the logits, so two backends will not agree on tokens even at
+    // the same seed; pinning them is what makes the flow + vocoder stages
+    // comparable across backends, and what makes two benchmark legs do provably
+    // equal work.  Empty (the default) = decode normally.
+    std::vector<int> force_speech_tokens;
 
     // Reserved: output resampling is not yet implemented.  CosyVoice3 output is
     // always the native 24 kHz (reported on SynthesisResult::sample_rate),
@@ -133,10 +146,13 @@ struct EngineOptions {
     int stream_first_chunk_tokens  = 0;
     int stream_left_context_tokens = 0;
 
-    // Reserved (GPU): directory to scan for dynamically-loaded ggml backends.
-    // Iteration 1 is CPU-only, so this is not consulted yet; plumbed so the
-    // option surface stays stable for the GPU follow-up.
+    // Directory to scan for dynamically-loaded ggml backend plugins.  Consulted
+    // only when n_gpu_layers > 0.  Process-global and first-Engine-wins.
     std::string backends_dir;
+
+    // Writable directory for the OpenCL program-binary cache (Android).  Empty
+    // leaves ggml's default, which on Android resolves under HOME and is inert.
+    std::string opencl_cache_dir;
 };
 
 // Per-chunk PCM callback for streaming synthesis.  Receives `samples`
@@ -155,10 +171,35 @@ using StreamCallback = std::function<void(
 // cosyvoice_engine.cpp, so this public value can't silently drift from it.
 constexpr int kNativeSampleRate = 24000;
 
+// Per-stage wall-clock accounting for one synthesize() call, in milliseconds.
+// Measured after a backend sync, so an async GPU submission cannot read as
+// speed.  The counters exist so two runs can be PROVEN to have done the same
+// work before their times are compared -- a run that decoded a different number
+// of tokens is void, not faster.
+struct StageTimings {
+    double lm_prefill_ms    = 0;
+    double lm_decode_ms     = 0;
+    double flow_frontend_ms = 0;
+    double dit_euler_ms     = 0;
+    double hift_f0_ms       = 0;
+    double hift_source_ms   = 0;
+    double hift_stft_ms     = 0;
+    double hift_decode_ms   = 0;
+    double total_ms         = 0;
+
+    int n_decode_steps  = 0;
+    int n_speech_tokens = 0;
+    int tm              = 0;   // flow frames in (prompt + generated)
+    int mel_len         = 0;   // mel frames out (after the prompt trim)
+};
+
 struct SynthesisResult {
     std::vector<float> pcm;
     int   sample_rate = kNativeSampleRate;
     float duration_s  = 0.0f;
+
+    StageTimings     timings;        // per-stage wall clock for this call
+    std::vector<int> speech_tokens;  // the LM trajectory this call actually used
 };
 
 // Persistent engine.  Loads the model once at construction; subsequent

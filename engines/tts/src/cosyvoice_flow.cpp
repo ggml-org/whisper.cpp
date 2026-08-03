@@ -49,11 +49,7 @@ static int run_dit_test(model_ctx & m, const std::string & in_dir) {
     ggml_tensor * tsin = ggml_new_tensor_2d(c, GGML_TYPE_F32, 256, B); ggml_set_name(tsin,"tsin"); ggml_set_input(tsin);
     ggml_tensor * pos = ggml_new_tensor_1d(c, GGML_TYPE_I32, N); ggml_set_name(pos,"pos"); ggml_set_input(pos);
 
-    ggml_init_params cgp = { 2 * ggml_tensor_overhead() + 64, nullptr, false };
-    ggml_context * ctx_const = ggml_init(cgp);
-    ggml_tensor * one = ggml_new_f32(ctx_const, 1.0f);
-
-    ggml_tensor * out = build_dit(c, m, hp, x, mu, cnd, spks, tsin, pos, one, N, B);
+    ggml_tensor * out = build_dit(c, m, hp, x, mu, cnd, spks, tsin, pos, N, B);
     ggml_build_forward_expand(gf, out);
 
     ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
@@ -102,7 +98,6 @@ static int run_dit_test(model_ctx & m, const std::string & in_dir) {
     fprintf(stderr, "  cosine=%.6f\n", dot/(std::sqrt(na)*std::sqrt(nb)));
 
     ggml_gallocr_free(allocr);
-    ggml_free(ctx_const);
     ggml_free(c);
     return 0;
 }

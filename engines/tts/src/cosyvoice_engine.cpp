@@ -17,11 +17,14 @@
 
 #include "tts-cpp/cosyvoice/engine.h"
 
+#include "backend_selection.h"
+#include "backend_util.h"
 #include "cosyvoice_pipeline.h"
 #include "qwen_tokenizer.h"
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -96,6 +99,15 @@ std::vector<float> read_f32(const model_ctx & m, const std::string & name) {
 struct Engine::Impl {
     EngineOptions opts;
 
+    // Owned by Impl and SHARED by llm_m/flow_m/hift_m (which borrow it).  Freed
+    // in ~Impl only after every cosyvoice_free() has run -- the sched bundles
+    // inside those model_ctx hold refs into it.
+    ggml_backend_t backend = nullptr;
+    // True when a GPU was present but this engine declined it (unvalidated
+    // vendor, or a non-OpenCL backend), so a caller can tell "CPU by policy"
+    // from "CPU because there is no GPU".
+    bool gpu_present_but_unused = false;
+
     model_ctx llm_m{}, flow_m{}, hift_m{}, voice_m{};
     QwenTokenizer tokenizer;
 
@@ -139,10 +151,37 @@ struct Engine::Impl {
                             "is not yet ported; using the baked default voice.\n");
         }
 
-        llm_m   = cosyvoice_load_gguf(llm_path);
-        flow_m  = cosyvoice_load_gguf(flow_path);
-        hift_m  = cosyvoice_load_gguf(hift_path);
-        voice_m = cosyvoice_load_gguf(voice_path);
+        // ---- backend selection -------------------------------------------
+        namespace det = ::tts_cpp::detail;
+        if (!opts.backends_dir.empty())     det::set_backends_directory(opts.backends_dir);
+        if (!opts.opencl_cache_dir.empty()) det::set_opencl_cache_dir(opts.opencl_cache_dir);
+
+        backend = det::init_gpu_backend(opts.n_gpu_layers, /*verbose=*/false, "cosyvoice",
+                                        /*vulkan_device=*/0, /*allow_arm_mali=*/false,
+                                        &gpu_present_but_unused);
+        // CosyVoice3's GPU path is validated on OpenCL (Adreno) only.  Other GPU
+        // backends are declined deliberately: the DiT and CausalHiFT graphs lean
+        // on ops (grouped conv1d, conv_transpose_1d, snake) whose per-backend
+        // numerics have not been parity-gated for this model, and there is no CI
+        // device for them.  Widening this needs a per-stage reference run first.
+        if (backend && !det::backend_is_opencl(backend)) {
+            // init_gpu_backend only reports its own declines, so record ours too.
+            gpu_present_but_unused = true;
+            ggml_backend_free(backend);
+            backend = nullptr;
+        }
+        if (!backend) backend = det::init_cpu_backend();
+        if (!backend) throw std::runtime_error("cosyvoice: failed to init a compute backend");
+
+        // llm/flow/hift share the one backend.  voice.gguf holds four tensors
+        // read once via ggml_backend_tensor_get and never used in a graph, so it
+        // stays on CPU rather than occupying device memory.
+        llm_m   = cosyvoice_load_gguf(llm_path,  backend);
+        flow_m  = cosyvoice_load_gguf(flow_path, backend);
+        hift_m  = cosyvoice_load_gguf(hift_path, backend);
+        voice_m = cosyvoice_load_gguf(voice_path,
+                                      det::backend_is_cpu(backend) ? backend : nullptr);
+        llm_m.n_threads = flow_m.n_threads = hift_m.n_threads = opts.n_threads;
 
         if (!tokenizer.load(vocab_path, merges_path)) {
             throw std::runtime_error("cosyvoice: failed to load tokenizer (" +
@@ -158,10 +197,14 @@ struct Engine::Impl {
     }
 
     ~Impl() {
+        // Order matters: each model_ctx frees its sched (which holds refs into
+        // `backend`) and its buffers first; only then is the shared backend safe
+        // to free.  The model_ctx do not own it (owns_backend is false).
         cosyvoice_free(llm_m);
         cosyvoice_free(flow_m);
         cosyvoice_free(hift_m);
         cosyvoice_free(voice_m);
+        if (backend) { ggml_backend_free(backend); backend = nullptr; }
     }
 
     int sample_rate() const {
@@ -170,8 +213,10 @@ struct Engine::Impl {
         return kNativeSampleRate;
     }
 
-    // Full text -> 24 kHz PCM pipeline.
-    std::vector<float> run(const std::string & text) {
+    // Full text -> 24 kHz PCM pipeline.  `tmg` / `out_tokens` are optional.
+    std::vector<float> run(const std::string & text,
+                           cosyvoice_timings * tmg = nullptr,
+                           std::vector<int> * out_tokens = nullptr) {
         std::string prompt_text;
         std::vector<int> lm_prompt_stok;
         if (!opts.instruct_text.empty()) {
@@ -200,21 +245,30 @@ struct Engine::Impl {
 
         const int min_len   = 2 * (int)tts_ids.size();     // min_token_text_ratio
         const int max_steps = 50 * ((int)tts_ids.size() + 1); // generous cap
-        const bool greedy   = false;
+        const bool greedy   = opts.greedy;
 
         qwen_hp hp = cosyvoice_qwen_hp(llm_m);
-        std::vector<int> speech_tokens = cosyvoice_llm_generate(
-            llm_m, hp, text_ids, lm_prompt_stok, max_steps, greedy, opts.seed, min_len);
+        // A pinned trajectory skips the LM entirely: sampling is chaotic in the
+        // logits, so pinning is the only way two backends run the flow and
+        // vocoder over identical input (and do provably equal work).
+        std::vector<int> speech_tokens = opts.force_speech_tokens.empty()
+            ? cosyvoice_llm_generate(llm_m, hp, text_ids, lm_prompt_stok,
+                                     max_steps, greedy, opts.seed, min_len, tmg)
+            : opts.force_speech_tokens;
         if (speech_tokens.empty()) {
             throw std::runtime_error("cosyvoice: LM produced no speech tokens");
         }
+        if (tmg && !opts.force_speech_tokens.empty()) {
+            tmg->n_speech_tokens = (int) speech_tokens.size();
+        }
+        if (out_tokens) *out_tokens = speech_tokens;
 
         int mel_len = 0;
         std::vector<float> mel = cosyvoice_flow_run(
             flow_m, voice_prompt_token, speech_tokens,
-            voice_prompt_feat, voice_mel_len1, voice_embedding, mel_len);
+            voice_prompt_feat, voice_mel_len1, voice_embedding, mel_len, tmg);
 
-        return cosyvoice_hift_synth(hift_m, mel, mel_len, opts.seed);
+        return cosyvoice_hift_synth(hift_m, mel, mel_len, opts.seed, tmg);
     }
 };
 
@@ -236,11 +290,30 @@ SynthesisResult Engine::synthesize(const std::string & text,
     }
     pimpl_->cancel_flag.store(false, std::memory_order_relaxed);
 
-    std::vector<float> pcm = pimpl_->run(text);
+    cosyvoice_timings tmg;
+    std::vector<int>  tokens;
+    const auto t_all = std::chrono::steady_clock::now();
+    std::vector<float> pcm = pimpl_->run(text, &tmg, &tokens);
+    const double total_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_all).count();
 
     SynthesisResult result;
     result.sample_rate = kNativeSampleRate;
     result.duration_s  = static_cast<float>(pcm.size()) / static_cast<float>(kNativeSampleRate);
+    result.speech_tokens = std::move(tokens);
+    result.timings.lm_prefill_ms    = tmg.lm_prefill_ms;
+    result.timings.lm_decode_ms     = tmg.lm_decode_ms;
+    result.timings.flow_frontend_ms = tmg.flow_frontend_ms;
+    result.timings.dit_euler_ms     = tmg.dit_euler_ms;
+    result.timings.hift_f0_ms       = tmg.hift_f0_ms;
+    result.timings.hift_source_ms   = tmg.hift_source_ms;
+    result.timings.hift_stft_ms     = tmg.hift_stft_ms;
+    result.timings.hift_decode_ms   = tmg.hift_decode_ms;
+    result.timings.total_ms         = total_ms;
+    result.timings.n_decode_steps   = tmg.n_decode_steps;
+    result.timings.n_speech_tokens  = tmg.n_speech_tokens;
+    result.timings.tm               = tmg.tm;
+    result.timings.mel_len          = tmg.mel_len;
 
     const bool streaming = pimpl_->opts.stream_chunk_tokens > 0 && static_cast<bool>(on_chunk);
     if (!streaming) {
@@ -291,11 +364,18 @@ void Engine::cancel() {
 
 const EngineOptions & Engine::options() const { return pimpl_->opts; }
 
-std::string Engine::backend_name() const { return "CPU"; }
+std::string Engine::backend_name() const {
+    ggml_backend_t b = pimpl_ ? pimpl_->backend : nullptr;
+    const char * n = b ? ggml_backend_name(b) : nullptr;
+    return n ? std::string(n) : std::string("(none)");
+}
 
-BackendDevice Engine::backend_device() const { return BackendDevice::CPU; }
+BackendDevice Engine::backend_device() const {
+    return ::tts_cpp::detail::backend_is_cpu(pimpl_ ? pimpl_->backend : nullptr)
+        ? BackendDevice::CPU : BackendDevice::GPU;
+}
 
-bool Engine::gpu_unsupported() const { return false; }
+bool Engine::gpu_unsupported() const { return pimpl_ && pimpl_->gpu_present_but_unused; }
 
 SynthesisResult synthesize(const EngineOptions & opts, const std::string & text) {
     Engine e(opts);
