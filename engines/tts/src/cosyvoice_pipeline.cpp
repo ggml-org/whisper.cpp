@@ -8,6 +8,7 @@
 
 #include "cosyvoice_pipeline.h"
 
+#include "backend_selection.h"
 #include "ggml-alloc.h"
 #include "ggml-cpu.h"
 #include "gguf.h"
@@ -33,7 +34,12 @@ model_ctx cosyvoice_load_gguf(const std::string & path) {
     gguf_init_params gp = { /*.no_alloc=*/ false, /*.ctx=*/ &tmp_ctx };
     gguf_context * g = gguf_init_from_file(path.c_str(), gp);
     if (!g) throw std::runtime_error("gguf_init_from_file failed: " + path);
-    m.backend = ggml_backend_cpu_init();
+    // Route CPU-backend init through the registry helper so this resolves under
+    // GGML_BACKEND_DL=ON (per-arch CPU dlopen variants on aarch64 Linux /
+    // Android). A direct ggml_backend_cpu_init() lives in the dlopen'd .so, not
+    // the addon's link line, and fails verify-prebuild-symbols on those arches.
+    m.backend = ::tts_cpp::detail::init_cpu_backend();
+    if (!m.backend) throw std::runtime_error("cosyvoice: init_cpu_backend failed");
     int64_t n_tensors = gguf_get_n_tensors(g);
     ggml_init_params p = { ggml_tensor_overhead() * (size_t)n_tensors, nullptr, true };
     m.ctx_w = ggml_init(p);
@@ -624,7 +630,11 @@ static void run_euler_steps(model_ctx & m, const dit_hp & hp,
     ggml_tensor * pos = ggml_new_tensor_1d(c, GGML_TYPE_I32, N); ggml_set_name(pos, "pos"); ggml_set_input(pos);
     ggml_init_params cgp = { 2 * ggml_tensor_overhead() + 64, nullptr, false };
     ggml_context * ctx_const = ggml_init(cgp);
-    ggml_tensor * one = ggml_new_f32(ctx_const, 1.0f);
+    // ggml_new_f32() lives in the compute lib (unresolved under GGML_BACKEND_DL);
+    // build the scalar constant with ggml-base ops instead. ctx_const is
+    // no_alloc=false, so the tensor's data is host-backed and writable here.
+    ggml_tensor * one = ggml_new_tensor_1d(ctx_const, GGML_TYPE_F32, 1);
+    *(float *) one->data = 1.0f;
     ggml_tensor * out = build_dit(c, m, hp, x, mu, cnd, spks, tsin, pos, one, N, B);
     ggml_build_forward_expand(gf, out);
     ggml_gallocr_t al = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
