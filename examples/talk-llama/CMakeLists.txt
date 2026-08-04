@@ -2,6 +2,8 @@ if (WHISPER_SDL2)
     set(CMAKE_CXX_STANDARD 17)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+    file(GLOB SRC_KV_CACHE llama-kv-cache-*.cpp)
+    file(GLOB SRC_MEMORY llama-memory-*.cpp)
     file(GLOB SRC_MODELS models/*.cpp)
 
     set(TARGET whisper-talk-llama)
@@ -19,13 +21,9 @@ if (WHISPER_SDL2)
         llama-impl.cpp
         llama-io.cpp
         llama-kv-cache.cpp
-        llama-kv-cache-iswa.cpp
-        llama-kv-cache-dsa.cpp
-        llama-kv-cache-dsv4.cpp
-        llama-memory-recurrent.cpp
-        llama-memory-hybrid.cpp
-        llama-memory-hybrid-iswa.cpp
+        ${SRC_KV_CACHE}
         llama-memory.cpp
+        ${SRC_MEMORY}
         llama-mmap.cpp
         llama-model-loader.cpp
         llama-model-saver.cpp
