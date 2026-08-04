@@ -125,8 +125,10 @@ int main(int argc, char ** argv) {
                 "   or: music-cli --dit dit.gguf --lm lm.gguf --text emb.gguf --vae vae.gguf\n"
                 "  prompt:  [--caption \"...\"] [--lyrics \"...\"] [--bpm 128] [--key \"C major\"]\n"
                 "           [--tsig 4/4] [--lang en] [--req request.json]\n"
-                "  sampler: [--steps 8] [--shift 3.0] [--temp 1.0] [--cfg 1.5] [--topk 50]\n"
-                "           [--topp 0.95] [--no-phase1]\n"
+                "  sampler: [--steps N] [--shift F]  (default: auto from the DiT variant,\n"
+                "           turbo 8 / 3.0, base and sft 50 / 1.0)\n"
+                "           [--temp 0.85] [--cfg 2.0] [--topp 0.9] [--topk 0 (off)]\n"
+                "           [--no-phase1]  (values shown are the defaults)\n"
                 "  backend: [--gpu] [--threads N] [--dump-stages <existing dir>]\n");
         return 1;
     }

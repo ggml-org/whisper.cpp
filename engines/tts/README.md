@@ -89,7 +89,7 @@ public surface (defined in
 | Surface | Role |
 |---------|------|
 | `tts_cpp::chatterbox::Engine::synthesize` | One-shot text → 24 kHz PCM for the Chatterbox pipeline (T3 + S3Gen + HiFT). Loads the T3 + S3Gen GGUFs once at construction, optionally bakes a voice-cloning profile from a reference wav, and reuses everything across calls. Header: [`<tts-cpp/chatterbox/engine.h>`](include/tts-cpp/chatterbox/engine.h). Variant (Turbo / Multilingual) is autodetected from `chatterbox.variant` GGUF metadata. |
-| `tts_cpp::supertonic::synthesize` | One-shot text → 44.1 kHz PCM for the Supertonic CPU TTS family. Header: [`<tts-cpp/supertonic/engine.h>`](include/tts-cpp/supertonic/engine.h). |
+| `tts_cpp::supertonic::synthesize` | One-shot text → 44.1 kHz PCM for the Supertonic TTS family, on CPU or GPU (`n_gpu_layers`). Header: [`<tts-cpp/supertonic/engine.h>`](include/tts-cpp/supertonic/engine.h). |
 
 Lower-level helpers also exposed via `TTS_CPP_API`, useful when
 embedding into a host that already manages model lifetime:
@@ -176,7 +176,7 @@ Supertonic engine.
 One binary, one invocation, end to end — `scripts/synthesize.sh` is a
 thin convenience wrapper that fills in the two GGUF paths.
 
-## Parler-TTS (CPU)
+## Parler-TTS
 
 Description-conditioned TTS: the transcript (`--text`) is spoken in a voice
 controlled by a natural-language description (`--description`).  Supports
@@ -186,8 +186,12 @@ model differences are pure GGUF metadata (`parler.*` keys), no code
 branching.  Pipeline: Flan-T5 encoder (description → cross-attention K/V,
 precomputed once and cached per description) → delay-pattern decoder LM
 (9 DAC codebooks, MusicGen-style stagger, HF-faithful EOS gating) → DAC
-codec decode → 44.1 kHz mono PCM.  CPU is the validated backend; the graph
-dispatch uses the shared `sched_dispatch` dual path like the other engines.
+codec decode → 44.1 kHz mono PCM.  Validated backends are CPU, Metal,
+Vulkan, and OpenCL (Adreno): the GPU path (F16 flash attention, fused QKV +
+stacked LM heads, DAC upsampling as phase matmuls) is gated on that
+allowlist in `src/parler/gguf.cpp`, and any other GPU backend is released at
+load and replaced by CPU rather than run unvalidated.  The graph dispatch
+uses the shared `sched_dispatch` dual path like the other engines.
 
 Indic-class checkpoints ship a second, SentencePiece-BPE **prompt**
 tokenizer (90k vocab covering the Indic scripts, byte fallback) alongside
@@ -304,11 +308,16 @@ greedy token trace matches HF exactly; the DAC waveform matches at
 Streaming synthesis is not offered yet (frames complete 8 steps late under
 the delay pattern and DAC decode is whole-sequence).
 
-## Experimental: Supertonic GGUF / CPU
+## Supertonic GGUF
 
-This branch also contains an experimental Supertonic path.  It is
+The tree also contains a Supertonic path.  It is
 model-specific: the official Supertone ONNX files and assets are converted
-into one GGUF, then a CPU C++ runtime runs the known Supertonic stages.
+into one GGUF, then a ggml C++ runtime runs the known Supertonic stages on
+CPU or, with `--n-gpu-layers > 0`, on Metal (Apple), Vulkan, OpenCL (Adreno),
+or CUDA when that backend is compiled in.  Metal is the fastest backend
+measured so far: `91.4 ms` total, `RTF 0.029`, ~35x realtime on an M2 with the
+`q8_0` GGUF, ahead of ggml CPU, ONNX CPU, and ONNX CoreML on every stage that
+matters (see [`PROGRESS_SUPERTONIC.md`](PROGRESS_SUPERTONIC.md)).
 
 There are two related upstream bundles:
 
@@ -328,9 +337,10 @@ Current status:
   When `--onnx-dir` is omitted, it downloads the selected repo just like the
   Chatterbox converters.
 - `build/tts-cli` autodetects Supertonic GGUFs from `supertonic.arch` and can
-  synthesize a 44.1 kHz wav on CPU.  `build/supertonic-cli` remains as a
+  synthesize a 44.1 kHz wav on CPU or GPU (`--n-gpu-layers`, with
+  `--vulkan-device` to pick an adapter).  `build/supertonic-cli` remains as a
   focused compatibility/debug wrapper.
-- All four stages pass numerical parity against the ONNX reference
+- All five stages pass numerical parity against the ONNX reference
   (preprocess, duration, text encoder, vector estimator, vocoder), and the
   full pipeline (`test-supertonic-pipeline`) reproduces the ONNX reference
   waveform when fed the same initial noise tensor.
@@ -991,11 +1001,11 @@ backend-comparable metric, wall time is workload-specific).
 _Source: workflow run [#27415600049](https://github.com/tetherto/qvac/actions/runs/27415600049)
 (2026-06-12), runner `qvac-ubuntu2204-x64-gpu`, GPU **NVIDIA RTX 4000 SFF Ada
 Generation** (`backend=vulkan`). Chatterbox built against `tts-cpp` `1c75d6e9`
-on a benchmark branch; the shipped `tts-ggml` pin stays at the Android-safe
-`2026-06-03` revision. ¹ Supertonic runs **CPU-only** on the current package
-(the `0.2.2` Android revert), so its Vulkan figures (and the ~34× Supertonic GPU
-optimisations) are pending the GPU re-enablement in #2506 + the upstream Android
-CPU-backend fix._
+on a benchmark branch; at the time of the run the shipped `tts-ggml` pin was the Android-safe
+`2026-06-03` revision. ¹ That run has no Supertonic Vulkan lane, so the Vulkan
+columns are unrecorded, not unsupported: Supertonic runs on Metal, Vulkan,
+OpenCL (Adreno), and CUDA, and the shipped `tts-ggml` addon has honoured
+`useGPU` / `nGpuLayers` for it since `0.3.0`._
 
 ### Mac Studio M3 Ultra (96 GB unified memory)
 

@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 Gianfranco Cordella
+Copyright (c) 2026 QVAC contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -24,13 +24,26 @@ SOFTWARE.
 Third-party components
 ================================================================================
 
-This project bundles, ports, or builds against the following third-party
-software, all under MIT-compatible licenses:
+This project ports, bundles, or builds against the following third-party
+software, under permissive licenses (MIT or Apache-2.0). NOTICE carries the
+complete list, including the file-by-file mapping of the acestep.cpp ports and
+the optional Python packages used by scripts/.
 
-* ggml — MIT License, Copyright (c) 2023-2026 The ggml authors.
+* ggml (MIT License), Copyright (c) 2023-2026 The ggml authors.
+  Consumed as a system package through the ggml-speech vcpkg port; no ggml
+  sources are vendored here.
   Source: https://github.com/ggml-org/ggml
-  License: ggml/LICENSE
 
-* Chatterbox / Chatterbox Turbo — MIT License, Copyright (c) 2025 Resemble AI.
-  This project is a C++/ggml port of the Python implementation.
-  Source: https://github.com/resemble-ai/chatterbox
+* acestep.cpp (MIT License), Copyright (c) 2023-2026 The acestep.cpp authors.
+  Most of the C++ inference path under src/acestep/ is ported from this
+  project's ggml implementation, parts of it verbatim.
+  Source: https://github.com/ServeurpersoCom/acestep.cpp
+
+* ACE-Step 1.5 (MIT License), model architecture and weights.
+  The 5 Hz LM, FSQ detokenizer, DiT flow-matching transformer, and Oobleck VAE
+  stages implement this architecture. The weights are ACE Studio's and
+  StepFun's and carry the terms of their own model cards.
+  Source: https://github.com/ace-step/ACE-Step-1.5
+
+* Qwen3-Embedding (Apache License 2.0), weights for the text-encoder stage.
+  Source: https://huggingface.co/Qwen/Qwen3-Embedding-0.6B

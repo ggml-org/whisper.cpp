@@ -1,0 +1,90 @@
+audiogen-cpp
+Copyright 2026 QVAC contributors
+
+This product includes third-party components under their respective
+licenses. audiogen-cpp itself is licensed under MIT; bundled
+dependencies are governed by the licenses listed below. Python packages
+listed under Python Dependencies are optional and apply only to scripts/
+(diagnostic and parity tooling), not to C++ inference binaries.
+
+=========================================================================
+Upstream model code
+=========================================================================
+
+--- mit (MIT License) ---
+
+  acestep.cpp
+    https://github.com/ServeurpersoCom/acestep.cpp
+    Copyright (c) 2023-2026 The acestep.cpp authors
+
+    Most of the C++ inference path under src/acestep/ is ported from this
+    project's ggml implementation rather than written against the PyTorch
+    reference directly:
+
+      src/acestep/philox.h              from src/philox.h (verbatim)
+      src/acestep/lm_pipeline.{h,cpp}   from src/sampling.h (sample_top_k_p,
+                                        verbatim), src/prompt.h, pipeline-lm
+      src/acestep/bpe_tokenizer.{h,cpp} from src/bpe.h
+      src/acestep/metadata_fsm.h        from src/metadata-fsm.h
+      src/acestep/lm_ggml.{h,cpp}       from src/qwen3-lm.h
+      src/acestep/textenc_ggml.cpp      from src/qwen3-enc.h
+      src/acestep/cond_ggml.{h,cpp}     from src/cond-enc.h
+      src/acestep/detok_ggml.{h,cpp}    from src/fsq-detok.h
+      src/acestep/dit_ggml.{h,cpp}      from src/dit-graph.h and src/dit*.h
+
+    The stage GGUFs this engine loads are produced by that project's
+    convert.py, and src/acestep/engine.cpp follows its pipeline wiring and
+    LM sampling defaults so the two implementations can be compared tensor
+    by tensor.
+
+--- mit (MIT License) ---
+
+  ACE-Step 1.5 (model architecture and weights)
+    https://github.com/ace-step/ACE-Step-1.5
+    The 5 Hz LM, FSQ detokenizer, DiT flow-matching transformer, and Oobleck
+    VAE stages implement the ACE-Step 1.5 architecture; the weights are ACE
+    Studio's and StepFun's. Note that the ACE-Step 1.5 line is MIT-licensed,
+    unlike the Apache-2.0 ACE-Step v1 line; consult the LICENSE file of the
+    specific upstream repository and the model card of the specific
+    checkpoint being converted.
+
+--- apache-2.0 (Apache License 2.0) ---
+
+  Qwen3-Embedding (text-encoder stage)
+    https://huggingface.co/Qwen/Qwen3-Embedding-0.6B
+    The text-encoder stage runs Qwen3-Embedding weights, and the LM stage
+    reuses the Qwen3 causal architecture (src/acestep/qwen3_block.h). The LM
+    weights themselves ship with ACE-Step 1.5 and follow that project's
+    license.
+
+=========================================================================
+C++ Dependencies
+=========================================================================
+
+--- mit (MIT License) ---
+
+  ggml
+    https://github.com/ggml-org/ggml
+    Consumed as a system package through the QVAC speech-stack
+    `ggml-speech` vcpkg port (the qvac-ext-ggml `speech` branch), which
+    ships the custom `ggml_snake` and `ggml_col2im_1d` ops this engine
+    requires. No ggml sources are vendored here.
+
+--- apache-2.0-with-llvm-exception ---
+
+  libc++ (LLVM C++ Standard Library), when linked (e.g. some Linux toolchains)
+    https://github.com/llvm/llvm-project
+
+=========================================================================
+Python Dependencies
+=========================================================================
+
+--- bsd-3-clause ---
+
+  numpy
+    https://numpy.org/
+
+--- mit (MIT License) ---
+
+  gguf
+    https://pypi.org/project/gguf/

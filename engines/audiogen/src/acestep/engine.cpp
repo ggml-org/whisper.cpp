@@ -498,12 +498,13 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
 
     // Sequential loading (default): each stage is loaded via m->ensure_*() right
     // before its step and freed via m->free_*() right after, so the peak resident
-    // set is a single stage rather than all six at once — small enough for a
-    // non-entitled iOS app not to be jetsam-killed (QVAC-22955). With
-    // ACESTEP_KEEP_STAGES=1 every stage is already resident (create() eager-loaded
-    // it), ensure_*() is a no-op, and the free_*() calls are skipped so nothing is
-    // released between generate() calls. Each stage's lazy-load cost is attributed
-    // to its own timing.mark() below — there is no separate up-front reload phase.
+    // set is one stage, or the cond + text encoders where those two overlap,
+    // rather than all six at once — small enough for a non-entitled iOS app not
+    // to be jetsam-killed. With ACESTEP_KEEP_STAGES=1 every stage is already
+    // resident (create() eager-loaded it), ensure_*() is a no-op, and the free_*()
+    // calls are skipped so nothing is released between generate() calls. Each
+    // stage's lazy-load cost is attributed to its own timing.mark() below — there
+    // is no separate up-front reload phase.
     const bool low_mem = !m->keep_stages;
 
     long long seed = params.seed;

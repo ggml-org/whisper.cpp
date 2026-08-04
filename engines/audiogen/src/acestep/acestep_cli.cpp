@@ -1,17 +1,3 @@
-// acestep-cli: standalone harness for the ACE-Step Oobleck VAE stage.
-//
-// Two modes:
-//   --decode     : feed a structured synthetic latent through the decoder and
-//                  write the resulting 48 kHz stereo WAV. Proves real weights
-//                  load + the decode graph (col2im_1d + snake) runs on CPU.
-//   --roundtrip  : read a 48 kHz WAV, encode -> 64-ch latent -> decode, write the
-//                  reconstruction and report correlation vs the input. The audible
-//                  end-to-end VAE check.
-//
-// Usage:
-//   acestep-cli --model vae.gguf [--decode] [--t-latent 32] [--out out.wav]
-//   acestep-cli --model vae.gguf --roundtrip --in in.wav [--seconds 2.56] [--out out.wav]
-
 #include "audiogen-cpp/acestep/vae.h"
 
 #include <cmath>
@@ -98,7 +84,7 @@ int main(int argc, char ** argv) {
     const char * model = arg_val(argc, argv, "--model");
     if (!model) {
         fprintf(stderr,
-            "usage: acestep-cli --model vae.gguf [--decode] [--t-latent 32] [--out out.wav] [--gpu]\n"
+            "usage: acestep-cli --model vae.gguf [--t-latent 32] [--out out.wav] [--gpu]\n"
             "       acestep-cli --model vae.gguf --roundtrip --in in.wav [--seconds 2.56] [--out out.wav] [--gpu]\n");
         return 1;
     }
