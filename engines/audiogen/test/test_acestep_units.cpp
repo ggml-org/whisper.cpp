@@ -10,15 +10,19 @@
 //   2. philox_randn        — Philox4x32-10 + Box-Muller (torch.randn parity).
 //   3. fsq_decode_index    — FSQ index -> 6 normalized dims (strides 8/8/8/5/5/5).
 //   4. sample_top_k_p      — top-k/top-p LM sampler (determinism + argmax).
+//   5. vae_progress_pct    — VAE decode progress clamp/monotonicity.
+//   6. stage placement     — which backend the LM / detokenizer / encoders run on.
 
 #include "dit_ggml.h"
 #include "detok_ggml.h"
 #include "lm_pipeline.h"
 #include "philox.h"
+#include "stage_placement.h"
 #include "vae_ggml.h"
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <random>
 #include <vector>
 
@@ -192,6 +196,169 @@ void test_vae_progress() {
     CHECK(last_emitted == 100);  // the final surfaced value is 100
 }
 
+// 6. stage placement ---------------------------------------------------------
+// Which backend each stage runs on decides which numerical path the generated
+// audio takes, so the policy is locked here rather than only observed on a
+// device lane. Mirrors the three branches Engine::create() relies on: the
+// backend allowlist, the CPU fallback for everything else, and the env
+// overrides layered on top.
+void test_stage_placement() {
+    using tts_cpp::acestep::backend_name_is_metal;
+    using tts_cpp::acestep::backend_name_is_vulkan;
+    using tts_cpp::acestep::PlacementOverrides;
+    using tts_cpp::acestep::resolve_stage_placement;
+    using tts_cpp::acestep::StagePlacement;
+
+    // -- backend name matching ------------------------------------------------
+    // ggml-metal registers as "MTL"; older ggml reported "Metal". Both must
+    // match or the allowlist is silently dead on one of them.
+    CHECK(backend_name_is_metal("MTL"));
+    CHECK(backend_name_is_metal("Metal"));
+    CHECK(backend_name_is_vulkan("Vulkan"));
+
+    // The input is the REGISTRY name, which carries no device-index suffix.
+    // ggml_backend_name() would hand over "MTL0" / "Vulkan0" and match nothing.
+    CHECK(!backend_name_is_metal("MTL0"));
+    CHECK(!backend_name_is_vulkan("Vulkan0"));
+
+    // Exact compare: no case folding, no substring match, and null/empty safe.
+    CHECK(!backend_name_is_metal("mtl"));
+    CHECK(!backend_name_is_metal("metal"));
+    CHECK(!backend_name_is_metal("MTLX"));
+    CHECK(!backend_name_is_vulkan("vulkan"));
+    CHECK(!backend_name_is_metal("CUDA"));
+    CHECK(!backend_name_is_vulkan("MTL"));
+    CHECK(!backend_name_is_metal("Vulkan"));
+    CHECK(!backend_name_is_metal(""));
+    CHECK(!backend_name_is_vulkan(""));
+    CHECK(!backend_name_is_metal(nullptr));
+    CHECK(!backend_name_is_vulkan(nullptr));
+
+    const PlacementOverrides none;
+
+    // -- allowlist: LM + detokenizer stay on the GPU ---------------------------
+    for (const char * allowed : { "Vulkan", "MTL", "Metal" }) {
+        StagePlacement p = resolve_stage_placement(allowed, none);
+        CHECK(p.lm_on_gpu);
+        CHECK(p.detok_on_gpu);
+        CHECK(p.enc_on_gpu);  // encoders follow the GPU on every backend
+    }
+
+    // -- fallback: everything else keeps the shipping CPU placement -----------
+    // Unmeasured backends must not silently pick up the GPU path. "MTL0" is in
+    // this list on purpose: a suffixed name is NOT the allowlisted one.
+    const char * const others[] = { "CUDA", "OpenCL", "SYCL", "BLAS", "CPU", "MTL0", "Vulkan0", "", nullptr };
+    for (const char * other : others) {
+        StagePlacement p = resolve_stage_placement(other, none);
+        CHECK(!p.lm_on_gpu);
+        CHECK(!p.detok_on_gpu);
+        CHECK(p.enc_on_gpu);  // only the LM and the detokenizer are allowlisted
+    }
+
+    // -- env overrides: applied after the allowlist ---------------------------
+    // GPU hatch lifts a non-allowlisted backend (this is how a new backend gets
+    // measured without a rebuild).
+    {
+        PlacementOverrides ov;
+        ov.lm_gpu        = true;
+        StagePlacement p = resolve_stage_placement("CUDA", ov);
+        CHECK(p.lm_on_gpu);
+        CHECK(!p.detok_on_gpu);  // the LM hatch must not move the detokenizer
+    }
+    {
+        PlacementOverrides ov;
+        ov.detok_gpu     = true;
+        StagePlacement p = resolve_stage_placement("CUDA", ov);
+        CHECK(p.detok_on_gpu);
+        CHECK(!p.lm_on_gpu);
+    }
+
+    // CPU hatch demotes an allowlisted backend.
+    {
+        PlacementOverrides ov;
+        ov.lm_cpu        = true;
+        StagePlacement p = resolve_stage_placement("MTL", ov);
+        CHECK(!p.lm_on_gpu);
+        CHECK(p.detok_on_gpu);
+    }
+    {
+        PlacementOverrides ov;
+        ov.detok_cpu     = true;
+        StagePlacement p = resolve_stage_placement("Vulkan", ov);
+        CHECK(!p.detok_on_gpu);
+        CHECK(p.lm_on_gpu);
+    }
+
+    // Precedence: CPU wins when both hatches are set for the same stage, on an
+    // allowlisted backend and on a fallback one alike.
+    for (const char * name : { "MTL", "Metal", "Vulkan", "CUDA" }) {
+        PlacementOverrides ov;
+        ov.lm_gpu        = true;
+        ov.lm_cpu        = true;
+        ov.detok_gpu     = true;
+        ov.detok_cpu     = true;
+        StagePlacement p = resolve_stage_placement(name, ov);
+        CHECK(!p.lm_on_gpu);
+        CHECK(!p.detok_on_gpu);
+    }
+
+    // The encoder hatch is independent of the LM/detokenizer allowlist.
+    for (const char * name : { "MTL", "Vulkan", "CUDA" }) {
+        PlacementOverrides ov;
+        ov.encoders_cpu  = true;
+        StagePlacement p = resolve_stage_placement(name, ov);
+        CHECK(!p.enc_on_gpu);
+        CHECK(p.lm_on_gpu == (backend_name_is_metal(name) || backend_name_is_vulkan(name)));
+    }
+}
+
+// 6b. env -> overrides -------------------------------------------------------
+// Locks which variable drives which stage, and that PRESENCE is what counts:
+// ACESTEP_LM_CPU=0 still forces the LM to the CPU (the getenv() semantics this
+// policy inherited). Uses "0" as the "set" value so the assertion is identical
+// on POSIX and Windows, where _putenv_s(k, "") removes the variable instead.
+void set_env(const char * key, const char * value) {
+#ifdef _WIN32
+    _putenv_s(key, value ? value : "");
+#else
+    if (value) setenv(key, value, 1);
+    else       unsetenv(key);
+#endif
+}
+
+void test_placement_env() {
+    using tts_cpp::acestep::placement_overrides_from_env;
+    using tts_cpp::acestep::PlacementOverrides;
+
+    const char * const vars[] = { "ACESTEP_LM_GPU",    "ACESTEP_LM_CPU", "ACESTEP_DETOK_GPU",
+                                  "ACESTEP_DETOK_CPU", "ACESTEP_ENCODERS_CPU" };
+    auto clear_all = [&] {
+        for (const char * k : vars) set_env(k, nullptr);
+    };
+
+    // Nothing set -> no override.
+    clear_all();
+    {
+        PlacementOverrides ov = placement_overrides_from_env();
+        CHECK(!ov.lm_gpu);
+        CHECK(!ov.lm_cpu);
+        CHECK(!ov.detok_gpu);
+        CHECK(!ov.detok_cpu);
+        CHECK(!ov.encoders_cpu);
+    }
+
+    // One variable at a time -> exactly its own flag, nothing else.
+    for (size_t i = 0; i < sizeof(vars) / sizeof(vars[0]); ++i) {
+        clear_all();
+        set_env(vars[i], "0");  // presence, not value
+        PlacementOverrides ov  = placement_overrides_from_env();
+        const bool         set[] = { ov.lm_gpu, ov.lm_cpu, ov.detok_gpu, ov.detok_cpu, ov.encoders_cpu };
+        for (size_t j = 0; j < sizeof(set) / sizeof(set[0]); ++j) CHECK(set[j] == (i == j));
+    }
+
+    clear_all();  // leave the environment as found
+}
+
 }  // namespace
 
 int main() {
@@ -200,6 +367,8 @@ int main() {
     test_fsq();
     test_sampler();
     test_vae_progress();
+    test_stage_placement();
+    test_placement_env();
 
     std::fprintf(stderr, "[test-acestep-units] %d/%d checks passed\n", g_checks - g_failures, g_checks);
     return g_failures == 0 ? 0 : 1;

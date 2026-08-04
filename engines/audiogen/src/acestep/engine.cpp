@@ -13,6 +13,7 @@
 #include "acestep/textenc_ggml.h"
 
 #include "acestep/backend_registry.h"
+#include "acestep/stage_placement.h"
 
 #include "ggml-backend.h"
 
@@ -272,24 +273,11 @@ std::unique_ptr<Engine> Engine::create(const EngineOptions & opts_in) {
 
     // Stage placement when a GPU is active. The DiT, the VAE and the one-shot
     // text/cond encoders always run on it. The autoregressive LM and the FSQ
-    // detokenizer are allowlisted per backend instead, because each has a backend
-    // where it is known-wrong or simply unmeasured:
-    //
-    //   * LM: iOS/macOS A-series Metal produces empty/garbage logits, so the
-    //     sampler yields zero audio codes ("LM produced no audio codes") while the
-    //     SAME weights decode correctly on CPU. Numerical, not memory (unified RAM
-    //     does not help), confirmed against the full-GPU path on device.
-    //   * detokenizer: `detokenizer.special_tokens` ships quantized, so q3_as_f32
-    //     becomes ggml_cast(Q8_0 -> F32) and Metal had no kernel for that CPY
-    //     variant. It has one now (ggml-metal-device.m), but the stage has not been
-    //     run there since, so it stays off the Metal GPU.
-    //
-    // Allowlist rather than denylist: Vulkan is the only GPU backend either stage has
-    // actually been measured on (LM logits against an F32 reference, detokenizer
-    // latents against CPU). Every other backend therefore keeps the CPU placement
-    // that ships today, so adding one cannot silently regress generated audio.
-    // Widen the allowlist per backend once it is measured — ACESTEP_LM_GPU /
-    // ACESTEP_DETOK_GPU are how you take that measurement without a rebuild.
+    // detokenizer are allowlisted per backend, so a backend nobody has measured
+    // keeps the CPU placement and cannot silently regress generated audio.
+    // ACESTEP_LM_GPU / ACESTEP_DETOK_GPU take that measurement without a rebuild.
+    // The policy itself lives in stage_placement.h so it can be unit tested
+    // without a GPU (test/test_acestep_units.cpp); this only applies its answer.
     //
     // Env escape hatches (applied after the allowlist; CPU wins if both are set):
     //   ACESTEP_LM_GPU=1        -> LM on the GPU, whatever the backend
@@ -301,22 +289,18 @@ std::unique_ptr<Engine> Engine::create(const EngineOptions & opts_in) {
     ggml_backend_t lm_backend    = m->backend;
     ggml_backend_t detok_backend = m->backend;
     if (on_gpu) {
-        if (!backend_is_vulkan(m->backend)) {
-            lm_backend    = m->backend_cpu;
-            detok_backend = m->backend_cpu;
-        }
-        if (std::getenv("ACESTEP_LM_GPU"))       lm_backend    = m->backend;
-        if (std::getenv("ACESTEP_LM_CPU"))       lm_backend    = m->backend_cpu;
-        if (std::getenv("ACESTEP_DETOK_GPU"))    detok_backend = m->backend;
-        if (std::getenv("ACESTEP_DETOK_CPU"))    detok_backend = m->backend_cpu;
-        if (std::getenv("ACESTEP_ENCODERS_CPU")) enc_backend   = m->backend_cpu;
+        const StagePlacement place =
+            resolve_stage_placement(backend_reg_name(m->backend), placement_overrides_from_env());
+        if (!place.enc_on_gpu)   enc_backend   = m->backend_cpu;
+        if (!place.lm_on_gpu)    lm_backend    = m->backend_cpu;
+        if (!place.detok_on_gpu) detok_backend = m->backend_cpu;
         if (v) fprintf(stderr, "[acestep-engine] backends: enc=%s lm=%s detok=%s dit/vae=%s\n",
                        ggml_backend_name(enc_backend), ggml_backend_name(lm_backend),
                        ggml_backend_name(detok_backend), ggml_backend_name(m->backend));
     }
     m->backend_enc   = enc_backend;
     m->backend_lm    = lm_backend;
-    m->backend_detok = detok_backend;  // Vulkan-aware (QVAC-22613): GPU on Vulkan, CPU otherwise
+    m->backend_detok = detok_backend;  // GPU on the allowlisted backends, CPU otherwise
     m->nth           = nth;
 
     // ACE-Step loads six weight sets (text-enc, LM, cond, detok, DiT, VAE). Held

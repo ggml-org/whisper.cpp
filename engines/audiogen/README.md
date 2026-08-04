@@ -7,7 +7,7 @@ Native [ACE-Step 1.5](https://github.com/ace-step/ACE-Step-1.5) text-to-music in
 | CMake project | `audiogen-cpp` v0.1.0 |
 | Public API | `tts_cpp::acestep::Engine` (`include/audiogen-cpp/acestep/engine.h`) |
 | Output | interleaved stereo PCM, 48 kHz, `pcm[t * 2 + ch]` |
-| Backends | CPU, Vulkan; Metal for the DiT, VAE, and encoder stages |
+| Backends | CPU, Vulkan, Metal |
 | ggml | requires the `ggml-speech` port for the custom `ggml_snake` and `ggml_col2im_1d` ops |
 | Consumed by | the `@qvac/audiogen-ggml` addon in [QVAC](https://github.com/tetherto/qvac) |
 
@@ -59,9 +59,13 @@ Weights load quantized. `f32`, `f16`, and `bf16` are handled for norms and biase
 |---|---|
 | DiT, VAE | GPU |
 | Text encoder, cond encoder | GPU, unless `ACESTEP_ENCODERS_CPU=1` |
-| LM, FSQ detokenizer | GPU on Vulkan only, CPU on every other backend |
+| LM, FSQ detokenizer | GPU on Vulkan and Metal, CPU on every other backend |
 
-The LM and detokenizer use an allowlist rather than a denylist: Vulkan is the only GPU backend where both have been measured (LM logits against an F32 reference, detokenizer latents against CPU), so any other backend keeps the CPU placement that ships today and cannot silently regress generated audio. On Metal the LM produced empty or garbage logits on A-series parts, which is why it stays on the CPU there.
+The LM and detokenizer use an allowlist rather than a denylist: a backend keeps the CPU placement until both stages have been measured on it, so adding one cannot silently regress generated audio. Vulkan and Metal have been measured; every other GPU backend has not.
+
+Measurement is against an F32-dequantized reference (`scripts/dequant_gguf.py`), not against CPU. CPU is not ground truth for a quantized model — ggml's CPU matmul quantizes activations to Q8_1 internally — so pinning a stage to the CPU forces the *less* accurate path. On Metal the LM reproduces the F32 argmax trajectory exactly where CPU Q8_0 diverges at the first token, and every pipeline stage is closer to the F32 reference on Metal than on CPU.
+
+The policy itself lives in [`src/acestep/stage_placement.h`](src/acestep/stage_placement.h), separate from the engine, so it is unit tested without a GPU.
 
 ### Environment overrides
 
@@ -170,7 +174,7 @@ cmake --build build -j
 ctest --test-dir build
 ```
 
-`test-acestep-units` covers the weight-free CPU logic and needs no GGUFs.
+`test-acestep-units` covers the weight-free CPU logic and needs no GGUFs. That includes the stage-placement policy above: the backend allowlist (both the `MTL` and `Metal` registry names), the CPU fallback for every unmeasured backend, and the environment override precedence.
 
 Stage dumps are the tool for localising a backend divergence. Run the same prompt twice with `--dump-stages`, then compare:
 
