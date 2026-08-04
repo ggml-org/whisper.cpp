@@ -655,6 +655,14 @@ if (TTS_CPP_BUILD_TESTS)
         ARGS     "--hift-gguf" "${_tcb_cosy_hift_gguf}" "--in-dir" "${_tcb_cosy_ref}"
         REQUIRES "${_tcb_cosy_hift_gguf}" "${_tcb_cosy_ref}/hift_wav.npy")
 
+    # Map-in-place loader: byte-exact round-trip + clean failure on a truncated
+    # GGUF. Self-contained (writes its own synthetic GGUF), so it always runs.
+    add_executable(test-cosyvoice-load test/test_cosyvoice_load.cpp ${_tcb_cosy_core_srcs})
+    target_link_libraries(test-cosyvoice-load PRIVATE ggml)
+    target_include_directories(test-cosyvoice-load PRIVATE ggml/include src)
+    tts_cpp_apply_ccache(test-cosyvoice-load)
+    tts_cpp_register_test(test-cosyvoice-load LABEL "unit")
+
     # Qwen2 BPE tokenizer parity (header-only; no GGUF weights, just the Qwen2
     # vocab.json/merges.txt bundled with the model + HF-reference ids from
     # scripts/dump-cosyvoice3-tokenizer-reference.py).

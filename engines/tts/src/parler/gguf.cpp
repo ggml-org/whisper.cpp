@@ -229,14 +229,50 @@ bool parler_load_gguf(const std::string & path, parler_model & model,
                     && std::getenv("PARLER_NO_FA") == nullptr;
     model.kv_type = model.use_fa ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
-    model.buffer_w = ggml_backend_alloc_ctx_tensors(model.ctx_w, model.backend);
-    if (!model.buffer_w) return fail("failed to allocate weight buffer");
+    // On the CPU backend, back each verbatim ctx_w tensor with the mmap'd GGUF
+    // (bounds + 32B-align guarded, alloc+stream fallback) instead of a dirty
+    // buffer + stream copy. GPU path unchanged (weights uploaded to a device
+    // buffer); ctx_fused is GPU-only.
+    const bool on_cpu = ::tts_cpp::detail::backend_is_cpu(model.backend);
+    bool mapping = false;
+    if (on_cpu && tts_cpp::cosyvoice::mapped_file_open(model.mapped, path, "parler")) {
+        model.map_buf = ggml_backend_cpu_buffer_from_ptr(
+            (void *) model.mapped.data, model.mapped.size);
+        mapping = model.map_buf != nullptr;
+        if (!mapping) tts_cpp::cosyvoice::mapped_file_close(model.mapped);
+    }
+    if (mapping) {
+        const size_t data_off = gguf_get_data_offset(g);
+        for (ggml_tensor * t = ggml_get_first_tensor(model.ctx_w); t;
+             t = ggml_get_next_tensor(model.ctx_w, t)) {
+            const int64_t gi = gguf_find_tensor(g, ggml_get_name(t));
+            if (gi < 0) continue;
+            const size_t off = data_off + (size_t) gguf_get_tensor_offset(g, gi);
+            const size_t nb  = ggml_nbytes(t);
+            if (off > model.mapped.size || nb > model.mapped.size - off) continue;
+            const uint8_t * src = model.mapped.data + off;
+            if (((uintptr_t) src % 32) != 0) continue;  // quant kernels need 32B alignment
+            t->data   = (void *) src;
+            t->buffer = model.map_buf;
+        }
+    }
 
-    {
+    // Allocate + stream whatever stayed unmapped (all on GPU; none on a full CPU
+    // map, where buffer_w stays null).
+    bool any_unmapped = false;
+    for (ggml_tensor * t = ggml_get_first_tensor(model.ctx_w); t;
+         t = ggml_get_next_tensor(model.ctx_w, t)) {
+        if (t->data == nullptr) { any_unmapped = true; break; }
+    }
+    if (any_unmapped) {
+        model.buffer_w = ggml_backend_alloc_ctx_tensors(model.ctx_w, model.backend);
+        if (!model.buffer_w) return fail("failed to allocate weight buffer");
+
         ::tts_cpp::detail::gguf_stream_reader rd(g, path);
         if (!rd.ok()) return fail("failed to reopen GGUF for streaming");
         for (ggml_tensor * t = ggml_get_first_tensor(model.ctx_w); t;
              t = ggml_get_next_tensor(model.ctx_w, t)) {
+            if (mapping && t->buffer == model.map_buf) continue;
             if (!rd.to_backend(ggml_get_name(t), t)) {
                 return fail(std::string("failed to stream tensor ") + ggml_get_name(t));
             }
@@ -455,6 +491,9 @@ void parler_free_model(parler_model & model) {
     if (model.ctx_kv)       { ggml_free(model.ctx_kv); model.ctx_kv = nullptr; }
     if (model.buffer_w)     { ggml_backend_buffer_free(model.buffer_w); model.buffer_w = nullptr; }
     if (model.ctx_w)        { ggml_free(model.ctx_w); model.ctx_w = nullptr; }
+    // Free the wrapper (not the mapping) after ctx_w, then munmap.
+    if (model.map_buf)      { ggml_backend_buffer_free(model.map_buf); model.map_buf = nullptr; }
+    tts_cpp::cosyvoice::mapped_file_close(model.mapped);
     if (model.backend)      { ggml_backend_free(model.backend); model.backend = nullptr; }
     model.cross_k.clear();
     model.cross_v_t.clear();

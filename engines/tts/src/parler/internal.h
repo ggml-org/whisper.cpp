@@ -5,6 +5,7 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "sched_dispatch.h"
+#include "../cosyvoice_mmap.h"
 
 #include <cstdint>
 #include <string>
@@ -108,6 +109,10 @@ struct parler_model {
     ggml_backend_t        backend  = nullptr;
     ggml_context        * ctx_w    = nullptr;
     ggml_backend_buffer_t buffer_w = nullptr;
+    // Map-in-place GGUF backing for ctx_w on the CPU backend (null on GPU / when
+    // mapping fails). map_buf wraps the whole mapping; freeing it does not munmap.
+    tts_cpp::cosyvoice::MappedFile mapped;
+    ggml_backend_buffer_t          map_buf = nullptr;
     mutable ::tts_cpp::detail::sched_fallback sched_fb;
 
     // GPU flash-attention self-attn path (F16 KV). Probed at load; CPU keeps

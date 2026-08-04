@@ -19,6 +19,7 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "sched_dispatch.h"
+#include "cosyvoice_mmap.h"
 
 #include <cstdint>
 #include <map>
@@ -48,6 +49,11 @@ struct model_ctx {
     // Null when the GGUF carries none, and unused when the backend is the CPU.
     ggml_context *        ctx_h    = nullptr;
     ggml_backend_buffer_t buffer_h = nullptr;
+
+    // Map-in-place GGUF backing on the CPU backend (null on the GPU path).
+    // map_buf wraps the whole mapping; freeing it does not munmap.
+    tts_cpp::cosyvoice::MappedFile mapped;
+    ggml_backend_buffer_t          map_buf = nullptr;
 
     std::map<std::string, ggml_tensor*> tensors;   // spans both contexts
     // GGUF scalar metadata captured at load (e.g. cosyvoice3.llm.sos,

@@ -10,6 +10,7 @@
 
 #include "backend_selection.h"
 #include "backend_util.h"
+#include "gguf_stream.h"
 #include "ggml-alloc.h"
 #include "gguf.h"
 
@@ -152,12 +153,26 @@ static bool cosy_dispatch_compute(model_ctx & m, ggml_cgraph * gf, bool use_sche
     return true;
 }
 
+// ggml's CPU quant kernels require GGUF general.alignment (default 32); a tensor
+// whose mapped pointer is under-aligned falls back to an allocated copy.
+static constexpr uintptr_t kCosyvoiceTensorAlignment = 32;
+
 model_ctx cosyvoice_load_gguf(const std::string & path, ggml_backend_t backend) {
     model_ctx m;
+
+    // Map the GGUF so CPU/host weights can be backed in place; fall back to a
+    // resident copy when mapping fails.
+    const bool have_map = tts_cpp::cosyvoice::mapped_file_open(m.mapped, path, "cosyvoice");
+
     ggml_context * tmp_ctx = nullptr;
-    gguf_init_params gp = { /*.no_alloc=*/ false, /*.ctx=*/ &tmp_ctx };
+    // Shapes only; bytes come from the mapping or the bounds-checked stream
+    // reader below, never from tmp_ctx.
+    gguf_init_params gp = { /*.no_alloc=*/ true, /*.ctx=*/ &tmp_ctx };
     gguf_context * g = gguf_init_from_file(path.c_str(), gp);
-    if (!g) throw std::runtime_error("gguf_init_from_file failed: " + path);
+    if (!g) {
+        tts_cpp::cosyvoice::mapped_file_close(m.mapped);
+        throw std::runtime_error("gguf_init_from_file failed: " + path);
+    }
     if (backend) {
         m.backend = backend;              // borrowed; the caller frees it
     } else {
@@ -167,6 +182,7 @@ model_ctx cosyvoice_load_gguf(const std::string & path, ggml_backend_t backend) 
         m.owns_backend = true;
         if (!m.backend) {
             gguf_free(g); ggml_free(tmp_ctx);
+            tts_cpp::cosyvoice::mapped_file_close(m.mapped);
             throw std::runtime_error("cosyvoice: failed to init a CPU backend for " + path);
         }
     }
@@ -188,28 +204,83 @@ model_ctx cosyvoice_load_gguf(const std::string & path, ggml_backend_t backend) 
         ggml_init_params ph = { ggml_tensor_overhead() * (size_t)(n_host + 1), nullptr, true };
         m.ctx_h = ggml_init(ph);
     }
+
+    if (have_map) {
+        m.map_buf = ggml_backend_cpu_buffer_from_ptr((void *) m.mapped.data, m.mapped.size);
+    }
+    // mapping gates pointer map-in-place; have_map still uploads from the mapping
+    // (not tmp_ctx) if only the wrapper buffer failed.
+    const bool mapping    = have_map && m.map_buf != nullptr;
+    const size_t data_off = have_map ? gguf_get_data_offset(g) : 0;
+
+    // Point host tensors (all on CPU; the host-resident tables on GPU) at the
+    // mapping when in-bounds + aligned; false leaves the tensor for alloc+upload.
+    auto map_in_place = [&](ggml_tensor * dst, int64_t gi, bool host_ctx) -> bool {
+        if (!mapping) return false;
+        const bool wants_host = (!split_host) || host_ctx;
+        if (!wants_host) return false;
+        const size_t nb  = ggml_nbytes(dst);
+        const size_t off = data_off + (size_t) gguf_get_tensor_offset(g, gi);
+        if (off > m.mapped.size || nb > m.mapped.size - off) return false;
+        const uint8_t * src = m.mapped.data + off;
+        if (((uintptr_t) src % kCosyvoiceTensorAlignment) != 0) return false;
+        dst->data   = (void *) src;
+        dst->buffer = m.map_buf;
+        return true;
+    };
+
     for (int64_t i = 0; i < n_tensors; ++i) {
         const char * name = gguf_get_tensor_name(g, i);
         ggml_tensor * src = ggml_get_tensor(tmp_ctx, name);
-        ggml_context * into = (split_host && cosyvoice_host_resident(name)) ? m.ctx_h : m.ctx_w;
+        const bool host_ctx = split_host && cosyvoice_host_resident(name);
+        ggml_context * into = host_ctx ? m.ctx_h : m.ctx_w;
         ggml_tensor * dst = ggml_dup_tensor(into, src);
         ggml_set_name(dst, name);
+        map_in_place(dst, i, host_ctx);
         m.tensors[name] = dst;
     }
-    m.buffer_w = ggml_backend_alloc_ctx_tensors(m.ctx_w, m.backend);
-    if (m.ctx_h) {
+
+    // alloc_ctx_tensors skips tensors already backed by the mapping; on the
+    // pure-CPU mapped path nothing is allocated (buffer_w stays null).
+    auto has_unmapped = [](ggml_context * ctx) {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->data == nullptr) return true;
+        }
+        return false;
+    };
+    if (!mapping || has_unmapped(m.ctx_w)) {
+        m.buffer_w = ggml_backend_alloc_ctx_tensors(m.ctx_w, m.backend);
+    }
+    if (m.ctx_h && (!mapping || has_unmapped(m.ctx_h))) {
         ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
         if (!cpu_dev) {
             gguf_free(g); ggml_free(tmp_ctx);
+            tts_cpp::cosyvoice::mapped_file_close(m.mapped);
             throw std::runtime_error("cosyvoice: no CPU device for host-resident weights");
         }
         m.buffer_h = ggml_backend_alloc_ctx_tensors_from_buft(m.ctx_h, ggml_backend_dev_buffer_type(cpu_dev));
     }
-    for (ggml_context * ctx : { m.ctx_w, m.ctx_h }) {
-        if (!ctx) continue;
-        for (ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
-            ggml_tensor * src = ggml_get_tensor(tmp_ctx, ggml_get_name(cur));
-            ggml_backend_tensor_set(cur, ggml_get_data(src), 0, ggml_nbytes(src));
+
+    // Stream the unmapped tensors with the bounds-checked reader (a truncated
+    // GGUF fails cleanly here instead of reading past the mapping).
+    {
+        ::tts_cpp::detail::gguf_stream_reader rd(g, path);
+        if (!rd.ok()) {
+            gguf_free(g); ggml_free(tmp_ctx);
+            tts_cpp::cosyvoice::mapped_file_close(m.mapped);
+            throw std::runtime_error("cosyvoice: failed to reopen GGUF for streaming: " + path);
+        }
+        for (ggml_context * ctx : { m.ctx_w, m.ctx_h }) {
+            if (!ctx) continue;
+            for (ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
+                if (mapping && cur->buffer == m.map_buf) continue;
+                if (!rd.to_backend(ggml_get_name(cur), cur)) {
+                    gguf_free(g); ggml_free(tmp_ctx);
+                    tts_cpp::cosyvoice::mapped_file_close(m.mapped);
+                    throw std::runtime_error(std::string("cosyvoice: failed to stream tensor ") +
+                                             ggml_get_name(cur));
+                }
+            }
         }
     }
     // Capture scalar KV metadata (architecture sizes + special-token ids the
@@ -244,9 +315,13 @@ void cosyvoice_free(model_ctx & m) {
     if (m.ctx_h)    ggml_free(m.ctx_h);
     if (m.buffer_w) ggml_backend_buffer_free(m.buffer_w);
     if (m.ctx_w)    ggml_free(m.ctx_w);
+    // Free the wrapper (not the mapping) after ctx_w, then munmap.
+    if (m.map_buf)  ggml_backend_buffer_free(m.map_buf);
+    tts_cpp::cosyvoice::mapped_file_close(m.mapped);
     if (m.owns_backend && m.backend) ggml_backend_free(m.backend);
     m.buffer_h = nullptr; m.ctx_h = nullptr;
     m.buffer_w = nullptr; m.ctx_w = nullptr;
+    m.map_buf = nullptr;
     m.backend = nullptr;  m.owns_backend = false;
     m.tensors.clear();
 }

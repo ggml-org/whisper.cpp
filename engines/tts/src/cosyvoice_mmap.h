@@ -1,0 +1,112 @@
+#pragma once
+
+// Cross-platform read-only memory-mapped file (POSIX mmap / Win32 MapViewOfFile)
+// used to back GGUF weight tensors in place. Shared by the tts-cpp engines.
+
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <string>
+
+#ifdef _WIN32
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX  // keep std::min/std::max usable in including TUs
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#else
+#  include <fcntl.h>
+#  include <sys/mman.h>
+#  include <sys/stat.h>
+#  include <unistd.h>
+#endif
+
+namespace tts_cpp::cosyvoice {
+
+struct MappedFile {
+    const uint8_t * data = nullptr;
+    size_t          size = 0;
+#ifdef _WIN32
+    void * file_handle = nullptr;
+    void * map_handle  = nullptr;
+#else
+    int fd = -1;
+#endif
+
+    bool is_open() const { return data != nullptr; }
+};
+
+// Returns false and leaves `m` closed on any failure (caller falls back to a
+// resident load). `tag` prefixes error logs.
+inline bool mapped_file_open(MappedFile & m, const std::string & path, const char * tag) {
+#ifdef _WIN32
+    HANDLE hf = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                            FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hf == INVALID_HANDLE_VALUE) {
+        fprintf(stderr, "[%s] cannot open %s\n", tag, path.c_str());
+        return false;
+    }
+    LARGE_INTEGER sz;
+    if (!GetFileSizeEx(hf, &sz)) {
+        fprintf(stderr, "[%s] GetFileSizeEx failed\n", tag);
+        CloseHandle(hf);
+        return false;
+    }
+    HANDLE hm = CreateFileMappingA(hf, nullptr, PAGE_READONLY, 0, 0, nullptr);
+    if (!hm) {
+        fprintf(stderr, "[%s] CreateFileMapping failed\n", tag);
+        CloseHandle(hf);
+        return false;
+    }
+    void * base = MapViewOfFile(hm, FILE_MAP_READ, 0, 0, 0);
+    if (!base) {
+        fprintf(stderr, "[%s] MapViewOfFile failed\n", tag);
+        CloseHandle(hm);
+        CloseHandle(hf);
+        return false;
+    }
+    m.file_handle = hf;
+    m.map_handle  = hm;
+    m.data        = (const uint8_t *) base;
+    m.size        = (size_t) sz.QuadPart;
+    return true;
+#else
+    int fd = open(path.c_str(), O_RDONLY);
+    if (fd < 0) {
+        fprintf(stderr, "[%s] cannot open %s\n", tag, path.c_str());
+        return false;
+    }
+    struct stat sb;
+    if (fstat(fd, &sb) != 0) {
+        fprintf(stderr, "[%s] fstat failed\n", tag);
+        close(fd);
+        return false;
+    }
+    void * base = mmap(nullptr, (size_t) sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (base == MAP_FAILED) {
+        fprintf(stderr, "[%s] mmap failed\n", tag);
+        close(fd);
+        return false;
+    }
+    m.fd   = fd;
+    m.data = (const uint8_t *) base;
+    m.size = (size_t) sb.st_size;
+    return true;
+#endif
+}
+
+inline void mapped_file_close(MappedFile & m) {
+#ifdef _WIN32
+    if (m.data) UnmapViewOfFile((void *) m.data);
+    if (m.map_handle) CloseHandle((HANDLE) m.map_handle);
+    if (m.file_handle) CloseHandle((HANDLE) m.file_handle);
+#else
+    if (m.data) munmap((void *) m.data, m.size);
+    if (m.fd >= 0) close(m.fd);
+#endif
+    m = {};
+}
+
+}  // namespace tts_cpp::cosyvoice

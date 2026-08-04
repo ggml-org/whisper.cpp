@@ -94,21 +94,32 @@ std::vector<float> read_f32(const model_ctx & m, const std::string & name) {
     return out;
 }
 
+// Frees a model_ctx on scope exit (normal or exception) so stages load one at a
+// time; peak resident weight memory is the largest single stage, not the sum.
+struct ModelGuard {
+    model_ctx & m;
+    explicit ModelGuard(model_ctx & mm) : m(mm) {}
+    ~ModelGuard() { cosyvoice_free(m); }
+    ModelGuard(const ModelGuard &) = delete;
+    ModelGuard & operator=(const ModelGuard &) = delete;
+};
+
 } // namespace
 
 struct Engine::Impl {
     EngineOptions opts;
 
-    // Owned by Impl and SHARED by llm_m/flow_m/hift_m (which borrow it).  Freed
-    // in ~Impl only after every cosyvoice_free() has run -- the sched bundles
-    // inside those model_ctx hold refs into it.
+    // Owned by Impl and SHARED by each stage's model_ctx (which borrow it).
+    // Freed in ~Impl after the last stage; the stages are loaded/freed inside
+    // run(), so nothing borrows it between syntheses.
     ggml_backend_t backend = nullptr;
     // True when a GPU was present but this engine declined it (unvalidated
     // vendor, or a non-OpenCL backend), so a caller can tell "CPU by policy"
     // from "CPU because there is no GPU".
     bool gpu_present_but_unused = false;
 
-    model_ctx llm_m{}, flow_m{}, hift_m{}, voice_m{};
+    // llm/flow/hift are loaded on demand in run(); only their paths are kept.
+    std::string llm_path_, flow_path_, hift_path_;
     QwenTokenizer tokenizer;
 
     // baked voice (from voice.gguf)
@@ -173,37 +184,31 @@ struct Engine::Impl {
         if (!backend) backend = det::init_cpu_backend();
         if (!backend) throw std::runtime_error("cosyvoice: failed to init a compute backend");
 
-        // llm/flow/hift share the one backend.  voice.gguf holds four tensors
-        // read once via ggml_backend_tensor_get and never used in a graph, so it
-        // stays on CPU rather than occupying device memory.
-        llm_m   = cosyvoice_load_gguf(llm_path,  backend);
-        flow_m  = cosyvoice_load_gguf(flow_path, backend);
-        hift_m  = cosyvoice_load_gguf(hift_path, backend);
-        voice_m = cosyvoice_load_gguf(voice_path,
-                                      det::backend_is_cpu(backend) ? backend : nullptr);
-        llm_m.n_threads = flow_m.n_threads = hift_m.n_threads = opts.n_threads;
+        llm_path_  = llm_path;
+        flow_path_ = flow_path;
+        hift_path_ = hift_path;
 
         if (!tokenizer.load(vocab_path, merges_path)) {
             throw std::runtime_error("cosyvoice: failed to load tokenizer (" +
                                      vocab_path + ", " + merges_path + ")");
         }
 
-        voice_prompt_stok  = read_i32(voice_m, "voice/prompt_stok");
-        voice_prompt_token = read_i32(voice_m, "voice/prompt_token");
-        voice_prompt_feat  = read_f32(voice_m, "voice/prompt_feat");
-        voice_embedding    = read_f32(voice_m, "voice/embedding");
+        // voice.gguf: read its four tensors into vectors, then free it.
+        {
+            model_ctx voice_m = cosyvoice_load_gguf(
+                voice_path, det::backend_is_cpu(backend) ? backend : nullptr);
+            ModelGuard voice_guard(voice_m);
+            voice_prompt_stok  = read_i32(voice_m, "voice/prompt_stok");
+            voice_prompt_token = read_i32(voice_m, "voice/prompt_token");
+            voice_prompt_feat  = read_f32(voice_m, "voice/prompt_feat");
+            voice_embedding    = read_f32(voice_m, "voice/embedding");
+        }
         voice_mel_len1     = (int)(voice_prompt_feat.size() / 80);
         voice_prompt_text  = cosyvoice_gguf_meta_str(voice_path, "voice.prompt_text", "");
     }
 
     ~Impl() {
-        // Order matters: each model_ctx frees its sched (which holds refs into
-        // `backend`) and its buffers first; only then is the shared backend safe
-        // to free.  The model_ctx do not own it (owns_backend is false).
-        cosyvoice_free(llm_m);
-        cosyvoice_free(flow_m);
-        cosyvoice_free(hift_m);
-        cosyvoice_free(voice_m);
+        // Stages are freed inside run(); nothing borrows `backend` between calls.
         if (backend) { ggml_backend_free(backend); backend = nullptr; }
     }
 
@@ -247,14 +252,21 @@ struct Engine::Impl {
         const int max_steps = 50 * ((int)tts_ids.size() + 1); // generous cap
         const bool greedy   = opts.greedy;
 
-        qwen_hp hp = cosyvoice_qwen_hp(llm_m);
-        // A pinned trajectory skips the LM entirely: sampling is chaotic in the
-        // logits, so pinning is the only way two backends run the flow and
-        // vocoder over identical input (and do provably equal work).
-        std::vector<int> speech_tokens = opts.force_speech_tokens.empty()
-            ? cosyvoice_llm_generate(llm_m, hp, text_ids, lm_prompt_stok,
-                                     max_steps, greedy, opts.seed, min_len, tmg)
-            : opts.force_speech_tokens;
+        // Stage 1 — LM: text ids -> speech tokens (freed at scope end). A pinned
+        // trajectory skips the LM entirely -- sampling is chaotic in the logits,
+        // so pinning is the only way two backends run the flow and vocoder over
+        // identical input -- so the LM is not even loaded on that path.
+        std::vector<int> speech_tokens;
+        if (opts.force_speech_tokens.empty()) {
+            model_ctx llm_m = cosyvoice_load_gguf(llm_path_, backend);
+            ModelGuard llm_guard(llm_m);
+            llm_m.n_threads = opts.n_threads;
+            qwen_hp hp = cosyvoice_qwen_hp(llm_m);
+            speech_tokens = cosyvoice_llm_generate(llm_m, hp, text_ids, lm_prompt_stok,
+                                                   max_steps, greedy, opts.seed, min_len, tmg);
+        } else {
+            speech_tokens = opts.force_speech_tokens;
+        }
         if (speech_tokens.empty()) {
             throw std::runtime_error("cosyvoice: LM produced no speech tokens");
         }
@@ -263,12 +275,25 @@ struct Engine::Impl {
         }
         if (out_tokens) *out_tokens = speech_tokens;
 
+        // Stage 2 — DiT flow: speech tokens -> mel.
         int mel_len = 0;
-        std::vector<float> mel = cosyvoice_flow_run(
-            flow_m, voice_prompt_token, speech_tokens,
-            voice_prompt_feat, voice_mel_len1, voice_embedding, mel_len, tmg);
+        std::vector<float> mel;
+        {
+            model_ctx flow_m = cosyvoice_load_gguf(flow_path_, backend);
+            ModelGuard flow_guard(flow_m);
+            flow_m.n_threads = opts.n_threads;
+            mel = cosyvoice_flow_run(
+                flow_m, voice_prompt_token, speech_tokens,
+                voice_prompt_feat, voice_mel_len1, voice_embedding, mel_len, tmg);
+        }
 
-        return cosyvoice_hift_synth(hift_m, mel, mel_len, opts.seed, tmg);
+        // Stage 3 — CausalHiFT vocoder: mel -> 24 kHz PCM.
+        {
+            model_ctx hift_m = cosyvoice_load_gguf(hift_path_, backend);
+            ModelGuard hift_guard(hift_m);
+            hift_m.n_threads = opts.n_threads;
+            return cosyvoice_hift_synth(hift_m, mel, mel_len, opts.seed, tmg);
+        }
     }
 };
 
