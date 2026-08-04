@@ -84,6 +84,7 @@ option(WHISPER_BUILD_SERVER   "whisper: build server example" ${WHISPER_STANDALO
 # 3rd party libs
 option(WHISPER_CURL "whisper: use libcurl to download model from an URL" OFF)
 option(WHISPER_SDL2 "whisper: support for libSDL2" OFF)
+option(WEBSOCKET "whisper: support for websocket" OFF)
 
 if (CMAKE_SYSTEM_NAME MATCHES "Linux")
     option(WHISPER_COMMON_FFMPEG "whisper: examples link with ffmpeg libs in order to decode more audio formats" OFF)
