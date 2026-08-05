@@ -320,6 +320,11 @@ On AMD Ryzen™ AI 300 and 400 Series processors with a dedicated NPU, whisper.c
 
 ### Prerequisites
 
+Supported Platforms
+
+- **Windows 11**
+- **Linux** (Ubuntu 24.04 LTS, Python 3.12)
+
 Install the XRT runtime and FlexML runtime for your platform:
 
 - **XRT**: provides the NPU kernel driver and `xrt-smi` diagnostic tool — on Windows this is bundled with the NPU driver; on Linux install it separately following the [NPU driver installation guide](https://ryzenai.docs.amd.com/en/latest/linux.html#install-npu-drivers)
