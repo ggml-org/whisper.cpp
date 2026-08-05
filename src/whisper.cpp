@@ -1879,6 +1879,14 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
                 break;
             }
 
+            // ne[] is a fixed 4-element array; n_dims comes straight from the
+            // file, so a crafted model with n_dims > 4 overflows the stack
+            // array below (CWE-121). Reject before the read loop.
+            if (n_dims < 1 || n_dims > 4) {
+                WHISPER_LOG_ERROR("%s: invalid n_dims %d in model file (expected 1..4)\n", __func__, n_dims);
+                return false;
+            }
+
             int32_t nelements = 1;
             int32_t ne[4] = { 1, 1, 1, 1 };
             for (int i = 0; i < n_dims; ++i) {
@@ -5019,6 +5027,14 @@ struct whisper_vad_context * whisper_vad_init_with_params(
 
             if (loader->eof(loader->context)) {
                 break;
+            }
+
+            // ne[] is a fixed 4-element array; n_dims comes straight from the
+            // file, so a crafted model with n_dims > 4 overflows the stack
+            // array below (CWE-121). Reject before the read loop.
+            if (n_dims < 1 || n_dims > 4) {
+                WHISPER_LOG_ERROR("%s: invalid n_dims %d in model file (expected 1..4)\n", __func__, n_dims);
+                return nullptr;
             }
 
             int32_t nelements = 1;
