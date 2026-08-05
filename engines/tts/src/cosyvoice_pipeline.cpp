@@ -158,7 +158,10 @@ static bool cosy_dispatch_compute(model_ctx & m, ggml_cgraph * gf, bool use_sche
 static constexpr uintptr_t kCosyvoiceTensorAlignment = 32;
 
 model_ctx cosyvoice_load_gguf(const std::string & path, ggml_backend_t backend) {
-    model_ctx m;
+    // Heap-allocated, matching chatterbox's model_ctx: a stack model_ctx corrupts
+    // its own std::map during load on the win32 MSVC-lib + clang-addon link.
+    auto mp = std::make_unique<model_ctx>();
+    model_ctx & m = *mp;
 
     // Map the GGUF so CPU/host weights can be backed in place; fall back to a
     // resident copy when mapping fails.
@@ -302,7 +305,7 @@ model_ctx cosyvoice_load_gguf(const std::string & path, ggml_backend_t backend) 
     }
     gguf_free(g);
     ggml_free(tmp_ctx);
-    return m;
+    return std::move(m);
 }
 
 void cosyvoice_free(model_ctx & m) {
