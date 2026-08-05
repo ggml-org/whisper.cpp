@@ -1,0 +1,4 @@
+videos/
+.venv-parakeet/
+__pycache__/
+*.pyc
