@@ -250,11 +250,12 @@ std::unique_ptr<Engine> Engine::create(const EngineOptions & opts_in) {
     // only standard ggml ops, so a GPU backend (Metal on Apple, CUDA/Vulkan
     // elsewhere) can run them; opts.n_gpu_layers > 0 opts in. The VAE gets its
     // own dedicated backend (see Vae::load) and also follows n_gpu_layers now
-    // that its snake / col2im_1d ops have Metal kernels in the ggml-speech fork.
+    // that its snake / col2im_1d ops have Metal and Vulkan kernels in the
+    // ggml-speech fork.
     // Falls back to CPU when no GPU backend is registered/available.
     bool on_gpu = false;
     if (opts.n_gpu_layers > 0) {
-        m->backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
+        m->backend = backend_gpu_init();
         on_gpu     = (m->backend != nullptr);
         if (!on_gpu && v) fprintf(stderr, "[acestep-engine] GPU requested but no GPU backend available; using CPU\n");
     }
@@ -323,7 +324,7 @@ std::unique_ptr<Engine> Engine::create(const EngineOptions & opts_in) {
     vo.verbose      = v;
     vo.with_encoder = false;
     vo.n_threads    = nth;
-    vo.n_gpu_layers = opts.n_gpu_layers;  // snake / col2im_1d now have Metal kernels
+    vo.n_gpu_layers = opts.n_gpu_layers;  // snake / col2im_1d have Metal + Vulkan kernels
     if (const char * e = std::getenv("ACESTEP_VAE_GPU")) {
         vo.n_gpu_layers = (e[0] == '1') ? 99 : 0;
     }

@@ -35,9 +35,9 @@ Vae::~Vae() = default;
 std::unique_ptr<Vae> Vae::load(const std::string & gguf_path, const VaeOptions & opts) {
     std::unique_ptr<Vae> v(new Vae());
 
-    // The two custom ops (col2im_1d, snake) now have both CPU and Metal kernels
+    // The two custom ops (col2im_1d, snake) have CPU, Metal and Vulkan kernels
     // in the ggml-speech fork, so the decode/encode graph can run on a GPU
-    // backend. n_gpu_layers > 0 opts in (Metal on Apple, CUDA/Vulkan elsewhere);
+    // backend. n_gpu_layers > 0 opts in (Metal on Apple, Vulkan elsewhere);
     // falls back to CPU when no GPU backend is registered/available. Backends are
     // acquired through the ggml registry (see backend_registry.h) so the CPU path
     // resolves on arm64 dlopen (GGML_CPU_ALL_VARIANTS) builds too. When Vae::load
@@ -46,7 +46,7 @@ std::unique_ptr<Vae> Vae::load(const std::string & gguf_path, const VaeOptions &
 
     ggml_backend_t backend = nullptr;
     if (opts.n_gpu_layers > 0) {
-        backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
+        backend = backend_gpu_init();
         if (!backend && opts.verbose) {
             fprintf(stderr, "[acestep-vae] GPU requested but no GPU backend available; using CPU\n");
         }

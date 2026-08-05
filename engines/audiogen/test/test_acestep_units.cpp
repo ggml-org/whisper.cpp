@@ -11,8 +11,10 @@
 //   3. fsq_decode_index    — FSQ index -> 6 normalized dims (strides 8/8/8/5/5/5).
 //   4. sample_top_k_p      — top-k/top-p LM sampler (determinism + argmax).
 //   5. vae_progress_pct    — VAE decode progress clamp/monotonicity.
-//   6. stage placement     — which backend the LM / detokenizer / encoders run on.
+//   6. GPU device types    — discrete and integrated GPUs are selectable.
+//   7. stage placement     — which backend the LM / detokenizer / encoders run on.
 
+#include "backend_registry.h"
 #include "dit_ggml.h"
 #include "detok_ggml.h"
 #include "lm_pipeline.h"
@@ -196,7 +198,27 @@ void test_vae_progress() {
     CHECK(last_emitted == 100);  // the final surfaced value is 100
 }
 
-// 6. stage placement ---------------------------------------------------------
+// 6. GPU device types --------------------------------------------------------
+// Vulkan classifies UMA adapters such as Android Mali as IGPU. AceStep must
+// accept both device classes while rejecting CPU and non-GPU accelerators.
+void test_backend_device_types() {
+    using tts_cpp::acestep::backend_device_type_is_gpu;
+    using tts_cpp::acestep::backend_reg_name_is_validated_gpu;
+
+    CHECK(backend_device_type_is_gpu(GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(backend_device_type_is_gpu(GGML_BACKEND_DEVICE_TYPE_IGPU));
+    CHECK(!backend_device_type_is_gpu(GGML_BACKEND_DEVICE_TYPE_CPU));
+    CHECK(!backend_device_type_is_gpu(GGML_BACKEND_DEVICE_TYPE_ACCEL));
+
+    CHECK(backend_reg_name_is_validated_gpu("Vulkan"));
+    CHECK(backend_reg_name_is_validated_gpu("MTL"));
+    CHECK(backend_reg_name_is_validated_gpu("Metal"));
+    CHECK(!backend_reg_name_is_validated_gpu("OpenCL"));
+    CHECK(!backend_reg_name_is_validated_gpu("CUDA"));
+    CHECK(!backend_reg_name_is_validated_gpu(nullptr));
+}
+
+// 7. stage placement ---------------------------------------------------------
 // Which backend each stage runs on decides which numerical path the generated
 // audio takes, so the policy is locked here rather than only observed on a
 // device lane. Mirrors the three branches Engine::create() relies on: the
@@ -312,7 +334,7 @@ void test_stage_placement() {
     }
 }
 
-// 6b. env -> overrides -------------------------------------------------------
+// 7b. env -> overrides -------------------------------------------------------
 // Locks which variable drives which stage, and that PRESENCE is what counts:
 // ACESTEP_LM_CPU=0 still forces the LM to the CPU (the getenv() semantics this
 // policy inherited). Uses "0" as the "set" value so the assertion is identical
@@ -367,6 +389,7 @@ int main() {
     test_fsq();
     test_sampler();
     test_vae_progress();
+    test_backend_device_types();
     test_stage_placement();
     test_placement_env();
 

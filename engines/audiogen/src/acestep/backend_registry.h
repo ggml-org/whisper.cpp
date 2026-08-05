@@ -28,6 +28,8 @@
 
 #include "ggml-backend.h"
 
+#include <cstring>
+#include <initializer_list>
 #include <string>
 
 namespace tts_cpp::acestep {
@@ -45,6 +47,53 @@ inline void load_backends(const std::string & dir) {
 // `ggml_backend_cpu_init()`. Call `load_backends()` first on DL platforms.
 inline ggml_backend_t backend_cpu_init() {
     return ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+}
+
+// Both discrete and integrated GPUs are valid compute devices. Vulkan reports
+// UMA adapters (including Android Mali) as IGPU, so
+// ggml_backend_init_by_type(GPU) alone silently misses them.
+inline bool backend_device_type_is_gpu(enum ggml_backend_dev_type type) {
+    return type == GGML_BACKEND_DEVICE_TYPE_GPU ||
+           type == GGML_BACKEND_DEVICE_TYPE_IGPU;
+}
+
+inline bool backend_reg_name_is_validated_gpu(const char * name) {
+    return name && (std::strcmp(name, "Vulkan") == 0 ||
+                    std::strcmp(name, "MTL") == 0 ||
+                    std::strcmp(name, "Metal") == 0);
+}
+
+// GPU backend from the registry. Prefer a measured Vulkan/Metal device, then a
+// discrete adapter, while still preserving the historical fallback to another
+// GPU backend when neither measured backend exists. Vulkan is preferred over
+// OpenCL on Android because the complete ACE-Step pipeline, including the VAE
+// custom ops, is validated on Vulkan. Accepting IGPU is required for UMA
+// adapters such as Pixel's Mali GPU and Apple integrated GPUs.
+//
+// Try every matching device so one adapter failing to initialise does not hide
+// another usable one.
+inline ggml_backend_t backend_gpu_init() {
+    for (bool require_validated : {true, false}) {
+        for (enum ggml_backend_dev_type wanted :
+             {GGML_BACKEND_DEVICE_TYPE_GPU, GGML_BACKEND_DEVICE_TYPE_IGPU}) {
+            const size_t n_dev = ggml_backend_dev_count();
+            for (size_t i = 0; i < n_dev; ++i) {
+                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                if (!dev) continue;
+                const enum ggml_backend_dev_type type = ggml_backend_dev_type(dev);
+                if (!backend_device_type_is_gpu(type) || type != wanted) continue;
+
+                ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+                const char * reg_name = reg ? ggml_backend_reg_name(reg) : nullptr;
+                if (backend_reg_name_is_validated_gpu(reg_name) != require_validated) continue;
+
+                if (ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr)) {
+                    return backend;
+                }
+            }
+        }
+    }
+    return nullptr;
 }
 
 // Set the compute thread count via the backend's generic

@@ -7,7 +7,7 @@ Native [ACE-Step 1.5](https://github.com/ace-step/ACE-Step-1.5) text-to-music in
 | CMake project | `audiogen-cpp` v0.1.0 |
 | Public API | `tts_cpp::acestep::Engine` (`include/audiogen-cpp/acestep/engine.h`) |
 | Output | interleaved stereo PCM, 48 kHz, `pcm[t * 2 + ch]` |
-| Backends | CPU, Vulkan, Metal |
+| Backends | CPU, Vulkan (including Android Mali iGPUs), Metal |
 | ggml | requires the `ggml-speech` port for the custom `ggml_snake` and `ggml_col2im_1d` ops |
 | Consumed by | the `@qvac/audiogen-ggml` addon in [QVAC](https://github.com/tetherto/qvac) |
 
@@ -53,7 +53,10 @@ Weights load quantized. `f32`, `f16`, and `bf16` are handled for norms and biase
 
 ## Backends
 
-`n_gpu_layers > 0` (`--gpu` on the CLI) selects a GPU backend through the ggml registry.
+`n_gpu_layers > 0` (`--gpu` on the CLI) selects a GPU backend through the ggml
+registry. Discrete GPUs are preferred, then integrated GPUs; this second class
+is required because Vulkan reports Android UMA adapters such as Pixel's
+Mali-G715 as `IGPU`.
 
 | Stage | Placement when a GPU is selected |
 |---|---|

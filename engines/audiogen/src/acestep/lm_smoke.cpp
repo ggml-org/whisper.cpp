@@ -15,6 +15,7 @@
 //            [--gpu] [--threads N] [--kv-sets 1]
 //            [--dump logits.bin] [--dump-layers layers.bin]
 
+#include "acestep/backend_registry.h"
 #include "acestep/lm_ggml.h"
 
 #include "ggml-backend.h"
@@ -81,7 +82,7 @@ int main(int argc, char ** argv) {
 
     ggml_backend_t backend = nullptr;
     if (gpu) {
-        backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
+        backend = backend_gpu_init();
         if (!backend) { fprintf(stderr, "[lm-smoke] no GPU backend available\n"); return 1; }
     } else {
         backend = ggml_backend_cpu_init();
