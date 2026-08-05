@@ -107,6 +107,17 @@ target_compile_definitions(${VAD_TEST} PRIVATE
 add_test(NAME ${VAD_TEST} COMMAND ${VAD_TEST})
 set_tests_properties(${VAD_TEST} PROPERTIES LABELS "unit")
 
+# Model-load hardening: a crafted .bin with n_dims > 4 must be rejected, not
+# overflow the fixed ne[] stack array (#3944). Needs no real model download.
+set(MODEL_LOAD_TEST test-model-load)
+add_executable(${MODEL_LOAD_TEST} ${MODEL_LOAD_TEST}.cpp)
+target_include_directories(${MODEL_LOAD_TEST} PRIVATE ../include ../ggml/include ../examples)
+target_link_libraries(${MODEL_LOAD_TEST} PRIVATE common)
+target_compile_definitions(${MODEL_LOAD_TEST} PRIVATE
+    WHISPER_BAD_NDIMS_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-ggml-whisper-bad-ndims.bin")
+add_test(NAME ${MODEL_LOAD_TEST} COMMAND ${MODEL_LOAD_TEST})
+set_tests_properties(${MODEL_LOAD_TEST} PROPERTIES LABELS "unit")
+
 # VAD test full uses whisper_full with VAD enabled
 set(VAD_TEST test-vad-full)
 add_executable(${VAD_TEST} ${VAD_TEST}.cpp)
