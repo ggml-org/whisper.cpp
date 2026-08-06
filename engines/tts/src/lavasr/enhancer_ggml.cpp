@@ -46,6 +46,9 @@ struct EnhancerGgml {
     // Native CONV_2D_DW (Vulkan) vs im2col+matmul fallback (Metal/CPU): the k=7
     // per-channel matvecs are GPU-pathological, but Metal has no CONV_2D_DW.
     bool use_dw_direct = false;
+    // ARM Mali/Valhall Vulkan needs small GEMM dimensions padded to avoid a
+    // driver mul_mat correctness bug.
+    bool mulmat_needs_pad = false;
 
     // Geometry snapshot.
     int   C = 0, F = 0, n_mels = 0, K = 0, n_blocks = 0, spec_bins = 0;
@@ -79,16 +82,42 @@ namespace {
 
 // fp32-precise matmul: parity with the scalar core requires fp32 arithmetic
 // even on GPUs whose default F32 matmul multiplies in fp16 (e.g. Vulkan).
-static ggml_tensor * mul_mat_f32(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b) {
-    ggml_tensor * r = ggml_mul_mat(ctx, a, b);
+// Valhall Vulkan additionally miscomputes small GEMMs, so pad either output
+// dimension to 64 and slice the exact result back when that workaround is active.
+static ggml_tensor * mul_mat_f32(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b,
+                                 bool pad_small_dims) {
+    const int64_t M = a->ne[1];
+    const int64_t N = b->ne[1];
+    const bool is_gemm = (N != 1) && !(N <= 8 && b->ne[2] * b->ne[3] == 1);
+    const bool pad_a = pad_small_dims && is_gemm && M < 64 && a->type == GGML_TYPE_F32;
+    const bool pad_b = pad_small_dims && is_gemm && N < 64 && b->type == GGML_TYPE_F32;
+
+    ggml_tensor * ap = a;
+    ggml_tensor * bp = b;
+    if (pad_a) {
+        if (!ggml_is_contiguous(ap)) ap = ggml_cont(ctx, ap);
+        ap = ggml_pad(ctx, ap, 0, static_cast<int>(64 - M), 0, 0);
+    }
+    if (pad_b) {
+        if (!ggml_is_contiguous(bp)) bp = ggml_cont(ctx, bp);
+        bp = ggml_pad(ctx, bp, 0, static_cast<int>(64 - N), 0, 0);
+    }
+
+    ggml_tensor * r = ggml_mul_mat(ctx, ap, bp);
     ggml_mul_mat_set_prec(r, GGML_PREC_F32);
+    if (pad_a || pad_b) {
+        r = ggml_view_4d(ctx, r, M, N, r->ne[2], r->ne[3],
+                         r->nb[1], r->nb[2], r->nb[3], 0);
+        r = ggml_cont(ctx, r);
+    }
     return r;
 }
 
 // Regular / pointwise Conv1d.  kernel [K, IC, OC], input [T, IC, 1] -> [T, OC, 1].
 // bias (optional) [1, OC] is broadcast over the time axis.
 ggml_tensor * conv1d_same(ggml_context * ctx, ggml_tensor * kernel,
-                          ggml_tensor * input, ggml_tensor * bias, int pad) {
+                          ggml_tensor * input, ggml_tensor * bias, int pad,
+                          bool pad_small_dims) {
     ggml_tensor * im2col = ggml_im2col(ctx, kernel, input,
                                        /*s0=*/1, /*s1=*/0, /*p0=*/pad, /*p1=*/0,
                                        /*d0=*/1, /*d1=*/0, /*is_2D=*/false,
@@ -96,7 +125,8 @@ ggml_tensor * conv1d_same(ggml_context * ctx, ggml_tensor * kernel,
     ggml_tensor * r = mul_mat_f32(
         ctx,
         ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1]),
-        ggml_reshape_2d(ctx, kernel, kernel->ne[0] * kernel->ne[1], kernel->ne[2]));
+        ggml_reshape_2d(ctx, kernel, kernel->ne[0] * kernel->ne[1], kernel->ne[2]),
+        pad_small_dims);
     r = ggml_reshape_3d(ctx, r, im2col->ne[1], kernel->ne[2], im2col->ne[2]);
     if (bias) {
         r = ggml_add(ctx, r, bias);
@@ -110,7 +140,7 @@ ggml_tensor * conv1d_same(ggml_context * ctx, ggml_tensor * kernel,
 // one native CONV_2D_DW op (1D as W-axis 2D; same taps, same accumulation order).
 ggml_tensor * depthwise_same(ggml_context * ctx, ggml_tensor * kernel,
                              ggml_tensor * input, ggml_tensor * bias, int pad,
-                             bool dw_direct) {
+                             bool dw_direct, bool pad_small_dims) {
     ggml_tensor * y;
     if (dw_direct) {
         ggml_tensor * k4 = ggml_reshape_4d(ctx, kernel, kernel->ne[0], 1, 1,
@@ -125,7 +155,7 @@ ggml_tensor * depthwise_same(ggml_context * ctx, ggml_tensor * kernel,
                                            /*s0=*/1, /*s1=*/0, /*p0=*/pad, /*p1=*/0,
                                            /*d0=*/1, /*d1=*/0, /*is_2D=*/false,
                                            GGML_TYPE_F32); // [K, T, C, 1]
-        y = mul_mat_f32(ctx, im2col, kernel);              // [T, 1, C, 1]
+        y = mul_mat_f32(ctx, im2col, kernel, pad_small_dims); // [T, 1, C, 1]
     }
     y = ggml_reshape_3d(ctx, y, y->ne[0], y->ne[2], 1);    // [T, C, 1]
     if (bias) {
@@ -137,7 +167,7 @@ ggml_tensor * depthwise_same(ggml_context * ctx, ggml_tensor * kernel,
 // Depthwise Conv1d, channel-major [C,T,1].  cwhn: native CONV_2D_DW on a
 // channels-fastest [T,1,C,1] view; else time-major wrapped in two transposes.
 ggml_tensor * depthwise_cm(ggml_context * ctx, const BlockW & b, ggml_tensor * x,
-                           int pad, bool cwhn, bool dw_direct) {
+                           int pad, bool cwhn, bool dw_direct, bool pad_small_dims) {
     ggml_tensor * y;
     if (cwhn) {
         ggml_tensor * k4 = ggml_permute(ctx, b.dwt_w, 3, 2, 0, 1);           // [K,1,1,C]
@@ -146,7 +176,7 @@ ggml_tensor * depthwise_cm(ggml_context * ctx, const BlockW & b, ggml_tensor * x
         y = ggml_permute(ctx, y, 1, 2, 0, 3);                                // [C,T,1]
     } else {
         ggml_tensor * xt = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3)); // [T,C,1]
-        y = depthwise_same(ctx, b.dw_w, xt, nullptr, pad, dw_direct);
+        y = depthwise_same(ctx, b.dw_w, xt, nullptr, pad, dw_direct, pad_small_dims);
         y = ggml_cont(ctx, ggml_permute(ctx, y, 1, 0, 2, 3));                // [C,T,1]
     }
     return ggml_add(ctx, y, b.dw_b);
@@ -253,6 +283,7 @@ EnhancerGgml * enhancer_ggml_create(const EnhancerWeights & w, ggml_backend_t ba
     EnhancerGgml * g = new EnhancerGgml();
     g->backend       = backend;
     g->use_dw_direct = ::tts_cpp::detail::backend_is_vulkan(backend);
+    g->mulmat_needs_pad = ::tts_cpp::detail::backend_is_arm_mali_vulkan(backend);
     g->C         = w.dim;
     g->F         = w.ffn_dim;
     g->n_mels    = w.n_mels;
@@ -391,7 +422,8 @@ bool enhancer_ggml_spec_forward(EnhancerGgml * g,
 
     // embed Conv1d(n_mels -> C, k) "same" (time-major, one im2col — runs once),
     // then one transpose into channel-major [C,T,1] for the whole backbone.
-    ggml_tensor * x = conv1d_same(ctx, g->embed_w, mel_in, g->embed_b, pad); // [T,C,1]
+    ggml_tensor * x = conv1d_same(
+        ctx, g->embed_w, mel_in, g->embed_b, pad, g->mulmat_needs_pad);       // [T,C,1]
     x = ggml_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));                    // [C,T,1]
     x = layernorm_cm(ctx, x, g->norm_g, g->norm_b, g->ln_eps);
 
@@ -405,12 +437,15 @@ bool enhancer_ggml_spec_forward(EnhancerGgml * g,
         const BlockW & b   = g->blocks[static_cast<size_t>(i)];
         ggml_tensor *  res = x;
         ggml_tensor *  y   = depthwise_cm(ctx, b, x, pad, dw_cwhn,
-                                          g->use_dw_direct);              // [C,T,1]
+                                          g->use_dw_direct,
+                                          g->mulmat_needs_pad);            // [C,T,1]
         y                  = layernorm_cm(ctx, y, b.norm_g, b.norm_b, g->ln_eps);
-        y                  = ggml_add(ctx, mul_mat_f32(ctx, b.pw1_w, y),
+        y                  = ggml_add(ctx, mul_mat_f32(ctx, b.pw1_w, y,
+                                                      g->mulmat_needs_pad),
                                       b.pw1_b);                           // [F,T,1]
         y                  = ggml_gelu_erf(ctx, y);
-        y                  = ggml_add(ctx, mul_mat_f32(ctx, b.pw2_w, y),
+        y                  = ggml_add(ctx, mul_mat_f32(ctx, b.pw2_w, y,
+                                                      g->mulmat_needs_pad),
                                       b.pw2_b);                           // [C,T,1]
         y                  = ggml_mul(ctx, y, b.gamma);                   // per-channel scale
         x                  = ggml_add(ctx, res, y);
@@ -422,7 +457,8 @@ bool enhancer_ggml_spec_forward(EnhancerGgml * g,
     // Spec head: Linear(C -> 2*spec_bins), split log-mag / phase, then
     //   mag = clip(exp(log-mag), max=clip_max); real = mag*cos(phase);
     //   imag = mag*sin(phase).
-    ggml_tensor * lin = conv1d_same(ctx, g->spec_w, x, g->spec_b, 0); // [T, 2B, 1]
+    ggml_tensor * lin = conv1d_same(
+        ctx, g->spec_w, x, g->spec_b, 0, g->mulmat_needs_pad);        // [T, 2B, 1]
     lin               = ggml_reshape_2d(ctx, lin, T, 2 * B);         // [T, 2B]
 
     ggml_tensor * logmag =

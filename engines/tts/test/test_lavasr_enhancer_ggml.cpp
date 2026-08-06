@@ -160,7 +160,8 @@ static int parity_over_backends(const EnhancerWeights & w, const std::vector<flo
     ggml_backend_free(cpu);
 
     ggml_backend_t gpu = tts_cpp::detail::init_gpu_backend(
-        /*n_gpu_layers=*/99, /*verbose=*/true, "test-enhancer", /*vulkan_device=*/0);
+        /*n_gpu_layers=*/99, /*verbose=*/true, "test-enhancer", /*vulkan_device=*/0,
+        /*allow_arm_mali=*/true);
     if (gpu) {
         // f32 GPU rounding (FMA, different reductions) drifts a little more from
         // the scalar core; still far tighter than any layout bug would allow.
@@ -327,7 +328,8 @@ static int selftest_pipeline() {
     ggml_backend_free(cpu);
 
     ggml_backend_t gpu = tts_cpp::detail::init_gpu_backend(
-        /*n_gpu_layers=*/99, /*verbose=*/false, "test-enh-pipe", /*vulkan_device=*/0);
+        /*n_gpu_layers=*/99, /*verbose=*/false, "test-enh-pipe", /*vulkan_device=*/0,
+        /*allow_arm_mali=*/true);
     if (gpu) {
         failures += run_pipeline_backend("gpu", gpu, w, pcm, sr_in, ref);
         ggml_backend_free(gpu);
@@ -414,10 +416,11 @@ static int golden_test(const std::string & dir) {
 // The parity tests above drive the internal enhancer_ggml_* / free-function
 // enhance() directly; they never touch the public Enhancer class.  This test
 // covers that load-time wiring — which the downstream JS suite otherwise
-// exercises only indirectly: with default options Enhancer::load() must select
-// the ggml-CPU backend (backend_device()==CPU, non-empty backend_name()), and
-// enhance() must return a non-empty 48 kHz signal.  It also guards the
-// "graph created -> enhance() runs the graph" path end to end.  Self-contained:
+// exercises only indirectly: default options must select ggml-CPU, while
+// use_gpu=true must select a GPU whenever the allowlisted probe can find one.
+// Both paths must return finite, numerically equivalent 48 kHz output.  This
+// specifically guards policy mismatches where the internal graph works on a
+// device but Enhancer::load() silently falls back to CPU.  Self-contained:
 // synthesises a small but DSP-consistent enhancer GGUF in a temp file, loads it
 // through the public API, then removes the file.
 
@@ -534,47 +537,95 @@ static int selftest_public_api() {
         return 1;
     }
 
-    std::printf("LavaSR enhancer public-API test (Enhancer::load, default opts):\n");
+    std::printf("LavaSR enhancer public-API test (Enhancer::load, CPU + requested GPU):\n");
 
     int failures = 0;
     try {
-        // Default opts => no GPU requested => ggml-CPU backend.
-        std::unique_ptr<tts_cpp::lavasr::Enhancer> enh =
-            tts_cpp::lavasr::Enhancer::load(path);
-        if (!enh) {
-            std::fprintf(stderr, "FAIL: Enhancer::load returned null\n");
-            std::remove(path.c_str());
-            return 1;
-        }
-
-        const tts_cpp::BackendDevice dev = enh->backend_device();
-        const std::string            bn  = enh->backend_name();
-        std::printf("  backend_device=%d backend_name='%s' out_rate=%d\n",
-                    static_cast<int>(dev), bn.c_str(), enh->output_sample_rate());
-
-        if (dev != tts_cpp::BackendDevice::CPU) {
-            std::fprintf(stderr, "FAIL: default-opts load should resolve to CPU (got %d)\n",
-                         static_cast<int>(dev));
-            ++failures;
-        }
-        if (bn.empty()) {
-            std::fprintf(stderr, "FAIL: backend_name() is empty\n");
-            ++failures;
-        }
-
-        // ~0.25 s of 24 kHz mono; enhance() must resample + band-extend to a
-        // non-empty 48 kHz signal — guards the load -> graph -> enhance() wiring.
+        // ~0.25 s of 24 kHz mono; both public-API paths must resample +
+        // band-extend it to the same finite 48 kHz signal.
         const int          sr_in = 24000;
         std::vector<float> pcm(static_cast<size_t>(sr_in / 4));
         for (size_t i = 0; i < pcm.size(); i++) {
             pcm[i] = 0.1f * std::sin(2.0f * 3.14159265358979f * 220.0f * i / sr_in);
         }
-        const std::vector<float> out = enh->enhance(pcm, sr_in);
-        if (out.empty()) {
-            std::fprintf(stderr, "FAIL: enhance() returned empty output\n");
+
+        // Default opts => no GPU requested => ggml-CPU backend.
+        std::unique_ptr<tts_cpp::lavasr::Enhancer> cpu_enh =
+            tts_cpp::lavasr::Enhancer::load(path);
+        if (!cpu_enh) {
+            std::fprintf(stderr, "FAIL: Enhancer::load returned null\n");
+            std::remove(path.c_str());
+            return 1;
+        }
+
+        const tts_cpp::BackendDevice cpu_dev = cpu_enh->backend_device();
+        const std::string            cpu_bn  = cpu_enh->backend_name();
+        std::printf("  [cpu] backend_device=%d backend_name='%s' out_rate=%d\n",
+                    static_cast<int>(cpu_dev), cpu_bn.c_str(),
+                    cpu_enh->output_sample_rate());
+
+        if (cpu_dev != tts_cpp::BackendDevice::CPU) {
+            std::fprintf(stderr, "FAIL: default-opts load should resolve to CPU (got %d)\n",
+                         static_cast<int>(cpu_dev));
+            ++failures;
+        }
+        if (cpu_bn.empty()) {
+            std::fprintf(stderr, "FAIL: CPU backend_name() is empty\n");
+            ++failures;
+        }
+
+        const std::vector<float> cpu_out = cpu_enh->enhance(pcm, sr_in);
+        if (cpu_out.empty()) {
+            std::fprintf(stderr, "FAIL: CPU enhance() returned empty output\n");
             ++failures;
         } else {
-            std::printf("  enhance(): %zu in -> %zu out samples\n", pcm.size(), out.size());
+            std::printf("  [cpu] enhance(): %zu in -> %zu out samples\n",
+                        pcm.size(), cpu_out.size());
+        }
+
+        // Probe with the same Mali opt-in that the public API is required to
+        // use.  If this succeeds, a subsequent use_gpu load must not fall back.
+        ggml_backend_t gpu_probe = tts_cpp::detail::init_gpu_backend(
+            /*n_gpu_layers=*/99, /*verbose=*/false, "test-enh-api",
+            /*vulkan_device=*/0, /*allow_arm_mali=*/true);
+        const bool gpu_available = gpu_probe != nullptr;
+        if (gpu_probe) {
+            ggml_backend_free(gpu_probe);
+        }
+
+        tts_cpp::lavasr::EnhancerOptions gpu_opts;
+        gpu_opts.use_gpu = true;
+        gpu_opts.verbose = true;
+        std::unique_ptr<tts_cpp::lavasr::Enhancer> gpu_enh =
+            tts_cpp::lavasr::Enhancer::load(path, gpu_opts);
+        if (!gpu_enh) {
+            std::fprintf(stderr, "FAIL: GPU-requested Enhancer::load returned null\n");
+            std::remove(path.c_str());
+            return failures + 1;
+        }
+
+        const tts_cpp::BackendDevice gpu_dev = gpu_enh->backend_device();
+        const std::string            gpu_bn  = gpu_enh->backend_name();
+        std::printf("  [gpu-requested] backend_device=%d backend_name='%s'\n",
+                    static_cast<int>(gpu_dev), gpu_bn.c_str());
+        if (gpu_available && gpu_dev != tts_cpp::BackendDevice::GPU) {
+            std::fprintf(stderr,
+                         "FAIL: allowlisted GPU is available but Enhancer::load "
+                         "fell back to device %d\n",
+                         static_cast<int>(gpu_dev));
+            ++failures;
+        }
+        if (gpu_bn.empty()) {
+            std::fprintf(stderr, "FAIL: GPU-requested backend_name() is empty\n");
+            ++failures;
+        }
+
+        const std::vector<float> gpu_out = gpu_enh->enhance(pcm, sr_in);
+        if (gpu_available) {
+            failures += check_pipeline("public-api-gpu", gpu_out, cpu_out);
+        } else if (gpu_out.empty()) {
+            std::fprintf(stderr, "FAIL: GPU-requested CPU fallback returned empty output\n");
+            ++failures;
         }
     } catch (const std::exception & e) {
         std::fprintf(stderr, "FAIL: Enhancer::load/enhance threw: %s\n", e.what());

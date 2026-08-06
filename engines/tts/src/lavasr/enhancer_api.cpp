@@ -65,7 +65,8 @@ std::unique_ptr<Enhancer> Enhancer::load(const std::string & gguf_path,
         // n_gpu_layers is a whole-network switch for the enhancer (the graph
         // runs entirely on one backend); pass a positive value to request a GPU.
         backend = tts_cpp::detail::init_gpu_backend(
-            /*n_gpu_layers=*/99, opts.verbose, "lavasr-enhancer", opts.vulkan_device);
+            /*n_gpu_layers=*/99, opts.verbose, "lavasr-enhancer", opts.vulkan_device,
+            /*allow_arm_mali=*/true);
         if (backend) {
             device = BackendDevice::GPU;
         }
