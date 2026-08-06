@@ -11,6 +11,7 @@
 //   3. fsq_decode_index    — FSQ index -> 6 normalized dims (strides 8/8/8/5/5/5).
 //   4. sample_top_k_p      — top-k/top-p LM sampler (determinism + argmax).
 //   5. vae_progress_pct    — VAE decode progress clamp/monotonicity.
+//   5b. vae_shrink_window_core — chunked-decode window vs the backend alloc cap.
 //   6. GPU device types    — discrete and integrated GPUs are selectable.
 //   7. stage placement     — which backend the LM / detokenizer / encoders run on.
 
@@ -196,6 +197,48 @@ void test_vae_progress() {
     }
     CHECK(prev == 100);          // ends exactly at 100
     CHECK(last_emitted == 100);  // the final surfaced value is 100
+}
+
+// 5b. VAE window sizing ------------------------------------------------------
+// The decoder's im2col node grows linearly with the window and cannot be split
+// across allocations, so a backend that caps allocation size caps the window.
+// Adreno 740 reports 1024 MB and the 256+2*48 window needs 1155 MiB, which is
+// what aborted a 30 s GPU decode; these are those measured numbers.
+void test_vae_window_core() {
+    using tts_cpp::acestep::vae_shrink_window_core;
+
+    const int    core = 256, ov = 48, core_min = 64;
+    const size_t adreno_cap = (size_t) 1024 * 1024 * 1024;
+    const size_t peak_352   = (size_t) 1155 * 1024 * 1024;  // measured at 256 + 2*48 frames
+
+    // A backend that does not cap allocations (CPU reports SIZE_MAX) keeps 256,
+    // so CPU / Metal / iOS behaviour is untouched.
+    CHECK(vae_shrink_window_core(core, ov, peak_352, SIZE_MAX, core_min) == core);
+    CHECK(vae_shrink_window_core(core, ov, (size_t) 900 * 1024 * 1024, adreno_cap, core_min) == core);
+
+    // Adreno: must shrink, and the result must actually fit once rescaled.
+    const int fitted = vae_shrink_window_core(core, ov, peak_352, adreno_cap, core_min);
+    CHECK(fitted < core);
+    CHECK(fitted >= core_min);
+    const double bytes_per_frame = (double) peak_352 / (double) (core + 2 * ov);
+    CHECK((size_t) (bytes_per_frame * (fitted + 2 * ov)) <= adreno_cap);
+
+    // Never below the floor, however small the cap.
+    CHECK(vae_shrink_window_core(core, ov, peak_352, 1024 * 1024, core_min) == core_min);
+    CHECK(vae_shrink_window_core(core_min, ov, peak_352, 1024 * 1024, core_min) == core_min);
+
+    // Converges: re-applying with the rescaled peak is a fixed point.
+    const size_t peak_fitted = (size_t) (bytes_per_frame * (fitted + 2 * ov));
+    CHECK(vae_shrink_window_core(fitted, ov, peak_fitted, adreno_cap, core_min) == fitted);
+
+    // Always makes progress while it does not fit, so the caller's loop ends.
+    int c = core;
+    for (int i = 0; i < 16 && c > core_min; ++i) {
+        const int next = vae_shrink_window_core(c, ov, peak_352, adreno_cap, core_min);
+        if (next == c) break;
+        CHECK(next < c);
+        c = next;
+    }
 }
 
 // 6. GPU device types --------------------------------------------------------
@@ -418,6 +461,7 @@ int main() {
     test_fsq();
     test_sampler();
     test_vae_progress();
+    test_vae_window_core();
     test_backend_device_types();
     test_stage_placement();
     test_placement_env();

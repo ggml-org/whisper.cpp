@@ -25,6 +25,9 @@ static Qwen3Config lyric_config() {
     Qwen3Config c;
     c.hidden_size = 2048; c.intermediate_size = 6144; c.n_heads = 16; c.n_kv_heads = 8;
     c.head_dim = 128; c.n_layers = 8; c.rope_theta = 1000000.0f; c.rms_norm_eps = 1e-6f; c.is_causal = false;
+    // Measured on a real caption+lyrics: the residual stream reaches 4.2e5 at hidden
+    // channel 259, ~6x past fp16 max, so half-staged matmuls saturate it to inf.
+    c.prec = GGML_PREC_F32;
     return c;
 }
 static Qwen3Config timbre_config() {

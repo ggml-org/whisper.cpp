@@ -52,4 +52,19 @@ inline int vae_progress_pct(int done, int total) {
     return (int) ((long long) done * 100 / total);
 }
 
+// Shrink a chunked-decode window so the graph's largest single node fits one
+// backend allocation. ggml_gallocr already spreads an arena over several buffers
+// when a backend caps allocation size, but it cannot split a tensor, so the
+// biggest node has to fit on its own. Node size is linear in the window, so the
+// measured `peak_bytes` at `core + 2*overlap` frames gives the scale directly.
+// Returns `core` unchanged when it already fits. Pure + header-only so the
+// sizing is unit-tested without a GPU.
+inline int vae_shrink_window_core(int core, int overlap, size_t peak_bytes, size_t max_alloc, int core_min) {
+    if (peak_bytes <= max_alloc || core <= core_min) return core;
+    const int win = core + 2 * overlap;
+    const int fit = (int) ((double) win * (double) max_alloc / (double) peak_bytes) - 2 * overlap;
+    if (fit < core_min) return core_min;
+    return fit < core ? fit : core - 1;
+}
+
 } // namespace tts_cpp::acestep

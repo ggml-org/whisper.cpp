@@ -442,6 +442,58 @@ static int vae_decode_window(VaeModel * m, const float * latent, int T_latent, s
     return T_audio;
 }
 
+// latent frames decoded AND kept per chunk. 256 is the iOS-era default and stays
+// the ceiling; backends with a smaller per-allocation limit get less.
+static constexpr int WIN_CORE_MAX = 256;
+static constexpr int WIN_CORE_MIN = 64;
+static constexpr int WIN_OV       = 48;  // context frames each side (>> decoder RF ~6 frames)
+
+// Bytes of the largest single node in a T_latent-frame decode graph. Measured off
+// the real graph rather than derived from the decoder's shape, so it stays correct
+// if the model or an op's lowering changes.
+static size_t vae_decode_peak_node_bytes(VaeModel * m, int T_latent) {
+    ggml_init_params gp{ ggml_tensor_overhead() * 1024 + ggml_graph_overhead_custom(8192, false), nullptr, true };
+    ggml_context * ctx = ggml_init(gp);
+
+    ggml_tensor * lat = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, T_latent, 64);
+    ggml_cgraph * gf  = ggml_new_graph_custom(ctx, 8192, false);
+    ggml_build_forward_expand(gf, build_decode(ctx, &m->dec, lat));
+
+    size_t peak = 0;
+    for (int i = 0; i < ggml_graph_n_nodes(gf); ++i)
+        peak = std::max(peak, ggml_nbytes(ggml_graph_node(gf, i)));
+
+    ggml_free(ctx);
+    return peak;
+}
+
+// Largest window core this backend can decode. Probes the real graph and shrinks
+// until the biggest node fits one allocation; the loop bound only guards against
+// a non-linear surprise, one or two passes converge.
+static int vae_decode_core_frames(VaeModel * m) {
+    // Debug hatch: pin the window to compare chunk sizes, or to decode in one
+    // piece (a very large value) and check the stitching against it.
+    if (const char * s = std::getenv("ACESTEP_VAE_WIN_CORE")) {
+        const int forced = atoi(s);
+        if (forced > 0) return forced;
+    }
+
+    const size_t cap = ggml_backend_buft_get_max_size(ggml_backend_get_default_buffer_type(m->backend));
+
+    int core = WIN_CORE_MAX;
+    for (int i = 0; i < 8; ++i) {
+        const size_t peak = vae_decode_peak_node_bytes(m, core + 2 * WIN_OV);
+        const int    next = vae_shrink_window_core(core, WIN_OV, peak, cap, WIN_CORE_MIN);
+        if (next == core) break;
+        core = next;
+    }
+
+    if (core < WIN_CORE_MAX && std::getenv("AUDIOGEN_VERBOSE"))
+        fprintf(stderr, "[acestep-vae] %s caps allocations at %zu MB: window core %d -> %d frames\n",
+                ggml_backend_name(m->backend), cap / (1024 * 1024), WIN_CORE_MAX, core);
+    return core;
+}
+
 int vae_model_decode(VaeModel * m, const float * latent, int T_latent, std::vector<float> & pcm_out,
                      const std::function<bool(int, int)> & on_node) {
     // The Oobleck decoder upsamples the latent by a fixed 1920x; its compute
@@ -454,8 +506,7 @@ int vae_model_decode(VaeModel * m, const float * latent, int T_latent, std::vect
     // enough context on each side reproduces the full decode inside the trimmed
     // core. Short latents (<= WIN_CORE, e.g. parity clips) stay a single window
     // and are numerically identical to the non-chunked path.
-    constexpr int WIN_CORE = 256;  // latent frames decoded AND kept per chunk (~arena 1.2 GB peak)
-    constexpr int WIN_OV   = 48;   // context frames on each side (>> decoder RF ~6 frames)
+    const int WIN_CORE = vae_decode_core_frames(m);
 
     if (T_latent <= WIN_CORE)
         return vae_decode_window(m, latent, T_latent, pcm_out, on_node);
