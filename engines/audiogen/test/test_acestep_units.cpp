@@ -204,6 +204,7 @@ void test_vae_progress() {
 void test_backend_device_types() {
     using tts_cpp::acestep::backend_device_type_is_gpu;
     using tts_cpp::acestep::backend_reg_name_is_validated_gpu;
+    using tts_cpp::acestep::parse_adreno_version;
 
     CHECK(backend_device_type_is_gpu(GGML_BACKEND_DEVICE_TYPE_GPU));
     CHECK(backend_device_type_is_gpu(GGML_BACKEND_DEVICE_TYPE_IGPU));
@@ -213,9 +214,25 @@ void test_backend_device_types() {
     CHECK(backend_reg_name_is_validated_gpu("Vulkan"));
     CHECK(backend_reg_name_is_validated_gpu("MTL"));
     CHECK(backend_reg_name_is_validated_gpu("Metal"));
+    // OpenCL is deliberately absent: it is reached by its own Adreno pass in
+    // backend_gpu_init(), not by this Vulkan/Metal preference.
     CHECK(!backend_reg_name_is_validated_gpu("OpenCL"));
     CHECK(!backend_reg_name_is_validated_gpu("CUDA"));
     CHECK(!backend_reg_name_is_validated_gpu(nullptr));
+
+    // That Adreno pass gates on the generation parsed out of the device
+    // name/description, so the parse is what decides OpenCL-over-Vulkan.
+    CHECK(parse_adreno_version("Adreno (TM) 740") == 740);
+    CHECK(parse_adreno_version("QUALCOMM Adreno(TM) 830") == 830);
+    CHECK(parse_adreno_version("Adreno X1-85") == 800);       // Snapdragon-X naming
+    CHECK(parse_adreno_version("Adreno (TM) 640") == 640);    // parsed, but below the 700 gate
+    // An embedded "OpenCL 3.0" must not be mistaken for the model number, and a
+    // non-Adreno device must not be claimed at all.
+    CHECK(parse_adreno_version("Adreno (TM) 750 (OpenCL 3.0)") == 750);
+    CHECK(parse_adreno_version("Mali-G715") == -1);
+    CHECK(parse_adreno_version("Apple M1 Pro") == -1);
+    CHECK(parse_adreno_version("") == -1);
+    CHECK(parse_adreno_version(nullptr) == -1);
 }
 
 // 7. stage placement ---------------------------------------------------------
@@ -226,6 +243,7 @@ void test_backend_device_types() {
 // overrides layered on top.
 void test_stage_placement() {
     using tts_cpp::acestep::backend_name_is_metal;
+    using tts_cpp::acestep::backend_name_is_opencl;
     using tts_cpp::acestep::backend_name_is_vulkan;
     using tts_cpp::acestep::PlacementOverrides;
     using tts_cpp::acestep::resolve_stage_placement;
@@ -237,29 +255,38 @@ void test_stage_placement() {
     CHECK(backend_name_is_metal("MTL"));
     CHECK(backend_name_is_metal("Metal"));
     CHECK(backend_name_is_vulkan("Vulkan"));
+    // ggml-opencl's REGISTRY name; its device reports as "GPUOpenCL", which is
+    // not what reaches here.
+    CHECK(backend_name_is_opencl("OpenCL"));
+    CHECK(!backend_name_is_opencl("GPUOpenCL"));
 
     // The input is the REGISTRY name, which carries no device-index suffix.
     // ggml_backend_name() would hand over "MTL0" / "Vulkan0" and match nothing.
     CHECK(!backend_name_is_metal("MTL0"));
     CHECK(!backend_name_is_vulkan("Vulkan0"));
+    CHECK(!backend_name_is_opencl("OpenCL0"));
 
     // Exact compare: no case folding, no substring match, and null/empty safe.
     CHECK(!backend_name_is_metal("mtl"));
     CHECK(!backend_name_is_metal("metal"));
     CHECK(!backend_name_is_metal("MTLX"));
     CHECK(!backend_name_is_vulkan("vulkan"));
+    CHECK(!backend_name_is_opencl("opencl"));
     CHECK(!backend_name_is_metal("CUDA"));
     CHECK(!backend_name_is_vulkan("MTL"));
     CHECK(!backend_name_is_metal("Vulkan"));
+    CHECK(!backend_name_is_opencl("Vulkan"));
     CHECK(!backend_name_is_metal(""));
     CHECK(!backend_name_is_vulkan(""));
+    CHECK(!backend_name_is_opencl(""));
     CHECK(!backend_name_is_metal(nullptr));
     CHECK(!backend_name_is_vulkan(nullptr));
+    CHECK(!backend_name_is_opencl(nullptr));
 
     const PlacementOverrides none;
 
     // -- allowlist: LM + detokenizer stay on the GPU ---------------------------
-    for (const char * allowed : { "Vulkan", "MTL", "Metal" }) {
+    for (const char * allowed : { "Vulkan", "MTL", "Metal", "OpenCL" }) {
         StagePlacement p = resolve_stage_placement(allowed, none);
         CHECK(p.lm_on_gpu);
         CHECK(p.detok_on_gpu);
@@ -269,7 +296,8 @@ void test_stage_placement() {
     // -- fallback: everything else keeps the shipping CPU placement -----------
     // Unmeasured backends must not silently pick up the GPU path. "MTL0" is in
     // this list on purpose: a suffixed name is NOT the allowlisted one.
-    const char * const others[] = { "CUDA", "OpenCL", "SYCL", "BLAS", "CPU", "MTL0", "Vulkan0", "", nullptr };
+    const char * const others[] = { "CUDA",     "SYCL",     "BLAS", "CPU",  "MTL0",
+                                    "Vulkan0",  "OpenCL0",  "",     nullptr };
     for (const char * other : others) {
         StagePlacement p = resolve_stage_placement(other, none);
         CHECK(!p.lm_on_gpu);
@@ -313,7 +341,7 @@ void test_stage_placement() {
 
     // Precedence: CPU wins when both hatches are set for the same stage, on an
     // allowlisted backend and on a fallback one alike.
-    for (const char * name : { "MTL", "Metal", "Vulkan", "CUDA" }) {
+    for (const char * name : { "MTL", "Metal", "Vulkan", "OpenCL", "CUDA" }) {
         PlacementOverrides ov;
         ov.lm_gpu        = true;
         ov.lm_cpu        = true;
@@ -325,12 +353,13 @@ void test_stage_placement() {
     }
 
     // The encoder hatch is independent of the LM/detokenizer allowlist.
-    for (const char * name : { "MTL", "Vulkan", "CUDA" }) {
+    for (const char * name : { "MTL", "Vulkan", "OpenCL", "CUDA" }) {
         PlacementOverrides ov;
         ov.encoders_cpu  = true;
         StagePlacement p = resolve_stage_placement(name, ov);
         CHECK(!p.enc_on_gpu);
-        CHECK(p.lm_on_gpu == (backend_name_is_metal(name) || backend_name_is_vulkan(name)));
+        CHECK(p.lm_on_gpu == (backend_name_is_metal(name) || backend_name_is_vulkan(name) ||
+                              backend_name_is_opencl(name)));
     }
 }
 

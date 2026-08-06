@@ -115,6 +115,10 @@ int main(int argc, char ** argv) {
     // and currently only move off the CPU on Vulkan.
     if (arg_flag(argc, argv, "--gpu"))   o.n_gpu_layers = 99;
     if (arg_val(argc, argv, "--threads")) o.n_threads = atoi(arg_val(argc, argv, "--threads"));
+    // Required wherever ggml ships its backends as dlopen'd MODULE .so files
+    // (GGML_BACKEND_DL, i.e. every Android/arm64 build): without it the registry is
+    // empty and even the CPU backend fails to init.
+    if (arg_val(argc, argv, "--backends-dir")) o.backends_dir = arg_val(argc, argv, "--backends-dir");
     // Parity aid: write one .bin per stage so a CPU/GPU divergence can be traced
     // to the stage that introduces it rather than inferred from the final WAV.
     if (arg_val(argc, argv, "--dump-stages")) o.dump_stages_dir = arg_val(argc, argv, "--dump-stages");
@@ -129,7 +133,8 @@ int main(int argc, char ** argv) {
                 "           turbo 8 / 3.0, base and sft 50 / 1.0)\n"
                 "           [--temp 0.85] [--cfg 2.0] [--topp 0.9] [--topk 0 (off)]\n"
                 "           [--no-phase1]  (values shown are the defaults)\n"
-                "  backend: [--gpu] [--threads N] [--dump-stages <existing dir>]\n");
+                "  backend: [--gpu] [--threads N] [--backends-dir <dir>]\n"
+                "           [--dump-stages <existing dir>]\n");
         return 1;
     }
 

@@ -85,7 +85,8 @@ int main(int argc, char ** argv) {
     if (!model) {
         fprintf(stderr,
             "usage: acestep-cli --model vae.gguf [--t-latent 32] [--out out.wav] [--gpu]\n"
-            "       acestep-cli --model vae.gguf --roundtrip --in in.wav [--seconds 2.56] [--out out.wav] [--gpu]\n");
+            "       acestep-cli --model vae.gguf --roundtrip --in in.wav [--seconds 2.56] [--out out.wav] [--gpu]\n"
+            "       [--backends-dir <dir>]  (required on builds with dlopen'd ggml backends)\n");
         return 1;
     }
     const bool   roundtrip = arg_flag(argc, argv, "--roundtrip");
@@ -94,6 +95,10 @@ int main(int argc, char ** argv) {
     tts_cpp::acestep::VaeOptions opts;
     opts.verbose      = true;
     opts.with_encoder = roundtrip;  // decode mode does not need the encoder
+    // Required wherever ggml ships its backends as dlopen'd MODULE .so files
+    // (GGML_BACKEND_DL, i.e. every Android/arm64 build): without it the registry is
+    // empty and even the CPU backend fails to init.
+    if (arg_val(argc, argv, "--backends-dir")) opts.backends_dir = arg_val(argc, argv, "--backends-dir");
     // Run the decode/encode graph on a GPU backend. This exercises the whole real
     // VAE graph (including the snake / col2im_1d custom ops at production shapes)
     // in isolation from the LM and DiT, which is what makes it usable as a

@@ -285,12 +285,23 @@ struct VaeNodeProg {
     int last_pct;
     const std::function<bool(int, int)> * cb;
     bool keep_going;
+    int seen;
 };
 
+// Answering `ask` with true makes the scheduler cut the dispatch batch at that node
+// and ggml_backend_synchronize() before continuing (ggml-backend.cpp). Observing every
+// node therefore drains the GPU pipeline once per node -- ~3% on Metal, but ruinous on
+// OpenCL where each drain is a clFinish and nothing can overlap. Tick every
+// VAE_PROG_STRIDE nodes instead: same progress and cancellation, 1/stride the syncs.
+static constexpr int VAE_PROG_STRIDE = 16;
+
 bool vae_eval_cb(ggml_tensor * /*t*/, bool ask, void * ud) {
-    if (ask) return true;  // observe every node (ask=false will follow)
     auto * p = static_cast<VaeNodeProg *>(ud);
-    p->done++;
+    if (ask) {
+        ++p->seen;
+        return (p->seen % VAE_PROG_STRIDE) == 0 || p->seen >= p->total;
+    }
+    p->done = p->seen;
     // The scheduler can fire this more than ggml_graph_n_nodes(gf) times (copy/
     // split nodes on a GPU+CPU backend list), so clamp the reported node count
     // too and derive a bounded, monotone percentage via vae_progress_pct.
@@ -384,8 +395,13 @@ static int vae_decode_window(VaeModel * m, const float * latent, int T_latent, s
         return -1;
     }
 
-    VaeNodeProg prog{ ggml_graph_n_nodes(gf), 0, -1, &on_node, true };
-    ggml_backend_sched_set_eval_callback(sched, vae_eval_cb, &prog);
+    // Only install the eval callback when the caller actually wants progress or the
+    // ability to cancel. With no callback the scheduler dispatches each split in one
+    // go and never synchronizes mid-graph, which is the fast path.
+    VaeNodeProg prog{ ggml_graph_n_nodes(gf), 0, -1, &on_node, true, 0 };
+    if (on_node) {
+        ggml_backend_sched_set_eval_callback(sched, vae_eval_cb, &prog);
+    }
 
     if (!ggml_backend_sched_alloc_graph(sched, gf)) {
         fprintf(stderr, "[acestep-vae] decode alloc failed (T_latent=%d)\n", T_latent);

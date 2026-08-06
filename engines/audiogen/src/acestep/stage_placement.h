@@ -29,6 +29,12 @@ inline bool backend_name_is_metal(const char * name) {
     return name && (std::strcmp(name, "MTL") == 0 || std::strcmp(name, "Metal") == 0);
 }
 
+// ggml-opencl registers as "OpenCL" (ggml-opencl.cpp, reg get_name); the device
+// itself reports as "GPUOpenCL", which is not what reaches here.
+inline bool backend_name_is_opencl(const char * name) {
+    return name && std::strcmp(name, "OpenCL") == 0;
+}
+
 // Environment escape hatches, read once at create(). Presence is what counts:
 // ACESTEP_LM_CPU=0 still forces the LM to the CPU, matching the getenv() checks
 // this replaced.
@@ -55,10 +61,15 @@ struct StagePlacement {
 // nobody has measured keeps the CPU placement and cannot silently regress
 // generated audio. Widen the list once a backend is measured; ACESTEP_LM_GPU /
 // ACESTEP_DETOK_GPU take that measurement without a rebuild.
+//
+// OpenCL is on the list off an Adreno 740: both stages render end-to-end with no
+// unsupported-op abort, and the decode matches the CPU path (isolated VAE cosine
+// 0.99998563; full-pipeline health metrics within 5%).
 inline StagePlacement resolve_stage_placement(const char * reg_name, const PlacementOverrides & ov) {
     StagePlacement p;
 
-    if (!backend_name_is_vulkan(reg_name) && !backend_name_is_metal(reg_name)) {
+    if (!backend_name_is_vulkan(reg_name) && !backend_name_is_metal(reg_name) &&
+        !backend_name_is_opencl(reg_name)) {
         p.lm_on_gpu    = false;
         p.detok_on_gpu = false;
     }

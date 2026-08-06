@@ -91,13 +91,16 @@ DetokModel * detok_model_load(const std::string & path, ggml_backend_t backend, 
     m->weight_ctx      = ggml_init(ip);
     ggml_context * ctx = m->weight_ctx;
 
-    m->fsq_proj_w  = q3_create_like(ctx, g, "tokenizer.quantizer.project_out.weight", map_buf);
+    // fsq_proj_w (BF16 [6,2048]) and special_tokens (quantised [2048,5]) are tiny
+    // auxiliary tensors, not GEMM weights. Materialising them as F32 at load costs
+    // ~64 KB, is exact (BF16 widening / the same dequantiser ggml_cast would run),
+    // and drops two element types no GPU backend is obliged to implement -- the
+    // graph's q3_as_f32 then folds away instead of re-dequantising every frame.
+    m->fsq_proj_w  = q3_create_f32_like(ctx, g, "tokenizer.quantizer.project_out.weight");
     m->fsq_proj_b  = q3_create_f32_like(ctx, g, "tokenizer.quantizer.project_out.bias");
     m->embed_w     = q3_create_like(ctx, g, "detokenizer.embed_tokens.weight", map_buf);
     m->embed_b     = q3_create_f32_like(ctx, g, "detokenizer.embed_tokens.bias");
-    // special_tokens is stored in the model's native type (e.g. BF16/Q8_0);
-    // keep it raw and cast to F32 in the graph (q3_as_f32) like upstream.
-    m->special_tok = q3_create_like(ctx, g, "detokenizer.special_tokens", map_buf);
+    m->special_tok = q3_create_f32_like(ctx, g, "detokenizer.special_tokens");
     m->norm        = q3_create_f32_like(ctx, g, "detokenizer.norm.weight");
     m->proj_out_w  = q3_create_like(ctx, g, "detokenizer.proj_out.weight", map_buf);
     m->proj_out_b  = q3_create_f32_like(ctx, g, "detokenizer.proj_out.bias");
@@ -115,11 +118,11 @@ DetokModel * detok_model_load(const std::string & path, ggml_backend_t backend, 
         return nullptr;
     }
 
-    q3_load_raw(m->fsq_proj_w, g, "tokenizer.quantizer.project_out.weight");
+    q3_load_f32(m->fsq_proj_w, g, "tokenizer.quantizer.project_out.weight");
     q3_load_f32(m->fsq_proj_b, g, "tokenizer.quantizer.project_out.bias");
     q3_load_raw(m->embed_w, g, "detokenizer.embed_tokens.weight");
     q3_load_f32(m->embed_b, g, "detokenizer.embed_tokens.bias");
-    q3_load_raw(m->special_tok, g, "detokenizer.special_tokens");
+    q3_load_f32(m->special_tok, g, "detokenizer.special_tokens");
     q3_load_f32(m->norm, g, "detokenizer.norm.weight");
     q3_load_raw(m->proj_out_w, g, "detokenizer.proj_out.weight");
     q3_load_f32(m->proj_out_b, g, "detokenizer.proj_out.bias");

@@ -126,7 +126,10 @@ CondModel * cond_model_load(const std::string & path, ggml_backend_t backend, bo
     }
 
     // timbre encoder
-    m->timbre_embed_w = q3_create_like(ctx, g, "encoder.timbre_encoder.embed_tokens.weight", map_buf);
+    // [64, 2048], and BF16 in the Q4_K_M checkpoint. It feeds ggml_mul_mat, and no GPU
+    // backend here implements a BF16 matmul, so materialise it as F32 at load (exact
+    // widening; ne0=64 is below the Adreno image-GEMM threshold either way).
+    m->timbre_embed_w = q3_create_f32_like(ctx, g, "encoder.timbre_encoder.embed_tokens.weight");
     m->timbre_embed_b = q3_create_f32_like(ctx, g, "encoder.timbre_encoder.embed_tokens.bias");
     m->timbre_norm    = q3_create_f32_like(ctx, g, "encoder.timbre_encoder.norm.weight");
     m->timbre_layers.resize(m->timbre_cfg.n_layers);
@@ -157,7 +160,7 @@ CondModel * cond_model_load(const std::string & path, ggml_backend_t backend, bo
     for (int i = 0; i < m->lyric_cfg.n_layers; i++) {
         q3_load_layer(g, "encoder.lyric_encoder.layers." + std::to_string(i), m->lyric_layers[i]);
     }
-    q3_load_raw(m->timbre_embed_w, g, "encoder.timbre_encoder.embed_tokens.weight");
+    q3_load_f32(m->timbre_embed_w, g, "encoder.timbre_encoder.embed_tokens.weight");
     q3_load_f32(m->timbre_embed_b, g, "encoder.timbre_encoder.embed_tokens.bias");
     q3_load_f32(m->timbre_norm, g, "encoder.timbre_encoder.norm.weight");
     for (int i = 0; i < m->timbre_cfg.n_layers; i++) {
