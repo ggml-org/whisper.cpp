@@ -72,6 +72,7 @@ jobs:
       tag_name:       ${{ steps.tag.outputs.name }}
       version:        ${{ steps.tag.outputs.version }}
       should_release: ${{ steps.tag.outputs.should_release }}
+      is_full_build:  ${{ steps.tag.outputs.is_full_build }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,39 +86,64 @@ jobs:
           SHORT_HASH=$(git rev-parse --short=7 HEAD)
           CUSTOM_TAG="${{ github.event.inputs.pre_release_tag }}"
           SHOULD_RELEASE="false"
+          IS_FULL_BUILD="false"
+          IS_PR="${{ github.event_name == 'pull_request' }}"
+          HAS_FULL_CI_LABEL="false"
+          # Check for 'full-ci' label on PRs
+          if [[ "$IS_PR" == "true" ]]; then
+            LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
+            if echo "$LABELS" | grep -q '"full-ci"'; then
+              HAS_FULL_CI_LABEL="true"
+            fi
+          fi
 
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            # Triggered by sync.yml pushing a vX.Y.Z tag — this is the primary release path
             TAG_NAME="${{ github.ref_name }}"
             SHOULD_RELEASE="true"
+            IS_FULL_BUILD="true"
           elif [[ -n "$CUSTOM_TAG" ]]; then
             TAG_NAME="$CUSTOM_TAG"
             SHOULD_RELEASE="true"
+            IS_FULL_BUILD="true"
           elif [[ "${{ github.event.inputs.create_release }}" == "true" ]]; then
             TAG_NAME="b${BUILD_NUMBER}"
             SHOULD_RELEASE="true"
+            IS_FULL_BUILD="true"
+          elif [[ "$IS_PR" == "true" && "$HAS_FULL_CI_LABEL" == "true" ]]; then
+            SAFE=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
+            TAG_NAME="${SAFE}-b${BUILD_NUMBER}-${SHORT_HASH}"
+            IS_FULL_BUILD="true"
+          elif [[ "$IS_PR" == "true" ]]; then
+            # PR without full-ci label — lightweight path only
+            SAFE=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
+            TAG_NAME="${SAFE}-b${BUILD_NUMBER}-${SHORT_HASH}"
+            IS_FULL_BUILD="false"
+          elif [[ "${{ github.event_name }}" == "schedule" ]]; then
+            TAG_NAME="b${BUILD_NUMBER}"
+            IS_FULL_BUILD="true"
           elif [[ "${{ env.BRANCH_NAME }}" == "main" || "${{ env.BRANCH_NAME }}" == "master" ]]; then
             TAG_NAME="b${BUILD_NUMBER}"
-            SHOULD_RELEASE="false"
+            IS_FULL_BUILD="true"
           else
             SAFE=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
             TAG_NAME="${SAFE}-b${BUILD_NUMBER}-${SHORT_HASH}"
-            SHOULD_RELEASE="false"
+            IS_FULL_BUILD="true"
           fi
 
-          # Version used in artifact filenames — keep leading 'v' to match lemonade expectations
-          # e.g. v1.8.4 → v1.8.4,  b1234 → b1234
           VERSION="${TAG_NAME}"
 
           echo "name=$TAG_NAME"                >> $GITHUB_OUTPUT
           echo "version=$VERSION"              >> $GITHUB_OUTPUT
           echo "should_release=$SHOULD_RELEASE" >> $GITHUB_OUTPUT
+          echo "is_full_build=$IS_FULL_BUILD"  >> $GITHUB_OUTPUT
 
 # ════════════════════════════════════════════════════════════════════════════════
 # 1. ROCm matrix (Linux + Windows per GFX target)
 # ════════════════════════════════════════════════════════════════════════════════
   prepare-rocm-matrix:
     runs-on: ubuntu-latest
+    if: needs.determine-tag.outputs.is_full_build == 'true'
+    needs: determine-tag
     outputs:
       ubuntu_matrix:  ${{ steps.m.outputs.ubuntu_matrix }}
       windows_matrix: ${{ steps.m.outputs.windows_matrix }}
@@ -142,6 +168,7 @@ jobs:
 # ════════════════════════════════════════════════════════════════════════════════
   linux-rocm:
     runs-on: ubuntu-22.04
+    if: needs.determine-tag.outputs.is_full_build == 'true'
     needs: [determine-tag, prepare-rocm-matrix]
     strategy:
       matrix: ${{ fromJson(needs.prepare-rocm-matrix.outputs.ubuntu_matrix) }}
@@ -1223,6 +1250,12 @@ jobs:
     if: |
       always() &&
       needs.determine-tag.outputs.should_release == 'true' &&
+      (needs.linux-rocm.result == 'success' || needs.linux-rocm.result == 'skipped') &&
+      (needs.windows-rocm.result == 'success' || needs.windows-rocm.result == 'skipped') &&
+      (needs.linux-vulkan.result == 'success' || needs.linux-vulkan.result == 'skipped') &&
+      (needs.windows-vulkan.result == 'success' || needs.windows-vulkan.result == 'skipped') &&
+      (needs.linux-cpu.result == 'success' || needs.linux-cpu.result == 'skipped') &&
+      (needs.windows-cpu.result == 'success' || needs.windows-cpu.result == 'skipped') &&
       (needs.test-cpu-windows.result == 'success' || needs.test-cpu-windows.result == 'skipped') &&
       (needs.test-cpu-linux.result == 'success' || needs.test-cpu-linux.result == 'skipped') &&
       (needs.test-vulkan-windows.result == 'success' || needs.test-vulkan-windows.result == 'skipped') &&
@@ -1272,12 +1305,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ needs.determine-tag.outputs.tag_name }}"
-          RELEASE_ID=$(gh api repos/${{ github.repository }}/releases/tags/"$TAG" --jq '.id' 2>/dev/null || true)
-          if [ -n "$RELEASE_ID" ]; then
-            echo "Deleting existing release $RELEASE_ID for tag $TAG"
-            gh api -X DELETE repos/${{ github.repository }}/releases/"$RELEASE_ID"
-          fi
-          git push --delete origin "refs/tags/$TAG" 2>/dev/null || true
+          gh release delete "$TAG" --yes --cleanup-tag --repo ${{ github.repository }} 2>/dev/null || true
 
       - name: Create release
         id: create_release
@@ -1313,28 +1341,30 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const fs   = require('fs');
-            const path = require('path');
-            const id   = '${{ steps.create_release.outputs.id }}';
+            const fs = require('fs');
+            const id = '${{ steps.create_release.outputs.id }}';
+            if (!id) throw new Error('create_release did not produce a release ID');
             for (const file of fs.readdirSync('./release')) {
               if (!file.endsWith('.zip') && !file.endsWith('.tar.gz')) continue;
               console.log('Uploading:', file);
+              const stat = fs.statSync(`./release/${file}`);
               await github.rest.repos.uploadReleaseAsset({
                 owner: context.repo.owner,
                 repo:  context.repo.repo,
                 release_id: id,
                 name: file,
-                data: fs.readFileSync(`./release/${file}`),
+                data: fs.createReadStream(`./release/${file}`),
+                headers: { 'content-length': stat.size, 'content-type': 'application/octet-stream' },
               });
             }
 
       - name: Update README download links
         run: |
           TAG="${{ needs.determine-tag.outputs.tag_name }}"
-          # Replace the placeholder tag in all download URLs with the actual release tag
           sed -i "s|/releases/download/[^/]*/whisper-[^-]*-|/releases/download/${TAG}/whisper-${TAG}-|g" README.md
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add README.md
           git diff --cached --quiet || git commit -m "docs: update download links to ${TAG}"
+          git pull --rebase origin master 2>/dev/null || git pull --rebase origin main
           git push
