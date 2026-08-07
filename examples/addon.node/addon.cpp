@@ -4,6 +4,8 @@
 
 #include "whisper.h"
 
+#include <atomic>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -149,8 +151,9 @@ struct whisper_result {
 
 class ProgressWorker : public Napi::AsyncWorker {
  public:
-    ProgressWorker(Napi::Function& callback, whisper_params params, Napi::Function progress_callback, Napi::Env env)
-        : Napi::AsyncWorker(callback), params(params), env(env) {
+    ProgressWorker(Napi::Function& callback, whisper_params params, Napi::Function progress_callback, Napi::Env env,
+                   std::shared_ptr<std::atomic<bool>> is_aborted)
+        : Napi::AsyncWorker(callback), params(params), env(env), is_aborted(std::move(is_aborted)) {
         // Create thread-safe function
         if (!progress_callback.IsEmpty()) {
             tsfn = Napi::ThreadSafeFunction::New(
@@ -185,6 +188,7 @@ class ProgressWorker : public Napi::AsyncWorker {
         }
 
         Napi::Object returnObj = Napi::Object::New(Env());
+        returnObj.Set("cancelled", Napi::Boolean::New(Env(), is_aborted->load()));
         if (!result.language.empty()) {
             returnObj.Set("language", Napi::String::New(Env(), result.language));
         }
@@ -217,6 +221,7 @@ class ProgressWorker : public Napi::AsyncWorker {
     whisper_result result;
     Napi::Env env;
     Napi::ThreadSafeFunction tsfn;
+    std::shared_ptr<std::atomic<bool>> is_aborted;
 
     // Custom run function with progress callback support
     int run_with_progress(whisper_params &params, whisper_result & result) {
@@ -344,6 +349,18 @@ class ProgressWorker : public Napi::AsyncWorker {
                 };
                 wparams.progress_callback_user_data = this;
 
+                // Cancellation support: checked before each encoder run (coarse)
+                // and before each ggml graph computation (fine)
+                wparams.encoder_begin_callback = [](struct whisper_context * /*ctx*/, struct whisper_state * /*state*/, void * user_data) {
+                    return !static_cast<std::atomic<bool>*>(user_data)->load();
+                };
+                wparams.encoder_begin_callback_user_data = is_aborted.get();
+
+                wparams.abort_callback = [](void * user_data) {
+                    return static_cast<std::atomic<bool>*>(user_data)->load();
+                };
+                wparams.abort_callback_user_data = is_aborted.get();
+
                 // Set VAD parameters
                 wparams.vad            = params.vad;
                 wparams.vad_model_path = params.vad_model.c_str();
@@ -355,8 +372,16 @@ class ProgressWorker : public Napi::AsyncWorker {
                 wparams.vad_params.speech_pad_ms           = params.vad_speech_pad_ms;
                 wparams.vad_params.samples_overlap         = params.vad_samples_overlap;
 
-                if (whisper_full_parallel(ctx, wparams, pcmf32.data(), pcmf32.size(), params.n_processors) != 0) {
+                const int ret = whisper_full_parallel(ctx, wparams, pcmf32.data(), pcmf32.size(), params.n_processors);
+
+                if (is_aborted->load()) {
+                    // cancelled - keep the segments transcribed so far
+                    break;
+                }
+
+                if (ret != 0) {
                     fprintf(stderr, "failed to process audio\n");
+                    whisper_free(ctx);
                     return 10;
                 }
             }
@@ -538,9 +563,29 @@ Napi::Value whisper(const Napi::CallbackInfo& info) {
   params.vad_speech_pad_ms = vad_speech_pad_ms;
   params.vad_samples_overlap = vad_samples_overlap;
 
+  // Cancellation support: an AbortSignal can be passed via params.signal.
+  // Its "abort" event sets a shared flag which is polled by the whisper.cpp
+  // abort callbacks on the worker thread.
+  auto is_aborted = std::make_shared<std::atomic<bool>>(false);
+  if (whisper_params.Has("signal") && whisper_params.Get("signal").IsObject()) {
+    Napi::Object signal = whisper_params.Get("signal").As<Napi::Object>();
+
+    if (signal.Get("aborted").ToBoolean().Value()) {
+      is_aborted->store(true);
+    } else if (signal.Has("addEventListener") && signal.Get("addEventListener").IsFunction()) {
+      Napi::Function add_listener = signal.Get("addEventListener").As<Napi::Function>();
+      Napi::Function on_abort = Napi::Function::New(env, [is_aborted](const Napi::CallbackInfo &) {
+        is_aborted->store(true);
+      });
+      Napi::Object options = Napi::Object::New(env);
+      options.Set("once", Napi::Boolean::New(env, true));
+      add_listener.Call(signal, { Napi::String::New(env, "abort"), on_abort, options });
+    }
+  }
+
   Napi::Function callback = info[1].As<Napi::Function>();
   // Create a new Worker class with progress callback support
-  ProgressWorker* worker = new ProgressWorker(callback, params, progress_callback, env);
+  ProgressWorker* worker = new ProgressWorker(callback, params, progress_callback, env, is_aborted);
   worker->Queue();
   return env.Undefined();
 }
