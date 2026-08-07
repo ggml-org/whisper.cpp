@@ -13,7 +13,6 @@ namespace whisper_vitisai_helpers {
 
 bool map_rai_file(const char * path, uint8_t ** buffer, size_t * size);
 void unmap_rai_file(uint8_t * buffer, size_t size);
-bool file_exists(const char * path);
 
 const char * whisper_kv_type_name(ggml_type type);
 const char * whisper_flexml_dtype_name(flexmlrt::client::DataType type);

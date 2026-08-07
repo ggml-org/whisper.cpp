@@ -3388,17 +3388,12 @@ static std::string whisper_get_coreml_path_encoder(std::string path_bin) {
 #endif
 
 #ifdef WHISPER_USE_VITISAI
-// replace extension with Vitis AI encoder artifact
+// replace extension with Vitis AI encoder artifact. Cross projection support is
+// detected from the model's output tensors, not from the file name.
 static std::string whisper_get_vitisai_path_encoder_cache(std::string path_bin) {
     auto pos = path_bin.rfind('.');
     if (pos != std::string::npos) {
         path_bin = path_bin.substr(0, pos);
-    }
-
-    const std::string path_vitisai_cross = path_bin + "-encoder-cross-vitisai.rai";
-    if (FILE * file = fopen(path_vitisai_cross.c_str(), "rb")) {
-        fclose(file);
-        return path_vitisai_cross;
     }
 
     return path_bin + "-encoder-vitisai.rai";

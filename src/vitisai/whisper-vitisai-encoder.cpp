@@ -86,8 +86,10 @@ struct whisper_vitisai_context * whisper_vitisai_init(const char * path_model) {
     options.executeMode = 2;
     options.extOptions["enable_preemption"] = true;
 
+    const bool model_is_rai = ctx->model_path.find(".rai") != std::string::npos;
+
     // Check if model_path is rai file and if so, add fbs_buffer and fbs_buffer_size to the options
-    if (ctx->model_path.find(".rai") != std::string::npos) {
+    if (model_is_rai) {
         if (whisper_vitisai_helpers::map_rai_file(ctx->model_path.c_str(), &ctx->fbs_buffer, &ctx->fbs_buffer_size)) {
             options.extOptions["fbs_buffer"] = ctx->fbs_buffer;
             options.extOptions["fbs_buffer_size"] = ctx->fbs_buffer_size;
@@ -104,7 +106,6 @@ struct whisper_vitisai_context * whisper_vitisai_init(const char * path_model) {
 #endif
     }
 
-    const bool model_is_rai = ctx->model_path.find(".rai") != std::string::npos;
     if (model_is_rai) {
 #if WHISPER_FLEXMLRT_LEGACY_RAI_OVERRIDES
         options.deviceName = "stx";
@@ -180,10 +181,6 @@ struct whisper_vitisai_context * whisper_vitisai_init(const char * path_model) {
 
 bool whisper_vitisai_has_cross_proj(const struct whisper_vitisai_context * ctx) {
     return ctx && ctx->cross_k_out_idx >= 0 && ctx->cross_v_out_idx >= 0;
-}
-
-bool whisper_vitisai_file_exists(const char * path) {
-    return whisper_vitisai_helpers::file_exists(path);
 }
 
 void whisper_vitisai_free(struct whisper_vitisai_context * ctx) {

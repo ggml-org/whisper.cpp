@@ -173,10 +173,9 @@ if (WHISPER_VITISAI)
     set_property(TARGET ${TARGET} PROPERTY POSITION_INDEPENDENT_CODE ON)
     set(WHISPER_EXTRA_FLAGS ${WHISPER_EXTRA_FLAGS} -DWHISPER_USE_VITISAI)
 
-    # Add C++17 standard for MSVC
-    if (MSVC)
-        target_compile_options(${TARGET} PRIVATE /std:c++17)
-    endif()
+    # FlexMLRT headers and this plugin require C++17. Keep it PRIVATE so the
+    # C++11 requirement of the whisper target is not bumped.
+    target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
     target_compile_definitions(${TARGET} PRIVATE
         WHISPER_FLEXMLRT_LEGACY_RAI_OVERRIDES=${WHISPER_FLEXMLRT_LEGACY_RAI_OVERRIDES}

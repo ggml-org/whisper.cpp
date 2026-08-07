@@ -66,7 +66,7 @@ bool map_rai_file(const char * path, uint8_t ** buffer, size_t * size) {
         return false;
     }
 
-    *buffer = (uint8_t *) mmap(nullptr, st.st_size, PROT_READ, MAP_SHARED, fileno(fd), 0);
+    *buffer = (uint8_t *) mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fileno(fd), 0);
     if (*buffer == MAP_FAILED) {
         fclose(fd);
         std::fprintf(stderr, "%s: %d: Failed to mmap rai file '%s'\n", __func__, __LINE__, path);
@@ -84,19 +84,6 @@ void unmap_rai_file(uint8_t * buffer, size_t size) {
 #else
     munmap(buffer, size);
 #endif // _WIN32
-}
-
-bool file_exists(const char * path) {
-    if (!path) {
-        return false;
-    }
-
-    FILE * file = fopen(path, "rb");
-    if (!file) {
-        return false;
-    }
-    fclose(file);
-    return true;
 }
 
 const char * whisper_kv_type_name(ggml_type type) {
@@ -260,7 +247,7 @@ bool whisper_vitisai_bind_tensor_data(
 }
 
 bool whisper_vitisai_resolve_io_binding(
-        const char * caller,
+        [[maybe_unused]] const char * caller,
         const std::vector<flexmlrt::client::ErtTensorType> & input_tensors,
         const std::vector<flexmlrt::client::ErtTensorType> & output_tensors,
         whisper_vitisai_io_binding * binding,
@@ -287,7 +274,9 @@ bool whisper_vitisai_resolve_io_binding(
         }
     }
     if (!found_named_mel) {
+#if defined(WHISPER_DEBUG)
         std::fprintf(stderr, "%s: WARNING: mel input not found by name; falling back to input[0]\n", caller);
+#endif
     }
 
     if (output_tensors.empty()) {
@@ -306,7 +295,9 @@ bool whisper_vitisai_resolve_io_binding(
     }
 
     if (binding->embd_enc_out_idx < 0) {
+#if defined(WHISPER_DEBUG)
         std::fprintf(stderr, "%s: WARNING: embd_enc output not found by name; falling back to output[0]\n", caller);
+#endif
         binding->embd_enc_out_idx = 0;
     }
 

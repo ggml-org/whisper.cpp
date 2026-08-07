@@ -11,7 +11,6 @@ struct whisper_vitisai_context;
 struct whisper_vitisai_context * whisper_vitisai_init(const char * path_model);
 void whisper_vitisai_free(struct whisper_vitisai_context * ctx);
 bool whisper_vitisai_has_cross_proj(const struct whisper_vitisai_context * ctx);
-bool whisper_vitisai_file_exists(const char * path);
 
 struct ggml_tensor;
 
