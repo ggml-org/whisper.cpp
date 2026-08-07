@@ -26,7 +26,7 @@ private class CpuInfo(private val lines: List<String>) {
     private fun getHighPerfCpuCountByVariant(): Int =
         getCpuValues(property = "CPU variant") { it.substringAfter("0x").toInt(radix = 16) }
             .also { Log.d(LOG_TAG, "Binned cpu variants (variant, count): ${it.binnedValues()}") }
-            .countKeepingMin()
+            .countDroppingMin()
 
     private fun List<Int>.binnedValues() = groupingBy { it }.eachCount()
 
