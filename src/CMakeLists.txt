@@ -160,6 +160,8 @@ if (WHISPER_VITISAI)
     set(TARGET whisper.vitisai)
 
     add_library(${TARGET} OBJECT
+        vitisai/whisper-vitisai-helpers.h
+        vitisai/whisper-vitisai-helpers.cpp
         vitisai/whisper-vitisai-encoder.h
         vitisai/whisper-vitisai-encoder.cpp
         )
