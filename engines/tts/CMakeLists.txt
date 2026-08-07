@@ -288,6 +288,17 @@ set(TTS_CPP_LIB_SOURCES
     src/parler/sampler.cpp
     src/parler/dac.cpp
     src/parler/engine.cpp
+    # Audio8 engine (DualAR semantic LM + DAC-style codec with in-process cloning).
+    src/audio8/unicode.cpp
+    src/audio8/tokenizer.cpp
+    src/audio8/gguf.cpp
+    src/audio8/graph.cpp
+    src/audio8/lm.cpp
+    src/audio8/codec_ops.cpp
+    src/audio8/codec_decode.cpp
+    src/audio8/codec_encode.cpp
+    src/audio8/sampling.cpp
+    src/audio8/engine.cpp
 )
 
 if (TTS_CPP_BUILD_LIBRARY)
@@ -515,6 +526,13 @@ if (TTS_CPP_BUILD_EXECUTABLES)
     add_executable(cosyvoice-bench src/cosyvoice_bench.cpp)
     target_link_libraries(cosyvoice-bench PRIVATE tts-cpp)
     tts_cpp_apply_ccache(cosyvoice-bench)
+
+    # Audio8 end-to-end CLI: text -> 44.1 kHz WAV, with in-process cloning when
+    # the codec encoder GGUF is supplied.  See src/audio8_cli.cpp.
+    add_executable(audio8-cli src/audio8_cli.cpp)
+    target_link_libraries(audio8-cli PRIVATE tts-cpp)
+    target_include_directories(audio8-cli PRIVATE src)
+    tts_cpp_apply_ccache(audio8-cli)
 endif()
 
 if (TTS_CPP_BUILD_TESTS)
@@ -615,6 +633,14 @@ if (TTS_CPP_BUILD_TESTS)
     set(_tcb_jfk_wav            "${TTS_CPP_TEST_AUDIO_DIR}/jfk.wav")
     set(_tcb_parler_gguf        "${TTS_CPP_TEST_MODEL_DIR}/parler-mini-v1-f32.gguf")
     set(_tcb_parler_ref         "${TTS_CPP_TEST_REF_DIR}/parler-ref")
+    set(_tcb_audio8_lm          "${TTS_CPP_TEST_MODEL_DIR}/audio8-lm-f32.gguf")
+    set(_tcb_audio8_decoder     "${TTS_CPP_TEST_MODEL_DIR}/audio8-codec-decoder-f32.gguf")
+    set(_tcb_audio8_encoder     "${TTS_CPP_TEST_MODEL_DIR}/audio8-codec-encoder-f32.gguf")
+    set(_tcb_audio8_ref         "${TTS_CPP_TEST_REF_DIR}/audio8-ref")
+    set(_tcb_audio8_ref_clone   "${TTS_CPP_TEST_REF_DIR}/audio8-ref-clone")
+    # The recording the cloning fixtures were enrolled from, which the engine
+    # test hands to the codec encoder instead of pre-computed codes.
+    set(_tcb_audio8_ref_wav     "${TTS_CPP_TEST_AUDIO_DIR}/audio8-reference-en.wav")
     set(_tcb_parler_indic_gguf  "${TTS_CPP_TEST_MODEL_DIR}/parler-indic-f32.gguf")
     set(_tcb_parler_indic_ref   "${TTS_CPP_TEST_REF_DIR}/parler-indic-ref")
 
@@ -676,6 +702,82 @@ if (TTS_CPP_BUILD_TESTS)
         ARGS     "--vocab" "${_tcb_cosy_vocab}" "--merges" "${_tcb_cosy_merges}"
                  "--ref" "${_tcb_cosy_ref}/tokenizer_ref.txt"
         REQUIRES "${_tcb_cosy_vocab}" "${_tcb_cosy_merges}" "${_tcb_cosy_ref}/tokenizer_ref.txt")
+
+    # ---- Audio8 tests (fixtures from scripts/dump-audio8-*-reference.py) ----
+    set(_tcb_audio8_core_srcs
+        src/audio8/gguf.cpp
+        src/audio8/graph.cpp
+        src/backend_selection.cpp
+        src/log.cpp)
+
+    add_executable(test-audio8-tokenizer test/audio8/test_tokenizer.cpp
+        src/audio8/tokenizer.cpp src/audio8/unicode.cpp)
+    target_link_libraries(test-audio8-tokenizer PRIVATE ggml)
+    target_include_directories(test-audio8-tokenizer PRIVATE src)
+    tts_cpp_apply_ccache(test-audio8-tokenizer)
+    tts_cpp_register_test(test-audio8-tokenizer
+        LABEL    "fixture"
+        ARGS     "${_tcb_audio8_lm}" "${_tcb_audio8_ref}/tokenizer_ref.txt"
+        REQUIRES "${_tcb_audio8_lm}" "${_tcb_audio8_ref}/tokenizer_ref.txt")
+
+    add_executable(test-audio8-lm test/audio8/test_lm.cpp
+        src/audio8/lm.cpp src/audio8/tokenizer.cpp src/audio8/unicode.cpp
+        ${_tcb_audio8_core_srcs})
+    target_link_libraries(test-audio8-lm PRIVATE ggml)
+    target_include_directories(test-audio8-lm PRIVATE include src)
+    tts_cpp_apply_ccache(test-audio8-lm)
+    tts_cpp_register_test(test-audio8-lm
+        LABEL    "fixture"
+        ARGS     "${_tcb_audio8_lm}" "${_tcb_audio8_ref}"
+        REQUIRES "${_tcb_audio8_lm}" "${_tcb_audio8_ref}/sem_logits.npy")
+
+    add_executable(test-audio8-codec test/audio8/test_codec.cpp
+        src/audio8/codec_ops.cpp src/audio8/codec_decode.cpp src/audio8/codec_encode.cpp
+        ${_tcb_audio8_core_srcs})
+    target_link_libraries(test-audio8-codec PRIVATE ggml)
+    target_include_directories(test-audio8-codec PRIVATE include src)
+    tts_cpp_apply_ccache(test-audio8-codec)
+    tts_cpp_register_test(test-audio8-codec
+        LABEL    "fixture"
+        ARGS     "${_tcb_audio8_decoder}" "${_tcb_audio8_encoder}" "${_tcb_audio8_ref}"
+        REQUIRES "${_tcb_audio8_decoder}" "${_tcb_audio8_encoder}"
+                 "${_tcb_audio8_ref}/codec_wav.npy"
+                 "${_tcb_audio8_ref}/codec_enc_codes.npy")
+
+    add_executable(test-audio8-sampler test/audio8/test_sampler.cpp src/audio8/sampling.cpp)
+    target_include_directories(test-audio8-sampler PRIVATE src)
+    tts_cpp_apply_ccache(test-audio8-sampler)
+    tts_cpp_register_test(test-audio8-sampler
+        LABEL    "fixture"
+        ARGS     "${_tcb_audio8_ref}"
+        REQUIRES "${_tcb_audio8_ref}/filtered.npy" "${_tcb_audio8_ref}/meta.json")
+
+    # The repetition-aware window, which the fixture dumps decode greedily and
+    # therefore never exercise.  No fixtures, so it runs on a bare checkout.
+    add_executable(test-audio8-ras test/audio8/test_ras.cpp src/audio8/sampling.cpp)
+    target_include_directories(test-audio8-ras PRIVATE src)
+    # A window of zero used to pop an empty deque, which is undefined rather
+    # than observable: the sampler returns the same tokens either way, so only
+    # a hardened container turns the regression into a failure.  Unlike
+    # _GLIBCXX_DEBUG this leaves the ABI alone, and the target compiles its own
+    # copy of sampling.cpp rather than linking tts-cpp, so nothing else sees it.
+    target_compile_definitions(test-audio8-ras PRIVATE _GLIBCXX_ASSERTIONS)
+    tts_cpp_apply_ccache(test-audio8-ras)
+    tts_cpp_register_test(test-audio8-ras)
+
+    # End-to-end through the public engine, both the text path and the cloning
+    # path, so it links the whole library rather than the stage sources.
+    add_executable(test-audio8-engine test/audio8/test_engine.cpp)
+    target_link_libraries(test-audio8-engine PRIVATE tts-cpp ggml)
+    target_include_directories(test-audio8-engine PRIVATE include src)
+    tts_cpp_apply_ccache(test-audio8-engine)
+    tts_cpp_register_test(test-audio8-engine
+        LABEL    "fixture"
+        ARGS     "${_tcb_audio8_lm}" "${_tcb_audio8_decoder}" "${_tcb_audio8_encoder}"
+                 "${_tcb_audio8_ref}" "${_tcb_audio8_ref_clone}" "${_tcb_audio8_ref_wav}"
+        REQUIRES "${_tcb_audio8_lm}" "${_tcb_audio8_decoder}" "${_tcb_audio8_encoder}"
+                 "${_tcb_audio8_ref}/wav.npy" "${_tcb_audio8_ref_clone}/wav.npy"
+                 "${_tcb_audio8_ref_wav}")
 
     # ---- Parler-TTS tests (fixtures from scripts/parler/dump-reference.py) ----
     set(_tcb_parler_core_srcs
