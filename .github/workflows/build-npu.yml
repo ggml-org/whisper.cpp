@@ -50,7 +50,7 @@ jobs:
 # 1. NPU — Windows (self-hosted, RyzenAI runner)
 # ════════════════════════════════════════════════════════════════════════════════
   windows-npu:
-    runs-on: [self-hosted, Windows, stx, rai300_400]
+    runs-on: [self-hosted, Windows, stx-halo]
     needs: determine-tag
     continue-on-error: false
 
@@ -148,7 +148,7 @@ jobs:
 # 2. NPU — Linux (self-hosted, RyzenAI runner)
 # ════════════════════════════════════════════════════════════════════════════════
   linux-npu:
-    runs-on: [self-hosted, Linux, X64, stx, rai300-400]
+    runs-on: [self-hosted, Linux, stx-halo]
     needs: determine-tag
     continue-on-error: false
 
