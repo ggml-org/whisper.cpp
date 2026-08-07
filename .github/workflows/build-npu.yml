@@ -1,0 +1,240 @@
+name: NPU Build (Windows + Linux)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BRANCH_NAME:      ${{ github.head_ref || github.ref_name }}
+  FLEXML_WIN_URL:   "https://github.com/lemonade-sdk/whisper.cpp/releases/download/deps/flexmlrt1.7.0-win.zip"
+  FLEXML_LINUX_URL: "https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/deps/flexmlrt-1.8.0-linux.tar.gz"
+
+jobs:
+
+# ════════════════════════════════════════════════════════════════════════════════
+# 0. Determine version tag (same logic as main build.yml)
+# ════════════════════════════════════════════════════════════════════════════════
+  determine-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.tag.outputs.name }}
+      version:  ${{ steps.tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine tag and version
+        id: tag
+        shell: bash
+        run: |
+          BUILD_NUMBER=$(git rev-list --count HEAD)
+          SHORT_HASH=$(git rev-parse --short=7 HEAD)
+          CUSTOM_TAG="${{ github.event.inputs.pre_release_tag }}"
+
+          if [[ -n "$CUSTOM_TAG" ]]; then
+            TAG_NAME="$CUSTOM_TAG"
+          elif [[ "${{ env.BRANCH_NAME }}" == "main" || "${{ env.BRANCH_NAME }}" == "master" ]]; then
+            TAG_NAME="b${BUILD_NUMBER}"
+          else
+            SAFE=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
+            TAG_NAME="${SAFE}-b${BUILD_NUMBER}-${SHORT_HASH}"
+          fi
+
+          echo "name=$TAG_NAME"    >> $GITHUB_OUTPUT
+          echo "version=$TAG_NAME" >> $GITHUB_OUTPUT
+
+# ════════════════════════════════════════════════════════════════════════════════
+# 1. NPU — Windows (self-hosted, RyzenAI runner)
+# ════════════════════════════════════════════════════════════════════════════════
+  windows-npu:
+    runs-on: [self-hosted, Windows, stx, rai300_400]
+    needs: determine-tag
+    continue-on-error: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Install CMake if not available
+        shell: powershell
+        run: |
+          $installed = Get-Command cmake -ErrorAction SilentlyContinue
+          if (-not $installed) {
+            $ver = "3.28.1"
+            $url = "https://github.com/Kitware/CMake/releases/download/v$ver/cmake-$ver-windows-x86_64.msi"
+            Invoke-WebRequest -Uri $url -OutFile cmake.msi
+            Start-Process msiexec.exe -ArgumentList "/i cmake.msi /quiet /norestart" -Wait
+            $p = "C:\Program Files\CMake\bin"
+            $env:PATH = "$p;$env:PATH"
+            echo $p >> $env:GITHUB_PATH
+            cmake --version
+            if ($LASTEXITCODE -ne 0) { Write-Error "CMake install failed"; exit 1 }
+          } else { cmake --version }
+
+      - name: Download FlexML Runtime
+        shell: powershell
+        run: |
+          Invoke-WebRequest -Uri "${{ env.FLEXML_WIN_URL }}" -OutFile flexmlrt.zip
+          if (-Not (Test-Path "flexmlrt.zip")) { Write-Error "flexmlrt.zip not downloaded"; exit 1 }
+          if ((Get-Item "flexmlrt.zip").Length -eq 0) { Write-Error "flexmlrt.zip is empty"; exit 1 }
+          Write-Host "FlexML: $([math]::Round((Get-Item 'flexmlrt.zip').Length/1MB,2)) MB downloaded"
+
+      - name: Extract FlexML Runtime
+        shell: powershell
+        run: |
+          tar xvf flexmlrt.zip
+          if ($LASTEXITCODE -ne 0) { Write-Error "Extraction failed"; exit 1 }
+          $dirs = Get-ChildItem -Directory | Where-Object { $_.Name -like "flexmlrt*" }
+          if (-not $dirs) { Write-Error "No flexmlrt directory found after extraction"; exit 1 }
+          Write-Host "Extracted: $($dirs.Name)"
+
+      - name: Setup FlexML, configure and build
+        shell: cmd
+        run: |
+          cd flexmlrt
+          call setup.bat
+          if errorlevel 1 ( echo ERROR: FlexML setup.bat failed! & exit /b 1 )
+          cd ..
+          cmake -B build -A x64 ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DWHISPER_VITISAI=ON ^
+            -DWHISPER_BUILD_SERVER=ON ^
+            -DWHISPER_FLEXMLRT_LEGACY_RAI_OVERRIDES_MODE=ON
+          if errorlevel 1 ( echo ERROR: CMake configure failed! & exit /b 1 )
+          cmake --build build --config Release -j
+          if errorlevel 1 ( echo ERROR: Build failed! & exit /b 1 )
+
+      - name: List build output
+        shell: powershell
+        run: |
+          if (Test-Path "build/bin/Release") {
+            Get-ChildItem -Path "build/bin/Release" -Recurse | Format-Table Name, Length
+          } else { Write-Error "build/bin/Release not found"; exit 1 }
+
+      - name: Copy FlexML DLLs to build output
+        shell: powershell
+        run: |
+          $copied = 0
+          if (Test-Path "flexmlrt/bin") {
+            $d = Get-ChildItem -Path "flexmlrt/bin/*.dll" -ErrorAction SilentlyContinue
+            if ($d) { Copy-Item "flexmlrt/bin/*.dll" "build/bin/Release/" -Force; $copied += $d.Count }
+          }
+          if (Test-Path "flexmlrt/lib") {
+            $d = Get-ChildItem -Path "flexmlrt/lib/*.dll" -ErrorAction SilentlyContinue
+            if ($d) { Copy-Item "flexmlrt/lib/*.dll" "build/bin/Release/" -Force; $copied += $d.Count }
+          }
+          Write-Host "FlexML DLLs copied: $copied"
+
+      - name: Package
+        shell: powershell
+        run: |
+          $a = "whisper-${{ needs.determine-tag.outputs.version }}-windows-npu-x64.zip"
+          Compress-Archive -Path "build/bin/Release/*" -DestinationPath $a -Force
+          if (-not (Test-Path $a)) { Write-Error "Package creation failed"; exit 1 }
+          $mb = [math]::Round((Get-Item $a).Length/1MB,2)
+          Write-Host "Package: $a ($mb MB)"
+          "ARCHIVE=$a" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}
+
+# ════════════════════════════════════════════════════════════════════════════════
+# 2. NPU — Linux (self-hosted, RyzenAI runner)
+# ════════════════════════════════════════════════════════════════════════════════
+  linux-npu:
+    runs-on: [self-hosted, Linux, X64, stx, rai300-400]
+    needs: determine-tag
+    continue-on-error: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download FlexML Runtime
+        run: |
+          curl -L --fail --retry 3 --retry-delay 5 -o flexmlrt.tar.gz "${{ env.FLEXML_LINUX_URL }}"
+          if [ ! -f flexmlrt.tar.gz ] || [ ! -s flexmlrt.tar.gz ]; then
+            echo "::error::flexmlrt.tar.gz download failed or empty"; exit 1
+          fi
+          echo "FlexML: $(du -sh flexmlrt.tar.gz | cut -f1) downloaded"
+
+      - name: Extract FlexML Runtime
+        run: |
+          tar xf flexmlrt.tar.gz
+          FLEXML_DIR=$(find . -maxdepth 1 -type d -name "flexmlrt*" | head -1)
+          if [ -z "$FLEXML_DIR" ]; then echo "::error::No flexmlrt directory found"; exit 1; fi
+          echo "Extracted: $FLEXML_DIR"
+
+      - name: Setup FlexML environment
+        run: |
+          source flexmlrt/setup.sh
+          echo "FlexmlRT_DIR=$PWD/flexmlrt/share/cmake/FlexmlRT" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$PWD/flexmlrt/lib:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+
+      - name: Configure CMake
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWHISPER_VITISAI=ON \
+            -DWHISPER_BUILD_SERVER=ON
+
+      - name: Build
+        run: |
+          cmake --build build --config Release -j$(nproc) > build.log 2>&1
+          exit_code=$?
+          grep -E "error:|FAILED|Linking|Built target" build.log || true
+          if [ $exit_code -ne 0 ]; then
+            echo "--- Last 100 lines of build log ---"
+            tail -100 build.log
+            exit $exit_code
+          fi
+          echo "Build succeeded."
+
+      - name: Verify build output
+        run: |
+          if [ ! -f build/bin/whisper-cli ]; then
+            echo "::error::whisper-cli not found"
+            ls -lh build/bin/ 2>/dev/null || true
+            exit 1
+          fi
+          echo "Build output:"; ls -lh build/bin/whisper-cli
+          ldd build/bin/whisper-cli || true
+
+      - name: Copy FlexML shared libs
+        run: |
+          BIN="build/bin"
+          if [ -d flexmlrt/lib ]; then
+            find flexmlrt/lib -maxdepth 1 -name "*.so*" -exec cp -Pn {} "$BIN/" \; 2>/dev/null || true
+            echo "FlexML libs copied:"
+            ls -lh "$BIN"/*.so* 2>/dev/null || echo "(none)"
+          fi
+
+      - name: Set portable RPATH
+        run: |
+          command -v patchelf >/dev/null 2>&1 || { echo "::warning::patchelf not found, skipping RPATH patch"; exit 0; }
+          BIN="build/bin"
+          for f in "$BIN"/whisper-* "$BIN"/*.so*; do
+            [ -f "$f" ] && [ ! -L "$f" ] && file "$f" | grep -q ELF && \
+              patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true
+          done
+
+      - name: Package
+        run: |
+          VER="${{ needs.determine-tag.outputs.version }}"
+          ARCHIVE="whisper-${VER}-linux-npu-x64.tar.gz"
+          STAGE="whisper-${VER}-linux-npu-x64"
+          mkdir -p "$STAGE"
+          cp -r build/bin/* "$STAGE/"
+          tar -czf "$ARCHIVE" "$STAGE"
+          echo "Package: $ARCHIVE ($(du -sh $ARCHIVE | cut -f1))"
+          echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}
