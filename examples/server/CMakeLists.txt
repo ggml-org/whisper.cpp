@@ -2,7 +2,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(TARGET whisper-server)
-add_executable(${TARGET} server.cpp httplib.h)
+add_executable(${TARGET} server.cpp ../httplib.h)
+
+target_sources(${TARGET} PRIVATE ../server-common.cpp)
 
 include(DefaultTargetOptions)
 
