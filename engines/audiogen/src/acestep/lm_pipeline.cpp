@@ -445,6 +445,15 @@ bool lm_generate_codes(LMModel *              m,
     std::vector<int> uncond;
     if (use_cfg) uncond = build_lm_prompt_uncond_with_cot(bpe, /*negative_prompt=*/"");
 
+    if (const char * path = std::getenv("ACESTEP_LM_DUMP_TOKENS")) {
+        if (FILE * f = fopen(path, "w")) {
+            for (size_t i = 0; i < tokens.size(); i++) fprintf(f, "%s%d", i ? "," : "", tokens[i]);
+            fprintf(f, "\n");
+            fclose(f);
+            fprintf(stderr, "[lm-dbg] wrote prompt tokens -> %s (%zu tokens)\n", path, tokens.size());
+        }
+    }
+
     int max_tokens = params.max_new_tokens > 0 ? params.max_new_tokens : (int) (prompt.duration * 5) + 100;
 
     std::mt19937 rng(params.seed);
@@ -474,6 +483,13 @@ bool lm_generate_codes(LMModel *              m,
         fprintf(stderr, "[lm-pipeline] cond prefill failed\n");
         return false;
     }
+    if (const char * path = std::getenv("ACESTEP_LM_DUMP_LOGITS")) {
+        if (FILE * f = fopen(path, "wb")) {
+            fwrite(lc.data(), sizeof(float), lc.size(), f);
+            fclose(f);
+            fprintf(stderr, "[lm-dbg] wrote prefill logits -> %s (%zu floats)\n", path, lc.size());
+        }
+    }
     if (dump_layers_path && !layer_states.empty()) {
         const int32_t n_layers  = lm_model_config(m).n_layers;
         const int32_t per_layer = (int32_t) (layer_states.size() / (size_t) n_layers);
@@ -493,11 +509,13 @@ bool lm_generate_codes(LMModel *              m,
             return false;
         }
     }
+    const bool batch_cfg = use_cfg && lm_model_supports_batched_decode(m);
     if (params.verbose)
         fprintf(stderr,
-                "[lm-pipeline] prefill cond=%zu uncond=%zu, max_new=%d, temp=%.2f top_p=%.2f top_k=%d cfg=%.2f%s\n",
+                "[lm-pipeline] prefill cond=%zu uncond=%zu, max_new=%d, temp=%.2f top_p=%.2f top_k=%d cfg=%.2f%s%s\n",
                 tokens.size(), uncond.size(), max_tokens, params.temperature, params.top_p, params.top_k,
-                use_cfg ? params.cfg_scale : 1.0f, use_cfg ? "" : " (CFG off)");
+                use_cfg ? params.cfg_scale : 1.0f, use_cfg ? "" : " (CFG off)",
+                batch_cfg ? " (batched decode)" : "");
 
     int tok = combine_mask_sample();
     if (tok != TOKEN_IM_END && tok >= AUDIO_CODE_BASE && tok < AUDIO_CODE_BASE + AUDIO_CODE_COUNT) {
@@ -506,13 +524,28 @@ bool lm_generate_codes(LMModel *              m,
 
     for (int step = 0; step < max_tokens && tok != TOKEN_IM_END; step++) {
         int32_t t = (int32_t) tok;
-        if (!lm_model_forward(m, &t, 1, lc, 0)) {
-            fprintf(stderr, "[lm-pipeline] cond decode step %d failed\n", step);
-            return false;
-        }
-        if (use_cfg && !lm_model_forward(m, &t, 1, lu, 1)) {
-            fprintf(stderr, "[lm-pipeline] uncond decode step %d failed\n", step);
-            return false;
+        if (batch_cfg) {
+            const int32_t ids[2] = { t, t };
+            const int     sets[2] = { 0, 1 };
+            std::vector<float> batched;
+            if (!lm_model_forward_batch(m, ids, sets, 2, batched, TOKEN_IM_END)) {
+                fprintf(stderr, "[lm-pipeline] batched CFG decode step %d failed\n", step);
+                return false;
+            }
+            const int out_v = V - TOKEN_IM_END;
+            lc.assign((size_t) V, -1e9f);
+            lu.assign((size_t) V, -1e9f);
+            std::copy_n(batched.data(), out_v, lc.data() + TOKEN_IM_END);
+            std::copy_n(batched.data() + out_v, out_v, lu.data() + TOKEN_IM_END);
+        } else {
+            if (!lm_model_forward(m, &t, 1, lc, 0)) {
+                fprintf(stderr, "[lm-pipeline] cond decode step %d failed\n", step);
+                return false;
+            }
+            if (use_cfg && !lm_model_forward(m, &t, 1, lu, 1)) {
+                fprintf(stderr, "[lm-pipeline] uncond decode step %d failed\n", step);
+                return false;
+            }
         }
         tok = combine_mask_sample();
         if (tok == TOKEN_IM_END) break;

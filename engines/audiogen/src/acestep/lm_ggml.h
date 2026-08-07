@@ -8,8 +8,11 @@
 // and a tied LM head (logits = embed_tokens^T @ hidden). Ported from
 // acestep.cpp/src/qwen3-lm.h. No new ggml op.
 //
-// This is the model core (CPU, single KV set, F32 attention). The BPE tokenizer,
-// metadata FSM and top-k/p sampling live above it in the pipeline.
+// This is the model core. It keeps independent KV sets for conditional and
+// unconditional decoding, uses F32 flash attention plus batched CFG when the
+// selected GPU advertises support, and retains the F32 manual-attention path as
+// the CPU/unsupported-backend fallback. The BPE tokenizer, metadata FSM and
+// top-k/p sampling live above it in the pipeline.
 
 #include "ggml-backend.h"
 
@@ -57,5 +60,13 @@ int  lm_kv_pos(const LMModel * m, int set = 0);
 // production paths.
 bool lm_model_forward(LMModel * m, const int32_t * token_ids, int n_tokens, std::vector<float> & logits_out,
                       int set = 0, std::vector<float> * layer_states_out = nullptr);
+
+// Decode one token for each KV set in a single batched graph. `sets` must name
+// consecutive caches and `logit_offset` optionally projects only the tied-head
+// rows [logit_offset, vocab_size), matching ACE-Step's Phase-2 compact head.
+// Returns logits as N consecutive vectors of size vocab_size-logit_offset.
+bool lm_model_forward_batch(LMModel * m, const int32_t * token_ids, const int * sets, int n,
+                            std::vector<float> & logits_out, int logit_offset = 0);
+bool lm_model_supports_batched_decode(const LMModel * m);
 
 } // namespace tts_cpp::acestep

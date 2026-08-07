@@ -698,6 +698,46 @@ void dit_build_schedule(float shift, int num_steps, std::vector<float> & schedul
     }
 }
 
+void dit_apply_haar_dcw(std::vector<float> &       x_next,
+                        const std::vector<float> & denoised,
+                        int                        T,
+                        int                        C,
+                        int                        N,
+                        float                      low_scale,
+                        float                      high_scale) {
+    const size_t expected = (size_t) T * C * N;
+    if (T <= 0 || C <= 0 || N <= 0 || x_next.size() != expected || denoised.size() != expected) return;
+    if (low_scale == 0.0f && high_scale == 0.0f) return;
+
+    // Single-level orthonormal Haar DWT/IDWT along time. For an odd T, the
+    // missing right sample is zero, matching pytorch_wavelets mode="zero".
+    const float inv_sqrt2 = 1.0f / std::sqrt(2.0f);
+    for (int b = 0; b < N; ++b) {
+        const size_t batch = (size_t) b * T * C;
+        for (int t = 0; t < T; t += 2) {
+            const bool   has_odd = t + 1 < T;
+            const size_t even    = batch + (size_t) t * C;
+            const size_t odd     = even + C;
+            for (int c = 0; c < C; ++c) {
+                const float xe = x_next[even + c];
+                const float xo = has_odd ? x_next[odd + c] : 0.0f;
+                const float ye = denoised[even + c];
+                const float yo = has_odd ? denoised[odd + c] : 0.0f;
+
+                float x_low  = (xe + xo) * inv_sqrt2;
+                float x_high = (xe - xo) * inv_sqrt2;
+                const float y_low  = (ye + yo) * inv_sqrt2;
+                const float y_high = (ye - yo) * inv_sqrt2;
+
+                x_low += low_scale * (x_low - y_low);
+                x_high += high_scale * (x_high - y_high);
+                x_next[even + c] = (x_low + x_high) * inv_sqrt2;
+                if (has_odd) x_next[odd + c] = (x_low - x_high) * inv_sqrt2;
+            }
+        }
+    }
+}
+
 bool dit_sample(DitModel * m, const DitSampleParams & p, std::vector<float> & latent_out) {
     const DitConfig & c      = m->cfg;
     const int         Oc     = c.out_channels;                 // 64 (noisy latent channels)
@@ -757,6 +797,12 @@ bool dit_sample(DitModel * m, const DitSampleParams & p, std::vector<float> & la
     }
 
     std::vector<float> vt;
+    std::vector<float> xt_before;
+    std::vector<float> denoised;
+    if (p.dcw_enabled) {
+        xt_before.resize(n_per * N);
+        denoised.resize(n_per * N);
+    }
     for (int step = 0; step < p.num_steps; step++) {
         if (p.on_step && !p.on_step(step, p.num_steps)) return false;
         const float t_curr = p.schedule[step];
@@ -794,8 +840,25 @@ bool dit_sample(DitModel * m, const DitSampleParams & p, std::vector<float> & la
         // Euler ODE step. Final step integrates all the way to x0 (t_next = 0).
         const float t_next = (step == p.num_steps - 1) ? 0.0f : p.schedule[step + 1];
         const float dt     = t_curr - t_next;
+        if (p.dcw_enabled) xt_before = xt;
         for (size_t i = 0; i < (size_t) n_per * N; i++) {
             xt[i] -= vt[i] * dt;
+        }
+
+        // Official ACE-Step DCW "double" mode. Reconstruct the model's clean
+        // estimate from the pre-step latent, then push x_next's low/high Haar
+        // bands away from it with complementary timestep schedules.
+        if (p.dcw_enabled) {
+            for (size_t i = 0; i < (size_t) n_per * N; ++i) {
+                denoised[i] = xt_before[i] - vt[i] * t_curr;
+            }
+            dit_apply_haar_dcw(xt,
+                               denoised,
+                               T,
+                               Oc,
+                               N,
+                               t_curr * p.dcw_scaler,
+                               (1.0f - t_curr) * p.dcw_high_scaler);
         }
     }
 

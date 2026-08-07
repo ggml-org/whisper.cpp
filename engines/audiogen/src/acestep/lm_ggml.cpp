@@ -42,9 +42,12 @@ struct LMModel {
     ggml_context *             kv_ctx  = nullptr;
     ggml_backend_buffer_t      kv_buf  = nullptr;
     int                        n_sets  = 1;
+    std::vector<ggml_tensor *> kv_k4;
+    std::vector<ggml_tensor *> kv_v4;
     std::vector<ggml_tensor *> kv_k;
     std::vector<ggml_tensor *> kv_v;
     std::vector<int>           kv_pos;  // per set
+    bool                       use_flash_attn = false;
 };
 
 static Qwen3Config to_q3(const LMConfig & c) {
@@ -62,6 +65,31 @@ static Qwen3Config to_q3(const LMConfig & c) {
     // matmul paths clamp them at 65504 and generation degenerates.
     q.prec         = GGML_PREC_F32;
     return q;
+}
+
+static bool lm_backend_supports_flash_attn(ggml_backend_t backend, const Qwen3Config & c) {
+    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+    if (!dev || (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU &&
+                 ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_IGPU)) {
+        return false;
+    }
+
+    ggml_init_params ip{ ggml_tensor_overhead() * 8, nullptr, true };
+    ggml_context * ctx = ggml_init(ip);
+    if (!ctx) return false;
+    ggml_tensor * q = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, c.head_dim, 16, c.n_heads);
+    ggml_tensor * k = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, c.head_dim, 256, c.n_kv_heads);
+    ggml_tensor * v = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, c.head_dim, 256, c.n_kv_heads);
+    ggml_tensor * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 256, 16);
+    ggml_tensor * op = ggml_flash_attn_ext(ctx, q, k, v, mask, 1.0f / sqrtf((float) c.head_dim), 0.0f, 0.0f);
+    if (!op) {
+        ggml_free(ctx);
+        return false;
+    }
+    ggml_flash_attn_ext_set_prec(op, GGML_PREC_F32);
+    const bool supported = ggml_backend_supports_op(backend, op);
+    ggml_free(ctx);
+    return supported;
 }
 
 LMModel * lm_model_load(const std::string & path, ggml_backend_t backend, int max_seq_len, bool verbose,
@@ -109,6 +137,7 @@ LMModel * lm_model_load(const std::string & path, ggml_backend_t backend, int ma
         delete m;
         return nullptr;
     }
+    m->use_flash_attn = lm_backend_supports_flash_attn(backend, m->q3);
 
     // CPU backend: map the quantised weights straight off the mmap (no dirty RAM).
     const bool            mapped  = ggml_backend_buft_is_host(ggml_backend_get_default_buffer_type(backend));
@@ -152,15 +181,26 @@ LMModel * lm_model_load(const std::string & path, ggml_backend_t backend, int ma
 
     // KV cache: n_sets * n_layers tensors.
     const int D = c.head_dim, Nkv = c.n_kv_heads, S = c.max_seq_len, Lc = c.n_layers, NS = m->n_sets;
-    ggml_init_params kp{ ggml_tensor_overhead() * (size_t) (NS * Lc * 2 + 4), nullptr, /*no_alloc=*/true };
+    ggml_init_params kp{
+        ggml_tensor_overhead() * (size_t) (Lc * 2 + NS * Lc * 2 + 4), nullptr, /*no_alloc=*/true
+    };
     m->kv_ctx = ggml_init(kp);
+    m->kv_k4.resize((size_t) Lc);
+    m->kv_v4.resize((size_t) Lc);
     m->kv_k.resize((size_t) NS * Lc);
     m->kv_v.resize((size_t) NS * Lc);
-    for (int s = 0; s < NS; s++) {
-        for (int l = 0; l < Lc; l++) {
+    for (int l = 0; l < Lc; l++) {
+        m->kv_k4[l] = ggml_new_tensor_4d(m->kv_ctx, GGML_TYPE_F16, D, S, Nkv, NS);
+        m->kv_v4[l] = ggml_new_tensor_4d(m->kv_ctx, GGML_TYPE_F16, D, S, Nkv, NS);
+        ggml_set_name(m->kv_k4[l], ("kv_k4_" + std::to_string(l)).c_str());
+        ggml_set_name(m->kv_v4[l], ("kv_v4_" + std::to_string(l)).c_str());
+        for (int s = 0; s < NS; s++) {
             int idx      = s * Lc + l;
-            m->kv_k[idx] = ggml_new_tensor_3d(m->kv_ctx, GGML_TYPE_F16, D, S, Nkv);
-            m->kv_v[idx] = ggml_new_tensor_3d(m->kv_ctx, GGML_TYPE_F16, D, S, Nkv);
+            const size_t off = (size_t) s * m->kv_k4[l]->nb[3];
+            m->kv_k[idx] = ggml_view_3d(m->kv_ctx, m->kv_k4[l], D, S, Nkv,
+                                        m->kv_k4[l]->nb[1], m->kv_k4[l]->nb[2], off);
+            m->kv_v[idx] = ggml_view_3d(m->kv_ctx, m->kv_v4[l], D, S, Nkv,
+                                        m->kv_v4[l]->nb[1], m->kv_v4[l]->nb[2], off);
             ggml_set_name(m->kv_k[idx], ("kv_k_" + std::to_string(s) + "_" + std::to_string(l)).c_str());
             ggml_set_name(m->kv_v[idx], ("kv_v_" + std::to_string(s) + "_" + std::to_string(l)).c_str());
         }
@@ -182,9 +222,9 @@ LMModel * lm_model_load(const std::string & path, ggml_backend_t backend, int ma
     if (verbose) {
         const size_t kv_bytes = (size_t) NS * Lc * 2 * D * S * Nkv * sizeof(uint16_t);
         fprintf(stderr,
-                "[acestep-lm] loaded %s: %.1f MB weights, %d layers H=%d V=%d Nh=%d/%d D=%d, KV %.1f MB (%d sets)\n",
+                "[acestep-lm] loaded %s: %.1f MB weights, %d layers H=%d V=%d Nh=%d/%d D=%d, KV %.1f MB (%d sets), FA=%s\n",
                 path.c_str(), lm_model_weight_bytes(m) / 1048576.0, c.n_layers, c.hidden_size, c.vocab_size, c.n_heads,
-                c.n_kv_heads, c.head_dim, kv_bytes / 1048576.0, NS);
+                c.n_kv_heads, c.head_dim, kv_bytes / 1048576.0, NS, m->use_flash_attn ? "on" : "off");
     }
 
     if (mapped) {
@@ -215,6 +255,9 @@ size_t           lm_model_weight_bytes(const LMModel * m) {
     return alloc + m->mapped_bytes;  // allocated (F32) + mmapped weights
 }
 int  lm_num_kv_sets(const LMModel * m) { return m->n_sets; }
+bool lm_model_supports_batched_decode(const LMModel * m) {
+    return m && m->use_flash_attn && m->n_sets > 1;
+}
 void lm_reset(LMModel * m, int set) { if (set >= 0 && set < m->n_sets) m->kv_pos[set] = 0; }
 int  lm_kv_pos(const LMModel * m, int set) { return (set >= 0 && set < m->n_sets) ? m->kv_pos[set] : 0; }
 
@@ -222,7 +265,7 @@ int  lm_kv_pos(const LMModel * m, int set) { return (set >= 0 && set < m->n_sets
 // [kv_pos..kv_pos+S) then reads the [0, n_kv_pad) window. F32 attention.
 static ggml_tensor * lm_attn(ggml_context * ctx, ggml_cgraph * gf, const Qwen3Config & c, Qwen3Layer * ly,
                              ggml_tensor * x, ggml_tensor * positions, ggml_tensor * mask, ggml_tensor * kv_rows,
-                             ggml_tensor * cache_k, ggml_tensor * cache_v, int n_kv_pad, int S) {
+                             ggml_tensor * cache_k, ggml_tensor * cache_v, int n_kv_pad, int S, bool use_flash_attn) {
     const int D = c.head_dim, Nh = c.n_heads, Nkv = c.n_kv_heads;
 
     ggml_tensor * q = q3_linear(ctx, ly->q_proj, x, c.prec);
@@ -239,7 +282,7 @@ static ggml_tensor * lm_attn(ggml_context * ctx, ggml_cgraph * gf, const Qwen3Co
     q = ggml_rope_ext(ctx, q, positions, nullptr, D, 2, 0, c.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
     k = ggml_rope_ext(ctx, k, positions, nullptr, D, 2, 0, c.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
 
-    q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));  // [D, S, Nh]
+    q = ggml_permute(ctx, q, 0, 2, 1, 3);                   // [D, S, Nh]
     k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));  // [D, S, Nkv]
     v = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3));  // [D, S, Nkv]
 
@@ -261,7 +304,13 @@ static ggml_tensor * lm_attn(ggml_context * ctx, ggml_cgraph * gf, const Qwen3Co
     ggml_tensor * v_full = ggml_view_3d(ctx, cache_v, D, n_kv_pad, Nkv, cache_v->nb[1], cache_v->nb[2], 0);
 
     const float   scale = 1.0f / sqrtf((float) D);
-    ggml_tensor * attn  = q3_attn(ctx, q, k_full, v_full, mask, scale, c.prec);  // [D, Nh, S]
+    ggml_tensor * attn;
+    if (use_flash_attn) {
+        attn = ggml_flash_attn_ext(ctx, q, k_full, v_full, mask, scale, 0.0f, 0.0f);
+        ggml_flash_attn_ext_set_prec(attn, c.prec);
+    } else {
+        attn = q3_attn(ctx, ggml_cont(ctx, q), k_full, v_full, mask, scale, c.prec);
+    }
     attn                = ggml_reshape_2d(ctx, attn, (int64_t) Nh * D, S);
     return q3_linear(ctx, ly->o_proj, attn, c.prec);
 }
@@ -307,7 +356,7 @@ bool lm_model_forward(LMModel * m, const int32_t * token_ids, int n_tokens, std:
         ggml_tensor * norm = q3_rms_norm_w(ctx, hidden, ly->input_norm, c.rms_norm_eps);
         int           idx  = set * c.n_layers + l;
         ggml_tensor * attn = lm_attn(ctx, gf, c, ly, norm, positions, mask, kv_rows, m->kv_k[idx], m->kv_v[idx],
-                                     n_kv_pad, S);
+                                     n_kv_pad, S, m->use_flash_attn);
         hidden             = ggml_add(ctx, hidden, attn);
         norm               = q3_rms_norm_w(ctx, hidden, ly->post_norm, c.rms_norm_eps);
         ggml_tensor * mlp  = q3_build_mlp(ctx, ly, norm, c.prec);
@@ -370,6 +419,143 @@ bool lm_model_forward(LMModel * m, const int32_t * token_ids, int n_tokens, std:
     ggml_gallocr_free(ga);
     ggml_free(ctx);
     m->kv_pos[set] += S;
+    return true;
+}
+
+bool lm_model_forward_batch(LMModel * m, const int32_t * token_ids, const int * sets, int N,
+                            std::vector<float> & logits_out, int logit_offset) {
+    if (!m || !m->use_flash_attn || N < 1 || N > m->n_sets || logit_offset < 0 ||
+        logit_offset >= m->cfg.vocab_size) {
+        return false;
+    }
+
+    const int s0 = sets[0];
+    for (int i = 0; i < N; i++) {
+        if (sets[i] != s0 + i || sets[i] < 0 || sets[i] >= m->n_sets) return false;
+    }
+
+    const Qwen3Config & c = m->q3;
+    const LMConfig & lc = m->cfg;
+    const int H = c.hidden_size, D = c.head_dim, Nh = c.n_heads, Nkv = c.n_kv_heads;
+    int max_kv_len = 0;
+    for (int i = 0; i < N; i++) {
+        const int kv_len = m->kv_pos[sets[i]] + 1;
+        if (kv_len > lc.max_seq_len) return false;
+        max_kv_len = std::max(max_kv_len, kv_len);
+    }
+    int n_kv_pad = (int) GGML_PAD(max_kv_len, 256);
+    if (n_kv_pad > lc.max_seq_len) n_kv_pad = lc.max_seq_len;
+
+    const size_t nodes = 16384;
+    ggml_init_params gp{ ggml_tensor_overhead() * 4096 + ggml_graph_overhead_custom(nodes, false), nullptr, true };
+    ggml_context * ctx = ggml_init(gp);
+
+    ggml_tensor * t_ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, N);
+    ggml_set_input(t_ids);
+    ggml_tensor * positions = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, N);
+    ggml_set_input(positions);
+    ggml_tensor * kv_rows = ggml_new_tensor_3d(ctx, GGML_TYPE_I64, 1, 1, N);
+    ggml_set_input(kv_rows);
+    ggml_tensor * mask = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, n_kv_pad, 1, 1, N);
+    ggml_set_input(mask);
+
+    ggml_cgraph * gf = ggml_new_graph_custom(ctx, nodes, false);
+    ggml_tensor * hidden = ggml_get_rows(ctx, m->embed_tokens, t_ids);  // [H, N]
+
+    for (int l = 0; l < c.n_layers; l++) {
+        Qwen3Layer * ly = &m->layers[l];
+        ggml_tensor * norm = q3_rms_norm_w(ctx, hidden, ly->input_norm, c.rms_norm_eps);
+
+        ggml_tensor * q = q3_linear(ctx, ly->q_proj, norm, c.prec);
+        ggml_tensor * k = q3_linear(ctx, ly->k_proj, norm, c.prec);
+        ggml_tensor * v = q3_linear(ctx, ly->v_proj, norm, c.prec);
+        q = ggml_reshape_3d(ctx, q, D, Nh, N);
+        k = ggml_reshape_3d(ctx, k, D, Nkv, N);
+        v = ggml_reshape_3d(ctx, v, D, Nkv, N);
+
+        q = ggml_mul(ctx, ggml_rms_norm(ctx, q, c.rms_norm_eps), q3_as_f32(ctx, ly->q_norm));
+        k = ggml_mul(ctx, ggml_rms_norm(ctx, k, c.rms_norm_eps), q3_as_f32(ctx, ly->k_norm));
+        q = ggml_rope_ext(ctx, q, positions, nullptr, D, 2, 0, c.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        k = ggml_rope_ext(ctx, k, positions, nullptr, D, 2, 0, c.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
+        q = ggml_cont(ctx, q);
+        k = ggml_cont(ctx, k);
+        v = ggml_cont(ctx, v);
+
+        const size_t off = (size_t) s0 * m->kv_k4[l]->nb[3];
+        ggml_tensor * k_sets = ggml_view_4d(ctx, m->kv_k4[l], D, lc.max_seq_len, Nkv, N,
+                                            m->kv_k4[l]->nb[1], m->kv_k4[l]->nb[2],
+                                            m->kv_k4[l]->nb[3], off);
+        ggml_tensor * v_sets = ggml_view_4d(ctx, m->kv_v4[l], D, lc.max_seq_len, Nkv, N,
+                                            m->kv_v4[l]->nb[1], m->kv_v4[l]->nb[2],
+                                            m->kv_v4[l]->nb[3], off);
+        ggml_tensor * k_new = ggml_reshape_4d(ctx, k, D, 1, Nkv, N);
+        ggml_tensor * v_new = ggml_reshape_4d(ctx, v, D, 1, Nkv, N);
+        ggml_build_forward_expand(gf, ggml_set_rows(ctx, k_sets, k_new, kv_rows));
+        ggml_build_forward_expand(gf, ggml_set_rows(ctx, v_sets, v_new, kv_rows));
+
+        ggml_tensor * q4 = ggml_reshape_4d(ctx, q, D, 1, Nh, N);
+        ggml_tensor * k_batch = ggml_view_4d(ctx, m->kv_k4[l], D, n_kv_pad, Nkv, N,
+                                             m->kv_k4[l]->nb[1], m->kv_k4[l]->nb[2],
+                                             m->kv_k4[l]->nb[3], off);
+        ggml_tensor * v_batch = ggml_view_4d(ctx, m->kv_v4[l], D, n_kv_pad, Nkv, N,
+                                             m->kv_v4[l]->nb[1], m->kv_v4[l]->nb[2],
+                                             m->kv_v4[l]->nb[3], off);
+        const float scale = 1.0f / sqrtf((float) D);
+        ggml_tensor * attn = ggml_flash_attn_ext(ctx, q4, k_batch, v_batch, mask, scale, 0.0f, 0.0f);
+        ggml_flash_attn_ext_set_prec(attn, c.prec);
+        attn = ggml_reshape_2d(ctx, attn, Nh * D, N);
+
+        hidden = ggml_add(ctx, hidden, q3_linear(ctx, ly->o_proj, attn, c.prec));
+        norm = q3_rms_norm_w(ctx, hidden, ly->post_norm, c.rms_norm_eps);
+        hidden = ggml_add(ctx, hidden, q3_build_mlp(ctx, ly, norm, c.prec));
+    }
+
+    hidden = q3_rms_norm_w(ctx, hidden, m->final_norm, c.rms_norm_eps);
+    const int out_V = lc.vocab_size - logit_offset;
+    ggml_tensor * lm_weight = m->embed_tokens;
+    if (logit_offset > 0) {
+        lm_weight = ggml_view_2d(ctx, m->embed_tokens, H, out_V, m->embed_tokens->nb[1],
+                                 (size_t) logit_offset * m->embed_tokens->nb[1]);
+    }
+    ggml_tensor * lgt = q3_linear(ctx, lm_weight, hidden, c.prec);  // [out_V, N]
+    ggml_set_output(lgt);
+    ggml_build_forward_expand(gf, lgt);
+
+    ggml_gallocr_t ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m->backend));
+    if (!ga || !ggml_gallocr_alloc_graph(ga, gf)) {
+        if (ga) ggml_gallocr_free(ga);
+        ggml_free(ctx);
+        return false;
+    }
+
+    ggml_backend_tensor_set(t_ids, token_ids, 0, (size_t) N * sizeof(int32_t));
+    std::vector<int32_t> pos(N);
+    std::vector<int64_t> rows(N);
+    std::vector<uint16_t> md((size_t) n_kv_pad * N);
+    for (int i = 0; i < N; i++) {
+        const int kv_pos = m->kv_pos[sets[i]];
+        pos[i] = kv_pos;
+        rows[i] = (int64_t) kv_pos;
+        for (int j = 0; j < n_kv_pad; j++) {
+            md[(size_t) i * n_kv_pad + j] = ggml_fp32_to_fp16(j <= kv_pos ? 0.0f : -INFINITY);
+        }
+    }
+    ggml_backend_tensor_set(positions, pos.data(), 0, (size_t) N * sizeof(int32_t));
+    ggml_backend_tensor_set(kv_rows, rows.data(), 0, (size_t) N * sizeof(int64_t));
+    ggml_backend_tensor_set(mask, md.data(), 0, md.size() * sizeof(uint16_t));
+
+    if (ggml_backend_graph_compute(m->backend, gf) != GGML_STATUS_SUCCESS) {
+        ggml_gallocr_free(ga);
+        ggml_free(ctx);
+        return false;
+    }
+
+    logits_out.resize((size_t) out_V * N);
+    ggml_backend_tensor_get(lgt, logits_out.data(), 0, logits_out.size() * sizeof(float));
+    for (int i = 0; i < N; i++) m->kv_pos[sets[i]]++;
+
+    ggml_gallocr_free(ga);
+    ggml_free(ctx);
     return true;
 }
 

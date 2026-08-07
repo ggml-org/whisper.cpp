@@ -7,13 +7,14 @@
 //
 // Coverage:
 //   1. dit_build_schedule  — flow-matching time schedule (shift/steps).
-//   2. philox_randn        — Philox4x32-10 + Box-Muller (torch.randn parity).
-//   3. fsq_decode_index    — FSQ index -> 6 normalized dims (strides 8/8/8/5/5/5).
-//   4. sample_top_k_p      — top-k/top-p LM sampler (determinism + argmax).
-//   5. vae_progress_pct    — VAE decode progress clamp/monotonicity.
-//   5b. vae_shrink_window_core — chunked-decode window vs the backend alloc cap.
-//   6. GPU device types    — discrete and integrated GPUs are selectable.
-//   7. stage placement     — which backend the LM / detokenizer / encoders run on.
+//   2. dit_apply_haar_dcw  — official sampler-side low/high wavelet correction.
+//   3. philox_randn        — Philox4x32-10 + Box-Muller (torch.randn parity).
+//   4. fsq_decode_index    — FSQ index -> 6 normalized dims (strides 8/8/8/5/5/5).
+//   5. sample_top_k_p      — top-k/top-p LM sampler (determinism + argmax).
+//   6. vae_progress_pct    — VAE decode progress clamp/monotonicity.
+//   6b. vae_shrink_window_core — chunked-decode window vs the backend alloc cap.
+//   7. GPU device types    — discrete and integrated GPUs are selectable.
+//   8. stage placement     — which backend the LM / detokenizer / encoders run on.
 
 #include "backend_registry.h"
 #include "dit_ggml.h"
@@ -65,7 +66,38 @@ void test_schedule() {
     for (float v : sched) CHECK(v > 0.0f && v <= 1.0f);
 }
 
-// 2. philox_randn ------------------------------------------------------------
+// 2. Haar DCW ----------------------------------------------------------------
+void test_haar_dcw() {
+    using tts_cpp::acestep::dit_apply_haar_dcw;
+
+    // Low-band correction moves both samples in a pair together.
+    std::vector<float> x = { 2.0f, 4.0f };
+    const std::vector<float> y_low = { 1.0f, 3.0f };
+    dit_apply_haar_dcw(x, y_low, /*T=*/2, /*C=*/1, /*N=*/1, 0.1f, 0.0f);
+    CHECK(approx(x[0], 2.1f));
+    CHECK(approx(x[1], 4.1f));
+
+    // High-band correction changes the contrast inside the temporal pair.
+    x = { 2.0f, 4.0f };
+    const std::vector<float> y_high = { 1.0f, 5.0f };
+    dit_apply_haar_dcw(x, y_high, 2, 1, 1, 0.0f, 0.2f);
+    CHECK(approx(x[0], 2.2f));
+    CHECK(approx(x[1], 3.8f));
+
+    // Odd temporal lengths use a zero-padded partner and discard it after IDWT.
+    x = { 2.0f };
+    const std::vector<float> y_odd = { 1.0f };
+    dit_apply_haar_dcw(x, y_odd, 1, 1, 1, 0.1f, 0.2f);
+    CHECK(approx(x[0], 2.15f));
+
+    // Disabled coefficients are an exact no-op.
+    x = { -3.0f, 7.0f };
+    const std::vector<float> before = x;
+    dit_apply_haar_dcw(x, y_low, 2, 1, 1, 0.0f, 0.0f);
+    CHECK(x == before);
+}
+
+// 3. philox_randn ------------------------------------------------------------
 void test_philox() {
     using tts_cpp::acestep::philox_randn;
 
@@ -328,12 +360,21 @@ void test_stage_placement() {
 
     const PlacementOverrides none;
 
-    // -- allowlist: LM + detokenizer stay on the GPU ---------------------------
-    for (const char * allowed : { "Vulkan", "MTL", "Metal", "OpenCL" }) {
+    // -- allowlist: Metal and OpenCL keep LM + detokenizer on GPU ---------------
+    for (const char * allowed : { "MTL", "Metal", "OpenCL" }) {
         StagePlacement p = resolve_stage_placement(allowed, none);
         CHECK(p.lm_on_gpu);
         CHECK(p.detok_on_gpu);
         CHECK(p.enc_on_gpu);  // encoders follow the GPU on every backend
+    }
+
+    // Vulkan is validated for every stage except the autoregressive LM. On
+    // Mali-G715, GPU LM logits collapse to repeated codes and truncate songs.
+    {
+        StagePlacement p = resolve_stage_placement("Vulkan", none);
+        CHECK(!p.lm_on_gpu);
+        CHECK(p.detok_on_gpu);
+        CHECK(p.enc_on_gpu);
     }
 
     // -- fallback: everything else keeps the shipping CPU placement -----------
@@ -379,7 +420,7 @@ void test_stage_placement() {
         ov.detok_cpu     = true;
         StagePlacement p = resolve_stage_placement("Vulkan", ov);
         CHECK(!p.detok_on_gpu);
-        CHECK(p.lm_on_gpu);
+        CHECK(!p.lm_on_gpu);
     }
 
     // Precedence: CPU wins when both hatches are set for the same stage, on an
@@ -401,8 +442,7 @@ void test_stage_placement() {
         ov.encoders_cpu  = true;
         StagePlacement p = resolve_stage_placement(name, ov);
         CHECK(!p.enc_on_gpu);
-        CHECK(p.lm_on_gpu == (backend_name_is_metal(name) || backend_name_is_vulkan(name) ||
-                              backend_name_is_opencl(name)));
+        CHECK(p.lm_on_gpu == (backend_name_is_metal(name) || backend_name_is_opencl(name)));
     }
 }
 
@@ -457,6 +497,7 @@ void test_placement_env() {
 
 int main() {
     test_schedule();
+    test_haar_dcw();
     test_philox();
     test_fsq();
     test_sampler();

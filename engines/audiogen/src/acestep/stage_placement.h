@@ -59,17 +59,18 @@ struct StagePlacement {
 //
 // The LM and the detokenizer are allowlisted rather than denylisted: a backend
 // nobody has measured keeps the CPU placement and cannot silently regress
-// generated audio. Widen the list once a backend is measured; ACESTEP_LM_GPU /
-// ACESTEP_DETOK_GPU take that measurement without a rebuild.
-//
-// OpenCL is on the list off an Adreno 740: both stages render end-to-end with no
-// unsupported-op abort, and the decode matches the CPU path (isolated VAE cosine
-// 0.99998563; full-pipeline health metrics within 5%).
+// generated audio. Vulkan is validated for the detokenizer but not for the
+// autoregressive LM: on Mali-G715 the LM collapses to repeated codes and may
+// terminate far short of the requested duration. Keep that stage on CPU while
+// the encoders, detokenizer, DiT and VAE remain GPU-accelerated.
+// OpenCL is validated for both stages on Adreno 740. ACESTEP_LM_GPU /
+// ACESTEP_DETOK_GPU remain available for parity measurements.
 inline StagePlacement resolve_stage_placement(const char * reg_name, const PlacementOverrides & ov) {
     StagePlacement p;
 
-    if (!backend_name_is_vulkan(reg_name) && !backend_name_is_metal(reg_name) &&
-        !backend_name_is_opencl(reg_name)) {
+    if (backend_name_is_vulkan(reg_name)) {
+        p.lm_on_gpu = false;
+    } else if (!backend_name_is_metal(reg_name) && !backend_name_is_opencl(reg_name)) {
         p.lm_on_gpu    = false;
         p.detok_on_gpu = false;
     }
