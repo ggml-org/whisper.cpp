@@ -453,12 +453,10 @@ ggml_tensor * convnext_block_ggml(ggml_context * ctx,
         y = conv1d_causal_ggml(ctx, y, w.pw1_w, w.pw1_b);
         y = ggml_gelu_erf(ctx, y);
     }
-    // NOTE: the vector_estimator's `ggml_supertonic_pw2_residual` op
-    // expects `gamma` to be `[C]` (per-channel scale); the vocoder
-    // however stores `gamma` as a `[1]` scalar (single learnable
-    // scale per ConvNeXt block).  The shapes are incompatible, so we
-    // keep the unfused chain here.  A vocoder-specific fused op with
-    // scalar gamma is possible but the win would be tiny (~10
+    // NOTE: `gamma` is the per-channel `[C]` residual scale (same shape as the
+    // vector_estimator's), broadcast over time by `repeat_like` below.  We keep
+    // the unfused `mul + add` tail rather than the vector_estimator's
+    // `ggml_supertonic_pw2_residual` fused op because the win would be tiny (~10
     // dispatches × ~40μs = 0.4 ms).
     y = conv1d_causal_ggml(ctx, y, w.pw2_w, w.pw2_b);
     y = ggml_mul(ctx, y, repeat_like(ctx, w.gamma, y));
@@ -488,10 +486,10 @@ ggml_tensor * pointwise_matmul_ct_voc(ggml_context * ctx,
 // Vocoder ConvNeXt differs from vector_estimator's: (1) depthwise is
 // **causal** (left-only pad) rather than symmetric edge-clamp — handled
 // by the `_causal_ct` variant of the fused depthwise kernel (port-v14).
-// (2) `gamma` is a scalar `[1]`, not per-channel, so the `pw2_residual_ct`
-// fused op doesn't fit — unfused scalar `mul + add` tail.  (3) `norm_g` /
-// `norm_b` ship as `[1, C]` (same flatten-needed quirk as vector_estimator's
-// `.gamma`).
+// (2) the per-channel `[C]` `gamma` residual scale is applied with an
+// unfused `mul + add` tail (the `pw2_residual_ct` fused op isn't wired up
+// here).  (3) `norm_g` / `norm_b` ship as `[1, C]` (same flatten-needed
+// quirk as vector_estimator's `.gamma`).
 //
 // Caller: `SUPERTONIC_DISABLE_CT_VOCODER=1` reverts to legacy
 // `convnext_block_ggml`.
@@ -515,7 +513,7 @@ ggml_tensor * convnext_block_ggml_ct(ggml_context * ctx,
     y_ct = pointwise_matmul_ct_voc(ctx, y_ct, w.pw1_w, /*bias=*/nullptr);
     y_ct = ggml_supertonic_bias_gelu_ct(ctx, y_ct, flatten_1d(w.pw1_b));
     y_ct = pointwise_matmul_ct_voc(ctx, y_ct, w.pw2_w, flatten_1d(w.pw2_b));
-    // Scalar gamma multiply (broadcasts in any layout).
+    // Per-channel `[C]` gamma multiply (broadcasts over time in any layout).
     y_ct = ggml_mul(ctx, y_ct, repeat_like(ctx, w.gamma, y_ct));
     return ggml_add(ctx, residual, y_ct);
 }
@@ -631,7 +629,7 @@ void build_supertonic_vocoder_cache(vocoder_graph_cache & cache,
     ggml_set_name(x, "vocoder_embed");
     // Phase B2 follow-up: route the 10-block ConvNeXt chain through the
     // `[C, T]` variant on Metal.  Each block runs depthwise (causal_ct) +
-    // layer_norm + pw1 + bias_gelu + pw2 + scalar gamma + residual add
+    // layer_norm + pw1 + bias_gelu + pw2 + per-channel gamma + residual add
     // entirely on `[C, T]` — no intra-block permutes.  The single
     // `[T, C] -> [C, T]` permute happens once before the chain and the
     // single reverse permute once after.  Override:

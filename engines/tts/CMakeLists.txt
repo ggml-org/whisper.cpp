@@ -1564,6 +1564,40 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-vector-estimator-backward)
     tts_cpp_register_test(test-supertonic-vector-estimator-backward LABEL "unit")
 
+    # QVAC-20983 — analytic backward of the vocoder (latent unpack, denorm,
+    # causal conv1d, causal depthwise, channel layer norm, gelu, per-channel-gamma
+    # convnext, affine batch norm, leaky-relu head, full chain d(loss)/d(latent)).
+    # The "transposed convolution" upsampling is a fixed reshape+permute (the
+    # latent unpack), so its backward is a pure permutation. Model-free: every
+    # analytic gradient is gradchecked against finite differences via the Task 2
+    # harness, so it ALWAYS runs on a fresh checkout (no-skip policy).
+    add_executable(test-supertonic-vocoder-backward
+        test/test_supertonic_vocoder_backward.cpp
+        src/supertonic_vocoder_backward.cpp
+        src/supertonic_vector_estimator_backward.cpp
+        src/voiceclone_gradcheck.cpp)
+    target_include_directories(test-supertonic-vocoder-backward PRIVATE src)
+    tts_cpp_apply_ccache(test-supertonic-vocoder-backward)
+    tts_cpp_register_test(test-supertonic-vocoder-backward LABEL "unit")
+
+    # QVAC-20983 — forward-parity guard for the vocoder backward.  The gradcheck
+    # above is self-referential (analytic backward vs the in-file reference
+    # forward); this builds a synthetic CPU-backed `supertonic_model` from
+    # deterministic weights and asserts the reference forward
+    # (`VocoderBackward::forward`) matches the PRODUCTION
+    # `supertonic_vocoder_forward_cpu` on the same buffers.  Catches any drift
+    # between the two forwards (per-channel gamma layout, dilation schedule,
+    # weight index order) the gradcheck cannot see.  Model-free (weights
+    # synthesized in-memory) so it always runs in the `unit` tier.
+    add_executable(test-supertonic-vocoder-backward-parity
+        test/test_supertonic_vocoder_backward_parity.cpp
+        src/supertonic_vocoder_backward.cpp
+        src/supertonic_vector_estimator_backward.cpp)
+    target_link_libraries(test-supertonic-vocoder-backward-parity PRIVATE tts-cpp ggml)
+    target_include_directories(test-supertonic-vocoder-backward-parity PRIVATE ggml/include src include)
+    tts_cpp_apply_ccache(test-supertonic-vocoder-backward-parity)
+    tts_cpp_register_test(test-supertonic-vocoder-backward-parity LABEL "unit")
+
     # analytic backward of the CAMPPlus speaker encoder (FCM Conv2d
     # head + residual blocks, TDNN, CAM dense-TDNN blocks with context-attention
     # gating and dense concat, statistics pooling, dense head). Model-free: every
