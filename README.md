@@ -22,6 +22,7 @@ High-performance inference of [OpenAI's Whisper](https://github.com/openai/whisp
 - Support for CPU-only inference
 - [Efficient GPU support for NVIDIA](#nvidia-gpu-support)
 - [AMD ROCm GPU support](#amd-rocm-gpu-support)
+- [AMD Ryzen AI NPU Support](#amd-ryzen-ai-npu-support)
 - [OpenVINO Support](#openvino-support)
 - [Ascend NPU Support](#ascend-npu-support)
 - [Moore Threads GPU Support](#moore-threads-gpu-support)
@@ -312,6 +313,87 @@ This can result in significant speedup in encoder performance. Here are the inst
   cached for the next run.
 
 For more information about the OpenVINO implementation please refer to PR [#1037](https://github.com/ggml-org/whisper.cpp/pull/1037).
+
+## AMD Ryzen™ AI NPU support
+
+On AMD Ryzen™ AI 300 and 400 Series processors with a dedicated NPU, whisper.cpp can fully offload the Whisper encoder to the NPU via VitisAI, delivering significant speedup over CPU-only inference.
+
+### Prerequisites
+
+Supported Platforms
+
+- **Windows 11**
+- **Linux** (Ubuntu 24.04 LTS, Python 3.12)
+
+Install the XRT runtime and FlexML runtime for your platform:
+
+- **XRT**: provides the NPU kernel driver and `xrt-smi` diagnostic tool — on Windows this is bundled with the NPU driver; on Linux install it separately following the [NPU driver installation guide](https://ryzenai.docs.amd.com/en/latest/linux.html#install-npu-drivers)
+- **FlexML runtime** (`flexmlrt`): VitisAI inference engine used by whisper.cpp — download from the [FlexML runtime releases](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/tag/deps)
+
+After installing, source the setup scripts in every shell you use to build or run whisper.cpp:
+
+```bash
+# Linux
+source /opt/xilinx/xrt/setup.sh
+source /path/to/flexmlrt/setup.sh
+```
+
+```cmd
+:: Windows
+cd /path/to/flexmlrt && call setup.bat
+```
+
+You can verify the NPU is visible with:
+
+```bash
+xrt-smi examine
+```
+
+### Download models
+
+Download the ggml model and the matching prebuilt VitisAI encoder cache:
+
+```bash
+# Linux / macOS
+sh ./models/download-ggml-model.sh base
+sh ./models/download-vitisai-model.sh base
+```
+
+```cmd
+:: Windows
+.\models\download-ggml-model.cmd base
+.\models\download-vitisai-model.cmd base
+```
+
+Use the same model name with both scripts. To see all available VitisAI encoder caches:
+
+```bash
+sh ./models/download-vitisai-model.sh --list
+```
+
+```cmd
+.\models\download-vitisai-model.cmd --list
+```
+
+The VitisAI script queries the [AMD Ryzen AI Whisper NPU collection on Hugging Face](https://huggingface.co/collections/amd/ryzen-ai-whisper-npu-optimized-onnx-models) and downloads the `.rai` encoder cache as `models/ggml-<model>-encoder-vitisai.rai`.
+
+> Depending on the `.rai` cache, VitisAI may offload the encoder only, or the encoder plus cross-projection layers. whisper.cpp detects this at runtime and logs the selected offload mode during model initialization.
+
+### Build
+
+```bash
+cmake -B build -DWHISPER_VITISAI=1
+cmake --build build -j --config Release
+```
+
+### Run
+
+```bash
+./build/bin/whisper-cli -m models/ggml-base.bin -f samples/jfk.wav
+```
+
+For more information see the [Ryzen AI documentation](https://ryzenai.docs.amd.com/en/latest/).
+
 
 ## NVIDIA GPU support
 
