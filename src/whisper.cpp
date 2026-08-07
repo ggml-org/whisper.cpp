@@ -1987,6 +1987,18 @@ static bool whisper_encode_external(const whisper_state & wstate) {
     return use_coreml || use_openvino || use_vitisai;
 }
 
+static bool whisper_cross_external(const whisper_state & wstate) {
+    GGML_UNUSED(wstate);
+
+#if defined(WHISPER_USE_VITISAI)
+    const bool use_vitisai_cross = whisper_vitisai_has_cross_proj(wstate.ctx_vitisai);
+#else
+    const bool use_vitisai_cross = false;
+#endif
+
+    return use_vitisai_cross;
+}
+
 static struct ggml_cgraph * whisper_build_graph_conv(
         whisper_context & wctx,
           whisper_state & wstate) {
@@ -2426,7 +2438,20 @@ static bool whisper_encode_internal(
 #if defined(WHISPER_USE_COREML)
             whisper_coreml_encode(wstate.ctx_coreml, mel->ne[0], mel->ne[1], (float *) mel->data, (float *) wstate.embd_enc->data);
 #elif defined(WHISPER_USE_VITISAI)
-            whisper_vitisai_encode(wstate.ctx_vitisai, mel, wstate.embd_enc);
+            if (whisper_vitisai_has_cross_proj(wstate.ctx_vitisai)) {
+                const auto & hp = wctx.model.hparams;
+                const int n_ctx = wstate.exp_n_audio_ctx > 0
+                                ? wstate.exp_n_audio_ctx : hp.n_audio_ctx;
+                if (!whisper_vitisai_encode_with_cross(
+                    wstate.ctx_vitisai, mel, wstate.embd_enc,
+                    wstate.kv_cross.k, wstate.kv_cross.v,
+                    hp.n_text_layer, n_ctx, hp.n_text_state,
+                    hp.n_text_head, wctx.params.flash_attn)) {
+                    return false;
+                }
+            } else if (!whisper_vitisai_encode(wstate.ctx_vitisai, mel, wstate.embd_enc)) {
+                return false;
+            }
 #elif defined(WHISPER_USE_OPENVINO)
             whisper_openvino_encode(wstate.ctx_openvino, mel, wstate.embd_enc);
 #endif
@@ -2450,7 +2475,7 @@ static bool whisper_encode_internal(
     }
 
     // cross
-    {
+    if (!whisper_cross_external(wstate)) {
         auto & sched = wstate.sched_cross.sched;
 
         ggml_cgraph * gf = whisper_build_graph_cross(wctx, wstate);
@@ -3370,9 +3395,13 @@ static std::string whisper_get_vitisai_path_encoder_cache(std::string path_bin) 
         path_bin = path_bin.substr(0, pos);
     }
 
-    path_bin += "-encoder-vitisai.rai";
+    const std::string path_vitisai_cross = path_bin + "-encoder-cross-vitisai.rai";
+    if (FILE * file = fopen(path_vitisai_cross.c_str(), "rb")) {
+        fclose(file);
+        return path_vitisai_cross;
+    }
 
-    return path_bin;
+    return path_bin + "-encoder-vitisai.rai";
 }
 #endif
 
@@ -3493,8 +3522,10 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
         WHISPER_LOG_ERROR("%s: failed to load Vitis AI model from '%s'\n", __func__, path_vitisai.c_str());
         whisper_free_state(state);
         return nullptr;
+    } else if (whisper_vitisai_has_cross_proj(state->ctx_vitisai)) {
+        WHISPER_LOG_INFO("%s: Vitis AI encoder + cross projection model loaded\n", __func__);
     } else {
-        WHISPER_LOG_INFO("%s: Vitis AI model loaded\n", __func__);
+        WHISPER_LOG_INFO("%s: Vitis AI encoder model loaded\n", __func__);
     }
 #endif
 
@@ -3545,7 +3576,7 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
     }
 
     // cross allocator
-    {
+    if (!whisper_cross_external(*state)) {
         bool ok = whisper_sched_graph_init(state->sched_cross, state->backends,
                 [&]() {
                     return whisper_build_graph_cross(*ctx, *state);
