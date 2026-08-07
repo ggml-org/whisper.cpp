@@ -73,6 +73,7 @@ void ggml_vec_dot_bf16(int n, float * GGML_RESTRICT s, size_t bs, ggml_bf16_t * 
 void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * GGML_RESTRICT x, size_t bx, ggml_fp16_t * GGML_RESTRICT y, size_t by, int nrc);
 
 void ggml_vec_silu_f32(const int n, float * y, const float * x);
+void ggml_vec_gelu_f32(const int n, float * y, const float * x);
 ggml_float ggml_vec_cvar_f32(const int n, float * y, const float * x, const float mean); //it will also center y ( y = y - mean )
 ggml_float ggml_vec_soft_max_f32(const int n, float * y, const float * x, float max);
 ggml_float ggml_vec_log_soft_max_f32(const int n, float * y, const float * x, float max);
@@ -969,6 +970,16 @@ inline static float ggml_gelu_f32(float x) {
     return 0.5f*x*(1.0f + tanhf(SQRT_2_OVER_PI*x*(1.0f + GELU_COEF_A*x*x)));
 }
 
+// single-element f16-table gelu; used as the fallback on narrow-SIMD targets (see ggml_vec_gelu_f32 in vec.cpp)
+inline static float ggml_gelu_f32_table(float x) {
+    if (x <= -10.0f) return 0.0f;
+    if (x >=  10.0f) return x;
+    uint16_t t;
+    ggml_fp16_t fp16 = GGML_CPU_FP32_TO_FP16(x);
+    memcpy(&t, &fp16, sizeof(uint16_t));
+    return GGML_CPU_FP16_TO_FP32(ggml_table_gelu_f16[t]);
+}
+
 inline static void ggml_vec_gelu_f16(const int n, ggml_fp16_t * y, const ggml_fp16_t * x) {
     const uint16_t * i16 = (const uint16_t *) x;
     for (int i = 0; i < n; ++i) {
@@ -984,28 +995,6 @@ inline static void ggml_vec_gelu_erf_f16(const int n, ggml_fp16_t * y, const ggm
     }
 }
 
-#ifdef GGML_GELU_FP16
-inline static void ggml_vec_gelu_f32(const int n, float * y, const float * x) {
-    uint16_t t;
-    for (int i = 0; i < n; ++i) {
-        if (x[i] <= -10.0f) {
-            y[i] = 0.0f;
-        } else if (x[i] >= 10.0f) {
-            y[i] = x[i];
-        } else {
-            ggml_fp16_t fp16 = GGML_CPU_FP32_TO_FP16(x[i]);
-            memcpy(&t, &fp16, sizeof(uint16_t));
-            y[i] = GGML_CPU_FP16_TO_FP32(ggml_table_gelu_f16[t]);
-        }
-    }
-}
-#else
-inline static void ggml_vec_gelu_f32(const int n, float * y, const float * x) {
-    for (int i = 0; i < n; ++i) {
-        y[i] = ggml_gelu_f32(x[i]);
-    }
-}
-#endif
 
 inline static void ggml_vec_gelu_erf_f32(const int n, float * y, const float * x) {
     for (int i = 0; i < n; ++i) {
@@ -1124,6 +1113,20 @@ inline static svfloat32_t ggml_v_silu(svbool_t pg, svfloat32_t x) {
     return svdiv_f32_x(pg, x, one_plus_exp_neg_x);
 }
 
+// computes gelu (tanh approx) x/(1+exp(-2u)), u = sqrt(2/pi)*x*(1+0.044715*x^2)
+inline static svfloat32_t ggml_v_gelu(svbool_t pg, svfloat32_t x) {
+    const svfloat32_t one  = svdup_n_f32_x(pg, 1.0f);
+    const svfloat32_t zero = svdup_n_f32_x(pg, 0.0f);
+    const svfloat32_t x2   = svmul_f32_x(pg, x, x);
+    const svfloat32_t inner = svmla_n_f32_x(pg, one, x2, 0.044715f);
+    svfloat32_t arg = svmul_f32_x(pg, x, inner);
+    arg = svmul_n_f32_x(pg, arg, 1.5957691216057307f); // 2*sqrt(2/pi)
+    const svfloat32_t neg_arg = svsub_f32_x(pg, zero, arg);
+    const svfloat32_t e = ggml_v_expf(pg, neg_arg);
+    const svfloat32_t denom = svadd_f32_x(pg, one, e);
+    return svdiv_f32_x(pg, x, denom);
+}
+
 #elif defined(__ARM_NEON) && defined(__aarch64__)
 
 // adapted from arm limited optimized routine
@@ -1161,6 +1164,20 @@ inline static float32x4_t ggml_v_silu(float32x4_t x) {
     const float32x4_t exp_neg_x = ggml_v_expf(neg_x);
     const float32x4_t one_plus_exp_neg_x = vaddq_f32(one, exp_neg_x);
     return vdivq_f32(x, one_plus_exp_neg_x);
+}
+
+// computes gelu (tanh approx) x/(1+exp(-2u)), u = sqrt(2/pi)*x*(1+0.044715*x^2)
+inline static float32x4_t ggml_v_gelu(float32x4_t x) {
+    const float32x4_t one  = vdupq_n_f32(1.0f);
+    const float32x4_t zero = vdupq_n_f32(0.0f);
+    const float32x4_t x2   = vmulq_f32(x, x);
+    const float32x4_t inner = vfmaq_f32(one, x2, vdupq_n_f32(0.044715f));
+    float32x4_t arg = vmulq_f32(x, inner);
+    arg = vmulq_f32(arg, vdupq_n_f32(1.5957691216057307f)); // 2*sqrt(2/pi)
+    const float32x4_t neg_arg = vsubq_f32(zero, arg);
+    const float32x4_t e = ggml_v_expf(neg_arg);
+    const float32x4_t denom = vaddq_f32(one, e);
+    return vdivq_f32(x, denom);
 }
 
 #elif defined(__AVX512F__) && defined(__AVX512DQ__)
@@ -1204,6 +1221,19 @@ inline static __m512 ggml_v_silu(__m512 x) {
     const __m512 exp_neg_x = ggml_v_expf(neg_x);
     const __m512 one_plus_exp_neg_x = _mm512_add_ps(one, exp_neg_x);
     return _mm512_div_ps(x, one_plus_exp_neg_x);
+}
+
+// computes gelu (tanh approx) x/(1+exp(-2u)), u = sqrt(2/pi)*x*(1+0.044715*x^2)
+inline static __m512 ggml_v_gelu(__m512 x) {
+    const __m512 one = _mm512_set1_ps(1.0f);
+    const __m512 x2  = _mm512_mul_ps(x, x);
+    const __m512 inner = _mm512_fmadd_ps(x2, _mm512_set1_ps(0.044715f), one);
+    __m512 arg = _mm512_mul_ps(x, inner);
+    arg = _mm512_mul_ps(arg, _mm512_set1_ps(1.5957691216057307f)); // 2*sqrt(2/pi)
+    const __m512 neg_arg = _mm512_sub_ps(_mm512_setzero_ps(), arg);
+    const __m512 e = ggml_v_expf(neg_arg);
+    const __m512 denom = _mm512_add_ps(one, e);
+    return _mm512_div_ps(x, denom);
 }
 
 #elif defined(__AVX2__) && defined(__FMA__)
@@ -1261,6 +1291,19 @@ inline static __m256 ggml_v_silu(__m256 x) {
     return _mm256_div_ps(x, one_plus_exp_neg_x);
 }
 
+// computes gelu (tanh approx) x/(1+exp(-2u)), u = sqrt(2/pi)*x*(1+0.044715*x^2)
+inline static __m256 ggml_v_gelu(__m256 x) {
+    const __m256 one = _mm256_set1_ps(1.0f);
+    const __m256 x2  = _mm256_mul_ps(x, x);
+    const __m256 inner = _mm256_fmadd_ps(x2, _mm256_set1_ps(0.044715f), one);
+    __m256 arg = _mm256_mul_ps(x, inner);
+    arg = _mm256_mul_ps(arg, _mm256_set1_ps(1.5957691216057307f)); // 2*sqrt(2/pi)
+    const __m256 neg_arg = _mm256_sub_ps(_mm256_setzero_ps(), arg);
+    const __m256 e = ggml_v_expf(neg_arg);
+    const __m256 denom = _mm256_add_ps(one, e);
+    return _mm256_div_ps(x, denom);
+}
+
 #elif defined(__SSE2__) // __AVX2__ / __ARM_NEON
 
 #if defined(__FMA__)
@@ -1313,6 +1356,19 @@ inline static __m128 ggml_v_silu(__m128 x) {
     const __m128 exp_neg_x = ggml_v_expf(neg_x);
     const __m128 one_plus_exp_neg_x = _mm_add_ps(one, exp_neg_x);
     return _mm_div_ps(x, one_plus_exp_neg_x);
+}
+
+// computes gelu (tanh approx) x/(1+exp(-2u)), u = sqrt(2/pi)*x*(1+0.044715*x^2)
+inline static __m128 ggml_v_gelu(__m128 x) {
+    const __m128 one = _mm_set1_ps(1.0f);
+    const __m128 x2  = _mm_mul_ps(x, x);
+    const __m128 inner = MADD128(x2, _mm_set1_ps(0.044715f), one);
+    __m128 arg = _mm_mul_ps(x, inner);
+    arg = _mm_mul_ps(arg, _mm_set1_ps(1.5957691216057307f)); // 2*sqrt(2/pi)
+    const __m128 neg_arg = _mm_sub_ps(_mm_setzero_ps(), arg);
+    const __m128 e = ggml_v_expf(neg_arg);
+    const __m128 denom = _mm_add_ps(one, e);
+    return _mm_div_ps(x, denom);
 }
 
 #elif defined(__riscv_v_intrinsic)
