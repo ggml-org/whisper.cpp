@@ -17,7 +17,6 @@
 #include "acestep/detok_ggml.h"
 
 #include "ggml-backend.h"
-#include "ggml-cpu.h"
 
 #include <chrono>
 #include <cmath>
@@ -56,7 +55,8 @@ int main(int argc, char ** argv) {
     const char * model = arg_val(argc, argv, "--model");
     if (!model) {
         fprintf(stderr, "usage: detok-smoke --model acestep-v15-turbo.gguf [--codes 20] [--seed 1]"
-                        " [--gpu] [--threads N] [--dump context.bin] [--repeat N]\n");
+                        " [--gpu] [--threads N] [--dump context.bin] [--repeat N]\n"
+                        "       [--backends-dir <dir>]  (required on builds with dlopen'd ggml backends)\n");
         return 1;
     }
     const int      T5     = arg_val(argc, argv, "--codes") ? atoi(arg_val(argc, argv, "--codes")) : 20;
@@ -71,15 +71,19 @@ int main(int argc, char ** argv) {
                                                : (int) std::thread::hardware_concurrency();
     if (nth < 1) nth = 4;
 
+    // Go through the registry like the engine does, so this tool resolves a backend
+    // on arm64 dlopen builds too -- `ggml_backend_cpu_init` is not even linked there.
+    if (const char * bd = arg_val(argc, argv, "--backends-dir")) load_backends(bd);
+
     ggml_backend_t backend = nullptr;
     if (gpu) {
         backend = backend_gpu_init();
         if (!backend) { fprintf(stderr, "[detok-smoke] no GPU backend available\n"); return 1; }
     } else {
-        backend = ggml_backend_cpu_init();
+        backend = backend_cpu_init();
         if (!backend) { fprintf(stderr, "cpu backend init failed\n"); return 1; }
         // The engine sets this; leaving the default (4) would understate the CPU path.
-        ggml_backend_cpu_set_n_threads(backend, nth);
+        backend_set_n_threads(backend, nth);
     }
     fprintf(stderr, "[detok-smoke] backend=%s codes=%d seed=%u threads=%d\n",
             ggml_backend_name(backend), T5, seed, gpu ? 0 : nth);

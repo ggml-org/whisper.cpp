@@ -19,7 +19,6 @@
 #include "acestep/lm_ggml.h"
 
 #include "ggml-backend.h"
-#include "ggml-cpu.h"
 
 #include <cmath>
 #include <cstdio>
@@ -67,7 +66,11 @@ static int argmax(const std::vector<float> & v, double * maxval, size_t * nan) {
 
 int main(int argc, char ** argv) {
     const char * model = arg_val(argc, argv, "--model");
-    if (!model) { fprintf(stderr, "usage: lm-smoke --model ace-lm.gguf [--prefill 8] [--decode 8]\n"); return 1; }
+    if (!model) {
+        fprintf(stderr, "usage: lm-smoke --model ace-lm.gguf [--prefill 8] [--decode 8]\n"
+                        "       [--backends-dir <dir>]  (required on builds with dlopen'd ggml backends)\n");
+        return 1;
+    }
     const int      P    = arg_val(argc, argv, "--prefill") ? atoi(arg_val(argc, argv, "--prefill")) : 8;
     const int      Dn   = arg_val(argc, argv, "--decode")  ? atoi(arg_val(argc, argv, "--decode"))  : 8;
     const unsigned seed = arg_val(argc, argv, "--seed")    ? (unsigned) atoi(arg_val(argc, argv, "--seed")) : 1234u;
@@ -80,16 +83,20 @@ int main(int argc, char ** argv) {
                                                : (int) std::thread::hardware_concurrency();
     if (nth < 1) nth = 4;
 
+    // Go through the registry like the engine does, so this tool resolves a backend
+    // on arm64 dlopen builds too -- `ggml_backend_cpu_init` is not even linked there.
+    if (const char * bd = arg_val(argc, argv, "--backends-dir")) load_backends(bd);
+
     ggml_backend_t backend = nullptr;
     if (gpu) {
         backend = backend_gpu_init();
         if (!backend) { fprintf(stderr, "[lm-smoke] no GPU backend available\n"); return 1; }
     } else {
-        backend = ggml_backend_cpu_init();
+        backend = backend_cpu_init();
         if (!backend) { fprintf(stderr, "cpu backend init failed\n"); return 1; }
         // The engine sets this; leaving the default (4) would understate the CPU path
         // and make any CPU-vs-GPU timing meaningless.
-        ggml_backend_cpu_set_n_threads(backend, nth);
+        backend_set_n_threads(backend, nth);
     }
     fprintf(stderr, "[lm-smoke] backend=%s prefill=%d decode=%d seed=%u threads=%d\n",
             ggml_backend_name(backend), P, Dn, seed, gpu ? 0 : nth);
