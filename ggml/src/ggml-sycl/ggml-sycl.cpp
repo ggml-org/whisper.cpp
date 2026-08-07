@@ -3215,10 +3215,8 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
                     }
 
                     if constexpr (quantize_enabled) {
-                        scope_op_debug_print scope_dbg_print(__func__, "/quantize_row_q8_1_sycl", dst,
-                                                             /*num_src=*/2, " : converting src1 to Q8_1");
                         try {
-                            quantize_row_q8_1_sycl<quantize_q8_1>(src1_ddf_i, src1_ddq_i, ne10, src1_ncols,
+                            quantize_row_q8_1_sycl<quantize_f>(src1_ddf_i, src1_ddq_i, ne10, src1_ncols,
                                                                   src1_padded_col_size, stream);
                         } catch (const sycl::exception & exc) {
                             std::cerr << "Quantize_row_q8_1_sycl error" << exc.what()
@@ -4342,7 +4340,10 @@ static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor *
     }
 
     ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-    if (!extra || extra->optimized_feature.reorder) {
+    if (!extra) {
+        return;
+    }
+    if (extra->optimized_feature.reorder) {
         return;  // Skip permutations and already reordered tensors
     }
 
@@ -4364,7 +4365,8 @@ static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor *
             break;
     }
 
-    if (reorder_qw(src0, ctx->stream())) {
+    bool ok = reorder_qw(src0, ctx->stream());
+    if (ok) {
         extra->optimized_feature.reorder = true;  // Used to decode/dequan in next steps and avoid re-reordering
     }
 }
@@ -4484,7 +4486,20 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
             ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q);
         }
     } else if (use_mul_mat_q) {
-        ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q);
+        // If the weight tensor was reordered by a prior MMVQ/DMMV opt_for_reorder
+        // call (in-place split qs+d layout), quantize_q8_1 would read the wrong
+        // layout (it expects original block_q8_0 interleaved d+qs).  Fall back to
+        // the dequantize path (no_quantize_q8_1), which dequantizes first then
+        // does a normal matmul — layout-agnostic.  This happens when the same
+        // weight is used by both the encoder (mul_mat_q, many tokens) and the
+        // decoder (MMVQ, single token): the decoder's opt_for_reorder corrupts
+        // the weight for the next encoder call.
+        ggml_tensor_extra_gpu * mmq_extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+        if (mmq_extra && mmq_extra->optimized_feature.reorder) {
+            ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_sycl);
+        } else {
+            ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q);
+        }
     } else {
         ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_sycl);
     }
