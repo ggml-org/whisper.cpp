@@ -46,6 +46,7 @@ void             lm_model_free(LMModel * m);
 const LMConfig & lm_model_config(const LMModel * m);
 size_t           lm_model_weight_bytes(const LMModel * m);
 int              lm_num_kv_sets(const LMModel * m);
+bool             lm_model_embeddings_quantized(const LMModel * m);
 
 // Reset the KV cache for one set (start a new sequence).
 void lm_reset(LMModel * m, int set = 0);

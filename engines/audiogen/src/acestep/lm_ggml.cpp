@@ -36,6 +36,14 @@ struct LMModel {
     ggml_tensor *           final_norm   = nullptr;  // [H] F32
     std::vector<Qwen3Layer> layers;
 
+    // Contiguous tied-head rows used by Phase-2 batched CFG. Quantized tensors
+    // cannot be safely sliced with ggml_view_2d on every GPU backend.
+    ggml_context *        lm_head_ctx           = nullptr;
+    ggml_backend_buffer_t lm_head_buf           = nullptr;
+    ggml_tensor *         lm_head_partial       = nullptr;
+    int                   lm_head_offset        = -1;
+    int                   lm_head_failed_offset = -1;
+
     // KV cache: n_sets independent caches, each per-layer [D, max_seq, Nkv] f16.
     // Indexed kv_k[set * n_layers + layer]. Set 0 is the default; CFG uses set 1
     // for the unconditional stream.
@@ -90,6 +98,59 @@ static bool lm_backend_supports_flash_attn(ggml_backend_t backend, const Qwen3Co
     const bool supported = ggml_backend_supports_op(backend, op);
     ggml_free(ctx);
     return supported;
+}
+
+static void lm_partial_head_clear(LMModel * m) {
+    if (m->lm_head_buf) ggml_backend_buffer_free(m->lm_head_buf);
+    if (m->lm_head_ctx) ggml_free(m->lm_head_ctx);
+    m->lm_head_buf     = nullptr;
+    m->lm_head_ctx     = nullptr;
+    m->lm_head_partial = nullptr;
+    m->lm_head_offset  = -1;
+}
+
+// Copy tied-embedding rows [offset, V) into a contiguous tensor. A direct
+// ggml_view_2d is only byte-addressable for non-quantized rows on all backends;
+// a compact Q4/Q8 view may otherwise feed the wrong blocks to GPU MUL_MAT.
+static bool lm_build_partial_head(LMModel * m, int offset) {
+    if (!m || offset <= 0 || offset >= m->cfg.vocab_size) return false;
+    if (m->lm_head_partial && m->lm_head_offset == offset) return true;
+    if (m->lm_head_failed_offset == offset) return false;
+
+    lm_partial_head_clear(m);
+
+    const int H     = m->cfg.hidden_size;
+    const int count = m->cfg.vocab_size - offset;
+    ggml_init_params hp{ ggml_tensor_overhead() * 2 + 16, nullptr, true };
+    m->lm_head_ctx = ggml_init(hp);
+    if (!m->lm_head_ctx) {
+        m->lm_head_failed_offset = offset;
+        return false;
+    }
+
+    m->lm_head_partial = ggml_new_tensor_2d(m->lm_head_ctx, m->embed_tokens->type, H, count);
+    ggml_set_name(m->lm_head_partial, "lm_head_phase2");
+    m->lm_head_buf = ggml_backend_alloc_ctx_tensors(m->lm_head_ctx, m->backend);
+    if (!m->lm_head_buf) {
+        m->lm_head_failed_offset = offset;
+        lm_partial_head_clear(m);
+        return false;
+    }
+    ggml_backend_buffer_set_usage(m->lm_head_buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    const size_t row_bytes = ggml_row_size(m->embed_tokens->type, H);
+    if (row_bytes == 0 || (size_t) count > SIZE_MAX / row_bytes ||
+        (size_t) offset > SIZE_MAX / row_bytes) {
+        m->lm_head_failed_offset = offset;
+        lm_partial_head_clear(m);
+        return false;
+    }
+    const size_t nbytes = (size_t) count * row_bytes;
+    std::vector<uint8_t> tmp(nbytes);
+    ggml_backend_tensor_get(m->embed_tokens, tmp.data(), (size_t) offset * row_bytes, nbytes);
+    ggml_backend_tensor_set(m->lm_head_partial, tmp.data(), 0, nbytes);
+    m->lm_head_offset = offset;
+    return true;
 }
 
 LMModel * lm_model_load(const std::string & path, ggml_backend_t backend, int max_seq_len, bool verbose,
@@ -239,6 +300,7 @@ LMModel * lm_model_load(const std::string & path, ggml_backend_t backend, int ma
 
 void lm_model_free(LMModel * m) {
     if (!m) return;
+    lm_partial_head_clear(m);
     if (m->kv_buf) ggml_backend_buffer_free(m->kv_buf);
     if (m->kv_ctx) ggml_free(m->kv_ctx);
     if (m->weight_buf) ggml_backend_buffer_free(m->weight_buf);
@@ -252,9 +314,13 @@ const LMConfig & lm_model_config(const LMModel * m) { return m->cfg; }
 size_t           lm_model_weight_bytes(const LMModel * m) {
     if (!m) return 0;
     const size_t alloc = m->weight_buf ? ggml_backend_buffer_get_size(m->weight_buf) : 0;
-    return alloc + m->mapped_bytes;  // allocated (F32) + mmapped weights
+    const size_t partial = m->lm_head_buf ? ggml_backend_buffer_get_size(m->lm_head_buf) : 0;
+    return alloc + m->mapped_bytes + partial;  // allocated + mmapped + compact tied head
 }
 int  lm_num_kv_sets(const LMModel * m) { return m->n_sets; }
+bool lm_model_embeddings_quantized(const LMModel * m) {
+    return m && m->embed_tokens && ggml_is_quantized(m->embed_tokens->type);
+}
 bool lm_model_supports_batched_decode(const LMModel * m) {
     return m && m->use_flash_attn && m->n_sets > 1;
 }
@@ -437,6 +503,9 @@ bool lm_model_forward_batch(LMModel * m, const int32_t * token_ids, const int * 
     const Qwen3Config & c = m->q3;
     const LMConfig & lc = m->cfg;
     const int H = c.hidden_size, D = c.head_dim, Nh = c.n_heads, Nkv = c.n_kv_heads;
+    const int requested_out_V = lc.vocab_size - logit_offset;
+    const bool compact_head = logit_offset > 0 && lm_build_partial_head(m, logit_offset);
+    const int graph_out_V = compact_head ? requested_out_V : lc.vocab_size;
     int max_kv_len = 0;
     for (int i = 0; i < N; i++) {
         const int kv_len = m->kv_pos[sets[i]] + 1;
@@ -503,7 +572,7 @@ bool lm_model_forward_batch(LMModel * m, const int32_t * token_ids, const int * 
         const float scale = 1.0f / sqrtf((float) D);
         ggml_tensor * attn = ggml_flash_attn_ext(ctx, q4, k_batch, v_batch, mask, scale, 0.0f, 0.0f);
         ggml_flash_attn_ext_set_prec(attn, c.prec);
-        attn = ggml_reshape_2d(ctx, attn, Nh * D, N);
+        attn = ggml_reshape_2d(ctx, attn, (int64_t) Nh * D, N);
 
         hidden = ggml_add(ctx, hidden, q3_linear(ctx, ly->o_proj, attn, c.prec));
         norm = q3_rms_norm_w(ctx, hidden, ly->post_norm, c.rms_norm_eps);
@@ -511,13 +580,8 @@ bool lm_model_forward_batch(LMModel * m, const int32_t * token_ids, const int * 
     }
 
     hidden = q3_rms_norm_w(ctx, hidden, m->final_norm, c.rms_norm_eps);
-    const int out_V = lc.vocab_size - logit_offset;
-    ggml_tensor * lm_weight = m->embed_tokens;
-    if (logit_offset > 0) {
-        lm_weight = ggml_view_2d(ctx, m->embed_tokens, H, out_V, m->embed_tokens->nb[1],
-                                 (size_t) logit_offset * m->embed_tokens->nb[1]);
-    }
-    ggml_tensor * lgt = q3_linear(ctx, lm_weight, hidden, c.prec);  // [out_V, N]
+    ggml_tensor * lm_weight = compact_head ? m->lm_head_partial : m->embed_tokens;
+    ggml_tensor * lgt = q3_linear(ctx, lm_weight, hidden, c.prec);  // [graph_out_V, N]
     ggml_set_output(lgt);
     ggml_build_forward_expand(gf, lgt);
 
@@ -550,8 +614,20 @@ bool lm_model_forward_batch(LMModel * m, const int32_t * token_ids, const int * 
         return false;
     }
 
-    logits_out.resize((size_t) out_V * N);
-    ggml_backend_tensor_get(lgt, logits_out.data(), 0, logits_out.size() * sizeof(float));
+    logits_out.resize((size_t) requested_out_V * N);
+    if (logit_offset == 0 || compact_head) {
+        ggml_backend_tensor_get(lgt, logits_out.data(), 0, logits_out.size() * sizeof(float));
+    } else {
+        // Allocation of the compact head is an optimization, not a correctness
+        // requirement. Fall back to the full tied head and slice host logits.
+        std::vector<float> full_logits((size_t) graph_out_V * N);
+        ggml_backend_tensor_get(lgt, full_logits.data(), 0, full_logits.size() * sizeof(float));
+        for (int i = 0; i < N; ++i) {
+            std::memcpy(logits_out.data() + (size_t) i * requested_out_V,
+                        full_logits.data() + (size_t) i * graph_out_V + logit_offset,
+                        (size_t) requested_out_V * sizeof(float));
+        }
+    }
     for (int i = 0; i < N; i++) m->kv_pos[sets[i]]++;
 
     ggml_gallocr_free(ga);
