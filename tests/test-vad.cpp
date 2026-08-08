@@ -71,7 +71,7 @@ int main() {
     assert_default_params(params);
 
     // Test speech probabilites
-    test_detect_speech(vctx, params, pcmf32.data(), pcmf32.size());
+    test_detect_speech(vctx, params, pcmf32.data(), static_cast<int>(pcmf32.size()));
 
     // Test speech timestamps (uses speech probabilities from above)
     struct whisper_vad_segments * timestamps = test_detect_timestamps(vctx, params);
