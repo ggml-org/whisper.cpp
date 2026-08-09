@@ -95,6 +95,11 @@ struct GenerateParams {
     float       dcw_scaler      = 0.05f;  // low band coefficient: t * scaler
     float       dcw_high_scaler = 0.02f;  // high band coefficient: (1-t) * scaler
 
+    // Optional timbre reference: normalized interleaved stereo PCM at 48 kHz.
+    // The VAE encoder converts it to 25 Hz features consumed by the existing
+    // condition encoder. Empty preserves the canonical silence reference.
+    std::vector<float> reference_audio;
+
     // Pre-supplied FSQ audio codes (LM output). When non-empty, the LM stage is
     // skipped and these codes are used directly (parity / caching / editing).
     std::vector<int> audio_codes;
@@ -120,8 +125,9 @@ struct GenerateResult {
     GenerateMetadata   metadata;
 };
 
-// Optional progress callback: stage name ("lm"|"dit"|"vae"), current step,
-// total steps (total <= 0 when unknown). Return false to request cancellation.
+// Optional progress callback: stage name ("reference"|"lm"|"dit"|"vae"),
+// current step, total steps (total <= 0 when unknown). Return false to request
+// cancellation.
 using ProgressFn = std::function<bool(const std::string & stage, int step, int total)>;
 
 class AUDIOGEN_API Engine {

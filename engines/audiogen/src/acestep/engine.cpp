@@ -168,10 +168,13 @@ struct Engine::Impl {
         dit = dit_model_load(opts.dit_model_path, backend, opts.verbose);
         if (!dit) throw std::runtime_error("acestep engine: DiT load failed");
     }
-    void ensure_vae() {
-        if (vae) return;
+3    void ensure_vae(bool with_encoder = false) {
+        if (vae && (!with_encoder || vae->has_encoder())) return;
+        if (vae) free_vae();  // reload a resident decoder-only VAE when encoding is required
         if (opts.verbose) fprintf(stderr, "[acestep-engine] loading VAE\n");
-        vae = Vae::load(opts.vae_model_path, vae_opts);
+        VaeOptions load_opts = vae_opts;
+        load_opts.with_encoder = with_encoder;
+        vae = Vae::load(opts.vae_model_path, load_opts);
         if (!vae) throw std::runtime_error("acestep engine: VAE load failed");
         sr = vae->sample_rate();
     }
@@ -492,6 +495,28 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     // is no separate up-front reload phase.
     const bool low_mem = !m->keep_stages;
 
+    std::vector<float> reference_features;
+    int                reference_T = 0;
+    if (!params.reference_audio.empty()) {
+        if ((params.reference_audio.size() & 1u) != 0)
+            throw std::invalid_argument("acestep engine: reference_audio must be interleaved stereo");
+
+        m->ensure_vae(/*with_encoder=*/true);
+        if (!report("reference", 0, 1)) return result;
+        const int reference_frames = (int) (params.reference_audio.size() / 2);
+        reference_features = m->vae->encode(params.reference_audio, reference_frames, &reference_T);
+        if (reference_features.empty() || reference_T <= 0)
+            throw std::runtime_error("acestep engine: reference audio VAE encode failed");
+        if (m->opts.verbose)
+            fprintf(stderr, "[acestep-engine] reference audio: %.2fs -> %d timbre frames\n",
+                    (float) reference_frames / 48000.0f, reference_T);
+        dump.write("00_reference_latent", reference_features, reference_T, 64);
+        timing.mark("reference");
+        if (!report("reference", 1, 1)) return result;
+
+        if (low_mem) m->free_vae();
+    }
+
     long long seed = params.seed;
     if (seed < 0) { std::random_device rd; seed = (long long) rd(); }
 
@@ -652,8 +677,10 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     // the enc sequence carries the timbre token (packed lyric|timbre|text),
     // matching acestep.cpp. Without it we drop a token and misalign cross-attn.
     const std::vector<float> & silence_frame = cond_model_silence_frame(m->cond);
-    const float *              timbre_feats  = silence_frame.empty() ? nullptr : silence_frame.data();
-    const int                  timbre_S_ref  = silence_frame.empty() ? 0 : 1;
+    const float * timbre_feats = reference_features.empty()
+                                     ? (silence_frame.empty() ? nullptr : silence_frame.data())
+                                     : reference_features.data();
+    const int timbre_S_ref = reference_features.empty() ? (silence_frame.empty() ? 0 : 1) : reference_T;
 
     std::vector<float> enc_hidden;
     int                enc_S = 0;

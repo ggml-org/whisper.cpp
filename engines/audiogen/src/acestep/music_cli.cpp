@@ -10,6 +10,7 @@
 //   music-cli --dit dit.gguf --lm lm.gguf --text emb.gguf --vae vae.gguf ...
 //   optional: --caption "..." --lyrics "..." --steps 8 --shift 3.0
 //             --bpm 128 --key "C major" --tsig 4/4 --lang en
+//             --ref-audio reference-48khz-pcm16.wav
 //             --gpu --threads N --dump-stages <existing dir>
 
 #include "audiogen-cpp/acestep/engine.h"
@@ -88,6 +89,74 @@ static bool json_field(const std::string & j, const char * key, std::string & ou
     return true;
 }
 
+// Minimal PCM16 WAV reader. The portable engine receives normalized
+// interleaved stereo PCM; container decoding remains at the CLI boundary.
+static std::vector<float> wav_read(const char * path, int * frames, int * rate) {
+    *frames = 0;
+    *rate   = 0;
+    FILE * f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "[music-cli] cannot open reference WAV %s\n", path); return {}; }
+
+    char riff[4], wave[4];
+    uint32_t riff_size = 0;
+    if (fread(riff, 1, 4, f) != 4 || fread(&riff_size, 4, 1, f) != 1 || fread(wave, 1, 4, f) != 4 ||
+        memcmp(riff, "RIFF", 4) || memcmp(wave, "WAVE", 4)) {
+        fprintf(stderr, "[music-cli] reference audio is not a RIFF/WAVE file\n");
+        fclose(f);
+        return {};
+    }
+
+    uint16_t channels = 0, bits = 0, format = 0;
+    uint32_t sample_rate = 0;
+    while (!feof(f)) {
+        char id[4];
+        uint32_t size = 0;
+        if (fread(id, 1, 4, f) != 4 || fread(&size, 4, 1, f) != 1) break;
+        if (!memcmp(id, "fmt ", 4)) {
+            if (size < 16 || fread(&format, 2, 1, f) != 1 || fread(&channels, 2, 1, f) != 1 ||
+                fread(&sample_rate, 4, 1, f) != 1) {
+                fclose(f);
+                return {};
+            }
+            uint32_t byte_rate = 0;
+            uint16_t block_align = 0;
+            fread(&byte_rate, 4, 1, f);
+            fread(&block_align, 2, 1, f);
+            fread(&bits, 2, 1, f);
+            if (size > 16) fseek(f, (long) size - 16, SEEK_CUR);
+        } else if (!memcmp(id, "data", 4)) {
+            if (format != 1 || bits != 16 || channels < 1) {
+                fprintf(stderr, "[music-cli] reference WAV must be PCM16 (format=%u bits=%u channels=%u)\n",
+                        (unsigned) format, (unsigned) bits, (unsigned) channels);
+                fclose(f);
+                return {};
+            }
+            const size_t sample_count = size / sizeof(int16_t);
+            std::vector<int16_t> input(sample_count);
+            const size_t got = fread(input.data(), sizeof(int16_t), sample_count, f);
+            const int frame_count = (int) (got / channels);
+            std::vector<float> output((size_t) frame_count * 2);
+            for (int i = 0; i < frame_count; ++i) {
+                const float left  = input[(size_t) i * channels] / 32768.0f;
+                const float right = channels > 1 ? input[(size_t) i * channels + 1] / 32768.0f : left;
+                output[(size_t) i * 2]     = left;
+                output[(size_t) i * 2 + 1] = right;
+            }
+            *frames = frame_count;
+            *rate   = (int) sample_rate;
+            fclose(f);
+            return output;
+        } else {
+            fseek(f, (long) size, SEEK_CUR);
+        }
+        if (size & 1u) fseek(f, 1, SEEK_CUR);
+    }
+
+    fclose(f);
+    fprintf(stderr, "[music-cli] reference WAV has no data chunk\n");
+    return {};
+}
+
 static void wav_write(const char * path, const std::vector<float> & pcm, int frames, int rate) {
     float peak = 1e-9f;
     for (int i = 0; i < frames * 2; i++) peak = std::fmax(peak, std::fabs(pcm[i]));
@@ -142,6 +211,7 @@ int main(int argc, char ** argv) {
                 "   or: music-cli --dit dit.gguf --lm lm.gguf --text emb.gguf --vae vae.gguf\n"
                 "  prompt:  [--caption \"...\"] [--lyrics \"...\"] [--bpm 128] [--key \"C major\"]\n"
                 "           [--tsig 4/4] [--lang en] [--req request.json]\n"
+                "  audio:   [--ref-audio <48-kHz PCM16 WAV>]  (timbre reference)\n"
                 "  sampler: [--steps N] [--shift F]  (default: auto from the DiT variant,\n"
                 "           turbo 8 / 3.0, base and sft 50 / 1.0)\n"
                 "           [--no-dcw]  (Haar DCW double mode is enabled by default)\n"
@@ -201,6 +271,20 @@ int main(int argc, char ** argv) {
             }
             fprintf(stderr, "[music-cli] --req: %zu pre-supplied audio codes (LM bypass)\n", p.audio_codes.size());
         }
+    }
+
+    if (const char * reference_path = arg_val(argc, argv, "--ref-audio")) {
+        int reference_frames = 0;
+        int reference_rate   = 0;
+        p.reference_audio = wav_read(reference_path, &reference_frames, &reference_rate);
+        if (p.reference_audio.empty()) return 1;
+        if (reference_rate != 48000) {
+            fprintf(stderr, "[music-cli] reference WAV is %d Hz; convert it to 48 kHz before generation\n",
+                    reference_rate);
+            return 1;
+        }
+        fprintf(stderr, "[music-cli] reference audio: %s (%.2fs, 48 kHz stereo)\n", reference_path,
+                (float) reference_frames / 48000.0f);
     }
 
     const char * out_path = arg_val(argc, argv, "--out") ? arg_val(argc, argv, "--out") : "music_out.wav";

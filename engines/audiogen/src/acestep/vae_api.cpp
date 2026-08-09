@@ -6,6 +6,8 @@
 
 #include "ggml-backend.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <stdexcept>
 #include <thread>
@@ -82,6 +84,49 @@ std::vector<float> Vae::decode(const std::vector<float> & latent, int T_latent,
 std::vector<float> Vae::encode(const std::vector<float> & pcm_interleaved, int frames, int * T_latent_out) const {
     if (T_latent_out) *T_latent_out = 0;
     if (frames <= 0 || (int) pcm_interleaved.size() < frames * 2) return {};
+
+    // Match acestep.cpp's bounded-memory VAE encoder: 1024 latent-frame
+    // windows (40.96 s), 64 frames of context on each side, and only the
+    // non-overlap core retained.
+    constexpr int latent_chunk   = 1024;
+    constexpr int latent_overlap = 64;
+    constexpr int upsample       = 1920;
+    constexpr int audio_chunk    = latent_chunk * upsample;
+    constexpr int audio_overlap  = latent_overlap * upsample;
+    constexpr int audio_stride   = audio_chunk - 2 * audio_overlap;
+    if (frames > audio_chunk) {
+        const int tiles = (frames + audio_stride - 1) / audio_stride;
+        std::vector<float> latent;
+        latent.reserve(((size_t) frames / upsample + (size_t) tiles) * 64);
+        float downsample = 0.0f;
+
+        for (int i = 0; i < tiles; ++i) {
+            const int core_start = i * audio_stride;
+            const int core_end   = std::min(core_start + audio_stride, frames);
+            const int win_start  = std::max(0, core_start - audio_overlap);
+            const int win_end    = std::min(frames, core_end + audio_overlap);
+            const int win_frames = win_end - win_start;
+
+            std::vector<float> window(
+                pcm_interleaved.begin() + (size_t) win_start * 2,
+                pcm_interleaved.begin() + (size_t) win_end * 2);
+            std::vector<float> tile;
+            const int tile_T = vae_model_encode(impl_->model, window.data(), win_frames, tile);
+            if (tile_T <= 0) return {};
+
+            if (i == 0) downsample = (float) tile_T / (float) win_frames;
+            const int trim_start = (int) std::round((float) (core_start - win_start) * downsample);
+            const int trim_end   = (int) std::round((float) (win_end - core_end) * downsample);
+            const int end        = trim_end > 0 ? tile_T - trim_end : tile_T;
+            if (trim_start < 0 || end <= trim_start || end > tile_T) return {};
+            latent.insert(latent.end(), tile.begin() + (size_t) trim_start * 64,
+                          tile.begin() + (size_t) end * 64);
+        }
+
+        if (T_latent_out) *T_latent_out = (int) (latent.size() / 64);
+        return latent;
+    }
+
     std::vector<float> latent;
     int T_lat = vae_model_encode(impl_->model, pcm_interleaved.data(), frames, latent);
     if (T_lat < 0) return {};

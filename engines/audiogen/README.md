@@ -149,6 +149,11 @@ Consume the installed package with `find_package(audiogen-cpp CONFIG REQUIRED)` 
                   --caption "driving synth pop, bright analog leads" \
                   --lyrics "[Instrumental]" --bpm 128 --key "C major" --tsig 4/4 \
                   --lang en --steps 8 --shift 3.0 --gpu --out song.wav
+
+# condition generation with a 48 kHz PCM16 WAV timbre reference
+./build/music-cli --models models/acestep --ref-audio reference-48k.wav \
+                  --caption "warm Latin pop with a male lead vocal" \
+                  --lyrics "[Verse]\nA brand new lyric" --gpu --out referenced.wav
 ```
 
 | Flag | Default | Meaning |
@@ -165,6 +170,7 @@ Consume the installed package with `find_package(audiogen-cpp CONFIG REQUIRED)` 
 | `--temp F`, `--topp F`, `--topk N`, `--cfg F` | `0.85`, `0.9`, off, `2.0` | LM sampling for the audio codes |
 | `--no-phase1` | off | skip the LM metadata auto-fill pass |
 | `--req FILE` | | request JSON; pre-supplied `audio_codes` skip the LM stage |
+| `--ref-audio FILE` | | 48 kHz PCM16 WAV used by ACE-Step's timbre-conditioning path |
 | `--gpu`, `--threads N` | CPU, hardware concurrency | compute placement |
 | `--dump-stages DIR` | | write one `.bin` per stage into an existing directory |
 
@@ -173,6 +179,10 @@ At timestep `t`, the low band uses `t * 0.05` and the high band uses
 `(1 - t) * 0.02`, matching the official Python defaults. The correction runs
 on the host latent between DiT steps, so it is backend-independent and adds
 negligible work compared with a transformer forward.
+
+Reference WAV input is decoded at the `music-cli` boundary and must be PCM16
+stereo or mono at 48 kHz. The engine receives normalized interleaved stereo PCM
+and encodes it in overlapping VAE windows for bounded memory on long inputs.
 
 ### acestep-cli
 
