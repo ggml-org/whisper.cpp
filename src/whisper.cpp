@@ -3766,7 +3766,12 @@ struct whisper_context * whisper_init_from_buffer_with_params_no_state(void * bu
 
         size_t size_to_copy = buf->current_offset + read_size < buf->size ? read_size : buf->size - buf->current_offset;
 
-        memcpy(output, buf->buffer + buf->current_offset, size_to_copy);
+        // When the buffer is exhausted size_to_copy is 0 and buf->buffer may be
+        // null (empty buffer); passing a null source to memcpy is undefined
+        // behavior even for a zero-length copy, so skip it (issue #3879).
+        if (size_to_copy > 0) {
+            memcpy(output, buf->buffer + buf->current_offset, size_to_copy);
+        }
         buf->current_offset += size_to_copy;
 
         return size_to_copy;
