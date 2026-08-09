@@ -523,10 +523,16 @@ static char * escape_double_quotes_and_backslashes(const char * str) {
         return NULL;
     }
 
-    size_t escaped_length = strlen(str) + 1;
+    // Drop bytes that are not valid UTF-8 so the emitted JSON is always well-formed:
+    // byte-level decoder tokens can leave a lone UTF-8 lead byte at a segment
+    // boundary, which would otherwise produce invalid UTF-8 output (issue #3760).
+    const std::string sanitized = utf8_sanitize(str);
+    const char * s = sanitized.c_str();
 
-    for (size_t i = 0; str[i] != '\0'; i++) {
-        if (str[i] == '"' || str[i] == '\\') {
+    size_t escaped_length = sanitized.size() + 1;
+
+    for (size_t i = 0; s[i] != '\0'; i++) {
+        if (s[i] == '"' || s[i] == '\\') {
             escaped_length++;
         }
     }
@@ -537,11 +543,11 @@ static char * escape_double_quotes_and_backslashes(const char * str) {
     }
 
     size_t pos = 0;
-    for (size_t i = 0; str[i] != '\0'; i++) {
-        if (str[i] == '"' || str[i] == '\\') {
+    for (size_t i = 0; s[i] != '\0'; i++) {
+        if (s[i] == '"' || s[i] == '\\') {
             escaped[pos++] = '\\';
         }
-        escaped[pos++] = str[i];
+        escaped[pos++] = s[i];
     }
 
     // no need to set zero due to calloc() being used prior
