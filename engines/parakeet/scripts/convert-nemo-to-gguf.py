@@ -5,6 +5,15 @@ parakeet.cpp Engine.
 Auto-detects the model flavour from ``cfg['target']``:
 
   - ``EncDecCTCModelBPE``                -> CTC head      (parakeet-ctc-0.6b, -1.1b)
+  - ``EncDecHybridRNNTCTCBPEModel`` (no TDT durations)
+                                         -> CTC head      (IndicConformer-600M
+                                            hybrid; CTC-only v1 export.
+                                            CTC weights live under
+                                            ``ctc_decoder.*``; vocab under
+                                            ``aux_ctc.decoder``)
+  - ``EncDecHybridRNNTCTCBPEModel`` (with TDT durations)
+                                         -> TDT           (hybrid TDT+CTC ckpts
+                                            such as parakeet-tdt_ctc-110m)
   - ``EncDecRNNTBPEModel`` (with TDT durations)
                                          -> TDT (RNN-T + duration head)
                                             (parakeet-tdt-0.6b-v3, -1.1b)
@@ -18,15 +27,16 @@ Auto-detects the model flavour from ``cfg['target']``:
   - ``EncDecDiarLabelModel``             -> Sortformer    (diar_sortformer_4spk-v1,
                                             diar_streaming_sortformer_4spk-v2)
 
-The FastConformer encoder topology is shared across all four flavours; only
+The FastConformer encoder topology is shared across all flavours; only
 the decoder / head tensors + metadata differ. EOU additionally swaps the
 conv module's BatchNorm for a LayerNorm and carries cache-aware streaming
 hyperparameters (att_context_size, subsampling-output cache lookback, and the
-EOU reference chunk size) in metadata.
+chunk size used by the binding's reference EOU pipeline) in metadata.
 
-Warning: the script's ``--hf-repo`` default is ``nvidia/parakeet-ctc-0.6b``.
-When ``--ckpt`` names a non-CTC file that is not present locally, pass ``--hf-repo``
-explicitly or the downloader may fetch the default CTC checkpoint instead.
+Footgun: the script's ``--hf-repo`` default is ``nvidia/parakeet-ctc-0.6b``,
+so when ``--ckpt`` points at a non-CTC path that does not exist locally
+**you must pass ``--hf-repo`` explicitly** -- otherwise the script will
+download the CTC checkpoint instead of the one named in ``--ckpt``.
 
 Output GGUF layout (see src/parakeet_ctc.h / src/parakeet_tdt.h /
 src/parakeet_sortformer.h for the consumer structs):
@@ -124,7 +134,18 @@ def ensure_ckpt(path: Path, hf_repo: str) -> Path:
     if path.exists():
         return path
     print(f"[convert] {path} missing, downloading {hf_repo} from Hugging Face...", file=sys.stderr)
-    from huggingface_hub import hf_hub_download
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        raise SystemExit(
+            f"[convert] huggingface_hub is not installed but {path} is missing.\n"
+            "  Either:\n"
+            "    1. Run 'npm run setup-models' / 'scripts/download-models.sh' "
+            "(the documented path; uses curl, no Python deps), or\n"
+            "    2. Install it manually: 'python -m pip install huggingface_hub'.\n"
+            "  huggingface_hub is intentionally not in scripts/requirements.txt "
+            "because download-models.sh is the supported entry point."
+        )
     os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
     cache = path.parent / "hf-cache"
     cache.mkdir(parents=True, exist_ok=True)
@@ -152,6 +173,9 @@ def load_nemo(ckpt: Path):
 
         tok_bytes = b""
         tok_cfg   = cfg.get("tokenizer")
+        # Single-file SentencePiece (Parakeet CTC/TDT/EOU). Multilingual /
+        # aggregate tokenizers have no top-level model_path; pieces are
+        # resolved later from per-lang models or cfg labels.
         if tok_cfg and tok_cfg.get("model_path"):
             tok_fname = Path(tok_cfg["model_path"].split("nemo:", 1)[1]).name
             for m in t.getmembers():
@@ -161,17 +185,185 @@ def load_nemo(ckpt: Path):
             else:
                 raise RuntimeError(f"tokenizer.model ({tok_fname}) not found in {ckpt}")
 
+        multilingual_tok = {}
+        if tok_cfg and str(tok_cfg.get("type", "")).lower() in ("multilingual", "agg", "aggregate"):
+            langs = tok_cfg.get("langs") or {}
+            for lang, lcfg in langs.items():
+                if not isinstance(lcfg, dict) or not lcfg.get("model_path"):
+                    continue
+                tok_fname = Path(lcfg["model_path"].split("nemo:", 1)[1]).name
+                for m in t.getmembers():
+                    if m.name.endswith("/" + tok_fname) or m.name.endswith(tok_fname):
+                        multilingual_tok[lang] = t.extractfile(m).read()
+                        break
+                else:
+                    raise RuntimeError(
+                        f"multilingual tokenizer.model for lang={lang} "
+                        f"({tok_fname}) not found in {ckpt}"
+                    )
+
         w_m = _get_member(t, "model_weights.ckpt")
         buf = io.BytesIO(t.extractfile(w_m).read())
 
     sd = torch.load(buf, map_location="cpu", weights_only=True)
-    return cfg, sd, tok_bytes
+    return cfg, sd, tok_bytes, multilingual_tok
+
+
+def vocab_piece_list(cfg: dict):
+    """Return the CTC/RNNT label vocabulary when no single SP model exists."""
+    labels = cfg.get("labels")
+    if labels:
+        return [str(p) for p in labels]
+    ctc = ctc_decoder_config(cfg)
+    vocabulary = ctc.get("vocabulary")
+    if vocabulary:
+        return [str(p) for p in vocabulary]
+    return None
+
+
+def emit_ctc_language_ranges(writer, cfg: dict, multilingual_tok: dict):
+    """Emit per-language CTC vocab slices for aggregate multilingual tokenizers.
+
+    IndicConformer-style checkpoints concatenate 22 language SentencePiece
+    models into one CTC head. NeMo / HF decode applies a language mask so
+    greedy CTC only sees that language's token range (+ blank). Without these
+    keys the engine keeps full-vocab greedy (Parakeet monolingual CTC).
+    """
+    tok_cfg = cfg.get("tokenizer") or {}
+    langs = tok_cfg.get("langs")
+    if not isinstance(langs, dict) or not langs:
+        return
+
+    import sentencepiece as spm
+
+    lang_ids = []
+    starts = []
+    ends = []
+    offset = 0
+    for lang, _lcfg in langs.items():
+        data = multilingual_tok.get(lang) if multilingual_tok else None
+        if not data:
+            raise RuntimeError(
+                f"CTC language range for lang={lang}: tokenizer.model missing "
+                f"from checkpoint (refusing 256-token fallback; offsets would "
+                f"diverge from emitted tokenizer pieces)"
+            )
+        sp = spm.SentencePieceProcessor()
+        sp.load_from_serialized_proto(data)
+        n_pieces = sp.get_piece_size()
+        if n_pieces <= 0:
+            raise RuntimeError(
+                f"CTC language range for lang={lang}: tokenizer has 0 pieces"
+            )
+        lang_ids.append(str(lang))
+        starts.append(int(offset))
+        ends.append(int(offset + n_pieces))
+        offset += n_pieces
+
+    writer.add_array("parakeet.ctc.lang_ids", lang_ids)
+    writer.add_array("parakeet.ctc.lang_token_start", starts)
+    writer.add_array("parakeet.ctc.lang_token_end", ends)
+    print(f"[convert] ctc language ranges: {len(lang_ids)} langs, "
+          f"covered_tokens={offset}", file=sys.stderr)
+
+
+def emit_tokenizer_metadata(writer, tok_bytes: bytes, multilingual_tok: dict, cfg: dict):
+    """Write tokenizer.ggml.* keys the engine uses for BPE detokenize.
+
+    Prefer a single SentencePiece proto when present. For IndicConformer-style
+    multilingual aggregate tokenizers, concatenate per-language SP models in
+    ``tokenizer.langs`` order (matches ``cfg['labels']``). Fall back to the
+    label list alone when SP protos are unavailable.
+    """
+    pieces = None
+    scores = None
+    piece_tp = None
+    unk_id = 0
+    bos_id = -1
+    eos_id = -1
+    pad_id = -1
+
+    if tok_bytes:
+        writer.add_string("tokenizer.ggml.model", "sentencepiece")
+        writer.add_array("tokenizer.ggml.sentencepiece_model", list(tok_bytes))
+        import sentencepiece as spm
+        sp = spm.SentencePieceProcessor()
+        sp.load_from_serialized_proto(tok_bytes)
+        n_pieces = sp.get_piece_size()
+        pieces = [sp.id_to_piece(i) for i in range(n_pieces)]
+        scores = [float(sp.get_score(i)) for i in range(n_pieces)]
+        piece_tp = []
+        for i in range(n_pieces):
+            if   sp.is_unknown(i):  piece_tp.append(2)
+            elif sp.is_control(i):  piece_tp.append(3)
+            elif sp.is_unused(i):   piece_tp.append(5)
+            elif sp.is_byte(i):     piece_tp.append(6)
+            else:                   piece_tp.append(1)
+        unk_id = sp.unk_id() if sp.unk_id() >= 0 else 0
+        bos_id = sp.bos_id() if sp.bos_id() >= 0 else -1
+        eos_id = sp.eos_id() if sp.eos_id() >= 0 else -1
+        pad_id = sp.pad_id() if sp.pad_id() >= 0 else -1
+    elif multilingual_tok:
+        import sentencepiece as spm
+        pieces = []
+        scores = []
+        piece_tp = []
+        tok_cfg = cfg.get("tokenizer") or {}
+        for lang in (tok_cfg.get("langs") or {}):
+            data = multilingual_tok.get(lang)
+            if data is None:
+                raise RuntimeError(
+                    f"multilingual tokenizer pieces for lang={lang} missing; "
+                    f"cannot emit tokenizer.ggml.* aligned with lang ranges"
+                )
+            sp = spm.SentencePieceProcessor()
+            sp.load_from_serialized_proto(data)
+            for i in range(sp.get_piece_size()):
+                pieces.append(sp.id_to_piece(i))
+                scores.append(float(sp.get_score(i)))
+                if   sp.is_unknown(i):  piece_tp.append(2)
+                elif sp.is_control(i):  piece_tp.append(3)
+                elif sp.is_unused(i):   piece_tp.append(5)
+                elif sp.is_byte(i):     piece_tp.append(6)
+                else:                   piece_tp.append(1)
+        writer.add_string("tokenizer.ggml.model", "sentencepiece")
+        unk_id = 0
+    else:
+        pieces = vocab_piece_list(cfg)
+        if pieces:
+            writer.add_string("tokenizer.ggml.model", "sentencepiece")
+            scores = [0.0] * len(pieces)
+            piece_tp = [2 if p == "<unk>" else 1 for p in pieces]
+            unk_id = next((i for i, p in enumerate(pieces) if p == "<unk>"), 0)
+
+    if not pieces:
+        raise RuntimeError("no tokenizer in checkpoint (e.g. Sortformer)")
+
+    writer.add_array("tokenizer.ggml.tokens",      pieces)
+    writer.add_array("tokenizer.ggml.scores",      scores)
+    writer.add_array("tokenizer.ggml.token_type",  piece_tp)
+    writer.add_uint32("tokenizer.ggml.unk_token_id", unk_id if unk_id >= 0 else 0)
+    if bos_id >= 0:
+        writer.add_uint32("tokenizer.ggml.bos_token_id", bos_id)
+    if eos_id >= 0:
+        writer.add_uint32("tokenizer.ggml.eos_token_id", eos_id)
+    if pad_id >= 0:
+        writer.add_uint32("tokenizer.ggml.pad_token_id", pad_id)
+    return len(pieces)
 
 
 def detect_model_type(cfg: dict) -> str:
     target = cfg.get("target", "")
     if "Sortformer" in target or "sortformer_modules" in cfg:
         return "sortformer"
+    # Hybrid RNNT+CTC targets contain "RNNT", so resolve them before the
+    # generic RNNT branch. Vanilla hybrid (IndicConformer) exports CTC for
+    # v1; hybrid+TDT keeps the TDT export path.
+    if "HybridRNNTCTC" in target:
+        durations = cfg.get("model_defaults", {}).get("tdt_durations")
+        if durations:
+            return "tdt"
+        return "ctc"
     is_rnnt = "RNNT" in target or \
               "tdt" in cfg.get("loss", {}).get("loss_name", "").lower()
     if is_rnnt:
@@ -184,6 +376,41 @@ def detect_model_type(cfg: dict) -> str:
             return "eou"
         return "tdt"
     return "ctc"
+
+
+def ctc_decoder_config(cfg: dict) -> dict:
+    """Return the ConvASRDecoder config used for CTC vocab metadata.
+
+    Pure CTC checkpoints store ``num_classes`` under ``decoder``. Hybrid
+    RNNT+CTC checkpoints keep the RNNT predictor under ``decoder`` and the
+    CTC head config under ``aux_ctc.decoder``.
+    """
+    aux = cfg.get("aux_ctc")
+    if isinstance(aux, dict):
+        decoder = aux.get("decoder")
+        if isinstance(decoder, dict) and "num_classes" in decoder:
+            return decoder
+    return cfg.get("decoder") or {}
+
+
+def resolve_ctc_head_tensors(sd: dict):
+    """Locate the CTC 1x1 conv head weight/bias in a state dict.
+
+    Hybrid checkpoints register the head as ``self.ctc_decoder``; pure CTC
+    checkpoints use ``self.decoder``. Prefer the hybrid keys, then fall back.
+    """
+    hybrid_w = "ctc_decoder.decoder_layers.0.weight"
+    hybrid_b = "ctc_decoder.decoder_layers.0.bias"
+    plain_w = "decoder.decoder_layers.0.weight"
+    plain_b = "decoder.decoder_layers.0.bias"
+    if hybrid_w in sd and hybrid_b in sd:
+        return sd[hybrid_w].squeeze(-1), sd[hybrid_b]
+    if plain_w in sd and plain_b in sd:
+        return sd[plain_w].squeeze(-1), sd[plain_b]
+    raise KeyError(
+        "CTC head not found: expected ctc_decoder.decoder_layers.0.{weight,bias} "
+        "or decoder.decoder_layers.0.{weight,bias}"
+    )
 
 
 def as_np(t: torch.Tensor, dtype=None) -> np.ndarray:
@@ -216,7 +443,8 @@ def detect_sortformer_variant(ckpt: Path) -> str:
     return ""
 
 
-def write_gguf(out: Path, ckpt: Path, cfg: dict, sd: dict, tok_bytes: bytes, quant: str):
+def write_gguf(out: Path, ckpt: Path, cfg: dict, sd: dict, tok_bytes: bytes,
+               multilingual_tok: dict, quant: str):
     model_type = detect_model_type(cfg)
 
     enc = cfg["encoder"]
@@ -303,10 +531,12 @@ def write_gguf(out: Path, ckpt: Path, cfg: dict, sd: dict, tok_bytes: bytes, qua
     writer.add_string ("parakeet.preproc.normalize",                 normalize_str)
 
     if model_type == "ctc":
-        vocab_size = int(dec["num_classes"]) + 1
+        ctc_dec = ctc_decoder_config(cfg)
+        vocab_size = int(ctc_dec["num_classes"]) + 1
         blank_id   = vocab_size - 1
         writer.add_uint32("parakeet.ctc.vocab_size", vocab_size)
         writer.add_uint32("parakeet.ctc.blank_id",   blank_id)
+        emit_ctc_language_ranges(writer, cfg, multilingual_tok)
     elif model_type == "eou":
         pred_hidden       = int(dec["prednet"]["pred_hidden"])
         pred_rnn_layers   = int(dec["prednet"]["pred_rnn_layers"])
@@ -374,38 +604,9 @@ def write_gguf(out: Path, ckpt: Path, cfg: dict, sd: dict, tok_bytes: bytes, qua
         writer.add_uint32("parakeet.tdt.num_durations",    num_durations)
         writer.add_array ("parakeet.tdt.durations",        durations)
 
-    if tok_bytes:
-        writer.add_string("tokenizer.ggml.model", "sentencepiece")
-        writer.add_array ("tokenizer.ggml.sentencepiece_model",
-                          list(tok_bytes))
-
     try:
-        if not tok_bytes:
-            raise RuntimeError("no tokenizer in checkpoint (e.g. Sortformer)")
-        import sentencepiece as spm
-        sp = spm.SentencePieceProcessor()
-        sp.load_from_serialized_proto(tok_bytes)
-        n_pieces = sp.get_piece_size()
-        pieces    = [sp.id_to_piece(i) for i in range(n_pieces)]
-        scores    = [float(sp.get_score(i)) for i in range(n_pieces)]
-        piece_tp  = []
-        for i in range(n_pieces):
-            if   sp.is_unknown(i):  piece_tp.append(2)
-            elif sp.is_control(i):  piece_tp.append(3)
-            elif sp.is_unused(i):   piece_tp.append(5)
-            elif sp.is_byte(i):     piece_tp.append(6)
-            else:                   piece_tp.append(1)
-        writer.add_array("tokenizer.ggml.tokens",      pieces)
-        writer.add_array("tokenizer.ggml.scores",      scores)
-        writer.add_array("tokenizer.ggml.token_type",  piece_tp)
-        writer.add_uint32("tokenizer.ggml.unk_token_id",
-                          sp.unk_id() if sp.unk_id() >= 0 else 0)
-        writer.add_uint32("tokenizer.ggml.bos_token_id",
-                          sp.bos_id() if sp.bos_id() >= 0 else 0)
-        writer.add_uint32("tokenizer.ggml.eos_token_id",
-                          sp.eos_id() if sp.eos_id() >= 0 else 0)
-        writer.add_uint32("tokenizer.ggml.pad_token_id",
-                          sp.pad_id() if sp.pad_id() >= 0 else 0)
+        n_tok = emit_tokenizer_metadata(writer, tok_bytes, multilingual_tok, cfg)
+        print(f"[convert] tokenizer pieces={n_tok}", file=sys.stderr)
     except Exception as e:
         print(f"[convert] warn: could not emit tokenizer pieces: {e}", file=sys.stderr)
 
@@ -522,8 +723,7 @@ def write_gguf(out: Path, ckpt: Path, cfg: dict, sd: dict, tok_bytes: bytes, qua
         add_f32(f"{p}.norm_out.bias",     sd[f"{k}.norm_out.bias"])
 
     if model_type == "ctc":
-        dec_w = sd["decoder.decoder_layers.0.weight"].squeeze(-1)
-        dec_b = sd["decoder.decoder_layers.0.bias"]
+        dec_w, dec_b = resolve_ctc_head_tensors(sd)
         add_2d ("ctc.decoder.weight", dec_w)
         add_f32("ctc.decoder.bias",   dec_b)
     elif model_type == "eou":
@@ -611,7 +811,7 @@ def write_gguf(out: Path, ckpt: Path, cfg: dict, sd: dict, tok_bytes: bytes, qua
 
     size_mb = out.stat().st_size / (1024 * 1024)
     if model_type == "ctc":
-        vocab_note = f"ctc_vocab={int(cfg['decoder']['num_classes'])+1}"
+        vocab_note = f"ctc_vocab={int(ctc_decoder_config(cfg)['num_classes'])+1}"
     elif model_type == "sortformer":
         vocab_note = (f"num_spks={cfg['sortformer_modules']['num_spks']} "
                       f"tf_layers={cfg['transformer_encoder']['num_layers']} "
@@ -631,9 +831,9 @@ def write_gguf(out: Path, ckpt: Path, cfg: dict, sd: dict, tok_bytes: bytes, qua
 def main():
     args = parse_args()
     ckpt = ensure_ckpt(args.ckpt, args.hf_repo)
-    cfg, sd, tok_bytes = load_nemo(ckpt)
+    cfg, sd, tok_bytes, multilingual_tok = load_nemo(ckpt)
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    write_gguf(args.out, ckpt, cfg, sd, tok_bytes, args.quant)
+    write_gguf(args.out, ckpt, cfg, sd, tok_bytes, multilingual_tok, args.quant)
 
 
 if __name__ == "__main__":

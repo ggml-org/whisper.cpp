@@ -275,6 +275,17 @@ struct ParakeetCtcModel {
     int32_t blank_id   = 1024;
     int32_t vocab_size = 1025;
 
+    // Optional CTC language masks (IndicConformer multilingual aggregate
+    // vocab). Empty for monolingual Parakeet CTC GGUFs. When non-empty,
+    // EngineOptions::language / CLI --language selects a [start, end)
+    // slice; greedy CTC also always considers blank_id.
+    struct CtcLangRange {
+        std::string id;
+        int32_t token_start = 0;  // inclusive
+        int32_t token_end   = 0;  // exclusive
+    };
+    std::vector<CtcLangRange> ctc_lang_ranges;
+
     bool supports_streaming = false;
 
     // EOU-specific token IDs (resolved from the GGUF's `parakeet.eou.*`
@@ -421,10 +432,30 @@ int run_encoder_bypass_pre_encode(
     EncoderOutputs     & out,
     int                  max_layers = -1);
 
+// Optional language mask for multilingual CTC. token_end < 0 means
+// full-vocab greedy (default / monolingual). When token_end > token_start,
+// argmax considers [token_start, token_end) and always blank_id.
+struct CtcDecodeOptions {
+    int32_t token_start = 0;
+    int32_t token_end   = -1;
+};
+
+bool find_ctc_language_range(const ParakeetCtcModel & model,
+                             const std::string      & language,
+                             int32_t                & out_start,
+                             int32_t                & out_end);
+
+// Resolve EngineOptions::language / CLI --language into CTC decode options.
+// Empty language with masks present throws (required). Non-empty language with
+// no masks returns full-vocab options (ignored). Unknown id with masks throws.
+CtcDecodeOptions resolve_ctc_decode_options(const ParakeetCtcModel & model,
+                                            const std::string      & language);
+
 std::vector<int32_t> ctc_greedy_decode(const float * logits,
                                        int           n_frames,
                                        int           vocab_size,
-                                       int32_t       blank_id);
+                                       int32_t       blank_id,
+                                       const CtcDecodeOptions * opts = nullptr);
 
 void ctc_greedy_decode_window(const float * logits,
                               int           start_frame,
@@ -433,7 +464,8 @@ void ctc_greedy_decode_window(const float * logits,
                               int32_t       blank_id,
                               int32_t     & inout_prev_token,
                               std::vector<int32_t> & out_tokens,
-                              std::vector<int>     * out_first_frame = nullptr);
+                              std::vector<int>     * out_first_frame = nullptr,
+                              const CtcDecodeOptions * opts = nullptr);
 
 struct BlockSubstageTimes {
     double ff1_ms  = 0.0;

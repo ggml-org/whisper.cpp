@@ -8,6 +8,7 @@
 |---|---|---|---|---|---|---|---|---|
 | `nvidia/parakeet-ctc-0.6b`    | CTC  | 80  | 1024 × 24 | 1024 | 600 M  | 697 MiB q8_0 / 1.3 GiB f16  | 0.014-0.046 | English only |
 | `nvidia/parakeet-ctc-1.1b`    | CTC  | 80  | 1024 × 42 | 1024 | 1.1 B  | 1217 MiB q8_0               | 0.026-0.074 | English only |
+| `ai4bharat/indic-conformer-600m-multilingual` | CTC (hybrid NeMo; CTC-only export) | 80 | 1024 × 24 | 5632 (+blank) | 600 M | ~701 MiB q8_0 / ~373 MiB q4_0 / 1.3 GiB f16 | CPU smoke only so far | 22 Indic languages; requires `--language` / `EngineOptions::language` |
 | `nvidia/parakeet-tdt-0.6b-v3` | TDT  | 128 | 1024 × 24 | 8192 | 600 M  | 715 MiB q8_0 / 1.34 GiB f16 | 0.006 (q8_0, end-to-end Metal — ~160× realtime, fused LSTM+joint decoder) | ~25 languages + PnC |
 | `nvidia/parakeet-tdt-1.1b`    | TDT  | 80  | 1024 × 42 | 1024 | 1.1 B  | 1225 MiB q8_0               | 0.027-0.079 | English only, lowest WER (no PnC) |
 | `nvidia/diar_sortformer_4spk-v1` | Sortformer (diarization) | 80 | enc 512 × 18 + tf 192 × 18 | n/a (4 spk) | ~123 M | 263 MiB f16 / 141 MiB q8_0 / 75 MiB q4_0 | 0.017-0.097 | Up to 4 speakers, offline |
@@ -77,6 +78,15 @@ Run with GPU layers:
 
 `--n-gpu-layers` is a yes/no toggle: any value > 0 offloads the encoder to the compiled GPU backend; on Metal the TDT decoder can run as ggml graphs too. Encoder fits one device; partial-layer offload is not implemented.
 
+**Multilingual CTC (`--language`)** — IndicConformer-style GGUFs advertise `parakeet.ctc.lang_*` ranges (one SentencePiece slice per language). Pass the language id so greedy CTC only considers that range (+ blank):
+
+```bash
+./build/parakeet --model models/indic-conformer-ctc.q8_0.gguf \
+  --wav samples/hi.wav --language hi
+```
+
+`EngineOptions::language` is the matching C++ knob. Empty language on a masked GGUF is an error. On monolingual CTC GGUFs (no `lang_*` metadata), `--language` is ignored and decode stays full-vocab.
+
 **Useful CMake options**
 
 | Flag | Default | Meaning |
@@ -106,6 +116,15 @@ python scripts/convert-nemo-to-gguf.py \
 ```
 
 **Important:** for non-default checkpoints set **`--hf-repo`** (e.g. `nvidia/parakeet-tdt-0.6b-v3`) — the script otherwise defaults to the CTC repo and may download the wrong weights. Use `scripts/download-all-models.sh` to prefetch `.nemo` files.
+
+Hybrid NeMo targets (`EncDecHybridRNNTCTCBPEModel`, e.g. IndicConformer) export **CTC-only** for v1: CTC head from `ctc_decoder.*`, aggregate SentencePiece pieces, and `parakeet.ctc.lang_{ids,token_start,token_end}` metadata. Conversion fails if any per-language tokenizer is missing (no synthetic 256-token ranges).
+
+```bash
+python scripts/convert-nemo-to-gguf.py \
+  --ckpt models/indicconformer_stt_multi_hybrid_rnnt_600m.nemo \
+  --out  models/indic-conformer-ctc.q8_0.gguf \
+  --quant q8_0
+```
 
 Default **`--quant`** is **`q8_0`**. Use **`f16`** for parity-calibrated harnesses (noise from q8 swamps NeMo FP32 references).
 

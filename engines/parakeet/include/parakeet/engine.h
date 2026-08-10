@@ -182,6 +182,15 @@ struct EngineOptions {
     // appears twice in the output. 0 => auto (min(256, window/4) each side).
     int long_form_window_frames  = 0;
     int long_form_context_frames = 0;
+
+    // Multilingual CTC language id (e.g. "hi", "ta").
+    // - Empty: full-vocab greedy. Required (throws / CLI error) when the GGUF
+    //   advertises parakeet.ctc.lang_* ranges (IndicConformer aggregate vocab).
+    // - Non-empty on monolingual CTC (no lang_* ranges): ignored; decode stays
+    //   full-vocab greedy.
+    // - Non-empty on a multilingual GGUF: must match a advertised lang id or
+    //   load/transcribe throws.
+    std::string language;
 };
 
 // Resolved compute device the Engine is actually running on, after the
