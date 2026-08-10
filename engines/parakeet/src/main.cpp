@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -55,6 +56,10 @@ void print_usage(const char * argv0) {
         "                       model's sample rate exactly (resampling is not yet wired).\n"
         "                       If omitted, falls back to the model's rate with a warning.\n"
         "  --threads N          number of CPU threads (0 = hardware_concurrency)\n"
+        "  --language ID        CTC language id for multilingual aggregate vocabs\n"
+        "                       (e.g. hi, ta, gu). Required for IndicConformer-style\n"
+        "                       GGUFs that advertise parakeet.ctc.lang_* ranges;\n"
+        "                       ignored (full-vocab decode) for monolingual CTC.\n"
         "  --n-gpu-layers N     when > 0, run the encoder on the compiled-in GPU\n"
         "                       backend (build with -DGGML_METAL=ON / -DGGML_CUDA=ON\n"
         "                       / -DGGML_VULKAN=ON / -DGGML_OPENCL=ON; only one is\n"
@@ -361,6 +366,7 @@ AggStats aggregate(std::vector<double> v) {
 struct CliOpts {
     std::string model_gguf_path;
     std::string wav_path;
+    std::string language;
     int  n_threads    = 0;
     int  n_gpu_layers = 0;
     bool verbose      = false;
@@ -389,6 +395,8 @@ extern "C" int parakeet_cli_main(int argc, char ** argv) {
             opts.wav_path = argv[++i];
         } else if (a == "--threads" && i + 1 < argc) {
             opts.n_threads = std::atoi(argv[++i]);
+        } else if (a == "--language" && i + 1 < argc) {
+            opts.language = argv[++i];
         } else if (a == "--n-gpu-layers" && i + 1 < argc) {
             opts.n_gpu_layers = std::atoi(argv[++i]);
         } else if (a == "--opencl-cache-dir" && i + 1 < argc) {
@@ -556,6 +564,7 @@ extern "C" int parakeet_cli_main(int argc, char ** argv) {
         asr_opts.n_gpu_layers    = opts.n_gpu_layers;
         asr_opts.n_threads       = opts.n_threads;
         asr_opts.verbose         = opts.verbose;
+        asr_opts.language        = opts.language;
         Engine asr_engine(asr_opts);
 
         AttributedTranscriptionOptions topts;
@@ -607,6 +616,7 @@ extern "C" int parakeet_cli_main(int argc, char ** argv) {
         eopts.n_gpu_layers    = opts.n_gpu_layers;
         eopts.n_threads       = opts.n_threads;
         eopts.verbose         = opts.verbose;
+        eopts.language        = opts.language;
         Engine engine(eopts);
 
         const std::string emit_fmt = extra.emit_format;
@@ -800,9 +810,17 @@ extern "C" int parakeet_cli_main(int argc, char ** argv) {
             ids_out  = std::move(dres.token_ids);
             text_out = std::move(dres.text);
         } else {
-            ids_out = ctc_greedy_decode(
-                enc_out.logits.data(), enc_out.n_enc_frames, model.vocab_size, model.blank_id);
-            text_out = detokenize(model.vocab, ids_out);
+            try {
+                const CtcDecodeOptions dopts =
+                    resolve_ctc_decode_options(model, opts.language);
+                ids_out = ctc_greedy_decode(
+                    enc_out.logits.data(), enc_out.n_enc_frames, model.vocab_size,
+                    model.blank_id, &dopts);
+                text_out = detokenize(model.vocab, ids_out);
+            } catch (const std::exception & e) {
+                PARAKEET_LOG_ERROR("error: %s\n", e.what());
+                return 2;
+            }
         }
         times.dec_ms = ms_since(t3);
         times.inference_ms = times.mel_ms + times.enc_ms + times.dec_ms;
@@ -951,6 +969,7 @@ extern "C" int parakeet_cli_main(int argc, char ** argv) {
         eopts.n_gpu_layers    = opts.n_gpu_layers;
         eopts.n_threads       = opts.n_threads;
         eopts.verbose         = opts.verbose;
+        eopts.language        = opts.language;
 
         Engine engine(eopts);
 

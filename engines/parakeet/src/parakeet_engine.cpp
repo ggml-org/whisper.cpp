@@ -507,8 +507,11 @@ EngineResult Engine::transcribe_samples(const float * samples, int n_samples, in
         ids  = std::move(dres.token_ids);
         text = std::move(dres.text);
     } else {
+        const CtcDecodeOptions dopts =
+            resolve_ctc_decode_options(pimpl_->model, pimpl_->opts.language);
         ids  = ctc_greedy_decode(enc_out.logits.data(), enc_out.n_enc_frames,
-                                 pimpl_->model.vocab_size, pimpl_->model.blank_id);
+                                 pimpl_->model.vocab_size, pimpl_->model.blank_id,
+                                 &dopts);
         text = detokenize(pimpl_->model.vocab, ids);
     }
     const double decode_ms = ms_since(t_dec);
@@ -614,6 +617,8 @@ EngineResult Engine::transcribe_samples_stream(const float * samples,
     const int T_enc = enc_out.n_enc_frames;
     const int vocab = pimpl_->model.vocab_size;
     const int blank = pimpl_->model.blank_id;
+    const CtcDecodeOptions ctc_dopts =
+        resolve_ctc_decode_options(pimpl_->model, pimpl_->opts.language);
 
     const double frame_stride_ms = encoder_frame_stride_ms(pimpl_->model);
     int frames_per_window = (int) std::floor(opts.chunk_ms / frame_stride_ms);
@@ -684,7 +689,8 @@ EngineResult Engine::transcribe_samples_stream(const float * samples,
         } else {
             ctc_greedy_decode_window(enc_out.logits.data(),
                                      start, end, vocab, blank,
-                                     prev_token, win_tokens, nullptr);
+                                     prev_token, win_tokens, nullptr,
+                                     &ctc_dopts);
         }
 
         const size_t prev_cumulative_len = result.text.size();
@@ -1197,11 +1203,14 @@ void StreamSession::Impl::process_window(const float * window_samples, int windo
         }
         eou_boundaries_in_chunk = static_cast<int>(win_segments.size());
     } else {
+        const CtcDecodeOptions ctc_dopts =
+            resolve_ctc_decode_options(engine_impl->model, engine_impl->opts.language);
         ctc_greedy_decode_window(enc_out.logits.data(),
                                  left_drop_frames, center_end_frame,
                                  engine_impl->model.vocab_size,
                                  engine_impl->model.blank_id,
-                                 prev_token, win_tokens, nullptr);
+                                 prev_token, win_tokens, nullptr,
+                                 &ctc_dopts);
     }
 
     const size_t prev_cumulative_len = cumulative_text.size();

@@ -4,6 +4,7 @@
 #include "backend_selection.h"
 #include "supertonic_chunker.h"
 #include "supertonic_internal.h"
+#include "supertonic_pace.h"
 #include "supertonic_voice_json.h"
 #include "npy.h"
 #include "voice_features.h"  // resample_for_output / validate_output_sample_rate
@@ -173,6 +174,8 @@ struct Engine::Impl {
     std::vector<float> ext_style_ttl;
     std::vector<float> ext_style_dp;
 
+    float pace_factor = 1.0f;
+
     explicit Impl(const EngineOptions & o)
         : opts(o) {
         if (opts.model_gguf_path.empty()) {
@@ -183,6 +186,7 @@ struct Engine::Impl {
         }
         // fail fast on an unsupported output frequency.
         validate_output_sample_rate(opts.output_sample_rate, "supertonic::Engine");
+        pace_factor = detail::resolve_pace_factor(opts.speed, opts.pace);
         // Wire backends_dir + opencl_cache_dir BEFORE any backend
         // init. First-Engine-wins across the whole process; second
         // and later Engines reuse the already-loaded registry. See
@@ -431,7 +435,8 @@ struct Engine::Impl {
     SynthesisResult run_single_chunk(const std::string & text, int seed,
                                      bool is_continuation = false) {
         const int   steps = opts.steps > 0 ? opts.steps : model.hparams.default_steps;
-        const float speed = opts.speed > 0.0f ? opts.speed : model.hparams.default_speed;
+        const float speed =
+            detail::apply_pace_factor(opts.speed, pace_factor, model.hparams.default_speed);
         if (steps <= 0) throw std::runtime_error("Supertonic Engine: steps must be positive");
         if (speed <= 0.0f) throw std::runtime_error("Supertonic Engine: speed must be positive");
 

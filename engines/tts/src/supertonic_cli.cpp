@@ -1,4 +1,6 @@
 #include "tts-cpp/supertonic/engine.h"
+#include "tts-cpp/voice_controls.h"
+#include "voice_controls_cli.h"
 #include "voice_features.h"  // kOutputSampleRateMin / kOutputSampleRateMax
 
 #include <algorithm>
@@ -12,11 +14,18 @@
 
 namespace {
 
+namespace ctl = ::tts_cpp::controls;
+
+constexpr ctl::EngineId k_engine = ctl::EngineId::Supertonic;
+
 void usage(const char * argv0) {
     fprintf(stderr,
         "usage: %s --model supertonic2.gguf --text TEXT --out out.wav\n"
         "          [--language en] [--voice NAME] [--steps N] [--speed X]\n"
-        "          (voice/steps/speed default to GGUF metadata when omitted)\n"
+        "          [--pace slow|moderate|fast] [--list-emotions] [--list-paces]\n"
+        "          (voice/steps/speed default to GGUF metadata when omitted;\n"
+        "           --speed is the exact multiplier and --pace the 3-step enum\n"
+        "           relative to the GGUF default -- they are mutually exclusive)\n"
         "          [--seed 42] [--threads N] [--n-gpu-layers N]\n"
         "          [--output-sample-rate HZ] (resample output; 0 = native model\n"
         "                            rate, else 8000..192000; default 0)\n"
@@ -141,6 +150,16 @@ int main(int argc, char ** argv) {
         else if (arg == "--voice") opts.voice = next("--voice");
         else if (arg == "--steps") opts.steps = std::stoi(next("--steps"));
         else if (arg == "--speed") opts.speed = std::stof(next("--speed"));
+        else if (arg == "--pace") opts.pace = next("--pace");
+        else if (arg == "--emotion") ctl::cli::validate_emotion(k_engine, next("--emotion"));
+        else if (arg == "--list-emotions") {
+            printf("%s\n", ctl::cli::describe_emotions(k_engine).c_str());
+            return 0;
+        }
+        else if (arg == "--list-paces") {
+            printf("%s\n", ctl::cli::describe_paces(k_engine).c_str());
+            return 0;
+        }
         else if (arg == "--seed") opts.seed = std::stoi(next("--seed"));
         else if (arg == "--threads") opts.n_threads = std::stoi(next("--threads"));
         else if (arg == "--n-gpu-layers") opts.n_gpu_layers = std::stoi(next("--n-gpu-layers"));

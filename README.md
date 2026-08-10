@@ -85,6 +85,7 @@ One row per model. `Backends` lists what the owning engine documents as working;
 | `silero-v6.2.0` | whisper | language agnostic | 2 M | `f16` | CPU | voice activity detection |
 | `nvidia/parakeet-ctc-0.6b` | parakeet | English | 600 M | `f32`, `f16`, `q8_0`, `q5_0`, `q4_0` | CPU, Metal, Vulkan, OpenCL, Core ML | offline + streaming + long-form |
 | `nvidia/parakeet-ctc-1.1b` | parakeet | English | 1.1 B | `f16`, `q8_0` | CPU, Metal, Vulkan, OpenCL, Core ML | offline + streaming + long-form |
+| `ai4bharat/indic-conformer-600m-multilingual` | parakeet | 22 Indic (CTC-only export) | 600 M | `f16`, `q8_0`, `q4_0` | CPU (GPU backends share the CTC path) | requires `--language` / `EngineOptions::language` |
 | `nvidia/parakeet-tdt-0.6b-v3` | parakeet | ~25 + punctuation and capitalization | 600 M | `f32`, `f16`, `q8_0`, `q5_0`, `q4_0` | CPU, Metal, Vulkan, OpenCL, Core ML | fused LSTM + joint decoder |
 | `nvidia/parakeet-tdt-1.1b` | parakeet | English | 1.1 B | `f16`, `q8_0` | CPU, Metal, Vulkan, OpenCL, Core ML | lowest WER, no punctuation |
 
@@ -241,6 +242,20 @@ GGUF conversion steps are in [engines/tts/README.md](engines/tts/README.md).
 
 # CosyVoice3
 ./build/engines/tts/cosyvoice-cli --model-dir models/cosyvoice3-0.5b \
+                                  --text "Hello from a fully on-device pipeline." --out out.wav
+```
+
+`--emotion` and `--pace` work the same way on every engine that supports them;
+each CLI lists its own supported values via `--list-emotions` / `--list-paces`.
+See [Voice conditioning](engines/tts/README.md#voice-conditioning-cross-engine).
+
+```sh
+./build/engines/tts/parler-cli --model models/parler-indic-q8_0.gguf \
+                               --emotion happy --pace moderate \
+                               --text "आज मौसम बहुत अच्छा है।" --out out.wav
+
+./build/engines/tts/cosyvoice-cli --model-dir models/cosyvoice3-0.5b \
+                                  --emotion happy \
                                   --text "Hello from a fully on-device pipeline." --out out.wav
 ```
 

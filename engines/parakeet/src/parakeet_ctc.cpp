@@ -1137,6 +1137,25 @@ int load_from_gguf(const std::string & gguf_path,
     if (out_model.model_type == ParakeetModelType::CTC) {
         out_model.vocab_size = get_u32(g, "parakeet.ctc.vocab_size", 1025);
         out_model.blank_id   = get_u32(g, "parakeet.ctc.blank_id",   1024);
+
+        const int id_langs = find_key(g, "parakeet.ctc.lang_ids");
+        const int id_start = find_key(g, "parakeet.ctc.lang_token_start");
+        const int id_end   = find_key(g, "parakeet.ctc.lang_token_end");
+        if (id_langs >= 0 && id_start >= 0 && id_end >= 0 &&
+            gguf_get_arr_type(g, id_langs) == GGUF_TYPE_STRING &&
+            gguf_get_arr_n(g, id_langs) == gguf_get_arr_n(g, id_start) &&
+            gguf_get_arr_n(g, id_langs) == gguf_get_arr_n(g, id_end)) {
+            const size_t n = gguf_get_arr_n(g, id_langs);
+            const int32_t * starts = static_cast<const int32_t *>(gguf_get_arr_data(g, id_start));
+            const int32_t * ends   = static_cast<const int32_t *>(gguf_get_arr_data(g, id_end));
+            out_model.ctc_lang_ranges.resize(n);
+            for (size_t i = 0; i < n; ++i) {
+                const char * s = gguf_get_arr_str(g, id_langs, i);
+                out_model.ctc_lang_ranges[i].id = s ? s : "";
+                out_model.ctc_lang_ranges[i].token_start = starts[i];
+                out_model.ctc_lang_ranges[i].token_end   = ends[i];
+            }
+        }
     }
     out_model.vocab.blank_id = out_model.blank_id;
 
@@ -1428,7 +1447,8 @@ void print_model_summary(const ParakeetCtcModel & m) {
                       m.mel_cfg.hop_length, m.mel_cfg.n_mels, m.mel_cfg.preemph,
                       (double) m.mel_cfg.log_zero_guard_value);
     if (m.model_type == ParakeetModelType::CTC) {
-        PARAKEET_LOG_INFO("  ctc:     vocab=%d blank=%d\n", m.vocab_size, m.blank_id);
+        PARAKEET_LOG_INFO("  ctc:     vocab=%d blank=%d langs=%zu\n",
+                          m.vocab_size, m.blank_id, m.ctc_lang_ranges.size());
     } else if (m.model_type == ParakeetModelType::EOU) {
         PARAKEET_LOG_INFO("  eou:     vocab=%d blank=%d eou_id=%d eob_id=%d "
                           "pred_hidden=%d pred_layers=%d joint_hidden=%d "
@@ -2824,12 +2844,61 @@ int profile_block_substages(ParakeetCtcModel & model,
 std::vector<int32_t> ctc_greedy_decode(const float * logits,
                                        int           n_frames,
                                        int           vocab_size,
-                                       int32_t       blank_id) {
+                                       int32_t       blank_id,
+                                       const CtcDecodeOptions * opts) {
     std::vector<int32_t> decoded;
     int32_t prev = -1;
     ctc_greedy_decode_window(logits, 0, n_frames, vocab_size, blank_id,
-                             prev, decoded, nullptr);
+                             prev, decoded, nullptr, opts);
     return decoded;
+}
+
+bool find_ctc_language_range(const ParakeetCtcModel & model,
+                             const std::string      & language,
+                             int32_t                & out_start,
+                             int32_t                & out_end) {
+    if (language.empty()) return false;
+    for (const auto & range : model.ctc_lang_ranges) {
+        if (range.id == language) {
+            out_start = range.token_start;
+            out_end   = range.token_end;
+            return true;
+        }
+    }
+    return false;
+}
+
+CtcDecodeOptions resolve_ctc_decode_options(const ParakeetCtcModel & model,
+                                            const std::string      & language) {
+    CtcDecodeOptions dopts;
+    if (language.empty()) {
+        if (!model.ctc_lang_ranges.empty()) {
+            throw std::runtime_error(
+                "parakeet: this CTC GGUF requires EngineOptions::language "
+                "(multilingual language masks present)");
+        }
+        return dopts;
+    }
+    // Documented contract: --language / EngineOptions::language is ignored on
+    // monolingual CTC GGUFs that do not advertise lang_* ranges.
+    if (model.ctc_lang_ranges.empty()) {
+        return dopts;
+    }
+    int32_t start = 0;
+    int32_t end   = -1;
+    if (!find_ctc_language_range(model, language, start, end)) {
+        std::string available;
+        for (size_t i = 0; i < model.ctc_lang_ranges.size(); ++i) {
+            if (i) available += ",";
+            available += model.ctc_lang_ranges[i].id;
+        }
+        throw std::runtime_error(
+            "parakeet: unknown CTC language '" + language + "'"
+            " (available: " + available + ")");
+    }
+    dopts.token_start = start;
+    dopts.token_end   = end;
+    return dopts;
 }
 
 void ctc_greedy_decode_window(const float * logits,
@@ -2839,13 +2908,48 @@ void ctc_greedy_decode_window(const float * logits,
                               int32_t       blank_id,
                               int32_t     & inout_prev_token,
                               std::vector<int32_t> & out_tokens,
-                              std::vector<int>     * out_first_frame) {
+                              std::vector<int>     * out_first_frame,
+                              const CtcDecodeOptions * opts) {
     if (start_frame < 0) start_frame = 0;
     if (end_frame < start_frame) end_frame = start_frame;
+
+    const bool mask = opts != nullptr && opts->token_end > opts->token_start;
+    int32_t range_start = 0;
+    int32_t range_end   = vocab_size;
+    if (mask) {
+        range_start = opts->token_start;
+        range_end   = opts->token_end;
+        if (range_start < 0) range_start = 0;
+        if (range_end > vocab_size) range_end = vocab_size;
+        if (range_start >= range_end) {
+            range_start = 0;
+            range_end   = vocab_size;
+        }
+    }
 
     int32_t prev = inout_prev_token;
     for (int t = start_frame; t < end_frame; ++t) {
         const float * __restrict row = logits + static_cast<size_t>(t) * vocab_size;
+        if (mask) {
+            int32_t best = range_start;
+            float best_score = row[range_start];
+            for (int32_t i = range_start + 1; i < range_end; ++i) {
+                const float v = row[i];
+                if (v > best_score) { best_score = v; best = i; }
+            }
+            if (blank_id >= 0 && blank_id < vocab_size &&
+                (blank_id < range_start || blank_id >= range_end)) {
+                const float v = row[blank_id];
+                if (v > best_score) { best_score = v; best = blank_id; }
+            }
+            if (best != blank_id && best != prev) {
+                out_tokens.push_back(best);
+                if (out_first_frame) out_first_frame->push_back(t);
+            }
+            prev = best;
+            continue;
+        }
+
         int32_t best       = 0;
         float   best_score = row[0];
         // The argmax-with-index reduction has a loop-carried dep on

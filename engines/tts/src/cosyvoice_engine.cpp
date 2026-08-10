@@ -19,6 +19,7 @@
 
 #include "backend_selection.h"
 #include "backend_util.h"
+#include "cosyvoice_instruct.h"
 #include "cosyvoice_pipeline.h"
 #include "qwen_tokenizer.h"
 
@@ -46,9 +47,6 @@ namespace {
 // to size streaming chunks so the streaming contract keeps realistic cadence.
 constexpr int kSamplesPerToken = 960;
 
-// The LM asserts an <|endofprompt|> marker even for zero-shot; this fixed
-// preamble is prepended to the prompt transcript for every voice.
-constexpr const char * kPromptPreamble = "You are a helpful assistant.<|endofprompt|>";
 // Fallback transcript when neither the voice.gguf metadata nor an explicit
 // EngineOptions.prompt_text is set (matches the stock Chinese prompt).
 constexpr const char * kDefaultTranscript = "希望你以后能够做的比我还好呦。";
@@ -133,6 +131,7 @@ struct Engine::Impl {
     std::atomic_bool cancel_flag{false};
 
     explicit Impl(EngineOptions o) : opts(std::move(o)) {
+        detail::validate_controls(opts.default_controls);
         if (!opts.model_dir.empty()) {
             std::error_code ec;
             if (!std::filesystem::is_directory(opts.model_dir, ec)) {
@@ -218,21 +217,23 @@ struct Engine::Impl {
         return kNativeSampleRate;
     }
 
-    // Full text -> 24 kHz PCM pipeline.  `tmg` / `out_tokens` are optional.
+    // Full text -> 24 kHz PCM pipeline.  `instruct` is the already-resolved
+    // bare instruction ("" = zero-shot).  `tmg` / `out_tokens` are optional.
     std::vector<float> run(const std::string & text,
+                           const std::string & instruct,
                            cosyvoice_timings * tmg = nullptr,
                            std::vector<int> * out_tokens = nullptr) {
         std::string prompt_text;
         std::vector<int> lm_prompt_stok;
-        if (!opts.instruct_text.empty()) {
-            // Instruct mode (dialects / accents / emotion / speed / volume):
+        if (!instruct.empty()) {
+            // Instruct mode (dialects / accents / emotion / pace / volume):
             // the natural-language instruction sits in the LM prompt *before*
             // <|endofprompt|>, and the LM receives NO prompt speech tokens.
             // This mirrors CosyVoice3 frontend_instruct2 == frontend_zero_shot
             // minus llm_prompt_speech_token.  The baked voice still supplies the
             // *timbre* via the flow tensors below; the instruction drives the
-            // dialect/style.  e.g. instruct_text = "请用广东话表达。".
-            prompt_text = "You are a helpful assistant. " + opts.instruct_text + "<|endofprompt|>";
+            // dialect/style.
+            prompt_text = detail::build_lm_prompt_instruct(instruct);
             lm_prompt_stok = {};  // dropped in instruct mode
         } else {
             // Zero-shot: transcript precedence explicit > baked voice > fallback.
@@ -240,7 +241,7 @@ struct Engine::Impl {
                 !opts.prompt_text.empty()    ? opts.prompt_text
                 : !voice_prompt_text.empty() ? voice_prompt_text
                                              : std::string(kDefaultTranscript);
-            prompt_text = std::string(kPromptPreamble) + transcript;
+            prompt_text = detail::build_lm_prompt_zero_shot(transcript);
             lm_prompt_stok = voice_prompt_stok;
         }
 
@@ -305,20 +306,32 @@ Engine::Engine(Engine &&) noexcept = default;
 Engine & Engine::operator=(Engine &&) noexcept = default;
 
 SynthesisResult Engine::synthesize(const std::string & text) {
-    return synthesize(text, StreamCallback{});
+    return synthesize(text, pimpl_->opts.default_controls, StreamCallback{});
 }
 
 SynthesisResult Engine::synthesize(const std::string & text,
                                    const StreamCallback & on_chunk) {
+    return synthesize(text, pimpl_->opts.default_controls, on_chunk);
+}
+
+SynthesisResult Engine::synthesize(const std::string & text,
+                                   const VoiceControls & controls) {
+    return synthesize(text, controls, StreamCallback{});
+}
+
+SynthesisResult Engine::synthesize(const std::string & text,
+                                   const VoiceControls & controls,
+                                   const StreamCallback & on_chunk) {
     if (text.empty()) {
         throw std::runtime_error("cosyvoice: empty text");
     }
+    const std::string instruct = detail::resolve_instruct(controls);
     pimpl_->cancel_flag.store(false, std::memory_order_relaxed);
 
     cosyvoice_timings tmg;
     std::vector<int>  tokens;
     const auto t_all = std::chrono::steady_clock::now();
-    std::vector<float> pcm = pimpl_->run(text, &tmg, &tokens);
+    std::vector<float> pcm = pimpl_->run(text, instruct, &tmg, &tokens);
     const double total_ms =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_all).count();
 
@@ -405,6 +418,12 @@ bool Engine::gpu_unsupported() const { return pimpl_ && pimpl_->gpu_present_but_
 SynthesisResult synthesize(const EngineOptions & opts, const std::string & text) {
     Engine e(opts);
     return e.synthesize(text);
+}
+
+SynthesisResult synthesize(const EngineOptions & opts, const std::string & text,
+                           const VoiceControls & controls) {
+    Engine e(opts);
+    return e.synthesize(text, controls);
 }
 
 } // namespace tts_cpp::cosyvoice

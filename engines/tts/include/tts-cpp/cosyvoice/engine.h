@@ -13,8 +13,8 @@
 //   Zero-shot voice cloning adds: reference audio --> S3 tokenizer (prompt
 //   tokens) + CAM++ (192-d speaker embedding).  Iteration 1 uses a baked voice
 //   (voice.gguf); the native S3 tokenizer + CAM++ path is a follow-up.  Instruct
-//   mode (EngineOptions::instruct_text) selects a Chinese dialect / emotion /
-//   speed / volume, mirroring CosyVoice3 inference_instruct2.
+//   mode (VoiceControls) selects an emotion / pace, or a raw dialect / volume /
+//   style instruction, mirroring CosyVoice3 inference_instruct2.
 //
 // CosyVoice3 ships as a small set of GGUFs (llm / flow / hift / s3tok /
 // campplus / voices).  Point `model_dir` at the folder that holds them, or
@@ -53,6 +53,37 @@
 
 namespace tts_cpp::cosyvoice {
 
+// Conditioning controls for one synthesis (CosyVoice3 inference_instruct2).
+//
+// CosyVoice3 is trained on exactly ONE instruction per synthesis.  A channel is
+// ENGAGED when its value resolves to a non-empty instruction; only "moderate"
+// disengages one.  Engaging two or more throws naming each one -- silently
+// dropping a control would ship conditioning nobody asked for.
+struct VoiceControls {
+    // One of controls::supported_emotions(controls::EngineId::CosyVoice):
+    // anger | happy | neutral | sad.  Case-insensitive.  The other canonical
+    // emotions -- and the upstream spelling "angry" -- throw: Fun-CosyVoice3
+    // has no trained instruction for them and we do not paraphrase one.
+    // Every value here, "neutral" included, engages the instruct path.
+    std::string emotion;
+
+    // One of controls::supported_paces(controls::EngineId::CosyVoice):
+    // slow | moderate | fast.  Case-insensitive.  "moderate" emits NO
+    // instruction and so engages nothing; CosyVoice3 has no middle step.
+    std::string pace;
+
+    // Escape hatch for the controls with no canonical vocabulary yet (dialect /
+    // volume / style), e.g. "请用广东话表达。".  Used verbatim: pass the bare
+    // sentence, the engine adds the wrapper and <|endofprompt|>.
+    std::string instruct_text;
+
+    // Inline on purpose: the library builds with hidden visibility, so an
+    // out-of-line method would not resolve for shared-lib consumers.
+    bool empty() const {
+        return emotion.empty() && pace.empty() && instruct_text.empty();
+    }
+};
+
 struct EngineOptions {
     // Directory holding the standard CosyVoice3 GGUFs
     // (cosyvoice3-{llm,flow,hift,s3tok,campplus,voices}-*.gguf).  Either set
@@ -82,13 +113,14 @@ struct EngineOptions {
     std::string reference_audio;
     std::string prompt_text;
 
-    // Instruct mode (CosyVoice3 instruct2): a natural-language instruction that
-    // controls dialect / accent / emotion / speed / volume, e.g.
-    // "请用广东话表达。" (speak in Cantonese) or "speak slowly and cheerfully".
-    // When non-empty the LM is conditioned on this instruction and drops its
-    // prompt speech tokens; the baked/selected voice still supplies the timbre.
-    // Empty (default) = zero-shot (prompt_text / baked-voice transcript path).
-    std::string instruct_text;
+    // Conditioning applied by the synthesize() overloads that take no
+    // VoiceControls.  Validated in the constructor, so a bad default fails at
+    // load rather than at first synthesis.  When it resolves to an instruction
+    // the LM is conditioned on it and drops its prompt speech tokens; the
+    // baked/selected voice still supplies the timbre.  All-empty (default) =
+    // zero-shot (prompt_text / baked-voice transcript path).
+    VoiceControls default_controls;
+
     // Reserved: named-voice selection from a multi-voice voices.gguf is not yet
     // wired.  Use voice_gguf_path to point at a single baked voice.gguf.
     std::string voice;
@@ -217,14 +249,26 @@ public:
     Engine(Engine &&) noexcept;
     Engine & operator=(Engine &&) noexcept;
 
-    // Synthesize `text` into PCM (24 kHz mono float32 by default).  Throws
-    // std::runtime_error on failure.  Empty `text` is rejected.
-    // Not safe to call concurrently on the same Engine instance.
+    // Synthesize `text` into PCM (24 kHz mono float32 by default) using
+    // options().default_controls.  Throws std::runtime_error on failure.  Empty
+    // `text` is rejected.  Not safe to call concurrently on the same Engine.
     SynthesisResult synthesize(const std::string & text);
 
     // Streaming variant — see EngineOptions streaming block.  Falls through
     // to the batch path when streaming is disabled.
     SynthesisResult synthesize(const std::string & text,
+                               const StreamCallback & on_chunk);
+
+    // Per-call conditioning.  `controls` REPLACES options().default_controls
+    // for this call -- it is not merged, so passing VoiceControls{} always
+    // gets back to plain zero-shot.  Throws std::invalid_argument on an
+    // unsupported value or on two engaged channels.
+    //
+    // Pass an explicitly-typed argument: synthesize(text, {}) is ambiguous
+    // between VoiceControls and StreamCallback.
+    SynthesisResult synthesize(const std::string & text, const VoiceControls & controls);
+
+    SynthesisResult synthesize(const std::string & text, const VoiceControls & controls,
                                const StreamCallback & on_chunk);
 
     // Best-effort cancel of an in-flight synthesize() on another thread.
@@ -249,5 +293,8 @@ private:
 // Convenience one-shot wrapper.  Equivalent to:
 //   Engine e(opts); return e.synthesize(text);
 TTS_CPP_API SynthesisResult synthesize(const EngineOptions & opts, const std::string & text);
+
+TTS_CPP_API SynthesisResult synthesize(const EngineOptions & opts, const std::string & text,
+                                       const VoiceControls & controls);
 
 } // namespace tts_cpp::cosyvoice

@@ -609,6 +609,18 @@ if (PARAKEET_BUILD_TESTS)
         ARGS     "${_qvp_ctc_q8_gguf}" "${_qvp_ctc_ref}/logits.npy" "${_qvp_ctc_ref}/decoded.txt"
         REQUIRES "${_qvp_ctc_q8_gguf}" "${_qvp_ctc_ref}/logits.npy" "${_qvp_ctc_ref}/decoded.txt")
 
+    # Multilingual CTC language-mask unit tests (synthetic logits; no GGUF).
+    add_executable(test-ctc-language-mask
+        test/test_ctc_language_mask.cpp
+        src/parakeet_ctc.cpp
+        src/parakeet_log.cpp
+        src/mel_preprocess.cpp
+        src/sentencepiece_bpe.cpp)
+    target_link_libraries(test-ctc-language-mask PRIVATE ggml parakeet-backend-defs)
+    target_include_directories(test-ctc-language-mask PRIVATE ggml/include src include)
+    parakeet_apply_backend_defs(test-ctc-language-mask)
+    parakeet_register_test(test-ctc-language-mask LABEL "unit")
+
     add_executable(test-parakeet-streaming test/test_streaming.cpp)
     target_link_libraries(test-parakeet-streaming PRIVATE qvac-parakeet)
     target_include_directories(test-parakeet-streaming PRIVATE include src ggml/include)

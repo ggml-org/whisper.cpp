@@ -1,5 +1,8 @@
 #include "tts-cpp/parler/description.h"
 
+#include "tts-cpp/voice_controls.h"
+#include "voice_controls_internal.h"
+
 #include <initializer_list>
 #include <stdexcept>
 
@@ -8,35 +11,14 @@ namespace parler {
 
 namespace {
 
-// ASCII-only on purpose: locale-independent (std::tolower would misbehave
-// under e.g. a Turkish LC_CTYPE), and all valid field values are ASCII.
-std::string to_lower(const std::string & s) {
-    std::string out = s;
-    for (char & c : out) {
-        if (c >= 'A' && c <= 'Z') c = (char) (c - 'A' + 'a');
-    }
-    return out;
-}
+namespace ctl = ::tts_cpp::controls;
 
-// Validates a field value against its closed set (case-insensitive);
-// returns the canonical lowercase form, or throws listing the valid values.
+constexpr const char * k_context = "parler description";
+constexpr ctl::EngineId k_engine = ctl::EngineId::Parler;
+
 std::string canon(const char * field, const std::string & value,
                   std::initializer_list<const char *> valid) {
-    const std::string low = to_lower(value);
-    for (const char * v : valid) {
-        if (low == v) return low;
-    }
-    std::string msg = "parler description: invalid ";
-    msg += field;
-    msg += " \"" + value + "\" (valid:";
-    bool first = true;
-    for (const char * v : valid) {
-        msg += first ? " " : ", ";
-        msg += v;
-        first = false;
-    }
-    msg += ")";
-    throw std::invalid_argument(msg);
+    return ctl::detail::canon_in(k_context, field, value, valid);
 }
 
 struct emotion_clause {
@@ -45,9 +27,9 @@ struct emotion_clause {
     bool comma;           // always comma-attached, even with no other modifiers
 };
 
-// Clause wording follows the official examples ("with an angry tone",
-// "delivering the news", "perfect for narration"); see also emotions().
-const emotion_clause k_emotions[] = {
+// Clause wording follows the official Parler examples ("with an angry tone",
+// "delivering the news").  Membership and order live in voice_controls.h.
+const emotion_clause k_emotion_clauses[] = {
     { "command",      "in a commanding style",    false },
     { "anger",        "with an angry tone",       false },
     { "narration",    "perfect for narration",    true  },
@@ -62,42 +44,42 @@ const emotion_clause k_emotions[] = {
     { "surprise",     "with a surprised tone",    false },
 };
 
+const emotion_clause * find_clause(const std::string & canonical) {
+    for (const emotion_clause & e : k_emotion_clauses) {
+        if (canonical == e.name) return &e;
+    }
+    return nullptr;
+}
+
+// A canonical emotion with no clause row is a table bug, not user error, hence
+// the runtime_error; test-parler-description walks the vocabulary to catch it.
+const emotion_clause * resolve_emotion(const std::string & value) {
+    if (value.empty()) return nullptr;
+    const std::string canonical =
+        ctl::detail::canon_in(k_context, "emotion", value, ctl::supported_emotions(k_engine));
+    const emotion_clause * emo = find_clause(canonical);
+    if (!emo) {
+        throw std::runtime_error(std::string(k_context) + ": no caption clause for emotion \"" +
+                                 canonical + "\"");
+    }
+    return emo;
+}
+
 } // namespace
 
 const std::vector<std::string> & emotions() {
-    static const std::vector<std::string> list = [] {
-        std::vector<std::string> v;
-        for (const auto & e : k_emotions) v.push_back(e.name);
-        return v;
-    }();
-    return list;
+    return ctl::supported_emotions(k_engine);
 }
 
 std::string build_description(const DescriptionSpec & spec) {
     const std::string subject = spec.voice.empty() ? "The speaker" : spec.voice;
 
-    const emotion_clause * emo = nullptr;
-    if (!spec.emotion.empty()) {
-        const std::string low = to_lower(spec.emotion);
-        for (const auto & e : k_emotions) {
-            if (low == e.name) { emo = &e; break; }
-        }
-        if (!emo) {
-            std::string msg = "parler description: invalid emotion \"" + spec.emotion + "\" (valid:";
-            bool first = true;
-            for (const auto & e : k_emotions) {
-                msg += first ? " " : ", ";
-                msg += e.name;
-                first = false;
-            }
-            msg += ")";
-            throw std::invalid_argument(msg);
-        }
-    }
+    const emotion_clause * emo = resolve_emotion(spec.emotion);
 
     std::string mods;
     if (!spec.pace.empty()) {
-        const std::string v = canon("pace", spec.pace, { "slow", "moderate", "fast" });
+        const std::string v =
+            ctl::detail::canon_in(k_context, "pace", spec.pace, ctl::supported_paces(k_engine));
         mods += v == "slow" ? " slowly" : " at a " + v + " pace";
     }
     if (!spec.pitch.empty()) {
