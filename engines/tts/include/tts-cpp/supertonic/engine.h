@@ -111,7 +111,20 @@ struct EngineOptions {
 
     std::string language = "en";
     int   steps    = 0;
+
+    // Exact rate multiplier on the predicted duration; 0 => the GGUF's
+    // supertonic.default_speed.  The precise knob; `pace` does not replace it.
     float speed    = 0.0f;
+
+    // Canonical 3-step speaking rate: slow | moderate | fast (see
+    // <tts-cpp/voice_controls.h>).  Scales default_speed rather than replacing
+    // it, so "moderate" is bit-identical to leaving both this and `speed`
+    // unset, and a checkpoint keeps its own idea of a natural rate.  Mutually
+    // exclusive with `speed`: setting both throws, because honouring one and
+    // dropping the other silently ignores a request.
+    // Empty (default) = no pace conditioning.
+    std::string pace;
+
     int   seed     = 42;
     int   n_threads     = 0;
     int   n_gpu_layers  = 0;

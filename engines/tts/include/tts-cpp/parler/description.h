@@ -21,10 +21,11 @@ struct DescriptionSpec {
 
     // One of the 12 speaking styles the indic checkpoint was trained on
     // (see emotions()); case-insensitive; empty adds no style conditioning.
+    // Canonical vocabulary: <tts-cpp/voice_controls.h>.
     std::string emotion;
 
     std::string pitch;         // low | moderate | high
-    std::string pace;          // slow | moderate | fast
+    std::string pace;          // slow | moderate | fast (canonical steps)
     std::string expressivity;  // monotone | slightly expressive | expressive
     std::string noise;         // clear (default) | noisy
     std::string reverb;        // close (default) | distant
@@ -43,6 +44,7 @@ struct DescriptionSpec {
 TTS_CPP_API std::string build_description(const DescriptionSpec & spec);
 
 // The valid emotion values (canonical lowercase), in model-card order.
+// Equivalent to controls::supported_emotions(controls::EngineId::Parler).
 TTS_CPP_API const std::vector<std::string> & emotions();
 
 } // namespace parler

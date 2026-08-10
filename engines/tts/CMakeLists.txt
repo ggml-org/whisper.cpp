@@ -226,6 +226,7 @@ endif()
 add_library(tts-cpp-backend-defs INTERFACE)
 
 set(TTS_CPP_LIB_SOURCES
+    src/voice_controls.cpp
     src/backend_selection.cpp
     src/sched_dispatch.cpp
     src/main.cpp
@@ -249,12 +250,14 @@ set(TTS_CPP_LIB_SOURCES
     src/supertonic_text_encoder.cpp
     src/supertonic_vector_estimator.cpp
     src/supertonic_engine.cpp
+    src/supertonic_pace.cpp
     src/supertonic_voice_json.cpp
     src/supertonic_chunker.cpp
     # CosyVoice3 (Fun-CosyVoice3-0.5B / 1.5B) — native CPU pipeline.
     # cosyvoice_pipeline.cpp is the shared graph core (LM / DiT flow / HiFT),
     # also used by the cosyvoice-{llm,flow,hift} parity CLIs below.
     src/cosyvoice_pipeline.cpp
+    src/cosyvoice_instruct.cpp
     src/cosyvoice_engine.cpp
     src/mtl_tokenizer.cpp
     src/text_preprocess.cpp
@@ -501,6 +504,7 @@ if (TTS_CPP_BUILD_EXECUTABLES)
 
     add_executable(parler-cli src/parler/cli.cpp)
     target_link_libraries(parler-cli PRIVATE tts-cpp)
+    target_include_directories(parler-cli PRIVATE src)
     tts_cpp_apply_ccache(parler-cli)
 
     add_executable(parler-bench src/parler/bench.cpp)
@@ -573,7 +577,7 @@ if (TTS_CPP_BUILD_TESTS)
     # marked DISABLED so a missing reference dump shows as "Not Run"
     # rather than a hard failure.
     function(tts_cpp_register_test target)
-        cmake_parse_arguments(TCRT "" "LABEL;EXE" "ARGS;REQUIRES" ${ARGN})
+        cmake_parse_arguments(TCRT "" "LABEL;EXE;PASS_REGEX" "ARGS;REQUIRES" ${ARGN})
         if (NOT DEFINED TCRT_LABEL)
             set(TCRT_LABEL "cpu")
         endif()
@@ -587,6 +591,11 @@ if (TTS_CPP_BUILD_TESTS)
         add_test(NAME ${target}
                  COMMAND $<TARGET_FILE:${TCRT_EXE}> ${TCRT_ARGS})
         set_property(TEST ${target} PROPERTY LABELS ${TCRT_LABEL})
+        # For tests whose binary is not a harness: the pass criterion is what
+        # it prints, not just a zero exit code.
+        if (DEFINED TCRT_PASS_REGEX)
+            set_property(TEST ${target} PROPERTY PASS_REGULAR_EXPRESSION "${TCRT_PASS_REGEX}")
+        endif()
         if (WIN32)
             # When ggml builds as shared (the MSVC default), test exes
             # link against import libs and need to find speech-ggml-*.dll
@@ -805,9 +814,58 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-parler-text-norm)
     tts_cpp_register_test(test-parler-text-norm)
 
+    add_executable(test-voice-controls test/test_voice_controls.cpp
+        src/voice_controls.cpp)
+    target_include_directories(test-voice-controls PRIVATE include src)
+    tts_cpp_apply_ccache(test-voice-controls)
+    tts_cpp_register_test(test-voice-controls)
+
+    add_executable(test-cosyvoice-instruct test/test_cosyvoice_instruct.cpp
+        src/cosyvoice_instruct.cpp src/voice_controls.cpp)
+    target_include_directories(test-cosyvoice-instruct PRIVATE include src)
+    tts_cpp_apply_ccache(test-cosyvoice-instruct)
+    tts_cpp_register_test(test-cosyvoice-instruct)
+
+    add_executable(test-supertonic-pace test/test_supertonic_pace.cpp
+        src/supertonic_pace.cpp src/voice_controls.cpp)
+    target_include_directories(test-supertonic-pace PRIVATE include src)
+    tts_cpp_apply_ccache(test-supertonic-pace)
+    tts_cpp_register_test(test-supertonic-pace)
+
+    # Capability listing on the shipped CLIs.  Model-free: the flags print and
+    # exit before anything is loaded, so these run in the default lane.  They
+    # assert the flag exists and names its engine; the wording of each list is
+    # pinned separately by test-voice-controls.
+    foreach (_cli_target parler-cli supertonic-cli cosyvoice-cli)
+        if (TARGET ${_cli_target})
+            string(REPLACE "-cli" "" _cli_engine ${_cli_target})
+            tts_cpp_register_test(test-${_cli_target}-list-emotions
+                EXE        ${_cli_target}
+                ARGS       "--list-emotions"
+                PASS_REGEX "${_cli_engine} emotions: ")
+            tts_cpp_register_test(test-${_cli_target}-list-paces
+                EXE        ${_cli_target}
+                ARGS       "--list-paces"
+                PASS_REGEX "${_cli_engine} paces: ")
+        endif()
+    endforeach()
+
+    # tts-cli routes three families and prints them in routed_engines() order,
+    # so matching the last line proves the whole matrix was emitted.
+    if (TARGET tts-cli)
+        tts_cpp_register_test(test-tts-cli-list-emotions
+            EXE        tts-cli
+            ARGS       "--list-emotions"
+            PASS_REGEX "chatterbox emotions: \\(not supported\\)")
+        tts_cpp_register_test(test-tts-cli-list-paces
+            EXE        tts-cli
+            ARGS       "--list-paces"
+            PASS_REGEX "chatterbox paces: \\(not supported\\)")
+    endif()
+
     add_executable(test-parler-description test/parler/test_description.cpp
-        src/parler/description.cpp)
-    target_include_directories(test-parler-description PRIVATE include)
+        src/parler/description.cpp src/voice_controls.cpp)
+    target_include_directories(test-parler-description PRIVATE include src)
     tts_cpp_apply_ccache(test-parler-description)
     tts_cpp_register_test(test-parler-description)
 

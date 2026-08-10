@@ -54,6 +54,9 @@
 #include "tts-cpp/chatterbox/s3gen_pipeline.h"
 #include "tts-cpp/supertonic/engine.h"
 #include "tts-cpp/parler/engine.h"
+#include "tts-cpp/parler/description.h"
+#include "tts-cpp/voice_controls.h"
+#include "voice_controls_cli.h"
 #include "chatterbox_t3_internal.h"
 #include "t3_alignment_analyzer.h"
 #include "t3_mtl.h"
@@ -304,8 +307,14 @@ struct cli_params {
     bool        has_supertonic_options = false;
 
     // Parler-TTS: natural-language voice description (required for parler
-    // GGUFs; routed through the T5 encoder / cross-attention).
+    // GGUFs unless the conditioning flags below supply one; routed through the
+    // T5 encoder / cross-attention).
     std::string parler_description;
+
+    // Cross-engine conditioning (see <tts-cpp/voice_controls.h>); routed by the
+    // detected model family, not by the flag.
+    std::string emotion;
+    std::string pace;
 
     // Streaming synthesis (PROGRESS.md B1).  When > 0, speech tokens from
     // T3 are fed to S3Gen+HiFT in chunks of this size, with `cache_source`
@@ -453,10 +462,21 @@ static void print_usage(const char * argv0) {
     fprintf(stderr, "  --cangjie-tsv PATH      Path to Cangjie5_TC.tsv mapping file (for zh).\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Parler-TTS options (when --model has parler.arch metadata):\n");
-    fprintf(stderr, "  --description DESC      Required. Natural-language voice description,\n");
-    fprintf(stderr, "                          e.g. \"A female speaker with a calm, clear voice.\"\n");
+    fprintf(stderr, "  --description DESC      Natural-language voice description, e.g.\n");
+    fprintf(stderr, "                          \"A female speaker with a calm, clear voice.\"\n");
+    fprintf(stderr, "                          Required unless --emotion / --pace render one.\n");
     fprintf(stderr, "                          Use parler-cli for the full Parler flag surface\n");
     fprintf(stderr, "                          (--greedy, --max-frames, --temperature, ...).\n");
+    fprintf(stderr, "\n");
+    fprintf(stderr, "Conditioning options (Parler-TTS and Supertonic):\n");
+    fprintf(stderr, "  --emotion NAME          Speaking style. Parler only; run --list-emotions\n");
+    fprintf(stderr, "                          for the values.\n");
+    fprintf(stderr, "  --pace STEP             slow | moderate | fast. Parler renders it into the\n");
+    fprintf(stderr, "                          description; Supertonic maps it onto its duration\n");
+    fprintf(stderr, "                          multiplier (mutually exclusive with --speed).\n");
+    fprintf(stderr, "  --list-emotions         Print the supported emotions for every model family\n");
+    fprintf(stderr, "                          this CLI can drive, then exit.\n");
+    fprintf(stderr, "  --list-paces            Print the supported pace steps likewise, then exit.\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Supertonic options (when --model has supertonic.arch metadata):\n");
     fprintf(stderr, "  --voice NAME            Built-in Supertonic voice name. Defaults to GGUF metadata.\n");
@@ -568,6 +588,17 @@ static void print_usage(const char * argv0) {
     fprintf(stderr, "  -h, --help\n");
 }
 
+// The model families this CLI routes to; --model decides which one applies, so
+// a capability listing has to report all of them.
+static const std::vector<tts_cpp::controls::EngineId> & routed_engines() {
+    static const std::vector<tts_cpp::controls::EngineId> engines = {
+        tts_cpp::controls::EngineId::Parler,
+        tts_cpp::controls::EngineId::Supertonic,
+        tts_cpp::controls::EngineId::Chatterbox,
+    };
+    return engines;
+}
+
 static bool parse_args(int argc, char ** argv, cli_params & params) {
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -655,6 +686,10 @@ static bool parse_args(int argc, char ** argv, cli_params & params) {
         else if (arg == "--mecab-dict")    { auto v = next("--mecab-dict");    if (!v) return false; params.mecab_dict = v; }
         else if (arg == "--cangjie-tsv")   { auto v = next("--cangjie-tsv");   if (!v) return false; params.cangjie_tsv = v; }
         else if (arg == "--description")    { auto v = next("--description");    if (!v) return false; params.parler_description = v; }
+        else if (arg == "--emotion")        { auto v = next("--emotion");        if (!v) return false; params.emotion = v; }
+        else if (arg == "--pace")           { auto v = next("--pace");           if (!v) return false; params.pace = v; }
+        else if (arg == "--list-emotions")  { printf("%s", tts_cpp::controls::cli::describe_emotions(routed_engines()).c_str()); std::exit(0); }
+        else if (arg == "--list-paces")     { printf("%s", tts_cpp::controls::cli::describe_paces(routed_engines()).c_str());    std::exit(0); }
         else if (arg == "--voice")          { auto v = next("--voice");          if (!v) return false; params.supertonic_voice = v; params.has_supertonic_options = true; }
         else if (arg == "--steps")          { if (!parse_int  ("--steps",          params.supertonic_steps)) return false; params.has_supertonic_options = true; }
         else if (arg == "--speed")          { if (!parse_float("--speed",          params.supertonic_speed)) return false; params.has_supertonic_options = true; }
@@ -887,9 +922,15 @@ static int run_parler_cli_path(const cli_params & params) {
         fprintf(stderr, "error: Parler-TTS requires --text TEXT\n");
         return 1;
     }
-    if (params.parler_description.empty()) {
+    const bool has_conditioning = !params.emotion.empty() || !params.pace.empty();
+    if (!params.parler_description.empty() && has_conditioning) {
+        fprintf(stderr, "error: --description is mutually exclusive with --emotion / --pace\n");
+        return 1;
+    }
+    if (params.parler_description.empty() && !has_conditioning) {
         fprintf(stderr, "error: Parler-TTS requires --description DESC (the natural-language\n"
-                        "       voice description, e.g. \"A female speaker with a calm voice...\")\n");
+                        "       voice description, e.g. \"A female speaker with a calm voice...\")\n"
+                        "       or --emotion / --pace to render one.\n");
         return 1;
     }
     if (params.out_wav.empty() || params.out_wav == "-") {
@@ -897,13 +938,27 @@ static int run_parler_cli_path(const cli_params & params) {
         return 1;
     }
 
+    std::string description = params.parler_description;
+    if (has_conditioning) {
+        tts_cpp::parler::DescriptionSpec spec;
+        spec.emotion = params.emotion;
+        spec.pace    = params.pace;
+        try {
+            description = tts_cpp::parler::build_description(spec);
+        } catch (const std::exception & e) {
+            fprintf(stderr, "error: %s\n", e.what());
+            return 1;
+        }
+        fprintf(stderr, "tts-cli: description: %s\n", description.c_str());
+    }
+
     tts_cpp::parler::EngineOptions opts;
     opts.model_gguf_path = params.model;
-    opts.default_description = params.parler_description;
+    opts.default_description = description;
     if (params.seed_set) opts.seed = params.seed;
     opts.n_threads = params.n_threads;
 
-    auto result = tts_cpp::parler::synthesize(opts, params.text, params.parler_description);
+    auto result = tts_cpp::parler::synthesize(opts, params.text, description);
     const int osr = params.output_sample_rate;
     if (osr > 0 && osr != result.sample_rate) {
         std::vector<float> resampled = resample_sinc(result.pcm, result.sample_rate, osr);
@@ -957,6 +1012,12 @@ static int run_supertonic_cli_path(const cli_params & params) {
         fprintf(stderr, "error: --speed must be >= 0 for Supertonic\n");
         return 1;
     }
+    if (!params.emotion.empty()) {
+        namespace ctl = tts_cpp::controls;
+        fprintf(stderr, "error: --emotion is not supported by Supertonic (supported by: %s)\n",
+                ctl::engine_name(ctl::EngineId::Parler));
+        return 1;
+    }
 
     tts_cpp::supertonic::EngineOptions opts;
     opts.model_gguf_path = params.model;
@@ -964,6 +1025,7 @@ static int run_supertonic_cli_path(const cli_params & params) {
     opts.language = params.language.empty() ? "en" : params.language;
     opts.steps = params.supertonic_steps;
     opts.speed = params.supertonic_speed;
+    opts.pace  = params.pace;
     if (params.seed_set) opts.seed = params.seed;
     opts.n_threads = params.n_threads;
     opts.n_gpu_layers = params.n_gpu_layers;
@@ -1061,6 +1123,12 @@ int tts_cpp_cli_main(int argc, char ** argv) {
         if (!params.parler_description.empty()) {
             fprintf(stderr, "error: --description is a Parler-TTS-only option, but --model was\n"
                             "       not detected as a Parler GGUF.\n");
+            return 1;
+        }
+        if (!params.emotion.empty() || !params.pace.empty()) {
+            fprintf(stderr,
+                    "error: --emotion / --pace are not supported by Chatterbox GGUFs.\n"
+                    "       Chatterbox exposes --exaggeration (an intensity scalar) instead.\n");
             return 1;
         }
         if (params.has_supertonic_options) {

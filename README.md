@@ -244,6 +244,20 @@ GGUF conversion steps are in [engines/tts/README.md](engines/tts/README.md).
                                   --text "Hello from a fully on-device pipeline." --out out.wav
 ```
 
+`--emotion` and `--pace` work the same way on every engine that supports them;
+each CLI lists its own supported values via `--list-emotions` / `--list-paces`.
+See [Voice conditioning](engines/tts/README.md#voice-conditioning-cross-engine).
+
+```sh
+./build/engines/tts/parler-cli --model models/parler-indic-q8_0.gguf \
+                               --emotion happy --pace moderate \
+                               --text "आज मौसम बहुत अच्छा है।" --out out.wav
+
+./build/engines/tts/cosyvoice-cli --model-dir models/cosyvoice3-0.5b \
+                                  --emotion happy \
+                                  --text "Hello from a fully on-device pipeline." --out out.wav
+```
+
 ### Music generation
 
 ```sh

@@ -3,6 +3,8 @@
 
 #include "tts-cpp/parler/description.h"
 
+#include "tts-cpp/voice_controls.h"
+
 #include <cstdio>
 #include <stdexcept>
 #include <string>
@@ -10,6 +12,8 @@
 using tts_cpp::parler::DescriptionSpec;
 using tts_cpp::parler::build_description;
 using tts_cpp::parler::emotions;
+
+namespace ctl = tts_cpp::controls;
 
 static int g_failures = 0;
 
@@ -42,6 +46,39 @@ static void expect_throw(const DescriptionSpec & spec, const std::string & needl
                     what.c_str(), needle.c_str());
             ++g_failures;
         }
+    }
+}
+
+// Structural checks used to sweep the whole vocabulary, complementing the
+// pinned strings above: catch a missing caption path without pinning a string
+// for every combination.
+static void expect_renders(const DescriptionSpec & s) {
+    try {
+        const std::string got = build_description(s);
+        if (got.empty() || got.back() != '.') {
+            fprintf(stderr, "FAIL: malformed render \"%s\"\n", got.c_str());
+            ++g_failures;
+        }
+    } catch (const std::exception & e) {
+        fprintf(stderr, "FAIL: unexpected throw \"%s\"\n", e.what());
+        ++g_failures;
+    }
+}
+
+static void expect_anchor(const std::string & emotion) {
+    DescriptionSpec s;
+    s.emotion = emotion;
+    const std::string anchor = " The intended style is " + emotion + ".";
+    try {
+        const std::string got = build_description(s);
+        if (got.size() < anchor.size() ||
+            got.compare(got.size() - anchor.size(), anchor.size(), anchor) != 0) {
+            fprintf(stderr, "FAIL: \"%s\" missing anchor \"%s\"\n", got.c_str(), anchor.c_str());
+            ++g_failures;
+        }
+    } catch (const std::exception & e) {
+        fprintf(stderr, "FAIL: emotion \"%s\" unexpected throw \"%s\"\n", emotion.c_str(), e.what());
+        ++g_failures;
     }
 }
 
@@ -144,6 +181,30 @@ int main() {
     if (emo.size() != 12 || emo.front() != "command" || emo.back() != "surprise") {
         fprintf(stderr, "FAIL: emotions() size/order wrong (n=%zu)\n", emo.size());
         ++g_failures;
+    }
+
+    // Parler's public list IS the shared canonical vocabulary, so a reorder or
+    // respelling of the shared table fails here rather than silently changing
+    // the rendered caption (the canonical name is interpolated into it).
+    if (emo != ctl::all_emotions() || emo != ctl::supported_emotions(ctl::EngineId::Parler)) {
+        fprintf(stderr, "FAIL: emotions() diverged from the shared vocabulary\n");
+        ++g_failures;
+    }
+
+    // Every canonical emotion must render and end with its anchor sentence: a
+    // vocabulary entry with no caption clause would otherwise only surface at
+    // runtime for whoever happened to request it.
+    for (const std::string & name : ctl::supported_emotions(ctl::EngineId::Parler)) {
+        expect_anchor(name);
+    }
+
+    // Pace steps come from the shared vocabulary too, and every step must
+    // render across the emotion axis (the comma-attachment branch depends on
+    // both), so a new step cannot land without a caption path.
+    for (const std::string & pace : ctl::supported_paces(ctl::EngineId::Parler)) {
+        for (const std::string & name : ctl::supported_emotions(ctl::EngineId::Parler)) {
+            expect_renders(spec("", name, "", pace));
+        }
     }
 
     // DescriptionSpec::empty()

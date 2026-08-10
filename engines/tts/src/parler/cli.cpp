@@ -1,5 +1,7 @@
 #include "tts-cpp/parler/description.h"
 #include "tts-cpp/parler/engine.h"
+#include "tts-cpp/voice_controls.h"
+#include "voice_controls_cli.h"
 
 #include <algorithm>
 #include <cmath>
@@ -12,6 +14,10 @@
 
 namespace {
 
+namespace ctl = ::tts_cpp::controls;
+
+constexpr ctl::EngineId k_engine = ctl::EngineId::Parler;
+
 void usage(const char * argv0) {
     fprintf(stderr,
         "usage: %s --model parler.gguf --text TEXT --out out.wav\n"
@@ -19,6 +25,7 @@ void usage(const char * argv0) {
         "                      exclusive with the template flags below)\n"
         "          [--voice NAME] [--emotion NAME] (one of the 12 speaking\n"
         "                      styles, e.g. happy, sad, anger, news)\n"
+        "          [--list-emotions] [--list-paces] (print the supported values)\n"
         "          [--pitch low|moderate|high] [--pace slow|moderate|fast]\n"
         "          [--expressivity monotone|\"slightly expressive\"|expressive]\n"
         "          [--noise clear|noisy] [--reverb close|distant]\n"
@@ -103,6 +110,14 @@ int main(int argc, char ** argv) {
         else if (a == "--min-new-tokens") opts.min_new_tokens = atoi(next());
         else if (a == "--no-normalize-numbers") opts.normalize_numbers = false;
         else if (a == "--backends-dir")   opts.backends_dir = next();
+        else if (a == "--list-emotions") {
+            printf("%s\n", ctl::cli::describe_emotions(k_engine).c_str());
+            return 0;
+        }
+        else if (a == "--list-paces") {
+            printf("%s\n", ctl::cli::describe_paces(k_engine).c_str());
+            return 0;
+        }
         else if (a == "--help" || a == "-h") { usage(argv[0]); return 0; }
         else {
             fprintf(stderr, "unknown argument: %s\n", a.c_str());
