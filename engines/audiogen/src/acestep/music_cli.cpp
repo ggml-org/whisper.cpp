@@ -61,7 +61,21 @@ static bool json_field(const std::string & j, const char * key, std::string & ou
         size_t e = ++p;
         std::string v;
         while (e < j.size() && j[e] != '"') {
-            if (j[e] == '\\' && e + 1 < j.size()) { v += j[e + 1]; e += 2; continue; }
+            if (j[e] == '\\' && e + 1 < j.size()) {
+                switch (j[e + 1]) {
+                    case '"':  v += '"';  break;
+                    case '\\': v += '\\'; break;
+                    case '/':  v += '/';  break;
+                    case 'b':  v += '\b'; break;
+                    case 'f':  v += '\f'; break;
+                    case 'n':  v += '\n'; break;
+                    case 'r':  v += '\r'; break;
+                    case 't':  v += '\t'; break;
+                    default:   v += j[e + 1]; break;
+                }
+                e += 2;
+                continue;
+            }
             v += j[e++];
         }
         out = v;
@@ -110,9 +124,8 @@ int main(int argc, char ** argv) {
     if (arg_val(argc, argv, "--text"))   o.text_enc_model_path = arg_val(argc, argv, "--text");
     if (arg_val(argc, argv, "--vae"))    o.vae_model_path = arg_val(argc, argv, "--vae");
     // Offer every stage to a GPU backend (Metal/CUDA/Vulkan) when one is available.
-    // Engine::create makes the final placement call: the DiT, VAE and encoders always
-    // take the GPU, while the LM and the FSQ detokenizer are allowlisted per backend
-    // and currently only move off the CPU on Vulkan.
+    // Engine::create makes the final placement call: the DiT, VAE and encoders use
+    // the GPU; the LM and FSQ detokenizer are allowlisted independently per backend.
     if (arg_flag(argc, argv, "--gpu"))   o.n_gpu_layers = 99;
     if (arg_val(argc, argv, "--threads")) o.n_threads = atoi(arg_val(argc, argv, "--threads"));
     // Required wherever ggml ships its backends as dlopen'd MODULE .so files
@@ -131,6 +144,7 @@ int main(int argc, char ** argv) {
                 "           [--tsig 4/4] [--lang en] [--req request.json]\n"
                 "  sampler: [--steps N] [--shift F]  (default: auto from the DiT variant,\n"
                 "           turbo 8 / 3.0, base and sft 50 / 1.0)\n"
+                "           [--no-dcw]  (Haar DCW double mode is enabled by default)\n"
                 "           [--temp 0.85] [--cfg 2.0] [--topp 0.9] [--topk 0 (off)]\n"
                 "           [--no-phase1]  (values shown are the defaults)\n"
                 "  backend: [--gpu] [--threads N] [--backends-dir <dir>]\n"
@@ -155,6 +169,7 @@ int main(int argc, char ** argv) {
     if (arg_val(argc, argv, "--topk")) p.lm_top_k = atoi(arg_val(argc, argv, "--topk"));
     if (arg_val(argc, argv, "--topp")) p.lm_top_p = (float) atof(arg_val(argc, argv, "--topp"));
     if (arg_flag(argc, argv, "--no-phase1")) p.lm_phase1 = false;
+    if (arg_flag(argc, argv, "--no-dcw")) p.dcw_enabled = false;
 
     // --req <json>: load caption/lyrics/metas and (if present) audio_codes to
     // bypass our LM — used for parity against acestep.cpp's ace-lm output.
@@ -172,6 +187,9 @@ int main(int argc, char ** argv) {
         if (json_field(j, "shift", v)) p.shift = (float) atof(v.c_str());
         if (json_field(j, "inference_steps", v)) p.inference_steps = atoi(v.c_str());
         if (json_field(j, "seed", v)) p.seed = strtoll(v.c_str(), nullptr, 10);
+        if (json_field(j, "dcw_enabled", v)) p.dcw_enabled = v != "false" && v != "0";
+        if (json_field(j, "dcw_scaler", v)) p.dcw_scaler = (float) atof(v.c_str());
+        if (json_field(j, "dcw_high_scaler", v)) p.dcw_high_scaler = (float) atof(v.c_str());
         if (json_field(j, "audio_codes", v) && !v.empty()) {
             size_t start = 0;
             while (start < v.size()) {

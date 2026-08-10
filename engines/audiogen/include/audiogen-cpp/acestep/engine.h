@@ -28,7 +28,8 @@
 //   [x] is_turbo auto-detect -> steps/shift (turbo 8/3.0, base/sft 50/1.0).
 //   [x] Parity vs acestep.cpp: synth bit-close (corr 0.98-0.99 on same codes);
 //       LM greedy matches upstream argmax (divergence = CPU-F32 vs Metal-F16).
-// Deferred: DiT CFG/APG (guidance>1, base/sft only), DCW wavelet correction.
+//   [x] DiT sampler Haar DCW "double" correction (official ACE-Step defaults).
+// Deferred: DiT CFG/APG (guidance>1, base/sft only).
 
 #include "audiogen-cpp/export.h"
 
@@ -89,6 +90,10 @@ struct GenerateParams {
     int         lm_top_k       = 0;      // 0 = disabled (top_p only)
     float       lm_cfg_scale   = 2.0f;   // classifier-free guidance for codes
     bool        lm_phase1      = true;   // auto-fill missing metadata (FSM CoT)
+    // Official sampler-side Haar DCW "double" correction.
+    bool        dcw_enabled     = true;
+    float       dcw_scaler      = 0.05f;  // low band coefficient: t * scaler
+    float       dcw_high_scaler = 0.02f;  // high band coefficient: (1-t) * scaler
 
     // Pre-supplied FSQ audio codes (LM output). When non-empty, the LM stage is
     // skipped and these codes are used directly (parity / caching / editing).

@@ -62,11 +62,16 @@ Mali-G715 as `IGPU`.
 |---|---|
 | DiT, VAE | GPU |
 | Text encoder, cond encoder | GPU, unless `ACESTEP_ENCODERS_CPU=1` |
-| LM, FSQ detokenizer | GPU on Vulkan and Metal, CPU on every other backend |
+| LM | GPU on Metal; CPU on Vulkan and every unmeasured backend |
+| FSQ detokenizer | GPU on Vulkan and Metal, CPU on every other backend |
 
-The LM and detokenizer use an allowlist rather than a denylist: a backend keeps the CPU placement until both stages have been measured on it, so adding one cannot silently regress generated audio. Vulkan and Metal have been measured; every other GPU backend has not.
+The LM and detokenizer use an allowlist rather than a denylist: a backend keeps the CPU placement until the stage has been measured on it, so adding one cannot silently regress generated audio. Metal is validated for both stages. Vulkan is validated for the detokenizer, but the autoregressive LM remains on CPU because Mali-G715 testing showed code collapse and early termination on Vulkan.
 
-Measurement is against an F32-dequantized reference (`scripts/dequant_gguf.py`), not against CPU. CPU is not ground truth for a quantized model — ggml's CPU matmul quantizes activations to Q8_1 internally — so pinning a stage to the CPU forces the *less* accurate path. On Metal the LM reproduces the F32 argmax trajectory exactly where CPU Q8_0 diverges at the first token, and every pipeline stage is closer to the F32 reference on Metal than on CPU.
+Measurement is against an F32-dequantized reference (`scripts/dequant_gguf.py`), not against CPU. CPU is not automatically ground truth for a quantized model — ggml's CPU matmul quantizes activations to Q8_1 internally. On Metal the LM reproduces the F32 argmax trajectory exactly where CPU Q8_0 diverges at the first token. On Mali Vulkan, however, the LM produces repeated semantic codes and can terminate at roughly half the requested duration, while the same device produces a diverse full-length sequence with the LM on CPU.
+
+On a GPU that supports F32 flash attention, Phase 2 also decodes the conditional and unconditional CFG paths in one batched graph. This matches the reference `acestep.cpp` LM path: the same prompt, model, sampler settings, and seed produce the same semantic-code sequence. Unsupported backends keep the separate F32 manual-attention path.
+
+`lm-smoke --gpu --quantized-batch-cfg-regression --model <Q4-or-Q8-LM.gguf>` compares the compact batched head against two full-vocabulary decode streams. It requires quantized tied embeddings and fails if either stream changes argmax or drops below `0.99999` logit cosine.
 
 The policy itself lives in [`src/acestep/stage_placement.h`](src/acestep/stage_placement.h), separate from the engine, so it is unit tested without a GPU.
 
@@ -82,6 +87,8 @@ Applied after the allowlist. CPU wins when both are set for the same stage.
 | `ACESTEP_VAE_GPU` | force the VAE onto the GPU |
 | `ACESTEP_KEEP_STAGES` | keep every stage resident instead of loading sequentially |
 | `ACESTEP_LM_DUMP_LAYERS` | write the LM's per-layer prefill hidden states to this file path |
+| `ACESTEP_LM_DUMP_TOKENS` | write the Phase-2 prompt token IDs as CSV |
+| `ACESTEP_LM_DUMP_LOGITS` | write the conditional Phase-2 prefill logits as raw F32 |
 | `ACESTEP_VAE_PROFILE` | print the VAE per-op-type time inventory |
 
 Use `ACESTEP_LM_GPU` or `ACESTEP_DETOK_GPU` to take the measurement that would widen the allowlist for a new backend, without a rebuild.
@@ -154,11 +161,18 @@ Consume the installed package with `find_package(audiogen-cpp CONFIG REQUIRED)` 
 | `--seed N` | `42` | negative means random |
 | `--bpm N`, `--key STR`, `--tsig STR`, `--lang CODE` | inferred | optional metadata hints |
 | `--steps N`, `--shift F` | per variant | sampler overrides |
+| `--no-dcw` | DCW enabled | disable the official Haar low/high correction applied after each DiT step |
 | `--temp F`, `--topp F`, `--topk N`, `--cfg F` | `0.85`, `0.9`, off, `2.0` | LM sampling for the audio codes |
 | `--no-phase1` | off | skip the LM metadata auto-fill pass |
 | `--req FILE` | | request JSON; pre-supplied `audio_codes` skip the LM stage |
 | `--gpu`, `--threads N` | CPU, hardware concurrency | compute placement |
 | `--dump-stages DIR` | | write one `.bin` per stage into an existing directory |
+
+The sampler enables ACE-Step's single-level Haar DCW `double` mode by default.
+At timestep `t`, the low band uses `t * 0.05` and the high band uses
+`(1 - t) * 0.02`, matching the official Python defaults. The correction runs
+on the host latent between DiT steps, so it is backend-independent and adds
+negligible work compared with a transformer forward.
 
 ### acestep-cli
 

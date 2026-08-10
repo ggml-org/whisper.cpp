@@ -713,6 +713,9 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     sp.schedule        = schedule.data();
     sp.num_steps       = n_steps;
     sp.real_enc_S      = &enc_S;
+    sp.dcw_enabled     = params.dcw_enabled;
+    sp.dcw_scaler      = params.dcw_scaler;
+    sp.dcw_high_scaler = params.dcw_high_scaler;
     // Surface per-step diffusion progress (the long pole) to the caller's
     // ProgressFn; returning false here also honours cooperative cancellation.
     sp.on_step         = [&](int step, int total) { return report("dit", step, total); };

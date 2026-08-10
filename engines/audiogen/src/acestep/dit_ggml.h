@@ -77,6 +77,16 @@ bool dit_model_forward(DitModel * m, const DitForwardInputs & in, std::vector<fl
 // Turbo: shift=3.0, num_steps=8. Base/SFT: shift=1.0, num_steps=50.
 void dit_build_schedule(float shift, int num_steps, std::vector<float> & schedule_out);
 
+// Apply the official ACE-Step single-level Haar DCW correction along the
+// temporal axis. x_next and denoised use row-major [N, T, C] layout.
+void dit_apply_haar_dcw(std::vector<float> &       x_next,
+                        const std::vector<float> & denoised,
+                        int                        T,
+                        int                        C,
+                        int                        N,
+                        float                      low_scale,
+                        float                      high_scale);
+
 // One full flow-matching denoise (Euler, no CFG — turbo runs guidance=1.0).
 struct DitSampleParams {
     const float * noise           = nullptr;  // [out_channels, T, N] initial x_T
@@ -89,6 +99,9 @@ struct DitSampleParams {
     const float * schedule        = nullptr;  // [num_steps] descending timesteps
     int           num_steps       = 0;
     const int *   real_enc_S      = nullptr;  // [N] valid encoder lengths; null = all enc_S
+    bool          dcw_enabled     = true;     // official ACE-Step Haar "double" mode
+    float         dcw_scaler      = 0.05f;    // low band: t_curr * scaler
+    float         dcw_high_scaler = 0.02f;    // high band: (1-t_curr) * scaler
 
     // Optional per-step progress hook, fired at the start of each Euler step
     // with (step, num_steps). Return false to request cancellation (the sampler
