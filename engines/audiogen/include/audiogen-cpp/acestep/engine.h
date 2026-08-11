@@ -98,10 +98,32 @@ struct GenerateParams {
     // Optional timbre reference: normalized interleaved stereo PCM at 48 kHz.
     // The VAE encoder converts it to 25 Hz features consumed by the existing
     // condition encoder. Empty preserves the canonical silence reference.
+    // For cover / cover-nofsq, empty falls back to source_audio (acestep.cpp
+    // recommendation: pass the same buffer as --src-audio and --ref-audio).
     std::vector<float> reference_audio;
+
+    // Optional source / cover audio: same layout as reference_audio. Required
+    // when task_type is "cover" or "cover-nofsq". Encoded by the VAE into the
+    // DiT context so generation follows the source structure.
+    std::vector<float> source_audio;
+
+    // Task discriminator (mirrors acestep.cpp AceRequest::task_type).
+    // Supported today: "text2music" | "cover-nofsq".
+    // "cover" (FSQ roundtrip) is accepted at the API but not implemented yet.
+    std::string task_type = "text2music";
+
+    // Fraction of DiT steps that keep the source context (0..1). Default 1.0
+    // keeps source context for every step. Values < 1.0 need DiT context
+    // switching and are rejected until that path is ported.
+    float audio_cover_strength = 1.0f;
+
+    // Blend initial DiT noise toward clean source latents (0..1). 0 = pure
+    // Philox noise; 1 = nearly the source latent. Matches acestep.cpp.
+    float cover_noise_strength = 0.0f;
 
     // Pre-supplied FSQ audio codes (LM output). When non-empty, the LM stage is
     // skipped and these codes are used directly (parity / caching / editing).
+    // Ignored for cover / cover-nofsq (those skip the LM entirely).
     std::vector<int> audio_codes;
 };
 
@@ -125,9 +147,9 @@ struct GenerateResult {
     GenerateMetadata   metadata;
 };
 
-// Optional progress callback: stage name ("reference"|"lm"|"dit"|"vae"),
-// current step, total steps (total <= 0 when unknown). Return false to request
-// cancellation.
+// Optional progress callback: stage name
+// ("reference"|"source"|"lm"|"dit"|"vae"), current step, total steps
+// (total <= 0 when unknown). Return false to request cancellation.
 using ProgressFn = std::function<bool(const std::string & stage, int step, int total)>;
 
 class AUDIOGEN_API Engine {

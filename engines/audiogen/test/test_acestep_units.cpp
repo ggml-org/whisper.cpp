@@ -15,10 +15,12 @@
 //   6b. vae_shrink_window_core — chunked-decode window vs the backend alloc cap.
 //   7. GPU device types    — discrete and integrated GPUs are selectable.
 //   8. stage placement     — which backend the LM / detokenizer / encoders run on.
+//   9. generate task       — cover/text2music discriminator + strength clamps.
 
 #include "backend_registry.h"
 #include "dit_ggml.h"
 #include "detok_ggml.h"
+#include "generate_task.h"
 #include "lm_pipeline.h"
 #include "philox.h"
 #include "stage_placement.h"
@@ -493,6 +495,141 @@ void test_placement_env() {
     clear_all();  // leave the environment as found
 }
 
+// 9. generate task validation -----------------------------------------------
+// Locks the cover/text2music discriminator, stereo PCM layout checks, and the
+// strength clamps that the addon and music-cli both rely on before any GGUF
+// is loaded.
+void test_generate_task() {
+    using tts_cpp::acestep::GenerateParams;
+    using tts_cpp::acestep::TASK_COVER;
+    using tts_cpp::acestep::TASK_COVER_NOFSQ;
+    using tts_cpp::acestep::TASK_TEXT2MUSIC;
+    using tts_cpp::acestep::is_cover_task;
+    using tts_cpp::acestep::normalize_generate_task;
+
+    CHECK(is_cover_task(TASK_COVER));
+    CHECK(is_cover_task(TASK_COVER_NOFSQ));
+    CHECK(!is_cover_task(TASK_TEXT2MUSIC));
+    CHECK(!is_cover_task(""));
+    CHECK(!is_cover_task("text2music"));
+
+    // Defaults: empty task_type => text2music; strengths stay at defaults.
+    {
+        GenerateParams p;
+        CHECK(normalize_generate_task(p).empty());
+        CHECK(p.task_type == TASK_TEXT2MUSIC);
+        CHECK(approx(p.audio_cover_strength, 1.0f));
+        CHECK(approx(p.cover_noise_strength, 0.0f));
+        CHECK(p.source_audio.empty());
+        CHECK(p.reference_audio.empty());
+    }
+    // Explicit text2music with optional reference_audio (timbre only).
+    {
+        GenerateParams p;
+        p.task_type = TASK_TEXT2MUSIC;
+        p.reference_audio.assign(4, 0.1f);
+        CHECK(normalize_generate_task(p).empty());
+        CHECK(p.task_type == TASK_TEXT2MUSIC);
+        CHECK(p.reference_audio.size() == 4);
+    }
+    // text2music does not require source_audio.
+    {
+        GenerateParams p;
+        p.task_type = TASK_TEXT2MUSIC;
+        CHECK(normalize_generate_task(p).empty());
+    }
+    // Unknown task_type rejected.
+    {
+        GenerateParams p;
+        p.task_type = "repaint";
+        const std::string err = normalize_generate_task(p);
+        CHECK(!err.empty());
+        CHECK(err.find("unsupported task_type") != std::string::npos);
+    }
+    // cover-nofsq requires source_audio.
+    {
+        GenerateParams p;
+        p.task_type = TASK_COVER_NOFSQ;
+        const std::string err = normalize_generate_task(p);
+        CHECK(!err.empty());
+        CHECK(err.find("requires source_audio") != std::string::npos);
+        p.source_audio.assign(4, 0.0f);  // 2 stereo frames
+        CHECK(normalize_generate_task(p).empty());
+    }
+    // Odd-length source_audio rejected (must be interleaved stereo).
+    {
+        GenerateParams p;
+        p.task_type = TASK_COVER_NOFSQ;
+        p.source_audio.assign(3, 0.0f);
+        const std::string err = normalize_generate_task(p);
+        CHECK(!err.empty());
+        CHECK(err.find("source_audio must be interleaved stereo") != std::string::npos);
+    }
+    // Odd-length reference_audio rejected when provided.
+    {
+        GenerateParams p;
+        p.task_type = TASK_COVER_NOFSQ;
+        p.source_audio.assign(4, 0.0f);
+        p.reference_audio.assign(5, 0.0f);
+        const std::string err = normalize_generate_task(p);
+        CHECK(!err.empty());
+        CHECK(err.find("reference_audio must be interleaved stereo") != std::string::npos);
+    }
+    // Even reference_audio accepted alongside cover-nofsq source.
+    {
+        GenerateParams p;
+        p.task_type = TASK_COVER_NOFSQ;
+        p.source_audio.assign(4, 0.2f);
+        p.reference_audio.assign(6, 0.3f);
+        p.cover_noise_strength = 0.25f;
+        CHECK(normalize_generate_task(p).empty());
+        CHECK(approx(p.cover_noise_strength, 0.25f));
+    }
+    // Full cover (FSQ) is accepted at the API but not implemented yet.
+    {
+        GenerateParams p;
+        p.task_type = TASK_COVER;
+        p.source_audio.assign(4, 0.0f);
+        const std::string err = normalize_generate_task(p);
+        CHECK(!err.empty());
+        CHECK(err.find("not implemented") != std::string::npos);
+        CHECK(err.find("cover-nofsq") != std::string::npos);
+    }
+    // audio_cover_strength < 1 not implemented for cover-nofsq.
+    {
+        GenerateParams p;
+        p.task_type            = TASK_COVER_NOFSQ;
+        p.source_audio.assign(4, 0.0f);
+        p.audio_cover_strength = 0.5f;
+        const std::string err  = normalize_generate_task(p);
+        CHECK(!err.empty());
+        CHECK(err.find("audio_cover_strength") != std::string::npos);
+    }
+    // Strength clamps (out of range) for text2music path.
+    {
+        GenerateParams p;
+        p.audio_cover_strength = 2.0f;
+        p.cover_noise_strength = -0.5f;
+        CHECK(normalize_generate_task(p).empty());
+        CHECK(approx(p.audio_cover_strength, 1.0f));
+        CHECK(approx(p.cover_noise_strength, 0.0f));
+    }
+    // Boundary strengths 0 and 1: cover_noise ok; cover strength 0 rejected on cover.
+    {
+        GenerateParams p;
+        p.task_type            = TASK_COVER_NOFSQ;
+        p.source_audio.assign(4, 0.0f);
+        p.audio_cover_strength = 1.0f;
+        p.cover_noise_strength = 0.0f;
+        CHECK(normalize_generate_task(p).empty());
+        p.cover_noise_strength = 1.0f;
+        CHECK(normalize_generate_task(p).empty());
+        CHECK(approx(p.cover_noise_strength, 1.0f));
+        p.audio_cover_strength = 0.0f;
+        CHECK(!normalize_generate_task(p).empty());
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -506,6 +643,7 @@ int main() {
     test_backend_device_types();
     test_stage_placement();
     test_placement_env();
+    test_generate_task();
 
     std::fprintf(stderr, "[test-acestep-units] %d/%d checks passed\n", g_checks - g_failures, g_checks);
     return g_failures == 0 ? 0 : 1;

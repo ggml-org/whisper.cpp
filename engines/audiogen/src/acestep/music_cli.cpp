@@ -212,6 +212,9 @@ int main(int argc, char ** argv) {
                 "  prompt:  [--caption \"...\"] [--lyrics \"...\"] [--bpm 128] [--key \"C major\"]\n"
                 "           [--tsig 4/4] [--lang en] [--req request.json]\n"
                 "  audio:   [--ref-audio <48-kHz PCM16 WAV>]  (timbre reference)\n"
+                "           [--src-audio <48-kHz PCM16 WAV>]  (cover source structure)\n"
+                "           [--task text2music|cover-nofsq]   (default text2music)\n"
+                "           [--cover-strength F] [--cover-noise F]  (cover defaults 1.0 / 0.0)\n"
                 "  sampler: [--steps N] [--shift F]  (default: auto from the DiT variant,\n"
                 "           turbo 8 / 3.0, base and sft 50 / 1.0)\n"
                 "           [--no-dcw]  (Haar DCW double mode is enabled by default)\n"
@@ -260,6 +263,9 @@ int main(int argc, char ** argv) {
         if (json_field(j, "dcw_enabled", v)) p.dcw_enabled = v != "false" && v != "0";
         if (json_field(j, "dcw_scaler", v)) p.dcw_scaler = (float) atof(v.c_str());
         if (json_field(j, "dcw_high_scaler", v)) p.dcw_high_scaler = (float) atof(v.c_str());
+        if (json_field(j, "task_type", v)) p.task_type = v;
+        if (json_field(j, "audio_cover_strength", v)) p.audio_cover_strength = (float) atof(v.c_str());
+        if (json_field(j, "cover_noise_strength", v)) p.cover_noise_strength = (float) atof(v.c_str());
         if (json_field(j, "audio_codes", v) && !v.empty()) {
             size_t start = 0;
             while (start < v.size()) {
@@ -286,6 +292,26 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "[music-cli] reference audio: %s (%.2fs, 48 kHz stereo)\n", reference_path,
                 (float) reference_frames / 48000.0f);
     }
+
+    if (const char * source_path = arg_val(argc, argv, "--src-audio")) {
+        int source_frames = 0;
+        int source_rate   = 0;
+        p.source_audio = wav_read(source_path, &source_frames, &source_rate);
+        if (p.source_audio.empty()) return 1;
+        if (source_rate != 48000) {
+            fprintf(stderr, "[music-cli] source WAV is %d Hz; convert it to 48 kHz before generation\n",
+                    source_rate);
+            return 1;
+        }
+        fprintf(stderr, "[music-cli] source audio: %s (%.2fs, 48 kHz stereo)\n", source_path,
+                (float) source_frames / 48000.0f);
+    }
+
+    if (const char * task = arg_val(argc, argv, "--task")) p.task_type = task;
+    if (arg_val(argc, argv, "--cover-strength"))
+        p.audio_cover_strength = (float) atof(arg_val(argc, argv, "--cover-strength"));
+    if (arg_val(argc, argv, "--cover-noise"))
+        p.cover_noise_strength = (float) atof(arg_val(argc, argv, "--cover-noise"));
 
     const char * out_path = arg_val(argc, argv, "--out") ? arg_val(argc, argv, "--out") : "music_out.wav";
 
