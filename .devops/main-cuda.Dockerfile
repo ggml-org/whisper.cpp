@@ -19,6 +19,8 @@ RUN apt-get update && \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
+# The build stage has no real GPU/driver, so the linker needs the
+# forward-compat libcuda stub to resolve CUDA driver-API symbols.
 # Ref: https://stackoverflow.com/a/53464012
 ENV CUDA_MAIN_VERSION=13.0
 ENV LD_LIBRARY_PATH /usr/local/cuda-${CUDA_MAIN_VERSION}/compat:$LD_LIBRARY_PATH
@@ -34,8 +36,6 @@ RUN find /app/build -name "*.o" -delete && \
     rm -rf /app/build/_deps
 
 FROM ${BASE_CUDA_RUN_CONTAINER} AS runtime
-ENV CUDA_MAIN_VERSION=13.0
-ENV LD_LIBRARY_PATH /usr/local/cuda-${CUDA_MAIN_VERSION}/compat:$LD_LIBRARY_PATH
 WORKDIR /app
 
 RUN apt-get update && \
