@@ -1,20 +1,20 @@
 name: Release
 
+# Builds dev releases (b* tags) when manually dispatched with create_release: true.
+# Run this as a verification build before making a release (see make-release.yml).
+# Pushing a v* tag does not trigger this workflow; releases are made via make-release.yml.
+
 on:
   workflow_dispatch:
     inputs:
       create_release:
-        description: 'Create new release'
+        description: 'Create new developer release'
         required: true
         type: boolean
       pre_release_tag:
         description: 'Pre-release tag name'
         required: false
         type: string
-
-  push:
-    tags:
-      - 'v*'
 
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
@@ -55,18 +55,10 @@ jobs:
           echo "BRANCH_NAME: ${{ env.BRANCH_NAME }}"
           echo "CUSTOM_TAG: $CUSTOM_TAG"
 
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            echo "Using pushed tag name"
-            TAG_NAME="${{ github.ref_name }}"
-            SHOULD_RELEASE="true"
-          elif [[ -n "$CUSTOM_TAG" ]]; then
+          if [[ -n "$CUSTOM_TAG" ]]; then
             echo "Using custom tag"
             TAG_NAME="${CUSTOM_TAG}"
             SHOULD_RELEASE="true"
-          elif [[ "${{ github.event.inputs.create_release }}" == "true" ]]; then
-            echo "Manual release requested"
-            SHOULD_RELEASE="true"
-            TAG_NAME="b${BUILD_NUMBER}"
           elif [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
             echo "Using master branch format"
             TAG_NAME="b${BUILD_NUMBER}"
@@ -76,6 +68,11 @@ jobs:
             SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
             TAG_NAME="${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}"
             SHOULD_RELEASE="false"
+          fi
+
+          if [[ "${{ github.event.inputs.create_release }}" == "true" ]]; then
+            echo "Manual release requested"
+            SHOULD_RELEASE="true"
           fi
 
           echo "Final tag name: $TAG_NAME"
@@ -584,7 +581,7 @@ jobs:
           name: whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip
 
   release:
-    if: ${{ github.event.inputs.create_release == 'true' || github.event.inputs.pre_release_tag != '' || startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ github.event.inputs.create_release == 'true' || github.event.inputs.pre_release_tag != '' }}
 
     runs-on: ubuntu-latest
 
@@ -620,6 +617,16 @@ jobs:
         id: move_artifacts
         run: mkdir -p ./artifact/release && mv ./artifact/*/*.zip ./artifact/release && mv ./artifact/*/*.tar.gz ./artifact/release 2>/dev/null || true
 
+      - name: Create and push git tag
+        run: |
+          TAG="${{ needs.determine-tag.outputs.tag_name }}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists, skipping creation"
+          else
+            git tag "${TAG}"
+            git push origin "${TAG}"
+          fi
+
       - name: Create release
         id: create_release
         uses: ggml-org/action-create-release@v1
@@ -627,8 +634,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ needs.determine-tag.outputs.tag_name }}
-          prerelease: ${{ github.event.inputs.pre_release_tag != '' }}
-          draft: true
 
       - name: Upload release
         id: upload_release
