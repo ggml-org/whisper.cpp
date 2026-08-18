@@ -30,6 +30,7 @@ jobs:
         with:
           ref: ${{ inputs.commit != '' && inputs.commit || github.ref_name }}
           fetch-depth: 0
+          ssh-key: ${{ secrets.DEPLOY_KEY_RELEASE }}
 
       - name: Run release checks
         id: checks
