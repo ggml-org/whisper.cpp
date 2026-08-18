@@ -121,13 +121,15 @@ target_link_libraries(parakeet PUBLIC ggml Threads::Threads)
 
 # Set the version numbers
 set_target_properties(whisper PROPERTIES
-    VERSION ${PROJECT_VERSION}
-    SOVERSION ${SOVERSION}
+    VERSION ${WHISPER_VERSION_BASE}
+    SOVERSION ${WHISPER_VERSION_MAJOR}
+    MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 
 set_target_properties(parakeet PROPERTIES
-    VERSION ${PROJECT_VERSION}
-    SOVERSION ${SOVERSION}
+    VERSION ${WHISPER_VERSION_BASE}
+    SOVERSION ${WHISPER_VERSION_MAJOR}
+    MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 
 target_include_directories(whisper PUBLIC . ../include)

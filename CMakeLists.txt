@@ -1,9 +1,26 @@
 cmake_minimum_required(VERSION 3.5) # for add_link_options and implicit target directories.
 project("whisper.cpp" C CXX)
-project("whisper.cpp" VERSION 1.9.2)
 include(CheckIncludeFileCXX)
 
-set(SOVERSION 1)
+### whisper.cpp version
+set(WHISPER_VERSION_MAJOR 1)
+set(WHISPER_VERSION_MINOR 9)
+set(WHISPER_VERSION_PATCH 2)
+set(WHISPER_VERSION_BASE "${WHISPER_VERSION_MAJOR}.${WHISPER_VERSION_MINOR}.${WHISPER_VERSION_PATCH}")
+
+# whether this is a development/nightly build
+# set this to OFF when making a release from a release tag (vX.Y.Z)
+# ref: https://github.com/ggml-org/ggml/discussions/1579
+option(WHISPER_BUILD_IS_DEV "whisper: dev build" ON)
+
+if (WHISPER_BUILD_IS_DEV)
+    set(WHISPER_VERSION "${WHISPER_VERSION_BASE}-dev")
+else()
+    # TODO: check that the current commit is tagged correctly according to the version specified above
+    set(WHISPER_VERSION "${WHISPER_VERSION_BASE}")
+endif()
+
+message(STATUS "whisper.cpp version: ${WHISPER_VERSION}")
 
 #set(CMAKE_WARN_DEPRECATED YES)
 set(CMAKE_WARN_UNUSED_CLI YES)
@@ -170,9 +187,12 @@ add_subdirectory(src)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
-set(WHISPER_BUILD_NUMBER        ${BUILD_NUMBER})
-set(WHISPER_BUILD_COMMIT        ${BUILD_COMMIT})
-set(WHISPER_INSTALL_VERSION     ${CMAKE_PROJECT_VERSION})
+if (NOT DEFINED WHISPER_BUILD_NUMBER)
+    set(WHISPER_BUILD_NUMBER        ${BUILD_NUMBER})
+endif()
+if (NOT DEFINED WHISPER_BUILD_COMMIT)
+    set(WHISPER_BUILD_COMMIT        ${BUILD_COMMIT})
+endif()
 
 set(WHISPER_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of header  files")
 set(WHISPER_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
@@ -185,14 +205,14 @@ set_target_properties(whisper PROPERTIES PUBLIC_HEADER ${CMAKE_CURRENT_SOURCE_DI
 install(TARGETS whisper LIBRARY PUBLIC_HEADER)
 
 target_compile_definitions(whisper PRIVATE
-    WHISPER_VERSION="${PROJECT_VERSION}"
+    WHISPER_VERSION="${WHISPER_VERSION}"
 )
 
 set_target_properties(parakeet PROPERTIES PUBLIC_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/include/parakeet.h)
 install(TARGETS parakeet LIBRARY PUBLIC_HEADER)
 
 target_compile_definitions(parakeet PRIVATE
-    PARAKEET_VERSION="${PROJECT_VERSION}"
+    PARAKEET_VERSION="${WHISPER_VERSION}"
 )
 
 configure_package_config_file(
@@ -205,12 +225,12 @@ configure_package_config_file(
     WHISPER_BIN_INSTALL_DIR )
 
 write_basic_package_version_file(
-    ${CMAKE_CURRENT_BINARY_DIR}/whisper-version.cmake
-    VERSION ${WHISPER_INSTALL_VERSION}
+    ${CMAKE_CURRENT_BINARY_DIR}/whisper-config-version.cmake
+    VERSION ${WHISPER_VERSION}
     COMPATIBILITY SameMajorVersion)
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/whisper-config.cmake
-              ${CMAKE_CURRENT_BINARY_DIR}/whisper-version.cmake
+              ${CMAKE_CURRENT_BINARY_DIR}/whisper-config-version.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/whisper)
 
 configure_file(cmake/whisper.pc.in
@@ -234,12 +254,12 @@ configure_package_config_file(
     PARAKEET_BIN_INSTALL_DIR)
 
 write_basic_package_version_file(
-    ${CMAKE_CURRENT_BINARY_DIR}/parakeet-version.cmake
-    VERSION ${WHISPER_INSTALL_VERSION}
+    ${CMAKE_CURRENT_BINARY_DIR}/parakeet-config-version.cmake
+    VERSION ${WHISPER_VERSION}
     COMPATIBILITY SameMajorVersion)
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/parakeet-config.cmake
-              ${CMAKE_CURRENT_BINARY_DIR}/parakeet-version.cmake
+              ${CMAKE_CURRENT_BINARY_DIR}/parakeet-config-version.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/parakeet)
 
 configure_file(cmake/parakeet.pc.in
