@@ -615,13 +615,14 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           path: ./artifact
+          merge-multiple: true
 
       - name: Move artifacts
         id: move_artifacts
         run: |
-          mkdir -p ./artifact/release
-          mv ./artifact/*/*.zip ./artifact/release 2>/dev/null || true
-          mv ./artifact/*/*.tar.gz ./artifact/release 2>/dev/null || true
+          mkdir -p ./release
+          mv -v ./artifact/*.zip ./release 2>/dev/null || true
+          mv -v ./artifact/*.tar.gz ./release 2>/dev/null || true
 
       - name: Create and push git tag
         run: |
@@ -650,7 +651,7 @@ jobs:
             const path = require('path');
             const fs = require('fs');
             const release_id = '${{ steps.create_release.outputs.id }}';
-            for (let file of await fs.readdirSync('./artifact/release')) {
+            for (let file of await fs.readdirSync('./release')) {
               if (path.extname(file) === '.zip' || file.endsWith('.tar.gz')) {
                 console.log('uploadReleaseAsset', file);
                 await github.repos.uploadReleaseAsset({
@@ -658,7 +659,7 @@ jobs:
                   repo: context.repo.repo,
                   release_id: release_id,
                   name: file,
-                  data: await fs.readFileSync(`./artifact/release/${file}`)
+                  data: await fs.readFileSync(`./release/${file}`)
                 });
               }
             }
