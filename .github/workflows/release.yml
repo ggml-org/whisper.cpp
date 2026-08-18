@@ -221,7 +221,7 @@ jobs:
               Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-bin-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
-        if: matrix.sdl2 == 'ON' && ${{ needs.determine-tag.outputs.should_release }}
+        if: ${{ matrix.sdl2 == 'ON' && needs.determine-tag.outputs.should_release == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: whisper-bin-${{ matrix.arch }}.zip
@@ -308,7 +308,7 @@ jobs:
               Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-blas-bin-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
-        if: matrix.blas == 'ON' && matrix.sdl2 == 'ON' && ${{ needs.determine-tag.outputs.should_release }}
+        if: ${{ matrix.blas == 'ON' && matrix.sdl2 == 'ON' && needs.determine-tag.outputs.should_release == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: whisper-blas-bin-${{ matrix.arch }}.zip
@@ -517,7 +517,7 @@ jobs:
               Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
-        if: ${{ needs.determine-tag.outputs.should_release }}
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
@@ -574,7 +574,7 @@ jobs:
           zip --symlinks -r whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip build-apple/whisper.xcframework
 
       - name: Upload artifacts
-        if: ${{ needs.determine-tag.outputs.should_release }}
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           path: whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip
