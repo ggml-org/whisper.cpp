@@ -1,24 +1,30 @@
 if (WHISPER_SDL2)
     set(CMAKE_CXX_STANDARD 17)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
-    include(FetchContent)
 
-    set(LLAMA_TAG "v0.1.2")
+    if (WHISPER_USE_SYSTEM_LLAMA)
+        message(STATUS "Using system-provided llama.cpp, skipping llama.cpp fetch")
+        find_package(llama 0.1.2 REQUIRED)
+    else()
+        include(FetchContent)
 
-    set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
-    set(LLAMA_BUILD_COMMON   OFF CACHE BOOL "" FORCE)
-    set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
-    set(LLAMA_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
+        set(LLAMA_TAG "v0.1.2")
 
-    FetchContent_Declare(
-        llama
-        GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
-        GIT_TAG        ${LLAMA_TAG}
-    )
+        set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+        set(LLAMA_BUILD_COMMON   OFF CACHE BOOL "" FORCE)
+        set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
+        set(LLAMA_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
 
-    message(STATUS "Fetching llama.cpp dependency (${LLAMA_TAG})...")
-    FetchContent_MakeAvailable(llama)
+        FetchContent_Declare(
+            llama
+            GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
+            GIT_TAG        ${LLAMA_TAG}
+        )
+
+        message(STATUS "Fetching llama.cpp dependency (${LLAMA_TAG})...")
+        FetchContent_MakeAvailable(llama)
+    endif()
 
     set(TARGET whisper-talk-llama)
     add_executable(${TARGET} talk-llama.cpp)

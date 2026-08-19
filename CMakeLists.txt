@@ -85,8 +85,14 @@ option(WHISPER_ALL_WARNINGS           "whisper: enable all compiler warnings"   
 option(WHISPER_ALL_WARNINGS_3RD_PARTY "whisper: enable all compiler warnings in 3rd party libs" OFF)
 
 # build
-option(WHISPER_FATAL_WARNINGS  "whisper: enable -Werror flag"               OFF)
-option(WHISPER_USE_SYSTEM_GGML "whisper: use system-installed GGML library" OFF)
+option(WHISPER_FATAL_WARNINGS   "whisper: enable -Werror flag"                    OFF)
+option(WHISPER_USE_SYSTEM_GGML  "whisper: use system-installed GGML library"      OFF)
+option(WHISPER_USE_SYSTEM_LLAMA "whisper: use system-installed llama.cpp library" OFF)
+
+if (WHISPER_USE_SYSTEM_LLAMA AND NOT WHISPER_USE_SYSTEM_GGML)
+    message(STATUS "WHISPER_USE_SYSTEM_LLAMA=ON: setting WHISPER_USE_SYSTEM_GGML=ON")
+    set(WHISPER_USE_SYSTEM_GGML ON CACHE BOOL "" FORCE)
+endif()
 
 # sanitizers
 option(WHISPER_SANITIZE_THREAD    "whisper: enable thread sanitizer"    OFF)
