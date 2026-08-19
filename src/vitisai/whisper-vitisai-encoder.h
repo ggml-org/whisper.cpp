@@ -19,13 +19,6 @@ int whisper_vitisai_encode(
     struct ggml_tensor * mel,
     struct ggml_tensor * out);
 
-int whisper_vitisai_run_enc_cross(
-    struct whisper_vitisai_context * ctx,
-    struct ggml_tensor * mel,
-    struct ggml_tensor * out,
-    void * cross_v_data,
-    void * cross_k_data);
-
 int whisper_vitisai_encode_with_cross(
     struct whisper_vitisai_context * ctx,
     struct ggml_tensor * mel,

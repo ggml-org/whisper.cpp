@@ -326,37 +326,6 @@ int whisper_vitisai_encode(struct whisper_vitisai_context * ctx, struct ggml_ten
             nullptr);
 }
 
-int whisper_vitisai_run_enc_cross(
-        struct whisper_vitisai_context * ctx,
-        struct ggml_tensor * mel,
-        struct ggml_tensor * out,
-        void * cross_v_data,
-        void * cross_k_data) {
-    if (!cross_v_data || !cross_k_data) {
-        std::fprintf(stderr, "%s: cross_v_data/cross_k_data must not be null\n", __func__);
-        return 0;
-    }
-
-    std::vector<flexmlrt::client::ErtTensorType> * input_tensors_cached = nullptr;
-    std::vector<flexmlrt::client::ErtTensorType> * output_tensors_cached = nullptr;
-    if (!whisper_vitisai_get_cached_io_tensors(ctx, input_tensors_cached, output_tensors_cached)) {
-        std::fprintf(stderr, "%s: failed to acquire Vitis AI I/O tensors\n", __func__);
-        return 0;
-    }
-
-    std::vector<flexmlrt::client::ErtTensorType> input_tensors = *input_tensors_cached;
-    std::vector<flexmlrt::client::ErtTensorType> output_tensors = *output_tensors_cached;
-
-    return whisper_vitisai_forward_impl(
-            ctx,
-            mel,
-            out,
-            input_tensors,
-            output_tensors,
-            cross_k_data,
-            cross_v_data);
-}
-
 // Ensure persistent staging buffers are large enough for the given dimensions.
 static void ensure_staging_buffers(
         struct whisper_vitisai_context * ctx,
