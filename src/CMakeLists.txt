@@ -166,9 +166,7 @@ if (WHISPER_VITISAI)
         vitisai/whisper-vitisai-encoder.cpp
         )
 
-    target_include_directories(${TARGET} PUBLIC
-        .
-        )
+    target_include_directories(${TARGET} PUBLIC .)
 
     set_property(TARGET ${TARGET} PROPERTY POSITION_INDEPENDENT_CODE ON)
     set(WHISPER_EXTRA_FLAGS ${WHISPER_EXTRA_FLAGS} -DWHISPER_USE_VITISAI)
