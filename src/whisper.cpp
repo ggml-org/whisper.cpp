@@ -2310,7 +2310,9 @@ static struct ggml_cgraph * whisper_build_graph_cross(
                 layer.cross_attn_k_w,
                 cur);
 
+#if !defined(GGML_USE_OPENVINO) // scaling is handled internally in OpenVINO backend
         Kcross = ggml_scale(ctx0, Kcross, Kscale);
+#endif
 
         struct ggml_tensor * Vcross = ggml_mul_mat(ctx0,
                 layer.cross_attn_v_w,
