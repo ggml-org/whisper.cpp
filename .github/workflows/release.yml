@@ -605,12 +605,6 @@ jobs:
           fetch-depth: 0
           ssh-key: ${{ secrets.DEPLOY_KEY_RELEASE }}
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: release
-          evict-old-files: 1d
-
       # Downloads all the artifacts from the previous jobs
       - name: Download artifacts
         id: download-artifact
