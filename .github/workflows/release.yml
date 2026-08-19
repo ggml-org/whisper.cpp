@@ -26,6 +26,8 @@ concurrency:
 
 permissions:
   contents: write  # for creating release
+  id-token: write
+  attestations: write
 
 jobs:
   determine-tag:
@@ -623,6 +625,11 @@ jobs:
           mkdir -p ./release
           mv -v ./artifact/*.zip ./release 2>/dev/null || true
           mv -v ./artifact/*.tar.gz ./release 2>/dev/null || true
+
+      - name: Attest release artifacts
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: 'release/*'
 
       - name: Create and push git tag
         run: |
