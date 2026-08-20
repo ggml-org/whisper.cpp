@@ -19,6 +19,7 @@ on:
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  WHISPER_BUILD_IS_DEV: OFF
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -118,6 +119,7 @@ jobs:
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DGGML_BACKEND_DL=ON \
             -DGGML_NATIVE=OFF \
+            -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }} \
             ${{ matrix.build == 'x64' && '-DGGML_CPU_ALL_VARIANTS=ON' || '-DGGML_CPU_ARM_ARCH=armv8-a' }}
           cmake --build build --config Release -j $(nproc)
 
@@ -174,6 +176,7 @@ jobs:
           -DBUILD_SHARED_LIBS=ON
           -DWHISPER_SDL2=${{ matrix.sdl2 }}
           -DGGML_NATIVE=OFF
+          -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }}
           ${{ matrix.arch == 'x64' && '-DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON' || '-DGGML_BMI2=OFF' }}
 
       - name: Build
@@ -289,6 +292,7 @@ jobs:
           -DBLAS_INCLUDE_DIRS="$env:GITHUB_WORKSPACE/OpenBLAS-${{matrix.blasver}}/include"
           -DWHISPER_SDL2=${{ matrix.sdl2 }}
           -DGGML_NATIVE=OFF
+          -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }}
           ${{ matrix.arch == 'x64' && '-DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON' || '-DGGML_BMI2=OFF' }}
 
       - name: Build
@@ -496,6 +500,7 @@ jobs:
             -DCMAKE_CUDA_FLAGS="%CUDA_FLAGS%" ^
             -DGGML_BACKEND_DL=ON ^
             -DGGML_NATIVE=OFF ^
+            -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }} ^
             -DGGML_CPU_ALL_VARIANTS=ON
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config ${{ matrix.build }} -j %NUMBER_OF_PROCESSORS%
@@ -551,6 +556,7 @@ jobs:
           cmake -G Xcode .. \
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }} \
             -DWHISPER_BUILD_EXAMPLES=OFF \
             -DWHISPER_BUILD_TESTS=OFF \
             -DWHISPER_BUILD_SERVER=OFF \
