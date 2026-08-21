@@ -1,7 +1,7 @@
 # whisper.cpp/examples/stream
 
 This is a naive example of performing real-time inference on audio from your microphone.
-The `whisper-stream` tool samples the audio every half a second and runs the transcription continously.
+The `whisper-stream` tool samples the audio every half a second and runs the transcription continuously.
 More info is available in [issue #10](https://github.com/ggerganov/whisper.cpp/issues/10).
 
 ```bash

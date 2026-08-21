@@ -386,7 +386,7 @@ First, check if your Ascend NPU device is supported:
 | Atlas 300T A2                 | Support |
 | Atlas 300I Duo                | Support |
 
-Then, make sure you have installed [`CANN toolkit`](https://www.hiascend.com/en/software/cann/community) . The lasted version of CANN is recommanded.
+Then, make sure you have installed [`CANN toolkit`](https://www.hiascend.com/en/software/cann/community) . The latest version of CANN is recommended.
 
 Now build `whisper.cpp` with CANN support:
 
