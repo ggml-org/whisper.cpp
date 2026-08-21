@@ -646,6 +646,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ needs.determine-tag.outputs.tag_name }}
+          prerelease: true
 
       - name: Upload release
         id: upload_release
