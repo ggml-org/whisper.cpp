@@ -625,6 +625,14 @@ extern "C" {
                                    int   n_samples,
                                    int   n_processors);
 
+    WHISPER_API int whisper_full_batch_parallel(
+                      struct whisper_context * ctx,
+                    struct whisper_full_params params,
+                         const float * const * batches,
+                                   const int * size_per_batch,
+                                           int n_batches,
+                                           int n_processors);
+
     // Number of generated text segments
     // A segment can be a few words, a sentence, or even a paragraph.
     WHISPER_API int whisper_full_n_segments           (struct whisper_context * ctx);
