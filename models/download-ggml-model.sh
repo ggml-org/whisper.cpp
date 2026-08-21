@@ -118,7 +118,7 @@ if [ -f "ggml-$model.bin" ]; then
 fi
 
 if [ -x "$(command -v wget2)" ]; then
-    wget2 --no-config --progress bar -O ggml-"$model".bin $src/$pfx-"$model".bin
+    wget2 --no-config --progress bar --continue -O ggml-"$model".bin $src/$pfx-"$model".bin
 elif [ -x "$(command -v curl)" ]; then
     curl -L --fail \
          --retry 5 \
@@ -128,7 +128,7 @@ elif [ -x "$(command -v curl)" ]; then
          ${HF_TOKEN:+--header "Authorization: Bearer $HF_TOKEN"} \
          --output ggml-"$model".bin $src/$pfx-"$model".bin
 elif [ -x "$(command -v wget)" ]; then
-    wget --no-config --quiet --show-progress -O ggml-"$model".bin $src/$pfx-"$model".bin
+    wget --no-config --quiet --show-progress --continue -O ggml-"$model".bin $src/$pfx-"$model".bin
 else
     printf "Either wget2, curl, or wget is required to download models.\n"
     exit 1
