@@ -46,7 +46,7 @@ ignored_exts = %w[
 ]
 
 EXTSOURCES =
-  `git ls-files -z #{root}`.split("\x0")
+  IO.popen(["git", "ls-files", "-z", root.to_s], &:read).split("\x0")
     .collect {|file| Pathname(file)}
     .reject {|file|
       ignored_exts.include?(file.extname) ||
