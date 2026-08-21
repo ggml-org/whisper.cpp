@@ -94,6 +94,15 @@ check_master_up_to_date() {
     fi
 }
 
+# In-place sed that works on both GNU (Linux) and BSD (macOS) sed
+sed_inplace() {
+    if sed --version >/dev/null 2>&1; then
+        sed -i "$@"
+    else
+        sed -i '' "$@"
+    fi
+}
+
 prepare_release() {
     if [ "$DRY_RUN" = true ]; then
         echo "[dry-run] Preparing release (no changes will be made)"
@@ -156,9 +165,9 @@ prepare_release() {
         echo "  [dry-run] Would update WHISPER_VERSION_MINOR to $NEW_MINOR"
         echo "  [dry-run] Would update WHISPER_VERSION_PATCH to $NEW_PATCH"
     else
-        sed -i '' -e "s/set(WHISPER_VERSION_MAJOR [0-9]*)/set(WHISPER_VERSION_MAJOR $NEW_MAJOR)/" CMakeLists.txt
-        sed -i '' -e "s/set(WHISPER_VERSION_MINOR [0-9]*)/set(WHISPER_VERSION_MINOR $NEW_MINOR)/" CMakeLists.txt
-        sed -i '' -e "s/set(WHISPER_VERSION_PATCH [0-9]*)/set(WHISPER_VERSION_PATCH $NEW_PATCH)/" CMakeLists.txt
+        sed_inplace -e "s/set(WHISPER_VERSION_MAJOR [0-9]*)/set(WHISPER_VERSION_MAJOR $NEW_MAJOR)/" CMakeLists.txt
+        sed_inplace -e "s/set(WHISPER_VERSION_MINOR [0-9]*)/set(WHISPER_VERSION_MINOR $NEW_MINOR)/" CMakeLists.txt
+        sed_inplace -e "s/set(WHISPER_VERSION_PATCH [0-9]*)/set(WHISPER_VERSION_PATCH $NEW_PATCH)/" CMakeLists.txt
     fi
     echo ""
 
