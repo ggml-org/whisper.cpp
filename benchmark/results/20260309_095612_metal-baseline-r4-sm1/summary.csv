@@ -1,0 +1,3 @@
+variant,model,audio_key,audio_length_s,runs,init_mean_ms,first_inference_mean_s,runtime_median_s,throughput_mean_audio_s_per_s,runtime_std_dev_s,reference_present,wer_median,cer_median,max_wer,max_cer,correctness_pass,notes
+metal-baseline-r4-sm1,ggml-small.en.bin,short,30.0,5,554.888,4.332124508201377,4.658535082999151,6.479901806255953,0.31951728481648517,True,0.0,0.0,0.02,0.02,True,tokens/s unavailable; encode mean=2680.76 ms; decode mean=799.27 ms; wer median=0.0000; cer median=0.0000
+metal-baseline-r4-sm1,ggml-small.en.bin,medium,300.0,5,616.222,5.254207508199033,130.46477074999711,2.3429522270266734,9.069832833737284,True,0.0,0.0,0.02,0.02,True,tokens/s unavailable; encode mean=43349.16 ms; decode mean=74948.45 ms; wer median=0.0000; cer median=0.0000
