@@ -107,6 +107,8 @@ add_library(whisper
             ../include/whisper.h
             whisper-arch.h
             whisper.cpp
+            aneforge/whisper-aneforge.h
+            aneforge/whisper-aneforge.cpp
             )
 
 add_library(parakeet
