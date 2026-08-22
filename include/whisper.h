@@ -419,6 +419,9 @@ extern "C" {
     WHISPER_API const char * whisper_token_to_str(struct whisper_context * ctx, whisper_token token);
     WHISPER_API const char * whisper_model_type_readable(struct whisper_context * ctx);
 
+    // String -> Token Id. Uses the vocabulary in the provided context
+    WHISPER_API bool whisper_token_exists(struct whisper_context * ctx, const char * str);
+    WHISPER_API whisper_token whisper_str_to_token(struct whisper_context * ctx, const char * str);
 
     // Special tokens
     WHISPER_API whisper_token whisper_token_eot (struct whisper_context * ctx);
