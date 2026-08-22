@@ -834,7 +834,7 @@ static bool ggml_gallocr_reserve_n_impl(
         GGML_ASSERT(galloc->hash_set.keys != NULL);
 
         free(galloc->hash_values);
-        galloc->hash_values = malloc(sizeof(struct hash_node) * galloc->hash_set.size);
+        galloc->hash_values = calloc(galloc->hash_set.size, sizeof(struct hash_node));
         GGML_ASSERT(galloc->hash_values != NULL);
     }
 
@@ -882,6 +882,7 @@ static bool ggml_gallocr_reserve_n_impl(
     }
     if (galloc->n_leafs < graph->n_leafs) {
         free(galloc->leaf_allocs);
+        galloc->leaf_allocs = NULL;
         galloc->leaf_allocs = calloc(graph->n_leafs, sizeof(galloc->leaf_allocs[0]));
         GGML_ASSERT(galloc->leaf_allocs != NULL);
     }
