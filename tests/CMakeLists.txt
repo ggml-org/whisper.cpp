@@ -96,7 +96,6 @@ target_link_libraries(${UTF8_TEST} PRIVATE common)
 add_test(NAME ${UTF8_TEST} COMMAND ${UTF8_TEST})
 set_tests_properties(${UTF8_TEST} PROPERTIES LABELS "unit")
 
-# Loading from a null/empty or truncated buffer must fail gracefully (#3879)
 set(BUFFER_LOADER_TEST test-whisper-buffer-loader)
 add_executable(${BUFFER_LOADER_TEST} ${BUFFER_LOADER_TEST}.cpp)
 target_include_directories(${BUFFER_LOADER_TEST} PRIVATE ../include ../ggml/include ../examples)
@@ -185,4 +184,3 @@ add_parakeet_transcription_test(
     samples/diffusion2023-07-03.flac
     tests/parakeet-expected-diffusion-output.txt
     0.95)
-
