@@ -4,6 +4,11 @@
 // (compile-with-cache; the on-device program is not cold-loadable across processes),
 // then dispatches it per encode.
 #include "whisper-aneforge.h"
+
+// ANEForge runs on the Apple Neural Engine (Apple Silicon) only. Build a no-op stub on every
+// other platform so the whisper library still links; the encoder just stays unavailable there.
+#if defined(__APPLE__) && defined(__aarch64__)
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -147,3 +152,19 @@ void whisper_aneforge_free(struct whisper_aneforge_context * ctx) {
     if (ctx->dl) dlclose(ctx->dl);
     delete ctx;
 }
+
+#else  // not (Apple && arm64): the ANE is unavailable, so stub the entry points.
+
+struct whisper_aneforge_context {};
+
+struct whisper_aneforge_context * whisper_aneforge_init(const char *) {
+    return nullptr;
+}
+
+void whisper_aneforge_encode(struct whisper_aneforge_context *, int64_t, int64_t, const float *, float *) {
+}
+
+void whisper_aneforge_free(struct whisper_aneforge_context *) {
+}
+
+#endif
