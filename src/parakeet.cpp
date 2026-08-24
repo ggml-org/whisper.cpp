@@ -592,16 +592,20 @@ static std::string sentencepiece_piece_to_text(const std::string & piece, bool i
 static struct parakeet_batch parakeet_batch_init(int32_t n_tokens) {
     parakeet_batch batch = { 0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, };
 
-    batch.token    = (parakeet_token *  ) malloc(sizeof(parakeet_token)    * (n_tokens));
-    batch.i_time   = (int32_t *)          malloc(sizeof(int32_t)           * (n_tokens));
-    batch.pos      = (parakeet_pos *)     malloc(sizeof(parakeet_pos)      * (n_tokens));
-    batch.n_seq_id = (int32_t *)          malloc(sizeof(int32_t)           * (n_tokens));
-    batch.seq_id   = (parakeet_seq_id **) malloc(sizeof(parakeet_seq_id *) * (n_tokens + 1));
+    if (n_tokens <= 0) {
+        return batch;
+    }
+
+    batch.token    = (parakeet_token *  ) calloc(n_tokens,     sizeof(parakeet_token));
+    batch.i_time   = (int32_t *)          calloc(n_tokens,     sizeof(int32_t));
+    batch.pos      = (parakeet_pos *)     calloc(n_tokens,     sizeof(parakeet_pos));
+    batch.n_seq_id = (int32_t *)          calloc(n_tokens,     sizeof(int32_t));
+    batch.seq_id   = (parakeet_seq_id **) calloc(n_tokens + 1, sizeof(parakeet_seq_id *));
     for (int i = 0; i < n_tokens; ++i) {
-        batch.seq_id[i] = (parakeet_seq_id *) malloc(sizeof(parakeet_seq_id));
+        batch.seq_id[i] = (parakeet_seq_id *) calloc(1, sizeof(parakeet_seq_id));
     }
     batch.seq_id[n_tokens] = nullptr;
-    batch.logits   = (int8_t *)          malloc(sizeof(int8_t)           * n_tokens);
+    batch.logits   = (int8_t *)          calloc(n_tokens, sizeof(int8_t));
 
     return batch;
 }
