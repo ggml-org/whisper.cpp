@@ -4,11 +4,11 @@ if (WHISPER_SDL2)
 
     if (WHISPER_USE_SYSTEM_LLAMA)
         message(STATUS "Using system-provided llama.cpp, skipping llama.cpp fetch")
-        find_package(llama 0.1.2 REQUIRED)
+        find_package(llama 0.3.0 REQUIRED)
     else()
         include(FetchContent)
 
-        set(LLAMA_TAG "v0.1.2")
+        set(LLAMA_TAG "v0.3.0")
 
         set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
         set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
