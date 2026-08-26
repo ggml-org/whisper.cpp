@@ -42,4 +42,4 @@ cp bin/libstream.worker.js /path/to/html/
 
 > 📝 **Note:** As of Emscripten 3.1.58 (April 2024), separate worker.js files are no
 > longer generated and the worker is embedded in the main JS file. So the worker
-> file will not be geneated for versions later than `3.1.58`.
+> file will not be generated for versions later than `3.1.58`.

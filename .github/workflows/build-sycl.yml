@@ -85,7 +85,7 @@ jobs:
           export CCACHE_COMPILERCHECK="string:$(icpx --version 2>&1 | head -1)"
           mkdir build
           cd build
-          cmake -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx \
+          cmake -DGGML_SYCL=ON -DGGML_NATIVE=OFF -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache ..
           cmake --build . --config Release -j $(nproc)
@@ -144,7 +144,7 @@ jobs:
           export CCACHE_COMPILERCHECK="string:$(icpx --version 2>&1 | head -1)"
           mkdir build
           cd build
-          cmake -DGGML_SYCL_F16=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx \
+          cmake -DGGML_SYCL_F16=ON -DGGML_NATIVE=OFF -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache ..
           cmake --build . --config Release -j $(nproc)

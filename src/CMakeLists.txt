@@ -48,6 +48,61 @@ if (WHISPER_OPENVINO)
     find_package(OpenVINO REQUIRED COMPONENTS Runtime)
 endif()
 
+if (WHISPER_VITISAI)
+    find_package(FlexmlRT REQUIRED)
+
+    # Legacy RAI overrides are required by FlexMLRT older than 1.8.0
+    set(WHISPER_FLEXMLRT_LEGACY_RAI_OVERRIDES_MODE "AUTO" CACHE STRING
+        "Legacy RAI override mode for FlexMLRT (AUTO|ON|OFF)")
+    set_property(CACHE WHISPER_FLEXMLRT_LEGACY_RAI_OVERRIDES_MODE PROPERTY STRINGS AUTO ON OFF)
+
+    string(TOUPPER "${WHISPER_FLEXMLRT_LEGACY_RAI_OVERRIDES_MODE}" _flexmlrt_legacy_mode)
+    set(_flexmlrt_legacy_hint "Set -DWHISPER_FLEXMLRT_LEGACY_RAI_OVERRIDES_MODE=ON or OFF explicitly.")
+
+    if (NOT _flexmlrt_legacy_mode MATCHES "^(AUTO|ON|OFF)$")
+        message(FATAL_ERROR
+            "Invalid WHISPER_FLEXMLRT_LEGACY_RAI_OVERRIDES_MODE='${WHISPER_FLEXMLRT_LEGACY_RAI_OVERRIDES_MODE}'. "
+            "Expected AUTO, ON, or OFF.")
+    endif()
+
+    if (_flexmlrt_legacy_mode STREQUAL "AUTO")
+        if (NOT FlexmlRT_DIR)
+            message(FATAL_ERROR
+                "FlexmlRT_DIR is unset after find_package(FlexmlRT). ${_flexmlrt_legacy_hint}")
+        endif()
+
+        # FlexmlRT_DIR points to <pkg_root>/share/cmake/FlexmlRT.
+        get_filename_component(_flexmlrt_init_py "${FlexmlRT_DIR}/../../../__init__.py" ABSOLUTE)
+        if (NOT EXISTS "${_flexmlrt_init_py}")
+            message(FATAL_ERROR
+                "flexmlrt __init__.py not found at ${_flexmlrt_init_py}. ${_flexmlrt_legacy_hint}")
+        endif()
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_flexmlrt_init_py}")
+
+        file(STRINGS "${_flexmlrt_init_py}" _flexmlrt_version_lines
+             REGEX "^VERSION[ \t]*=[ \t]*\"[0-9]+\\.[0-9]+\\.[0-9]+")
+        if (NOT _flexmlrt_version_lines MATCHES "\"([0-9]+\\.[0-9]+\\.[0-9]+)")
+            message(FATAL_ERROR
+                "Could not parse flexmlrt VERSION from ${_flexmlrt_init_py}. ${_flexmlrt_legacy_hint}")
+        endif()
+        set(_flexmlrt_version "${CMAKE_MATCH_1}")
+
+        if (_flexmlrt_version VERSION_LESS "1.8.0")
+            set(WHISPER_FLEXMLRT_LEGACY_RAI_OVERRIDES 1)
+        else()
+            set(WHISPER_FLEXMLRT_LEGACY_RAI_OVERRIDES 0)
+        endif()
+        message(STATUS "Detected flexmlrt VERSION=${_flexmlrt_version} from ${_flexmlrt_init_py} (legacy overrides=${WHISPER_FLEXMLRT_LEGACY_RAI_OVERRIDES})")
+    else()
+        if (_flexmlrt_legacy_mode STREQUAL "ON")
+            set(WHISPER_FLEXMLRT_LEGACY_RAI_OVERRIDES 1)
+        else()
+            set(WHISPER_FLEXMLRT_LEGACY_RAI_OVERRIDES 0)
+        endif()
+        message(STATUS "FlexMLRT legacy RAI overrides forced ${_flexmlrt_legacy_mode}")
+    endif()
+endif()
+
 #
 # libraries
 #
@@ -101,6 +156,33 @@ if (WHISPER_OPENVINO)
     set_target_properties(${TARGET} PROPERTIES FOLDER "libs")
 endif()
 
+if (WHISPER_VITISAI)
+    set(TARGET whisper.vitisai)
+
+    add_library(${TARGET} OBJECT
+        vitisai/whisper-vitisai-helpers.h
+        vitisai/whisper-vitisai-helpers.cpp
+        vitisai/whisper-vitisai-encoder.h
+        vitisai/whisper-vitisai-encoder.cpp
+        )
+
+    target_include_directories(${TARGET} PUBLIC .)
+
+    set_property(TARGET ${TARGET} PROPERTY POSITION_INDEPENDENT_CODE ON)
+    set(WHISPER_EXTRA_FLAGS ${WHISPER_EXTRA_FLAGS} -DWHISPER_USE_VITISAI)
+
+    # FlexMLRT headers and this plugin require C++17. Keep it PRIVATE so the
+    # C++11 requirement of the whisper target is not bumped.
+    target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+    target_compile_definitions(${TARGET} PRIVATE
+        WHISPER_FLEXMLRT_LEGACY_RAI_OVERRIDES=${WHISPER_FLEXMLRT_LEGACY_RAI_OVERRIDES}
+    )
+
+    target_link_libraries(${TARGET} PRIVATE ggml flexmlrt::flexmlrt)
+    set_target_properties(${TARGET} PROPERTIES FOLDER "libs")
+endif()
+
 # whisper
 
 add_library(whisper
@@ -121,13 +203,15 @@ target_link_libraries(parakeet PUBLIC ggml Threads::Threads)
 
 # Set the version numbers
 set_target_properties(whisper PROPERTIES
-    VERSION ${PROJECT_VERSION}
-    SOVERSION ${SOVERSION}
+    VERSION ${WHISPER_VERSION_BASE}
+    SOVERSION ${WHISPER_VERSION_MAJOR}
+    MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 
 set_target_properties(parakeet PROPERTIES
-    VERSION ${PROJECT_VERSION}
-    SOVERSION ${SOVERSION}
+    VERSION ${WHISPER_VERSION_BASE}
+    SOVERSION ${WHISPER_VERSION_MAJOR}
+    MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 
 target_include_directories(whisper PUBLIC . ../include)
@@ -155,6 +239,10 @@ endif()
 
 if (WHISPER_OPENVINO)
     target_link_libraries(whisper PRIVATE whisper.openvino)
+endif()
+
+if (WHISPER_VITISAI)
+    target_link_libraries(whisper PRIVATE whisper.vitisai)
 endif()
 
 if (WHISPER_MKL)

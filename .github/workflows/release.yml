@@ -1,10 +1,14 @@
 name: Release
 
+# Builds dev releases (b* tags) when manually dispatched with create_release: true.
+# Run this as a verification build before making a release (see make-release.yml).
+# Pushing a v* tag does not trigger this workflow; releases are made via make-release.yml.
+
 on:
   workflow_dispatch:
     inputs:
       create_release:
-        description: 'Create new release'
+        description: 'Create new developer release'
         required: true
         type: boolean
       pre_release_tag:
@@ -12,13 +16,10 @@ on:
         required: false
         type: string
 
-  push:
-    tags:
-      - 'v*'
-
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  WHISPER_BUILD_IS_DEV: OFF
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -26,6 +27,8 @@ concurrency:
 
 permissions:
   contents: write  # for creating release
+  id-token: write
+  attestations: write
 
 jobs:
   determine-tag:
@@ -55,18 +58,10 @@ jobs:
           echo "BRANCH_NAME: ${{ env.BRANCH_NAME }}"
           echo "CUSTOM_TAG: $CUSTOM_TAG"
 
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            echo "Using pushed tag name"
-            TAG_NAME="${{ github.ref_name }}"
-            SHOULD_RELEASE="true"
-          elif [[ -n "$CUSTOM_TAG" ]]; then
+          if [[ -n "$CUSTOM_TAG" ]]; then
             echo "Using custom tag"
             TAG_NAME="${CUSTOM_TAG}"
             SHOULD_RELEASE="true"
-          elif [[ "${{ github.event.inputs.create_release }}" == "true" ]]; then
-            echo "Manual release requested"
-            SHOULD_RELEASE="true"
-            TAG_NAME="b${BUILD_NUMBER}"
           elif [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
             echo "Using master branch format"
             TAG_NAME="b${BUILD_NUMBER}"
@@ -76,6 +71,11 @@ jobs:
             SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
             TAG_NAME="${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}"
             SHOULD_RELEASE="false"
+          fi
+
+          if [[ "${{ github.event.inputs.create_release }}" == "true" ]]; then
+            echo "Manual release requested"
+            SHOULD_RELEASE="true"
           fi
 
           echo "Final tag name: $TAG_NAME"
@@ -119,6 +119,7 @@ jobs:
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DGGML_BACKEND_DL=ON \
             -DGGML_NATIVE=OFF \
+            -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }} \
             ${{ matrix.build == 'x64' && '-DGGML_CPU_ALL_VARIANTS=ON' || '-DGGML_CPU_ARM_ARCH=armv8-a' }}
           cmake --build build --config Release -j $(nproc)
 
@@ -175,6 +176,7 @@ jobs:
           -DBUILD_SHARED_LIBS=ON
           -DWHISPER_SDL2=${{ matrix.sdl2 }}
           -DGGML_NATIVE=OFF
+          -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }}
           ${{ matrix.arch == 'x64' && '-DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON' || '-DGGML_BMI2=OFF' }}
 
       - name: Build
@@ -224,7 +226,7 @@ jobs:
               Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-bin-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
-        if: matrix.sdl2 == 'ON' && ${{ needs.determine-tag.outputs.should_release }}
+        if: ${{ matrix.sdl2 == 'ON' && needs.determine-tag.outputs.should_release == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: whisper-bin-${{ matrix.arch }}.zip
@@ -290,6 +292,7 @@ jobs:
           -DBLAS_INCLUDE_DIRS="$env:GITHUB_WORKSPACE/OpenBLAS-${{matrix.blasver}}/include"
           -DWHISPER_SDL2=${{ matrix.sdl2 }}
           -DGGML_NATIVE=OFF
+          -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }}
           ${{ matrix.arch == 'x64' && '-DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON' || '-DGGML_BMI2=OFF' }}
 
       - name: Build
@@ -311,7 +314,7 @@ jobs:
               Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-blas-bin-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
-        if: matrix.blas == 'ON' && matrix.sdl2 == 'ON' && ${{ needs.determine-tag.outputs.should_release }}
+        if: ${{ matrix.blas == 'ON' && matrix.sdl2 == 'ON' && needs.determine-tag.outputs.should_release == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: whisper-blas-bin-${{ matrix.arch }}.zip
@@ -497,6 +500,7 @@ jobs:
             -DCMAKE_CUDA_FLAGS="%CUDA_FLAGS%" ^
             -DGGML_BACKEND_DL=ON ^
             -DGGML_NATIVE=OFF ^
+            -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }} ^
             -DGGML_CPU_ALL_VARIANTS=ON
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config ${{ matrix.build }} -j %NUMBER_OF_PROCESSORS%
@@ -520,7 +524,7 @@ jobs:
               Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
-        if: ${{ needs.determine-tag.outputs.should_release }}
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
@@ -552,6 +556,7 @@ jobs:
           cmake -G Xcode .. \
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }} \
             -DWHISPER_BUILD_EXAMPLES=OFF \
             -DWHISPER_BUILD_TESTS=OFF \
             -DWHISPER_BUILD_SERVER=OFF \
@@ -577,14 +582,14 @@ jobs:
           zip --symlinks -r whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip build-apple/whisper.xcframework
 
       - name: Upload artifacts
-        if: ${{ needs.determine-tag.outputs.should_release }}
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           path: whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip
           name: whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip
 
   release:
-    if: ${{ github.event.inputs.create_release == 'true' || github.event.inputs.pre_release_tag != '' || startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ github.event.inputs.create_release == 'true' || github.event.inputs.pre_release_tag != '' }}
 
     runs-on: ubuntu-latest
 
@@ -602,12 +607,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: release
-          evict-old-files: 1d
+          ssh-key: ${{ secrets.DEPLOY_KEY_RELEASE }}
 
       # Downloads all the artifacts from the previous jobs
       - name: Download artifacts
@@ -615,10 +615,29 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           path: ./artifact
+          merge-multiple: true
 
       - name: Move artifacts
         id: move_artifacts
-        run: mkdir -p ./artifact/release && mv ./artifact/*/*.zip ./artifact/release && mv ./artifact/*/*.tar.gz ./artifact/release 2>/dev/null || true
+        run: |
+          mkdir -p ./release
+          mv -v ./artifact/*.zip ./release 2>/dev/null || true
+          mv -v ./artifact/*.tar.gz ./release 2>/dev/null || true
+
+      - name: Attest release artifacts
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: 'release/*'
+
+      - name: Create and push git tag
+        run: |
+          TAG="${{ needs.determine-tag.outputs.tag_name }}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists, skipping creation"
+          else
+            git tag "${TAG}"
+            git push origin "${TAG}"
+          fi
 
       - name: Create release
         id: create_release
@@ -627,8 +646,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ needs.determine-tag.outputs.tag_name }}
-          prerelease: ${{ github.event.inputs.pre_release_tag != '' }}
-          draft: true
+          prerelease: true
 
       - name: Upload release
         id: upload_release
@@ -639,7 +657,7 @@ jobs:
             const path = require('path');
             const fs = require('fs');
             const release_id = '${{ steps.create_release.outputs.id }}';
-            for (let file of await fs.readdirSync('./artifact/release')) {
+            for (let file of await fs.readdirSync('./release')) {
               if (path.extname(file) === '.zip' || file.endsWith('.tar.gz')) {
                 console.log('uploadReleaseAsset', file);
                 await github.repos.uploadReleaseAsset({
@@ -647,7 +665,7 @@ jobs:
                   repo: context.repo.repo,
                   release_id: release_id,
                   name: file,
-                  data: await fs.readFileSync(`./artifact/release/${file}`)
+                  data: await fs.readFileSync(`./release/${file}`)
                 });
               }
             }

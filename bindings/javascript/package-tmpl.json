@@ -1,6 +1,6 @@
 {
   "name": "whisper.cpp",
-  "version": "@PROJECT_VERSION@",
+  "version": "@WHISPER_VERSION@",
   "description": "Whisper speech recognition",
   "main": "whisper.js",
   "scripts": {

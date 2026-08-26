@@ -27,6 +27,11 @@ int main() {
             whisper_model_path.c_str(),
             cparams);
 
+    if (!wctx) {
+        fprintf(stderr, "failed to load model '%s'\n", whisper_model_path.c_str());
+        return 1;
+    }
+
     struct whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
     wparams.vad            = true;
     wparams.vad_model_path = vad_model_path.c_str();

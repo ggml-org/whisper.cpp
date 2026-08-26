@@ -5,6 +5,6 @@ includedir=@CMAKE_INSTALL_FULL_INCLUDEDIR@
 
 Name: parakeet
 Description: Port of NVIDIA's Parakeet model in C/C++
-Version: @PROJECT_VERSION@
+Version: @WHISPER_VERSION@
 Libs: -L${libdir} -lggml -lggml-base -lparakeet
 Cflags: -I${includedir}
