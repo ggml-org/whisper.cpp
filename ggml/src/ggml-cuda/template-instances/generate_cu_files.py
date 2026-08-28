@@ -59,7 +59,10 @@ DECL_MMF_CASE({type});
 
 
 def get_short_name(long_quant_name):
-    return long_quant_name.replace("GGML_TYPE_", "").lower()
+    name = long_quant_name.replace("GGML_TYPE_", "").lower()
+    if "/" in name or "\\" in name or ".." in name:
+        raise ValueError(f"Invalid type name would cause path traversal: {long_quant_name}")
+    return name
 
 
 for filename in glob("*.cu"):
@@ -67,12 +70,12 @@ for filename in glob("*.cu"):
 
 for head_size_kq in HEAD_SIZES_KQ:
     head_size_v = HEAD_SIZES_V_OVERRIDE.get(head_size_kq, head_size_kq)
-    with open(f"fattn-tile-instance-dkq{head_size_kq}-dv{head_size_v}.cu", "w") as f:
+    with open(os.path.basename(f"fattn-tile-instance-dkq{head_size_kq}-dv{head_size_v}.cu"), "w") as f:
         f.write(SOURCE_FATTN_TILE.format(head_size_kq=head_size_kq, head_size_v=head_size_v))
 
 for type_k in TYPES_KV:
     for type_v in TYPES_KV:
-        with open(f"fattn-vec-instance-{get_short_name(type_k)}-{get_short_name(type_v)}.cu", "w") as f:
+        with open(os.path.basename(f"fattn-vec-instance-{get_short_name(type_k)}-{get_short_name(type_v)}.cu"), "w") as f:
             f.write(SOURCE_FATTN_VEC.format(type_k=type_k, type_v=type_v))
 
 for ncols in [8, 16, 32, 64]:
@@ -80,7 +83,7 @@ for ncols in [8, 16, 32, 64]:
         if ncols2 > ncols:
             continue
         ncols1 = ncols // ncols2
-        with open(f"fattn-mma-f16-instance-ncols1_{ncols1}-ncols2_{ncols2}.cu", "w") as f:
+        with open(os.path.basename(f"fattn-mma-f16-instance-ncols1_{ncols1}-ncols2_{ncols2}.cu"), "w") as f:
             f.write(SOURCE_FATTN_MMA_START)
 
             for head_size_kq in HEAD_SIZES_KQ:
@@ -103,9 +106,9 @@ for ncols in [8, 16, 32, 64]:
                 f.write(SOURCE_FATTN_MMA_CASE.format(ncols1=ncols1, ncols2=ncols2, head_size_kq=head_size_kq, head_size_v=head_size_v))
 
 for type in TYPES_MMQ:
-    with open(f"mmq-instance-{get_short_name(type)}.cu", "w") as f:
+    with open(os.path.basename(f"mmq-instance-{get_short_name(type)}.cu"), "w") as f:
         f.write(SOURCE_MMQ.format(type=type))
 
 for type in range(1, 17):
-    with open(f"mmf-instance-ncols_{type}.cu", "w") as f:
+    with open(os.path.basename(f"mmf-instance-ncols_{type}.cu"), "w") as f:
         f.write(SOURCE_MMF.format(type=type))
