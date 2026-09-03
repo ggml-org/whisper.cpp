@@ -187,7 +187,7 @@ extern VALUE ruby_whisper_log_queue_drain(ruby_whisper_log_queue *log_queue);
 #define GetVADContext(obj, rwvc) do { \
     TypedData_Get_Struct((obj), ruby_whisper_vad_context, &ruby_whisper_vad_context_type, (rwvc)); \
     if ((rwvc)->context == NULL) { \
-      rb_raise(rb_eRuntimeError, "Not initialized"); \
+      rb_raise(rb_eRuntimeError, "Already freed or not initialized"); \
     } \
 } while (0)
 

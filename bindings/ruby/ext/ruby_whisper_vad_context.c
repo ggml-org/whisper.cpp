@@ -132,6 +132,17 @@ ruby_whisper_vad_segments_from_samples(int argc, VALUE *argv, VALUE self)
   return segments;
 }
 
+static VALUE
+ruby_whisper_vad_free(VALUE self)
+{
+  ruby_whisper_vad_context *rwvc;
+  GetVADContext(self, rwvc);
+  whisper_vad_free(rwvc->context);
+  rwvc->context = NULL;
+
+  return Qnil;
+}
+
 void init_ruby_whisper_vad_context(VALUE *mVAD)
 {
   cVADContext = rb_define_class_under(*mVAD, "Context", rb_cObject);
@@ -139,4 +150,5 @@ void init_ruby_whisper_vad_context(VALUE *mVAD)
   rb_define_method(cVADContext, "initialize", ruby_whisper_vad_context_initialize, 1);
   rb_define_method(cVADContext, "segments_from_samples", ruby_whisper_vad_segments_from_samples, -1);
   rb_define_method(cVADContext, "detect", ruby_whisper_vad_detect, 2);
+  rb_define_method(cVADContext, "free", ruby_whisper_vad_free, 0);
 }
