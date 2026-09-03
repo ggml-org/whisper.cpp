@@ -136,6 +136,219 @@ jobs:
           path: whisper-bin-ubuntu-${{ matrix.build }}.tar.gz
           name: whisper-bin-ubuntu-${{ matrix.build }}.tar.gz
 
+  macos-cpu:
+    runs-on: ${{ matrix.os }}
+    needs: determine-tag
+    if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
+
+    strategy:
+      matrix:
+        include:
+          - build: arm64
+            os: macos-26
+            defines: "-DGGML_METAL_EMBED_LIBRARY=ON"
+          # macos-15-intel is the last x86_64 image available on Actions, and it is
+          # scheduled to go away in August 2027 (actions/runner-images#13046).
+          # Metal is off here because the hosted Intel runners have no GPU, which is
+          # the same reason ggml-org/llama.cpp disables it for its x64 macOS build.
+          - build: x64
+            os: macos-15-intel
+            defines: "-DGGML_METAL=OFF"
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-${{ matrix.os }}-cpu
+          evict-old-files: 1d
+
+      # Same shape as ubuntu-cpu: backends built as loadable dylibs, one CPU backend per
+      # micro-architecture, selected at load time. GGML_NATIVE has to be off for
+      # GGML_CPU_ALL_VARIANTS to drive the per-variant flags at all; left on, it would
+      # instead compile a single backend for whichever CPU the runner happened to have,
+      # which on a refreshed arm64 image means -mcpu=native+i8mm+sme and a binary that
+      # will not start on an M1. The Apple variants are apple_m1 (dotprod),
+      # apple_m2_m3 (+i8mm) and apple_m4 (+sme), so one archive covers every Mac
+      # without giving up the newer instructions on the machines that have them.
+      - name: Build
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_RPATH='@loader_path' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3 \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_NATIVE=OFF \
+            -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }} \
+            ${{ matrix.defines }}
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+
+      - name: Pack artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czvf whisper-bin-macos-${{ matrix.build }}.tar.gz \
+            -s ",^\.,whisper-bin-macos-${{ matrix.build }}," \
+            -C ./build/bin .
+
+      # Runs from an extracted copy of the archive rather than from build/bin, so the
+      # test covers what actually ships: @loader_path resolving the dylibs next to the
+      # binary once the tree has moved off the machine that built it.
+      - name: Smoke test
+        run: |
+          mkdir -p "${RUNNER_TEMP}/unpacked"
+          tar -xzf whisper-bin-macos-${{ matrix.build }}.tar.gz \
+            -C "${RUNNER_TEMP}/unpacked" --strip-components 1
+          "${RUNNER_TEMP}/unpacked/whisper-cli" \
+            -m models/for-tests-ggml-base.en.bin \
+            -f samples/jfk.wav
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          path: whisper-bin-macos-${{ matrix.build }}.tar.gz
+          name: whisper-bin-macos-${{ matrix.build }}.tar.gz
+
+  # Fuses the two thin builds above into one universal tree. Everything that exists on
+  # both sides is lipo'd. The CPU and Metal backends are built per micro-architecture and
+  # so only ever exist on one side; those are copied through thin, which is what
+  # GGML_BACKEND_DL expects - the loader walks every libggml-*.so next to the binary
+  # and skips the ones it cannot load, so the backends belonging to the other
+  # architecture are simply never used. Anything else that is one-sided is a packaging
+  # bug and fails the job rather than disappearing from the archive silently.
+  macos-universal:
+    runs-on: macos-26
+    needs:
+      - determine-tag
+      - macos-cpu
+    if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Download arm64 artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: whisper-bin-macos-arm64.tar.gz
+          path: ./thin
+
+      - name: Download x64 artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: whisper-bin-macos-x64.tar.gz
+          path: ./thin
+
+      - name: Unpack
+        run: |
+          mkdir -p arm64 x64
+          tar -xzf ./thin/whisper-bin-macos-arm64.tar.gz -C arm64 --strip-components 1
+          tar -xzf ./thin/whisper-bin-macos-x64.tar.gz   -C x64   --strip-components 1
+
+          (cd arm64 && find . \( -type f -o -type l \) | sed 's,^\./,,') | sort > "${RUNNER_TEMP}/arm64.list"
+          (cd x64   && find . \( -type f -o -type l \) | sed 's,^\./,,') | sort > "${RUNNER_TEMP}/x64.list"
+          sort -u "${RUNNER_TEMP}/arm64.list" "${RUNNER_TEMP}/x64.list" > "${RUNNER_TEMP}/all.list"
+
+      - name: Fuse
+        run: |
+          # GGML_BACKEND_DL emits loadable backends as libggml-*.so, one per
+          # micro-architecture, so they have no counterpart in the other tree.
+          # Everything else has to be present on both sides.
+          is_backend() {
+            case "$1" in
+              libggml-*.so) return 0 ;;
+              *)            return 1 ;;
+            esac
+          }
+
+          exists() { [ -e "$1" ] || [ -L "$1" ]; }
+
+          rc=0
+          while IFS= read -r f; do
+            mkdir -p "universal/$(dirname "$f")"
+
+            if exists "arm64/$f" && exists "x64/$f"; then
+              if [ -L "arm64/$f" ]; then
+                cp -a "arm64/$f" "universal/$f"
+              elif file -b "arm64/$f" | grep -q "Mach-O"; then
+                lipo -create "arm64/$f" "x64/$f" -output "universal/$f"
+              else
+                cp -a "arm64/$f" "universal/$f"
+              fi
+            elif is_backend "$(basename "$f")"; then
+              if exists "arm64/$f"; then
+                cp -a "arm64/$f" "universal/$f"
+              else
+                cp -a "x64/$f" "universal/$f"
+              fi
+            else
+              echo "::error::${f} exists for only one architecture and is not a backend"
+              rc=1
+            fi
+          done < "${RUNNER_TEMP}/all.list"
+
+          exit $rc
+
+      # lipo -archs rather than parsing lipo -info, so the check does not depend on the
+      # order the architectures happen to be listed in.
+      - name: Verify
+        run: |
+          rc=0
+          while IFS= read -r f; do
+            if ! { [ -e "universal/$f" ] || [ -L "universal/$f" ]; }; then
+              echo "::error::${f} is missing from the fused tree"
+              rc=1
+              continue
+            fi
+
+            [ -L "universal/$f" ] && continue
+            file -b "universal/$f" | grep -q "Mach-O" || continue
+
+            archs="$(lipo -archs "universal/$f")"
+            case "$(basename "$f")" in
+              libggml-*.so)
+                printf '  backend    %-44s %s\n' "$f" "$archs"
+                ;;
+              *)
+                if [[ " ${archs} " == *" arm64 "* && " ${archs} " == *" x86_64 "* ]]; then
+                  printf '  universal  %-44s %s\n' "$f" "$archs"
+                else
+                  echo "::error::${f} is not universal (${archs})"
+                  rc=1
+                fi
+                ;;
+            esac
+          done < "${RUNNER_TEMP}/all.list"
+
+          exit $rc
+
+      - name: Pack artifacts
+        run: |
+          tar -czvf whisper-bin-macos-universal.tar.gz \
+            -s ",^\.,whisper-bin-macos-universal," \
+            -C ./universal .
+
+      # Only the arm64 slice can be exercised here, since the hosted arm64 runners do not
+      # have Rosetta. The x86_64 slice is the same build the x64 job above already ran
+      # natively, so it is covered there.
+      - name: Smoke test
+        run: |
+          mkdir -p "${RUNNER_TEMP}/unpacked"
+          tar -xzf whisper-bin-macos-universal.tar.gz \
+            -C "${RUNNER_TEMP}/unpacked" --strip-components 1
+          "${RUNNER_TEMP}/unpacked/whisper-cli" \
+            -m models/for-tests-ggml-base.en.bin \
+            -f samples/jfk.wav
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          path: whisper-bin-macos-universal.tar.gz
+          name: whisper-bin-macos-universal.tar.gz
+
   windows:
     runs-on: windows-latest
     needs: determine-tag
@@ -596,6 +809,8 @@ jobs:
     needs:
       - determine-tag
       - ubuntu-cpu
+      - macos-cpu
+      - macos-universal
       - ios-xcode-build
       - windows
       - windows-blas
@@ -629,6 +844,17 @@ jobs:
         with:
           subject-path: 'release/*'
 
+      # One manifest for the whole release rather than a .sha256 next to each archive:
+      # it adds a single asset instead of one per artifact, and it can be checked in one
+      # go with `shasum -a 256 -c SHA256SUMS`. Written after the attestation so the
+      # attested subjects stay exactly the artifacts themselves.
+      - name: Checksum release artifacts
+        run: |
+          cd ./release
+          sha256sum * > "${RUNNER_TEMP}/SHA256SUMS"
+          mv "${RUNNER_TEMP}/SHA256SUMS" .
+          cat SHA256SUMS
+
       - name: Create and push git tag
         run: |
           TAG="${{ needs.determine-tag.outputs.tag_name }}"
@@ -658,7 +884,7 @@ jobs:
             const fs = require('fs');
             const release_id = '${{ steps.create_release.outputs.id }}';
             for (let file of await fs.readdirSync('./release')) {
-              if (path.extname(file) === '.zip' || file.endsWith('.tar.gz')) {
+              if (path.extname(file) === '.zip' || file.endsWith('.tar.gz') || file === 'SHA256SUMS') {
                 console.log('uploadReleaseAsset', file);
                 await github.repos.uploadReleaseAsset({
                   owner: context.repo.owner,
