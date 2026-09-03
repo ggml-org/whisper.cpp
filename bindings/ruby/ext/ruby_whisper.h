@@ -169,7 +169,7 @@ extern VALUE ruby_whisper_log_queue_drain(ruby_whisper_log_queue *log_queue);
 #define GetContext(obj, rw) do { \
   TypedData_Get_Struct((obj), ruby_whisper, &ruby_whisper_type, (rw)); \
   if ((rw)->context == NULL) { \
-    rb_raise(rb_eRuntimeError, "Not initialized"); \
+    rb_raise(rb_eRuntimeError, "Already freed or not initialized"); \
   } \
 } while (0)
 

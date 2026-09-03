@@ -791,6 +791,17 @@ ruby_whisper_full_get_vad_segment_t1(VALUE self, VALUE i_segment)
   return LONG2NUM(whisper_full_get_vad_segment_t1(rw->context, c_i_segment));
 }
 
+static VALUE
+ruby_whisper_context_free(VALUE self)
+{
+  ruby_whisper *rw;
+  GetContext(self, rw);
+  whisper_free(rw->context);
+  rw->context = NULL;
+
+  return Qnil;
+}
+
 // High level API
 
 static VALUE
@@ -881,6 +892,7 @@ init_ruby_whisper_context(VALUE *mWhisper)
   rb_define_method(cContext, "full_get_vad_segment_t1", ruby_whisper_full_get_vad_segment_t1, 1);
   rb_define_method(cContext, "full", ruby_whisper_full, -1);
   rb_define_method(cContext, "full_parallel", ruby_whisper_full_parallel, -1);
+  rb_define_method(cContext, "free", ruby_whisper_context_free, 0);
 
   // High level
   rb_define_method(cContext, "full_get_segment", ruby_whisper_full_get_segment, 1);
