@@ -25,6 +25,14 @@ class TestVADContext < TestBase
     end
   end
 
+  def test_free
+    vad = Whisper::VAD::Context.new("silero-v6.2.0")
+    vad.free
+    assert_raise RuntimeError do
+      vad.detect(AUDIO, Whisper::VAD::Params.new)
+    end
+  end
+
   private
 
   def assert_segments(segments)
