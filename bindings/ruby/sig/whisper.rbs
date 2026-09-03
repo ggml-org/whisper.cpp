@@ -159,6 +159,9 @@ module Whisper
                      | (Whisper::Params, _Samples, ?Integer n_samples) -> self
                      | (Whisper::Params, _Samples, ?Integer? n_samples, Integer n_processors) -> self
 
+    # Free context and unload the model.
+    def free: () -> void
+
     class Params
       def self.new: (
         ?use_gpu: boolish,
