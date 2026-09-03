@@ -1003,6 +1003,7 @@ module Whisper
       def segments_from_samples: (Params, Array[Float] samples, ?Integer n_samples) -> Segments
                                | (Params, _Samples, ?Integer n_samples) -> Segments
       def detect: (path wav_file_path, Params) -> Segments
+      def free: () -> void
     end
 
     class Segments
