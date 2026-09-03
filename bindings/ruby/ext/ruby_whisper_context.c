@@ -420,12 +420,23 @@ parse_samples(VALUE *samples, VALUE *n_samples)
       }
       parsed.n_samples = (int)RARRAY_LEN(*samples);
     } else if (memview_available) {
-      bool memview_got = rb_memory_view_get(*samples, &parsed.memview, RUBY_MEMORY_VIEW_SIMPLE);
+      bool memview_got = rb_memory_view_get(*samples, &parsed.memview, RUBY_MEMORY_VIEW_FORMAT | RUBY_MEMORY_VIEW_ROW_MAJOR);
       if (memview_got) {
         parsed.memview_exported = check_memory_view(&parsed.memview);
         if (!parsed.memview_exported) {
           rb_memory_view_release(&parsed.memview);
           parsed.memview = (rb_memory_view_t){0};
+        }
+      } else {
+        // Sometimes MemoryView producers accept only SIMPLE flag even when they provide suitable MemoryView
+        parsed.memview = (rb_memory_view_t){0};
+        bool simple_memview_got = rb_memory_view_get(*samples, &parsed.memview, RUBY_MEMORY_VIEW_SIMPLE);
+        if (simple_memview_got) {
+          parsed.memview_exported = check_memory_view(&parsed.memview);
+          if (!parsed.memview_exported) {
+            rb_memory_view_release(&parsed.memview);
+            parsed.memview = (rb_memory_view_t){0};
+          }
         }
       }
       if (parsed.memview_exported) {
