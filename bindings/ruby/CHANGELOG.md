@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.9] - Unreleased
+
+Bundled whisper.cpp: `1.9.3`
+
+- Fixed test fixture JFKReader's format string.
+- Add #free method to `Whisper::Context`, `Whisper::VAD::Context` and `Whisper::Parakeet::Context`.
+- Checked MemoryView format more strictly.
+
 ## [1.3.8] - 2026-07-28
 
 Bundled whisper.cpp: `1.9.1`
