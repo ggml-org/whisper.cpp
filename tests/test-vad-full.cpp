@@ -13,6 +13,8 @@
 #include <cassert>
 
 int main() {
+    ggml_backend_load_all();
+
     std::string whisper_model_path = WHISPER_MODEL_PATH;
     std::string vad_model_path     = VAD_MODEL_PATH;
     std::string sample_path        = SAMPLE_PATH;

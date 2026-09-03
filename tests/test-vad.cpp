@@ -48,6 +48,8 @@ struct whisper_vad_segments * test_detect_timestamps(
 }
 
 int main() {
+    ggml_backend_load_all();
+
     std::string vad_model_path = VAD_MODEL_PATH;
     std::string sample_path    = SAMPLE_PATH;
 
