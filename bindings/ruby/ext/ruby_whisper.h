@@ -209,7 +209,7 @@ extern VALUE ruby_whisper_log_queue_drain(ruby_whisper_log_queue *log_queue);
 #define GetParakeetContext(obj, rwpc) do { \
   TypedData_Get_Struct((obj), ruby_whisper_parakeet_context, &ruby_whisper_parakeet_context_type, (rwpc)); \
   if ((rwpc)->context == NULL) { \
-    rb_raise(rb_eRuntimeError, "Not initialized"); \
+    rb_raise(rb_eRuntimeError, "Already freed or not initialized"); \
   } \
 } while (0)
 
