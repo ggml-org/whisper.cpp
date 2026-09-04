@@ -1,5 +1,6 @@
 #include "parakeet.h"
 #include "parakeet-arch.h"
+#include "parakeet-version.h"
 
 #include "ggml.h"
 #include "ggml-cpp.h"
