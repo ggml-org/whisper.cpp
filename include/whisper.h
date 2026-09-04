@@ -144,8 +144,8 @@ extern "C" {
 
         // [EXPERIMENTAL] Token-level timestamps with DTW
         // do not use if you haven't computed token-level timestamps with dtw
-        // Roughly corresponds to the moment in audio in which the token was output
-        int64_t t_dtw;
+        int64_t t_dtw;     // start time from DTW alignment
+        int64_t t_dtw_end; // end time from DTW alignment
 
         float vlen;        // voice length of the token
     } whisper_token_data;
