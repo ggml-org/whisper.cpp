@@ -25,6 +25,36 @@ It's best to tune it to the specific use case, but a value around `0.6` should b
 When silence is detected, it will transcribe the last `--length` milliseconds of audio and output
 a transcription block that is suitable for parsing.
 
+## Output format
+
+The shape depends on --step, and there is no flag to override it.
+
+Default (--step > 0): one rolling segment, no timestamps, rewritten in
+place with ANSI erase-line escapes. Fine for a terminal, wrong for a pipe.
+
+VAD mode (--step 0): timestamped blocks meant for parsing —
+
+    ### Transcription 0 START | t0 = 0 ms | t1 = 4000 ms
+
+    [00:00:00.000 --> 00:00:03.480]   Hello there.
+
+    ### Transcription 0 END
+
+- timestamps are enabled implicitly by --step 0; there is no -nt here
+- strip the [t0 --> t1] prefix; don't discard those lines as log noise
+- -tdrz appends [SPEAKER_TURN] on a speaker change
+- the ### markers and [Start speaking] are on stdout
+
+## Model path
+
+-m is relative to the process CWD and defaults to models/ggml-base.en.bin.
+Spawning whisper-stream from a parent with a different CWD needs an
+absolute path, or you get:
+
+    error: failed to initialize whisper context
+
+which is also what a corrupt model prints — check the path first.
+
 ## Building
 
 The `whisper-stream` tool depends on SDL2 library to capture audio from the microphone. You can build it like this:
