@@ -339,6 +339,27 @@ extern "C" {
                                int   n_past,
                                int   n_threads);
 
+    // Same as whisper_decode_with_state, but saves alignment head cross-attention data.
+    // Requires context created with dtw_token_timestamps=true and flash_attn=false.
+    WHISPER_API int whisper_decode_with_state_and_aheads(
+            struct whisper_context * ctx,
+              struct whisper_state * state,
+               const whisper_token * tokens,
+                               int   n_tokens,
+                               int   n_past,
+                               int   n_threads);
+
+    // Get cross-attention data from alignment heads after a decode call with aheads enabled.
+    // Returns pointer to float array of shape [n_tokens x n_audio_ctx x n_heads].
+    // Copies data from GPU/backend to CPU on each call.
+    // Returns NULL if DTW is not enabled or no attention data is available.
+    // The pointer is valid until the next call to this function or whisper_free_state.
+    WHISPER_API const float * whisper_state_get_aheads_cross_qks(
+              struct whisper_state * state,
+                               int * n_tokens,
+                               int * n_audio_ctx,
+                               int * n_heads);
+
     // Convert the provided text into tokens.
     // The tokens pointer must be large enough to hold the resulting tokens.
     // Returns the number of tokens on success, no more than n_max_tokens
