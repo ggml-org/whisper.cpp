@@ -1165,6 +1165,9 @@ int main(int argc, char ** argv) {
             json jres = json{
                 {"text", results}
             };
+            if (params.detect_language) {
+                jres["language"] = whisper_lang_str_full(whisper_full_lang_id(ctx));
+            }
             res.set_content(jres.dump(-1, ' ', false, json::error_handler_t::replace),
                             "application/json");
         }
