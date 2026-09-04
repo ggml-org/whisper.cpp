@@ -1,0 +1,3 @@
+#pragma once
+
+#define WHISPER_VERSION "@WHISPER_VERSION@"

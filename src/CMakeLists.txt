@@ -214,7 +214,11 @@ set_target_properties(parakeet PROPERTIES
     MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 
-target_include_directories(whisper PUBLIC . ../include)
+configure_file(whisper-version.h.in  ${CMAKE_CURRENT_BINARY_DIR}/whisper-version.h  @ONLY)
+configure_file(parakeet-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/parakeet-version.h @ONLY)
+
+target_include_directories(whisper  PUBLIC . ../include PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(parakeet PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_compile_features   (whisper PUBLIC cxx_std_11) # don't bump
 
 if (CMAKE_CXX_BYTE_ORDER STREQUAL "BIG_ENDIAN")
