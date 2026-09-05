@@ -1,0 +1,82 @@
+[
+  {
+    "variant": "metal-opt3-v2",
+    "model": "ggml-small.en.bin",
+    "audio_key": "short",
+    "audio_length_s": 30.0,
+    "runs": 5,
+    "model_load_ms": {
+      "mean": 505.024,
+      "median": 496.82,
+      "min": 292.14,
+      "max": 770.23,
+      "std_dev": 171.24914285916878
+    },
+    "first_inference_latency_s": {
+      "mean": 3.5054172666015804,
+      "median": 3.498834917001659,
+      "min": 3.2232215410040226,
+      "max": 3.739346166003088,
+      "std_dev": 0.19811196438142906
+    },
+    "wall_clock_runtime_s": {
+      "mean": 3.821764533199894,
+      "median": 3.626695833001577,
+      "min": 3.604826000002504,
+      "max": 4.132079540999257,
+      "std_dev": 0.28232363328172455
+    },
+    "full_runtime_ms": {
+      "mean": 3421.706,
+      "median": 3406.08,
+      "min": 3151.5,
+      "max": 3655.79,
+      "std_dev": 192.98183095825368
+    },
+    "throughput_audio_seconds_per_second": {
+      "mean": 7.883294881588631,
+      "median": 8.271992298612751,
+      "min": 7.2602668226336045,
+      "max": 8.32217699272563,
+      "std_dev": 0.5671583503721838
+    },
+    "tokens_per_second": {
+      "mean": null,
+      "median": null,
+      "min": null,
+      "max": null,
+      "std_dev": null
+    },
+    "encode_ms": {
+      "mean": 2189.34,
+      "median": 2192.01,
+      "min": 2013.07,
+      "max": 2324.9,
+      "std_dev": 115.98988684363829
+    },
+    "decode_ms": {
+      "mean": 587.69,
+      "median": 595.21,
+      "min": 552.62,
+      "max": 605.85,
+      "std_dev": 20.580290328370012
+    },
+    "wer": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "std_dev": 0.0
+    },
+    "cer": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "std_dev": 0.0
+    },
+    "reference_present": true,
+    "correctness_pass": true,
+    "notes": "tokens/s unavailable; encode mean=2189.34 ms; decode mean=587.69 ms; wer median=0.0000; cer median=0.0000"
+  }
+]
