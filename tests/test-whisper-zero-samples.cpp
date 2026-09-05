@@ -8,6 +8,8 @@
 #include <cassert>
 
 int main() {
+    ggml_backend_load_all();
+
     struct whisper_context_params cparams = whisper_context_default_params();
     cparams.use_gpu = false;
 
