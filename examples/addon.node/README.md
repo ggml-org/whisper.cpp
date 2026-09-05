@@ -44,6 +44,39 @@ Run the VAD example with performance comparison:
 node vad-example.js
 ```
 
+### Cancellation Usage
+
+Run the cancellation example (cancels an in-flight transcription via `AbortSignal`):
+
+```shell
+node cancel-example.js
+```
+
+## Cancelling a transcription
+
+An in-flight transcription can be cancelled by passing an `AbortSignal` as the `signal` parameter:
+
+```javascript
+const ac = new AbortController();
+
+const promise = whisperAsync({
+  // ... other params ...
+  signal: ac.signal,
+});
+
+// cancel at any time
+ac.abort();
+
+const result = await promise;
+// result.cancelled === true
+// result.transcription contains the segments transcribed before cancellation
+```
+
+Cancellation is checked before each encoder run and before each ggml graph
+computation, so it usually takes effect within a fraction of a second.
+The promise resolves normally (it does not reject): `result.cancelled` is `true`
+and `result.transcription` contains the segments completed before the abort.
+
 ## Voice Activity Detection (VAD) Support
 
 VAD can significantly improve transcription performance by only processing speech segments, which is especially beneficial for audio files with long periods of silence.
@@ -112,4 +145,5 @@ Both traditional whisper.cpp parameters and new VAD parameters are supported:
 - `comma_in_time`: Use comma in timestamps (default: true)
 - `print_progress`: Print progress info (default: false)
 - `progress_callback`: Progress callback function
+- `signal`: `AbortSignal` used to cancel the transcription (see above section)
 - VAD parameters (see above section)
