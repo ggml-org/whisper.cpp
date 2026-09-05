@@ -133,8 +133,21 @@ target_compile_definitions(${VAD_TEST} PRIVATE
     WHISPER_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/ggml-base.en.bin"
     VAD_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-silero-v6.2.0-ggml.bin"
     SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
+
+set(VAD_MODEL_FIXTURE ggml-base.en-model)
+add_test(NAME download-ggml-base.en
+    COMMAND ${CMAKE_COMMAND}
+        -D "MODEL_URL=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
+        -D "MODEL_PATH=${PROJECT_SOURCE_DIR}/models/ggml-base.en.bin"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/download-ggml-model.cmake")
+set_tests_properties(download-ggml-base.en PROPERTIES
+    FIXTURES_SETUP ${VAD_MODEL_FIXTURE}
+    LABELS "download")
+
 add_test(NAME ${VAD_TEST} COMMAND ${VAD_TEST})
-set_tests_properties(${VAD_TEST} PROPERTIES LABELS "base;en")
+set_tests_properties(${VAD_TEST} PROPERTIES
+    LABELS "base;en"
+    FIXTURES_REQUIRED ${VAD_MODEL_FIXTURE})
 
 # Parakeet model loading test
 set(PARAKEET_TEST test-parakeet)
