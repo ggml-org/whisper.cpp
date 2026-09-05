@@ -7006,6 +7006,13 @@ int whisper_full_with_state(
         return -4;
     }
 
+    // decoder 0 is seeded once in whisper_init_state and skipped by the loop below, so its
+    // generator carries over between calls for the whole lifetime of the state. It is only read
+    // in the temperature > 0 branch, i.e. on the temperature fallback path, which makes the
+    // output a function of how many calls the state has already served: the same audio, decoded
+    // twice, can yield different text. Re-seed it here like every other decoder.
+    state->decoders[0].rng = std::mt19937(0);
+
     // TAGS: WHISPER_DECODER_INIT
     for (int j = 1; j < n_decoders; j++) {
         auto & decoder = state->decoders[j];
