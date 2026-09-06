@@ -1,8 +1,8 @@
 FROM ubuntu:24.04 AS build
 WORKDIR /app
 
-RUN apt-get update && \
-  apt-get install -y build-essential wget cmake git libvulkan-dev spirv-headers glslc \
+RUN apt update && \
+  apt install --no-install-recommends -y build-essential ca-certificates cmake git glslc libvulkan-dev spirv-headers wget \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 COPY .. .
@@ -11,8 +11,9 @@ RUN --mount=type=secret,id=HF_TOKEN,required=false,env=HF_TOKEN make base.en CMA
 FROM ubuntu:24.04 AS runtime
 WORKDIR /app
 
-RUN apt-get update && \
-  apt-get install -y curl ffmpeg libsdl2-dev wget cmake git libvulkan1 mesa-vulkan-drivers \
+RUN apt update && \
+  apt install --no-install-recommends -y \
+    ca-certificates curl ffmpeg libsdl2-dev wget cmake git libvulkan1 mesa-vulkan-drivers \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 COPY --from=build /app /app
