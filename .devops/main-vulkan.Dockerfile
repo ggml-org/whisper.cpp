@@ -13,7 +13,7 @@ WORKDIR /app
 
 RUN apt update && \
   apt install --no-install-recommends -y \
-    ca-certificates curl ffmpeg libsdl2-dev wget cmake git libvulkan1 mesa-vulkan-drivers \
+    ca-certificates curl ffmpeg libvulkan1 mesa-vulkan-drivers \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 COPY --from=build /app /app
