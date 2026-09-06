@@ -564,28 +564,28 @@ We have multiple Docker images available for this project:
 # download model and persist it in a local folder
 docker run -it --rm \
   -v path/to/models:/models \
-  whisper.cpp:main "./models/download-ggml-model.sh base /models"
+  whisper.cpp:main download-ggml-model.sh base /models
 
 # transcribe an audio file
 docker run -it --rm \
   -v path/to/models:/models \
   -v path/to/audios:/audios \
-  whisper.cpp:main "whisper-cli -m /models/ggml-base.bin -f /audios/jfk.wav"
+  whisper.cpp:main whisper-cli -m /models/ggml-base.bin -f /audios/jfk.wav
 
 # transcribe an audio file in samples folder
 docker run -it --rm \
   -v path/to/models:/models \
-  whisper.cpp:main "whisper-cli -m /models/ggml-base.bin -f ./samples/jfk.wav"
+  whisper.cpp:main whisper-cli -m /models/ggml-base.bin -f ./samples/jfk.wav
 
 # run the web server
 docker run -it --rm -p "8080:8080" \
   -v path/to/models:/models \
-  whisper.cpp:main "whisper-server --host 127.0.0.1 -m /models/ggml-base.bin"
-  
+  whisper.cpp:main whisper-server --host 127.0.0.1 -m /models/ggml-base.bin
+
 # run the bench too on the small.en model using 4 threads
 docker run -it --rm \
   -v path/to/models:/models \
-  whisper.cpp:main "whisper-bench -m /models/ggml-small.en.bin -t 4"
+  whisper.cpp:main whisper-bench -m /models/ggml-small.en.bin -t 4
 ```
 
 ## Installing with Conan

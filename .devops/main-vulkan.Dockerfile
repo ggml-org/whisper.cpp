@@ -30,4 +30,3 @@ RUN apt update && \
 COPY --from=build /runtime/ /
 COPY --from=build /app/models/download-* /usr/local/bin/
 RUN ldconfig
-ENTRYPOINT [ "bash", "-c" ]
