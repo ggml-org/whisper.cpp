@@ -530,6 +530,42 @@ jobs:
           name: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
           path: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
 
+  windows-arm64:
+    runs-on: windows-11-arm
+    needs: determine-tag
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Configure
+        run: >
+          cmake -S . -B ./build
+          -G Ninja
+          -DCMAKE_C_COMPILER=clang-cl
+          -DCMAKE_CXX_COMPILER=clang-cl
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_SHARED_LIBS=ON
+          -DWHISPER_SDL2=OFF
+          -DGGML_NATIVE=OFF
+          -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }}
+          -DGGML_BACKEND_DL=ON
+  
+      - name: Build
+        run: cmake --build ./build --config Release
+
+      - name: Pack bin artifacts
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "build/bin" -DestinationPath "whisper-bin-woa64.zip"
+  
+      - name: Upload binaries
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: whisper-bin-woa64.zip
+          path: whisper-bin-woa64.zip
+
   ios-xcode-build:
     runs-on: macos-latest
     needs: determine-tag
@@ -599,6 +635,7 @@ jobs:
       - ios-xcode-build
       - windows
       - windows-blas
+      - windows-arm64
       - windows-cublas
 
     steps:
