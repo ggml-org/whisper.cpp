@@ -186,6 +186,9 @@ jobs:
             ${{ matrix.defines }}
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
+      - name: Test
+        run: ctest --test-dir build -L gh --output-on-failure
+
       - name: Pack artifacts
         run: |
           cp LICENSE ./build/bin/
