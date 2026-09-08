@@ -341,7 +341,7 @@ func (ctx *Context) Whisper_full_parallel(params Params, samples []float32, proc
 
 // Return the id of the autodetected language, returns -1 if not found
 // Added to whisper.cpp in
-// https://github.com/ggerganov/whisper.cpp/commit/a1c1583cc7cd8b75222857afc936f0638c5683d6
+// https://github.com/ggml-org/whisper.cpp/commit/a1c1583cc7cd8b75222857afc936f0638c5683d6
 //
 // Examples:
 //
