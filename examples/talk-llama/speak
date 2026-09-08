@@ -32,9 +32,20 @@ elif installed python3 && \
     #python3 $script -q -s ./audio.mp3 -v $1 $2 >/dev/null 2>&1
     #ffplay -autoexit -nodisp -loglevel quiet -hide_banner -i ./audio.mp3 >/dev/null 2>&1
 
+# MiniMax TTS
+elif [ -n "$MINIMAX_API_KEY" ] && installed python3 && installed ffplay; then
+    wd=$(dirname $0)
+    script=$wd/minimax-tts.py
+    python3 $script -p -v $1 $2 >/dev/null 2>&1
+
+    # Uncomment to keep the audio file
+    #python3 $script -s ./audio.mp3 -v $1 $2 >/dev/null 2>&1
+    #ffplay -autoexit -nodisp -loglevel quiet -hide_banner -i ./audio.mp3 >/dev/null 2>&1
+
 else
   echo 'Install espeak ("brew install espeak" or "apt-get install espeak"),'
   echo 'piper ("pip install piper-tts" or https://github.com/rhasspy/piper) with aplay,'
-  echo 'or elevenlabs ("pip install elevenlabs") with ffplay.'
-  echo '(export ELEVEN_API_KEY if you have an api key from https://beta.elevenlabs.io)'
+  echo 'or elevenlabs ("pip install elevenlabs") with ffplay,'
+  echo 'or set MINIMAX_API_KEY and install ffplay for MiniMax TTS.'
+  echo '(See https://platform.minimax.io for a MiniMax API key)'
 fi
