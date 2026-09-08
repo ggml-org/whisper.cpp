@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=whisper.linux
+Comment=Voice typing for Linux desktop
+Exec=~/whisper.linux/whisper-linux
+Icon=audio-input-microphone
+Terminal=false
+Categories=Utility;Audio;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
