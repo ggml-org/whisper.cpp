@@ -9,10 +9,48 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
+
+// --- minimal cross-platform non-blocking keyboard, for interactive start/stop ---
+#ifdef _WIN32
+#include <conio.h>
+static void kbd_enable()  {}
+static void kbd_restore() {}
+static int  kbd_get()     { return _kbhit() ? _getch() : -1; }
+#else
+#include <termios.h>
+#include <unistd.h>
+#include <sys/select.h>
+static struct termios g_kbd_old;
+static bool           g_kbd_saved = false;
+static void kbd_restore() {
+    if (g_kbd_saved) { tcsetattr(STDIN_FILENO, TCSANOW, &g_kbd_old); g_kbd_saved = false; }
+}
+static void kbd_enable() {
+    if (!isatty(STDIN_FILENO) || g_kbd_saved) return;
+    tcgetattr(STDIN_FILENO, &g_kbd_old);
+    g_kbd_saved = true;
+    atexit(kbd_restore);
+    struct termios tio = g_kbd_old;
+    tio.c_lflag &= ~(ICANON | ECHO);
+    tio.c_cc[VMIN] = 0; tio.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSANOW, &tio);
+}
+static int kbd_get() {
+    if (!isatty(STDIN_FILENO)) return -1;
+    fd_set fds; FD_ZERO(&fds); FD_SET(STDIN_FILENO, &fds);
+    struct timeval tv{0, 0};
+    if (select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) > 0) {
+        unsigned char c;
+        if (read(STDIN_FILENO, &c, 1) == 1) return c;
+    }
+    return -1;
+}
+#endif
 
 // command-line parameters
 struct whisper_params {
@@ -37,6 +75,7 @@ struct whisper_params {
     bool save_audio    = false; // save audio to wav file
     bool use_gpu       = true;
     bool flash_attn    = true;
+    bool interactive   = false; // press SPACE to start/stop capture
 
     std::string language  = "en";
     std::string model     = "models/ggml-base.en.bin";
@@ -75,6 +114,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-ng"   || arg == "--no-gpu")        { params.use_gpu       = false; }
         else if (arg == "-fa"   || arg == "--flash-attn")    { params.flash_attn    = true; }
         else if (arg == "-nfa"  || arg == "--no-flash-attn") { params.flash_attn    = false; }
+        else if (arg == "-i"    || arg == "--interactive")   { params.interactive   = true; }
 
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
@@ -114,6 +154,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -ng,      --no-gpu        [%-7s] disable GPU inference\n",                          params.use_gpu ? "false" : "true");
     fprintf(stderr, "  -fa,      --flash-attn    [%-7s] enable flash attention during inference\n",        params.flash_attn ? "true" : "false");
     fprintf(stderr, "  -nfa,     --no-flash-attn [%-7s] disable flash attention during inference\n",       params.flash_attn ? "false" : "true");
+    fprintf(stderr, "  -i,       --interactive   [%-7s] press SPACE to start/stop capture, Q to quit\n",   params.interactive ? "true" : "false");
     fprintf(stderr, "\n");
 }
 
@@ -230,7 +271,16 @@ int main(int argc, char ** argv) {
 
         wavWriter.open(filename, WHISPER_SAMPLE_RATE, 16, 1);
     }
-    printf("[Start speaking]\n");
+    bool recording = true;
+    if (params.interactive) {
+        kbd_enable();
+        audio.pause();          // start paused; wait for the user to press SPACE
+        audio.clear();
+        recording = false;
+        printf("[Interactive mode: press SPACE to start/stop recording, Q to quit]\n");
+    } else {
+        printf("[Start speaking]\n");
+    }
     fflush(stdout);
 
     auto t_last  = std::chrono::high_resolution_clock::now();
@@ -238,6 +288,30 @@ int main(int argc, char ** argv) {
 
     // main audio loop
     while (is_running) {
+        // interactive start/stop via keyboard (SPACE toggles capture, Q quits)
+        if (params.interactive) {
+            const int key = kbd_get();
+            if (key == 'q' || key == 'Q') {
+                break;
+            }
+            if (key == ' ') {
+                recording = !recording;
+                if (recording) {
+                    audio.clear();
+                    audio.resume();
+                    printf("\n[recording... press SPACE to stop]\n");
+                } else {
+                    audio.pause();
+                    printf("\n[stopped. press SPACE to record]\n");
+                }
+                fflush(stdout);
+            }
+            if (!recording) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                continue;
+            }
+        }
+
         if (params.save_audio) {
             wavWriter.write(pcmf32_new.data(), pcmf32_new.size());
         }
@@ -429,6 +503,7 @@ int main(int argc, char ** argv) {
     }
 
     audio.pause();
+    kbd_restore();
 
     whisper_print_timings(ctx);
     whisper_free(ctx);
