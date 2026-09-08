@@ -9,12 +9,14 @@ set(WHISPER_LIB_DIR ${CMAKE_SOURCE_DIR}/../../../../../../../)
 file(READ "${WHISPER_LIB_DIR}/CMakeLists.txt" MAIN_CMAKE_CONTENT)
 string(REGEX MATCH "project\\(\"whisper\\.cpp\" VERSION ([0-9]+\\.[0-9]+\\.[0-9]+)\\)" VERSION_MATCH "${MAIN_CMAKE_CONTENT}")
 if(CMAKE_MATCH_1)
-    set(WHISPER_VERSION ${CMAKE_MATCH_1} PARENT_SCOPE)
+    set(WHISPER_VERSION ${CMAKE_MATCH_1})
 else()
-    set(WHISPER_VERSION "unknown" PARENT_SCOPE)
+    set(WHISPER_VERSION "unknown")
 endif()
 
 message(STATUS " Whisper version: ${WHISPER_VERSION}")
+
+configure_file(${WHISPER_LIB_DIR}/src/whisper-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/whisper-version.h @ONLY)
 
 set(SOURCE_FILES
     ${WHISPER_LIB_DIR}/src/whisper.cpp
@@ -37,7 +39,7 @@ function(build_library target_name)
 
     target_link_libraries(${target_name} ${LOG_LIB} android ggml)
     target_compile_definitions(${target_name} PUBLIC GGML_USE_CPU)
-    target_compile_definitions(${target_name} PRIVATE WHISPER_VERSION="${WHISPER_VERSION}")
+    target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
     if (${target_name} STREQUAL "whisper_v8fp16_va")
         target_compile_options(${target_name} PRIVATE -march=armv8.2-a+fp16)
