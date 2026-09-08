@@ -1,4 +1,4 @@
-name: Close inactive issues
+name: Mark inactive issues stale
 on:
   schedule:
     - cron: "42 0 * * *"
@@ -9,7 +9,7 @@ permissions:
   issues: write
 
 jobs:
-  close-issues:
+  mark-issues:
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -19,9 +19,9 @@ jobs:
         with:
           exempt-issue-labels: "refactor,help wanted,good first issue,research,bug,roadmap"
           days-before-issue-stale: 30
-          days-before-issue-close: 14
+          days-before-issue-close: -1
           stale-issue-label: "stale"
-          close-issue-message: "This issue was closed because it has been inactive for 14 days since being marked as stale."
+          stale-issue-message: "This issue was marked as stale because it has been inactive for 30 days."
           days-before-pr-stale: -1
           days-before-pr-close: -1
           operations-per-run: 10000
