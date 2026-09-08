@@ -93,6 +93,7 @@ jobs:
       fail-fast: false
       matrix:
         build: [Debug, Release]
+        backend_dl: ['OFF', 'ON']
 
     steps:
       - name: Clone
@@ -101,7 +102,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: clang-arm64-${{ matrix.build }}
+          key: clang-arm64-${{ matrix.build }}-dl-${{ matrix.backend_dl }}
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
@@ -116,6 +117,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
             -DCMAKE_CXX_COMPILER=clang++ \
             -DCMAKE_C_COMPILER=clang \
+            -DGGML_BACKEND_DL=${{ matrix.backend_dl }} \
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ARM_ARCH=armv8-a
           make
