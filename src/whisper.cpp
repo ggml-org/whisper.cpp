@@ -7975,10 +7975,14 @@ int whisper_full_parallel(
     for (int i = 0; i < n_processors - 1; ++i) {
         auto& results_i = states[i]->result_all;
 
+        // time offset of this chunk in 10 ms units, computed in 64-bit to avoid
+        // int overflow for chunk boundaries beyond ~22 min at 16 kHz
+        const int64_t chunk_offset_t = (100LL * (i + 1) * n_samples_per_processor) / WHISPER_SAMPLE_RATE + offset_t;
+
         for (auto& result : results_i) {
             // correct the segment timestamp taking into account the offset
-            result.t0 += 100 * ((i + 1) * n_samples_per_processor) / WHISPER_SAMPLE_RATE + offset_t;
-            result.t1 += 100 * ((i + 1) * n_samples_per_processor) / WHISPER_SAMPLE_RATE + offset_t;
+            result.t0 += chunk_offset_t;
+            result.t1 += chunk_offset_t;
 
             // make sure that segments are not overlapping
             if (!ctx->state->result_all.empty()) {
@@ -8020,7 +8024,8 @@ int whisper_full_parallel(
     WHISPER_LOG_WARN("\n");
     WHISPER_LOG_WARN("%s: the audio has been split into %d chunks at the following times:\n", __func__, n_processors);
     for (int i = 0; i < n_processors - 1; ++i) {
-        WHISPER_LOG_WARN("%s: split %d - %s\n", __func__, (i + 1), to_timestamp(100*((i + 1)*n_samples_per_processor)/WHISPER_SAMPLE_RATE + offset_t).c_str());
+        const int64_t split_t = (100LL * (i + 1) * n_samples_per_processor) / WHISPER_SAMPLE_RATE + offset_t;
+        WHISPER_LOG_WARN("%s: split %d - %s\n", __func__, (i + 1), to_timestamp(split_t).c_str());
     }
     WHISPER_LOG_WARN("%s: the transcription quality may be degraded near these boundaries\n", __func__);
 
