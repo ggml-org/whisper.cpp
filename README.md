@@ -561,31 +561,54 @@ We have multiple Docker images available for this project:
 ### Usage
 
 ```shell
+# Use the main tag or: cublas, main-cuda, main-intel, main-musa, main-rocm, main-vulkan.
+IMAGE="ghcr.io/ggml-org/whisper.cpp:main"
+MODEL_PATH="/tmp/whisper.cpp-models"
+AUDIO_PATH="/tmp/whisper.cpp-audio"
+AUDIO_URL="https://github.com/ggml-org/whisper.cpp/raw/refs/heads/master/samples/jfk.wav"
+mkdir -p "$MODEL_PATH" "$AUDIO_PATH"
+wget -O "$AUDIO_PATH/jfk.wav" "$AUDIO_URL"
+
 # download model and persist it in a local folder
 docker run -it --rm \
-  -v path/to/models:/models \
-  whisper.cpp:main "./models/download-ggml-model.sh base /models"
+  -v $MODEL_PATH:/models \
+  $IMAGE \
+  download-ggml-model.sh base /models
 
 # transcribe an audio file
 docker run -it --rm \
-  -v path/to/models:/models \
-  -v path/to/audios:/audios \
-  whisper.cpp:main "whisper-cli -m /models/ggml-base.bin -f /audios/jfk.wav"
-
-# transcribe an audio file in samples folder
-docker run -it --rm \
-  -v path/to/models:/models \
-  whisper.cpp:main "whisper-cli -m /models/ggml-base.bin -f ./samples/jfk.wav"
+  -v $MODEL_PATH:/models \
+  -v $AUDIO_PATH:/audios \
+  $IMAGE \
+  whisper-cli -m /models/ggml-base.bin -f /audios/jfk.wav
 
 # run the web server
-docker run -it --rm -p "8080:8080" \
-  -v path/to/models:/models \
-  whisper.cpp:main "whisper-server --host 127.0.0.1 -m /models/ggml-base.bin"
-  
-# run the bench too on the small.en model using 4 threads
 docker run -it --rm \
-  -v path/to/models:/models \
-  whisper.cpp:main "whisper-bench -m /models/ggml-small.en.bin -t 4"
+  -p "8080:8080" \
+  -v $MODEL_PATH:/models \
+  $IMAGE \
+  whisper-server --host 0.0.0.0 -m /models/ggml-base.bin
+# then:
+curl -v http://127.0.0.1:8080/inference \
+  -F "file=@${AUDIO_PATH}/jfk.wav" \
+  -F 'response_format=json'
+
+# download small.en and run the bench on it using 4 threads
+docker run -it --rm \
+  -v $MODEL_PATH:/models \
+  $IMAGE \
+  download-ggml-model.sh small.en /models
+docker run -it --rm \
+  -v $MODEL_PATH:/models \
+  $IMAGE \
+  whisper-bench -m /models/ggml-small.en.bin -t 4
+
+# the methods above use the CPU - use your GPU by sharing the device, for example, for an AMD iGPU via Vulkan:
+docker run --rm \
+  --device /dev/dri \
+  -v $MODEL_PATH:/models \
+  "ghcr.io/ggml-org/whisper.cpp:main-vulkan" \
+  whisper-bench -m /models/ggml-small.en.bin -t 4
 ```
 
 ## Installing with Conan
