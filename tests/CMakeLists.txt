@@ -150,9 +150,9 @@ set_tests_properties(${PARAKEET_TEST} PROPERTIES LABELS "parakeet;gh")
 
 # The following parakeet test require a real ggml-parakeet-tdt model to have
 # been converted or downloaded:
-# $ hf download danbev/parakeet parakeet-tdt-0.6b-v3-f32.bin --local-dir models
+# $ hf download ggml-org/parakeet-GGUF ggml-parakeet-tdt-0.6b-v3-f32.bin --local-dir models
 #
-# And also required more audio samples that are shipped by default. These can
+# And also requires more audio samples that are shipped by default. These can
 # downloaded by running:
 # $ make samples
 function(add_parakeet_transcription_test TEST_TARGET TEST_SOURCE SAMPLE_PATH EXPECTED_TRANSCRIPTION_PATH)
