@@ -530,6 +530,266 @@ jobs:
           name: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
           path: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
 
+  windows-arm64-cpu:
+    runs-on: windows-2022
+    needs: determine-tag
+
+    strategy:
+      matrix:
+        build: [Release]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Install Ninja
+        run: |
+          choco install ninja
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-windows-arm64-cpu
+          evict-old-files: 1d
+
+      - name: Configure and Build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" amd64_arm64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake ^
+            -DBUILD_SHARED_LIBS=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_BACKEND_DL=ON ^
+            -DWHISPER_SDL2=OFF ^
+            -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }}
+          cmake --build build --config ${{ matrix.build }}
+
+      - name: Copy OpenMP runtime DLL
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstallPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+          if (-not $vsInstallPath) {
+            Write-Error "Could not find a Visual Studio install with the ARM64 MSVC toolset"
+            exit 1
+          }
+          $redistVersion = Get-ChildItem "$vsInstallPath\VC\Redist\MSVC" -Directory |
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+$' } |
+            Sort-Object Name -Descending | Select-Object -First 1
+          $ompDll = "$vsInstallPath\VC\Redist\MSVC\$($redistVersion.Name)\debug_nonredist\arm64\Microsoft.VC143.OpenMP.LLVM\libomp140.aarch64.dll"
+          if (-not (Test-Path $ompDll)) {
+            Write-Error "libomp140.aarch64.dll not found at $ompDll"
+            exit 1
+          }
+          Copy-Item $ompDll "build\bin\${{ matrix.build }}\" -Force
+
+      - name: Pack bin artifacts
+        shell: pwsh
+        run: |
+              Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-bin-win-cpu-arm64.zip"
+
+      - name: Upload binaries
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: whisper-bin-win-cpu-arm64.zip
+          path: whisper-bin-win-cpu-arm64.zip
+
+  windows-arm64-opencl-adreno:
+    runs-on: windows-2022
+    needs: determine-tag
+
+    strategy:
+      matrix:
+        build: [Release]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Install Ninja
+        run: |
+          choco install ninja
+
+      - name: Install OpenCL Headers and Libs
+        run: |
+          git clone https://github.com/KhronosGroup/OpenCL-Headers
+          cd OpenCL-Headers
+          cmake -B build `
+            -DBUILD_TESTING=OFF `
+            -DOPENCL_HEADERS_BUILD_TESTING=OFF `
+            -DOPENCL_HEADERS_BUILD_CXX_TESTS=OFF `
+            -DCMAKE_INSTALL_PREFIX="$env:RUNNER_TEMP/opencl-arm64-release"
+          cmake --build build --target install
+          cd ..
+          git clone https://github.com/KhronosGroup/OpenCL-ICD-Loader
+          cd OpenCL-ICD-Loader
+          cmake -B build-arm64-release `
+            -A arm64 `
+            -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" `
+            -DCMAKE_INSTALL_PREFIX="$env:RUNNER_TEMP/opencl-arm64-release"
+          cmake --build build-arm64-release --target install --config release
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-windows-arm64-opencl-adreno
+          evict-old-files: 1d
+
+      - name: Configure and Build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" amd64_arm64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake ^
+            -DCMAKE_PREFIX_PATH="%RUNNER_TEMP%/opencl-arm64-release" ^
+            -DBUILD_SHARED_LIBS=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_OPENCL=ON ^
+            -DGGML_OPENCL_USE_ADRENO_KERNELS=ON ^
+            -DWHISPER_SDL2=OFF ^
+            -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }}
+          cmake --build build --config ${{ matrix.build }}
+
+      - name: Copy OpenMP runtime DLL
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstallPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+          if (-not $vsInstallPath) {
+            Write-Error "Could not find a Visual Studio install with the ARM64 MSVC toolset"
+            exit 1
+          }
+          $redistVersion = Get-ChildItem "$vsInstallPath\VC\Redist\MSVC" -Directory |
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+$' } |
+            Sort-Object Name -Descending | Select-Object -First 1
+          $ompDll = "$vsInstallPath\VC\Redist\MSVC\$($redistVersion.Name)\debug_nonredist\arm64\Microsoft.VC143.OpenMP.LLVM\libomp140.aarch64.dll"
+          if (-not (Test-Path $ompDll)) {
+            Write-Error "libomp140.aarch64.dll not found at $ompDll"
+            exit 1
+          }
+          Copy-Item $ompDll "build\bin\${{ matrix.build }}\" -Force
+
+      - name: Pack bin artifacts
+        shell: pwsh
+        run: |
+              Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-bin-win-opencl-adreno-arm64.zip"
+
+      - name: Upload binaries
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: whisper-bin-win-opencl-adreno-arm64.zip
+          path: whisper-bin-win-opencl-adreno-arm64.zip
+
+  windows-arm64-cuda:
+    runs-on: windows-2022
+    needs: determine-tag
+
+    strategy:
+      matrix:
+        build: [Release]
+        cuda-toolkit: [13.4.0]
+
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Install Ninja
+        run: |
+          choco install ninja
+
+      - name: Install ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ${{ github.job }}-${{ matrix.cuda-toolkit }}-${{ matrix.build }}
+          evict-old-files: 5d
+
+      # nvcc cross-compiles for ARM64 from this x64 runner using the ARM64-targeting
+      # host cl.exe; the CUDA runtime/cublas libs still need their own ARM64 archives
+      # since the standard x64 CUDA packages don't ship ARM64 binaries.
+      - name: Install Cuda Toolkit 13.4.0 (ARM64 target)
+        run: |
+          $CUDA_TOOLKIT_DIR = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4"
+          $PKG = "https://packages.nvidia.com/bin-archive/pool"
+          $PKG_ID = "5B515474-7E78-11F1-8656-C51E4F4B317F"
+
+          mkdir -p $CUDA_TOOLKIT_DIR
+          choco install unzip -y
+
+          curl -O "$PKG/windows-x86_64/$PKG_ID/cccl-windows-x86_64-13.3.4.1.2-archive.zip"
+          curl -O "$PKG/windows-x86_64/$PKG_ID/cuda_crt-windows-x86_64-13.4.46-archive.zip"
+          curl -O "$PKG/windows-x86_64/$PKG_ID/cuda_nvcc-windows-x86_64-13.4.46-archive.zip"
+          curl -O "$PKG/windows-x86_64/$PKG_ID/libnvvm-windows-x86_64-13.4.46-archive.zip"
+          curl -O "$PKG/windows-arm64/$PKG_ID/cuda_cudart-windows-arm64-13.4.46-archive.zip"
+          curl -O "$PKG/windows-arm64/$PKG_ID/libcublas-windows-arm64-13.7.0.10-archive.zip"
+
+          unzip '*.zip' -d $CUDA_TOOLKIT_DIR
+
+          xcopy "$CUDA_TOOLKIT_DIR\cccl-windows-x86_64-13.3.4.1.2-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_crt-windows-x86_64-13.4.46-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_nvcc-windows-x86_64-13.4.46-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\libnvvm-windows-x86_64-13.4.46-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_cudart-windows-arm64-13.4.46-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\libcublas-windows-arm64-13.7.0.10-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+
+          echo "$CUDA_TOOLKIT_DIR\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "CUDA_PATH=$CUDA_TOOLKIT_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Configure and Build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" amd64_arm64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm-cuda.cmake ^
+            -DCMAKE_BUILD_TYPE=${{ matrix.build }} ^
+            -DGGML_CUDA=ON ^
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DWHISPER_SDL2=OFF ^
+            -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }}
+          cmake --build build --config ${{ matrix.build }}
+
+      - name: Copy CUDA runtime DLLs
+        run: |
+          Get-ChildItem "$env:CUDA_PATH\bin\arm64" -Filter "cudart64_*.dll" | Copy-Item -Destination "build/bin/${{ matrix.build }}"
+          Get-ChildItem "$env:CUDA_PATH\bin\arm64" -Filter "cublas64_*.dll" | Copy-Item -Destination "build/bin/${{ matrix.build }}"
+          Get-ChildItem "$env:CUDA_PATH\bin\arm64" -Filter "cublasLt64_*.dll" | Copy-Item -Destination "build/bin/${{ matrix.build }}"
+
+      - name: Copy OpenMP runtime DLL
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstallPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+          if (-not $vsInstallPath) {
+            Write-Error "Could not find a Visual Studio install with the ARM64 MSVC toolset"
+            exit 1
+          }
+          $redistVersion = Get-ChildItem "$vsInstallPath\VC\Redist\MSVC" -Directory |
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+$' } |
+            Sort-Object Name -Descending | Select-Object -First 1
+          $ompDll = "$vsInstallPath\VC\Redist\MSVC\$($redistVersion.Name)\debug_nonredist\arm64\Microsoft.VC143.OpenMP.LLVM\libomp140.aarch64.dll"
+          if (-not (Test-Path $ompDll)) {
+            Write-Error "libomp140.aarch64.dll not found at $ompDll"
+            exit 1
+          }
+          Copy-Item $ompDll "build\bin\${{ matrix.build }}\" -Force
+
+      - name: Pack bin artifacts
+        shell: pwsh
+        run: |
+              Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-bin-win-cuda-${{ matrix.cuda-toolkit }}-arm64.zip"
+
+      - name: Upload binaries
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: whisper-bin-win-cuda-${{ matrix.cuda-toolkit }}-arm64.zip
+          path: whisper-bin-win-cuda-${{ matrix.cuda-toolkit }}-arm64.zip
+
   ios-xcode-build:
     runs-on: macos-latest
     needs: determine-tag
@@ -600,6 +860,9 @@ jobs:
       - windows
       - windows-blas
       - windows-cublas
+      - windows-arm64-cpu
+      - windows-arm64-opencl-adreno
+      - windows-arm64-cuda
 
     steps:
       - name: Clone
