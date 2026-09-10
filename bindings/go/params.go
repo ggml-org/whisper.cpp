@@ -14,11 +14,22 @@ import (
 */
 import "C"
 
-func setOwnedCString(dst **C.char, s string) {
+func freeOwnedCString(dst **C.char) {
 	if *dst != nil {
 		C.free(unsafe.Pointer(*dst))
+		*dst = nil
 	}
+}
+
+func setOwnedCString(dst **C.char, s string) {
+	freeOwnedCString(dst)
 	*dst = C.CString(s)
+}
+
+// Free releases C strings owned by SetInitialPrompt and SetVADModelPath.
+func (p *Params) Free() {
+	freeOwnedCString(&p.initial_prompt)
+	freeOwnedCString(&p.vad_model_path)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
