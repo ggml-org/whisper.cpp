@@ -910,6 +910,8 @@ jobs:
         with:
           tag_name: ${{ needs.determine-tag.outputs.tag_name }}
           prerelease: true
+          body: |
+            **Note:** the Windows arm64 (CUDA) build (`whisper-bin-win-cuda-*-arm64.zip`) uses a preview edition of the CUDA Toolkit for Windows on Arm and should be considered experimental.
 
       - name: Upload release
         id: upload_release
