@@ -1858,12 +1858,17 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         ggml_backend_buffer_type_t buft = p.first;
         ggml_context * ctx = p.second;
         ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
-        if (buf) {
-            model.buffers.emplace_back(buf);
-
-            size_t size_main = ggml_backend_buffer_get_size(buf);
-            WHISPER_LOG_INFO("%s: %12s total size = %8.2f MB\n", __func__, ggml_backend_buffer_name(buf), size_main / 1e6);
+        if (!buf) {
+            // out of memory: fail gracefully instead of leaving weight tensors with a
+            // null buffer, which crashes later when loading weights or freeing the model
+            WHISPER_LOG_ERROR("%s: failed to allocate memory for the model weights\n", __func__);
+            return false;
         }
+
+        model.buffers.emplace_back(buf);
+
+        size_t size_main = ggml_backend_buffer_get_size(buf);
+        WHISPER_LOG_INFO("%s: %12s total size = %8.2f MB\n", __func__, ggml_backend_buffer_name(buf), size_main / 1e6);
     }
 
     // load weights
