@@ -33,3 +33,7 @@ int utf8_trailing_bytes_needed(const std::string & s);
 
 // write text to file, and call system("command voice_id file")
 bool speak_with_file(const std::string & command, const std::string & text, const std::string & path, int voice_id);
+
+// returns a concrete model path, or "" if the repo/file is not resolvable from the local cache.
+// Phase 1: cache-only (get_cached_files + finalize_file). Phase 2 adds download.
+std::string whisper_hf_resolve_model(const std::string & hf_repo, const std::string & hf_file);
