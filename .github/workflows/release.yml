@@ -691,7 +691,7 @@ jobs:
     strategy:
       matrix:
         build: [Release]
-        cuda-toolkit: [13.4.0]
+        cuda-toolkit: ['13.4']
 
     steps:
       - name: Clone repository
@@ -710,30 +710,37 @@ jobs:
       # nvcc cross-compiles for ARM64 from this x64 runner using the ARM64-targeting
       # host cl.exe; the CUDA runtime/cublas libs still need their own ARM64 archives
       # since the standard x64 CUDA packages don't ship ARM64 binaries.
-      - name: Install Cuda Toolkit 13.4.0 (ARM64 target)
+      - name: Install Cuda Toolkit 13.4 (ARM64 target)
         run: |
           $CUDA_TOOLKIT_DIR = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4"
-          $PKG = "https://packages.nvidia.com/bin-archive/pool"
-          $PKG_ID = "5B515474-7E78-11F1-8656-C51E4F4B317F"
+          $CUDA_DOWNLOAD = "https://developer.download.nvidia.com/compute/cuda/redist"
+
+          # Components versions
+          $CCCL_VER   = "13.3.4.2.1"
+          $CRT_VER    = "13.4.59"
+          $NVCC_VER   = "13.4.59"
+          $NVVM_VER   = "13.4.59"
+          $CUDART_VER = "13.4.49"
+          $CUBLAS_VER = "13.7.0.27"
 
           mkdir -p $CUDA_TOOLKIT_DIR
           choco install unzip -y
 
-          curl -O "$PKG/windows-x86_64/$PKG_ID/cccl-windows-x86_64-13.3.4.1.2-archive.zip"
-          curl -O "$PKG/windows-x86_64/$PKG_ID/cuda_crt-windows-x86_64-13.4.46-archive.zip"
-          curl -O "$PKG/windows-x86_64/$PKG_ID/cuda_nvcc-windows-x86_64-13.4.46-archive.zip"
-          curl -O "$PKG/windows-x86_64/$PKG_ID/libnvvm-windows-x86_64-13.4.46-archive.zip"
-          curl -O "$PKG/windows-arm64/$PKG_ID/cuda_cudart-windows-arm64-13.4.46-archive.zip"
-          curl -O "$PKG/windows-arm64/$PKG_ID/libcublas-windows-arm64-13.7.0.10-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/cccl/windows-x86_64/cccl-windows-x86_64-${CCCL_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/cuda_crt/windows-x86_64/cuda_crt-windows-x86_64-${CRT_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-${NVCC_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/libnvvm/windows-x86_64/libnvvm-windows-x86_64-${NVVM_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/cuda_cudart/windows-arm64/cuda_cudart-windows-arm64-${CUDART_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/libcublas/windows-arm64/libcublas-windows-arm64-${CUBLAS_VER}-archive.zip"
 
           unzip '*.zip' -d $CUDA_TOOLKIT_DIR
 
-          xcopy "$CUDA_TOOLKIT_DIR\cccl-windows-x86_64-13.3.4.1.2-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
-          xcopy "$CUDA_TOOLKIT_DIR\cuda_crt-windows-x86_64-13.4.46-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
-          xcopy "$CUDA_TOOLKIT_DIR\cuda_nvcc-windows-x86_64-13.4.46-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
-          xcopy "$CUDA_TOOLKIT_DIR\libnvvm-windows-x86_64-13.4.46-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
-          xcopy "$CUDA_TOOLKIT_DIR\cuda_cudart-windows-arm64-13.4.46-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
-          xcopy "$CUDA_TOOLKIT_DIR\libcublas-windows-arm64-13.7.0.10-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cccl-windows-x86_64-${CCCL_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_crt-windows-x86_64-${CRT_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_nvcc-windows-x86_64-${NVCC_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\libnvvm-windows-x86_64-${NVVM_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_cudart-windows-arm64-${CUDART_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\libcublas-windows-arm64-${CUBLAS_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
 
           echo "$CUDA_TOOLKIT_DIR\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "CUDA_PATH=$CUDA_TOOLKIT_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
@@ -910,8 +917,6 @@ jobs:
         with:
           tag_name: ${{ needs.determine-tag.outputs.tag_name }}
           prerelease: true
-          body: |
-            **Note:** the Windows arm64 (CUDA) build (`whisper-bin-win-cuda-*-arm64.zip`) uses a preview edition of the CUDA Toolkit for Windows on Arm and should be considered experimental.
 
       - name: Upload release
         id: upload_release
