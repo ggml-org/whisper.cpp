@@ -7911,6 +7911,13 @@ int whisper_full(
     return whisper_full_with_state(ctx, ctx->state, params, samples, n_samples);
 }
 
+// Chunk boundary offset (in centiseconds) for the `i_plus_1`-th `whisper_full_parallel` split.
+// Promotes to int64_t before multiplying: `100 * chunk_start_samples` alone can exceed INT_MAX
+// for audio longer than ~22 minutes at 16 kHz, overflowing a 32-bit int (issue #4039).
+static int64_t whisper_full_parallel_chunk_offset(int i_plus_1, int n_samples_per_processor, int64_t offset_t) {
+    return 100LL * i_plus_1 * n_samples_per_processor / WHISPER_SAMPLE_RATE + offset_t;
+}
+
 int whisper_full_parallel(
         struct whisper_context * ctx,
         struct whisper_full_params params,
@@ -7989,10 +7996,12 @@ int whisper_full_parallel(
     for (int i = 0; i < n_processors - 1; ++i) {
         auto& results_i = states[i]->result_all;
 
+        const int64_t chunk_offset_t = whisper_full_parallel_chunk_offset(i + 1, n_samples_per_processor, offset_t);
+
         for (auto& result : results_i) {
             // correct the segment timestamp taking into account the offset
-            result.t0 += 100 * ((i + 1) * n_samples_per_processor) / WHISPER_SAMPLE_RATE + offset_t;
-            result.t1 += 100 * ((i + 1) * n_samples_per_processor) / WHISPER_SAMPLE_RATE + offset_t;
+            result.t0 += chunk_offset_t;
+            result.t1 += chunk_offset_t;
 
             // make sure that segments are not overlapping
             if (!ctx->state->result_all.empty()) {
@@ -8034,7 +8043,8 @@ int whisper_full_parallel(
     WHISPER_LOG_WARN("\n");
     WHISPER_LOG_WARN("%s: the audio has been split into %d chunks at the following times:\n", __func__, n_processors);
     for (int i = 0; i < n_processors - 1; ++i) {
-        WHISPER_LOG_WARN("%s: split %d - %s\n", __func__, (i + 1), to_timestamp(100*((i + 1)*n_samples_per_processor)/WHISPER_SAMPLE_RATE + offset_t).c_str());
+        const int64_t split_t = whisper_full_parallel_chunk_offset(i + 1, n_samples_per_processor, offset_t);
+        WHISPER_LOG_WARN("%s: split %d - %s\n", __func__, (i + 1), to_timestamp(split_t).c_str());
     }
     WHISPER_LOG_WARN("%s: the transcription quality may be degraded near these boundaries\n", __func__);
 
