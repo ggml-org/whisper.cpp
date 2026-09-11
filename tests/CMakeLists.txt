@@ -88,6 +88,14 @@ if (WHISPER_COMMON_FFMPEG)
     set_tests_properties(${TEST_TARGET} PROPERTIES LABELS "tiny;mp3")
 endif()
 
+# Language metadata API test
+set(LANG_TEST test-whisper-lang)
+add_executable(${LANG_TEST} ${LANG_TEST}.cpp)
+target_include_directories(${LANG_TEST} PRIVATE ../include)
+target_link_libraries(${LANG_TEST} PRIVATE whisper)
+add_test(NAME ${LANG_TEST} COMMAND ${LANG_TEST})
+set_tests_properties(${LANG_TEST} PROPERTIES LABELS "unit")
+
 # UTF-8 helper unit test
 set(UTF8_TEST test-common-utf8)
 add_executable(${UTF8_TEST} ${UTF8_TEST}.cpp)
