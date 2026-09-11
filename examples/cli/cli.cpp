@@ -317,7 +317,7 @@ struct whisper_print_user_data {
     int progress_prev;
 };
 
-static std::string estimate_diarization_speaker(std::vector<std::vector<float>> pcmf32s, int64_t t0, int64_t t1, bool id_only = false) {
+static std::string estimate_diarization_speaker(const std::vector<std::vector<float>> & pcmf32s, int64_t t0, int64_t t1, bool id_only = false) {
     std::string speaker = "";
     const int64_t n_samples = pcmf32s[0].size();
 
@@ -452,7 +452,7 @@ static void whisper_print_segment_callback(struct whisper_context * ctx, struct 
     }
 }
 
-static void output_txt(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, std::vector<std::vector<float>> pcmf32s) {
+static void output_txt(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, const std::vector<std::vector<float>> & pcmf32s) {
     const int n_segments = whisper_full_n_segments(ctx);
     for (int i = 0; i < n_segments; ++i) {
         const char * text = whisper_full_get_segment_text(ctx, i);
@@ -477,7 +477,7 @@ static void output_txt(struct whisper_context * ctx, std::ofstream & fout, const
     }
 }
 
-static void output_vtt(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, std::vector<std::vector<float>> pcmf32s) {
+static void output_vtt(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, const std::vector<std::vector<float>> & pcmf32s) {
     fout << "WEBVTT\n\n";
 
     const int n_segments = whisper_full_n_segments(ctx);
@@ -499,7 +499,7 @@ static void output_vtt(struct whisper_context * ctx, std::ofstream & fout, const
     }
 }
 
-static void output_srt(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, std::vector<std::vector<float>> pcmf32s) {
+static void output_srt(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, const std::vector<std::vector<float>> & pcmf32s) {
     const int n_segments = whisper_full_n_segments(ctx);
     for (int i = 0; i < n_segments; ++i) {
         const char * text = whisper_full_get_segment_text(ctx, i);
@@ -581,7 +581,7 @@ static char * escape_double_quotes_in_csv(const char * str) {
     return escaped;
 }
 
-static void output_csv(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, std::vector<std::vector<float>> pcmf32s) {
+static void output_csv(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, const std::vector<std::vector<float>> & pcmf32s) {
     const int n_segments = whisper_full_n_segments(ctx);
     fout << "start,end,";
     if (params.diarize && pcmf32s.size() == 2)
@@ -606,7 +606,7 @@ static void output_csv(struct whisper_context * ctx, std::ofstream & fout, const
     }
 }
 
-static void output_score(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & /*params*/, std::vector<std::vector<float>> /*pcmf32s*/) {
+static void output_score(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & /*params*/, const std::vector<std::vector<float>> & /*pcmf32s*/) {
     const int n_segments = whisper_full_n_segments(ctx);
     // fprintf(stderr,"segments: %d\n",n_segments);
     for (int i = 0; i < n_segments; ++i) {
@@ -625,7 +625,7 @@ static void output_json(
              struct whisper_context * ctx,
                       std::ofstream & fout,
                const whisper_params & params,
-    std::vector<std::vector<float>>   pcmf32s) {
+    const std::vector<std::vector<float>> & pcmf32s) {
     const bool full = params.output_jsn_full;
     int indent = 0;
 
@@ -813,7 +813,7 @@ static void output_json(
 // karaoke video generation
 // outputs a bash script that uses ffmpeg to generate a video with the subtitles
 // TODO: font parameter adjustments
-static bool output_wts(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, std::vector<std::vector<float>> pcmf32s, const char * fname_inp, float t_sec, const char * fname_out) {
+static bool output_wts(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, const std::vector<std::vector<float>> & pcmf32s, const char * fname_inp, float t_sec, const char * fname_out) {
     static const char * font = params.font_path.c_str();
 
     std::ifstream fin(font);
@@ -934,7 +934,7 @@ static bool output_wts(struct whisper_context * ctx, std::ofstream & fout, const
     return true;
 }
 
-static void output_lrc(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, std::vector<std::vector<float>> pcmf32s) {
+static void output_lrc(struct whisper_context * ctx, std::ofstream & fout, const whisper_params & params, const std::vector<std::vector<float>> & pcmf32s) {
     fout << "[by:whisper.cpp]\n";
 
     const int n_segments = whisper_full_n_segments(ctx);
