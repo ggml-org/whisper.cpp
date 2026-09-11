@@ -27,7 +27,7 @@ a transcription block that is suitable for parsing.
 
 ## Output format
 
-The shape depends on --step, and there is no flag to override it.
+The output format depends on --step, and there is no flag to override it.
 
 Default (--step > 0): one rolling segment, no timestamps, rewritten in
 place with ANSI erase-line escapes. Fine for a terminal, wrong for a pipe.
