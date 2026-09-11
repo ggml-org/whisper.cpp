@@ -320,7 +320,7 @@ jobs:
           name: whisper-blas-bin-${{ matrix.arch }}.zip
           path: whisper-blas-bin-${{ matrix.arch }}.zip
 
-  windows-cublas:
+  windows-cuda:
     runs-on: windows-2022
     needs: determine-tag
     strategy:
@@ -521,14 +521,14 @@ jobs:
       - name: Pack bin artifacts
         shell: pwsh
         run: |
-              Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip"
+              Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-bin-win-cuda-${{ matrix.cuda-toolkit }}-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
         if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
-          path: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
+          name: whisper-bin-win-cuda-${{ matrix.cuda-toolkit }}-${{ matrix.arch }}.zip
+          path: whisper-bin-win-cuda-${{ matrix.cuda-toolkit }}-${{ matrix.arch }}.zip
 
   windows-arm64-cpu:
     runs-on: windows-2022
@@ -866,7 +866,7 @@ jobs:
       - ios-xcode-build
       - windows
       - windows-blas
-      - windows-cublas
+      - windows-cuda
       - windows-arm64-cpu
       - windows-arm64-opencl-adreno
       - windows-arm64-cuda
