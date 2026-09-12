@@ -113,6 +113,14 @@ target_compile_definitions(${ZERO_SAMPLES_TEST} PRIVATE
 add_test(NAME ${ZERO_SAMPLES_TEST} COMMAND ${ZERO_SAMPLES_TEST})
 set_tests_properties(${ZERO_SAMPLES_TEST} PROPERTIES LABELS "tiny;gh")
 
+# out-of-memory during model load must fail gracefully, not crash (#3386)
+set(OOM_GRACEFUL_TEST test-whisper-oom-graceful)
+add_executable(${OOM_GRACEFUL_TEST} ${OOM_GRACEFUL_TEST}.cpp)
+target_include_directories(${OOM_GRACEFUL_TEST} PRIVATE ../include ../ggml/include ../examples)
+target_link_libraries(${OOM_GRACEFUL_TEST} PRIVATE common)
+add_test(NAME ${OOM_GRACEFUL_TEST} COMMAND ${OOM_GRACEFUL_TEST})
+set_tests_properties(${OOM_GRACEFUL_TEST} PROPERTIES LABELS "unit;gh")
+
 # VAD test tests VAD in isolation
 set(VAD_TEST test-vad)
 add_executable(${VAD_TEST} ${VAD_TEST}.cpp)
