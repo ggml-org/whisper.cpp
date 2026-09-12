@@ -6,6 +6,10 @@ on:
     # Rebuild daily rather than on every push because it is expensive
     - cron: '12 4 * * *'
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   push_to_registry:
     name: Push Docker image to Docker Hub
