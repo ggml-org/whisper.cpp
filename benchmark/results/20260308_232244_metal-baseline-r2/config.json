@@ -1,0 +1,62 @@
+{
+  "audio": {
+    "long": {
+      "duration_s": 1800.0,
+      "path": "/Users/shaihi/Downloads/whisper_optimization/benchmark/audio/long.wav",
+      "sha256": "fd586cbcf50f12d8eca4908bd38a3cd71a0c146992923d28259376aa0e6f4367"
+    },
+    "medium": {
+      "duration_s": 300.0,
+      "path": "/Users/shaihi/Downloads/whisper_optimization/benchmark/audio/medium.wav",
+      "sha256": "a918fe0de597908c917d44c4bfc54cfbfad3dbf79a763cdc558b0dbd95fe2aca"
+    },
+    "short": {
+      "duration_s": 30.0,
+      "path": "/Users/shaihi/Downloads/whisper_optimization/benchmark/audio/short.wav",
+      "sha256": "bf6376be2d6749925b9fb53a194a55cd0330329f0425705e5b4e67a0dd1ebd3a"
+    }
+  },
+  "cli": {
+    "args": [
+      "-l",
+      "en",
+      "-tp",
+      "0",
+      "-tpi",
+      "0",
+      "-nf",
+      "-bs",
+      "1",
+      "-bo",
+      "1",
+      "-fa"
+    ],
+    "binary": "/Users/shaihi/Downloads/whisper_optimization/build/bin/whisper-cli",
+    "processors": 1,
+    "threads": 8
+  },
+  "created_at_utc": "2026-03-08T21:22:46.077177+00:00",
+  "environment": {
+    "clang_version": "Apple clang version 17.0.0 (clang-1700.6.4.2)\nTarget: arm64-apple-darwin25.3.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin",
+    "cmake_version": "cmake version 4.2.3\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+    "cpu_brand_string": "Apple M2",
+    "git_commit": "30c5194c9691e4e9a98b3dea9f19727397d3f46e",
+    "git_short_commit": "30c5194",
+    "hw_memsize": "17179869184",
+    "python_version": "3.13.2",
+    "sw_vers": "ProductName:\t\tmacOS\nProductVersion:\t\t26.3.1\nBuildVersion:\t\t25D2128",
+    "uname": "Darwin Shais-MacBook-Air.local 25.3.0 Darwin Kernel Version 25.3.0: Wed Jan 28 20:56:34 PST 2026; root:xnu-12377.91.3~2/RELEASE_ARM64_T8112 arm64",
+    "xcodebuild_version": "Xcode 26.3\nBuild version 17C529"
+  },
+  "model": {
+    "abs_path": "/Users/shaihi/Downloads/whisper_optimization/models/ggml-small.en.bin",
+    "rel_path": "models/ggml-small.en.bin",
+    "sha256": "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d"
+  },
+  "run_policy": {
+    "measured_runs": 5,
+    "sequential_execution": true,
+    "warmup_runs": 1
+  },
+  "variant": "metal-baseline-r2"
+}

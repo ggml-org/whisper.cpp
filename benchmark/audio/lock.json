@@ -1,0 +1,28 @@
+{
+  "audio": {
+    "long": {
+      "channels": 1,
+      "duration_s": 1800.0,
+      "sample_rate_hz": 16000,
+      "sample_width_bytes": 2,
+      "sha256": "fd586cbcf50f12d8eca4908bd38a3cd71a0c146992923d28259376aa0e6f4367"
+    },
+    "medium": {
+      "channels": 1,
+      "duration_s": 300.0,
+      "sample_rate_hz": 16000,
+      "sample_width_bytes": 2,
+      "sha256": "a918fe0de597908c917d44c4bfc54cfbfad3dbf79a763cdc558b0dbd95fe2aca"
+    },
+    "short": {
+      "channels": 1,
+      "duration_s": 30.0,
+      "sample_rate_hz": 16000,
+      "sample_width_bytes": 2,
+      "sha256": "bf6376be2d6749925b9fb53a194a55cd0330329f0425705e5b4e67a0dd1ebd3a"
+    }
+  },
+  "model_rel": "models/ggml-small.en.bin",
+  "model_sha256": "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
+  "schema_version": 1
+}
