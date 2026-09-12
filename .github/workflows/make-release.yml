@@ -1,0 +1,88 @@
+name: Make Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Commit SHA to release (empty = branch HEAD)'
+        required: false
+        default: ''
+        type: string
+      dry_run:
+        description: 'Dry run - validate without creating the tag'
+        required: true
+        type: boolean
+        default: true
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+permissions:
+  contents: write
+
+jobs:
+  make-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ inputs.commit != '' && inputs.commit || github.ref_name }}
+          fetch-depth: 0
+          ssh-key: ${{ secrets.DEPLOY_KEY_RELEASE }}
+
+      - name: Run release checks
+        id: checks
+        run: bash scripts/make-release-checks.sh ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_BRANCH: ${{ github.ref_name }}
+
+      - name: Create release tag
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        run: |
+          VERSION="${{ steps.checks.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${VERSION}" -m "Release ${VERSION}"
+          git push origin "${VERSION}"
+          echo "Created and pushed tag ${VERSION}"
+
+      - name: Generate release description
+        id: desc
+        run: bash scripts/make-release-desc.sh "${{ steps.checks.outputs.version }}"
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - name: Create release
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        uses: ggml-org/action-create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tag_name: ${{ steps.checks.outputs.version }}
+          prerelease: false
+          # TODO: enrich the body of the release with more information
+          body: |
+            ## Overview
+
+            New version has been released.
+
+            ${{ steps.desc.outputs.nightly }}
+            **More info:** [dist : releases and versioning of ggml-org projects](https://github.com/ggml-org/ggml/discussions/1579)
+
+            ## ${{ steps.desc.outputs.changelog_title }}
+
+            ${{ steps.desc.outputs.changelog }}
+
+      - name: Dry run summary
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        run: |
+          if [[ "${{ steps.checks.outputs.checks_passed }}" == "true" ]]; then
+            echo "Dry run complete - all checks passed."
+            echo "Would have created tag: ${{ steps.checks.outputs.version }}"
+          else
+            echo "::error::Dry run found release check failures. A release tag would not be created."
+            exit 1
+          fi

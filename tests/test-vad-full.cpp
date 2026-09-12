@@ -13,6 +13,8 @@
 #include <cassert>
 
 int main() {
+    ggml_backend_load_all();
+
     std::string whisper_model_path = WHISPER_MODEL_PATH;
     std::string vad_model_path     = VAD_MODEL_PATH;
     std::string sample_path        = SAMPLE_PATH;
@@ -26,6 +28,11 @@ int main() {
     struct whisper_context * wctx = whisper_init_from_file_with_params(
             whisper_model_path.c_str(),
             cparams);
+
+    if (!wctx) {
+        fprintf(stderr, "failed to load model '%s'\n", whisper_model_path.c_str());
+        return 1;
+    }
 
     struct whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
     wparams.vad            = true;

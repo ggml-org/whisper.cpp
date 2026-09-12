@@ -50,6 +50,15 @@ class TestWhisper < TestBase
     end
   end
 
+  def test_free
+    whisper = Whisper::Context.new("base.en")
+    whisper.free
+
+    assert_raise RuntimeError do
+      whisper.model_type
+    end
+  end
+
   private
 
   def without_log_callback

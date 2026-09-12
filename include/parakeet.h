@@ -176,7 +176,8 @@ extern "C" {
     // Token logits obtained from the last call to parakeet_full/parakeet_chunk
     // The logits for the last token are stored in the last row
     // Rows: n_tokens
-    // Cols: n_vocab
+    // Cols: n_vocab + 1 token logits (the blank token is at index n_vocab),
+    //       followed by n_tdt_durations duration logits
     PARAKEET_API float * parakeet_get_logits           (struct parakeet_context * ctx);
     PARAKEET_API float * parakeet_get_logits_from_state(struct parakeet_state * state);
 

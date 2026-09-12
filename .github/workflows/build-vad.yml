@@ -41,7 +41,7 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          cmake -B build -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake -B build -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DGGML_NATIVE=OFF
           cmake --build build --config Release
 
       - name: Test

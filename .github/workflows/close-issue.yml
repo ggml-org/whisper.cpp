@@ -1,0 +1,28 @@
+name: Mark inactive issues stale
+on:
+  schedule:
+    - cron: "42 0 * * *"
+
+# Fine-grant permission
+# https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token
+permissions:
+  issues: write
+
+jobs:
+  mark-issues:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/stale@v10
+        with:
+          exempt-issue-labels: "refactor,help wanted,good first issue,research,bug,roadmap"
+          days-before-issue-stale: 30
+          days-before-issue-close: -1
+          stale-issue-label: "stale"
+          stale-issue-message: "This issue was marked as stale because it has been inactive for 30 days."
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          operations-per-run: 10000
+          repo-token: ${{ secrets.GITHUB_TOKEN }}

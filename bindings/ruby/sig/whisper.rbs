@@ -159,6 +159,9 @@ module Whisper
                      | (Whisper::Params, _Samples, ?Integer n_samples) -> self
                      | (Whisper::Params, _Samples, ?Integer? n_samples, Integer n_processors) -> self
 
+    # Free context and unload the model.
+    def free: () -> void
+
     class Params
       def self.new: (
         ?use_gpu: boolish,
@@ -708,6 +711,8 @@ module Whisper
       def each_segment: { (Segment) -> void } -> void
                       | () -> Enumerator[Segment]
 
+      def free: () -> void
+
       class Params
         def self.new: (?use_gpu: boolish, ?gpu_device: Integer) -> instance
         def use_gpu: () -> boolish
@@ -1000,6 +1005,7 @@ module Whisper
       def segments_from_samples: (Params, Array[Float] samples, ?Integer n_samples) -> Segments
                                | (Params, _Samples, ?Integer n_samples) -> Segments
       def detect: (path wav_file_path, Params) -> Segments
+      def free: () -> void
     end
 
     class Segments

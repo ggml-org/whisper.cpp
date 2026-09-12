@@ -202,7 +202,7 @@ whisper.transcribe("path/to/audio.wav", params, n_processors: Etc.nprocessors)
 
 Note that transcription occasionally might be low accuracy when it works in parallel.
 
-If n_processors is greater than 1, you cannot set any callbacks including new_segment_callback, progress_callback, encoder_begin_callback, abort_callback, and log_callback set by Whisper.log_set.
+If n_processors is greater than 1, you cannot set some callbacks including encoder_begin_callback, abort_callback. Also, progress_callback is ignored even if it's set.
 
 ### Segments ###
 

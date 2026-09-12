@@ -1,10 +1,14 @@
 name: Release
 
+# Builds dev releases (b* tags) when manually dispatched with create_release: true.
+# Run this as a verification build before making a release (see make-release.yml).
+# Pushing a v* tag does not trigger this workflow; releases are made via make-release.yml.
+
 on:
   workflow_dispatch:
     inputs:
       create_release:
-        description: 'Create new release'
+        description: 'Create new developer release'
         required: true
         type: boolean
       pre_release_tag:
@@ -12,13 +16,10 @@ on:
         required: false
         type: string
 
-  push:
-    tags:
-      - 'v*'
-
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  WHISPER_BUILD_IS_DEV: OFF
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -26,6 +27,8 @@ concurrency:
 
 permissions:
   contents: write  # for creating release
+  id-token: write
+  attestations: write
 
 jobs:
   determine-tag:
@@ -55,18 +58,10 @@ jobs:
           echo "BRANCH_NAME: ${{ env.BRANCH_NAME }}"
           echo "CUSTOM_TAG: $CUSTOM_TAG"
 
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            echo "Using pushed tag name"
-            TAG_NAME="${{ github.ref_name }}"
-            SHOULD_RELEASE="true"
-          elif [[ -n "$CUSTOM_TAG" ]]; then
+          if [[ -n "$CUSTOM_TAG" ]]; then
             echo "Using custom tag"
             TAG_NAME="${CUSTOM_TAG}"
             SHOULD_RELEASE="true"
-          elif [[ "${{ github.event.inputs.create_release }}" == "true" ]]; then
-            echo "Manual release requested"
-            SHOULD_RELEASE="true"
-            TAG_NAME="b${BUILD_NUMBER}"
           elif [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
             echo "Using master branch format"
             TAG_NAME="b${BUILD_NUMBER}"
@@ -76,6 +71,11 @@ jobs:
             SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
             TAG_NAME="${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}"
             SHOULD_RELEASE="false"
+          fi
+
+          if [[ "${{ github.event.inputs.create_release }}" == "true" ]]; then
+            echo "Manual release requested"
+            SHOULD_RELEASE="true"
           fi
 
           echo "Final tag name: $TAG_NAME"
@@ -119,6 +119,7 @@ jobs:
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DGGML_BACKEND_DL=ON \
             -DGGML_NATIVE=OFF \
+            -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }} \
             ${{ matrix.build == 'x64' && '-DGGML_CPU_ALL_VARIANTS=ON' || '-DGGML_CPU_ARM_ARCH=armv8-a' }}
           cmake --build build --config Release -j $(nproc)
 
@@ -175,6 +176,7 @@ jobs:
           -DBUILD_SHARED_LIBS=ON
           -DWHISPER_SDL2=${{ matrix.sdl2 }}
           -DGGML_NATIVE=OFF
+          -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }}
           ${{ matrix.arch == 'x64' && '-DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON' || '-DGGML_BMI2=OFF' }}
 
       - name: Build
@@ -224,7 +226,7 @@ jobs:
               Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-bin-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
-        if: matrix.sdl2 == 'ON' && ${{ needs.determine-tag.outputs.should_release }}
+        if: ${{ matrix.sdl2 == 'ON' && needs.determine-tag.outputs.should_release == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: whisper-bin-${{ matrix.arch }}.zip
@@ -290,6 +292,7 @@ jobs:
           -DBLAS_INCLUDE_DIRS="$env:GITHUB_WORKSPACE/OpenBLAS-${{matrix.blasver}}/include"
           -DWHISPER_SDL2=${{ matrix.sdl2 }}
           -DGGML_NATIVE=OFF
+          -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }}
           ${{ matrix.arch == 'x64' && '-DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON' || '-DGGML_BMI2=OFF' }}
 
       - name: Build
@@ -311,13 +314,13 @@ jobs:
               Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-blas-bin-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
-        if: matrix.blas == 'ON' && matrix.sdl2 == 'ON' && ${{ needs.determine-tag.outputs.should_release }}
+        if: ${{ matrix.blas == 'ON' && matrix.sdl2 == 'ON' && needs.determine-tag.outputs.should_release == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: whisper-blas-bin-${{ matrix.arch }}.zip
           path: whisper-blas-bin-${{ matrix.arch }}.zip
 
-  windows-cublas:
+  windows-cuda:
     runs-on: windows-2022
     needs: determine-tag
     strategy:
@@ -497,6 +500,7 @@ jobs:
             -DCMAKE_CUDA_FLAGS="%CUDA_FLAGS%" ^
             -DGGML_BACKEND_DL=ON ^
             -DGGML_NATIVE=OFF ^
+            -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }} ^
             -DGGML_CPU_ALL_VARIANTS=ON
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config ${{ matrix.build }} -j %NUMBER_OF_PROCESSORS%
@@ -517,14 +521,281 @@ jobs:
       - name: Pack bin artifacts
         shell: pwsh
         run: |
-              Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip"
+              Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-bin-win-cuda-${{ matrix.cuda-toolkit }}-${{ matrix.arch }}.zip"
 
       - name: Upload binaries
-        if: ${{ needs.determine-tag.outputs.should_release }}
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
-          path: whisper-cublas-${{ matrix.cuda-toolkit }}-bin-${{ matrix.arch }}.zip
+          name: whisper-bin-win-cuda-${{ matrix.cuda-toolkit }}-${{ matrix.arch }}.zip
+          path: whisper-bin-win-cuda-${{ matrix.cuda-toolkit }}-${{ matrix.arch }}.zip
+
+  windows-arm64-cpu:
+    runs-on: windows-2022
+    needs: determine-tag
+
+    strategy:
+      matrix:
+        build: [Release]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Install Ninja
+        run: |
+          choco install ninja
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-windows-arm64-cpu
+          evict-old-files: 1d
+
+      - name: Configure and Build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" amd64_arm64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake ^
+            -DBUILD_SHARED_LIBS=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_BACKEND_DL=ON ^
+            -DWHISPER_SDL2=OFF ^
+            -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }}
+          cmake --build build --config ${{ matrix.build }}
+
+      - name: Copy OpenMP runtime DLL
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstallPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+          if (-not $vsInstallPath) {
+            Write-Error "Could not find a Visual Studio install with the ARM64 MSVC toolset"
+            exit 1
+          }
+          $redistVersion = Get-ChildItem "$vsInstallPath\VC\Redist\MSVC" -Directory |
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+$' } |
+            Sort-Object Name -Descending | Select-Object -First 1
+          $ompDll = "$vsInstallPath\VC\Redist\MSVC\$($redistVersion.Name)\debug_nonredist\arm64\Microsoft.VC143.OpenMP.LLVM\libomp140.aarch64.dll"
+          if (-not (Test-Path $ompDll)) {
+            Write-Error "libomp140.aarch64.dll not found at $ompDll"
+            exit 1
+          }
+          Copy-Item $ompDll "build\bin\${{ matrix.build }}\" -Force
+
+      - name: Pack bin artifacts
+        shell: pwsh
+        run: |
+              Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-bin-win-cpu-arm64.zip"
+
+      - name: Upload binaries
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: whisper-bin-win-cpu-arm64.zip
+          path: whisper-bin-win-cpu-arm64.zip
+
+  windows-arm64-opencl-adreno:
+    runs-on: windows-2022
+    needs: determine-tag
+
+    strategy:
+      matrix:
+        build: [Release]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Install Ninja
+        run: |
+          choco install ninja
+
+      - name: Install OpenCL Headers and Libs
+        run: |
+          git clone https://github.com/KhronosGroup/OpenCL-Headers
+          cd OpenCL-Headers
+          cmake -B build `
+            -DBUILD_TESTING=OFF `
+            -DOPENCL_HEADERS_BUILD_TESTING=OFF `
+            -DOPENCL_HEADERS_BUILD_CXX_TESTS=OFF `
+            -DCMAKE_INSTALL_PREFIX="$env:RUNNER_TEMP/opencl-arm64-release"
+          cmake --build build --target install
+          cd ..
+          git clone https://github.com/KhronosGroup/OpenCL-ICD-Loader
+          cd OpenCL-ICD-Loader
+          cmake -B build-arm64-release `
+            -A arm64 `
+            -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" `
+            -DCMAKE_INSTALL_PREFIX="$env:RUNNER_TEMP/opencl-arm64-release"
+          cmake --build build-arm64-release --target install --config release
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-windows-arm64-opencl-adreno
+          evict-old-files: 1d
+
+      - name: Configure and Build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" amd64_arm64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake ^
+            -DCMAKE_PREFIX_PATH="%RUNNER_TEMP%/opencl-arm64-release" ^
+            -DBUILD_SHARED_LIBS=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_OPENCL=ON ^
+            -DGGML_OPENCL_USE_ADRENO_KERNELS=ON ^
+            -DWHISPER_SDL2=OFF ^
+            -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }}
+          cmake --build build --config ${{ matrix.build }}
+
+      - name: Copy OpenMP runtime DLL
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstallPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+          if (-not $vsInstallPath) {
+            Write-Error "Could not find a Visual Studio install with the ARM64 MSVC toolset"
+            exit 1
+          }
+          $redistVersion = Get-ChildItem "$vsInstallPath\VC\Redist\MSVC" -Directory |
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+$' } |
+            Sort-Object Name -Descending | Select-Object -First 1
+          $ompDll = "$vsInstallPath\VC\Redist\MSVC\$($redistVersion.Name)\debug_nonredist\arm64\Microsoft.VC143.OpenMP.LLVM\libomp140.aarch64.dll"
+          if (-not (Test-Path $ompDll)) {
+            Write-Error "libomp140.aarch64.dll not found at $ompDll"
+            exit 1
+          }
+          Copy-Item $ompDll "build\bin\${{ matrix.build }}\" -Force
+
+      - name: Pack bin artifacts
+        shell: pwsh
+        run: |
+              Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-bin-win-opencl-adreno-arm64.zip"
+
+      - name: Upload binaries
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: whisper-bin-win-opencl-adreno-arm64.zip
+          path: whisper-bin-win-opencl-adreno-arm64.zip
+
+  windows-arm64-cuda:
+    runs-on: windows-2022
+    needs: determine-tag
+
+    strategy:
+      matrix:
+        build: [Release]
+        cuda-toolkit: ['13.4']
+
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Install Ninja
+        run: |
+          choco install ninja
+
+      - name: Install ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: ${{ github.job }}-${{ matrix.cuda-toolkit }}-${{ matrix.build }}
+          evict-old-files: 5d
+
+      # nvcc cross-compiles for ARM64 from this x64 runner using the ARM64-targeting
+      # host cl.exe; the CUDA runtime/cublas libs still need their own ARM64 archives
+      # since the standard x64 CUDA packages don't ship ARM64 binaries.
+      - name: Install Cuda Toolkit 13.4 (ARM64 target)
+        run: |
+          $CUDA_TOOLKIT_DIR = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4"
+          $CUDA_DOWNLOAD = "https://developer.download.nvidia.com/compute/cuda/redist"
+
+          # Components versions
+          $CCCL_VER   = "13.3.4.2.1"
+          $CRT_VER    = "13.4.59"
+          $NVCC_VER   = "13.4.59"
+          $NVVM_VER   = "13.4.59"
+          $CUDART_VER = "13.4.49"
+          $CUBLAS_VER = "13.7.0.27"
+
+          mkdir -p $CUDA_TOOLKIT_DIR
+          choco install unzip -y
+
+          curl -O "$CUDA_DOWNLOAD/cccl/windows-x86_64/cccl-windows-x86_64-${CCCL_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/cuda_crt/windows-x86_64/cuda_crt-windows-x86_64-${CRT_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-${NVCC_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/libnvvm/windows-x86_64/libnvvm-windows-x86_64-${NVVM_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/cuda_cudart/windows-arm64/cuda_cudart-windows-arm64-${CUDART_VER}-archive.zip"
+          curl -O "$CUDA_DOWNLOAD/libcublas/windows-arm64/libcublas-windows-arm64-${CUBLAS_VER}-archive.zip"
+
+          unzip '*.zip' -d $CUDA_TOOLKIT_DIR
+
+          xcopy "$CUDA_TOOLKIT_DIR\cccl-windows-x86_64-${CCCL_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_crt-windows-x86_64-${CRT_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_nvcc-windows-x86_64-${NVCC_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\libnvvm-windows-x86_64-${NVVM_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\cuda_cudart-windows-arm64-${CUDART_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+          xcopy "$CUDA_TOOLKIT_DIR\libcublas-windows-arm64-${CUBLAS_VER}-archive\*" "$CUDA_TOOLKIT_DIR" /E /I /H /Y
+
+          echo "$CUDA_TOOLKIT_DIR\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "CUDA_PATH=$CUDA_TOOLKIT_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Configure and Build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" amd64_arm64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm-cuda.cmake ^
+            -DCMAKE_BUILD_TYPE=${{ matrix.build }} ^
+            -DGGML_CUDA=ON ^
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DWHISPER_SDL2=OFF ^
+            -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }}
+          cmake --build build --config ${{ matrix.build }}
+
+      - name: Copy CUDA runtime DLLs
+        run: |
+          Get-ChildItem "$env:CUDA_PATH\bin\arm64" -Filter "cudart64_*.dll" | Copy-Item -Destination "build/bin/${{ matrix.build }}"
+          Get-ChildItem "$env:CUDA_PATH\bin\arm64" -Filter "cublas64_*.dll" | Copy-Item -Destination "build/bin/${{ matrix.build }}"
+          Get-ChildItem "$env:CUDA_PATH\bin\arm64" -Filter "cublasLt64_*.dll" | Copy-Item -Destination "build/bin/${{ matrix.build }}"
+
+      - name: Copy OpenMP runtime DLL
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstallPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+          if (-not $vsInstallPath) {
+            Write-Error "Could not find a Visual Studio install with the ARM64 MSVC toolset"
+            exit 1
+          }
+          $redistVersion = Get-ChildItem "$vsInstallPath\VC\Redist\MSVC" -Directory |
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+$' } |
+            Sort-Object Name -Descending | Select-Object -First 1
+          $ompDll = "$vsInstallPath\VC\Redist\MSVC\$($redistVersion.Name)\debug_nonredist\arm64\Microsoft.VC143.OpenMP.LLVM\libomp140.aarch64.dll"
+          if (-not (Test-Path $ompDll)) {
+            Write-Error "libomp140.aarch64.dll not found at $ompDll"
+            exit 1
+          }
+          Copy-Item $ompDll "build\bin\${{ matrix.build }}\" -Force
+
+      - name: Pack bin artifacts
+        shell: pwsh
+        run: |
+              Compress-Archive -Path "build/bin/${{ matrix.build }}" -DestinationPath "whisper-bin-win-cuda-${{ matrix.cuda-toolkit }}-arm64.zip"
+
+      - name: Upload binaries
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: whisper-bin-win-cuda-${{ matrix.cuda-toolkit }}-arm64.zip
+          path: whisper-bin-win-cuda-${{ matrix.cuda-toolkit }}-arm64.zip
 
   ios-xcode-build:
     runs-on: macos-latest
@@ -552,6 +823,7 @@ jobs:
           cmake -G Xcode .. \
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DWHISPER_BUILD_IS_DEV=${{ env.WHISPER_BUILD_IS_DEV }} \
             -DWHISPER_BUILD_EXAMPLES=OFF \
             -DWHISPER_BUILD_TESTS=OFF \
             -DWHISPER_BUILD_SERVER=OFF \
@@ -577,14 +849,14 @@ jobs:
           zip --symlinks -r whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip build-apple/whisper.xcframework
 
       - name: Upload artifacts
-        if: ${{ needs.determine-tag.outputs.should_release }}
+        if: ${{ needs.determine-tag.outputs.should_release == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           path: whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip
           name: whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip
 
   release:
-    if: ${{ github.event.inputs.create_release == 'true' || github.event.inputs.pre_release_tag != '' || startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ github.event.inputs.create_release == 'true' || github.event.inputs.pre_release_tag != '' }}
 
     runs-on: ubuntu-latest
 
@@ -594,7 +866,10 @@ jobs:
       - ios-xcode-build
       - windows
       - windows-blas
-      - windows-cublas
+      - windows-cuda
+      - windows-arm64-cpu
+      - windows-arm64-opencl-adreno
+      - windows-arm64-cuda
 
     steps:
       - name: Clone
@@ -602,12 +877,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
-
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: release
-          evict-old-files: 1d
+          ssh-key: ${{ secrets.DEPLOY_KEY_RELEASE }}
 
       # Downloads all the artifacts from the previous jobs
       - name: Download artifacts
@@ -615,10 +885,29 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           path: ./artifact
+          merge-multiple: true
 
       - name: Move artifacts
         id: move_artifacts
-        run: mkdir -p ./artifact/release && mv ./artifact/*/*.zip ./artifact/release && mv ./artifact/*/*.tar.gz ./artifact/release 2>/dev/null || true
+        run: |
+          mkdir -p ./release
+          mv -v ./artifact/*.zip ./release 2>/dev/null || true
+          mv -v ./artifact/*.tar.gz ./release 2>/dev/null || true
+
+      - name: Attest release artifacts
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: 'release/*'
+
+      - name: Create and push git tag
+        run: |
+          TAG="${{ needs.determine-tag.outputs.tag_name }}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists, skipping creation"
+          else
+            git tag "${TAG}"
+            git push origin "${TAG}"
+          fi
 
       - name: Create release
         id: create_release
@@ -627,8 +916,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ needs.determine-tag.outputs.tag_name }}
-          prerelease: ${{ github.event.inputs.pre_release_tag != '' }}
-          draft: true
+          prerelease: true
 
       - name: Upload release
         id: upload_release
@@ -639,7 +927,7 @@ jobs:
             const path = require('path');
             const fs = require('fs');
             const release_id = '${{ steps.create_release.outputs.id }}';
-            for (let file of await fs.readdirSync('./artifact/release')) {
+            for (let file of await fs.readdirSync('./release')) {
               if (path.extname(file) === '.zip' || file.endsWith('.tar.gz')) {
                 console.log('uploadReleaseAsset', file);
                 await github.repos.uploadReleaseAsset({
@@ -647,7 +935,7 @@ jobs:
                   repo: context.repo.repo,
                   release_id: release_id,
                   name: file,
-                  data: await fs.readFileSync(`./artifact/release/${file}`)
+                  data: await fs.readFileSync(`./release/${file}`)
                 });
               }
             }

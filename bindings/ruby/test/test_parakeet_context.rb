@@ -113,4 +113,11 @@ class TestParakeetContext < TestBase
       @parakeet.transcribe "nothing", @params
     end
   end
+
+  def test_free
+    @parakeet.free
+    assert_raise RuntimeError do
+      @parakeet.transcribe AUDIO, @params
+    end
+  end
 end

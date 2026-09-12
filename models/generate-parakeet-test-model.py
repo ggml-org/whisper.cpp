@@ -86,7 +86,8 @@ def generate(output_path, n_fft_override=None):
 
         fout.write(struct.pack("i", n_mels))
         fout.write(struct.pack("i", n_freqs))
-        f32(n_mels, n_freqs).tofile(fout)
+        # Mel filter must be non-negative.
+        np.abs(f32(n_mels, n_freqs)).tofile(fout)
 
         fout.write(struct.pack("i", n_fft))
         f32(n_fft).tofile(fout)

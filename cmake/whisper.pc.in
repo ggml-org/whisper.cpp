@@ -5,6 +5,6 @@ includedir=@CMAKE_INSTALL_FULL_INCLUDEDIR@
 
 Name: whisper
 Description: Port of OpenAI's Whisper model in C/C++
-Version: @PROJECT_VERSION@
+Version: @WHISPER_VERSION@
 Libs: -L${libdir} -lggml  -lggml-base -lwhisper
 Cflags: -I${includedir}

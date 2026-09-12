@@ -554,8 +554,6 @@ void get_req_parameters(const Request & req, whisper_params & params)
     if (req.has_file("token_timestamps"))
     {
         params.token_timestamps = parse_str_to_bool(req.get_file_value("token_timestamps").content);
-    } else {
-        params.token_timestamps = !params.no_timestamps;
     }
     if (req.has_file("language"))
     {
@@ -624,6 +622,17 @@ void get_req_parameters(const Request & req, whisper_params & params)
     if (req.has_file("no_language_probabilities"))
     {
         params.no_language_probabilities = parse_str_to_bool(req.get_file_value("no_language_probabilities").content);
+    }
+
+    // resolved last, since it depends on response_format / max_len / split_on_word above.
+    // token timestamps also drive the max_len segment wrapping in whisper_full(), so turning
+    // them on unconditionally makes the max_len fallback below wrap every response at 60
+    // characters - on a token boundary, i.e. mid-word. Only default them on when the response
+    // actually carries per-token data (verbose_json) or wrapping was asked for.
+    if (!req.has_file("token_timestamps"))
+    {
+        params.token_timestamps = !params.no_timestamps &&
+            (params.response_format == vjson_format || params.max_len > 0 || params.split_on_word);
     }
 }
 
@@ -1156,6 +1165,9 @@ int main(int argc, char ** argv) {
             json jres = json{
                 {"text", results}
             };
+            if (params.detect_language) {
+                jres["language"] = whisper_lang_str_full(whisper_full_lang_id(ctx));
+            }
             res.set_content(jres.dump(-1, ' ', false, json::error_handler_t::replace),
                             "application/json");
         }
