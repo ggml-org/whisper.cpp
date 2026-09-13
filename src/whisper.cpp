@@ -4920,6 +4920,11 @@ struct whisper_vad_context * whisper_vad_init_with_params(
     {
         read_safe(loader, hparams.n_encoder_layers);
 
+        if (hparams.n_encoder_layers != 4) {
+            WHISPER_LOG_ERROR("%s: invalid n_encoder_layers %d in VAD model file (expected 4)\n", __func__, hparams.n_encoder_layers);
+            return nullptr;
+        }
+
         hparams.encoder_in_channels = new int32_t[hparams.n_encoder_layers];
         hparams.encoder_out_channels = new int32_t[hparams.n_encoder_layers];
         hparams.kernel_sizes = new int32_t[hparams.n_encoder_layers];
