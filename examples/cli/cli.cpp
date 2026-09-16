@@ -760,19 +760,22 @@ static void output_json(
                         struct merged_token {
                             std::string        text;
                             whisper_token_data data;
+                            int64_t            t0;
                             int64_t            t1;
                         };
                         std::vector<merged_token> merged;
                         merged.reserve(n);
                         for (int j = 0; j < n; ) {
                             auto tok = whisper_full_get_token_data(ctx, i, j);
-                            merged_token m{ whisper_token_to_str(ctx, tok.id), tok, tok.t1 };
+                            merged_token m{ whisper_token_to_str(ctx, tok.id), tok,
+                                            tok.t0 > -1 ? whisper_full_get_token_t0(ctx, i, j) : -1,
+                                            tok.t1 > -1 ? whisper_full_get_token_t1(ctx, i, j) : -1 };
                             ++j;
                             while (j < n && utf8_trailing_bytes_needed(m.text) > 0) {
                                 auto tok_next = whisper_full_get_token_data(ctx, i, j);
                                 m.text += whisper_token_to_str(ctx, tok_next.id);
                                 if (tok_next.t1 > -1) {
-                                    m.t1 = tok_next.t1;
+                                    m.t1 = whisper_full_get_token_t1(ctx, i, j);
                                 }
                                 ++j;
                             }
@@ -784,9 +787,9 @@ static void output_json(
                             const auto & mt = merged[j];
                             start_obj(nullptr);
                                 value_s("text", mt.text.c_str(), false);
-                                if (mt.data.t0 > -1 && mt.t1 > -1) {
+                                if (mt.t0 > -1 && mt.t1 > -1) {
                                     // If we have per-token timestamps, write them out
-                                    times_o(mt.data.t0, mt.t1, false);
+                                    times_o(mt.t0, mt.t1, false);
                                 }
                                 value_i("id", mt.data.id, false);
                                 value_f("p", mt.data.p, false);
