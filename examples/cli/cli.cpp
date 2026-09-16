@@ -746,6 +746,7 @@ static void output_json(
 
                 start_obj(nullptr);
                     times_o(t0, t1, false);
+                    value_f("no_speech_prob", whisper_full_get_segment_no_speech_prob(ctx, i), false);
                     value_s("text", text, !params.diarize && !params.tinydiarize && !full);
 
                     if (full) {
