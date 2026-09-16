@@ -968,8 +968,6 @@ static void output_lrc(struct whisper_context * ctx, std::ofstream & fout, const
 static void cb_log_disable(enum ggml_log_level , const char * , void * ) { }
 
 int main(int argc, char ** argv) {
-    ggml_backend_load_all();
-
 #if defined(_WIN32)
     // Set the console output code page to UTF-8, while command line arguments
     // are still encoded in the system's code page. In this way, we can print
@@ -1047,6 +1045,14 @@ int main(int argc, char ** argv) {
     if (params.no_prints) {
         whisper_log_set(cb_log_disable, NULL);
     }
+
+    if (!is_file_exist(params.model.c_str())) {
+        fprintf(stderr, "error: model file not found '%s'\n", params.model.c_str());
+        whisper_print_usage(argc, argv, params);
+        return 3;
+    }
+
+    ggml_backend_load_all();
 
     // whisper init
     struct whisper_context_params cparams = whisper_context_default_params();
