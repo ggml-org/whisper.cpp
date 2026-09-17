@@ -68,7 +68,7 @@ First clone the repository:
 git clone https://github.com/ggml-org/whisper.cpp.git
 ```
 
-Navigate into the directory:
+Then Navigate to the directory:
 
 ```
 cd whisper.cpp
