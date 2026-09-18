@@ -1030,6 +1030,12 @@ int main(int argc, char ** argv) {
         return 2;
     }
 
+    if (!is_file_exist(params.model.c_str())) {
+        fprintf(stderr, "error: model file not found '%s'\n", params.model.c_str());
+        whisper_print_usage(argc, argv, params);
+        return 3;
+    }
+
     if (params.language != "auto" && whisper_lang_id(params.language.c_str()) == -1) {
         fprintf(stderr, "error: unknown language '%s'\n", params.language.c_str());
         whisper_print_usage(argc, argv, params);
@@ -1044,12 +1050,6 @@ int main(int argc, char ** argv) {
 
     if (params.no_prints) {
         whisper_log_set(cb_log_disable, NULL);
-    }
-
-    if (!is_file_exist(params.model.c_str())) {
-        fprintf(stderr, "error: model file not found '%s'\n", params.model.c_str());
-        whisper_print_usage(argc, argv, params);
-        return 3;
     }
 
     ggml_backend_load_all();
