@@ -234,10 +234,9 @@ For more information about the Core ML implementation please refer to PR [#566](
 
 ## ANEForge support
 
-On Apple Silicon the Encoder can also run on the Apple Neural Engine via
-[ANEForge](https://github.com/sbryngelson/ANEForge), which dispatches to the ANE directly instead of
-through Core ML. It is about 2x faster than the Core ML encoder from `tiny` to `medium`
-([benchmarks](https://github.com/sbryngelson/ANEForge/tree/main/bench/whisper_encoder_ane)). The
+On Apple Silicon, the Encoder can also run on the Apple Neural Engine via [ANEForge](https://github.com/sbryngelson/ANEForge), which dispatches to the ANE directly instead of
+through Core ML.
+It is about 2x faster than the Core ML encoder from `tiny` to `medium` ([benchmarks](https://github.com/sbryngelson/ANEForge/tree/main/bench/whisper_encoder_ane)). The
 Decoder is unchanged, and no build flag is needed.
 
 Compile the encoder into a bundle (tied to the machine and OS build that produced it):
@@ -257,7 +256,7 @@ export ANEFORGE_DYLIB=$PWD/aneforge/_lib/libane_e5rt_dispatch.dylib
 ./build/bin/whisper-cli -m models/ggml-base.bin -f samples/jfk.wav
 ```
 
-For more information about the ANEForge implementation please refer to PR [#3905](https://github.com/ggml-org/whisper.cpp/pull/3905).
+For more information about the ANEForge implementation, see PR [#3905](https://github.com/ggml-org/whisper.cpp/pull/3905).
 
 ## OpenVINO support
 
