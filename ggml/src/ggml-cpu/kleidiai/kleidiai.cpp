@@ -48,7 +48,7 @@
 
 #include "kernels.h"
 
-#include "kai_common.h"
+#include "kai/kai_common.h"
 
 #define GGML_COMMON_DECL_CPP
 #include "ggml-common.h"
@@ -316,6 +316,7 @@ static void init_kleidiai_context(void) {
 
         ctx.features  = (runtime_feat.has_dotprod  ? CPU_FEATURE_DOTPROD : CPU_FEATURE_NONE) |
                         (runtime_feat.has_i8mm     ? CPU_FEATURE_I8MM    : CPU_FEATURE_NONE) |
+                        (runtime_feat.has_fp16     ? CPU_FEATURE_FP16    : CPU_FEATURE_NONE) |
                         (runtime_feat.sve_cnt == QK8_0 ? CPU_FEATURE_SVE : CPU_FEATURE_NONE);
 
         if (env_threads) {
@@ -1822,7 +1823,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
         const bool src0_is_kleidiai =
             op->src[0]->buffer &&
             (ggml_n_dims(op->src[0]) == 2) &&
-            op->src[0]->buffer->buft == ggml_backend_cpu_kleidiai_buffer_type() &&
+            op->src[0]->buffer->buft->context == this &&
             slot_total > 0;
 
         if ((op->op == GGML_OP_MUL_MAT || op->op == GGML_OP_GET_ROWS) &&
@@ -1861,7 +1862,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
 
     ggml::cpu::tensor_traits * get_tensor_traits(const struct ggml_tensor * op) override {
         if (op->op == GGML_OP_MUL_MAT || op->op == GGML_OP_GET_ROWS) {
-            if (op->src[0]->buffer && op->src[0]->buffer->buft == ggml_backend_cpu_kleidiai_buffer_type()) {
+            if (op->src[0]->buffer && op->src[0]->buffer->buft->context == this) {
                 return (ggml::cpu::tensor_traits *) op->src[0]->extra;
             } else {
                 // KleidiAI only has kernels for Q4_0 and Q8_0. For a quantized weight of any

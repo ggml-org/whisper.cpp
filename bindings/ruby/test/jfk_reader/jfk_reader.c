@@ -69,7 +69,7 @@ jfk_reader_get_memory_view(const VALUE obj, rb_memory_view_t *view, int flags)
   view->data = (void *)args.data;
   view->byte_size = sizeof(float) * n_samples;
   view->readonly = true;
-  view->format = "f";
+  view->format = "e";
   view->item_size = sizeof(float);
   view->item_desc.components = NULL;
   view->item_desc.length = 0;

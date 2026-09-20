@@ -111,6 +111,8 @@ static int test_valid_model() {
 }
 
 int main(){
+    ggml_backend_load_all();
+
     if(test_valid_model() != 0){
         return 1;
     }

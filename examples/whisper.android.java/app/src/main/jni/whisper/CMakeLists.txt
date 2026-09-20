@@ -18,6 +18,7 @@ message(STATUS " Whisper version: ${WHISPER_VERSION}")
 
 set(SOURCE_FILES
     ${WHISPER_LIB_DIR}/src/whisper.cpp
+    ${WHISPER_LIB_DIR}/src/aneforge/whisper-aneforge.cpp
     ${CMAKE_SOURCE_DIR}/jni.c
     )
 

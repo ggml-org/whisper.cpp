@@ -270,6 +270,17 @@ ruby_whisper_parakeet_context_full(int argc, VALUE *argv, VALUE self)
 }
 
 static VALUE
+ruby_whisper_parakeet_free(VALUE self)
+{
+  ruby_whisper_parakeet_context *rwpc;
+  GetParakeetContext(self, rwpc);
+  parakeet_free(rwpc->context);
+  rwpc->context = NULL;
+
+  return Qnil;
+}
+
+static VALUE
 ruby_whisper_parakeet_context_get_model(VALUE self)
 {
   return ruby_whisper_parakeet_model_s_new(self);
@@ -289,6 +300,7 @@ init_ruby_whisper_parakeet_context(VALUE *mParakeet)
   rb_define_method(cParakeetContext, "model", ruby_whisper_parakeet_context_get_model, 0);
   rb_define_method(cParakeetContext, "each_segment", ruby_whisper_parakeet_context_each_segment, 0);
   rb_define_method(cParakeetContext, "full", ruby_whisper_parakeet_context_full, -1);
+  rb_define_method(cParakeetContext, "free", ruby_whisper_parakeet_free, 0);
 
 #define REGISTER_SEGMENT_ATTR(name, type) \
   rb_define_method(cParakeetContext, "full_" #name, ruby_whisper_parakeet_context_full_##name, 1);

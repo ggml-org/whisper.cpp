@@ -103,6 +103,16 @@ target_link_libraries(${BUFFER_LOADER_TEST} PRIVATE common)
 add_test(NAME ${BUFFER_LOADER_TEST} COMMAND ${BUFFER_LOADER_TEST})
 set_tests_properties(${BUFFER_LOADER_TEST} PROPERTIES LABELS "unit;gh")
 
+# whisper_full() with n_samples == 0 must not read an uninitialized mel (#3978)
+set(ZERO_SAMPLES_TEST test-whisper-zero-samples)
+add_executable(${ZERO_SAMPLES_TEST} ${ZERO_SAMPLES_TEST}.cpp)
+target_include_directories(${ZERO_SAMPLES_TEST} PRIVATE ../include ../ggml/include ../examples)
+target_link_libraries(${ZERO_SAMPLES_TEST} PRIVATE common)
+target_compile_definitions(${ZERO_SAMPLES_TEST} PRIVATE
+    WHISPER_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-ggml-tiny.bin")
+add_test(NAME ${ZERO_SAMPLES_TEST} COMMAND ${ZERO_SAMPLES_TEST})
+set_tests_properties(${ZERO_SAMPLES_TEST} PROPERTIES LABELS "tiny;gh")
+
 # VAD test tests VAD in isolation
 set(VAD_TEST test-vad)
 add_executable(${VAD_TEST} ${VAD_TEST}.cpp)
