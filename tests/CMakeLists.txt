@@ -113,6 +113,16 @@ target_compile_definitions(${ZERO_SAMPLES_TEST} PRIVATE
 add_test(NAME ${ZERO_SAMPLES_TEST} COMMAND ${ZERO_SAMPLES_TEST})
 set_tests_properties(${ZERO_SAMPLES_TEST} PROPERTIES LABELS "tiny;gh")
 
+# abort_callback must be honored during language auto-detection (#3888)
+set(LANG_DETECT_ABORT_TEST test-whisper-lang-detect-abort)
+add_executable(${LANG_DETECT_ABORT_TEST} ${LANG_DETECT_ABORT_TEST}.cpp)
+target_include_directories(${LANG_DETECT_ABORT_TEST} PRIVATE ../include ../ggml/include ../examples)
+target_link_libraries(${LANG_DETECT_ABORT_TEST} PRIVATE common)
+target_compile_definitions(${LANG_DETECT_ABORT_TEST} PRIVATE
+    WHISPER_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-ggml-tiny.bin")
+add_test(NAME ${LANG_DETECT_ABORT_TEST} COMMAND ${LANG_DETECT_ABORT_TEST})
+set_tests_properties(${LANG_DETECT_ABORT_TEST} PROPERTIES LABELS "tiny;gh")
+
 # VAD test tests VAD in isolation
 set(VAD_TEST test-vad)
 add_executable(${VAD_TEST} ${VAD_TEST}.cpp)

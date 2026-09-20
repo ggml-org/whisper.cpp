@@ -4149,12 +4149,14 @@ const char * whisper_lang_str_full(int id) {
     return nullptr;
 }
 
-int whisper_lang_auto_detect_with_state(
+static int whisper_lang_auto_detect_internal(
         struct whisper_context * ctx,
           struct whisper_state * state,
                            int   offset_ms,
                            int   n_threads,
-                         float * lang_probs) {
+                         float * lang_probs,
+           ggml_abort_callback   abort_callback,
+                          void * abort_callback_data) {
     const int seek = offset_ms/10;
 
     if (seek < 0) {
@@ -4168,14 +4170,18 @@ int whisper_lang_auto_detect_with_state(
     }
 
     // run the encoder
-    if (whisper_encode_with_state(ctx, state, seek, n_threads) != 0) {
+    if (!whisper_encode_internal(*ctx, *state, seek, n_threads, abort_callback, abort_callback_data)) {
         WHISPER_LOG_ERROR("%s: failed to encode\n", __func__);
         return -6;
     }
 
     const std::vector<whisper_token> prompt = { whisper_token_sot(ctx) };
 
-    if (whisper_decode_with_state(ctx, state, prompt.data(), prompt.size(), 0, n_threads) != 0) {
+    whisper_batch_prep_legacy(state->batch, prompt.data(), prompt.size(), 0, 0);
+
+    whisper_kv_cache_seq_rm(state->kv_self, 0, 0, -1);
+
+    if (!whisper_decode_internal(*ctx, *state, state->batch, n_threads, false, abort_callback, abort_callback_data)) {
         WHISPER_LOG_ERROR("%s: failed to decode\n", __func__);
         return -7;
     }
@@ -4222,6 +4228,15 @@ int whisper_lang_auto_detect_with_state(
     }
 
     return logits_id[0].second;
+}
+
+int whisper_lang_auto_detect_with_state(
+        struct whisper_context * ctx,
+          struct whisper_state * state,
+                           int   offset_ms,
+                           int   n_threads,
+                         float * lang_probs) {
+    return whisper_lang_auto_detect_internal(ctx, state, offset_ms, n_threads, lang_probs, nullptr, nullptr);
 }
 
 int whisper_lang_auto_detect(
@@ -6972,7 +6987,7 @@ int whisper_full_with_state(
             }
         }
 
-        const auto lang_id = whisper_lang_auto_detect_with_state(ctx, state, 0, params.n_threads, probs.data());
+        const auto lang_id = whisper_lang_auto_detect_internal(ctx, state, 0, params.n_threads, probs.data(), params.abort_callback, params.abort_callback_user_data);
         if (lang_id < 0) {
             WHISPER_LOG_ERROR("%s: failed to auto-detect language\n", __func__);
             return -3;
