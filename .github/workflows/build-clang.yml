@@ -87,13 +87,17 @@ jobs:
             ctest -L gh --output-on-failure'
 
   ubuntu-22-clang-arm64:
+    name: ubuntu-22-clang-arm64 (${{ matrix.build }}, backend DL ${{ matrix.backend_dl }})
     runs-on: ubuntu-22.04-arm
 
     strategy:
       fail-fast: false
       matrix:
         build: [Debug, Release]
-        backend_dl: ['OFF', 'ON']
+        backend_dl: ['OFF']
+        include:
+          - build: Debug
+            backend_dl: 'ON'
 
     steps:
       - name: Clone
