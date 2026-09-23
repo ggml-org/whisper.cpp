@@ -1117,6 +1117,8 @@ int main(int argc, char ** argv) {
         }
     }
 
+    int ret = 0;
+
     for (int f = 0; f < (int) params.fname_inp.size(); ++f) {
         const auto & fname_inp = params.fname_inp[f];
         struct fout_factory {
@@ -1173,6 +1175,7 @@ int main(int argc, char ** argv) {
 
         if (!::read_audio_data(fname_inp, pcmf32, pcmf32s, params.diarize)) {
             fprintf(stderr, "error: failed to read audio file '%s'\n", fname_inp.c_str());
+            ret = 5;
             continue;
         }
 
@@ -1323,6 +1326,7 @@ int main(int argc, char ** argv) {
 
             if (whisper_full_parallel(ctx, wparams, pcmf32.data(), pcmf32.size(), params.n_processors) != 0) {
                 fprintf(stderr, "%s: failed to process audio\n", argv[0]);
+                whisper_free(ctx);
                 return 10;
             }
         }
@@ -1358,5 +1362,5 @@ int main(int argc, char ** argv) {
     }
     whisper_free(ctx);
 
-    return 0;
+    return ret;
 }

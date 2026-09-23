@@ -29,6 +29,13 @@ add_test(NAME ${TEST_TARGET}
     -f ${PROJECT_SOURCE_DIR}/samples/jfk.wav)
 set_tests_properties(${TEST_TARGET} PROPERTIES LABELS "tiny;en")
 
+set(TEST_TARGET test-whisper-cli-audio-read-fail)
+add_test(NAME ${TEST_TARGET}
+    COMMAND $<TARGET_FILE:whisper-cli>
+    -m ${PROJECT_SOURCE_DIR}/models/for-tests-ggml-tiny.bin
+    -f ${PROJECT_SOURCE_DIR}/CMakeLists.txt)
+set_tests_properties(${TEST_TARGET} PROPERTIES WILL_FAIL TRUE LABELS "tiny;gh")
+
 set(TEST_TARGET test-whisper-cli-base)
 add_test(NAME ${TEST_TARGET}
     COMMAND $<TARGET_FILE:whisper-cli>
