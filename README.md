@@ -91,6 +91,30 @@ cmake --build build -j --config Release
 ./build/bin/whisper-cli -f samples/jfk.wav
 ```
 
+### Prebuilt macOS binaries
+
+Releases also ship `whisper-cli` for macOS on the
+[releases page](https://github.com/ggml-org/whisper.cpp/releases), as `arm64`, `x64` and
+`universal` archives, so no build step is needed:
+
+```bash
+# verify the download against the SHA256SUMS asset published with the release
+grep -F whisper-bin-macos-arm64.tar.gz SHA256SUMS | shasum -a 256 -c
+
+tar -xzf whisper-bin-macos-arm64.tar.gz
+cd whisper-bin-macos-arm64
+./whisper-cli -m /path/to/ggml-base.en.bin -f /path/to/audio.wav
+```
+
+The archives are neither signed nor notarized. macOS marks anything downloaded through a
+browser as quarantined, and Finder carries that mark onto the files it extracts, so
+Gatekeeper refuses to run them. Extracting with `tar`, as above, avoids this; otherwise
+clear the flag:
+
+```bash
+xattr -dr com.apple.quarantine whisper-bin-macos-arm64
+```
+
 ---
 
 For a quick demo, simply run `make base.en`.
