@@ -536,7 +536,7 @@ If you want to stream audio from another app without SDL or a microphone device,
 [stream-pcm](examples/stream-pcm). It reads raw PCM from stdin or a pipe:
 
 ```bash
-ffmpeg -i samples/jfk.wav -f s16le -ac 1 -ar 16000 - | \
+ffmpeg -hide_banner -loglevel error -i samples/jfk.wav -f s16le -ac 1 -ar 16000 - | \
   ./build/bin/whisper-stream-pcm -m ./models/ggml-base.en.bin --format s16 --sample-rate 16000 --step 500 --length 5000
 ```
 

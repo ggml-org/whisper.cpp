@@ -192,7 +192,7 @@ public:
             return false;
         }
 
-        m_audio.resize((m_sample_rate*m_len_ms)/1000);
+        m_audio.resize((m_sample_rate * m_len_ms) / 1000);
         m_audio_pos = 0;
         m_audio_len = 0;
 
@@ -242,44 +242,6 @@ public:
         return true;
     }
 
-    bool clear() {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_audio_pos = 0;
-        m_audio_len = 0;
-        m_audio_read = 0;
-        return true;
-    }
-
-    void get(int ms, std::vector<float> & result) {
-        result.clear();
-
-        std::lock_guard<std::mutex> lock(m_mutex);
-
-        if (ms <= 0) {
-            ms = m_len_ms;
-        }
-
-        size_t n_samples = (m_sample_rate * ms) / 1000;
-        if (n_samples > m_audio_len) {
-            n_samples = m_audio_len;
-        }
-
-        result.resize(n_samples);
-
-        int s0 = (int) m_audio_pos - (int) n_samples;
-        if (s0 < 0) {
-            s0 += (int) m_audio.size();
-        }
-
-        if (s0 + (int) n_samples > (int) m_audio.size()) {
-            const size_t n0 = m_audio.size() - (size_t) s0;
-            memcpy(result.data(), &m_audio[s0], n0 * sizeof(float));
-            memcpy(&result[n0], &m_audio[0], (n_samples - n0) * sizeof(float));
-        } else {
-            memcpy(result.data(), &m_audio[s0], n_samples * sizeof(float));
-        }
-    }
-
     void pop_ms(int ms, std::vector<float> & result) {
         result.clear();
 
@@ -299,15 +261,7 @@ public:
         }
 
         result.resize(n_samples);
-
-        size_t s0 = m_audio_read;
-        if (s0 + n_samples > m_audio.size()) {
-            const size_t n0 = m_audio.size() - s0;
-            memcpy(result.data(), &m_audio[s0], n0 * sizeof(float));
-            memcpy(&result[n0], &m_audio[0], (n_samples - n0) * sizeof(float));
-        } else {
-            memcpy(result.data(), &m_audio[s0], n_samples * sizeof(float));
-        }
+        ring_read(m_audio_read, n_samples, result.data());
 
         m_audio_read = (m_audio_read + n_samples) % m_audio.size();
         m_audio_len -= n_samples;
@@ -385,27 +339,39 @@ private:
 
         std::lock_guard<std::mutex> lock(m_mutex);
 
-            if (n_samples > m_audio.size()) {
-                data += (n_samples - m_audio.size());
-                n_samples = m_audio.size();
-            }
+        if (n_samples > m_audio.size()) {
+            data += (n_samples - m_audio.size());
+            n_samples = m_audio.size();
+        }
 
-            if (n_samples > m_audio.size() - m_audio_len) {
-                const size_t drop = n_samples - (m_audio.size() - m_audio_len);
-                m_audio_read = (m_audio_read + drop) % m_audio.size();
-                m_audio_len -= drop;
-            }
+        if (n_samples > m_audio.size() - m_audio_len) {
+            const size_t drop = n_samples - (m_audio.size() - m_audio_len);
+            m_audio_read = (m_audio_read + drop) % m_audio.size();
+            m_audio_len -= drop;
+        }
 
-            if (m_audio_pos + n_samples > m_audio.size()) {
-                const size_t n0 = m_audio.size() - m_audio_pos;
-                memcpy(&m_audio[m_audio_pos], data, n0 * sizeof(float));
-                memcpy(&m_audio[0], data + n0, (n_samples - n0) * sizeof(float));
+        if (m_audio_pos + n_samples > m_audio.size()) {
+            const size_t n0 = m_audio.size() - m_audio_pos;
+            memcpy(&m_audio[m_audio_pos], data, n0 * sizeof(float));
+            memcpy(&m_audio[0], data + n0, (n_samples - n0) * sizeof(float));
         } else {
             memcpy(&m_audio[m_audio_pos], data, n_samples * sizeof(float));
         }
 
         m_audio_pos = (m_audio_pos + n_samples) % m_audio.size();
         m_audio_len = std::min(m_audio_len + n_samples, m_audio.size());
+    }
+
+    // copy n_samples from the ring buffer starting at s0, handling wrap-around
+    // caller must hold m_mutex
+    void ring_read(size_t s0, size_t n_samples, float * dst) const {
+        if (s0 + n_samples > m_audio.size()) {
+            const size_t n0 = m_audio.size() - s0;
+            memcpy(dst, &m_audio[s0], n0 * sizeof(float));
+            memcpy(dst + n0, &m_audio[0], (n_samples - n0) * sizeof(float));
+        } else {
+            memcpy(dst, &m_audio[s0], n_samples * sizeof(float));
+        }
     }
 
     FILE * m_in = nullptr;
@@ -590,7 +556,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    wav_writer wavWriter;
+    wav_writer wav_out;
     // save wav file
     if (params.save_audio) {
         // Get current date/time for filename
@@ -599,7 +565,7 @@ int main(int argc, char ** argv) {
         strftime(buffer, sizeof(buffer), "%Y%m%d%H%M%S", localtime(&now));
         std::string filename = std::string(buffer) + ".wav";
 
-        wavWriter.open(filename, WHISPER_SAMPLE_RATE, 16, 1);
+        wav_out.open(filename, WHISPER_SAMPLE_RATE, 16, 1);
     }
 
     audio.resume();
@@ -749,7 +715,7 @@ int main(int argc, char ** argv) {
             total_samples += pcmf32_new.size();
 
             if (params.save_audio && !pcmf32_new.empty()) {
-                wavWriter.write(pcmf32_new.data(), pcmf32_new.size());
+                wav_out.write(pcmf32_new.data(), pcmf32_new.size());
                 debug_log("debug: save_audio wrote %zu samples (step)\n", pcmf32_new.size());
             }
 
@@ -820,7 +786,7 @@ int main(int argc, char ** argv) {
             total_samples += pcmf32_new.size();
 
             if (params.save_audio && !pcmf32_new.empty()) {
-                wavWriter.write(pcmf32_new.data(), pcmf32_new.size());
+                wav_out.write(pcmf32_new.data(), pcmf32_new.size());
                 debug_log("debug: save_audio wrote %zu samples (probe)\n", pcmf32_new.size());
             }
 

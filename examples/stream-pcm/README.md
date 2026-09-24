@@ -27,7 +27,7 @@ mkfifo /tmp/whisper.pcm
 Example of piping a WAV file using ffmpeg (optional, `-re` for realtime pacing):
 
 ```bash
-ffmpeg -re -i samples/jfk.wav -f s16le -ac 1 -ar 16000 - | \
+ffmpeg -re -hide_banner -loglevel error -i samples/jfk.wav -f s16le -ac 1 -ar 16000 - | \
   ./build/bin/whisper-stream-pcm -m ./models/ggml-base.en.bin --format s16 --sample-rate 16000 --step 1000 --length 10000 --keep 500
 ```
 
