@@ -146,6 +146,16 @@ target_compile_definitions(${VAD_TEST} PRIVATE
 add_test(NAME ${VAD_TEST} COMMAND ${VAD_TEST})
 set_tests_properties(${VAD_TEST} PROPERTIES LABELS "base;en")
 
+if (WHISPER_BUILD_EXAMPLES)
+    set(TEST_TARGET test-stream-pcm)
+    add_executable(${TEST_TARGET} ${TEST_TARGET}.cpp)
+    target_compile_definitions(${TEST_TARGET} PRIVATE
+        WHISPER_STREAM_PCM_PATH="$<TARGET_FILE:whisper-stream-pcm>"
+        WHISPER_TEST_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-ggml-tiny.en.bin")
+    add_test(NAME ${TEST_TARGET} COMMAND ${TEST_TARGET})
+    set_tests_properties(${TEST_TARGET} PROPERTIES LABELS "tiny;stream")
+endif()
+
 # Parakeet model loading test
 set(PARAKEET_TEST test-parakeet)
 add_executable(${PARAKEET_TEST} ${PARAKEET_TEST}.cpp)
