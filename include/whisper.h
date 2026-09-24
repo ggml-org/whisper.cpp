@@ -415,6 +415,9 @@ extern "C" {
     WHISPER_API float * whisper_get_logits           (struct whisper_context * ctx);
     WHISPER_API float * whisper_get_logits_from_state(struct whisper_state * state);
 
+    WHISPER_API int whisper_get_lang_id_from_state(struct whisper_state * state);
+    WHISPER_API float whisper_get_lang_prob_from_state(struct whisper_state * state);
+
     // Token Id -> String. Uses the vocabulary in the provided context
     WHISPER_API const char * whisper_token_to_str(struct whisper_context * ctx, whisper_token token);
     WHISPER_API const char * whisper_model_type_readable(struct whisper_context * ctx);
@@ -464,6 +467,9 @@ extern "C" {
 
     // Progress callback
     typedef void (*whisper_progress_callback)(struct whisper_context * ctx, struct whisper_state * state, int progress, void * user_data);
+
+    // Detected language callback
+    typedef void (*whisper_detected_language_callback)(struct whisper_context * ctx, struct whisper_state * state, void * user_data);
 
     // Encoder begin callback
     // If not NULL, called before the encoder starts
@@ -561,6 +567,10 @@ extern "C" {
         // called for every newly generated text segment
         whisper_new_segment_callback new_segment_callback;
         void * new_segment_callback_user_data;
+
+        // called on detected language
+        whisper_detected_language_callback detected_language_callback;
+        void * detected_language_callback_user_data;
 
         // called on each progress update
         whisper_progress_callback progress_callback;
