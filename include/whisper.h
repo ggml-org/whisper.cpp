@@ -667,9 +667,30 @@ extern "C" {
     WHISPER_API whisper_token_data whisper_full_get_token_data           (struct whisper_context * ctx, int i_segment, int i_token);
     WHISPER_API whisper_token_data whisper_full_get_token_data_from_state(struct whisper_state * state, int i_segment, int i_token);
 
+    // Get the start/end time of the specified token, in centiseconds. When VAD is enabled
+    // these are mapped back to the original audio timeline (a token landing in a removed
+    // inter-segment silence snaps to the nearest speech boundary), unlike
+    // whisper_full_get_token_data().t0/t1 which stay in VAD-processed time. Without VAD the
+    // raw token times are returned unchanged.
+    WHISPER_API int64_t whisper_full_get_token_t0           (struct whisper_context * ctx, int i_segment, int i_token);
+    WHISPER_API int64_t whisper_full_get_token_t0_from_state(struct whisper_state * state, int i_segment, int i_token);
+    WHISPER_API int64_t whisper_full_get_token_t1           (struct whisper_context * ctx, int i_segment, int i_token);
+    WHISPER_API int64_t whisper_full_get_token_t1_from_state(struct whisper_state * state, int i_segment, int i_token);
+
     // Get the probability of the specified token in the specified segment
     WHISPER_API float whisper_full_get_token_p           (struct whisper_context * ctx, int i_segment, int i_token);
     WHISPER_API float whisper_full_get_token_p_from_state(struct whisper_state * state, int i_segment, int i_token);
+
+    // Access the speech segments detected by the internal VAD (only when params.vad = true).
+    // Times are on the original audio timeline, in centiseconds. The count is 0 when VAD was
+    // not used, so callers can reuse whisper's own speech boundaries instead of running a
+    // separate VAD pass.
+    WHISPER_API int     whisper_full_n_vad_segments               (struct whisper_context * ctx);
+    WHISPER_API int     whisper_full_n_vad_segments_from_state    (struct whisper_state * state);
+    WHISPER_API int64_t whisper_full_get_vad_segment_t0           (struct whisper_context * ctx, int i);
+    WHISPER_API int64_t whisper_full_get_vad_segment_t0_from_state(struct whisper_state * state, int i);
+    WHISPER_API int64_t whisper_full_get_vad_segment_t1           (struct whisper_context * ctx, int i);
+    WHISPER_API int64_t whisper_full_get_vad_segment_t1_from_state(struct whisper_state * state, int i);
 
     //
     // Voice Activity Detection (VAD)

@@ -2,38 +2,33 @@ if (WHISPER_SDL2)
     set(CMAKE_CXX_STANDARD 17)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-    file(GLOB SRC_MODELS models/*.cpp)
+    if (WHISPER_USE_SYSTEM_LLAMA)
+        message(STATUS "Using system-provided llama.cpp, skipping llama.cpp fetch")
+        find_package(llama 0.3.0 REQUIRED)
+    else()
+        include(FetchContent)
+
+        set(LLAMA_TAG "v0.3.0")
+
+        set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+        set(LLAMA_BUILD_COMMON   OFF CACHE BOOL "" FORCE)
+        set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
+        set(LLAMA_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
+
+        FetchContent_Declare(
+            llama
+            GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
+            GIT_TAG        ${LLAMA_TAG}
+        )
+
+        message(STATUS "Fetching llama.cpp dependency (${LLAMA_TAG})...")
+        FetchContent_MakeAvailable(llama)
+    endif()
 
     set(TARGET whisper-talk-llama)
-    add_executable(${TARGET} talk-llama.cpp
-        llama.cpp
-        llama-adapter.cpp
-        llama-arch.cpp
-        llama-batch.cpp
-        llama-chat.cpp
-        llama-context.cpp
-        llama-cparams.cpp
-        llama-grammar.cpp
-        llama-graph.cpp
-        llama-hparams.cpp
-        llama-impl.cpp
-        llama-io.cpp
-        llama-kv-cache.cpp
-        llama-kv-cache-iswa.cpp
-        llama-memory-recurrent.cpp
-        llama-memory-hybrid.cpp
-        llama-memory-hybrid-iswa.cpp
-        llama-memory.cpp
-        llama-mmap.cpp
-        llama-model-loader.cpp
-        llama-model-saver.cpp
-        llama-model.cpp
-        llama-quant.cpp
-        llama-sampler.cpp
-        llama-vocab.cpp
-        unicode.cpp
-        unicode-data.cpp
-        ${SRC_MODELS})
+    add_executable(${TARGET} talk-llama.cpp)
+    target_link_libraries(${TARGET} PRIVATE llama)
     target_include_directories(${TARGET} PRIVATE . ${SDL2_INCLUDE_DIRS})
 
     target_link_libraries(${TARGET} PRIVATE common common-sdl whisper ${SDL2_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})

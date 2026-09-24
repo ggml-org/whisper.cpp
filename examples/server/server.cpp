@@ -554,8 +554,6 @@ void get_req_parameters(const Request & req, whisper_params & params)
     if (req.has_file("token_timestamps"))
     {
         params.token_timestamps = parse_str_to_bool(req.get_file_value("token_timestamps").content);
-    } else {
-        params.token_timestamps = !params.no_timestamps;
     }
     if (req.has_file("language"))
     {
@@ -624,6 +622,17 @@ void get_req_parameters(const Request & req, whisper_params & params)
     if (req.has_file("no_language_probabilities"))
     {
         params.no_language_probabilities = parse_str_to_bool(req.get_file_value("no_language_probabilities").content);
+    }
+
+    // resolved last, since it depends on response_format / max_len / split_on_word above.
+    // token timestamps also drive the max_len segment wrapping in whisper_full(), so turning
+    // them on unconditionally makes the max_len fallback below wrap every response at 60
+    // characters - on a token boundary, i.e. mid-word. Only default them on when the response
+    // actually carries per-token data (verbose_json) or wrapping was asked for.
+    if (!req.has_file("token_timestamps"))
+    {
+        params.token_timestamps = !params.no_timestamps &&
+            (params.response_format == vjson_format || params.max_len > 0 || params.split_on_word);
     }
 }
 
@@ -1107,10 +1116,29 @@ int main(int argc, char ** argv) {
                     }
 
                     segment["tokens"].push_back(token.id);
-                    json word = json{{"word", whisper_full_get_token_text(ctx, i, j)}};
+                    std::string word_text = whisper_full_get_token_text(ctx, i, j);
+                    int64_t word_t1 = token.t1;
+
+                    while (j + 1 < n_tokens && utf8_trailing_bytes_needed(word_text) > 0) {
+                        const whisper_token_data next_token = whisper_full_get_token_data(ctx, i, j + 1);
+                        // Keep verbose_json tokens free of EOT ids, matching the pre-merge server behavior.
+                        if (next_token.id >= whisper_token_eot(ctx)) {
+                            break;
+                        }
+
+                        ++j;
+                        segment["tokens"].push_back(next_token.id);
+                        word_text += whisper_full_get_token_text(ctx, i, j);
+                        if (next_token.t1 > -1) {
+                            word_t1 = next_token.t1;
+                        }
+                        total_logprob += next_token.plog;
+                    }
+
+                    json word = json{{"word", word_text}};
                     if (!params.no_timestamps && params.token_timestamps) {
                         word["start"] = token.t0 * 0.01;
-                        word["end"] = token.t1 * 0.01;
+                        word["end"] = word_t1 * 0.01;
                         word["t_dtw"] = token.t_dtw;
                     }
                     word["probability"] = token.p;
@@ -1137,6 +1165,9 @@ int main(int argc, char ** argv) {
             json jres = json{
                 {"text", results}
             };
+            if (params.detect_language) {
+                jres["language"] = whisper_lang_str_full(whisper_full_lang_id(ctx));
+            }
             res.set_content(jres.dump(-1, ' ', false, json::error_handler_t::replace),
                             "application/json");
         }

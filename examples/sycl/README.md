@@ -6,11 +6,11 @@ This example program provide the tools for llama.cpp for SYCL on Intel GPU.
 
 |Tool Name| Function|Status|
 |-|-|-|
-|ls-sycl-device| List all SYCL devices with ID, compute capability, max work group size, ect.|Support|
+|ls-sycl-device| List all SYCL devices with ID, compute capability, max work group size, etc.|Support|
 
 ### ls-sycl-device
 
-List all SYCL devices with ID, compute capability, max work group size, ect.
+List all SYCL devices with ID, compute capability, max work group size, etc.
 
 1. Build the llama.cpp for SYCL for all targets.
 

@@ -25,6 +25,18 @@ android {
   }
 
   buildTypes {
+    debug {
+      externalNativeBuild {
+        cmake {
+          // When the AGP build type is Debug, the native (NDK/CMake) build does not run
+          // compiler optimizations by default, causing a critical performance issue.
+          // We force CMAKE_BUILD_TYPE to Release here so native code stays optimized
+          // even in Debug AGP builds.
+          arguments "-DCMAKE_BUILD_TYPE=Release"
+        }
+      }
+    }
+
     release {
       signingConfig signingConfigs.debug
       minifyEnabled true

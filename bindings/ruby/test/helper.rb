@@ -5,6 +5,8 @@ require_relative "jfk_reader/jfk_reader"
 class TestBase < Test::Unit::TestCase
   AUDIO = File.join(__dir__, "fixtures", "jfk.wav")
 
+  Parakeet = Whisper::Parakeet
+
   class << self
     def whisper
       return @whisper if @whisper

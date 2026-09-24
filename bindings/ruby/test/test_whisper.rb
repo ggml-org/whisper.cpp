@@ -50,6 +50,15 @@ class TestWhisper < TestBase
     end
   end
 
+  def test_free
+    whisper = Whisper::Context.new("base.en")
+    whisper.free
+
+    assert_raise RuntimeError do
+      whisper.model_type
+    end
+  end
+
   private
 
   def without_log_callback
@@ -149,6 +158,7 @@ class TestWhisper < TestBase
     }
     Whisper.log_set log_callback, user_data
     Whisper::Context.new("base.en")
+    sleep 0.1 # wait for logs dequeued
 
     assert logs.length > 30
     logs.each do |log|

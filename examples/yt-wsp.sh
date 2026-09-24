@@ -39,7 +39,11 @@
 set -Eeuo pipefail
 
 # get script file location
-SCRIPT_PATH="$(realpath -e ${BASH_SOURCE[0]})";
+if [ -x "$(command -v realpath)" ]; then
+    SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
+else
+    SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)/$(basename -- "${BASH_SOURCE[0]}")"
+fi
 SCRIPT_DIR="${SCRIPT_PATH%/*}"
 
 ################################################################################

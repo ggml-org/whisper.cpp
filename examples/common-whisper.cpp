@@ -198,6 +198,34 @@ int timestamp_to_sample(int64_t t, int n_samples, int whisper_sample_rate) {
     return std::max(0, std::min((int) n_samples - 1, (int) ((t*whisper_sample_rate)/100)));
 }
 
+int utf8_trailing_bytes_needed(const std::string & s) {
+    const int n = (int) s.size();
+    int i = n - 1;
+    while (i >= 0 && ((unsigned char) s[i] & 0xC0) == 0x80) {
+        --i;
+    }
+    if (i < 0) {
+        return 0;
+    }
+
+    const unsigned char c = (unsigned char) s[i];
+    int expected;
+    if ((c & 0x80) == 0x00) {
+        expected = 1;
+    } else if ((c & 0xE0) == 0xC0) {
+        expected = 2;
+    } else if ((c & 0xF0) == 0xE0) {
+        expected = 3;
+    } else if ((c & 0xF8) == 0xF0) {
+        expected = 4;
+    } else {
+        return 0;
+    }
+
+    const int have = n - i;
+    return have >= expected ? 0 : (expected - have);
+}
+
 bool speak_with_file(const std::string & command, const std::string & text, const std::string & path, int voice_id) {
     std::ofstream speak_file(path.c_str());
     if (speak_file.fail()) {

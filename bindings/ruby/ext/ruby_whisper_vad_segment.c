@@ -68,7 +68,7 @@ ruby_whisper_vad_segment_get_start_time(VALUE self)
   TypedData_Get_Struct(self, ruby_whisper_vad_segment, &ruby_whisper_vad_segment_type, rwvs);
   TypedData_Get_Struct(rwvs->segments, ruby_whisper_vad_segments, &ruby_whisper_vad_segments_type, rwvss);
   t0 = whisper_vad_segments_get_segment_t0(rwvss->segments, rwvs->index);
-  return DBL2NUM(t0 * 10);
+  return LONG2NUM(t0 * 10);
 }
 
 static VALUE
@@ -81,7 +81,7 @@ ruby_whisper_vad_segment_get_end_time(VALUE self)
   TypedData_Get_Struct(self, ruby_whisper_vad_segment, &ruby_whisper_vad_segment_type, rwvs);
   TypedData_Get_Struct(rwvs->segments, ruby_whisper_vad_segments, &ruby_whisper_vad_segments_type, rwvss);
   t1 = whisper_vad_segments_get_segment_t1(rwvss->segments, rwvs->index);
-  return DBL2NUM(t1 * 10);
+  return LONG2NUM(t1 * 10);
 }
 
 static VALUE

@@ -28,5 +28,8 @@ std::string to_timestamp(int64_t t, bool comma = false);
 // given a timestamp get the sample
 int timestamp_to_sample(int64_t t, int n_samples, int whisper_sample_rate);
 
+// Returns the number of trailing bytes still needed for s to end on a complete UTF-8 codepoint.
+int utf8_trailing_bytes_needed(const std::string & s);
+
 // write text to file, and call system("command voice_id file")
 bool speak_with_file(const std::string & command, const std::string & text, const std::string & path, int voice_id);

@@ -406,6 +406,7 @@ gpt_vocab::id gpt_sample_top_k_top_p(
         double temp,
         std::mt19937 & rng) {
     int n_logits = vocab.id_to_token.size();
+    top_k = std::min(top_k, n_logits);
 
     std::vector<std::pair<double, gpt_vocab::id>> logits_id;
     logits_id.reserve(n_logits);
@@ -491,6 +492,7 @@ gpt_vocab::id gpt_sample_top_k_top_p_repeat(
         std::mt19937 & rng) {
 
     int n_logits = vocab.id_to_token.size();
+    top_k = std::min(top_k, n_logits);
 
     const auto * plogits = logits;
 

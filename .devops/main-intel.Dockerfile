@@ -10,7 +10,8 @@ RUN apt-get update && \
 COPY .. .
 # Enable SYCL
 ARG GGML_SYCL_F16=OFF
-RUN if [ "${GGML_SYCL_F16}" = "ON" ]; then \
+RUN --mount=type=secret,id=HF_TOKEN,required=false,env=HF_TOKEN \
+    if [ "${GGML_SYCL_F16}" = "ON" ]; then \
         echo "GGML_SYCL_F16 is set" \
         && export OPT_SYCL_F16="-DGGML_SYCL_F16=ON"; \
     fi && \

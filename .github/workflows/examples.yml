@@ -16,10 +16,10 @@ jobs:
     runs-on: ubuntu-22.04
     strategy:
       matrix:
-        node-version: [ 16.x, 18.x ]
+        node-version: [ 20.x, 22.x ]
     steps:
       - name: Clone
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Dependencies
         run: |
@@ -29,10 +29,11 @@ jobs:
           sudo apt-get install libsdl2-dev
 
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
+          cache-dependency-path: examples/addon.node/package-lock.json
 
       - name: Install package.json dependencies
         working-directory: ./examples/addon.node
@@ -42,6 +43,8 @@ jobs:
         run: npx cmake-js compile -T addon.node -B Release
 
       - name: Download test model
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           bash ./models/download-ggml-model.sh base.en
       - name: Test

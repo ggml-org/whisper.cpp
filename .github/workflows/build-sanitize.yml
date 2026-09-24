@@ -1,0 +1,85 @@
+name: CI (sanitize)
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: ['.github/workflows/build-sanitize.yml',
+            '**/CMakeLists.txt',
+            '**/Makefile',
+            '**/*.mk',
+            '**/*.cmake',
+            '**/*.h',
+            '**/*.hpp',
+            '**/*.c',
+            '**/*.cpp']
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - 'bindings/ruby/**'
+      - 'bindings/go/**'
+      - 'examples/addon.node/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  ubuntu-22-gcc-sanitized:
+    runs-on: ubuntu-22.04
+
+    continue-on-error: true
+
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [ADDRESS, THREAD, UNDEFINED]
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: sanitize-${{ matrix.sanitizer }}
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git
+
+      - name: Build (undefined)
+        if: ${{ matrix.sanitizer == 'UNDEFINED' }}
+        run: |
+          cmake . -DCMAKE_BUILD_TYPE=Debug \
+            -DWHISPER_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_OPENMP=OFF
+          make
+
+      - name: Build
+        if: ${{ matrix.sanitizer == 'ADDRESS' }}
+        run: |
+          cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DWHISPER_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DGGML_NATIVE=OFF
+          make
+
+      - name: Build (no OpenMP)
+        if: ${{ matrix.sanitizer == 'THREAD' }}
+        run: |
+          cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DWHISPER_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_OPENMP=OFF
+          make
+
+      - name: Test
+        if: ${{ matrix.sanitizer != 'UNDEFINED' }}
+        run: |
+          ctest -L gh --output-on-failure

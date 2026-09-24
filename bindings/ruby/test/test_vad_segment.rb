@@ -9,7 +9,7 @@ class TestVADSegment < TestBase
     end
 
     assert_raise do
-      segments.end_time
+      segment.end_time
     end
 
     assert_raise do

@@ -5,7 +5,7 @@
 .PHONY: build
 build:
 	cmake -B build $(CMAKE_ARGS)
-	cmake --build build --config Release
+	cmake --build build --config Release --parallel $(shell nproc)
 
 # download a few audio samples into folder "./samples":
 .PHONY: samples
@@ -42,7 +42,7 @@ samples:
 tiny.en tiny base.en base small.en small medium.en medium large-v1 large-v2 large-v3 large-v3-turbo:
 	bash ./models/download-ggml-model.sh $@
 	cmake -B build $(CMAKE_ARGS)
-	cmake --build build --config Release
+	cmake --build build --config Release --parallel $(shell nproc)
 	@echo ""
 	@echo "==============================================="
 	@echo "Running $@ on all samples in ./samples ..."
