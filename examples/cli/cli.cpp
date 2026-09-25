@@ -1331,6 +1331,7 @@ int main(int argc, char ** argv) {
 
             if (whisper_full_parallel(ctx, wparams, pcmf32.data(), pcmf32.size(), params.n_processors) != 0) {
                 fprintf(stderr, "%s: failed to process audio\n", argv[0]);
+                whisper_free(ctx);
                 return 10;
             }
         }
