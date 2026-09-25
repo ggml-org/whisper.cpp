@@ -1011,12 +1011,16 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    // number of input files that could not be processed or whose output could not be written
+    int n_failed = 0;
+
     // remove non-existent files
     for (auto it = params.fname_inp.begin(); it != params.fname_inp.end();) {
         const auto fname_inp = it->c_str();
 
         if (*it != "-" && !is_file_exist(fname_inp)) {
             fprintf(stderr, "error: input file not found '%s'\n", fname_inp);
+            n_failed++;
             it = params.fname_inp.erase(it);
             continue;
         }
@@ -1124,6 +1128,7 @@ int main(int argc, char ** argv) {
             const size_t basename_length;
             const bool is_stdout;
             bool used_stdout;
+            bool failed;
             decltype(whisper_print_segment_callback) * const print_segment_callback;
             std::ofstream fout;
 
@@ -1132,6 +1137,7 @@ int main(int argc, char ** argv) {
                     basename_length{fname_out.size()},
                     is_stdout{fname_out == "-"},
                     used_stdout{},
+                    failed{},
                     print_segment_callback{is_stdout ? nullptr : whisper_print_segment_callback} {
                 if (!print_segment_callback) {
                     params.print_progress = false;
@@ -1161,6 +1167,7 @@ int main(int argc, char ** argv) {
                 fout = std::ofstream{fname_out};
                 if (!fout.is_open()) {
                     fprintf(stderr, "%s: failed to open '%s' for writing\n", __func__, fname_out.c_str());
+                    failed = true;
                     return false;
                 }
                 fprintf(stderr, "%s: saving output to '%s'\n", function, fname_out.c_str());
@@ -1173,6 +1180,7 @@ int main(int argc, char ** argv) {
 
         if (!::read_audio_data(fname_inp, pcmf32, pcmf32s, params.diarize)) {
             fprintf(stderr, "error: failed to read audio file '%s'\n", fname_inp.c_str());
+            n_failed++;
             continue;
         }
 
@@ -1323,6 +1331,7 @@ int main(int argc, char ** argv) {
 
             if (whisper_full_parallel(ctx, wparams, pcmf32.data(), pcmf32.size(), params.n_processors) != 0) {
                 fprintf(stderr, "%s: failed to process audio\n", argv[0]);
+                whisper_free(ctx);
                 return 10;
             }
         }
@@ -1351,12 +1360,21 @@ int main(int argc, char ** argv) {
                 fprintf(stderr, "warning: '--output-file -' used without any other '--output-*'");
             }
         }
+
+        if (fout_factory.failed) {
+            n_failed++;
+        }
     }
 
     if (!params.no_prints) {
         whisper_print_timings(ctx);
     }
     whisper_free(ctx);
+
+    if (n_failed > 0) {
+        fprintf(stderr, "error: %d input file(s) failed\n", n_failed);
+        return 11;
+    }
 
     return 0;
 }
