@@ -1,0 +1,242 @@
+[
+  {
+    "variant": "metal-baseline",
+    "model": "ggml-small.en.bin",
+    "audio_key": "short",
+    "audio_length_s": 30.0,
+    "runs": 5,
+    "model_load_ms": {
+      "mean": 317.424,
+      "median": 307.39,
+      "min": 271.83,
+      "max": 394.88,
+      "std_dev": 46.2916972037103
+    },
+    "first_inference_latency_s": {
+      "mean": 2.3322941418009577,
+      "median": 2.312735416999203,
+      "min": 2.2354854160003015,
+      "max": 2.487656583005446,
+      "std_dev": 0.09695128821408004
+    },
+    "wall_clock_runtime_s": {
+      "mean": 2.6120745081992935,
+      "median": 2.6105057909953757,
+      "min": 2.6083485830022255,
+      "max": 2.618632500001695,
+      "std_dev": 0.004198189036346631
+    },
+    "full_runtime_ms": {
+      "mean": 2253.708,
+      "median": 2233.08,
+      "min": 2157.06,
+      "max": 2410.01,
+      "std_dev": 97.614459840743
+    },
+    "throughput_audio_seconds_per_second": {
+      "mean": 11.485147851908152,
+      "median": 11.492025837859229,
+      "min": 11.456361287802157,
+      "max": 11.501530200181225,
+      "std_dev": 0.018438576329723858
+    },
+    "tokens_per_second": {
+      "mean": null,
+      "median": null,
+      "min": null,
+      "max": null,
+      "std_dev": null
+    },
+    "encode_ms": {
+      "mean": 1611.59,
+      "median": 1662.36,
+      "min": 1430.3,
+      "max": 1728.98,
+      "std_dev": 120.13035003694947
+    },
+    "decode_ms": {
+      "mean": 258.38599999999997,
+      "median": 251.72,
+      "min": 237.17,
+      "max": 305.62,
+      "std_dev": 27.477353038456968
+    },
+    "wer": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "std_dev": 0.0
+    },
+    "cer": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "std_dev": 0.0
+    },
+    "reference_present": true,
+    "correctness_pass": true,
+    "notes": "tokens/s unavailable; encode mean=1611.59 ms; decode mean=258.39 ms; wer median=0.0000; cer median=0.0000"
+  },
+  {
+    "variant": "metal-baseline",
+    "model": "ggml-small.en.bin",
+    "audio_key": "medium",
+    "audio_length_s": 300.0,
+    "runs": 5,
+    "model_load_ms": {
+      "mean": 371.386,
+      "median": 334.57,
+      "min": 294.49,
+      "max": 514.21,
+      "std_dev": 88.38974335294793
+    },
+    "first_inference_latency_s": {
+      "mean": 3.5053313415977754,
+      "median": 3.6369052919981186,
+      "min": 2.772809457994299,
+      "max": 3.8416501249957946,
+      "std_dev": 0.41896722523467633
+    },
+    "wall_clock_runtime_s": {
+      "mean": 77.04852580840088,
+      "median": 80.66440254100598,
+      "min": 64.32755733299564,
+      "max": 80.67616358400119,
+      "std_dev": 7.1522606904299195
+    },
+    "full_runtime_ms": {
+      "mean": 76683.686,
+      "median": 80115.46,
+      "min": 64042.66,
+      "max": 80413.61,
+      "std_dev": 7108.165474233136
+    },
+    "throughput_audio_seconds_per_second": {
+      "mean": 3.924446888035722,
+      "median": 3.7191126513023405,
+      "min": 3.718570475746974,
+      "max": 4.6636311471774246,
+      "std_dev": 0.41478634619569676
+    },
+    "tokens_per_second": {
+      "mean": null,
+      "median": null,
+      "min": null,
+      "max": null,
+      "std_dev": null
+    },
+    "encode_ms": {
+      "mean": 31327.916,
+      "median": 32469.4,
+      "min": 26512.7,
+      "max": 32607.48,
+      "std_dev": 2692.7932789818824
+    },
+    "decode_ms": {
+      "mean": 38565.066,
+      "median": 40475.29,
+      "min": 31846.68,
+      "max": 40943.01,
+      "std_dev": 3846.587166454181
+    },
+    "wer": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "std_dev": 0.0
+    },
+    "cer": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "std_dev": 0.0
+    },
+    "reference_present": true,
+    "correctness_pass": true,
+    "notes": "tokens/s unavailable; encode mean=31327.92 ms; decode mean=38565.07 ms; wer median=0.0000; cer median=0.0000"
+  },
+  {
+    "variant": "metal-baseline",
+    "model": "ggml-small.en.bin",
+    "audio_key": "long",
+    "audio_length_s": 1800.0,
+    "runs": 5,
+    "model_load_ms": {
+      "mean": 269.85,
+      "median": 269.53,
+      "min": 257.67,
+      "max": 280.92,
+      "std_dev": 8.905647084855763
+    },
+    "first_inference_latency_s": {
+      "mean": 1.7899988501987536,
+      "median": 1.7880880420052563,
+      "min": 1.6381932919975952,
+      "max": 1.9347949999937555,
+      "std_dev": 0.11190745128820256
+    },
+    "wall_clock_runtime_s": {
+      "mean": 120.23880427519907,
+      "median": 119.85825262499566,
+      "min": 119.3234943330026,
+      "max": 122.33720404199994,
+      "std_dev": 1.1952551580019861
+    },
+    "full_runtime_ms": {
+      "mean": 119829.37,
+      "median": 119378.98,
+      "min": 118916.23,
+      "max": 122060.63,
+      "std_dev": 1268.4094490542118
+    },
+    "throughput_audio_seconds_per_second": {
+      "mean": 14.971378222809495,
+      "median": 15.017739376125544,
+      "min": 14.713430914949116,
+      "max": 15.085042640275365,
+      "std_dev": 0.14705779745612452
+    },
+    "tokens_per_second": {
+      "mean": null,
+      "median": null,
+      "min": null,
+      "max": null,
+      "std_dev": null
+    },
+    "encode_ms": {
+      "mean": 46698.056,
+      "median": 46621.23,
+      "min": 46440.52,
+      "max": 47112.68,
+      "std_dev": 256.31403713023684
+    },
+    "decode_ms": {
+      "mean": 58974.108,
+      "median": 58503.88,
+      "min": 58337.1,
+      "max": 60712.06,
+      "std_dev": 996.6089295556201
+    },
+    "wer": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "std_dev": 0.0
+    },
+    "cer": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "std_dev": 0.0
+    },
+    "reference_present": true,
+    "correctness_pass": true,
+    "notes": "tokens/s unavailable; encode mean=46698.06 ms; decode mean=58974.11 ms; wer median=0.0000; cer median=0.0000"
+  }
+]

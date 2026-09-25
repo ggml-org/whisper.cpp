@@ -1,0 +1,95 @@
+whisper_init_from_file_with_params_no_state: loading model from '/Users/shaihi/Downloads/whisper_optimization/models/ggml-small.en.bin'
+whisper_init_with_params_no_state: use gpu    = 1
+whisper_init_with_params_no_state: flash attn = 1
+whisper_init_with_params_no_state: gpu_device = 0
+whisper_init_with_params_no_state: dtw        = 0
+ggml_metal_device_init: tensor API disabled for pre-M5 and pre-A19 devices
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: loaded in 0.006 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple8  (1008)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = false
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 12713.12 MB
+whisper_init_with_params_no_state: devices    = 3
+whisper_init_with_params_no_state: backends   = 3
+whisper_model_load: loading model
+whisper_model_load: n_vocab       = 51864
+whisper_model_load: n_audio_ctx   = 1500
+whisper_model_load: n_audio_state = 768
+whisper_model_load: n_audio_head  = 12
+whisper_model_load: n_audio_layer = 12
+whisper_model_load: n_text_ctx    = 448
+whisper_model_load: n_text_state  = 768
+whisper_model_load: n_text_head   = 12
+whisper_model_load: n_text_layer  = 12
+whisper_model_load: n_mels        = 80
+whisper_model_load: ftype         = 1
+whisper_model_load: qntvr         = 0
+whisper_model_load: type          = 3 (small)
+whisper_model_load: adding 1607 extra tokens
+whisper_model_load: n_langs       = 99
+whisper_model_load:         MTL0 total size =   487.00 MB
+whisper_model_load: model size    =  487.00 MB
+whisper_backend_init_gpu: device 0: MTL0 (type: 1)
+whisper_backend_init_gpu: found GPU device 0: MTL0 (type: 1, cnt: 0)
+whisper_backend_init_gpu: using MTL0 backend
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M2
+ggml_metal_init: picking default device: Apple M2
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+whisper_backend_init: using BLAS backend
+whisper_init_state: kv self size  =   18.87 MB
+whisper_init_state: kv cross size =   56.62 MB
+whisper_init_state: kv pad  size  =    4.72 MB
+whisper_init_state: compute buffer (conv)   =   23.38 MB
+whisper_init_state: compute buffer (encode) =   39.45 MB
+whisper_init_state: compute buffer (cross)  =   79.93 MB
+whisper_init_state: compute buffer (decode) =   98.20 MB
+
+system_info: n_threads = 8 / 8 | WHISPER : COREML = 0 | OPENVINO = 0 | MTL : EMBED_LIBRARY = 1 | CPU : NEON = 1 | ARM_FMA = 1 | FP16_VA = 1 | MATMUL_INT8 = 1 | DOTPROD = 1 | ACCELERATE = 1 | REPACK = 1 | 
+
+main: processing '/Users/shaihi/Downloads/whisper_optimization/benchmark/audio/medium.wav' (4800000 samples, 300.0 sec), 8 threads, 1 processors, 1 beams + best of 1, lang = en, task = transcribe, timestamps = 1 ...
+
+
+[00:00:00.000 --> 00:00:28.720]   "The Town Hose Story"
+[00:00:30.000 --> 00:00:32.000]   As told at the Golden Inn.
+[00:00:32.000 --> 00:00:46.000]   The Cape of Good Hope, and all the watery region about there, is much like some noted four corners of a great highway, where you meet more travelers than in any other part.
+[00:00:47.000 --> 00:01:03.000]   It was not very long after speaking the Goni that another homeward bound whaleman, the Town Hoe, was encountered. She was manned almost wholly by Polynesians. In the short gam that ensued she gave us strong news of Moby Dick.
+[00:01:04.000 --> 00:01:25.000]   For some the general interest in the white whale was now wildly heightened by a circumstance of the Town Hose Story, which seemed obscurely to involve with the whale a certain wondrous inverted visitation of one of those so-called "judgments of God" which are at times said to overtake some men.
+[00:01:26.000 --> 00:01:29.460]   The Town Hose Story was a very strange and
+[00:01:30.000 --> 00:01:57.000]   forming what may be called the "secret part" of the tragedy about to be narrated, never reached the ears of Captain Ahab or his mates. For that secret part of the story was unknown to the Captain of the Town Hoe himself. It was the private property of three Confederate white seamen of that ship, one of whom, it seems, communicated it to Tashtego with "romish injunctions of secrecy."
+[00:01:58.000 --> 00:02:08.000]   But the following night Tashtego rambled in his sleep and revealed so much of it in that way that when he was wakened he could not well withhold the rest.
+[00:02:09.000 --> 00:02:29.000]   Nevertheless, so potent an influence did this thing have on those seamen in the Pequod who came to the full knowledge of it, and by such a strange delicacy, to call it so, were they governed in this matter, that they kept the secret among themselves so that it never transpired a bath the Pequod's main-mist.
+[00:02:30.000 --> 00:02:41.000]   After weaving in its proper place this darker thread with the story as publicly narrated on the ship, the whole of this strange affair I now proceed to put on lasting record.
+[00:02:41.000 --> 00:02:54.000]   Footnote. Town Hoe. The ancient whale cry upon first sighting a whale from the masthead, still used by whalemen in hunting the famous Galapagos Terrapin.
+[00:02:54.000 --> 00:02:56.000]   End of footnote.
+[00:02:57.000 --> 00:03:13.000]   For my humor's sake I shall preserve the style in which I once narrated it at Lima, to a lounging circle of my Spanish friends, one Saint's Eve, smoking upon the thick-guilt, tiled piazza of the Golden Inn.
+[00:03:14.000 --> 00:03:27.000]   Of those fine cavaliers the young dons Pedro and Sebastian were on closer terms with me, and hence the interluding questions they occasionally put and which are duly answered at the time.
+[00:03:28.000 --> 00:03:46.000]   Quote. Some two years prior to my first learning the events, which I am about rehearsing to you, gentlemen, the Town Hoe, sperm-whaler of Nantucket, was cruising in your Pacific here, not very many days sail eastward from the eaves of this good Golden Inn.
+[00:03:47.000 --> 00:03:59.000]   She was somewhere to the northward of the line. One morning upon handling the pumps, according to daily usage, it was observed that she made more water in her hole than common.
+[00:03:59.000 --> 00:04:02.000]   They supposed a swordfish had stabbed her, gentlemen.
+[00:04:03.000 --> 00:04:31.000]   But the captain, having some unusual reason for believing that rare good luck awaited him in those latitudes, and therefore being very averse to quit them, and the leak not being then considered at all dangerous, though indeed they could not find it after searching the hole as low down as was possible in rather heavy weather, the ship still continued her cruisings, the mariners working at the pumps at wide and easy intervals.
+[00:04:32.000 --> 00:04:52.000]   But no good luck came, more days went by, and not only was the leak yet undiscovered, but it sensibly increased. So much so that, now taking some alarm, the captain, making all sail, stood away for the nearest harbor among the islands, there to have his hull hove out and repaired.
+[00:04:53.000 --> 00:05:02.000]   Though no small passage was before her, yet if the commonest chance favored, he did not at all fear that it was a good thing.
+
+whisper_print_timings:     load time =   171.84 ms
+whisper_print_timings:     fallbacks =   0 p /   0 h
+whisper_print_timings:      mel time =    90.44 ms
+whisper_print_timings:   sample time =   317.84 ms /     1 runs (   317.84 ms per run)
+whisper_print_timings:   encode time =  3914.39 ms /    16 runs (   244.65 ms per run)
+whisper_print_timings:   decode time =  5303.68 ms /   881 runs (     6.02 ms per run)
+whisper_print_timings:   batchd time =    10.70 ms /    11 runs (     0.97 ms per run)
+whisper_print_timings:   prompt time =   607.88 ms /  2803 runs (     0.22 ms per run)
+whisper_print_timings:    total time = 10631.77 ms
+ggml_metal_free: deallocating
