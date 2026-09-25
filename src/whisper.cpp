@@ -7330,6 +7330,9 @@ int whisper_full_with_state(
 
                 whisper_batch_prep_legacy(state->batch, prompt.data(), prompt.size(), 0, 0);
 
+                const int sot_idx = (int) prompt.size() - (int) prompt_init.size();
+                state->batch.logits[sot_idx] = 1;
+
                 if (!whisper_decode_internal(*ctx, *state, state->batch, params.n_threads, false, params.abort_callback, params.abort_callback_user_data)) {
                     WHISPER_LOG_ERROR("%s: failed to decode\n", __func__);
                     return -8;
@@ -7339,11 +7342,12 @@ int whisper_full_with_state(
                 // This has to be done before any logit filtering. Hence we cannot use the probs from the whisper_process_logits.
                 {
                     const int n_logits = ctx->vocab.id_to_token.size();
+                    const std::vector<float> logits_sot(state->logits.begin() + sot_idx*n_logits, state->logits.begin() + (sot_idx + 1)*n_logits);
                     std::vector<float> logprobs(n_logits);
                     std::vector<float> probs(n_logits);
 
-                    whisper_compute_logprobs(state->logits, n_logits, logprobs);
-                    whisper_compute_probs(state->logits, n_logits, logprobs, probs);
+                    whisper_compute_logprobs(logits_sot, n_logits, logprobs);
+                    whisper_compute_probs(logits_sot, n_logits, logprobs, probs);
                     state->no_speech_prob = probs[whisper_token_nosp(ctx)];
                 }
 
