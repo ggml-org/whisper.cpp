@@ -969,9 +969,8 @@ static void cb_log_disable(enum ggml_log_level , const char * , void * ) { }
 
 int main(int argc, char ** argv) {
 #if defined(_WIN32)
-    // Set the console output code page to UTF-8, while command line arguments
-    // are still encoded in the system's code page. In this way, we can print
-    // non-ASCII characters to the console, and access files with non-ASCII paths.
+    // Set the console output code page to UTF-8. With the win32.manifest,
+    // command line arguments and file paths are also treated as UTF-8.
     SetConsoleOutputCP(CP_UTF8);
 #endif
 
