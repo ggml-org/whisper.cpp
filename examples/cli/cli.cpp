@@ -112,6 +112,8 @@ struct whisper_params {
     float       vad_max_speech_duration_s = FLT_MAX;
     int         vad_speech_pad_ms = 30;
     float       vad_samples_overlap = 0.1f;
+    bool        vad_use_gpu   = true;
+    int         vad_gpu_device = 0;
 };
 
 static void whisper_print_usage(int argc, char ** argv, const whisper_params & params);
@@ -221,6 +223,9 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-vmsd" || arg == "--vad-max-speech-duration-s")   { params.vad_max_speech_duration_s   = std::stof(ARGV_NEXT); }
         else if (arg == "-vp"   || arg == "--vad-speech-pad-ms")           { params.vad_speech_pad_ms           = std::stoi(ARGV_NEXT); }
         else if (arg == "-vo"   || arg == "--vad-samples-overlap")         { params.vad_samples_overlap         = std::stof(ARGV_NEXT); }
+        else if (                  arg == "--vad-use-gpu")                 { params.vad_use_gpu                 = true; }
+        else if (                  arg == "--vad-no-gpu")                  { params.vad_use_gpu                 = false; }
+        else if (arg == "-vgd"  || arg == "--vad-gpu-device")               { params.vad_gpu_device              = std::stoi(ARGV_NEXT); }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             whisper_print_usage(argc, argv, params);
@@ -307,6 +312,9 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
                                                                                                                                   std::to_string(params.vad_max_speech_duration_s).c_str());
     fprintf(stderr, "  -vp N,     --vad-speech-pad-ms           N [%-7d] VAD speech padding (extend segments)\n",             params.vad_speech_pad_ms);
     fprintf(stderr, "  -vo N,     --vad-samples-overlap         N [%-7.2f] VAD samples overlap (seconds between segments)\n", params.vad_samples_overlap);
+    fprintf(stderr, "             --vad-use-gpu                   [%-7s] run the VAD (Silero) model on the GPU\n",            params.vad_use_gpu ? "true" : "false");
+    fprintf(stderr, "             --vad-no-gpu                    [%-7s] force the VAD (Silero) model to run on the CPU\n",   !params.vad_use_gpu ? "true" : "false");
+    fprintf(stderr, "  -vgd N,    --vad-gpu-device              N [%-7d] GPU device to use for VAD\n",                        params.vad_gpu_device);
     fprintf(stderr, "\n");
 }
 
@@ -1268,6 +1276,9 @@ int main(int argc, char ** argv) {
             wparams.vad_params.max_speech_duration_s   = params.vad_max_speech_duration_s;
             wparams.vad_params.speech_pad_ms           = params.vad_speech_pad_ms;
             wparams.vad_params.samples_overlap         = params.vad_samples_overlap;
+
+            wparams.vad_use_gpu    = params.vad_use_gpu;
+            wparams.vad_gpu_device = params.vad_gpu_device;
 
             whisper_print_user_data user_data = { &params, &pcmf32s, 0 };
 

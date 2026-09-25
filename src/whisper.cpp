@@ -6163,6 +6163,9 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
         /*.vad                         =*/ false,
         /*.vad_model_path              =*/ nullptr,
 
+        /*.vad_use_gpu                 =*/ true,
+        /*.vad_gpu_device              =*/ 0,
+
         /* vad_params =*/ whisper_vad_default_params(),
     };
 
@@ -6816,6 +6819,19 @@ static bool whisper_vad(
 
     if (state->vad_context == nullptr) {
         struct whisper_vad_context_params vad_ctx_params = whisper_vad_default_context_params();
+        // Previously this always forced the Silero VAD model onto the CPU
+        // backend (use_gpu was left at its "false" default), regardless of
+        // whether the main Whisper model was running on GPU. Propagate the
+        // caller-controlled vad_use_gpu/vad_gpu_device settings (and reuse
+        // the main n_threads value) so that VAD inference can run on the
+        // same GPU backend as the rest of the pipeline when requested.
+        vad_ctx_params.use_gpu    = params.vad_use_gpu;
+        vad_ctx_params.gpu_device = params.vad_gpu_device;
+        vad_ctx_params.n_threads  = params.n_threads > 0 ? params.n_threads : vad_ctx_params.n_threads;
+
+        WHISPER_LOG_INFO("%s: VAD use_gpu = %s, gpu_device = %d, n_threads = %d\n",
+                __func__, vad_ctx_params.use_gpu ? "true" : "false", vad_ctx_params.gpu_device, vad_ctx_params.n_threads);
+
         struct whisper_vad_context * vctx = whisper_vad_init_from_file_with_params(params.vad_model_path, vad_ctx_params);
         if (vctx == nullptr) {
             WHISPER_LOG_ERROR("%s: failed to initialize VAD context\n", __func__);

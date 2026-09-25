@@ -988,6 +988,15 @@ before and after each detected speech segment to avoid cutting off speech edges.
 the next one, in seconds (e.g., 0.10 = 100ms overlap). This ensures speech isn't
 cut off abruptly between segments when they're concatenated together.
 
+* --vad-use-gpu / --vad-no-gpu: Run the Silero VAD model itself on the GPU
+(default: enabled when the build was compiled with a GPU backend such as
+CUDA/Metal/Vulkan). This is independent of whether the main transcription
+model runs on GPU. If the requested GPU device/backend is not available, VAD
+silently falls back to running on the CPU.
+
+* --vad-gpu-device: GPU device index to use for the VAD model (e.g. CUDA
+device), analogous to `-dev`/`--device` for the main model.
+
 ## Examples
 
 There are various examples of using the library for different projects in the [examples](examples) folder.

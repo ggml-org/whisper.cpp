@@ -587,6 +587,14 @@ extern "C" {
         bool         vad;                         // Enable VAD
         const char * vad_model_path;              // Path to VAD model
 
+        // Run the Silero VAD model itself on the GPU (independent of the
+        // GPU setting used for the main Whisper model). Requires the build
+        // to have been compiled with a GPU backend (CUDA/Metal/Vulkan/...).
+        // If the requested GPU backend/device is unavailable, silently
+        // falls back to CPU, same behaviour as whisper_context_params.use_gpu.
+        bool         vad_use_gpu;                 // Run VAD model on GPU (default: true)
+        int          vad_gpu_device;               // GPU device to use for VAD (e.g. CUDA device)
+
         whisper_vad_params vad_params;
     };
 
