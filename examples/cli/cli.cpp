@@ -1039,13 +1039,13 @@ int main(int argc, char ** argv) {
     if (params.language != "auto" && whisper_lang_id(params.language.c_str()) == -1) {
         fprintf(stderr, "error: unknown language '%s'\n", params.language.c_str());
         whisper_print_usage(argc, argv, params);
-        exit(0);
+        return 1;
     }
 
     if (params.diarize && params.tinydiarize) {
         fprintf(stderr, "error: cannot use both --diarize and --tinydiarize\n");
         whisper_print_usage(argc, argv, params);
-        exit(0);
+        return 1;
     }
 
     if (params.no_prints) {
