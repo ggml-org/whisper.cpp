@@ -1896,6 +1896,10 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
                   return false;
               }
 
+            if (ttype < 0 || ttype >= GGML_TYPE_COUNT) {
+                WHISPER_LOG_ERROR("%s: invalid ttype %d in model file (expected 0 <= ttype < %d)\n", __func__, ttype, GGML_TYPE_COUNT);
+                return false;
+            }
 
             int32_t nelements = 1;
             int32_t ne[4] = { 1, 1, 1, 1 };
@@ -5172,6 +5176,10 @@ struct whisper_vad_context * whisper_vad_init_with_params(
                   return nullptr;
             }
 
+            if (ttype < 0 || ttype >= GGML_TYPE_COUNT) {
+                WHISPER_LOG_ERROR("%s: invalid ttype %d in model file (expected 0 <= ttype < %d)\n", __func__, ttype, GGML_TYPE_COUNT);
+                return nullptr;
+            }
 
             int32_t nelements = 1;
             int32_t ne[4] = { 1, 1, 1, 1 };
