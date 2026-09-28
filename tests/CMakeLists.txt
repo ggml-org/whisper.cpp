@@ -140,6 +140,17 @@ target_compile_definitions(${LANG_DETECT_ABORT_TEST} PRIVATE
 add_test(NAME ${LANG_DETECT_ABORT_TEST} COMMAND ${LANG_DETECT_ABORT_TEST})
 set_tests_properties(${LANG_DETECT_ABORT_TEST} PROPERTIES LABELS "tiny;gh")
 
+set(DIARIZATION_MODEL_PATH "${PROJECT_SOURCE_DIR}/models/Nemotron-3-Diarization.q8_0.gguf")
+add_executable(test-diarization test-diarization.cpp)
+target_include_directories(test-diarization PRIVATE ../examples)
+target_link_libraries(test-diarization PRIVATE common whisper)
+target_compile_definitions(test-diarization PRIVATE
+    DIARIZATION_MODEL_PATH="${DIARIZATION_MODEL_PATH}"
+    SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/conversation.wav")
+    #SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/ami_en2002d_2132.wav")
+add_test(NAME test-diarization COMMAND test-diarization)
+set_tests_properties(test-diarization PROPERTIES LABELS "diarization" SKIP_RETURN_CODE 77)
+
 # VAD test tests VAD in isolation
 set(VAD_TEST test-vad)
 add_executable(${VAD_TEST} ${VAD_TEST}.cpp)
