@@ -78,6 +78,7 @@ struct whisper_params {
     bool use_gpu         = true;
     bool flash_attn      = true;
     int32_t gpu_device   = 0;
+    bool    split_mode   = false;
     bool suppress_nst    = false;
     bool carry_initial_prompt = false;
 
@@ -205,6 +206,9 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-ls"   || arg == "--log-score")            { params.log_score       = true; }
         else if (arg == "-ng"   || arg == "--no-gpu")               { params.use_gpu         = false; }
         else if (arg == "-dev"  || arg == "--device")               { params.gpu_device      = std::stoi(ARGV_NEXT); }
+        else if (arg == "-sm"   || arg == "--split-mode" || arg == "--hybrid" || arg == "--optimize-gpu-cpu") { params.split_mode = true; }
+        else if (arg == "--hybrid-1" || arg == "--optimize-1" || arg == "--optimize-gpu-cpu-1") { params.split_mode = true; params.n_threads = 1; }
+        else if (arg == "--hybrid-4" || arg == "--optimize-4" || arg == "--optimize-gpu-cpu-4") { params.split_mode = true; params.n_threads = 4; }
         else if (arg == "-fa"   || arg == "--flash-attn")           { params.flash_attn      = true; }
         else if (arg == "-nfa"  || arg == "--no-flash-attn")        { params.flash_attn      = false; }
         else if (arg == "-sns"  || arg == "--suppress-nst")         { params.suppress_nst    = true; }
@@ -1059,6 +1063,7 @@ int main(int argc, char ** argv) {
 
     cparams.use_gpu    = params.use_gpu;
     cparams.gpu_device = params.gpu_device;
+    cparams.split_mode = params.split_mode;
     cparams.flash_attn = params.flash_attn;
 
     if (!params.dtw.empty()) {
