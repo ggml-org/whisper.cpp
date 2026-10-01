@@ -538,16 +538,6 @@ static bool whisper_diar_read_f32(const gguf_context * meta, const char * name, 
     return true;
 }
 
-static bool whisper_diar_read_bool(const gguf_context * meta, const char * name, bool & value) {
-    const int64_t id = gguf_find_key(meta, name);
-    if (id < 0 || gguf_get_kv_type(meta, id) != GGUF_TYPE_BOOL) {
-        WHISPER_LOG_ERROR("%s: missing or invalid metadata '%s'\n", __func__, name);
-        return false;
-    }
-    value = gguf_get_val_bool(meta, id);
-    return true;
-}
-
 static bool whisper_diar_is_probability(float p) {
     return std::isfinite(p) && p >= 0 && p <= 1;
 }
@@ -654,37 +644,10 @@ static bool whisper_diar_model_load(whisper_diar_context & dctx) {
         auto read_f32  = [&](whisper_diar_hparam hparam, float & value) {
             ok = ok && whisper_diar_read_f32(meta, WHISPER_DIAR_HPARAM_NAMES.at(hparam), value);
         };
-        auto read_bool = [&](whisper_diar_hparam hparam, bool & value) {
-            ok = ok && whisper_diar_read_bool(meta, WHISPER_DIAR_HPARAM_NAMES.at(hparam), value);
-        };
-        auto check_i32 = [](int32_t actual, whisper_diar_hparam hparam) {
-            return actual == WHISPER_DIAR_HPARAM_MODEL_VALUES.at(hparam);
-        };
-        auto check_f32 = [](float actual, whisper_diar_hparam hparam) {
-            return std::fabs(actual - WHISPER_DIAR_HPARAM_MODEL_FLOAT_VALUES.at(hparam)) < 1e-7f;
-        };
-
-        // Validation of field from the model that we don't actually use but still
-        // want to make sure that future models don't mismatch.
         std::string architecture;
         std::string version;
         std::string type;
         std::string subsampling_type;
-        std::string normalize;
-        int32_t n_features = 0;
-        int32_t n_transformer_layer = 0;
-        int32_t output_subsampling_factor = 0;
-        int32_t upsample_factor = 0;
-        int32_t sample_rate = 0;
-        bool qkv_bias = false;
-        bool qk_norm = false;
-        bool xscaling = false;
-        bool pre_block_norm = false;
-        bool learnable_silence = false;
-        bool high_resolution = false;
-        float rotary_fraction = 0.f;
-        float window_size = 0.f;
-        float window_stride = 0.f;
         int32_t sil_frames_per_spk = 0;
 
         read_str (WHISPER_DIAR_HPARAM_ARCHITECTURE,                         architecture);
@@ -693,22 +656,6 @@ static bool whisper_diar_model_load(whisper_diar_context & dctx) {
         read_str (WHISPER_DIAR_HPARAM_SUBSAMPLING_TYPE,                     subsampling_type);
         read_i32 (WHISPER_DIAR_HPARAM_ENCODER_N_HEADS,                      hparams.n_audio_head);
         read_i32 (WHISPER_DIAR_HPARAM_ENCODER_SUBSAMPLING_FACTOR,           hparams.subsampling_factor);
-        read_i32 (WHISPER_DIAR_HPARAM_ENCODER_FEAT_IN,                      n_features);
-        read_i32 (WHISPER_DIAR_HPARAM_TRANSFORMER_N_LAYERS,                 n_transformer_layer);
-        read_bool(WHISPER_DIAR_HPARAM_ENCODER_QKV_BIAS,                     qkv_bias);
-        read_bool(WHISPER_DIAR_HPARAM_ENCODER_QK_NORM,                      qk_norm);
-        read_bool(WHISPER_DIAR_HPARAM_ENCODER_XSCALING,                     xscaling);
-        read_bool(WHISPER_DIAR_HPARAM_ENCODER_PRE_BLOCK_NORM,               pre_block_norm);
-        read_bool(WHISPER_DIAR_HPARAM_LEARNABLE_SILENCE,                    learnable_silence);
-        read_bool(WHISPER_DIAR_HPARAM_HIGH_RESOLUTION,                      high_resolution);
-        read_f32 (WHISPER_DIAR_HPARAM_ENCODER_ROTARY_FRACTION,              rotary_fraction);
-        read_i32 (WHISPER_DIAR_HPARAM_OUTPUT_SUBSAMPLING_FACTOR,            output_subsampling_factor);
-        read_i32 (WHISPER_DIAR_HPARAM_UPSAMPLE_FACTOR,                      upsample_factor);
-        read_i32 (WHISPER_DIAR_HPARAM_PREPROCESSOR_SAMPLE_RATE,             sample_rate);
-        read_f32 (WHISPER_DIAR_HPARAM_PREPROCESSOR_WINDOW_SIZE,             window_size);
-        read_f32 (WHISPER_DIAR_HPARAM_PREPROCESSOR_WINDOW_STRIDE,           window_stride);
-        read_str (WHISPER_DIAR_HPARAM_PREPROCESSOR_NORMALIZE,               normalize);
-
         // Runtime fields → hparams
         read_i32 (WHISPER_DIAR_HPARAM_ENCODER_D_MODEL,                      hparams.n_audio_state);
         read_i32 (WHISPER_DIAR_HPARAM_ENCODER_D_FF,                         hparams.n_ff);
@@ -742,35 +689,6 @@ static bool whisper_diar_model_load(whisper_diar_context & dctx) {
 
         if (!(type == "transformer_rope" && subsampling_type == "feature_stacking")) {
             WHISPER_LOG_ERROR("%s: unsupported encoder\n", __func__);
-            return false;
-        }
-
-        if (!(check_i32(hparams.n_audio_state,      WHISPER_DIAR_HPARAM_ENCODER_D_MODEL)            &&
-              check_i32(hparams.n_audio_head,       WHISPER_DIAR_HPARAM_ENCODER_N_HEADS)            &&
-              check_i32(hparams.n_ff,               WHISPER_DIAR_HPARAM_ENCODER_D_FF)               &&
-              check_i32(hparams.subsampling_factor, WHISPER_DIAR_HPARAM_ENCODER_SUBSAMPLING_FACTOR) &&
-              check_i32(n_features,                 WHISPER_DIAR_HPARAM_ENCODER_FEAT_IN)            &&
-              check_i32(hparams.n_head_state,       WHISPER_DIAR_HPARAM_TRANSFORMER_HIDDEN_SIZE)    &&
-              check_i32(n_transformer_layer,        WHISPER_DIAR_HPARAM_TRANSFORMER_N_LAYERS))) {
-            WHISPER_LOG_ERROR("%s: unsupported V3 dimensions\n", __func__);
-            return false;
-        }
-
-        if (!(!qkv_bias && !qk_norm && !xscaling && pre_block_norm                                &&
-              learnable_silence && high_resolution && rotary_fraction == 1.0f                     &&
-              check_i32(output_subsampling_factor, WHISPER_DIAR_HPARAM_OUTPUT_SUBSAMPLING_FACTOR) &&
-              check_i32(upsample_factor,           WHISPER_DIAR_HPARAM_UPSAMPLE_FACTOR))) {
-            WHISPER_LOG_ERROR("%s: unsupported V3 graph configuration\n", __func__);
-            return false;
-        }
-
-        if (!(check_i32(sample_rate,     WHISPER_DIAR_HPARAM_PREPROCESSOR_SAMPLE_RATE)    &&
-              check_i32(hparams.n_fft,   WHISPER_DIAR_HPARAM_PREPROCESSOR_N_FFT)          &&
-              check_i32(hparams.n_mels,  WHISPER_DIAR_HPARAM_PREPROCESSOR_FEATURES)       &&
-              check_f32(window_size,     WHISPER_DIAR_HPARAM_PREPROCESSOR_WINDOW_SIZE)    &&
-              check_f32(window_stride,   WHISPER_DIAR_HPARAM_PREPROCESSOR_WINDOW_STRIDE)  &&
-              normalize == "NA")) {
-            WHISPER_LOG_ERROR("%s: unsupported audio frontend\n", __func__);
             return false;
         }
 
