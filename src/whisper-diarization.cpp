@@ -820,6 +820,7 @@ static bool whisper_diar_model_load(whisper_diar_context & dctx) {
     const int n_ff          = hparams.n_ff;
     const int n_mels        = hparams.n_mels;
     const int n_fft         = hparams.n_fft;
+    const int sf            = hparams.subsampling_factor;
 
     bool tensors_ok = true;
     auto create_tensor = [&](whisper_diar_tensor tensor_type, ggml_tensor * meta_tensor,
@@ -877,7 +878,7 @@ static bool whisper_diar_model_load(whisper_diar_context & dctx) {
     model.silence_emb = create_tensor(WHISPER_DIAR_TENSOR_SILENCE_EMBEDDING,
                                       ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state));
     model.enc_pre_w = create_tensor(WHISPER_DIAR_TENSOR_ENC_PRE_ENCODE_WEIGHT,
-                                    ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state * 2, n_audio_state));
+                                    ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, sf * n_mels, n_audio_state));
     model.enc_norm_w = create_tensor(WHISPER_DIAR_TENSOR_ENC_EMBED_NORM_WEIGHT,
                                          ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state));
     model.enc_norm_b = create_tensor(WHISPER_DIAR_TENSOR_ENC_EMBED_NORM_BIAS,
@@ -891,9 +892,9 @@ static bool whisper_diar_model_load(whisper_diar_context & dctx) {
     model.enc_proj_b = create_tensor(WHISPER_DIAR_TENSOR_ENC_PROJ_BIAS,
                                      ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_head_state));
     model.upsample_w = create_tensor(WHISPER_DIAR_TENSOR_UPSAMPLE_WEIGHT,
-                          ggml_new_tensor_3d(meta_ctx.get(), GGML_TYPE_F32, 3, n_head_state, n_head_state * 8));
+                          ggml_new_tensor_3d(meta_ctx.get(), GGML_TYPE_F32, 3, n_head_state, sf * n_head_state));
     model.upsample_b = create_tensor(WHISPER_DIAR_TENSOR_UPSAMPLE_BIAS,
-                                        ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_head_state * 8));
+                                        ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, sf * n_head_state));
     model.head_hidden_w = create_tensor(WHISPER_DIAR_TENSOR_HEAD_HIDDEN_WEIGHT,
                                         ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, n_head_state, n_head_state));
     model.head_hidden_b = create_tensor(WHISPER_DIAR_TENSOR_HEAD_HIDDEN_BIAS,
