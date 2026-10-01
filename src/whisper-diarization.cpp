@@ -5,11 +5,11 @@
 #include "gguf.h"
 
 #include <algorithm>
+#include <fstream>
 #include <cmath>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
-#include <fstream>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -937,15 +937,6 @@ static bool whisper_diar_model_load(whisper_diar_context & dctx) {
         return false;
     }
 
-    std::ifstream file(dctx.path_model, std::ios::binary | std::ios::ate);
-    const auto end = file.tellg();
-    if (!file || end < 0) {
-        WHISPER_LOG_ERROR("%s: cannot determine GGUF file size\n", __func__);
-        return false;
-    }
-
-    const uint64_t size = (uint64_t)end;
-    const uint64_t base = gguf_get_data_offset(meta);
     for (int64_t i = 0; i < gguf_get_n_tensors(meta); ++i) {
         const char * name = gguf_get_tensor_name(meta, i);
         if (model.tensors.count(name) == 0 &&
@@ -954,12 +945,6 @@ static bool whisper_diar_model_load(whisper_diar_context & dctx) {
             std::strcmp(name, WHISPER_DIAR_TENSOR_NAMES.at(WHISPER_DIAR_TENSOR_ACTIVITY_HEAD1_WEIGHT)) != 0 &&
             std::strcmp(name, WHISPER_DIAR_TENSOR_NAMES.at(WHISPER_DIAR_TENSOR_ACTIVITY_HEAD1_BIAS)) != 0) {
             WHISPER_LOG_ERROR("%s: unknown tensor '%s'\n", __func__, name);
-            return false;
-        }
-        const uint64_t offset = gguf_get_tensor_offset(meta, i);
-        const uint64_t bytes  = gguf_get_tensor_size(meta, i);
-        if (base > size || offset > size - base || bytes > size - base - offset) {
-            WHISPER_LOG_ERROR("%s: truncated payload for '%s'\n", __func__, name);
             return false;
         }
     }
@@ -971,6 +956,13 @@ static bool whisper_diar_model_load(whisper_diar_context & dctx) {
     }
     model.buffers.push_back(buffer);
     ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    std::ifstream file(dctx.path_model, std::ios::binary);
+    if (!file) {
+        WHISPER_LOG_ERROR("%s: failed to open model file for reading\n", __func__);
+        return false;
+    }
+    const uint64_t base = gguf_get_data_offset(meta);
 
     size_t total_size = 0;
     std::vector<char> read_buf;
