@@ -18,6 +18,16 @@
 #include <string>
 #include <vector>
 
+struct gguf_context_deleter {
+    void operator()(gguf_context * p) { gguf_free(p); }
+};
+typedef std::unique_ptr<gguf_context, gguf_context_deleter> metadata_ptr;
+
+struct ggml_context_deleter {
+    void operator()(ggml_context * p) { ggml_free(p); }
+};
+typedef std::unique_ptr<ggml_context, ggml_context_deleter> ggml_context_ptr;
+
 static void whisper_diar_log_callback_default(ggml_log_level level, const char * text, void * user_data) {
     (void) level;
     (void) user_data;
@@ -623,8 +633,8 @@ static bool whisper_diar_backend_init(whisper_diar_context & dctx) {
 static bool whisper_diar_model_load(whisper_diar_context & dctx) {
     WHISPER_LOG_INFO("%s: loading model from '%s'\n", __func__, dctx.path_model.c_str());
     auto & model = dctx.model;
-    std::unique_ptr<gguf_context, decltype(&gguf_free)> metadata(
-            gguf_init_from_file(dctx.path_model.c_str(), {true, nullptr}), gguf_free);
+
+    metadata_ptr metadata(gguf_init_from_file(dctx.path_model.c_str(), {true, nullptr}));
     gguf_context * meta = metadata.get();
     if (!meta) {
         return false;
@@ -635,15 +645,18 @@ static bool whisper_diar_model_load(whisper_diar_context & dctx) {
         auto & scoring = model.scoring;
         bool ok = true;
 
-        auto read_str  = [&](whisper_diar_hparam hparam, std::string & value) {
+        auto read_str = [&](whisper_diar_hparam hparam, std::string & value) {
             ok = ok && whisper_diar_read_str(meta, WHISPER_DIAR_HPARAM_NAMES.at(hparam), value);
         };
-        auto read_i32  = [&](whisper_diar_hparam hparam, int32_t & value) {
+
+        auto read_i32 = [&](whisper_diar_hparam hparam, int32_t & value) {
             ok = ok && whisper_diar_read_i32(meta, WHISPER_DIAR_HPARAM_NAMES.at(hparam), value);
         };
-        auto read_f32  = [&](whisper_diar_hparam hparam, float & value) {
+
+        auto read_f32 = [&](whisper_diar_hparam hparam, float & value) {
             ok = ok && whisper_diar_read_f32(meta, WHISPER_DIAR_HPARAM_NAMES.at(hparam), value);
         };
+
         std::string architecture;
         std::string version;
         std::string type;
@@ -681,7 +694,6 @@ static bool whisper_diar_model_load(whisper_diar_context & dctx) {
             return false;
         }
 
-        // Validate fixed-value fields.
         if (!(architecture == "sortformer" && version == "v3")) {
             WHISPER_LOG_ERROR("%s: expected Sortformer V3 GGUF\n", __func__);
             return false;
@@ -710,9 +722,9 @@ static bool whisper_diar_model_load(whisper_diar_context & dctx) {
     model.buffers.reserve(1);
 
     ggml_init_params params = {
-            /*.mem_size   =*/n_tensors * ggml_tensor_overhead(),
-            /*.mem_buffer =*/nullptr,
-            /*.no_alloc   =*/true,
+        /*.mem_size   =*/ n_tensors * ggml_tensor_overhead(),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
     };
     ggml_context * ctx = ggml_init(params);
     if (!ctx) {
@@ -722,12 +734,11 @@ static bool whisper_diar_model_load(whisper_diar_context & dctx) {
     model.ctxs.push_back(ctx);
 
     ggml_init_params meta_params = {
-            /*.mem_size   =*/n_tensors * ggml_tensor_overhead(),
-            /*.mem_buffer =*/nullptr,
-            /*.no_alloc   =*/true,
+        /*.mem_size   =*/ n_tensors * ggml_tensor_overhead(),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
     };
-
-    std::unique_ptr<ggml_context, decltype(&ggml_free)> meta_ctx(ggml_init(meta_params), ggml_free);
+    ggml_context_ptr meta_ctx(ggml_init(meta_params));
     if (!meta_ctx) {
         WHISPER_LOG_ERROR("%s: failed to allocate tensor metadata context\n", __func__);
         return false;
@@ -761,26 +772,11 @@ static bool whisper_diar_model_load(whisper_diar_context & dctx) {
         const int64_t * ne   = gguf_get_tensor_ne(meta, id);
         const ggml_type type = gguf_get_tensor_type(meta, id);
 
-        const bool is_linear = tensor_type == WHISPER_DIAR_TENSOR_ENC_PRE_ENCODE_WEIGHT ||
-                               tensor_type == WHISPER_DIAR_TENSOR_ENC_PROJ_WEIGHT       ||
-                               tensor_type == WHISPER_DIAR_TENSOR_HEAD_HIDDEN_WEIGHT    ||
-                               tensor_type == WHISPER_DIAR_TENSOR_HEAD_SPEAKERS_WEIGHT  ||
-                               tensor_type == WHISPER_DIAR_TENSOR_ENC_ATTN_QKV_WEIGHT   ||
-                               tensor_type == WHISPER_DIAR_TENSOR_ENC_ATTN_OUT_WEIGHT   ||
-                               tensor_type == WHISPER_DIAR_TENSOR_ENC_FFN1_WEIGHT       ||
-                               tensor_type == WHISPER_DIAR_TENSOR_ENC_FFN2_WEIGHT;
-        const bool is_conv   = tensor_type == WHISPER_DIAR_TENSOR_UPSAMPLE_WEIGHT;
-
-        const bool type_ok = is_conv ? type == GGML_TYPE_F16 :
-                             is_linear ? (type == GGML_TYPE_F32 ||
-                                          type == GGML_TYPE_F16 ||
-                                          type == GGML_TYPE_Q8_0) : type == GGML_TYPE_F32;
-
-        if (!type_ok || ne[0] != meta_tensor->ne[0] ||
+        if (ne[0] != meta_tensor->ne[0] ||
             ne[1] != meta_tensor->ne[1] ||
             ne[2] != meta_tensor->ne[2] ||
             ne[3] != meta_tensor->ne[3]) {
-            WHISPER_LOG_ERROR("%s: tensor '%s' has invalid type or shape\n", __func__, name.c_str());
+            WHISPER_LOG_ERROR("%s: tensor '%s' has wrong shape\n", __func__, name.c_str());
             tensors_ok = false;
             return nullptr;
         }
