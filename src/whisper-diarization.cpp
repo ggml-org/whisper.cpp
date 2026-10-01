@@ -874,61 +874,61 @@ static bool whisper_diar_model_load(whisper_diar_context & dctx) {
     };
 
     model.mel_filters = create_tensor(WHISPER_DIAR_TENSOR_MEL_FILTERS,
-                                      ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, n_fft / 2 + 1, n_mels));
+            ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, n_fft / 2 + 1, n_mels));
     model.silence_emb = create_tensor(WHISPER_DIAR_TENSOR_SILENCE_EMBEDDING,
-                                      ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state));
+            ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state));
     model.enc_pre_w = create_tensor(WHISPER_DIAR_TENSOR_ENC_PRE_ENCODE_WEIGHT,
-                                    ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, sf * n_mels, n_audio_state));
+            ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, sf * n_mels, n_audio_state));
     model.enc_norm_w = create_tensor(WHISPER_DIAR_TENSOR_ENC_EMBED_NORM_WEIGHT,
-                                         ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state));
+            ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state));
     model.enc_norm_b = create_tensor(WHISPER_DIAR_TENSOR_ENC_EMBED_NORM_BIAS,
-                                         ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state));
+            ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state));
     model.enc_out_norm_w = create_tensor(WHISPER_DIAR_TENSOR_ENC_FINAL_NORM_WEIGHT,
-                                         ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state));
+            ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state));
     model.enc_out_norm_b = create_tensor(WHISPER_DIAR_TENSOR_ENC_FINAL_NORM_BIAS,
-                                         ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state));
+            ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state));
     model.enc_proj_w = create_tensor(WHISPER_DIAR_TENSOR_ENC_PROJ_WEIGHT,
-                                         ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state, n_head_state));
+            ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state, n_head_state));
     model.enc_proj_b = create_tensor(WHISPER_DIAR_TENSOR_ENC_PROJ_BIAS,
-                                     ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_head_state));
+            ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_head_state));
     model.upsample_w = create_tensor(WHISPER_DIAR_TENSOR_UPSAMPLE_WEIGHT,
-                          ggml_new_tensor_3d(meta_ctx.get(), GGML_TYPE_F32, 3, n_head_state, sf * n_head_state));
+            ggml_new_tensor_3d(meta_ctx.get(), GGML_TYPE_F32, 3, n_head_state, sf * n_head_state));
     model.upsample_b = create_tensor(WHISPER_DIAR_TENSOR_UPSAMPLE_BIAS,
-                                        ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, sf * n_head_state));
+            ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, sf * n_head_state));
     model.head_hidden_w = create_tensor(WHISPER_DIAR_TENSOR_HEAD_HIDDEN_WEIGHT,
-                                        ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, n_head_state, n_head_state));
+            ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, n_head_state, n_head_state));
     model.head_hidden_b = create_tensor(WHISPER_DIAR_TENSOR_HEAD_HIDDEN_BIAS,
-                                        ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_head_state));
+            ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_head_state));
     model.head_spks_w = create_tensor(WHISPER_DIAR_TENSOR_HEAD_SPEAKERS_WEIGHT,
-                          ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, n_head_state, hparams.n_speakers));
+            ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, n_head_state, hparams.n_speakers));
     model.head_spks_b = create_tensor(WHISPER_DIAR_TENSOR_HEAD_SPEAKERS_BIAS,
-                                      ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, hparams.n_speakers));
+            ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, hparams.n_speakers));
 
     model.layers.resize(hparams.n_audio_layer);
     for (int i = 0; i < hparams.n_audio_layer; ++i) {
         auto & layer = model.layers[i];
         layer.norm_attn_w = create_tensor(WHISPER_DIAR_TENSOR_ENC_NORM1_WEIGHT,
-                                          ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state), i);
+                ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state), i);
         layer.norm_attn_b = create_tensor(WHISPER_DIAR_TENSOR_ENC_NORM1_BIAS,
-                                          ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state), i);
+                ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state), i);
         layer.attn_qkv_w = create_tensor(WHISPER_DIAR_TENSOR_ENC_ATTN_QKV_WEIGHT,
-                                         ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state, n_audio_state * 3), i);
+                ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state, n_audio_state * 3), i);
         layer.attn_out_w = create_tensor(WHISPER_DIAR_TENSOR_ENC_ATTN_OUT_WEIGHT,
-                                         ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state, n_audio_state), i);
+                ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state, n_audio_state), i);
         layer.attn_out_b = create_tensor(WHISPER_DIAR_TENSOR_ENC_ATTN_OUT_BIAS,
-                                         ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state), i);
+                ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state), i);
         layer.norm_ff_w = create_tensor(WHISPER_DIAR_TENSOR_ENC_NORM2_WEIGHT,
-                                        ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state), i);
+                ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state), i);
         layer.norm_ff_b = create_tensor(WHISPER_DIAR_TENSOR_ENC_NORM2_BIAS,
-                                        ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state), i);
+                ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state), i);
         layer.ff1_w = create_tensor(WHISPER_DIAR_TENSOR_ENC_FFN1_WEIGHT,
-                                    ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state, n_ff), i);
+                ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state, n_ff), i);
         layer.ff1_b = create_tensor(WHISPER_DIAR_TENSOR_ENC_FFN1_BIAS,
-                                    ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_ff), i);
+                ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_ff), i);
         layer.ff2_w = create_tensor(WHISPER_DIAR_TENSOR_ENC_FFN2_WEIGHT,
-                                    ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, n_ff, n_audio_state), i);
+                ggml_new_tensor_2d(meta_ctx.get(), GGML_TYPE_F32, n_ff, n_audio_state), i);
         layer.ff2_b = create_tensor(WHISPER_DIAR_TENSOR_ENC_FFN2_BIAS,
-                                         ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state), i);
+                ggml_new_tensor_1d(meta_ctx.get(), GGML_TYPE_F32, n_audio_state), i);
     }
 
     meta_ctx.reset();
