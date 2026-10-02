@@ -9125,7 +9125,15 @@ static void median_filter(struct ggml_tensor * dst , const struct ggml_tensor * 
         return;
     }
     int filter_width = ((median_filter_user_data *) userdata)->filter_width;
-    WHISPER_ASSERT(filter_width < a->ne[2]);
+    // A window that advanced only a few frames has fewer audio tokens than
+    // the filter is wide: narrow the filter instead of aborting (1: none).
+    if (filter_width >= a->ne[2]) {
+        filter_width = (a->ne[2] % 2) ? (int) a->ne[2] - 2 : (int) a->ne[2] - 1;
+        if (filter_width < 1) {
+            filter_width = 1;
+        }
+    }
+    WHISPER_ASSERT(filter_width < a->ne[2] || filter_width == 1);
     WHISPER_ASSERT(filter_width % 2);
     WHISPER_ASSERT(ggml_n_dims(a) == 3);
     WHISPER_ASSERT(a->type == GGML_TYPE_F32);
