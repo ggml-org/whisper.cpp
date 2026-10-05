@@ -4160,7 +4160,8 @@ static int whisper_lang_auto_detect_internal(
                            int   n_threads,
                          float * lang_probs,
            ggml_abort_callback   abort_callback,
-                          void * abort_callback_data) {
+                          void * abort_callback_data,
+          const std::vector<bool> * lang_filter = nullptr) {
     const int seek = offset_ms/10;
 
     if (seek < 0) {
@@ -4196,6 +4197,16 @@ static int whisper_lang_auto_detect_internal(
     for (const auto & kv : g_lang) {
         const auto token_lang = whisper_token_lang(ctx, kv.second.first);
         logits_id.emplace_back(state->logits[token_lang], kv.second.first);
+    }
+
+    // restrict auto-detection to the allowed subset of languages (if provided):
+    // excluded languages get a logit of -INFINITY so their probability is ~0
+    if (lang_filter) {
+        for (auto & kv : logits_id) {
+            if (!(*lang_filter)[kv.second]) {
+                kv.first = -INFINITY;
+            }
+        }
     }
 
     // sort descending
@@ -6172,6 +6183,7 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
         /*.vad_model_path              =*/ nullptr,
 
         /* vad_params =*/ whisper_vad_default_params(),
+        /* detect_language_filter =*/ nullptr,
     };
 
     switch (strategy) {
@@ -6993,6 +7005,42 @@ int whisper_full_with_state(
     if (params.language == nullptr || strlen(params.language) == 0 || strcmp(params.language, "auto") == 0 || params.detect_language) {
         std::vector<float> probs(whisper_lang_max_id() + 1, 0.0f);
 
+        // parse the optional detect_language_filter ("en,de,fr") into a per-language mask
+        std::vector<bool> lang_filter(whisper_lang_max_id() + 1, false);
+        bool has_lang_filter = false;
+        if (params.detect_language_filter && strlen(params.detect_language_filter) > 0) {
+            const std::string filter_str(params.detect_language_filter);
+            size_t start = 0;
+            while (start <= filter_str.size()) {
+                const size_t end = filter_str.find(',', start);
+                std::string lang = filter_str.substr(start, end == std::string::npos ? std::string::npos : end - start);
+
+                const char * ws = " \t";
+                lang.erase(0, lang.find_first_not_of(ws));
+                lang.erase(lang.find_last_not_of(ws) + 1);
+
+                if (!lang.empty()) {
+                    const int id = whisper_lang_id(lang.c_str());
+                    if (id < 0) {
+                        WHISPER_LOG_ERROR("%s: unknown language '%s' in detect_language_filter\n", __func__, lang.c_str());
+                        return -3;
+                    }
+                    lang_filter[id] = true;
+                    has_lang_filter = true;
+                }
+
+                if (end == std::string::npos) {
+                    break;
+                }
+                start = end + 1;
+            }
+
+            if (!has_lang_filter) {
+                WHISPER_LOG_ERROR("%s: detect_language_filter contains no valid languages\n", __func__);
+                return -3;
+            }
+        }
+
         if (params.encoder_begin_callback) {
             if (params.encoder_begin_callback(ctx, state, params.encoder_begin_callback_user_data) == false) {
                 WHISPER_LOG_ERROR("%s: encoder_begin_callback returned false - aborting\n", __func__);
@@ -7000,7 +7048,7 @@ int whisper_full_with_state(
             }
         }
 
-        const auto lang_id = whisper_lang_auto_detect_internal(ctx, state, 0, params.n_threads, probs.data(), params.abort_callback, params.abort_callback_user_data);
+        const auto lang_id = whisper_lang_auto_detect_internal(ctx, state, 0, params.n_threads, probs.data(), params.abort_callback, params.abort_callback_user_data, has_lang_filter ? &lang_filter : nullptr);
         if (lang_id < 0) {
             WHISPER_LOG_ERROR("%s: failed to auto-detect language\n", __func__);
             return -3;

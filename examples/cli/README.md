@@ -50,6 +50,7 @@ options:
   -nt,       --no-timestamps     [false  ] do not print timestamps
   -l LANG,   --language LANG     [en     ] spoken language ('auto' for auto-detect)
   -dl,       --detect-language   [false  ] exit after automatically detecting language
+             --detect-langs LANGS[       ] restrict language auto-detection to a comma-separated list (e.g. "en,de,fr")
              --prompt PROMPT     [       ] initial prompt (max n_text_ctx/2 tokens)
   -m FNAME,  --model FNAME       [models/ggml-base.en.bin] model path
   -f FNAME,  --file FNAME        [       ] input audio file path
