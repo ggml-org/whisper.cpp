@@ -88,7 +88,6 @@ struct whisper_diar_cache {
     int n_speakers = 0;
     int n_embd = 0;
 
-    // Speaker cache which stores 
     std::vector<float> spkcache;
     int n_spk_frames = 0;
 
@@ -921,30 +920,54 @@ static bool whisper_diar_model_load(whisper_diar_context & dctx) {
 }
 
 static void whisper_diar_fft(float * re, float * im) {
-    for (int i = 1, j = 0; i < 512; ++i) {
-        int bit = 256;
+    constexpr int n_fft = 512;
+
+    // perform bit-reversal permutation
+    for (int i = 1, j = 0; i < n_fft; ++i) {
+        int bit = n_fft >> 1;
         for (; j & bit; bit >>= 1) {
             j ^= bit;
         }
         j ^= bit;
+
         if (i < j) {
             std::swap(re[i], re[j]);
             std::swap(im[i], im[j]);
         }
     }
-    for (int len = 2; len <= 512; len *= 2) {
-        const float wr = std::cos(-2 * WHISPER_DIAR_PI / len);
-        const float wi = std::sin(-2 * WHISPER_DIAR_PI / len);
-        for (int i = 0; i < 512; i += len) {
-            float cr = 1, ci = 0;
+    // re and im arrays are now in bit-revered order.
+
+    // Cooley-Tukey butterfly starting at 2 points, then 4, 8 and so on.
+    for (int len = 2; len <= n_fft; len *= 2) {
+        // twiddle factors for real and imaginary.
+        const float angle = -2.0f * WHISPER_DIAR_PI / len;
+        const float wr = std::cos(angle);
+        const float wi = std::sin(angle);
+
+        // performs len point merges
+        for (int i = 0; i < n_fft; i += len) {
+            // current twiddle factors for real/imaginary, intially 1+0i
+            // as cos(0) = 1, and sin(0) = 0.
+            float cr = 1;
+            float ci = 0;
+
+            // butterfly operation
             for (int j = 0; j < len / 2; ++j) {
-                const int   a = i + j, b = a + len / 2;
-                const float tr = cr * re[b] - ci * im[b];
-                const float ti = cr * im[b] + ci * re[b];
-                re[b] = re[a] - tr;
-                im[b] = im[a] - ti;
-                re[a] += tr;
-                im[a] += ti;
+                const int a = i + j;
+                const int b = a + len / 2;
+
+                // calculate how much odd samples (b) needs to be rotated to be
+                // aligned with even samples (a)
+                const float twiddle_real = cr * re[b] - ci * im[b];
+                const float twiddle_img  = cr * im[b] + ci * re[b];
+
+                re[b] = re[a] - twiddle_real; // diff
+                re[a] += twiddle_real;        // sum
+
+                im[b] = im[a] - twiddle_img;  // diff
+                im[a] += twiddle_img;         // sum
+
+                // phasor step to avoid cos/sin calls for every iteration
                 const float next = cr * wr - ci * wi;
                 ci = cr * wi + ci * wr;
                 cr = next;
@@ -954,18 +977,35 @@ static void whisper_diar_fft(float * re, float * im) {
 }
 
 static std::vector<float> whisper_diar_pcm_to_mel(const whisper_diar_model & model,
-        const float * audio, int64_t n, int64_t first, int count) {
+        const float * samples, int64_t n, int64_t first, int count) {
+    constexpr int n_hop      = 160; // 160/16000=10ms
+    constexpr int n_fft      = 512; // 400/16000=25ms
+    constexpr int n_win      = 400;
+    constexpr int n_pad      = 56;  // n_fft - n_win) / 2
+    constexpr int center_off = 200; // 400/2
+
     const int n_mels    = model.hparams.n_mels;
     const int n_fft_out = model.hparams.n_fft / 2 + 1;
+
     std::vector<float> out(count * n_mels);
     for (int f = 0; f < count; ++f) {
-        float re[512] = {}, im[512] = {};
-        for (int j = 0; j < 400; ++j) {
-            const int64_t sample = (first + f) * 160 - 200 + j;
-            if (sample >= 0 && sample < n) {
-                re[j + 56] = (audio[sample] - (sample ? model.hparams.preemph * audio[sample - 1] : 0)) * model.window[j];
+        // zero initialized to n_fft which provides implicit zero-padding on
+        // both sides of the centered window.
+        float re[n_fft] = {};
+        float im[n_fft] = {};
+
+        // apply padding, optional pre-emphasis, and fft window to the real samples
+        for (int j = 0; j < n_win; ++j) {
+            // map the window index j to audio sample s, centered to the frame
+            const int64_t s = (first + f) * n_hop - center_off + j;
+            if (s >= 0 && s < n) {
+                // apply preemphasis to cut low frequencies and boost high frequencies.
+                const float preemp = (samples[s] - (s > 0 ? model.hparams.preemph * samples[s - 1] : 0));
+                // apply FFT window.
+                re[j + n_pad] = preemp * model.window[j];
             }
         }
+
         whisper_diar_fft(re, im);
         for (int m = 0; m < n_mels; ++m) {
             float sum = 0;
@@ -1353,11 +1393,12 @@ bool whisper_diar_detect_speakers(whisper_diar_context * ctx, const float * samp
         }
 
         whisper_diar_cache_params cache_params;
-        whisper_diar_cache_init(ctx->state.cache,
-                cache_params, ctx->model.scoring, ctx->model.hparams.n_speakers, ctx->model.hparams.n_audio_state, ctx->model.silence);
+        whisper_diar_cache_init(ctx->state.cache, cache_params,
+                ctx->model.scoring, ctx->model.hparams.n_speakers,
+                ctx->model.hparams.n_audio_state, ctx->model.silence);
 
         // 16000 samples/sec * 0.010 sec = 160 samples per frame
-        const int   sf         = ctx->model.hparams.subsampling_factor;
+        const int sf = ctx->model.hparams.subsampling_factor;
         const int64_t n_mel_frames = n / 160 + 1;
         for (int64_t i = 0; i < n_mel_frames; i += cache_params.chunk_len * sf) {
             const int count = (int)std::min<int64_t>(cache_params.chunk_len * sf, n_mel_frames - i);
