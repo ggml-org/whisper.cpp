@@ -11,6 +11,7 @@ supported audio formats: flac, mp3, ogg, wav
 
 options:
   -h,        --help              [default] show this help message and exit
+             --version           [       ] show version information and exit
   -t N,      --threads N         [4      ] number of threads to use during computation
   -p N,      --processors N      [1      ] number of processors to use during computation
   -ot N,     --offset-t N        [0      ] time offset in milliseconds
@@ -46,21 +47,59 @@ options:
   -np,       --no-prints         [false  ] do not print anything other than the results
   -ps,       --print-special     [false  ] print special tokens
   -pc,       --print-colors      [false  ] print colors
+             --print-confidence  [false  ] print confidence
   -pp,       --print-progress    [false  ] print progress
   -nt,       --no-timestamps     [false  ] do not print timestamps
   -l LANG,   --language LANG     [en     ] spoken language ('auto' for auto-detect)
   -dl,       --detect-language   [false  ] exit after automatically detecting language
              --prompt PROMPT     [       ] initial prompt (max n_text_ctx/2 tokens)
+             --carry-initial-prompt [false] always prepend initial prompt
   -m FNAME,  --model FNAME       [models/ggml-base.en.bin] model path
   -f FNAME,  --file FNAME        [       ] input audio file path
   -oved D,   --ov-e-device DNAME [CPU    ] the OpenVINO device used for encode inference
   -dtw MODEL --dtw MODEL         [       ] compute token-level timestamps
   -ls,       --log-score         [false  ] log best decoder scores of tokens
   -ng,       --no-gpu            [false  ] disable GPU
-  -fa,       --flash-attn        [false  ] flash attention
+  -dev N,    --device N          [0      ] GPU device ID (default: 0)
+  -fa,       --flash-attn        [true   ] enable flash attention
+  -nfa,      --no-flash-attn     [false  ] disable flash attention
   -sns,      --suppress-nst      [false  ] suppress non-speech tokens
   --suppress-regex REGEX         [       ] regular expression matching tokens to suppress
   --grammar GRAMMAR              [       ] GBNF grammar to guide decoding
   --grammar-rule RULE            [       ] top-level GBNF grammar rule name
   --grammar-penalty N            [100.0  ] scales down logits of nongrammar tokens
+
+Voice Activity Detection (VAD) options:
+             --vad                           [false  ] enable Voice Activity Detection (VAD)
+  -vm FNAME, --vad-model FNAME               [       ] VAD model path
+  -vt N,     --vad-threshold N               [0.50   ] VAD threshold for speech recognition
+  -vspd N,   --vad-min-speech-duration-ms  N [250    ] VAD min speech duration (0.0-1.0)
+  -vsd N,    --vad-min-silence-duration-ms N [100    ] VAD min silence duration (to split segments)
+  -vmsd N,   --vad-max-speech-duration-s   N [FLT_MAX] VAD max speech duration (auto-split longer)
+  -vp N,     --vad-speech-pad-ms           N [30     ] VAD speech padding (extend segments)
+  -vo N,     --vad-samples-overlap         N [0.10   ] VAD samples overlap (seconds between segments)
 ```
+
+## Non-speech audio (music/silence) hallucinations
+
+On audio that is mostly music or silence, the decoder can emit phantom text:
+repeated lines, or fluent sentences in an unexpected language (commonly CJK),
+even when no actual speech is present (see
+[#1724](https://github.com/ggml-org/whisper.cpp/issues/1724)). The options below
+reduce this behaviour:
+
+- **Pin the language** with `-l LANG, --language LANG` instead of relying on
+  auto-detection: on non-speech audio the language detector can pick a language
+  at random, and decoding then produces text matching that language.
+- **`-sns, --suppress-nst`** suppresses non-speech tokens.
+- **`-nf, --no-fallback`** disables the temperature fallback: when the decoder
+  is unsure (as it is on silence), the fallback retries at higher temperatures,
+  which tends to turn uncertainty into fluent hallucinations.
+- **Tighten the decoder-fail thresholds** `-et, --entropy-thold` and
+  `-lpt, --logprob-thold` so low-confidence output is rejected rather than
+  printed.
+- **Use VAD** (`--vad` with `--vad-model`) to cut non-speech regions before
+  they reach the decoder — nothing is hallucinated from audio that is never
+  decoded.
+- As a last resort, **`--suppress-regex REGEX`** filters tokens matching a
+  known phantom pattern.
