@@ -1007,12 +1007,17 @@ static std::vector<float> whisper_diar_pcm_to_mel(const whisper_diar_model & mod
         }
 
         whisper_diar_fft(re, im);
+
+        // Create log mel spectrogram from the frequency domain values in re and im.
         for (int m = 0; m < n_mels; ++m) {
-            float sum = 0;
+            float mel_bin = 0;
+            // apply mel filterbank filters.
             for (int k = 0; k < n_fft_out; ++k) {
-                sum += model.filters[m * n_fft_out + k] * (re[k] * re[k] + im[k] * im[k]);
+                float bin_power = re[k] * re[k] + im[k] * im[k];
+                mel_bin += model.filters[m * n_fft_out + k] * bin_power;
             }
-            out[f * n_mels + m] = std::log(sum + model.hparams.log_guard);
+
+            out[f * n_mels + m] = std::log(mel_bin + model.hparams.log_guard);
         }
     }
     return out;
