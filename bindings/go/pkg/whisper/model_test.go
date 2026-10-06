@@ -3,7 +3,7 @@ package whisper_test
 import (
 	"testing"
 
-	"github.com/ggerganov/whisper.cpp/bindings/go/pkg/whisper"
+	"github.com/ggml-org/whisper.cpp/bindings/go/pkg/whisper"
 	assert "github.com/stretchr/testify/assert"
 )
 
@@ -14,7 +14,6 @@ func TestNew(t *testing.T) {
 		assert.NoError(err)
 		assert.NotNil(model)
 		defer model.Close()
-
 	})
 
 	t.Run("invalid model path", func(t *testing.T) {
