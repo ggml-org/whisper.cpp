@@ -188,7 +188,9 @@ endif()
 add_library(whisper
             ../include/whisper.h
             whisper-arch.h
+            whisper-diarization-arch.h
             whisper.cpp
+            whisper-diarization.cpp
             aneforge/whisper-aneforge.h
             aneforge/whisper-aneforge.cpp
             )
