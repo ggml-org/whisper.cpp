@@ -1,0 +1,2 @@
+variant,model,audio_key,audio_length_s,runs,init_mean_ms,first_inference_mean_s,runtime_median_s,throughput_mean_audio_s_per_s,runtime_std_dev_s,reference_present,wer_median,cer_median,max_wer,max_cer,correctness_pass,notes
+metal-optB-final,ggml-small.en.bin,short,30.0,5,207.068,0.6697685502003878,1.061812124986318,28.18097234137864,0.00702706432431074,True,0.0,0.0,0.02,0.02,True,tokens/s unavailable; encode mean=303.91 ms; decode mean=76.55 ms; wer median=0.0000; cer median=0.0000
