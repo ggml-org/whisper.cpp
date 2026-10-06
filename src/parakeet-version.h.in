@@ -1,0 +1,3 @@
+#pragma once
+
+#define PARAKEET_VERSION "@WHISPER_VERSION@"
