@@ -5,6 +5,7 @@
 #include "ggml-cpp.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
 
 #ifdef WHISPER_USE_COREML
 #include "coreml/whisper-encoder.h"
@@ -862,6 +863,7 @@ struct whisper_state {
     // cross-attention KV cache for the decoders
     // shared between all decoders
     whisper_kv_cache kv_cross;
+    whisper_kv_cache kv_cross_cpu;
 
     // padded buffer for flash-attention
     whisper_kv_cache kv_pad;
@@ -1722,10 +1724,29 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
 
     // Create a list of available bufts, in priority order
     buft_list_t buft_list = make_buft_list(wctx.params);
+    buft_list_t buft_list_cpu;
+    if (wctx.params.split_mode) {
+        auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        if (cpu_dev) {
+            auto * buft = ggml_backend_dev_buffer_type(cpu_dev);
+            if (buft) {
+                buft_list_cpu.emplace_back(cpu_dev, buft);
+            }
+        }
+        for (const auto & p : buft_list) {
+            buft_list_cpu.push_back(p);
+        }
+    }
 
     auto create_tensor = [&](asr_tensor type, asr_system system, ggml_tensor * meta, int layer = 0) -> ggml_tensor * {
         ggml_op op = ASR_TENSOR_INFO.at(type);
-        ggml_backend_buffer_type_t buft = select_weight_buft(hparams, meta, op, buft_list);
+        const bool is_decoder_tensor = (system == ASR_SYSTEM_DECODER) ||
+            (system == ASR_SYSTEM_CROSS &&
+             type != ASR_TENSOR_ATTN_KEY_WEIGHT &&
+             type != ASR_TENSOR_ATTN_VALUE_WEIGHT &&
+             type != ASR_TENSOR_ATTN_VALUE_BIAS);
+        const auto & cur_buft_list = (wctx.params.split_mode && is_decoder_tensor) ? buft_list_cpu : buft_list;
+        ggml_backend_buffer_type_t buft = select_weight_buft(hparams, meta, op, cur_buft_list);
         if (!buft) {
             throw std::runtime_error(format("failed to find a compatible buffer type for tensor %s", ASR_TENSOR_NAMES.at(system).at(type)));
         }
@@ -2510,6 +2531,10 @@ static bool whisper_encode_internal(
         if (!ggml_graph_compute_helper(sched, gf, n_threads)) {
             return false;
         }
+        if (wctx.params.split_mode && wstate.kv_cross_cpu.buffer) {
+            ggml_backend_tensor_copy(wstate.kv_cross.k, wstate.kv_cross_cpu.k);
+            ggml_backend_tensor_copy(wstate.kv_cross.v, wstate.kv_cross_cpu.v);
+        }
     }
 
     wstate.t_encode_us += ggml_time_us() - t_start_us;
@@ -2740,16 +2765,17 @@ static struct ggml_cgraph * whisper_build_graph_decoder(
                         ggml_reshape_3d(ctx0, Qcur, n_state_head, n_head, n_tokens),
                         0, 2, 1, 3);
 
+            const auto & cur_kv_cross = (wctx.params.split_mode && wstate.kv_cross_cpu.buffer) ? wstate.kv_cross_cpu : wstate.kv_cross;
             if (wctx.params.flash_attn) {
                 struct ggml_tensor * Kcross =
-                    ggml_view_3d(ctx0, wstate.kv_cross.k,
+                    ggml_view_3d(ctx0, cur_kv_cross.k,
                             n_state_head, n_audio_ctx_pad, n_head,
                             ggml_element_size(wstate.kv_cross.k)*n_state,
                             ggml_element_size(wstate.kv_cross.k)*n_state_head,
                             ggml_element_size(wstate.kv_cross.k)*n_state*n_audio_ctx_pad*il);
 
                 struct ggml_tensor * Vcross =
-                    ggml_view_3d(ctx0, wstate.kv_cross.v,
+                    ggml_view_3d(ctx0, cur_kv_cross.v,
                             n_state_head, n_audio_ctx_pad, n_head,
                             ggml_element_size(wstate.kv_cross.v)*n_state,
                             ggml_element_size(wstate.kv_cross.v)*n_state_head,
@@ -2760,14 +2786,14 @@ static struct ggml_cgraph * whisper_build_graph_decoder(
                 cur = ggml_reshape_2d(ctx0, cur, n_state, n_tokens);
             } else {
                 struct ggml_tensor * Kcross =
-                    ggml_view_3d(ctx0, wstate.kv_cross.k,
+                    ggml_view_3d(ctx0, cur_kv_cross.k,
                             n_state_head, n_audio_ctx, n_head,
                             ggml_element_size(wstate.kv_cross.k)*n_state,
                             ggml_element_size(wstate.kv_cross.k)*n_state_head,
                             ggml_element_size(wstate.kv_cross.k)*n_state*n_audio_ctx*il);
 
                 struct ggml_tensor * Vcross =
-                    ggml_view_3d(ctx0, wstate.kv_cross.v,
+                    ggml_view_3d(ctx0, cur_kv_cross.v,
                             n_audio_ctx, n_state_head, n_head,
                             n_audio_ctx*ggml_element_size(wstate.kv_cross.v),
                             n_audio_ctx*ggml_element_size(wstate.kv_cross.v)*n_state_head,
@@ -3461,10 +3487,27 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
         return nullptr;
     }
 
+    if (ctx->params.split_mode) {
+        bool has_gpu = false;
+        for (auto b : state->backends) {
+            if (!ggml_backend_is_cpu(b)) { has_gpu = true; break; }
+        }
+        if (!has_gpu) {
+            WHISPER_LOG_ERROR("%s: split_mode requires active GPU backend, but only CPU was initialized.\n", __func__);
+            whisper_free_state(state);
+            return nullptr;
+        }
+    }
     // at this point, we don't know yet how many decoders will be used
     // later during decoding, if more decoders are used, we will recreate the KV cache respectively
     state->kv_self_n_dec = 1;
-    if (!whisper_kv_cache_init(state->kv_self, state->backends[0], ctx->itype,
+    ggml_backend_t backend_self = state->backends[0];
+    if (ctx->params.split_mode) {
+        for (auto b : state->backends) {
+            if (ggml_backend_is_cpu(b)) { backend_self = b; break; }
+        }
+    }
+    if (!whisper_kv_cache_init(state->kv_self, backend_self, ctx->itype,
                 ctx->model.hparams.n_text_state,
                 ctx->model.hparams.n_text_layer,
                 GGML_PAD(ctx->model.hparams.n_text_ctx, 256))) {
@@ -3485,6 +3528,25 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
         WHISPER_LOG_ERROR("%s: whisper_kv_cache_init() failed for cross-attention cache\n", __func__);
         whisper_free_state(state);
         return nullptr;
+    }
+
+    if (ctx->params.split_mode) {
+        ggml_backend_t backend_cpu = nullptr;
+        for (auto b : state->backends) {
+            if (ggml_backend_is_cpu(b)) { backend_cpu = b; break; }
+        }
+        if (backend_cpu) {
+            if (!whisper_kv_cache_init(state->kv_cross_cpu, backend_cpu, ctx->itype,
+                        ctx->model.hparams.n_text_state,
+                        ctx->model.hparams.n_text_layer,
+                        GGML_PAD(ctx->model.hparams.n_audio_ctx, 256))) {
+                WHISPER_LOG_ERROR("%s: whisper_kv_cache_init() failed for kv_cross_cpu\n", __func__);
+                whisper_free_state(state);
+                return nullptr;
+            }
+            const size_t memory_size_cpu = ggml_nbytes(state->kv_cross_cpu.k) + ggml_nbytes(state->kv_cross_cpu.v);
+            WHISPER_LOG_INFO("%s: kv cross cpu size = %7.2f MB\n", __func__, memory_size_cpu / 1e6);
+        }
     }
 
     {
@@ -3626,7 +3688,15 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
 
     // decoder allocator
     {
-        bool ok = whisper_sched_graph_init(state->sched_decode, state->backends,
+        std::vector<ggml_backend_t> backends_decode;
+        if (ctx->params.split_mode) {
+            for (auto b : state->backends) {
+                if (ggml_backend_is_cpu(b)) { backends_decode.push_back(b); break; }
+            }
+        } else {
+            backends_decode = state->backends;
+        }
+        bool ok = whisper_sched_graph_init(state->sched_decode, backends_decode,
                 [&]() {
                     const auto & hparams = ctx->model.hparams;
 
@@ -3715,6 +3785,7 @@ struct whisper_context_params whisper_context_default_params() {
         /*.use_gpu              =*/ true,
         /*.flash_attn           =*/ true,
         /*.gpu_device           =*/ 0,
+        /*.split_mode           =*/ false,
 
         /*.dtw_token_timestamps =*/ false,
         /*.dtw_aheads_preset    =*/ WHISPER_AHEADS_NONE,
@@ -3822,10 +3893,15 @@ struct whisper_context * whisper_init_with_params_no_state(struct whisper_model_
     WHISPER_LOG_INFO("%s: use gpu    = %d\n", __func__, params.use_gpu);
     WHISPER_LOG_INFO("%s: flash attn = %d\n", __func__, params.flash_attn);
     WHISPER_LOG_INFO("%s: gpu_device = %d\n", __func__, params.gpu_device);
+    WHISPER_LOG_INFO("%s: split mode = %d (hybrid enc GPU / dec CPU)\n", __func__, params.split_mode);
     WHISPER_LOG_INFO("%s: dtw        = %d\n", __func__, params.dtw_token_timestamps);
     WHISPER_LOG_INFO("%s: devices    = %zu\n", __func__, ggml_backend_dev_count());
     WHISPER_LOG_INFO("%s: backends   = %zu\n", __func__, ggml_backend_reg_count());
 
+    if (params.split_mode && !params.use_gpu) {
+        WHISPER_LOG_ERROR("%s: split_mode requires GPU backend, but GPU is disabled.\n", __func__);
+        return nullptr;
+    }
     whisper_context * ctx = new whisper_context;
     ctx->params = params;
 
@@ -3928,6 +4004,7 @@ void whisper_free_state(struct whisper_state * state) {
     if (state) {
         whisper_kv_cache_free(state->kv_self);
         whisper_kv_cache_free(state->kv_cross);
+        whisper_kv_cache_free(state->kv_cross_cpu);
         whisper_kv_cache_free(state->kv_pad);
 
 #ifdef WHISPER_USE_COREML
