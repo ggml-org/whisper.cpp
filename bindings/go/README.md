@@ -68,7 +68,7 @@ To build using cuda support add `GGML_CUDA=1`:
 GGML_CUDA=1 make examples
 ```
 
-The examples are placed in the `build` directory. Once built, you can download all the models with the following command:
+The examples are placed in the `build_go` directory. Once built, you can download all the models with the following command:
 
 ```bash
 ./build/go-model-download -out models
