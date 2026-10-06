@@ -31,5 +31,10 @@ int timestamp_to_sample(int64_t t, int n_samples, int whisper_sample_rate);
 // Returns the number of trailing bytes still needed for s to end on a complete UTF-8 codepoint.
 int utf8_trailing_bytes_needed(const std::string & s);
 
+// Returns s with every byte that is not part of a valid, complete UTF-8 sequence removed.
+// Byte-level decoder tokens can leave a lone UTF-8 lead byte or an orphan continuation byte
+// at a segment boundary; dropping them keeps text output well-formed UTF-8 (issue #3760).
+std::string utf8_sanitize(const std::string & s);
+
 // write text to file, and call system("command voice_id file")
 bool speak_with_file(const std::string & command, const std::string & text, const std::string & path, int voice_id);
