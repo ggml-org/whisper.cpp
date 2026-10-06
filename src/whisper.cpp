@@ -1,3 +1,10 @@
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#endif
+
 #include "whisper.h"
 #include "whisper-arch.h"
 
