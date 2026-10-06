@@ -13,6 +13,19 @@
 #ifndef GGML_SYCL_COMMON_HPP
 #define GGML_SYCL_COMMON_HPP
 
+// ─── Fix: Undefine math macros before SYCL includes ───────────────────
+#undef isnan
+#undef isinf
+#undef isfinite
+#undef signbit
+#undef isgreater
+#undef isgreaterequal
+#undef isless
+#undef islessequal
+#undef islessgreater
+#undef isunordered
+// ──────────────────────────────────────────────────────────────────────
+
 #include <cstddef>
 #include <fstream>
 #include <iostream>
