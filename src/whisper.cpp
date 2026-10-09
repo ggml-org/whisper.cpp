@@ -4153,6 +4153,10 @@ const char * whisper_lang_str_full(int id) {
     return nullptr;
 }
 
+const char * whisper_lang_title(int id) {
+    return whisper_lang_str_full(id);
+}
+
 static int whisper_lang_auto_detect_internal(
         struct whisper_context * ctx,
           struct whisper_state * state,
