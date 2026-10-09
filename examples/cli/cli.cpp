@@ -126,7 +126,7 @@ static char * whisper_param_turn_lowercase(char * in){
 
 static char * requires_value_error(const std::string & arg) {
     fprintf(stderr, "error: argument %s requires value\n", arg.c_str());
-    exit(0);
+    exit(1);
 }
 
 static bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
