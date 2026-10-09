@@ -415,6 +415,36 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0> {
     };
 };
 
+// Load four contiguous dwords per operand instead of loading each value separately.
+struct reorder_vec_dot_q8_0_wide {
+    static constexpr ggml_type gtype = GGML_TYPE_Q8_0;
+
+    using q8_0_block  = ggml_sycl_reordered::block_q_t<GGML_TYPE_Q8_0>;
+    using q8_0_traits = typename q8_0_block::traits;
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        static_assert(q8_0_traits::vdr_mmvq == 4, "the wide load moves exactly four dwords");
+
+        const uint8_t * base = static_cast<const uint8_t *>(vbq);
+        const int8_t *  qs   = reinterpret_cast<const int8_t *>(base + ibx_offset.first);
+        const ggml_half d    = *reinterpret_cast<const ggml_half *>(base + d_offset.first);
+
+        const sycl::int4 v = *reinterpret_cast<const sycl::int4 *>(qs + sizeof(int) * iqs);
+        const sycl::int4 u = *reinterpret_cast<const sycl::int4 *>(q8_1_quant_ptr + sizeof(int) * iqs);
+
+        int sumi = 0;
+#pragma unroll
+        for (int i = 0; i < 4; ++i) {
+            sumi = dpct::dp4a(v[i], u[i], sumi);
+        }
+
+        const sycl::half2 ds_values = *q8_1_ds;
+        return static_cast<float>(d) * static_cast<float>(ds_values[0]) * sumi;
+    }
+};
+
 template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q8_0> {
     static constexpr ggml_type gtype = GGML_TYPE_Q8_0;
 
@@ -1398,6 +1428,11 @@ vec_dot_q6_K_q8_1(const void *__restrict__ vbq,
 }
 
 
+// NOTE: the VDR_IQ*_Q8_1_MMVQ values deliberately differ from the identically named CUDA constants
+// (vecdotq.cuh): the SYCL kernels pair them with a halved qi (e.g. QI3_S/2), so the values are not
+// interchangeable and must not be copied across backends.
+#define VDR_IQ2_XXS_Q8_1_MMVQ 1
+
 static __dpct_inline__ float
 vec_dot_iq2_xxs_q8_1(const void *__restrict__ vbq,
                      const block_q8_1 *__restrict__ bq8_1, const int &iqs,
@@ -1428,6 +1463,8 @@ vec_dot_iq2_xxs_q8_1(const void *__restrict__ vbq,
     return 0.f;
 #endif
 }
+
+#define VDR_IQ2_XS_Q8_1_MMVQ 1
 
 static __dpct_inline__ float
 vec_dot_iq2_xs_q8_1(const void *__restrict__ vbq,
@@ -1478,6 +1515,8 @@ vec_dot_iq2_xs_q8_1(const void *__restrict__ vbq,
     return 0.f;
 #endif
 }
+
+#define VDR_IQ2_S_Q8_1_MMVQ 1
 
 static __dpct_inline__ float
 vec_dot_iq2_s_q8_1(const void *__restrict__ vbq,
@@ -1531,6 +1570,8 @@ vec_dot_iq2_s_q8_1(const void *__restrict__ vbq,
 #endif
 }
 
+#define VDR_IQ3_XXS_Q8_1_MMVQ 1
+
 static __dpct_inline__ float
 vec_dot_iq3_xxs_q8_1(const void *__restrict__ vbq,
                      const block_q8_1 *__restrict__ bq8_1, const int &iqs,
@@ -1571,6 +1612,8 @@ vec_dot_iq3_xxs_q8_1(const void *__restrict__ vbq,
 #endif
 }
 
+#define VDR_IQ3_S_Q8_1_MMVQ 1
+
 static __dpct_inline__ float
 vec_dot_iq3_s_q8_1(const void *__restrict__ vbq,
                    const block_q8_1 *__restrict__ bq8_1, const int &iqs,
@@ -1609,6 +1652,8 @@ vec_dot_iq3_s_q8_1(const void *__restrict__ vbq,
 #endif
 }
 
+#define VDR_IQ1_S_Q8_1_MMVQ 1
+
 static __dpct_inline__ float
 vec_dot_iq1_s_q8_1(const void *__restrict__ vbq,
                    const block_q8_1 *__restrict__ bq8_1, const int &iqs,
@@ -1636,6 +1681,8 @@ vec_dot_iq1_s_q8_1(const void *__restrict__ vbq,
     assert(false);
 #endif
 }
+
+#define VDR_IQ1_M_Q8_1_MMVQ 1
 
 static __dpct_inline__ float
 vec_dot_iq1_m_q8_1(const void *__restrict__ vbq,
@@ -1671,6 +1718,8 @@ vec_dot_iq1_m_q8_1(const void *__restrict__ vbq,
 }
 
 
+#define VDR_IQ4_NL_Q8_1_MMVQ 2
+
 static __dpct_inline__ float
 vec_dot_iq4_nl_q8_1(const void *__restrict__ vbq,
                     const block_q8_1 *__restrict__ bq8_1, const int &iqs) {
@@ -1695,6 +1744,8 @@ vec_dot_iq4_nl_q8_1(const void *__restrict__ vbq,
     return d * (sumi1 + sumi2);
 }
 
+
+#define VDR_IQ4_XS_Q8_1_MMVQ 1
 
 static __dpct_inline__ float
 vec_dot_iq4_xs_q8_1(const void *__restrict__ vbq,

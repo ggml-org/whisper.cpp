@@ -1444,6 +1444,11 @@ static bool parakeet_model_load(struct parakeet_model_loader * loader, parakeet_
                   return false;
             }
 
+            if (ttype < 0 || ttype >= GGML_TYPE_COUNT) {
+                PARAKEET_LOG_ERROR("%s: invalid ttype %d in model file (expected 0 <= ttype < %d)\n", __func__, ttype, GGML_TYPE_COUNT);
+                return false;
+            }
+
             int32_t nelements = 1;
             int32_t ne[4] = { 1, 1, 1, 1 };
             for (int i = 0; i < n_dims; ++i) {

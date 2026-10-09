@@ -22,6 +22,23 @@ add_test(NAME ${TEST_TARGET}
     -f ${PROJECT_SOURCE_DIR}/samples/jfk.wav)
 set_tests_properties(${TEST_TARGET} PROPERTIES LABELS "tiny;gh")
 
+# whisper-cli must exit with non-zero status when an input cannot be decoded (#4011)
+set(TEST_TARGET test-whisper-cli-bad-audio)
+add_test(NAME ${TEST_TARGET}
+    COMMAND $<TARGET_FILE:whisper-cli>
+    -m ${PROJECT_SOURCE_DIR}/models/for-tests-ggml-tiny.bin
+    -f ${PROJECT_SOURCE_DIR}/README.md)
+set_tests_properties(${TEST_TARGET} PROPERTIES LABELS "tiny;gh" WILL_FAIL TRUE)
+
+# whisper-cli must exit with non-zero status when an output file cannot be written (#4011)
+set(TEST_TARGET test-whisper-cli-bad-output)
+add_test(NAME ${TEST_TARGET}
+    COMMAND $<TARGET_FILE:whisper-cli>
+    -m ${PROJECT_SOURCE_DIR}/models/for-tests-ggml-tiny.bin
+    -f ${PROJECT_SOURCE_DIR}/samples/jfk.wav
+    -otxt -of ${CMAKE_CURRENT_BINARY_DIR}/non-existent-dir/out)
+set_tests_properties(${TEST_TARGET} PROPERTIES LABELS "tiny;gh" WILL_FAIL TRUE)
+
 set(TEST_TARGET test-whisper-cli-tiny.en)
 add_test(NAME ${TEST_TARGET}
     COMMAND $<TARGET_FILE:whisper-cli>
@@ -120,6 +137,16 @@ target_compile_definitions(${ZERO_SAMPLES_TEST} PRIVATE
     WHISPER_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-ggml-tiny.bin")
 add_test(NAME ${ZERO_SAMPLES_TEST} COMMAND ${ZERO_SAMPLES_TEST})
 set_tests_properties(${ZERO_SAMPLES_TEST} PROPERTIES LABELS "tiny;gh")
+
+# abort_callback must be honored during language auto-detection (#3888)
+set(LANG_DETECT_ABORT_TEST test-whisper-lang-detect-abort)
+add_executable(${LANG_DETECT_ABORT_TEST} ${LANG_DETECT_ABORT_TEST}.cpp)
+target_include_directories(${LANG_DETECT_ABORT_TEST} PRIVATE ../include ../ggml/include ../examples)
+target_link_libraries(${LANG_DETECT_ABORT_TEST} PRIVATE common)
+target_compile_definitions(${LANG_DETECT_ABORT_TEST} PRIVATE
+    WHISPER_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-ggml-tiny.bin")
+add_test(NAME ${LANG_DETECT_ABORT_TEST} COMMAND ${LANG_DETECT_ABORT_TEST})
+set_tests_properties(${LANG_DETECT_ABORT_TEST} PROPERTIES LABELS "tiny;gh")
 
 # VAD test tests VAD in isolation
 set(VAD_TEST test-vad)
