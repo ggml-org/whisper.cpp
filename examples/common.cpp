@@ -2,6 +2,7 @@
 
 #include "common.h"
 
+#include <algorithm>
 #include <cmath>
 #include <codecvt>
 #include <cstring>

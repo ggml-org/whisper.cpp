@@ -1,6 +1,7 @@
 // Warns users that this filename was deprecated, and provides a link for more information.
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 // Main
