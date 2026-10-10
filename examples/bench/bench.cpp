@@ -1,6 +1,7 @@
 #include "whisper.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <thread>
