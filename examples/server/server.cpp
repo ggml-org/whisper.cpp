@@ -19,6 +19,7 @@
 #include <atomic>
 #include <functional>
 #include <cstdlib>
+#include <ctime>
 #if defined (_WIN32)
 #include <windows.h>
 #endif
@@ -67,6 +68,7 @@ struct server_params
     int32_t write_timeout = 600;
 
     bool ffmpeg_converter = false;
+    std::string model_name = "";
 };
 
 struct whisper_params {
@@ -174,6 +176,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  --request-path PATH,                   [%-7s] Request path for all requests\n",                           sparams.request_path.c_str());
     fprintf(stderr, "  --inference-path PATH,                 [%-7s] Inference path for all requests\n",                         sparams.inference_path.c_str());
     fprintf(stderr, "  --convert,                             [%-7s] Convert audio to WAV, requires ffmpeg on the server\n",     sparams.ffmpeg_converter ? "true" : "false");
+    fprintf(stderr, "  --model-name NAME,                     [%-7s] Model name for OpenAI-compatible /v1/models response\n",    sparams.model_name.c_str());
     fprintf(stderr, "  --tmp-dir,                             [%-7s] Temporary directory for ffmpeg transcoded files\n",         sparams.tmp_dir.c_str());
     fprintf(stderr, "  -sns,      --suppress-nst              [%-7s] suppress non-speech tokens\n",                              params.suppress_nst ? "true" : "false");
     fprintf(stderr, "  -nth N,    --no-speech-thold N         [%-7.2f] no speech threshold\n",                                   params.no_speech_thold);
@@ -254,6 +257,7 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params, serve
         else if (                   arg == "--request-path")    { sparams.request_path = argv[++i]; }
         else if (                   arg == "--inference-path")  { sparams.inference_path = argv[++i]; }
         else if (                   arg == "--convert")         { sparams.ffmpeg_converter     = true; }
+        else if (                   arg == "--model-name")      { sparams.model_name  = argv[++i]; }
         else if (                   arg == "--tmp-dir")         { sparams.tmp_dir     = argv[++i]; }
 
         // Voice Activity Detection (VAD)
@@ -661,6 +665,11 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "error: cannot use both --diarize and --tinydiarize\n");
         whisper_print_usage(argc, argv, params, sparams);
         exit(0);
+    }
+
+    // Use the model file stem when no explicit name is provided.
+    if (sparams.model_name.empty()) {
+        sparams.model_name = std::filesystem::path(params.model).stem().string();
     }
 
     if (sparams.ffmpeg_converter) {
@@ -1184,6 +1193,10 @@ int main(int argc, char ** argv) {
             return;
         }
         std::string model = req.get_file_value("model").content;
+        std::string model_name = std::filesystem::path(model).stem().string();
+        if (req.has_file("model_name") && !req.get_file_value("model_name").content.empty()) {
+            model_name = req.get_file_value("model_name").content;
+        }
         if (!is_file_exist(model.c_str()))
         {
             fprintf(stderr, "error: 'model': %s not found!\n", model.c_str());
@@ -1208,6 +1221,7 @@ int main(int argc, char ** argv) {
         // initialize openvino encoder. this has no effect on whisper.cpp builds that don't have OpenVINO configured
         whisper_ctx_init_openvino_encoder(ctx, nullptr, params.openvino_encode_device.c_str(), nullptr);
 
+        sparams.model_name = model_name;
         state.store(SERVER_STATE_READY);
         const std::string success = "Load was successful!";
         res.set_content(success, "application/text");
@@ -1224,6 +1238,20 @@ int main(int argc, char ** argv) {
             res.set_content("{\"status\":\"loading model\"}", "application/json");
             res.status = 503;
         }
+    });
+
+    svr->Get(sparams.request_path + "/v1/models", [&](const Request &, Response &res){
+        std::lock_guard<std::mutex> lock(whisper_mutex);
+        json jres = {
+            {"object", "list"},
+            {"data", json::array({
+                {{"id", sparams.model_name},
+                 {"object", "model"},
+                 {"created", static_cast<int64_t>(std::time(nullptr))},
+                 {"owned_by", "whisper.cpp"}}
+            })}
+        };
+        res.set_content(jres.dump(), "application/json");
     });
 
     svr->set_exception_handler([](const Request &, Response &res, std::exception_ptr ep) {
