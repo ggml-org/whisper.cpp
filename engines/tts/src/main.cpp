@@ -1,6 +1,7 @@
 #include "backend_selection.h"
 #include "backend_util.h"
 #include "fit_price.h"
+#include "kv_cache_copy.h"
 #include "gguf_stream.h"
 #include "gpt2_bpe.h"
 #include "mtl_tokenizer.h"
@@ -722,10 +723,6 @@ static ggml_tensor * build_transformer_core(
             qkv_col_stride,
             (size_t) 2 * n_embd * sizeof(float));  // Vcur slot
 
-        // KV cache append: positions [n_past, n_past+N) are consecutive
-        // token rows, so the destination view is contiguous and ggml_cpy
-        // converts/quantises f32 → kv_type on write.  One kernel launch
-        // per tensor.
         const size_t layer_off = (size_t) il * kv_layer_bytes;
         {
             ggml_tensor * k_dst = ggml_view_2d(ctx, model.memory_k,
@@ -737,8 +734,8 @@ static ggml_tensor * build_transformer_core(
                 kv_tok_row,
                 layer_off + (size_t) n_past * kv_tok_row);
 
-            ggml_build_forward_expand(gf, ggml_cpy(ctx, Kcur, k_dst));
-            ggml_build_forward_expand(gf, ggml_cpy(ctx, Vcur, v_dst));
+            ggml_build_forward_expand(gf, ::tts_cpp::detail::build_kv_cache_copy(ctx, model.backend, Kcur, k_dst));
+            ggml_build_forward_expand(gf, ::tts_cpp::detail::build_kv_cache_copy(ctx, model.backend, Vcur, v_dst));
         }
 
         ggml_tensor * K = ggml_view_3d(ctx, model.memory_k,

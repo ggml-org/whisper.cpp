@@ -23,6 +23,7 @@
 
 #include "chatterbox_t3_internal.h"
 #include "t3_mtl.h"
+#include "kv_cache_copy.h"
 #include "t3_alignment_analyzer.h"
 
 #include "backend_util.h"
@@ -773,8 +774,8 @@ ggml_tensor * build_llama_block(ggml_context * ctx, ggml_cgraph * gf,
             (size_t) HD * NKV, N,
             kv_tok_row,
             dst_off);
-        ggml_build_forward_expand(gf, ggml_cpy(ctx, k_src, k_dst));
-        ggml_build_forward_expand(gf, ggml_cpy(ctx, v_src, v_dst));
+        ggml_build_forward_expand(gf, ::tts_cpp::detail::build_kv_cache_copy(ctx, m.backend, k_src, k_dst));
+        ggml_build_forward_expand(gf, ::tts_cpp::detail::build_kv_cache_copy(ctx, m.backend, v_src, v_dst));
     }
 
     // Attention: read the full [0, L) slice from the cache.

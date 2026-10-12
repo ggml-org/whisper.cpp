@@ -3547,6 +3547,12 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-backend-dispatch)
     tts_cpp_register_test(test-supertonic-backend-dispatch LABEL "unit")
 
+    add_executable(test-kv-cache-copy test/test_kv_cache_copy.cpp)
+    target_link_libraries(test-kv-cache-copy PRIVATE ggml)
+    target_include_directories(test-kv-cache-copy PRIVATE ggml/include src)
+    tts_cpp_apply_ccache(test-kv-cache-copy)
+    tts_cpp_register_test(test-kv-cache-copy LABEL "unit")
+
     # T3 dual-path dispatch helper unit tests (src/sched_dispatch.{h,cpp}):
     # supports_op walk, force-env escape hatch, sched_fallback lifecycle,
     # pre-allocated-op abort guard.  CPU-only, no GGUF needed.
