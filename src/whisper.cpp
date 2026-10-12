@@ -1650,6 +1650,12 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
             vocab.token_beg        += dt;
         }
 
+        // every special token id (token_beg is the largest) must be a valid index into the logits
+        if (vocab.n_vocab <= vocab.token_beg) {
+            WHISPER_LOG_ERROR("%s: invalid model (n_vocab = %d must be greater than token_beg = %d)\n", __func__, vocab.n_vocab, vocab.token_beg);
+            return false;
+        }
+
         if (n_vocab < model.hparams.n_vocab) {
             WHISPER_LOG_INFO("%s: adding %d extra tokens\n", __func__, model.hparams.n_vocab - n_vocab);
             for (int i = n_vocab; i < model.hparams.n_vocab; i++) {
