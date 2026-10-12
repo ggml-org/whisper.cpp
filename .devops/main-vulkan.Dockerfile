@@ -24,7 +24,7 @@ WORKDIR /app
 
 RUN apt update && \
   apt install --no-install-recommends -y \
-    ca-certificates curl ffmpeg libvulkan1 mesa-vulkan-drivers \
+    ca-certificates curl ffmpeg libegl1 libvulkan1 mesa-vulkan-drivers \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 COPY --from=build /runtime/ /
