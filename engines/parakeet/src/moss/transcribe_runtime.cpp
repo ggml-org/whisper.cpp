@@ -153,10 +153,10 @@ bool TranscribeScheduler::compute(ggml_cgraph * graph, int n_threads) {
     return ggml_backend_sched_graph_compute(sched_, graph) == GGML_STATUS_SUCCESS;
 }
 
-ggml_backend * open_transcribe_backend(bool use_gpu) {
-    ggml_backend_t backend = init_engine_backend(use_gpu);
+ggml_backend * open_transcribe_backend(bool use_gpu, const std::string & requested) {
+    ggml_backend_t backend = init_engine_backend(use_gpu, requested);
     if (!backend) {
-        fail("no compute backend available");
+        fail("no compute backend available for request: " + requested);
     }
     return backend;
 }

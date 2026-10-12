@@ -1096,7 +1096,9 @@ static std::vector<float> run_encoder(const model_ctx & m, const std::vector<flo
     }
     ggml_cgraph * gf = cache.gf;
 
-    ggml_gallocr_alloc_graph(cache.allocr, gf);
+    if (!ggml_gallocr_alloc_graph(cache.allocr, gf)) {
+        throw std::runtime_error("s3gen encoder: graph allocation failed");
+    }
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "x_in"), input_embed.data(), 0, input_embed.size()*sizeof(float));
 
     // Cached positional embeddings — same (T, D) keys reused across every
@@ -1246,6 +1248,13 @@ static ggml_tensor * basic_tfm(ggml_context * ctx, const basic_tfm_w & w,
                                                     /*scale=*/1.0f / std::sqrt((float)HD),
                                                     /*max_bias=*/0.0f,
                                                     /*logit_softcap=*/0.0f);
+        // CFM feeds attention back through the flow solver. Vulkan's default
+        // F16 accumulation drifts across steps and can overflow even with F32
+        // Q/K/V. Preserve accumulation precision without disabling F16 weights.
+        // At ggml e16d1332 CPU DEFAULT/F32 share the F32 implementation;
+        // Metal/CUDA flash attention do not read this flag (not a global F32
+        // arithmetic guarantee). Re-audit on ggml upgrades; see docs/moss.md.
+        ggml_flash_attn_ext_set_prec(attn_fa, GGML_PREC_F32);
         // flash_attn_ext output: ne=[HD, H, T, 1] (contiguous). Reshape to (INNER, T).
         flat = ggml_reshape_2d(ctx, attn_fa, INNER, T);
     }
@@ -1349,6 +1358,8 @@ static ggml_tensor * basic_tfm_b(ggml_context * ctx, const basic_tfm_w & w,
         }
         ggml_tensor * attn_fa = ggml_flash_attn_ext(ctx, q, k, v, /*mask=*/nullptr,
                                                     1.0f / std::sqrt((float)HD), 0.0f, 0.0f);
+        // Same accumulation requirement as the single-batch CFM path above.
+        ggml_flash_attn_ext_set_prec(attn_fa, GGML_PREC_F32);
         // flash_attn_ext output ne=[HD, H, T, B].  Reshape back to (INNER, T, B).
         flat = ggml_reshape_3d(ctx, attn_fa, INNER, T, B);
     }
@@ -1468,7 +1479,9 @@ static std::vector<float> compute_time_mlp(const model_ctx & m, float t_val) {
         cache.backend = m.backend;
     }
 
-    ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
+    if (!ggml_gallocr_alloc_graph(cache.allocr, cache.gf)) {
+        throw std::runtime_error("s3gen time MLP: graph allocation failed");
+    }
     ggml_backend_tensor_set(cache.x_in, t_sin.data(), 0, t_sin.size() * sizeof(float));
     compute(m.backend, cache.gf);
 
@@ -1500,7 +1513,11 @@ static std::vector<float> compute_time_mixed(const model_ctx & m,
 
     ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
     ggml_gallocr_reserve(allocr, gf);
-    ggml_gallocr_alloc_graph(allocr, gf);
+    if (!ggml_gallocr_alloc_graph(allocr, gf)) {
+        ggml_gallocr_free(allocr);
+        ggml_free(ctx);
+        throw std::runtime_error("s3gen time mixer: graph allocation failed");
+    }
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "t_in"), t_mlp.data(), 0, t_mlp.size()*sizeof(float));
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "r_in"), r_mlp.data(), 0, r_mlp.size()*sizeof(float));
     compute(m.backend, gf);
@@ -1669,7 +1686,9 @@ static std::vector<float> cfm_estimator_forward(
     // dispatch elsewhere in the pipeline (e.g. during T3→S3Gen transition)
     // so it overlaps with other host work, which is a bigger refactor.
 
-    ggml_gallocr_alloc_graph(cache.allocr, gf);
+    if (!ggml_gallocr_alloc_graph(cache.allocr, gf)) {
+        throw std::runtime_error("s3gen CFM estimator: graph allocation failed");
+    }
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "x_in"), x.data(), 0, x.size()*sizeof(float));
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "mu_in"), mu.data(), 0, mu.size()*sizeof(float));
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "spks_in"), spks.data(), 0, spks.size()*sizeof(float));
@@ -1789,7 +1808,9 @@ static void cfm_estimator_forward_b2(
     }
     ggml_cgraph * gf = cache.gf;
 
-    ggml_gallocr_alloc_graph(cache.allocr, gf);
+    if (!ggml_gallocr_alloc_graph(cache.allocr, gf)) {
+        throw std::runtime_error("s3gen batched CFM estimator: graph allocation failed");
+    }
 
     // Stage inputs: cond slice [0, T*MEL), uncond slice [T*MEL, 2*T*MEL).
     const size_t one_tm = (size_t) T * MEL * sizeof(float);
@@ -2046,7 +2067,9 @@ static std::vector<float> run_f0_predictor(const model_ctx & m, const std::vecto
     }
     ggml_cgraph * gf = cache.gf;
 
-    ggml_gallocr_alloc_graph(cache.allocr, gf);
+    if (!ggml_gallocr_alloc_graph(cache.allocr, gf)) {
+        throw std::runtime_error("s3gen F0 predictor: graph allocation failed");
+    }
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "mel_in"), mel.data(), 0, mel.size()*sizeof(float));
     compute(m.backend, gf);
     ggml_tensor * y_out = ggml_graph_get_tensor(gf, "out");
@@ -2145,7 +2168,9 @@ static std::vector<float> run_stft(const model_ctx & m, const std::vector<float>
         ggml_gallocr_reserve(cache.allocr, cache.gf);
     }
 
-    ggml_gallocr_alloc_graph(cache.allocr, cache.gf);
+    if (!ggml_gallocr_alloc_graph(cache.allocr, cache.gf)) {
+        throw std::runtime_error("s3gen STFT: graph allocation failed");
+    }
     ggml_backend_tensor_set(ggml_graph_get_tensor(cache.gf, "s"),
                             src.data(), 0, src.size() * sizeof(float));
     ggml_backend_tensor_set(ggml_graph_get_tensor(cache.gf, "k"),
@@ -2379,7 +2404,9 @@ static std::vector<float> run_hift_decode(const model_ctx & m,
             cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
             ggml_gallocr_reserve(cache.allocr, gf);
         }
-        ggml_gallocr_alloc_graph(cache.allocr, gf);
+        if (!ggml_gallocr_alloc_graph(cache.allocr, gf)) {
+            throw std::runtime_error("s3gen HiFT: graph allocation failed");
+        }
     } else {
         s3gen_sched_prepare(m, gf);
     }
@@ -3092,6 +3119,10 @@ int s3gen_synthesize_to_wav(
             }
         } else {
             for (size_t i = 0; i < z.size(); ++i) z[i] = z[i] + dt * dxdt[i];
+        }
+        if (!std::all_of(z.begin(), z.end(), [](float value) { return std::isfinite(value); })) {
+            fprintf(stderr, "error: non-finite S3Gen CFM state at step %zu\n", s);
+            return 1;
         }
     }
     double prof_cfm_ms = now_ms() - cfm_t0;

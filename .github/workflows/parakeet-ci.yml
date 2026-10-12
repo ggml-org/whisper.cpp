@@ -15,10 +15,12 @@ on:
     branches: [master]
     paths:
       - 'engines/parakeet/**'
+      - 'engines/test/**'
       - '.github/workflows/parakeet-ci.yml'
   pull_request:
     paths:
       - 'engines/parakeet/**'
+      - 'engines/test/**'
       - '.github/workflows/parakeet-ci.yml'
   workflow_dispatch:
     inputs:
@@ -259,4 +261,3 @@ jobs:
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/ggml-install/lib
         run: ctest --test-dir build -L gpu --output-on-failure --timeout 1200
-

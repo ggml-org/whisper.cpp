@@ -528,6 +528,11 @@ void test_cli_flags() {
     check(args.options.model_path == "t.gguf" && args.audio_path == "a.wav" && args.request.prompt == "p" &&
           args.request.max_new_tokens == 9 && args.options.use_gpu && args.options.n_threads == 3 &&
           args.out_path == "o.json", "CLI values land in the options and the request");
+    const char * explicit_backend[] = {"moss-transcribe", "--model", "t.gguf", "--audio", "a.wav",
+                                       "--backend", "vulkan"};
+    TranscribeCliArgs vulkan;
+    check(parse_args(7, explicit_backend, vulkan) && vulkan.options.backend == "vulkan" && !vulkan.options.use_gpu,
+          "--backend selects Vulkan independently of --gpu");
     const char * hinted[] = {"moss-transcribe", "--model", "t.gguf", "--audio", "a.wav", "--hotwords", "QVAC,,vcpkg"};
     TranscribeCliArgs hotwords;
     check(parse_args(7, hinted, hotwords) &&

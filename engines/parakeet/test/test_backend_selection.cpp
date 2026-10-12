@@ -102,6 +102,16 @@ void test_explicit_selection() {
     CHECK(!backend_selection_matches("HTP0", "HTP", "HTP1", GGML_BACKEND_DEVICE_TYPE_GPU));
     CHECK(backend_selection_matches("opencl", "OpenCL", "OpenCL0", GGML_BACKEND_DEVICE_TYPE_GPU));
     CHECK(!backend_selection_matches("opencl", "HTP", "HTP0", GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(backend_selection_matches("vulkan", "Vulkan", "Vulkan0", GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(backend_selection_matches("vulkan", "Vulkan", "Vulkan1", GGML_BACKEND_DEVICE_TYPE_IGPU));
+    CHECK(!backend_selection_matches("vulkan", "CUDA", "CUDA0", GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(!backend_selection_matches("vulkan", "Metal", "Metal", GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(backend_selection_matches("Vulkan1", "Vulkan", "Vulkan1", GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(!backend_selection_matches("Vulkan1", "Vulkan", "Vulkan0", GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(backend_selection_matches("cuda", "CUDA", "CUDA0", GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(backend_selection_matches("cuda", "CUDA", "CUDA1", GGML_BACKEND_DEVICE_TYPE_IGPU));
+    CHECK(!backend_selection_matches("cuda", "Vulkan", "Vulkan0", GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(backend_selection_matches("CUDA1", "CUDA", "CUDA1", GGML_BACKEND_DEVICE_TYPE_GPU));
     CHECK(backend_selection_matches("cpu", "CPU", "CPU", GGML_BACKEND_DEVICE_TYPE_CPU));
     CHECK(!backend_selection_matches("cpu", "HTP", "HTP0", GGML_BACKEND_DEVICE_TYPE_GPU));
     CHECK(!backend_selection_matches("auto", "HTP", "HTP0", GGML_BACKEND_DEVICE_TYPE_GPU));

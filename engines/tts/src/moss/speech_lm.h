@@ -67,6 +67,12 @@ public:
     std::vector<int32_t> tokenizer_types() const;
 
     void begin(int n_ctx);
+    // Drop per-request KV and graph buffers, retaining weights/tokenizer data.
+    // A subsequent begin() starts a fresh request on the same model.
+    void release_generation();
+    // Also release device weights between LM and codec stages. Metadata and
+    // backend identity remain valid; begin() reloads weights on the next turn.
+    void release_weights();
     int position() const;
     int context() const;
     SpeechLogits prefill(const std::vector<SpeechRow> & rows, int batch_tokens, const SpeechStop & stop = {});

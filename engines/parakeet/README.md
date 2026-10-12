@@ -7,7 +7,10 @@ RNN-T, TDT, EOU, Nemotron, or Sortformer GGUFs and selects the implementation
 from GGUF metadata. MOSS-Transcribe-Diarize, a Qwen3-based model that
 transcribes and labels speakers in one pass (with optional per-request
 hotwords), ships alongside with its own `parakeet::moss::TranscribeEngine`
-and `moss-transcribe` CLI. Its `parakeet::moss::fit_params` preflight measures
+and `moss-transcribe` CLI. `--backend cuda|vulkan` (or
+`TranscribeOptions::backend = "cuda"` / `"vulkan"`) explicitly selects a GPU backend; the
+request fails if unavailable. Generated-model CPU/CUDA/Vulkan parity and
+F16/Q5/Q8 full-checkpoint smoke cases cover this path. Its `parakeet::moss::fit_params` preflight measures
 weights, encoder/decoder graphs, KV cache and host memory, including scheduler storage
 and CPU scratch for the configured threads, using GGUF metadata only; see
 [docs/moss-transcribe.md](docs/moss-transcribe.md).

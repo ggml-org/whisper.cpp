@@ -164,7 +164,7 @@ void test_transcripts(const std::string & model_path, const std::vector<float> &
           "MOSS_COREML_DISABLE keeps the ggml encoder");
     std::printf("encode: Core ML %.0f ms, ggml %.0f ms\n", accelerated.encode_ms, reference.encode_ms);
     std::printf("transcript match: %s\n", accelerated.text == reference.text ? "exact" : "differs");
-    TranscribeModel model(model_path, false, 1, true);
+    TranscribeModel model(model_path, false, 1, "auto", true);
     const TranscribeTokenizer tokenizer(model);
     const double agreement = token_agreement(tokenizer.encode(accelerated.text), tokenizer.encode(reference.text));
     std::printf("greedy token prefix agreement: %.4f\n", agreement);

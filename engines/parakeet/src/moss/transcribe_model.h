@@ -75,7 +75,8 @@ struct TranscribeConfig {
 
 class TranscribeModel {
 public:
-    TranscribeModel(const std::string & path, bool use_gpu, int n_threads, bool measure_only = false);
+    TranscribeModel(const std::string & path, bool use_gpu, int n_threads,
+                    const std::string & backend = "auto", bool measure_only = false);
     ~TranscribeModel();
     TranscribeModel(const TranscribeModel &) = delete;
     TranscribeModel & operator=(const TranscribeModel &) = delete;

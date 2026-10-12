@@ -62,7 +62,7 @@ private:
     ggml_backend_sched * sched_ = nullptr;
 };
 
-ggml_backend * open_transcribe_backend(bool use_gpu);
+ggml_backend * open_transcribe_backend(bool use_gpu, const std::string & requested);
 void upload_gguf_tensors(const gguf_context * file, const std::string & path, ggml_context * weights);
 
 } // namespace parakeet::moss::detail

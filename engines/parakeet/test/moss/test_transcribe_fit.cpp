@@ -125,7 +125,7 @@ void check_runtime_parity(const std::filesystem::path & path, const FitResult & 
     check(fit.host_bytes >= model.allocated_memory().host_bytes +
                                 model.allocated_memory().cpu_work_bytes,
           "decoder host allocation exceeds projection");
-    TranscribeModel metadata(path.string(), false, 4, true);
+    TranscribeModel metadata(path.string(), false, 4, "auto", true);
     TranscribeGraph graph(8);
     bool guarded = false;
     try { metadata.compute(graph); } catch (const std::runtime_error &) { guarded = true; }

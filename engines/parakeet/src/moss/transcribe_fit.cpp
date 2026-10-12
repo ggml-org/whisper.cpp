@@ -184,7 +184,7 @@ FitResult fit_params(const TranscribeOptions & options, const TranscribeRequest 
     }
     if (!options.backends_dir.empty()) ::parakeet::set_backends_directory(options.backends_dir);
     try {
-        detail::TranscribeModel model(options.model_path, options.use_gpu, options.n_threads, true);
+        detail::TranscribeModel model(options.model_path, options.use_gpu, options.n_threads, options.backend, true);
         detail::validate_transcribe_encoder(model);
         detail::validate_transcribe_decoder(model);
         detail::TranscribeTokenizer tokenizer(model);

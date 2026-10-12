@@ -55,7 +55,7 @@ struct TranscribeEngine::Impl {
         if (!options.backends_dir.empty()) {
             ::parakeet::set_backends_directory(options.backends_dir);
         }
-        model = std::make_unique<TranscribeModel>(options.model_path, options.use_gpu, options.n_threads);
+        model = std::make_unique<TranscribeModel>(options.model_path, options.use_gpu, options.n_threads, options.backend);
         detail::validate_transcribe_encoder(*model);
         detail::validate_transcribe_decoder(*model);
         tokenizer = std::make_unique<TranscribeTokenizer>(*model);

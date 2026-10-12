@@ -81,6 +81,11 @@ struct Engine::Impl {
         backbone.reset(new DelayLM(options.backbone_path, options.use_gpu, options.n_threads,
                 options.context));
         frontend.reset(new Frontend(*backbone));
+        validate_duration_budget();
+        // Reference encoding only needs the backbone's channel count. Finish
+        // and destroy its temporary encoder before loading decoder weights so
+        // cloning does not require both codec checkpoints resident at once.
+        load_reference();
         decoder.reset(new Codec(options.decoder_path, options.use_gpu, options.n_threads));
         if (decoder->is_encoder()) {
             fail("decoder_path points at an encoder checkpoint");
@@ -88,8 +93,6 @@ struct Engine::Impl {
         if (decoder->num_quantizers() < backbone->config().n_vq) {
             fail("the decoder has fewer quantizers than the backbone channels");
         }
-        validate_duration_budget();
-        load_reference();
     }
 
     void validate_duration_budget() const {

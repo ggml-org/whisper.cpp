@@ -2686,6 +2686,16 @@ ggml_backend_t init_engine_cpu_backend() {
     return init_cpu_backend();
 }
 
+ggml_backend_t init_engine_backend(bool use_gpu, const std::string & requested) {
+    if (backend_selection_is_auto(requested)) return init_engine_backend(use_gpu);
+    ggml_backend_t cpu = init_cpu_backend();
+    if (!cpu) return nullptr;
+    bool is_mali_vulkan = false;
+    ggml_backend_t selected = init_explicit_backend(requested, cpu, is_mali_vulkan);
+    if (selected != cpu) ggml_backend_free(cpu);
+    return selected;
+}
+
 ggml_backend_t model_active_backend(ParakeetCtcModel & m) {
     if (!m.impl) return nullptr;
     return m.impl->backend_active;

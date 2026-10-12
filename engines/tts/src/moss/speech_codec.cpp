@@ -225,6 +225,19 @@ struct SpeechCodec::Impl {
         if (codes.empty()) {
             return {};
         }
+        // Match every acquired cache reference, including exceptions and
+        // cancellation. The decoder must not remain resident when the next
+        // Speech turn reloads the LM. Other owners' references are preserved.
+        struct DecoderLease {
+            bool acquired = false;
+            ~DecoderLease() { if (acquired) ::s3gen_unload(); }
+        } lease;
+        if (use_gpu) {
+            if (::s3gen_preload(path, 1) != 0) {
+                fail("token-to-wave decoder load failed");
+            }
+            lease.acquired = true;
+        }
         std::vector<float> pcm;
         const int status = ::s3gen_synthesize_to_wav(codes, synth_options(voice, pcm, options));
         if (status == CANCELLED) {

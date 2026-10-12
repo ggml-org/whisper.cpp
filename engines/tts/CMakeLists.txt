@@ -1485,6 +1485,27 @@ if (TTS_CPP_BUILD_TESTS)
                  "--ref" "${_tcb_cosy_ref}/tokenizer_ref.txt"
         REQUIRES "${_tcb_cosy_vocab}" "${_tcb_cosy_merges}" "${_tcb_cosy_ref}/tokenizer_ref.txt")
 
+    # CPU/GPU parity on generated GGUFs, one arm per compiled backend. Each
+    # arm pins its backend, so a build carrying both fails loud instead of
+    # passing on the other GPU.
+    set(_tcb_moss_arms "")
+    if (TTS_CPP_GGML_CUDA)
+        list(APPEND _tcb_moss_arms cuda)
+    endif()
+    if (TTS_CPP_GGML_VULKAN)
+        list(APPEND _tcb_moss_arms vulkan)
+    endif()
+    if (_tcb_moss_arms)
+        add_executable(test-moss-gpu test/moss/test_gpu.cpp)
+        target_link_libraries(test-moss-gpu PRIVATE tts-cpp)
+        target_include_directories(test-moss-gpu PRIVATE src)
+        tts_cpp_apply_ccache(test-moss-gpu)
+        foreach(_tcb_moss_arm IN LISTS _tcb_moss_arms)
+            tts_cpp_register_test(test-moss-${_tcb_moss_arm} LABEL "gpu"
+                EXE test-moss-gpu ARGS ${_tcb_moss_arm})
+        endforeach()
+    endif()
+
     add_executable(test-moss-generation test/moss/test_generation.cpp)
     target_link_libraries(test-moss-generation PRIVATE tts-cpp)
     target_include_directories(test-moss-generation PRIVATE src)
@@ -1514,6 +1535,10 @@ if (TTS_CPP_BUILD_TESTS)
     target_include_directories(test-moss-stream PRIVATE src)
     tts_cpp_apply_ccache(test-moss-stream)
     tts_cpp_register_test(test-moss-stream)
+    if (TTS_CPP_GGML_VULKAN)
+        tts_cpp_register_test(test-moss-vulkan-stream EXE test-moss-stream
+            ARGS --vulkan LABEL "gpu")
+    endif()
 
     add_executable(test-moss-cancel test/moss/test_cancel.cpp)
     target_link_libraries(test-moss-cancel PRIVATE tts-cpp)
@@ -1563,6 +1588,28 @@ if (TTS_CPP_BUILD_TESTS)
     target_include_directories(test-moss-speech PRIVATE src)
     tts_cpp_apply_ccache(test-moss-speech)
     tts_cpp_register_test(test-moss-speech)
+
+    add_executable(test-moss-speech-e2e test/moss/test_speech_e2e.cpp)
+    target_link_libraries(test-moss-speech-e2e PRIVATE tts-cpp)
+    target_include_directories(test-moss-speech-e2e PRIVATE src)
+    tts_cpp_apply_ccache(test-moss-speech-e2e)
+    # Invoked with downloaded full checkpoints by the manual GPU workflow.
+    tts_cpp_register_test(test-moss-speech-e2e LABEL "gpu")
+    set_property(TEST test-moss-speech-e2e PROPERTY SKIP_RETURN_CODE 77)
+
+    add_executable(test-moss-speech-codec-e2e test/moss/test_speech_codec_e2e.cpp)
+    target_link_libraries(test-moss-speech-codec-e2e PRIVATE tts-cpp)
+    target_include_directories(test-moss-speech-codec-e2e PRIVATE src)
+    tts_cpp_apply_ccache(test-moss-speech-codec-e2e)
+    tts_cpp_register_test(test-moss-speech-codec-e2e LABEL "gpu")
+    set_property(TEST test-moss-speech-codec-e2e PROPERTY SKIP_RETURN_CODE 77)
+
+    add_executable(test-moss-tts-stream-e2e test/moss/test_tts_stream_e2e.cpp)
+    target_link_libraries(test-moss-tts-stream-e2e PRIVATE tts-cpp)
+    target_include_directories(test-moss-tts-stream-e2e PRIVATE src)
+    tts_cpp_apply_ccache(test-moss-tts-stream-e2e)
+    tts_cpp_register_test(test-moss-tts-stream-e2e LABEL "gpu")
+    set_property(TEST test-moss-tts-stream-e2e PROPERTY SKIP_RETURN_CODE 77)
 
     add_executable(test-moss-sfx-parity test/moss/test_sfx_parity.cpp)
     target_link_libraries(test-moss-sfx-parity PRIVATE tts-cpp)

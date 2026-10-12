@@ -315,6 +315,27 @@ void test_lm_batches_and_steps() {
     const SpeechLogits whole = prefill(lm, rows, (int) rows.size());
     check(whole.text.size() == (size_t) moss_fixtures::TEXT_VOCAB && whole.audio.size() == AUDIO_VOCAB,
           "prefill returns both heads");
+    lm.release_generation();
+    lm.release_generation();
+    check(lm.position() == 0 && lm.context() == 0, "released generation has no KV state");
+    expect_failure([&] { lm.step(rows.back()); }, "begin()", "decode after release requires begin()");
+    check(close(prefill(lm, rows, (int) rows.size()), whole),
+          "releasing generation retains weights and permits an identical new request");
+    const std::string backend = lm.backend_name();
+    lm.release_weights();
+    lm.release_weights();
+    check(backend == lm.backend_name() && lm.config().text_vocab == moss_fixtures::TEXT_VOCAB,
+          "weight eviction retains backend identity and model metadata");
+    check(!lm.tokenizer_tokens().empty(), "tokenizer metadata survives weight eviction");
+    expect_failure([&] { lm.step(rows.back()); }, "begin()", "decode after weight eviction requires begin()");
+    check(close(prefill(lm, rows, (int) rows.size()), whole), "reloaded weights reproduce original logits");
+    lm.release_weights();
+    const auto moved = path.string() + ".held";
+    std::filesystem::rename(path, moved);
+    expect_failure([&] { lm.begin((int) rows.size() + 1); }, "reopen GGUF", "a missing reload checkpoint");
+    std::filesystem::rename(moved, path);
+    check(lm.context() == 0, "failed weight reload leaves no generation state");
+    check(close(prefill(lm, rows, (int) rows.size()), whole), "a failed weight reload can be retried");
     check(close(prefill(lm, rows, 1), whole), "token-by-token prefill matches one batch");
     check(close(prefill(lm, rows, 3), whole), "uneven batches match one batch");
     lm.begin((int) rows.size() + 1);
