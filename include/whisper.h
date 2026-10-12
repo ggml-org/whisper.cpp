@@ -588,6 +588,12 @@ extern "C" {
         const char * vad_model_path;              // Path to VAD model
 
         whisper_vad_params vad_params;
+
+        // Optional comma-separated list of languages to restrict auto-detection
+        // to (e.g. "en,de,fr" or "english,german"). Only used when language is
+        // "auto" (or empty). Languages outside the list get a detection
+        // probability of ~0. NULL/empty = no restriction.
+        const char * detect_language_filter;
     };
 
     // NOTE: this function allocates memory, and it is the responsibility of the caller to free the pointer - see whisper_free_context_params & whisper_free_params()

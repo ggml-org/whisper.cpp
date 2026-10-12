@@ -56,6 +56,7 @@ struct whisper_params {
     bool debug_mode      = false;
     bool translate       = false;
     bool detect_language = false;
+    std::string detect_langs = "";
     bool diarize         = false;
     bool tinydiarize     = false;
     bool split_on_word   = false;
@@ -196,6 +197,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-nt"   || arg == "--no-timestamps")        { params.no_timestamps   = true; }
         else if (arg == "-l"    || arg == "--language")             { params.language        = whisper_param_turn_lowercase(ARGV_NEXT); }
         else if (arg == "-dl"   || arg == "--detect-language")      { params.detect_language = true; }
+        else if (                  arg == "--detect-langs")          { params.detect_langs   = ARGV_NEXT; }
         else if (                  arg == "--prompt")               { params.prompt          = ARGV_NEXT; }
         else if (                  arg == "--carry-initial-prompt") { params.carry_initial_prompt = true; }
         else if (arg == "-m"    || arg == "--model")                { params.model           = ARGV_NEXT; }
@@ -279,6 +281,7 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  -nt,       --no-timestamps        [%-7s] do not print timestamps\n",                        params.no_timestamps ? "true" : "false");
     fprintf(stderr, "  -l LANG,   --language LANG        [%-7s] spoken language ('auto' for auto-detect)\n",       params.language.c_str());
     fprintf(stderr, "  -dl,       --detect-language      [%-7s] exit after automatically detecting language\n",    params.detect_language ? "true" : "false");
+    fprintf(stderr, "             --detect-langs LANGS         [%-7s] restrict language auto-detection to a comma-separated list (e.g. \"en,de,fr\")\n", params.detect_langs.c_str());
     fprintf(stderr, "             --prompt PROMPT        [%-7s] initial prompt (max n_text_ctx/2 tokens)\n",       params.prompt.c_str());
     fprintf(stderr, "             --carry-initial-prompt [%-7s] always prepend initial prompt\n",                  params.carry_initial_prompt ? "true" : "false");
     fprintf(stderr, "  -m FNAME,  --model FNAME          [%-7s] model path\n",                                     params.model.c_str());
@@ -1233,6 +1236,7 @@ int main(int argc, char ** argv) {
             wparams.translate        = params.translate;
             wparams.language         = params.language.c_str();
             wparams.detect_language  = params.detect_language;
+            wparams.detect_language_filter = params.detect_langs.empty() ? nullptr : params.detect_langs.c_str();
             wparams.n_threads        = params.n_threads;
             wparams.n_max_text_ctx   = params.max_context >= 0 ? params.max_context : wparams.n_max_text_ctx;
             wparams.offset_ms        = params.offset_t_ms;
