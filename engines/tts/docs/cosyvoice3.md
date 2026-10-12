@@ -204,6 +204,19 @@ checks exact greedy-token parity against CPU when model fixtures are staged.
 Floating-point differences can change sampled trajectories, so compare
 `lm_decode_per_token` alongside end-to-end timings when profiling.
 
+### Vulkan flow attention
+
+Flow prefers F16 key/value operands for Vulkan flash attention and retains
+F32 accumulation. Model weight precision is unchanged. The backend capability
+probe selects F32 operands when F16 is unsupported, and regular attention
+when neither flash-attention configuration is supported. Memory-fit projection
+uses the same graph builder and selection.
+
+`test-cosyvoice-flow-attention-vulkan` requires no model files. It checks the
+operand selection, unsupported-dimension fallback, and batched attention
+against an F32 scalar reference at short and unaligned sequence lengths.
+The CPU version is registered as `test-cosyvoice-flow-attention`.
+
 ### Metal graph paths
 
 On Metal the engine takes graph shapes chosen from a per-op GPU profile, all

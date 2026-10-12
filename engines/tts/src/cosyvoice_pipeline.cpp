@@ -1096,14 +1096,13 @@ static bool cosy_dit_fa_supported(ggml_backend_t backend, int head_dim, int head
     return ok;
 }
 
-// On Metal, f16 K/V operands take the DiT's [N x N] flash attention from
-// 1.93 to 1.62 ms per layer-step (M3 Ultra, N=1620 -- the f16 simdgroup
-// loads), and the flow parity gates are cosine-tolerance with the deviation
-// measured negligible next to the backend's f16-staged GEMMs, so the K/V
-// operands are cast to f16 there.  The CPU keeps f32 K/V (f16 K/V measured
-// slower on Zen 5) and the other backends stay on their measured f32 path.
-static ggml_type cosy_dit_fa_kv_type(ggml_backend_t backend) {
-    return ::tts_cpp::detail::backend_is_metal(backend) ? GGML_TYPE_F16 : GGML_TYPE_F32;
+bool cosyvoice_dit_fa_config(ggml_backend_t backend, const dit_hp & hp, ggml_type & kv_type) {
+    kv_type = ::tts_cpp::detail::backend_is_metal(backend) || ::tts_cpp::detail::backend_is_vulkan(backend)
+        ? GGML_TYPE_F16 : GGML_TYPE_F32;
+    if (cosy_dit_fa_supported(backend, hp.dim_head, hp.heads, kv_type)) return true;
+    if (kv_type == GGML_TYPE_F32) return false;
+    kv_type = GGML_TYPE_F32;
+    return cosy_dit_fa_supported(backend, hp.dim_head, hp.heads, kv_type);
 }
 
 static ggml_tensor * dit_rope(ggml_context * c, ggml_tensor * x, ggml_tensor * pos, int dim_head) {
@@ -1141,12 +1140,8 @@ ggml_tensor * build_dit(ggml_context * c, const model_ctx & m, const dit_hp & hp
     // chain on both the CPU backend and the desktop GPUs; the probe keeps
     // backends without a native FLASH_ATTN_EXT on the naive path they are
     // tuned for instead of demoting the stage to a scheduler fallback.
-    ggml_type fa_kv = cosy_dit_fa_kv_type(m.backend);
-    bool use_fa = cosy_dit_fa_supported(m.backend, hp.dim_head, hp.heads, fa_kv);
-    if (!use_fa && fa_kv != GGML_TYPE_F32) {
-        fa_kv = GGML_TYPE_F32;
-        use_fa = cosy_dit_fa_supported(m.backend, hp.dim_head, hp.heads, fa_kv);
-    }
+    ggml_type fa_kv;
+    const bool use_fa = cosyvoice_dit_fa_config(m.backend, hp, fa_kv);
     ggml_tensor * t = linear(c, T(m, std::string(P) + "time_embed/time_mlp/0/weight"),
                                 T(m, std::string(P) + "time_embed/time_mlp/0/bias"), time_sin);
     t = silu(c, t);

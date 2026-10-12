@@ -84,6 +84,10 @@ on CUDA and Metal. Supported CUDA backends reuse decode graphs within masked
 128-token cache windows, allowing CUDA graph capture. Unsupported backends or
 head dimensions retain their existing attention path.
 
+CosyVoice3 flow uses F16 key/value operands with F32 accumulation for
+capability-checked Vulkan flash attention, falling back to F32 operands or
+regular attention when required.
+
 CosyVoice3 expands bf16 flow weights to f32 when loading on ARM CPUs. This
 avoids scalar bf16 matmuls at twice the resident storage for those weights;
 memory preflight includes the expansion. Prefer an f16 flow bundle on ARM.

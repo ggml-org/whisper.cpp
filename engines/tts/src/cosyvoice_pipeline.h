@@ -149,6 +149,7 @@ struct dit_hp {
 // (real converted GGUFs predate these keys, so their graph shape is
 // unchanged).  Mirrors cosyvoice_qwen_hp.
 dit_hp cosyvoice_dit_hp(const model_ctx & m);
+bool cosyvoice_dit_fa_config(ggml_backend_t backend, const dit_hp & hp, ggml_type & kv_type);
 
 // ---- low-level graph builders (exposed for the parity CLIs) ---------------
 // Qwen2 prefill: x [hidden, L] -> logits [6761, L] (also tags "hidden" output).
