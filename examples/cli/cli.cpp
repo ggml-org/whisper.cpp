@@ -810,6 +810,20 @@ static void output_json(
     end_obj(true);
 }
 
+// helper to quote a string for bash
+static std::string quote(const std::string & s) {
+    std::string out = "'";
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\'') {
+            out += "'\\''";
+        } else {
+            out += s[i];
+        }
+    }
+    out += "'";
+    return out;
+}
+
 // karaoke video generation
 // outputs a bash script that uses ffmpeg to generate a video with the subtitles
 // TODO: font parameter adjustments
@@ -825,7 +839,7 @@ static bool output_wts(struct whisper_context * ctx, std::ofstream & fout, const
     fout << "#!/bin/bash" << "\n";
     fout << "\n";
 
-    fout << "ffmpeg -i " << fname_inp << " -f lavfi -i color=size=1200x120:duration=" << t_sec << ":rate=25:color=black -vf \"";
+    fout << "ffmpeg -i " << quote(fname_inp) << " -f lavfi -i color=size=1200x120:duration=" << t_sec << ":rate=25:color=black -vf \"";
 
     for (int i = 0; i < whisper_full_n_segments(ctx); i++) {
         const int64_t t0 = whisper_full_get_segment_t0(ctx, i);
@@ -919,12 +933,12 @@ static bool output_wts(struct whisper_context * ctx, std::ofstream & fout, const
         }
     }
 
-    fout << "\" -c:v libx264 -pix_fmt yuv420p -y " << fname_inp << ".mp4" << "\n";
+    fout << "\" -c:v libx264 -pix_fmt yuv420p -y " << quote(std::string(fname_inp) + ".mp4") << "\n";
 
     fout << "\n\n";
-    fout << "echo \"Your video has been saved to " << fname_inp << ".mp4\"" << "\n";
+    fout << "echo \"Your video has been saved to \" " << quote(std::string(fname_inp) + ".mp4") << "\n";
     fout << "\n";
-    fout << "echo \"  ffplay " << fname_inp << ".mp4\"\n";
+    fout << "echo \"  ffplay \" " << quote(std::string(fname_inp) + ".mp4") << "\n";
     fout << "\n";
 
     fout.close();
