@@ -1992,6 +1992,19 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-audio8-codec-bench-cli)
     tts_cpp_register_test(test-audio8-codec-bench-cli LABEL "unit")
 
+    if (Python3_Interpreter_FOUND AND TARGET audio8-codec-bench)
+        add_executable(audio8-codec-bench-fixture test/audio8/codec_bench_fixture.cpp)
+        target_link_libraries(audio8-codec-bench-fixture PRIVATE tts-cpp ggml)
+        target_include_directories(audio8-codec-bench-fixture PRIVATE src)
+        tts_cpp_apply_ccache(audio8-codec-bench-fixture)
+        add_test(NAME test-audio8-codec-bench-runner
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${CMAKE_CURRENT_SOURCE_DIR}/test/audio8/test_codec_bench_runner.py"
+                         $<TARGET_FILE:audio8-codec-bench> $<TARGET_FILE:audio8-codec-bench-fixture>)
+        set_tests_properties(test-audio8-codec-bench-runner PROPERTIES
+                             LABELS "unit" TIMEOUT 300 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+    endif()
+
     # Model-free on every host: sidecar naming rule and window plan.
     add_executable(test-audio8-coreml-windows test/audio8/test_coreml_windows.cpp
         src/audio8/coreml_path.cpp src/coreml_sidecar_path.cpp)

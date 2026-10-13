@@ -775,6 +775,50 @@ handed the other arm's GPU, fails rather than passing on someone else's result.
 The engine test hands the cloning path a wav rather than pre-computed codes, so
 it exercises the codec encoder the way a caller would.
 
+#### Fixed-code decoder benchmark
+
+Both output paths must differ even under ASCII case folding; on Windows the
+check also covers Unicode case aliases. This prevents two nonexistent output
+names such as `out.wav` and `OUT.WAV` from overwriting each other on a
+case-insensitive filesystem. Existing input/model aliases, hard links and
+symlinks are also rejected. With tests and executables enabled,
+`test-audio8-codec-bench-runner` generates a tiny decoder and exercises the
+actual CLI, including repetition statistics and byte-level WAV/F32 exports.
+
+`audio8-codec-bench` can decode captured codes without running the language
+model. Build the existing benchmark target, then use the CSV produced by
+`audio8-cli --dump-codes` (one frame per line, ten comma-separated codes):
+
+```bash
+build/audio8-codec-bench \
+  --codec-decoder models/audio8-codec-decoder-q8_0.gguf \
+  --codes utterance.codes --frames 66 --codec-backend hexagon \
+  --warmup 3 --repeat 5 --threads 4 \
+  --out decoded.wav --out-f32 decoded.f32
+```
+
+Supported decoder backends are `cpu`, `hexagon` and `opencl`. Selection is
+checked; unsupported operations can still use the CPU scheduler fallback.
+The report identifies the synthesis backend and fallback availability, not
+the number of operations actually executed on each backend. Run with the
+matching backend libraries; Hexagon correctness and timing require
+`GGML_HEXAGON_OPSTAGE=3`.
+
+Timing covers the production `decode_codes` call, including graph setup,
+execution and PCM readback. Model loading, code validation/transposition and
+file output are excluded. Warmup defaults to one and repeat to five; zero
+warmups are allowed. Each timed iteration reports its time and decoder route.
+The summary reports geometry, whether PCM is bit-identical across timed
+iterations, minimum, mean, median, maximum and population standard deviation. Output files
+contain the last iteration; compare F32 output as well as WAV when checking
+numerical correctness.
+
+`--codes-format i32` accepts headerless little-endian int32 codes in frame
+order, with semantic codebook first and residual codebooks following.
+`--codebooks N` must match the model; when omitted it is inferred. Code count,
+token range, output geometry and finite PCM are validated. Existing encoder
+and decoder WAV roundtrip mode remains available.
+
 #### Fixed-input backend parity
 
 `test-audio8-backend-parity` compares a selected `cpu`, `hexagon`, or `opencl`

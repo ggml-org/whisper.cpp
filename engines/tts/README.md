@@ -82,6 +82,10 @@ including text/diffusion/decode workloads for sound effects. Entry points are in
 
 ## Performance
 
+`audio8-codec-bench` can decode captured codes on CPU, Hexagon or OpenCL and
+export WAV/raw F32 PCM while measuring the codec separately from generation.
+See the [fixed-code decoder benchmark](docs/audio8.md#fixed-code-decoder-benchmark).
+
 `RTF = generation_time / audio_duration`; lower is faster. Dated CI snapshots,
 Supertonic 3 and Audio8 campaigns, Apple-silicon measurements, streaming
 latency, build pins and reproduction steps live in

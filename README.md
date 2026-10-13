@@ -98,6 +98,10 @@ tool, and the engine's model guide to acquire its required weights.
 
 ## Performance
 
+`audio8-codec-bench` can decode captured codes on CPU, Hexagon or OpenCL and
+export WAV/raw F32 PCM while measuring the codec separately from generation.
+See the [fixed-code decoder benchmark](engines/tts/docs/audio8.md#fixed-code-decoder-benchmark).
+
 `RTF = inference_time / audio_duration`; lower is faster. These are dated
 measurements with different workloads and timing boundaries, not universal
 speed guarantees. Full methods, build pins and limitations live in
