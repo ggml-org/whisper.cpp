@@ -30,6 +30,9 @@ func newContext(model *model, params whisper.Params) (Context, error) {
 	context := new(context)
 	context.model = model
 	context.params = params
+	runtime.SetFinalizer(context, func(c *context) {
+		c.params.Free()
+	})
 
 	// Return success
 	return context, nil
