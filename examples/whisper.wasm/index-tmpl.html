@@ -4,6 +4,25 @@
         <title>whisper.cpp : WASM example</title>
 
         <style>
+            #transcript {
+                width: 100%;
+                margin-top: 10px;
+                padding: 6px;
+                background-color: #111;
+                color: white;
+                font-size: 13px;
+                font-family: 'Lucida Console', Monaco, monospace;
+                min-height: 60px;
+                max-height: 300px;
+                overflow-y: auto;
+                white-space: pre-wrap;
+            }
+
+            #transcript .t {
+                color: #888;
+                user-select: none;
+            }
+
             #output {
                 width: 100%;
                 height: 100%;
@@ -197,6 +216,16 @@
                     </td>
                 </tr>
             </table>
+
+            <br>
+
+            <!-- transcription, pushed segment by segment from the worker -->
+            <div id="transcript"></div>
+
+            <label>
+                <input type="checkbox" id="color_tokens" onchange="renderTranscript()" />
+                color tokens by probability
+            </label>
 
             <br>
 
@@ -619,6 +648,93 @@
                 document.getElementById('threads-value').innerHTML = nthreads;
             }
 
+            // transcription, filled in by the callbacks the wasm worker fires
+            var segments = [];
+
+            function clearTranscript() {
+                segments = [];
+                document.getElementById('transcript').innerHTML = '';
+            }
+
+            function toTimestamp(t) {
+                // t is in 10 ms units, as whisper_full_get_segment_t0 returns it
+                var ms = t * 10;
+
+                var h = Math.floor(ms / 3600000); ms -= h * 3600000;
+                var m = Math.floor(ms /   60000); ms -= m *   60000;
+                var sec = Math.floor(ms / 1000);  ms -= sec * 1000;
+
+                var pad = function(n, w) { return String(n).padStart(w, '0'); };
+
+                return pad(h, 2) + ':' + pad(m, 2) + ':' + pad(sec, 2) + '.' + pad(ms, 3);
+            }
+
+            function tokenColor(p) {
+                // same idea as the -print-colors option of the CLI: cubed so that only
+                // genuinely uncertain tokens stand out
+                var c = Math.pow(Math.max(0.0, Math.min(1.0, p)), 3);
+                return 'hsl(' + Math.round(120 * c) + ', 70%, 65%)';
+            }
+
+            // called from the worker thread for every new segment whisper decodes
+            function onNewSegment(instance, i) {
+                var n_tokens = Module.get_n_tokens(instance, i);
+                var tokens = [];
+
+                for (var j = 0; j < n_tokens; ++j) {
+                    tokens.push({
+                        text: Module.get_token_text(instance, i, j),
+                        p:    Module.get_token_p(instance, i, j),
+                    });
+                }
+
+                segments.push({
+                    t0:     Module.get_segment_t0(instance, i),
+                    t1:     Module.get_segment_t1(instance, i),
+                    text:   Module.get_segment_text(instance, i),
+                    tokens: tokens,
+                });
+
+                renderTranscript();
+            }
+
+            function onTranscriptionDone(instance, ret) {
+                printTextarea('js: transcription done, ' + segments.length + ' segments, whisper_full returned ' + ret);
+            }
+
+            function renderTranscript() {
+                var color = document.getElementById('color_tokens').checked;
+                var out = document.getElementById('transcript');
+
+                out.innerHTML = '';
+
+                for (var i = 0; i < segments.length; ++i) {
+                    var s = segments[i];
+
+                    var line = document.createElement('div');
+
+                    var stamp = document.createElement('span');
+                    stamp.className = 't';
+                    stamp.textContent = '[' + toTimestamp(s.t0) + ' --> ' + toTimestamp(s.t1) + ']  ';
+                    line.appendChild(stamp);
+
+                    if (color) {
+                        for (var j = 0; j < s.tokens.length; ++j) {
+                            var tok = document.createElement('span');
+                            tok.textContent = s.tokens[j].text;
+                            tok.style.color = tokenColor(s.tokens[j].p);
+                            line.appendChild(tok);
+                        }
+                    } else {
+                        line.appendChild(document.createTextNode(s.text));
+                    }
+
+                    out.appendChild(line);
+                }
+
+                out.scrollTop = out.scrollHeight;
+            }
+
             function onProcess(translate) {
                 if (!instance) {
                     instance = Module.init('whisper.bin');
@@ -640,6 +756,8 @@
                 }
 
                 if (instance) {
+                    clearTranscript();
+
                     printTextarea('');
                     printTextarea('js: processing - this might take a while ...');
                     printTextarea('');
