@@ -387,4 +387,126 @@ public interface WhisperCppJnaLibrary extends Library {
      * @return The result of the benchmark as a string.
      */
     String whisper_bench_ggml_mul_mat_str(int nThreads);
+
+    // ============================================================================
+    // Voice Activity Detection (VAD) Functions
+    // ============================================================================
+
+    /**
+     * Get default VAD parameters.
+     *
+     * @return Default VAD parameters
+     */
+    Pointer whisper_vad_default_params();
+
+    /**
+     * Get default VAD context parameters.
+     *
+     * @return Default VAD context parameters
+     */
+    Pointer whisper_vad_default_context_params();
+
+    /**
+     * Initialize VAD context from file with parameters.
+     *
+     * @param path_model Path to the VAD model file
+     * @param params VAD context parameters
+     * @return VAD context pointer on success, null on failure
+     */
+    Pointer whisper_vad_init_from_file_with_params(String path_model, Pointer params);
+
+    /**
+     * Initialize VAD context with model loader and parameters.
+     *
+     * @param loader Model loader
+     * @param params VAD context parameters
+     * @return VAD context pointer on success, null on failure
+     */
+    Pointer whisper_vad_init_with_params(WhisperModelLoader loader, Pointer params);
+
+    /**
+     * Detect speech in audio samples.
+     *
+     * @param vctx VAD context
+     * @param samples Audio samples (float array)
+     * @param n_samples Number of samples
+     * @return true if speech detected, false otherwise
+     */
+    boolean whisper_vad_detect_speech(Pointer vctx, float[] samples, int n_samples);
+
+    /**
+     * Get number of probability values in VAD context.
+     *
+     * @param vctx VAD context
+     * @return Number of probability values
+     */
+    int whisper_vad_n_probs(Pointer vctx);
+
+    /**
+     * Get probability array from VAD context.
+     *
+     * @param vctx VAD context
+     * @return Pointer to probability array
+     */
+    Pointer whisper_vad_probs(Pointer vctx);
+
+    /**
+     * Get VAD segments from pre-computed probabilities.
+     *
+     * @param vctx VAD context
+     * @param params VAD parameters
+     * @return Pointer to VAD segments
+     */
+    Pointer whisper_vad_segments_from_probs(Pointer vctx, Pointer params);
+
+    /**
+     * Get VAD segments directly from audio samples.
+     *
+     * @param vctx VAD context
+     * @param params VAD parameters
+     * @param samples Audio samples (float array)
+     * @param n_samples Number of samples
+     * @return Pointer to VAD segments
+     */
+    Pointer whisper_vad_segments_from_samples(Pointer vctx, Pointer params, float[] samples, int n_samples);
+
+    /**
+     * Get number of segments in VAD segments result.
+     *
+     * @param segments VAD segments pointer
+     * @return Number of segments
+     */
+    int whisper_vad_segments_n_segments(Pointer segments);
+
+    /**
+     * Get start time of a specific segment.
+     *
+     * @param segments VAD segments pointer
+     * @param i_segment Segment index
+     * @return Start time in seconds
+     */
+    float whisper_vad_segments_get_segment_t0(Pointer segments, int i_segment);
+
+    /**
+     * Get end time of a specific segment.
+     *
+     * @param segments VAD segments pointer
+     * @param i_segment Segment index
+     * @return End time in seconds
+     */
+    float whisper_vad_segments_get_segment_t1(Pointer segments, int i_segment);
+
+    /**
+     * Free VAD segments memory.
+     *
+     * @param segments VAD segments pointer to free
+     */
+    void whisper_vad_free_segments(Pointer segments);
+
+    /**
+     * Free VAD context memory.
+     *
+     * @param ctx VAD context pointer to free
+     */
+    void whisper_vad_free(Pointer ctx);
 }
