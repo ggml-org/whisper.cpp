@@ -1,0 +1,35 @@
+{
+  "name": "whisper.cpp.node",
+  "version": "1.8.3-1",
+  "description": "NPM package wrapping the whisper.cpp addon for Node.js",
+  "main": "whisper.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ggerganov/whisper.cpp"
+  },
+  "keywords": [
+    "openai",
+    "whisper",
+    "speech-to-text",
+    "speech-recognition",
+    "transformer"
+  ],
+  "bin": "bin/build.js",
+  "files": [
+    "index.js",
+    "bin/"
+  ],
+  "author": "Georgi Kostov",
+  "license": "MIT",
+  "dependencies": {
+    "cmake-js": "^7.4.0",
+    "node-addon-api": "^5.0.0"
+  },
+  "bugs": {
+    "url": "https://github.com/ggerganov/whisper.cpp/issues"
+  },
+  "homepage": "https://github.com/ggerganov/whisper.cpp#readme"
+}
