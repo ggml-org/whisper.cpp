@@ -91,7 +91,7 @@ inline options parse(int argc, char ** argv) {
     if (!mode_set && !opts.codes.empty()) opts.mode = "decode";
     if (opts.mode != "roundtrip" && opts.mode != "decode")
         throw std::runtime_error("--mode must be roundtrip or decode");
-    if (opts.threads == 0) throw std::runtime_error("--threads must be positive");
+    if (opts.threads <= 0) throw std::runtime_error("--threads must be positive");
     if (opts.mode == "roundtrip") {
         if (decode_options) throw std::runtime_error("decoder benchmark options require --mode decode or --codes");
         if (opts.encoder.empty() || opts.decoder.empty() || opts.input.empty() || opts.output.empty())
@@ -105,8 +105,10 @@ inline options parse(int argc, char ** argv) {
             throw std::runtime_error("--codec-backend must be cpu, hexagon or opencl");
         if (opts.codes_format != "csv" && opts.codes_format != "i32")
             throw std::runtime_error("--codes-format must be csv or i32");
-        if (opts.frames <= 0 || (codebooks_set && opts.codebooks <= 0) || opts.repeat <= 0)
-            throw std::runtime_error("--frames, --codebooks and --repeat must be positive");
+        if (opts.frames <= 0 || (codebooks_set && opts.codebooks <= 0) ||
+            opts.warmup < 0 || opts.repeat <= 0)
+            throw std::runtime_error(
+                "--frames, --codebooks, and --repeat must be positive; --warmup must be nonnegative");
         if (opts.output.empty() && opts.output_f32.empty())
             throw std::runtime_error("decode mode requires --out and/or --out-f32");
     }

@@ -348,9 +348,9 @@ separate session; they must not be combined with the table above into a new
 cross-backend comparison. The later three-backend S2–S5 sweep was cancelled;
 its partial results do not replace this S1 evidence. Current Hexagon-only
 dispatch measurements are documented separately in the companion ggml
-`docs/hexagon-audio8-profile.md` report under QVAC-26714.
+`docs/hexagon-audio8-profile.md` report.
 
-#### Dispatch profiling (QVAC-26714)
+#### Dispatch profiling
 
 Companion ggml #115 copies only the live operations into each outstanding
 batch's host metadata cache. It retains those snapshots for both profiling
@@ -379,22 +379,47 @@ decoding removes sampling randomness but does not guarantee equal CPU,
 OpenCL and Hexagon trajectories. Check generated codes and frame counts,
 then compare fixed-input numerical boundaries and waveforms.
 
-#### Codec panel tuning prototype (QVAC-26763)
+#### Quantized LM projection repacking
 
-Companion ggml PR #115 adds a selectable F32-preserving 4x2 HVX panel for
-large codec DDR matmuls. Set `GGML_HEXAGON_F16_F32_PANEL_SHAPE=4x2` for
-candidate testing; unset it or use `2x2` for the validated default. Existing
-VTCM routing and precision guards are preserved, and previously validated
-optimizations remain enabled. Profiling reports `hvx-panel-4x2` when that
-candidate is selected; keep profiling disabled for timing comparisons.
+The Hexagon backend needs repacked Q8_0 weights to execute transformer
+projections on the DSP. Audio8 previously allocated these weights in canonical
+host buffers, which sent the projections to the scheduler's CPU fallback.
+The default loader path puts eligible slow and fast transformer projections in
+Hexagon repack buffers. Set the environment variable to `0` to select the
+previous canonical layout for diagnostic comparisons:
 
-Host, Android and DSP v79 builds and the 29-case independent host oracle pass.
-Device correctness, fixed-code CPU/OpenCL parity and repeated S1–S5 timing
-remain pending, so no new performance improvement is claimed. Promotion
-requires those gates on matched baseline/candidate artifacts and the same
-device. The companion `docs/hexagon-audio8-profile.md` report contains the
-oracle, worker-count and dominant-shape benchmark commands for
-[QVAC-26763](https://app.asana.com/1/45238840754660/project/1214153063536860/task/1219313976732459).
+```sh
+export AUDIO8_LM_HEXAGON_REPACK=0
+```
+
+Use this with `--backend hexagon` and canonical host buffers
+(`GGML_HEXAGON_HOSTBUF=1`, the default). Embeddings, norms, other weights,
+KV caches, and codec allocations retain their existing buffer types.
+Both fused and unfused Q8_0 projections are supported; tensor uploads remain
+whole-tensor operations, and memory estimation includes both weight layouts.
+Leave the variable unset, or set it to `1`, for the default repacked path.
+
+Repacking does not change the stored weights or requested matmul precision.
+Projection-level CPU/OpenCL comparisons pass. Full-LM trajectories remain
+sampling-sensitive and are not bit-exact across CPU, OpenCL, and Hexagon; the
+validated native outputs are stable and intelligible, and the strict numerical
+differences remain recorded in the performance report. Set the variable to `0`
+when exact comparison with the previous Hexagon allocation path is required.
+
+#### Codec panel selection
+
+Companion [ggml PR #119](https://github.com/tetherto/qvac-ext-ggml/pull/119)
+sets the F32-preserving 4x2 HVX panel as the default for large codec DDR matmuls.
+Set `GGML_HEXAGON_F16_F32_PANEL_SHAPE=2x2` for the older panel or `4x2` to
+select the current default explicitly. VTCM routing and precision guards are
+preserved. Profiling reports `hvx-panel-4x2`; keep profiling disabled for
+performance comparisons.
+
+Fixed-code codec checks on the phone covered 3, 66, and 94 frames against
+CPU/OpenCL. The blocked reuse and residual fusion experiments remain opt-in;
+the four-variant prompt sweep did not show a repeatable full-inference gain.
+The LM projection repacking experiment above controls a separate weight
+layout and retains the codec panel setting.
 
 ### Core ML codec sidecar
 

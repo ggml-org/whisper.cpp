@@ -1749,6 +1749,19 @@ if (TTS_CPP_BUILD_TESTS)
     add_test(NAME test-audio8-backend-parity COMMAND test-audio8-backend-parity)
     set_tests_properties(test-audio8-backend-parity PROPERTIES LABELS "fixture" SKIP_RETURN_CODE 77)
 
+    add_executable(test-audio8-hexagon-repack test/audio8/test_hexagon_repack.cpp)
+    target_link_libraries(test-audio8-hexagon-repack PRIVATE tts-cpp ggml)
+    target_include_directories(test-audio8-hexagon-repack PRIVATE src)
+    tts_cpp_apply_ccache(test-audio8-hexagon-repack)
+    # The fixture requires Android's Hexagon and OpenCL providers. Keep the
+    # executable buildable on Windows, but do not launch a device-only binary
+    # in the host CTest lane.
+    if (NOT WIN32)
+        add_test(NAME test-audio8-hexagon-repack COMMAND test-audio8-hexagon-repack)
+        set_tests_properties(test-audio8-hexagon-repack PROPERTIES LABELS "fixture"
+            SKIP_RETURN_CODE 77 ENVIRONMENT "GGML_HEXAGON_HOSTBUF=1")
+    endif()
+
     # Fail-closed GGUF header reading: synthesized metadata-only files with a
     # wrong architecture and wrong-typed scalar/string keys. No fixtures.
     add_executable(test-audio8-gguf-load test/audio8/test_gguf_load.cpp
@@ -3088,7 +3101,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-vector-estimator-backward)
     tts_cpp_register_test(test-supertonic-vector-estimator-backward LABEL "unit")
 
-    # QVAC-20983 — analytic backward of the vocoder (latent unpack, denorm,
+    # Analytic backward of the vocoder (latent unpack, denorm,
     # causal conv1d, causal depthwise, channel layer norm, gelu, per-channel-gamma
     # convnext, affine batch norm, leaky-relu head, full chain d(loss)/d(latent)).
     # The "transposed convolution" upsampling is a fixed reshape+permute (the
@@ -3104,7 +3117,7 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-supertonic-vocoder-backward)
     tts_cpp_register_test(test-supertonic-vocoder-backward LABEL "unit")
 
-    # QVAC-20983 — forward-parity guard for the vocoder backward.  The gradcheck
+    # Forward-parity guard for the vocoder backward.  The gradcheck
     # above is self-referential (analytic backward vs the in-file reference
     # forward); this builds a synthetic CPU-backed `supertonic_model` from
     # deterministic weights and asserts the reference forward

@@ -145,6 +145,9 @@ struct lm_model {
     ggml_backend_t backend = nullptr;
     ggml_context * ctx_w = nullptr;
     ggml_backend_buffer_t buffer_w = nullptr;
+    // Hexagon's quantized projection layout is separate from canonical
+    // embeddings, norms and other weights. Buffers may split at device limits.
+    std::vector<ggml_backend_buffer_t> repacked_projection_buffers;
     ::tts_cpp::detail::sched_fallback sched;
 
     ggml_tensor * tok_emb = nullptr;

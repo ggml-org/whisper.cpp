@@ -15,6 +15,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -347,13 +348,110 @@ void mark_externally_allocated(ggml_context * ctx) {
     }
 }
 
+ggml_backend_buffer_type_t hexagon_projection_buffer_type(ggml_backend_t backend) {
+    // Repacking is the validated Audio8 Hexagon default. Keep an explicit
+    // fallback for comparisons and devices that need the canonical layout.
+    const char * setting = std::getenv("AUDIO8_LM_HEXAGON_REPACK");
+    if (setting && std::strcmp(setting, "0") == 0) return nullptr;
+    const auto device = ggml_backend_get_device(backend);
+    if (!device) return nullptr;
+    const auto registry = ggml_backend_dev_backend_reg(device);
+    if (!registry) return nullptr;
+    if (std::strcmp(ggml_backend_reg_name(registry), "HTP") != 0) return nullptr;
+    const auto extra = reinterpret_cast<ggml_backend_dev_get_extra_bufts_t>(
+        ggml_backend_reg_get_proc_address(registry, "ggml_backend_dev_get_extra_bufts"));
+    if (!extra) return nullptr;
+    const auto types = extra(device);
+    if (!types) return nullptr;
+    for (size_t i = 0; types[i]; ++i) {
+        if (std::strstr(ggml_backend_buft_name(types[i]), "-REPACK") &&
+            ggml_backend_dev_supports_buft(device, types[i])) return types[i];
+    }
+    return nullptr;
+}
+
+bool is_q8_projection(const ggml_tensor * tensor) {
+    if (tensor->type != GGML_TYPE_Q8_0 || ggml_n_dims(tensor) != MATRIX_DIMS ||
+        tensor->ne[0] % 32 != 0 || tensor->ne[1] > 32768) return false;
+    const std::string name = ggml_get_name(tensor);
+    const size_t prefix = name.compare(0, 7, "lm/blk/") == 0 ? 7 :
+                          (name.compare(0, 9, "fast/blk/") == 0 ? 9 : 0);
+    if (!prefix) return false;
+    const size_t slash = name.find('/', prefix);
+    if (slash == std::string::npos || slash == prefix ||
+        name.find_first_not_of("0123456789", prefix) != slash) return false;
+    const std::string role = name.substr(slash + 1);
+    return role == "wqkv" || role == "wo" || role == "w13" || role == "w2" ||
+           role == "wq" || role == "wk" || role == "wv" || role == "w1" || role == "w3";
+}
+
+// Allocate eligible projections first. The normal context allocator then skips
+// their resident tensors and allocates every other weight in its usual layout.
+// The metadata-only path applies the same partition and backend padding.
+bool allocate_projection_weights(ggml_context * ctx, ggml_backend_buffer_type_t type,
+                                 std::vector<ggml_backend_buffer_t> & buffers,
+                                 size_t * measure_bytes, std::string * error) {
+    if (!type) return true;
+    const size_t alignment = ggml_backend_buft_get_alignment(type);
+    const size_t max_size = ggml_backend_buft_get_max_size(type);
+    std::vector<ggml_tensor *> tensors;
+    size_t chunk_bytes = 0;
+    auto allocate_chunk = [&]() {
+        if (tensors.empty()) return true;
+        if (measure_bytes) {
+            if (*measure_bytes > std::numeric_limits<size_t>::max() - chunk_bytes) return false;
+            *measure_bytes += chunk_bytes;
+            for (auto * tensor : tensors) {
+                tensor->data = reinterpret_cast<void *>(static_cast<uintptr_t>(1));
+            }
+        } else {
+            auto buffer = ggml_backend_buft_alloc_buffer(type, chunk_bytes);
+            if (!buffer) return false;
+            buffers.push_back(buffer);
+            ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            auto allocator = ggml_tallocr_new(buffer);
+            for (auto * tensor : tensors) {
+                if (ggml_tallocr_alloc(&allocator, tensor) != GGML_STATUS_SUCCESS) return false;
+            }
+        }
+        tensors.clear();
+        chunk_bytes = 0;
+        return true;
+    };
+    bool success = alignment > 0 && max_size > 0;
+    for (auto * tensor = ggml_get_first_tensor(ctx); success && tensor;
+         tensor = ggml_get_next_tensor(ctx, tensor)) {
+        if (!is_q8_projection(tensor)) continue;
+        const size_t bytes = ggml_backend_buft_get_alloc_size(type, tensor);
+        if (bytes > std::numeric_limits<size_t>::max() - (alignment - 1)) {
+            success = false;
+            break;
+        }
+        const size_t padded = ((bytes + alignment - 1) / alignment) * alignment;
+        if (padded > max_size) {
+            success = false;
+            break;
+        }
+        if (padded > max_size - chunk_bytes && !allocate_chunk()) {
+            success = false;
+            break;
+        }
+        tensors.push_back(tensor);
+        chunk_bytes += padded;
+    }
+    if (success) success = allocate_chunk();
+    if (!success && error) *error = "audio8: failed to allocate repacked projection weights";
+    return success;
+}
+
 // When `measure_bytes` is non-null the load is metadata-only: the weight
 // buffer the real path allocates is SIZED instead (the size-only twin of
 // ggml_backend_alloc_ctx_tensors runs the same buffer-type sizing sweep) and
 // no tensor data leaves the disk.
 bool load_weights(const gguf_file & file, ggml_backend_t backend, ggml_context ** ctx,
                   ggml_backend_buffer_t * buffer, std::string * error,
-                  size_t * measure_bytes = nullptr, const fusion_plan & plan = {}) {
+                  size_t * measure_bytes = nullptr, const fusion_plan & plan = {},
+                  std::vector<ggml_backend_buffer_t> * projection_buffers = nullptr) {
     *ctx = new_weight_context(gguf_get_n_tensors(file.ctx()) +
                               static_cast<int64_t>(plan.size()));
     if (!*ctx) {
@@ -362,9 +460,18 @@ bool load_weights(const gguf_file & file, ggml_backend_t backend, ggml_context *
     }
     clone_tensor_headers(file.meta(), *ctx, fused_parts(plan));
     add_fused_headers(file, plan, *ctx);
+    if (measure_bytes) *measure_bytes = 0;
+    if (projection_buffers && !allocate_projection_weights(
+            *ctx, hexagon_projection_buffer_type(backend), *projection_buffers,
+            measure_bytes, error)) return false;
     if (measure_bytes) {
-        *measure_bytes = ggml_backend_alloc_ctx_tensors_from_buft_size(
+        const size_t canonical_bytes = ggml_backend_alloc_ctx_tensors_from_buft_size(
             *ctx, ggml_backend_get_default_buffer_type(backend));
+        if (*measure_bytes > std::numeric_limits<size_t>::max() - canonical_bytes) {
+            if (error) *error = "audio8: weight buffer size overflow";
+            return false;
+        }
+        *measure_bytes += canonical_bytes;
         mark_externally_allocated(*ctx);
         return true;
     }
@@ -979,7 +1086,7 @@ static bool load_lm_impl(const std::string & path, int n_gpu_layers,
     model.precise_outputs = ::tts_cpp::detail::backend_is_metal(model.backend);
     if (!load_weights(file, model.backend, &model.ctx_w, &model.buffer_w, error,
                       measure ? &measure->weights_bytes : nullptr,
-                      plan_lm_fusions(file, model.hp))) {
+                      plan_lm_fusions(file, model.hp), &model.repacked_projection_buffers)) {
         return false;
     }
 
@@ -1053,6 +1160,8 @@ void free_lm(lm_model & model) {
     free_kv(model.slow_kv);
     free_kv(model.fast_kv);
     if (model.buffer_w) ggml_backend_buffer_free(model.buffer_w);
+    for (auto buffer : model.repacked_projection_buffers) ggml_backend_buffer_free(buffer);
+    model.repacked_projection_buffers.clear();
     if (model.ctx_w) ggml_free(model.ctx_w);
     if (model.backend) ggml_backend_free(model.backend);
     model.slow_allocr = nullptr;
