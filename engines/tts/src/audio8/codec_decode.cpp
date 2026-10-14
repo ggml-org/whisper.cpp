@@ -92,10 +92,10 @@ ggml_tensor * sum_quantizers(ggml_context * ctx, const std::vector<quantizer_wei
 }
 
 ggml_tensor * run_upsample(ggml_context * ctx, const std::vector<resample_stage> & stages,
-                           ggml_tensor * signal, float eps) {
+                           ggml_tensor * signal, float eps, const codec_conv_options & options) {
     for (const resample_stage & stage : stages) {
-        signal = causal_conv_transpose(ctx, stage.conv, signal, stage.stride);
-        signal = convnext_block(ctx, stage.convnext, signal, eps);
+        signal = causal_conv_transpose(ctx, stage.conv, signal, stage.stride, options);
+        signal = convnext_block(ctx, stage.convnext, signal, eps, options);
     }
     return signal;
 }
@@ -103,16 +103,16 @@ ggml_tensor * run_upsample(ggml_context * ctx, const std::vector<resample_stage>
 ggml_tensor * run_decoder_stack(ggml_context * ctx, const codec_model & model,
                                 ggml_tensor * signal) {
     const codec_hparams & hp = model.hp;
-    signal = causal_conv(ctx, model.dec_in, signal, /*stride=*/1, /*dilation=*/1);
+    signal = causal_conv(ctx, model.dec_in, signal, /*stride=*/1, /*dilation=*/1, model.synthesis_convs);
     for (const dac_stage & stage : model.dec_stages) {
         signal = snake(ctx, signal, stage.alpha, hp.snake_epsilon);
-        signal = causal_conv_transpose(ctx, stage.conv, signal, stage.stride);
+        signal = causal_conv_transpose(ctx, stage.conv, signal, stage.stride, model.synthesis_convs);
         signal = residual_stack(ctx, stage.units, hp.residual_dilations, signal,
-                                hp.snake_epsilon);
+                                hp.snake_epsilon, model.synthesis_convs);
     }
     signal = snake(ctx, signal, model.dec_out_alpha, hp.snake_epsilon);
     return ggml_tanh(ctx, causal_conv(ctx, model.dec_out, signal, /*stride=*/1,
-                                      /*dilation=*/1));
+                                      /*dilation=*/1, model.synthesis_convs));
 }
 
 int upsample_factor(const codec_model & model) {
@@ -165,7 +165,7 @@ synthesis_graph build_synthesis(ggml_context * ctx, const codec_model & model,
                                 int n_frames) {
     ggml_tensor * post = input_f32(ctx, POST_INPUT, model.hp.latent_dim, n_frames);
     synthesis_graph built;
-    built.latent = run_upsample(ctx, model.upsample, post, model.hp.convnext_norm_eps);
+    built.latent = run_upsample(ctx, model.upsample, post, model.hp.convnext_norm_eps, model.synthesis_convs);
     built.pcm = run_decoder_stack(ctx, model, built.latent);
     return built;
 }

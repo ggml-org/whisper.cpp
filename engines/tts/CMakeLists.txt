@@ -1749,6 +1749,12 @@ if (TTS_CPP_BUILD_TESTS)
     add_test(NAME test-audio8-backend-parity COMMAND test-audio8-backend-parity)
     set_tests_properties(test-audio8-backend-parity PROPERTIES LABELS "fixture" SKIP_RETURN_CODE 77)
 
+    add_executable(test-audio8-attention-cache test/audio8/test_attention_cache.cpp)
+    target_link_libraries(test-audio8-attention-cache PRIVATE tts-cpp ggml)
+    target_include_directories(test-audio8-attention-cache PRIVATE src)
+    tts_cpp_apply_ccache(test-audio8-attention-cache)
+    tts_cpp_register_test(test-audio8-attention-cache LABEL "unit")
+
     add_executable(test-audio8-hexagon-repack test/audio8/test_hexagon_repack.cpp)
     target_link_libraries(test-audio8-hexagon-repack PRIVATE tts-cpp ggml)
     target_include_directories(test-audio8-hexagon-repack PRIVATE src)

@@ -128,8 +128,8 @@ struct block_weights {
     ggml_tensor * ffn_norm = nullptr;
 };
 
-// One transformer's KV slab: [head_dim * n_kv, capacity] per layer, stacked
-// layer-major in a single tensor so a step writes one view and reads one view.
+// One transformer's KV slab, stacked layer-major. K is position-major;
+// V is channel-major unless F32 flash attention selects position-major V.
 struct kv_cache {
     ggml_context * ctx = nullptr;
     ggml_backend_buffer_t buffer = nullptr;
@@ -137,6 +137,10 @@ struct kv_cache {
     ggml_tensor * v = nullptr;
     int capacity = 0;
     int stride = 0;
+    // F32 flash attention reads contiguous head dimensions from both caches.
+    // Selected once at load time; masked prefill uses ordinary attention over
+    // the same position-major values.
+    bool flash_attention = false;
 };
 
 struct lm_model {
@@ -296,6 +300,13 @@ struct codec_hparams {
     std::vector<int> residual_dilations;
 };
 
+struct codec_conv_options {
+    using tiled_fn = ggml_tensor * (*)(ggml_context *, ggml_backend_t, ggml_tensor *, ggml_tensor *, int, int);
+    ggml_backend_t backend = nullptr;
+    tiled_fn tiled = nullptr;
+    ggml_prec precision = GGML_PREC_F32;
+};
+
 struct codec_model {
     codec_hparams hp;
     bool has_encoder = false;
@@ -306,6 +317,7 @@ struct codec_model {
     ggml_backend_buffer_t buffer_w = nullptr;
     ::tts_cpp::detail::sched_fallback sched;
     bool precise_outputs = false;
+    codec_conv_options synthesis_convs;
     // Both directions run in two graphs: one over the whole sequence at one
     // column per frame, and one over blocks of the sample-rate stack. They get
     // an arena each, because alternating them through one would resize it on

@@ -73,6 +73,16 @@ void append_keys(ggml_context * ctx, ggml_cgraph * graph, const kv_cache & cache
 
 void append_values(ggml_context * ctx, ggml_cgraph * graph, const kv_cache & cache,
                    const attention_shape & shape, ggml_tensor * rows) {
+    if (cache.flash_attention) {
+        const size_t layer_bytes = static_cast<size_t>(cache.capacity) * cache.stride * FLOAT;
+        const size_t offset = static_cast<size_t>(shape.layer) * layer_bytes +
+                              static_cast<size_t>(shape.n_past) * cache.stride * FLOAT;
+        ggml_tensor * slot = ggml_view_2d(ctx, cache.v, cache.stride, shape.width,
+                                          static_cast<size_t>(cache.stride) * FLOAT, offset);
+        if (!ggml_is_contiguous(rows)) rows = ggml_cont(ctx, rows);
+        ggml_build_forward_expand(graph, ggml_cpy(ctx, rows, slot));
+        return;
+    }
     const size_t column = static_cast<size_t>(cache.capacity) * FLOAT;
     const size_t offset = static_cast<size_t>(shape.layer) * column * cache.stride +
                           static_cast<size_t>(shape.n_past) * FLOAT;
@@ -318,7 +328,28 @@ ggml_tensor * attention(ggml_context * ctx, ggml_cgraph * graph,
     const int total = shape.n_past + shape.width;
     ggml_tensor * query = ggml_permute(ctx, heads.query, 0, 2, 1, 3);
     ggml_tensor * keys = ggml_permute(ctx, cache_keys(ctx, cache, shape, total), 0, 2, 1, 3);
-    ggml_tensor * values = cache_values(ctx, cache, shape, total);
+    ggml_tensor * values;
+    if (cache.flash_attention) {
+        const size_t layer_bytes = static_cast<size_t>(cache.capacity) * cache.stride * FLOAT;
+        ggml_tensor * stored = ggml_view_3d(ctx, cache.v, shape.head_dim, shape.n_kv, total,
+                                            static_cast<size_t>(shape.head_dim) * FLOAT,
+                                            static_cast<size_t>(cache.stride) * FLOAT,
+                                            static_cast<size_t>(shape.layer) * layer_bytes);
+        if (!mask && shape.width == 1) {
+            ggml_tensor * value_heads = ggml_permute(ctx, stored, 0, 2, 1, 3);
+            const float scale = 1.0f / std::sqrt(static_cast<float>(shape.head_dim));
+            ggml_tensor * blended = ggml_flash_attn_ext(ctx, query, keys, value_heads,
+                                                        nullptr, scale, 0.0f, 0.0f);
+            ggml_flash_attn_ext_set_prec(blended, GGML_PREC_F32);
+            ggml_tensor * merged = ggml_reshape_2d(ctx, blended, shape.head_dim * shape.n_head, 1);
+            return linear(ctx, weights.wo, merged, nullptr);
+        }
+        // Prefill remains causal. Materialize its channel-major operand once
+        // rather than changing the persistent cache layout between graph calls.
+        values = ggml_cont(ctx, ggml_permute(ctx, stored, 1, 2, 0, 3));
+    } else {
+        values = cache_values(ctx, cache, shape, total);
+    }
     ggml_tensor * merged = attend(ctx, query, keys, values, mask, shape.head_dim,
                                   shape.n_head, shape.precise_values);
     return linear(ctx, weights.wo, merged, nullptr);

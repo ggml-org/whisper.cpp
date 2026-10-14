@@ -13,6 +13,7 @@
 #include "audio8/coreml/codec-synth.h"
 #endif
 
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -746,8 +747,8 @@ void read_tokenizer(raw_metadata & meta, TokenizerData & data) {
     meta.ints("tokenizer.ggml.added_token_ids", data.added_token_ids);
 }
 
-// K is position-major so a step appends whole rows; V is channel-major so the
-// value matmul reads runs of positions without transposing the prefix.
+// K is position-major. V uses the same layout for F32 flash attention, or
+// channel-major storage for the separate value matmul.
 // In measure mode (`measure_bytes` non-null) the slab is sized, not
 // allocated, and the tensors come back marked externally allocated so graph
 // pricing can still build the cache views over them.
@@ -760,8 +761,9 @@ bool alloc_kv(ggml_backend_t backend, int layers, int width, int capacity, kv_ca
     cache.stride = width;
     cache.k = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, width,
                                  static_cast<int64_t>(capacity) * layers);
-    cache.v = ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, capacity,
-                                 static_cast<int64_t>(width) * layers);
+    cache.v = cache.flash_attention
+        ? ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, width, static_cast<int64_t>(capacity) * layers)
+        : ggml_new_tensor_2d(cache.ctx, GGML_TYPE_F32, capacity, static_cast<int64_t>(width) * layers);
     if (measure_bytes) {
         *measure_bytes += ggml_backend_alloc_ctx_tensors_from_buft_size(
             cache.ctx, ggml_backend_get_default_buffer_type(backend));
@@ -989,6 +991,27 @@ bool backend_picks_codes(ggml_backend_t backend, const lm_hparams & hp) {
     return ggml_backend_supports_op(backend, ggml_argmax(probe.ctx, logits));
 }
 
+bool hexagon_decode_attention(ggml_backend_t backend, int head_dim, int heads, int kv_heads,
+                              int capacity) {
+    // Select supported Hexagon decode attention by default, with an explicit opt-out.
+    const char * flag = std::getenv("AUDIO8_LM_HEXAGON_FLASH_ATTN");
+    if (flag && std::strcmp(flag, "0") == 0) return false;
+    const auto device = ggml_backend_get_device(backend);
+    if (!device || std::strcmp(audio8_dev_reg_name(device), "HTP") != 0 ||
+        head_dim < 32 || head_dim > 256 || head_dim % 32 != 0 ||
+        heads <= 0 || kv_heads <= 0 || heads % kv_heads != 0 || capacity <= 0) return false;
+    scratch probe(16);
+    if (!probe.ok()) return false;
+    auto q = ggml_new_tensor_4d(probe.ctx, GGML_TYPE_F32, head_dim, 1, heads, 1);
+    auto k = ggml_new_tensor_3d(probe.ctx, GGML_TYPE_F32, head_dim, kv_heads, capacity);
+    auto v = ggml_new_tensor_3d(probe.ctx, GGML_TYPE_F32, head_dim, kv_heads, capacity);
+    auto out = ggml_flash_attn_ext(probe.ctx, q, ggml_permute(probe.ctx, k, 0, 2, 1, 3),
+                                  ggml_permute(probe.ctx, v, 0, 2, 1, 3), nullptr,
+                                  1.0f / std::sqrt(static_cast<float>(head_dim)), 0.0f, 0.0f);
+    ggml_flash_attn_ext_set_prec(out, GGML_PREC_F32);
+    return ggml_backend_supports_op(backend, out);
+}
+
 bool coreml_sidecar_enabled() {
 #ifdef TTS_CPP_USE_COREML
     return std::getenv("AUDIO8_COREML_DISABLE") == nullptr;
@@ -1111,6 +1134,10 @@ static bool load_lm_impl(const std::string & path, int n_gpu_layers,
 
     const lm_hparams & hp = model.hp;
     size_t * kv_measure = measure ? &measure->kv_bytes : nullptr;
+    model.slow_kv.flash_attention = hexagon_decode_attention(
+        model.backend, hp.head_dim, hp.n_head, hp.n_kv, hp.max_seq_len);
+    model.fast_kv.flash_attention = hexagon_decode_attention(
+        model.backend, hp.fast_head_dim, hp.fast_n_head, hp.fast_n_kv, hp.num_codebooks);
     if (!alloc_kv(model.backend, hp.depth, hp.n_kv * hp.head_dim, hp.max_seq_len,
                   model.slow_kv, kv_measure) ||
         !alloc_kv(model.backend, hp.fast_depth, hp.fast_n_kv * hp.fast_head_dim,
@@ -1217,6 +1244,25 @@ static bool load_codec_impl(const std::string & path, int n_gpu_layers,
         return false;
     }
     model.precise_outputs = ::tts_cpp::detail::backend_is_metal(model.backend);
+    model.synthesis_convs = {};
+    const auto device = ggml_backend_get_device(model.backend);
+    const char * tiled = std::getenv("AUDIO8_CODEC_HEXAGON_CONV_TILE");
+    const char * fp16 = std::getenv("AUDIO8_CODEC_HEXAGON_FP16");
+    const bool hexagon_decoder = model.has_decoder && device &&
+                                 std::strcmp(audio8_dev_reg_name(device), "HTP") == 0;
+    if (hexagon_decoder && (!fp16 || std::strcmp(fp16, "0") != 0)) {
+        // Default to the validated F16 activation/HMX path for eligible
+        // synthesis products. The explicit opt-out restores the F32 request.
+        model.synthesis_convs.precision = GGML_PREC_DEFAULT;
+        std::fprintf(stderr, "[audio8] Hexagon codec FP16 synthesis: enabled\n");
+    } else if (hexagon_decoder && tiled && std::strcmp(tiled, "1") == 0) {
+        const auto registry = ggml_backend_dev_backend_reg(device);
+        model.synthesis_convs.backend = model.backend;
+        model.synthesis_convs.tiled = reinterpret_cast<codec_conv_options::tiled_fn>(
+            ggml_backend_reg_get_proc_address(registry, "ggml_backend_hexagon_conv_taps_f32"));
+        std::fprintf(stderr, "[audio8] Hexagon codec F32 convolution tiling: %s\n",
+                     model.synthesis_convs.tiled ? "requested" : "unavailable; using separate taps");
+    }
     if (!load_weights(file, model.backend, &model.ctx_w, &model.buffer_w, error,
                       measure ? &measure->weights_bytes : nullptr)) {
         return false;

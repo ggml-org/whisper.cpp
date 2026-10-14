@@ -50,14 +50,27 @@ ggml_tensor * accumulate(ggml_context * ctx, ggml_tensor * total, ggml_tensor * 
     return total ? ggml_add(ctx, total, term) : term;
 }
 
+// The optional mixed-precision experiment is confined to large synthesis
+// projections. Small/channel-tail products retain the original F32 request.
+void synthesis_precision(ggml_tensor * product, const codec_conv_options & options) {
+    const auto * weights = product->src[0];
+    const bool eligible = weights->type == GGML_TYPE_F16 &&
+                          weights->ne[0] >= 64 && weights->ne[0] % 32 == 0 &&
+                          weights->ne[1] >= 64 && weights->ne[1] % 32 == 0;
+    ggml_mul_mat_set_prec(product, eligible ? options.precision : GGML_PREC_F32);
+}
+
 ggml_tensor * sum_taps(ggml_context * ctx, ggml_tensor * kernel, ggml_tensor * padded,
-                       int taps, int stride, int dilation, int length) {
+                       int taps, int stride, int dilation, int length, const codec_conv_options & options) {
+    if (stride == 1 && options.tiled) {
+        if (auto * out = options.tiled(ctx, options.backend, kernel, padded, dilation, length)) return out;
+    }
     ggml_tensor * total = nullptr;
     for (int tap = 0; tap < taps; ++tap) {
         ggml_tensor * term = ggml_mul_mat(ctx, tap_matrix(ctx, kernel, tap),
                                           tap_window(ctx, padded, tap, stride, dilation,
                                                      length));
-        ggml_mul_mat_set_prec(term, GGML_PREC_F32);
+        synthesis_precision(term, options);
         total = accumulate(ctx, total, term);
     }
     return total;
@@ -135,11 +148,11 @@ attention_shape shape_for(const transformer_spec & spec, int length,
 }
 
 ggml_tensor * residual_block(ggml_context * ctx, const residual_unit & unit, ggml_tensor * x,
-                             int dilation, float snake_epsilon) {
+                             int dilation, float snake_epsilon, const codec_conv_options & options) {
     ggml_tensor * branch = snake(ctx, x, unit.alpha1, snake_epsilon);
-    branch = causal_conv(ctx, unit.conv1, branch, /*stride=*/1, dilation);
+    branch = causal_conv(ctx, unit.conv1, branch, /*stride=*/1, dilation, options);
     branch = snake(ctx, branch, unit.alpha2, snake_epsilon);
-    branch = causal_conv(ctx, unit.conv2, branch, /*stride=*/1, /*dilation=*/1);
+    branch = causal_conv(ctx, unit.conv2, branch, /*stride=*/1, /*dilation=*/1, options);
     return ggml_add(ctx, x, branch);
 }
 
@@ -180,12 +193,12 @@ int span_through_units(int span, const std::vector<residual_unit> & units,
 }
 
 ggml_tensor * causal_conv(ggml_context * ctx, const conv_weights & conv, ggml_tensor * x,
-                          int stride, int dilation) {
+                          int stride, int dilation, const codec_conv_options & options) {
     const int taps = conv_taps(conv);
     const int span = (taps - 1) * dilation + 1;
     const int length = ceil_div(length_of(x), stride);
     ggml_tensor * padded = pad_for_conv(ctx, x, span, stride);
-    return add_bias(ctx, sum_taps(ctx, conv.w, padded, taps, stride, dilation, length),
+    return add_bias(ctx, sum_taps(ctx, conv.w, padded, taps, stride, dilation, length, options),
                     conv.b);
 }
 
@@ -204,14 +217,22 @@ ggml_tensor * causal_depthwise_conv(ggml_context * ctx, const conv_weights & con
 // span over a progressively delayed signal. The reference's trailing crop is
 // what leaves exactly length * stride columns.
 ggml_tensor * causal_conv_transpose(ggml_context * ctx, const conv_weights & conv,
-                                    ggml_tensor * x, int stride) {
+                                    ggml_tensor * x, int stride, const codec_conv_options & options) {
     const int taps = conv_taps(conv);
     GGML_ASSERT(taps % stride == 0);
+    if (options.tiled && taps / stride > 1) {
+        auto * weights = ggml_reshape_3d(ctx, conv.w, conv.w->ne[0],
+                                         conv.w->ne[1] * stride, taps / stride);
+        auto * input = pad_history(ctx, x, taps / stride - 1, 0);
+        if (auto * out = options.tiled(ctx, options.backend, weights, input, -1, length_of(x))) {
+            return add_bias(ctx, ggml_reshape_2d(ctx, out, conv.w->ne[1], stride * x->ne[1]), conv.b);
+        }
+    }
     ggml_tensor * total = nullptr;
     for (int group = 0; group < taps / stride; ++group) {
         ggml_tensor * term = ggml_mul_mat(ctx, tap_group(ctx, conv.w, stride, group),
                                           delayed(ctx, x, group));
-        ggml_mul_mat_set_prec(term, GGML_PREC_F32);
+        synthesis_precision(term, options);
         total = accumulate(ctx, total, term);
     }
     return add_bias(ctx, ggml_reshape_2d(ctx, total, conv.w->ne[1], stride * x->ne[1]),
@@ -230,20 +251,25 @@ ggml_tensor * project(ggml_context * ctx, const conv_weights & conv, ggml_tensor
 
 ggml_tensor * residual_stack(ggml_context * ctx, const std::vector<residual_unit> & units,
                              const std::vector<int> & dilations, ggml_tensor * x,
-                             float snake_epsilon) {
+                             float snake_epsilon, const codec_conv_options & options) {
     for (size_t index = 0; index < units.size(); ++index) {
-        x = residual_block(ctx, units[index], x, dilations[index], snake_epsilon);
+        x = residual_block(ctx, units[index], x, dilations[index], snake_epsilon, options);
     }
     return x;
 }
 
 ggml_tensor * convnext_block(ggml_context * ctx, const convnext_weights & block,
-                             ggml_tensor * x, float eps) {
+                             ggml_tensor * x, float eps, const codec_conv_options & options) {
     ggml_tensor * branch = causal_depthwise_conv(ctx, block.dwconv, x);
     branch = layer_norm(ctx, branch, block.norm_w, block.norm_b, eps);
-    branch = linear(ctx, block.pwconv1.w, branch, block.pwconv1.b);
+    const auto pointwise = [&](const conv_weights & conv, ggml_tensor * input) {
+        auto * product = ggml_mul_mat(ctx, conv.w, input);
+        synthesis_precision(product, options);
+        return add_bias(ctx, product, conv.b);
+    };
+    branch = pointwise(block.pwconv1, branch);
     branch = ggml_gelu_erf(ctx, branch);
-    branch = linear(ctx, block.pwconv2.w, branch, block.pwconv2.b);
+    branch = pointwise(block.pwconv2, branch);
     return ggml_add(ctx, x, ggml_mul(ctx, branch, block.gamma));
 }
 

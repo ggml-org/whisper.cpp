@@ -406,6 +406,45 @@ validated native outputs are stable and intelligible, and the strict numerical
 differences remain recorded in the performance report. Set the variable to `0`
 when exact comparison with the previous Hexagon allocation path is required.
 
+#### F32 flash attention for Hexagon decoding
+
+Maskless F32 flash attention is enabled by default for the slow and fast LM
+decoders on supported Hexagon backends. No environment setting is required.
+To use separate attention operations instead, set this before loading the model:
+
+```sh
+export AUDIO8_LM_HEXAGON_FLASH_ATTN=0
+```
+
+The default path requires a Hexagon backend that supports the F32 flash-attention
+operation for the model's head dimensions. The loader checks support and
+selects the cache layout once. Leave the variable unset, or set it to `1`, for
+the default flash path. Unsupported operations use separate attention.
+CPU and OpenCL retain their existing path.
+Use the companion backend with the `hvx-f32-decode` kernel for the measured
+performance; the support probe checks operation support and does not identify
+which kernel an older backend selects.
+
+The enabled path stores V in position-major order, with each head's dimensions
+contiguous, like K. Single-token decoding combines QK, softmax and the value
+reduction in one F32 operation, keeping scores and accumulation in VTCM.
+Masked prefill retains causal attention and materializes a channel-major view
+of V. Cache capacity and payload size are unchanged.
+
+The companion Hexagon kernel also vectorizes short, irregular F32 softmax
+rows, including masks, reductions and normalization. This kernel is selected
+automatically when applicable; it has no Audio8 CLI switch.
+
+`test-audio8-attention-cache [CPU|HTP0]` compares the production graph with
+canonical CPU attention. It covers masked prefill, decoding, grouped query
+heads, layer offsets, cache reset and prefixes crossing a 128-key tile.
+Full LM comparisons use fixed CPU histories because changes in F32 reduction
+order can change close argmax decisions. The default flash path does not
+promise identical native codes across implementations.
+
+See [validation and performance](audio8-hexagon-attention.md) for the complete
+S1-S5 inference measurements, CPU comparisons and remaining execution costs.
+
 #### Codec panel selection
 
 Companion [ggml PR #119](https://github.com/tetherto/qvac-ext-ggml/pull/119)
@@ -420,6 +459,56 @@ CPU/OpenCL. The blocked reuse and residual fusion experiments remain opt-in;
 the four-variant prompt sweep did not show a repeatable full-inference gain.
 The LM projection repacking experiment above controls a separate weight
 layout and retains the codec panel setting.
+
+#### Hexagon codec synthesis precision
+
+The companion Hexagon backend also exposes an experimental bounded F32
+convolution tile. Disable the default FP16 mode and enable the tile before
+loading the decoder:
+
+```sh
+export AUDIO8_CODEC_HEXAGON_FP16=0
+export AUDIO8_CODEC_HEXAGON_CONV_TILE=1
+```
+
+Eligible multi-tap convolutions whose ordinary products use the DDR 4x2
+panel accumulate 64 output rows per worker in VTCM, then copy the completed
+tile once. Each tap preserves the existing F32 product reduction and addition
+boundary. Efficient existing VTCM products and unsupported shapes retain the
+separate-tap graph. The optional registry procedure is
+`ggml_backend_hexagon_conv_taps_f32`; an older backend without that procedure
+also retains the separate-tap graph.
+
+Hexagon decoder synthesis uses FP16 activation staging through the existing
+HMX matmul kernels by default. No environment setting is required. Set this
+before loading the decoder to restore the F32 synthesis graph:
+
+```sh
+export AUDIO8_CODEC_HEXAGON_FP16=0
+```
+
+This applies only to large F16-weight matmuls in decoder synthesis: at least
+64 input and output channels, each divisible by 32. These products request
+default backend precision; the backend chooses HMX when its remaining shape
+and scratch requirements are met. Activations and HMX output tiles are F16
+internally, with F32 graph outputs. This changes numerical precision. Small
+channel tails, the latent transformer, and the LM retain their existing
+precision. CPU, OpenCL, and encoder graphs retain their existing behavior.
+Existing HMX matmul/ADD fusion remains available with normal backend fusion
+enabled; the older experimental HVX reuse/residual-fusion switches are separate.
+
+See the [codec experiment report](audio8-hexagon-codec-tracks.md) for the
+optimized-only stage measurements, focused waveform checks and saved OpenCL
+comparison.
+
+Leave `AUDIO8_CODEC_HEXAGON_FP16` unset, or set it to `1`, for the default HMX
+mode. F32 tiling remains opt-in and applies only when FP16 is disabled.
+To restore the original separate-tap F32 graph, set FP16 to `0` and leave
+`AUDIO8_CODEC_HEXAGON_CONV_TILE` unset or set it to `0`. LM repacking,
+supported flash decoding, vectorized softmax and the 4x2 panel retain their
+defaults. Keep profiling disabled for timing comparisons. The recorded
+Plan B measurements used explicit FP16 enablement; this default change selects
+the same synthesis graph and arithmetic.
 
 ### Core ML codec sidecar
 

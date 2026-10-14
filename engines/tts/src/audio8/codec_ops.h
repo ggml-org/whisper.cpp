@@ -25,26 +25,26 @@ namespace audio8 {
 namespace detail {
 
 ggml_tensor * causal_conv(ggml_context * ctx, const conv_weights & conv, ggml_tensor * x,
-                          int stride, int dilation);
+                          int stride, int dilation, const codec_conv_options & options = {});
 ggml_tensor * causal_depthwise_conv(ggml_context * ctx, const conv_weights & conv,
                                     ggml_tensor * x);
 // Requires the kernel width to be a whole number of strides, which holds for
 // every transposed convolution in the codec.
 ggml_tensor * causal_conv_transpose(ggml_context * ctx, const conv_weights & conv,
-                                    ggml_tensor * x, int stride);
+                                    ggml_tensor * x, int stride, const codec_conv_options & options = {});
 
 // A 1x1 convolution, which is what the quantizer projections are.
 ggml_tensor * project(ggml_context * ctx, const conv_weights & conv, ggml_tensor * x);
 
 ggml_tensor * snake(ggml_context * ctx, ggml_tensor * x, ggml_tensor * alpha, float epsilon);
 ggml_tensor * convnext_block(ggml_context * ctx, const convnext_weights & block,
-                             ggml_tensor * x, float eps);
+                             ggml_tensor * x, float eps, const codec_conv_options & options = {});
 
 // The three dilated residual units every DAC stage wraps around its resampling
 // convolution.
 ggml_tensor * residual_stack(ggml_context * ctx, const std::vector<residual_unit> & units,
                              const std::vector<int> & dilations, ggml_tensor * x,
-                             float snake_epsilon);
+                             float snake_epsilon, const codec_conv_options & options = {});
 
 // Runs the whole sequence through a window transformer; x is [dim, length] and
 // comes back the same shape.
