@@ -1,10 +1,13 @@
 # TTS intelligibility benchmark
 
-The `chatterbox`, `supertonic`, `parler`, `cosyvoice`, and `audio8-tts`
-families synthesize the same checked-in English prompt. The final measured
-output is transcribed by Whisper Tiny and compared with the prompt using the
-existing English WER normalizer. `audio8-tts` is the full synthesis workload;
-the separate Audio8 codec reconstruction benchmark in PR #244 remains separate.
+The `chatterbox`, `chatterbox-multilingual`, `supertonic`, `supertonic1`,
+`supertonic2`, `parler`, `parler-indic`, `cosyvoice`, `audio8-tts`, and
+`moss-tts` families synthesize the same checked-in English prompt. The final
+measured output is transcribed by Whisper Tiny and compared with the prompt
+using the existing English WER normalizer. `audio8-tts` is the full synthesis
+workload; the separate Audio8 codec reconstruction benchmark in PR #244
+remains separate. `moss-tts` is macOS-only and opt-in because its registered
+f16 backbone is about 17 GB.
 
 WER is `(substitutions + insertions + deletions) / reference words`.
 Lower is better; zero means the reference ASR recovered all normalized words.
@@ -55,8 +58,9 @@ scripts/benchmarks/run-family.sh --family supertonic --runs 3 --warmup 1 \
 
 The driver uses the existing S3 model download configuration for TTS weights.
 On GitHub Actions, dispatch `speech-benchmark-desktop.yml` with
-`model_families=chatterbox,supertonic,parler,cosyvoice,audio8-tts`,
-`runners=linux,macos`, and `runs_per_bench=3`.
+`model_families=chatterbox,chatterbox-multilingual,supertonic,supertonic1,supertonic2,parler,parler-indic,cosyvoice,audio8-tts`,
+`runners=linux,macos`, and `runs_per_bench=3`; add `moss-tts` to the list to
+include the opt-in MOSS cell on macOS.
 
 Artifacts alongside `result.json` are `.tts.wav`, `.tts-reference.txt`,
 `.tts-transcript.txt`, `.tts-asr.log`, and `.tts-intelligibility.json`.

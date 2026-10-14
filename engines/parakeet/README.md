@@ -88,6 +88,7 @@ methods live in [docs/performance.md](docs/performance.md).
 | Tests and NeMo parity | [docs/testing.md](docs/testing.md) |
 | MOSS-Transcribe-Diarize (conversion, CLI, API, tests) | [docs/moss-transcribe.md](docs/moss-transcribe.md) |
 | Benchmark method, CI snapshots, decode optimization history | [docs/performance.md](docs/performance.md) |
+| Desktop benchmark coverage (CTC, IndicConformer, TDT, Unified, EOU, Nemotron ASR, Sortformer batch and streaming, Nemotron 3 Diarization, MOSS-Transcribe-Diarize), metrics and runner limits | [Benchmark coverage](../../docs/PERFORMANCE.md#benchmark-coverage) |
 
 ## License
 

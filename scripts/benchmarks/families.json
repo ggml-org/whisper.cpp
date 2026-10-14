@@ -16,9 +16,12 @@
       "hf_repo":                 "HuggingFace repo id (e.g. 'ggerganov/whisper.cpp'). Required when source='huggingface'.",
       "hf_ref":                  "HuggingFace ref (commit SHA) pinned so the download can't silently drift with upstream re-uploads. Required when source='huggingface'.",
       "models_by_size":          "Only for the whisper family. Object keyed by size ('tiny' / 'base' / 'small'). Each value is either a {name, sha256?} object (source='huggingface') or a list of S3 keys (source='s3'). sha256 is optional; when set the download is verified against it via sha256sum/shasum.",
-      "args":                    "Command-line arguments as a JSON array (one element per argv token, so multi-word values stay a single token). Placeholders expanded by run-family.sh per-element: ${MODEL_DIR}, ${MODELS_ROOT}, ${AUDIO_DIR}, ${MODEL_PATH}, and for bench_kind=native also ${RUNS}, ${WARMUP}, ${JSON_OUT}. Native families put the runs/warmup/json-out flags in `args` because their spellings differ (--json-out vs --bench-json, --runs vs --bench-runs).",
+      "args":                    "Command-line arguments as a JSON array (one element per argv token, so multi-word values stay a single token). Placeholders expanded by run-family.sh per-element: ${MODEL_DIR}, ${MODELS_ROOT}, ${AUDIO_DIR}, ${MODEL_PATH}, and for bench_kind=native also ${RUNS}, ${WARMUP}, ${JSON_OUT}. Native families put the runs/warmup/json-out flags in `args` because their spellings differ (--json-out vs --bench-json, --runs vs --bench-runs). ${AUDIO_OUT} is a per-run scratch WAV path for time-wrapped families: audio-scored families (see correctness) have it scored, and a performance-only family whose CLI insists on writing output (moss-sfx, moss-speech) hands it over as a discard path.",
       "audio_duration_seconds":  "Length of the reference input audio (for ASR) or requested output audio (for TTS/music). Used to compute wall-based RTF when the bench binary does not report one. Null when the wall-clock isn't a fair RTF proxy (e.g. TTS with variable-length output).",
-      "correctness": "Optional. When present, run-family.sh computes an accuracy metric against a reference and merges it into result.json as wer_median (kind='wer'), der_median (kind='der'), or f1_median (kind='f1'). Object shape by kind: {kind:'wer', reference:'<repo-relative transcript path>', normalizer:'english'|'none'} for ASR; {kind:'der', reference:'<repo-relative RTTM path>', collar_ms:N} for diarization (collar_ms default 250); {kind:'f1', reference:'<repo-relative JSON-array path>', tolerance_ms:N} for VAD (frame-based precision/recall/F1, tolerance_ms default 100). Hypothesis source depends on bench_kind: native families supply it via `.transcript` in --json-out (parakeet WER); time-wrapped families supply it via the CLI's captured stdout (whisper -nt for WER; parakeet-cli --emit jsonl for sortformer DER; whisper-vad-speech-segments --no-prints for VAD F1). TTS uses {kind:tts_intelligibility, reference:prompt-file, asr_model:{repo,revision,name,sha256}}; TTS_TEXT and TTS_AUDIO_OUT placeholders supply the fixed prompt and generated WAV. TTS results are in tts_intelligibility, not wer_median. Audio metrics use {kind:audio, metrics:[sisdr,stoi], reference:<clean WAV>, degradation:{snr_db,seed}?}; output is audio_quality with per-metric status/value/unit. Single kinds sisdr/stoi are also supported. Audio args use ${AUDIO_INPUT} and ${AUDIO_OUT}. Absent block == correctness step skipped.",
+      "correctness": "Optional. When present, run-family.sh computes an accuracy metric against a reference and merges it into result.json as wer_median (kind='wer'), der_median (kind='der'), or f1_median (kind='f1'). Object shape by kind: {kind:'wer', reference:'<repo-relative transcript path>', normalizer:'english'|'none'} for ASR; {kind:'der', reference:'<repo-relative RTTM path>', collar_ms:N} for diarization (collar_ms default 250); {kind:'f1', reference:'<repo-relative JSON-array path>', tolerance_ms:N} for VAD (frame-based precision/recall/F1, tolerance_ms default 100). Hypothesis source depends on bench_kind: native families supply it via `.transcript` in --json-out (parakeet WER); time-wrapped families supply it via the CLI's captured stdout (whisper -nt for WER; parakeet-cli --emit jsonl for sortformer DER; whisper-vad-speech-segments --no-prints for VAD F1). TTS uses {kind:tts_intelligibility, reference:prompt-file, asr_model:{repo,revision,name,sha256}}; TTS_TEXT and TTS_AUDIO_OUT placeholders supply the fixed prompt and generated WAV. TTS results are in tts_intelligibility, not wer_median. Audio metrics use {kind:audio, metrics:[sisdr,stoi], reference:<clean WAV>, degradation:{snr_db,seed}?}; output is audio_quality with per-metric status/value/unit. Single kinds sisdr/stoi are also supported. Audio args use ${AUDIO_INPUT} and ${AUDIO_OUT}. WER blocks may add hypothesis_format:'moss-segments' when the CLI prints one '[start-end] Sxx: text' line per segment (moss-transcribe); the markup is stripped before scoring. Absent block == correctness step skipped.",
+      "runners":                 "Optional. Runner labels the family may run on ('linux', 'macos'). The workflow's plan job drops the other runners' cells. Absent means every requested runner. Use it for families whose models exceed the hosted Linux runner's disk or CPU budget.",
+      "opt_in":                  "Optional boolean. When true, the family is left out of the 'all' expansion and must be named in model_families explicitly. Use it for families whose downloads or generation time would dominate a default dispatch.",
+      "timeout_minutes":         "Optional. Per-cell job timeout (default 60). Raise it for families whose model download alone takes a large share of the default budget.",
       "notes":                   "Free text; surfaced in the summary table's 'notes' column."
     }
   },
@@ -169,6 +172,61 @@
     "notes": "Nemotron offline benchmark at its GGUF-defined chunk-limited attention geometry. On Darwin the fixed Core ML encoder is required, then the same F16 model is rerun with Core ML disabled as the Metal baseline. Locale prompt projection and RNN-T decoding remain on ggml. The 6-bit sidecar may produce a small token-level drift, so each transcript is gated independently by WER instead of requiring byte-for-byte equality."
   },
 
+  "parakeet-ctc": {
+    "cmake_target": "parakeet-cli",
+    "bench_kind":   "native",
+    "binary":       "engines/parakeet/parakeet",
+    "s3_prefix":    "parakeet",
+    "models": [
+      "2026-05-11/parakeet-ctc-0.6b.q8_0.gguf"
+    ],
+    "args": [
+      "--verbose",
+      "--model",       "${MODEL_DIR}/parakeet-ctc-0.6b.q8_0.gguf",
+      "--wav",         "${AUDIO_DIR}/jfk.wav",
+      "--n-gpu-layers", "999",
+      "--bench",
+      "--bench-runs",    "${RUNS}",
+      "--bench-warmup",  "${WARMUP}",
+      "--bench-json",    "${JSON_OUT}"
+    ],
+    "audio_duration_seconds":  11.0,
+    "correctness": {
+      "kind":       "wer",
+      "reference":  "third_party/whisper.cpp/tests/parakeet-expected-jfk-output.txt",
+      "normalizer": "english"
+    },
+    "notes": "CTC 0.6b benchmark on the same jfk.wav fixture and JFK reference as the TDT family, so a CTC vs TDT WER delta is a model delta. Runs the ggml encoder on every runner (Metal on macOS); no Core ML comparison."
+  },
+
+  "parakeet-indic": {
+    "cmake_target": "parakeet-cli",
+    "bench_kind":   "native",
+    "binary":       "engines/parakeet/parakeet",
+    "s3_prefix":    "indic_conformer",
+    "models": [
+      "2026-08-07/indic-conformer-ctc.q8_0.gguf"
+    ],
+    "args": [
+      "--verbose",
+      "--model",       "${MODEL_DIR}/indic-conformer-ctc.q8_0.gguf",
+      "--wav",         "${AUDIO_DIR}/hi-16k.wav",
+      "--language",    "hi",
+      "--n-gpu-layers", "999",
+      "--bench",
+      "--bench-runs",    "${RUNS}",
+      "--bench-warmup",  "${WARMUP}",
+      "--bench-json",    "${JSON_OUT}"
+    ],
+    "audio_duration_seconds":  7.29,
+    "correctness": {
+      "kind":       "wer",
+      "reference":  "engines/parakeet/test/samples/hi-16k.expected.txt",
+      "normalizer": "none"
+    },
+    "notes": "IndicConformer CTC on the checked-in Hindi fixture hi-16k.wav (7.29 s) with --language hi, which the model requires. WER uses the 'none' normalizer because the English normalizer strips Devanagari vowel signs; the reference is the exact transcript the engine tests expect, so a healthy build scores WER 0.00%. Like parakeet-ctc it runs the ggml encoder on every runner (Metal on macOS) with no Core ML comparison: the sidecar export is not wired into the workflow for this family."
+  },
+
   "sortformer": {
     "cmake_target": "parakeet-cli",
     "bench_kind":   "time-wrapped",
@@ -191,6 +249,82 @@
       "collar_ms":  250
     },
     "notes": "Pure batch diarization: a Sortformer GGUF at --model takes parakeet-cli's diarize path (sortformer-4spk-v1 is the batch checkpoint; diar_streaming_sortformer_4spk-v2.1 belongs to the streaming API). The CLI's --bench mode covers transcription models only — the diarize and attributed paths return before the bench loop and emit no --bench-json — so the family is time-wrapped; wall includes model load like every time-wrapped row. Audio switched from jfk.wav (11 s, single speaker — trivial DER) to abcba.wav (~160.6 s, 3 speakers A-B-C-B-A) so DER actually stress-tests diarization; RTF divides by the abcba.wav duration. --emit jsonl makes parakeet-cli print one {speaker,start,end} JSON object per segment on stdout, which run-family.sh feeds to compute-der.py as the hypothesis. --n-gpu-layers 999 asks parakeet-cli to offload the encoder to a GPU when one is registered — parakeet-cli defaults to 0 (CPU-only) unlike whisper-cli which defaults to on, so the flag is needed for the macOS Metal path; on hosted Linux without a GPU-compiled ggml it falls back to CPU as a no-op. Correctness: DER against the checked-in abcba.rttm with a 250 ms collar; healthy sortformer scores single-digit percent."
+  },
+
+  "sortformer-streaming": {
+    "cmake_target": "parakeet-cli",
+    "bench_kind":   "time-wrapped",
+    "binary":       "engines/parakeet/parakeet",
+    "s3_prefix":    "parakeet",
+    "timeout_minutes": 90,
+    "models": [
+      "2026-05-20/diar_streaming_sortformer_4spk-v2.1.q8_0.gguf"
+    ],
+    "args": [
+      "--verbose",
+      "--model",         "${MODEL_DIR}/diar_streaming_sortformer_4spk-v2.1.q8_0.gguf",
+      "--wav",           "${AUDIO_DIR}/abcba.wav",
+      "--stream",
+      "--emit",          "jsonl",
+      "--n-gpu-layers",  "999"
+    ],
+    "audio_duration_seconds":  160.6,
+    "correctness": {
+      "kind":       "der",
+      "reference":  "engines/parakeet/test/samples/abcba.rttm",
+      "collar_ms":  250
+    },
+    "notes": "Streaming Sortformer v2.1 (AOSC) fed abcba.wav through parakeet-cli's --stream diarization session at the default 1 s chunk, so wall time covers the whole session including finalize(). Every real segment the session emits carries is_final=false; only the synthetic end-of-session terminator is final, and the CLI drops it, so compute-der.py scores every emitted segment. DER against the same abcba.rttm as the batch sortformer family. Each chunk re-encodes its 30 s sliding history, so the CPU row is far slower than the batch family (RTF 0.74 on a 32-thread desktop); the 90 minute budget covers the hosted Linux runner."
+  },
+
+  "nemotron-diarization": {
+    "cmake_target": "parakeet-cli",
+    "bench_kind":   "time-wrapped",
+    "binary":       "engines/parakeet/parakeet",
+    "source":       "huggingface",
+    "hf_repo":      "nvidia/Nemotron-3-Diarization",
+    "hf_ref":       "f667ed73aee57d40cc39428eb768b4fd87a0a29e",
+    "models": [
+      {"name": "Nemotron-3-Diarization.q8_0.gguf", "sha256": "08456d9e22cd9a323c0364d98375f3746d6e68507ebb705cd46438c534c7a3a1"}
+    ],
+    "args": [
+      "--verbose",
+      "--model",         "${MODEL_DIR}/Nemotron-3-Diarization.q8_0.gguf",
+      "--wav",           "${AUDIO_DIR}/abcba.wav",
+      "--emit",          "jsonl",
+      "--n-gpu-layers",  "999"
+    ],
+    "audio_duration_seconds":  160.6,
+    "correctness": {
+      "kind":       "der",
+      "reference":  "engines/parakeet/test/samples/abcba.rttm",
+      "collar_ms":  250
+    },
+    "notes": "NVIDIA's official Nemotron 3 Diarization q8_0 GGUF, pinned to the revision engines/parakeet/scripts/download_nemotron_diarization.py downloads. Offline diarization of abcba.wav (160.6 s) takes the engine's long-form path (inputs past 90 s run in cached 30 s chunks), which is the path a single graph would lose speaker identity on. DER against abcba.rttm; the engine docs record 3.7% on CUDA for this fixture."
+  },
+
+  "moss-transcribe": {
+    "cmake_target": "moss-transcribe",
+    "bench_kind":   "time-wrapped",
+    "binary":       "engines/parakeet/moss-transcribe",
+    "s3_prefix":    "openmoss",
+    "models": [
+      "2026-10-01/moss-transcribe-diarize-q8_0.gguf"
+    ],
+    "args": [
+      "--model",          "${MODEL_DIR}/moss-transcribe-diarize-q8_0.gguf",
+      "--audio",          "${AUDIO_DIR}/jfk.wav",
+      "--max-new-tokens", "256",
+      "--gpu"
+    ],
+    "audio_duration_seconds":  11.0,
+    "correctness": {
+      "kind":              "wer",
+      "reference":         "third_party/whisper.cpp/tests/parakeet-expected-jfk-output.txt",
+      "normalizer":        "english",
+      "hypothesis_format": "moss-segments"
+    },
+    "notes": "MOSS-Transcribe-Diarize q8_0 on jfk.wav through the moss-transcribe CLI, which prints one '[start-end] Sxx: text' line per segment; hypothesis_format strips that markup so WER scores the text alone against the JFK reference. --gpu selects Metal on the macOS runner and falls back to CPU on the hosted Linux build. Wall includes model load like every time-wrapped row. The checkpoint is validated on Spanish and Chinese; English WER is reported, not gated."
   },
 
   "vad": {
@@ -219,6 +353,32 @@
     "notes": "Silero VAD v5.1.2 via the whisper-vad-speech-segments example on jfk.wav (11.0 s). --use-gpu takes the QVAC-24420-validated GPU path (Metal on the macOS runner) and falls back to CPU on GPU-less builds. --no-prints suppresses the example's non-result chatter so stdout carries only 'Detected N speech segments:' + 'Speech segment N: start=X, end=Y' lines — the compute-f1.py parser expects exactly that whisper.cpp example format and skips anything else with a stderr diagnostic (defensive against upstream format drift). UNITS GOTCHA: whisper.cpp's VAD API stores segment times in CENTISECONDS (see src/whisper.cpp samples_to_cs / _WHISPER_VAD_SEG_RE) and the example prints them raw without dividing, so 'Speech segment 0: start = 29.00' is 0.29 s, not 29 s. compute-f1.py's whisper-vad text parser divides by 100 to get seconds; the JSON-array shape uses seconds directly. Correctness: frame-based F1 against a hand-labeled reference for jfk.wav (one continuous 'Ask not…' segment, ~0.30-10.90 s) with a 100 ms boundary-tolerance collar — the standard VAD-eval collar convention."
   },
 
+  "vad-v6": {
+    "cmake_target": "whisper-vad-speech-segments",
+    "bench_kind":   "time-wrapped",
+    "binary":       "bin/whisper-vad-speech-segments",
+    "source":       "huggingface",
+    "hf_repo":      "ggml-org/whisper-vad",
+    "hf_ref":       "9ffd54a1e1ee413ddf265af9913beaf518d1639b",
+    "models": [
+      {"name": "ggml-silero-v6.2.0.bin", "sha256": "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987"}
+    ],
+    "args": [
+      "--vad-model",  "${MODEL_DIR}/ggml-silero-v6.2.0.bin",
+      "--file",       "${AUDIO_DIR}/jfk.wav",
+      "--threads",    "4",
+      "--use-gpu",
+      "--no-prints"
+    ],
+    "audio_duration_seconds":  11.0,
+    "correctness": {
+      "kind":         "f1",
+      "reference":    "engines/parakeet/test/samples/jfk.vad-ref.json",
+      "tolerance_ms": 100
+    },
+    "notes": "Silero VAD v6.2.0 from the same pinned ggml-org/whisper-vad revision as the v5.1.2 family, same jfk.wav workload, same hand-labeled F1 reference and 100 ms collar, so the two rows compare the checkpoints directly."
+  },
+
   "chatterbox": {
     "cmake_target": "tts-cli",
     "bench_kind": "time-wrapped",
@@ -245,6 +405,47 @@
     ],
     "audio_duration_seconds": null,
     "notes": "Fixed English TTS prompt; final measured WAV transcribed by pinned Whisper Tiny on CPU, then scored against the prompt. TTS WER is a single-output intelligibility proxy, including ASR errors, not a quality gate or median. ASR runs outside synthesis timing. This prompt resets the performance baseline.",
+    "correctness": {
+      "kind": "tts_intelligibility",
+      "reference": "scripts/benchmarks/fixtures/tts-intelligibility.txt",
+      "normalizer": "english",
+      "asr_model": {
+        "repo": "ggerganov/whisper.cpp",
+        "revision": "5359861c739e955e79d9a303bcbc70fb988958b1",
+        "name": "ggml-tiny.bin",
+        "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21"
+      }
+    }
+  },
+
+  "chatterbox-multilingual": {
+    "cmake_target": "tts-cli",
+    "bench_kind": "time-wrapped",
+    "binary": "engines/tts/tts-cli",
+    "s3_prefix": "chatterbox",
+    "models": [
+      "2026-05-18/chatterbox-t3-mtl-q8_0.gguf",
+      "2026-06-01/chatterbox-s3gen-mtl-q8_0.gguf"
+    ],
+    "args": [
+      "--verbose",
+      "--model",
+      "${MODEL_DIR}/chatterbox-t3-mtl-q8_0.gguf",
+      "--s3gen-gguf",
+      "${MODEL_DIR}/chatterbox-s3gen-mtl-q8_0.gguf",
+      "--language",
+      "en",
+      "--n-gpu-layers",
+      "999",
+      "--seed",
+      "42",
+      "--text",
+      "${TTS_TEXT}",
+      "--out",
+      "${TTS_AUDIO_OUT}"
+    ],
+    "audio_duration_seconds": null,
+    "notes": "Fixed English TTS prompt; final measured WAV transcribed by pinned Whisper Tiny on CPU, then scored against the prompt. TTS WER is a single-output intelligibility proxy, including ASR errors, not a quality gate or median. ASR runs outside synthesis timing. Chatterbox Multilingual (t3_mtl + s3gen-mtl q8_0) synthesizes the same English prompt as the Turbo family with the required --language en, so the two rows isolate the multilingual checkpoint's cost.",
     "correctness": {
       "kind": "tts_intelligibility",
       "reference": "scripts/benchmarks/fixtures/tts-intelligibility.txt",
@@ -297,6 +498,83 @@
     }
   },
 
+  "supertonic1": {
+    "cmake_target": "supertonic-bench",
+    "bench_kind": "native",
+    "binary": "engines/tts/supertonic-bench",
+    "s3_prefix": "supertonic",
+    "models": [
+      "2026-05-18/supertonic-q8_0.gguf"
+    ],
+    "args": [
+      "--model",
+      "${MODEL_DIR}/supertonic-q8_0.gguf",
+      "--text",
+      "${TTS_TEXT}",
+      "--n-gpu-layers",
+      "999",
+      "--runs",
+      "${RUNS}",
+      "--warmup",
+      "${WARMUP}",
+      "--json-out",
+      "${JSON_OUT}",
+      "--wav-out",
+      "${TTS_AUDIO_OUT}"
+    ],
+    "audio_duration_seconds": null,
+    "notes": "Fixed English TTS prompt; final measured WAV transcribed by pinned Whisper Tiny on CPU, then scored against the prompt. TTS WER is a single-output intelligibility proxy, including ASR errors, not a quality gate or median. ASR runs outside synthesis timing. Supertonic 1 (English-only bundle, no language wrapping) with supertonic-bench's default voice M1, 5 steps and speed 1.05, the same settings as the Supertonic 3 family.",
+    "correctness": {
+      "kind": "tts_intelligibility",
+      "reference": "scripts/benchmarks/fixtures/tts-intelligibility.txt",
+      "normalizer": "english",
+      "asr_model": {
+        "repo": "ggerganov/whisper.cpp",
+        "revision": "5359861c739e955e79d9a303bcbc70fb988958b1",
+        "name": "ggml-tiny.bin",
+        "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21"
+      }
+    }
+  },
+  "supertonic2": {
+    "cmake_target": "supertonic-bench",
+    "bench_kind": "native",
+    "binary": "engines/tts/supertonic-bench",
+    "s3_prefix": "supertonic",
+    "models": [
+      "2026-05-18/supertonic2-q8_0.gguf"
+    ],
+    "args": [
+      "--model",
+      "${MODEL_DIR}/supertonic2-q8_0.gguf",
+      "--text",
+      "${TTS_TEXT}",
+      "--n-gpu-layers",
+      "999",
+      "--runs",
+      "${RUNS}",
+      "--warmup",
+      "${WARMUP}",
+      "--json-out",
+      "${JSON_OUT}",
+      "--wav-out",
+      "${TTS_AUDIO_OUT}"
+    ],
+    "audio_duration_seconds": null,
+    "notes": "Fixed English TTS prompt; final measured WAV transcribed by pinned Whisper Tiny on CPU, then scored against the prompt. TTS WER is a single-output intelligibility proxy, including ASR errors, not a quality gate or median. ASR runs outside synthesis timing. Supertonic 2 (multilingual bundle, <lang> wrapping path) with supertonic-bench's default voice M1, language en, 5 steps and speed 1.05, the same settings as the Supertonic 3 family.",
+    "correctness": {
+      "kind": "tts_intelligibility",
+      "reference": "scripts/benchmarks/fixtures/tts-intelligibility.txt",
+      "normalizer": "english",
+      "asr_model": {
+        "repo": "ggerganov/whisper.cpp",
+        "revision": "5359861c739e955e79d9a303bcbc70fb988958b1",
+        "name": "ggml-tiny.bin",
+        "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21"
+      }
+    }
+  },
+
   "parler": {
     "cmake_target": "parler-bench",
     "bench_kind": "native",
@@ -326,6 +604,48 @@
     ],
     "audio_duration_seconds": null,
     "notes": "Fixed English TTS prompt; final measured WAV transcribed by pinned Whisper Tiny on CPU, then scored against the prompt. TTS WER is a single-output intelligibility proxy, including ASR errors, not a quality gate or median. ASR runs outside synthesis timing. This prompt resets the performance baseline. Parler uses sampled decoding with seed 42 because greedy benchmark mode produces degenerate audio.",
+    "correctness": {
+      "kind": "tts_intelligibility",
+      "reference": "scripts/benchmarks/fixtures/tts-intelligibility.txt",
+      "normalizer": "english",
+      "asr_model": {
+        "repo": "ggerganov/whisper.cpp",
+        "revision": "5359861c739e955e79d9a303bcbc70fb988958b1",
+        "name": "ggml-tiny.bin",
+        "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21"
+      }
+    }
+  },
+
+  "parler-indic": {
+    "cmake_target": "parler-bench",
+    "bench_kind": "native",
+    "binary": "engines/tts/parler-bench",
+    "s3_prefix": "parler-tts",
+    "models": [
+      "2026-07-20/parler-indic-q8_0.gguf"
+    ],
+    "args": [
+      "--model",
+      "${MODEL_DIR}/parler-indic-q8_0.gguf",
+      "--text",
+      "${TTS_TEXT}",
+      "--n-gpu-layers",
+      "999",
+      "--runs",
+      "${RUNS}",
+      "--warmup",
+      "${WARMUP}",
+      "--json-out",
+      "${JSON_OUT}",
+      "--wav-out",
+      "${TTS_AUDIO_OUT}",
+      "--sampled",
+      "--seed",
+      "42"
+    ],
+    "audio_duration_seconds": null,
+    "notes": "Fixed English TTS prompt; final measured WAV transcribed by pinned Whisper Tiny on CPU, then scored against the prompt. TTS WER is a single-output intelligibility proxy, including ASR errors, not a quality gate or median. ASR runs outside synthesis timing. Indic Parler-TTS q8_0 on the shared English prompt (the checkpoint covers English next to its 21 Indic languages; an Indic-script prompt could not be scored by the English reference ASR). Sampled decoding with seed 42 and parler-bench's default description, as the mini family.",
     "correctness": {
       "kind": "tts_intelligibility",
       "reference": "scripts/benchmarks/fixtures/tts-intelligibility.txt",
@@ -461,6 +781,115 @@
         "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21"
       }
     }
+  },
+
+  "moss-tts": {
+    "cmake_target": "moss-cli",
+    "bench_kind": "time-wrapped",
+    "binary": "engines/tts/moss-cli",
+    "s3_prefix": "openmoss",
+    "runners": ["macos"],
+    "opt_in": true,
+    "timeout_minutes": 120,
+    "models": [
+      "2026-09-25/moss-tts-delay-f16.gguf",
+      "2026-09-25/moss-codec-decoder-f16.gguf"
+    ],
+    "args": [
+      "--backbone",
+      "${MODEL_DIR}/moss-tts-delay-f16.gguf",
+      "--decoder",
+      "${MODEL_DIR}/moss-codec-decoder-f16.gguf",
+      "--language",
+      "en",
+      "--max-new-tokens",
+      "512",
+      "--seed",
+      "1234",
+      "--gpu",
+      "--text",
+      "${TTS_TEXT}",
+      "--out",
+      "${TTS_AUDIO_OUT}"
+    ],
+    "audio_duration_seconds": null,
+    "notes": "Fixed English TTS prompt; final measured WAV transcribed by pinned Whisper Tiny on CPU, then scored against the prompt. TTS WER is a single-output intelligibility proxy, including ASR errors, not a quality gate or median. ASR runs outside synthesis timing. MOSS-TTS-v1.5 through moss-cli with the registered f16 backbone (about 17 GB) and the f16 codec decoder, model voice, reference sampling defaults and seed 1234. macOS-only and opt-in: the backbone does not fit the hosted Linux runner's disk, and the download dominates the cell, hence the 120 minute budget. Unconditioned MOSS-TTS output has a known wrong-text issue (#328); the TTS WER column reports it rather than gating it.",
+    "correctness": {
+      "kind": "tts_intelligibility",
+      "reference": "scripts/benchmarks/fixtures/tts-intelligibility.txt",
+      "normalizer": "english",
+      "asr_model": {
+        "repo": "ggerganov/whisper.cpp",
+        "revision": "5359861c739e955e79d9a303bcbc70fb988958b1",
+        "name": "ggml-tiny.bin",
+        "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21"
+      }
+    }
+  },
+
+  "moss-sfx": {
+    "cmake_target": "moss-cli",
+    "bench_kind": "time-wrapped",
+    "binary": "engines/tts/moss-cli",
+    "s3_prefix": "openmoss",
+    "runners": ["macos"],
+    "opt_in": true,
+    "timeout_minutes": 90,
+    "models": [
+      "2026-10-01/moss-sfx-v2-q8_0.gguf"
+    ],
+    "args": [
+      "--mode",
+      "sfx",
+      "--model",
+      "${MODEL_DIR}/moss-sfx-v2-q8_0.gguf",
+      "--text",
+      "Heavy rain falling on a tin roof with distant thunder.",
+      "--seconds",
+      "5",
+      "--steps",
+      "25",
+      "--seed",
+      "0",
+      "--gpu",
+      "--out",
+      "${AUDIO_OUT}"
+    ],
+    "audio_duration_seconds": null,
+    "notes": "MOSS-SoundEffect-v2 q8_0 text-to-sound-effect generation through moss-cli on Metal. 25 guided Euler steps instead of the model default 100 keep the cell inside its budget; time scales linearly with steps. The DiT always denoises the full 30 s latent and crops, so RTF is not meaningful and is left null. macOS-only and opt-in: the CPU path takes about ten seconds per DiT pass. Performance only; no sound-effect quality scorer is wired in."
+  },
+
+  "moss-speech": {
+    "cmake_target": "moss-cli",
+    "bench_kind": "time-wrapped",
+    "binary": "engines/tts/moss-cli",
+    "s3_prefix": "openmoss",
+    "runners": ["macos"],
+    "opt_in": true,
+    "timeout_minutes": 120,
+    "models": [
+      "2026-10-01/moss-speech-q8_0.gguf",
+      "2026-10-01/moss-speech-codec-f16.gguf"
+    ],
+    "args": [
+      "--mode",
+      "s2s",
+      "--model",
+      "${MODEL_DIR}/moss-speech-q8_0.gguf",
+      "--codec",
+      "${MODEL_DIR}/moss-speech-codec-f16.gguf",
+      "--audio",
+      "${AUDIO_DIR}/jfk.wav",
+      "--max-reply-seconds",
+      "10",
+      "--seed",
+      "0",
+      "--gpu",
+      "--out",
+      "${AUDIO_OUT}"
+    ],
+    "audio_duration_seconds": null,
+    "notes": "MOSS-Speech speech-to-speech reply to jfk.wav through moss-cli on Metal: the 9B q8_0 LM (about 9.7 GB) plus the f16 codec, upstream sampling defaults with seed 0, and the spoken part capped at 10 s so the workload is bounded. macOS-only and opt-in: the weights exceed the hosted Linux runner's disk and memory. Performance only; a spoken reply has no reference transcript to score."
   },
 
   "lavasr": {

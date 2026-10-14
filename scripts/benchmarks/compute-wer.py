@@ -7,6 +7,7 @@
 #   compute-wer.py --hypothesis-text "HYP STRING" \
 #                  --reference REF_FILE \
 #                  [--normalizer english|none] \
+#                  [--hypothesis-format plain|moss-segments] \
 #                  [--json-out PATH]
 #
 #   compute-wer.py --hypothesis-file HYP_FILE ...   # same, but hyp from file
@@ -19,8 +20,14 @@
 #     "n_hyp_words":  17,
 #     "n_edits":      {"sub": 0, "ins": 0, "del": 0},
 #     "normalizer":   "english",
+#     "hypothesis_format": "plain",
 #     "reference":    "path/to/ref.txt"
 #   }
+#
+# --hypothesis-format names the shape of the hypothesis text. `plain` scores
+# it as is. `moss-segments` is what the moss-transcribe CLI prints: one
+# `[start-end] Sxx: text` line per segment (or the raw `[t][Sxx]text[t]`
+# transcript when no segment parsed), and only the text is scored.
 #
 # Implementation: pure-Python word-level Levenshtein DP so the CI runners
 # don't need `jiwer` installed. If `jiwer` IS importable, we use it to
@@ -85,6 +92,38 @@ NORMALIZERS = {
 }
 
 
+# ---- hypothesis formats -----------------------------------------------------
+
+
+_MOSS_SEGMENT_PREFIX_RE = re.compile(r"^\s*\[\d+(?:\.\d+)?-\d+(?:\.\d+)?\]\s*S\d+:\s*")
+_MOSS_RAW_MARKUP_RE     = re.compile(r"\[(?:\d+(?:\.\d+)?|S\d+)\]")
+
+
+def strip_moss_segment_line(line: str) -> str:
+    return _MOSS_RAW_MARKUP_RE.sub(" ", _MOSS_SEGMENT_PREFIX_RE.sub("", line))
+
+
+def extract_moss_segments_text(text: str) -> str:
+    """Return the spoken text of a moss-transcribe stdout capture.
+
+    Each segment line is `[start-end] Sxx: text`; the prefix is dropped.
+    The raw transcript markup `[seconds]` and `[Sxx]` that the CLI prints
+    when no segment parsed is dropped as well, so the timestamps and
+    speaker labels never count as words.
+    """
+    return "\n".join(strip_moss_segment_line(line) for line in text.splitlines())
+
+
+def extract_plain_text(text: str) -> str:
+    return text
+
+
+HYPOTHESIS_FORMATS = {
+    "plain":         extract_plain_text,
+    "moss-segments": extract_moss_segments_text,
+}
+
+
 # ---- WER computation --------------------------------------------------------
 
 
@@ -132,15 +171,19 @@ def compute_wer(
     hypothesis: str,
     reference:  str,
     normalizer: str = "english",
+    hypothesis_format: str = "plain",
 ) -> dict:
     """Compute WER + edit breakdown against `reference`. See module docstring
     for the returned schema."""
     if normalizer not in NORMALIZERS:
         raise ValueError(f"unknown normalizer: {normalizer!r} "
                          f"(known: {sorted(NORMALIZERS)})")
+    if hypothesis_format not in HYPOTHESIS_FORMATS:
+        raise ValueError(f"unknown hypothesis format: {hypothesis_format!r} "
+                         f"(known: {sorted(HYPOTHESIS_FORMATS)})")
     norm = NORMALIZERS[normalizer]
     ref_words = norm(reference).split()
-    hyp_words = norm(hypothesis).split()
+    hyp_words = norm(HYPOTHESIS_FORMATS[hypothesis_format](hypothesis)).split()
 
     if not ref_words:
         # WER is undefined against an empty reference. Report a WER of 0.0
@@ -152,6 +195,7 @@ def compute_wer(
             "n_hyp_words": len(hyp_words),
             "n_edits":     {"sub": 0, "ins": len(hyp_words), "del": 0},
             "normalizer":  normalizer,
+            "hypothesis_format": hypothesis_format,
         }
 
     subs, ins, dels = _edit_counts(ref_words, hyp_words)
@@ -161,10 +205,47 @@ def compute_wer(
         "n_hyp_words": len(hyp_words),
         "n_edits":     {"sub": subs, "ins": ins, "del": dels},
         "normalizer":  normalizer,
+        "hypothesis_format": hypothesis_format,
     }
 
 
 # ---- self-test --------------------------------------------------------------
+
+
+_MOSS_SEGMENT_CASES: list[tuple[str, str, str, float]] = [
+    # (label, ref, moss-transcribe stdout, expected WER under moss-segments)
+    ("two segments",
+     "the quick brown fox jumps over the lazy dog",
+     "[0.00-2.50] S1: The quick brown fox\n[2.50-5.00] S2: jumps over the lazy dog.\n",
+     0.0),
+    ("segment with a missing word",
+     "the quick brown fox",
+     "[0.00-2.50] S1: the brown fox\n",
+     0.25),
+    ("raw markup without parsed segments",
+     "the quick brown fox",
+     "[0.00][S1]the quick brown fox[2.50]\n",
+     0.0),
+    ("empty capture",
+     "the quick brown fox",
+     "",
+     1.0),
+]
+
+
+def _self_test_moss_segments() -> list[str]:
+    """The moss-segments format must drop timestamps and speaker labels, and
+    the plain format must still count them, or the option is not wired."""
+    failures: list[str] = []
+    for label, ref, hyp, want in _MOSS_SEGMENT_CASES:
+        got = compute_wer(hyp, ref, normalizer="english", hypothesis_format="moss-segments")
+        if abs(got["wer"] - want) > 1e-6:
+            failures.append(f"moss-segments {label}: wer {got['wer']} != {want}")
+    label, ref, hyp, _want = _MOSS_SEGMENT_CASES[0]
+    plain = compute_wer(hyp, ref, normalizer="english", hypothesis_format="plain")
+    if plain["wer"] == 0.0:
+        failures.append("plain format must keep the segment markup as words")
+    return failures
 
 
 def _self_test() -> int:
@@ -201,6 +282,8 @@ def _self_test() -> int:
     got = compute_wer("hello world", "Hello, world!", normalizer="none")
     if got["wer"] == 0.0:
         failed.append("normalizer=none: punctuation should not be stripped")
+
+    failed.extend(_self_test_moss_segments())
 
     # Cross-check against jiwer if installed. Never fail the self-test on
     # jiwer differences alone — jiwer's default normalizer differs from
@@ -243,6 +326,10 @@ def main() -> int:
     ap.add_argument("--normalizer",      default="english",
                     choices=sorted(NORMALIZERS),
                     help="Text normalizer applied to both sides before comparison (default: english).")
+    ap.add_argument("--hypothesis-format", default="plain",
+                    choices=sorted(HYPOTHESIS_FORMATS),
+                    help="Shape of the hypothesis text: plain, or moss-segments for moss-transcribe's "
+                         "'[start-end] Sxx: text' lines (default: plain).")
     ap.add_argument("--json-out",        type=pathlib.Path,
                     help="Write result JSON to this path in addition to stdout.")
     ap.add_argument("--self-test", action="store_true",
@@ -267,7 +354,8 @@ def main() -> int:
     else:
         hyp_text = args.hypothesis_text
 
-    result = compute_wer(hyp_text, ref_text, normalizer=args.normalizer)
+    result = compute_wer(hyp_text, ref_text, normalizer=args.normalizer,
+                         hypothesis_format=args.hypothesis_format)
     result["reference"] = str(args.reference)
 
     line = json.dumps(result, sort_keys=True)

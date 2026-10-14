@@ -199,6 +199,127 @@ hf_bad="$(jq -r 'to_entries[] | select(.key | startswith("_") | not)
 [[ -z "$hf_bad" ]] || fail "huggingface families without hf_repo/hf_ref: $hf_bad"
 ok "every huggingface family pins repo and ref"
 
+# ---- new-model families ------------------------------------------------------
+
+jq -e '."parakeet-ctc".bench_kind == "native" and
+       ."parakeet-ctc".correctness.kind == "wer" and
+       ."parakeet-ctc".correctness.reference == .parakeet.correctness.reference and
+       ."parakeet-ctc".coreml_compare_on_darwin == null and
+       (."parakeet-ctc".args | index("--bench") != null) and
+       (."parakeet-ctc".args | index("--n-gpu-layers") != null)' "$REAL_SPEC" > /dev/null \
+  || fail "parakeet-ctc must bench natively on jfk.wav with the TDT WER reference and no Core ML comparison"
+ok "parakeet-ctc benches natively against the shared JFK reference"
+
+jq -e '."parakeet-indic".bench_kind == "native" and
+       ."parakeet-indic".s3_prefix == "indic_conformer" and
+       ."parakeet-indic".correctness.kind == "wer" and
+       ."parakeet-indic".correctness.normalizer == "none" and
+       ."parakeet-indic".audio_duration_seconds == 7.29 and
+       (."parakeet-indic".args | index("--language") != null) and
+       ([."parakeet-indic".args[] | select(endswith("/hi-16k.wav"))] | length == 1)' "$REAL_SPEC" > /dev/null \
+  || fail "parakeet-indic must bench hi-16k.wav with --language and the 'none' normalizer (the English one strips Devanagari vowel signs)"
+indic_ref_repo_rel="$(jq -r '."parakeet-indic".correctness.reference' "$REAL_SPEC")"
+[[ -f "$HERE/../../$indic_ref_repo_rel" ]] \
+  || fail "parakeet-indic correctness.reference file missing: $indic_ref_repo_rel"
+ok "parakeet-indic benches the Hindi fixture with its exact expected transcript"
+
+jq -e '."sortformer-streaming".bench_kind == "time-wrapped" and
+       ."sortformer-streaming".correctness.kind == "der" and
+       ."sortformer-streaming".correctness.reference == .sortformer.correctness.reference and
+       ."sortformer-streaming".audio_duration_seconds == .sortformer.audio_duration_seconds and
+       (."sortformer-streaming".args | index("--stream") != null) and
+       (."sortformer-streaming".args | index("--n-gpu-layers") != null) and
+       ([."sortformer-streaming".args[] | select(startswith("--bench"))] | length == 0)' "$REAL_SPEC" > /dev/null \
+  || fail "sortformer-streaming must time-wrap parakeet-cli's --stream diarization on abcba.wav with the batch family's DER reference"
+stream_emit_pos="$(jq -r '[."sortformer-streaming".args[]] | to_entries[] | select(.value == "--emit") | .key' "$REAL_SPEC" | head -1)"
+[[ -n "$stream_emit_pos" ]] || fail "sortformer-streaming args missing --emit"
+[[ "$(jq -r --argjson i "$((stream_emit_pos + 1))" '."sortformer-streaming".args[$i]' "$REAL_SPEC")" == "jsonl" ]] \
+  || fail "sortformer-streaming --emit must be jsonl (compute-der.py reads JSONL segments)"
+ok "sortformer-streaming streams abcba.wav and scores DER from JSONL segments"
+
+jq -e '."nemotron-diarization".bench_kind == "time-wrapped" and
+       ."nemotron-diarization".source == "huggingface" and
+       ."nemotron-diarization".hf_repo == "nvidia/Nemotron-3-Diarization" and
+       (."nemotron-diarization".hf_ref | test("^[0-9a-f]{40}$")) and
+       (."nemotron-diarization".models[0].sha256 | test("^[0-9a-f]{64}$")) and
+       ."nemotron-diarization".correctness.kind == "der" and
+       ."nemotron-diarization".correctness.reference == .sortformer.correctness.reference and
+       ."nemotron-diarization".audio_duration_seconds == .sortformer.audio_duration_seconds and
+       (."nemotron-diarization".args | index("--n-gpu-layers") != null)' "$REAL_SPEC" > /dev/null \
+  || fail "nemotron-diarization must pin the official HF GGUF (revision + sha256) and score DER on abcba.wav"
+# The benchmark must download the same revision the engine's downloader pins,
+# or the two could silently diverge on a checkpoint bump.
+nemotron_script_rev="$(grep -oE 'MODEL_REVISION = "[0-9a-f]{40}"' "$HERE/../../engines/parakeet/scripts/download_nemotron_diarization.py" | grep -oE '[0-9a-f]{40}')"
+[[ "$(jq -r '."nemotron-diarization".hf_ref' "$REAL_SPEC")" == "$nemotron_script_rev" ]] \
+  || fail "nemotron-diarization hf_ref must match download_nemotron_diarization.py's MODEL_REVISION ($nemotron_script_rev)"
+ok "nemotron-diarization pins the engine downloader's HF revision"
+
+jq -e '."moss-transcribe".bench_kind == "time-wrapped" and
+       ."moss-transcribe".binary == "engines/parakeet/moss-transcribe" and
+       ."moss-transcribe".s3_prefix == "openmoss" and
+       ."moss-transcribe".correctness.kind == "wer" and
+       ."moss-transcribe".correctness.hypothesis_format == "moss-segments" and
+       ."moss-transcribe".correctness.reference == .parakeet.correctness.reference and
+       (."moss-transcribe".args | index("--gpu") != null)' "$REAL_SPEC" > /dev/null \
+  || fail "moss-transcribe must time-wrap the moss-transcribe CLI with moss-segments WER scoring against the JFK reference"
+ok "moss-transcribe declares moss-segments WER scoring"
+
+jq -e '."vad-v6".source == "huggingface" and
+       ."vad-v6".hf_repo == .vad.hf_repo and ."vad-v6".hf_ref == .vad.hf_ref and
+       (."vad-v6".models[0].sha256 | test("^[0-9a-f]{64}$")) and
+       ."vad-v6".models[0].sha256 != .vad.models[0].sha256 and
+       ."vad-v6".correctness.kind == "f1" and
+       ."vad-v6".correctness.reference == .vad.correctness.reference and
+       (."vad-v6".args | index("--no-prints") != null)' "$REAL_SPEC" > /dev/null \
+  || fail "vad-v6 must mirror the vad family (same HF pin, F1 reference, --no-prints) with its own v6.2.0 checksum"
+ok "vad-v6 mirrors the silero v5 family with the v6.2.0 checkpoint"
+
+for tts_family in chatterbox-multilingual supertonic1 supertonic2 parler-indic moss-tts; do
+  jq -e --arg f "$tts_family" '.[$f].correctness.kind == "tts_intelligibility" and
+         .[$f].correctness.asr_model == .supertonic.correctness.asr_model and
+         .[$f].correctness.reference == .supertonic.correctness.reference and
+         (.[$f].args | index("${TTS_TEXT}") != null) and
+         (.[$f].args | index("${TTS_AUDIO_OUT}") != null)' "$REAL_SPEC" > /dev/null \
+    || fail "$tts_family must score TTS intelligibility with the shared prompt and pinned reference ASR"
+done
+jq -e '(."chatterbox-multilingual".args | index("--language") != null) and
+       (."chatterbox-multilingual".args | index("--s3gen-gguf") != null)' "$REAL_SPEC" > /dev/null \
+  || fail "chatterbox-multilingual must pass --language (required by t3_mtl) and its own s3gen GGUF"
+jq -e '(."parler-indic".args | index("--sampled") != null)' "$REAL_SPEC" > /dev/null \
+  || fail "parler-indic must use sampled decoding like the parler family (greedy bench output is degenerate)"
+ok "new TTS families reuse the intelligibility contract"
+
+for moss_family in moss-tts moss-sfx moss-speech; do
+  jq -e --arg f "$moss_family" '.[$f].runners == ["macos"] and .[$f].opt_in == true and
+         (.[$f].timeout_minutes | type == "number" and . > 60) and
+         (.[$f].args | index("--gpu") != null)' "$REAL_SPEC" > /dev/null \
+    || fail "$moss_family must be macOS-only, opt-in, carry a raised timeout and request the GPU"
+done
+ok "MOSS generation families are macOS-only opt-ins with raised timeouts"
+
+# runners / opt_in / timeout_minutes are read by the workflow's plan job;
+# a typo there would silently drop or mis-time cells.
+bad_runners="$(jq -r 'to_entries[] | select(.key | startswith("_") | not)
+  | select((.value.runners // []) | map(. == "linux" or . == "macos") | all | not) | .key' "$REAL_SPEC")"
+[[ -z "$bad_runners" ]] || fail "families with runner labels other than linux/macos: $bad_runners"
+bad_opt_in="$(jq -r 'to_entries[] | select(.key | startswith("_") | not)
+  | select(has("value") and (.value | has("opt_in")) and (.value.opt_in | type != "boolean")) | .key' "$REAL_SPEC")"
+[[ -z "$bad_opt_in" ]] || fail "families with a non-boolean opt_in: $bad_opt_in"
+bad_timeouts="$(jq -r 'to_entries[] | select(.key | startswith("_") | not)
+  | select((.value | has("timeout_minutes")) and ((.value.timeout_minutes | type != "number") or .value.timeout_minutes < 1)) | .key' "$REAL_SPEC")"
+[[ -z "$bad_timeouts" ]] || fail "families with an invalid timeout_minutes: $bad_timeouts"
+ok "runners, opt_in and timeout_minutes fields are well-formed"
+
+# The workflow whitelists families against ALL_FAMILIES; every family in the
+# spec must be listed there or it can never be dispatched, and a stale entry
+# there would expand "all" into a cell no spec backs.
+workflow_families="$(grep -oE '^  ALL_FAMILIES: "[^"]+"' "$DESKTOP_WORKFLOW" | sed -E 's/^  ALL_FAMILIES: "([^"]+)"/\1/')"
+[[ -n "$workflow_families" ]] || fail "could not read ALL_FAMILIES from $DESKTOP_WORKFLOW"
+spec_families="$(jq -r '[keys[] | select(startswith("_") | not)] | sort | join(",")' "$REAL_SPEC")"
+[[ "$(tr ',' '\n' <<< "$workflow_families" | sort | paste -sd, -)" == "$spec_families" ]] \
+  || fail "workflow ALL_FAMILIES ($workflow_families) must list exactly the families.json keys ($spec_families)"
+ok "workflow ALL_FAMILIES matches families.json"
+
 # ---- 2. driver behavior against a synthetic spec -----------------------------
 
 SPEC="$TMP/spec.json"
@@ -301,6 +422,18 @@ jq -n --arg sha "$hello_sha" \
     args: [], audio_duration_seconds: 1.0,
     correctness: {kind: "wer", reference: $ref_perfect, normalizer: "english"},
     notes: "time-wrapped catastrophic-miss guard: empty stdout capture must score WER 1.0, not skip"
+  },
+  "wer-tw-moss-segments": {
+    bench_kind: "time-wrapped", binary: "bin/tw-moss-segments", cmake_target: "x",
+    args: [], audio_duration_seconds: 1.0,
+    correctness: {kind: "wer", reference: $ref_perfect, normalizer: "english", hypothesis_format: "moss-segments"},
+    notes: "moss-transcribe shape: [start-end] Sxx: text lines; the markup must be stripped => WER 0.0"
+  },
+  "wer-tw-moss-plain": {
+    bench_kind: "time-wrapped", binary: "bin/tw-moss-segments", cmake_target: "x",
+    args: [], audio_duration_seconds: 1.0,
+    correctness: {kind: "wer", reference: $ref_perfect, normalizer: "english"},
+    notes: "same stub without hypothesis_format: the markup counts as words, so WER > 0 proves the option is threaded"
   },
   "der-tw-perfect": {
     bench_kind: "time-wrapped", binary: "bin/tw-jsonl-perfect", cmake_target: "x",
@@ -479,6 +612,14 @@ STUB
 cat > "$BUILD/bin/tw-transcript-perfect" <<'STUB'
 #!/usr/bin/env bash
 echo "the quick brown fox"
+STUB
+
+# moss-transcribe-shape stub: one "[start-end] Sxx: text" line per segment,
+# the two segments together spelling the reference exactly.
+cat > "$BUILD/bin/tw-moss-segments" <<'STUB'
+#!/usr/bin/env bash
+echo "[0.00-0.50] S1: The quick"
+echo "[0.50-1.00] S2: brown fox."
 STUB
 
 # Sortformer-shape stub for the time-wrapped DER path: prints one JSONL segment
@@ -825,6 +966,21 @@ jq -e '.status == "ok" and .wer_median == 1.0 and .correctness_kind == "wer"' \
   || fail "wer-tw-empty: $(cat "$OUT/wer-tw-empty.json")"
 ok "correctness (time-wrapped): empty stdout capture => wer_median=1.0 (catastrophic-miss regression guard)"
 
+# hypothesis_format='moss-segments' strips the timestamp/speaker markup that
+# moss-transcribe prints before every segment, so a transcript that matches
+# the reference scores 0.0. The plain-format twin runs the same stub and must
+# score higher: it proves families.json's hypothesis_format actually reaches
+# compute-wer.py instead of being silently ignored.
+run_driver wer-tw-moss-segments "$OUT/wer-tw-moss-segments.json" "$OUT/wer-tw-moss-segments.err" BENCH_FAMILIES_JSON="$SPEC"
+jq -e '.status == "ok" and .wer_median == 0.0 and .correctness_kind == "wer"' \
+  "$OUT/wer-tw-moss-segments.json" > /dev/null \
+  || fail "wer-tw-moss-segments: $(cat "$OUT/wer-tw-moss-segments.json")"
+run_driver wer-tw-moss-plain "$OUT/wer-tw-moss-plain.json" "$OUT/wer-tw-moss-plain.err" BENCH_FAMILIES_JSON="$SPEC"
+jq -e '.status == "ok" and .wer_median > 0.0 and .correctness_kind == "wer"' \
+  "$OUT/wer-tw-moss-plain.json" > /dev/null \
+  || fail "wer-tw-moss-plain: $(cat "$OUT/wer-tw-moss-plain.json")"
+ok "correctness (time-wrapped): hypothesis_format=moss-segments strips segment markup before WER scoring"
+
 # ---- correctness scoring (DER path, time-wrapped) --------------------------
 # All DER cells declare the same 8 s / 2 speaker reference; only the stub's
 # JSONL output varies. The kind='der' branch must (a) route the score into
@@ -1028,6 +1184,82 @@ jq -e '.status == "ok" and .f1_median == null and .correctness_kind == null' \
 grep -q "correctness.kind='f1' requires text-file mode" "$OUT/f1-nat-warns.err" \
   || fail "f1-nat-warns: native-F1 config diagnostic not surfaced"
 ok "correctness (F1): native-mode families with kind='f1' are skipped with a diagnostic"
+
+# ---- 3. the workflow's plan-job expansion ------------------------------------
+# The `expand` step's shell is extracted from the workflow and run against
+# the real families.json, so the family whitelist, the "all" expansion, the
+# per-family runner restriction and the per-cell timeout are checked before
+# a dispatch spends runner minutes on them.
+
+extract_plan_script() {
+  awk '
+    /^      - id: expand$/ { in_step = 1; next }
+    in_step && /^        run: \|$/ { in_run = 1; next }
+    in_run && /^      - / { exit }
+    in_run && /^  # ---------- 2\./ { exit }
+    in_run { sub(/^          /, ""); print }
+  ' "$DESKTOP_WORKFLOW"
+}
+PLAN_SCRIPT="$TMP/plan.sh"
+extract_plan_script > "$PLAN_SCRIPT"
+[[ -s "$PLAN_SCRIPT" ]] || fail "could not extract the plan job's expand script from $DESKTOP_WORKFLOW"
+bash -n "$PLAN_SCRIPT" || fail "extracted plan script does not parse"
+
+run_plan() {
+  # run_plan <out-file> [VAR=VALUE...]; stdout/stderr go to <out-file>.log
+  local out="$1"; shift
+  : > "$out"
+  env -i PATH="$PATH" HOME="$TMP" GITHUB_OUTPUT="$out" \
+    ALL_FAMILIES="$workflow_families" FAMILIES_SPEC="$REAL_SPEC" \
+    IN_FAMILIES=all IN_RUNNERS=linux,macos IN_WHISPER=tiny IN_RUNS=1 IN_MINIMAX_DIR="" IN_MINIMAX_RUN="" \
+    "$@" bash "$PLAN_SCRIPT" > "$out.log" 2>&1
+}
+plan_matrix() { grep -E '^matrix=' "$1" | sed 's/^matrix=//'; }
+
+cd "$HERE/../.."
+run_plan "$TMP/plan-all.out" || fail "plan rejected the default 'all' dispatch: $(cat "$TMP/plan-all.out.log")"
+all_families_planned="$(plan_matrix "$TMP/plan-all.out" | jq -r '[.include[].family] | unique | sort | join(",")')"
+default_families="$(jq -r '[to_entries[] | select(.key | startswith("_") | not) | select(.value.opt_in != true) | .key] | sort | join(",")' "$REAL_SPEC")"
+[[ "$all_families_planned" == "$default_families" ]] \
+  || fail "'all' must expand to every non-opt-in family; planned '$all_families_planned', expected '$default_families'"
+plan_matrix "$TMP/plan-all.out" | jq -e '[.include[] | select(.family == "parakeet-nemotron")] | length == 2' > /dev/null \
+  || fail "'all' must plan parakeet-nemotron on both runners (it was missing from the old hardcoded whitelist)"
+plan_matrix "$TMP/plan-all.out" | jq -e --slurpfile spec "$REAL_SPEC" \
+  '[.include[] | .timeout_minutes == ($spec[0][.family].timeout_minutes // 60)] | all' > /dev/null \
+  || fail "every cell must carry its family's timeout_minutes (60 when the spec sets none)"
+[[ "$(grep -E '^expected_count=' "$TMP/plan-all.out")" == "expected_count=$(plan_matrix "$TMP/plan-all.out" | jq '.include | length')" ]] \
+  || fail "expected_count must equal the number of planned cells"
+ok "plan: 'all' expands to every non-opt-in family on both runners"
+
+run_plan "$TMP/plan-optin.out" IN_FAMILIES="moss-tts,moss-speech,parakeet-ctc" \
+  || fail "plan rejected explicitly named opt-in families: $(cat "$TMP/plan-optin.out.log")"
+plan_matrix "$TMP/plan-optin.out" | jq -e '
+  ([.include[] | select(.family == "moss-tts")] | length == 1) and
+  ([.include[] | select(.family == "moss-tts")][0] | .runner_label == "macos" and .timeout_minutes == 120) and
+  ([.include[] | select(.family == "moss-speech")] | length == 1) and
+  ([.include[] | select(.family == "parakeet-ctc")] | length == 2)' > /dev/null \
+  || fail "plan must restrict macOS-only families to the macos cell with their raised timeout: $(plan_matrix "$TMP/plan-optin.out")"
+grep -q 'moss-tts is restricted to macos; skipping the linux cell' "$TMP/plan-optin.out.log" \
+  || fail "plan must say why a restricted family's cell was dropped"
+ok "plan: runners/timeout_minutes restrict and time the opt-in cells"
+
+if run_plan "$TMP/plan-bad.out" IN_FAMILIES="whisper,not-a-family"; then
+  fail "plan accepted an unknown family"
+fi
+grep -q 'rejected family: not-a-family' "$TMP/plan-bad.out.log" \
+  || fail "plan must name the rejected family: $(cat "$TMP/plan-bad.out.log")"
+ok "plan: unknown families are rejected before any runner is scheduled"
+
+# A macOS-only family dispatched on linux alone leaves no cell. An empty
+# include list would pass the bench job's `matrix != ''` guard and fail at
+# matrix expansion with no hint, so the plan must refuse it and say why.
+if run_plan "$TMP/plan-empty.out" IN_FAMILIES="moss-tts" IN_RUNNERS="linux"; then
+  fail "plan accepted a selection that yields no cells"
+fi
+grep -q "no benchmark cells: families 'moss-tts' accept none of the requested runners (linux)" "$TMP/plan-empty.out.log" \
+  || fail "plan must explain the empty selection: $(cat "$TMP/plan-empty.out.log")"
+grep -qE '^matrix=' "$TMP/plan-empty.out" && fail "plan must not emit a matrix for an empty selection"
+ok "plan: a selection with no cells is rejected with a diagnostic"
 
 # Music driver, cache and pilot aggregation tests use only the standard library.
 python3 "$HERE/test-music-alignment-driver.py" || fail "music driver regressions"

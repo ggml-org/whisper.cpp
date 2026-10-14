@@ -8,6 +8,51 @@ For full campaigns and reproduction methods, see [Parakeet](../engines/parakeet/
 Quality diagnostics and MiniMax benchmark preparation are documented in the
 [music alignment guide](../scripts/benchmarks/music-alignment.md).
 
+## Benchmark coverage
+
+The desktop benchmark workflow (`speech-benchmark-desktop.yml`, driven by
+`scripts/benchmarks/families.json`) measures each family below on the hosted
+Linux (CPU) and self-hosted macOS (Metal) runners and scores a correctness
+metric where the harness has one; `none` marks performance-only rows. The
+last column records what keeps a row out of the default `all` dispatch, off
+one runner, or short of the model line's full size range.
+
+| Family | Model | Workload | Correctness | Limit |
+|---|---|---|---|---|
+| `whisper` | tiny, base, small | `jfk.wav` transcription | WER | larger sizes excluded to save runner minutes |
+| `parakeet` | TDT 0.6b v3 f16 | `jfk.wav`, Core ML vs Metal on macOS | WER | |
+| `parakeet-unified` | Unified RNN-T 0.6b q8_0 | `jfk.wav`, Core ML vs Metal on macOS | WER | |
+| `parakeet-eou` | realtime EOU 120m f16 | `jfk.wav`, Core ML vs Metal on macOS | WER | |
+| `parakeet-nemotron` | Nemotron 3.5 ASR 0.6b f16 | `jfk.wav`, Core ML vs Metal on macOS | WER | |
+| `parakeet-ctc` | CTC 0.6b q8_0 | `jfk.wav` | WER | |
+| `parakeet-indic` | IndicConformer CTC q8_0 | `hi-16k.wav`, `--language hi` | WER, `none` normalizer | |
+| `sortformer` | Sortformer v1 q8_0 | `abcba.wav` batch diarization | DER | |
+| `sortformer-streaming` | streaming Sortformer v2.1 q8_0 | `abcba.wav` streaming session | DER | |
+| `nemotron-diarization` | Nemotron 3 Diarization q8_0 (official GGUF) | `abcba.wav` long-form diarization | DER | |
+| `moss-transcribe` | MOSS-Transcribe-Diarize q8_0 | `jfk.wav` | WER of the segment text | |
+| `vad`, `vad-v6` | Silero v5.1.2, v6.2.0 | `jfk.wav` speech segments | F1 | |
+| `chatterbox` | Chatterbox Turbo q8_0 | shared English prompt | TTS WER | |
+| `chatterbox-multilingual` | Chatterbox Multilingual q8_0 | shared English prompt, `--language en` | TTS WER | |
+| `supertonic1`, `supertonic2`, `supertonic` | Supertonic 1, 2, 3 q8_0 | shared English prompt | TTS WER | |
+| `parler`, `parler-indic` | Parler mini v1, Indic Parler q8_0 | shared English prompt, sampled | TTS WER | |
+| `cosyvoice` | Fun-CosyVoice3-0.5B | shared English prompt | TTS WER | |
+| `audio8-tts` | Audio8-TTS-Preview-0.6B q8_0 | shared English prompt | TTS WER | |
+| `audio8` | Audio8 codec q8_0 | `jfk.wav` reconstruction | SI-SDR, STOI | |
+| `lavasr` | LavaSR denoiser and enhancer f16 | noisy `jfk.wav` enhancement | SI-SDR, STOI | |
+| `moss-tts` | MOSS-TTS-v1.5 f16 | shared English prompt | TTS WER | macOS only, opt-in: 17 GB backbone |
+| `moss-sfx` | MOSS-SoundEffect-v2 q8_0 | 5 s sound effect, 25 steps | none | macOS only, opt-in: CPU diffusion too slow |
+| `moss-speech` | MOSS-Speech q8_0 | spoken reply to `jfk.wav` | none | macOS only, opt-in: 11 GB of weights |
+| `acestep` | ACE-Step v15 turbo q8_0 | 4 s generation | CLAP, opt-in | |
+| `minimax` | MiniMax-Music3 q4_k_m | opt-in CLAP diagnostics only | CLAP, opt-in | no performance-only invocation |
+
+Supported models without a benchmark family, and why:
+
+- Whisper medium, large v1/v2/v3, large-v3-turbo and tinydiarize: left out on purpose to keep runner minutes down; `whisper_sizes` accepts tiny, base and small.
+- Parakeet CTC 1.1b and TDT 1.1b, streaming Sortformer v2, Parler-TTS large and Pocket TTS: no GGUF in the model registry to pin.
+- MOSS-TTSD: its input is a two-speaker dialogue with reference audio and transcripts, which the shared single-speaker prompt and intelligibility scorer do not model.
+- ACE-Step sft and base: only the turbo checkpoint is registered under the benchmark's prefix.
+- MOSS-SoundEffect and MOSS-Speech outputs are timed but not scored: no sound-effect or spoken-reply reference exists in the harness.
+
 ## ASR, end-of-utterance, diarization
 
 CI numbers from the published `@qvac/asr-ggml@0.1.1` addon ([run 31603189415](https://github.com/tetherto/qvac/actions/runs/31603189415), 2026-08-12), `q8_0` GGUFs, 1 warmup plus 5 timed runs, host `qvac-ubuntu2204-x64-gpu` (CPU: Intel Core i5-13500, GPU: NVIDIA RTX 4000 SFF Ada, Vulkan). Full table: [engines/parakeet/README.md](../engines/parakeet/docs/performance.md#asr-addon-ci-2026-08-12).

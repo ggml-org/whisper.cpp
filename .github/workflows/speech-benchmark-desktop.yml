@@ -16,8 +16,12 @@ on:
         description: >-
           Comma-separated family names, or "all". Families:
           whisper, parakeet (TDT), parakeet-unified, parakeet-eou, parakeet-nemotron
-          (Core ML vs Metal on macOS), sortformer, vad, chatterbox, supertonic, parler,
-          cosyvoice, audio8, audio8-tts, lavasr, acestep, minimax.
+          (Core ML vs Metal on macOS), parakeet-ctc, parakeet-indic, sortformer,
+          sortformer-streaming, nemotron-diarization, moss-transcribe, vad, vad-v6,
+          chatterbox, chatterbox-multilingual, supertonic, supertonic1, supertonic2,
+          parler, parler-indic, cosyvoice, audio8, audio8-tts, lavasr, acestep, minimax.
+          Opt-in families (large downloads, macOS only) are left out of "all" and must
+          be named: moss-tts, moss-sfx, moss-speech.
         required: false
         default: "all"
         type: string
@@ -82,7 +86,12 @@ env:
   GGML_REPO: https://github.com/tetherto/qvac-ext-ggml.git
   GGML_BRANCH: speech
   AWS_REGION: eu-central-1
-  ALL_FAMILIES: "whisper,parakeet,parakeet-unified,parakeet-eou,parakeet-nemotron,sortformer,vad,chatterbox,supertonic,parler,cosyvoice,audio8,audio8-tts,lavasr,acestep,minimax"
+  # Whitelist of every family in scripts/benchmarks/families.json, opt-in ones
+  # included. The plan job derives the "all" expansion, per-family runner
+  # restrictions and timeouts from families.json itself;
+  # scripts/benchmarks/test-run-family.sh pins this list to the spec's keys.
+  ALL_FAMILIES: "whisper,parakeet,parakeet-unified,parakeet-eou,parakeet-nemotron,parakeet-ctc,parakeet-indic,sortformer,sortformer-streaming,nemotron-diarization,moss-transcribe,vad,vad-v6,chatterbox,chatterbox-multilingual,supertonic,supertonic1,supertonic2,parler,parler-indic,cosyvoice,audio8,audio8-tts,moss-tts,moss-sfx,moss-speech,lavasr,acestep,minimax"
+  FAMILIES_SPEC: scripts/benchmarks/families.json
 
 jobs:
   # ---------- 1. Expand inputs into a matrix ------------------------------
@@ -141,9 +150,12 @@ jobs:
           echo "runs_per_bench=$IN_RUNS" >> "$GITHUB_OUTPUT"
 
           # "all" (or empty, since the dispatch UI can save an empty string as
-          # a default) → full family list; otherwise split the comma list.
+          # a default) → every family the spec does not mark opt_in; otherwise
+          # split the comma list. Opt-in families stay in the whitelist so
+          # they can be named explicitly.
           if [[ "$IN_FAMILIES" == "all" || -z "$IN_FAMILIES" ]]; then
-            families="$ALL_FAMILIES"
+            families="$(jq -r '[to_entries[] | select(.key | startswith("_") | not)
+              | select(.value.opt_in != true) | .key] | join(",")' "$FAMILIES_SPEC")"
           else
             families="$IN_FAMILIES"
           fi
@@ -155,10 +167,24 @@ jobs:
           if [[ -z "$IN_WHISPER" ]]; then IN_WHISPER="tiny,base,small"; fi
 
           valid_family() {
-            case "$1" in
-              whisper|parakeet|parakeet-unified|parakeet-eou|sortformer|vad|chatterbox|supertonic|parler|cosyvoice|audio8|audio8-tts|lavasr|acestep|minimax) return 0 ;;
+            case ",$ALL_FAMILIES," in
+              *",$1,"*) return 0 ;;
               *) return 1 ;;
             esac
+          }
+          # Runner labels a family accepts: its `runners` list in
+          # families.json, or every label when the field is absent.
+          family_accepts_runner() {
+            local allowed
+            allowed="$(jq -r --arg f "$1" '.[$f].runners // [] | join(",")' "$FAMILIES_SPEC")"
+            [[ -z "$allowed" ]] && return 0
+            case ",$allowed," in
+              *",$2,"*) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          family_timeout_minutes() {
+            jq -r --arg f "$1" '.[$f].timeout_minutes // 60' "$FAMILIES_SPEC"
           }
           valid_size() {
             case "$1" in tiny|base|small) return 0 ;; *) return 1 ;; esac
@@ -196,19 +222,34 @@ jobs:
             if ! valid_family "$f_trim"; then
               echo "rejected family: $f_trim (allowed: $ALL_FAMILIES)" >&2; exit 1
             fi
+            timeout_minutes="$(family_timeout_minutes "$f_trim")"
             for r in $(echo "$runners_json" | jq -c '.[]'); do
+              r_label="$(echo "$r" | jq -r '.label')"
+              if ! family_accepts_runner "$f_trim" "$r_label"; then
+                echo "::notice::$f_trim is restricted to $(jq -r --arg f "$f_trim" '.[$f].runners | join(",")' "$FAMILIES_SPEC"); skipping the $r_label cell"
+                continue
+              fi
               if [[ "$f_trim" == "whisper" ]]; then
                 for s in $(echo "$whisper_sizes_json" | jq -r '.[]'); do
-                  cells="$(echo "$cells" | jq -c --arg fam "$f_trim" --arg size "$s" --argjson r "$r" \
-                    '. + [{"family":$fam,"whisper_size":$size,"runner_label":$r.label,"runner_os":$r.os}]')"
+                  cells="$(echo "$cells" | jq -c --arg fam "$f_trim" --arg size "$s" --argjson r "$r" --argjson t "$timeout_minutes" \
+                    '. + [{"family":$fam,"whisper_size":$size,"runner_label":$r.label,"runner_os":$r.os,"timeout_minutes":$t}]')"
                 done
               else
-                cells="$(echo "$cells" | jq -c --arg fam "$f_trim" --argjson r "$r" \
-                  '. + [{"family":$fam,"whisper_size":"","runner_label":$r.label,"runner_os":$r.os}]')"
+                cells="$(echo "$cells" | jq -c --arg fam "$f_trim" --argjson r "$r" --argjson t "$timeout_minutes" \
+                  '. + [{"family":$fam,"whisper_size":"","runner_label":$r.label,"runner_os":$r.os,"timeout_minutes":$t}]')"
               fi
             done
           done
 
+          # A selection whose families accept none of the requested runners
+          # (model_families=moss-tts with runners=linux) would emit an empty
+          # include list; the bench job's `matrix != ''` guard only catches
+          # an unset output, and GitHub rejects an empty matrix at expansion
+          # time with an opaque error. Refuse it here, naming the cause.
+          if [[ "$(echo "$cells" | jq 'length')" -eq 0 ]]; then
+            echo "no benchmark cells: families '$families' accept none of the requested runners ($IN_RUNNERS); check their 'runners' field in $FAMILIES_SPEC" >&2
+            exit 1
+          fi
           matrix="$(jq -c -n --argjson include "$cells" '{include: $include}')"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           # expected_count feeds summarize.py's absent-row check. A cell that
@@ -221,12 +262,15 @@ jobs:
           echo "$matrix" | jq .
 
   # ---------- 2. Bench a single (family, runner) cell ---------------------
-  # 60-minute timeout: a cold cache cell on macos does a full ggml build
-  # (~15 min) + all-engine cmake configure (~2 min) + up to 5 GB of S3
+  # 60-minute default timeout: a cold cache cell on macos does a full ggml
+  # build (~15 min) + all-engine cmake configure (~2 min) + up to 5 GB of S3
   # downloads (~10 min on typical bandwidth) + ~3x 60 s bench iterations
-  # for the heaviest family (acestep). 60 minutes gives headroom without
-  # inviting runaway hangs. Opt-in MiniMax gets 180 minutes for its larger
-  # checkpoint preparation and generation; resource preflight runs first.
+  # for the heaviest default family (acestep). 60 minutes gives headroom
+  # without inviting runaway hangs. A family whose download alone eats that
+  # budget (the opt-in MOSS checkpoints) raises `timeout_minutes` in
+  # families.json, which the plan job copies into its cells. Opt-in MiniMax
+  # gets 180 minutes for its larger checkpoint preparation and generation;
+  # resource preflight runs first.
   bench:
     needs: plan
     if: ${{ needs.plan.outputs.matrix != '' }}
@@ -235,7 +279,7 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.runner_os }}
     continue-on-error: true
-    timeout-minutes: ${{ inputs.music_alignment && matrix.family == 'minimax' && 180 || 60 }}
+    timeout-minutes: ${{ inputs.music_alignment && matrix.family == 'minimax' && 180 || matrix.timeout_minutes }}
     # id-token: write scoped to the one job that actually consumes it
     # (aws-actions/configure-aws-credentials for the S3 model fetch).
     # plan and summarize inherit the workflow-level contents: read only.

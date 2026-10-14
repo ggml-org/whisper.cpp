@@ -111,7 +111,9 @@ See the [fixed-code decoder benchmark](engines/tts/docs/audio8.md#fixed-code-dec
 `RTF = inference_time / audio_duration`; lower is faster. These are dated
 measurements with different workloads and timing boundaries, not universal
 speed guarantees. Full methods, build pins and limitations live in
-[docs/PERFORMANCE.md](docs/PERFORMANCE.md) and the linked engine reports.
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md) and the linked engine reports;
+[benchmark coverage](docs/PERFORMANCE.md#benchmark-coverage) lists which
+model each desktop benchmark family measures and scores.
 
 | Task | Model | Recorded measurements |
 |---|---|---|

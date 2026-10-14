@@ -754,6 +754,8 @@ parse_backend_from_logs() {
 #                               .transcript). DER has no native source today.
 #   mode="text-file"  <path>  — time-wrapped families whose CLI prints its
 #                               hypothesis on stdout (whisper -nt for WER;
+#                               moss-transcribe's segment lines for WER with
+#                               correctness.hypothesis_format='moss-segments';
 #                               parakeet-cli --emit jsonl for sortformer DER).
 #
 # All error paths are non-fatal: a missing reference file, missing hypothesis
@@ -763,13 +765,15 @@ parse_backend_from_logs() {
 # didn't run" instead of dragging the whole cell to run-failed.
 score_correctness() {
   local mode="$1" src_path="$2"
-  local spec_kind spec_ref spec_norm spec_collar spec_tolerance
+  local spec_kind spec_ref spec_norm spec_format spec_collar spec_tolerance
   spec_kind="$(jq      -r --arg family "$FAMILY" \
     '.[$family].correctness.kind // ""'              "$FAMILIES_JSON")"
   spec_ref="$(jq       -r --arg family "$FAMILY" \
     '.[$family].correctness.reference // ""'         "$FAMILIES_JSON")"
   spec_norm="$(jq      -r --arg family "$FAMILY" \
     '.[$family].correctness.normalizer // "english"' "$FAMILIES_JSON")"
+  spec_format="$(jq    -r --arg family "$FAMILY" \
+    '.[$family].correctness.hypothesis_format // "plain"' "$FAMILIES_JSON")"
   spec_collar="$(jq    -r --arg family "$FAMILY" \
     '.[$family].correctness.collar_ms // 250'        "$FAMILIES_JSON")"
   spec_tolerance="$(jq -r --arg family "$FAMILY" \
@@ -849,7 +853,8 @@ score_correctness() {
       if ! script_out="$(python3 "$(dirname "$0")/compute-wer.py" \
            "${hyp_args[@]}" \
            --reference   "$ref_path" \
-           --normalizer  "$spec_norm" 2> "$script_err")"; then
+           --normalizer  "$spec_norm" \
+           --hypothesis-format "$spec_format" 2> "$script_err")"; then
         echo "$FAMILY: compute-wer.py failed: $(cat "$script_err" 2>/dev/null)" >&2
         return 0
       fi
