@@ -46,6 +46,12 @@ matmuls; f16 remains the recommended ARM flow bundle. Its benchmark supports
 independent LM, flow and HiFT model overrides for
 [stage profiling](engines/tts/docs/cosyvoice3.md#stage-profiling).
 
+Nemotron 3 Diarization preparation supports additional weight precisions via
+`convert_nemotron_diarization.py --outtype`. CPU/CUDA offline validation covers
+F16, BF16, Q6_K, Q5_K, Q4_K, and NVFP4; streaming quality varies by precision.
+See the [quantization measurements](engines/parakeet/docs/performance.md#nemotron-3-diarization-quantizations)
+before selecting a format. MXFP4 failed CPU quality checks.
+
 ### Apple Core ML sidecars
 
 Optional sidecars accelerate a stage while the rest of the pipeline stays on

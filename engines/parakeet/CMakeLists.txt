@@ -1143,6 +1143,10 @@ if (PARAKEET_BUILD_TESTS)
         ARGS "${PARAKEET_TEST_NEMOTRON_DIARIZATION_GGUF}"
         REQUIRES "${PARAKEET_TEST_NEMOTRON_DIARIZATION_GGUF}")
 
+    add_executable(bench-nemotron-quantization test/bench_nemotron_quantization.cpp)
+    target_link_libraries(bench-nemotron-quantization PRIVATE qvac-parakeet)
+    parakeet_apply_ccache(bench-nemotron-quantization)
+
     add_executable(test-nemotron-diarization
         test/test_nemotron_diarization.cpp)
     target_link_libraries(test-nemotron-diarization PRIVATE qvac-parakeet)
@@ -1195,6 +1199,36 @@ if (PARAKEET_BUILD_TESTS)
                  "--offline" "--der-max" "${PARAKEET_TEST_LONG_FORM_DER_MAX}"
                  "--n-gpu-layers" "${PARAKEET_TEST_GPU_LAYERS}"
         REQUIRES "${PARAKEET_TEST_NEMOTRON_DIARIZATION_GGUF}" "${_qvp_abcdba_wav}" "${_qvp_abcdba_rttm}")
+
+    set(PARAKEET_TEST_NEMOTRON_DIARIZATION_QUANTIZATIONS
+        "f16;bf16;q6_k;q5_k;q4_k;nvfp4"
+        CACHE STRING "Nemotron diarization converted precisions to validate")
+    foreach(_qvp_diar_quant IN LISTS PARAKEET_TEST_NEMOTRON_DIARIZATION_QUANTIZATIONS)
+        set(_qvp_diar_quant_model
+            "${PARAKEET_TEST_MODEL_DIR}/Nemotron-3-Diarization.converted.${_qvp_diar_quant}.gguf")
+        foreach(_qvp_diar_fixture IN ITEMS abcba abcdba)
+            foreach(_qvp_diar_backend IN ITEMS cpu gpu)
+                set(_qvp_diar_layers 0)
+                set(_qvp_diar_label "fixture")
+                if (_qvp_diar_backend STREQUAL "gpu")
+                    set(_qvp_diar_layers "${PARAKEET_TEST_GPU_LAYERS}")
+                    set(_qvp_diar_label "gpu")
+                endif()
+                parakeet_register_test(
+                    test-nemotron-diarization-${_qvp_diar_quant}-${_qvp_diar_fixture}-${_qvp_diar_backend}
+                    EXE test-sortformer-aosc-speakers
+                    LABEL "${_qvp_diar_label}"
+                    ARGS "--model" "${_qvp_diar_quant_model}"
+                         "--wav" "${CMAKE_CURRENT_SOURCE_DIR}/test/samples/${_qvp_diar_fixture}.wav"
+                         "--ref-rttm" "${CMAKE_CURRENT_SOURCE_DIR}/test/samples/${_qvp_diar_fixture}.rttm"
+                         "--offline" "--der-max" "${PARAKEET_TEST_LONG_FORM_DER_MAX}"
+                         "--n-gpu-layers" "${_qvp_diar_layers}"
+                    REQUIRES "${_qvp_diar_quant_model}"
+                             "${CMAKE_CURRENT_SOURCE_DIR}/test/samples/${_qvp_diar_fixture}.wav"
+                             "${CMAKE_CURRENT_SOURCE_DIR}/test/samples/${_qvp_diar_fixture}.rttm")
+            endforeach()
+        endforeach()
+    endforeach()
 
     add_executable(test-nemotron
         test/test_nemotron.cpp

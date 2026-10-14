@@ -17,6 +17,7 @@ CONVERTER_REVISION = "97a15afa5caa9bce5baaa86c1184103877af4101"
 CONVERTER_DIRECTORY = DEFAULT_MODEL_DIRECTORY / "sources" / "NeMo-Speech.cpp"
 OUTPUT_FILENAME = "Nemotron-3-Diarization.converted.q8_0.gguf"
 OUTPUT_TYPE = "q8_0"
+OUTPUT_TYPES = ("f32", "f16", "bf16", "q8_0", "q6_k", "q5_k", "q4_k", "mxfp4", "nvfp4")
 
 
 def ensure_converter(converter_directory, run=subprocess.run):
@@ -57,21 +58,28 @@ def verify_converter_file(converter_directory, run):
         raise RuntimeError("Converter script differs from the pinned revision")
 
 
-def convert_model(source, output, converter, run=subprocess.run):
+def convert_model(source, output, converter, run=subprocess.run, outtype=OUTPUT_TYPE):
+    if outtype not in OUTPUT_TYPES:
+        raise ValueError(f"Unsupported output type: {outtype}")
     output.parent.mkdir(parents=True, exist_ok=True)
     run([sys.executable, str(converter), str(source.resolve()),
-         "--outfile", str(output.resolve()), "--outtype", OUTPUT_TYPE],
+         "--outfile", str(output.resolve()), "--outtype", outtype],
         check=True, cwd=converter.parent)
 
 
-def parse_args():
+def output_filename(outtype):
+    return f"Nemotron-3-Diarization.converted.{outtype}.gguf"
+
+
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-dir", type=Path, default=DEFAULT_MODEL_DIRECTORY)
     parser.add_argument("--source", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--outtype", choices=OUTPUT_TYPES, default=OUTPUT_TYPE)
     parser.add_argument("--converter-dir", type=Path, default=CONVERTER_DIRECTORY)
     parser.add_argument("--prepare-only", action="store_true")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main():
@@ -82,13 +90,13 @@ def main():
         source = download_artifact(NEMO_FILENAME, args.model_dir, hf_hub_download)
     else:
         source = args.source
-    output = args.output or args.model_dir / OUTPUT_FILENAME
+    output = args.output or args.model_dir / output_filename(args.outtype)
     converter = ensure_converter(args.converter_dir)
     if args.prepare_only:
         print(source)
         print(converter.parent / "requirements.txt")
         return
-    convert_model(source, output, converter)
+    convert_model(source, output, converter, outtype=args.outtype)
     print(output)
 
 

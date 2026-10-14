@@ -53,6 +53,34 @@ class NemotronPreparationTests(unittest.TestCase):
         self.assertTrue(arguments["check"])
         self.assertNotEqual(output.name, downloader.GGUF_FILENAME)
 
+    def test_converts_each_supported_output_type(self):
+        for outtype in converter.OUTPUT_TYPES:
+            with self.subTest(outtype=outtype), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                calls = []
+                output = directory / converter.output_filename(outtype)
+                converter.convert_model(
+                    directory / "source.nemo", output, directory / "convert_model.py",
+                    run=lambda command, **kwargs: calls.append(command), outtype=outtype)
+                self.assertEqual(calls[0][-2:], ["--outtype", outtype])
+                self.assertIn(f".converted.{outtype}.", output.name)
+                self.assertEqual(converter.parse_args(["--outtype", outtype]).outtype, outtype)
+
+    def test_default_output_remains_q8(self):
+        self.assertEqual(converter.parse_args([]).outtype, converter.OUTPUT_TYPE)
+        self.assertEqual(converter.output_filename(converter.OUTPUT_TYPE), converter.OUTPUT_FILENAME)
+        self.assertEqual(len({converter.output_filename(value) for value in converter.OUTPUT_TYPES}),
+                         len(converter.OUTPUT_TYPES))
+
+    def test_rejects_unsupported_type_before_running_converter(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            with self.assertRaises(ValueError):
+                converter.convert_model(
+                    directory / "source.nemo", directory / "new" / "output.gguf",
+                    directory / "convert_model.py", outtype="q2_k")
+            self.assertFalse((directory / "new").exists())
+
     def test_uses_existing_converter_checkout(self):
         calls = []
 

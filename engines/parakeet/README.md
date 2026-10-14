@@ -39,6 +39,13 @@ with an optional RNN-T branch; CTC requires a language selection. Use the
 [model acquisition and format guide](docs/models.md) for each family's
 download and conversion path.
 
+Nemotron 3 Diarization can also be converted to F16, BF16, Q6_K, Q5_K,
+Q4_K, MXFP4, and NVFP4 with `scripts/convert_nemotron_diarization.py --outtype`.
+F16/BF16 and the K-quants plus NVFP4 pass the CPU/CUDA offline fixture gates;
+MXFP4 fails CPU quality checks. Q4_K cuts model size by 46% on the tested
+checkpoint. See [precision-specific quality and timings](docs/performance.md#nemotron-3-diarization-quantizations),
+including streaming limitations and reproduction commands.
+
 Unified RNN-T and Nemotron 3.5 ASR have native cache-aware streaming.
 [docs/api.md](docs/api.md) documents trained operating points and context
 controls. Nemotron 3 Diarization supports eight speakers and uses cached

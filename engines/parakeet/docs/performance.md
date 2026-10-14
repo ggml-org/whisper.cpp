@@ -139,6 +139,106 @@ ggml-opencl rejects flash attention on Adreno. With
 fails the test's negative-peak check and changes the streaming segments, so
 leave it off.
 
+### Nemotron 3 Diarization quantizations
+
+Measured on 2026-10-14 with speech base `e2c3d8bc`, ggml-speech
+`6bb85ad673ccf18850524a4d4d4cf5e781a374c7`, RTX 5090 CUDA 13.3, and an
+8-thread CPU run on a Ryzen 9 9950X VM exposing 10 CPUs. All formats were
+converted directly from the pinned NeMo checkpoint by NeMo-Speech.cpp
+`97a15afa5caa9bce5baaa86c1184103877af4101`; these are not requantizations
+of the published Q8 file. F32 is a linear-weight reference: the converter
+still stores its convolution kernel in F16. The published Q8 fixture also
+passes the existing CPU and CUDA probability and streaming regression tests.
+
+`bench-nemotron-quantization` checks finite [0, 1] probabilities and eight
+speaker channels, writes the offline probabilities, warms the full input,
+and reports the median of five offline runs plus one streaming session.
+The input is `diarization-sample-16k.wav` (27.3 s); streaming feeds 100 ms
+blocks with the default 1040 ms chunks. Model load is excluded. Streaming
+is a single observation, not a median; small timing differences should not
+be treated as reliable speedups. Sizes are decimal MB.
+
+| Precision | MB | CPU offline ms | CUDA offline ms | CPU stream ms | CUDA stream ms |
+|---|---:|---:|---:|---:|---:|
+| F32 | 395.30 | 139.26 | 5.12 | 2143 | 87.44 |
+| F16 | 199.02 | 151.33 | 5.01 | 2134 | 91.10 |
+| BF16 | 199.02 | 112.95 | 4.98 | 1597 | 92.61 |
+| Q8_0 | 107.01 | 138.94 | 6.12 | 1939 | 105.59 |
+| Q6_K | 83.24 | 135.17 | 6.05 | 1883 | 104.45 |
+| Q5_K | 70.21 | 169.61 | 5.79 | 2362 | 99.89 |
+| Q4_K | 57.94 | 135.02 | 5.94 | 1871 | 99.79 |
+| MXFP4 | 54.88 | 167.67 | 5.37 | 2343 | 92.84 |
+| NVFP4 | 57.94 | 203.46 | 5.12 | 2848 | 86.65 |
+
+Frame DER against the existing RTTMs uses the test's 10 ms grid, no collar,
+optimal speaker mapping, and 200 ms minimum segment. Each pair below is
+`abcba` / `abcdba` (160.6 / 191.2 s). Offline uses automatic long-form
+chunking; streaming uses 1040 ms chunks. Coverage and speaker re-entry are
+also checked. These two fixtures do not establish quality on overlapping
+speech, eight simultaneous speakers, languages, or general meeting audio.
+
+| Precision | CPU offline DER % | CUDA offline DER % | CUDA streaming DER % |
+|---|---:|---:|---:|
+| F32 | 3.71 / 4.36 | 3.71 / 4.36 | 6.09 / 15.35 |
+| F16 | 3.71 / 4.36 | 3.71 / 4.36 | 4.76 / 17.56 |
+| BF16 | 3.71 / 4.36 | 3.71 / 4.36 | 8.18 / 8.77 |
+| Q8_0 | 3.71 / 8.02 | 3.70 / 4.35 | 4.78 / 17.59 |
+| Q6_K | 3.71 / 4.36 | 3.72 / 4.37 | 13.60 / 13.37 |
+| Q5_K | 3.72 / 4.36 | 3.71 / 4.36 | 4.75 / 15.22 |
+| Q4_K | 3.68 / 4.30 | 3.68 / 4.30 | 4.74 / 5.68 |
+| MXFP4 | 26.17 / re-entry failure | 7.23 / 7.34 | 20.65 / 22.83 |
+| NVFP4 | 3.63 / 4.26 | 3.31 / 3.99 | 4.51 / 4.71 |
+
+On the short clip, CUDA probability relative L2 errors against F32 after
+optimal speaker permutation were Q8 0.0049, Q6_K 0.0065, Q5_K 0.0096,
+Q4_K 0.0340, MXFP4 0.0503, and NVFP4 0.0420. Corresponding CUDA-versus-CPU
+errors using the same GGUF were 0.0014, 0.0020, 0.0089, 0.0099, 0.0671,
+and 0.0265. Quantized activation arithmetic can differ across backends;
+these comparisons are diagnostics, not independent NVIDIA reference
+parity for each precision. Do not reuse the Q8 probability reference as
+an acceptance target for a differently quantized model or loosen its
+existing tolerances to admit them.
+
+Q4_K is the strongest size-oriented candidate in this fixture set: 46%
+smaller than Q8 with comparable offline latency and quality. Q6_K saves
+22% with less offline probability drift, but its live `abcba` quality
+regresses. Q5_K saves 34%, with slower CPU inference here. F16/BF16 offer
+higher precision at larger size. NVFP4 is a promising RTX 5090 candidate,
+but is slower on this CPU and needs wider device/quality validation.
+MXFP4 saves only another 3.07 MB versus Q4_K and fails CPU quality and
+speaker continuity; no MXFP4-specific runtime patch is justified by these
+results. The tested formats require no graph/kernel changes. Keep Q8 as
+the default until broader validation supports changing it.
+
+Reproduce conversion and measurements from the repository root:
+
+```bash
+python engines/parakeet/scripts/convert_nemotron_diarization.py --outtype q4_k
+cmake --build build-parakeet --target bench-nemotron-quantization test-sortformer-aosc-speakers
+./build-parakeet/bench-nemotron-quantization \
+  engines/parakeet/models/Nemotron-3-Diarization.converted.q4_k.gguf \
+  engines/parakeet/test/samples/diarization-sample-16k.wav /tmp/q4-k-probs.bin 99
+ctest --test-dir build-parakeet --output-on-failure \
+  -R 'test-nemotron-diarization-(f16|bf16|q6_k|q5_k|q4_k|nvfp4)-'
+./build-parakeet/test-sortformer-aosc-speakers \
+  --model engines/parakeet/models/Nemotron-3-Diarization.converted.q4_k.gguf \
+  --wav engines/parakeet/test/samples/abcdba.wav \
+  --ref-rttm engines/parakeet/test/samples/abcdba.rttm \
+  --chunk-ms 1040 --n-gpu-layers 99 --der-max 15
+```
+
+Use `0` instead of `99` for CPU benchmarking. Install the pinned converter's
+Python requirements and provide `NEMO_SPEECH_GGML_BASE` pointing to a built
+ggml-base shared library for K-quants when required by the converter.
+Configure CMake after generating the models: missing fixture tests are
+disabled at configure time. `PARAKEET_TEST_MODEL_DIR` selects their directory;
+`PARAKEET_TEST_NEMOTRON_DIARIZATION_QUANTIZATIONS` selects the format list.
+The default six extra formats register 24 offline CPU/GPU tests, all passing
+on the host above. MXFP4 is available for explicit experiments but excluded
+from that default list because it failed. Live failures above remain visible
+and are not relabeled as passing offline gates. Additional-precision Vulkan,
+Metal, mobile, and downstream `qvac/` validation have not been run.
+
 ### Nemotron 3 Diarization on long offline inputs
 
 A single offline graph loses speaker identity on inputs longer than about
