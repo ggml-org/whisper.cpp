@@ -1,7 +1,8 @@
 // Parity tests for the LavaSR denoiser ggml graph (denoiser_ggml.cpp) vs the scalar
-// reference (denoiser_core.cpp).  Pure host math on the CPU backend — no model/fixture.
+// reference (denoiser_core.cpp), on CPU and an available GPU, without fixtures.
 
 #include "lavasr/denoiser_ggml.h"
+#include "backend_selection.h"
 
 #include "lavasr/denoiser.h"      // internal: denoise_with_core / denoise_with_batch_core
 #include "lavasr/denoiser_gguf.h" // internal: load_denoiser_gguf
@@ -947,7 +948,7 @@ static DenoiserWeights make_synthetic_denoiser_weights(std::mt19937 & rng) {
 
 // Always-on e2e parity (no fixture): ggml chunk_forward vs the scalar
 // denoiser_net_forward on the synthetic model, same metrics as test_e2e.
-static void test_e2e_synthetic() {
+static void test_e2e_synthetic(int n_gpu_layers = -1) {
     std::mt19937    rng(20260710);
     DenoiserWeights w = make_synthetic_denoiser_weights(rng);
     const int       L = w.chunk_frames, F = w.spec_bins;
@@ -959,7 +960,10 @@ static void test_e2e_synthetic() {
     df(re); df(im);
     std::vector<float> sr, si;
     tts_cpp::lavasr::denoiser_net_forward(w, re, im, L, sr, si);
-    auto               g = tts_cpp::lavasr::DenoiserGgml::create(w, -1);
+    auto               g = tts_cpp::lavasr::DenoiserGgml::create(w, n_gpu_layers);
+    if (n_gpu_layers > 0) {
+        CHECK(g->backend_name() != "CPU", "available GPU must not fall back to CPU for the denoiser");
+    }
     std::vector<float> gr, gi;
     g->chunk_forward(re, im, L, gr, gi);
     auto rel = [](const std::vector<float> & a, const std::vector<float> & b, float & mx) {
@@ -984,6 +988,20 @@ static void test_e2e_synthetic() {
     CHECK(gr.size() == sr.size() && gi.size() == si.size(), "synthetic e2e output size matches scalar");
     CHECK(rr < 2e-3f && ri < 2e-3f, "synthetic denoiser ggml chunk_forward matches scalar");
     CHECK(omax > 1e-3f, "synthetic outputs are not all ~0 (mask not degenerate)");
+}
+
+static void test_gpu_e2e_synthetic() {
+    constexpr int gpu_layers = 1;
+    constexpr int vulkan_device = 0;
+    constexpr bool allow_arm_mali = true;
+    ggml_backend_t backend = tts_cpp::detail::init_gpu_backend(
+        gpu_layers, false, "lavasr-test", vulkan_device, allow_arm_mali);
+    if (!backend) {
+        std::printf("SKIP: LavaSR GPU parity requires an available GPU backend\n");
+        return;
+    }
+    ggml_backend_free(backend);
+    test_e2e_synthetic(gpu_layers);
 }
 
 // Always-on chunk-batch consistency on the synthetic model (style of test_batch).
@@ -1075,6 +1093,7 @@ int main(int argc, char ** argv) {
     test_dpgrnn();
     test_ctfa();
     test_e2e_synthetic();
+    test_gpu_e2e_synthetic();
     test_batch_synthetic();
     test_pipeline_batch_parity();
     if (argc > 1) { test_e2e(argv[1]); test_batch(argv[1]); }

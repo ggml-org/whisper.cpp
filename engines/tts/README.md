@@ -56,6 +56,9 @@ SoundEffect and Speech checkpoint smoke cases. Vulkan also covers the
 F16 TTS/TTSD/SoundEffect and BF16 Speech cases. TTS quality gates retain
 known upstream limitations; see the linked MOSS guide for details.
 
+LavaSR denoiser and enhancer GPU selection includes ARM Mali/Immortalis
+through Vulkan when GPU execution is requested.
+
 Supertonic 3, Parler-TTS mini, CosyVoice3 and Audio8 also support explicit
 Hexagon placement on Snapdragon; see their model guides for setup and validated
 tiers. Audio8's corrected baseline uses `q8_0` quantisation with
