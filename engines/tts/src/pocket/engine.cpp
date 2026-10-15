@@ -5,6 +5,7 @@
 #include "pocket/frontend.h"
 #include "pocket/generation.h"
 #include "pocket/reference_audio.h"
+#include "pocket/backend.h"
 #include "voice_features.h"
 #include <atomic>
 #include <chrono>
@@ -56,11 +57,13 @@ struct Engine::Impl {
     std::unique_ptr<detail::Mimi> mimi;
     std::unique_ptr<detail::Frontend> frontend;
     detail::VoiceState voice;
+    std::string device_name;
     std::atomic<bool> operating{false};
     std::atomic<bool> cancelled{false};
     std::condition_variable changed;
 
     explicit Impl(const EngineOptions & o) : opts(o) {
+        detail::backend_request(o.backend);
         if (o.output_sample_rate < 8000 || o.output_sample_rate > 192000) fail("output sample rate must be 8000..192000 Hz");
         if (o.steps < 1 || o.steps > 64 || !std::isfinite(o.temperature) || o.temperature < 0 || o.temperature > 10 ||
             !std::isfinite(o.noise_clamp) || o.noise_clamp < 0 || !std::isfinite(o.eos_threshold) ||
@@ -69,9 +72,12 @@ struct Engine::Impl {
         if (o.voice_path.empty() == o.reference_audio_path.empty()) fail("supply exactly one prepared voice or reference audio file");
         std::unique_ptr<detail::ReferenceAudio> reference;
         if (!o.reference_audio_path.empty()) reference.reset(new detail::ReferenceAudio(o.reference_audio_path));
+        auto backend = detail::select_backend(o.use_gpu, o.backend);
+        const auto device = ggml_backend_get_device(backend.get());
+        device_name = ggml_backend_dev_description(device);
         frontend.reset(new detail::Frontend(o.frontend_path));
-        lm.reset(new detail::FlowLM(o.flow_lm_path, o.context, o.n_threads));
-        mimi.reset(new detail::Mimi(o.mimi_path, o.n_threads));
+        lm.reset(new detail::FlowLM(o.flow_lm_path, o.context, o.n_threads, device));
+        mimi.reset(new detail::Mimi(o.mimi_path, o.n_threads, device));
         if (frontend->source_hash() != lm->source_hash() || mimi->source_hash() != lm->source_hash() ||
             frontend->vocab_size() != lm->config().vocab_size || lm->config().latent_dim != mimi->latent_dim()) fail("model artifacts do not belong to the same checkpoint");
         if (!o.voice_path.empty()) voice = lm->read_voice(o.voice_path);
@@ -211,6 +217,10 @@ struct Engine::Impl {
 Engine::Engine(const EngineOptions & options) : impl_(new Impl(options)) {}
 Engine::~Engine() = default;
 int Engine::sample_rate() const noexcept { return impl_->opts.output_sample_rate; }
+const char * Engine::backend_name() const noexcept { return flow_lm_backend_name(); }
+const char * Engine::flow_lm_backend_name() const noexcept { return impl_->lm->backend_name(); }
+const char * Engine::mimi_backend_name() const noexcept { return impl_->mimi->backend_name(); }
+const char * Engine::device_name() const noexcept { return impl_->device_name.c_str(); }
 std::string Engine::model_source_sha256() const { return impl_->lm->source_hash(); }
 void Engine::cancel() noexcept { impl_->cancelled.store(true); impl_->changed.notify_all(); }
 SynthesisResult Engine::synthesize_stream(const std::string & text, const AudioCallback & callback) { return impl_->generate(text, callback); }

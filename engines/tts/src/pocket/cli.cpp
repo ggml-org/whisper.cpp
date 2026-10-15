@@ -39,12 +39,12 @@ Arguments parse_arguments(int argc, char ** argv) {
     Arguments args;
     const std::set<std::string> accepted = {"--model-dir","--flow-lm","--mimi","--frontend","--voice","--reference-audio",
         "--text","--output","--threads","--steps","--temperature","--seed","--runs","--report","--context","--max-tokens",
-        "--frames-after-eos","--fit-budget-mib","--fit-margin-mib"};
+        "--frames-after-eos","--fit-budget-mib","--fit-margin-mib","--backend"};
     for (int i = 1; i < argc; ++i) {
         const std::string key = argv[i];
         if (key == "--help") { args.values[key] = "true"; return args; }
-        if (key == "--fit") {
-            if (args.has(key)) throw std::runtime_error("duplicate option: --fit");
+        if (key == "--fit" || key == "--gpu") {
+            if (args.has(key)) throw std::runtime_error("duplicate option: "+key);
             args.values[key] = "true"; continue;
         }
         if (!accepted.count(key) || i+1 == argc || args.has(key)) throw std::runtime_error("invalid or duplicate option: "+key);
@@ -56,14 +56,16 @@ void print_help() {
     std::puts("pocket-cli --model-dir DIR --text TEXT --output FILE.wav [--voice FILE.gguf | --reference-audio FILE.wav]\n"
               "           [--threads 1 --steps 1 --temperature 0.3 --seed 1234 --runs 1 --report FILE.json]\n"
               "           [--frames-after-eos -1] (-1 uses the checkpoint/text default; explicit range 0..100)\n"
+              "           [--gpu | --backend cpu|opencl] (CPU default; unavailable OpenCL is an error)\n"
               "DIR contains flow-lm.gguf, mimi.gguf, frontend.json, voice.gguf. Individual asset paths can override DIR.\n"
               "--runs greater than 1 includes one untimed warmup and records each warm run.\n"
-              "--fit estimates CPU memory without loading weights; optional --fit-budget-mib and --fit-margin-mib.\n"
+              "--fit estimates selected-backend memory without loading weights; optional --fit-budget-mib and --fit-margin-mib.\n"
               "Fit exit status: 0 fits, 1 does not fit, 2 measurement error.");
 }
 EngineOptions engine_options(const Arguments & args) {
     const auto dir = args.get("--model-dir", ".");
     EngineOptions opts;
+    opts.use_gpu = args.has("--gpu"); opts.backend = args.get("--backend", "");
     opts.flow_lm_path = args.get("--flow-lm", dir+"/flow-lm.gguf");
     opts.mimi_path = args.get("--mimi", dir+"/mimi.gguf");
     opts.frontend_path = args.get("--frontend", dir+"/frontend.json");
@@ -93,6 +95,8 @@ int run_fit(const Arguments & args, const EngineOptions & opts, const std::strin
     std::puts(result.report.c_str());
     write_report(args.get("--report", ""), {
         {"status", int(result.status)}, {"fits", result.fits}, {"reason", result.reason},
+        {"backend", result.device_name}, {"device_is_cpu", result.device_is_cpu},
+        {"device_shares_host_memory", result.device_shares_host_memory},
         {"weights_bytes", result.device.weights_bytes}, {"state_bytes", result.device.state_bytes},
         {"lm_compute_bytes", result.device.lm_compute_bytes}, {"codec_compute_bytes", result.device.codec_compute_bytes},
         {"device_bytes", result.device.total_bytes}, {"host_bytes", result.host_bytes},
@@ -137,10 +141,13 @@ int run_synthesis(const Arguments & args, const EngineOptions & opts, const std:
     if (runs < 1 || runs > 100) throw std::runtime_error("runs must be 1..100");
     const auto start = Clock::now(); Engine engine(opts);
     const double load = seconds_since(start);
+    std::fprintf(stderr, "Pocket FlowLM: %s; Mimi: %s; device: %s\n", engine.flow_lm_backend_name(), engine.mimi_backend_name(), engine.device_name());
     if (runs > 1) engine.synthesize("A short warm up.");
     const auto measurements = benchmark_runs(engine, text, args.get("--output", "pocket-output.wav"), runs);
     write_report(args.get("--report", ""), {
         {"implementation","Fabric native ggml"},{"backend",engine.backend_name()},
+        {"flow_lm_backend",engine.flow_lm_backend_name()},{"mimi_backend",engine.mimi_backend_name()},
+        {"device",engine.device_name()},
         {"threads_per_worker",opts.n_threads},{"worker_threads",2},{"steps",opts.steps},{"temperature",opts.temperature},
         {"frames_after_eos",opts.frames_after_eos},
         {"seed",opts.seed},{"text",text},{"load_seconds",load},{"warmups",runs>1?1:0},{"runs",measurements},

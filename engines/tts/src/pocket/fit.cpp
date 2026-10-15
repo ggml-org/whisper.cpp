@@ -6,6 +6,8 @@
 #include "fit_util.h"
 #include "backend_selection.h"
 #include "pocket/reference_audio.h"
+#include "pocket/backend.h"
+#include "pocket/ggml_utils.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -74,6 +76,7 @@ bool available_memory(uint64_t & available, uint64_t & total) {
 }
 void validate(const FitOptions & o) {
     const auto & e = o.engine;
+    detail::backend_request(e.backend);
     if (o.text.empty() || o.text.size() > 65536 || e.context < 1 || e.context > 8192 ||
         e.n_threads < 1 || e.n_threads > 1024 || e.output_sample_rate < 8000 || e.output_sample_rate > 192000 ||
         e.steps < 1 || e.steps > 64 || !std::isfinite(e.temperature) || e.temperature < 0 || e.temperature > 10 ||
@@ -85,10 +88,21 @@ void validate(const FitOptions & o) {
 }
 FitResult fit_params(const FitOptions & o) {
     FitResult r; r.model_variant = "pocket-tts";
-    r.device_name = "CPU"; r.device_is_cpu = r.device_shares_host_memory = true;
     try {
         validate(o);
         const auto & e = o.engine;
+        // Snapshot before backend initialization and metadata/container loads:
+        // all of those allocations are charged in the projection below.
+        uint64_t host_free = 0, host_total = 0;
+        if (!available_memory(host_free, host_total)) {
+            r.reason = "memory-unavailable"; r.report = "Cannot determine currently available system memory"; return r;
+        }
+        auto backend = detail::select_backend(e.use_gpu, e.backend);
+        const auto device = ggml_backend_get_device(backend.get());
+        r.device_name = ggml_backend_name(backend.get());
+        r.device_is_cpu = ::tts_cpp::detail::backend_is_cpu(backend.get());
+        r.device_shares_host_memory = detail::shares_host_memory(backend.get());
+        if (!r.device_is_cpu) r.device_name += std::string(" (") + ggml_backend_dev_description(device) + ')';
         detail::Frontend frontend(e.frontend_path);
         const auto chunks = frontend.split(o.text, e.max_tokens);
         if (chunks.empty()) throw std::invalid_argument("no text chunks");
@@ -105,7 +119,7 @@ FitResult fit_params(const FitOptions & o) {
             prefill = std::max(prefill, int(tokens));
             shapes.push_back({tokens, count}); frames = sat_add(frames, count);
         }
-        auto flow = detail::FlowLM::measure(e.flow_lm_path, e.context, prefill, e.n_threads);
+        auto flow = detail::FlowLM::measure(e.flow_lm_path, e.context, prefill, e.n_threads, device);
         const bool reference = !e.reference_audio_path.empty();
         uint64_t reference_host = 0;
         int voice_frames;
@@ -118,19 +132,21 @@ FitResult fit_params(const FitOptions & o) {
             voice_frames = int((samples+detail::Mimi::frame_samples()-1)/detail::Mimi::frame_samples()) + int(flow.config.bos_before_voice);
             reference_host = sat_add(sat_mul(file_bytes, 8), sat_mul(30ull*192000+samples, 8));
             if (voice_frames > prefill && voice_frames < e.context)
-                flow = detail::FlowLM::measure(e.flow_lm_path, e.context, voice_frames, e.n_threads);
+                flow = detail::FlowLM::measure(e.flow_lm_path, e.context, voice_frames, e.n_threads, device);
         } else {
             voice_frames = detail::FlowLM::measure_voice(e.voice_path, flow, e.context);
         }
         for (const auto & shape : shapes) if (voice_frames + shape.first + shape.second > size_t(e.context)) {
             r.reason = "workload-too-large"; r.report = "Voice, text and maximum audio frames exceed context capacity"; return r;
         }
-        const auto codec = detail::Mimi::measure(e.mimi_path, e.n_threads, reference);
+        const auto codec = detail::Mimi::measure(e.mimi_path, e.n_threads, reference, device);
         if (flow.source_hash != frontend.source_hash() || flow.source_hash != codec.source_hash ||
             flow.config.vocab_size != frontend.vocab_size() || flow.config.latent_dim != detail::Mimi::latent_dim())
             throw std::invalid_argument("Pocket artifacts do not belong to the same checkpoint");
         r.device.weights_bytes = sat_add(flow.weights, codec.weights);
         r.device.state_bytes = sat_add(flow.state, codec.state);
+        const auto backend_scratch = r.device_is_cpu ? uint64_t(0) : detail::opencl_scratch_bound(flow.opencl_scratch, codec.opencl_scratch);
+        r.device.state_bytes = sat_add(r.device.state_bytes, backend_scratch);
         r.device.lm_compute_bytes = flow.compute;
         r.device.codec_compute_bytes = codec.compute;
         r.device.total_bytes = sat_add(sat_add(r.device.weights_bytes, r.device.state_bytes), sat_add(flow.compute, codec.compute));
@@ -141,6 +157,7 @@ FitResult fit_params(const FitOptions & o) {
         // Conservative STL/allocator bookkeeping and CPU thread stack bounds.
         persistent_host = sat_add(persistent_host, sat_mul(8*mib, 2ull*e.n_threads+2));
         auto runtime_host = sat_mul(sat_add(flow.graph_metadata, codec.graph_metadata), 2);
+        runtime_host = sat_add(runtime_host, flow.host_compute);
         runtime_host = sat_add(runtime_host, sat_mul(uint64_t(prefill)*flow.config.dim, 16));
         runtime_host = sat_add(runtime_host, sat_mul(o.text.size()+1, 64));
         runtime_host = sat_add(runtime_host, 2*mib); // codec mask, latent queue, chunk copies
@@ -152,24 +169,48 @@ FitResult fit_params(const FitOptions & o) {
         auto load_host = sat_add(std::max(flow.load_staging, codec.load_staging), reference_host);
         load_host = sat_add(load_host, sat_mul(std::filesystem::file_size(e.frontend_path), 64));
         r.host_bytes = sat_add(persistent_host, std::max(runtime_host, load_host));
-        if (!available_memory(r.device_free_bytes, r.device_total_bytes)) {
-            r.reason = "memory-unavailable"; r.report = "Cannot determine currently available system memory"; return r;
+        if (r.device_is_cpu) {
+            r.device_free_bytes = host_free; r.device_total_bytes = host_total;
+        } else {
+            size_t free = 0, total = 0;
+            ::tts_cpp::detail::backend_memory(backend.get(), free, total);
+            if (!total || free > total) {
+                r.reason = "memory-unavailable"; r.report = "Cannot determine OpenCL device memory"; return r;
+            }
+            r.device_free_bytes = free; r.device_total_bytes = total;
+            if (r.device_shares_host_memory) {
+                r.device_free_bytes = std::min(r.device_free_bytes, host_free);
+                r.device_total_bytes = std::min(r.device_total_bytes, host_total);
+            }
         }
-        if (o.memory_budget_bytes) r.device_free_bytes = std::min(r.device_free_bytes, o.memory_budget_bytes);
-        const auto required = sat_add(sat_add(r.device.total_bytes, r.host_bytes), o.margin_bytes);
-        r.fits = required <= r.device_free_bytes;
+        if (o.memory_budget_bytes) {
+            r.device_free_bytes = std::min(r.device_free_bytes, o.memory_budget_bytes);
+            host_free = std::min(host_free, o.memory_budget_bytes);
+        }
+        const auto required = sat_add(sat_add(r.device.total_bytes,
+            r.device_shares_host_memory ? r.host_bytes : 0), o.margin_bytes);
+        const auto host_required = sat_add(r.host_bytes, o.margin_bytes);
+        r.fits = required <= r.device_free_bytes && (r.device_shares_host_memory || host_required <= host_free);
         r.status = r.fits ? FitStatus::Success : FitStatus::Failure;
         r.reason = r.fits ? "fits" : "does-not-fit";
         std::ostringstream report;
-        report << "Pocket CPU memory preflight (bytes)\nweights: " << r.device.weights_bytes
+        report << "Pocket " << r.device_name << " memory preflight (bytes)\nweights: " << r.device.weights_bytes
                << "\nstate: " << r.device.state_bytes << "\nFlowLM compute: " << flow.compute
                << "\nMimi compute: " << codec.compute << "\nhost extras: " << r.host_bytes
                << "\nmargin: " << o.margin_bytes << "\nrequired: " << required
                << "\navailable/budget: " << r.device_free_bytes << "\nmaximum audio frames: " << frames
+               << "\nshared host memory: " << (r.device_shares_host_memory ? "yes" : "no")
+               << "\nhost required/available: " << host_required << '/' << host_free
                << "\nresult: " << r.reason << '\n';
+        if (!r.device_is_cpu)
+            report << "OpenCL shared backend scratch bound (included in state): " << backend_scratch
+                   << "\nConservative F32 backend scratch bound for reviewed ggml-speech; includes backend init and pool growth."
+                   << "\nOpenCL available memory is a driver estimate/cap, limited by OS RAM on Adreno.\n";
         r.report = report.str();
     } catch (const std::invalid_argument & error) {
         r.reason = "invalid-arguments"; r.report = error.what();
+    } catch (const detail::BackendUnavailable & error) {
+        r.reason = "no-backend-device"; r.report = error.what();
     } catch (const std::exception & error) {
         r.reason = "measurement-failed"; r.report = error.what();
     } catch (...) { r.reason = "measurement-failed"; r.report = "Unknown Pocket preflight failure"; }

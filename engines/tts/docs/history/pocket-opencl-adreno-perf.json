@@ -1,0 +1,917 @@
+{
+  "date_utc": "2026-10-15",
+  "fabric_commit": "cb4af72848414912f6e39e9be5fb307ac2618b30",
+  "ggml_commit": "06f1b66806626a635904f31db6914ad2d0e71197",
+  "method": "CPU/OpenCL/OpenCL/CPU blocks per prompt; each block has one untimed warmup and five measured requests",
+  "threads_per_worker": 2,
+  "steps": 1,
+  "temperature": 0.3,
+  "seed": 1234,
+  "controlled_frequencies": false,
+  "device": [
+    "OnePlus/CPH2723IN/OP612BL1:16/AP3A.240617.008/V.R4T3.49a8f70-2488592-24a9018:user/release-keys",
+    "SM8750"
+  ],
+  "asset_and_cli_sha256": [
+    "082637df634b40dd81b1d78add4df54a43041230bcfd7ea0d5d1cc6934c60d56  pocket-cli",
+    "11ed51882574fc1b929990a873924b733d6f6b6aeee9ddd89cab5e4e5db5a839  bundle/flow-lm.gguf",
+    "fa9f5d0e6b6b7b160d13f302a196b183d192ef0c0b78186a203843254c775892  bundle/mimi.gguf",
+    "e7a6d9fb89c295417cc406850c2cb6e0f07fdc790559d75654521c38c7296cf9  bundle/voice.gguf"
+  ],
+  "rows": [
+    {
+      "prompt": "reminder",
+      "text": "Hello Alok. Your meeting starts in ten minutes.",
+      "backend": "cpu",
+      "measured_requests": 10,
+      "synthesis_seconds": {
+        "median": 1.112666484,
+        "minimum": 1.029477708,
+        "maximum": 1.179929687,
+        "p10": 1.0550427704999998,
+        "p90": 1.1741342963
+      },
+      "first_audio_ms": {
+        "median": 152.26734400000004,
+        "minimum": 137.310208,
+        "maximum": 160.73932299999998,
+        "p10": 149.5973644,
+        "p90": 156.7450573
+      },
+      "rtf": {
+        "median": 0.36600871184210526,
+        "minimum": 0.3386439828947368,
+        "maximum": 0.38813476546052633,
+        "p10": 0.3470535429276315,
+        "p90": 0.3862283869407895
+      },
+      "audio_seconds": {
+        "median": 3.04,
+        "minimum": 3.04,
+        "maximum": 3.04,
+        "p10": 3.04,
+        "p90": 3.04
+      },
+      "cached_load_seconds": {
+        "median": 0.5719160679999999,
+        "minimum": 0.545206459,
+        "maximum": 0.598625677,
+        "p10": 0.5505483808,
+        "p90": 0.5932837552
+      },
+      "peak_rss_mib": 520.52734375,
+      "battery_temperature_c": {
+        "minimum": 35.6,
+        "maximum": 35.6
+      }
+    },
+    {
+      "prompt": "reminder",
+      "text": "Hello Alok. Your meeting starts in ten minutes.",
+      "backend": "opencl",
+      "measured_requests": 10,
+      "synthesis_seconds": {
+        "median": 1.033226953,
+        "minimum": 0.97059276,
+        "maximum": 1.07171625,
+        "p10": 0.9720290106,
+        "p90": 1.0524262962000002
+      },
+      "first_audio_ms": {
+        "median": 68.0022915,
+        "minimum": 63.452813,
+        "maximum": 74.52640600000001,
+        "p10": 64.6091258,
+        "p90": 71.6139214
+      },
+      "rtf": {
+        "median": 0.3398772871710526,
+        "minimum": 0.31927393421052636,
+        "maximum": 0.3525382401315789,
+        "p10": 0.31974638506578945,
+        "p90": 0.34619286059210524
+      },
+      "audio_seconds": {
+        "median": 3.04,
+        "minimum": 3.04,
+        "maximum": 3.04,
+        "p10": 3.04,
+        "p90": 3.04
+      },
+      "cached_load_seconds": {
+        "median": 0.6824661715,
+        "minimum": 0.658733437,
+        "maximum": 0.706198906,
+        "p10": 0.6634799839,
+        "p90": 0.7014523591
+      },
+      "peak_rss_mib": 485.87890625,
+      "battery_temperature_c": {
+        "minimum": 35.6,
+        "maximum": 35.6
+      }
+    },
+    {
+      "prompt": "news",
+      "text": "The research team announced a new speech model today. It can generate natural English speech directly on your phone.",
+      "backend": "cpu",
+      "measured_requests": 10,
+      "synthesis_seconds": {
+        "median": 2.3678911444999997,
+        "minimum": 2.299746614,
+        "maximum": 2.407329218,
+        "p10": 2.3190588329,
+        "p90": 2.3917812491
+      },
+      "first_audio_ms": {
+        "median": 254.983021,
+        "minimum": 252.54968700000003,
+        "maximum": 280.93364599999995,
+        "p10": 252.8447187,
+        "p90": 277.00514599999997
+      },
+      "rtf": {
+        "median": 0.38439791306818183,
+        "minimum": 0.3733354892857143,
+        "maximum": 0.39080019772727276,
+        "p10": 0.3764705897564935,
+        "p90": 0.38827617680194804
+      },
+      "audio_seconds": {
+        "median": 6.16,
+        "minimum": 6.16,
+        "maximum": 6.16,
+        "p10": 6.16,
+        "p90": 6.16
+      },
+      "cached_load_seconds": {
+        "median": 0.7026882544999999,
+        "minimum": 0.587411406,
+        "maximum": 0.817965103,
+        "p10": 0.6104667757,
+        "p90": 0.7949097333
+      },
+      "peak_rss_mib": 524.296875,
+      "battery_temperature_c": {
+        "minimum": 35.4,
+        "maximum": 35.6
+      }
+    },
+    {
+      "prompt": "news",
+      "text": "The research team announced a new speech model today. It can generate natural English speech directly on your phone.",
+      "backend": "opencl",
+      "measured_requests": 10,
+      "synthesis_seconds": {
+        "median": 1.9214901035,
+        "minimum": 1.546054999,
+        "maximum": 2.407699218,
+        "p10": 1.5839637028,
+        "p90": 2.1481651866
+      },
+      "first_audio_ms": {
+        "median": 63.440104000000005,
+        "minimum": 57.083072,
+        "maximum": 76.72156199999999,
+        "p10": 57.2853857,
+        "p90": 75.9177495
+      },
+      "rtf": {
+        "median": 0.31193021160714285,
+        "minimum": 0.2509829543831169,
+        "maximum": 0.39086026266233764,
+        "p10": 0.2571369647402597,
+        "p90": 0.3487281147077922
+      },
+      "audio_seconds": {
+        "median": 6.16,
+        "minimum": 6.16,
+        "maximum": 6.16,
+        "p10": 6.16,
+        "p90": 6.16
+      },
+      "cached_load_seconds": {
+        "median": 0.6931015105,
+        "minimum": 0.603157969,
+        "maximum": 0.783045052,
+        "p10": 0.6211466773,
+        "p90": 0.7650563437
+      },
+      "peak_rss_mib": 484.76171875,
+      "battery_temperature_c": {
+        "minimum": 35.4,
+        "maximum": 35.4
+      }
+    },
+    {
+      "prompt": "paragraph",
+      "text": "Good morning. Here is your schedule for today. The engineering meeting begins at ten, followed by lunch with the team at noon. In the afternoon, we will review the latest results and plan the next release. Please bring your notes and leave enough time to travel between meetings.",
+      "backend": "cpu",
+      "measured_requests": 10,
+      "synthesis_seconds": {
+        "median": 5.147019632999999,
+        "minimum": 3.667254686,
+        "maximum": 10.154465309,
+        "p10": 4.171919561,
+        "p90": 9.6613353866
+      },
+      "first_audio_ms": {
+        "median": 314.78429700000004,
+        "minimum": 183.85494799999998,
+        "maximum": 561.551927,
+        "p10": 199.769666,
+        "p90": 527.1030671000001
+      },
+      "rtf": {
+        "median": 0.3655553716619318,
+        "minimum": 0.2604584294034091,
+        "maximum": 0.7211978202414773,
+        "p10": 0.2963011051846591,
+        "p90": 0.6861743882528408
+      },
+      "audio_seconds": {
+        "median": 14.08,
+        "minimum": 14.08,
+        "maximum": 14.08,
+        "p10": 14.08,
+        "p90": 14.08
+      },
+      "cached_load_seconds": {
+        "median": 0.49924921899999997,
+        "minimum": 0.4557275,
+        "maximum": 0.542770938,
+        "p10": 0.4644318438,
+        "p90": 0.5340665942
+      },
+      "peak_rss_mib": 519.91015625,
+      "battery_temperature_c": {
+        "minimum": 35.4,
+        "maximum": 37.0
+      }
+    },
+    {
+      "prompt": "paragraph",
+      "text": "Good morning. Here is your schedule for today. The engineering meeting begins at ten, followed by lunch with the team at noon. In the afternoon, we will review the latest results and plan the next release. Please bring your notes and leave enough time to travel between meetings.",
+      "backend": "opencl",
+      "measured_requests": 10,
+      "synthesis_seconds": {
+        "median": 4.0835883840000005,
+        "minimum": 3.449754062,
+        "maximum": 5.172856456,
+        "p10": 3.6150090614,
+        "p90": 4.8817598467
+      },
+      "first_audio_ms": {
+        "median": 64.43265650000001,
+        "minimum": 56.867187,
+        "maximum": 262.881093,
+        "p10": 57.2666565,
+        "p90": 225.3225
+      },
+      "rtf": {
+        "median": 0.2900275840909091,
+        "minimum": 0.24501094190340908,
+        "maximum": 0.36739037329545454,
+        "p10": 0.25674780265625,
+        "p90": 0.346715898203125
+      },
+      "audio_seconds": {
+        "median": 14.08,
+        "minimum": 14.08,
+        "maximum": 14.08,
+        "p10": 14.08,
+        "p90": 14.08
+      },
+      "cached_load_seconds": {
+        "median": 0.913860521,
+        "minimum": 0.609634636,
+        "maximum": 1.218086406,
+        "p10": 0.670479813,
+        "p90": 1.157241229
+      },
+      "peak_rss_mib": 480.328125,
+      "battery_temperature_c": {
+        "minimum": 36.0,
+        "maximum": 36.4
+      }
+    }
+  ],
+  "raw_blocks": [
+    {
+      "label": "reminder-cpu-a",
+      "load_seconds": 0.545206459,
+      "backend": "CPU",
+      "flow_lm_backend": "CPU",
+      "mimi_backend": "CPU",
+      "warmups": 1,
+      "runs": [
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.137310208,
+          "real_time_factor": 0.3386439828947368,
+          "seconds": 1.029477708
+        },
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.153680417,
+          "real_time_factor": 0.34904255756578945,
+          "seconds": 1.061089375
+        },
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.151814948,
+          "real_time_factor": 0.35107205986842105,
+          "seconds": 1.067259062
+        },
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.152517552,
+          "real_time_factor": 0.34798793848684206,
+          "seconds": 1.057883333
+        },
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.15630125,
+          "real_time_factor": 0.35013013947368427,
+          "seconds": 1.064395624
+        }
+      ],
+      "peak_rss_kib": 531928
+    },
+    {
+      "label": "reminder-cpu-b",
+      "load_seconds": 0.598625677,
+      "backend": "CPU",
+      "flow_lm_backend": "CPU",
+      "mimi_backend": "CPU",
+      "warmups": 1,
+      "runs": [
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.152240312,
+          "real_time_factor": 0.38601656710526316,
+          "seconds": 1.173490364
+        },
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.160739323,
+          "real_time_factor": 0.38813476546052633,
+          "seconds": 1.179929687
+        },
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.152269532,
+          "real_time_factor": 0.38537299539473685,
+          "seconds": 1.171533906
+        },
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.150962604,
+          "real_time_factor": 0.3809453638157895,
+          "seconds": 1.158073906
+        },
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.152265156,
+          "real_time_factor": 0.3833179825657895,
+          "seconds": 1.165286667
+        }
+      ],
+      "peak_rss_kib": 533020
+    },
+    {
+      "label": "reminder-opencl-a",
+      "load_seconds": 0.706198906,
+      "backend": "OpenCL",
+      "flow_lm_backend": "OpenCL",
+      "mimi_backend": "OpenCL",
+      "warmups": 1,
+      "runs": [
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.064737605,
+          "real_time_factor": 0.31979887960526315,
+          "seconds": 0.972188594
+        },
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.067453906,
+          "real_time_factor": 0.31927393421052636,
+          "seconds": 0.97059276
+        },
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.067340729,
+          "real_time_factor": 0.33793832236842103,
+          "seconds": 1.0273325
+        },
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.068079583,
+          "real_time_factor": 0.32932555493421056,
+          "seconds": 1.001149687
+        },
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.069882708,
+          "real_time_factor": 0.3344968644736842,
+          "seconds": 1.016870468
+        }
+      ],
+      "peak_rss_kib": 497540
+    },
+    {
+      "label": "reminder-opencl-b",
+      "load_seconds": 0.658733437,
+      "backend": "OpenCL",
+      "flow_lm_backend": "OpenCL",
+      "mimi_backend": "OpenCL",
+      "warmups": 1,
+      "runs": [
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.074526406,
+          "real_time_factor": 0.3431135894736842,
+          "seconds": 1.043065312
+        },
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.063452813,
+          "real_time_factor": 0.3525382401315789,
+          "seconds": 1.07171625
+        },
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.071290312,
+          "real_time_factor": 0.34548781842105264,
+          "seconds": 1.050282968
+        },
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.067925,
+          "real_time_factor": 0.34213461118421057,
+          "seconds": 1.040089218
+        },
+        {
+          "audio_seconds": 3.04,
+          "first_audio_seconds": 0.07036401,
+          "real_time_factor": 0.3418162519736842,
+          "seconds": 1.039121406
+        }
+      ],
+      "peak_rss_kib": 496936
+    },
+    {
+      "label": "news-cpu-a",
+      "load_seconds": 0.587411406,
+      "backend": "CPU",
+      "flow_lm_backend": "CPU",
+      "mimi_backend": "CPU",
+      "warmups": 1,
+      "runs": [
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.255270834,
+          "real_time_factor": 0.3836068637987013,
+          "seconds": 2.363018281
+        },
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.2528775,
+          "real_time_factor": 0.38544329155844154,
+          "seconds": 2.374330676
+        },
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.258223958,
+          "real_time_factor": 0.38444216704545453,
+          "seconds": 2.368163749
+        },
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.252549687,
+          "real_time_factor": 0.38435365909090907,
+          "seconds": 2.36761854
+        },
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.253534219,
+          "real_time_factor": 0.38337171087662336,
+          "seconds": 2.361569739
+        }
+      ],
+      "peak_rss_kib": 536880
+    },
+    {
+      "label": "news-cpu-b",
+      "load_seconds": 0.817965103,
+      "backend": "CPU",
+      "flow_lm_backend": "CPU",
+      "mimi_backend": "CPU",
+      "warmups": 1,
+      "runs": [
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.254087344,
+          "real_time_factor": 0.3733354892857143,
+          "seconds": 2.299746614
+        },
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.254695208,
+          "real_time_factor": 0.37681893425324675,
+          "seconds": 2.321204635
+        },
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.270661823,
+          "real_time_factor": 0.3874156857142857,
+          "seconds": 2.386480624
+        },
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.276568646,
+          "real_time_factor": 0.3879957300324675,
+          "seconds": 2.390053697
+        },
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.280933646,
+          "real_time_factor": 0.39080019772727276,
+          "seconds": 2.407329218
+        }
+      ],
+      "peak_rss_kib": 529324
+    },
+    {
+      "label": "news-opencl-a",
+      "load_seconds": 0.603157969,
+      "backend": "OpenCL",
+      "flow_lm_backend": "OpenCL",
+      "mimi_backend": "OpenCL",
+      "warmups": 1,
+      "runs": [
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.075828437,
+          "real_time_factor": 0.3440467649350649,
+          "seconds": 2.119328072
+        },
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.076721562,
+          "real_time_factor": 0.3388136412337662,
+          "seconds": 2.08709203
+        },
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.072860417,
+          "real_time_factor": 0.39086026266233764,
+          "seconds": 2.407699218
+        },
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.064099687,
+          "real_time_factor": 0.32045249074675325,
+          "seconds": 1.973987343
+        },
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.066349688,
+          "real_time_factor": 0.2592541175324675,
+          "seconds": 1.597005364
+        }
+      ],
+      "peak_rss_kib": 496396
+    },
+    {
+      "label": "news-opencl-b",
+      "load_seconds": 0.783045052,
+      "backend": "OpenCL",
+      "flow_lm_backend": "OpenCL",
+      "mimi_backend": "OpenCL",
+      "warmups": 1,
+      "runs": [
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.060797812,
+          "real_time_factor": 0.2578207436688311,
+          "seconds": 1.588175781
+        },
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.060409948,
+          "real_time_factor": 0.2509829543831169,
+          "seconds": 1.546054999
+        },
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.057083072,
+          "real_time_factor": 0.2725369569805195,
+          "seconds": 1.678827655
+        },
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.062780521,
+          "real_time_factor": 0.3161582368506493,
+          "seconds": 1.947534739
+        },
+        {
+          "audio_seconds": 6.16,
+          "first_audio_seconds": 0.057307865,
+          "real_time_factor": 0.30770218636363633,
+          "seconds": 1.895445468
+        }
+      ],
+      "peak_rss_kib": 491348
+    },
+    {
+      "label": "paragraph-cpu-a",
+      "load_seconds": 0.4557275,
+      "backend": "CPU",
+      "flow_lm_backend": "CPU",
+      "mimi_backend": "CPU",
+      "warmups": 1,
+      "runs": [
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.219972239,
+          "real_time_factor": 0.36627874552556816,
+          "seconds": 5.157204737
+        },
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.291702083,
+          "real_time_factor": 0.3249945140625,
+          "seconds": 4.575922758
+        },
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.293761406,
+          "real_time_factor": 0.36483199779829545,
+          "seconds": 5.136834529
+        },
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.339976302,
+          "real_time_factor": 0.40853859623579547,
+          "seconds": 5.752223435
+        },
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.335807188,
+          "real_time_factor": 0.3002836247159091,
+          "seconds": 4.227993436
+        }
+      ],
+      "peak_rss_kib": 532388
+    },
+    {
+      "label": "paragraph-cpu-b",
+      "load_seconds": 0.542770938,
+      "backend": "CPU",
+      "flow_lm_backend": "CPU",
+      "mimi_backend": "CPU",
+      "warmups": 1,
+      "runs": [
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.183854948,
+          "real_time_factor": 0.2604584294034091,
+          "seconds": 3.667254686
+        },
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.201537968,
+          "real_time_factor": 0.3592553154119318,
+          "seconds": 5.058314841
+        },
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.340210677,
+          "real_time_factor": 0.6371104105113636,
+          "seconds": 8.97051458
+        },
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.523275416,
+          "real_time_factor": 0.7211978202414773,
+          "seconds": 10.154465309
+        },
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.561551927,
+          "real_time_factor": 0.6822828958096591,
+          "seconds": 9.606543173
+        }
+      ],
+      "peak_rss_kib": 530772
+    },
+    {
+      "label": "paragraph-opencl-a",
+      "load_seconds": 1.218086406,
+      "backend": "OpenCL",
+      "flow_lm_backend": "OpenCL",
+      "mimi_backend": "OpenCL",
+      "warmups": 1,
+      "runs": [
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.05766625,
+          "real_time_factor": 0.2897203367897727,
+          "seconds": 4.079262342
+        },
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.262881093,
+          "real_time_factor": 0.3444187343039773,
+          "seconds": 4.849415779
+        },
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.073992969,
+          "real_time_factor": 0.32779103032670454,
+          "seconds": 4.615297707
+        },
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.067616875,
+          "real_time_factor": 0.27033834183238636,
+          "seconds": 3.806363853
+        },
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.058511407,
+          "real_time_factor": 0.24501094190340908,
+          "seconds": 3.449754062
+        }
+      ],
+      "peak_rss_kib": 491856
+    },
+    {
+      "label": "paragraph-opencl-b",
+      "load_seconds": 0.609634636,
+      "backend": "OpenCL",
+      "flow_lm_backend": "OpenCL",
+      "mimi_backend": "OpenCL",
+      "warmups": 1,
+      "runs": [
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.057311042,
+          "real_time_factor": 0.25805189829545455,
+          "seconds": 3.633370728
+        },
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.061248438,
+          "real_time_factor": 0.2984474134943182,
+          "seconds": 4.202139582
+        },
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.221149323,
+          "real_time_factor": 0.29033483139204547,
+          "seconds": 4.087914426
+        },
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.056867187,
+          "real_time_factor": 0.36739037329545454,
+          "seconds": 5.172856456
+        },
+        {
+          "audio_seconds": 14.08,
+          "first_audio_seconds": 0.069308281,
+          "real_time_factor": 0.25980712876420453,
+          "seconds": 3.658084373
+        }
+      ],
+      "peak_rss_kib": 491124
+    }
+  ],
+  "pcm_checks": [
+    {
+      "label": "reminder-cpu-a",
+      "sample_rate": 24000,
+      "samples": 72960,
+      "peak": 0.5211202502250671,
+      "clipping_fraction": 0.0
+    },
+    {
+      "label": "reminder-cpu-b",
+      "sample_rate": 24000,
+      "samples": 72960,
+      "peak": 0.5211202502250671,
+      "clipping_fraction": 0.0
+    },
+    {
+      "label": "reminder-opencl-a",
+      "sample_rate": 24000,
+      "samples": 72960,
+      "peak": 0.5211288928985596,
+      "clipping_fraction": 0.0
+    },
+    {
+      "label": "reminder-opencl-b",
+      "sample_rate": 24000,
+      "samples": 72960,
+      "peak": 0.5211288928985596,
+      "clipping_fraction": 0.0
+    },
+    {
+      "label": "news-cpu-a",
+      "sample_rate": 24000,
+      "samples": 147840,
+      "peak": 0.608753502368927,
+      "clipping_fraction": 0.0
+    },
+    {
+      "label": "news-cpu-b",
+      "sample_rate": 24000,
+      "samples": 147840,
+      "peak": 0.608753502368927,
+      "clipping_fraction": 0.0
+    },
+    {
+      "label": "news-opencl-a",
+      "sample_rate": 24000,
+      "samples": 147840,
+      "peak": 0.6087534427642822,
+      "clipping_fraction": 0.0
+    },
+    {
+      "label": "news-opencl-b",
+      "sample_rate": 24000,
+      "samples": 147840,
+      "peak": 0.6087534427642822,
+      "clipping_fraction": 0.0
+    },
+    {
+      "label": "paragraph-cpu-a",
+      "sample_rate": 24000,
+      "samples": 337920,
+      "peak": 0.6968880891799927,
+      "clipping_fraction": 0.0
+    },
+    {
+      "label": "paragraph-cpu-b",
+      "sample_rate": 24000,
+      "samples": 337920,
+      "peak": 0.6968880891799927,
+      "clipping_fraction": 0.0
+    },
+    {
+      "label": "paragraph-opencl-a",
+      "sample_rate": 24000,
+      "samples": 337920,
+      "peak": 0.6968871355056763,
+      "clipping_fraction": 0.0
+    },
+    {
+      "label": "paragraph-opencl-b",
+      "sample_rate": 24000,
+      "samples": 337920,
+      "peak": 0.6968871355056763,
+      "clipping_fraction": 0.0
+    }
+  ],
+  "comparisons": [
+    {
+      "prompt": "reminder",
+      "opencl_throughput_relative_to_cpu": 1.076884880683131,
+      "opencl_times_realtime": 2.9422383835161146,
+      "cpu_times_realtime": 2.73217540360459
+    },
+    {
+      "prompt": "news",
+      "opencl_throughput_relative_to_cpu": 1.232320239478142,
+      "opencl_times_realtime": 3.205845290995536,
+      "cpu_times_realtime": 2.6014709393664863
+    },
+    {
+      "prompt": "paragraph",
+      "opencl_throughput_relative_to_cpu": 1.260415876675194,
+      "opencl_times_realtime": 3.447947901695275,
+      "cpu_times_realtime": 2.735563686162454
+    }
+  ],
+  "paragraph_asr": {
+    "model": "Whisper base.en",
+    "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+    "cases": [
+      {
+        "backend": "cpu",
+        "transcript": "Good morning. Here is your schedule for today. The engineering meeting begins at 10, followed by lunch with the team at noon. In the afternoon, we will review the latest results and plan the next release. Please bring your notes and leave enough time to travel between meetings.",
+        "reference": "Good morning. Here is your schedule for today. The engineering meeting begins at ten, followed by lunch with the team at noon. In the afternoon, we will review the latest results and plan the next release. Please bring your notes and leave enough time to travel between meetings.",
+        "word_error_rate": 0.020833333333333332
+      },
+      {
+        "backend": "opencl",
+        "transcript": "Good morning. Here is your schedule for today. The engineering meeting begins at 10, followed by lunch with the team at noon. In the afternoon, we will review the latest results and plan the next release. Please bring your notes and leave enough time to travel between meetings.",
+        "reference": "Good morning. Here is your schedule for today. The engineering meeting begins at ten, followed by lunch with the team at noon. In the afternoon, we will review the latest results and plan the next release. Please bring your notes and leave enough time to travel between meetings.",
+        "word_error_rate": 0.020833333333333332
+      }
+    ]
+  }
+}

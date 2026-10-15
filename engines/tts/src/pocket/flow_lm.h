@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+struct ggml_backend_device;
+
 namespace tts_cpp::pocket::detail {
 
 struct FlowConfig {
@@ -34,24 +36,26 @@ struct VoiceState {
     std::vector<std::vector<float>> keys, values;
 };
 
-// One instance owns weights, CPU backend, and a bounded linear KV cache.
+// One instance owns weights, its backend, and a bounded linear KV cache.
 // Calls must be serialized by the caller. reset() starts an independent
 // utterance; prefill and advance check capacity before changing the cache.
 class FlowLM {
 public:
-    explicit FlowLM(const std::string & gguf, int context = 2048, int threads = 2);
+    explicit FlowLM(const std::string & gguf, int context = 2048, int threads = 2,
+                    ggml_backend_device * device = nullptr);
     ~FlowLM();
     FlowLM(const FlowLM &) = delete;
     FlowLM & operator=(const FlowLM &) = delete;
 
     // Shares the loader and builders, without payload reads or device buffers.
     static FlowMemory measure(const std::string & path, int context,
-                                 int prefill_frames, int threads);
+                                 int prefill_frames, int threads, ggml_backend_device * device = nullptr);
     static int measure_voice(const std::string & path, const FlowMemory & model, int context);
     const FlowConfig & config() const;
     int position() const;
     void reset();
     std::string source_hash() const;
+    const char * backend_name() const noexcept;
     VoiceState read_voice(const std::string & path) const;
     VoiceState capture_voice() const;
     void restore_voice(const VoiceState & voice);

@@ -2,7 +2,7 @@
 
 Part of the [tts documentation](../README.md).
 
-Pocket provides English text-to-speech through a persistent CPU FlowLM/Mimi
+Pocket provides English text-to-speech through a persistent CPU/OpenCL FlowLM/Mimi
 engine and incremental 24 kHz mono PCM callbacks. Its public API is
 `<tts-cpp/pocket/engine.h>`; `pocket-cli` uses that API. F32 arithmetic is used
 throughout. F16 is a storage option whose weights expand to F32 at load.
@@ -58,10 +58,55 @@ splitting. It matches 322 upstream corpus cases. Generate the fixture using
 `TTS_CPP_POCKET_MODEL_DIR` to enable frontend and public-engine CTest cases.
 
 The persistent engine restores the chosen voice for each text chunk and runs
-FlowLM/Mimi on separate CPU workers with at most 16 queued latent frames.
+FlowLM/Mimi on separate workers with at most 16 queued latent frames.
 The Fabric seed uses a specified Box–Muller transform. An encoder-enabled
 checkpoint can use `--reference-audio` instead of the prepared voice; the
 tested public checkpoint rejects that path.
+
+## OpenCL execution
+
+CPU remains the default. `EngineOptions.use_gpu = true` (CLI: `--gpu`) uses
+the existing registry selector restricted to OpenCL, including its Adreno tier
+policy. `EngineOptions.backend = "opencl"` (CLI: `--backend opencl`) explicitly
+selects OpenCL; `"cpu"` explicitly selects CPU. Empty/`"auto"` follows `use_gpu`.
+GPU/OpenCL requests fail if OpenCL is unavailable. Other Pocket GPU backends
+are rejected. Both FlowLM and Mimi use the same selected device, retaining
+F32 weights and persistent caches on that device. Prepared voices and small
+conditioning/output values still cross the host boundary.
+
+Use an installed ggml-speech build with `GGML_OPENCL=ON` and its OpenCL backend
+available to the existing registry loader. Dynamic builds must ship the
+backend libraries beside the application, or set the public backend directory
+before constructing the first engine (see `<tts-cpp/backend.h>`).
+
+```sh
+build/pocket/pocket-cli --model-dir /path/to/pocket-bundle --backend opencl \
+  --text "Hello from Pocket TTS." --output /tmp/pocket-opencl.wav \
+  --runs 3 --report /tmp/pocket-opencl.json
+```
+
+The CLI prints both stage backends and the device description; its JSON records
+`flow_lm_backend`, `mimi_backend`, and `device`. Native callers can inspect
+`flow_lm_backend_name()`, `mimi_backend_name()`, and `device_name()`.
+Every graph checks backend operation support before allocation or execution;
+an incompatible ggml build reports the unsupported operation instead of
+executing a partial graph or falling back to CPU.
+
+FlowLM supplies an explicit causal mask to OpenCL softmax. This avoids the
+reviewed ggml-speech `DIAG_MASK_INF` vector kernel, whose lane writes corrupt
+neighboring vectors at attention widths divisible by eight. The existing
+64-position full-context/chunked-prefill regression exposed this on Adreno 830;
+CPU retains its original graph. Preflight prices both the device mask and its
+host upload staging.
+
+The ggml OpenCL backend shares kernel arguments, scratch and lifecycle state
+between handles on a device. Pocket serializes its OpenCL submissions,
+initialization and backend release across its workers and engine instances.
+Each worker still owns its weights, persistent state and graph arena, so
+their memory can overlap. CPU workers remain concurrent. This Pocket gate
+does not cover another Fabric engine using the same ggml OpenCL context;
+applications must serialize such mixed-engine use until ggml provides that
+protection itself.
 
 `frames_after_eos` (CLI: `--frames-after-eos`) accepts an explicit 0–100-frame
 tail, or -1 for the checkpoint/text default. Synthesis and memory preflight
@@ -122,6 +167,27 @@ inputs, and a trajectory that feeds native sampled latents back into the LM.
 The loader test needs no model files. Numerical tests are visibly disabled
 by CMake when fixtures are absent; no reference downloads occur during build.
 
+On a configured OpenCL host, set `-DTTS_CPP_POCKET_OPENCL_TESTS=ON` and all three
+fixture directories to add explicit OpenCL runs of the existing FlowLM F32/F16,
+Mimi, public engine, and metadata-only fit tests. These retain the CPU numerical
+tolerances and cover cache/context boundaries, streaming, reset, cancellation,
+repeated synthesis and error recovery. A missing OpenCL backend fails an enabled
+OpenCL test; it cannot pass through CPU fallback. The fixture-free backend test
+also checks the CPU default, allowlist and unavailable-OpenCL behavior.
+
+For example, on the target host after installing its compatible ggml build:
+
+```sh
+cmake -S engines/tts -B build/pocket -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH="$GGML_PREFIX" -DTTS_CPP_BUILD_TESTS=ON \
+  -DTTS_CPP_POCKET_OPENCL_TESTS=ON \
+  -DTTS_CPP_POCKET_REFERENCE_DIR=/path/to/pocket-reference \
+  -DTTS_CPP_POCKET_MIMI_REFERENCE_DIR=/path/to/pocket-mimi-reference \
+  -DTTS_CPP_POCKET_MODEL_DIR=/path/to/pocket-bundle
+cmake --build build/pocket --parallel
+ctest --test-dir build/pocket -R 'test-pocket-.*opencl' --output-on-failure
+```
+
 For a real checkpoint, use the same generator with `--weights` and `--config`:
 
 ```sh
@@ -143,17 +209,39 @@ disabled tests from executed tests. Exact test counts are revision-dependent.
 
 `tts-cpp/pocket/fit.h` exposes `pocket::fit_params(FitOptions)`. It tokenizes the
 requested text, validates voice/context capacity, and prices the actual FlowLM
-and Mimi graphs with ggml's size-only allocator and CPU work-buffer planner.
+and Mimi graphs with the selected backend's size-only allocator and, on CPU,
+the CPU work-buffer planner.
 The planner is resolved through the selected CPU backend's registry, so
 preflight works when CPU variants are dynamically loaded (Linux/Android).
 This requires the `ggml_graph_plan` registry export from
 [qvac-ext-ggml#92](https://github.com/tetherto/qvac-ext-ggml/pull/92);
 older backends report an explicit preflight error instead of omitting scratch memory.
-GGUF tensor payloads are never read, allocated, or executed during preflight.
+GGUF tensor payloads are never read and model/graph buffers are never allocated
+or executed during preflight. Backend initialization can allocate its own scratch.
 The estimate includes expanded F32 weights, state, overlapping worker compute,
 host containers, thread stacks, load staging, and native batch PCM buffers.
 It excludes application and SDK/JS copies. This is a memory projection, not a
 validation of tensor contents, checkpoint encoder capability, or speech quality.
+
+OpenCL fit uses the same selection rules as synthesis. Adreno OpenCL is treated
+as shared system memory even though ggml advertises it as a GPU. Other devices
+use ggml's shared-memory classification; discrete devices must fit both device
+and host memory independently. Host availability is sampled before backend
+initialization to charge that allocation once. OpenCL's reported free memory
+is a backend estimate/cap, currently global memory minus 1 GiB in the reviewed
+speech backend; on Adreno the result is also limited by OS available RAM.
+Missing/invalid memory telemetry produces a preflight error.
+
+The OpenCL state total includes one conservative shared-backend scratch bound,
+reported separately in the text report. Its constants and F32 dispatch audit
+come from qvac-ext-ggml speech `06f1b668`: the Adreno initialization pools total
+395,149,312 bytes before device allocation caps. The estimate also bounds
+independently retained weight/activation transpose and strided GEMM input
+pools, including old allocations retained by queued work during growth.
+Builds without those Adreno pools can therefore be overestimated. Re-audit
+these constants and F32 dispatch paths when updating ggml; driver/kernel
+compiler overhead is implementation-dependent and covered by the requested
+margin rather than an exact measurement. This is not a live allocation trace.
 
 ```sh
 build/pocket/pocket-cli --model-dir /path/to/pocket-bundle \
@@ -169,12 +257,30 @@ returns 0 for fit, 1 for no-fit, and 2 for a preflight error. Native callers rec
 `FitStatus` and a reason/report. Fit remains a point-in-time estimate; another
 process can consume memory between preflight and loading.
 
+For an OpenCL preflight add `--backend opencl` to that command. For device
+benchmarks, run the CPU and OpenCL commands with identical assets, text,
+threads, steps and seed. Record the model hashes, phone/GPU, OS and driver,
+build options, load time, first-run and warm first-audio latency/RTF, and peak
+host/device memory. `--runs 1` records the first synthesis; `--runs 3` performs
+one warmup and records three warm runs. Validate output with the existing
+`scripts/validate-pocket-audio.py` workflow and listen for defects. Hardware
+correctness, audio quality and speedup require measured results on the target
+device; host CPU checks do not establish them.
+
 
 Reference input is bounded before model allocation. Accepted reference input is uncompressed
 PCM8/16/24/32 or float32/64 WAV, 1–64 channels, 8–192 kHz, at most 30 seconds and
 64 MiB on disk.
 
 ## Performance and integration evidence
+
+The [OnePlus 13s OpenCL report](history/pocket-opencl-adreno.md) records
+CPU/OpenCL correctness, speech checks, first-use and warm timings, and memory
+preflight on Adreno 830. Both stages passed device validation. It retains the
+initial timings and an expanded 60-request comparison, which observed a
+1.08–1.26x median OpenCL throughput advantage with substantial run variability.
+The report includes the standalone Android build and driver setup used for
+reproduction.
 
 The [archived integration report](history/pocket-integration.md#final-registry-build-and-release-review)
 records the September 2026 pinned-registry Apple M2 comparison: generation

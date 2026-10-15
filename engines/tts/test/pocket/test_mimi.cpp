@@ -1,4 +1,5 @@
 #include "pocket/mimi.h"
+#include "pocket/backend.h"
 #include "npy.h"
 #define DR_WAV_IMPLEMENTATION
 #include "dr_wav.h"
@@ -31,9 +32,11 @@ static void compare(const char * name, const std::vector<float> & got, const std
     if (worst > tolerance) throw std::runtime_error(std::string(name)+": parity failure");
 }
 int main(int argc, char ** argv) {
-    if (argc != 3) { std::fprintf(stderr, "usage: test-pocket-mimi model.gguf reference-directory\n"); return 2; }
+    if (argc != 3 && argc != 4) { std::fprintf(stderr, "usage: test-pocket-mimi model.gguf reference-directory [cpu|opencl]\n"); return 2; }
     try {
-        Mimi model(argv[1], 1);
+        auto backend = tts_cpp::pocket::detail::select_backend(false, argc == 4 ? argv[3] : "cpu");
+        Mimi model(argv[1], 1, ggml_backend_get_device(backend.get()));
+        std::printf("Mimi backend: %s\n", model.backend_name());
         const std::string dir = argv[2];
         const auto latents = load(dir+"/latents.npy"), pcm = load(dir+"/pcm.npy");
         std::vector<float> singles;

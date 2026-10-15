@@ -1,4 +1,5 @@
 #include "pocket/flow_lm.h"
+#include "pocket/backend.h"
 #include "npy.h"
 #include "gguf.h"
 
@@ -68,15 +69,18 @@ struct CorruptModel {
 } // namespace
 
 int main(int argc, char ** argv) {
-    if (argc != 4) {
-        std::fprintf(stderr, "usage: test-pocket-flow-lm model.gguf fixture-directory absolute-tolerance\n");
+    if (argc != 4 && argc != 5) {
+        std::fprintf(stderr, "usage: test-pocket-flow-lm model.gguf fixture-directory absolute-tolerance [cpu|opencl]\n");
         return 2;
     }
     try {
         const std::string model = argv[1], dir = argv[2];
         const double tol = std::stod(argv[3]);
         if (!std::isfinite(tol) || tol <= 0) throw std::runtime_error("invalid tolerance");
-        FlowLM lm(model, 64, 2);
+        auto backend = tts_cpp::pocket::detail::select_backend(false, argc == 5 ? argv[4] : "cpu");
+        const auto device = ggml_backend_get_device(backend.get());
+        FlowLM lm(model, 64, 2, device);
+        std::printf("FlowLM backend: %s\n", lm.backend_name());
         const auto embeddings = load(dir, "embeddings");
         const auto expected = load(dir, "prefill");
         check("text embeddings", lm.text_embeddings({1, 7, 3, 12, 5}), load(dir, "text_embeddings"), tol);
@@ -154,7 +158,7 @@ int main(int argc, char ** argv) {
             for (auto & w : weights) w = std::copysign(std::numeric_limits<float>::max(), w);
             if (bad.replace("out_eos.weight", weights)) {
                 bad.replace("out_eos.bias", {std::numeric_limits<float>::max()});
-                FlowLM overflow(bad.path.string(), 64, 2);
+                FlowLM overflow(bad.path.string(), 64, 2, device);
                 overflow.prefill(embeddings);
                 rejects("finite weights causing EOS overflow", [&] { overflow.advance(); });
                 if (overflow.position() != 0) throw std::runtime_error("EOS overflow did not reset state");

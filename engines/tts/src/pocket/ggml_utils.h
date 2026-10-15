@@ -3,7 +3,9 @@
 #include "ggml-alloc.h"
 #include "ggml-cpu.h"
 #include "pocket/memory.h"
+#include "pocket/backend.h"
 #include "gguf_stream.h"
+#include "fit_util.h"
 
 #include <algorithm>
 #include <cmath>
@@ -57,6 +59,75 @@ inline uint64_t price_cpu_graph(ggml_backend_t backend, ggml_gallocr_t allocator
     const auto plan = plan_graph(graph, threads, nullptr);
     return uint64_t(arena) + plan.work_size;
 }
+
+inline void validate_graph(ggml_backend_t backend, ggml_cgraph * graph) {
+    if (::tts_cpp::detail::backend_is_cpu(backend)) return;
+    for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
+        const auto * node = ggml_graph_node(graph, i);
+        if (node->op == GGML_OP_NONE || node->op == GGML_OP_VIEW || node->op == GGML_OP_RESHAPE ||
+            node->op == GGML_OP_PERMUTE || node->op == GGML_OP_TRANSPOSE) continue;
+        if (!ggml_backend_supports_op(backend, node))
+            throw std::runtime_error(std::string("pocket: ") + ggml_backend_name(backend) +
+                " does not support graph operation " + ggml_op_desc(node) + "; update ggml-speech");
+    }
+}
+
+inline uint64_t price_graph(ggml_backend_t backend, ggml_gallocr_t allocator, ggml_cgraph * graph, int threads) {
+    if (::tts_cpp::detail::backend_is_cpu(backend)) return price_cpu_graph(backend, allocator, graph, threads);
+    size_t arena = 0;
+    ggml_gallocr_reserve_n_size(allocator, graph, nullptr, nullptr, &arena);
+    return arena;
+}
+
+inline void measure_opencl_scratch(ggml_cgraph * graph, OpenCLScratch & retained) {
+    using ::tts_cpp::fitutil::sat_add;
+    using ::tts_cpp::fitutil::sat_mul;
+    OpenCLScratch current;
+    // Baseline activation pool in the speech OpenCL backend with Adreno kernels.
+    current.activations = opencl_init_activation_bytes;
+    auto grow = [&](uint64_t & capacity, uint64_t bytes) {
+        if (bytes > capacity) { current.growth = sat_add(current.growth, capacity); capacity = bytes; }
+    };
+    for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
+        const auto * node = ggml_graph_node(graph, i);
+        if (node->op != GGML_OP_MUL_MAT) continue;
+        const auto * a = node->src[0], * b = node->src[1];
+        if (a->type != GGML_TYPE_F32 || b->type != GGML_TYPE_F32)
+            throw std::runtime_error("pocket: OpenCL scratch pricing requires F32 matmul");
+        if (!ggml_is_contiguous(a)) grow(current.src0, ggml_nbytes(a));
+        if (!ggml_is_contiguous(b)) grow(current.src1, ggml_nbytes(b));
+        // Bound the Adreno image GEMM independently of device image limits
+        // and build flags (falling back to generic GEMM needs no larger pools).
+        const uint64_t columns = sat_mul(uint64_t(b->ne[1]), sat_mul(b->ne[2], b->ne[3]));
+        if (ggml_is_contiguous(a) && ggml_is_contiguous(b) && a->ne[0] % 32 == 0 &&
+            a->ne[1] % 4 == 0 && columns > 1) {
+            grow(current.weights, sat_mul(sat_mul(a->ne[0], a->ne[1]), sizeof(float)));
+            grow(current.activations, sat_mul(sat_mul(a->ne[0], sat_add(columns, 7) / 8 * 8), sizeof(float)));
+        }
+    }
+    retained.weights = std::max(retained.weights, current.weights);
+    retained.activations = std::max(retained.activations, current.activations);
+    retained.src0 = std::max(retained.src0, current.src0);
+    retained.src1 = std::max(retained.src1, current.src1);
+    retained.growth = std::max(retained.growth, current.growth);
+}
+
+inline uint64_t opencl_scratch_bound(const OpenCLScratch & a, const OpenCLScratch & b) {
+    using ::tts_cpp::fitutil::sat_add;
+    using ::tts_cpp::fitutil::sat_mul;
+    // Known speech backend init buffers: quant, scales, activation transpose.
+    // Each is capped by CL_DEVICE_MAX_MEM_ALLOC_SIZE; the uncapped sum is safe
+    // for builds without Adreno kernels too. These are shared by both stages.
+    uint64_t bytes = opencl_init_bytes;
+    for (const auto pool : {std::max(a.weights, b.weights), std::max(a.src0, b.src0), std::max(a.src1, b.src1)})
+        bytes = sat_add(bytes, sat_mul(pool, 2));
+    const auto activation = std::max(a.activations, b.activations);
+    if (activation > opencl_init_activation_bytes) bytes = sat_add(bytes, sat_mul(activation, 2));
+    // One initial resident generation plus a graph's increasing generations
+    // may coexist until its queued work finishes. The extra maximum above
+    // bounds the initial generation regardless of which worker ran previously.
+    return sat_add(bytes, std::max(a.growth, b.growth));
+}
 inline void price_persistent(ggml_backend_t backend, ggml_context * metadata,
                              ggml_context * weights, ggml_context * state,
                              gguf_context * file, MemoryMeasure & out) {
@@ -92,17 +163,21 @@ struct SizedPocketGraph {
     static size_t metadata_bytes() {
         return Nodes * ggml_tensor_overhead() + ggml_graph_overhead_custom(Nodes, false);
     }
-    uint64_t prepare(ggml_tensor * output, bool size_only = false, int threads = 1) {
+    uint64_t prepare(ggml_tensor * output, bool size_only = false, int threads = 1,
+                     OpenCLScratch * scratch = nullptr) {
         ggml_set_output(output);
         ggml_build_forward_expand(graph, output);
         // The old convolution / transformer histories must remain intact until
         // every consumer has run. Delay cache writes until after the output.
         for (auto * update : updates) ggml_build_forward_expand(graph, update);
-        if (size_only) return price_cpu_graph(backend_, allocator, graph, threads);
+        validate_graph(backend_, graph);
+        if (scratch && ::tts_cpp::detail::backend_is_opencl(backend_)) measure_opencl_scratch(graph, *scratch);
+        if (size_only) return price_graph(backend_, allocator, graph, threads);
         if (!ggml_gallocr_alloc_graph(allocator, graph)) throw std::runtime_error("pocket: graph allocation failed");
         return 0;
     }
     std::vector<float> compute(ggml_backend_t backend, ggml_tensor * output) {
+        auto lock = lock_backend(backend);
         if (ggml_backend_graph_compute(backend, graph) != GGML_STATUS_SUCCESS)
             throw std::runtime_error("pocket: graph execution failed");
         std::vector<float> values(static_cast<size_t>(ggml_nelements(output)));

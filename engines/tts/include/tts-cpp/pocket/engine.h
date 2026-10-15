@@ -13,7 +13,7 @@ struct EngineOptions {
     // Supply exactly one voice source. Prepared voices are checkpoint-specific.
     std::string voice_path;
     std::string reference_audio_path;
-    int n_threads = 1;  // per worker; FlowLM and Mimi run concurrently on CPU
+    int n_threads = 1;  // per worker; FlowLM and Mimi have separate workers
     int output_sample_rate = 24000; // 8000..192000 Hz, streaming sinc resampling
     int context = 2048;
     int max_tokens = 50;
@@ -24,6 +24,10 @@ struct EngineOptions {
     int frames_after_eos = -1;  // -1: checkpoint/text default; 0..100: explicit tail
     // Context validation reserves the complete EOS tail before emitting PCM.
     uint32_t seed = 1234;
+    // CPU is the default. GPU requests allow OpenCL only and fail if unavailable.
+    bool use_gpu = false;
+    // Empty/auto follows use_gpu; cpu/opencl explicitly selects the backend.
+    std::string backend;
 };
 struct SynthesisResult {
     std::vector<float> pcm; // populated by synthesize(); streaming uses the callback
@@ -34,7 +38,7 @@ struct SynthesisResult {
 };
 using AudioCallback = std::function<bool(const float *, size_t, int)>;
 
-// Persistent native CPU engine. One synthesis at a time per instance;
+// Persistent native CPU/OpenCL engine. One synthesis at a time per instance;
 // overlapping/reentrant calls throw. cancel() is safe from another thread.
 // Streaming callbacks run on the calling thread, with valid PCM until return.
 // Returning false cancels the request. Each new request resets the voice,
@@ -49,7 +53,10 @@ public:
     SynthesisResult synthesize_stream(const std::string & text, const AudioCallback & callback);
     void cancel() noexcept;
     int sample_rate() const noexcept;
-    const char * backend_name() const noexcept { return "CPU"; }
+    const char * backend_name() const noexcept;
+    const char * flow_lm_backend_name() const noexcept;
+    const char * mimi_backend_name() const noexcept;
+    const char * device_name() const noexcept;
     std::string model_source_sha256() const;
 private:
     struct Impl;

@@ -1,0 +1,423 @@
+{
+  "date_utc": "2026-10-15",
+  "fabric_commit": "c99e116c7ed60e822b4ac1afe2fe990c64b096b1",
+  "ggml_commit": "06f1b66806626a635904f31db6914ad2d0e71197",
+  "upstream_reference_commit": "0c2db3bdea7c991c568989cc11b503f14483fabc",
+  "device": {
+    "model": "OnePlus 13s (CPH2723)",
+    "soc": "SM8750",
+    "gpu": "Adreno 830 v2",
+    "android": "16",
+    "build_fingerprint": "OnePlus/CPH2723IN/OP612BL1:16/AP3A.240617.008/V.R4T3.49a8f70-2488592-24a9018:user/release-keys",
+    "opencl_driver": "OpenCL 3.0 QUALCOMM build: 0800.74",
+    "opencl_compiler": "E031.47.18.51",
+    "mem_total_kib": 11384676,
+    "post_benchmark_battery_temperature_c": 33.7,
+    "frequency_control": "Stock settings; frequencies and thermal state not controlled"
+  },
+  "build": {
+    "ndk": "r28b",
+    "clang": "19",
+    "abi": "arm64-v8a",
+    "android_api": 28,
+    "type": "Release",
+    "ggml_options": {
+      "BUILD_SHARED_LIBS": true,
+      "GGML_BACKEND_DL": true,
+      "GGML_NATIVE": false,
+      "GGML_CPU_ALL_VARIANTS": false,
+      "GGML_OPENMP": false,
+      "GGML_OPENCL": true,
+      "GGML_OPENCL_EMBED_KERNELS": true,
+      "GGML_OPENCL_KERNEL_CACHE": true,
+      "GGML_OPENCL_USE_ADRENO_KERNELS": true,
+      "GGML_HEXAGON": false,
+      "GGML_VULKAN": false,
+      "GGML_CUDA": false,
+      "GGML_METAL": false
+    },
+    "synthesis": {
+      "threads_per_worker": 2,
+      "workers": 2,
+      "steps": 1,
+      "temperature": 0.3,
+      "seed": 1234,
+      "voice": "Alba prepared cache",
+      "compute": "F32",
+      "warm_runs": 3,
+      "warmups": 1
+    }
+  },
+  "validation": {
+    "device_checks_passed": 19,
+    "device_checks": [
+      "backend",
+      "load",
+      "graph-memory",
+      "generation",
+      "reference-audio",
+      "frontend",
+      "small-flow-f32-opencl",
+      "real-flow-f32-opencl",
+      "real-flow-f32-cpu",
+      "real-mimi-opencl",
+      "real-mimi-cpu",
+      "small-flow-f32-cpu",
+      "small-flow-f16-opencl",
+      "real-flow-f16-opencl",
+      "fit-opencl",
+      "fit-cpu",
+      "mimi-random-opencl",
+      "engine-opencl",
+      "engine-cpu"
+    ],
+    "flow_f32_absolute_tolerance": 0.0001,
+    "flow_f16_absolute_tolerance": 0.01,
+    "real_flow_f32_max_abs": 7.8529119e-05,
+    "real_mimi_decoder_max_abs": 2.4922192e-06,
+    "real_mimi_decoder_snr_db": 120.215,
+    "listening_status": "Comparison WAVs provided in Windows Downloads; user approved both outputs as equivalent",
+    "ci": "https://github.com/tetherto/qvac-fabric-speech.cpp/actions/runs/38778583428"
+  },
+  "upstream_assets": [
+    {
+      "file": "model.safetensors",
+      "repo": "kyutai/pocket-tts-without-voice-cloning",
+      "revision": "d29db7978e464fb90cb3359ee0c69a273b9142cc",
+      "path": "languages/english_2026-04/model.safetensors",
+      "bytes": 219029196,
+      "sha256": "be9c6b4876d3f30740a8225dfcaa2e43dc4aeb753c15272735bee16bbb4abb0a"
+    },
+    {
+      "file": "tokenizer.model",
+      "repo": "kyutai/pocket-tts-without-voice-cloning",
+      "revision": "d29db7978e464fb90cb3359ee0c69a273b9142cc",
+      "path": "languages/english_2026-04/tokenizer.model",
+      "bytes": 59339,
+      "sha256": "d461765ae179566678c93091c5fa6f2984c31bbe990bf1aa62d92c64d91bc3f6"
+    },
+    {
+      "file": "alba.safetensors",
+      "repo": "kyutai/pocket-tts-without-voice-cloning",
+      "revision": "e81d79e8194ad4c7ce879c87a4258ef20cbf2487",
+      "path": "languages/english_2026-04/embeddings/alba.safetensors",
+      "bytes": 6194424,
+      "sha256": "69c32db63ca56843d994f81f343f62e0bf2d73f7e4c9bc73e44bb1110b1d8845"
+    }
+  ],
+  "converted_bundle": {
+    "engine": "pocket",
+    "schema_version": 1,
+    "assets": {
+      "flow-lm.gguf": {
+        "bytes": 357802016,
+        "sha256": "11ed51882574fc1b929990a873924b733d6f6b6aeee9ddd89cab5e4e5db5a839"
+      },
+      "frontend.json": {
+        "bytes": 264716,
+        "sha256": "e1bf5c4d7384d8d1331806653753e708b3e1a0ddc38a38ada46472bb3b86a086"
+      },
+      "mimi.gguf": {
+        "bytes": 80224096,
+        "sha256": "fa9f5d0e6b6b7b160d13f302a196b183d192ef0c0b78186a203843254c775892"
+      },
+      "voice.gguf": {
+        "bytes": 6194240,
+        "sha256": "e7a6d9fb89c295417cc406850c2cb6e0f07fdc790559d75654521c38c7296cf9"
+      }
+    }
+  },
+  "audio_and_benchmarks": {
+    "asr_model": "Whisper base.en",
+    "asr_sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+    "method": "Independent whisper.cpp CPU; 24kHz float resampled to 16kHz PCM16 for ASR only; English beam size 5",
+    "cases": [
+      {
+        "name": "cpu-reminder",
+        "reference": "Hello Alok. Your meeting starts in ten minutes.",
+        "transcript": "Hello, Alach. Your meeting starts in 10 minutes.",
+        "word_error_rate": 0.25,
+        "sample_rate": 24000,
+        "channels": 1,
+        "duration_seconds": 3.04,
+        "peak": 0.5211202502250671,
+        "rms": 0.11130908524419865,
+        "clipping_fraction": 0.0
+      },
+      {
+        "name": "opencl-reminder",
+        "reference": "Hello Alok. Your meeting starts in ten minutes.",
+        "transcript": "Hello, Alach. Your meeting starts in 10 minutes.",
+        "word_error_rate": 0.25,
+        "sample_rate": 24000,
+        "channels": 1,
+        "duration_seconds": 3.04,
+        "peak": 0.5211288928985596,
+        "rms": 0.1113089933440593,
+        "clipping_fraction": 0.0
+      },
+      {
+        "name": "cpu-news",
+        "reference": "The research team announced a new speech model today. It can generate natural English speech directly on your phone.",
+        "transcript": "The research team announced a new speech model today. It can generate natural English speech directly on your phone.",
+        "word_error_rate": 0.0,
+        "sample_rate": 24000,
+        "channels": 1,
+        "duration_seconds": 6.16,
+        "peak": 0.608753502368927,
+        "rms": 0.1195334569584729,
+        "clipping_fraction": 0.0
+      },
+      {
+        "name": "opencl-news",
+        "reference": "The research team announced a new speech model today. It can generate natural English speech directly on your phone.",
+        "transcript": "The research team announced a new speech model today. It can generate natural English speech directly on your phone.",
+        "word_error_rate": 0.0,
+        "sample_rate": 24000,
+        "channels": 1,
+        "duration_seconds": 6.16,
+        "peak": 0.6087534427642822,
+        "rms": 0.11953272409582323,
+        "clipping_fraction": 0.0
+      }
+    ],
+    "benchmarks": [
+      {
+        "name": "cpu-first",
+        "backend": "CPU",
+        "flow_lm_backend": "CPU",
+        "mimi_backend": "CPU",
+        "device": "CPU",
+        "load_seconds": 0.587442656,
+        "warmups": 0,
+        "runs": [
+          {
+            "audio_seconds": 3.04,
+            "first_audio_seconds": 0.138279948,
+            "real_time_factor": 0.2758522648026316,
+            "seconds": 0.838590885
+          }
+        ],
+        "median_seconds": 0.838590885,
+        "median_first_audio_seconds": 0.138279948,
+        "median_rtf": 0.2758522648026316,
+        "peak_rss_kib": 517072,
+        "source_sha256": "be9c6b4876d3f30740a8225dfcaa2e43dc4aeb753c15272735bee16bbb4abb0a"
+      },
+      {
+        "name": "opencl-first",
+        "backend": "OpenCL",
+        "flow_lm_backend": "OpenCL",
+        "mimi_backend": "OpenCL",
+        "device": "QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)",
+        "load_seconds": 26.069870094,
+        "warmups": 0,
+        "runs": [
+          {
+            "audio_seconds": 3.04,
+            "first_audio_seconds": 0.071927968,
+            "real_time_factor": 0.5606151654605264,
+            "seconds": 1.704270103
+          }
+        ],
+        "median_seconds": 1.704270103,
+        "median_first_audio_seconds": 0.071927968,
+        "median_rtf": 0.5606151654605264,
+        "peak_rss_kib": 512536,
+        "source_sha256": "be9c6b4876d3f30740a8225dfcaa2e43dc4aeb753c15272735bee16bbb4abb0a"
+      },
+      {
+        "name": "cpu-reminder",
+        "backend": "CPU",
+        "flow_lm_backend": "CPU",
+        "mimi_backend": "CPU",
+        "device": "CPU",
+        "load_seconds": 0.725935468,
+        "warmups": 1,
+        "runs": [
+          {
+            "audio_seconds": 3.04,
+            "first_audio_seconds": 0.140013334,
+            "real_time_factor": 0.27945672269736843,
+            "seconds": 0.849548437
+          },
+          {
+            "audio_seconds": 3.04,
+            "first_audio_seconds": 0.148885625,
+            "real_time_factor": 0.3362708332236842,
+            "seconds": 1.022263333
+          },
+          {
+            "audio_seconds": 3.04,
+            "first_audio_seconds": 0.163686354,
+            "real_time_factor": 0.3164537417763158,
+            "seconds": 0.962019375
+          }
+        ],
+        "median_seconds": 0.962019375,
+        "median_first_audio_seconds": 0.148885625,
+        "median_rtf": 0.3164537417763158,
+        "peak_rss_kib": 519348,
+        "source_sha256": "be9c6b4876d3f30740a8225dfcaa2e43dc4aeb753c15272735bee16bbb4abb0a"
+      },
+      {
+        "name": "opencl-reminder",
+        "backend": "OpenCL",
+        "flow_lm_backend": "OpenCL",
+        "mimi_backend": "OpenCL",
+        "device": "QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)",
+        "load_seconds": 1.081907396,
+        "warmups": 1,
+        "runs": [
+          {
+            "audio_seconds": 3.04,
+            "first_audio_seconds": 0.271314271,
+            "real_time_factor": 0.54443988125,
+            "seconds": 1.655097239
+          },
+          {
+            "audio_seconds": 3.04,
+            "first_audio_seconds": 0.220898281,
+            "real_time_factor": 0.7310730707236841,
+            "seconds": 2.222462135
+          },
+          {
+            "audio_seconds": 3.04,
+            "first_audio_seconds": 0.071223906,
+            "real_time_factor": 0.6095942809210526,
+            "seconds": 1.853166614
+          }
+        ],
+        "median_seconds": 1.853166614,
+        "median_first_audio_seconds": 0.220898281,
+        "median_rtf": 0.6095942809210526,
+        "peak_rss_kib": 496624,
+        "source_sha256": "be9c6b4876d3f30740a8225dfcaa2e43dc4aeb753c15272735bee16bbb4abb0a"
+      },
+      {
+        "name": "cpu-news",
+        "backend": "CPU",
+        "flow_lm_backend": "CPU",
+        "mimi_backend": "CPU",
+        "device": "CPU",
+        "load_seconds": 0.760357291,
+        "warmups": 1,
+        "runs": [
+          {
+            "audio_seconds": 6.16,
+            "first_audio_seconds": 0.566234792,
+            "real_time_factor": 0.5058976762987013,
+            "seconds": 3.116329686
+          },
+          {
+            "audio_seconds": 6.16,
+            "first_audio_seconds": 0.197393177,
+            "real_time_factor": 0.3220367202922078,
+            "seconds": 1.983746197
+          },
+          {
+            "audio_seconds": 6.16,
+            "first_audio_seconds": 0.384294375,
+            "real_time_factor": 0.3625118538961039,
+            "seconds": 2.23307302
+          }
+        ],
+        "median_seconds": 2.23307302,
+        "median_first_audio_seconds": 0.384294375,
+        "median_rtf": 0.3625118538961039,
+        "peak_rss_kib": 535796,
+        "source_sha256": "be9c6b4876d3f30740a8225dfcaa2e43dc4aeb753c15272735bee16bbb4abb0a"
+      },
+      {
+        "name": "opencl-news",
+        "backend": "OpenCL",
+        "flow_lm_backend": "OpenCL",
+        "mimi_backend": "OpenCL",
+        "device": "QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)",
+        "load_seconds": 1.256530573,
+        "warmups": 1,
+        "runs": [
+          {
+            "audio_seconds": 6.16,
+            "first_audio_seconds": 0.254533906,
+            "real_time_factor": 0.4123306613636364,
+            "seconds": 2.539956874
+          },
+          {
+            "audio_seconds": 6.16,
+            "first_audio_seconds": 0.077178593,
+            "real_time_factor": 0.3477214047077922,
+            "seconds": 2.141963853
+          },
+          {
+            "audio_seconds": 6.16,
+            "first_audio_seconds": 0.075610625,
+            "real_time_factor": 0.39124315113636365,
+            "seconds": 2.410057811
+          }
+        ],
+        "median_seconds": 2.410057811,
+        "median_first_audio_seconds": 0.077178593,
+        "median_rtf": 0.39124315113636365,
+        "peak_rss_kib": 496880,
+        "source_sha256": "be9c6b4876d3f30740a8225dfcaa2e43dc4aeb753c15272735bee16bbb4abb0a"
+      }
+    ],
+    "cpu_opencl_waveform_comparison": [
+      {
+        "name": "reminder",
+        "cpu_samples": 72960,
+        "opencl_samples": 72960,
+        "max_abs_difference": 0.00033414363861083984,
+        "snr_db": 80.59979988641716,
+        "correlation": 0.9999999956453179
+      },
+      {
+        "name": "news",
+        "cpu_samples": 147840,
+        "opencl_samples": 147840,
+        "max_abs_difference": 0.0057298243045806885,
+        "snr_db": 54.611179672879466,
+        "correlation": 0.9999982707800977
+      }
+    ]
+  },
+  "memory_preflight": {
+    "cpu": {
+      "available_bytes": 4469141504,
+      "backend": "CPU",
+      "codec_compute_bytes": 53478984,
+      "device_bytes": 607137000,
+      "device_is_cpu": true,
+      "device_shares_host_memory": true,
+      "fits": true,
+      "host_bytes": 127431991,
+      "lm_compute_bytes": 10834240,
+      "margin_bytes": 268435456,
+      "reason": "fits",
+      "report": "Pocket CPU memory preflight (bytes)\nweights: 438008640\nstate: 104815136\nFlowLM compute: 10834240\nMimi compute: 53478984\nhost extras: 127431991\nmargin: 268435456\nrequired: 1003004447\navailable/budget: 4469141504\nmaximum audio frames: 95\nshared host memory: yes\nhost required/available: 395867447/4469141504\nresult: fits\n",
+      "state_bytes": 104815136,
+      "status": 0,
+      "total_memory_bytes": 11657908224,
+      "weights_bytes": 438008640
+    },
+    "opencl": {
+      "available_bytes": 4482461696,
+      "backend": "OpenCL (QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830))",
+      "codec_compute_bytes": 53474816,
+      "device_bytes": 1066360192,
+      "device_is_cpu": false,
+      "device_shares_host_memory": true,
+      "fits": true,
+      "host_bytes": 127563063,
+      "lm_compute_bytes": 10948864,
+      "margin_bytes": 268435456,
+      "reason": "fits",
+      "report": "Pocket OpenCL (QUALCOMM Adreno(TM) 830 (OpenCL 3.0 Adreno(TM) 830)) memory preflight (bytes)\nweights: 438008832\nstate: 563927680\nFlowLM compute: 10948864\nMimi compute: 53474816\nhost extras: 127563063\nmargin: 268435456\nrequired: 1462358711\navailable/budget: 4482461696\nmaximum audio frames: 95\nshared host memory: yes\nhost required/available: 395998519/4482461696\nresult: fits\nOpenCL shared backend scratch bound (included in state): 459112448\nConservative F32 backend scratch bound for reviewed ggml-speech; includes backend init and pool growth.\nOpenCL available memory is a driver estimate/cap, limited by OS RAM on Adreno.\n",
+      "state_bytes": 563927680,
+      "status": 0,
+      "total_memory_bytes": 5828954112,
+      "weights_bytes": 438008832
+    }
+  }
+}
