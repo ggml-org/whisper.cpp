@@ -281,6 +281,13 @@ bool DelayState::channel_is_sampled(int channel) const {
     return pre_audio && post_audio;
 }
 
+TextLogits DelayState::text_logits() const {
+    if (stopping_ || delayed_length_ <= config_.n_vq) {
+        return TextLogits::None;
+    }
+    return is_audio_ ? TextLogits::Slots : TextLogits::Full;
+}
+
 int32_t DelayState::next_text_token(const DelayLogits & logits, const SamplingConfig & sampling,
                                     std::mt19937 & rng) const {
     if (delayed_length_ < config_.n_vq) {

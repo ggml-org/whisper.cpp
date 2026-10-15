@@ -49,7 +49,7 @@ void test_option_mapping() {
     check(parse({"moss-cli", "--backbone", "b.gguf", "--decoder", "d.gguf", "--text", "hi",
             "--encoder", "e.gguf", "--ref-audio", "r.wav", "--language", "en",
             "--max-new-tokens", "7", "--context", "128", "--seed", "42", "--threads", "2",
-            "--duration-tokens", "38", "--backends-dir", "/opt/backends",
+            "--duration-tokens", "38", "--backends-dir", "/opt/backends", "--backend", "hexagon",
             "--gpu", "--text-temperature", "0.5", "--audio-top-k", "9", "--out", "x.wav"}, args),
             "full flag surface parses");
     check(args.options.encoder_path == "e.gguf" && args.options.reference_audio_path == "r.wav",
@@ -61,7 +61,17 @@ void test_option_mapping() {
             "sampling flags map");
     check(args.options.duration_tokens == 38, "duration flag maps");
     check(args.options.backends_dir == "/opt/backends", "backends directory flag maps");
+    check(args.options.backend == "hexagon", "backend flag maps");
     check(args.out_path == "x.wav", "output path maps");
+}
+
+void test_backend_is_tts_only() {
+    CliArgs sfx;
+    check(!parse({"moss-cli", "--mode", "sfx", "--model", "m.gguf", "--text", "rain",
+            "--backend", "hexagon"}, sfx), "--backend is rejected in sfx mode");
+    CliArgs s2s;
+    check(!parse({"moss-cli", "--mode", "s2s", "--model", "m.gguf", "--codec", "c.gguf",
+            "--audio", "q.wav", "--backend", "hexagon"}, s2s), "--backend is rejected in s2s mode");
 }
 
 void test_end_to_end_run() {
@@ -81,6 +91,10 @@ void test_end_to_end_run() {
     check(rc == 0, "cli run succeeds on the fixture models");
     check(std::filesystem::exists(out_wav) && std::filesystem::file_size(out_wav) > 44,
             "cli writes a non-empty WAV");
+    args.options.backend = "cpu";
+    check(tts_cpp::moss::cli::run(args) == 0, "an explicit cpu backend runs");
+    args.options.backend = "no-such-device";
+    check(tts_cpp::moss::cli::run(args) != 0, "an unavailable backend fails instead of falling back");
     std::filesystem::remove(backbone);
     std::filesystem::remove(decoder);
     std::filesystem::remove(out_wav);
@@ -92,6 +106,7 @@ int main() {
     try {
         test_required_flags();
         test_option_mapping();
+        test_backend_is_tts_only();
         test_end_to_end_run();
     } catch (const std::exception & e) {
         std::fprintf(stderr, "%s\n", e.what());

@@ -11,6 +11,7 @@
 #include <vector>
 
 using tts_cpp::moss::detail::Codec;
+using tts_cpp::moss::detail::CodecAttention;
 using tts_cpp::moss::detail::decode_after_context;
 using tts_cpp::moss::detail::decode_in_windows;
 using tts_cpp::moss::detail::decode_segments;
@@ -24,6 +25,8 @@ constexpr int LONG_FRAMES = 40;
 constexpr int SHORT_FRAMES = 11;
 constexpr int WINDOW_FRAMES = 6;
 constexpr float TOLERANCE = 1e-4f;
+constexpr float SIGNAL_AMPLITUDE = 0.3f;
+constexpr float SIGNAL_STEP = 0.37f;
 const std::vector<int> CHUNK_PATTERN = {3, 5, 1, 7, 2};
 
 int failures = 0;
@@ -149,11 +152,49 @@ void test_context_is_decoded_then_trimmed(Codec & codec) {
             "decoding the suffix alone would lose the reference history");
 }
 
+void test_fused_attention_matches_unfused(const std::filesystem::path & path) {
+    Codec automatic(path.string(), {}, 1);
+    Codec unfused(path.string(), {}, 1, false, CodecAttention::Unfused);
+    Codec fused(path.string(), {}, 1, false, CodecAttention::Fused);
+    check(!automatic.fused_attention(), "the CPU keeps unfused codec attention");
+    check(!unfused.fused_attention() && fused.fused_attention(), "codec attention layouts can be forced");
+    const std::vector<int32_t> codes = random_codes(LONG_FRAMES, CODE_SEED);
+    check(max_abs_diff(unfused.decode(codes), fused.decode(codes)) < TOLERANCE,
+            "fused banded attention decodes like the unfused bands");
+    check(max_abs_diff(stream_in_chunks(unfused, codes), stream_in_chunks(fused, codes)) < TOLERANCE,
+            "fused attention streams through the same cached history");
+}
+
+std::vector<float> sine(size_t samples) {
+    std::vector<float> pcm(samples);
+    for (size_t i = 0; i < pcm.size(); ++i) {
+        pcm[i] = SIGNAL_AMPLITUDE * std::sin(SIGNAL_STEP * (float) i);
+    }
+    return pcm;
+}
+
+void test_fused_attention_encodes_like_unfused() {
+    std::mt19937 rng(WEIGHT_SEED);
+    const auto path = temp_gguf("codec-fused-encoder");
+    {
+        GgufBuilder b;
+        b.random = &rng;
+        add_encoder_meta(b.file);
+        add_encoder_tensors(b);
+        b.write(path);
+    }
+    Codec unfused(path.string(), {}, 1, false, CodecAttention::Unfused);
+    Codec fused(path.string(), {}, 1, false, CodecAttention::Fused);
+    const std::vector<float> pcm = sine((size_t) LONG_FRAMES * OUT_DIM);
+    check(unfused.encode(pcm) == fused.encode(pcm), "fused attention encodes the same codes");
+    std::filesystem::remove(path);
+}
+
 void test_stream_requires_begin() {
     std::mt19937 rng(WEIGHT_SEED);
     const auto path = write_decoder("codec-stream-unstarted", N_VQ, 3 * D_MODEL,
             [](gguf_context *) {}, &rng);
-    Codec codec(path.string(), false, 1);
+    Codec codec(path.string(), {}, 1);
     try {
         codec.decode_stream(random_codes(1, CODE_SEED));
         check(false, "decode_stream before begin_decode_stream is rejected");
@@ -171,7 +212,7 @@ int main() {
     const auto path = write_decoder("codec-stream", N_VQ, 3 * D_MODEL, [](gguf_context *) {}, &rng);
     int rc = 0;
     try {
-        Codec codec(path.string(), false, 1);
+        Codec codec(path.string(), {}, 1);
         test_incremental_matches_full_decode(codec);
         test_windows_match_full_decode(codec);
         test_segments_decode_independently(codec);
@@ -179,6 +220,8 @@ int main() {
         test_stream_work_is_linear(codec);
         test_context_is_decoded_then_trimmed(codec);
         test_stream_requires_begin();
+        test_fused_attention_matches_unfused(path);
+        test_fused_attention_encodes_like_unfused();
     } catch (const std::exception & e) {
         std::fprintf(stderr, "%s\n", e.what());
         rc = 1;

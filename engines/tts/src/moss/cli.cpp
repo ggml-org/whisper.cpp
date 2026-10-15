@@ -22,7 +22,7 @@ void print_usage() {
         "       [--language zh] [--duration-tokens 0]   target length, 12.5 tokens per second\n"
         "       [--max-new-tokens 2048] [--context 4096]\n"
         "       [--stream] [--stream-chunk-frames 25]\n"
-        "       [--seed 1234] [--threads 4] [--gpu] [--backends-dir dir]\n"
+        "       [--seed 1234] [--threads 4] [--gpu] [--backend auto|cpu|hexagon|DEVICE] [--backends-dir dir]\n"
         "       [--text-temperature 1.5] [--text-top-p 1.0] [--text-top-k 50]\n"
         "       [--audio-temperature 1.7] [--audio-top-p 0.8] [--audio-top-k 25]\n"
         "       [--audio-repetition-penalty 1.0]\n"
@@ -93,6 +93,10 @@ bool has_s2s_flags(const CliArgs & args) {
 }
 
 bool has_required_flags(const CliArgs & args) {
+    if (args.mode != Mode::Speech && !args.options.backend.empty()) {
+        std::fprintf(stderr, "--backend is only available in tts mode\n");
+        return false;
+    }
     if (args.mode == Mode::SpeechToSpeech) {
         return has_s2s_flags(args);
     }
@@ -242,6 +246,7 @@ bool parse_args(int argc, const char * const * argv, CliArgs & args) {
         else if (flag == "--shift")         args.sound_request.shift = std::strtof(next(), nullptr);
         else if (flag == "--threads")       args.options.n_threads = std::atoi(next());
         else if (flag == "--gpu")           args.options.use_gpu = true;
+        else if (flag == "--backend")       args.options.backend = next();
         else if (flag == "--stream")        args.stream = true;
         else if (flag == "--stream-chunk-frames")   args.options.stream_chunk_frames = std::atoi(next());
         else if (flag == "--backends-dir")  args.options.backends_dir = next();

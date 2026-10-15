@@ -338,10 +338,10 @@ std::vector<float> stream_codes(Codec & codec, const std::vector<int32_t> & code
 
 void test_codec_decode(const std::string & decoder_path) {
     set_env(COREML_STRICT_ENV);
-    Codec coreml(decoder_path, use_gpu(), PARITY_THREADS);
+    Codec coreml(decoder_path, {"", use_gpu()}, PARITY_THREADS);
     clear_env(COREML_STRICT_ENV);
     set_env(COREML_DISABLE_ENV);
-    Codec ggml(decoder_path, use_gpu(), PARITY_THREADS);
+    Codec ggml(decoder_path, {"", use_gpu()}, PARITY_THREADS);
     clear_env(COREML_DISABLE_ENV);
     check(coreml.on_coreml() && !ggml.on_coreml(), "the staged codec sidecar attaches; MOSS_COREML_DISABLE skips it");
     if (!coreml.on_coreml()) {
@@ -363,7 +363,7 @@ void test_codec_invalid_sidecar(const std::string & decoder_path) {
     const auto dir = scratch_dir("codec-invalid");
     const auto staged = linked_file(dir, decoder_path);
     std::filesystem::create_directories(codec_decoder_sidecar_path(staged.string()));
-    Codec codec(staged.string(), use_gpu(), PARITY_THREADS);
+    Codec codec(staged.string(), {"", use_gpu()}, PARITY_THREADS);
     check(!codec.on_coreml(), "a codec sidecar directory that is not a model leaves the codec on ggml");
     std::filesystem::remove_all(dir);
 }

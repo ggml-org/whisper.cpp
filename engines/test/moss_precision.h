@@ -24,7 +24,8 @@ inline void moss_fixture_precision(const std::filesystem::path & path, ggml_type
     std::unique_ptr<gguf_context, decltype(&gguf_free)> output(gguf_init_empty(), gguf_free);
     if (!destination || !output) throw std::runtime_error("cannot allocate precision fixture");
     gguf_set_kv(output.get(), input.get());
-    for (auto * src = ggml_get_first_tensor(source.get()); src; src = ggml_get_next_tensor(source.get(), src)) {
+    for (int64_t i = 0; i < gguf_get_n_tensors(input.get()); ++i) {
+        ggml_tensor * src = ggml_get_tensor(source.get(), gguf_get_tensor_name(input.get(), i));
         const std::string name = ggml_get_name(src);
         const bool matrix = src->ne[0] > 1 && src->ne[1] > 1 &&
                 name.size() >= 7 && name.compare(name.size() - 7, 7, ".weight") == 0;

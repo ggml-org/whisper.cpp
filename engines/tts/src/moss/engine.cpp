@@ -78,7 +78,7 @@ struct Engine::Impl {
         sampling.audio_top_p       = options.audio_top_p;
         sampling.audio_top_k       = options.audio_top_k;
         sampling.audio_repetition_penalty = options.audio_repetition_penalty;
-        backbone.reset(new DelayLM(options.backbone_path, options.use_gpu, options.n_threads,
+        backbone.reset(new DelayLM(options.backbone_path, detail::backend_request(options), options.n_threads,
                 options.context));
         frontend.reset(new Frontend(*backbone));
         validate_duration_budget();
@@ -86,7 +86,7 @@ struct Engine::Impl {
         // and destroy its temporary encoder before loading decoder weights so
         // cloning does not require both codec checkpoints resident at once.
         load_reference();
-        decoder.reset(new Codec(options.decoder_path, options.use_gpu, options.n_threads));
+        decoder.reset(new Codec(options.decoder_path, detail::backend_request(options), options.n_threads));
         if (decoder->is_encoder()) {
             fail("decoder_path points at an encoder checkpoint");
         }
@@ -113,7 +113,7 @@ struct Engine::Impl {
         if (options.encoder_path.empty()) {
             fail("voice cloning needs encoder_path next to the reference audio");
         }
-        Codec encoder(options.encoder_path, options.use_gpu, options.n_threads);
+        Codec encoder(options.encoder_path, detail::backend_request(options), options.n_threads);
         if (!encoder.is_encoder()) {
             fail("encoder_path points at a decoder checkpoint");
         }
@@ -176,7 +176,7 @@ struct Engine::Impl {
     void generate_rows(const std::vector<DelayRow> & prompt, DelayState & state,
                        std::mt19937 & rng, SynthesisResult & result,
                        const std::function<bool()> & after_step) {
-        DelayLogits logits = backbone->prefill(prompt);
+        DelayLogits logits = backbone->prefill(prompt, state.text_logits());
         for (int step = 0; step < options.max_new_tokens; ++step) {
             if (cancel_requested) {
                 result.cancelled = true;
@@ -191,7 +191,7 @@ struct Engine::Impl {
             if (state.stopping()) {
                 return;
             }
-            logits = backbone->step(row);
+            logits = backbone->step(row, state.text_logits());
         }
     }
 

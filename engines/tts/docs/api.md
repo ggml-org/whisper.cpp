@@ -43,7 +43,7 @@ load their model once and reuse it across synthesis calls:
 | `tts_cpp::cosyvoice` | `Engine::synthesize` | 24 kHz PCM |
 | `tts_cpp::audio8` | `Engine::synthesize` | 44.1 kHz PCM, optionally cloned from `VoicePrompt`; `Engine::codec_on_coreml()` reports whether the Core ML codec sidecar is attached (false once a failed call retires it) and `SynthesisResult::codec_synthesis_backend` where each call's codec synthesis ran (`"ggml"` or a `coreml-*` label), see the [Audio8 guide](audio8.md#core-ml-codec-sidecar) |
 | `tts_cpp::pocket` | `Engine::synthesize` / `synthesize_stream` | CPU FlowLM/Mimi, 24 kHz by default; prepared voice or encoder-enabled cloning |
-| `tts_cpp::moss` | `Engine::synthesize` / `synthesize_stream` | MOSS Delay / TTSD synthesis, cloning and dialogue; `Engine::codec_on_coreml()` reports whether the [Core ML codec sidecar](moss.md#core-ml-codec-decoder) is attached and `SynthesisResult::codec_backend` where the request decoded (`"ggml"`, a `coreml-*` label, or `"mixed"`) |
+| `tts_cpp::moss` | `Engine::synthesize` / `synthesize_stream` | MOSS Delay / TTSD synthesis, cloning and dialogue; `EngineOptions::backend = "hexagon"` runs it on the [Snapdragon NPU](moss.md#hexagon-npu); `Engine::codec_on_coreml()` reports whether the [Core ML codec sidecar](moss.md#core-ml-codec-decoder) is attached and `SynthesisResult::codec_backend` where the request decoded (`"ggml"`, a `coreml-*` label, or `"mixed"`) |
 | `tts_cpp::moss` | `SoundEffectEngine::generate` | 48 kHz sound-effect PCM; `dit_on_coreml()` / `vae_on_coreml()` and `SoundEffectResult::dit_backend` / `vae_backend` report the [Core ML sidecars](moss.md#core-ml-dit-and-vae) |
 | `tts_cpp::moss` | `SpeechEngine::respond` | Spoken reply PCM or text, with generation/progress metadata; `tokenizer_on_coreml()` and `SpeechResult::tokenizer_backend` report the [Core ML speech tokenizer](moss.md#core-ml-speech-tokenizer) |
 | `tts_cpp::lavasr` | `Denoiser` / `Enhancer` | enhanced PCM |
@@ -184,8 +184,10 @@ work, host staging and generated PCM. Batch decoding follows the engine's
 existing windowed path for long sequences. Component peaks are summed as a
 conservative upper bound, including encoder allocations that can be released
 before synthesis. This can report `does-not-fit` for a workload whose actual
-peak is smaller. On CPU and Metal unified memory, host and device requirements
-compete for the same free memory.
+peak is smaller. On CPU, Metal unified memory and Hexagon, host and device
+requirements compete for the same free memory. A Hexagon session reports no
+memory of its own, so its projection reads the host's, and the embedding
+tables and text head it keeps on the host count as host bytes.
 
 The result follows `tts-cpp/fit.h`: `Success`/`fits`, `Failure`/`does-not-fit`,
 or `Error` for invalid arguments, an unreadable model, or failed measurement.

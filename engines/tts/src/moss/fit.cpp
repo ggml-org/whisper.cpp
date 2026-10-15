@@ -60,7 +60,7 @@ void validate_codec(const detail::Codec & codec, bool encoder, int channels) {
 void measure_reference(FitResult & result, const EngineOptions & options,
                        const FitWorkload & workload, int channels, int sample_rate, int hop) {
     if (workload.reference_samples == 0) return;
-    detail::Codec encoder(options.encoder_path, options.use_gpu, options.n_threads, true);
+    detail::Codec encoder(options.encoder_path, detail::backend_request(options), options.n_threads, true);
     validate_codec(encoder, true, channels);
     if (encoder.sample_rate() != sample_rate || encoder.samples_per_frame() != hop) {
         throw std::runtime_error("codec frame geometry does not match");
@@ -117,13 +117,14 @@ FitResult fit_params(const EngineOptions & options, const FitWorkload & workload
     }
     if (!options.backends_dir.empty()) ::tts_cpp::detail::set_backends_directory(options.backends_dir);
     try {
-        detail::DelayLM backbone(options.backbone_path, options.use_gpu, options.n_threads, options.context, true);
+        detail::DelayLM backbone(options.backbone_path, detail::backend_request(options), options.n_threads,
+                options.context, true);
         const int channels = backbone.config().n_vq;
         if (!valid_budget(options, workload, channels)) {
             result.reason = "workload-too-large";
             return result;
         }
-        detail::Codec decoder(options.decoder_path, options.use_gpu, options.n_threads, true);
+        detail::Codec decoder(options.decoder_path, detail::backend_request(options), options.n_threads, true);
         validate_codec(decoder, false, channels);
         result = backbone.measure(workload.prompt_rows, options.max_new_tokens);
         result.model_variant = "moss";

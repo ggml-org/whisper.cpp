@@ -20,6 +20,7 @@ struct EngineOptions {
     int context = 4096;
     int max_new_tokens = 2048;
     bool use_gpu = false;
+    std::string backend;
     float text_temperature  = 1.5f;
     float text_top_p        = 1.0f;
     int   text_top_k        = 50;

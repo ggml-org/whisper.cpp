@@ -112,15 +112,27 @@ void test_errors() {
     check(moss::fit_params(options, {PROMPT_ROWS, 0, false, 0}).reason == "model-unreadable", "unreadable model is an outcome");
 }
 
+void test_explicit_backend() {
+    Models models;
+    auto options = models.options();
+    options.backend = "cpu";
+    const auto cpu = moss::fit_params(options, {PROMPT_ROWS, 0, false, 0});
+    check(cpu.status == FitStatus::Success && cpu.device_is_cpu, "an explicit cpu backend projects on the CPU");
+    options.backend = "no-such-device";
+    const auto missing = moss::fit_params(options, {PROMPT_ROWS, 0, false, 0});
+    check(missing.status == FitStatus::Error && missing.reason == "no-backend-device",
+          "an unavailable explicit backend reports no-backend-device");
+}
+
 void test_runtime_after_measurement() {
     Models models;
     const auto options = models.options();
     check(moss::fit_params(options, {PROMPT_ROWS, 0, true, 0}).status == FitStatus::Success, "measure before runtime");
-    moss::detail::DelayLM backbone(options.backbone_path, false, 1, CONTEXT);
+    moss::detail::DelayLM backbone(options.backbone_path, {}, 1, CONTEXT);
     moss::detail::DelayRow row;
     row.audio.assign(N_VQ, 0);
     check(backbone.prefill({row}).text.size() == TEXT_VOCAB, "runtime LM still computes after measure");
-    moss::detail::Codec decoder(options.decoder_path, false, 1);
+    moss::detail::Codec decoder(options.decoder_path, {}, 1);
     check(decoder.decode(std::vector<int32_t>(N_VQ * 4), N_VQ).size() == OUT_DIM * 4,
           "runtime decoder still computes after measure");
 }
@@ -130,6 +142,7 @@ int main() {
     test_metadata_only();
     test_workloads();
     test_errors();
+    test_explicit_backend();
     test_runtime_after_measurement();
     if (!failures) std::puts("MOSS fit tests passed");
     return failures ? 1 : 0;

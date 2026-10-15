@@ -1,5 +1,6 @@
 #pragma once
 
+#include "moss/backend_request.h"
 #include "tts-cpp/fit.h"
 #include <cstdint>
 #include <memory>
@@ -40,15 +41,29 @@ struct DelayLogits {
     std::vector<std::vector<float>> audio;
 };
 
+enum class TextLogits { None, Slots, Full };
+
+enum class TablePlacement { Automatic, Device, Host };
+
+enum class DelayAttention { Automatic, Unfused, Fused };
+
+struct DelayLayout {
+    TablePlacement tables = TablePlacement::Automatic;
+    DelayAttention attention = DelayAttention::Automatic;
+};
+
 class DelayLM {
 public:
-    DelayLM(const std::string & path, bool use_gpu, int n_threads, int n_ctx, bool measure_only = false);
+    DelayLM(const std::string & path, const BackendRequest & backend, int n_threads, int n_ctx,
+            bool measure_only = false, const DelayLayout & layout = {});
     ~DelayLM();
     DelayLM(const DelayLM &) = delete;
     DelayLM & operator=(const DelayLM &) = delete;
 
     const DelayConfig & config() const;
     const char * backend_name() const;
+    bool tables_on_host() const;
+    bool fused_attention() const;
     int position() const;
     int context() const;
     FitResult measure(int prompt_rows, int generated_rows);
@@ -58,8 +73,8 @@ public:
     std::vector<std::string> tokenizer_merges() const;
     int32_t token_id(const std::string & token) const;
 
-    DelayLogits prefill(const std::vector<DelayRow> & rows);
-    DelayLogits step(const DelayRow & row);
+    DelayLogits prefill(const std::vector<DelayRow> & rows, TextLogits text = TextLogits::Full);
+    DelayLogits step(const DelayRow & row, TextLogits text = TextLogits::Full);
 
 private:
     struct Impl;

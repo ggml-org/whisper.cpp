@@ -1,5 +1,6 @@
 #pragma once
 
+#include "moss/backend_request.h"
 #include "moss/codec_coreml.h"
 #include "tts-cpp/fit.h"
 #include <cstdint>
@@ -9,9 +10,12 @@
 
 namespace tts_cpp::moss::detail {
 
+enum class CodecAttention { Automatic, Unfused, Fused };
+
 class Codec {
 public:
-    Codec(const std::string & path, bool use_gpu, int n_threads, bool measure_only = false);
+    Codec(const std::string & path, const BackendRequest & backend, int n_threads, bool measure_only = false,
+          CodecAttention attention = CodecAttention::Automatic);
     ~Codec();
     Codec(const Codec &) = delete;
     Codec & operator=(const Codec &) = delete;
@@ -21,6 +25,7 @@ public:
     int num_quantizers() const;
     int samples_per_frame() const;
     const char * backend_name() const;
+    bool fused_attention() const;
 
     std::vector<int32_t> encode(const std::vector<float> & pcm);
     std::vector<float> decode(const std::vector<int32_t> & codes, int n_channels = 0);

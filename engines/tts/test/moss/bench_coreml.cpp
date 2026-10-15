@@ -230,10 +230,10 @@ void bench_codec_stream(Codec & coreml, Codec & ggml, const std::vector<int32_t>
 
 void bench_codec(const std::string & decoder_path) {
     set_env(COREML_STRICT_ENV);
-    Codec coreml(decoder_path, true, BENCH_THREADS);
+    Codec coreml(decoder_path, {"", true}, BENCH_THREADS);
     clear_env(COREML_STRICT_ENV);
     set_env(COREML_DISABLE_ENV);
-    Codec ggml(decoder_path, true, BENCH_THREADS);
+    Codec ggml(decoder_path, {"", true}, BENCH_THREADS);
     clear_env(COREML_DISABLE_ENV);
     bench_codec_stream(coreml, ggml, random_codes(CODEC_FRAMES, coreml.num_quantizers()));
 }

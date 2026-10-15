@@ -16,7 +16,8 @@ Chatterbox families share one engine API, while the Supertonic generations
 share another.
 
 Pocket TTS runs on CPU; cloning requires encoder-enabled weights. MOSS Delay
-and MOSS-TTSD are validated end to end on CPU/Metal, with numerical reference
+and MOSS-TTSD are validated end to end on CPU/Metal and on the
+[Snapdragon Hexagon NPU](docs/moss.md#hexagon-npu), with numerical reference
 parity pending. MOSS-SoundEffect and MOSS-Speech have CPU/Metal stage validation;
 CUDA and Vulkan add generated-model CPU parity and full-checkpoint smoke coverage.
 TTS streaming, cancellation/reuse and ASR intelligibility gates are described
@@ -59,9 +60,9 @@ known upstream limitations; see the linked MOSS guide for details.
 LavaSR denoiser and enhancer GPU selection includes ARM Mali/Immortalis
 through Vulkan when GPU execution is requested.
 
-Supertonic 3, Parler-TTS mini, CosyVoice3 and Audio8 also support explicit
-Hexagon placement on Snapdragon; see their model guides for setup and validated
-tiers. Audio8's corrected baseline uses `q8_0` quantisation with
+Supertonic 3, Parler-TTS mini, CosyVoice3, Audio8 and MOSS-TTS-v1.5 /
+MOSS-TTSD also support explicit Hexagon placement on Snapdragon; see their
+model guides for setup and validated tiers. Audio8's corrected baseline uses `q8_0` quantisation with
 `--greedy` sampling under `--backend hexagon`; see
 [Audio8](docs/audio8.md#hexagon-npu-snapdragon) for the full-compute tuning
 recipe (`OPPOLL=1`, `OPSTAGE=3`, `OPFUSION=1`), the corrected single-prompt

@@ -2,6 +2,7 @@
 
 #include "backend_selection.h"
 #include "backend_util.h"
+#include "cosyvoice_mmap.h"
 #include "gguf_stream.h"
 #include "sched_dispatch.h"
 #include "moss/fit_measure.h"
@@ -30,6 +31,13 @@ constexpr int MAX_FEED_FORWARD = 1 << 18;
 constexpr int MAX_HEADS = 1024;
 constexpr int MAX_HEAD_DIM = 1024;
 constexpr float FFN_DOWN_ACCUMULATION_SCALE = 64.0f;
+constexpr const char * TEXT_TABLE = "token_embd.weight";
+constexpr const char * AUDIO_TABLE_PREFIX = "token_embd_audio.";
+constexpr const char * TEXT_HEAD = "output.weight";
+constexpr const char * SLOT_HEAD = "output_slots.weight";
+constexpr const char * OWNER = "moss-delay";
+constexpr size_t HOST_TENSOR_ALIGNMENT = 32;
+constexpr size_t SPARE_TENSORS = 8;
 
 [[noreturn]] void fail(const std::string & message) {
     throw std::runtime_error("moss delay LM: " + message);
@@ -37,6 +45,15 @@ constexpr float FFN_DOWN_ACCUMULATION_SCALE = 64.0f;
 
 bool within(int value, int low, int high) {
     return value >= low && value <= high;
+}
+
+bool starts_with(const char * text, const char * prefix) {
+    return std::strncmp(text, prefix, std::strlen(prefix)) == 0;
+}
+
+bool host_table(const char * name) {
+    return std::strcmp(name, TEXT_TABLE) == 0 || std::strcmp(name, TEXT_HEAD) == 0 ||
+           starts_with(name, AUDIO_TABLE_PREFIX);
 }
 
 struct Layer {
@@ -73,6 +90,9 @@ struct DelayLM::Impl {
     ggml_backend_t backend = nullptr;
     ggml_backend_buffer_t weight_buffer = nullptr;
     ggml_backend_buffer_t state_buffer = nullptr;
+    ggml_context * host_weights = nullptr;
+    ggml_backend_buffer_t host_buffer = nullptr;
+    ::tts_cpp::cosyvoice::MappedFile mapping;
     ::tts_cpp::detail::sched_fallback sched;
 
     DelayConfig config;
@@ -80,12 +100,17 @@ struct DelayLM::Impl {
     int n_ctx = 0;
     int pos = 0;
     bool measure_only = false;
+    DelayLayout layout;
+    bool tables_on_host = false;
+    bool fused = false;
     uint64_t graph_host_bytes = 0;
     ::tts_cpp::detail::fit_graph_price graph_price;
 
     ggml_tensor * tok_embd = nullptr;
     ggml_tensor * output_norm = nullptr;
     ggml_tensor * output_head = nullptr;
+    ggml_tensor * slot_head = nullptr;
+    std::vector<int32_t> slot_ids;
     std::vector<ggml_tensor *> tok_embd_audio;
     std::vector<ggml_tensor *> output_audio;
     std::vector<Layer> layers;
@@ -101,7 +126,10 @@ struct DelayLM::Impl {
         if (graph_ctx) ggml_free(graph_ctx);
         if (state_buffer) ggml_backend_buffer_free(state_buffer);
         if (weight_buffer) ggml_backend_buffer_free(weight_buffer);
+        if (host_buffer) ggml_backend_buffer_free(host_buffer);
+        ::tts_cpp::cosyvoice::mapped_file_close(mapping);
         if (state) ggml_free(state);
+        if (host_weights) ggml_free(host_weights);
         if (weights) ggml_free(weights);
         if (metadata) ggml_free(metadata);
         if (file) gguf_free(file);
@@ -162,7 +190,11 @@ struct DelayLM::Impl {
     }
 
     ggml_tensor * find_tensor(const std::string & name) const {
-        return ggml_get_tensor(weights ? weights : metadata, name.c_str());
+        if (!weights) {
+            return ggml_get_tensor(metadata, name.c_str());
+        }
+        ggml_tensor * tensor = ggml_get_tensor(weights, name.c_str());
+        return tensor || !host_weights ? tensor : ggml_get_tensor(host_weights, name.c_str());
     }
 
     ggml_tensor * require_tensor(const std::string & name) const {
@@ -213,14 +245,14 @@ struct DelayLM::Impl {
     }
 
     void map_tensors() {
-        tok_embd    = require_tensor("token_embd.weight");
+        tok_embd    = require_tensor(TEXT_TABLE);
         output_norm = require_tensor("output_norm.weight");
-        output_head = require_tensor("output.weight");
+        output_head = require_tensor(TEXT_HEAD);
         config.text_vocab = (int) output_head->ne[1];
         tok_embd_audio.resize(config.n_vq);
         output_audio.resize(config.n_vq);
         for (int i = 0; i < config.n_vq; ++i) {
-            tok_embd_audio[i] = require_tensor("token_embd_audio." + std::to_string(i) + ".weight");
+            tok_embd_audio[i] = require_tensor(AUDIO_TABLE_PREFIX + std::to_string(i) + ".weight");
             output_audio[i]   = require_tensor("output_audio." + std::to_string(i) + ".weight");
         }
         config.audio_vocab = (int) output_audio[0]->ne[1];
@@ -323,7 +355,8 @@ struct DelayLM::Impl {
         cache_v.resize(config.n_layers);
         for (int il = 0; il < config.n_layers; ++il) {
             cache_k[il] = ggml_new_tensor_2d(state, GGML_TYPE_F16, kv_dim, n_ctx);
-            cache_v[il] = ggml_new_tensor_2d(state, GGML_TYPE_F16, n_ctx, kv_dim);
+            cache_v[il] = fused ? ggml_new_tensor_2d(state, GGML_TYPE_F16, kv_dim, n_ctx)
+                                : ggml_new_tensor_2d(state, GGML_TYPE_F16, n_ctx, kv_dim);
         }
         if (measure_only) {
             mark_fit_tensors(state);
@@ -336,51 +369,177 @@ struct DelayLM::Impl {
         ggml_backend_buffer_clear(state_buffer, 0);
     }
 
-    void duplicate_metadata_tensors() {
+    static size_t count_tensors(ggml_context * ctx) {
         size_t count = 0;
-        for (auto * src = ggml_get_first_tensor(metadata); src; src = ggml_get_next_tensor(metadata, src)) {
+        for (auto * tensor = ggml_get_first_tensor(ctx); tensor; tensor = ggml_get_next_tensor(ctx, tensor)) {
             count++;
         }
-        weights = ggml_init({(count + 8) * ggml_tensor_overhead(), nullptr, true});
-        if (!weights) {
+        return count;
+    }
+
+    static ggml_context * new_weight_context(size_t count) {
+        ggml_context * ctx = ggml_init({(count + SPARE_TENSORS) * ggml_tensor_overhead(), nullptr, true});
+        if (!ctx) {
             fail("weight context allocation failed");
         }
+        return ctx;
+    }
+
+    ggml_context * context_for(const char * name) const {
+        return host_weights && host_table(name) ? host_weights : weights;
+    }
+
+    void duplicate_metadata_tensors() {
+        const size_t count = count_tensors(metadata);
+        weights = new_weight_context(count);
+        if (tables_on_host) {
+            host_weights = new_weight_context(count);
+        }
         for (auto * src = ggml_get_first_tensor(metadata); src; src = ggml_get_next_tensor(metadata, src)) {
-            auto * dst = ggml_new_tensor(weights, src->type, GGML_MAX_DIMS, src->ne);
+            auto * dst = ggml_new_tensor(context_for(ggml_get_name(src)), src->type, GGML_MAX_DIMS, src->ne);
             ggml_set_name(dst, ggml_get_name(src));
         }
     }
 
-    void upload_weights(const std::string & path) {
-        weight_buffer = ggml_backend_alloc_ctx_tensors(weights, backend);
-        if (!weight_buffer) {
-            fail("weight allocation failed");
+    void add_slot_head() {
+        if (!tables_on_host) {
+            return;
         }
-        ::tts_cpp::detail::gguf_stream_reader reader(file, path);
-        if (!reader.ok()) {
-            fail("cannot reopen GGUF for streaming: " + path);
+        slot_ids = {config.audio_assistant_gen_slot_token_id, config.audio_assistant_delay_slot_token_id};
+        slot_head = ggml_new_tensor_2d(weights, GGML_TYPE_F32, config.n_embd, (int64_t) slot_ids.size());
+        ggml_set_name(slot_head, SLOT_HEAD);
+    }
+
+    void require_device_weight_types() const {
+        if (!::tts_cpp::detail::backend_is_hexagon(backend)) {
+            return;
         }
-        for (auto * dst = ggml_get_first_tensor(weights); dst; dst = ggml_get_next_tensor(weights, dst)) {
-            if (!reader.to_backend(ggml_get_name(dst), dst)) {
+        if (const ggml_tensor * refused = first_tensor_hexagon_cannot_run(weights)) {
+            fail(hexagon_weight_refusal(refused));
+        }
+    }
+
+    void stream_tensors(::tts_cpp::detail::gguf_stream_reader & reader, ggml_context * ctx) {
+        for (auto * dst = ggml_get_first_tensor(ctx); dst; dst = ggml_get_next_tensor(ctx, dst)) {
+            if (dst != slot_head && !reader.to_backend(ggml_get_name(dst), dst)) {
                 fail(std::string("failed to load tensor: ") + ggml_get_name(dst));
             }
         }
     }
 
-    void init_backend(bool use_gpu) {
-        ::tts_cpp::detail::ensure_backends_loaded();
-        if (use_gpu) {
-            backend = ::tts_cpp::detail::init_gpu_backend(1, false, "moss-delay");
+    const uint8_t * mapped_address(const ggml_tensor * tensor) const {
+        const int64_t id = gguf_find_tensor(file, ggml_get_name(tensor));
+        if (id < 0) {
+            return nullptr;
         }
-        if (!backend) {
-            backend = ::tts_cpp::detail::init_cpu_backend();
+        const size_t offset = gguf_get_data_offset(file) + gguf_get_tensor_offset(file, id);
+        if (offset > mapping.size || ggml_nbytes(tensor) > mapping.size - offset) {
+            return nullptr;
         }
-        if (!backend) {
-            fail("no compute backend available");
+        const uint8_t * address = mapping.data + offset;
+        return (uintptr_t) address % HOST_TENSOR_ALIGNMENT == 0 ? address : nullptr;
+    }
+
+    bool host_tables_mappable() const {
+        for (auto * t = ggml_get_first_tensor(host_weights); t; t = ggml_get_next_tensor(host_weights, t)) {
+            if (!mapped_address(t)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void bind_host_tables() {
+        for (auto * t = ggml_get_first_tensor(host_weights); t; t = ggml_get_next_tensor(host_weights, t)) {
+            if (ggml_backend_tensor_alloc(host_buffer, t, (void *) mapped_address(t)) != GGML_STATUS_SUCCESS) {
+                fail(std::string("cannot map tensor: ") + ggml_get_name(t));
+            }
         }
     }
 
-    void load(const std::string & path, bool use_gpu, int threads, int context) {
+    bool map_host_tables(const std::string & path) {
+        if (!::tts_cpp::cosyvoice::mapped_file_open(mapping, path, OWNER)) {
+            return false;
+        }
+        if (host_tables_mappable()) {
+            host_buffer = ggml_backend_cpu_buffer_from_ptr((void *) mapping.data, mapping.size);
+        }
+        if (!host_buffer) {
+            ::tts_cpp::cosyvoice::mapped_file_close(mapping);
+            return false;
+        }
+        bind_host_tables();
+        return true;
+    }
+
+    void place_host_tables(const std::string & path, ::tts_cpp::detail::gguf_stream_reader & reader) {
+        if (map_host_tables(path)) {
+            return;
+        }
+        ggml_backend_dev_t cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        host_buffer = cpu ? ggml_backend_alloc_ctx_tensors_from_buft(host_weights, ggml_backend_dev_buffer_type(cpu))
+                          : nullptr;
+        if (!host_buffer) {
+            fail("host table allocation failed");
+        }
+        stream_tensors(reader, host_weights);
+    }
+
+    void read_head_row(int32_t id, float * out) const {
+        const char * row = (const char *) output_head->data + (size_t) id * output_head->nb[1];
+        if (output_head->type == GGML_TYPE_F32) {
+            std::memcpy(out, row, (size_t) config.n_embd * sizeof(float));
+            return;
+        }
+        const auto * traits = ggml_get_type_traits(output_head->type);
+        if (!traits->to_float) {
+            fail(std::string("cannot read text head type ") + ggml_type_name(output_head->type));
+        }
+        traits->to_float(row, out, config.n_embd);
+    }
+
+    std::vector<float> slot_rows() const {
+        std::vector<float> rows((size_t) config.n_embd * slot_ids.size());
+        for (size_t i = 0; i < slot_ids.size(); ++i) {
+            read_head_row(slot_ids[i], rows.data() + i * (size_t) config.n_embd);
+        }
+        return rows;
+    }
+
+    void upload_slot_head() {
+        const std::vector<float> rows = slot_rows();
+        ggml_backend_tensor_set(slot_head, rows.data(), 0, rows.size() * sizeof(float));
+    }
+
+    void upload_weights(const std::string & path) {
+        ::tts_cpp::detail::gguf_stream_reader reader(file, path);
+        if (!reader.ok()) {
+            fail("cannot reopen GGUF for streaming: " + path);
+        }
+        if (host_weights) {
+            place_host_tables(path, reader);
+        }
+        weight_buffer = ggml_backend_alloc_ctx_tensors_from_buft(weights,
+                ::tts_cpp::detail::weight_buffer_type(backend));
+        if (!weight_buffer) {
+            fail("weight allocation failed");
+        }
+        stream_tensors(reader, weights);
+        if (slot_head) {
+            upload_slot_head();
+        }
+    }
+
+    void select_backend(const BackendRequest & request) {
+        backend = ::tts_cpp::moss::detail::init_backend(request, OWNER);
+        const bool hexagon = ::tts_cpp::detail::backend_is_hexagon(backend);
+        tables_on_host = layout.tables == TablePlacement::Host ||
+                (layout.tables == TablePlacement::Automatic && hexagon);
+        fused = layout.attention == DelayAttention::Fused ||
+                (layout.attention == DelayAttention::Automatic && hexagon);
+    }
+
+    void load(const std::string & path, const BackendRequest & request, int threads, int context) {
         n_threads = threads;
         n_ctx = context;
         if (threads < 1 || threads > 1024) {
@@ -397,14 +556,17 @@ struct DelayLM::Impl {
             fail("unsupported architecture");
         }
         read_config();
-        init_backend(use_gpu);
+        select_backend(request);
         duplicate_metadata_tensors();
         map_tensors();
         validate_tensor_shapes();
         validate_token_ids();
+        add_slot_head();
+        require_device_weight_types();
         allocate_cache();
         if (measure_only) {
             mark_fit_tensors(weights);
+            if (host_weights) mark_fit_tensors(host_weights);
             return;
         }
         upload_weights(path);
@@ -482,6 +644,43 @@ struct DelayLM::Impl {
                 row, row * config.head_dim, 0);
     }
 
+    float attention_scale() const {
+        return 1.0f / std::sqrt((float) config.head_dim);
+    }
+
+    ggml_tensor * cache_heads(ggml_tensor * cache, int64_t total) {
+        return ggml_reshape_3d(graph_ctx, cache_view(cache, total), config.head_dim, config.n_kv_heads, total);
+    }
+
+    void write_cache(ggml_cgraph * graph, int il, ggml_tensor * k, ggml_tensor * v, int64_t n_tokens) {
+        const int64_t kv_dim = (int64_t) config.head_dim * config.n_kv_heads;
+        ggml_tensor * k_rows = ggml_reshape_2d(graph_ctx, ggml_cont(graph_ctx, k), kv_dim, n_tokens);
+        ggml_tensor * v_rows = ggml_reshape_2d(graph_ctx, ggml_cont(graph_ctx, v), kv_dim, n_tokens);
+        ggml_build_forward_expand(graph, ggml_cpy(graph_ctx, k_rows, cache_write_view(cache_k[il], pos, n_tokens)));
+        ggml_tensor * value_write = fused
+                ? ggml_cpy(graph_ctx, v_rows, cache_write_view(cache_v[il], pos, n_tokens))
+                : ggml_cpy(graph_ctx, ggml_transpose(graph_ctx, v_rows),
+                        cache_write_view_transposed(cache_v[il], pos, n_tokens));
+        ggml_build_forward_expand(graph, value_write);
+    }
+
+    ggml_tensor * attend_unfused(ggml_tensor * q, int il, int64_t n_tokens, int64_t total, ggml_tensor * mask) {
+        ggml_tensor * keys = ggml_permute(graph_ctx, cache_heads(cache_k[il], total), 0, 2, 1, 3);
+        ggml_tensor * scores = ggml_mul_mat(graph_ctx, keys, ggml_permute(graph_ctx, q, 0, 2, 1, 3));
+        scores = ggml_soft_max_ext(graph_ctx, scores, mask, attention_scale(), 0.0f);
+        ggml_tensor * attended = ggml_mul_mat(graph_ctx, value_prefix_view(cache_v[il], total), scores);
+        attended = ggml_permute(graph_ctx, attended, 0, 2, 1, 3);
+        return ggml_cont_2d(graph_ctx, attended, (int64_t) config.head_dim * config.n_heads, n_tokens);
+    }
+
+    ggml_tensor * attend_fused(ggml_tensor * q, int il, int64_t n_tokens, int64_t total, ggml_tensor * mask) {
+        ggml_tensor * attended = ggml_flash_attn_ext(graph_ctx, ggml_permute(graph_ctx, q, 0, 2, 1, 3),
+                ggml_permute(graph_ctx, cache_heads(cache_k[il], total), 0, 2, 1, 3),
+                ggml_permute(graph_ctx, cache_heads(cache_v[il], total), 0, 2, 1, 3),
+                mask, attention_scale(), 0.0f, 0.0f);
+        return ggml_reshape_2d(graph_ctx, attended, (int64_t) config.head_dim * config.n_heads, n_tokens);
+    }
+
     ggml_tensor * attention(ggml_cgraph * graph, const Layer & layer, int il, ggml_tensor * cur,
                             int64_t n_tokens, int64_t total, ggml_tensor * positions, ggml_tensor * mask) {
         ggml_tensor * q = ggml_mul_mat(graph_ctx, layer.wq, cur);
@@ -492,25 +691,9 @@ struct DelayLM::Impl {
         v = ggml_reshape_3d(graph_ctx, v, config.head_dim, config.n_kv_heads, n_tokens);
         q = rope(rms_norm(q, layer.attn_q_norm), positions);
         k = rope(rms_norm(k, layer.attn_k_norm), positions);
-
-        const int64_t kv_dim = (int64_t) config.head_dim * config.n_kv_heads;
-        ggml_tensor * k_rows = ggml_reshape_2d(graph_ctx, ggml_cont(graph_ctx, k), kv_dim, n_tokens);
-        ggml_tensor * v_rows = ggml_reshape_2d(graph_ctx, ggml_cont(graph_ctx, v), kv_dim, n_tokens);
-        ggml_build_forward_expand(graph, ggml_cpy(graph_ctx, k_rows, cache_write_view(cache_k[il], pos, n_tokens)));
-        ggml_build_forward_expand(graph, ggml_cpy(graph_ctx, ggml_transpose(graph_ctx, v_rows),
-                cache_write_view_transposed(cache_v[il], pos, n_tokens)));
-
-        ggml_tensor * keys = ggml_reshape_3d(graph_ctx, cache_view(cache_k[il], total),
-                config.head_dim, config.n_kv_heads, total);
-        ggml_tensor * values = value_prefix_view(cache_v[il], total);
-
-        q = ggml_permute(graph_ctx, q, 0, 2, 1, 3);
-        keys = ggml_permute(graph_ctx, keys, 0, 2, 1, 3);
-        ggml_tensor * scores = ggml_mul_mat(graph_ctx, keys, q);
-        scores = ggml_soft_max_ext(graph_ctx, scores, mask, 1.0f / std::sqrt((float) config.head_dim), 0.0f);
-        ggml_tensor * attended = ggml_mul_mat(graph_ctx, values, scores);
-        attended = ggml_permute(graph_ctx, attended, 0, 2, 1, 3);
-        attended = ggml_cont_2d(graph_ctx, attended, (int64_t) config.head_dim * config.n_heads, n_tokens);
+        write_cache(graph, il, k, v, n_tokens);
+        ggml_tensor * attended = fused ? attend_fused(q, il, n_tokens, total, mask)
+                                       : attend_unfused(q, il, n_tokens, total, mask);
         return ggml_mul_mat(graph_ctx, layer.wo, attended);
     }
 
@@ -578,8 +761,45 @@ struct DelayLM::Impl {
         }
     }
 
-    DelayLogits forward(const std::vector<DelayRow> & rows) {
+    TextLogits projected_text(TextLogits requested) const {
+        return tables_on_host ? requested : TextLogits::Full;
+    }
+
+    ggml_tensor * text_projection(ggml_tensor * last, TextLogits text) {
+        switch (text) {
+            case TextLogits::Full:  return ggml_mul_mat(graph_ctx, output_head, last);
+            case TextLogits::Slots: return ggml_mul_mat(graph_ctx, slot_head, last);
+            case TextLogits::None:  return nullptr;
+        }
+        return nullptr;
+    }
+
+    static std::vector<float> read_f32(ggml_tensor * tensor) {
+        std::vector<float> values((size_t) ggml_nelements(tensor));
+        ggml_backend_tensor_get(tensor, values.data(), 0, values.size() * sizeof(float));
+        return values;
+    }
+
+    void scatter_slot_logits(const std::vector<float> & slots, std::vector<float> & logits) const {
+        for (size_t i = 0; i < slot_ids.size(); ++i) {
+            logits[(size_t) slot_ids[i]] = slots[i];
+        }
+    }
+
+    std::vector<float> read_text_logits(ggml_tensor * projected, TextLogits text) const {
+        if (text == TextLogits::Full) {
+            return read_f32(projected);
+        }
+        std::vector<float> logits((size_t) config.text_vocab, -std::numeric_limits<float>::infinity());
+        if (text == TextLogits::Slots) {
+            scatter_slot_logits(read_f32(projected), logits);
+        }
+        return logits;
+    }
+
+    DelayLogits forward(const std::vector<DelayRow> & rows, TextLogits requested_text = TextLogits::Full) {
         validate_rows(rows);
+        const TextLogits text = projected_text(requested_text);
         begin_graph();
         const int64_t n_tokens = (int64_t) rows.size();
         const int64_t total = pos + n_tokens;
@@ -591,6 +811,9 @@ struct DelayLM::Impl {
         }
         ggml_tensor * inp_pos = input_i32(std::move(positions));
         ggml_tensor * mask = input_f32(attention_mask(n_tokens, total), total, n_tokens);
+        if (fused) {
+            mask = ggml_cast(graph_ctx, mask, GGML_TYPE_F16);
+        }
 
         ggml_tensor * cur = embed_rows(rows);
         for (int il = 0; il < config.n_layers; ++il) {
@@ -605,9 +828,11 @@ struct DelayLM::Impl {
         cur = rms_norm(cur, output_norm);
         ggml_tensor * last = ggml_get_rows(graph_ctx, cur, input_i32({(int32_t) (n_tokens - 1)}));
 
-        ggml_tensor * text_logits = ggml_mul_mat(graph_ctx, output_head, last);
-        ggml_set_output(text_logits);
-        ggml_build_forward_expand(graph, text_logits);
+        ggml_tensor * text_logits = text_projection(last, text);
+        if (text_logits) {
+            ggml_set_output(text_logits);
+            ggml_build_forward_expand(graph, text_logits);
+        }
         std::vector<ggml_tensor *> audio_logits(config.n_vq);
         for (int i = 0; i < config.n_vq; ++i) {
             audio_logits[i] = ggml_mul_mat(graph_ctx, output_audio[i], last);
@@ -619,7 +844,7 @@ struct DelayLM::Impl {
             graph_price = measure_fit_graph(backend, graph, GRAPH_NODES);
             return {};
         }
-        if (!::tts_cpp::detail::sched_fallback_ensure(sched, backend, GRAPH_NODES, {weight_buffer, state_buffer})) {
+        if (!::tts_cpp::detail::sched_fallback_ensure(sched, backend, GRAPH_NODES, {weight_buffer, host_buffer})) {
             fail("scheduler initialization failed");
         }
         if (!::tts_cpp::detail::sched_fallback_alloc(sched, graph)) {
@@ -632,28 +857,28 @@ struct DelayLM::Impl {
         }
 
         DelayLogits logits;
-        logits.text.resize(config.text_vocab);
-        ggml_backend_tensor_get(text_logits, logits.text.data(), 0, logits.text.size() * sizeof(float));
+        logits.text = read_text_logits(text_logits, text);
         logits.audio.resize(config.n_vq);
         for (int i = 0; i < config.n_vq; ++i) {
-            logits.audio[i].resize(config.audio_vocab);
-            ggml_backend_tensor_get(audio_logits[i], logits.audio[i].data(), 0,
-                    logits.audio[i].size() * sizeof(float));
+            logits.audio[i] = read_f32(audio_logits[i]);
         }
         pos += (int) n_tokens;
         return logits;
     }
 };
 
-DelayLM::DelayLM(const std::string & path, bool use_gpu, int n_threads, int n_ctx, bool measure_only) : impl_(new Impl) {
+DelayLM::DelayLM(const std::string & path, const BackendRequest & backend, int n_threads, int n_ctx,
+                 bool measure_only, const DelayLayout & layout) : impl_(new Impl) {
     impl_->measure_only = measure_only;
-    impl_->load(path, use_gpu, n_threads, n_ctx);
+    impl_->layout = layout;
+    impl_->load(path, backend, n_threads, n_ctx);
 }
 
 FitResult DelayLM::measure(int prompt_rows, int generated_rows) {
     if (!impl_->measure_only) fail("measurement requires a metadata-only model");
     FitResult result = fit_device(impl_->backend);
-    result.device.weights_bytes = measure_fit_tensors(impl_->weights, impl_->backend);
+    result.device.weights_bytes = measure_fit_tensors(impl_->weights,
+            ::tts_cpp::detail::weight_buffer_type(impl_->backend));
     result.device.state_bytes = measure_fit_tensors(impl_->state, impl_->backend);
     DelayRow row;
     row.audio.assign(impl_->config.n_vq, 0);
@@ -672,6 +897,10 @@ FitResult DelayLM::measure(int prompt_rows, int generated_rows) {
     result.host_bytes = fitutil::sat_add(result.host_bytes, ggml_get_mem_size(impl_->weights));
     result.host_bytes = fitutil::sat_add(result.host_bytes, ggml_get_mem_size(impl_->graph_ctx));
     if (impl_->state) result.host_bytes = fitutil::sat_add(result.host_bytes, ggml_get_mem_size(impl_->state));
+    if (impl_->host_weights) {
+        result.host_bytes = fitutil::sat_add(result.host_bytes,
+                measure_fit_tensors(impl_->host_weights, ggml_backend_cpu_buffer_type()));
+    }
     return result;
 }
 
@@ -679,6 +908,8 @@ DelayLM::~DelayLM() = default;
 
 const DelayConfig & DelayLM::config() const { return impl_->config; }
 const char * DelayLM::backend_name() const { return ggml_backend_name(impl_->backend); }
+bool DelayLM::tables_on_host() const { return impl_->tables_on_host; }
+bool DelayLM::fused_attention() const { return impl_->fused; }
 int DelayLM::position() const { return impl_->pos; }
 int DelayLM::context() const { return impl_->n_ctx; }
 
@@ -704,12 +935,12 @@ int32_t DelayLM::token_id(const std::string & token) const {
     fail("unknown token: " + token);
 }
 
-DelayLogits DelayLM::prefill(const std::vector<DelayRow> & rows) {
-    return impl_->forward(rows);
+DelayLogits DelayLM::prefill(const std::vector<DelayRow> & rows, TextLogits text) {
+    return impl_->forward(rows, text);
 }
 
-DelayLogits DelayLM::step(const DelayRow & row) {
-    return impl_->forward({row});
+DelayLogits DelayLM::step(const DelayRow & row, TextLogits text) {
+    return impl_->forward({row}, text);
 }
 
 } // namespace tts_cpp::moss::detail

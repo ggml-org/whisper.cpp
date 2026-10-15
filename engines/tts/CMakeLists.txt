@@ -204,7 +204,7 @@ endif()
 # variants register only for backends that engine's production allowlist
 # accepts, so an off-allowlist build neither runs unvalidated backends nor
 # silently skips validated ones.
-foreach(_tts_ggml_backend metal vulkan cuda opencl)
+foreach(_tts_ggml_backend metal vulkan cuda opencl hexagon)
     string(TOUPPER "${_tts_ggml_backend}" _tts_ggml_backend_uc)
     set(TTS_CPP_GGML_${_tts_ggml_backend_uc} FALSE)
     if (GGML_${_tts_ggml_backend_uc} OR
@@ -368,6 +368,7 @@ set(TTS_CPP_LIB_SOURCES
     src/pocket/engine.cpp
     src/pocket/fit.cpp
     src/pocket/reference_audio.cpp
+    src/moss/backend_request.cpp
     src/moss/codec.cpp
     src/moss/delay_lm.cpp
     src/moss/generation.cpp
@@ -1485,15 +1486,18 @@ if (TTS_CPP_BUILD_TESTS)
                  "--ref" "${_tcb_cosy_ref}/tokenizer_ref.txt"
         REQUIRES "${_tcb_cosy_vocab}" "${_tcb_cosy_merges}" "${_tcb_cosy_ref}/tokenizer_ref.txt")
 
-    # CPU/GPU parity on generated GGUFs, one arm per compiled backend. Each
-    # arm pins its backend, so a build carrying both fails loud instead of
-    # passing on the other GPU.
+    # CPU/accelerator parity on generated GGUFs, one arm per compiled backend.
+    # Each arm pins its backend, so a build carrying several fails loud instead
+    # of passing on another one.
     set(_tcb_moss_arms "")
     if (TTS_CPP_GGML_CUDA)
         list(APPEND _tcb_moss_arms cuda)
     endif()
     if (TTS_CPP_GGML_VULKAN)
         list(APPEND _tcb_moss_arms vulkan)
+    endif()
+    if (TTS_CPP_GGML_HEXAGON)
+        list(APPEND _tcb_moss_arms hexagon)
     endif()
     if (_tcb_moss_arms)
         add_executable(test-moss-gpu test/moss/test_gpu.cpp)
@@ -1529,6 +1533,12 @@ if (TTS_CPP_BUILD_TESTS)
     target_include_directories(test-moss-load PRIVATE src)
     tts_cpp_apply_ccache(test-moss-load)
     tts_cpp_register_test(test-moss-load)
+
+    add_executable(test-moss-hexagon-layout test/moss/test_hexagon_layout.cpp)
+    target_link_libraries(test-moss-hexagon-layout PRIVATE tts-cpp)
+    target_include_directories(test-moss-hexagon-layout PRIVATE src)
+    tts_cpp_apply_ccache(test-moss-hexagon-layout)
+    tts_cpp_register_test(test-moss-hexagon-layout)
 
     add_executable(test-moss-stream test/moss/test_stream.cpp)
     target_link_libraries(test-moss-stream PRIVATE tts-cpp)

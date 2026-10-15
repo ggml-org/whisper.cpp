@@ -283,6 +283,7 @@ audio channels, seed 1234 — and every knob is exposed as a flag
 The public API is `tts_cpp::moss::Engine` in
 [`include/tts-cpp/moss/engine.h`](../include/tts-cpp/moss/engine.h):
 construct with `EngineOptions` (model paths, language, sampling, `use_gpu`,
+`backend` for an explicit device such as the [Hexagon NPU](#hexagon-npu),
 `backends_dir` for builds that load ggml backends at runtime, `context`,
 `max_new_tokens`), call `synthesize(text)` for a
 `SynthesisResult` (mono PCM, sample rate, frame count, generation and decode
@@ -392,6 +393,97 @@ batch took 512 ms on ggml and 700 ms on the sidecar on the M4 (0.73x), and
 114 ms against 330 ms on the M3 Ultra (0.35x), which is why batch decodes stay
 on ggml. Under `all` the M4 stream took 814 ms (0.89x).
 
+### Hexagon NPU
+
+MOSS-TTS-v1.5 and MOSS-TTSD run on the Snapdragon Hexagon NPU (HTP0; measured
+on a Galaxy S25, Snapdragon 8 Elite, Hexagon v79) when requested explicitly:
+`EngineOptions::backend = "hexagon"` or `moss-cli --backend hexagon`. There is
+no fallback: construction fails when HTP0 is missing, and `--gpu` never selects
+it. The backbone's transformer layers and audio heads run on the NPU, and so
+does the codec (the decoder, and the encoder for cloning and dialogue); the
+host embeds each row, samples it, and projects the whole text head on the few
+steps that need it. It needs a `qvac-ext-ggml@speech` build with the Hexagon
+backend (measured at `6bb85ad6`).
+
+Weights go into the Hexagon repack buffer type. HTP multiplies `f32`, `f16`,
+`q8_0` and `q4_0` weights; the backbone and the codec refuse other types for
+the weights they place on the NPU. The text embedding table, the audio
+embedding tables and the text head stay on the host in any type, mapped from
+the GGUF rather than copied (they are read into memory instead when the file
+cannot be mapped or a table is not 32-byte aligned): at 155,648 x 4,096
+the text table and head are 1.27 GB each at `f16`, past HTP's 1 GiB buffer
+limit, and HTP cannot gather rows from a quantized table. While audio is
+generated the text channel only chooses between the generation and delay slot
+tokens, so those two head rows run on the NPU as a small `f32` matrix; drain
+steps, whose text token is forced, project no text logits, and only steps
+after `audio_end` project the whole head, on the CPU. Other backends keep every
+table on the device and project the whole head on every step.
+
+Attention runs as one `FLASH_ATTN_EXT` with an F16 mask: per layer in the
+backbone, whose value cache then uses the key layout, and per band in the codec.
+Unfused, the score and value matmuls, their softmax and the transposed value
+copy took 19 of the 44 s of a MOSS-TTSD generation over two voice references
+(a 723-row prompt), and 96% of the codec decode of a 15.8 s utterance (6.4 s;
+fused, 0.4 s). Replaying a 600-step
+Hexagon trajectory on the CPU, the fused and unfused slot logits differ from the
+CPU's by 1.42 and 1.36 on average and never reverse a slot decision.
+
+The 8.5B backbones are 17 GB at `f16`. On a 12 GB phone, quantize the
+transformer layers to `q4_0` and keep the tables and heads at `f16`:
+
+```sh
+python scripts/requantize-gguf.py moss-tts-delay-f16.gguf \
+    moss-tts-delay-blk-q4_0.gguf q4_0 --name-filter blk.
+```
+
+The file is 7.0 GB (MOSS-TTSD 6.7 GB). About 4.2 GB of it sits on the NPU
+besides the KV cache; the tables are paged in from the file as rows are read.
+Quantizing the heads as well (no `--name-filter`, 4.8 GB) is the only variant
+the CPU backend can hold beside the 1.8 GB codec on that phone, but it often
+fails to stop: the 4 s sentence below ran on for 20 s on both backends.
+
+`q4_0` transformer layers also stop less reliably than `f16` ones on every
+backend. Over seeds 1-8 on the umbrella sentence below (at most 400 steps):
+
+| Backbone | Backend | Stopped | Whisper WER 0 |
+|---|---|--:|--:|
+| `f16` | CPU (x86) | 8/8 | 8/8 |
+| transformer `q4_0` | CPU (x86) | 7/8 | 7/8 |
+| transformer `q4_0` | Hexagon | 7/8 | 7/8 |
+
+On both backends seed 7 ran to the limit. MOSS-TTSD without references
+stopped for 5 of 6 seeds on Hexagon. Bound long requests with
+`max_new_tokens` or `duration_tokens`.
+
+Speed on the Galaxy S25 (seed 1234, context 1024, 6 CPU threads, each run
+started at thermal status 0; generation includes the prefill and, on Hexagon,
+about 1.6 s of mapping the weights into the NPU session on the first request):
+
+| Request | Backbone | Backend | Steps | Audio | Generate | Codec decode |
+|---|---|---|--:|--:|--:|--:|
+| "The quick brown fox jumps over the lazy dog near the riverbank." | transformer `q4_0` | Hexagon | 81 | 3.8 s | 8.5 s | 0.13 s |
+| same | all `q4_0` | Hexagon | 81 | 3.8 s | 8.1 s | 0.12 s |
+| same | all `q4_0` | CPU | 287 | 20.3 s | 38.3 s | 10.7 s |
+| "Mobile speech synthesis has to balance quality, ..." (two sentences) | all `q4_0` | Hexagon | 287 | 20.3 s | 28.4 s | 0.70 s |
+| same | all `q4_0` | CPU | 341 | 24.6 s | 56.6 s | 16.4 s |
+| MOSS-TTSD, two voice references (723-row prompt) | transformer `q4_0` | Hexagon | 149 | 10.6 s | 17.4 s | 0.99 s |
+
+Generation steps cost 99-101 ms on Hexagon and 133-166 ms on the CPU with the
+same GGUF. A step is memory-bound on both: in steady state the NPU spends about
+93 ms streaming 4.2 GB of `q4_0` weights (45-53 GB/s), so generation stays
+slower than real time (one frame is 80 ms of audio). The codec decodes 20.3 s
+of audio in 0.70 s on the NPU against 10.7 s on the CPU.
+
+`test-moss-hexagon` (the `hexagon` arm of `test-moss-gpu`, registered when ggml
+carries Hexagon) compares HTP0 with the CPU on generated GGUFs at `f32`, `f16`,
+`q8_0` and `q4_0`: backbone prefill, decoding with slot and forced steps, both
+codec halves, streaming, dialogue channels and the memory projection; it also
+checks that `bf16` backbone and codec weights are refused. On the
+S25 the worst relative L2 error is 0.06% for the backbone and 0.08% for the
+codec. Whisper transcribed the Hexagon output of every request above, of
+streaming, of single-reference cloning and of MOSS-TTSD with and without
+references verbatim, apart from the runs that did not stop.
+
 ### Test
 
 The suites build with `TTS_CPP_BUILD_TESTS` and need no model downloads.
@@ -402,7 +494,14 @@ pairing, including oversized architecture metadata, the duration budget, and
 an f16 feed-forward sum past the half-precision range.
 `test-moss-codec-stream` checks on random codec weights that incremental
 decoding matches a single decode, that segments decode independently, and
-that streaming decodes every frame exactly once. `test-moss-cancel` drives a real synthesis on the fixture models and
+that streaming decodes every frame exactly once; it also forces the fused
+banded attention Hexagon uses onto the CPU and compares its batch, streamed
+and encoder outputs with the unfused bands. `test-moss-hexagon-layout` forces
+both [Hexagon](#hexagon-npu) layouts onto the CPU with f32, f16 and q8_0
+weights: host tables (whole-head, slot and forced steps against the device
+tables, also with q8_0 and q4_0 tables and head) and fused attention with the
+key-layout value cache (prefill, decoding and reset against the unfused
+attention); it also pins the weight types the Hexagon gate accepts. `test-moss-cancel` drives a real synthesis on the fixture models and
 cancels it from another thread. `test-moss-cli` covers the flag surface and
 runs the CLI end to end against the fixtures. `test-convert-moss` (Python,
 registered when an interpreter is available, skips without numpy/gguf)

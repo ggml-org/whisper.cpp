@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <limits>
 #include <random>
 #include <string>
 #include <vector>
@@ -207,6 +208,80 @@ void test_state_machine_drain() {
             "no pad codes leak into decoded segments");
 }
 
+constexpr uint32_t STATE_SEED = 1234;
+constexpr uint32_t LOGIT_SOURCE_SEED = 77;
+constexpr uint32_t SAMPLER_SEED = 5;
+constexpr float RANDOM_LOGIT_SPREAD = 3.0f;
+constexpr int OPEN_CODE = 4;
+constexpr int ARMING_CODE = 5;
+constexpr int DRAIN_CODE = 6;
+constexpr int SLOT_SAMPLING_STEPS = 24;
+
+void step_through_drain(DelayState & state, const DelayConfig & config, const SamplingConfig & sampling,
+                        std::mt19937 & rng) {
+    for (int drain = 0; drain < config.n_vq; ++drain) {
+        check(state.text_logits() == TextLogits::None, "the drain forces its text tokens");
+        state.step(logits_preferring(config, config.audio_assistant_gen_slot_token_id, DRAIN_CODE), sampling, rng);
+    }
+}
+
+void test_text_logits_follow_the_state() {
+    const DelayConfig config = test_config();
+    const SamplingConfig sampling = greedy_sampling();
+    std::mt19937 rng(STATE_SEED);
+    DelayState state(config, seeded_prompt(config), PAD_TOKEN, IM_END_TOKEN);
+    check(state.text_logits() == TextLogits::Slots, "an audio prompt samples only the slot tokens");
+
+    state.step(logits_preferring(config, config.audio_assistant_gen_slot_token_id, OPEN_CODE), sampling, rng);
+    check(state.text_logits() == TextLogits::Slots, "generation keeps sampling the slot tokens");
+
+    state.step(logits_preferring(config, config.audio_assistant_delay_slot_token_id, ARMING_CODE), sampling, rng);
+    step_through_drain(state, config, sampling, rng);
+    check(state.text_logits() == TextLogits::Full, "after audio_end the whole vocabulary is sampled");
+
+    state.step(logits_preferring(config, IM_END_TOKEN, DRAIN_CODE), sampling, rng);
+    check(state.stopping() && state.text_logits() == TextLogits::None, "a stopped state reads no logits");
+}
+
+void fill_random(std::vector<float> & values, std::mt19937 & rng) {
+    std::normal_distribution<float> logit(0.0f, RANDOM_LOGIT_SPREAD);
+    for (float & value : values) value = logit(rng);
+}
+
+DelayLogits random_logits(const DelayConfig & config, std::mt19937 & rng) {
+    DelayLogits logits = uniform_logits(config);
+    fill_random(logits.text, rng);
+    for (auto & channel : logits.audio) {
+        fill_random(channel, rng);
+    }
+    return logits;
+}
+
+DelayLogits slots_only(const DelayConfig & config, DelayLogits logits) {
+    std::vector<float> text(logits.text.size(), -std::numeric_limits<float>::infinity());
+    for (int32_t id : {config.audio_assistant_gen_slot_token_id, config.audio_assistant_delay_slot_token_id}) {
+        text[(size_t) id] = logits.text[(size_t) id];
+    }
+    logits.text = std::move(text);
+    return logits;
+}
+
+void test_slot_logits_sample_like_the_whole_head() {
+    const DelayConfig config = test_config();
+    const SamplingConfig sampling;
+    std::mt19937 source(LOGIT_SOURCE_SEED), rng_full(SAMPLER_SEED), rng_slots(SAMPLER_SEED);
+    DelayState full(config, seeded_prompt(config), PAD_TOKEN, IM_END_TOKEN);
+    DelayState slots(config, seeded_prompt(config), PAD_TOKEN, IM_END_TOKEN);
+    for (int i = 0; i < SLOT_SAMPLING_STEPS && !full.stopping(); ++i) {
+        const DelayLogits logits = random_logits(config, source);
+        const bool slot_step = full.text_logits() == TextLogits::Slots;
+        const DelayRow expected = full.step(logits, sampling, rng_full);
+        const DelayRow actual = slots.step(slot_step ? slots_only(config, logits) : logits, sampling, rng_slots);
+        check(expected.text == actual.text && expected.audio == actual.audio,
+                "slot-only logits sample the same rows as the whole head");
+    }
+}
+
 void test_early_stop_masks() {
     const DelayConfig config = test_config();
     const SamplingConfig sampling = greedy_sampling();
@@ -376,6 +451,8 @@ int main() {
     test_top_p_zero_is_greedy();
     test_repetition_penalty_scoping();
     test_state_machine_drain();
+    test_text_logits_follow_the_state();
+    test_slot_logits_sample_like_the_whole_head();
     test_early_stop_masks();
     test_incremental_de_delay();
     test_segment_extraction();

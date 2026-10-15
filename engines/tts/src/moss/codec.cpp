@@ -42,6 +42,8 @@ constexpr const char * DECODER_ARCH = "moss-tts-audio-decoder";
 constexpr const char * OWNER = "moss codec";
 constexpr const char * SIDECAR_STAGE = "codec decoder";
 constexpr int64_t REPLAY_WINDOW_FRAMES = 750;
+constexpr int UNFUSED_QUERY_AXIS = 1;
+constexpr int FUSED_QUERY_AXIS = 2;
 
 [[noreturn]] void fail(const std::string & message) {
     throw std::runtime_error("moss codec: " + message);
@@ -143,6 +145,7 @@ struct AttentionBand {
     int64_t key_start = 0;
     int64_t key_count = 0;
     ggml_tensor * mask = nullptr;
+    ggml_tensor * mask_f16 = nullptr;
 };
 
 int64_t align_up(int64_t value, int64_t multiple) {
@@ -181,6 +184,8 @@ struct Codec::Impl {
     int stream_channels = 0;
     int64_t frames_decoded = 0;
     bool measure_only = false;
+    CodecAttention attention_layout = CodecAttention::Automatic;
+    bool fused = false;
     uint64_t graph_host_bytes = 0;
 
     std::unique_ptr<CodecSidecarModel> sidecar;
@@ -489,8 +494,18 @@ struct Codec::Impl {
         }
     }
 
+    void require_device_weight_types() const {
+        if (!::tts_cpp::detail::backend_is_hexagon(backend)) {
+            return;
+        }
+        if (const ggml_tensor * refused = first_tensor_hexagon_cannot_run(weights)) {
+            fail(hexagon_weight_refusal(refused));
+        }
+    }
+
     void upload_weights(const std::string & path) {
-        weight_buffer = ggml_backend_alloc_ctx_tensors(weights, backend);
+        weight_buffer = ggml_backend_alloc_ctx_tensors_from_buft(weights,
+                ::tts_cpp::detail::weight_buffer_type(backend));
         if (!weight_buffer) {
             fail("weight allocation failed");
         }
@@ -505,20 +520,7 @@ struct Codec::Impl {
         }
     }
 
-    void init_backend(bool use_gpu) {
-        ::tts_cpp::detail::ensure_backends_loaded();
-        if (use_gpu) {
-            backend = ::tts_cpp::detail::init_gpu_backend(1, false, "moss-codec");
-        }
-        if (!backend) {
-            backend = ::tts_cpp::detail::init_cpu_backend();
-        }
-        if (!backend) {
-            fail("no compute backend available");
-        }
-    }
-
-    void load(const std::string & path, bool use_gpu, int threads) {
+    void load(const std::string & path, const BackendRequest & request, int threads) {
         n_threads = threads;
         if (threads < 1 || threads > 1024) {
             fail("threads must be 1..1024");
@@ -540,8 +542,11 @@ struct Codec::Impl {
             downsample = meta_u32(arch + ".downsample_rate");
         }
         read_quantizer_meta();
-        init_backend(use_gpu);
+        backend = init_backend(request, "moss-codec");
+        fused = attention_layout == CodecAttention::Fused ||
+                (attention_layout == CodecAttention::Automatic && ::tts_cpp::detail::backend_is_hexagon(backend));
         duplicate_metadata_tensors();
+        require_device_weight_types();
         read_modules();
         validate_module_chain();
         validate_codebooks();
@@ -685,14 +690,34 @@ struct Codec::Impl {
         return ggml_mul_mat(graph_ctx, v_band, scores);
     }
 
+    ggml_tensor * fused_band_attention(ggml_tensor * q, ggml_tensor * k, ggml_tensor * v,
+                                       const AttentionBand & band, int d_head) {
+        return ggml_flash_attn_ext(graph_ctx,
+                ggml_permute(graph_ctx, time_slice(q, band.query_start, band.query_count), 0, 2, 1, 3),
+                ggml_permute(graph_ctx, time_slice(k, band.key_start, band.key_count), 0, 2, 1, 3),
+                ggml_permute(graph_ctx, time_slice(v, band.key_start, band.key_count), 0, 2, 1, 3),
+                band.mask_f16, 1.0f / std::sqrt((float) d_head), 0.0f, 0.0f);
+    }
+
     ggml_tensor * banded_attention(ggml_tensor * q, ggml_tensor * k, ggml_tensor * v,
                                    const std::vector<AttentionBand> & bands, int d_head) {
+        const int query_dim = fused ? FUSED_QUERY_AXIS : UNFUSED_QUERY_AXIS;
         ggml_tensor * attended = nullptr;
         for (const AttentionBand & band : bands) {
-            ggml_tensor * piece = band_attention(q, k, v, band, d_head);
-            attended = attended ? ggml_concat(graph_ctx, attended, piece, 1) : piece;
+            ggml_tensor * piece = fused ? fused_band_attention(q, k, v, band, d_head)
+                                        : band_attention(q, k, v, band, d_head);
+            attended = attended ? ggml_concat(graph_ctx, attended, piece, query_dim) : piece;
         }
         return attended;
+    }
+
+    ggml_tensor * merge_heads(ggml_tensor * attended) {
+        if (fused) {
+            return ggml_reshape_2d(graph_ctx, attended, attended->ne[0] * attended->ne[1], attended->ne[2]);
+        }
+        attended = ggml_permute(graph_ctx, attended, 0, 2, 1, 3);
+        return ggml_cont_2d(graph_ctx, attended,
+                attended->ne[0] * attended->ne[1], attended->ne[2] * attended->ne[3]);
     }
 
     ggml_tensor * with_history(ggml_tensor * fresh, ggml_tensor * cache, int64_t cached) {
@@ -739,10 +764,7 @@ struct Codec::Impl {
             retain_tail(k, cache->keys, keep);
             retain_tail(v, cache->values, keep);
         }
-        ggml_tensor * attended = banded_attention(q, k, v, bands, d_head);
-        attended = ggml_permute(graph_ctx, attended, 0, 2, 1, 3);
-        attended = ggml_cont_2d(graph_ctx, attended,
-                attended->ne[0] * attended->ne[1], attended->ne[2] * attended->ne[3]);
+        ggml_tensor * attended = merge_heads(banded_attention(q, k, v, bands, d_head));
         return ggml_mul_mat(graph_ctx, as_matrix(layer.attn_out), attended);
     }
 
@@ -779,6 +801,9 @@ struct Codec::Impl {
                 banded_causal_mask(first_query, query_count,
                 band.key_start, band.key_count, block.context),
                 band.key_count, query_count);
+        if (fused) {
+            band.mask_f16 = ggml_cast(graph_ctx, band.mask, GGML_TYPE_F16);
+        }
         return band;
     }
 
@@ -1180,9 +1205,11 @@ struct Codec::Impl {
 
 };
 
-Codec::Codec(const std::string & path, bool use_gpu, int n_threads, bool measure_only) : impl_(new Impl) {
+Codec::Codec(const std::string & path, const BackendRequest & backend, int n_threads, bool measure_only,
+             CodecAttention attention) : impl_(new Impl) {
     impl_->measure_only = measure_only;
-    impl_->load(path, use_gpu, n_threads);
+    impl_->attention_layout = attention;
+    impl_->load(path, backend, n_threads);
     if (!impl_->encoder && !measure_only) {
         impl_->open_sidecar(path);
     }
@@ -1191,7 +1218,8 @@ Codec::Codec(const std::string & path, bool use_gpu, int n_threads, bool measure
 FitResult Codec::measure(int64_t length, int n_channels, bool streaming) {
     if (!impl_->measure_only) fail("measurement requires a metadata-only model");
     FitResult result = fit_device(impl_->backend);
-    result.device.weights_bytes = measure_fit_tensors(impl_->weights, impl_->backend);
+    result.device.weights_bytes = measure_fit_tensors(impl_->weights,
+            ::tts_cpp::detail::weight_buffer_type(impl_->backend));
     if (streaming) {
         impl_->reset_streams();
         result.device.state_bytes = measure_fit_tensors(impl_->stream_ctx, impl_->backend);
@@ -1223,6 +1251,7 @@ int Codec::sample_rate() const { return impl_->rate; }
 int Codec::num_quantizers() const { return impl_->quantizer.num_quantizers; }
 int Codec::samples_per_frame() const { return (int) impl_->downsample; }
 const char * Codec::backend_name() const { return ggml_backend_name(impl_->backend); }
+bool Codec::fused_attention() const { return impl_->fused; }
 
 std::vector<int32_t> Codec::encode(const std::vector<float> & pcm) {
     if (!impl_->encoder) {

@@ -235,8 +235,8 @@ void test_codec_geometry(Codec & codec) {
 }
 
 void test_codec_routing(const std::filesystem::path & path) {
-    Codec reference(path.string(), false, 1);
-    Codec codec(path.string(), false, 1);
+    Codec reference(path.string(), {}, 1);
+    Codec codec(path.string(), {}, 1);
     test_codec_geometry(codec);
     int calls = 0;
     codec.attach_sidecar(std::make_unique<PrefixSumModel>(codec.sidecar_geometry(), NEVER_FAIL, &calls), false);
@@ -259,10 +259,10 @@ void test_codec_routing(const std::filesystem::path & path) {
 }
 
 void test_codec_stream_fallback(const std::filesystem::path & path) {
-    Codec reference(path.string(), false, 1);
+    Codec reference(path.string(), {}, 1);
     const std::vector<int32_t> codes = random_codes(STREAM_FRAMES);
     const std::vector<float> ggml = stream_codes(reference, codes, FAKE_CHUNK);
-    Codec codec(path.string(), false, 1);
+    Codec codec(path.string(), {}, 1);
     int calls = 0;
     codec.attach_sidecar(std::make_unique<PrefixSumModel>(codec.sidecar_geometry(), FALLBACK_CALL, &calls), false);
     codec.begin_run();
@@ -278,9 +278,9 @@ void test_codec_stream_fallback(const std::filesystem::path & path) {
 }
 
 void test_codec_strict(const std::filesystem::path & path) {
-    Codec reference(path.string(), false, 1);
+    Codec reference(path.string(), {}, 1);
     const std::vector<int32_t> codes = random_codes(STREAM_FRAMES);
-    Codec codec(path.string(), false, 1);
+    Codec codec(path.string(), {}, 1);
     int calls = 0;
     codec.attach_sidecar(std::make_unique<PrefixSumModel>(codec.sidecar_geometry(), 0, &calls), true);
     check(codec.decode(codes) == reference.decode(codes) && calls == 0,
@@ -298,7 +298,7 @@ void test_sidecar_lookup(const std::filesystem::path & path) {
           "the decoder sidecar name drops the quantization tag");
     const std::filesystem::path staged = codec_decoder_sidecar_path(path.string());
     std::filesystem::create_directories(staged);
-    Codec codec(path.string(), false, 1);
+    Codec codec(path.string(), {}, 1);
     check(!codec.on_coreml(), "a directory that is not a model leaves the codec on ggml");
     std::filesystem::remove_all(staged);
 }

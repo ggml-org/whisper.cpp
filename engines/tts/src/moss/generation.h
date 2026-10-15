@@ -43,6 +43,7 @@ public:
                int32_t pad_token_id, int32_t im_end_token_id);
 
     bool stopping() const { return stopping_; }
+    TextLogits text_logits() const;
     const std::vector<int32_t> & audio_history() const { return audio_history_; }
 
     DelayRow step(const DelayLogits & logits, const SamplingConfig & sampling, std::mt19937 & rng);

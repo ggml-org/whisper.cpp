@@ -36,7 +36,7 @@ void expect_backbone_failure(const char * name,
         const std::function<void(gguf_context *)> & mutate, const std::string & expected) {
     const auto path = write_backbone(name, mutate);
     try {
-        DelayLM model(path.string(), false, 1, 64);
+        DelayLM model(path.string(), {}, 1, 64);
         check(false, std::string(name) + ": accepted invalid GGUF");
     } catch (const std::runtime_error & e) {
         check(std::string(e.what()).find(expected) != std::string::npos,
@@ -49,7 +49,7 @@ void expect_decoder_failure(const char * name, int64_t qkv_rows,
         const std::function<void(gguf_context *)> & mutate_meta, const std::string & expected) {
     const auto path = write_decoder(name, N_VQ, qkv_rows, mutate_meta);
     try {
-        Codec codec(path.string(), false, 1);
+        Codec codec(path.string(), {}, 1);
         check(false, std::string(name) + ": accepted invalid GGUF");
     } catch (const std::runtime_error & e) {
         check(std::string(e.what()).find(expected) != std::string::npos,
@@ -60,7 +60,7 @@ void expect_decoder_failure(const char * name, int64_t qkv_rows,
 
 void test_valid_backbone() {
     const auto path = write_backbone("valid-backbone", [](gguf_context *) {});
-    DelayLM model(path.string(), false, 1, 64);
+    DelayLM model(path.string(), {}, 1, 64);
     check(model.config().text_vocab == TEXT_VOCAB, "backbone text vocab from tensor");
     check(model.config().audio_vocab == AUDIO_HEAD, "backbone audio vocab from tensor");
     check(model.config().n_vq == N_VQ, "backbone n_vq");
@@ -69,7 +69,7 @@ void test_valid_backbone() {
 
 void test_valid_decoder() {
     const auto path = write_decoder("valid-decoder", N_VQ, 3 * D_MODEL, [](gguf_context *) {});
-    Codec codec(path.string(), false, 1);
+    Codec codec(path.string(), {}, 1);
     check(!codec.is_encoder(), "decoder role");
     check(codec.num_quantizers() == N_VQ, "decoder quantizer count");
     check(codec.samples_per_frame() == OUT_DIM, "decoder upsample from patch product");
@@ -182,7 +182,7 @@ bool all_finite(const std::vector<float> & values) {
 void test_feed_forward_beyond_half_precision() {
     const auto path = write_backbone("overflow-backbone", [](gguf_context *) {},
             overflowing_feed_forward());
-    DelayLM model(path.string(), false, 1, 64);
+    DelayLM model(path.string(), {}, 1, 64);
     DelayRow row;
     row.text = SPECIALS;
     row.audio.assign(N_VQ, 0);
@@ -229,7 +229,7 @@ void expect_shaped_backbone_failure(const char * name, const TensorShapes & shap
                                     const std::string & expected) {
     const auto path = write_backbone(name, [](gguf_context *) {}, {}, shapes);
     try {
-        DelayLM model(path.string(), false, 1, 64);
+        DelayLM model(path.string(), {}, 1, 64);
         check(false, std::string(name) + ": accepted invalid GGUF");
     } catch (const std::runtime_error & e) {
         check(std::string(e.what()).find(expected) != std::string::npos,

@@ -32,6 +32,8 @@ constexpr int CODE_DIM   = 4;
 constexpr int CODE_SIZE  = 8;
 constexpr int AUDIO_HEAD = CODE_SIZE + 1;
 constexpr int OUT_DIM    = 4;
+constexpr int GEN_SLOT   = 6;
+constexpr int DELAY_SLOT = 7;
 
 inline std::filesystem::path temp_gguf(const char * tag) {
     const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -141,10 +143,10 @@ inline std::vector<std::string> byte_complete_vocab() {
     return tokens;
 }
 
-inline void add_backbone_meta(gguf_context * f) {
+inline void add_backbone_meta(gguf_context * f, int n_embd = N_EMBD) {
     gguf_set_val_str(f, "general.architecture", "moss-tts-delay");
     gguf_set_val_u32(f, "moss-tts-delay.block_count", 1);
-    gguf_set_val_u32(f, "moss-tts-delay.embedding_length", N_EMBD);
+    gguf_set_val_u32(f, "moss-tts-delay.embedding_length", (uint32_t) n_embd);
     gguf_set_val_u32(f, "moss-tts-delay.feed_forward_length", N_FF);
     gguf_set_val_u32(f, "moss-tts-delay.attention.head_count", N_HEADS);
     gguf_set_val_u32(f, "moss-tts-delay.attention.head_count_kv", N_KV_HEADS);
@@ -156,8 +158,8 @@ inline void add_backbone_meta(gguf_context * f) {
     gguf_set_val_u32(f, "moss-tts-delay.audio_start_token_id", 3);
     gguf_set_val_u32(f, "moss-tts-delay.audio_end_token_id", 4);
     gguf_set_val_u32(f, "moss-tts-delay.audio_user_slot_token_id", 5);
-    gguf_set_val_u32(f, "moss-tts-delay.audio_assistant_gen_slot_token_id", 6);
-    gguf_set_val_u32(f, "moss-tts-delay.audio_assistant_delay_slot_token_id", 7);
+    gguf_set_val_u32(f, "moss-tts-delay.audio_assistant_gen_slot_token_id", GEN_SLOT);
+    gguf_set_val_u32(f, "moss-tts-delay.audio_assistant_delay_slot_token_id", DELAY_SLOT);
     gguf_set_val_u32(f, "moss-tts-delay.sampling_rate", 24000);
 
     const std::vector<std::string> tokens = byte_complete_vocab();
@@ -170,25 +172,25 @@ inline void add_backbone_meta(gguf_context * f) {
     gguf_set_arr_str(f, "tokenizer.ggml.merges", merges, 1);
 }
 
-inline void add_backbone_tensors(GgufBuilder & b) {
-    b.add2("token_embd.weight", N_EMBD, TEXT_VOCAB);
-    b.add1("output_norm.weight", N_EMBD);
-    b.add2("output.weight", N_EMBD, TEXT_VOCAB);
+inline void add_backbone_tensors(GgufBuilder & b, int n_embd = N_EMBD) {
+    b.add2("token_embd.weight", n_embd, TEXT_VOCAB);
+    b.add1("output_norm.weight", n_embd);
+    b.add2("output.weight", n_embd, TEXT_VOCAB);
     for (int i = 0; i < N_VQ; ++i) {
-        b.add2("token_embd_audio." + std::to_string(i) + ".weight", N_EMBD, AUDIO_HEAD);
-        b.add2("output_audio." + std::to_string(i) + ".weight", N_EMBD, AUDIO_HEAD);
+        b.add2("token_embd_audio." + std::to_string(i) + ".weight", n_embd, AUDIO_HEAD);
+        b.add2("output_audio." + std::to_string(i) + ".weight", n_embd, AUDIO_HEAD);
     }
-    b.add1("blk.0.attn_norm.weight", N_EMBD);
-    b.add2("blk.0.attn_q.weight", N_EMBD, (int64_t) N_HEADS * HEAD_DIM);
-    b.add2("blk.0.attn_k.weight", N_EMBD, (int64_t) N_KV_HEADS * HEAD_DIM);
-    b.add2("blk.0.attn_v.weight", N_EMBD, (int64_t) N_KV_HEADS * HEAD_DIM);
-    b.add2("blk.0.attn_output.weight", (int64_t) N_HEADS * HEAD_DIM, N_EMBD);
+    b.add1("blk.0.attn_norm.weight", n_embd);
+    b.add2("blk.0.attn_q.weight", n_embd, (int64_t) N_HEADS * HEAD_DIM);
+    b.add2("blk.0.attn_k.weight", n_embd, (int64_t) N_KV_HEADS * HEAD_DIM);
+    b.add2("blk.0.attn_v.weight", n_embd, (int64_t) N_KV_HEADS * HEAD_DIM);
+    b.add2("blk.0.attn_output.weight", (int64_t) N_HEADS * HEAD_DIM, n_embd);
     b.add1("blk.0.attn_q_norm.weight", HEAD_DIM);
     b.add1("blk.0.attn_k_norm.weight", HEAD_DIM);
-    b.add1("blk.0.ffn_norm.weight", N_EMBD);
-    b.add2("blk.0.ffn_gate.weight", N_EMBD, N_FF);
-    b.add2("blk.0.ffn_up.weight", N_EMBD, N_FF);
-    b.add2("blk.0.ffn_down.weight", N_FF, N_EMBD);
+    b.add1("blk.0.ffn_norm.weight", n_embd);
+    b.add2("blk.0.ffn_gate.weight", n_embd, N_FF);
+    b.add2("blk.0.ffn_up.weight", n_embd, N_FF);
+    b.add2("blk.0.ffn_down.weight", N_FF, n_embd);
 }
 
 inline std::filesystem::path write_backbone(const char * tag,
