@@ -24,9 +24,12 @@ so later models can explicitly select Hexagon. If only legacy
 `ADSP_LIBRARY_PATH` is set, its entries are retained. Set `backends_dir` before
 the first Engine/loader call; registry discovery remains process-global.
 
-Hexagon is experimental and currently targets Parakeet CTC 0.6B Q8_0. Build and
-ship the matching GGML Hexagon backend and DSP library. For device validation,
-run `--backend hexagon --verbose --bench --bench-json result.json`, with the
+Hexagon is experimental and currently targets Parakeet CTC 0.6B Q8_0 and
+MOSS-Transcribe-Diarize. Build and ship the matching GGML Hexagon backend and
+DSP library. MOSS-Transcribe-Diarize's requirements, graph layout, device tests
+and measurements are in [its guide](moss-transcribe.md#hexagon-npu). For
+Parakeet CTC device validation, run
+`parakeet --backend hexagon --verbose --bench --bench-json result.json`, with the
 existing `--backends-dir` pointing at the installed backend libraries. The JSON
 records the actual backend (`ggml-htp0`), transcript and stage timings. Use a
 separate `GGML_HEXAGON_PROFILE=1` run to collect DSP operation evidence for

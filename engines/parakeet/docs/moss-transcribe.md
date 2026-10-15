@@ -2,22 +2,26 @@
 
 Part of the [parakeet engine documentation](../README.md).
 
-CUDA or Vulkan can be selected explicitly with `--backend cuda` or
-`--backend vulkan` (or an exact device such as `--backend CUDA0`). This overrides `--gpu` and fails when
+CUDA, Vulkan or the Snapdragon Hexagon NPU can be selected explicitly with
+`--backend cuda`, `--backend vulkan` or `--backend hexagon` (or an exact device
+such as `--backend CUDA0`). This overrides `--gpu` and fails when
 the requested backend is unavailable; `--backend auto` retains the existing
 `--gpu`/CPU selection. The API equivalent is `TranscribeOptions::backend`.
-Build against a CUDA- or Vulkan-enabled ggml installation, then run:
+Hexagon has its own requirements and graph layout; see
+[Hexagon NPU](#hexagon-npu).
+Build against a CUDA-, Vulkan- or Hexagon-enabled ggml installation, then run:
 
 ```sh
 build/moss-transcribe --model moss-transcribe-f16.gguf --audio speech.wav --backend cuda
-ctest --test-dir build -R '^test-moss-transcribe-(cuda|vulkan)$' --output-on-failure
+ctest --test-dir build -R '^test-moss-transcribe-(cuda|vulkan|hexagon)$' --output-on-failure
 ```
 
 Each arm registers only when ggml carries its backend. The test generates random-weight GGUFs in F32, F16 and mixed Q8_0/F16
 and compares the encoder, adaptor, batched prefill and incremental decoding
 against CPU. It also checks explicit selection through the public engine and
-rejects unavailable backends. It runs in the manual `parakeet CI` GPU lane
-(`run_gpu=true`) without model downloads. These checks pass on Apple M2
+rejects unavailable backends. The CUDA and Vulkan arms run in the manual
+`parakeet CI` GPU lane (`run_gpu=true`) without model downloads; the Hexagon
+arm runs on a Snapdragon device. These checks pass on Apple M2
 through MoltenVK; full-checkpoint transcript quality and discrete-GPU/mobile
 validation remain separate from this generated-model coverage.
 
@@ -132,8 +136,8 @@ metadata itself, so a malformed GGUF fails with an error instead of aborting
 inside ggml. Weights are read straight into host-visible buffers (CPU, and
 Metal's shared memory) with no staging copy; on other GPU backends float
 tensors stream in 8 MiB chunks and quantized tensors go up whole, because the
-OpenCL and CPU-repacking backends rebuild their layout from the full tensor.
-Timestamps are parsed and JSON numbers written in the C locale, so a host
+OpenCL, Hexagon and CPU-repacking backends rebuild their layout from the full
+tensor. Timestamps are parsed and JSON numbers written in the C locale, so a host
 application with a comma-decimal locale gets the same segments and valid JSON.
 
 ## Core ML encoder sidecar
@@ -196,6 +200,85 @@ an M3 Ultra the GPU outruns the Neural Engine, so the default placement is
 slower than ggml there; set `MOSS_COREML_COMPUTE_UNITS=cpu_and_gpu` on such
 machines, or leave the sidecar out.
 
+## Hexagon NPU
+
+`--backend hexagon` (API: `TranscribeOptions::backend = "hexagon"`) runs the
+encoder, the adaptor and the decoder on the HTP0 session of a ggml-speech built
+with `GGML_HEXAGON=ON`. On a Galaxy S25 (Snapdragon 8 Elite, Hexagon v79) every
+encoder and decoder graph is a single HTP0 split, so no operation falls back
+to the CPU. Requirements:
+
+- ggml-speech with `GGML_HEXAGON=ON`, with the `libggml-htp-v*.so` DSP
+  skeletons staged next to the host backends. `backends_dir` is prepended to
+  FastRPC's `DSP_LIBRARY_PATH` (see [backends](backends.md)). The measurements
+  below use qvac-ext-ggml `speech` at `6bb85ad6`, whose HTP `q8_0` activation
+  quantizer matches the CPU's.
+- A `q8_0` or `f16` GGUF. HTP matrix kernels do not cover `q5_0`, so a `q5_0`
+  model is refused at load (`HTP0 cannot project the q5_0 token table`).
+
+The Hexagon graph differs from the other backends in three ways:
+
+- Weights go to the session's repack buffer. HTP refuses quantized matrix
+  multiplications whose weights sit in its default host-visible buffer.
+- The tied 151,936-row token table is both a `GET_ROWS` table and the output
+  head. HTP cannot gather rows from a quantized table and refuses a
+  `MUL_MAT` past 32,768 rows, so the engine reads each token's embedding row
+  from the GGUF on the host and projects the head in five chunks of at most
+  32,768 rows. The table is not held twice. An `f16` table stays whole: HTP
+  gathers F16 rows and projects all of them. Any backend that cannot gather
+  from the table or project the whole vocabulary takes the same split.
+- Each attention is one `FLASH_ATTN_EXT`. Without it, the unfused graph's F32
+  matrix multiplications over 1500 x 1500 score tensors took 85% of the DSP
+  time of encoding and prefilling the 27 s sample, and the encoder ran slower
+  than on the CPU. The KV cache then stores values in the key layout. Other
+  backends keep the unfused graph.
+
+Parity on the S25 against the Hugging Face dumps (`test-moss-transcribe-parity`
+with `MOSS_TRANSCRIBE_BACKEND`), cosine:
+
+| Stage | CPU f16 | HTP0 f16 | CPU q8_0 | HTP0 q8_0 |
+|---|--:|--:|--:|--:|
+| Encoder states | 0.99825 | 0.99926 | 0.99333 | 0.99753 |
+| Adaptor output | 0.999998 | 0.999999 | 0.99956 | 0.99987 |
+| Prefill logits | 0.999999 | 0.999999 | 0.99988 | 0.99996 |
+| Greedy transcript | exact | exact | exact | exact |
+
+HTP0 is closer to the reference than the phone's CPU at every stage. Only
+`f16` on HTP0 passes the test's 0.999 threshold for the encoder states; the
+ARM CPU with either model and `q8_0` on HTP0 fall below it, while the adaptor
+output that the decoder reads passes everywhere.
+
+Speed on the same phone (`moss-transcribe`, 6 CPU threads, milliseconds). The
+27 s rows are the median of three runs spaced 20 s apart; each long-clip run
+started at thermal status 0 (median of three for `q8_0`, one run for `f16`):
+
+| Audio | Model | Backend | Encode | Prefill | Decode | Total | RTF |
+|---|---|---|--:|--:|--:|--:|--:|
+| 27.3 s, 185 tokens | `q8_0` | CPU | 6,617 | 1,896 | 3,161 | 11,674 | 0.428 |
+| | `q8_0` | HTP0 | 354 | 209 | 2,973 | 3,536 | 0.130 |
+| | `f16` | CPU | 7,806 | 2,235 | 5,465 | 15,506 | 0.568 |
+| | `f16` | HTP0 | 356 | 267 | 4,246 | 4,869 | 0.178 |
+| 160.6 s, 943 tokens | `q8_0` | CPU | 60,117 | 17,827 | 34,378 | 112,322 | 0.699 |
+| | `q8_0` | HTP0 | 2,103 | 943 | 26,306 | 29,352 | 0.183 |
+| | `f16` | CPU | 70,079 | 21,453 | 44,722 | 136,255 | 0.848 |
+| | `f16` | HTP0 | 2,164 | 1,194 | 34,415 | 37,773 | 0.235 |
+| 191.2 s, 1,157 tokens | `q8_0` | CPU | 69,752 | 22,453 | 45,576 | 137,781 | 0.721 |
+| | `q8_0` | HTP0 | 2,465 | 1,109 | 34,156 | 37,729 | 0.197 |
+| | `f16` | CPU | 83,345 | 26,156 | 58,556 | 168,057 | 0.879 |
+| | `f16` | HTP0 | 2,490 | 1,294 | 45,531 | 49,315 | 0.258 |
+
+HTP0 encodes 19-28x and prefills 9-20x faster than the CPU. Decoding is bound
+by memory bandwidth on both: each token reads the decoder weights, the head
+and the KV cache, so HTP0 decodes only 1.06-1.33x faster and decoding is most
+of its time (per token on the 27 s clip: 8.3 ms of `q8_0` projections, 2.9 ms
+of head, 2.7 ms of attention). On all three clips the CPU and HTP0 transcripts have the same words and
+speaker labels; segment timestamps differ by at most 0.05 s.
+
+`test-moss-transcribe-hexagon` runs the CPU-against-backend comparison of the
+CUDA and Vulkan arms on HTP0 (generated F32, F16 and mixed Q8_0 models:
+encoder, adaptor, partial chunk, batched prefill, incremental decoding, the
+engine and the memory projection).
+
 ## Test
 
 `test-moss-transcribe` builds a tiny random-weight GGUF in-test and needs no
@@ -208,8 +291,12 @@ transcript parser (edge cases and character-by-character streaming), the
 load-time rejections, encoder chunks, decoder prefill in uneven batches
 against a single batch, audio injection, engine end-to-end, hotword prompts,
 cancellation, request validation, the `moss-transcribe` CLI flags and
-JSON output, the timestamp and JSON numbers under a comma-decimal locale, and
-the weight-upload plan per buffer kind. `test-converter-moss-transcribe` fabricates a tiny checkpoint
+JSON output, the timestamp and JSON numbers under a comma-decimal locale,
+the weight-upload plan per buffer kind, and the two Hexagon layouts on the
+CPU: a token table split into head chunks with host lookups reproduces the
+whole table's logits exactly in the F32, F16 and mixed Q8_0 fixtures, and
+fused attention matches the unfused graph in the encoder and in prefill
+batches of 1, 3 and the whole prompt. `test-converter-moss-transcribe` fabricates a tiny checkpoint
 and checks the tensor census, the column biases, the token types, the stored
 prompt ids, the hotword metadata, and the q8_0 path (skipped without
 `numpy`, `gguf`, or `tokenizers`).
@@ -218,7 +305,8 @@ prompt ids, the hotword metadata, and the q8_0 path (skipped without
 stage checks but its greedy transcript drifts from the fp32 one, although it
 scores the same WER) and
 `MOSS_TRANSCRIBE_REFERENCE_DIR` at stage dumps from the Hugging Face model
-(`MOSS_TRANSCRIBE_GPU=1` runs it on the GPU). The dumps come from
+(`MOSS_TRANSCRIBE_GPU=1` runs it on the GPU, `MOSS_TRANSCRIBE_BACKEND=hexagon`
+or another backend name selects that backend explicitly). The dumps come from
 `engines/parakeet/scripts/dump-moss-transcribe-reference.py <checkpoint> <16 kHz wav>
 <out_dir> --upstream <MOSS-Transcribe-Diarize checkout>`. When the directory
 also holds `tokenizer_cases.bin` from
@@ -275,7 +363,9 @@ and decoder share a scheduler: the two compute fields sum to the peak compute de
 Host demand includes tokenizer, audio, embeddings, mel preprocessing, decoder buffers,
 scheduler storage and the peak CPU execution scratch across encoder and decoder splits
 for the configured thread count, including CPU fallback when a GPU is selected;
-CPU and unified-memory GPU verdicts charge host memory to the same pool. Workloads past
+CPU and unified-memory GPU verdicts charge host memory to the same pool. A Hexagon
+session reports no memory of its own, so its verdict uses the CPU device's free
+memory and charges the host memory to it too. Workloads past
 the model context return `Error` / `workload-too-large`; invalid requests return
 `Error` / `invalid-arguments`.
 

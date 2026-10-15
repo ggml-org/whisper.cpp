@@ -73,10 +73,30 @@ struct TranscribeConfig {
     int samples_per_token() const;
 };
 
+struct TranscribeHeadChunk {
+    int row0 = 0;
+    int rows = 0;
+    ggml_tensor * weight = nullptr;
+};
+
+std::vector<TranscribeHeadChunk> plan_transcribe_head(int vocab, int max_rows);
+
+enum class TranscribeAttention { Auto, Unfused, Fused };
+
+// Overrides of the per-backend graph layout, so tests can compare layouts on
+// one backend. head_rows > 0 splits the tied token table into head chunks of
+// at most that many rows and looks embeddings up on the host, as on a backend
+// that cannot gather rows from the table or project the whole vocabulary.
+struct TranscribeLayout {
+    int head_rows = 0;
+    TranscribeAttention attention = TranscribeAttention::Auto;
+};
+
 class TranscribeModel {
 public:
     TranscribeModel(const std::string & path, bool use_gpu, int n_threads,
-                    const std::string & backend = "auto", bool measure_only = false);
+                    const std::string & backend = "auto", bool measure_only = false,
+                    const TranscribeLayout & layout = {});
     ~TranscribeModel();
     TranscribeModel(const TranscribeModel &) = delete;
     TranscribeModel & operator=(const TranscribeModel &) = delete;
@@ -85,6 +105,11 @@ public:
     const char * backend_name() const;
     ggml_backend * backend() const;
     ggml_tensor * tensor(const std::string & name) const;
+    const ggml_tensor * token_table() const;
+    bool embeds_on_host() const;
+    bool fused_attention() const;
+    const std::vector<TranscribeHeadChunk> & head() const;
+    std::vector<float> embed_tokens(const std::vector<int32_t> & ids) const;
     std::vector<std::string> tokenizer_tokens() const;
     std::vector<std::string> tokenizer_merges() const;
     std::vector<int32_t> tokenizer_types() const;

@@ -131,7 +131,7 @@ void print_usage() {
     std::fprintf(stderr,
         "usage: %s --model moss-transcribe.gguf --audio speech.wav [--out transcript.json]\n"
         "       [--prompt \"...\" | --hotwords \"QVAC,vcpkg,Parakeet\"] [--max-new-tokens N]\n"
-        "       [--threads 4] [--gpu] [--backend auto|cpu|cuda|vulkan|CUDA0] [--backends-dir dir]\n"
+        "       [--threads 4] [--gpu] [--backend auto|cpu|cuda|vulkan|hexagon|CUDA0] [--backends-dir dir]\n"
         "           16 kHz WAV in; prints one [start-end] Sxx: text line per segment\n", PROGRAM);
 }
 

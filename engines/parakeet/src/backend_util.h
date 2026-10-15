@@ -166,6 +166,21 @@ inline bool backend_runs_embedding_lookup(ggml_backend_t b, ggml_tensor * embedd
     return supported;
 }
 
+// Hexagon uploads quantized weights in its tiled representation. Use the
+// explicit repack buffer so the scheduler recognizes those weights as
+// Hexagon-only and uses tensor_get for any CPU fallback. Its default
+// host-visible buffer lets CPU kernels read tiled bytes as ordinary GGUF
+// blocks, and HTP refuses quantized matmuls whose weights live there.
+inline ggml_backend_buffer_type_t weight_buffer_type(ggml_backend_t b) {
+    ggml_backend_buffer_type_t fallback = ggml_backend_get_default_buffer_type(b);
+    if (!backend_is_hexagon(b)) return fallback;
+    ggml_backend_dev_t dev = ggml_backend_get_device(b);
+    auto get_extra_bufts = (ggml_backend_dev_get_extra_bufts_t)
+        ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(dev), "ggml_backend_dev_get_extra_bufts");
+    ggml_backend_buffer_type_t * extra = get_extra_bufts ? get_extra_bufts(dev) : nullptr;
+    return extra && extra[0] ? extra[0] : fallback;
+}
+
 inline bool flash_attn_allowed(bool compiled_in, ggml_backend_t b) {
     return compiled_in && b && (backend_is_cuda(b) || backend_is_metal(b) || backend_is_vulkan(b) || backend_is_hexagon(b));
 }

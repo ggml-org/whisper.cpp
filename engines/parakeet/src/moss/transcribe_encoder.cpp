@@ -103,18 +103,31 @@ struct EncoderGraph {
         return ggml_reshape_3d(ctx(), cur, config.n_embd / config.n_heads, config.n_heads, tokens);
     }
 
+    float attention_scale() const {
+        return 1.0f / std::sqrt((float) (config.n_embd / config.n_heads));
+    }
+
+    ggml_tensor * attend_unfused(ggml_tensor * q, ggml_tensor * k, ggml_tensor * v, int64_t tokens) const {
+        ggml_tensor * values = ggml_cont(ctx(), ggml_permute(ctx(), v, 1, 2, 0, 3));
+        ggml_tensor * scores = ggml_soft_max_ext(ctx(), ggml_mul_mat(ctx(), ggml_permute(ctx(), k, 0, 2, 1, 3),
+                ggml_permute(ctx(), q, 0, 2, 1, 3)), nullptr, attention_scale(), 0.0f);
+        ggml_tensor * attended = ggml_permute(ctx(), ggml_mul_mat(ctx(), values, scores), 0, 2, 1, 3);
+        return ggml_cont_2d(ctx(), attended, config.n_embd, tokens);
+    }
+
+    ggml_tensor * attend_fused(ggml_tensor * q, ggml_tensor * k, ggml_tensor * v, int64_t tokens) const {
+        ggml_tensor * attended = ggml_flash_attn_ext(ctx(), ggml_permute(ctx(), q, 0, 2, 1, 3),
+                ggml_permute(ctx(), k, 0, 2, 1, 3), ggml_permute(ctx(), v, 0, 2, 1, 3), nullptr,
+                attention_scale(), 0.0f, 0.0f);
+        return ggml_reshape_2d(ctx(), attended, config.n_embd, tokens);
+    }
+
     ggml_tensor * attention(int layer, ggml_tensor * cur, int64_t tokens) const {
-        const int head_dim = config.n_embd / config.n_heads;
         ggml_tensor * q = heads(linear(cur, weight(layer, "attn_q.weight"), weight(layer, "attn_q.bias")), tokens);
         ggml_tensor * k = heads(ggml_mul_mat(ctx(), weight(layer, "attn_k.weight"), cur), tokens);
         ggml_tensor * v = heads(linear(cur, weight(layer, "attn_v.weight"), weight(layer, "attn_v.bias")), tokens);
-        q = ggml_permute(ctx(), q, 0, 2, 1, 3);
-        k = ggml_permute(ctx(), k, 0, 2, 1, 3);
-        ggml_tensor * values = ggml_cont(ctx(), ggml_permute(ctx(), v, 1, 2, 0, 3));
-        ggml_tensor * scores = ggml_soft_max_ext(ctx(), ggml_mul_mat(ctx(), k, q), nullptr,
-                1.0f / std::sqrt((float) head_dim), 0.0f);
-        ggml_tensor * attended = ggml_permute(ctx(), ggml_mul_mat(ctx(), values, scores), 0, 2, 1, 3);
-        attended = ggml_cont_2d(ctx(), attended, config.n_embd, tokens);
+        ggml_tensor * attended = model.fused_attention() ? attend_fused(q, k, v, tokens)
+                                                         : attend_unfused(q, k, v, tokens);
         return linear(attended, weight(layer, "attn_output.weight"), weight(layer, "attn_output.bias"));
     }
 

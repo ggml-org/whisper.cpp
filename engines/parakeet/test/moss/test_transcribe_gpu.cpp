@@ -74,6 +74,7 @@ void test(const std::string & path) {
     require(fit.status != parakeet::FitStatus::Error && !fit.device_is_cpu &&
             arm.selected(fit.device_name.c_str()) && fit.device.weights_bytes > 0,
             "memory projection lost explicit GPU selection");
+    require(fit.device_free_bytes > 0, "memory projection sees no free memory on the selected device");
     options.backend = "missing-backend";
     const auto unavailable_fit = parakeet::moss::fit_params(options, {}, 0.02, 0);
     require(unavailable_fit.status == parakeet::FitStatus::Error &&
@@ -83,7 +84,7 @@ void test(const std::string & path) {
 
 int main(int argc, char ** argv) {
     if (argc != 2) {
-        std::fprintf(stderr, "usage: %s cuda|vulkan\n", argv[0]);
+        std::fprintf(stderr, "usage: %s cuda|vulkan|hexagon\n", argv[0]);
         return 2;
     }
     std::filesystem::path path;

@@ -31,7 +31,7 @@ and CPU scratch for the configured threads, using GGUF metadata only; see
 | `nvidia/diar_streaming_sortformer_4spk-v2` | Sortformer | 128 | 512 × 17 | n/a | 117 M | 251 MiB f16 / 134 MiB q8_0 / 72 MiB q4_0 | similar to v1 offline | Streaming-trained; sliding-history streaming |
 | `nvidia/diar_streaming_sortformer_4spk-v2.1` | Sortformer + AOSC | 128 | 512 × 17 | n/a | 117 M | 251 MiB f16 / 134 MiB q8_0 / 72 MiB q4_0 | similar to v1 offline | Audio-Online Speaker Cache preserves slots across long gaps; Core ML exact-shape batch/AOSC encoder |
 | `nvidia/Nemotron-3-Diarization` | Nemotron diarization + AOSC | 128 | 512 × 31 RoPE | n/a | — | 107 MB q8_0 GGUF | 0.0002 q8_0 CUDA / 0.0002 q8_0 Vulkan / 0.0006 q8_0 Metal / 0.0065 q8_0 OpenCL (Adreno 830) | Eight speakers, 10 ms probabilities, native offline and cached streaming |
-| `OpenMOSS-Team/MOSS-Transcribe-Diarize` | Whisper-shaped encoder + Qwen3 decoder (text, speakers, timestamps) | 80 | 1024 × 24 encoder, 1024 × 28 decoder | 151936 | 0.9 B | 1.8 GB f16 / 0.98 GB q8_0 / 0.64 GB q5_0 | 0.05–0.39 f16 Metal (2 to 30 min) | Multilingual checkpoint, validated on Spanish and Chinese; English long-form skips spans, as in the reference model; per-request hotwords; separate `moss-transcribe` API and CLI; optional Core ML audio encoder |
+| `OpenMOSS-Team/MOSS-Transcribe-Diarize` | Whisper-shaped encoder + Qwen3 decoder (text, speakers, timestamps) | 80 | 1024 × 24 encoder, 1024 × 28 decoder | 151936 | 0.9 B | 1.8 GB f16 / 0.98 GB q8_0 / 0.64 GB q5_0 | 0.05–0.39 f16 Metal (2 to 30 min) / 0.13–0.20 q8_0 Hexagon (Galaxy S25, 27 s to 3 min) | Multilingual checkpoint, validated on Spanish and Chinese; English long-form skips spans, as in the reference model; per-request hotwords; separate `moss-transcribe` API and CLI; optional Core ML audio encoder; Hexagon NPU with q8_0 or f16 |
 
 TDT 0.6B-v3 is multilingual with punctuation/capitalization; TDT 1.1B is
 English-only without those features. IndicConformer exports CTC by default,
@@ -68,7 +68,9 @@ and, for MOSS-Transcribe-Diarize, in
 `parakeet --backend NAME` and `EngineOptions::backend` select the runtime device.
 Explicit requests fail if unavailable. Hexagon is experimental and requires
 a staged DSP library; see [docs/backends.md](docs/backends.md) for names,
-automatic placement and validation coverage.
+automatic placement and validation coverage, and
+[docs/moss-transcribe.md](docs/moss-transcribe.md#hexagon-npu) for
+MOSS-Transcribe-Diarize on the NPU.
 
 ## Performance
 

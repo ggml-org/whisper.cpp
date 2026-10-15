@@ -1,4 +1,5 @@
 #include "transcribe_fixtures.h"
+#include "../../../test/moss_precision.h"
 
 #include "moss/transcribe_cli.h"
 #include "moss/transcribe_audio.h"
@@ -45,6 +46,13 @@ constexpr int SHORT_CONTEXT = 64;
 constexpr int OVER_CONTEXT_CHUNKS = 10;
 constexpr int NEVER_FAIL = -1;
 constexpr const char * FAKE_SIDECAR_LABEL = "coreml-fake";
+constexpr int SPLIT_HEAD_ROWS = 100;
+constexpr int SPLIT_HEAD_CHUNKS = 3;
+constexpr int SPLIT_TAIL_ROWS = TEXT_VOCAB - 2 * SPLIT_HEAD_ROWS;
+constexpr int DECODE_STEPS = 5;
+constexpr double FUSED_RELATIVE_TOLERANCE = 1e-2;
+constexpr int MASK_POSITION = 3;
+constexpr int MASK_TOKENS = 4;
 const char * const COMMA_DECIMAL_LOCALES[] = {"de_DE.UTF-8", "de_DE.utf8", "fr_FR.UTF-8", "fr_FR.utf8", "de_DE",
                                               "fr_FR", "German_Germany.1252"};
 
@@ -351,6 +359,17 @@ void test_model_rejections() {
     const auto healthy = write_transcribe_model("transcribe-threads", WEIGHT_SEED);
     expect_failure([&] { TranscribeModel model(healthy.string(), false, 0); }, "threads", "zero threads rejected");
     std::filesystem::remove(healthy);
+}
+
+void test_token_table_width_rejected() {
+    const auto shapes = TensorShapes{{"text.token_embd.weight", {TEXT_EMBD * 2, TEXT_VOCAB}}};
+    const auto path = write_transcribe_model("transcribe-table-width", WEIGHT_SEED, [](gguf_context *) {}, shapes);
+    expect_failure([&] { TranscribeModel model(path.string(), false, 1); }, "text.token_embd.weight",
+                   "a token table wider than the decoder is rejected at load");
+    expect_failure([&] {
+        TranscribeModel model(path.string(), false, 1, "auto", false, TranscribeLayout{SPLIT_HEAD_ROWS});
+    }, "text.token_embd.weight", "a split token table never reads rows wider than the decoder");
+    std::filesystem::remove(path);
 }
 
 void test_network_rejections() {
@@ -768,6 +787,140 @@ void test_engine_reports_ggml_encoder() {
     std::filesystem::remove(path);
 }
 
+double relative_l2(const std::vector<float> & reference, const std::vector<float> & value) {
+    if (reference.size() != value.size() || reference.empty()) {
+        return INFINITY;
+    }
+    double error = 0.0, norm = 0.0;
+    for (size_t i = 0; i < reference.size(); ++i) {
+        const double d = (double) reference[i] - value[i];
+        error += d * d;
+        norm += (double) reference[i] * reference[i];
+    }
+    return std::sqrt(error / std::max(norm, 1e-20));
+}
+
+bool chunks_tile(const std::vector<TranscribeHeadChunk> & chunks, int vocab, int max_rows) {
+    int next = 0;
+    for (const TranscribeHeadChunk & chunk : chunks) {
+        if (chunk.row0 != next || chunk.rows < 1 || chunk.rows > max_rows) return false;
+        next += chunk.rows;
+    }
+    return next == vocab;
+}
+
+void test_head_plan() {
+    const auto split = plan_transcribe_head(TEXT_VOCAB, SPLIT_HEAD_ROWS);
+    check(split.size() == SPLIT_HEAD_CHUNKS && split.back().rows == SPLIT_TAIL_ROWS,
+          "head chunks stop at the row cap and keep the remainder");
+    check(chunks_tile(split, TEXT_VOCAB, SPLIT_HEAD_ROWS), "head chunks tile the vocabulary without gaps");
+    check(plan_transcribe_head(TEXT_VOCAB, TEXT_VOCAB).size() == 1, "a backend with no row cap keeps one chunk");
+    expect_failure([] { plan_transcribe_head(0, SPLIT_HEAD_ROWS); }, "head chunks", "empty vocabulary rejected");
+    expect_failure([] { plan_transcribe_head(TEXT_VOCAB, 0); }, "head chunks", "zero-row chunks rejected");
+}
+
+std::vector<float> decode_steps(TranscribeDecoder & decoder) {
+    std::vector<float> logits;
+    for (int step = 0; step < DECODE_STEPS; ++step) {
+        const std::vector<float> next = decoder.step(byte_token('a' + step));
+        logits.insert(logits.end(), next.begin(), next.end());
+    }
+    return logits;
+}
+
+std::vector<float> decoded_logits(TranscribeModel & model, int batch) {
+    const std::vector<int32_t> prompt = tiny_prompt(CHUNK_TOKENS);
+    TranscribeDecoder decoder(model, (int) prompt.size() + DECODE_STEPS);
+    std::vector<float> logits = decoder.prefill(prompt, random_signal((size_t) CHUNK_TOKENS * TEXT_EMBD, AUDIO_SEED),
+            batch);
+    const std::vector<float> steps = decode_steps(decoder);
+    logits.insert(logits.end(), steps.begin(), steps.end());
+    return logits;
+}
+
+void check_split_table(const std::filesystem::path & path, const std::string & precision) {
+    TranscribeModel whole(path.string(), false, 1);
+    TranscribeModel split(path.string(), false, 1, "auto", false, TranscribeLayout{SPLIT_HEAD_ROWS});
+    check(!whole.embeds_on_host() && whole.head().size() == 1, precision + ": the CPU gathers from one table");
+    check(split.embeds_on_host() && split.head().size() == SPLIT_HEAD_CHUNKS,
+          precision + ": a capped head splits the table");
+    check(max_abs_diff(decoded_logits(split, 3), decoded_logits(whole, 3)) == 0.0f,
+          precision + ": host lookup and chunked head reproduce the whole table");
+    expect_failure([&] { split.embed_tokens({TEXT_VOCAB}); }, "vocabulary", precision + ": host lookup bounds ids");
+    TranscribeModel measured(path.string(), false, 1, "auto", true, TranscribeLayout{SPLIT_HEAD_ROWS});
+    check(measured.measure_weights().device.weights_bytes == split.weight_bytes(),
+          precision + ": the projection counts the head chunks");
+}
+
+void test_split_token_table() {
+    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0}) {
+        const auto path = write_transcribe_model("transcribe-split", WEIGHT_SEED);
+        moss_fixture_precision(path, type);
+        check_split_table(path, ggml_type_name(type));
+        std::filesystem::remove(path);
+    }
+}
+
+void test_fused_attention() {
+    const auto path = write_transcribe_model("transcribe-fused", WEIGHT_SEED);
+    TranscribeModel unfused(path.string(), false, 1);
+    TranscribeModel fused(path.string(), false, 1, "auto", false, TranscribeLayout{0, TranscribeAttention::Fused});
+    check(!unfused.fused_attention() && fused.fused_attention(), "attention layout follows the override");
+    const std::vector<float> mel = tiny_mel(unfused, random_signal(CHUNK_SAMPLES, AUDIO_SEED));
+    const auto a = encode_audio_chunk(unfused, mel, CHUNK_TOKENS, true);
+    const auto b = encode_audio_chunk(fused, mel, CHUNK_TOKENS, true);
+    check(relative_l2(a.encoder_states, b.encoder_states) < FUSED_RELATIVE_TOLERANCE,
+          "fused encoder attention matches the unfused graph");
+    const std::vector<float> reference = decoded_logits(unfused, 3);
+    for (int batch : {1, 3, CHUNK_TOKENS + 5}) {
+        check(relative_l2(reference, decoded_logits(fused, batch)) < FUSED_RELATIVE_TOLERANCE,
+              "fused decoder attention matches with prefill batch " + std::to_string(batch));
+    }
+    std::filesystem::remove(path);
+}
+
+std::vector<float> mask_values(const std::vector<uint8_t> & bytes, ggml_type type) {
+    const size_t count = bytes.size() / ggml_type_size(type);
+    std::vector<float> values(count);
+    if (type == GGML_TYPE_F16) {
+        ggml_fp16_to_fp32_row(reinterpret_cast<const ggml_fp16_t *>(bytes.data()), values.data(), (int64_t) count);
+    } else {
+        std::memcpy(values.data(), bytes.data(), bytes.size());
+    }
+    return values;
+}
+
+bool mask_is_causal(const std::vector<float> & values) {
+    const int total = MASK_POSITION + MASK_TOKENS;
+    for (int query = 0; query < MASK_TOKENS; ++query) {
+        for (int key = 0; key < total; ++key) {
+            const float value = values[(size_t) query * total + key];
+            const bool visible = key <= MASK_POSITION + query;
+            if (visible ? value != 0.0f : !(std::isinf(value) && value < 0.0f)) return false;
+        }
+    }
+    return true;
+}
+
+void check_mask_projection(const TranscribeModel & model, ggml_type type, const std::string & layout) {
+    const int64_t total = MASK_POSITION + MASK_TOKENS;
+    const std::vector<uint8_t> mask = build_causal_mask(model, MASK_POSITION, MASK_TOKENS);
+    check(transcribe_mask_type(model) == type, layout + ": the mask has the attention input's type");
+    check(mask.size() == transcribe_mask_bytes(model, total, MASK_TOKENS) &&
+          mask.size() == (size_t) total * MASK_TOKENS * ggml_type_size(type),
+          layout + ": the projection counts exactly the one mask buffer the decoder uploads");
+    check(mask_is_causal(mask_values(mask, type)), layout + ": the mask hides only later positions");
+}
+
+void test_mask_projection() {
+    const auto path = write_transcribe_model("transcribe-mask", WEIGHT_SEED);
+    TranscribeModel unfused(path.string(), false, 1);
+    TranscribeModel fused(path.string(), false, 1, "auto", false, TranscribeLayout{0, TranscribeAttention::Fused});
+    check_mask_projection(unfused, GGML_TYPE_F32, "unfused");
+    check_mask_projection(fused, GGML_TYPE_F16, "fused");
+    std::filesystem::remove(path);
+}
+
 void test_upload_plan() {
     check(plan_upload(true, true) == TensorUpload::InPlace && plan_upload(true, false) == TensorUpload::InPlace,
           "host buffers read tensors in place without a staging copy");
@@ -794,6 +947,7 @@ int main() {
         test_model_loads();
         test_model_rejections();
         test_network_rejections();
+        test_token_table_width_rejected();
         test_encoder_chunk();
         test_decoder_batches();
         test_engine_end_to_end();
@@ -806,6 +960,10 @@ int main() {
         test_transcript_json_escapes();
         test_locale_independent_numbers();
         test_upload_plan();
+        test_head_plan();
+        test_split_token_table();
+        test_fused_attention();
+        test_mask_projection();
         test_coreml_frame_major_mel();
         test_coreml_policy();
         test_coreml_sidecar_lookup();

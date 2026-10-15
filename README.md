@@ -77,6 +77,7 @@ and OpenCL on the same device.
 
 | Engine | Models | Guide |
 |---|---|---|
+| ASR | Parakeet CTC 0.6B (`q8_0`), MOSS-Transcribe-Diarize (`q8_0`, `f16`) | [Parakeet backends](engines/parakeet/docs/backends.md#backends-and-runtime-selection), [MOSS Hexagon](engines/parakeet/docs/moss-transcribe.md#hexagon-npu) |
 | TTS | Supertonic 3, Parler-TTS mini, CosyVoice3, Audio8, MOSS-TTS-v1.5 / MOSS-TTSD (`q4_0` transformer) | [Audio8 Hexagon](engines/tts/docs/audio8.md#hexagon-npu-snapdragon), [MOSS Hexagon](engines/tts/docs/moss.md#hexagon-npu), and the matching sections in the other model guides |
 | AudioGen | ACE-Step v15 turbo (`q8_0` DiT) | [AudioGen Hexagon](engines/audiogen/docs/backends.md#hexagon-npu) |
 

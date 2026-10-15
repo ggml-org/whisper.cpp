@@ -8,6 +8,7 @@
 #include "gguf.h"
 
 #include <algorithm>
+#include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <vector>
@@ -18,14 +19,6 @@ namespace {
 
 [[noreturn]] void fail(const std::string & message) {
     throw std::runtime_error("moss transcribe: " + message);
-}
-
-size_t tensor_offset(const gguf_context * file, const char * name, size_t expected_bytes) {
-    const int64_t id = gguf_find_tensor(file, name);
-    if (id < 0 || gguf_get_tensor_size(file, id) != expected_bytes) {
-        fail(std::string("GGUF tensor does not match the model: ") + name);
-    }
-    return gguf_get_data_offset(file) + gguf_get_tensor_offset(file, id);
 }
 
 void read_exactly(std::ifstream & file, void * data, size_t bytes, const char * name) {
@@ -53,12 +46,16 @@ void upload_chunked(std::ifstream & file, ggml_tensor * tensor, size_t bytes, st
     }
 }
 
-void upload_tensor(const gguf_context * gguf, std::ifstream & file, ggml_tensor * tensor, std::vector<uint8_t> & scratch) {
-    const size_t bytes = ggml_nbytes(tensor);
-    const size_t offset = tensor_offset(gguf, ggml_get_name(tensor), bytes);
+void seek(std::ifstream & file, size_t offset, const char * name) {
     if (!file.seekg((std::streamoff) offset)) {
-        fail(std::string("cannot seek to tensor ") + ggml_get_name(tensor));
+        fail(std::string("cannot seek to tensor ") + name);
     }
+}
+
+void upload_tensor(std::ifstream & file, const TensorSource & source, std::vector<uint8_t> & scratch) {
+    ggml_tensor * tensor = source.tensor;
+    const size_t bytes = ggml_nbytes(tensor);
+    seek(file, source.offset, ggml_get_name(tensor));
     switch (plan_upload(ggml_backend_buffer_is_host(tensor->buffer), ggml_is_quantized(tensor->type))) {
         case TensorUpload::InPlace: read_in_place(file, tensor, bytes); break;
         case TensorUpload::Whole:   upload_whole(file, tensor, bytes, scratch); break;
@@ -93,6 +90,12 @@ ggml_cgraph * TranscribeGraph::graph() const { return graph_; }
 
 ggml_tensor * TranscribeGraph::input_f32(int64_t ne0, int64_t ne1) {
     ggml_tensor * tensor = ggml_new_tensor_2d(ctx_, GGML_TYPE_F32, ne0, ne1);
+    ggml_set_input(tensor);
+    return tensor;
+}
+
+ggml_tensor * TranscribeGraph::input_f16(int64_t ne0, int64_t ne1) {
+    ggml_tensor * tensor = ggml_new_tensor_2d(ctx_, GGML_TYPE_F16, ne0, ne1);
     ggml_set_input(tensor);
     return tensor;
 }
@@ -161,15 +164,55 @@ ggml_backend * open_transcribe_backend(bool use_gpu, const std::string & request
     return backend;
 }
 
-void upload_gguf_tensors(const gguf_context * file, const std::string & path, ggml_context * weights) {
+size_t gguf_tensor_data_offset(const gguf_context * file, const char * name, size_t expected_bytes) {
+    const int64_t id = gguf_find_tensor(file, name);
+    if (id < 0 || gguf_get_tensor_size(file, id) != expected_bytes) {
+        fail(std::string("GGUF tensor does not match the model: ") + name);
+    }
+    return gguf_get_data_offset(file) + gguf_get_tensor_offset(file, id);
+}
+
+void upload_file_ranges(const std::string & path, const std::vector<TensorSource> & sources) {
     std::ifstream handle(path, std::ios::binary);
     if (!handle) {
         fail("cannot reopen GGUF for streaming: " + path);
     }
     std::vector<uint8_t> scratch;
-    for (ggml_tensor * tensor = ggml_get_first_tensor(weights); tensor; tensor = ggml_get_next_tensor(weights, tensor)) {
-        upload_tensor(file, handle, tensor, scratch);
+    for (const TensorSource & source : sources) {
+        upload_tensor(handle, source, scratch);
     }
+}
+
+void upload_gguf_tensors(const gguf_context * file, const std::string & path, ggml_context * weights) {
+    std::vector<TensorSource> sources;
+    for (ggml_tensor * tensor = ggml_get_first_tensor(weights); tensor; tensor = ggml_get_next_tensor(weights, tensor)) {
+        sources.push_back({tensor, gguf_tensor_data_offset(file, ggml_get_name(tensor), ggml_nbytes(tensor))});
+    }
+    upload_file_ranges(path, sources);
+}
+
+GgufRows::GgufRows(const std::string & path, size_t offset, ggml_type type, int64_t width, int64_t rows)
+    : file_(path, std::ios::binary), offset_(offset), type_(type), width_(width), rows_(rows),
+      row_(ggml_row_size(type, width)) {
+    if (!file_) {
+        fail("cannot reopen GGUF for embedding lookup: " + path);
+    }
+    if (type != GGML_TYPE_F32 && !ggml_get_type_traits(type)->to_float) {
+        fail(std::string("cannot dequantize ") + ggml_type_name(type) + " embedding rows");
+    }
+}
+
+void GgufRows::dequantize(int64_t row, float * out) {
+    if (row < 0 || row >= rows_) {
+        fail("token id outside the text vocabulary");
+    }
+    seek(file_, offset_ + (size_t) row * row_.size(), "text embedding row");
+    read_exactly(file_, row_.data(), row_.size(), "text embedding row");
+    if (type_ == GGML_TYPE_F32) {
+        std::memcpy(out, row_.data(), row_.size());
+        return;
+    }
+    ggml_get_type_traits(type_)->to_float(row_.data(), out, width_);
 }
 
 } // namespace parakeet::moss::detail

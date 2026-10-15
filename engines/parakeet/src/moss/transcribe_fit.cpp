@@ -106,12 +106,14 @@ uint64_t encoder_payload(const detail::TranscribeConfig & config) {
     return sat_add(fft, sat_mul(sat_add(sat_add(mel, power), sat_add(padded, embeddings)), sizeof(float)));
 }
 
-uint64_t decoder_payload(const detail::TranscribeConfig & config, const Workload & workload,
+uint64_t decoder_payload(const detail::TranscribeModel & model, const Workload & workload,
                          const detail::TranscribeTokenizer & tokenizer) {
+    const auto & config = model.config();
     const uint64_t batch = std::min<size_t>(detail::TRANSCRIBE_PREFILL_BATCH_TOKENS, workload.prompt.size());
-    const uint64_t mask = sat_mul(batch, workload.prompt.size());
-    const uint64_t input = sat_mul(batch, config.text.n_embd + 2);
-    uint64_t bytes = sat_add(sat_mul(sat_add(mask, input), sizeof(float)), sat_mul(batch, sizeof(int32_t) * 2));
+    const uint64_t mask = detail::transcribe_mask_bytes(model, (int64_t) workload.prompt.size(), (int64_t) batch);
+    const uint64_t host_rows = model.embeds_on_host() ? config.text.n_embd : 0;
+    const uint64_t input = sat_mul(sat_mul(batch, config.text.n_embd + host_rows + 2), sizeof(float));
+    uint64_t bytes = sat_add(sat_add(mask, input), sat_mul(batch, sizeof(int32_t) * 2));
     bytes = sat_add(bytes, sat_mul(config.text.vocab, sizeof(float) * 2));
     bytes = sat_add(bytes, sat_mul(workload.limit, sizeof(int32_t) * VECTOR_CAPACITY_FACTOR));
     bytes = sat_add(bytes, sat_mul(sat_mul(workload.limit, tokenizer.max_piece_bytes()), TRANSCRIPT_COPIES));
@@ -136,7 +138,7 @@ void measure_workload(FitResult & result, detail::TranscribeModel & model,
         sizeof(float) * VECTOR_CAPACITY_FACTOR));
     const uint64_t encode_host = sat_add(encoder.host_bytes, encoder_payload(config));
     const uint64_t decode_host = sat_add(decode.host_bytes,
-        sat_add(decoder.host_state_bytes(), decoder_payload(config, workload, tokenizer)));
+        sat_add(decoder.host_state_bytes(), decoder_payload(model, workload, tokenizer)));
     resident = sat_add(resident, std::max(encode_host, decode_host));
     resident = sat_add(resident, std::max(encoder.host_compute_bytes, decode.host_compute_bytes));
     resident = sat_add(resident,

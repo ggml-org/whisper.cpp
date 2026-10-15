@@ -13,8 +13,8 @@ struct TranscribeOptions {
     int n_threads = 4;
     bool use_gpu = false;
     std::string backends_dir;
-    // "auto" follows use_gpu. An explicit backend (e.g. "cuda", "vulkan" or
-    // "CUDA0") overrides use_gpu and fails if unavailable.
+    // "auto" follows use_gpu. An explicit backend (e.g. "cuda", "vulkan",
+    // "hexagon" or "CUDA0") overrides use_gpu and fails if unavailable.
     std::string backend = "auto";
 };
 

@@ -175,10 +175,12 @@ void test_prefill(const Fixture & fixture) {
     report("prefill logits", cosine(logits, read_bin<float>(fixture.dir / "prefill_logits.bin")), STAGE_COSINE);
 }
 
-void test_end_to_end(const Fixture & fixture, const std::string & model_path, bool use_gpu) {
+void test_end_to_end(const Fixture & fixture, const std::string & model_path, bool use_gpu,
+                     const std::string & backend) {
     parakeet::moss::TranscribeOptions options;
     options.model_path = model_path;
     options.use_gpu = use_gpu;
+    options.backend = backend;
     options.n_threads = PARITY_THREADS;
     parakeet::moss::TranscribeEngine engine(options);
     parakeet::moss::TranscribeRequest request;
@@ -207,7 +209,9 @@ int main() {
     }
     try {
         const bool use_gpu = std::getenv("MOSS_TRANSCRIBE_GPU") != nullptr;
-        TranscribeModel model(model_path, use_gpu, PARITY_THREADS);
+        const char * requested = std::getenv("MOSS_TRANSCRIBE_BACKEND");
+        const std::string backend = requested ? requested : "auto";
+        TranscribeModel model(model_path, use_gpu, PARITY_THREADS, backend);
         std::printf("backend: %s\n", model.backend_name());
         validate_transcribe_encoder(model);
         validate_transcribe_decoder(model);
@@ -218,7 +222,7 @@ int main() {
         test_tokenizer_cases(fixture);
         test_encoder(fixture);
         test_prefill(fixture);
-        test_end_to_end(fixture, model_path, use_gpu);
+        test_end_to_end(fixture, model_path, use_gpu, backend);
     } catch (const std::exception & e) {
         std::fprintf(stderr, "%s\n", e.what());
         return 1;
