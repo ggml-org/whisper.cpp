@@ -15,7 +15,7 @@ RUN --mount=type=secret,id=HF_TOKEN,required=false,env=HF_TOKEN \
         echo "GGML_SYCL_F16 is set" \
         && export OPT_SYCL_F16="-DGGML_SYCL_F16=ON"; \
     fi && \
-    make base.en CMAKE_ARGS="-DGGML_SYCL=1 -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx ${OPT_SYCL_F16}"
+    make base.en CMAKE_ARGS="-DGGML_SYCL=1 -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx ${OPT_SYCL_F16} -DGGML_NATIVE=OFF"
 
 FROM intel/deep-learning-essentials:$ONEAPI_VERSION AS runtime
 WORKDIR /app

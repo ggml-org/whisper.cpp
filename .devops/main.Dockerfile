@@ -6,7 +6,7 @@ RUN apt-get update && \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 COPY .. .
-RUN --mount=type=secret,id=HF_TOKEN,required=false,env=HF_TOKEN make base.en
+RUN --mount=type=secret,id=HF_TOKEN,required=false,env=HF_TOKEN make base.en CMAKE_ARGS="-DGGML_NATIVE=OFF"
 
 FROM ubuntu:22.04 AS runtime
 WORKDIR /app

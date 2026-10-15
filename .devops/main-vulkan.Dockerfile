@@ -6,7 +6,7 @@ RUN apt update && \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 COPY .. .
-RUN --mount=type=secret,id=HF_TOKEN,required=false,env=HF_TOKEN make base.en CMAKE_ARGS="-DGGML_VULKAN=1"
+RUN --mount=type=secret,id=HF_TOKEN,required=false,env=HF_TOKEN make base.en CMAKE_ARGS="-DGGML_VULKAN=1 -DGGML_NATIVE=OFF"
 # Copy only CLI executables and shared libraries (not compiled tests, nor source code or other build artifacts)
 RUN mkdir -p /runtime/usr/local/bin /runtime/usr/local/lib && \
     for path in build/bin/*; do \
