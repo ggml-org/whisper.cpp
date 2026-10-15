@@ -84,7 +84,18 @@ build-parakeet/parakeet-fit-params \
 build-parakeet/parakeet-fit-params \
   --model engines/parakeet/models/parakeet-tdt-0.6b-v3.q8_0.gguf \
   --n-gpu-layers 1 --json
+
+# Explicit Snapdragon Hexagon projection
+build-parakeet/parakeet-fit-params \
+  --model engines/parakeet/models/parakeet-ctc-0.6b.q8_0.gguf --backend hexagon
 ```
+
+`--backend` (`FitOptions::backend`) takes the same names as the engine's
+`--backend`: `auto` follows `--n-gpu-layers`; `cpu`, `opencl`, `hexagon` or an
+exact ggml device name projects for that backend, and an unavailable one is an
+error with reason `no-backend-device`, as a real load fails. A Hexagon session
+allocates host memory and reports none of its own, so the verdict reads the
+CPU device's free memory and charges host buffers to the same pool.
 
 The workload (`--audio-seconds`, default 300) sets the longest single
 transcribe input to project for. Device-side memory is bounded by the
@@ -131,7 +142,9 @@ before it compares the projection with real reservations.
 The projection is exact where it can be: `test-fit-params` asserts the
 projected weight, encoder-compute, Sortformer-head, Nemotron
 prompt/step/pre-encode, and Nemotron 3 Diarization graph bytes equal what a
-real load/encode/diarize/stream allocates, byte for byte. For the legacy families (CTC/RNN-T/TDT/EOU) the
+real load/encode/diarize/stream allocates, byte for byte. On Hexagon each
+buffer also carries a 4 KiB guard page that ggml does not report, so the
+projection is short by one page per buffer. For the legacy families (CTC/RNN-T/TDT/EOU) the
 projection covers the offline paths; their streaming sessions build smaller
 per-chunk graphs but rotate through the same graph cache with
 session-dependent keys, so treat the offline projection as a guide, not a

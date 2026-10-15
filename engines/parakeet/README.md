@@ -65,8 +65,9 @@ and, for MOSS-Transcribe-Diarize, in
 
 ## Backend selection
 
-`parakeet --backend NAME` and `EngineOptions::backend` select the runtime device.
-Explicit requests fail if unavailable. Hexagon is experimental and requires
+`parakeet --backend NAME` and `EngineOptions::backend` select the runtime device;
+`parakeet-fit-params --backend NAME` and `FitOptions::backend` project memory for
+the same device. Explicit requests fail if unavailable. Hexagon is experimental and requires
 a staged DSP library; see [docs/backends.md](docs/backends.md) for names,
 automatic placement and validation coverage, and
 [docs/moss-transcribe.md](docs/moss-transcribe.md#hexagon-npu) for

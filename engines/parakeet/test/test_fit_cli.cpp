@@ -155,6 +155,24 @@ int main() {
                "--context-frames garbage exits Error");
         expect(run_cli({"--model", "x.gguf", "--nemotron-chunk-ms", "80ms"}) == err,
                "--nemotron-chunk-ms garbage exits Error");
+        expect(run_cli({"--model", "x.gguf", "--backend"}) == err,
+               "--backend without value exits Error");
+    }
+
+    // ── Explicit backend: resolved before the GGUF is read, as in a real
+    //    load, so a missing model still tells the two failures apart ───────
+    {
+        const int err = (int) parakeet::FitStatus::Error;
+        parakeet::FitOptions opts;
+        opts.model_gguf_path = "/nonexistent/parakeet-fit-backend.gguf";
+        opts.backend = "missing-backend";
+        expect(parakeet::fit_params(opts).reason == "no-backend-device",
+               "an unavailable explicit backend reports no-backend-device");
+        opts.backend = "cpu";
+        expect(parakeet::fit_params(opts).reason == "model-unreadable",
+               "an available explicit backend goes on to read the model");
+        expect(run_cli({"--model", opts.model_gguf_path.c_str(), "--backend", "missing-backend"}) == err,
+               "--backend with an unavailable backend exits Error");
     }
 
     if (g_failures == 0) {

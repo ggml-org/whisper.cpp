@@ -106,6 +106,12 @@ struct FitOptions {
     // Free-memory headroom that must remain on the device for the projection
     // to count as fitting.
     uint64_t margin_bytes = 256ull * 1024 * 1024;
+
+    // Same semantics as EngineOptions::backend: "auto" (or empty) follows
+    // n_gpu_layers; "cpu", "opencl", "hexagon" or an exact ggml device name
+    // projects for that backend and reports "no-backend-device" when it is
+    // unavailable.
+    std::string backend = "auto";
 };
 
 // Projected bytes on the resolved compute device.

@@ -181,6 +181,26 @@ inline ggml_backend_buffer_type_t weight_buffer_type(ggml_backend_t b) {
     return extra && extra[0] ? extra[0] : fallback;
 }
 
+// Unified-memory devices (CPU, integrated GPUs, Apple Metal, Hexagon) draw
+// device buffers from the same RAM the host-side buffers live in, so a memory
+// verdict must charge both against it. Discrete GPUs keep the pools separate.
+inline bool backend_shares_host_memory(ggml_backend_t b) {
+    ggml_backend_dev_t dev = b ? ggml_backend_get_device(b) : nullptr;
+    return backend_is_cpu(b) || backend_is_metal(b) || backend_is_hexagon(b) ||
+        (dev && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_IGPU);
+}
+
+// Hexagon sessions allocate host RAM through rpcmem and may report no memory
+// of their own; their buffers then compete with the host for the CPU's pool.
+inline void backend_device_memory(ggml_backend_t b, size_t & free, size_t & total) {
+    free = 0;
+    total = 0;
+    ggml_backend_dev_t dev = b ? ggml_backend_get_device(b) : nullptr;
+    if (dev) ggml_backend_dev_memory(dev, &free, &total);
+    ggml_backend_dev_t cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (total == 0 && backend_is_hexagon(b) && cpu) ggml_backend_dev_memory(cpu, &free, &total);
+}
+
 inline bool flash_attn_allowed(bool compiled_in, ggml_backend_t b) {
     return compiled_in && b && (backend_is_cuda(b) || backend_is_metal(b) || backend_is_vulkan(b) || backend_is_hexagon(b));
 }

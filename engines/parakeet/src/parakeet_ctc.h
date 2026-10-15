@@ -547,7 +547,8 @@ int load_from_gguf_metadata_only(const std::string & gguf_path,
                                  int                 n_threads,
                                  int                 n_gpu_layers,
                                  bool                verbose,
-                                 GgufLoadMeasure   & out_measure);
+                                 GgufLoadMeasure   & out_measure,
+                                 const std::string & backend = "auto");
 
 // Measure the compute buffer the offline encoder graph at `n_mel_frames`
 // would allocate on the model's active backend, without allocating or

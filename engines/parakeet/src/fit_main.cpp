@@ -41,6 +41,9 @@ void print_usage(const char * argv0) {
         "  --n-gpu-layers N        request the GPU backend when > 0 (default 0 = CPU),\n"
         "                          with the same runtime fallbacks a real load applies\n"
         "  --threads N             CPU thread count used for backend resolution\n"
+        "  --backend NAME          auto|cpu|opencl|hexagon or an exact ggml device name\n"
+        "                          (default auto follows --n-gpu-layers; an unavailable\n"
+        "                          backend is an error, as in a real load)\n"
         "  --margin-mib MIB        free-memory headroom to require (default 256)\n"
         "  --window-frames N       EngineOptions::long_form_window_frames (default 0 = auto)\n"
         "  --context-frames N      EngineOptions::long_form_context_frames (default 0 = auto)\n"
@@ -133,6 +136,8 @@ extern "C" int parakeet_fit_cli_main(int argc, char ** argv) {
                 std::fprintf(stderr, "--nemotron-chunk-ms: '%s' is not an integer\n", argv[i]);
                 return (int) parakeet::FitStatus::Error;
             }
+        } else if (a == "--backend" && i + 1 < argc) {
+            opts.backend = argv[++i];
         } else if (a == "--backends-dir" && i + 1 < argc) {
             opts.backends_dir = argv[++i];
         } else if (a == "--json") {

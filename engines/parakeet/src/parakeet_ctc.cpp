@@ -2570,10 +2570,11 @@ int load_from_gguf_metadata_only(const std::string & gguf_path,
                                  int                 n_threads,
                                  int                 n_gpu_layers,
                                  bool                verbose,
-                                 GgufLoadMeasure   & out_measure) {
+                                 GgufLoadMeasure   & out_measure,
+                                 const std::string & backend) {
     out_measure = GgufLoadMeasure{};
     return load_from_gguf_impl(gguf_path, out_model, n_threads, n_gpu_layers,
-                               verbose, &out_measure);
+                               verbose, &out_measure, backend);
 }
 
 size_t model_weights_buffer_bytes(const ParakeetCtcModel & m) {

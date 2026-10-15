@@ -200,22 +200,6 @@ int largest_head_rows(ggml_backend_t backend, const ggml_tensor * table) {
     return 0;
 }
 
-// Hexagon sessions allocate host RAM through rpcmem and may report no memory
-// of their own; their weights then compete with the host for the CPU's pool.
-void read_device_memory(ggml_backend_t backend, size_t & free, size_t & total) {
-    ggml_backend_dev_memory(ggml_backend_get_device(backend), &free, &total);
-    ggml_backend_dev_t cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-    if (total == 0 && backend_is_hexagon(backend) && cpu) {
-        ggml_backend_dev_memory(cpu, &free, &total);
-    }
-}
-
-bool shares_host_memory(ggml_backend_t backend) {
-    ggml_backend_dev_t device = ggml_backend_get_device(backend);
-    return backend_is_cpu(backend) || backend_is_metal(backend) || backend_is_hexagon(backend) ||
-        ggml_backend_dev_type(device) == GGML_BACKEND_DEVICE_TYPE_IGPU;
-}
-
 } // namespace
 
 std::vector<TranscribeHeadChunk> plan_transcribe_head(int vocab, int max_rows) {
@@ -506,9 +490,9 @@ FitResult TranscribeModel::measure_weights() {
     if (!device) fail("no compute backend available");
     result.device_name = ggml_backend_name(impl_->backend);
     result.device_is_cpu = backend_is_cpu(impl_->backend);
-    result.device_shares_host_memory = shares_host_memory(impl_->backend);
+    result.device_shares_host_memory = backend_shares_host_memory(impl_->backend);
     size_t free = 0, total = 0;
-    read_device_memory(impl_->backend, free, total);
+    backend_device_memory(impl_->backend, free, total);
     result.device_free_bytes = free;
     result.device_total_bytes = total;
     result.device.weights_bytes = impl_->measured_weights;

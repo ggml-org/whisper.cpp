@@ -289,8 +289,10 @@ FitResult fit_params(const FitOptions & opts) {
     {
         const int rc = load_from_gguf_metadata_only(
             opts.model_gguf_path, model, opts.n_threads, opts.n_gpu_layers,
-            opts.verbose, lm);
-        if (rc == 10) {  // CPU backend init failed: nothing registered at all
+            opts.verbose, lm, opts.backend);
+        // 10: no CPU backend registered at all; 11: the explicit backend is
+        // unavailable or failed to initialize.
+        if (rc == 10 || rc == 11) {
             r.reason = "no-backend-device";
             return r;
         }
@@ -352,17 +354,10 @@ FitResult fit_params(const FitOptions & opts) {
         return r;
     }
     r.device_is_cpu = ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
-    // Unified-memory devices (CPU, integrated GPUs, Apple Metal) draw the
-    // "device" figure from the same physical RAM the host-side buffers live
-    // in, so the verdict must charge both against it. Discrete GPUs keep the
-    // pools separate.
-    r.device_shares_host_memory =
-        r.device_is_cpu ||
-        ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_IGPU ||
-        backend_is_metal(backend);
+    r.device_shares_host_memory = backend_shares_host_memory(backend);
     {
         size_t free_b = 0, total_b = 0;
-        ggml_backend_dev_memory(dev, &free_b, &total_b);
+        backend_device_memory(backend, free_b, total_b);
         r.device_free_bytes  = free_b;
         r.device_total_bytes = total_b;
     }

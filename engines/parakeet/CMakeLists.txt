@@ -2094,6 +2094,13 @@ if (PARAKEET_BUILD_TESTS)
         EXE      test-fit-params
         ARGS     "${_qvp_ctc_q8_gguf}"
         REQUIRES "${_qvp_ctc_q8_gguf}")
+    # Explicit HTP0: the Hexagon session reports no memory of its own, so
+    # the verdict must use host memory. Skips on hosts without HTP0.
+    parakeet_register_test(test-fit-params-ctc-hexagon
+        LABEL    "fixture"
+        EXE      test-fit-params
+        ARGS     "${_qvp_ctc_q8_gguf}" "0" "hexagon"
+        REQUIRES "${_qvp_ctc_q8_gguf}")
     parakeet_register_test(test-fit-params-tdt
         LABEL    "fixture"
         EXE      test-fit-params

@@ -137,12 +137,30 @@ void test_adreno_descriptions() {
     CHECK(!description_names_adreno(nullptr));
 }
 
+void test_memory_pool() {
+    using parakeet::backend_device_memory;
+    using parakeet::backend_shares_host_memory;
+    size_t free = 1, total = 1;
+    backend_device_memory(nullptr, free, total);
+    CHECK(free == 0 && total == 0);
+    CHECK(!backend_shares_host_memory(nullptr));
+    ggml_backend_load_all();
+    ggml_backend_t cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+    CHECK(cpu != nullptr);
+    if (!cpu) return;
+    CHECK(backend_shares_host_memory(cpu));
+    backend_device_memory(cpu, free, total);
+    CHECK(total > 0 && free > 0 && free <= total);
+    ggml_backend_free(cpu);
+}
+
 }  // namespace
 
 int main() {
     test_gpu_tier_policy();
     test_explicit_selection();
     test_adreno_descriptions();
+    test_memory_pool();
 
     std::fprintf(stderr, "[test-parakeet-backend-selection] %d/%d checks passed\n",
                  g_checks - g_failures, g_checks);
