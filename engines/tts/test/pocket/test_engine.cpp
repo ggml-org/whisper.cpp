@@ -1,5 +1,6 @@
 #include "tts-cpp/pocket/engine.h"
 #include "test_workload.h"
+#include "test_backend.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -60,12 +61,13 @@ static void check_parallel_instances(EngineOptions opts) {
     compare(first, second);
 }
 int main(int argc, char ** argv) {
-    if (argc != 3 && argc != 4) { std::fprintf(stderr, "usage: test-pocket-engine model-directory flow-lm.gguf [cpu|opencl]\n"); return 2; }
+    if (argc != 3 && argc != 4) { std::fprintf(stderr, "usage: test-pocket-engine model-directory flow-lm.gguf [--gpu]\n"); return 2; }
     try {
         const std::string dir = argv[1];
         EngineOptions opts; opts.flow_lm_path = argv[2]; opts.mimi_path = dir+"/mimi.gguf";
-        opts.backend = argc == 4 ? argv[3] : "cpu";
         opts.frontend_path = dir+"/frontend.json"; opts.voice_path = dir+"/voice.gguf";
+        opts.use_gpu = argc == 4 && std::string(argv[3]) == "--gpu";
+        opts.backend = argc == 4 && !opts.use_gpu ? argv[3] : "";
         check_eos_tail(opts);
         check_parallel_instances(opts);
         Engine engine(opts);
@@ -74,6 +76,7 @@ int main(int argc, char ** argv) {
             throw std::runtime_error("stage backend reporting differs");
         if (opts.backend == "opencl" && backend.find("OpenCL") == std::string::npos)
             throw std::runtime_error("OpenCL test ran on another backend");
+        if (opts.backend != "opencl") check_pocket_backend(engine.backend_name(), opts.use_gpu);
         std::printf("FlowLM: %s; Mimi: %s\n", engine.flow_lm_backend_name(), engine.mimi_backend_name());
         const std::string text = "Hello! We can generate speech with Fabric.";
         const auto batch = engine.synthesize(text);

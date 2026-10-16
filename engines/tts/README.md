@@ -15,7 +15,7 @@ count follows the installed public headers under `include/tts-cpp/`; the two
 Chatterbox families share one engine API, while the Supertonic generations
 share another.
 
-Pocket TTS runs on CPU; cloning requires encoder-enabled weights. MOSS Delay
+Pocket TTS runs on CPU or opt-in Metal, CUDA, Vulkan or OpenCL; cloning requires encoder-enabled weights. MOSS Delay
 and MOSS-TTSD are validated end to end on CPU/Metal and on the
 [Snapdragon Hexagon NPU](docs/moss.md#hexagon-npu), with numerical reference
 parity pending. MOSS-SoundEffect and MOSS-Speech have CPU/Metal stage validation,
@@ -48,7 +48,7 @@ engine, not every backend ggml can compile.
 | Parler-TTS mini/large/Indic | English or 21 Indic languages | natural-language description | 44.1 kHz | yes | yes | yes | yes | yes |
 | Fun-CosyVoice3-0.5B | model-advertised multilingual text | baked voice or zero-shot/cross-lingual reference WAV; instruct controls | 24 kHz | yes | yes | yes | yes | yes |
 | Audio8-TTS-Preview-0.6B | multilingual checkpoint vocabulary | model voice or zero-shot reference WAV + transcript | 44.1 kHz | yes | yes (+ optional Core ML sidecar) | yes | yes | yes |
-| Pocket TTS | English | prepared voice; cloning requires encoder-enabled weights | 24 kHz | yes | no | no | no | no |
+| Pocket TTS | English | prepared voice; cloning requires encoder-enabled weights | 24 kHz | yes | yes | yes | yes | yes |
 | MOSS Delay (MOSS-TTS-v1.5 / MOSS-TTSD) | model-advertised multilingual text | model voice, zero-shot reference WAV, or two-speaker dialogue references; pause/duration/pronunciation controls | 24 kHz | yes | yes (+ optional Core ML sidecar) | scoped¹ | untested | scoped¹ |
 | MOSS-SoundEffect-v2 (text to sound effects) | text prompt | none | 48 kHz | yes | yes (+ optional Core ML sidecars) | scoped¹ | untested | scoped¹ |
 | MOSS-Speech (speech to speech) | spoken English and Chinese | built-in default voice or reference WAV | 24 kHz | yes | yes (+ optional Core ML sidecar) | scoped¹ | untested | scoped¹ |

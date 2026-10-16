@@ -1,7 +1,6 @@
 #pragma once
 
-// Native Pocket TTS numerical core. Internal until the Mimi synthesis engine
-// is available: this API returns continuous latents, not playable audio.
+// Native Pocket TTS numerical core, returning continuous latents.
 #include "pocket/memory.h"
 #include <memory>
 #include <string>
@@ -52,10 +51,10 @@ public:
                                  int prefill_frames, int threads, ggml_backend_device * device = nullptr);
     static int measure_voice(const std::string & path, const FlowMemory & model, int context);
     const FlowConfig & config() const;
+    const char * backend_name() const noexcept;
     int position() const;
     void reset();
     std::string source_hash() const;
-    const char * backend_name() const noexcept;
     VoiceState read_voice(const std::string & path) const;
     VoiceState capture_voice() const;
     void restore_voice(const VoiceState & voice);

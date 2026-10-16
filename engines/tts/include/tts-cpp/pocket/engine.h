@@ -24,10 +24,11 @@ struct EngineOptions {
     int frames_after_eos = -1;  // -1: checkpoint/text default; 0..100: explicit tail
     // Context validation reserves the complete EOS tail before emitting PCM.
     uint32_t seed = 1234;
-    // CPU is the default. GPU requests allow OpenCL only and fail if unavailable.
+    // CPU is the default. GPU requests fail if no supported GPU is available.
     bool use_gpu = false;
     // Empty/auto follows use_gpu; cpu/opencl explicitly selects the backend.
     std::string backend;
+    std::string backends_dir;
 };
 struct SynthesisResult {
     std::vector<float> pcm; // populated by synthesize(); streaming uses the callback
@@ -38,7 +39,7 @@ struct SynthesisResult {
 };
 using AudioCallback = std::function<bool(const float *, size_t, int)>;
 
-// Persistent native CPU/OpenCL engine. One synthesis at a time per instance;
+// Persistent native CPU or GPU engine. One synthesis at a time per instance;
 // overlapping/reentrant calls throw. cancel() is safe from another thread.
 // Streaming callbacks run on the calling thread, with valid PCM until return.
 // Returning false cancels the request. Each new request resets the voice,

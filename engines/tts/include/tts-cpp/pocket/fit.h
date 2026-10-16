@@ -14,7 +14,7 @@ struct FitOptions {
     uint64_t memory_budget_bytes = 0;
 };
 
-// CPU/OpenCL memory preflight, using EngineOptions' backend selection. GGUF
+// CPU/GPU memory preflight, using EngineOptions' backend selection. GGUF
 // tensor metadata is read, never tensor data; actual runtime graphs are priced
 // without allocating or executing model/graph buffers. OpenCL initialization
 // may allocate backend-owned scratch; its conservative bound is included in

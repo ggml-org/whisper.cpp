@@ -23,5 +23,8 @@ struct MemoryMeasure {
     uint64_t host_compute = 0; // graph-input upload staging, outside device arenas
     OpenCLScratch opencl_scratch;
     std::string source_hash;
+    std::string backend_name;
+    uint64_t device_free = 0, device_total = 0;
+    bool shares_host_memory = true;
 };
 }

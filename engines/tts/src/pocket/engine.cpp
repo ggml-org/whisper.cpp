@@ -7,6 +7,7 @@
 #include "pocket/reference_audio.h"
 #include "pocket/backend.h"
 #include "voice_features.h"
+#include "backend_selection.h"
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -72,6 +73,7 @@ struct Engine::Impl {
         if (o.voice_path.empty() == o.reference_audio_path.empty()) fail("supply exactly one prepared voice or reference audio file");
         std::unique_ptr<detail::ReferenceAudio> reference;
         if (!o.reference_audio_path.empty()) reference.reset(new detail::ReferenceAudio(o.reference_audio_path));
+        if (!o.backends_dir.empty()) ::tts_cpp::detail::set_backends_directory(o.backends_dir);
         auto backend = detail::select_backend(o.use_gpu, o.backend);
         const auto device = ggml_backend_get_device(backend.get());
         device_name = ggml_backend_dev_description(device);

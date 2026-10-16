@@ -1,5 +1,5 @@
 #include "pocket/flow_lm.h"
-#include "pocket/backend.h"
+#include "test_backend.h"
 #include "npy.h"
 #include "gguf.h"
 
@@ -70,16 +70,17 @@ struct CorruptModel {
 
 int main(int argc, char ** argv) {
     if (argc != 4 && argc != 5) {
-        std::fprintf(stderr, "usage: test-pocket-flow-lm model.gguf fixture-directory absolute-tolerance [cpu|opencl]\n");
+        std::fprintf(stderr, "usage: test-pocket-flow-lm model.gguf fixture-directory absolute-tolerance [--gpu]\n");
         return 2;
     }
     try {
         const std::string model = argv[1], dir = argv[2];
         const double tol = std::stod(argv[3]);
         if (!std::isfinite(tol) || tol <= 0) throw std::runtime_error("invalid tolerance");
-        auto backend = tts_cpp::pocket::detail::select_backend(false, argc == 5 ? argv[4] : "cpu");
+        auto backend = pocket_test_backend(argc == 5 ? argv[4] : "cpu");
         const auto device = ggml_backend_get_device(backend.get());
         FlowLM lm(model, 64, 2, device);
+        if (argc != 5 || std::string(argv[4]) == "--gpu") check_pocket_backend(lm.backend_name(), argc == 5);
         std::printf("FlowLM backend: %s\n", lm.backend_name());
         const auto embeddings = load(dir, "embeddings");
         const auto expected = load(dir, "prefill");
@@ -150,7 +151,7 @@ int main(int argc, char ** argv) {
         check("full context vs eight chunks", split_result, full_result, tol);
         for (float bad_value : {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()}) {
             CorruptModel bad(model); bad.replace("out_eos.bias", {bad_value});
-            rejects("non-finite EOS weight payload", [&] { FlowLM invalid(bad.path.string(), 64, 2); });
+            rejects("non-finite EOS weight payload", [&] { FlowLM invalid(bad.path.string(), 64, 2, device); });
         }
         {
             CorruptModel bad(model);

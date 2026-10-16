@@ -93,6 +93,7 @@ FitResult fit_params(const FitOptions & o) {
         const auto & e = o.engine;
         // Snapshot before backend initialization and metadata/container loads:
         // all of those allocations are charged in the projection below.
+        if (!e.backends_dir.empty()) ::tts_cpp::detail::set_backends_directory(e.backends_dir);
         uint64_t host_free = 0, host_total = 0;
         if (!available_memory(host_free, host_total)) {
             r.reason = "memory-unavailable"; r.report = "Cannot determine currently available system memory"; return r;
@@ -145,7 +146,8 @@ FitResult fit_params(const FitOptions & o) {
             throw std::invalid_argument("Pocket artifacts do not belong to the same checkpoint");
         r.device.weights_bytes = sat_add(flow.weights, codec.weights);
         r.device.state_bytes = sat_add(flow.state, codec.state);
-        const auto backend_scratch = r.device_is_cpu ? uint64_t(0) : detail::opencl_scratch_bound(flow.opencl_scratch, codec.opencl_scratch);
+        const bool opencl = ::tts_cpp::detail::backend_is_opencl(backend.get());
+        const auto backend_scratch = opencl ? detail::opencl_scratch_bound(flow.opencl_scratch, codec.opencl_scratch) : uint64_t(0);
         r.device.state_bytes = sat_add(r.device.state_bytes, backend_scratch);
         r.device.lm_compute_bytes = flow.compute;
         r.device.codec_compute_bytes = codec.compute;
@@ -175,7 +177,7 @@ FitResult fit_params(const FitOptions & o) {
             size_t free = 0, total = 0;
             ::tts_cpp::detail::backend_memory(backend.get(), free, total);
             if (!total || free > total) {
-                r.reason = "memory-unavailable"; r.report = "Cannot determine OpenCL device memory"; return r;
+                r.reason = "memory-unavailable"; r.report = "Cannot determine device memory"; return r;
             }
             r.device_free_bytes = free; r.device_total_bytes = total;
             if (r.device_shares_host_memory) {
@@ -202,7 +204,7 @@ FitResult fit_params(const FitOptions & o) {
                << "\nshared host memory: " << (r.device_shares_host_memory ? "yes" : "no")
                << "\nhost required/available: " << host_required << '/' << host_free
                << "\nresult: " << r.reason << '\n';
-        if (!r.device_is_cpu)
+        if (opencl)
             report << "OpenCL shared backend scratch bound (included in state): " << backend_scratch
                    << "\nConservative F32 backend scratch bound for reviewed ggml-speech; includes backend init and pool growth."
                    << "\nOpenCL available memory is a driver estimate/cap, limited by OS RAM on Adreno.\n";

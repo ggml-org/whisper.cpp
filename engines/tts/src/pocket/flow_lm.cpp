@@ -4,6 +4,7 @@
 
 #include "backend_selection.h"
 #include "backend_util.h"
+#include "pocket/backend.h"
 #include "gguf_stream.h"
 #include "ggml-alloc.h"
 

@@ -28,7 +28,7 @@ int main() {
         if (!opencl_present) {
             for (bool gpu_flag : {false, true}) {
                 bool rejected = false;
-                try { auto backend = select_backend(gpu_flag, gpu_flag ? "" : "opencl"); }
+                try { auto backend = select_backend(gpu_flag, "opencl"); }
                 catch (const BackendUnavailable & error) {
                     rejected = std::string(error.what()).find("OpenCL") != std::string::npos;
                 }

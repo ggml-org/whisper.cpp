@@ -1774,6 +1774,38 @@ if (TTS_CPP_BUILD_TESTS)
                      "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/encoded.npy")
     endif()
 
+    foreach(_pocket_backend IN ITEMS metal cuda vulkan)
+        string(TOUPPER "${_pocket_backend}" _pocket_backend_upper)
+        if (NOT GGML_${_pocket_backend_upper})
+            continue()
+        endif()
+        tts_cpp_register_test(test-pocket-flow-lm-${_pocket_backend} LABEL "fixture" EXE test-pocket-flow-lm
+            ARGS "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f32.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}" "0.0001" "--gpu"
+            REQUIRES "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f32.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}/provenance.json")
+        tts_cpp_register_test(test-pocket-flow-lm-f16-${_pocket_backend} LABEL "fixture" EXE test-pocket-flow-lm
+            ARGS "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f16.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}" "0.01" "--gpu"
+            REQUIRES "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f16.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}/provenance.json")
+        tts_cpp_register_test(test-pocket-mimi-${_pocket_backend} LABEL "fixture" EXE test-pocket-mimi
+            ARGS "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/mimi.gguf" "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}" "--gpu"
+            REQUIRES "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/mimi.gguf" "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/provenance.json"
+                     "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/latents.npy" "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/pcm.npy"
+                     "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/encoded.npy")
+        set_property(TEST test-pocket-flow-lm-${_pocket_backend} test-pocket-flow-lm-f16-${_pocket_backend} test-pocket-mimi-${_pocket_backend} APPEND PROPERTY LABELS "gpu")
+        set_property(TEST test-pocket-flow-lm-${_pocket_backend} test-pocket-flow-lm-f16-${_pocket_backend} test-pocket-mimi-${_pocket_backend} APPEND PROPERTY ENVIRONMENT "TTS_CPP_GPU_BACKEND=${_pocket_backend}")
+        if (TARGET tts-cpp)
+            tts_cpp_register_test(test-pocket-engine-${_pocket_backend} LABEL "fixture" EXE test-pocket-engine
+                ARGS "${TTS_CPP_POCKET_MODEL_DIR}" "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf" "--gpu"
+                REQUIRES "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf" "${TTS_CPP_POCKET_MODEL_DIR}/mimi.gguf"
+                         "${TTS_CPP_POCKET_MODEL_DIR}/frontend.json" "${TTS_CPP_POCKET_MODEL_DIR}/voice.gguf")
+            tts_cpp_register_test(test-pocket-fit-${_pocket_backend} LABEL "fixture" EXE test-pocket-fit
+                ARGS "${TTS_CPP_POCKET_MODEL_DIR}" "--gpu"
+                REQUIRES "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf" "${TTS_CPP_POCKET_MODEL_DIR}/mimi.gguf"
+                         "${TTS_CPP_POCKET_MODEL_DIR}/frontend.json" "${TTS_CPP_POCKET_MODEL_DIR}/voice.gguf")
+            set_property(TEST test-pocket-engine-${_pocket_backend} test-pocket-fit-${_pocket_backend} APPEND PROPERTY LABELS "gpu")
+            set_property(TEST test-pocket-engine-${_pocket_backend} test-pocket-fit-${_pocket_backend} APPEND PROPERTY ENVIRONMENT "TTS_CPP_GPU_BACKEND=${_pocket_backend}")
+        endif()
+    endforeach()
+
     # ---- Audio8 tests (fixtures from scripts/dump-audio8-*-reference.py) ----
     set(_tcb_audio8_core_srcs
         src/audio8/gguf.cpp

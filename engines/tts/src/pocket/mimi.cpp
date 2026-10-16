@@ -3,6 +3,7 @@
 #include "pocket/ggml_utils.h"
 #include "backend_selection.h"
 #include "backend_util.h"
+#include "pocket/backend.h"
 #include "json.hpp"
 
 #include <climits>
