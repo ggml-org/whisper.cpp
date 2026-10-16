@@ -233,6 +233,7 @@ struct TranscribeModel::Impl {
     bool measure_only = false;
     bool split_table = false;
     bool fused_attention = false;
+    bool contiguous_attention_heads = false;
     uint64_t measured_weights = 0;
     const TranscribeGraph * allocated_graph = nullptr;
 
@@ -356,6 +357,8 @@ struct TranscribeModel::Impl {
     void plan_attention(TranscribeAttention requested) {
         fused_attention = requested == TranscribeAttention::Fused ||
             (requested == TranscribeAttention::Auto && backend_is_hexagon(backend));
+        contiguous_attention_heads = requested == TranscribeAttention::UnfusedContiguousHeads ||
+            (requested == TranscribeAttention::Auto && backend_is_opencl(backend));
     }
 
     void load(const std::string & path, bool use_gpu, int threads, const std::string & requested,
@@ -457,6 +460,7 @@ ggml_tensor * TranscribeModel::tensor(const std::string & name) const { return i
 const ggml_tensor * TranscribeModel::token_table() const { return impl_->table(); }
 bool TranscribeModel::embeds_on_host() const { return impl_->split_table; }
 bool TranscribeModel::fused_attention() const { return impl_->fused_attention; }
+bool TranscribeModel::contiguous_attention_heads() const { return impl_->contiguous_attention_heads; }
 const std::vector<TranscribeHeadChunk> & TranscribeModel::head() const { return impl_->head; }
 
 std::vector<float> TranscribeModel::embed_tokens(const std::vector<int32_t> & ids) const {

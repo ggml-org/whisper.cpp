@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ggml.h"
+#include "ggml-backend.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -82,6 +83,14 @@ private:
     int64_t rows_ = 0;
     std::vector<uint8_t> row_;
 };
+
+using CopySupport = bool (*)(ggml_backend * backend, const ggml_tensor * copy);
+
+// Adreno OpenCL refuses a strided copy source, and the CPU cannot write a
+// cache that lives in that backend's buffer; such a source is materialized
+// first. Copies the backend accepts keep their single node.
+ggml_tensor * copy_into_cache(ggml_context * ctx, ggml_backend * backend, ggml_tensor * source,
+                              ggml_tensor * destination, CopySupport supports = ggml_backend_supports_op);
 
 ggml_backend * open_transcribe_backend(bool use_gpu, const std::string & requested);
 size_t gguf_tensor_data_offset(const gguf_context * file, const char * name, size_t expected_bytes);

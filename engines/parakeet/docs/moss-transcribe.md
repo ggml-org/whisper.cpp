@@ -2,18 +2,19 @@
 
 Part of the [parakeet engine documentation](../README.md).
 
-CUDA, Vulkan or the Snapdragon Hexagon NPU can be selected explicitly with
-`--backend cuda`, `--backend vulkan` or `--backend hexagon` (or an exact device
-such as `--backend CUDA0`). This overrides `--gpu` and fails when
+CUDA, Vulkan, OpenCL or the Snapdragon Hexagon NPU can be selected explicitly
+with `--backend cuda`, `--backend vulkan`, `--backend opencl` or
+`--backend hexagon` (or an exact device such as `--backend CUDA0`). This overrides `--gpu` and fails when
 the requested backend is unavailable; `--backend auto` retains the existing
 `--gpu`/CPU selection. The API equivalent is `TranscribeOptions::backend`.
-Hexagon has its own requirements and graph layout; see
-[Hexagon NPU](#hexagon-npu).
-Build against a CUDA-, Vulkan- or Hexagon-enabled ggml installation, then run:
+Hexagon and Adreno OpenCL have their own graph layouts; see
+[Hexagon NPU](#hexagon-npu) and [Adreno OpenCL](#adreno-opencl).
+Build against a CUDA-, Vulkan-, OpenCL- or Hexagon-enabled ggml installation,
+then run:
 
 ```sh
 build/moss-transcribe --model moss-transcribe-f16.gguf --audio speech.wav --backend cuda
-ctest --test-dir build -R '^test-moss-transcribe-(cuda|vulkan|hexagon)$' --output-on-failure
+ctest --test-dir build -R '^test-moss-transcribe-(cuda|vulkan|hexagon|opencl)$' --output-on-failure
 ```
 
 Each arm registers only when ggml carries its backend. The test generates random-weight GGUFs in F32, F16 and mixed Q8_0/F16
@@ -21,7 +22,9 @@ and compares the encoder, adaptor, batched prefill and incremental decoding
 against CPU. It also checks explicit selection through the public engine and
 rejects unavailable backends. The CUDA and Vulkan arms run in the manual
 `parakeet CI` GPU lane (`run_gpu=true`) without model downloads; the Hexagon
-arm runs on a Snapdragon device. These checks pass on Apple M2
+and OpenCL arms run on a Snapdragon device. The generated models are too small
+for the Adreno kernels described under [Adreno OpenCL](#adreno-opencl), so
+that path is covered by the reference parity test. These checks pass on Apple M2
 through MoltenVK; full-checkpoint transcript quality and discrete-GPU/mobile
 validation remain separate from this generated-model coverage.
 
@@ -278,6 +281,60 @@ speaker labels; segment timestamps differ by at most 0.05 s.
 CUDA and Vulkan arms on HTP0 (generated F32, F16 and mixed Q8_0 models:
 encoder, adaptor, partial chunk, batched prefill, incremental decoding, the
 engine and the memory projection).
+
+## Adreno OpenCL
+
+`--backend opencl` runs the encoder, the adaptor and the decoder on Adreno
+OpenCL with the unfused graph, plus two changes that apply only where the
+backend needs them:
+
+- Adreno OpenCL refuses a strided copy source, and the CPU cannot write a cache
+  that lives in the OpenCL buffer. Writing the transposed value cache therefore
+  copies a materialized source there; backends that accept the strided copy
+  keep the single copy.
+- Adreno's batched attention matrix kernels, which run batches of 32 or more
+  query tokens, compute this grouped-query attention (16 query heads over 8
+  key/value heads) wrongly from the cache views: prefill logits fell to cosine
+  0.62-0.86 against the reference and the transcript was garbage. On OpenCL
+  the decoder materializes the key and value heads for every multi-token
+  batch, which routes them to the generic kernels. Single-token decoding never
+  reaches those kernels and keeps the views. Flash attention is also correct
+  there but slower (prefill 939 ms against 514 ms, decoding about 63 ms per
+  token against 13 ms), so OpenCL keeps the unfused graph.
+
+Parity on a Galaxy S25 (Adreno 830) against the Hugging Face dumps
+(`test-moss-transcribe-parity` with `MOSS_TRANSCRIBE_BACKEND=opencl`), cosine:
+
+| Stage | OpenCL f16 | OpenCL q8_0 |
+|---|--:|--:|
+| Encoder states | 0.99834 | 0.99451 |
+| Adaptor output | 0.999993 | 0.99991 |
+| Prefill logits | 1.000000 | 0.99990 |
+| Greedy transcript | exact | exact |
+
+As on the phone's CPU, the encoder states fall below the test's 0.999
+threshold while the adaptor output that the decoder reads passes.
+
+Speed on the same phone (`moss-transcribe`, 6 CPU threads, milliseconds). Each
+OpenCL run started at thermal status 0 (median of three for `q8_0` on the 27 s
+and 160 s clips, one run otherwise); the CPU and HTP0 rows are those of
+[Hexagon NPU](#hexagon-npu):
+
+| Audio | Model | Backend | Encode | Prefill | Decode | Total | RTF |
+|---|---|---|--:|--:|--:|--:|--:|
+| 27.3 s, 185 tokens | `q8_0` | CPU | 6,617 | 1,896 | 3,161 | 11,674 | 0.428 |
+| | `q8_0` | OpenCL | 2,857 | 757 | 3,552 | 7,167 | 0.263 |
+| | `q8_0` | HTP0 | 354 | 209 | 2,973 | 3,536 | 0.130 |
+| | `f16` | OpenCL | 3,727 | 1,088 | 5,403 | 10,219 | 0.374 |
+| 160.6 s, 943 tokens | `q8_0` | CPU | 60,117 | 17,827 | 34,378 | 112,322 | 0.699 |
+| | `q8_0` | OpenCL | 18,539 | 3,981 | 30,168 | 52,688 | 0.328 |
+| | `q8_0` | HTP0 | 2,103 | 943 | 26,306 | 29,352 | 0.183 |
+| 191.2 s, 1,157 tokens | `q8_0` | CPU | 69,752 | 22,453 | 45,576 | 137,781 | 0.721 |
+| | `q8_0` | OpenCL | 21,821 | 4,517 | 41,023 | 67,361 | 0.352 |
+| | `q8_0` | HTP0 | 2,465 | 1,109 | 34,156 | 37,729 | 0.197 |
+
+OpenCL is 1.6-2.1x faster than the CPU and HTP0 1.8-2.0x faster than OpenCL.
+Every OpenCL transcript in the table is identical to the CPU's, byte for byte.
 
 ## Test
 

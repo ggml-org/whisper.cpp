@@ -81,7 +81,7 @@ struct TranscribeHeadChunk {
 
 std::vector<TranscribeHeadChunk> plan_transcribe_head(int vocab, int max_rows);
 
-enum class TranscribeAttention { Auto, Unfused, Fused };
+enum class TranscribeAttention { Auto, Unfused, UnfusedContiguousHeads, Fused };
 
 // Overrides of the per-backend graph layout, so tests can compare layouts on
 // one backend. head_rows > 0 splits the tied token table into head chunks of
@@ -108,6 +108,7 @@ public:
     const ggml_tensor * token_table() const;
     bool embeds_on_host() const;
     bool fused_attention() const;
+    bool contiguous_attention_heads() const;
     const std::vector<TranscribeHeadChunk> & head() const;
     std::vector<float> embed_tokens(const std::vector<int32_t> & ids) const;
     std::vector<std::string> tokenizer_tokens() const;

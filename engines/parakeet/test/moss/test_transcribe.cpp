@@ -11,6 +11,9 @@
 #include "moss/transcribe_text.h"
 #include "parakeet/moss_transcribe.h"
 
+#include "ggml-alloc.h"
+#include "ggml-backend.h"
+
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -51,6 +54,12 @@ constexpr int SPLIT_HEAD_CHUNKS = 3;
 constexpr int SPLIT_TAIL_ROWS = TEXT_VOCAB - 2 * SPLIT_HEAD_ROWS;
 constexpr int DECODE_STEPS = 5;
 constexpr double FUSED_RELATIVE_TOLERANCE = 1e-2;
+constexpr int CACHE_WIDTH = 4;
+constexpr int CACHE_POSITIONS = 8;
+constexpr int COPY_TOKENS = 3;
+constexpr int COPY_POSITION = 2;
+constexpr float UNTOUCHED = -1.0f;
+constexpr int COPY_GRAPH_NODES = 16;
 constexpr int MASK_POSITION = 3;
 constexpr int MASK_TOKENS = 4;
 const char * const COMMA_DECIMAL_LOCALES[] = {"de_DE.UTF-8", "de_DE.utf8", "fr_FR.UTF-8", "fr_FR.utf8", "de_DE",
@@ -879,6 +888,110 @@ void test_fused_attention() {
     std::filesystem::remove(path);
 }
 
+void test_contiguous_attention_heads() {
+    const auto path = write_transcribe_model("transcribe-contiguous", WEIGHT_SEED);
+    TranscribeModel views(path.string(), false, 1);
+    TranscribeModel contiguous(path.string(), false, 1, "auto", false,
+                               TranscribeLayout{0, TranscribeAttention::UnfusedContiguousHeads});
+    check(!views.contiguous_attention_heads() && contiguous.contiguous_attention_heads() &&
+          !contiguous.fused_attention(), "contiguous heads keep the unfused graph");
+    for (int batch : {1, 3, CHUNK_TOKENS + 5}) {
+        check(max_abs_diff(decoded_logits(views, batch), decoded_logits(contiguous, batch)) < LOGIT_TOLERANCE,
+              "contiguous attention heads match the cache views with prefill batch " + std::to_string(batch));
+    }
+    std::filesystem::remove(path);
+}
+
+bool rejects_strided_copy(ggml_backend * backend, const ggml_tensor * copy) {
+    return ggml_is_contiguous(copy->src[0]) && ggml_backend_supports_op(backend, copy);
+}
+
+std::vector<float> counting_values(size_t count) {
+    std::vector<float> values(count);
+    for (size_t i = 0; i < count; ++i) {
+        values[i] = (float) (i + 1);
+    }
+    return values;
+}
+
+std::vector<ggml_fp16_t> untouched_cache() {
+    std::vector<ggml_fp16_t> cache((size_t) CACHE_POSITIONS * CACHE_WIDTH);
+    std::fill(cache.begin(), cache.end(), ggml_fp32_to_fp16(UNTOUCHED));
+    return cache;
+}
+
+struct CacheCopyRun {
+    std::vector<float> cache;
+    bool materialized = false;
+};
+
+std::vector<float> read_cache(ggml_tensor * cache) {
+    std::vector<ggml_fp16_t> halves((size_t) ggml_nelements(cache));
+    ggml_backend_tensor_get(cache, halves.data(), 0, ggml_nbytes(cache));
+    std::vector<float> values(halves.size());
+    ggml_fp16_to_fp32_row(halves.data(), values.data(), (int64_t) halves.size());
+    return values;
+}
+
+CacheCopyRun run_cache_copy(ggml_backend_t cpu, CopySupport supports) {
+    ggml_context * state = ggml_init({ggml_tensor_overhead(), nullptr, true});
+    ggml_tensor * cache = ggml_new_tensor_2d(state, GGML_TYPE_F16, CACHE_POSITIONS, CACHE_WIDTH);
+    ggml_backend_buffer_t cache_buffer = ggml_backend_alloc_ctx_tensors(state, cpu);
+    const std::vector<ggml_fp16_t> initial = untouched_cache();
+    ggml_backend_tensor_set(cache, initial.data(), 0, ggml_nbytes(cache));
+
+    TranscribeGraph graph(COPY_GRAPH_NODES);
+    ggml_tensor * rows = graph.input_f32(CACHE_WIDTH, COPY_TOKENS);
+    ggml_tensor * columns = ggml_view_2d(graph.ctx(), cache, COPY_TOKENS, CACHE_WIDTH, cache->nb[1],
+            (size_t) COPY_POSITION * ggml_element_size(cache));
+    ggml_tensor * copy = copy_into_cache(graph.ctx(), cpu, ggml_transpose(graph.ctx(), rows), columns, supports);
+    ggml_build_forward_expand(graph.graph(), copy);
+    ggml_gallocr_t allocator = ggml_gallocr_new(ggml_backend_get_default_buffer_type(cpu));
+    ggml_gallocr_alloc_graph(allocator, graph.graph());
+    const std::vector<float> values = counting_values((size_t) CACHE_WIDTH * COPY_TOKENS);
+    ggml_backend_tensor_set(rows, values.data(), 0, ggml_nbytes(rows));
+    ggml_backend_graph_compute(cpu, graph.graph());
+
+    CacheCopyRun run{read_cache(cache), copy->src[0]->op == GGML_OP_CONT};
+    ggml_gallocr_free(allocator);
+    ggml_backend_buffer_free(cache_buffer);
+    ggml_free(state);
+    return run;
+}
+
+float expected_cache_value(int channel, int position) {
+    const int token = position - COPY_POSITION;
+    if (token < 0 || token >= COPY_TOKENS) {
+        return UNTOUCHED;
+    }
+    return (float) (token * CACHE_WIDTH + channel + 1);
+}
+
+bool cache_holds_columns(const std::vector<float> & cache) {
+    for (int channel = 0; channel < CACHE_WIDTH; ++channel) {
+        for (int position = 0; position < CACHE_POSITIONS; ++position) {
+            if (cache[(size_t) channel * CACHE_POSITIONS + position] != expected_cache_value(channel, position)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+void test_cache_copy_materializes_rejected_source() {
+    ggml_backend_load_all();
+    ggml_backend_t cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+    check(cpu != nullptr, "the CPU backend initializes");
+    if (!cpu) return;
+    const CacheCopyRun direct = run_cache_copy(cpu, ggml_backend_supports_op);
+    const CacheCopyRun materialized = run_cache_copy(cpu, rejects_strided_copy);
+    check(!direct.materialized, "a backend that copies strided sources keeps one copy node");
+    check(materialized.materialized, "a backend that rejects strided sources copies a materialized source");
+    check(cache_holds_columns(direct.cache), "the transposed copy fills only its cache columns");
+    check(materialized.cache == direct.cache, "the materialized copy writes the same cache");
+    ggml_backend_free(cpu);
+}
+
 std::vector<float> mask_values(const std::vector<uint8_t> & bytes, ggml_type type) {
     const size_t count = bytes.size() / ggml_type_size(type);
     std::vector<float> values(count);
@@ -960,6 +1073,8 @@ int main() {
         test_transcript_json_escapes();
         test_locale_independent_numbers();
         test_upload_plan();
+        test_cache_copy_materializes_rejected_source();
+        test_contiguous_attention_heads();
         test_head_plan();
         test_split_token_table();
         test_fused_attention();

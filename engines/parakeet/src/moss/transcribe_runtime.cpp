@@ -156,6 +156,15 @@ bool TranscribeScheduler::compute(ggml_cgraph * graph, int n_threads) {
     return ggml_backend_sched_graph_compute(sched_, graph) == GGML_STATUS_SUCCESS;
 }
 
+ggml_tensor * copy_into_cache(ggml_context * ctx, ggml_backend * backend, ggml_tensor * source,
+                              ggml_tensor * destination, CopySupport supports) {
+    ggml_tensor * copy = ggml_cpy(ctx, source, destination);
+    if (ggml_is_contiguous(source) || supports(backend, copy)) {
+        return copy;
+    }
+    return ggml_cpy(ctx, ggml_cont(ctx, source), destination);
+}
+
 ggml_backend * open_transcribe_backend(bool use_gpu, const std::string & requested) {
     ggml_backend_t backend = init_engine_backend(use_gpu, requested);
     if (!backend) {
