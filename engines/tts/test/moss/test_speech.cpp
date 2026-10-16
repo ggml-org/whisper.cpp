@@ -1,4 +1,5 @@
 #include "speech_fixtures.h"
+#include "../../../test/moss_precision.h"
 
 #include "moss/cli.h"
 #include "moss/speech_generation.h"
@@ -25,6 +26,14 @@ namespace {
 constexpr uint32_t WEIGHT_SEED = 20260928;
 constexpr uint32_t AUDIO_SEED = 11;
 constexpr float TOLERANCE = 1e-4f;
+constexpr float QUANTIZED_TOLERANCE = 0.5f;
+constexpr uint64_t SMALL_CACHE_BYTES = 1024;
+constexpr uint64_t LARGE_CACHE_BYTES = 2048;
+constexpr uint64_t UNKNOWN_FREE_BYTES = 0;
+constexpr const char * OPTIONS_MODEL = "lm.gguf";
+constexpr const char * OPTIONS_CODEC = "codec.gguf";
+constexpr int OPTIONS_THREADS = 4;
+constexpr const char * OPTIONS_BACKENDS_DIR = "/plugins";
 constexpr float LOW = -10.0f;
 constexpr float HIGH = 10.0f;
 constexpr int NEVER_FAIL = -1;
@@ -256,7 +265,7 @@ void test_reply_text() {
 
 void test_lm_loads_and_validates() {
     const auto path = write_lm("speech-lm", WEIGHT_SEED);
-    SpeechLM lm(path.string(), false, 1);
+    SpeechLM lm(path.string(), {}, 1);
     check(lm.config().n_shared_layers == 1 && lm.config().audio_vocab == AUDIO_VOCAB, "configuration loads");
     expect_failure([&] { lm.step({0, 0}); }, "begin()", "running before begin() is rejected");
     lm.begin(3);
@@ -266,7 +275,7 @@ void test_lm_loads_and_validates() {
 }
 
 void expect_lm_rejects(const std::filesystem::path & path, const std::string & needle, const std::string & label) {
-    expect_failure([&] { SpeechLM lm(path.string(), false, 1); }, needle, label);
+    expect_failure([&] { SpeechLM lm(path.string(), {}, 1); }, needle, label);
     std::filesystem::remove(path);
 }
 
@@ -286,7 +295,7 @@ void test_lm_rejections() {
     expect_lm_rejects(write_lm("speech-shape", WEIGHT_SEED, [](gguf_context *) {},
             {{"audio.output.weight", {EMBD, AUDIO_VOCAB - 1}}}), "audio.output.weight", "a mis-sized audio head");
     const auto healthy = write_lm("speech-threads", WEIGHT_SEED);
-    expect_failure([&] { SpeechLM lm(healthy.string(), false, 0); }, "threads", "zero threads");
+    expect_failure([&] { SpeechLM lm(healthy.string(), {}, 0); }, "threads", "zero threads");
     std::filesystem::remove(healthy);
 }
 
@@ -310,7 +319,7 @@ bool close(const SpeechLogits & a, const SpeechLogits & b) {
 
 void test_lm_batches_and_steps() {
     const auto path = write_lm("speech-batches", WEIGHT_SEED);
-    SpeechLM lm(path.string(), false, 1);
+    SpeechLM lm(path.string(), {}, 1);
     const std::vector<SpeechRow> rows = mixed_rows();
     const SpeechLogits whole = prefill(lm, rows, (int) rows.size());
     check(whole.text.size() == (size_t) moss_fixtures::TEXT_VOCAB && whole.audio.size() == AUDIO_VOCAB,
@@ -360,7 +369,7 @@ void test_lm_batches_and_steps() {
 
 void test_lm_skips_the_text_head() {
     const auto path = write_lm("speech-heads", WEIGHT_SEED);
-    SpeechLM lm(path.string(), false, 1);
+    SpeechLM lm(path.string(), {}, 1);
     const std::vector<SpeechRow> rows = mixed_rows();
     const SpeechLogits whole = prefill(lm, rows, (int) rows.size());
     const std::vector<SpeechRow> head(rows.begin(), rows.end() - 2);
@@ -372,9 +381,60 @@ void test_lm_skips_the_text_head() {
     std::filesystem::remove(path);
 }
 
+bool holds_tensor_type(const std::filesystem::path & path, ggml_type type) {
+    gguf_context * file = gguf_init_from_file(path.string().c_str(), {true, nullptr});
+    bool found = false;
+    for (int64_t id = 0; file && id < gguf_get_n_tensors(file) && !found; ++id) {
+        found = gguf_get_tensor_type(file, id) == type;
+    }
+    if (file) gguf_free(file);
+    return found;
+}
+
+bool finite_logits(const SpeechLogits & logits) {
+    return std::all_of(logits.text.begin(), logits.text.end(), [](float v) { return std::isfinite(v); }) &&
+           std::all_of(logits.audio.begin(), logits.audio.end(), [](float v) { return std::isfinite(v); });
+}
+
+void test_lm_weight_tiers() {
+    const std::vector<SpeechRow> rows = mixed_rows();
+    const auto reference_path = write_lm("speech-tier-f32", WEIGHT_SEED);
+    SpeechLM reference(reference_path.string(), {}, 1);
+    const SpeechLogits expected = prefill(reference, rows, (int) rows.size());
+    for (ggml_type tier : {GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
+        const std::string label = std::string("a ") + ggml_type_name(tier) + " LM";
+        const auto path = write_lm("speech-tier", WEIGHT_SEED);
+        moss_fixture_precision(path, tier);
+        check(holds_tensor_type(path, tier), label + " fixture holds quantized weights");
+        SpeechLM lm(path.string(), {}, 1);
+        const SpeechLogits logits = prefill(lm, rows, (int) rows.size());
+        check(finite_logits(logits) && max_abs_diff(logits.text, expected.text) < QUANTIZED_TOLERANCE &&
+              max_abs_diff(logits.audio, expected.audio) < QUANTIZED_TOLERANCE, label + " loads and runs");
+        std::filesystem::remove(path);
+    }
+    const auto refused = write_lm("speech-tier-q5_0", WEIGHT_SEED);
+    moss_fixture_precision(refused, GGML_TYPE_Q5_0);
+    expect_lm_rejects(refused, "unsupported type", "a q5_0 LM");
+    std::filesystem::remove(reference_path);
+}
+
+void test_options_keep_their_field_order() {
+    const tts_cpp::moss::SpeechOptions options{OPTIONS_MODEL, OPTIONS_CODEC, OPTIONS_THREADS, false,
+                                               OPTIONS_BACKENDS_DIR};
+    check(options.backends_dir == OPTIONS_BACKENDS_DIR && options.backend.empty(),
+          "a five-field SpeechOptions initializer still sets backends_dir and leaves backend automatic");
+}
+
+void test_cache_memory_guard() {
+    check_cache_memory(SMALL_CACHE_BYTES, LARGE_CACHE_BYTES);
+    check_cache_memory(LARGE_CACHE_BYTES, UNKNOWN_FREE_BYTES);
+    expect_failure([] { check_cache_memory(LARGE_CACHE_BYTES, SMALL_CACHE_BYTES); }, "max_new_tokens",
+                   "a KV cache larger than the free memory is refused");
+}
+
 void test_generation_loop() {
     const auto path = write_lm("speech-loop", WEIGHT_SEED);
-    SpeechLM lm(path.string(), false, 1);
+    SpeechLM lm(path.string(), {}, 1);
     const std::vector<SpeechRow> prompt = mixed_rows();
     const SpeechSampling sampled{true, 0.9f, 0.95f, 5};
     auto run = [&](const SpeechContinue & keep_going, std::vector<SpeechRow> & generated) {
@@ -415,7 +475,7 @@ void test_segment_arithmetic() {
 
 void test_tokenizer_encodes() {
     const auto path = write_vq("speech-vq", WEIGHT_SEED);
-    SpeechTokenizer tokenizer(path.string(), false, 1);
+    SpeechTokenizer tokenizer(path.string(), {}, 1);
     const std::vector<float> audio = random_signal(VQ_CHUNK + 40, AUDIO_SEED);
     const std::vector<int32_t> codes = tokenizer.encode(audio);
     const size_t per_token = (size_t) tokenizer.config().samples_per_token();
@@ -434,7 +494,7 @@ void test_tokenizer_encodes() {
 }
 
 void expect_tokenizer_rejects(const std::filesystem::path & path, const std::string & label) {
-    expect_failure([&] { SpeechTokenizer tokenizer(path.string(), false, 1); }, "geometry", label);
+    expect_failure([&] { SpeechTokenizer tokenizer(path.string(), {}, 1); }, "geometry", label);
     std::filesystem::remove(path);
 }
 
@@ -502,7 +562,7 @@ std::vector<float> codebook_rows(const std::vector<float> & codebook, const std:
 
 std::unique_ptr<SpeechTokenizerSidecar> planted_sidecar(const std::filesystem::path & path, int fail_on_call,
                                                         int * calls, std::vector<float> * seen) {
-    const SpeechTokenizer probe(path.string(), false, 1);
+    const SpeechTokenizer probe(path.string(), {}, 1);
     const SpeechSegmentCapacity capacity = speech_segment_capacity(probe.config());
     const std::vector<float> rows = codebook_rows(read_f32_tensor(path, "whispervq.codebook"),
                                                   planted_codes(capacity.tokens));
@@ -511,7 +571,7 @@ std::unique_ptr<SpeechTokenizerSidecar> planted_sidecar(const std::filesystem::p
 
 void test_tokenizer_capacity() {
     const auto path = write_vq("speech-vq-capacity", WEIGHT_SEED);
-    const SpeechTokenizer tokenizer(path.string(), false, 1);
+    const SpeechTokenizer tokenizer(path.string(), {}, 1);
     const SpeechSegmentCapacity capacity = speech_segment_capacity(tokenizer.config());
     check(capacity.tokens == VQ_CHUNK / tokenizer.config().samples_per_token(),
           "the sidecar window holds every token of a full segment");
@@ -530,7 +590,7 @@ void test_tokenizer_capacity() {
 
 void test_tokenizer_sidecar_routing() {
     const auto path = write_vq("speech-vq-sidecar", WEIGHT_SEED);
-    SpeechTokenizer tokenizer(path.string(), false, 1);
+    SpeechTokenizer tokenizer(path.string(), {}, 1);
     int calls = 0;
     std::vector<float> seen;
     tokenizer.attach_sidecar(planted_sidecar(path, NEVER_FAIL, &calls, &seen), false);
@@ -549,8 +609,8 @@ void test_tokenizer_sidecar_routing() {
 
 void test_tokenizer_partial_segments_stay_on_ggml() {
     const auto path = write_vq("speech-vq-partial", WEIGHT_SEED);
-    SpeechTokenizer reference(path.string(), false, 1);
-    SpeechTokenizer tokenizer(path.string(), false, 1);
+    SpeechTokenizer reference(path.string(), {}, 1);
+    SpeechTokenizer tokenizer(path.string(), {}, 1);
     int calls = 0;
     std::vector<float> seen;
     tokenizer.attach_sidecar(planted_sidecar(path, NEVER_FAIL, &calls, &seen), true);
@@ -569,8 +629,8 @@ void test_tokenizer_partial_segments_stay_on_ggml() {
 
 void test_tokenizer_sidecar_fallback() {
     const auto path = write_vq("speech-vq-fallback", WEIGHT_SEED);
-    SpeechTokenizer reference(path.string(), false, 1);
-    SpeechTokenizer tokenizer(path.string(), false, 1);
+    SpeechTokenizer reference(path.string(), {}, 1);
+    SpeechTokenizer tokenizer(path.string(), {}, 1);
     int calls = 0;
     std::vector<float> seen;
     tokenizer.attach_sidecar(planted_sidecar(path, 1, &calls, &seen), false);
@@ -588,7 +648,7 @@ void test_tokenizer_sidecar_fallback() {
 
 void test_tokenizer_sidecar_strict() {
     const auto path = write_vq("speech-vq-strict", WEIGHT_SEED);
-    SpeechTokenizer tokenizer(path.string(), false, 1);
+    SpeechTokenizer tokenizer(path.string(), {}, 1);
     int calls = 0;
     std::vector<float> seen;
     const std::vector<float> audio = random_signal(VQ_CHUNK, AUDIO_SEED);
@@ -695,6 +755,9 @@ int main() {
         test_lm_rejections();
         test_lm_batches_and_steps();
         test_lm_skips_the_text_head();
+        test_lm_weight_tiers();
+        test_cache_memory_guard();
+        test_options_keep_their_field_order();
         test_generation_loop();
         test_segment_arithmetic();
         test_tokenizer_encodes();

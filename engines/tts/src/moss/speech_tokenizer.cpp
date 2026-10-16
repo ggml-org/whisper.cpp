@@ -235,6 +235,8 @@ struct SpeechTokenizer::Impl {
     int n_threads = 1;
     std::unique_ptr<SpeechTokenizerSidecar> sidecar;
     bool strict = false;
+    AttentionLayout attention_layout = AttentionLayout::Automatic;
+    bool fused = false;
     StageBackends backends;
 
     ~Impl() {
@@ -283,13 +285,26 @@ struct SpeechTokenizer::Impl {
         }
     }
 
-    void upload_weights(const std::string & path) {
+    void require_device_weight_types() const {
+        if (!::tts_cpp::detail::backend_is_hexagon(backend)) {
+            return;
+        }
+        if (const ggml_tensor * refused = first_tensor_hexagon_cannot_run(weights)) {
+            fail(hexagon_weight_refusal(refused, HEXAGON_SPEECH_TOKENIZER_WEIGHT_TIERS));
+        }
+    }
+
+    void create_weight_context() {
         weights = ggml_init({(count_owned_tensors() + TENSOR_SLACK) * ggml_tensor_overhead(), nullptr, true});
         if (!weights) {
             fail("weight context allocation failed");
         }
         mirror_owned_tensors();
-        weight_buffer = ggml_backend_alloc_ctx_tensors(weights, backend);
+    }
+
+    void upload_weights(const std::string & path) {
+        weight_buffer = ggml_backend_alloc_ctx_tensors_from_buft(weights,
+                ::tts_cpp::detail::weight_buffer_type(backend));
         if (!weight_buffer) {
             fail("weight allocation failed");
         }
@@ -300,17 +315,9 @@ struct SpeechTokenizer::Impl {
         stream_tensors(reader);
     }
 
-    void init_backend(bool use_gpu) {
-        ::tts_cpp::detail::ensure_backends_loaded();
-        if (use_gpu) {
-            backend = ::tts_cpp::detail::init_gpu_backend(1, false, "moss-speech-tokenizer");
-        }
-        if (!backend) {
-            backend = ::tts_cpp::detail::init_cpu_backend();
-        }
-        if (!backend) {
-            fail("no compute backend available");
-        }
+    void select_backend(const BackendRequest & request) {
+        backend = init_backend(request, OWNER);
+        fused = fuses_attention(attention_layout, backend);
     }
 
     void validate_layer(int layer) const {
@@ -359,7 +366,7 @@ struct SpeechTokenizer::Impl {
         return values;
     }
 
-    void load(const std::string & path, bool use_gpu, int threads) {
+    void load(const std::string & path, const BackendRequest & request, int threads) {
         if (!within(threads, 1, MAX_THREADS)) {
             fail("threads must be 1.." + std::to_string(MAX_THREADS));
         }
@@ -374,7 +381,9 @@ struct SpeechTokenizer::Impl {
         }
         config = read_config(meta);
         validate_config(config);
-        init_backend(use_gpu);
+        select_backend(request);
+        create_weight_context();
+        require_device_weight_types();
         upload_weights(path);
         validate_tensors();
         mel_filters = read_tensor(find("whispervq.mel_filters"));
@@ -421,17 +430,35 @@ struct SpeechTokenizer::Impl {
         return ggml_reshape_3d(ctx, cur, config.n_embd / config.n_heads, config.n_heads, tokens);
     }
 
-    ggml_tensor * attention(ggml_context * ctx, int layer, ggml_tensor * cur, int64_t tokens, ggml_tensor * mask) const {
-        const int head_dim = config.n_embd / config.n_heads;
-        const std::string base = std::string(PREFIX) + "blk." + std::to_string(layer) + ".";
-        ggml_tensor * q = ggml_permute(ctx, heads(ctx, linear(ctx, cur, base + "attn_q", true), tokens), 0, 2, 1, 3);
-        ggml_tensor * k = ggml_permute(ctx, heads(ctx, linear(ctx, cur, base + "attn_k", false), tokens), 0, 2, 1, 3);
-        ggml_tensor * v = heads(ctx, linear(ctx, cur, base + "attn_v", true), tokens);
+    float attention_scale() const {
+        return 1.0f / std::sqrt((float) (config.n_embd / config.n_heads));
+    }
+
+    ggml_tensor * attend_unfused(ggml_context * ctx, ggml_tensor * q, ggml_tensor * k, ggml_tensor * v,
+                                 int64_t tokens, ggml_tensor * mask) const {
         ggml_tensor * values = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));
-        ggml_tensor * scores = ggml_soft_max_ext(ctx, ggml_mul_mat(ctx, k, q), mask,
-                1.0f / std::sqrt((float) head_dim), 0.0f);
+        ggml_tensor * scores = ggml_soft_max_ext(ctx, ggml_mul_mat(ctx, ggml_permute(ctx, k, 0, 2, 1, 3),
+                ggml_permute(ctx, q, 0, 2, 1, 3)), mask, attention_scale(), 0.0f);
         ggml_tensor * attended = ggml_permute(ctx, ggml_mul_mat(ctx, values, scores), 0, 2, 1, 3);
-        return linear(ctx, ggml_cont_2d(ctx, attended, config.n_embd, tokens), base + "attn_output", true);
+        return ggml_cont_2d(ctx, attended, config.n_embd, tokens);
+    }
+
+    ggml_tensor * attend_fused(ggml_context * ctx, ggml_tensor * q, ggml_tensor * k, ggml_tensor * v,
+                               int64_t tokens, ggml_tensor * mask) const {
+        ggml_tensor * attended = ggml_flash_attn_ext(ctx, ggml_permute(ctx, q, 0, 2, 1, 3),
+                ggml_permute(ctx, k, 0, 2, 1, 3), ggml_permute(ctx, v, 0, 2, 1, 3), mask,
+                attention_scale(), 0.0f, 0.0f);
+        return ggml_reshape_2d(ctx, attended, config.n_embd, tokens);
+    }
+
+    ggml_tensor * attention(ggml_context * ctx, int layer, ggml_tensor * cur, int64_t tokens, ggml_tensor * mask) const {
+        const std::string base = std::string(PREFIX) + "blk." + std::to_string(layer) + ".";
+        ggml_tensor * q = heads(ctx, linear(ctx, cur, base + "attn_q", true), tokens);
+        ggml_tensor * k = heads(ctx, linear(ctx, cur, base + "attn_k", false), tokens);
+        ggml_tensor * v = heads(ctx, linear(ctx, cur, base + "attn_v", true), tokens);
+        ggml_tensor * attended = fused ? attend_fused(ctx, q, k, v, tokens, mask)
+                                       : attend_unfused(ctx, q, k, v, tokens, mask);
+        return linear(ctx, attended, base + "attn_output", true);
     }
 
     ggml_tensor * block(ggml_context * ctx, int layer, ggml_tensor * cur, int64_t tokens, ggml_tensor * mask) const {
@@ -479,7 +506,8 @@ struct SpeechTokenizer::Impl {
         ggml_tensor * positions = ggml_view_2d(ctx, find("whispervq.pos_embd"), config.n_embd, frames,
                 find("whispervq.pos_embd")->nb[1], 0);
         cur = ggml_add(ctx, ggml_cont(ctx, ggml_transpose(ctx, cur)), positions);
-        cur = average_pool(ctx, blocks(ctx, cur, frames, mask), frames);
+        ggml_tensor * attention_mask = fused ? ggml_cast(ctx, mask, GGML_TYPE_F16) : mask;
+        cur = average_pool(ctx, blocks(ctx, cur, frames, attention_mask), frames);
         ggml_tensor * codes = code_indices(ctx, cur, bias);
         ggml_set_output(codes);
         ggml_build_forward_expand(graph.graph(), codes);
@@ -568,13 +596,17 @@ struct SpeechTokenizer::Impl {
     }
 };
 
-SpeechTokenizer::SpeechTokenizer(const std::string & codec_path, bool use_gpu, int n_threads) : impl_(new Impl) {
-    impl_->load(codec_path, use_gpu, n_threads);
+SpeechTokenizer::SpeechTokenizer(const std::string & codec_path, const BackendRequest & backend, int n_threads,
+                                 AttentionLayout attention) : impl_(new Impl) {
+    impl_->attention_layout = attention;
+    impl_->load(codec_path, backend, n_threads);
 }
 
 SpeechTokenizer::~SpeechTokenizer() = default;
 
 const SpeechVqConfig & SpeechTokenizer::config() const { return impl_->config; }
+const char * SpeechTokenizer::backend_name() const { return ggml_backend_name(impl_->backend); }
+bool SpeechTokenizer::fused_attention() const { return impl_->fused; }
 
 std::vector<float> SpeechTokenizer::log_mel(const float * samples, size_t count) const {
     return impl_->log_mel(samples, count);

@@ -153,8 +153,9 @@ struct SpeechEngine::Impl {
         if (!options.backends_dir.empty()) {
             ::tts_cpp::detail::set_backends_directory(options.backends_dir);
         }
-        lm = std::make_unique<SpeechLM>(options.model_path, options.use_gpu, options.n_threads);
-        codec = std::make_unique<SpeechCodec>(options.codec_path, options.use_gpu, options.n_threads);
+        const detail::BackendRequest request = detail::backend_request(options);
+        lm = std::make_unique<SpeechLM>(options.model_path, request, options.n_threads);
+        codec = std::make_unique<SpeechCodec>(options.codec_path, request, options.n_threads);
         tokenizer = std::make_unique<SpeechTextTokenizer>(lm->tokenizer_tokens(), lm->tokenizer_merges(),
                 lm->tokenizer_types());
     }
@@ -217,6 +218,7 @@ struct SpeechEngine::Impl {
         detail::SpeechVoice custom;
         detail::SpeechDecodeOptions decode;
         decode.cancel = &cancel_requested;
+        decode.release_decoder = !lm->runs_on_cpu();
         result.pcm = codec->decode(codes, reply_voice(request, custom), decode);
         result.decode_ms = elapsed_ms(decode_start);
         result.cancelled = cancel_requested.load();
@@ -275,10 +277,10 @@ struct SpeechEngine::Impl {
         result.reply_tokens = (int) codes.size();
         // Each request begins with a fresh prompt; the completed LM's KV and
         // prefill graph buffers are no longer needed during S3Gen/HiFT decode.
-        if (options.use_gpu && !result.cancelled && !request.text_reply) {
-            // The full-precision LM and S3Gen decoder exceed smaller GPUs when
-            // resident together. Keep metadata/backend identity, but reload LM
-            // weights at the next begin() after the decoder has been released.
+        if (!lm->runs_on_cpu() && !result.cancelled && !request.text_reply) {
+            // An LM on a GPU or the NPU and the S3Gen decoder exceed smaller
+            // GPUs and 12 GB phones when resident together. Keep metadata and
+            // backend identity, but reload LM weights at the next begin().
             lm->release_weights();
         } else {
             lm->release_generation();

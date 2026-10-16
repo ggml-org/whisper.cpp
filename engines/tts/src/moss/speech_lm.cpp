@@ -1,6 +1,7 @@
 #include "moss/speech_lm.h"
 
 #include "moss/gguf_metadata.h"
+#include "moss/host_tables.h"
 #include "moss/sfx_model.h"
 
 #include "backend_selection.h"
@@ -14,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 
@@ -32,11 +34,13 @@ constexpr int MAX_VOCAB = 1 << 24;
 constexpr int CACHE_ALIGNMENT = 256;
 constexpr size_t TENSOR_SLACK = 8;
 constexpr float FFN_DOWN_ACCUMULATION_SCALE = 64.0f;
+constexpr uint64_t MIB = 1024 * 1024;
 constexpr int SHARED_BLOCK = 0;
 constexpr int TEXT_BLOCK = 1;
 constexpr int AUDIO_BLOCK = 2;
 constexpr int BLOCK_COUNT = 3;
 const char * const BLOCK_PREFIXES[BLOCK_COUNT] = {"blk.", "text.blk.", "audio.blk."};
+const char * const HOST_TABLES[] = {"text.token_embd.weight", "audio.token_embd.weight", "text.output.weight"};
 
 [[noreturn]] void fail(const std::string & message) {
     throw std::runtime_error(std::string(OWNER) + ": " + message);
@@ -100,6 +104,27 @@ void validate_geometry(const SpeechLmConfig & c) {
     }
 }
 
+bool is_weight_type(ggml_type type) {
+    return type == GGML_TYPE_F32 || type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0 ||
+           type == GGML_TYPE_Q4_0;
+}
+
+void require_weight(const ggml_tensor * tensor, int64_t ne0, int64_t ne1) {
+    require_shape(tensor, ne0, ne1);
+    if (!is_weight_type(tensor->type)) {
+        fail(std::string(ggml_get_name(tensor)) + " has an unsupported type");
+    }
+}
+
+bool host_table(const char * name) {
+    for (const char * table : HOST_TABLES) {
+        if (std::strcmp(name, table) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool in_vocab(int32_t id, int vocab) {
     return id >= 0 && id < vocab;
 }
@@ -143,16 +168,28 @@ void set_input(ggml_tensor * tensor, const std::vector<T> & values) {
 
 } // namespace
 
+void check_cache_memory(uint64_t cache_bytes, uint64_t free_bytes) {
+    if (free_bytes > 0 && cache_bytes > free_bytes) {
+        fail("the KV cache needs " + std::to_string(cache_bytes / MIB) + " MiB but " +
+             std::to_string(free_bytes / MIB) + " MiB of memory is free; lower max_new_tokens");
+    }
+}
+
 struct SpeechLM::Impl {
     gguf_context * file = nullptr;
     ggml_context * metadata = nullptr;
     ggml_context * weights = nullptr;
+    ggml_context * host_weights = nullptr;
     ggml_context * state = nullptr;
     ggml_backend_t backend = nullptr;
     ggml_backend_buffer_t weight_buffer = nullptr;
     ggml_backend_buffer_t state_buffer = nullptr;
+    HostTables host_tables{OWNER};
     ::tts_cpp::detail::sched_fallback sched;
     SpeechLmConfig config;
+    SpeechLayout layout;
+    bool tables_on_host = false;
+    bool fused = false;
     std::string model_path;
     int n_threads = 1;
     int n_ctx = 0;
@@ -166,8 +203,12 @@ struct SpeechLM::Impl {
         if (backend) ggml_backend_free(backend);
     }
 
+    ggml_context * context_for(const char * name) const {
+        return host_weights && host_table(name) ? host_weights : weights;
+    }
+
     ggml_tensor * find(const std::string & name) const {
-        ggml_tensor * tensor = ggml_get_tensor(weights, name.c_str());
+        ggml_tensor * tensor = ggml_get_tensor(context_for(name.c_str()), name.c_str());
         if (tensor == nullptr) {
             fail("missing tensor: " + name);
         }
@@ -188,17 +229,35 @@ struct SpeechLM::Impl {
 
     void mirror_metadata_tensors() {
         for (auto * src = ggml_get_first_tensor(metadata); src; src = ggml_get_next_tensor(metadata, src)) {
-            ggml_tensor * dst = ggml_new_tensor(weights, src->type, GGML_MAX_DIMS, src->ne);
+            ggml_tensor * dst = ggml_new_tensor(context_for(ggml_get_name(src)), src->type, GGML_MAX_DIMS, src->ne);
             ggml_set_name(dst, ggml_get_name(src));
         }
     }
 
-    void duplicate_metadata_tensors() {
-        weights = ggml_init({(count_metadata_tensors() + TENSOR_SLACK) * ggml_tensor_overhead(), nullptr, true});
-        if (!weights) {
+    ggml_context * new_weight_context() const {
+        ggml_context * ctx = ggml_init({(count_metadata_tensors() + TENSOR_SLACK) * ggml_tensor_overhead(),
+                nullptr, true});
+        if (!ctx) {
             fail("weight context allocation failed");
         }
+        return ctx;
+    }
+
+    void duplicate_metadata_tensors() {
+        weights = new_weight_context();
+        if (tables_on_host) {
+            host_weights = new_weight_context();
+        }
         mirror_metadata_tensors();
+    }
+
+    void require_device_weight_types() const {
+        if (!::tts_cpp::detail::backend_is_hexagon(backend)) {
+            return;
+        }
+        if (const ggml_tensor * refused = first_tensor_hexagon_cannot_run(weights)) {
+            fail(hexagon_weight_refusal(refused, HEXAGON_SPEECH_WEIGHT_TIERS));
+        }
     }
 
     void stream_tensors(::tts_cpp::detail::gguf_stream_reader & reader) {
@@ -210,44 +269,41 @@ struct SpeechLM::Impl {
     }
 
     void upload_weights(const std::string & path) {
-        weight_buffer = ggml_backend_alloc_ctx_tensors(weights, backend);
-        if (!weight_buffer) {
-            fail("weight allocation failed");
-        }
         ::tts_cpp::detail::gguf_stream_reader reader(file, path);
         if (!reader.ok()) {
             fail("cannot reopen GGUF for streaming: " + path);
         }
+        if (host_weights) {
+            host_tables.place(host_weights, file, path, reader);
+        }
+        weight_buffer = ggml_backend_alloc_ctx_tensors_from_buft(weights,
+                ::tts_cpp::detail::weight_buffer_type(backend));
+        if (!weight_buffer) {
+            fail("weight allocation failed");
+        }
         stream_tensors(reader);
     }
 
-    void init_backend(bool use_gpu) {
-        ::tts_cpp::detail::ensure_backends_loaded();
-        if (use_gpu) {
-            backend = ::tts_cpp::detail::init_gpu_backend(1, false, "moss-speech");
-        }
-        if (!backend) {
-            backend = ::tts_cpp::detail::init_cpu_backend();
-        }
-        if (!backend) {
-            fail("no compute backend available");
-        }
+    void select_backend(const BackendRequest & request) {
+        backend = init_backend(request, OWNER);
+        tables_on_host = places_tables_on_host(layout.tables, backend);
+        fused = fuses_attention(layout.attention, backend);
     }
 
     void validate_layer(int block, int layer) const {
         const int64_t q_dim = (int64_t) config.n_heads * config.head_dim;
         const int64_t kv_dim = (int64_t) config.n_kv_heads * config.head_dim;
         require_vector(weight(block, layer, "attn_norm.weight"), config.n_embd, 1);
-        require_matrix(weight(block, layer, "attn_q.weight"), config.n_embd, q_dim);
-        require_matrix(weight(block, layer, "attn_k.weight"), config.n_embd, kv_dim);
-        require_matrix(weight(block, layer, "attn_v.weight"), config.n_embd, kv_dim);
-        require_matrix(weight(block, layer, "attn_output.weight"), q_dim, config.n_embd);
+        require_weight(weight(block, layer, "attn_q.weight"), config.n_embd, q_dim);
+        require_weight(weight(block, layer, "attn_k.weight"), config.n_embd, kv_dim);
+        require_weight(weight(block, layer, "attn_v.weight"), config.n_embd, kv_dim);
+        require_weight(weight(block, layer, "attn_output.weight"), q_dim, config.n_embd);
         require_vector(weight(block, layer, "attn_q_norm.weight"), config.head_dim, 1);
         require_vector(weight(block, layer, "attn_k_norm.weight"), config.head_dim, 1);
         require_vector(weight(block, layer, "ffn_norm.weight"), config.n_embd, 1);
-        require_matrix(weight(block, layer, "ffn_gate.weight"), config.n_embd, config.n_ff);
-        require_matrix(weight(block, layer, "ffn_up.weight"), config.n_embd, config.n_ff);
-        require_matrix(weight(block, layer, "ffn_down.weight"), config.n_ff, config.n_embd);
+        require_weight(weight(block, layer, "ffn_gate.weight"), config.n_embd, config.n_ff);
+        require_weight(weight(block, layer, "ffn_up.weight"), config.n_embd, config.n_ff);
+        require_weight(weight(block, layer, "ffn_down.weight"), config.n_ff, config.n_embd);
     }
 
     void validate_block(int block) const {
@@ -257,12 +313,12 @@ struct SpeechLM::Impl {
     }
 
     void validate_heads() const {
-        require_matrix(find("text.token_embd.weight"), config.n_embd, config.text_vocab);
-        require_matrix(find("audio.token_embd.weight"), config.n_embd, config.audio_vocab);
+        require_weight(find("text.token_embd.weight"), config.n_embd, config.text_vocab);
+        require_weight(find("audio.token_embd.weight"), config.n_embd, config.audio_vocab);
         require_vector(find("text.output_norm.weight"), config.n_embd, 1);
         require_vector(find("audio.output_norm.weight"), config.n_embd, 1);
-        require_matrix(find("text.output.weight"), config.n_embd, config.text_vocab);
-        require_matrix(find("audio.output.weight"), config.n_embd, config.audio_vocab);
+        require_weight(find("text.output.weight"), config.n_embd, config.text_vocab);
+        require_weight(find("audio.output.weight"), config.n_embd, config.audio_vocab);
     }
 
     void validate_tensors() const {
@@ -272,7 +328,7 @@ struct SpeechLM::Impl {
         }
     }
 
-    void load(const std::string & path, bool use_gpu, int threads) {
+    void load(const std::string & path, const BackendRequest & request, int threads) {
         if (!within(threads, 1, MAX_THREADS)) {
             fail("threads must be 1.." + std::to_string(MAX_THREADS));
         }
@@ -289,9 +345,10 @@ struct SpeechLM::Impl {
         config = read_config(meta);
         validate_geometry(config);
         validate_tokens(config);
-        init_backend(use_gpu);
+        select_backend(request);
         duplicate_metadata_tensors();
         validate_tensors();
+        require_device_weight_types();
         upload_weights(path);
     }
 
@@ -317,9 +374,12 @@ struct SpeechLM::Impl {
 
     void release_weights() {
         release_generation();
+        host_tables.release();
         if (weight_buffer) ggml_backend_buffer_free(weight_buffer);
+        if (host_weights) ggml_free(host_weights);
         if (weights) ggml_free(weights);
         weight_buffer = nullptr;
+        host_weights = nullptr;
         weights = nullptr;
     }
 
@@ -340,7 +400,8 @@ struct SpeechLM::Impl {
         caches[block].assign((size_t) block_layers(config, block), {});
         for (LayerCache & cache : caches[block]) {
             cache.k = ggml_new_tensor_2d(state, GGML_TYPE_F16, kv_dim(), n_ctx);
-            cache.v = ggml_new_tensor_2d(state, GGML_TYPE_F16, n_ctx, kv_dim());
+            cache.v = fused ? ggml_new_tensor_2d(state, GGML_TYPE_F16, kv_dim(), n_ctx)
+                            : ggml_new_tensor_2d(state, GGML_TYPE_F16, n_ctx, kv_dim());
         }
     }
 
@@ -350,19 +411,39 @@ struct SpeechLM::Impl {
         }
     }
 
+    void require_cache_memory() const {
+        if (!::tts_cpp::detail::backend_shares_host_memory(backend)) {
+            return;
+        }
+        size_t free_bytes = 0, total_bytes = 0;
+        ::tts_cpp::detail::backend_memory(backend, free_bytes, total_bytes);
+        check_cache_memory(ggml_backend_alloc_ctx_tensors_from_buft_size(state,
+                ggml_backend_get_default_buffer_type(backend)), free_bytes);
+    }
+
     void begin(int context) {
         if (!within(context, 1, config.n_ctx_train)) {
             fail("context must be 1.." + std::to_string(config.n_ctx_train));
         }
         release_generation();
         ensure_weights();
-        n_ctx = aligned_context(context);
+        try {
+            allocate_cache(aligned_context(context));
+        } catch (...) {
+            release_generation();
+            throw;
+        }
+    }
+
+    void allocate_cache(int context) {
+        n_ctx = context;
         const size_t layers = (size_t) config.n_shared_layers + 2 * (size_t) config.n_modality_layers;
         state = ggml_init({(2 * layers + TENSOR_SLACK) * ggml_tensor_overhead(), nullptr, true});
         if (!state) {
             fail("KV cache context allocation failed");
         }
         create_caches();
+        require_cache_memory();
         state_buffer = ggml_backend_alloc_ctx_tensors(state, backend);
         if (!state_buffer) {
             fail("KV cache allocation failed; the conversation is too long for this device");
@@ -393,14 +474,52 @@ struct SpeechLM::Impl {
                 cache.v->nb[1] * config.head_dim, 0);
     }
 
+    ggml_tensor * value_rows(ggml_context * ctx, const LayerCache & cache, int64_t first, int64_t count) const {
+        return ggml_view_2d(ctx, cache.v, kv_dim(), count, cache.v->nb[1], first * cache.v->nb[1]);
+    }
+
+    ggml_tensor * value_write(ggml_context * ctx, const LayerCache & cache, ggml_tensor * v_rows,
+                              int64_t tokens) const {
+        if (fused) {
+            return ggml_cpy(ctx, v_rows, value_rows(ctx, cache, pos, tokens));
+        }
+        return ggml_cpy(ctx, ggml_transpose(ctx, v_rows), value_columns(ctx, cache, pos, tokens));
+    }
+
     void store_cache(SfxGraph & graph, const LayerCache & cache, ggml_tensor * k, ggml_tensor * v,
                      int64_t tokens) const {
         ggml_context * ctx = graph.ctx();
         ggml_tensor * k_rows = ggml_reshape_2d(ctx, ggml_cont(ctx, k), kv_dim(), tokens);
         ggml_tensor * v_rows = ggml_reshape_2d(ctx, ggml_cont(ctx, v), kv_dim(), tokens);
         ggml_build_forward_expand(graph.graph(), ggml_cpy(ctx, k_rows, key_rows(ctx, cache, pos, tokens)));
-        ggml_build_forward_expand(graph.graph(), ggml_cpy(ctx, ggml_transpose(ctx, v_rows),
-                value_columns(ctx, cache, pos, tokens)));
+        ggml_build_forward_expand(graph.graph(), value_write(ctx, cache, v_rows, tokens));
+    }
+
+    ggml_tensor * cache_heads(ggml_context * ctx, ggml_tensor * rows, int64_t total) const {
+        return ggml_reshape_3d(ctx, rows, config.head_dim, config.n_kv_heads, total);
+    }
+
+    float attention_scale() const {
+        return 1.0f / std::sqrt((float) config.head_dim);
+    }
+
+    ggml_tensor * attend_unfused(ggml_context * ctx, const LayerCache & cache, ggml_tensor * q, int64_t tokens,
+                                 int64_t total, ggml_tensor * mask) const {
+        ggml_tensor * keys = ggml_permute(ctx, cache_heads(ctx, key_rows(ctx, cache, 0, total), total), 0, 2, 1, 3);
+        ggml_tensor * scores = ggml_soft_max_ext(ctx, ggml_mul_mat(ctx, keys, ggml_permute(ctx, q, 0, 2, 1, 3)),
+                mask, attention_scale(), 0.0f);
+        ggml_tensor * attended = ggml_mul_mat(ctx, cached_values(ctx, cache, total), scores);
+        return ggml_cont_2d(ctx, ggml_permute(ctx, attended, 0, 2, 1, 3),
+                (int64_t) config.head_dim * config.n_heads, tokens);
+    }
+
+    ggml_tensor * attend_fused(ggml_context * ctx, const LayerCache & cache, ggml_tensor * q, int64_t tokens,
+                               int64_t total, ggml_tensor * mask) const {
+        ggml_tensor * attended = ggml_flash_attn_ext(ctx, ggml_permute(ctx, q, 0, 2, 1, 3),
+                ggml_permute(ctx, cache_heads(ctx, key_rows(ctx, cache, 0, total), total), 0, 2, 1, 3),
+                ggml_permute(ctx, cache_heads(ctx, value_rows(ctx, cache, 0, total), total), 0, 2, 1, 3),
+                mask, attention_scale(), 0.0f, 0.0f);
+        return ggml_reshape_2d(ctx, attended, (int64_t) config.head_dim * config.n_heads, tokens);
     }
 
     ggml_tensor * attention(SfxGraph & graph, int block, int layer, ggml_tensor * cur, int64_t tokens,
@@ -417,16 +536,8 @@ struct SpeechLM::Impl {
         q = rope(ctx, rms_norm(ctx, q, weight(block, layer, "attn_q_norm.weight")), positions);
         k = rope(ctx, rms_norm(ctx, k, weight(block, layer, "attn_k_norm.weight")), positions);
         store_cache(graph, cache, k, v, tokens);
-
-        ggml_tensor * keys = ggml_reshape_3d(ctx, key_rows(ctx, cache, 0, total), config.head_dim,
-                config.n_kv_heads, total);
-        q = ggml_permute(ctx, q, 0, 2, 1, 3);
-        keys = ggml_permute(ctx, keys, 0, 2, 1, 3);
-        ggml_tensor * scores = ggml_soft_max_ext(ctx, ggml_mul_mat(ctx, keys, q), mask,
-                1.0f / std::sqrt((float) config.head_dim), 0.0f);
-        ggml_tensor * attended = ggml_mul_mat(ctx, cached_values(ctx, cache, total), scores);
-        attended = ggml_cont_2d(ctx, ggml_permute(ctx, attended, 0, 2, 1, 3),
-                (int64_t) config.head_dim * config.n_heads, tokens);
+        ggml_tensor * attended = fused ? attend_fused(ctx, cache, q, tokens, total, mask)
+                                       : attend_unfused(ctx, cache, q, tokens, total, mask);
         return ggml_mul_mat(ctx, weight(block, layer, "attn_output.weight"), attended);
     }
 
@@ -512,7 +623,8 @@ struct SpeechLM::Impl {
     }
 
     void allocate(SfxGraph & graph) {
-        if (!::tts_cpp::detail::sched_fallback_ensure(sched, backend, GRAPH_NODES, {weight_buffer})) {
+        if (!::tts_cpp::detail::sched_fallback_ensure(sched, backend, GRAPH_NODES,
+                {weight_buffer, host_tables.buffer()})) {
             fail("scheduler initialization failed");
         }
         if (!::tts_cpp::detail::sched_fallback_alloc(sched, graph.graph())) {
@@ -559,12 +671,13 @@ struct SpeechLM::Impl {
         ggml_tensor * audio_select = graph.input_f32(1, tokens);
         ggml_tensor * positions_input = graph.input_i32(tokens);
         ggml_tensor * mask = tokens > 1 ? graph.input_f32(pos + tokens, tokens) : nullptr;
+        ggml_tensor * attention_mask = mask && fused ? ggml_cast(graph.ctx(), mask, GGML_TYPE_F16) : mask;
         ggml_tensor * shared = block_forward(graph, SHARED_BLOCK, embed(graph, text_ids, audio_ids, text_select,
-                audio_select), tokens, positions_input, mask);
+                audio_select), tokens, positions_input, attention_mask);
         ggml_tensor * text_logits = request_output(graph, branch_logits(graph, TEXT_BLOCK, "text", shared, tokens,
-                positions_input, mask), heads.text);
+                positions_input, attention_mask), heads.text);
         ggml_tensor * audio_logits = request_output(graph, branch_logits(graph, AUDIO_BLOCK, "audio", shared, tokens,
-                positions_input, mask), heads.audio);
+                positions_input, attention_mask), heads.audio);
 
         allocate(graph);
         set_input(text_ids, inputs.text_ids);
@@ -595,14 +708,19 @@ struct SpeechLM::Impl {
     }
 };
 
-SpeechLM::SpeechLM(const std::string & path, bool use_gpu, int n_threads) : impl_(new Impl) {
-    impl_->load(path, use_gpu, n_threads);
+SpeechLM::SpeechLM(const std::string & path, const BackendRequest & backend, int n_threads,
+                   const SpeechLayout & layout) : impl_(new Impl) {
+    impl_->layout = layout;
+    impl_->load(path, backend, n_threads);
 }
 
 SpeechLM::~SpeechLM() = default;
 
 const SpeechLmConfig & SpeechLM::config() const { return impl_->config; }
 const char * SpeechLM::backend_name() const { return ggml_backend_name(impl_->backend); }
+bool SpeechLM::runs_on_cpu() const { return ::tts_cpp::detail::backend_is_cpu(impl_->backend); }
+bool SpeechLM::tables_on_host() const { return impl_->tables_on_host; }
+bool SpeechLM::fused_attention() const { return impl_->fused; }
 int SpeechLM::position() const { return impl_->pos; }
 int SpeechLM::context() const { return impl_->n_ctx; }
 

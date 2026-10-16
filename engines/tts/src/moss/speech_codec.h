@@ -22,11 +22,14 @@ struct SpeechDecodeOptions {
     std::vector<float> noise;
     const std::atomic<bool> * cancel = nullptr;
     std::string dump_mel_path;
+    bool release_decoder = false;
 };
+
+bool decoder_uses_gpu(const BackendRequest & backend);
 
 class SpeechCodec {
 public:
-    SpeechCodec(const std::string & codec_path, bool use_gpu, int n_threads);
+    SpeechCodec(const std::string & codec_path, const BackendRequest & backend, int n_threads);
     ~SpeechCodec();
     SpeechCodec(const SpeechCodec &) = delete;
     SpeechCodec & operator=(const SpeechCodec &) = delete;

@@ -71,8 +71,9 @@ void test_backend_modes() {
             "--backend", "hexagon"}, sfx), "--backend is accepted in sfx mode");
     check(sfx.sound_options.backend == "hexagon", "backend flag reaches the sfx engine");
     CliArgs s2s;
-    check(!parse({"moss-cli", "--mode", "s2s", "--model", "m.gguf", "--codec", "c.gguf",
-            "--audio", "q.wav", "--backend", "hexagon"}, s2s), "--backend is rejected in s2s mode");
+    check(parse({"moss-cli", "--mode", "s2s", "--model", "m.gguf", "--codec", "c.gguf",
+            "--audio", "q.wav", "--backend", "hexagon"}, s2s), "--backend is accepted in s2s mode");
+    check(s2s.s2s_options.backend == "hexagon", "backend flag reaches the speech engine");
 }
 
 void test_end_to_end_run() {

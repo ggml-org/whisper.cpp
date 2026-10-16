@@ -16,7 +16,12 @@ constexpr size_t HOST_TENSOR_ALIGNMENT = 32;
 HostTables::HostTables(const char * owner) : owner_(owner) {}
 
 HostTables::~HostTables() {
+    release();
+}
+
+void HostTables::release() {
     if (buffer_) ggml_backend_buffer_free(buffer_);
+    buffer_ = nullptr;
     ::tts_cpp::cosyvoice::mapped_file_close(mapping_);
 }
 

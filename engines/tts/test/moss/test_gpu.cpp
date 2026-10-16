@@ -133,6 +133,13 @@ void hexagon_refuses_bf16() {
     moss_fixture_precision(sfx_file.path, GGML_TYPE_BF16);
     require_hexagon_refusal("sfx bf16", [&] { SfxModel model(sfx_file.str(), device_request(), 2); },
                             ggml_type_name(GGML_TYPE_Q4_0));
+    Fixture speech_file{moss_speech_fixtures::write_lm("gpu-speech-bf16", 26342)};
+    moss_fixture_precision(speech_file.path, GGML_TYPE_BF16);
+    require_hexagon_refusal("speech bf16", [&] { SpeechLM lm(speech_file.str(), device_request(), 2); });
+    Fixture vq{moss_speech_fixtures::write_vq("gpu-speech-vq-bf16", 26342)};
+    moss_fixture_precision(vq.path, GGML_TYPE_BF16);
+    require_hexagon_refusal("speech tokenizer bf16", [&] { SpeechTokenizer t(vq.str(), device_request(), 2); },
+                            ggml_type_name(GGML_TYPE_Q4_0));
 }
 
 void fit_sfx_on_host_memory(const std::string & model) {
@@ -241,8 +248,11 @@ void speech(ggml_type precision) {
     using namespace moss_speech_fixtures;
     Fixture file{write_lm("gpu-speech", 26342)};
     moss_fixture_precision(file.path, precision);
-    SpeechLM cpu(file.str(), false, 2), gpu(file.str(), true, 2);
+    SpeechLM cpu(file.str(), {}, 2), gpu(file.str(), device_request(), 2);
     arm.require(gpu.backend_name());
+    require(gpu.tables_on_host() == hexagon_arm(), "speech tables placement");
+    require(gpu.fused_attention() == hexagon_arm(), "speech attention layout");
+    require(!gpu.runs_on_cpu(), "speech LM runs off the CPU");
     const std::vector<SpeechRow> rows{{TOKEN_IM_START, TOKEN_AUDIO_PAD},
         {TOKEN_SPEECH_START, TOKEN_AUDIO_PAD}, {TOKEN_TEXT_PLACEHOLDER, 7}, {TOKEN_TEXT_PLACEHOLDER, 8}};
     auto check = [](const SpeechLogits & a, const SpeechLogits & b) {
@@ -267,7 +277,9 @@ void speech(ggml_type precision) {
     }
     Fixture vq{write_vq("gpu-speech-vq", 26342)};
     moss_fixture_precision(vq.path, precision == GGML_TYPE_BF16 ? GGML_TYPE_F16 : precision);
-    SpeechTokenizer c(vq.str(), false, 2), g(vq.str(), true, 2);
+    SpeechTokenizer c(vq.str(), {}, 2), g(vq.str(), device_request(), 2);
+    arm.require(g.backend_name());
+    require(g.fused_attention() == hexagon_arm(), "speech tokenizer attention layout");
     const auto pcm = signal(VQ_CHUNK + 37);
     require(c.encode(pcm) == g.encode(pcm), "speech tokenizer codes differ");
 }
@@ -287,7 +299,6 @@ int main(int argc, char ** argv) {
             std::printf("precision: %s\n", ggml_type_name(type));
             delay(type);
             if (sfx_loads(type)) sfx(type);
-            if (hexagon_arm()) continue;
             speech(type);
         }
         // MOSS-Speech's default LM export is BF16. Devices without native

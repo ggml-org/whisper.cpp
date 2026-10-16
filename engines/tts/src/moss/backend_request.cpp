@@ -20,6 +20,10 @@ BackendRequest backend_request(const SoundEffectOptions & options) {
     return {options.backend, options.use_gpu};
 }
 
+BackendRequest backend_request(const SpeechOptions & options) {
+    return {options.backend, options.use_gpu};
+}
+
 bool places_tables_on_host(TablePlacement placement, ggml_backend_t backend) {
     return placement == TablePlacement::Host ||
            (placement == TablePlacement::Automatic && ::tts_cpp::detail::backend_is_hexagon(backend));

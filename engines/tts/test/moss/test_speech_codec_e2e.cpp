@@ -156,7 +156,7 @@ int main(int argc, char ** argv) {
         SpeechVoice voice;
         int ratio = 0;
         {
-            SpeechCodec codec(argv[2], false, 2);
+            SpeechCodec codec(argv[2], {}, 2);
             voice = codec.default_voice();
             ratio = codec.token_mel_ratio();
         } // Release the tokenizer/CAM++ before loading the decoder.

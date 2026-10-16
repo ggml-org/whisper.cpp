@@ -2,6 +2,7 @@
 
 #include "tts-cpp/moss/engine.h"
 #include "tts-cpp/moss/sound_effect.h"
+#include "tts-cpp/moss/speech.h"
 
 #include "ggml-backend.h"
 
@@ -20,10 +21,14 @@ enum class AttentionLayout { Automatic, Unfused, Fused };
 
 inline constexpr const char * HEXAGON_TTS_WEIGHT_TIERS = "q8_0, q4_0, f16 or f32";
 inline constexpr const char * HEXAGON_SFX_WEIGHT_TIERS = "q8_0, f16 or f32";
+inline constexpr const char * HEXAGON_SPEECH_WEIGHT_TIERS = "q8_0, q4_0, f16 or f32";
+inline constexpr const char * HEXAGON_SPEECH_TOKENIZER_WEIGHT_TIERS = "q8_0, f16 or f32";
 
 BackendRequest backend_request(const EngineOptions & options);
 
 BackendRequest backend_request(const SoundEffectOptions & options);
+
+BackendRequest backend_request(const SpeechOptions & options);
 
 ggml_backend_t init_backend(const BackendRequest & request, const char * owner);
 

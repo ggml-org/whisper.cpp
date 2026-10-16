@@ -3,6 +3,7 @@
 #include "moss/speech_prompt.h"
 #include "moss/speech_codec.h"
 #include "moss/speech_tokenizer.h"
+#include "chatterbox_tts_test_hooks.h"
 
 #include <cmath>
 #include <cstdio>
@@ -178,8 +179,10 @@ void test_prefill(SpeechLM & lm, const std::filesystem::path & dir) {
            LOGIT_COSINE);
 }
 
-void test_tokenizer(const std::string & codec_path, bool use_gpu, const std::filesystem::path & codec_dir) {
-    SpeechTokenizer tokenizer(codec_path, use_gpu, PARITY_THREADS);
+void test_tokenizer(const std::string & codec_path, const BackendRequest & backend,
+                    const std::filesystem::path & codec_dir) {
+    SpeechTokenizer tokenizer(codec_path, backend, PARITY_THREADS);
+    std::printf("tokenizer backend: %s\n", tokenizer.backend_name());
     const std::vector<float> audio = read_bin<float>(codec_dir / "user_audio_16k.bin");
     const std::vector<float> mel = tokenizer.log_mel(audio.data(), audio.size());
     report("user log-mel", cosine(mel, read_bin<float>(codec_dir / "user_mel.bin")), MEL_COSINE);
@@ -189,8 +192,8 @@ void test_tokenizer(const std::string & codec_path, bool use_gpu, const std::fil
     report("user speech tokens", agreement(codes, reference), TOKEN_AGREEMENT);
 }
 
-void test_decoder(const std::string & codec_path, bool use_gpu, const std::filesystem::path & dir) {
-    SpeechCodec codec(codec_path, use_gpu, PARITY_THREADS);
+void test_decoder(const std::string & codec_path, const BackendRequest & backend, const std::filesystem::path & dir) {
+    SpeechCodec codec(codec_path, backend, PARITY_THREADS);
     const std::vector<float> feat = codec.prompt_feat(read_bin<float>(dir / "voice_audio_24k.bin"));
     const std::vector<float> reference_feat = read_bin<float>(dir / "voice_prompt_feat.bin");
     const std::vector<float> head(feat.begin(), feat.begin() + (std::ptrdiff_t) std::min(feat.size(), reference_feat.size()));
@@ -204,13 +207,22 @@ void test_decoder(const std::string & codec_path, bool use_gpu, const std::files
     voice.embedding = read_bin<float>(dir / "voice_embedding.bin");
     SpeechDecodeOptions options;
     options.noise = read_bin<float>(dir / "flow_noise.bin");
+    options.release_decoder = true;
     if (const char * dump = std::getenv("MOSS_SPEECH_DUMP_MEL")) {
         options.dump_mel_path = dump;
     }
     const std::vector<float> wav = codec.decode(read_bin<int32_t>(dir / "reply_codes.bin"), voice, options);
     const std::vector<float> reference_wav = read_bin<float>(dir / "reply_audio_24k.bin");
     std::printf("reply samples: %zu (reference %zu)\n", wav.size(), reference_wav.size());
+    check(!tts_cpp::chatterbox::test_hooks::cfm_estimator_cache_built() &&
+          !tts_cpp::chatterbox::test_hooks::encoder_graph_cache_built(),
+          "a released decoder keeps no S3Gen graph cache");
     report("reply log-mel", cosine(codec.prompt_feat(wav), codec.prompt_feat(reference_wav)), SPECTRUM_COSINE);
+}
+
+BackendRequest parity_backend() {
+    const char * name = std::getenv("MOSS_SPEECH_BACKEND");
+    return {name ? name : "", std::getenv("MOSS_SPEECH_GPU") != nullptr};
 }
 
 } // namespace
@@ -223,13 +235,13 @@ int main() {
         return SKIP;
     }
     try {
-        const bool use_gpu = std::getenv("MOSS_SPEECH_GPU") != nullptr;
+        const BackendRequest backend = parity_backend();
         const std::filesystem::path dir(reference_dir);
         if (const char * codec_path = std::getenv("MOSS_SPEECH_CODEC")) {
-            test_tokenizer(codec_path, use_gpu, dir / "codec");
-            test_decoder(codec_path, use_gpu, dir / "codec");
+            test_tokenizer(codec_path, backend, dir / "codec");
+            test_decoder(codec_path, backend, dir / "codec");
         }
-        SpeechLM lm(model_path, use_gpu, PARITY_THREADS);
+        SpeechLM lm(model_path, backend, PARITY_THREADS);
         std::printf("backend: %s\n", lm.backend_name());
         test_prefill(lm, dir / "lm");
         test_greedy(lm, dir);

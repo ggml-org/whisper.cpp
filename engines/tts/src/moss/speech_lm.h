@@ -1,5 +1,7 @@
 #pragma once
 
+#include "moss/backend_request.h"
+
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -53,15 +55,25 @@ struct SpeechLogits {
     std::vector<float> audio;
 };
 
+void check_cache_memory(uint64_t cache_bytes, uint64_t free_bytes);
+
+struct SpeechLayout {
+    TablePlacement tables = TablePlacement::Automatic;
+    AttentionLayout attention = AttentionLayout::Automatic;
+};
+
 class SpeechLM {
 public:
-    SpeechLM(const std::string & path, bool use_gpu, int n_threads);
+    SpeechLM(const std::string & path, const BackendRequest & backend, int n_threads, const SpeechLayout & layout = {});
     ~SpeechLM();
     SpeechLM(const SpeechLM &) = delete;
     SpeechLM & operator=(const SpeechLM &) = delete;
 
     const SpeechLmConfig & config() const;
     const char * backend_name() const;
+    bool runs_on_cpu() const;
+    bool tables_on_host() const;
+    bool fused_attention() const;
     std::vector<std::string> tokenizer_tokens() const;
     std::vector<std::string> tokenizer_merges() const;
     std::vector<int32_t> tokenizer_types() const;

@@ -99,9 +99,14 @@ bool valid_voice(const std::vector<float> & pcm, int rate) {
 
 } // namespace
 
+bool decoder_uses_gpu(const BackendRequest & backend) {
+    return backend.use_gpu;
+}
+
 struct SpeechCodec::Impl {
     std::string path;
-    bool use_gpu = false;
+    BackendRequest request;
+    bool decoder_gpu = false;
     int n_threads = 1;
     std::unique_ptr<SpeechTokenizer> tokenizer;
     std::vector<float> prompt_mel_filters;
@@ -136,7 +141,7 @@ struct SpeechCodec::Impl {
 
     void load() {
         read_assets();
-        tokenizer = std::make_unique<SpeechTokenizer>(path, use_gpu, n_threads);
+        tokenizer = std::make_unique<SpeechTokenizer>(path, request, n_threads);
         if (!campplus_load(path, speaker)) {
             fail("the codec GGUF carries no CAM++ speaker encoder");
         }
@@ -210,7 +215,7 @@ struct SpeechCodec::Impl {
         opts.seed = DEFAULT_SEED;
         opts.n_threads = n_threads;
         opts.sr = OUTPUT_SAMPLE_RATE;
-        opts.n_gpu_layers = use_gpu ? 1 : 0;
+        opts.n_gpu_layers = decoder_gpu ? 1 : 0;
         opts.finalize = true;
         opts.append_lookahead_silence = false;
         opts.apply_trim_fade = false;
@@ -232,8 +237,8 @@ struct SpeechCodec::Impl {
             bool acquired = false;
             ~DecoderLease() { if (acquired) ::s3gen_unload(); }
         } lease;
-        if (use_gpu) {
-            if (::s3gen_preload(path, 1) != 0) {
+        if (decoder_gpu || options.release_decoder) {
+            if (::s3gen_preload(path, decoder_gpu ? 1 : 0) != 0) {
                 fail("token-to-wave decoder load failed");
             }
             lease.acquired = true;
@@ -250,9 +255,11 @@ struct SpeechCodec::Impl {
     }
 };
 
-SpeechCodec::SpeechCodec(const std::string & codec_path, bool use_gpu, int n_threads) : impl_(new Impl) {
+SpeechCodec::SpeechCodec(const std::string & codec_path, const BackendRequest & backend, int n_threads)
+    : impl_(new Impl) {
     impl_->path = codec_path;
-    impl_->use_gpu = use_gpu;
+    impl_->request = backend;
+    impl_->decoder_gpu = decoder_uses_gpu(backend);
     impl_->n_threads = n_threads;
     impl_->load();
 }

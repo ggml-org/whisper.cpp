@@ -23,6 +23,7 @@ public:
 
     void place(ggml_context * tables, gguf_context * file, const std::string & path,
                ::tts_cpp::detail::gguf_stream_reader & reader);
+    void release();
     ggml_backend_buffer_t buffer() const;
 
 private:

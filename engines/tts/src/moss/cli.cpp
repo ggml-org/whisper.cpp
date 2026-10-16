@@ -34,7 +34,8 @@ void print_usage() {
         "       [--out reply.wav] [--voice voice.wav] [--system \"...\"] [--max-reply-seconds S]\n"
         "       [--max-new-tokens 0]   0: use remaining model context; positive: explicit reply budget\n"
         "       [--greedy] [--temperature 0.7] [--top-p 0.95] [--top-k 20]\n"
-        "       [--seed 0] [--text-reply] [--threads 4] [--gpu] [--backends-dir dir]\n");
+        "       [--seed 0] [--text-reply] [--threads 4] [--gpu] [--backend auto|cpu|hexagon|DEVICE]\n"
+        "       [--backends-dir dir]\n");
 }
 
 namespace {
@@ -83,6 +84,7 @@ void share_runtime_flags(CliArgs & args) {
     args.s2s_options.model_path = args.sound_options.model_path;
     args.s2s_options.n_threads = args.options.n_threads;
     args.s2s_options.use_gpu = args.options.use_gpu;
+    args.s2s_options.backend = args.options.backend;
     args.s2s_options.backends_dir = args.options.backends_dir;
 }
 
@@ -95,10 +97,6 @@ bool has_s2s_flags(const CliArgs & args) {
 }
 
 bool has_required_flags(const CliArgs & args) {
-    if (args.mode == Mode::SpeechToSpeech && !args.options.backend.empty()) {
-        std::fprintf(stderr, "--backend is only available in tts and sfx modes\n");
-        return false;
-    }
     if (args.mode == Mode::SpeechToSpeech) {
         return has_s2s_flags(args);
     }

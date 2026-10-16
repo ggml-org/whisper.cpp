@@ -129,10 +129,10 @@ void bench_tokenizer_segment(SpeechTokenizer & coreml, SpeechTokenizer & ggml, s
 
 void bench_tokenizer(const std::string & codec_path) {
     set_env(COREML_STRICT_ENV);
-    SpeechTokenizer coreml(codec_path, true, BENCH_THREADS);
+    SpeechTokenizer coreml(codec_path, {"", true}, BENCH_THREADS);
     clear_env(COREML_STRICT_ENV);
     set_env(COREML_DISABLE_ENV);
-    SpeechTokenizer ggml(codec_path, true, BENCH_THREADS);
+    SpeechTokenizer ggml(codec_path, {"", true}, BENCH_THREADS);
     clear_env(COREML_DISABLE_ENV);
     bench_tokenizer_segment(coreml, ggml, (size_t) coreml.config().chunk_samples, "30 s segment");
 }

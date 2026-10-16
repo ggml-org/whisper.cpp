@@ -38,13 +38,17 @@ static void write_reply(const std::filesystem::path & path,
 
 int main(int argc, char ** argv) {
     if (argc != 6) {
-        std::fprintf(stderr, "usage: %s cuda|vulkan LM.gguf CODEC.gguf INPUT.wav OUTPUT_DIR\n", argv[0]);
+        std::fprintf(stderr, "usage: %s cuda|vulkan|hexagon LM.gguf CODEC.gguf INPUT.wav OUTPUT_DIR\n", argv[0]);
         return 77;
     }
     try {
         const MossGpuArm arm = moss_gpu_arm(argv[1]);
-        setenv("TTS_CPP_GPU_BACKEND", arm.request.c_str(), 1);
         tts_cpp::moss::SpeechOptions options;
+        if (arm.request == "hexagon") {
+            options.backend = arm.request;
+        } else {
+            setenv("TTS_CPP_GPU_BACKEND", arm.request.c_str(), 1);
+        }
         options.model_path = argv[2];
         options.codec_path = argv[3];
         options.use_gpu = true;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "moss/backend_request.h"
 #include "moss/coreml_sidecar.h"
 
 #include <cstddef>
@@ -51,12 +52,15 @@ std::unique_ptr<SpeechTokenizerSidecar> open_speech_tokenizer_sidecar(const std:
 
 class SpeechTokenizer {
 public:
-    SpeechTokenizer(const std::string & codec_path, bool use_gpu, int n_threads);
+    SpeechTokenizer(const std::string & codec_path, const BackendRequest & backend, int n_threads,
+                    AttentionLayout attention = AttentionLayout::Automatic);
     ~SpeechTokenizer();
     SpeechTokenizer(const SpeechTokenizer &) = delete;
     SpeechTokenizer & operator=(const SpeechTokenizer &) = delete;
 
     const SpeechVqConfig & config() const;
+    const char * backend_name() const;
+    bool fused_attention() const;
     std::vector<float> log_mel(const float * samples, size_t count) const;
     std::vector<int32_t> encode_segment(const float * samples, size_t count);
     std::vector<int32_t> encode(const std::vector<float> & pcm_16k, const std::function<bool()> & stop = {});
