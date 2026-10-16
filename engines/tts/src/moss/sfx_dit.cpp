@@ -66,15 +66,31 @@ struct DitGraph {
                 0, ROPE_BASE, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
     }
 
-    ggml_tensor * attend(ggml_tensor * q, ggml_tensor * k, ggml_tensor * v) const {
+    float attention_scale() const {
+        return 1.0f / std::sqrt((float) head_dim());
+    }
+
+    ggml_tensor * attend_unfused(ggml_tensor * q, ggml_tensor * k, ggml_tensor * v) const {
         const int64_t queries = q->ne[2];
         q = ggml_permute(ctx(), q, 0, 2, 1, 3);
         k = ggml_permute(ctx(), k, 0, 2, 1, 3);
         ggml_tensor * values = ggml_cont(ctx(), ggml_permute(ctx(), v, 1, 2, 0, 3));
         ggml_tensor * scores = ggml_soft_max_ext(ctx(), ggml_mul_mat(ctx(), k, q), nullptr,
-                1.0f / std::sqrt((float) head_dim()), 0.0f);
+                attention_scale(), 0.0f);
         ggml_tensor * attended = ggml_permute(ctx(), ggml_mul_mat(ctx(), values, scores), 0, 2, 1, 3);
         return ggml_cont_2d(ctx(), attended, config.n_embd, queries);
+    }
+
+    ggml_tensor * attend_fused(ggml_tensor * q, ggml_tensor * k, ggml_tensor * v) const {
+        const int64_t queries = q->ne[2];
+        ggml_tensor * attended = ggml_flash_attn_ext(ctx(), ggml_permute(ctx(), q, 0, 2, 1, 3),
+                ggml_permute(ctx(), k, 0, 2, 1, 3), ggml_permute(ctx(), v, 0, 2, 1, 3), nullptr,
+                attention_scale(), 0.0f, 0.0f);
+        return ggml_reshape_2d(ctx(), attended, config.n_embd, queries);
+    }
+
+    ggml_tensor * attend(ggml_tensor * q, ggml_tensor * k, ggml_tensor * v) const {
+        return model.fused_attention() ? attend_fused(q, k, v) : attend_unfused(q, k, v);
     }
 
     ggml_tensor * self_attention(int layer, ggml_tensor * cur, ggml_tensor * positions) const {

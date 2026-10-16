@@ -59,7 +59,7 @@ struct SoundEffectEngine::Impl {
         if (!options.backends_dir.empty()) {
             ::tts_cpp::detail::set_backends_directory(options.backends_dir);
         }
-        model = std::make_unique<SfxModel>(options.model_path, options.use_gpu, options.n_threads);
+        model = std::make_unique<SfxModel>(options.model_path, detail::backend_request(options), options.n_threads);
         validate_networks();
         tokenizer = std::make_unique<SfxTokenizer>(*model);
         attach_sidecars();

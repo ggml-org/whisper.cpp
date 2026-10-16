@@ -111,7 +111,7 @@ FitResult fit_params(const SoundEffectOptions & options, const SoundEffectReques
     }
     if (!options.backends_dir.empty()) ::tts_cpp::detail::set_backends_directory(options.backends_dir);
     try {
-        detail::SfxModel model(options.model_path, options.use_gpu, options.n_threads, true);
+        detail::SfxModel model(options.model_path, detail::backend_request(options), options.n_threads, true);
         detail::validate_text_encoder(model);
         detail::validate_dit(model);
         detail::validate_vae(model);

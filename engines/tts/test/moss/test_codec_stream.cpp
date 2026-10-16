@@ -11,7 +11,7 @@
 #include <vector>
 
 using tts_cpp::moss::detail::Codec;
-using tts_cpp::moss::detail::CodecAttention;
+using tts_cpp::moss::detail::AttentionLayout;
 using tts_cpp::moss::detail::decode_after_context;
 using tts_cpp::moss::detail::decode_in_windows;
 using tts_cpp::moss::detail::decode_segments;
@@ -154,8 +154,8 @@ void test_context_is_decoded_then_trimmed(Codec & codec) {
 
 void test_fused_attention_matches_unfused(const std::filesystem::path & path) {
     Codec automatic(path.string(), {}, 1);
-    Codec unfused(path.string(), {}, 1, false, CodecAttention::Unfused);
-    Codec fused(path.string(), {}, 1, false, CodecAttention::Fused);
+    Codec unfused(path.string(), {}, 1, false, AttentionLayout::Unfused);
+    Codec fused(path.string(), {}, 1, false, AttentionLayout::Fused);
     check(!automatic.fused_attention(), "the CPU keeps unfused codec attention");
     check(!unfused.fused_attention() && fused.fused_attention(), "codec attention layouts can be forced");
     const std::vector<int32_t> codes = random_codes(LONG_FRAMES, CODE_SEED);
@@ -183,8 +183,8 @@ void test_fused_attention_encodes_like_unfused() {
         add_encoder_tensors(b);
         b.write(path);
     }
-    Codec unfused(path.string(), {}, 1, false, CodecAttention::Unfused);
-    Codec fused(path.string(), {}, 1, false, CodecAttention::Fused);
+    Codec unfused(path.string(), {}, 1, false, AttentionLayout::Unfused);
+    Codec fused(path.string(), {}, 1, false, AttentionLayout::Fused);
     const std::vector<float> pcm = sine((size_t) LONG_FRAMES * OUT_DIM);
     check(unfused.encode(pcm) == fused.encode(pcm), "fused attention encodes the same codes");
     std::filesystem::remove(path);

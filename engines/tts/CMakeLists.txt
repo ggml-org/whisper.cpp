@@ -369,6 +369,7 @@ set(TTS_CPP_LIB_SOURCES
     src/pocket/fit.cpp
     src/pocket/reference_audio.cpp
     src/moss/backend_request.cpp
+    src/moss/host_tables.cpp
     src/moss/codec.cpp
     src/moss/delay_lm.cpp
     src/moss/generation.cpp

@@ -27,7 +27,7 @@ validated on it.
 | [TTS](engines/tts/README.md) | Chatterbox Turbo/Multilingual, Supertonic 1/2/3, Parler mini/large/Indic, CosyVoice3, Audio8 | Synthesis with preset, described, or cloned voices, depending on the model; streaming support varies by API and CLI |
 | TTS | Pocket TTS | English synthesis and incremental CPU streaming; cloning requires encoder-enabled weights |
 | TTS | MOSS-TTS-v1.5 / MOSS-TTSD | Multilingual synthesis, cloning, dialogue and streaming; CPU/Metal validated; CUDA/Vulkan generated-model parity and synthesis/streaming/cancellation checks (see scoped validation in the TTS guide); explicit Hexagon NPU placement with a `q4_0` transformer; numerical reference parity pending |
-| TTS | MOSS-SoundEffect-v2, MOSS-Speech | Sound-effect generation and spoken replies respectively; metadata-only memory fit for SoundEffect; CPU/Metal generation validated; CUDA/Vulkan generated-model parity and quantized SoundEffect/Speech checkpoint smoke coverage |
+| TTS | MOSS-SoundEffect-v2, MOSS-Speech | Sound-effect generation and spoken replies respectively; metadata-only memory fit for SoundEffect; CPU/Metal generation validated; CUDA/Vulkan generated-model parity and quantized SoundEffect/Speech checkpoint smoke coverage; explicit Hexagon NPU placement for SoundEffect, with reference parity |
 | TTS | LavaSR denoiser/enhancer | Speech denoising and bandwidth extension; GPU selection includes ARM Mali for both stages |
 | [AudioGen](engines/audiogen/README.md) | ACE-Step v15 turbo/sft/base | Music generation and editing; base additionally supports lego stems |
 | AudioGen | MiniMax-Music3 | Desktop music generation on CPU or GPU, with a metadata-only [memory-fit preflight](engines/audiogen/docs/memory-fit.md); unavailable on Android/iOS |
@@ -78,7 +78,7 @@ and OpenCL on the same device.
 | Engine | Models | Guide |
 |---|---|---|
 | ASR | Parakeet CTC 0.6B (`q8_0`), MOSS-Transcribe-Diarize (`q8_0`, `f16`) | [Parakeet backends](engines/parakeet/docs/backends.md#backends-and-runtime-selection), [MOSS Hexagon](engines/parakeet/docs/moss-transcribe.md#hexagon-npu) |
-| TTS | Supertonic 3, Parler-TTS mini, CosyVoice3, Audio8, MOSS-TTS-v1.5 / MOSS-TTSD (`q4_0` transformer) | [Audio8 Hexagon](engines/tts/docs/audio8.md#hexagon-npu-snapdragon), [MOSS Hexagon](engines/tts/docs/moss.md#hexagon-npu), and the matching sections in the other model guides |
+| TTS | Supertonic 3, Parler-TTS mini, CosyVoice3, Audio8, MOSS-TTS-v1.5 / MOSS-TTSD (`q4_0` transformer), MOSS-SoundEffect-v2 (`f16` or `q8_0`) | [Audio8 Hexagon](engines/tts/docs/audio8.md#hexagon-npu-snapdragon), [MOSS Hexagon](engines/tts/docs/moss.md#hexagon-npu), [MOSS-SoundEffect Hexagon](engines/tts/docs/moss.md#hexagon-npu-generation), and the matching sections in the other model guides |
 | AudioGen | ACE-Step v15 turbo (`q8_0` DiT) | [AudioGen Hexagon](engines/audiogen/docs/backends.md#hexagon-npu) |
 
 ## Getting started

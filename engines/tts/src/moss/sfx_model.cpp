@@ -1,5 +1,6 @@
 #include "moss/sfx_model.h"
 #include "moss/fit_measure.h"
+#include "moss/host_tables.h"
 
 #include "backend_selection.h"
 #include "backend_util.h"
@@ -12,12 +13,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 
 namespace tts_cpp::moss::detail {
 namespace {
 
 constexpr const char * ARCH = "moss-sfx";
+constexpr const char * OWNER = "moss-sfx";
 constexpr int SCHED_NODES = 32768;
 constexpr int SCHED_SPLIT_INPUTS = 30;
 constexpr int SCHED_BACKEND_ID_ARRAYS = 4;
@@ -124,18 +127,27 @@ struct SfxModel::Impl {
     gguf_context * file = nullptr;
     ggml_context * metadata = nullptr;
     ggml_context * weights = nullptr;
+    ggml_context * host_weights = nullptr;
     ggml_backend_t backend = nullptr;
     ggml_backend_buffer_t weight_buffer = nullptr;
+    ggml_backend_buffer_t host_measure_buffer = nullptr;
+    HostTables host_tables{OWNER};
     ::tts_cpp::detail::sched_fallback sched;
     SfxConfig config;
+    SfxLayout layout;
     int n_threads = 1;
     const SfxGraph * allocated_graph = nullptr;
     bool measure_only = false;
+    bool table_on_host = false;
+    bool fused = false;
     uint64_t measured_weights = 0;
+    uint64_t measured_host_tables = 0;
 
     ~Impl() {
         ::tts_cpp::detail::sched_fallback_free(sched);
         if (weight_buffer) ggml_backend_buffer_free(weight_buffer);
+        if (host_measure_buffer) ggml_backend_buffer_free(host_measure_buffer);
+        if (host_weights) ggml_free(host_weights);
         if (weights) ggml_free(weights);
         if (metadata) ggml_free(metadata);
         if (file) gguf_free(file);
@@ -327,19 +339,41 @@ struct SfxModel::Impl {
         return count;
     }
 
+    ggml_context * context_for(const char * name) const {
+        return host_weights && std::strcmp(name, SFX_TOKEN_TABLE) == 0 ? host_weights : weights;
+    }
+
     void mirror_metadata_tensors() {
         for (auto * src = ggml_get_first_tensor(metadata); src; src = ggml_get_next_tensor(metadata, src)) {
-            ggml_tensor * dst = ggml_new_tensor(weights, src->type, GGML_MAX_DIMS, src->ne);
+            ggml_tensor * dst = ggml_new_tensor(context_for(ggml_get_name(src)), src->type, GGML_MAX_DIMS, src->ne);
             ggml_set_name(dst, ggml_get_name(src));
         }
     }
 
-    void duplicate_metadata_tensors() {
-        weights = ggml_init({(count_metadata_tensors() + TENSOR_SLACK) * ggml_tensor_overhead(), nullptr, true});
-        if (!weights) {
+    ggml_context * new_weight_context() const {
+        ggml_context * ctx = ggml_init({(count_metadata_tensors() + TENSOR_SLACK) * ggml_tensor_overhead(),
+                nullptr, true});
+        if (!ctx) {
             fail("weight context allocation failed");
         }
+        return ctx;
+    }
+
+    void duplicate_metadata_tensors() {
+        weights = new_weight_context();
+        if (table_on_host) {
+            host_weights = new_weight_context();
+        }
         mirror_metadata_tensors();
+    }
+
+    void require_device_weight_types() const {
+        if (!::tts_cpp::detail::backend_is_hexagon(backend)) {
+            return;
+        }
+        if (const ggml_tensor * refused = first_tensor_hexagon_cannot_run(weights)) {
+            fail(hexagon_weight_refusal(refused, HEXAGON_SFX_WEIGHT_TIERS));
+        }
     }
 
     void stream_tensors(::tts_cpp::detail::gguf_stream_reader & reader) {
@@ -351,31 +385,28 @@ struct SfxModel::Impl {
     }
 
     void upload_weights(const std::string & path) {
-        weight_buffer = ggml_backend_alloc_ctx_tensors(weights, backend);
-        if (!weight_buffer) {
-            fail("weight allocation failed");
-        }
         ::tts_cpp::detail::gguf_stream_reader reader(file, path);
         if (!reader.ok()) {
             fail("cannot reopen GGUF for streaming: " + path);
         }
+        if (host_weights) {
+            host_tables.place(host_weights, file, path, reader);
+        }
+        weight_buffer = ggml_backend_alloc_ctx_tensors_from_buft(weights,
+                ::tts_cpp::detail::weight_buffer_type(backend));
+        if (!weight_buffer) {
+            fail("weight allocation failed");
+        }
         stream_tensors(reader);
     }
 
-    void init_backend(bool use_gpu) {
-        ::tts_cpp::detail::ensure_backends_loaded();
-        if (use_gpu) {
-            backend = ::tts_cpp::detail::init_gpu_backend(1, false, "moss-sfx");
-        }
-        if (!backend) {
-            backend = ::tts_cpp::detail::init_cpu_backend();
-        }
-        if (!backend) {
-            fail("no compute backend available");
-        }
+    void select_backend(const BackendRequest & request) {
+        backend = init_backend(request, OWNER);
+        table_on_host = places_tables_on_host(layout.table, backend);
+        fused = fuses_attention(layout.attention, backend);
     }
 
-    void load(const std::string & path, bool use_gpu, int threads) {
+    void load(const std::string & path, const BackendRequest & request, int threads) {
         if (threads < 1 || threads > MAX_THREADS) {
             fail("threads must be 1.." + std::to_string(MAX_THREADS));
         }
@@ -388,8 +419,9 @@ struct SfxModel::Impl {
             fail("unsupported architecture");
         }
         read_config();
-        init_backend(use_gpu);
+        select_backend(request);
         duplicate_metadata_tensors();
+        require_device_weight_types();
         if (measure_only) {
             prepare_measurement();
         } else {
@@ -397,22 +429,41 @@ struct SfxModel::Impl {
         }
     }
 
-    void prepare_measurement() {
-        measured_weights = measure_fit_tensors(weights, backend);
-        weight_buffer = ggml_backend_buft_alloc_buffer(ggml_backend_get_default_buffer_type(backend), 0);
-        if (!weight_buffer) fail("weight measurement buffer failed");
-        ggml_backend_buffer_set_usage(weight_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-        bind_measurement_weights();
+    static ggml_backend_buffer_t measurement_buffer(ggml_backend_buffer_type_t buft) {
+        ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(buft, 0);
+        if (!buffer) fail("weight measurement buffer failed");
+        ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        return buffer;
     }
 
-    void bind_measurement_weights() {
-        for (auto * tensor = ggml_get_first_tensor(weights); tensor; tensor = ggml_get_next_tensor(weights, tensor)) {
-            tensor->buffer = weight_buffer;
+    void prepare_measurement() {
+        ggml_backend_buffer_type_t buft = ::tts_cpp::detail::weight_buffer_type(backend);
+        measured_weights = measure_fit_tensors(weights, buft);
+        weight_buffer = measurement_buffer(buft);
+        bind_measurement_weights(weights, weight_buffer);
+        if (host_weights) {
+            measured_host_tables = measure_fit_tensors(host_weights, ggml_backend_cpu_buffer_type());
+            host_measure_buffer = measurement_buffer(ggml_backend_cpu_buffer_type());
+            bind_measurement_weights(host_weights, host_measure_buffer);
         }
     }
 
+    static void bind_measurement_weights(ggml_context * ctx, ggml_backend_buffer_t buffer) {
+        for (auto * tensor = ggml_get_first_tensor(ctx); tensor; tensor = ggml_get_next_tensor(ctx, tensor)) {
+            tensor->buffer = buffer;
+        }
+    }
+
+    std::vector<ggml_backend_buffer_t> weight_buffers() const {
+        return {weight_buffer, measure_only ? host_measure_buffer : host_tables.buffer()};
+    }
+
+    bool ensure_scheduler() {
+        return ::tts_cpp::detail::sched_fallback_ensure(sched, backend, SCHED_NODES, weight_buffers());
+    }
+
     ggml_tensor * find(const std::string & name) const {
-        ggml_tensor * tensor = ggml_get_tensor(weights, name.c_str());
+        ggml_tensor * tensor = ggml_get_tensor(context_for(name.c_str()), name.c_str());
         if (tensor == nullptr) {
             fail("missing tensor: " + name);
         }
@@ -421,7 +472,7 @@ struct SfxModel::Impl {
 
     void allocate(SfxGraph & graph) {
         if (measure_only) fail("cannot allocate a metadata-only model");
-        if (!::tts_cpp::detail::sched_fallback_ensure(sched, backend, SCHED_NODES, {weight_buffer})) {
+        if (!ensure_scheduler()) {
             fail("scheduler initialization failed");
         }
         allocated_graph = nullptr;
@@ -444,15 +495,19 @@ struct SfxModel::Impl {
     }
 };
 
-SfxModel::SfxModel(const std::string & path, bool use_gpu, int n_threads, bool measure_only) : impl_(new Impl) {
+SfxModel::SfxModel(const std::string & path, const BackendRequest & backend, int n_threads, bool measure_only,
+                   const SfxLayout & layout) : impl_(new Impl) {
     impl_->measure_only = measure_only;
-    impl_->load(path, use_gpu, n_threads);
+    impl_->layout = layout;
+    impl_->load(path, backend, n_threads);
 }
 
 SfxModel::~SfxModel() = default;
 
 const SfxConfig & SfxModel::config() const { return impl_->config; }
 const char * SfxModel::backend_name() const { return ggml_backend_name(impl_->backend); }
+bool SfxModel::table_on_host() const { return impl_->table_on_host; }
+bool SfxModel::fused_attention() const { return impl_->fused; }
 ggml_tensor * SfxModel::tensor(const std::string & name) const { return impl_->find(name); }
 
 std::vector<std::string> SfxModel::tokenizer_tokens() const {
@@ -472,6 +527,10 @@ FitResult SfxModel::measure_weights() {
     result.device.weights_bytes = impl_->measured_weights;
     result.host_bytes = fitutil::sat_add(gguf_get_meta_size(impl_->file),
         fitutil::sat_add(ggml_get_mem_size(impl_->metadata), ggml_get_mem_size(impl_->weights)));
+    if (impl_->host_weights) {
+        result.host_bytes = fitutil::sat_add(result.host_bytes,
+            fitutil::sat_add(ggml_get_mem_size(impl_->host_weights), impl_->measured_host_tables));
+    }
     result.host_bytes = fitutil::sat_add(result.host_bytes, impl_->config.vae.rates.capacity() * sizeof(int));
     const uint64_t sched_nodes = uint64_t(SCHED_NODES) * (1 + SCHED_SPLIT_INPUTS * SCHED_COPY_DIRECTIONS);
     const uint64_t descriptors = uint64_t(SCHED_NODES) * SCHED_SPLIT_INPUTS * SCHED_COPY_DIRECTIONS * sizeof(ggml_tensor);
@@ -484,7 +543,7 @@ FitResult SfxModel::measure_weights() {
 SfxMemory SfxModel::measure(SfxGraph & graph) {
     if (!impl_->measure_only) fail("measurement requires a metadata-only model");
     SfxMemory result;
-    if (!::tts_cpp::detail::sched_fallback_ensure(impl_->sched, impl_->backend, SCHED_NODES, {impl_->weight_buffer})) {
+    if (!impl_->ensure_scheduler()) {
         fail("scheduler measurement initialization failed");
     }
     size_t sizes[2] = {0, 0};

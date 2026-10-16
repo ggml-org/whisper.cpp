@@ -186,7 +186,7 @@ void bench_vae(SfxModel & model, const std::string & model_path) {
 }
 
 void bench_sound_effect(const std::string & model_path) {
-    SfxModel model(model_path, true, BENCH_THREADS);
+    SfxModel model(model_path, {"", true}, BENCH_THREADS);
     bench_dit(model, model_path);
     bench_vae(model, model_path);
 }

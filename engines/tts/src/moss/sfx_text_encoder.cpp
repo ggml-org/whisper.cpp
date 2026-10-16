@@ -45,14 +45,35 @@ struct TextGraph {
         ggml_tensor * v = heads(ggml_mul_mat(ctx(), weight(layer, "attn_v.weight"), cur), config.n_kv_heads, tokens);
         q = rope(rms_norm(q, weight(layer, "attn_q_norm.weight")), positions);
         k = rope(rms_norm(k, weight(layer, "attn_k_norm.weight")), positions);
+        ggml_tensor * attended = model.fused_attention() ? attend_fused(q, k, v, mask)
+                                                         : attend_unfused(q, k, v, mask);
+        return ggml_mul_mat(ctx(), weight(layer, "attn_output.weight"), attended);
+    }
+
+    float attention_scale() const {
+        return 1.0f / std::sqrt((float) config.head_dim);
+    }
+
+    int64_t query_width() const {
+        return (int64_t) config.head_dim * config.n_heads;
+    }
+
+    ggml_tensor * attend_unfused(ggml_tensor * q, ggml_tensor * k, ggml_tensor * v, ggml_tensor * mask) const {
+        const int64_t tokens = q->ne[2];
         q = ggml_permute(ctx(), q, 0, 2, 1, 3);
         k = ggml_permute(ctx(), k, 0, 2, 1, 3);
         ggml_tensor * values = ggml_cont(ctx(), ggml_permute(ctx(), v, 1, 2, 0, 3));
-        ggml_tensor * scores = ggml_soft_max_ext(ctx(), ggml_mul_mat(ctx(), k, q), mask,
-                1.0f / std::sqrt((float) config.head_dim), 0.0f);
+        ggml_tensor * scores = ggml_soft_max_ext(ctx(), ggml_mul_mat(ctx(), k, q), mask, attention_scale(), 0.0f);
         ggml_tensor * attended = ggml_permute(ctx(), ggml_mul_mat(ctx(), values, scores), 0, 2, 1, 3);
-        attended = ggml_cont_2d(ctx(), attended, (int64_t) config.head_dim * config.n_heads, tokens);
-        return ggml_mul_mat(ctx(), weight(layer, "attn_output.weight"), attended);
+        return ggml_cont_2d(ctx(), attended, query_width(), tokens);
+    }
+
+    ggml_tensor * attend_fused(ggml_tensor * q, ggml_tensor * k, ggml_tensor * v, ggml_tensor * mask) const {
+        const int64_t tokens = q->ne[2];
+        ggml_tensor * attended = ggml_flash_attn_ext(ctx(), ggml_permute(ctx(), q, 0, 2, 1, 3),
+                ggml_permute(ctx(), k, 0, 2, 1, 3), ggml_permute(ctx(), v, 0, 2, 1, 3), mask,
+                attention_scale(), 0.0f, 0.0f);
+        return ggml_reshape_2d(ctx(), attended, query_width(), tokens);
     }
 
     ggml_tensor * scaled_down_projection(ggml_tensor * down, ggml_tensor * hidden) const {
@@ -136,7 +157,7 @@ void validate_ids(const SfxModel & model, const std::vector<int32_t> & ids) {
     if ((int) ids.size() > config.max_tokens) {
         throw std::runtime_error("moss sfx: prompt exceeds the text encoder context");
     }
-    require_ids_in_vocabulary(ids, model.tensor("text.token_embd.weight")->ne[1]);
+    require_ids_in_vocabulary(ids, model.tensor(SFX_TOKEN_TABLE)->ne[1]);
 }
 
 struct TextInputs {
@@ -152,8 +173,9 @@ TextInputs build_text_graph(SfxModel & model, SfxGraph & graph, int64_t tokens) 
     ggml_tensor * input_ids = graph.input_i32(tokens);
     ggml_tensor * positions = graph.input_i32(tokens);
     ggml_tensor * mask = graph.input_f32(tokens, tokens);
-    ggml_tensor * cur = ggml_get_rows(graph.ctx(), model.tensor("text.token_embd.weight"), input_ids);
-    cur = builder.blocks(cur, tokens, positions, mask);
+    ggml_tensor * attention_mask = model.fused_attention() ? ggml_cast(graph.ctx(), mask, GGML_TYPE_F16) : mask;
+    ggml_tensor * cur = ggml_get_rows(graph.ctx(), model.tensor(SFX_TOKEN_TABLE), input_ids);
+    cur = builder.blocks(cur, tokens, positions, attention_mask);
     cur = builder.rms_norm(cur, model.tensor("text.output_norm.weight"));
     ggml_set_output(cur);
     ggml_build_forward_expand(graph.graph(), cur);
@@ -165,7 +187,7 @@ TextInputs build_text_graph(SfxModel & model, SfxGraph & graph, int64_t tokens) 
 
 void validate_text_encoder(const SfxModel & model) {
     const SfxTextConfig & config = model.config().text;
-    const ggml_tensor * embedding = model.tensor("text.token_embd.weight");
+    const ggml_tensor * embedding = model.tensor(SFX_TOKEN_TABLE);
     require_matrix(embedding, config.n_embd, embedding->ne[1]);
     require_vector(model.tensor("text.output_norm.weight"), config.n_embd, 1);
     validate_text_layers(model, config);

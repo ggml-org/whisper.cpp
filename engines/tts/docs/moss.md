@@ -530,11 +530,12 @@ DAC decoder turns the 128-channel latent (50 frames per second) into 48 kHz
 mono audio. It is not a speech model; it shares the MOSS CLI and the Qwen
 tokenizer with the Delay engine and nothing else.
 
-**Status — CPU and Metal, validated against the reference pipeline.** With
+**Status — CPU, Metal and the [Hexagon NPU](#hexagon-npu-generation),
+validated against the reference pipeline.** With
 the same noise, every stage matches the PyTorch fp32 pipeline: the text
 encoder, one DiT velocity for the prompt and for the empty negative prompt,
 an eight-step guided sampling loop, and the VAE decode. An f16 GGUF reaches
-cosine similarity 0.99998 or better on both backends; a q8_0 GGUF reaches
+cosine similarity 0.99998 or better on all three backends; a q8_0 GGUF reaches
 0.9995 per stage and 0.9987 after the eight sampling steps. The CPU path is
 correct but slow (about ten seconds per DiT pass on an M1 Ultra, so a
 100-step clip takes over half an hour); use `--gpu` where one is available.
@@ -573,13 +574,15 @@ this mode) override them. `--seconds` must be in (0, 30] and is rounded to
 0.1 s the way Python's `round` does. There is no streaming in this mode. On an M1 Ultra a
 100-step clip takes about two minutes on Metal whatever its length, because
 the model always denoises the full 30-second latent and crops the result.
+`--backend hexagon` runs it on a Snapdragon NPU instead of `--gpu`; see
+[Hexagon NPU generation](#hexagon-npu-generation).
 
 ### Engine notes
 
 The public API is `tts_cpp::moss::SoundEffectEngine` in
 [`include/tts-cpp/moss/sound_effect.h`](../include/tts-cpp/moss/sound_effect.h):
 construct with `SoundEffectOptions` (model path, threads, `use_gpu`,
-`backends_dir`), call `generate(request, progress)` for a `SoundEffectResult`
+`backends_dir`, `backend`), call `generate(request, progress)` for a `SoundEffectResult`
 (mono PCM, sample rate, text, diffusion, and decode wall times), and
 `cancel()` from another thread or `false` from the progress callback to stop
 a run. A request leaves `steps`, `guidance`, and `shift` at zero to use the
@@ -686,6 +689,64 @@ M4, `all` moved part of the VAE to the Neural Engine and made it slower, and
 128-frame VAE window, which keeps only 64 frames per call, ran at 0.98x on the
 M4 and 1.05x on the M3 Ultra.
 
+### Hexagon NPU generation
+
+MOSS-SoundEffect-v2 runs on the Snapdragon Hexagon NPU (HTP0; measured on a
+Galaxy S25, Snapdragon 8 Elite, Hexagon v79) when requested explicitly:
+`SoundEffectOptions::backend = "hexagon"` or `moss-cli --mode sfx --backend
+hexagon`. As for MOSS-TTS there is no fallback: construction fails when HTP0
+is missing, and `--gpu` never selects it. The text encoder, the DiT and the
+VAE decoder all run on the NPU. Only the 151,936-row token table stays on the
+host, mapped from the GGUF (read into memory when the file cannot be mapped
+or the table is not 32-byte aligned), and the host gathers the prompt's rows
+from it. The loader takes `f32`, `f16`,
+`bf16` and `q8_0` linear weights; HTP runs all of them but `bf16`, which is
+refused at load, so both validated GGUFs run.
+
+It needs a `qvac-ext-ggml@speech` build with the Hexagon backend at `d85713da`
+or later, which carries the DSP buffer remapping fix
+([tetherto/qvac-ext-ggml#124](https://github.com/tetherto/qvac-ext-ggml/pull/124));
+the numbers below were measured at that commit. Without it the first DiT pass maps more 1 GiB weight
+buffers than the DSP's address space or its 16 mapping slots can hold, the
+DSP aborts and the request never returns; on the S25 the fault rebooted the
+phone.
+
+Attention runs as one `FLASH_ATTN_EXT`: the DiT's self-attention over the 1500
+latent frames and its cross-attention to the 512-row text context, and the
+text encoder's causal attention with an F16 mask. Unfused, one DiT pass took
+29.7 s on the NPU; fused, 0.89 s, with the same velocity.
+
+Against the PyTorch dumps (`test-moss-sfx-parity` with
+`MOSS_SFX_BACKEND=hexagon`), cosine similarity per stage:
+
+| GGUF | Text encoder | DiT, prompt / empty | VAE decode | Eight guided steps |
+|---|--:|--:|--:|--:|
+| `f16` | 0.999999 | 1.000000 / 1.000000 | 0.999994 | 0.999998 |
+| `q8_0` | 0.999687 | 0.999698 / 0.999656 | 0.999994 | 0.999645 |
+
+Speed on the Galaxy S25 (seed 7, 6 CPU threads, each run started at thermal
+status 0; "glass" and "rain" are the prompts of the parity dumps and of
+[Run](#run-1)):
+
+| Request | GGUF | Backend | Steps | Diffusion | VAE decode |
+|---|---|---|--:|--:|--:|
+| glass, 5 s | `f16` | Hexagon | 2 | 3.6 s | 1.3 s |
+| same | `q8_0` | Hexagon | 2 | 3.2 s | 1.1 s |
+| same | `f16` | CPU | 2 | 163.4 s | 9.6 s |
+| same | `q8_0` | CPU | 2 | 122.0 s | 7.6 s |
+| glass, 5 s | `f16` | Hexagon | 100 | 367.6 s | 2.4 s |
+| rain, 10 s | `f16` | Hexagon | 100 | 316.8 s | 4.9 s |
+| same | `q8_0` | Hexagon | 100 | 326.9 s | 4.8 s |
+| rain, 30 s | `f16` | Hexagon | 100 | 372.7 s | 14.7 s |
+
+A guided step runs the DiT twice over the full 30-second latent, so the
+diffusion cost does not depend on the requested length. From a cool start a
+pass costs 0.89 s (`f16`) or 0.79 s (`q8_0`) on the NPU against 41 s and 31 s
+on the CPU; over a 100-step clip the NPU throttles to 1.6-1.9 s per pass, so a
+default clip takes five to six minutes, where the CPU would need over two
+hours. Text encoding takes about 0.1 s. The `f16` GGUF (6.4 GB, 5.8 GB of it
+on the NPU) runs on the 12 GB phone.
+
 ### Test
 
 `test-moss-sfx` builds a tiny random-weight GGUF in-test and needs no
@@ -702,13 +763,20 @@ checks the tensor census, the folded weight norm, the f16 and q8_0 paths, and
 the `.pth` VAE checkpoint (when torch is installed). `test-moss-sfx-parity` is the reference check: it
 skips unless `MOSS_SFX_MODEL` points at a converted GGUF and
 `MOSS_SFX_REFERENCE_DIR` at stage dumps from the PyTorch pipeline
-(`MOSS_SFX_GPU=1` runs it on the GPU). The dumps come from
+(`MOSS_SFX_GPU=1` runs it on the GPU, `MOSS_SFX_BACKEND=hexagon` on the NPU). The dumps come from
 `scripts/dump-moss-sfx-reference.py <checkpoint> <out_dir> --upstream
 <MOSS-TTS checkout>`, whose defaults are the prompt, duration, and step count
 the test expects. `test-moss-sfx` also covers the sidecar routing without
 Core ML: the fixed VAE window plan, sidecar and fallback decodes, retiring a
 failed DiT or VAE sidecar, strict mode, the default compute units, and the
-per-request backend report.
+per-request backend report. `test-moss-hexagon-layout` forces the Hexagon
+layout onto the CPU at f32, f16 and q8_0: the host token table gives the same
+text context as the device table, and fused attention in the text encoder and
+in the DiT's self- and cross-attention matches the unfused graphs; it also
+checks that a host table leaves the device weights and is priced as host
+memory. On a phone, `test-moss-hexagon` runs the text encoder, the DiT and the
+VAE on HTP0 against the CPU at f32, f16 and q8_0, checks that bf16 weights are
+refused, and projects the fit against host memory.
 `test-moss-sfx-coreml-exporter` (Python; skips without numpy or torch) checks
 the exporter's DiT and VAE rebuilds against independent NumPy references on
 tiny random weights, including the reordered rotary pairs, the stride-phase

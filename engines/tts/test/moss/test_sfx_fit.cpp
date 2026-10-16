@@ -108,6 +108,18 @@ void test_errors() {
     check(moss::fit_params(missing, request(), 0).reason == "model-unreadable", "missing model is an error outcome");
 }
 
+void test_explicit_backend() {
+    Model model;
+    auto options = model.options();
+    options.backend = "cpu";
+    const auto cpu = moss::fit_params(options, request(), 0);
+    check(cpu.status == FitStatus::Success && cpu.device_is_cpu, "an explicit cpu backend projects on the CPU");
+    options.backend = "no-such-device";
+    const auto missing = moss::fit_params(options, request(), 0);
+    check(missing.status == FitStatus::Error && missing.reason == "no-backend-device",
+          "an unavailable explicit backend reports no-backend-device");
+}
+
 void test_generation_after_fit() {
     Model model;
     check(moss::fit_params(model.options(), request(), 0).status == FitStatus::Success, "fit before synthesis");
@@ -137,6 +149,7 @@ int main() {
     test_weightless();
     test_workloads();
     test_errors();
+    test_explicit_backend();
     test_generation_after_fit();
     test_real_model();
     if (!failures) std::puts("MOSS sound-effect fit tests passed");

@@ -18,7 +18,9 @@ share another.
 Pocket TTS runs on CPU; cloning requires encoder-enabled weights. MOSS Delay
 and MOSS-TTSD are validated end to end on CPU/Metal and on the
 [Snapdragon Hexagon NPU](docs/moss.md#hexagon-npu), with numerical reference
-parity pending. MOSS-SoundEffect and MOSS-Speech have CPU/Metal stage validation;
+parity pending. MOSS-SoundEffect and MOSS-Speech have CPU/Metal stage validation,
+and MOSS-SoundEffect also matches the reference pipeline on the
+[Hexagon NPU](docs/moss.md#hexagon-npu-generation);
 CUDA and Vulkan add generated-model CPU parity and full-checkpoint smoke coverage.
 TTS streaming, cancellation/reuse and ASR intelligibility gates are described
 in [MOSS GPU validation](docs/moss.md#gpu-validation-cuda-and-vulkan); smoke coverage does
@@ -60,8 +62,8 @@ known upstream limitations; see the linked MOSS guide for details.
 LavaSR denoiser and enhancer GPU selection includes ARM Mali/Immortalis
 through Vulkan when GPU execution is requested.
 
-Supertonic 3, Parler-TTS mini, CosyVoice3, Audio8 and MOSS-TTS-v1.5 /
-MOSS-TTSD also support explicit Hexagon placement on Snapdragon; see their
+Supertonic 3, Parler-TTS mini, CosyVoice3, Audio8, MOSS-TTS-v1.5 /
+MOSS-TTSD and MOSS-SoundEffect-v2 also support explicit Hexagon placement on Snapdragon; see their
 model guides for setup and validated tiers. Audio8's corrected baseline uses `q8_0` quantisation with
 `--greedy` sampling under `--backend hexagon`; see
 [Audio8](docs/audio8.md#hexagon-npu-snapdragon) for the full-compute tuning

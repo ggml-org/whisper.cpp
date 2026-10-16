@@ -131,8 +131,9 @@ int main() {
         return SKIP;
     }
     try {
+        const char * backend = std::getenv("MOSS_SFX_BACKEND");
         const bool use_gpu = std::getenv("MOSS_SFX_GPU") != nullptr;
-        SfxModel model(model_path, use_gpu, PARITY_THREADS);
+        SfxModel model(model_path, {backend ? backend : "", use_gpu}, PARITY_THREADS);
         std::printf("backend: %s\n", model.backend_name());
         const std::filesystem::path dir(reference_dir);
         test_tokenizer(model, dir);

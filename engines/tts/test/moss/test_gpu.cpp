@@ -11,6 +11,7 @@
 #include "moss/speech_lm.h"
 #include "moss/speech_tokenizer.h"
 #include "tts-cpp/moss/fit.h"
+#include "tts-cpp/moss/sound_effect_fit.h"
 #include "ggml-backend.h"
 
 #include <algorithm>
@@ -50,6 +51,10 @@ std::vector<ggml_type> precisions() {
     std::vector<ggml_type> types{GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0};
     if (hexagon_arm()) types.push_back(GGML_TYPE_Q4_0);
     return types;
+}
+
+bool sfx_loads(ggml_type precision) {
+    return precision != GGML_TYPE_Q4_0;
 }
 
 void compare(const char * stage, const std::vector<float> & cpu, const std::vector<float> & gpu) {
@@ -92,12 +97,17 @@ std::vector<float> slot_values(const DelayLogits & logits) {
 }
 
 template <typename Load>
-void require_hexagon_refusal(const char * stage, Load load) {
+void require_hexagon_refusal(const char * stage, Load load, const char * unoffered_tier = nullptr) {
     try {
         load();
     } catch (const std::runtime_error & e) {
-        require(std::string(e.what()).find("Hexagon cannot run") != std::string::npos,
-                std::string(stage) + ": wrong refusal: " + e.what());
+        const std::string message = e.what();
+        require(message.find("Hexagon cannot run") != std::string::npos,
+                std::string(stage) + ": wrong refusal: " + message);
+        if (unoffered_tier) {
+            require(message.find(unoffered_tier) == std::string::npos,
+                    std::string(stage) + ": refusal offers " + unoffered_tier + ": " + message);
+        }
         return;
     }
     throw std::runtime_error(std::string(stage) + ": Hexagon accepted bf16 weights");
@@ -119,6 +129,23 @@ void hexagon_refuses_bf16() {
     Fixture decoder{write_decoder("gpu-codec-bf16", N_VQ, 3 * D_MODEL, [](gguf_context *) {}, &rng)};
     moss_fixture_precision(decoder.path, GGML_TYPE_BF16);
     require_hexagon_refusal("codec bf16", [&] { Codec codec(decoder.str(), device_request(), 2); });
+    Fixture sfx_file{moss_sfx_fixtures::write_sfx_model("gpu-sfx-bf16", 26342)};
+    moss_fixture_precision(sfx_file.path, GGML_TYPE_BF16);
+    require_hexagon_refusal("sfx bf16", [&] { SfxModel model(sfx_file.str(), device_request(), 2); },
+                            ggml_type_name(GGML_TYPE_Q4_0));
+}
+
+void fit_sfx_on_host_memory(const std::string & model) {
+    tts_cpp::moss::SoundEffectOptions options;
+    options.model_path = model;
+    options.backend = arm.request;
+    tts_cpp::moss::SoundEffectRequest request;
+    request.prompt = "rain";
+    request.seconds = moss_sfx_fixtures::MAX_SECONDS;
+    const tts_cpp::FitResult fit = tts_cpp::moss::fit_params(options, request, 0);
+    arm.require(fit.device_name.c_str());
+    require(fit.device_shares_host_memory && fit.device_free_bytes > 0 && fit.fits,
+            "Hexagon sfx fit projects against host memory: " + fit.reason);
 }
 
 void delay(ggml_type precision) {
@@ -189,8 +216,10 @@ void delay(ggml_type precision) {
 void sfx(ggml_type precision) {
     Fixture file{moss_sfx_fixtures::write_sfx_model("gpu-sfx", 26342)};
     moss_fixture_precision(file.path, precision);
-    SfxModel cpu(file.str(), false, 2), gpu(file.str(), true, 2);
+    SfxModel cpu(file.str(), {}, 2), gpu(file.str(), device_request(), 2);
     arm.require(gpu.backend_name());
+    require(gpu.table_on_host() == hexagon_arm(), "sfx table placement");
+    require(gpu.fused_attention() == hexagon_arm(), "sfx attention layout");
     const auto context = encode_text(cpu, {1, 8, 9, 2});
     compare("sfx text", context, encode_text(gpu, {1, 8, 9, 2}));
     const int frames = 17;
@@ -205,6 +234,7 @@ void sfx(ggml_type precision) {
             decode_latents(gpu, latents, frames, frames, 8, {}));
     // Reuse the scheduler after switching from diffusion to the VAE.
     compare("sfx text reload", context, encode_text(gpu, {1, 8, 9, 2}));
+    if (hexagon_arm()) fit_sfx_on_host_memory(file.str());
 }
 
 void speech(ggml_type precision) {
@@ -256,8 +286,8 @@ int main(int argc, char ** argv) {
         for (ggml_type type : precisions()) {
             std::printf("precision: %s\n", ggml_type_name(type));
             delay(type);
+            if (sfx_loads(type)) sfx(type);
             if (hexagon_arm()) continue;
-            sfx(type);
             speech(type);
         }
         // MOSS-Speech's default LM export is BF16. Devices without native

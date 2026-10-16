@@ -1,5 +1,6 @@
 #pragma once
 
+#include "moss/backend_request.h"
 #include "tts-cpp/fit.h"
 
 #include <cstdint>
@@ -12,6 +13,8 @@ struct ggml_cgraph;
 struct ggml_tensor;
 
 namespace tts_cpp::moss::detail {
+
+inline constexpr const char * SFX_TOKEN_TABLE = "text.token_embd.weight";
 
 struct SfxTextConfig {
     int n_layers   = 0;
@@ -61,6 +64,11 @@ void require_shape(const ggml_tensor * tensor, int64_t ne0, int64_t ne1, int64_t
 void require_matrix(const ggml_tensor * tensor, int64_t ne0, int64_t ne1);
 void require_vector(const ggml_tensor * tensor, int64_t ne0, int64_t ne1);
 
+struct SfxLayout {
+    TablePlacement table = TablePlacement::Automatic;
+    AttentionLayout attention = AttentionLayout::Automatic;
+};
+
 struct SfxMemory {
     uint64_t device_bytes = 0;
     uint64_t host_compute_bytes = 0;
@@ -86,13 +94,16 @@ private:
 
 class SfxModel {
 public:
-    SfxModel(const std::string & path, bool use_gpu, int n_threads, bool measure_only = false);
+    SfxModel(const std::string & path, const BackendRequest & backend, int n_threads, bool measure_only = false,
+             const SfxLayout & layout = {});
     ~SfxModel();
     SfxModel(const SfxModel &) = delete;
     SfxModel & operator=(const SfxModel &) = delete;
 
     const SfxConfig & config() const;
     const char * backend_name() const;
+    bool table_on_host() const;
+    bool fused_attention() const;
     ggml_tensor * tensor(const std::string & name) const;
     std::vector<std::string> tokenizer_tokens() const;
     std::vector<std::string> tokenizer_merges() const;

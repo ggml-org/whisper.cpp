@@ -43,13 +43,9 @@ struct DelayLogits {
 
 enum class TextLogits { None, Slots, Full };
 
-enum class TablePlacement { Automatic, Device, Host };
-
-enum class DelayAttention { Automatic, Unfused, Fused };
-
 struct DelayLayout {
     TablePlacement tables = TablePlacement::Automatic;
-    DelayAttention attention = DelayAttention::Automatic;
+    AttentionLayout attention = AttentionLayout::Automatic;
 };
 
 class DelayLM {

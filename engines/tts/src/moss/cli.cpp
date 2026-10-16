@@ -27,7 +27,8 @@ void print_usage() {
         "       [--audio-temperature 1.7] [--audio-top-p 0.8] [--audio-top-k 25]\n"
         "       [--audio-repetition-penalty 1.0]\n"
         "       moss-cli --mode sfx --model sfx.gguf --text \"rain on a tin roof\" --out out.wav\n"
-        "       [--seconds 10] [--negative-prompt \"...\"] [--seed 0] [--threads 4] [--gpu] [--backends-dir dir]\n"
+        "       [--seconds 10] [--negative-prompt \"...\"] [--seed 0] [--threads 4] [--gpu]\n"
+        "       [--backend auto|cpu|hexagon|DEVICE] [--backends-dir dir]\n"
         "       [--steps N] [--guidance G] [--shift S]   defaults come from the model file\n"
         "       moss-cli --mode s2s --model moss-speech.gguf --codec moss-speech-codec.gguf --audio question.wav\n"
         "       [--out reply.wav] [--voice voice.wav] [--system \"...\"] [--max-reply-seconds S]\n"
@@ -76,6 +77,7 @@ bool parse_mode(const std::string & value, Mode & mode) {
 void share_runtime_flags(CliArgs & args) {
     args.sound_options.n_threads = args.options.n_threads;
     args.sound_options.use_gpu = args.options.use_gpu;
+    args.sound_options.backend = args.options.backend;
     args.sound_options.backends_dir = args.options.backends_dir;
     args.sound_request.prompt = args.text;
     args.s2s_options.model_path = args.sound_options.model_path;
@@ -93,8 +95,8 @@ bool has_s2s_flags(const CliArgs & args) {
 }
 
 bool has_required_flags(const CliArgs & args) {
-    if (args.mode != Mode::Speech && !args.options.backend.empty()) {
-        std::fprintf(stderr, "--backend is only available in tts mode\n");
+    if (args.mode == Mode::SpeechToSpeech && !args.options.backend.empty()) {
+        std::fprintf(stderr, "--backend is only available in tts and sfx modes\n");
         return false;
     }
     if (args.mode == Mode::SpeechToSpeech) {

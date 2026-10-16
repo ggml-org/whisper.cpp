@@ -2,10 +2,10 @@
 
 #include "backend_selection.h"
 #include "backend_util.h"
-#include "cosyvoice_mmap.h"
 #include "gguf_stream.h"
 #include "sched_dispatch.h"
 #include "moss/fit_measure.h"
+#include "moss/host_tables.h"
 
 #include "ggml.h"
 #include "ggml-backend.h"
@@ -36,7 +36,6 @@ constexpr const char * AUDIO_TABLE_PREFIX = "token_embd_audio.";
 constexpr const char * TEXT_HEAD = "output.weight";
 constexpr const char * SLOT_HEAD = "output_slots.weight";
 constexpr const char * OWNER = "moss-delay";
-constexpr size_t HOST_TENSOR_ALIGNMENT = 32;
 constexpr size_t SPARE_TENSORS = 8;
 
 [[noreturn]] void fail(const std::string & message) {
@@ -91,8 +90,7 @@ struct DelayLM::Impl {
     ggml_backend_buffer_t weight_buffer = nullptr;
     ggml_backend_buffer_t state_buffer = nullptr;
     ggml_context * host_weights = nullptr;
-    ggml_backend_buffer_t host_buffer = nullptr;
-    ::tts_cpp::cosyvoice::MappedFile mapping;
+    HostTables host_tables{OWNER};
     ::tts_cpp::detail::sched_fallback sched;
 
     DelayConfig config;
@@ -126,8 +124,6 @@ struct DelayLM::Impl {
         if (graph_ctx) ggml_free(graph_ctx);
         if (state_buffer) ggml_backend_buffer_free(state_buffer);
         if (weight_buffer) ggml_backend_buffer_free(weight_buffer);
-        if (host_buffer) ggml_backend_buffer_free(host_buffer);
-        ::tts_cpp::cosyvoice::mapped_file_close(mapping);
         if (state) ggml_free(state);
         if (host_weights) ggml_free(host_weights);
         if (weights) ggml_free(weights);
@@ -415,7 +411,7 @@ struct DelayLM::Impl {
             return;
         }
         if (const ggml_tensor * refused = first_tensor_hexagon_cannot_run(weights)) {
-            fail(hexagon_weight_refusal(refused));
+            fail(hexagon_weight_refusal(refused, HEXAGON_TTS_WEIGHT_TIERS));
         }
     }
 
@@ -425,64 +421,6 @@ struct DelayLM::Impl {
                 fail(std::string("failed to load tensor: ") + ggml_get_name(dst));
             }
         }
-    }
-
-    const uint8_t * mapped_address(const ggml_tensor * tensor) const {
-        const int64_t id = gguf_find_tensor(file, ggml_get_name(tensor));
-        if (id < 0) {
-            return nullptr;
-        }
-        const size_t offset = gguf_get_data_offset(file) + gguf_get_tensor_offset(file, id);
-        if (offset > mapping.size || ggml_nbytes(tensor) > mapping.size - offset) {
-            return nullptr;
-        }
-        const uint8_t * address = mapping.data + offset;
-        return (uintptr_t) address % HOST_TENSOR_ALIGNMENT == 0 ? address : nullptr;
-    }
-
-    bool host_tables_mappable() const {
-        for (auto * t = ggml_get_first_tensor(host_weights); t; t = ggml_get_next_tensor(host_weights, t)) {
-            if (!mapped_address(t)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    void bind_host_tables() {
-        for (auto * t = ggml_get_first_tensor(host_weights); t; t = ggml_get_next_tensor(host_weights, t)) {
-            if (ggml_backend_tensor_alloc(host_buffer, t, (void *) mapped_address(t)) != GGML_STATUS_SUCCESS) {
-                fail(std::string("cannot map tensor: ") + ggml_get_name(t));
-            }
-        }
-    }
-
-    bool map_host_tables(const std::string & path) {
-        if (!::tts_cpp::cosyvoice::mapped_file_open(mapping, path, OWNER)) {
-            return false;
-        }
-        if (host_tables_mappable()) {
-            host_buffer = ggml_backend_cpu_buffer_from_ptr((void *) mapping.data, mapping.size);
-        }
-        if (!host_buffer) {
-            ::tts_cpp::cosyvoice::mapped_file_close(mapping);
-            return false;
-        }
-        bind_host_tables();
-        return true;
-    }
-
-    void place_host_tables(const std::string & path, ::tts_cpp::detail::gguf_stream_reader & reader) {
-        if (map_host_tables(path)) {
-            return;
-        }
-        ggml_backend_dev_t cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-        host_buffer = cpu ? ggml_backend_alloc_ctx_tensors_from_buft(host_weights, ggml_backend_dev_buffer_type(cpu))
-                          : nullptr;
-        if (!host_buffer) {
-            fail("host table allocation failed");
-        }
-        stream_tensors(reader, host_weights);
     }
 
     void read_head_row(int32_t id, float * out) const {
@@ -517,7 +455,7 @@ struct DelayLM::Impl {
             fail("cannot reopen GGUF for streaming: " + path);
         }
         if (host_weights) {
-            place_host_tables(path, reader);
+            host_tables.place(host_weights, file, path, reader);
         }
         weight_buffer = ggml_backend_alloc_ctx_tensors_from_buft(weights,
                 ::tts_cpp::detail::weight_buffer_type(backend));
@@ -532,11 +470,8 @@ struct DelayLM::Impl {
 
     void select_backend(const BackendRequest & request) {
         backend = ::tts_cpp::moss::detail::init_backend(request, OWNER);
-        const bool hexagon = ::tts_cpp::detail::backend_is_hexagon(backend);
-        tables_on_host = layout.tables == TablePlacement::Host ||
-                (layout.tables == TablePlacement::Automatic && hexagon);
-        fused = layout.attention == DelayAttention::Fused ||
-                (layout.attention == DelayAttention::Automatic && hexagon);
+        tables_on_host = places_tables_on_host(layout.tables, backend);
+        fused = fuses_attention(layout.attention, backend);
     }
 
     void load(const std::string & path, const BackendRequest & request, int threads, int context) {
@@ -844,7 +779,8 @@ struct DelayLM::Impl {
             graph_price = measure_fit_graph(backend, graph, GRAPH_NODES);
             return {};
         }
-        if (!::tts_cpp::detail::sched_fallback_ensure(sched, backend, GRAPH_NODES, {weight_buffer, host_buffer})) {
+        if (!::tts_cpp::detail::sched_fallback_ensure(sched, backend, GRAPH_NODES,
+                {weight_buffer, host_tables.buffer()})) {
             fail("scheduler initialization failed");
         }
         if (!::tts_cpp::detail::sched_fallback_alloc(sched, graph)) {

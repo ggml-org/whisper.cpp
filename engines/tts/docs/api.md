@@ -44,7 +44,7 @@ load their model once and reuse it across synthesis calls:
 | `tts_cpp::audio8` | `Engine::synthesize` | 44.1 kHz PCM, optionally cloned from `VoicePrompt`; `Engine::codec_on_coreml()` reports whether the Core ML codec sidecar is attached (false once a failed call retires it) and `SynthesisResult::codec_synthesis_backend` where each call's codec synthesis ran (`"ggml"` or a `coreml-*` label), see the [Audio8 guide](audio8.md#core-ml-codec-sidecar) |
 | `tts_cpp::pocket` | `Engine::synthesize` / `synthesize_stream` | CPU FlowLM/Mimi, 24 kHz by default; prepared voice or encoder-enabled cloning |
 | `tts_cpp::moss` | `Engine::synthesize` / `synthesize_stream` | MOSS Delay / TTSD synthesis, cloning and dialogue; `EngineOptions::backend = "hexagon"` runs it on the [Snapdragon NPU](moss.md#hexagon-npu); `Engine::codec_on_coreml()` reports whether the [Core ML codec sidecar](moss.md#core-ml-codec-decoder) is attached and `SynthesisResult::codec_backend` where the request decoded (`"ggml"`, a `coreml-*` label, or `"mixed"`) |
-| `tts_cpp::moss` | `SoundEffectEngine::generate` | 48 kHz sound-effect PCM; `dit_on_coreml()` / `vae_on_coreml()` and `SoundEffectResult::dit_backend` / `vae_backend` report the [Core ML sidecars](moss.md#core-ml-dit-and-vae) |
+| `tts_cpp::moss` | `SoundEffectEngine::generate` | 48 kHz sound-effect PCM; `SoundEffectOptions::backend = "hexagon"` runs it on the [Snapdragon NPU](moss.md#hexagon-npu-generation); `dit_on_coreml()` / `vae_on_coreml()` and `SoundEffectResult::dit_backend` / `vae_backend` report the [Core ML sidecars](moss.md#core-ml-dit-and-vae) |
 | `tts_cpp::moss` | `SpeechEngine::respond` | Spoken reply PCM or text, with generation/progress metadata; `tokenizer_on_coreml()` and `SpeechResult::tokenizer_backend` report the [Core ML speech tokenizer](moss.md#core-ml-speech-tokenizer) |
 | `tts_cpp::lavasr` | `Denoiser` / `Enhancer` | enhanced PCM |
 
@@ -217,4 +217,6 @@ and output storage. The shared graph allocator is priced at its peak across phas
 `lm_compute_bytes` covers text/DiT, and `codec_compute_bytes` is any additional
 VAE demand. Their sum is the device compute peak. Host bytes include CPU fallback
 arenas, graph/scheduler descriptors, tokenizer storage, conditioning, diffusion
-vectors and decoded audio. The margin is explicit in the native API.
+vectors and decoded audio. The margin is explicit in the native API. With
+`options.backend = "hexagon"` the projection reads the host's memory, and the token
+table that stays on the host counts as host bytes.

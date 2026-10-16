@@ -10,12 +10,10 @@
 
 namespace tts_cpp::moss::detail {
 
-enum class CodecAttention { Automatic, Unfused, Fused };
-
 class Codec {
 public:
     Codec(const std::string & path, const BackendRequest & backend, int n_threads, bool measure_only = false,
-          CodecAttention attention = CodecAttention::Automatic);
+          AttentionLayout attention = AttentionLayout::Automatic);
     ~Codec();
     Codec(const Codec &) = delete;
     Codec & operator=(const Codec &) = delete;

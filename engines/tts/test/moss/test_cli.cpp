@@ -65,10 +65,11 @@ void test_option_mapping() {
     check(args.out_path == "x.wav", "output path maps");
 }
 
-void test_backend_is_tts_only() {
+void test_backend_modes() {
     CliArgs sfx;
-    check(!parse({"moss-cli", "--mode", "sfx", "--model", "m.gguf", "--text", "rain",
-            "--backend", "hexagon"}, sfx), "--backend is rejected in sfx mode");
+    check(parse({"moss-cli", "--mode", "sfx", "--model", "m.gguf", "--text", "rain",
+            "--backend", "hexagon"}, sfx), "--backend is accepted in sfx mode");
+    check(sfx.sound_options.backend == "hexagon", "backend flag reaches the sfx engine");
     CliArgs s2s;
     check(!parse({"moss-cli", "--mode", "s2s", "--model", "m.gguf", "--codec", "c.gguf",
             "--audio", "q.wav", "--backend", "hexagon"}, s2s), "--backend is rejected in s2s mode");
@@ -106,7 +107,7 @@ int main() {
     try {
         test_required_flags();
         test_option_mapping();
-        test_backend_is_tts_only();
+        test_backend_modes();
         test_end_to_end_run();
     } catch (const std::exception & e) {
         std::fprintf(stderr, "%s\n", e.what());

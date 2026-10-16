@@ -13,6 +13,7 @@ struct SoundEffectOptions {
     int n_threads = 4;
     bool use_gpu = false;
     std::string backends_dir;
+    std::string backend;
 };
 
 struct SoundEffectRequest {

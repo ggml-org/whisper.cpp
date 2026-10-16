@@ -302,7 +302,7 @@ bool run_sound_effect() {
         return false;
     }
     {
-        tts_cpp::moss::detail::SfxModel model(model_path, use_gpu(), PARITY_THREADS);
+        tts_cpp::moss::detail::SfxModel model(model_path, {"", use_gpu()}, PARITY_THREADS);
         test_sfx_dit(model, model_path);
         test_sfx_vae(model, model_path);
     }

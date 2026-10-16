@@ -184,7 +184,7 @@ struct Codec::Impl {
     int stream_channels = 0;
     int64_t frames_decoded = 0;
     bool measure_only = false;
-    CodecAttention attention_layout = CodecAttention::Automatic;
+    AttentionLayout attention_layout = AttentionLayout::Automatic;
     bool fused = false;
     uint64_t graph_host_bytes = 0;
 
@@ -499,7 +499,7 @@ struct Codec::Impl {
             return;
         }
         if (const ggml_tensor * refused = first_tensor_hexagon_cannot_run(weights)) {
-            fail(hexagon_weight_refusal(refused));
+            fail(hexagon_weight_refusal(refused, HEXAGON_TTS_WEIGHT_TIERS));
         }
     }
 
@@ -543,8 +543,7 @@ struct Codec::Impl {
         }
         read_quantizer_meta();
         backend = init_backend(request, "moss-codec");
-        fused = attention_layout == CodecAttention::Fused ||
-                (attention_layout == CodecAttention::Automatic && ::tts_cpp::detail::backend_is_hexagon(backend));
+        fused = fuses_attention(attention_layout, backend);
         duplicate_metadata_tensors();
         require_device_weight_types();
         read_modules();
@@ -1206,7 +1205,7 @@ struct Codec::Impl {
 };
 
 Codec::Codec(const std::string & path, const BackendRequest & backend, int n_threads, bool measure_only,
-             CodecAttention attention) : impl_(new Impl) {
+             AttentionLayout attention) : impl_(new Impl) {
     impl_->measure_only = measure_only;
     impl_->attention_layout = attention;
     impl_->load(path, backend, n_threads);

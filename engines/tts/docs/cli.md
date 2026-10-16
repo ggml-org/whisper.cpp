@@ -417,7 +417,7 @@ inference cost (well under real-time on any GPU backend).
 - `--backend NAME` (`supertonic-cli`, `supertonic-bench`,
   `supertonic-fit-params`, `parler-cli`, `parler-bench`,
   `parler-fit-params`, `cosyvoice-cli`, `cosyvoice-bench`,
-  `cosyvoice-fit-params`, and `moss-cli` in its default TTS mode) — run on
+  `cosyvoice-fit-params`, and `moss-cli` in its TTS and `sfx` modes) — run on
   one device: `cpu`, `opencl`, `hexagon` (the Snapdragon HTP0 NPU) or an
   exact ggml device name; MOSS is validated on `cpu` and `hexagon` only. It overrides `--n-gpu-layers` (`--gpu` on
   `moss-cli`) and fails instead of falling back when the device is missing;

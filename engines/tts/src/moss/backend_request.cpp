@@ -1,6 +1,7 @@
 #include "moss/backend_request.h"
 
 #include "backend_selection.h"
+#include "backend_util.h"
 
 #include <stdexcept>
 
@@ -13,6 +14,20 @@ constexpr int GPU_REQUESTED = 1;
 
 BackendRequest backend_request(const EngineOptions & options) {
     return {options.backend, options.use_gpu};
+}
+
+BackendRequest backend_request(const SoundEffectOptions & options) {
+    return {options.backend, options.use_gpu};
+}
+
+bool places_tables_on_host(TablePlacement placement, ggml_backend_t backend) {
+    return placement == TablePlacement::Host ||
+           (placement == TablePlacement::Automatic && ::tts_cpp::detail::backend_is_hexagon(backend));
+}
+
+bool fuses_attention(AttentionLayout layout, ggml_backend_t backend) {
+    return layout == AttentionLayout::Fused ||
+           (layout == AttentionLayout::Automatic && ::tts_cpp::detail::backend_is_hexagon(backend));
 }
 
 ggml_backend_t init_backend(const BackendRequest & request, const char * owner) {
@@ -50,9 +65,9 @@ const ggml_tensor * first_tensor_hexagon_cannot_run(ggml_context * weights) {
     return nullptr;
 }
 
-std::string hexagon_weight_refusal(const ggml_tensor * tensor) {
+std::string hexagon_weight_refusal(const ggml_tensor * tensor, const char * supported_tiers) {
     return std::string("Hexagon cannot run ") + ggml_get_name(tensor) + " (" + ggml_type_name(tensor->type) +
-           "); use a q8_0, q4_0, f16 or f32 GGUF";
+           "); use a " + supported_tiers + " GGUF";
 }
 
 } // namespace tts_cpp::moss::detail
