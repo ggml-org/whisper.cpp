@@ -896,6 +896,7 @@ struct whisper_state {
     // prompt history split into static prefix (prompt_past0) and dynamic rolling context (prompt_past1)
     std::vector<whisper_token>   prompt_past0; // static carried initial prompt (if enabled)
     std::vector<whisper_token>   prompt_past1; // dynamic context from decoded output
+    bool prompt_past0_consumed = false; // initial prompt already conditioned a first window (when not carrying it)
 
     int lang_id = 0; // english by default
 
@@ -7095,6 +7096,17 @@ int whisper_full_with_state(
     if (params.no_context) {
         prompt_past0.clear();
         prompt_past1.clear();
+        state->prompt_past0_consumed = false;
+    }
+
+    // re-arm the one-shot initial-prompt conditioning on every call when the state is
+    // reused (streaming) without carrying the initial prompt and without rolling
+    // context: with n_max_text_ctx == 0 the initial prompt never enters prompt_past1,
+    // so the first window of each new call must see it again. note: this must not be
+    // done for n_max_text_ctx > 0 - there the initial prompt already lives in the
+    // rolling context (prompt_past1) and re-arming would duplicate it in the budget
+    if (!params.carry_initial_prompt && params.n_max_text_ctx <= 0) {
+        state->prompt_past0_consumed = false;
     }
 
     // calculate the maximum context budget for prompt history
@@ -7117,23 +7129,24 @@ int whisper_full_with_state(
             params.prompt_n_tokens = prompt_tokens.size();
         }
         if (params.prompt_tokens && params.prompt_n_tokens > 0) {
-            if (params.carry_initial_prompt) {
-                if (prompt_past0.empty()) {
-                    const int max_tokens = std::max(1, max_prompt_ctx - 1);
+            // the initial prompt is the user's explicit conditioning request: always keep it as
+            // static context in prompt_past0. n_max_text_ctx (including 0) limits the rolling
+            // context built from previous transcription output - it must not drop the initial prompt
+            if (prompt_past0.empty()) {
+                // budget shared with the rolling context when it is enabled, otherwise the same
+                // window the rolling context would use (half of the text context)
+                const int max_static = params.n_max_text_ctx > 0
+                    ? std::max(1, max_prompt_ctx - 1)
+                    : std::max(1, whisper_n_text_ctx(ctx)/2 - 1);
 
-                    if (params.prompt_n_tokens > max_tokens) {
-                        WHISPER_LOG_WARN("%s: initial prompt is too long (%d tokens), will use only the last %d tokens\n",
-                                        __func__, params.prompt_n_tokens, max_tokens);
-                    }
+                if (params.prompt_n_tokens > max_static) {
+                    WHISPER_LOG_WARN("%s: initial prompt is too long (%d tokens), will use only the last %d tokens\n",
+                                    __func__, params.prompt_n_tokens, max_static);
+                }
 
-                    const int n_tokens = std::min(params.prompt_n_tokens, max_tokens);
-                    prompt_past0.assign(params.prompt_tokens + (params.prompt_n_tokens - n_tokens), params.prompt_tokens + params.prompt_n_tokens);
-                }
-            } else {
-                for (int i = 0; i < params.prompt_n_tokens; ++i) {
-                    prompt_past1.push_back(params.prompt_tokens[i]);
-                }
-                std::rotate(prompt_past1.begin(), prompt_past1.end() - params.prompt_n_tokens, prompt_past1.end());
+                const int n_tokens = std::min(params.prompt_n_tokens, max_static);
+                prompt_past0.assign(params.prompt_tokens + (params.prompt_n_tokens - n_tokens), params.prompt_tokens + params.prompt_n_tokens);
+                state->prompt_past0_consumed = false;
             }
         }
     }
@@ -7222,6 +7235,7 @@ int whisper_full_with_state(
         if (seek > seek_start && seek + 500 >= seek_end) {
             prompt_past0.clear();
             prompt_past1.clear();
+            state->prompt_past0_consumed = false;
         }
 
         int best_decoder_id = 0;
@@ -7282,25 +7296,33 @@ int whisper_full_with_state(
             {
                 prompt.clear();
 
-                if (params.n_max_text_ctx > 0 && t_cur < WHISPER_HISTORY_CONDITIONING_TEMP_CUTOFF) {
-                    const bool can_take0 = params.carry_initial_prompt && !prompt_past0.empty();
-                    const bool can_take1 = !prompt_past1.empty();
+                const bool can_take0 = !prompt_past0.empty() &&
+                    (params.carry_initial_prompt || !state->prompt_past0_consumed);
+                const bool can_take1 = params.n_max_text_ctx > 0 &&
+                    t_cur < WHISPER_HISTORY_CONDITIONING_TEMP_CUTOFF &&
+                    !prompt_past1.empty();
 
-                    if (max_prompt_ctx > 0 && (can_take0 || can_take1)) {
-                        // Always start with previous token marker to connect continuity
-                        prompt.push_back(whisper_token_prev(ctx));
+                if (can_take0 || can_take1) {
+                    // Always start with previous token marker to connect continuity
+                    prompt.push_back(whisper_token_prev(ctx));
 
-                        // Take static tokens (initial prompt) first
-                        int n_take0 = 0;
-                        if (can_take0) {
-                            n_take0 = prompt_past0.size();
-                            prompt.insert(prompt.end(), prompt_past0.end() - n_take0, prompt_past0.end());
-                        }
-
-                        // Fill remaining budget with dynamic tokens (rolling context)
-                        const int n_take1 = std::min<int>(max_prompt_ctx - n_take0 - 1, prompt_past1.size());
-                        prompt.insert(prompt.end(), prompt_past1.end() - n_take1, prompt_past1.end());
+                    // Take static tokens (initial prompt) first
+                    // note: when not carrying the initial prompt it must condition exactly one
+                    // window, but never in the middle of the temperature fallback loop - the
+                    // per-window prompt has to stay identical across decode retries (matching
+                    // OpenAI's implementation). prompt_past0_consumed is therefore set only
+                    // after the window has been decoded, together with the prompt_past1 update.
+                    int n_take0 = 0;
+                    if (can_take0) {
+                        n_take0 = prompt_past0.size();
+                        prompt.insert(prompt.end(), prompt_past0.end() - n_take0, prompt_past0.end());
                     }
+
+                    // Fill remaining budget with dynamic tokens (rolling context)
+                    const int n_take1 = can_take1
+                        ? std::max(0, std::min<int>(max_prompt_ctx - n_take0 - 1, prompt_past1.size()))
+                        : 0;
+                    prompt.insert(prompt.end(), prompt_past1.end() - n_take1, prompt_past1.end());
                 }
 
                 // init new transcription with sot, language (opt) and task tokens
@@ -7786,6 +7808,13 @@ int whisper_full_with_state(
             prompt_past1.clear();
             if (!params.carry_initial_prompt && !prompt.empty() && prompt.front() == whisper_token_prev(ctx)) {
                 prompt_past1.insert(prompt_past1.end(), prompt.begin() + 1, prompt.end() - prompt_init.size());
+
+                // the one-shot initial prompt has now conditioned this window and its tokens
+                // were folded into the rolling context above: later windows must not take
+                // prompt_past0 again or it would be counted twice. this runs once per window
+                // (after all temperature fallback attempts), so every retry of the first
+                // window keeps the initial prompt in its decoder prompt
+                state->prompt_past0_consumed = true;
             }
 
             // Add newly decoded tokens to the rolling context
