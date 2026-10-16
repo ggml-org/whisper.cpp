@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <cstdio>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -75,6 +76,7 @@ MLModel * load_model(const char * path_mlmodelc, const placement & where) {
     MLModel * model = [MLModel modelWithContentsOfURL:[NSURL fileURLWithPath:path]
                                         configuration:config
                                                 error:&err];
+    if (model == nil && err != nil) std::fprintf(stderr, "Core ML: %s\n", err.localizedDescription.UTF8String);
     return (model == nil || err != nil) ? nil : model;
 }
 
@@ -337,6 +339,7 @@ struct moss_coreml_model * moss_coreml_load(const char * path_mlmodelc, const ch
         model->model  = CFBridgingRetain(mlmodel);
         model->label  = where.label;
         if (!bind_io(model, mlmodel) || !bind_state(model, mlmodel)) {
+            std::fprintf(stderr, "Core ML: cannot bind model inputs, outputs or state (%s)\n", path_mlmodelc);
             release_model(model);
             return nullptr;
         }

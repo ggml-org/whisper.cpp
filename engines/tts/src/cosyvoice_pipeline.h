@@ -21,6 +21,7 @@
 #include "backend_selection.h"
 #include "sched_dispatch.h"
 #include "cosyvoice_mmap.h"
+#include "cosyvoice_coreml.h"
 
 #include <cstdint>
 #include <map>
@@ -103,6 +104,9 @@ struct model_ctx {
     size_t sched_graph_size = 0;
 
     int n_threads = 0;   // 0 = leave the backend default
+    std::shared_ptr<cosyvoice_coreml> coreml;
+    std::shared_ptr<cosyvoice_coreml> coreml_frontend;
+    std::shared_ptr<cosyvoice_coreml> coreml_f0;
 };
 
 // Load a GGUF into a resident model_ctx (all tensors materialised).

@@ -26,7 +26,7 @@ option(TTS_CPP_USE_SYSTEM_GGML   "tts-cpp: use find_package(ggml) instead of add
 # does not expose the standalone filename-prefix option; the speech branch or
 # `ggml-speech` vcpkg port already emits the integrated filenames.
 option(TTS_CPP_CCACHE            "tts-cpp: use ccache as compiler launcher if available"     ON)
-option(TTS_CPP_COREML            "tts-cpp: enable the Apple Core ML (Neural Engine) sidecars for the Audio8 codec synthesis stack, the Supertonic vocoder and the MOSS stages (Apple-only, additive; each stage runs on its .mlmodelc next to the GGUF when present, else on ggml)." OFF)
+option(TTS_CPP_COREML            "tts-cpp: enable the Apple Core ML (Neural Engine) sidecars for the Audio8 codec synthesis stack, the Supertonic vocoder, CosyVoice3 stages and the MOSS stages (Apple-only, additive; each stage runs on its .mlmodelc next to the GGUF when present, else on ggml)." OFF)
 
 # OBJC + OBJCXX up front, before any add_subdirectory(ggml); see engines/parakeet.
 if (TTS_CPP_COREML)
@@ -312,6 +312,8 @@ set(TTS_CPP_LIB_SOURCES
     # cosyvoice_pipeline.cpp is the shared graph core (LM / DiT flow / HiFT),
     # also used by the cosyvoice-{llm,flow,hift} parity CLIs below.
     src/cosyvoice_pipeline.cpp
+    src/cosyvoice_coreml.cpp
+    src/cosyvoice_coreml_pipeline.cpp
     src/cosyvoice_instruct.cpp
     src/cosyvoice_frontend.cpp
     src/cosyvoice_engine.cpp
@@ -458,7 +460,7 @@ if (TTS_CPP_BUILD_LIBRARY)
     )
     target_compile_features(tts-cpp PUBLIC cxx_std_17)
 
-    # Core ML sidecars (Audio8 codec, Supertonic vocoder, MOSS stages): ARC objects fold
+    # Core ML sidecars (Audio8 codec, Supertonic vocoder, CosyVoice3 stages, MOSS stages): ARC objects fold
     # into libtts-cpp; frameworks are PUBLIC for static consumers.
     if (TTS_CPP_COREML)
         find_library(TTS_CPP_FOUNDATION_FRAMEWORK Foundation REQUIRED)
@@ -482,7 +484,7 @@ if (TTS_CPP_BUILD_LIBRARY)
             ${TTS_CPP_FOUNDATION_FRAMEWORK}
             ${TTS_CPP_COREML_FRAMEWORK}
         )
-        message(STATUS "tts-cpp: Core ML sidecars enabled (TTS_CPP_USE_COREML): Audio8 codec, Supertonic vocoder, MOSS stages")
+        message(STATUS "tts-cpp: Core ML sidecars enabled (TTS_CPP_USE_COREML): Audio8 codec, Supertonic vocoder, CosyVoice3 stages, MOSS stages")
     endif()
     target_link_libraries(tts-cpp PUBLIC ggml)
     find_package(Threads REQUIRED)
@@ -592,6 +594,8 @@ endif()
 # executables/tests blocks because both consume it.  Mirrors _tcb_parler_core_srcs.
 set(_tcb_cosy_core_srcs
     src/cosyvoice_pipeline.cpp
+    src/cosyvoice_coreml.cpp
+    src/cosyvoice_coreml_pipeline.cpp
     src/backend_selection.cpp
     src/sched_dispatch.cpp)
 
@@ -1252,6 +1256,11 @@ if (TTS_CPP_BUILD_TESTS)
         set_property(TEST test-supertonic-coreml-exporter PROPERTY ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
         set_property(TEST test-supertonic-coreml-exporter PROPERTY SKIP_REGULAR_EXPRESSION "SKIP: numpy")
 
+        add_test(NAME test-cosyvoice-coreml-exporter
+                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/test_export_cosyvoice_coreml.py")
+        set_tests_properties(test-cosyvoice-coreml-exporter PROPERTIES
+            LABELS "unit" ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1" SKIP_REGULAR_EXPRESSION "SKIP: ")
+
         foreach(_moss_exporter IN ITEMS speech_tokenizer sfx codec)
             string(REPLACE "_" "-" _moss_exporter_test "${_moss_exporter}")
             add_test(NAME test-moss-${_moss_exporter_test}-coreml-exporter
@@ -1452,6 +1461,23 @@ if (TTS_CPP_BUILD_TESTS)
 
     # Map-in-place loader: byte-exact round-trip + clean failure on a truncated
     # GGUF. Self-contained (writes its own synthetic GGUF), so it always runs.
+    add_executable(test-cosyvoice-coreml test/test_cosyvoice_coreml.cpp)
+    target_link_libraries(test-cosyvoice-coreml PRIVATE tts-cpp)
+    target_include_directories(test-cosyvoice-coreml PRIVATE src)
+    if (TTS_CPP_COREML)
+        target_compile_definitions(test-cosyvoice-coreml PRIVATE TTS_CPP_USE_COREML)
+    endif()
+    tts_cpp_apply_ccache(test-cosyvoice-coreml)
+    tts_cpp_register_test(test-cosyvoice-coreml LABEL "unit")
+    tts_cpp_register_test(test-cosyvoice-coreml-lm
+        EXE test-cosyvoice-coreml LABEL "fixture" ARGS "--lm-fixture")
+    tts_cpp_register_test(test-cosyvoice-coreml-stages
+        EXE test-cosyvoice-coreml LABEL "fixture" ARGS "--stages-fixture")
+    tts_cpp_register_test(test-cosyvoice-coreml-routing
+        EXE test-cosyvoice-coreml LABEL "fixture" ARGS "--routing-fixture")
+    set_tests_properties(test-cosyvoice-coreml-lm test-cosyvoice-coreml-stages test-cosyvoice-coreml-routing
+        PROPERTIES SKIP_RETURN_CODE 77)
+
     add_executable(test-cosyvoice-load test/test_cosyvoice_load.cpp ${_tcb_cosy_core_srcs})
     target_link_libraries(test-cosyvoice-load PRIVATE ggml)
     target_include_directories(test-cosyvoice-load PRIVATE ggml/include src)

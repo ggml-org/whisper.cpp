@@ -63,9 +63,14 @@ contracts; see the engine guides before exporting or deploying one.
 | Whisper | Encoder | [Whisper Core ML](third_party/whisper.cpp/README.md#core-ml-support) |
 | Parakeet | Eligible ASR and Sortformer v2.1 encoder paths | [Backend and routing contracts](engines/parakeet/docs/backends.md#core-ml-encoder-sidecar) |
 | Parakeet | MOSS-Transcribe-Diarize audio encoder | [MOSS-Transcribe-Diarize](engines/parakeet/docs/moss-transcribe.md#core-ml-encoder-sidecar) |
+| TTS | CosyVoice3 speech LM, flow and HiFT neural stages | [CosyVoice3 Core ML](engines/tts/docs/cosyvoice3.md#core-ml-sidecars) |
 | TTS | Supertonic vocoder, Audio8 codec synthesis | [Supertonic](engines/tts/docs/supertonic.md#core-ml-vocoder-sidecar), [Audio8](engines/tts/docs/audio8.md#core-ml-codec-sidecar) |
 | TTS | MOSS-TTS/TTSD codec decoder, MOSS-SoundEffect DiT and VAE, MOSS-Speech speech tokenizer | [MOSS](engines/tts/docs/moss.md#core-ml-codec-decoder), [SoundEffect](engines/tts/docs/moss.md#core-ml-dit-and-vae), [Speech](engines/tts/docs/moss.md#core-ml-speech-tokenizer) |
 | AudioGen | ACE-Step VAE decoder | [AudioGen backends](engines/audiogen/docs/backends.md#core-ml-vae-decoder-sidecar) |
+
+CosyVoice3 exports HiFT in FP32 to preserve waveform parity. Its memory-fit
+preflight returns `Error` with `coreml-memory-estimate-unavailable` when
+enabled sidecars are present, rather than undercounting their resident memory.
 
 ### Hexagon NPU (Snapdragon)
 

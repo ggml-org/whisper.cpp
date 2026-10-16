@@ -123,6 +123,7 @@ struct Engine::Impl {
 
     // llm/flow/hift are loaded on demand in run(); only their paths are kept.
     std::string llm_path_, flow_path_, hift_path_;
+    std::shared_ptr<cosyvoice_coreml> coreml_lm, coreml_flow, coreml_frontend, coreml_hift, coreml_f0;
     QwenTokenizer tokenizer;
 
     // baked voice (from voice.gguf)
@@ -256,6 +257,11 @@ struct Engine::Impl {
                                              : "transcript given: zero-shot mode");
         }
 
+        coreml_lm = cosyvoice_coreml::load(llm_path_);
+        coreml_flow = cosyvoice_coreml::load(flow_path_);
+        coreml_frontend = cosyvoice_coreml::load(flow_path_, "-frontend");
+        coreml_hift = cosyvoice_coreml::load(hift_path_);
+        coreml_f0 = cosyvoice_coreml::load(hift_path_, "-f0");
         backend_guard.armed = false;
     }
 
@@ -276,6 +282,8 @@ struct Engine::Impl {
                            const std::string & instruct,
                            cosyvoice_timings * tmg = nullptr,
                            std::vector<int> * out_tokens = nullptr) {
+        for (const auto & stage : {coreml_lm, coreml_flow, coreml_frontend, coreml_hift, coreml_f0})
+            if (stage) stage->clear_predictions();
         std::string prompt_text;
         std::vector<int> lm_prompt_stok;
         bool cross_lingual = false;
@@ -342,6 +350,7 @@ struct Engine::Impl {
             model_ctx llm_m = cosyvoice_load_gguf(llm_path_, backend);
             ModelGuard llm_guard(llm_m);
             llm_m.n_threads = opts.n_threads;
+            llm_m.coreml = coreml_lm;
             qwen_hp hp = cosyvoice_qwen_hp(llm_m);
             speech_tokens = cosyvoice_llm_generate(llm_m, hp, text_ids, lm_prompt_stok,
                                                    max_steps, greedy, opts.seed, min_len, tmg);
@@ -363,6 +372,8 @@ struct Engine::Impl {
             model_ctx flow_m = cosyvoice_load_gguf(flow_path_, backend);
             ModelGuard flow_guard(flow_m);
             flow_m.n_threads = opts.n_threads;
+            flow_m.coreml = coreml_flow;
+            flow_m.coreml_frontend = coreml_frontend;
             mel = cosyvoice_flow_run(
                 flow_m, voice_prompt_token, speech_tokens,
                 voice_prompt_feat, voice_mel_len1, voice_embedding, mel_len, tmg,
@@ -374,6 +385,8 @@ struct Engine::Impl {
             model_ctx hift_m = cosyvoice_load_gguf(hift_path_, backend);
             ModelGuard hift_guard(hift_m);
             hift_m.n_threads = opts.n_threads;
+            hift_m.coreml = coreml_hift;
+            hift_m.coreml_f0 = coreml_f0;
             return cosyvoice_hift_synth(hift_m, mel, mel_len, opts.seed, tmg);
         }
     }
@@ -488,7 +501,15 @@ const EngineOptions & Engine::options() const { return pimpl_->opts; }
 std::string Engine::backend_name() const {
     ggml_backend_t b = pimpl_ ? pimpl_->backend : nullptr;
     const char * n = b ? ggml_backend_name(b) : nullptr;
-    return n ? std::string(n) : std::string("(none)");
+    std::string label = n ? std::string(n) : std::string("(none)");
+    if (pimpl_) {
+        for (const auto & stage : {pimpl_->coreml_lm, pimpl_->coreml_flow, pimpl_->coreml_frontend,
+                                  pimpl_->coreml_hift, pimpl_->coreml_f0}) {
+            if (stage && stage->predictions() && label.find(stage->label()) == std::string::npos)
+                label += "+" + stage->label();
+        }
+    }
+    return label;
 }
 
 BackendDevice Engine::backend_device() const {

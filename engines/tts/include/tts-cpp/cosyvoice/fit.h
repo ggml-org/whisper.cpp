@@ -35,6 +35,9 @@
 // buffers) plus the persistent baked-voice vectors.
 //
 // Scope / exclusions (documented, strict where approximate):
+//   * Enabled Core ML sidecars return Error with reason
+//     "coreml-memory-estimate-unavailable" because resident Core ML models
+//     and prediction buffers cannot be projected by the native fitter.
 //   * The resident Qwen tokenizer (vocab.json + merges.txt live OUTSIDE the
 //     GGUF set and are parsed into hash maps, typically tens of MB of host
 //     RAM) is NOT projected -- the fitter never sees those files.

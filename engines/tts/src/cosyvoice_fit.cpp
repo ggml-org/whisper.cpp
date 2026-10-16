@@ -12,6 +12,7 @@
 #include "backend_selection.h"
 #include "backend_util.h"
 #include "cosyvoice_fit_internal.h"
+#include "cosyvoice_coreml.h"
 #include "fit_util.h"
 
 #include "ggml-backend.h"
@@ -67,6 +68,16 @@ FitResult fit_params(const FitOptions & opts) {
         opts.hift_gguf_path.empty() || opts.voice_gguf_path.empty() ||
         opts.text_tokens <= 0 || opts.speech_tokens < 0) {
         r.reason = "invalid-arguments";
+        return r;
+    }
+
+    if (cosyvoice_coreml::has_sidecar(opts.llm_gguf_path) ||
+        cosyvoice_coreml::has_sidecar(opts.flow_gguf_path) ||
+        cosyvoice_coreml::has_sidecar(opts.flow_gguf_path, "-frontend") ||
+        cosyvoice_coreml::has_sidecar(opts.hift_gguf_path) ||
+        cosyvoice_coreml::has_sidecar(opts.hift_gguf_path, "-f0")) {
+        r.reason = "coreml-memory-estimate-unavailable";
+        r.report = "Core ML resident models and prediction buffers cannot be projected.\n";
         return r;
     }
 

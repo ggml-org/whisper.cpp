@@ -1026,6 +1026,67 @@ bool cosyvoice_lm_fa_enabled(ggml_backend_t backend, const qwen_hp & hp) {
     return ok;
 }
 
+static int coreml_lm_capacity(const model_ctx & m, const qwen_hp & hp, int vocabulary, int64_t needed) {
+    if (!m.coreml) return 0;
+    const auto mask = m.coreml->dimensions("mask");
+    if (mask.size() != 4 || mask.back() < needed || mask.back() > INT32_MAX) return 0;
+    const auto capacity = mask.back();
+    if (!m.coreml->matches("x", {1, 1, hp.hidden}) ||
+        !m.coreml->matches("cosine", {1, 1, 1, hp.head_dim / 2}) ||
+        !m.coreml->matches("sine", {1, 1, 1, hp.head_dim / 2}) ||
+        !m.coreml->matches("write_mask", {1, 1, capacity, 1}) ||
+        !m.coreml->matches("mask", {1, 1, 1, capacity}) ||
+        !m.coreml->matches("logits", {1, vocabulary})) return 0;
+    const std::vector<int64_t> cache_shape{hp.depth, 1, hp.n_kv, capacity, hp.head_dim};
+    for (const char * name : {"keys", "values", "keys_out", "values_out"})
+        if (!m.coreml->matches(name, cache_shape)) return 0;
+    return static_cast<int>(capacity);
+}
+
+struct coreml_lm_cache {
+    int position = 0;
+    std::vector<float> keys;
+    std::vector<float> values;
+
+    coreml_lm_cache(const qwen_hp & hp, int capacity) {
+        const size_t count = static_cast<size_t>(hp.depth) * hp.n_kv * capacity * hp.head_dim;
+        keys.resize(count);
+        values.resize(count);
+    }
+};
+
+static std::vector<float> coreml_lm_steps(model_ctx & m, const qwen_hp & hp, const float * input,
+                                         int rows, int vocabulary, int capacity, coreml_lm_cache & cache) {
+    int & position = cache.position;
+    const std::vector<int64_t> cache_shape{hp.depth, 1, hp.n_kv, capacity, hp.head_dim};
+    constexpr float masked_score = -1e4f;
+    std::vector<float> cosine(hp.head_dim / 2), sine(hp.head_dim / 2);
+    std::vector<float> mask(capacity, masked_score), write_mask(capacity), logits(vocabulary);
+    for (int row = 0; row < rows; ++row) {
+        std::fill(write_mask.begin(), write_mask.end(), 0);
+        write_mask[position] = 1;
+        std::fill(mask.begin(), mask.end(), masked_score);
+        std::fill(mask.begin(), mask.begin() + position + 1, 0);
+        for (int pair = 0; pair < hp.head_dim / 2; ++pair) {
+            const float angle = position * std::pow(hp.theta, -2.0f * pair / hp.head_dim);
+            cosine[pair] = std::cos(angle);
+            sine[pair] = std::sin(angle);
+        }
+        m.coreml->predict({{"x", input + static_cast<size_t>(row) * hp.hidden, {1, 1, hp.hidden}},
+                           {"cosine", cosine.data(), {1, 1, 1, hp.head_dim / 2}},
+                           {"sine", sine.data(), {1, 1, 1, hp.head_dim / 2}},
+                           {"write_mask", write_mask.data(), {1, 1, capacity, 1}},
+                           {"mask", mask.data(), {1, 1, 1, capacity}},
+                           {"keys", cache.keys.data(), cache_shape, true},
+                           {"values", cache.values.data(), cache_shape, true}},
+                          {{"logits", logits.data(), {1, vocabulary}},
+                           {"keys_out", cache.keys.data(), cache_shape},
+                           {"values_out", cache.values.data(), cache_shape}});
+        ++position;
+    }
+    return logits;
+}
+
 std::vector<int> cosyvoice_llm_generate(model_ctx & m, const qwen_hp & hp,
                                         const std::vector<int> & text_ids,
                                         const std::vector<int> & prompt_stok,
@@ -1044,15 +1105,22 @@ std::vector<int> cosyvoice_llm_generate(model_ctx & m, const qwen_hp & hp,
     std::vector<int> tokens;
     std::mt19937 rng(seed);
     // Cache holds the L0 prefill positions plus up to max_steps decode positions.
-    qwen_kvcache cache; cache.init(m, hp, L0 + max_steps + 1, cosyvoice_lm_fa_enabled(m.backend, hp), allow_replay);
+    const int coreml_capacity = coreml_lm_capacity(m, hp, VS, int64_t(L0) + max_steps + 1);
+    coreml_lm_cache coreml_cache(hp, coreml_capacity);
+    if (coreml_capacity) m.coreml->reset();
+    qwen_kvcache cache;
+    if (!coreml_capacity)
+        cache.init(m, hp, L0 + max_steps + 1, cosyvoice_lm_fa_enabled(m.backend, hp), allow_replay);
     // One allocator for the entire decode (see the note in qwen_step_kv).
-    ggml_gallocr_t al = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
-    if (!al) { cache.free(); throw std::runtime_error("cosyvoice: gallocr alloc failed (LM)"); }
+    ggml_gallocr_t al = coreml_capacity ? nullptr : ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
+    if (!coreml_capacity && !al) { cache.free(); throw std::runtime_error("cosyvoice: gallocr alloc failed (LM)"); }
 
     // Prefill the prompt (sos + text + task + prompt speech tokens) in one pass;
     // its last-position logits give the step-0 distribution.
     auto t_pre = cosy_clk::now();
-    std::vector<float> logits = qwen_step_kv(m, hp, seq.data(), L0, D, VS, cache, al);
+    std::vector<float> logits = coreml_capacity
+        ? coreml_lm_steps(m, hp, seq.data(), L0, VS, coreml_capacity, coreml_cache)
+        : qwen_step_kv(m, hp, seq.data(), L0, D, VS, cache, al);
     if (tmg) tmg->lm_prefill_ms += cosy_ms_since(t_pre, m.backend);
     for (int step = 0; step < max_steps; ++step) {
         log_softmax_inplace(logits);
@@ -1063,12 +1131,14 @@ std::vector<int> cosyvoice_llm_generate(model_ctx & m, const qwen_hp & hp,
         // Decode one step: feed this token's speech_embedding at the next position.
         std::vector<float> x1(spk_emb + (size_t)tok * SE_D, spk_emb + (size_t)(tok + 1) * SE_D);
         auto t_dec = cosy_clk::now();
-        logits = qwen_step_kv(m, hp, x1.data(), 1, D, VS, cache, al);
+        logits = coreml_capacity
+            ? coreml_lm_steps(m, hp, x1.data(), 1, VS, coreml_capacity, coreml_cache)
+            : qwen_step_kv(m, hp, x1.data(), 1, D, VS, cache, al);
         if (tmg) { tmg->lm_decode_ms += cosy_ms_since(t_dec, m.backend); tmg->n_decode_steps++; }
     }
     if (tmg) tmg->n_speech_tokens = (int) tokens.size();
-    ggml_gallocr_free(al);
-    cache.free();
+    if (al) ggml_gallocr_free(al);
+    if (!coreml_capacity) cache.free();
     return tokens;
 }
 
@@ -1324,6 +1394,7 @@ static void build_flow_frontend(model_ctx & m, const std::vector<int32_t> & toki
                                 const std::vector<float> & embedding,
                                 int T_tok, int TM, int SPK,
                                 std::vector<float> & mu_host, std::vector<float> & spks_host) {
+    if (cosyvoice_coreml_frontend(m.coreml_frontend, tokids, embedding, mu_host, spks_host)) return;
     const int MEL = 80;
     mu_host.assign((size_t)MEL * TM, 0.f);
     spks_host.assign(MEL, 0.f);
@@ -1360,6 +1431,7 @@ static void run_euler_steps(model_ctx & m, const dit_hp & hp,
                             const std::vector<float> & cond_host,
                             const std::vector<float> & spks_host, int TM,
                             std::vector<float> & x_host, int n_cut) {
+    if (n_cut == 0 && cosyvoice_coreml_euler(m.coreml, hp.dim_head, mu_host, cond_host, spks_host, TM, x_host)) return;
     const int MEL = 80;
     int B = 2, N = TM;
     const size_t nmax = cosy_dit_nodes(hp);
@@ -1774,6 +1846,8 @@ static ggml_cgraph * build_hift_f0_graph(ggml_context * ctx, const model_ctx & m
 }
 
 std::vector<float> cosyvoice_hift_f0(model_ctx & m, const std::vector<float> & mel, int T_mel) {
+    std::vector<float> coreml_f0;
+    if (cosyvoice_coreml_f0(m.coreml_f0, mel, T_mel, coreml_f0)) return coreml_f0;
     ggml_init_params gp = cosy_arena(kCosyHiftF0Nodes);
     ggml_context * ctx = ggml_init(gp);
     ggml_cgraph * gf = build_hift_f0_graph(ctx, m, T_mel);
@@ -1964,9 +2038,39 @@ static ggml_cgraph * build_hift_decode_graph(ggml_context * ctx, const model_ctx
     return gf;
 }
 
+static void accumulate_coreml_frame(std::vector<float> & waveform, const std::vector<float> & spectrum,
+                                    const std::vector<float> & kernel, int frame, int frames) {
+    constexpr int fft_size = 16, fft_hop = 4, spectrum_channels = 18;
+    for (int sample = 0; sample < fft_size; ++sample) {
+        float value = 0;
+        for (int channel = 0; channel < spectrum_channels; ++channel)
+            value += spectrum[static_cast<size_t>(channel) * frames + frame] * kernel[channel * fft_size + sample];
+        waveform[static_cast<size_t>(frame) * fft_hop + sample] += value;
+    }
+}
+
+static std::vector<float> coreml_inverse_stft(const std::vector<float> & spectrum, int frames) {
+    constexpr int fft_size = 16, fft_hop = 4;
+    const auto window = build_hann_window(fft_size, true);
+    const auto kernel = build_istft_kernel(fft_size, window);
+    const auto window_sum = build_window_sum(frames, fft_size, fft_hop, window);
+    std::vector<float> waveform(window_sum.size());
+    for (int frame = 0; frame < frames; ++frame)
+        accumulate_coreml_frame(waveform, spectrum, kernel, frame, frames);
+    std::vector<float> output(waveform.size() - fft_size);
+    for (size_t i = 0; i < output.size(); ++i) {
+        const auto index = i + fft_size / 2;
+        output[i] = std::clamp(waveform[index] / window_sum[index], -0.99f, 0.99f);
+    }
+    return output;
+}
+
 static std::vector<float> run_hift_decode(model_ctx & m,
                                           const std::vector<float> & mel, int T_mel,
                                           const std::vector<float> & s_stft, int T_stft) {
+    std::vector<float> spectrum;
+    if (cosyvoice_coreml_spectrum(m.coreml, mel, T_mel, s_stft, T_stft, spectrum))
+        return coreml_inverse_stft(spectrum, T_stft);
     ggml_init_params gp = cosy_arena(kCosyHiftDecodeNodes);
     ggml_context * ctx = ggml_init(gp);
     std::vector<cosy_inv_entry> inv_alphas;
