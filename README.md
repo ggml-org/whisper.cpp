@@ -71,6 +71,8 @@ contracts; see the engine guides before exporting or deploying one.
 CosyVoice3 exports HiFT in FP32 to preserve waveform parity. Its memory-fit
 preflight returns `Error` with `coreml-memory-estimate-unavailable` when
 enabled sidecars are present, rather than undercounting their resident memory.
+Re-export CosyVoice3 LM sidecars with the current exporter to preserve cache
+feedback on macOS 15 and 26; see the [Core ML guide](engines/tts/docs/cosyvoice3.md#core-ml-sidecars).
 
 ### Hexagon NPU (Snapdragon)
 

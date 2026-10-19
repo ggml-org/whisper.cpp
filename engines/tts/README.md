@@ -82,6 +82,8 @@ speech tokenizer. Export, routing, fallback, and per-call status are documented 
 CosyVoice3 HiFT sidecars use FP32 for waveform parity. With enabled CosyVoice3
 sidecars present, `fit_params` returns `Error` with
 `coreml-memory-estimate-unavailable`; it cannot project Core ML resident memory.
+Re-export CosyVoice3 LM sidecars with the current exporter for correct cache
+feedback on macOS 15 and 26; see [CosyVoice3 Core ML](docs/cosyvoice3.md#core-ml-sidecars).
 
 Chatterbox Multilingual has native tokenization for 18 languages; Japanese,
 Hebrew, Russian, Chinese and Hindi need external preprocessing. See

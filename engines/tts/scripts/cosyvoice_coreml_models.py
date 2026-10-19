@@ -149,8 +149,11 @@ class QwenIO(Qwen):
 
     def forward(self, x, cosine, sine, write_mask, mask, keys, values):
         next_keys, next_values = [], []
+        key_layers = keys.reshape(self.depth, self.kv_heads, self.context, self.head_dim).unbind(0)
+        value_layers = values.reshape(self.depth, self.kv_heads, self.context, self.head_dim).unbind(0)
         for index in range(self.depth):
-            x, key, value = self.layer_step(x, index, cosine, sine, write_mask, mask, keys[index], values[index])
+            x, key, value = self.layer_step(x, index, cosine, sine, write_mask, mask,
+                                            key_layers[index].unsqueeze(0), value_layers[index].unsqueeze(0))
             next_keys.append(key.float())
             next_values.append(value.float())
         logits = self.linear(rms_norm(x, self.weight("lm/norm/weight"), self.eps), "lm/llm_decoder")[:, 0]

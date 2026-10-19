@@ -445,8 +445,15 @@ jobs:
           .venv-cosyvoice-coreml/bin/python engines/tts/scripts/export-cosyvoice3-coreml.py \
             --stage llm --context 16 --gguf cosyvoice-coreml-fixture/cosyvoice3-llm-f32.gguf \
             --output cosyvoice-coreml-fixture --compile
-          COSYVOICE_COREML_ROUTING_GGUF="$PWD/cosyvoice-coreml-fixture/cosyvoice3-llm-f32.gguf" \
-            ./build/test-cosyvoice-coreml --routing-fixture
+          sw_vers -productVersion
+          routing_status=0
+          for compute_units in cpu_only cpu_and_ane all; do
+            echo "CosyVoice routing compute units: $compute_units"
+            COSYVOICE_COREML_COMPUTE_UNITS="$compute_units" \
+              COSYVOICE_COREML_ROUTING_GGUF="$PWD/cosyvoice-coreml-fixture/cosyvoice3-llm-f32.gguf" \
+              ./build/test-cosyvoice-coreml --routing-fixture || routing_status=1
+          done
+          exit "$routing_status"
 
       # Core ML Audio8 codec sidecar fixtures, converted and exported by the
       # repo's own scripts: the 64-frame sidecar for parity and speed, and an

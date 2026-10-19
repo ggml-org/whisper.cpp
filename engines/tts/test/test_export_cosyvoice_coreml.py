@@ -25,6 +25,7 @@ DIM = 16
 HEAD_DIM = 8
 FRAMES = 8
 VALID_FRAMES = 3
+CACHE_ROUNDTRIP_STEPS = 4
 
 
 def tensor(*shape):
@@ -71,6 +72,30 @@ def qwen_weights():
         linear(weights, "lm/blk/0/" + name, output, width, False)
     linear(weights, "lm/llm_decoder", 11, DIM, False)
     return weights
+
+
+def assert_coreml_cache_outputs(expected, actual):
+    for name, reference in zip(("logits", "keys_out", "values_out"), expected):
+        np.testing.assert_allclose(reference.numpy(), actual[name], atol=2e-3, rtol=2e-3)
+
+
+def check_coreml_cache_steps(model, converted, inputs):
+    caches = {name: value.numpy().copy() for name, value in inputs.items() if name in ("keys", "values")}
+    for position in range(CACHE_ROUNDTRIP_STEPS):
+        inputs["x"] = torch.randn(1, 1, DIM)
+        angle = position * torch.pow(1000000.0, -2 * torch.arange(HEAD_DIM // 2) / HEAD_DIM)
+        inputs["cosine"] = angle.cos().reshape(1, 1, 1, -1)
+        inputs["sine"] = angle.sin().reshape(1, 1, 1, -1)
+        inputs["write_mask"].zero_()
+        inputs["write_mask"][..., position, :] = 1
+        inputs["mask"][..., position] = 0
+        with torch.no_grad():
+            expected = model(*inputs.values())
+        actual = converted.predict({**{name: value.numpy() for name, value in inputs.items()}, **caches})
+        assert_coreml_cache_outputs(expected, actual)
+        inputs["keys"], inputs["values"] = expected[1:]
+        caches = {"keys": actual["keys_out"], "values": actual["values_out"]}
+    return caches
 
 
 @unittest.skipUnless(HAVE_DEPS, "numpy/torch unavailable")
@@ -129,11 +154,13 @@ class ExportTest(unittest.TestCase):
         torch.testing.assert_close(original, padded[:, :VALID_FRAMES * 2], atol=1e-6, rtol=1e-5)
 
     def test_lm_explicit_cache_matches_stateful_sequence(self):
-        metadata = {"cosyvoice3.llm.depth": 1, "cosyvoice3.llm.n_head": 2,
+        metadata = {"cosyvoice3.llm.depth": 2, "cosyvoice3.llm.n_head": 2,
                     "cosyvoice3.llm.n_kv": 1, "cosyvoice3.llm.head_dim": HEAD_DIM}
         weights = qwen_weights()
+        weights.update({name.replace("lm/blk/0/", "lm/blk/1/"): value.copy()
+                        for name, value in list(weights.items()) if name.startswith("lm/blk/0/")})
         stateful, explicit = Qwen(weights, metadata, FRAMES), QwenIO(weights, metadata, FRAMES)
-        keys = torch.zeros(1, 1, 1, FRAMES, HEAD_DIM)
+        keys = torch.zeros(2, 1, 1, FRAMES, HEAD_DIM)
         values = torch.zeros_like(keys)
         cosine, sine = torch.ones(1, 1, 1, HEAD_DIM // 2), torch.zeros(1, 1, 1, HEAD_DIM // 2)
         for position in range(3):
@@ -146,8 +173,10 @@ class ExportTest(unittest.TestCase):
                 expected = stateful(x, cosine, sine, write, mask)
                 actual, keys, values = explicit(x, cosine, sine, write, mask, keys, values)
             torch.testing.assert_close(expected, actual, atol=0, rtol=0)
-            torch.testing.assert_close(stateful.key_0.float(), keys[0], atol=0, rtol=0)
-            torch.testing.assert_close(stateful.value_0.float(), values[0], atol=0, rtol=0)
+            torch.testing.assert_close(torch.stack((stateful.key_0.float(), stateful.key_1.float())),
+                                       keys, atol=0, rtol=0)
+            torch.testing.assert_close(torch.stack((stateful.value_0.float(), stateful.value_1.float())),
+                                       values, atol=0, rtol=0)
 
     def test_flow_large_attention_scores_remain_finite_in_half_precision(self):
         weights = flow_weights()
@@ -183,7 +212,6 @@ class ExportTest(unittest.TestCase):
                       keys=keys, values=keys.clone())
         with torch.no_grad():
             traced = torch.jit.trace(model, tuple(inputs.values()), check_trace=False)
-            expected = model(*inputs.values())
         converted = ct.convert(traced, convert_to="mlprogram",
                                inputs=[ct.TensorType(name=k, shape=v.shape, dtype=np.float32)
                                        for k, v in inputs.items()],
@@ -192,24 +220,8 @@ class ExportTest(unittest.TestCase):
                                minimum_deployment_target=ct.target.iOS18,
                                compute_precision=ct.precision.FLOAT16,
                                compute_units=ct.ComputeUnit.CPU_AND_NE)
-        actual = converted.predict({k: v.numpy() for k, v in inputs.items()})
-        for name, reference in zip(("logits", "keys_out", "values_out"), expected):
-            np.testing.assert_allclose(reference.numpy(), actual[name], atol=2e-3, rtol=2e-3)
-        self.assertGreater(np.abs(actual["keys_out"]).sum(), 0)
-        inputs["keys"] = torch.from_numpy(actual["keys_out"])
-        inputs["values"] = torch.from_numpy(actual["values_out"])
-        inputs["x"] = torch.randn(1, 1, DIM)
-        angle = torch.pow(1000000.0, -2 * torch.arange(HEAD_DIM // 2) / HEAD_DIM)
-        inputs["cosine"] = angle.cos().reshape(1, 1, 1, -1)
-        inputs["sine"] = angle.sin().reshape(1, 1, 1, -1)
-        inputs["write_mask"].zero_()
-        inputs["write_mask"][..., 1, :] = 1
-        inputs["mask"][..., 1] = 0
-        with torch.no_grad():
-            expected = model(*inputs.values())
-        repeated = converted.predict({k: v.numpy() for k, v in inputs.items()})
-        for name, reference in zip(("logits", "keys_out", "values_out"), expected):
-            np.testing.assert_allclose(reference.numpy(), repeated[name], atol=2e-3, rtol=2e-3)
+        caches = check_coreml_cache_steps(model, converted, inputs)
+        self.assertGreater(np.abs(caches["keys"]).sum(), 0)
 
 
     def test_lm_state_reset_reproduces_the_same_prefix(self):

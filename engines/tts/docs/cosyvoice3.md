@@ -78,6 +78,13 @@ so it does not depend on Core ML state operations. Artifacts target macOS
 15 / iOS 18 or later; unavailable runtimes retain ggml. First load may
 compile an ANE execution plan and take substantially longer than a warm load.
 
+Re-export LM sidecars produced before the cache-layer split correction.
+The current exporter separates cache layers through a four-dimensional view
+before selecting each layer. Directly indexing the five-dimensional cache
+can discard earlier positions on macOS 15 and 26. Input/output shapes and
+precision are unchanged; existing compiled artifacts require re-exporting
+to include the corrected graph.
+
 HiFT exports preserve FP32 throughout the spectrum decoder to meet the
 existing waveform parity gate. Under CPU+ANE this stage may execute on CPU;
 the sidecar does not guarantee ANE placement. Re-export HiFT artifacts made

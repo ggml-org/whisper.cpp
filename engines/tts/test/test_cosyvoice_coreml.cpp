@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <iostream>
+#include <iterator>
+#include <sstream>
 #include <stdexcept>
 
 static bool compare(const char *, const std::vector<float> &, const std::vector<float> &, double, double);
@@ -75,6 +77,19 @@ static std::vector<int> generate_lm(model_ctx & model, const std::vector<int> & 
                                   true, seed, steps, nullptr, false);
 }
 
+static std::string token_sequence(const std::vector<int> & tokens) {
+    std::ostringstream output;
+    std::copy(tokens.begin(), tokens.end(), std::ostream_iterator<int>(output, " "));
+    return output.str();
+}
+
+static void require_tokens(const char * label, const std::vector<int> & actual,
+                           const std::vector<int> & expected) {
+    if (actual != expected)
+        throw std::runtime_error(std::string(label) + ": expected " + token_sequence(expected) +
+                                 "; actual " + token_sequence(actual));
+}
+
 static void check_lm_routing(const std::string & path) {
     auto model = cosyvoice_load_gguf(path);
     struct cleanup {
@@ -92,8 +107,10 @@ static void check_lm_routing(const std::string & path) {
     const auto first_predictions = model.coreml->predictions();
     const auto alternate = generate_lm(model, {3, 4}, short_steps);
     const auto second = generate_lm(model, text, short_steps);
-    if (native.size() != short_steps || first != native || second != first ||
-        alternate.size() != short_steps || first_predictions != prefix_rows + short_steps ||
+    require_tokens("Core ML LM differs from native generation", first, native);
+    require_tokens("Core ML LM cache reset differs", second, first);
+    if (native.size() != short_steps || alternate.size() != short_steps ||
+        first_predictions != prefix_rows + short_steps ||
         model.coreml->predictions() != first_predictions)
         throw std::runtime_error("LM generation routing/cache reset failed");
     const auto capacity = model.coreml->dimensions("mask").back();
@@ -106,7 +123,8 @@ static void check_lm_routing(const std::string & path) {
     model.coreml.reset();
     if (fallback.size() != fixture_context || fallback != generate_lm(model, text, fixture_context))
         throw std::runtime_error("LM fallback differs from native generation");
-    std::cout << "LM generation: Core ML selected, caches reset, undersized context retained ggml\n";
+    std::cout << "LM generation: Core ML selected, caches reset, undersized context retained ggml; tokens "
+              << token_sequence(first) << '\n';
 }
 
 static void check_unavailable_stages() {
