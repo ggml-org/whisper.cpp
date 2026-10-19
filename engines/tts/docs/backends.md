@@ -21,10 +21,11 @@ CosyVoice3 take `EngineOptions::vulkan_device` (default: the first adapter).
 Explicit Hexagon placement is supported for [Supertonic 3](supertonic.md#snapdragon-hexagon-npu),
 [Parler mini](parler.md#snapdragon-hexagon-npu),
 [CosyVoice3](cosyvoice3.md#snapdragon-hexagon-npu),
-[Audio8](audio8.md#hexagon-npu-snapdragon) and
+[Audio8](audio8.md#hexagon-npu-snapdragon),
 [MOSS-TTS / MOSS-TTSD](moss.md#hexagon-npu),
-[MOSS-SoundEffect](moss.md#hexagon-npu-generation) and
-[MOSS-Speech](moss.md#hexagon-npu-speech-to-speech); it is not an automatic GPU fallback.
+[MOSS-SoundEffect](moss.md#hexagon-npu-generation),
+[MOSS-Speech](moss.md#hexagon-npu-speech-to-speech) and
+[PocketTTS](pocket-tts.md#hexagon-execution); it is not an automatic GPU fallback.
 
 ## Apple Core ML sidecars
 

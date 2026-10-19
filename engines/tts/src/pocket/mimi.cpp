@@ -22,6 +22,8 @@ struct Mimi::Impl {
     gguf_context * file = nullptr;
     ggml_context * metadata = nullptr, * weights = nullptr, * state = nullptr;
     ggml_backend_t backend = nullptr;
+    // Session capabilities are immutable; avoid a metadata snapshot per graph.
+    HexagonRuntime hexagon_caps;
     ggml_backend_buffer_t wb = nullptr, sb = nullptr;
     std::string hash;
     std::set<std::string> checked;
@@ -33,6 +35,7 @@ struct Mimi::Impl {
     MemoryMeasure * measure = nullptr;
 
     ~Impl() {
+        auto backend_lock = lock_backend(backend);
         if (sb) ggml_backend_buffer_free(sb);
         if (wb) ggml_backend_buffer_free(wb);
         if (state) ggml_free(state);
@@ -133,6 +136,7 @@ struct Mimi::Impl {
         if (checked.size() != static_cast<size_t>(gguf_get_n_tensors(file))) fail("unexpected codec tensors");
         backend = init_stage_backend(device);
         auto backend_lock = lock_backend(backend);
+        if (::tts_cpp::detail::backend_is_hexagon(backend)) hexagon_caps = hexagon_runtime(backend);
         ::tts_cpp::detail::backend_set_n_threads(backend, threads);
         weights = ggml_init({(checked.size() + 8) * ggml_tensor_overhead(), nullptr, true});
         if (!weights) fail("weight context allocation failed");
@@ -145,6 +149,8 @@ struct Mimi::Impl {
             measure->source_hash = hash;
             return;
         }
+        (void)price_hexagon_context(backend, weights);
+        (void)price_hexagon_context(backend, state);
         wb = ggml_backend_alloc_ctx_tensors(weights, backend);
         sb = ggml_backend_alloc_ctx_tensors(state, backend);
         if (!wb || !sb) fail("backend allocation failed");
@@ -155,6 +161,7 @@ struct Mimi::Impl {
         ggml_backend_buffer_clear(sb, 0);
     }
     void reset(bool enc) {
+        auto backend_lock = lock_backend(backend);
         positions[enc] = 0;
         for (const auto & item : histories) {
             const bool is_enc = item.first.find("encoder.") == 0 || item.first.find("downsample.") == 0;
@@ -258,7 +265,7 @@ struct Mimi::Impl {
         return ggml_add(g.ctx, x, y);
     }
     std::vector<float> run(const std::vector<float> & input, bool enc) {
-        PocketGraph g(backend); auto * c = g.ctx;
+        PocketGraph g(backend, &hexagon_caps); auto * c = g.ctx;
         const int count = input.size() / (enc ? hop : latent), n = count*up;
         if (positions[enc] > INT_MAX-n) fail("position overflow; reset codec");
         auto * in = ggml_new_tensor_2d(c, GGML_TYPE_F32, enc ? 1 : latent, enc ? count*hop : count);

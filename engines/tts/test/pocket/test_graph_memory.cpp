@@ -79,6 +79,49 @@ int main() {
             if (a->data || b->data || output->data || w->data || x->data)
                 throw std::runtime_error("OpenCL scratch pricing allocated model/graph tensors");
         }
+        {
+            using namespace tts_cpp::pocket::detail;
+            HexagonRuntime runtime;
+            runtime.tensor_guard_bytes = 4096; runtime.allocation_page_bytes = 16384;
+            runtime.max_buffer_bytes = 8192;
+            if (hexagon_buffer_overhead(runtime) < 4096 + 16383)
+                throw std::runtime_error("Hexagon guard/page rounding omitted");
+            PocketGraph g(backend);
+            auto * exact = ggml_new_tensor_1d(g.ctx, GGML_TYPE_F32, 2048);
+            validate_hexagon_tensor(exact, runtime);
+            auto * oversized = ggml_new_tensor_1d(g.ctx, GGML_TYPE_F32, 2049);
+            bool rejected = false;
+            try { validate_hexagon_tensor(oversized, runtime); }
+            catch (const std::runtime_error &) { rejected = true; }
+            if (!rejected) throw std::runtime_error("Hexagon oversized RPC tensor accepted");
+            if (exact->data || oversized->data) throw std::runtime_error("Hexagon limit check allocated tensors");
+        }
+        {
+            using namespace tts_cpp::pocket::detail;
+            constexpr uint64_t mib = 1024 * 1024;
+            HexagonRuntime runtime;
+            runtime.max_buffer_bytes = 2048 * mib - 4096;
+            PocketGraph g(backend);
+            // Two individually valid 1.125 GiB tensors can share a 2.25 GiB
+            // allocation when MBUF=3072, above the 2 GiB minus guard cap.
+            auto * a = ggml_new_tensor_1d(g.ctx, GGML_TYPE_F32, 1152 * mib / sizeof(float));
+            auto * b = ggml_new_tensor_1d(g.ctx, GGML_TYPE_F32, 1152 * mib / sizeof(float));
+            validate_hexagon_tensor(a, runtime);
+            validate_hexagon_tensor(b, runtime);
+            for (const auto limit : {2048 * mib, 3072 * mib}) {
+                bool rejected = false;
+                try { validate_hexagon_packing_limit(limit, runtime.max_buffer_bytes); }
+                catch (const BackendUnavailable & error) {
+                    rejected = std::string(error.what()).find("GGML_HEXAGON_MBUF") != std::string::npos;
+                }
+                if (!rejected) throw std::runtime_error("Hexagon unsafe packed buffer configuration accepted");
+            }
+            // The default, the largest whole-MiB safe setting, and the exact
+            // effective payload boundary remain valid.
+            for (const auto limit : {1024 * mib, 2047 * mib, runtime.max_buffer_bytes})
+                validate_hexagon_packing_limit(limit, runtime.max_buffer_bytes);
+            if (a->data || b->data) throw std::runtime_error("Hexagon packing check allocated payloads");
+        }
         ggml_backend_free(backend);
         std::cout << "Pocket graph memory: metadata-only CPU scratch included\n";
         return 0;

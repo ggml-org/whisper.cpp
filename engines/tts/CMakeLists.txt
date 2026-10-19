@@ -1705,6 +1705,7 @@ if (TTS_CPP_BUILD_TESTS)
     set(TTS_CPP_POCKET_MODEL_DIR "${TTS_CPP_TEST_MODEL_DIR}/pocket"
         CACHE PATH "Complete Pocket bundle for frontend and engine fixtures")
     option(TTS_CPP_POCKET_OPENCL_TESTS "Run Pocket fixtures explicitly on OpenCL (requires hardware)" OFF)
+    option(TTS_CPP_POCKET_HEXAGON_TESTS "Run Pocket fixtures explicitly on Hexagon HTP0 (requires hardware)" OFF)
     add_executable(test-pocket-frontend test/pocket/test_frontend.cpp src/pocket/frontend.cpp)
     target_include_directories(test-pocket-frontend PRIVATE src)
     tts_cpp_register_test(test-pocket-frontend LABEL "fixture"
@@ -1725,16 +1726,19 @@ if (TTS_CPP_BUILD_TESTS)
             ARGS "${TTS_CPP_POCKET_MODEL_DIR}" "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf"
             REQUIRES "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf" "${TTS_CPP_POCKET_MODEL_DIR}/mimi.gguf"
                      "${TTS_CPP_POCKET_MODEL_DIR}/frontend.json" "${TTS_CPP_POCKET_MODEL_DIR}/voice.gguf")
-        if (TTS_CPP_POCKET_OPENCL_TESTS)
-            tts_cpp_register_test(test-pocket-fit-opencl LABEL "fixture" EXE test-pocket-fit
-                ARGS "${TTS_CPP_POCKET_MODEL_DIR}" opencl
-                REQUIRES "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf" "${TTS_CPP_POCKET_MODEL_DIR}/mimi.gguf"
-                         "${TTS_CPP_POCKET_MODEL_DIR}/frontend.json" "${TTS_CPP_POCKET_MODEL_DIR}/voice.gguf")
-            tts_cpp_register_test(test-pocket-engine-opencl LABEL "fixture" EXE test-pocket-engine
-                ARGS "${TTS_CPP_POCKET_MODEL_DIR}" "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf" opencl
-                REQUIRES "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf" "${TTS_CPP_POCKET_MODEL_DIR}/mimi.gguf"
-                         "${TTS_CPP_POCKET_MODEL_DIR}/frontend.json" "${TTS_CPP_POCKET_MODEL_DIR}/voice.gguf")
-        endif()
+        foreach(_pocket_backend opencl hexagon)
+            string(TOUPPER "${_pocket_backend}" _pocket_backend_uc)
+            if (TTS_CPP_POCKET_${_pocket_backend_uc}_TESTS)
+                tts_cpp_register_test(test-pocket-fit-${_pocket_backend} LABEL "fixture" EXE test-pocket-fit
+                    ARGS "${TTS_CPP_POCKET_MODEL_DIR}" ${_pocket_backend}
+                    REQUIRES "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf" "${TTS_CPP_POCKET_MODEL_DIR}/mimi.gguf"
+                             "${TTS_CPP_POCKET_MODEL_DIR}/frontend.json" "${TTS_CPP_POCKET_MODEL_DIR}/voice.gguf")
+                tts_cpp_register_test(test-pocket-engine-${_pocket_backend} LABEL "fixture" EXE test-pocket-engine
+                    ARGS "${TTS_CPP_POCKET_MODEL_DIR}" "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf" ${_pocket_backend}
+                    REQUIRES "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf" "${TTS_CPP_POCKET_MODEL_DIR}/mimi.gguf"
+                             "${TTS_CPP_POCKET_MODEL_DIR}/frontend.json" "${TTS_CPP_POCKET_MODEL_DIR}/voice.gguf")
+            endif()
+        endforeach()
     endif()
     set(TTS_CPP_POCKET_REFERENCE_DIR "${TTS_CPP_TEST_MODEL_DIR}/pocket-reference"
         CACHE PATH "Pocket FlowLM fixtures from dump-pocket-flow-reference.py")
@@ -1768,14 +1772,17 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_register_test(test-pocket-flow-lm-f16 LABEL "fixture" EXE test-pocket-flow-lm
         ARGS "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f16.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}" "0.01"
         REQUIRES "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f16.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}/provenance.json")
-    if (TTS_CPP_POCKET_OPENCL_TESTS)
-        tts_cpp_register_test(test-pocket-flow-lm-opencl LABEL "fixture" EXE test-pocket-flow-lm
-            ARGS "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f32.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}" "0.0001" opencl
-            REQUIRES "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f32.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}/provenance.json")
-        tts_cpp_register_test(test-pocket-flow-lm-f16-opencl LABEL "fixture" EXE test-pocket-flow-lm
-            ARGS "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f16.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}" "0.01" opencl
-            REQUIRES "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f16.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}/provenance.json")
-    endif()
+    foreach(_pocket_backend opencl hexagon)
+        string(TOUPPER "${_pocket_backend}" _pocket_backend_uc)
+        if (TTS_CPP_POCKET_${_pocket_backend_uc}_TESTS)
+            tts_cpp_register_test(test-pocket-flow-lm-${_pocket_backend} LABEL "fixture" EXE test-pocket-flow-lm
+                ARGS "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f32.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}" "0.0001" ${_pocket_backend}
+                REQUIRES "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f32.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}/provenance.json")
+            tts_cpp_register_test(test-pocket-flow-lm-f16-${_pocket_backend} LABEL "fixture" EXE test-pocket-flow-lm
+                ARGS "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f16.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}" "0.01" ${_pocket_backend}
+                REQUIRES "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f16.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}/provenance.json")
+        endif()
+    endforeach()
 
     add_executable(test-pocket-mimi test/pocket/test_mimi.cpp ${_pocket_test_sources})
     target_link_libraries(test-pocket-mimi PRIVATE ${_pocket_test_library})
@@ -1790,15 +1797,18 @@ if (TTS_CPP_BUILD_TESTS)
                  "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/latents.npy"
                  "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/pcm.npy"
                  "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/encoded.npy")
-    if (TTS_CPP_POCKET_OPENCL_TESTS)
-        tts_cpp_register_test(test-pocket-mimi-opencl LABEL "fixture" EXE test-pocket-mimi
-            ARGS "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/mimi.gguf" "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}" opencl
-            REQUIRES "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/mimi.gguf"
-                     "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/provenance.json"
-                     "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/latents.npy"
-                     "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/pcm.npy"
-                     "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/encoded.npy")
-    endif()
+    foreach(_pocket_backend opencl hexagon)
+        string(TOUPPER "${_pocket_backend}" _pocket_backend_uc)
+        if (TTS_CPP_POCKET_${_pocket_backend_uc}_TESTS)
+            tts_cpp_register_test(test-pocket-mimi-${_pocket_backend} LABEL "fixture" EXE test-pocket-mimi
+                ARGS "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/mimi.gguf" "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}" ${_pocket_backend}
+                REQUIRES "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/mimi.gguf"
+                         "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/provenance.json"
+                         "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/latents.npy"
+                         "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/pcm.npy"
+                         "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/encoded.npy")
+        endif()
+    endforeach()
 
     foreach(_pocket_backend IN ITEMS metal cuda vulkan)
         string(TOUPPER "${_pocket_backend}" _pocket_backend_upper)

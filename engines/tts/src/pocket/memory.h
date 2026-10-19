@@ -15,6 +15,16 @@ constexpr uint64_t opencl_init_bytes = opencl_init_quant_bytes + opencl_init_sca
 struct OpenCLScratch {
     uint64_t weights = 0, activations = 0, src0 = 0, src1 = 0, growth = 0;
 };
+// Effective registry-owned HTP session state. Populated only through the
+// versioned runtime query; mutable environment variables are not telemetry.
+struct HexagonRuntime {
+    uint64_t host_bytes_bound = 0, shared_bytes = 0;
+    uint64_t max_buffer_bytes = 0, max_batch_vmem_bytes = 0, vtcm_bytes = 0;
+    uint64_t tensor_guard_bytes = 0, buffer_alignment = 0, allocation_page_bytes = 0;
+    uint32_t session_count = 0;
+};
+// Speech ggml e1fb17af: graph arenas use at most 16 virtual-buffer chunks.
+constexpr uint64_t hexagon_graph_buffer_chunks = 16;
 // Internal metadata-only measurements. Compute includes CPU work-plan scratch;
 // the CPU backend retains its largest work buffer across graph executions.
 struct MemoryMeasure {

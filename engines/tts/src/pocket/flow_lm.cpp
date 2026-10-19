@@ -42,12 +42,15 @@ struct FlowLM::Impl {
     ggml_context * weights = nullptr;
     ggml_context * state = nullptr;
     ggml_backend_t backend = nullptr;
+    // Session capabilities are immutable; avoid a metadata snapshot per frame.
+    HexagonRuntime hexagon_caps;
     ggml_backend_buffer_t weights_buffer = nullptr;
     ggml_backend_buffer_t state_buffer = nullptr;
     std::vector<ggml_tensor *> keys, values;
     std::unordered_set<std::string> checked;
 
     ~Impl() {
+        auto backend_lock = lock_backend(backend);
         if (state_buffer) ggml_backend_buffer_free(state_buffer);
         if (weights_buffer) ggml_backend_buffer_free(weights_buffer);
         if (state) ggml_free(state);
@@ -152,6 +155,7 @@ struct FlowLM::Impl {
         validate_tensors(); // All validation precedes device allocations and graph construction.
         backend = init_stage_backend(device);
         auto backend_lock = lock_backend(backend);
+        if (::tts_cpp::detail::backend_is_hexagon(backend)) hexagon_caps = hexagon_runtime(backend);
         ::tts_cpp::detail::backend_set_n_threads(backend, threads);
         // This baseline always computes in F32. Expanding half storage once
         // avoids ggml CPU's F16 matmul rounding *activations* to F16, which
@@ -163,6 +167,7 @@ struct FlowLM::Impl {
             ggml_set_name(destination, ggml_get_name(t));
         }
         if (!measure) {
+        (void)price_hexagon_context(backend, weights);
         weights_buffer = ggml_backend_alloc_ctx_tensors(weights, backend);
         if (!weights_buffer) fail("weight allocation failed");
         ::tts_cpp::detail::gguf_stream_reader reader(file, path);
@@ -183,6 +188,7 @@ struct FlowLM::Impl {
             price_persistent(backend, metadata, weights, state, file, *measure);
             return;
         }
+        (void)price_hexagon_context(backend, state);
         state_buffer = ggml_backend_alloc_ctx_tensors(state, backend);
         if (!state_buffer) fail("KV cache allocation failed");
     }
@@ -212,12 +218,13 @@ struct FlowLM::Impl {
         if (!count) fail("empty graph workload");
         if (count > static_cast<size_t>(capacity - past)) fail("KV context capacity exceeded");
         const int n = static_cast<int>(count), hd = cfg.dim / cfg.heads, total = past + n;
-        PocketFlowGraph g(backend); auto * c = g.ctx;
+        PocketFlowGraph g(backend, &hexagon_caps); auto * c = g.ctx;
         auto * in = ggml_new_tensor_2d(c, GGML_TYPE_F32, cfg.dim, n); ggml_set_input(in);
         auto * positions = ggml_new_tensor_1d(c, GGML_TYPE_I32, n); ggml_set_input(positions);
         ggml_tensor * causal_mask = nullptr;
-        if (::tts_cpp::detail::backend_is_opencl(backend)) {
-            // The reviewed OpenCL DIAG_MASK_INF vector kernel overwrites
+        if (::tts_cpp::detail::backend_is_opencl(backend) || ::tts_cpp::detail::backend_is_hexagon(backend)) {
+            // Hexagon does not implement DIAG_MASK_INF; the reviewed OpenCL
+            // DIAG_MASK_INF vector kernel overwrites
             // neighboring float4 vectors when total is divisible by eight.
             // Use the explicit-mask softmax path, also used by Mimi.
             causal_mask = ggml_new_tensor_2d(c, GGML_TYPE_F32, total, n);
@@ -278,7 +285,7 @@ struct FlowLM::Impl {
         if (condition.size() != static_cast<size_t>(cfg.dim) || noise.size() != static_cast<size_t>(cfg.latent_dim) ||
             steps < 1 || steps > 64) fail("invalid flow inputs or steps (expected 1..64)");
         finite(condition); finite(noise);
-        PocketFlowGraph g(backend); auto * c = g.ctx;
+        PocketFlowGraph g(backend, &hexagon_caps); auto * c = g.ctx;
         auto * hidden = ggml_new_tensor_2d(c, GGML_TYPE_F32, cfg.dim, 1); ggml_set_input(hidden);
         auto * latent = ggml_new_tensor_2d(c, GGML_TYPE_F32, cfg.latent_dim, 1); ggml_set_input(latent);
         ggml_tensor * times[2]; ggml_tensor * embedded[2];
@@ -288,8 +295,8 @@ struct FlowLM::Impl {
             auto * h = linear(c, p + ".mlp.2", ggml_silu(c, linear(c, p + ".mlp.0", times[i])));
             // Kyutai calls this RMSNorm but divides by the sample VARIANCE
             // (unbiased, mean-subtracted), while multiplying the original h.
-            auto * centered = ggml_sub(c, h, ggml_mean(c, h));
-            auto * variance = ggml_scale_bias(c, ggml_mean(c, ggml_sqr(c, centered)),
+            auto * centered = ggml_sub(c, h, pocket_mean(c, h, backend));
+            auto * variance = ggml_scale_bias(c, pocket_mean(c, ggml_sqr(c, centered), backend),
                                                float(cfg.flow_dim) / float(cfg.flow_dim - 1), 1e-5f);
             embedded[i] = ggml_mul(c, ggml_div(c, h, ggml_sqrt(c, variance)), tensor(p + ".mlp.3.alpha"));
         }
@@ -357,12 +364,12 @@ FlowMemory FlowLM::measure(const std::string & path, int context, int prefill_fr
     model.past = context - 1;
     model.backbone({}, 1);
     // advance() keeps its projection arena alive while backbone() runs.
-    PocketFlowGraph projection(model.backend);
+    PocketFlowGraph projection(model.backend, &model.hexagon_caps);
     auto * input = ggml_new_tensor_2d(projection.ctx, GGML_TYPE_F32, model.cfg.latent_dim, 1);
     ggml_set_input(input);
     out.compute += projection.prepare(model.audio_projection(projection, input), true, threads, &out.opencl_scratch);
     model.flow(std::vector<float>(model.cfg.dim), std::vector<float>(model.cfg.latent_dim), 1);
-    PocketFlowGraph voice_projection(model.backend);
+    PocketFlowGraph voice_projection(model.backend, &model.hexagon_caps);
     auto * voice_input = ggml_new_tensor_2d(voice_projection.ctx, GGML_TYPE_F32, model.cfg.latent_dim, 375);
     ggml_set_input(voice_input);
     out.compute = std::max(out.compute, voice_projection.prepare(model.voice_projection(voice_projection, voice_input), true, threads, &out.opencl_scratch));
@@ -377,6 +384,7 @@ void FlowLM::reset() { impl_->past = 0; }
 std::vector<float> FlowLM::prefill(const std::vector<float> & embeddings) { return impl_->backbone(embeddings); }
 
 std::vector<float> FlowLM::text_embeddings(const std::vector<int> & ids) const {
+    auto backend_lock = lock_backend(impl_->backend);
     std::vector<float> result;
     if (ids.size() > static_cast<size_t>(impl_->capacity)) fail("text exceeds context capacity");
     for (int id : ids) {
@@ -392,7 +400,7 @@ FrameCondition FlowLM::advance(const std::vector<float> & latent) {
     if (position() >= impl_->capacity) fail("KV context capacity exceeded");
     if (!latent.empty() && latent.size() != static_cast<size_t>(config().latent_dim)) fail("invalid latent dimensions");
     finite(latent);
-    PocketFlowGraph g(impl_->backend);
+    PocketFlowGraph g(impl_->backend, &impl_->hexagon_caps);
     auto * input = ggml_new_tensor_2d(g.ctx, GGML_TYPE_F32, config().latent_dim, 1); ggml_set_input(input);
     auto * output = impl_->audio_projection(g, input);
     g.prepare(output);
@@ -411,6 +419,7 @@ std::vector<float> FlowLM::sample(const std::vector<float> & hidden, const std::
     return impl_->flow(hidden, noise, steps);
 }
 std::vector<float> FlowLM::denormalize(const std::vector<float> & latent) const {
+    auto backend_lock = lock_backend(impl_->backend);
     if (latent.size() != static_cast<size_t>(config().latent_dim)) fail("invalid latent dimensions");
     finite(latent);
     auto result = latent;
@@ -466,6 +475,7 @@ int FlowLM::measure_voice(const std::string & path, const FlowMemory & model, in
     return read_voice_file(path, model.config, context, model.source_hash, false).frames;
 }
 VoiceState FlowLM::capture_voice() const {
+    auto backend_lock = lock_backend(impl_->backend);
     if (position() < 1) fail("cannot capture an empty voice prefix");
     VoiceState result; result.source_hash = source_hash(); result.frames = position();
     for (int i = 0; i < config().layers; ++i) {
@@ -475,6 +485,7 @@ VoiceState FlowLM::capture_voice() const {
     return result;
 }
 void FlowLM::restore_voice(const VoiceState & voice) {
+    auto backend_lock = lock_backend(impl_->backend);
     if (voice.source_hash != source_hash() || voice.frames < 1 || voice.frames >= impl_->capacity ||
         voice.keys.size() != size_t(config().layers) || voice.values.size() != voice.keys.size()) fail("invalid voice state");
     for (int i = 0; i < config().layers; ++i) {
@@ -488,7 +499,7 @@ void FlowLM::restore_voice(const VoiceState & voice) {
 std::vector<float> FlowLM::voice_embeddings(const std::vector<float> & latents) const {
     if (latents.empty() || latents.size()%config().latent_dim || latents.size()/config().latent_dim > 375) fail("invalid voice latents");
     finite(latents);
-    PocketFlowGraph g(impl_->backend);
+    PocketFlowGraph g(impl_->backend, &impl_->hexagon_caps);
     auto * x = ggml_new_tensor_2d(g.ctx, GGML_TYPE_F32, config().latent_dim, latents.size()/config().latent_dim);
     ggml_set_input(x); auto * output = impl_->voice_projection(g, x);
     g.prepare(output); upload(x, latents); auto result = g.compute(impl_->backend, output);

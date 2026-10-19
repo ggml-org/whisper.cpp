@@ -59,7 +59,7 @@ void check_tail_budget(pocket::FitOptions opts) {
 }
 int main(int argc, char ** argv) {
     try {
-        check(argc == 2 || argc == 3, "expected Pocket bundle directory [--gpu]");
+        check(argc == 2 || argc == 3, "expected Pocket bundle directory [cpu|opencl|hexagon|HTP0|--gpu]");
         pocket::FitOptions opts;
         opts.engine.use_gpu = argc == 3 && std::string(argv[2]) == "--gpu";
         opts.engine.backend = argc == 3 && !opts.engine.use_gpu ? argv[2] : "";
@@ -73,8 +73,13 @@ int main(int argc, char ** argv) {
         set_paths(bundle); check_tail_budget(opts); opts.text = "Hello! This is a Pocket memory preflight.";
         const auto result = pocket::fit_params(opts);
         check(result.status != FitStatus::Error, result.report.c_str());
-        check(result.device_is_cpu == (!opts.engine.use_gpu && opts.engine.backend != "opencl"), "fit reported the wrong backend");
-        if (opts.engine.backend != "opencl") check_pocket_backend(result.device_name.c_str(), opts.engine.use_gpu);
+        const bool hexagon = pocket::detail::backend_request(opts.engine.backend) == "hexagon";
+        check(result.device_is_cpu == (!opts.engine.use_gpu && opts.engine.backend != "opencl" && !hexagon), "fit selected the wrong backend");
+        if (hexagon) {
+            check(result.device_shares_host_memory, "Hexagon RPC memory must share OS RAM");
+            check(result.device_total_bytes > 0 && result.device_free_bytes > 0, "zero Hexagon driver telemetry treated as zero RAM");
+            check(result.report.find("Hexagon") != std::string::npos, "Hexagon memory details omitted");
+        } else if (opts.engine.backend != "opencl") check_pocket_backend(result.device_name.c_str(), opts.engine.use_gpu);
         check(result.device.weights_bytes > 100*1024*1024, "expanded weights not priced");
         check(result.device.state_bytes && result.device.lm_compute_bytes && result.device.codec_compute_bytes && result.host_bytes, "missing memory components");
         std::cout << result.report;

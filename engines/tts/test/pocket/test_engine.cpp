@@ -51,8 +51,8 @@ static void check_parallel_instances(EngineOptions opts) {
         try { Engine instance(opts); pcm = instance.synthesize("Hi.").pcm; }
         catch (...) { error = std::current_exception(); }
     };
-    // Include construction and destruction: OpenCL handles share backend
-    // lifecycle state as well as graph scratch and mutable kernel arguments.
+    // Include construction/destruction: accelerator handles share OpenCL
+    // scratch/kernel state or the Hexagon session/queue/cache.
     std::thread a(run, std::ref(first), std::ref(first_error));
     std::thread b(run, std::ref(second), std::ref(second_error));
     a.join(); b.join();
@@ -61,7 +61,7 @@ static void check_parallel_instances(EngineOptions opts) {
     compare(first, second);
 }
 int main(int argc, char ** argv) {
-    if (argc != 3 && argc != 4) { std::fprintf(stderr, "usage: test-pocket-engine model-directory flow-lm.gguf [--gpu]\n"); return 2; }
+    if (argc != 3 && argc != 4) { std::fprintf(stderr, "usage: test-pocket-engine model-directory flow-lm.gguf [cpu|opencl|hexagon|HTP0|--gpu]\n"); return 2; }
     try {
         const std::string dir = argv[1];
         EngineOptions opts; opts.flow_lm_path = argv[2]; opts.mimi_path = dir+"/mimi.gguf";
@@ -76,7 +76,9 @@ int main(int argc, char ** argv) {
             throw std::runtime_error("stage backend reporting differs");
         if (opts.backend == "opencl" && backend.find("OpenCL") == std::string::npos)
             throw std::runtime_error("OpenCL test ran on another backend");
-        if (opts.backend != "opencl") check_pocket_backend(engine.backend_name(), opts.use_gpu);
+        if (tts_cpp::pocket::detail::backend_request(opts.backend) == "hexagon") {
+            if (backend != "HTP0") throw std::runtime_error("Hexagon test ran on another backend");
+        } else if (opts.backend != "opencl") check_pocket_backend(engine.backend_name(), opts.use_gpu);
         std::printf("FlowLM: %s; Mimi: %s\n", engine.flow_lm_backend_name(), engine.mimi_backend_name());
         const std::string text = "Hello! We can generate speech with Fabric.";
         const auto batch = engine.synthesize(text);

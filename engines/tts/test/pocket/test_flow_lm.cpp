@@ -70,7 +70,7 @@ struct CorruptModel {
 
 int main(int argc, char ** argv) {
     if (argc != 4 && argc != 5) {
-        std::fprintf(stderr, "usage: test-pocket-flow-lm model.gguf fixture-directory absolute-tolerance [--gpu]\n");
+        std::fprintf(stderr, "usage: test-pocket-flow-lm model.gguf fixture-directory absolute-tolerance [cpu|opencl|hexagon|HTP0|--gpu]\n");
         return 2;
     }
     try {
@@ -80,6 +80,8 @@ int main(int argc, char ** argv) {
         auto backend = pocket_test_backend(argc == 5 ? argv[4] : "cpu");
         const auto device = ggml_backend_get_device(backend.get());
         FlowLM lm(model, 64, 2, device);
+        if (std::string(lm.backend_name()) != ggml_backend_name(backend.get()))
+            throw std::runtime_error("FlowLM fixture ran on a different backend");
         if (argc != 5 || std::string(argv[4]) == "--gpu") check_pocket_backend(lm.backend_name(), argc == 5);
         std::printf("FlowLM backend: %s\n", lm.backend_name());
         const auto embeddings = load(dir, "embeddings");
