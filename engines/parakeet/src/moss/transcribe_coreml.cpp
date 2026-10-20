@@ -47,8 +47,8 @@ public:
     bool encode(const std::vector<float> & mel, std::vector<float> & embeddings) override {
         const std::vector<float> frames = frame_major_mel(mel, n_mels_, frames_);
         embeddings.assign((size_t) tokens_ * width_, 0.0f);
-        return parakeet_coreml_encode(context_, frames_, n_mels_, frames.data(), tokens_, width_,
-                embeddings.data()) == 0;
+        return parakeet_coreml_encode(context_, frames_, /*n_mel_valid=*/frames_, n_mels_,
+                frames.data(), tokens_, width_, embeddings.data()) == 0;
     }
 
     const char * label() const override {

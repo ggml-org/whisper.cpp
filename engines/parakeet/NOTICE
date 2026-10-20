@@ -134,4 +134,10 @@ Apache-2.0 model weights
   MOSS-Transcribe-Diarize
     https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize
 
+  QVAC TranscribePsy-250M-EU-sub (FastConformer-TDT distilled from
+  NVIDIA Parakeet-TDT-0.6B-v3), with its GGUF and Core ML builds
+    https://huggingface.co/qvac/TranscribePsy-250M-EU-sub
+    https://huggingface.co/qvac/TranscribePsy-250M-EU-sub-gguf
+    https://huggingface.co/qvac/TranscribePsy-250M-EU-sub-coreml
+
 Model weights are downloaded separately and are not distributed in this source tree.

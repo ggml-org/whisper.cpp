@@ -57,4 +57,8 @@ std::string coreml_bypass_encoder_sidecar_path(const std::string & gguf_path) {
     return coreml_sidecar_base(gguf_path) + "-encoder-bypass-pre-encode.mlmodelc";
 }
 
+std::string coreml_decoder_sidecar_path(const std::string & gguf_path) {
+    return coreml_sidecar_base(gguf_path) + "-decoder.mlmodelc";
+}
+
 }  // namespace parakeet

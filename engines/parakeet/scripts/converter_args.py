@@ -49,6 +49,35 @@ def parse_args(
         help="HF model id to download from if --ckpt is missing.",
     )
     parser.add_argument(
+        "--description",
+        default=None,
+        help=(
+            "Value for general.description. Defaults to the model family's "
+            "own text, e.g. 'NVIDIA Parakeet-TDT FastConformer ASR "
+            "(CC-BY-4.0)'. Published derivatives such as TranscribePsy set "
+            "their own so the GGUF can be reproduced byte for byte."
+        ),
+    )
+    parser.add_argument(
+        "--long-form-window-sec",
+        type=float,
+        default=None,
+        help=(
+            "Long-form window the model recommends, in seconds, written as "
+            "parakeet.long_form.window_frames; the engine takes it when the "
+            "caller leaves the window automatic (TranscribePsy: 60)."
+        ),
+    )
+    parser.add_argument(
+        "--long-form-overlap",
+        type=float,
+        default=None,
+        help=(
+            "Fraction of the recommended window shared with its neighbours, "
+            "written as parakeet.long_form.context_frames (TranscribePsy: 0.25)."
+        ),
+    )
+    parser.add_argument(
         "--head",
         choices=HEAD_CHOICES,
         default="auto",

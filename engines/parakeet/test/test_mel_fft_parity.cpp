@@ -146,6 +146,80 @@ int section_repeated_call_invariance(const parakeet::MelConfig & cfg,
     return 0;
 }
 
+// Engine::compute_mel keeps a thread-local MelState that outlives the engine,
+// and a later engine can place another model's tables at the same address;
+// the state's caches must follow the table contents, never the address.
+int section_reused_state_after_table_change(const parakeet::MelConfig & cfg,
+                                            const std::vector<float> & signal) {
+    using namespace parakeet;
+
+    MelState  state;
+    MelConfig same_address = cfg;
+    std::vector<float> before, reused, fresh;
+    int n_before = 0, n_reused = 0, n_fresh = 0;
+    if (compute_log_mel(signal.data(), (int) signal.size(), same_address, state, before, n_before) != 0) {
+        std::fprintf(stderr, "[reload] compute_log_mel failed before the table change\n");
+        return 1;
+    }
+
+    for (float & w : same_address.window)     w *= 0.75f;
+    for (float & f : same_address.filterbank) f *= 0.5f;
+
+    if (compute_log_mel(signal.data(), (int) signal.size(), same_address, state, reused, n_reused) != 0 ||
+        compute_log_mel(signal.data(), (int) signal.size(), same_address, fresh, n_fresh) != 0) {
+        std::fprintf(stderr, "[reload] compute_log_mel failed after the table change\n");
+        return 1;
+    }
+    if (bit_equal(fresh, before)) {
+        std::fprintf(stderr, "[reload] FAIL: the changed tables did not change the mel\n");
+        return 1;
+    }
+    if (n_reused != n_fresh || !bit_equal(reused, fresh)) {
+        report_first_diff(fresh, reused, "reload");
+        std::fprintf(stderr, "[reload] FAIL: a reused state kept the previous tables' caches\n");
+        return 1;
+    }
+    std::fprintf(stderr, "[reload] PASS  reused state follows new tables at the same address\n");
+    return 0;
+}
+
+int section_incremental_state_after_table_change(const parakeet::MelConfig & cfg,
+                                                 const std::vector<float> & signal) {
+    using namespace parakeet;
+
+    IncrementalMelState state;
+    MelConfig same_address = cfg;
+    same_address.normalize = MelNormalize::None;
+    std::vector<float> before, reused, fresh;
+    int n_before = 0, n_reused = 0, n_fresh = 0;
+    if (append_log_mel(signal.data(), (int) signal.size(), true, same_address, state, before, n_before) != 0) {
+        std::fprintf(stderr, "[reload-incremental] append_log_mel failed before the table change\n");
+        return 1;
+    }
+
+    for (float & w : same_address.window)     w *= 0.75f;
+    for (float & f : same_address.filterbank) f *= 0.5f;
+
+    reset_incremental_mel(state);
+    IncrementalMelState fresh_state;
+    if (append_log_mel(signal.data(), (int) signal.size(), true, same_address, state, reused, n_reused) != 0 ||
+        append_log_mel(signal.data(), (int) signal.size(), true, same_address, fresh_state, fresh, n_fresh) != 0) {
+        std::fprintf(stderr, "[reload-incremental] append_log_mel failed after the table change\n");
+        return 1;
+    }
+    if (bit_equal(fresh, before)) {
+        std::fprintf(stderr, "[reload-incremental] FAIL: the changed tables did not change the mel\n");
+        return 1;
+    }
+    if (n_reused != n_fresh || !bit_equal(reused, fresh)) {
+        report_first_diff(fresh, reused, "reload-incremental");
+        std::fprintf(stderr, "[reload-incremental] FAIL: a reused incremental state kept the previous tables' caches\n");
+        return 1;
+    }
+    std::fprintf(stderr, "[reload-incremental] PASS  reused incremental state follows new tables\n");
+    return 0;
+}
+
 int section_stateful_vs_stateless_parity(const parakeet::MelConfig & cfg,
                                          const std::vector<float> & signal) {
     using namespace parakeet;
@@ -558,6 +632,115 @@ int section_per_feature_valid_frame_zeroing() {
     return 0;
 }
 
+// The STFT runs in blocks of `MelConfig::stft_block_frames` frames. Each block
+// rebuilds the samples it needs straight from the input, which is only sound
+// because pre-emphasis and reflect padding are pointwise; a mis-derived seam
+// would show up as a different frame. A block of n_frames is a single pass
+// over the whole input, so comparing it against smaller blocks tests the
+// chunking, and equality has to be exact: the per-frame arithmetic does not
+// depend on the block.
+int compare_blocked_against_single_pass(parakeet::MelConfig cfg,
+                                        const std::vector<float> & signal,
+                                        const char * label) {
+    using namespace parakeet;
+
+    auto mel_with_block = [&](int block, std::vector<float> & mel, int & n) {
+        cfg.stft_block_frames = block;
+        MelState state;
+        return compute_log_mel(signal.data(), (int) signal.size(), cfg, state, mel, n);
+    };
+
+    std::vector<float> ref;
+    int ref_frames = 0;
+    if (mel_with_block(1 << 20, ref, ref_frames) != 0) {
+        std::fprintf(stderr, "[block/%s] reference compute_log_mel failed\n", label);
+        return 1;
+    }
+
+    // 1 and 2 are degenerate (every block is a seam); 2048 is the default;
+    // 2047/2049 straddle it so an off-by-one in the span or the base offset
+    // cannot hide behind an exact multiple.
+    for (int block : {1, 2, 7, 64, 2047, 2048, 2049, 3000}) {
+        std::vector<float> mel;
+        int n_frames = 0;
+        if (mel_with_block(block, mel, n_frames) != 0) {
+            std::fprintf(stderr, "[block/%s] compute_log_mel failed at block=%d\n", label, block);
+            return 1;
+        }
+        if (n_frames != ref_frames || !bit_equal(mel, ref)) {
+            std::fprintf(stderr, "[block/%s] block=%d differs from the single pass\n", label, block);
+            report_first_diff(mel, ref, "block");
+            return 1;
+        }
+    }
+    std::fprintf(stderr, "[block/%s] %d frames bit-identical across 8 block sizes\n",
+                 label, ref_frames);
+    return 0;
+}
+
+// 30 s crosses the default block and ends mid-block, so the interior seams
+// and the final short block are both exercised; the other sections run one
+// second, entirely inside one block. The second configuration takes the
+// right-zero-pad branch of the padding, which the first never reaches.
+int section_stft_block_invariance(const parakeet::MelConfig & cfg) {
+    const std::vector<float> signal = make_signal(30 * cfg.sample_rate);
+
+    parakeet::MelConfig zero_pad = cfg;
+    zero_pad.right_zero_pad = true;
+    zero_pad.normalize      = parakeet::MelNormalize::None;
+
+    int rc = 0;
+    rc |= compare_blocked_against_single_pass(cfg, signal, "reflect");
+    rc |= compare_blocked_against_single_pass(zero_pad, signal, "zero-pad");
+    return rc;
+}
+
+// The block buffers are sized by the block, never by the input, and
+// releasing them between calls changes nothing about the next result.
+int section_scratch_bounded_and_releasable(const parakeet::MelConfig & cfg) {
+    using namespace parakeet;
+
+    const std::vector<float> signal = make_signal(30 * cfg.sample_rate);
+    const int block  = 256;
+    const int n_bins = cfg.n_fft / 2 + 1;
+
+    MelConfig blocked = cfg;
+    blocked.stft_block_frames = block;
+
+    MelState state;
+    std::vector<float> first;
+    int n_first = 0;
+    if (compute_log_mel(signal.data(), (int) signal.size(), blocked, state, first, n_first) != 0) {
+        std::fprintf(stderr, "[scratch] compute_log_mel failed\n");
+        return 1;
+    }
+    const size_t span_bound  = (size_t) (block - 1) * cfg.hop_length + cfg.n_fft;
+    const size_t power_bound = (size_t) block * n_bins;
+    if (state.x_padded.size() > span_bound || state.power.size() > power_bound) {
+        std::fprintf(stderr, "[scratch] FAIL: scratch grew past the block (%zu > %zu or %zu > %zu)\n",
+                     state.x_padded.size(), span_bound, state.power.size(), power_bound);
+        return 1;
+    }
+
+    state.release_scratch();
+    if (!state.x_padded.empty() || !state.power.empty() || state.window_padded.empty()) {
+        std::fprintf(stderr, "[scratch] FAIL: release_scratch did not free the block buffers "
+                             "or dropped the cached window\n");
+        return 1;
+    }
+
+    std::vector<float> second;
+    int n_second = 0;
+    if (compute_log_mel(signal.data(), (int) signal.size(), blocked, state, second, n_second) != 0 ||
+        n_second != n_first || !bit_equal(first, second)) {
+        std::fprintf(stderr, "[scratch] FAIL: result changed after release_scratch\n");
+        report_first_diff(first, second, "scratch");
+        return 1;
+    }
+    std::fprintf(stderr, "[scratch] PASS  block-bounded scratch, identical after release\n");
+    return 0;
+}
+
 int main(int /*argc*/, char ** /*argv*/) {
     using namespace parakeet;
 
@@ -568,9 +751,13 @@ int main(int /*argc*/, char ** /*argv*/) {
     rc |= section_real_fft_parity(cfg, signal);
     rc |= section_stateful_vs_stateless_parity(cfg, signal);
     rc |= section_repeated_call_invariance(cfg, signal);
+    rc |= section_reused_state_after_table_change(cfg, signal);
+    rc |= section_incremental_state_after_table_change(cfg, signal);
     rc |= section_incremental_short_input_parity(cfg);
     rc |= section_per_feature_cmvn();
     rc |= section_per_feature_valid_frame_zeroing();
+    rc |= section_stft_block_invariance(cfg);
+    rc |= section_scratch_bounded_and_releasable(cfg);
 
     if (rc != 0) {
         std::fprintf(stderr, "[test-mel-fft-parity] FAIL\n");

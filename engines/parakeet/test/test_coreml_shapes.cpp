@@ -58,8 +58,50 @@ void expect_capacity(const std::string & name,
 
 }  // namespace
 
+void expect_frames(const std::string & name, int64_t mel_frames, int64_t want) {
+    const int64_t got = parakeet::coreml_offline_encoder_frames(mel_frames);
+    const bool ok = got == want;
+    std::printf("[%s] %-34s -> %lld encoder frames\n", ok ? "ok  " : "FAIL", name.c_str(), (long long) got);
+    if (!ok) {
+        std::printf("       expected: %lld\n", (long long) want);
+        ++g_failures;
+    }
+}
+
+void expect_valid(const std::string & name, int64_t n_mel_frames, int64_t n_mel_valid,
+                  int64_t n_enc_frames, int64_t want_mel, int64_t want_enc) {
+    const parakeet::CoremlAneValidity got =
+        parakeet::coreml_ane_valid_lengths(n_mel_frames, n_mel_valid, n_enc_frames);
+    const bool ok = got.mel_frames == want_mel && got.enc_frames == want_enc;
+    std::printf("[%s] %-34s -> mel=%lld enc=%lld\n", ok ? "ok  " : "FAIL", name.c_str(),
+                (long long) got.mel_frames, (long long) got.enc_frames);
+    if (!ok) {
+        std::printf("       expected: mel=%lld enc=%lld\n", (long long) want_mel, (long long) want_enc);
+        ++g_failures;
+    }
+}
+
+// The fixed-window export's masks must follow the frames that hold audio: the
+// mel front-end's zeroed trailing padding frame is padding for the masks too.
+void check_ane_valid_lengths() {
+    expect_frames("1500 mel -> 188 frames", 1500, 188);
+    expect_frames("1101 mel -> 138 frames", 1101, 138);
+    expect_frames("1 mel -> 1 frame",       1,    1);
+    expect_frames("0 mel -> 0 frames",      0,    0);
+
+    expect_valid("whole slab valid",          1500, 1500, 188, 1500, 188);
+    expect_valid("valid unknown (0)",         1500, 0,    188, 1500, 188);
+    expect_valid("valid beyond the slab",     1500, 2000, 188, 1500, 188);
+    expect_valid("one zeroed trailing frame", 1101, 1100, 138, 1100, 138);
+    expect_valid("short audio in the window", 1500, 1200, 188, 1200, 150);
+    expect_valid("toy slab 37 valid 36",      37,   36,   5,   36,   5);
+    expect_valid("enc capped by the caller",  1500, 1500, 100, 1500, 100);
+}
+
 int main() {
     const int64_t N_MELS = 128;
+
+    check_ane_valid_lengths();
 
     // Fixed model already sized to the input -> honoured verbatim (no rebuild).
     expect("fixed features-major exact", {1, N_MELS, 1101}, 1101, N_MELS, {1, N_MELS, 1101}, true);

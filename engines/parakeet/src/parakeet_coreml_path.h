@@ -20,4 +20,10 @@ std::string coreml_encoder_sidecar_path(const std::string & gguf_path);
 // supplied directly, so this bundle contains only the FastConformer block stack.
 std::string coreml_bypass_encoder_sidecar_path(const std::string & gguf_path);
 
+// Same derivation, `-decoder.mlmodelc`: the batched TDT decoder sidecar
+// (src/coreml/parakeet-decoder.h, exported by
+// scripts/export-decoder-coreml-ane.py). The encoder and decoder sidecars are
+// independent: a GGUF may have either, both, or neither next to it.
+std::string coreml_decoder_sidecar_path(const std::string & gguf_path);
+
 }  // namespace parakeet

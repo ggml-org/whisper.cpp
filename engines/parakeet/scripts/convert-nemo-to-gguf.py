@@ -638,8 +638,9 @@ def validate_eou_contract(cfg: dict, sd=None):
             "incompatible EOU checkpoint:\n  - " + "\n  - ".join(errors))
 
 
-def write_eou_provenance(writer):
+def write_eou_provenance(writer, description=None):
     writer.add_description(
+        description or
         "NVIDIA Parakeet Realtime EOU 120M "
         f"({EOU_LICENSE})"
     )
@@ -752,14 +753,41 @@ def write_transducer_metadata(writer, cfg: dict, model_type: str):
         writer.add_uint32(f"{prefix}.max_symbols_per_step", max_symbols)
         return
 
-    durations = list(cfg["model_defaults"]["tdt_durations"])
-    num_durations = int(cfg["model_defaults"]["num_tdt_durations"])
-    if num_durations != len(durations):
-        raise ValueError(
-            f"num_tdt_durations {num_durations} != len(durations) {len(durations)}"
-        )
-    writer.add_uint32(f"{prefix}.num_durations", num_durations)
+    durations = tdt_durations(cfg)
+    writer.add_uint32(f"{prefix}.num_durations", len(durations))
     writer.add_array(f"{prefix}.durations", durations)
+
+
+def tdt_durations(cfg: dict) -> list:
+    """The TDT duration set, from whichever config location holds it.
+
+    NeMo's released checkpoints keep it under model_defaults; some training
+    configs (TranscribePsy among them) keep it under loss.tdt_kwargs or
+    decoding instead, and a config with neither still implies 0..N-1 from
+    the joint's extra duration outputs.
+    """
+    model_defaults = cfg.get("model_defaults") or {}
+    if model_defaults.get("tdt_durations") is not None:
+        durations = list(model_defaults["tdt_durations"])
+        num_durations = int(model_defaults.get("num_tdt_durations", len(durations)))
+        if num_durations != len(durations):
+            raise ValueError(
+                f"num_tdt_durations {num_durations} != len(durations) {len(durations)}"
+            )
+        return durations
+    durations = (
+        ((cfg.get("loss") or {}).get("tdt_kwargs") or {}).get("durations")
+        or (cfg.get("decoding") or {}).get("durations")
+    )
+    if durations is not None:
+        return list(durations)
+    num_extra_outputs = int((cfg.get("joint") or {}).get("num_extra_outputs", 0))
+    if num_extra_outputs <= 0:
+        raise KeyError(
+            "could not resolve TDT durations from config "
+            "(model_defaults.tdt_durations / loss.tdt_kwargs.durations / "
+            "decoding.durations all missing and joint.num_extra_outputs is 0)")
+    return list(range(num_extra_outputs))
 
 
 def unified_streaming_contexts(enc: dict):
@@ -931,8 +959,61 @@ def detect_sortformer_variant(ckpt: Path) -> str:
     return ""
 
 
+def long_form_hint_frames(hop_length: int, sample_rate: int, subsampling_factor: int,
+                          window_sec: float, overlap: float | None) -> tuple:
+    """Encoder frames of a recommended long-form window and of the context
+    on each side for a share `overlap` of the window (half of it each side)."""
+    frame_sec = hop_length * subsampling_factor / sample_rate
+    window_frames = int(round(window_sec / frame_sec))
+    context_frames = 0 if not overlap else int(round(window_frames * overlap / 2))
+    return window_frames, context_frames
+
+
+def write_long_form_hint(writer, hop_length: int, sample_rate: int, cfg: dict,
+                         window_sec: float | None, overlap: float | None):
+    """parakeet.long_form.* keys for a model that recommends its own window."""
+    if window_sec is None:
+        return
+    subsampling_factor = int(cfg.get("encoder", {}).get("subsampling_factor", 8))
+    window_frames, context_frames = long_form_hint_frames(
+        hop_length, sample_rate, subsampling_factor, window_sec, overlap)
+    writer.add_uint32("parakeet.long_form.window_frames", window_frames)
+    writer.add_uint32("parakeet.long_form.context_frames", context_frames)
+
+
+def write_provenance(writer, model_type: str, description=None):
+    """general.description plus the per-family license keys.
+
+    An explicit `description` (the converter's --description) replaces the
+    family text only; the license and source keys stay.
+    """
+    if model_type == "nemotron":
+        writer.add_description(
+            description or
+            "NVIDIA Nemotron 3.5 ASR Streaming 0.6B "
+            "(OpenMDW-1.1)"
+        )
+        writer.add_string("general.license", "OpenMDW-1.1")
+        writer.add_string(
+            "general.source.url",
+            "https://huggingface.co/nvidia/"
+            "nemotron-3.5-asr-streaming-0.6b",
+        )
+        writer.add_string("parakeet.model_variant", NEMOTRON_VARIANT)
+    elif model_type == "eou":
+        write_eou_provenance(writer, description)
+    else:
+        writer.add_description(
+            description or
+            f"NVIDIA Parakeet-{model_type.upper()} "
+            "FastConformer ASR (CC-BY-4.0)"
+        )
+
+
 def write_gguf(out: Path, ckpt: Path, cfg: dict, sd: dict, tok_bytes: bytes,
-               multilingual_tok: dict, quant: str, head: str = "auto"):
+               multilingual_tok: dict, quant: str, head: str = "auto",
+               description=None,
+               long_form_window_sec=None, long_form_overlap=None):
     model_type = detect_model_type(cfg, head)
     if model_type == "rnnt":
         validate_rnnt_contract(cfg, sd)
@@ -980,25 +1061,8 @@ def write_gguf(out: Path, ckpt: Path, cfg: dict, sd: dict, tok_bytes: bytes,
         "sortformer":  f"sortformer-{d_model}-{n_layers}l",
     }[model_type]
     writer.add_name(model_name)
-    if model_type == "nemotron":
-        writer.add_description(
-            "NVIDIA Nemotron 3.5 ASR Streaming 0.6B "
-            "(OpenMDW-1.1)"
-        )
-        writer.add_string("general.license", "OpenMDW-1.1")
-        writer.add_string(
-            "general.source.url",
-            "https://huggingface.co/nvidia/"
-            "nemotron-3.5-asr-streaming-0.6b",
-        )
-        writer.add_string("parakeet.model_variant", NEMOTRON_VARIANT)
-    elif model_type == "eou":
-        write_eou_provenance(writer)
-    else:
-        writer.add_description(
-            f"NVIDIA Parakeet-{model_type.upper()} "
-            "FastConformer ASR (CC-BY-4.0)"
-        )
+    write_provenance(writer, model_type, description)
+    write_long_form_hint(writer, hop_length, sample_rate, cfg, long_form_window_sec, long_form_overlap)
     writer.add_file_type(FILE_TYPE_MAP[quant])
 
     writer.add_string("parakeet.model.type", model_type)
@@ -1350,7 +1414,7 @@ def write_gguf(out: Path, ckpt: Path, cfg: dict, sd: dict, tok_bytes: bytes,
             f"contexts={NEMOTRON_ALLOWED_RIGHT_CONTEXTS}"
         )
     else:
-        vocab_note = f"tdt_vocab={int(cfg['decoder']['vocab_size'])} durations={cfg['model_defaults']['tdt_durations']}"
+        vocab_note = f"tdt_vocab={int(cfg['decoder']['vocab_size'])} durations={tdt_durations(cfg)}"
     print(f"[convert] wrote {out} ({size_mb:.1f} MiB, type={model_type}, quant={quant}, {vocab_note}, layers={n_layers}, use_bias={use_bias})", file=sys.stderr)
 
 
@@ -1361,7 +1425,8 @@ def main():
     args.out.parent.mkdir(parents=True, exist_ok=True)
     write_gguf(
         args.out, ckpt, cfg, sd, tok_bytes, multilingual_tok, args.quant,
-        args.head,
+        args.head, args.description,
+        args.long_form_window_sec, args.long_form_overlap,
     )
 
 

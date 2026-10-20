@@ -42,4 +42,20 @@ struct CoremlInputDims {
 CoremlInputDims coreml_resolve_input_dims(const std::vector<int64_t> & declared,
                                           int64_t n_mel_frames, int64_t n_mels);
 
+// Encoder frames the offline FastConformer subsampling (three stride-2,
+// kernel-3, pad-1 convolutions) produces for `mel_frames` mel frames.
+int64_t coreml_offline_encoder_frames(int64_t mel_frames);
+
+// Lengths the fixed-window export's masks must mark valid for a slab of
+// `n_mel_frames` whose frames from `n_mel_valid` on are the mel front-end's
+// zeroed padding (`n_mel_valid <= 0` or beyond the slab: every frame holds
+// audio). `enc_frames` never exceeds the `n_enc_frames` the caller sized.
+struct CoremlAneValidity {
+    int64_t mel_frames;
+    int64_t enc_frames;
+};
+
+CoremlAneValidity coreml_ane_valid_lengths(int64_t n_mel_frames, int64_t n_mel_valid,
+                                           int64_t n_enc_frames);
+
 }  // namespace parakeet

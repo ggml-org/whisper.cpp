@@ -10,10 +10,14 @@
 # streaming Sortformer v2.1).
 # Already-cached checkpoints are untouched.
 #
+# TranscribePsy is published as ready-made GGUF and Core ML files rather than
+# a .nemo archive, so its selector downloads the runtime artifacts directly.
+#
 # Usage:
-#     ./scripts/download-all-models.sh             # everything
-#     ./scripts/download-all-models.sh tdt         # only the TDT pair
-#     ./scripts/download-all-models.sh eou         # only EOU 120M
+#     ./scripts/download-all-models.sh               # everything
+#     ./scripts/download-all-models.sh tdt           # only the TDT pair
+#     ./scripts/download-all-models.sh eou           # only EOU 120M
+#     ./scripts/download-all-models.sh transcribepsy # TranscribePsy GGUF + Core ML files
 
 set -euo pipefail
 
@@ -26,7 +30,8 @@ case "${1:-all}" in
   all) ;;
   tdt) ;;  # filtered below
   eou) ;;  # filtered below
-  *) echo "usage: $0 [all|tdt|eou]" >&2; exit 2 ;;
+  transcribepsy) ;;  # filtered below
+  *) echo "usage: $0 [all|tdt|eou|transcribepsy]" >&2; exit 2 ;;
 esac
 
 bytes_human() {
@@ -55,7 +60,39 @@ fetch() {
 
 hr() { printf '%.0s=' {1..70}; echo; }
 
-if [[ "${1:-all}" != "eou" ]]; then
+TRANSCRIBEPSY_GGUF_REPO="https://huggingface.co/qvac/TranscribePsy-250M-EU-sub-gguf/resolve/main"
+TRANSCRIBEPSY_COREML_REPO="https://huggingface.co/qvac/TranscribePsy-250M-EU-sub-coreml/resolve/main"
+TRANSCRIBEPSY_COREML_STEM="transcribepsy-250m-eu-sub-coreml"
+MLMODELC_FILES=(analytics/coremldata.bin coremldata.bin metadata.json model.mil weights/weight.bin)
+
+# A compiled Core ML bundle is a directory; fetch each of its files so the
+# bundle lands next to its GGUF under the name the engine derives.
+fetch_mlmodelc() {
+  local repo="$1" bundle="$2" file
+  for file in "${MLMODELC_FILES[@]}"; do
+    fetch "$repo/$bundle/$file" "$NEMO_DIR/$bundle/$file"
+  done
+}
+
+fetch_transcribepsy() {
+  hr
+  echo "== gguf: TranscribePsy-250M-EU-sub (FastConformer-TDT 254M, 8 EU languages, q8_0, ~305 MB)"
+  fetch "$TRANSCRIBEPSY_GGUF_REPO/transcribepsy-250m-eu-sub.gguf" \
+        "$NEMO_DIR/transcribepsy-250m-eu-sub.gguf"
+
+  hr
+  echo "== coreml: TranscribePsy-250M-EU-sub (encoder-less GGUF + Neural Engine encoder/decoder, ~212 MB)"
+  fetch "$TRANSCRIBEPSY_COREML_REPO/$TRANSCRIBEPSY_COREML_STEM.gguf" \
+        "$NEMO_DIR/$TRANSCRIBEPSY_COREML_STEM.gguf"
+  fetch_mlmodelc "$TRANSCRIBEPSY_COREML_REPO" "$TRANSCRIBEPSY_COREML_STEM-encoder.mlmodelc"
+  fetch_mlmodelc "$TRANSCRIBEPSY_COREML_REPO" "$TRANSCRIBEPSY_COREML_STEM-decoder.mlmodelc"
+}
+
+if [[ "${1:-all}" == "transcribepsy" || "${1:-all}" == "all" ]]; then
+  fetch_transcribepsy
+fi
+
+if [[ "${1:-all}" != "eou" && "${1:-all}" != "transcribepsy" ]]; then
   hr
   echo "== nemo: parakeet-tdt-0.6b-v3 (multilingual, 25 langs, +PnC, ~2.4 GiB)"
   fetch "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/main/parakeet-tdt-0.6b-v3.nemo" \
@@ -115,7 +152,7 @@ if [[ "${1:-all}" == "all" ]]; then
         "$NEMO_DIR/diar_streaming_sortformer_4spk-v2.1.nemo"
 fi
 
-if [[ "${1:-all}" != "tdt" ]]; then
+if [[ "${1:-all}" != "tdt" && "${1:-all}" != "transcribepsy" ]]; then
   hr
   echo "== nemo: parakeet_realtime_eou_120m-v1 (EOU streaming, FastConformer-RNNT 120M, ~440 MiB)"
   echo "         (cache-aware streaming with att_context_size=[70,1] + <EOU>"
@@ -127,4 +164,4 @@ fi
 hr
 echo "done. Cached checkpoints:"
 echo
-ls -lh "$NEMO_DIR" | awk '/\.nemo$/ {print "  " $9, $5}' || true
+ls -lh "$NEMO_DIR" | awk '/\.(nemo|gguf)$/ {print "  " $9, $5}' || true

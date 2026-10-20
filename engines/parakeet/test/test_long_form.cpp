@@ -89,52 +89,8 @@ int parse_args(int argc, char ** argv, Opts & o) {
     return 0;
 }
 
-std::vector<float> tile_to_seconds(const std::vector<float> & src, int sample_rate, int secs) {
-    if (src.empty() || secs <= 0) return src;
-    // A different gain per repetition makes each window see different loudness,
-    // so the parity check exercises the global-CMVN guarantee (and attention
-    // locality) rather than feeding identical copies with identical statistics.
-    static const float gains[] = {1.0f, 0.35f, 0.7f, 0.5f, 0.85f, 0.25f};
-    const size_t n_gains = sizeof(gains) / sizeof(gains[0]);
-    const size_t target = (size_t) sample_rate * (size_t) secs;
-    std::vector<float> out;
-    out.reserve(target + src.size());
-    for (size_t tile = 0; out.size() < target; ++tile) {
-        const float g = gains[tile % n_gains];
-        for (float s : src) out.push_back(s * g);
-    }
-    return out;
-}
-
-std::vector<std::string> split_words(const std::string & s) {
-    std::vector<std::string> words;
-    std::istringstream is(s);
-    std::string w;
-    while (is >> w) words.push_back(w);
-    return words;
-}
-
-// Word-level Levenshtein similarity in [0, 1]: 1.0 == identical token streams.
-double word_similarity(const std::string & a, const std::string & b) {
-    const std::vector<std::string> wa = split_words(a);
-    const std::vector<std::string> wb = split_words(b);
-    if (wa.empty() && wb.empty()) return 1.0;
-    const size_t n = wa.size();
-    const size_t m = wb.size();
-    std::vector<size_t> prev(m + 1), cur(m + 1);
-    for (size_t j = 0; j <= m; ++j) prev[j] = j;
-    for (size_t i = 1; i <= n; ++i) {
-        cur[0] = i;
-        for (size_t j = 1; j <= m; ++j) {
-            const size_t cost = (wa[i - 1] == wb[j - 1]) ? 0 : 1;
-            cur[j] = std::min({ prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost });
-        }
-        std::swap(prev, cur);
-    }
-    const size_t dist = prev[m];
-    const size_t denom = std::max<size_t>(1, std::max(n, m));
-    return 1.0 - (double) dist / (double) denom;
-}
+using parakeet_test::tile_to_seconds;
+using parakeet_test::word_similarity;
 
 std::string transcribe_with_window(const Opts & o, int window_frames, int context_frames,
                                    const std::vector<float> & samples, int sample_rate) {

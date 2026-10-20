@@ -1,5 +1,7 @@
 #include "coreml/parakeet_coreml_shape.h"
 
+#include <algorithm>
+
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -81,6 +83,24 @@ CoremlInputDims coreml_resolve_input_dims(const std::vector<int64_t> & declared,
         }
     }
     return {{1, n_mels, n_mel_frames}, true};
+}
+
+constexpr int kOfflineSubsamplingStages = 3;
+
+int64_t coreml_offline_encoder_frames(int64_t mel_frames) {
+    int64_t frames = mel_frames;
+    for (int stage = 0; stage < kOfflineSubsamplingStages; ++stage) {
+        frames = frames <= 0 ? 0 : (frames - 1) / 2 + 1;
+    }
+    return frames;
+}
+
+CoremlAneValidity coreml_ane_valid_lengths(int64_t n_mel_frames, int64_t n_mel_valid,
+                                           int64_t n_enc_frames) {
+    const bool whole_slab = n_mel_valid <= 0 || n_mel_valid >= n_mel_frames;
+    const int64_t mel_frames = whole_slab ? n_mel_frames : n_mel_valid;
+    const int64_t enc_frames = std::min(n_enc_frames, coreml_offline_encoder_frames(mel_frames));
+    return CoremlAneValidity{mel_frames, enc_frames};
 }
 
 }  // namespace parakeet

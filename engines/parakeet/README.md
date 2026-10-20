@@ -25,6 +25,7 @@ and CPU scratch for the configured threads, using GGUF metadata only; see
 | `nvidia/parakeet-unified-en-0.6b` | RNN-T | 128 | 1024 x 24 | 1024 | 600 M | 707 MiB q8_0 | 0.004 q8_0 Vulkan / 0.028 q8_0 Metal | English; offline full-context encoder with an optional Core ML sidecar; cache-aware streaming at 80/160/560/1040 ms chunks with 0-1040 ms right context |
 | `nvidia/parakeet-tdt-0.6b-v3` | TDT | 128 | 1024 × 24 | 8192 | 600 M | 715 MiB q8_0 / 1.34 GiB f16 | 0.006 q8_0 Metal | About 25 languages, with punctuation and capitalization; optional Core ML offline encoder |
 | `nvidia/parakeet-tdt-1.1b` | TDT | 80 | 1024 × 42 | 1024 | 1.1 B | 1225 MiB q8_0 | 0.027–0.079 Metal | English only; no punctuation or capitalization; optional Core ML offline encoder |
+| `qvac/TranscribePsy-250M-EU-sub` ([GGUF](https://huggingface.co/qvac/TranscribePsy-250M-EU-sub-gguf), [Core ML](https://huggingface.co/qvac/TranscribePsy-250M-EU-sub-coreml)) | TDT | 128 | 640 × 24 | 8192 | 254 M | 291 MiB q8_0 / 17 MiB encoder-less + 186 MiB Core ML | 0.016 q8_0 CPU (8 threads, x86-64) | Eight European languages (nl, en, fr, de, it, pl, pt, es) with punctuation and capitalization, distilled from TDT 0.6B-v3; published GGUF loads as a TDT model; Neural Engine encoder and batched TDT decoder sidecars, see [Neural Engine sidecars](docs/backends.md#neural-engine-fixed-window-encoder-and-tdt-decoder-sidecars) |
 | `nvidia/parakeet_realtime_eou_120m-v1` | RNN-T + `<EOU>` | 128 | 512 × 17 | 1027 | 120 M | 246 MiB f16 / 132 MiB q8_0 | 0.0052 Vulkan | English ASR and native end-of-turn token; Core ML exact-shape encoder |
 | `nvidia/nemotron-3.5-asr-streaming-0.6b` | Prompt-conditioned RNN-T | 128 | 1024 × 24 | 13087 | 600 M | ~1.3 GiB f16 | 0.108 CPU | Locale-conditioned ASR; empty language selects `auto`; cache-aware streaming at 80/160/320/560/1120 ms; Core ML exact-shape offline encoder |
 | `nvidia/diar_sortformer_4spk-v1` | Sortformer | 80 | 512 × 18 | n/a | 123 M | 263 MiB f16 / 141 MiB q8_0 / 75 MiB q4_0 | 0.0020 Vulkan | Up to four speakers; offline and sliding-history streaming |
@@ -34,7 +35,11 @@ and CPU scratch for the configured threads, using GGUF metadata only; see
 | `OpenMOSS-Team/MOSS-Transcribe-Diarize` | Whisper-shaped encoder + Qwen3 decoder (text, speakers, timestamps) | 80 | 1024 × 24 encoder, 1024 × 28 decoder | 151936 | 0.9 B | 1.8 GB f16 / 0.98 GB q8_0 / 0.64 GB q5_0 | 0.05–0.39 f16 Metal (2 to 30 min) / 0.13–0.20 q8_0 Hexagon / 0.26–0.36 q8_0 OpenCL (Galaxy S25, 27 s to 3 min) | Multilingual checkpoint, validated on Spanish and Chinese; English long-form skips spans, as in the reference model; per-request hotwords; separate `moss-transcribe` API and CLI; optional Core ML audio encoder; Hexagon NPU and Adreno OpenCL with q8_0 or f16 |
 
 TDT 0.6B-v3 is multilingual with punctuation/capitalization; TDT 1.1B is
-English-only without those features. IndicConformer exports CTC by default,
+English-only without those features. TranscribePsy is a 254M FastConformer-TDT
+distilled from TDT 0.6B-v3 for eight European languages and published as
+ready-made GGUF and Core ML files; the engine treats it as a TDT checkpoint, and
+`--window-sec 60 --overlap 0.25` is the long-form setting validated on phones
+(see [CLI](docs/cli.md#long-form-window-flags)). IndicConformer exports CTC by default,
 with an optional RNN-T branch; CTC requires a language selection. Use the
 [model acquisition and format guide](docs/models.md) for each family's
 download and conversion path.
@@ -52,7 +57,7 @@ controls. Nemotron 3 Diarization supports eight speakers and uses cached
 long-form processing for offline inputs over 90 seconds; see
 [its model guide](docs/nemotron-3-diarization-port.md).
 
-## Core ML encoder sidecars
+## Core ML sidecars
 
 Optional Apple sidecars support eligible CTC, IndicConformer, Unified RNN-T,
 TDT, EOU, Nemotron 3.5 ASR and Sortformer v2.1 encoder paths, and the
@@ -62,6 +67,14 @@ incompatible sidecars fall back to ggml. Export, placement and routing
 contracts are in [docs/backends.md](docs/backends.md#core-ml-encoder-sidecar)
 and, for MOSS-Transcribe-Diarize, in
 [docs/moss-transcribe.md](docs/moss-transcribe.md#core-ml-encoder-sidecar).
+
+TDT models can additionally run on the Apple Neural Engine end to end: a
+fixed-window encoder export with padding masks and a batched TDT decoder
+sidecar (`<model>-decoder.mlmodelc`). With the decoder sidecar the engine cuts
+long recordings at pauses into independent segments and decodes 16 of them per
+Neural Engine dispatch. A GGUF without encoder weights, such as the published
+TranscribePsy Core ML distribution, loads only with its encoder sidecar; see
+[Neural Engine sidecars](docs/backends.md#neural-engine-fixed-window-encoder-and-tdt-decoder-sidecars).
 
 ## Backend selection
 
@@ -98,7 +111,8 @@ methods live in [docs/performance.md](docs/performance.md).
 Code is Apache-2.0. NVIDIA Parakeet CTC, Unified RNN-T, TDT and Sortformer
 weights are CC-BY-4.0. [IndicConformer](https://huggingface.co/ai4bharat/indic-conformer-600m-multilingual)
 weights are MIT; [MOSS-Transcribe-Diarize](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize)
-weights are Apache-2.0. `parakeet_realtime_eou_120m-v1` uses the
+and [TranscribePsy](https://huggingface.co/qvac/TranscribePsy-250M-EU-sub) weights
+are Apache-2.0. `parakeet_realtime_eou_120m-v1` uses the
 NVIDIA Open Model License. Nemotron 3.5 ASR Streaming 0.6B and Nemotron 3
 Diarization use OpenMDW-1.1; redistribution of their weights must retain the
 license and applicable origin notices.

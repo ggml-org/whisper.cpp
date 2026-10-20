@@ -68,6 +68,22 @@ class ConverterArgsTest(unittest.TestCase):
     def test_rnnt_head_override(self):
         self.assertEqual(parse_args(argv=["--head", "rnnt"]).head, "rnnt")
 
+    def test_description_defaults_to_none(self):
+        self.assertIsNone(parse_args(argv=[]).description)
+
+    def test_long_form_hint_defaults_to_none(self):
+        args = parse_args(argv=[])
+        self.assertIsNone(args.long_form_window_sec)
+        self.assertIsNone(args.long_form_overlap)
+
+    def test_long_form_hint_is_parsed(self):
+        args = parse_args(argv=["--long-form-window-sec", "60", "--long-form-overlap", "0.25"])
+        self.assertEqual((args.long_form_window_sec, args.long_form_overlap), (60.0, 0.25))
+
+    def test_description_is_passed_through(self):
+        args = parse_args(argv=["--description", "TranscribePsy-250M-EU-sub"])
+        self.assertEqual(args.description, "TranscribePsy-250M-EU-sub")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -286,26 +286,69 @@ void filterbank_rows(int t0, int t1, int n_bins, int n_mels,
     }
 }
 
-void apply_preemph(std::vector<float> & x, float preemph) {
-    if (preemph == 0.0f || x.size() < 2) return;
-    for (size_t t = x.size() - 1; t >= 1; --t) {
-        x[t] = x[t] - preemph * x[t - 1];
+// Frames per STFT block. The block's padded span and power spectrogram are the
+// only scratch buffers, so memory is bounded by the block rather than by the
+// input, and a full block still feeds every worker thread.
+constexpr int k_stft_block_frames_default = k_mel_max_threads * k_mel_frames_per_thread;
+
+int stft_block_frames(const MelConfig & cfg, int n_frames) {
+    const int block = cfg.stft_block_frames > 0 ? cfg.stft_block_frames
+                                                : k_stft_block_frames_default;
+    return std::min(block, n_frames);
+}
+
+// Pre-emphasis as a pointwise function of the input: y[m] = x[m] - preemph * x[m-1]
+// with x[0] unchanged, so a block can rebuild any sample from the raw input.
+inline float preemphasized_sample(const float * __restrict samples, int m, float preemph) {
+    if (m <= 0) return samples[0];
+    return samples[m] - preemph * samples[m - 1];
+}
+
+// Source sample index of padded position `j` under reflect padding, matching
+// torch.stft(center=True, pad_mode="reflect"); -1 marks a zero in the right pad.
+inline int padded_source_index(int j, int pad, int n, bool right_zero_pad) {
+    if (j < pad)        return std::min(pad - j, n - 1);
+    if (j < pad + n)    return j - pad;
+    if (right_zero_pad) return -1;
+    return std::max(n - 2 - (j - pad - n), 0);
+}
+
+// Padded positions [j0, j1) that fall in a reflect (or zero) tail, sample by sample.
+void fill_padded_tail(const float * __restrict samples, int n_samples, const MelConfig & cfg,
+                      int pad, int j0, int j1, float * __restrict dst) {
+    for (int j = j0; j < j1; ++j) {
+        const int src = padded_source_index(j, pad, n_samples, cfg.right_zero_pad);
+        dst[j - j0] = src < 0 ? 0.0f : preemphasized_sample(samples, src, cfg.preemph);
     }
 }
 
-std::vector<float> reflect_pad(const std::vector<float> & x, int pad) {
-    const int n = static_cast<int>(x.size());
-    std::vector<float> out(n + 2 * pad);
-    for (int i = 0; i < pad; ++i) {
-        const int src = std::min(pad - i, n - 1);
-        out[i] = x[src];
+// Input samples [m0, m1) pre-emphasized in one straight pass, so the bulk of
+// every block vectorises; sample 0, which has no predecessor, is copied.
+void fill_preemphasized_interior(const float * __restrict samples, float preemph,
+                                 int m0, int m1, float * __restrict dst) {
+    int m = m0;
+    if (m < m1 && m == 0) {
+        dst[0] = samples[0];
+        ++m;
     }
-    std::memcpy(out.data() + pad, x.data(), n * sizeof(float));
-    for (int i = 0; i < pad; ++i) {
-        const int src = std::max(n - 2 - i, 0);
-        out[pad + n + i] = x[src];
+    for (; m < m1; ++m) {
+        dst[m - m0] = samples[m] - preemph * samples[m - 1];
     }
-    return out;
+}
+
+// Rebuilds the `count` padded, pre-emphasized samples starting at padded
+// position `base` straight from the raw input: the two tails position by
+// position, the interior as a plain pass over the input.
+void fill_padded_span(const float * __restrict samples, int n_samples, const MelConfig & cfg,
+                      int pad, int base, size_t count, float * __restrict dst) {
+    const int end            = base + (int) count;
+    const int interior_begin = std::min(end, std::max(base, pad));
+    const int interior_end   = std::max(interior_begin, std::min(end, pad + n_samples));
+
+    fill_padded_tail(samples, n_samples, cfg, pad, base, interior_begin, dst);
+    fill_preemphasized_interior(samples, cfg.preemph, interior_begin - pad, interior_end - pad,
+                                dst + (interior_begin - base));
+    fill_padded_tail(samples, n_samples, cfg, pad, interior_end, end, dst + (interior_end - base));
 }
 
 std::vector<float> make_padded_window(const std::vector<float> & hann400, int n_fft) {
@@ -315,6 +358,14 @@ std::vector<float> make_padded_window(const std::vector<float> & hann400, int n_
     std::vector<float> out(n_fft, 0.0f);
     std::memcpy(out.data() + pad_left, hann400.data(), win_length * sizeof(float));
     return out;
+}
+
+// A cached table is valid only while its source still holds the same values;
+// the address of the source proves nothing once configs come and go.
+bool same_table(const std::vector<float> & cached, const std::vector<float> & source) {
+    return cached.size() == source.size() &&
+           (cached.empty() ||
+            std::memcmp(cached.data(), source.data(), cached.size() * sizeof(float)) == 0);
 }
 
 }
@@ -349,6 +400,42 @@ void log_mel_frame(const float * __restrict frame_power, int n_bins, int n_mels,
 
 namespace {
 
+// One block's frames [t0, t1): window + real FFT into the block's power rows,
+// then the banded filterbank and log into the output. Both steps are per
+// frame, so a thread's range needs nothing from any other thread.
+void mel_block_rows(int t0, int t1, const MelConfig & cfg, int n_bins,
+                    const float * __restrict x_padded, const float * __restrict window_padded,
+                    const MelFilterBand * __restrict bands,
+                    float * __restrict power_data, float * __restrict mel_data) {
+    power_spectrum_rows(t0, t1, cfg.n_fft, cfg.hop_length, n_bins, x_padded, window_padded,
+                        power_data);
+    filterbank_rows(t0, t1, n_bins, cfg.n_mels, cfg.filterbank.data(), bands,
+                    cfg.log_zero_guard_value, power_data, mel_data);
+}
+
+// Blocked STFT. Every block rebuilds the padded samples it needs straight
+// from the raw input (pre-emphasis and reflect padding are pointwise), so the
+// scratch is bounded by the block and the output is bit-identical for any
+// block size. Each worker thread owns its window/FFT scratch, and the workers
+// join before ggml-cpu's pool wakes for the encoder.
+void compute_log_mel_blocks(const float * samples, int n_samples, const MelConfig & cfg,
+                            MelState & state, int pad, int n_frames, int n_bins, int block,
+                            float * mel_data) {
+    const float         * window_padded = state.window_padded.data();
+    const MelFilterBand * bands         = state.filter_bands.data();
+    for (int t0 = 0; t0 < n_frames; t0 += block) {
+        const int    nb   = std::min(block, n_frames - t0);
+        const size_t need = (size_t) (nb - 1) * cfg.hop_length + cfg.n_fft;
+        fill_padded_span(samples, n_samples, cfg, pad, t0 * cfg.hop_length, need,
+                         state.x_padded.data());
+        float * block_mel = mel_data + (size_t) t0 * cfg.n_mels;
+        parallel_over_frames(nb, cfg.n_threads, [&](int a, int b) {
+            mel_block_rows(a, b, cfg, n_bins, state.x_padded.data(), window_padded, bands,
+                           state.power.data(), block_mel);
+        });
+    }
+}
+
 // Stateful inner. Both public `compute_log_mel` overloads call into
 // this one; the stateless overload uses a scratch `MelState` allocated
 // on the stack (so its semantics are unchanged for callers that aren't
@@ -371,72 +458,30 @@ int compute_log_mel_impl(const float        * samples,
         return 3;
     }
 
-    state.x.resize((size_t) n_samples);
-    std::memcpy(state.x.data(), samples, (size_t) n_samples * sizeof(float));
-    apply_preemph(state.x, cfg.preemph);
-
-    const int pad = cfg.n_fft / 2;
-    const int n_padded = n_samples + 2 * pad;
-    state.x_padded.resize((size_t) n_padded);
-    {
-        // Inline reflect-pad into the cached buffer instead of
-        // returning a fresh std::vector from `reflect_pad`.
-        const int n = n_samples;
-        for (int i = 0; i < pad; ++i) {
-            const int src = std::min(pad - i, n - 1);
-            state.x_padded[i] = state.x[src];
-        }
-        std::memcpy(state.x_padded.data() + pad, state.x.data(),
-                    (size_t) n * sizeof(float));
-        for (int i = 0; i < pad; ++i) {
-            const int src = std::max(n - 2 - i, 0);
-            state.x_padded[pad + n + i] = cfg.right_zero_pad ? 0.0f : state.x[src];
-        }
-    }
-
+    const int pad      = cfg.n_fft / 2;
     const int n_frames = 1 + n_samples / cfg.hop_length;
     out_n_frames = n_frames;
 
     const int n_bins = cfg.n_fft / 2 + 1;
-
-    // Window padding only depends on cfg.n_fft + the (immutable) cfg.window
-    // contents. Cache the result on `state` so we rebuild it at most once
-    // per engine lifetime.
-    if (state.window_padded_n_fft != cfg.n_fft || state.window_padded_src != &cfg.window) {
-        state.window_padded     = make_padded_window(cfg.window, cfg.n_fft);
-        state.window_padded_n_fft = cfg.n_fft;
-        state.window_padded_src = &cfg.window;
-    }
-    const float * __restrict window_padded = state.window_padded.data();
-
-    state.power.resize((size_t) n_frames * n_bins);
-
-    float                  * __restrict power_data = state.power.data();
-    const float            * __restrict x_padded   = state.x_padded.data();
-
-    // Per-frame work: pre-multiply by the analysis window into a
-    // n_fft-long real buffer, then run the real-input radix-2 FFT
-    // which packs into n_fft/2 complex points, FFTs, and unpacks
-    // straight into power[0..n_fft/2]. Each worker thread owns its
-    // window/FFT scratch; the frames themselves are independent, and the
-    // workers join before ggml-cpu's pool wakes for the encoder.
-    parallel_over_frames(n_frames, cfg.n_threads, [&](int t0, int t1) {
-        power_spectrum_rows(t0, t1, cfg.n_fft, cfg.hop_length, n_bins, x_padded, window_padded, power_data);
-    });
-
     const int n_mels = cfg.n_mels;
-    out_mel.resize((size_t) n_frames * n_mels);
-    if (state.filter_bands_src != &cfg.filterbank || state.filter_bands.size() != (size_t) n_mels) {
-        state.filter_bands     = make_filter_bands(cfg.filterbank, n_mels, n_bins);
-        state.filter_bands_src = &cfg.filterbank;
+
+    if (state.window_padded_n_fft != cfg.n_fft || !same_table(state.window_src, cfg.window)) {
+        state.window_padded       = make_padded_window(cfg.window, cfg.n_fft);
+        state.window_padded_n_fft = cfg.n_fft;
+        state.window_src          = cfg.window;
     }
-    const float * __restrict fb = cfg.filterbank.data();
-    const MelFilterBand * __restrict bands = state.filter_bands.data();
-    const float guard = cfg.log_zero_guard_value;
-    float * __restrict mel_data = out_mel.data();
-    parallel_over_frames(n_frames, cfg.n_threads, [&](int t0, int t1) {
-        filterbank_rows(t0, t1, n_bins, n_mels, fb, bands, guard, power_data, mel_data);
-    });
+    if (state.filter_bands.size() != (size_t) n_mels || !same_table(state.filterbank_src, cfg.filterbank)) {
+        state.filter_bands   = make_filter_bands(cfg.filterbank, n_mels, n_bins);
+        state.filterbank_src = cfg.filterbank;
+    }
+
+    const int block = stft_block_frames(cfg, n_frames);
+    state.x_padded.resize((size_t) (block - 1) * cfg.hop_length + cfg.n_fft);
+    state.power.resize((size_t) block * n_bins);
+    out_mel.resize((size_t) n_frames * n_mels);
+
+    compute_log_mel_blocks(samples, n_samples, cfg, state, pad, n_frames, n_bins, block,
+                           out_mel.data());
 
     const int seq_len = cfg.normalize == MelNormalize::None
         ? std::max(1, n_samples / cfg.hop_length)
@@ -469,13 +514,13 @@ struct IncrementalMelState::Impl {
     std::vector<float> power;
     std::vector<std::complex<float>> fft;
     std::vector<MelFilterBand> filter_bands;
-    const std::vector<float> * filter_bands_src = nullptr;
+    std::vector<float> filterbank_src;
 
     int64_t sample_base = 0;
     int64_t total_samples = 0;
     int64_t next_frame = 0;
     int window_n_fft = 0;
-    const std::vector<float> * window_source = nullptr;
+    std::vector<float> window_src;
     float last_raw_sample = 0.0f;
     bool has_last_raw_sample = false;
     bool finalized = false;
@@ -561,13 +606,13 @@ void prepare_incremental_window(
     IncrementalMelState::Impl & state,
     const MelConfig & config) {
     if (state.window_n_fft == config.n_fft &&
-        state.window_source == &config.window) {
+        same_table(state.window_src, config.window)) {
         return;
     }
     state.window = make_padded_window(
         config.window, config.n_fft);
     state.window_n_fft = config.n_fft;
-    state.window_source = &config.window;
+    state.window_src = config.window;
     state.windowed.resize(static_cast<size_t>(config.n_fft));
     state.power.resize(
         static_cast<size_t>(config.n_fft / 2 + 1));
@@ -596,10 +641,10 @@ void compute_incremental_frame(
         state.fft.data());
 
     const int bins = config.n_fft / 2 + 1;
-    if (state.filter_bands_src != &config.filterbank ||
-        state.filter_bands.size() != static_cast<size_t>(config.n_mels)) {
-        state.filter_bands     = make_filter_bands(config.filterbank, config.n_mels, bins);
-        state.filter_bands_src = &config.filterbank;
+    if (state.filter_bands.size() != static_cast<size_t>(config.n_mels) ||
+        !same_table(state.filterbank_src, config.filterbank)) {
+        state.filter_bands   = make_filter_bands(config.filterbank, config.n_mels, bins);
+        state.filterbank_src = config.filterbank;
     }
     log_mel_frame(state.power.data(), bins, config.n_mels, config.filterbank.data(),
                   state.filter_bands.data(), config.log_zero_guard_value, destination);
@@ -718,6 +763,11 @@ int compute_log_mel(const float        * samples,
                     std::vector<float> & out_mel,
                     int                & out_n_frames) {
     return compute_log_mel_impl(samples, n_samples, cfg, state, out_mel, out_n_frames);
+}
+
+void MelState::release_scratch() {
+    std::vector<float>().swap(x_padded);
+    std::vector<float>().swap(power);
 }
 
 void apply_per_feature_cmvn(std::vector<float> & mel, int n_valid_frames, int n_mels) {

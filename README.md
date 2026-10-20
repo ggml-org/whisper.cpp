@@ -21,7 +21,7 @@ validated on it.
 | Engine | Model families | Capabilities and limitations |
 |---|---|---|
 | [Whisper](docs/WHISPER.md) | tiny, base, small, medium, large v1/v2/v3, large-v3-turbo; Silero v5.1.2/v6.2.0 | ASR, multilingual-to-English translation, VAD, tinydiarize speaker turns; metadata-only memory fit from a model or its weightless description; `.en` checkpoints are English-only and turbo is intended for transcription |
-| [Parakeet](engines/parakeet/README.md) | CTC, Unified RNN-T, TDT, IndicConformer, realtime EOU, Nemotron 3.5 ASR | Offline, streaming, long-form ASR and end-of-turn detection; IndicConformer CTC requires a language selection |
+| [Parakeet](engines/parakeet/README.md) | CTC, Unified RNN-T, TDT, TranscribePsy, IndicConformer, realtime EOU, Nemotron 3.5 ASR | Offline, streaming, long-form ASR and end-of-turn detection; IndicConformer CTC requires a language selection; TranscribePsy ships as ready-made GGUF and Core ML files for eight European languages |
 | Parakeet | Sortformer v1/v2/v2.1, Nemotron 3 Diarization | Speaker diarization and attributed ASR; Sortformer supports up to four speakers, Nemotron up to eight |
 | Parakeet | MOSS-Transcribe-Diarize | One-pass transcription, speakers, timestamps, hotwords and metadata-only memory fit including scheduler storage and CPU scratch; CPU/Metal validated on Spanish/Chinese; explicit CUDA/Vulkan/OpenCL/Hexagon selection with generated-model CPU parity and quantized checkpoint smoke coverage; English long-form skips spans in both native and reference runs |
 | [TTS](engines/tts/README.md) | Chatterbox Turbo/Multilingual, Supertonic 1/2/3, Parler mini/large/Indic, CosyVoice3, Audio8 | Synthesis with preset, described, or cloned voices, depending on the model; streaming support varies by API and CLI |
@@ -61,7 +61,7 @@ contracts; see the engine guides before exporting or deploying one.
 | Engine | Accelerated stage | Guide |
 |---|---|---|
 | Whisper | Encoder | [Whisper Core ML](third_party/whisper.cpp/README.md#core-ml-support) |
-| Parakeet | Eligible ASR and Sortformer v2.1 encoder paths | [Backend and routing contracts](engines/parakeet/docs/backends.md#core-ml-encoder-sidecar) |
+| Parakeet | Eligible ASR and Sortformer v2.1 encoder paths; TDT models also run a fixed-window Neural Engine encoder and a batched TDT decoder | [Backend and routing contracts](engines/parakeet/docs/backends.md#core-ml-encoder-sidecar), [Neural Engine sidecars](engines/parakeet/docs/backends.md#neural-engine-fixed-window-encoder-and-tdt-decoder-sidecars) |
 | Parakeet | MOSS-Transcribe-Diarize audio encoder | [MOSS-Transcribe-Diarize](engines/parakeet/docs/moss-transcribe.md#core-ml-encoder-sidecar) |
 | TTS | CosyVoice3 speech LM, flow and HiFT neural stages | [CosyVoice3 Core ML](engines/tts/docs/cosyvoice3.md#core-ml-sidecars) |
 | TTS | Supertonic vocoder, Audio8 codec synthesis | [Supertonic](engines/tts/docs/supertonic.md#core-ml-vocoder-sidecar), [Audio8](engines/tts/docs/audio8.md#core-ml-codec-sidecar) |
@@ -154,7 +154,7 @@ and model-specific exceptions.
 | Component | Code | Model weights |
 |---|---|---|
 | [Whisper](third_party/whisper.cpp/LICENSE) | MIT | OpenAI Whisper MIT; Silero under its model terms |
-| [Parakeet](engines/parakeet/README.md#license) | Apache-2.0 | NVIDIA Parakeet/Sortformer CC-BY-4.0; EOU NVIDIA Open Model License; Nemotron OpenMDW-1.1; IndicConformer MIT; MOSS-Transcribe-Diarize Apache-2.0 |
+| [Parakeet](engines/parakeet/README.md#license) | Apache-2.0 | NVIDIA Parakeet/Sortformer CC-BY-4.0; EOU NVIDIA Open Model License; Nemotron OpenMDW-1.1; IndicConformer MIT; MOSS-Transcribe-Diarize and TranscribePsy Apache-2.0 |
 | [TTS](engines/tts/NOTICE) | MIT | Chatterbox MIT; Pocket CC-BY-4.0; Supertonic OpenRAIL-M; Parler, CosyVoice3, Audio8, LavaSR and MOSS models Apache-2.0 |
 | [AudioGen](engines/audiogen/NOTICE) | MIT | ACE-Step 1.5 MIT; Qwen3-Embedding Apache-2.0; MiniMax-Music3 Community License |
 

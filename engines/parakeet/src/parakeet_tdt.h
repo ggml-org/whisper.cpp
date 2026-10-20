@@ -265,6 +265,80 @@ using RnntDecodeOptions = TdtDecodeOptions;
 using RnntDecodeResult = TdtDecodeResult;
 using RnntDecodeState = TdtDecodeState;
 
+// ── Batched decode of independent windows ────────────────────────────────
+//
+// The Core ML TDT decoder sidecar steps several independent windows per
+// dispatch (src/coreml/parakeet-decoder.h). tdt_decode_lanes drives it with
+// the same walk as tdt_decode_window, `lanes` windows wide, behind the
+// TdtLaneStepper interface so the walk itself is unit-tested without Core ML
+// (test/test_independent_segments.cpp).
+
+// One independently decoded window: a slice of encoder output that gets its
+// own TDT state. Slices point into a buffer the caller owns and must outlive
+// the call; nothing here copies encoder output.
+struct TdtLaneWindow {
+    const float * enc      = nullptr;  // [n_frames][d_enc], row-major
+    int           n_frames = 0;
+};
+
+// What the lane walk needs to know about the checkpoint. tdt_lane_geometry()
+// fills it from a prepared runtime; unit tests fill it by hand.
+struct TdtLaneGeometry {
+    int              blank_id         = 0;
+    int              vocab_plus_blank = 0;  // token logits occupy [0, vocab_plus_blank)
+    std::vector<int> durations;             // frame advance per duration logit; empty = index
+    int              h_pred           = 0;
+    int              layers           = 0;
+    int              d_enc            = 0;
+};
+
+TdtLaneGeometry tdt_lane_geometry(const ParakeetCtcModel & model, const TdtRuntimeWeights & W);
+
+// One batched prediction step over `lanes` independent decoder states: the
+// sidecar in production, a scripted double in tests. The geometry is fixed per
+// instance. Buffers are float32, lane-major and densely packed:
+//   embed [lanes][h_pred]   h_in/c_in [lanes][h_dim]   enc_step [lanes][d_enc]
+//   logits [lanes][v_out]   h_out/c_out [lanes][h_dim]
+// where h_dim = h_pred * layers and v_out = vocab_plus_blank + durations.
+// Inputs are read before any output is written, so h_out may alias h_in.
+struct TdtLaneStepper {
+    virtual ~TdtLaneStepper() = default;
+    virtual int64_t lanes()  const = 0;
+    virtual int64_t h_pred() const = 0;
+    virtual int64_t h_dim()  const = 0;
+    virtual int64_t d_enc()  const = 0;
+    virtual int64_t v_out()  const = 0;
+    virtual int step(const float * embed, const float * h_in, const float * c_in,
+                     const float * enc_step, float * logits, float * h_out, float * c_out) = 0;
+};
+
+struct TdtLaneStats {
+    int dispatches = 0;  // batched steps issued
+    int rescued    = 0;  // windows re-decoded warm-started from their predecessor
+};
+
+// Decodes independent windows, `stepper.lanes()` of them per dispatch, and
+// emits one token vector per window in input order so the caller can
+// detokenise and join them.
+//
+// `embed_table` is the prediction network's token embedding as host f32,
+// [vocab_plus_blank][h_pred] (the GGUF table dequantised; a gather is not an
+// ANE op). Windows are seated into lanes as lanes free up, so the batch stays
+// full until the input runs out. A window that emits nothing at all is
+// re-decoded in a second batched pass, warm-started from the previous window's
+// retired state.
+//
+// Returns 0 on success. Any non-zero return leaves out_tokens unusable and
+// means the caller should fall back to tdt_greedy_decode for the whole
+// utterance: a half-decoded lane batch cannot be resumed.
+int tdt_decode_lanes(const TdtLaneGeometry & geom,
+                     const std::vector<float> & embed_table,
+                     TdtLaneStepper & stepper,
+                     const std::vector<TdtLaneWindow> & windows,
+                     const TdtDecodeOptions & opts,
+                     std::vector<std::vector<int32_t>> & out_tokens,
+                     TdtLaneStats * stats);
+
 // allow_fused_lstm = false keeps the decomposed per-gate LSTM graph, and
 // allow_concat_lstm = false keeps the separate input/recurrent matmuls (parity tests).
 int tdt_prepare_runtime(const ParakeetCtcModel & model, TdtRuntimeWeights & out,

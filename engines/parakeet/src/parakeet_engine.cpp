@@ -14,12 +14,17 @@
 #include "mel_preprocess.h"
 #include "sentencepiece_bpe.h"
 #include "energy_vad.h"
+#include "independent_segments.h"
 #include "long_form.h"
 #include "long_form_encoder.h"
 #include "parakeet_log.h"
 #include "sortformer_finalize.h"
 #include "backend_util.h"
 #include "ggml-backend.h"
+
+#ifdef PARAKEET_USE_COREML
+#include "coreml/parakeet-decoder.h"
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -178,9 +183,13 @@ int decode_transducer(const ParakeetCtcModel & model,
 LongFormPlan resolve_long_form_plan(const ParakeetCtcModel & model,
                                     const EngineOptions & opts,
                                     int n_mel_frames) {
+    int requested_window  = opts.long_form_window_frames;
+    int requested_context = opts.long_form_context_frames;
+    apply_long_form_hint(model.encoder_cfg.long_form_window_hint,
+                         model.encoder_cfg.long_form_context_hint,
+                         requested_window, requested_context);
     const LongFormPlan normal =
-        resolve_long_form_plan_frames(opts.long_form_window_frames,
-                                      opts.long_form_context_frames,
+        resolve_long_form_plan_frames(requested_window, requested_context,
                                       model.encoder_cfg.pos_emb_max_len,
                                       model.encoder_cfg.subsampling_factor,
                                       n_mel_frames);
@@ -192,13 +201,21 @@ LongFormPlan resolve_long_form_plan(const ParakeetCtcModel & model,
         return normal;
     }
 
+    // A sidecar validated with its own seam context (the fixed-window Neural
+    // Engine export) supplies it when the caller left the context automatic.
+    const int sidecar_context = model_coreml_seam_context_frames(model);
+    const int coreml_context_frames =
+        opts.long_form_context_frames == 0 && sidecar_context > 0
+            ? sidecar_context
+            : opts.long_form_context_frames;
+
     LongFormPlan coreml;
     if (model.model_type == ParakeetModelType::CTC ||
         model.model_type == ParakeetModelType::RNNT ||
         model.model_type == ParakeetModelType::TDT) {
         coreml = resolve_coreml_fixed_shape_plan(
             model_coreml_fixed_mel_frames(model),
-            opts.long_form_context_frames,
+            coreml_context_frames,
             model.encoder_cfg.subsampling_factor,
             n_mel_frames);
     } else if (model.model_type == ParakeetModelType::EOU) {
@@ -229,6 +246,39 @@ LongFormPlan resolve_long_form_plan(const ParakeetCtcModel & model,
 // single-pass result. Returns the run_encoder rc contract (0 = ok), or -6 if a
 // committed range ever escapes its window buffer; honours `cancel_flag` between
 // windows.
+namespace {
+
+// Holds the ggml encoder graph cache at one graph for the duration of a
+// windowed pass. The windows share one shape, so a second slot would only
+// keep an earlier, differently shaped graph's compute buffer alive.
+struct SingleEncoderGraphScope {
+    ParakeetCtcModel & model;
+    size_t previous_limit;
+
+    explicit SingleEncoderGraphScope(ParakeetCtcModel & m)
+        : model(m), previous_limit(set_encoder_graph_cache_limit(m, 1)) {}
+    ~SingleEncoderGraphScope() { set_encoder_graph_cache_limit(model, previous_limit); }
+};
+
+// Size the concatenation buffers once d_model is known. The centres tile
+// [0, n_mel_frames) gap-free, so the committed total is n_mel_frames / sub up
+// to one frame of rounding per window; reserving avoids geometric regrowth,
+// whose last reallocation holds the old and new buffers at once.
+void reserve_committed_frames(EncoderOutputs & out, int n_mel_frames, int sub,
+                              size_t n_windows, bool with_logits) {
+    const size_t est_frames = (size_t) (n_mel_frames / std::max(1, sub)) + n_windows + 1;
+    out.encoder_out.reserve(est_frames * (size_t) out.d_model);
+    if (with_logits && out.vocab_size > 0) {
+        out.logits.reserve(est_frames * (size_t) out.vocab_size);
+    }
+}
+
+bool same_span(const LongFormWindow & a, const LongFormWindow & b) {
+    return a.window_start == b.window_start && a.window_len == b.window_len;
+}
+
+}  // namespace
+
 int run_encoder_windowed(ParakeetCtcModel & model,
                          const float * mel, int n_mel_frames, int n_mels,
                          const LongFormPlan & plan,
@@ -246,33 +296,43 @@ int run_encoder_windowed(ParakeetCtcModel & model,
             plan.exact_mel_frames);
 
     out = EncoderOutputs{};
+    SingleEncoderGraphScope one_graph(model);
 
+    // A final centre shorter than the context gives the last two windows the
+    // same span; it is encoded once and trimmed twice.
+    EncoderOutputs win_out;
+    const LongFormWindow * encoded = nullptr;
     for (const LongFormWindow & w : windows) {
         if (cancel_flag.load()) {
             break;
         }
 
-        const float * win_mel = mel + (size_t) w.window_start * (size_t) n_mels;
+        if (encoded == nullptr || !same_span(*encoded, w)) {
+            const float * win_mel = mel + (size_t) w.window_start * (size_t) n_mels;
 
-        const auto t_enc = clock::now();
-        EncoderOutputs win_out;
-        if (int rc = run_encoder(model, win_mel, w.window_len, n_mels, win_out,
-                                 /*max_layers=*/-1,
-                                 /*capture_intermediates=*/false,
-                                 /*allow_coreml_padded=*/true);
-            rc != 0) {
-            return rc;
-        }
-        stats.encoder_ms += ms_since(t_enc);
-        if (win_out.used_coreml) {
-            ++stats.coreml_windows;
-        } else {
-            ++stats.ggml_windows;
+            const auto t_enc = clock::now();
+            win_out = EncoderOutputs{};
+            if (int rc = run_encoder(model, win_mel, w.window_len, n_mels, win_out,
+                                     /*max_layers=*/-1,
+                                     /*capture_intermediates=*/false,
+                                     /*allow_coreml_padded=*/true);
+                rc != 0) {
+                return rc;
+            }
+            stats.encoder_ms += ms_since(t_enc);
+            if (win_out.used_coreml) {
+                ++stats.coreml_windows;
+            } else {
+                ++stats.ggml_windows;
+            }
+            encoded = &w;
         }
 
         if (out.d_model == 0) {
             out.d_model    = win_out.d_model;
             out.vocab_size = win_out.vocab_size;
+            reserve_committed_frames(out, n_mel_frames, plan.sub, windows.size(),
+                                     !win_out.logits.empty());
         }
 
         const WindowTrim trim =
@@ -293,14 +353,294 @@ int run_encoder_windowed(ParakeetCtcModel & model,
         out.n_enc_frames += trim.center_cnt;
     }
 
-    out.used_coreml = !windows.empty() &&
-                      stats.coreml_windows == (int) windows.size();
+    out.used_coreml = stats.coreml_windows > 0 && stats.ggml_windows == 0;
     PARAKEET_LOG_INFO(
         "parakeet: long-form encoder windows=%zu coreml=%d ggml=%d\n",
         windows.size(), stats.coreml_windows, stats.ggml_windows);
 
     return 0;
 }
+
+namespace {
+
+// ── Independent-segment batched decode (Core ML decoder sidecar) ─────────
+//
+// The Core ML TDT decoder decodes `lanes` windows per dispatch, so it needs
+// windows with no dependency between them. The mel is cut at pauses into
+// segments no longer than the encoder sidecar's window
+// (src/independent_segments.h), each segment is encoded in one dispatch, and
+// each segment's encoder output is decoded from a fresh prediction state.
+// Note: the output can differ from the sequential decoder's.
+
+// Segment cap when the encoder sidecar does not report a window of its own.
+constexpr int    kSegmentMelFramesFallback = 1500;
+constexpr double kSegmentPauseSearchMs     = 6000.0;
+constexpr const char * kSegmentBatchDecodeEnv = "PARAKEET_ANE_BATCH_DECODE";
+constexpr const char * kSegmentMsEnv          = "PARAKEET_ANE_SEGMENT_MS";
+constexpr const char * kSegmentPauseSearchEnv = "PARAKEET_ANE_PAUSE_SEARCH_MS";
+constexpr const char * kSegmentHostDecodeEnv  = "PARAKEET_ANE_DECODE_HOST";
+
+struct IndependentSegmentsOutcome {
+    std::vector<int32_t> ids;
+    std::string          text;
+    int                  encoder_frames = 0;
+    bool                 used_coreml    = false;
+    double encoder_ms = 0.0, decode_ms = 0.0, segment_plan_ms = 0.0, assemble_ms = 0.0;
+};
+
+bool env_flag_disabled(const char * name) {
+    const char * v = std::getenv(name);
+    return v != nullptr && std::atoi(v) == 0;
+}
+
+bool env_flag_enabled(const char * name) {
+    const char * v = std::getenv(name);
+    return v != nullptr && std::atoi(v) != 0;
+}
+
+// Segment cap in mel frames: the encoder sidecar's own dispatch window, so
+// each segment is exactly one encoder dispatch, unless PARAKEET_ANE_SEGMENT_MS
+// asks for another length.
+int resolve_segment_frames(const ParakeetCtcModel & model, double mel_stride_ms) {
+    int segment_frames = model_coreml_fixed_mel_frames(model);
+    if (segment_frames <= 0) segment_frames = kSegmentMelFramesFallback;
+    if (const char * env = std::getenv(kSegmentMsEnv)) {
+        const double requested = std::atof(env);
+        if (requested > 0.0) {
+            segment_frames = std::max(1, (int) std::lround(requested / mel_stride_ms));
+        }
+    }
+    return segment_frames;
+}
+
+int resolve_pause_search_frames(double mel_stride_ms) {
+    double search_ms = kSegmentPauseSearchMs;
+    if (const char * env = std::getenv(kSegmentPauseSearchEnv)) {
+        const double requested = std::atof(env);
+        if (requested >= 0.0) search_ms = requested;
+    }
+    return std::max(0, (int) std::lround(search_ms / mel_stride_ms));
+}
+
+// Encodes each segment on its own and appends every frame to `out`: a decoder
+// starting from a fresh state needs frames that look like the start of an
+// utterance, and unlike the overlapping long-form windows, independent
+// segments have no seam context to trim. Returns false on an encoder failure
+// or a cancel.
+bool encode_segments(ParakeetCtcModel & model, const float * mel, int n_mels,
+                     const std::vector<SegmentRange> & segments, int n_mel_frames,
+                     std::atomic<bool> & cancel_flag, EncoderOutputs & out,
+                     std::vector<TdtLaneWindow> & windows, IndependentSegmentsOutcome & outcome) {
+    using clock = std::chrono::steady_clock;
+    out = EncoderOutputs{};
+    std::vector<int> frame_counts;
+    frame_counts.reserve(segments.size());
+    int coreml_segments = 0;
+
+    for (const SegmentRange & r : segments) {
+        if (cancel_flag.load()) return false;
+
+        const auto t_enc = clock::now();
+        EncoderOutputs seg;
+        if (int rc = run_encoder(model, mel + (size_t) r.begin * (size_t) n_mels,
+                                 r.end - r.begin, n_mels, seg,
+                                 /*max_layers=*/-1,
+                                 /*capture_intermediates=*/false,
+                                 /*allow_coreml_padded=*/true); rc != 0) {
+            PARAKEET_LOG_WARN("parakeet: independent-segment encode failed (rc=%d); "
+                              "falling back to the single-pass path\n", rc);
+            return false;
+        }
+        outcome.encoder_ms += ms_since(t_enc);
+        if (seg.used_coreml) ++coreml_segments;
+
+        const auto t_asm = clock::now();
+        if (out.d_model == 0) {
+            out.d_model    = seg.d_model;
+            out.vocab_size = seg.vocab_size;
+            reserve_committed_frames(out, n_mel_frames, model.encoder_cfg.subsampling_factor,
+                                     segments.size(), /*with_logits=*/false);
+        }
+        if (!append_committed_frames(out.encoder_out, seg.encoder_out, 0, seg.n_enc_frames,
+                                     out.d_model)) {
+            return false;
+        }
+        frame_counts.push_back(seg.n_enc_frames);
+        out.n_enc_frames += seg.n_enc_frames;
+        outcome.assemble_ms += ms_since(t_asm);
+    }
+
+    // Window pointers are taken once the buffer is complete, so reallocation
+    // during the appends cannot invalidate them.
+    size_t start = 0;
+    for (int frames : frame_counts) {
+        windows.push_back({out.encoder_out.data() + start * (size_t) out.d_model, frames});
+        start += (size_t) frames;
+    }
+    outcome.used_coreml = !segments.empty() && coreml_segments == (int) segments.size();
+    return out.n_enc_frames > 0;
+}
+
+// Concatenates each window's transcript end to end. The windows tile the
+// encoder output without overlap, so there is nothing to splice.
+void stitch_segment_transcripts(const ParakeetCtcModel & model,
+                                const std::vector<std::vector<int32_t>> & per_window,
+                                IndependentSegmentsOutcome & outcome) {
+    for (const std::vector<int32_t> & tokens : per_window) {
+        outcome.ids.insert(outcome.ids.end(), tokens.begin(), tokens.end());
+        const std::string piece = detokenize(model.vocab, tokens);
+        if (piece.empty()) continue;
+        if (!outcome.text.empty()) outcome.text.push_back(' ');
+        outcome.text += piece;
+    }
+}
+
+// PARAKEET_ANE_DECODE_HOST=1: the same windows through the sequential host
+// decoder, for parity checks of the lane walk with identical windowing.
+int decode_windows_on_host(const ParakeetCtcModel & model, TdtRuntimeWeights & rt,
+                           const std::vector<TdtLaneWindow> & windows, int d_model,
+                           const TdtDecodeOptions & dopts,
+                           std::vector<std::vector<int32_t>> & per_window) {
+    per_window.resize(windows.size());
+    for (size_t i = 0; i < windows.size(); ++i) {
+        TdtDecodeResult wres;
+        if (int rc = tdt_greedy_decode(model, rt, windows[i].enc, windows[i].n_frames, d_model,
+                                       dopts, wres); rc != 0) {
+            return rc;
+        }
+        per_window[i] = std::move(wres.token_ids);
+    }
+    return 0;
+}
+
+#ifdef PARAKEET_USE_COREML
+// The Core ML TDT decoder sidecar behind the lane walk's stepper interface.
+struct CoremlLaneStepper final : TdtLaneStepper {
+    parakeet_coreml_decoder * dec;
+    int64_t n_lanes = 0, n_h_pred = 0, n_h_dim = 0, n_d_enc = 0, n_width = 0, n_v_out = 0;
+
+    explicit CoremlLaneStepper(parakeet_coreml_decoder * d) : dec(d) {
+        parakeet_coreml_decoder_geometry(dec, &n_lanes, &n_h_pred, &n_h_dim, &n_d_enc,
+                                         &n_width, &n_v_out);
+    }
+    // width > 1 would mean the graph scores several frames per dispatch
+    // against one prediction state, which needs a block-cache invalidation
+    // rule the lane walk does not implement.
+    bool usable() const { return n_width == 1; }
+
+    int64_t lanes()  const override { return n_lanes; }
+    int64_t h_pred() const override { return n_h_pred; }
+    int64_t h_dim()  const override { return n_h_dim; }
+    int64_t d_enc()  const override { return n_d_enc; }
+    int64_t v_out()  const override { return n_v_out; }
+    int step(const float * embed, const float * h_in, const float * c_in, const float * enc_step,
+             float * logits, float * h_out, float * c_out) override {
+        return parakeet_coreml_decoder_step(dec, embed, h_in, c_in, enc_step, logits, h_out, c_out);
+    }
+};
+
+void log_segment_stats(const ParakeetCtcModel & model, const std::vector<SegmentRange> & segments,
+                       const std::vector<TdtLaneWindow> & windows,
+                       const std::vector<std::vector<int32_t>> & per_window,
+                       const TdtLaneStats & stats, bool host) {
+    size_t emitted = 0;
+    for (const std::vector<int32_t> & tokens : per_window) emitted += tokens.size();
+    PARAKEET_LOG_INFO("parakeet: independent segments=%zu dispatches=%d emitted=%zu rescued=%d host=%d\n",
+                      windows.size(), stats.dispatches, emitted, stats.rescued, (int) host);
+    for (size_t i = 0; i < windows.size(); ++i) {
+        std::string piece = detokenize(model.vocab, per_window[i]);
+        if (piece.size() > 70) piece = piece.substr(0, 70) + "...";
+        PARAKEET_LOG_INFO("parakeet:   segment %2zu mel=[%6d,%6d) enc=%4d emit=%zu  %s\n",
+                          i, segments[i].begin, segments[i].end, windows[i].n_frames,
+                          per_window[i].size(), piece.c_str());
+    }
+}
+
+// Pause-cut segments, one encoder dispatch each, then the batched lane decode
+// on the Core ML decoder sidecar. Returns false, leaving `outcome` to be
+// discarded, when there is no usable decoder sidecar, PARAKEET_ANE_BATCH_DECODE=0
+// is set, or any step fails; the caller then runs the sequential path.
+bool transcribe_independent_segments(ParakeetCtcModel & model, TdtRuntimeWeights & rt,
+                                     const float * mel, int n_mel_frames, int n_mels,
+                                     bool verbose, std::atomic<bool> & cancel_flag,
+                                     IndependentSegmentsOutcome & outcome) {
+    using clock = std::chrono::steady_clock;
+    parakeet_coreml_decoder * dec = model_coreml_decoder(model);
+    if (dec == nullptr || env_flag_disabled(kSegmentBatchDecodeEnv) || n_mel_frames <= 0) {
+        return false;
+    }
+    CoremlLaneStepper stepper(dec);
+    if (!stepper.usable()) {
+        PARAKEET_LOG_WARN("parakeet: Core ML decoder was exported at width=%lld; only width=1 "
+                          "is driven\n", (long long) stepper.n_width);
+        return false;
+    }
+    const double mel_stride_ms = model.mel_cfg.hop_length > 0 && model.mel_cfg.sample_rate > 0
+        ? 1000.0 * (double) model.mel_cfg.hop_length / (double) model.mel_cfg.sample_rate
+        : 0.0;
+    if (mel_stride_ms <= 0.0) return false;
+
+    const auto t_plan = clock::now();
+    const std::vector<float> energy = mel_frame_energy(mel, n_mel_frames, n_mels);
+    const std::vector<SegmentRange> segments = plan_independent_segments(
+        energy, n_mel_frames, resolve_segment_frames(model, mel_stride_ms),
+        resolve_pause_search_frames(mel_stride_ms));
+    outcome.segment_plan_ms = ms_since(t_plan);
+    if (segments.empty()) return false;
+
+    EncoderOutputs enc_out;
+    std::vector<TdtLaneWindow> windows;
+    if (!encode_segments(model, mel, n_mels, segments, n_mel_frames, cancel_flag, enc_out,
+                         windows, outcome)) {
+        return false;
+    }
+
+    const TdtDecodeOptions dopts;
+    const bool host = env_flag_enabled(kSegmentHostDecodeEnv);
+    std::vector<std::vector<int32_t>> per_window;
+    TdtLaneStats stats;
+    const auto t_dec = clock::now();
+    const int rc = host
+        ? decode_windows_on_host(model, rt, windows, enc_out.d_model, dopts, per_window)
+        : tdt_decode_lanes(tdt_lane_geometry(model, rt), rt.embed, stepper, windows, dopts,
+                           per_window, &stats);
+    if (rc != 0) {
+        PARAKEET_LOG_WARN("parakeet: Core ML batched decode failed (rc=%d); falling back to the "
+                          "ggml decoder\n", rc);
+        return false;
+    }
+    outcome.decode_ms = ms_since(t_dec);
+
+    const auto t_stitch = clock::now();
+    stitch_segment_transcripts(model, per_window, outcome);
+    outcome.encoder_frames = enc_out.n_enc_frames;
+    outcome.assemble_ms += ms_since(t_stitch);
+
+    if (verbose) log_segment_stats(model, segments, windows, per_window, stats, host);
+    return true;
+}
+
+EngineResult segments_result(IndependentSegmentsOutcome && seg, double preprocess_ms,
+                             double total_ms, int n_samples, int sample_rate, int n_mel_frames) {
+    EngineResult result;
+    result.text            = std::move(seg.text);
+    result.token_ids       = std::move(seg.ids);
+    result.preprocess_ms   = preprocess_ms;
+    result.encoder_ms      = seg.encoder_ms;
+    result.decode_ms       = seg.decode_ms;
+    result.segment_plan_ms = seg.segment_plan_ms;
+    result.assemble_ms     = seg.assemble_ms;
+    result.total_ms        = total_ms;
+    result.audio_samples   = n_samples;
+    result.sample_rate     = sample_rate;
+    result.mel_frames      = n_mel_frames;
+    result.encoder_frames  = seg.encoder_frames;
+    result.encoder_used_coreml = seg.used_coreml;
+    return result;
+}
+#endif  // PARAKEET_USE_COREML
+
+}  // namespace
 
 struct Engine::Impl {
     EngineOptions       opts;
@@ -515,45 +855,173 @@ void Engine::cancel() {
     pimpl_->cancel_flag.store(true);
 }
 
-EngineResult Engine::transcribe(const std::string & wav_path) {
+namespace {
+
+std::vector<float> load_wav_or_throw(const std::string & wav_path, const char * where, int & sr) {
     std::vector<float> samples;
-    int sr = 0;
     if (int rc = load_wav_mono_f32(wav_path, samples, sr); rc != 0) {
-        throw std::runtime_error("parakeet::Engine::transcribe: failed to load wav '" +
-                                 wav_path + "' (rc=" + std::to_string(rc) + ")");
+        throw std::runtime_error(std::string("parakeet::Engine::") + where +
+                                 ": failed to load wav '" + wav_path +
+                                 "' (rc=" + std::to_string(rc) + ")");
     }
-    return transcribe_samples(samples.data(), (int) samples.size(), sr);
+    return samples;
 }
 
-EngineResult Engine::transcribe_samples(const float * samples, int n_samples, int sample_rate) {
+void require_audio_for_model(const ParakeetCtcModel & model, const float * samples,
+                             int n_samples, int sample_rate, const char * where) {
     if (!samples || n_samples <= 0) {
-        throw std::runtime_error("parakeet::Engine::transcribe_samples: empty input");
+        throw std::runtime_error(std::string("parakeet::Engine::") + where + ": empty input");
     }
-    if (sample_rate != pimpl_->model.mel_cfg.sample_rate) {
-        throw std::runtime_error("parakeet::Engine::transcribe_samples: input is " +
+    if (sample_rate != model.mel_cfg.sample_rate) {
+        throw std::runtime_error(std::string("parakeet::Engine::") + where + ": input is " +
                                  std::to_string(sample_rate) + " Hz but model expects " +
-                                 std::to_string(pimpl_->model.mel_cfg.sample_rate) + " Hz");
+                                 std::to_string(model.mel_cfg.sample_rate) + " Hz");
     }
-    if (pimpl_->model.model_type == ParakeetModelType::SORTFORMER) {
+}
+
+void require_transcription_model(const ParakeetCtcModel & model, const char * where) {
+    if (model.model_type == ParakeetModelType::SORTFORMER) {
         throw std::runtime_error(
-            "parakeet::Engine::transcribe_samples: loaded GGUF is a Sortformer "
+            std::string("parakeet::Engine::") + where + ": loaded GGUF is a Sortformer "
             "diarization model; call Engine::diarize() (or transcribe_with_speakers "
             "with a separate ASR engine) instead.");
     }
+}
+
+// The mel stage as a detached value. `state` is whichever scratch the caller
+// owns: the Engine's for the transcribe entry points, a thread-local one for
+// compute_mel, which may run concurrently with a transcription.
+PrecomputedMel build_precomputed_mel(const ParakeetCtcModel & model, MelState & state,
+                                     const float * samples, int n_samples, int sample_rate,
+                                     const char * where) {
+    const auto t_mel = std::chrono::steady_clock::now();
+    PrecomputedMel out;
+    if (int rc = compute_log_mel(samples, n_samples, model.mel_cfg, state,
+                                 out.mel, out.n_frames); rc != 0) {
+        throw std::runtime_error(std::string("parakeet::Engine::") + where +
+                                 ": compute_log_mel failed (rc=" + std::to_string(rc) + ")");
+    }
+    out.n_mels        = model.mel_cfg.n_mels;
+    out.audio_samples = n_samples;
+    out.sample_rate   = sample_rate;
+    out.preprocess_ms = ms_since(t_mel);
+    return out;
+}
+
+}  // namespace
+
+EngineResult Engine::transcribe(const std::string & wav_path) {
+    int sr = 0;
+    std::vector<float> samples = load_wav_or_throw(wav_path, "transcribe", sr);
+    require_audio_for_model(pimpl_->model, samples.data(), (int) samples.size(), sr, "transcribe");
+    require_transcription_model(pimpl_->model, "transcribe");
     pimpl_->cancel_flag.store(false);
 
+    PrecomputedMel mel = build_precomputed_mel(pimpl_->model, pimpl_->mel_state,
+                                               samples.data(), (int) samples.size(), sr,
+                                               "transcribe");
+    // Everything from here on reads the mel, never the audio, so neither the
+    // waveform nor the STFT scratch is held across the encoder and decoder.
+    std::vector<float>().swap(samples);
+    pimpl_->mel_state.release_scratch();
+    return transcribe_mel_impl(std::move(mel), mel.preprocess_ms);
+}
+
+EngineResult Engine::transcribe_samples(const float * samples, int n_samples, int sample_rate) {
+    require_audio_for_model(pimpl_->model, samples, n_samples, sample_rate, "transcribe_samples");
+    require_transcription_model(pimpl_->model, "transcribe_samples");
+    pimpl_->cancel_flag.store(false);
+
+    PrecomputedMel mel = build_precomputed_mel(pimpl_->model, pimpl_->mel_state,
+                                               samples, n_samples, sample_rate,
+                                               "transcribe_samples");
+    pimpl_->mel_state.release_scratch();
+    return transcribe_mel_impl(std::move(mel), mel.preprocess_ms);
+}
+
+PrecomputedMel Engine::compute_mel(const float * samples, int n_samples, int sample_rate) const {
+    require_audio_for_model(pimpl_->model, samples, n_samples, sample_rate, "compute_mel");
+    // Not pimpl_->mel_state: the Engine may be using that on another thread.
+    // A thread_local keeps buffer reuse across calls without sharing state,
+    // since the expected caller is one long-lived prefetch worker.
+    static thread_local MelState tls_mel_state;
+    return build_precomputed_mel(pimpl_->model, tls_mel_state, samples, n_samples, sample_rate,
+                                 "compute_mel");
+}
+
+PrecomputedMel Engine::compute_mel_wav(const std::string & wav_path) const {
+    const auto t_read = std::chrono::steady_clock::now();
+    int sr = 0;
+    const std::vector<float> samples = load_wav_or_throw(wav_path, "compute_mel_wav", sr);
+    const double read_ms = ms_since(t_read);
+
+    PrecomputedMel out = compute_mel(samples.data(), (int) samples.size(), sr);
+    // The read is prefetched along with the mel, so it belongs to the same
+    // hidden stage; folding it in keeps total_ms end-to-end on this path too.
+    out.preprocess_ms += read_ms;
+    return out;
+}
+
+namespace {
+
+// A PrecomputedMel is a plain public struct, so the frame count, the bin count
+// and the buffer it carries are checked against each other before the encoder
+// reads it. The product is formed in size_t and checked by division so an
+// oversized frame count cannot wrap into a plausible size.
+void require_mel_buffer(const PrecomputedMel & mel, int expected_n_mels) {
+    if (mel.empty()) {
+        throw std::runtime_error("parakeet::Engine::transcribe_mel: empty mel");
+    }
+    if (mel.n_mels != expected_n_mels) {
+        throw std::runtime_error("parakeet::Engine::transcribe_mel: mel has " +
+                                 std::to_string(mel.n_mels) + " bins but model expects " +
+                                 std::to_string(expected_n_mels));
+    }
+    const size_t frames   = (size_t) mel.n_frames;
+    const size_t bins     = (size_t) mel.n_mels;
+    const size_t expected = frames * bins;
+    if (expected / bins != frames || mel.mel.size() != expected) {
+        throw std::runtime_error("parakeet::Engine::transcribe_mel: mel buffer holds " +
+                                 std::to_string(mel.mel.size()) + " values but " +
+                                 std::to_string(mel.n_frames) + " frames x " +
+                                 std::to_string(mel.n_mels) + " bins were declared");
+    }
+}
+
+}  // namespace
+
+EngineResult Engine::transcribe_mel(PrecomputedMel mel) {
+    require_mel_buffer(mel, pimpl_->model.mel_cfg.n_mels);
+    require_transcription_model(pimpl_->model, "transcribe_mel");
+    pimpl_->cancel_flag.store(false);
+    // The mel was timed on whichever thread built it; only the stages from
+    // here on are this call's to measure.
+    return transcribe_mel_impl(std::move(mel), mel.preprocess_ms);
+}
+
+EngineResult Engine::transcribe_mel_impl(PrecomputedMel && precomputed, double prior_ms) {
     using clock = std::chrono::steady_clock;
     const auto t_total = clock::now();
 
-    const auto t_mel = clock::now();
-    std::vector<float> mel;
-    int n_mel_frames = 0;
-    if (int rc = compute_log_mel(samples, n_samples, pimpl_->model.mel_cfg,
-                                 pimpl_->mel_state, mel, n_mel_frames); rc != 0) {
-        throw std::runtime_error("parakeet::Engine::transcribe_samples: compute_log_mel failed (rc=" +
-                                 std::to_string(rc) + ")");
+    std::vector<float> mel = std::move(precomputed.mel);
+    const int    n_mel_frames  = precomputed.n_frames;
+    const int    n_samples     = precomputed.audio_samples;
+    const int    sample_rate   = precomputed.sample_rate;
+    const double preprocess_ms = precomputed.preprocess_ms;
+
+#ifdef PARAKEET_USE_COREML
+    // With a TDT decoder sidecar the whole pass runs as pause-cut segments,
+    // batched on the Neural Engine; anything below is the fallback.
+    if (pimpl_->model.model_type == ParakeetModelType::TDT) {
+        IndependentSegmentsOutcome seg;
+        if (transcribe_independent_segments(pimpl_->model, pimpl_->transducer_rt, mel.data(),
+                                            n_mel_frames, pimpl_->model.mel_cfg.n_mels,
+                                            pimpl_->opts.verbose, pimpl_->cancel_flag, seg)) {
+            return segments_result(std::move(seg), preprocess_ms, prior_ms + ms_since(t_total),
+                                   n_samples, sample_rate, n_mel_frames);
+        }
     }
-    const double preprocess_ms = ms_since(t_mel);
+#endif
 
     double encoder_ms = 0.0;
     EncoderOutputs enc_out;
@@ -601,7 +1069,7 @@ EngineResult Engine::transcribe_samples(const float * samples, int n_samples, in
         result.preprocess_ms = preprocess_ms;
         result.encoder_ms = offline.encoder_ms;
         result.decode_ms = offline.decoder_ms;
-        result.total_ms = ms_since(t_total);
+        result.total_ms = prior_ms + ms_since(t_total);
         result.audio_samples = n_samples;
         result.sample_rate = sample_rate;
         result.mel_frames = n_mel_frames;
@@ -642,7 +1110,7 @@ EngineResult Engine::transcribe_samples(const float * samples, int n_samples, in
         EngineResult result;
         result.preprocess_ms  = preprocess_ms;
         result.encoder_ms     = encoder_ms;
-        result.total_ms       = ms_since(t_total);
+        result.total_ms       = prior_ms + ms_since(t_total);
         result.audio_samples  = n_samples;
         result.sample_rate    = sample_rate;
         result.mel_frames     = n_mel_frames;
@@ -730,7 +1198,7 @@ EngineResult Engine::transcribe_samples(const float * samples, int n_samples, in
     result.preprocess_ms  = preprocess_ms;
     result.encoder_ms     = encoder_ms;
     result.decode_ms      = decode_ms;
-    result.total_ms       = ms_since(t_total);
+    result.total_ms       = prior_ms + ms_since(t_total);
     result.audio_samples  = n_samples;
     result.sample_rate    = sample_rate;
     result.mel_frames     = n_mel_frames;

@@ -25,6 +25,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <locale>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -109,6 +111,22 @@ void print_usage(const char * argv0) {
         "                                     Q8_0 GGUFs on Adreno (the model weights\n"
         "                                     exceed the 256 MB single-allocation cap).\n"
         "  --verbose            print per-stage wall times and shapes to stderr\n"
+        "\n"
+        "  --window-sec S       offline transcription: encode inputs longer than S seconds\n"
+        "                       in overlapping windows of S seconds, so the encoder's\n"
+        "                       memory depends on the window rather than on the length of\n"
+        "                       the recording. At least 256 encoder frames (20.5 s at the\n"
+        "                       80 ms stride), at most the model's positional range (400 s\n"
+        "                       for TranscribePsy). Default: the engine's automatic window,\n"
+        "                       300 s or the model's range if shorter. 0 encodes the whole\n"
+        "                       input in one pass, whose memory grows with the square of\n"
+        "                       its length. 60 s with --overlap 0.25 is the recommended\n"
+        "                       setting on phones.\n"
+        "  --overlap F          fraction of each window shared with its neighbours, 0 to\n"
+        "                       0.5 (default: 256 frames of context each side, at most a\n"
+        "                       quarter of the window; 0 = no shared context). Both flags\n"
+        "                       are ignored, with a warning, by --stream,\n"
+        "                       --diarization-model and --profile.\n"
         "\n"
         "  --stream             enable streaming. Without --stream-duplex this is Mode 2:\n"
         "                       runs the offline encoder once, then emits one segment per\n"
@@ -289,6 +307,11 @@ struct ExtraCliOpts {
     int         attributed_min_segment_ms = 200;
     int         attributed_pad_segment_ms = 0;
 
+    // --window-sec / --overlap exactly as given. Converted to encoder frames
+    // only once the model's frame stride and positional range are known.
+    std::string window_sec_arg;
+    std::string overlap_arg;
+
     // OpenCL CLI surface: ggml-opencl's runtime knobs are exposed through
     // CLI flags so bench scripts can A/B them without `env VAR=… ./binary`.
     // All four are read by ggml-opencl via getenv() and (for the cache
@@ -373,6 +396,99 @@ AggStats aggregate(std::vector<double> v) {
     if (v.size() % 2 == 1) s.median = v[v.size() / 2];
     else                   s.median = 0.5 * (v[v.size()/2 - 1] + v[v.size()/2]);
     return s;
+}
+
+// The whole argument must be one finite number, read in the C locale:
+// parakeet_cli_main can run inside a host app whose LC_NUMERIC uses a comma.
+bool parse_finite_double(const std::string & s, double & out) {
+    std::istringstream in(s);
+    in.imbue(std::locale::classic());
+    double v = 0.0;
+    in >> std::noskipws >> v;
+    if (in.fail() || in.peek() != std::char_traits<char>::eof() || !std::isfinite(v)) {
+        return false;
+    }
+    out = v;
+    return true;
+}
+
+double encoder_frame_seconds(const parakeet::ParakeetCtcModel & model) {
+    const int sub = model.encoder_cfg.subsampling_factor > 0 ? model.encoder_cfg.subsampling_factor : 8;
+    return (double) model.mel_cfg.hop_length * sub / (double) model.mel_cfg.sample_rate;
+}
+
+// --window-sec into EngineOptions::long_form_window_frames; false after
+// logging the reason when the value is rejected.
+bool resolve_cli_window(const parakeet::ParakeetCtcModel & model, const std::string & arg,
+                        parakeet::EngineOptions & long_form_opts) {
+    if (arg.empty()) return true;
+    const double frame_sec  = encoder_frame_seconds(model);
+    const int    max_frames = model.encoder_cfg.pos_emb_max_len;
+    double window_sec = 0.0;
+    if (!parse_finite_double(arg, window_sec) || window_sec < 0.0) {
+        PARAKEET_LOG_ERROR("error: --window-sec expects seconds >= 0 (got '%s')\n", arg.c_str());
+        return false;
+    }
+    if (!parakeet::long_form_window_frames_from_seconds(window_sec, frame_sec, parakeet::kLongFormMinWindowFrames,
+                                              max_frames, long_form_opts.long_form_window_frames)) {
+        if (max_frames > 0) {
+            PARAKEET_LOG_ERROR("error: --window-sec must be 0 (single pass) or %.1f to %.1f s "
+                               "(%d to %d encoder frames of %.0f ms); got %g\n",
+                               parakeet::kLongFormMinWindowFrames * frame_sec, max_frames * frame_sec,
+                               parakeet::kLongFormMinWindowFrames, max_frames, frame_sec * 1000.0, window_sec);
+        } else {
+            PARAKEET_LOG_ERROR("error: --window-sec must be 0 (single pass) or at least %.1f s "
+                               "(%d encoder frames of %.0f ms); got %g\n",
+                               parakeet::kLongFormMinWindowFrames * frame_sec, parakeet::kLongFormMinWindowFrames,
+                               frame_sec * 1000.0, window_sec);
+        }
+        return false;
+    }
+    return true;
+}
+
+// --overlap into EngineOptions::long_form_context_frames, against the window
+// --window-sec selected or the engine's automatic one; false after logging
+// the reason when the value is rejected.
+bool resolve_cli_overlap(const parakeet::ParakeetCtcModel & model, const std::string & arg,
+                         parakeet::EngineOptions & long_form_opts) {
+    if (arg.empty() || long_form_opts.long_form_window_frames < 0) return true;
+    double overlap = 0.0;
+    const int window_frames = parakeet::resolve_long_form_window_frames(
+        long_form_opts.long_form_window_frames, model.encoder_cfg.pos_emb_max_len,
+        parakeet::kLongFormAutoWindowFrames, parakeet::kLongFormMinWindowFrames);
+    if (!parse_finite_double(arg, overlap) ||
+        !parakeet::long_form_context_frames_from_overlap(overlap, window_frames,
+                                               long_form_opts.long_form_context_frames)) {
+        PARAKEET_LOG_ERROR("error: --overlap expects a fraction from 0 to 0.5 (got '%s')\n",
+                           arg.c_str());
+        return false;
+    }
+    return true;
+}
+
+void log_cli_long_form(const parakeet::ParakeetCtcModel & model, const parakeet::EngineOptions & long_form_opts) {
+    if (long_form_opts.long_form_window_frames < 0) {
+        PARAKEET_LOG_INFO("[long-form] off: single-pass encoder\n");
+        return;
+    }
+    const double frame_sec = encoder_frame_seconds(model);
+    int requested_window  = long_form_opts.long_form_window_frames;
+    int requested_context = long_form_opts.long_form_context_frames;
+    parakeet::apply_long_form_hint(model.encoder_cfg.long_form_window_hint,
+                                   model.encoder_cfg.long_form_context_hint,
+                                   requested_window, requested_context);
+    const int window_frames = parakeet::resolve_long_form_window_frames(
+        requested_window, model.encoder_cfg.pos_emb_max_len,
+        parakeet::kLongFormAutoWindowFrames, parakeet::kLongFormMinWindowFrames);
+    int context_frames = requested_context;
+    if (context_frames == 0) context_frames = parakeet::kLongFormAutoContextFrames;
+    if (context_frames < 0) context_frames = 0;
+    context_frames = std::min(context_frames, window_frames / 4);
+    PARAKEET_LOG_INFO("[long-form] inputs longer than %.2f s are encoded in windows of %d encoder "
+                      "frames with %d frames of context each side (%.1f %% overlap)\n",
+                      window_frames * frame_sec, window_frames, context_frames,
+                      100.0 * 2.0 * context_frames / window_frames);
 }
 
 // Private CLI options struct -- this binary's parsed flags only. The
@@ -483,6 +599,10 @@ extern "C" int parakeet_cli_main(int argc, char ** argv) {
             extra.attributed_min_segment_ms = std::max(0, std::atoi(argv[++i]));
         } else if (a == "--diarization-pad-segment-ms" && i + 1 < argc) {
             extra.attributed_pad_segment_ms = std::max(0, std::atoi(argv[++i]));
+        } else if (a == "--window-sec" && i + 1 < argc) {
+            extra.window_sec_arg = argv[++i];
+        } else if (a == "--overlap" && i + 1 < argc) {
+            extra.overlap_arg = argv[++i];
         } else {
             PARAKEET_LOG_ERROR("unknown option: %s\n", a.c_str());
             print_usage(argv[0]);
@@ -585,6 +705,24 @@ extern "C" int parakeet_cli_main(int argc, char ** argv) {
     }
     const double wav_ms = ms_since(t_wav);
     const double audio_ms = 1000.0 * (double) samples.size() / (double) sr;
+
+    // --window-sec / --overlap shape the offline encoder pass of the one-shot
+    // transcription below. The other modes run their own encoder passes.
+    EngineOptions long_form_opts;
+    const bool window_flags_set = !extra.window_sec_arg.empty() || !extra.overlap_arg.empty();
+    if (window_flags_set &&
+        (extra.stream || extra.profile || !extra.diarization_model_path.empty())) {
+        PARAKEET_LOG_WARN("warning: --window-sec/--overlap ignored: --stream, "
+                          "--diarization-model and --profile do not use them\n");
+    } else {
+        if (!resolve_cli_window(model, extra.window_sec_arg, long_form_opts) ||
+            !resolve_cli_overlap(model, extra.overlap_arg, long_form_opts)) {
+            return 2;
+        }
+        if (opts.verbose && window_flags_set) {
+            log_cli_long_form(model, long_form_opts);
+        }
+    }
 
     if (!extra.diarization_model_path.empty()) {
         if (model.model_type == ParakeetModelType::SORTFORMER ||
@@ -780,7 +918,6 @@ extern "C" int parakeet_cli_main(int argc, char ** argv) {
         }
 
         EncoderOutputs enc_out;
-        EngineOptions long_form_opts;
         const LongFormPlan long_form =
             resolve_long_form_plan(model, long_form_opts, n_frames);
 
@@ -1322,7 +1459,7 @@ extern "C" int parakeet_cli_main(int argc, char ** argv) {
     PARAKEET_LOG_INFO(
         "[bench] encoder_backend=%s  decoder_backend=%s\n",
         encoder_backend.c_str(),
-        model_active_backend_name(model).c_str());
+        model_decoder_backend_name(model).c_str());
 
     PARAKEET_LOG_INFO(
         "[bench] ----------- summary (%d timed runs, warmup excluded) -----------\n"

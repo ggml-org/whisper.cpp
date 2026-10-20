@@ -47,26 +47,16 @@ struct MelConfig {
     // Worker threads for the per-frame FFT and filterbank loops; 0 picks
     // from the frame count and the hardware, capped internally.
     int n_threads = 0;
+
+    // Frames per STFT block; 0 picks the default. The block bounds the
+    // scratch memory and never changes the output (test-mel-fft-parity).
+    int stft_block_frames = 0;
 };
 
 int load_wav_mono_f32(const std::string & wav_path,
                       std::vector<float>   & out_samples,
                       int                  & out_sample_rate);
 
-// Reusable working buffers for `compute_log_mel`. Holds every per-call
-// scratch allocation so streaming workloads (Mode 2 / Mode 3 chunked
-// transcribe, live diarization) don't re-allocate 6 std::vectors per
-// chunk. Default-initialise once on the engine / stream session and
-// pass the same `MelState&` to every `compute_log_mel` call. The
-// stateful overload is byte-identical to the stateless form -- it
-// just reuses buffers when their capacity is large enough.
-//
-// The first call grows each buffer as needed; subsequent calls with
-// the same `(n_samples, n_fft, n_mels)` shape never reallocate.
-//
-// `window_padded_n_fft` is the cache key for the precomputed
-// zero-padded analysis window: re-derives only when `cfg.n_fft`
-// changes (which is once per engine lifetime in practice).
 // Column range [lo, hi) of one mel filter's non-zero weights.
 struct MelFilterBand {
     int lo = 0;
@@ -80,16 +70,32 @@ void log_mel_frame(const float * frame_power, int n_bins, int n_mels,
                    const float * filterbank, const MelFilterBand * bands,
                    float log_zero_guard, float * mel_out);
 
+// Reusable working buffers for `compute_log_mel`. Default-initialise once
+// on the engine / stream session and pass the same `MelState&` to every
+// call, so streaming workloads (Mode 2 / Mode 3 chunked transcribe, live
+// diarization) do not re-allocate per chunk. The stateful overload is
+// byte-identical to the stateless form.
+//
+// `x_padded` and `power` are sized by the STFT block, not by the input, so
+// they stay bounded however long the audio is. `window_padded` and
+// `filter_bands` are derived from the config and cached by source pointer.
 struct MelState {
-    std::vector<float>               x;
     std::vector<float>               x_padded;
     std::vector<float>               window_padded;
     std::vector<float>               power;
     std::vector<MelFilterBand>       filter_bands;
 
+    // The tables the two caches were built from, kept by value: a state can
+    // outlive the engine whose config built it (Engine::compute_mel's
+    // thread-local), and a later engine may reuse that config's address with
+    // other tables, so validity is decided by contents, never by address.
     int                              window_padded_n_fft = 0;
-    const std::vector<float> *       window_padded_src   = nullptr;
-    const std::vector<float> *       filter_bands_src    = nullptr;
+    std::vector<float>               window_src;
+    std::vector<float>               filterbank_src;
+
+    // Frees the two block buffers while keeping the cached window and filter
+    // bands, for callers that hold the state idle between utterances.
+    void release_scratch();
 };
 
 struct IncrementalMelState {

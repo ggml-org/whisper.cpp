@@ -1187,6 +1187,17 @@ static int tdt_prepare_runtime_impl(const ParakeetCtcModel & model, TdtRuntimeWe
         return 1;
     }
 
+    // ggml-opencl drops the in-place ggml_cpy writes that advance the LSTM
+    // state, so with the encoder on OpenCL the TDT / RNN-T decode graphs run
+    // on the CPU backend from the loader's CPU-resident weight copies (the
+    // measure pass sizes them from the originals' shapes). Nemotron keeps the
+    // host loop below.
+    if (!is_nemotron && backend_is_opencl(W.backend) && model.backend_cpu() &&
+        (measure || model_tdt_decoder_on_cpu(model))) {
+        W.backend = model.backend_cpu();
+        if (!measure) W.weights = &model.tdt_cpu;
+    }
+
     // The CPU backend keeps the thread count the encoder configured at load;
     // compute_graph only overrides it when n_threads is set explicitly.
     W.n_threads = 0;
@@ -1215,6 +1226,12 @@ static int tdt_prepare_runtime_impl(const ParakeetCtcModel & model, TdtRuntimeWe
     W.fused_lstm_cell = W.use_graphs && allow_fused_lstm && backend_runs_lstm_cell(W.backend, W.H_pred);
     W.argmax_on_gpu   = W.use_graphs && backend_runs_transducer_argmax(W.backend, W.V_out, W.V_plus_1, W.num_durations);
 
+    // The batched Core ML decoder looks tokens up on the host whichever path
+    // the sequential decoder takes (a gather is not an ANE op).
+    if (!measure && model_coreml_decoder(model) != nullptr) {
+        dequantize_to_f32(W.weights->predict_embed, W.embed);
+    }
+
     if (!W.use_graphs) {
         if (measure) {
             // ---- CPU fallback, sized: the dequantised host f32 copies ----
@@ -1235,7 +1252,9 @@ static int tdt_prepare_runtime_impl(const ParakeetCtcModel & model, TdtRuntimeWe
             return 0;
         }
         // ---- CPU fallback: dequantise weights to host f32 ----
-        dequantize_to_f32(W.weights->predict_embed, W.embed);
+        if (W.embed.empty()) {
+            dequantize_to_f32(W.weights->predict_embed, W.embed);
+        }
         W.host_lstm.clear();
         W.host_lstm.resize(W.L);
         for (int l = 0; l < W.L; ++l) {
@@ -1855,6 +1874,268 @@ int tdt_decode_window(const ParakeetCtcModel & model,
     }
 
     state.carry_frames = is_rnnt ? 0 : std::max(0, t - n_frames);
+    return 0;
+}
+
+TdtLaneGeometry tdt_lane_geometry(const ParakeetCtcModel & model, const TdtRuntimeWeights & W) {
+    TdtLaneGeometry geom;
+    geom.blank_id         = (int) model.blank_id;
+    geom.vocab_plus_blank = W.V_plus_1;
+    geom.durations        = model.tdt_durations;
+    geom.h_pred           = W.H_pred;
+    geom.layers           = W.L;
+    geom.d_enc            = W.D_enc;
+    return geom;
+}
+
+namespace {
+
+// A window's prediction state as it retires: h/c *before* consuming embed,
+// the same triple a lane carries, which is what a warm start needs.
+struct LaneWindowState {
+    bool               valid = false;
+    std::vector<float> h, c, embed;
+};
+
+struct LaneCursor {
+    size_t window  = 0;  // index into the windows, or the idle marker
+    int    t       = 0;  // frame cursor within that window
+    int    symbols = 0;  // emissions at the current frame
+};
+
+// The lane walk's buffers and bookkeeping for one utterance. The stepper's
+// graph always steps the LSTM, so a lane carries (h, c, embed) meaning "h/c
+// before consuming embed", and the prediction the joint scores against is
+// recomputed every dispatch: a blank step leaves all three alone and only
+// moves the frame cursor, an emission commits h_out/c_out and swaps in the
+// emitted token's embedding row.
+struct LaneDecoder {
+    const TdtLaneGeometry &            geom;
+    const std::vector<float> &         embed_table;
+    TdtLaneStepper &                   stepper;
+    const std::vector<TdtLaneWindow> & windows;
+    const TdtDecodeOptions &           opts;
+
+    const int     L;
+    const int64_t h_pred, h_dim, d_enc, v_out;
+    const int     n_dur;
+    const size_t  idle;
+
+    std::vector<float> embed, h, c, enc, logits, h_out, c_out;
+    std::vector<LaneCursor>            lane;
+    std::vector<LaneWindowState>       final_state;
+    std::vector<std::vector<int32_t>>  tokens;
+    int dispatches = 0;
+
+    LaneDecoder(const TdtLaneGeometry & g, const std::vector<float> & table, TdtLaneStepper & s,
+                const std::vector<TdtLaneWindow> & w, const TdtDecodeOptions & o)
+        : geom(g), embed_table(table), stepper(s), windows(w), opts(o),
+          L((int) s.lanes()), h_pred(s.h_pred()), h_dim(s.h_dim()), d_enc(s.d_enc()),
+          v_out(s.v_out()), n_dur(geom.durations.empty()
+                                      ? (int) (v_out - geom.vocab_plus_blank)
+                                      : (int) geom.durations.size()),
+          idle(w.size()),
+          embed((size_t) L * h_pred, 0.0f), h((size_t) L * h_dim, 0.0f), c((size_t) L * h_dim, 0.0f),
+          enc((size_t) L * d_enc, 0.0f), logits((size_t) L * v_out, 0.0f),
+          h_out((size_t) L * h_dim, 0.0f), c_out((size_t) L * h_dim, 0.0f),
+          lane((size_t) L), final_state(w.size()), tokens(w.size()) {}
+
+    const float * embed_row(int token) const {
+        return embed_table.data() + (size_t) token * (size_t) h_pred;
+    }
+
+    float * lane_h(int l)     { return h.data()     + (size_t) l * h_dim; }
+    float * lane_c(int l)     { return c.data()     + (size_t) l * h_dim; }
+    float * lane_embed(int l) { return embed.data() + (size_t) l * h_pred; }
+
+    void seed_lane(int l, const LaneWindowState & seed) {
+        if (seed.valid) {
+            std::copy(seed.h.begin(), seed.h.end(), lane_h(l));
+            std::copy(seed.c.begin(), seed.c.end(), lane_c(l));
+            std::copy(seed.embed.begin(), seed.embed.end(), lane_embed(l));
+            return;
+        }
+        // Zero state plus the blank row is the canonical "nothing emitted yet"
+        // prediction, the same seed tdt_init_state gives the sequential walk.
+        std::fill(lane_h(l), lane_h(l) + h_dim, 0.0f);
+        std::fill(lane_c(l), lane_c(l) + h_dim, 0.0f);
+        std::copy(embed_row(geom.blank_id), embed_row(geom.blank_id) + h_pred, lane_embed(l));
+    }
+
+    // Seats the next window with frames into lane `l`, or idles the lane.
+    void seat(int l, const std::vector<size_t> & todo, size_t & next,
+              const std::vector<LaneWindowState> & seeds) {
+        while (next < todo.size() && windows[todo[next]].n_frames <= 0) ++next;
+        lane[(size_t) l] = LaneCursor{};
+        lane[(size_t) l].window = next < todo.size() ? todo[next++] : idle;
+        if (lane[(size_t) l].window != idle) {
+            seed_lane(l, seeds[lane[(size_t) l].window]);
+        }
+    }
+
+    void retire(int l) {
+        LaneWindowState & st = final_state[lane[(size_t) l].window];
+        st.h.assign(lane_h(l), lane_h(l) + h_dim);
+        st.c.assign(lane_c(l), lane_c(l) + h_dim);
+        st.embed.assign(lane_embed(l), lane_embed(l) + h_pred);
+        st.valid = true;
+    }
+
+    // Copies every active lane's current encoder frame into the dispatch
+    // input; returns the number of active lanes.
+    int stage_frames() {
+        int active = 0;
+        for (int l = 0; l < L; ++l) {
+            const LaneCursor & cur = lane[(size_t) l];
+            if (cur.window == idle) continue;
+            ++active;
+            const TdtLaneWindow & w = windows[cur.window];
+            std::copy(w.enc + (size_t) cur.t * d_enc, w.enc + (size_t) (cur.t + 1) * d_enc,
+                      enc.data() + (size_t) l * d_enc);
+        }
+        return active;
+    }
+
+    int duration_for(int dur_idx) const {
+        return geom.durations.empty() ? dur_idx : geom.durations[(size_t) dur_idx];
+    }
+
+    // Applies one dispatch's logits to lane `l`: the same blank handling,
+    // duration jump and max_symbols_per_step guard as tdt_decode_window.
+    void advance_lane(int l) {
+        LaneCursor & cur = lane[(size_t) l];
+        const float * lane_logits = logits.data() + (size_t) l * v_out;
+        const int best_token   = argmax_f32(lane_logits, geom.vocab_plus_blank);
+        const int best_dur_idx = argmax_f32(lane_logits + geom.vocab_plus_blank, n_dur);
+        const int best_dur     = duration_for(best_dur_idx);
+
+        if (best_token == geom.blank_id) {
+            cur.t += std::max(1, best_dur);
+            cur.symbols = 0;
+            return;
+        }
+        tokens[cur.window].push_back((int32_t) best_token);
+        std::copy(h_out.begin() + (size_t) l * h_dim, h_out.begin() + (size_t) (l + 1) * h_dim, lane_h(l));
+        std::copy(c_out.begin() + (size_t) l * h_dim, c_out.begin() + (size_t) (l + 1) * h_dim, lane_c(l));
+        std::copy(embed_row(best_token), embed_row(best_token) + h_pred, lane_embed(l));
+
+        ++cur.symbols;
+        if (best_dur > 0 || cur.symbols >= opts.max_symbols_per_step) {
+            cur.t += std::max(1, best_dur);
+            cur.symbols = 0;
+        }
+    }
+
+    // Retires lanes whose window ran out of frames and seats the next ones.
+    void refill_lanes(const std::vector<size_t> & todo, size_t & next,
+                      const std::vector<LaneWindowState> & seeds) {
+        for (int l = 0; l < L; ++l) {
+            const LaneCursor & cur = lane[(size_t) l];
+            if (cur.window == idle) continue;
+            if (cur.t >= windows[cur.window].n_frames) {
+                retire(l);
+                seat(l, todo, next, seeds);
+            }
+        }
+    }
+
+    void advance_lanes() {
+        for (int l = 0; l < L; ++l) {
+            if (lane[(size_t) l].window != idle) advance_lane(l);
+        }
+    }
+
+    // One batched pass over `todo`, seating windows into lanes as lanes free
+    // up so the batch stays full until the list runs out. `seeds` supplies a
+    // warm start per window; where it has none the lane starts from blank.
+    int run_pass(const std::vector<size_t> & todo, const std::vector<LaneWindowState> & seeds) {
+        size_t next = 0;
+        for (int l = 0; l < L; ++l) seat(l, todo, next, seeds);
+
+        while (stage_frames() > 0) {
+            if (int rc = stepper.step(embed.data(), h.data(), c.data(), enc.data(),
+                                      logits.data(), h_out.data(), c_out.data()); rc != 0) {
+                PARAKEET_LOG_ERROR("tdt: batched decoder dispatch failed (rc=%d)\n", rc);
+                return 8;
+            }
+            ++dispatches;
+            advance_lanes();
+            refill_lanes(todo, next, seeds);
+        }
+        return 0;
+    }
+
+    // Windows that emitted nothing although a predecessor retired a state.
+    // Blank leaves the prediction state untouched, so a window that starts
+    // mid-phrase can score blank against the from-scratch state on every frame.
+    std::vector<size_t> windows_to_rescue() const {
+        std::vector<size_t> rescue;
+        for (size_t i = 1; i < windows.size(); ++i) {
+            if (tokens[i].empty() && windows[i].n_frames > 0 && final_state[i - 1].valid) {
+                rescue.push_back(i);
+            }
+        }
+        return rescue;
+    }
+};
+
+bool lane_stepper_matches(const TdtLaneGeometry & geom, const TdtLaneStepper & stepper) {
+    const int64_t n_dur = geom.durations.empty() ? 0 : (int64_t) geom.durations.size();
+    const bool v_out_ok = geom.durations.empty()
+        ? stepper.v_out() > geom.vocab_plus_blank
+        : stepper.v_out() == geom.vocab_plus_blank + n_dur;
+    return stepper.lanes() > 0 &&
+           stepper.h_pred() == geom.h_pred &&
+           stepper.h_dim()  == (int64_t) geom.h_pred * geom.layers &&
+           stepper.d_enc()  == geom.d_enc &&
+           v_out_ok;
+}
+
+}  // anonymous namespace
+
+int tdt_decode_lanes(const TdtLaneGeometry & geom,
+                     const std::vector<float> & embed_table,
+                     TdtLaneStepper & stepper,
+                     const std::vector<TdtLaneWindow> & windows,
+                     const TdtDecodeOptions & opts,
+                     std::vector<std::vector<int32_t>> & out_tokens,
+                     TdtLaneStats * stats) {
+    // Cross-check the stepper against the checkpoint. A sidecar built from a
+    // different GGUF would otherwise decode into plausible-looking nonsense.
+    if (!lane_stepper_matches(geom, stepper)) {
+        PARAKEET_LOG_ERROR("tdt: batched decoder geometry does not match the GGUF "
+                           "(h_pred %lld vs %d, h_dim %lld vs %d, d_enc %lld vs %d, v_out %lld)\n",
+                           (long long) stepper.h_pred(), geom.h_pred,
+                           (long long) stepper.h_dim(), geom.h_pred * geom.layers,
+                           (long long) stepper.d_enc(), geom.d_enc, (long long) stepper.v_out());
+        return 2;
+    }
+    if (embed_table.size() < (size_t) geom.vocab_plus_blank * (size_t) geom.h_pred ||
+        geom.blank_id < 0 || geom.blank_id >= geom.vocab_plus_blank) {
+        PARAKEET_LOG_ERROR("tdt: batched decoder needs the host embedding table\n");
+        return 3;
+    }
+
+    LaneDecoder decoder(geom, embed_table, stepper, windows, opts);
+
+    std::vector<size_t> all(windows.size());
+    for (size_t i = 0; i < windows.size(); ++i) all[i] = i;
+    const std::vector<LaneWindowState> no_seeds(windows.size());
+    if (int rc = decoder.run_pass(all, no_seeds); rc != 0) return rc;
+
+    // Seeds all come from the first pass, so the rescue is itself one batched pass.
+    const std::vector<size_t> rescue = decoder.windows_to_rescue();
+    if (!rescue.empty()) {
+        std::vector<LaneWindowState> seeds(windows.size());
+        for (size_t i : rescue) seeds[i] = decoder.final_state[i - 1];
+        if (int rc = decoder.run_pass(rescue, seeds); rc != 0) return rc;
+    }
+
+    out_tokens = std::move(decoder.tokens);
+    if (stats != nullptr) {
+        stats->dispatches = decoder.dispatches;
+        stats->rescued    = (int) rescue.size();
+    }
     return 0;
 }
 

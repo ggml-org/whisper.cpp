@@ -349,6 +349,82 @@ class ConverterRnntTests(unittest.TestCase):
         self.assertFalse(
             any("duration" in name for name in writer.values))
 
+    def test_long_form_hint_frames(self):
+        # 60 s at the 80 ms stride is 750 frames; a 25 % overlap is 94 frames each side.
+        self.assertEqual(CONVERTER.long_form_hint_frames(160, 16000, 8, 60.0, 0.25), (750, 94))
+        self.assertEqual(CONVERTER.long_form_hint_frames(160, 16000, 8, 60.0, None), (750, 0))
+
+    def test_long_form_hint_keys_written_only_when_requested(self):
+        writer = RecordingWriter()
+        CONVERTER.write_long_form_hint(writer, 160, 16000, unified_config(), None, None)
+        self.assertNotIn("parakeet.long_form.window_frames", writer.values)
+        CONVERTER.write_long_form_hint(writer, 160, 16000, unified_config(), 60.0, 0.25)
+        self.assertEqual(writer.values["parakeet.long_form.window_frames"], 750)
+        self.assertEqual(writer.values["parakeet.long_form.context_frames"], 94)
+
+    def test_tdt_durations_from_model_defaults(self):
+        config = unified_config()
+        config["model_defaults"]["tdt_durations"] = [0, 1, 2, 3, 4]
+        config["model_defaults"]["num_tdt_durations"] = 5
+        self.assertEqual(CONVERTER.tdt_durations(config), [0, 1, 2, 3, 4])
+
+    def test_tdt_durations_reject_count_mismatch(self):
+        config = unified_config()
+        config["model_defaults"]["tdt_durations"] = [0, 1, 2]
+        config["model_defaults"]["num_tdt_durations"] = 5
+        with self.assertRaises(ValueError):
+            CONVERTER.tdt_durations(config)
+
+    def test_tdt_durations_from_loss_kwargs(self):
+        config = unified_config()
+        config["loss"] = {"loss_name": "tdt", "tdt_kwargs": {"durations": [0, 1, 2, 3]}}
+        self.assertEqual(CONVERTER.tdt_durations(config), [0, 1, 2, 3])
+
+    def test_tdt_durations_from_decoding(self):
+        config = unified_config()
+        config["decoding"]["durations"] = [0, 1, 2]
+        self.assertEqual(CONVERTER.tdt_durations(config), [0, 1, 2])
+
+    def test_tdt_durations_from_joint_extra_outputs(self):
+        config = unified_config()
+        config["joint"]["num_extra_outputs"] = 5
+        self.assertEqual(CONVERTER.tdt_durations(config), [0, 1, 2, 3, 4])
+
+    def test_tdt_durations_missing_everywhere(self):
+        with self.assertRaises(KeyError):
+            CONVERTER.tdt_durations(unified_config())
+
+    def test_writes_tdt_metadata_from_loss_kwargs(self):
+        writer = RecordingWriter()
+        config = unified_config()
+        config["loss"] = {"loss_name": "tdt", "tdt_kwargs": {"durations": [0, 1, 2, 3, 4]}}
+        CONVERTER.write_transducer_metadata(writer, config, "tdt")
+
+        self.assertEqual(writer.values["parakeet.tdt.num_durations"], 5)
+        self.assertEqual(writer.values["parakeet.tdt.durations"], [0, 1, 2, 3, 4])
+
+    def test_default_description_names_the_family(self):
+        writer = RecordingWriter()
+        CONVERTER.write_provenance(writer, "tdt")
+        self.assertEqual(
+            writer.values["general.description"],
+            "NVIDIA Parakeet-TDT FastConformer ASR (CC-BY-4.0)")
+
+    def test_description_override_replaces_the_family_text(self):
+        writer = RecordingWriter()
+        CONVERTER.write_provenance(
+            writer, "tdt",
+            "TranscribePsy-250M-EU-sub, FastConformer-TDT speech recognition")
+        self.assertEqual(
+            writer.values["general.description"],
+            "TranscribePsy-250M-EU-sub, FastConformer-TDT speech recognition")
+
+    def test_description_override_keeps_license_keys(self):
+        writer = RecordingWriter()
+        CONVERTER.write_provenance(writer, "nemotron", "custom")
+        self.assertEqual(writer.values["general.description"], "custom")
+        self.assertEqual(writer.values["general.license"], "OpenMDW-1.1")
+
     def test_writes_rnnt_tensor_namespace(self):
         names = []
 

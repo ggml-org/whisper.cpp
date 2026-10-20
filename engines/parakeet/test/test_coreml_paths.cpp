@@ -34,6 +34,16 @@ void expect_bypass(const std::string & gguf, const std::string & expected) {
     }
 }
 
+void expect_decoder(const std::string & gguf, const std::string & expected) {
+    const std::string got = parakeet::coreml_decoder_sidecar_path(gguf);
+    const bool ok = got == expected;
+    std::printf("[%s] %-46s -> %s\n", ok ? "ok  " : "FAIL", gguf.c_str(), got.c_str());
+    if (!ok) {
+        std::printf("       expected: %s\n", expected.c_str());
+        ++g_failures;
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -55,6 +65,16 @@ int main() {
            "models/diar_streaming_sortformer_4spk-v2.1-encoder.mlmodelc");
     expect_bypass("models/diar_streaming_sortformer_4spk-v2.1.q8_0.gguf",
                   "models/diar_streaming_sortformer_4spk-v2.1-encoder-bypass-pre-encode.mlmodelc");
+
+    // The TranscribePsy Core ML distribution: both sidecars hang off the same stem.
+    expect("models/transcribepsy-250m-eu-sub-coreml.gguf",
+           "models/transcribepsy-250m-eu-sub-coreml-encoder.mlmodelc");
+    expect_decoder("models/transcribepsy-250m-eu-sub-coreml.gguf",
+                   "models/transcribepsy-250m-eu-sub-coreml-decoder.mlmodelc");
+    expect_decoder("models/transcribepsy-250m-eu-sub.q8_0.gguf",
+                   "models/transcribepsy-250m-eu-sub-decoder.mlmodelc");
+    expect_decoder("/opt/models/parakeet-tdt-0.6b-v3.gguf",
+                   "/opt/models/parakeet-tdt-0.6b-v3-decoder.mlmodelc");
 
     if (g_failures == 0) {
         std::printf("[coreml-paths] PASS\n");

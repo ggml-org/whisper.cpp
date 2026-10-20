@@ -23,6 +23,34 @@ at `--model`) and the attributed path (`--diarization-model`) return before
 the bench loop, ignoring the `--bench*` flags — time the invocation externally
 to benchmark those.
 
+### Long-form window flags
+
+Offline transcription encodes an input longer than one window in overlapping
+windows, so the encoder's memory depends on the window rather than on the
+length of the recording. `--window-sec S` sets the window (at least 256 encoder
+frames, 20.5 s at the 80 ms stride; at most the model's positional range, 400 s
+for TranscribePsy) and `--overlap F` the fraction of each window shared with its
+neighbours, from 0 to 0.5. Without the flags the model's own recommended
+window applies when its GGUF carries one, which TranscribePsy's does (60 s
+with 25 % overlap, the setting the research team validated on phones);
+otherwise the engine's automatic window applies (the fewest windows of at most
+300 s, or the model's range if shorter, balanced to equal length, with 256
+frames of context each side). `--window-sec 0` encodes the whole input in one pass, whose memory grows
+with the square of its length. Inputs shorter than the window are encoded in
+one pass at their own length either way. `--stream`, `--diarization-model` and
+`--profile` run their own encoder passes and ignore both flags with a warning.
+
+`--window-sec 60 --overlap 0.25` is the setting TranscribePsy was validated
+with on phones. On a 412 s recording transcribed with TranscribePsy q8_0 on an
+x86-64 CPU with eight threads, it cut the encoder time from 18.0 s to 10.8 s
+and peak memory from 2.4 GB to 0.9 GB against the automatic 300 s window:
+
+```bash
+build-parakeet/parakeet \
+  --model engines/parakeet/models/transcribepsy-250m-eu-sub.gguf \
+  --wav long.wav --threads 6 --window-sec 60 --overlap 0.25
+```
+
 `--backend hexagon` explicitly requests HTP0, even when OpenCL is present.
 `--backend cpu` and `--backend opencl` select comparison backends. Explicit
 selection overrides `--n-gpu-layers` and fails if unavailable; omit the option

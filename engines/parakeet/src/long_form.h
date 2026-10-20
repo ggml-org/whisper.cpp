@@ -19,7 +19,10 @@
 // window-size resolver, and the seam trim + append) so they can be unit-tested
 // without loading a model (see test/test_long_form_windows.cpp).
 
+#include <climits>
+#include <cmath>
 #include <cstddef>
+#include <string>
 #include <vector>
 
 namespace parakeet {
@@ -131,6 +134,62 @@ plan_long_form_windows(int n_units, int center_units, int ctx_units,
 //     than one that exceeds the trained range.
 //
 // Exercised model-free by test/test_long_form_windows.cpp.
+// The 60 s / 25 % windows the research team validated TranscribePsy with on
+// phones: 750 encoder frames at the 80 ms stride, 12.5 % of context each side.
+constexpr int kTranscribePsyWindowFrames  = 750;
+constexpr int kTranscribePsyContextFrames = 94;
+constexpr const char * kTranscribePsyDescriptionMark = "TranscribePsy";
+
+// The window a model recommends for the automatic long-form plan: the GGUF's
+// parakeet.long_form.window_frames / context_frames keys when it carries
+// them, or TranscribePsy's validated setting for a GGUF whose description
+// names the model (the published file predates the keys). Returns false,
+// with both outputs 0, when the model recommends nothing.
+inline bool long_form_hint_for_model(int window_key, int context_key,
+                                     const std::string & description,
+                                     int & window, int & context) {
+    if (window_key > 0) {
+        window  = window_key;
+        context = context_key > 0 ? context_key : 0;
+        return true;
+    }
+    if (description.find(kTranscribePsyDescriptionMark) != std::string::npos) {
+        window  = kTranscribePsyWindowFrames;
+        context = kTranscribePsyContextFrames;
+        return true;
+    }
+    window  = 0;
+    context = 0;
+    return false;
+}
+
+// A caller who left the window automatic (0) gets the model's recommended
+// window, and its recommended context unless the caller set one; explicit
+// and disabled (< 0) requests are left alone.
+inline void apply_long_form_hint(int hint_window, int hint_context,
+                                 int & requested_window, int & requested_context) {
+    if (requested_window != 0 || hint_window <= 0) {
+        return;
+    }
+    requested_window = hint_window;
+    if (requested_context == 0 && hint_context > 0) {
+        requested_context = hint_context;
+    }
+}
+
+// Centre frames of the automatic windows for an input of `n_enc_frames`: the
+// fewest windows whose centres fit `center_frames`, then every window takes an
+// equal share, so a recording just past one window is encoded as two half
+// windows instead of two full ones (the attention cost is quadratic in the
+// window, and every window still gets its full context on both sides).
+inline int balanced_center_frames(long long n_enc_frames, int center_frames) {
+    if (center_frames <= 0 || n_enc_frames <= center_frames) {
+        return center_frames;
+    }
+    const long long windows = (n_enc_frames + center_frames - 1) / center_frames;
+    return (int) ((n_enc_frames + windows - 1) / windows);
+}
+
 inline int resolve_long_form_window_frames(int requested, int pos_emb_max_len,
                                            int auto_window_frames,
                                            int min_window_frames) {
@@ -142,6 +201,52 @@ inline int resolve_long_form_window_frames(int requested, int pos_emb_max_len,
         window_frames = pos_emb_max_len;
     }
     return window_frames;
+}
+
+// Converts a window length in seconds into EngineOptions::long_form_window_frames:
+//   - 0 disables windowing (-1);
+//   - otherwise round(window_sec / frame_sec), which must lie within
+//     [min_window_frames, max_window_frames] (max_window_frames <= 0: no ceiling
+//     other than INT_MAX).
+// Returns false, leaving `out` untouched, for non-finite or out-of-range input.
+inline bool long_form_window_frames_from_seconds(double window_sec, double frame_sec,
+                                                 int min_window_frames,
+                                                 int max_window_frames,
+                                                 int & out) {
+    if (!std::isfinite(window_sec) || window_sec < 0.0) {
+        return false;
+    }
+    if (window_sec == 0.0) {
+        out = -1;
+        return true;
+    }
+    if (!std::isfinite(frame_sec) || frame_sec <= 0.0) {
+        return false;
+    }
+    const double frames = std::round(window_sec / frame_sec);
+    if (frames < (double) min_window_frames || frames > (double) INT_MAX ||
+        (max_window_frames > 0 && frames > (double) max_window_frames)) {
+        return false;
+    }
+    out = (int) frames;
+    return true;
+}
+
+// Converts the fraction of a window shared with its neighbours, in [0, 0.5],
+// into EngineOptions::long_form_context_frames for a `window_frames` window:
+// round(window_frames * overlap / 2), clamped to window_frames / 4 like the
+// engine, and -1 when it rounds to 0 (0 would mean "auto" to the engine).
+// Returns false, leaving `out` untouched, for non-finite or out-of-range input.
+inline bool long_form_context_frames_from_overlap(double overlap, int window_frames, int & out) {
+    if (!std::isfinite(overlap) || overlap < 0.0 || overlap > 0.5 || window_frames <= 0) {
+        return false;
+    }
+    int context_frames = (int) std::lround((double) window_frames * overlap / 2.0);
+    if (context_frames > window_frames / 4) {
+        context_frames = window_frames / 4;
+    }
+    out = context_frames > 0 ? context_frames : -1;
+    return true;
 }
 
 // ── Long-form window policy (shared by the engine and the fit projector) ──
@@ -295,10 +400,17 @@ inline LongFormPlan resolve_long_form_plan_frames(int requested_window_frames,
         return plan;
     }
 
+    // A requested window is honoured as given; the automatic one is balanced
+    // over the input so no window is larger than its share needs.
+    const long long n_enc_frames = (n_mel_frames + sub - 1) / sub;
+    const int planned_center = requested_window_frames == 0
+        ? balanced_center_frames(n_enc_frames, center_frames)
+        : center_frames;
+
     plan.enabled        = true;
-    plan.window_frames  = window_frames;
+    plan.window_frames  = planned_center + 2 * context_frames;
     plan.context_frames = context_frames;
-    plan.center_frames  = center_frames;
+    plan.center_frames  = planned_center;
     plan.left_context_frames  = context_frames;
     plan.right_context_frames = context_frames;
     return plan;

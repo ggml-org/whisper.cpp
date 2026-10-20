@@ -21,7 +21,7 @@ option(PARAKEET_INSTALL           "parakeet: generate install rules"            
 option(PARAKEET_USE_SYSTEM_GGML   "parakeet: use system-installed GGML library"                      OFF)
 option(PARAKEET_CCACHE            "parakeet: use ccache as compiler launcher if available"           ON)
 option(PARAKEET_GGML_LIB_PREFIX   "parakeet: rename bundled ggml libraries to libspeech-ggml-* (filename only; CMake target names and C symbols are unchanged). Prevents shared-library filename collisions with other ggml consumers in the same host process; the `speech-` prefix is shared with the rest of the QVAC speech stack (whisper, parakeet, chatterbox, supertonic, ...) so they vendor a single ggml file set. Has no effect when PARAKEET_USE_SYSTEM_GGML=ON." ON)
-option(PARAKEET_COREML            "parakeet: enable the Apple Core ML (Neural Engine) encoder sidecar (Apple-only, additive; the FastConformer encoder runs on a <model>-encoder.mlmodelc when present, else falls back to the ggml encoder)." OFF)
+option(PARAKEET_COREML            "parakeet: enable the Apple Core ML (Neural Engine) encoder and TDT decoder sidecars (Apple-only, additive; the FastConformer encoder runs on a <model>-encoder.mlmodelc and the TDT decoder on a <model>-decoder.mlmodelc when present, else the engine falls back to ggml)." OFF)
 
 # Enable Objective-C and Objective-C++ up front (before add_subdirectory(ggml))
 # for the Apple Core ML encoder sidecar. Both must happen here:
@@ -429,26 +429,29 @@ if (PARAKEET_BUILD_LIBRARY)
     endif()
 
     # -----------------------------------------------------------------------
-    # Apple Core ML encoder sidecar.
+    # Apple Core ML encoder and TDT decoder sidecars.
     #
-    # Optional, Apple-only, additive. Compiles the Objective-C++ Core ML wrapper
-    # (src/coreml/parakeet-encoder.mm) into the parakeet library and defines
-    # PARAKEET_USE_COREML so run_encoder can route the offline FastConformer
-    # forward through a `<model>-encoder.mlmodelc` on the Apple Neural Engine.
-    # Mel preprocessing, TDT decode and the tokenizer stay on ggml, and any
-    # non-Apple build or missing/incompatible sidecar falls back to the ggml
-    # encoder. Modelled on the whisper.cpp WHISPER_COREML pattern; the encoder
-    # I/O contract the exported .mlmodelc must honour is documented in
-    # src/coreml/parakeet-encoder.h.
+    # Optional, Apple-only, additive. Compiles the Objective-C++ Core ML wrappers
+    # (src/coreml/parakeet-encoder.mm, src/coreml/parakeet-decoder.mm) into the
+    # parakeet library and defines PARAKEET_USE_COREML so the offline
+    # FastConformer forward runs through a `<model>-encoder.mlmodelc` and the
+    # TDT prediction network and joint through a `<model>-decoder.mlmodelc` on
+    # the Apple Neural Engine. Mel preprocessing and the tokenizer stay on
+    # ggml, and any non-Apple build or missing/incompatible sidecar falls back
+    # to ggml. Modelled on the whisper.cpp WHISPER_COREML pattern; the I/O
+    # contracts the exported .mlmodelc bundles must honour are documented in
+    # src/coreml/parakeet-encoder.h and src/coreml/parakeet-decoder.h.
     if (PARAKEET_COREML)
         # OBJCXX is enabled up front (see the top-level PARAKEET_COREML block);
-        # here we only bind the frameworks and fold the wrapper into libqvac-parakeet.
+        # here we only bind the frameworks and fold the wrappers into libqvac-parakeet.
         find_library(PARAKEET_FOUNDATION_FRAMEWORK Foundation REQUIRED)
         find_library(PARAKEET_COREML_FRAMEWORK     CoreML     REQUIRED)
 
         # OBJECT library so the ARC-compiled Core ML objects fold into libqvac-parakeet
         # (a single archive for the static vcpkg build; no extra install/export target).
-        add_library(parakeet.coreml OBJECT src/coreml/parakeet-encoder.mm)
+        add_library(parakeet.coreml OBJECT
+            src/coreml/parakeet-encoder.mm
+            src/coreml/parakeet-decoder.mm)
         parakeet_apply_ccache(parakeet.coreml)
         target_include_directories(parakeet.coreml PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -466,7 +469,7 @@ if (PARAKEET_BUILD_LIBRARY)
             ${PARAKEET_FOUNDATION_FRAMEWORK}
             ${PARAKEET_COREML_FRAMEWORK}
         )
-        message(STATUS "parakeet: Core ML encoder sidecar enabled (PARAKEET_USE_COREML)")
+        message(STATUS "parakeet: Core ML encoder and TDT decoder sidecars enabled (PARAKEET_USE_COREML)")
     endif()
 
     set_target_properties(qvac-parakeet PROPERTIES
@@ -661,6 +664,9 @@ if (PARAKEET_BUILD_TESTS)
     set(_qvp_tdt_q8_gguf   "${PARAKEET_TEST_MODEL_DIR}/parakeet-tdt-0.6b-v3.q8_0.gguf")
     set(_qvp_tdt_f16_gguf  "${PARAKEET_TEST_MODEL_DIR}/parakeet-tdt-0.6b-v3.f16.gguf")
     set(_qvp_tdt_coreml     "${PARAKEET_TEST_MODEL_DIR}/parakeet-tdt-0.6b-v3-encoder.mlmodelc")
+    set(_qvp_transcribepsy_gguf "${PARAKEET_TEST_MODEL_DIR}/transcribepsy-250m-eu-sub.gguf")
+    set(_qvp_transcribepsy_coreml_gguf "${PARAKEET_TEST_MODEL_DIR}/transcribepsy-250m-eu-sub-coreml.gguf")
+    set(_qvp_transcribepsy_coreml_encoder "${PARAKEET_TEST_MODEL_DIR}/transcribepsy-250m-eu-sub-coreml-encoder.mlmodelc")
     set(_qvp_eou_q8_gguf   "${PARAKEET_TEST_MODEL_DIR}/parakeet_realtime_eou_120m-v1.q8_0.gguf")
     set(_qvp_eou_coreml    "${PARAKEET_TEST_MODEL_DIR}/parakeet_realtime_eou_120m-v1-encoder.mlmodelc")
     set(_qvp_nemotron_f16_gguf "${PARAKEET_TEST_MODEL_DIR}/nemotron-3.5-asr-streaming-0.6b.f16.gguf")
@@ -679,6 +685,7 @@ if (PARAKEET_BUILD_TESTS)
     set(_qvp_jfk_wav       "${PARAKEET_TEST_AUDIO_DIR}/jfk.wav")
     set(_qvp_diar_wav      "${PARAKEET_TEST_AUDIO_DIR}/diarization-sample-16k.wav")
     set(_qvp_fr_multipiece_wav "${PARAKEET_TEST_AUDIO_DIR}/fr-multipiece-16k.wav")
+    set(_qvp_sample_wav    "${PARAKEET_TEST_AUDIO_DIR}/sample-16k.wav")
     set(_qvp_hi_wav        "${PARAKEET_TEST_AUDIO_DIR}/hi-16k.wav")
     set(_qvp_rnnt_hybrid_wav "${PARAKEET_TEST_AUDIO_DIR}/rnnt-ka-16k.wav")
     set(_qvp_hi_expected   "${PARAKEET_TEST_AUDIO_DIR}/hi-16k.expected.txt")
@@ -1050,6 +1057,30 @@ if (PARAKEET_BUILD_TESTS)
     target_include_directories(test-mel-bands PRIVATE ggml/include src include)
     parakeet_apply_backend_defs(test-mel-bands)
     parakeet_register_test(test-mel-bands LABEL "unit")
+
+    # The pause-cut segment planner and the batched lane walk behind the Core ML
+    # TDT decoder sidecar, driven by a scripted stepper: pure logic, no model,
+    # no Core ML. tdt_decode_lanes is not exported from the shared library, so
+    # the decoder sources are compiled in like test-rnnt.
+    add_executable(test-independent-segments
+        test/test_independent_segments.cpp
+        src/parakeet_ctc.cpp
+        src/parakeet_engine.cpp
+        src/parakeet_nemotron.cpp
+        src/parakeet_unified.cpp
+        src/parakeet_log.cpp
+        src/parakeet_tdt.cpp
+        src/parakeet_eou.cpp
+        src/parakeet_sortformer.cpp
+        src/parakeet_diarization_v3.cpp
+        src/mel_preprocess.cpp
+        src/sentencepiece_bpe.cpp
+        src/energy_vad.cpp)
+    target_link_libraries(test-independent-segments PRIVATE ggml parakeet-backend-defs)
+    target_include_directories(test-independent-segments PRIVATE src include ggml/include)
+    parakeet_apply_backend_defs(test-independent-segments)
+    parakeet_apply_ccache(test-independent-segments)
+    parakeet_register_test(test-independent-segments LABEL "unit")
 
     # test_rnnt.cpp exercises internal decoder entry points
     # (rnnt_decode_window, build_transducer_argmax_outputs) that are not
@@ -1457,8 +1488,10 @@ if (PARAKEET_BUILD_TESTS)
     if (PARAKEET_COREML)
         find_library(PARAKEET_FOUNDATION_FRAMEWORK Foundation REQUIRED)
         find_library(PARAKEET_COREML_FRAMEWORK     CoreML     REQUIRED)
-        target_sources(test-moss-transcribe-coreml-parity PRIVATE src/coreml/parakeet-encoder.mm)
-        set_source_files_properties(src/coreml/parakeet-encoder.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+        target_sources(test-moss-transcribe-coreml-parity PRIVATE
+            src/coreml/parakeet-encoder.mm src/coreml/parakeet-decoder.mm)
+        set_source_files_properties(src/coreml/parakeet-encoder.mm src/coreml/parakeet-decoder.mm
+            PROPERTIES COMPILE_FLAGS "-fobjc-arc")
         target_compile_definitions(test-moss-transcribe-coreml-parity PRIVATE PARAKEET_USE_COREML)
         target_link_libraries(test-moss-transcribe-coreml-parity PRIVATE
             ${PARAKEET_FOUNDATION_FRAMEWORK} ${PARAKEET_COREML_FRAMEWORK})
@@ -1477,7 +1510,8 @@ if (PARAKEET_BUILD_TESTS)
     parakeet_apply_backend_defs(bench-moss-transcribe-coreml)
     parakeet_apply_ccache(bench-moss-transcribe-coreml)
     if (PARAKEET_COREML)
-        target_sources(bench-moss-transcribe-coreml PRIVATE src/coreml/parakeet-encoder.mm)
+        target_sources(bench-moss-transcribe-coreml PRIVATE
+            src/coreml/parakeet-encoder.mm src/coreml/parakeet-decoder.mm)
         target_compile_definitions(bench-moss-transcribe-coreml PRIVATE PARAKEET_USE_COREML)
         target_link_libraries(bench-moss-transcribe-coreml PRIVATE
             ${PARAKEET_FOUNDATION_FRAMEWORK} ${PARAKEET_COREML_FRAMEWORK})
@@ -1570,8 +1604,9 @@ if (PARAKEET_BUILD_TESTS)
     if (PARAKEET_COREML)
         find_library(PARAKEET_FOUNDATION_FRAMEWORK Foundation REQUIRED)
         find_library(PARAKEET_COREML_FRAMEWORK     CoreML     REQUIRED)
-        target_sources(test-encoder-coreml-parity PRIVATE src/coreml/parakeet-encoder.mm)
-        set_source_files_properties(src/coreml/parakeet-encoder.mm
+        target_sources(test-encoder-coreml-parity PRIVATE
+            src/coreml/parakeet-encoder.mm src/coreml/parakeet-decoder.mm)
+        set_source_files_properties(src/coreml/parakeet-encoder.mm src/coreml/parakeet-decoder.mm
             PROPERTIES COMPILE_FLAGS "-fobjc-arc")
         target_compile_definitions(test-encoder-coreml-parity PRIVATE PARAKEET_USE_COREML)
         target_link_libraries(test-encoder-coreml-parity PRIVATE
@@ -1613,8 +1648,9 @@ if (PARAKEET_BUILD_TESTS)
     target_include_directories(test-encoder-coreml-bypass-parity PRIVATE include src ggml/include)
     parakeet_apply_backend_defs(test-encoder-coreml-bypass-parity)
     if (PARAKEET_COREML)
-        target_sources(test-encoder-coreml-bypass-parity PRIVATE src/coreml/parakeet-encoder.mm)
-        set_source_files_properties(src/coreml/parakeet-encoder.mm
+        target_sources(test-encoder-coreml-bypass-parity PRIVATE
+            src/coreml/parakeet-encoder.mm src/coreml/parakeet-decoder.mm)
+        set_source_files_properties(src/coreml/parakeet-encoder.mm src/coreml/parakeet-decoder.mm
             PROPERTIES COMPILE_FLAGS "-fobjc-arc")
         target_compile_definitions(test-encoder-coreml-bypass-parity PRIVATE PARAKEET_USE_COREML)
         target_link_libraries(test-encoder-coreml-bypass-parity PRIVATE
@@ -1654,6 +1690,12 @@ if (PARAKEET_BUILD_TESTS)
             COMMAND ${Python3_EXECUTABLE}
                     "${CMAKE_CURRENT_SOURCE_DIR}/test/test_export_encoder_coreml.py")
         set_property(TEST test-export-encoder-coreml PROPERTY LABELS "unit")
+        add_test(
+            NAME test-export-coreml-ane
+            COMMAND ${Python3_EXECUTABLE}
+                    "${CMAKE_CURRENT_SOURCE_DIR}/test/test_export_coreml_ane.py")
+        set_property(TEST test-export-coreml-ane PROPERTY LABELS "unit")
+        set_property(TEST test-export-coreml-ane PROPERTY SKIP_REGULAR_EXPRESSION "SKIP: ")
         add_test(
             NAME test-export-moss-transcribe-coreml
             COMMAND ${Python3_EXECUTABLE}
@@ -2289,6 +2331,127 @@ if (PARAKEET_BUILD_TESTS)
         EXE      test-long-form
         ARGS     "--model" "${_qvp_tdt_q8_gguf}" "--wav" "${_qvp_jfk_wav}"
         REQUIRES "${_qvp_tdt_q8_gguf}" "${_qvp_jfk_wav}")
+
+    # The ggml encoder graph cache: eviction when the limit is lowered, and the
+    # windowed encoder holding one graph and restoring the limit afterwards.
+    add_executable(test-encoder-graph-cache
+        test/test_encoder_graph_cache.cpp
+        src/parakeet_ctc.cpp
+        src/parakeet_engine.cpp
+        src/parakeet_nemotron.cpp
+        src/parakeet_unified.cpp
+        src/parakeet_log.cpp
+        src/parakeet_tdt.cpp
+        src/parakeet_eou.cpp
+        src/parakeet_sortformer.cpp
+        src/parakeet_diarization_v3.cpp
+        src/mel_preprocess.cpp
+        src/sentencepiece_bpe.cpp
+        src/energy_vad.cpp)
+    target_link_libraries(test-encoder-graph-cache PRIVATE ggml parakeet-backend-defs)
+    target_include_directories(test-encoder-graph-cache PRIVATE src include ggml/include)
+    parakeet_apply_backend_defs(test-encoder-graph-cache)
+    parakeet_apply_ccache(test-encoder-graph-cache)
+    parakeet_register_test(test-encoder-graph-cache
+        LABEL    "fixture"
+        ARGS     "--model" "${_qvp_transcribepsy_gguf}" "--wav" "${_qvp_jfk_wav}"
+        REQUIRES "${_qvp_transcribepsy_gguf}" "${_qvp_jfk_wav}")
+
+    # The CPU-resident TDT decoder copies an OpenCL load builds: byte-equal to
+    # the originals on the CPU backend, and the decoder reports that backend.
+    add_executable(test-tdt-cpu-copies
+        test/test_tdt_cpu_copies.cpp
+        src/parakeet_ctc.cpp
+        src/parakeet_engine.cpp
+        src/parakeet_nemotron.cpp
+        src/parakeet_unified.cpp
+        src/parakeet_log.cpp
+        src/parakeet_tdt.cpp
+        src/parakeet_eou.cpp
+        src/parakeet_sortformer.cpp
+        src/parakeet_diarization_v3.cpp
+        src/mel_preprocess.cpp
+        src/sentencepiece_bpe.cpp
+        src/energy_vad.cpp)
+    target_link_libraries(test-tdt-cpu-copies PRIVATE ggml parakeet-backend-defs)
+    target_include_directories(test-tdt-cpu-copies PRIVATE src include ggml/include)
+    parakeet_apply_backend_defs(test-tdt-cpu-copies)
+    parakeet_apply_ccache(test-tdt-cpu-copies)
+    parakeet_register_test(test-tdt-cpu-copies
+        LABEL    "fixture"
+        ARGS     "--model" "${_qvp_transcribepsy_gguf}" "--wav" "${_qvp_jfk_wav}"
+        REQUIRES "${_qvp_transcribepsy_gguf}" "${_qvp_jfk_wav}")
+
+    # The Core ML-owned encoder: an encoder-less GGUF is rejected without its
+    # sidecar on every platform; with Core ML and the sidecar it loads, runs,
+    # refuses the ggml encoder, and PARAKEET_COREML_ONLY skips the encoder
+    # weights of a full GGUF.
+    add_executable(test-coreml-encoder-owner
+        test/test_coreml_encoder_owner.cpp
+        src/parakeet_ctc.cpp
+        src/parakeet_coreml_path.cpp
+        src/coreml/parakeet_coreml_shape.cpp
+        src/parakeet_log.cpp
+        src/mel_preprocess.cpp
+        src/sentencepiece_bpe.cpp)
+    target_link_libraries(test-coreml-encoder-owner PRIVATE ggml parakeet-backend-defs)
+    target_include_directories(test-coreml-encoder-owner PRIVATE include src ggml/include)
+    parakeet_apply_backend_defs(test-coreml-encoder-owner)
+    parakeet_apply_ccache(test-coreml-encoder-owner)
+    if (PARAKEET_COREML)
+        target_sources(test-coreml-encoder-owner PRIVATE
+            src/coreml/parakeet-encoder.mm src/coreml/parakeet-decoder.mm)
+        set_source_files_properties(src/coreml/parakeet-encoder.mm src/coreml/parakeet-decoder.mm
+            PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+        target_compile_definitions(test-coreml-encoder-owner PRIVATE PARAKEET_USE_COREML)
+        target_link_libraries(test-coreml-encoder-owner PRIVATE
+            ${PARAKEET_FOUNDATION_FRAMEWORK} ${PARAKEET_COREML_FRAMEWORK})
+    endif()
+    parakeet_register_test(test-coreml-encoder-owner-reject
+        LABEL    "fixture"
+        EXE      test-coreml-encoder-owner
+        ARGS     "--coreml-gguf" "${_qvp_transcribepsy_coreml_gguf}"
+        REQUIRES "${_qvp_transcribepsy_coreml_gguf}")
+    parakeet_register_test(test-coreml-encoder-owner
+        LABEL    "fixture;coreml"
+        ARGS     "--coreml-gguf" "${_qvp_transcribepsy_coreml_gguf}"
+                 "--full-gguf" "${_qvp_transcribepsy_gguf}" "--wav" "${_qvp_jfk_wav}"
+        REQUIRES "${_qvp_transcribepsy_coreml_gguf}" "${_qvp_transcribepsy_coreml_encoder}"
+                 "${_qvp_transcribepsy_gguf}" "${_qvp_jfk_wav}")
+
+    # TranscribePsy on the engine API: expected transcript, precomputed-mel
+    # parity (also from a worker thread), the 60 s / 25 % long-form windows
+    # recommended on phones against the single pass, and a three-minute
+    # pause-free English recording held to one percent word error. The same
+    # binary runs on the ggml CPU, on the GPU backend of the build, and on the
+    # Core ML sidecars of the encoder-less GGUF, so every backend meets the
+    # same accuracy bar.
+    add_executable(test-transcribepsy test/test_transcribepsy.cpp)
+    target_link_libraries(test-transcribepsy PRIVATE qvac-parakeet)
+    target_include_directories(test-transcribepsy PRIVATE include src ggml/include)
+    parakeet_apply_ccache(test-transcribepsy)
+    set(_qvp_transcribepsy_clips
+        "--wav" "${_qvp_jfk_wav}" "--wav2" "${_qvp_fr_multipiece_wav}" "--wav-sample" "${_qvp_sample_wav}")
+    set(_qvp_transcribepsy_clip_files "${_qvp_jfk_wav}" "${_qvp_fr_multipiece_wav}" "${_qvp_sample_wav}")
+    parakeet_register_test(test-transcribepsy
+        LABEL    "fixture"
+        ARGS     "--model" "${_qvp_transcribepsy_gguf}" ${_qvp_transcribepsy_clips}
+        REQUIRES "${_qvp_transcribepsy_gguf}" ${_qvp_transcribepsy_clip_files})
+    if (GGML_VULKAN OR GGML_METAL OR GGML_CUDA)
+        parakeet_register_test(test-transcribepsy-gpu
+            LABEL    "fixture;gpu"
+            EXE      test-transcribepsy
+            ARGS     "--model" "${_qvp_transcribepsy_gguf}" ${_qvp_transcribepsy_clips} "--n-gpu-layers" "999"
+            REQUIRES "${_qvp_transcribepsy_gguf}" ${_qvp_transcribepsy_clip_files})
+    endif()
+    if (PARAKEET_COREML)
+        parakeet_register_test(test-transcribepsy-coreml
+            LABEL    "fixture;coreml"
+            EXE      test-transcribepsy
+            ARGS     "--model" "${_qvp_transcribepsy_coreml_gguf}" ${_qvp_transcribepsy_clips}
+            REQUIRES "${_qvp_transcribepsy_coreml_gguf}" "${_qvp_transcribepsy_coreml_encoder}"
+                     ${_qvp_transcribepsy_clip_files})
+    endif()
 
     if (GGML_VULKAN OR GGML_METAL OR GGML_CUDA)
         add_executable(test-gpu-vs-cpu

@@ -1,6 +1,7 @@
 // FastConformer encoder ggml graph, GGUF load, CTC head, and encoder execution.
 
 #include "parakeet_ctc.h"
+#include "long_form.h"
 #include "parakeet_log.h"
 #include "backend_util.h"
 
@@ -11,6 +12,7 @@
 
 #ifdef PARAKEET_USE_COREML
 #include "coreml/parakeet-encoder.h"
+#include "coreml/parakeet-decoder.h"
 #include "parakeet_coreml_path.h"
 #include <sys/stat.h>
 #endif
@@ -41,6 +43,10 @@
 #endif
 
 namespace parakeet {
+
+// run_encoder result when the ggml encoder is asked for while Core ML owns the
+// encoder and its weights were never loaded.
+constexpr int kEncoderWeightsNotLoaded = 9;
 
 struct EncoderGraph {
     ggml_context * graph_ctx = nullptr;
@@ -306,6 +312,9 @@ struct ParakeetCtcModel::Impl {
     // dereferencing the GPU-resident originals.
     ggml_context         * sortformer_cpu_ctx    = nullptr;
     ggml_backend_buffer_t  sortformer_cpu_buffer = nullptr;
+    // CPU-resident copies of the TDT / RNN-T decoder weights (OpenCL only).
+    ggml_context         * tdt_cpu_ctx           = nullptr;
+    ggml_backend_buffer_t  tdt_cpu_buffer        = nullptr;
     ggml_backend_buffer_t  weights_buffer = nullptr;
     // CPU "extra" buffer-type (CPU_REPACK) buffers holding the repack-eligible
     // encoder GEMM weights on CPU-only runs. See alloc_cpu_repack_weights.
@@ -316,6 +325,7 @@ struct ParakeetCtcModel::Impl {
     ggml_backend_sched_t   sched          = nullptr;
     std::vector<std::unique_ptr<EncoderGraph>> encoder_graphs;
     static constexpr size_t k_encoder_graph_cache_max = 3;
+    size_t encoder_graph_cache_limit = k_encoder_graph_cache_max;
     static constexpr size_t k_pos_proj_cache_max_bytes = (size_t) 256 << 20;
     std::unique_ptr<NemotronPromptGraph> nemotron_prompt_graph;
     std::unique_ptr<CtcHeadGraph> ctc_head_graph;
@@ -329,12 +339,24 @@ struct ParakeetCtcModel::Impl {
     // Optional fixed-capacity Sortformer v2.1 AOSC block-stack sidecar. Its
     // input is post-subsampling [speaker cache | FIFO | chunk] embeddings.
     parakeet_coreml_context * ctx_coreml_bypass = nullptr;
+    // Optional Apple Neural Engine TDT decoder sidecar, loaded from a
+    // `<model>-decoder.mlmodelc` on the same presence-driven terms as the
+    // encoder and independently of it. Non-null only enables the batched lane
+    // decode of the engine's offline transcribe path (tdt_decode_lanes);
+    // streaming paths keep the sequential decoder.
+    parakeet_coreml_decoder * ctx_coreml_dec = nullptr;
 #endif
+    // Set when the encoder sidecar loaded before weight allocation and the
+    // `encoder.*` tensors were therefore never given memory: the GGUF has no
+    // encoder weights, or PARAKEET_COREML_ONLY skipped them. The ggml encoder
+    // cannot run in this state and every path that would reach it fails.
+    bool coreml_owns_encoder = false;
 
     ~Impl() {
 #ifdef PARAKEET_USE_COREML
         if (ctx_coreml) parakeet_coreml_free(ctx_coreml);
         if (ctx_coreml_bypass) parakeet_coreml_free(ctx_coreml_bypass);
+        if (ctx_coreml_dec) parakeet_coreml_decoder_free(ctx_coreml_dec);
 #endif
         for (auto & g : encoder_graphs) {
             if (g) g->free_();
@@ -350,6 +372,8 @@ struct ParakeetCtcModel::Impl {
         weights_extra_buffers.clear();
         if (sortformer_cpu_buffer) ggml_backend_buffer_free(sortformer_cpu_buffer);
         if (sortformer_cpu_ctx)    ggml_free(sortformer_cpu_ctx);
+        if (tdt_cpu_buffer)        ggml_backend_buffer_free(tdt_cpu_buffer);
+        if (tdt_cpu_ctx)           ggml_free(tdt_cpu_ctx);
         if (ctx)            ggml_free(ctx);
         if (gguf)           gguf_free(gguf);
         if (backend_blas)   ggml_backend_free(backend_blas);
@@ -360,6 +384,10 @@ struct ParakeetCtcModel::Impl {
 
 ggml_backend_t ParakeetCtcModel::backend_active() const {
     return impl ? impl->backend_active : nullptr;
+}
+
+ggml_backend_t ParakeetCtcModel::backend_cpu() const {
+    return impl ? impl->backend_cpu : nullptr;
 }
 
 ggml_context * ParakeetCtcModel::weights_ctx() const {
@@ -1478,6 +1506,96 @@ void set_opencl_cache_dir(const std::string & dir) {
 #endif
 }
 
+// Tripwire: build_tdt_cpu_weights() hand-enumerates every field; fail the build if one is added/removed.
+static_assert(sizeof(TdtLstmLayer) == 4 * sizeof(ggml_tensor *),
+              "TdtLstmLayer layout changed; update build_tdt_cpu_weights()");
+static_assert(sizeof(TdtWeights) == 7 * sizeof(ggml_tensor *) + sizeof(std::vector<TdtLstmLayer>),
+              "TdtWeights layout changed; update build_tdt_cpu_weights()");
+
+// Duplicate the TDT / RNN-T decoder weights into a fresh context + buffer on
+// the CPU backend, for an encoder on OpenCL: ggml-opencl drops the in-place
+// state writes the decoder graphs rely on, so they run on the CPU backend and
+// must read weights that live there. Measure mode sizes the buffer only.
+static bool build_tdt_cpu_weights(ParakeetCtcModel::Impl * impl,
+                                  const TdtWeights & src,
+                                  TdtWeights & dst,
+                                  size_t * measure_bytes = nullptr) {
+    dst = TdtWeights{};
+    dst.lstm.resize(src.lstm.size());
+
+    struct Field { ggml_tensor * src; ggml_tensor ** dst; };
+    std::vector<Field> fields;
+    auto add = [&](ggml_tensor * s, ggml_tensor ** d) {
+        if (s) fields.push_back({ s, d });
+    };
+    add(src.predict_embed, &dst.predict_embed);
+    for (size_t i = 0; i < src.lstm.size(); ++i) {
+        add(src.lstm[i].w_ih, &dst.lstm[i].w_ih);  add(src.lstm[i].w_hh, &dst.lstm[i].w_hh);
+        add(src.lstm[i].b_ih, &dst.lstm[i].b_ih);  add(src.lstm[i].b_hh, &dst.lstm[i].b_hh);
+    }
+    add(src.joint_enc_w,  &dst.joint_enc_w);   add(src.joint_enc_b,  &dst.joint_enc_b);
+    add(src.joint_pred_w, &dst.joint_pred_w);  add(src.joint_pred_b, &dst.joint_pred_b);
+    add(src.joint_out_w,  &dst.joint_out_w);   add(src.joint_out_b,  &dst.joint_out_b);
+
+    ggml_init_params p = {
+        /*mem_size=*/   ggml_tensor_overhead() * (fields.size() + 8),
+        /*mem_buffer=*/ nullptr,
+        /*no_alloc=*/   true,
+    };
+    ggml_context * cpu_ctx = ggml_init(p);
+    if (!cpu_ctx) return false;
+
+    for (Field & f : fields) {
+        ggml_tensor * t = ggml_new_tensor(cpu_ctx, f.src->type, GGML_MAX_DIMS, f.src->ne);
+        ggml_set_name(t, ggml_get_name(f.src));
+        *f.dst = t;
+    }
+
+    if (measure_bytes) {
+        *measure_bytes = ggml_backend_alloc_ctx_tensors_from_buft_size(
+            cpu_ctx, ggml_backend_get_default_buffer_type(impl->backend_cpu));
+        ggml_free(cpu_ctx);
+        dst = TdtWeights{};
+        return true;
+    }
+
+    impl->tdt_cpu_ctx    = cpu_ctx;
+    impl->tdt_cpu_buffer = ggml_backend_alloc_ctx_tensors(cpu_ctx, impl->backend_cpu);
+    if (!impl->tdt_cpu_buffer) return false;
+
+    std::vector<uint8_t> buf;
+    for (Field & f : fields) {
+        const size_t nb = ggml_nbytes(f.src);
+        buf.resize(nb);
+        ggml_backend_tensor_get(f.src, buf.data(), 0, nb);
+        ggml_backend_tensor_set(*f.dst, buf.data(), 0, nb);
+    }
+    return true;
+}
+
+static const TdtWeights * transducer_decoder_weights(const ParakeetCtcModel & m) {
+    if (m.model_type == ParakeetModelType::TDT)  return &m.tdt;
+    if (m.model_type == ParakeetModelType::RNNT) return &m.rnnt;
+    return nullptr;
+}
+
+bool model_build_tdt_cpu_weights(ParakeetCtcModel & m) {
+    const TdtWeights * src = transducer_decoder_weights(m);
+    if (!m.impl || !src) return false;
+    return build_tdt_cpu_weights(m.impl.get(), *src, m.tdt_cpu);
+}
+
+bool model_tdt_decoder_on_cpu(const ParakeetCtcModel & m) {
+    return m.tdt_cpu.predict_embed != nullptr;
+}
+
+// An encoder on OpenCL leaves the TDT / RNN-T decoder graphs to the CPU
+// backend (see build_tdt_cpu_weights); Nemotron keeps its host decoder.
+static bool decoder_moves_to_cpu(const ParakeetCtcModel & m, const ParakeetCtcModel::Impl * impl) {
+    return impl->backend_gpu && backend_is_opencl(impl->backend_gpu) &&
+           transducer_decoder_weights(m) != nullptr;
+}
+
 // Tripwire: build_sortformer_cpu_weights() hand-enumerates every field; fail the build if one is added/removed.
 static_assert(sizeof(SortformerTransformerBlock) == 16 * sizeof(ggml_tensor *),
               "SortformerTransformerBlock layout changed; update build_sortformer_cpu_weights()");
@@ -1736,13 +1854,95 @@ static bool path_is_directory(const std::string & path) {
     return ::stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
 }
 
+static constexpr const char * kCoremlDisableEnv = "PARAKEET_COREML_DISABLE";
+static constexpr const char * kCoremlOnlyEnv    = "PARAKEET_COREML_ONLY";
+
+
+// Loads the TDT decoder sidecar when one sits next to the GGUF. Only TDT
+// models have one: the sidecar is the prediction network plus joint. The lane
+// decoder cross-checks the geometry it reports against the GGUF before use.
+static void maybe_init_coreml_decoder(const std::string & gguf_path,
+                                      ParakeetCtcModel  & model,
+                                      bool                verbose) {
+    if (std::getenv(kCoremlDisableEnv) != nullptr) return;
+    if (model.model_type != ParakeetModelType::TDT) return;
+
+    const std::string path = coreml_decoder_sidecar_path(gguf_path);
+    if (!path_is_directory(path)) {
+        if (verbose) PARAKEET_LOG_INFO("parakeet: no Core ML decoder at '%s'; using ggml decoder\n", path.c_str());
+        return;
+    }
+    model.impl->ctx_coreml_dec = parakeet_coreml_decoder_init(path.c_str());
+    if (model.impl->ctx_coreml_dec == nullptr) {
+        PARAKEET_LOG_WARN("parakeet: failed to load Core ML decoder at '%s'; falling back to ggml decoder\n", path.c_str());
+        return;
+    }
+    int64_t lanes = 0, h_pred = 0, h_dim = 0, d_enc = 0, width = 0, v_out = 0;
+    parakeet_coreml_decoder_geometry(model.impl->ctx_coreml_dec,
+                                     &lanes, &h_pred, &h_dim, &d_enc, &width, &v_out);
+    PARAKEET_LOG_INFO("parakeet: Core ML decoder loaded from '%s' "
+                      "(lanes=%lld width=%lld h_pred=%lld h_dim=%lld d_enc=%lld v_out=%lld)\n",
+                      path.c_str(), (long long) lanes, (long long) width, (long long) h_pred,
+                      (long long) h_dim, (long long) d_enc, (long long) v_out);
+}
+
+// Whether the encoder sidecar has to be loaded before weight allocation: the
+// GGUF carries no encoder weights, or PARAKEET_COREML_ONLY asks to skip them.
+static bool coreml_must_own_encoder(bool gguf_has_encoder) {
+    return !gguf_has_encoder || std::getenv(kCoremlOnlyEnv) != nullptr;
+}
+
+// Reads the offline-encoder test straight off GGUF metadata, for the early
+// sidecar load that runs before the authoritative parse into EncoderConfig.
+static bool gguf_encoder_is_offline(const gguf_context * g) {
+    const int id_l = find_key(g, "parakeet.encoder.att_context_size_left");
+    const int id_r = find_key(g, "parakeet.encoder.att_context_size_right");
+    return (id_l < 0 || gguf_get_val_i32(g, id_l) < 0)
+        && (id_r < 0 || gguf_get_val_i32(g, id_r) < 0)
+        && get_str(g, "parakeet.encoder.att_context_style", "regular") != "chunked_limited"
+        && get_str(g, "parakeet.encoder.conv_context_size", "default") != "causal"
+        && !get_bool(g, "parakeet.encoder.causal_downsampling", false);
+}
+
+// Loads the encoder sidecar before weight allocation so the `encoder.*`
+// tensors can be skipped. Only the offline fixed-capacity families qualify
+// (the same ones should_use_coreml_encoder pads and windows); returns null,
+// after logging why, when the sidecar cannot take over the encoder.
+static parakeet_coreml_context * init_coreml_only_encoder(const gguf_context * g,
+                                                          const std::string & gguf_path,
+                                                          bool verbose) {
+    if (std::getenv(kCoremlDisableEnv) != nullptr) {
+        PARAKEET_LOG_WARN("parakeet: %s set; the GGUF's ggml encoder weights are kept\n", kCoremlDisableEnv);
+        return nullptr;
+    }
+    const std::string type = get_str(g, "parakeet.model.type", "ctc");
+    if ((type != "tdt" && type != "ctc" && type != "rnnt") || !gguf_encoder_is_offline(g)) {
+        PARAKEET_LOG_WARN("parakeet: a Core ML-only encoder needs an offline CTC, RNN-T or TDT "
+                          "model; '%s' keeps its ggml encoder\n", type.c_str());
+        return nullptr;
+    }
+    const std::string path = coreml_encoder_sidecar_path(gguf_path);
+    if (!path_is_directory(path)) {
+        PARAKEET_LOG_WARN("parakeet: no Core ML encoder at '%s'\n", path.c_str());
+        return nullptr;
+    }
+    parakeet_coreml_context * ctx = parakeet_coreml_init(path.c_str());
+    if (ctx == nullptr) {
+        PARAKEET_LOG_WARN("parakeet: failed to load Core ML encoder at '%s'\n", path.c_str());
+        return nullptr;
+    }
+    if (verbose) PARAKEET_LOG_INFO("parakeet: Core ML encoder loaded from '%s' and owns the encoder\n", path.c_str());
+    return ctx;
+}
+
 // Presence-driven, additive loader: loads the Core ML encoder sidecar
 // when one sits next to the GGUF. Any miss (env override, unsupported family,
 // absent directory, load failure) leaves ctx_coreml null so ggml runs.
 static void maybe_init_coreml_encoder(const std::string & gguf_path,
                                       ParakeetCtcModel  & model,
                                       bool                verbose) {
-    if (std::getenv("PARAKEET_COREML_DISABLE") != nullptr) {
+    if (model.impl->ctx_coreml != nullptr) return;  // loaded before weight allocation
+    if (std::getenv(kCoremlDisableEnv) != nullptr) {
         if (verbose) PARAKEET_LOG_INFO("parakeet: Core ML encoder disabled via PARAKEET_COREML_DISABLE; using ggml\n");
         return;
     }
@@ -1949,6 +2149,133 @@ static void exclude_weights_from_graph_measure(ggml_context * ctx) {
     }
 }
 
+// True for the weights the encoder owns. The GGUF keeps them under the
+// `encoder.` prefix; everything outside it is the decoder head and the mel
+// front-end.
+static bool tensor_is_encoder(const char * name) {
+    return std::strncmp(name, "encoder.", 8) == 0;
+}
+
+// ggml_backend_alloc_ctx_tensors_from_buft, minus the encoder: allocates every
+// unallocated tensor in the context except the `encoder.*` weights, for use
+// when Core ML owns the encoder. Sizing and placement mirror the stock helper,
+// so a tensor that fits there fits here.
+static ggml_backend_buffer_t alloc_ctx_tensors_without_encoder(ggml_context * ctx,
+                                                               ggml_backend_buffer_type_t buft) {
+    const size_t align = ggml_backend_buft_get_alignment(buft);
+
+    std::vector<ggml_tensor *> keep;
+    size_t bytes = 0;
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t; t = ggml_get_next_tensor(ctx, t)) {
+        if (t->data || t->view_src)              continue;
+        if (tensor_is_encoder(ggml_get_name(t))) continue;
+        keep.push_back(t);
+        bytes += GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), align);
+    }
+    if (keep.empty()) return nullptr;
+
+    ggml_backend_buffer_t buf = ggml_backend_buft_alloc_buffer(buft, bytes);
+    if (!buf) return nullptr;
+
+    ggml_tallocr talloc = ggml_tallocr_new(buf);
+    for (ggml_tensor * t : keep) {
+        if (ggml_tallocr_alloc(&talloc, t) != GGML_STATUS_SUCCESS) {
+            PARAKEET_LOG_ERROR("gguf: tensor '%s' did not fit the weights buffer\n",
+                               ggml_get_name(t));
+            ggml_backend_buffer_free(buf);
+            return nullptr;
+        }
+    }
+    return buf;
+}
+
+static void load_conformer_block_weights(ggml_context * ctx, const ParakeetCtcModel & model,
+                                         bool gate_qkv_stack, int i, BlockWeights & b) {
+    const std::string p = "encoder.blk." + std::to_string(i) + ".";
+
+    b.norm_ff1_w  = require_tensor(ctx, p + "norm_ff1.weight");
+    b.norm_ff1_b  = require_tensor(ctx, p + "norm_ff1.bias");
+    b.ff1_l1_w    = require_tensor(ctx, p + "ff1.linear1.weight");
+    b.ff1_l1_b    = maybe_tensor(ctx, p + "ff1.linear1.bias");
+    b.ff1_l2_w    = require_tensor(ctx, p + "ff1.linear2.weight");
+    b.ff1_l2_b    = maybe_tensor(ctx, p + "ff1.linear2.bias");
+
+    b.norm_attn_w = require_tensor(ctx, p + "norm_attn.weight");
+    b.norm_attn_b = require_tensor(ctx, p + "norm_attn.bias");
+    b.attn_q_w    = require_tensor(ctx, p + "attn.q.weight");
+    b.attn_q_b    = maybe_tensor(ctx, p + "attn.q.bias");
+    b.attn_k_w    = require_tensor(ctx, p + "attn.k.weight");
+    b.attn_k_b    = maybe_tensor(ctx, p + "attn.k.bias");
+    b.attn_v_w    = require_tensor(ctx, p + "attn.v.weight");
+    b.attn_v_b    = maybe_tensor(ctx, p + "attn.v.bias");
+    b.attn_qkv_w  = gate_qkv_stack ? maybe_tensor(ctx, p + "attn.qkv.weight") : nullptr;
+    b.attn_qkv_b  = gate_qkv_stack ? maybe_tensor(ctx, p + "attn.qkv.bias")   : nullptr;
+    b.attn_out_w  = require_tensor(ctx, p + "attn.out.weight");
+    b.attn_out_b  = maybe_tensor(ctx, p + "attn.out.bias");
+    b.attn_pos_w  = require_tensor(ctx, p + "attn.pos.weight");
+    b.pos_bias_u  = require_tensor(ctx, p + "attn.pos_bias_u");
+    b.pos_bias_v  = require_tensor(ctx, p + "attn.pos_bias_v");
+
+    b.norm_conv_w = require_tensor(ctx, p + "norm_conv.weight");
+    b.norm_conv_b = require_tensor(ctx, p + "norm_conv.bias");
+    b.conv_pw1_w  = require_tensor(ctx, p + "conv.pw1.weight");
+    b.conv_pw1_b  = maybe_tensor(ctx, p + "conv.pw1.bias");
+    b.conv_dw_w   = require_tensor(ctx, p + "conv.dw.weight");
+    b.conv_dw_b   = maybe_tensor(ctx, p + "conv.dw.bias");
+    if (model.encoder_cfg.conv_norm_type == ConvNormType::LayerNorm) {
+        b.conv_norm_w = require_tensor(ctx, p + "conv.norm.weight");
+        b.conv_norm_b = require_tensor(ctx, p + "conv.norm.bias");
+    } else {
+        b.conv_bn_scale = require_tensor(ctx, p + "conv.bn.scale");
+        b.conv_bn_shift = require_tensor(ctx, p + "conv.bn.shift");
+    }
+    b.conv_pw2_w  = require_tensor(ctx, p + "conv.pw2.weight");
+    b.conv_pw2_b  = maybe_tensor(ctx, p + "conv.pw2.bias");
+
+    b.norm_ff2_w  = require_tensor(ctx, p + "norm_ff2.weight");
+    b.norm_ff2_b  = require_tensor(ctx, p + "norm_ff2.bias");
+    b.ff2_l1_w    = require_tensor(ctx, p + "ff2.linear1.weight");
+    b.ff2_l1_b    = maybe_tensor(ctx, p + "ff2.linear1.bias");
+    b.ff2_l2_w    = require_tensor(ctx, p + "ff2.linear2.weight");
+    b.ff2_l2_b    = maybe_tensor(ctx, p + "ff2.linear2.bias");
+
+    b.norm_out_w  = require_tensor(ctx, p + "norm_out.weight");
+    b.norm_out_b  = require_tensor(ctx, p + "norm_out.bias");
+}
+
+// Binds the ggml encoder's weights: the subsampling stack and the conformer
+// blocks. Every tensor is required, so a GGUF without encoder weights fails
+// here unless Core ML owns the encoder and the caller skipped this.
+static void load_encoder_weights(ParakeetCtcModel::Impl * impl, ParakeetCtcModel & out_model) {
+    ggml_context * ctx = impl->ctx;
+    out_model.subsampling.conv0_w    = require_tensor(ctx, "encoder.subsampling.conv0.weight");
+    out_model.subsampling.conv0_b    = maybe_tensor(ctx, "encoder.subsampling.conv0.bias");
+    out_model.subsampling.conv1_dw_w = require_tensor(ctx, "encoder.subsampling.conv1_dw.weight");
+    out_model.subsampling.conv1_dw_b = maybe_tensor(ctx, "encoder.subsampling.conv1_dw.bias");
+    out_model.subsampling.conv1_pw_w = require_tensor(ctx, "encoder.subsampling.conv1_pw.weight");
+    out_model.subsampling.conv1_pw_b = maybe_tensor(ctx, "encoder.subsampling.conv1_pw.bias");
+    out_model.subsampling.conv2_dw_w = require_tensor(ctx, "encoder.subsampling.conv2_dw.weight");
+    out_model.subsampling.conv2_dw_b = maybe_tensor(ctx, "encoder.subsampling.conv2_dw.bias");
+    out_model.subsampling.conv2_pw_w = require_tensor(ctx, "encoder.subsampling.conv2_pw.weight");
+    out_model.subsampling.conv2_pw_b = maybe_tensor(ctx, "encoder.subsampling.conv2_pw.bias");
+    out_model.subsampling.out_w      = require_tensor(ctx, "encoder.subsampling.out.weight");
+    out_model.subsampling.out_b      = maybe_tensor(ctx, "encoder.subsampling.out.bias");
+
+    // Use converter-pre-stacked encoder.blk.*.attn.qkv on GPU when the wide
+    // M=3*n_embd matmul helps; keep unstacked Q/K/V on CPU for cache locality.
+    // (Heuristic: stacked wins where separate matmuls under-fill the device;
+    // Metal stays unstacked here.)
+    const bool gate_qkv_stack =
+        impl->backend_active &&
+        !backend_is_cpu(impl->backend_active) &&
+        !backend_is_metal(impl->backend_active);
+
+    out_model.blocks.resize(out_model.encoder_cfg.n_layers);
+    for (int i = 0; i < out_model.encoder_cfg.n_layers; ++i) {
+        load_conformer_block_weights(ctx, out_model, gate_qkv_stack, i, out_model.blocks[i]);
+    }
+}
+
 // Shared body of load_from_gguf and load_from_gguf_metadata_only. When
 // `measure` is non-null the load is metadata-only: every allocation the real
 // path makes is sized into `measure` instead of performed and no tensor data
@@ -2060,11 +2387,32 @@ static int load_from_gguf_impl(const std::string & gguf_path,
 
     gguf_context * g = impl->gguf;
 
+    // A GGUF without encoder weights (the Core ML distributions) runs only with
+    // its encoder sidecar, which then has to load before allocation so the
+    // `encoder.*` tensors get no memory. PARAKEET_COREML_ONLY asks for the same
+    // with a full GGUF. The memory-fit projection never loads Core ML, so it
+    // cannot project such a model.
+    const bool gguf_has_encoder = gguf_find_tensor(g, "encoder.subsampling.conv0.weight") >= 0;
+#ifdef PARAKEET_USE_COREML
+    if (!measure && coreml_must_own_encoder(gguf_has_encoder)) {
+        impl->ctx_coreml = init_coreml_only_encoder(g, gguf_path, verbose);
+        impl->coreml_owns_encoder = impl->ctx_coreml != nullptr;
+    }
+#endif
+    if (!gguf_has_encoder && !impl->coreml_owns_encoder) {
+        PARAKEET_LOG_ERROR("gguf: %s holds no encoder weights; it runs only with its "
+                           "%s sidecar on an Apple build with PARAKEET_COREML=ON\n",
+                           gguf_path.c_str(), "-encoder.mlmodelc");
+        return kGgufLoadNoEncoderWeights;
+    }
+    const bool owns_encoder = impl->coreml_owns_encoder;
+
     // CPU-only runs: place repack-eligible encoder GEMM weights in the CPU
     // extra buffer type first; the default allocation below picks up every
     // tensor this pass leaves unallocated. Skipped when the model lives on a
-    // GPU backend (the weights aren't in CPU memory at all).
-    if (impl->backend_active == impl->backend_cpu) {
+    // GPU backend (the weights aren't in CPU memory at all) and when Core ML
+    // owns the encoder (the allowlist is entirely encoder GEMMs).
+    if (impl->backend_active == impl->backend_cpu && !owns_encoder) {
         if (measure) {
             alloc_cpu_repack_weights(impl->ctx, impl->backend_cpu, verbose,
                                      &measure->repack_bytes);
@@ -2082,7 +2430,9 @@ static int load_from_gguf_impl(const std::string & gguf_path,
         measure->weights_bytes = ggml_backend_alloc_ctx_tensors_from_buft_size(
             impl->ctx, weights_buft);
     } else {
-        impl->weights_buffer = ggml_backend_alloc_ctx_tensors_from_buft(impl->ctx, weights_buft);
+        impl->weights_buffer = owns_encoder
+            ? alloc_ctx_tensors_without_encoder(impl->ctx, weights_buft)
+            : ggml_backend_alloc_ctx_tensors_from_buft(impl->ctx, weights_buft);
         if (!impl->weights_buffer) {
             PARAKEET_LOG_ERROR("gguf: ggml_backend_alloc_ctx_tensors failed\n");
             return 12;
@@ -2101,6 +2451,9 @@ static int load_from_gguf_impl(const std::string & gguf_path,
             const char  * name = gguf_get_tensor_name(g, i);
             ggml_tensor * t    = ggml_get_tensor(impl->ctx, name);
             if (!t) continue;
+            // No buffer means the allocation pass skipped it: Core ML owns the
+            // encoder, so these bytes are never read.
+            if (!t->buffer) continue;
             const size_t off   = gguf_get_tensor_offset(g, i);
             const size_t nbytes = ggml_nbytes(t);
             buf.resize(nbytes);
@@ -2210,6 +2563,11 @@ static int load_from_gguf_impl(const std::string & gguf_path,
 
     // Optional variant tag (empty for legacy GGUFs that predate the key).
     out_model.model_variant = get_str(g, "parakeet.model_variant", "");
+    long_form_hint_for_model(get_u32(g, "parakeet.long_form.window_frames", 0),
+                             get_u32(g, "parakeet.long_form.context_frames", 0),
+                             get_str(g, "general.description", ""),
+                             out_model.encoder_cfg.long_form_window_hint,
+                             out_model.encoder_cfg.long_form_context_hint);
     if (out_model.model_type == ParakeetModelType::NEMOTRON) {
         load_nemotron_metadata(g, out_model);
     }
@@ -2349,81 +2707,11 @@ static int load_from_gguf_impl(const std::string & gguf_path,
         out_model.mel_cfg.window     = read_filterbank_to_vector(out_model.window);
     }
 
-    out_model.subsampling.conv0_w    = require_tensor(impl->ctx, "encoder.subsampling.conv0.weight");
-    out_model.subsampling.conv0_b    = maybe_tensor(impl->ctx, "encoder.subsampling.conv0.bias");
-    out_model.subsampling.conv1_dw_w = require_tensor(impl->ctx, "encoder.subsampling.conv1_dw.weight");
-    out_model.subsampling.conv1_dw_b = maybe_tensor(impl->ctx, "encoder.subsampling.conv1_dw.bias");
-    out_model.subsampling.conv1_pw_w = require_tensor(impl->ctx, "encoder.subsampling.conv1_pw.weight");
-    out_model.subsampling.conv1_pw_b = maybe_tensor(impl->ctx, "encoder.subsampling.conv1_pw.bias");
-    out_model.subsampling.conv2_dw_w = require_tensor(impl->ctx, "encoder.subsampling.conv2_dw.weight");
-    out_model.subsampling.conv2_dw_b = maybe_tensor(impl->ctx, "encoder.subsampling.conv2_dw.bias");
-    out_model.subsampling.conv2_pw_w = require_tensor(impl->ctx, "encoder.subsampling.conv2_pw.weight");
-    out_model.subsampling.conv2_pw_b = maybe_tensor(impl->ctx, "encoder.subsampling.conv2_pw.bias");
-    out_model.subsampling.out_w      = require_tensor(impl->ctx, "encoder.subsampling.out.weight");
-    out_model.subsampling.out_b      = maybe_tensor(impl->ctx, "encoder.subsampling.out.bias");
-
-    // Use converter-pre-stacked encoder.blk.*.attn.qkv on GPU when the wide
-    // M=3*n_embd matmul helps; keep unstacked Q/K/V on CPU for cache locality.
-    // (Heuristic: stacked wins where separate matmuls under-fill the device;
-    // Metal stays unstacked here.)
-    const bool gate_qkv_stack =
-        impl->backend_active &&
-        !backend_is_cpu(impl->backend_active) &&
-        !backend_is_metal(impl->backend_active);
-
-    out_model.blocks.resize(out_model.encoder_cfg.n_layers);
-    for (int i = 0; i < out_model.encoder_cfg.n_layers; ++i) {
-        BlockWeights & b = out_model.blocks[i];
-        const std::string p = "encoder.blk." + std::to_string(i) + ".";
-
-        b.norm_ff1_w  = require_tensor(impl->ctx, p + "norm_ff1.weight");
-        b.norm_ff1_b  = require_tensor(impl->ctx, p + "norm_ff1.bias");
-        b.ff1_l1_w    = require_tensor(impl->ctx, p + "ff1.linear1.weight");
-        b.ff1_l1_b    = maybe_tensor(impl->ctx, p + "ff1.linear1.bias");
-        b.ff1_l2_w    = require_tensor(impl->ctx, p + "ff1.linear2.weight");
-        b.ff1_l2_b    = maybe_tensor(impl->ctx, p + "ff1.linear2.bias");
-
-        b.norm_attn_w = require_tensor(impl->ctx, p + "norm_attn.weight");
-        b.norm_attn_b = require_tensor(impl->ctx, p + "norm_attn.bias");
-        b.attn_q_w    = require_tensor(impl->ctx, p + "attn.q.weight");
-        b.attn_q_b    = maybe_tensor(impl->ctx, p + "attn.q.bias");
-        b.attn_k_w    = require_tensor(impl->ctx, p + "attn.k.weight");
-        b.attn_k_b    = maybe_tensor(impl->ctx, p + "attn.k.bias");
-        b.attn_v_w    = require_tensor(impl->ctx, p + "attn.v.weight");
-        b.attn_v_b    = maybe_tensor(impl->ctx, p + "attn.v.bias");
-        b.attn_qkv_w  = gate_qkv_stack ? maybe_tensor(impl->ctx, p + "attn.qkv.weight") : nullptr;
-        b.attn_qkv_b  = gate_qkv_stack ? maybe_tensor(impl->ctx, p + "attn.qkv.bias")   : nullptr;
-        b.attn_out_w  = require_tensor(impl->ctx, p + "attn.out.weight");
-        b.attn_out_b  = maybe_tensor(impl->ctx, p + "attn.out.bias");
-        b.attn_pos_w  = require_tensor(impl->ctx, p + "attn.pos.weight");
-        b.pos_bias_u  = require_tensor(impl->ctx, p + "attn.pos_bias_u");
-        b.pos_bias_v  = require_tensor(impl->ctx, p + "attn.pos_bias_v");
-
-        b.norm_conv_w = require_tensor(impl->ctx, p + "norm_conv.weight");
-        b.norm_conv_b = require_tensor(impl->ctx, p + "norm_conv.bias");
-        b.conv_pw1_w  = require_tensor(impl->ctx, p + "conv.pw1.weight");
-        b.conv_pw1_b  = maybe_tensor(impl->ctx, p + "conv.pw1.bias");
-        b.conv_dw_w   = require_tensor(impl->ctx, p + "conv.dw.weight");
-        b.conv_dw_b   = maybe_tensor(impl->ctx, p + "conv.dw.bias");
-        if (out_model.encoder_cfg.conv_norm_type == ConvNormType::LayerNorm) {
-            b.conv_norm_w = require_tensor(impl->ctx, p + "conv.norm.weight");
-            b.conv_norm_b = require_tensor(impl->ctx, p + "conv.norm.bias");
-        } else {
-            b.conv_bn_scale = require_tensor(impl->ctx, p + "conv.bn.scale");
-            b.conv_bn_shift = require_tensor(impl->ctx, p + "conv.bn.shift");
-        }
-        b.conv_pw2_w  = require_tensor(impl->ctx, p + "conv.pw2.weight");
-        b.conv_pw2_b  = maybe_tensor(impl->ctx, p + "conv.pw2.bias");
-
-        b.norm_ff2_w  = require_tensor(impl->ctx, p + "norm_ff2.weight");
-        b.norm_ff2_b  = require_tensor(impl->ctx, p + "norm_ff2.bias");
-        b.ff2_l1_w    = require_tensor(impl->ctx, p + "ff2.linear1.weight");
-        b.ff2_l1_b    = maybe_tensor(impl->ctx, p + "ff2.linear1.bias");
-        b.ff2_l2_w    = require_tensor(impl->ctx, p + "ff2.linear2.weight");
-        b.ff2_l2_b    = maybe_tensor(impl->ctx, p + "ff2.linear2.bias");
-
-        b.norm_out_w  = require_tensor(impl->ctx, p + "norm_out.weight");
-        b.norm_out_b  = require_tensor(impl->ctx, p + "norm_out.bias");
+    // The ggml encoder's weights. When Core ML owns the encoder they were never
+    // allocated and may be absent from the file altogether, and nothing reads
+    // them: build_encoder_graph_cached refuses the ggml encoder in that state.
+    if (!owns_encoder) {
+        load_encoder_weights(impl.get(), out_model);
     }
 
     if (out_model.model_type == ParakeetModelType::CTC) {
@@ -2511,6 +2799,7 @@ static int load_from_gguf_impl(const std::string & gguf_path,
 #ifdef PARAKEET_USE_COREML
     if (!measure) {
         maybe_init_coreml_encoder(gguf_path, out_model, verbose);
+        maybe_init_coreml_decoder(gguf_path, out_model, verbose);
     }
 #endif
 
@@ -2534,6 +2823,23 @@ static int load_from_gguf_impl(const std::string & gguf_path,
         if (!measure && verbose) PARAKEET_LOG_INFO(
             "parakeet: built CPU-resident Sortformer head weights "
             "(diarization head runs on CPU; encoder stays on the Mali GPU)\n");
+    }
+
+    if (decoder_moves_to_cpu(out_model, impl.get())) {
+        const TdtWeights & src = *transducer_decoder_weights(out_model);
+        if (measure) {
+            TdtWeights scratch;
+            if (!build_tdt_cpu_weights(impl.get(), src, scratch, &measure->tdt_cpu_bytes)) {
+                PARAKEET_LOG_ERROR("parakeet: failed to size CPU-resident decoder weights\n");
+                return 15;
+            }
+        } else if (!build_tdt_cpu_weights(impl.get(), src, out_model.tdt_cpu)) {
+            PARAKEET_LOG_ERROR("parakeet: failed to build CPU-resident decoder weights\n");
+            return 15;
+        }
+        if (!measure && verbose) PARAKEET_LOG_INFO(
+            "parakeet: built CPU-resident decoder weights "
+            "(TDT decode graphs run on the CPU; encoder stays on OpenCL)\n");
     }
 
     if (measure) {
@@ -2619,6 +2925,42 @@ bool model_encoder_on_coreml(const ParakeetCtcModel & m) {
     (void) m;
     return false;
 #endif
+}
+
+bool model_encoder_owned_by_coreml(const ParakeetCtcModel & m) {
+    return m.impl && m.impl->coreml_owns_encoder;
+}
+
+int model_coreml_seam_context_frames(const ParakeetCtcModel & m) {
+#ifdef PARAKEET_USE_COREML
+    if (m.impl && m.impl->ctx_coreml) {
+        return (int) parakeet_coreml_seam_context_frames(m.impl->ctx_coreml);
+    }
+#else
+    (void) m;
+#endif
+    return 0;
+}
+
+::parakeet_coreml_decoder * model_coreml_decoder(const ParakeetCtcModel & m) {
+#ifdef PARAKEET_USE_COREML
+    return m.impl ? m.impl->ctx_coreml_dec : nullptr;
+#else
+    (void) m;
+    return nullptr;
+#endif
+}
+
+std::string model_decoder_backend_name(const ParakeetCtcModel & m) {
+#ifdef PARAKEET_USE_COREML
+    if (m.impl && m.impl->ctx_coreml_dec) {
+        return parakeet_coreml_decoder_backend_label(m.impl->ctx_coreml_dec);
+    }
+#endif
+    if (model_tdt_decoder_on_cpu(m) && m.impl && m.impl->backend_cpu) {
+        return ggml_backend_name(m.impl->backend_cpu);
+    }
+    return model_active_backend_name(m);
 }
 
 bool model_bypass_encoder_on_coreml(const ParakeetCtcModel & m) {
@@ -3911,6 +4253,16 @@ static int build_encoder_graph_cached(const ParakeetCtcModel & model,
                                       bool bypass_pre_encode = false,
                                       int  T_enc_override   = 0,
                                       size_t * measure_compute = nullptr) {
+    // Every ggml encoder path builds its graph here, so this is where a model
+    // whose encoder weights were never loaded is refused instead of reading
+    // through unallocated tensors.
+    if (model.impl->coreml_owns_encoder) {
+        PARAKEET_LOG_ERROR("parakeet: the ggml encoder was requested but Core ML owns the "
+                           "encoder and its weights were not loaded (bypass=%d, layers=%d)\n",
+                           (int) bypass_pre_encode, n_run_layers_override);
+        return kEncoderWeightsNotLoaded;
+    }
+
     const EncoderConfig & enc = model.encoder_cfg;
     const int C_sub = enc.subsampling_channels;
     const int d_model = enc.d_model;
@@ -4371,6 +4723,7 @@ static int run_coreml_ctc_head(ParakeetCtcModel & model,
 static int run_encoder_coreml(ParakeetCtcModel & model,
                               const float      * mel,
                               int                n_mel_frames,
+                              int                mel_valid,
                               int                n_mels,
                               EncoderOutputs   & out) {
     const EncoderConfig & enc     = model.encoder_cfg;
@@ -4383,7 +4736,7 @@ static int run_encoder_coreml(ParakeetCtcModel & model,
     out.encoder_out.resize((size_t) T * d_model);
 
     const int rc = parakeet_coreml_encode(model.impl->ctx_coreml,
-                                           n_mel_frames, n_mels, mel,
+                                           n_mel_frames, mel_valid, n_mels, mel,
                                            T, d_model, out.encoder_out.data());
     if (rc != 0) return rc;
 
@@ -4567,6 +4920,27 @@ int run_nemotron_prompt_projection(
     return 0;
 }
 
+// Frees the least recently used encoder graphs until at most `keep` remain.
+static void evict_encoder_graphs_to(std::vector<std::unique_ptr<EncoderGraph>> & cache,
+                                    size_t keep) {
+    while (cache.size() > keep) {
+        cache.front()->free_();
+        cache.erase(cache.begin());
+    }
+}
+
+size_t set_encoder_graph_cache_limit(ParakeetCtcModel & model, size_t limit) {
+    if (!model.impl) return 0;
+    const size_t prev = model.impl->encoder_graph_cache_limit;
+    model.impl->encoder_graph_cache_limit = std::max<size_t>(1, limit);
+    evict_encoder_graphs_to(model.impl->encoder_graphs, model.impl->encoder_graph_cache_limit);
+    return prev;
+}
+
+size_t encoder_graph_cache_size(const ParakeetCtcModel & model) {
+    return model.impl ? model.impl->encoder_graphs.size() : 0;
+}
+
 int run_encoder(ParakeetCtcModel   & model,
                 const float        * mel,
                 int                  n_mel_frames,
@@ -4609,8 +4983,13 @@ int run_encoder(ParakeetCtcModel   & model,
     // encoder_out back to the ggml decoder or diarization head.
     if (should_use_coreml_encoder(model, n_mel_frames, all_valid, capture_intermediates,
                                   allow_coreml_padded)) {
-        const int rc = run_encoder_coreml(model, mel, n_mel_frames, n_mels, out);
+        const int rc = run_encoder_coreml(model, mel, n_mel_frames, mel_valid, n_mels, out);
         if (rc == 0) return 0;
+        if (model.impl->coreml_owns_encoder) {
+            PARAKEET_LOG_ERROR("parakeet: Core ML encoder failed (rc=%d) and the GGUF holds no "
+                               "encoder weights to fall back to\n", rc);
+            return rc;
+        }
         PARAKEET_LOG_WARN("parakeet: Core ML encoder failed (rc=%d); falling back to ggml encoder\n", rc);
     }
 #endif
@@ -4634,10 +5013,7 @@ int run_encoder(ParakeetCtcModel   & model,
     }
 
     if (!g_ptr) {
-        while (cache.size() >= ParakeetCtcModel::Impl::k_encoder_graph_cache_max) {
-            cache.front()->free_();
-            cache.erase(cache.begin());
-        }
+        evict_encoder_graphs_to(cache, model.impl->encoder_graph_cache_limit - 1);
         cache.push_back(std::make_unique<EncoderGraph>());
         EncoderGraph & e = *cache.back();
         if (int rc = build_encoder_graph_cached(model, e, n_mel_frames, mel_valid, n_mels, max_layers, all_valid,
@@ -4848,10 +5224,7 @@ int run_encoder_bypass_pre_encode(ParakeetCtcModel & model,
     }
 
     if (!g_ptr) {
-        while (cache.size() >= ParakeetCtcModel::Impl::k_encoder_graph_cache_max) {
-            cache.front()->free_();
-            cache.erase(cache.begin());
-        }
+        evict_encoder_graphs_to(cache, model.impl->encoder_graph_cache_limit - 1);
         cache.push_back(std::make_unique<EncoderGraph>());
         EncoderGraph & e = *cache.back();
         if (int rc = build_encoder_graph_cached(model, e, /*n_mel_frames=*/0, /*mel_valid=*/0, /*n_mels=*/0,

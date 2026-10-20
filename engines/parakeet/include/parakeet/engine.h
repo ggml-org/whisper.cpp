@@ -40,6 +40,9 @@
 //     calls on the same instance are not supported (the encoder's graph
 //     allocator is shared mutable state). Wrap an Engine in your own
 //     mutex if you need that, or hold one Engine per worker.
+//     `compute_mel()` / `compute_mel_wav()` are the exception and may
+//     run on a worker thread during a `transcribe*` call; see
+//     PrecomputedMel.
 //
 //   - `cancel()` is safe to call from any thread while another thread
 //     is inside `transcribe*` / `diarize*`. It causes the running call
@@ -178,9 +181,14 @@ struct EngineOptions {
     // and never exceeds the encoder's trained positional range
     // (pos_emb_max_len), which is a hard ceiling:
     //     > 0  explicit request (still clamped to pos_emb_max_len).
-    //     = 0  auto: min(pos_emb_max_len, 3750), which keeps each window inside
-    //          the model's trained positional range and caps the attention
-    //          score tensor at a few hundred MB.
+    //     = 0  auto: the window the model recommends when its GGUF carries
+    //          one (TranscribePsy: 750 frames with 94 of context, the 60 s /
+    //          25 % setting validated on phones), otherwise at most
+    //          min(pos_emb_max_len, 3750), which keeps each window inside the
+    //          model's trained positional range and caps the attention score
+    //          tensor at a few hundred MB; the input is then split into the
+    //          fewest such windows and they share it equally, so a recording
+    //          just past one window gets two half windows.
     //     < 0  disabled: always single-pass (legacy behaviour; OOMs on long
     //          inputs -- for A/B testing only).
     //
@@ -227,6 +235,25 @@ enum class BackendDevice : int {
     NPU = 2,
 };
 
+// A mel spectrogram detached from the Engine that produced it, so the mel
+// stage can run on one thread while the encoder runs on another.
+//
+// Intended for a batch of separate utterances. Each one's mel depends only on
+// its own audio (CMVN is a whole-utterance statistic over that utterance), so
+// utterance i+1's mel can be built while utterance i is still in the encoder.
+// For a single recording there is nothing to overlap: its mel must complete
+// before the first encoder dispatch.
+struct PrecomputedMel {
+    std::vector<float> mel;
+    int    n_frames      = 0;
+    int    n_mels        = 0;
+    int    audio_samples = 0;
+    int    sample_rate   = 16000;
+    double preprocess_ms = 0.0;
+
+    bool empty() const { return n_frames <= 0; }
+};
+
 struct EngineResult {
     std::string text;
     std::vector<int32_t> token_ids;
@@ -239,6 +266,11 @@ struct EngineResult {
     double preprocess_ms = 0.0;
     double encoder_ms    = 0.0;
     double decode_ms     = 0.0;
+    // Only non-zero on the Core ML independent-segment path, where together
+    // with the three above they account for `total_ms`: pause-cut planning,
+    // then per-segment encoder-output concatenation, lane setup and stitching.
+    double segment_plan_ms = 0.0;
+    double assemble_ms     = 0.0;
     double total_ms      = 0.0;
 
     int audio_samples    = 0;
@@ -262,6 +294,25 @@ public:
     EngineResult transcribe_samples(const float * samples,
                                     int n_samples,
                                     int sample_rate);
+
+    // Mel ahead of time, encoder later. See PrecomputedMel.
+    //
+    // `compute_mel*` is the one member that IS safe to call concurrently with
+    // a `transcribe*` call on the same Engine: it reads only the mel config,
+    // which is immutable after load, and allocates its own scratch rather than
+    // touching the Engine's. Everything else in the "no concurrent calls" rule
+    // above still applies; in particular two concurrent `transcribe_mel`
+    // calls are no more legal than two concurrent `transcribe_samples` ones.
+    //
+    // `transcribe_mel(compute_mel(...))` returns exactly what
+    // `transcribe_samples` returns on the same audio.
+    PrecomputedMel compute_mel(const float * samples,
+                               int n_samples,
+                               int sample_rate) const;
+
+    PrecomputedMel compute_mel_wav(const std::string & wav_path) const;
+
+    EngineResult transcribe_mel(PrecomputedMel mel);
 
     EngineResult transcribe_stream(const std::string & wav_path,
                                    const StreamingOptions & opts,
@@ -345,6 +396,12 @@ public:
     struct Impl;
 
 private:
+    // Everything from the encoder onwards, shared by every transcribe entry
+    // point. `mel` is consumed. `prior_ms` is wall time already spent before
+    // entry (the mel, and the wav read when there was one) so `total_ms`
+    // stays end-to-end whichever entry point built the mel.
+    EngineResult transcribe_mel_impl(PrecomputedMel && mel, double prior_ms);
+
     std::unique_ptr<Impl> pimpl_;
 };
 

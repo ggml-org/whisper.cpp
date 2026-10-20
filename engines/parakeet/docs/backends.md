@@ -54,10 +54,14 @@ routed to CPU because that head is incorrect on Mali Vulkan.
 
 TDT predictor/joint decoding uses ggml graphs on every backend, including
 ggml-cpu, where the quantised joint matmuls run about ten times faster than the
-former host f32 gemv loop. OpenCL keeps the host scalar decoder because it lacks
-the graph operation support this path needs, and `PARAKEET_TDT_HOST_DECODE=1`
-forces it elsewhere for parity testing. EOU decoding uses graphs on Metal,
-Vulkan and CUDA and the scalar path on CPU and OpenCL.
+former host f32 gemv loop. ggml-opencl drops the in-place state writes those
+graphs rely on, so with the encoder on OpenCL the TDT and RNN-T decoder graphs
+run on the CPU backend from a CPU-resident copy of the decoder weights that
+the loader makes (`model_tdt_decoder_on_cpu`; the fit projector counts the
+copy); Nemotron keeps the host scalar decoder there, and
+`PARAKEET_TDT_HOST_DECODE=1` forces the host decoder elsewhere for parity
+testing. EOU decoding uses graphs on Metal, Vulkan and CUDA and the scalar
+path on CPU and OpenCL.
 
 Nemotron 3.5 ASR streaming is supported on OpenCL (Adreno 700+). The encoder
 runs on the GPU and the cache-aware streaming operating points (80, 160, 320,
@@ -159,8 +163,10 @@ cmake -S engines/parakeet -B build-opencl -DGGML_OPENCL=ON
 Unified RNN-T, TDT, EOU, Nemotron, and tagged Sortformer v2.1 FastConformer
 encoder sidecars, and the MOSS-Transcribe-Diarize audio encoder sidecar, whose
 export and routing are in [its guide](moss-transcribe.md#core-ml-encoder-sidecar).
-Mel preprocessing, the CTC/RNN-T/TDT/EOU/Nemotron decoders, and the Sortformer
-transformer/speaker head remain in the normal ggml pipeline.
+Mel preprocessing, the CTC/RNN-T/EOU/Nemotron decoders, and the Sortformer
+transformer/speaker head remain in the normal ggml pipeline; the TDT decoder
+can additionally run on the Neural Engine through the
+[batched decoder sidecar](#neural-engine-fixed-window-encoder-and-tdt-decoder-sidecars).
 Sortformer v1 and v2 have no sidecar. The English CTC checkpoints satisfy the
 CTC/IndicConformer export contract; among CTC checkpoints, the Core ML parity
 tests cover only IndicConformer.
@@ -329,6 +335,10 @@ graph is predominantly Neural Engine-backed, but a small number of operations
 may prefer the GPU; forcing CPU + Neural Engine can move those operations onto
 the CPU and reduce the speedup. Set `PARAKEET_COREML_COMPUTE_UNITS=cpu_and_gpu`,
 `cpu_only`, or `cpu_and_ane` to override the default for placement comparisons.
+The [Neural Engine exports](#neural-engine-fixed-window-encoder-and-tdt-decoder-sidecars)
+are the exception: they are fully ANE-shaped and load pinned to CPU + Neural
+Engine, since `all` is only a preference that may place them on the GPU;
+`PARAKEET_COREML_COMPUTE_UNITS=all` restores Core ML's own choice.
 
 A missing sidecar, load failure, incompatible shape, or runtime prediction
 failure falls back to the ggml encoder. A failed AOSC bypass prediction also
@@ -375,11 +385,99 @@ then local to each overlapping window. The stitched result should therefore be
 treated as close to, rather than bit-identical with, a single full-length encode;
 validate accuracy on representative long recordings before production use.
 
+## Neural Engine fixed-window encoder and TDT decoder sidecars
+
+TDT models can run on the Apple Neural Engine end to end with two sidecars that
+TranscribePsy publishes ready-made
+([qvac/TranscribePsy-250M-EU-sub-coreml](https://huggingface.co/qvac/TranscribePsy-250M-EU-sub-coreml);
+`scripts/download-all-models.sh transcribepsy` fetches them) and that
+`export-encoder-coreml-ane.py` / `export-decoder-coreml-ane.py` export from any
+offline TDT GGUF. Both sit next to the GGUF under the usual derived names:
+
+```text
+<model>.gguf
+<model>-encoder.mlmodelc
+<model>-decoder.mlmodelc
+```
+
+The **fixed-window encoder** is a channel-first `[1, C, 1, T]` graph over a
+fixed window (`--window-mel-frames`, 1500 mel frames = 15 s by default) with
+runtime masks: `mel_mask` zeroes the padded mel frames and, through its
+even-index slices, the padded frames at every subsampling resolution;
+`pad_mask` zeroes the padded encoder frames and `key_bias` masks them out of
+attention, so a partially filled window uses the same graph and its valid
+frames come out as the reference encoder's for the short input alone (the
+exporter's `--check` verifies both a full and a partial window). The wrapper
+derives all three masks from the frames that hold audio, so the mel
+front-end's zeroed trailing padding frame counts as padding as well. The published
+TranscribePsy export predates `mel_mask` and masks after subsampling only; the
+wrapper fills `mel_mask` when an export declares it. The wrapper
+recognises the inputs (`mel`, `pad_mask`, `key_bias`, optionally `mel_mask`), reports the window
+as the sidecar's fixed capacity, and the engine's long-form plan tiles longer
+audio across overlapping windows with 16 encoder frames (1.28 s) of seam
+context each side, the setting the export was validated with
+(`PARAKEET_COREML_ANE_CONTEXT_FRAMES` overrides it; an explicit
+`EngineOptions::long_form_context_frames` wins). Weights are 6-bit palettized
+(`--nbits 0` keeps fp16). Unlike the single-input export, this layout is fully
+Neural Engine-resident on the published TranscribePsy model. The short window
+and seam context cost accuracy on long recordings without pauses; the
+[measurements](performance.md#transcribepsy-on-the-apple-neural-engine-mac-mini-m4-2026-10)
+quantify it against the CPU windows.
+
+```bash
+python engines/parakeet/scripts/export-encoder-coreml-ane.py \
+  --gguf engines/parakeet/models/transcribepsy-250m-eu-sub.gguf \
+  --out  engines/parakeet/models/transcribepsy-250m-eu-sub-encoder.mlpackage \
+  --compile-dir engines/parakeet/models --check
+```
+
+The **TDT decoder sidecar** runs the prediction LSTM and the joint for 16
+independent decoder states (`--lanes`) per dispatch; the prediction network is
+memory-bandwidth bound, so one weight read serves every lane. The TDT walk and
+the token-embedding lookup stay on the host (a gather is not a Neural Engine
+op). The published model keeps the joint output projection at 6 bits too
+(`--nbits-out 6`); the exporter's default leaves it fp16.
+
+```bash
+python engines/parakeet/scripts/export-decoder-coreml-ane.py \
+  --gguf engines/parakeet/models/transcribepsy-250m-eu-sub.gguf \
+  --out  engines/parakeet/models/transcribepsy-250m-eu-sub-decoder.mlpackage \
+  --compile-dir engines/parakeet/models --nbits-out 6 --check
+```
+
+With the decoder sidecar loaded, `Engine::transcribe*` on a TDT model takes the
+**independent-segment path**: the mel is cut into segments no longer than the
+encoder window, each cut at the quietest mel frame within the last 6 s before
+the cap so the state reset falls in a pause rather than mid-word; every segment
+is encoded in one dispatch and decoded from a fresh prediction state, 16
+segments per decoder dispatch; a segment that emits nothing is re-decoded
+warm-started from the previous segment's state; the texts are joined. The
+output can differ from the sequential decoder's. `EngineResult::segment_plan_ms`
+and `assemble_ms` report the planning and stitching time. The CLI's one-shot
+path keeps the sequential decoder over the windowed encoder output.
+Overrides: `PARAKEET_ANE_BATCH_DECODE=0` keeps the sequential path,
+`PARAKEET_ANE_SEGMENT_MS` and `PARAKEET_ANE_PAUSE_SEARCH_MS` change the cap and
+the pause search, and `PARAKEET_ANE_DECODE_HOST=1` decodes the same segments on
+the host for parity checks. The lane walk's geometry is cross-checked against
+the GGUF at load; a mismatched export is refused with a log line and the
+sequential decoder runs.
+
+A **GGUF without encoder weights**, such as the 17 MB TranscribePsy Core ML
+GGUF, loads only when the encoder sidecar can take the encoder over: it is then
+loaded before weight allocation and the `encoder.*` tensors get no memory.
+Without the sidecar, or on a build without `PARAKEET_COREML=ON`, loading fails
+with a message saying so, and every path that would reach the ggml encoder
+(`--profile`, the memory-fit projection) fails instead of running. The same
+sidecars work next to a full GGUF renamed to match them; set
+`PARAKEET_COREML_ONLY=1` so the ggml copy of the encoder weights, which the
+Neural Engine path never reads, is not loaded.
+
 ## Core ML family routing
 
 | Family | Contract | Inputs the sidecar does not take |
 |---|---|---|
 | CTC (English, IndicConformer), Unified RNN-T, TDT 0.6B-v3 / 1.1B | fixed capacity: shorter inputs are zero-padded to the compiled shape, longer offline inputs are split into overlapping windows | Unified RNN-T cache-aware streaming runs on ggml |
+| TDT with a fixed-window Neural Engine encoder (TranscribePsy) | fixed window with padding masks: shorter inputs are padded and masked, longer offline inputs are split into overlapping windows with 16 frames of seam context, or into pause-cut independent segments when the TDT decoder sidecar is present | streaming runs on ggml; the decoder sidecar serves only the engine's offline transcribe path |
 | EOU | exact compiled shape only | every other length, including mismatched streaming windows, runs on ggml; EOU never pads |
 | Nemotron | exact compiled shape only | longer offline inputs and streaming take the cache-aware ggml path |
 | Sortformer v2.1 (`sortformer-streaming-v2.1-aosc`) | exact-shape batch sidecar plus a masked AOSC sidecar | batch inputs of any other length, and AOSC slabs above the masked capacity, run on ggml |

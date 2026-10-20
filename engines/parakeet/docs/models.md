@@ -14,6 +14,54 @@ dependencies before running its converter.
 | Nemotron 3.5 ASR | `convert-nemo-to-gguf.py` with explicit `--hf-repo nvidia/nemotron-3.5-asr-streaming-0.6b` and checkpoint/output paths | Converted ASR GGUF |
 | Nemotron 3 Diarization | `engines/parakeet/scripts/download_nemotron_diarization.py` | Official pinned Q8_0 GGUF; optional source conversion is separate |
 | MOSS-Transcribe-Diarize | Download the [Hugging Face checkpoint](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize), then [convert-moss-transcribe-to-gguf.py](moss-transcribe.md#convert) | Separate MOSS GGUF, API and CLI |
+| TranscribePsy-250M-EU-sub | `engines/parakeet/scripts/download-all-models.sh transcribepsy` | Published q8_0 GGUF; on Apple, the encoder-less GGUF with its Neural Engine encoder and decoder sidecars |
+
+### TranscribePsy
+
+[TranscribePsy-250M-EU-sub](https://huggingface.co/qvac/TranscribePsy-250M-EU-sub)
+is a 254M FastConformer-TDT distilled from Parakeet-TDT-0.6B-v3 for Dutch,
+English, French, German, Italian, Polish, Portuguese and Spanish. It is
+published ready to run, so there is nothing to convert; the engine recognises
+it and transcribes long recordings with the 60 s / 25 % windows the research
+team validated unless the caller asks for a window (a re-export can state the
+window itself with the converter's `--long-form-window-sec 60
+--long-form-overlap 0.25`):
+
+```bash
+engines/parakeet/scripts/download-all-models.sh transcribepsy
+
+build-parakeet/parakeet \
+  --model engines/parakeet/models/transcribepsy-250m-eu-sub.gguf \
+  --wav engines/parakeet/test/samples/jfk.wav --threads 6
+```
+
+The selector also downloads the Core ML distribution: a 17 MB GGUF that holds
+the vocabulary, the mel filterbank, the decoder weights and the configuration
+but no encoder weights, plus `transcribepsy-250m-eu-sub-coreml-encoder.mlmodelc`
+and `transcribepsy-250m-eu-sub-coreml-decoder.mlmodelc`. The three stay in one
+directory under these names; the engine finds the sidecars next to the GGUF.
+That GGUF loads only on an Apple build with `PARAKEET_COREML=ON` and its encoder
+sidecar present; anywhere else it fails with a message saying so. See
+[Neural Engine sidecars](backends.md#neural-engine-fixed-window-encoder-and-tdt-decoder-sidecars).
+
+The published GGUF is a direct conversion of the NeMo checkpoint, reproduced
+byte for byte with `--description`, which replaces the converter's default
+`general.description` text:
+
+```bash
+hf download qvac/TranscribePsy-250M-EU-sub TranscribePsy-250M-EU-sub.nemo \
+  --local-dir engines/parakeet/models
+python engines/parakeet/scripts/convert-nemo-to-gguf.py \
+  --ckpt engines/parakeet/models/TranscribePsy-250M-EU-sub.nemo \
+  --out  engines/parakeet/models/transcribepsy-250m-eu-sub.gguf --quant q8_0 \
+  --description "TranscribePsy-250M-EU-sub, FastConformer-TDT speech recognition"
+```
+
+The converter reads the TDT durations from `model_defaults`, as NeMo's released
+checkpoints keep them, or from `loss.tdt_kwargs` / `decoding`, where some
+training configs keep them instead. The Core ML models are exported from the
+GGUF with the Neural Engine exporters described in
+[backends.md](backends.md#neural-engine-fixed-window-encoder-and-tdt-decoder-sidecars).
 
 ### Nemotron 3.5 ASR conversion
 
@@ -171,6 +219,7 @@ parity; see the [checkpoint table](../README.md#supported-checkpoints),
 | `nvidia/parakeet-unified-en-0.6b` | `q8_0` |
 | `nvidia/parakeet-tdt-0.6b-v3` | `f32`, `f16`, `q8_0`, `q5_0`, `q4_0` |
 | `nvidia/parakeet-tdt-1.1b` | `f16`, `q8_0` |
+| `qvac/TranscribePsy-250M-EU-sub` | published `q8_0` GGUF; encoder-less GGUF with 6-bit palettized Core ML encoder and decoder |
 | `nvidia/nemotron-3.5-asr-streaming-0.6b` | `f16` |
 | `OpenMOSS-Team/MOSS-Transcribe-Diarize` | `f16`, `q8_0`, `q5_0`; converter also writes `f32`, `bf16` |
 | `nvidia/parakeet_realtime_eou_120m-v1` | `f16`, `q8_0` |

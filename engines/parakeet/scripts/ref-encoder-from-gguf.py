@@ -2,7 +2,9 @@
 """Pure-PyTorch FastConformer encoder with weights loaded from a parakeet GGUF.
 
 Compare tensor outputs to ``dump-ctc-reference.py`` artifacts to validate GGUF layout
-and the forward pass against NeMo references.
+and the forward pass against NeMo references. The Core ML exporters import this
+module as their reference encoder; it reads f32, f16 and q8_0/q5_0/q4_0 tensors
+and both conv-module norms (batch_norm and layer_norm).
 
 Usage:
 
@@ -214,9 +216,17 @@ def conformer_conv(x, W, prefix):
                    padding=(W[f"{prefix}.dw.weight"].size(-1) - 1) // 2,
                    groups=C)
 
-    scale = W[f"{prefix}.bn.scale"].view(1, -1, 1)
-    shift = W[f"{prefix}.bn.shift"].view(1, -1, 1)
-    x_t = x_t * scale + shift
+    if f"{prefix}.norm.weight" in W:
+        # conv_norm_type=layer_norm (TranscribePsy): NeMo normalises over the
+        # channel axis; layer_norm() reduces the last dim, so hand it the
+        # (B, T, C) orientation and come back.
+        x_t = layer_norm(x_t.transpose(1, 2),
+                         W[f"{prefix}.norm.weight"],
+                         W[f"{prefix}.norm.bias"]).transpose(1, 2)
+    else:
+        scale = W[f"{prefix}.bn.scale"].view(1, -1, 1)
+        shift = W[f"{prefix}.bn.shift"].view(1, -1, 1)
+        x_t = x_t * scale + shift
 
     x_t = F.silu(x_t)
     x_t = F.conv1d(x_t,

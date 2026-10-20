@@ -52,10 +52,42 @@ the NeMo `token_ids.npy` dump are available. It requires bit-exact token IDs
 between the reference and the current shared RNN-T/TDT decoder.
 
 Model-free logic tests (`-L unit`) cover the CTC language mask, mel FFT
-parity and per-feature CMVN, RNN-T graph construction, long-form window
-planning, Sortformer finalization and probability thresholding, the
-streaming energy VAD, the SentencePiece detokenizer, and the NeMo
-converter (Python).
+parity, the blocked STFT's independence from its block size, a reused
+`MelState` or `IncrementalMelState` following tables that changed at the same
+address, per-feature CMVN, the fixed-window Core ML export's valid lengths for
+a slab with zeroed trailing padding, RNN-T graph construction, long-form window planning and the CLI's
+`--window-sec` / `--overlap` conversions, the pause-cut segment planner and
+the batched TDT lane walk behind the Core ML decoder sidecar (driven by a
+scripted stepper), Sortformer finalization and probability thresholding, the
+streaming energy VAD, the SentencePiece detokenizer, the NeMo converter and
+the Neural Engine Core ML exporters (Python).
+
+`test-transcribepsy` (`-L fixture`) runs when
+`models/transcribepsy-250m-eu-sub.gguf` is staged
+(`scripts/download-all-models.sh transcribepsy`): it checks the published
+GGUF's transcript of `jfk.wav`, `transcribe_mel` parity with `transcribe`
+including a mel computed on a worker thread, the rejection of a
+`PrecomputedMel` whose buffer does not match its declared shape, the
+60 s / 25 % long-form windows against the single pass, and a 187 s pause-free
+English recording (`jfk.wav` and `sample-16k.wav` six times) held to one
+percent word error with the default options and with the 60 s / 25 % windows.
+`test-transcribepsy-gpu` (`-L gpu`) runs the same binary with
+`--n-gpu-layers 999` on the GPU backend of the build, and on a Core ML build
+`test-transcribepsy-coreml` (`-L coreml`) runs it on the encoder-less Core ML
+GGUF with its sidecars, so every backend meets the same accuracy bar. Two more fixture tests
+use the same GGUF: `test-encoder-graph-cache` fills the ggml encoder graph
+cache with several shapes, lowers the limit and checks the eviction, then
+checks that a windowed pass holds one graph and restores the limit on both a
+complete and a cancelled run; `test-tdt-cpu-copies` builds the CPU-resident
+decoder weight copies an OpenCL load makes and checks them byte for byte
+against the originals on the CPU backend; `test-coreml-encoder-owner-reject` checks that
+the encoder-less Core ML GGUF (`transcribepsy-250m-eu-sub-coreml.gguf`) is
+refused with a clear error when no sidecar can take the encoder over, and on
+a Core ML build with the `-encoder.mlmodelc` sidecar staged
+`test-coreml-encoder-owner` (`-L coreml`) loads it, runs the encoder,
+checks that a ggml encoder request is refused rather than reading unallocated
+weights, and checks that `PARAKEET_COREML_ONLY=1` skips the encoder weights of
+the full GGUF.
 
 Fixture roots are configurable with `PARAKEET_TEST_MODEL_DIR`,
 `PARAKEET_TEST_AUDIO_DIR`, and `PARAKEET_TEST_REF_DIR`. `test-gpu-vs-cpu`

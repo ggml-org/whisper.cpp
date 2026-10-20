@@ -11,7 +11,25 @@
 // (nullptr / non-zero) rather than aborting so the caller can fall back to the
 // ggml encoder on any error.
 //
-// Export contract (what the mobius `.mlmodelc` must expose so the wrapper binds):
+// Two export shapes bind here, told apart by their input names; the C entry
+// points below are the same for both.
+//
+// Fixed-window Neural Engine export (scripts/export-encoder-coreml-ane.py):
+//   - Three MLMultiArray inputs, all concrete:
+//       `mel`       {1, n_mels, 1, window_mel_frames}
+//       `pad_mask`  {1, 1, 1, enc_frames}          1.0 valid, 0.0 pad
+//       `key_bias`  {1, enc_frames, 1, 1}          0.0 valid, -1e4 pad
+//     plus, on exports that mask every subsampling resolution, a fourth:
+//       `mel_mask`  {1, 1, 1, window_mel_frames}   1.0 valid, 0.0 pad
+//   - One MLMultiArray output {1, d_model, 1, enc_frames}.
+//   The graph only ever sees one window: the wrapper zero-pads a shorter input
+//   to the window and masks the padded encoder frames, and
+//   parakeet_coreml_fixed_mel_frames reports the window so the engine's
+//   long-form plan tiles longer audio across overlapping windows.
+//   parakeet_coreml_seam_context_frames reports the seam context the export
+//   was validated with.
+//
+// Single-input export (scripts/export-encoder-coreml.py, the mobius `.mlmodelc`):
 //   - Exactly one MLMultiArray input  = log-mel features, dims {n_mels, n_mel_frames}
 //     (either order; Float16 or Float32; the wrapper adapts). This is the offline FastConformer encoder
 //     input, i.e. everything from the subsampling stack through the last Conformer
@@ -65,10 +83,22 @@ int64_t parakeet_coreml_fixed_output_rows(
         const struct parakeet_coreml_context * ctx,
         int64_t cols);
 
+// Encoder frames of seam context each long-form window should carry on both
+// sides when the caller has no preference of its own: the fixed-window Neural
+// Engine export was validated with 16 frames (1.28 s at the 80 ms stride),
+// capped at a quarter of its window; PARAKEET_COREML_ANE_CONTEXT_FRAMES
+// overrides it. 0 for every other export, meaning "use the engine default".
+int64_t parakeet_coreml_seam_context_frames(const struct parakeet_coreml_context * ctx);
+
 // Run the encoder on the Apple Neural Engine.
 //
 //   mel           log-mel features, row-major (n_mel_frames, n_mels),
 //                 n_mels contiguous (the layout `compute_log_mel` emits).
+//   n_mel_valid   frames of `mel` that hold audio; the frames from there to
+//                 n_mel_frames are the front-end's zeroed padding and the
+//                 fixed-window export masks them out at every resolution
+//                 (<= 0 or >= n_mel_frames: every frame holds audio). Other
+//                 exports take the whole slab and ignore it.
 //   encoder_out   destination for the encoder hidden states, row-major
 //                 (n_enc_frames, d_model), d_model contiguous. The caller
 //                 sizes it to n_enc_frames * d_model floats.
@@ -81,6 +111,7 @@ int64_t parakeet_coreml_fixed_output_rows(
 // which case the caller falls back to the ggml encoder.
 int parakeet_coreml_encode(struct parakeet_coreml_context * ctx,
                            int64_t       n_mel_frames,
+                           int64_t       n_mel_valid,
                            int64_t       n_mels,
                            const float * mel,
                            int64_t       n_enc_frames,
