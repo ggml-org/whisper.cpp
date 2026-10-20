@@ -888,20 +888,6 @@ void test_fused_attention() {
     std::filesystem::remove(path);
 }
 
-void test_contiguous_attention_heads() {
-    const auto path = write_transcribe_model("transcribe-contiguous", WEIGHT_SEED);
-    TranscribeModel views(path.string(), false, 1);
-    TranscribeModel contiguous(path.string(), false, 1, "auto", false,
-                               TranscribeLayout{0, TranscribeAttention::UnfusedContiguousHeads});
-    check(!views.contiguous_attention_heads() && contiguous.contiguous_attention_heads() &&
-          !contiguous.fused_attention(), "contiguous heads keep the unfused graph");
-    for (int batch : {1, 3, CHUNK_TOKENS + 5}) {
-        check(max_abs_diff(decoded_logits(views, batch), decoded_logits(contiguous, batch)) < LOGIT_TOLERANCE,
-              "contiguous attention heads match the cache views with prefill batch " + std::to_string(batch));
-    }
-    std::filesystem::remove(path);
-}
-
 bool rejects_strided_copy(ggml_backend * backend, const ggml_tensor * copy) {
     return ggml_is_contiguous(copy->src[0]) && ggml_backend_supports_op(backend, copy);
 }
@@ -1074,7 +1060,6 @@ int main() {
         test_locale_independent_numbers();
         test_upload_plan();
         test_cache_copy_materializes_rejected_source();
-        test_contiguous_attention_heads();
         test_head_plan();
         test_split_token_table();
         test_fused_attention();

@@ -276,20 +276,12 @@ struct TranscribeDecoder::Impl {
         return 1.0f / std::sqrt((float) config.head_dim);
     }
 
-    // Adreno OpenCL's batched KQ/KQV kernels compute this grouped-query
-    // attention wrongly from cache views; materialized heads take its
-    // generic kernels. A single query token never reaches those kernels.
-    ggml_tensor * attention_operand(ggml_context * ctx, ggml_tensor * heads, int64_t tokens) const {
-        return model.contiguous_attention_heads() && tokens > 1 ? ggml_cont(ctx, heads) : heads;
-    }
-
     ggml_tensor * attend_unfused(ggml_context * ctx, int layer, ggml_tensor * q, int64_t tokens,
                                  ggml_tensor * mask) const {
         const int64_t total = pos + tokens;
-        ggml_tensor * keys = attention_operand(ctx, cached_heads(ctx, cache_k[(size_t) layer], total), tokens);
-        ggml_tensor * values = attention_operand(ctx, cached_values(ctx, layer, total), tokens);
+        ggml_tensor * keys = cached_heads(ctx, cache_k[(size_t) layer], total);
         ggml_tensor * scores = ggml_soft_max_ext(ctx, ggml_mul_mat(ctx, keys, q), mask, attention_scale(), 0.0f);
-        ggml_tensor * attended = ggml_mul_mat(ctx, values, scores);
+        ggml_tensor * attended = ggml_mul_mat(ctx, cached_values(ctx, layer, total), scores);
         return ggml_cont_2d(ctx, ggml_permute(ctx, attended, 0, 2, 1, 3),
                 (int64_t) config.head_dim * config.n_heads, tokens);
     }

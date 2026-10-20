@@ -285,22 +285,22 @@ engine and the memory projection).
 ## Adreno OpenCL
 
 `--backend opencl` runs the encoder, the adaptor and the decoder on Adreno
-OpenCL with the unfused graph, plus two changes that apply only where the
-backend needs them:
+OpenCL with the unfused graph. It needs ggml-speech 2026-10-19 or later
+(qvac-ext-ggml `speech` at `1bb92ec5`,
+[tetherto/qvac-ext-ggml#126](https://github.com/tetherto/qvac-ext-ggml/pull/126)):
+older builds run attention batches of 32 or more query tokens through
+Adreno matrix kernels that ignore the tails of their 16 by 64 tiles, so on an
+unpadded KV length the prefill logits fall to cosine 0.84 against the
+reference and the transcript is garbage.
 
-- Adreno OpenCL refuses a strided copy source, and the CPU cannot write a cache
-  that lives in the OpenCL buffer. Writing the transposed value cache therefore
-  copies a materialized source there; backends that accept the strided copy
-  keep the single copy.
-- Adreno's batched attention matrix kernels, which run batches of 32 or more
-  query tokens, compute this grouped-query attention (16 query heads over 8
-  key/value heads) wrongly from the cache views: prefill logits fell to cosine
-  0.62-0.86 against the reference and the transcript was garbage. On OpenCL
-  the decoder materializes the key and value heads for every multi-token
-  batch, which routes them to the generic kernels. Single-token decoding never
-  reaches those kernels and keeps the views. Flash attention is also correct
-  there but slower (prefill 939 ms against 514 ms, decoding about 63 ms per
-  token against 13 ms), so OpenCL keeps the unfused graph.
+Adreno OpenCL refuses a strided copy source, and the CPU cannot write a cache
+that lives in the OpenCL buffer. Writing the transposed value cache therefore
+copies a materialized source there; backends that accept the strided copy
+keep the single copy.
+
+Flash attention is also correct on OpenCL but slower (prefill 793 ms against
+479 ms for a 256-token batch, decoding about 63 ms per token against 13 ms),
+so OpenCL keeps the unfused graph.
 
 Parity on a Galaxy S25 (Adreno 830) against the Hugging Face dumps
 (`test-moss-transcribe-parity` with `MOSS_TRANSCRIBE_BACKEND=opencl`), cosine:
@@ -309,7 +309,7 @@ Parity on a Galaxy S25 (Adreno 830) against the Hugging Face dumps
 |---|--:|--:|
 | Encoder states | 0.99834 | 0.99451 |
 | Adaptor output | 0.999993 | 0.99991 |
-| Prefill logits | 1.000000 | 0.99990 |
+| Prefill logits | 1.000000 | 0.99988 |
 | Greedy transcript | exact | exact |
 
 As on the phone's CPU, the encoder states fall below the test's 0.999
@@ -323,14 +323,14 @@ and 160 s clips, one run otherwise); the CPU and HTP0 rows are those of
 | Audio | Model | Backend | Encode | Prefill | Decode | Total | RTF |
 |---|---|---|--:|--:|--:|--:|--:|
 | 27.3 s, 185 tokens | `q8_0` | CPU | 6,617 | 1,896 | 3,161 | 11,674 | 0.428 |
-| | `q8_0` | OpenCL | 2,857 | 757 | 3,552 | 7,167 | 0.263 |
+| | `q8_0` | OpenCL | 2,840 | 721 | 3,515 | 7,076 | 0.259 |
 | | `q8_0` | HTP0 | 354 | 209 | 2,973 | 3,536 | 0.130 |
-| | `f16` | OpenCL | 3,727 | 1,088 | 5,403 | 10,219 | 0.374 |
+| | `f16` | OpenCL | 3,599 | 1,163 | 5,304 | 10,066 | 0.369 |
 | 160.6 s, 943 tokens | `q8_0` | CPU | 60,117 | 17,827 | 34,378 | 112,322 | 0.699 |
-| | `q8_0` | OpenCL | 18,539 | 3,981 | 30,168 | 52,688 | 0.328 |
+| | `q8_0` | OpenCL | 18,169 | 3,595 | 31,204 | 52,969 | 0.330 |
 | | `q8_0` | HTP0 | 2,103 | 943 | 26,306 | 29,352 | 0.183 |
 | 191.2 s, 1,157 tokens | `q8_0` | CPU | 69,752 | 22,453 | 45,576 | 137,781 | 0.721 |
-| | `q8_0` | OpenCL | 21,821 | 4,517 | 41,023 | 67,361 | 0.352 |
+| | `q8_0` | OpenCL | 21,564 | 3,998 | 42,372 | 67,934 | 0.355 |
 | | `q8_0` | HTP0 | 2,465 | 1,109 | 34,156 | 37,729 | 0.197 |
 
 OpenCL is 1.6-2.1x faster than the CPU and HTP0 1.8-2.0x faster than OpenCL.
