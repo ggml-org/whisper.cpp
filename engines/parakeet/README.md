@@ -48,7 +48,11 @@ Nemotron 3 Diarization can also be converted to F16, BF16, Q6_K, Q5_K,
 Q4_K, MXFP4, and NVFP4 with `scripts/convert_nemotron_diarization.py --outtype`.
 F16/BF16 and the K-quants plus NVFP4 pass the CPU/CUDA offline fixture gates;
 MXFP4 fails CPU quality checks. Q4_K cuts model size by 46% on the tested
-checkpoint. See [precision-specific quality and timings](docs/performance.md#nemotron-3-diarization-quantizations),
+checkpoint. Q4_K/Q6_K run as one GPU graph on Metal and Vulkan and pass
+the offline fixtures; their live four-speaker fixture still fails the 15%
+DER gate on both backends. NVFP4 passes offline Vulkan validation but uses
+CPU matmuls on Metal, so it is not recommended for Metal acceleration.
+See [precision-specific quality and timings](docs/performance.md#nemotron-3-diarization-quantizations),
 including streaming limitations and reproduction commands.
 
 Unified RNN-T and Nemotron 3.5 ASR have native cache-aware streaming.

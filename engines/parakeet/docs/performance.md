@@ -236,8 +236,101 @@ disabled at configure time. `PARAKEET_TEST_MODEL_DIR` selects their directory;
 The default six extra formats register 24 offline CPU/GPU tests, all passing
 on the host above. MXFP4 is available for explicit experiments but excluded
 from that default list because it failed. Live failures above remain visible
-and are not relabeled as passing offline gates. Additional-precision Vulkan,
-Metal, mobile, and downstream `qvac/` validation have not been run.
+and are not relabeled as passing offline gates. The follow-up below covers
+Q4_K/Q6_K/NVFP4 on desktop Metal and Vulkan. Additional-precision mobile
+and downstream `qvac/` validation have not been run.
+
+#### Desktop Metal and Vulkan follow-up
+
+Measured on 2026-10-14 from merged speech revision `dc1e7957`, with the
+same ggml revision, converter, and fixtures as above. Model SHA256 hashes
+matched between hosts for Q8_0, Q4_K, Q6_K, and NVFP4. Metal runs on Apple
+M3 Ultra; Vulkan runs on RTX 5090. No engine or kernel changes were needed
+for Q4_K/Q6_K. These measurements extend offline validation, not a claim
+that all precisions are interchangeable for live diarization.
+
+Metal timings use the existing harness: median of five warm offline passes
+and one streaming session on the 27.3 s clip. Peak RSS comes from macOS
+`/usr/bin/time -l` for the entire benchmark process, including loading and
+prewarming; it is not an isolated GPU allocation or a portable VRAM metric.
+NVFP4's row includes CPU fallback and must not be read as Metal acceleration.
+
+| Precision | Metal offline ms | Metal stream ms | Peak process RSS MB | Graph placement |
+|---|---:|---:|---:|---|
+| Q8_0 | 14.79 | 331.11 | 190.84 | 1 Metal split |
+| Q4_K | 15.07 | 326.66 | 136.63 | 1 Metal split |
+| Q6_K | 14.99 | 326.41 | 162.09 | 1 Metal split |
+| NVFP4 | 220.10 | 3687.83 | 155.73 | 252 CPU/Metal splits |
+
+Q4_K lowers observed peak process RSS by about 28% relative to Q8 here,
+while reducing file size by 46%; neither percentage establishes a general
+runtime-memory saving for other input lengths or devices. The pinned
+Metal backend explicitly rejects NVFP4 in its matmul support check
+(`ggml/src/ggml-metal/ggml-metal-device.m`). Scheduler diagnostics confirm
+CPU execution of those weights, so a passing GPU-requested correctness
+test does not demonstrate full GPU placement. Prefer Q4_K/Q6_K for Metal;
+adding NVFP4 Metal kernels would be a separate ggml change.
+
+The initial Vulkan timing sweep encountered substantial host contention
+and is excluded from the timing table. Timings below use three interleaved
+rounds on the second, idle RTX 5090 (`GGML_VK_VISIBLE_DEVICES=1`). Each
+round contains five warm offline passes and one streaming session; report
+the median across rounds and the observed range. The host remained shared,
+so these values support comparable performance, not a precise speedup claim.
+The earlier quality runs used the first RTX 5090. Placement diagnostics
+show one Vulkan GPU split for all four formats, including streaming graphs.
+
+| Precision | Vulkan offline median ms (range) | Vulkan stream median ms (range) |
+|---|---:|---:|
+| Q8_0 | 7.14 (6.42–8.54) | 114.38 (109.49–125.26) |
+| Q4_K | 6.71 (6.18–7.65) | 103.38 (103.03–118.93) |
+| Q6_K | 7.15 (6.62–7.67) | 114.68 (113.69–115.75) |
+| NVFP4 | 7.31 (6.48–7.66) | 117.52 (112.16–121.24) |
+
+DER uses the same RTTM scoring as above; pairs are `abcba` / `abcdba`.
+Metal NVFP4 quality includes its CPU matmuls. The 1040 ms streaming results
+are deliberately reported separately from offline acceptance.
+
+| Precision | Metal offline DER % | Vulkan offline DER % | Metal live DER % | Vulkan live DER % |
+|---|---:|---:|---:|---:|
+| Q8_0 | 3.70 / 4.36 | 3.70 / 4.36 | 13.79 / 12.90 | 4.80 / 17.34 |
+| Q4_K | 3.68 / 4.32 | 3.68 / 4.31 | 6.17 / 18.18 | 5.77 / 17.12 |
+| Q6_K | 3.72 / 4.37 | 3.72 / 4.37 | 5.82 / 18.94 | 5.50 / 15.08 |
+| NVFP4 | 3.63 / 4.26 | 3.63 / 4.26 | 3.96 / 4.32 | 3.97 / 4.53 |
+
+On the short clip, relative L2 differences from each host's CPU output for
+the identical GGUF were Q8 0.00180, Q4_K 0.00255, Q6_K 0.00253, and
+NVFP4 0.00105 for Metal; Vulkan measured 0.00172, 0.00261, 0.00261, and
+0.00110 respectively. Speaker permutations are aligned before comparison.
+These diagnostics do not replace independent reference parity or long-form
+quality testing: small local numeric differences can accompany markedly
+different live speaker-cache outcomes across backends. The root cause of
+the live divergence has not been isolated, and no precision policy or
+streaming algorithm was changed to make these fixtures pass.
+
+Both hosts passed 14 registered regression tests: the official Q8 CPU/GPU
+reference tests plus the two offline RTTM fixtures for Q4_K/Q6_K/NVFP4 on
+CPU and the requested GPU backend. The Metal NVFP4 passes include fallback.
+Q4_K and Q6_K fail the standalone live `abcdba` 15% DER gate on both
+backends; Q8 also fails that gate on Vulkan. Keep Q8 as the default and
+limit the new K-quant recommendation to the validated offline use case.
+
+After generating or copying these models, configure the desired backend
+with the pinned ggml source, then run the existing regression targets:
+
+```bash
+ctest --test-dir build-parakeet --output-on-failure \
+  -R '^test-nemotron-diarization(-gpu|-(q4_k|q6_k|nvfp4)-(abcba|abcdba)-(cpu|gpu))?$'
+GGML_SCHED_DEBUG=1 ./build-parakeet/bench-nemotron-quantization \
+  engines/parakeet/models/Nemotron-3-Diarization.converted.q4_k.gguf \
+  engines/parakeet/test/samples/diarization-sample-16k.wav /tmp/q4-k-probs.bin 99
+```
+
+The second command exposes scheduler splits; use it separately from timing
+runs so logging does not contaminate latency. The live command in the
+previous section reproduces the four-speaker failure. Other Vulkan GPUs,
+other Metal precisions, mobile, broader meeting audio, overlap/eight-speaker
+quality, and downstream QVAC integration remain outside this validation.
 
 ### Nemotron 3 Diarization on long offline inputs
 

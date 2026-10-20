@@ -48,7 +48,9 @@ independent LM, flow and HiFT model overrides for
 
 Nemotron 3 Diarization preparation supports additional weight precisions via
 `convert_nemotron_diarization.py --outtype`. CPU/CUDA offline validation covers
-F16, BF16, Q6_K, Q5_K, Q4_K, and NVFP4; streaming quality varies by precision.
+F16, BF16, Q6_K, Q5_K, Q4_K, and NVFP4. Q4_K/Q6_K also pass offline
+Metal and Vulkan validation; NVFP4 runs on Vulkan but falls back to CPU
+matmuls on Metal. Streaming quality varies by precision and backend.
 See the [quantization measurements](engines/parakeet/docs/performance.md#nemotron-3-diarization-quantizations)
 before selecting a format. MXFP4 failed CPU quality checks.
 
