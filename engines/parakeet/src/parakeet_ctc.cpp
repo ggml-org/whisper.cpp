@@ -1848,6 +1848,13 @@ static std::vector<ggml_backend_buffer_t> alloc_cpu_repack_weights(
     return buffers;
 }
 
+static constexpr const char * kParakeetArchitecture = "parakeet-ctc";
+
+static bool gguf_has_encoder_weights(const gguf_context * g) {
+    return get_str(g, "general.architecture", "") != kParakeetArchitecture ||
+           gguf_find_tensor(g, "encoder.subsampling.conv0.weight") >= 0;
+}
+
 #ifdef PARAKEET_USE_COREML
 static bool path_is_directory(const std::string & path) {
     struct stat st{};
@@ -2387,12 +2394,12 @@ static int load_from_gguf_impl(const std::string & gguf_path,
 
     gguf_context * g = impl->gguf;
 
-    // A GGUF without encoder weights (the Core ML distributions) runs only with
-    // its encoder sidecar, which then has to load before allocation so the
-    // `encoder.*` tensors get no memory. PARAKEET_COREML_ONLY asks for the same
+    // A Parakeet GGUF without encoder weights (the Core ML distributions) runs
+    // only with its encoder sidecar, which then has to load before allocation
+    // so the `encoder.*` tensors get no memory. PARAKEET_COREML_ONLY asks for the same
     // with a full GGUF. The memory-fit projection never loads Core ML, so it
     // cannot project such a model.
-    const bool gguf_has_encoder = gguf_find_tensor(g, "encoder.subsampling.conv0.weight") >= 0;
+    const bool gguf_has_encoder = gguf_has_encoder_weights(g);
 #ifdef PARAKEET_USE_COREML
     if (!measure && coreml_must_own_encoder(gguf_has_encoder)) {
         impl->ctx_coreml = init_coreml_only_encoder(g, gguf_path, verbose);
@@ -2492,8 +2499,8 @@ static int load_from_gguf_impl(const std::string & gguf_path,
             out_model.impl = impl;
             return 0;
         }
-        if (std::strcmp(arch, "parakeet-ctc") != 0) {
-            PARAKEET_LOG_ERROR("gguf: expected arch=parakeet-ctc, got '%s'\n", arch);
+        if (std::strcmp(arch, kParakeetArchitecture) != 0) {
+            PARAKEET_LOG_ERROR("gguf: expected arch=%s, got '%s'\n", kParakeetArchitecture, arch);
             return 2;
         }
     }

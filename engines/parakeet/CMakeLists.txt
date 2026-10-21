@@ -1174,6 +1174,26 @@ if (PARAKEET_BUILD_TESTS)
         ARGS "${PARAKEET_TEST_NEMOTRON_DIARIZATION_GGUF}"
         REQUIRES "${PARAKEET_TEST_NEMOTRON_DIARIZATION_GGUF}")
 
+    add_executable(test-gguf-encoder-weights
+        test/test_gguf_encoder_weights.cpp
+        src/parakeet_ctc.cpp
+        src/parakeet_engine.cpp
+        src/parakeet_nemotron.cpp
+        src/parakeet_unified.cpp
+        src/parakeet_log.cpp
+        src/parakeet_tdt.cpp
+        src/parakeet_eou.cpp
+        src/parakeet_sortformer.cpp
+        src/parakeet_diarization_v3.cpp
+        src/mel_preprocess.cpp
+        src/sentencepiece_bpe.cpp
+        src/energy_vad.cpp)
+    target_link_libraries(test-gguf-encoder-weights PRIVATE ggml parakeet-backend-defs)
+    target_include_directories(test-gguf-encoder-weights PRIVATE src include ggml/include)
+    parakeet_apply_backend_defs(test-gguf-encoder-weights)
+    parakeet_apply_ccache(test-gguf-encoder-weights)
+    parakeet_register_test(test-gguf-encoder-weights LABEL "cpu")
+
     add_executable(bench-nemotron-quantization test/bench_nemotron_quantization.cpp)
     target_link_libraries(bench-nemotron-quantization PRIVATE qvac-parakeet)
     parakeet_apply_ccache(bench-nemotron-quantization)
