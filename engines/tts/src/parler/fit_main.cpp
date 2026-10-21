@@ -43,6 +43,7 @@ void print_usage(const char * argv0) {
         "  --backend NAME           auto | cpu | opencl | hexagon | exact ggml device\n"
         "                           name, as EngineOptions::backend (no fallback)\n"
         "  --margin-mib MIB         free-memory headroom to require (default 256)\n"
+        "  --coreml-decoder         account for the optional Core ML decoder (cannot project)\n"
         "  --backends-dir DIR       directory scanned for dynamically-loaded ggml backends\n"
         "  --json                   emit the projection as JSON on stdout\n"
         "  --help                   this text\n",
@@ -123,6 +124,8 @@ extern "C" int parler_fit_cli_main(int argc, char ** argv) {
             opts.backend = argv[++i];
         } else if (a == "--backends-dir" && i + 1 < argc) {
             opts.backends_dir = argv[++i];
+        } else if (a == "--coreml-decoder") {
+            opts.coreml_decoder = true;
         } else if (a == "--json") {
             json = true;
         } else {

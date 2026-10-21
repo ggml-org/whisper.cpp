@@ -29,12 +29,13 @@ Explicit Hexagon placement is supported for [Supertonic 3](supertonic.md#snapdra
 
 ## Apple Core ML sidecars
 
-`TTS_CPP_COREML=ON` enables optional Supertonic vocoder, Audio8 codec and
-MOSS sidecars on Apple. Their guides own naming, export commands, accepted
+`TTS_CPP_COREML=ON` enables optional Supertonic vocoder, Audio8 codec,
+Parler-TTS DAC and MOSS sidecars on Apple. Their guides own naming, export commands, accepted
 shapes, low-bit restrictions, placement and runtime status:
 
 - [Supertonic vocoder](supertonic.md#core-ml-vocoder-sidecar)
 - [Audio8 codec](audio8.md#core-ml-codec-sidecar)
+- [Parler-TTS DAC decoder](parler.md#core-ml-dac-sidecar-apple-neural-engine)
 - [MOSS-TTS / MOSS-TTSD codec decoder](moss.md#core-ml-codec-decoder)
 - [MOSS-SoundEffect DiT and VAE](moss.md#core-ml-dit-and-vae)
 - [MOSS-Speech speech tokenizer](moss.md#core-ml-speech-tokenizer)

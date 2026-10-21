@@ -6,6 +6,7 @@
 #include "ggml-backend.h"
 #include "sched_dispatch.h"
 #include "../cosyvoice_mmap.h"
+#include "dac_coreml.h"
 
 #include <cstdint>
 #include <string>
@@ -29,6 +30,7 @@ constexpr unsigned PARLER_DEFAULT_THREADS = 4;
 constexpr int PARLER_DAC_WINDOW_FRAMES = 128;
 
 struct parler_hparams {
+    std::string variant;  // optional checkpoint family, used to validate sidecars
     // t5 encoder
     int   t5_n_layer      = 0;
     int   t5_d_model      = 0;
@@ -169,6 +171,11 @@ struct parler_model {
     // process instead of a fresh large allocation per decode (streaming makes one
     // call per chunk). Created on first decode; freed by parler_free_model.
     mutable ggml_gallocr_t dac_allocr = nullptr;
+    // Core ML DAC sidecar (dac_coreml.h) and the host quantizer it decodes
+    // from; null on ggml. Mutable: a failing sidecar is retired mid-decode.
+    mutable std::shared_ptr<parler_dac_sidecar> dac_sidecar;
+    mutable bool dac_sidecar_retired = false;  // a failure retired it (STRICT keeps failing)
+    parler_dac_rvq dac_rvq;
 
     // decoder self-attention KV cache (token-major slab, one per K/V):
     // [d_model, n_ctx] rows per layer, stacked layer-major.
@@ -408,13 +415,18 @@ ggml_cgraph * parler_build_dac_fit_graph(const parler_model & model, int n_frame
 // is bit-identical to decoding the whole sequence and slicing.
 // latent_out (optional, tests): summed RVQ latent for the same frame range,
 // [latent_dim, T] ggml layout (element (c, t) at t*latent_dim + c).
+// With a Core ML sidecar attached (model.dac_sidecar) the windows run on it;
+// a failing sidecar is retired and the whole range is redone on ggml, unless
+// PARLER_COREML_STRICT is set, which fails the call instead. backend_out
+// (optional) receives where the range ran: "ggml" or the sidecar's label.
 bool parler_dac_decode(const parler_model & model,
                        const int32_t * codes, int n_frames,
                        int n_threads,
                        std::vector<float> & pcm_out,
                        std::vector<float> * latent_out = nullptr,
                        int out_begin = 0, int out_end = -1,
-                       std::string * err_out = nullptr);
+                       std::string * err_out = nullptr,
+                       std::string * backend_out = nullptr);
 
 } // namespace detail
 } // namespace parler

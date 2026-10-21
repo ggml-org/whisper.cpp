@@ -1,0 +1,242 @@
+{
+  "schema": 1,
+  "date": "2026-10-20",
+  "source_head": "47a5a62846e4a7fe51e443333dab7a412f87efaa",
+  "decision": "NOT_ADOPTED_NO_ELIGIBLE_GAIN",
+  "scope": "External decoder-only public MLOptimizationHints.specializationStrategy=FastPrediction test. Production code, model weights, precision, units and defaults unchanged.",
+  "machine": "Apple M2, macOS 15; AC power, low-power mode disabled; shared desktop",
+  "artifact_root": "/Users/ogad/tether/models/parler/fast-prediction-hint-20261020",
+  "arms": {
+    "original": "Frozen whole-output2-r2 archive; native control only.",
+    "A": "Rebuilt default decoder_coreml.mm (MODE0), explicit object before same frozen archive.",
+    "B": "Same MM source with seven-line FastPrediction/setup-log block (MODE1), explicit object before same archive."
+  },
+  "build_control": {
+    "same_harness_object_per_experiment": true,
+    "strong_MM_module_symbols_owned": 18,
+    "archive_MM_absent_in_overrides": true,
+    "same_remaining_archive_members": true,
+    "native_original_vs_MODE0_byte_exact": true,
+    "historical_compiler_flags_continuity": "UNCONFIRMED; current per-file ARC flags captured. Native controls establish observed numerical continuity, not historical flag identity.",
+    "FAST_configuration_evidence": "Object class/format reference and exactly one requested=1/config-getter=1 setup marker per process; controls have none. Not a physical placement/effect proof."
+  },
+  "identities": {
+    "gguf_sha256": "4c37839de6daff9d596693d2e50f003bc61928c8d8370a4695232930567dc969",
+    "decoder_canonical_package_sha256": "223d7a11b5e583b62254349c9590647aa2f109b5950887029ad6ff3c15eb96f5",
+    "fixture_manifest_sha256": "109e84bab050d4a994aa1cfb71c0ef799f3f997104a97e32ffa4a76d1720d17d",
+    "before_after_pins": "PASS archive/GGUF/decoder/DAC/five ggml dylibs/source/adapter/replay/fixture/compiler/SDK/actual headers and own objects/binaries/maps"
+  },
+  "native_parity": {
+    "result": "native-run-r1/RESULT.json",
+    "status": "PASS_NATIVE_ONLY",
+    "arms": 3,
+    "cases_per_arm": 2,
+    "inputs_per_case": 200,
+    "reset_repeats": 2,
+    "rows_per_arm": 800,
+    "successful_native_calls_per_arm_inferred": 796,
+    "all_float32_logits_bytes_equal": true,
+    "actual_repeats_deterministic": true,
+    "coverage_scope": "200 inputs = 1 host-prefill + 199 native calls. Count inferred from exact loop, successful strict API returns and per-call active checks; no profiler counter. Case-end labels overwrite repeats.",
+    "strict_enforcement": "Frozen bridge attaches strict=true; adapter coreml_strict identity alone is not an environment observation.",
+    "not_established": [
+      "Universal speech quality",
+      "Sampled raw float PCM or generated code parity for this hint",
+      "HF-relative quality improvement"
+    ]
+  },
+  "timing_protocol": {
+    "result": "timing-run-r2/RESULT.json",
+    "summary": "timing-run-r2/SUMMARY.json",
+    "text": "Hello.",
+    "host": "CPU",
+    "threads": 4,
+    "n_gpu_layers": 0,
+    "decoder_and_DAC_labels": "coreml-ane",
+    "compute_units_policy": "cpu_and_ane",
+    "strict": true,
+    "greedy": true,
+    "seed": 42,
+    "min_new_tokens": 500,
+    "max_frames": 500,
+    "steps_per_run": 498,
+    "order": "ABBAABBA",
+    "invocations": 8,
+    "warmup_each": 1,
+    "measured_each": 3,
+    "profile": false,
+    "pass_rule": "TOTAL candidate mean <=0.95*MODE0 in both sets and aggregate, decode mean lower both sets and aggregate; MODE0 max/min invocation TOTAL drift <=5%, else inconclusive.",
+    "fixed_work_scope": "Stage TOTAL excludes model loading and WAV/JSON I/O, includes T5/prefill/decode/sampling/DAC. EOS-suppressed fixed work is not natural speech latency.",
+    "precision": "Frozen bench stage JSON emits six significant digits; stderr per-run total0.1ms/audio0.01s/RTF0.001. Derived means/ratios use those emitted rounded values; no original fullprecision claim.",
+    "all_records_retained": true,
+    "no_performance_reruns_or_discarded_records": true
+  },
+  "sets": [
+    {
+      "set": 1,
+      "total": {
+        "A_mean_ms_from_emitted": 4914.385,
+        "B_mean_ms_from_emitted": 4921.125,
+        "gain_percent_derived": -0.137,
+        "total_at_least5pct": false,
+        "candidate_lower": false
+      },
+      "decode_loop": {
+        "A_mean_ms_from_emitted": 4200.465,
+        "B_mean_ms_from_emitted": 4195.79,
+        "gain_percent_derived": 0.111,
+        "total_at_least5pct": false,
+        "candidate_lower": true
+      }
+    },
+    {
+      "set": 2,
+      "total": {
+        "A_mean_ms_from_emitted": 4900.62,
+        "B_mean_ms_from_emitted": 4915.42,
+        "gain_percent_derived": -0.302,
+        "total_at_least5pct": false,
+        "candidate_lower": false
+      },
+      "decode_loop": {
+        "A_mean_ms_from_emitted": 4189.02,
+        "B_mean_ms_from_emitted": 4201.74,
+        "gain_percent_derived": -0.304,
+        "total_at_least5pct": false,
+        "candidate_lower": false
+      }
+    }
+  ],
+  "pooled": {
+    "total": {
+      "A_mean_ms_from_emitted": 4907.5025,
+      "B_mean_ms_from_emitted": 4918.2725,
+      "gain_percent_derived": -0.219,
+      "total_at_least5pct": false,
+      "candidate_lower": false
+    },
+    "decode_loop": {
+      "A_mean_ms_from_emitted": 4194.7425,
+      "B_mean_ms_from_emitted": 4198.765,
+      "gain_percent_derived": -0.096,
+      "total_at_least5pct": false,
+      "candidate_lower": false
+    }
+  },
+  "baseline_total_drift_percent": 0.413,
+  "baseline_drift_gate_pass": true,
+  "timing_status": "NO_ELIGIBLE_GAIN",
+  "invocations": [
+    {
+      "index": 1,
+      "arm": "A",
+      "total_mean_ms": 4914.67,
+      "decode_mean_ms": 4198.05,
+      "process_resources": {
+        "maximum_resident_set_size_bytes_macos": 1157791744,
+        "bench_process_real_s_emitted": 48.76,
+        "scope": "time-l raw stderr retained; real includes load/warmup/3measured/WAV+JSON I/O, no isolated coldload/firstrequest inference"
+      },
+      "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+    },
+    {
+      "index": 2,
+      "arm": "B",
+      "total_mean_ms": 4937.22,
+      "decode_mean_ms": 4197.31,
+      "process_resources": {
+        "maximum_resident_set_size_bytes_macos": 1143996416,
+        "bench_process_real_s_emitted": 38.48,
+        "scope": "time-l raw stderr retained; real includes load/warmup/3measured/WAV+JSON I/O, no isolated coldload/firstrequest inference"
+      },
+      "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+    },
+    {
+      "index": 3,
+      "arm": "B",
+      "total_mean_ms": 4905.03,
+      "decode_mean_ms": 4194.27,
+      "process_resources": {
+        "maximum_resident_set_size_bytes_macos": 1122418688,
+        "bench_process_real_s_emitted": 19.92,
+        "scope": "time-l raw stderr retained; real includes load/warmup/3measured/WAV+JSON I/O, no isolated coldload/firstrequest inference"
+      },
+      "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+    },
+    {
+      "index": 4,
+      "arm": "A",
+      "total_mean_ms": 4914.1,
+      "decode_mean_ms": 4202.88,
+      "process_resources": {
+        "maximum_resident_set_size_bytes_macos": 1119633408,
+        "bench_process_real_s_emitted": 19.91,
+        "scope": "time-l raw stderr retained; real includes load/warmup/3measured/WAV+JSON I/O, no isolated coldload/firstrequest inference"
+      },
+      "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+    },
+    {
+      "index": 5,
+      "arm": "A",
+      "total_mean_ms": 4906.77,
+      "decode_mean_ms": 4194.68,
+      "process_resources": {
+        "maximum_resident_set_size_bytes_macos": 1119453184,
+        "bench_process_real_s_emitted": 19.87,
+        "scope": "time-l raw stderr retained; real includes load/warmup/3measured/WAV+JSON I/O, no isolated coldload/firstrequest inference"
+      },
+      "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+    },
+    {
+      "index": 6,
+      "arm": "B",
+      "total_mean_ms": 4919.94,
+      "decode_mean_ms": 4201.95,
+      "process_resources": {
+        "maximum_resident_set_size_bytes_macos": 1120649216,
+        "bench_process_real_s_emitted": 19.96,
+        "scope": "time-l raw stderr retained; real includes load/warmup/3measured/WAV+JSON I/O, no isolated coldload/firstrequest inference"
+      },
+      "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+    },
+    {
+      "index": 7,
+      "arm": "B",
+      "total_mean_ms": 4910.9,
+      "decode_mean_ms": 4201.53,
+      "process_resources": {
+        "maximum_resident_set_size_bytes_macos": 1122762752,
+        "bench_process_real_s_emitted": 19.93,
+        "scope": "time-l raw stderr retained; real includes load/warmup/3measured/WAV+JSON I/O, no isolated coldload/firstrequest inference"
+      },
+      "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+    },
+    {
+      "index": 8,
+      "arm": "A",
+      "total_mean_ms": 4894.47,
+      "decode_mean_ms": 4183.36,
+      "process_resources": {
+        "maximum_resident_set_size_bytes_macos": 1128497152,
+        "bench_process_real_s_emitted": 19.9,
+        "scope": "time-l raw stderr retained; real includes load/warmup/3measured/WAV+JSON I/O, no isolated coldload/firstrequest inference"
+      },
+      "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+    }
+  ],
+  "limitations": [
+    "One prompt on one M2; no general zero-effect, hardware ceiling or 2x claim.",
+    "Byte-exact native logits are bounded to the tested teacher histories and resets. All final WAV/PCM16 hashes match, a diagnostic rather than sampled raw-float speech proof.",
+    "time-l process elapsed and cumulative peak RSS include loading, warmup, measured calls and file I/O. No caches deleted; first observed processes are not genuine cold-load or isolated first-request measurements.",
+    "CPU_AND_NE is a compute-unit policy, not physical ANE-only execution proof.",
+    "Original timing attempt stopped before model load/inference because --greedy is unsupported; no samples. Retry omitted it (greedy is default) and excluded only the numeric time-l instructions-retired line from runtime failure matching. All failed artifacts remain retained.",
+    "No observer, new trace, sampled Engine audio, HF or ASR evaluation was run for this hint."
+  ],
+  "supporting_evidence": {
+    "native_build_and_pins": "native-launch-r1/HANDOFF.json; native-run-r1/object-audit.raw.json; native-run-r1/link-audit.raw.json; native-run-r1/input-postinfer.raw.json; native-run-r1/output-postinfer.raw.json",
+    "configuration_source": "source-r4/source.patch; source-r4/provenance/current-observed-coreml.flags.make",
+    "power_and_OS": "timing-run-r2/before-power.txt; timing-run-r2/before-settings.txt; timing-run-r2/before-os.txt (same after-* files retained)",
+    "premetric_failure": "timing-run-r1/STOP.json; timing-run-r1/commands/016-bench-01-A/stderr.log",
+    "retry_hunks_and_tests": "timing-source-r2/EXACT_FUNCTIONAL_R2.patch; timing-source-r2/PREP_RECEIPT_R2.json"
+  }
+}

@@ -1,0 +1,204 @@
+{
+  "schema": 1,
+  "date": "2026-10-21",
+  "decision": "USER_ACCEPTED_QKV_FOR_TESTED_MINI_CPU_AND_ANE_PROFILE",
+  "authorization": "User: 1.77% is good, can we go with that?",
+  "threshold_policy": "The user accepts the smaller measured benefit. The original experiment remains NO_ELIGIBLE_GAIN under its predeclared5%cutoff; no timing result or tiny CPU failure is relabeled.",
+  "scope": "Opt-in package optimization, selected local deployment; no runtime API/default or model precision changes.",
+  "performance": {
+    "record": "parler-coreml-followup-experiments-20261021.json",
+    "total_gain_percent_pooled": 1.77,
+    "decode_gain_percent_pooled": 1.924,
+    "total_gain_percent_by_set": [
+      1.302,
+      2.243
+    ],
+    "baseline_drift_percent": 1.482,
+    "workload": "Hello., fixed498steps, two ABBA sets, CPUhost4/strictCPU_AND_NE decoder andDAC, warm1+runs3 eachprocess. Not a natural-speech/cold-load measurement.",
+    "uncertainty": "Modest observed within-experiment improvement on M2; not a guaranteed gain on other hardware or a2x result."
+  },
+  "sampled_quality": {
+    "result": "/Users/ogad/tether/models/parler/qkv-fusion-20261020/adoption-sampled-run-r1/RESULT.json",
+    "handoff": "/Users/ogad/tether/models/parler/qkv-fusion-20261020/adoption-sampled-launch-r1/HANDOFF.json",
+    "status": "PASS_SAMPLED_PUBLIC_ENGINE_RAWFLOAT_PCM",
+    "pairs": [
+      {
+        "seed": 1,
+        "case": "case0",
+        "raw_float_PCM_bytes_exact": true,
+        "sample_count_equal": true,
+        "sample_rate_equal": true,
+        "duration_exact_ratio_equal": true,
+        "actual_end_backend_labels_equal": true,
+        "baseline_pcm_sha256": "82bea1dc50bacc82c974bb9a4331be5854c9c461ccc9c018026801a8248050a0",
+        "candidate_pcm_sha256": "82bea1dc50bacc82c974bb9a4331be5854c9c461ccc9c018026801a8248050a0",
+        "samples": 81920,
+        "sample_rate": 44100,
+        "baseline_raw_path": "/Users/ogad/tether/models/parler/qkv-fusion-20261020/adoption-sampled-run-r1/seed1-case0-baseline/repeat0.pcm.f32",
+        "candidate_raw_path": "/Users/ogad/tether/models/parler/qkv-fusion-20261020/adoption-sampled-run-r1/seed1-case0-candidate/repeat0.pcm.f32"
+      },
+      {
+        "seed": 1,
+        "case": "case1",
+        "raw_float_PCM_bytes_exact": true,
+        "sample_count_equal": true,
+        "sample_rate_equal": true,
+        "duration_exact_ratio_equal": true,
+        "actual_end_backend_labels_equal": true,
+        "baseline_pcm_sha256": "1a8a082523ea34eeb07a369addc6cbb12f88d8910e339614ac726b9b6f737343",
+        "candidate_pcm_sha256": "1a8a082523ea34eeb07a369addc6cbb12f88d8910e339614ac726b9b6f737343",
+        "samples": 225792,
+        "sample_rate": 44100,
+        "baseline_raw_path": "/Users/ogad/tether/models/parler/qkv-fusion-20261020/adoption-sampled-run-r1/seed1-case1-baseline/repeat0.pcm.f32",
+        "candidate_raw_path": "/Users/ogad/tether/models/parler/qkv-fusion-20261020/adoption-sampled-run-r1/seed1-case1-candidate/repeat0.pcm.f32"
+      },
+      {
+        "seed": 42,
+        "case": "case0",
+        "raw_float_PCM_bytes_exact": true,
+        "sample_count_equal": true,
+        "sample_rate_equal": true,
+        "duration_exact_ratio_equal": true,
+        "actual_end_backend_labels_equal": true,
+        "baseline_pcm_sha256": "d974ff47a4da385ed34e5ff6b8695802a29ac820ec7bb4c23f14db0a2442a461",
+        "candidate_pcm_sha256": "d974ff47a4da385ed34e5ff6b8695802a29ac820ec7bb4c23f14db0a2442a461",
+        "samples": 76800,
+        "sample_rate": 44100,
+        "baseline_raw_path": "/Users/ogad/tether/models/parler/qkv-fusion-20261020/adoption-sampled-run-r1/seed42-case0-baseline/repeat0.pcm.f32",
+        "candidate_raw_path": "/Users/ogad/tether/models/parler/qkv-fusion-20261020/adoption-sampled-run-r1/seed42-case0-candidate/repeat0.pcm.f32"
+      },
+      {
+        "seed": 42,
+        "case": "case1",
+        "raw_float_PCM_bytes_exact": true,
+        "sample_count_equal": true,
+        "sample_rate_equal": true,
+        "duration_exact_ratio_equal": true,
+        "actual_end_backend_labels_equal": true,
+        "baseline_pcm_sha256": "43819722f7ce1ddf3595e5433480bff9b003e5b3daebcb087754b20a37ab8b2e",
+        "candidate_pcm_sha256": "43819722f7ce1ddf3595e5433480bff9b003e5b3daebcb087754b20a37ab8b2e",
+        "samples": 217600,
+        "sample_rate": 44100,
+        "baseline_raw_path": "/Users/ogad/tether/models/parler/qkv-fusion-20261020/adoption-sampled-run-r1/seed42-case1-baseline/repeat0.pcm.f32",
+        "candidate_raw_path": "/Users/ogad/tether/models/parler/qkv-fusion-20261020/adoption-sampled-run-r1/seed42-case1-candidate/repeat0.pcm.f32"
+      },
+      {
+        "seed": 777,
+        "case": "case0",
+        "raw_float_PCM_bytes_exact": true,
+        "sample_count_equal": true,
+        "sample_rate_equal": true,
+        "duration_exact_ratio_equal": true,
+        "actual_end_backend_labels_equal": true,
+        "baseline_pcm_sha256": "565784692e4598bf2e68320e8fb6769f4706dbf033f0a23e302104eb1784c9e7",
+        "candidate_pcm_sha256": "565784692e4598bf2e68320e8fb6769f4706dbf033f0a23e302104eb1784c9e7",
+        "samples": 80384,
+        "sample_rate": 44100,
+        "baseline_raw_path": "/Users/ogad/tether/models/parler/qkv-fusion-20261020/adoption-sampled-run-r1/seed777-case0-baseline/repeat0.pcm.f32",
+        "candidate_raw_path": "/Users/ogad/tether/models/parler/qkv-fusion-20261020/adoption-sampled-run-r1/seed777-case0-candidate/repeat0.pcm.f32"
+      },
+      {
+        "seed": 777,
+        "case": "case1",
+        "raw_float_PCM_bytes_exact": true,
+        "sample_count_equal": true,
+        "sample_rate_equal": true,
+        "duration_exact_ratio_equal": true,
+        "actual_end_backend_labels_equal": true,
+        "baseline_pcm_sha256": "35de193b37af1667d150890560e131fa299871a5cd54a02442b58d8db8ceef14",
+        "candidate_pcm_sha256": "35de193b37af1667d150890560e131fa299871a5cd54a02442b58d8db8ceef14",
+        "samples": 144384,
+        "sample_rate": 44100,
+        "baseline_raw_path": "/Users/ogad/tether/models/parler/qkv-fusion-20261020/adoption-sampled-run-r1/seed777-case1-baseline/repeat0.pcm.f32",
+        "candidate_raw_path": "/Users/ogad/tether/models/parler/qkv-fusion-20261020/adoption-sampled-run-r1/seed777-case1-candidate/repeat0.pcm.f32"
+      }
+    ],
+    "syntheses": 12,
+    "settings": {
+      "temperature": 1,
+      "top_k": 50,
+      "top_p": 1,
+      "min_new_tokens": 0,
+      "max_frames": 450,
+      "seeds": [
+        1,
+        42,
+        777
+      ],
+      "cases": [
+        "case0",
+        "case1"
+      ],
+      "calls_per_Engine": 1
+    },
+    "route": "CPUhost4, strictcpu_and_ane decoder andDAC, allactualendlabelsCPU/coreml-ane. Engine strictattach and abort-on-failure active; nofallback/retire/replay.",
+    "raw_float_PCM_exact": true,
+    "sample_counts_and_rates_exact": true,
+    "generated_codes": "UNOBSERVED",
+    "explicit_EOS_or_cap_reason": "UNOBSERVED",
+    "duration_budget": {
+      "elapsed_s": 86.033379,
+      "cap_s": 300,
+      "temporary_idle_sleep_assertion_removed": true,
+      "no_active_owned_jobs": true
+    },
+    "power": "Battery67%to66%, lowpower mode disabled; separate from timingcohort."
+  },
+  "native_history_parity": {
+    "result": "/Users/ogad/tether/models/parler/qkv-fusion-20261020/full-exploratory-run-r3/RESULT.json",
+    "rows_per_arm": 800,
+    "native_calls_per_arm_inferred": 796,
+    "host_prefill_rows_per_arm": 4,
+    "all_logit_bytes_exact": true,
+    "repeat_deterministic": true,
+    "cases": 2,
+    "inputs_per_case": 200,
+    "resets": 2
+  },
+  "retained_failure": {
+    "result": "/Users/ogad/tether/models/parler/qkv-fusion-20261020/tiny-run-r2/gate-cpu/FAILED_STEP.json",
+    "scope": "Tiny CPU_ONLY firststep logits/K/V not bitwise equal. Not overwritten or reclassified by fullCPU+ANE or sampled passes."
+  },
+  "package_tradeoff": {
+    "baseline_compiled_bytes": 373885820,
+    "qkv_compiled_bytes": 449506551,
+    "additional_bytes": 75620731,
+    "increase_percent_approx": 20.2,
+    "reason": "Append-only transformation retains original inactive QKV records; no unmeasured compaction."
+  },
+  "local_selection": {
+    "model": "/Users/ogad/tether/models/parler/selected-mini-coreml/parler-mini-v1-q8_0.gguf",
+    "receipt": "/Users/ogad/tether/models/parler/deployed/mini-qkv/SELECTION.json",
+    "decoder_canonical_sha256": "dcc20723e658aecdaeee7f8d4f9c75c47689fb7e380da6001082cee5e0bc6138",
+    "selected_graph_marker": "diagnostic-original-heads-self-qkv (the exact measured and sampled candidate)",
+    "baseline_unchanged": "/Users/ogad/tether/models/parler/qkv-fusion-20261020/full-exploratory-run-r3/stage/baseline",
+    "storage": "Own verified decoder copy; shared immutable GGUF andDAC linked from validated candidate stage.",
+    "rollback": "Use original baseline model path or remove selected-mini-coreml symlink; original artifacts unchanged."
+  },
+  "reproducible_tool": {
+    "command": "scripts/parler/optimize-decoder-coreml.py",
+    "marker": "original-heads-self-qkv-v1",
+    "strategy": "Same serialized original-head transformation; no retrace/convert/requantization. New output package and optional new compilation directory only.",
+    "validation": {
+      "status": "PASS",
+      "receipt": "/Users/ogad/tether/models/parler/qkv-fusion-20261020/production-tool-validation-r3/RECEIPT.json",
+      "unit_tests": 57,
+      "real_tiny_package": "Matches measured fusion serialized spec except stablemarker; all Manifest/weightbytes exact, original/golden unchanged.31learned/47refs->27active/39refs,51physical records incl12knowninactive.",
+      "xcrun_compile": "PASS actual tiny interface/metadata; normal output mode0755. Unit regressions022->0755 and077->0700.",
+      "negative_checks": [
+        "Real unknown protobuf fields rejected before patch",
+        "Corrupt protobuf produces clean CLI error",
+        "In-place and existing-output writes refused",
+        "Compile failure publishes no output"
+      ],
+      "ctest_registration": "Model-free CTest registration check passed; see qkv-fusion-20261020/adoption-root-validation-r1/CTEST_RECEIPT.json. No full TTS rebuild.",
+      "review": "Independent Cursor/Claude source review found no blocker/high; mediumcompiled-directory permission finding fixed and tested. Rootreviewed changedhunks. Knownactualvalidpadding recognized; priorfalsecustomassertion R1retained."
+    }
+  },
+  "limits": [
+    "Bounded sampled evidence, not universal speech/MOS/ASR/HF or Indic quality proof",
+    "No production raw-K/V or generated-code equality proof",
+    "CPU_AND_NE is a policy, not an ANE-only physical execution trace",
+    "All preceding failed/incomplete attempts preserved; no favorable partial timing reused"
+  ]
+}

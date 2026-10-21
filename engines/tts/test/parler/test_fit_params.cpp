@@ -32,6 +32,7 @@
 
 #include "fit_price.h"
 #include "parler/internal.h"
+#include "../test_env_portable.h"
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -525,6 +526,9 @@ void run_weightless_description_gates() {
 }  // namespace
 
 int main(int argc, char ** argv) {
+    // These gates price the ggml DAC; a Core ML sidecar next to a fixture
+    // model makes fit_params refuse instead (test-parler-dac-coreml covers it).
+    setenv(PARLER_COREML_DISABLE_ENV, "1", 1);
     if (argc >= 2 && std::string(argv[1]) == "--synthetic-gpu") {
         // Same synthetic model, GPU backend requested: exercises the fused
         // qkv/head stack, the FA probe's KV/cross dtype, and the phase-GEMM

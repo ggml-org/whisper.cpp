@@ -26,7 +26,7 @@ option(TTS_CPP_USE_SYSTEM_GGML   "tts-cpp: use find_package(ggml) instead of add
 # does not expose the standalone filename-prefix option; the speech branch or
 # `ggml-speech` vcpkg port already emits the integrated filenames.
 option(TTS_CPP_CCACHE            "tts-cpp: use ccache as compiler launcher if available"     ON)
-option(TTS_CPP_COREML            "tts-cpp: enable the Apple Core ML (Neural Engine) sidecars for the Audio8 codec synthesis stack, the Supertonic vocoder, CosyVoice3 stages and the MOSS stages (Apple-only, additive; each stage runs on its .mlmodelc next to the GGUF when present, else on ggml)." OFF)
+option(TTS_CPP_COREML            "tts-cpp: enable the Apple Core ML (Neural Engine) sidecars for the Audio8 codec synthesis stack, the Supertonic vocoder, CosyVoice3 stages, the Parler-TTS DAC/optional decoder steps and the MOSS stages (Apple-only, additive; each stage runs on its .mlmodelc next to the GGUF when present, else on ggml)." OFF)
 
 # OBJC + OBJCXX up front, before any add_subdirectory(ggml); see engines/parakeet.
 if (TTS_CPP_COREML)
@@ -345,10 +345,13 @@ set(TTS_CPP_LIB_SOURCES
     src/parler/bpe_tokenizer.cpp
     src/parler/t5.cpp
     src/parler/decoder.cpp
+    src/parler/decoder_runtime.cpp
+    src/parler/decoder_sidecar.cpp
     src/parler/delay.cpp
     src/parler/sampler.cpp
     src/parler/dac.cpp
     src/parler/dac_accel.cpp
+    src/parler/dac_coreml.cpp
     src/parler/engine.cpp
     # Audio8 engine (DualAR semantic LM + DAC-style codec with in-process cloning).
     src/audio8/unicode.cpp
@@ -469,7 +472,8 @@ if (TTS_CPP_BUILD_LIBRARY)
         add_library(tts-cpp.coreml OBJECT
             src/audio8/coreml/codec-synth.mm
             src/supertonic_coreml_vocoder.mm
-            src/moss/coreml/runner.mm)
+            src/moss/coreml/runner.mm
+            src/parler/decoder_coreml.mm)
         tts_cpp_apply_ccache(tts-cpp.coreml)
         target_include_directories(tts-cpp.coreml PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
         set_target_properties(tts-cpp.coreml PROPERTIES
@@ -484,7 +488,7 @@ if (TTS_CPP_BUILD_LIBRARY)
             ${TTS_CPP_FOUNDATION_FRAMEWORK}
             ${TTS_CPP_COREML_FRAMEWORK}
         )
-        message(STATUS "tts-cpp: Core ML sidecars enabled (TTS_CPP_USE_COREML): Audio8 codec, Supertonic vocoder, CosyVoice3 stages, MOSS stages")
+        message(STATUS "tts-cpp: Core ML sidecars enabled (TTS_CPP_USE_COREML): Audio8 codec, Supertonic vocoder, CosyVoice3 stages, Parler DAC/optional decoder, MOSS stages")
     endif()
     target_link_libraries(tts-cpp PUBLIC ggml)
     find_package(Threads REQUIRED)
@@ -1245,6 +1249,32 @@ if (TTS_CPP_BUILD_TESTS)
         set_property(TEST test-audio8-codec-coreml-exporter PROPERTY LABELS "unit")
         set_property(TEST test-audio8-codec-coreml-exporter PROPERTY ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
+        # Skips without torch; the TTS CI macOS lane runs it in the export venv.
+        add_test(NAME test-parler-dac-coreml-exporter
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${CMAKE_CURRENT_SOURCE_DIR}/test/test_export_parler_dac_coreml.py")
+        set_property(TEST test-parler-dac-coreml-exporter PROPERTY LABELS "unit")
+        set_property(TEST test-parler-dac-coreml-exporter PROPERTY ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+        foreach(_parler_suite IN ITEMS export_parler_decoder_coreml validate_parler_decoder_coreml parler_decoder_validation_bridge)
+            string(REPLACE "_" "-" _parler_test "${_parler_suite}")
+            add_test(NAME test-${_parler_test}
+                     COMMAND "${Python3_EXECUTABLE}"
+                             "${CMAKE_CURRENT_SOURCE_DIR}/test/test_${_parler_suite}.py")
+            set_tests_properties(test-${_parler_test} PROPERTIES
+                LABELS "unit" ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+        endforeach()
+        # The validator and bridge suites import numpy unconditionally. Keep
+        # them visible but disabled with an unprovisioned system interpreter;
+        # macOS CI runs all three suites in the Core ML export venv.
+        execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import numpy"
+                        RESULT_VARIABLE _parler_numpy_result OUTPUT_QUIET ERROR_QUIET)
+        if (NOT _parler_numpy_result EQUAL 0)
+            set_tests_properties(test-validate-parler-decoder-coreml test-parler-decoder-validation-bridge
+                PROPERTIES DISABLED TRUE)
+            message(STATUS "tts-cpp: Parler Python validation tests disabled (Python3 needs numpy)")
+        endif()
+
         # The GGUF helper tests (aliases, quantized counter, stem rule) need
         # only numpy; the Vocoder rebuild tests additionally need torch and
         # run in the Core ML export venv (the tts-ci macOS fixture step). A
@@ -1674,6 +1704,91 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_register_test(test-moss-coreml-parity LABEL "fixture"
         ARGS "${CMAKE_CURRENT_SOURCE_DIR}/test/reference-audio/jfk.wav")
     set_property(TEST test-moss-coreml-parity PROPERTY SKIP_RETURN_CODE 77)
+
+    # Parler DAC Core ML sidecar: the retire-on-failure, strict-mode and host
+    # quantizer gates run on every build with a fake sidecar; the Core ML
+    # parity gates run when <stem>-dac.mlmodelc sits next to the model.
+    # Self-skips (77) without the model; CI drives it on the tiny fixture from
+    # test/parler/prepare_dac_coreml_fixture.py.
+    if (TTS_CPP_COREML)
+        add_executable(test-parler-decoder-coreml test/parler/test_decoder_coreml.cpp)
+        target_link_libraries(test-parler-decoder-coreml PRIVATE tts-cpp)
+        target_include_directories(test-parler-decoder-coreml PRIVATE src)
+        tts_cpp_apply_ccache(test-parler-decoder-coreml)
+        tts_cpp_register_test(test-parler-decoder-coreml LABEL "fixture"
+            ARGS "${TTS_CPP_TEST_MODEL_DIR}/parler-coreml-session/readonly_cache.mlmodelc"
+            REQUIRES "${TTS_CPP_TEST_MODEL_DIR}/parler-coreml-session/readonly_cache.mlmodelc")
+    endif()
+
+    add_library(parler-decoder-validation MODULE test/parler/decoder_validation_bridge.cpp)
+    target_link_libraries(parler-decoder-validation PRIVATE tts-cpp)
+    target_include_directories(parler-decoder-validation PRIVATE src)
+    tts_cpp_apply_ccache(parler-decoder-validation)
+
+    if (Python3_Interpreter_FOUND AND _parler_numpy_result EQUAL 0)
+        execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import gguf"
+                        RESULT_VARIABLE _parler_gguf_result OUTPUT_QUIET ERROR_QUIET)
+        if (_parler_gguf_result EQUAL 0)
+            set(_parler_validation_fixture "${CMAKE_CURRENT_BINARY_DIR}/parler-decoder-validation-fixture")
+            add_test(NAME test-parler-decoder-validation-fixture
+                     COMMAND "${Python3_EXECUTABLE}"
+                             "${CMAKE_CURRENT_SOURCE_DIR}/test/parler/prepare_dac_coreml_fixture.py"
+                             --out "${_parler_validation_fixture}" --random-decoder)
+            set_tests_properties(test-parler-decoder-validation-fixture PROPERTIES
+                LABELS "unit" FIXTURES_SETUP parler-decoder-validation
+                ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+            set_property(TEST test-parler-decoder-validation-bridge PROPERTY
+                FIXTURES_REQUIRED parler-decoder-validation)
+            set_property(TEST test-parler-decoder-validation-bridge APPEND PROPERTY ENVIRONMENT
+                "PARLER_DECODER_VALIDATION_BRIDGE=$<TARGET_FILE:parler-decoder-validation>"
+                "PARLER_DECODER_VALIDATION_TINY_GGUF=${_parler_validation_fixture}/parler-tiny-f32.gguf")
+        endif()
+    endif()
+
+    add_executable(test-parler-decoder-update-plan test/parler/test_decoder_update_plan.cpp)
+    target_include_directories(test-parler-decoder-update-plan PRIVATE src)
+    tts_cpp_apply_ccache(test-parler-decoder-update-plan)
+    tts_cpp_register_test(test-parler-decoder-update-plan LABEL "unit")
+
+    add_executable(test-parler-decoder-profile test/parler/test_decoder_profile.cpp)
+    target_include_directories(test-parler-decoder-profile PRIVATE src)
+    tts_cpp_apply_ccache(test-parler-decoder-profile)
+    tts_cpp_register_test(test-parler-decoder-profile LABEL "unit")
+    if (Python3_Interpreter_FOUND AND UNIX)
+        add_test(NAME test-parler-optimize-decoder-coreml
+            COMMAND "${Python3_EXECUTABLE}" -I -B
+                    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/parler/test_optimize_decoder_coreml.py")
+        set_tests_properties(test-parler-optimize-decoder-coreml PROPERTIES LABELS "unit"
+            ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+    endif()
+    if (Python3_Interpreter_FOUND AND TARGET parler-bench)
+        add_test(NAME test-parler-bench-profile-cli
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/parler/test_bench_profile_cli.py"
+                    "$<TARGET_FILE:parler-bench>")
+        set_tests_properties(test-parler-bench-profile-cli PROPERTIES LABELS "unit"
+            ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+    endif()
+
+    add_executable(test-parler-decoder-runtime test/parler/test_decoder_runtime.cpp)
+    target_link_libraries(test-parler-decoder-runtime PRIVATE tts-cpp)
+    target_include_directories(test-parler-decoder-runtime PRIVATE src)
+    if (TTS_CPP_COREML)
+        target_compile_definitions(test-parler-decoder-runtime PRIVATE TTS_CPP_USE_COREML)
+    endif()
+    tts_cpp_apply_ccache(test-parler-decoder-runtime)
+    tts_cpp_register_test(test-parler-decoder-runtime LABEL "fixture"
+        ARGS "${_tcb_parler_gguf}" REQUIRES "${_tcb_parler_gguf}")
+
+    add_executable(test-parler-dac-coreml test/parler/test_dac_coreml.cpp)
+    target_link_libraries(test-parler-dac-coreml PRIVATE tts-cpp)
+    target_include_directories(test-parler-dac-coreml PRIVATE src)
+    if (TTS_CPP_COREML)
+        target_compile_definitions(test-parler-dac-coreml PRIVATE TTS_CPP_USE_COREML)
+    endif()
+    tts_cpp_apply_ccache(test-parler-dac-coreml)
+    tts_cpp_register_test(test-parler-dac-coreml LABEL "fixture"
+        ARGS --gguf "${_tcb_parler_gguf}" --ref-dir "${_tcb_parler_ref}")
+    set_property(TEST test-parler-dac-coreml PROPERTY SKIP_RETURN_CODE 77)
 
     # Not a test: times each staged MOSS sidecar against the ggml GPU stage
     # (median of 5 after a warm-up) and prints a markdown table.
@@ -2357,14 +2472,14 @@ if (TTS_CPP_BUILD_TESTS)
     # Model-free: the DAC snake and conv routing on every build, plus the
     # Accelerate DAC kernels against naive references where they are compiled in.
     add_executable(test-parler-dac-cpu-kernels test/parler/test_dac_cpu_kernels.cpp
-        src/parler/dac.cpp src/parler/dac_accel.cpp ${_tcb_parler_core_srcs})
+        src/parler/dac.cpp src/parler/dac_accel.cpp src/parler/dac_coreml.cpp src/coreml_sidecar_path.cpp ${_tcb_parler_core_srcs})
     target_link_libraries(test-parler-dac-cpu-kernels PRIVATE ggml)
     target_include_directories(test-parler-dac-cpu-kernels PRIVATE ggml/include include src)
     tts_cpp_apply_ccache(test-parler-dac-cpu-kernels)
     tts_cpp_register_test(test-parler-dac-cpu-kernels LABEL "unit")
 
     add_executable(test-parler-dac test/parler/test_dac.cpp
-        src/parler/dac.cpp src/parler/dac_accel.cpp ${_tcb_parler_core_srcs})
+        src/parler/dac.cpp src/parler/dac_accel.cpp src/parler/dac_coreml.cpp src/coreml_sidecar_path.cpp ${_tcb_parler_core_srcs})
     target_link_libraries(test-parler-dac PRIVATE ggml)
     target_include_directories(test-parler-dac PRIVATE ggml/include include src)
     tts_cpp_apply_ccache(test-parler-dac)
@@ -2404,9 +2519,9 @@ if (TTS_CPP_BUILD_TESTS)
 
     add_executable(test-parler-e2e test/parler/test_e2e.cpp
         src/parler/t5.cpp src/parler/decoder.cpp src/parler/delay.cpp
-        src/parler/dac.cpp src/parler/dac_accel.cpp src/parler/sampler.cpp src/parler/tokenizer.cpp
+        src/parler/dac.cpp src/parler/dac_accel.cpp src/parler/dac_coreml.cpp src/coreml_sidecar_path.cpp src/parler/sampler.cpp src/parler/tokenizer.cpp
         src/parler/bpe_tokenizer.cpp
-        src/parler/text_norm.cpp src/parler/engine.cpp ${_tcb_parler_core_srcs})
+        src/parler/text_norm.cpp src/parler/engine.cpp src/parler/decoder_runtime.cpp src/parler/decoder_sidecar.cpp ${_tcb_parler_core_srcs})
     target_link_libraries(test-parler-e2e PRIVATE ggml)
     target_include_directories(test-parler-e2e PRIVATE ggml/include include src)
     tts_cpp_apply_ccache(test-parler-e2e)

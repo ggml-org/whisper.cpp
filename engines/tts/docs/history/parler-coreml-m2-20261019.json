@@ -1,0 +1,279 @@
+{
+  "date": "2026-10-19",
+  "hardware": "Apple M2, 24 GB unified memory",
+  "status": "Experimental; same-history native quality and free-running speech gate pending",
+  "model": "parler-mini-v1-q8_0.gguf",
+  "threads": 4,
+  "warmup": 1,
+  "measured_runs": 3,
+  "max_frames": 500,
+  "generation": "greedy",
+  "prompt": "Hey, how are you doing today?",
+  "description": "A female speaker delivers a slightly expressive and animated speech with a moderate speed and pitch. The recording is of very high quality, with the speaker's voice sounding clear and very close up.",
+  "protocol": "Sequential independent processes in order listed. CPU uses --backend cpu; others --n-gpu-layers 99. CPU and Metal set PARLER_COREML_DISABLE=1. Others use PARLER_COREML_COMPUTE_UNITS=cpu_and_ane and PARLER_COREML_STRICT=1. Decoder int8 profiles add --coreml-decoder; DAC-only uses ggml decoder. One warmup, three measured complete synthesis calls; model loading excluded. T5 and prefill remain ggml. Prefill includes Core ML cache seed. decode_loop includes host embedding, prediction, row updates, and logit readback. Process wall time includes loading, warmup, and all runs, and is not a model load metric.",
+  "limitations": [
+    "One prompt, one machine, fixed 498 decoder steps; not a broad performance guarantee.",
+    "Sequential run order and Metal timing variability may affect comparisons.",
+    "A 512-row model must fit prompt plus requested full generation bound; oversized calls use ggml or fail in strict mode.",
+    "3072-row model loses to CPU and Metal on this short trace.",
+    "Same number of steps and duration does not establish equal speech quality.",
+    "Warm synthesis timing excludes cold Core ML load/compilation."
+  ],
+  "results": [
+    {
+      "name": "cpu",
+      "process_wall_s": 32.65941786766052,
+      "decoder_backend": "ggml",
+      "dac_backend": "ggml",
+      "steps": 498,
+      "audio_s": 5.7005,
+      "rtf": 1.36185,
+      "stages": {
+        "t5_encode": {
+          "n": 3,
+          "min_ms": 103.122,
+          "median_ms": 103.205,
+          "mean_ms": 103.205,
+          "p95_ms": 103.28,
+          "max_ms": 103.288
+        },
+        "prefill": {
+          "n": 3,
+          "min_ms": 29.9754,
+          "median_ms": 30.1556,
+          "mean_ms": 30.3137,
+          "p95_ms": 30.7448,
+          "max_ms": 30.8102
+        },
+        "decode_loop": {
+          "n": 3,
+          "min_ms": 4976.51,
+          "median_ms": 4994.41,
+          "mean_ms": 4990.21,
+          "p95_ms": 4999.18,
+          "max_ms": 4999.71
+        },
+        "dac_decode": {
+          "n": 3,
+          "min_ms": 2621.8,
+          "median_ms": 2630.24,
+          "mean_ms": 2648.8,
+          "p95_ms": 2687.96,
+          "max_ms": 2694.37
+        },
+        "total": {
+          "n": 3,
+          "min_ms": 7732.41,
+          "median_ms": 7763.23,
+          "mean_ms": 7772.53,
+          "p95_ms": 7816.09,
+          "max_ms": 7821.96
+        }
+      }
+    },
+    {
+      "name": "metal",
+      "process_wall_s": 33.078657150268555,
+      "decoder_backend": "ggml",
+      "dac_backend": "ggml",
+      "steps": 498,
+      "audio_s": 5.7005,
+      "rtf": 1.4303,
+      "stages": {
+        "t5_encode": {
+          "n": 3,
+          "min_ms": 32.4326,
+          "median_ms": 32.6602,
+          "mean_ms": 33.2071,
+          "p95_ms": 34.3416,
+          "max_ms": 34.5285
+        },
+        "prefill": {
+          "n": 3,
+          "min_ms": 24.7175,
+          "median_ms": 24.8818,
+          "mean_ms": 24.9078,
+          "p95_ms": 25.0999,
+          "max_ms": 25.1241
+        },
+        "decode_loop": {
+          "n": 3,
+          "min_ms": 6369.98,
+          "median_ms": 7040.35,
+          "mean_ms": 6970.42,
+          "p95_ms": 7454.87,
+          "max_ms": 7500.93
+        },
+        "dac_decode": {
+          "n": 3,
+          "min_ms": 1053.43,
+          "median_ms": 1089.43,
+          "mean_ms": 1102.07,
+          "p95_ms": 1155.96,
+          "max_ms": 1163.35
+        },
+        "total": {
+          "n": 3,
+          "min_ms": 7590.64,
+          "median_ms": 8153.44,
+          "mean_ms": 8130.61,
+          "p95_ms": 8598.31,
+          "max_ms": 8647.74
+        }
+      }
+    },
+    {
+      "name": "dac-only",
+      "process_wall_s": 39.559842109680176,
+      "decoder_backend": "ggml",
+      "dac_backend": "coreml-ane",
+      "steps": 498,
+      "audio_s": 5.7005,
+      "rtf": 1.37646,
+      "stages": {
+        "t5_encode": {
+          "n": 3,
+          "min_ms": 49.7437,
+          "median_ms": 50.0908,
+          "mean_ms": 50.9793,
+          "p95_ms": 52.8022,
+          "max_ms": 53.1035
+        },
+        "prefill": {
+          "n": 3,
+          "min_ms": 23.052,
+          "median_ms": 23.2298,
+          "mean_ms": 23.2775,
+          "p95_ms": 23.5186,
+          "max_ms": 23.5507
+        },
+        "decode_loop": {
+          "n": 3,
+          "min_ms": 6617.69,
+          "median_ms": 7067.8,
+          "mean_ms": 6927.27,
+          "p95_ms": 7093.47,
+          "max_ms": 7096.33
+        },
+        "dac_decode": {
+          "n": 3,
+          "min_ms": 704.667,
+          "median_ms": 705.391,
+          "mean_ms": 706.301,
+          "p95_ms": 708.499,
+          "max_ms": 708.844
+        },
+        "total": {
+          "n": 3,
+          "min_ms": 7399.83,
+          "median_ms": 7846.51,
+          "mean_ms": 7707.83,
+          "p95_ms": 7874.08,
+          "max_ms": 7877.15
+        }
+      }
+    },
+    {
+      "name": "int8-c512",
+      "process_wall_s": 39.98066425323486,
+      "decoder_backend": "coreml-ane",
+      "dac_backend": "coreml-ane",
+      "steps": 498,
+      "audio_s": 5.7005,
+      "rtf": 0.943273,
+      "stages": {
+        "t5_encode": {
+          "n": 3,
+          "min_ms": 49.6443,
+          "median_ms": 50.7827,
+          "mean_ms": 52.9722,
+          "p95_ms": 57.7189,
+          "max_ms": 58.4896
+        },
+        "prefill": {
+          "n": 3,
+          "min_ms": 27.604,
+          "median_ms": 38.3847,
+          "mean_ms": 36.1475,
+          "p95_ms": 42.0468,
+          "max_ms": 42.4537
+        },
+        "decode_loop": {
+          "n": 3,
+          "min_ms": 4554.28,
+          "median_ms": 4632.3,
+          "mean_ms": 4742.25,
+          "p95_ms": 4999.38,
+          "max_ms": 5040.16
+        },
+        "dac_decode": {
+          "n": 3,
+          "min_ms": 643.887,
+          "median_ms": 682.055,
+          "mean_ms": 671.491,
+          "p95_ms": 687.883,
+          "max_ms": 688.53
+        },
+        "total": {
+          "n": 3,
+          "min_ms": 5320.06,
+          "median_ms": 5377.13,
+          "mean_ms": 5502.86,
+          "p95_ms": 5767.96,
+          "max_ms": 5811.39
+        }
+      }
+    },
+    {
+      "name": "int8-c3072",
+      "process_wall_s": 54.585917234420776,
+      "decoder_backend": "coreml-ane",
+      "dac_backend": "coreml-ane",
+      "steps": 498,
+      "audio_s": 5.7005,
+      "rtf": 1.47439,
+      "stages": {
+        "t5_encode": {
+          "n": 3,
+          "min_ms": 42.1595,
+          "median_ms": 46.7417,
+          "mean_ms": 49.1907,
+          "p95_ms": 57.4781,
+          "max_ms": 58.671
+        },
+        "prefill": {
+          "n": 3,
+          "min_ms": 27.2637,
+          "median_ms": 32.4429,
+          "mean_ms": 33.1406,
+          "p95_ms": 38.988,
+          "max_ms": 39.7152
+        },
+        "decode_loop": {
+          "n": 3,
+          "min_ms": 7604.67,
+          "median_ms": 7672.68,
+          "mean_ms": 7797.94,
+          "p95_ms": 8072.09,
+          "max_ms": 8116.46
+        },
+        "dac_decode": {
+          "n": 3,
+          "min_ms": 640.938,
+          "median_ms": 646.5,
+          "mean_ms": 646.817,
+          "p95_ms": 652.361,
+          "max_ms": 653.012
+        },
+        "total": {
+          "n": 3,
+          "min_ms": 8327.11,
+          "median_ms": 8404.74,
+          "mean_ms": 8527.09,
+          "p95_ms": 8804.95,
+          "max_ms": 8849.42
+        }
+      }
+    }
+  ]
+}

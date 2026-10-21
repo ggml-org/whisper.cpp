@@ -14,6 +14,14 @@
 //
 // Streaming: the synthesize(...on_chunk) overload emits audio in chunks by
 // re-decoding the growing DAC-code prefix, holding back a right margin for seams.
+//
+// Core ML (Apple, TTS_CPP_COREML builds): when the DAC sidecar sits next to the
+// GGUF (`parler-mini-v1-q8_0.gguf` -> `parler-mini-v1-dac.mlmodelc`, the quant
+// tag dropped), the DAC decode runs on it on the compute units Core ML picks
+// (the Neural Engine on Apple silicon), whatever the `backend` option; the T5
+// encoder and decoder LM stay on ggml by default. coreml_decoder opts into
+// decoder steps on a separate -decoder.mlmodelc sidecar (macOS 15 / iOS 18);
+// T5 and prompt prefill still run on ggml.
 
 #include "tts-cpp/backend.h"
 #include "tts-cpp/export.h"
@@ -47,6 +55,12 @@ struct EngineOptions {
     // n_gpu_layers; there is no fallback, so the constructor throws when it
     // is missing. The automatic walk never picks Hexagon.
     std::string backend;
+
+    // Opt in to an experimental Core ML decoder-step sidecar. T5 and prefill
+    // stay on ggml. Missing/incompatible/failing sidecars fall back to ggml;
+    // PARLER_COREML_STRICT makes a requested sidecar failure fatal.
+    // PARLER_COREML_DISABLE disables this along with the DAC sidecar.
+    bool coreml_decoder = false;
 
     // Sampling. Parler's HF defaults (do_sample, temperature 1.0, top_k 50)
     // are stored in the GGUF; zero values defer to them. greedy and top_k = 1
@@ -85,6 +99,18 @@ struct SynthesisResult {
     std::vector<float> pcm;          // mono float32
     int   sample_rate = 44100;
     float duration_s  = 0.0f;
+
+    // Where this synthesis's DAC decode ran: "ggml" (on backend_name()) or the
+    // Core ML sidecar's compute label ("coreml-all", "coreml-ane", ...), or
+    // "mixed" when a streamed call's chunks ran on both. Unlike
+    // Engine::dac_on_coreml(), this is per call: a sidecar that fails is
+    // retired and the decode falls back to ggml.
+    std::string dac_backend = "ggml";
+
+    // Decoder step execution for this call, including replay after a failure.
+    // Prefill currently runs on ggml. "mixed" means successful Core ML steps
+    // were followed by ggml after a sidecar failure.
+    std::string decoder_backend = "ggml";
 };
 
 // Per-chunk PCM callback: consecutive float32 mono samples (engine-owned, do not
@@ -129,6 +155,12 @@ public:
     const EngineOptions & options() const;
     std::string backend_name() const;
     BackendDevice backend_device() const;
+
+    // True while the DAC decode runs on the Core ML sidecar (TTS_CPP_COREML
+    // builds; see the header comment and docs/parler.md). Becomes false if a
+    // failing sidecar is retired.
+    bool dac_on_coreml() const;
+    bool decoder_on_coreml() const;
 
 private:
     struct Impl;

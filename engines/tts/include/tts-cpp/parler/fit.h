@@ -33,6 +33,14 @@
 // stream fallback, which bounds the fully-touched mapping from above --
 // wrong only in the strict direction.
 //
+// Core ML: when the Engine would run the DAC on its Core ML sidecar (the
+// GGUF's name minus its quant tag plus `-dac.mlmodelc`, next to it, in a
+// TTS_CPP_COREML build, not disabled by PARLER_COREML_DISABLE), the result
+// is Error with reason
+// "coreml-memory-estimate-unavailable": resident Core ML models and their
+// prediction buffers cannot be projected by the native fitter. The same
+// refusal applies when coreml_decoder is requested in a Core ML build.
+//
 // See tts-cpp/fit.h for the status contract and result layout.
 
 #include "tts-cpp/export.h"
@@ -52,6 +60,7 @@ struct FitOptions {
     int         n_gpu_layers = 0;
     std::string backend;
     std::string backends_dir;
+    bool coreml_decoder = false; // mirror EngineOptions; Core ML memory is not projectable
 
     // ── Workload ──────────────────────────────────────────────────────────
     // Token count of the voice description fed to the T5 encoder (the

@@ -1,0 +1,334 @@
+{
+  "schema": 1,
+  "date": "2026-10-20",
+  "source_head": "f76ad6c93835858f7b14b1d3eba69a9c647ca9f8",
+  "scope": "Uncommitted internal profiling and grouped cache-update changes; experimental opt-in Core ML decoder. No exporter, model weights, contracts, native copy implementation, public Engine API or defaults changed.",
+  "machine": "Apple M2, macOS 15; battery power, low-power mode disabled; shared desktop",
+  "artifact_root": "/Users/ogad/tether/models/parler/cache-batching-20261020",
+  "baseline_snapshot": "legacy48-profile-r2",
+  "candidate_snapshot": "whole-output2-r2",
+  "workload": {
+    "model": "parler-mini-v1-q8_0.gguf",
+    "gguf_sha256": "4c37839de6daff9d596693d2e50f003bc61928c8d8370a4695232930567dc969",
+    "host_backend": "cpu",
+    "threads": 4,
+    "compute_units": "cpu_and_ane",
+    "strict": true,
+    "min_new_tokens": 500,
+    "max_frames": 500,
+    "warmup": 1,
+    "measured_runs_per_invocation": 3,
+    "decoder_steps_per_run": 498,
+    "timing_order": [
+      "legacy",
+      "whole-output",
+      "whole-output",
+      "legacy"
+    ],
+    "greedy": true
+  },
+  "unprofiled_invocations": [
+    {
+      "order": "A1",
+      "total_mean_ms": 5030.95,
+      "decode_mean_ms": 4299.17
+    },
+    {
+      "order": "B1",
+      "total_mean_ms": 4974.78,
+      "decode_mean_ms": 4253.16
+    },
+    {
+      "order": "B2",
+      "total_mean_ms": 5003.62,
+      "decode_mean_ms": 4265.42
+    },
+    {
+      "order": "A2",
+      "total_mean_ms": 5362.85,
+      "decode_mean_ms": 4604.88
+    }
+  ],
+  "aggregate": {
+    "decode_loop": {
+      "baseline_mean_ms": 4452.025,
+      "candidate_mean_ms": 4259.29,
+      "candidate_reduction_percent": 4.3291535874124625,
+      "first_pair_reduction_percent": 1.0702065747574583,
+      "second_pair_reduction_percent": 7.371744757735272
+    },
+    "total": {
+      "baseline_mean_ms": 5196.9,
+      "candidate_mean_ms": 4989.2,
+      "candidate_reduction_percent": 3.9966133656602945,
+      "first_pair_reduction_percent": 1.1164889335016264,
+      "second_pair_reduction_percent": 6.6984905414098925
+    }
+  },
+  "interpretation": "small positive first pair (~1.1% total); larger apparent aggregate (~4%) driven by slower final legacy invocation. Tentative/order-sensitive; no extra reruns or promotion claim. Prediction remains dominant; graph work remains priority.",
+  "candidate_profile_coverage": {
+    "requested_steps": 1494,
+    "successful_steps": 1494,
+    "unprofiled_steps": 0,
+    "row_bytes_written": 146866176
+  },
+  "candidate_profile_per_step_ms": {
+    "embedding_ms": 0.005611880856760376,
+    "input_prepare_ms": 0.008749020080321284,
+    "predict_ms": 8.493528447121825,
+    "row_write_ms": 0.030685981258366826,
+    "session_other_ms": 0.0005726767068216346,
+    "session_total_ms": 8.524787105087015,
+    "logit_readback_ms": 0.01018082396251674,
+    "step_other_ms": 0.0048517710843337105,
+    "step_wall_ms": 8.554180601070946
+  },
+  "earlier_legacy_profile_per_step_ms": {
+    "embedding_ms": 0.006248427041499331,
+    "input_prepare_ms": 0.012148995983935743,
+    "predict_ms": 8.528580990629184,
+    "row_write_ms": 0.15514123159303883,
+    "session_other_ms": 0.0021168808567603747,
+    "session_total_ms": 8.685809906291833,
+    "logit_readback_ms": 0.010829718875502008,
+    "step_other_ms": 0.005101218206157965,
+    "step_wall_ms": 8.720147255689424
+  },
+  "profile_comparison_limit": "legacy profile was earlier phase1 measurement, not interleaved with this candidate profile; r2 coverage/format fixes have no intended numerical effect",
+  "parity": {
+    "tiny_actual_coreml": "CPU_ONLY and ALL; independent legacy48 reference vs production whole2 helper; complete finite fp16 state read as fp32 plus logits/new_k/new_v memcmp, seeded history, multiple positions, reset/repeat",
+    "production_fixed_work_pcm16": "All four unprofiled final outputs and the final profile output have equal WAV/PCM16 hashes.",
+    "not_established": [
+      "Production raw native state bytes",
+      "Sampled generated code equivalence",
+      "Explicit EOS versus cap reasons",
+      "Universal or perceptual speech equivalence",
+      "Indic preservation for this cache change"
+    ],
+    "existing_checks": "Partial-group invalid-whole rejection, padded strides, mixed fp32/fp16, bounds, overflow, alias and failure tests retained.",
+    "production_native_float32_logits": {
+      "status": "PASS",
+      "result": "/Users/ogad/tether/models/parler/cache-batching-20261020/production-parity-r1/LOGIT_PARITY.json",
+      "cases": 2,
+      "reset_repeats": 2,
+      "all_float32_logits_bytes_equal": true,
+      "teacher_inputs_per_case": 200,
+      "prefill_per_case": 1,
+      "native_steps_per_case": 199,
+      "candidate_native_steps_total": 796,
+      "count_scope": "inferred strict successful calls, not profilercounter",
+      "saved_legacy_repeat_deterministic": true,
+      "candidate_repeat_deterministic": true,
+      "baseline_saved_logits": "/Users/ogad/tether/models/parler/graph-optimizations-20261020/heads-only-r1/runtime-baseline",
+      "candidate_saved_logits": "/Users/ogad/tether/models/parler/cache-batching-20261020/production-parity-r1/runtime-whole2",
+      "exact_same_manifest_sha256": "109e84bab050d4a994aa1cfb71c0ef799f3f997104a97e32ffa4a76d1720d17d",
+      "exact_same_gguf_sha256": "4c37839de6daff9d596693d2e50f003bc61928c8d8370a4695232930567dc969"
+    },
+    "production_sampled_raw_float_PCM": {
+      "status": "PASS",
+      "result": "/Users/ogad/tether/models/parler/cache-batching-20261020/production-parity-r1/SAMPLED_PARITY.json",
+      "pairs": 6,
+      "syntheses": 12,
+      "seeds": [
+        1,
+        42,
+        777
+      ],
+      "texts": "both exact mini-history200-native manifest prompts and descriptions",
+      "raw_float_PCM_bytes_equal_allpairs": true,
+      "samplecounts_sample_rates_exact_duration_ratios_equal": true,
+      "settings": {
+        "temperature": 1,
+        "top_k": 50,
+        "top_p": 1,
+        "max_frames": 450,
+        "min_new_tokens": 0,
+        "greedy": false,
+        "n_threads": 4,
+        "backend": "cpu",
+        "n_gpu_layers": 0
+      },
+      "actual_all": "CPU host/coreml-ane decoder/coreml-ane DAC, strict; no retirement or replay",
+      "cap_inferred_calls": [
+        {
+          "seed": 1,
+          "case": "case1",
+          "arm": "legacy",
+          "samples": 225792
+        },
+        {
+          "seed": 1,
+          "case": "case1",
+          "arm": "whole2",
+          "samples": 225792
+        }
+      ]
+    },
+    "production_parity_scope": "bounded current mini cache-only quality-preservation evidence on these inputs/seeds; no universal quality, MOS, Indic, context, historicalstrictHFgate or performance promotionclaim",
+    "ASR": "not run because fullrawfloatPCMbytesexact"
+  },
+  "tests": {
+    "profile_unit": "PASS",
+    "profile_cli": "PASS",
+    "runtime_recovery": "PASS",
+    "fresh_coreml_cpu_only": "PASS",
+    "fresh_coreml_all": "PASS",
+    "update_plan_unit_after_helper_extraction": "PASS",
+    "constructor_plan_cases": [
+      [
+        24,
+        24
+      ],
+      [
+        4,
+        2
+      ],
+      [
+        3,
+        1
+      ],
+      [
+        1,
+        1
+      ]
+    ]
+  },
+  "limits": [
+    "One prompt on one M2; no general latency guarantee.",
+    "ABBA pair effects differ; final legacy invocation is slower.",
+    "Earlier legacy and candidate profiles are not interleaved.",
+    "Power differs from earlier AC-powered speech benchmarks.",
+    "498-step EOS-suppressed greedy audio measures bounded work, not speech quality.",
+    "No timing reruns or discarded records in this bounded experiment.",
+    "Full requested/successful/unprofiled coverage is instrumented only for the profile invocation; unprofiled runs used strict mode, actual backend labels and work counts."
+  ],
+  "rejected_reshape_experiment": {
+    "artifact_root": "/Users/ogad/tether/models/parler/graph-optimizations-20261020",
+    "decision": "Not adopted; stop reference-quality and free-running follow-up after missing the predeclared speed cutoff.",
+    "learned_weights": "Complete 339 learned tensors / 531 blobs, shapes, dtype, raw data/scales, fp16 heads and interface/contract verified equal.",
+    "compiled_transposes": {
+      "baseline": 97,
+      "candidate": 0
+    },
+    "preferred_devices_cpu_and_ne_and_all": {
+      "baseline": {
+        "neural_engine": 1211,
+        "cpu": 1
+      },
+      "candidate": {
+        "neural_engine": 1115,
+        "cpu": 0
+      },
+      "interpretation": "Planner preferred devices; not a physical execution trace or segment count."
+    },
+    "exactness_gate": "FAIL",
+    "deterministic_repeats": true,
+    "native_teacher_cases": [
+      {
+        "case": "case0",
+        "logit_rows": 200,
+        "prefill_rows": 1,
+        "native_steps": 199,
+        "max_abs_delta": 0.1171875,
+        "argmax_agreement": 0.9972222222222222,
+        "kl_mean": 2.3431315917250293e-05,
+        "kl_p95": 6.844117062434846e-05
+      },
+      {
+        "case": "case1",
+        "logit_rows": 200,
+        "prefill_rows": 1,
+        "native_steps": 199,
+        "max_abs_delta": 0.09375,
+        "argmax_agreement": 0.9983333333333333,
+        "kl_mean": 2.4351861884940738e-05,
+        "kl_p95": 6.211554250236815e-05
+      }
+    ],
+    "speed_protocol": {
+      "power": "AC throughout; low-power mode off; nominal thermals",
+      "order": "ABBA, ABBA",
+      "invocations": 8,
+      "warmup_each": 1,
+      "measured_each": 3,
+      "steps_each_run": 498,
+      "runtime": "Same immutable LEGACY48-r2 binary/archive, q8 GGUF and DAC; only decoder sidecar differs. Strict cpu_and_ane, CPU host, four threads, greedy seed42, min/max500.",
+      "pass_rule": "Both sets require candidate total mean <=0.97*baseline and lower decode mean.",
+      "precision": "Frozen unprofiled JSON emits six significant digits; per-run stderr totals rounded to 0.1ms. Original protocol retained with additive precision note.",
+      "retention": "All 24 measured and eight warmup calls retained; no reruns or discarded records."
+    },
+    "speed_sets": [
+      {
+        "set": 1,
+        "baseline_total_mean_ms": 5034.004999999999,
+        "candidate_total_mean_ms": 4998.280000000001,
+        "total_reduction_percent": 0.7096735104553664,
+        "baseline_decode_mean_ms": 4312.68,
+        "candidate_decode_mean_ms": 4269.16,
+        "decode_reduction_percent": 1.0091173006112286,
+        "total_3percent_pass": false,
+        "decode_lower_pass": true,
+        "eligible": false,
+        "pairs": [
+          {
+            "baseline_index": 1,
+            "candidate_index": 2,
+            "order": "AB",
+            "total_reduction_percent": 1.0506458613817493,
+            "decode_reduction_percent": 1.2812100701039553
+          },
+          {
+            "baseline_index": 4,
+            "candidate_index": 3,
+            "order": "BA",
+            "total_reduction_percent": 0.36336772814087315,
+            "decode_reduction_percent": 0.7331011885160832
+          }
+        ],
+        "order_drift": {
+          "baseline_last_vs_first_percent": -1.540093079732785,
+          "candidate_second_vs_first_percent": -0.8562145277572597
+        }
+      },
+      {
+        "set": 2,
+        "baseline_total_mean_ms": 4971.9,
+        "candidate_total_mean_ms": 4891.36,
+        "total_reduction_percent": 1.6199038596914628,
+        "baseline_decode_mean_ms": 4262.225,
+        "candidate_decode_mean_ms": 4178.28,
+        "decode_reduction_percent": 1.9695112294634942,
+        "total_3percent_pass": false,
+        "decode_lower_pass": true,
+        "eligible": false,
+        "pairs": [
+          {
+            "baseline_index": 5,
+            "candidate_index": 6,
+            "order": "AB",
+            "total_reduction_percent": 1.7277480598502648,
+            "decode_reduction_percent": 1.9441807035435077
+          },
+          {
+            "baseline_index": 8,
+            "candidate_index": 7,
+            "order": "BA",
+            "total_reduction_percent": 1.511863396800739,
+            "decode_reduction_percent": 1.9948813073798366
+          }
+        ],
+        "order_drift": {
+          "baseline_last_vs_first_percent": -0.1816566929640162,
+          "candidate_second_vs_first_percent": 0.037624426431981384
+        }
+      }
+    ],
+    "speed_statement": "no repeatable >=3% speed benefit under this protocol",
+    "artifact_hashes_unchanged": true,
+    "limits": [
+      "Small positive measured differences do not pass the chosen cutoff; not proof of zero effect.",
+      "Exactness failure is retained; no speech-quality equivalence claim.",
+      "HF-relative quality, sampled speech, ASR and Indic follow-up were not run for this candidate."
+    ]
+  }
+}

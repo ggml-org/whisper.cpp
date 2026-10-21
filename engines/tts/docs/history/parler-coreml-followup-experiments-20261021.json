@@ -1,0 +1,593 @@
+{
+  "schema": 1,
+  "date": "2026-10-21",
+  "source_head": "7e0ec40a5107c97e18d457f913ba00f235f573fd",
+  "decision": "NO_NEW_VARIANT_ADOPTED",
+  "machine": "Apple M2, macOS 15; shared desktop. Battery/low-power snapshots below apply to timing only unless native power is explicitly recorded.",
+  "scope": "Three isolated decoder experiments; production runtime, defaults and weight precision unchanged. No combined-candidate test.",
+  "timing_protocol": {
+    "order": "ABBAABBA (two ABBA sets), all8 invocations",
+    "each_invocation": "Hello.; seed42; default greedy; min/max500 ->498 decoder steps; CPU4/ngpu0; strict cpu_and_ane decoder and unchanged DAC; warm1 excluded then3 measured, unprofiled.",
+    "counts": "32 warm+measured runtime runs per study:8warmup+24measured; four498-step labels per invocation, not instrumented profiler counters.",
+    "speed_eligibility": "candidate TOTAL <=0.95*baseline in BOTHsets AND pooled; decode_loop strictly lower in BOTHsets AND pooled; max/min baseline invocation TOTAL <=1.05, otherwise INCONCLUSIVE. No favorable reruns/discards.",
+    "gain_sign": "100*(baseline-candidate)/baseline; positive=faster, negative=slower. All gains relative within their own experiment.",
+    "precision": "Frozen stageJSON emits6significantdigits; stderr TOTAL0.1ms/audio0.01s/RTF0.001. Derived aggregates use emitted rounded values, not fabricated original precision. Gate comparisons used unrounded Decimal arithmetic on emitted values.",
+    "wall_scope": "StageTOTAL excludes model load/WAV I/O. Preserved time-l processwall includes load/warmup/3measured/WAVJSON I/O; no genuinecold or isolatedload/firstrequest claim.",
+    "resources": "Separate OS-shared300s native/package and timing phases, with completed pre/post identity and process gates.",
+    "quality_limit": "Native floatlogits exactness and final WAV16 diagnostic equality do not establish raw K/V/floatPCM/codes/perceptual/free-runquality or productionapproval."
+  },
+  "experiments": [
+    {
+      "name": "infrequent_reshape",
+      "artifact_root": "/Users/ogad/tether/models/parler/infrequent-reshape-20261020",
+      "decision": "NOT_ADOPTED_NO_ELIGIBLE_GAIN",
+      "factor": "MLOptimizationHints.reshapeFrequency=Infrequent only; specializationStrategy default. Rebuilt MODE0 vs hinted MM objects before same archive.",
+      "timing_power": {
+        "source": "BATTERY",
+        "percent_before_after": [
+          87,
+          86
+        ],
+        "lowpowermode": 0
+      },
+      "native_evidence": {
+        "status": "PASS_NATIVE_ONLY",
+        "cases": 2,
+        "rows_per_case_including_prefill": 200,
+        "reset_repeats": 2,
+        "rows_per_arm": 800,
+        "native_calls_per_arm_inferred": 796,
+        "native_call_scope": "199 native steps x2 cases x2 resets, inferred from strict API success, per-call runtime active checks and exact input loop; no direct profiler count or per-step label samples.",
+        "backend": "CPU host threads4, n_gpu_layers0; strict cpu_and_ane; case-end CPU/coreml-ane labels, repeats overwrite case_backends.",
+        "equality": "All saved float32 logit bytes finite, reset-repeat deterministic and exact across arms.",
+        "not_proven": [
+          "direct K/V state bytes",
+          "sampled rawfloat PCM or generated-code equality",
+          "perceptual speech quality",
+          "physical ANE-only execution"
+        ],
+        "gate_order": "frozen-original vs rebuiltMODE0 exact first; MODE0 vs Infrequent exact next; savedwhole2 extra integrity PASS",
+        "executed_arms": 3,
+        "executed_rows_all_arms": 2400,
+        "native_calls_all_arms_inferred": 2388
+      },
+      "timing_result": "timing-run-r1/RESULT.json",
+      "timing_summary": "timing-run-r1/SUMMARY.json",
+      "sets": [
+        {
+          "set": 1,
+          "total": {
+            "A_mean_ms_from_emitted": 5011.665,
+            "B_mean_ms_from_emitted": 4946.0,
+            "gain_percent_derived": 1.31,
+            "total_at_least5pct": false,
+            "candidate_lower": true
+          },
+          "decode_loop": {
+            "A_mean_ms_from_emitted": 4264.45,
+            "B_mean_ms_from_emitted": 4226.93,
+            "gain_percent_derived": 0.88,
+            "decode_strictly_lower": true
+          }
+        },
+        {
+          "set": 2,
+          "total": {
+            "A_mean_ms_from_emitted": 5118.415,
+            "B_mean_ms_from_emitted": 5276.82,
+            "gain_percent_derived": -3.095,
+            "total_at_least5pct": false,
+            "candidate_lower": false
+          },
+          "decode_loop": {
+            "A_mean_ms_from_emitted": 4372.405,
+            "B_mean_ms_from_emitted": 4487.74,
+            "gain_percent_derived": -2.638,
+            "decode_strictly_lower": false
+          }
+        }
+      ],
+      "pooled": {
+        "total": {
+          "A_mean_ms_from_emitted": 5065.04,
+          "B_mean_ms_from_emitted": 5111.41,
+          "gain_percent_derived": -0.915,
+          "total_at_least5pct": false,
+          "candidate_lower": false
+        },
+        "decode_loop": {
+          "A_mean_ms_from_emitted": 4318.4275,
+          "B_mean_ms_from_emitted": 4357.335,
+          "gain_percent_derived": -0.901,
+          "decode_strictly_lower": false
+        }
+      },
+      "baseline_invocation_total_drift_percent": 3.127,
+      "perpair_order": [
+        {
+          "A_index": 1,
+          "B_index": 2,
+          "order": "A-B",
+          "total_gain_percent_derived": 0.856,
+          "decode_loop_gain_percent_derived": 0.705
+        },
+        {
+          "A_index": 4,
+          "B_index": 3,
+          "order": "B-A",
+          "total_gain_percent_derived": 1.761,
+          "decode_loop_gain_percent_derived": 1.054
+        },
+        {
+          "A_index": 5,
+          "B_index": 6,
+          "order": "A-B",
+          "total_gain_percent_derived": -3.082,
+          "decode_loop_gain_percent_derived": -2.909
+        },
+        {
+          "A_index": 8,
+          "B_index": 7,
+          "order": "B-A",
+          "total_gain_percent_derived": -3.107,
+          "decode_loop_gain_percent_derived": -2.371
+        }
+      ],
+      "invocations": [
+        {
+          "index": 1,
+          "arm": "A",
+          "total_mean_ms": 4992.42,
+          "decode_mean_ms": 4255.66,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 2,
+          "arm": "B",
+          "total_mean_ms": 4949.68,
+          "decode_mean_ms": 4225.64,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 3,
+          "arm": "B",
+          "total_mean_ms": 4942.32,
+          "decode_mean_ms": 4228.22,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 4,
+          "arm": "A",
+          "total_mean_ms": 5030.91,
+          "decode_mean_ms": 4273.24,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 5,
+          "arm": "A",
+          "total_mean_ms": 5088.31,
+          "decode_mean_ms": 4336.75,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 6,
+          "arm": "B",
+          "total_mean_ms": 5245.15,
+          "decode_mean_ms": 4462.92,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 7,
+          "arm": "B",
+          "total_mean_ms": 5308.49,
+          "decode_mean_ms": 4512.56,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 8,
+          "arm": "A",
+          "total_mean_ms": 5148.52,
+          "decode_mean_ms": 4408.06,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        }
+      ],
+      "native_result": "/Users/ogad/tether/models/parler/infrequent-reshape-20261020/native-run-r1/RESULT.json",
+      "native_power": "NOT_RECORDED; timing snapshots not assigned retroactively."
+    },
+    {
+      "name": "newk_tail_reshape",
+      "artifact_root": "/Users/ogad/tether/models/parler/cast-boundaries-20261020",
+      "decision": "NOT_ADOPTED_NO_ELIGIBLE_GAIN",
+      "factor": "Serialized terminal new_k singleton transpose replaced by reshape: compiled transposes97->96/reshapes291->292. Other math/head/current/cross paths and339learned/531payload references preserved. Same frozen bench binary, model path only.",
+      "timing_power": {
+        "source": "BATTERY",
+        "percent_before_after": [
+          83,
+          82
+        ],
+        "lowpowermode": 0
+      },
+      "native_evidence": {
+        "status": "PASS_FULL_NATIVE",
+        "cases": 2,
+        "rows_per_case_including_prefill": 200,
+        "reset_repeats": 2,
+        "rows_per_arm": 800,
+        "native_calls_per_arm_inferred": 796,
+        "native_call_scope": "199 native steps x2 cases x2 resets, inferred from strict API success, per-call runtime active checks and exact input loop; no direct profiler count or per-step label samples.",
+        "backend": "CPU host threads4, n_gpu_layers0; strict cpu_and_ane; case-end CPU/coreml-ane labels, repeats overwrite case_backends.",
+        "equality": "All saved float32 logit bytes finite, reset-repeat deterministic and exact across arms.",
+        "not_proven": [
+          "direct K/V state bytes",
+          "sampled rawfloat PCM or generated-code equality",
+          "perceptual speech quality",
+          "physical ANE-only execution"
+        ],
+        "gate_order": "same frozenwhole2 bridge current-stage control vs savedwhole2 exact first, then candidate exact",
+        "executed_arms": 2,
+        "executed_rows_all_arms": 1600,
+        "native_calls_all_arms_inferred": 1592,
+        "scope_addendum": "Indirect cache trajectory through native runtime; no direct K/V output capture."
+      },
+      "timing_result": "timing-run-r1/RESULT.json",
+      "timing_summary": "timing-run-r1/SUMMARY.json",
+      "sets": [
+        {
+          "set": 1,
+          "total": {
+            "A_mean_ms_from_emitted": 5012.78,
+            "B_mean_ms_from_emitted": 4950.88,
+            "gain_percent_derived": 1.235,
+            "total_at_least5pct": false,
+            "candidate_lower": true
+          },
+          "decode_loop": {
+            "A_mean_ms_from_emitted": 4287.09,
+            "B_mean_ms_from_emitted": 4218.26,
+            "gain_percent_derived": 1.606,
+            "decode_strictly_lower": true
+          }
+        },
+        {
+          "set": 2,
+          "total": {
+            "A_mean_ms_from_emitted": 5016.9,
+            "B_mean_ms_from_emitted": 4931.58,
+            "gain_percent_derived": 1.701,
+            "total_at_least5pct": false,
+            "candidate_lower": true
+          },
+          "decode_loop": {
+            "A_mean_ms_from_emitted": 4286.545,
+            "B_mean_ms_from_emitted": 4201.38,
+            "gain_percent_derived": 1.987,
+            "decode_strictly_lower": true
+          }
+        }
+      ],
+      "pooled": {
+        "total": {
+          "A_mean_ms_from_emitted": 5014.84,
+          "B_mean_ms_from_emitted": 4941.23,
+          "gain_percent_derived": 1.468,
+          "total_at_least5pct": false,
+          "candidate_lower": true
+        },
+        "decode_loop": {
+          "A_mean_ms_from_emitted": 4286.8175,
+          "B_mean_ms_from_emitted": 4209.82,
+          "gain_percent_derived": 1.796,
+          "decode_strictly_lower": true
+        }
+      },
+      "baseline_invocation_total_drift_percent": 0.133,
+      "perpair_order": [
+        {
+          "A_index": 1,
+          "B_index": 2,
+          "order": "A-B",
+          "total_gain_percent_derived": 1.069,
+          "decode_loop_gain_percent_derived": 1.503
+        },
+        {
+          "A_index": 4,
+          "B_index": 3,
+          "order": "B-A",
+          "total_gain_percent_derived": 1.401,
+          "decode_loop_gain_percent_derived": 1.708
+        },
+        {
+          "A_index": 5,
+          "B_index": 6,
+          "order": "A-B",
+          "total_gain_percent_derived": 1.825,
+          "decode_loop_gain_percent_derived": 2.012
+        },
+        {
+          "A_index": 8,
+          "B_index": 7,
+          "order": "B-A",
+          "total_gain_percent_derived": 1.577,
+          "decode_loop_gain_percent_derived": 1.962
+        }
+      ],
+      "invocations": [
+        {
+          "index": 1,
+          "arm": "A",
+          "total_mean_ms": 5010.72,
+          "decode_mean_ms": 4286.24,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 2,
+          "arm": "B",
+          "total_mean_ms": 4957.17,
+          "decode_mean_ms": 4221.81,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 3,
+          "arm": "B",
+          "total_mean_ms": 4944.59,
+          "decode_mean_ms": 4214.71,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 4,
+          "arm": "A",
+          "total_mean_ms": 5014.84,
+          "decode_mean_ms": 4287.94,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 5,
+          "arm": "A",
+          "total_mean_ms": 5016.41,
+          "decode_mean_ms": 4285.44,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 6,
+          "arm": "B",
+          "total_mean_ms": 4924.88,
+          "decode_mean_ms": 4199.23,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 7,
+          "arm": "B",
+          "total_mean_ms": 4938.28,
+          "decode_mean_ms": 4203.53,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 8,
+          "arm": "A",
+          "total_mean_ms": 5017.39,
+          "decode_mean_ms": 4287.65,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        }
+      ],
+      "native_result": "/Users/ogad/tether/models/parler/cast-boundaries-20261020/full-run-r1/RESULT.json",
+      "native_power": "NOT_RECORDED; timing snapshots not assigned retroactively."
+    },
+    {
+      "name": "original_heads_self_qkv_fusion",
+      "artifact_root": "/Users/ogad/tether/models/parler/qkv-fusion-20261020",
+      "decision": "NOT_ADOPTED_NO_ELIGIBLE_GAIN",
+      "factor": "Original-head serialized selfQ/K/V convs fused with3slices/layer. Int8codes/fp16scales concatenated without requantization. Baseline339learned/531refs mapped to291active producers/435refs,579physical records incl144 explicitly inactive old records. Same frozen bench binary, model path only.",
+      "timing_power": {
+        "source": "BATTERY",
+        "percent_before_after": [
+          72,
+          70
+        ],
+        "lowpowermode": 0
+      },
+      "native_evidence": {
+        "status": "EXPLORATORY_NATIVE_GUARD_PASS",
+        "full_crossarm_exactness": "PASS",
+        "rows_per_arm": 800,
+        "native_calls_per_arm_inferred": 796,
+        "equality": "Fresh current control matched saved WHOLE2 first; current vs QKV all800 float32 logit rows byte-exact, finite, repeats deterministic; NRMSE/KL0 and top1=1. Two200-input cases x2resets; each case1host-prefill+199nativecalls.",
+        "not_proven": [
+          "Production raw K/V equality",
+          "Universal or general CPU quality",
+          "Sampled raw float PCM/code/perceptual speech quality",
+          "Physical ANE-only execution"
+        ]
+      },
+      "timing_result": "full-exploratory-timing-run-r2/RESULT.json",
+      "timing_summary": "full-exploratory-timing-run-r2/SUMMARY.json",
+      "sets": [
+        {
+          "set": 1,
+          "total": {
+            "A_mean_ms_from_emitted": 5022.915,
+            "B_mean_ms_from_emitted": 4957.535,
+            "gain_percent_derived": 1.302,
+            "total_at_least5pct": false,
+            "candidate_lower": true
+          },
+          "decode_loop": {
+            "A_mean_ms_from_emitted": 4287.955,
+            "B_mean_ms_from_emitted": 4221.33,
+            "gain_percent_derived": 1.554,
+            "decode_strictly_lower": true
+          }
+        },
+        {
+          "set": 2,
+          "total": {
+            "A_mean_ms_from_emitted": 4964.6,
+            "B_mean_ms_from_emitted": 4853.23,
+            "gain_percent_derived": 2.243,
+            "total_at_least5pct": false,
+            "candidate_lower": true
+          },
+          "decode_loop": {
+            "A_mean_ms_from_emitted": 4234.005,
+            "B_mean_ms_from_emitted": 4136.645,
+            "gain_percent_derived": 2.299,
+            "decode_strictly_lower": true
+          }
+        }
+      ],
+      "pooled": {
+        "total": {
+          "A_mean_ms_from_emitted": 4993.7575,
+          "B_mean_ms_from_emitted": 4905.3825,
+          "gain_percent_derived": 1.77,
+          "total_at_least5pct": false,
+          "candidate_lower": true
+        },
+        "decode_loop": {
+          "A_mean_ms_from_emitted": 4260.98,
+          "B_mean_ms_from_emitted": 4178.9875,
+          "gain_percent_derived": 1.924,
+          "decode_strictly_lower": true
+        }
+      },
+      "baseline_invocation_total_drift_percent": 1.482,
+      "perpair_order": [
+        {
+          "A_index": 1,
+          "B_index": 2,
+          "order": "A-B",
+          "total_gain_percent_derived": 1.655,
+          "decode_loop_gain_percent_derived": 1.95
+        },
+        {
+          "A_index": 4,
+          "B_index": 3,
+          "order": "B-A",
+          "total_gain_percent_derived": 0.947,
+          "decode_loop_gain_percent_derived": 1.156
+        },
+        {
+          "A_index": 5,
+          "B_index": 6,
+          "order": "A-B",
+          "total_gain_percent_derived": 2.206,
+          "decode_loop_gain_percent_derived": 2.541
+        },
+        {
+          "A_index": 8,
+          "B_index": 7,
+          "order": "B-A",
+          "total_gain_percent_derived": 2.281,
+          "decode_loop_gain_percent_derived": 2.057
+        }
+      ],
+      "invocations": [
+        {
+          "index": 1,
+          "arm": "A",
+          "total_mean_ms": 5034.21,
+          "decode_mean_ms": 4298.54,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 2,
+          "arm": "B",
+          "total_mean_ms": 4950.9,
+          "decode_mean_ms": 4214.72,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 3,
+          "arm": "B",
+          "total_mean_ms": 4964.17,
+          "decode_mean_ms": 4227.94,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 4,
+          "arm": "A",
+          "total_mean_ms": 5011.62,
+          "decode_mean_ms": 4277.37,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 5,
+          "arm": "A",
+          "total_mean_ms": 4960.7,
+          "decode_mean_ms": 4241.45,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 6,
+          "arm": "B",
+          "total_mean_ms": 4851.29,
+          "decode_mean_ms": 4133.67,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 7,
+          "arm": "B",
+          "total_mean_ms": 4855.17,
+          "decode_mean_ms": 4139.62,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        },
+        {
+          "index": 8,
+          "arm": "A",
+          "total_mean_ms": 4968.5,
+          "decode_mean_ms": 4226.56,
+          "pcm16_sha256": "a274610a8992040c753978fd156124c82650225fda501e2ef0e990c1351be83f"
+        }
+      ],
+      "native_result": "full-exploratory-run-r3/RESULT.json",
+      "tiny_cpu_failure": {
+        "receipt": "tiny-run-r2/gate-cpu/FAILED_STEP.json",
+        "status": "STRICT_BITWISE_FAIL_RETAINED",
+        "scope": "CPU_ONLY tiny first step: logits maxabs0.001953125,newK0.0068359375,newV0.005859375. Stopped before furthersteps/ALL. FullCPU+ANE exploration separately predeclared; not a relabeling of tiny failure."
+      },
+      "interrupted_timing": {
+        "receipt": "full-exploratory-timing-watchdog-r1/HANDOFF.json",
+        "status": "INCOMPLETE_NO_VERDICT",
+        "completed_invocations": 1,
+        "partial_times_used_in_valid_cohort": false,
+        "diagnosis": "full-exploratory-timing-sleep-diagnosis-r1.json: idle sleep23:42:47 +0100 until DarkWake23:58:38 on2026-10-20. Watchdog elapsed1030.253s despite300cap; original evidence retained."
+      },
+      "valid_timing_resources": {
+        "status": "VALID_COMPLETED_COHORT",
+        "total_external_s": 172.718429,
+        "cap_s": 300,
+        "budget_compliant": true,
+        "system_sleep_events_during_cohort": [],
+        "owned_idle_sleep_assertion_removed": true,
+        "no_active_owned_jobs_including_caffeinate": true,
+        "receipt": "full-exploratory-timing-watchdog-r2/FINAL_PROCESS_AND_RESOURCE_RESULT.json",
+        "temporary_caffeinate_i_same_both_arms": true
+      },
+      "native_power": {
+        "scope": "Before native phase only; no after-phase snapshot recorded here.",
+        "source": "BATTERY",
+        "percent_before": 77,
+        "lowpowermode": 0,
+        "evidence": [
+          "full-exploratory-run-r3/before-power.txt",
+          "full-exploratory-run-r3/before-settings.txt"
+        ]
+      }
+    }
+  ],
+  "interpretation": {
+    "largest_observed_within_experiment_total_gain_percent": 1.77,
+    "variant": "original_heads_self_qkv_fusion",
+    "ranking_limit": "Separate sessions/power conditions; no direct candidate-vs-candidate comparison, no combined test, gains not additive. Largest observed percentage is not statistical superiority.",
+    "decision": "All3miss5%gate; no adoption or subsequent sampled-speech/ASR evaluation. QKV/tail smallpositive bothsets; Infrequent inconsistent.",
+    "prior_fast_prediction": "parler-coreml-fast-prediction-20261020.json: -0.219%pooled onAC; no unqualified cross-session absolute-time comparison.",
+    "limits": [
+      "No2x result or hardware ceiling proven",
+      "CPU_AND_NE is policy, not physical ANE-only execution",
+      "All8final fixed-work WAV/PCM16 hashes match within each study: diagnostic only, not general/rawfloat speech quality",
+      "Six-significant-digit stageJSON, not original full-precision timings",
+      "No genuine cold-load or natural end-to-end speech latency measured",
+      "Historical MM compiler flag continuity unconfirmed; original/MODE0 exactness is bounded numerical control"
+    ]
+  },
+  "retained_failures": "All failed artifacts retained. Tail producer count fixed before model work. QKV SDK/header plumbing fixed before genuine tinyBITFAIL; full basename preserved to pass unchanged generated-class metadata, relocated test-only paths fixed before new activity. Interrupted timing excluded in full. No threshold relaxed within a failed study."
+}

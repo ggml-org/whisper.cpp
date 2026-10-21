@@ -39,7 +39,7 @@ load their model once and reuse it across synthesis calls:
 |---|---|---|
 | `tts_cpp::chatterbox` | `Engine::synthesize` | 24 kHz PCM by default; Turbo/Multilingual selected by GGUF metadata |
 | `tts_cpp::supertonic` | `Engine::synthesize` | model-rate PCM, usually 44.1 kHz; `Engine::vocoder_on_coreml()` reports whether the Core ML vocoder sidecar loaded and `SynthesisResult::vocoder_synthesis_backend` where each call's vocoder ran (`"ggml"`, a `coreml-*` label, or `"mixed"` across streamed chunks), see the [Supertonic guide](supertonic.md#core-ml-vocoder-sidecar) |
-| `tts_cpp::parler` | `Engine::synthesize` | 44.1 kHz PCM conditioned by a description |
+| `tts_cpp::parler` | `Engine::synthesize` | 44.1 kHz PCM conditioned by a description; `Engine::dac_on_coreml()` reports whether the Core ML DAC sidecar is attached (false once a failed call retires it) and `SynthesisResult::dac_backend` where each call's DAC ran (`"ggml"`, a `coreml-*` label, or `"mixed"` across streamed chunks), see the [Parler guide](parler.md#core-ml-dac-sidecar-apple-neural-engine) |
 | `tts_cpp::cosyvoice` | `Engine::synthesize` | 24 kHz PCM |
 | `tts_cpp::audio8` | `Engine::synthesize` | 44.1 kHz PCM, optionally cloned from `VoicePrompt`; `Engine::codec_on_coreml()` reports whether the Core ML codec sidecar is attached (false once a failed call retires it) and `SynthesisResult::codec_synthesis_backend` where each call's codec synthesis ran (`"ggml"` or a `coreml-*` label), see the [Audio8 guide](audio8.md#core-ml-codec-sidecar) |
 | `tts_cpp::pocket` | `Engine::synthesize` / `synthesize_stream` | CPU FlowLM/Mimi, 24 kHz by default; prepared voice or encoder-enabled cloning |

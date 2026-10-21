@@ -72,6 +72,24 @@ FitResult fit_params(const FitOptions & opts) {
         return r;
     }
 
+#ifdef TTS_CPP_USE_COREML
+    if (opts.coreml_decoder && !detail::parler_coreml_disabled()) {
+        r.reason = "coreml-memory-estimate-unavailable";
+        r.report = "The requested Core ML decoder adds resident weights, state and prediction buffers "
+                   "outside the native fitter; disable it to project the ggml runtime.\n";
+        return r;
+    }
+#endif
+
+    // An enabled Core ML DAC sidecar runs outside ggml: its resident model and
+    // prediction buffers cannot be projected (CosyVoice's rule).
+    if (detail::parler_dac_sidecar_enabled(opts.model_gguf_path)) {
+        r.reason = "coreml-memory-estimate-unavailable";
+        r.report = "The Core ML DAC sidecar's resident model and prediction buffers cannot be "
+                   "projected; set PARLER_COREML_DISABLE=1 to project the ggml DAC instead.\n";
+        return r;
+    }
+
     if (!opts.backends_dir.empty()) {
         ::tts_cpp::detail::set_backends_directory(opts.backends_dir);
     }

@@ -1,6 +1,7 @@
 #include "tts-cpp/parler/engine.h"
 
 #include "internal.h"
+#include "decoder_runtime.h"
 #include "tokenizer.h"
 #include "bpe_tokenizer.h"
 #include "text_norm.h"
@@ -12,6 +13,7 @@
 #include <atomic>
 #include <cstdio>
 #include <random>
+#include <set>
 #include <stdexcept>
 #include <thread>
 
@@ -23,6 +25,7 @@ using namespace ::tts_cpp::parler::detail;
 struct Engine::Impl {
     EngineOptions        opts;
     parler_model         model;
+    parler_decoder_runtime decoder{model};
     parler_tokenizer     tokenizer;         // descriptions (and prompts when shared)
     parler_bpe_tokenizer prompt_tokenizer;  // prompts, iff the GGUF ships one
     ggml_gallocr_t       allocr = nullptr;
@@ -113,13 +116,18 @@ struct Engine::Impl {
 
         parler_step_logits logits;
         int n_past = 0;
-        if (!parler_dec_prefill(model, prompt_ids, st.input_frame(), allocr, n_threads,
-                                logits, n_past)) {
+        if (!decoder.prefill(prompt_ids, st.input_frame(), allocr, n_threads,
+                                logits, n_past, dcfg.max_length)) {
             throw std::runtime_error("parler: decoder prefill failed");
         }
 
         SynthesisResult res;
         res.sample_rate = hp.dac_sample_rate;
+        std::set<std::string> dac_backends;
+        auto note_dac_backend = [&](const std::string & backend) {
+            dac_backends.insert(backend);
+            res.dac_backend = dac_backends.size() == 1 ? backend : PARLER_DAC_MIXED_BACKEND;
+        };
 
         // Streaming re-decodes the growing code prefix every stream_chunk_frames
         // steps and emits the newly-stable samples (holding back the DAC right
@@ -139,11 +147,12 @@ struct Engine::Impl {
             // are still consulted as convolution context, so each chunk is
             // bit-identical to slicing a whole-sequence decode
             std::vector<float> pcm;
-            std::string dac_err;
+            std::string dac_err, dac_backend;
             if (!parler_dac_decode(model, c.data(), nf, n_threads, pcm, nullptr,
-                                   emitted_frames, emit_end, &dac_err)) {
+                                   emitted_frames, emit_end, &dac_err, &dac_backend)) {
                 throw std::runtime_error("parler: DAC decode failed: " + dac_err);
             }
+            note_dac_backend(dac_backend);
             (*on_chunk)(pcm.data(), pcm.size(), chunk_index++, final_flush);
             res.pcm.insert(res.pcm.end(), pcm.begin(), pcm.end());
             emitted_frames = emit_end;
@@ -159,7 +168,8 @@ struct Engine::Impl {
                                 frame);
             st.append(frame);
             if (st.finished()) break;
-            if (!parler_dec_step(model, st.input_frame(), n_past, allocr, n_threads, logits)) {
+            if (!decoder.step(st.input_frame(), n_past, allocr, n_threads, logits)) {
+                check_cancel();
                 throw std::runtime_error("parler: decoder step failed");
             }
             n_past++;
@@ -169,6 +179,7 @@ struct Engine::Impl {
             }
         }
 
+        res.decoder_backend = decoder.backend();
         int n_frames = 0;
         const std::vector<int32_t> codes = st.undelay(hp.dac_codebook_size, &n_frames);
         if (n_frames <= 0) {
@@ -183,11 +194,12 @@ struct Engine::Impl {
             return res;
         }
 
-        std::string dac_err;
+        std::string dac_err, dac_backend;
         if (!parler_dac_decode(model, codes.data(), n_frames, n_threads, res.pcm,
-                               nullptr, 0, -1, &dac_err)) {
+                               nullptr, 0, -1, &dac_err, &dac_backend)) {
             throw std::runtime_error("parler: DAC decode failed: " + dac_err);
         }
+        note_dac_backend(dac_backend);
         res.duration_s  = res.pcm.empty() ? 0.0f
                         : (float) res.pcm.size() / (float) hp.dac_sample_rate;
         return res;
@@ -196,6 +208,9 @@ struct Engine::Impl {
 
 Engine::Engine(const EngineOptions & opts) : pimpl_(new Impl()) {
     pimpl_->opts = opts;
+    pimpl_->decoder.set_cancel_check([state = pimpl_.get()] {
+        return state->cancel_requested.load(std::memory_order_relaxed);
+    });
     if (!opts.backends_dir.empty()) {
         ::tts_cpp::detail::set_backends_directory(opts.backends_dir);
     }
@@ -213,6 +228,16 @@ Engine::Engine(const EngineOptions & opts) : pimpl_(new Impl()) {
                                        pimpl_->model.ptok_unk_id, pimpl_->model.ptok_bos_id,
                                        pimpl_->model.ptok_add_bos)) {
         throw std::runtime_error("parler: prompt tokenizer load failed");
+    }
+    parler_attach_dac_sidecar(pimpl_->model, opts.model_gguf_path);
+    if (opts.coreml_decoder && !parler_coreml_disabled()) {
+        auto sidecar = parler_open_decoder_sidecar(pimpl_->model, opts.model_gguf_path, err);
+        if (!sidecar) {
+            if (parler_coreml_strict()) throw std::runtime_error("parler: " + err);
+            fprintf(stderr, "parler: %s; decoder stays on ggml\n", err.c_str());
+        } else {
+            pimpl_->decoder.attach(std::move(sidecar), parler_coreml_strict());
+        }
     }
     pimpl_->allocr = ggml_gallocr_new(
         ggml_backend_get_default_buffer_type(pimpl_->model.backend));
@@ -276,6 +301,12 @@ std::string Engine::backend_name() const {
     if (!pimpl_->model.backend) return "(unknown)";
     return ggml_backend_name(pimpl_->model.backend);
 }
+
+bool Engine::dac_on_coreml() const {
+    return pimpl_->model.dac_sidecar != nullptr;
+}
+
+bool Engine::decoder_on_coreml() const { return pimpl_->decoder.active(); }
 
 BackendDevice Engine::backend_device() const {
     return ::tts_cpp::detail::backend_is_cpu(pimpl_->model.backend)

@@ -393,7 +393,8 @@ ggml_cgraph * parler_build_dac_fit_graph(const parler_model & model, int n_frame
 bool parler_dac_decode(const parler_model & model, const int32_t * codes, int n_frames,
                        int n_threads, std::vector<float> & pcm_out,
                        std::vector<float> * latent_out,
-                       int out_begin, int out_end, std::string * err_out) {
+                       int out_begin, int out_end, std::string * err_out,
+                       std::string * backend_out) {
     std::string err;
     const parler_hparams & hp = model.hparams;
     const int n_q = hp.dac_n_q;
@@ -424,6 +425,29 @@ bool parler_dac_decode(const parler_model & model, const int32_t * codes, int n_
             return false;
         }
     }
+
+    if (model.dac_sidecar) {
+        pcm_out.clear();
+        if (latent_out) latent_out->clear();
+        if (parler_dac_decode_sidecar(model, codes, n_frames, pcm_out, latent_out, out_begin, out_end)) {
+            if (backend_out) *backend_out = model.dac_sidecar->label();
+            return true;
+        }
+        // retire the sidecar for the rest of the model's life and redo the whole
+        // range on ggml, so no output ever mixes a failed call's windows
+        fprintf(stderr, "%s: Core ML DAC sidecar (%s) failed; retiring it, decoding on ggml\n",
+                __func__, model.dac_sidecar->label());
+        model.dac_sidecar.reset();
+        model.dac_sidecar_retired = true;
+    }
+    if (model.dac_sidecar_retired && parler_coreml_strict()) {
+        err = std::string("the Core ML DAC sidecar failed and ") + PARLER_COREML_STRICT_ENV + " is set";
+        pcm_out.clear();
+        if (latent_out) latent_out->clear();
+        if (err_out) *err_out = err;
+        return false;
+    }
+    if (backend_out) *backend_out = PARLER_DAC_GGML_BACKEND;
 
     if (!model.dac_allocr) {
         model.dac_allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));

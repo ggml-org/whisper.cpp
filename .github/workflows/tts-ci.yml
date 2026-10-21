@@ -455,6 +455,139 @@ jobs:
           done
           exit "$routing_status"
 
+      # Core ML Parler DAC sidecar on a tiny random-weight Parler GGUF built
+      # in place (no download): the sidecar is exported by the repo's
+      # exporter with rows folded at 64 samples so the tiny decoder still
+      # takes the folded path, plus a second sidecar too narrow for its
+      # context that attach must refuse. fp32, because untrained weights
+      # drive the Snake phase |alpha x / pi| to ~25, where fp16 resolution
+      # costs ~30 dB (the trained checkpoints stay below ~2 past the first
+      # Snake). --require-coreml fails the step if the Core ML gates skip.
+      - name: Test (Core ML Parler DAC sidecar)
+        if: runner.os == 'macOS'
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          py=.venv-cosyvoice-coreml/bin/python
+          if [ ! -x "$py" ]; then
+            coreml_python="$(command -v python3.11 || command -v python3)"
+            "$coreml_python" -m venv .venv-parler-coreml
+            .venv-parler-coreml/bin/python -m pip install -r engines/parakeet/scripts/requirements-coreml.txt
+            py=.venv-parler-coreml/bin/python
+          fi
+          "$py" engines/tts/test/test_export_parler_dac_coreml.py
+          "$py" engines/tts/test/parler/prepare_dac_coreml_fixture.py --out parler-coreml-fixture
+          "$py" engines/tts/scripts/parler/export-dac-coreml.py \
+            --gguf parler-coreml-fixture/parler-tiny-f32.gguf --window 128 --fold-rows 64 \
+            --precision float32 --compile-dir parler-coreml-fixture
+          mkdir -p parler-coreml-fixture-fallback
+          ln -sf "$PWD/parler-coreml-fixture/parler-tiny-f32.gguf" parler-coreml-fixture-fallback/
+          "$py" engines/tts/scripts/parler/export-dac-coreml.py \
+            --gguf parler-coreml-fixture-fallback/parler-tiny-f32.gguf --window 64 --precision float32 \
+            --out parler-coreml-fixture-fallback/parler-tiny-dac.mlpackage \
+            --compile-dir parler-coreml-fixture-fallback
+          ./build/test-parler-dac-coreml --gguf parler-coreml-fixture/parler-tiny-f32.gguf \
+            --fallback-gguf parler-coreml-fixture-fallback/parler-tiny-f32.gguf \
+            --min-snr 60 --require-coreml
+
+      - name: Test (Core ML Parler decoder state and recovery)
+        id: parler-decoder-runtime
+        if: runner.os == 'macOS'
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          PARLER_REQUIRE_HF_CAPTURE: '1'
+        run: |
+          set -euo pipefail
+          py=.venv-cosyvoice-coreml/bin/python
+          if [ ! -x "$py" ]; then py=.venv-parler-coreml/bin/python; fi
+          # Reuse the Core ML venv without changing its torch/numpy pins.
+          # Parler 0.2.2's metadata requests unpinned Git audiotools and
+          # protobuf>=4, conflicting with audiotools 0.7.2's protobuf<3.20.
+          # Use the known-working release dependencies for this decoder-only
+          # capture (no checkpoint, tokenizer, or audio generation is loaded).
+          "$py" -m pip install -c engines/parakeet/scripts/requirements-coreml.txt \
+            'transformers==4.46.1' 'tokenizers==0.20.3' 'sentencepiece==0.2.2' \
+            'torchaudio==2.7.0' 'descript-audio-codec==1.0.0' \
+            'descript-audiotools==0.7.2' 'protobuf==3.19.6'
+          "$py" -m pip install --no-deps \
+            'parler-tts @ git+https://github.com/huggingface/parler-tts.git@d108732cd57788ec86bc857d99a6cabd66663d68'
+          "$py" engines/tts/test/parler/prepare_decoder_coreml_fixture.py parler-coreml-session
+          ./build/test-parler-decoder-coreml parler-coreml-session/readonly_cache.mlmodelc cpu
+          "$py" engines/tts/test/parler/prepare_dac_coreml_fixture.py \
+            --out parler-decoder-runtime-fixture --random-decoder
+          # Run all decoder Python suites with real dependencies. The bridge
+          # suite must exercise the native ABI against this synthetic GGUF.
+          export PARLER_DECODER_VALIDATION_BRIDGE="$PWD/build/libparler-decoder-validation.so"
+          export PARLER_DECODER_VALIDATION_TINY_GGUF="$PWD/parler-decoder-runtime-fixture/parler-tiny-f32.gguf"
+          test -f "$PARLER_DECODER_VALIDATION_BRIDGE"
+          test -f "$PARLER_DECODER_VALIDATION_TINY_GGUF"
+          "$py" engines/tts/test/test_export_parler_decoder_coreml.py
+          "$py" engines/tts/test/test_validate_parler_decoder_coreml.py
+          "$py" engines/tts/test/test_parler_decoder_validation_bridge.py
+          # Validate production exports with both supported state groupings.
+          # Run all graph/native cases before reporting any parity failure.
+          decoder_status=0
+          for grouping in per-layer grouped; do
+            case_dir="parler-decoder-runtime-fixture/$grouping"
+            mkdir -p "$case_dir"
+            ln -sf ../parler-tiny-f32.gguf "$case_dir/parler-tiny-f32.gguf"
+            layers_per_state=1
+            if [ "$grouping" = grouped ]; then layers_per_state=0; fi
+            echo "::group::Export decoder grouping=$grouping"
+            if ! "$py" engines/tts/scripts/parler/export-decoder-coreml.py \
+              --gguf "$case_dir/parler-tiny-f32.gguf" --ctx 64 --cross-context 8 \
+              --weights fp16 --layers-per-state "$layers_per_state" --compile-dir "$case_dir"; then
+              decoder_status=1
+              echo "::endgroup::"
+              continue
+            fi
+            echo "::endgroup::"
+            echo "::group::Independent Torch/Core ML graph parity grouping=$grouping"
+            graph_status=0
+            if ! "$py" engines/tts/test/parler/check_decoder_coreml_parity.py \
+              --gguf "$case_dir/parler-tiny-f32.gguf" --package "$case_dir/parler-tiny-decoder.mlpackage"; then
+              decoder_status=1
+              graph_status=1
+            fi
+            echo "::endgroup::"
+            native_status=0
+            for units in cpu_only all; do
+              for attention in fa manual; do
+                echo "::group::Native decoder parity grouping=$grouping units=$units attention=$attention"
+                if [ "$attention" = manual ]; then export PARLER_NO_FA=1; else unset PARLER_NO_FA; fi
+                if ! PARLER_COREML_COMPUTE_UNITS="$units" ./build/test-parler-decoder-runtime \
+                  "$case_dir/parler-tiny-f32.gguf" --coreml; then
+                  decoder_status=1
+                  native_status=1
+                  echo "FAIL native grouping=$grouping units=$units attention=$attention"
+                else
+                  echo "PASS native grouping=$grouping units=$units attention=$attention"
+                fi
+                echo "::endgroup::"
+              done
+            done
+            if [ "$graph_status" = 1 ]; then
+              echo "Independent graph inference fails for $grouping; native cache import is not needed to reproduce."
+            elif [ "$native_status" = 1 ]; then
+              echo "Independent graph inference passes for $grouping; isolate native cache import, input provider, row writes, or ggml reference."
+            else
+              echo "Independent graph and native parity pass for $grouping."
+            fi
+          done
+          exit "$decoder_status"
+
+      - name: Upload failing synthetic Parler decoder fixtures
+        if: failure() && steps.parler-decoder-runtime.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: parler-decoder-runtime-synthetic
+          path: |
+            parler-decoder-runtime-fixture/parler-tiny-f32.gguf
+            parler-decoder-runtime-fixture/per-layer/parler-tiny-decoder.mlpackage
+            parler-decoder-runtime-fixture/grouped/parler-tiny-decoder.mlpackage
+          if-no-files-found: warn
+
       # Core ML Audio8 codec sidecar fixtures, converted and exported by the
       # repo's own scripts: the 64-frame sidecar for parity and speed, and an
       # 8-frame one (window <= causal context) that loads but cannot serve, for
