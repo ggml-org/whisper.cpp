@@ -46,7 +46,7 @@ else()
     set(AUDIOGEN_MINIMAX_DEFAULT ON)
 endif()
 option(AUDIOGEN_BUILD_MINIMAX "audiogen-cpp: build the desktop MiniMax-Music3 engine (CPU default, GPU via EngineOptions::device)" ${AUDIOGEN_MINIMAX_DEFAULT})
-option(AUDIOGEN_COREML "audiogen-cpp: enable the Apple Core ML (Neural Engine) VAE decoder sidecar (Apple-only, additive; ACE-Step decodes on a <vae>-decoder.mlmodelc next to the VAE GGUF when present, else falls back to the ggml decode)." OFF)
+option(AUDIOGEN_COREML "audiogen-cpp: enable Apple Core ML sidecars (ACE-Step VAE decoder and explicit MiniMax conditioner)." OFF)
 if (AUDIOGEN_COREML)
     if (NOT APPLE)
         message(FATAL_ERROR "AUDIOGEN_COREML is Apple-only (requires the CoreML framework); leave it OFF on ${CMAKE_SYSTEM_NAME}.")
@@ -128,6 +128,7 @@ set(AUDIOGEN_LIB_SOURCES
 if (AUDIOGEN_BUILD_MINIMAX)
     list(APPEND AUDIOGEN_LIB_SOURCES
         src/minimax/logic.cpp
+        src/minimax/coreml-conditioner.cpp
         src/minimax/engine.cpp
         src/minimax/fit.cpp
     )
@@ -137,6 +138,11 @@ if (AUDIOGEN_COREML)
     list(APPEND AUDIOGEN_LIB_SOURCES src/coreml/vae-decoder.mm)
     set_source_files_properties(src/coreml/vae-decoder.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    if (AUDIOGEN_BUILD_MINIMAX)
+        list(APPEND AUDIOGEN_LIB_SOURCES src/coreml/minimax-conditioner.mm)
+        set_source_files_properties(src/coreml/minimax-conditioner.mm
+            PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    endif()
 endif()
 
 if (AUDIOGEN_BUILD_LIBRARY)
@@ -164,7 +170,7 @@ if (AUDIOGEN_BUILD_LIBRARY)
             ${AUDIOGEN_COREML_FRAMEWORK}
             ${AUDIOGEN_FOUNDATION_FRAMEWORK}
         )
-        message(STATUS "audiogen: Core ML VAE decoder sidecar enabled (AUDIOGEN_USE_COREML)")
+        message(STATUS "audiogen: Core ML sidecars enabled (AUDIOGEN_USE_COREML)")
     endif()
     set_target_properties(audiogen-cpp-objects PROPERTIES
         POSITION_INDEPENDENT_CODE ON
@@ -358,6 +364,17 @@ if (AUDIOGEN_BUILD_TESTS)
     endif()
 
     if (AUDIOGEN_BUILD_MINIMAX)
+        add_executable(test-minimax-conditioner-layout test/test_minimax_conditioner_layout.cpp)
+        audiogen_link_in_tree_binary(test-minimax-conditioner-layout)
+        audiogen_register_test(test-minimax-conditioner-layout LABEL "unit")
+
+        if (AUDIOGEN_COREML)
+            add_executable(test-minimax-coreml-conditioner test/test_minimax_coreml_conditioner.cpp)
+            audiogen_link_in_tree_binary(test-minimax-coreml-conditioner)
+            audiogen_register_test(test-minimax-coreml-conditioner LABEL "integration")
+            set_property(TEST test-minimax-coreml-conditioner PROPERTY SKIP_RETURN_CODE 77)
+        endif()
+
         add_executable(test-minimax-units test/test_minimax_units.cpp)
         audiogen_link_in_tree_binary(test-minimax-units)
         audiogen_register_test(test-minimax-units LABEL "unit")
@@ -400,6 +417,12 @@ if (AUDIOGEN_BUILD_TESTS)
 
         find_package(Python3 COMPONENTS Interpreter)
         if (Python3_Interpreter_FOUND)
+            add_test(NAME test-minimax-conditioner-exporter
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_export_minimax_conditioner_coreml.py
+            )
+            set_property(TEST test-minimax-conditioner-exporter PROPERTY LABELS "unit")
+            set_property(TEST test-minimax-conditioner-exporter PROPERTY ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
             add_test(NAME test-minimax-converter
                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_convert_minimax.py
             )

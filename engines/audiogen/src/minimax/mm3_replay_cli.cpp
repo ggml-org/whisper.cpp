@@ -19,6 +19,7 @@ struct CliOptions {
     std::string out_dir;
     std::string mode;
     std::string device;
+    std::string coreml_conditioner;
     std::string caption;
     std::string lyrics;
     std::string tokens_path;
@@ -58,6 +59,7 @@ CliOptions parse_options(int argc, char ** argv) {
     options.out_dir       = arg_value(argc, argv, "--out", ".");
     options.mode          = arg_value(argc, argv, "--mode", "full");
     options.device        = arg_value(argc, argv, "--device", "");
+    options.coreml_conditioner = arg_value(argc, argv, "--coreml-cond", "");
     options.caption       = arg_value(argc, argv, "--caption", "");
     options.lyrics        = arg_value(argc, argv, "--lyrics", "");
     options.tokens_path   = arg_value(argc, argv, "--tokens", "");
@@ -84,6 +86,7 @@ void print_usage() {
             "             repeated computes with interleaved CFG branches\n"
             "  common:    [--seed N] [--steps N] [--max-frames N] [--threads N]\n"
             "             [--device cpu|gpu|auto]\n"
+            "             [--coreml-cond <conditioner.mlmodelc>] CPU + ANE projection\n"
             "             [--dump-iters N [--dump-dir <dir>]] write per-iteration AR\n"
             "             probes (semantic logits, guided logits, hiddens, feedback)\n"
             "             for the first N iterations as raw f32 files\n");
@@ -108,6 +111,7 @@ bool load_model(const CliOptions & options, MM3Model & model, std::string * erro
         return false;
     }
     model.models_dir = options.models;
+    model.coreml_conditioner_path = options.coreml_conditioner;
     mm3_probe_file(pair.lm, &model.lm_file, &model.lm_cfg, nullptr, &model.meta_errors);
     mm3_probe_file(pair.synth, &model.synth_file, nullptr, &model.synth_cfg, &model.meta_errors);
     if (!model.meta_errors.empty()) {

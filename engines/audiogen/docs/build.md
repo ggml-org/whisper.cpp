@@ -34,7 +34,7 @@ directory such as `Release/` beneath the executable directory. See the
 | `AUDIOGEN_BUILD_EXECUTABLES` | `ON` standalone, `OFF` as a subdirectory | CLIs and per-stage smoke harnesses |
 | `AUDIOGEN_BUILD_TESTS` | `ON` standalone, `OFF` as a subdirectory | unit, integration, and backend parity tests |
 | `AUDIOGEN_BUILD_MINIMAX` | `ON` on desktop, unavailable on Android and iOS | MiniMax-Music3 engine; CPU by default, GPU through `EngineOptions::device` |
-| `AUDIOGEN_COREML` | `OFF` | Apple-only Core ML (Neural Engine) VAE decoder sidecar; see [Core ML VAE decoder sidecar](backends.md#core-ml-vae-decoder-sidecar) |
+| `AUDIOGEN_COREML` | `OFF` | Apple-only Core ML sidecars: [ACE-Step VAE decoder](backends.md#core-ml-vae-decoder-sidecar) and explicit [MiniMax conditioner](backends.md#minimax-core-ml-conditioner) |
 | `AUDIOGEN_INSTALL` | `ON` | generate install rules |
 | `AUDIOGEN_USE_SYSTEM_GGML` | `ON` | `find_package(ggml)`; required, there is no supported vendored ggml in this tree |
 | `AUDIOGEN_CCACHE` | `ON` | use ccache when available |

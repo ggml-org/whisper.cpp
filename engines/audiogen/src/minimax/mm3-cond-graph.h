@@ -6,6 +6,7 @@
 #include "ggml.h"
 #include "logic.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -345,6 +346,33 @@ static bool mm3_cond_encode(const MM3Model & m, const float * hiddens, int64_t F
         return false;
     }
     MM3CondGraph * g = &g_mm3_cond;
+    if (m.coreml_conditioner) {
+        const auto & c = m.synth_cfg.cond;
+        std::vector<float> mix;
+        if (!mm3_cond_readback_f32(g->mix, &mix, err, "cond.layer_mix")) return false;
+        std::vector<float> mixed((size_t) F * c.hidden_dim, 0.0f);
+        for (int64_t frame = 0; frame < F; ++frame) {
+            float * dst = mixed.data() + frame * c.hidden_dim;
+            for (uint32_t layer = 0; layer < c.num_layers; ++layer) {
+                const float * src = hiddens + (frame * c.num_layers + layer) * c.hidden_dim;
+                for (uint32_t channel = 0; channel < c.hidden_dim; ++channel) {
+                    dst[channel] += mix[layer] * src[channel];
+                }
+            }
+        }
+        std::vector<float> projected;
+        if (!mm3_coreml_conditioner_project(m.coreml_conditioner, mixed.data(), F, projected, err)) {
+            return false;
+        }
+        const int64_t L = mm3_cond_latent_length(c, F);
+        out.resize((size_t) L * c.out_dim);
+        for (int64_t i = 0; i < L; ++i) {
+            const int64_t source = std::min(i * F / L, F - 1);
+            std::copy_n(projected.data() + source * c.out_dim, c.out_dim, out.data() + i * c.out_dim);
+        }
+        if (out_L) *out_L = L;
+        return true;
+    }
     if (!mm3_cond_ensure_graph(m, g, F, err)) {
         return false;
     }

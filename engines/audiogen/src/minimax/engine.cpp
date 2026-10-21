@@ -166,6 +166,7 @@ std::unique_ptr<Engine> Engine::create(const EngineOptions & input) {
     backend_configure_cpu(engine->impl_->options.n_threads, input.backends_dir);
     backend_configure_device(input.device);
     detail::probe_model_files(engine->impl_->model, engine->impl_->options);
+    engine->impl_->model.coreml_conditioner_path = input.coreml_conditioner_path;
     std::string error;
     if (!mm3_load(&engine->impl_->model, &error)) {
         throw std::runtime_error("minimax engine: " + error);

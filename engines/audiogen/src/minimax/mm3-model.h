@@ -1,6 +1,7 @@
 #pragma once
 
 #include "backend.h"
+#include "coreml-conditioner.h"
 #include "gguf-weights.h"
 #include "logic.h"
 #include "weight-ctx.h"
@@ -288,6 +289,9 @@ struct MM3Model {
     MM3LmConfig              lm_cfg;
     MM3SynthConfig           synth_cfg;
     std::vector<std::string> meta_errors;
+
+    std::string coreml_conditioner_path;
+    MM3CoreMLConditioner * coreml_conditioner = nullptr;
 
     bool           loaded      = false;
     bool           backend_ref = false;
@@ -979,8 +983,10 @@ static bool mm3_load_synth_tensors(MM3Model * m, const GGUFModel & gf, std::vect
         const MM3CondConfig & e = c.cond;
         m->synth.cond.layer_logits = ld.req("cond.layer_logits", e.num_layers);
         m->synth.cond.layer_scale  = ld.req("cond.layer_scale", 1);
-        m->synth.cond.proj_w       = ld.req("cond.proj.weight", e.kernel_size, e.hidden_dim, e.out_dim);
-        m->synth.cond.proj_b       = ld.req("cond.proj.bias", e.out_dim);
+        if (!m->coreml_conditioner) {
+            m->synth.cond.proj_w = ld.req("cond.proj.weight", e.kernel_size, e.hidden_dim, e.out_dim);
+            m->synth.cond.proj_b = ld.req("cond.proj.bias", e.out_dim);
+        }
     }
 
     {
@@ -1061,9 +1067,11 @@ static bool mm3_load_synth_tensors(MM3Model * m, const GGUFModel & gf, std::vect
 }
 
 static void mm3_unload(MM3Model * m) {
-    if (!m->loaded && !m->wctx_lm.ctx && !m->wctx_synth.ctx && !m->backend_ref) {
+    if (!m->loaded && !m->wctx_lm.ctx && !m->wctx_synth.ctx && !m->backend_ref && !m->coreml_conditioner) {
         return;
     }
+    mm3_coreml_conditioner_free(m->coreml_conditioner);
+    m->coreml_conditioner = nullptr;
     wctx_free(&m->wctx_lm);
     wctx_free(&m->wctx_synth);
     m->lm    = MM3LmWeights{};
@@ -1102,6 +1110,18 @@ static bool mm3_load(MM3Model * m, std::string * err_out) {
     }
 
     const auto t0 = std::chrono::steady_clock::now();
+
+    if (!m->coreml_conditioner_path.empty()) {
+        const auto & c = m->synth_cfg.cond;
+        if (c.kernel_size != 3 || c.padding != 1) {
+            if (err_out) *err_out = "Core ML conditioner requires kernel=3 and padding=1";
+            return false;
+        }
+        m->coreml_conditioner = mm3_coreml_conditioner_load(
+            m->coreml_conditioner_path, c.hidden_dim, c.out_dim, err_out);
+        if (!m->coreml_conditioner) return false;
+        fprintf(stderr, "[MM3] Conditioner: Core ML CPU + ANE, %s\n", m->coreml_conditioner_path.c_str());
+    }
 
     BackendPair bp = backend_init("MM3");
     m->backend     = bp.backend;

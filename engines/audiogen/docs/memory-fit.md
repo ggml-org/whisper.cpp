@@ -32,6 +32,12 @@ same `device` semantics (`cpu`, `gpu` or `auto`; empty defers to
 `MM3_DEVICE`, then `cpu`) and the same `backends_dir`. `device = "gpu"` without
 a usable GPU is an error, as it is for a load.
 
+When `coreml_conditioner_path` is set, the preflight returns `Error` with
+reason `coreml-memory-estimate-unavailable`. It cannot project Core ML's
+resident model and prediction allocations, so it does not report the native
+estimate as a hybrid fit verdict. This does not prevent `Engine::create` or
+`generate` from using the Core ML conditioner.
+
 | `FitWorkload` field | Default | Meaning |
 |---|---|---|
 | `max_frames` | 300 (12 s) | `GenerateParams::max_frames`; capped at the checkpoint's `mm3.max_audio_frames` exactly as `generate()` caps it |
@@ -65,7 +71,8 @@ is the device side of the stage's graph buffers, and `host_bytes` is what the
 stage holds in system memory. `status` is `Success` (`fits`), `Failure`
 (`does-not-fit`, a valid answer) or `Error` with one of `invalid-arguments`,
 `model-unreadable`, `workload-too-large`, `no-backend-device` or
-`measurement-failed`; `report` carries a readable summary or the error.
+`measurement-failed` or `coreml-memory-estimate-unavailable`; `report` carries
+a readable summary or the error.
 
 The tokenizer tables, ggml's per-graph CPU work buffers and the scheduler's own
 bookkeeping are not projected; the margin covers them.

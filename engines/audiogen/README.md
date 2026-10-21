@@ -16,12 +16,13 @@ Native [ACE-Step 1.5](https://github.com/ace-step/ACE-Step-1.5) and MiniMax-Musi
 | Model | Task | Output | Quantization | Backends |
 |---|---|---|---|---|
 | ACE-Step v15 turbo / sft / base | text-to-music, editing, LRC timestamps; base-only lego stems | 48 kHz stereo | `f32`, `f16`, `bf16`, `q8_0`; turbo also `q4_k_m` | CPU, Vulkan, Metal, OpenCL (Adreno 700+), CUDA, Hexagon (turbo `q8_0` DiT); optional Core ML VAE-decoder sidecar |
-| MiniMax-Music3 | text-to-music | 44.1 kHz stereo | `f16`, `q8_0`; LM, DiT and depth decoder also `q4_k_m` | desktop CPU + GPU (CUDA, Vulkan, Metal) |
+| MiniMax-Music3 | text-to-music | 44.1 kHz stereo | `f16`, `q8_0`; LM, DiT and depth decoder also `q4_k_m` | desktop CPU + GPU (CUDA, Vulkan, Metal); optional Core ML conditioner projection on Apple |
 
 Apple builds can optionally use a Core ML sidecar for the ACE-Step VAE decoder.
 Export, placement and fallback contracts are in
 [docs/backends.md](docs/backends.md#core-ml-vae-decoder-sidecar).
-MiniMax-Music3 has no Core ML sidecar and is unavailable on mobile.
+MiniMax-Music3 can explicitly use a [Core ML conditioner projection](docs/backends.md#minimax-core-ml-conditioner)
+with its remaining stages on the configured native backend. MiniMax is unavailable on mobile.
 
 ## Performance
 

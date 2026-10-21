@@ -50,6 +50,7 @@ constexpr const char * kReasonUnreadable  = "model-unreadable";
 constexpr const char * kReasonNoBackend   = "no-backend-device";
 constexpr const char * kReasonMeasurement = "measurement-failed";
 constexpr const char * kReasonTooLarge    = "workload-too-large";
+constexpr const char * kReasonCoreML      = "coreml-memory-estimate-unavailable";
 
 constexpr int64_t kDitBranches       = 2;
 constexpr int64_t kLmSlots           = 2;
@@ -805,6 +806,9 @@ void fill_pools(FitResult & result, const std::vector<FitPool> & pools, size_t p
 
 FitResult project(const EngineOptions & options, const FitWorkload & request) {
     validate_workload(request);
+    if (!options.coreml_conditioner_path.empty()) {
+        throw FitError(kReasonCoreML, "Core ML resident models and prediction buffers cannot be projected.");
+    }
     const std::string   device   = resolve_device(options);
     const EngineOptions resolved = resolve_paths(options);
     FitModel            fit_model;

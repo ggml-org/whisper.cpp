@@ -7,8 +7,26 @@ Part of the [audiogen engine documentation](../README.md).
 | Binary | Purpose |
 |---|---|
 | `music-cli` | end-to-end text-to-music |
+| `mm3-replay` | MiniMax full text-to-music generation and controlled replay |
 | `acestep-cli` | VAE decode and reconstruction roundtrip harness |
 | `textenc-smoke`, `lm-smoke`, `lmgen-smoke`, `bpe-smoke`, `detok-smoke`, `cond-smoke`, `dit-smoke` | per-stage smoke harnesses |
+
+### MiniMax Core ML conditioner
+
+With an Apple `AUDIOGEN_COREML=ON` build and the
+[exported conditioner](backends.md#minimax-core-ml-conditioner):
+
+```bash
+./build/audiogen/mm3-replay --models models/minimax --mode full \
+  --device gpu --threads 8 --seed 7 --steps 8 --max-frames 150 \
+  --coreml-cond models/minimax/conditioner.mlmodelc \
+  --caption "Warm piano, gentle acoustic guitar and soft drums." \
+  --lyrics "[Instrumental]" --out output/minimax-coreml
+```
+
+The output directory contains `audio.wav` and replay tensors. `--max-frames`
+is the existing request length in 25 Hz AR frames; 150 requests about six
+seconds. Omitting `--coreml-cond` keeps the native conditioner.
 
 ### music-cli
 

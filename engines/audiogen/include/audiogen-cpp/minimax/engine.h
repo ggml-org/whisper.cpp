@@ -24,6 +24,10 @@ struct EngineOptions {
     // are packaged (CUDA, Vulkan, Metal, ...); the CPU backend always backs
     // unsupported ops.
     std::string device;
+    // Explicit compiled Core ML conditioner projection (.mlmodelc), exported
+    // from this synth GGUF. Uses CPU + ANE; the other stages use `device`.
+    // Empty keeps the native conditioner. The model stays resident in Engine.
+    std::string coreml_conditioner_path;
 };
 
 struct GenerateParams {

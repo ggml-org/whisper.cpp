@@ -1,10 +1,13 @@
 #include "minimax/mm3-lm-graph.h"
+#include "audiogen-cpp/minimax/engine.h"
+#include "minimax_tiny_model.h"
 
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <limits>
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -347,6 +350,48 @@ void test_backend_release_after_post_probe_failure() {
     CHECK(g_backend_refs == 0);
 }
 
+void test_coreml_failure_precedes_native_allocation() {
+    MM3Model model;
+    model.lm_file.found = model.lm_file.probe_ok = true;
+    model.synth_file.found = model.synth_file.probe_ok = true;
+    model.coreml_conditioner_path = "missing-minimax-conditioner.mlmodelc";
+    model.synth_cfg.cond.hidden_dim = 3;
+    model.synth_cfg.cond.out_dim = 2;
+    model.synth_cfg.cond.kernel_size = 3;
+    model.synth_cfg.cond.padding = 1;
+    std::string error;
+    CHECK(!mm3_load(&model, &error));
+    CHECK(!error.empty());
+    CHECK(model.coreml_conditioner == nullptr);
+    CHECK(!model.loaded && !model.backend_ref);
+    CHECK(!model.wctx_lm.ctx && !model.wctx_synth.ctx);
+    CHECK(g_backend_refs == 0);
+    model.synth_cfg.cond.kernel_size = 1;
+    CHECK(!mm3_load(&model, &error));
+    CHECK(error == "Core ML conditioner requires kernel=3 and padding=1");
+    mm3_unload(&model);
+    CHECK(g_backend_refs == 0);
+}
+
+void test_public_engine_forwards_coreml_path() {
+    minimax_tiny::Pair pair("coreml-options");
+    CHECK(pair.written);
+    tts_cpp::minimax::EngineOptions options;
+    options.lm_model_path = pair.lm.string();
+    options.synth_model_path = pair.synth.string();
+    options.device = "cpu";
+    options.coreml_conditioner_path = "missing-minimax-conditioner.mlmodelc";
+    bool rejected = false;
+    try {
+        const auto engine = tts_cpp::minimax::Engine::create(options);
+    } catch (const std::runtime_error & error) {
+        rejected = std::string(error.what()).find("Core ML conditioner") != std::string::npos;
+    }
+    CHECK(rejected);
+    options.coreml_conditioner_path.clear();
+    CHECK(tts_cpp::minimax::Engine::create(options) != nullptr);
+}
+
 }
 
 int main() {
@@ -358,6 +403,8 @@ int main() {
     test_context_position_validation();
     test_context_bucket_validation();
     test_backend_release_after_post_probe_failure();
+    test_coreml_failure_precedes_native_allocation();
+    test_public_engine_forwards_coreml_path();
     std::fprintf(stderr, "[test-minimax-loading-safety] %d/%d checks passed\n", checks - failures, checks);
     return failures == 0 ? 0 : 1;
 }

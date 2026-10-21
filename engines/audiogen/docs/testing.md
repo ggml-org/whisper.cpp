@@ -40,6 +40,19 @@ self-hosted `qvac-macos26-arm64-gpu` runner and fails rather than passes if the
 test skips there.
 `test-acestep-integration` exercises the ACE-Step public API when model paths
 are supplied and otherwise reports a skipped test.
+
+`test-minimax-conditioner-layout` compares tiled, strided Core ML IO with an
+independent full convolution, including one-frame inputs and boundaries at
+149, 150, 151, 299, 300 and 301 frames. With `AUDIOGEN_COREML=ON`, the
+model-backed `test-minimax-coreml-conditioner` compares the original native
+conditioner against CPU + ANE with recorded AR hiddens. It checks finite
+outputs, identical resampled lengths, relative RMS error <= 0.002 and cosine
+>= 0.9999. Set `AUDIOGEN_TEST_MINIMAX_SYNTH` to the F16 synth GGUF,
+`AUDIOGEN_TEST_MINIMAX_COREML_CONDITIONER` to the compiled sidecar and
+`AUDIOGEN_TEST_MINIMAX_HIDDENS` to `frame-hiddens.f32` from `mm3-replay`.
+`AUDIOGEN_TEST_MINIMAX_DEVICE=gpu` selects the native GPU reference; the
+test otherwise uses CPU. Missing artifacts skip with return code 77.
+
 `test-audiogen-comparison-lib` runs the engine-comparison harness's own
 `node:test` suites (`benchmarks/comparison/tests/`) on hosts with node,
 so the harness's adapters, aggregation, and report logic stay verified.

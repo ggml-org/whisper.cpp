@@ -163,6 +163,19 @@ void test_gpu_request_matches_runtime_or_reports_no_device(const EngineOptions &
     check_matches_runtime_allocations(gpu, fit);
 }
 
+void test_coreml_memory_estimate_is_explicitly_unavailable(const EngineOptions & options) {
+    EngineOptions coreml = options;
+    coreml.coreml_conditioner_path = "conditioner.mlmodelc";
+    const FitResult fit = tts_cpp::minimax::fit_params(coreml, workload(kFrames, kPrompt));
+    CHECK(fit.status == FitStatus::Error);
+    CHECK(!fit.fits);
+    CHECK(fit.reason == "coreml-memory-estimate-unavailable");
+    CHECK(!fit.report.empty());
+    CHECK(fit.stages.empty());
+    CHECK(fit.peak_device_bytes == 0);
+    CHECK(fit.peak_host_bytes == 0);
+}
+
 void test_weightless_description_projects_the_same(const EngineOptions & options,
                                                     const minimax_tiny::Pair & pair) {
     const FitResult full = tts_cpp::minimax::fit_params(options, workload(kFrames, kPrompt));
@@ -191,6 +204,7 @@ int main() {
     test_margin_turns_a_fit_into_a_failure(options);
     test_rejections(options);
     test_gpu_request_matches_runtime_or_reports_no_device(options);
+    test_coreml_memory_estimate_is_explicitly_unavailable(options);
     test_weightless_description_projects_the_same(options, pair);
     std::printf("[test-minimax-fit] %d/%d checks passed\n", checks - failures, checks);
     return failures == 0 ? 0 : 1;

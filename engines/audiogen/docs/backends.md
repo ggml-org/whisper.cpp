@@ -145,6 +145,50 @@ milliseconds):
 At `--dur 8` the same five placements generate in 45,743 / 13,412 / 16,267 /
 8,973 / 7,832 ms.
 
+## MiniMax Core ML conditioner
+
+On Apple Silicon with macOS 13 or later, build with `AUDIOGEN_COREML=ON`
+and export the projection from the same F16 synth GGUF used by the engine:
+
+```bash
+python engines/audiogen/scripts/export-minimax-conditioner-coreml.py \
+  --synth models/minimax/mm3-synth-f16.gguf \
+  --out models/minimax/conditioner.mlpackage --frames 150 \
+  --compile-dir models/minimax
+```
+
+Export requires PyTorch, NumPy, `gguf` and `coremltools`; inference requires
+only the native library and Apple frameworks. Request the compiled model in
+the C++ API:
+
+```cpp
+tts_cpp::minimax::EngineOptions options;
+options.model_dir = "models/minimax";
+options.device = "gpu";
+options.coreml_conditioner_path = "models/minimax/conditioner.mlmodelc";
+auto engine = tts_cpp::minimax::Engine::create(options);
+```
+
+Only the condition encoder's original three-tap convolution moves to Core ML
+with `CPUAndNeuralEngine`. The original layer mix and nearest resampling run
+on the CPU. LM, Depth, DiT and vocoder retain their native backend, including
+Metal on Apple. This is a hybrid route, not a complete ANE implementation.
+The Core ML model and IO buffers remain loaded between `generate()` calls;
+its convolution weights are omitted from the native synth allocation.
+
+`--frames` controls the exported window size, not the maximum generation
+length. C++ supplies both convolution halos at each window boundary and
+stitches every projected frame before resampling. The final partial window
+and requests longer than one window use the same learned convolution.
+
+An empty `coreml_conditioner_path` preserves native generation. An explicit
+path fails when the build lacks Core ML support, the model cannot load, or
+its IO contract is incompatible; prediction errors fail generation. There
+is no silent switch to the native projection. Core ML controls placement
+within CPU + ANE; Instruments' Core AI / ANE intervals verify hardware use.
+The [memory-fit preflight](memory-fit.md#minimax-music3) reports
+`coreml-memory-estimate-unavailable` for this route.
+
 ## Core ML VAE decoder sidecar
 
 `AUDIOGEN_COREML=ON` is Apple-only. It enables an optional Core ML sidecar for
