@@ -176,6 +176,10 @@ precision.
 live geometry, and `parakeet-fit-params` projects the model's memory. GPU
 timings and accuracy are in
 [docs/performance.md](performance.md#nemotron-3-diarization-on-gpu).
+On Apple builds with `PARAKEET_COREML=ON`, `scripts/export-nemotron-diarization-coreml.py`
+exports optional [Core ML diarizer sidecars](backends.md#core-ml-diarizer-sidecars)
+from this GGUF; `scripts/export-sortformer-diarizer-coreml.py` does the same for
+Sortformer v2.1.
 Offline inputs longer than 90 s (`EngineOptions::long_form_window_frames`)
 are diarized by the cached long-form path in 30 s chunks instead of one
 graph: a single graph loses speaker identity past about two minutes (DER

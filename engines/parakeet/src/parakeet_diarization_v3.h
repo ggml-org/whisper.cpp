@@ -27,6 +27,7 @@ struct NemotronDiarizationChunk {
     std::vector<float> embeddings;
     int state_frames = 0;
     int chunk_frames = 0;
+    bool used_coreml = false;
 };
 
 struct NemotronDiarizationFitMeasure {

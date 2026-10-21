@@ -30,8 +30,8 @@ and CPU scratch for the configured threads, using GGUF metadata only; see
 | `nvidia/nemotron-3.5-asr-streaming-0.6b` | Prompt-conditioned RNN-T | 128 | 1024 × 24 | 13087 | 600 M | ~1.3 GiB f16 | 0.108 CPU | Locale-conditioned ASR; empty language selects `auto`; cache-aware streaming at 80/160/320/560/1120 ms; Core ML exact-shape offline encoder |
 | `nvidia/diar_sortformer_4spk-v1` | Sortformer | 80 | 512 × 18 | n/a | 123 M | 263 MiB f16 / 141 MiB q8_0 / 75 MiB q4_0 | 0.0020 Vulkan | Up to four speakers; offline and sliding-history streaming |
 | `nvidia/diar_streaming_sortformer_4spk-v2` | Sortformer | 128 | 512 × 17 | n/a | 117 M | 251 MiB f16 / 134 MiB q8_0 / 72 MiB q4_0 | similar to v1 offline | Streaming-trained; sliding-history streaming |
-| `nvidia/diar_streaming_sortformer_4spk-v2.1` | Sortformer + AOSC | 128 | 512 × 17 | n/a | 117 M | 251 MiB f16 / 134 MiB q8_0 / 72 MiB q4_0 | similar to v1 offline | Audio-Online Speaker Cache preserves slots across long gaps; Core ML exact-shape batch/AOSC encoder |
-| `nvidia/Nemotron-3-Diarization` | Nemotron diarization + AOSC | 128 | 512 × 31 RoPE | n/a | — | 107 MB q8_0 GGUF | 0.0002 q8_0 CUDA / 0.0002 q8_0 Vulkan / 0.0006 q8_0 Metal / 0.0065 q8_0 OpenCL (Adreno 830) | Eight speakers, 10 ms probabilities, native offline and cached streaming |
+| `nvidia/diar_streaming_sortformer_4spk-v2.1` | Sortformer + AOSC | 128 | 512 × 17 | n/a | 117 M | 251 MiB f16 / 134 MiB q8_0 / 72 MiB q4_0 | similar to v1 offline | Audio-Online Speaker Cache preserves slots across long gaps; optional Core ML whole-network diarizer, plus the older exact-shape batch/AOSC encoder sidecars |
+| `nvidia/Nemotron-3-Diarization` | Nemotron diarization + AOSC | 128 | 512 × 31 RoPE | n/a | — | 107 MB q8_0 GGUF | 0.0002 q8_0 CUDA / 0.0002 q8_0 Vulkan / 0.0006 q8_0 Metal / 0.0065 q8_0 OpenCL (Adreno 830) / 0.0005 Core ML (Apple M4) | Eight speakers, 10 ms probabilities, native offline and cached streaming; optional Core ML whole-network diarizer |
 | `OpenMOSS-Team/MOSS-Transcribe-Diarize` | Whisper-shaped encoder + Qwen3 decoder (text, speakers, timestamps) | 80 | 1024 × 24 encoder, 1024 × 28 decoder | 151936 | 0.9 B | 1.8 GB f16 / 0.98 GB q8_0 / 0.64 GB q5_0 | 0.05–0.39 f16 Metal (2 to 30 min) / 0.13–0.20 q8_0 Hexagon / 0.26–0.36 q8_0 OpenCL (Galaxy S25, 27 s to 3 min) | Multilingual checkpoint, validated on Spanish and Chinese; English long-form skips spans, as in the reference model; per-request hotwords; separate `moss-transcribe` API and CLI; optional Core ML audio encoder; Hexagon NPU and Adreno OpenCL with q8_0 or f16 |
 
 TDT 0.6B-v3 is multilingual with punctuation/capitalization; TDT 1.1B is
@@ -79,6 +79,14 @@ long recordings at pauses into independent segments and decodes 16 of them per
 Neural Engine dispatch. A GGUF without encoder weights, such as the published
 TranscribePsy Core ML distribution, loads only with its encoder sidecar; see
 [Neural Engine sidecars](docs/backends.md#neural-engine-fixed-window-encoder-and-tdt-decoder-sidecars).
+
+Nemotron 3 Diarization and Sortformer v2.1 can also run their whole network,
+encoder and speaker head, on fixed-capacity diarizer sidecars named
+`<model>-diarizer-<frames>.mlmodelc`. Offline, long-form, and live calls use
+the smallest capacity that fits and fall back to ggml above it. On an Apple M4
+they run 1.4-2.7x faster than ggml Metal. On an M3 Ultra, whose GPU is faster,
+they only tie with it (0.70-1.17x), so leave them out on Max and Ultra
+machines; see [the diarizer guide](docs/backends.md#core-ml-diarizer-sidecars).
 
 ## Backend selection
 

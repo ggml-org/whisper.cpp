@@ -80,6 +80,7 @@ void print_json(const parakeet::FitResult & r, uint64_t margin_bytes) {
     std::printf("  \"decoderComputeBytes\": %" PRIu64 ",\n", r.device.decoder_compute_bytes);
     std::printf("  \"deviceProjectedBytes\": %" PRIu64 ",\n", r.device.total_bytes);
     std::printf("  \"hostBytes\": %" PRIu64 ",\n", r.host_bytes);
+    std::printf("  \"coremlBytes\": %" PRIu64 ",\n", r.coreml_bytes);
     std::printf("  \"marginBytes\": %" PRIu64 "\n", margin_bytes);
     std::printf("}\n");
 }

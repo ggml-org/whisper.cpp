@@ -6,6 +6,10 @@
 #include "ggml-backend.h"
 #include "ggml.h"
 
+#ifdef PARAKEET_USE_COREML
+#include "coreml/coreml_diarizers.h"
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -356,6 +360,43 @@ GraphOptions stream_graph_options(const ParakeetCtcModel & model) {
     return graph_options(model, frames, NemotronAttention::Automatic);
 }
 
+#ifdef PARAKEET_USE_COREML
+constexpr const char * kCoremlFeatures = "features";
+constexpr const char * kCoremlCache = "cache";
+constexpr const char * kCoremlProbabilities = "probabilities";
+constexpr const char * kCoremlEmbeddings = "embeddings";
+constexpr int kCoremlInputs = 2;
+constexpr int kCoremlOutputs = 2;
+
+bool run_coreml_chunk(
+    const ParakeetCtcModel & model, const std::vector<float> & stacked,
+    const float * state, int state_frames, int chunk_frames,
+    NemotronDiarizationChunk & result) {
+    CoremlDiarizers * diarizers = model_coreml_diarizers(model);
+    const int frames = state_frames + chunk_frames;
+    if (!diarizers || !diarizers->covers(frames)) return false;
+    const auto & config = model.nemotron_diarization_cfg;
+    const int stacked_width = config.subsampling_factor * model.mel_cfg.n_mels;
+    const int output_rows = frames * config.subsampling_factor;
+    result.probabilities.resize(static_cast<size_t>(output_rows) * config.speakers);
+    result.embeddings.resize(static_cast<size_t>(chunk_frames) * config.encoder_width);
+    const parakeet_coreml_rows inputs[kCoremlInputs] = {
+        {kCoremlFeatures, state_frames, chunk_frames, stacked_width, stacked.data()},
+        {kCoremlCache, 0, state_frames, config.encoder_width, state},
+    };
+    const parakeet_coreml_rows_out outputs[kCoremlOutputs] = {
+        {kCoremlProbabilities, 0, output_rows, config.speakers, result.probabilities.data()},
+        {kCoremlEmbeddings, state_frames, chunk_frames, config.encoder_width,
+            result.embeddings.data()},
+    };
+    if (diarizers->run(frames, inputs, kCoremlInputs, outputs, kCoremlOutputs) != 0) return false;
+    result.state_frames = state_frames;
+    result.chunk_frames = chunk_frames;
+    result.used_coreml = true;
+    return true;
+}
+#endif
+
 int run_zero_chunk(const ParakeetCtcModel & model, int mel_frames, int state_frames) {
     const std::vector<float> mel(
         static_cast<size_t>(mel_frames) * model.mel_cfg.n_mels, 0.0f);
@@ -380,6 +421,11 @@ int run_nemotron_diarization_chunk(
     std::vector<float> stacked;
     stack_mel(mel, mel_frames, model.mel_cfg.n_mels,
         config.subsampling_factor, stacked);
+    output.used_coreml = false;
+#ifdef PARAKEET_USE_COREML
+    if (attention == NemotronAttention::Automatic &&
+        run_coreml_chunk(model, stacked, state, state_frames, chunk_frames, output)) return 0;
+#endif
     std::vector<int32_t> position_values;
     fill_positions(state_frames + chunk_frames, position_values);
     DiarizationGraph graph;

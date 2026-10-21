@@ -131,6 +131,16 @@ int  sortformer_measure_head(const ParakeetCtcModel & model, int T_enc,
                              size_t & out_active_bytes,
                              size_t & out_host_input_bytes);
 
+bool sortformer_diarize_coreml(const ParakeetCtcModel & model,
+                               const float * pre_encode, int T_enc, int D,
+                               const SortformerDiarizationOptions & opts,
+                               SortformerDiarizationResult & out);
+
+bool sortformer_diarize_mel_coreml(ParakeetCtcModel & model,
+                                   const float * mel, int n_mel_frames,
+                                   const SortformerDiarizationOptions & opts,
+                                   SortformerDiarizationResult & out);
+
 // The diarization head backend is resolved internally via model_sortformer_backend
 // (CPU on Mali-Vulkan, the active backend otherwise) so callers cannot accidentally
 // drive the CPU-resident force-CPU path through the GPU.

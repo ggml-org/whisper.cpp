@@ -12,12 +12,16 @@
 #include "backend_util.h"
 #include "fit_util.h"
 #include "long_form.h"
+#include "parakeet_coreml_path.h"
 #include "parakeet_ctc.h"
 #include "parakeet_diarization_v3.h"
 #include "parakeet_eou.h"
 #include "parakeet_log.h"
 #include "parakeet_sortformer.h"
 #include "parakeet_tdt.h"
+#ifdef PARAKEET_USE_COREML
+#include "coreml/coreml_diarizers.h"
+#endif
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -28,6 +32,7 @@
 #include <cstdio>
 #include <limits>
 #include <string>
+#include <vector>
 
 namespace parakeet {
 
@@ -75,7 +80,7 @@ constexpr uint64_t kNemotronDiarizationSampleCopies = 2;
 uint64_t apply_fit_verdict(FitResult & r, uint64_t margin_bytes) {
     uint64_t required = sat_add(r.device.total_bytes, margin_bytes);
     if (r.device_shares_host_memory) {
-        required = sat_add(required, r.host_bytes);
+        required = sat_add(required, sat_add(r.host_bytes, r.coreml_bytes));
     }
     r.fits   = required <= r.device_free_bytes;
     r.status = r.fits ? FitStatus::Success : FitStatus::Failure;
@@ -124,6 +129,13 @@ std::string device_projection_report(const FitResult & r, uint64_t margin_bytes,
                   r.device_shares_host_memory
                       ? " (same RAM pool as the device projection)" : "");
     s += line;
+    if (r.coreml_bytes > 0) {
+        std::snprintf(line, sizeof(line), "core ml sidecars:  %14s%s\n",
+                      fmt_mib(r.coreml_bytes).c_str(),
+                      r.device_shares_host_memory
+                          ? " (same RAM pool as the device projection)" : "");
+        s += line;
+    }
     std::snprintf(line, sizeof(line), "margin:            %14s\n",
                   fmt_mib(margin_bytes).c_str());
     s += line;
@@ -166,6 +178,18 @@ uint64_t nemotron_diarization_host_bytes(const ParakeetCtcModel & model,
     host = sat_add(host, f32_bytes(sat_mul(stacked_frames, (uint64_t) cfg.speakers)));
     host = sat_add(host, f32_bytes(sat_mul((uint64_t) offline_frames, (uint64_t) cfg.encoder_width)));
     return sat_add(host, sched_input_bytes);
+}
+
+uint64_t coreml_diarizer_bytes(const std::string & gguf_path,
+                               const std::vector<CoremlFrameRange> & ranges) {
+#ifdef PARAKEET_USE_COREML
+    if (coreml_diarizers_disabled()) return 0;
+    return coreml_diarizer_resident_bytes(list_coreml_diarizer_bundles(gguf_path), ranges);
+#else
+    (void) gguf_path;
+    (void) ranges;
+    return 0;
+#endif
 }
 
 struct DiarizationGraphShape {
@@ -232,6 +256,13 @@ std::string nemotron_diarization_report(const DiarizationFitGraphs & graphs, boo
     return s + "\n";
 }
 
+std::vector<CoremlFrameRange> nemotron_coreml_ranges(const DiarizationFitGraphs & graphs,
+                                                     bool long_form) {
+    const CoremlFrameRange stream{1, graphs.stream.frames};
+    if (long_form) return {CoremlFrameRange{1, graphs.long_form.frames}, stream};
+    return {CoremlFrameRange{graphs.single_pass.frames, graphs.single_pass.frames}, stream};
+}
+
 long long nemotron_workload_mel_frames(const ParakeetCtcModel & model, float audio_seconds) {
     const uint64_t samples = std::min<uint64_t>(
         sat_u64_from_double(std::ceil((double) audio_seconds * model.mel_cfg.sample_rate)),
@@ -263,6 +294,8 @@ void project_nemotron_diarization(const ParakeetCtcModel & model, const GgufLoad
     r.device.total_bytes = sat_add(r.device.weights_bytes, r.device.encoder_compute_bytes);
     r.host_bytes = nemotron_diarization_host_bytes(
         model, opts, total_mel, offline_frames, largest_host_input_bytes(graphs));
+    r.coreml_bytes = coreml_diarizer_bytes(opts.model_gguf_path,
+                                           nemotron_coreml_ranges(graphs, long_form));
     const uint64_t required = apply_fit_verdict(r, opts.margin_bytes);
     r.report = model_device_report(r) + nemotron_diarization_report(graphs, long_form) +
                device_projection_report(r, opts.margin_bytes, required,
@@ -585,6 +618,10 @@ FitResult fit_params(const FitOptions & opts) {
             host = sat_add(host, nsm.host_bytes);
         }
         r.host_bytes = host;
+    }
+    if (model.model_type == ParakeetModelType::SORTFORMER) {
+        r.coreml_bytes = coreml_diarizer_bytes(opts.model_gguf_path,
+                                               {CoremlFrameRange{total_enc, total_enc}});
     }
 
     r.device.weights_bytes         = lm.weights_bytes + lm.repack_bytes;

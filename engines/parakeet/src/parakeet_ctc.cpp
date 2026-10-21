@@ -11,6 +11,7 @@
 #include "gguf.h"
 
 #ifdef PARAKEET_USE_COREML
+#include "coreml/coreml_diarizers.h"
 #include "coreml/parakeet-encoder.h"
 #include "coreml/parakeet-decoder.h"
 #include "parakeet_coreml_path.h"
@@ -345,6 +346,7 @@ struct ParakeetCtcModel::Impl {
     // decode of the engine's offline transcribe path (tdt_decode_lanes);
     // streaming paths keep the sequential decoder.
     parakeet_coreml_decoder * ctx_coreml_dec = nullptr;
+    std::unique_ptr<CoremlDiarizers> coreml_diarizers;
 #endif
     // Set when the encoder sidecar loaded before weight allocation and the
     // `encoder.*` tensors were therefore never given memory: the GGUF has no
@@ -1861,7 +1863,6 @@ static bool path_is_directory(const std::string & path) {
     return ::stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-static constexpr const char * kCoremlDisableEnv = "PARAKEET_COREML_DISABLE";
 static constexpr const char * kCoremlOnlyEnv    = "PARAKEET_COREML_ONLY";
 
 
@@ -1942,6 +1943,22 @@ static parakeet_coreml_context * init_coreml_only_encoder(const gguf_context * g
     return ctx;
 }
 
+static void maybe_init_coreml_diarizers(const std::string & gguf_path,
+                                        ParakeetCtcModel  & model,
+                                        bool                verbose) {
+    if (coreml_diarizers_disabled()) return;
+    model.impl->coreml_diarizers = discover_coreml_diarizers(gguf_path);
+    if (model.impl->coreml_diarizers) {
+        for (int capacity : model.impl->coreml_diarizers->capacities()) {
+            PARAKEET_LOG_INFO("parakeet: Core ML diarizer available for %d frames at '%s'\n",
+                capacity, coreml_diarizer_sidecar_path(gguf_path, capacity).c_str());
+        }
+    } else if (verbose) {
+        PARAKEET_LOG_INFO("parakeet: no Core ML diarizer beside '%s'; using ggml\n",
+            gguf_path.c_str());
+    }
+}
+
 // Presence-driven, additive loader: loads the Core ML encoder sidecar
 // when one sits next to the GGUF. Any miss (env override, unsupported family,
 // absent directory, load failure) leaves ctx_coreml null so ggml runs.
@@ -1984,6 +2001,7 @@ static void maybe_init_coreml_encoder(const std::string & gguf_path,
     }
 
     if (supported_sortformer) {
+        maybe_init_coreml_diarizers(gguf_path, model, verbose);
         const std::string bypass_path = coreml_bypass_encoder_sidecar_path(gguf_path);
         if (path_is_directory(bypass_path)) {
             model.impl->ctx_coreml_bypass = parakeet_coreml_init(bypass_path.c_str());
@@ -2497,6 +2515,9 @@ static int load_from_gguf_impl(const std::string & gguf_path,
                 impl->backend_blas = nullptr;
             }
             out_model.impl = impl;
+#ifdef PARAKEET_USE_COREML
+            if (!measure) maybe_init_coreml_diarizers(gguf_path, out_model, verbose);
+#endif
             return 0;
         }
         if (std::strcmp(arch, kParakeetArchitecture) != 0) {
@@ -2925,9 +2946,15 @@ std::string model_active_backend_name(const ParakeetCtcModel & m) {
     return name ? std::string(name) : std::string("CPU");
 }
 
+#ifdef PARAKEET_USE_COREML
+CoremlDiarizers * model_coreml_diarizers(const ParakeetCtcModel & m) {
+    return m.impl ? m.impl->coreml_diarizers.get() : nullptr;
+}
+#endif
+
 bool model_encoder_on_coreml(const ParakeetCtcModel & m) {
 #ifdef PARAKEET_USE_COREML
-    return m.impl && m.impl->ctx_coreml != nullptr;
+    return m.impl && (m.impl->ctx_coreml != nullptr || m.impl->coreml_diarizers != nullptr);
 #else
     (void) m;
     return false;
@@ -3010,6 +3037,9 @@ std::string model_encoder_backend_name(const ParakeetCtcModel & m) {
 #ifdef PARAKEET_USE_COREML
     if (m.impl && m.impl->ctx_coreml) {
         return parakeet_coreml_backend_label(m.impl->ctx_coreml);
+    }
+    if (m.impl && m.impl->coreml_diarizers) {
+        return m.impl->coreml_diarizers->label();
     }
 #endif
     return model_active_backend_name(m);

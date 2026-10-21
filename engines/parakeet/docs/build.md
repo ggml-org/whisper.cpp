@@ -58,7 +58,7 @@ defaults follow `SPEECH_BUILD_EXECUTABLES` and `SPEECH_BUILD_TESTS`, and force
 | `PARAKEET_INSTALL` | `ON` | `ON` | Generate library, headers, CMake package, and pkg-config install rules |
 | `PARAKEET_USE_SYSTEM_GGML` | `OFF` | `ON` | Use `find_package(ggml)` instead of `engines/parakeet/ggml` |
 | `PARAKEET_GGML_LIB_PREFIX` | `ON` | no effect with system ggml | Name bundled libraries `speech-ggml-*` |
-| `PARAKEET_COREML` | `OFF` | `OFF` | Apple-only CTC/IndicConformer, Unified RNN-T, TDT, EOU, Nemotron, and tagged Sortformer encoder sidecars, plus the Neural Engine TDT decoder sidecar |
+| `PARAKEET_COREML` | `OFF` | `OFF` | Apple-only CTC/IndicConformer, Unified RNN-T, TDT, EOU, Nemotron, and tagged Sortformer encoder sidecars, the Neural Engine TDT decoder sidecar, and Nemotron 3 Diarization and Sortformer v2.1 diarizer sidecars |
 | `PARAKEET_OPENMP` | `ON` | `ON` | Link OpenMP when available; auto-disabled on Windows non-MinGW unless explicitly overridden |
 | `PARAKEET_FLASH_ATTN` | Metal, CUDA and Vulkan `ON`, otherwise `OFF` | same | Fused encoder attention with the rel-pos bias folded into the mask; selected per backend at load, the CPU path always keeps the unfused graph |
 | `PARAKEET_CCACHE` | `ON` | `ON` | Use ccache for Parakeet targets when available |

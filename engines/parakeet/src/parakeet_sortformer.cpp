@@ -15,6 +15,10 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 
+#ifdef PARAKEET_USE_COREML
+#include "coreml/coreml_diarizers.h"
+#endif
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -694,6 +698,79 @@ int sortformer_measure_head(const ParakeetCtcModel & model, int T_enc,
     return rc;
 }
 
+namespace {
+
+constexpr const char * kCoremlPreEncode = "pre_encode";
+constexpr const char * kCoremlProbabilities = "probabilities";
+
+void finish_diarization(const ParakeetCtcModel & model, int T_enc,
+                        const SortformerDiarizationOptions & opts,
+                        SortformerDiarizationResult & out) {
+    out.n_frames = T_enc;
+    out.num_spks = model.encoder_cfg.sortformer_num_spks;
+    out.frame_stride_s = (double)(model.mel_cfg.hop_length *
+                                  model.encoder_cfg.subsampling_factor) /
+                         (double)model.mel_cfg.sample_rate;
+    sf_threshold_segments(out.speaker_probs, T_enc, out.num_spks,
+                          out.frame_stride_s, opts.threshold, out.segments);
+}
+
+int coreml_capacity(const ParakeetCtcModel & model) {
+#ifdef PARAKEET_USE_COREML
+    CoremlDiarizers * diarizers = model_coreml_diarizers(model);
+    if (!diarizers) return 0;
+    const std::vector<int> capacities = diarizers->capacities();
+    return capacities.empty() ? 0 : capacities.back();
+#else
+    (void) model;
+    return 0;
+#endif
+}
+
+}
+
+bool sortformer_diarize_coreml(const ParakeetCtcModel & model,
+                               const float * pre_encode, int T_enc, int D,
+                               const SortformerDiarizationOptions & opts,
+                               SortformerDiarizationResult & out) {
+#ifdef PARAKEET_USE_COREML
+    CoremlDiarizers * diarizers = model_coreml_diarizers(model);
+    if (!diarizers || !pre_encode || D != model.encoder_cfg.sortformer_fc_d_model ||
+        !diarizers->covers(T_enc)) return false;
+    const auto t0 = std::chrono::steady_clock::now();
+    const int num_spks = model.encoder_cfg.sortformer_num_spks;
+    out.speaker_probs.resize((size_t) T_enc * num_spks);
+    const parakeet_coreml_rows inputs[] = {{kCoremlPreEncode, 0, T_enc, D, pre_encode}};
+    const parakeet_coreml_rows_out outputs[] = {
+        {kCoremlProbabilities, 0, T_enc, num_spks, out.speaker_probs.data()}};
+    if (diarizers->run(T_enc, inputs, 1, outputs, 1) != 0) return false;
+    out.segments.clear();
+    finish_diarization(model, T_enc, opts, out);
+    out.decode_ms = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - t0).count() / 1000.0;
+    return true;
+#else
+    (void) model; (void) pre_encode; (void) T_enc; (void) D; (void) opts; (void) out;
+    return false;
+#endif
+}
+
+bool sortformer_diarize_mel_coreml(ParakeetCtcModel & model,
+                                   const float * mel, int n_mel_frames,
+                                   const SortformerDiarizationOptions & opts,
+                                   SortformerDiarizationResult & out) {
+    const long long covered_mel =
+        (long long) coreml_capacity(model) * model.encoder_cfg.subsampling_factor;
+    if (n_mel_frames <= 0 || n_mel_frames > covered_mel) return false;
+    std::vector<float> pre_encode;
+    int T_enc = 0;
+    if (run_subsampling(model, mel, n_mel_frames, model.mel_cfg.n_mels, pre_encode, T_enc) != 0) {
+        return false;
+    }
+    return sortformer_diarize_coreml(model, pre_encode.data(), T_enc,
+                                     model.encoder_cfg.sortformer_fc_d_model, opts, out);
+}
+
 int sortformer_diarize_ggml(const ParakeetCtcModel & model,
                             const float * encoder_out,
                             int T_enc, int D_enc,
@@ -763,19 +840,31 @@ int sortformer_diarize_ggml(const ParakeetCtcModel & model,
     ggml_free(ctx);
     if (rc != 0) return rc;
 
-    // 4. Fill result metadata + threshold segmentation
-    out.n_frames = T_enc;
-    out.num_spks = num_spks;
-    out.frame_stride_s = (double)(model.mel_cfg.hop_length *
-                                  model.encoder_cfg.subsampling_factor) /
-                         (double)model.mel_cfg.sample_rate;
-
-    sf_threshold_segments(out.speaker_probs, T_enc, num_spks,
-                          out.frame_stride_s, opts.threshold, out.segments);
+    finish_diarization(model, T_enc, opts, out);
 
     out.decode_ms = std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::steady_clock::now() - t0).count() / 1000.0;
     return 0;
+}
+
+static int diarize_concatenation(ParakeetCtcModel & model,
+                                 const float * cat_pre, int T_cat, int D,
+                                 const SortformerDiarizationOptions & opts,
+                                 SortformerDiarizationResult & diar_cat) {
+    if (sortformer_diarize_coreml(model, cat_pre, T_cat, D, opts, diar_cat)) return 0;
+    EncoderOutputs enc_cat;
+    if (int rc = run_encoder_bypass_pre_encode(model, cat_pre, T_cat, D, enc_cat); rc != 0) {
+        std::fprintf(stderr,
+            "sortformer_aosc_step: run_encoder_bypass_pre_encode rc=%d\n", rc);
+        return rc;
+    }
+    if (enc_cat.n_enc_frames != T_cat || enc_cat.d_model != D) {
+        std::fprintf(stderr,
+            "sortformer_aosc_step: unexpected encoder output shape (%d,%d) vs (%d,%d)\n",
+            enc_cat.n_enc_frames, enc_cat.d_model, T_cat, D);
+        return -2;
+    }
+    return sortformer_diarize_ggml(model, enc_cat.encoder_out.data(), T_cat, D, opts, diar_cat);
 }
 
 int sortformer_aosc_step(ParakeetCtcModel & model,
@@ -839,25 +928,10 @@ int sortformer_aosc_step(ParakeetCtcModel & model,
                 chunk_pre_encode_embs,
                 (size_t) T_chunk_pre * D * sizeof(float));
 
-    // 2. Run the FastConformer encoder layers on the cat (bypass pre_encode).
-    EncoderOutputs enc_cat;
-    if (int rc_ = run_encoder_bypass_pre_encode(model, cat_pre.data(),
-                                                T_cat, D, enc_cat); rc_ != 0) {
-        std::fprintf(stderr,
-            "sortformer_aosc_step: run_encoder_bypass_pre_encode rc=%d\n", rc_);
-        return rc_;
-    }
-    if (enc_cat.n_enc_frames != T_cat || enc_cat.d_model != D) {
-        std::fprintf(stderr,
-            "sortformer_aosc_step: unexpected encoder output shape (%d,%d) vs (%d,%d)\n",
-            enc_cat.n_enc_frames, enc_cat.d_model, T_cat, D);
-        return -2;
-    }
-
-    // 3. Run the diariser over the full cat.
+    // 2-3. Run the encoder layers and the diariser over the full cat.
     SortformerDiarizationResult diar_cat;
-    if (int rc_ = sortformer_diarize_ggml(model, enc_cat.encoder_out.data(),
-                                          T_cat, D, opts, diar_cat); rc_ != 0) {
+    if (int rc_ = diarize_concatenation(model, cat_pre.data(), T_cat, D, opts, diar_cat);
+        rc_ != 0) {
         return rc_;
     }
     if (diar_cat.num_spks != num_spks) {

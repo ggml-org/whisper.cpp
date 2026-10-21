@@ -14,13 +14,12 @@ namespace {
 constexpr int kSampleRate = 16000;
 constexpr int kThreads = 8;
 constexpr int kRuns = 5;
-constexpr int kSpeakers = 8;
 constexpr size_t kFeedSamples = kSampleRate / 10;
 using Clock = std::chrono::steady_clock;
 
 void validate(const parakeet::DiarizationResult & result) {
-    if (result.num_spks != kSpeakers || result.n_frames <= 0 ||
-        result.speaker_probs.size() != static_cast<size_t>(result.n_frames) * kSpeakers) {
+    if (result.num_spks <= 0 || result.n_frames <= 0 ||
+        result.speaker_probs.size() != static_cast<size_t>(result.n_frames) * result.num_spks) {
         throw std::runtime_error("Invalid diarization output dimensions");
     }
     for (float value : result.speaker_probs) {

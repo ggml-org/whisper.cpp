@@ -18,7 +18,7 @@ Include `<parakeet/parakeet.h>` for the complete surface or individual headers.
 | `Engine::diarize_start` | Live Sortformer or Nemotron 3 Diarization session |
 | `transcribe_with_speakers` / `transcribe_samples_with_speakers` | CTC, RNN-T, TDT, or EOU transcription attributed with Sortformer or Nemotron 3 Diarization |
 | `EngineOptions::prewarm` / `prewarm_audio_seconds` | Run a configurable encoder-only synthetic forward during construction; Nemotron 3 Diarization runs one offline pass and one chunk at the default live geometry |
-| `Engine::encoder_on_coreml` / `encoder_backend` | Whether an Apple Core ML encoder sidecar loaded (`encoder_backend()` returns the Core ML label, otherwise `backend_name()`); see [Core ML encoder sidecar](backends.md#core-ml-encoder-sidecar) |
+| `Engine::encoder_on_coreml` / `encoder_backend` | Whether an Apple Core ML encoder or diarizer sidecar loaded (`encoder_backend()` returns the Core ML label, otherwise `backend_name()`); see [Core ML encoder sidecar](backends.md#core-ml-encoder-sidecar) and [diarizer sidecars](backends.md#core-ml-diarizer-sidecars) |
 | `EngineResult::encoder_used_coreml` | Whether every encoder invocation of this transcription ran on the Core ML sidecar |
 | `EngineResult::segment_plan_ms` / `assemble_ms` | Non-zero only on the Core ML independent-segment path (TDT decoder sidecar): pause-cut planning, and per-segment concatenation plus stitching; with `preprocess_ms`, `encoder_ms` and `decode_ms` they account for `total_ms` |
 | `parakeet_log_set` | Install the host logging sink |

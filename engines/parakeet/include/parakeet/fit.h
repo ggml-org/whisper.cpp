@@ -31,6 +31,8 @@
 // the single-pass graph (bounded by the window), one chunk at the default
 // live geometry (1040 ms chunk, 80 ms right context, 264 speaker-cache and
 // 80 FIFO rows), and one 30 s long-form chunk when the workload needs it.
+// On Apple builds both diarization families also charge the Core ML
+// diarizer sidecars those calls can load (FitResult::coreml_bytes).
 //
 // Status semantics follow the SDK's @qvac/model-fit contract:
 //   Success -- a projection was made and it fits (result.fits == true).
@@ -156,6 +158,19 @@ struct FitResult {
     // device_shares_host_memory these compete with `device` for the same
     // physical RAM and the fit test accounts for both.
     uint64_t host_bytes = 0;
+
+    // Apple builds only: projected system RAM of the Core ML diarizer
+    // sidecars (`<model>-diarizer-<frames>.mlmodelc`) the workload can load.
+    // Nemotron 3 Diarization charges the bundle for its offline input, or
+    // every bundle up to its 30 s long-form block, plus the bundle for one
+    // default live chunk; Sortformer v2.1 charges the bundle for its offline
+    // input. Each bundle costs twice its weights file, plus a fixed Core ML
+    // runtime cost once, as measured on an M4. The ggml weights stay loaded
+    // for the fallback, so this adds to `device`, and with
+    // device_shares_host_memory the verdict counts it. Zero without
+    // sidecars, without a covering capacity, or with
+    // PARAKEET_COREML_DISABLE / PARAKEET_COREML_DIARIZER_DISABLE set.
+    uint64_t coreml_bytes = 0;
 
     // Human-readable projection table (multi-line, suitable for logging).
     std::string report;

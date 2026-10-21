@@ -1528,29 +1528,35 @@ static DiarizationResult engine_impl_diarize_helper(Engine::Impl & impl,
     }
     const double preprocess_ms = ms_since(t_mel);
 
-    const auto t_enc = clock::now();
-    EncoderOutputs enc_out;
-    if (int rc = run_encoder(impl.model, mel.data(), n_mel_frames,
-                             impl.model.mel_cfg.n_mels, enc_out,
-                             /*max_layers=*/-1,
-                             /*capture_intermediates=*/false,
-                             /*allow_coreml_padded=*/false); rc != 0) {
-        throw std::runtime_error("diarize: run_encoder failed (rc=" +
-                                 std::to_string(rc) + ")");
-    }
-    const double encoder_ms = ms_since(t_enc);
-
     SortformerDiarizationOptions sopts;
     sopts.threshold = opts.threshold;
     SortformerDiarizationResult dres;
 
-    int diarize_rc = sortformer_diarize_ggml(impl.model,
-                                             enc_out.encoder_out.data(),
-                                             enc_out.n_enc_frames, enc_out.d_model,
-                                             sopts, dres);
-    if (diarize_rc != 0) {
-        throw std::runtime_error("diarize: sortformer_diarize failed (rc=" +
-                                 std::to_string(diarize_rc) + ")");
+    const auto t_enc = clock::now();
+    double encoder_ms = 0.0;
+    if (sortformer_diarize_mel_coreml(impl.model, mel.data(), n_mel_frames, sopts, dres)) {
+        encoder_ms = ms_since(t_enc);
+        dres.decode_ms = 0.0;
+    } else {
+        EncoderOutputs enc_out;
+        if (int rc = run_encoder(impl.model, mel.data(), n_mel_frames,
+                                 impl.model.mel_cfg.n_mels, enc_out,
+                                 /*max_layers=*/-1,
+                                 /*capture_intermediates=*/false,
+                                 /*allow_coreml_padded=*/false); rc != 0) {
+            throw std::runtime_error("diarize: run_encoder failed (rc=" +
+                                     std::to_string(rc) + ")");
+        }
+        encoder_ms = ms_since(t_enc);
+
+        int diarize_rc = sortformer_diarize_ggml(impl.model,
+                                                 enc_out.encoder_out.data(),
+                                                 enc_out.n_enc_frames, enc_out.d_model,
+                                                 sopts, dres);
+        if (diarize_rc != 0) {
+            throw std::runtime_error("diarize: sortformer_diarize failed (rc=" +
+                                     std::to_string(diarize_rc) + ")");
+        }
     }
 
     DiarizationResult result;

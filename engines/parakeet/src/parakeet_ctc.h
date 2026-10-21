@@ -682,6 +682,10 @@ ggml_backend_t model_active_backend(ParakeetCtcModel & m);
 // True when the FastConformer encoder runs on the Apple Core ML sidecar (ANE/GPU)
 // instead of the ggml backend. Always false on non-Apple / non-Core ML builds.
 bool        model_encoder_on_coreml(const ParakeetCtcModel & m);
+#ifdef PARAKEET_USE_COREML
+class CoremlDiarizers;
+CoremlDiarizers * model_coreml_diarizers(const ParakeetCtcModel & m);
+#endif
 bool        model_bypass_encoder_on_coreml(const ParakeetCtcModel & m);
 
 // True when the ggml encoder weights were never loaded because the Core ML

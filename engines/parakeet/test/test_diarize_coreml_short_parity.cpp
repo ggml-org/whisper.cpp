@@ -26,6 +26,7 @@ constexpr int kSampleRate = 16000;
 constexpr int kShortAudioSeconds = 3;
 constexpr uint64_t kFnvOffsetBasis = 1469598103934665603ULL;
 constexpr uint64_t kFnvPrime = 1099511628211ULL;
+constexpr const char * kDiarizerDisableEnv = "PARAKEET_COREML_DIARIZER_DISABLE";
 
 template <typename T>
 void hash_value(uint64_t & hash, const T & value) {
@@ -67,6 +68,7 @@ std::string diarize_in_child(const std::string & gguf, bool disable_coreml) {
     const pid_t pid = fork();
     if (pid == 0) {
         close(fds[0]);
+        setenv(kDiarizerDisableEnv, "1", 1);
         if (disable_coreml) setenv("PARAKEET_COREML_DISABLE", "1", 1);
 
         std::string payload;
