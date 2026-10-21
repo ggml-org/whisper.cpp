@@ -5,6 +5,9 @@
 .coreml/
 .test/
 .venv/
+# Python bytecode caches
+__pycache__/
+*.py[cod]
 .vs/
 .vscode/
 .DS_Store
