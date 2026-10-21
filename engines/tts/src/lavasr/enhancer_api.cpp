@@ -1,6 +1,7 @@
 #include "tts-cpp/lavasr/enhancer.h"
 
 #include "../backend_selection.h" // init_gpu_backend, init_cpu_backend
+#include "backend_requirement.h"
 #include "enhancer.h"             // internal: enhance(EnhancerWeights, ...)
 #include "enhancer_core.h"        // internal: EnhancerWeights
 #include "enhancer_ggml.h"        // internal: EnhancerGgml, enhancer_ggml_*
@@ -66,7 +67,8 @@ std::unique_ptr<Enhancer> Enhancer::load(const std::string & gguf_path,
         // runs entirely on one backend); pass a positive value to request a GPU.
         backend = tts_cpp::detail::init_gpu_backend(
             /*n_gpu_layers=*/99, opts.verbose, "lavasr-enhancer", opts.vulkan_device,
-            /*allow_arm_mali=*/true);
+            /*allow_arm_mali=*/true, /*out_gpu_present_but_unused=*/nullptr,
+            tts_cpp::lavasr::gpu_requirement());
         if (backend) {
             device = BackendDevice::GPU;
         }

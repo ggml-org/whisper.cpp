@@ -54,7 +54,7 @@ void usage(const char * argv0) {
         "          [--voice M1] [--language en] [--steps 5] [--speed 1.05]\n"
         "          [--seed 42] [--noise-npy /path/to/noise.npy]\n"
         "          [--runs 5] [--warmup 1] [--threads N] [--n-gpu-layers N]\n"
-        "          [--backend auto|cpu|opencl|hexagon|DEVICE] (explicit device, no fallback)\n"
+        "          [--backend auto|cpu|opencl|webgpu|hexagon|DEVICE] (explicit device, no fallback)\n"
         "          [--vulkan-device N] (-1 = auto-pick adapter with most free VRAM)\n"
         "          [--f16-attn 0|1] [--f16-weights 0|1]\n"
         "          [--precision auto|f32|f16|q8_0]   (default: auto)\n"

@@ -40,7 +40,7 @@ on:
         type: boolean
         default: false
       moss_e2e_backends:
-        description: 'JSON array of GPU backends to run the full-checkpoint cases on (cuda, vulkan)'
+        description: 'JSON array of GPU backends to run the full-checkpoint cases on (cuda, vulkan, webgpu)'
         type: string
         default: '["cuda","vulkan"]'
       moss_e2e_cases:
@@ -145,6 +145,17 @@ jobs:
               ;;
             vulkan)
               BACKEND_OPTIONS="-DGGML_VULKAN=ON -DGGML_CUDA=OFF"
+              ;;
+            webgpu)
+              # Prebuilt Dawn (google/dawn releases), the pin the ggml CI
+              # lane uses; ggml-webgpu drives it natively through webgpu.h.
+              DAWN_VERSION="v20260317.182325"
+              DAWN_ASSET_NAME="Dawn-18eb229ef5f707c1464cc581252e7603c73a3ef0-ubuntu-latest-Release"
+              curl -fL -o dawn.tar.gz \
+                "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+              rm -rf dawn && mkdir dawn
+              tar -xf dawn.tar.gz -C dawn --strip-components=1
+              BACKEND_OPTIONS="-DGGML_WEBGPU=ON -DGGML_VULKAN=OFF -DGGML_CUDA=OFF -DDawn_DIR=$PWD/dawn/lib64/cmake/Dawn"
               ;;
             *)
               echo "::error::unknown backend $BACKEND"

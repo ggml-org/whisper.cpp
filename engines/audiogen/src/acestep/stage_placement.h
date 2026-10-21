@@ -46,6 +46,12 @@ inline bool backend_name_is_hexagon(const char * name) {
     return name && std::strcmp(name, "HTP") == 0;
 }
 
+// ggml-webgpu registers as "WebGPU" (GGML_WEBGPU_NAME); Dawn picks the
+// adapter, so one registry name covers Vulkan, Metal and D3D12 hosts.
+inline bool backend_name_is_webgpu(const char * name) {
+    return name && std::strcmp(name, "WebGPU") == 0;
+}
+
 inline bool device_desc_has_marker(const char * device_desc, const char * marker) {
     return device_desc && std::strstr(device_desc, marker) != nullptr;
 }

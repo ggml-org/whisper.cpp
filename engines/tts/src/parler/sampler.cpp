@@ -4,6 +4,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <stdexcept>
 
 namespace tts_cpp {
 namespace parler {
@@ -114,6 +115,20 @@ int32_t draw_from_candidates(const std::vector<float> & scaled,
     return pick_by_cumulative(cand, probs, dist(rng) * denom);
 }
 
+// Masked tokens arrive as -inf and are fine; NaN or +inf means the decoder
+// graph miscomputed on the active backend, and the top-k / nucleus walk below
+// would index past the vocabulary on such a row instead of failing.
+bool logit_is_sane(float value) {
+    return !std::isnan(value) && value != std::numeric_limits<float>::infinity();
+}
+
+void require_sane_logits(const float * logits, size_t count) {
+    if (std::all_of(logits, logits + count, logit_is_sane)) return;
+    throw std::runtime_error(
+        "parler: the decoder produced NaN or +inf logits; the active backend "
+        "miscomputed this model (select another backend)");
+}
+
 int32_t sample_row(const float * row, int vocab, const parler_sampling_params & p,
                    std::mt19937 & rng, parler_sampler_scratch & s) {
     if (p.greedy) return argmax_row(row, vocab);
@@ -164,6 +179,7 @@ void parler_sample_frame(const float * logits, int n_codebooks, int vocab,
                          std::mt19937 & rng, parler_sampler_scratch & scratch,
                          std::vector<int32_t> & frame_out) {
     frame_out.resize((size_t) n_codebooks);
+    require_sane_logits(logits, (size_t) n_codebooks * (size_t) vocab);
     for (int k = 0; k < n_codebooks; ++k) {
         frame_out[k] = sample_row(logits + (size_t) k * vocab, vocab, params, rng, scratch);
     }

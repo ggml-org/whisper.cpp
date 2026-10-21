@@ -15,6 +15,8 @@ constexpr const char * OPENCL_DEVICE = "GPUOpenCL";
 constexpr const char * HEXAGON_BACKEND = "HTP";
 constexpr const char * HEXAGON_DEVICE = "HTP0";
 constexpr const char * SECOND_HEXAGON_DEVICE = "HTP1";
+constexpr const char * WEBGPU_BACKEND = "WebGPU";
+constexpr const char * WEBGPU_DEVICE = "WebGPU";
 
 int failures = 0;
 
@@ -55,6 +57,9 @@ void check_backend_requests() {
     check(backend_request_matches("cpu", CPU_BACKEND, CPU_BACKEND), "cpu must match the CPU registry");
     check(!backend_request_matches("cpu", OPENCL_BACKEND, OPENCL_DEVICE), "cpu must not match OpenCL");
     check(backend_request_matches("opencl", OPENCL_BACKEND, OPENCL_DEVICE), "opencl must match the OpenCL registry");
+    check(backend_request_matches("webgpu", WEBGPU_BACKEND, WEBGPU_DEVICE), "webgpu must match the WebGPU registry");
+    check(!backend_request_matches("webgpu", VULKAN_BACKEND, "Vulkan0"), "webgpu must not match Vulkan");
+    check(!backend_request_matches("opencl", WEBGPU_BACKEND, WEBGPU_DEVICE), "opencl must not match WebGPU");
     check(backend_request_matches("hexagon", HEXAGON_BACKEND, HEXAGON_DEVICE), "hexagon must match HTP0");
     check(!backend_request_matches("hexagon", HEXAGON_BACKEND, SECOND_HEXAGON_DEVICE),
           "hexagon must select only the primary NPU");
@@ -123,6 +128,11 @@ int main() {
           "Metal|OpenCL|Vulkan selection must accept Vulkan");
     check(!gpu_backend_satisfies_requirement(CUDA_BACKEND, vkmtlcl),
           "Metal|OpenCL|Vulkan selection must reject CUDA");
+
+    check(gpu_backend_satisfies_requirement(WEBGPU_BACKEND, GpuBackendRequirement::WebGPU),
+          "WebGPU selection must accept WebGPU");
+    check(!gpu_backend_satisfies_requirement(WEBGPU_BACKEND, vkmtlcl),
+          "Metal|OpenCL|Vulkan selection must reject WebGPU");
 
     check(selection_rejects("bogus"),
           "an unknown TTS_CPP_GPU_BACKEND must be rejected, not silently ignored");

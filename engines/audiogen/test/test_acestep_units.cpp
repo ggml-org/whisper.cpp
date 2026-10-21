@@ -871,6 +871,9 @@ void test_backend_request_matching() {
     CHECK(backend_request_matches("HTP1", "HTP", "HTP1", GGML_BACKEND_DEVICE_TYPE_GPU));
     CHECK(backend_request_matches("opencl", "OpenCL", "GPUOpenCL", GGML_BACKEND_DEVICE_TYPE_GPU));
     CHECK(!backend_request_matches("opencl", "HTP", "HTP0", GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(backend_request_matches("webgpu", "WebGPU", "WebGPU", GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(!backend_request_matches("webgpu", "Vulkan", "Vulkan0", GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(!backend_request_matches("opencl", "WebGPU", "WebGPU", GGML_BACKEND_DEVICE_TYPE_GPU));
     CHECK(backend_request_matches("cpu", "CPU", "CPU", GGML_BACKEND_DEVICE_TYPE_CPU));
     CHECK(!backend_request_matches("cpu", "HTP", "HTP0", GGML_BACKEND_DEVICE_TYPE_GPU));
     CHECK(!backend_request_matches("auto", "HTP", "HTP0", GGML_BACKEND_DEVICE_TYPE_GPU));

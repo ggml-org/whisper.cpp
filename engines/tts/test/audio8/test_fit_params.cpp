@@ -275,6 +275,12 @@ void run_synthetic_lm_gates() {
         expect(backend_selection_matches("opencl", "OpenCL", "GPU0",
                                          GGML_BACKEND_DEVICE_TYPE_GPU),
                "'opencl' did not match the OpenCL registry");
+        expect(backend_selection_matches("webgpu", "WebGPU", "WebGPU",
+                                         GGML_BACKEND_DEVICE_TYPE_GPU),
+               "'webgpu' did not match the WebGPU registry");
+        expect(!backend_selection_matches("webgpu", "Vulkan", "Vulkan0",
+                                          GGML_BACKEND_DEVICE_TYPE_GPU),
+               "'webgpu' matched a Vulkan device");
         expect(!backend_selection_matches("auto", "CUDA", "CUDA0",
                                           GGML_BACKEND_DEVICE_TYPE_GPU),
                "'auto' matched a specific device (expected false; auto defers to tier policy)");

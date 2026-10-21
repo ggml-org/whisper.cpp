@@ -68,7 +68,7 @@ the request fails explicitly otherwise. `backend_name()` and CLI JSON reports
 identify the selected backend. `backends_dir` (CLI: `--backends-dir`) locates
 dynamically loaded ggml backends using the library's existing process-wide
 loader. For backend-specific validation, set `TTS_CPP_GPU_BACKEND` to
-`metal`, `cuda`, `vulkan` or `opencl`; the selected backend must match the request.
+`metal`, `cuda`, `vulkan`, `opencl` or `webgpu`; the selected backend must match the request.
 The Fabric seed uses a specified Box–Muller transform. An encoder-enabled
 checkpoint can use `--reference-audio` instead of the prepared voice; the
 tested public checkpoint rejects that path.
@@ -76,8 +76,9 @@ tested public checkpoint rejects that path.
 ## OpenCL execution
 
 `EngineOptions.backend = "opencl"` (CLI: `--backend opencl`) explicitly
-selects OpenCL; `"cpu"` explicitly selects CPU. Empty/`"auto"` follows `use_gpu`.
-Explicit OpenCL requests fail if OpenCL is unavailable. Automatic GPU selection
+selects OpenCL; `"webgpu"` explicitly selects the WebGPU (Dawn) backend;
+`"cpu"` explicitly selects CPU. Empty/`"auto"` follows `use_gpu`.
+Explicit OpenCL or WebGPU requests fail if that backend is unavailable. Automatic GPU selection
 also supports Metal, CUDA and Vulkan, retaining the registry's Adreno tier
 policy. Hexagon is selected explicitly as described below. Both FlowLM and Mimi
 use the same selected device, retaining

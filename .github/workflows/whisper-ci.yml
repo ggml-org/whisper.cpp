@@ -7,6 +7,12 @@
 #   - umbrella: configure the root superbuild with ALL engines against one
 #     system ggml — proves the shared-ggml invariant — then whisper-cli
 #     transcription smoke on the bundled jfk.wav with ggml-tiny.en.
+#   - umbrella-webgpu (Linux only): the same superbuild against a ggml that
+#     carries the WebGPU backend, the model-free suite, and the whisper-cli
+#     smoke. The hosted runner has no GPU, so this lane proves the backend
+#     registers no device there (Dawn's Null adapter is refused) and whisper
+#     degrades to the CPU; umbrella-webgpu-gpu, opt-in on the self-hosted
+#     NVIDIA runner, runs the same smoke on a real WebGPU device.
 # Cross-platform coverage for the engines lives in engines-cross-ci.yml.
 name: whisper CI
 
@@ -16,15 +22,22 @@ on:
     paths:
       - 'third_party/whisper.cpp/**'
       - 'CMakeLists.txt'
+      - 'engines/whisper-gpu-picker*'
       - 'scripts/check-whisper-packaging.py'
       - '.github/workflows/whisper-ci.yml'
   pull_request:
     paths:
       - 'third_party/whisper.cpp/**'
       - 'CMakeLists.txt'
+      - 'engines/whisper-gpu-picker*'
       - 'scripts/check-whisper-packaging.py'
       - '.github/workflows/whisper-ci.yml'
   workflow_dispatch:
+    inputs:
+      run_webgpu_gpu:
+        description: 'Also run the whisper WebGPU smoke on the self-hosted NVIDIA Linux runner'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -233,3 +246,201 @@ jobs:
             || { echo "::error::JFK sentence missing past 30 s — the seek loop never reached the second mel window"; exit 1; }
           rm -f models-cache/jfk-x4.wav
 
+
+  # WebGPU lane: every engine plus whisper against a ggml built with
+  # GGML_WEBGPU=ON (prebuilt Dawn from the google/dawn releases, the pin the
+  # qvac-ext-ggml@speech CI uses). The hosted runner has no GPU and Dawn
+  # never hands out a software (fallback) adapter unless asked, so the backend
+  # must register no device here and whisper must land on the CPU: that is
+  # what the smoke at the end asserts.
+  umbrella-webgpu:
+    needs: runner_names
+    runs-on: ${{ needs.runner_names.outputs.ubuntu_2404 }}
+    timeout-minutes: 120
+    env:
+      DAWN_VERSION: v20260317.182325
+      DAWN_ASSET_NAME: Dawn-18eb229ef5f707c1464cc581252e7603c73a3ef0-ubuntu-latest-Release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ccache
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y ccache
+          echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> "$GITHUB_ENV"
+
+      - name: Fetch prebuilt Dawn
+        run: |
+          curl -fL -o dawn.tar.gz \
+            "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+          mkdir dawn
+          tar -xf dawn.tar.gz -C dawn --strip-components=1
+
+      - name: Resolve ggml pin (tip of ${{ env.GGML_BRANCH }})
+        id: ggml
+        run: echo "sha=$(git ls-remote "$GGML_REPO" "refs/heads/$GGML_BRANCH" | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache ggml install
+        id: ggml-cache
+        uses: actions/cache@v4
+        with:
+          path: ggml-install
+          key: ggml-install-webgpu-${{ env.DAWN_VERSION }}-ubuntu-24.04-${{ steps.ggml.outputs.sha }}
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-umbrella-webgpu-${{ github.sha }}
+          restore-keys: ccache-umbrella-webgpu-
+
+      - name: Build ggml with the WebGPU backend
+        if: steps.ggml-cache.outputs.cache-hit != 'true'
+        run: |
+          git init -q ggml-src
+          git -C ggml-src remote add origin "$GGML_REPO"
+          git -C ggml-src fetch --depth 1 origin ${{ steps.ggml.outputs.sha }}
+          git -C ggml-src checkout -q FETCH_HEAD
+          cmake -S ggml-src -B ggml-src/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_WEBGPU=ON \
+            -DGGML_METAL=OFF \
+            -DGGML_BUILD_TESTS=OFF \
+            -DGGML_BUILD_EXAMPLES=OFF \
+            -DDawn_DIR="$PWD/dawn/lib64/cmake/Dawn" \
+            -DCMAKE_INSTALL_PREFIX="$PWD/ggml-install"
+          cmake --build ggml-src/build -j4
+          cmake --install ggml-src/build
+
+      - name: Configure umbrella (all engines, one WebGPU ggml)
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSPEECH_BUILD_TESTS=ON \
+            -DSPEECH_BUILD_WHISPER_TESTS=ON \
+            -DCMAKE_PREFIX_PATH="$PWD/ggml-install"
+
+      - name: Build
+        run: cmake --build build -j4
+
+      # Same filter as the umbrella job, now linked against a ggml whose
+      # registry carries the WebGPU backend (with zero devices on this host).
+      - name: Tests (non-GPU, committed fixtures only)
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/ggml-install/lib
+        run: ctest --test-dir build -LE 'gpu|perf|medium|large' -E '^test-vad-full$' --output-on-failure --timeout 900
+
+      - name: Cache whisper tiny model
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: models-cache
+          key: whisper-tiny-en-v1
+
+      - name: Fetch ggml-tiny.en
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p models-cache
+          curl -fL -o models-cache/ggml-tiny.en.bin \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.en.bin
+          echo "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f  models-cache/ggml-tiny.en.bin" | shasum -a 256 -c -
+
+      # A GPU-less host: the backend must say why it registered no device
+      # (Dawn offers only its Null adapter, which the backend refuses rather
+      # than computing nothing on it) and whisper must transcribe on the CPU.
+      - name: whisper-cli smoke degrades to the CPU without a GPU (jfk.wav)
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/ggml-install/lib
+        run: |
+          ./build/bin/whisper-cli \
+            -m models-cache/ggml-tiny.en.bin \
+            -f third_party/whisper.cpp/samples/jfk.wav -nt > smoke.txt 2> smoke.log
+          grep -i -E "ggml_webgpu|backend|no GPU" smoke.log || true
+          grep -q "ggml_webgpu: .*registering no device" smoke.log \
+            || { echo "::error::the WebGPU backend did not report why it registered no device"; exit 1; }
+          if grep -q "using WebGPU backend" smoke.log; then
+            echo "::error::whisper ran on a WebGPU device on a runner that has no GPU"; exit 1
+          fi
+          out=$(tr '[:upper:]' '[:lower:]' < smoke.txt)
+          echo "$out"
+          echo "$out" | grep -q "ask not what your country can do for you" \
+            || { echo "::error::expected JFK transcript not found"; exit 1; }
+
+  # Opt-in GPU lane (workflow_dispatch with run_webgpu_gpu): the same WebGPU
+  # ggml and umbrella on the self-hosted NVIDIA Linux runner, where Dawn
+  # drives the card through Vulkan, so the whisper-cli smoke must run on the
+  # WebGPU backend and still produce the reference transcript.
+  umbrella-webgpu-gpu:
+    needs: runner_names
+    if: github.event_name == 'workflow_dispatch' && inputs.run_webgpu_gpu
+    runs-on: ${{ needs.runner_names.outputs.linux_x64_gpu }}
+    timeout-minutes: 120
+    env:
+      DAWN_VERSION: v20260317.182325
+      DAWN_ASSET_NAME: Dawn-18eb229ef5f707c1464cc581252e7603c73a3ef0-ubuntu-latest-Release
+    steps:
+      - name: Manual Workspace Cleanup
+        run: rm -rf "$GITHUB_WORKSPACE" && mkdir -p "$GITHUB_WORKSPACE"
+        shell: bash
+        working-directory: .
+      - uses: actions/checkout@v4
+
+      - name: Show what this runner has
+        run: |
+          nvidia-smi || echo "no NVIDIA driver"
+          command -v vulkaninfo && vulkaninfo --summary 2>/dev/null | head -20 || echo "no vulkaninfo"
+
+      - name: Fetch prebuilt Dawn
+        run: |
+          curl -fL -o dawn.tar.gz \
+            "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
+          mkdir dawn
+          tar -xf dawn.tar.gz -C dawn --strip-components=1
+
+      - name: Build ggml with the WebGPU backend and the whisper umbrella
+        run: |
+          git clone --depth 1 --branch "$GGML_BRANCH" "$GGML_REPO" ggml-src
+          cmake -S ggml-src -B ggml-src/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_WEBGPU=ON \
+            -DGGML_BUILD_TESTS=OFF \
+            -DGGML_BUILD_EXAMPLES=OFF \
+            -DDawn_DIR="$PWD/dawn/lib64/cmake/Dawn" \
+            -DCMAKE_INSTALL_PREFIX="$PWD/ggml-install"
+          cmake --build ggml-src/build -j && cmake --install ggml-src/build
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DSPEECH_BUILD_PARAKEET=OFF -DSPEECH_BUILD_TTS=OFF -DSPEECH_BUILD_AUDIOGEN=OFF \
+            -DSPEECH_BUILD_TESTS=ON \
+            -DCMAKE_PREFIX_PATH="$PWD/ggml-install"
+          cmake --build build -j
+
+      - name: Picker unit test with a registered WebGPU device
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/ggml-install/lib
+        run: ctest --test-dir build -R '^test-whisper-gpu-picker$' --output-on-failure
+
+      - name: Fetch ggml-tiny.en
+        run: |
+          mkdir -p models-cache
+          curl -fL -o models-cache/ggml-tiny.en.bin \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.en.bin
+          echo "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f  models-cache/ggml-tiny.en.bin" | shasum -a 256 -c -
+
+      - name: whisper-cli transcription smoke on WebGPU (jfk.wav)
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/ggml-install/lib
+        run: |
+          ./build/bin/whisper-cli \
+            -m models-cache/ggml-tiny.en.bin \
+            -f third_party/whisper.cpp/samples/jfk.wav -nt > smoke.txt 2> smoke.log
+          grep -i -E "ggml_webgpu|backend" smoke.log || true
+          grep -q "using WebGPU backend" smoke.log \
+            || { echo "::error::whisper did not run on the WebGPU backend"; exit 1; }
+          out=$(tr '[:upper:]' '[:lower:]' < smoke.txt)
+          echo "$out"
+          echo "$out" | grep -q "ask not what your country can do for you" \
+            || { echo "::error::expected JFK transcript not found"; exit 1; }

@@ -84,7 +84,7 @@ void test(const std::string & path) {
 
 int main(int argc, char ** argv) {
     if (argc != 2) {
-        std::fprintf(stderr, "usage: %s cuda|vulkan|hexagon|opencl\n", argv[0]);
+        std::fprintf(stderr, "usage: %s cuda|vulkan|hexagon|opencl|webgpu\n", argv[0]);
         return 2;
     }
     std::filesystem::path path;

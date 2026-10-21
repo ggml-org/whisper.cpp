@@ -76,11 +76,63 @@ see the relevant engine backend guide.
 | `TTS_CPP_BUILD_SHARED` | `OFF` | Select TTS linkage independently of `BUILD_SHARED_LIBS` |
 
 GPU backends come from the ggml build: `GGML_VULKAN`, `GGML_OPENCL`,
-`GGML_CUDA`, or `GGML_HEXAGON`; Metal defaults on for Apple builds.
+`GGML_CUDA`, `GGML_WEBGPU`, or `GGML_HEXAGON`; Metal defaults on for Apple builds.
 Core ML options default off and are Apple-only: `WHISPER_COREML`,
 `PARAKEET_COREML`, `TTS_CPP_COREML`, `AUDIOGEN_COREML`.
 The [sidecar overview](../README.md#apple-core-ml-sidecars) links to each
 engine's export, input-routing and fallback contracts.
+
+### WebGPU (Dawn)
+
+`GGML_WEBGPU=ON` builds ggml's WebGPU backend on [Dawn](https://dawn.googlesource.com/dawn),
+Google's native WebGPU implementation. The engines drive it through the
+native `webgpu.h` API inside the process, so no browser is involved; Dawn
+targets Vulkan on Linux, Windows and Android, Metal on Apple platforms, and
+D3D12 on Windows. The backend registers as `WebGPU` in the ggml registry
+and is selected like any other GPU backend: automatically by each engine's
+runtime tiering (it ranks with Vulkan and Metal, below CUDA on the same
+NVIDIA card), or explicitly with `--backend webgpu` on the CLIs and
+`backend = "webgpu"` in the engine options. Model validation per engine is
+documented in the engine backend guides; a backend that compiles does not
+imply every model has been checked on it.
+
+The ggml CI lanes use Dawn's prebuilt release binaries; the `ggml-speech`
+vcpkg port builds Dawn from source through the official `dawn` port instead
+(the same toolchain and C++ runtime as the consumer, which a prebuilt Dawn
+cannot promise). To reproduce the CI build, point CMake at a Dawn install
+and enable the backend when building ggml:
+
+```sh
+curl -fL -o dawn.tar.gz \
+  https://github.com/google/dawn/releases/download/v20260317.182325/Dawn-18eb229ef5f707c1464cc581252e7603c73a3ef0-ubuntu-latest-Release.tar.gz
+mkdir dawn && tar -xf dawn.tar.gz -C dawn --strip-components=1
+cmake -S ggml-src -B ggml-src/build -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=ON -DGGML_WEBGPU=ON \
+  -DDawn_DIR="$PWD/dawn/lib64/cmake/Dawn" \
+  -DCMAKE_INSTALL_PREFIX="$PWD/ggml-install"
+cmake --build ggml-src/build --parallel
+cmake --install ggml-src/build
+```
+
+Pick the `macos-latest` asset on Apple hosts, whose config lives under
+`lib/cmake/Dawn`. Shader embedding needs a `python3` on the PATH at configure
+time. A static ggml exports Dawn in its link interface, so pass the same
+`Dawn_DIR` when configuring the umbrella against a static WebGPU ggml as
+well (a shared ggml needs nothing). Dawn hides
+`shader-f16` on NVIDIA Vulkan unless the backend enables the
+`vulkan_enable_f16_on_nvidia` toggle, which ggml-webgpu does; a host whose
+adapter still lacks it, or lacks implicit device synchronization, registers no
+WebGPU device and logs why. The backend requests a high-performance adapter
+(the discrete GPU on hybrid machines), never a software fallback adapter, and
+refuses Dawn's Null adapter, so a host without a usable GPU gets the engines'
+ordinary CPU fallback instead of silent empty output. Two limitations to keep
+in mind: the device reports Dawn's maximum buffer size as its memory, so the
+engines' memory-fit projections are not meaningful on WebGPU, and the WGSL
+matmul kernels keep activations in f16, which the fork's `test-backend-ops`
+large-activation and `GGML_PREC_F32` cases fail on; the
+[validation table](../README.md#webgpu-dawn) records which models that
+affects. Desktop Linux is the validated platform; Dawn's Android, Windows and
+Apple paths compile but have not been exercised with the speech engines.
 
 ### Tests
 
@@ -117,8 +169,14 @@ Each engine also configures directly. Defaults and ggml acquisition differ:
 
 The [`speech-cpp`](https://github.com/tetherto/qvac-registry-vcpkg/tree/main/ports/speech-cpp)
 vcpkg port builds the umbrella. Select engine features such as
-`speech-cpp[whisper,parakeet,vulkan]`; backend features select the corresponding
-shared `ggml-speech` dependency features. CMake package names remain engine-specific.
+`speech-cpp[whisper,parakeet,vulkan]`; backend features (`metal`, `vulkan`,
+`opencl`, `cuda`, `webgpu`) select the corresponding shared `ggml-speech`
+dependency features. `webgpu` is opt-in on every platform and pulls the
+registry's own `dawn` port (the official port pinned at the version the
+speech-branch `ggml-webgpu` compiles against, Linux defaults trimmed to
+Vulkan), so a consumer manifest must import `vulkan-headers`,
+`vulkan-utility-libraries` and `vcpkg-get-python-packages` from
+microsoft/vcpkg. CMake package names remain engine-specific.
 
 | Feature | `find_package(... CONFIG REQUIRED)` | Imported target |
 |---|---|---|

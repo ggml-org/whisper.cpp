@@ -12,8 +12,8 @@ support is required because Vulkan reports Android UMA adapters such as
 Pixel's Mali-G715 as `IGPU`.
 
 `EngineOptions::backend` (`--backend` on the CLIs) replaces that walk with an
-explicit device: `cpu`, `opencl`, `hexagon` (the Snapdragon HTP0 NPU), or an
-exact ggml device name. An explicit request has no fallback, so `create()`
+explicit device: `cpu`, `opencl`, `webgpu`, `hexagon` (the Snapdragon HTP0
+NPU), or an exact ggml device name. An explicit request has no fallback, so `create()`
 throws when the device is missing. The Hexagon NPU is never picked by the
 automatic walk; see [Hexagon NPU](#hexagon-npu).
 `EngineOptions::lm_backend` (`--lm-backend`) moves only the LM to another
@@ -23,8 +23,8 @@ device with the same names.
 |---|---|
 | DiT, VAE | GPU (or the Hexagon NPU on request) |
 | Text encoder, condition encoder | GPU, unless `ACESTEP_ENCODERS_CPU` is present |
-| LM | GPU on Vulkan (every device except Mali), Metal, OpenCL and CUDA, the NPU on Hexagon; CPU on Mali Vulkan devices and every unmeasured backend |
-| FSQ detokenizer | GPU on Vulkan, Metal, OpenCL, and CUDA, the NPU on Hexagon; CPU on every unmeasured backend |
+| LM | GPU on Vulkan (every device except Mali), Metal, OpenCL and CUDA, the NPU on Hexagon; CPU on Mali Vulkan devices and every unmeasured backend (WebGPU included) |
+| FSQ detokenizer | GPU on Vulkan, Metal, OpenCL, and CUDA, the NPU on Hexagon; CPU on every unmeasured backend (WebGPU included) |
 
 The LM and detokenizer are allowlisted per backend: a backend nobody has run keeps the CPU placement, so adding one cannot silently regress generated audio. Metal and OpenCL are validated for both stages; the recorded OpenCL validation used an Adreno 740. Vulkan carries both stages on every device except the ones on a per-device denylist (`vulkan_device_lm_blocked`): Mali keeps the LM on the CPU, because Mali-G715 testing showed code collapse and early termination there. A single misbehaving GPU family should cost that family the stage, not every Vulkan device, so the per-device rule denies rather than admits. CUDA needs the `snake` / `col2im_1d` VAE kernels from the `ggml-speech` fork's CUDA backend and its `GGML_PREC_F32` MUL_MAT support (the LM-shaped q4_0/q4_K strided-B `b_absmax=1e5` stress cases produced NaN before the fork routed explicit-precision matmuls to the f32 cuBLAS path); with that ggml, `test-backend-ops` on an RTX 5090 passes the full suite, the Q8_0 LM matches the F32-dequantized reference at 0.9999 logit cosine with an identical greedy trajectory where the CPU Q8_0 path sits at 0.994, and `--quantized-batch-cfg-regression` passes, so the LM runs on the GPU. Hexagon runs the LM on the NPU, which needs a `ggml-speech` whose HTP `q8_0` activation quantizer matches the CPU's (see [Hexagon NPU](#hexagon-npu)). The HIP/MUSA builds of the same backend register as `ROCm`/`MUSA` and stay off the allowlist until measured.
 

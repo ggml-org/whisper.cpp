@@ -43,7 +43,7 @@ void print_usage(const char * argv0) {
         "                        (default 0 = CPU), with the same runtime\n"
         "                        fallbacks a real load applies\n"
         "  --vulkan-device N     Vulkan adapter index (default 0)\n"
-        "  --backend NAME        auto | cpu | opencl | hexagon | exact ggml device\n"
+        "  --backend NAME        auto | cpu | opencl | webgpu | hexagon | exact ggml device\n"
         "                        name, as EngineOptions::backend (no fallback)\n"
         "  --margin-mib MIB      free-memory headroom to require (default 256)\n"
         "  --backends-dir DIR    directory scanned for dynamically-loaded ggml backends\n"

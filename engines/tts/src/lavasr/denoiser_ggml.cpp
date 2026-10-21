@@ -2,6 +2,7 @@
 
 #include "../backend_selection.h"
 #include "../backend_util.h"
+#include "backend_requirement.h"
 
 #include "ggml-backend.h"
 
@@ -506,7 +507,8 @@ struct DenoiserGgml::Impl {
 void DenoiserGgml::Impl::init_backend(int n_gpu_layers, bool verbose) {
     if (n_gpu_layers > 0) {
         bool unused = false;
-        backend = ::tts_cpp::detail::init_gpu_backend(n_gpu_layers, verbose, "lavasr-dn", 0, true, &unused);
+        backend = ::tts_cpp::detail::init_gpu_backend(n_gpu_layers, verbose, "lavasr-dn", 0, true, &unused,
+                                                      ::tts_cpp::lavasr::gpu_requirement());
         gpu     = backend != nullptr;
     }
     if (!backend) { backend = ::tts_cpp::detail::init_cpu_backend(); gpu = false; }

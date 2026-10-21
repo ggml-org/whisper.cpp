@@ -1055,6 +1055,7 @@ bool backend_selection_matches(const std::string & requested,
     if (requested.empty() || requested == "auto") return false;
     if (requested == "cpu")    return type == GGML_BACKEND_DEVICE_TYPE_CPU;
     if (requested == "opencl") return reg && std::strcmp(reg, "OpenCL") == 0;
+    if (requested == "webgpu") return ::tts_cpp::detail::reg_name_is_webgpu(reg);
     if (requested == "hexagon") {
         return reg && std::strcmp(reg, "HTP") == 0 &&
                device && std::strcmp(device, "HTP0") == 0;

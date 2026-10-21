@@ -108,7 +108,7 @@ void cancel(Engine & engine, const std::string & text, bool explicit_cancel) {
 
 int main(int argc, char ** argv) {
     if (argc != 9) {
-        std::fprintf(stderr, "usage: %s cuda|vulkan LM.gguf DECODER.gguf ENCODER.gguf REFERENCE.wav OUTPUT_DIR SHORT.txt LONG.txt\n", argv[0]);
+        std::fprintf(stderr, "usage: %s cuda|vulkan|webgpu LM.gguf DECODER.gguf ENCODER.gguf REFERENCE.wav OUTPUT_DIR SHORT.txt LONG.txt\n", argv[0]);
         return 77;
     }
     try {

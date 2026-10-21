@@ -12,6 +12,7 @@
 #include <numeric>
 #include <random>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -288,10 +289,47 @@ static void test_matches_full_vocab_reference() {
     CHECK(rng_a() == rng_b(), "greedy leaves the RNG untouched");
 }
 
+// A backend that miscomputes the decoder hands the sampler NaN logits; the
+// candidate walk must refuse them instead of indexing past the vocabulary.
+// Masked tokens arrive as -inf and must still sample normally.
+static void test_non_finite_logits_rejected() {
+    const int n_codebooks = 2;
+    const int vocab       = 8;
+    std::vector<float> logits((size_t) n_codebooks * vocab, 0.5f);
+    logits[3] = -std::numeric_limits<float>::infinity();
+    parler_sampler_scratch scratch;
+    std::vector<int32_t>   frame;
+    std::mt19937           rng(7);
+    const parler_sampling_params p = parler_resolve_sampling(parler_sampling_request(), shipped());
+
+    bool threw = false;
+    try {
+        parler_sample_frame(logits.data(), n_codebooks, vocab, p, rng, scratch, frame);
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+    CHECK(!threw, "masked -inf logits sample normally");
+    CHECK(frame.size() == (size_t) n_codebooks, "one token per codebook");
+    CHECK(frame[0] != 3, "a masked token is never drawn");
+
+    for (float poison : { std::numeric_limits<float>::quiet_NaN(),
+                          std::numeric_limits<float>::infinity() }) {
+        logits[(size_t) vocab + 5] = poison;
+        threw = false;
+        try {
+            parler_sample_frame(logits.data(), n_codebooks, vocab, p, rng, scratch, frame);
+        } catch (const std::runtime_error &) {
+            threw = true;
+        }
+        CHECK(threw, "NaN or +inf logits raise instead of sampling");
+    }
+}
+
 int main() {
     test_resolution();
     test_top_k_1_is_argmax();
     test_matches_full_vocab_reference();
+    test_non_finite_logits_rejected();
 
     if (g_failures == 0) {
         fprintf(stderr, "parler sampler: PASS\n");

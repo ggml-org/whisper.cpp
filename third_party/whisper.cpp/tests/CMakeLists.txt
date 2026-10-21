@@ -92,7 +92,7 @@ endif()
 set(UTF8_TEST test-common-utf8)
 add_executable(${UTF8_TEST} ${UTF8_TEST}.cpp)
 target_include_directories(${UTF8_TEST} PRIVATE ../examples)
-target_link_libraries(${UTF8_TEST} PRIVATE common)
+target_link_libraries(${UTF8_TEST} PRIVATE common whisper)
 add_test(NAME ${UTF8_TEST} COMMAND ${UTF8_TEST})
 set_tests_properties(${UTF8_TEST} PROPERTIES LABELS "unit")
 
@@ -106,7 +106,7 @@ set_tests_properties(${LOGITS_SLICE_TEST} PROPERTIES LABELS "unit;gh")
 # language lookup-table unit test (QVAC patch, see PATCHES.md; no model needed)
 set(LANG_TEST test-whisper-lang)
 add_executable(${LANG_TEST} ${LANG_TEST}.cpp)
-target_include_directories(${LANG_TEST} PRIVATE ../include ../ggml/include)
+target_include_directories(${LANG_TEST} PRIVATE ../include)
 target_link_libraries(${LANG_TEST} PRIVATE whisper)
 add_test(NAME ${LANG_TEST} COMMAND ${LANG_TEST})
 set_tests_properties(${LANG_TEST} PROPERTIES LABELS "unit;gh")
@@ -114,7 +114,7 @@ set_tests_properties(${LANG_TEST} PROPERTIES LABELS "unit;gh")
 # default-parameter contract test (QVAC patch, see PATCHES.md; no model needed)
 set(PARAMS_TEST test-whisper-params)
 add_executable(${PARAMS_TEST} ${PARAMS_TEST}.cpp)
-target_include_directories(${PARAMS_TEST} PRIVATE ../include ../ggml/include)
+target_include_directories(${PARAMS_TEST} PRIVATE ../include)
 target_link_libraries(${PARAMS_TEST} PRIVATE whisper)
 add_test(NAME ${PARAMS_TEST} COMMAND ${PARAMS_TEST})
 set_tests_properties(${PARAMS_TEST} PROPERTIES LABELS "unit;gh")
@@ -123,7 +123,7 @@ set_tests_properties(${PARAMS_TEST} PROPERTIES LABELS "unit;gh")
 # whisper_fit_params argument/status contract (QVAC patch, see PATCHES.md)
 set(FIT_CLI_TEST test-whisper-fit-cli)
 add_executable(${FIT_CLI_TEST} ${FIT_CLI_TEST}.cpp)
-target_include_directories(${FIT_CLI_TEST} PRIVATE ../include ../ggml/include ../examples)
+target_include_directories(${FIT_CLI_TEST} PRIVATE ../include ../examples)
 target_link_libraries(${FIT_CLI_TEST} PRIVATE whisper)
 add_test(NAME ${FIT_CLI_TEST} COMMAND ${FIT_CLI_TEST})
 set_tests_properties(${FIT_CLI_TEST} PROPERTIES LABELS "unit;gh")
@@ -144,7 +144,7 @@ set_tests_properties(${FIT_CLI_TEST} PROPERTIES LABELS "unit;gh")
 #     exposes no GPU device, so a mislabeled lane cannot green-wash it.
 set(FIT_TEST test-whisper-fit-params)
 add_executable(${FIT_TEST} ${FIT_TEST}.cpp)
-target_include_directories(${FIT_TEST} PRIVATE ../include ../ggml/include)
+target_include_directories(${FIT_TEST} PRIVATE ../include)
 target_link_libraries(${FIT_TEST} PRIVATE whisper)
 target_compile_definitions(${FIT_TEST} PRIVATE
     WHISPER_FIT_TEST_MODEL="${PROJECT_SOURCE_DIR}/models/for-tests-ggml-tiny.bin"
@@ -169,7 +169,7 @@ set(FIT_DESCRIPTION_FIXTURES
     ${PROJECT_SOURCE_DIR}/models/for-tests-ggml-bci.bin
     ${PROJECT_SOURCE_DIR}/models/for-tests-ggml-bci.fit.gguf)
 add_executable(${FIT_DESCRIPTION_TEST} ${FIT_DESCRIPTION_TEST}.cpp)
-target_include_directories(${FIT_DESCRIPTION_TEST} PRIVATE ../include ../ggml/include)
+target_include_directories(${FIT_DESCRIPTION_TEST} PRIVATE ../include)
 target_link_libraries(${FIT_DESCRIPTION_TEST} PRIVATE whisper)
 add_test(NAME ${FIT_DESCRIPTION_TEST} COMMAND ${FIT_DESCRIPTION_TEST} ${FIT_DESCRIPTION_FIXTURES})
 set_tests_properties(${FIT_DESCRIPTION_TEST} PROPERTIES LABELS "unit;tiny;gh")
@@ -178,16 +178,16 @@ set_tests_properties(${FIT_DESCRIPTION_TEST}-gpu PROPERTIES LABELS "gpu;tiny" SK
 
 set(BUFFER_LOADER_TEST test-whisper-buffer-loader)
 add_executable(${BUFFER_LOADER_TEST} ${BUFFER_LOADER_TEST}.cpp)
-target_include_directories(${BUFFER_LOADER_TEST} PRIVATE ../include ../ggml/include ../examples)
-target_link_libraries(${BUFFER_LOADER_TEST} PRIVATE common)
+target_include_directories(${BUFFER_LOADER_TEST} PRIVATE ../include ../examples)
+target_link_libraries(${BUFFER_LOADER_TEST} PRIVATE common whisper)
 add_test(NAME ${BUFFER_LOADER_TEST} COMMAND ${BUFFER_LOADER_TEST})
 set_tests_properties(${BUFFER_LOADER_TEST} PROPERTIES LABELS "unit;gh")
 
 # whisper_full() with n_samples == 0 must not read an uninitialized mel (#3978)
 set(ZERO_SAMPLES_TEST test-whisper-zero-samples)
 add_executable(${ZERO_SAMPLES_TEST} ${ZERO_SAMPLES_TEST}.cpp)
-target_include_directories(${ZERO_SAMPLES_TEST} PRIVATE ../include ../ggml/include ../examples)
-target_link_libraries(${ZERO_SAMPLES_TEST} PRIVATE common)
+target_include_directories(${ZERO_SAMPLES_TEST} PRIVATE ../include ../examples)
+target_link_libraries(${ZERO_SAMPLES_TEST} PRIVATE common whisper)
 target_compile_definitions(${ZERO_SAMPLES_TEST} PRIVATE
     WHISPER_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-ggml-tiny.bin")
 add_test(NAME ${ZERO_SAMPLES_TEST} COMMAND ${ZERO_SAMPLES_TEST})
@@ -197,8 +197,8 @@ set_tests_properties(${ZERO_SAMPLES_TEST} PROPERTIES LABELS "tiny;gh")
 # VAD test tests VAD in isolation
 set(VAD_TEST test-vad)
 add_executable(${VAD_TEST} ${VAD_TEST}.cpp)
-target_include_directories(${VAD_TEST} PRIVATE ../include ../ggml/include ../examples)
-target_link_libraries(${VAD_TEST} PRIVATE common)
+target_include_directories(${VAD_TEST} PRIVATE ../include ../examples)
+target_link_libraries(${VAD_TEST} PRIVATE common whisper)
 target_compile_definitions(${VAD_TEST} PRIVATE
     VAD_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-silero-v6.2.0-ggml.bin"
     SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
@@ -208,8 +208,8 @@ set_tests_properties(${VAD_TEST} PROPERTIES LABELS "unit")
 # VAD test full uses whisper_full with VAD enabled
 set(VAD_TEST test-vad-full)
 add_executable(${VAD_TEST} ${VAD_TEST}.cpp)
-target_include_directories(${VAD_TEST} PRIVATE ../include ../ggml/include ../examples)
-target_link_libraries(${VAD_TEST} PRIVATE common)
+target_include_directories(${VAD_TEST} PRIVATE ../include ../examples)
+target_link_libraries(${VAD_TEST} PRIVATE common whisper)
 target_compile_definitions(${VAD_TEST} PRIVATE
     WHISPER_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/ggml-base.en.bin"
     VAD_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-silero-v6.2.0-ggml.bin"
@@ -224,8 +224,8 @@ set_tests_properties(${VAD_TEST} PROPERTIES LABELS "base;en")
 # model (no whisper transcribe model needed).
 set(VAD_TEST test-vad-streaming)
 add_executable(${VAD_TEST} ${VAD_TEST}.cpp)
-target_include_directories(${VAD_TEST} PRIVATE ../include ../ggml/include ../examples)
-target_link_libraries(${VAD_TEST} PRIVATE common)
+target_include_directories(${VAD_TEST} PRIVATE ../include ../examples)
+target_link_libraries(${VAD_TEST} PRIVATE common whisper)
 target_compile_definitions(${VAD_TEST} PRIVATE
     VAD_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-silero-v6.2.0-ggml.bin"
     SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
@@ -237,8 +237,8 @@ set_tests_properties(${VAD_TEST} PROPERTIES LABELS "unit;vad")
 # path on GPU builds and falls back to CPU-vs-CPU elsewhere.
 set(VAD_TEST test-vad-gpu)
 add_executable(${VAD_TEST} ${VAD_TEST}.cpp)
-target_include_directories(${VAD_TEST} PRIVATE ../include ../ggml/include ../examples)
-target_link_libraries(${VAD_TEST} PRIVATE common)
+target_include_directories(${VAD_TEST} PRIVATE ../include ../examples)
+target_link_libraries(${VAD_TEST} PRIVATE common whisper)
 target_compile_definitions(${VAD_TEST} PRIVATE
     VAD_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-silero-v6.2.0-ggml.bin"
     SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
@@ -249,8 +249,8 @@ if (WHISPER_BUILD_PARAKEET) # QVAC patch, see PATCHES.md: these link the gated `
 # Parakeet model loading test
 set(PARAKEET_TEST test-parakeet)
 add_executable(${PARAKEET_TEST} ${PARAKEET_TEST}.cpp)
-target_include_directories(${PARAKEET_TEST} PRIVATE ../include ../ggml/include ../examples)
-target_link_libraries(${PARAKEET_TEST} PRIVATE parakeet common)
+target_include_directories(${PARAKEET_TEST} PRIVATE ../include ../examples)
+target_link_libraries(${PARAKEET_TEST} PRIVATE parakeet common whisper)
 target_compile_definitions(${PARAKEET_TEST} PRIVATE
     PARAKEET_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-ggml-parakeet-tdt.bin"
     PARAKEET_BAD_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-ggml-parakeet-tdt-bad-nfft0.bin"
@@ -272,8 +272,8 @@ function(add_parakeet_transcription_test TEST_TARGET TEST_SOURCE SAMPLE_PATH EXP
     endif()
 
     add_executable(${TEST_TARGET} ${TEST_SOURCE})
-    target_include_directories(${TEST_TARGET} PRIVATE ../include ../ggml/include ../examples)
-    target_link_libraries(${TEST_TARGET} PRIVATE parakeet common)
+    target_include_directories(${TEST_TARGET} PRIVATE ../include ../examples)
+    target_link_libraries(${TEST_TARGET} PRIVATE parakeet common whisper)
     target_compile_definitions(${TEST_TARGET} PRIVATE
         PARAKEET_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/ggml-parakeet-tdt-0.6b-v3-f32.bin"
         SAMPLE_PATH="${PROJECT_SOURCE_DIR}/${SAMPLE_PATH}"

@@ -40,7 +40,7 @@ void print_usage(const char * argv0) {
         "  --n-gpu-layers N         request the validated GPU backend when > 0\n"
         "                           (default 0 = CPU), with the same runtime\n"
         "                           fallbacks a real load applies\n"
-        "  --backend NAME           auto | cpu | opencl | hexagon | exact ggml device\n"
+        "  --backend NAME           auto | cpu | opencl | webgpu | hexagon | exact ggml device\n"
         "                           name, as EngineOptions::backend (no fallback)\n"
         "  --margin-mib MIB         free-memory headroom to require (default 256)\n"
         "  --coreml-decoder         account for the optional Core ML decoder (cannot project)\n"

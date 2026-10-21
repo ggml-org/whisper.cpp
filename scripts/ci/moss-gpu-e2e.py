@@ -26,7 +26,7 @@ import traceback
 import wave
 
 
-BACKENDS = {"cuda": "CUDA", "vulkan": "Vulkan"}
+BACKENDS = {"cuda": "CUDA", "vulkan": "Vulkan", "webgpu": "WebGPU"}
 
 CASES = {
     "tts-f16": "moss-tts-delay-f16",

@@ -119,8 +119,9 @@ build-parakeet/parakeet-fit-params \
 ```
 
 `--backend` (`FitOptions::backend`) takes the same names as the engine's
-`--backend`: `auto` follows `--n-gpu-layers`; `cpu`, `opencl`, `hexagon` or an
-exact ggml device name projects for that backend, and an unavailable one is an
+`--backend`: `auto` follows `--n-gpu-layers`; `cpu`, `cuda`, `vulkan`, `opencl`,
+`webgpu`, `hexagon` or an exact ggml device name projects for that backend, and
+an unavailable one is an
 error with reason `no-backend-device`, as a real load fails. A Hexagon session
 allocates host memory and reports none of its own, so the verdict reads the
 CPU device's free memory and charges host buffers to the same pool.

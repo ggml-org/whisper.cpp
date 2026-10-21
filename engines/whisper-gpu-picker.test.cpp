@@ -154,6 +154,23 @@ void test_desktop_opencl_deprioritized_below_vulkan() {
     }) == 0);
 }
 
+void test_webgpu_ranks_with_vulkan() {
+    // ggml-webgpu (Dawn) exposes one discrete adapter named "WebGPU". It sits
+    // in the generic discrete tier: CUDA on the same NVIDIA card still wins,
+    // an integrated adapter loses to it, and alone it is index 0.
+    CHECK(pick({
+        {"WebGPU", false, -1},
+        {"CUDA",   false, -1},
+    }) == 1);
+    CHECK(pick({
+        {"Vulkan", true,  -1},
+        {"WebGPU", false, -1},
+    }) == 1);
+    CHECK(pick({
+        {"WebGPU", false, -1},
+    }) == 0);
+}
+
 void test_only_integrated_available() {
     // Only iGPU visible — the picker returns the first (only) one, which
     // is what whisper's own default already does. This is the no-op case
@@ -203,6 +220,7 @@ int main() {
     test_adreno_700plus_opencl_wins_top_tier();
     test_adreno_6xx_opencl_not_promoted();
     test_desktop_opencl_deprioritized_below_vulkan();
+    test_webgpu_ranks_with_vulkan();
     test_only_integrated_available();
     test_only_discrete_available();
     test_empty_device_list();

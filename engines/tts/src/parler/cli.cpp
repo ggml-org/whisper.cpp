@@ -32,7 +32,7 @@ void usage(const char * argv0) {
         "          [--quality basic|high|\"very high\"]\n"
         "          [--seed 42] [--threads N]\n"
         "          [--n-gpu-layers N] (offload to GPU: Metal/Vulkan/...; 0 = CPU)\n"
-        "          [--backend auto|cpu|opencl|hexagon|DEVICE] (explicit device;\n"
+        "          [--backend auto|cpu|opencl|webgpu|hexagon|DEVICE] (explicit device;\n"
         "                      overrides --n-gpu-layers, no fallback)\n"
         "          [--greedy] (not honoured: argmax decoding never terminates\n"
         "                      for this model, so it warns and samples instead)\n"

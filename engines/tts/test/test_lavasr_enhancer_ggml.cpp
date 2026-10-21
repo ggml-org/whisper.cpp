@@ -19,6 +19,7 @@
 
 #include "test_env_portable.h"
 #include "backend_selection.h"
+#include "lavasr/backend_requirement.h"
 #include "lavasr/enhancer.h"      // scalar enhance() + enhance_with()
 #include "lavasr/enhancer_core.h"
 #include "lavasr/enhancer_ggml.h"
@@ -583,11 +584,13 @@ static int selftest_public_api() {
                         pcm.size(), cpu_out.size());
         }
 
-        // Probe with the same Mali opt-in that the public API is required to
-        // use.  If this succeeds, a subsequent use_gpu load must not fall back.
+        // Probe with the same Mali opt-in and backend requirement that the
+        // public API uses.  If this succeeds, a subsequent use_gpu load must
+        // not fall back.
         ggml_backend_t gpu_probe = tts_cpp::detail::init_gpu_backend(
             /*n_gpu_layers=*/99, /*verbose=*/false, "test-enh-api",
-            /*vulkan_device=*/0, /*allow_arm_mali=*/true);
+            /*vulkan_device=*/0, /*allow_arm_mali=*/true,
+            /*out_gpu_present_but_unused=*/nullptr, tts_cpp::lavasr::gpu_requirement());
         const bool gpu_available = gpu_probe != nullptr;
         if (gpu_probe) {
             ggml_backend_free(gpu_probe);

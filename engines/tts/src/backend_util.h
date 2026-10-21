@@ -81,6 +81,12 @@ inline bool reg_name_is_cuda(const char * n) {
     return n && std::strcmp(n, "CUDA") == 0;
 }
 
+// ggml-webgpu registers as "WebGPU" (GGML_WEBGPU_NAME) and names its single
+// device the same way.
+inline bool reg_name_is_webgpu(const char * n) {
+    return n && std::strcmp(n, "WebGPU") == 0;
+}
+
 inline bool reg_name_is_hexagon(const char * n) {
     return n && std::strcmp(n, "HTP") == 0;
 }
@@ -111,6 +117,10 @@ inline bool backend_is_opencl(ggml_backend_t b) {
 
 inline bool backend_is_cuda(ggml_backend_t b) {
     return reg_name_is_cuda(backend_reg_name(b));
+}
+
+inline bool backend_is_webgpu(ggml_backend_t b) {
+    return reg_name_is_webgpu(backend_reg_name(b));
 }
 
 inline bool backend_is_hexagon(ggml_backend_t b) {

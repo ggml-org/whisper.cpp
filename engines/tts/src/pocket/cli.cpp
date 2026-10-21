@@ -57,7 +57,7 @@ void print_help() {
               "           [--threads 1 --steps 1 --temperature 0.3 --seed 1234 --runs 1 --report FILE.json]\n"
               "           [--gpu] [--backends-dir DIR] [--frames-after-eos -1]\n"
               "--gpu selects Metal, CUDA, Vulkan or OpenCL for FlowLM and Mimi; CPU is the default.\n"
-              "--backend cpu|opencl|hexagon|HTP0 explicitly selects a backend; unavailable backends are errors.\n"
+              "--backend cpu|opencl|webgpu|hexagon|HTP0 explicitly selects a backend; unavailable backends are errors.\n"
               "--frames-after-eos -1 uses the checkpoint/text default; explicit range 0..100.\n"
               "DIR contains flow-lm.gguf, mimi.gguf, frontend.json, voice.gguf. Individual asset paths can override DIR.\n"
               "--runs greater than 1 includes one untimed warmup and records each warm run.\n"

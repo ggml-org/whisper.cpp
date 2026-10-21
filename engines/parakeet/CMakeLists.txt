@@ -1201,10 +1201,28 @@ if (PARAKEET_BUILD_TESTS)
     target_link_libraries(bench-nemotron-quantization PRIVATE qvac-parakeet)
     parakeet_apply_ccache(bench-nemotron-quantization)
 
+    # test_nemotron_diarization.cpp drives internal entry points
+    # (load_from_gguf, run_nemotron_diarization, the long-form window
+    # helpers) that a shared qvac-parakeet does not export
+    # (CXX_VISIBILITY_PRESET hidden), so compile the sources in directly like
+    # test-nemotron-diarization-loader; the umbrella builds the library shared.
     add_executable(test-nemotron-diarization
-        test/test_nemotron_diarization.cpp)
-    target_link_libraries(test-nemotron-diarization PRIVATE qvac-parakeet)
-    target_include_directories(test-nemotron-diarization PRIVATE src include)
+        test/test_nemotron_diarization.cpp
+        src/parakeet_ctc.cpp
+        src/parakeet_engine.cpp
+        src/parakeet_nemotron.cpp
+        src/parakeet_unified.cpp
+        src/parakeet_log.cpp
+        src/parakeet_tdt.cpp
+        src/parakeet_eou.cpp
+        src/parakeet_sortformer.cpp
+        src/parakeet_diarization_v3.cpp
+        src/mel_preprocess.cpp
+        src/sentencepiece_bpe.cpp
+        src/energy_vad.cpp)
+    target_link_libraries(test-nemotron-diarization PRIVATE ggml parakeet-backend-defs)
+    target_include_directories(test-nemotron-diarization PRIVATE src include ggml/include)
+    parakeet_apply_backend_defs(test-nemotron-diarization)
     parakeet_apply_ccache(test-nemotron-diarization)
     parakeet_register_test(test-nemotron-diarization
         LABEL "fixture"
@@ -1463,6 +1481,9 @@ if (PARAKEET_BUILD_TESTS)
     endif()
     if (GGML_OPENCL)
         list(APPEND _qvp_moss_arms opencl)
+    endif()
+    if (GGML_WEBGPU)
+        list(APPEND _qvp_moss_arms webgpu)
     endif()
     if (_qvp_moss_arms)
         add_executable(test-moss-transcribe-gpu test/moss/test_transcribe_gpu.cpp ${PARAKEET_MOSS_TEST_SOURCES})

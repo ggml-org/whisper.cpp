@@ -4,16 +4,17 @@ Part of the [parakeet engine documentation](../README.md).
 
 ## Backends and runtime selection
 
-Any combination of Metal, CUDA, Vulkan, and OpenCL may be built or dynamically
-loaded. Parakeet selects one primary GPU through the ggml backend registry when
+Any combination of Metal, CUDA, Vulkan, OpenCL, and WebGPU may be built or
+dynamically loaded. Parakeet selects one primary GPU through the ggml backend registry when
 `n_gpu_layers > 0`; this is not a fixed compile-time CUDA/Metal/Vulkan/OpenCL
 cascade. `n_gpu_layers` is currently a boolean offload request: positive means
 the whole encoder, not a partial layer count.
 
 Set `EngineOptions::backend` or CLI `--backend` to select a primary GGML backend
-explicitly. `auto` (the default) preserves the policy below; `cpu`, `opencl`,
-and `hexagon` override `n_gpu_layers`. `hexagon` selects the `HTP0` device from
-the `HTP` registry. An exact GGML device name such as `HTP0` is also accepted.
+explicitly. `auto` (the default) preserves the policy below; `cpu`, `cuda`,
+`vulkan`, `opencl`, `webgpu` and `hexagon` override `n_gpu_layers`. `hexagon`
+selects the `HTP0` device from the `HTP` registry. An exact GGML device name
+such as `HTP0` is also accepted.
 An unavailable or failed explicit selection fails loading instead of selecting
 another backend. The existing per-operation CPU scheduler still handles
 unsupported operations; selecting HTP0 does not claim every operation ran there.
@@ -42,8 +43,9 @@ OpenCL with `--backend cpu` and `--backend opencl` using the same model/audio.
 Runtime tiering is:
 
 1. Prefer OpenCL for Adreno 700+, where it is validated ahead of Vulkan.
-2. Otherwise choose the first registered non-OpenCL GPU, such as Vulkan,
-   Metal, CUDA, or Mali Vulkan.
+2. Otherwise choose CUDA on NVIDIA, then the first registered discrete
+   non-OpenCL GPU, such as Vulkan, Metal or WebGPU, then an integrated one
+   such as Mali Vulkan.
 3. Use non-Adreno OpenCL only when no non-OpenCL GPU can initialize.
 4. Fall back to CPU.
 
@@ -51,6 +53,17 @@ Adreno 6xx OpenCL is skipped because it produces incorrect output. Set
 `PARAKEET_ALLOW_ADRENO_6XX=1` to opt in explicitly. Mali uses Vulkan for the
 encoder and CTC/TDT/EOU computation, but the Sortformer diarization head is
 routed to CPU because that head is incorrect on Mali Vulkan.
+
+WebGPU (ggml-webgpu on Dawn, `GGML_WEBGPU=ON`) registers one discrete
+`WebGPU` device and takes the same tier as Vulkan and Metal, so it is chosen
+automatically when no CUDA device is present and explicitly with
+`--backend webgpu`. Validated on an RTX 5090 (Dawn on Vulkan, 2026-10-20) with
+the TranscribePsy 250M CTC model: the transcript is identical to the CPU run
+and the end-to-end time 2.8x shorter. The encoder keeps its unfused attention
+graph on WebGPU (`flash_attn_allowed` admits only CUDA, Metal, Vulkan and
+Hexagon) until the fused path is compared there too. The backend reports its
+maximum buffer size as device memory, so a memory-fit projection is not
+meaningful on WebGPU.
 
 TDT predictor/joint decoding uses ggml graphs on every backend, including
 ggml-cpu, where the quantised joint matmuls run about ten times faster than the

@@ -32,7 +32,7 @@ ggml_backend_t init_first_gpu() {
 // The policy keys on registry names; a backend that renames itself would make the
 // engine and this test agree on "unfused" silently, so every GPU name must be known.
 bool known_gpu_backend_name(const char * name) {
-    static const char * const known[] = {"CUDA", "MTL", "Metal", "Vulkan", "OpenCL", "HIP", "SYCL", "HTP"};
+    static const char * const known[] = {"CUDA", "MTL", "Metal", "Vulkan", "OpenCL", "WebGPU", "HIP", "SYCL", "HTP"};
     for (const char * k : known) {
         if (std::strcmp(name, k) == 0) return true;
     }

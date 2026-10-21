@@ -115,7 +115,7 @@ int main(int argc, char ** argv) {
                 "          [--list-emotions] [--list-paces]\n"
                 "          [--out out.wav] [--seed N] [--greedy] [--flow-cut-prompt]\n"
                 "          [--n-gpu-layers N] [--threads N]\n"
-                "          [--backend auto|cpu|opencl|hexagon|DEVICE] (explicit device;\n"
+                "          [--backend auto|cpu|opencl|webgpu|hexagon|DEVICE] (explicit device;\n"
                 "                      overrides --n-gpu-layers, no fallback)\n"
                 "          [--vulkan-device N] [--backends-dir DIR] [--opencl-cache-dir DIR]\n"
                 "\n"

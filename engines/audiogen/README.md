@@ -7,7 +7,7 @@ Native [ACE-Step 1.5](https://github.com/ace-step/ACE-Step-1.5) and MiniMax-Musi
 | CMake project | `audiogen-cpp` v0.1.0 |
 | Public API | `tts_cpp::acestep::Engine`, `tts_cpp::minimax::Engine`; memory-fit preflights `tts_cpp::acestep::fit_params`, `tts_cpp::minimax::fit_params` |
 | Output | interleaved stereo PCM, model-defined sample rate, `pcm[t * 2 + ch]` |
-| Backends | CPU, Vulkan (including Android Mali iGPUs), Metal, OpenCL (validated on Adreno 700+), CUDA, Hexagon NPU on explicit request (`backend = "hexagon"`, every ACE-Step stage including the LM, validated on Snapdragon 8 Elite); optional Core ML VAE-decoder sidecar on Apple (`AUDIOGEN_COREML`) |
+| Backends | CPU, Vulkan (including Android Mali iGPUs), Metal, OpenCL (validated on Adreno 700+), CUDA, Hexagon NPU on explicit request (`backend = "hexagon"`, every ACE-Step stage including the LM, validated on Snapdragon 8 Elite); WebGPU (Dawn) is selectable with `backend = "webgpu"` but unmeasured, so the LM and detokenizer stay on the CPU there; optional Core ML VAE-decoder sidecar on Apple (`AUDIOGEN_COREML`) |
 | ggml | requires the `ggml-speech` port for the custom `ggml_snake` and `ggml_col2im_1d` ops |
 | Consumed by | the `@qvac/audiogen-ggml` addon in [QVAC](https://github.com/tetherto/qvac) |
 

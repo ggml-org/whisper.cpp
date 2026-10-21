@@ -27,7 +27,7 @@ void usage(const char * argv0) {
         "           --speed is the exact multiplier and --pace the 3-step enum\n"
         "           relative to the GGUF default -- they are mutually exclusive)\n"
         "          [--seed 42] [--threads N] [--n-gpu-layers N]\n"
-        "          [--backend auto|cpu|opencl|hexagon|DEVICE] (explicit device;\n"
+        "          [--backend auto|cpu|opencl|webgpu|hexagon|DEVICE] (explicit device;\n"
         "                            overrides --n-gpu-layers, no fallback)\n"
         "          [--output-sample-rate HZ] (resample output; 0 = native model\n"
         "                            rate, else 8000..192000; default 0)\n"

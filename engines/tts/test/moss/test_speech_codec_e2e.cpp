@@ -137,7 +137,7 @@ void compare(const Result & cpu, const Result & gpu) {
 
 int main(int argc, char ** argv) {
     if (argc != 4) {
-        std::fprintf(stderr, "usage: %s cuda|vulkan CODEC.gguf OUTPUT_DIR\n", argv[0]);
+        std::fprintf(stderr, "usage: %s cuda|vulkan|webgpu CODEC.gguf OUTPUT_DIR\n", argv[0]);
         return 77;
     }
     try {

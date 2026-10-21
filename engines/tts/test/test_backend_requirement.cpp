@@ -7,6 +7,7 @@
 // and being rejected afterwards, which would drop a Metal-capable host to CPU.
 
 #include "backend_selection.h"
+#include "lavasr/backend_requirement.h"
 
 #include <cstdio>
 
@@ -102,6 +103,29 @@ int main() {
     expect(gpu_backend_satisfies_requirement("OpenCL", desktop), "four-backend set accepts OpenCL");
     expect(!gpu_backend_satisfies_requirement(nullptr, desktop),
            "four-backend set still rejects unnamed, so naming every backend is not Any");
+
+    // WebGPU is its own bit: the four-backend desktop set keeps excluding it,
+    // Any still admits it, and naming it does not admit anything else.
+    const auto webgpu   = GpuBackendRequirement::WebGPU;
+    const auto vkwebgpu = GpuBackendRequirement::Vulkan | GpuBackendRequirement::WebGPU;
+    expect(gpu_backend_satisfies_requirement("WebGPU", any), "Any accepts WebGPU");
+    expect(!gpu_backend_satisfies_requirement("WebGPU", desktop), "four-backend set rejects WebGPU");
+    expect(gpu_backend_satisfies_requirement("WebGPU", webgpu), "WebGPU accepts WebGPU");
+    expect(!gpu_backend_satisfies_requirement("Vulkan", webgpu), "WebGPU rejects Vulkan");
+    expect(!gpu_backend_satisfies_requirement("CUDA", webgpu), "WebGPU rejects CUDA");
+    expect(!gpu_backend_satisfies_requirement(nullptr, webgpu), "WebGPU rejects unnamed");
+    expect(gpu_backend_satisfies_requirement("WebGPU", vkwebgpu), "Vulkan|WebGPU accepts WebGPU");
+    expect(gpu_backend_satisfies_requirement("Vulkan", vkwebgpu), "Vulkan|WebGPU accepts Vulkan");
+    expect(!gpu_backend_satisfies_requirement("MTL", vkwebgpu), "Vulkan|WebGPU rejects MTL");
+
+    // LavaSR runs without per-op CPU fallback, so its set names the four
+    // backends that implement its whole graph and keeps WebGPU out.
+    const auto lavasr = tts_cpp::lavasr::gpu_requirement();
+    expect(gpu_backend_satisfies_requirement("Vulkan", lavasr), "LavaSR accepts Vulkan");
+    expect(gpu_backend_satisfies_requirement("MTL", lavasr), "LavaSR accepts MTL");
+    expect(gpu_backend_satisfies_requirement("OpenCL", lavasr), "LavaSR accepts OpenCL");
+    expect(gpu_backend_satisfies_requirement("CUDA", lavasr), "LavaSR accepts CUDA");
+    expect(!gpu_backend_satisfies_requirement("WebGPU", lavasr), "LavaSR rejects WebGPU");
 
     if (g_failures) {
         fprintf(stderr, "%d requirement checks failed\n", g_failures);

@@ -288,7 +288,7 @@ void speech(ggml_type precision) {
 
 int main(int argc, char ** argv) {
     if (argc != 2) {
-        std::fprintf(stderr, "usage: %s cuda|vulkan|hexagon\n", argv[0]);
+        std::fprintf(stderr, "usage: %s cuda|vulkan|hexagon|opencl|webgpu\n", argv[0]);
         return 2;
     }
     try {

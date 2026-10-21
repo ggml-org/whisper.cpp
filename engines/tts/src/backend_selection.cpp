@@ -53,6 +53,7 @@ constexpr const char * CPU_BACKEND_NAME = "CPU";
 constexpr const char * BACKEND_REQUEST_AUTO = "auto";
 constexpr const char * BACKEND_REQUEST_CPU = "cpu";
 constexpr const char * BACKEND_REQUEST_OPENCL = "opencl";
+constexpr const char * BACKEND_REQUEST_WEBGPU = "webgpu";
 constexpr const char * BACKEND_REQUEST_HEXAGON = "hexagon";
 constexpr const char * HEXAGON_PRIMARY_DEVICE = "HTP0";
 constexpr const char * DSP_LIBRARY_PATH_ENV = "DSP_LIBRARY_PATH";
@@ -65,7 +66,7 @@ const char * dev_reg_name(ggml_backend_dev_t dev) {
 }
 
 // Names a single registry that selection must use, from
-// TTS_CPP_GPU_BACKEND ("cuda", "vulkan", "metal", "opencl"); empty when
+// TTS_CPP_GPU_BACKEND ("cuda", "vulkan", "metal", "opencl", "webgpu"); empty when
 // unset. Selection otherwise picks on its own preference order, so a
 // per-backend test arm cannot ask for the backend it is meant to cover on a
 // host where several are compiled in. Not a production knob: an engine names
@@ -86,6 +87,7 @@ bool reg_name_is_forced(const char * reg_name, const std::string & forced) {
     if (forced == "vulkan") return reg_name_is_vulkan(reg_name);
     if (forced == "metal")  return reg_name_is_metal(reg_name);
     if (forced == "opencl") return reg_name_is_opencl(reg_name);
+    if (forced == "webgpu") return reg_name_is_webgpu(reg_name);
     // Unreachable: validate_forced_gpu_backend rejects anything else, so a
     // misspelt name cannot quietly match nothing and leave a GPU arm passing
     // on the CPU.
@@ -94,12 +96,12 @@ bool reg_name_is_forced(const char * reg_name, const std::string & forced) {
 
 void validate_forced_gpu_backend(const std::string & forced) {
     if (forced.empty() || forced == "cuda" || forced == "vulkan" ||
-        forced == "metal" || forced == "opencl") {
+        forced == "metal" || forced == "opencl" || forced == "webgpu") {
         return;
     }
     throw std::runtime_error(
         "TTS_CPP_GPU_BACKEND='" + forced +
-        "' is not one of cuda, vulkan, metal, opencl");
+        "' is not one of cuda, vulkan, metal, opencl, webgpu");
 }
 
 // Vulkan multi-adapter pick. Pure logic on the two
@@ -219,6 +221,7 @@ bool backend_request_matches(const std::string & requested,
         return reg_name && std::strcmp(reg_name, CPU_BACKEND_NAME) == 0;
     }
     if (requested == BACKEND_REQUEST_OPENCL) return reg_name_is_opencl(reg_name);
+    if (requested == BACKEND_REQUEST_WEBGPU) return reg_name_is_webgpu(reg_name);
     if (requested == BACKEND_REQUEST_HEXAGON) {
         return reg_name_is_hexagon(reg_name) && device_name &&
                std::strcmp(device_name, HEXAGON_PRIMARY_DEVICE) == 0;
@@ -292,7 +295,8 @@ bool gpu_backend_satisfies_requirement(const char * backend_name,
     return (allows(GpuBackendRequirement::Vulkan) && reg_name_is_vulkan(backend_name)) ||
            (allows(GpuBackendRequirement::Metal)  && reg_name_is_metal(backend_name))  ||
            (allows(GpuBackendRequirement::OpenCL) && reg_name_is_opencl(backend_name)) ||
-           (allows(GpuBackendRequirement::CUDA)   && reg_name_is_cuda(backend_name));
+           (allows(GpuBackendRequirement::CUDA)   && reg_name_is_cuda(backend_name))   ||
+           (allows(GpuBackendRequirement::WebGPU) && reg_name_is_webgpu(backend_name));
 }
 
 void set_backends_directory(const std::string & dir) {

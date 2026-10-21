@@ -61,7 +61,8 @@ with open(sys.argv[1]) as lock:
 class RunnerTests(unittest.TestCase):
     def test_gpu_invocation_requires_the_selected_backend(self):
         for backend, selected, other in (("cuda", "CUDA0", "Vulkan0"),
-                                         ("vulkan", "Vulkan0", "CUDA0")):
+                                         ("vulkan", "Vulkan0", "CUDA0"),
+                                         ("webgpu", "WebGPU: WebGPU", "Vulkan0")):
             with self.subTest(backend=backend), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 runner = e2e.CaseRunner(backend, root, root, root, root / "baseline")

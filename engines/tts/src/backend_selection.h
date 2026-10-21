@@ -47,6 +47,7 @@ enum class GpuBackendRequirement : unsigned {
     Metal  = 1u << 1,
     OpenCL = 1u << 2,
     CUDA   = 1u << 3,
+    WebGPU = 1u << 4,
     // Every registered GPU, including any backend with no flag of its own.
     Any    = ~0u,
 };

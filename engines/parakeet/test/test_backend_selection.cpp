@@ -75,6 +75,12 @@ void test_gpu_tier_policy() {
     CHECK(gpu_tier_for("Metal", GGML_BACKEND_DEVICE_TYPE_GPU,  -1) == GpuTier::OtherDiscrete);
     CHECK(gpu_tier_for("MTL",   GGML_BACKEND_DEVICE_TYPE_IGPU, -1) == GpuTier::OtherIntegrated);
 
+    // WebGPU (Dawn) reports its adapter as a discrete GPU and ranks with
+    // Vulkan/Metal, so CUDA on the same NVIDIA card still wins.
+    CHECK(gpu_tier_for("WebGPU", GGML_BACKEND_DEVICE_TYPE_GPU, -1) == GpuTier::OtherDiscrete);
+    CHECK(static_cast<int>(gpu_tier_for("CUDA", GGML_BACKEND_DEVICE_TYPE_GPU, -1)) <
+          static_cast<int>(gpu_tier_for("WebGPU", GGML_BACKEND_DEVICE_TYPE_GPU, -1)));
+
     // Non-GPU / non-IGPU devices are not selectable — CPU, ACCEL, unknown
     // types must never be picked into a GPU bucket.
     CHECK(gpu_tier_for("Vulkan", GGML_BACKEND_DEVICE_TYPE_CPU,   -1) == GpuTier::NotSelectable);
@@ -109,6 +115,11 @@ void test_explicit_selection() {
     CHECK(backend_selection_matches("Vulkan1", "Vulkan", "Vulkan1", GGML_BACKEND_DEVICE_TYPE_GPU));
     CHECK(!backend_selection_matches("Vulkan1", "Vulkan", "Vulkan0", GGML_BACKEND_DEVICE_TYPE_GPU));
     CHECK(backend_selection_matches("cuda", "CUDA", "CUDA0", GGML_BACKEND_DEVICE_TYPE_GPU));
+    // ggml-webgpu registers as "WebGPU" with a single device of the same name.
+    CHECK(backend_selection_matches("webgpu", "WebGPU", "WebGPU", GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(!backend_selection_matches("webgpu", "Vulkan", "Vulkan0", GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(!backend_selection_matches("vulkan", "WebGPU", "WebGPU", GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(backend_selection_matches("WebGPU", "WebGPU", "WebGPU", GGML_BACKEND_DEVICE_TYPE_GPU));
     CHECK(backend_selection_matches("cuda", "CUDA", "CUDA1", GGML_BACKEND_DEVICE_TYPE_IGPU));
     CHECK(!backend_selection_matches("cuda", "Vulkan", "Vulkan0", GGML_BACKEND_DEVICE_TYPE_GPU));
     CHECK(backend_selection_matches("CUDA1", "CUDA", "CUDA1", GGML_BACKEND_DEVICE_TYPE_GPU));

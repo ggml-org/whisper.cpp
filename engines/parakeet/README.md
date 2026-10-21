@@ -90,7 +90,8 @@ machines; see [the diarizer guide](docs/backends.md#core-ml-diarizer-sidecars).
 
 ## Backend selection
 
-`parakeet --backend NAME` and `EngineOptions::backend` select the runtime device;
+`parakeet --backend NAME` and `EngineOptions::backend` select the runtime device
+(`auto`, `cpu`, `cuda`, `vulkan`, `opencl`, `webgpu`, `hexagon` or an exact ggml device name);
 `parakeet-fit-params --backend NAME` and `FitOptions::backend` project memory for
 the same device. Explicit requests fail if unavailable. Hexagon is experimental and requires
 a staged DSP library; see [docs/backends.md](docs/backends.md) for names,

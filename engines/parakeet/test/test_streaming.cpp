@@ -24,7 +24,7 @@ namespace {
 struct Opts {
     std::string model_path;
     std::string wav_path;
-    std::string backend;         // "auto" (default), "cpu", "opencl", "hexagon", or an exact ggml device name
+    std::string backend;         // "auto" (default), "cpu", "cuda", "vulkan", "opencl", "webgpu", "hexagon", or an exact ggml device name
     int  n_gpu_layers = 0;
     int  n_threads    = 0;
     bool verbose      = false;
@@ -38,8 +38,9 @@ void print_usage(const char * argv0) {
         "across a range of chunk sizes, plus the Mode 3 (stream_start) error path.\n"
         "\n"
         "options:\n"
-        "  --backend NAME       backend routing: auto (default), cpu, opencl,\n"
-        "                       hexagon, or an exact ggml device name (e.g. HTP0)\n"
+        "  --backend NAME       backend routing: auto (default), cpu, cuda, vulkan,\n"
+        "                       opencl, webgpu, hexagon, or an exact ggml device name\n"
+        "                       (e.g. HTP0)\n"
         "  --n-gpu-layers N     offload to GPU backend when > 0\n"
         "  --threads N          CPU threads (0 = hardware_concurrency)\n"
         "  --verbose            print per-test segment counts and timings\n",

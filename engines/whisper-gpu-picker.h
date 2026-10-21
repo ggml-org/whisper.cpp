@@ -93,7 +93,7 @@ inline int parse_adreno_version_whisper_picker(const char * s) {
 //   2. First CUDA device on a discrete GPU (typical NVIDIA).
 //   3. First CUDA device on an integrated GPU (Tegra/Jetson).
 //   4. Otherwise, first discrete (GPU) non-CUDA, non-OpenCL device —
-//      Vulkan/Metal on a dGPU, etc.
+//      Vulkan/Metal/WebGPU on a dGPU, etc.
 //   5. Otherwise, first integrated (IGPU) non-OpenCL device — UMA Vulkan,
 //      Mali iGPU, Intel iGPU, Apple integrated, etc.
 //   6. Otherwise, first OpenCL device that did not qualify for the Adreno
@@ -174,7 +174,7 @@ inline int pick_whisper_gpu_device() {
 // ggml registry and delegates here. Exposed for unit tests that simulate a
 // fake device topology without depending on the host's real GPU set.
 struct PickerDevice {
-    const char * reg_name;       // registry name, e.g. "CUDA" / "Vulkan" / "Metal" / "OpenCL"
+    const char * reg_name;       // registry name, e.g. "CUDA" / "Vulkan" / "Metal" / "WebGPU" / "OpenCL"
     bool         is_integrated;  // true for GGML_BACKEND_DEVICE_TYPE_IGPU
     int          adreno_version; // parsed Adreno generation (700, 740, 800, ...); -1 for non-Adreno
 };

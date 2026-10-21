@@ -38,7 +38,7 @@ static void write_reply(const std::filesystem::path & path,
 
 int main(int argc, char ** argv) {
     if (argc != 6) {
-        std::fprintf(stderr, "usage: %s cuda|vulkan|hexagon LM.gguf CODEC.gguf INPUT.wav OUTPUT_DIR\n", argv[0]);
+        std::fprintf(stderr, "usage: %s cuda|vulkan|hexagon|opencl|webgpu LM.gguf CODEC.gguf INPUT.wav OUTPUT_DIR\n", argv[0]);
         return 77;
     }
     try {

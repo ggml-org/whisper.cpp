@@ -98,4 +98,12 @@ if (SPEECH_BUILD_TESTS)
     add_test(NAME test-whisper-gpu-picker
              COMMAND $<TARGET_FILE:test-whisper-gpu-picker>)
     set_property(TEST test-whisper-gpu-picker PROPERTY LABELS unit)
+
+    # The MOSS GPU suites' accelerator-arm table (engines/test/moss_gpu_arm.h)
+    # is shared by tts and parakeet tests; this pins the names it accepts.
+    add_executable(test-moss-gpu-arm engines/test/moss_gpu_arm.test.cpp)
+    target_include_directories(test-moss-gpu-arm PRIVATE engines/test)
+    target_compile_features(test-moss-gpu-arm PRIVATE cxx_std_17)
+    add_test(NAME test-moss-gpu-arm COMMAND $<TARGET_FILE:test-moss-gpu-arm>)
+    set_property(TEST test-moss-gpu-arm PROPERTY LABELS unit)
 endif()

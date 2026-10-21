@@ -43,6 +43,7 @@ namespace tts_cpp::acestep {
 inline constexpr char BACKEND_REQUEST_AUTO[]    = "auto";
 inline constexpr char BACKEND_REQUEST_CPU[]     = "cpu";
 inline constexpr char BACKEND_REQUEST_OPENCL[]  = "opencl";
+inline constexpr char BACKEND_REQUEST_WEBGPU[]  = "webgpu";
 inline constexpr char BACKEND_REQUEST_HEXAGON[] = "hexagon";
 
 inline constexpr char HEXAGON_PRIMARY_DEVICE[] = "HTP0";
@@ -96,6 +97,7 @@ inline bool backend_request_matches(const std::string & requested, const char * 
     if (backend_request_is_auto(requested)) return false;
     if (requested == BACKEND_REQUEST_CPU) return type == GGML_BACKEND_DEVICE_TYPE_CPU;
     if (requested == BACKEND_REQUEST_OPENCL) return reg_name && std::strcmp(reg_name, OPENCL_REG_NAME) == 0;
+    if (requested == BACKEND_REQUEST_WEBGPU) return backend_name_is_webgpu(reg_name);
     if (requested == BACKEND_REQUEST_HEXAGON) {
         return backend_name_is_hexagon(reg_name) && device_name && std::strcmp(device_name, HEXAGON_PRIMARY_DEVICE) == 0;
     }

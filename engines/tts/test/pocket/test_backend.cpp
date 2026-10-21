@@ -20,11 +20,13 @@ int main() {
             check(rejected, "unsupported backend accepted");
         }
         check(backend_request("HTP0") == "hexagon" && backend_request("HEXAGON") == "hexagon", "Hexagon aliases differ");
-        bool opencl_present = false, hexagon_present = false;
+        check(backend_request("WebGPU") == "webgpu", "WebGPU request is not case-folded");
+        bool opencl_present = false, webgpu_present = false, hexagon_present = false;
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             const auto device = ggml_backend_dev_get(i);
             const auto registry = ggml_backend_dev_backend_reg(device);
             opencl_present |= tts_cpp::detail::reg_name_is_opencl(ggml_backend_reg_name(registry));
+            webgpu_present |= tts_cpp::detail::reg_name_is_webgpu(ggml_backend_reg_name(registry));
             hexagon_present |= tts_cpp::detail::reg_name_is_hexagon(ggml_backend_reg_name(registry)) &&
                 std::string(ggml_backend_dev_name(device)) == "HTP0";
         }
@@ -36,6 +38,21 @@ int main() {
                     rejected = std::string(error.what()).find("OpenCL") != std::string::npos;
                 }
                 check(rejected, "missing OpenCL silently fell back to CPU");
+            }
+        }
+        if (webgpu_present) {
+            for (bool gpu_flag : {false, true}) {
+                auto backend = select_backend(gpu_flag, "webgpu");
+                check(tts_cpp::detail::backend_is_webgpu(backend.get()), "explicit WebGPU selected another backend");
+            }
+        } else {
+            for (bool gpu_flag : {false, true}) {
+                bool rejected = false;
+                try { auto backend = select_backend(gpu_flag, "webgpu"); }
+                catch (const BackendUnavailable & error) {
+                    rejected = std::string(error.what()).find("WebGPU") != std::string::npos;
+                }
+                check(rejected, "missing WebGPU silently fell back to CPU");
             }
         }
         if (hexagon_present) {

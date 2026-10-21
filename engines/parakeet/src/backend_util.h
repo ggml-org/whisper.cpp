@@ -41,6 +41,7 @@ inline bool backend_selection_matches(const std::string & requested,
     if (requested == "opencl") return reg && std::strcmp(reg, "OpenCL") == 0;
     if (requested == "vulkan") return reg && std::strcmp(reg, "Vulkan") == 0;
     if (requested == "cuda") return reg && std::strcmp(reg, "CUDA") == 0;
+    if (requested == "webgpu") return reg && std::strcmp(reg, "WebGPU") == 0;
     if (requested == "hexagon") {
         return reg && std::strcmp(reg, "HTP") == 0 && device && std::strcmp(device, "HTP0") == 0;
     }
@@ -61,7 +62,7 @@ enum class GpuTier {
     AdrenoOpenCL700Plus  = 0, // Snapdragon 8 Gen 2/3/4 (validated + faster than Vulkan).
     CudaDiscrete         = 1, // NVIDIA dGPU via CUDA; preferred over Vulkan on same card.
     CudaIntegrated       = 2, // Tegra/Jetson (CUDA reported as IGPU); still CUDA-first.
-    OtherDiscrete        = 3, // Discrete Vulkan / Metal / etc.
+    OtherDiscrete        = 3, // Discrete Vulkan / Metal / WebGPU / etc.
     OtherIntegrated      = 4, // UMA Vulkan (iGPU / Mali / Apple integrated).
     OpenCLOther          = 5, // Non-Adreno OpenCL (desktop OpenCL, unrecognised Adreno).
     NotSelectable        = 6,
@@ -133,6 +134,10 @@ inline bool backend_is_vulkan(ggml_backend_t b) {
 
 inline bool backend_is_opencl(ggml_backend_t b) {
     return std::strcmp(backend_reg_name(b), "OpenCL") == 0;
+}
+
+inline bool backend_is_webgpu(ggml_backend_t b) {
+    return std::strcmp(backend_reg_name(b), "WebGPU") == 0;
 }
 
 inline bool backend_is_hexagon(ggml_backend_t b) {

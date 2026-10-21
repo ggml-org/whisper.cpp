@@ -55,6 +55,8 @@ parler_sampling_params parler_resolve_sampling(const parler_sampling_request & r
 
 // logits: [n_codebooks, vocab] row-major (already logits-processed);
 // writes one token id per codebook into the caller-owned frame_out.
+// Throws std::runtime_error when a logit is NaN or +inf (a backend
+// miscompute); masked -inf entries are accepted.
 void parler_sample_frame(const float * logits, int n_codebooks, int vocab,
                          const parler_sampling_params & params,
                          std::mt19937 & rng, parler_sampler_scratch & scratch,

@@ -107,7 +107,7 @@ void usage(const char * a0) {
         "usage: %s --model-dir DIR [--text TEXT]\n"
         "          [--llm-gguf FILE] [--flow-gguf FILE] [--hift-gguf FILE]\n"
         "          [--n-gpu-layers N] [--vulkan-device N] [--threads N] [--seed 42] [--greedy]\n"
-        "          [--backend auto|cpu|opencl|hexagon|DEVICE] (explicit device, no fallback)\n"
+        "          [--backend auto|cpu|opencl|webgpu|hexagon|DEVICE] (explicit device, no fallback)\n"
         "          [--runs 3] [--warmup 1]\n"
         "          [--tokens-out FILE]  pin: write the LM trajectory this run used\n"
         "          [--tokens-in FILE]   pin: reuse a trajectory (skips the LM)\n"

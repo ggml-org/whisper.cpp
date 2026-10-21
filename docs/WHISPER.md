@@ -19,9 +19,9 @@ transcription and is not trained for translation. See the
 
 | Model | Languages | Parameters | Storage | Backends | Notes |
 |---|---|---|---|---|---|
-| `whisper-tiny` / `tiny.en` | 99 + translation; `.en`: English only | 39 M | `f16`, `q5_1`, `q8_0` | CPU, Metal, Vulkan, OpenCL, CUDA, Core ML |  |
-| `whisper-base` / `base.en` | 99 + translation; `.en`: English only | 74 M | `f16`, `q5_1`, `q8_0` | CPU, Metal, Vulkan, OpenCL, CUDA, Core ML |  |
-| `whisper-small` / `small.en` | 99 + translation; `.en`: English only | 244 M | `f16`, `q5_1`, `q8_0` | CPU, Metal, Vulkan, OpenCL, CUDA, Core ML |  |
+| `whisper-tiny` / `tiny.en` | 99 + translation; `.en`: English only | 39 M | `f16`, `q5_1`, `q8_0` | CPU, Metal, Vulkan, OpenCL, CUDA, WebGPU, Core ML |  |
+| `whisper-base` / `base.en` | 99 + translation; `.en`: English only | 74 M | `f16`, `q5_1`, `q8_0` | CPU, Metal, Vulkan, OpenCL, CUDA, WebGPU, Core ML |  |
+| `whisper-small` / `small.en` | 99 + translation; `.en`: English only | 244 M | `f16`, `q5_1`, `q8_0` | CPU, Metal, Vulkan, OpenCL, CUDA, WebGPU, Core ML |  |
 | `whisper-small.en-tdrz` | English | 244 M | `f16` | CPU, Metal, Vulkan, OpenCL, CUDA | tinydiarize speaker turns |
 | `whisper-medium` / `medium.en` | 99 + translation; `.en`: English only | 769 M | `f16`, `q5_0`, `q8_0` | CPU, Metal, Vulkan, OpenCL, CUDA, Core ML |  |
 | `whisper-large-v1` | 99 + translation | 1.55 B | `f16` | CPU, Metal, Vulkan, OpenCL, CUDA, Core ML |  |

@@ -26,7 +26,7 @@ struct EngineOptions {
     uint32_t seed = 1234;
     // CPU is the default. GPU requests fail if no supported GPU is available.
     bool use_gpu = false;
-    // Empty/auto follows use_gpu; cpu/opencl/hexagon (HTP0) explicitly selects the backend.
+    // Empty/auto follows use_gpu; cpu/opencl/webgpu/hexagon (HTP0) explicitly selects the backend.
     std::string backend;
     std::string backends_dir;
 };

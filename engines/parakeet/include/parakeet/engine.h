@@ -215,8 +215,8 @@ struct EngineOptions {
     std::string language;
 
     // "auto" (or empty) preserves n_gpu_layers and runtime GPU tiering.
-    // "cpu", "opencl", and "hexagon" explicitly select a backend;
-    // "hexagon" selects HTP0. An exact ggml device name (e.g. HTP0)
+    // "cpu", "cuda", "vulkan", "opencl", "webgpu" and "hexagon" explicitly
+    // select a backend; "hexagon" selects HTP0. An exact ggml device name (e.g. HTP0)
     // is also accepted. Explicit selection overrides n_gpu_layers and
     // fails construction if unavailable or initialization fails. Individual
     // unsupported operations can still use the existing CPU scheduler.

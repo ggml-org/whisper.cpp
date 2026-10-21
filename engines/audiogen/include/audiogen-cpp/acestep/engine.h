@@ -75,8 +75,8 @@ struct EngineOptions {
     // search path (static-linked desktop / Apple builds need nothing here).
     std::string backends_dir;
     // "auto" (or empty) keeps the n_gpu_layers request and runtime GPU tiering.
-    // "cpu", "opencl" and "hexagon" (the HTP0 NPU session) select a backend
-    // explicitly, as does an exact ggml device name ("HTP0", "Vulkan0", ...).
+    // "cpu", "opencl", "webgpu" and "hexagon" (the HTP0 NPU session) select a
+    // backend explicitly, as does an exact ggml device name ("HTP0", "Vulkan0", ...).
     // An explicit request overrides n_gpu_layers and makes create() throw when
     // the device is missing or fails to initialise. Hexagon is never chosen
     // automatically. The stage-placement allowlist still applies on top.
