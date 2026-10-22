@@ -583,6 +583,7 @@ static DitModel * dit_model_load_impl(const std::string & path, ggml_backend_t b
                                       AcestepStageMeasure * measure) {
     DitGGUF g;
     if (!dit_gguf_open(g, path)) return nullptr;
+    dit_gguf_require_hexagon_weights(g, path, backend, "acestep-dit");
 
     DitModel * m = new DitModel();
     m->backend = backend;

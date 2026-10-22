@@ -6,11 +6,16 @@
 // the CPU. Engine::create() applies the answer (engine.cpp).
 //
 // This lives apart from backend_registry.h, and takes a plain `const char *`
-// rather than a ggml_backend_t, so the policy is exercisable with no GPU, no
-// ggml context and no GGUF -- see test/test_acestep_units.cpp. The placement
-// decides which numerical path generated audio takes, so it is regression
-// tested rather than only observed on a device lane.
+// rather than a ggml_backend_t, so the policy is exercisable with no GPU and
+// no ggml context -- see test/test_acestep_units.cpp. The placement decides
+// which numerical path generated audio takes, so it is regression tested
+// rather than only observed on a device lane. The Hexagon weight-type policy
+// below reads GGUF metadata only, so it is testable the same way.
 
+#include "ggml.h"
+#include "gguf.h"
+
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 
@@ -50,6 +55,29 @@ inline bool backend_name_is_hexagon(const char * name) {
 // adapter, so one registry name covers Vulkan, Metal and D3D12 hosts.
 inline bool backend_name_is_webgpu(const char * name) {
     return name && std::strcmp(name, "WebGPU") == 0;
+}
+
+// The src0 types ggml_hexagon_supported_mul_mat accepts plus the F16/BF16
+// tables HTP GET_ROWS gathers from. The stages compute their graphs directly
+// on the backend, so any other quantisation reaches the DSP and faults.
+inline constexpr ggml_type HEXAGON_WEIGHT_TYPES[] = {
+    GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16,   GGML_TYPE_Q4_0,
+    GGML_TYPE_Q4_1, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_NL, GGML_TYPE_MXFP4,
+};
+
+inline bool hexagon_runs_weight_type(ggml_type type) {
+    for (const ggml_type runnable : HEXAGON_WEIGHT_TYPES) {
+        if (type == runnable) return true;
+    }
+    return false;
+}
+
+inline int64_t first_tensor_hexagon_cannot_run(const gguf_context * weights) {
+    const int64_t n_tensors = gguf_get_n_tensors(weights);
+    for (int64_t i = 0; i < n_tensors; ++i) {
+        if (!hexagon_runs_weight_type(gguf_get_tensor_type(weights, i))) return i;
+    }
+    return -1;
 }
 
 inline bool device_desc_has_marker(const char * device_desc, const char * marker) {

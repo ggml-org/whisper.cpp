@@ -110,7 +110,7 @@ and OpenCL on the same device.
 |---|---|---|
 | ASR | Parakeet CTC 0.6B (`q8_0`), MOSS-Transcribe-Diarize (`q8_0`, `f16`) | [Parakeet backends](engines/parakeet/docs/backends.md#backends-and-runtime-selection), [MOSS Hexagon](engines/parakeet/docs/moss-transcribe.md#hexagon-npu) |
 | TTS | Supertonic 3, Parler-TTS mini, CosyVoice3, Audio8, MOSS-TTS-v1.5 / MOSS-TTSD (`q4_0` transformer), MOSS-SoundEffect-v2 (`f16` or `q8_0`), MOSS-Speech LM (`q4_0` transformer) and speech tokenizer (`f16` codec) | [Audio8 Hexagon](engines/tts/docs/audio8.md#hexagon-npu-snapdragon), [MOSS Hexagon](engines/tts/docs/moss.md#hexagon-npu), [MOSS-SoundEffect Hexagon](engines/tts/docs/moss.md#hexagon-npu-generation), [MOSS-Speech Hexagon](engines/tts/docs/moss.md#hexagon-npu-speech-to-speech), and the matching sections in the other model guides |
-| AudioGen | ACE-Step v15 turbo (`q8_0` DiT) | [AudioGen Hexagon](engines/audiogen/docs/backends.md#hexagon-npu) |
+| AudioGen | ACE-Step v15 turbo (`q8_0` DiT; K-quant GGUFs are refused at load) | [AudioGen Hexagon](engines/audiogen/docs/backends.md#hexagon-npu) |
 
 ### WebGPU (Dawn)
 

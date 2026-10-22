@@ -98,6 +98,7 @@ TokModel * tok_model_load(const std::string & path, ggml_backend_t backend, bool
         fprintf(stderr, "[acestep-tok] failed to parse %s\n", path.c_str());
         return nullptr;
     }
+    dit_gguf_require_hexagon_weights(g, path, backend, "acestep-tok");
 
     TokModel * m = new TokModel();
     m->backend   = backend;

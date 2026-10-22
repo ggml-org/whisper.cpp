@@ -115,6 +115,7 @@ static CondModel * cond_model_load_impl(const std::string & path, ggml_backend_t
         fprintf(stderr, "[acestep-cond] failed to parse %s\n", path.c_str());
         return nullptr;
     }
+    dit_gguf_require_hexagon_weights(g, path, backend, "acestep-cond");
 
     CondModel * m   = new CondModel();
     m->backend = backend;

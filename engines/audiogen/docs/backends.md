@@ -96,7 +96,17 @@ off the NPU. Requirements:
   audio code, and activations past 65504 turn into NaN.
 - The `q8_0` DiT (`ditVariant: 'turbo-q8'`). The HTP matmuls cover
   `q4_0`/`q8_0`/`mxfp4` and float weights, not the K-quants of the default
-  `turbo-q4` (`Q4_K_M`) DiT.
+  `turbo-q4` (`Q4_K_M`) DiT. Every stage checks its GGUF before uploading
+  anything: a tensor outside `f32`, `f16`, `bf16`, `q4_0`, `q4_1`, `q8_0`,
+  `iq4_nl` and `mxfp4` fails the load with an error naming the file, the
+  tensor and that list (`[acestep-cond] acestep-v15-turbo-Q4_K_M.gguf:
+  decoder.condition_embedder.weight is q4_K; ...`), and
+  `acestep-fit-params` reports it as its error verdict. The stages compute
+  their graphs directly on the backend, so without that check the K-quant
+  matmul reached the DSP and the process aborted on `HTP0 aborting on DSP
+  failure`. `bf16` passes because the text encoder gathers its token table
+  from a `bf16` tensor; the loaders widen the `bf16` matmul weights they
+  know about to `f32`, so the check does not cover a full-`bf16` DiT.
 
 Stage weights are uploaded into the session's repack buffer type instead of
 being mapped from the GGUF (HTP computes only on its own buffers), so a stage

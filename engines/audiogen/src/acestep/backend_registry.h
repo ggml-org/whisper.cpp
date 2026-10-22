@@ -385,7 +385,15 @@ inline ggml_backend_t backend_init_for_tool(const char * requested, bool gpu, in
 // stage-placement policies can compare it exactly. Mirrors the helper in
 // engines/tts/src/backend_util.h; duplicated so audiogen stays self-contained.
 // The policy that consumes it lives in stage_placement.h.
+// Test seam: a non-null override stands in for every registry lookup, so the
+// Hexagon-only paths run on the CPU backend in test-acestep-units.
+inline const char *& backend_reg_name_override() {
+    static const char * forced = nullptr;
+    return forced;
+}
+
 inline const char * backend_reg_name(ggml_backend_t backend) {
+    if (const char * forced = backend_reg_name_override()) return forced;
     if (!backend) return "";
     ggml_backend_dev_t dev = ggml_backend_get_device(backend);
     ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;

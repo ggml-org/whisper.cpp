@@ -452,6 +452,7 @@ static LMModel * lm_model_load_impl(const std::string & path, ggml_backend_t bac
         fprintf(stderr, "[acestep-lm] failed to parse %s\n", path.c_str());
         return nullptr;
     }
+    dit_gguf_require_hexagon_weights(g, path, backend, "acestep-lm");
 
     LMModel * m = new LMModel();
     m->backend  = backend;

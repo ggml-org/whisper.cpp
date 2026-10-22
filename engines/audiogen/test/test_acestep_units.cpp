@@ -57,6 +57,9 @@
 #include "vae_ggml.h"
 #include "wav_reader.h"
 
+#include "audiogen-cpp/acestep/fit.h"
+#include "audiogen-cpp/acestep/vae.h"
+
 #include "ggml-alloc.h"
 #include "gguf.h"
 
@@ -3507,6 +3510,144 @@ void test_quality_score_request_policy() {
     CHECK(resolve_generate_task(params, task).find("audio edit path") != std::string::npos);
 }
 
+void add_gate_test_tensor(ggml_context * ctx, gguf_context * weights, const char * name, ggml_type type,
+                          int64_t ne0) {
+    ggml_tensor * t = ggml_new_tensor_2d(ctx, type, ne0, 2);
+    ggml_set_name(t, name);
+    std::memset(t->data, 0, ggml_nbytes(t));
+    gguf_add_tensor(weights, t);
+}
+
+gguf_context * gate_test_weights(ggml_context * ctx, bool with_k_quant) {
+    gguf_context * weights = gguf_init_empty();
+    add_gate_test_tensor(ctx, weights, "norm.weight", GGML_TYPE_F32, 32);
+    add_gate_test_tensor(ctx, weights, "proj.weight", GGML_TYPE_Q8_0, 32);
+    if (with_k_quant) add_gate_test_tensor(ctx, weights, "down.weight", GGML_TYPE_Q4_K, 256);
+    return weights;
+}
+
+void check_hexagon_weight_types() {
+    using tts_cpp::acestep::hexagon_runs_weight_type;
+    for (const ggml_type type : { GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1,
+                                  GGML_TYPE_Q8_0, GGML_TYPE_IQ4_NL, GGML_TYPE_MXFP4 }) {
+        CHECK(hexagon_runs_weight_type(type));
+    }
+    for (const ggml_type type : { GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K,
+                                  GGML_TYPE_Q5_0, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ4_XS }) {
+        CHECK(!hexagon_runs_weight_type(type));
+    }
+}
+
+void test_hexagon_weight_gate() {
+    using tts_cpp::acestep::backend_cpu_init;
+    using tts_cpp::acestep::dit_gguf_hexagon_refusal;
+    using tts_cpp::acestep::first_tensor_hexagon_cannot_run;
+    using tts_cpp::acestep::hexagon_weight_refusal;
+
+    check_hexagon_weight_types();
+
+    ggml_init_params ip{ 1024 * 1024, nullptr, /*no_alloc=*/false };
+    ggml_context *   ctx      = ggml_init(ip);
+    gguf_context *   runnable = gate_test_weights(ctx, /*with_k_quant=*/false);
+    gguf_context *   refused  = gate_test_weights(ctx, /*with_k_quant=*/true);
+    CHECK(first_tensor_hexagon_cannot_run(runnable) == -1);
+    CHECK(first_tensor_hexagon_cannot_run(refused) == 2);
+
+    const std::string message = hexagon_weight_refusal(refused, 2, "weights.gguf", "acestep-test");
+    CHECK(message.rfind("[acestep-test] weights.gguf: down.weight is q4_K; the Hexagon NPU runs ", 0) == 0);
+    CHECK(message.find("q8_0") != std::string::npos);
+    CHECK(message.find("q4_K,") == std::string::npos);
+
+    ggml_backend_t cpu = backend_cpu_init();
+    CHECK(cpu != nullptr);
+    if (cpu) {
+        CHECK(dit_gguf_hexagon_refusal(refused, "weights.gguf", cpu, "acestep-test").empty());
+        ggml_backend_free(cpu);
+    }
+    gguf_free(runnable);
+    gguf_free(refused);
+    ggml_free(ctx);
+}
+
+struct RegNameOverride {
+    explicit RegNameOverride(const char * name) { tts_cpp::acestep::backend_reg_name_override() = name; }
+    ~RegNameOverride() { tts_cpp::acestep::backend_reg_name_override() = nullptr; }
+};
+
+std::string write_gate_test_gguf() {
+    const std::string path = test_temp_dir() + "/qvac-acestep-hexagon-gate-test.gguf";
+    ggml_init_params  ip{ 1024 * 1024, nullptr, /*no_alloc=*/false };
+    ggml_context *    ctx     = ggml_init(ip);
+    gguf_context *    weights = gate_test_weights(ctx, /*with_k_quant=*/true);
+    CHECK(gguf_write_to_file(weights, path.c_str(), /*only_meta=*/false));
+    gguf_free(weights);
+    ggml_free(ctx);
+    return path;
+}
+
+template <typename Load>
+std::string refusal_from(Load && load) {
+    try {
+        load();
+    } catch (const std::runtime_error & e) {
+        return e.what();
+    }
+    return "";
+}
+
+void test_hexagon_refusal_paths() {
+    using tts_cpp::acestep::backend_cpu_init;
+    using tts_cpp::acestep::detok_model_load;
+    using tts_cpp::acestep::dit_gguf_open;
+    using tts_cpp::acestep::dit_gguf_require_hexagon_weights;
+    using tts_cpp::acestep::DitGGUF;
+    using tts_cpp::acestep::fit_params;
+    using tts_cpp::acestep::FitOptions;
+    using tts_cpp::acestep::FitStatus;
+    using tts_cpp::acestep::Vae;
+    using tts_cpp::acestep::VaeOptions;
+
+    const std::string path    = write_gate_test_gguf();
+    const std::string refused = path + ": down.weight is q4_K; the Hexagon NPU runs ";
+    ggml_backend_t    cpu     = backend_cpu_init();
+    CHECK(cpu != nullptr);
+    if (!cpu) return;
+    RegNameOverride as_hexagon("HTP");
+
+    DitGGUF g;
+    CHECK(dit_gguf_open(g, path));
+    const std::string gate = refusal_from([&] { dit_gguf_require_hexagon_weights(g, path, cpu, "acestep-test"); });
+    CHECK(gate.rfind("[acestep-test] " + refused, 0) == 0);
+    CHECK(g.ctx == nullptr);
+    CHECK(g.meta == nullptr);
+    CHECK(g.file.data == nullptr);
+
+    const std::string detok = refusal_from([&] { detok_model_load(path, cpu, /*verbose=*/false); });
+    CHECK(detok.rfind("[acestep-detok] " + refused, 0) == 0);
+
+    VaeOptions vae_opts;
+    vae_opts.backend = "cpu";
+    const std::string vae = refusal_from([&] { Vae::load(path, vae_opts); });
+    CHECK(vae.rfind("[acestep-vae] " + refused, 0) == 0);
+
+    FitOptions fit;
+    fit.backend             = "cpu";
+    fit.text_enc_model_path = path;
+    fit.lm_model_path       = path;
+    fit.dit_model_path      = path;
+    fit.vae_model_path      = path;
+    fit.duration_seconds    = 8.0f;
+    fit.text_tokens         = 32;
+    fit.lyric_tokens        = 16;
+    const tts_cpp::acestep::FitResult result = fit_params(fit);
+    CHECK(result.status == FitStatus::Error);
+    CHECK(!result.fits);
+    CHECK(result.reason == "measurement-failed");
+    CHECK(result.report.rfind("[acestep-fit] " + refused, 0) == 0);
+
+    ggml_backend_free(cpu);
+}
+
 }  // namespace
 
 int main() {
@@ -3541,6 +3682,8 @@ int main() {
     test_fit_pools_check_every_discrete_device();
     test_weight_placement_on_cpu();
     test_stage_placement();
+    test_hexagon_weight_gate();
+    test_hexagon_refusal_paths();
     test_placement_env();
     test_vae_backend_request_env();
     test_parallel_rows();

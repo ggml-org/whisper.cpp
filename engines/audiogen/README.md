@@ -15,7 +15,7 @@ Native [ACE-Step 1.5](https://github.com/ace-step/ACE-Step-1.5) and MiniMax-Musi
 
 | Model | Task | Output | Quantization | Backends |
 |---|---|---|---|---|
-| ACE-Step v15 turbo / sft / base | text-to-music, editing, LRC timestamps; base-only lego stems | 48 kHz stereo | `f32`, `f16`, `bf16`, `q8_0`; turbo also `q4_k_m` | CPU, Vulkan, Metal, OpenCL (Adreno 700+), CUDA, Hexagon (turbo `q8_0` DiT); optional Core ML VAE-decoder sidecar |
+| ACE-Step v15 turbo / sft / base | text-to-music, editing, LRC timestamps; base-only lego stems | 48 kHz stereo | `f32`, `f16`, `bf16`, `q8_0`; turbo also `q4_k_m` | CPU, Vulkan, Metal, OpenCL (Adreno 700+), CUDA, Hexagon (turbo `q8_0` DiT; K-quant GGUFs are refused at load); optional Core ML VAE-decoder sidecar |
 | MiniMax-Music3 | text-to-music | 44.1 kHz stereo | `f16`, `q8_0`; LM, DiT and depth decoder also `q4_k_m` | desktop CPU + GPU (CUDA, Vulkan, Metal); optional Core ML conditioner projection on Apple |
 
 Apple builds can optionally use a Core ML sidecar for the ACE-Step VAE decoder.

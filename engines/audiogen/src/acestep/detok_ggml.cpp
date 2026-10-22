@@ -84,6 +84,7 @@ static DetokModel * detok_model_load_impl(const std::string & path, ggml_backend
         fprintf(stderr, "[acestep-detok] failed to parse %s\n", path.c_str());
         return nullptr;
     }
+    dit_gguf_require_hexagon_weights(g, path, backend, "acestep-detok");
 
     DetokModel * m = new DetokModel();
     m->backend     = backend;

@@ -71,6 +71,38 @@ ggml_backend_buffer_type_t dit_gguf_weight_buffer_type(ggml_backend_t backend) {
     return extra && extra[0] ? extra[0] : fallback;
 }
 
+static std::string hexagon_weight_type_names() {
+    std::string names;
+    for (const ggml_type type : HEXAGON_WEIGHT_TYPES) {
+        if (!names.empty()) names += ", ";
+        names += ggml_type_name(type);
+    }
+    return names;
+}
+
+std::string hexagon_weight_refusal(const gguf_context * weights, int64_t index, const std::string & path,
+                                   const char * tag) {
+    return std::string("[") + tag + "] " + path + ": " + gguf_get_tensor_name(weights, index) + " is " +
+           ggml_type_name(gguf_get_tensor_type(weights, index)) + "; the Hexagon NPU runs " +
+           hexagon_weight_type_names() + " weights: use a GGUF in one of those types or another backend";
+}
+
+std::string dit_gguf_hexagon_refusal(const gguf_context * weights, const std::string & path,
+                                     ggml_backend_t backend, const char * tag) {
+    if (!backend_name_is_hexagon(backend_reg_name(backend))) return "";
+    const int64_t refused = first_tensor_hexagon_cannot_run(weights);
+    if (refused < 0) return "";
+    return hexagon_weight_refusal(weights, refused, path, tag);
+}
+
+void dit_gguf_require_hexagon_weights(DitGGUF & g, const std::string & path, ggml_backend_t backend,
+                                      const char * tag) {
+    const std::string refusal = dit_gguf_hexagon_refusal(g.ctx, path, backend, tag);
+    if (refusal.empty()) return;
+    dit_gguf_close(g);
+    throw std::runtime_error(refusal);
+}
+
 // GGUF tensor data is aligned to general.alignment (default 32); ggml's CPU quant
 // kernels rely on that. Refuse to map (fall back to copy) if a tensor's pointer
 // is under-aligned, so we never hand the CPU backend a misaligned quant block.

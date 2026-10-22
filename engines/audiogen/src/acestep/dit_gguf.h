@@ -62,6 +62,21 @@ bool dit_gguf_backend_maps_weights(ggml_backend_t backend);
 
 ggml_backend_buffer_type_t dit_gguf_weight_buffer_type(ggml_backend_t backend);
 
+// The load-time refusal for tensor `index` of `weights` (read from `path`),
+// prefixed with `tag`.
+std::string hexagon_weight_refusal(const gguf_context * weights, int64_t index, const std::string & path,
+                                   const char * tag);
+
+// Empty when `backend` runs every tensor in `weights`; otherwise the refusal
+// naming the first tensor the Hexagon NPU cannot run. Other backends are never
+// refused here.
+std::string dit_gguf_hexagon_refusal(const gguf_context * weights, const std::string & path,
+                                     ggml_backend_t backend, const char * tag);
+
+// Closes `g` and throws std::runtime_error with that refusal.
+void dit_gguf_require_hexagon_weights(DitGGUF & g, const std::string & path, ggml_backend_t backend,
+                                      const char * tag);
+
 // Point `dst` at its bytes inside the mmap and attach `map_buf`. `dst` must have
 // been created with the SAME type + shape as the GGUF tensor (create_like), so
 // the mapped bytes are a byte-for-byte match for what a copy would have set.

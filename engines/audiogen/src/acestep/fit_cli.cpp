@@ -238,6 +238,7 @@ extern "C" int acestep_fit_cli_main(int argc, char ** argv) {
         print_json(r, opts.margin_bytes);
     } else if (r.status == tts_cpp::acestep::FitStatus::Error) {
         std::fprintf(stderr, "acestep-fit-params: error: %s\n", r.reason.c_str());
+        if (!r.report.empty()) std::fprintf(stderr, "%s\n", r.report.c_str());
     } else {
         std::printf("%s", r.report.c_str());
     }

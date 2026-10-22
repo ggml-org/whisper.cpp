@@ -14,6 +14,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -236,6 +238,11 @@ static VaeModel * vae_model_load_impl(const std::string & path, ggml_backend_t b
                                       bool verbose, AcestepStageMeasure * measure) {
     VaeGGUF g;
     if (!vae_gguf_open(g, path)) return nullptr;
+    const std::string refusal = dit_gguf_hexagon_refusal(g.ctx, path, backend, "acestep-vae");
+    if (!refusal.empty()) {
+        vae_gguf_close(g);
+        throw std::runtime_error(refusal);
+    }
 
     // encoder tensors only exist in the file if it's a full VAE
     if (with_encoder && !vae_gguf_has(g, "encoder.conv1.weight_v")) {

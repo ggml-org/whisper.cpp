@@ -70,6 +70,7 @@ static TextEncModel * textenc_model_load_impl(const std::string & path, ggml_bac
         fprintf(stderr, "[acestep-txt] failed to parse %s\n", path.c_str());
         return nullptr;
     }
+    dit_gguf_require_hexagon_weights(g, path, backend, "acestep-txt");
 
     TextEncModel * m = new TextEncModel();
     m->backend = backend;

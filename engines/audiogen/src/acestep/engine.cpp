@@ -326,6 +326,7 @@ std::unique_ptr<Engine> Engine::create(const EngineOptions & opts_in) {
         DitGGUF g;
         if (!dit_gguf_open(g, opts.dit_model_path))
             throw std::runtime_error("acestep engine: cannot open DiT GGUF: " + opts.dit_model_path);
+        dit_gguf_require_hexagon_weights(g, opts.dit_model_path, m->backend, "acestep-engine");
         const bool cfg_ok = dit_gguf_read_config(g, m->dit_cfg);
         dit_gguf_close(g);
         if (!cfg_ok) throw std::runtime_error("acestep engine: bad DiT config in " + opts.dit_model_path);

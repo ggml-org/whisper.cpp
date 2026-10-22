@@ -120,15 +120,11 @@ std::unique_ptr<Vae> Vae::load(const std::string & gguf_path, const VaeOptions &
     request.verbose        = opts.verbose;
     ggml_backend_t backend = resolve_vae_backend(request);
     if (!backend) throw std::runtime_error("acestep-vae: failed to init backend '" + opts.backend + "'");
+    v->impl_->backend = backend;
 
     VaeModel * model = vae_model_load(gguf_path, backend, opts.with_encoder, opts.verbose);
-    if (!model) {
-        ggml_backend_free(backend);
-        throw std::runtime_error("acestep-vae: failed to load VAE GGUF: " + gguf_path);
-    }
-
-    v->impl_->backend = backend;
-    v->impl_->model   = model;
+    if (!model) throw std::runtime_error("acestep-vae: failed to load VAE GGUF: " + gguf_path);
+    v->impl_->model = model;
     const char * bn   = ggml_backend_name(backend);
     v->impl_->backend_name = bn ? bn : "CPU";
 #ifdef AUDIOGEN_USE_COREML
