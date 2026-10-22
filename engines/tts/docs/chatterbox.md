@@ -60,4 +60,132 @@ extraction via STFT matmul, T3 Q4/Q5/Q8 quantization, the multilingual
 Llama-520M port + CFG dual-cache (§3.19), and the shared S3Gen weight-
 quantisation pass that ships in this repo (§3.20)).
 
+
+### Adreno OpenCL
+
+ggml-opencl declines `FLASH_ATTN_EXT` on Adreno (its kernels miscompute some
+inputs there unless `GGML_OPENCL_FA_ADRENO=1`), so T3 builds its attention
+from score and value products and a masked softmax wherever the backend
+declines the fused node; before, the scheduler ran every T3 attention on the
+CPU and copied the KV cache across on every step. On Adreno, the Multilingual
+cond+uncond pair also runs its weight products without batch broadcasting
+(ggml-opencl dequantized each quantized weight to F16 for a broadcast
+product): the prompt as one flattened product, each decode step as one
+matrix-vector product per half. `test-attention-fallback` pins the unfused
+form to `ggml_flash_attn_ext`. T3 decode on a Galaxy S25 (Adreno 830, `q4_0`,
+one sentence):
+
+| T3 | Before | After | CPU (6 threads) |
+|---|--:|--:|--:|
+| Turbo, 70 tokens | 3.9 s | 1.3 s | 1.6 s |
+| Multilingual, 61 tokens | 134 s | 1.9 s | 1.4 s |
+
+`test-t3-backend-logits` against the CPU over the same teacher-forced tokens:
+Turbo min cosine 0.99985 with 24 of 25 argmaxes equal, Multilingual 0.99914
+with 47 of 50. The S3Gen CFM keeps its flash attention on OpenCL, whose
+output matches the CPU's (mel rel 2.3e-6 on the `f32` tier). The
+Multilingual F32 KV cache at the GGUF's context (1.44 GB per tensor) still
+exceeds OpenCL's 1 GB allocation limit on Adreno: cap `n_ctx` (e.g. 1200) or
+use the `f16` cache.
+
+### Snapdragon Hexagon NPU
+
+Chatterbox Turbo and Multilingual run on the Snapdragon Hexagon NPU (HTP0;
+measured on a Galaxy S25, Snapdragon 8 Elite, Hexagon v79) when it is requested
+explicitly: `EngineOptions::backend = "hexagon"` or `--backend hexagon` on
+`tts-cli` and `chatterbox-fit-params`. There is no fallback: construction fails
+when HTP0 is missing, and the automatic `--n-gpu-layers` walk never selects it.
+T3 (the prompt and every decode step) and S3Gen (encoder, CFM, F0 predictor,
+STFT and HiFT) run on the NPU. With a reference WAV, the S3Tokenizer and
+CAM++ stay on the CPU, as the voice encoder does on every backend. Weights go
+into the Hexagon repack buffer type; HTP multiplies only `f32`, `f16`, `q8_0`
+and `q4_0` weights, so a T3 or S3Gen GGUF holding another type is refused at
+load. It needs a `qvac-ext-ggml@speech` build with the Hexagon `COL2IM_1D`,
+F16 `IM2COL`, flash attention (F32 and F16 keys and values), sin, cos and
+leaky ReLU kernels (measured at `a6122941`).
+
+On Hexagon every S3Gen graph is checked against the operations HTP reports it
+can run (support depends on shapes, e.g. flash attention past its VTCM budget)
+and goes through the `[backend, CPU]` scheduler when one is missing; other
+backends keep that check for HiFT only, as before. Four Hexagon forms keep the
+whole pipeline on the NPU:
+
+- **HiFT upsamplers and iSTFT.** HTP has no transposed convolution, so each
+  runs as one GEMM into columns plus `ggml_col2im_1d`
+  (`conv_transpose_1d_columns`), pinned to `ggml_conv_transpose_1d` by
+  `test-conv-columns`.
+- **F16 convolution columns.** HTP has no fast F32 `im2col`, and HMX
+  multiplies in F16 regardless, so convolutions whose kernel sits on the NPU
+  take F16 columns. HiFT on 36 s of audio drops from 13.5 to 4.2 s. The
+  batched (classifier-free-guidance) CFM convolutions keep F32 columns: HTP's
+  batched F16 `im2col` is slower than its F32 one.
+- **F16 K/V CFM attention.** HTP runs F32 flash attention on HVX; F16 keys
+  and values move it onto HMX, 15x faster (7.1 to 0.47 s of attention over
+  the 2,306-frame CFM of a 36 s clip). On `f32` S3Gen weights the first CFM
+  step's velocity then differs from the CPU's by at most 0.27 (cosine
+  0.999996) instead of 0.058; the `q4_0` tier itself moves it by up to 5.1
+  from the `f32` weights, identically on the CPU and on the NPU.
+- **F16 T3 KV cache.** The DSP maps at most 3.2 GB of buffers per batch of
+  operations. The Multilingual F32 cache at the GGUF's context (2.9 GB for the
+  cond+uncond pair) overflows it beside the weights, so every decode step
+  remapped: 3.1 s of T3 for a 60-token sentence against 0.67 s with the F16
+  cache. Hexagon therefore stores the cache as F16 whatever
+  `kv_cache_type` requests (Turbo 0.77 GB, Multilingual 1.44 GB).
+
+The conformer encoder keeps its unfused relative-position attention (an F16
+mask drifts it past the WAV quality gate; see §3.25 of the
+[port archive](history/chatterbox-port.md)), whose F32 score and value
+products run on HVX. On a single 36 s segment it takes 5.2 s on the NPU
+against 2.4 s on the CPU, so split long text into sentences
+(`EngineOptions::max_sentence_chars`, the CLI's default 180).
+
+Accuracy against the CPU on the same GGUF (the CPU and the NPU run different
+quantized-matmul paths, so the residual is larger at `q4_0` than at `f32`):
+
+| Check | Result | Gate |
+|---|---|---|
+| `test-s3gen-agreement-hexagon`, Turbo S3Gen `f32`, 900 tokens | mel rel 4.0e-3, waveform rms ratio 0.056 | 2e-2, 0.15 |
+| `test-s3gen-agreement-hexagon-q4_0`, 900 tokens | mel rel 3.2e-2, rms ratio 0.177 | 5e-2, 0.5 |
+| Multilingual S3Gen `q4_0`, 900 tokens, 10 CFG steps | mel cosine 0.99998; max abs 1.9, above 1.0 on four of 1,806 frames | (noise of the tier, above) |
+| `test-t3-backend-logits-turbo-hexagon` (`q4_0`, prompt + 24 teacher-forced steps) | min cosine 0.99980, argmax 25/25 | 0.995, 0.75 |
+| `test-t3-backend-logits-mtl-hexagon` (`q4_0`, cond and uncond) | min cosine 0.99792, argmax 48/50 | 0.995, 0.75 |
+| `test-chatterbox-parity-mtl-hexagon` (`q4_0`, greedy) | token counts within 4.3% | duration 1.35x |
+
+Whisper `small.en` transcribes the NPU's Turbo, Multilingual, JFK-cloned and
+streamed Multilingual outputs verbatim. Greedy Turbo decoding (`top_k = 1`)
+misses the stop token on some sentences on every backend: over 12 sentences
+the `q8_0` T3 ran on to the limit for the same three on the CPU and on the
+NPU, and the `q4_0` T3 for two on each (different ones). Requesting F32
+products for the Hexagon prompt removed one of them at three times the
+prefill cost, so the prompt keeps HMX. With the default sampling (seed 42) all
+12 sentences stopped on both the CPU and the NPU (at most 87 and 84 tokens).
+
+Speed on the Galaxy S25 (registry `q4_0` T3 and S3Gen, built-in voice,
+seed 42, `tts-cli`, each run started at thermal status 0, median of two runs;
+inference only, model load excluded). The short text is "The quick brown fox
+jumps over the lazy dog."; the paragraph is three sentences (62 words),
+synthesised sentence by sentence. The OpenCL Multilingual rows cap the context
+at 1,200 (see Adreno OpenCL above):
+
+| Model | Text | Backend | Tokens | T3 | S3Gen (encoder / CFM / HiFT) | Audio | RTF |
+|---|---|---|--:|--:|--:|--:|--:|
+| Turbo | short | CPU (6 threads) | 69 | 1.73 s | 3.59 s (0.38 s / 2.04 s / 1.16 s) | 2.9 s | 1.85 |
+| Turbo | short | OpenCL (Adreno 830) | 70 | 1.28 s | 1.41 s (0.15 s / 0.86 s / 0.40 s) | 2.9 s | 0.92 |
+| Turbo | short | Hexagon | 73 | 0.55 s | 0.95 s (0.33 s / 0.29 s / 0.33 s) | 3.0 s | 0.49 |
+| Turbo | paragraph | CPU (6 threads) | 427 | 8.51 s | 23.37 s (2.09 s / 11.90 s / 9.37 s) | 17.4 s | 1.83 |
+| Turbo | paragraph | OpenCL (Adreno 830) | 422 | 8.16 s | 5.67 s (0.72 s / 2.77 s / 2.15 s) | 17.2 s | 0.80 |
+| Turbo | paragraph | Hexagon | 454 | 3.39 s | 4.61 s (1.48 s / 1.11 s / 2.01 s) | 18.5 s | 0.43 |
+| Multilingual | short | CPU (6 threads) | 61 | 1.44 s | 14.01 s (0.25 s / 12.57 s / 1.19 s) | 2.6 s | 6.04 |
+| Multilingual | short | OpenCL (Adreno 830) | 61 | 1.90 s | 4.55 s (0.10 s / 4.08 s / 0.37 s) | 2.6 s | 2.52 |
+| Multilingual | short | Hexagon | 60 | 0.66 s | 2.92 s (0.15 s / 2.47 s / 0.29 s) | 2.5 s | 1.42 |
+| Multilingual | paragraph | CPU (6 threads) | 352 | 14.48 s | 91.79 s (1.97 s / 80.51 s / 9.30 s) | 14.4 s | 7.36 |
+| Multilingual | paragraph | OpenCL (Adreno 830) | 346 | 12.06 s | 18.76 s (0.39 s / 16.52 s / 1.83 s) | 14.2 s | 2.17 |
+| Multilingual | paragraph | Hexagon | 365 | 4.23 s | 12.01 s (0.75 s / 9.61 s / 1.64 s) | 15.0 s | 1.09 |
+
+On the paragraph the NPU runs Turbo faster than real time, at RTF 0.43 (4.3x
+the CPU, 1.9x OpenCL), and Multilingual close to it, at 1.09 (6.8x the CPU,
+2.0x OpenCL). The Multilingual CFM dominates there: ten Euler steps of the
+cond+uncond pair at about 250 ms each for a short sentence, a quarter of it
+attention; its batched convolutions keep F32 columns (see above).
+
 ---

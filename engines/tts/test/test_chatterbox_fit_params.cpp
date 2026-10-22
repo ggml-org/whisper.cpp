@@ -201,7 +201,7 @@ int main(int argc, char ** argv) {
             expect(!pcm.empty(), "real synthesis produced no PCM");
             detail::s3gen_fit_measure sm;
             std::string error;
-            if (!detail::s3gen_measure_fit(s3gen_path, n_gpu_layers, kSpeechToks,
+            if (!detail::s3gen_measure_fit(s3gen_path, n_gpu_layers, /*backend=*/{}, kSpeechToks,
                                            sm, &error)) {
                 fail("s3gen_measure_fit failed: " + error);
             } else {

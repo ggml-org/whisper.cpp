@@ -66,6 +66,10 @@ struct FitOptions {
     // Free-memory headroom that must remain on the device for the projection
     // to count as fitting.
     uint64_t margin_bytes = 256ull * 1024 * 1024;
+
+    // Same semantics as EngineOptions::backend; appended last so existing
+    // positional initializers stay valid.
+    std::string backend;
 };
 
 // Project the model pair + workload in `opts` against the device memory

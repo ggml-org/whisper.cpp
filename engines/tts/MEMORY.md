@@ -150,7 +150,7 @@ teardown code in `src/chatterbox_engine.cpp` + `src/chatterbox_tts.cpp`
 ### Chatterbox process-singleton caches
 
 - **S3Gen model cache** (`g_s3gen_cache_entry` in chatterbox_tts.cpp).
-  One `model_ctx` per (path, n_gpu_layers) pair, refcounted across
+  One `model_ctx` per (path, n_gpu_layers, backend) key, refcounted across
   multiple Engine instances sharing the same S3Gen GGUF.  Released
   by the last `s3gen_unload()` or by the `atexit` hook
   (`s3gen_model_cache_release`) on process exit.

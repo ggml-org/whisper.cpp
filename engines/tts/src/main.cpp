@@ -1,3 +1,4 @@
+#include "attention_fallback.h"
 #include "backend_selection.h"
 #include "backend_util.h"
 #include "fit_price.h"
@@ -242,6 +243,10 @@ bool compute_embedding_native(const std::string & wav_path,
 // stream (first 15 s → up to max_cond_tokens tokens).
 //
 // Returns false if the s3gen GGUF pre-dates Phase 2e (no s3tokv2.* tensors).
+ggml_backend_t voice_frontend_backend(ggml_backend_t t3_backend) {
+    return ::tts_cpp::detail::backend_is_hexagon(t3_backend) ? nullptr : t3_backend;
+}
+
 bool compute_speech_tokens_native(const std::string & wav_path,
                                          const std::string & s3gen_gguf_path,
                                          int max_cond_tokens,
@@ -303,9 +308,16 @@ static ggml_tensor * require_tensor(const chatterbox_model & m, const char * nam
 // so chatterbox_engine.cpp can flip it from its Engine ctor without a copy.
 int g_log_verbose = 0;
 
-ggml_backend_t init_backend(int n_gpu_layers, bool * out_gpu_unsupported) {
+ggml_backend_t init_backend(int n_gpu_layers, bool * out_gpu_unsupported,
+                            const std::string & backend) {
     if (out_gpu_unsupported) *out_gpu_unsupported = false;
     const bool v = g_log_verbose != 0;
+    if (!::tts_cpp::detail::backend_request_is_auto(backend)) {
+        if (ggml_backend_t b = ::tts_cpp::detail::init_requested_backend(backend, v, "chatterbox")) {
+            return b;
+        }
+        throw std::runtime_error("init_backend: requested backend '" + backend + "' is unavailable");
+    }
     // GPU cascade is centralised in backend_selection.cpp's
     // `init_gpu_backend` (Adreno 700+ -> OpenCL, every other GPU ->
     // Vulkan/Metal/CUDA/Mali, with Adreno 6xx OpenCL force-skipped).
@@ -324,6 +336,18 @@ ggml_backend_t init_backend(int n_gpu_layers, bool * out_gpu_unsupported) {
         return b;
     }
     throw std::runtime_error("init_backend: no CPU device registered");
+}
+
+void t3_require_hexagon_weight_types(chatterbox_model & model, const gguf_context * g,
+                                     const std::string & path) {
+    if (!::tts_cpp::detail::backend_is_hexagon(model.backend)) return;
+    const int64_t bad = ::tts_cpp::detail::first_tensor_hexagon_cannot_run(g);
+    if (bad < 0) return;
+    ggml_backend_free(model.backend);
+    model.backend = nullptr;
+    throw std::runtime_error("Hexagon cannot run " + std::string(gguf_get_tensor_name(g, bad)) + " (" +
+                             ggml_type_name(gguf_get_tensor_type(g, bad)) + ") in " + path +
+                             "; use a q8_0, q4_0, f16 or f32 GGUF");
 }
 
 // --------------------------------------------------------------------------
@@ -358,6 +382,18 @@ ggml_type chatterbox_kv_type_from_str(const std::string & s) {
 // the load-time guard for honest backends and future ports.
 ggml_type chatterbox_resolve_kv_type(ggml_backend_t backend, ggml_type requested,
                                      int head_dim, int n_head, int n_kv_head) {
+    // The DSP maps at most HTP_OP_MAX_VMEM_DEFAULT (3.2 GB) of buffers per op
+    // batch.  An F32 cache at the GGUF's own context (2.9 GB for the
+    // multilingual cond+uncond pair) overflows it next to the weights, so every
+    // decode step remaps (4.5x slower on a Snapdragon 8 Elite), and the
+    // flash-attention kernels have no q8_0 K/V.  HTP reads F16 K/V natively.
+    if (::tts_cpp::detail::backend_is_hexagon(backend)) {
+        if (requested != GGML_TYPE_F16 && g_log_verbose) {
+            fprintf(stderr, "chatterbox: Hexagon stores the T3 KV cache as f16 (requested %s)\n",
+                    ggml_type_name(requested));
+        }
+        return GGML_TYPE_F16;
+    }
     if (requested == GGML_TYPE_F32 || !backend) return GGML_TYPE_F32;
 
     // ggml-vulkan's supports_op ADVERTISES quantized K/V flash-attention
@@ -483,7 +519,8 @@ void t3_mark_externally_allocated(ggml_context * ctx) {
     }
 }
 
-bool load_model_gguf(const std::string & path, chatterbox_model & model, int requested_ctx, int n_gpu_layers, ggml_type kv_type, t3_load_measure * measure) {
+bool load_model_gguf(const std::string & path, chatterbox_model & model, int requested_ctx, int n_gpu_layers, ggml_type kv_type, t3_load_measure * measure,
+                     const std::string & backend) {
     if (measure) *measure = t3_load_measure{};
     {
         gguf_init_params peek_params = { /*.no_alloc=*/ true, /*.ctx=*/ nullptr };
@@ -503,7 +540,7 @@ bool load_model_gguf(const std::string & path, chatterbox_model & model, int req
             gguf_free(peek_ctx);
             if (variant == "t3_mtl") {
                 return load_model_gguf_mtl(path, model, requested_ctx, n_gpu_layers, kv_type,
-                                           measure);
+                                           measure, backend);
             }
         }
     }
@@ -531,7 +568,8 @@ bool load_model_gguf(const std::string & path, chatterbox_model & model, int req
         hp.n_layer = (int32_t) gguf_get_val_u32(gguf_ctx, require_key(gguf_ctx, KEY_N_LAYER));
         if (requested_ctx > 0) hp.n_ctx = std::min(hp.n_ctx, requested_ctx);
 
-        model.backend = init_backend(n_gpu_layers, &model.gpu_unsupported);
+        model.backend = init_backend(n_gpu_layers, &model.gpu_unsupported, backend);
+        t3_require_hexagon_weight_types(model, gguf_ctx, path);
 
         const int64_t num_tensors = gguf_get_n_tensors(gguf_ctx);
         ggml_init_params params = { ggml_tensor_overhead() * (size_t) num_tensors, nullptr, true };
@@ -545,12 +583,13 @@ bool load_model_gguf(const std::string & path, chatterbox_model & model, int req
             ggml_set_name(dst, name);
             model.tensors[name] = dst;
         }
+        ggml_backend_buffer_type_t weight_buft = ::tts_cpp::detail::weight_buffer_type(model.backend);
         if (measure) {
-            measure->weights_bytes = ggml_backend_alloc_ctx_tensors_from_buft_size(
-                model.ctx_w, ggml_backend_get_default_buffer_type(model.backend));
+            measure->weights_bytes = ggml_backend_alloc_ctx_tensors_from_buft_size(model.ctx_w, weight_buft);
             t3_mark_externally_allocated(model.ctx_w);
         } else {
-            model.buffer_w = ggml_backend_alloc_ctx_tensors(model.ctx_w, model.backend);
+            model.buffer_w = ggml_backend_alloc_ctx_tensors_from_buft(model.ctx_w, weight_buft);
+            if (!model.buffer_w) throw std::runtime_error("failed to allocate the T3 weights buffer");
             ::tts_cpp::detail::gguf_stream_reader reader(gguf_ctx, path);
             if (!reader.ok()) throw std::runtime_error("failed to reopen GGUF for tensor data: " + path);
             for (ggml_tensor * cur = ggml_get_first_tensor(model.ctx_w); cur; cur = ggml_get_next_tensor(model.ctx_w, cur)) {
@@ -749,8 +788,8 @@ static ggml_tensor * build_transformer_core(
             kv_head_row,
             layer_off);
 
-        ggml_tensor * attn = ggml_flash_attn_ext(ctx, Q, K, V, kq_mask,
-            1.0f / std::sqrt((float) HD), 0.0f, 0.0f);
+        ggml_tensor * attn = ::tts_cpp::detail::attention_for_backend(ctx, model.backend, Q, K, V, kq_mask,
+            1.0f / std::sqrt((float) HD));
         // attn: [HD, n_head, N, 1] contiguous -> [n_embd, N]
         cur = ggml_reshape_2d(ctx, attn, n_embd, N);
         cur = ggml_add(ctx, ggml_add(ctx, ggml_mul_mat(ctx, model.layers[il].c_attn_proj_w, cur), model.layers[il].c_attn_proj_b), inpL);

@@ -236,6 +236,7 @@ struct cli_params {
     int32_t n_predict      = 1000;   // matches Python's default-ish output budget for paragraph-length text
     int32_t n_ctx          = 0;
     int32_t n_gpu_layers   = 0;
+    std::string backend;             // --backend auto|cpu|opencl|webgpu|hexagon|DEVICE (Chatterbox)
     std::string kv_cache_type;       // --kv-cache-type f32|f16|q8_0 (default f32)
     // Sampling defaults matched to ChatterboxTurboTTS.generate() in tts_turbo.py:
     //   temperature=0.8, top_k=1000, top_p=0.95, repetition_penalty=1.2
@@ -445,6 +446,9 @@ static void print_usage(const char * argv0) {
     fprintf(stderr, "  --n-predict N           Max speech tokens (default: 1000)\n");
     fprintf(stderr, "  --context N             Override KV context length\n");
     fprintf(stderr, "  --n-gpu-layers N        GPU backend when N > 0\n");
+    fprintf(stderr, "  --backend NAME          Chatterbox device: auto|cpu|opencl|webgpu|hexagon|DEVICE;\n");
+    fprintf(stderr, "                          overrides --n-gpu-layers, no fallback (hexagon =\n");
+    fprintf(stderr, "                          the Snapdragon HTP0 NPU)\n");
     fprintf(stderr, "  --top-k N               (default: 1000, matches Python; use 1 for greedy)\n");
     fprintf(stderr, "  --top-p P               (default: 0.95)\n");
     fprintf(stderr, "  --temp T                (default: 0.8)\n");
@@ -655,6 +659,7 @@ static bool parse_args(int argc, char ** argv, cli_params & params) {
         else if (arg == "--threads")        { if (!parse_int  ("--threads",        params.n_threads))      return false; }
         else if (arg == "--n-predict")      { if (!parse_int  ("--n-predict",      params.n_predict))      return false; }
         else if (arg == "--context")        { if (!parse_int  ("--context",        params.n_ctx))          return false; }
+        else if (arg == "--backend")        { if (++i >= argc) { fprintf(stderr, "--backend needs a value (auto|cpu|opencl|webgpu|hexagon|DEVICE)\n"); return false; } params.backend = argv[i]; }
         else if (arg == "--kv-cache-type")  { if (++i >= argc) { fprintf(stderr, "--kv-cache-type needs a value (f32|f16|q8_0)\n"); return false; } params.kv_cache_type = argv[i]; }
         else if (arg == "--n-gpu-layers")   { if (!parse_int  ("--n-gpu-layers",   params.n_gpu_layers))   return false; }
         else if (arg == "--top-k")          { if (!parse_int  ("--top-k",          params.top_k))          return false; }
@@ -1175,7 +1180,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
             // and Vulkan on every other Android GPU. Falls back to the
             // ggml-cpu NEON/AVX kernels when n_gpu_layers == 0 or no GPU
             // device is registered.
-            ggml_backend_t vc_backend = init_backend(params.n_gpu_layers);
+            ggml_backend_t vc_backend = init_backend(params.n_gpu_layers, nullptr, params.backend);
 
             // (1) speaker_emb via VoiceEncoder (3-layer LSTM + proj + L2-norm
             //     on the chosen backend).
@@ -1206,7 +1211,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                 const int64_t _t0 = ggml_time_us();
                 (void)compute_speech_tokens_native(params.reference_audio, params.s3gen_gguf,
                                                    cond_prompt_len, pt_bake, ct_bake,
-                                                   params.n_threads, vc_backend,
+                                                   params.n_threads, voice_frontend_backend(vc_backend),
                                                    params.verbose);
                 fprintf(stderr, "BENCH: VC_STAGE_s3tokenizer_ms=%lld\n", (long long)((ggml_time_us() - _t0)/1000));
             }
@@ -1216,7 +1221,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
             {
                 const int64_t _t0 = ggml_time_us();
                 (void)compute_embedding_native(params.reference_audio, params.s3gen_gguf,
-                                               emb_bake, vc_backend, params.verbose);
+                                               emb_bake, voice_frontend_backend(vc_backend), params.verbose);
                 fprintf(stderr, "BENCH: VC_STAGE_campplus_ms=%lld\n", (long long)((ggml_time_us() - _t0)/1000));
             }
 
@@ -1253,6 +1258,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
             opts.debug           = params.debug;
             opts.verbose         = params.verbose;
             opts.n_gpu_layers    = params.n_gpu_layers;
+            opts.backend         = params.backend;
             opts.cfm_steps       = params.cfm_steps;
             opts.cfg_rate        = params.cfg_rate;
             opts.dump_mel_path   = params.dump_mel_path;
@@ -1286,7 +1292,8 @@ int tts_cpp_cli_main(int argc, char ** argv) {
         chatterbox_model model;
         const int64_t _t3_load_t0 = ggml_time_us();
         if (!load_model_gguf(params.model, model, params.n_ctx, params.n_gpu_layers,
-                             chatterbox_kv_type_from_str(params.kv_cache_type))) return 1;
+                             chatterbox_kv_type_from_str(params.kv_cache_type),
+                             /*measure=*/nullptr, params.backend)) return 1;
         const int64_t _t3_load_ms = (ggml_time_us() - _t3_load_t0) / 1000;
         fprintf(stderr, "BENCH: T3_LOAD_MS=%lld\n", (long long)_t3_load_ms);
 
@@ -1316,8 +1323,9 @@ int tts_cpp_cli_main(int argc, char ** argv) {
         thread_join_guard s3gen_guard{s3gen_preload_thread};
         if (!params.s3gen_gguf.empty()) {
             s3gen_preload_thread = std::thread([path = params.s3gen_gguf,
-                                                ngpu = params.n_gpu_layers]() {
-                s3gen_preload(path, ngpu);
+                                                ngpu = params.n_gpu_layers,
+                                                backend = params.backend]() {
+                s3gen_preload(path, ngpu, backend);
             });
         }
 
@@ -1389,7 +1397,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                                              /*max_cond_tokens=*/model.hparams.cond_prompt_len,
                                              prompt_token_from_ref, cond_tokens,
                                              params.n_threads,
-                                             /*backend=*/model.backend,
+                                             voice_frontend_backend(model.backend),
                                              params.verbose)) {
                 ct_data = std::move(cond_tokens);
                 have_ct = true;
@@ -1526,6 +1534,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
             opts.debug           = params.debug;
             opts.verbose         = params.verbose;
             opts.n_gpu_layers    = params.n_gpu_layers;
+            opts.backend         = params.backend;
             // Live-input streaming: --stream-cfm-steps takes precedence per
             // chunk; --cfm-steps falls in as the per-chunk default below
             // (`stream_cfm_steps > 0 ? stream_cfm_steps : cfm_steps`).
@@ -1541,7 +1550,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                     throw std::runtime_error("failed to compute prompt_feat from --reference-audio");
                 (void)compute_embedding_native(params.reference_audio, params.s3gen_gguf,
                                                opts.embedding_override,
-                                               /*backend=*/model.backend, params.verbose);
+                                               voice_frontend_backend(model.backend), params.verbose);
                 if (!prompt_token_from_ref.empty()) {
                     opts.prompt_token_override = std::move(prompt_token_from_ref);
                 }
@@ -2410,6 +2419,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
             opts.debug           = params.debug;
             opts.verbose         = params.verbose;
             opts.n_gpu_layers    = params.n_gpu_layers;
+            opts.backend         = params.backend;
             // Non-streaming CFM Euler step count (0 = GGUF default).
             // Streaming chunks honour --stream-cfm-steps with --cfm-steps as
             // fallback when copts is set up further below.
@@ -2425,7 +2435,7 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                     throw std::runtime_error("failed to compute prompt_feat from --reference-audio");
                 (void)compute_embedding_native(params.reference_audio, params.s3gen_gguf,
                                                opts.embedding_override,
-                                               /*backend=*/model.backend, params.verbose);
+                                               voice_frontend_backend(model.backend), params.verbose);
                 if (!prompt_token_from_ref.empty()) {
                     opts.prompt_token_override = std::move(prompt_token_from_ref);
                 }

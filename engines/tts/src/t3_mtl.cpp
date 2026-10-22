@@ -26,6 +26,8 @@
 #include "kv_cache_copy.h"
 #include "t3_alignment_analyzer.h"
 
+#include "attention_fallback.h"
+#include "backend_selection.h"
 #include "backend_util.h"
 #include "fit_price.h"
 #include "gguf_stream.h"
@@ -494,6 +496,7 @@ std::vector<float> compute_llama3_freq_factors(int head_dim, float theta,
 // perc_kv shape: (n_embd, T_kv)     key/value input
 // Returns:       (n_embd, T_q)
 ggml_tensor * build_perceiver_attn(ggml_context * ctx,
+                                   ggml_backend_t backend,
                                    const perceiver_weights & w,
                                    const chatterbox_hparams & hp,
                                    ggml_tensor * perc_q,
@@ -529,8 +532,8 @@ ggml_tensor * build_perceiver_attn(ggml_context * ctx,
     V = ggml_cont(ctx, ggml_permute(ctx, V, 0, 2, 1, 3));
 
     const float scale = 1.0f / std::sqrt((float) head_dim);
-    ggml_tensor * attn = ggml_flash_attn_ext(ctx, Q, K, V, /*mask=*/nullptr,
-                                             scale, /*max_bias=*/0.0f, /*logit_softcap=*/0.0f);
+    ggml_tensor * attn = ::tts_cpp::detail::attention_for_backend(ctx, backend, Q, K, V, /*mask=*/nullptr,
+                                                                  scale);
     // attn output layout: (head_dim, n_heads, T_q, 1)
     attn = ggml_reshape_2d(ctx, attn, n_embd, T_q);
 
@@ -547,39 +550,45 @@ ggml_tensor * build_perceiver(ggml_context * ctx,
     // pre_attention_query stored as (1, 32, 1024) → ggml storage (1024, 32, 1).
     // Take it as a (1024, 32) 2D tensor.
     ggml_tensor * query = ggml_reshape_2d(ctx, m.perceiver.pre_attention_query, m.hparams.n_embd, m.hparams.perceiver_queries);
-    ggml_tensor * pre_att = build_perceiver_attn(ctx, m.perceiver, m.hparams, query, h);
-    ggml_tensor * out     = build_perceiver_attn(ctx, m.perceiver, m.hparams, pre_att, pre_att);
+    ggml_tensor * pre_att = build_perceiver_attn(ctx, m.backend, m.perceiver, m.hparams, query, h);
+    ggml_tensor * out     = build_perceiver_attn(ctx, m.backend, m.perceiver, m.hparams, pre_att, pre_att);
     return out;
 }
 
-// One Llama transformer block.  Writes K/V into the selected KV cache
-// tensors at positions [n_past, n_past + N).
-//
-// inpL:       (n_embd, N)            for B=1
-//             (n_embd, N, 2)         for B=2 (cond + uncond packed as ne[2])
-// memory_k/v: 1D buffer (dtype = hparams.kv_type) holding the
-//             **cond+uncond pair** for MTL:
-//             size = 2 * head_dim * n_kv_head * n_ctx * n_layer elements.
-//             Per-layer slab is two batch slabs; cond at offset 0,
-//             uncond one batch slab later.
-//
-// Layout within a batch slab is TOKEN-MAJOR: one
-// ggml_row_size(kv_type, HD * NKV) row per cached position, heads
-// packed [HD-head0 ‖ HD-head1 ‖ ...] inside the row.  The per-step
-// append at position n_past is therefore a CONTIGUOUS span, which is
-// what allows a quantised kv_type (ggml-cpu's dup→quantized path
-// aborts on a non-contiguous dst) — and it lets the append consume
-// the pre-permute K (rope output) / V (projection output) directly,
-// dropping the two per-layer ggml_cont(permute(...)) calls the old
-// head-major [HD, n_ctx, NKV] slab needed.  flash_attn_ext reads the
-// [HD, L, NKV] slice with plain strides (pos stride = one token row,
-// head stride = one HD-row inside it; same shape llama.cpp uses).
-//
-// b_offset_elems selects which half is touched in the B=1 path:
-//             0        → cond pass writes/reads the cond slab
-//             non-zero → uncond pass writes/reads the uncond slab
-// In the B=2 path b_offset_elems is ignored: ne[3]=2 spans both halves
-// and the per-batch stride is one batch slab.
+// ggml-opencl dequantizes a quantized weight to F16 on every product whose
+// activations carry more batches than the weight (src1->ne[2] > src0->ne[2]),
+// so each cond+uncond (B=2) decode step took seconds on Adreno.  There the
+// prompt flattens contiguous [K, N, B] activations to one [K, N * B] product,
+// and a decode step runs one matrix-vector product per batch (Adreno's GEMM is
+// several times slower than its GEMV on two columns).  Other backends keep the
+// batched form they were validated with.
+static bool mtl_weight_product_splits_batches(ggml_backend_t backend, const ggml_tensor * w,
+                                              const ggml_tensor * x) {
+    return ::tts_cpp::detail::backend_is_opencl(backend) && x->ne[2] > 1 && x->ne[3] == 1 &&
+           w->ne[2] == 1 && ggml_is_contiguous(x);
+}
+
+static ggml_tensor * mtl_weight_mul_mat_flat(ggml_context * ctx, ggml_tensor * w, ggml_tensor * x) {
+    ggml_tensor * product = ggml_mul_mat(ctx, w, ggml_reshape_2d(ctx, x, x->ne[0], x->ne[1] * x->ne[2]));
+    return ggml_reshape_3d(ctx, product, product->ne[0], x->ne[1], x->ne[2]);
+}
+
+static ggml_tensor * mtl_weight_mul_vec_per_batch(ggml_context * ctx, ggml_tensor * w, ggml_tensor * x) {
+    ggml_tensor * out = nullptr;
+    for (int64_t b = 0; b < x->ne[2]; ++b) {
+        ggml_tensor * column  = ggml_view_2d(ctx, x, x->ne[0], 1, x->nb[1], (size_t) b * x->nb[2]);
+        ggml_tensor * product = ggml_reshape_3d(ctx, ggml_mul_mat(ctx, w, column), w->ne[1], 1, 1);
+        out = out ? ggml_concat(ctx, out, product, 2) : product;
+    }
+    return out;
+}
+
+static ggml_tensor * mtl_weight_mul_mat(ggml_context * ctx, ggml_backend_t backend,
+                                        ggml_tensor * w, ggml_tensor * x) {
+    if (!mtl_weight_product_splits_batches(backend, w, x)) return ggml_mul_mat(ctx, w, x);
+    return x->ne[1] == 1 ? mtl_weight_mul_vec_per_batch(ctx, w, x) : mtl_weight_mul_mat_flat(ctx, w, x);
+}
+
 ggml_tensor * build_llama_block(ggml_context * ctx, ggml_cgraph * gf,
                                 const chatterbox_model & m,
                                 int il,
@@ -628,7 +637,7 @@ ggml_tensor * build_llama_block(ggml_context * ctx, ggml_cgraph * gf,
     ggml_tensor * Vlin;
     bool used_stacked_qkv = false;
     if (l.wqkv) {
-        ggml_tensor * QKV = ggml_mul_mat(ctx, l.wqkv, cur);  // (3*n_embd, N) or (3*n_embd, N, B)
+        ggml_tensor * QKV = mtl_weight_mul_mat(ctx, m.backend, l.wqkv, cur);  // (3*n_embd, N[, B])
         used_stacked_qkv = true;
         const size_t f = sizeof(float);
         const size_t row_stride   = (size_t) 3 * n_embd_t * f;
@@ -646,9 +655,9 @@ ggml_tensor * build_llama_block(ggml_context * ctx, ggml_cgraph * gf,
             Vlin = ggml_view_3d(ctx, QKV, n_embd_t, N, B, row_stride, batch_stride, off_v);
         }
     } else {
-        Qlin = ggml_mul_mat(ctx, l.wq, cur);
-        Klin = ggml_mul_mat(ctx, l.wk, cur);
-        Vlin = ggml_mul_mat(ctx, l.wv, cur);
+        Qlin = mtl_weight_mul_mat(ctx, m.backend, l.wq, cur);
+        Klin = mtl_weight_mul_mat(ctx, m.backend, l.wk, cur);
+        Vlin = mtl_weight_mul_mat(ctx, m.backend, l.wv, cur);
     }
 
     // Reshape to (HD, n_head, N) [B=1] or (HD, n_head, N, B) [B=2].
@@ -802,8 +811,8 @@ ggml_tensor * build_llama_block(ggml_context * ctx, ggml_cgraph * gf,
     }
 
     const float scale = 1.0f / std::sqrt((float) HD);
-    ggml_tensor * attn = ggml_flash_attn_ext(ctx, Q, Kfull, Vfull, kq_mask,
-                                             scale, 0.0f, 0.0f);
+    ggml_tensor * attn = ::tts_cpp::detail::attention_for_backend(ctx, m.backend, Q, Kfull, Vfull, kq_mask,
+                                                                  scale);
     // attn ne=[HD, NH, N, B].  Reshape back to (n_embd, N[, B]).
     if (B == 1) {
         cur = ggml_reshape_2d(ctx, attn, hp.n_embd, N);
@@ -812,7 +821,7 @@ ggml_tensor * build_llama_block(ggml_context * ctx, ggml_cgraph * gf,
     }
 
     // O-proj + residual.
-    cur = ggml_mul_mat(ctx, l.wo, cur);
+    cur = mtl_weight_mul_mat(ctx, m.backend, l.wo, cur);
     cur = ggml_add(ctx, cur, inpL);
 
     // MLP (SwiGLU) with pre-norm + residual.
@@ -832,10 +841,10 @@ ggml_tensor * build_llama_block(ggml_context * ctx, ggml_cgraph * gf,
     // two ops so CPU + non-Metal backends get the same shape.
     ggml_tensor * inpFF = cur;
     ggml_tensor * norm2 = ggml_mul(ctx, ggml_rms_norm(ctx, cur, hp.eps), l.ln_mlp_g);
-    ggml_tensor * gate = ggml_mul_mat(ctx, l.mlp_gate, norm2);
-    ggml_tensor * up   = ggml_mul_mat(ctx, l.mlp_up,   norm2);
+    ggml_tensor * gate = mtl_weight_mul_mat(ctx, m.backend, l.mlp_gate, norm2);
+    ggml_tensor * up   = mtl_weight_mul_mat(ctx, m.backend, l.mlp_up,   norm2);
     ggml_tensor * mlp  = ggml_swiglu_split(ctx, gate, up);
-    ggml_tensor * down = ggml_mul_mat(ctx, l.mlp_down, mlp);
+    ggml_tensor * down = mtl_weight_mul_mat(ctx, m.backend, l.mlp_down, mlp);
     return ggml_add(ctx, inpFF, down);
 }
 
@@ -968,7 +977,7 @@ ggml_cgraph * build_prompt_graph_mtl(const chatterbox_model & model,
     ggml_tensor * last = ggml_view_2d(ctx, cur, hp.n_embd, 1,
                                       cur->nb[1],
                                       (size_t)(N - 1) * cur->nb[1]);
-    ggml_tensor * logits = ggml_mul_mat(ctx, model.speech_head, last);  // (n_speech_vocab, 1)
+    ggml_tensor * logits = mtl_weight_mul_mat(ctx, model.backend, model.speech_head, last);  // (n_speech_vocab, 1)
     ggml_set_name(logits, "logits");  ggml_set_output(logits);
     ggml_build_forward_expand(gf, logits);
 
@@ -1067,7 +1076,7 @@ ggml_cgraph * build_prompt_graph_mtl_b2(const chatterbox_model & model,
         cur->nb[1], cur->nb[2],
         (size_t)(N - 1) * cur->nb[1]);
     last = ggml_cont(ctx, last);  // mat_mul wants contiguous src1 over batches
-    ggml_tensor * logits = ggml_mul_mat(ctx, model.speech_head, last);
+    ggml_tensor * logits = mtl_weight_mul_mat(ctx, model.backend, model.speech_head, last);
     ggml_set_name(logits, "logits");  ggml_set_output(logits);
     ggml_build_forward_expand(gf, logits);
 
@@ -1119,7 +1128,7 @@ ggml_cgraph * build_step_graph_mtl_b2(const chatterbox_model & model,
     cur = ggml_mul(ctx, ggml_rms_norm(ctx, cur, hp.eps), model.norm_g);
 
     // cur ne=[n_embd, 1, 2] → speech_head @ cur → (n_speech_vocab, 1, 2)
-    ggml_tensor * logits = ggml_mul_mat(ctx, model.speech_head, cur);
+    ggml_tensor * logits = mtl_weight_mul_mat(ctx, model.backend, model.speech_head, cur);
     ggml_set_name(logits, "logits"); ggml_set_output(logits);
     ggml_build_forward_expand(gf, logits);
 
@@ -1683,7 +1692,8 @@ bool load_model_gguf_mtl(const std::string & path,
                          int requested_ctx,
                          int n_gpu_layers,
                          ggml_type kv_type,
-                         t3_load_measure * measure) {
+                         t3_load_measure * measure,
+                         const std::string & backend) {
     extern int g_log_verbose;
     if (measure) *measure = t3_load_measure{};
     // no_alloc=true: tmp_ctx carries tensor METADATA only; payloads are
@@ -1744,7 +1754,9 @@ bool load_model_gguf_mtl(const std::string & path,
 
         if (requested_ctx > 0) hp.n_ctx = std::min(hp.n_ctx, requested_ctx);
 
-        model.backend = init_backend(n_gpu_layers, &model.gpu_unsupported);
+        model.backend = init_backend(n_gpu_layers, &model.gpu_unsupported, backend);
+        t3_require_hexagon_weight_types(model, gguf_ctx, path);
+        ggml_backend_buffer_type_t weight_buft = ::tts_cpp::detail::weight_buffer_type(model.backend);
 
         const int64_t num_tensors = gguf_get_n_tensors(gguf_ctx);
         ggml_init_params p = { ggml_tensor_overhead() * (size_t)(num_tensors + 1), nullptr, true };
@@ -1773,11 +1785,10 @@ bool load_model_gguf_mtl(const std::string & path,
         model.rope_freq_factors = freq_factors;
 
         if (measure) {
-            measure->weights_bytes = ggml_backend_alloc_ctx_tensors_from_buft_size(
-                model.ctx_w, ggml_backend_get_default_buffer_type(model.backend));
+            measure->weights_bytes = ggml_backend_alloc_ctx_tensors_from_buft_size(model.ctx_w, weight_buft);
             t3_mark_externally_allocated(model.ctx_w);
         } else {
-            model.buffer_w = ggml_backend_alloc_ctx_tensors(model.ctx_w, model.backend);
+            model.buffer_w = ggml_backend_alloc_ctx_tensors_from_buft(model.ctx_w, weight_buft);
             if (!model.buffer_w) {
                 throw std::runtime_error("load_model_gguf_mtl: ggml_backend_alloc_ctx_tensors failed for "
                                          "weights buffer (backend out of memory?)");
@@ -1945,11 +1956,10 @@ bool load_model_gguf_mtl(const std::string & path,
                 // Size the stack instead of allocating; the pack loop below
                 // reads weight data, so the measure path skips it (there is
                 // no buffer to register either).
-                measure->stack_bytes = ggml_backend_alloc_ctx_tensors_from_buft_size(
-                    model.ctx_stack, ggml_backend_get_default_buffer_type(model.backend));
+                measure->stack_bytes = ggml_backend_alloc_ctx_tensors_from_buft_size(model.ctx_stack, weight_buft);
                 t3_mark_externally_allocated(model.ctx_stack);
             } else {
-            model.buffer_stack = ggml_backend_alloc_ctx_tensors(model.ctx_stack, model.backend);
+            model.buffer_stack = ggml_backend_alloc_ctx_tensors_from_buft(model.ctx_stack, weight_buft);
             if (!model.buffer_stack) {
                 throw std::runtime_error("load_model_gguf_mtl: ggml_backend_alloc_ctx_tensors failed for "
                                          "stacked-weights buffer (backend out of memory?)");

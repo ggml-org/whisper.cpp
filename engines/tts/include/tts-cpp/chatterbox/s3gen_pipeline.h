@@ -218,6 +218,13 @@ struct s3gen_synthesize_opts {
     // cancel_flag so a single Engine::cancel() reaches both the T3
     // decode loop and the S3Gen + HiFT path.
     const std::atomic<bool> * cancel_flag       = nullptr;
+
+    // Explicit device: "cpu", "opencl", "hexagon" (the Snapdragon HTP0 NPU) or
+    // an exact ggml device name.  Overrides n_gpu_layers with no fallback, so
+    // synthesis fails when the device is missing.  Empty or "auto" keeps the
+    // n_gpu_layers walk, which never picks Hexagon.  Kept last so existing
+    // positional initializers stay valid.
+    std::string backend;
 };
 
 inline float resolve_s3gen_cfg_rate(float caller_cfg_rate, float model_cfg_rate) {
@@ -269,7 +276,11 @@ TTS_CPP_API int s3gen_synthesize_to_wav(
 // spike, not a crash).  Bracket direct synthesize_to_wav usage with
 // an explicit s3gen_preload / s3gen_unload pair when running alongside
 // chatterbox::Engine.
-TTS_CPP_API int s3gen_preload(const std::string & s3gen_gguf_path, int n_gpu_layers);
+//
+// `backend` selects the device the same way s3gen_synthesize_opts::backend
+// does; preload and synthesis must pass the same value to share the cache.
+TTS_CPP_API int s3gen_preload(const std::string & s3gen_gguf_path, int n_gpu_layers,
+                              const std::string & backend = {});
 
 // Release one reference to the internal S3Gen cache (weights + backend
 // + allocator).  Decrements the refcount established by s3gen_preload;

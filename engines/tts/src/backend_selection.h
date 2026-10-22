@@ -25,7 +25,10 @@
 
 #include "ggml-backend.h"
 
+#include <cstdint>
 #include <string>
+
+struct gguf_context;
 
 namespace tts_cpp::detail {
 
@@ -127,6 +130,14 @@ ggml_backend_t init_requested_backend(const std::string & requested,
 std::string dsp_library_path_with(const std::string & dir, const char * current);
 
 ggml_backend_buffer_type_t weight_buffer_type(ggml_backend_t backend);
+
+// The weight types whose products HTP runs (I32 covers index tables).  An
+// engine refuses a GGUF holding any other type on Hexagon rather than quietly
+// running those products on the CPU.
+bool hexagon_runs_weight_type(ggml_type type);
+
+// Index of the first tensor in `g` whose type Hexagon cannot run, or -1.
+int64_t first_tensor_hexagon_cannot_run(const gguf_context * g);
 
 bool backend_shares_host_memory(ggml_backend_t backend);
 

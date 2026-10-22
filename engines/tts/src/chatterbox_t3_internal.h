@@ -27,6 +27,8 @@
 
 #include "sched_dispatch.h"
 
+struct gguf_context;
+
 namespace tts_cpp::chatterbox::detail {
 
 constexpr int CHBX_MAX_NODES = 8192;
@@ -312,7 +314,17 @@ struct chatterbox_sampling_params {
     float   cfg_weight     = 0.0f;
 };
 
-ggml_backend_t init_backend(int n_gpu_layers, bool * out_gpu_unsupported = nullptr);
+// `backend` names an explicit device ("cpu", "opencl", "hexagon" or an exact
+// ggml device name); it overrides n_gpu_layers and throws when unavailable.
+// Empty or "auto" keeps the n_gpu_layers walk.
+ggml_backend_t init_backend(int n_gpu_layers, bool * out_gpu_unsupported = nullptr,
+                            const std::string & backend = {});
+
+// Throws when `model.backend` is Hexagon and the T3 GGUF holds a weight type
+// HTP cannot multiply (see tts_cpp::detail::hexagon_runs_weight_type), freeing
+// that backend first.
+void t3_require_hexagon_weight_types(chatterbox_model & model, const gguf_context * g,
+                                     const std::string & path);
 
 // Dual-path dispatch shared by the Turbo (main.cpp) and MTL (t3_mtl.cpp)
 // eval functions; implemented in main.cpp on top of src/sched_dispatch.h.
@@ -365,7 +377,8 @@ bool load_model_gguf(
     int                 requested_ctx,
     int                 n_gpu_layers,
     ggml_type           kv_type = GGML_TYPE_F32,
-    t3_load_measure *   measure = nullptr);
+    t3_load_measure *   measure = nullptr,
+    const std::string & backend = {});
 
 // Price the T3 compute arena for one synthesis: the prompt graph at
 // n_text_tokens and the deepest decode-step graph at n_past, through the
@@ -434,13 +447,19 @@ bool compute_speech_tokens_native(
 
 bool validate_reference_audio(const std::string & path);
 
+// Backend for the reference-audio frontend (S3TokenizerV2, CAMPPlus): the T3
+// backend, except nullptr (their own CPU backend) when T3 runs on Hexagon,
+// whose graphs these one-time stages were never validated on.
+ggml_backend_t voice_frontend_backend(ggml_backend_t t3_backend);
+
 bool load_model_gguf_mtl(
     const std::string & path,
     chatterbox_model &  model,
     int                 requested_ctx,
     int                 n_gpu_layers,
     ggml_type           kv_type = GGML_TYPE_F32,
-    t3_load_measure *   measure = nullptr);
+    t3_load_measure *   measure = nullptr,
+    const std::string & backend = {});
 
 bool eval_prompt_mtl(
     const chatterbox_model &     model,

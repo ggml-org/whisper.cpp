@@ -2,8 +2,13 @@
 
 #include "test_env_portable.h"
 
+#include "ggml.h"
+#include "gguf.h"
+
 #include <cstdio>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -100,12 +105,42 @@ void check_requested_init() {
           "a request for a missing device must return no backend");
 }
 
+int64_t first_unrunnable_of(const std::vector<ggml_type> & types) {
+    ggml_init_params params = { ggml_tensor_overhead() * types.size(), nullptr, /*no_alloc=*/true };
+    ggml_context * ctx = ggml_init(params);
+    gguf_context * g = gguf_init_empty();
+    for (size_t i = 0; i < types.size(); ++i) {
+        ggml_tensor * t = ggml_new_tensor_1d(ctx, types[i], 32);
+        ggml_set_name(t, ("t" + std::to_string(i)).c_str());
+        gguf_add_tensor(g, t);
+    }
+    const int64_t bad = tts_cpp::detail::first_tensor_hexagon_cannot_run(g);
+    gguf_free(g);
+    ggml_free(ctx);
+    return bad;
+}
+
+void check_hexagon_weight_types() {
+    using tts_cpp::detail::hexagon_runs_weight_type;
+    for (ggml_type type : { GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, GGML_TYPE_I32 }) {
+        check(hexagon_runs_weight_type(type), "Hexagon must accept its validated weight types");
+    }
+    for (ggml_type type : { GGML_TYPE_BF16, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1 }) {
+        check(!hexagon_runs_weight_type(type), "Hexagon must refuse weight types it was not validated on");
+    }
+    check(first_unrunnable_of({ GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_I32 }) == -1,
+          "a GGUF of runnable types must pass the Hexagon scan");
+    check(first_unrunnable_of({ GGML_TYPE_F16, GGML_TYPE_Q5_0, GGML_TYPE_BF16 }) == 1,
+          "the Hexagon scan must name the first unrunnable tensor");
+}
+
 }
 
 int main() {
     check_backend_requests();
     check_dsp_library_path();
     check_requested_init();
+    check_hexagon_weight_types();
 
     using tts_cpp::detail::GpuBackendRequirement;
     using tts_cpp::detail::gpu_backend_satisfies_requirement;

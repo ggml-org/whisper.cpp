@@ -59,6 +59,7 @@ struct s3gen_fit_measure {
 // Returns false with `error` set when the model is unreadable or a graph
 // cannot be priced.
 bool s3gen_measure_fit(const std::string & gguf_path, int n_gpu_layers,
+                       const std::string & backend,
                        int n_speech_tokens, s3gen_fit_measure & out,
                        std::string * error);
 

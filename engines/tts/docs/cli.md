@@ -414,7 +414,8 @@ inference cost (well under real-time on any GPU backend).
 - `--n-gpu-layers N` — move layers to the GPU backend when built with
   `-DGGML_METAL=ON` / `-DGGML_CUDA=ON` / `-DGGML_VULKAN=ON`.  Pass `99`
   (or any large number) to move everything.
-- `--backend NAME` (`supertonic-cli`, `supertonic-bench`,
+- `--backend NAME` (`tts-cli` for Chatterbox, `chatterbox-fit-params`,
+  `supertonic-cli`, `supertonic-bench`,
   `supertonic-fit-params`, `parler-cli`, `parler-bench`,
   `parler-fit-params`, `cosyvoice-cli`, `cosyvoice-bench`,
   `cosyvoice-fit-params`, and `moss-cli` in every mode) — run on

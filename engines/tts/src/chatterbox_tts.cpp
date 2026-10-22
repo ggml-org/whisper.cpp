@@ -23,6 +23,7 @@
 
 #include "backend_selection.h"
 #include "backend_util.h"
+#include "conv_columns.h"
 #include "chatterbox_fit_internal.h"
 #include "fit_price.h"
 #include "fit_util.h"
@@ -128,8 +129,8 @@ static constexpr int MAX_TOKEN_MEL_RATIO = 16;
 struct model_ctx {
     ggml_backend_t backend = nullptr;
     // Scheduler bundle [backend, CPU-last] (sched_dispatch.h) routing ops the
-    // GPU backend can't run (GGML_OP_CONV_TRANSPOSE_1D in the HiFT vocoder) to
-    // CPU instead of asserting; stays a single-backend pass-through
+    // backend can't run (e.g. GGML_OP_CONV_TRANSPOSE_1D in the HiFT vocoder on
+    // OpenCL/Vulkan) to CPU instead of asserting; stays a single-backend pass-through
     // (cpu_backend null) when the primary is the CPU.  Held through a
     // unique_ptr so model_ctx stays move-constructible (it is moved into the
     // process-wide cache via make_unique<model_ctx>(load_s3gen_gguf(...)))
@@ -171,8 +172,8 @@ static void s3gen_sched_prepare(const model_ctx & m, ggml_cgraph * gf) {
         throw std::runtime_error("s3gen_sched_prepare: op writing a pre-allocated buffer "
                                  "is unsupported by every backend; scheduler fallback impossible");
     }
-    // graph_size matches the HiFT graph's ggml_new_graph_custom capacity (it
-    // is the only graph routed through sched, and the largest S3Gen graph).
+    // graph_size matches the HiFT graph's ggml_new_graph_custom capacity, the
+    // largest S3Gen graph.
     // ensure() marks buffer_w USAGE_WEIGHTS and creates the backends on first
     // use, guarded by its null check — this replaces the previous call_once
     // (creation-only guard; concurrent synthesis on one model_ctx was never
@@ -196,7 +197,76 @@ static void s3gen_sched_compute(const model_ctx & m, ggml_cgraph * gf) {
     }
 }
 
-static ggml_backend_t s3gen_init_backend(int n_gpu_layers, bool verbose) {
+// How an S3Gen stage picks between the direct path (a cached gallocr, so a
+// same-shape graph is replayed) and the [backend, CPU] scheduler.  HiFT always
+// asks the backend about every op: OpenCL and Vulkan lack CONV_TRANSPOSE_1D.
+// The other stages stay direct on the backends they were validated on --
+// ggml-opencl declines flash attention on Adreno by policy although its kernel
+// runs the CFM, and walking there would move the CFM attention to the CPU
+// (2.5x slower) -- except on Hexagon, whose direct path aborts on an op it
+// cannot run and which reports support per shape (flash attention past its
+// VTCM budget).  TTS_CPP_FORCE_SCHED sends every stage through the scheduler.
+enum class s3gen_dispatch { validated_direct, op_walk };
+
+static bool s3gen_runs_direct(const model_ctx & m, const ggml_cgraph * gf, s3gen_dispatch dispatch) {
+    if (::tts_cpp::detail::sched_force_enabled()) return false;
+    if (dispatch == s3gen_dispatch::validated_direct && !::tts_cpp::detail::backend_is_hexagon(m.backend)) {
+        return true;
+    }
+    return ::tts_cpp::detail::graph_fully_supported(m.backend, gf);
+}
+
+// Scheduler allocation rewrites node->src[], so the scheduler path leaves
+// `allocr` null and the caller rebuilds the graph on its next call; a cached
+// graph is replayed only on the direct path, by the gallocr that placed it
+// (TTS_CPP_FORCE_SCHED toggles between calls).  `direct` receives the path
+// when the graph is replayed, so a call walks the graph's ops once.
+static bool s3gen_graph_reusable(const model_ctx & m, const ggml_cgraph * gf, ggml_gallocr_t allocr,
+                                 s3gen_dispatch dispatch, bool & direct) {
+    direct = allocr != nullptr && gf != nullptr && s3gen_runs_direct(m, gf, dispatch);
+    return direct;
+}
+
+static void s3gen_alloc_graph(const model_ctx & m, ggml_cgraph * gf, ggml_gallocr_t & allocr,
+                              const char * stage, bool direct) {
+    if (!direct) {
+        if (allocr) { ggml_gallocr_free(allocr); allocr = nullptr; }
+        s3gen_sched_prepare(m, gf);
+        return;
+    }
+    if (!allocr) {
+        allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
+        ggml_gallocr_reserve(allocr, gf);
+    }
+    if (!ggml_gallocr_alloc_graph(allocr, gf)) {
+        throw std::runtime_error(std::string("s3gen ") + stage + ": graph allocation failed");
+    }
+}
+
+static uint64_t s3gen_price_direct(const model_ctx & m, ggml_cgraph * gf) {
+    ggml_gallocr_t pricer = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
+    if (!pricer) throw std::runtime_error("s3gen_measure_fit: gallocr_new failed");
+    size_t size = 0;
+    ggml_gallocr_reserve_n_size(pricer, gf, nullptr, nullptr, &size);
+    ggml_gallocr_free(pricer);
+    return size;
+}
+
+static void s3gen_compute_graph(const model_ctx & m, ggml_cgraph * gf, bool direct) {
+    if (direct) {
+        compute(m.backend, gf);
+    } else {
+        s3gen_sched_compute(m, gf);
+    }
+}
+
+static ggml_backend_t s3gen_init_backend(int n_gpu_layers, const std::string & backend, bool verbose) {
+    if (!::tts_cpp::detail::backend_request_is_auto(backend)) {
+        if (ggml_backend_t b = ::tts_cpp::detail::init_requested_backend(backend, verbose, "s3gen")) {
+            return b;
+        }
+        throw std::runtime_error("s3gen_init_backend: requested backend '" + backend + "' is unavailable");
+    }
     // GPU cascade is centralised in backend_selection.cpp's
     // `init_gpu_backend` (Adreno 700+ -> OpenCL, every other GPU ->
     // Vulkan/Metal/CUDA/Mali, with Adreno 6xx OpenCL force-skipped).
@@ -214,7 +284,7 @@ static ggml_backend_t s3gen_init_backend(int n_gpu_layers, bool verbose) {
 
 // Process-wide cache of the loaded S3Gen GGUF so repeated calls (streaming
 // or server mode) pay the ~700 ms tensor-load cost only once.  Keyed on
-// (path, n_gpu_layers) — switching backend invalidates the cache.
+// (path, n_gpu_layers, backend) — switching backend invalidates the cache.
 //
 // Thread-safety: simple mutex around load/lookup.  The returned pointer
 // stays alive for the lifetime of the process (we never evict), which
@@ -224,7 +294,8 @@ static ggml_backend_t s3gen_init_backend(int n_gpu_layers, bool verbose) {
 // buffer is SIZED instead of allocated, tensors come back marked externally
 // allocated (dummy non-null data) for size-only graph pricing, and no tensor
 // data is read.  See include/tts-cpp/chatterbox/fit.h.
-static model_ctx load_s3gen_gguf(const std::string & path, int n_gpu_layers, bool verbose,
+static model_ctx load_s3gen_gguf(const std::string & path, int n_gpu_layers,
+                                 const std::string & backend, bool verbose,
                                  size_t * measure_bytes = nullptr);
 
 // Tears down every per-synth host-side cache before ggml_backend_free
@@ -237,7 +308,12 @@ static model_ctx load_s3gen_gguf(const std::string & path, int n_gpu_layers, boo
 static void s3gen_release_synth_caches();
 
 namespace {
-struct s3gen_cache_entry { std::string path; int gpu = 0; std::unique_ptr<model_ctx> m; };
+struct s3gen_cache_entry {
+    std::string path;
+    int gpu = 0;
+    std::string backend;
+    std::unique_ptr<model_ctx> m;
+};
 static std::mutex                            g_s3gen_cache_mu;
 static std::unique_ptr<s3gen_cache_entry>    g_s3gen_cache_entry;
 static double                                g_s3gen_cache_last_load_ms = 0.0;
@@ -298,12 +374,14 @@ static void s3gen_model_cache_release() {
     g_s3gen_cache_entry.reset();
 }
 
-static model_ctx * s3gen_model_cache_get(const std::string & path, int n_gpu_layers, bool verbose) {
+static model_ctx * s3gen_model_cache_get(const std::string & path, int n_gpu_layers,
+                                         const std::string & backend, bool verbose) {
     {
         std::lock_guard<std::mutex> lk(g_s3gen_cache_mu);
         if (g_s3gen_cache_entry &&
             g_s3gen_cache_entry->path == path &&
-            g_s3gen_cache_entry->gpu  == n_gpu_layers) {
+            g_s3gen_cache_entry->gpu  == n_gpu_layers &&
+            g_s3gen_cache_entry->backend == backend) {
             if (verbose) {
                 fprintf(stderr, "  %zu tensors (cached — skip GGUF load)\n",
                         g_s3gen_cache_entry->m->tensors.size());
@@ -312,7 +390,7 @@ static model_ctx * s3gen_model_cache_get(const std::string & path, int n_gpu_lay
             return g_s3gen_cache_entry->m.get();
         }
     }
-    // Backend swap (different path or n_gpu_layers).  Tear down every
+    // Backend swap (different path, n_gpu_layers or backend).  Tear down every
     // persistent cache against the OLD backend before freeing it, then
     // drop the s3gen_cache_entry.  Same reasoning as
     // s3gen_model_cache_release.
@@ -321,11 +399,11 @@ static model_ctx * s3gen_model_cache_get(const std::string & path, int n_gpu_lay
     }
     if (verbose) fprintf(stderr, "Loading %s\n", path.c_str());
     double t0 = now_ms();
-    auto m = std::make_unique<model_ctx>(load_s3gen_gguf(path, n_gpu_layers, verbose));
+    auto m = std::make_unique<model_ctx>(load_s3gen_gguf(path, n_gpu_layers, backend, verbose));
     g_s3gen_cache_last_load_ms = now_ms() - t0;
     if (verbose) fprintf(stderr, "  %zu tensors loaded (%.1f ms)\n", m->tensors.size(), g_s3gen_cache_last_load_ms);
     g_s3gen_cache_entry = std::make_unique<s3gen_cache_entry>(
-        s3gen_cache_entry{path, n_gpu_layers, std::move(m)});
+        s3gen_cache_entry{path, n_gpu_layers, backend, std::move(m)});
 
     // Register the release on first insertion.  atexit() handlers run in
     // LIFO and execute before any static destructors in DSOs loaded *after*
@@ -341,7 +419,8 @@ static model_ctx * s3gen_model_cache_get(const std::string & path, int n_gpu_lay
 
 static double s3gen_model_cache_last_load_ms() { return g_s3gen_cache_last_load_ms; }
 
-static model_ctx load_s3gen_gguf(const std::string & path, int n_gpu_layers, bool verbose,
+static model_ctx load_s3gen_gguf(const std::string & path, int n_gpu_layers,
+                                 const std::string & backend, bool verbose,
                                  size_t * measure_bytes) {
     model_ctx m;
     // no_alloc=true: tmp_ctx carries tensor METADATA only; payloads are
@@ -367,7 +446,25 @@ static model_ctx load_s3gen_gguf(const std::string & path, int n_gpu_layers, boo
             throw std::runtime_error("s3gen GGUF has an invalid token_mel_ratio or speech_vocab_size: " + path);
         }
     }
-    m.backend = s3gen_init_backend(n_gpu_layers, verbose);
+    try {
+        m.backend = s3gen_init_backend(n_gpu_layers, backend, verbose);
+    } catch (...) {
+        gguf_free(g);
+        ggml_free(tmp_ctx);
+        throw;
+    }
+    if (::tts_cpp::detail::backend_is_hexagon(m.backend)) {
+        const int64_t bad = ::tts_cpp::detail::first_tensor_hexagon_cannot_run(g);
+        if (bad >= 0) {
+            const std::string what = std::string(gguf_get_tensor_name(g, bad)) + " (" +
+                                     ggml_type_name(gguf_get_tensor_type(g, bad)) + ")";
+            gguf_free(g);
+            ggml_free(tmp_ctx);
+            ggml_backend_free(m.backend);
+            throw std::runtime_error("s3gen: Hexagon cannot run " + what + " in " + path +
+                                     "; use a q8_0, q4_0, f16 or f32 GGUF");
+        }
+    }
     m.is_mali = backend_is_arm_mali(m.backend);
     if (verbose && m.is_mali)
         fprintf(stderr, "s3gen: ARM Mali Vulkan detected -> CFM uses unfused attention\n");
@@ -381,9 +478,9 @@ static model_ctx load_s3gen_gguf(const std::string & path, int n_gpu_layers, boo
         ggml_set_name(dst, name);
         m.tensors[name] = dst;
     }
+    ggml_backend_buffer_type_t weight_buft = ::tts_cpp::detail::weight_buffer_type(m.backend);
     if (measure_bytes) {
-        *measure_bytes = ggml_backend_alloc_ctx_tensors_from_buft_size(
-            m.ctx_w, ggml_backend_get_default_buffer_type(m.backend));
+        *measure_bytes = ggml_backend_alloc_ctx_tensors_from_buft_size(m.ctx_w, weight_buft);
         // Same trick ggml's own measure paths use: mark every weight tensor
         // externally allocated so size-only graph pricing excludes it.  The
         // model must never have tensor data read or written after this.
@@ -394,7 +491,7 @@ static model_ctx load_s3gen_gguf(const std::string & path, int n_gpu_layers, boo
             }
         }
     } else {
-    m.buffer_w = ggml_backend_alloc_ctx_tensors(m.ctx_w, m.backend);
+    m.buffer_w = ggml_backend_alloc_ctx_tensors_from_buft(m.ctx_w, weight_buft);
     {
         auto fail = [&](const std::string & what) {
             gguf_free(g);
@@ -462,10 +559,22 @@ static ggml_tensor * find_tensor(const model_ctx & m, const std::string & name) 
     return it->second;
 }
 
-// F32 conv1d via im2col + mul_mat.  kernel ne=[K, IC, OC]
+// HTP has no fast F32 im2col and HMX multiplies in F16 regardless, so a
+// Hexagon-resident kernel takes F16 columns: half the im2col traffic at the
+// same product precision.  A kernel without a buffer (a graph input, or a
+// metadata-only fit model) keeps F32 columns.
+static ggml_type conv_column_type(const ggml_tensor * kernel) {
+    const bool on_hexagon = kernel->buffer &&
+        ::tts_cpp::detail::reg_name_is_hexagon(
+            ::tts_cpp::detail::buft_reg_name(ggml_backend_buffer_get_type(kernel->buffer)));
+    return on_hexagon ? GGML_TYPE_F16 : GGML_TYPE_F32;
+}
+
+// conv1d via im2col + mul_mat.  kernel ne=[K, IC, OC]
 static ggml_tensor * conv1d_f32(ggml_context * ctx, ggml_tensor * kernel, ggml_tensor * input,
                                 int stride, int padding, int dilation) {
-    ggml_tensor * im2col = ggml_im2col(ctx, kernel, input, stride, 0, padding, 0, dilation, 0, false, GGML_TYPE_F32);
+    ggml_tensor * im2col = ggml_im2col(ctx, kernel, input, stride, 0, padding, 0, dilation, 0, false,
+                                       conv_column_type(kernel));
     ggml_tensor * result = ggml_mul_mat(ctx,
         ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1]),
         ggml_reshape_2d(ctx, kernel, kernel->ne[0] * kernel->ne[1], kernel->ne[2]));
@@ -1089,16 +1198,14 @@ static std::vector<float> run_encoder(const model_ctx & m, const std::vector<flo
     const int T2 = m.token_mel_ratio * T;
 
     graph_cache & cache = g_encoder_graph_cache;
-    if (cache.key != (int64_t) T || cache.ctx == nullptr) {
+    bool direct = false;
+    if (cache.key != (int64_t) T ||
+        !s3gen_graph_reusable(m, cache.gf, cache.allocr, s3gen_dispatch::validated_direct, direct)) {
         build_encoder_graph_nodes(cache, m, T, D);
-        cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
-        ggml_gallocr_reserve(cache.allocr, cache.gf);
+        direct = s3gen_runs_direct(m, cache.gf, s3gen_dispatch::validated_direct);
     }
     ggml_cgraph * gf = cache.gf;
-
-    if (!ggml_gallocr_alloc_graph(cache.allocr, gf)) {
-        throw std::runtime_error("s3gen encoder: graph allocation failed");
-    }
+    s3gen_alloc_graph(m, gf, cache.allocr, "encoder", direct);
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "x_in"), input_embed.data(), 0, input_embed.size()*sizeof(float));
 
     // Cached positional embeddings — same (T, D) keys reused across every
@@ -1109,7 +1216,7 @@ static std::vector<float> run_encoder(const model_ctx & m, const std::vector<flo
     const std::vector<float> & pe2 = cached_pos_emb(T2, D);
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "pos1"), pe1.data(), 0, pe1.size()*sizeof(float));
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "pos2"), pe2.data(), 0, pe2.size()*sizeof(float));
-    compute(m.backend, gf);
+    s3gen_compute_graph(m, gf, direct);
 
     ggml_tensor * mu_out = ggml_graph_get_tensor(gf, "mu");
     std::vector<float> mu_data(ggml_nelements(mu_out));
@@ -1453,7 +1560,9 @@ static std::vector<float> compute_time_mlp(const model_ctx & m, float t_val) {
 
     std::lock_guard<std::mutex> lk(g_time_mlp_graph_mu);
     time_mlp_cache & cache = g_time_mlp_graph_caches[m.backend];
-    if (cache.ctx == nullptr || cache.backend != m.backend) {
+    bool direct = false;
+    if (cache.backend != m.backend ||
+        !s3gen_graph_reusable(m, cache.gf, cache.allocr, s3gen_dispatch::validated_direct, direct)) {
         if (cache.allocr) { ggml_gallocr_free(cache.allocr); cache.allocr = nullptr; }
         if (cache.ctx)    { ggml_free(cache.ctx); cache.ctx = nullptr; }
         cache.buf.assign(4 * 1024 * 1024, 0);
@@ -1473,17 +1582,13 @@ static std::vector<float> compute_time_mlp(const model_ctx & m, float t_val) {
         ggml_set_name(y, "out"); ggml_set_output(y);
         cache.y_out = y;
         ggml_build_forward_expand(cache.gf, cache.y_out);
-
-        cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
-        ggml_gallocr_reserve(cache.allocr, cache.gf);
         cache.backend = m.backend;
+        direct = s3gen_runs_direct(m, cache.gf, s3gen_dispatch::validated_direct);
     }
 
-    if (!ggml_gallocr_alloc_graph(cache.allocr, cache.gf)) {
-        throw std::runtime_error("s3gen time MLP: graph allocation failed");
-    }
+    s3gen_alloc_graph(m, cache.gf, cache.allocr, "time MLP", direct);
     ggml_backend_tensor_set(cache.x_in, t_sin.data(), 0, t_sin.size() * sizeof(float));
-    compute(m.backend, cache.gf);
+    s3gen_compute_graph(m, cache.gf, direct);
 
     std::vector<float> out(ggml_nelements(cache.y_out));
     ggml_backend_tensor_get(cache.y_out, out.data(), 0, ggml_nbytes(cache.y_out));
@@ -1511,20 +1616,22 @@ static std::vector<float> compute_time_mixed(const model_ctx & m,
     ggml_set_name(mixed, "out"); ggml_set_output(mixed);
     ggml_build_forward_expand(gf, mixed);
 
-    ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
-    ggml_gallocr_reserve(allocr, gf);
-    if (!ggml_gallocr_alloc_graph(allocr, gf)) {
-        ggml_gallocr_free(allocr);
+    ggml_gallocr_t allocr = nullptr;
+    const bool direct = s3gen_runs_direct(m, gf, s3gen_dispatch::validated_direct);
+    try {
+        s3gen_alloc_graph(m, gf, allocr, "time mixer", direct);
+    } catch (...) {
+        if (allocr) ggml_gallocr_free(allocr);
         ggml_free(ctx);
-        throw std::runtime_error("s3gen time mixer: graph allocation failed");
+        throw;
     }
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "t_in"), t_mlp.data(), 0, t_mlp.size()*sizeof(float));
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "r_in"), r_mlp.data(), 0, r_mlp.size()*sizeof(float));
-    compute(m.backend, gf);
+    s3gen_compute_graph(m, gf, direct);
 
     std::vector<float> out(ggml_nelements(mixed));
     ggml_backend_tensor_get(mixed, out.data(), 0, ggml_nbytes(mixed));
-    ggml_gallocr_free(allocr);
+    if (allocr) ggml_gallocr_free(allocr);
     ggml_free(ctx);
     return out;
 }
@@ -1578,16 +1685,24 @@ static std::vector<float> compute_time_emb_cached(const model_ctx & m, float t_v
 // block earlier in this file (so they're in scope for run_encoder
 // and other users above).  See "CPU-side persistent caches".
 
+// HTP runs F32 flash attention on HVX; F16 K/V moves it onto HMX, 15x faster
+// on the 2306-frame CFM of a 36 s clip.  Its step-0 velocity error on F32
+// weights (max 0.27) is a twentieth of the q4_0 tier's own (docs/chatterbox.md).
+static bool cfm_attention_uses_f16_kv(const model_ctx & m, bool requested) {
+    return requested || ::tts_cpp::detail::backend_is_hexagon(m.backend);
+}
+
 // Single estimator forward: (x, mu, t_emb, spks, cond) -> dxdt
 // All shapes are numpy (80, T) or (80,) as given, flattened row-major.
 // Graph half of cfm_estimator_forward, shared with the fit projector
 // (s3gen_measure_fit).  Resets `cache` and rebuilds its ctx/graph for (T,
 // b2=false); the caller creates the gallocr (or prices without one).
 static void build_cfm_graph_nodes(cfm_estimator_cache & cache, const model_ctx & m,
-                                  int T, bool f16_kv_attn) {
+                                  int T, bool f16_kv_attn_requested) {
     const int MEL = 80, CH = 256, TIME_DIM = 1024;
     const int N_MID = 12, N_BLOCKS = 4;
     const bool use_unfused = m.is_mali && !chbx_force_cfm_fa();
+    const bool f16_kv_attn = cfm_attention_uses_f16_kv(m, f16_kv_attn_requested);
 
     if (cache.allocr) { ggml_gallocr_free(cache.allocr); cache.allocr = nullptr; }
     if (cache.ctx) { ggml_free(cache.ctx); cache.ctx = nullptr; }
@@ -1666,10 +1781,11 @@ static std::vector<float> cfm_estimator_forward(
     const std::vector<float> & cond,
     int T,
     bool f16_kv_attn) {
-    if (cache.T != T || cache.b2) {
+    bool direct = false;
+    if (cache.T != T || cache.b2 ||
+        !s3gen_graph_reusable(m, cache.gf, cache.allocr, s3gen_dispatch::validated_direct, direct)) {
         build_cfm_graph_nodes(cache, m, T, f16_kv_attn);
-        cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
-        ggml_gallocr_reserve(cache.allocr, cache.gf);
+        direct = s3gen_runs_direct(m, cache.gf, s3gen_dispatch::validated_direct);
     }
     ggml_cgraph * gf = cache.gf;
 
@@ -1686,15 +1802,13 @@ static std::vector<float> cfm_estimator_forward(
     // dispatch elsewhere in the pipeline (e.g. during T3→S3Gen transition)
     // so it overlaps with other host work, which is a bigger refactor.
 
-    if (!ggml_gallocr_alloc_graph(cache.allocr, gf)) {
-        throw std::runtime_error("s3gen CFM estimator: graph allocation failed");
-    }
+    s3gen_alloc_graph(m, gf, cache.allocr, "CFM estimator", direct);
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "x_in"), x.data(), 0, x.size()*sizeof(float));
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "mu_in"), mu.data(), 0, mu.size()*sizeof(float));
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "spks_in"), spks.data(), 0, spks.size()*sizeof(float));
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "cond_in"), cond.data(), 0, cond.size()*sizeof(float));
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "t_emb"), t_emb.data(), 0, t_emb.size()*sizeof(float));
-    compute(m.backend, gf);
+    s3gen_compute_graph(m, gf, direct);
 
     ggml_tensor * out_t = ggml_graph_get_tensor(gf, "out");
     std::vector<float> out_data(ggml_nelements(out_t));
@@ -1714,11 +1828,12 @@ static std::vector<float> cfm_estimator_forward(
 // Graph half of cfm_estimator_forward_b2 (batch=2 CFG), shared with the fit
 // projector.  Resets `cache` and rebuilds its ctx/graph for (T, b2=true).
 static void build_cfm_graph_nodes_b2(cfm_estimator_cache & cache, const model_ctx & m,
-                                     int T, bool f16_kv_attn) {
+                                     int T, bool f16_kv_attn_requested) {
     const int MEL = 80, CH = 256, TIME_DIM = 1024;
     const int N_MID = 12, N_BLOCKS = 4;
     const int B = 2;
     const bool use_unfused = m.is_mali && !chbx_force_cfm_fa();
+    const bool f16_kv_attn = cfm_attention_uses_f16_kv(m, f16_kv_attn_requested);
 
     if (cache.allocr) { ggml_gallocr_free(cache.allocr); cache.allocr = nullptr; }
     if (cache.ctx) { ggml_free(cache.ctx); cache.ctx = nullptr; }
@@ -1801,16 +1916,14 @@ static void cfm_estimator_forward_b2(
     bool f16_kv_attn) {
     const int MEL = 80, TIME_DIM = 1024;
 
-    if (cache.T != T || !cache.b2) {
+    bool direct = false;
+    if (cache.T != T || !cache.b2 ||
+        !s3gen_graph_reusable(m, cache.gf, cache.allocr, s3gen_dispatch::validated_direct, direct)) {
         build_cfm_graph_nodes_b2(cache, m, T, f16_kv_attn);
-        cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
-        ggml_gallocr_reserve(cache.allocr, cache.gf);
+        direct = s3gen_runs_direct(m, cache.gf, s3gen_dispatch::validated_direct);
     }
     ggml_cgraph * gf = cache.gf;
-
-    if (!ggml_gallocr_alloc_graph(cache.allocr, gf)) {
-        throw std::runtime_error("s3gen batched CFM estimator: graph allocation failed");
-    }
+    s3gen_alloc_graph(m, gf, cache.allocr, "batched CFM estimator", direct);
 
     // Stage inputs: cond slice [0, T*MEL), uncond slice [T*MEL, 2*T*MEL).
     const size_t one_tm = (size_t) T * MEL * sizeof(float);
@@ -1834,7 +1947,7 @@ static void cfm_estimator_forward_b2(
     ggml_backend_tensor_set(te_t,    t_emb_c.data(), 0 * one_td, one_td);
     ggml_backend_tensor_set(te_t,    t_emb_u.data(), 1 * one_td, one_td);
 
-    compute(m.backend, gf);
+    s3gen_compute_graph(m, gf, direct);
 
     ggml_tensor * out_t = ggml_graph_get_tensor(gf, "out");
     // out_t ne=[T, MEL, B=2], contiguous.  Read cond/uncond halves separately.
@@ -2060,18 +2173,16 @@ static void build_f0_graph_nodes(graph_cache & cache, const model_ctx & m, int T
 
 static std::vector<float> run_f0_predictor(const model_ctx & m, const std::vector<float> & mel, int T_mel) {
     graph_cache & cache = g_f0_graph_cache;
-    if (cache.key != (int64_t) T_mel || cache.ctx == nullptr) {
+    bool direct = false;
+    if (cache.key != (int64_t) T_mel ||
+        !s3gen_graph_reusable(m, cache.gf, cache.allocr, s3gen_dispatch::validated_direct, direct)) {
         build_f0_graph_nodes(cache, m, T_mel);
-        cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
-        ggml_gallocr_reserve(cache.allocr, cache.gf);
+        direct = s3gen_runs_direct(m, cache.gf, s3gen_dispatch::validated_direct);
     }
     ggml_cgraph * gf = cache.gf;
-
-    if (!ggml_gallocr_alloc_graph(cache.allocr, gf)) {
-        throw std::runtime_error("s3gen F0 predictor: graph allocation failed");
-    }
+    s3gen_alloc_graph(m, gf, cache.allocr, "F0 predictor", direct);
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "mel_in"), mel.data(), 0, mel.size()*sizeof(float));
-    compute(m.backend, gf);
+    s3gen_compute_graph(m, gf, direct);
     ggml_tensor * y_out = ggml_graph_get_tensor(gf, "out");
     std::vector<float> f0(T_mel);
     ggml_backend_tensor_get(y_out, f0.data(), 0, ggml_nbytes(y_out));
@@ -2162,20 +2273,18 @@ static std::vector<float> run_stft(const model_ctx & m, const std::vector<float>
     const std::vector<float> & kernel = cached_stft_kernel(n_fft);
 
     graph_cache & cache = g_stft_graph_cache;
-    if (cache.key != (int64_t) T_src || cache.ctx == nullptr) {
+    bool direct = false;
+    if (cache.key != (int64_t) T_src ||
+        !s3gen_graph_reusable(m, cache.gf, cache.allocr, s3gen_dispatch::validated_direct, direct)) {
         build_stft_graph_nodes(cache, m, T_src);
-        cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
-        ggml_gallocr_reserve(cache.allocr, cache.gf);
+        direct = s3gen_runs_direct(m, cache.gf, s3gen_dispatch::validated_direct);
     }
-
-    if (!ggml_gallocr_alloc_graph(cache.allocr, cache.gf)) {
-        throw std::runtime_error("s3gen STFT: graph allocation failed");
-    }
+    s3gen_alloc_graph(m, cache.gf, cache.allocr, "STFT", direct);
     ggml_backend_tensor_set(ggml_graph_get_tensor(cache.gf, "s"),
                             src.data(), 0, src.size() * sizeof(float));
     ggml_backend_tensor_set(ggml_graph_get_tensor(cache.gf, "k"),
                             kernel.data(), 0, kernel.size() * sizeof(float));
-    compute(m.backend, cache.gf);
+    s3gen_compute_graph(m, cache.gf, direct);
     ggml_tensor * spec = ggml_graph_get_tensor(cache.gf, "out");
     std::vector<float> out(ggml_nelements(spec));
     ggml_backend_tensor_get(spec, out.data(), 0, ggml_nbytes(spec));
@@ -2224,6 +2333,9 @@ static void build_hift_graph_nodes(graph_cache & cache, const model_ctx & m,
     }
     ggml_context * ctx = cache.ctx;
     ggml_cgraph * gf = cache.gf;
+    // HTP has no CONV_TRANSPOSE_1D; the columns form keeps the upsamplers and
+    // the iSTFT on the NPU instead of splitting the graph around the CPU.
+    const bool transposed_conv_columns = ::tts_cpp::detail::backend_is_hexagon(m.backend);
 
     ggml_tensor * mel_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, T_mel, MEL);
     ggml_set_name(mel_in, "mel_in"); ggml_set_input(mel_in);
@@ -2290,7 +2402,9 @@ static void build_hift_graph_nodes(graph_cache & cache, const model_ctx & m,
         ggml_tensor * uw = find_tensor(m, "hift/ups/" + std::to_string(i) + "/weight");
         ggml_tensor * ub = find_tensor(m, "hift/ups/" + std::to_string(i) + "/bias");
         int up_pad = (ups_ksizes[i] - ups_rates[i]) / 2;
-        x = conv_transpose_1d_f32(ctx, uw, x, ups_rates[i], up_pad);
+        x = transposed_conv_columns
+            ? ::tts_cpp::detail::conv_transpose_1d_columns(ctx, uw, x, ups_rates[i], up_pad)
+            : conv_transpose_1d_f32(ctx, uw, x, ups_rates[i], up_pad);
         x = ggml_add(ctx, x, ggml_reshape_2d(ctx, ub, 1, ups_ch[i]));
         if (i == 2) {
             ggml_tensor * xs = ggml_view_3d(ctx, x, 1, x->ne[1], x->ne[2], x->nb[1], x->nb[2], 1 * x->nb[0]);
@@ -2342,7 +2456,9 @@ static void build_hift_graph_nodes(graph_cache & cache, const model_ctx & m,
     ggml_tensor * ws_in = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, (int)ws_for_size.size(), 1);
     ggml_set_name(ws_in, "w_sum"); ggml_set_input(ws_in);
 
-    ggml_tensor * y = ggml_conv_transpose_1d(ctx, istft_k, spec, hop, 0, 1);
+    ggml_tensor * y = transposed_conv_columns
+        ? ::tts_cpp::detail::conv_transpose_1d_columns(ctx, istft_k, spec, hop, 0)
+        : ggml_conv_transpose_1d(ctx, istft_k, spec, hop, 0, 1);
     y = ggml_div(ctx, y, ws_in);
     int pad_amt = n_fft / 2;
     int L_wav = (int)ws_for_size.size() - n_fft;
@@ -2369,12 +2485,11 @@ static std::vector<float> run_hift_decode(const model_ctx & m,
 
     graph_cache & cache = g_hift_graph_cache;
     const int64_t cache_key = pack_hift_key(T_mel, T_stft);
-    // Reuse the same-shape HiFT graph only when the direct backend path owns a
-    // cached gallocator. The scheduler path leaves cache.allocr null because
-    // ggml_backend_sched_alloc_graph mutates node->src[] while inserting
-    // GPU<->CPU copies, so scheduler-routed calls must rebuild from a clean graph.
-    if (cache.key != cache_key || cache.ctx == nullptr || cache.allocr == nullptr) {
+    bool direct = false;
+    if (cache.key != cache_key ||
+        !s3gen_graph_reusable(m, cache.gf, cache.allocr, s3gen_dispatch::op_walk, direct)) {
         build_hift_graph_nodes(cache, m, T_mel, T_stft, /*measure=*/false);
+        direct = s3gen_runs_direct(m, cache.gf, s3gen_dispatch::op_walk);
     }
     ggml_cgraph * gf = cache.gf;
 
@@ -2384,32 +2499,11 @@ static std::vector<float> run_hift_decode(const model_ctx & m,
     const std::vector<float> & ik_data = cached_istft_kernel(n_fft);
     const std::vector<float> & ws_data = cached_window_sum(T_stft, n_fft, hop);
 
-    // Capability-gate the scheduler. The [GPU,CPU] ggml_backend_sched exists only
-    // to route CONV_TRANSPOSE_1D to CPU because ggml-opencl / ggml-vulkan lack that
-    // kernel. A backend that can run every op in this graph itself (Metal, CUDA,
-    // CPU) does not need the scheduler — and the scheduler's graph-split aborts on
-    // the iOS Metal driver — so run those directly on the primary backend (the
-    // pre-scheduler path). Only use the scheduler when the primary backend can't
-    // run some op. Generic: asks the actual backend about the actual graph, with
-    // no platform / backend-name hardcoding, so iOS Metal is not regressed by the
-    // Android-motivated routing.
-    //
-    // TTS_CPP_FORCE_SCHED is the direct-vs-sched A/B escape hatch; forcing is
-    // safe here because the sched path rebuilds the HiFT graph on every call
-    // (cache.allocr stays null -> build_graph above).
-    const bool primary_runs_all = !::tts_cpp::detail::sched_force_enabled() &&
-                                  ::tts_cpp::detail::graph_fully_supported(m.backend, gf);
-    if (primary_runs_all) {
-        if (!cache.allocr) {
-            cache.allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
-            ggml_gallocr_reserve(cache.allocr, gf);
-        }
-        if (!ggml_gallocr_alloc_graph(cache.allocr, gf)) {
-            throw std::runtime_error("s3gen HiFT: graph allocation failed");
-        }
-    } else {
-        s3gen_sched_prepare(m, gf);
-    }
+    // The scheduler path exists for CONV_TRANSPOSE_1D, which ggml-opencl and
+    // ggml-vulkan lack; backends that run the whole graph (Metal, CUDA, CPU,
+    // and Hexagon with its columns form) stay direct, which matters on the iOS
+    // Metal driver, where the scheduler's graph split aborts.
+    s3gen_alloc_graph(m, gf, cache.allocr, "HiFT", direct);
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "mel_in"),  mel.data(),    0, mel.size()*sizeof(float));
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "s_in"),    s_stft.data(), 0, s_stft.size()*sizeof(float));
     ggml_backend_tensor_set(ggml_graph_get_tensor(gf, "istft_k"), ik_data.data(),0, ik_data.size()*sizeof(float));
@@ -2436,11 +2530,7 @@ static std::vector<float> run_hift_decode(const model_ctx & m,
         ggml_backend_tensor_set(ggml_graph_get_tensor(gf, e.first.c_str()),
                                 inv.data(), 0, inv.size()*sizeof(float));
     }
-    if (primary_runs_all) {
-        compute(m.backend, gf);
-    } else {
-        s3gen_sched_compute(m, gf);
-    }
+    s3gen_compute_graph(m, gf, direct);
 
     ggml_tensor * y_trim_out = ggml_graph_get_tensor(gf, "wav");
     std::vector<float> wav(ggml_nelements(y_trim_out));
@@ -2644,9 +2734,9 @@ int s3gen_synthesize_to_wav(
 
     // Cache the loaded model across invocations so the streaming driver
     // pays the ~700 ms GGUF-load cost only once.  Keyed on (path,
-    // n_gpu_layers) so switching backends still works.  Verbose gates the
+    // n_gpu_layers, backend) so switching backends still works.  Verbose gates the
     // banner prints but the BENCH line always goes out for perf checks.
-    model_ctx & m = *s3gen_model_cache_get(gguf_path, opts.n_gpu_layers, verbose);
+    model_ctx & m = *s3gen_model_cache_get(gguf_path, opts.n_gpu_layers, opts.backend, verbose);
     {
         const double load_ms = s3gen_model_cache_last_load_ms();
         // Only emit the BENCH line on an actual GGUF load — on cache hits
@@ -3293,9 +3383,9 @@ int s3gen_synthesize_to_wav(
     return 0;
 }
 
-int s3gen_preload(const std::string & s3gen_gguf_path, int n_gpu_layers) {
+int s3gen_preload(const std::string & s3gen_gguf_path, int n_gpu_layers, const std::string & backend) {
     try {
-        (void)s3gen_model_cache_get(s3gen_gguf_path, n_gpu_layers, /*verbose=*/false);
+        (void)s3gen_model_cache_get(s3gen_gguf_path, n_gpu_layers, backend, /*verbose=*/false);
         g_s3gen_cache_refcount.fetch_add(1, std::memory_order_acq_rel);
         return 0;
     } catch (const std::exception & e) {
@@ -3332,6 +3422,7 @@ void s3gen_unload() {
 namespace tts_cpp::chatterbox::detail {
 
 bool s3gen_measure_fit(const std::string & gguf_path, int n_gpu_layers,
+                       const std::string & backend,
                        int n_speech_tokens, s3gen_fit_measure & out,
                        std::string * error) {
     using ::tts_cpp::fitutil::sat_add;
@@ -3345,7 +3436,7 @@ bool s3gen_measure_fit(const std::string & gguf_path, int n_gpu_layers,
         // buffer sized instead of allocated, tensors marked externally
         // allocated.  Local (never inserted into the process-wide cache).
         size_t weights = 0;
-        model_ctx m = load_s3gen_gguf(gguf_path, n_gpu_layers, /*verbose=*/false, &weights);
+        model_ctx m = load_s3gen_gguf(gguf_path, n_gpu_layers, backend, /*verbose=*/false, &weights);
         struct release {
             model_ctx & m;
             ~release() {
@@ -3377,26 +3468,34 @@ bool s3gen_measure_fit(const std::string & gguf_path, int n_gpu_layers,
         const int T_src  = out.T_mel * 480;   // 8*5*3 upsample * 4 token->sample
         const int T_stft = T_src / 4 + 1;     // hop 4, reflect-padded by n_fft/2
 
-        ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(m.backend);
-        auto price_gallocr = [&](ggml_cgraph * gf) -> uint64_t {
-            ggml_gallocr_t pricer = ggml_gallocr_new(buft);
-            if (!pricer) throw std::runtime_error("s3gen_measure_fit: gallocr_new failed");
-            size_t size = 0;
-            ggml_gallocr_reserve_n_size(pricer, gf, nullptr, nullptr, &size);
-            ggml_gallocr_free(pricer);
-            return size;
+        // Every stage prices through the path it runs on (s3gen_runs_direct): a
+        // direct stage keeps its own resident arena, so those sum; scheduler-
+        // routed stages share the model's one scheduler, which grows to the
+        // widest of them.
+        uint64_t direct_dev = 0, sched_dev = 0, sched_host = 0;
+        auto price_stage = [&](ggml_cgraph * gf, const char * stage, s3gen_dispatch dispatch) -> uint64_t {
+            if (s3gen_runs_direct(m, gf, dispatch)) {
+                const uint64_t bytes = s3gen_price_direct(m, gf);
+                direct_dev = sat_add(direct_dev, bytes);
+                return bytes;
+            }
+            ::tts_cpp::detail::fit_graph_price price;
+            if (!::tts_cpp::detail::fit_price_graph(m.backend, gf, /*sched_graph_size=*/131072, price)) {
+                throw std::runtime_error(std::string("s3gen_measure_fit: ") + stage + " graph pricing failed");
+            }
+            if (price.used_sched) {
+                sched_dev  = std::max<uint64_t>(sched_dev, price.device_bytes);
+                sched_host = std::max<uint64_t>(sched_host, price.host_bytes);
+            } else {
+                direct_dev = sat_add(direct_dev, price.device_bytes);
+            }
+            return price.device_bytes;
         };
 
-        // Every stage cache below stays resident once its stage has run, so
-        // the five arenas sum.  Encoder / CFM / F0 / STFT run on the direct
-        // gallocr path (compute()); HiFT dual-paths through the scheduler
-        // when the backend cannot run some op, so it is priced accordingly.
-        uint64_t dev = 0;
         {
             graph_cache c;
             build_encoder_graph_nodes(c, m, out.n_total, /*D=*/512);
-            out.encoder_bytes = price_gallocr(c.gf);
-            dev = sat_add(dev, out.encoder_bytes);
+            out.encoder_bytes = price_stage(c.gf, "encoder", s3gen_dispatch::validated_direct);
             out.host_arena_bytes = sat_add(out.host_arena_bytes, c.buf.size());
             c.destroy();
         }
@@ -3411,43 +3510,33 @@ bool s3gen_measure_fit(const std::string & gguf_path, int n_gpu_layers,
             } else {
                 build_cfm_graph_nodes(c, m, out.T_mu, /*f16_kv_attn=*/false);
             }
-            out.cfm_bytes = price_gallocr(c.gf);
-            dev = sat_add(dev, out.cfm_bytes);
+            out.cfm_bytes = price_stage(c.gf, "CFM", s3gen_dispatch::validated_direct);
             out.host_arena_bytes = sat_add(out.host_arena_bytes, c.buf.size());
             c.destroy();
         }
         {
             graph_cache c;
             build_f0_graph_nodes(c, m, out.T_mel);
-            out.f0_bytes = price_gallocr(c.gf);
-            dev = sat_add(dev, out.f0_bytes);
+            out.f0_bytes = price_stage(c.gf, "F0", s3gen_dispatch::validated_direct);
             out.host_arena_bytes = sat_add(out.host_arena_bytes, c.buf.size());
             c.destroy();
         }
         {
             graph_cache c;
             build_stft_graph_nodes(c, m, T_src);
-            out.stft_bytes = price_gallocr(c.gf);
-            dev = sat_add(dev, out.stft_bytes);
+            out.stft_bytes = price_stage(c.gf, "STFT", s3gen_dispatch::validated_direct);
             out.host_arena_bytes = sat_add(out.host_arena_bytes, c.buf.size());
             c.destroy();
         }
         {
             graph_cache c;
             build_hift_graph_nodes(c, m, out.T_mel, T_stft, /*measure=*/true);
-            ::tts_cpp::detail::fit_graph_price price;
-            if (!::tts_cpp::detail::fit_price_graph(m.backend, c.gf,
-                                                    /*sched_graph_size=*/131072, price)) {
-                c.destroy();
-                if (error) *error = "s3gen_measure_fit: HiFT graph pricing failed";
-                return false;
-            }
-            out.hift_device_bytes = price.device_bytes;
-            dev = sat_add(dev, price.device_bytes);
-            out.host_compute_bytes = sat_add(out.host_compute_bytes, price.host_bytes);
-            out.host_arena_bytes   = sat_add(out.host_arena_bytes, c.buf.size());
+            out.hift_device_bytes = price_stage(c.gf, "HiFT", s3gen_dispatch::op_walk);
+            out.host_arena_bytes  = sat_add(out.host_arena_bytes, c.buf.size());
             c.destroy();
         }
+        const uint64_t dev = sat_add(direct_dev, sched_dev);
+        out.host_compute_bytes = sat_add(out.host_compute_bytes, sched_host);
         out.device_compute_bytes = dev;
 
         // Host working slabs at these shapes (s3gen_synthesize_to_wav locals

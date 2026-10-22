@@ -123,7 +123,8 @@ struct Engine::Impl {
         }
 
         if (!load_model_gguf(opts.t3_gguf_path, model, opts.n_ctx, opts.n_gpu_layers,
-                             chatterbox_kv_type_from_str(opts.kv_cache_type))) {
+                             chatterbox_kv_type_from_str(opts.kv_cache_type),
+                             /*measure=*/nullptr, opts.backend)) {
             throw std::runtime_error("Engine: failed to load T3 GGUF: " + opts.t3_gguf_path);
         }
 
@@ -207,8 +208,9 @@ struct Engine::Impl {
         }
 
         s3gen_preload_thread = std::thread([path = opts.s3gen_gguf_path,
-                                            ngpu = opts.n_gpu_layers]() {
-            s3gen_preload(path, ngpu);
+                                            ngpu = opts.n_gpu_layers,
+                                            backend = opts.backend]() {
+            s3gen_preload(path, ngpu, backend);
         });
 
         // Block until s3gen_preload finishes its Metal buffer allocation
@@ -360,7 +362,7 @@ struct Engine::Impl {
                     opts.reference_audio, opts.s3gen_gguf_path,
                     /*max_cond_tokens=*/ model.hparams.cond_prompt_len,
                     prompt_token_from_ref, cond_tokens,
-                    n_threads, /*backend=*/ model.backend, opts.verbose)) {
+                    n_threads, voice_frontend_backend(model.backend), opts.verbose)) {
                 ct_data = std::move(cond_tokens);
                 have_ct = true;
             }
@@ -420,7 +422,7 @@ struct Engine::Impl {
                 if (!compute_embedding_native(
                         opts.reference_audio, opts.s3gen_gguf_path,
                         s3gen_embedding,
-                        /*backend=*/ model.backend, opts.verbose)) {
+                        voice_frontend_backend(model.backend), opts.verbose)) {
                     // CAMPPlus tensors predate Phase 2d-a in this GGUF.
                     // `compute_embedding_native` already logged the concrete
                     // error to stderr; callers that want a hard failure can
@@ -599,6 +601,7 @@ struct Engine::Impl {
         sopts.n_threads       = resolve_thread_count(opts.n_threads);
         sopts.verbose         = opts.verbose;
         sopts.n_gpu_layers    = opts.n_gpu_layers;
+        sopts.backend         = opts.backend;
         sopts.cfg_rate        = opts.s3gen_cfg_rate;
 
         // Use the non-owning view fields rather than the *_override

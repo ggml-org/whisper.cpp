@@ -53,7 +53,12 @@ std::vector<int32_t> make_tokens(int count) {
     return tokens;
 }
 
-bool synthesize(const std::string & gguf, int n_gpu_layers, int token_count,
+struct device_choice {
+    int         n_gpu_layers = 0;
+    std::string backend;
+};
+
+bool synthesize(const std::string & gguf, const device_choice & device, int token_count,
                 std::vector<float> & pcm, const std::string & mel_path, const char * label) {
     s3gen_synthesize_opts opts;
     opts.s3gen_gguf_path = gguf;
@@ -61,7 +66,8 @@ bool synthesize(const std::string & gguf, int n_gpu_layers, int token_count,
     opts.pcm_out       = &pcm;
     opts.seed          = SEED;
     opts.n_threads     = THREADS;
-    opts.n_gpu_layers  = n_gpu_layers;
+    opts.n_gpu_layers  = device.n_gpu_layers;
+    opts.backend       = device.backend;
     opts.dump_mel_path = mel_path;
 
     const int rc = s3gen_synthesize_to_wav(make_tokens(token_count), opts);
@@ -139,8 +145,8 @@ void remove_mel_dumps(const std::string & mel_path) {
     }
 }
 
-bool compare_case(const std::string & gguf, int token_count, const char * label,
-                  double mel_tolerance, double max_rms_ratio) {
+bool compare_case(const std::string & gguf, const device_choice & device, int token_count,
+                  const char * label, double mel_tolerance, double max_rms_ratio) {
     std::fprintf(stderr, "\n== %s: %d tokens ==\n", label, token_count);
 
     const std::string tmp     = test_tmpdir();
@@ -149,11 +155,11 @@ bool compare_case(const std::string & gguf, int token_count, const char * label,
     const std::string gpu_mel = tmp + "/s3gen_agree_" + tag + "_gpu_" + label + ".npy";
 
     std::vector<float> cpu_pcm;
-    if (!synthesize(gguf, 0, token_count, cpu_pcm, cpu_mel, "cpu")) {
+    if (!synthesize(gguf, device_choice{0, "cpu"}, token_count, cpu_pcm, cpu_mel, "cpu")) {
         return false;
     }
     std::vector<float> gpu_pcm;
-    if (!synthesize(gguf, GPU_LAYERS, token_count, gpu_pcm, gpu_mel, "gpu")) {
+    if (!synthesize(gguf, device, token_count, gpu_pcm, gpu_mel, "gpu")) {
         return false;
     }
 
@@ -168,22 +174,24 @@ bool compare_case(const std::string & gguf, int token_count, const char * label,
 
 int main(int argc, char ** argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "usage: %s S3GEN.gguf [--mel-tolerance REL] [--max-rms-ratio R]\n",
-                     argv[0]);
+        std::fprintf(stderr, "usage: %s S3GEN.gguf [--mel-tolerance REL] [--max-rms-ratio R]"
+                             " [--backend NAME]\n", argv[0]);
         return 2;
     }
     const std::string gguf = argv[1];
     double mel_tolerance = DEFAULT_MEL_TOLERANCE;
     double max_rms_ratio = DEFAULT_MAX_RMS_RATIO;
+    device_choice device{GPU_LAYERS, {}};
     for (int i = 2; i < argc; ++i) {
         const std::string flag = argv[i];
         if (flag == "--mel-tolerance" && i + 1 < argc)      mel_tolerance = atof(argv[++i]);
         else if (flag == "--max-rms-ratio" && i + 1 < argc) max_rms_ratio = atof(argv[++i]);
+        else if (flag == "--backend" && i + 1 < argc)       device = device_choice{0, argv[++i]};
     }
 
     int failures = 0;
-    if (!compare_case(gguf, SHORT_TOKENS, "short", mel_tolerance, max_rms_ratio)) ++failures;
-    if (!compare_case(gguf, LONG_TOKENS, "long", mel_tolerance, max_rms_ratio)) ++failures;
+    if (!compare_case(gguf, device, SHORT_TOKENS, "short", mel_tolerance, max_rms_ratio)) ++failures;
+    if (!compare_case(gguf, device, LONG_TOKENS, "long", mel_tolerance, max_rms_ratio)) ++failures;
 
     if (failures) {
         std::fprintf(stderr, "\n%d case(s) failed\n", failures);

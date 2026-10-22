@@ -2,6 +2,7 @@
 #include "backend_util.h"
 
 #include "ggml-backend.h"
+#include "gguf.h"
 
 #include <algorithm>
 #include <atomic>
@@ -239,6 +240,18 @@ ggml_backend_buffer_type_t weight_buffer_type(ggml_backend_t backend) {
                          : nullptr;
     ggml_backend_buffer_type_t * extra = get_extra ? get_extra(dev) : nullptr;
     return extra && extra[0] ? extra[0] : fallback;
+}
+
+bool hexagon_runs_weight_type(ggml_type type) {
+    return type == GGML_TYPE_F32 || type == GGML_TYPE_F16 || type == GGML_TYPE_Q8_0 ||
+           type == GGML_TYPE_Q4_0 || type == GGML_TYPE_I32;
+}
+
+int64_t first_tensor_hexagon_cannot_run(const gguf_context * g) {
+    for (int64_t i = 0, n = gguf_get_n_tensors(g); i < n; ++i) {
+        if (!hexagon_runs_weight_type(gguf_get_tensor_type(g, i))) return i;
+    }
+    return -1;
 }
 
 bool backend_shares_host_memory(ggml_backend_t backend) {

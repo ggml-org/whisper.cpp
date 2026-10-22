@@ -67,9 +67,12 @@ FitResult fit_params(const FitOptions & opts) {
         ::tts_cpp::detail::set_backends_directory(opts.backends_dir);
     }
 
-    // An empty device registry is always Error, never Success.
+    // An empty device registry, or an explicit backend that is missing, is
+    // always Error, never Success.
     {
-        ggml_backend_t probe = ::tts_cpp::detail::init_cpu_backend();
+        ggml_backend_t probe = ::tts_cpp::detail::backend_request_is_auto(opts.backend)
+            ? ::tts_cpp::detail::init_cpu_backend()
+            : ::tts_cpp::detail::init_requested_backend(opts.backend, /*verbose=*/false, "chatterbox-fit");
         if (!probe) {
             r.reason = "no-backend-device";
             return r;
@@ -83,7 +86,7 @@ FitResult fit_params(const FitOptions & opts) {
     t3_guard t3;
     detail::t3_load_measure t3m;
     if (!detail::load_model_gguf(opts.t3_gguf_path, t3.model, opts.n_ctx,
-                                 opts.n_gpu_layers, kv_requested, &t3m)) {
+                                 opts.n_gpu_layers, kv_requested, &t3m, opts.backend)) {
         r.reason = "model-unreadable";
         return r;
     }
@@ -99,13 +102,10 @@ FitResult fit_params(const FitOptions & opts) {
     }
     r.device_name   = ggml_backend_name(backend);
     r.device_is_cpu = ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
-    r.device_shares_host_memory =
-        r.device_is_cpu ||
-        ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_IGPU ||
-        ::tts_cpp::detail::backend_is_metal(backend);
+    r.device_shares_host_memory = ::tts_cpp::detail::backend_shares_host_memory(backend);
     {
         size_t free_b = 0, total_b = 0;
-        ggml_backend_dev_memory(dev, &free_b, &total_b);
+        ::tts_cpp::detail::backend_memory(backend, free_b, total_b);
         r.device_free_bytes  = free_b;
         r.device_total_bytes = total_b;
     }
@@ -153,7 +153,7 @@ FitResult fit_params(const FitOptions & opts) {
         }
         gguf_free(g);
         std::string error;
-        if (!detail::s3gen_measure_fit(opts.s3gen_gguf_path, opts.n_gpu_layers,
+        if (!detail::s3gen_measure_fit(opts.s3gen_gguf_path, opts.n_gpu_layers, opts.backend,
                                        n_gen, sm, &error)) {
             r.reason = "measurement-failed";
             return r;

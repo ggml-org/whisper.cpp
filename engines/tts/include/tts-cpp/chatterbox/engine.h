@@ -262,6 +262,15 @@ struct EngineOptions {
     // Pass-through of the CLI's --verbose behaviour: per-stage wall times
     // on stderr.  Errors always go through regardless of this flag.
     bool verbose = false;
+
+    // Explicit device for T3 and S3Gen: "cpu", "opencl", "hexagon" (the
+    // Snapdragon HTP0 NPU) or an exact ggml device name.  Overrides
+    // n_gpu_layers with no fallback, so the constructor throws when the device
+    // is missing; the automatic walk never picks Hexagon.  Reference-audio
+    // conditioning stays on the CPU under Hexagon.  Empty or "auto" keeps the
+    // n_gpu_layers walk.  Kept last so existing positional initializers stay
+    // valid.
+    std::string backend;
 };
 
 // Per-chunk PCM callback.  Receives a pointer to `samples` consecutive

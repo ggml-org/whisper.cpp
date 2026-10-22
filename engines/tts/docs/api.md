@@ -37,7 +37,7 @@ load their model once and reuse it across synthesis calls:
 
 | Namespace | Primary surface | Result |
 |---|---|---|
-| `tts_cpp::chatterbox` | `Engine::synthesize` | 24 kHz PCM by default; Turbo/Multilingual selected by GGUF metadata |
+| `tts_cpp::chatterbox` | `Engine::synthesize` | 24 kHz PCM by default; Turbo/Multilingual selected by GGUF metadata; `EngineOptions::backend = "hexagon"` runs T3 and S3Gen on the [Snapdragon NPU](chatterbox.md#snapdragon-hexagon-npu) |
 | `tts_cpp::supertonic` | `Engine::synthesize` | model-rate PCM, usually 44.1 kHz; `Engine::vocoder_on_coreml()` reports whether the Core ML vocoder sidecar loaded and `SynthesisResult::vocoder_synthesis_backend` where each call's vocoder ran (`"ggml"`, a `coreml-*` label, or `"mixed"` across streamed chunks), see the [Supertonic guide](supertonic.md#core-ml-vocoder-sidecar) |
 | `tts_cpp::parler` | `Engine::synthesize` | 44.1 kHz PCM conditioned by a description; `Engine::dac_on_coreml()` reports whether the Core ML DAC sidecar is attached (false once a failed call retires it) and `SynthesisResult::dac_backend` where each call's DAC ran (`"ggml"`, a `coreml-*` label, or `"mixed"` across streamed chunks), see the [Parler guide](parler.md#core-ml-dac-sidecar-apple-neural-engine) |
 | `tts_cpp::cosyvoice` | `Engine::synthesize` | 24 kHz PCM |

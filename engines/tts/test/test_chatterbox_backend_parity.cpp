@@ -30,13 +30,19 @@ struct run_result {
     size_t pcm_size;
 };
 
+struct device_choice {
+    int         n_gpu_layers = 0;
+    std::string backend;
+};
+
 run_result synthesize(const std::string & t3, const std::string & s3gen,
                       const std::string & language, const std::string & text,
-                      int n_gpu_layers) {
+                      const device_choice & device) {
     tts_cpp::chatterbox::EngineOptions options;
     options.t3_gguf_path    = t3;
     options.s3gen_gguf_path = s3gen;
-    options.n_gpu_layers    = n_gpu_layers;
+    options.n_gpu_layers    = device.n_gpu_layers;
+    options.backend         = device.backend;
     options.seed            = SEED;
     options.top_k           = GREEDY_TOP_K;
     if (!language.empty()) {
@@ -49,9 +55,10 @@ run_result synthesize(const std::string & t3, const std::string & s3gen,
 }
 
 bool compare_one(const std::string & t3, const std::string & s3gen,
-                 const std::string & language, const std::string & text) {
-    const run_result cpu = synthesize(t3, s3gen, language, text, 0);
-    const run_result gpu = synthesize(t3, s3gen, language, text, GPU_LAYERS);
+                 const std::string & language, const std::string & text,
+                 const device_choice & device) {
+    const run_result cpu = synthesize(t3, s3gen, language, text, device_choice{0, "cpu"});
+    const run_result gpu = synthesize(t3, s3gen, language, text, device);
 
     if (cpu.pcm_size == 0 || gpu.pcm_size == 0) {
         fprintf(stderr, "  FAIL a backend produced no audio\n");
@@ -76,17 +83,26 @@ bool compare_one(const std::string & t3, const std::string & s3gen,
 
 int main(int argc, char ** argv) {
     if (argc < 3) {
-        fprintf(stderr, "usage: %s T3.gguf S3GEN.gguf [language]\n", argv[0]);
+        fprintf(stderr, "usage: %s T3.gguf S3GEN.gguf [language] [--backend NAME]\n", argv[0]);
         return 2;
     }
-    const std::string t3       = argv[1];
-    const std::string s3gen    = argv[2];
-    const std::string language = argc > 3 ? argv[3] : "";
+    const std::string t3    = argv[1];
+    const std::string s3gen = argv[2];
+    std::string   language;
+    device_choice device{GPU_LAYERS, {}};
+    for (int i = 3; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--backend" && i + 1 < argc) {
+            device = device_choice{0, argv[++i]};
+        } else {
+            language = arg;
+        }
+    }
 
     int failures = 0;
     for (const char * text : PHRASES) {
         fprintf(stderr, "\n== %s ==\n", text);
-        if (!compare_one(t3, s3gen, language, text)) {
+        if (!compare_one(t3, s3gen, language, text, device)) {
             ++failures;
         }
     }
