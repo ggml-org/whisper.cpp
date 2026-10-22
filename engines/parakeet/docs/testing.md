@@ -89,6 +89,36 @@ checks that a ggml encoder request is refused rather than reading unallocated
 weights, and checks that `PARAKEET_COREML_ONLY=1` skips the encoder weights of
 the full GGUF.
 
+## Mosaic integration
+
+`test-mosaic-*` loads the exact 486,693,152-byte Mosaic GGUF and
+transcribes two complete LibriSpeech dev-clean recordings (2.245 and 3.525 s).
+The committed references are checked after case/punctuation normalization;
+tokens and raw text must repeat exactly on a second call. CPU and explicit
+Metal/CUDA/HIP lanes require native execution. The Core ML lane verifies the matching
+masked512 sidecar's provenance/inventory and requires actual per-call Core ML
+use, with the decoder on Metal; fallback fails. There are no timing gates.
+These smoke tests do not establish broader WER or ANE placement.
+
+Set `PARAKEET_TEST_MOSAIC_DIR` to a fixture root containing `bundle/` (the
+outputs of `scripts/prepare-mosaic.py`) and `audio/` (the pinned WAVs and
+`receipt.json`). The provisioner is `test/prepare_mosaic_fixtures.py`; it
+downloads the hash-pinned original archive, uses the production Mosaic
+exporter, and verifies the source FLACs before lossless PCM16 WAV conversion.
+An S3/registry mirror can supply the same verified bundle later without
+changing the inference tests. No model weights or audio are committed.
+
+Like other model tests, missing fixtures disable these registrations in
+ordinary PR CI. The opt-in Apple CI job provisions them and requires all six
+arms to execute successfully; missing/disabled/skipped coverage cannot pass:
+
+```bash
+gh workflow run parakeet-ci.yml --ref YOUR_BRANCH -f run_mosaic=true
+```
+
+The `mosaic-integration-*` workflow artifact contains CTest results, runtime
+route/transcript logs, dependency SHA and model/sidecar/audio receipts.
+
 Fixture roots are configurable with `PARAKEET_TEST_MODEL_DIR`,
 `PARAKEET_TEST_AUDIO_DIR`, and `PARAKEET_TEST_REF_DIR`. `test-gpu-vs-cpu`
 (formerly `test-vk-vs-cpu`) is available when Vulkan or Metal is configured.

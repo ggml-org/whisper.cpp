@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "name": "parakeet-mosaic",
+  "version": "1",
+  "default_recipe": "parakeet-mosaic.decoder.recipe.json",
+  "exporter": "scripts/export-mosaic.py",
+  "default_output": "models/parakeet-mosaic.gguf",
+  "bytes": 486693152,
+  "sha256": "9e17114b5773d1b1ed9b6a4fafb0f46427a3bb9a80b77e645c24576bda9188ef",
+  "encoder_matrix_counts": {
+    "Q4_0": 122,
+    "Q8_0": 142
+  },
+  "execution": "stock GGML: CPU, Metal, CUDA or HIP",
+  "sidecar": "optional masked512 FLOAT16 encoder; separate smoke coverage, not native accuracy qualification",
+  "historical_affine_model": "610.6 MB intermediate milestone; older report identifiers are preserved",
+  "decoder_matrix_counts": {
+    "Q8_0": 8
+  }
+}

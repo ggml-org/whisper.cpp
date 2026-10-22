@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "name": "parakeet-mosaic",
+  "version": "1",
+  "source": {
+    "bytes": 503670112,
+    "sha256": "612fcc711d453fd914b04022186f2d71904e094f931e5129fe64c8defd86ab93",
+    "tensors": 653
+  },
+  "output": {
+    "bytes": 486693152,
+    "sha256": "9e17114b5773d1b1ed9b6a4fafb0f46427a3bb9a80b77e645c24576bda9188ef"
+  },
+  "quantizer_source_sha256": "db403c3b2292d3f2c5cfef4109d4b5745f437b5599c7afc94d4b97feca7e9247",
+  "target_type": "Q8_0",
+  "targets": [
+    "tdt.joint.enc.weight",
+    "tdt.joint.out.weight",
+    "tdt.joint.pred.weight",
+    "tdt.predict.embed.weight",
+    "tdt.predict.lstm.0.w_hh",
+    "tdt.predict.lstm.0.w_ih",
+    "tdt.predict.lstm.1.w_hh",
+    "tdt.predict.lstm.1.w_ih"
+  ],
+  "non_target_policy": "Preserve all 645 other tensor payloads, including the complete encoder, and all metadata exactly.",
+  "lineage": "Quantize the eight decoder matrices directly from the verified encoder-source GGUF effective FP16 values."
+}

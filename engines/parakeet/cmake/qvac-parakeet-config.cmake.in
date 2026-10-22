@@ -17,6 +17,29 @@ if (QVAC_PARAKEET_WITH_OPENMP)
     find_dependency(OpenMP COMPONENTS CXX)
 endif()
 
+# GGML's static export can reference its build's C OpenMP target even when
+# a consumer enables CXX only. Both targets select the same runtime; use the
+# available CXX target for link-only C references without enabling C in the
+# consuming project or inventing a compiler configuration for that language.
+if (TARGET OpenMP::OpenMP_CXX AND NOT TARGET OpenMP::OpenMP_C)
+    foreach(_qvp_ggml_target ggml::ggml-base ggml::ggml ${GGML_AVAILABLE_BACKENDS})
+        if (TARGET ggml::${_qvp_ggml_target})
+            set(_qvp_ggml_target ggml::${_qvp_ggml_target})
+        endif()
+        if (NOT TARGET ${_qvp_ggml_target})
+            continue()
+        endif()
+        get_target_property(_qvp_links ${_qvp_ggml_target} INTERFACE_LINK_LIBRARIES)
+        if (_qvp_links)
+            string(REPLACE "OpenMP::OpenMP_C>" "OpenMP::OpenMP_CXX>" _qvp_links "${_qvp_links}")
+            list(TRANSFORM _qvp_links REPLACE "^OpenMP::OpenMP_C$" "OpenMP::OpenMP_CXX")
+            set_property(TARGET ${_qvp_ggml_target} PROPERTY INTERFACE_LINK_LIBRARIES "${_qvp_links}")
+        endif()
+    endforeach()
+    unset(_qvp_ggml_target)
+    unset(_qvp_links)
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/qvac-parakeet-targets.cmake")
 
 check_required_components(qvac-parakeet)

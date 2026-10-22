@@ -4,6 +4,7 @@
 #include "long_form.h"
 #include "parakeet_log.h"
 #include "backend_util.h"
+#include "packed_affine.h"
 
 #include "ggml.h"
 #include "ggml-alloc.h"
@@ -285,6 +286,7 @@ static inline ggml_tensor * pad_ne0_for_hmx(ggml_context * ctx, ggml_tensor * t)
 }
 
 struct ParakeetCtcModel::Impl {
+    PackedAffineWeights affine_weights;
     gguf_context         * gguf           = nullptr;
     ggml_context         * ctx            = nullptr;
     ggml_backend_t         backend_cpu    = nullptr;
@@ -1750,7 +1752,7 @@ static bool cpu_extra_buft_supports_mul_mat(ggml_backend_dev_t dev,
         return false;
     }
     ggml_tensor * b  = ggml_new_tensor_2d(c, GGML_TYPE_F32, w->ne[0], 512);
-    ggml_tensor * op = ggml_mul_mat(c, w, b);
+    ggml_tensor * op = affine_mul_mat(c, w, b);
     bool ok = false;
     w->buffer = ggml_backend_buft_alloc_buffer(buft, 0);
     if (w->buffer) {
@@ -2411,6 +2413,7 @@ static int load_from_gguf_impl(const std::string & gguf_path,
     }
 
     gguf_context * g = impl->gguf;
+    impl->affine_weights = load_packed_affine(g, impl->ctx);
 
     // A Parakeet GGUF without encoder weights (the Core ML distributions) runs
     // only with its encoder sidecar, which then has to load before allocation
@@ -2435,9 +2438,8 @@ static int load_from_gguf_impl(const std::string & gguf_path,
     // CPU-only runs: place repack-eligible encoder GEMM weights in the CPU
     // extra buffer type first; the default allocation below picks up every
     // tensor this pass leaves unallocated. Skipped when the model lives on a
-    // GPU backend (the weights aren't in CPU memory at all) and when Core ML
-    // owns the encoder (the allowlist is entirely encoder GEMMs).
-    if (impl->backend_active == impl->backend_cpu && !owns_encoder) {
+    // GPU backend, when Core ML owns the encoder, or for packed-affine carriers.
+    if (impl->backend_active == impl->backend_cpu && !owns_encoder && impl->affine_weights.empty()) {
         if (measure) {
             alloc_cpu_repack_weights(impl->ctx, impl->backend_cpu, verbose,
                                      &measure->repack_bytes);
@@ -2520,7 +2522,12 @@ static int load_from_gguf_impl(const std::string & gguf_path,
 #endif
             return 0;
         }
-        if (std::strcmp(arch, kParakeetArchitecture) != 0) {
+        const bool affine_arch = std::strcmp(arch, "parakeet-affine-v1") == 0;
+        if (affine_arch != !impl->affine_weights.empty()) {
+            PARAKEET_LOG_ERROR("gguf: packed-affine architecture/schema mismatch\n");
+            return 2;
+        }
+        if (std::strcmp(arch, kParakeetArchitecture) != 0 && !affine_arch) {
             PARAKEET_LOG_ERROR("gguf: expected arch=%s, got '%s'\n", kParakeetArchitecture, arch);
             return 2;
         }
@@ -3241,7 +3248,7 @@ ggml_tensor * conv_2d_im2col(ggml_context * ctx, ggml_tensor * a, ggml_tensor * 
     ggml_tensor * im2col = ggml_im2col(ctx, a, b, s, s, p, p, 1, 1, true, a->type);
     ggml_tensor * cols   = ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[1] * im2col->ne[2]);
     ggml_tensor * kernel = ggml_reshape_2d(ctx, a, a->ne[0] * a->ne[1] * a->ne[2], a->ne[3]);
-    ggml_tensor * y = ggml_mul_mat(ctx, cols, kernel);
+    ggml_tensor * y = affine_mul_mat(ctx, cols, kernel);
     return ggml_reshape_4d(ctx, y, im2col->ne[1], im2col->ne[2], a->ne[3], 1);
 }
 
@@ -3252,7 +3259,7 @@ ggml_tensor * pointwise_conv_2d(ggml_context * ctx, ggml_tensor * a, ggml_tensor
     ggml_tensor * cols = ggml_cast(ctx, ggml_permute(ctx, b, 1, 2, 0, 3), a->type);
     cols = ggml_reshape_2d(ctx, cols, b->ne[2], b->ne[0] * b->ne[1]);
     ggml_tensor * kernel = ggml_reshape_2d(ctx, a, a->ne[2], a->ne[3]);
-    ggml_tensor * y = ggml_mul_mat(ctx, cols, kernel);
+    ggml_tensor * y = affine_mul_mat(ctx, cols, kernel);
     return ggml_reshape_4d(ctx, y, b->ne[0], b->ne[1], a->ne[3], 1);
 }
 
@@ -3339,7 +3346,7 @@ ggml_tensor * subsampling_graph(ggml_context    * gctx,
     x = ggml_reshape_2d(gctx, x, W * C, H);
     x = zero_pad_dim1(gctx, x, 0, n_out_frames - (int) H);
 
-    x = ggml_mul_mat(gctx, S.out_w, x);
+    x = affine_mul_mat(gctx, S.out_w, x);
     x = ggml_add(gctx, x, S.out_b);
     return x;
 }
@@ -3437,7 +3444,7 @@ ggml_tensor * conv1d_via_matmul(ggml_context * ctx,
     ggml_tensor * im2col = ggml_im2col(ctx, kf32, input,
                                        stride, 0, padding, 0, dilation, 0,
                                        false, GGML_TYPE_F32);
-    ggml_tensor * r = ggml_mul_mat(ctx,
+    ggml_tensor * r = affine_mul_mat(ctx,
         ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1]),
         ggml_reshape_2d(ctx, kf32, kf32->ne[0] * kf32->ne[1], kf32->ne[2]));
     return ggml_reshape_3d(ctx, r, im2col->ne[1], kf32->ne[2], im2col->ne[2]);
@@ -3461,9 +3468,9 @@ ggml_tensor * conformer_ff_graph(ggml_context * ctx, ggml_tensor * x,
                                  ggml_tensor * l2_w,  ggml_tensor * l2_b,
                                  float eps) {
     x = layer_norm_affine(ctx, x, norm_w, norm_b, eps);
-    x = maybe_add_bias(ctx, ggml_mul_mat(ctx, l1_w, x), l1_b);
+    x = maybe_add_bias(ctx, affine_mul_mat(ctx, l1_w, x), l1_b);
     x = ggml_silu(ctx, x);
-    x = maybe_add_bias(ctx, ggml_mul_mat(ctx, l2_w, x), l2_b);
+    x = maybe_add_bias(ctx, affine_mul_mat(ctx, l2_w, x), l2_b);
     return x;
 }
 
@@ -3551,7 +3558,7 @@ ggml_tensor * rel_pos_mha_graph(ggml_context * ctx, ggml_tensor * xn,
         // hardware with higher per-dispatch overhead and proportionally
         // smaller tiles relative to SM count is the predicted-positive
         // case; that's what the loader gate is for.
-        ggml_tensor * qkv = ggml_mul_mat(ctx, W.attn_qkv_w, xn);
+        ggml_tensor * qkv = affine_mul_mat(ctx, W.attn_qkv_w, xn);
         if (W.attn_qkv_b) qkv = ggml_add(ctx, qkv, W.attn_qkv_b);
         qkv_full = qkv;
         const int n_embd = HD * H;
@@ -3561,9 +3568,9 @@ ggml_tensor * rel_pos_mha_graph(ggml_context * ctx, ggml_tensor * xn,
         k = ggml_view_3d(ctx, qkv, HD, H, T, HD * f, row_stride, 1 * (size_t) n_embd * f);
         v = ggml_view_3d(ctx, qkv, HD, H, T, HD * f, row_stride, 2 * (size_t) n_embd * f);
     } else {
-        q = maybe_add_bias(ctx, ggml_mul_mat(ctx, W.attn_q_w, xn), W.attn_q_b);
-        k = maybe_add_bias(ctx, ggml_mul_mat(ctx, W.attn_k_w, xn), W.attn_k_b);
-        v = maybe_add_bias(ctx, ggml_mul_mat(ctx, W.attn_v_w, xn), W.attn_v_b);
+        q = maybe_add_bias(ctx, affine_mul_mat(ctx, W.attn_q_w, xn), W.attn_q_b);
+        k = maybe_add_bias(ctx, affine_mul_mat(ctx, W.attn_k_w, xn), W.attn_k_b);
+        v = maybe_add_bias(ctx, affine_mul_mat(ctx, W.attn_v_w, xn), W.attn_v_b);
         if (cap) { cap->qkv = q; cap->k_raw = k; cap->v_raw = v; }
         q = ggml_reshape_3d(ctx, q, HD, H, T);
         k = ggml_reshape_3d(ctx, k, HD, H, T);
@@ -3574,7 +3581,7 @@ ggml_tensor * rel_pos_mha_graph(ggml_context * ctx, ggml_tensor * xn,
     // permutes a (HD, H, 2T-1) tensor as before, the unfused path takes it pre-permuted.
     ggml_tensor * p = attn.flash_attn ? pos_proj : nullptr;
     if (!pos_proj) {
-        p = ggml_mul_mat(ctx, W.attn_pos_w, pos_emb);
+        p = affine_mul_mat(ctx, W.attn_pos_w, pos_emb);
         p = ggml_reshape_3d(ctx, p, HD, H, pos_emb->ne[1]);
     }
 
@@ -3614,7 +3621,7 @@ ggml_tensor * rel_pos_mha_flash_graph(ggml_context * ctx, const RelPosAttnInputs
     ggml_tensor * q_u = ggml_add(ctx, qp, u_bias);
     ggml_tensor * q_v = ggml_scale(ctx, ggml_add(ctx, qp, v_bias), scale);
 
-    ggml_tensor * bd       = ggml_mul_mat(ctx, pp, q_v);
+    ggml_tensor * bd       = affine_mul_mat(ctx, pp, q_v);
     ggml_tensor * bd_shift = rel_shift_view(ctx, bd, T);
     // Mode 2 / 3 streaming windows pass a (T_k, T_q, 1, 1) f32 additive mask that
     // must be folded in, otherwise attention leaks outside the window.
@@ -3635,7 +3642,7 @@ ggml_tensor * rel_pos_mha_flash_graph(ggml_context * ctx, const RelPosAttnInputs
         ggml_tensor * heads = ggml_reshape_3d(ctx, attn_out, HD, T, H);
         flat = ggml_reshape_2d(ctx, ggml_cont(ctx, ggml_permute(ctx, heads, 0, 2, 1, 3)), HD * H, T);
     }
-    return maybe_add_bias(ctx, ggml_mul_mat(ctx, W.attn_out_w, flat), W.attn_out_b);
+    return maybe_add_bias(ctx, affine_mul_mat(ctx, W.attn_out_w, flat), W.attn_out_b);
 }
 
 // Query rows [i0, i0+n) only meet relative positions [T-i0-n, 2T-2-i0], so per block the
@@ -3660,8 +3667,8 @@ ggml_tensor * attn_probs_block(ggml_context * ctx, ggml_tensor * k_perm, ggml_te
     ggml_tensor * p_b  = ggml_view_3d(ctx, p_perm, HD, Tp, H, p_perm->nb[1], p_perm->nb[2],
                                       (size_t) (T - i0 - n) * p_perm->nb[1]);
     // ggml-cpu takes the tinyBLAS path only for a contiguous src1, so copy the query rows.
-    ggml_tensor * bd_b = ggml_mul_mat(ctx, p_b, ggml_cont(ctx, query_rows_view(ctx, q_v, i0, n)));
-    ggml_tensor * ac_b = ggml_mul_mat(ctx, k_perm, ggml_cont(ctx, query_rows_view(ctx, q_u, i0, n)));
+    ggml_tensor * bd_b = affine_mul_mat(ctx, p_b, ggml_cont(ctx, query_rows_view(ctx, q_v, i0, n)));
+    ggml_tensor * ac_b = affine_mul_mat(ctx, k_perm, ggml_cont(ctx, query_rows_view(ctx, q_u, i0, n)));
     ggml_tensor * scores = ggml_add(ctx, ac_b, rel_shift_block_view(ctx, bd_b, T, n));
     ggml_tensor * mask_b = att_mask
         ? ggml_view_4d(ctx, att_mask, T, n, 1, 1, att_mask->nb[1], att_mask->nb[2], att_mask->nb[3],
@@ -3678,7 +3685,7 @@ ggml_tensor * attn_context_blocked(ggml_context * ctx, ggml_tensor * k_perm, ggm
     for (int i0 = 0; i0 < T; i0 += k_attn_block_rows) {
         const int n = std::min(k_attn_block_rows, T - i0);
         ggml_tensor * attn_b   = attn_probs_block(ctx, k_perm, p_perm, q_u, q_v, att_mask, scale, T, H, HD, i0, n);
-        ggml_tensor * attn_v_b = ggml_mul_mat(ctx, v_for_mm, attn_b);
+        ggml_tensor * attn_v_b = affine_mul_mat(ctx, v_for_mm, attn_b);
         ggml_tensor * flat_b   = ggml_reshape_2d(ctx, ggml_cont(ctx, ggml_permute(ctx, attn_v_b, 0, 2, 1, 3)), HD * H, n);
         flat = flat ? ggml_concat(ctx, flat, flat_b, 1) : flat_b;
     }
@@ -3740,13 +3747,13 @@ ggml_tensor * rel_pos_mha_unfused_graph(ggml_context * ctx, const RelPosAttnInpu
     if (use_blocked_attn) {
         ggml_tensor * v_for_mm = ggml_cont(ctx, ggml_permute(ctx, v_perm, 1, 0, 2, 3));
         ggml_tensor * flat = attn_context_blocked(ctx, k_perm_mm, p_perm_mm, v_for_mm, q_u, q_v, att_mask, scale, T, H, HD);
-        ggml_tensor * out = maybe_add_bias(ctx, ggml_mul_mat(ctx, W.attn_out_w, flat), W.attn_out_b);
+        ggml_tensor * out = maybe_add_bias(ctx, affine_mul_mat(ctx, W.attn_out_w, flat), W.attn_out_b);
         if (cap) cap->out = out;
         return out;
     }
 
-    ggml_tensor * bd = ggml_mul_mat(ctx, p_perm_mm, q_v);
-    ggml_tensor * ac     = ggml_mul_mat(ctx, k_perm_mm, q_u);
+    ggml_tensor * bd = affine_mul_mat(ctx, p_perm_mm, q_v);
+    ggml_tensor * ac     = affine_mul_mat(ctx, k_perm_mm, q_u);
 
     // When `k_perm` was tail-padded above the `ac` output is (T_pad, T, H);
     // slice the padded tail off (its rows are dots against zero keys) and
@@ -3777,11 +3784,11 @@ ggml_tensor * rel_pos_mha_unfused_graph(ggml_context * ctx, const RelPosAttnInpu
     ggml_tensor * v_for_mm = ggml_cont(ctx, ggml_permute(ctx, v_perm, 1, 0, 2, 3));
     v_for_mm = pad_and_cast_for_hmx(ctx, v_for_mm, /*dim=*/0);
     ggml_tensor * attn_for_mm = pad_ne0_for_hmx(ctx, attn);
-    ggml_tensor * attn_v   = ggml_mul_mat(ctx, v_for_mm, attn_for_mm);
+    ggml_tensor * attn_v   = affine_mul_mat(ctx, v_for_mm, attn_for_mm);
     ggml_tensor * merged   = ggml_cont(ctx, ggml_permute(ctx, attn_v, 0, 2, 1, 3));
     ggml_tensor * flat     = ggml_reshape_2d(ctx, merged, HD * H, T);
 
-    ggml_tensor * out = maybe_add_bias(ctx, ggml_mul_mat(ctx, W.attn_out_w, flat), W.attn_out_b);
+    ggml_tensor * out = maybe_add_bias(ctx, affine_mul_mat(ctx, W.attn_out_w, flat), W.attn_out_b);
 
     if (cap) {
         cap->ac      = ac;
@@ -3853,12 +3860,12 @@ ggml_tensor * conformer_conv_graph(ggml_context * ctx, ggml_tensor * xn,
     // CPU-repack weight drops the repack traits (the mul_mat would then read
     // the interleaved bytes as plain q4_0). Legacy 3D GGUFs still reshape --
     // those tensors are never placed in a repack buffer.
-    ggml_tensor * pw1_w_2d = W.conv_pw1_w;
+    ggml_tensor * pw1_w_2d = affine_weight_for_view(ctx, W.conv_pw1_w, xn);
     if (!(ggml_n_dims(pw1_w_2d) == 2 &&
           pw1_w_2d->ne[0] == d_model && pw1_w_2d->ne[1] == 2 * d_model)) {
-        pw1_w_2d = ggml_reshape_2d(ctx, W.conv_pw1_w, d_model, 2 * d_model);
+        pw1_w_2d = ggml_reshape_2d(ctx, pw1_w_2d, d_model, 2 * d_model);
     }
-    ggml_tensor * y = ggml_mul_mat(ctx, pw1_w_2d, xn);
+    ggml_tensor * y = affine_mul_mat(ctx, pw1_w_2d, xn);
     y = maybe_add_bias(ctx, y, W.conv_pw1_b);
 
     // Conformer GLU: split (2*d_model, T, B) along the channel axis into two
@@ -3895,7 +3902,7 @@ ggml_tensor * conformer_conv_graph(ggml_context * ctx, ggml_tensor * xn,
             y = ggml_add(ctx, y, W.conv_bn_shift);
         }
         y = ggml_silu(ctx, y);
-        return maybe_add_bias(ctx, ggml_mul_mat(ctx, W.conv_pw2_w, y), W.conv_pw2_b);
+        return maybe_add_bias(ctx, affine_mul_mat(ctx, W.conv_pw2_w, y), W.conv_pw2_b);
     }
 
     ggml_tensor * yt = ggml_cont(ctx, ggml_permute(ctx, y, 1, 0, 2, 3));
@@ -3941,12 +3948,12 @@ ggml_tensor * conformer_conv_graph(ggml_context * ctx, ggml_tensor * xn,
     }
 
     // Same repack-traits consideration as pw1 above.
-    ggml_tensor * pw2_w_2d = W.conv_pw2_w;
+    ggml_tensor * pw2_w_2d = affine_weight_for_view(ctx, W.conv_pw2_w, y);
     if (!(ggml_n_dims(pw2_w_2d) == 2 &&
           pw2_w_2d->ne[0] == d_model && pw2_w_2d->ne[1] == d_model)) {
-        pw2_w_2d = ggml_reshape_2d(ctx, W.conv_pw2_w, d_model, d_model);
+        pw2_w_2d = ggml_reshape_2d(ctx, pw2_w_2d, d_model, d_model);
     }
-    y = ggml_mul_mat(ctx, pw2_w_2d, y);
+    y = affine_mul_mat(ctx, pw2_w_2d, y);
     y = maybe_add_bias(ctx, y, W.conv_pw2_b);
 
     return y;
@@ -4197,7 +4204,11 @@ bool pos_proj_cache_disabled() {
 size_t pos_proj_cache_bytes(const ParakeetCtcModel & model, int n_layers, int T) {
     const EncoderConfig & enc = model.encoder_cfg;
     const size_t bytes = (size_t) n_layers * enc.head_dim * (2 * (size_t) T - 1) * enc.n_heads * sizeof(float);
-    if (n_layers <= 0 || pos_proj_cache_disabled() ||
+    bool affine_position = false;
+    for (const auto & block : model.blocks) {
+        affine_position |= model.impl->affine_weights.count(block.attn_pos_w) != 0;
+    }
+    if (n_layers <= 0 || affine_position || pos_proj_cache_disabled() ||
         bytes > ParakeetCtcModel::Impl::k_pos_proj_cache_max_bytes) {
         return 0;
     }
@@ -4207,7 +4218,7 @@ size_t pos_proj_cache_bytes(const ParakeetCtcModel & model, int n_layers, int T)
 // One layer's projection (attn_pos_w x pe) copied into `dst`, permuted to (HD, 2T-1, H) when asked.
 ggml_tensor * pos_proj_node(ggml_context * ctx, const BlockWeights & W, ggml_tensor * pe,
                             ggml_tensor * dst, int H, int HD, bool permuted) {
-    ggml_tensor * p = ggml_mul_mat(ctx, W.attn_pos_w, pe);
+    ggml_tensor * p = affine_mul_mat(ctx, W.attn_pos_w, pe);
     p = ggml_reshape_3d(ctx, p, HD, H, pe->ne[1]);
     return ggml_cpy(ctx, permuted ? ggml_permute(ctx, p, 0, 2, 1, 3) : p, dst);
 }
@@ -4372,6 +4383,11 @@ static int build_encoder_graph_cached(const ParakeetCtcModel & model,
     g.graph_ctx = ggml_init(gp);
     if (!g.graph_ctx) return -2;
     ggml_context * gctx = g.graph_ctx;
+    g.cgraph = ggml_new_graph_custom(gctx, graph_slots, false);
+    const bool fused_affine = affine_fused_requested() && !model.impl->affine_weights.empty();
+    if (fused_affine && model_active_backend_name(model).rfind("MTL", 0) != 0)
+        throw std::runtime_error("fused affine requires the explicit Metal backend");
+    PackedAffineGraphScope affine_scope(gctx, g.cgraph, model.impl->affine_weights, fused_affine);
 
     if (bypass_pre_encode) {
         // Pre-subsampled input fed directly: (d_model, T). Subsampling block is
@@ -4564,14 +4580,13 @@ static int build_encoder_graph_cached(const ParakeetCtcModel & model,
     ggml_set_output(g.encoder_out_node);
 
     if (model.model_type == ParakeetModelType::CTC && model.ctc.w && model.ctc.b) {
-        g.logits_node = ggml_add(gctx, ggml_mul_mat(gctx, model.ctc.w, x), model.ctc.b);
+        g.logits_node = ggml_add(gctx, affine_mul_mat(gctx, model.ctc.w, x), model.ctc.b);
         ggml_set_name(g.logits_node, "logits");
         ggml_set_output(g.logits_node);
     } else {
         g.logits_node = nullptr;
     }
 
-    g.cgraph = ggml_new_graph_custom(gctx, graph_slots, false);
     if (g.sub_out_node)        ggml_build_forward_expand(g.cgraph, g.sub_out_node);
     if (g.post_ff1_0_node)     ggml_build_forward_expand(g.cgraph, g.post_ff1_0_node);
     if (g.block_0_attn_qkv_node)     ggml_build_forward_expand(g.cgraph, g.block_0_attn_qkv_node);
@@ -4593,6 +4608,16 @@ static int build_encoder_graph_cached(const ParakeetCtcModel & model,
     ggml_build_forward_expand(g.cgraph, g.encoder_out_node);
     if (g.logits_node) ggml_build_forward_expand(g.cgraph, g.logits_node);
 
+    if (!model.impl->affine_weights.empty()) {
+        for (int i = 0; i < ggml_graph_n_nodes(g.cgraph); ++i) {
+            auto * node = ggml_graph_node(g.cgraph, i);
+            if (!ggml_backend_supports_op(backend, node)) {
+                PARAKEET_LOG_ERROR("packed-affine: active backend cannot execute %s; refusing fallback\n",
+                                   ggml_op_name(node->op));
+                return -4;
+            }
+        }
+    }
     // Snapshot the pristine source pointers now, so a run can restore them if the
     // graph is ever mutated in place. Dormant on the current encoder path (the
     // gallocr below never splits), kept defensively.
@@ -4727,7 +4752,7 @@ static int run_coreml_ctc_head(ParakeetCtcModel & model,
         ggml_set_input(graph.input);
         graph.output = ggml_add(
             graph.context,
-            ggml_mul_mat(graph.context, model.ctc.w, graph.input),
+            affine_mul_mat(graph.context, model.ctc.w, graph.input),
             model.ctc.b);
         ggml_set_output(graph.output);
         graph.graph = ggml_new_graph_custom(graph.context, graph_size, false);
@@ -4765,14 +4790,15 @@ static int run_encoder_coreml(ParakeetCtcModel & model,
                               EncoderOutputs   & out) {
     const EncoderConfig & enc     = model.encoder_cfg;
     const int             d_model = enc.d_model;
-    const int             T       = coreml_encoder_out_frames(enc, n_mel_frames);
+    const bool masked = parakeet_coreml_masks_mel_padding(model.impl->ctx_coreml);
+    const int T = coreml_encoder_out_frames(enc, masked ? mel_valid : n_mel_frames);
 
     out.n_enc_frames = T;
     out.d_model      = d_model;
     out.vocab_size   = model.vocab_size;
     out.encoder_out.resize((size_t) T * d_model);
 
-    const int rc = parakeet_coreml_encode(model.impl->ctx_coreml,
+    const int rc = parakeet_coreml_encode_valid(model.impl->ctx_coreml,
                                            n_mel_frames, mel_valid, n_mels, mel,
                                            T, d_model, out.encoder_out.data());
     if (rc != 0) return rc;
@@ -4831,12 +4857,12 @@ static int build_nemotron_prompt_graph(
     out.input = ggml_new_tensor_2d(
         out.context, GGML_TYPE_F32, input_width, n_frames);
     ggml_set_input(out.input);
-    ggml_tensor * hidden = ggml_mul_mat(
+    ggml_tensor * hidden = affine_mul_mat(
         out.context, model.nemotron.prompt.proj_0_w, out.input);
     hidden = ggml_add(
         out.context, hidden, model.nemotron.prompt.proj_0_b);
     hidden = ggml_relu(out.context, hidden);
-    out.output = ggml_mul_mat(
+    out.output = affine_mul_mat(
         out.context, model.nemotron.prompt.proj_2_w, hidden);
     out.output = ggml_add(
         out.context, out.output, model.nemotron.prompt.proj_2_b);
@@ -5424,6 +5450,13 @@ int profile_block_substages(ParakeetCtcModel & model,
                             int timed_runs,
                             BlockSubstageTimes & out) {
     if (!model.impl || !model.impl->backend_active) return -1;
+    // The isolated substage builder has no affine graph scope. Refuse packed
+    // models rather than timing raw integer carriers as ordinary weights.
+    if (!model.impl->affine_weights.empty()) {
+        PARAKEET_LOG_ERROR("[profile] packed-affine models do not support sub-stage profiling; "
+                           "use full encoder/inference measurements instead\n");
+        return -2;
+    }
     ggml_backend_t backend = model.impl->backend_active;
     const int d_model = model.encoder_cfg.d_model;
 

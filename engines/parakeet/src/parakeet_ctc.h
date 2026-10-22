@@ -926,6 +926,8 @@ struct BlockSubstageTimes {
     double block_full_ms = 0.0;
 };
 
+// Returns -2 for packed-affine models: isolated substage graphs do not support
+// their reconstruction/fusion scope. No substage timing is produced in that case.
 int profile_block_substages(ParakeetCtcModel & model,
                             int T_enc,
                             int warmup_runs,

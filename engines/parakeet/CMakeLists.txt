@@ -583,6 +583,8 @@ if (PARAKEET_BUILD_TESTS)
     set(PARAKEET_TEST_MODEL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/models"        CACHE PATH "parakeet: directory containing .gguf fixtures used by the test suite")
     set(PARAKEET_TEST_AUDIO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/test/samples"  CACHE PATH "parakeet: directory containing .wav fixtures used by the test suite")
     set(PARAKEET_TEST_REF_DIR   "${CMAKE_CURRENT_SOURCE_DIR}/artifacts"     CACHE PATH "parakeet: directory containing NeMo .npy reference dumps (scripts/dump-*-reference.py)")
+    set(PARAKEET_TEST_MOSAIC_DIR "${PARAKEET_TEST_MODEL_DIR}/mosaic" CACHE PATH
+        "parakeet: Mosaic integration fixture root (bundle/ and audio/)")
 
     # Helper: register a built test target with CTest. Same shape as
     # the standard llama-style `llama_test()` macro: every harness
@@ -1803,6 +1805,114 @@ if (PARAKEET_BUILD_TESTS)
     # frameworks -- so it runs on every CI regardless of PARAKEET_COREML and locks
     # the wrapper's variable-length behaviour (fixed verbatim / flexible rebuild /
     # features-major default).
+    # Profiling uses internal entry points, not the shared library's public ABI.
+    add_executable(test-affine-profile
+        test/test_affine_profile.cpp
+        src/parakeet_ctc.cpp
+        src/parakeet_engine.cpp
+        src/parakeet_nemotron.cpp
+        src/parakeet_unified.cpp
+        src/parakeet_log.cpp
+        src/parakeet_tdt.cpp
+        src/parakeet_eou.cpp
+        src/parakeet_sortformer.cpp
+        src/parakeet_diarization_v3.cpp
+        src/mel_preprocess.cpp
+        src/sentencepiece_bpe.cpp
+        src/energy_vad.cpp)
+    target_include_directories(test-affine-profile PRIVATE src include ggml/include)
+    target_link_libraries(test-affine-profile PRIVATE ggml parakeet-backend-defs)
+    parakeet_apply_backend_defs(test-affine-profile)
+    parakeet_register_test(test-affine-profile LABEL "unit"
+        ARGS "${CMAKE_CURRENT_BINARY_DIR}/test-affine-profile.gguf")
+
+    if (Python3_Interpreter_FOUND)
+        add_test(NAME test-export-mosaic
+            COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/test/test_export_mosaic.py")
+        set_tests_properties(test-export-mosaic PROPERTIES LABELS "unit" SKIP_REGULAR_EXPRESSION "SKIP: ")
+        add_test(NAME test-prepare-mosaic-compact
+            COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/test/test_mosaic_compact.py")
+        set_tests_properties(test-prepare-mosaic-compact PROPERTIES LABELS "unit" SKIP_REGULAR_EXPRESSION "SKIP: ")
+    endif()
+
+    add_executable(test-mosaic-inference test/test_mosaic_inference.cpp)
+    target_link_libraries(test-mosaic-inference PRIVATE qvac-parakeet)
+    parakeet_apply_ccache(test-mosaic-inference)
+    if (Python3_Interpreter_FOUND)
+        file(READ "${CMAKE_CURRENT_SOURCE_DIR}/test/mosaic-fixtures.json" _mosaic_manifest)
+        string(JSON _mosaic_count LENGTH "${_mosaic_manifest}" clips)
+        math(EXPR _mosaic_last "${_mosaic_count} - 1")
+        foreach(_index RANGE 0 ${_mosaic_last})
+            string(JSON _clip GET "${_mosaic_manifest}" clips ${_index} id)
+            foreach(_variant IN ITEMS mosaic compact)
+                set(_bundle bundle)
+                set(_stem parakeet-mosaic)
+                set(_variant_prefix "")
+                if (_variant STREQUAL "compact")
+                    set(_bundle compact)
+                    set(_stem parakeet-mosaic-compact)
+                    set(_variant_prefix "compact-")
+                endif()
+            foreach(_lane IN ITEMS native-cpu native-metal native-cuda native-hip coreml)
+                if ((_lane STREQUAL "native-metal" AND NOT APPLE) OR
+                    (_lane STREQUAL "native-cuda" AND NOT GGML_CUDA) OR
+                    (_lane STREQUAL "native-hip" AND NOT GGML_HIP) OR
+                    (_lane STREQUAL "coreml" AND NOT PARAKEET_COREML))
+                    continue()
+                endif()
+                set(_mode native)
+                set(_backend cpu)
+                set(_labels "fixture;mosaic;cpu")
+                set(_required
+                    "${PARAKEET_TEST_MOSAIC_DIR}/${_bundle}/${_stem}.gguf"
+                    "${PARAKEET_TEST_MOSAIC_DIR}/audio/${_clip}.wav"
+                    "${PARAKEET_TEST_MOSAIC_DIR}/audio/receipt.json")
+                if (NOT _lane STREQUAL "native-cpu")
+                    set(_backend MTL0)
+                    set(_labels "fixture;mosaic;gpu")
+                endif()
+                if (_lane STREQUAL "native-cuda")
+                    set(_backend CUDA0)
+                elseif (_lane STREQUAL "native-hip")
+                    set(_backend ROCm0)
+                endif()
+                if (_lane STREQUAL "coreml")
+                    set(_mode coreml)
+                    list(APPEND _labels coreml)
+                    list(APPEND _required
+                        "${PARAKEET_TEST_MOSAIC_DIR}/${_bundle}/complete.json"
+                        "${PARAKEET_TEST_MOSAIC_DIR}/${_bundle}/plan.json"
+                        "${PARAKEET_TEST_MOSAIC_DIR}/${_bundle}/${_stem}-encoder.mlmodelc")
+                endif()
+                set(_test "test-mosaic-${_variant_prefix}${_lane}-${_clip}")
+                add_test(NAME ${_test} COMMAND ${Python3_EXECUTABLE}
+                    "${CMAKE_CURRENT_SOURCE_DIR}/test/test_mosaic_integration.py"
+                    --binary "$<TARGET_FILE:test-mosaic-inference>"
+                    --fixtures "${PARAKEET_TEST_MOSAIC_DIR}" --clip "${_clip}"
+                    --mode "${_mode}" --backend "${_backend}" --variant "${_variant}")
+                set_tests_properties(${_test} PROPERTIES LABELS "${_labels}"
+                    TIMEOUT 600 RUN_SERIAL TRUE)
+                foreach(_path IN LISTS _required)
+                    if (NOT EXISTS "${_path}")
+                        set_property(TEST ${_test} PROPERTY DISABLED TRUE)
+                        message(STATUS "parakeet: ${_test} disabled (missing ${_path})")
+                    endif()
+                endforeach()
+            endforeach()
+            endforeach()
+        endforeach()
+    endif()
+
+    add_executable(test-packed-affine test/test_packed_affine.cpp)
+    target_include_directories(test-packed-affine PRIVATE src)
+    target_link_libraries(test-packed-affine PRIVATE ggml)
+    add_test(NAME test-packed-affine-schema COMMAND test-packed-affine --self-test)
+    if (Python3_Interpreter_FOUND)
+        add_test(NAME test-packed-affine-python
+            COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/test/test_packed_affine.py")
+        set_property(TEST test-packed-affine-python PROPERTY SKIP_REGULAR_EXPRESSION "SKIP: ")
+    endif()
+
     add_executable(test-coreml-shapes
         test/test_coreml_shapes.cpp
         src/coreml/parakeet_coreml_shape.cpp)
@@ -1816,6 +1926,16 @@ if (PARAKEET_BUILD_TESTS)
             COMMAND ${Python3_EXECUTABLE}
                     "${CMAKE_CURRENT_SOURCE_DIR}/test/test_export_encoder_coreml.py")
         set_property(TEST test-export-encoder-coreml PROPERTY LABELS "unit")
+        foreach(padding_test IN ITEMS test_coreml_padding test_coreml_padding_runtime)
+            add_test(NAME ${padding_test}
+                COMMAND ${Python3_EXECUTABLE}
+                        "${CMAKE_CURRENT_SOURCE_DIR}/test/${padding_test}.py")
+            set_property(TEST ${padding_test} PROPERTY LABELS "unit")
+            set_property(TEST ${padding_test} PROPERTY ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+            set_property(TEST ${padding_test} PROPERTY SKIP_REGULAR_EXPRESSION
+                "SKIP: |requires Apple Core ML runtime and coremltools")
+        endforeach()
+        set_property(TEST test_coreml_padding_runtime PROPERTY SKIP_RETURN_CODE 77)
         add_test(
             NAME test-export-coreml-ane
             COMMAND ${Python3_EXECUTABLE}
@@ -2761,54 +2881,9 @@ if (PARAKEET_BUILD_EXAMPLES)
 endif()
 
 if (PARAKEET_INSTALL AND PARAKEET_BUILD_LIBRARY)
-    # Re-install the bundled ggml targets into a `ggml-targets` export
-    # set so `install(EXPORT qvac-parakeet-targets)` can resolve the
-    # `qvac-parakeet PUBLIC ggml` link as the namespaced `ggml::ggml`.
-    # Without this, CMake refuses to generate qvac-parakeet-targets.cmake
-    # because the in-tree `ggml` target is not part of any export set.
-    # Replicates the standard
-    # `install(TARGETS ggml ggml-base EXPORT ggml-targets)` pattern
-    # that downstream ggml-based projects ship in their own CMake
-    # (e.g. llama.cpp); we add it here at the parakeet level because
-    # the upstream ggml at the pinned commit installs ggml without
-    # an EXPORT clause. The bundled ggml's hand-written
-    # ggml-config.cmake (find_library + UNKNOWN IMPORTED) still
-    # ships and is what's loaded via find_dependency(ggml) -- we
-    # don't replace it; the new ggml-targets.cmake just carries the
-    # export so CMake's cross-package reference check passes here.
-    if (NOT PARAKEET_USE_SYSTEM_GGML)
-        set(_parakeet_ggml_export_targets ggml ggml-base)
-        if (DEFINED GGML_AVAILABLE_BACKENDS)
-            list(APPEND _parakeet_ggml_export_targets ${GGML_AVAILABLE_BACKENDS})
-        endif()
-        # No PUBLIC_HEADER DESTINATION here: the bundled ggml's own
-        # `install(TARGETS ggml LIBRARY PUBLIC_HEADER)` already copies
-        # the ggml/include/*.h headers into the install tree (relative
-        # paths resolve against ggml/CMakeLists.txt's source dir). If
-        # we duplicated the PUBLIC_HEADER install here, the same
-        # relative paths would be re-resolved against the parakeet
-        # source dir and `cmake --install` would fail with
-        # "file INSTALL cannot find <root>/include/ggml.h: File exists".
-        # CMake emits a developer warning ("PUBLIC_HEADER files but no
-        # PUBLIC_HEADER DESTINATION") about the gap, which is benign
-        # here -- ggml's own rule still publishes the headers. Keep
-        # the rule minimal: we only need EXPORT + library destinations
-        # so `qvac-parakeet-targets` can resolve the namespaced
-        # `ggml::ggml` link without rebuilding the headers install.
-        install(TARGETS ${_parakeet_ggml_export_targets}
-            EXPORT ggml-targets
-            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-        )
-        install(EXPORT ggml-targets
-            FILE ggml-targets.cmake
-            NAMESPACE ggml::
-            DESTINATION ${CMAKE_INSTALL_DATADIR}/ggml
-        )
-        unset(_parakeet_ggml_export_targets)
-    endif()
-
+    # Bundled qvac-ext-ggml owns ggml-targets and its ggml:: namespace.
+    # Registering those targets here as well duplicates the same export set
+    # and makes a fresh bundled build fail during CMake generation.
     # Export the parakeet target via an install(EXPORT ...) set so the
     # generated qvac-parakeet-targets.cmake carries the correct shape
     # for whatever linkage the build produced (STATIC vs SHARED, with
@@ -2898,14 +2973,28 @@ if (PARAKEET_INSTALL AND PARAKEET_BUILD_LIBRARY)
     # imported (system) ggml we read IMPORTED_LOCATION and emit both
     # the containing -L and the real library stem; for the bundled
     # in-tree build we read OUTPUT_NAME and rely on our own ${libdir}
-    # (the re-install rule above puts ggml there). Deliberately NOT
+    # (GGML owns its install rules). Deliberately NOT
     # `Requires: ggml`: the qvac-ext-ggml@speech ggml.pc advertises an
     # unprefixed `-lggml` that no install actually produces and omits
     # ggml-base entirely, so inheriting it would under-link. Revisit
     # once that .pc is fixed upstream in the fork.
     set(_pk_pc_ggml_libs "")
     set(_pk_pc_ggml_libdirs "")
-    foreach (_pk_ggml_tgt ggml::ggml ggml::ggml-base ggml ggml-base)
+    # Static registry references require the linked backend archives too.
+    # Order wrappers before backends, and ggml-base after its dependents.
+    set(_pk_ggml_pc_targets ggml::ggml ggml)
+    foreach (_pk_backend IN LISTS GGML_AVAILABLE_BACKENDS)
+        foreach (_pk_candidate ggml::${_pk_backend} ${_pk_backend})
+            if (TARGET ${_pk_candidate})
+                get_target_property(_pk_backend_type ${_pk_candidate} TYPE)
+                if (NOT _pk_backend_type STREQUAL "MODULE_LIBRARY")
+                    list(APPEND _pk_ggml_pc_targets ${_pk_candidate})
+                endif()
+            endif()
+        endforeach()
+    endforeach()
+    list(APPEND _pk_ggml_pc_targets ggml::ggml-base ggml-base)
+    foreach (_pk_ggml_tgt IN LISTS _pk_ggml_pc_targets)
         if (NOT TARGET ${_pk_ggml_tgt})
             continue()
         endif()
@@ -3008,6 +3097,28 @@ if (PARAKEET_INSTALL AND PARAKEET_BUILD_LIBRARY)
             endif()
         endforeach()
     endif()
+    # Backends may link platform frameworks (Accelerate/BLAS on Apple) or
+    # system libraries. These are not contained in the backend archive.
+    foreach (_pk_backend IN LISTS GGML_AVAILABLE_BACKENDS)
+        if (NOT TARGET ${_pk_backend})
+            continue()
+        endif()
+        get_target_property(_pk_backend_libs ${_pk_backend} LINK_LIBRARIES)
+        foreach (_pk_lib IN LISTS _pk_backend_libs)
+            if (NOT _pk_lib OR _pk_lib MATCHES "NOTFOUND$" OR
+                _pk_lib MATCHES "\\$<|::" OR TARGET "${_pk_lib}")
+                continue()
+            endif()
+            if (_pk_lib MATCHES "\\.framework$")
+                get_filename_component(_pk_framework "${_pk_lib}" NAME_WE)
+                list(APPEND _pk_pc_private "-framework ${_pk_framework}")
+            elseif (IS_ABSOLUTE "${_pk_lib}" OR _pk_lib MATCHES "^-")
+                list(APPEND _pk_pc_private "${_pk_lib}")
+            else()
+                list(APPEND _pk_pc_private "-l${_pk_lib}")
+            endif()
+        endforeach()
+    endforeach()
     if (PARAKEET_COREML)
         list(APPEND _pk_pc_private "-framework CoreML" "-framework Foundation")
     endif()

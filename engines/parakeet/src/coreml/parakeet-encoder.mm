@@ -396,6 +396,7 @@ struct parakeet_coreml_context {
     const void * prediction_options = nullptr;  // retained MLPredictionOptions *
     std::string  input_name;
     std::string  valid_mask_name;
+    bool         masks_mel_padding = false;
     std::string  output_name;
     std::string  label;
     std::vector<int64_t> declared_input_dims;
@@ -656,12 +657,13 @@ bool prepare_cached_io(parakeet_coreml_context * ctx, MLModel * model,
     return true;
 }
 
-bool prepare_cached_bypass_io(parakeet_coreml_context * ctx, MLModel * model,
+bool prepare_cached_masked_io(parakeet_coreml_context * ctx, MLModel * model,
                               NSString * in_name, NSString * mask_name,
                               NSString * out_name, int64_t capacity,
+                              int64_t input_width, int64_t output_rows,
                               int64_t d_model) {
     if (ctx->input_array != nullptr && ctx->valid_mask_array != nullptr &&
-        ctx->cached_mel_frames == capacity && ctx->cached_mels == d_model &&
+        ctx->cached_mel_frames == capacity && ctx->cached_mels == input_width &&
         ctx->cached_d_model == d_model) {
         return true;
     }
@@ -677,7 +679,7 @@ bool prepare_cached_bypass_io(parakeet_coreml_context * ctx, MLModel * model,
 
     bool transpose = true;
     NSArray<NSNumber *> * in_shape =
-        resolve_input_shape(in_constraint.shape, capacity, d_model, &transpose);
+        resolve_input_shape(in_constraint.shape, capacity, input_width, &transpose);
     NSError * err = nil;
     MLMultiArray * in_arr = build_array(in_shape, in_constraint.dataType, &err);
     if (in_arr == nil || err != nil) return false;
@@ -695,7 +697,7 @@ bool prepare_cached_bypass_io(parakeet_coreml_context * ctx, MLModel * model,
     MLMultiArray * out_arr = nil;
     const parakeet::CoremlTrailingMatch out_match =
         parakeet::coreml_match_trailing_capacity(
-            dims_of(out_constraint.shape), capacity, d_model);
+            dims_of(out_constraint.shape), output_rows, d_model);
     if (out_match.matched) {
         out_arr = build_array(out_constraint.shape, out_constraint.dataType, &err);
         if (out_arr == nil || err != nil) return false;
@@ -708,7 +710,7 @@ bool prepare_cached_bypass_io(parakeet_coreml_context * ctx, MLModel * model,
     ctx->prediction_options = CFBridgingRetain(options);
     if (out_arr != nil) ctx->output_array = CFBridgingRetain(out_arr);
     ctx->cached_mel_frames = capacity;
-    ctx->cached_mels       = d_model;
+    ctx->cached_mels       = input_width;
     ctx->cached_d_model    = d_model;
     ctx->input_transpose   = transpose;
     return true;
@@ -765,6 +767,14 @@ struct parakeet_coreml_context * parakeet_coreml_init_with_units_env(const char 
             in_name = @"pre_encode";
             valid_mask_name = @"valid_mask";
         }
+        bool masks_mel_padding = false;
+        if (in_name == nil && input_descs.count == 2 &&
+            input_descs[@"mel"].type == MLFeatureTypeMultiArray &&
+            input_descs[@"mel_valid_mask"].type == MLFeatureTypeMultiArray) {
+            in_name = @"mel";
+            valid_mask_name = @"mel_valid_mask";
+            masks_mel_padding = true;
+        }
         NSString * out_name = sole_multiarray_feature(model.modelDescription.outputDescriptionsByName);
         if (in_name == nil || out_name == nil) return nullptr;
 
@@ -776,6 +786,7 @@ struct parakeet_coreml_context * parakeet_coreml_init_with_units_env(const char 
         ctx->model       = CFBridgingRetain(model);
         ctx->input_name  = in_name.UTF8String;
         if (valid_mask_name != nil) ctx->valid_mask_name = valid_mask_name.UTF8String;
+        ctx->masks_mel_padding = masks_mel_padding;
         ctx->output_name = out_name.UTF8String;
         ctx->label       = std::move(label);
         ctx->declared_input_dims = dims_of(input_constraint.shape);
@@ -804,30 +815,49 @@ int64_t parakeet_coreml_fixed_output_rows(
     return ctx != nullptr ? trailing_partner(ctx->declared_output_dims, cols) : 0;
 }
 
+bool parakeet_coreml_masks_mel_padding(const struct parakeet_coreml_context * ctx) {
+    return ctx != nullptr && ctx->masks_mel_padding;
+}
+
 int parakeet_coreml_encode(struct parakeet_coreml_context * ctx,
-                           int64_t       n_mel_frames,
-                           int64_t       n_mel_valid,
-                           int64_t       n_mels,
-                           const float * mel,
-                           int64_t       n_enc_frames,
-                           int64_t       d_model,
-                           float       * encoder_out) {
+                           int64_t n_mel_frames, int64_t n_mel_valid,
+                           int64_t n_mels, const float * mel,
+                           int64_t n_enc_frames, int64_t d_model, float * encoder_out) {
+    const int64_t valid = n_mel_valid <= 0 || n_mel_valid >= n_mel_frames ? n_mel_frames : n_mel_valid;
+    return parakeet_coreml_encode_valid(ctx, n_mel_frames, valid, n_mels,
+                                        mel, n_enc_frames, d_model, encoder_out);
+}
+
+int parakeet_coreml_encode_valid(struct parakeet_coreml_context * ctx,
+                                 int64_t n_mel_frames, int64_t valid_mel_frames,
+                                 int64_t n_mels, const float * mel,
+                                 int64_t n_enc_frames, int64_t d_model,
+                                 float * encoder_out) {
     if (ctx == nullptr || ctx->model == nullptr || mel == nullptr || encoder_out == nullptr) return 1;
-    if (!ctx->valid_mask_name.empty()) return 1;
-    if (n_mel_frames <= 0 || n_mels <= 0 || n_enc_frames <= 0 || d_model <= 0) return 1;
+    if (!ctx->valid_mask_name.empty() && !ctx->masks_mel_padding) return 1;
+    if (n_mel_frames <= 0 || valid_mel_frames <= 0 || valid_mel_frames > n_mel_frames ||
+        n_mels <= 0 || n_enc_frames <= 0 || d_model <= 0) return 1;
 
     @autoreleasepool {
         std::lock_guard<std::mutex> lock(ctx->mutex);
         if (ctx->ane.active) {
-            return encode_ane_window(ctx, n_mel_frames, n_mel_valid, n_mels, mel, n_enc_frames,
+            return encode_ane_window(ctx, n_mel_frames, valid_mel_frames, n_mels, mel, n_enc_frames,
                                      d_model, encoder_out);
         }
         MLModel  * model    = (__bridge MLModel *) ctx->model;
         NSString * in_name  = [NSString stringWithUTF8String:ctx->input_name.c_str()];
         NSString * out_name = [NSString stringWithUTF8String:ctx->output_name.c_str()];
 
-        if (!prepare_cached_io(ctx, model, in_name, out_name, n_mel_frames, n_mels,
-                               n_enc_frames, d_model)) return 2;
+        if (ctx->masks_mel_padding) {
+            const int64_t capacity = fixed_mel_frames_for(ctx, n_mels);
+            if (capacity <= 0 || n_mel_frames > capacity) return 2;
+            NSString * mask_name = [NSString stringWithUTF8String:ctx->valid_mask_name.c_str()];
+            if (!prepare_cached_masked_io(ctx, model, in_name, mask_name, out_name,
+                                           capacity, n_mels, n_enc_frames, d_model)) return 2;
+            MLMultiArray * mask_arr = (__bridge MLMultiArray *) ctx->valid_mask_array;
+            if (!fill_valid_mask(mask_arr, valid_mel_frames, capacity)) return 3;
+        } else if (!prepare_cached_io(ctx, model, in_name, out_name, n_mel_frames, n_mels,
+                                      n_enc_frames, d_model)) return 2;
         MLMultiArray * in_arr = (__bridge MLMultiArray *) ctx->input_array;
         if (!fill_input_array(in_arr, ctx->input_transpose, mel, n_mel_frames, ctx->cached_mel_frames, n_mels)) return 3;
 
@@ -852,7 +882,7 @@ int parakeet_coreml_encode_embeddings(
         const float * pre_encode,
         float * encoder_out) {
     if (ctx == nullptr || ctx->model == nullptr || pre_encode == nullptr ||
-        encoder_out == nullptr || ctx->valid_mask_name.empty()) return 1;
+        encoder_out == nullptr || ctx->valid_mask_name.empty() || ctx->masks_mel_padding) return 1;
     if (n_encoder_frames <= 0 || d_model <= 0) return 1;
 
     @autoreleasepool {
@@ -865,8 +895,8 @@ int parakeet_coreml_encode_embeddings(
         const int64_t capacity = fixed_mel_frames_for(ctx, d_model);
         if (capacity <= 0 || n_encoder_frames > capacity) return 2;
 
-        if (!prepare_cached_bypass_io(ctx, model, in_name, mask_name, out_name,
-                                      capacity, d_model)) return 2;
+        if (!prepare_cached_masked_io(ctx, model, in_name, mask_name, out_name,
+                                      capacity, d_model, capacity, d_model)) return 2;
         MLMultiArray * in_arr = (__bridge MLMultiArray *) ctx->input_array;
         MLMultiArray * mask_arr = (__bridge MLMultiArray *) ctx->valid_mask_array;
         if (!fill_input_array(in_arr, ctx->input_transpose, pre_encode, n_encoder_frames,

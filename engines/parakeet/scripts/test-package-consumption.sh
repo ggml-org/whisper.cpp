@@ -20,8 +20,8 @@
 # Usage:
 #   scripts/test-package-consumption.sh --ggml-prefix <dir> [options]
 #
-#   --ggml-prefix <dir>   CMAKE_PREFIX_PATH entry holding the system ggml
-#                         install (required)
+#   --ggml-prefix <dir>   CMAKE_PREFIX_PATH entry holding the system ggml install
+#   --bundled             Build/install the engine with engines/parakeet/ggml
 #   --work-dir <dir>      scratch dir (default: mktemp -d)
 #   --coreml              configure the engine with PARAKEET_COREML=ON
 #                         (Apple only; exercises the framework entries in
@@ -36,6 +36,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENGINE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 GGML_PREFIX=""
+BUNDLED=0
 WORK_DIR=""
 COREML=OFF
 KEEP=0
@@ -43,6 +44,7 @@ KEEP=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --ggml-prefix) GGML_PREFIX="$2"; shift 2 ;;
+        --bundled) BUNDLED=1; shift ;;
         --work-dir)    WORK_DIR="$2";    shift 2 ;;
         --coreml)      COREML=ON;        shift ;;
         --keep)        KEEP=1;           shift ;;
@@ -51,11 +53,14 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ -z "${GGML_PREFIX}" ]; then
+if [ "${BUNDLED}" -eq 1 ] && [ -n "${GGML_PREFIX}" ]; then
+    echo "error: choose --bundled or --ggml-prefix" >&2; exit 2
+fi
+if [ "${BUNDLED}" -eq 0 ] && [ -z "${GGML_PREFIX}" ]; then
     echo "error: --ggml-prefix is required (path to a system ggml install)" >&2
     exit 2
 fi
-if [ ! -d "${GGML_PREFIX}" ]; then
+if [ "${BUNDLED}" -eq 0 ] && [ ! -d "${GGML_PREFIX}" ]; then
     echo "error: --ggml-prefix '${GGML_PREFIX}' is not a directory" >&2
     exit 2
 fi
@@ -80,11 +85,13 @@ ok()   { echo "  ok: $*"; }
 #     -DPARAKEET_OPENMP_USER_OVERRIDE=ON -DOpenMP_ROOT=/opt/homebrew/opt/libomp"
 read -r -a _pk_extra_args <<< "${PARAKEET_PKGTEST_CMAKE_ARGS:-}"
 
-echo "==> configuring + installing the engine (static, system ggml, COREML=${COREML})"
+USE_SYSTEM_GGML=ON
+if [ "${BUNDLED}" -eq 1 ]; then USE_SYSTEM_GGML=OFF; fi
+echo "==> configuring + installing the engine (static, system ggml=${USE_SYSTEM_GGML}, COREML=${COREML})"
 cmake -S "${ENGINE_DIR}" -B "${BUILD_DIR}" \
     ${_pk_extra_args[@]+"${_pk_extra_args[@]}"} \
     -DCMAKE_BUILD_TYPE=Release \
-    -DPARAKEET_USE_SYSTEM_GGML=ON \
+    -DPARAKEET_USE_SYSTEM_GGML="${USE_SYSTEM_GGML}" \
     -DPARAKEET_BUILD_LIBRARY=ON \
     -DPARAKEET_BUILD_EXECUTABLES=OFF \
     -DPARAKEET_BUILD_TESTS=OFF \
@@ -100,6 +107,8 @@ cmake --build "${BUILD_DIR}" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 
     || { tail -30 "${WORK_DIR}/build.log"; fail "engine build"; }
 cmake --install "${BUILD_DIR}" > "${WORK_DIR}/install.log" 2>&1 \
     || { tail -30 "${WORK_DIR}/install.log"; fail "engine install"; }
+
+if [ "${BUNDLED}" -eq 1 ]; then GGML_PREFIX="${PREFIX}"; fi
 
 # ----------------------------------------------------------------------
 echo "==> 1/3 install-tree artifact audit"

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "source_url": "https://www.openslr.org/resources/12/dev-clean.tar.gz",
+  "clips": [
+    {
+      "id": "1272-128104-0014",
+      "member": "LibriSpeech/dev-clean/1272/128104/1272-128104-0014.flac",
+      "source_flac_sha256": "5e7e3b96d975c74c952209a4d3a0731ec57019689685e1cf5f3c73a76f6f8a36",
+      "samples": 35920,
+      "expected": "BY HARRY QUILTER M A"
+    },
+    {
+      "id": "1272-135031-0019",
+      "member": "LibriSpeech/dev-clean/1272/135031/1272-135031-0019.flac",
+      "source_flac_sha256": "c19e0c3de6100627ffbca103dc5d8502dc6d74a3e1f06e00d5e6dc6ffbb25d94",
+      "samples": 56400,
+      "expected": "THAT'S FUNNY REMARKED BETSY THOUGHTFULLY"
+    }
+  ]
+}

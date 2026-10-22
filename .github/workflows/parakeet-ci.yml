@@ -28,6 +28,14 @@ on:
         description: 'Also run the GPU ctest lane (on the self-hosted NVIDIA Linux runner)'
         type: boolean
         default: false
+      run_mosaic:
+        description: 'Provision exact Mosaic and run real CPU/Metal/Core ML integration tests'
+        type: boolean
+        default: false
+      mosaic_compact_url:
+        description: 'Optional CI-accessible URL for the hash-pinned 339.6 MB Mosaic Compact GGUF; enables all twelve model/sidecar cases'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -40,8 +48,8 @@ permissions:
 # Two things are exempt and keyed per run instead, so they can never be
 # superseded:
 #
-#   run_gpu dispatch - the opt-in `gpu` job below only runs under a
-#     workflow_dispatch with run_gpu, takes ~90 minutes on a self-hosted
+#   run_gpu / run_mosaic dispatch - the opt-in jobs below only run under a
+#     workflow_dispatch with their input enabled, can take ~90 minutes on a self-hosted
 #     runner, and is SKIPPED by whatever run would replace it. Since that
 #     dispatch is made on a branch rather than master, keying on the ref alone
 #     left it cancellable — a second dispatch would kill it and the
@@ -51,7 +59,7 @@ permissions:
 # github.event.inputs.* is a string even for a `type: boolean` input, hence
 # the explicit == 'true'.
 concurrency:
-  group: parakeet-ci-${{ ((github.event.inputs.run_gpu == 'true' || github.ref == 'refs/heads/master') && github.run_id) || github.ref }}
+  group: parakeet-ci-${{ ((github.event.inputs.run_gpu == 'true' || github.event.inputs.run_mosaic == 'true' || github.ref == 'refs/heads/master') && github.run_id) || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -136,6 +144,37 @@ jobs:
       - name: Build
         run: cmake --build build -j4
 
+      - name: Verify bundled install and external package consumers
+        run: |
+          if [ ! -d ggml-src/.git ]; then
+            git init -q ggml-src
+            git -C ggml-src remote add origin "$GGML_REPO"
+            git -C ggml-src fetch --depth 1 origin ${{ steps.ggml.outputs.sha }}
+            git -C ggml-src checkout -q FETCH_HEAD
+          fi
+          ln -s "$PWD/ggml-src" engines/parakeet/ggml
+          PARAKEET_PKGTEST_CMAKE_ARGS="-DGGML_NATIVE=OFF -DGGML_METAL=OFF -DGGML_BUILD_TESTS=OFF -DGGML_BUILD_EXAMPLES=OFF" \
+            bash engines/parakeet/scripts/test-package-consumption.sh \
+              --bundled --work-dir "$RUNNER_TEMP/parakeet-bundled-${{ github.run_id }}-${{ github.run_attempt }}" --keep
+
+      - name: Verify unavailable Apple runtime is reported as skipped with Torch installed
+        if: github.event_name == 'workflow_dispatch' && inputs.run_mosaic && matrix.os == 'ubuntu-24.04'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/coreml-skip-python"
+          skip_python="$RUNNER_TEMP/coreml-skip-python/bin/python"
+          "$skip_python" -m pip install torch==2.7.0 --index-url https://download.pytorch.org/whl/cpu
+          "$skip_python" -m pip install numpy==2.2.6
+          cmake -S engines/parakeet -B build -DPython3_EXECUTABLE="$skip_python"
+          ctest --test-dir build -R '^test_coreml_padding_runtime$' --verbose \
+            --no-tests=error --output-junit coreml-skip-results.xml
+          "$skip_python" - <<'PY'
+          import xml.etree.ElementTree as ET
+          tests = list(ET.parse('build/coreml-skip-results.xml').iter('testcase'))
+          if len(tests) != 1 or tests[0].find('skipped') is None:
+              raise SystemExit('Unavailable Apple runtime must be reported as skipped, never passed')
+          print('Confirmed Apple runtime coverage is skipped on Linux with Torch installed')
+          PY
+
       # Excludes gpu (no GPU on hosted runners) and perf (timing gates are
       # meaningless on shared runners). Model-dependent tests are DISABLED
       # at configure time when fixtures are absent and report as "Not Run".
@@ -160,6 +199,115 @@ jobs:
         run: |
           bash engines/parakeet/scripts/test-package-consumption.sh \
             --ggml-prefix "$PWD/ggml-install"
+
+  mosaic_authorize:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_mosaic
+    uses: ./.github/workflows/reusable-authorize-self-hosted.yml
+
+  # Unlike fixture-free PR CI, this lane fails if any Mosaic arm is skipped.
+  # Sources are public; the archive, GGUF and complete audio are hash-verified.
+  mosaic:
+    needs: [runner_names, mosaic_authorize]
+    if: github.event_name == 'workflow_dispatch' && inputs.run_mosaic && needs.mosaic_authorize.outputs.allowed == 'true'
+    runs-on: ${{ needs.runner_names.outputs.macos_arm64_gpu }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize isolated fixture paths
+        run: |
+          echo "MOSAIC_FIXTURES=$RUNNER_TEMP/mosaic-fixtures-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+          echo "MOSAIC_PYTHON=$RUNNER_TEMP/mosaic-python-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/bin/python" >> "$GITHUB_ENV"
+      - name: Provision isolated Python 3.11
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+          python-version: '3.11'
+        env:
+          UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/mosaic-python-runtime
+      - name: Create pinned export environment
+        env:
+          UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/mosaic-python-runtime
+        run: |
+          uv venv --python 3.11 "$(dirname "$(dirname "$MOSAIC_PYTHON")")"
+          uv pip install --python "$MOSAIC_PYTHON" \
+            torch==2.7.0 numpy==2.2.6 gguf==0.19.0 coremltools==9.0 \
+            PyYAML==6.0.3 sentencepiece==0.2.0 soundfile==0.13.1 pip==25.1.1
+      - name: Check decoder export and failure guards
+        run: |
+          "$MOSAIC_PYTHON" engines/parakeet/test/test_export_mosaic.py
+          "$MOSAIC_PYTHON" engines/parakeet/test/test_mosaic_compact.py
+      - name: Check merged Core ML interfaces and Neural Engine exporter helpers
+        run: |
+          "$MOSAIC_PYTHON" engines/parakeet/test/test_coreml_padding_runtime.py
+          "$MOSAIC_PYTHON" engines/parakeet/test/test_export_coreml_ane.py
+      - name: Cache exact model, sidecar and audio fixtures
+        id: mosaic-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.MOSAIC_FIXTURES }}/bundle
+            ${{ env.MOSAIC_FIXTURES }}/audio
+            ${{ env.MOSAIC_FIXTURES }}/compact
+          key: mosaic-${{ inputs.mosaic_compact_url != '' && 'both' || 'standard' }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('engines/parakeet/scripts/*.py', 'engines/parakeet/configs/parakeet-mosaic*.json', 'engines/parakeet/test/mosaic-fixtures.json', 'engines/parakeet/test/prepare_mosaic_fixtures.py') }}
+      - name: Provision frozen Mosaic fixtures
+        if: steps.mosaic-cache.outputs.cache-hit != 'true'
+        env:
+          MOSAIC_COMPACT_URL: ${{ inputs.mosaic_compact_url }}
+        run: |
+          compact_args=()
+          if [ -n "$MOSAIC_COMPACT_URL" ]; then compact_args=(--compact-url "$MOSAIC_COMPACT_URL"); fi
+          "$MOSAIC_PYTHON" engines/parakeet/test/prepare_mosaic_fixtures.py \
+            --fixtures "$MOSAIC_FIXTURES" --coreml "${compact_args[@]}"
+      - name: Build normal speech dependency and Mosaic harness
+        run: |
+          git clone --depth 1 --branch "$GGML_BRANCH" "$GGML_REPO" mosaic-ggml-src
+          git -C mosaic-ggml-src rev-parse HEAD > mosaic-dependency-sha.txt
+          cmake -S mosaic-ggml-src -B mosaic-ggml-build -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON -DGGML_METAL=ON -DGGML_BUILD_TESTS=OFF \
+            -DGGML_BUILD_EXAMPLES=OFF -DCMAKE_INSTALL_PREFIX="$PWD/mosaic-ggml-install"
+          cmake --build mosaic-ggml-build -j4
+          cmake --install mosaic-ggml-build
+          cmake -S engines/parakeet -B build-mosaic -DCMAKE_BUILD_TYPE=Release \
+            -DPARAKEET_USE_SYSTEM_GGML=ON -DPARAKEET_COREML=ON \
+            -DPARAKEET_BUILD_TESTS=ON -DPARAKEET_BUILD_EXAMPLES=OFF -DPARAKEET_INSTALL=OFF \
+            -DPython3_EXECUTABLE="$MOSAIC_PYTHON" \
+            -DPARAKEET_TEST_MOSAIC_DIR="$MOSAIC_FIXTURES" \
+            -DCMAKE_PREFIX_PATH="$PWD/mosaic-ggml-install"
+          cmake --build build-mosaic --target test-mosaic-inference -j4
+      - name: Run all requested real-model arms and reject skipped coverage
+        env:
+          INCLUDE_COMPACT: ${{ inputs.mosaic_compact_url != '' && '1' || '0' }}
+        run: |
+          pattern='^test-mosaic-(native|coreml)'
+          if [ "$INCLUDE_COMPACT" = 1 ]; then pattern='^test-mosaic-'; fi
+          ctest --test-dir build-mosaic -R "$pattern" \
+            --output-on-failure --no-tests=error --output-junit mosaic-results.xml
+          "$MOSAIC_PYTHON" - <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+          tests = list(ET.parse('build-mosaic/mosaic-results.xml').iter('testcase'))
+          expected = 12 if os.environ['INCLUDE_COMPACT'] == '1' else 6
+          if len(tests) != expected or any(t.find(tag) is not None for t in tests for tag in ('skipped', 'failure', 'error')):
+              raise SystemExit(f'Expected {expected} executed, passing Mosaic integration tests')
+          print(f'All {expected} requested Mosaic CPU/Metal/Core ML cases executed and passed')
+          PY
+      - name: Upload integration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mosaic-integration-${{ github.sha }}
+          path: |
+            build-mosaic/mosaic-results.xml
+            build-mosaic/Testing/Temporary/LastTest.log
+            mosaic-dependency-sha.txt
+            ${{ env.MOSAIC_FIXTURES }}/audio/receipt.json
+            ${{ env.MOSAIC_FIXTURES }}/bundle/complete.json
+            ${{ env.MOSAIC_FIXTURES }}/bundle/plan.json
+            ${{ env.MOSAIC_FIXTURES }}/bundle/failure.json
+            ${{ env.MOSAIC_FIXTURES }}/bundle/gguf-export.log
+            ${{ env.MOSAIC_FIXTURES }}/compact/complete.json
+            ${{ env.MOSAIC_FIXTURES }}/compact/plan.json
+            ${{ env.MOSAIC_FIXTURES }}/compact/failure.json
 
   # Non-Metal GPU lane, opt-in via run_gpu. Runner choice mirrors tts-ci.yml:
   # the generic [self-hosted, gpu] label resolves to a mixed pool — an Apple

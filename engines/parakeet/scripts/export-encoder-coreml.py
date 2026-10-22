@@ -10,7 +10,9 @@ ref-encoder-from-gguf.py so it matches the ggml encoder numerically.
 Three input-shape modes:
   - Fixed (default): torch.jit.trace at a single mel length (from a sample wav
     or an explicit count). Unified RNN-T and TDT treat that length as a
-    capacity. CTC/IndicConformer uses the same capacity contract. EOU,
+    capacity. Fixed TDT adds a mel_valid_mask input to isolate padding throughout
+    subsampling and the Conformer stack. CTC/IndicConformer uses the same
+    capacity contract. EOU,
     Nemotron, and Sortformer batch routing require the exact
     exported length.
   - Sortformer AOSC (--bypass-pre-encode): trace only the Conformer block stack
@@ -140,8 +142,8 @@ def validate_export_contract(meta, flexible=False, bypass_pre_encode=False):
             f"Sortformer v2.1, got {kind!r}")
     if bypass_pre_encode and kind != "sortformer":
         raise ValueError("--bypass-pre-encode is supported only for Sortformer v2.1")
-    if kind in ("ctc", "rnnt"):
-        family = "CTC/IndicConformer" if kind == "ctc" else "Unified RNN-T"
+    if kind in ("ctc", "rnnt", "tdt"):
+        family = {"ctc": "CTC/IndicConformer", "rnnt": "Unified RNN-T", "tdt": "TDT"}[kind]
         if bool(meta.get("parakeet.encoder.causal_downsampling", False)):
             raise ValueError(
                 f"{family} Core ML export requires non-causal downsampling")
@@ -517,6 +519,28 @@ class EncoderModule(torch.nn.Module):
         return encoder_forward(self.ref, mel, weights, self.meta)[0]
 
 
+class MaskedEncoderModule(EncoderModule):
+    """Fixed-capacity offline TDT encoder with a contiguous valid mel prefix.
+
+    The second input stays a tensor throughout tracing: shorter utterances must
+    not inherit the example length baked into the exported graph.
+    """
+
+    def forward(self, mel, mel_valid_mask):
+        weights = BiasTolerantWeights(
+            (key, getattr(self, self._buffers_by_key[key])) for key in self._keys)
+        # Keep length arithmetic integer even under Core ML's FP16 transform:
+        # FP16 cannot represent every frame count above 2048.
+        valid_mel_frames = mel_valid_mask.to(torch.int32).sum(dim=0)
+        x, valid_frames = self.ref.subsampling(mel, weights, valid_mel_frames)
+        valid = (torch.arange(x.size(1), device=x.device) < valid_frames).to(x.dtype)
+        sequence_mask = valid.reshape(1, -1, 1)
+        # Finite in FP16; a fully masked padded query must not create NaNs.
+        attention_mask = (1.0 - valid).reshape(1, 1, 1, -1) * -1.0e4
+        return conformer_stack_forward(
+            self.ref, x, weights, self.meta, attention_mask, sequence_mask)[0]
+
+
 def prepare_bypass_encoder_inputs(pre_encode, valid_mask):
     encoder_input = pre_encode.transpose(0, 1).unsqueeze(0)
     sequence_mask = valid_mask.reshape(1, -1, 1)
@@ -620,15 +644,22 @@ def palettize_encoder(mlmodel, bits, group_size):
 
 def convert_fixed(ref, weights, meta, example, n_mels, n_mel_frames, d_model,
                   precision, io_dtype, deployment_target):
-    model = EncoderModule(ref, weights, meta).eval()
+    masked = model_type(meta) == "tdt"
+    model = (MaskedEncoderModule if masked else EncoderModule)(ref, weights, meta).eval()
+    inputs = [ct.TensorType(name="mel", shape=(n_mels, n_mel_frames), dtype=io_dtype)]
+    trace_inputs = (example,)
+    if masked:
+        trace_inputs += (torch.ones(n_mel_frames, dtype=torch.float32),)
+        inputs.append(ct.TensorType(name="mel_valid_mask", shape=(n_mel_frames,),
+                                    dtype=io_dtype))
     with torch.inference_mode():
-        reference_out = model(example)
+        reference_out = model(*trace_inputs)
     print(f"[export] fixed n_mels={n_mels} d_model={d_model} n_mel_frames={n_mel_frames} "
           f"encoder_frames={reference_out.shape[0]}")
-    traced = torch.jit.trace(model, example, check_trace=False)
+    traced = torch.jit.trace(model, trace_inputs, check_trace=False)
     return ct.convert(
         traced,
-        inputs=[ct.TensorType(name="mel", shape=(n_mels, n_mel_frames), dtype=io_dtype)],
+        inputs=inputs,
         outputs=[ct.TensorType(name="encoder_out", dtype=io_dtype)],
         compute_units=ct.ComputeUnit.ALL,
         compute_precision=precision,

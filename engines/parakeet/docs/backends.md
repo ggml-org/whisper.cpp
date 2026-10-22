@@ -170,6 +170,64 @@ cmake -S engines/parakeet -B build-vulkan -DGGML_VULKAN=ON
 cmake -S engines/parakeet -B build-opencl -DGGML_OPENCL=ON
 ```
 
+## Experimental packed affine TDT recipe
+
+`export-packed-affine.py` preserves an explicit per-output-channel INT4/INT8
+recipe, including FP32 minima/steps and original FP16 overrides. It does not
+apply another GGML weight quantizer. The nonstandard architecture
+`parakeet-affine-v1` makes older engines reject these files instead of treating
+carrier integers as model weights. Ordinary GGUF models retain their existing
+load and execution paths.
+
+Supply a JSON recipe with `source_archive_sha256` and a `tensors` object mapping
+NeMo encoder weight names to `4`, `8`, or `16`; unlisted tensors remain FP16:
+
+```bash
+python engines/parakeet/scripts/export-packed-affine.py \
+  --archive models/parakeet-tdt-0.6b-v3.nemo \
+  --recipe recipe.json \
+  --output models/retained.affine.gguf \
+  --dense-control models/retained.dense.gguf
+```
+
+The experimental native path stores integer codes in unit-scale Q4_0/Q8_0
+carrier blocks, with separate FP32 affine metadata. These blocks are not
+ordinary Q4_0/Q8_0 model weights. Block-scale headers add storage overhead over
+pure packed codes. The native graph reconstructs each projection transiently
+using separate FP32 multiply/add operations and rounds to FP16 before the
+existing matrix multiply. Activation-first graph ordering permits workspace
+reuse; the loader does not create a persistent dense model. This is a faithful
+storage/execution baseline, **not a fused low-bit matrix multiply or a speed
+optimization**. Reconstruction can be substantially slower than ordinary Q8.
+Unsupported encoder graph operations fail rather than silently falling back.
+`--profile` does not produce isolated substage timings for packed-affine models;
+that graph builder has no affine reconstruction scope and rejects them explicitly.
+Full encoder/inference measurements retain the normal affine execution path.
+Only offline TDT has been evaluated; other backend/model combinations require
+validation before use.
+
+Depthwise kernels retain the recipe's reconstructed FP16 values, as in the
+original packed-projection runtime. Selected FP16 attention weights remain
+FP16. Both packed exports and their dense controls omit duplicate fused Q/K/V
+copies, so size comparisons must account for that layout difference. The receipt
+records the exported source values, physical bytes, coverage and file hashes.
+`--expected-tensors` can require an independent SHA/shape/dtype receipt for every
+source tensor before GGUF conversion.
+
+Validate exact reconstruction before comparing transcription and timing:
+
+```bash
+python engines/parakeet/test/test_packed_affine.py
+# Build target test-packed-affine, then run on the exact requested backend:
+./build/test-packed-affine models/retained.affine.gguf MTL0
+```
+
+The native audit compares every reconstructed FP16 weight bit-for-bit with the
+saved affine arithmetic and refuses unsupported operations. Python reference
+and Core ML export scripts deliberately reject carrier files; use the matching
+`--dense-control` output when an expanded weight graph is required. A weight
+identity check does not establish transcription accuracy or a speed advantage.
+
 ## Core ML encoder sidecar
 
 `PARAKEET_COREML=ON` is Apple-only. It enables optional CTC/IndicConformer,
@@ -222,6 +280,39 @@ python engines/parakeet/scripts/export-encoder-coreml.py \
   --out engines/parakeet/models/parakeet-tdt-0.6b-v3-encoder.mlpackage \
   --compile-dir engines/parakeet/models
 ```
+
+Fixed TDT exports now have two inputs: `mel` and `mel_valid_mask`. The latter
+is a vector at mel capacity, with ones for the contiguous valid prefix and zeros
+for padding. The runtime supplies this mask from the same valid-frame scan used
+by the native encoder. The graph masks every subsampling stage, attention keys,
+and intermediate Conformer states, including the GLU output before depthwise
+convolution. Only the subsampled valid prefix reaches the decoder. This requires
+both the updated exporter and runtime; an older runtime cannot load this new
+interface. Existing single-input sidecars still load in the updated runtime,
+but their padded frames remain visible to attention. Re-exporting is required
+to obtain the masking fix; updating engine code alone cannot fix old artifacts.
+Masking preserves natural-length semantics in the graph; quantization and Core
+ML precision can still affect numerical and transcript parity. Validate the
+new artifact on the intended audio before deploying it.
+
+Checkpoint-free padding regressions can be run with:
+
+```bash
+python engines/parakeet/test/test_coreml_padding.py
+# Apple + Xcode command-line tools; also converts/compiles small test models:
+python engines/parakeet/test/test_coreml_padding_runtime.py
+```
+
+The runtime test covers fixed capacity, 1501-frame inputs, short and full-capacity
+calls, integer lengths above 2048, stride boundaries, cache reuse, legacy single-input
+models, and the Sortformer bypass interface on CPU-only and default Core ML
+placement. FP32 conversions check padding semantics against the unpadded
+PyTorch reference; FP16 and FP32 native I/O are compared against predictions
+from the corresponding compiled Core ML graph. FP16-versus-PyTorch numerical
+parity is a separate artifact validation, not asserted by the I/O test.
+A tested conversion environment is Python 3.11, Torch 2.7.0,
+coremltools 9.0, and NumPy 1.26.4. These small-model checks do not establish
+full-model WER, latency, or ANE placement.
 
 IndicConformer uses the same fixed-capacity contract. Core ML runs the encoder;
 the multilingual CTC projection and `--language` token mask remain on ggml:

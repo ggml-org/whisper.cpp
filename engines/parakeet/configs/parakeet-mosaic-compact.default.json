@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "parakeet-mosaic-compact",
+  "version": "1",
+  "bytes": 339564832,
+  "sha256": "8229311ec51911e7f305413f8d9430b1e0d357101ffb3b75d32feed6b8520780",
+  "tensor_counts": {"F32": 351, "F16": 30, "Q4_0": 178, "Q8_0": 20, "Q3_K": 41, "IQ3_S": 33},
+  "execution": "stock GGML blocks; no affine opt-in or dense inference expansion",
+  "sidecar": "optional matching masked512 FLOAT16 encoder",
+  "preparation": "Verify and copy the supplied exact GGUF. This manifest does not recreate or retune its research allocation."
+}

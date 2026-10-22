@@ -40,6 +40,8 @@ def ggml_to_torch(t):
         gguf.GGMLQuantizationType.Q8_0,
         gguf.GGMLQuantizationType.Q5_0,
         gguf.GGMLQuantizationType.Q4_0,
+        gguf.GGMLQuantizationType.Q3_K,
+        gguf.GGMLQuantizationType.IQ3_S,
     ):
         arr = gguf.quants.dequantize(raw, t.tensor_type)
         arr = np.asarray(arr, dtype=np.float32).reshape(tuple(reversed(t.shape)))
@@ -50,6 +52,9 @@ def ggml_to_torch(t):
 
 def load_gguf(gguf_path):
     r = gguf.GGUFReader(str(gguf_path))
+    if "parakeet.affine.version" in r.fields:
+        raise ValueError("Packed affine carriers require the native packed engine; "
+                         "use export-packed-affine.py --dense-control for reference/Core ML export")
     tensors = {t.name: ggml_to_torch(t) for t in r.tensors}
     meta = {}
     for field in r.fields.values():
