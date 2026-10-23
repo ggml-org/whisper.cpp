@@ -336,6 +336,14 @@ static MM3CondGraph g_mm3_cond;
 
 static bool mm3_cond_encode(const MM3Model & m, const float * hiddens, int64_t F, std::vector<float> & out,
                             int64_t * out_L, std::string * err = nullptr) {
+#ifdef MM3_ANE_VALIDATION
+    if (m.ane_validation) {
+        const int64_t L = mm3_cond_latent_length(m.synth_cfg.cond, F);
+        mm3_ane_validation::condition(*m.ane_validation, hiddens, F, L, out);
+        if (out_L) *out_L = L;
+        return true;
+    }
+#endif
     if (F <= 0 || F > MM3_COND_MAX_FRAMES) {
         if (err) {
             *err = "frames must be in 1.." + std::to_string(MM3_COND_MAX_FRAMES);

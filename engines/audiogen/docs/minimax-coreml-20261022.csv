@@ -1,0 +1,9 @@
+machine,chip,compute_units,status,load_s,generation_s,ar_s,conditioner_s,flow_s,vocoder_s,audio_s,nonfinite_candidate_logits,numerical_vs_native_cpu_passed,numerical_vs_native_gpu_passed,ane_compiler_diagnostic_count
+local-m1,Apple M1 Ultra,CPU_ONLY,complete,148.645,105.214,85.6258,0.018036999999999997,18.296799999999998,1.19127,5.990748299319728,0,False,False,0
+local-m1,Apple M1 Ultra,CPU_AND_GPU,complete,120.593,2435.39,2379.6,0.28260700000000005,54.1375,1.2100499999999998,5.990748299319728,0,False,True,0
+local-m1,Apple M1 Ultra,CPU_AND_NE,complete,403.591,898.795,862.862,0.088349,31.1554,4.60385,5.990748299319728,0,False,False,0
+local-m1,Apple M1 Ultra,ALL,complete,283.587,948.067,866.055,0.09436459999999999,79.8427,1.9839,5.990748299319728,0,False,False,0
+remote-m3,Apple M3 Ultra,CPU_ONLY,complete,53.5878,89.1249,77.2135,0.0131793,10.8653,0.9839410000000001,5.990748299319728,0,False,False,0
+remote-m3,Apple M3 Ultra,CPU_AND_GPU,complete,17.8597,48.779199999999996,41.2868,0.160427,6.65173,0.631334,5.990748299319728,0,False,True,0
+remote-m3,Apple M3 Ultra,CPU_AND_NE,complete,132.476,47.2008,39.006099999999996,0.0215469,6.85483,1.26932,5.990748299319728,0,False,False,1
+remote-m3,Apple M3 Ultra,ALL,complete,134.236,62.434599999999996,39.056,0.0204985,22.588,0.7218730000000001,5.990748299319728,0,False,False,1

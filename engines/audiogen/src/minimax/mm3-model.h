@@ -1,6 +1,7 @@
 #pragma once
 
 #include "backend.h"
+#include "ane-validation.h"
 #include "coreml-conditioner.h"
 #include "gguf-weights.h"
 #include "logic.h"
@@ -292,6 +293,11 @@ struct MM3Model {
 
     std::string coreml_conditioner_path;
     MM3CoreMLConditioner * coreml_conditioner = nullptr;
+#ifdef MM3_ANE_VALIDATION
+    std::string ane_validation_directory;
+    std::string ane_validation_compute_units = "CPU_AND_NE";
+    std::shared_ptr<mm3_ane_validation::Runtime> ane_validation;
+#endif
 
     bool           loaded      = false;
     bool           backend_ref = false;
@@ -1067,6 +1073,9 @@ static bool mm3_load_synth_tensors(MM3Model * m, const GGUFModel & gf, std::vect
 }
 
 static void mm3_unload(MM3Model * m) {
+#ifdef MM3_ANE_VALIDATION
+    m->ane_validation.reset();
+#endif
     if (!m->loaded && !m->wctx_lm.ctx && !m->wctx_synth.ctx && !m->backend_ref && !m->coreml_conditioner) {
         return;
     }
@@ -1110,6 +1119,15 @@ static bool mm3_load(MM3Model * m, std::string * err_out) {
     }
 
     const auto t0 = std::chrono::steady_clock::now();
+
+#ifdef MM3_ANE_VALIDATION
+    if (!m->ane_validation_directory.empty()) {
+        m->ane_validation = mm3_ane_validation::load(*m, m->ane_validation_directory);
+        m->loaded = true;
+        m->load_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-t0).count();
+        return true;
+    }
+#endif
 
     if (!m->coreml_conditioner_path.empty()) {
         const auto & c = m->synth_cfg.cond;

@@ -421,6 +421,22 @@ static bool mm3_lm_define_kv(const MM3LmConfig & c, MM3LmGraph * g, int64_t posi
 }
 
 static bool mm3_lm_prepare(const MM3Model & m, MM3LmGraph * g, int64_t n_ctx_needed, std::string * err) {
+#ifdef MM3_ANE_VALIDATION
+    if (m.ane_validation) {
+        int64_t positions=0;
+        if (!mm3_lm_bucket_for_context(n_ctx_needed,m.lm_cfg.context_length,&positions)) {
+            if (err) *err="requested positions exceed the original LM context";
+            return false;
+        }
+        if (positions!=mm3_ane_validation::context_positions(*m.ane_validation)) {
+            if (err) *err="compile the ANE validation profile for the existing native cache bucket";
+            return false;
+        }
+        g->n_ctx = positions;
+        g->kv_pos = 0;
+        return true;
+    }
+#endif
     if (!m.loaded) {
         if (err) {
             *err = "MiniMax-Music3 is not warm (POST /mm3/warm first)";
@@ -539,6 +555,21 @@ static void mm3_lm_read_outputs(const MM3LmConfig & c, const MM3LmSlot & s, floa
 
 static bool mm3_lm_prefill(const MM3Model & m, MM3LmGraph * g, const int32_t * ids_cond, const int32_t * ids_uncond,
                            int64_t n_prompt, float * out_hidden, float * out_logits, std::string * err) {
+#ifdef MM3_ANE_VALIDATION
+    if (m.ane_validation) {
+        mm3_ane_validation::reset(*m.ane_validation);
+        std::vector<float> input;
+        for (int64_t position=0; position<n_prompt; ++position) {
+            mm3_ane_validation::lm_embedding(*m.ane_validation, ids_cond[position], ids_uncond[position], input);
+            const auto started=std::chrono::steady_clock::now();
+            mm3_ane_validation::lm_step(*m.ane_validation, input.data(), position, out_hidden, out_logits);
+            fprintf(stderr,"[MM3-ANE] Prefill %lld/%lld: %.3f ms\n",(long long)(position+1),(long long)n_prompt,
+                std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count());
+        }
+        g->kv_pos = n_prompt;
+        return true;
+    }
+#endif
     const MM3LmConfig & c = m.lm_cfg;
     if (n_prompt <= 0) {
         if (err) {
@@ -595,6 +626,18 @@ static bool mm3_lm_prefill(const MM3Model & m, MM3LmGraph * g, const int32_t * i
 
 static bool mm3_lm_decode(const MM3Model & m, MM3LmGraph * g, int32_t sem_token_id, const int32_t * acoustic_rows,
                           float * out_hidden, float * out_logits, float * out_feedback, std::string * err) {
+#ifdef MM3_ANE_VALIDATION
+    if (m.ane_validation) {
+        const int64_t H = m.lm_cfg.embedding_length;
+        std::vector<float> input(2*H);
+        mm3_ane_validation::lm_feedback(*m.ane_validation, sem_token_id, acoustic_rows, input.data());
+        std::copy_n(input.data(), H, input.data()+H);
+        if (out_feedback) std::copy_n(input.data(), H, out_feedback);
+        mm3_ane_validation::lm_step(*m.ane_validation, input.data(), g->kv_pos, out_hidden, out_logits);
+        ++g->kv_pos;
+        return true;
+    }
+#endif
     const MM3LmConfig & c  = m.lm_cfg;
     const int64_t       NC = (int64_t) c.num_codebooks - 1;
 

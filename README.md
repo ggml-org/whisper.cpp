@@ -91,6 +91,12 @@ contracts; see the engine guides before exporting or deploying one.
 | AudioGen | ACE-Step VAE decoder | [AudioGen backends](engines/audiogen/docs/backends.md#core-ml-vae-decoder-sidecar) |
 | AudioGen | MiniMax conditioner projection (CPU + ANE; remaining stages native) | [MiniMax Core ML](engines/audiogen/docs/backends.md#minimax-core-ml-conditioner) |
 
+MiniMax also has an experimental, separately compiled [full Core ML replay
+harness](engines/audiogen/docs/minimax-coreml-validation.md). It runs the LM,
+depth decoder, conditioner, DiT and vocoder through the native Core ML API
+with `CPU_ONLY`, `CPU_AND_GPU`, `CPU_AND_NE` or `ALL`. The guide includes
+M1 Ultra/M3 Ultra measurements and the remaining numerical validation gaps.
+
 CosyVoice3 exports HiFT in FP32 to preserve waveform parity. Its memory-fit
 preflight returns `Error` with `coreml-memory-estimate-unavailable` when
 enabled sidecars are present, rather than undercounting their resident memory.

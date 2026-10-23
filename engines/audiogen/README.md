@@ -24,6 +24,13 @@ Export, placement and fallback contracts are in
 MiniMax-Music3 can explicitly use a [Core ML conditioner projection](docs/backends.md#minimax-core-ml-conditioner)
 with its remaining stages on the configured native backend. MiniMax is unavailable on mobile.
 
+The experimental [full Core ML replay harness](docs/minimax-coreml-validation.md)
+routes the LM, depth decoder, conditioner, DiT and vocoder through Core ML.
+It supports the four native compute-unit configurations, uses a separate
+`MM3_ANE_VALIDATION` build, and reports load and generation times separately.
+The guide documents export/profile composition, M1 Ultra/M3 Ultra results,
+and the pending numerical validation for CPU-only and ANE configurations.
+
 ## Performance
 
 Dated ACE-Step and MiniMax campaigns, including CUDA/Vulkan/Metal and
@@ -48,6 +55,7 @@ and MiniMax model preparation and transfer. Diagnostics do not gate quality.
 | Tests and parity | [docs/testing.md](docs/testing.md) |
 | Performance campaigns and timing methods | [docs/performance.md](docs/performance.md) |
 | Engine comparison harness | [benchmarks/comparison/README.md](benchmarks/comparison/README.md) |
+| Experimental MiniMax full Core ML replay | [docs/minimax-coreml-validation.md](docs/minimax-coreml-validation.md) |
 
 ## License
 
