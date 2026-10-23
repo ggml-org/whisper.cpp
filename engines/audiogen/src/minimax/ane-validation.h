@@ -1,7 +1,9 @@
 #pragma once
 
-#ifdef MM3_ANE_VALIDATION
+#if defined(MM3_ANE_VALIDATION) || defined(AUDIOGEN_USE_MINIMAX_COREML)
+#define MM3_COREML_RUNTIME_ENABLED
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -12,8 +14,10 @@ struct MM3DitBranch;
 
 namespace mm3_ane_validation {
 struct Runtime;
+bool available();
 std::shared_ptr<Runtime> load(const MM3Model & model, const std::string & directory);
 void reset(Runtime & runtime);
+void set_cancel_handler(Runtime & runtime, std::function<bool()> handler);
 int64_t context_positions(const Runtime & runtime);
 void lm_embedding(Runtime & runtime, int32_t conditional, int32_t unconditional, std::vector<float> & out);
 void lm_feedback(Runtime & runtime, int32_t semantic, const int32_t * acoustic, float * out);

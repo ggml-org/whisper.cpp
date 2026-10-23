@@ -16,7 +16,7 @@ Native [ACE-Step 1.5](https://github.com/ace-step/ACE-Step-1.5) and MiniMax-Musi
 | Model | Task | Output | Quantization | Backends |
 |---|---|---|---|---|
 | ACE-Step v15 turbo / sft / base | text-to-music, editing, LRC timestamps; base-only lego stems | 48 kHz stereo | `f32`, `f16`, `bf16`, `q8_0`; turbo also `q4_k_m` | CPU, Vulkan, Metal, OpenCL (Adreno 700+), CUDA, Hexagon (turbo `q8_0` DiT; K-quant GGUFs are refused at load); optional Core ML VAE-decoder sidecar |
-| MiniMax-Music3 | text-to-music | 44.1 kHz stereo | `f16`, `q8_0`; LM, DiT and depth decoder also `q4_k_m` | desktop CPU + GPU (CUDA, Vulkan, Metal); optional Core ML conditioner projection on Apple |
+| MiniMax-Music3 | text-to-music | 44.1 kHz stereo | `f16`, `q8_0`; LM, DiT and depth decoder also `q4_k_m` | desktop CPU + GPU (CUDA, Vulkan, Metal); optional conditioner or full-network Core ML on Apple |
 
 Apple builds can optionally use a Core ML sidecar for the ACE-Step VAE decoder.
 Export, placement and fallback contracts are in
@@ -24,12 +24,13 @@ Export, placement and fallback contracts are in
 MiniMax-Music3 can explicitly use a [Core ML conditioner projection](docs/backends.md#minimax-core-ml-conditioner)
 with its remaining stages on the configured native backend. MiniMax is unavailable on mobile.
 
-The experimental [full Core ML replay harness](docs/minimax-coreml-validation.md)
-routes the LM, depth decoder, conditioner, DiT and vocoder through Core ML.
-It supports the four native compute-unit configurations, uses a separate
-`MM3_ANE_VALIDATION` build, and reports load and generation times separately.
-The guide documents export/profile composition, M1 Ultra/M3 Ultra results,
-and the pending numerical validation for CPU-only and ANE configurations.
+The public MiniMax engine also supports the [full Core ML route](docs/minimax-coreml-validation.md)
+with `AUDIOGEN_MINIMAX_COREML=ON`, `EngineOptions::coreml_profile_dir`, and
+`EngineOptions::coreml_compute_units`. Both fields are required together.
+The runtime retains its compiled LM, depth, conditioner, DiT, and vocoder
+programs between generations, using the selected Apple device policy on
+macOS 15+. The separate flag leaves ACE-Step's sidecar behavior unchanged.
+The guide records device-dependent timings and pending CPU/ANE numerical parity.
 
 ## Performance
 

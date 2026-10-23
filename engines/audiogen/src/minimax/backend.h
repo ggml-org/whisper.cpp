@@ -76,6 +76,9 @@ static void backend_set_threads(ggml_backend_t backend, int n_threads) {
 }
 
 static void backend_set_abort_handler(ggml_backend_t backend, ggml_abort_callback callback, void * user_data) {
+    if (!backend) {
+        return;
+    }
     ggml_backend_dev_t device = ggml_backend_get_device(backend);
     ggml_backend_reg_t registry = device ? ggml_backend_dev_backend_reg(device) : nullptr;
     if (!registry) {

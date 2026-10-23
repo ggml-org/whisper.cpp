@@ -486,7 +486,7 @@ static MM3DepthGraph g_mm3_depth;
 static bool mm3_depth_decode_frame(const MM3Model & m, const float * lm_hidden_cond, const float * lm_hidden_uncond,
                                    int32_t semantic_code, const int32_t * forced_codes, MM3DepthFrame * out,
                                    std::string * err = nullptr, std::mt19937_64 * rng = nullptr, int top_k = 0) {
-#ifdef MM3_ANE_VALIDATION
+#ifdef MM3_COREML_RUNTIME_ENABLED
     if (m.ane_validation) {
         mm3_ane_validation::depth(*m.ane_validation, lm_hidden_cond, lm_hidden_uncond, semantic_code,
                                    forced_codes, out, rng, top_k);

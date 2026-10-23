@@ -806,8 +806,10 @@ void fill_pools(FitResult & result, const std::vector<FitPool> & pools, size_t p
 
 FitResult project(const EngineOptions & options, const FitWorkload & request) {
     validate_workload(request);
-    if (!options.coreml_conditioner_path.empty()) {
-        throw FitError(kReasonCoreML, "Core ML resident models and prediction buffers cannot be projected.");
+    if (!options.coreml_conditioner_path.empty() || !options.coreml_profile_dir.empty() ||
+        !options.coreml_compute_units.empty()) {
+        throw FitError(kReasonCoreML, "Core ML resident models and prediction "
+                                      "buffers cannot be projected.");
     }
     const std::string   device   = resolve_device(options);
     const EngineOptions resolved = resolve_paths(options);

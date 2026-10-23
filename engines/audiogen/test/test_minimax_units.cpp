@@ -1983,6 +1983,7 @@ void test_model_pair_resolution_f32() {
 }
 
 void test_backend_configuration() {
+    backend_set_abort_handler(nullptr, nullptr, nullptr);
     using tts_cpp::minimax::detail::backend_configuration_matches;
     CHECK(backend_configuration_matches(0, 4, "first", 8, "second"));
     CHECK(backend_configuration_matches(1, 4, "backends/.", 4, "backends"));

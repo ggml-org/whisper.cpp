@@ -602,7 +602,7 @@ static bool mm3_vocoder_decode_tiled(const MM3Model & m, const std::vector<float
 
 static bool mm3_vocoder_decode(const MM3Model & m, const std::vector<float> & latents, int64_t L,
                                std::vector<float> & out_stereo, std::string * err = nullptr) {
-#ifdef MM3_ANE_VALIDATION
+#ifdef MM3_COREML_RUNTIME_ENABLED
     if (m.ane_validation) {
         mm3_ane_validation::vocoder(*m.ane_validation, latents, L, out_stereo);
         return true;

@@ -171,7 +171,7 @@ static bool mm3_dit_use_flash_attn(bool has_gpu) {
 }
 
 static bool mm3_dit_prepare(const MM3Model & m, MM3DitGraph * g, std::string * err) {
-#ifdef MM3_ANE_VALIDATION
+#ifdef MM3_COREML_RUNTIME_ENABLED
     if (m.ane_validation) return true;
 #endif
     if (!m.loaded) {
@@ -456,7 +456,7 @@ static bool mm3_dit_read_branches(const MM3Model & m, MM3DitGraph * g, const std
 // latents, timestep and condition and differ only in their condition gate.
 static bool mm3_dit_run(const MM3Model & m, MM3DitGraph * g, const float * latents, const float * cond,
                         const std::vector<MM3DitBranch> & branches, float t, int64_t L, std::string * err) {
-#ifdef MM3_ANE_VALIDATION
+#ifdef MM3_COREML_RUNTIME_ENABLED
     if (m.ane_validation) {
         mm3_ane_validation::dit(*m.ane_validation, latents, cond, branches, t, L);
         return true;

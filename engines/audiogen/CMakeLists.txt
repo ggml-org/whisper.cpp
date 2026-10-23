@@ -47,7 +47,11 @@ else()
 endif()
 option(AUDIOGEN_BUILD_MINIMAX "audiogen-cpp: build the desktop MiniMax-Music3 engine (CPU default, GPU via EngineOptions::device)" ${AUDIOGEN_MINIMAX_DEFAULT})
 option(AUDIOGEN_COREML "audiogen-cpp: enable Apple Core ML sidecars (ACE-Step VAE decoder and explicit MiniMax conditioner)." OFF)
-if (AUDIOGEN_COREML)
+option(AUDIOGEN_MINIMAX_COREML "audiogen-cpp: enable the full MiniMax Core ML runtime with explicit compute units." OFF)
+if (AUDIOGEN_MINIMAX_COREML AND (NOT APPLE OR AUDIOGEN_MOBILE OR NOT AUDIOGEN_BUILD_MINIMAX))
+    message(FATAL_ERROR "AUDIOGEN_MINIMAX_COREML requires desktop macOS and AUDIOGEN_BUILD_MINIMAX=ON.")
+endif()
+if (AUDIOGEN_COREML OR AUDIOGEN_MINIMAX_COREML)
     if (NOT APPLE)
         message(FATAL_ERROR "AUDIOGEN_COREML is Apple-only (requires the CoreML framework); leave it OFF on ${CMAKE_SYSTEM_NAME}.")
     endif()
@@ -145,6 +149,12 @@ if (AUDIOGEN_COREML)
     endif()
 endif()
 
+if (AUDIOGEN_MINIMAX_COREML)
+    list(APPEND AUDIOGEN_LIB_SOURCES src/coreml/minimax-ane-validation.mm)
+    set_source_files_properties(src/coreml/minimax-ane-validation.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+endif()
+
 if (AUDIOGEN_BUILD_LIBRARY)
     # Compile once. The installed/exported library follows BUILD_SHARED_LIBS
     # (shared under the umbrella, because whisper caches ON). In-tree CLIs and
@@ -162,15 +172,21 @@ if (AUDIOGEN_BUILD_LIBRARY)
             $<$<BOOL:${AUDIOGEN_BUILD_MINIMAX}>:${CMAKE_CURRENT_SOURCE_DIR}/src/minimax>
     )
     target_link_libraries(audiogen-cpp-objects PUBLIC ggml)
-    if (AUDIOGEN_COREML)
+    if (AUDIOGEN_COREML OR AUDIOGEN_MINIMAX_COREML)
         find_library(AUDIOGEN_COREML_FRAMEWORK     CoreML     REQUIRED)
         find_library(AUDIOGEN_FOUNDATION_FRAMEWORK Foundation REQUIRED)
-        target_compile_definitions(audiogen-cpp-objects PRIVATE AUDIOGEN_USE_COREML)
         target_link_libraries(audiogen-cpp-objects PUBLIC
             ${AUDIOGEN_COREML_FRAMEWORK}
             ${AUDIOGEN_FOUNDATION_FRAMEWORK}
         )
+    endif()
+    if (AUDIOGEN_COREML)
+        target_compile_definitions(audiogen-cpp-objects PRIVATE AUDIOGEN_USE_COREML)
         message(STATUS "audiogen: Core ML sidecars enabled (AUDIOGEN_USE_COREML)")
+    endif()
+    if (AUDIOGEN_MINIMAX_COREML)
+        target_compile_definitions(audiogen-cpp-objects PUBLIC AUDIOGEN_USE_MINIMAX_COREML)
+        message(STATUS "audiogen: full MiniMax Core ML enabled (AUDIOGEN_USE_MINIMAX_COREML)")
     endif()
     set_target_properties(audiogen-cpp-objects PROPERTIES
         POSITION_INDEPENDENT_CODE ON
@@ -191,7 +207,7 @@ if (AUDIOGEN_BUILD_LIBRARY)
             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     )
     target_link_libraries(audiogen-cpp PUBLIC ggml)
-    if (AUDIOGEN_COREML)
+    if (AUDIOGEN_COREML OR AUDIOGEN_MINIMAX_COREML)
         target_link_libraries(audiogen-cpp PUBLIC
             ${AUDIOGEN_COREML_FRAMEWORK}
             ${AUDIOGEN_FOUNDATION_FRAMEWORK}
@@ -374,6 +390,10 @@ if (AUDIOGEN_BUILD_TESTS)
             audiogen_register_test(test-minimax-coreml-conditioner LABEL "integration")
             set_property(TEST test-minimax-coreml-conditioner PROPERTY SKIP_RETURN_CODE 77)
         endif()
+
+        add_executable(test-minimax-coreml-options test/test_minimax_coreml_options.cpp)
+        audiogen_link_in_tree_binary(test-minimax-coreml-options)
+        audiogen_register_test(test-minimax-coreml-options LABEL "unit")
 
         add_executable(test-minimax-units test/test_minimax_units.cpp)
         audiogen_link_in_tree_binary(test-minimax-units)

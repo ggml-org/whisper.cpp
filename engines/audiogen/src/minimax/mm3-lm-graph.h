@@ -421,7 +421,7 @@ static bool mm3_lm_define_kv(const MM3LmConfig & c, MM3LmGraph * g, int64_t posi
 }
 
 static bool mm3_lm_prepare(const MM3Model & m, MM3LmGraph * g, int64_t n_ctx_needed, std::string * err) {
-#ifdef MM3_ANE_VALIDATION
+#ifdef MM3_COREML_RUNTIME_ENABLED
     if (m.ane_validation) {
         int64_t positions=0;
         if (!mm3_lm_bucket_for_context(n_ctx_needed,m.lm_cfg.context_length,&positions)) {
@@ -555,7 +555,7 @@ static void mm3_lm_read_outputs(const MM3LmConfig & c, const MM3LmSlot & s, floa
 
 static bool mm3_lm_prefill(const MM3Model & m, MM3LmGraph * g, const int32_t * ids_cond, const int32_t * ids_uncond,
                            int64_t n_prompt, float * out_hidden, float * out_logits, std::string * err) {
-#ifdef MM3_ANE_VALIDATION
+#ifdef MM3_COREML_RUNTIME_ENABLED
     if (m.ane_validation) {
         mm3_ane_validation::reset(*m.ane_validation);
         std::vector<float> input;
@@ -626,7 +626,7 @@ static bool mm3_lm_prefill(const MM3Model & m, MM3LmGraph * g, const int32_t * i
 
 static bool mm3_lm_decode(const MM3Model & m, MM3LmGraph * g, int32_t sem_token_id, const int32_t * acoustic_rows,
                           float * out_hidden, float * out_logits, float * out_feedback, std::string * err) {
-#ifdef MM3_ANE_VALIDATION
+#ifdef MM3_COREML_RUNTIME_ENABLED
     if (m.ane_validation) {
         const int64_t H = m.lm_cfg.embedding_length;
         std::vector<float> input(2*H);

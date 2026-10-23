@@ -21,7 +21,7 @@ struct CliOptions {
     std::string mode;
     std::string device;
     std::string coreml_conditioner;
-#ifdef MM3_ANE_VALIDATION
+#ifdef MM3_COREML_RUNTIME_ENABLED
     std::string ane_validation;
     std::string ane_compute_units;
 #endif
@@ -65,7 +65,7 @@ CliOptions parse_options(int argc, char ** argv) {
     options.mode          = arg_value(argc, argv, "--mode", "full");
     options.device        = arg_value(argc, argv, "--device", "");
     options.coreml_conditioner = arg_value(argc, argv, "--coreml-cond", "");
-#ifdef MM3_ANE_VALIDATION
+#ifdef MM3_COREML_RUNTIME_ENABLED
     options.ane_validation = arg_value(argc, argv, "--ane-validation", "");
     options.ane_compute_units = arg_value(argc, argv, "--ane-compute-units", "CPU_AND_NE");
     if (options.ane_compute_units != "CPU_ONLY" && options.ane_compute_units != "CPU_AND_GPU" &&
@@ -103,7 +103,7 @@ void print_usage() {
             "             [--dump-iters N [--dump-dir <dir>]] write per-iteration AR\n"
             "             probes (semantic logits, guided logits, hiddens, feedback)\n"
             "             for the first N iterations as raw f32 files\n");
-#ifdef MM3_ANE_VALIDATION
+#ifdef MM3_COREML_RUNTIME_ENABLED
     fprintf(stderr,"  experimental: --ane-validation <profile> [--ane-compute-units CPU_ONLY|CPU_AND_GPU|CPU_AND_NE|ALL]\n");
 #endif
 }
@@ -128,7 +128,7 @@ bool load_model(const CliOptions & options, MM3Model & model, std::string * erro
     }
     model.models_dir = options.models;
     model.coreml_conditioner_path = options.coreml_conditioner;
-#ifdef MM3_ANE_VALIDATION
+#ifdef MM3_COREML_RUNTIME_ENABLED
     model.ane_validation_directory = options.ane_validation;
     model.ane_validation_compute_units = options.ane_compute_units;
 #endif
@@ -316,7 +316,7 @@ int run_generation(const CliOptions & options, const MM3Model & model) {
         return 1;
     }
     report_done(result);
-#ifdef MM3_ANE_VALIDATION
+#ifdef MM3_COREML_RUNTIME_ENABLED
     if (model.ane_validation) {
         std::ofstream timings(options.out_dir+"/ane-timings.json");
         timings << "{\n  \"compute_units\": \"" << model.ane_validation_compute_units << "\",\n"
@@ -336,7 +336,7 @@ int run_generation(const CliOptions & options, const MM3Model & model) {
 }  // namespace
 
 int main(int argc, char ** argv) {
-#ifdef MM3_ANE_VALIDATION
+#ifdef MM3_COREML_RUNTIME_ENABLED
     try {
 #endif
     const CliOptions options = parse_options(argc, argv);
@@ -369,7 +369,7 @@ int main(int argc, char ** argv) {
         return run_condcheck(model);
     }
     return run_generation(options, model);
-#ifdef MM3_ANE_VALIDATION
+#ifdef MM3_COREML_RUNTIME_ENABLED
     } catch (const std::exception & error) {
         fprintf(stderr,"ANE validation error: %s\n",error.what());
         return 1;

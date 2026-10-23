@@ -28,6 +28,10 @@ struct EngineOptions {
     // from this synth GGUF. Uses CPU + ANE; the other stages use `device`.
     // Empty keeps the native conditioner. The model stays resident in Engine.
     std::string coreml_conditioner_path;
+    // Full Core ML profile and explicit Apple device policy, required together
+    // (macOS 15+).
+    std::string coreml_profile_dir;
+    std::string coreml_compute_units;
 };
 
 struct GenerateParams {

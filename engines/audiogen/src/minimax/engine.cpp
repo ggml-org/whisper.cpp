@@ -1,6 +1,7 @@
 #include "audiogen-cpp/minimax/engine.h"
 
 #include "minimax/backend.h"
+#include "minimax/coreml-options.h"
 #include "minimax/logic.h"
 #include "minimax/mm3-pipeline.h"
 #include "minimax/model-files.h"
@@ -25,6 +26,51 @@ int & active_engine_count() {
     static int count = 0;
     return count;
 }
+
+void require_coreml_support(const EngineOptions & options) {
+    detail::validate_coreml_options(options);
+    if (!detail::coreml_requested(options)) {
+        return;
+    }
+#ifdef AUDIOGEN_USE_MINIMAX_COREML
+    if (mm3_ane_validation::available()) {
+        return;
+    }
+    throw std::runtime_error("MiniMax full Core ML requires macOS 15 or later");
+#else
+    throw std::runtime_error("MiniMax full Core ML support was not built; enable "
+                             "AUDIOGEN_MINIMAX_COREML");
+#endif
+}
+
+class CoreMLCancellationScope {
+  public:
+    CoreMLCancellationScope(const MM3Model & model, std::atomic<bool> & cancelled)
+#ifdef AUDIOGEN_USE_MINIMAX_COREML
+        : runtime_(model.ane_validation) {
+        if (runtime_) {
+            mm3_ane_validation::set_cancel_handler(*runtime_, [&cancelled] { return cancelled.load(); });
+        }
+#else
+    {
+        (void)model;
+        (void)cancelled;
+#endif
+    }
+
+    ~CoreMLCancellationScope() {
+#ifdef AUDIOGEN_USE_MINIMAX_COREML
+        if (runtime_) {
+            mm3_ane_validation::set_cancel_handler(*runtime_, {});
+        }
+#endif
+    }
+
+  private:
+#ifdef AUDIOGEN_USE_MINIMAX_COREML
+    std::shared_ptr<mm3_ane_validation::Runtime> runtime_;
+#endif
+};
 
 int resolve_thread_count(int requested) {
     if (requested > 0) {
@@ -157,6 +203,7 @@ Engine::~Engine() = default;
 
 std::unique_ptr<Engine> Engine::create(const EngineOptions & input) {
     std::lock_guard<std::recursive_mutex> lock(engine_mutex());
+    require_coreml_support(input);
     if (!detail::engine_instance_available(active_engine_count())) {
         throw std::runtime_error("minimax engine: only one active engine instance is supported");
     }
@@ -167,6 +214,10 @@ std::unique_ptr<Engine> Engine::create(const EngineOptions & input) {
     backend_configure_device(input.device);
     detail::probe_model_files(engine->impl_->model, engine->impl_->options);
     engine->impl_->model.coreml_conditioner_path = input.coreml_conditioner_path;
+#ifdef AUDIOGEN_USE_MINIMAX_COREML
+    engine->impl_->model.ane_validation_directory = input.coreml_profile_dir;
+    engine->impl_->model.ane_validation_compute_units = input.coreml_compute_units;
+#endif
     std::string error;
     if (!mm3_load(&engine->impl_->model, &error)) {
         throw std::runtime_error("minimax engine: " + error);
@@ -180,6 +231,7 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
     std::lock_guard<std::recursive_mutex> lock(engine_mutex());
     GenerationScope generation_scope(impl_->generating);
     CancellationScope cancellation_scope(impl_->cancelled);
+    CoreMLCancellationScope coreml_cancellation_scope(impl_->model, impl_->cancelled);
     AbortScope abort_scope(impl_->model.backend, impl_->model.cpu_backend, impl_->cancelled);
 
     const int model_max_frames = static_cast<int>(impl_->model.lm_cfg.max_audio_frames);
@@ -217,7 +269,16 @@ GenerateResult Engine::generate(const GenerateParams & params, const ProgressFn 
 
     MM3GenResult generated;
     std::string error;
-    if (!mm3_generate(impl_->model, request, &impl_->tokenizer, callback, &generated, &error)) {
+    bool success = false;
+    try {
+        success = mm3_generate(impl_->model, request, &impl_->tokenizer, callback, &generated, &error);
+    } catch (...) {
+        if (impl_->cancelled.load()) {
+            return {};
+        }
+        throw;
+    }
+    if (!success) {
         if (error == MM3_ERR_CANCELLED || impl_->cancelled.load()) {
             return {};
         }
@@ -246,6 +307,11 @@ int Engine::sample_rate() const {
 }
 
 std::string Engine::backend_name() const {
+#ifdef AUDIOGEN_USE_MINIMAX_COREML
+    if (impl_->model.ane_validation) {
+        return "CoreML/" + impl_->options.coreml_compute_units;
+    }
+#endif
     const ggml_backend_t backend = impl_->model.backend;
     if (!backend || backend == impl_->model.cpu_backend) {
         return "CPU";
@@ -255,6 +321,11 @@ std::string Engine::backend_name() const {
 }
 
 GpuFallbackReason Engine::gpu_fallback_reason() const {
+#ifdef AUDIOGEN_USE_MINIMAX_COREML
+    if (impl_->model.ane_validation) {
+        return GpuFallbackReason::not_requested;
+    }
+#endif
     return g_backend_gpu_fallback_reason;
 }
 

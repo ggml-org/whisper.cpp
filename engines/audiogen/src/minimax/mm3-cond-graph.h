@@ -336,7 +336,7 @@ static MM3CondGraph g_mm3_cond;
 
 static bool mm3_cond_encode(const MM3Model & m, const float * hiddens, int64_t F, std::vector<float> & out,
                             int64_t * out_L, std::string * err = nullptr) {
-#ifdef MM3_ANE_VALIDATION
+#ifdef MM3_COREML_RUNTIME_ENABLED
     if (m.ane_validation) {
         const int64_t L = mm3_cond_latent_length(m.synth_cfg.cond, F);
         mm3_ane_validation::condition(*m.ane_validation, hiddens, F, L, out);

@@ -174,6 +174,14 @@ void test_coreml_memory_estimate_is_explicitly_unavailable(const EngineOptions &
     CHECK(fit.stages.empty());
     CHECK(fit.peak_device_bytes == 0);
     CHECK(fit.peak_host_bytes == 0);
+    coreml.coreml_conditioner_path.clear();
+    coreml.coreml_profile_dir = "compiled-profile";
+    coreml.coreml_compute_units = "CPU_AND_NE";
+    const FitResult full = tts_cpp::minimax::fit_params(coreml, workload(kFrames, kPrompt));
+    CHECK(full.status == FitStatus::Error);
+    CHECK(!full.fits);
+    CHECK(full.reason == "coreml-memory-estimate-unavailable");
+    CHECK(full.stages.empty());
 }
 
 void test_weightless_description_projects_the_same(const EngineOptions & options,

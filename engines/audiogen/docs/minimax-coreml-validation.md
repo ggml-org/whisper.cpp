@@ -3,13 +3,68 @@
 This experimental replay harness runs the LM, depth decoder, feedback,
 conditioner, DiT and vocoder through the native Core ML API in C++ and
 Objective-C++. Python is used to export the original F16 weights and run
-conversion tests. The public MiniMax engine retains its native ggml route
-and its existing optional conditioner sidecar.
+conversion tests. The public MiniMax engine exposes the full Core ML route
+with an explicit compiled profile and device policy, alongside its native ggml
+route and existing optional conditioner sidecar.
 
 The validation build requires Apple Silicon, macOS 15 or later, and an
 installed speech-branch ggml with CPU, Metal and Accelerate backends. Model
 conversion additionally requires PyTorch, coremltools, NumPy and gguf in the
 active Python environment.
+
+## Public C++ engine
+
+Enable the full MiniMax runtime with `-DAUDIOGEN_MINIMAX_COREML=ON` on desktop
+macOS. It is independent of `AUDIOGEN_COREML`, which enables the existing
+ACE-Step VAE and MiniMax conditioner-only sidecars. Native generation remains
+available on older supported systems; an explicit full Core ML request requires
+macOS 15+ for stateful predictions.
+
+```cpp
+#include <audiogen-cpp/minimax/engine.h>
+
+tts_cpp::minimax::EngineOptions options;
+options.lm_model_path = "/models/mm3-lm-f16.gguf";
+options.synth_model_path = "/models/mm3-synth-f16.gguf";
+options.coreml_profile_dir = "/models/minimax-coreml";
+options.coreml_compute_units = "CPU_AND_NE";
+auto engine = tts_cpp::minimax::Engine::create(options);
+
+tts_cpp::minimax::GenerateParams request;
+request.caption = "Warm piano with gentle acoustic guitar";
+request.max_frames = 150;
+request.seed = 7;
+request.inference_steps = 8;
+auto audio = engine->generate(request);
+```
+
+Both Core ML fields must be set explicitly. Allowed policies are `CPU_ONLY`,
+`CPU_AND_GPU`, `CPU_AND_NE`, and `ALL`; these are allowed compute units, not
+proof of exclusive ANE or GPU execution. `backend_name()` reports
+`CoreML/<policy>`. The explicit route takes precedence over native device
+selection and fails on unavailable builds, incompatible profiles, or model
+loading errors. It never silently falls back to native generation.
+
+The profile holds its manifest and matching original-F16 compiled programs.
+The loader checks manifest dimensions and program IO against the GGUF metadata.
+Its LM cache profile must fit the request's prompt and generation; a mismatch is
+an error, not a truncation. Models stay resident until engine destruction.
+`cancel()` and progress callback cancellation interrupt between Core ML
+predictions. Memory-fit preflight reports `coreml-memory-estimate-unavailable`
+instead of estimating this route as native GGML memory.
+
+Run the public engine regression with the compiled profile explicitly selected:
+
+```sh
+AUDIOGEN_TEST_MINIMAX_MODELS_DIR=/models/gguf \
+AUDIOGEN_TEST_MINIMAX_COREML_PROFILE=/models/minimax-coreml \
+AUDIOGEN_TEST_MINIMAX_COREML_COMPUTE_UNITS=CPU_AND_NE \
+ctest --test-dir build -R '^test-minimax-integration$' --output-on-failure
+```
+
+The replay harness below remains available for numerical investigations. Its
+CPU/ANE parity gaps still apply to this public route; exposing configuration
+does not establish parity with native Metal or guarantee a speed improvement.
 
 ## Build
 

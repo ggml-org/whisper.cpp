@@ -39,6 +39,11 @@ tts_cpp::minimax::EngineOptions make_engine_options(const char * models_dir) {
     tts_cpp::minimax::EngineOptions options;
     options.model_dir = models_dir;
     options.n_threads = 4;
+    if (const char * profile = std::getenv("AUDIOGEN_TEST_MINIMAX_COREML_PROFILE")) {
+        options.coreml_profile_dir = profile;
+        const char * units = std::getenv("AUDIOGEN_TEST_MINIMAX_COREML_COMPUTE_UNITS");
+        options.coreml_compute_units = units ? units : "";
+    }
     // An explicit device wins over MM3_DEVICE, keeping the deterministic part
     // of the suite on the CPU even when the environment requests a GPU.
     options.device = "cpu";

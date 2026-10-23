@@ -89,13 +89,15 @@ contracts; see the engine guides before exporting or deploying one.
 | TTS | Supertonic vocoder, Audio8 codec synthesis | [Supertonic](engines/tts/docs/supertonic.md#core-ml-vocoder-sidecar), [Audio8](engines/tts/docs/audio8.md#core-ml-codec-sidecar) |
 | TTS | MOSS-TTS/TTSD codec decoder, MOSS-SoundEffect DiT and VAE, MOSS-Speech speech tokenizer | [MOSS](engines/tts/docs/moss.md#core-ml-codec-decoder), [SoundEffect](engines/tts/docs/moss.md#core-ml-dit-and-vae), [Speech](engines/tts/docs/moss.md#core-ml-speech-tokenizer) |
 | AudioGen | ACE-Step VAE decoder | [AudioGen backends](engines/audiogen/docs/backends.md#core-ml-vae-decoder-sidecar) |
-| AudioGen | MiniMax conditioner projection (CPU + ANE; remaining stages native) | [MiniMax Core ML](engines/audiogen/docs/backends.md#minimax-core-ml-conditioner) |
+| AudioGen | MiniMax conditioner projection, or explicit full-network Core ML (`coreml_profile_dir` + `coreml_compute_units`, macOS 15+) | [MiniMax Core ML](engines/audiogen/docs/backends.md#minimax-core-ml-conditioner) |
 
-MiniMax also has an experimental, separately compiled [full Core ML replay
-harness](engines/audiogen/docs/minimax-coreml-validation.md). It runs the LM,
-depth decoder, conditioner, DiT and vocoder through the native Core ML API
-with `CPU_ONLY`, `CPU_AND_GPU`, `CPU_AND_NE` or `ALL`. The guide includes
-M1 Ultra/M3 Ultra measurements and the remaining numerical validation gaps.
+MiniMax's full Core ML route is also exposed through its public C++ engine.
+Build with `AUDIOGEN_MINIMAX_COREML=ON` and supply both `coreml_profile_dir` and
+`coreml_compute_units`; the separate flag does not enable automatic ACE-Step
+sidecars. It supports `CPU_ONLY`, `CPU_AND_GPU`, `CPU_AND_NE`, and `ALL` on
+macOS 15+. See the [full Core ML guide](engines/audiogen/docs/minimax-coreml-validation.md)
+for the matching F16 compiled profile, measurements, and remaining numerical
+validation.
 
 CosyVoice3 exports HiFT in FP32 to preserve waveform parity. Its memory-fit
 preflight returns `Error` with `coreml-memory-estimate-unavailable` when

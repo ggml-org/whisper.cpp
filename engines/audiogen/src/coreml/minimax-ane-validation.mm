@@ -10,17 +10,31 @@
 #include <cmath>
 #include <filesystem>
 #include <map>
+#include <limits>
 #include <random>
 #include <stdexcept>
 
 namespace mm3_ane_validation {
+
+bool available() {
+    if (@available(macOS 15.0, *)) return true;
+    return false;
+}
+
+using Shape = std::vector<int64_t>;
+using TensorSpecs = std::map<std::string, Shape>;
+
+struct ModelSpec {
+    TensorSpecs inputs;
+    TensorSpecs outputs;
+};
 
 static void require(bool condition, const std::string & message) {
     if (!condition) throw std::runtime_error(message);
 }
 
 static std::string error_text(NSError * error) {
-    return error.localizedDescription.UTF8String ?: "Core ML validation error";
+    return error.localizedDescription.UTF8String ?: "Core ML error";
 }
 
 static MLMultiArray * make_array(NSArray<NSNumber *> * shape) {
@@ -37,7 +51,8 @@ struct Array {
     int64_t stride[4];
 
     explicit Array(MLMultiArray * array): value(array), data(static_cast<float *>(array.dataPointer)) {
-        require(array.shape.count==4,"Expected a four-dimensional Core ML tensor");
+        require(array != nil && array.dataType == MLMultiArrayDataTypeFloat32 && array.shape.count == 4,
+                "Expected a four-dimensional F32 Core ML tensor");
         for(int index=0;index<4;++index) {
             shape[index]=array.shape[index].longLongValue;
             stride[index]=array.strides[index].longLongValue;
@@ -58,43 +73,96 @@ static void zero(MLMultiArray * array) {
                     cell(view,b,c,h,s)=0;
 }
 
+static bool matches_shape(NSArray<NSNumber *> * actual, const Shape & expected) {
+    if (actual.count != expected.size()) return false;
+    for (size_t index = 0; index < expected.size(); ++index) {
+        if (actual[index].longLongValue != expected[index]) return false;
+    }
+    return true;
+}
+
+static void validate_descriptions(NSDictionary<NSString *, MLFeatureDescription *> * descriptions,
+                                  const TensorSpecs & expected, const std::string & label) {
+    require(descriptions.count == expected.size(), label + ": unexpected feature count");
+    for (const auto & entry : expected) {
+        auto * description = descriptions[@(entry.first.c_str())];
+        require(description != nil && description.type == MLFeatureTypeMultiArray &&
+                description.multiArrayConstraint.dataType == MLMultiArrayDataTypeFloat32 &&
+                matches_shape(description.multiArrayConstraint.shape, entry.second),
+                label + ": incompatible tensor " + entry.first);
+    }
+}
+
 struct Model {
     MLModel * model = nil;
-    MLState * state = nil;
+    id state = nil;
     NSMutableDictionary<NSString *, MLMultiArray *> * inputs = nil;
     MLPredictionOptions * options = nil;
+    ModelSpec spec;
+    std::string label;
+    const std::function<bool()> * should_cancel;
 
-    explicit Model(const std::filesystem::path & path,
-                   MLComputeUnits compute_units = MLComputeUnitsCPUAndNeuralEngine) {
-        NSError * error = nil;
-        auto * configuration = [[MLModelConfiguration alloc] init];
-        configuration.computeUnits = compute_units;
-        model = [MLModel modelWithContentsOfURL:[NSURL fileURLWithPath:@(path.c_str())]
-            configuration:configuration error:&error];
-        require(model != nil, path.string()+": "+error_text(error));
-        inputs = [NSMutableDictionary dictionary];
-        for (NSString * name in model.modelDescription.inputDescriptionsByName) {
-            inputs[name] = make_array(model.modelDescription.inputDescriptionsByName[name].multiArrayConstraint.shape);
+    Model(const std::filesystem::path & path, MLComputeUnits compute_units, ModelSpec expected,
+          const std::function<bool()> * cancelled)
+        : spec(std::move(expected)), label(path.string()), should_cancel(cancelled) {
+        if (@available(macOS 15.0, *)) {
+            NSError * error = nil;
+            auto * configuration = [[MLModelConfiguration alloc] init];
+            configuration.computeUnits = compute_units;
+            model = [MLModel modelWithContentsOfURL:[NSURL fileURLWithPath:@(path.c_str())]
+                configuration:configuration error:&error];
+            require(model != nil, label + ": " + error_text(error));
+            validate_descriptions(model.modelDescription.inputDescriptionsByName, spec.inputs, label + " inputs");
+            validate_descriptions(model.modelDescription.outputDescriptionsByName, spec.outputs, label + " outputs");
+            inputs = [NSMutableDictionary dictionary];
+            for (NSString * name in model.modelDescription.inputDescriptionsByName) {
+                inputs[name] = make_array(model.modelDescription.inputDescriptionsByName[name].multiArrayConstraint.shape);
+            }
+            auto * backings = [NSMutableDictionary dictionary];
+            for (NSString * name in model.modelDescription.outputDescriptionsByName) {
+                backings[name] = make_array(model.modelDescription.outputDescriptionsByName[name].multiArrayConstraint.shape);
+            }
+            options = [[MLPredictionOptions alloc] init];
+            options.outputBackings = backings;
+            reset();
+        } else {
+            throw std::runtime_error("MiniMax full Core ML requires macOS 15 or later");
         }
-        auto * backings = [NSMutableDictionary dictionary];
-        for (NSString * name in model.modelDescription.outputDescriptionsByName) {
-            backings[name] = make_array(model.modelDescription.outputDescriptionsByName[name].multiArrayConstraint.shape);
+    }
+
+    void check_cancelled() const {
+        if (should_cancel && *should_cancel && (*should_cancel)()) {
+            throw std::runtime_error("MiniMax Core ML generation cancelled");
         }
-        options = [[MLPredictionOptions alloc] init];
-        options.outputBackings = backings;
-        if (model.modelDescription.stateDescriptionsByName.count) state = [model newState];
+    }
+
+    void reset() {
+        check_cancelled();
+        if (@available(macOS 15.0, *)) {
+            if (model.modelDescription.stateDescriptionsByName.count) state = [model newState];
+        }
     }
 
     id<MLFeatureProvider> predict(NSDictionary<NSString *, MLMultiArray *> * overrides = nil) {
-        NSError * error = nil;
-        NSMutableDictionary * values = [inputs mutableCopy];
-        if (overrides) [values addEntriesFromDictionary:overrides];
-        auto * provider = [[MLDictionaryFeatureProvider alloc] initWithDictionary:values error:&error];
-        require(provider != nil, error_text(error));
-        auto result = state ? [model predictionFromFeatures:provider usingState:state options:options error:&error]
-                            : [model predictionFromFeatures:provider options:options error:&error];
-        require(result != nil, error_text(error));
-        return result;
+        check_cancelled();
+        if (@available(macOS 15.0, *)) {
+            NSError * error = nil;
+            NSMutableDictionary * values = [inputs mutableCopy];
+            if (overrides) [values addEntriesFromDictionary:overrides];
+            auto * provider = [[MLDictionaryFeatureProvider alloc] initWithDictionary:values error:&error];
+            require(provider != nil, label + ": " + error_text(error));
+            auto result = state ? [model predictionFromFeatures:provider usingState:state options:options error:&error]
+                                : [model predictionFromFeatures:provider options:options error:&error];
+            require(result != nil, label + ": " + error_text(error));
+            for (const auto & entry : spec.outputs) {
+                auto * array = [result featureValueForName:@(entry.first.c_str())].multiArrayValue;
+                require(array != nil && array.dataType == MLMultiArrayDataTypeFloat32 &&
+                        matches_shape(array.shape, entry.second), label + ": incompatible output " + entry.first);
+            }
+            check_cancelled();
+            return result;
+        }
+        throw std::runtime_error("MiniMax full Core ML requires macOS 15 or later");
     }
 };
 
@@ -103,8 +171,10 @@ struct Runtime {
     MM3SynthConfig synth;
     GGUFModel lm_file{};
     GGUFModel synth_file{};
+    std::function<bool()> should_cancel;
     std::map<std::string, std::unique_ptr<Model>> models;
     int64_t capacity=0;
+    int64_t depth_context=0;
     int64_t condition_frames=0;
     int64_t dit_latents=0;
     int64_t vocoder_latents=0;
@@ -118,26 +188,74 @@ struct Runtime {
 
     Model & get(const std::string & name) { return *models.at(name); }
 
-    void row(const GGUFModel & file, const char * name, int64_t index, float * destination) {
+    void row(const GGUFModel & file, const char * name, int64_t index, float * destination, int64_t width) {
         const auto id=gguf_find_tensor(file.gguf,name);
         require(id>=0,std::string("Missing tensor ")+name);
         auto * tensor=ggml_get_tensor(file.meta,name);
-        require(index>=0 && index<tensor->ne[1],"Embedding row outside the original vocabulary");
+        require(tensor != nullptr && tensor->ne[0] == width && index >= 0 && index < tensor->ne[1],
+                "Incompatible embedding shape or row outside the original vocabulary");
         const auto * source=gf_tensor_source(file,id)+index*tensor->nb[1];
         if(tensor->type==GGML_TYPE_F16) ggml_fp16_to_fp32_row(reinterpret_cast<const ggml_fp16_t *>(source),destination,tensor->ne[0]);
         else if(tensor->type==GGML_TYPE_F32) std::copy_n(reinterpret_cast<const float *>(source),tensor->ne[0],destination);
-        else throw std::runtime_error("Validation expects original F16 or F32 embedding rows");
+        else throw std::runtime_error("MiniMax Core ML expects original F16 or F32 embedding rows");
     }
 };
 
+static int64_t positive_integer(NSDictionary * manifest, NSString * key) {
+    id value = manifest[key];
+    require([value isKindOfClass:NSNumber.class] && CFGetTypeID((__bridge CFTypeRef)value) != CFBooleanGetTypeID(),
+            std::string("MiniMax Core ML manifest requires integer ") + key.UTF8String);
+    const auto number = [value longLongValue];
+    require(number > 0 && [value doubleValue] == static_cast<double>(number),
+            std::string("Invalid MiniMax Core ML manifest value for ") + key.UTF8String);
+    return number;
+}
+
+static ModelSpec model_spec(const Runtime & runtime, const std::string & name) {
+    const Shape lm_hidden = {1, runtime.lm.embedding_length, 1, 2};
+    const Shape depth_hidden = {1, runtime.synth.depth.embedding_length, 1, 2};
+    const Shape dit_hidden = {2, runtime.synth.dit.embedding_length, 1, runtime.dit_latents + 1};
+    if (name == "lm-head") return {{{"hidden", lm_hidden}},
+        {{"hidden_out", lm_hidden}, {"logits", {1, int64_t(runtime.lm.semantic_vocab_size) + 1, 1, 2}}}};
+    if (name == "feedback") return {{{"embeddings", {1, runtime.lm.embedding_length, runtime.lm.num_codebooks, 1}}},
+        {{"feedback", {1, runtime.lm.embedding_length, 1, 1}}}};
+    if (name == "depth-input") return {{{"hidden", lm_hidden}, {"positional", depth_hidden}}, {{"hidden_out", depth_hidden}}};
+    if (name.rfind("depth-head-", 0) == 0) return {{{"hidden", depth_hidden}},
+        {{"hidden_out", depth_hidden}, {"logits", {1, runtime.synth.depth.audio_vocab_size, 1, 2}}}};
+    if (name == "conditioner") return {
+        {{"hidden", {1, runtime.synth.cond.hidden_dim, runtime.synth.cond.num_layers, runtime.condition_frames + 2}}},
+        {{"condition", {1, runtime.synth.cond.out_dim, 1, runtime.condition_frames + 2}}}};
+    if (name == "dit-input") return {
+        {{"latent", {1, runtime.synth.dit.in_channels, 1, runtime.dit_latents}},
+         {"condition", {1, runtime.synth.dit.condition_dim, 1, runtime.dit_latents}},
+         {"fourier", {1, runtime.synth.dit.fourier_dim, 1, 1}}, {"gates", {2, 1, 1, 1}}}, {{"hidden_out", dit_hidden}}};
+    if (name == "dit-output") return {{{"hidden", dit_hidden}},
+        {{"velocity", {2, runtime.synth.dit.in_channels, 1, runtime.dit_latents}}}};
+    if (name == "vocoder") return {
+        {{"latent", {1, runtime.synth.voc.fold_channels, 1, runtime.vocoder_latents}},
+         {"valid", {1, 1, 1, runtime.vocoder_latents}}},
+        {{"waveform", {1, 1, 1, runtime.vocoder_latents * runtime.synth.voc.total_upsample}}}};
+    if (name.rfind("lm-", 0) == 0) return {
+        {{"hidden", lm_hidden}, {"selector", {1, runtime.capacity}}, {"mask", {1, runtime.capacity, 1, 1}},
+         {"cosine", {1, 1, runtime.lm.key_length / 2, 1}}, {"sine", {1, 1, runtime.lm.key_length / 2, 1}}},
+        {{"hidden_out", lm_hidden}}};
+    if (name.rfind("depth-", 0) == 0) return {
+        {{"hidden", depth_hidden}, {"selector", {1, runtime.depth_context}}, {"mask", {1, runtime.depth_context, 1, 1}}},
+        {{"hidden_out", depth_hidden}}};
+    if (name.rfind("dit-", 0) == 0) return {
+        {{"hidden", dit_hidden}, {"mask", {1, runtime.dit_latents + 1, 1, 1}}}, {{"hidden_out", dit_hidden}}};
+    throw std::runtime_error("Unknown MiniMax Core ML program " + name);
+}
+
 std::shared_ptr<Runtime> load(const MM3Model & model, const std::string & directory) {
     @autoreleasepool {
+        require(available(), "MiniMax full Core ML requires macOS 15 or later");
         const auto start=std::chrono::steady_clock::now();
         auto result=std::make_shared<Runtime>();
         require(model.ane_validation_compute_units == "CPU_ONLY" ||
                 model.ane_validation_compute_units == "CPU_AND_GPU" ||
                 model.ane_validation_compute_units == "CPU_AND_NE" ||
-                model.ane_validation_compute_units == "ALL", "Unsupported validation compute units");
+                model.ane_validation_compute_units == "ALL", "Unsupported MiniMax Core ML compute units");
         auto compute_units = MLComputeUnitsCPUAndNeuralEngine;
         if (model.ane_validation_compute_units == "CPU_ONLY") {
             compute_units = MLComputeUnitsCPUOnly;
@@ -151,15 +269,28 @@ std::shared_ptr<Runtime> load(const MM3Model & model, const std::string & direct
         result->synth=model.synth_cfg;
         NSError * error=nil;
         auto * json=[NSData dataWithContentsOfFile:@((directory+"/manifest.json").c_str())];
-        require(json != nil,"Missing ANE validation manifest");
+        require(json != nil,"Missing MiniMax Core ML manifest");
         NSDictionary * manifest=[NSJSONSerialization JSONObjectWithData:json options:0 error:&error];
-        require([manifest isKindOfClass:NSDictionary.class],"Invalid ANE validation manifest");
-        result->capacity=[manifest[@"lm_profile_positions"] ?: manifest[@"context"] longLongValue];
-        result->condition_frames=[manifest[@"condition_frames"] longLongValue];
-        result->dit_latents=[manifest[@"dit_latents"] longLongValue];
-        result->vocoder_latents=[manifest[@"vocoder_latents"] longLongValue];
-        require([manifest[@"context"] longLongValue]==model.lm_cfg.context_length,"ANE metadata must preserve the original model context");
-        require(result->capacity>0 && result->capacity<=model.lm_cfg.context_length,"Invalid compiled ANE validation cache profile");
+        require([manifest isKindOfClass:NSDictionary.class],"Invalid MiniMax Core ML manifest");
+        require(positive_integer(manifest, @"format") == 1, "Unsupported MiniMax Core ML profile format");
+        result->capacity = positive_integer(manifest, manifest[@"lm_profile_positions"] ? @"lm_profile_positions" : @"context");
+        result->depth_context = positive_integer(manifest, @"depth_context");
+        result->condition_frames = positive_integer(manifest, @"condition_frames");
+        result->dit_latents = positive_integer(manifest, @"dit_latents");
+        result->vocoder_latents = positive_integer(manifest, @"vocoder_latents");
+        require(positive_integer(manifest, @"context") == model.lm_cfg.context_length,
+                "Core ML metadata must preserve the original model context");
+        require(positive_integer(manifest, @"lm_layers") == model.lm_cfg.block_count &&
+                positive_integer(manifest, @"depth_layers") == model.synth_cfg.depth.block_count &&
+                positive_integer(manifest, @"dit_layers") == model.synth_cfg.dit.block_count,
+                "Core ML profile layer counts do not match the model");
+        require(result->depth_context >= model.synth_cfg.depth.num_codebooks &&
+                result->condition_frames <= std::numeric_limits<int64_t>::max() - 2 &&
+                result->dit_latents < std::numeric_limits<int64_t>::max() &&
+                result->vocoder_latents > 64 && model.synth_cfg.voc.total_upsample > 0 &&
+                result->vocoder_latents <= std::numeric_limits<int64_t>::max() / model.synth_cfg.voc.total_upsample,
+                "Invalid MiniMax Core ML profile dimensions");
+        require(result->capacity>0 && result->capacity<=model.lm_cfg.context_length,"Invalid compiled MiniMax Core ML cache profile");
         require(gf_load(&result->lm_file,model.lm_file.path.c_str()),"Cannot map original LM embedding rows");
         require(gf_load(&result->synth_file,model.synth_file.path.c_str()),"Cannot map original synthesis embedding rows");
         std::vector<std::string> names={"lm-head","feedback","depth-input","conditioner","dit-input","dit-output","vocoder"};
@@ -169,7 +300,8 @@ std::shared_ptr<Runtime> load(const MM3Model & model, const std::string & direct
         for (uint32_t index=0;index<model.synth_cfg.dit.block_count;++index) names.push_back("dit-"+std::to_string(index));
         for (const auto & name:names) {
             fprintf(stderr,"[MM3-ANE] Loading %s\n",name.c_str());
-            result->models.emplace(name,std::make_unique<Model>(std::filesystem::path(directory)/(name+".mlmodelc"),compute_units));
+            result->models.emplace(name,std::make_unique<Model>(std::filesystem::path(directory)/(name+".mlmodelc"), compute_units,
+                model_spec(*result, name), &result->should_cancel));
         }
         const auto elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
         fprintf(stderr,"[MM3-ANE] All %zu programs resident, load %.3f s; generation has not started\n",names.size(),elapsed);
@@ -178,15 +310,19 @@ std::shared_ptr<Runtime> load(const MM3Model & model, const std::string & direct
 }
 
 void reset(Runtime & runtime) {
-    for (auto & pair:runtime.models) if(pair.second->state) pair.second->state=[pair.second->model newState];
+    for (auto & pair : runtime.models) pair.second->reset();
+}
+
+void set_cancel_handler(Runtime & runtime, std::function<bool()> handler) {
+    runtime.should_cancel = std::move(handler);
 }
 
 int64_t context_positions(const Runtime & runtime) { return runtime.capacity; }
 
 void lm_embedding(Runtime & runtime,int32_t conditional,int32_t unconditional,std::vector<float> & out) {
     out.resize(2*runtime.lm.embedding_length);
-    runtime.row(runtime.lm_file,"token_embd.weight",conditional,out.data());
-    runtime.row(runtime.lm_file,"token_embd.weight",unconditional,out.data()+runtime.lm.embedding_length);
+    runtime.row(runtime.lm_file,"token_embd.weight",conditional,out.data(),runtime.lm.embedding_length);
+    runtime.row(runtime.lm_file,"token_embd.weight",unconditional,out.data()+runtime.lm.embedding_length,runtime.lm.embedding_length);
 }
 
 void lm_feedback(Runtime & runtime,int32_t semantic,const int32_t * acoustic,float * out) {
@@ -196,8 +332,8 @@ void lm_feedback(Runtime & runtime,int32_t semantic,const int32_t * acoustic,flo
         const auto H=runtime.lm.embedding_length;
         std::vector<float> row(H);
         for(uint32_t layer=0;layer<runtime.lm.num_codebooks;++layer) {
-            if(layer==0) runtime.row(runtime.lm_file,"token_embd.weight",semantic,row.data());
-            else runtime.row(runtime.synth_file,"depth.audio_embd.weight",acoustic[layer-1],row.data());
+            if(layer==0) runtime.row(runtime.lm_file,"token_embd.weight",semantic,row.data(),H);
+            else runtime.row(runtime.synth_file,"depth.audio_embd.weight",acoustic[layer-1],row.data(),H);
             for(uint32_t c=0;c<H;++c) cell(input,0,c,layer,0)=row[c];
         }
         const Array value([model.predict() featureValueForName:@"feedback"].multiArrayValue);
@@ -268,11 +404,11 @@ void depth(Runtime & runtime,const float * conditional,const float * uncondition
                 std::copy_n(conditional,H,row.data());
                 std::copy_n(unconditional,H,row.data()+H);
             } else {
-                if(token==1) runtime.row(runtime.lm_file,"token_embd.weight",semantic+runtime.lm.semantic_vocab_offset,row.data());
-                else runtime.row(runtime.synth_file,"depth.audio_embd.weight",out->codes[token-2]+(token-2)*V,row.data());
+                if(token==1) runtime.row(runtime.lm_file,"token_embd.weight",semantic+runtime.lm.semantic_vocab_offset,row.data(),H);
+                else runtime.row(runtime.synth_file,"depth.audio_embd.weight",out->codes[token-2]+(token-2)*V,row.data(),H);
                 std::copy_n(row.data(),H,row.data()+H);
             }
-            runtime.row(runtime.synth_file,"depth.pos_embd.weight",token,position.data());
+            runtime.row(runtime.synth_file,"depth.pos_embd.weight",token,position.data(),H);
             pack_pair(entry.inputs[@"hidden"],row.data(),H);
             const Array positional(entry.inputs[@"positional"]);
             for(uint32_t channel=0;channel<H;++channel) for(int b=0;b<2;++b) cell(positional,0,channel,0,b)=position[channel];
@@ -343,7 +479,8 @@ void dit(Runtime & runtime,const float * latent,const float * conditioning,const
         std::vector<float> frequency(runtime.synth.dit.fourier_dim/2);
         const auto id=gguf_find_tensor(runtime.synth_file.gguf,"dit.time_fourier.weight");
         auto * source=ggml_get_tensor(runtime.synth_file.meta,"dit.time_fourier.weight");
-        require(source->type==GGML_TYPE_F32,"Expected original F32 time frequencies");
+        require(id >= 0 && source != nullptr && source->type == GGML_TYPE_F32 &&
+                ggml_nelements(source) == static_cast<int64_t>(frequency.size()), "Expected original F32 time frequencies");
         std::copy_n(reinterpret_cast<const float *>(gf_tensor_source(runtime.synth_file,id)),frequency.size(),frequency.data());
         const Array fourier(entry.inputs[@"fourier"]);
         for(size_t index=0;index<frequency.size();++index) {
