@@ -57,6 +57,7 @@
 #include "vae_ggml.h"
 #include "wav_reader.h"
 
+#include "audiogen-cpp/acestep/engine.h"
 #include "audiogen-cpp/acestep/fit.h"
 #include "audiogen-cpp/acestep/vae.h"
 
@@ -3648,6 +3649,33 @@ void test_hexagon_refusal_paths() {
     ggml_backend_free(cpu);
 }
 
+tts_cpp::acestep::EngineOptions gate_test_engine_options(const std::string & path) {
+    tts_cpp::acestep::EngineOptions opts;
+    opts.backend             = "cpu";
+    opts.lm_backend          = "cpu";
+    opts.text_enc_model_path = path;
+    opts.lm_model_path       = path;
+    opts.dit_model_path      = path;
+    opts.vae_model_path      = path;
+    return opts;
+}
+
+void test_hexagon_lazy_engine_refusal() {
+    using tts_cpp::acestep::Engine;
+    using tts_cpp::acestep::EngineOptions;
+
+    const std::string   path = write_gate_test_gguf();
+    const EngineOptions opts = gate_test_engine_options(path);
+    set_env("ACESTEP_KEEP_STAGES", nullptr);
+
+    const std::string on_cpu = refusal_from([&] { Engine::create(opts); });
+    CHECK(on_cpu == "acestep engine: bad DiT config in " + path);
+
+    RegNameOverride   as_hexagon("HTP");
+    const std::string on_hexagon = refusal_from([&] { Engine::create(opts); });
+    CHECK(on_hexagon.rfind("[acestep-engine] " + path + ": down.weight is q4_K; the Hexagon NPU runs ", 0) == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -3684,6 +3712,7 @@ int main() {
     test_stage_placement();
     test_hexagon_weight_gate();
     test_hexagon_refusal_paths();
+    test_hexagon_lazy_engine_refusal();
     test_placement_env();
     test_vae_backend_request_env();
     test_parallel_rows();

@@ -197,4 +197,8 @@ hosts can link the CLI as `acestep_fit_cli_main`. Workload knobs: `--duration`,
 lands on is its own memory pool: a third device picked by `--lm-backend` is
 listed under `extraDevices` in the JSON and must hold its stages plus the
 margin, while devices that share host memory (unified memory, or the Hexagon
-NPU, which reports none of its own) are charged against host RAM.
+NPU, which reports none of its own) are charged against host RAM. With
+`--backend hexagon`, a GGUF holding a weight type the NPU cannot run, such as
+the K-quants of the default `turbo-q4` DiT, is an error instead of a
+projection: `measurement-failed`, followed by the refusal naming the file,
+tensor and type (see [Hexagon NPU](backends.md#hexagon-npu)).
