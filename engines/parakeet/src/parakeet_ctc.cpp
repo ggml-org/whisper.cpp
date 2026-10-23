@@ -655,6 +655,7 @@ bool backend_runs_flash_attn(ggml_backend_t backend, int HD, int H, bool per_hea
 
 AttnPath select_attn_path(ggml_backend_t backend, int HD, int H) {
     AttnPath attn;
+    attn.matmul_head_dim = attention_matmul_head_dim(backend, HD);
     if (!flash_attn_allowed(k_flash_attn_compiled, backend)) return attn;
     attn.per_head_mask = backend_runs_flash_attn_per_head_mask(backend, HD, H);
     attn.flash_attn    = backend_runs_flash_attn(backend, HD, H, attn.per_head_mask);
@@ -2349,9 +2350,6 @@ static int load_from_gguf_impl(const std::string & gguf_path,
     // route only that head to CPU while the encoder + CTC/TDT/EOU heads stay on GPU.
     impl->sortformer_force_cpu =
         gpu_is_mali_vulkan && impl->backend_active == impl->backend_gpu;
-    impl->attn = select_attn_path(impl->backend_active, out_model.encoder_cfg.head_dim,
-                                  out_model.encoder_cfg.n_heads);
-    impl->glu_fused = !gpu_is_mali_vulkan && backend_runs_siglu(impl->backend_active, out_model.encoder_cfg.d_model);
     if (impl->backend_gpu && impl->backend_active == impl->backend_gpu && !gpu_is_mali_vulkan) {
         impl->dw_direct_planar   = backend_runs_conv_2d_dw(impl->backend_gpu, false);
         impl->dw_direct_channels = backend_runs_conv_2d_dw(impl->backend_gpu, true);
@@ -2575,6 +2573,11 @@ static int load_from_gguf_impl(const std::string & gguf_path,
         out_model.encoder_cfg.att_dynamic_chunking =
             (style == "chunked_limited_with_rc");
     }
+    // The graph-shape probes take the model's own dimensions, so they wait for
+    // its encoder configuration.
+    impl->attn = select_attn_path(impl->backend_active, out_model.encoder_cfg.head_dim,
+                                  out_model.encoder_cfg.n_heads);
+    impl->glu_fused = !gpu_is_mali_vulkan && backend_runs_siglu(impl->backend_active, out_model.encoder_cfg.d_model);
 
     out_model.supports_streaming = get_bool(g, "parakeet.encoder.streaming.enabled", false);
 
@@ -3462,15 +3465,18 @@ ggml_tensor * maybe_add_bias(ggml_context * ctx, ggml_tensor * x, ggml_tensor * 
     return bias ? ggml_add(ctx, x, bias) : x;
 }
 
+// The second linear carries the headroom: an early block's feed-forward can
+// exceed the F16 range there (TranscribePsy's block 0 peaks near 76k on
+// speech), while the encoder's other matmuls stay far below it.
 ggml_tensor * conformer_ff_graph(ggml_context * ctx, ggml_tensor * x,
                                  ggml_tensor * norm_w, ggml_tensor * norm_b,
                                  ggml_tensor * l1_w,  ggml_tensor * l1_b,
                                  ggml_tensor * l2_w,  ggml_tensor * l2_b,
-                                 float eps) {
+                                 float eps, float l2_headroom) {
     x = layer_norm_affine(ctx, x, norm_w, norm_b, eps);
     x = maybe_add_bias(ctx, affine_mul_mat(ctx, l1_w, x), l1_b);
     x = ggml_silu(ctx, x);
-    x = maybe_add_bias(ctx, affine_mul_mat(ctx, l2_w, x), l2_b);
+    x = maybe_add_bias(ctx, affine_mul_mat_with_headroom(ctx, l2_w, x, l2_headroom), l2_b);
     return x;
 }
 
@@ -3523,7 +3529,7 @@ struct AttnCapture {
 
 ggml_tensor * rel_pos_mha_unfused_graph(ggml_context * ctx, const RelPosAttnInputs & in,
                                         ggml_tensor * att_mask, const BlockWeights & W,
-                                        int H, int HD, int T,
+                                        int H, int HD, int T, int matmul_head_dim,
                                         AttnCapture * cap = nullptr);
 
 ggml_tensor * rel_pos_mha_graph(ggml_context * ctx, ggml_tensor * xn,
@@ -3596,7 +3602,7 @@ ggml_tensor * rel_pos_mha_graph(ggml_context * ctx, ggml_tensor * xn,
         // capture is still useful, the others cannot be intercepted.
         return rel_pos_mha_flash_graph(ctx, in, att_mask, W, H, HD, T, attn.per_head_mask);
     }
-    return rel_pos_mha_unfused_graph(ctx, in, att_mask, W, H, HD, T, cap);
+    return rel_pos_mha_unfused_graph(ctx, in, att_mask, W, H, HD, T, attn.matmul_head_dim, cap);
 }
 
 ggml_tensor * rel_pos_mha_flash_graph(ggml_context * ctx, const RelPosAttnInputs & in,
@@ -3692,9 +3698,14 @@ ggml_tensor * attn_context_blocked(ggml_context * ctx, ggml_tensor * k_perm, ggm
     return flat;
 }
 
+// Zero-pads dim 0 of `t` from `HD` to `head_dim`; a no-op when they match.
+ggml_tensor * pad_head_dim(ggml_context * ctx, ggml_tensor * t, int HD, int head_dim) {
+    return head_dim > HD ? ggml_pad(ctx, t, head_dim - HD, 0, 0, 0) : t;
+}
+
 ggml_tensor * rel_pos_mha_unfused_graph(ggml_context * ctx, const RelPosAttnInputs & in,
                                         ggml_tensor * att_mask, const BlockWeights & W,
-                                        int H, int HD, int T,
+                                        int H, int HD, int T, int matmul_head_dim,
                                         AttnCapture * cap) {
     ggml_tensor * q = in.q;
     ggml_tensor * k = in.k;
@@ -3741,8 +3752,11 @@ ggml_tensor * rel_pos_mha_unfused_graph(ggml_context * ctx, const RelPosAttnInpu
     // production audio is well under T=1024 so the HMX-F16 dispatch is
     // unaffected in practice.
     const bool use_blocked_attn = T >= k_attn_block_min_T;
-    ggml_tensor * k_perm_mm = use_blocked_attn ? k_perm : pad_and_cast_for_hmx(ctx, k_perm, /*dim=*/1);
-    ggml_tensor * p_perm_mm = use_blocked_attn ? p_perm : pad_and_cast_for_hmx(ctx, p_perm, /*dim=*/1);
+    // A head size the HMX kernel cannot take (TranscribePsy's 80) is zero-padded
+    // on every attention matmul operand as well (see attention_matmul_head_dim).
+    const int HDm = (!use_blocked_attn && matmul_head_dim > HD) ? matmul_head_dim : HD;
+    ggml_tensor * k_perm_mm = use_blocked_attn ? k_perm : pad_and_cast_for_hmx(ctx, pad_head_dim(ctx, k_perm, HD, HDm), /*dim=*/1);
+    ggml_tensor * p_perm_mm = use_blocked_attn ? p_perm : pad_and_cast_for_hmx(ctx, pad_head_dim(ctx, p_perm, HD, HDm), /*dim=*/1);
 
     if (use_blocked_attn) {
         ggml_tensor * v_for_mm = ggml_cont(ctx, ggml_permute(ctx, v_perm, 1, 0, 2, 3));
@@ -3752,8 +3766,8 @@ ggml_tensor * rel_pos_mha_unfused_graph(ggml_context * ctx, const RelPosAttnInpu
         return out;
     }
 
-    ggml_tensor * bd = affine_mul_mat(ctx, p_perm_mm, q_v);
-    ggml_tensor * ac     = affine_mul_mat(ctx, k_perm_mm, q_u);
+    ggml_tensor * bd = affine_mul_mat(ctx, p_perm_mm, pad_head_dim(ctx, q_v, HD, HDm));
+    ggml_tensor * ac     = affine_mul_mat(ctx, k_perm_mm, pad_head_dim(ctx, q_u, HD, HDm));
 
     // When `k_perm` was tail-padded above the `ac` output is (T_pad, T, H);
     // slice the padded tail off (its rows are dots against zero keys) and
@@ -3781,10 +3795,11 @@ ggml_tensor * rel_pos_mha_unfused_graph(ggml_context * ctx, const RelPosAttnInpu
     // `attn` correspondingly with zeros so the reduction over padded keys
     // contributes nothing. `attn_v`'s F32 output shape (HD, T, H) is
     // unchanged either way.
-    ggml_tensor * v_for_mm = ggml_cont(ctx, ggml_permute(ctx, v_perm, 1, 0, 2, 3));
+    ggml_tensor * v_for_mm = ggml_cont(ctx, ggml_permute(ctx, pad_head_dim(ctx, v_perm, HD, HDm), 1, 0, 2, 3));
     v_for_mm = pad_and_cast_for_hmx(ctx, v_for_mm, /*dim=*/0);
     ggml_tensor * attn_for_mm = pad_ne0_for_hmx(ctx, attn);
     ggml_tensor * attn_v   = affine_mul_mat(ctx, v_for_mm, attn_for_mm);
+    if (HDm > HD) attn_v = ggml_view_3d(ctx, attn_v, HD, T, H, attn_v->nb[1], attn_v->nb[2], 0);
     ggml_tensor * merged   = ggml_cont(ctx, ggml_permute(ctx, attn_v, 0, 2, 1, 3));
     ggml_tensor * flat     = ggml_reshape_2d(ctx, merged, HD * H, T);
 
@@ -3970,12 +3985,13 @@ ggml_tensor * conformer_block_graph(ggml_context * ctx, ggml_tensor * x,
                                     const AttnPath & attn,
                                     bool glu_fused,
                                     ConvNormType conv_norm_type,
-                                    bool conv_causal) {
+                                    bool conv_causal,
+                                    float ff_headroom) {
     ggml_tensor * residual = x;
     ggml_tensor * y = conformer_ff_graph(ctx, x,
                                          W.norm_ff1_w, W.norm_ff1_b,
                                          W.ff1_l1_w,   W.ff1_l1_b,
-                                         W.ff1_l2_w,   W.ff1_l2_b, eps);
+                                         W.ff1_l2_w,   W.ff1_l2_b, eps, ff_headroom);
     y = ggml_scale(ctx, y, 0.5f);
     x = ggml_add(ctx, residual, y);
 
@@ -3994,7 +4010,7 @@ ggml_tensor * conformer_block_graph(ggml_context * ctx, ggml_tensor * x,
     y = conformer_ff_graph(ctx, x,
                            W.norm_ff2_w, W.norm_ff2_b,
                            W.ff2_l1_w,   W.ff2_l1_b,
-                           W.ff2_l2_w,   W.ff2_l2_b, eps);
+                           W.ff2_l2_w,   W.ff2_l2_b, eps, ff_headroom);
     y = ggml_scale(ctx, y, 0.5f);
     x = ggml_add(ctx, residual, y);
 
@@ -4451,6 +4467,7 @@ static int build_encoder_graph_cached(const ParakeetCtcModel & model,
     g.n_run_layers = n_run_layers;
 
     build_pos_proj_cache(model, g, backend, n_run_layers, T, /*measure_only=*/measure_compute != nullptr);
+    const float ff_headroom = matmul_output_headroom(backend);
     auto layer_pos_proj = [&](int i) -> ggml_tensor * {
         return i < (int) g.pos_proj.size() ? g.pos_proj[i] : nullptr;
     };
@@ -4462,7 +4479,7 @@ static int build_encoder_graph_cached(const ParakeetCtcModel & model,
             ggml_tensor * y = conformer_ff_graph(gctx, x,
                                                  W.norm_ff1_w, W.norm_ff1_b,
                                                  W.ff1_l1_w,   W.ff1_l1_b,
-                                                 W.ff1_l2_w,   W.ff1_l2_b, eps);
+                                                 W.ff1_l2_w,   W.ff1_l2_b, eps, ff_headroom);
             y = ggml_scale(gctx, y, 0.5f);
             x = ggml_add(gctx, residual, y);
             g.post_ff1_0_node = x;
@@ -4550,7 +4567,7 @@ static int build_encoder_graph_cached(const ParakeetCtcModel & model,
             y = conformer_ff_graph(gctx, x,
                                    W.norm_ff2_w, W.norm_ff2_b,
                                    W.ff2_l1_w,   W.ff2_l1_b,
-                                   W.ff2_l2_w,   W.ff2_l2_b, eps);
+                                   W.ff2_l2_w,   W.ff2_l2_b, eps, ff_headroom);
             y = ggml_scale(gctx, y, 0.5f);
             x = ggml_add(gctx, residual, y);
             g.post_ff2_0_node = x;
@@ -4566,7 +4583,7 @@ static int build_encoder_graph_cached(const ParakeetCtcModel & model,
             x = conformer_block_graph(gctx, x, g.pe_in, layer_pos_proj(i), g.att_mask, model.blocks[i],
                                       d_model, H, HD, T, conv_kernel, eps,
                                       dw_lowering, model.impl->attn, model.impl->glu_fused,
-                                      enc.conv_norm_type, enc.conv_causal);
+                                      enc.conv_norm_type, enc.conv_causal, ff_headroom);
         }
         if (i == n_run_layers - 1) {
             g.block_last_out_node = x;
@@ -5369,6 +5386,7 @@ static int build_substage_graph(const ParakeetCtcModel & model,
                                 SubstageGraph & g,
                                 int T, Substage stage,
                                 ggml_backend_t backend) {
+    const float ff_headroom = matmul_output_headroom(backend);
     const EncoderConfig & enc = model.encoder_cfg;
     const int d_model = enc.d_model;
     const int H  = enc.n_heads;
@@ -5396,7 +5414,7 @@ static int build_substage_graph(const ParakeetCtcModel & model,
         ggml_tensor * y = conformer_ff_graph(g.ctx, x,
                                              W.norm_ff1_w, W.norm_ff1_b,
                                              W.ff1_l1_w,   W.ff1_l1_b,
-                                             W.ff1_l2_w,   W.ff1_l2_b, eps);
+                                             W.ff1_l2_w,   W.ff1_l2_b, eps, ff_headroom);
         y = ggml_scale(g.ctx, y, 0.5f);
         x = ggml_add(g.ctx, r, y);
     }
@@ -5420,7 +5438,7 @@ static int build_substage_graph(const ParakeetCtcModel & model,
         ggml_tensor * y = conformer_ff_graph(g.ctx, x,
                                              W.norm_ff2_w, W.norm_ff2_b,
                                              W.ff2_l1_w,   W.ff2_l1_b,
-                                             W.ff2_l2_w,   W.ff2_l2_b, eps);
+                                             W.ff2_l2_w,   W.ff2_l2_b, eps, ff_headroom);
         y = ggml_scale(g.ctx, y, 0.5f);
         x = ggml_add(g.ctx, r, y);
     }
@@ -5635,6 +5653,19 @@ void ctc_greedy_decode_window(const float * logits,
 
 
 bool flash_attn_compiled() { return k_flash_attn_compiled; }
+
+// Hexagon's HMX batched matmuls take only 32-aligned reduction and row counts, so
+// the unfused attention zero-pads a head size that is not one; the padded columns
+// contribute nothing to any score or output.
+int attention_matmul_head_dim(ggml_backend_t backend, int HD) {
+    if (!k_f16_activations_compiled || !backend_is_hexagon(backend)) return 0;
+    const int padded = hmx_align_up_32(HD);
+    return padded > HD ? padded : 0;
+}
+
+int model_attention_matmul_head_dim(const ParakeetCtcModel & model) {
+    return model.impl ? model.impl->attn.matmul_head_dim : 0;
+}
 
 bool f16_activations_compiled() { return k_f16_activations_compiled; }
 

@@ -113,6 +113,7 @@ inline bool backend_is_cpu(ggml_backend_t b) {
 struct AttnPath {
     bool flash_attn    = false;
     bool per_head_mask = false; // the fused kernel accepts one additive mask per head
+    int  matmul_head_dim = 0;   // head size the unfused attention matmuls run at; 0 keeps the model's
 };
 
 inline bool backend_is_metal(ggml_backend_t b) {
@@ -206,8 +207,21 @@ inline void backend_device_memory(ggml_backend_t b, size_t & free, size_t & tota
     if (total == 0 && backend_is_hexagon(b) && cpu) ggml_backend_dev_memory(cpu, &free, &total);
 }
 
+// Hexagon's HMX matmul writes its result through F16, so an element beyond the
+// F16 range comes back as inf. A matmul whose result can grow that large takes
+// its input divided by this headroom and scales the F32 result back.
+constexpr float k_hmx_matmul_headroom = 16.0f;
+
+inline float matmul_output_headroom(ggml_backend_t b) {
+    return backend_is_hexagon(b) ? k_hmx_matmul_headroom : 1.0f;
+}
+
+// Hexagon keeps the unfused graph: its HMX fused attention holds scores and the
+// running output in F16 and drifts over long windows (encoder cosine 0.76 against
+// the CPU on a 67 s TDT window), while the unfused graph runs the same matmuls on
+// HMX with an F32 softmax and is faster too.
 inline bool flash_attn_allowed(bool compiled_in, ggml_backend_t b) {
-    return compiled_in && b && (backend_is_cuda(b) || backend_is_metal(b) || backend_is_vulkan(b) || backend_is_hexagon(b));
+    return compiled_in && b && (backend_is_cuda(b) || backend_is_metal(b) || backend_is_vulkan(b));
 }
 
 inline void backend_set_n_threads(ggml_backend_t b, int n_threads) {

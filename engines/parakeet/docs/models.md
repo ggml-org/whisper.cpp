@@ -35,6 +35,11 @@ build-parakeet/parakeet \
   --wav engines/parakeet/test/samples/jfk.wav --threads 6
 ```
 
+On a Snapdragon device the same GGUF runs on the Hexagon NPU with
+`--backend hexagon`: encoder and TDT decoder on HTP0, the same transcript as
+the CPU, and a 191 s recording 3.3 times faster than on the phone's CPU (see
+[Hexagon NPU](backends.md#hexagon-npu)).
+
 The selector also downloads the Core ML distribution: a 17 MB GGUF that holds
 the vocabulary, the mel filterbank, the decoder weights and the configuration
 but no encoder weights, plus `transcribepsy-250m-eu-sub-coreml-encoder.mlmodelc`

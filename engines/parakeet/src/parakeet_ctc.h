@@ -942,4 +942,10 @@ bool flash_attn_compiled();
 bool f16_activations_compiled();
 bool encoder_graph_uses_op(const ParakeetCtcModel & model, enum ggml_op op);
 
+// Head size the unfused attention matmuls run at on `backend` for a model head
+// size `HD`; 0 when they run at `HD` itself. The second form reports what the
+// loader chose for `model`.
+int attention_matmul_head_dim(ggml_backend_t backend, int HD);
+int model_attention_matmul_head_dim(const ParakeetCtcModel & model);
+
 }

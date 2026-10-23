@@ -15,8 +15,9 @@
 //      sample-16k.wav concatenated six times) transcribes to its known words
 //      within one percent word error, both with the engine's default options
 //      and with the 60 s / 25 % windows, on whichever backend the test runs
-//      (ggml CPU, a GPU through --n-gpu-layers, or the Core ML sidecars of
-//      the encoder-less GGUF), so every backend is held to the same accuracy;
+//      (ggml CPU, a GPU through --n-gpu-layers, an explicit --backend such as
+//      hexagon, or the Core ML sidecars of the encoder-less GGUF), so every
+//      backend is held to the same accuracy;
 //      on the ggml paths the default options take the model's validated
 //      windows and transcribe exactly like the explicit request.
 //
@@ -27,10 +28,11 @@
 //
 // Usage:
 //   test-transcribepsy --model <transcribepsy.gguf> --wav <jfk.wav> --wav2 <other.wav>
-//                      --wav-sample <sample-16k.wav> [--n-gpu-layers N]
+//                      --wav-sample <sample-16k.wav> [--n-gpu-layers N] [--backend NAME]
 //                      [--long-wav <long.wav>] [--threads N] [--min-similarity F] [--verbose]
 //
-// Exit 0 on success; non-zero on failure or invalid arguments.
+// Exit 0 on success, 3 when an explicit --backend is not available on this
+// host (ctest reports it as skipped); non-zero otherwise.
 
 #include "parakeet/engine.h"
 
@@ -41,6 +43,7 @@
 #include <exception>
 #include <future>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -67,6 +70,7 @@ constexpr int    kPhoneWindowFrames  = 750;  // 60 s at the 80 ms encoder stride
 constexpr int    kPhoneContextFrames = 94;   // 25 % overlap: 12.5 % each side
 constexpr double kDefaultMinSimilarity = 0.85;
 constexpr double kTimingSlackMs      = 1.0;
+constexpr int    kSkipReturnCode     = 3;
 
 struct Opts {
     std::string model_path;
@@ -74,6 +78,7 @@ struct Opts {
     std::string wav2_path;
     std::string wav_sample_path;
     std::string long_wav_path;
+    std::string backend;
     int    n_threads      = 0;
     int    n_gpu_layers   = 0;
     double min_similarity = kDefaultMinSimilarity;
@@ -87,6 +92,7 @@ void print_usage(const char * argv0) {
         "options:\n"
         "  --wav-sample PATH    sample-16k.wav, tiled with jfk.wav into the long English recording\n"
         "  --n-gpu-layers N     offload the encoder to the GPU backend of this build\n"
+        "  --backend NAME       explicit backend (cpu, cuda, vulkan, opencl, webgpu, hexagon, ...)\n"
         "  --long-wav PATH      also transcribe this recording once and print its stage times\n"
         "  --threads N          CPU threads (0 = hardware_concurrency)\n"
         "  --min-similarity F   required windowed-vs-single word similarity (default %.2f)\n"
@@ -102,6 +108,7 @@ int parse_args(int argc, char ** argv, Opts & o) {
         else if (a == "--wav2" && i + 1 < argc) o.wav2_path = argv[++i];
         else if (a == "--wav-sample" && i + 1 < argc) o.wav_sample_path = argv[++i];
         else if (a == "--n-gpu-layers" && i + 1 < argc) o.n_gpu_layers = std::atoi(argv[++i]);
+        else if (a == "--backend" && i + 1 < argc) o.backend = argv[++i];
         else if (a == "--long-wav" && i + 1 < argc) o.long_wav_path = argv[++i];
         else if (a == "--threads" && i + 1 < argc) o.n_threads = std::atoi(argv[++i]);
         else if (a == "--min-similarity" && i + 1 < argc) o.min_similarity = std::atof(argv[++i]);
@@ -246,12 +253,26 @@ int check_mel_rejections(Engine & engine, const Opts & o, const EngineResult & j
     return 0;
 }
 
+EngineOptions engine_options(const Opts & o) {
+    EngineOptions eo;
+    eo.model_gguf_path = o.model_path;
+    eo.n_threads       = o.n_threads;
+    eo.n_gpu_layers    = o.n_gpu_layers;
+    if (!o.backend.empty()) eo.backend = o.backend;
+    return eo;
+}
+
+// An explicit backend this host does not have fails the load with rc=11 or a
+// message naming it; that is a skip, not a failure.
+bool backend_unavailable(const Opts & o, const std::exception & e) {
+    const std::string what = e.what();
+    return !o.backend.empty() &&
+           (what.find("rc=11") != std::string::npos || what.find(o.backend) != std::string::npos);
+}
+
 EngineResult transcribe_tiled(const Opts & o, int window_frames, int context_frames,
                               const std::vector<float> & samples, int sample_rate) {
-    EngineOptions eo;
-    eo.model_gguf_path          = o.model_path;
-    eo.n_threads                = o.n_threads;
-    eo.n_gpu_layers             = o.n_gpu_layers;
+    EngineOptions eo = engine_options(o);
     eo.long_form_window_frames  = window_frames;
     eo.long_form_context_frames = context_frames;
     Engine engine(eo);
@@ -393,12 +414,21 @@ int main(int argc, char ** argv) {
     Opts opts;
     if (int rc = parse_args(argc, argv, opts); rc != 0) return rc;
 
+    std::unique_ptr<Engine> loaded;
     try {
-        EngineOptions eo;
-        eo.model_gguf_path = opts.model_path;
-        eo.n_threads       = opts.n_threads;
-        eo.n_gpu_layers    = opts.n_gpu_layers;
-        Engine engine(eo);
+        loaded = std::make_unique<Engine>(engine_options(opts));
+    } catch (const std::exception & e) {
+        if (!backend_unavailable(opts, e)) {
+            std::fprintf(stderr, "FAIL: load: %s\n", e.what());
+            return 1;
+        }
+        std::fprintf(stderr, "SKIP: backend '%s' unavailable: %s\n", opts.backend.c_str(), e.what());
+        return kSkipReturnCode;
+    }
+
+    try {
+        Engine & engine = *loaded;
+        if (opts.verbose) std::printf("encoder backend: %s\n", engine.backend_name().c_str());
 
         EngineResult jfk;
         if (check_expected_transcript(engine, opts, jfk) != 0) return 1;

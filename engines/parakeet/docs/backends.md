@@ -25,11 +25,13 @@ so later models can explicitly select Hexagon. If only legacy
 `ADSP_LIBRARY_PATH` is set, its entries are retained. Set `backends_dir` before
 the first Engine/loader call; registry discovery remains process-global.
 
-Hexagon is experimental and currently targets Parakeet CTC 0.6B Q8_0 and
-MOSS-Transcribe-Diarize. Build and ship the matching GGML Hexagon backend and
-DSP library. MOSS-Transcribe-Diarize's requirements, graph layout, device tests
-and measurements are in [its guide](moss-transcribe.md#hexagon-npu). For
-Parakeet CTC device validation, run
+Hexagon is experimental and currently targets Parakeet CTC and TDT 0.6B Q8_0,
+TranscribePsy-250M-EU-sub and MOSS-Transcribe-Diarize. Build and ship the
+matching GGML Hexagon backend and DSP library. How the FastConformer encoder and
+the TDT decoder run on the NPU, with TranscribePsy measurements, is in
+[Hexagon NPU](#hexagon-npu); MOSS-Transcribe-Diarize's requirements, graph
+layout, device tests and measurements are in
+[its guide](moss-transcribe.md#hexagon-npu). For Parakeet device validation, run
 `parakeet --backend hexagon --verbose --bench --bench-json result.json`, with the
 existing `--backends-dir` pointing at the installed backend libraries. The JSON
 records the actual backend (`ggml-htp0`), transcript and stage timings. Use a
@@ -60,8 +62,8 @@ automatically when no CUDA device is present and explicitly with
 `--backend webgpu`. Validated on an RTX 5090 (Dawn on Vulkan, 2026-10-20) with
 the TranscribePsy 250M CTC model: the transcript is identical to the CPU run
 and the end-to-end time 2.8x shorter. The encoder keeps its unfused attention
-graph on WebGPU (`flash_attn_allowed` admits only CUDA, Metal, Vulkan and
-Hexagon) until the fused path is compared there too. The backend reports its
+graph on WebGPU (`flash_attn_allowed` admits only CUDA, Metal and Vulkan)
+until the fused path is compared there too. The backend reports its
 maximum buffer size as device memory, so a memory-fit projection is not
 meaningful on WebGPU.
 
@@ -169,6 +171,52 @@ cmake -S engines/parakeet -B build-cuda -DGGML_CUDA=ON
 cmake -S engines/parakeet -B build-vulkan -DGGML_VULKAN=ON
 cmake -S engines/parakeet -B build-opencl -DGGML_OPENCL=ON
 ```
+
+## Hexagon NPU
+
+With `--backend hexagon` the FastConformer encoder and the TDT predictor and
+joint graphs run on HTP0. Three things keep that numerically equal to the CPU:
+
+- **Unfused attention.** `flash_attn_allowed` leaves Hexagon out. Its HMX fused
+  attention holds the scores and the running output in F16 and drifts over
+  long windows: on a 67.5 s window (844 encoder frames) the encoder output
+  falls to cosine 0.76 against the CPU for Parakeet-TDT-0.6B and 0.81 for
+  TranscribePsy. The unfused graph runs the same three batched matmuls (`ac`,
+  `bd`, `attn·V`) on HMX in F16 with an F32 softmax: cosine 0.9996 and 0.99995
+  on that window, and faster (0.94 s against 1.60 s for TDT-0.6B). HMX takes
+  only 32-aligned reduction and row counts, so a head size that is not one
+  (TranscribePsy's 80) is zero-padded to 96 on every attention operand
+  (`attention_matmul_head_dim`); the padded columns add nothing to any score or
+  output. Unpadded, those matmuls fall back to HVX and the window takes 6.2 s;
+  padded, 0.91 s (the fused attention, on HVX for this head size, took 3.5 s).
+- **Feed-forward headroom.** HMX writes matmul results through F16, so an
+  element above 65504 reads back as inf. TranscribePsy's first block reaches
+  37k to 76k in the second feed-forward linear on ordinary speech (69.5k on
+  `hi-16k.wav`), while every other encoder matmul stays under 8.5k. On Hexagon
+  that linear takes its input divided by 16 and multiplies the F32 result back
+  (`matmul_output_headroom`, `affine_mul_mat_with_headroom`); other backends
+  build the plain matmul.
+- **Decoder weights in the repack buffer.** The TDT decoder graphs execute
+  directly on the backend, without the scheduler's CPU fallback. The stacked
+  `[w_ih | w_hh]` LSTM weight is therefore allocated in the same Hexagon repack
+  buffer as the model weights and probed before use; in HTP's default buffer
+  HTP refuses the quantized GEMV, and the graph decoded garbage.
+
+TranscribePsy q8_0 on a Galaxy S25 (Snapdragon 8 Elite, HTP v79), six CPU
+threads, default 60 s / 25 % windows, median of three runs after one warm-up;
+transcripts identical to the CPU on every clip:
+
+| Clip | CPU inference | Hexagon inference | Hexagon encoder | Hexagon decoder |
+|---|--:|--:|--:|--:|
+| `jfk.wav`, 11 s | 173 ms | 140 ms | 122 ms | 15 ms |
+| 67.5 s (two windows) | 4.29 s | 1.71 s | 1.57 s | 122 ms |
+| `abcdba.wav`, 191 s (five windows) | 14.8 s | 4.52 s | 4.13 s | 355 ms |
+
+The device tests are `test-transcribepsy-hexagon`,
+`test-encoder-backend-parity-transcribepsy`,
+`test-attn-path-graph-transcribepsy-hexagon`, `test-tdt-backend-graphs-hexagon`
+and `test-matmul-headroom-hexagon`; each exits with the skip code on a host
+without HTP0 ([testing](testing.md#hexagon-npu-tests)).
 
 ## Experimental packed affine TDT recipe
 

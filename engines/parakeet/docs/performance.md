@@ -490,6 +490,39 @@ halves the mel time and bounds its scratch by a 2048-frame block instead of the
 input length. Short clips are unchanged: `jfk.wav` (11 s) encodes in 170 ms and
 decodes in 5 ms, RTF 0.016.
 
+### TranscribePsy on the Hexagon NPU (Galaxy S25, 2026-10-22)
+
+TranscribePsy q8_0 on a Galaxy S25 (Snapdragon 8 Elite, HTP v79), six CPU
+threads, default 60 s / 25 % windows, median of three runs after one warm-up,
+each run gated on thermal status 0; the transcripts match the CPU's on every
+clip:
+
+| Clip | Backend | Encoder | Decoder | Inference | RTF |
+|---|---|--:|--:|--:|--:|
+| `jfk.wav`, 11 s | CPU | 153 ms | 16 ms | 173 ms | 0.016 |
+| `jfk.wav`, 11 s | Hexagon | 122 ms | 15 ms | 140 ms | 0.013 |
+| 67.5 s, two windows | CPU | 4.18 s | 96 ms | 4.29 s | 0.064 |
+| 67.5 s, two windows | Hexagon | 1.57 s | 122 ms | 1.71 s | 0.025 |
+| `abcdba.wav`, 191 s, five windows | CPU | 14.5 s | 267 ms | 14.8 s | 0.078 |
+| `abcdba.wav`, 191 s, five windows | Hexagon | 4.13 s | 355 ms | 4.52 s | 0.024 |
+
+The CPU's 67.5 s runs spread from 3.7 to 6.2 s with the phone's temperature;
+the Hexagon runs stay within a millisecond. Where the encoder time goes on one
+844-frame window (`GGML_HEXAGON_PROFILE=1`, `--window-sec 0` on the 67.5 s
+clip):
+
+| Attention graph | Encoder | Attention ops | Encoder cosine vs CPU |
+|---|--:|--:|--:|
+| fused, HVX (head size 80) | 3.50 s | 2.00 s flash attention + 0.91 s position matmul | 0.99995 |
+| fused, HMX (head padded to 128) | 1.56 s | 0.04 s flash attention + 0.91 s position matmul | 0.81 |
+| unfused, HVX (head size 80) | 6.16 s | 5.34 s in the three batched matmuls | 0.99995 |
+| unfused, HMX (head padded to 96), shipped | 0.91 s | 0.06 s in the three batched matmuls + 0.09 s softmax | 0.99995 |
+
+Parakeet-TDT-0.6B, whose 128-wide heads already suit HMX, gains the same way
+on that window: the fused HMX attention it took before ran the encoder in
+1.60 s at cosine 0.76 against the CPU, the unfused HMX graph in 0.94 s at
+0.9996.
+
 ### TranscribePsy on the Apple Neural Engine (Mac mini M4, 2026-10)
 
 The same 412.7 s recording on a Mac mini M4 (macOS 15.3, six threads), built

@@ -1005,6 +1005,17 @@ if (PARAKEET_BUILD_TESTS)
             ARGS     "--model" "${_qvp_eou_q8_gguf}" "--wav" "${_qvp_jfk_wav}"
                      "--backend-a" "cpu" "--backend-b" "hexagon" "--min-cos" "0.995"
             REQUIRES "${_qvp_eou_q8_gguf}" "${_qvp_jfk_wav}")
+        # hi-16k drives TranscribePsy's first feed-forward to 69.5k, past the F16
+        # range HMX writes matmul results through (matmul_output_headroom); without
+        # the headroom block 0 turns non-finite. Block 0's softmax probabilities
+        # agree to 0.998 because HMX rounds its large scores to F16, while every
+        # activation stage stays at 0.9999, hence the looser gate.
+        parakeet_register_test(test-encoder-backend-parity-transcribepsy
+            LABEL    "parity"
+            EXE      test-encoder-backend-parity
+            ARGS     "--model" "${_qvp_transcribepsy_gguf}" "--wav" "${_qvp_hi_wav}"
+                     "--backend-a" "cpu" "--backend-b" "hexagon" "--min-cos" "0.995"
+            REQUIRES "${_qvp_transcribepsy_gguf}" "${_qvp_hi_wav}")
         parakeet_register_test(test-encoder-backend-parity-sortformer
             LABEL    "parity"
             EXE      test-encoder-backend-parity
@@ -2338,6 +2349,54 @@ if (PARAKEET_BUILD_TESTS)
         EXE      test-attn-path
         ARGS     "${_qvp_tdt_q8_gguf}" "--n-gpu-layers" "1"
         REQUIRES "${_qvp_tdt_q8_gguf}")
+    # TranscribePsy's 80-wide heads: on Hexagon the loader must pad them for HMX
+    # from the model's own head size, not the configuration defaults.
+    parakeet_register_test(test-attn-path-graph-transcribepsy-hexagon
+        LABEL    "fixture"
+        EXE      test-attn-path
+        ARGS     "${_qvp_transcribepsy_gguf}" "--backend" "hexagon"
+        REQUIRES "${_qvp_transcribepsy_gguf}")
+
+    # A matmul result past the F16 range stays finite with the headroom the
+    # engine applies on the device (Hexagon writes HMX results through F16).
+    add_executable(test-matmul-headroom test/test_matmul_headroom.cpp)
+    target_link_libraries(test-matmul-headroom PRIVATE ggml)
+    target_include_directories(test-matmul-headroom PRIVATE src ggml/include)
+    parakeet_apply_ccache(test-matmul-headroom)
+    parakeet_register_test(test-matmul-headroom LABEL "unit")
+    parakeet_register_test(test-matmul-headroom-hexagon
+        LABEL "unit"
+        EXE   test-matmul-headroom
+        ARGS  "--device" "HTP0")
+
+    # Every node of the TDT decoder graphs must be one their backend accepts:
+    # they run without the scheduler's CPU fallback.
+    add_executable(test-tdt-backend-graphs
+        test/test_tdt_backend_graphs.cpp
+        src/parakeet_ctc.cpp
+        src/parakeet_engine.cpp
+        src/parakeet_nemotron.cpp
+        src/parakeet_unified.cpp
+        src/parakeet_log.cpp
+        src/parakeet_tdt.cpp
+        src/parakeet_eou.cpp
+        src/parakeet_sortformer.cpp
+        src/parakeet_diarization_v3.cpp
+        src/mel_preprocess.cpp
+        src/sentencepiece_bpe.cpp
+        src/energy_vad.cpp)
+    target_link_libraries(test-tdt-backend-graphs PRIVATE ggml parakeet-backend-defs)
+    target_include_directories(test-tdt-backend-graphs PRIVATE include src ggml/include)
+    parakeet_apply_backend_defs(test-tdt-backend-graphs)
+    parakeet_register_test(test-tdt-backend-graphs
+        LABEL    "fixture"
+        ARGS     "${_qvp_transcribepsy_gguf}" "${_qvp_jfk_wav}"
+        REQUIRES "${_qvp_transcribepsy_gguf}" "${_qvp_jfk_wav}")
+    parakeet_register_test(test-tdt-backend-graphs-hexagon
+        LABEL    "fixture"
+        EXE      test-tdt-backend-graphs
+        ARGS     "${_qvp_transcribepsy_gguf}" "${_qvp_jfk_wav}" "--backend" "hexagon"
+        REQUIRES "${_qvp_transcribepsy_gguf}" "${_qvp_jfk_wav}")
 
     # The channel-contiguous depthwise-conv view needs two or more frames.
     add_executable(test-conv-channels-view test/test_conv_channels_view.cpp)
@@ -2745,6 +2804,13 @@ if (PARAKEET_BUILD_TESTS)
             ARGS     "--model" "${_qvp_transcribepsy_gguf}" ${_qvp_transcribepsy_clips} "--n-gpu-layers" "999"
             REQUIRES "${_qvp_transcribepsy_gguf}" ${_qvp_transcribepsy_clip_files})
     endif()
+    # The NPU arm: encoder and TDT decoder graphs on Hexagon HTP0. Skips (exit 3)
+    # on hosts without HTP0.
+    parakeet_register_test(test-transcribepsy-hexagon
+        LABEL    "fixture"
+        EXE      test-transcribepsy
+        ARGS     "--model" "${_qvp_transcribepsy_gguf}" ${_qvp_transcribepsy_clips} "--backend" "hexagon"
+        REQUIRES "${_qvp_transcribepsy_gguf}" ${_qvp_transcribepsy_clip_files})
     if (PARAKEET_COREML)
         parakeet_register_test(test-transcribepsy-coreml
             LABEL    "fixture;coreml"

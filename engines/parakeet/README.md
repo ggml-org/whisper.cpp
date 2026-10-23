@@ -25,7 +25,7 @@ and CPU scratch for the configured threads, using GGUF metadata only; see
 | `nvidia/parakeet-unified-en-0.6b` | RNN-T | 128 | 1024 x 24 | 1024 | 600 M | 707 MiB q8_0 | 0.004 q8_0 Vulkan / 0.028 q8_0 Metal | English; offline full-context encoder with an optional Core ML sidecar; cache-aware streaming at 80/160/560/1040 ms chunks with 0-1040 ms right context |
 | `nvidia/parakeet-tdt-0.6b-v3` | TDT | 128 | 1024 × 24 | 8192 | 600 M | 715 MiB q8_0 / 1.34 GiB f16 | 0.006 q8_0 Metal | About 25 languages, with punctuation and capitalization; optional Core ML offline encoder |
 | `nvidia/parakeet-tdt-1.1b` | TDT | 80 | 1024 × 42 | 1024 | 1.1 B | 1225 MiB q8_0 | 0.027–0.079 Metal | English only; no punctuation or capitalization; optional Core ML offline encoder |
-| `qvac/TranscribePsy-250M-EU-sub` ([GGUF](https://huggingface.co/qvac/TranscribePsy-250M-EU-sub-gguf), [Core ML](https://huggingface.co/qvac/TranscribePsy-250M-EU-sub-coreml)) | TDT | 128 | 640 × 24 | 8192 | 254 M | 291 MiB q8_0 / 17 MiB encoder-less + 186 MiB Core ML | 0.016 q8_0 CPU (8 threads, x86-64) | Eight European languages (nl, en, fr, de, it, pl, pt, es) with punctuation and capitalization, distilled from TDT 0.6B-v3; published GGUF loads as a TDT model; Neural Engine encoder and batched TDT decoder sidecars, see [Neural Engine sidecars](docs/backends.md#neural-engine-fixed-window-encoder-and-tdt-decoder-sidecars) |
+| `qvac/TranscribePsy-250M-EU-sub` ([GGUF](https://huggingface.co/qvac/TranscribePsy-250M-EU-sub-gguf), [Core ML](https://huggingface.co/qvac/TranscribePsy-250M-EU-sub-coreml)) | TDT | 128 | 640 × 24 | 8192 | 254 M | 291 MiB q8_0 / 17 MiB encoder-less + 186 MiB Core ML | 0.016 q8_0 CPU (8 threads, x86-64) / 0.024 q8_0 Hexagon (Galaxy S25, 191 s) | Eight European languages (nl, en, fr, de, it, pl, pt, es) with punctuation and capitalization, distilled from TDT 0.6B-v3; published GGUF loads as a TDT model; Neural Engine encoder and batched TDT decoder sidecars, see [Neural Engine sidecars](docs/backends.md#neural-engine-fixed-window-encoder-and-tdt-decoder-sidecars); Hexagon NPU, see [Hexagon NPU](docs/backends.md#hexagon-npu) |
 | `nvidia/parakeet_realtime_eou_120m-v1` | RNN-T + `<EOU>` | 128 | 512 × 17 | 1027 | 120 M | 246 MiB f16 / 132 MiB q8_0 | 0.0052 Vulkan | English ASR and native end-of-turn token; Core ML exact-shape encoder |
 | `nvidia/nemotron-3.5-asr-streaming-0.6b` | Prompt-conditioned RNN-T | 128 | 1024 × 24 | 13087 | 600 M | ~1.3 GiB f16 | 0.108 CPU | Locale-conditioned ASR; empty language selects `auto`; cache-aware streaming at 80/160/320/560/1120 ms; Core ML exact-shape offline encoder |
 | `nvidia/diar_sortformer_4spk-v1` | Sortformer | 80 | 512 × 18 | n/a | 123 M | 263 MiB f16 / 141 MiB q8_0 / 75 MiB q4_0 | 0.0020 Vulkan | Up to four speakers; offline and sliding-history streaming |
@@ -115,7 +115,9 @@ machines; see [the diarizer guide](docs/backends.md#core-ml-diarizer-sidecars).
 `parakeet-fit-params --backend NAME` and `FitOptions::backend` project memory for
 the same device. Explicit requests fail if unavailable. Hexagon is experimental and requires
 a staged DSP library; see [docs/backends.md](docs/backends.md) for names,
-automatic placement and validation coverage, and
+automatic placement and validation coverage,
+[Hexagon NPU](docs/backends.md#hexagon-npu) for the FastConformer models
+(TranscribePsy measurements included), and
 [docs/moss-transcribe.md](docs/moss-transcribe.md#hexagon-npu) for
 MOSS-Transcribe-Diarize on the NPU.
 

@@ -237,8 +237,31 @@ void upload_lstm_cat_bias(ggml_tensor * dst, const TdtLstmLayer & src) {
     ggml_backend_tensor_set(dst, b_ih.data(), 0, b_ih.size() * sizeof(float));
 }
 
-// Allocate and fill the per-layer [w_ih | w_hh] stacks on the active backend.
-// Returns false (leaving concat disabled) when any layer is ineligible.
+void release_lstm_input_concat(TdtRuntimeWeights & W) {
+    if (W.lstm_cat_buffer) { ggml_backend_buffer_free(W.lstm_cat_buffer); W.lstm_cat_buffer = nullptr; }
+    if (W.lstm_cat_ctx)    { ggml_free(W.lstm_cat_ctx);                  W.lstm_cat_ctx    = nullptr; }
+    W.lstm_cat.clear();
+}
+
+// The decoder graphs execute directly on the backend, so every stacked GEMV
+// must be one the backend accepts with its weight where it was allocated.
+bool backend_runs_lstm_cat_gemv(const TdtRuntimeWeights & W) {
+    ggml_init_params ip = { ggml_tensor_overhead() * 2 * W.lstm_cat.size(), nullptr, true };
+    ggml_context * ctx = ggml_init(ip);
+    if (!ctx) return false;
+    bool ok = true;
+    for (const TdtLstmCatWeights & cat : W.lstm_cat) {
+        ggml_tensor * xh = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, cat.w->ne[0]);
+        ok = ok && ggml_backend_supports_op(W.backend, ggml_mul_mat(ctx, cat.w, xh));
+    }
+    ggml_free(ctx);
+    return ok;
+}
+
+// Allocate and fill the per-layer [w_ih | w_hh] stacks on the active backend,
+// in the buffer type the loader gives weights there (Hexagon runs quantized
+// GEMVs only from its repack buffer). Returns false (leaving concat disabled)
+// when any layer is ineligible or the backend cannot run a stacked GEMV.
 //
 // Measure mode (`measure_bytes != nullptr`, fit projection): the eligibility
 // decision and tensor shapes are identical, but the backend buffer is *sized*
@@ -269,9 +292,9 @@ bool build_lstm_input_concat(TdtRuntimeWeights & W, size_t * measure_bytes = nul
         ggml_set_name(W.lstm_cat[l].b, (base + ".b").c_str());
     }
 
+    const ggml_backend_buffer_type_t buft = weight_buffer_type(W.backend);
     if (measure_bytes) {
-        *measure_bytes += ggml_backend_alloc_ctx_tensors_from_buft_size(
-            W.lstm_cat_ctx, ggml_backend_get_default_buffer_type(W.backend));
+        *measure_bytes += ggml_backend_alloc_ctx_tensors_from_buft_size(W.lstm_cat_ctx, buft);
         for (ggml_tensor * t = ggml_get_first_tensor(W.lstm_cat_ctx); t;
              t = ggml_get_next_tensor(W.lstm_cat_ctx, t)) {
             if (!t->data && !t->view_src) {
@@ -281,8 +304,11 @@ bool build_lstm_input_concat(TdtRuntimeWeights & W, size_t * measure_bytes = nul
         return true;
     }
 
-    W.lstm_cat_buffer = ggml_backend_alloc_ctx_tensors(W.lstm_cat_ctx, W.backend);
-    if (!W.lstm_cat_buffer) return false;
+    W.lstm_cat_buffer = ggml_backend_alloc_ctx_tensors_from_buft(W.lstm_cat_ctx, buft);
+    if (!W.lstm_cat_buffer || !backend_runs_lstm_cat_gemv(W)) {
+        release_lstm_input_concat(W);
+        return false;
+    }
 
     for (int l = 0; l < W.L; ++l) {
         upload_lstm_cat_weight(W.lstm_cat[l].w, W.weights->lstm[l]);

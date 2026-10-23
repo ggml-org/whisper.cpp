@@ -135,4 +135,14 @@ inline ggml_tensor * affine_mul_mat(ggml_context * ctx, ggml_tensor * weight, gg
 #endif
     return ggml_mul_mat(ctx, affine_weight(ctx, weight, x), x);
 }
+
+// Divides the input by `headroom` and scales the F32 result back: exact in real
+// arithmetic, and it keeps a result beyond the F16 range finite on a backend
+// that writes matmul results through F16 (matmul_output_headroom).
+inline ggml_tensor * affine_mul_mat_with_headroom(ggml_context * ctx, ggml_tensor * weight,
+                                                  ggml_tensor * x, float headroom) {
+    if (headroom == 1.0f) return affine_mul_mat(ctx, weight, x);
+    ggml_tensor * y = affine_mul_mat(ctx, weight, ggml_scale(ctx, x, 1.0f / headroom));
+    return ggml_scale(ctx, y, headroom);
+}
 } // namespace parakeet
