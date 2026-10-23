@@ -15,6 +15,7 @@
 #include "audio8/cli.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -115,8 +116,26 @@ tts_cpp::audio8::EngineOptions to_engine_options(const options & opts) {
 tts_cpp::audio8::SynthesisResult speak(tts_cpp::audio8::Engine & engine,
                                        const options & opts,
                                        const tts_cpp::audio8::VoicePrompt & voice) {
-    return voice.empty() ? engine.synthesize(opts.text)
-                         : engine.synthesize(opts.text, voice);
+    const auto started = std::chrono::steady_clock::now();
+    double first_audio_ms = -1.0;
+    size_t chunks = 0;
+    const auto callback = [&](const float *, size_t, int) {
+        if (chunks++ == 0) {
+            first_audio_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - started).count();
+        }
+        return true;
+    };
+    auto result = opts.stream ? engine.synthesize_stream(opts.text, voice, callback)
+                              : engine.synthesize(opts.text, voice);
+    const double total_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - started).count();
+    if (!opts.stream) first_audio_ms = total_ms;
+    std::fprintf(stderr,
+        "[audio8-performance] mode=%s first_audio_ms=%.3f total_ms=%.3f audio_s=%.3f realtime_factor=%.3f chunks=%zu\n",
+        opts.stream ? "stream" : "batch", first_audio_ms, total_ms, result.duration_s,
+        result.duration_s > 0 ? total_ms / (1000.0 * result.duration_s) : 0.0, chunks);
+    return result;
 }
 
 }  // namespace

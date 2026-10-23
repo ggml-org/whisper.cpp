@@ -20,6 +20,7 @@
 #include "tts-cpp/export.h"
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -131,9 +132,8 @@ struct SynthesisResult {
     std::string codec_synthesis_backend = "ggml";
 };
 
-// Persistent engine. Loads the GGUFs once at construction; synthesize() reuses
-// the resident models. Codes for the most recent voice prompt are cached, so
-// consecutive calls with the same reference skip the codec encoder.
+using AudioCallback = std::function<bool(const float *, size_t, int)>;
+
 class TTS_CPP_API Engine {
 public:
     // Throws std::runtime_error on any hard failure, a set of GGUFs that does
@@ -152,6 +152,10 @@ public:
     // Speaks `text` in the voice of `voice`. Throws when the engine was built
     // without codec_encoder_gguf_path.
     SynthesisResult synthesize(const std::string & text, const VoicePrompt & voice);
+
+    SynthesisResult synthesize_stream(const std::string & text, const AudioCallback & callback);
+    SynthesisResult synthesize_stream(const std::string & text, const VoicePrompt & voice,
+                                      const AudioCallback & callback);
 
     // Best-effort cancel of an in-flight synthesize() on another thread; takes
     // effect at the next language model step or codec block, and leaves

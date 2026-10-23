@@ -72,14 +72,15 @@ bool check_gpu_layers() {
 // A switch that ate the next argument would swallow whatever followed it.
 bool check_switches() {
     options opts;
-    if (!parse({"--verbose", "--greedy", "--seed", "7"}, opts)) {
+    if (!parse({"--verbose", "--stream", "--greedy", "--seed", "7"}, opts)) {
         return fail("switches", "the switches were rejected");
     }
+    if (!opts.stream) return fail("switches", "--stream did not set stream");
     if (!opts.verbose) return fail("switches", "--verbose did not set verbose");
     if (!opts.greedy) return fail("switches", "--greedy did not set greedy");
     if (opts.seed != 7) return fail("switches", "a switch consumed the seed");
     options defaulted;
-    if (!parse({}, defaulted) || defaulted.verbose) {
+    if (!parse({}, defaulted) || defaulted.verbose || defaulted.stream) {
         return fail("switches", "verbose is on by default");
     }
     std::printf("switches: PASS\n");

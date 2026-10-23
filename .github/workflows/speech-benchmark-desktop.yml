@@ -59,6 +59,11 @@ on:
         required: false
         default: false
         type: boolean
+      audio8_pcm_streaming:
+        description: "Compare Audio8 batch and incremental PCM latency; retain logs, codes and WAVs (select audio8-tts)."
+        required: false
+        default: false
+        type: boolean
       runs_per_bench:
         description: "Timed iterations per bench (median reported). Positive integer, max 20."
         required: false
@@ -122,6 +127,7 @@ jobs:
           python3 -B scripts/benchmarks/test-audio-quality-driver.py
           python3 -B scripts/benchmarks/test_minimax_preparation.py
           python3 -B scripts/benchmarks/test_music_model_validation.py
+          python3 -B scripts/benchmarks/test_audio8_streaming.py
 
       - id: expand
         env:
@@ -538,11 +544,12 @@ jobs:
 
       - name: Configure umbrella build
         env:
+          STREAMING_TESTS: ${{ inputs.audio8_pcm_streaming && matrix.family == 'audio8-tts' && 'ON' || 'OFF' }}
           PARAKEET_COREML_FLAG: ${{ runner.os == 'macOS' && (matrix.family == 'parakeet' || matrix.family == 'parakeet-unified' || matrix.family == 'parakeet-eou' || matrix.family == 'parakeet-nemotron') && 'ON' || 'OFF' }}
         run: |
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DSPEECH_BUILD_TESTS=OFF \
+            -DSPEECH_BUILD_TESTS="$STREAMING_TESTS" \
             -DSPEECH_BUILD_EXECUTABLES=ON \
             -DPARAKEET_COREML="$PARAKEET_COREML_FLAG" \
             -DCMAKE_PREFIX_PATH="$PWD/ggml-install"
@@ -762,6 +769,24 @@ jobs:
             --runner "$RUNNER_LABEL" \
             ${extra_args[@]+"${extra_args[@]}"} \
             --out "artifacts/result.json"
+
+      - name: Audio8 streaming API and latency comparison
+        if: inputs.audio8_pcm_streaming && matrix.family == 'audio8-tts'
+        env:
+          RUNS_PER_BENCH: ${{ needs.plan.outputs.runs_per_bench }}
+          LD_LIBRARY_PATH: ${{ github.workspace }}/ggml-install/lib
+        run: |
+          set -euo pipefail
+          cmake --build build --target test-audio8-streaming -j4
+          ./build/engines/tts/test-audio8-streaming \
+            bench-models/audio8-tts/audio8-lm-q8_0.gguf \
+            bench-models/audio8-tts/audio8-codec-decoder-q8_0.gguf
+          python3 -B scripts/benchmarks/audio8-streaming.py \
+            --binary "$PWD/build/engines/tts/audio8-cli" \
+            --lm "$PWD/bench-models/audio8-tts/audio8-lm-q8_0.gguf" \
+            --decoder "$PWD/bench-models/audio8-tts/audio8-codec-decoder-q8_0.gguf" \
+            --backend auto --gpu-layers 999 --runs "$RUNS_PER_BENCH" \
+            --out-dir "$PWD/artifacts/audio8-streaming" >> "$GITHUB_STEP_SUMMARY"
 
       # Include the whisper size in the artifact name so the fan-out cells
       # don't clobber each other's uploads. Uploads the whole `artifacts/`

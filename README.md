@@ -225,3 +225,6 @@ and model-specific exceptions.
 | Music generation and editing | [AudioGen](engines/audiogen/README.md) |
 | Benchmark quality diagnostics and model preparation | [Music alignment guide](scripts/benchmarks/music-alignment.md) |
 | Historical development and integration reports | [Chatterbox](engines/tts/docs/history/chatterbox-port.md), [Supertonic](engines/tts/docs/history/supertonic-port.md), [Pocket](engines/tts/docs/history/pocket-integration.md), [Parakeet](engines/parakeet/docs/history/parakeet-port.md), [Strix Halo](engines/audiogen/docs/history/strix-halo.md) |
+
+Audio8 exposes incremental PCM through `Engine::synthesize_stream()`, with codec-window
+delivery on ggml and Core ML. See the [streaming API and measurement guide](engines/tts/docs/audio8.md#incremental-pcm-streaming).

@@ -1,6 +1,7 @@
 // Build a tiny decoder and obtain reference PCM through decode_codes directly.
 // The integration test runs the unmodified benchmark executable separately.
 #include "audio8/internal.h"
+#include "audio8/window_stream.h"
 #include "gguf.h"
 
 #include <cmath>
@@ -19,7 +20,7 @@ static void require(bool ok, const std::string & message) {
     if (!ok) throw std::runtime_error(message);
 }
 
-static void write_decoder(const fs::path & path) {
+static void write_decoder(const fs::path & path, int max_frames = 8) {
     std::unique_ptr<ggml_context, decltype(&ggml_free)> ctx(
         ggml_init({1024 * 1024, nullptr, false}), ggml_free);
     std::unique_ptr<gguf_context, decltype(&gguf_free)> file(gguf_init_empty(), gguf_free);
@@ -34,7 +35,7 @@ static void write_decoder(const fs::path & path) {
     };
     u32("sample_rate", 8000); u32("frame_size", 4); u32("num_codebooks", 2);
     u32("residual_codebooks", 1); u32("latent_dim", 4); u32("codebook_dim", 4);
-    u32("semantic_codebook_size", 4); u32("residual_codebook_size", 4); u32("max_frames", 8);
+    u32("semantic_codebook_size", 4); u32("residual_codebook_size", 4); u32("max_frames", max_frames);
     f32("convnext_norm_eps", 1e-5f); f32("snake_epsilon", 1e-5f);
     const int32_t unused = 0;
     for (const auto * key : {"encoder_strides", "decoder_strides", "residual_dilations"})
@@ -75,8 +76,8 @@ static void write_decoder(const fs::path & path) {
     tensor(block + "w3", {4, 4});
     for (const auto * suffix : {"attn_norm", "ffn_norm", "attn_scale", "ffn_scale"})
         tensor(block + suffix, {4}, true, 1.0f);
-    tensor("rope/post_tf_cos", {2, 8}, true, 1.0f);
-    tensor("rope/post_tf_sin", {2, 8}, true, 0.0f);
+    tensor("rope/post_tf_cos", {2, max_frames}, true, 1.0f);
+    tensor("rope/post_tf_sin", {2, max_frames}, true, 0.0f);
     for (int stage = 0; stage < 2; ++stage) {
         const std::string base = "q/up/" + std::to_string(stage);
         conv(base + "/0/conv", 4, 4, 2);
@@ -98,6 +99,53 @@ struct owned_codec {
     codec::codec_model model;
     ~owned_codec() { codec::free_codec(model); }
 };
+
+static std::vector<int32_t> streaming_frames(int count) {
+    std::vector<int32_t> frames;
+    for (int frame = 0; frame < count; ++frame) {
+        frames.push_back(frame % 4);
+        frames.push_back((frame + 1) % 4);
+    }
+    return frames;
+}
+
+static void feed_stream(codec::window_stream & stream, int count) {
+    std::string error;
+    for (int frame = 1; frame <= count; ++frame) require(stream.advance(frame, &error), error);
+}
+
+static void compare_pcm(const std::vector<float> & got, const std::vector<float> & expected) {
+    require(got.size() == expected.size(), "streaming sample count mismatch");
+    for (size_t index = 0; index < got.size(); ++index) {
+        require(std::isfinite(got[index]) && std::abs(got[index] - expected[index]) < 1e-5f,
+                "streaming waveform differs from batch");
+    }
+}
+
+static void check_streaming_decoder(const fs::path & root) {
+    constexpr int frames_count = 51;
+    const auto path = root / "stream-decoder.gguf";
+    write_decoder(path, frames_count);
+    owned_codec loaded;
+    std::string error;
+    require(codec::load_codec(path.string(), 0, "cpu", loaded.model, &error), error);
+    const auto frames = streaming_frames(frames_count);
+    const auto rows = codec::codebook_rows(frames, loaded.model.hp.num_codebooks, 0, frames_count);
+    std::vector<float> expected;
+    require(codec::decode_codes(loaded.model, rows.data(), frames_count, 1, {}, expected, &error), error);
+    std::vector<float> delivered;
+    auto stream = codec::open_synthesis_stream(loaded.model, frames, 1, {},
+        [&](const std::vector<float> & chunk) { delivered.insert(delivered.end(), chunk.begin(), chunk.end()); });
+    require(static_cast<bool>(stream), "ggml stream unavailable");
+    feed_stream(*stream, frames_count);
+    require(!delivered.empty(), "ggml PCM delayed until finish");
+    std::vector<float> result;
+    require(codec::finish_synthesis_stream(loaded.model, *stream, rows.data(), frames_count,
+                                          1, {}, result, &error, nullptr), error);
+    require(delivered == result, "callback PCM differs from returned PCM");
+    compare_pcm(delivered, expected);
+    fs::remove(path);
+}
 
 int main(int argc, char ** argv) {
     try {
@@ -128,6 +176,7 @@ int main(int argc, char ** argv) {
                     "cannot write reference PCM");
         }
         require(std::fflush(reference.get()) == 0, "cannot flush reference PCM");
+        check_streaming_decoder(root);
         return 0;
     } catch (const std::exception & error) {
         std::fprintf(stderr, "codec bench fixture: %s\n", error.what());

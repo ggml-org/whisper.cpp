@@ -170,3 +170,7 @@ CC-BY-4.0, Supertonic OpenRAIL-M, and Parler/CosyVoice3/Audio8/LavaSR/MOSS
 Apache-2.0; see [NOTICE](NOTICE) for
 canonical upstream sources and license identities. This in-tree package does
 not bundle ggml.
+
+Audio8 supports codec-window PCM callbacks through `Engine::synthesize_stream()`.
+The CLI `--stream` mode measures callback first-audio latency and real-time factor;
+see [incremental PCM streaming](docs/audio8.md#incremental-pcm-streaming).

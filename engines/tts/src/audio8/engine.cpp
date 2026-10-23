@@ -350,19 +350,33 @@ struct Engine::Impl {
         pcm = resample_for_output(std::move(pcm), native, target);
     }
 
-    SynthesisResult run(const std::string & text, const VoicePrompt & voice) {
+    std::vector<float> resample_chunk(OutputResampler & resampler, const std::vector<float> & pcm) {
+        if (resampler.passthrough()) return pcm;
+        stage_timer measure(timings.resample_ms);
+        return resampler.process(pcm);
+    }
+
+    std::vector<float> finish_resampling(OutputResampler & resampler) {
+        if (resampler.passthrough()) return {};
+        stage_timer measure(timings.resample_ms);
+        return resampler.finish();
+    }
+
+    SynthesisResult run(const std::string & text, const VoicePrompt & voice,
+                        const AudioCallback & callback = {}) {
         timings = StageTimings();
         SynthesisResult result;
         {
             stage_timer whole(timings.total_ms);
-            result = generate(text, voice);
+            result = generate(text, voice, callback);
         }
         result.timings = timings;
         if (opts.verbose) report_timings(result);
         return result;
     }
 
-    SynthesisResult generate(const std::string & text, const VoicePrompt & voice) {
+    SynthesisResult generate(const std::string & text, const VoicePrompt & voice,
+                             const AudioCallback & callback) {
         require(!text.empty(), "the text to speak must not be empty");
         cancel_requested.store(false, std::memory_order_relaxed);
         const int n_threads = resolve_threads(opts.n_threads);
@@ -370,8 +384,27 @@ struct Engine::Impl {
         const prompt_frames prompt = prompt_for(text, voice, n_threads);
         std::vector<int32_t> frames;
         int n_frames = 0;
+        OutputResampler resampler(decoder.hp.sample_rate, opts.output_sample_rate);
+        std::vector<float> delivered;
+        bool received = false;
+        const auto deliver = [&](const std::vector<float> & pcm) {
+            if (pcm.empty()) return;
+            check_cancel();
+            if (!callback(pcm.data(), pcm.size(), resampler.target_rate())) {
+                cancel_requested.store(true, std::memory_order_relaxed);
+                check_cancel();
+            }
+            delivered.insert(delivered.end(), pcm.begin(), pcm.end());
+        };
+        std::function<void(const std::vector<float> &)> emit;
+        if (callback) {
+            emit = [&](const std::vector<float> & pcm) {
+                received = true;
+                deliver(resample_chunk(resampler, pcm));
+            };
+        }
         const std::unique_ptr<window_stream> stream =
-            open_synthesis_stream(decoder, frames, n_threads, cancel_probe());
+            open_synthesis_stream(decoder, frames, n_threads, cancel_probe(), emit);
         generate_codes(prompt, n_threads, stream.get(), frames, n_frames);
         require(n_frames > 0, "the model emitted no audio frames");
         check_cancel();
@@ -382,7 +415,13 @@ struct Engine::Impl {
         run_codec(stream.get(), frames, n_frames, n_threads, result);
 
         const int native = decoder.hp.sample_rate;
-        resample(result.pcm, native);
+        if (callback) {
+            if (!received) emit(result.pcm);
+            deliver(finish_resampling(resampler));
+            result.pcm = std::move(delivered);
+        } else {
+            resample(result.pcm, native);
+        }
         result.sample_rate =
             opts.output_sample_rate > 0 ? opts.output_sample_rate : native;
         result.duration_s =
@@ -484,6 +523,16 @@ SynthesisResult Engine::synthesize(const std::string & text) {
 
 SynthesisResult Engine::synthesize(const std::string & text, const VoicePrompt & voice) {
     return pimpl_->run(text, voice);
+}
+
+SynthesisResult Engine::synthesize_stream(const std::string & text, const AudioCallback & callback) {
+    return synthesize_stream(text, VoicePrompt{}, callback);
+}
+
+SynthesisResult Engine::synthesize_stream(const std::string & text, const VoicePrompt & voice,
+                                          const AudioCallback & callback) {
+    require(static_cast<bool>(callback), "the audio callback must not be empty");
+    return pimpl_->run(text, voice, callback);
 }
 
 void Engine::cancel() {

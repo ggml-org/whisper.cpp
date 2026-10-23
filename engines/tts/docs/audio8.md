@@ -1022,3 +1022,102 @@ S1 baseline in ggml's profiling document. Local raw evidence and the parsed
 summary are `hexagon-26397-build/results/parity-v2.log` and
 `parity-v2-summary.json`; `hexagon-26397-build/run-parity-v2.sh` records the
 device invocations. These diagnostics are not performance measurements.
+
+### Incremental PCM streaming
+
+`Engine::synthesize_stream(text, callback)` and
+`Engine::synthesize_stream(text, voice, callback)` deliver mono float PCM as
+codec windows complete. The callback takes `(const float * samples, size_t count,
+int sample_rate)` and returns `true` to continue or `false` to cancel. The sample
+pointer is valid only during the callback. Calls are ordered and serialized,
+but may run on the Core ML worker thread; do not re-enter the engine from a
+callback. All callbacks finish before synthesis returns or throws.
+
+The returned `SynthesisResult::pcm` contains the same samples as the concatenated
+callbacks. Output sample-rate conversion carries sinc history across callbacks
+and flushes its final samples at completion. Cancellation throws; consumers may
+already have received a prefix. A codec failure after delivery starts also
+fails the call instead of replaying that prefix through a batch fallback.
+
+With a Core ML sidecar, synthesis overlaps language-model generation on the
+existing codec worker. With ggml, windows run synchronously between generation
+steps so codec graph allocation is never shared concurrently. ggml retains the
+codec's causal left context and advances by 16 new frames per full window.
+The final window is trimmed to the generated frame count. Short utterances can
+finish generation before their first window is ready. Models without finite
+post-transformer attention windows use batch decoding and one final callback.
+
+For a local batch/stream comparison, run the same model, text, seed, backend,
+thread count, and output rate with and without `--stream`:
+
+```bash
+./build/audio8-cli --lm models/audio8-lm-q8_0.gguf \
+  --codec-decoder models/audio8-codec-decoder-q8_0.gguf \
+  --text "The same benchmark text for both runs." --greedy --verbose --out batch.wav
+./build/audio8-cli --lm models/audio8-lm-q8_0.gguf \
+  --codec-decoder models/audio8-codec-decoder-q8_0.gguf \
+  --text "The same benchmark text for both runs." --greedy --verbose --stream --out stream.wav
+```
+
+`[audio8-performance]` reports first nonempty PCM callback latency, synthesis
+wall time, audio duration, real-time factor (wall seconds / audio seconds), and
+callback count. Model loading and WAV writing are excluded. In batch mode,
+first-audio latency is synthesis completion time. The CLI writes the complete
+WAV after synthesis; its callback timing measures availability to an embedding
+application, not speaker playback. These native metrics do not include SDK
+text chunking or duplex input delays.
+
+#### Local CPU measurement (2026-10-22)
+
+On a Ryzen AI 9 HX 370 under WSL2 Linux, the draft incremental implementation
+was measured with q8_0 LM/decoder weights, four CPU threads, greedy decoding,
+and a fixed 51-word English prompt. Three fresh-process runs per mode used
+batch/stream, stream/batch, batch/stream order. Loading and WAV writing were
+excluded; inference was not warmed up. Every run emitted 426 frames (19.783 s),
+below the 512-frame ceiling. The Release build used `GGML_NATIVE=OFF`.
+
+| Metric (median of three runs) | Batch | Incremental PCM |
+| --- | ---: | ---: |
+| First audio available | 33.471 s | 2.172 s |
+| Complete synthesis | 33.471 s | 43.613 s |
+| Real-time factor (lower is better) | 1.692 | 2.205 |
+| PCM callbacks | — | 26 |
+
+First-audio latency fell 93.5%, but complete synthesis took 30.3% longer
+(23.3% lower throughput). This CPU implementation does not sustain real-time
+playback. Codec synthesis accounted for most of the regression: the first pair
+spent 22.384 s there in batch versus 32.666 s streaming. Smaller windows repeat
+causal context and add graph work, so throughput tuning remains necessary.
+
+Generated codes and sample counts agreed across all six runs. Streamed and
+batch PCM were not bit-identical: their PCM16 correlation was 0.9999981,
+normalized RMSE 0.00027045, and maximum absolute difference 615 PCM16 units.
+These numerical measurements are not a listening-quality assessment.
+
+These are native CPU measurements on this machine, not a reproduction of the
+SDK long-text or duplex baseline. Core ML, GPU, voice cloning, and SDK/duplex
+latency were not measured in this run.
+
+#### CI measurement
+
+The standard TTS and cross-platform PR workflows run the fixture-free window,
+codec integration, resampler, and benchmark-driver tests. The public streaming
+API test is fixture-gated in CTest and also runs explicitly in the opt-in
+full-model benchmark below.
+
+Dispatch `speech-benchmark-desktop.yml` on the published feature branch with
+`model_families=audio8-tts`, `audio8_pcm_streaming=true`, `runs_per_bench=3`, and
+`runners=linux,macos` (or one runner). The existing workflow downloads the q8_0
+models from its configured registry. Its normal Audio8 benchmark is followed
+by public-API checks on CPU and paired batch/streaming runs using the runner's
+available backend. The job summary reports first-audio and total synthesis
+medians. The `bench-audio8-tts-<runner>` artifact contains `audio8-streaming/`
+with exact commands, per-run measurements, logs, codes, and WAVs.
+
+The paired benchmark requires matching generated codes and sample counts. It
+reports timing without a speed threshold, because shared runners are variable
+and CPU streaming currently trades throughput for first-audio latency. It does
+not export or test a Core ML sidecar; that path still requires the macOS TTS
+Core ML lane and additional full-engine measurements. SDK/duplex timing remains
+a separate integration check. Dispatch must run in a repository with the
+workflow's existing model-registry credentials and runner access.

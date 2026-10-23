@@ -2148,6 +2148,15 @@ if (TTS_CPP_BUILD_TESTS)
                  "${_tcb_audio8_ref}/wav.npy" "${_tcb_audio8_ref_clone}/wav.npy"
                  "${_tcb_audio8_ref_wav}")
 
+    add_executable(test-audio8-streaming test/audio8/test_streaming.cpp)
+    target_link_libraries(test-audio8-streaming PRIVATE tts-cpp ggml)
+    target_include_directories(test-audio8-streaming PRIVATE include src)
+    tts_cpp_apply_ccache(test-audio8-streaming)
+    tts_cpp_register_test(test-audio8-streaming
+        LABEL "fixture"
+        ARGS "${_tcb_audio8_lm_q8}" "${_tcb_audio8_decoder_q8}"
+        REQUIRES "${_tcb_audio8_lm_q8}" "${_tcb_audio8_decoder_q8}")
+
     # The three Audio8 suites again on one GPU backend, against the same torch
     # reference and the same fixtures.  Comparing the GPU to the reference rather
     # than to CPU is what makes this a correctness gate: the two arms are then
@@ -2264,6 +2273,11 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_register_test(test-audio8-codec-bench-cli LABEL "unit")
 
     if (Python3_Interpreter_FOUND AND TARGET audio8-codec-bench)
+        add_test(NAME test-audio8-streaming-benchmark
+            COMMAND ${Python3_EXECUTABLE} -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/benchmarks/test_audio8_streaming.py")
+        set_tests_properties(test-audio8-streaming-benchmark PROPERTIES LABELS "unit")
+
         add_executable(audio8-codec-bench-fixture test/audio8/codec_bench_fixture.cpp)
         target_link_libraries(audio8-codec-bench-fixture PRIVATE tts-cpp ggml)
         target_include_directories(audio8-codec-bench-fixture PRIVATE src)

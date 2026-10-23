@@ -12,6 +12,7 @@ namespace {
 // argument.
 bool apply_switch(options & opts, const std::string & flag) {
     if (flag == "--greedy") opts.greedy = true;
+    else if (flag == "--stream") opts.stream = true;
     else if (flag == "--verbose") opts.verbose = true;
     else return false;
     return true;
@@ -59,7 +60,7 @@ void print_usage(const char * program) {
                  "[--top-p F]\n"
                  "          [--max-frames N] [--threads N] [--output-sample-rate N]\n"
                  "          [--n-gpu-layers N] [--dump-codes codes.txt]\n"
-                 "          [--backend NAME] [--backends-dir DIR] [--verbose]\n"
+                 "          [--backend NAME] [--backends-dir DIR] [--verbose] [--stream]\n"
                  "\n"
                  "  --backend NAME   explicit backend: auto (default), cpu,\n"
                  "                   hexagon (Snapdragon HTP0), or an exact\n"

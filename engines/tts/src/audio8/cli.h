@@ -29,6 +29,7 @@ struct options {
     float top_p = 0.9f;
     bool greedy = false;
     bool verbose = false;
+    bool stream = false;
 };
 
 void print_usage(const char * program);

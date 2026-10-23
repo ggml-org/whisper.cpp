@@ -1,15 +1,10 @@
 #pragma once
-// Runs a fixed-width window synthesizer on a worker thread while the language
-// model is still producing frames; see docs/audio8.md ("Core ML codec
-// sidecar"). The windows are exactly plan_coreml_windows() of the final frame
-// count, so the stitched waveform is the one the windowed pass after generation
-// would produce.
-
 #include "audio8/coreml_windows.h"
 
 #include <condition_variable>
 #include <deque>
 #include <functional>
+#include <exception>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -24,15 +19,16 @@ struct window_stream_shape {
     int context = 0;
     int latent_dim = 0;
     int frame_size = 0;
+    bool asynchronous = true;
 };
 
 struct window_stream_hooks {
     // Appends post columns up to `end`, latent_dim each, to the ones `post`
     // holds, on the producer's thread.
     std::function<bool(int end, std::vector<float> & post, std::string * error)> extend_post;
-    // window * latent_dim in, window * frame_size samples out, on the worker.
     std::function<bool(const float * post, float * pcm)> synthesize;
     std::function<bool()> cancelled;
+    std::function<void(const std::vector<float> &)> emit;
 };
 
 enum class window_stream_status { done, unavailable, cancelled, failed };
@@ -58,6 +54,9 @@ public:
     int streamed_windows() const { return streamed_; }
     int window_frames() const { return shape_.window; }
     double post_ms() const { return post_ms_; }
+    bool emitted() const { return emitted_; }
+    bool asynchronous() const { return shape_.asynchronous; }
+    double synthesis_ms() const { return synthesis_ms_; }
 
 private:
     struct job {
@@ -74,7 +73,9 @@ private:
     bool pop(job & work);
     void run_worker();
     bool run_job(const job & work, std::vector<float> & out);
+    bool process_job(const job & work, std::vector<float> & out);
     void keep_core(const job & work, const std::vector<float> & out);
+    void rethrow_callback_error();
     void close();
     window_stream_status wait_for_worker();
     void stitch(int n_frames, std::vector<float> & pcm) const;
@@ -84,6 +85,7 @@ private:
     int queued_ = 0;
     int streamed_ = 0;
     double post_ms_ = 0.0;
+    double synthesis_ms_ = 0.0;
     std::vector<float> post_;
 
     std::mutex mutex_;
@@ -94,6 +96,8 @@ private:
     bool closing_ = false;
     bool failed_ = false;
     bool cancelled_ = false;
+    bool emitted_ = false;
+    std::exception_ptr callback_error_;
     std::thread worker_;
 };
 

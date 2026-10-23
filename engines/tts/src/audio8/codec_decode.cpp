@@ -418,7 +418,7 @@ coreml_status run_synthesis_coreml(codec_model & model, const std::vector<float>
     }
     clock.block_frames = window;
     clock.block_scratch = 0;
-    clock.synthesis_backend = audio8_coreml_codec_backend_label(model.coreml);
+    clock.synthesis_backend = model.coreml ? audio8_coreml_codec_backend_label(model.coreml) : "ggml";
     return coreml_status::done;
 }
 #endif
@@ -674,10 +674,21 @@ bool coreml_streaming_enabled() {
     return std::getenv("AUDIO8_COREML_STREAM_DISABLE") == nullptr;
 }
 
+#endif
+
+constexpr int STREAM_CORE_FRAMES = 16;
+
 window_stream_shape stream_shape(const codec_model & model) {
     window_stream_shape shape;
-    shape.window = static_cast<int>(audio8_coreml_codec_window_frames(model.coreml));
     shape.context = synthesis_context_frames(model);
+    shape.window = shape.context + STREAM_CORE_FRAMES;
+    shape.asynchronous = false;
+#ifdef TTS_CPP_USE_COREML
+    if (model.coreml) {
+        shape.window = static_cast<int>(audio8_coreml_codec_window_frames(model.coreml));
+        shape.asynchronous = true;
+    }
+#endif
     shape.latent_dim = model.hp.latent_dim;
     shape.frame_size = model.hp.frame_size;
     return shape;
@@ -694,13 +705,21 @@ window_stream_hooks stream_hooks(codec_model & model, const std::vector<int32_t>
             codebook_rows(frames, model.hp.num_codebooks, history->done, end);
         return extend_post(model, rows.data(), end, n_threads, *history, post, error);
     };
-    hooks.synthesize = [&model](const float * post, float * pcm) {
-        return audio8_coreml_codec_synthesize(model.coreml, post, pcm) == 0;
+    const window_stream_shape shape = stream_shape(model);
+    hooks.synthesize = [&model, n_threads, shape](const float * post, float * pcm) {
+#ifdef TTS_CPP_USE_COREML
+        if (model.coreml) return audio8_coreml_codec_synthesize(model.coreml, post, pcm) == 0;
+#endif
+        const std::vector<float> input(post, post + static_cast<size_t>(shape.window) * shape.latent_dim);
+        std::vector<float> output;
+        std::string error;
+        if (!run_block(model, input, {0, shape.window, 0}, n_threads, output, nullptr, &error)) return false;
+        std::copy(output.begin(), output.end(), pcm);
+        return true;
     };
     hooks.cancelled = cancel;
     return hooks;
 }
-#endif
 
 void note_streamed_synthesis(const codec_model & model, const window_stream & stream,
                              decode_timing & clock) {
@@ -708,7 +727,7 @@ void note_streamed_synthesis(const codec_model & model, const window_stream & st
     clock.block_scratch = 0;
     clock.streamed_windows = stream.streamed_windows();
 #ifdef TTS_CPP_USE_COREML
-    clock.synthesis_backend = audio8_coreml_codec_backend_label(model.coreml);
+    clock.synthesis_backend = model.coreml ? audio8_coreml_codec_backend_label(model.coreml) : "ggml";
 #else
     (void) model;
 #endif
@@ -741,20 +760,19 @@ bool fall_back_from_stream(codec_model & model, const int32_t * codes, int n_fra
 
 std::unique_ptr<window_stream> open_synthesis_stream(codec_model & model,
                                                      const std::vector<int32_t> & frames,
-                                                     int n_threads, const cancel_hook & cancel) {
+                                                     int n_threads, const cancel_hook & cancel,
+                                                     const std::function<void(const std::vector<float> &)> & emit) {
+    if (!post_has_window(model)) return nullptr;
+    bool enabled = static_cast<bool>(emit);
 #ifdef TTS_CPP_USE_COREML
-    if (!model.coreml || !coreml_streaming_enabled() || !post_has_window(model)) return nullptr;
+    enabled = enabled || (model.coreml && coreml_streaming_enabled());
+#endif
+    if (!enabled) return nullptr;
     const window_stream_shape shape = stream_shape(model);
     if (shape.context >= shape.window) return nullptr;
-    return std::unique_ptr<window_stream>(
-        new window_stream(shape, stream_hooks(model, frames, n_threads, cancel)));
-#else
-    (void) model;
-    (void) frames;
-    (void) n_threads;
-    (void) cancel;
-    return nullptr;
-#endif
+    window_stream_hooks hooks = stream_hooks(model, frames, n_threads, cancel);
+    hooks.emit = emit;
+    return std::unique_ptr<window_stream>(new window_stream(shape, std::move(hooks)));
 }
 
 bool finish_synthesis_stream(codec_model & model, window_stream & stream,
@@ -771,7 +789,8 @@ bool finish_synthesis_stream(codec_model & model, window_stream & stream,
         status = stream.finish(n_frames, pcm_out, error);
     }
     clock.latent_ms = stream.post_ms();
-    clock.synthesis_ms = finish_ms - (stream.post_ms() - post_before);
+    clock.synthesis_ms = stream.asynchronous()
+        ? finish_ms - (stream.post_ms() - post_before) : stream.synthesis_ms();
     switch (status) {
         case window_stream_status::done:
             note_streamed_synthesis(model, stream, clock);
@@ -783,6 +802,10 @@ bool finish_synthesis_stream(codec_model & model, window_stream & stream,
             return false;
         case window_stream_status::unavailable:
             break;
+    }
+    if (stream.emitted()) {
+        if (error) *error = "audio8: codec failed after PCM delivery began";
+        return false;
     }
     return fall_back_from_stream(model, codes, n_frames, n_threads, cancel, pcm_out, error,
                                  timing);

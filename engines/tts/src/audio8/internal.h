@@ -566,16 +566,12 @@ bool post_has_window(const codec_model & model);
 std::vector<int32_t> codebook_rows(const std::vector<int32_t> & frames, int books, int first,
                                    int end);
 
-// Synthesis that overlaps generation (window_stream.h): null unless a Core ML
-// sidecar is attached. `frames` grows frame-major while the stream lives.
 class window_stream;
 std::unique_ptr<window_stream> open_synthesis_stream(codec_model & model,
                                                      const std::vector<int32_t> & frames,
-                                                     int n_threads, const cancel_hook & cancel);
+                                                     int n_threads, const cancel_hook & cancel,
+                                                     const std::function<void(const std::vector<float> &)> & emit = {});
 
-// decode_codes for a streamed utterance: the remaining windows, then the
-// stitched waveform. A sidecar failure retires it and reruns the whole
-// utterance on the ggml blocks, as decode_codes does.
 bool finish_synthesis_stream(codec_model & model, window_stream & stream,
                              const int32_t * codes, int n_frames, int n_threads,
                              const cancel_hook & cancel, std::vector<float> & pcm_out,
