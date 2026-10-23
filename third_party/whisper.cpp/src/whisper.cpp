@@ -1,6 +1,7 @@
 #include "whisper.h"
 #include "whisper-arch.h"
 #include "whisper-logits-slice.h"
+#include "whisper-fit-memory.h"
 
 #include "ggml.h"
 #include "ggml-cpp.h"
@@ -29,6 +30,7 @@
 #include <climits>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <functional>
@@ -598,28 +600,9 @@ static bool whisper_sched_graph_measure(struct whisper_sched & allocr, std::vect
 
     meta.resize(ggml_tensor_overhead()*WHISPER_MAX_NODES + ggml_graph_overhead());
 
-    sizes.assign(backends.size(), 0);
-    ggml_backend_sched_reserve_size(sched, get_graph(), sizes.data());
-
-    // backends that share a buffer type (e.g. BLAS and CPU) share ONE galloc
-    // pool, but reserve_size reports that pool once per backend; the real
-    // ggml_backend_sched_get_buffer_size reports duplicates as 0, so mirror
-    // that here (dedup key: the backend's default buffer type, which is what
-    // the scheduler allocates from)
-    for (size_t i = 1; i < backends.size(); ++i) {
-        for (size_t j = 0; j < i; ++j) {
-            if (ggml_backend_get_default_buffer_type(backends[i]) ==
-                ggml_backend_get_default_buffer_type(backends[j])) {
-                sizes[i] = 0;
-                break;
-            }
-        }
-    }
-
     // no reset: the caller may still query ggml_backend_sched_get_tensor_backend
     // to place this graph's outputs before the next graph is measured
-
-    return true;
+    return whisper_fit_measure_graph(sched, get_graph(), backends, sizes);
 }
 
 // medium
@@ -1558,10 +1541,13 @@ static buft_list_t make_buft_list(whisper_context_params & params) {
 static bool weight_buft_supported(const whisper_hparams & hparams, ggml_tensor * w, ggml_op op, ggml_backend_buffer_type_t buft, ggml_backend_dev_t dev) {
     bool op_supported = true;
 
-    if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU ||
-        ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_IGPU ||
+    // QVAC: GPU extras may require a specific type/shape/layout. Preserve the
+    // existing default-buffer policy, but probe extras with an attached buffer.
+    if (((ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU ||
+          ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_IGPU) &&
+         buft == ggml_backend_dev_buffer_type(dev)) ||
         (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU && buft == ggml_backend_cpu_buffer_type())) {
-        // GPU and default CPU backend support all operators
+        // GPU default and default CPU buffers retain their existing placement.
         op_supported = true;
     } else {
         switch (op) {
@@ -1595,7 +1581,7 @@ static bool weight_buft_supported(const whisper_hparams & hparams, ggml_tensor *
                 // create a temporary dummy buffer for the weight so that supports_op can check the buffer type
                 GGML_ASSERT(w->buffer == nullptr);
                 w->buffer = ggml_backend_buft_alloc_buffer(buft, 0);
-                op_supported = ggml_backend_dev_supports_op(dev, op_tensor);
+                op_supported = w->buffer && ggml_backend_dev_supports_op(dev, op_tensor);
                 ggml_backend_buffer_free(w->buffer);
                 w->buffer = nullptr;
                 break;
@@ -1615,6 +1601,23 @@ static ggml_backend_buffer_type_t select_weight_buft(const whisper_hparams & hpa
     for (const auto & p : buft_list) {
         ggml_backend_dev_t dev = p.first;
         ggml_backend_buffer_type_t buft = p.second;
+        // QVAC: only quantized projection weights opt into GPU repack storage.
+        // Keep F16/F32, GET_ROWS/tied embeddings and the shared VAD list intact.
+        const enum ggml_backend_dev_type dev_type = ggml_backend_dev_type(dev);
+        if (op == GGML_OP_MUL_MAT && ggml_is_quantized(w->type) &&
+            (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU)) {
+            ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+            auto get_extra_bufts_fn = reg ? (ggml_backend_dev_get_extra_bufts_t)
+                ggml_backend_reg_get_proc_address(reg, "ggml_backend_dev_get_extra_bufts") : nullptr;
+            if (get_extra_bufts_fn) {
+                ggml_backend_buffer_type_t * extras = get_extra_bufts_fn(dev);
+                for (; extras && *extras; ++extras) {
+                    if (*extras != buft && weight_buft_supported(hparams, w, op, *extras, dev)) {
+                        return *extras;
+                    }
+                }
+            }
+        }
         if (weight_buft_supported(hparams, w, op, buft, dev)) {
             return buft;
         }
@@ -4570,6 +4573,15 @@ int whisper_n_len(struct whisper_context * ctx) {
 
 int whisper_n_vocab(struct whisper_context * ctx) {
     return ctx->vocab.n_vocab;
+}
+
+// QVAC (see PATCHES.md): distinguish explicit-device initialization from fallback.
+const char * whisper_get_primary_backend_name(struct whisper_context * ctx) {
+    if (ctx == nullptr || ctx->state == nullptr || ctx->state->backends.empty()) {
+        return nullptr;
+    }
+    ggml_backend_dev_t dev = ggml_backend_get_device(ctx->state->backends.front());
+    return dev ? ggml_backend_dev_name(dev) : nullptr;
 }
 
 int whisper_n_text_ctx(struct whisper_context * ctx) {
@@ -9657,7 +9669,12 @@ static void whisper_log_callback_default(ggml_log_level level, const char * text
     (void) user_data;
 #ifndef WHISPER_DEBUG
     if (level == GGML_LOG_LEVEL_DEBUG) {
-        return;
+        // QVAC (see PATCHES.md): expose existing GGML scheduler/HTP diagnostics
+        // in release builds only when explicitly requested. Keep timing runs off.
+        const char * debug = std::getenv("WHISPER_LOG_DEBUG");
+        if (debug == nullptr || strcmp(debug, "1") != 0) {
+            return;
+        }
     }
 #endif
     fputs(text, stderr);
@@ -10088,19 +10105,6 @@ struct whisper_fit_source {
     }
 };
 
-// true when the device's memory pool IS system RAM: the CPU backend,
-// integrated GPUs, and Apple unified memory (the Metal registry reports
-// "Metal" upstream and "MTL" in the qvac-ext-ggml pin)
-bool whisper_fit_dev_shares_host_memory(ggml_backend_dev_t dev) {
-    const enum ggml_backend_dev_type t = ggml_backend_dev_type(dev);
-    if (t == GGML_BACKEND_DEVICE_TYPE_CPU || t == GGML_BACKEND_DEVICE_TYPE_IGPU) {
-        return true;
-    }
-    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
-    const char * name = reg ? ggml_backend_reg_name(reg) : nullptr;
-    return name && (strcmp(name, "Metal") == 0 || strcmp(name, "MTL") == 0);
-}
-
 // everything the metadata-only state measurement produces; mirrors
 // whisper_init_state's allocation set field by field
 struct whisper_fit_state_measure {
@@ -10448,12 +10452,23 @@ int whisper_fit_params(const struct whisper_fit_options * opts, struct whisper_f
 
     whisper_fit_set_str(result->device_name, sizeof(result->device_name), ggml_backend_dev_name(main_dev));
     result->device_is_cpu = ggml_backend_dev_type(main_dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
-    result->device_shares_host_memory = whisper_fit_dev_shares_host_memory(main_dev);
-    {
-        size_t free_b = 0, total_b = 0;
-        ggml_backend_dev_memory(main_dev, &free_b, &total_b);
-        result->device_free_bytes  = free_b;
-        result->device_total_bytes = total_b;
+    const auto memory = whisper_fit_query_memory(main_dev);
+    result->device_shares_host_memory = memory.shares_host;
+    result->device_free_bytes = memory.free_bytes;
+    result->device_total_bytes = memory.total_bytes;
+    if (memory.total_bytes == 0) {
+        whisper_free_state(state);
+        whisper_fit_set_str(result->reason, sizeof(result->reason), "memory-capacity-unavailable");
+        return (int) result->status;
+    }
+    uint64_t backend_overhead = 0;
+    for (ggml_backend_t backend : state->backends) {
+        if (ggml_backend_get_device(backend) == main_dev &&
+            !whisper_fit_query_backend_overhead(backend, WHISPER_MAX_NODES, backend_overhead)) {
+            whisper_free_state(state);
+            whisper_fit_set_str(result->reason, sizeof(result->reason), "backend-memory-unavailable");
+            return (int) result->status;
+        }
     }
 
     // -- charge each component to the device or to host RAM
@@ -10573,6 +10588,7 @@ int whisper_fit_params(const struct whisper_fit_options * opts, struct whisper_f
     host = whisper_fit_sat_add(host, sm.meta_bytes);
     host = whisper_fit_sat_add(host, ctx_overhead);
     host = whisper_fit_sat_add(host, vocab_bytes);
+    host = whisper_fit_sat_add(host, backend_overhead);
     if (is_bci) {
         host = whisper_fit_sat_add(host, (uint64_t) n_audio_ctx*n_audio_ctx*sizeof(float));  // window mask
     }

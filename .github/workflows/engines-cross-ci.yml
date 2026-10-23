@@ -18,12 +18,16 @@ on:
       - 'engines/parakeet/**'
       - 'engines/tts/**'
       - 'engines/audiogen/**'
+      - 'third_party/whisper.cpp/**'
+      - 'CMakeLists.txt'
       - '.github/workflows/engines-cross-ci.yml'
   pull_request:
     paths:
       - 'engines/parakeet/**'
       - 'engines/tts/**'
       - 'engines/audiogen/**'
+      - 'third_party/whisper.cpp/**'
+      - 'CMakeLists.txt'
       - '.github/workflows/engines-cross-ci.yml'
   workflow_dispatch:
 
@@ -122,7 +126,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        engine: [parakeet, tts, audiogen]
+        engine: [parakeet, tts, audiogen, whisper]
         include:
           - engine: parakeet
             src: engines/parakeet
@@ -133,6 +137,9 @@ jobs:
           - engine: audiogen
             src: engines/audiogen
             cmake_flags: -DAUDIOGEN_BUILD_TESTS=OFF -DAUDIOGEN_BUILD_EXECUTABLES=OFF
+          - engine: whisper
+            src: .
+            cmake_flags: -DSPEECH_BUILD_WHISPER=ON -DSPEECH_BUILD_PARAKEET=OFF -DSPEECH_BUILD_TTS=OFF -DSPEECH_BUILD_AUDIOGEN=OFF -DSPEECH_BUILD_EXECUTABLES=ON -DSPEECH_BUILD_TESTS=OFF
     runs-on: ${{ needs.runner_names.outputs.ubuntu_2404 }}
     timeout-minutes: 60
     steps:

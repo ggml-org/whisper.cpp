@@ -82,6 +82,10 @@ Core ML options default off and are Apple-only: `WHISPER_COREML`,
 The [sidecar overview](../README.md#apple-core-ml-sidecars) links to each
 engine's export, input-routing and fallback contracts.
 
+For native Android Whisper with OpenCL and matching Hexagon DSP skeletons,
+see [Whisper on Snapdragon Hexagon](WHISPER-HEXAGON.md). Backend flags belong
+to the external shared GGML build; ordinary CPU builds need no Hexagon SDK.
+
 ### WebGPU (Dawn)
 
 `GGML_WEBGPU=ON` builds ggml's WebGPU backend on [Dawn](https://dawn.googlesource.com/dawn),

@@ -218,6 +218,7 @@ and model-specific exceptions.
 | CLI selection and examples | [docs/CLI.md](docs/CLI.md) |
 | Performance overview and reports | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) |
 | Whisper models and formats | [docs/WHISPER.md](docs/WHISPER.md) |
+| Native Whisper Snapdragon build and validation | [docs/WHISPER-HEXAGON.md](docs/WHISPER-HEXAGON.md) |
 | Whisper subtree deltas and synchronization | [PATCHES.md](third_party/whisper.cpp/PATCHES.md), [docs/UPSTREAM-SYNC.md](docs/UPSTREAM-SYNC.md) |
 | ASR, diarization, end-of-utterance | [Parakeet](engines/parakeet/README.md) |
 | Synthesis, voice cloning, sound effects, speech-to-speech, enhancement | [TTS](engines/tts/README.md) |

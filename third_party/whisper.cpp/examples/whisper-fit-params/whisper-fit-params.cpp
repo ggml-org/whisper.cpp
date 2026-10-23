@@ -8,6 +8,7 @@
 #include "ggml-backend.h"
 
 #include "whisper-fit-util.h"
+#include "../whisper-device-selection.h"
 
 #include <cinttypes>
 #include <cstdio>
@@ -43,7 +44,10 @@ void print_usage(const char * argv0) {
         "                      fallback grows the KV cache (N+2)x the first time it runs\n"
         "  --no-gpu            project for the CPU backend (default follows\n"
         "                      whisper_context_default_params: GPU when available)\n"
-        "  --gpu-device N      GPU device index (default 0)\n"
+        "  --device DEV        GPU/IGPU index or exact name; default prefers HTP0\n"
+        "                      when available, otherwise GPU index 0; overrides\n"
+        "                      WHISPER_ARG_DEVICE; --gpu-device is an alias\n"
+        "  --list-devices      list devices and exit without a model\n"
         "  --no-flash-attn     project with flash_attn disabled\n"
         "  --margin-mib MIB    free-memory headroom to require (default 256)\n"
         "  --backends-dir DIR  directory scanned for dynamically-loaded ggml backends\n"
@@ -92,6 +96,9 @@ int main(int argc, char ** argv) {
     std::string model_path;
     std::string vad_model_path;
     std::string backends_dir;
+    std::string device;
+    bool device_explicit = false;
+    bool list_devices = false;
     bool json   = false;
     bool verify = false;
 
@@ -116,11 +123,11 @@ int main(int argc, char ** argv) {
                 fprintf(stderr, "--n-decoders: '%s' is not an integer\n", argv[i]);
                 return (int) WHISPER_FIT_ERROR;
             }
-        } else if (a == "--gpu-device" && i + 1 < argc) {
-            if (!parse_i32(argv[++i], opts.gpu_device)) {
-                fprintf(stderr, "--gpu-device: '%s' is not an integer\n", argv[i]);
-                return (int) WHISPER_FIT_ERROR;
-            }
+        } else if ((a == "--gpu-device" || a == "--device" || a == "-dev") && i + 1 < argc) {
+            device = argv[++i];
+            device_explicit = true;
+        } else if (a == "--list-devices") {
+            list_devices = true;
         } else if (a == "--margin-mib" && i + 1 < argc) {
             uint64_t mib = 0;
             if (!parse_u64(argv[++i], mib)) {
@@ -141,7 +148,7 @@ int main(int argc, char ** argv) {
         } else if (a == "--verbose" || a == "-v") {
             opts.verbose = true;
         } else if (a == "--model" || a == "--vad-model" || a == "--audio-seconds" ||
-                   a == "--n-decoders" || a == "--gpu-device" || a == "--margin-mib" ||
+                   a == "--n-decoders" || a == "--gpu-device" || a == "--device" || a == "-dev" || a == "--margin-mib" ||
                    a == "--backends-dir") {
             // a value-taking flag in last position: every such flag only
             // matches its branch above when a value follows it
@@ -155,7 +162,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    if (model_path.empty()) {
+    if (model_path.empty() && !list_devices) {
         fprintf(stderr, "--model is required\n\n");
         print_usage(argv[0]);
         return (int) WHISPER_FIT_ERROR;
@@ -172,16 +179,40 @@ int main(int argc, char ** argv) {
         ggml_backend_load_all();
     }
 
+    if (list_devices) {
+        whisper_device_selection::list(stdout);
+        return 0;
+    }
+    std::string device_error;
+    if (!whisper_device_selection::apply(device, device_explicit, opts.use_gpu,
+                                          opts.gpu_device, device_error)) {
+        fprintf(stderr, "whisper-fit-params: error: %s\n", device_error.c_str());
+        return (int) WHISPER_FIT_ERROR;
+    }
+    const std::string requested_backend = whisper_device_selection::requested_backend(
+        device_explicit, opts.use_gpu, opts.gpu_device);
+
     opts.model_path     = model_path.c_str();
     opts.vad_model_path = vad_model_path.empty() ? nullptr : vad_model_path.c_str();
 
     whisper_fit_result r;
     whisper_fit_params(&opts, &r);
+    // A registered device can still fail initialization. Do not emit a CPU
+    // memory verdict for an explicit GPU request, or obscure an earlier error.
+    if (r.status != WHISPER_FIT_ERROR &&
+        !whisper_device_selection::check_primary_backend(requested_backend, r.device_name, device_error)) {
+        r.status = WHISPER_FIT_ERROR;
+        r.fits = false;
+        std::snprintf(r.reason, sizeof(r.reason), "requested-device-init-failed");
+    }
 
     if (json) {
         print_json(r, opts.margin_bytes);
+        if (!device_error.empty()) {
+            fprintf(stderr, "whisper-fit-params: error: %s\n", device_error.c_str());
+        }
     } else if (r.status == WHISPER_FIT_ERROR) {
-        fprintf(stderr, "whisper-fit-params: error: %s\n", r.reason);
+        fprintf(stderr, "whisper-fit-params: error: %s\n", device_error.empty() ? r.reason : device_error.c_str());
     } else {
         printf("%s", r.report);
     }

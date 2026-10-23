@@ -1,5 +1,6 @@
 #include "common.h"
 #include "common-whisper.h"
+#include "../whisper-device-selection.h"
 
 #include "whisper.h"
 #include "grammar-parser.h"
@@ -78,6 +79,10 @@ struct whisper_params {
     bool use_gpu         = true;
     bool flash_attn      = true;
     int32_t gpu_device   = 0;
+    // QVAC: resolve explicit names/indices after parsing, before model loading.
+    std::string device;
+    bool device_explicit = false;
+    bool list_devices    = false;
     bool suppress_nst    = false;
     bool carry_initial_prompt = false;
 
@@ -130,10 +135,6 @@ static char * requires_value_error(const std::string & arg) {
 }
 
 static bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
-    if (const char * env_device = std::getenv("WHISPER_ARG_DEVICE")) {
-        params.gpu_device = std::stoi(env_device);
-    }
-
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
 
@@ -204,7 +205,15 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-dtw"  || arg == "--dtw")                  { params.dtw             = ARGV_NEXT; }
         else if (arg == "-ls"   || arg == "--log-score")            { params.log_score       = true; }
         else if (arg == "-ng"   || arg == "--no-gpu")               { params.use_gpu         = false; }
-        else if (arg == "-dev"  || arg == "--device")               { params.gpu_device      = std::stoi(ARGV_NEXT); }
+        else if (arg == "-dev"  || arg == "--device") {
+            if (i + 1 == argc) {
+                fprintf(stderr, "error: %s requires a value\n", arg.c_str());
+                return false;
+            }
+            params.device = argv[++i];
+            params.device_explicit = true;
+        }
+        else if (                  arg == "--list-devices")        { params.list_devices    = true; }
         else if (arg == "-fa"   || arg == "--flash-attn")           { params.flash_attn      = true; }
         else if (arg == "-nfa"  || arg == "--no-flash-attn")        { params.flash_attn      = false; }
         else if (arg == "-sns"  || arg == "--suppress-nst")         { params.suppress_nst    = true; }
@@ -287,7 +296,9 @@ static void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params
     fprintf(stderr, "  -dtw MODEL --dtw MODEL            [%-7s] compute token-level timestamps\n",                 params.dtw.c_str());
     fprintf(stderr, "  -ls,       --log-score            [%-7s] log best decoder scores of tokens\n",              params.log_score?"true":"false");
     fprintf(stderr, "  -ng,       --no-gpu               [%-7s] disable GPU\n",                                    params.use_gpu ? "false" : "true");
-    fprintf(stderr, "  -dev N,    --device N             [%-7d] GPU device ID (default: 0)\n",                     params.gpu_device);
+    fprintf(stderr, "  -dev DEV,  --device DEV           [auto   ] GPU/IGPU index or exact name; overrides WHISPER_ARG_DEVICE\n");
+    fprintf(stderr, "                                           auto prefers HTP0 when available, otherwise GPU index 0\n");
+    fprintf(stderr, "             --list-devices          list devices and exit without loading a model\n");
     fprintf(stderr, "  -fa,       --flash-attn           [%-7s] enable flash attention\n",                         params.flash_attn ? "true" : "false");
     fprintf(stderr, "  -nfa,      --no-flash-attn        [%-7s] disable flash attention\n",                        params.flash_attn ? "false" : "true");
     fprintf(stderr, "  -sns,      --suppress-nst         [%-7s] suppress non-speech tokens\n",                     params.suppress_nst ? "true" : "false");
@@ -1013,6 +1024,21 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    if (params.list_devices) {
+        whisper_device_selection::list(stdout);
+        return 0;
+    }
+    std::string device_error;
+    if (!whisper_device_selection::apply(params.device, params.device_explicit, params.use_gpu,
+                                          params.gpu_device, device_error)) {
+        fprintf(stderr, "error: %s\n", device_error.c_str());
+        return 1;
+    }
+
+    // QVAC (see PATCHES.md): discovery does not guarantee successful init.
+    const std::string requested_backend = whisper_device_selection::requested_backend(
+        params.device_explicit, params.use_gpu, params.gpu_device);
+
     // remove non-existent files
     for (auto it = params.fname_inp.begin(); it != params.fname_inp.end();) {
         const auto fname_inp = it->c_str();
@@ -1082,6 +1108,13 @@ int main(int argc, char ** argv) {
 
     if (ctx == nullptr) {
         fprintf(stderr, "error: failed to initialize whisper context\n");
+        return 3;
+    }
+
+    if (!whisper_device_selection::check_primary_backend(
+            requested_backend, whisper_get_primary_backend_name(ctx), device_error)) {
+        fprintf(stderr, "error: %s\n", device_error.c_str());
+        whisper_free(ctx);
         return 3;
     }
 

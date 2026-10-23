@@ -128,6 +128,38 @@ target_link_libraries(${FIT_CLI_TEST} PRIVATE whisper)
 add_test(NAME ${FIT_CLI_TEST} COMMAND ${FIT_CLI_TEST})
 set_tests_properties(${FIT_CLI_TEST} PROPERTIES LABELS "unit;gh")
 
+# Public-API fake backend tests: no ggml implementation or model is linked.
+set(FIT_MEMORY_TEST test-whisper-fit-memory)
+add_executable(${FIT_MEMORY_TEST} ${FIT_MEMORY_TEST}.cpp)
+target_include_directories(${FIT_MEMORY_TEST} PRIVATE ../src
+    $<TARGET_PROPERTY:ggml,INTERFACE_INCLUDE_DIRECTORIES>)
+target_compile_features(${FIT_MEMORY_TEST} PRIVATE cxx_std_11)
+add_test(NAME ${FIT_MEMORY_TEST} COMMAND ${FIT_MEMORY_TEST})
+set_tests_properties(${FIT_MEMORY_TEST} PROPERTIES LABELS "unit;gh")
+
+set(FIT_GRAPH_ERROR_TEST test-whisper-fit-graph-error)
+add_executable(${FIT_GRAPH_ERROR_TEST} ${FIT_GRAPH_ERROR_TEST}.cpp)
+target_include_directories(${FIT_GRAPH_ERROR_TEST} PRIVATE ../src)
+target_link_libraries(${FIT_GRAPH_ERROR_TEST} PRIVATE ggml)
+add_test(NAME ${FIT_GRAPH_ERROR_TEST} COMMAND ${FIT_GRAPH_ERROR_TEST})
+set_tests_properties(${FIT_GRAPH_ERROR_TEST} PROPERTIES LABELS "unit;gh")
+
+# Native device selection: model-free registry/precedence contracts and real
+# frontend error/listing checks (QVAC patch, see PATCHES.md).
+set(DEVICE_SELECTION_TEST test-whisper-device-selection)
+add_executable(${DEVICE_SELECTION_TEST} ${DEVICE_SELECTION_TEST}.cpp)
+target_include_directories(${DEVICE_SELECTION_TEST} PRIVATE ../examples)
+target_link_libraries(${DEVICE_SELECTION_TEST} PRIVATE whisper)
+add_test(NAME ${DEVICE_SELECTION_TEST} COMMAND ${DEVICE_SELECTION_TEST})
+set_tests_properties(${DEVICE_SELECTION_TEST} PROPERTIES LABELS "unit;gh")
+
+add_test(NAME test-whisper-device-cli COMMAND ${CMAKE_COMMAND}
+    -DCLI=$<TARGET_FILE:whisper-cli>
+    -DFIT=$<TARGET_FILE:whisper-fit-params>
+    -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/test-whisper-device-cli.cmake)
+set_tests_properties(test-whisper-device-cli PROPERTIES LABELS "unit;gh" TIMEOUT 180)
+
 # Memory-fit preflight: byte-parity gates against a REAL load of the committed
 # tiny + silero fixtures -- the projection must equal what whisper actually
 # allocates (QVAC patch, see PATCHES.md). Registered twice:

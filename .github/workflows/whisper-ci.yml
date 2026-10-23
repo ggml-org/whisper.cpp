@@ -24,6 +24,8 @@ on:
       - 'CMakeLists.txt'
       - 'engines/whisper-gpu-picker*'
       - 'scripts/check-whisper-packaging.py'
+      - 'scripts/benchmarks/whisper-hexagon.cpp'
+      - 'scripts/benchmarks/whisper-hexagon/**'
       - '.github/workflows/whisper-ci.yml'
   pull_request:
     paths:
@@ -31,6 +33,8 @@ on:
       - 'CMakeLists.txt'
       - 'engines/whisper-gpu-picker*'
       - 'scripts/check-whisper-packaging.py'
+      - 'scripts/benchmarks/whisper-hexagon.cpp'
+      - 'scripts/benchmarks/whisper-hexagon/**'
       - '.github/workflows/whisper-ci.yml'
   workflow_dispatch:
     inputs:
@@ -165,6 +169,34 @@ jobs:
           curl -fL -o models-cache/ggml-tiny.en.bin \
             https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.en.bin
           echo "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f  models-cache/ggml-tiny.en.bin" | shasum -a 256 -c -
+
+      - name: Installed native measurement consumer (contracts and transcription smoke)
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/whisper-install/lib:${{ github.workspace }}/ggml-install/lib
+          DYLD_LIBRARY_PATH: ${{ github.workspace }}/whisper-install/lib:${{ github.workspace }}/ggml-install/lib
+        run: |
+          cmake --install build/third_party/whisper.cpp --prefix "$PWD/whisper-install"
+          cmake -S scripts/benchmarks/whisper-hexagon -B whisper-measure \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$PWD/whisper-install;$PWD/ggml-install"
+          cmake --build whisper-measure -j4
+          python3 scripts/benchmarks/whisper-hexagon/test-driver.py \
+            --binary "$PWD/whisper-measure/whisper-hexagon"
+          ./whisper-measure/whisper-hexagon --model models-cache/ggml-tiny.en.bin \
+            --audio third_party/whisper.cpp/samples/jfk.wav --no-gpu \
+            --warmup 1 --runs 1 > native-measure-smoke.jsonl
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          records = [json.loads(line) for line in Path("native-measure-smoke.jsonl").read_text().splitlines()]
+          runs = [r for r in records if r.get("kind") == "run"]
+          assert len(runs) == 2, records
+          assert {r["phase"] for r in runs} == {"warmup", "measure"}, runs
+          # Whisper retains automatic host BLAS initialization on macOS.
+          # The driver permits CPU/known host BLAS, never arbitrary ACCEL.
+          assert all(r["whisper_full_rc"] == 0 and r["actual_primary_backend"] in ("CPU", "BLAS") for r in runs), runs
+          assert all("ask not what your country can do for you" in r["transcript"].lower() for r in runs), runs
+          PY
 
       - name: whisper-cli transcription smoke (jfk.wav)
         env:
