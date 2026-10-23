@@ -207,6 +207,7 @@ struct Engine::Impl {
 };
 
 Engine::Engine(const EngineOptions & opts) : pimpl_(new Impl()) {
+    const auto coreml_policy = parler_resolve_coreml_policy(opts.coreml_compute_units, opts.coreml_strict);
     pimpl_->opts = opts;
     pimpl_->decoder.set_cancel_check([state = pimpl_.get()] {
         return state->cancel_requested.load(std::memory_order_relaxed);
@@ -229,14 +230,14 @@ Engine::Engine(const EngineOptions & opts) : pimpl_(new Impl()) {
                                        pimpl_->model.ptok_add_bos)) {
         throw std::runtime_error("parler: prompt tokenizer load failed");
     }
-    parler_attach_dac_sidecar(pimpl_->model, opts.model_gguf_path);
-    if (opts.coreml_decoder && !parler_coreml_disabled()) {
-        auto sidecar = parler_open_decoder_sidecar(pimpl_->model, opts.model_gguf_path, err);
+    parler_attach_dac_sidecar(pimpl_->model, opts.model_gguf_path, coreml_policy);
+    if (opts.coreml_decoder && !coreml_policy.disabled) {
+        auto sidecar = parler_open_decoder_sidecar(pimpl_->model, opts.model_gguf_path, coreml_policy, err);
         if (!sidecar) {
-            if (parler_coreml_strict()) throw std::runtime_error("parler: " + err);
+            if (coreml_policy.strict) throw std::runtime_error("parler: " + err);
             fprintf(stderr, "parler: %s; decoder stays on ggml\n", err.c_str());
         } else {
-            pimpl_->decoder.attach(std::move(sidecar), parler_coreml_strict());
+            pimpl_->decoder.attach(std::move(sidecar), coreml_policy.strict);
         }
     }
     pimpl_->allocr = ggml_gallocr_new(

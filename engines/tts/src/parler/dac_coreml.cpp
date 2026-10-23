@@ -21,18 +21,6 @@ namespace {
 constexpr int SINGLE_BATCH = 1;
 constexpr int MONO = 1;
 constexpr int FEATURE_RANK = 3;
-constexpr const char * KNOWN_UNITS[] = {"all", "cpu_and_ane", "cpu_and_gpu", "cpu_only"};
-
-std::string requested_units() {
-    const char * units = std::getenv(PARLER_COREML_UNITS_ENV);
-    if (units == nullptr || *units == '\0') return PARLER_COREML_DEFAULT_UNITS;
-    for (const char * known : KNOWN_UNITS) {
-        if (std::strcmp(units, known) == 0) return units;
-    }
-    fprintf(stderr, "parler: ignoring %s=%s (expected all, cpu_and_ane, cpu_and_gpu or cpu_only)\n",
-            PARLER_COREML_UNITS_ENV, units);
-    return PARLER_COREML_DEFAULT_UNITS;
-}
 
 bool read_f32(const ggml_tensor * t, int64_t n, std::vector<float> & out) {
     if (t == nullptr || t->type != GGML_TYPE_F32 || ggml_nelements(t) != n) return false;
@@ -151,16 +139,22 @@ bool parler_dac_rvq_load(const parler_model & model, parler_dac_rvq & rvq, std::
 std::shared_ptr<parler_dac_sidecar> parler_open_dac_sidecar(const std::string & gguf_path,
                                                             const parler_model & model,
                                                             std::string * why) {
+    return parler_open_dac_sidecar(gguf_path, model, parler_resolve_coreml_policy(), why);
+}
+
+std::shared_ptr<parler_dac_sidecar> parler_open_dac_sidecar(const std::string & gguf_path,
+                                                            const parler_model & model,
+                                                            const parler_coreml_policy & policy,
+                                                            std::string * why) {
     auto reject = [&](const std::string & reason) -> std::shared_ptr<parler_dac_sidecar> {
         if (why) *why = reason;
         return nullptr;
     };
+    if (policy.disabled) return reject(std::string(PARLER_COREML_DISABLE_ENV) + " is set");
 #ifdef TTS_CPP_USE_COREML
-    if (parler_coreml_disabled()) return reject(std::string(PARLER_COREML_DISABLE_ENV) + " is set");
     const std::string path = parler_dac_sidecar_path(gguf_path);
     if (!::tts_cpp::detail::coreml_sidecar_exists(path)) return reject("no sidecar at " + path);
-    const std::string units = requested_units();
-    moss_coreml_model * m = moss_coreml_load(path.c_str(), units.c_str());
+    moss_coreml_model * m = moss_coreml_load(path.c_str(), policy.compute_units.c_str());
     if (m == nullptr) return reject("Core ML could not load " + path);
 
     const parler_hparams & hp = model.hparams;
@@ -184,31 +178,52 @@ std::shared_ptr<parler_dac_sidecar> parler_open_dac_sidecar(const std::string & 
 
 bool parler_attach_dac_sidecar(parler_model & model, std::shared_ptr<parler_dac_sidecar> sidecar,
                                std::string * err) {
+    return parler_attach_dac_sidecar(model, std::move(sidecar), parler_resolve_coreml_policy(), err);
+}
+
+bool parler_attach_dac_sidecar(parler_model & model, std::shared_ptr<parler_dac_sidecar> sidecar,
+                               const parler_coreml_policy & policy, std::string * err) {
     model.dac_sidecar.reset();
     model.dac_sidecar_retired = false;
-    if (!sidecar) return true;
+    model.dac_coreml_strict = policy.strict;
+    if (!sidecar || policy.disabled) return true;
     if (!parler_dac_rvq_load(model, model.dac_rvq, err)) return false;
     model.dac_sidecar = std::move(sidecar);
     return true;
 }
 
 bool parler_attach_dac_sidecar(parler_model & model, const std::string & gguf_path) {
+    return parler_attach_dac_sidecar(model, gguf_path, parler_resolve_coreml_policy());
+}
+
+bool parler_attach_dac_sidecar(parler_model & model, const std::string & gguf_path,
+                               const parler_coreml_policy & policy) {
+    // Reset retirement even if the new sidecar cannot be opened. Strictness
+    // belongs to this attachment, never to the environment at decode time.
+    parler_attach_dac_sidecar(model, std::shared_ptr<parler_dac_sidecar>{}, policy);
+    if (policy.disabled) {
+        if (policy.strict) {
+            throw std::runtime_error("parler: Core ML is disabled but strict policy is enabled");
+        }
+        return false;
+    }
     std::string why;
-    std::shared_ptr<parler_dac_sidecar> sidecar = parler_open_dac_sidecar(gguf_path, model, &why);
+    std::shared_ptr<parler_dac_sidecar> sidecar = parler_open_dac_sidecar(gguf_path, model, policy, &why);
     if (sidecar && sidecar->window() <= 2 * parler_dac_rf_frames(model)) {
         why = "sidecar window " + std::to_string(sidecar->window()) + " leaves no frames after " +
               std::to_string(parler_dac_rf_frames(model)) + " context frames per side";
         sidecar.reset();
     }
-    if (sidecar && !parler_attach_dac_sidecar(model, sidecar, &why)) sidecar.reset();
+    if (sidecar && !parler_attach_dac_sidecar(model, sidecar, policy, &why)) sidecar.reset();
     if (sidecar) {
         fprintf(stderr, "parler: DAC on Core ML (%s, %d-frame window)\n", sidecar->label(),
                 sidecar->window());
         return true;
     }
-    if (parler_coreml_strict()) {
-        throw std::runtime_error(std::string("parler: no usable Core ML DAC sidecar (") + why + ") and " +
-                                 PARLER_COREML_STRICT_ENV + " is set");
+    if (policy.strict) {
+        throw std::runtime_error(std::string("parler: no usable Core ML DAC sidecar (") + why +
+                                 "); Core ML strict policy is enabled (coreml_strict / " +
+                                 PARLER_COREML_STRICT_ENV + ")");
     }
     return false;
 }

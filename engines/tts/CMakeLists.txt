@@ -1747,6 +1747,12 @@ if (TTS_CPP_BUILD_TESTS)
         endif()
     endif()
 
+    add_executable(test-parler-coreml-policy test/parler/test_coreml_policy.cpp)
+    target_include_directories(test-parler-coreml-policy PRIVATE include src)
+    target_link_libraries(test-parler-coreml-policy PRIVATE Threads::Threads)
+    tts_cpp_apply_ccache(test-parler-coreml-policy)
+    tts_cpp_register_test(test-parler-coreml-policy LABEL "unit")
+
     add_executable(test-parler-decoder-update-plan test/parler/test_decoder_update_plan.cpp)
     target_include_directories(test-parler-decoder-update-plan PRIVATE src)
     tts_cpp_apply_ccache(test-parler-decoder-update-plan)

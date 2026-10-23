@@ -194,6 +194,37 @@ python scripts/parler/export-dac-coreml.py \
 | `PARLER_COREML_STRICT` | a missing, unusable or failing sidecar is an error instead of a fallback |
 | `PARLER_COREML_COMPUTE_UNITS` | `all` (default), `cpu_and_ane`, `cpu_and_gpu`, `cpu_only` |
 
+SDK hosts can set `EngineOptions::coreml_compute_units` and
+`EngineOptions::coreml_strict` per model instance without writing process
+environment variables. The units string accepts exactly `all`, `cpu_and_ane`,
+`cpu_and_gpu`, or `cpu_only`; an empty string inherits
+`PARLER_COREML_COMPUTE_UNITS`, defaulting to `all`. An invalid explicit string
+throws with the accepted values before loading the GGUF, including in builds
+without Core ML. An invalid inherited value retains the DAC's legacy warning
+and fallback to `all`; the decoder retains its rejection of an invalid inherited value.
+`coreml_strict` is `std::optional<bool>`: unset inherits
+`PARLER_COREML_STRICT`, while explicit `false` permits fallback even if that
+variable is set. Legacy environment booleans use presence, so `0` and `false`
+still mean enabled. The environment is read once at engine construction;
+both stages and later runtime recovery use the captured policy.
+`PARLER_COREML_DISABLE` remains a global construction-time kill switch for
+both stages. As before, disabling Core ML while strict mode is enabled fails
+construction; explicit `coreml_strict = false` permits ggml. Changing
+environment variables does not reconfigure an existing engine.
+
+These fields extend the public C++ options structure. Rebuild native SDK addons
+and consumers against the matching library headers; do not mix old addon binaries
+with this library or old libraries with a newly built addon.
+
+```cpp
+tts_cpp::parler::EngineOptions options;
+options.model_gguf_path = model_path;
+options.coreml_compute_units = "cpu_and_ane";
+options.coreml_strict = false; // permit ggml recovery for this instance
+options.coreml_decoder = true; // remains false by default; separate opt-in
+tts_cpp::parler::Engine engine(options);
+```
+
 `Engine::dac_on_coreml()` reports whether the sidecar is attached;
 `SynthesisResult::dac_backend` reports where each call's DAC ran (`ggml`, the
 `coreml-*` compute label, or `mixed` across streamed chunks). `parler-cli`
@@ -202,7 +233,7 @@ prints it after synthesis and `parler-bench` on its `dac:` line and as
 `PARLER_COREML_DISABLE=1` benchmarks the ggml DAC). A sidecar whose
 prediction fails is retired for the engine's lifetime and the call's whole
 range is decoded again on ggml, so no output mixes a failed call's windows;
-chunks already streamed are kept. Under `PARLER_COREML_STRICT` that call and
+chunks already streamed are kept. Under the captured strict policy that call and
 every later one fail instead. With an enabled sidecar present,
 `parler::fit_params` returns `Error` with `coreml-memory-estimate-unavailable`
 (Core ML resident memory cannot be projected); `PARLER_COREML_DISABLE=1`
@@ -363,7 +394,7 @@ ggml for that call, retaining the sidecar for later shorter requests. In
 strict mode only the oversized request fails; it does not retire the model. After
 a prediction failure it retires the sidecar and rebuilds the ggml cache by
 replaying the exact already-consumed token history, preserving sampled code
-frames and previously streamed chunks. `PARLER_COREML_STRICT` makes a
+frames and previously streamed chunks. The captured `coreml_strict` policy makes a
 requested sidecar failure fatal, including later calls after retirement;
 `PARLER_COREML_DISABLE` disables both Core ML stages.
 
@@ -376,6 +407,12 @@ native cache import/seeding. `FitOptions::coreml_decoder` (or the fitter's
 `--coreml-decoder`) returns `coreml-memory-estimate-unavailable` rather than
 underestimate additional Core ML model/state memory. Decoder-inclusive benchmarks must
 include embedding preparation, prediction, logit readback and cache writes.
+When integrating the fitter, copy the explicit engine decoder bool to
+`FitOptions::coreml_decoder`. The compute-units and strictness options do not
+affect the fitter's memory projection or make Core ML memory projectable, so
+`FitOptions` has no matching fields. The enabled DAC sidecar path and decoder
+opt-in continue to cause the conservative Core ML refusal for every units
+selection, including `cpu_only`; strictness does not relax that refusal.
 A successful small-model export does not establish production quality or an
 end-to-end speed advantage. Uniform 6-bit palettes scored only 93.46% token
 agreement against the fp32 rebuild on a 401-frame mini trace, so the faster

@@ -18,6 +18,8 @@
 //                                instead of a fallback to ggml
 //   PARLER_COREML_COMPUTE_UNITS  all | cpu_and_ane | cpu_and_gpu | cpu_only
 
+#include "coreml_policy.h"
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -29,10 +31,6 @@ namespace detail {
 
 struct parler_model;
 
-constexpr const char * PARLER_COREML_DISABLE_ENV = "PARLER_COREML_DISABLE";
-constexpr const char * PARLER_COREML_STRICT_ENV  = "PARLER_COREML_STRICT";
-constexpr const char * PARLER_COREML_UNITS_ENV   = "PARLER_COREML_COMPUTE_UNITS";
-constexpr const char * PARLER_COREML_DEFAULT_UNITS = "all";
 constexpr const char * PARLER_DAC_SIDECAR_SUFFIX = "-dac";
 constexpr const char * PARLER_DAC_GGML_BACKEND   = "ggml";
 constexpr const char * PARLER_DAC_MIXED_BACKEND  = "mixed";
@@ -81,15 +79,24 @@ bool parler_dac_rvq_load(const parler_model & model, parler_dac_rvq & rvq, std::
 std::shared_ptr<parler_dac_sidecar> parler_open_dac_sidecar(const std::string & gguf_path,
                                                             const parler_model & model,
                                                             std::string * why = nullptr);
+std::shared_ptr<parler_dac_sidecar> parler_open_dac_sidecar(const std::string & gguf_path,
+                                                            const parler_model & model,
+                                                            const parler_coreml_policy & policy,
+                                                            std::string * why = nullptr);
 
 // Attaches `sidecar` (may be null) to the model, loading the host quantizer it
 // needs. False, leaving the model on ggml, when the quantizer cannot be read.
 bool parler_attach_dac_sidecar(parler_model & model, std::shared_ptr<parler_dac_sidecar> sidecar,
                                std::string * err = nullptr);
+bool parler_attach_dac_sidecar(parler_model & model, std::shared_ptr<parler_dac_sidecar> sidecar,
+                               const parler_coreml_policy & policy, std::string * err = nullptr);
 
 // Opens and attaches the sidecar next to `gguf_path`. Returns whether one is
-// attached; under PARLER_COREML_STRICT a missing or unusable sidecar throws.
+// attached; under strict policy a missing or unusable sidecar throws unless
+// globally disabled. Legacy overloads resolve the environment at attachment.
 bool parler_attach_dac_sidecar(parler_model & model, const std::string & gguf_path);
+bool parler_attach_dac_sidecar(parler_model & model, const std::string & gguf_path,
+                               const parler_coreml_policy & policy);
 
 // The sidecar decode of frames [out_begin, out_end) (see parler_dac_decode).
 // False on any sidecar failure; pcm_out / latent_out are then unspecified.

@@ -623,6 +623,7 @@ void parler_free_model(parler_model & model) {
     if (model.dac_allocr)   { ggml_gallocr_free(model.dac_allocr); model.dac_allocr = nullptr; }
     model.dac_sidecar.reset();
     model.dac_sidecar_retired = false;
+    model.dac_coreml_strict = false;
     model.dac_rvq = {};
     if (model.buffer_dac_derived) {
         ggml_backend_buffer_free(model.buffer_dac_derived);

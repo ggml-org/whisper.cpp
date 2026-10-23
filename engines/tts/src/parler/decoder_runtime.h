@@ -2,6 +2,7 @@
 
 #include "ggml-alloc.h"
 #include "decoder_profile.h"
+#include "coreml_policy.h"
 
 #include <cstdint>
 #include <functional>
@@ -42,6 +43,9 @@ public:
 // builds, absent or incompatible sidecars. Caller controls fallback/strictness.
 std::unique_ptr<parler_decoder_step_model> parler_open_decoder_sidecar(
     const parler_model & model, const std::string & gguf_path, std::string & error);
+std::unique_ptr<parler_decoder_step_model> parler_open_decoder_sidecar(
+    const parler_model & model, const std::string & gguf_path,
+    const parler_coreml_policy & policy, std::string & error);
 
 // Fast ggml prefill followed by Core ML single-token steps. If a sidecar
 // fails, replay the exact consumed token history into ggml before resuming;

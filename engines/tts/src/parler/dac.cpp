@@ -440,8 +440,9 @@ bool parler_dac_decode(const parler_model & model, const int32_t * codes, int n_
         model.dac_sidecar.reset();
         model.dac_sidecar_retired = true;
     }
-    if (model.dac_sidecar_retired && parler_coreml_strict()) {
-        err = std::string("the Core ML DAC sidecar failed and ") + PARLER_COREML_STRICT_ENV + " is set";
+    if (model.dac_sidecar_retired && model.dac_coreml_strict) {
+        err = std::string("the Core ML DAC sidecar failed; Core ML strict policy is enabled (coreml_strict / ") +
+              PARLER_COREML_STRICT_ENV + ")";
         pcm_out.clear();
         if (latent_out) latent_out->clear();
         if (err_out) *err_out = err;

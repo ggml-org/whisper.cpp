@@ -175,6 +175,7 @@ struct parler_model {
     // from; null on ggml. Mutable: a failing sidecar is retired mid-decode.
     mutable std::shared_ptr<parler_dac_sidecar> dac_sidecar;
     mutable bool dac_sidecar_retired = false;  // a failure retired it (STRICT keeps failing)
+    bool dac_coreml_strict = false;           // captured at attachment, not read at decode time
     parler_dac_rvq dac_rvq;
 
     // decoder self-attention KV cache (token-major slab, one per K/V):
@@ -417,7 +418,7 @@ ggml_cgraph * parler_build_dac_fit_graph(const parler_model & model, int n_frame
 // [latent_dim, T] ggml layout (element (c, t) at t*latent_dim + c).
 // With a Core ML sidecar attached (model.dac_sidecar) the windows run on it;
 // a failing sidecar is retired and the whole range is redone on ggml, unless
-// PARLER_COREML_STRICT is set, which fails the call instead. backend_out
+// the captured Core ML strict policy is enabled, which fails the call instead. backend_out
 // (optional) receives where the range ran: "ggml" or the sidecar's label.
 bool parler_dac_decode(const parler_model & model,
                        const int32_t * codes, int n_frames,

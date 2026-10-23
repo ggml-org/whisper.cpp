@@ -61,6 +61,9 @@ struct FitOptions {
     std::string backend;
     std::string backends_dir;
     bool coreml_decoder = false; // mirror EngineOptions; Core ML memory is not projectable
+    // EngineOptions::coreml_compute_units/coreml_strict have no fitter
+    // counterparts: neither makes Core ML memory projectable. Mirror the
+    // explicit decoder opt-in above; enabled DAC sidecars are detected by path.
 
     // ── Workload ──────────────────────────────────────────────────────────
     // Token count of the voice description fed to the T5 encoder (the

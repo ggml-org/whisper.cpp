@@ -29,6 +29,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -58,7 +59,7 @@ struct EngineOptions {
 
     // Opt in to an experimental Core ML decoder-step sidecar. T5 and prefill
     // stay on ggml. Missing/incompatible/failing sidecars fall back to ggml;
-    // PARLER_COREML_STRICT makes a requested sidecar failure fatal.
+    // coreml_strict makes a requested sidecar failure fatal.
     // PARLER_COREML_DISABLE disables this along with the DAC sidecar.
     bool coreml_decoder = false;
 
@@ -93,6 +94,17 @@ struct EngineOptions {
     // Directory for dynamically-loaded ggml backends (GGML_BACKEND_DL
     // builds); empty keeps the default search behaviour.
     std::string backends_dir;
+
+    // Per-instance policy for BOTH DAC and decoder sidecars, resolved once
+    // at construction without modifying process environment variables.
+    // Empty inherits PARLER_COREML_COMPUTE_UNITS (default "all"). Explicit
+    // values must be all, cpu_and_ane, cpu_and_gpu or cpu_only; invalid values
+    // throw even in builds without Core ML. This does not enable the decoder.
+    std::string coreml_compute_units;
+    // Unset inherits PARLER_COREML_STRICT (presence means true, even "0").
+    // Explicit false permits fallback even when that environment variable is
+    // set. PARLER_COREML_DISABLE overrides both stages at construction.
+    std::optional<bool> coreml_strict;
 };
 
 struct SynthesisResult {

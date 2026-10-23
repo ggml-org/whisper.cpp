@@ -154,22 +154,31 @@ private:
 
 std::unique_ptr<parler_decoder_step_model> parler_open_decoder_sidecar(
     const parler_model & model, const std::string & gguf_path, std::string & error) {
+    return parler_open_decoder_sidecar(model, gguf_path, parler_resolve_coreml_policy(), error);
+}
+
+std::unique_ptr<parler_decoder_step_model> parler_open_decoder_sidecar(
+    const parler_model & model, const std::string & gguf_path,
+    const parler_coreml_policy & policy, std::string & error) {
+    if (policy.disabled) { error = "Core ML is disabled"; return nullptr; }
+    if (!policy.invalid_inherited_units.empty()) {
+        error = "invalid PARLER_COREML_COMPUTE_UNITS for decoder: " + policy.invalid_inherited_units;
+        return nullptr;
+    }
 #ifdef TTS_CPP_USE_COREML
-    if (parler_coreml_disabled()) { error = "Core ML is disabled"; return nullptr; }
     const auto path = ::tts_cpp::detail::coreml_sidecar_path(gguf_path, "-decoder");
     if (!::tts_cpp::detail::coreml_sidecar_exists(path)) {
         error = "decoder sidecar not found: " + path;
         return nullptr;
     }
-    const char * env = std::getenv(PARLER_COREML_UNITS_ENV);
-    const std::string units = env && *env ? env : "all";
+    const std::string & units = policy.compute_units;
     decoder_coreml_units selection;
     std::string label;
     if (units == "all") { selection = decoder_coreml_units::all; label = "coreml-all"; }
     else if (units == "cpu_and_ane") { selection = decoder_coreml_units::cpu_and_ane; label = "coreml-ane"; }
     else if (units == "cpu_and_gpu") { selection = decoder_coreml_units::cpu_and_gpu; label = "coreml-gpu"; }
     else if (units == "cpu_only") { selection = decoder_coreml_units::cpu_only; label = "coreml-cpu"; }
-    else { error = "invalid PARLER_COREML_COMPUTE_UNITS for decoder"; return nullptr; }
+    else { error = "invalid Core ML compute units for decoder: " + units; return nullptr; }
     auto session = decoder_coreml_session::open(path, selection, error);
     if (!session) return nullptr;
     const auto & hp = model.hparams;

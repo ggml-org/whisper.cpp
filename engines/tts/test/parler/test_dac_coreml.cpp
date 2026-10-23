@@ -203,8 +203,9 @@ void fake_sidecar_gates(parler_model & model) {
     // fails on its second window: retired once, whole range redone on ggml
     auto failing = std::make_shared<fake_sidecar>(window, hp.dac_hop, 2);
     check(parler_attach_dac_sidecar(model, failing), "attach a failing fake sidecar");
+    setenv(PARLER_COREML_STRICT_ENV, "1", 1);
     check(decode(model, codes, n_frames, pcm, nullptr, 0, -1, &backend) && backend == "ggml",
-          "mid-range failure falls back to ggml");
+          "mid-range failure uses captured non-strict policy despite later strict environment");
     check(pcm == ref, "fallback output is bit-identical to the ggml-only decode");
     check(!model.dac_sidecar && failing->calls == 2, "failing sidecar retired after one failure");
     check(decode(model, codes, n_frames, pcm, nullptr, 5, n_frames - 3, &backend) && backend == "ggml" &&
@@ -215,22 +216,44 @@ void fake_sidecar_gates(parler_model & model) {
     setenv(PARLER_COREML_STRICT_ENV, "1", 1);
     auto strict_fail = std::make_shared<fake_sidecar>(window, hp.dac_hop, 1);
     parler_attach_dac_sidecar(model, strict_fail);
+    unsetenv(PARLER_COREML_STRICT_ENV);
     std::string err;
     check(!decode(model, codes, n_frames, pcm, nullptr, 0, -1, nullptr, &err) && pcm.empty() &&
           err.find(PARLER_COREML_STRICT_ENV) != std::string::npos && !model.dac_sidecar,
-          "strict: sidecar failure fails the call");
+          "strict: captured policy fails the call despite later environment removal");
     check(!decode(model, codes, n_frames, pcm) && pcm.empty(), "strict: later calls keep failing after a retirement");
     bool threw = false;
     try {
-        parler_attach_dac_sidecar(model, std::string("/nonexistent/parler-none-f32.gguf"));
+        parler_attach_dac_sidecar(model, std::string("/nonexistent/parler-none-f32.gguf"),
+                                  parler_resolve_coreml_policy("cpu_only", true));
     } catch (const std::runtime_error &) {
         threw = true;
     }
     check(threw, "strict: no sidecar throws at attach");
+    setenv(PARLER_COREML_STRICT_ENV, "1", 1);
+    auto explicit_fallback = std::make_shared<fake_sidecar>(window, hp.dac_hop, 1);
+    check(parler_attach_dac_sidecar(model, explicit_fallback,
+                                   parler_resolve_coreml_policy("cpu_only", false)),
+          "explicit false attaches independently of strict environment");
+    check(decode(model, codes, n_frames, pcm) && pcm == ref,
+          "explicit false recovers on ggml despite strict environment");
     unsetenv(PARLER_COREML_STRICT_ENV);
-    check(decode(model, codes, n_frames, pcm) && pcm == ref, "without strict, a retired sidecar decodes on ggml");
+    check(decode(model, codes, n_frames, pcm) && pcm == ref, "retired non-strict sidecar stays on ggml");
     check(!parler_attach_dac_sidecar(model, std::string("/nonexistent/parler-none-f32.gguf")),
           "no sidecar: attach reports ggml");
+    setenv(PARLER_COREML_DISABLE_ENV, "1", 1);
+    threw = false;
+    try {
+        parler_attach_dac_sidecar(model, std::string("/nonexistent/parler-none-f32.gguf"),
+                                  parler_resolve_coreml_policy("cpu_only", true));
+    } catch (const std::runtime_error &) {
+        threw = true;
+    }
+    check(threw, "disabled plus strict retains legacy missing-sidecar failure");
+    check(!parler_attach_dac_sidecar(model, std::string("/nonexistent/parler-none-f32.gguf"),
+                                    parler_resolve_coreml_policy("cpu_only", false)),
+          "global disable permits ggml with explicit non-strict policy");
+    unsetenv(PARLER_COREML_DISABLE_ENV);
 }
 
 void coreml_gates(parler_model & model, const std::string & gguf, const std::string & ref_dir,
