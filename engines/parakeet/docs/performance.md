@@ -1098,27 +1098,25 @@ What changed since the first pass and what the table says:
   now runs its ggml-graph decoder on the CPU backend from a CPU copy of the
   decoder weights (`c86079ec`), which decodes the 413 s recording in half a
   second where the scalar host fallback it replaced took two.
-- Accuracy on that OpenCL path is wrong for long recordings, in both trees
-  alike: single-window inputs are correct (`jfk.wav`, `sample-16k.wav`, and
-  two different 11 s clips transcribed one after the other by one engine),
-  but every recording that needs more than one encoder window loses most
-  of its words from the second window on (fork and port both 36 % WER on
-  long-mix, 54 % on the pause-free English recording, where the CPU is at
-  0 %; the two trees' outputs are word-for-word the same). The defect is in
-  the shared ggml-opencl backend on this device, not in either tree's
-  windowing: the same code is exact on the CPU, CUDA and Metal; it is
-  deterministic and survived disabling the port's graph reuse, copying each
-  window's mel into its own buffer, and every backend switch
-  (`GGML_OPENCL_FLUSH_WORK_MB`, `GGML_OPENCL_FA_MAX_NQ`,
-  `GGML_OPENCL_FA_ADRENO`, `GGML_OPENCL_ADRENO_USE_LARGE_BUFFER`); it
-  worsens with the window size (25 s windows: 16 % WER on the 374 s file,
-  60 s: 54 %, 120 s: everything after the first window is empty) while a
-  62 s single pass is exact. Reproduction: `en-nopause-2x.wav` (jfk and
-  sample-16k twice, 62 s) with `--window-sec 60 --overlap 0.25` on the
-  Adreno 830 gives 104 words instead of 158 on both trees. Until the backend
-  is fixed, recordings longer than one window must not be transcribed on
-  Adreno OpenCL; the OpenCL speed rows above stand as measurements of the
-  work done, not of a usable result on long audio.
+- Accuracy on that OpenCL path was wrong for long recordings, in both trees
+  alike, until ggml-speech's Adreno q8_0 GEMM stopped keeping its sums in
+  fp16. TranscribePsy's first feed-forward block reaches 66k on some 60 s
+  windows; the kernel returned inf for that output, the next layer norm
+  turned it into NaN and attention spread it over the window, which then
+  decoded to nothing. The longer the window, the likelier one frame crosses
+  the limit: with the old kernel the pause-free English recording lost
+  54 % of its words at 60 s windows, everything after the first window was
+  empty at 120 s, and `en-nopause-2x.wav` (jfk and sample-16k twice, 62 s)
+  with `--window-sec 60 --overlap 0.25` gave 104 words instead of 158. The
+  kernel now sums each 32-wide block in fp16 and adds the block sums in
+  fp32, which costs 1.5 % encoder time on a 60 s window (1245 ms to
+  1263 ms; the OpenCL speed rows above predate it). With it the port's
+  OpenCL transcripts equal the phone's CPU transcripts word for word on
+  the English and French recordings, and differ by two words at one French
+  language switch on long-mix and on the 619 s recording (0.4 % and 0.3 %
+  against the CPU, the spot where the CPU, CUDA and Metal rows differ too).
+  The fork's row below is its own vendored ggml, which still has the old
+  kernel.
 
 Peak memory (engine API, the path the addon uses; the engine driver's own
 `getrusage` on the phone, `/usr/bin/time` on the desktops):
@@ -1170,7 +1168,7 @@ previous section; the port's default rows now coincide with its 60 s rows):
 | Samsung S25, Snapdragon 8 Elite (CPU only), 6 threads | port, CPU, 60 s / 25 % windows | 0.0 % | 0.2 % | 21.9 % | 28.6 % | - |
 | Samsung S25, Snapdragon 8 Elite (CPU only), 6 threads | port, CPU, default | 0.0 % | 0.2 % | 21.9 % | 28.6 % | - |
 | Samsung S25, Snapdragon 8 Elite (CPU only), 6 threads | fork, CPU, its default 60 s / 25 % windows | 0.0 % | 0.2 % | 21.9 % | 28.6 % | - |
-| Samsung S25, Adreno 830 OpenCL, 6 CPU threads | port, OpenCL, default (60 s / 25 % windows) | 54.4 % | 65.8 % | 21.9 % | 28.6 % | - |
+| Samsung S25, Adreno 830 OpenCL, 6 CPU threads | port, OpenCL, default (60 s / 25 % windows) | 0.0 % | 0.2 % | 21.9 % | 28.6 % | - |
 | Samsung S25, Adreno 830 OpenCL, 6 CPU threads | fork, OpenCL, its default 60 s / 25 % windows | 54.4 % | 65.8 % | 21.9 % | 28.6 % | - |
 
 Per-machine detail (`jfk.wav`, long-mix and the 619 s recording):
