@@ -19,6 +19,8 @@ namespace {
 
 constexpr int CONTINUATION_FRAMES = 10;
 constexpr uint32_t DIALOGUE_WEIGHT_SEED = 29;
+constexpr int TTSD_AUDIO_CHANNELS = 16;
+constexpr int TTS_AUDIO_CHANNELS = 32;
 
 int failures = 0;
 
@@ -97,6 +99,34 @@ void test_dialogue_prompt_rows() {
             "the prompt ends mid-stream on a gen row");
     check(rows.back().audio[0] != config.audio_pad_code,
             "the final continuation row carries delayed codes");
+}
+
+std::string capture_prompt_template(int audio_channels) {
+    DelayConfig config = prompt_config();
+    config.n_vq = audio_channels;
+    const PromptTokens tokens{0, 2, 3};
+    std::string captured;
+    const TextEncoder recorder = [&captured](const std::string & span) {
+        captured += span;
+        return std::vector<int32_t>{1};
+    };
+    build_prompt_rows(config, tokens, recorder, "[S1] Hello.", "English", 0, {});
+    return captured;
+}
+
+void test_reference_prompt_templates() {
+    const std::string expected =
+            "user\n<user_inst>\n- Reference(s):\nNone\n- Instruction:\nNone\n"
+            "- Tokens:\nNone\n- Quality:\nNone\n- Sound Event:\nNone\n"
+            "- Ambient Sound:\nNone\n- Language:\nEnglish\n- Scene:\nNone\n"
+            "- Text:\n[S1] Hello.\n</user_inst>\nassistant\n";
+    check(capture_prompt_template(TTSD_AUDIO_CHANNELS) == expected,
+            "TTSD matches the upstream UserMessage template including Scene");
+    const std::string tts = capture_prompt_template(TTS_AUDIO_CHANNELS);
+    check(tts.find("- Scene:") == std::string::npos,
+            "TTS v1.5 retains its template without Scene");
+    check(tts.find("- Language:\nEnglish\n- Text:") != std::string::npos,
+            "TTS v1.5 text follows language directly");
 }
 
 void test_continuation_state_and_extraction() {
@@ -209,6 +239,7 @@ int main() {
     int rc = 0;
     try {
         test_dialogue_prompt_rows();
+        test_reference_prompt_templates();
         test_continuation_state_and_extraction();
 
         const auto backbone = write_backbone("dlg-backbone", [](gguf_context *) {});

@@ -225,6 +225,25 @@ void test_reference_shape_limits() {
     }
 }
 
+void test_reference_loudness_normalization() {
+    using tts_cpp::moss::detail::normalize_reference_pcm;
+    constexpr float TOLERANCE = 1e-6f;
+    const std::vector<float> quiet{0.01f, -0.01f};
+    const auto raised = normalize_reference_pcm(quiet);
+    const auto lowered = normalize_reference_pcm({0.5f, -0.5f});
+    const auto targeted = normalize_reference_pcm({0.08f, -0.08f});
+    check(normalize_reference_pcm({}).empty(), "empty reference remains empty");
+    check(normalize_reference_pcm({0.0f, 0.0f}) == std::vector<float>({0.0f, 0.0f}),
+            "silent reference remains silent");
+    check(std::abs(raised[0] - 0.014125375f) < TOLERANCE && raised[1] == -raised[0],
+            "quiet reference gain is limited to three dB");
+    check(std::abs(lowered[0] - 0.353972892f) < TOLERANCE && lowered[1] == -lowered[0],
+            "loud reference attenuation is limited to three dB");
+    check(std::abs(targeted[0] - 0.1f) < TOLERANCE && targeted[1] == -targeted[0],
+            "reference reaches minus twenty dBFS within the gain limits");
+    check(quiet[0] == 0.01f, "individual normalization preserves raw PCM for dialogue concatenation");
+}
+
 void expect_shaped_backbone_failure(const char * name, const TensorShapes & shapes,
                                     const std::string & expected) {
     const auto path = write_backbone(name, [](gguf_context *) {}, {}, shapes);
@@ -265,6 +284,7 @@ int main() {
         test_duration_budget();
         test_feed_forward_beyond_half_precision();
         test_reference_shape_limits();
+        test_reference_loudness_normalization();
 
         expect_shaped_backbone_failure("text vocabulary mismatch",
                 {{"token_embd.weight", {N_EMBD, TEXT_VOCAB + SPECIALS}}},

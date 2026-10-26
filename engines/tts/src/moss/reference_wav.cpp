@@ -3,7 +3,9 @@
 #include "dr_wav.h"
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
+#include <numeric>
 #include <stdexcept>
 
 namespace tts_cpp::moss::detail {
@@ -14,6 +16,11 @@ constexpr uint64_t MAX_REFERENCE_SECONDS   = 60;
 constexpr uint32_t MAX_REFERENCE_CHANNELS  = 64;
 constexpr uint64_t MAX_REFERENCE_SAMPLES   = 60ull * 192000ull;
 constexpr size_t REFERENCE_READ_BLOCK_FRAMES = 4096;
+constexpr double REFERENCE_TARGET_DBFS = -20.0;
+constexpr double REFERENCE_GAIN_LIMIT_DB = 3.0;
+constexpr double REFERENCE_POWER_FLOOR = 1e-9;
+constexpr double POWER_DECIBEL_FACTOR = 10.0;
+constexpr double AMPLITUDE_DECIBEL_FACTOR = 20.0;
 
 [[noreturn]] void fail(const std::string & message) {
     throw std::runtime_error("moss engine: " + message);
@@ -80,6 +87,21 @@ void require_reference_total(size_t samples, int sample_rate) {
         fail("dialogue references must total at most " + std::to_string(MAX_REFERENCE_SECONDS) +
              " seconds of audio");
     }
+}
+
+std::vector<float> normalize_reference_pcm(const std::vector<float> & pcm) {
+    if (pcm.empty()) {
+        return pcm;
+    }
+    const double power = std::inner_product(pcm.begin(), pcm.end(), pcm.begin(), 0.0) / pcm.size();
+    const double dbfs = POWER_DECIBEL_FACTOR * std::log10(power + REFERENCE_POWER_FLOOR);
+    const double gain = std::clamp(REFERENCE_TARGET_DBFS - dbfs,
+            -REFERENCE_GAIN_LIMIT_DB, REFERENCE_GAIN_LIMIT_DB);
+    const float factor = (float) std::pow(POWER_DECIBEL_FACTOR, gain / AMPLITUDE_DECIBEL_FACTOR);
+    std::vector<float> normalized(pcm.size());
+    std::transform(pcm.begin(), pcm.end(), normalized.begin(),
+            [factor](float sample) { return sample * factor; });
+    return normalized;
 }
 
 std::vector<float> read_reference_wav(const std::string & path, int expected_rate) {

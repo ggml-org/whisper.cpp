@@ -12,6 +12,7 @@ constexpr const char * PAD_TOKEN      = "<|endoftext|>";
 constexpr const char * IM_START_TOKEN = "<|im_start|>";
 constexpr const char * IM_END_TOKEN   = "<|im_end|>";
 constexpr const char * AUDIO_PLACEHOLDER = "<|audio|>";
+constexpr int TTSD_AUDIO_CHANNELS = 16;
 
 [[noreturn]] void fail(const std::string & message) {
     throw std::runtime_error("moss frontend: " + message);
@@ -22,7 +23,8 @@ std::string tokens_field(int duration_tokens) {
 }
 
 std::string user_instruction(const std::string & reference, const std::string & language,
-                             const std::string & text, int duration_tokens) {
+                             const std::string & text, int duration_tokens, int audio_channels) {
+    const std::string scene = audio_channels == TTSD_AUDIO_CHANNELS ? "- Scene:\nNone\n" : "";
     return "<user_inst>\n"
            "- Reference(s):\n" + reference + "\n"
            "- Instruction:\nNone\n"
@@ -30,7 +32,7 @@ std::string user_instruction(const std::string & reference, const std::string & 
            "- Quality:\nNone\n"
            "- Sound Event:\nNone\n"
            "- Ambient Sound:\nNone\n"
-           "- Language:\n" + language + "\n"
+           "- Language:\n" + language + "\n" + scene +
            "- Text:\n" + text + "\n"
            "</user_inst>";
 }
@@ -127,7 +129,7 @@ std::vector<DelayRow> build_prompt_rows(const DelayConfig & config, const Prompt
                                         const std::string & language, int duration_tokens,
                                         const PromptAudio & audio) {
     const std::string reference_field = reference_field_for(audio.speaker_codes.size());
-    const std::string content = user_instruction(reference_field, language, text, duration_tokens);
+    const std::string content = user_instruction(reference_field, language, text, duration_tokens, config.n_vq);
 
     RowBuilder builder{config, encode, {}};
     builder.append_text({tokens.im_start});

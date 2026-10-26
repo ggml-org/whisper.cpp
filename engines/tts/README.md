@@ -31,6 +31,11 @@ in [MOSS GPU validation](docs/moss.md#gpu-validation-cuda-and-vulkan); smoke cov
 not establish general speech quality. OpenCL remains untested here. See the [API matrix](docs/api.md) for
 streaming support and the [model guide](docs/models.md) for storage tiers.
 
+MOSS reference cloning applies the upstream loudness adjustment, and TTSD uses
+its dialogue-specific prompt template. Use the explicit TTSD sampling settings
+in the [dialogue example](docs/moss.md); the CLI's shared defaults are for
+TTS-v1.5, and sampled dialogue can stop before all requested turns are spoken.
+
 This in-tree package consumes the shared `ggml-speech` dependency. Build and
 vcpkg consumption instructions are in [docs/build.md](docs/build.md).
 

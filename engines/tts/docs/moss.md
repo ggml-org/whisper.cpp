@@ -260,7 +260,10 @@ build/moss-cli --backbone moss-ttsd-f16.gguf \
     --encoder moss-codec-encoder-f16.gguf \
     --dialogue-ref s1.wav --dialogue-ref s2.wav \
     --text "[S1] <s1 transcript> [S2] <s2 transcript> [S1] ... [S2] ..." \
-    --language en --out dialogue.wav
+    --language English --out dialogue.wav \
+    --text-temperature 1.1 --text-top-p 0.9 --text-top-k 50 \
+    --audio-temperature 1.1 --audio-top-p 0.9 --audio-top-k 50 \
+    --audio-repetition-penalty 1.1
 
 # on the GPU: same command plus --gpu
 ```
@@ -273,10 +276,22 @@ model for a target length of N codec frames (12.5 per second; 0 keeps the
 length free). A target length also needs `n_vq - 1` drain steps plus the
 `audio_end` and `im_end` rows, so the engine rejects a `duration_tokens`
 that does not fit in `max_new_tokens` together with them. Sampling
-follows the reference defaults — text temperature 1.5 / top-k 50, audio
+uses the TTS-v1.5 reference defaults — text temperature 1.5 / top-k 50, audio
 temperature 1.7 / top-p 0.8 / top-k 25, repetition penalty 1.0 over the
 audio channels, seed 1234 — and every knob is exposed as a flag
 (`--text-temperature`, `--audio-top-k`, `--audio-repetition-penalty`, ...).
+
+The dialogue example explicitly uses the TTSD-v1.0 defaults, which differ from
+TTS-v1.5. Text top-p 1.0 keeps rare stop tokens eligible and can end dialogue
+before every requested turn is spoken. A successful process exit does not
+establish that the output contains the complete dialogue.
+
+Reference audio follows the upstream processor's loudness adjustment: target
+−20 dBFS, with gain limited to ±3 dB. Each speaker clip and the concatenated
+continuation are normalized independently from their original PCM. The
+16-channel TTSD prompt includes `Scene: None`; the 32-channel TTS-v1.5 prompt
+retains its template without that field. These preprocessing matches do not
+make sampled outputs identical across runtimes or precisions.
 
 ### Engine notes
 

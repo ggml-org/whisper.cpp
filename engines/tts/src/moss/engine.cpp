@@ -138,7 +138,7 @@ struct Engine::Impl {
     }
 
     std::vector<int32_t> encode_checked(Codec & encoder, const std::vector<float> & pcm) {
-        std::vector<int32_t> codes = encoder.encode(pcm);
+        std::vector<int32_t> codes = encoder.encode(detail::normalize_reference_pcm(pcm));
         if (codes.empty()) {
             fail("reference audio is shorter than one codec frame");
         }
