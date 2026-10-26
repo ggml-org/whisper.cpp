@@ -21,8 +21,13 @@ constexpr int GUIDED_LATENT_BUFFERS = 4;
 constexpr int UNGUIDED_LATENT_BUFFERS = 2;
 constexpr int PROMPT_CONTEXTS = 2;
 
-uint64_t text_payload(size_t tokens) {
-    return sat_add(sat_mul(tokens, sizeof(int32_t) * 2), sat_mul(sat_mul(tokens, tokens), sizeof(float)));
+uint64_t host_rows_payload(const detail::SfxModel & model, size_t tokens) {
+    return model.table_on_host() ? sat_mul(sat_mul(tokens, model.config().text.n_embd), sizeof(float)) : 0;
+}
+
+uint64_t text_payload(const detail::SfxModel & model, size_t tokens) {
+    const uint64_t indices = sat_add(sat_mul(tokens, sizeof(int32_t) * 2), sat_mul(sat_mul(tokens, tokens), sizeof(float)));
+    return sat_add(indices, host_rows_payload(model, tokens));
 }
 
 detail::SfxMemory measure_texts(detail::SfxModel & model, detail::SfxTokenizer & tokenizer,
@@ -34,8 +39,8 @@ detail::SfxMemory measure_texts(detail::SfxModel & model, detail::SfxTokenizer &
     detail::SfxMemory result;
     result.device_bytes = std::max(first.device_bytes, second.device_bytes);
     result.host_compute_bytes = std::max(first.host_compute_bytes, second.host_compute_bytes);
-    result.host_bytes = std::max(sat_add(first.host_bytes, text_payload(positive.size())),
-                                 sat_add(second.host_bytes, text_payload(negative.size())));
+    result.host_bytes = std::max(sat_add(first.host_bytes, text_payload(model, positive.size())),
+                                 sat_add(second.host_bytes, text_payload(model, negative.size())));
     return result;
 }
 

@@ -161,26 +161,45 @@ void validate_ids(const SfxModel & model, const std::vector<int32_t> & ids) {
 }
 
 struct TextInputs {
-    ggml_tensor * ids;
-    ggml_tensor * positions;
-    ggml_tensor * mask;
-    ggml_tensor * output;
+    ggml_tensor * ids = nullptr;
+    ggml_tensor * rows = nullptr;
+    ggml_tensor * positions = nullptr;
+    ggml_tensor * mask = nullptr;
+    ggml_tensor * output = nullptr;
 };
+
+ggml_tensor * embed_tokens(SfxModel & model, SfxGraph & graph, int64_t tokens, TextInputs & inputs) {
+    if (model.table_on_host()) {
+        inputs.rows = graph.input_f32(model.config().text.n_embd, tokens);
+        return inputs.rows;
+    }
+    inputs.ids = graph.input_i32(tokens);
+    return ggml_get_rows(graph.ctx(), model.tensor(SFX_TOKEN_TABLE), inputs.ids);
+}
 
 TextInputs build_text_graph(SfxModel & model, SfxGraph & graph, int64_t tokens) {
     const auto & config = model.config().text;
     TextGraph builder{model, config, graph};
-    ggml_tensor * input_ids = graph.input_i32(tokens);
-    ggml_tensor * positions = graph.input_i32(tokens);
-    ggml_tensor * mask = graph.input_f32(tokens, tokens);
-    ggml_tensor * attention_mask = model.fused_attention() ? ggml_cast(graph.ctx(), mask, GGML_TYPE_F16) : mask;
-    ggml_tensor * cur = ggml_get_rows(graph.ctx(), model.tensor(SFX_TOKEN_TABLE), input_ids);
-    cur = builder.blocks(cur, tokens, positions, attention_mask);
-    cur = builder.rms_norm(cur, model.tensor("text.output_norm.weight"));
-    ggml_set_output(cur);
-    ggml_build_forward_expand(graph.graph(), cur);
+    TextInputs inputs;
+    ggml_tensor * cur = embed_tokens(model, graph, tokens, inputs);
+    inputs.positions = graph.input_i32(tokens);
+    inputs.mask = graph.input_f32(tokens, tokens);
+    ggml_tensor * attention_mask = model.fused_attention() ? ggml_cast(graph.ctx(), inputs.mask, GGML_TYPE_F16)
+                                                           : inputs.mask;
+    cur = builder.blocks(cur, tokens, inputs.positions, attention_mask);
+    inputs.output = builder.rms_norm(cur, model.tensor("text.output_norm.weight"));
+    ggml_set_output(inputs.output);
+    ggml_build_forward_expand(graph.graph(), inputs.output);
+    return inputs;
+}
 
-    return {input_ids, positions, mask, cur};
+void set_token_inputs(SfxModel & model, const TextInputs & inputs, const std::vector<int32_t> & ids) {
+    if (inputs.rows) {
+        const std::vector<float> rows = model.token_rows(ids);
+        ggml_backend_tensor_set(inputs.rows, rows.data(), 0, rows.size() * sizeof(float));
+        return;
+    }
+    ggml_backend_tensor_set(inputs.ids, ids.data(), 0, ids.size() * sizeof(int32_t));
 }
 
 } // namespace
@@ -206,7 +225,7 @@ std::vector<float> encode_text(SfxModel & model, const std::vector<int32_t> & id
     model.allocate(graph);
     const std::vector<int32_t> position_data = token_positions(ids.size());
     const std::vector<float> mask_data = causal_mask(ids.size());
-    ggml_backend_tensor_set(inputs.ids, ids.data(), 0, ids.size() * sizeof(int32_t));
+    set_token_inputs(model, inputs, ids);
     ggml_backend_tensor_set(inputs.positions, position_data.data(), 0, position_data.size() * sizeof(int32_t));
     ggml_backend_tensor_set(inputs.mask, mask_data.data(), 0, mask_data.size() * sizeof(float));
     model.compute(graph);

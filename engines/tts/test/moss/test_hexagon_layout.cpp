@@ -4,6 +4,7 @@
 #include "../../../test/moss_precision.h"
 
 #include "moss/delay_lm.h"
+#include "moss/gguf_rows.h"
 #include "moss/sfx_networks.h"
 #include "moss/speech_codec.h"
 #include "moss/speech_lm.h"
@@ -42,6 +43,12 @@ constexpr float SFX_TIMESTEPS[] = {1000.0f, 937.5f, 0.0f};
 constexpr float SFX_LATENT_AMPLITUDE = 0.2f;
 constexpr float SFX_LATENT_FREQUENCY = 0.31f;
 const std::vector<int32_t> SFX_PROMPT = {1, 8, 9, 2};
+constexpr const char * ROWS_TABLE = "rows.weight";
+constexpr int64_t ROWS_WIDTH = 64;
+constexpr int64_t ROWS_COUNT = 4;
+const std::vector<int32_t> ROWS_IDS = {3, 0, 2, 3};
+constexpr int32_t ROWS_MISSING_ID = 4;
+constexpr const char * ROWS_OWNER = "test-rows";
 constexpr int SPEECH_CONTEXT = 64;
 constexpr double SPEECH_FUSED_RELATIVE_TOLERANCE = 5e-3;
 constexpr int SPEECH_STEPS = 4;
@@ -283,10 +290,100 @@ void test_sfx_measured_table() {
     const tts_cpp::FitResult on_host = host.measure_weights();
     check(on_device.device.weights_bytes >= on_host.device.weights_bytes + table,
           "a host token table leaves the device weights");
-    check(on_host.host_bytes >= on_device.host_bytes + table, "a host token table is priced in host memory");
     check(measure_text(host, SFX_PROMPT).device_bytes > 0, "the text graph measures with a host token table");
     SfxDitSession dit(host, SFX_FRAMES, true);
     check(dit.measure().device_bytes > 0, "the fused DiT graph measures");
+}
+
+struct RowsFile {
+    Fixture file;
+    gguf_context * gguf = nullptr;
+    ggml_context * data = nullptr;
+    ~RowsFile() {
+        if (data) ggml_free(data);
+        if (gguf) gguf_free(gguf);
+    }
+    ggml_tensor * table() const { return ggml_get_tensor(data, ROWS_TABLE); }
+};
+
+void write_rows_table(const std::filesystem::path & path, ggml_type type) {
+    std::mt19937 rng(FIXTURE_SEED);
+    GgufBuilder b;
+    b.random = &rng;
+    b.add2(ROWS_TABLE, ROWS_WIDTH, ROWS_COUNT);
+    b.write(path);
+    moss_fixture_precision(path, type);
+}
+
+void open_rows_table(RowsFile & rows, ggml_type type) {
+    write_rows_table(rows.file.path, type);
+    rows.gguf = gguf_init_from_file(rows.file.str().c_str(), {false, &rows.data});
+    if (!rows.gguf || !rows.data) throw std::runtime_error("cannot read the rows fixture");
+}
+
+std::vector<float> dequantized_rows(const ggml_tensor * table, const std::vector<int32_t> & ids) {
+    std::vector<float> rows(ids.size() * (size_t) table->ne[0]);
+    for (size_t i = 0; i < ids.size(); ++i) {
+        const auto * row = (const char *) table->data + (size_t) ids[i] * table->nb[1];
+        float * out = rows.data() + i * (size_t) table->ne[0];
+        if (table->type == GGML_TYPE_F32) {
+            std::copy((const float *) row, (const float *) row + table->ne[0], out);
+        } else {
+            ggml_get_type_traits(table->type)->to_float(row, out, table->ne[0]);
+        }
+    }
+    return rows;
+}
+
+template <typename Read>
+void expect_rows_failure(Read read, const std::string & needle, const std::string & label) {
+    try {
+        read();
+        check(false, label + ": accepted");
+    } catch (const std::runtime_error & e) {
+        check(std::string(e.what()).find(needle) != std::string::npos, label + ": wrong failure: " + e.what());
+    }
+}
+
+bool truncate_file(const std::filesystem::path & path, uintmax_t size) {
+    std::error_code error;
+    std::filesystem::resize_file(path, size, error);
+    return !error;
+}
+
+uint64_t rows_offset(const RowsFile & rows) {
+    return gguf_get_data_offset(rows.gguf) + gguf_get_tensor_offset(rows.gguf, gguf_find_tensor(rows.gguf, ROWS_TABLE));
+}
+
+void test_gguf_rows(ggml_type type) {
+    const std::string tier = std::string("rows ") + ggml_type_name(type);
+    RowsFile rows{Fixture{temp_gguf("gguf-rows")}};
+    open_rows_table(rows, type);
+    check(rows.table()->type == type, tier + ": fixture keeps the requested type");
+    GgufRows reader(rows.file.str(), rows.gguf, rows.table(), ROWS_OWNER);
+    check(reader.gather(ROWS_IDS) == dequantized_rows(rows.table(), ROWS_IDS),
+          tier + ": rows read from the file match ggml's dequantization");
+    expect_rows_failure([&] { reader.gather({ROWS_MISSING_ID}); }, "outside the table", tier + ": row past the table");
+    if (!truncate_file(rows.file.path, rows_offset(rows))) {
+        std::printf("%s: skipped truncation (the file cannot be resized while open)\n", tier.c_str());
+        return;
+    }
+    expect_rows_failure([&] { reader.gather(ROWS_IDS); }, "changed while loaded", tier + ": truncated while loaded");
+    expect_rows_failure([&] { GgufRows reopened(rows.file.str(), rows.gguf, rows.table(), ROWS_OWNER); },
+                        "past the end", tier + ": truncated before loading");
+}
+
+void test_sfx_survives_truncation() {
+    Fixture file{random_sfx("sfx-truncated", GGML_TYPE_F16)};
+    SfxModel model(file.str(), {}, THREADS, false, {TablePlacement::Host, AttentionLayout::Unfused});
+    const std::vector<float> context = encode_text(model, SFX_PROMPT);
+    check(!context.empty(), "a host token table encodes before the file changes");
+    if (!truncate_file(file.path, 0)) {
+        std::printf("sfx: skipped truncation (the file cannot be resized while open)\n");
+        return;
+    }
+    expect_rows_failure([&] { encode_text(model, SFX_PROMPT); }, "changed while loaded",
+                        "a truncated model file fails the request instead of the process");
 }
 
 void test_sfx_cpu_layout() {
@@ -408,6 +505,10 @@ int main() {
         test_cpu_keeps_tables_on_device();
         test_sfx_cpu_layout();
         test_sfx_measured_table();
+        test_sfx_survives_truncation();
+        for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0}) {
+            test_gguf_rows(type);
+        }
         test_speech_cpu_layout();
         test_speech_decoder_placement();
         for (ggml_type precision : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0}) {

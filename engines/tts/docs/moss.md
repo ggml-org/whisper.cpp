@@ -782,10 +782,11 @@ Galaxy S25, Snapdragon 8 Elite, Hexagon v79) when requested explicitly:
 `SoundEffectOptions::backend = "hexagon"` or `moss-cli --mode sfx --backend
 hexagon`. As for MOSS-TTS there is no fallback: construction fails when HTP0
 is missing, and `--gpu` never selects it. The text encoder, the DiT and the
-VAE decoder all run on the NPU. Only the 151,936-row token table stays on the
-host, mapped from the GGUF (read into memory when the file cannot be mapped
-or the table is not 32-byte aligned), and the host gathers the prompt's rows
-from it. The loader takes `f32`, `f16`,
+VAE decoder all run on the NPU. Only the 151,936-row token table stays out of
+it: the table is never loaded, and each request reads its prompt's rows (at
+most 512) from the GGUF, so it takes no memory, and a model file truncated
+while the engine is loaded fails that request with an error instead of
+crashing the process. The loader takes `f32`, `f16`,
 `bf16` and `q8_0` linear weights; HTP runs all of them but `bf16`, which is
 refused at load, so both validated GGUFs run.
 
@@ -856,11 +857,12 @@ the test expects. `test-moss-sfx` also covers the sidecar routing without
 Core ML: the fixed VAE window plan, sidecar and fallback decodes, retiring a
 failed DiT or VAE sidecar, strict mode, the default compute units, and the
 per-request backend report. `test-moss-hexagon-layout` forces the Hexagon
-layout onto the CPU at f32, f16 and q8_0: the host token table gives the same
-text context as the device table, and fused attention in the text encoder and
-in the DiT's self- and cross-attention matches the unfused graphs; it also
-checks that a host table leaves the device weights and is priced as host
-memory. On a phone, `test-moss-hexagon` runs the text encoder, the DiT and the
+layout onto the CPU at f32, f16 and q8_0: token rows read from the file give
+the same text context as the device table, and fused attention in the text
+encoder and in the DiT's self- and cross-attention matches the unfused graphs;
+it also checks that the table leaves the device weights, that rows read at
+f32, f16 and q8_0 match ggml's dequantization, and that a file truncated under
+a loaded model fails the request with an error. On a phone, `test-moss-hexagon` runs the text encoder, the DiT and the
 VAE on HTP0 against the CPU at f32, f16 and q8_0, checks that bf16 weights are
 refused, and projects the fit against host memory.
 `test-moss-sfx-coreml-exporter` (Python; skips without numpy or torch) checks

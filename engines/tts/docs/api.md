@@ -218,5 +218,5 @@ and output storage. The shared graph allocator is priced at its peak across phas
 VAE demand. Their sum is the device compute peak. Host bytes include CPU fallback
 arenas, graph/scheduler descriptors, tokenizer storage, conditioning, diffusion
 vectors and decoded audio. The margin is explicit in the native API. With
-`options.backend = "hexagon"` the projection reads the host's memory, and the token
-table that stays on the host counts as host bytes.
+`options.backend = "hexagon"` the projection reads the host's memory; the token
+table stays in the file, so only the prompt's rows count as host bytes.
