@@ -41,6 +41,7 @@ public:
     ggml_tensor * input_f32(int64_t ne0, int64_t ne1);
     ggml_tensor * input_f16(int64_t ne0, int64_t ne1);
     ggml_tensor * input_i32(int64_t ne0);
+    ggml_tensor * input_i64(int64_t ne0);
 
 private:
     ggml_context * ctx_ = nullptr;

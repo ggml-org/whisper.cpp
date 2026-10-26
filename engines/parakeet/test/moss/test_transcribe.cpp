@@ -54,6 +54,7 @@ constexpr int SPLIT_HEAD_CHUNKS = 3;
 constexpr int SPLIT_TAIL_ROWS = TEXT_VOCAB - 2 * SPLIT_HEAD_ROWS;
 constexpr int DECODE_STEPS = 5;
 constexpr double FUSED_RELATIVE_TOLERANCE = 1e-2;
+constexpr double STEP_GRAPH_RELATIVE_TOLERANCE = 1e-3;
 constexpr int CACHE_WIDTH = 4;
 constexpr int CACHE_POSITIONS = 8;
 constexpr int COPY_TOKENS = 3;
@@ -62,6 +63,13 @@ constexpr float UNTOUCHED = -1.0f;
 constexpr int COPY_GRAPH_NODES = 16;
 constexpr int MASK_POSITION = 3;
 constexpr int MASK_TOKENS = 4;
+constexpr int WINDOW_COLUMNS = 8;
+constexpr int WINDOW_STEPS = 140;
+constexpr int WINDOW_PREFILL_BATCH = 3;
+constexpr int ALPHABET = 26;
+constexpr int LONG_PROMPT_CHUNKS = 9;
+constexpr int GROUPED_HEADS = 4;
+constexpr int GROUPED_KV_HEADS = 2;
 const char * const COMMA_DECIMAL_LOCALES[] = {"de_DE.UTF-8", "de_DE.utf8", "fr_FR.UTF-8", "fr_FR.utf8", "de_DE",
                                               "fr_FR", "German_Germany.1252"};
 
@@ -1040,6 +1048,149 @@ void test_mask_projection() {
     std::filesystem::remove(path);
 }
 
+bool window_opens_filled_positions(const std::vector<float> & values, int position) {
+    for (size_t key = 0; key < values.size(); ++key) {
+        const bool visible = (int) key <= position;
+        if (visible ? values[key] != 0.0f : !(std::isinf(values[key]) && values[key] < 0.0f)) return false;
+    }
+    return true;
+}
+
+std::vector<float> mask_row(const std::vector<float> & values, int query) {
+    const auto first = values.begin() + (std::ptrdiff_t) query * WINDOW_COLUMNS;
+    return std::vector<float>(first, first + WINDOW_COLUMNS);
+}
+
+bool window_rows_open_their_prefix(const std::vector<float> & values) {
+    for (int query = 0; query < MASK_TOKENS; ++query) {
+        if (!window_opens_filled_positions(mask_row(values, query), MASK_POSITION + query)) return false;
+    }
+    return true;
+}
+
+void test_window_mask() {
+    const auto path = write_transcribe_model("transcribe-window-mask", WEIGHT_SEED);
+    TranscribeModel model(path.string(), false, 1);
+    const std::vector<float> values =
+        mask_values(build_window_mask(model, MASK_POSITION, MASK_TOKENS, WINDOW_COLUMNS), GGML_TYPE_F32);
+    check(values.size() == (size_t) WINDOW_COLUMNS * MASK_TOKENS && window_rows_open_their_prefix(values),
+          "each query of a window mask sees its filled prefix and nothing past it");
+    std::filesystem::remove(path);
+}
+
+int32_t window_token(int step) {
+    return byte_token((unsigned char) ('a' + step % ALPHABET));
+}
+
+std::vector<float> window_steps(TranscribeDecoder & decoder) {
+    std::vector<float> logits;
+    for (int step = 0; step < WINDOW_STEPS; ++step) {
+        const std::vector<float> next = decoder.step(window_token(step));
+        logits.insert(logits.end(), next.begin(), next.end());
+    }
+    return logits;
+}
+
+std::vector<float> window_prefill(TranscribeDecoder & decoder) {
+    return decoder.prefill(tiny_prompt(CHUNK_TOKENS), random_signal((size_t) CHUNK_TOKENS * TEXT_EMBD, AUDIO_SEED),
+                           WINDOW_PREFILL_BATCH);
+}
+
+int window_context() {
+    return (int) tiny_prompt(CHUNK_TOKENS).size() + WINDOW_STEPS;
+}
+
+std::vector<float> windowed_logits(TranscribeModel & model) {
+    TranscribeDecoder decoder(model, window_context());
+    std::vector<float> logits = window_prefill(decoder);
+    const std::vector<float> steps = window_steps(decoder);
+    logits.insert(logits.end(), steps.begin(), steps.end());
+    return logits;
+}
+
+std::vector<float> alternating_steps(TranscribeDecoder & first, TranscribeDecoder & second, int from) {
+    std::vector<float> logits;
+    for (int step = from; step < WINDOW_STEPS; ++step) {
+        const std::vector<float> next = first.step(window_token(step));
+        logits.insert(logits.end(), next.begin(), next.end());
+        second.step(window_token(step));
+    }
+    return logits;
+}
+
+std::vector<int32_t> long_prompt() {
+    return tiny_prompt(CHUNK_TOKENS * LONG_PROMPT_CHUNKS);
+}
+
+void long_prefill(TranscribeDecoder & decoder) {
+    const std::vector<int32_t> prompt = long_prompt();
+    decoder.prefill(prompt, random_signal((size_t) CHUNK_TOKENS * LONG_PROMPT_CHUNKS * TEXT_EMBD, AUDIO_SEED),
+                    (int) prompt.size());
+}
+
+std::vector<float> interleaved_logits(TranscribeModel & model) {
+    TranscribeDecoder first(model, window_context());
+    TranscribeDecoder second(model, (int) long_prompt().size() + WINDOW_STEPS);
+    std::vector<float> logits = window_prefill(first);
+    const std::vector<float> opening = first.step(window_token(0));
+    logits.insert(logits.end(), opening.begin(), opening.end());
+    long_prefill(second);
+    const std::vector<float> steps = alternating_steps(first, second, 1);
+    logits.insert(logits.end(), steps.begin(), steps.end());
+    return logits;
+}
+
+std::vector<int> greedy_tokens(const std::vector<float> & logits) {
+    std::vector<int> tokens;
+    for (size_t first = 0; first < logits.size(); first += TEXT_VOCAB) {
+        const auto row = logits.begin() + (std::ptrdiff_t) first;
+        tokens.push_back((int) std::distance(row, std::max_element(row, row + TEXT_VOCAB)));
+    }
+    return tokens;
+}
+
+void check_step_graph_reuse(const std::filesystem::path & path, TranscribeAttention attention,
+                            const std::string & layout) {
+    TranscribeModel rebuilt(path.string(), false, 1, "auto", false,
+                            TranscribeLayout{0, attention, TranscribeStepGraph::Rebuilt});
+    TranscribeModel reused(path.string(), false, 1, "auto", false,
+                           TranscribeLayout{0, attention, TranscribeStepGraph::Reused});
+    check(!rebuilt.reuses_step_graph() && reused.reuses_step_graph(), layout + ": the step graph follows the override");
+    const std::vector<float> reference = windowed_logits(rebuilt);
+    const std::vector<float> windowed = windowed_logits(reused);
+    check(relative_l2(reference, windowed) < STEP_GRAPH_RELATIVE_TOLERANCE,
+          layout + ": one step graph per window matches a graph per step across window boundaries");
+    check(greedy_tokens(windowed) == greedy_tokens(reference), layout + ": a reused step graph picks the same tokens");
+    check(max_abs_diff(interleaved_logits(reused), windowed) == 0.0f,
+          layout + ": decoders at different windows taking turns on one model rebuild their step graphs");
+}
+
+std::filesystem::path write_grouped_model() {
+    const int64_t q_dim = (int64_t) GROUPED_HEADS * TEXT_HEAD_DIM;
+    const int64_t kv_dim = (int64_t) GROUPED_KV_HEADS * TEXT_HEAD_DIM;
+    const auto heads = [](gguf_context * f) {
+        gguf_set_val_u32(f, "moss-transcribe.text.attention.head_count", GROUPED_HEADS);
+        gguf_set_val_u32(f, "moss-transcribe.text.attention.head_count_kv", GROUPED_KV_HEADS);
+    };
+    return write_transcribe_model("transcribe-grouped-step", WEIGHT_SEED, heads,
+        TensorShapes{{"text.blk.0.attn_q.weight", {TEXT_EMBD, q_dim}},
+                     {"text.blk.0.attn_k.weight", {TEXT_EMBD, kv_dim}},
+                     {"text.blk.0.attn_v.weight", {TEXT_EMBD, kv_dim}},
+                     {"text.blk.0.attn_output.weight", {q_dim, TEXT_EMBD}}});
+}
+
+void test_step_graph_reuse() {
+    const auto path = write_transcribe_model("transcribe-step-graph", WEIGHT_SEED);
+    TranscribeModel cpu(path.string(), false, 1);
+    check(!cpu.reuses_step_graph(), "the CPU builds a graph per decode step by default");
+    check_step_graph_reuse(path, TranscribeAttention::Unfused, "unfused");
+    check_step_graph_reuse(path, TranscribeAttention::Fused, "fused");
+    std::filesystem::remove(path);
+    const auto grouped = write_grouped_model();
+    check_step_graph_reuse(grouped, TranscribeAttention::Unfused, "two KV heads");
+    std::filesystem::remove(grouped);
+}
+
 void test_upload_plan() {
     check(plan_upload(true, true) == TensorUpload::InPlace && plan_upload(true, false) == TensorUpload::InPlace,
           "host buffers read tensors in place without a staging copy");
@@ -1084,6 +1235,8 @@ int main() {
         test_split_token_table();
         test_fused_attention();
         test_mask_projection();
+        test_window_mask();
+        test_step_graph_reuse();
         test_coreml_frame_major_mel();
         test_coreml_policy();
         test_coreml_sidecar_lookup();

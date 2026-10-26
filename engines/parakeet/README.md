@@ -7,17 +7,19 @@ RNN-T, TDT, EOU, Nemotron, or Sortformer GGUFs and selects the implementation
 from GGUF metadata. MOSS-Transcribe-Diarize, a Qwen3-based model that
 transcribes and labels speakers in one pass (with optional per-request
 hotwords), ships alongside with its own `parakeet::moss::TranscribeEngine`
-and `moss-transcribe` CLI. `--backend cuda|vulkan` (or
-`TranscribeOptions::backend = "cuda"` / `"vulkan"`) explicitly selects a GPU backend; the
-request fails if unavailable. Generated-model CPU/CUDA/Vulkan parity and
-F16/Q5/Q8 full-checkpoint smoke cases cover this path. Its `parakeet::moss::fit_params` preflight measures
+and `moss-transcribe` CLI. `--backend cuda|vulkan|metal` (or
+`TranscribeOptions::backend = "cuda"` / `"vulkan"` / `"metal"`) explicitly selects a GPU backend; the
+request fails if unavailable. Generated-model CPU/CUDA/Vulkan/Metal parity and
+F16/Q5/Q8 full-checkpoint smoke cases cover this path. On Metal the decoder reuses one
+graph per cache window, which makes decoding 29-42% faster on an M3 Ultra with identical
+transcripts ([Metal decoding](docs/moss-transcribe.md#metal-decoding)). Its `parakeet::moss::fit_params` preflight measures
 weights, encoder/decoder graphs, KV cache and host memory, including scheduler storage
 and CPU scratch for the configured threads, using GGUF metadata only; see
 [docs/moss-transcribe.md](docs/moss-transcribe.md).
 
 The MOSS CPU audio encoder uses fused attention to avoid materializing full
-attention score matrices. Decoder attention and GPU backend layouts retain
-their existing behavior.
+attention score matrices. The GPU encoder layouts are unchanged; the decoder
+changes only its Metal single-token graph (see above).
 
 ## Supported checkpoints
 
@@ -36,7 +38,7 @@ their existing behavior.
 | `nvidia/diar_streaming_sortformer_4spk-v2` | Sortformer | 128 | 512 × 17 | n/a | 117 M | 251 MiB f16 / 134 MiB q8_0 / 72 MiB q4_0 | similar to v1 offline | Streaming-trained; sliding-history streaming |
 | `nvidia/diar_streaming_sortformer_4spk-v2.1` | Sortformer + AOSC | 128 | 512 × 17 | n/a | 117 M | 251 MiB f16 / 134 MiB q8_0 / 72 MiB q4_0 | similar to v1 offline | Audio-Online Speaker Cache preserves slots across long gaps; optional Core ML whole-network diarizer, plus the older exact-shape batch/AOSC encoder sidecars |
 | `nvidia/Nemotron-3-Diarization` | Nemotron diarization + AOSC | 128 | 512 × 31 RoPE | n/a | — | 107 MB q8_0 GGUF | 0.0002 q8_0 CUDA / 0.0002 q8_0 Vulkan / 0.0006 q8_0 Metal / 0.0065 q8_0 OpenCL (Adreno 830) / 0.0005 Core ML (Apple M4) | Eight speakers, 10 ms probabilities, native offline and cached streaming; optional Core ML whole-network diarizer |
-| `OpenMOSS-Team/MOSS-Transcribe-Diarize` | Whisper-shaped encoder + Qwen3 decoder (text, speakers, timestamps) | 80 | 1024 × 24 encoder, 1024 × 28 decoder | 151936 | 0.9 B | 1.8 GB f16 / 0.98 GB q8_0 / 0.64 GB q5_0 | 0.05–0.39 f16 Metal (2 to 30 min) / 0.13–0.20 q8_0 Hexagon / 0.26–0.36 q8_0 OpenCL (Galaxy S25, 27 s to 3 min) | Multilingual checkpoint, validated on Spanish and Chinese; English long-form skips spans, as in the reference model; per-request hotwords; separate `moss-transcribe` API and CLI; optional Core ML audio encoder; Hexagon NPU and Adreno OpenCL with q8_0 or f16 |
+| `OpenMOSS-Team/MOSS-Transcribe-Diarize` | Whisper-shaped encoder + Qwen3 decoder (text, speakers, timestamps) | 80 | 1024 × 24 encoder, 1024 × 28 decoder | 151936 | 0.9 B | 1.8 GB f16 / 0.98 GB q8_0 / 0.64 GB q5_0 | 0.05–0.39 f16 Metal (2 to 30 min, before the Metal decode graph) / 0.13–0.20 q8_0 Hexagon / 0.26–0.36 q8_0 OpenCL (Galaxy S25, 27 s to 3 min) | Multilingual checkpoint, validated on Spanish and Chinese; English long-form skips spans, as in the reference model; per-request hotwords; separate `moss-transcribe` API and CLI; optional Core ML audio encoder; Hexagon NPU and Adreno OpenCL with q8_0 or f16 |
 
 TDT 0.6B-v3 is multilingual with punctuation/capitalization; TDT 1.1B is
 English-only without those features. TranscribePsy is a 254M FastConformer-TDT
@@ -115,7 +117,7 @@ machines; see [the diarizer guide](docs/backends.md#core-ml-diarizer-sidecars).
 ## Backend selection
 
 `parakeet --backend NAME` and `EngineOptions::backend` select the runtime device
-(`auto`, `cpu`, `cuda`, `vulkan`, `opencl`, `webgpu`, `hexagon` or an exact ggml device name);
+(`auto`, `cpu`, `cuda`, `vulkan`, `opencl`, `webgpu`, `metal`, `hexagon` or an exact ggml device name);
 `parakeet-fit-params --backend NAME` and `FitOptions::backend` project memory for
 the same device. Explicit requests fail if unavailable. Hexagon is experimental and requires
 a staged DSP library; see [docs/backends.md](docs/backends.md) for names,

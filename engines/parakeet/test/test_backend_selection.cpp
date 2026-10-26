@@ -120,6 +120,10 @@ void test_explicit_selection() {
     CHECK(!backend_selection_matches("webgpu", "Vulkan", "Vulkan0", GGML_BACKEND_DEVICE_TYPE_GPU));
     CHECK(!backend_selection_matches("vulkan", "WebGPU", "WebGPU", GGML_BACKEND_DEVICE_TYPE_GPU));
     CHECK(backend_selection_matches("WebGPU", "WebGPU", "WebGPU", GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(backend_selection_matches("metal", "MTL", "MTL0", GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(backend_selection_matches("metal", "Metal", "Metal", GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(!backend_selection_matches("metal", "Vulkan", "Vulkan0", GGML_BACKEND_DEVICE_TYPE_GPU));
+    CHECK(backend_selection_matches("MTL0", "MTL", "MTL0", GGML_BACKEND_DEVICE_TYPE_GPU));
     CHECK(backend_selection_matches("cuda", "CUDA", "CUDA1", GGML_BACKEND_DEVICE_TYPE_IGPU));
     CHECK(!backend_selection_matches("cuda", "Vulkan", "Vulkan0", GGML_BACKEND_DEVICE_TYPE_GPU));
     CHECK(backend_selection_matches("CUDA1", "CUDA", "CUDA1", GGML_BACKEND_DEVICE_TYPE_GPU));

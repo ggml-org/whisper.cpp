@@ -41,7 +41,7 @@ void print_usage(const char * argv0) {
         "  --n-gpu-layers N        request the GPU backend when > 0 (default 0 = CPU),\n"
         "                          with the same runtime fallbacks a real load applies\n"
         "  --threads N             CPU thread count used for backend resolution\n"
-        "  --backend NAME          auto|cpu|cuda|vulkan|opencl|webgpu|hexagon or an exact\n"
+        "  --backend NAME          auto|cpu|cuda|vulkan|opencl|webgpu|metal|hexagon or an exact\n"
         "                          ggml device name\n"
         "                          (default auto follows --n-gpu-layers; an unavailable\n"
         "                          backend is an error, as in a real load)\n"

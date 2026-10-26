@@ -14,6 +14,11 @@ using namespace parakeet::moss::detail;
 
 namespace {
 MossGpuArm arm;
+constexpr int WINDOW_STEPS = 70;
+constexpr int WINDOW_PREFILL_BATCH = 3;
+constexpr int ALPHABET = 26;
+constexpr char FIRST_LETTER = 'a';
+constexpr int DECODER_CONTEXT = 512;
 
 void require(bool ok, const std::string & message) {
     if (!ok) throw std::runtime_error(message);
@@ -35,6 +40,21 @@ void compare(const char * stage, const std::vector<float> & cpu, const std::vect
     require(worst < 2e-4f || relative < 0.01, std::string(stage) + ": CPU/" + arm.prefix + " mismatch");
 }
 
+void compare_window_steps(TranscribeDecoder & dc, TranscribeDecoder & dg) {
+    for (int i = 0; i < WINDOW_STEPS; ++i) {
+        const int32_t token = byte_token((unsigned char) (FIRST_LETTER + i % ALPHABET));
+        compare("ASR windowed decode", dc.step(token), dg.step(token));
+    }
+}
+
+void compare_windowed_decode(TranscribeModel & cpu, TranscribeModel & gpu, const std::vector<int32_t> & ids,
+                             const std::vector<float> & embeddings) {
+    TranscribeDecoder dc(cpu, DECODER_CONTEXT), dg(gpu, DECODER_CONTEXT);
+    compare("ASR prefill", dc.prefill(ids, embeddings, WINDOW_PREFILL_BATCH),
+            dg.prefill(ids, embeddings, WINDOW_PREFILL_BATCH));
+    compare_window_steps(dc, dg);
+}
+
 void test(const std::string & path) {
     // The explicit backend must win even when use_gpu is false or another GPU
     // backend is registered first. A missing backend is a failure, not a skip.
@@ -53,10 +73,11 @@ void test(const std::string & path) {
     ids.push_back(TOKEN_AUDIO_END);
     ids.push_back(byte_token('b'));
     for (int batch : {1, 3, (int) ids.size()}) {
-        TranscribeDecoder dc(cpu, 512), dg(gpu, 512);
+        TranscribeDecoder dc(cpu, DECODER_CONTEXT), dg(gpu, DECODER_CONTEXT);
         compare("ASR prefill", dc.prefill(ids, c.embeddings, batch), dg.prefill(ids, c.embeddings, batch));
         for (int i = 0; i < 5; ++i) compare("ASR decode", dc.step(byte_token('a')), dg.step(byte_token('a')));
     }
+    compare_windowed_decode(cpu, gpu, ids, c.embeddings);
     bool rejected = false;
     try { TranscribeModel unavailable(path, true, 2, "missing-backend"); }
     catch (const std::runtime_error &) { rejected = true; }
@@ -84,7 +105,7 @@ void test(const std::string & path) {
 
 int main(int argc, char ** argv) {
     if (argc != 2) {
-        std::fprintf(stderr, "usage: %s cuda|vulkan|hexagon|opencl|webgpu\n", argv[0]);
+        std::fprintf(stderr, "usage: %s cuda|vulkan|hexagon|opencl|webgpu|metal\n", argv[0]);
         return 2;
     }
     std::filesystem::path path;

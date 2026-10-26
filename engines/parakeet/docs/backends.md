@@ -12,7 +12,7 @@ the whole encoder, not a partial layer count.
 
 Set `EngineOptions::backend` or CLI `--backend` to select a primary GGML backend
 explicitly. `auto` (the default) preserves the policy below; `cpu`, `cuda`,
-`vulkan`, `opencl`, `webgpu` and `hexagon` override `n_gpu_layers`. `hexagon`
+`vulkan`, `opencl`, `webgpu`, `metal` and `hexagon` override `n_gpu_layers`. `hexagon`
 selects the `HTP0` device from the `HTP` registry. An exact GGML device name
 such as `HTP0` is also accepted.
 An unavailable or failed explicit selection fails loading instead of selecting

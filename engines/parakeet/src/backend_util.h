@@ -42,6 +42,7 @@ inline bool backend_selection_matches(const std::string & requested,
     if (requested == "vulkan") return reg && std::strcmp(reg, "Vulkan") == 0;
     if (requested == "cuda") return reg && std::strcmp(reg, "CUDA") == 0;
     if (requested == "webgpu") return reg && std::strcmp(reg, "WebGPU") == 0;
+    if (requested == "metal") return reg && (std::strcmp(reg, "MTL") == 0 || std::strcmp(reg, "Metal") == 0);
     if (requested == "hexagon") {
         return reg && std::strcmp(reg, "HTP") == 0 && device && std::strcmp(device, "HTP0") == 0;
     }

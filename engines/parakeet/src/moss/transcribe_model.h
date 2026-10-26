@@ -82,14 +82,18 @@ struct TranscribeHeadChunk {
 std::vector<TranscribeHeadChunk> plan_transcribe_head(int vocab, int max_rows);
 
 enum class TranscribeAttention { Auto, Unfused, Fused };
+enum class TranscribeStepGraph { Auto, Rebuilt, Reused };
 
 // Overrides of the per-backend graph layout, so tests can compare layouts on
 // one backend. head_rows > 0 splits the tied token table into head chunks of
 // at most that many rows and looks embeddings up on the host, as on a backend
 // that cannot gather rows from the table or project the whole vocabulary.
+// step_graph Reused selects Metal's single-token graph: one graph per masked
+// cache window, grouped query heads, and no F16 overflow guard in the FFN.
 struct TranscribeLayout {
     int head_rows = 0;
     TranscribeAttention attention = TranscribeAttention::Auto;
+    TranscribeStepGraph step_graph = TranscribeStepGraph::Auto;
 };
 
 class TranscribeModel {
@@ -109,6 +113,7 @@ public:
     bool embeds_on_host() const;
     bool fused_attention() const;
     bool fused_encoder_attention() const;
+    bool reuses_step_graph() const;
     const std::vector<TranscribeHeadChunk> & head() const;
     std::vector<float> embed_tokens(const std::vector<int32_t> & ids) const;
     std::vector<std::string> tokenizer_tokens() const;
@@ -121,6 +126,7 @@ public:
     TranscribeMemory measure(TranscribeGraph & graph);
     bool measure_only() const;
     void allocate(TranscribeGraph & graph);
+    bool allocated(const TranscribeGraph & graph) const;
     void compute(TranscribeGraph & graph);
 
 private:

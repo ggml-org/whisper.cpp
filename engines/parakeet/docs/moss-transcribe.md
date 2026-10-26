@@ -2,8 +2,8 @@
 
 Part of the [parakeet engine documentation](../README.md).
 
-CUDA, Vulkan, OpenCL or the Snapdragon Hexagon NPU can be selected explicitly
-with `--backend cuda`, `--backend vulkan`, `--backend opencl` or
+CUDA, Vulkan, OpenCL, Metal or the Snapdragon Hexagon NPU can be selected explicitly
+with `--backend cuda`, `--backend vulkan`, `--backend opencl`, `--backend metal` or
 `--backend hexagon` (or an exact device such as `--backend CUDA0`). This overrides `--gpu` and fails when
 the requested backend is unavailable; `--backend auto` retains the existing
 `--gpu`/CPU selection. The API equivalent is `TranscribeOptions::backend`.
@@ -14,7 +14,7 @@ then run:
 
 ```sh
 build/moss-transcribe --model moss-transcribe-f16.gguf --audio speech.wav --backend cuda
-ctest --test-dir build -R '^test-moss-transcribe-(cuda|vulkan|hexagon|opencl)$' --output-on-failure
+ctest --test-dir build -R '^test-moss-transcribe-(cuda|vulkan|hexagon|opencl|metal)$' --output-on-failure
 ```
 
 Each arm registers only when ggml carries its backend. The test generates random-weight GGUFs in F32, F16 and mixed Q8_0/F16
@@ -22,7 +22,8 @@ and compares the encoder, adaptor, batched prefill and incremental decoding
 against CPU. It also checks explicit selection through the public engine and
 rejects unavailable backends. The CUDA and Vulkan arms run in the manual
 `parakeet CI` GPU lane (`run_gpu=true`) without model downloads; the Hexagon
-and OpenCL arms run on a Snapdragon device. The generated models are too small
+and OpenCL arms run on a Snapdragon device. The Metal arm registers in a Metal build
+and runs on a Mac; no CI lane runs it yet. The generated models are too small
 for the Adreno kernels described under [Adreno OpenCL](#adreno-opencl), so
 that path is covered by the reference parity test. These checks pass on Apple M2
 through MoltenVK; full-checkpoint transcript quality and discrete-GPU/mobile
@@ -116,8 +117,9 @@ prompts. One transcription runs
 at a time per instance; overlapping calls throw.
 
 CPU encoder attention uses the fused ggml operator with F32 accumulation,
-avoiding the full per-head attention score matrices. Decoder attention and
-GPU graph selection retain their existing layouts. Memory-fit measurement
+avoiding the full per-head attention score matrices. GPU encoder graph
+selection is unchanged; decoder attention differs only in Metal's single-token
+graph (see [Metal decoding](#metal-decoding)). Memory-fit measurement
 builds the same fused CPU encoder graph used for inference.
 
 Processing mirrors the reference processor. The audio is cut into
@@ -147,6 +149,58 @@ tensors stream in 8 MiB chunks and quantized tensors go up whole, because the
 OpenCL, Hexagon and CPU-repacking backends rebuild their layout from the full
 tensor. Timestamps are parsed and JSON numbers written in the C locale, so a host
 application with a comma-decimal locale gets the same segments and valid JSON.
+
+## Metal decoding
+
+A decode step is one token through 28 Qwen3 layers. It is bound by the number
+of Metal dispatches and the CPU time spent preparing them, not by weight
+bandwidth: before the changes below, f16, q8_0 and q5_0 decoded at the same
+speed. On Metal the decoder therefore builds the single-token graph
+differently from prefill and from the other backends:
+
+- **One graph per 64-position window.** The step graph writes the new key and
+  value through row-index inputs (`ggml_set_rows`) and attends over a
+  64-aligned window of the cache behind a mask, so a single built and
+  allocated graph serves every step until the window fills. Building the graph
+  and allocating it in the scheduler (including Metal's graph reordering) used
+  to take about 0.7 ms per token. Positions past the current one are masked,
+  and the cache there is still zero, so they contribute nothing.
+- **No F16 overflow guard in the feed-forward.** Prefill and the other backends
+  scale the gated product by 1/64 before the down projection and by 64 after
+  it, because their matrix kernels round activations to f16. Metal's
+  matrix-vector kernels read f32 activations, and a power-of-two scale is
+  exact there, so the single-token graph drops the two dispatches with
+  bit-identical results.
+- **Residual added inside the matrix-vector product.** The projection is the
+  first operand of the residual add, which lets Metal fuse the add into the
+  quantized (q8_0, q5_0) kernels.
+- **Grouped query heads.** The two query heads that share a KV head are
+  scored as one two-column product, which reads each cached key once and uses
+  Metal's small-batch kernel.
+- **No copies of contiguous tensors** before the cache write, nor of the
+  single-token attention output. This applies on every backend and is exact.
+
+Every greedy token stays the same. On a 65 s English clip, teacher-forced
+through the previous graph's tokens, all 368 steps pick the same token on f16,
+q8_0 and q5_0, and the logits stay within 0.0045 of the previous graph. The
+transcripts of the four clips below are identical to the previous graph's in
+all three quantizations. Flash attention was not adopted: on Metal it decoded
+no faster than the unfused graph, and it moved the logits further (0.013).
+
+Warm request times on an M3 Ultra (Metal, 8 threads, third of three requests in
+one process; clips from `test/samples`), previous graph to the current one:
+
+| Clip | Generated tokens | Decode f16 (ms) | Decode q8_0 (ms) | Decode q5_0 (ms) | Request f16 (ms) |
+|---|--:|--:|--:|--:|--:|
+| `jfk.wav`, 11 s | 70 | 471 to 334 | 436 to 288 | 438 to 290 | 666 to 530 |
+| `diarization-sample-16k.wav`, 27 s | 185 | 1289 to 900 | 1196 to 755 | 1209 to 788 | 1509 to 1119 |
+| `abcba.wav`, first 65 s | 367 | 2744 to 1863 | 2531 to 1547 | 2549 to 1652 | 3298 to 2416 |
+| `abcba.wav`, 160 s | 943 | 8245 to 5266 | 7720 to 4512 | 7768 to 4804 | 9381 to 6399 |
+
+Decode is 29 to 42% faster, and the gain grows with transcript length. The
+encoder and prefill are unchanged. The CPU and the other GPU backends still
+build a graph per step; apart from the dropped copies their graphs are the same,
+and their output is unchanged.
 
 ## Core ML encoder sidecar
 
@@ -358,7 +412,13 @@ the weight-upload plan per buffer kind, and the two Hexagon layouts on the
 CPU: a token table split into head chunks with host lookups reproduces the
 whole table's logits exactly in the F32, F16 and mixed Q8_0 fixtures, and
 fused attention matches the unfused graph in the encoder and in prefill
-batches of 1, 3 and the whole prompt. `test-converter-moss-transcribe` fabricates a tiny checkpoint
+batches of 1, 3 and the whole prompt. It also forces the Metal step graph on
+the CPU: over 140 decode steps, across two window boundaries, with both
+attention layouts and with two KV heads, one reused graph per window matches a
+graph built per step and picks the same tokens, and a decoder taking turns with
+another at a different window rebuilds its graph without changing a logit. `test-moss-transcribe-metal`
+compares the CPU and Metal stages, as the other GPU arms do, plus 70 decode
+steps that cross a window. `test-converter-moss-transcribe` fabricates a tiny checkpoint
 and checks the tensor census, the column biases, the token types, the stored
 prompt ids, the hotword metadata, and the q8_0 path (skipped without
 `numpy`, `gguf`, or `tokenizers`).

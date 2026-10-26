@@ -25,6 +25,8 @@ TranscribeMemory measure_audio_chunk(TranscribeModel & model, int tokens);
 ggml_type transcribe_mask_type(const TranscribeModel & model);
 uint64_t transcribe_mask_bytes(const TranscribeModel & model, int64_t positions, int64_t tokens);
 std::vector<uint8_t> build_causal_mask(const TranscribeModel & model, int64_t position, int64_t tokens);
+std::vector<uint8_t> build_window_mask(const TranscribeModel & model, int64_t position, int64_t tokens,
+                                       int64_t columns);
 
 TranscribeChunkEncoding encode_audio_chunk(TranscribeModel & model, const std::vector<float> & mel, int tokens,
                                            bool keep_encoder_states);

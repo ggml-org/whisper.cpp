@@ -106,6 +106,12 @@ ggml_tensor * TranscribeGraph::input_i32(int64_t ne0) {
     return tensor;
 }
 
+ggml_tensor * TranscribeGraph::input_i64(int64_t ne0) {
+    ggml_tensor * tensor = ggml_new_tensor_1d(ctx_, GGML_TYPE_I64, ne0);
+    ggml_set_input(tensor);
+    return tensor;
+}
+
 TranscribeScheduler::TranscribeScheduler(ggml_backend * backend, int max_nodes) : backend_(backend) {
     ggml_backend_t backends[2] = {backend, nullptr};
     int count = 1;

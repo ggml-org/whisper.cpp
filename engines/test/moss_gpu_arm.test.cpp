@@ -43,7 +43,8 @@ int main() {
     expect_arm("hexagon", "HTP", "HTP0");
     expect_arm("opencl", "OpenCL", "OpenCL");
     expect_arm("webgpu", "WebGPU", "WebGPU: WebGPU");
-    expect(unknown_arm_throws("metal"), "an arm nobody configured is rejected");
+    expect_arm("metal", "MTL", "MTL0");
+    expect(unknown_arm_throws("npu"), "an arm nobody configured is rejected");
     expect(unknown_arm_throws(""), "an empty arm is rejected");
     if (g_failures) {
         std::fprintf(stderr, "%d moss arm checks failed\n", g_failures);

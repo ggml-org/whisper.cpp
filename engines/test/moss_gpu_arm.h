@@ -8,7 +8,7 @@
 // CPU or on another accelerator registered alongside it.
 struct MossGpuArm {
     std::string request;  // TTS_CPP_GPU_BACKEND / TranscribeOptions::backend
-    std::string prefix;   // ggml instance name: "CUDA0", "Vulkan0", "HTP0", "OpenCL", "WebGPU: WebGPU"
+    std::string prefix;   // ggml instance name: "CUDA0", "Vulkan0", "HTP0", "OpenCL", "WebGPU: WebGPU", "MTL0"
 
     bool selected(const char * name) const {
         return name && std::string(name).rfind(prefix, 0) == 0;
@@ -27,5 +27,7 @@ inline MossGpuArm moss_gpu_arm(const std::string & request) {
     if (request == "hexagon") return {request, "HTP"};
     if (request == "opencl") return {request, "OpenCL"};
     if (request == "webgpu") return {request, "WebGPU"};
-    throw std::runtime_error("unknown accelerator arm '" + request + "' (expected cuda, vulkan, hexagon, opencl or webgpu)");
+    if (request == "metal") return {request, "MTL"};
+    throw std::runtime_error("unknown accelerator arm '" + request +
+                             "' (expected cuda, vulkan, hexagon, opencl, webgpu or metal)");
 }
