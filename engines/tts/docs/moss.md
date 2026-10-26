@@ -293,6 +293,62 @@ continuation are normalized independently from their original PCM. The
 retains its template without that field. These preprocessing matches do not
 make sampled outputs identical across runtimes or precisions.
 
+### Validated cloning
+
+For English TTSD batch cloning, `scripts/moss-validated-cloning.py` adds an
+optional transcription check and bounded retries around the existing CLIs.
+It requires Python 3.10 or later with only its standard library, `moss-cli`,
+`moss-transcribe`, and their converted model files. Run it from the repository
+root, adjusting the binary paths for your build:
+
+```bash
+python3 engines/tts/scripts/moss-validated-cloning.py \
+    --moss-cli build/engines/tts/moss-cli \
+    --asr-cli build/engines/parakeet/moss-transcribe \
+    --backbone moss-ttsd-f16.gguf \
+    --encoder moss-codec-encoder-f16.gguf \
+    --decoder moss-codec-decoder-f16.gguf \
+    --asr-model moss-transcribe-q8.gguf \
+    --reference s1.wav "Exact transcript of speaker one's reference." \
+    --reference s2.wav "Exact transcript of speaker two's reference." \
+    --text-file dialogue.txt --output validated.wav \
+    --gpu --seed 5 --attempts 3
+```
+
+`dialogue.txt` contains only the requested new dialogue, with `[S1]`/`[S2]`
+tags. The runner prepends the reference transcripts itself and uses the TTSD
+sampling settings above. References must be mono 24 kHz WAVs. `--gpu` selects
+CUDA device 0 for both processes; omitting it uses CPU. The synthesis process
+exits before ASR starts, so their model allocations do not overlap.
+
+Each attempt uses the initial seed plus its zero-based attempt index. An output
+that reaches `--max-new-tokens` (default 1024) is rejected before ASR. Otherwise,
+the runner resamples the audio to 16 kHz and rejects ASR results reaching its
+1024-token limit before scoring. Missing or invalid ASR token counts stop the
+run as a tool error. It checks complete transcripts against the
+requested text and its final turn. Both error rates must be at most
+`--max-error-rate` (default 0.25). Empty transcripts and silent audio fail the
+check. Reference transcripts of at least eight words are also checked for
+unexpected recurrence at that error threshold, unless the requested text itself
+contains the phrase. Shorter references rely on the overall text check. This
+prevents a long target from masking an extra reference phrase in its overall
+error rate. The runner accepts at most ten attempts and defaults to three. Each
+subprocess has a `--timeout` in seconds, default 300.
+
+Only an accepted WAV is published to `--output`; an existing output is never
+overwritten. A sibling `*-validation-*` directory retains candidate WAVs,
+commands, transcripts, logs, and `report.json`, including rejected attempts.
+Exit codes are 0 for acceptance, 2 for exhausted quality retries, and 1 for an
+input/tool error. Tool errors, malformed ASR output, and an unrecognized
+`moss-cli` generated-frame summary stop the run instead of silently accepting
+an unchecked result.
+
+This is a batch mitigation with additional ASR and retry latency. It does not
+change the native API or model, guarantee a correct transcript, assess speaker
+identity or naturalness, or support streaming. ASR can itself make mistakes;
+retain listening checks for your intended inputs. Tiny Whisper missed complete
+speaker turns during validation, so this runner uses MOSS transcription.
+
 ### Engine notes
 
 The public API is `tts_cpp::moss::Engine` in
