@@ -124,6 +124,10 @@ struct RowBuilder {
     }
 };
 
+void PromptAudio::prepare_continuation(const std::function<std::vector<int32_t>()> & encode_joined) {
+    continuation_codes = speaker_codes.size() == 1 ? speaker_codes.front() : encode_joined();
+}
+
 std::vector<DelayRow> build_prompt_rows(const DelayConfig & config, const PromptTokens & tokens,
                                         const TextEncoder & encode, const std::string & text,
                                         const std::string & language, int duration_tokens,

@@ -26,6 +26,9 @@ CUDA and Vulkan add generated-model CPU parity and full-checkpoint smoke coverag
 MOSS Delay on Metal projects only the text-control tokens needed during audio
 generation and omits text projection during the forced drain. Embedding tables
 stay on the GPU, and the control-token head preserves the model's weight type.
+MOSS-TTSD reuses the encoded reference for dialogue continuation when only one
+recording is supplied. Multiple recordings retain the joined-audio encoding
+needed for their continuation; all prepared codes stay cached per engine.
 TTS streaming, cancellation/reuse and ASR intelligibility gates are described
 in [MOSS GPU validation](docs/moss.md#gpu-validation-cuda-and-vulkan); smoke coverage does
 not establish general speech quality. OpenCL remains untested here. See the [API matrix](docs/api.md) for

@@ -101,6 +101,35 @@ void test_dialogue_prompt_rows() {
             "the final continuation row carries delayed codes");
 }
 
+void test_reference_continuation_encoding() {
+    PromptAudio audio;
+    const std::vector<int32_t> first{1, 2, 3, 4, 5, 6};
+    const std::vector<int32_t> second{7, 8, 9};
+    const std::vector<int32_t> joint{2, 4, 6, 8, 1, 3, 5, 7, 9};
+    int encoder_calls = 0;
+    const auto encode_joined = [&] {
+        ++encoder_calls;
+        return joint;
+    };
+
+    audio.speaker_codes = {first};
+    audio.prepare_continuation(encode_joined);
+    check(encoder_calls == 0, "a single reference skips the duplicate encoder pass");
+    check(audio.continuation_codes == first, "a single reference retains its exact code sequence");
+
+    audio.speaker_codes.push_back(second);
+    audio.prepare_continuation(encode_joined);
+    check(encoder_calls == 1, "multiple references encode their joined audio");
+    check(audio.continuation_codes == joint, "multiple references retain the joint encoding");
+    check(audio.speaker_codes == std::vector<std::vector<int32_t>>{first, second},
+            "continuation preparation leaves individual speaker codes intact");
+
+    audio.speaker_codes = {second};
+    audio.prepare_continuation(encode_joined);
+    check(encoder_calls == 1 && audio.continuation_codes == second,
+            "a single reference replaces stale continuation without encoding again");
+}
+
 std::string capture_prompt_template(int audio_channels) {
     DelayConfig config = prompt_config();
     config.n_vq = audio_channels;
@@ -239,6 +268,7 @@ int main() {
     int rc = 0;
     try {
         test_dialogue_prompt_rows();
+        test_reference_continuation_encoding();
         test_reference_prompt_templates();
         test_continuation_state_and_extraction();
 
@@ -252,6 +282,9 @@ int main() {
         const tts_cpp::moss::EngineOptions options =
                 dialogue_options(backbone, decoder, encoder, s1, s2);
         test_engine_dialogue(options);
+        auto single_reference = options;
+        single_reference.dialogue_reference_paths.resize(1);
+        test_engine_dialogue(single_reference);
         test_engine_rejects_mixed_references(options);
         std::filesystem::remove(backbone);
         std::filesystem::remove(decoder);

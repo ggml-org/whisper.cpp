@@ -325,6 +325,13 @@ seconds and at an absolute sample count that does not depend on the model. A bac
 references are truncated to the backbone's channels and the decoder sums
 only those levels.
 
+With a single dialogue reference, the continuation reuses that recording's
+already encoded codes instead of encoding the same PCM twice. With multiple
+references, the continuation still encodes the joined PCM: concatenating
+independent code sequences changes the encoder's context and frame alignment.
+Both the speaker codes and continuation are prepared once per engine and
+reused across batch and streaming synthesis calls.
+
 `synthesize_stream(text, callback)` emits PCM chunks while generation runs:
 a frame is complete `n_vq - 1` steps after its row, completed non-pad frames
 accumulate, and every `stream_chunk_frames` of them decode incrementally: the

@@ -21,6 +21,8 @@ using TextEncoder = std::function<std::vector<int32_t>(const std::string &)>;
 struct PromptAudio {
     std::vector<std::vector<int32_t>> speaker_codes;
     std::vector<int32_t> continuation_codes;
+
+    void prepare_continuation(const std::function<std::vector<int32_t>()> & encode_joined);
 };
 
 std::vector<DelayRow> build_prompt_rows(const DelayConfig & config, const PromptTokens & tokens,

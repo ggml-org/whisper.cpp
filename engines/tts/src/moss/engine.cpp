@@ -168,7 +168,7 @@ struct Engine::Impl {
 
     void encode_dialogue_references(Codec & encoder) {
         const std::vector<float> concatenated = read_dialogue_references(encoder);
-        prompt_audio.continuation_codes = encode_checked(encoder, concatenated);
+        prompt_audio.prepare_continuation([&] { return encode_checked(encoder, concatenated); });
         continuation_frames = (int) (prompt_audio.continuation_codes.size() /
                 (size_t) backbone->config().n_vq);
     }
