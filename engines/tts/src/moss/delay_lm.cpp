@@ -398,11 +398,15 @@ struct DelayLM::Impl {
     }
 
     void add_slot_head() {
-        if (!tables_on_host) {
+        if (!tables_on_host && !::tts_cpp::detail::backend_is_metal(backend)) {
             return;
         }
         slot_ids = {config.audio_assistant_gen_slot_token_id, config.audio_assistant_delay_slot_token_id};
-        slot_head = ggml_new_tensor_2d(weights, GGML_TYPE_F32, config.n_embd, (int64_t) slot_ids.size());
+        if (!tables_on_host && slot_ids[1] > slot_ids[0]) {
+            return;
+        }
+        const ggml_type type = tables_on_host ? GGML_TYPE_F32 : output_head->type;
+        slot_head = ggml_new_tensor_2d(weights, type, config.n_embd, (int64_t) slot_ids.size());
         ggml_set_name(slot_head, SLOT_HEAD);
     }
 
@@ -444,7 +448,22 @@ struct DelayLM::Impl {
         return rows;
     }
 
+    std::vector<uint8_t> native_slot_rows() const {
+        const size_t row_bytes = ggml_row_size(slot_head->type, config.n_embd);
+        std::vector<uint8_t> rows(row_bytes * slot_ids.size());
+        for (size_t i = 0; i < slot_ids.size(); ++i) {
+            ggml_backend_tensor_get(output_head, rows.data() + i * row_bytes,
+                    (size_t) slot_ids[i] * output_head->nb[1], row_bytes);
+        }
+        return rows;
+    }
+
     void upload_slot_head() {
+        if (!tables_on_host) {
+            const auto rows = native_slot_rows();
+            ggml_backend_tensor_set(slot_head, rows.data(), 0, rows.size());
+            return;
+        }
         const std::vector<float> rows = slot_rows();
         ggml_backend_tensor_set(slot_head, rows.data(), 0, rows.size() * sizeof(float));
     }
@@ -697,13 +716,19 @@ struct DelayLM::Impl {
     }
 
     TextLogits projected_text(TextLogits requested) const {
-        return tables_on_host ? requested : TextLogits::Full;
+        return slot_ids.empty() ? TextLogits::Full : requested;
+    }
+
+    ggml_tensor * control_head() {
+        return slot_head ? slot_head : ggml_view_2d(graph_ctx, output_head, config.n_embd,
+                (int64_t) slot_ids.size(), (size_t) (slot_ids[1] - slot_ids[0]) * output_head->nb[1],
+                (size_t) slot_ids[0] * output_head->nb[1]);
     }
 
     ggml_tensor * text_projection(ggml_tensor * last, TextLogits text) {
         switch (text) {
             case TextLogits::Full:  return ggml_mul_mat(graph_ctx, output_head, last);
-            case TextLogits::Slots: return ggml_mul_mat(graph_ctx, slot_head, last);
+            case TextLogits::Slots: return ggml_mul_mat(graph_ctx, control_head(), last);
             case TextLogits::None:  return nullptr;
         }
         return nullptr;

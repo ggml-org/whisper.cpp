@@ -334,6 +334,14 @@ forces delay slots while the channels close one per step and then forces
 all-pad frames; each segment decodes from a fresh codec context, in batch and
 in streaming alike, so one segment never attends to another.
 
+On Metal, the device-table layout honors those text-logit requirements: it
+projects only the two audio-control tokens while generating audio, omits the
+text head during the forced drain, and uses the full vocabulary when needed.
+Increasing control-token IDs select a strided view of the original weights;
+other layouts are copied once at model load into a head with the original
+weight type. Embedding tables stay on the device. Memory preflight includes
+any additional packed head.
+
 On ARM CPUs ggml accumulates f16 dot products in f16, and the backbone's
 feed-forward output exceeds that range; the down projection therefore runs
 on inputs scaled by a power of two and rescales its f32 result, which keeps
