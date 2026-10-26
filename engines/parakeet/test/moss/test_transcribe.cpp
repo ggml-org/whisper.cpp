@@ -870,22 +870,42 @@ void test_split_token_table() {
     }
 }
 
-void test_fused_attention() {
-    const auto path = write_transcribe_model("transcribe-fused", WEIGHT_SEED);
-    TranscribeModel unfused(path.string(), false, 1);
+void check_fused_attention(const std::filesystem::path & path) {
+    TranscribeModel unfused(path.string(), false, 1, "auto", false, TranscribeLayout{0, TranscribeAttention::Unfused});
     TranscribeModel fused(path.string(), false, 1, "auto", false, TranscribeLayout{0, TranscribeAttention::Fused});
+    TranscribeModel automatic(path.string(), false, 1);
     check(!unfused.fused_attention() && fused.fused_attention(), "attention layout follows the override");
+    check(!unfused.fused_encoder_attention() && fused.fused_encoder_attention(),
+          "encoder attention follows the override");
+    check(automatic.fused_encoder_attention() && !automatic.fused_attention(),
+          "CPU automatically fuses only encoder attention");
     const std::vector<float> mel = tiny_mel(unfused, random_signal(CHUNK_SAMPLES, AUDIO_SEED));
     const auto a = encode_audio_chunk(unfused, mel, CHUNK_TOKENS, true);
     const auto b = encode_audio_chunk(fused, mel, CHUNK_TOKENS, true);
     check(relative_l2(a.encoder_states, b.encoder_states) < FUSED_RELATIVE_TOLERANCE,
           "fused encoder attention matches the unfused graph");
+    check(relative_l2(a.embeddings, b.embeddings) < FUSED_RELATIVE_TOLERANCE,
+          "fused encoder adaptor matches the unfused graph");
+    const auto selected = encode_audio_chunk(automatic, mel, CHUNK_TOKENS, true);
+    check(max_abs_diff(selected.encoder_states, b.encoder_states) == 0.0f &&
+          max_abs_diff(selected.embeddings, b.embeddings) == 0.0f,
+          "CPU automatically selects the fused encoder graph");
     const std::vector<float> reference = decoded_logits(unfused, 3);
+    check(max_abs_diff(reference, decoded_logits(automatic, 3)) == 0.0f,
+          "CPU automatic encoder fusion preserves decoder logits");
     for (int batch : {1, 3, CHUNK_TOKENS + 5}) {
         check(relative_l2(reference, decoded_logits(fused, batch)) < FUSED_RELATIVE_TOLERANCE,
               "fused decoder attention matches with prefill batch " + std::to_string(batch));
     }
-    std::filesystem::remove(path);
+}
+
+void test_fused_attention() {
+    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0}) {
+        const auto path = write_transcribe_model("transcribe-fused", WEIGHT_SEED);
+        moss_fixture_precision(path, type);
+        check_fused_attention(path);
+        std::filesystem::remove(path);
+    }
 }
 
 bool rejects_strided_copy(ggml_backend * backend, const ggml_tensor * copy) {

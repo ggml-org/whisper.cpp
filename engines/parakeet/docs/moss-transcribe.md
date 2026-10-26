@@ -115,6 +115,11 @@ labels; the f16 transcript is identical to the Hugging Face model's for both
 prompts. One transcription runs
 at a time per instance; overlapping calls throw.
 
+CPU encoder attention uses the fused ggml operator with F32 accumulation,
+avoiding the full per-head attention score matrices. Decoder attention and
+GPU graph selection retain their existing layouts. Memory-fit measurement
+builds the same fused CPU encoder graph used for inference.
+
 Processing mirrors the reference processor. The audio is cut into
 non-overlapping 30 s windows, the last one zero-padded; each window gets a
 Whisper log-mel spectrogram (periodic Hann, reflect padding, 80 Slaney bands,

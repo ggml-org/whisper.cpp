@@ -108,6 +108,7 @@ public:
     const ggml_tensor * token_table() const;
     bool embeds_on_host() const;
     bool fused_attention() const;
+    bool fused_encoder_attention() const;
     const std::vector<TranscribeHeadChunk> & head() const;
     std::vector<float> embed_tokens(const std::vector<int32_t> & ids) const;
     std::vector<std::string> tokenizer_tokens() const;

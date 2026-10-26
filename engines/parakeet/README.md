@@ -15,6 +15,10 @@ weights, encoder/decoder graphs, KV cache and host memory, including scheduler s
 and CPU scratch for the configured threads, using GGUF metadata only; see
 [docs/moss-transcribe.md](docs/moss-transcribe.md).
 
+The MOSS CPU audio encoder uses fused attention to avoid materializing full
+attention score matrices. Decoder attention and GPU backend layouts retain
+their existing behavior.
+
 ## Supported checkpoints
 
 | HF repository | Decoder/task | Mel | `d_model × layers` | Vocab | Parameters | GGUF size | Recorded RTF | Languages and notes |
