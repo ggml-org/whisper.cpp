@@ -2,12 +2,14 @@ package whisper
 
 import (
 	"fmt"
+	"unsafe"
 )
 
 ///////////////////////////////////////////////////////////////////////////////
 // CGO
 
 /*
+#include <stdlib.h>
 #include <whisper.h>
 */
 import "C"
@@ -53,7 +55,7 @@ func (p *Params) SetVAD(v bool) {
 }
 
 func (p *Params) SetVADModelPath(path string) {
-	p.vad_model_path = C.CString(path)
+	replaceCString(&p.vad_model_path, path)
 }
 
 func (p *Params) SetVADThreshold(t float32) {
@@ -176,7 +178,7 @@ func (p *Params) SetTemperatureFallback(t float32) {
 
 // Set initial prompt
 func (p *Params) SetInitialPrompt(prompt string) {
-	p.initial_prompt = C.CString(prompt)
+	replaceCString(&p.initial_prompt, prompt)
 }
 
 func (p *Params) SetCarryInitialPrompt(v bool) {
@@ -241,4 +243,28 @@ func (p *Params) String() string {
 	}
 
 	return str + ">"
+}
+
+// Free releases the C strings allocated by SetInitialPrompt and
+// SetVADModelPath and resets both fields to NULL. The Params value must not
+// be in use by a running Whisper_full call.
+func (p *Params) Free() {
+	freeCString(&p.initial_prompt)
+	freeCString(&p.vad_model_path)
+}
+
+// freeCString frees *dst and sets it to NULL. These fields are NULL in
+// whisper_full_default_params, so a non-NULL value was allocated by a setter
+// of this file.
+func freeCString(dst **C.char) {
+	if *dst != nil {
+		C.free(unsafe.Pointer(*dst))
+		*dst = nil
+	}
+}
+
+// replaceCString frees the previous value of *dst and stores a copy of s.
+func replaceCString(dst **C.char, s string) {
+	freeCString(dst)
+	*dst = C.CString(s)
 }

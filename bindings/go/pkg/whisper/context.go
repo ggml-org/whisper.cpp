@@ -26,10 +26,17 @@ var _ Context = (*context)(nil)
 ///////////////////////////////////////////////////////////////////////////////
 // LIFECYCLE
 
+// freeContextParams releases the C strings owned by the context's params
+// once the context is unreachable.
+func freeContextParams(c *context) {
+	c.params.Free()
+}
+
 func newContext(model *model, params whisper.Params) (Context, error) {
 	context := new(context)
 	context.model = model
 	context.params = params
+	runtime.SetFinalizer(context, freeContextParams)
 
 	// Return success
 	return context, nil
