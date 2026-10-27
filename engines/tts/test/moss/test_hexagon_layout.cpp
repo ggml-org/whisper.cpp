@@ -275,6 +275,7 @@ void test_sfx_fused_attention(ggml_type precision) {
     SfxModel unfused(file.str(), {}, THREADS, false, {TablePlacement::Device, AttentionLayout::Unfused});
     SfxModel fused(file.str(), {}, THREADS, false, {TablePlacement::Device, AttentionLayout::Fused});
     check(!unfused.fused_attention() && fused.fused_attention(), tier + ": forced attention layouts");
+    check(!unfused.fused_dit_attention() && fused.fused_dit_attention(), tier + ": forced DiT attention layouts");
     const std::vector<float> context = encode_text(unfused, SFX_PROMPT);
     check(relative_l2(context, encode_text(fused, SFX_PROMPT)) <= FUSED_RELATIVE_TOLERANCE,
           tier + ": fused causal text attention matches");

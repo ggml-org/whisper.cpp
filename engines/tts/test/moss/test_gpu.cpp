@@ -227,14 +227,18 @@ void sfx(ggml_type precision) {
     arm.require(gpu.backend_name());
     require(gpu.table_on_host() == hexagon_arm(), "sfx table placement");
     require(gpu.fused_attention() == hexagon_arm(), "sfx attention layout");
+    require(gpu.fused_dit_attention() == hexagon_arm(), "sfx DiT attention layout");
     const auto context = encode_text(cpu, {1, 8, 9, 2});
     compare("sfx text", context, encode_text(gpu, {1, 8, 9, 2}));
     const int frames = 17;
     auto latents = signal(frames * moss_sfx_fixtures::LATENT);
     {
-        SfxDitSession c(cpu, frames), g(gpu, frames);
+        SfxDitSession c(cpu, frames), g(gpu, frames, false, 2);
+        const std::vector<float> empty(context.size(), 0.0f);
+        g.prepare_contexts({context, empty});
         for (float time : {1.0f, 0.5f, 0.0f}) {
             compare("sfx dit", c.velocity(latents, time, context), g.velocity(latents, time, context));
+            compare("sfx dit negative", c.velocity(latents, time, empty), g.velocity(latents, time, empty));
         }
     }
     compare("sfx vae", decode_latents(cpu, latents, frames, frames, 8, {}),

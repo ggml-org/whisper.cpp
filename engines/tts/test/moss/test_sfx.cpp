@@ -474,9 +474,12 @@ void test_dit_runner(SfxModel & model) {
     const std::vector<float> latents = gaussian_noise((size_t) FRAMES * LATENT, 3);
     const std::vector<float> context = encode_text(model, {40, 41, 42});
     std::vector<float> ggml;
+    const std::vector<float> negative(context.size(), 0.0f);
+    std::vector<float> ggml_negative;
     {
         SfxDitSession reference(model, FRAMES);
         ggml = reference.velocity(latents, PROBE_TIMESTEP, context);
+        ggml_negative = reference.velocity(latents, PROBE_TIMESTEP, negative);
     }
     int calls = 0;
     std::vector<float> seen_timestep;
@@ -484,6 +487,7 @@ void test_dit_runner(SfxModel & model) {
             std::make_unique<OffsetDit>(offset(ggml, FAKE_VELOCITY_OFFSET), 1, &calls, &seen_timestep);
     StageBackends backends;
     SfxDitRunner runner(model, FRAMES, sidecar, false, backends);
+    runner.prepare_contexts({context, negative});
     check(runner.velocity(latents, PROBE_TIMESTEP, context) == offset(ggml, FAKE_VELOCITY_OFFSET),
           "an attached DiT sidecar predicts the velocity");
     check(seen_timestep == timestep_sinusoid(PROBE_TIMESTEP, FREQ_DIM), "the sidecar gets the timestep embedding");
@@ -492,6 +496,8 @@ void test_dit_runner(SfxModel & model) {
     check(!sidecar && backends.summary() == MIXED_STAGE_BACKEND, "a failed DiT sidecar is retired mid-run");
     check(calls == 2 && max_abs_diff(runner.velocity(latents, PROBE_TIMESTEP, context), ggml) < TOLERANCE,
           "later steps stay on ggml");
+    check(max_abs_diff(runner.velocity(latents, PROBE_TIMESTEP, negative), ggml_negative) < TOLERANCE,
+          "a failed DiT sidecar prepares and selects the negative cached branch");
     std::unique_ptr<SfxDitSidecar> absent;
     SfxDitRunner strict(model, FRAMES, absent, true, backends);
     expect_failure([&] { strict.velocity(latents, PROBE_TIMESTEP, context); }, COREML_STRICT_ENV,

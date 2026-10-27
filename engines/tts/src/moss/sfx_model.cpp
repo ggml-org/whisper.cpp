@@ -39,6 +39,7 @@ constexpr int MAX_SAMPLE_RATE = 192000;
 constexpr float MAX_SECONDS_LIMIT = 600.0f;
 constexpr int64_t MAX_HOP = 1 << 16;
 constexpr int64_t MAX_LATENT_FRAMES = 1 << 14;
+constexpr int ATTENTION_PROBE_NODES = 16;
 
 [[noreturn]] void fail(const std::string & message) {
     throw std::runtime_error("moss sfx: " + message);
@@ -64,6 +65,29 @@ int64_t rate_product(const std::vector<int> & rates) {
         product = std::min<int64_t>(product * rate, MAX_HOP + 1);
     }
     return product;
+}
+
+ggml_tensor * attention_probe_input(SfxGraph & graph, const SfxDitConfig & config, int tokens) {
+    auto * input = graph.input_f32(config.n_embd, tokens);
+    auto * heads = ggml_reshape_3d(graph.ctx(), input, config.n_embd / config.n_heads, config.n_heads, tokens);
+    return ggml_permute(graph.ctx(), heads, 0, 2, 1, 3);
+}
+
+bool supports_dit_flash(ggml_backend_t backend, const SfxConfig & config, int keys) {
+    SfxGraph graph(ATTENTION_PROBE_NODES);
+    auto * q = attention_probe_input(graph, config.dit, config.latent_frames());
+    auto * k = attention_probe_input(graph, config.dit, keys);
+    auto * v = attention_probe_input(graph, config.dit, keys);
+    const float scale = 1.0f / std::sqrt(float(config.dit.n_embd / config.dit.n_heads));
+    auto * attention = ggml_flash_attn_ext(graph.ctx(), q, k, v, nullptr, scale, 0.0f, 0.0f);
+    return ggml_backend_supports_op(backend, attention);
+}
+
+bool fuses_dit_attention(const SfxLayout & layout, ggml_backend_t backend, const SfxConfig & config) {
+    if (fuses_attention(layout.attention, backend)) return true;
+    if (layout.attention != AttentionLayout::Automatic || !::tts_cpp::detail::backend_is_metal(backend)) return false;
+    return supports_dit_flash(backend, config, config.latent_frames()) &&
+           supports_dit_flash(backend, config, config.text.max_tokens);
 }
 
 } // namespace
@@ -140,6 +164,7 @@ struct SfxModel::Impl {
     bool measure_only = false;
     bool table_on_host = false;
     bool fused = false;
+    bool fused_dit = false;
     uint64_t measured_weights = 0;
 
     ~Impl() {
@@ -402,6 +427,7 @@ struct SfxModel::Impl {
         backend = init_backend(request, OWNER);
         table_on_host = places_tables_on_host(layout.table, backend);
         fused = fuses_attention(layout.attention, backend);
+        fused_dit = fuses_dit_attention(layout, backend, config);
     }
 
     void load(const std::string & path, const BackendRequest & request, int threads) {
@@ -501,6 +527,10 @@ const SfxConfig & SfxModel::config() const { return impl_->config; }
 const char * SfxModel::backend_name() const { return ggml_backend_name(impl_->backend); }
 bool SfxModel::table_on_host() const { return impl_->table_on_host; }
 bool SfxModel::fused_attention() const { return impl_->fused; }
+bool SfxModel::fused_dit_attention() const { return impl_->fused_dit; }
+ggml_backend_buffer_type * SfxModel::buffer_type() const {
+    return ::tts_cpp::detail::weight_buffer_type(impl_->backend);
+}
 
 std::vector<float> SfxModel::token_rows(const std::vector<int32_t> & ids) {
     if (!impl_->token_rows) fail("the token table is not on the host");

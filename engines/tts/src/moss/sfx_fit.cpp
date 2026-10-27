@@ -46,7 +46,7 @@ detail::SfxMemory measure_texts(detail::SfxModel & model, detail::SfxTokenizer &
 
 detail::SfxMemory measure_dit(detail::SfxModel & model, const detail::ResolvedRequest & request) {
     const auto & config = model.config();
-    detail::SfxDitSession session(model, config.latent_frames(), true);
+    detail::SfxDitSession session(model, config.latent_frames(), true, request.guidance == 1.0f ? 1 : PROMPT_CONTEXTS);
     auto result = session.measure();
     const auto latents = sat_mul(config.latent_frames(), config.dit.in_channels);
     const auto buffers = request.guidance == 1.0f ? UNGUIDED_LATENT_BUFFERS : GUIDED_LATENT_BUFFERS;
@@ -75,9 +75,11 @@ void measure_workload(FitResult & result, detail::SfxModel & model,
     const auto text = measure_texts(model, tokenizer, request);
     const auto dit = measure_dit(model, request);
     const auto audio = measure_audio(model, request);
-    result.device.lm_compute_bytes = std::max(text.device_bytes, dit.device_bytes);
-    result.device.codec_compute_bytes = audio.device_bytes > result.device.lm_compute_bytes
-        ? audio.device_bytes - result.device.lm_compute_bytes : 0;
+    const auto text_peak = sat_add(dit.persistent_device_bytes, text.device_bytes);
+    const auto audio_peak = sat_add(dit.persistent_device_bytes, audio.device_bytes);
+    result.device.lm_compute_bytes = std::max(text_peak, dit.device_bytes);
+    result.device.codec_compute_bytes =
+        audio_peak > result.device.lm_compute_bytes ? audio_peak - result.device.lm_compute_bytes : 0;
     const uint64_t contexts = sat_mul(sat_mul(model.config().text.max_tokens, model.config().text.n_embd),
                                      sizeof(float) * PROMPT_CONTEXTS);
     const uint64_t host_compute = std::max({text.host_compute_bytes, dit.host_compute_bytes, audio.host_compute_bytes});

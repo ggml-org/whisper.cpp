@@ -2,6 +2,8 @@
 #include "tts-cpp/moss/sound_effect_fit.h"
 #include "moss/sfx_model.h"
 #include "moss/sfx_networks.h"
+#include "moss/sfx_dit_cache.h"
+#include "moss/sfx_request.h"
 
 #include <cmath>
 #include <cstdio>
@@ -15,6 +17,10 @@ namespace {
 constexpr uint32_t MODEL_SEED = 47;
 constexpr double SHORT_SECONDS = 0.1;
 constexpr double LONG_SECONDS = 0.2;
+constexpr int VAE_PEAK_DECODER_DIM = 128;
+constexpr float VAE_PEAK_WEIGHT_SCALE = 0.01f;
+constexpr int GUIDED_CONTEXTS = 2;
+constexpr int REPEATED_REQUESTS = 2;
 int failures = 0;
 
 void check(bool condition, const char * label) {
@@ -22,7 +28,10 @@ void check(bool condition, const char * label) {
 }
 
 struct Model {
-    std::filesystem::path path = write_sfx_model("sfx-fit", MODEL_SEED);
+    explicit Model(int decoder_dim = DECODER_DIM, float vae_scale = 1.0f)
+        : path(write_sfx_model(
+              "sfx-fit", MODEL_SEED, [](gguf_context *) {}, {}, {}, 1, DIT_EMBD, DIT_HEADS, decoder_dim, vae_scale)) {}
+    std::filesystem::path path;
     ~Model() { std::filesystem::remove(path); }
     moss::SoundEffectOptions options() const {
         moss::SoundEffectOptions options;
@@ -108,6 +117,23 @@ void test_errors() {
     check(moss::fit_params(missing, request(), 0).reason == "model-unreadable", "missing model is an error outcome");
 }
 
+void test_cache_memory() {
+    Model fixture;
+    strip_weights(fixture.path);
+    moss::detail::SfxModel model(fixture.path.string(), {}, 1, true);
+    moss::detail::SfxDitCache single(model, 1, true), guided(model, 2, true);
+    const uint64_t branch = uint64_t(DIT_EMBD) * TEXT_TOKENS * 2 * sizeof(float);
+    check(single.bytes() >= branch, "single-branch cache includes full-precision keys and values");
+    check(guided.bytes() >= branch * 2, "guided cache includes both prompt branches");
+    moss::detail::SfxDitSession one(model, FRAMES, true, 1);
+    const auto first = one.measure();
+    moss::detail::SfxDitSession two(model, FRAMES, true, 2);
+    const auto second = two.measure();
+    check(first.device_bytes > single.bytes(), "cache storage is added to graph scratch");
+    check(second.device_bytes >= first.device_bytes + branch, "fit charges the second persistent branch");
+    check(second.host_bytes > first.host_bytes, "fit charges retained context copies");
+}
+
 void test_explicit_backend() {
     Model model;
     auto options = model.options();
@@ -130,6 +156,34 @@ void test_generation_after_fit() {
           "generation remains finite after metadata measurement");
 }
 
+void generate_repeated_requests(moss::SoundEffectEngine & engine) {
+    for (int turn = 0; turn < REPEATED_REQUESTS; ++turn) {
+        const auto audio = engine.generate(request());
+        check(!audio.cancelled && audio.pcm.size() == size_t(SAMPLE_RATE * SHORT_SECONDS),
+              "repeated generation preserves the requested length");
+        check(std::all_of(audio.pcm.begin(), audio.pcm.end(), [](float v) { return std::isfinite(v); }),
+              "repeated generation remains finite with retained VAE scratch");
+    }
+}
+
+void test_retained_vae_memory() {
+    Model fixture(VAE_PEAK_DECODER_DIM, VAE_PEAK_WEIGHT_SCALE);
+    const auto projection = moss::fit_params(fixture.options(), request(), 0);
+    check(projection.status == FitStatus::Success, "VAE-dominant workload projects");
+    moss::detail::SfxModel model(fixture.path.string(), {}, 1, true);
+    moss::detail::SfxDitCache cache(model, GUIDED_CONTEXTS, true);
+    moss::detail::SfxDitSession session(model, FRAMES, true, GUIDED_CONTEXTS);
+    const auto dit = session.measure();
+    const int keep = (int(SAMPLE_RATE * SHORT_SECONDS) + HOP - 1) / HOP;
+    const auto vae = moss::detail::measure_decode(model, FRAMES, keep, moss::detail::SFX_DECODE_WINDOW_FRAMES);
+    check(vae.device_bytes > dit.device_bytes, "regression fixture has a larger VAE scratch peak");
+    const auto compute = projection.device.lm_compute_bytes + projection.device.codec_compute_bytes;
+    check(compute >= cache.bytes() + vae.device_bytes,
+          "fit includes the next request's cache beside retained VAE scratch");
+    moss::SoundEffectEngine engine(fixture.options());
+    generate_repeated_requests(engine);
+}
+
 void test_real_model() {
     const char * path = std::getenv("MOSS_SFX_MODEL");
     if (!path || !*path) return;
@@ -148,9 +202,11 @@ void test_real_model() {
 int main() {
     test_weightless();
     test_workloads();
+    test_cache_memory();
     test_errors();
     test_explicit_backend();
     test_generation_after_fit();
+    test_retained_vae_memory();
     test_real_model();
     if (!failures) std::puts("MOSS sound-effect fit tests passed");
     return failures ? 1 : 0;

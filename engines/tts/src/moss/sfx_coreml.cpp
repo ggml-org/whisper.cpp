@@ -138,6 +138,11 @@ SfxDitRunner::SfxDitRunner(SfxModel & model, int frames, std::unique_ptr<SfxDitS
                            StageBackends & backends)
     : model_(model), frames_(frames), sidecar_(sidecar), strict_(strict), backends_(backends) {}
 
+void SfxDitRunner::prepare_contexts(std::vector<std::vector<float>> contexts) {
+    session_.reset();
+    contexts_ = std::move(contexts);
+}
+
 std::vector<float> SfxDitRunner::velocity(const std::vector<float> & latents, float timestep,
                                           const std::vector<float> & context) {
     std::vector<float> result;
@@ -166,7 +171,8 @@ bool SfxDitRunner::try_sidecar(const std::vector<float> & latents, float timeste
 std::vector<float> SfxDitRunner::on_ggml(const std::vector<float> & latents, float timestep,
                                          const std::vector<float> & context) {
     if (!session_) {
-        session_ = std::make_unique<SfxDitSession>(model_, frames_);
+        session_ = std::make_unique<SfxDitSession>(model_, frames_, false, (int) contexts_.size());
+        if (!contexts_.empty()) session_->prepare_contexts(std::move(contexts_));
     }
     backends_.note(GGML_STAGE_BACKEND);
     return session_->velocity(latents, timestep, context);

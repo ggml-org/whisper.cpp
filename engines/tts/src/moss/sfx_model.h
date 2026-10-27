@@ -11,6 +11,7 @@
 struct ggml_context;
 struct ggml_cgraph;
 struct ggml_tensor;
+struct ggml_backend_buffer_type;
 
 namespace tts_cpp::moss::detail {
 
@@ -73,6 +74,7 @@ struct SfxMemory {
     uint64_t device_bytes = 0;
     uint64_t host_compute_bytes = 0;
     uint64_t host_bytes = 0;
+    uint64_t persistent_device_bytes = 0;
 };
 
 class SfxGraph {
@@ -104,6 +106,8 @@ public:
     const char * backend_name() const;
     bool table_on_host() const;
     bool fused_attention() const;
+    bool fused_dit_attention() const;
+    ggml_backend_buffer_type * buffer_type() const;
     ggml_tensor * tensor(const std::string & name) const;
     std::vector<float> token_rows(const std::vector<int32_t> & ids);
     std::vector<std::string> tokenizer_tokens() const;

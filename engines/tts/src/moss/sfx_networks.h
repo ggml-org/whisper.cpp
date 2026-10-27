@@ -18,11 +18,12 @@ SfxMemory measure_text(SfxModel & model, const std::vector<int32_t> & ids);
 
 class SfxDitSession {
 public:
-    SfxDitSession(SfxModel & model, int frames, bool measure_only = false);
+    SfxDitSession(SfxModel & model, int frames, bool measure_only = false, int cached_contexts = 0);
     ~SfxDitSession();
     SfxDitSession(const SfxDitSession &) = delete;
     SfxDitSession & operator=(const SfxDitSession &) = delete;
 
+    void prepare_contexts(std::vector<std::vector<float>> contexts);
     std::vector<float> velocity(const std::vector<float> & latents, float timestep,
                                 const std::vector<float> & context);
     SfxMemory measure();

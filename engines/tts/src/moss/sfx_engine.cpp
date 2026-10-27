@@ -109,6 +109,8 @@ struct SoundEffectEngine::Impl {
                  const std::vector<float> & negative, const SoundEffectProgress & progress) {
         const std::vector<float> sigmas = detail::flow_sigmas(request.steps, request.shift);
         SfxDitRunner dit(*model, model->config().latent_frames(), dit_sidecar, strict, dit_backends);
+        if (request.guidance == UNGUIDED) dit.prepare_contexts({positive});
+        else dit.prepare_contexts({positive, negative});
         return run_steps(dit, latents, request, sigmas, positive, negative, progress);
     }
 

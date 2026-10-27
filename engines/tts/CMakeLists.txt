@@ -388,6 +388,7 @@ set(TTS_CPP_LIB_SOURCES
     src/moss/sfx_model.cpp
     src/moss/sfx_text_encoder.cpp
     src/moss/sfx_dit.cpp
+    src/moss/sfx_dit_cache.cpp
     src/moss/sfx_vae.cpp
     src/moss/sfx_prompt.cpp
     src/moss/sfx_sampler.cpp
@@ -1666,6 +1667,16 @@ if (TTS_CPP_BUILD_TESTS)
     target_include_directories(test-moss-sfx-fit PRIVATE src)
     tts_cpp_apply_ccache(test-moss-sfx-fit)
     tts_cpp_register_test(test-moss-sfx-fit)
+
+    add_executable(test-moss-sfx-cache test/moss/test_sfx_cache.cpp)
+    target_link_libraries(test-moss-sfx-cache PRIVATE tts-cpp)
+    target_include_directories(test-moss-sfx-cache PRIVATE src)
+    tts_cpp_apply_ccache(test-moss-sfx-cache)
+    tts_cpp_register_test(test-moss-sfx-cache)
+    if (TTS_CPP_GGML_METAL)
+        tts_cpp_register_test(test-moss-sfx-cache-metal LABEL "gpu" EXE test-moss-sfx-cache)
+        set_property(TEST test-moss-sfx-cache-metal APPEND PROPERTY ENVIRONMENT "MOSS_SFX_CACHE_BACKEND=MTL0")
+    endif()
 
     add_executable(test-moss-speech test/moss/test_speech.cpp src/moss/cli.cpp)
     target_link_libraries(test-moss-speech PRIVATE tts-cpp)

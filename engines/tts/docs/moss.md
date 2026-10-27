@@ -706,6 +706,48 @@ VAE decodes only the frames that cover the requested length, in 256-frame
 windows with 32 frames of context on each side, and the output is cropped to
 the exact sample count.
 
+Native ggml diffusion computes the text projections once and caches each
+layer's fixed cross-attention keys and values for the duration of a request. Positive and
+negative conditioning have separate cache entries; guidance `1` needs only the
+positive entry. K/V stays in F32 on the selected backend, retaining the existing
+activation precision. For the released 30-layer model with 512 text positions,
+the guided cache contains 360 MiB of K/V. Metadata-only memory fit includes this
+storage alongside the scheduler's retained peak across text encoding, preparation,
+denoising and VAE decoding. This covers a new request's cache coexisting with a
+larger VAE buffer retained from the previous request. A new request prepares new
+entries, including when ggml takes over after a Core ML DiT failure.
+
+Metal selects DiT flash attention after the backend confirms support for both
+self-attention and cross-attention. Unsupported geometries keep unfused
+attention. This selection applies to the DiT; text-encoder attention keeps its
+existing layout. Explicit internal fused/unfused layouts and other backend
+defaults retain their existing behavior. K/V storage remains F32. The Metal
+flash kernel uses some half intermediates with F32 QK, softmax and output
+accumulation, so its output can differ slightly from unfused attention.
+
+On an M1 Ultra with 64 GiB, the second request on a resident Metal engine
+measured as follows (8 CPU threads, 8 seconds of output, 100 diffusion steps,
+guidance 4, shift 5, seed 1234; the Formula One race-car prompt):
+
+| Weights | Original | K/V reuse | K/V reuse + Metal flash attention | Total time reduction |
+|---|---:|---:|---:|---:|
+| F16 | 124.44 s | 116.95 s | 101.31 s | 18.6% |
+| Q8_0 | 123.86 s | 119.65 s | 103.84 s | 16.2% |
+
+Each entry is one measured warmed request after one warmup, using the same
+ggml build. K/V reuse alone produces sample-identical 48 kHz PCM16 waveforms.
+Adding Metal flash attention gives waveform cosine similarity 0.999993 (F16)
+and 0.999991 (Q8_0), with difference SNR of 48.3 dB and 47.6 dB respectively.
+These are complete request times,
+including text encoding, cache preparation, diffusion and VAE decoding;
+model loading is excluded.
+
+The scheduler trace keeps both cache preparation and all denoising operations
+on Metal. For 100 guided steps, conditioning uploads fall from 800 MiB
+(4 MiB per DiT pass) to 8 MiB per request. The remaining loop transfers are
+latent uploads/downloads, positions, timestep and the cache-entry index; K/V
+never returns to host memory between diffusion steps.
+
 ### Core ML DiT and VAE
 
 On Apple builds with `TTS_CPP_COREML=ON`, the DiT and the VAE decoder can each
@@ -847,7 +889,17 @@ windowed VAE decoding against a single window; engine determinism, guidance
 and request validation; and the CLI's `sfx` and `tts` modes.
 `test-convert-moss` also fabricates a tiny MOSS-SoundEffect pipeline and
 checks the tensor census, the folded weight norm, the f16 and q8_0 paths, and
-the `.pth` VAE checkpoint (when torch is installed). `test-moss-sfx-parity` is the reference check: it
+the `.pth` VAE checkpoint (when torch is installed). `test-moss-sfx-cache`
+compares cached and uncached velocities and guided diffusion on a two-layer
+fixture in F32, F16 and Q8_0, including prompt replacement and reuse after
+changing projection weights. It uses CPU by default; set
+`MOSS_SFX_CACHE_BACKEND=MTL0` to exercise the same checks on Metal. A 128-wide
+head fixture checks automatic flash routing, forced unfused reference parity,
+and cached/uncached fused velocities; the original tiny heads check the
+unsupported-geometry path. Metal builds register the same checks as
+`test-moss-sfx-cache-metal` with the `gpu` label. The GPU fixture suite also
+exercises both cached conditioning branches.
+`test-moss-sfx-parity` is the reference check: it
 skips unless `MOSS_SFX_MODEL` points at a converted GGUF and
 `MOSS_SFX_REFERENCE_DIR` at stage dumps from the PyTorch pipeline
 (`MOSS_SFX_GPU=1` runs it on the GPU, `MOSS_SFX_BACKEND=hexagon` on the NPU). The dumps come from

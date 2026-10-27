@@ -45,6 +45,14 @@ including ASR results that reach the decoding token limit.
 This in-tree package consumes the shared `ggml-speech` dependency. Build and
 vcpkg consumption instructions are in [docs/build.md](docs/build.md).
 
+MOSS-SoundEffect native diffusion prepares the fixed cross-attention keys and
+values once per prompt and reuses them across steps. The request owns the cache;
+Metal also uses DiT flash attention when the backend supports both attention
+shapes. Metadata-only memory fit includes the cache alongside the scheduler's
+retained peak across text encoding, diffusion and VAE decoding, including repeated
+requests. See the
+[SoundEffect guide](docs/moss.md#moss-soundeffect) for details.
+
 ## Capabilities
 
 ### Supported models and backends

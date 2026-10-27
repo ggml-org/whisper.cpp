@@ -38,6 +38,7 @@ public:
     SfxDitRunner(SfxModel & model, int frames, std::unique_ptr<SfxDitSidecar> & sidecar, bool strict,
                  StageBackends & backends);
 
+    void prepare_contexts(std::vector<std::vector<float>> contexts);
     std::vector<float> velocity(const std::vector<float> & latents, float timestep, const std::vector<float> & context);
 
 private:
@@ -51,6 +52,7 @@ private:
     bool strict_;
     StageBackends & backends_;
     std::unique_ptr<SfxDitSession> session_;
+    std::vector<std::vector<float>> contexts_;
 };
 
 std::vector<float> decode_sfx_latents(SfxModel & model, std::unique_ptr<SfxVaeSidecar> & sidecar, bool strict,
