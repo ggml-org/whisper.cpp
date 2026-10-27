@@ -68,6 +68,22 @@ struct TdtHostLstmLayer {
     std::vector<float> b_hh;
 };
 
+struct TdtEmbeddingRows {
+    ggml_type            type      = GGML_TYPE_F32;
+    int64_t              rows      = 0;
+    int64_t              width     = 0;
+    size_t               row_bytes = 0;
+    const uint8_t *      borrowed  = nullptr;
+    std::vector<uint8_t> owned;
+
+    bool has_row(int64_t row) const { return row >= 0 && row < rows; }
+    bool read(int64_t row, float * dst) const;
+};
+
+TdtEmbeddingRows tdt_embedding_rows(const ggml_tensor * table);
+TdtEmbeddingRows tdt_embedding_rows_from_bytes(ggml_type type, int64_t rows, int64_t width,
+                                               std::vector<uint8_t> bytes);
+
 // Per-decoder runtime context. Two implementation paths:
 //   - GPU path  (Metal / CUDA / Vulkan): per-step LSTM, joint and full-window
 //                enc-projection are ggml graphs running on the active backend
@@ -91,8 +107,10 @@ struct TdtRuntimeWeights {
     int L            = 2;
     int num_durations = 5;
 
+    const ParakeetCtcModel * model = nullptr;
     const TdtWeights * weights = nullptr;
     ggml_tensor *      graph_embed = nullptr; // native embedding or F32 copy in persist_ctx
+    TdtEmbeddingRows   embed_rows;
     ggml_backend_t     backend = nullptr;
     int                n_threads = 0;
     bool               use_graphs = false;
@@ -104,7 +122,9 @@ struct TdtRuntimeWeights {
     // and the two bias adds. Changes float summation order, so it is not
     // bit-exact with the split form; the gate is token-stream equality.
     bool               concat_lstm_input = false;
+    bool               concat_lstm_allowed = true;
     bool               rnnt_mode = false;  // no duration head: advance one frame per step
+    bool               decode_resources_deferred = false;
 
     // Greedy steps unrolled into one decoder graph on the GPU path. Each step
     // costs one command-buffer commit and one host readback when run alone, so
@@ -223,9 +243,9 @@ struct TdtRuntimeWeights {
     };
     std::vector<EncProjGraph> enc_proj_cache;
     static constexpr size_t k_enc_proj_cache_max = 3;
-    // ~5 minutes of audio at the encoder's 80 ms-frame rate fits in 4096
-    // rows; H_joint=640 * f32 → ~10 MB, fine for any backend we target.
-    // Longer offline sequences use bounded windows with shared predictor state.
+    // Ceiling on enc_proj_persist's rows. The runtime holds the model's
+    // long-form window (tdt_enc_proj_capacity), and tdt_decode_window walks
+    // longer inputs in bounded pieces that share one predictor state.
     static constexpr int k_enc_proj_T_max = 4096;
 
     TdtRuntimeWeights() = default;
@@ -321,8 +341,8 @@ struct TdtLaneStats {
 // emits one token vector per window in input order so the caller can
 // detokenise and join them.
 //
-// `embed_table` is the prediction network's token embedding as host f32,
-// [vocab_plus_blank][h_pred] (the GGUF table dequantised; a gather is not an
+// `embed_rows` is the prediction network's token embedding, [vocab_plus_blank]
+// rows of h_pred, read row by row from its GGUF encoding (a gather is not an
 // ANE op). Windows are seated into lanes as lanes free up, so the batch stays
 // full until the input runs out. A window that emits nothing at all is
 // re-decoded in a second batched pass, warm-started from the previous window's
@@ -332,7 +352,7 @@ struct TdtLaneStats {
 // means the caller should fall back to tdt_greedy_decode for the whole
 // utterance: a half-decoded lane batch cannot be resumed.
 int tdt_decode_lanes(const TdtLaneGeometry & geom,
-                     const std::vector<float> & embed_table,
+                     const TdtEmbeddingRows & embed_rows,
                      TdtLaneStepper & stepper,
                      const std::vector<TdtLaneWindow> & windows,
                      const TdtDecodeOptions & opts,
@@ -344,6 +364,10 @@ int tdt_decode_lanes(const TdtLaneGeometry & geom,
 int tdt_prepare_runtime(const ParakeetCtcModel & model, TdtRuntimeWeights & out,
                         bool allow_fused_lstm = true, bool allow_concat_lstm = true);
 
+int tdt_prepare_runtime_deferred(const ParakeetCtcModel & model, TdtRuntimeWeights & out);
+
+int tdt_enc_proj_capacity(const ParakeetCtcModel & model);
+
 // Greedy steps per decoder graph on the GPU path: 8 by default, 1 for one step
 // per graph, 0 or less for the sequential per-step loop. Drops any built graph
 // so the next decode rebuilds it.
@@ -352,8 +376,8 @@ void tdt_set_unroll_steps(TdtRuntimeWeights & W, int steps);
 // Fit projection: size everything tdt_prepare_runtime would allocate (see
 // DecoderFitMeasure in parakeet_ctc.h) without allocating. Requires a
 // load_from_gguf_metadata_only model. `worst_enc_frames` sizes the worst-case
-// per-window enc-projection graph (clamped to k_enc_proj_T_max). Also covers
-// RNNT models (same runtime).
+// per-window enc-projection graph (clamped to tdt_enc_proj_capacity). Also
+// covers RNNT models (same runtime).
 int tdt_measure_runtime(const ParakeetCtcModel & model, int worst_enc_frames,
                         DecoderFitMeasure & out);
 

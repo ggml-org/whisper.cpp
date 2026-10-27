@@ -102,7 +102,8 @@ TDT models can additionally run on the Apple Neural Engine end to end: a
 fixed-window encoder export with padding masks and a batched TDT decoder
 sidecar (`<model>-decoder.mlmodelc`). With the decoder sidecar the engine cuts
 long recordings at pauses into independent segments and decodes 16 of them per
-Neural Engine dispatch. A GGUF without encoder weights, such as the published
+Neural Engine dispatch, and it allocates the sequential ggml decoder only when a
+call needs it. A GGUF without encoder weights, such as the published
 TranscribePsy Core ML distribution, loads only with its encoder sidecar; see
 [Neural Engine sidecars](docs/backends.md#neural-engine-fixed-window-encoder-and-tdt-decoder-sidecars).
 

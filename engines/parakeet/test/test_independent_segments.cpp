@@ -133,14 +133,21 @@ TdtLaneGeometry toy_geometry() {
     return g;
 }
 
+parakeet::TdtEmbeddingRows f32_rows(const std::vector<float> & table) {
+    const auto * first = reinterpret_cast<const uint8_t *>(table.data());
+    return parakeet::tdt_embedding_rows_from_bytes(
+        GGML_TYPE_F32, (int64_t) table.size() / kHPred, kHPred,
+        std::vector<uint8_t>(first, first + table.size() * sizeof(float)));
+}
+
 // Row `token` is {token, 100 + token}, so an embedding fed back is traceable.
-std::vector<float> toy_embed_table() {
+parakeet::TdtEmbeddingRows toy_embed_table() {
     std::vector<float> table;
     for (int token = 0; token < kVocabPlusBlank; ++token) {
         table.push_back((float) token);
         table.push_back(100.0f + (float) token);
     }
-    return table;
+    return f32_rows(table);
 }
 
 // Encoder frames carry the script: value = token * 10 + duration index, so the
@@ -350,7 +357,7 @@ void check_geometry_mismatch() {
            "geometry: a stepper with the wrong h_pred is refused");
 
     ScriptedStepper ok(1);
-    const std::vector<float> short_table(2, 0.0f);
+    const parakeet::TdtEmbeddingRows short_table = f32_rows(std::vector<float>(kHPred, 0.0f));
     expect(tdt_decode_lanes(toy_geometry(), short_table, ok, windows_of({script}), opts,
                             out, nullptr) != 0,
            "geometry: a short embedding table is refused");

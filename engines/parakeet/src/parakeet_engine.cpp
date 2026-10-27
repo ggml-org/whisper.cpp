@@ -153,6 +153,12 @@ int decode_transducer_window(const ParakeetCtcModel & model,
         options, state, tokens, steps);
 }
 
+int prepare_transducer_runtime(const ParakeetCtcModel & model, TdtRuntimeWeights & runtime) {
+    return model_coreml_decoder(model) != nullptr
+        ? tdt_prepare_runtime_deferred(model, runtime)
+        : tdt_prepare_runtime(model, runtime);
+}
+
 int decode_transducer(const ParakeetCtcModel & model,
                        TdtRuntimeWeights & weights,
                        const float * encoder_out,
@@ -602,7 +608,7 @@ bool transcribe_independent_segments(ParakeetCtcModel & model, TdtRuntimeWeights
     const auto t_dec = clock::now();
     const int rc = host
         ? decode_windows_on_host(model, rt, windows, enc_out.d_model, dopts, per_window)
-        : tdt_decode_lanes(tdt_lane_geometry(model, rt), rt.embed, stepper, windows, dopts,
+        : tdt_decode_lanes(tdt_lane_geometry(model, rt), rt.embed_rows, stepper, windows, dopts,
                            per_window, &stats);
     if (rc != 0) {
         PARAKEET_LOG_WARN("parakeet: Core ML batched decode failed (rc=%d); falling back to the "
@@ -782,7 +788,7 @@ Engine::Engine(const EngineOptions & opts) : pimpl_(std::make_unique<Impl>()) {
     }
     if (is_transducer(pimpl_->model.model_type) ||
         pimpl_->model.model_type == ParakeetModelType::NEMOTRON) {
-        if (tdt_prepare_runtime(pimpl_->model, pimpl_->transducer_rt) != 0) {
+        if (prepare_transducer_runtime(pimpl_->model, pimpl_->transducer_rt) != 0) {
             throw std::runtime_error("Engine: transducer runtime preparation failed");
         }
         pimpl_->transducer_ready = true;

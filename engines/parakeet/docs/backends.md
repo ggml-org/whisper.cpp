@@ -592,8 +592,11 @@ The **TDT decoder sidecar** runs the prediction LSTM and the joint for 16
 independent decoder states (`--lanes`) per dispatch; the prediction network is
 memory-bandwidth bound, so one weight read serves every lane. The TDT walk and
 the token-embedding lookup stay on the host (a gather is not a Neural Engine
-op). The published model keeps the joint output projection at 6 bits too
-(`--nbits-out 6`); the exporter's default leaves it fp16.
+op); the lookup converts one row at a time from the GGUF's own embedding table,
+so the engine holds no dequantised copy of it, and the sequential ggml decoder
+is built only when a call needs it (see below). The published model keeps the
+joint output projection at 6 bits too (`--nbits-out 6`); the exporter's
+default leaves it fp16.
 
 ```bash
 python engines/parakeet/scripts/export-decoder-coreml-ane.py \
@@ -617,7 +620,11 @@ Overrides: `PARAKEET_ANE_BATCH_DECODE=0` keeps the sequential path,
 the pause search, and `PARAKEET_ANE_DECODE_HOST=1` decodes the same segments on
 the host for parity checks. The lane walk's geometry is cross-checked against
 the GGUF at load; a mismatched export is refused with a log line and the
-sequential decoder runs.
+sequential decoder runs. The sequential decoder's graphs and state are
+allocated on its first call (streaming, these overrides, or a fallback), not at
+load, and its encoder projection holds the model's long-form window (750
+frames for TranscribePsy) rather than a fixed 4096; longer inputs are decoded
+in window-sized pieces that share one prediction state, with the same tokens.
 
 A **GGUF without encoder weights**, such as the 17 MB TranscribePsy Core ML
 GGUF, loads only when the encoder sidecar can take the encoder over: it is then

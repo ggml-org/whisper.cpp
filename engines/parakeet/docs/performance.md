@@ -576,6 +576,31 @@ section below shows what the seams cost on single-language speech (nothing to
 0.6 %) and why this recording exaggerates it: every seam that lands near the
 French sentence at a language switch can flip it.
 
+### TDT decoder memory on the Neural Engine path (Mac Studio M3 Ultra, 2026-10-27)
+
+TranscribePsy's Core ML distribution on a Mac Studio M3 Ultra (macOS 26.7, two
+threads, `PARAKEET_COREML=ON`), one fresh process per run, process footprint
+(`phys_footprint`) from `task_info`. Master `352f8cc6` against the build that
+reads the batched decoder's embedding rows from the GGUF table, allocates the
+sequential ggml decoder on its first call and sizes its encoder projection to
+the model's 750-frame window. The footprint after load drops from 354.1 MiB to
+328.0 MiB on every clip: the 20 MiB dequantised embedding table and the
+resident part of a ggml decoder the Neural Engine path never ran. Peaks of the
+batched rows are medians of two runs, the sequential rows one run each; every
+transcript is identical between the two builds:
+
+| Path | Clip | Peak, master | Peak, this build |
+|---|---|--:|--:|
+| batched Neural Engine decoder | `jfk.wav`, 11 s | 368.0 MiB | 344.3 MiB |
+| batched Neural Engine decoder | `sample-16k.wav`, 20 s | 369.8 MiB | 346.5 MiB |
+| batched Neural Engine decoder | `en-nopause-12x.wav`, 374 s | 415.6 MiB | 390.5 MiB |
+| batched Neural Engine decoder | `en-pause-12x.wav`, 390 s | 417.7 MiB | 392.6 MiB |
+| sequential ggml CPU decoder (`PARAKEET_ANE_BATCH_DECODE=0`) | 10 min recording | 464.4 MiB | 419.8 MiB |
+| sequential ggml Metal decoder (same, `--n-gpu-layers 999`) | 10 min recording | 486.7 MiB | 453.3 MiB |
+
+The sequential rows also shed the 4096-frame projection and its graphs, which
+the decoder now builds for 750 frames and reuses across window-sized pieces.
+
 ### TranscribePsy: port against the research fork (2026-10)
 
 The port on this branch (`58bf7d07`, master's parakeet engine with the ggml

@@ -1098,6 +1098,26 @@ if (PARAKEET_BUILD_TESTS)
     parakeet_apply_ccache(test-independent-segments)
     parakeet_register_test(test-independent-segments LABEL "unit")
 
+    add_executable(test-tdt-runtime-memory
+        test/test_tdt_runtime_memory.cpp
+        src/parakeet_ctc.cpp
+        src/parakeet_engine.cpp
+        src/parakeet_nemotron.cpp
+        src/parakeet_unified.cpp
+        src/parakeet_log.cpp
+        src/parakeet_tdt.cpp
+        src/parakeet_eou.cpp
+        src/parakeet_sortformer.cpp
+        src/parakeet_diarization_v3.cpp
+        src/mel_preprocess.cpp
+        src/sentencepiece_bpe.cpp
+        src/energy_vad.cpp)
+    target_link_libraries(test-tdt-runtime-memory PRIVATE ggml parakeet-backend-defs)
+    target_include_directories(test-tdt-runtime-memory PRIVATE src include ggml/include)
+    parakeet_apply_backend_defs(test-tdt-runtime-memory)
+    parakeet_apply_ccache(test-tdt-runtime-memory)
+    parakeet_register_test(test-tdt-runtime-memory LABEL "unit")
+
     # test_rnnt.cpp exercises internal decoder entry points
     # (rnnt_decode_window, build_transducer_argmax_outputs) that are not
     # exported from the shared library (CXX_VISIBILITY_PRESET hidden), so
@@ -2462,6 +2482,38 @@ if (PARAKEET_BUILD_TESTS)
         LABEL    "fixture"
         EXE      test-tdt-unroll-parity
         ARGS     "${_qvp_tdt_q8_gguf}" "${_qvp_jfk_wav}"
+        REQUIRES "${_qvp_tdt_q8_gguf}" "${_qvp_jfk_wav}")
+    add_executable(test-tdt-deferred-runtime
+        test/test_tdt_deferred_runtime.cpp
+        src/parakeet_ctc.cpp
+        src/parakeet_engine.cpp
+        src/parakeet_nemotron.cpp
+        src/parakeet_unified.cpp
+        src/parakeet_log.cpp
+        src/parakeet_tdt.cpp
+        src/parakeet_eou.cpp
+        src/parakeet_sortformer.cpp
+        src/parakeet_diarization_v3.cpp
+        src/mel_preprocess.cpp
+        src/sentencepiece_bpe.cpp
+        src/energy_vad.cpp)
+    target_link_libraries(test-tdt-deferred-runtime PRIVATE ggml parakeet-backend-defs)
+    target_include_directories(test-tdt-deferred-runtime PRIVATE include src ggml/include)
+    parakeet_apply_backend_defs(test-tdt-deferred-runtime)
+    parakeet_register_test(test-tdt-deferred-runtime
+        LABEL    "fixture"
+        EXE      test-tdt-deferred-runtime
+        ARGS     "${_qvp_tdt_q8_gguf}" "${_qvp_jfk_wav}"
+        REQUIRES "${_qvp_tdt_q8_gguf}" "${_qvp_jfk_wav}")
+    parakeet_register_test(test-tdt-deferred-runtime-transcribepsy
+        LABEL    "fixture"
+        EXE      test-tdt-deferred-runtime
+        ARGS     "${_qvp_transcribepsy_gguf}" "${_qvp_jfk_wav}"
+        REQUIRES "${_qvp_transcribepsy_gguf}" "${_qvp_jfk_wav}")
+    parakeet_register_test(test-tdt-deferred-runtime-gpu
+        LABEL    "gpu"
+        EXE      test-tdt-deferred-runtime
+        ARGS     "${_qvp_tdt_q8_gguf}" "${_qvp_jfk_wav}" "--n-gpu-layers" "1"
         REQUIRES "${_qvp_tdt_q8_gguf}" "${_qvp_jfk_wav}")
     # Multi-piece French guard for the on-device predictor: the gpu0
     # scalar path and the gpu1 graph path must produce identical token IDs on a

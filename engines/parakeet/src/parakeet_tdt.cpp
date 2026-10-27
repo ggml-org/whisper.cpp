@@ -4,6 +4,7 @@
 #include "parakeet_log.h"
 #include "sentencepiece_bpe.h"
 #include "backend_util.h"
+#include "long_form.h"
 
 #include "ggml.h"
 #include "ggml-alloc.h"
@@ -116,6 +117,36 @@ void dequantize_to_f32(const ggml_tensor * t, std::vector<float> & out) {
     std::vector<uint8_t> host_raw(nbytes);
     ggml_backend_tensor_get(t, host_raw.data(), 0, nbytes);
     tr->to_float(host_raw.data(), out.data(), (int64_t) n);
+}
+
+bool row_type_converts(ggml_type type, int64_t width) {
+    if (width <= 0 || width % ggml_blck_size(type) != 0) return false;
+    if (type == GGML_TYPE_F32) return true;
+    const auto * traits = ggml_get_type_traits(type);
+    return traits != nullptr && traits->to_float != nullptr;
+}
+
+void convert_row_to_f32(ggml_type type, const uint8_t * src, int64_t width, float * dst) {
+    if (type == GGML_TYPE_F32) {
+        std::memcpy(dst, src, (size_t) width * sizeof(float));
+        return;
+    }
+    ggml_get_type_traits(type)->to_float(src, dst, width);
+}
+
+bool tensor_is_host_memory(const ggml_tensor * t) {
+    if (t->buffer == nullptr) return t->data != nullptr;
+    return ggml_backend_buffer_is_host(t->buffer);
+}
+
+TdtEmbeddingRows borrowed_embedding_rows(const ggml_tensor * table) {
+    TdtEmbeddingRows rows;
+    rows.type      = table->type;
+    rows.rows      = ggml_nrows(table);
+    rows.width     = table->ne[0];
+    rows.row_bytes = table->nb[1];
+    rows.borrowed  = static_cast<const uint8_t *>(table->data);
+    return rows;
 }
 
 // ---- Scalar host-side LSTM step (CPU fallback) ----
@@ -1023,6 +1054,40 @@ bool compute_graph(TdtRuntimeWeights & rt, ggml_cgraph * cg) {
 
 }  // anonymous namespace
 
+bool TdtEmbeddingRows::read(int64_t row, float * dst) const {
+    const uint8_t * base = owned.empty() ? borrowed : owned.data();
+    if (!has_row(row) || base == nullptr || dst == nullptr) return false;
+    convert_row_to_f32(type, base + (size_t) row * row_bytes, width, dst);
+    return true;
+}
+
+TdtEmbeddingRows tdt_embedding_rows_from_bytes(ggml_type type, int64_t rows, int64_t width,
+                                               std::vector<uint8_t> bytes) {
+    if (rows <= 0 || !row_type_converts(type, width)) return TdtEmbeddingRows{};
+    const size_t row_bytes = ggml_row_size(type, width);
+    if (bytes.size() < row_bytes * (size_t) rows) return TdtEmbeddingRows{};
+    TdtEmbeddingRows table;
+    table.type      = type;
+    table.rows      = rows;
+    table.width     = width;
+    table.row_bytes = row_bytes;
+    table.owned     = std::move(bytes);
+    return table;
+}
+
+TdtEmbeddingRows tdt_embedding_rows(const ggml_tensor * table) {
+    if (table == nullptr || ggml_n_dims(table) > 2 || !ggml_is_contiguous(table) ||
+        !row_type_converts(table->type, table->ne[0])) {
+        return TdtEmbeddingRows{};
+    }
+    if (tensor_is_host_memory(table)) return borrowed_embedding_rows(table);
+    if (table->buffer == nullptr) return TdtEmbeddingRows{};
+    std::vector<uint8_t> bytes(ggml_nbytes(table));
+    ggml_backend_tensor_get(table, bytes.data(), 0, bytes.size());
+    return tdt_embedding_rows_from_bytes(table->type, ggml_nrows(table), table->ne[0],
+                                         std::move(bytes));
+}
+
 TdtRuntimeWeights::TdtRuntimeWeights(TdtRuntimeWeights && o) noexcept { *this = std::move(o); }
 
 TdtRuntimeWeights & TdtRuntimeWeights::operator=(TdtRuntimeWeights && o) noexcept {
@@ -1036,8 +1101,10 @@ TdtRuntimeWeights & TdtRuntimeWeights::operator=(TdtRuntimeWeights && o) noexcep
     V_out        = o.V_out;
     L            = o.L;
     num_durations = o.num_durations;
+    model        = o.model;          o.model = nullptr;
     weights      = o.weights;        o.weights = nullptr;
     graph_embed  = o.graph_embed;    o.graph_embed = nullptr;
+    embed_rows   = std::move(o.embed_rows);
     backend      = o.backend;        o.backend = nullptr;
     n_threads    = o.n_threads;
     use_graphs   = o.use_graphs;
@@ -1052,6 +1119,8 @@ TdtRuntimeWeights & TdtRuntimeWeights::operator=(TdtRuntimeWeights && o) noexcep
     host_joint_out_w  = std::move(o.host_joint_out_w);
     host_joint_out_b  = std::move(o.host_joint_out_b);
     concat_lstm_input = o.concat_lstm_input;
+    concat_lstm_allowed = o.concat_lstm_allowed;
+    decode_resources_deferred = o.decode_resources_deferred; o.decode_resources_deferred = false;
     gctx         = o.gctx;           o.gctx = nullptr;
     lstm_cat_ctx    = o.lstm_cat_ctx;    o.lstm_cat_ctx    = nullptr;
     lstm_cat_buffer = o.lstm_cat_buffer; o.lstm_cat_buffer = nullptr;
@@ -1163,15 +1232,15 @@ std::vector<int32_t> build_duration_table(const ParakeetCtcModel & model, int nu
     return table;
 }
 
-// Shared body of tdt_prepare_runtime and tdt_measure_runtime. When `measure`
-// is non-null every allocation the real path makes is sized into `measure`
-// instead of performed (fit projection; requires a metadata-only model whose
-// weight tensors are marked externally-allocated), and W is left non-ready.
-// `measure_enc_frames` sizes the worst-case per-window enc-projection graph.
-static int tdt_prepare_runtime_impl(const ParakeetCtcModel & model, TdtRuntimeWeights & W,
-                                    bool allow_fused_lstm, bool allow_concat_lstm,
-                                    DecoderFitMeasure * measure, int measure_enc_frames) {
+enum class RuntimeSizing { Allocate, Measure };
+
+static int prepare_runtime_shape(const ParakeetCtcModel & model, TdtRuntimeWeights & W,
+                                 RuntimeSizing sizing, bool allow_fused_lstm = true,
+                                 bool allow_concat_lstm = true) {
     W = TdtRuntimeWeights{};
+    W.model               = &model;
+    W.concat_lstm_allowed = allow_concat_lstm;
+    const bool measure    = sizing == RuntimeSizing::Measure;
 
     const bool is_nemotron =
         model.model_type == ParakeetModelType::NEMOTRON;
@@ -1253,11 +1322,18 @@ static int tdt_prepare_runtime_impl(const ParakeetCtcModel & model, TdtRuntimeWe
     W.argmax_on_gpu   = W.use_graphs && backend_runs_transducer_argmax(W.backend, W.V_out, W.V_plus_1, W.num_durations);
 
     // The batched Core ML decoder looks tokens up on the host whichever path
-    // the sequential decoder takes (a gather is not an ANE op).
+    // the sequential decoder takes (a gather is not an ANE op), one row at a
+    // time from the GGUF table.
     if (!measure && model_coreml_decoder(model) != nullptr) {
-        dequantize_to_f32(W.weights->predict_embed, W.embed);
+        W.embed_rows = tdt_embedding_rows(W.weights->predict_embed);
     }
+    W.enc_proj_T_max = W.use_graphs ? tdt_enc_proj_capacity(model) : 0;
+    return 0;
+}
 
+static int build_decode_resources(const ParakeetCtcModel & model, TdtRuntimeWeights & W,
+                                  DecoderFitMeasure * measure = nullptr,
+                                  int measure_enc_frames = 0) {
     if (!W.use_graphs) {
         if (measure) {
             // ---- CPU fallback, sized: the dequantised host f32 copies ----
@@ -1278,9 +1354,7 @@ static int tdt_prepare_runtime_impl(const ParakeetCtcModel & model, TdtRuntimeWe
             return 0;
         }
         // ---- CPU fallback: dequantise weights to host f32 ----
-        if (W.embed.empty()) {
-            dequantize_to_f32(W.weights->predict_embed, W.embed);
-        }
+        dequantize_to_f32(W.weights->predict_embed, W.embed);
         W.host_lstm.clear();
         W.host_lstm.resize(W.L);
         for (int l = 0; l < W.L; ++l) {
@@ -1322,7 +1396,7 @@ static int tdt_prepare_runtime_impl(const ParakeetCtcModel & model, TdtRuntimeWe
         const int H_pred  = W.H_pred;
         const int H_joint = W.H_joint;
         const int L       = W.L;
-        const int T_max   = TdtRuntimeWeights::k_enc_proj_T_max;
+        const int T_max   = W.enc_proj_T_max;
 
         W.graph_embed = W.weights->predict_embed;
         if (!backend_runs_embedding_lookup(W.backend, W.graph_embed)) {
@@ -1376,7 +1450,6 @@ static int tdt_prepare_runtime_impl(const ParakeetCtcModel & model, TdtRuntimeWe
                 return 4;
             }
         }
-        W.enc_proj_T_max = T_max;
 
         if (!measure && W.graph_embed != W.weights->predict_embed) {
             std::vector<float> embedding;
@@ -1409,7 +1482,7 @@ static int tdt_prepare_runtime_impl(const ParakeetCtcModel & model, TdtRuntimeWe
     }
 
     size_t lstm_cat_bytes = 0;
-    W.concat_lstm_input = allow_concat_lstm &&
+    W.concat_lstm_input = W.concat_lstm_allowed &&
                           backend_runs_concat(W.backend, W.H_pred) &&
                           build_lstm_input_concat(W, measure ? &lstm_cat_bytes : nullptr);
     if (!W.concat_lstm_input) W.lstm_cat.clear();
@@ -1439,10 +1512,9 @@ static int tdt_prepare_runtime_impl(const ParakeetCtcModel & model, TdtRuntimeWe
             measure->device_compute_bytes += sz;
         }
         // Worst-case per-window enc-projection graph (built lazily at decode
-        // time). Larger windows are projected in <= k_enc_proj_T_max chunks,
+        // time). Larger windows are projected in <= enc_proj_T_max chunks,
         // matching enc_proj_persist's capacity.
-        int T = measure_enc_frames;
-        if (T > TdtRuntimeWeights::k_enc_proj_T_max) T = TdtRuntimeWeights::k_enc_proj_T_max;
+        const int T = std::min(measure_enc_frames, W.enc_proj_T_max);
         if (T > 0) {
             size_t sz = 0;
             build_enc_proj_graph(W, T, &sz);
@@ -1484,10 +1556,49 @@ static int tdt_prepare_runtime_impl(const ParakeetCtcModel & model, TdtRuntimeWe
     return 0;
 }
 
+// Shared body of tdt_prepare_runtime and tdt_measure_runtime. When `measure`
+// is non-null every allocation the real path makes is sized into `measure`
+// instead of performed (fit projection; requires a metadata-only model whose
+// weight tensors are marked externally-allocated), and W is left non-ready.
+// `measure_enc_frames` sizes the worst-case per-window enc-projection graph.
+static int tdt_prepare_runtime_impl(const ParakeetCtcModel & model, TdtRuntimeWeights & W,
+                                    bool allow_fused_lstm, bool allow_concat_lstm,
+                                    DecoderFitMeasure * measure, int measure_enc_frames) {
+    const RuntimeSizing sizing = measure ? RuntimeSizing::Measure : RuntimeSizing::Allocate;
+    if (int rc = prepare_runtime_shape(model, W, sizing, allow_fused_lstm, allow_concat_lstm);
+        rc != 0) {
+        return rc;
+    }
+    return build_decode_resources(model, W, measure, measure_enc_frames);
+}
+
+static int ensure_decode_resources(TdtRuntimeWeights & W) {
+    if (!W.decode_resources_deferred) return 0;
+    if (int rc = build_decode_resources(*W.model, W); rc != 0) {
+        W.release();
+        return rc;
+    }
+    W.decode_resources_deferred = false;
+    return 0;
+}
+
 int tdt_prepare_runtime(const ParakeetCtcModel & model, TdtRuntimeWeights & W,
                         bool allow_fused_lstm, bool allow_concat_lstm) {
     return tdt_prepare_runtime_impl(model, W, allow_fused_lstm, allow_concat_lstm,
                                     /*measure=*/nullptr, /*measure_enc_frames=*/0);
+}
+
+int tdt_prepare_runtime_deferred(const ParakeetCtcModel & model, TdtRuntimeWeights & W) {
+    if (int rc = prepare_runtime_shape(model, W, RuntimeSizing::Allocate); rc != 0) return rc;
+    W.decode_resources_deferred = true;
+    return 0;
+}
+
+int tdt_enc_proj_capacity(const ParakeetCtcModel & model) {
+    const int window = resolve_long_form_window_frames(
+        model.encoder_cfg.long_form_window_hint, model.encoder_cfg.pos_emb_max_len,
+        kLongFormAutoWindowFrames, kLongFormMinWindowFrames);
+    return std::min(window, TdtRuntimeWeights::k_enc_proj_T_max);
 }
 
 int tdt_measure_runtime(const ParakeetCtcModel & model, int worst_enc_frames,
@@ -1713,6 +1824,10 @@ int decode_window_unrolled(const ParakeetCtcModel & model, TdtRuntimeWeights & W
 }  // anonymous namespace
 
 void tdt_init_state(TdtRuntimeWeights & W, int blank_id, TdtDecodeState & state) {
+    if (const int rc = ensure_decode_resources(W); rc != 0) {
+        throw std::runtime_error("tdt_init_state: decoder runtime build failed (rc=" +
+                                 std::to_string(rc) + ")");
+    }
     const int H = W.H_pred;
     const int L = W.L;
 
@@ -1761,26 +1876,14 @@ void tdt_init_state(TdtRuntimeWeights & W, int blank_id, TdtDecodeState & state)
     state.initialized = true;
 }
 
-int tdt_decode_window(const ParakeetCtcModel & model,
-                      TdtRuntimeWeights & W,
-                      const float * encoder_out_window,
-                      int n_frames, int D_enc,
-                      const TdtDecodeOptions & opts,
-                      TdtDecodeState & state,
-                      std::vector<int32_t> & out_tokens,
-                      int & out_steps) {
-    out_steps = 0;
-    if (D_enc != W.D_enc) {
-        PARAKEET_LOG_ERROR("tdt_decode_window: encoder d_model mismatch (%d vs %d)\n",
-                           D_enc, W.D_enc);
-        return 1;
-    }
-    if (n_frames <= 0) return 0;
-
-    if (!state.initialized) {
-        tdt_init_state(W, (int) model.blank_id, state);
-    }
-
+static int decode_bounded_window(const ParakeetCtcModel & model,
+                                 TdtRuntimeWeights & W,
+                                 const float * encoder_out_window,
+                                 int n_frames, int D_enc,
+                                 const TdtDecodeOptions & opts,
+                                 TdtDecodeState & state,
+                                 std::vector<int32_t> & out_tokens,
+                                 int & out_steps) {
     const int H_pred  = W.H_pred;
     const int V_p1    = W.V_plus_1;
     const int D_n     = W.num_durations;
@@ -1903,6 +2006,52 @@ int tdt_decode_window(const ParakeetCtcModel & model,
     return 0;
 }
 
+static int decode_bounded_windows(const ParakeetCtcModel & model,
+                                  TdtRuntimeWeights & W,
+                                  const float * encoder_out,
+                                  int n_frames, int D_enc,
+                                  const TdtDecodeOptions & opts,
+                                  TdtDecodeState & state,
+                                  std::vector<int32_t> & out_tokens,
+                                  int & out_steps) {
+    const int bound = W.use_graphs && W.enc_proj_T_max > 0 ? W.enc_proj_T_max : n_frames;
+    for (int start = 0; start < n_frames; start += bound) {
+        const int frames = std::min(bound, n_frames - start);
+        int steps = 0;
+        if (int rc = decode_bounded_window(model, W, encoder_out + (size_t) start * D_enc,
+                                           frames, D_enc, opts, state, out_tokens, steps);
+            rc != 0) {
+            return rc;
+        }
+        out_steps += steps;
+    }
+    return 0;
+}
+
+int tdt_decode_window(const ParakeetCtcModel & model,
+                      TdtRuntimeWeights & W,
+                      const float * encoder_out_window,
+                      int n_frames, int D_enc,
+                      const TdtDecodeOptions & opts,
+                      TdtDecodeState & state,
+                      std::vector<int32_t> & out_tokens,
+                      int & out_steps) {
+    out_steps = 0;
+    if (D_enc != W.D_enc) {
+        PARAKEET_LOG_ERROR("tdt_decode_window: encoder d_model mismatch (%d vs %d)\n",
+                           D_enc, W.D_enc);
+        return 1;
+    }
+    if (n_frames <= 0) return 0;
+    if (int rc = ensure_decode_resources(W); rc != 0) return rc;
+
+    if (!state.initialized) {
+        tdt_init_state(W, (int) model.blank_id, state);
+    }
+    return decode_bounded_windows(model, W, encoder_out_window, n_frames, D_enc, opts,
+                                  state, out_tokens, out_steps);
+}
+
 TdtLaneGeometry tdt_lane_geometry(const ParakeetCtcModel & model, const TdtRuntimeWeights & W) {
     TdtLaneGeometry geom;
     geom.blank_id         = (int) model.blank_id;
@@ -1937,7 +2086,7 @@ struct LaneCursor {
 // emitted token's embedding row.
 struct LaneDecoder {
     const TdtLaneGeometry &            geom;
-    const std::vector<float> &         embed_table;
+    const TdtEmbeddingRows &           embed_rows;
     TdtLaneStepper &                   stepper;
     const std::vector<TdtLaneWindow> & windows;
     const TdtDecodeOptions &           opts;
@@ -1953,9 +2102,9 @@ struct LaneDecoder {
     std::vector<std::vector<int32_t>>  tokens;
     int dispatches = 0;
 
-    LaneDecoder(const TdtLaneGeometry & g, const std::vector<float> & table, TdtLaneStepper & s,
+    LaneDecoder(const TdtLaneGeometry & g, const TdtEmbeddingRows & rows, TdtLaneStepper & s,
                 const std::vector<TdtLaneWindow> & w, const TdtDecodeOptions & o)
-        : geom(g), embed_table(table), stepper(s), windows(w), opts(o),
+        : geom(g), embed_rows(rows), stepper(s), windows(w), opts(o),
           L((int) s.lanes()), h_pred(s.h_pred()), h_dim(s.h_dim()), d_enc(s.d_enc()),
           v_out(s.v_out()), n_dur(geom.durations.empty()
                                       ? (int) (v_out - geom.vocab_plus_blank)
@@ -1966,9 +2115,7 @@ struct LaneDecoder {
           h_out((size_t) L * h_dim, 0.0f), c_out((size_t) L * h_dim, 0.0f),
           lane((size_t) L), final_state(w.size()), tokens(w.size()) {}
 
-    const float * embed_row(int token) const {
-        return embed_table.data() + (size_t) token * (size_t) h_pred;
-    }
+    void load_embedding(int token, int l) { embed_rows.read(token, lane_embed(l)); }
 
     float * lane_h(int l)     { return h.data()     + (size_t) l * h_dim; }
     float * lane_c(int l)     { return c.data()     + (size_t) l * h_dim; }
@@ -1985,7 +2132,7 @@ struct LaneDecoder {
         // prediction, the same seed tdt_init_state gives the sequential walk.
         std::fill(lane_h(l), lane_h(l) + h_dim, 0.0f);
         std::fill(lane_c(l), lane_c(l) + h_dim, 0.0f);
-        std::copy(embed_row(geom.blank_id), embed_row(geom.blank_id) + h_pred, lane_embed(l));
+        load_embedding(geom.blank_id, l);
     }
 
     // Seats the next window with frames into lane `l`, or idles the lane.
@@ -2043,7 +2190,7 @@ struct LaneDecoder {
         tokens[cur.window].push_back((int32_t) best_token);
         std::copy(h_out.begin() + (size_t) l * h_dim, h_out.begin() + (size_t) (l + 1) * h_dim, lane_h(l));
         std::copy(c_out.begin() + (size_t) l * h_dim, c_out.begin() + (size_t) (l + 1) * h_dim, lane_c(l));
-        std::copy(embed_row(best_token), embed_row(best_token) + h_pred, lane_embed(l));
+        load_embedding(best_token, l);
 
         ++cur.symbols;
         if (best_dur > 0 || cur.symbols >= opts.max_symbols_per_step) {
@@ -2120,7 +2267,7 @@ bool lane_stepper_matches(const TdtLaneGeometry & geom, const TdtLaneStepper & s
 }  // anonymous namespace
 
 int tdt_decode_lanes(const TdtLaneGeometry & geom,
-                     const std::vector<float> & embed_table,
+                     const TdtEmbeddingRows & embed_rows,
                      TdtLaneStepper & stepper,
                      const std::vector<TdtLaneWindow> & windows,
                      const TdtDecodeOptions & opts,
@@ -2136,13 +2283,13 @@ int tdt_decode_lanes(const TdtLaneGeometry & geom,
                            (long long) stepper.d_enc(), geom.d_enc, (long long) stepper.v_out());
         return 2;
     }
-    if (embed_table.size() < (size_t) geom.vocab_plus_blank * (size_t) geom.h_pred ||
+    if (embed_rows.rows < geom.vocab_plus_blank || embed_rows.width != geom.h_pred ||
         geom.blank_id < 0 || geom.blank_id >= geom.vocab_plus_blank) {
-        PARAKEET_LOG_ERROR("tdt: batched decoder needs the host embedding table\n");
+        PARAKEET_LOG_ERROR("tdt: batched decoder needs the embedding table\n");
         return 3;
     }
 
-    LaneDecoder decoder(geom, embed_table, stepper, windows, opts);
+    LaneDecoder decoder(geom, embed_rows, stepper, windows, opts);
 
     std::vector<size_t> all(windows.size());
     for (size_t i = 0; i < windows.size(); ++i) all[i] = i;
@@ -2178,29 +2325,10 @@ int tdt_greedy_decode(const ParakeetCtcModel & model,
     result.token_ids.reserve(T_enc);
     result.steps = 0;
 
-    // The offline encoder may concatenate many windows, but the graph
-    // decoder's persistent projection holds at most enc_proj_T_max frames.
-    // Keep one predictor state (including TDT duration carry) across bounded
-    // decoder windows. Short inputs retain their single-window path.
-    const int window_frames = W.use_graphs ? W.enc_proj_T_max : T_enc;
-    if (window_frames > 0 && T_enc > window_frames) {
-        for (int start = 0; start < T_enc; start += window_frames) {
-            const int frames = std::min(window_frames, T_enc - start);
-            int steps = 0;
-            if (int rc = tdt_decode_window(
-                    model, W, encoder_out + (size_t) start * D_enc,
-                    frames, D_enc, opts, state, result.token_ids, steps);
-                rc != 0) {
-                return rc;
-            }
-            result.steps += steps;
-        }
-    } else {
-        if (int rc = tdt_decode_window(model, W, encoder_out, T_enc, D_enc,
-                                       opts, state, result.token_ids, result.steps);
-            rc != 0) {
-            return rc;
-        }
+    if (int rc = tdt_decode_window(model, W, encoder_out, T_enc, D_enc,
+                                   opts, state, result.token_ids, result.steps);
+        rc != 0) {
+        return rc;
     }
 
     result.text = detokenize(model.vocab, result.token_ids);
