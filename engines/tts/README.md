@@ -39,8 +39,9 @@ its dialogue-specific prompt template. Use the explicit TTSD sampling settings
 in the [dialogue example](docs/moss.md); the CLI's shared defaults are for
 TTS-v1.5, and sampled dialogue can stop before all requested turns are spoken.
 The opt-in [validated cloning runner](docs/moss.md#validated-cloning) checks
-English dialogue with local MOSS transcription and retries rejected outputs,
-including ASR results that reach the decoding token limit.
+English dialogue and each requested turn with local MOSS transcription, retrying rejected outputs,
+including ASR results that reach the decoding token limit. It supports CPU and
+CUDA, plus Vulkan through `--gpu --backend vulkan`.
 
 This in-tree package consumes the shared `ggml-speech` dependency. Build and
 vcpkg consumption instructions are in [docs/build.md](docs/build.md).

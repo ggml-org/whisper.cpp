@@ -54,13 +54,14 @@ def text_scores(expected, transcript):
     target, observed = words(expected), words(transcript)
     ending = words(re.split(r"\[S\d+\]", expected)[-1])
     if not observed:
-        return {"word_error_rate": 1.0, "ending_error_rate": 1.0}
+        return {"word_error_rate": 1.0, "ending_error_rate": 1.0, "worst_turn_error_rate": 1.0}
     if not ending:
         raise ValueError("Expected text must end with words")
     lengths = range(max(1, len(ending) - 3), len(ending) + 4)
     ending_errors = min(edit_distance(ending, observed[-size:]) for size in lengths)
     return {"word_error_rate": edit_distance(target, observed) / len(target),
-            "ending_error_rate": ending_errors / len(ending)}
+            "ending_error_rate": ending_errors / len(ending),
+            "worst_turn_error_rate": worst_turn_error_rate(expected, observed)}
 
 
 def phrase_error_rate(reference, transcript):
@@ -68,6 +69,15 @@ def phrase_error_rate(reference, transcript):
     for index, token in enumerate(reference, 1):
         row = distance_row(row, token, transcript, index)
     return min(row) / len(reference)
+
+
+def worst_turn_error_rate(expected, observed):
+    rates = []
+    for text in re.split(r"\[S\d+\]", expected):
+        turn = words(text)
+        if turn:
+            rates.append(phrase_error_rate(turn, observed))
+    return max(rates, default=1.0)
 
 
 def unexpected_references(args, transcript):
@@ -97,14 +107,15 @@ def synthesis_command(args, seed, output):
                "--audio-repetition-penalty", str(TTSD_AUDIO_REPETITION_PENALTY)]
     for audio, _ in args.reference:
         command.extend(["--dialogue-ref", audio])
-    return command + (["--gpu", "--backend", "CUDA0"] if args.gpu else [])
+    device = "Vulkan0" if args.backend == "vulkan" else "CUDA0"
+    return command + (["--gpu", "--backend", device] if args.gpu else [])
 
 
 def asr_command(args, audio, output):
     command = [args.asr_cli, "--model", args.asr_model, "--audio", str(audio),
                "--out", str(output), "--threads", str(args.threads),
                "--max-new-tokens", str(ASR_TOKEN_LIMIT)]
-    return command + (["--gpu", "--backend", "cuda"] if args.gpu else [])
+    return command + (["--gpu", "--backend", args.backend] if args.gpu else [])
 
 
 def run_command(command, directory, name, timeout):
@@ -255,7 +266,9 @@ def parse_args(argv=None):
     for name in ("moss-cli", "asr-cli", "backbone", "encoder", "decoder", "asr-model", "text-file", "output"):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--reference", nargs=2, action="append", required=True, metavar=("WAV", "TRANSCRIPT"))
-    parser.add_argument("--gpu", action="store_true", help="Use CUDA device 0 for synthesis and ASR")
+    parser.add_argument("--gpu", action="store_true", help="Use the selected GPU backend for synthesis and ASR")
+    parser.add_argument("--backend", choices=("cuda", "vulkan"), default="cuda",
+                        help="GPU backend used with --gpu (default: cuda)")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--attempts", type=int, default=3)
     parser.add_argument("--threads", type=int, default=4)

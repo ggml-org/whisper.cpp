@@ -318,7 +318,10 @@ python3 engines/tts/scripts/moss-validated-cloning.py \
 `dialogue.txt` contains only the requested new dialogue, with `[S1]`/`[S2]`
 tags. The runner prepends the reference transcripts itself and uses the TTSD
 sampling settings above. References must be mono 24 kHz WAVs. `--gpu` selects
-CUDA device 0 for both processes; omitting it uses CPU. The synthesis process
+CUDA device 0 for both processes. Add `--backend vulkan` to select Vulkan for
+both synthesis and ASR; omitting `--gpu` uses CPU. Set
+`GGML_VK_VISIBLE_DEVICES` before launching the runner when selecting a physical
+Vulkan GPU; the selected device is exposed as `Vulkan0`. The synthesis process
 exits before ASR starts, so their model allocations do not overlap.
 
 Each attempt uses the initial seed plus its zero-based attempt index. An output
@@ -326,8 +329,12 @@ that reaches `--max-new-tokens` (default 1024) is rejected before ASR. Otherwise
 the runner resamples the audio to 16 kHz and rejects ASR results reaching its
 1024-token limit before scoring. Missing or invalid ASR token counts stop the
 run as a tool error. It checks complete transcripts against the
-requested text and its final turn. Both error rates must be at most
-`--max-error-rate` (default 0.25). Empty transcripts and silent audio fail the
+requested text, its final turn, and the best matching phrase for each speaker-tagged
+turn. The overall, ending, and worst-turn error rates must all be at most
+`--max-error-rate` (default 0.25), so an omitted middle turn cannot pass solely
+because its words are a small fraction of the full dialogue. Phrase checks do
+not verify speaker identity or turn order; transcription errors can reject complete
+speech, especially in short turns. Empty transcripts and silent audio fail the
 check. Reference transcripts of at least eight words are also checked for
 unexpected recurrence at that error threshold, unless the requested text itself
 contains the phrase. Shorter references rely on the overall text check. This

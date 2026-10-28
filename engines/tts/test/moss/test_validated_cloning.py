@@ -38,7 +38,7 @@ class ValidatedCloningTest(unittest.TestCase):
             encoder="encoder.gguf", decoder="decoder.gguf", asr_model="asr.gguf",
             reference=[("reference.wav", "An unrelated reference transcript.")],
             target=TARGET, output=str(self.root / "accepted.wav"), seed=5, attempts=3,
-            threads=4, max_new_tokens=1024, timeout=30, max_error_rate=0.25, gpu=False)
+            threads=4, max_new_tokens=1024, timeout=30, max_error_rate=0.25, gpu=False, backend="cuda")
         self.seeds = []
         self.asr_calls = 0
         self.transcripts = {}
@@ -64,6 +64,54 @@ class ValidatedCloningTest(unittest.TestCase):
     def run_guard(self):
         with patch.object(GUARD, "run_command", side_effect=self.fake_command):
             return GUARD.run_guard(self.args)
+
+    def test_cpu_commands_do_not_request_a_gpu(self):
+        synthesis = GUARD.synthesis_command(self.args, 7, self.root / "audio.wav")
+        asr = GUARD.asr_command(self.args, self.root / "audio.wav", self.root / "text.json")
+        self.assertNotIn("--gpu", synthesis)
+        self.assertNotIn("--backend", synthesis)
+        self.assertNotIn("--gpu", asr)
+        self.assertNotIn("--backend", asr)
+
+    def check_gpu_commands(self, backend, device):
+        self.args.gpu = True
+        self.args.backend = backend
+        synthesis = GUARD.synthesis_command(self.args, 7, self.root / "audio.wav")
+        asr = GUARD.asr_command(self.args, self.root / "audio.wav", self.root / "text.json")
+        self.assertEqual(synthesis[-3:], ["--gpu", "--backend", device])
+        self.assertEqual(asr[-3:], ["--gpu", "--backend", backend])
+
+    def test_backend_argument_defaults_to_cuda_and_accepts_vulkan(self):
+        required = ["--moss-cli", "moss-cli", "--asr-cli", "asr", "--backbone", "b",
+                    "--encoder", "e", "--decoder", "d", "--asr-model", "a",
+                    "--text-file", "text", "--output", "out", "--reference", "ref", "words"]
+        self.assertEqual(GUARD.parse_args(required + ["--gpu"]).backend, "cuda")
+        args = GUARD.parse_args(required + ["--gpu", "--backend", "vulkan"])
+        self.assertTrue(args.gpu)
+        self.assertEqual(args.backend, "vulkan")
+
+    def test_cuda_commands_preserve_device_selection(self):
+        self.check_gpu_commands("cuda", "CUDA0")
+
+    def test_vulkan_commands_select_both_engines(self):
+        self.check_gpu_commands("vulkan", "Vulkan0")
+
+    def test_missing_last_two_dialogue_turns_retries_before_publishing(self):
+        self.args.target = (
+            "[S1] The train leaves at four in the afternoon. "
+            "[S2] Thanks, I will bring my ticket. "
+            "[S1] Meet me beside the large clock. "
+            "[S2] All right, I will see you there.")
+        self.transcripts[5] = {"text": (
+            "The train leaves at four in the afternoon. Thanks, I will bring my ticket.")}
+        self.transcripts[6] = {"text": self.args.target}
+        status, report = self.run_guard()
+        self.assertEqual(status, 0)
+        self.assertEqual(self.seeds, [5, 6])
+        self.assertEqual(report["attempts"][0]["reason"], "text_mismatch")
+        self.assertGreater(report["attempts"][0]["ending_error_rate"], self.args.max_error_rate)
+        accepted = Path(report["attempts"][1]["directory"]) / "audio.wav"
+        self.assertEqual(Path(self.args.output).read_bytes(), accepted.read_bytes())
 
     def test_accepts_and_publishes_only_validated_audio(self):
         status, report = self.run_guard()
@@ -211,6 +259,32 @@ class ValidatedCloningTest(unittest.TestCase):
         self.assertEqual(status, 2)
         self.assertEqual(report["attempts"][0]["reason"], "invalid_audio")
         self.assertEqual(self.asr_calls, 0)
+
+    def test_missing_middle_turn_retries_despite_low_overall_error(self):
+        self.args.target = (
+            "[S1] The museum opens at nine tomorrow morning. "
+            "[S2] Shall we take the bus or walk there? "
+            "[S1] Let us walk if the weather stays dry. "
+            "[S2] I will bring an umbrella just in case. "
+            "[S1] We can have lunch near the river afterward. "
+            "[S2] That sounds good. I will meet you outside the hotel.")
+        incomplete = self.args.target.replace("[S1] Let us walk if the weather stays dry. ", "")
+        scores = GUARD.text_scores(self.args.target, incomplete)
+        self.assertLess(scores["word_error_rate"], self.args.max_error_rate)
+        self.assertEqual(scores["ending_error_rate"], 0.0)
+        self.assertGreater(scores["worst_turn_error_rate"], self.args.max_error_rate)
+        self.transcripts[5] = {"text": incomplete}
+        self.transcripts[6] = {"text": self.args.target}
+        status, report = self.run_guard()
+        self.assertEqual(status, 0)
+        self.assertEqual(self.seeds, [5, 6])
+        self.assertEqual(report["attempts"][0]["reason"], "text_mismatch")
+        accepted = Path(report["attempts"][1]["directory"]) / "audio.wav"
+        self.assertEqual(Path(self.args.output).read_bytes(), accepted.read_bytes())
+
+    def test_turn_check_allows_small_transcription_errors(self):
+        scores = GUARD.text_scores(TARGET, "A train leaves this afternoon. Please bring your ticket.")
+        self.assertLessEqual(max(scores.values()), self.args.max_error_rate)
 
     def test_missing_short_final_turn_is_rejected(self):
         expected = "[S1] We will visit the museum near the river tomorrow morning. [S2] Bring tickets."

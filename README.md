@@ -37,8 +37,10 @@ TTSD-specific dialogue prompt. The [TTSD example](engines/tts/docs/moss.md)
 sets its model-specific sampling parameters explicitly; check generated speech
 for complete dialogue rather than relying on a successful exit alone.
 An optional [validated cloning runner](engines/tts/docs/moss.md#validated-cloning)
-checks English dialogue with local ASR and retries rejected generations before
-publishing an output WAV. ASR results that reach the decoding token limit are rejected.
+checks English dialogue, including each requested turn, with local ASR and retries
+rejected generations before
+publishing an output WAV. It supports CPU, CUDA, and Vulkan (`--gpu --backend vulkan`).
+ASR results that reach the decoding token limit are rejected.
 
 CosyVoice3 uses capability-checked flash attention for single-token LM decoding
 on CUDA and Metal. Supported CUDA backends reuse decode graphs within masked
