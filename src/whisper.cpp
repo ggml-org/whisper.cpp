@@ -6814,6 +6814,12 @@ static void whisper_sequence_score(
     }
 }
 
+static void whisper_state_clear_vad(struct whisper_state * state) {
+    state->vad_segments.clear();
+    state->vad_mapping_table.clear();
+    state->has_vad_segments = false;
+}
+
 static bool whisper_vad(
         struct whisper_context * ctx,
           struct whisper_state * state,
@@ -6824,9 +6830,8 @@ static bool whisper_vad(
     WHISPER_LOG_INFO("%s: VAD is enabled, processing speech segments only\n", __func__);
     int filtered_n_samples = 0;
 
-    // Clear any existing mapping table
-    state->vad_mapping_table.clear();
-    state->has_vad_segments = false;
+    // Clear any existing VAD state
+    whisper_state_clear_vad(state);
 
     if (state->vad_context == nullptr) {
         struct whisper_vad_context_params vad_ctx_params = whisper_vad_default_context_params();
@@ -7968,6 +7973,8 @@ int whisper_full(
         }
         samples = vad_samples.data();
         n_samples = vad_samples.size();
+    } else {
+        whisper_state_clear_vad(ctx->state);
     }
     return whisper_full_with_state(ctx, ctx->state, params, samples, n_samples);
 }
@@ -7995,6 +8002,8 @@ int whisper_full_parallel(
         }
         samples = vad_samples.data();
         n_samples = vad_samples.size();
+    } else {
+        whisper_state_clear_vad(ctx->state);
     }
     int ret = 0;
 

@@ -81,6 +81,35 @@ int main() {
         vad_prev_end = t1;
     }
 
+    // non-VAD call after a VAD call on the same context must not use stale VAD state.
+    // ref: https://github.com/ggml-org/whisper.cpp/issues/4113
+    struct whisper_full_params wparams_novad = wparams;
+    wparams_novad.vad = false;
+
+    struct whisper_context * wctx_ref = whisper_init_from_file_with_params(
+            whisper_model_path.c_str(),
+            cparams);
+
+    assert(wctx_ref);
+
+    for (int processors = 1; processors <= 2; ++processors) {
+        assert(whisper_full_parallel(wctx_ref, wparams_novad, pcmf32.data(), pcmf32.size(), processors) == 0);
+
+        assert(whisper_full_parallel(wctx, wparams,       pcmf32.data(), pcmf32.size(), 1)          == 0);
+        assert(whisper_full_parallel(wctx, wparams_novad, pcmf32.data(), pcmf32.size(), processors) == 0);
+        assert(whisper_full_n_vad_segments(wctx) == 0);
+
+        const int n_segments_ref = whisper_full_n_segments(wctx_ref);
+        assert(n_segments_ref > 0);
+        assert(whisper_full_n_segments(wctx) == n_segments_ref);
+
+        for (int i = 0; i < n_segments_ref; ++i) {
+            assert(whisper_full_get_segment_t0(wctx, i) == whisper_full_get_segment_t0(wctx_ref, i));
+            assert(whisper_full_get_segment_t1(wctx, i) == whisper_full_get_segment_t1(wctx_ref, i));
+        }
+    }
+
+    whisper_free(wctx_ref);
     whisper_free(wctx);
 
     return 0;
