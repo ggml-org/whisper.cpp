@@ -23,10 +23,11 @@
 //     pcm = dn->denoise(pcm, sr);          // cleaned, SAME sample rate
 //     // ...then optionally Enhancer::enhance() bandwidth-extends to 48 kHz.
 //
-// Like Enhancer, the Denoiser is immutable after load and safe to share across
-// threads for concurrent denoise() calls (it holds only const weights).
+// Instances support concurrent denoise() calls; reusable neural backends
+// serialize access to their inference buffers.
 
 #include "tts-cpp/export.h"
+#include "tts-cpp/lavasr/coreml.h"
 
 #include <memory>
 #include <string>
@@ -34,12 +35,18 @@
 
 namespace tts_cpp::lavasr {
 
+struct DenoiserOptions {
+    int n_gpu_layers = 0;
+    CoreMLOptions coreml;
+};
+
 class TTS_CPP_API Denoiser {
 public:
     // Load the denoiser GGUF.  Throws std::runtime_error on failure (file
     // missing, wrong architecture, missing/mis-shaped tensors).  n_gpu_layers:
     // 0 = scalar CPU (default); >0 = ggml GPU graph; <0 = ggml CPU graph.
     static std::unique_ptr<Denoiser> load(const std::string & gguf_path, int n_gpu_layers = 0);
+    static std::unique_ptr<Denoiser> load(const std::string & gguf_path, const DenoiserOptions & options);
 
     ~Denoiser();
     Denoiser(const Denoiser &)             = delete;
@@ -56,7 +63,8 @@ public:
 
     // Compute backend of the neural core, mirroring Enhancer::backend_name():
     // the ggml backend name (e.g. "OpenCL", "CPU") when a ggml engine is
-    // active, "scalar" for the pure-scalar path.
+    // active, "scalar" for the pure-scalar path, or the requested Core ML policy
+    // ("coreml-cpu", "coreml-gpu", "coreml-ane", "coreml-all").
     std::string backend_name() const;
 
 private:

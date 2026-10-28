@@ -2,6 +2,7 @@
 
 #include "../backend_selection.h" // init_gpu_backend, init_cpu_backend
 #include "backend_requirement.h"
+#include "coreml.h"
 #include "enhancer.h"             // internal: enhance(EnhancerWeights, ...)
 #include "enhancer_core.h"        // internal: EnhancerWeights
 #include "enhancer_ggml.h"        // internal: EnhancerGgml, enhancer_ggml_*
@@ -17,6 +18,7 @@ namespace tts_cpp::lavasr {
 
 struct Enhancer::Impl {
     EnhancerWeights weights;
+    std::unique_ptr<CoreMLNetwork> coreml;
 
     // ggml compute-graph engine.  `backend` is a GPU backend when one was
     // requested and available, otherwise the ggml-CPU backend (still markedly
@@ -50,11 +52,22 @@ Enhancer::~Enhancer() = default;
 
 std::unique_ptr<Enhancer> Enhancer::load(const std::string & gguf_path,
                                          const EnhancerOptions & opts) {
+    const bool use_coreml = coreml_requested(opts.coreml);
+    if (use_coreml && opts.use_gpu) {
+        throw std::invalid_argument("LavaSR Core ML compute_units and use_gpu cannot be combined");
+    }
     std::unique_ptr<Enhancer> e(new Enhancer());
     std::string               err;
     if (!load_enhancer_gguf(gguf_path, e->impl_->weights, &err)) {
         throw std::runtime_error(err.empty() ? "lavasr: failed to load enhancer GGUF"
                                              : err);
+    }
+
+    if (use_coreml) {
+        e->impl_->coreml = CoreMLNetwork::load(opts.coreml, e->impl_->weights);
+        e->impl_->backend_name = e->impl_->coreml->backend_name();
+        e->impl_->device = BackendDevice::CoreML;
+        return e;
     }
 
     // Pick a compute backend for the ggml graph: a GPU when requested and
@@ -110,6 +123,13 @@ std::unique_ptr<Enhancer> Enhancer::load(const std::string & gguf_path,
 
 std::vector<float> Enhancer::enhance(const std::vector<float> & pcm_in,
                                      int sr_in) const {
+    if (impl_->coreml) {
+        return tts_cpp::lavasr::enhance_with(impl_->weights, pcm_in, sr_in,
+            [this](const std::vector<float> & mel, int frames,
+                   std::vector<float> & real, std::vector<float> & imag) {
+                impl_->coreml->enhance(mel, frames, real, imag);
+            });
+    }
     if (impl_->graph) {
         // The reusable graph allocator is mutated per call, so serialise
         // concurrent enhance() calls on this instance (CPU and GPU alike).

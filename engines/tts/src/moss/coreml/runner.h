@@ -23,6 +23,11 @@ int moss_coreml_predict(struct moss_coreml_model * model,
                         const char * const * input_names, const float * const * inputs, int n_inputs,
                         const char * const * output_names, float * const * outputs, int n_outputs);
 
+int moss_coreml_predict_batch(struct moss_coreml_model * model,
+                              const char * const * input_names, const float * const * inputs, int n_inputs,
+                              const char * const * output_names, float * const * outputs, int n_outputs,
+                              int batch_size);
+
 const char * moss_coreml_label(const struct moss_coreml_model * model);
 
 #if defined(__cplusplus)

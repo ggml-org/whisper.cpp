@@ -115,6 +115,8 @@ void usage(const char * a0) {
         "usage: %s --denoiser DN.gguf --enhancer ENH.gguf\n"
         "          [--in speech.wav] [--seconds 6] [--in-rate 24000]\n"
         "          [--runs 5] [--warmup 1] [--n-gpu-layers 0]\n"
+        "          [--denoiser-coreml DN.mlmodelc] [--enhancer-coreml ENH.mlmodelc]\n"
+        "          [--coreml-compute-units CPU_ONLY|CPU_AND_GPU|CPU_AND_NE|ALL]\n"
         "          [--out-denoised dn.wav] [--out-enhanced enh.wav]\n", a0);
 }
 
@@ -122,6 +124,7 @@ void usage(const char * a0) {
 
 int main(int argc, char ** argv) {
     std::string denoiser_path, enhancer_path, in_wav, out_dn, out_enh;
+    std::string denoiser_coreml, enhancer_coreml, compute_units;
     double seconds = 6.0;
     int    in_rate = 24000, runs = 5, warmup = 1, n_gpu_layers = 0, dn_gpu_layers = 0;
     bool   verify = false;
@@ -142,6 +145,9 @@ int main(int argc, char ** argv) {
         else if (a == "--n-gpu-layers")  n_gpu_layers  = std::stoi(next("--n-gpu-layers"));
         else if (a == "--dn-gpu-layers") dn_gpu_layers = std::stoi(next("--dn-gpu-layers"));
         else if (a == "--verify")        verify        = true;
+        else if (a == "--denoiser-coreml") denoiser_coreml = next("--denoiser-coreml");
+        else if (a == "--enhancer-coreml") enhancer_coreml = next("--enhancer-coreml");
+        else if (a == "--coreml-compute-units") compute_units = next("--coreml-compute-units");
         else if (a == "--out-denoised")  out_dn        = next("--out-denoised");
         else if (a == "--out-enhanced")  out_enh       = next("--out-enhanced");
         else if (a == "-h" || a == "--help") { usage(argv[0]); return 0; }
@@ -152,11 +158,23 @@ int main(int argc, char ** argv) {
     std::unique_ptr<tts_cpp::lavasr::Denoiser> dn;
     std::unique_ptr<tts_cpp::lavasr::Enhancer> enh;
     try {
-        dn  = tts_cpp::lavasr::Denoiser::load(denoiser_path, dn_gpu_layers);
+        if (!compute_units.empty() && denoiser_coreml.empty() && enhancer_coreml.empty()) {
+            throw std::invalid_argument("--coreml-compute-units requires a Core ML model");
+        }
+        const auto load_start = clk::now();
+        tts_cpp::lavasr::DenoiserOptions dopts;
+        dopts.n_gpu_layers = dn_gpu_layers;
+        if (!denoiser_coreml.empty()) dopts.coreml = {denoiser_coreml, compute_units};
+        dn = tts_cpp::lavasr::Denoiser::load(denoiser_path, dopts);
+        const auto denoiser_loaded = clk::now();
         tts_cpp::lavasr::EnhancerOptions eopts;
         eopts.use_gpu = n_gpu_layers > 0;
         eopts.verbose = true;
+        if (!enhancer_coreml.empty()) eopts.coreml = {enhancer_coreml, compute_units};
         enh = tts_cpp::lavasr::Enhancer::load(enhancer_path, eopts);
+        std::fprintf(stderr, "[load] denoiser=%.1f enhancer=%.1f total=%.1f ms\n",
+            ms_t(denoiser_loaded - load_start).count(), ms_t(clk::now() - denoiser_loaded).count(),
+            ms_t(clk::now() - load_start).count());
     } catch (const std::exception & e) {
         std::fprintf(stderr, "load failed: %s\n", e.what());
         return 1;
@@ -195,8 +213,12 @@ int main(int argc, char ** argv) {
     std::printf("  input: %s (%.3fs @ %d Hz, %zu samples)\n",
                 in_wav.empty() ? "synthetic" : in_wav.c_str(), audio_s, sr, pcm.size());
     std::printf("  enhancer out rate: %d Hz\n", enh->output_sample_rate());
-    std::printf("  denoiser dn_gpu_layers: %d (0=scalar, >0=ggml-GPU, <0=ggml-CPU)\n", dn_gpu_layers);
-    std::printf("  enhancer n_gpu_layers: %d (0=scalar, >0=ggml-GPU, <0=ggml-CPU)\n", n_gpu_layers);
+    if (denoiser_coreml.empty()) {
+        std::printf("  denoiser dn_gpu_layers: %d (0=scalar, >0=ggml-GPU, <0=ggml-CPU)\n", dn_gpu_layers);
+    }
+    if (enhancer_coreml.empty()) {
+        std::printf("  enhancer n_gpu_layers: %d (<=0=ggml-CPU, >0=ggml-GPU)\n", n_gpu_layers);
+    }
     std::printf("  runs: %d (warmup dropped: %d)\n\n", runs, warmup);
     report("denoise", dn_ms, audio_s);
     report("enhance", enh_ms, audio_s);
@@ -204,7 +226,7 @@ int main(int argc, char ** argv) {
 
     // On-device parity gate: re-run the denoiser on the scalar CPU path and
     // compare against the selected-backend cleaned output.
-    if (verify && dn_gpu_layers != 0) {
+    if (verify && (dn_gpu_layers != 0 || !denoiser_coreml.empty())) {
         try {
             auto               dn_ref = tts_cpp::lavasr::Denoiser::load(denoiser_path, 0);
             std::vector<float> ref    = dn_ref->denoise(pcm, sr);
@@ -228,7 +250,7 @@ int main(int argc, char ** argv) {
 
     // On-device parity gate: re-run the enhancer on the ggml-CPU path and
     // compare against the selected-backend output (relative, scale-aware).
-    if (verify && n_gpu_layers != 0) {
+    if (verify && (n_gpu_layers != 0 || !enhancer_coreml.empty())) {
         try {
             auto enh_ref = tts_cpp::lavasr::Enhancer::load(enhancer_path, {});
             std::vector<float> ref = enh_ref->enhance(cleaned, sr);

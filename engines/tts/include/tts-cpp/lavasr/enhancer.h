@@ -27,6 +27,7 @@
 
 #include "tts-cpp/backend.h" // BackendDevice
 #include "tts-cpp/export.h"
+#include "tts-cpp/lavasr/coreml.h"
 
 #include <memory>
 #include <string>
@@ -47,6 +48,7 @@ struct EnhancerOptions {
     int vulkan_device = 0;
     // Log backend selection to stderr.
     bool verbose = false;
+    CoreMLOptions coreml;
 };
 
 class TTS_CPP_API Enhancer {
@@ -75,7 +77,9 @@ public:
     // engaged.  "CPU" for the ggml-CPU backend (and the scalar fallback).
     std::string backend_name() const;
 
-    // Resolved compute device: GPU when the ggml network graph runs on a GPU
+    // CoreML reports framework-managed placement; backend_name() identifies
+    // the requested compute policy rather than claiming a physical device.
+    // Otherwise GPU when the ggml network graph runs on a GPU
     // backend (opts.use_gpu honoured and a backend was available), otherwise CPU
     // (the ggml-CPU graph — the default — or the scalar fallback).  Stable for
     // the lifetime of the Enhancer.

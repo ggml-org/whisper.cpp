@@ -327,6 +327,51 @@ id<MLFeatureProvider> run_prediction(moss_coreml_model * model, NSError ** err) 
     return [mlmodel predictionFromFeatures:provider options:options error:err];
 }
 
+MLDictionaryFeatureProvider * batch_item(moss_coreml_model * model, const char * const * names,
+                                         const float * const * data, int count, int index) {
+    NSMutableDictionary<NSString *, id> * values = [NSMutableDictionary dictionaryWithCapacity:count];
+    for (int i = 0; i < count; ++i) {
+        const Feature * feature = find_feature(model->inputs, names[i]);
+        if (feature == nullptr || data[i] == nullptr) return nil;
+        MLMultiArray * prototype = (__bridge MLMultiArray *) feature->array;
+        NSError * error = nil;
+        MLMultiArray * buffer = [[MLMultiArray alloc] initWithShape:prototype.shape
+                                                         dataType:prototype.dataType error:&error];
+        if (buffer == nil || error != nil) return nil;
+        const size_t offset = static_cast<size_t>(index) * element_count(feature->dims);
+        write_view(view_of(buffer), data[i] + offset);
+        values[[NSString stringWithUTF8String:names[i]]] = buffer;
+    }
+    NSError * error = nil;
+    MLDictionaryFeatureProvider * provider = [[MLDictionaryFeatureProvider alloc] initWithDictionary:values error:&error];
+    return error == nil ? provider : nil;
+}
+
+MLArrayBatchProvider * make_batch(moss_coreml_model * model, const char * const * names,
+                                  const float * const * data, int count, int batch_size) {
+    NSMutableArray<id<MLFeatureProvider>> * items = [NSMutableArray arrayWithCapacity:batch_size];
+    for (int index = 0; index < batch_size; ++index) {
+        MLDictionaryFeatureProvider * item = batch_item(model, names, data, count, index);
+        if (item == nil) return nil;
+        [items addObject:item];
+    }
+    return [[MLArrayBatchProvider alloc] initWithFeatureProviderArray:items];
+}
+
+bool read_batch_outputs(moss_coreml_model * model, id<MLBatchProvider> result,
+                         const char * const * names, float * const * data, int count, int batch_size) {
+    std::vector<float *> item_outputs(count);
+    for (int index = 0; index < batch_size; ++index) {
+        for (int i = 0; i < count; ++i) {
+            const Feature * feature = find_feature(model->outputs, names[i]);
+            if (feature == nullptr || data[i] == nullptr) return false;
+            item_outputs[i] = data[i] + static_cast<size_t>(index) * element_count(feature->dims);
+        }
+        if (!read_outputs(model, [result featuresAtIndex:index], names, item_outputs.data(), count)) return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 struct moss_coreml_model * moss_coreml_load(const char * path_mlmodelc, const char * compute_units) {
@@ -389,6 +434,26 @@ int moss_coreml_predict(struct moss_coreml_model * model,
         id<MLFeatureProvider> result = run_prediction(model, &err);
         if (result == nil || err != nil) return 3;
         return read_outputs(model, result, output_names, outputs, n_outputs) ? 0 : 4;
+    }
+}
+
+int moss_coreml_predict_batch(struct moss_coreml_model * model,
+                              const char * const * input_names, const float * const * inputs, int n_inputs,
+                              const char * const * output_names, float * const * outputs, int n_outputs,
+                              int batch_size) {
+    if (model == nullptr || input_names == nullptr || inputs == nullptr || output_names == nullptr ||
+        outputs == nullptr || batch_size <= 0 || n_inputs <= 0 || n_outputs <= 0) return 1;
+    @autoreleasepool {
+        std::lock_guard<std::mutex> lock(model->mutex);
+        if (model->stateful || n_inputs != static_cast<int>(model->inputs.size())) return 2;
+        MLArrayBatchProvider * batch = make_batch(model, input_names, inputs, n_inputs, batch_size);
+        if (batch == nil) return 2;
+        MLModel * mlmodel = (__bridge MLModel *) model->model;
+        NSError * error = nil;
+        id<MLBatchProvider> result = [mlmodel predictionsFromBatch:batch
+                                                         options:[[MLPredictionOptions alloc] init] error:&error];
+        if (result == nil || error != nil || result.count != batch_size) return 3;
+        return read_batch_outputs(model, result, output_names, outputs, n_outputs, batch_size) ? 0 : 4;
     }
 }
 

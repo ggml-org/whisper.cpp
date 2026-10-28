@@ -74,8 +74,8 @@ engine, not every backend ggml can compile.
 | MOSS Delay (MOSS-TTS-v1.5 / MOSS-TTSD) | model-advertised multilingual text | model voice, zero-shot reference WAV, or two-speaker dialogue references; pause/duration/pronunciation controls | 24 kHz | yes | yes (+ optional Core ML sidecar) | scoped¹ | untested | scoped¹ | untested |
 | MOSS-SoundEffect-v2 (text to sound effects) | text prompt | none | 48 kHz | yes | yes (+ optional Core ML sidecars) | scoped¹ | untested | scoped¹ | untested |
 | MOSS-Speech (speech to speech) | spoken English and Chinese | built-in default voice or reference WAV | 24 kHz | yes | yes (+ optional Core ML sidecar) | scoped¹ | untested | scoped¹ | untested |
-| LavaSR denoiser | language agnostic | input PCM | rate preserving | yes | yes | yes | yes | yes | untested |
-| LavaSR enhancer | language agnostic | input PCM | 48 kHz | yes | yes | yes | yes | yes | untested |
+| LavaSR denoiser | language agnostic | input PCM | rate preserving | yes | yes (+ optional Core ML model) | yes | yes | yes | untested |
+| LavaSR enhancer | language agnostic | input PCM | 48 kHz | yes | yes (+ optional Core ML model) | yes | yes | yes | untested |
 
 ¹ MOSS CUDA/Vulkan: generated-model CPU parity; quantized TTS/TTSD,
 SoundEffect and Speech checkpoint smoke cases. Vulkan also covers the
@@ -97,6 +97,11 @@ be re-checked.
 LavaSR denoiser and enhancer GPU selection includes ARM Mali/Immortalis
 through Vulkan when GPU execution is requested, and excludes WebGPU: the
 graphs run without a per-op CPU fallback and ggml-webgpu lacks `MEAN`.
+Both LavaSR stages also accept explicit Core ML models and one of `CPU_ONLY`,
+`CPU_AND_GPU`, `CPU_AND_NE`, or `ALL`, with `TTS_CPP_COREML=ON` on Apple.
+See [LavaSR Core ML](docs/lavasr.md#core-ml) for export and C++ examples.
+The Core ML denoiser submits independent chunks through batch prediction,
+reusing the same loaded model.
 
 Chatterbox Turbo and Multilingual, Supertonic 3, Parler-TTS mini, CosyVoice3, Audio8, MOSS-TTS-v1.5 /
 MOSS-TTSD, MOSS-SoundEffect-v2 and MOSS-Speech (LM and speech tokenizer) also support explicit Hexagon placement on Snapdragon; see their
