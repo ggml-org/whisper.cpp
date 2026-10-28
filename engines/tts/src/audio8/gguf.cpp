@@ -1,5 +1,6 @@
 #include "audio8/internal.h"
 
+#include "audio8/backend_requirement.h"
 #include "audio8/coreml_path.h"
 #include "coreml_sidecar_path.h"
 #include "audio8/graph.h"
@@ -551,11 +552,8 @@ ggml_backend_t init_backend(int n_gpu_layers, const std::string & backend) {
     if (!backend.empty() && backend != "auto") {
         return init_explicit_backend(backend);
     }
-    using ::tts_cpp::detail::GpuBackendRequirement;
     ggml_backend_t gpu = ::tts_cpp::detail::init_gpu_backend(
-        n_gpu_layers, true, "audio8", AUTO_VULKAN_DEVICE, false, nullptr,
-        GpuBackendRequirement::Vulkan | GpuBackendRequirement::Metal |
-            GpuBackendRequirement::OpenCL | GpuBackendRequirement::CUDA);
+        n_gpu_layers, true, "audio8", AUTO_VULKAN_DEVICE, false, nullptr, gpu_requirement());
     return gpu ? gpu : ::tts_cpp::detail::init_cpu_backend();
 }
 

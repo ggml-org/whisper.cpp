@@ -6,10 +6,14 @@
 // skipped at the walk (leaving Metal selectable) instead of winning selection
 // and being rejected afterwards, which would drop a Metal-capable host to CPU.
 
+#include "audio8/backend_requirement.h"
 #include "backend_selection.h"
+#include "cosyvoice_pipeline.h"
 #include "lavasr/backend_requirement.h"
+#include "parler/backend_requirement.h"
 
 #include <cstdio>
+#include <string>
 
 using tts_cpp::detail::GpuBackendRequirement;
 using tts_cpp::detail::gpu_backend_satisfies_requirement;
@@ -25,6 +29,19 @@ void expect(bool cond, const char * what) {
     }
 }
 
+void expect_accepts(GpuBackendRequirement set, const char * engine, const char * backend) {
+    const std::string what = std::string(engine) + " accepts " + backend;
+    expect(gpu_backend_satisfies_requirement(backend, set), what.c_str());
+}
+
+void expect_desktop_and_webgpu_set(GpuBackendRequirement set, const char * engine) {
+    for (const char * backend : { "Vulkan", "MTL", "OpenCL", "CUDA", "WebGPU" }) {
+        expect_accepts(set, engine, backend);
+    }
+    const std::string what = std::string(engine) + " rejects unnamed, so adding WebGPU did not widen it to Any";
+    expect(!gpu_backend_satisfies_requirement(nullptr, set), what.c_str());
+}
+
 } // namespace
 
 int main() {
@@ -33,9 +50,6 @@ int main() {
     const auto opencl  = GpuBackendRequirement::OpenCL;
     const auto vkmtl   = GpuBackendRequirement::Vulkan | GpuBackendRequirement::Metal;
     const auto mtlcl   = GpuBackendRequirement::Metal  | GpuBackendRequirement::OpenCL;
-    // Audio8's set on every platform (audio8/gguf.cpp); CosyVoice3's desktop
-    // set moved on to the four-backend `desktop` variable below when it
-    // admitted CUDA (cosyvoice_gpu_requirement()).
     const auto vkmtlcl = GpuBackendRequirement::Vulkan | GpuBackendRequirement::Metal |
                          GpuBackendRequirement::OpenCL;
 
@@ -81,8 +95,7 @@ int main() {
     // while one that has can name it without widening to every other backend.
     const auto cuda    = GpuBackendRequirement::CUDA;
     const auto vkcuda  = GpuBackendRequirement::Vulkan | GpuBackendRequirement::CUDA;
-    // CosyVoice3's desktop set (cosyvoice_gpu_requirement()) and the widest an
-    // engine names today.
+    // The four backends LavaSR names (lavasr::gpu_requirement()).
     const auto desktop = GpuBackendRequirement::Vulkan | GpuBackendRequirement::Metal |
                          GpuBackendRequirement::OpenCL | GpuBackendRequirement::CUDA;
 
@@ -126,6 +139,17 @@ int main() {
     expect(gpu_backend_satisfies_requirement("OpenCL", lavasr), "LavaSR accepts OpenCL");
     expect(gpu_backend_satisfies_requirement("CUDA", lavasr), "LavaSR accepts CUDA");
     expect(!gpu_backend_satisfies_requirement("WebGPU", lavasr), "LavaSR rejects WebGPU");
+
+    // Parler, Audio8 and CosyVoice3 (desktop) admit WebGPU since ggml-webgpu
+    // honours GGML_PREC_F32; LavaSR still keeps it out (asserted above).
+    expect_desktop_and_webgpu_set(tts_cpp::parler::gpu_requirement(), "Parler");
+    expect_desktop_and_webgpu_set(tts_cpp::audio8::gpu_requirement(), "Audio8");
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
+    expect_desktop_and_webgpu_set(cosyvoice_gpu_requirement(), "CosyVoice3");
+#else
+    expect(!gpu_backend_satisfies_requirement("WebGPU", cosyvoice_gpu_requirement()),
+           "CosyVoice3 keeps WebGPU out with Vulkan off-desktop");
+#endif
 
     if (g_failures) {
         fprintf(stderr, "%d requirement checks failed\n", g_failures);

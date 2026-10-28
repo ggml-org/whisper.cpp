@@ -311,7 +311,10 @@ uses the same graph builder and selection.
 `test-cosyvoice-flow-attention-vulkan` requires no model files. It checks the
 operand selection, unsupported-dimension fallback, and batched attention
 against an F32 scalar reference at short and unaligned sequence lengths.
-The CPU version is registered as `test-cosyvoice-flow-attention`.
+The CPU version is registered as `test-cosyvoice-flow-attention`. On a build
+with WebGPU, both attention tests also run on that device as
+`test-cosyvoice-lm-attention-webgpu` and `test-cosyvoice-flow-attention-webgpu`,
+and the stage tests gain `-webgpu` arms next to their `-cuda` and `-vulkan` ones.
 
 ### Metal graph paths
 

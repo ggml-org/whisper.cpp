@@ -1,4 +1,7 @@
+#include "audio8/backend_requirement.h"
 #include "backend_selection.h"
+#include "cosyvoice_pipeline.h"
+#include "parler/backend_requirement.h"
 
 #include "test_env_portable.h"
 
@@ -6,6 +9,7 @@
 #include "gguf.h"
 
 #include <cstdio>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -105,6 +109,49 @@ void check_requested_init() {
           "a request for a missing device must return no backend");
 }
 
+bool is_gpu_device(ggml_backend_dev_t dev) {
+    const enum ggml_backend_dev_type type = ggml_backend_dev_type(dev);
+    return type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU;
+}
+
+bool is_webgpu_device(ggml_backend_dev_t dev) {
+    return std::strcmp(ggml_backend_reg_name(ggml_backend_dev_backend_reg(dev)), WEBGPU_BACKEND) == 0;
+}
+
+bool webgpu_is_the_only_gpu() {
+    tts_cpp::detail::ensure_backends_loaded();
+    bool webgpu = false;
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        if (!is_gpu_device(dev)) continue;
+        if (!is_webgpu_device(dev)) return false;
+        webgpu = true;
+    }
+    return webgpu;
+}
+
+void check_policy_selects_webgpu(tts_cpp::detail::GpuBackendRequirement requirement, const char * message) {
+    ggml_backend_t backend = tts_cpp::detail::init_gpu_backend(/*n_gpu_layers=*/1, /*verbose=*/false, "test", 0,
+                                                              /*allow_arm_mali=*/false, nullptr, requirement);
+    check(backend != nullptr && is_webgpu_device(ggml_backend_get_device(backend)), message);
+    if (backend) ggml_backend_free(backend);
+}
+
+// Host-dependent: runs only where WebGPU is the sole registered GPU (the
+// WebGPU GPU lane), so the automatic walk of each LM-based engine must land
+// on it rather than declining to the CPU.
+void check_lm_engines_admit_webgpu() {
+    if (!webgpu_is_the_only_gpu()) {
+        std::fprintf(stderr, "skip: WebGPU is not the only registered GPU\n");
+        return;
+    }
+    check_policy_selects_webgpu(tts_cpp::parler::gpu_requirement(), "Parler's policy walk must select WebGPU");
+    check_policy_selects_webgpu(tts_cpp::audio8::gpu_requirement(), "Audio8's policy walk must select WebGPU");
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
+    check_policy_selects_webgpu(cosyvoice_gpu_requirement(), "CosyVoice3's policy walk must select WebGPU");
+#endif
+}
+
 int64_t first_unrunnable_of(const std::vector<ggml_type> & types) {
     ggml_init_params params = { ggml_tensor_overhead() * types.size(), nullptr, /*no_alloc=*/true };
     ggml_context * ctx = ggml_init(params);
@@ -141,6 +188,7 @@ int main() {
     check_dsp_library_path();
     check_requested_init();
     check_hexagon_weight_types();
+    check_lm_engines_admit_webgpu();
 
     using tts_cpp::detail::GpuBackendRequirement;
     using tts_cpp::detail::gpu_backend_satisfies_requirement;

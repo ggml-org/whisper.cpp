@@ -129,13 +129,13 @@ adapter still lacks it, or lacks implicit device synchronization, registers no
 WebGPU device and logs why. The backend requests a high-performance adapter
 (the discrete GPU on hybrid machines), never a software fallback adapter, and
 refuses Dawn's Null adapter, so a host without a usable GPU gets the engines'
-ordinary CPU fallback instead of silent empty output. Two limitations to keep
-in mind: the device reports Dawn's maximum buffer size as its memory, so the
-engines' memory-fit projections are not meaningful on WebGPU, and the WGSL
-matmul kernels keep activations in f16, which the fork's `test-backend-ops`
-large-activation and `GGML_PREC_F32` cases fail on; the
-[validation table](../README.md#webgpu-dawn) records which models that
-affects. Desktop Linux is the validated platform; Dawn's Android, Windows and
+ordinary CPU fallback instead of silent empty output. The device reports
+Dawn's maximum buffer size as its memory, so the engines' memory-fit
+projections are not meaningful on WebGPU. Matmul and flash-attention ops
+marked `GGML_PREC_F32` run with f32 activations and f32 accumulation (the
+other ops keep the faster f16 kernels), which the LM-based TTS models need;
+the [validation table](../README.md#webgpu-dawn) records the validated
+models. Desktop Linux is the validated platform; Dawn's Android, Windows and
 Apple paths compile but have not been exercised with the speech engines.
 
 ### Tests

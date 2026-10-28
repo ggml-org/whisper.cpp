@@ -204,7 +204,7 @@ endif()
 # variants register only for backends that engine's production allowlist
 # accepts, so an off-allowlist build neither runs unvalidated backends nor
 # silently skips validated ones.
-foreach(_tts_ggml_backend metal vulkan cuda opencl hexagon)
+foreach(_tts_ggml_backend metal vulkan cuda opencl hexagon webgpu)
     string(TOUPPER "${_tts_ggml_backend}" _tts_ggml_backend_uc)
     set(TTS_CPP_GGML_${_tts_ggml_backend_uc} FALSE)
     if (GGML_${_tts_ggml_backend_uc} OR
@@ -212,14 +212,15 @@ foreach(_tts_ggml_backend metal vulkan cuda opencl hexagon)
         set(TTS_CPP_GGML_${_tts_ggml_backend_uc} TRUE)
     endif()
 endforeach()
-# Parler allowlist: Metal / Vulkan / OpenCL / CUDA (parler/gguf.cpp).
+# Parler allowlist: Metal / Vulkan / OpenCL / CUDA / WebGPU
+# (parler::gpu_requirement() in parler/backend_requirement.h).
 set(TTS_CPP_PARLER_GPU FALSE)
 if (TTS_CPP_GGML_METAL OR TTS_CPP_GGML_VULKAN OR TTS_CPP_GGML_OPENCL OR
-    TTS_CPP_GGML_CUDA)
+    TTS_CPP_GGML_CUDA OR TTS_CPP_GGML_WEBGPU)
     set(TTS_CPP_PARLER_GPU TRUE)
 endif()
-# CosyVoice3 allowlist: Metal / OpenCL everywhere, Vulkan and CUDA on
-# Windows and non-Android Linux only (cosyvoice_gpu_requirement() in
+# CosyVoice3 allowlist: Metal / OpenCL everywhere, Vulkan, CUDA and WebGPU
+# on Windows and non-Android Linux only (cosyvoice_gpu_requirement() in
 # cosyvoice_pipeline.h -- keep the two conditions in lockstep). The
 # platform guard mirrors the runtime split: a build whose only GPU
 # backend the runtime requirement would refuse (Android or Apple
@@ -231,7 +232,7 @@ if (WIN32 OR (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID))
     set(_tts_cosy_desktop_platform TRUE)
 endif()
 if (TTS_CPP_GGML_METAL OR TTS_CPP_GGML_OPENCL OR
-    ((TTS_CPP_GGML_VULKAN OR TTS_CPP_GGML_CUDA) AND _tts_cosy_desktop_platform))
+    ((TTS_CPP_GGML_VULKAN OR TTS_CPP_GGML_CUDA OR TTS_CPP_GGML_WEBGPU) AND _tts_cosy_desktop_platform))
     set(TTS_CPP_COSYVOICE_GPU TRUE)
 endif()
 set(_tcb_cosy_arms "")
@@ -240,6 +241,9 @@ if (TTS_CPP_GGML_CUDA AND _tts_cosy_desktop_platform)
 endif()
 if (TTS_CPP_GGML_VULKAN AND _tts_cosy_desktop_platform)
     list(APPEND _tcb_cosy_arms vulkan)
+endif()
+if (TTS_CPP_GGML_WEBGPU AND _tts_cosy_desktop_platform)
+    list(APPEND _tcb_cosy_arms webgpu)
 endif()
 
 # The standalone chatterbox.cpp source carries a bundled-ggml filename-prefix
@@ -1473,6 +1477,10 @@ if (TTS_CPP_BUILD_TESTS)
         tts_cpp_register_test(test-cosyvoice-lm-attention-cuda
             EXE test-cosyvoice-lm-attention LABEL "gpu" ARGS "CUDA0")
     endif()
+    if (TTS_CPP_GGML_WEBGPU AND _tts_cosy_desktop_platform)
+        tts_cpp_register_test(test-cosyvoice-lm-attention-webgpu
+            EXE test-cosyvoice-lm-attention LABEL "gpu" ARGS "WebGPU")
+    endif()
 
     add_executable(test-cosyvoice-flow-attention test/test_cosyvoice_flow_attention.cpp)
     target_link_libraries(test-cosyvoice-flow-attention PRIVATE tts-cpp ggml)
@@ -1482,6 +1490,10 @@ if (TTS_CPP_BUILD_TESTS)
     if (TTS_CPP_GGML_VULKAN AND _tts_cosy_desktop_platform)
         tts_cpp_register_test(test-cosyvoice-flow-attention-vulkan
             EXE test-cosyvoice-flow-attention LABEL "gpu" ARGS "Vulkan0")
+    endif()
+    if (TTS_CPP_GGML_WEBGPU AND _tts_cosy_desktop_platform)
+        tts_cpp_register_test(test-cosyvoice-flow-attention-webgpu
+            EXE test-cosyvoice-flow-attention LABEL "gpu" ARGS "WebGPU")
     endif()
 
     add_executable(test-cosyvoice-xb test/test_cosyvoice_xb.cpp)
@@ -2280,8 +2292,8 @@ if (TTS_CPP_BUILD_TESTS)
                      "TTS_CPP_GPU_BACKEND=${backend}")
     endfunction()
 
-    # Audio8 allowlist: Vulkan / Metal / OpenCL / CUDA (audio8/gguf.cpp
-    # GpuBackendRequirement::Vulkan | Metal | OpenCL | CUDA).
+    # Audio8 allowlist: Vulkan / Metal / OpenCL / CUDA / WebGPU
+    # (audio8::gpu_requirement() in audio8/backend_requirement.h).
     if (TTS_CPP_GGML_CUDA)
         tts_cpp_register_audio8_gpu_tests(cuda)
         tts_cpp_register_audio8_quantised_cli_test(cuda "on CUDA")
@@ -2295,6 +2307,10 @@ if (TTS_CPP_BUILD_TESTS)
     endif()
     if (TTS_CPP_GGML_OPENCL)
         tts_cpp_register_audio8_gpu_tests(opencl)
+    endif()
+    if (TTS_CPP_GGML_WEBGPU)
+        tts_cpp_register_audio8_gpu_tests(webgpu)
+        tts_cpp_register_audio8_quantised_cli_test(webgpu "on WebGPU")
     endif()
 
     # The per-stage breakdown the Metal work is ranked by.  Needs the models but
@@ -2599,6 +2615,9 @@ if (TTS_CPP_BUILD_TESTS)
         endif()
         if (TTS_CPP_GGML_VULKAN)
             tts_cpp_register_parler_dac_arm(vulkan)
+        endif()
+        if (TTS_CPP_GGML_WEBGPU)
+            tts_cpp_register_parler_dac_arm(webgpu)
         endif()
     endif()
 

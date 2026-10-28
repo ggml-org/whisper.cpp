@@ -1,5 +1,6 @@
 #include "internal.h"
 
+#include "backend_requirement.h"
 #include "backend_selection.h"
 #include "backend_util.h"
 #include "gguf_stream.h"
@@ -202,23 +203,15 @@ const ggml_tensor * first_tensor_hexagon_cannot_run(const ggml_context * ctx) {
 
 ggml_backend_t init_policy_backend(int n_gpu_layers) {
     // Pixel 9-class Mali GPUs are validated through Vulkan for the complete
-    // Parler pipeline, including T5, autoregressive decode, and DAC synthesis.
-    // Parler's GPU path (FA + DAC phase-GEMM) is enabled only on
-    // backends it has been validated against end-to-end (reference-fixture parity
-    // per stage, plus greedy-token identity); anything else falls back to CPU.
-    // Metal was validated in PR #103, Vulkan and OpenCL (Adreno) since, and CUDA
-    // against the same reference fixtures on an RTX 3090. Feature-level
-    // probes such as parler_probe_fa() still apply on top, so a validated backend
-    // that lacks an individual capability degrades rather than breaking.
-    // Filtering at the walk rather than after it matters on a host carrying an
-    // unvalidated backend the walk would otherwise return: rejecting the winner
-    // afterwards drops straight to CPU instead of yielding to a validated one.
-    using ::tts_cpp::detail::GpuBackendRequirement;
+    // Parler pipeline. Feature-level probes such as parler_probe_fa() still
+    // apply on top, so a validated backend that lacks an individual capability
+    // degrades rather than breaking. Filtering at the walk rather than after it
+    // matters on a host carrying an unvalidated backend the walk would
+    // otherwise return: rejecting the winner afterwards drops straight to CPU
+    // instead of yielding to a validated one.
     ggml_backend_t backend = ::tts_cpp::detail::init_gpu_backend(
         n_gpu_layers, /*verbose=*/false, "parler", /*vulkan_device=*/0,
-        /*allow_arm_mali=*/true, /*out_gpu_present_but_unused=*/nullptr,
-        GpuBackendRequirement::Metal | GpuBackendRequirement::Vulkan |
-            GpuBackendRequirement::OpenCL | GpuBackendRequirement::CUDA);
+        /*allow_arm_mali=*/true, /*out_gpu_present_but_unused=*/nullptr, gpu_requirement());
     return backend ? backend : ::tts_cpp::detail::init_cpu_backend();
 }
 

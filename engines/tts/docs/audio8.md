@@ -881,8 +881,8 @@ ctest -R audio8 --output-on-failure
 on a checkout with no models; every other target needs the dumps.
 
 On a build with a GPU backend compiled in, the `lm`, `codec` and `engine`
-suites are registered a second time per backend as `test-audio8-<suite>-metal`,
-`-vulkan` and `-opencl`. Each arm names its backend in `AUDIO8_TEST_GPU` and
+suites are registered a second time per backend as `test-audio8-<suite>-cuda`,
+`-metal`, `-vulkan`, `-opencl` and `-webgpu`. Each arm names its backend in `AUDIO8_TEST_GPU` and
 asserts it before reading a number, so an arm that fell back to CPU, or that was
 handed the other arm's GPU, fails rather than passing on someone else's result.
 
