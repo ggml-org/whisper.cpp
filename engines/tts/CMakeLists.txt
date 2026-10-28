@@ -1246,6 +1246,13 @@ if (TTS_CPP_BUILD_TESTS)
                          "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_convert_cosyvoice3_llm.py")
         set_property(TEST test-convert-cosyvoice3-llm PROPERTY LABELS "unit")
 
+        add_test(NAME test-requantize-shapes
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_requantize_shapes.py")
+        set_tests_properties(test-requantize-shapes PROPERTIES
+            LABELS "unit" SKIP_RETURN_CODE 77
+            ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
         add_test(NAME test-convert-moss
                  COMMAND "${Python3_EXECUTABLE}"
                          "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_convert_moss.py")
@@ -4369,6 +4376,17 @@ else()
             endif()
         endforeach()
     endif()
+endif()
+
+# Model-free measurement-driver contracts run with the native unit lane. The
+# separate consumer project also builds against an installed public library.
+# Cross builds must not execute Android binaries through the host Python.
+set(_tts_chatterbox_measurement_dir
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/benchmarks/chatterbox-hexagon")
+if(TTS_CPP_BUILD_TESTS AND NOT CMAKE_CROSSCOMPILING AND
+   EXISTS "${_tts_chatterbox_measurement_dir}/CMakeLists.txt")
+    add_subdirectory("${_tts_chatterbox_measurement_dir}"
+        "${CMAKE_CURRENT_BINARY_DIR}/chatterbox-measurement")
 endif()
 
 if (TTS_CPP_INSTALL AND TTS_CPP_BUILD_LIBRARY)

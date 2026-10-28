@@ -142,6 +142,9 @@ struct model_ctx {
         std::make_unique<::tts_cpp::detail::sched_fallback>();
     ggml_context * ctx_w = nullptr;
     ggml_backend_buffer_t buffer_w = nullptr;
+    // A metadata-only fit model has no buffer_w, but graph construction must
+    // still use the same weight-residency policy as the real loader.
+    ggml_backend_buffer_type_t weight_buft = nullptr;
     std::map<std::string, ggml_tensor*> tensors;
 
     // Variant metadata read from GGUF once at load time.
@@ -479,6 +482,7 @@ static model_ctx load_s3gen_gguf(const std::string & path, int n_gpu_layers,
         m.tensors[name] = dst;
     }
     ggml_backend_buffer_type_t weight_buft = ::tts_cpp::detail::weight_buffer_type(m.backend);
+    m.weight_buft = weight_buft;
     if (measure_bytes) {
         *measure_bytes = ggml_backend_alloc_ctx_tensors_from_buft_size(m.ctx_w, weight_buft);
         // Same trick ggml's own measure paths use: mark every weight tensor
@@ -561,20 +565,24 @@ static ggml_tensor * find_tensor(const model_ctx & m, const std::string & name) 
 
 // HTP has no fast F32 im2col and HMX multiplies in F16 regardless, so a
 // Hexagon-resident kernel takes F16 columns: half the im2col traffic at the
-// same product precision.  A kernel without a buffer (a graph input, or a
-// metadata-only fit model) keeps F32 columns.
-static ggml_type conv_column_type(const ggml_tensor * kernel) {
-    const bool on_hexagon = kernel->buffer &&
-        ::tts_cpp::detail::reg_name_is_hexagon(
-            ::tts_cpp::detail::buft_reg_name(ggml_backend_buffer_get_type(kernel->buffer)));
+// same product precision. Metadata-only model weights use their planned
+// buffer type, so fit builds the same graph before device memory exists.
+// Graph-input kernels (the STFT scaffold) have neither and keep F32 columns.
+static ggml_type conv_column_type(const ggml_tensor * kernel,
+                                  ggml_backend_buffer_type_t planned_weight_buft) {
+    const ggml_backend_buffer_type_t buft = kernel->buffer
+        ? ggml_backend_buffer_get_type(kernel->buffer) : planned_weight_buft;
+    const bool on_hexagon = ::tts_cpp::detail::reg_name_is_hexagon(
+        ::tts_cpp::detail::buft_reg_name(buft));
     return on_hexagon ? GGML_TYPE_F16 : GGML_TYPE_F32;
 }
 
 // conv1d via im2col + mul_mat.  kernel ne=[K, IC, OC]
 static ggml_tensor * conv1d_f32(ggml_context * ctx, ggml_tensor * kernel, ggml_tensor * input,
-                                int stride, int padding, int dilation) {
+                                int stride, int padding, int dilation,
+                                ggml_backend_buffer_type_t planned_weight_buft = nullptr) {
     ggml_tensor * im2col = ggml_im2col(ctx, kernel, input, stride, 0, padding, 0, dilation, 0, false,
-                                       conv_column_type(kernel));
+                                       conv_column_type(kernel, planned_weight_buft));
     ggml_tensor * result = ggml_mul_mat(ctx,
         ggml_reshape_2d(ctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1]),
         ggml_reshape_2d(ctx, kernel, kernel->ne[0] * kernel->ne[1], kernel->ne[2]));
@@ -1137,11 +1145,11 @@ static void build_encoder_graph_nodes(graph_cache & cache, const model_ctx & m, 
     ggml_tensor * pw2 = find_tensor(m, "flow/encoder/pre_lookahead/conv2/w");
     ggml_tensor * pb2 = find_tensor(m, "flow/encoder/pre_lookahead/conv2/b");
     xt = zero_pad_dim0(ctx, xt, 0, 3);
-    xt = conv1d_f32(ctx, pw1, xt, 1, 0, 1);
+    xt = conv1d_f32(ctx, pw1, xt, 1, 0, 1, m.weight_buft);
     xt = ggml_add(ctx, xt, ggml_reshape_2d(ctx, pb1, 1, D));
     xt = ggml_leaky_relu(ctx, xt, 0.01f, false);
     xt = zero_pad_dim0(ctx, xt, 2, 0);
-    xt = conv1d_f32(ctx, pw2, xt, 1, 0, 1);
+    xt = conv1d_f32(ctx, pw2, xt, 1, 0, 1, m.weight_buft);
     xt = ggml_add(ctx, xt, ggml_reshape_2d(ctx, pb2, 1, D));
     xt = ggml_cont(ctx, ggml_permute(ctx, xt, 1, 0, 2, 3));
     x = ggml_add(ctx, xt, residual);
@@ -1160,7 +1168,7 @@ static void build_encoder_graph_nodes(graph_cache & cache, const model_ctx & m, 
     ggml_tensor * xu_rep = repeat_along_dim0(ctx, xu_3d, ratio);
     xu = ggml_cont(ctx, ggml_reshape_2d(ctx, xu_rep, xu_3d->ne[1]*ratio, xu_3d->ne[2]));
     xu = zero_pad_dim0(ctx, xu, 2 * ratio, 0);
-    xu = conv1d_f32(ctx, up_w, xu, 1, 0, 1);
+    xu = conv1d_f32(ctx, up_w, xu, 1, 0, 1, m.weight_buft);
     xu = ggml_add(ctx, xu, ggml_reshape_2d(ctx, up_b, 1, D));
     x = ggml_cont(ctx, ggml_permute(ctx, xu, 1, 0, 2, 3));
 
@@ -1253,22 +1261,24 @@ static cfm_resnet_w load_cfm_resnet(const model_ctx & m, const std::string & pfx
 
 static ggml_tensor * cfm_causal_block(ggml_context * ctx, ggml_tensor * x,
                                       ggml_tensor * conv_w, ggml_tensor * conv_b,
-                                      ggml_tensor * ln_w, ggml_tensor * ln_b, int64_t C_out) {
+                                      ggml_tensor * ln_w, ggml_tensor * ln_b, int64_t C_out,
+                                      ggml_backend_buffer_type_t weight_buft) {
     ggml_tensor * xp = zero_pad_dim0(ctx, x, 2, 0);
-    ggml_tensor * y = conv1d_f32(ctx, conv_w, xp, 1, 0, 1);
+    ggml_tensor * y = conv1d_f32(ctx, conv_w, xp, 1, 0, 1, weight_buft);
     y = ggml_add(ctx, y, ggml_reshape_2d(ctx, conv_b, 1, C_out));
     y = layer_norm_on_channel(ctx, y, ln_w, ln_b);
     return ggml_mish_fn(ctx, y);
 }
 
 static ggml_tensor * cfm_resnet(ggml_context * ctx, const cfm_resnet_w & w,
-                                ggml_tensor * x, ggml_tensor * t_emb, int64_t C_out) {
-    ggml_tensor * h = cfm_causal_block(ctx, x, w.b1_conv_w, w.b1_conv_b, w.b1_ln_w, w.b1_ln_b, C_out);
+                                ggml_tensor * x, ggml_tensor * t_emb, int64_t C_out,
+                                ggml_backend_buffer_type_t weight_buft) {
+    ggml_tensor * h = cfm_causal_block(ctx, x, w.b1_conv_w, w.b1_conv_b, w.b1_ln_w, w.b1_ln_b, C_out, weight_buft);
     ggml_tensor * t_feat = ggml_mish_fn(ctx, t_emb);
     ggml_tensor * t_proj = ggml_add(ctx, ggml_mul_mat(ctx, w.mlp_w, t_feat), w.mlp_b);
     h = ggml_add(ctx, h, ggml_reshape_2d(ctx, t_proj, 1, C_out));
-    h = cfm_causal_block(ctx, h, w.b2_conv_w, w.b2_conv_b, w.b2_ln_w, w.b2_ln_b, C_out);
-    ggml_tensor * res = conv1d_f32(ctx, w.res_w, x, 1, 0, 1);
+    h = cfm_causal_block(ctx, h, w.b2_conv_w, w.b2_conv_b, w.b2_ln_w, w.b2_ln_b, C_out, weight_buft);
+    ggml_tensor * res = conv1d_f32(ctx, w.res_w, x, 1, 0, 1, weight_buft);
     res = ggml_add(ctx, res, ggml_reshape_2d(ctx, w.res_b, 1, C_out));
     return ggml_add(ctx, h, res);
 }
@@ -1391,9 +1401,10 @@ static ggml_tensor * apply_tfm_stack(ggml_context * ctx, const cfm_tfm_stack & s
 }
 
 static ggml_tensor * cfm_causal_k3(ggml_context * ctx, ggml_tensor * x,
-                                   ggml_tensor * w, ggml_tensor * b, int C_out) {
+                                   ggml_tensor * w, ggml_tensor * b, int C_out,
+                                   ggml_backend_buffer_type_t weight_buft) {
     ggml_tensor * xp = zero_pad_dim0(ctx, x, 2, 0);
-    ggml_tensor * y = conv1d_f32(ctx, w, xp, 1, 0, 1);
+    ggml_tensor * y = conv1d_f32(ctx, w, xp, 1, 0, 1, weight_buft);
     return ggml_add(ctx, y, ggml_reshape_2d(ctx, b, 1, C_out));
 }
 
@@ -1736,15 +1747,15 @@ static void build_cfm_graph_nodes(cfm_estimator_cache & cache, const model_ctx &
     ggml_tensor * down_conv_w = find_tensor(m, "cfm/down_blocks/0/2/weight");
     ggml_tensor * down_conv_b = find_tensor(m, "cfm/down_blocks/0/2/bias");
 
-    ggml_tensor * z = cfm_resnet(ctx, down_rn, xc, t_emb_in, CH);
+    ggml_tensor * z = cfm_resnet(ctx, down_rn, xc, t_emb_in, CH, m.weight_buft);
     z = apply_tfm_stack(ctx, down_tfms, z, T, CH, f16_kv_attn, use_unfused);
     ggml_tensor * hidden = z;
-    z = cfm_causal_k3(ctx, z, down_conv_w, down_conv_b, CH);
+    z = cfm_causal_k3(ctx, z, down_conv_w, down_conv_b, CH, m.weight_buft);
 
     for (int i = 0; i < N_MID; ++i) {
         auto rn = load_cfm_resnet(m, "cfm/mid_blocks/" + std::to_string(i) + "/0");
         auto tfms = load_tfm_stack(m, "cfm/mid_blocks/" + std::to_string(i) + "/1", N_BLOCKS);
-        z = cfm_resnet(ctx, rn, z, t_emb_in, CH);
+        z = cfm_resnet(ctx, rn, z, t_emb_in, CH, m.weight_buft);
         z = apply_tfm_stack(ctx, tfms, z, T, CH, f16_kv_attn, use_unfused);
     }
 
@@ -1753,19 +1764,19 @@ static void build_cfm_graph_nodes(cfm_estimator_cache & cache, const model_ctx &
     ggml_tensor * up_conv_w = find_tensor(m, "cfm/up_blocks/0/2/weight");
     ggml_tensor * up_conv_b = find_tensor(m, "cfm/up_blocks/0/2/bias");
     z = ggml_concat(ctx, z, hidden, 1);
-    z = cfm_resnet(ctx, up_rn, z, t_emb_in, CH);
+    z = cfm_resnet(ctx, up_rn, z, t_emb_in, CH, m.weight_buft);
     z = apply_tfm_stack(ctx, up_tfms, z, T, CH, f16_kv_attn, use_unfused);
-    z = cfm_causal_k3(ctx, z, up_conv_w, up_conv_b, CH);
+    z = cfm_causal_k3(ctx, z, up_conv_w, up_conv_b, CH, m.weight_buft);
 
     ggml_tensor * fb_conv_w = find_tensor(m, "cfm/final_block/block/0/weight");
     ggml_tensor * fb_conv_b = find_tensor(m, "cfm/final_block/block/0/bias");
     ggml_tensor * fb_ln_w   = find_tensor(m, "cfm/final_block/block/2/weight");
     ggml_tensor * fb_ln_b   = find_tensor(m, "cfm/final_block/block/2/bias");
-    z = cfm_causal_block(ctx, z, fb_conv_w, fb_conv_b, fb_ln_w, fb_ln_b, CH);
+    z = cfm_causal_block(ctx, z, fb_conv_w, fb_conv_b, fb_ln_w, fb_ln_b, CH, m.weight_buft);
 
     ggml_tensor * fp_w = find_tensor(m, "cfm/final_proj/weight");
     ggml_tensor * fp_b = find_tensor(m, "cfm/final_proj/bias");
-    ggml_tensor * out = conv1d_f32(ctx, fp_w, z, 1, 0, 1);
+    ggml_tensor * out = conv1d_f32(ctx, fp_w, z, 1, 0, 1, m.weight_buft);
     out = ggml_add(ctx, out, ggml_reshape_2d(ctx, fp_b, 1, MEL));
     ggml_set_name(out, "out"); ggml_set_output(out);
     ggml_build_forward_expand(gf, out);
@@ -2149,7 +2160,7 @@ static void build_f0_graph_nodes(graph_cache & cache, const model_ctx & m, int T
         ggml_tensor * w = find_tensor(m, pfx + "/weight");
         ggml_tensor * b = find_tensor(m, pfx + "/bias");
         int C_out = (int)w->ne[2];
-        x = conv1d_f32(ctx, w, x, 1, 1, 1);
+        x = conv1d_f32(ctx, w, x, 1, 1, 1, m.weight_buft);
         x = ggml_add(ctx, x, ggml_reshape_2d(ctx, b, 1, C_out));
         x = ggml_unary(ctx, x, GGML_UNARY_OP_ELU);
     }
@@ -2382,10 +2393,10 @@ static void build_hift_graph_nodes(graph_cache & cache, const model_ctx & m,
             int pad1 = (ks * d - d) / 2;
             int pad2 = (ks - 1) / 2;
             ggml_tensor * xt = snake(ctx, x, p.a1, p.ia1);
-            xt = conv1d_f32(ctx, p.c1w, xt, 1, pad1, d);
+            xt = conv1d_f32(ctx, p.c1w, xt, 1, pad1, d, m.weight_buft);
             xt = ggml_add(ctx, xt, ggml_reshape_2d(ctx, p.c1b, 1, C));
             xt = snake(ctx, xt, p.a2, p.ia2);
-            xt = conv1d_f32(ctx, p.c2w, xt, 1, pad2, 1);
+            xt = conv1d_f32(ctx, p.c2w, xt, 1, pad2, 1, m.weight_buft);
             xt = ggml_add(ctx, xt, ggml_reshape_2d(ctx, p.c2b, 1, C));
             x = ggml_add(ctx, x, xt);
         }
@@ -2394,7 +2405,7 @@ static void build_hift_graph_nodes(graph_cache & cache, const model_ctx & m,
 
     ggml_tensor * cpw = find_tensor(m, "hift/conv_pre/weight");
     ggml_tensor * cpb = find_tensor(m, "hift/conv_pre/bias");
-    ggml_tensor * x = conv1d_f32(ctx, cpw, mel_in, 1, 3, 1);
+    ggml_tensor * x = conv1d_f32(ctx, cpw, mel_in, 1, 3, 1, m.weight_buft);
     x = ggml_add(ctx, x, ggml_reshape_2d(ctx, cpb, 1, BASE_CH));
 
     for (int i = 0; i < 3; ++i) {
@@ -2415,7 +2426,7 @@ static void build_hift_graph_nodes(graph_cache & cache, const model_ctx & m,
         ggml_tensor * sb = find_tensor(m, "hift/source_downs/" + std::to_string(i) + "/bias");
         int sd_stride = (i == 0) ? 15 : (i == 1) ? 3 : 1;
         int sd_pad    = (i == 0) ? 7  : (i == 1) ? 1 : 0;
-        ggml_tensor * si = conv1d_f32(ctx, sw, s_in, sd_stride, sd_pad, 1);
+        ggml_tensor * si = conv1d_f32(ctx, sw, s_in, sd_stride, sd_pad, 1, m.weight_buft);
         si = ggml_add(ctx, si, ggml_reshape_2d(ctx, sb, 1, (int)sw->ne[2]));
         auto srb = load_rb("hift/source_resblocks/" + std::to_string(i), ups_ch[i]);
         si = rb_fwd(srb, si, ups_ch[i], src_rb_dils[i], src_rb_ksizes[i]);
@@ -2433,7 +2444,7 @@ static void build_hift_graph_nodes(graph_cache & cache, const model_ctx & m,
     x = ggml_leaky_relu(ctx, x, 0.01f, false);
     ggml_tensor * cp2w = find_tensor(m, "hift/conv_post/weight");
     ggml_tensor * cp2b = find_tensor(m, "hift/conv_post/bias");
-    x = conv1d_f32(ctx, cp2w, x, 1, 3, 1);
+    x = conv1d_f32(ctx, cp2w, x, 1, 3, 1, m.weight_buft);
     x = ggml_add(ctx, x, ggml_reshape_2d(ctx, cp2b, 1, NFFT2));
 
     // ISTFT

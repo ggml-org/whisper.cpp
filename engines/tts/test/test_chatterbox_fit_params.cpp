@@ -24,6 +24,7 @@
 //      preflight must not crash on the inputs it exists to reject).
 //
 // Usage: test-chatterbox-fit-params <t3.gguf> <s3gen.gguf> [n_gpu_layers]
+//        [--backend NAME] [--n-ctx N]
 // (CMake registers the CPU form; pass e.g. 99 manually to check parity on a
 // GPU backend.)  Exit 0 on success; non-zero with a FAIL line per broken
 // invariant.
@@ -34,12 +35,14 @@
 #include "chatterbox_fit_internal.h"
 #include "chatterbox_t3_internal.h"
 #include "chatterbox_tts_test_hooks.h"
+#include "t3_mtl.h"
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 
 #include <cstdio>
 #include <cstdlib>
+#include <cerrno>
 #include <limits>
 #include <string>
 #include <vector>
@@ -61,13 +64,38 @@ void expect(bool cond, const std::string & what) {
 }
 
 void expect_eq(uint64_t projected, uint64_t real, const std::string & what) {
+    std::printf("%s: projected %llu allocated %llu\n", what.c_str(),
+                static_cast<unsigned long long>(projected),
+                static_cast<unsigned long long>(real));
     if (projected != real) {
         fail(what + ": projected " + std::to_string(projected) +
              " != allocated " + std::to_string(real));
     }
 }
 
+bool parse_int(const char * text, int & value) {
+    if (!text || !*text) return false;
+    char * end = nullptr;
+    errno = 0;
+    const long parsed = std::strtol(text, &end, 10);
+    if (errno || *end || parsed < std::numeric_limits<int>::min() ||
+        parsed > std::numeric_limits<int>::max()) return false;
+    value = static_cast<int>(parsed);
+    return true;
+}
+
+void usage(const char * executable) {
+    std::fprintf(stderr,
+        "usage: %s <t3.gguf> <s3gen.gguf> [n_gpu_layers] [--backend NAME] [--n-ctx N]\n",
+        executable);
+}
+
 void free_t3(detail::chatterbox_model & m) {
+    // The real MTL GPU stack is also registered for process-exit cleanup.
+    // Remove that ownership before releasing it here.
+    if (m.buffer_stack || m.ctx_stack) {
+        detail::t3_stack_unregister(m.buffer_stack, m.ctx_stack);
+    }
     ::tts_cpp::detail::sched_fallback_free(m.sched_fb);
     detail::t3_release_caches();
     if (m.buffer_w)        ggml_backend_buffer_free(m.buffer_w);
@@ -85,12 +113,30 @@ void free_t3(detail::chatterbox_model & m) {
 
 int main(int argc, char ** argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "usage: %s <t3.gguf> <s3gen.gguf> [n_gpu_layers]\n", argv[0]);
+        usage(argv[0]);
         return 2;
     }
     const std::string t3_path    = argv[1];
     const std::string s3gen_path = argv[2];
-    const int n_gpu_layers       = argc > 3 ? std::atoi(argv[3]) : 0;
+    int n_gpu_layers = 0;
+    int n_ctx = 0;
+    bool have_layers = false;
+    std::string backend;
+    for (int i = 3; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--backend" && i + 1 < argc && argv[i + 1][0] &&
+            argv[i + 1][0] != '-') {
+            backend = argv[++i];
+        } else if (arg == "--n-ctx" && i + 1 < argc &&
+                   parse_int(argv[i + 1], n_ctx) && n_ctx >= 0) {
+            ++i;
+        } else if (!have_layers && parse_int(argv[i], n_gpu_layers)) {
+            have_layers = true;
+        } else {
+            usage(argv[0]);
+            return 2;
+        }
+    }
 
     constexpr int kTextTokens  = 8;
     constexpr int kSpeechToks  = 40;
@@ -99,6 +145,8 @@ int main(int argc, char ** argv) {
     fopts.t3_gguf_path    = t3_path;
     fopts.s3gen_gguf_path = s3gen_path;
     fopts.n_gpu_layers    = n_gpu_layers;
+    fopts.backend         = backend;
+    fopts.n_ctx           = n_ctx;
     fopts.text_tokens     = kTextTokens;
     fopts.n_predict       = kSpeechToks;
 
@@ -122,14 +170,14 @@ int main(int argc, char ** argv) {
     {
         detail::t3_load_measure t3m;
         detail::chatterbox_model mm;  // metadata-only
-        if (!detail::load_model_gguf(t3_path, mm, /*requested_ctx=*/0, n_gpu_layers,
-                                     GGML_TYPE_F32, &t3m)) {
+        if (!detail::load_model_gguf(t3_path, mm, n_ctx, n_gpu_layers,
+                                     GGML_TYPE_F32, &t3m, backend)) {
             fail("metadata-only load_model_gguf failed");
             return g_failures;
         }
         detail::chatterbox_model real;
-        if (!detail::load_model_gguf(t3_path, real, /*requested_ctx=*/0, n_gpu_layers,
-                                     GGML_TYPE_F32)) {
+        if (!detail::load_model_gguf(t3_path, real, n_ctx, n_gpu_layers,
+                                     GGML_TYPE_F32, nullptr, backend)) {
             fail("real load_model_gguf failed");
             free_t3(mm);
             return g_failures;
@@ -195,13 +243,14 @@ int main(int argc, char ** argv) {
         sopts.pcm_out         = &pcm;
         sopts.n_threads       = 4;
         sopts.n_gpu_layers    = n_gpu_layers;
+        sopts.backend         = backend;
         if (s3gen_synthesize_to_wav(toks, sopts) != 0) {
             fail("real s3gen_synthesize_to_wav failed");
         } else {
             expect(!pcm.empty(), "real synthesis produced no PCM");
             detail::s3gen_fit_measure sm;
             std::string error;
-            if (!detail::s3gen_measure_fit(s3gen_path, n_gpu_layers, /*backend=*/{}, kSpeechToks,
+            if (!detail::s3gen_measure_fit(s3gen_path, n_gpu_layers, backend, kSpeechToks,
                                            sm, &error)) {
                 fail("s3gen_measure_fit failed: " + error);
             } else {

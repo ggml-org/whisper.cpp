@@ -107,10 +107,10 @@ def parse_args() -> argparse.Namespace:
             "Target format for the big matmul weights (encoder Linears, "
             "CFM attn/FF Linears, HiFT Conv1d weights, CAMPPlus/S3TokenizerV2). "
             "Biases, LayerNorm gammas/betas, embeddings, filterbanks and "
-            "built-in conditionals always stay F32. Tensors whose shape cannot "
-            "hold the requested block quant (rank != 2 or ne[0] not a multiple "
-            "of 32) transparently fall back to F16 so conv kernels still "
-            "benefit even at q8_0/q5_0/q4_0. q8_0/q5_0/q4_0 follow the same "
+            "built-in conditionals always stay F32. Tensors whose original "
+            "shape cannot hold the requested block quant retain their source "
+            "dtype and dimensions; pointwise Conv1d weights are not squeezed "
+            "to matrices. q8_0/q5_0/q4_0 follow the same "
             "deny-list as scripts/requantize-gguf.py (no quant on "
             "flow/input_embedding, campplus, s3tokv2, builtins, mel "
             "filterbanks, norms/biases). Default f16 stores all float "
@@ -188,7 +188,9 @@ def add_tensor_maybe_q(
         return
 
     qtype = _RQ_QUANT_TYPE[quant]
-    if not _SHOULD_QUANTIZE(name, arr.shape, qtype):
+    # Chatterbox needs the original 3-D Conv1d layout; unlike Supertonic it
+    # does not restore a squeezed pointwise shape from GGUF metadata.
+    if not _SHOULD_QUANTIZE(name, arr.shape, qtype, allow_pointwise_squeeze=False):
         writer.add_tensor(name, arr)
         return
 

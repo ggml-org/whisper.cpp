@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "description": "Fixed native Chatterbox correctness matrix; quality thresholds are supplied by existing numerical harnesses, not this manifest.",
+  "tiers": ["q4_0", "q8_0"],
+  "backends": ["cpu", "opencl", "hexagon"],
+  "modes": ["batch", "stream"],
+  "families": {"turbo": ["en"], "mtl": ["en", "fr", "es"]},
+  "model_files": {
+    "turbo": {
+      "q4_0": {"t3": "chatterbox-t3-turbo-q4_0.gguf", "s3gen": "chatterbox-s3gen-q4_0.gguf"},
+      "q8_0": {"t3": "chatterbox-t3-turbo-q8_0.gguf", "s3gen": "chatterbox-s3gen-q8_0.gguf"}
+    },
+    "mtl": {
+      "q4_0": {"t3": "chatterbox-t3-mtl-q4_0.gguf", "s3gen": "chatterbox-s3gen-mtl-q4_0.gguf"},
+      "q8_0": {"t3": "chatterbox-t3-mtl-q8_0.gguf", "s3gen": "chatterbox-s3gen-mtl-q8_0.gguf"}
+    }
+  },
+  "settings": {
+    "seed": 42,
+    "threads": 4,
+    "n_ctx": 1024,
+    "n_predict": 768,
+    "kv_cache_type": "f32",
+    "max_sentence_chars": 180,
+    "cfm_steps": 0,
+    "stream_chunk_tokens": 50,
+    "stream_first_chunk_tokens": 25,
+    "stream_left_context_tokens": 50,
+    "stream_cfm_steps": 0
+  },
+  "prompts": {
+    "en_short": {"language": "en", "text": "The morning train arrives at nine. Please bring the blue notebook and wait beside the station entrance."},
+    "fr_short": {"language": "fr", "text": "Le train du matin arrive à neuf heures. Apportez le carnet bleu et attendez près de l'entrée de la gare."},
+    "es_short": {"language": "es", "text": "El tren de la mañana llega a las nueve. Traiga el cuaderno azul y espere junto a la entrada de la estación."},
+    "en_paragraph": {"language": "en", "text": "The research team arrived at the station before sunrise and checked every item on the equipment list. After a short briefing, they walked to the river, recorded the water temperature, and photographed the bridge from both sides. They returned before lunch, compared their notes, and carefully saved the measurements so that another team could repeat the same survey next week."}
+  },
+  "matrix": [
+    {"group": "builtin", "families": ["turbo", "mtl"], "languages": "family", "voice": "builtin", "prompt": "short", "modes": ["batch", "stream"]},
+    {"group": "clone", "families": ["turbo", "mtl"], "languages": ["en"], "voice": "reference", "prompt": "short", "modes": ["batch", "stream"]},
+    {"group": "paragraph", "families": ["turbo", "mtl"], "languages": ["en"], "voice": "builtin", "prompt": "paragraph", "modes": ["batch"]}
+  ],
+  "expected_primary_cells": 84,
+  "notes": [
+    "cfm_steps=0 and stream_cfm_steps=0 preserve the engine's variant-specific defaults; record effective solver behavior separately.",
+    "Requested f32 KV is common across backends; Hexagon forces F16 internally. This unavoidable representation difference must remain disclosed.",
+    "The native driver makes one excluded first_call per invocation before measured calls; 84 primary cells therefore do not mean only 84 native calls.",
+    "Scoring reuses the existing english-named normalizer under an explicitly validated Unicode-basic NFC/lowercase/Unicode-word policy for English/French/Spanish; no contraction, number or semantic rewriting. Curly and straight apostrophes remain distinct. WER includes ASR errors and has no new pass threshold here.",
+    "Record actual DSP dispatch separately; explicit backend selection and an intact WAV alone do not prove HTP execution."
+  ]
+}

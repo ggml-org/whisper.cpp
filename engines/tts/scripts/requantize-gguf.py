@@ -256,7 +256,13 @@ def build_supertonic_keep_f32(src: gguf.GGUFReader) -> set[str]:
     return keep
 
 
-def should_quantize(name: str, shape: tuple[int, ...], qtype: gguf.GGMLQuantizationType) -> bool:
+def should_quantize(name: str, shape: tuple[int, ...], qtype: gguf.GGMLQuantizationType,
+                    *, allow_pointwise_squeeze: bool = False) -> bool:
+    """Select tensors representable in their existing layout by default.
+
+    Pointwise-convolution squeezing requires an explicit capability: both the
+    caller and its model loader must understand the changed on-disk shape.
+    """
     # Keep tiny tensors at full precision.
     n_elements = 1
     for d in shape:
@@ -304,7 +310,7 @@ def should_quantize(name: str, shape: tuple[int, ...], qtype: gguf.GGMLQuantizat
         # in this stack (HiFT K in {3,7,11,16} never qualifies).
         if shape[-1] % block == 0:
             return True
-        # Pointwise (1x1) conv: stored 3-D as ggml ne=[K=1, IC, OC] (numpy
+        # Optional pointwise (1x1) conv: stored 3-D as ggml ne=[K=1, IC, OC] (numpy
         # (OC, IC, 1)).  Algebraically it's a 2-D matmul [IC, OC]; the K=1
         # axis is trivial.  Squeeze the singleton and gate on the real
         # reduction dim (IC).  When quantized we store it squeezed-2D and the
@@ -312,9 +318,12 @@ def should_quantize(name: str, shape: tuple[int, ...], qtype: gguf.GGMLQuantizat
         # `supertonic.pwconv_squeezed` roster this script emits).  This is
         # where the bulk of a Supertonic GGUF lives (ConvNeXt pwconv1/pwconv2
         # in the vocoder + vector_estimator), so unlocking it is what takes a
-        # Q8_0 GGUF from ~96% of F32 down to ~32%.
+        # Q8_0 GGUF from ~96% of F32 down to ~32%.  Other loaders, including
+        # Chatterbox's, do not consume that roster and must keep the original
+        # 3-D shape and source dtype. Direct converters also need to actually
+        # squeeze the array before quantizing, so the policy never assumes it.
         squeezed = tuple(d for d in shape if d != 1)
-        if len(squeezed) == 2 and squeezed[-1] % block == 0:
+        if allow_pointwise_squeeze and len(squeezed) == 2 and squeezed[-1] % block == 0:
             return True
         return False
 
@@ -346,12 +355,16 @@ def main() -> int:
     if arch is not None:
         arch_name = bytes(arch.parts[arch.data[0]]).decode("utf-8")
 
+    # Only this loader restores squeezed pointwise weights from its roster.
+    # Sharing tensor-selection policy must not change another model's layout.
+    allow_pointwise_squeeze = arch_name.startswith("supertonic")
+
     # Supertonic stores weights under opaque `tNNNN` names; resolve the
     # raw-read roster via the alias arrays so we never block-quantize a
     # tensor the C++ loader reads as raw F32 (voices, CFG null tokens,
     # style/expand constants, embedding tables).  Empty for other archs.
     keep_f32_storage: set[str] = set()
-    if arch_name.startswith("supertonic"):
+    if allow_pointwise_squeeze:
         keep_f32_storage = build_supertonic_keep_f32(src)
 
     writer = gguf.GGUFWriter(args.dst, arch_name or "chatterbox-s3gen")
@@ -414,7 +427,8 @@ def main() -> int:
         if (in_filter and t.name not in keep_f32_storage
                       and t.tensor_type in _QUANTIZABLE_SRC_DTYPES
                       and t.tensor_type != qtype
-                      and should_quantize(t.name, shape, qtype)):
+                      and should_quantize(t.name, shape, qtype,
+                                          allow_pointwise_squeeze=allow_pointwise_squeeze)):
             # Reshape to natural (shape).  GGUF raw data is contiguous in
             # the original order, but reversed() above gives element-shape
             # which is what `quantize()` expects.
@@ -426,7 +440,8 @@ def main() -> int:
             quant_shape = shape
             q_block = gguf.GGML_QUANT_SIZES[qtype][0]
             squeezed_pwconv = (
-                len(shape) == 3 and (shape[-1] % q_block != 0) and (1 in shape)
+                allow_pointwise_squeeze and len(shape) == 3
+                and (shape[-1] % q_block != 0) and (1 in shape)
             )
             if squeezed_pwconv:
                 quant_shape = tuple(d for d in shape if d != 1)

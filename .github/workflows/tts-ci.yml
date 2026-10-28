@@ -19,6 +19,10 @@ on:
     paths:
       - 'engines/tts/**'
       - 'engines/test/**'
+      - 'scripts/benchmarks/chatterbox-hexagon*'
+      - 'scripts/benchmarks/chatterbox-hexagon/**'
+      - 'scripts/benchmarks/fixtures/chatterbox-hexagon.json'
+      - 'scripts/benchmarks/test-chatterbox-hexagon-validation.py'
       - 'scripts/ci/moss-gpu-e2e.py'
       - 'scripts/ci/test_moss_gpu_e2e.py'
       - '.github/workflows/tts-ci.yml'
@@ -26,6 +30,10 @@ on:
     paths:
       - 'engines/tts/**'
       - 'engines/test/**'
+      - 'scripts/benchmarks/chatterbox-hexagon*'
+      - 'scripts/benchmarks/chatterbox-hexagon/**'
+      - 'scripts/benchmarks/fixtures/chatterbox-hexagon.json'
+      - 'scripts/benchmarks/test-chatterbox-hexagon-validation.py'
       - 'scripts/ci/moss-gpu-e2e.py'
       - 'scripts/ci/test_moss_gpu_e2e.py'
       - '.github/workflows/tts-ci.yml'
@@ -356,6 +364,21 @@ jobs:
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/ggml-install/lib
         run: ctest --test-dir build -LE 'gpu|perf' --output-on-failure --timeout 600
+
+      # Exercise real tiny GGUF files in one hosted lane, without checkpoints
+      # or adding Python dependencies to the native/runtime installation.
+      - uses: actions/setup-python@v5
+        if: matrix.llamafile != 'ON'
+        with:
+          python-version: '3.12'
+
+      - name: Test quantized GGUF shape contracts
+        if: matrix.llamafile != 'ON'
+        run: |
+          qvac_shape_venv="$RUNNER_TEMP/chatterbox-quant-shapes"
+          python -m venv "$qvac_shape_venv"
+          "$qvac_shape_venv/bin/python" -m pip install 'numpy==1.26.4' 'gguf==0.19.0'
+          "$qvac_shape_venv/bin/python" -B engines/tts/scripts/test_requantize_shapes.py
 
   # Self-hosted Apple silicon, not hosted macOS: hosted macos-14 exposes an
   # Apple Paravirtual device without simdgroup matmul, so Metal-touching tests
