@@ -1254,7 +1254,7 @@ int main(int argc, char ** argv) {
     svr->set_write_timeout(sparams.write_timeout);
 
     // a host ending in ".sock" is the path of a unix domain socket
-    const std::string sock_ext = ".sock";
+    constexpr std::string_view sock_ext = ".sock";
     const bool is_sock = sparams.hostname.size() >= sock_ext.size() &&
         sparams.hostname.compare(sparams.hostname.size() - sock_ext.size(), sock_ext.size(), sock_ext) == 0;
 
