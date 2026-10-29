@@ -212,7 +212,7 @@ int main() {
     try {
         const char * backend = std::getenv("MOSS_SFX_CACHE_BACKEND");
         const BackendRequest request{backend ? backend : "cpu", false};
-        for (const auto precision : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0}) {
+        for (const auto precision : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
             test_precision(precision, request);
             test_flash_attention(precision, request);
         }

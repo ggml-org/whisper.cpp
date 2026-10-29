@@ -1,6 +1,7 @@
 #include "sfx_fixtures.h"
 
 #include "../test_env_portable.h"
+#include "../../../test/moss_precision.h"
 
 #include "moss/cli.h"
 #include "moss/sfx_coreml.h"
@@ -53,6 +54,9 @@ constexpr const char * FAKE_SIDECAR_LABEL = "coreml-fake";
 constexpr const char * POSITIONAL_MODEL = "m.gguf";
 constexpr int POSITIONAL_THREADS = 2;
 constexpr const char * POSITIONAL_BACKENDS_DIR = "/plugins";
+constexpr int TIER_DIT_WIDTH = 32;
+constexpr double TIER_MIN_COSINE = 0.9;
+constexpr const char * TIER_MATRIX = "dit.blk.0.self_q.weight";
 
 int failures = 0;
 
@@ -259,6 +263,44 @@ void test_rejected_tensors() {
     const auto f32_path = write_sfx_model("sfx-f32-kernels", WEIGHT_SEED);
     f32_kernels() = false;
     expect_engine_rejects(f32_path, "must be f16", "f32 VAE kernels");
+}
+
+std::filesystem::path write_tier_model(const char * tag, ggml_type tier) {
+    const auto path = write_sfx_model(tag, WEIGHT_SEED, [](gguf_context *) {}, {}, {}, 1, TIER_DIT_WIDTH);
+    moss_fixture_precision(path, tier);
+    return path;
+}
+
+double cosine(const std::vector<float> & a, const std::vector<float> & b) {
+    double dot = 0.0, na = 0.0, nb = 0.0;
+    for (size_t i = 0; i < a.size() && i < b.size(); ++i) {
+        dot += (double) a[i] * b[i];
+        na += (double) a[i] * a[i];
+        nb += (double) b[i] * b[i];
+    }
+    return a.size() == b.size() && na > 0.0 && nb > 0.0 ? dot / std::sqrt(na * nb) : -1.0;
+}
+
+std::vector<float> tier_velocity(const std::filesystem::path & path, ggml_type tier) {
+    SfxModel model(path.string(), {}, 1);
+    check(model.tensor(TIER_MATRIX)->type == tier,
+          std::string(ggml_type_name(tier)) + " linear weights load without conversion");
+    const std::vector<float> context = encode_text(model, {40, 41});
+    SfxDitSession dit(model, FRAMES);
+    return dit.velocity(gaussian_noise((size_t) FRAMES * LATENT, 3), PROBE_TIMESTEP, context);
+}
+
+void test_weight_tiers() {
+    const auto reference_path = write_tier_model("sfx-tier-f32", GGML_TYPE_F32);
+    const std::vector<float> reference = tier_velocity(reference_path, GGML_TYPE_F32);
+    std::filesystem::remove(reference_path);
+    for (ggml_type tier : {GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
+        const auto path = write_tier_model("sfx-tier", tier);
+        check(cosine(reference, tier_velocity(path, tier)) > TIER_MIN_COSINE,
+              std::string(ggml_type_name(tier)) + " linear weights follow the f32 velocity");
+        std::filesystem::remove(path);
+    }
+    expect_engine_rejects(write_tier_model("sfx-tier-q5", GGML_TYPE_Q5_0), "unsupported type", "q5_0 linear weights");
 }
 
 void test_text_encoder(SfxModel & model) {
@@ -728,6 +770,7 @@ int main() {
         test_noise();
         test_rejected_models();
         test_rejected_tensors();
+        test_weight_tiers();
         test_rejected_metadata_bounds();
         test_feed_forward_beyond_half_precision();
         test_timestep_sinusoid();

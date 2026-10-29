@@ -27,7 +27,7 @@ model guide for quality limits and stage-specific restrictions.
 | Audio8-TTS-Preview-0.6B | `f32`, `f16`, `q8_0`; LM also `q4_0` | [Guide](audio8.md) |
 | Pocket TTS | `f32`; `f16` as storage | [Guide](pocket-tts.md) |
 | MOSS Delay (MOSS-TTS-v1.5 / MOSS-TTSD) | `f32`, `f16` | [Guide](moss.md) |
-| MOSS-SoundEffect-v2 | `f16`, `q8_0`; converter also writes `f32`, `bf16` | [Guide](moss.md) |
+| MOSS-SoundEffect-v2 | `f16`, `q8_0`, `q8_0` with `q4_0` DiT blocks; converter also writes `f32`, `bf16`, `q4_0` | [Guide](moss.md) |
 | MOSS-Speech | LM `bf16`, `q8_0`; converter also writes `f16`, `f32`; codec `f16` | [Guide](moss.md) |
 | LavaSR denoiser (UL-UNAS) | `f32`, `f16` | [Guide](lavasr.md) |
 | LavaSR enhancer (Vocos BWE) | `f32`, `f16` | [Guide](lavasr.md) |

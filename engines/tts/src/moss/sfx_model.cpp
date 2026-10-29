@@ -50,7 +50,8 @@ bool within(int value, int low, int high) {
 }
 
 bool is_matrix_type(ggml_type type) {
-    return type == GGML_TYPE_F32 || type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0;
+    return type == GGML_TYPE_F32 || type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0 ||
+           type == GGML_TYPE_Q4_0;
 }
 
 void require_f32(const ggml_tensor * tensor) {

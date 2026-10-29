@@ -224,8 +224,8 @@ void test_first_refused_weight() {
     const std::string message = hexagon_weight_refusal(refused, HEXAGON_TTS_WEIGHT_TIERS);
     check(message.find("refused.weight (bf16)") != std::string::npos && message.find("q4_0") != std::string::npos,
           "the refusal names the tensor and the supported tiers");
-    check(hexagon_weight_refusal(refused, HEXAGON_SFX_WEIGHT_TIERS).find("q4_0") == std::string::npos,
-          "the sound-effect refusal offers no tier its loader rejects");
+    check(hexagon_weight_refusal(refused, HEXAGON_SFX_WEIGHT_TIERS).find("q4_0") != std::string::npos,
+          "the sound-effect refusal offers the q4_0 tier");
     check(hexagon_weight_refusal(refused, HEXAGON_SPEECH_WEIGHT_TIERS).find("q4_0") != std::string::npos,
           "the speech LM refusal offers the q4_0 tier");
     check(hexagon_weight_refusal(refused, HEXAGON_SPEECH_TOKENIZER_WEIGHT_TIERS).find("q4_0") == std::string::npos,
@@ -507,7 +507,7 @@ int main() {
         test_sfx_cpu_layout();
         test_sfx_measured_table();
         test_sfx_survives_truncation();
-        for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0}) {
+        for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
             test_gguf_rows(type);
         }
         test_speech_cpu_layout();
@@ -524,6 +524,8 @@ int main() {
         for (ggml_type precision : {GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
             test_placement_matches(precision, WIDE_EMBEDDING);
         }
+        test_sfx_table_placement(GGML_TYPE_Q4_0);
+        test_sfx_fused_attention(GGML_TYPE_Q4_0);
     } catch (const std::exception & e) {
         std::fprintf(stderr, "FAIL: %s\n", e.what());
         return 1;

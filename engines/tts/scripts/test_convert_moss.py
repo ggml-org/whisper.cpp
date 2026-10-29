@@ -63,6 +63,10 @@ VQ_EMBD = 8
 VQ_MELS = 4
 VQ_CODES = 6
 VQ_KERNEL = 3
+SFX_BLOCK_MATRICES = ("text.blk.0.attn_q.weight", "text.blk.0.ffn_down.weight",
+                      "dit.blk.0.self_q.weight", "dit.blk.0.cross_v.weight", "dit.blk.0.ffn_down.weight")
+SFX_GLOBAL_MATRICES = ("text.token_embd.weight", "dit.text_embd_1.weight", "dit.time_embd_2.weight",
+                       "dit.time_proj.weight", "dit.head.weight")
 
 
 def write_safetensors(path: Path, tensors: dict[str, np.ndarray]) -> None:
@@ -433,6 +437,59 @@ def check_sfx_quantized(path: Path) -> None:
     print("sound effect q8_0 converter: PASS")
 
 
+def reader_types(path: Path) -> dict[str, gguf.GGMLQuantizationType]:
+    return {t.name: t.tensor_type for t in gguf.GGUFReader(str(path)).tensors}
+
+
+def dequantized(path: Path, name: str) -> np.ndarray:
+    tensor = reader_tensor(path, name)
+    return gguf.quants.dequantize(tensor.data, tensor.tensor_type)
+
+
+def check_sfx_matrix_types(path: Path, block_type: gguf.GGMLQuantizationType,
+                           global_type: gguf.GGMLQuantizationType) -> None:
+    types = reader_types(path)
+    for name in SFX_BLOCK_MATRICES:
+        assert types[name] == block_type, f"{name} is {types[name].name}, not {block_type.name}"
+    for name in SFX_GLOBAL_MATRICES:
+        assert types[name] == global_type, f"{name} is {types[name].name}, not {global_type.name}"
+    assert types["dit.blk.0.self_q.bias"] == gguf.GGMLQuantizationType.F32, "biases stay f32"
+    assert types["dit.patch_embd.weight"] == gguf.GGMLQuantizationType.F32, "the 1x1 patch projection stays f32"
+    assert types["vae.conv_in.weight"] == gguf.GGMLQuantizationType.F16, "conv kernels stay f16"
+
+
+def check_sfx_four_bit(path: Path) -> None:
+    check_sfx(path)
+    q4 = gguf.GGMLQuantizationType.Q4_0
+    check_sfx_matrix_types(path, q4, q4)
+    assert np.allclose(dequantized(path, "dit.blk.0.self_q.weight"), 1.0), "q4_0 blocks dequantize to the weights"
+    print("sound effect q4_0 converter: PASS")
+
+
+def check_sfx_four_bit_dit_blocks(path: Path) -> None:
+    types = reader_types(path)
+    q8, q4 = gguf.GGMLQuantizationType.Q8_0, gguf.GGMLQuantizationType.Q4_0
+    for name in SFX_BLOCK_MATRICES:
+        expected = q4 if name.startswith("dit.blk.") else q8
+        assert types[name] == expected, f"{name} is {types[name].name}, not {expected.name}"
+    for name in SFX_GLOBAL_MATRICES:
+        assert types[name] == q8, f"{name} is {types[name].name}, not Q8_0"
+    print("sound effect q4_0 DiT blocks over q8_0 converter: PASS")
+
+
+def check_sfx_four_bit_text_blocks(path: Path) -> None:
+    check_sfx_matrix_types(path, gguf.GGMLQuantizationType.Q4_0, gguf.GGMLQuantizationType.Q8_0)
+    print("sound effect q4_0 text and DiT blocks over q8_0 converter: PASS")
+
+
+def check_sfx_default_name(sfx_dir: Path) -> None:
+    run_converter("convert-moss-sfx-to-gguf.py", [str(sfx_dir), "--outtype", "q8_0", "--dit-block-outtype", "q4_0"])
+    named = sfx_dir / f"{sfx_dir.name}-q8_0-dit-q4_0.gguf"
+    assert named.exists(), "the default name records the block override"
+    named.unlink()
+    print("sound effect converter default name: PASS")
+
+
 def run_converter(script: str, args: list[str]) -> None:
     result = subprocess.run([sys.executable, str(SCRIPTS / script), *args],
                             capture_output=True, text=True)
@@ -756,6 +813,18 @@ def main() -> None:
         sfx_q8 = root / "sfx-q8.gguf"
         run_converter("convert-moss-sfx-to-gguf.py", [str(sfx_dir), "--outtype", "q8_0", "--outfile", str(sfx_q8)])
         check_sfx_quantized(sfx_q8)
+        sfx_q4 = root / "sfx-q4.gguf"
+        run_converter("convert-moss-sfx-to-gguf.py", [str(sfx_dir), "--outtype", "q4_0", "--outfile", str(sfx_q4)])
+        check_sfx_four_bit(sfx_q4)
+        sfx_dit_q4 = root / "sfx-q8-dit-q4.gguf"
+        run_converter("convert-moss-sfx-to-gguf.py", [str(sfx_dir), "--outtype", "q8_0", "--dit-block-outtype", "q4_0",
+                                                      "--outfile", str(sfx_dit_q4)])
+        check_sfx_four_bit_dit_blocks(sfx_dit_q4)
+        sfx_blk_q4 = root / "sfx-q8-blk-q4.gguf"
+        run_converter("convert-moss-sfx-to-gguf.py", [str(sfx_dir), "--outtype", "q8_0", "--text-block-outtype", "q4_0",
+                                                      "--dit-block-outtype", "q4_0", "--outfile", str(sfx_blk_q4)])
+        check_sfx_four_bit_text_blocks(sfx_blk_q4)
+        check_sfx_default_name(sfx_dir)
         sfx_f16 = root / "sfx-f16.gguf"
         run_converter("convert-moss-sfx-to-gguf.py", [str(sfx_dir), "--outtype", "f16", "--outfile", str(sfx_f16)])
         check_sfx_half(sfx_f16)

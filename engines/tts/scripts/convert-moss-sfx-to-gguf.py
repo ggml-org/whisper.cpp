@@ -3,8 +3,8 @@
 Qwen3 text encoder, Wan audio DiT, continuous DAC VAE) into the single
 moss-sfx GGUF that the tts-cpp MOSS sound-effect engine loads.
 
-usage: convert-moss-sfx-to-gguf.py <hf_checkpoint_dir> [--outtype f16|bf16|f32|q8_0]
-           [--outfile out.gguf]
+usage: convert-moss-sfx-to-gguf.py <hf_checkpoint_dir> [--outtype f16|bf16|f32|q8_0|q4_0]
+           [--text-block-outtype TYPE] [--dit-block-outtype TYPE] [--outfile out.gguf]
 """
 from __future__ import annotations
 
@@ -48,7 +48,11 @@ OUTTYPES = {
     "f16": gguf.GGMLQuantizationType.F16,
     "bf16": gguf.GGMLQuantizationType.BF16,
     "q8_0": gguf.GGMLQuantizationType.Q8_0,
+    "q4_0": gguf.GGMLQuantizationType.Q4_0,
 }
+
+TEXT_BLOCK_PREFIX = "text.blk."
+DIT_BLOCK_PREFIX = "dit.blk."
 
 TEXT_LAYER_RENAMES = {
     "input_layernorm.weight": "attn_norm.weight",
@@ -167,15 +171,37 @@ class SafeTensorsIndex:
         return np.asarray(np.memmap(loc.shard, mode="r", dtype=dtype, offset=offset, shape=loc.shape))
 
 
+@dataclass(frozen=True)
+class MatrixTypes:
+    default: str
+    text_blocks: str
+    dit_blocks: str
+
+    def for_tensor(self, name: str) -> str:
+        if name.startswith(TEXT_BLOCK_PREFIX):
+            return self.text_blocks
+        if name.startswith(DIT_BLOCK_PREFIX):
+            return self.dit_blocks
+        return self.default
+
+    def tag(self) -> str:
+        overrides = [f"{part}-{outtype}" for part, outtype in (("text", self.text_blocks), ("dit", self.dit_blocks))
+                     if outtype != self.default]
+        return "-".join([self.default, *overrides])
+
+
 class Emitter:
-    def __init__(self, writer: gguf.GGUFWriter, outtype: str):
+    def __init__(self, writer: gguf.GGUFWriter, types: MatrixTypes):
         self.writer = writer
-        self.outtype = outtype
+        self.types = types
         self.names: set[str] = set()
+
+    def matrix_type(self, name: str) -> gguf.GGMLQuantizationType:
+        return OUTTYPES[self.types.for_tensor(name)]
 
     def matrix(self, name: str, tensor: np.ndarray) -> None:
         data = np.ascontiguousarray(tensor, dtype=np.float32)
-        qtype = OUTTYPES[self.outtype]
+        qtype = self.matrix_type(name)
         if qtype == gguf.GGMLQuantizationType.F32:
             self._add(name, data)
             return
@@ -498,8 +524,8 @@ def add_metadata(writer: gguf.GGUFWriter, checkpoint: Checkpoint) -> None:
     add_tokenizer(writer, checkpoint.model_dir / "tokenizer")
 
 
-def emit_tensors(writer: gguf.GGUFWriter, checkpoint: Checkpoint, outtype: str) -> None:
-    emitter = Emitter(writer, outtype)
+def emit_tensors(writer: gguf.GGUFWriter, checkpoint: Checkpoint, types: MatrixTypes) -> None:
+    emitter = Emitter(writer, types)
     emit_text_encoder(emitter, SafeTensorsIndex(checkpoint.model_dir / "text_encoder"))
     emit_dit(emitter, SafeTensorsIndex(checkpoint.model_dir / "transformer"))
     emit_vae(emitter, checkpoint.vae_weights, checkpoint.rates)
@@ -516,12 +542,12 @@ def write_gguf(writer: gguf.GGUFWriter) -> None:
     writer.write_tensors_to_file(progress=True)
 
 
-def convert(model_dir: Path, outfile: Path, outtype: str) -> None:
+def convert(model_dir: Path, outfile: Path, types: MatrixTypes) -> None:
     checkpoint = read_checkpoint(model_dir)
     writer = gguf.GGUFWriter(path=outfile, arch=ARCH)
     try:
         add_metadata(writer, checkpoint)
-        emit_tensors(writer, checkpoint, outtype)
+        emit_tensors(writer, checkpoint, types)
         write_gguf(writer)
         print(f"{ARCH}: wrote {outfile}")
     finally:
@@ -531,13 +557,19 @@ def convert(model_dir: Path, outfile: Path, outtype: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("model_dir", type=Path)
-    parser.add_argument("--outtype", choices=tuple(OUTTYPES), default="f16")
+    parser.add_argument("--outtype", choices=tuple(OUTTYPES), default="f16",
+                        help="type of the linear weights and the text token embedding")
+    parser.add_argument("--text-block-outtype", choices=tuple(OUTTYPES), default=None,
+                        help="type of the text-encoder block linear weights (text.blk.*); defaults to --outtype")
+    parser.add_argument("--dit-block-outtype", choices=tuple(OUTTYPES), default=None,
+                        help="type of the DiT block linear weights (dit.blk.*); defaults to --outtype")
     parser.add_argument("--outfile", type=Path, default=None)
     args = parser.parse_args()
 
     model_dir = args.model_dir.resolve()
-    outfile = args.outfile or model_dir / f"{model_dir.name}-{args.outtype}.gguf"
-    convert(model_dir, outfile, args.outtype)
+    types = MatrixTypes(args.outtype, args.text_block_outtype or args.outtype, args.dit_block_outtype or args.outtype)
+    outfile = args.outfile or model_dir / f"{model_dir.name}-{types.tag()}.gguf"
+    convert(model_dir, outfile, types)
 
 
 if __name__ == "__main__":

@@ -4,11 +4,15 @@
 #include "moss/sfx_sampler.h"
 #include "moss/sfx_tokenizer.h"
 
+#include "ggml.h"
+#include "gguf.h"
+
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -18,6 +22,9 @@ namespace {
 
 constexpr int SKIP = 77;
 constexpr double STAGE_COSINE = 0.999;
+constexpr double FOUR_BIT_DIT_COSINE = 0.998;
+constexpr const char * TEXT_PREFIX = "text.";
+constexpr const char * DIT_PREFIX = "dit.";
 constexpr double LOOP_COSINE = 0.99;
 constexpr int REFERENCE_STEPS = 8;
 constexpr int REFERENCE_TENTHS = 50;
@@ -63,6 +70,41 @@ double cosine(const std::vector<float> & a, const std::vector<float> & b) {
     return dot / (std::sqrt(na) * std::sqrt(nb) + 1e-30);
 }
 
+double bytes_per_weight(ggml_type type) {
+    return (double) ggml_type_size(type) / (double) ggml_blck_size(type);
+}
+
+ggml_type coarsest_type(const gguf_context * file, const std::string & prefix) {
+    ggml_type coarsest = GGML_TYPE_F32;
+    for (int64_t i = 0; i < gguf_get_n_tensors(file); ++i) {
+        const ggml_type type = gguf_get_tensor_type(file, i);
+        if (std::string(gguf_get_tensor_name(file, i)).rfind(prefix, 0) == 0 &&
+                bytes_per_weight(type) < bytes_per_weight(coarsest)) {
+            coarsest = type;
+        }
+    }
+    return coarsest;
+}
+
+struct WeightTypes {
+    ggml_type text;
+    ggml_type dit;
+};
+
+WeightTypes read_weight_types(const char * model_path) {
+    gguf_context * file = gguf_init_from_file(model_path, {true, nullptr});
+    if (!file) {
+        throw std::runtime_error(std::string("cannot read ") + model_path);
+    }
+    const WeightTypes types{coarsest_type(file, TEXT_PREFIX), coarsest_type(file, DIT_PREFIX)};
+    gguf_free(file);
+    return types;
+}
+
+double dit_threshold(ggml_type dit) {
+    return dit == GGML_TYPE_Q4_0 ? FOUR_BIT_DIT_COSINE : STAGE_COSINE;
+}
+
 void report(const char * stage, double value, double threshold) {
     std::printf("%-22s cosine %.6f (threshold %.3f)\n", stage, value, threshold);
     check(value >= threshold, std::string(stage) + " diverges from the PyTorch reference");
@@ -80,15 +122,15 @@ void test_text_encoder(SfxModel & model, const std::filesystem::path & dir) {
     report("text encoder", cosine(context, read_bin<float>(dir / "context_pos.bin")), STAGE_COSINE);
 }
 
-void test_dit_velocity(SfxModel & model, const std::filesystem::path & dir) {
+void test_dit_velocity(SfxModel & model, const std::filesystem::path & dir, double threshold) {
     const std::vector<float> noise = read_bin<float>(dir / "noise.bin");
     const std::vector<float> sigmas = read_bin<float>(dir / "sigmas.bin");
     const float timestep = sigmas[0] * (float) model.config().train_timesteps;
     SfxDitSession dit(model, model.config().latent_frames());
     const std::vector<float> positive = dit.velocity(noise, timestep, read_bin<float>(dir / "context_pos.bin"));
     const std::vector<float> negative = dit.velocity(noise, timestep, read_bin<float>(dir / "context_neg.bin"));
-    report("dit positive", cosine(positive, read_bin<float>(dir / "v_pos0.bin")), STAGE_COSINE);
-    report("dit negative", cosine(negative, read_bin<float>(dir / "v_neg0.bin")), STAGE_COSINE);
+    report("dit positive", cosine(positive, read_bin<float>(dir / "v_pos0.bin")), threshold);
+    report("dit negative", cosine(negative, read_bin<float>(dir / "v_neg0.bin")), threshold);
     const std::vector<float> again = dit.velocity(noise, timestep, read_bin<float>(dir / "context_pos.bin"));
     check(again == positive, "a reused DiT session is deterministic");
 }
@@ -133,13 +175,15 @@ int main() {
     try {
         const char * backend = std::getenv("MOSS_SFX_BACKEND");
         const bool use_gpu = std::getenv("MOSS_SFX_GPU") != nullptr;
+        const WeightTypes types = read_weight_types(model_path);
+        std::printf("weights: text %s, DiT %s\n", ggml_type_name(types.text), ggml_type_name(types.dit));
         SfxModel model(model_path, {backend ? backend : "", use_gpu}, PARITY_THREADS);
         std::printf("backend: %s\n", model.backend_name());
         const std::filesystem::path dir(reference_dir);
         test_tokenizer(model, dir);
         test_text_encoder(model, dir);
         test_vae_decode(model, dir);
-        test_dit_velocity(model, dir);
+        test_dit_velocity(model, dir, dit_threshold(types.dit));
         test_sampling_loop(model, dir);
     } catch (const std::exception & e) {
         std::fprintf(stderr, "%s\n", e.what());

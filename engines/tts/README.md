@@ -57,7 +57,10 @@ values once per prompt and reuses them across steps. The request owns the cache;
 Metal also uses DiT flash attention when the backend supports both attention
 shapes. Metadata-only memory fit includes the cache alongside the scheduler's
 retained peak across text encoding, diffusion and VAE decoding, including repeated
-requests. See the
+requests. Besides `f16` and `q8_0`, a 2.8 GB `q8_0` GGUF with `q4_0` DiT blocks
+is validated on CPU, Metal, CUDA and the Hexagon NPU; quantizing the text
+encoder to `q4_0` as well is not recommended
+([4-bit weights](docs/moss.md#4-bit-weights)). See the
 [SoundEffect guide](docs/moss.md#moss-soundeffect) for details.
 
 ## Capabilities

@@ -20,7 +20,7 @@ enum class TablePlacement { Automatic, Device, Host };
 enum class AttentionLayout { Automatic, Unfused, Fused };
 
 inline constexpr const char * HEXAGON_TTS_WEIGHT_TIERS = "q8_0, q4_0, f16 or f32";
-inline constexpr const char * HEXAGON_SFX_WEIGHT_TIERS = "q8_0, f16 or f32";
+inline constexpr const char * HEXAGON_SFX_WEIGHT_TIERS = "q8_0, q4_0, f16 or f32";
 inline constexpr const char * HEXAGON_SPEECH_WEIGHT_TIERS = "q8_0, q4_0, f16 or f32";
 inline constexpr const char * HEXAGON_SPEECH_TOKENIZER_WEIGHT_TIERS = "q8_0, f16 or f32";
 
