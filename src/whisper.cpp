@@ -2192,14 +2192,14 @@ static struct ggml_cgraph * whisper_build_graph_encoder(
 
                 struct ggml_tensor * K =
                     ggml_view_3d(ctx0, kv_pad.k,
-                            n_state_head, n_ctx_pad, n_head,
+                            n_state_head, n_ctx, n_head,
                             ggml_element_size(kv_pad.k)*n_state,
                             ggml_element_size(kv_pad.k)*n_state_head,
                             0);
 
                 struct ggml_tensor * V =
                     ggml_view_3d(ctx0, kv_pad.v,
-                            n_state_head, n_ctx_pad, n_head,
+                            n_state_head, n_ctx, n_head,
                             ggml_element_size(kv_pad.v)*n_state,
                             ggml_element_size(kv_pad.v)*n_state_head,
                             0);
@@ -2749,14 +2749,14 @@ static struct ggml_cgraph * whisper_build_graph_decoder(
             if (wctx.params.flash_attn) {
                 struct ggml_tensor * Kcross =
                     ggml_view_3d(ctx0, wstate.kv_cross.k,
-                            n_state_head, n_audio_ctx_pad, n_head,
+                            n_state_head, n_audio_ctx, n_head,
                             ggml_element_size(wstate.kv_cross.k)*n_state,
                             ggml_element_size(wstate.kv_cross.k)*n_state_head,
                             ggml_element_size(wstate.kv_cross.k)*n_state*n_audio_ctx_pad*il);
 
                 struct ggml_tensor * Vcross =
                     ggml_view_3d(ctx0, wstate.kv_cross.v,
-                            n_state_head, n_audio_ctx_pad, n_head,
+                            n_state_head, n_audio_ctx, n_head,
                             ggml_element_size(wstate.kv_cross.v)*n_state,
                             ggml_element_size(wstate.kv_cross.v)*n_state_head,
                             ggml_element_size(wstate.kv_cross.v)*n_state*n_audio_ctx_pad*il);
