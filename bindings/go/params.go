@@ -2,15 +2,35 @@ package whisper
 
 import (
 	"fmt"
+	"unsafe"
 )
 
 ///////////////////////////////////////////////////////////////////////////////
 // CGO
 
 /*
+#include <stdlib.h>
 #include <whisper.h>
 */
 import "C"
+
+func freeOwnedCString(dst **C.char) {
+	if *dst != nil {
+		C.free(unsafe.Pointer(*dst))
+		*dst = nil
+	}
+}
+
+func setOwnedCString(dst **C.char, s string) {
+	freeOwnedCString(dst)
+	*dst = C.CString(s)
+}
+
+// Free releases C strings owned by SetInitialPrompt and SetVADModelPath.
+func (p *Params) Free() {
+	freeOwnedCString(&p.initial_prompt)
+	freeOwnedCString(&p.vad_model_path)
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // PUBLIC METHODS
@@ -53,7 +73,7 @@ func (p *Params) SetVAD(v bool) {
 }
 
 func (p *Params) SetVADModelPath(path string) {
-	p.vad_model_path = C.CString(path)
+	setOwnedCString(&p.vad_model_path, path)
 }
 
 func (p *Params) SetVADThreshold(t float32) {
@@ -176,7 +196,7 @@ func (p *Params) SetTemperatureFallback(t float32) {
 
 // Set initial prompt
 func (p *Params) SetInitialPrompt(prompt string) {
-	p.initial_prompt = C.CString(prompt)
+	setOwnedCString(&p.initial_prompt, prompt)
 }
 
 func (p *Params) SetCarryInitialPrompt(v bool) {
