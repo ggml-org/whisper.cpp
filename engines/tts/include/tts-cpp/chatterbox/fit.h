@@ -23,6 +23,13 @@
 //               HiFT) at the shapes one full generation produces; these
 //               caches stay alive after the first synthesis
 //
+// Core ML: when the Engine would run S3Gen stages on Core ML sidecars (any of
+// `<s3gen stem>-{encoder,cfm,hift}.mlmodelc` next to the S3Gen GGUF, in a
+// TTS_CPP_COREML build, not disabled by CHATTERBOX_COREML_DISABLE), the result
+// is Error with reason "coreml-memory-estimate-unavailable": resident Core ML
+// models and their prediction buffers cannot be projected by the native
+// fitter.
+//
 // Scope: the projection covers steady-state synthesis with the built-in
 // voice (reference-audio conditioning is capped to the same prompt lengths,
 // so the steady state matches).  The TRANSIENT peak of baking a reference

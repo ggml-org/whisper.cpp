@@ -225,6 +225,26 @@ struct s3gen_synthesize_opts {
     // n_gpu_layers walk, which never picks Hexagon.  Kept last so existing
     // positional initializers stay valid.
     std::string backend;
+
+    // Core ML sidecars (TTS_CPP_COREML builds on Apple; docs/chatterbox.md
+    // "Core ML sidecars"): the encoder, CFM estimator and HiFT decoder run on
+    // `<s3gen stem>-{encoder,cfm,hift}.mlmodelc` next to the GGUF when present,
+    // whatever `backend` says; the rest of the pipeline keeps it.
+    //   coreml_compute_units  Empty inherits CHATTERBOX_COREML_COMPUTE_UNITS
+    //                         (default cpu_and_ane); else all, cpu_and_ane,
+    //                         cpu_and_gpu or cpu_only.
+    //   coreml_strict         < 0 inherits CHATTERBOX_COREML_STRICT; > 0 makes
+    //                         a present sidecar that cannot serve a call an
+    //                         error instead of a ggml fallback.
+    //   coreml_disabled       Keep every stage on ggml (also set by the
+    //                         CHATTERBOX_COREML_DISABLE environment variable).
+    //   s3gen_backend_out     Output: "ggml", the sidecar label ("coreml-ane",
+    //                         ...) when all three stages ran on Core ML, or
+    //                         "mixed".
+    std::string   coreml_compute_units;
+    int           coreml_strict     = -1;
+    bool          coreml_disabled   = false;
+    std::string * s3gen_backend_out = nullptr;
 };
 
 inline float resolve_s3gen_cfg_rate(float caller_cfg_rate, float model_cfg_rate) {

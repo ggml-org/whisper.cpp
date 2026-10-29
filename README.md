@@ -101,6 +101,7 @@ contracts; see the engine guides before exporting or deploying one.
 | Parakeet | Eligible ASR and Sortformer v2.1 encoder paths; TDT models also run a fixed-window Neural Engine encoder and a batched TDT decoder | [Backend and routing contracts](engines/parakeet/docs/backends.md#core-ml-encoder-sidecar), [Neural Engine sidecars](engines/parakeet/docs/backends.md#neural-engine-fixed-window-encoder-and-tdt-decoder-sidecars) |
 | Parakeet | Nemotron 3 Diarization and Sortformer v2.1 whole networks | [Diarizer sidecars](engines/parakeet/docs/backends.md#core-ml-diarizer-sidecars) |
 | Parakeet | MOSS-Transcribe-Diarize audio encoder | [MOSS-Transcribe-Diarize](engines/parakeet/docs/moss-transcribe.md#core-ml-encoder-sidecar) |
+| TTS | Chatterbox Turbo and Multilingual S3Gen encoder, CFM and HiFT (overlapping the next sentence's T3) | [Chatterbox Core ML](engines/tts/docs/chatterbox.md#core-ml-sidecars) |
 | TTS | CosyVoice3 speech LM, flow and HiFT neural stages | [CosyVoice3 Core ML](engines/tts/docs/cosyvoice3.md#core-ml-sidecars) |
 | TTS | Supertonic vocoder, Audio8 codec synthesis | [Supertonic](engines/tts/docs/supertonic.md#core-ml-vocoder-sidecar), [Audio8](engines/tts/docs/audio8.md#core-ml-codec-sidecar) |
 | TTS | LavaSR denoiser (batch prediction) and enhancer neural cores, with explicit model paths and compute policies | [LavaSR Core ML](engines/tts/docs/lavasr.md#core-ml) |

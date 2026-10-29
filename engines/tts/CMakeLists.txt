@@ -26,7 +26,7 @@ option(TTS_CPP_USE_SYSTEM_GGML   "tts-cpp: use find_package(ggml) instead of add
 # does not expose the standalone filename-prefix option; the speech branch or
 # `ggml-speech` vcpkg port already emits the integrated filenames.
 option(TTS_CPP_CCACHE            "tts-cpp: use ccache as compiler launcher if available"     ON)
-option(TTS_CPP_COREML            "tts-cpp: enable Apple Core ML sidecars for Audio8, Supertonic, CosyVoice3, Parler-TTS, MOSS and explicit LavaSR denoiser/enhancer models (Apple-only)." OFF)
+option(TTS_CPP_COREML            "tts-cpp: enable Apple Core ML sidecars for Audio8, Supertonic, Chatterbox S3Gen, CosyVoice3, Parler-TTS, MOSS and explicit LavaSR denoiser/enhancer models (Apple-only)." OFF)
 
 # OBJC + OBJCXX up front, before any add_subdirectory(ggml); see engines/parakeet.
 if (TTS_CPP_COREML)
@@ -292,6 +292,7 @@ set(TTS_CPP_LIB_SOURCES
     src/chatterbox_cli.cpp
     src/gpt2_bpe.cpp
     src/chatterbox_tts.cpp
+    src/chatterbox_coreml.cpp
     src/chatterbox_engine.cpp
     src/log.cpp
     src/voice_features.cpp
@@ -497,7 +498,7 @@ if (TTS_CPP_BUILD_LIBRARY)
             ${TTS_CPP_FOUNDATION_FRAMEWORK}
             ${TTS_CPP_COREML_FRAMEWORK}
         )
-        message(STATUS "tts-cpp: Core ML sidecars enabled (TTS_CPP_USE_COREML): Audio8 codec, Supertonic vocoder, CosyVoice3 stages, Parler DAC/optional decoder, MOSS stages, LavaSR denoiser/enhancer")
+        message(STATUS "tts-cpp: Core ML sidecars enabled (TTS_CPP_USE_COREML): Audio8 codec, Supertonic vocoder, Chatterbox S3Gen stages, CosyVoice3 stages, Parler DAC/optional decoder, MOSS stages, LavaSR denoiser/enhancer")
     endif()
     target_link_libraries(tts-cpp PUBLIC ggml)
     find_package(Threads REQUIRED)
@@ -1319,6 +1320,11 @@ if (TTS_CPP_BUILD_TESTS)
         set_tests_properties(test-cosyvoice-coreml-exporter PROPERTIES
             LABELS "unit" ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1" SKIP_REGULAR_EXPRESSION "SKIP: ")
 
+        add_test(NAME test-chatterbox-coreml-exporter
+                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/test_export_chatterbox_coreml.py")
+        set_tests_properties(test-chatterbox-coreml-exporter PROPERTIES
+            LABELS "unit" ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1" SKIP_REGULAR_EXPRESSION "SKIP: ")
+
         foreach(_moss_exporter IN ITEMS speech_tokenizer sfx codec)
             string(REPLACE "_" "-" _moss_exporter_test "${_moss_exporter}")
             add_test(NAME test-moss-${_moss_exporter_test}-coreml-exporter
@@ -1542,6 +1548,28 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_register_test(test-cosyvoice-coreml-routing
         EXE test-cosyvoice-coreml LABEL "fixture" ARGS "--routing-fixture")
     set_tests_properties(test-cosyvoice-coreml-lm test-cosyvoice-coreml-stages test-cosyvoice-coreml-routing
+        PROPERTIES SKIP_RETURN_CODE 77)
+
+    # Chatterbox S3Gen Core ML sidecars: policy/naming/windows/fit refusal
+    # always; per-stage parity against ggml with CHATTERBOX_COREML_TEST_S3GEN,
+    # the Engine sentence overlap with CHATTERBOX_COREML_TEST_T3 as well, and
+    # the feature-shape checks with CHATTERBOX_COREML_TEST_SHAPES (written by
+    # test/prepare_chatterbox_coreml_shape_fixture.py).
+    add_executable(test-chatterbox-coreml test/test_chatterbox_coreml.cpp)
+    target_link_libraries(test-chatterbox-coreml PRIVATE tts-cpp)
+    target_include_directories(test-chatterbox-coreml PRIVATE src include)
+    if (TTS_CPP_COREML)
+        target_compile_definitions(test-chatterbox-coreml PRIVATE TTS_CPP_USE_COREML)
+    endif()
+    tts_cpp_apply_ccache(test-chatterbox-coreml)
+    tts_cpp_register_test(test-chatterbox-coreml LABEL "unit")
+    tts_cpp_register_test(test-chatterbox-coreml-stages
+        EXE test-chatterbox-coreml LABEL "fixture" ARGS "--stages-fixture")
+    tts_cpp_register_test(test-chatterbox-coreml-shapes
+        EXE test-chatterbox-coreml LABEL "fixture" ARGS "--shape-fixture")
+    tts_cpp_register_test(test-chatterbox-coreml-engine
+        EXE test-chatterbox-coreml LABEL "fixture" ARGS "--engine-fixture")
+    set_tests_properties(test-chatterbox-coreml-stages test-chatterbox-coreml-shapes test-chatterbox-coreml-engine
         PROPERTIES SKIP_RETURN_CODE 77)
 
     add_executable(test-cosyvoice-load test/test_cosyvoice_load.cpp ${_tcb_cosy_core_srcs})
@@ -3306,6 +3334,8 @@ if (TTS_CPP_BUILD_TESTS)
     add_executable(test-tts-streaming
         test/test_streaming.cpp
         src/chatterbox_tts.cpp
+        src/chatterbox_coreml.cpp
+        src/coreml_sidecar_path.cpp
         src/conv_columns.cpp
         src/sched_dispatch.cpp
         src/backend_selection.cpp)
@@ -3659,6 +3689,8 @@ if (TTS_CPP_BUILD_TESTS)
     add_executable(test-cpu-caches
         test/test_cpu_caches.cpp
         src/chatterbox_tts.cpp
+        src/chatterbox_coreml.cpp
+        src/coreml_sidecar_path.cpp
         src/conv_columns.cpp
         src/sched_dispatch.cpp
         src/backend_selection.cpp)

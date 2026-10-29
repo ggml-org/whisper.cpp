@@ -57,6 +57,7 @@
 #include "tts-cpp/parler/description.h"
 #include "tts-cpp/voice_controls.h"
 #include "voice_controls_cli.h"
+#include "chatterbox_coreml.h"
 #include "chatterbox_t3_internal.h"
 #include "t3_alignment_analyzer.h"
 #include "t3_mtl.h"
@@ -1328,6 +1329,16 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                 s3gen_preload(path, ngpu, backend);
             });
         }
+        // Core ML sidecar functions load in the background while T3 decodes
+        // (started once the sentences are known, below); stopped between
+        // loads and joined before the S3Gen cache goes.
+        std::atomic<bool> coreml_warm_stop{false};
+        std::thread coreml_warm_thread;
+        struct warm_guard {
+            std::thread & t;
+            std::atomic<bool> & stop;
+            ~warm_guard() { stop = true; if (t.joinable()) t.join(); }
+        } coreml_warm_guard{coreml_warm_thread, coreml_warm_stop};
 
         // Voice-profile override on the T3 side.  We resolve two tensors
         // independently:
@@ -2129,6 +2140,32 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                     seg_text_tokens.size(), params.max_sentence_chars);
         }
 
+        if (!params.s3gen_gguf.empty() && !text_segments.empty()) {
+            const auto coreml_policy = tts_cpp::chatterbox::detail::resolve_coreml_policy();
+            if (tts_cpp::chatterbox::detail::coreml_sidecars_enabled(params.s3gen_gguf, coreml_policy)) {
+                // The S3Gen calls each sentence makes: one, or its streamed chunk windows.
+                std::vector<int> calls;
+                for (size_t si = 0; si < text_segments.size(); ++si) {
+                    const int speech =
+                        tts_cpp::chatterbox::detail::coreml_expected_speech_tokens(text_segments[si].size());
+                    if (params.stream_chunk_tokens <= 0) {
+                        calls.push_back(speech);
+                        continue;
+                    }
+                    for (int window : tts_cpp::chatterbox::detail::coreml_stream_windows(
+                             speech, si == 0 ? params.stream_first_chunk_tokens : 0, params.stream_chunk_tokens,
+                             params.stream_left_context_tokens)) {
+                        calls.push_back(window);
+                    }
+                }
+                coreml_warm_thread = std::thread([path = params.s3gen_gguf, coreml_policy,
+                                                  calls = std::move(calls), &coreml_warm_stop]() {
+                    tts_cpp::chatterbox::detail::s3gen_coreml_warm(path, coreml_policy, calls, -1,
+                                                                   &coreml_warm_stop);
+                });
+            }
+        }
+
         // ----------- T3 autoregressive decode (per segment) ------------
         //
         // The KV cache is indexed by position, so calling eval_prompt again
@@ -2500,8 +2537,14 @@ int tts_cpp_cli_main(int argc, char ** argv) {
                 const int sr = opts.sr ? opts.sr : 24000;
                 std::vector<float> full_pcm;
                 const int64_t _seg_t0 = ggml_time_us();
+                // When Core ML sidecars take S3Gen's CFM and HiFT off the GPU,
+                // T3 of the next sentence decodes on it while this one is
+                // vocoded (on a shared GPU the two only contend; see above).
+                const bool overlap_t3 = tts_cpp::chatterbox::detail::coreml_offloads_s3gen(
+                    params.s3gen_gguf, tts_cpp::chatterbox::detail::resolve_coreml_policy());
                 for (size_t si = 0; si < N_SEG; ++si) {
                     ensure_t3(si);
+                    if (overlap_t3) prefetch_t3(si + 1);
                     s3gen_synthesize_opts copts = opts;
                     std::vector<float> seg_pcm;
                     copts.out_wav_path = "";

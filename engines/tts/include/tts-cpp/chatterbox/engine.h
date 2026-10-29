@@ -35,6 +35,13 @@
 //     on a shared graph workspace.
 //   - `cancel()` is safe to call from any thread.
 //
+// Core ML (Apple, TTS_CPP_COREML builds): when the S3Gen sidecars sit next
+// to the S3Gen GGUF (`chatterbox-s3gen-q8_0.gguf` ->
+// `chatterbox-s3gen-{encoder,cfm,hift}.mlmodelc`, the quant tag dropped), the
+// S3Gen encoder, CFM estimator and HiFT decoder run on them (the Neural Engine
+// by default) whatever the `backend` option; T3, the voice frontend and the
+// rest of S3Gen stay on ggml. See docs/chatterbox.md "Core ML sidecars".
+//
 // Implemented in src/chatterbox_engine.cpp on top of the library-internal
 // helpers in src/chatterbox_t3_internal.h.
 
@@ -45,6 +52,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -271,6 +279,18 @@ struct EngineOptions {
     // n_gpu_layers walk.  Kept last so existing positional initializers stay
     // valid.
     std::string backend;
+
+    // Core ML sidecar policy for this Engine, resolved once at construction
+    // without modifying process environment variables. Empty inherits
+    // CHATTERBOX_COREML_COMPUTE_UNITS (default "cpu_and_ane"). Explicit values
+    // must be all, cpu_and_ane, cpu_and_gpu or cpu_only; invalid values throw
+    // even in builds without Core ML.
+    std::string coreml_compute_units;
+    // Unset inherits CHATTERBOX_COREML_STRICT (presence means true, even "0").
+    // True makes a present sidecar that cannot serve a call (failed
+    // prediction, input longer than its widest function) an error instead of
+    // a ggml fallback. CHATTERBOX_COREML_DISABLE keeps every stage on ggml.
+    std::optional<bool> coreml_strict;
 };
 
 // Per-chunk PCM callback.  Receives a pointer to `samples` consecutive
@@ -299,6 +319,12 @@ struct SynthesisResult {
     double s3gen_ms      = 0.0;
     int    t3_tokens     = 0;
     int    audio_samples = 0;
+
+    // Where this call's S3Gen encoder, CFM and HiFT ran: "ggml" (on
+    // backend_name()), the Core ML sidecar label ("coreml-ane", "coreml-all",
+    // ...) when every stage of every segment and chunk ran on Core ML, or
+    // "mixed". A sidecar that fails a prediction is retired and ggml takes over.
+    std::string s3gen_backend = "ggml";
 };
 
 class TTS_CPP_API Engine {

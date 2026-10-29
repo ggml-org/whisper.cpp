@@ -61,6 +61,138 @@ Llama-520M port + CFG dual-cache (§3.19), and the shared S3Gen weight-
 quantisation pass that ships in this repo (§3.20)).
 
 
+### Core ML sidecars
+
+Configure with `-DTTS_CPP_COREML=ON` on Apple platforms; the default build
+keeps Core ML disabled. The S3Gen encoder, CFM estimator and HiFT decoder can
+each run on a Core ML sidecar next to the S3Gen GGUF, by default on the CPU and
+Neural Engine. T3, tokenization, the voice frontend, the time embedding, the
+Euler update, the F0 predictor, SineGen, STFT and the inverse STFT stay on
+ggml, so T3 keeps the GPU.
+
+Export from the same S3Gen GGUF (`f32` or `f16`; one export serves every
+quantization tier of the checkpoint) with the
+[Core ML requirements](../../parakeet/scripts/requirements-coreml.txt)
+(`torch`, `numpy`, `gguf`, `coremltools`) and Xcode's `coremlcompiler`:
+
+```bash
+python3 scripts/export-chatterbox-coreml.py --gguf models/chatterbox-s3gen-f32.gguf \
+    --output models --compile
+python3 scripts/export-chatterbox-coreml.py --gguf models/chatterbox-s3gen-mtl-f32.gguf \
+    --output models --compile
+```
+
+`chatterbox-s3gen-q8_0.gguf` then finds `chatterbox-s3gen-encoder.mlmodelc`,
+`chatterbox-s3gen-cfm.mlmodelc` and `chatterbox-s3gen-hift.mlmodelc`; the
+Multilingual files are `chatterbox-s3gen-mtl-{encoder,cfm,hift}.mlmodelc`. The
+quantization tag is dropped by the rule every TTS sidecar uses; do not reuse a
+sidecar for different checkpoint weights. `--stage encoder|cfm|hift` exports
+one stage. The artifacts target macOS 15 / iOS 18 (multi-function models);
+older runtimes keep ggml.
+
+The encoder and CFM estimator are multi-function models with one function per
+width: `--frames` (default `512,640,768,896,1024,1280,1536` mel frames, and half
+that in tokens for the encoder) covers the voice prompt plus a sentence. A call
+takes the narrowest function that holds it, with the padding masked out of
+every attention, so it matches a ggml call at its own length; a longer input
+keeps ggml for that stage. The Multilingual estimator carries the
+classifier-free-guidance pair in its batch. HiFT is one 128-frame window walked
+over the utterance with 15 frames of real context on each side (its receptive
+field), zero-masked past the end, so the stitched spectrum matches a
+whole-utterance decode. Exp, sine and the inverse STFT of its output stay in
+float32 on the host. Every stage computes in float16: the Neural Engine has no
+sine (Snake is a range-reduced polynomial), runs dilation-5 and stride-15
+convolutions on the CPU (they are respelled as undilated/blocked convolutions)
+and miscomputes native transposed convolutions (respelled in phase form), as
+for the Parler and Audio8 sidecars.
+
+`CHATTERBOX_COREML_COMPUTE_UNITS` (or `EngineOptions::coreml_compute_units`)
+accepts `cpu_and_ane` (default), `all`, `cpu_and_gpu` and `cpu_only`;
+`cpu_and_ane` measured fastest for every stage and keeps the GPU for T3.
+`CHATTERBOX_COREML_DISABLE` keeps every stage on ggml. Before each prediction
+every input and output shape the sidecar declares is checked against what the
+call packs; a sidecar that declares another shape (an incompatible export, or
+the other variant's sidecar) or fails a prediction is retired and ggml takes
+over. `CHATTERBOX_COREML_STRICT` (or `EngineOptions::coreml_strict`) makes
+that, or an input past the widest function, an error instead. `SynthesisResult::s3gen_backend` reports `ggml`,
+the sidecar label (`coreml-ane`, ...) when every stage of the call ran on
+Core ML, or `mixed`.
+
+With the CFM and HiFT sidecars present, S3Gen no longer needs the GPU, so the
+batch path vocodes sentence *i* while T3 decodes sentence *i + 1* (`tts-cli`
+and `Engine` with `max_sentence_chars`; the CLI's default 180 splits). On one
+GPU the two only contend, which is why the ggml path stays sequential.
+
+The Neural Engine compiles each function on its first use by an executable
+(seconds to tens of seconds per function; the OS caches the result per
+executable). After that, loading a function costs about 0.1 to 1 s per process,
+growing with the whole multi-function program, so a background thread loads
+HiFT and the encoder and CFM functions each sentence (or streamed chunk) is
+expected to need, from its text length, while T3 decodes; an input outside the
+prediction loads its function on demand.
+
+Measured on an Apple M2 (macOS 15.7, 10-core GPU), `q8_0` T3 and S3Gen, the
+built-in voice, seed 42, `tts-cli` with the benchmark prompt (three sentences
+split into two segments), median of three warm runs with compiled sidecars,
+same binary with and without `CHATTERBOX_COREML_DISABLE`:
+
+| Model | Path | T3 | S3Gen (2 segments) | Synthesis | RTF | Process wall |
+|---|---|--:|--:|--:|--:|--:|
+| Turbo | Metal | 3.00 s | 1.75 s | 4.73 s | 0.49 | 5.70 s |
+| Turbo | Core ML | 2.66 s | 0.72 s (overlapped) | **2.91 s** | **0.30** | 3.68 s |
+| Multilingual | Metal | 5.06 s | 3.57 s | 8.63 s | 1.04 | 9.23 s |
+| Multilingual | Core ML | 5.22 s | 1.73 s (overlapped) | **5.87 s** | **0.70** | 6.68 s |
+
+Synthesis takes 39% (Turbo) and 32% (Multilingual) less time, 1.63x and 1.47x
+the Metal throughput. Per stage, the Turbo encoder takes 47-60 ms against
+55-84 ms on Metal, a CFM step 45-57 ms against 89-140 ms, and HiFT 87-190 ms
+against 368-798 ms; the Multilingual CFM step (CFG pair) takes 55-81 ms against
+105-155 ms. Through `Engine` (`max_sentence_chars = 180`, median of four calls on one
+Engine) the same prompt takes 3.08 s against 4.49 s for Turbo (31% less) and
+5.66 s against 8.40 s for Multilingual (33% less): T3 runs a few percent slower
+while the Neural Engine vocodes the previous sentence, as both share memory
+bandwidth. Streaming Turbo (`--stream-chunk-tokens 25`) delivers its first
+chunk after 1.94 s against 2.53 s and finishes in 4.58 s against 6.38 s. A
+single sentence has nothing to overlap: there the gain is the S3Gen time alone
+(Turbo 0.59 s to 0.25 s, Multilingual 1.32 s to 0.65 s on the last sentence
+above).
+
+Accuracy against ggml (Metal) on the same `q8_0` GGUF and tokens
+(`test-chatterbox-coreml --stages-fixture`: each sidecar alone, then all
+three):
+
+| Model | Encoder `mu` | CFM mel | HiFT waveform | All three, mel |
+|---|--:|--:|--:|--:|
+| Turbo | 0.999992 | 0.999976 | 0.999894 | 0.999973 |
+| Multilingual | 0.999990 | 0.999981 | 0.999609 | 0.999980 |
+
+(cosine similarity; the gates are 0.9999, 0.999, 0.995 and 0.999). On the
+benchmark prompt the Multilingual HiFT alone reproduces the Metal waveform at
+cosine 0.99992 (37 dB SNR). Whisper `tiny` transcribes the Metal and
+Core ML outputs of the benchmark prompt identically for both models and for
+seeds 1-4; `base.en` heard one word differently on one Multilingual run.
+
+When Core ML is compiled in and any S3Gen sidecar is enabled, `fit_params`
+returns `FitStatus::Error` with reason `coreml-memory-estimate-unavailable`:
+the native projection cannot account for resident Core ML models and
+prediction buffers. `CHATTERBOX_COREML_DISABLE=1` restores it.
+
+`test-chatterbox-coreml` covers the policy, naming, function selection, the
+HiFT window plan and the fit refusal without models;
+`test/test_export_chatterbox_coreml.py` checks the rebuild on random weights
+(padding equivalence, the window walk against a whole decode, the respelled
+convolutions and Snake). `test-chatterbox-coreml-shapes` loads tiny sidecars
+from `test/prepare_chatterbox_coreml_shape_fixture.py`
+(`CHATTERBOX_COREML_TEST_SHAPES`) and checks that one declaring any feature
+larger than the runtime packs it is rejected before prediction.
+`test-chatterbox-coreml-stages` reads `CHATTERBOX_COREML_TEST_S3GEN` (an S3Gen
+GGUF with its exported sidecars); `test-chatterbox-coreml-engine` also reads
+`CHATTERBOX_COREML_TEST_T3` and checks the `Engine` sentence overlap: PCM
+identical to the segments synthesized one call at a time and crossfaded in
+order, the aggregated backend, cancellation mid-request, and a worker's
+strict-mode error reaching the caller. Each reports a skip without its inputs.
+The macOS CI lane runs the exporter and shape checks.
+
 ### Adreno OpenCL
 
 ggml-opencl declines `FLASH_ATTN_EXT` on Adreno (its kernels miscompute some

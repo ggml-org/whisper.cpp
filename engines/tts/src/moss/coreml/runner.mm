@@ -67,11 +67,22 @@ placement placement_named(const char * compute_units) {
     return ALL_PLACEMENT;
 }
 
-MLModel * load_model(const char * path_mlmodelc, const placement & where) {
+MLModel * load_model(const char * path_mlmodelc, const placement & where, const char * function_name = nullptr) {
     NSString * path = [[NSString alloc] initWithUTF8String:path_mlmodelc];
     if (path == nil) return nil;
     MLModelConfiguration * config = [[MLModelConfiguration alloc] init];
     config.computeUnits = where.units;
+    if (function_name != nullptr) {
+#if MOSS_COREML_STATE_SDK
+        if (@available(macOS 15.0, iOS 18.0, *)) {
+            config.functionName = [NSString stringWithUTF8String:function_name];
+        } else {
+            return nil;
+        }
+#else
+        return nil;
+#endif
+    }
     NSError * err   = nil;
     MLModel * model = [MLModel modelWithContentsOfURL:[NSURL fileURLWithPath:path]
                                         configuration:config
@@ -375,10 +386,15 @@ bool read_batch_outputs(moss_coreml_model * model, id<MLBatchProvider> result,
 }  // namespace
 
 struct moss_coreml_model * moss_coreml_load(const char * path_mlmodelc, const char * compute_units) {
+    return moss_coreml_load_function(path_mlmodelc, compute_units, nullptr);
+}
+
+struct moss_coreml_model * moss_coreml_load_function(const char * path_mlmodelc, const char * compute_units,
+                                                     const char * function_name) {
     if (path_mlmodelc == nullptr) return nullptr;
     @autoreleasepool {
         const placement where   = placement_named(compute_units);
-        MLModel *       mlmodel = load_model(path_mlmodelc, where);
+        MLModel *       mlmodel = load_model(path_mlmodelc, where, function_name);
         if (mlmodel == nil) return nullptr;
         auto * model  = new moss_coreml_model();
         model->model  = CFBridgingRetain(mlmodel);
@@ -390,6 +406,33 @@ struct moss_coreml_model * moss_coreml_load(const char * path_mlmodelc, const ch
         }
         return model;
     }
+}
+
+int moss_coreml_function_names(const char * path_mlmodelc, char * names, int capacity) {
+    if (path_mlmodelc == nullptr || names == nullptr || capacity <= 0) return -1;
+#if MOSS_COREML_STATE_SDK
+    if (@available(macOS 15.0, iOS 18.0, *)) {
+        @autoreleasepool {
+            NSError *      err   = nil;
+            NSURL *        url   = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path_mlmodelc]];
+            MLModelAsset * asset = [MLModelAsset modelAssetWithURL:url error:&err];
+            if (asset == nil || err != nil) return -1;
+            __block NSArray<NSString *> * listed = nil;
+            dispatch_semaphore_t          done   = dispatch_semaphore_create(0);
+            [asset functionNamesWithCompletionHandler:^(NSArray<NSString *> * functions, NSError * error) {
+                if (error == nil) listed = functions;
+                dispatch_semaphore_signal(done);
+            }];
+            dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+            if (listed == nil) return -1;
+            const std::string joined = [listed componentsJoinedByString:@","].UTF8String;
+            if ((int) joined.size() >= capacity) return -1;
+            std::memcpy(names, joined.c_str(), joined.size() + 1);
+            return (int) listed.count;
+        }
+    }
+#endif
+    return -1;
 }
 
 void moss_coreml_free(struct moss_coreml_model * model) {

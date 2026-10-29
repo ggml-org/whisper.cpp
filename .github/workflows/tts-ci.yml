@@ -521,6 +521,30 @@ jobs:
           done
           exit "$routing_status"
 
+      # Chatterbox S3Gen Core ML rebuild: padding/masking equivalence, the
+      # HiFT window walk against a whole decode, the Neural Engine conv and
+      # Snake spellings, and a Core ML conversion of a reduced encoder, all on
+      # random weights (no download). Then tiny sidecars declaring each
+      # feature larger than the runtime packs it, which the runtime must
+      # reject before the shared runner copies anything (a skip, 77, fails the
+      # step). Stage parity and the Engine sentence overlap on the real
+      # checkpoints are test-chatterbox-coreml-stages / -engine
+      # (CHATTERBOX_COREML_TEST_S3GEN, CHATTERBOX_COREML_TEST_T3).
+      - name: Test (Core ML Chatterbox S3Gen exporter and feature shapes)
+        if: runner.os == 'macOS'
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          coreml_python="$(command -v python3.11 || command -v python3)"
+          "$coreml_python" -m venv .venv-chatterbox-coreml
+          .venv-chatterbox-coreml/bin/python -m pip install -r engines/parakeet/scripts/requirements-coreml.txt
+          .venv-chatterbox-coreml/bin/python engines/tts/test/test_export_chatterbox_coreml.py -v
+          .venv-chatterbox-coreml/bin/python engines/tts/test/prepare_chatterbox_coreml_shape_fixture.py \
+            --out chatterbox-coreml-shapes
+          CHATTERBOX_COREML_TEST_SHAPES="$PWD/chatterbox-coreml-shapes" \
+            ./build/test-chatterbox-coreml --shape-fixture
+
       # Core ML Parler DAC sidecar on a tiny random-weight Parler GGUF built
       # in place (no download): the sidecar is exported by the repo's
       # exporter with rows folded at 64 samples so the tiny decoder still

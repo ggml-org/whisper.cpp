@@ -13,6 +13,7 @@
 
 #include "backend_selection.h"
 #include "backend_util.h"
+#include "chatterbox_coreml.h"
 #include "chatterbox_fit_internal.h"
 #include "chatterbox_t3_internal.h"
 #include "fit_util.h"
@@ -60,6 +61,15 @@ FitResult fit_params(const FitOptions & opts) {
     if (opts.t3_gguf_path.empty() || opts.s3gen_gguf_path.empty() ||
         opts.text_tokens <= 0 || opts.n_predict <= 0 || opts.n_ctx < 0) {
         r.reason = "invalid-arguments";
+        return r;
+    }
+
+    // Enabled S3Gen Core ML sidecars run outside ggml: their resident models
+    // and prediction buffers cannot be projected (CosyVoice's rule).
+    if (detail::coreml_sidecars_enabled(opts.s3gen_gguf_path, detail::resolve_coreml_policy())) {
+        r.reason = "coreml-memory-estimate-unavailable";
+        r.report = "The S3Gen Core ML sidecars' resident models and prediction buffers cannot be projected; "
+                   "set CHATTERBOX_COREML_DISABLE=1 to project the ggml S3Gen instead.\n";
         return r;
     }
 

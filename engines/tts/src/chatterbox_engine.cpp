@@ -4,12 +4,15 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <future>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "backend_selection.h"
+#include "chatterbox_coreml.h"
 #include "chatterbox_t3_internal.h"
 #include "gpt2_bpe.h"
 #include "mtl_tokenizer.h"
@@ -46,6 +49,11 @@ struct Engine::Impl {
     chatterbox_model     model{};
     ggml_gallocr_t       allocr = nullptr;
     std::thread          s3gen_preload_thread;
+    // Loads the S3Gen Core ML sidecar functions a synthesize() call will need
+    // in the background while T3 decodes (see s3gen_coreml::warm).  Each
+    // warm-up waits for the previous one, so they never load concurrently.
+    std::future<void>    coreml_warm;
+    std::atomic<bool>    coreml_warm_stop{false};
 
     // Baked voice-conditioning state.  Populated at construction when
     // `reference_audio` or `voice_dir` is set, then reused by every
@@ -67,6 +75,10 @@ struct Engine::Impl {
     mtl_tokenizer        mtl_tok;
 
     std::atomic<bool>    cancel_flag{false};
+    detail::coreml_policy coreml_policy;
+    // S3Gen stage backends reported by every s3gen_synthesize_to_wav call of
+    // the current synthesize(); folded into SynthesisResult::s3gen_backend.
+    std::set<std::string> s3gen_backends;
 
     explicit Impl(const EngineOptions & o)
         : opts(o) {
@@ -92,6 +104,7 @@ struct Engine::Impl {
         }
         // fail fast on an unsupported output frequency.
         validate_output_sample_rate(opts.output_sample_rate, "chatterbox::Engine");
+        coreml_policy = detail::resolve_coreml_policy(opts.coreml_compute_units, opts.coreml_strict);
 
         ggml_time_init();
         g_log_verbose = opts.verbose ? 1 : 0;
@@ -227,9 +240,26 @@ struct Engine::Impl {
         // ggml-metal's shared buffer-type init is safe to use from a
         // preload thread concurrent with construction-time teardown.
         wait_for_preload(s3gen_preload_thread);
+
+        start_coreml_warm({});
+    }
+
+    // Warms the sidecars for S3Gen calls on these speech-token counts (HiFT
+    // only when empty).  The voice prompt length is the baked one, else the
+    // GGUF's.
+    void start_coreml_warm(std::vector<int> speech_tokens) {
+        if (!detail::coreml_sidecars_enabled(opts.s3gen_gguf_path, coreml_policy)) return;
+        const int prompt_tokens = s3gen_prompt_token.empty() ? -1 : (int) s3gen_prompt_token.size();
+        coreml_warm = std::async(std::launch::async, [this, previous = std::move(coreml_warm),
+                                                      tokens = std::move(speech_tokens), prompt_tokens]() mutable {
+            if (previous.valid()) previous.wait();
+            detail::s3gen_coreml_warm(opts.s3gen_gguf_path, coreml_policy, tokens, prompt_tokens, &coreml_warm_stop);
+        });
     }
 
     ~Impl() {
+        coreml_warm_stop.store(true, std::memory_order_relaxed);
+        if (coreml_warm.valid()) coreml_warm.wait();
         wait_for_preload(s3gen_preload_thread);
         // Release the S3Gen cache (which holds its own backend + buffers)
         // BEFORE freeing the T3 backend.  If we don't, the cache's
@@ -603,6 +633,9 @@ struct Engine::Impl {
         sopts.n_gpu_layers    = opts.n_gpu_layers;
         sopts.backend         = opts.backend;
         sopts.cfg_rate        = opts.s3gen_cfg_rate;
+        sopts.coreml_compute_units = coreml_policy.compute_units;
+        sopts.coreml_strict        = coreml_policy.strict ? 1 : 0;
+        sopts.coreml_disabled      = coreml_policy.disabled;
 
         // Use the non-owning view fields rather than the *_override
         // vectors so the streaming path doesn't pay a per-chunk MB-
@@ -629,12 +662,26 @@ struct Engine::Impl {
         sopts.cancel_flag = &cancel_flag;
     }
 
-    // Renders ONE segment in batch (non-streaming) mode, appending its PCM
-    // into result.pcm (crossfaded into the previous segment's tail when not
-    // the first) and accumulating stats.  All per-segment s3gen state is local
-    // to this call, so consecutive calls reset naturally.
+    // One batch segment's S3Gen output, before it is folded into the result.
+    struct rendered_segment {
+        std::vector<float> pcm;
+        std::string        backend;
+        double             s3gen_ms = 0.0;
+        int                tokens   = 0;
+    };
+
+    // Renders ONE segment in batch (non-streaming) mode and appends it (see
+    // append_batch_segment).  All per-segment s3gen state is local to this
+    // call, so consecutive calls reset naturally.
     void synthesize_batch_segment(const std::vector<int32_t> & speech_tokens,
                                   SynthesisResult & result) {
+        append_batch_segment(render_batch_segment(speech_tokens), result);
+    }
+
+    // S3Gen + HiFT of one batch segment.  Touches no Engine state but the
+    // read-only options and voice views, so it can run on a worker thread
+    // while T3 decodes the next segment.
+    rendered_segment render_batch_segment(const std::vector<int32_t> & speech_tokens) {
         s3gen_synthesize_opts sopts;
         fill_common_s3gen_opts(sopts);
         sopts.cfm_steps = opts.cfm_steps;
@@ -658,8 +705,9 @@ struct Engine::Impl {
             !opts.reference_audio.empty() || !opts.voice_dir.empty();
         sopts.apply_trim_fade = has_voice_override;
 
-        std::vector<float> seg_pcm;
-        sopts.pcm_out = &seg_pcm;
+        rendered_segment seg;
+        sopts.pcm_out = &seg.pcm;
+        sopts.s3gen_backend_out = &seg.backend;
 
         const auto s3_t0 = std::chrono::steady_clock::now();
         const int rc = s3gen_synthesize_to_wav(speech_tokens, sopts);
@@ -671,15 +719,23 @@ struct Engine::Impl {
             throw std::runtime_error("Engine: s3gen_synthesize_to_wav failed with code "
                                      + std::to_string(rc));
         }
+        seg.s3gen_ms = std::chrono::duration<double, std::milli>(s3_t1 - s3_t0).count();
+        seg.tokens   = (int) speech_tokens.size();
+        return seg;
+    }
 
+    // Folds a rendered segment into result.pcm (crossfaded into the previous
+    // segment's tail when not the first) and accumulates its stats.
+    void append_batch_segment(rendered_segment && seg, SynthesisResult & result) {
+        s3gen_backends.insert(seg.backend);
         // First segment: result.pcm is empty, so this is a plain append.
         // Later segments: raised-cosine crossfade the seam (a no-op when
         // crossfade_ms == 0).  Only the batch path crossfades; the streaming
         // path stays gapless to preserve result.pcm == concat(callbacks).
         tts_cpp::chatterbox::text_preprocess::append_pcm_crossfade(
-            result.pcm, seg_pcm, 24000, opts.crossfade_ms);
-        result.t3_tokens += (int) speech_tokens.size();
-        result.s3gen_ms  += std::chrono::duration<double, std::milli>(s3_t1 - s3_t0).count();
+            result.pcm, seg.pcm, 24000, opts.crossfade_ms);
+        result.t3_tokens += seg.tokens;
+        result.s3gen_ms  += seg.s3gen_ms;
     }
 
     // Renders ONE segment in streaming mode: chunks speech_tokens, invokes
@@ -767,6 +823,8 @@ struct Engine::Impl {
             copts.hift_cache_source         = hift_cache_source;
             std::vector<float> tail_out;
             copts.hift_source_tail_out      = &tail_out;
+            std::string chunk_backend;
+            copts.s3gen_backend_out         = &chunk_backend;
             copts.source_tail_samples       = 480;
             copts.cfm_steps                 = opts.stream_cfm_steps;
             copts.streaming = true;  // floor CFM steps for standard CFM
@@ -784,6 +842,7 @@ struct Engine::Impl {
                     "Engine: streaming chunk " + std::to_string(k) +
                     " failed with code " + std::to_string(rc));
             }
+            s3gen_backends.insert(chunk_backend);
             s3gen_ms_total += std::chrono::duration<double, std::milli>(s3_t1 - s3_t0).count();
 
             // is_last is true only on the final chunk of the final segment.
@@ -841,6 +900,23 @@ struct Engine::Impl {
         wait_for_preload(s3gen_preload_thread);
 
         const bool use_streaming = on_chunk && opts.stream_chunk_tokens > 0;
+        {
+            // The S3Gen calls this request is expected to make, in order.
+            std::vector<int> calls;
+            for (size_t si = 0; si < segments.size(); ++si) {
+                const int speech = detail::coreml_expected_speech_tokens(segments[si].size());
+                if (!use_streaming) {
+                    calls.push_back(speech);
+                    continue;
+                }
+                for (int window : detail::coreml_stream_windows(speech, si == 0 ? opts.stream_first_chunk_tokens : 0,
+                                                                opts.stream_chunk_tokens,
+                                                                opts.stream_left_context_tokens)) {
+                    calls.push_back(window);
+                }
+            }
+            start_coreml_warm(std::move(calls));
+        }
 
         // resolve the output rate once. 0 keeps the native
         // 24 kHz.  Streaming flows every chunk through a single utterance-
@@ -854,6 +930,16 @@ struct Engine::Impl {
         SynthesisResult result;
         result.sample_rate   = out_sr;
         int global_chunk_idx = 0;  // monotonic across all segments
+        s3gen_backends.clear();
+
+        // With S3Gen's CFM and HiFT on Core ML sidecars, the GPU is free for T3
+        // while a sentence is vocoded, so the batch path renders sentence i
+        // on a worker thread while T3 decodes sentence i + 1 (one in flight;
+        // the PCM is still appended in order).  On a shared GPU the two only
+        // contend, so every other configuration stays sequential.
+        const bool overlap_s3gen = !use_streaming && segments.size() > 1 &&
+                                   detail::coreml_offloads_s3gen(opts.s3gen_gguf_path, coreml_policy);
+        std::future<rendered_segment> in_flight;
 
         for (size_t si = 0; si < segments.size(); ++si) {
             // Bound cancel latency to a sentence boundary (run_t3 and the
@@ -872,10 +958,16 @@ struct Engine::Impl {
                     /*is_first_segment=*/si == 0,
                     /*is_last_segment=*/si + 1 == segments.size(),
                     global_chunk_idx, out_resampler);
+            } else if (overlap_s3gen) {
+                if (in_flight.valid()) append_batch_segment(in_flight.get(), result);
+                in_flight = std::async(std::launch::async, [this, tokens = std::move(speech_tokens)] {
+                    return render_batch_segment(tokens);
+                });
             } else {
                 synthesize_batch_segment(speech_tokens, result);
             }
         }
+        if (in_flight.valid()) append_batch_segment(in_flight.get(), result);
 
         // the batch path assembles + crossfades segments at the
         // native 24 kHz; resample the whole utterance once for best quality.
@@ -885,6 +977,11 @@ struct Engine::Impl {
         }
 
         result.audio_samples = (int) result.pcm.size();
+        if (s3gen_backends.size() == 1) {
+            result.s3gen_backend = *s3gen_backends.begin();
+        } else if (s3gen_backends.size() > 1) {
+            result.s3gen_backend = detail::MIXED_STAGE_BACKEND;
+        }
         return result;
     }
 

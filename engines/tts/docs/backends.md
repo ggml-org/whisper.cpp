@@ -38,10 +38,11 @@ Explicit Hexagon placement is supported for
 
 ## Apple Core ML sidecars
 
-`TTS_CPP_COREML=ON` enables optional Supertonic vocoder, Audio8 codec,
-Parler-TTS DAC and MOSS sidecars on Apple. Their guides own naming, export commands, accepted
+`TTS_CPP_COREML=ON` enables optional Chatterbox S3Gen, Supertonic vocoder,
+Audio8 codec, Parler-TTS DAC and MOSS sidecars on Apple. Their guides own naming, export commands, accepted
 shapes, low-bit restrictions, placement and runtime status:
 
+- [Chatterbox S3Gen encoder, CFM and HiFT](chatterbox.md#core-ml-sidecars)
 - [Supertonic vocoder](supertonic.md#core-ml-vocoder-sidecar)
 - [Audio8 codec](audio8.md#core-ml-codec-sidecar)
 - [Parler-TTS DAC decoder](parler.md#core-ml-dac-sidecar-apple-neural-engine)

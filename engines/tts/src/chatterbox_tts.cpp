@@ -24,6 +24,7 @@
 #include "backend_selection.h"
 #include "backend_util.h"
 #include "conv_columns.h"
+#include "chatterbox_coreml.h"
 #include "chatterbox_fit_internal.h"
 #include "fit_price.h"
 #include "fit_util.h"
@@ -56,7 +57,9 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <random>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -330,7 +333,69 @@ static double                                g_s3gen_cache_last_load_ms = 0.0;
 // count reaches zero.  Independent of the mutex below so the unload
 // fast-path doesn't take it.
 static std::atomic<int>                      g_s3gen_cache_refcount{0};
+
+// Core ML sidecars of the cached S3Gen GGUF, keyed on (path, compute units).
+// A stage retired after a failed prediction stays retired until the cache is
+// released (s3gen_unload / process exit).
+namespace coreml = ::tts_cpp::chatterbox::detail;
+static std::mutex                            g_coreml_mu;
+static std::shared_ptr<coreml::s3gen_coreml> g_coreml;
+static std::string                           g_coreml_key;
 }  // namespace
+
+// token_mel_ratio and the built-in voice's prompt length, from GGUF metadata
+// only (cheap; the warm-up thread may run before the S3Gen weights load).
+static void s3gen_peek_coreml_metadata(const std::string & path, int & ratio, int & prompt_tokens) {
+    ratio = 2;
+    prompt_tokens = 0;
+    gguf_init_params gp = { /*no_alloc=*/true, /*ctx=*/nullptr };
+    gguf_context * g = gguf_init_from_file(path.c_str(), gp);
+    if (!g) return;
+    auto read_u32 = [&](const char * key, int & out) {
+        const int64_t k = gguf_find_key(g, key);
+        if (k >= 0 && gguf_get_kv_type(g, k) == GGUF_TYPE_UINT32) out = (int) gguf_get_val_u32(g, k);
+    };
+    read_u32("s3gen.encoder.token_mel_ratio", ratio);
+    read_u32("s3gen.builtin.prompt_token_len", prompt_tokens);
+    gguf_free(g);
+    if (ratio < 1 || ratio > MAX_TOKEN_MEL_RATIO) ratio = 2;
+}
+
+static std::shared_ptr<coreml::s3gen_coreml> s3gen_coreml_get(const std::string & path,
+                                                              const coreml::coreml_policy & policy) {
+    if (!coreml::coreml_sidecars_enabled(path, policy)) return {};
+    const std::string key = path + '\n' + policy.compute_units;
+    std::lock_guard<std::mutex> lk(g_coreml_mu);
+    if (!g_coreml || g_coreml_key != key) {
+        g_coreml.reset();
+        int ratio = 2, prompt_tokens = 0;
+        s3gen_peek_coreml_metadata(path, ratio, prompt_tokens);
+        g_coreml = std::make_shared<coreml::s3gen_coreml>(path, policy.compute_units, ratio);
+        g_coreml_key = key;
+    }
+    return g_coreml;
+}
+
+void tts_cpp::chatterbox::detail::s3gen_coreml_warm(const std::string & s3gen_gguf, const coreml_policy & policy,
+                                                     const std::vector<int> & speech_tokens, int prompt_tokens,
+                                                     const std::atomic<bool> * stop) {
+    const auto sidecars = s3gen_coreml_get(s3gen_gguf, policy);
+    if (!sidecars) return;
+    if (prompt_tokens < 0) {
+        int ratio = 2;
+        s3gen_peek_coreml_metadata(s3gen_gguf, ratio, prompt_tokens);
+    }
+    const int pre_lookahead_len = 3;  // silence tokens a whole-sentence call appends
+    std::vector<int> tokens;
+    for (int speech : speech_tokens) tokens.push_back(prompt_tokens + speech + pre_lookahead_len);
+    sidecars->warm(tokens, stop);
+}
+
+static void s3gen_coreml_release() {
+    std::lock_guard<std::mutex> lk(g_coreml_mu);
+    g_coreml.reset();
+    g_coreml_key.clear();
+}
 
 // Forward declaration: clear all per-synth caches.  The persistent
 // graph caches (cfm_estimator + time_mlp scaffolding) and the CPU
@@ -354,6 +419,8 @@ static void s3gen_model_cache_release() {
     // Vulkan/Metal/CUDA where ggml_gallocr_free against a freed
     // backend asserts.
     s3gen_release_synth_caches();
+
+    s3gen_coreml_release();
 
     std::lock_guard<std::mutex> lk(g_s3gen_cache_mu);
     // Tear down every persistent host-side cache BEFORE freeing the
@@ -2549,6 +2616,41 @@ static std::vector<float> run_hift_decode(const model_ctx & m,
     return wav;
 }
 
+// The tail of build_hift_graph_nodes on the host, in float32, for the Core ML
+// HiFT sidecar's conv_post rows [18, T_stft] (log magnitude, then phase):
+// magnitude/phase -> spectrum -> inverse STFT -> window-sum normalisation ->
+// trim -> clamp, with the same kernel and window sum as the ggml graph.
+static std::vector<float> hift_istft_host(const std::vector<float> & conv_post, int T_stft) {
+    const int n_fft = 16, hop = 4, F = n_fft / 2 + 1;
+    const std::vector<float> & kernel = cached_istft_kernel(n_fft);
+    const std::vector<float> & window_sum = cached_window_sum(T_stft, n_fft, hop);
+    std::vector<float> frame(2 * F);
+    std::vector<float> y(window_sum.size(), 0.0f);
+    for (int t = 0; t < T_stft; ++t) {
+        for (int f = 0; f < F; ++f) {
+            const float log_mag = std::min(std::max(conv_post[(size_t) f * T_stft + t], -1e6f), 1e2f);
+            const float mag = std::exp(log_mag);
+            const float phase = std::sin(conv_post[(size_t) (F + f) * T_stft + t]);
+            frame[f] = mag * std::cos(phase);
+            frame[F + f] = mag * std::sin(phase);
+        }
+        float * out = y.data() + (size_t) t * hop;
+        for (int c = 0; c < 2 * F; ++c) {
+            const float v = frame[c];
+            const float * k = kernel.data() + (size_t) c * n_fft;
+            for (int n = 0; n < n_fft; ++n) out[n] += k[n] * v;
+        }
+    }
+    const int pad = n_fft / 2;
+    const int L_wav = (int) window_sum.size() - n_fft;
+    std::vector<float> wav((size_t) L_wav);
+    for (int i = 0; i < L_wav; ++i) {
+        const float v = y[(size_t) (i + pad)] / window_sum[(size_t) (i + pad)];
+        wav[(size_t) i] = std::min(std::max(v, -0.99f), 0.99f);
+    }
+    return wav;
+}
+
 // ============================================================================
 // WAV writer
 // ============================================================================
@@ -2757,6 +2859,38 @@ int s3gen_synthesize_to_wav(
         }
     }
 
+    // Core ML sidecars for the encoder, CFM estimator and HiFT decoder (empty
+    // when not compiled in, disabled or absent).  `on_coreml` runs one stage
+    // on its sidecar; false means ggml runs it.  A failing prediction retires
+    // the stage for later calls, unless the policy is strict.
+    coreml::coreml_policy coreml_policy = coreml::resolve_coreml_policy(
+        opts.coreml_compute_units,
+        opts.coreml_strict < 0 ? std::nullopt : std::optional<bool>(opts.coreml_strict > 0));
+    coreml_policy.disabled = coreml_policy.disabled || opts.coreml_disabled;
+    const std::shared_ptr<coreml::s3gen_coreml> sidecars = s3gen_coreml_get(gguf_path, coreml_policy);
+    std::set<std::string> stage_backends;
+    auto on_coreml = [&](coreml::s3gen_coreml::stage stage, const char * name, auto && run) -> bool {
+        bool served = false;
+        if (sidecars && sidecars->present(stage)) {
+            if (sidecars->available(stage)) {
+                try {
+                    served = run();
+                } catch (const std::exception & e) {
+                    if (coreml_policy.strict) throw;
+                    fprintf(stderr, "s3gen: %s; retiring the Core ML %s sidecar, ggml takes over\n", e.what(), name);
+                    sidecars->retire(stage);
+                }
+            }
+            if (!served && coreml_policy.strict) {
+                throw std::runtime_error(std::string("s3gen: the Core ML ") + name +
+                                         " sidecar cannot serve this call and coreml_strict / " +
+                                         coreml::COREML_STRICT_ENV + " is set");
+            }
+        }
+        stage_backends.insert(served ? sidecars->label() : coreml::GGML_STAGE_BACKEND);
+        return served;
+    };
+
     // HiFT-side graphs (f0_predictor, STFT, hift_decode) used to need a
     // dedicated CPU copy of the S3Gen GGUF on Metal because conv_transpose_1d,
     // pad_ext and diag_mask_inf were either missing or pathologically slow in
@@ -2843,9 +2977,14 @@ int s3gen_synthesize_to_wav(
     // 3) Run encoder -> mu_T (numpy (T_mu, 80) layout, to match encoder_proj.npy)
     vlog("Running encoder (T=%d)...\n", n_total);
     double encoder_t0 = now_ms();
-    std::vector<float> mu_T = run_encoder(m, input_embed, n_total, D);
+    std::vector<float> mu_T;
+    const bool encoder_on_coreml = on_coreml(coreml::s3gen_coreml::ENCODER, "encoder", [&] {
+        return sidecars->encode(input_embed, n_total, m.token_mel_ratio, mu_T);
+    });
+    if (!encoder_on_coreml) mu_T = run_encoder(m, input_embed, n_total, D);
     double prof_encoder_ms = now_ms() - encoder_t0;
-    vlog("  [encoder] %.1f ms\n", prof_encoder_ms);
+    vlog("  [encoder] %.1f ms (%s)\n", prof_encoder_ms,
+         encoder_on_coreml ? sidecars->label().c_str() : coreml::GGML_STAGE_BACKEND);
     int T_mu = m.token_mel_ratio * n_total;
     vlog("  encoder output: (%d, 80) = %zu floats\n", T_mu, mu_T.size());
 
@@ -3033,6 +3172,12 @@ int s3gen_synthesize_to_wav(
                     z[m2 * T_mu + t] = gauss2(rng2);
         }
     }
+    if (!opts.dump_mel_path.empty()) {
+        std::string base = opts.dump_mel_path;
+        if (base.size() > 4 && base.substr(base.size() - 4) == ".npy")
+            base.resize(base.size() - 4);
+        npy_save_f32(base + "_z0.npy", {MEL, (int64_t)T_mu}, z.data());
+    }
 
     // 7) CFM loop.
     //  - meanflow:      t_span linearly spaced on [0,1], default 2 steps,
@@ -3149,7 +3294,22 @@ int s3gen_synthesize_to_wav(
         // CFG path (B=2 batched and B=1 two-call) populate dxdt_uncond
         // and require the linear `(1+cfg)*cond - cfg*uncond` mix.
         bool have_cfg_uncond = false;
-        if (use_b2) {
+        // The Core ML estimator carries the CFG pair in its batch (2 for the
+        // standard-CFM Multilingual model, 1 for meanflow Turbo).
+        const int coreml_batch = meanflow ? 1 : 2;
+        std::vector<std::vector<float>> coreml_velocity;
+        const bool step_on_coreml = on_coreml(coreml::s3gen_coreml::CFM, "CFM", [&] {
+            return sidecars->velocity(coreml_batch, T_mu, {z.data(), z.data()}, {mu.data(), zero_mu.data()},
+                                      {cond.data(), zero_cond.data()}, {spks.data(), zero_spks.data()},
+                                      {t_emb.data(), t_emb.data()}, coreml_velocity);
+        });
+        if (step_on_coreml) {
+            dxdt_cond = std::move(coreml_velocity[0]);
+            if (coreml_batch == 2 && cfg_rate != 0.0f) {
+                dxdt_uncond = std::move(coreml_velocity[1]);
+                have_cfg_uncond = true;
+            }
+        } else if (use_b2) {
             cfm_estimator_forward_b2(m, cfm_cache,
                 z, z,
                 mu, zero_mu,
@@ -3185,7 +3345,8 @@ int s3gen_synthesize_to_wav(
             }
         }
         auto & dxdt = dxdt_cond;
-        vlog("  [cfm_step%zu] %.1f ms\n", s, now_ms() - step_t0);
+        vlog("  [cfm_step%zu] %.1f ms (%s)\n", s, now_ms() - step_t0,
+             step_on_coreml ? sidecars->label().c_str() : coreml::GGML_STAGE_BACKEND);
 
         if (debug_mode && meanflow) {
             npy_array ref = npy_load(ref_dir + "/cfm_step" + std::to_string(s) + "_dxdt.npy");
@@ -3341,8 +3502,14 @@ int s3gen_synthesize_to_wav(
 
     vlog("Running HiFT decode...\n");
     t0 = now_ms();
-    auto wav = run_hift_decode(m_hift, mel, T_mel, s_stft, T_stft);
-    vlog("  [hift_decode] %.1f ms\n", now_ms() - t0);
+    std::vector<float> spectrum;
+    const bool hift_on_coreml = on_coreml(coreml::s3gen_coreml::HIFT, "HiFT", [&] {
+        return sidecars->vocode(mel, T_mel, s_stft, spectrum);
+    });
+    auto wav = hift_on_coreml ? hift_istft_host(spectrum, T_stft)
+                              : run_hift_decode(m_hift, mel, T_mel, s_stft, T_stft);
+    vlog("  [hift_decode] %.1f ms (%s)\n", now_ms() - t0,
+         hift_on_coreml ? sidecars->label().c_str() : coreml::GGML_STAGE_BACKEND);
     double prof_hift_ms = now_ms() - hift_t0;
     vlog("  [hift_total] %.1f ms\n", prof_hift_ms);
     vlog("  wav: %zu samples (%.3fs @ %d Hz)\n", wav.size(), (float)wav.size() / sr, sr);
@@ -3384,6 +3551,10 @@ int s3gen_synthesize_to_wav(
          audio_ms / pipeline_total >= 1.0 ? audio_ms / pipeline_total : pipeline_total / audio_ms,
          audio_ms >= pipeline_total ? "faster than real-time" : "slower than real-time");
 
+    if (opts.s3gen_backend_out) {
+        *opts.s3gen_backend_out = stage_backends.size() == 1 ? *stage_backends.begin()
+                                                              : std::string(coreml::MIXED_STAGE_BACKEND);
+    }
     if (opts.pcm_out) {
         *opts.pcm_out = wav;
     }
