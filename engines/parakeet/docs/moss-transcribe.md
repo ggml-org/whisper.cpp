@@ -9,12 +9,15 @@ the requested backend is unavailable; `--backend auto` retains the existing
 `--gpu`/CPU selection. The API equivalent is `TranscribeOptions::backend`.
 Hexagon and Adreno OpenCL have their own graph layouts; see
 [Hexagon NPU](#hexagon-npu) and [Adreno OpenCL](#adreno-opencl).
-Build against a CUDA-, Vulkan-, OpenCL- or Hexagon-enabled ggml installation,
-then run:
+Use the [standalone engine build](build.md#standalone-engine-build) with a
+CUDA-, Vulkan-, OpenCL- or Hexagon-enabled ggml dependency. Commands below run
+from the repository root and use its `build-parakeet` output directory. For an
+umbrella build, the executable is `build/engines/parakeet/moss-transcribe`.
+Then run:
 
 ```sh
-build/moss-transcribe --model moss-transcribe-f16.gguf --audio speech.wav --backend cuda
-ctest --test-dir build -R '^test-moss-transcribe-(cuda|vulkan|hexagon|opencl|metal)$' --output-on-failure
+build-parakeet/moss-transcribe --model moss-transcribe-f16.gguf --audio speech.wav --backend cuda
+ctest --test-dir build-parakeet -R '^test-moss-transcribe-(cuda|vulkan|hexagon|opencl|metal)$' --output-on-failure
 ```
 
 Each arm registers only when ggml carries its backend. The test generates random-weight GGUFs in F32, F16 and mixed Q8_0/F16
@@ -73,7 +76,7 @@ the Hugging Face tokenizer, plus the hotword prefix (`热词提示：`) and sepa
 ## Run
 
 ```sh
-build/moss-transcribe --model moss-transcribe-diarize-f16.gguf \
+build-parakeet/moss-transcribe --model moss-transcribe-diarize-f16.gguf \
     --audio meeting.wav --gpu --out meeting.json
 ```
 

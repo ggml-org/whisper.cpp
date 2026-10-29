@@ -154,7 +154,7 @@ same NVIDIA card), and is selected explicitly with `--backend webgpu` or
 |---|---|---|
 | Whisper | tiny.en, base, small | Validated: same transcripts; encoder 8x (base) to 33x (small) faster than CPU, a 2-minute clip 3.1x faster end to end |
 | Whisper | large-v3-turbo | Validated: same transcripts; a 2-minute clip encodes in 0.27 s against 23.4 s on the CPU, 11x faster end to end |
-| Parakeet | TranscribePsy 250M CTC | Validated: identical transcript, 2.8x faster end to end |
+| Parakeet | TranscribePsy 250M TDT | Validated: identical transcript, 2.8x faster end to end |
 | TTS | Supertonic 3 | Validated: waveform correlation 0.997 with the CPU render, identical transcript |
 | TTS | Parler-TTS mini (f16, q8_0) | Validated: the same Whisper transcripts as the CPU render over four prompts; 3.5x faster end to end |
 | TTS | CosyVoice3 (q8_0 LM, f16 flow and HiFT) | Validated: the same Whisper transcripts as the CPU render over four prompts; 12x faster end to end |

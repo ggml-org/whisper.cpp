@@ -7,12 +7,14 @@
 // tensor handles exactly as a real load would, and then *measures* the
 // peak-resident allocation set of one offline transcribe (or diarize) on a
 // fresh Engine -- the weight buffers (including the CPU-repack extra buffers
-// on CPU runs), every encoder compute graph the runtime's graph cache will
-// hold at once (a windowed long-form pass keeps up to three window graphs
-// resident, not one), and the decoder-side state and fixed-shape graphs --
+// on CPU runs), encoder compute graphs, and the decoder-side state and
+// fixed-shape graphs --
 // using ggml's size-only allocator APIs. Nothing is allocated on the device
 // and no graph is executed, so a fit call is cheap (milliseconds + one
 // metadata read) and safe to run before committing to a full Engine load.
+// Long-form encoder compute conservatively sums up to three window graph
+// allocations; windowed inference retains one graph during the pass, so this
+// part of the projection can overestimate the runtime's peak allocation.
 //
 // Scope: the projection covers the offline paths. Streaming sessions for the
 // legacy families (CTC/RNN-T/TDT/EOU) build smaller per-chunk graphs but

@@ -22,7 +22,8 @@ python engines/parakeet/scripts/convert-nemo-to-gguf.py \
   --out engines/parakeet/models/parakeet-ctc-0.6b.f16.gguf --quant f16
 
 python engines/parakeet/scripts/dump-ctc-reference.py \
-  --wav engines/parakeet/test/samples/jfk.wav
+  --wav engines/parakeet/test/samples/jfk.wav \
+  --out engines/parakeet/artifacts/ctc-ref
 
 # Hybrid checkpoint: select its RNN-T branch in both conversion and NeMo.
 python engines/parakeet/scripts/dump-rnnt-reference.py \
@@ -38,10 +39,15 @@ ctest --test-dir build-parakeet --output-on-failure
 
 `download-all-models.sh` produces `.nemo` files, not runnable GGUFs. Missing
 model, audio, or reference fixtures cause individual tests to be registered as
-`DISABLED`, not failed. Configure again after adding a fixture. Each test
-carries exactly one label out of `unit`, `fixture`, `cpu`, `gpu`, and `perf`.
-The fixture-free suite (the one CI runs) is selected by excluding the
-GPU-bound and timing-bound labels:
+`DISABLED`, not failed. Configure again after adding a fixture. Test labels
+include `unit`, `fixture`, `cpu`, `gpu`, and `perf`; tests may carry multiple
+labels. Select the model-free unit suite with:
+
+```bash
+ctest --test-dir build-parakeet -L unit --output-on-failure
+```
+
+For the non-GPU, non-performance suite, including enabled fixture tests:
 
 ```bash
 ctest --test-dir build-parakeet -LE 'gpu|perf' --output-on-failure

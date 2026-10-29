@@ -130,9 +130,10 @@ The workload (`--audio-seconds`, default 300) sets the longest single
 transcribe input to project for. Device-side memory is bounded by the
 long-form encoder window, so the device projection saturates once the audio
 exceeds one window; host-side buffers (full-input mel, stitched encoder
-output) keep growing with it. The projection prices the encoder graph
-*cache*, not one graph: a windowed pass keeps up to three window graphs
-resident (`run_encoder`'s 3-slot LRU), and all of them are counted.
+output) keep growing with it. The projection conservatively sums up to three
+window graph allocations. Windowed inference limits the encoder graph cache
+to one graph during the pass, so this part of the projection can overestimate
+the runtime's peak allocation.
 Sortformer diarization does not window — its device projection grows with
 the full input (`O(T^2)` head attention).
 

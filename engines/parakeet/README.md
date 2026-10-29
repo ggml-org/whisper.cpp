@@ -120,7 +120,10 @@ machines; see [the diarizer guide](docs/backends.md#core-ml-diarizer-sidecars).
 `parakeet --backend NAME` and `EngineOptions::backend` select the runtime device
 (`auto`, `cpu`, `cuda`, `vulkan`, `opencl`, `webgpu`, `metal`, `hexagon` or an exact ggml device name);
 `parakeet-fit-params --backend NAME` and `FitOptions::backend` project memory for
-the same device. The fit result names it by its ggml device name, and a device
+the same device. Long-form encoder graph projections conservatively count up to
+three graphs, while windowed inference retains one; see
+[memory-fit preflight](docs/cli.md#memory-fit-preflight-parakeet-fit-params).
+The fit result names it by its ggml device name, and a device
 that shares host memory and reports none of its own carries the CPU's figures;
 see [memory fit results](../../README.md#memory-fit-results). Explicit requests fail if unavailable. Hexagon is experimental and requires
 a staged DSP library; see [docs/backends.md](docs/backends.md) for names,

@@ -60,7 +60,7 @@ WebGPU (ggml-webgpu on Dawn, `GGML_WEBGPU=ON`) registers one discrete
 `WebGPU` device and takes the same tier as Vulkan and Metal, so it is chosen
 automatically when no CUDA device is present and explicitly with
 `--backend webgpu`. Validated on an RTX 5090 (Dawn on Vulkan, 2026-10-20) with
-the TranscribePsy 250M CTC model: the transcript is identical to the CPU run
+the TranscribePsy 250M TDT model: the transcript is identical to the CPU run
 and the end-to-end time 2.8x shorter. The encoder keeps its unfused attention
 graph on WebGPU (`flash_attn_allowed` admits only CUDA, Metal and Vulkan)
 until the fused path is compared there too. The backend reports its
@@ -158,7 +158,10 @@ process-global: the first `Engine` construction loads from that directory and
 later engines reuse the populated registry. Leave it empty for ggml's default
 search path. In static `GGML_BACKEND_DL=OFF` builds the setting is a no-op.
 
-`Engine::backend_name()` reports the ggml backend used by the decoder.
+`Engine::backend_name()` reports the primary active ggml backend. Individual
+stages can run elsewhere: with OpenCL selected, TDT and RNN-T decoder graphs
+run on CPU, while `backend_name()` still reports OpenCL. Benchmark log output
+reports the decoder separately in `decoder_backend`.
 `Engine::encoder_backend()` reports the loaded encoder-sidecar configuration;
 benchmark JSON additionally reports whether every measured invocation actually
 completed through Core ML.
