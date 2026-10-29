@@ -1,5 +1,6 @@
 #include "whisper.h"
 #include "whisper-arch.h"
+#include "whisper-version.h"
 
 #include "ggml.h"
 #include "ggml-cpp.h"

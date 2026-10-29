@@ -211,16 +211,8 @@ set_target_properties(whisper PROPERTIES PUBLIC_HEADER ${CMAKE_CURRENT_SOURCE_DI
 
 install(TARGETS whisper LIBRARY PUBLIC_HEADER)
 
-target_compile_definitions(whisper PRIVATE
-    WHISPER_VERSION="${WHISPER_VERSION}"
-)
-
 set_target_properties(parakeet PROPERTIES PUBLIC_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/include/parakeet.h)
 install(TARGETS parakeet LIBRARY PUBLIC_HEADER)
-
-target_compile_definitions(parakeet PRIVATE
-    PARAKEET_VERSION="${WHISPER_VERSION}"
-)
 
 configure_package_config_file(
         ${CMAKE_CURRENT_SOURCE_DIR}/cmake/whisper-config.cmake.in
