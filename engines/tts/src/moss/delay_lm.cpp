@@ -757,6 +757,32 @@ struct DelayLM::Impl {
         return logits;
     }
 
+    ggml_tensor * pack_audio_logits(const std::vector<ggml_tensor *> & heads) {
+        constexpr int HEAD_AXIS = 1;
+        ggml_tensor * packed = heads.front();
+        for (size_t i = 1; i < heads.size(); ++i) {
+            packed = ggml_concat(graph_ctx, packed, heads[i], HEAD_AXIS);
+        }
+        return packed;
+    }
+
+    std::vector<std::vector<float>> read_audio_logits(
+            const std::vector<ggml_tensor *> & heads, ggml_tensor * packed) const {
+        const std::vector<float> values = packed ? read_f32(packed) : std::vector<float>{};
+        std::vector<std::vector<float>> logits(heads.size());
+        size_t offset = 0;
+        for (size_t i = 0; i < heads.size(); ++i) {
+            const size_t count = (size_t) ggml_nelements(heads[i]);
+            if (packed) {
+                logits[i].assign(values.begin() + offset, values.begin() + offset + count);
+            } else {
+                logits[i] = read_f32(heads[i]);
+            }
+            offset += count;
+        }
+        return logits;
+    }
+
     DelayLogits forward(const std::vector<DelayRow> & rows, TextLogits requested_text = TextLogits::Full) {
         validate_rows(rows);
         const TextLogits text = projected_text(requested_text);
@@ -793,11 +819,19 @@ struct DelayLM::Impl {
             ggml_set_output(text_logits);
             ggml_build_forward_expand(graph, text_logits);
         }
+        const bool pack_heads = ::tts_cpp::detail::backend_is_vulkan(backend);
         std::vector<ggml_tensor *> audio_logits(config.n_vq);
         for (int i = 0; i < config.n_vq; ++i) {
             audio_logits[i] = ggml_mul_mat(graph_ctx, output_audio[i], last);
-            ggml_set_output(audio_logits[i]);
-            ggml_build_forward_expand(graph, audio_logits[i]);
+            if (!pack_heads) {
+                ggml_set_output(audio_logits[i]);
+                ggml_build_forward_expand(graph, audio_logits[i]);
+            }
+        }
+        ggml_tensor * packed_audio = pack_heads ? pack_audio_logits(audio_logits) : nullptr;
+        if (packed_audio) {
+            ggml_set_output(packed_audio);
+            ggml_build_forward_expand(graph, packed_audio);
         }
 
         if (measure_only) {
@@ -819,10 +853,7 @@ struct DelayLM::Impl {
 
         DelayLogits logits;
         logits.text = read_text_logits(text_logits, text);
-        logits.audio.resize(config.n_vq);
-        for (int i = 0; i < config.n_vq; ++i) {
-            logits.audio[i] = read_f32(audio_logits[i]);
-        }
+        logits.audio = read_audio_logits(audio_logits, packed_audio);
         pos += (int) n_tokens;
         return logits;
     }

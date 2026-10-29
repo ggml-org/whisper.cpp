@@ -220,6 +220,62 @@ void delay(ggml_type precision) {
     if (hexagon_arm()) fit_on_host_memory(lm_file.str(), decoder.str());
 }
 
+constexpr int TTS_AUDIO_HEADS = 32;
+constexpr int MANY_HEAD_SEED = 217;
+constexpr int MANY_HEAD_EMBD = 32;
+constexpr int MANY_HEAD_VOCAB = 128;
+
+void configure_audio_heads(moss_fixtures::GgufBuilder & builder) {
+    gguf_set_val_u32(builder.file, "moss-tts-delay.n_vq", TTS_AUDIO_HEADS);
+    gguf_set_val_u32(builder.file, "moss-tts-delay.audio_vocab_size", MANY_HEAD_VOCAB - 1);
+    gguf_set_val_u32(builder.file, "moss-tts-delay.audio_pad_code", MANY_HEAD_VOCAB - 1);
+    for (int i = 0; i < TTS_AUDIO_HEADS; ++i) {
+        builder.shapes["token_embd_audio." + std::to_string(i) + ".weight"] = {MANY_HEAD_EMBD, MANY_HEAD_VOCAB};
+        builder.shapes["output_audio." + std::to_string(i) + ".weight"] = {MANY_HEAD_EMBD, MANY_HEAD_VOCAB};
+    }
+}
+
+void add_extra_audio_heads(moss_fixtures::GgufBuilder & builder) {
+    using namespace moss_fixtures;
+    for (int i = N_VQ; i < TTS_AUDIO_HEADS; ++i) {
+        builder.add2("token_embd_audio." + std::to_string(i) + ".weight", MANY_HEAD_EMBD, MANY_HEAD_VOCAB);
+        builder.add2("output_audio." + std::to_string(i) + ".weight", MANY_HEAD_EMBD, MANY_HEAD_VOCAB);
+    }
+}
+
+void compare_audio_heads(const DelayLogits & expected, const DelayLogits & actual) {
+    require(expected.audio.size() == TTS_AUDIO_HEADS && actual.audio.size() == TTS_AUDIO_HEADS,
+            "all audio heads returned");
+    for (int i = 0; i < TTS_AUDIO_HEADS; ++i) {
+        require(actual.audio[i].size() == MANY_HEAD_VOCAB, "audio head vocabulary preserved");
+        compare("delay packed audio head", expected.audio[i], actual.audio[i]);
+    }
+}
+
+void delay_many_heads(ggml_type precision) {
+    using namespace moss_fixtures;
+    std::mt19937 rng(MANY_HEAD_SEED);
+    Fixture file{temp_gguf("gpu-delay-many-heads")};
+    {
+        GgufBuilder builder;
+        builder.random = &rng;
+        add_backbone_meta(builder.file, MANY_HEAD_EMBD);
+        configure_audio_heads(builder);
+        add_backbone_tensors(builder, MANY_HEAD_EMBD);
+        add_extra_audio_heads(builder);
+        builder.write(file.path);
+    }
+    moss_fixture_precision(file.path, precision);
+    DelayLM cpu(file.str(), {}, 2, FIT_CONTEXT), gpu(file.str(), device_request(), 2, FIT_CONTEXT);
+    arm.require(gpu.backend_name());
+    const DelayRow row{GEN_SLOT, std::vector<int32_t>(TTS_AUDIO_HEADS, 1)};
+    compare_audio_heads(cpu.prefill({row, row}), gpu.prefill({row, row}));
+    compare_audio_heads(cpu.step(row), gpu.step(row));
+    cpu.reset();
+    gpu.reset();
+    compare_audio_heads(cpu.prefill({row}), gpu.prefill({row}));
+}
+
 void sfx(ggml_type precision) {
     Fixture file{moss_sfx_fixtures::write_sfx_model("gpu-sfx", 26342)};
     moss_fixture_precision(file.path, precision);
@@ -302,6 +358,7 @@ int main(int argc, char ** argv) {
         for (ggml_type type : precisions()) {
             std::printf("precision: %s\n", ggml_type_name(type));
             delay(type);
+            if (arm.request == "vulkan") delay_many_heads(type);
             if (sfx_loads(type)) sfx(type);
             speech(type);
         }

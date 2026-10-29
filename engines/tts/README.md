@@ -26,6 +26,8 @@ CUDA and Vulkan add generated-model CPU parity and full-checkpoint smoke coverag
 MOSS Delay on Metal projects only the text-control tokens needed during audio
 generation and omits text projection during the forced drain. Embedding tables
 stay on the GPU, and the control-token head preserves the model's weight type.
+On Vulkan, MOSS Delay batches audio-head logits into one readback per forward
+pass while retaining the individual projections and sampling behavior.
 MOSS-TTSD reuses the encoded reference for dialogue continuation when only one
 recording is supplied. Multiple recordings retain the joined-audio encoding
 needed for their continuation; all prepared codes stay cached per engine.

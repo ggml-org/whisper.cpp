@@ -194,6 +194,19 @@ instead of the clip length, and the banded output matches the dense
 computation on real audio. Numeric reference parity and the remaining
 backends are the follow-up to this change.
 
+### Vulkan audio-logit readback
+
+The Vulkan path concatenates the individual audio-head projections into one
+output tensor and reads it back once per forward pass. The host restores the
+per-head vectors before sampling. Projection weights, arithmetic, channel order,
+and sampling settings remain unchanged. Other backends retain separate reads.
+
+The Vulkan fixture suite compares all 32 audio heads against CPU through
+prefill, single-row decoding, and reset/reuse, in addition to the existing
+smaller-head and precision cases. End-to-end timing still depends on loading,
+prompt length, generated steps, codec work, and the GPU; generation throughput
+should be compared separately from process latency.
+
 ### Convert
 
 Three GGUFs, because the halves have different lifetimes: the backbone and
