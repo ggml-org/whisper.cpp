@@ -34,8 +34,8 @@ tts_cpp::moss::EngineOptions fixture_options(const std::filesystem::path & backb
     options.n_threads = 1;
     options.context = 512;
     options.max_new_tokens = 24;
-    // Zero LM weights plus greedy text selection keep the generation slot
-    // active until the cap, so the longer case really emits many chunks.
+    // The fixture generates audio_start, then greedy text selection keeps the
+    // generation slot active until the cap so the long case emits many chunks.
     options.text_temperature = 0.0f;
     options.stream_chunk_frames = 2;
     return options;
@@ -127,7 +127,7 @@ int main(int argc, char ** argv) {
         setenv("TTS_CPP_GPU_BACKEND", "vulkan", 1);
         unsetenv("GGML_VK_DISABLE_F16");
     }
-    const auto backbone = write_backbone("stream-backbone", [](gguf_context *) {});
+    const auto backbone = write_generating_backbone("stream-backbone");
     std::mt19937 weights(STREAM_WEIGHT_SEED);
     const auto decoder = write_decoder("stream-decoder", N_VQ, 3 * D_MODEL,
             [](gguf_context *) {}, &weights);

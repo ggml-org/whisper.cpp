@@ -104,6 +104,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      statuses: write
     strategy:
       fail-fast: false
       # Multiple runner services can share one physical GPU. Even with
@@ -114,8 +115,23 @@ jobs:
         model: ${{ fromJSON(inputs.moss_e2e_cases) }}
     env:
       GGML_E2E_SHA: e16d1332bdafcaade27eb402c62418239faef632
-      TTS_BASELINE_SHA: 8ae24fffce8d25fe4bfcc9b8d81f51374b29e65c
+      # The ASR oracle needs the current Whisper fork's scheduler/memory API.
+      # Keep its CPU-only runtime independent of the GPU runtime under test.
+      GGML_ASR_SHA: 380c5f9f3e1811dfd88adeb1c19ab887bcf8ab3e
+      MOSS_QUALITY_CONTEXT: moss-quality/${{ matrix.backend }}/${{ matrix.model }}
     steps:
+      # workflow_dispatch check suites are not included in the PR check rollup.
+      # Mirror the quality verdict as a commit status so it stays visible there.
+      - name: Mark full-checkpoint quality pending
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              ...context.repo, sha: context.sha, state: 'pending',
+              context: process.env.MOSS_QUALITY_CONTEXT,
+              description: 'Full-checkpoint speech quality validation running',
+              target_url: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
+            });
       - name: Manual Workspace Cleanup
         run: rm -rf "$GITHUB_WORKSPACE" && mkdir -p "$GITHUB_WORKSPACE"
         shell: bash
@@ -203,26 +219,28 @@ jobs:
                               "--output-log", str((output / "transcribe-fixtures.log").resolve()),
                               "-R", "^test-moss-transcribe(-fit|-" + os.environ["BACKEND"] + ")?$"], check=True, timeout=300)
           PY
-      - name: Build upstream TTS baseline
-        if: startsWith(matrix.model, 'tts-')
-        shell: bash
-        run: |
-          git fetch --depth 1 origin "$TTS_BASELINE_SHA"
-          git worktree add --detach moss-baseline-src "$TTS_BASELINE_SHA"
-          git -C moss-baseline-src rev-parse HEAD > moss-e2e-results/tts-baseline-commit.txt
-          cmake -S moss-baseline-src -B build-moss-baseline -DCMAKE_BUILD_TYPE=Release \
-            -DSPEECH_BUILD_WHISPER=OFF -DSPEECH_BUILD_AUDIOGEN=OFF -DSPEECH_BUILD_PARAKEET=OFF \
-            -DSPEECH_BUILD_TESTS=OFF -DSPEECH_BUILD_EXECUTABLES=ON \
-            -DCMAKE_PREFIX_PATH="$PWD/ggml-install"
-          cmake --build build-moss-baseline --target moss-cli -j4
       - name: Build independent CPU reference ASR
         if: startsWith(matrix.model, 'tts-')
-        # This test oracle uses the vendored Whisper/ggml pair, statically
-        # linked in a separate process. Its CLI needs newer ggml quant enums
-        # than the pinned Vulkan runtime being validated above.
+        # The vendored ggml lacks APIs used by this fork's Whisper memory-fit
+        # code. Build a compatible pinned CPU ggml, then statically link the
+        # oracle in its own process so it cannot load the GPU test runtime.
         run: |
+          git init -q ggml-asr-src
+          git -C ggml-asr-src remote add origin "$GGML_REPO"
+          git -C ggml-asr-src fetch --depth 1 origin "$GGML_ASR_SHA"
+          git -C ggml-asr-src checkout -q FETCH_HEAD
+          git -C ggml-asr-src rev-parse HEAD > moss-e2e-results/asr-ggml-commit.txt
+          cmake -S ggml-asr-src -B build-ggml-asr -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF -DGGML_BACKEND_DL=OFF -DGGML_NATIVE=OFF \
+            -DGGML_VULKAN=OFF -DGGML_METAL=OFF -DGGML_CUDA=OFF -DGGML_OPENCL=OFF \
+            -DGGML_WEBGPU=OFF -DGGML_HEXAGON=OFF -DGGML_BLAS=OFF \
+            -DGGML_BUILD_TESTS=OFF -DGGML_BUILD_EXAMPLES=OFF \
+            -DCMAKE_INSTALL_PREFIX="$PWD/ggml-asr-install"
+          cmake --build build-ggml-asr -j4
+          cmake --install build-ggml-asr
           cmake -S third_party/whisper.cpp -B build-moss-asr -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=OFF -DCMAKE_SKIP_INSTALL_RULES=ON -DWHISPER_USE_SYSTEM_GGML=OFF \
+            -DBUILD_SHARED_LIBS=OFF -DCMAKE_SKIP_INSTALL_RULES=ON -DWHISPER_USE_SYSTEM_GGML=ON \
+            -DCMAKE_PREFIX_PATH="$PWD/ggml-asr-install" \
             -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_BUILD_PARAKEET=OFF \
             -DGGML_VULKAN=OFF -DGGML_METAL=OFF -DGGML_CUDA=OFF -DGGML_NATIVE=OFF
           cmake --build build-moss-asr --target whisper-cli -j4
@@ -250,6 +268,20 @@ jobs:
       - name: Remove downloaded checkpoint weights
         if: always()
         run: rm -rf models-moss-e2e
+      - name: Publish full-checkpoint quality result
+        if: always()
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          QUALITY_JOB_STATUS: ${{ job.status }}
+        with:
+          script: |
+            const passed = process.env.QUALITY_JOB_STATUS === 'success';
+            await github.rest.repos.createCommitStatus({
+              ...context.repo, sha: context.sha, state: passed ? 'success' : 'failure',
+              context: process.env.MOSS_QUALITY_CONTEXT,
+              description: passed ? 'Full-checkpoint speech quality passed' : 'Full-checkpoint speech quality did not pass',
+              target_url: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
+            });
 
   build-test:
     needs: runner_names

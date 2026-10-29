@@ -77,7 +77,7 @@ void test_backend_modes() {
 }
 
 void test_end_to_end_run() {
-    const auto backbone = write_backbone("cli-backbone", [](gguf_context *) {});
+    const auto backbone = write_generating_backbone("cli-backbone");
     const auto decoder = write_decoder("cli-decoder", N_VQ, 3 * D_MODEL, [](gguf_context *) {});
     const auto out = temp_gguf("cli-out");
     const std::string out_wav = out.string() + ".wav";

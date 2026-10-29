@@ -813,7 +813,7 @@
       "${TTS_AUDIO_OUT}"
     ],
     "audio_duration_seconds": null,
-    "notes": "Fixed English TTS prompt; final measured WAV transcribed by pinned Whisper Tiny on CPU, then scored against the prompt. TTS WER is a single-output intelligibility proxy, including ASR errors, not a quality gate or median. ASR runs outside synthesis timing. MOSS-TTS-v1.5 through moss-cli with the registered f16 backbone (about 17 GB) and the f16 codec decoder, model voice, reference sampling defaults and seed 1234. macOS-only and opt-in: the backbone does not fit the hosted Linux runner's disk, and the download dominates the cell, hence the 120 minute budget. Unconditioned MOSS-TTS output has a known wrong-text issue (#328); the TTS WER column reports it rather than gating it.",
+    "notes": "Fixed English TTS prompt; final measured WAV transcribed by pinned Whisper Tiny on CPU, then scored against the prompt. TTS WER is a single-output intelligibility proxy, including ASR errors, not a quality gate or median. ASR runs outside synthesis timing. MOSS-TTS-v1.5 through moss-cli with the registered f16 backbone (about 17 GB) and the f16 codec decoder, model voice, reference sampling defaults and seed 1234. macOS-only and opt-in: the backbone does not fit the hosted Linux runner's disk, and the download dominates the cell, hence the 120 minute budget.",
     "correctness": {
       "kind": "tts_intelligibility",
       "reference": "scripts/benchmarks/fixtures/tts-intelligibility.txt",

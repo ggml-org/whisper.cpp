@@ -10,7 +10,7 @@ inference, not addon integration or perceptual audio quality.
 import argparse
 import array
 from contextlib import contextmanager, nullcontext
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 import fcntl
 import hashlib
 import importlib.util
@@ -53,13 +53,6 @@ ASR_SPEC = {
     "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
 }
 MAX_TTS_WER = 0.25
-TTS_BASELINE_SHA = "8ae24fffce8d25fe4bfcc9b8d81f51374b29e65c"
-# Temporary exception owned by @ogad-tether; renewal/removal requires review in
-# https://github.com/tetherto/qvac-fabric-speech.cpp/issues/328. Never auto-bump
-# the immutable baseline to turn newly failing audio into a pre-existing issue.
-TTS_BASELINE_ISSUE = "https://github.com/tetherto/qvac-fabric-speech.cpp/issues/328"
-TTS_BASELINE_REVIEW_BY = date(2026, 11, 12)  # expires at 00:00 UTC, fail closed
-UNCONDITIONED_OUTPUTS = ("batch", "stream", "cpu-reference")
 
 # Shared-worker admission policy and external-process limits, in explicit units.
 GPU_MAX_UNAVAILABLE_MIB = 1024
@@ -81,36 +74,8 @@ def intelligibility_passes(score):
             math.isfinite(wer) and 0 <= wer <= MAX_TTS_WER and score.get("n_ref_words", 0) > 0)
 
 
-def same_audio(left, right):
-    # Compare signal data, not incidental WAV metadata. Exact agreement is
-    # deliberately required before exempting an existing wrong-text result.
-    try:
-        with wave.open(str(left), "rb") as a, wave.open(str(right), "rb") as b:
-            return (a.getparams() == b.getparams() and a.getnframes() > 0 and
-                    a.readframes(a.getnframes()) == b.readframes(b.getnframes()))
-    except (OSError, wave.Error, EOFError):
-        return False
-
-
-def classify_tts_scores(scores, output, *, today=None):
-    failed, existing = [], []
-    baseline = output / "tts-baseline-commit.txt"
-    today = today if today is not None else datetime.now(timezone.utc).date()
-    verified_base = (today < TTS_BASELINE_REVIEW_BY and baseline.is_file() and
-                     baseline.read_text().strip() == TTS_BASELINE_SHA)
-    for name, score in scores.items():
-        if intelligibility_passes(score):
-            continue
-        # A failed ASR invocation is never an existing quality limitation.
-        wer = score.get("wer")
-        valid_score = (score.get("status") == "ok" and isinstance(wer, (float, int)) and
-                       math.isfinite(wer) and wer > MAX_TTS_WER and score.get("n_ref_words", 0) > 0)
-        if (verified_base and valid_score and name in UNCONDITIONED_OUTPUTS and
-                same_audio(output / f"{name}.wav", output / f"baseline-{name}.wav")):
-            existing.append(name)
-        else:
-            failed.append(name)
-    return failed, existing
+def classify_tts_scores(scores):
+    return [name for name, score in scores.items() if not intelligibility_passes(score)]
 
 
 def score_tts_outputs(asr_binary, models, output):
@@ -120,10 +85,11 @@ def score_tts_outputs(asr_binary, models, output):
     spec.loader.exec_module(prepare)
     model = prepare.prepare(ASR_SPEC, models.resolve())
     expected = {name: "short" for name in ["batch", "stream", "clone", "cpu-reference"]}
-    for chunk in (7, 25):
-        for suffix in ("batch", "stream", "after-callback-cancel", "after-explicit-cancel"):
-            expected[f"tts-c{chunk}-{suffix}"] = "short"
-    expected.update({"tts-long-batch": "long", "tts-long-stream": "long"})
+    for prefix in ("", "unconditioned/", "cpu/", "cpu/unconditioned/"):
+        for chunk in (7, 25):
+            for suffix in ("batch", "stream", "after-callback-cancel", "after-explicit-cancel"):
+                expected[f"{prefix}tts-c{chunk}-{suffix}"] = "short"
+        expected.update({f"{prefix}tts-long-batch": "long", f"{prefix}tts-long-stream": "long"})
     scores = {}
     for name, length in expected.items():
         audio = output / f"{name}.wav"
@@ -143,13 +109,10 @@ def score_tts_outputs(asr_binary, models, output):
         if completed.returncode != 0:
             score["status"] = "error"
         scores[name] = {key: score.get(key) for key in ("status", "wer", "n_ref_words", "n_hyp_words", "n_edits")}
-    failed, existing = classify_tts_scores(scores, output)
+    failed = classify_tts_scores(scores)
     return {"status": "failed" if failed else "passed", "max_wer": MAX_TTS_WER,
             "asr_model": ASR_SPEC, "failed_outputs": failed, "scores": scores,
-            "quality_status": "failed" if failed or existing else "passed",
-            "pre_existing_quality_issues": existing, "baseline_commit": TTS_BASELINE_SHA,
-            "baseline_issue": TTS_BASELINE_ISSUE,
-            "baseline_review_by_utc": TTS_BASELINE_REVIEW_BY.isoformat()}
+            "quality_status": "failed" if failed else "passed"}
 
 
 def gpu_memory():
@@ -289,13 +252,12 @@ def gpu_snapshot(output, name, phase):
 
 
 class CaseRunner:
-    def __init__(self, backend, build, models, output, baseline_binary):
+    def __init__(self, backend, build, models, output):
         self.backend = backend
         self.backend_prefix = BACKENDS[backend]
         self.build = build
         self.models = models
         self.output = output
-        self.baseline_binary = baseline_binary
         self.sample = Path("engines/parakeet/test/samples/jfk.wav")
         self.tts = str(build / "engines/tts/moss-cli")
         self.common = ["--gpu", "--threads", "4", "--seed", "1234"]
@@ -348,19 +310,13 @@ def run_tts(runner, model):
     # failures from backend-dependent generation drift. CI only.
     runner.invoke("cpu-reference", [arg for arg in base if arg != "--gpu"] +
            ["--out", str(runner.output / "cpu-reference.wav")], cpu=True)
-    # Same worker, ggml pin, checkpoint, prompt, seed and backend on
-    # the upstream base. Preserve evidence of pre-existing defects.
-    for name in UNCONDITIONED_OUTPUTS:
-        args = [str(runner.baseline_binary), *base[1:]]
-        if name == "cpu-reference":
-            args.remove("--gpu")
-        if name == "stream":
-            args += ["--stream", "--stream-chunk-frames", "25"]
-        runner.invoke(f"baseline-{name}", [*args, "--out", str(runner.output / f"baseline-{name}.wav")],
-               cpu=name == "cpu-reference")
     runner.invoke("stream-agreement", [str(runner.build / "engines/tts/test-moss-tts-stream-e2e"),
            runner.backend, model, decoder, encoder, str(ref1), str(runner.output),
            str(runner.output / "reference-short.txt"), str(runner.output / "reference-long.txt")], wav=False)
+    runner.invoke("cpu-stream-agreement", [str(runner.build / "engines/tts/test-moss-tts-stream-e2e"),
+           "cpu", model, decoder, encoder, str(ref1), str(runner.output / "cpu"),
+           str(runner.output / "reference-short.txt"), str(runner.output / "reference-long.txt")],
+           wav=False, cpu=True)
 
 
 def run_ttsd(runner, model):
@@ -433,9 +389,9 @@ def prepare_checkpoint(case, models, output):
     return str(quantized)
 
 
-def run_case(case, backend, build, models, output, baseline_binary):
+def run_case(case, backend, build, models, output):
     model = prepare_checkpoint(case, models, output)
-    runner = CaseRunner(backend, build, models, output, baseline_binary)
+    runner = CaseRunner(backend, build, models, output)
     FAMILY_RUNNERS[case.split("-")[0]](runner, model)
     return runner.checks
 
@@ -448,8 +404,6 @@ def main():
     parser.add_argument("--models", type=Path, default=Path("models-moss-e2e"))
     parser.add_argument("--output", type=Path, default=Path("moss-e2e-results"))
     parser.add_argument("--asr-binary", type=Path, default=Path("build-moss-asr/bin/whisper-cli"))
-    parser.add_argument("--tts-baseline-binary", type=Path,
-                        default=Path("build-moss-baseline/engines/tts/moss-cli"))
     args = parser.parse_args()
     args.models.mkdir(parents=True, exist_ok=True)
     args.output.mkdir(parents=True, exist_ok=True)
@@ -459,8 +413,7 @@ def main():
     result = {"case": args.case, "backend": args.backend, "status": "failed",
               "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()}
     try:
-        result["checks"] = run_case(args.case, args.backend, args.build.resolve(), args.models, args.output,
-                                   args.tts_baseline_binary.resolve())
+        result["checks"] = run_case(args.case, args.backend, args.build.resolve(), args.models, args.output)
         result["status"] = "passed"
     except Exception as error:
         result["error"] = str(error)
@@ -471,10 +424,6 @@ def main():
             # both the original failure and CPU/Vulkan quality evidence.
             try:
                 result["intelligibility"] = score_tts_outputs(args.asr_binary.resolve(), args.models, args.output)
-                existing = result["intelligibility"]["pre_existing_quality_issues"]
-                if existing:
-                    print("Non-blocking upstream quality failures (identical baseline audio): " +
-                          ", ".join(existing), flush=True)
                 if result["intelligibility"]["status"] != "passed":
                     result["status"] = "failed"
                     print("TTS intelligibility gate failed: " +

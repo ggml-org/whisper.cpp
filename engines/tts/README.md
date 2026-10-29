@@ -34,6 +34,10 @@ in [MOSS GPU validation](docs/moss.md#gpu-validation-cuda-and-vulkan); smoke cov
 not establish general speech quality. OpenCL remains untested here. See the [API matrix](docs/api.md) for
 streaming support and the [model guide](docs/models.md) for storage tiers.
 
+MOSS generation starts at the reference assistant header. ISO language codes
+accepted by the API/CLI are converted to the model's language names (`en` to
+`English`, `zh` to `Chinese`); spelled-out names pass through.
+
 MOSS reference cloning applies the upstream loudness adjustment, and TTSD uses
 its dialogue-specific prompt template. Use the explicit TTSD sampling settings
 in the [dialogue example](docs/moss.md); the CLI's shared defaults are for
@@ -80,8 +84,10 @@ engine, not every backend ggml can compile.
 
 ¹ MOSS CUDA/Vulkan: generated-model CPU parity; quantized TTS/TTSD,
 SoundEffect and Speech checkpoint smoke cases. Vulkan also covers the
-F16 TTS/TTSD/SoundEffect and BF16 Speech cases. TTS quality gates retain
-known upstream limitations; see the linked MOSS guide for details.
+F16 TTS/TTSD/SoundEffect and BF16 Speech cases. The full-checkpoint TTS quality
+gate requires every expected CPU/GPU batch, streaming and reuse WAV to pass
+WER <= 0.25. Wrong text has no baseline-audio exemption; missing outputs,
+ASR errors and non-finite scores fail the gate. See the linked MOSS guide.
 
 ² WebGPU (Dawn on an RTX 5090): Supertonic 3 renders with a 0.997 waveform
 correlation to the CPU run and the same transcript (2026-10-20). Parler mini

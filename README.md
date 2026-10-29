@@ -42,6 +42,12 @@ rejected generations before
 publishing an output WAV. It supports CPU, CUDA, and Vulkan (`--gpu --backend vulkan`).
 ASR results that reach the decoding token limit are rejected.
 
+MOSS generation starts at the reference assistant header and converts ISO language
+codes such as `en` to the model's language names (`English`). The full-checkpoint
+TTS CI gate requires every expected CPU/GPU batch, streaming and reuse output to
+pass WER <= 0.25, with no baseline-audio exemption for wrong text. See
+[MOSS validation](engines/tts/docs/moss.md#gpu-validation-cuda-and-vulkan).
+
 CosyVoice3 uses capability-checked flash attention for single-token LM decoding
 on CUDA and Metal. Supported CUDA backends reuse decode graphs within masked
 128-token cache windows, allowing CUDA graph capture. Unsupported backends or

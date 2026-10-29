@@ -1,5 +1,6 @@
 // Full-checkpoint streaming: batch agreement, chunk delivery, cancellation and
-// reuse. Run on CI workers; the local Vulkan streaming test uses tiny fixtures.
+// reuse, with and without voice conditioning. The local Vulkan streaming test
+// uses tiny fixtures; this harness also accepts CPU for checkpoint validation.
 #include "tts-cpp/moss/engine.h"
 #include "dr_wav.h"
 #include "../test_env_portable.h"
@@ -108,11 +109,12 @@ void cancel(Engine & engine, const std::string & text, bool explicit_cancel) {
 
 int main(int argc, char ** argv) {
     if (argc != 9) {
-        std::fprintf(stderr, "usage: %s cuda|vulkan|webgpu LM.gguf DECODER.gguf ENCODER.gguf REFERENCE.wav OUTPUT_DIR SHORT.txt LONG.txt\n", argv[0]);
+        std::fprintf(stderr, "usage: %s cpu|cuda|vulkan|webgpu|metal LM.gguf DECODER.gguf ENCODER.gguf REFERENCE.wav OUTPUT_DIR SHORT.txt LONG.txt\n", argv[0]);
         return 77;
     }
     try {
-        const MossGpuArm arm = moss_gpu_arm(argv[1]);
+        const bool cpu = std::string(argv[1]) == "cpu";
+        const MossGpuArm arm = cpu ? MossGpuArm{"cpu", "CPU"} : moss_gpu_arm(argv[1]);
         setenv("TTS_CPP_GPU_BACKEND", arm.request.c_str(), 1);
         unsetenv("GGML_VK_DISABLE_F16");
         const fs::path output(argv[6]);
@@ -127,32 +129,39 @@ int main(int argc, char ** argv) {
         };
         const std::string short_text = read_text(argv[7]);
         const std::string long_text = read_text(argv[8]);
-        for (int chunk : {7, 25}) {
-            EngineOptions options;
-            options.backbone_path = argv[2];
-            options.decoder_path = argv[3];
-            options.encoder_path = argv[4];
-            options.reference_audio_path = argv[5];
-            options.language = "en";
-            options.use_gpu = true;
-            options.n_threads = 4;
-            options.seed = 1234;
-            options.max_new_tokens = chunk == 7 ? LONG_MAX_NEW_TOKENS : SHORT_MAX_NEW_TOKENS;
-            options.stream_chunk_frames = chunk;
-            Engine engine(options);
-            const std::string backend = engine.backend_name();
-            arm.require(backend.c_str());
-            std::fprintf(stderr, "[moss-tts-stream-e2e] backend: %s\n", backend.c_str());
-            const std::string label = "tts-c" + std::to_string(chunk);
-            const auto reference = batch(engine, short_text, output / (label + "-batch.wav"), SHORT_MAX_NEW_TOKENS);
-            stream(engine, short_text, reference, output / (label + "-stream"));
-            cancel(engine, short_text, false);
-            stream(engine, short_text, reference, output / (label + "-after-callback-cancel"));
-            cancel(engine, short_text, true);
-            stream(engine, short_text, reference, output / (label + "-after-explicit-cancel"));
-            if (chunk == 7) {
-                const auto longer = batch(engine, long_text, output / "tts-long-batch.wav", options.max_new_tokens);
-                stream(engine, long_text, longer, output / "tts-long-stream");
+        for (bool conditioned : {false, true}) {
+            const fs::path renders = conditioned ? output : output / "unconditioned";
+            fs::create_directories(renders);
+            for (int chunk : {7, 25}) {
+                EngineOptions options;
+                options.backbone_path = argv[2];
+                options.decoder_path = argv[3];
+                if (conditioned) {
+                    options.encoder_path = argv[4];
+                    options.reference_audio_path = argv[5];
+                }
+                options.language = "en";
+                if (cpu) options.backend = "cpu";
+                options.use_gpu = !cpu;
+                options.n_threads = 4;
+                options.seed = 1234;
+                options.max_new_tokens = chunk == 7 ? LONG_MAX_NEW_TOKENS : SHORT_MAX_NEW_TOKENS;
+                options.stream_chunk_frames = chunk;
+                Engine engine(options);
+                const std::string backend = engine.backend_name();
+                arm.require(backend.c_str());
+                std::fprintf(stderr, "[moss-tts-stream-e2e] backend: %s\n", backend.c_str());
+                const std::string label = "tts-c" + std::to_string(chunk);
+                const auto reference = batch(engine, short_text, renders / (label + "-batch.wav"), SHORT_MAX_NEW_TOKENS);
+                stream(engine, short_text, reference, renders / (label + "-stream"));
+                cancel(engine, short_text, false);
+                stream(engine, short_text, reference, renders / (label + "-after-callback-cancel"));
+                cancel(engine, short_text, true);
+                stream(engine, short_text, reference, renders / (label + "-after-explicit-cancel"));
+                if (chunk == 7) {
+                    const auto longer = batch(engine, long_text, renders / "tts-long-batch.wav", options.max_new_tokens);
+                    stream(engine, long_text, longer, renders / "tts-long-stream");
+                }
             }
         }
         std::puts("MOSS TTS streaming/reuse: OK");

@@ -22,6 +22,28 @@ std::string tokens_field(int duration_tokens) {
     return duration_tokens > 0 ? std::to_string(duration_tokens) : "None";
 }
 
+std::string language_field(const std::string & language) {
+    // The model's UserMessage uses language names, e.g. "English" and
+    // "French". The native API/CLI also accept their ISO language codes.
+    static const struct { const char * code; const char * name; } languages[] = {
+        {"zh", "Chinese"}, {"yue", "Cantonese"}, {"en", "English"},
+        {"ar", "Arabic"}, {"cs", "Czech"}, {"da", "Danish"},
+        {"nl", "Dutch"}, {"fi", "Finnish"}, {"fr", "French"},
+        {"de", "German"}, {"el", "Greek"}, {"he", "Hebrew"},
+        {"hi", "Hindi"}, {"hu", "Hungarian"}, {"it", "Italian"},
+        {"ja", "Japanese"}, {"ko", "Korean"}, {"mk", "Macedonian"},
+        {"ms", "Malay"}, {"fa", "Persian"}, {"pl", "Polish"},
+        {"pt", "Portuguese"}, {"ro", "Romanian"}, {"ru", "Russian"},
+        {"es", "Spanish"}, {"sw", "Swahili"}, {"sv", "Swedish"},
+        {"tl", "Tagalog"}, {"th", "Thai"}, {"tr", "Turkish"},
+        {"vi", "Vietnamese"},
+    };
+    for (const auto & entry : languages) {
+        if (language == entry.code) return entry.name;
+    }
+    return language.empty() ? "None" : language;
+}
+
 std::string user_instruction(const std::string & reference, const std::string & language,
                              const std::string & text, int duration_tokens, int audio_channels) {
     const std::string scene = audio_channels == TTSD_AUDIO_CHANNELS ? "- Scene:\nNone\n" : "";
@@ -32,7 +54,7 @@ std::string user_instruction(const std::string & reference, const std::string & 
            "- Quality:\nNone\n"
            "- Sound Event:\nNone\n"
            "- Ambient Sound:\nNone\n"
-           "- Language:\n" + language + "\n" + scene +
+           "- Language:\n" + language_field(language) + "\n" + scene +
            "- Text:\n" + text + "\n"
            "</user_inst>";
 }
@@ -144,12 +166,10 @@ std::vector<DelayRow> build_prompt_rows(const DelayConfig & config, const Prompt
     builder.append_text({tokens.im_start});
     builder.append_encoded("assistant\n");
 
-    if (audio.continuation_codes.empty()) {
-        DelayRow seed;
-        seed.text = config.audio_start_token_id;
-        seed.audio.assign((size_t) config.n_vq, config.audio_pad_code);
-        builder.rows.push_back(seed);
-    } else {
+    // Generation starts at the assistant header, just as in the reference
+    // processor's chat template. Let the model emit any speaker/text prefix
+    // before audio_start; only a real audio continuation supplies that prefix.
+    if (!audio.continuation_codes.empty()) {
         builder.append_continuation_block(audio.continuation_codes);
     }
     return builder.rows;

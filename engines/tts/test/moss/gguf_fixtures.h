@@ -207,6 +207,21 @@ inline std::filesystem::path write_backbone(const char * tag,
     return path;
 }
 
+// Deterministic synthesis fixture: generate audio_start from the assistant
+// header, then keep emitting generation slots until the caller's token cap.
+inline std::filesystem::path write_generating_backbone(const char * tag) {
+    GgufBuilder b;
+    b.constants = {{"token_embd.weight", {GGML_TYPE_F32, 1.0f}},
+                   {"output_norm.weight", {GGML_TYPE_F32, 1.0f}}};
+    add_backbone_meta(b.file);
+    add_backbone_tensors(b);
+    auto * output = ggml_get_tensor(b.tensors, "output.weight");
+    std::fill_n((float *) output->data + 3 * N_EMBD, N_EMBD, 100.0f);
+    const auto path = temp_gguf(tag);
+    b.write(path);
+    return path;
+}
+
 inline void add_decoder_meta(gguf_context * f, int num_quantizers) {
     gguf_set_val_str(f, "general.architecture", "moss-tts-audio-decoder");
     gguf_set_val_u32(f, "moss-tts-audio-decoder.sampling_rate", 24000);

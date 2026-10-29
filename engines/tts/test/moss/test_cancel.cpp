@@ -54,7 +54,7 @@ void test_engine_recovers_after_cancel(tts_cpp::moss::Engine & engine) {
 } // namespace
 
 int main() {
-    const auto backbone = write_backbone("cancel-backbone", [](gguf_context *) {});
+    const auto backbone = write_generating_backbone("cancel-backbone");
     const auto decoder = write_decoder("cancel-decoder", N_VQ, 3 * D_MODEL,
             [](gguf_context *) {});
     int rc = 0;
