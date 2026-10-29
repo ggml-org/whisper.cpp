@@ -7035,7 +7035,8 @@ int whisper_full_with_state(
     }
 
     const int seek_start = params.offset_ms/10;
-    const int seek_end = params.duration_ms == 0 ? whisper_n_len_from_state(state) : seek_start + params.duration_ms/10;
+    const int seek_end = params.duration_ms == 0 ? whisper_n_len_from_state(state) : std::min(seek_start + params.duration_ms/10, whisper_n_len_from_state(state));
+    const int audio_len = n_samples > 0 ? (int) ((100LL * n_samples) / WHISPER_SAMPLE_RATE) : whisper_n_len_from_state(state);
 
     // if length of spectrogram is less than 100ms (10 frames), then return
     // basically don't process anything that is less than 100ms
@@ -7828,7 +7829,7 @@ int whisper_full_with_state(
                     }
 
                     if (tokens_cur[i].id > whisper_token_beg(ctx) && !params.single_segment) {
-                        const auto t1 = seek + 2*(tokens_cur[i].tid - whisper_token_beg(ctx));
+                        const auto t1 = std::min(seek + 2*(tokens_cur[i].tid - whisper_token_beg(ctx)), audio_len);
 
                         if (!text.empty()) {
                             const auto tt0 = t0;
@@ -7879,7 +7880,7 @@ int whisper_full_with_state(
                 }
 
                 if (!text.empty()) {
-                    const auto t1 = seek + seek_delta;
+                    const auto t1 = std::min(seek + seek_delta, audio_len);
 
                     const auto tt0 = t0;
                     const auto tt1 = t1;
