@@ -717,8 +717,9 @@ std::vector<FitPool> register_pools(const BackendPair & pair, size_t & primary) 
 
 FitStageProjection stage_row(const char * name, const BackendPair & pair, const StageBytes & bytes, uint64_t host) {
     FitStageProjection row;
+    ggml_backend_dev_t dev = ggml_backend_get_device(pair.backend);
     row.name          = name;
-    row.device_name   = ggml_backend_name(pair.backend);
+    row.device_name   = dev ? ggml_backend_dev_name(dev) : "CPU";
     row.on_gpu        = pair.has_gpu;
     row.weights_bytes = bytes.weights;
     row.state_bytes   = bytes.state;
@@ -834,7 +835,7 @@ FitResult project(const EngineOptions & options, const FitWorkload & request) {
 
     FitResult result;
     result.model_name      = model_name(model);
-    result.device_name     = ggml_backend_name(pair.backend);
+    result.device_name     = ggml_backend_dev_name(pools[primary].device);
     result.device_is_cpu   = !pair.has_gpu;
     result.stages_resident = true;
     result.stages          = stage_rows(pair, stages, host);

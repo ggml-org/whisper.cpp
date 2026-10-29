@@ -240,7 +240,7 @@ static FitResult fit_params_unguarded(const FitOptions & opts) {
     const size_t    primary      = fit_pool_of(pools, ggml_backend_get_device(rb.backend));
     const FitPool & primary_pool = pools[primary];
 
-    r.device_name               = ggml_backend_name(rb.backend);
+    r.device_name               = ggml_backend_dev_name(primary_pool.device);
     r.device_is_cpu             = !rb.on_gpu;
     r.device_shares_host_memory = primary_pool.shares_host_memory;
     r.device_free_bytes         = primary_pool.free_bytes;
@@ -432,8 +432,9 @@ static FitResult fit_params_unguarded(const FitOptions & opts) {
                          uint64_t extra_weights, uint64_t state, uint64_t compute,
                          uint64_t host) {
         FitStageProjection s;
+        ggml_backend_dev_t dev = ggml_backend_get_device(backend);
         s.name               = name;
-        s.device_name        = ggml_backend_name(backend);
+        s.device_name        = dev ? ggml_backend_dev_name(dev) : "CPU";
         s.on_gpu             = !backend_is_cpu_device(backend);
         s.weights_bytes      = sat_add(w.weights_alloc_bytes, extra_weights);
         s.weights_mmap_bytes = w.weights_mapped_bytes;

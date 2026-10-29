@@ -55,23 +55,42 @@ struct FitBudgetCheck {
     uint64_t required   = 0;
 };
 
+// Android's OpenCL GPUs (Adreno, Mali) draw their buffers from host RAM.
+#if defined(__ANDROID__)
+inline constexpr bool FIT_OPENCL_SHARES_HOST_MEMORY = true;
+#else
+inline constexpr bool FIT_OPENCL_SHARES_HOST_MEMORY = false;
+#endif
+
 inline bool fit_device_shares_host_memory(enum ggml_backend_dev_type type, const char * reg_name,
                                           uint64_t total_bytes) {
     const bool reports_no_memory_of_its_own = total_bytes == 0;
     return type == GGML_BACKEND_DEVICE_TYPE_CPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU ||
-           backend_name_is_metal(reg_name) || reports_no_memory_of_its_own;
+           backend_name_is_metal(reg_name) || (FIT_OPENCL_SHARES_HOST_MEMORY && backend_name_is_opencl(reg_name)) ||
+           reports_no_memory_of_its_own;
+}
+
+// A device that reports no memory of its own draws from host RAM, so it takes
+// the CPU's figures.
+inline FitPool fit_pool_from_memory(ggml_backend_dev_t dev, enum ggml_backend_dev_type type, const char * reg_name,
+                                    uint64_t free_bytes, uint64_t total_bytes, uint64_t cpu_free_bytes,
+                                    uint64_t cpu_total_bytes) {
+    FitPool pool;
+    pool.device             = dev;
+    pool.shares_host_memory = fit_device_shares_host_memory(type, reg_name, total_bytes);
+    pool.free_bytes         = total_bytes == 0 ? cpu_free_bytes : free_bytes;
+    pool.total_bytes        = total_bytes == 0 ? cpu_total_bytes : total_bytes;
+    return pool;
 }
 
 inline FitPool fit_pool_for_device(ggml_backend_dev_t dev) {
     size_t free_b = 0, total_b = 0;
     ggml_backend_dev_memory(dev, &free_b, &total_b);
-    FitPool pool;
-    pool.device             = dev;
-    pool.free_bytes         = free_b;
-    pool.total_bytes        = total_b;
-    pool.shares_host_memory =
-        fit_device_shares_host_memory(ggml_backend_dev_type(dev), backend_dev_reg_name(dev), total_b);
-    return pool;
+    size_t cpu_free_b = 0, cpu_total_b = 0;
+    ggml_backend_dev_t cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (total_b == 0 && cpu && cpu != dev) ggml_backend_dev_memory(cpu, &cpu_free_b, &cpu_total_b);
+    return fit_pool_from_memory(dev, ggml_backend_dev_type(dev), backend_dev_reg_name(dev), free_b, total_b,
+                                cpu_free_b, cpu_total_b);
 }
 
 inline size_t fit_pool_find(const std::vector<FitPool> & pools, ggml_backend_dev_t dev) {

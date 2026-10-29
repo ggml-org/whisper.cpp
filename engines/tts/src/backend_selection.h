@@ -139,6 +139,8 @@ bool hexagon_runs_weight_type(ggml_type type);
 // Index of the first tensor in `g` whose type Hexagon cannot run, or -1.
 int64_t first_tensor_hexagon_cannot_run(const gguf_context * g);
 
+// True for devices that draw their buffers from host RAM: the CPU, integrated
+// GPUs, Apple Metal, Hexagon and Android's OpenCL GPUs.
 bool backend_shares_host_memory(ggml_backend_t backend);
 
 void backend_memory(ggml_backend_t backend, size_t & free_bytes, size_t & total_bytes);

@@ -100,12 +100,11 @@ FitResult fit_params(const FitOptions & o) {
         }
         auto backend = detail::select_backend(e.use_gpu, e.backend);
         const auto device = ggml_backend_get_device(backend.get());
-        r.device_name = ggml_backend_name(backend.get());
+        r.device_name = ggml_backend_dev_name(device);
         r.device_is_cpu = ::tts_cpp::detail::backend_is_cpu(backend.get());
         const bool is_hexagon = ::tts_cpp::detail::backend_is_hexagon(backend.get());
         const auto hexagon = is_hexagon ? detail::hexagon_runtime(backend.get()) : detail::HexagonRuntime{};
         r.device_shares_host_memory = detail::shares_host_memory(backend.get());
-        if (!r.device_is_cpu) r.device_name += std::string(" (") + ggml_backend_dev_description(device) + ')';
         detail::Frontend frontend(e.frontend_path);
         const auto chunks = frontend.split(o.text, e.max_tokens);
         if (chunks.empty()) throw std::invalid_argument("no text chunks");

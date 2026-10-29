@@ -227,12 +227,11 @@ void run_synthetic_lm_gates() {
         expect(fr.reason == "backend-unavailable",
                "unknown-backend reason was '" + fr.reason + "'");
 
-        // Devices without reliable memory telemetry (Hexagon reports
-        // free=total=0 today in ggml_backend_hexagon_device_get_memory)
-        // must verdict as Error "device-memory-unknown" rather than being
-        // conflated with "does-not-fit". We can't fabricate a backend from
-        // this test, but when a Hex device IS visible in the registry we
-        // can exercise the branch end to end.
+        // Hexagon reports free=total=0 (ggml_backend_hexagon_device_get_memory)
+        // and draws from host RAM, so the fit takes the CPU's figures and
+        // reaches a verdict. We can't fabricate a backend from this test, but
+        // when a Hex device IS visible in the registry we can exercise the
+        // branch end to end.
         bool hex_visible = false;
         for (size_t i = 0, n = ggml_backend_dev_count(); i < n; ++i) {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);
@@ -248,10 +247,12 @@ void run_synthetic_lm_gates() {
             hex_opts.codec_decoder_gguf_path = path;
             hex_opts.backend                 = "hexagon";
             fr = tts_cpp::audio8::fit_params(hex_opts);
-            expect(fr.status == tts_cpp::FitStatus::Error,
-                   "zero-telemetry Hex backend was not Error");
-            expect(fr.reason == "device-memory-unknown",
-                   "zero-telemetry reason was '" + fr.reason + "'");
+            size_t cpu_free = 0, cpu_total = 0;
+            ggml_backend_dev_memory(ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU), &cpu_free, &cpu_total);
+            expect(fr.reason != "device-memory-unknown",
+                   "zero-telemetry Hex backend still reported device-memory-unknown");
+            expect(fr.device_shares_host_memory, "Hex backend did not share host memory");
+            expect(fr.device_total_bytes == cpu_total, "Hex backend did not take the CPU's total");
         }
 
         // Backend-selector policy: aliases, exact device names, "cpu" by

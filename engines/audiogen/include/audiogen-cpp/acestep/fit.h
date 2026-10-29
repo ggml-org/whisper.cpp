@@ -123,7 +123,7 @@ struct FitOptions {
 // One pipeline stage's projected footprint.
 struct FitStageProjection {
     std::string name;         // "textenc" | "lm" | "cond" | "detok" | "dit" | "vae"
-    std::string device_name;  // backend the stage loads on (after placement)
+    std::string device_name;  // ggml device the stage loads on (after placement)
     bool        on_gpu = false;
 
     uint64_t weights_bytes      = 0;  // backend weight buffer (LM: + compact tied head)
@@ -152,13 +152,18 @@ struct FitResult {
     bool        is_turbo = false;
 
     // Primary compute device (DiT/VAE; the per-stage rows carry their own).
+    // Its ggml device name, as ggml_backend_dev_by_name finds it: "CPU",
+    // "CUDA0", "MTL0", "GPUOpenCL".
     std::string device_name;
     bool        device_is_cpu = false;
     // True when the primary device's memory pool IS system RAM (the CPU
-    // backend, integrated GPUs, Apple Metal unified memory): the host pool
-    // and the device pool are then the same physical memory and the verdict
-    // charges both against it. False only for discrete-VRAM devices.
+    // backend, integrated GPUs, Apple Metal unified memory, Android's OpenCL
+    // GPUs, a device that reports no memory of its own): the host pool and the
+    // device pool are then the same physical memory and the verdict charges
+    // both against it. False only for discrete-VRAM devices.
     bool        device_shares_host_memory = false;
+    // The device's free and total memory. A device that reports none of its
+    // own carries the CPU's figures.
     uint64_t    device_free_bytes  = 0;
     uint64_t    device_total_bytes = 0;
     // Host pool (the CPU backend device): CPU-placed stages, mmapped weights,

@@ -62,14 +62,18 @@ struct FitResult {
 
     // Resolved compute device, after the same registry walk and runtime
     // fallbacks a real load applies (validated-backend allowlists, Adreno
-    // tier policy, missing GPU build, ...).
+    // tier policy, missing GPU build, ...). Its ggml device name, as
+    // ggml_backend_dev_by_name finds it: "CPU", "CUDA0", "MTL0", "GPUOpenCL".
     std::string device_name;
     bool        device_is_cpu = false;
     // True when the device's memory pool IS system RAM (the CPU backend,
-    // integrated GPUs, Apple Metal unified memory): host_bytes then competes
-    // with `device` for the same physical memory and the verdict charges
-    // both against the free figure. False only for discrete-VRAM devices.
+    // integrated GPUs, Apple Metal unified memory, Hexagon, Android's OpenCL
+    // GPUs): host_bytes then competes with `device` for the same physical
+    // memory and the verdict charges both against the free figure. False only
+    // for discrete-VRAM devices.
     bool        device_shares_host_memory = false;
+    // The device's free and total memory. A device that shares host memory
+    // and reports none of its own carries the CPU's figures.
     uint64_t    device_free_bytes  = 0;
     uint64_t    device_total_bytes = 0;
 

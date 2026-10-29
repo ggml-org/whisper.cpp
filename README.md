@@ -206,6 +206,20 @@ model each desktop benchmark family measures and scores.
 | Music | ACE-Step 1.5 | September 2026 CUDA/Vulkan/Metal lanes: generation 1,338–9,016 ms, RTF 0.139–0.957; [full table](engines/audiogen/docs/performance.md#ace-step-15-multi-machine-benchmark-2026-09) |
 | Music | MiniMax-Music3 f16 | September 2026 RTX 5090: two-minute song in 73.9 s CUDA / 84.2 s Vulkan, excluding model load; [full table](engines/audiogen/docs/performance.md#minimax-music3-f16-on-rtx-5090-2026-09) |
 
+## Memory fit results
+
+Every engine's memory-fit preflight reports the same device fields, so a caller
+can add up several models that share one device:
+
+- `device_name` is the ggml device name, as `ggml_backend_dev_by_name` finds it:
+  `CPU`, `CUDA0`, `Vulkan0`, `MTL0`, `GPUOpenCL`, `HTP0`. Two engines on the
+  same device report the same name.
+- `device_shares_host_memory` is true for a device that draws from host RAM: the
+  CPU, an integrated GPU, Apple Metal, Hexagon and Android's OpenCL GPUs.
+- `device_free_bytes` and `device_total_bytes` are the device's own figures. A
+  device that shares host memory and reports none of its own, such as Hexagon,
+  carries the CPU's figures.
+
 ## Use in QVAC
 
 These engines ship inside [QVAC](https://github.com/tetherto/qvac) as SDK

@@ -677,6 +677,8 @@ bool        model_has_gpu_backend(const ParakeetCtcModel & m);
 // Lets hosts treat the CPU backend as expected, not a GPU regression.
 bool        model_gpu_unsupported(const ParakeetCtcModel & m);
 std::string model_active_backend_name(const ParakeetCtcModel & m);
+// The ggml device name of the active backend, as ggml_backend_dev_by_name finds it.
+std::string model_active_device_name(const ParakeetCtcModel & m);
 ggml_backend_t model_active_backend(ParakeetCtcModel & m);
 
 // True when the FastConformer encoder runs on the Apple Core ML sidecar (ANE/GPU)

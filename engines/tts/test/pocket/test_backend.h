@@ -30,7 +30,7 @@ inline void check_pocket_backend(const char * actual, bool gpu) {
     const bool metal = name.find("MTL") == 0 || name == "Metal";
     const bool cuda = name.find("CUDA") == 0;
     const bool vulkan = name.find("Vulkan") == 0;
-    const bool opencl = name.find("OpenCL") == 0;
+    const bool opencl = name.find("OpenCL") == 0 || name.find("GPUOpenCL") == 0;
     const bool matches = requested.empty() ? metal || cuda || vulkan || opencl :
         (requested == "metal" && metal) || (requested == "cuda" && cuda) ||
         (requested == "vulkan" && vulkan) || (requested == "opencl" && opencl);

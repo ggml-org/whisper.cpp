@@ -500,7 +500,7 @@ FitResult TranscribeModel::measure_weights() {
     FitResult result;
     const auto device = ggml_backend_get_device(impl_->backend);
     if (!device) fail("no compute backend available");
-    result.device_name = ggml_backend_name(impl_->backend);
+    result.device_name = ggml_backend_dev_name(device);
     result.device_is_cpu = backend_is_cpu(impl_->backend);
     result.device_shares_host_memory = backend_shares_host_memory(impl_->backend);
     size_t free = 0, total = 0;

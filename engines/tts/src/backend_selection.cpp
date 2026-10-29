@@ -257,6 +257,9 @@ int64_t first_tensor_hexagon_cannot_run(const gguf_context * g) {
 bool backend_shares_host_memory(ggml_backend_t backend) {
     ggml_backend_dev_t dev = backend ? ggml_backend_get_device(backend) : nullptr;
     if (!dev) return false;
+#if defined(__ANDROID__)
+    if (backend_is_opencl(backend)) return true;
+#endif
     const enum ggml_backend_dev_type type = ggml_backend_dev_type(dev);
     return type == GGML_BACKEND_DEVICE_TYPE_CPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU ||
            backend_is_metal(backend) || backend_is_hexagon(backend);

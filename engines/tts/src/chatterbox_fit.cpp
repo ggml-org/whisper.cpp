@@ -100,7 +100,7 @@ FitResult fit_params(const FitOptions & opts) {
         r.reason = "no-backend-device";
         return r;
     }
-    r.device_name   = ggml_backend_name(backend);
+    r.device_name   = ggml_backend_dev_name(dev);
     r.device_is_cpu = ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
     r.device_shares_host_memory = ::tts_cpp::detail::backend_shares_host_memory(backend);
     {

@@ -134,7 +134,10 @@ Backend selection and model-specific validation are documented in
 [docs/backends.md](docs/backends.md) and [docs/testing.md](docs/testing.md).
 Metadata-only memory preflight covers MOSS Delay/TTSD and MOSS-SoundEffect,
 including text/diffusion/decode workloads for sound effects. Entry points are indexed in
-[docs/api.md](docs/api.md#memory-fit-preflight).
+[docs/api.md](docs/api.md#memory-fit-preflight). Every fit result names its device
+by the ggml device name, and a device that shares host memory and reports none
+of its own carries the CPU's figures; see
+[memory fit results](../../README.md#memory-fit-results).
 
 ## Performance
 

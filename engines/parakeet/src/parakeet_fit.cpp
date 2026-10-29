@@ -337,7 +337,7 @@ FitResult fit_params(const FitOptions & opts) {
 
     r.model_type    = model_type_name(model.model_type);
     r.model_variant = model.model_variant;
-    r.device_name   = model_active_backend_name(model);
+    r.device_name   = model_active_device_name(model);
 
     const bool is_nemotron = model.model_type == ParakeetModelType::NEMOTRON;
 

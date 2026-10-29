@@ -37,7 +37,7 @@ inline FitResult fit_device(ggml_backend_t backend) {
     FitResult result;
     const auto device = ggml_backend_get_device(backend);
     if (!device) throw std::runtime_error("no compute backend available");
-    result.device_name = ggml_backend_name(backend);
+    result.device_name = ggml_backend_dev_name(device);
     result.device_is_cpu = ggml_backend_dev_type(device) == GGML_BACKEND_DEVICE_TYPE_CPU;
     result.device_shares_host_memory = ::tts_cpp::detail::backend_shares_host_memory(backend);
     size_t free = 0, total = 0;

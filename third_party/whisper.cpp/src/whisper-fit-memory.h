@@ -4,6 +4,7 @@
 #include "ggml-hexagon.h"
 
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <algorithm>
 #include <vector>
@@ -41,12 +42,26 @@ struct whisper_fit_memory_info {
     size_t total_bytes = 0;
 };
 
+// Android's OpenCL GPUs (Adreno, Mali) draw their buffers from host RAM but
+// do not report unified memory.
+inline bool whisper_fit_is_android_opencl(ggml_backend_dev_t dev) {
+#if defined(__ANDROID__)
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    const char * name = reg ? ggml_backend_reg_name(reg) : nullptr;
+    return name != nullptr && std::strcmp(name, "OpenCL") == 0;
+#else
+    (void) dev;
+    return false;
+#endif
+}
+
 inline whisper_fit_memory_info whisper_fit_query_memory(ggml_backend_dev_t dev) {
     ggml_backend_dev_props props = {};
     ggml_backend_dev_get_props(dev, &props);
     whisper_fit_memory_info info;
     info.shares_host = props.type == GGML_BACKEND_DEVICE_TYPE_CPU ||
-                       props.type == GGML_BACKEND_DEVICE_TYPE_IGPU || props.memory_unified;
+                       props.type == GGML_BACKEND_DEVICE_TYPE_IGPU || props.memory_unified ||
+                       whisper_fit_is_android_opencl(dev);
     info.free_bytes = props.memory_free;
     info.total_bytes = props.memory_total;
     if (info.shares_host && info.total_bytes == 0) {

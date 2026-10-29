@@ -992,8 +992,10 @@ tts_cpp::acestep::FitPool fit_test_pool(ggml_backend_dev_t dev, bool shares_host
 
 void test_fit_pool_sharing() {
     using tts_cpp::acestep::backend_requested_init;
+    using tts_cpp::acestep::FIT_OPENCL_SHARES_HOST_MEMORY;
     using tts_cpp::acestep::fit_device_shares_host_memory;
     using tts_cpp::acestep::fit_pool_for_device;
+    using tts_cpp::acestep::fit_pool_from_memory;
     using tts_cpp::acestep::FitPool;
 
     CHECK(fit_device_shares_host_memory(GGML_BACKEND_DEVICE_TYPE_CPU, "CPU", 32 * FIT_TEST_GIB));
@@ -1001,7 +1003,24 @@ void test_fit_pool_sharing() {
     CHECK(fit_device_shares_host_memory(GGML_BACKEND_DEVICE_TYPE_GPU, "MTL", 24 * FIT_TEST_GIB));
     CHECK(fit_device_shares_host_memory(GGML_BACKEND_DEVICE_TYPE_GPU, "HTP", 0));
     CHECK(!fit_device_shares_host_memory(GGML_BACKEND_DEVICE_TYPE_GPU, "CUDA", 8 * FIT_TEST_GIB));
-    CHECK(!fit_device_shares_host_memory(GGML_BACKEND_DEVICE_TYPE_GPU, "OpenCL", 4 * FIT_TEST_GIB));
+    CHECK(fit_device_shares_host_memory(GGML_BACKEND_DEVICE_TYPE_GPU, "OpenCL", 4 * FIT_TEST_GIB) ==
+          FIT_OPENCL_SHARES_HOST_MEMORY);
+
+    int                      gpu_tag = 0;
+    const ggml_backend_dev_t gpu     = fit_test_device(gpu_tag);
+
+    const FitPool silent = fit_pool_from_memory(gpu, GGML_BACKEND_DEVICE_TYPE_GPU, "HTP", 0, 0, 12 * FIT_TEST_GIB,
+                                                16 * FIT_TEST_GIB);
+    CHECK(silent.device == gpu);
+    CHECK(silent.shares_host_memory);
+    CHECK(silent.free_bytes == 12 * FIT_TEST_GIB);
+    CHECK(silent.total_bytes == 16 * FIT_TEST_GIB);
+
+    const FitPool discrete = fit_pool_from_memory(gpu, GGML_BACKEND_DEVICE_TYPE_GPU, "CUDA", 6 * FIT_TEST_GIB,
+                                                  8 * FIT_TEST_GIB, 12 * FIT_TEST_GIB, 16 * FIT_TEST_GIB);
+    CHECK(!discrete.shares_host_memory);
+    CHECK(discrete.free_bytes == 6 * FIT_TEST_GIB);
+    CHECK(discrete.total_bytes == 8 * FIT_TEST_GIB);
 
     ggml_backend_t cpu = backend_requested_init("cpu");
     CHECK(cpu != nullptr);

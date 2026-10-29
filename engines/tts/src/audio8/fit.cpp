@@ -159,28 +159,20 @@ FitResult fit_params(const FitOptions & opts) {
         r.reason = "no-backend-device";
         return r;
     }
-    r.device_name   = ggml_backend_name(backend);
+    r.device_name   = ggml_backend_dev_name(dev);
     r.device_is_cpu = ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
-    // Unified-memory devices (CPU, integrated GPUs, Apple Metal) draw the
-    // "device" figure from the same physical RAM the host-side buffers live
-    // in, so the verdict must charge both against it.
-    r.device_shares_host_memory =
-        r.device_is_cpu ||
-        ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_IGPU ||
-        ::tts_cpp::detail::backend_is_metal(backend);
+    // Unified-memory devices draw the "device" figure from the same physical
+    // RAM the host-side buffers live in, so the verdict charges both against it.
+    r.device_shares_host_memory = ::tts_cpp::detail::backend_shares_host_memory(backend);
     {
+        // A device that shares host memory and reports none of its own
+        // (Hexagon) takes the host's figures.
         size_t free_b = 0, total_b = 0;
-        ggml_backend_dev_memory(dev, &free_b, &total_b);
+        ::tts_cpp::detail::backend_memory(backend, free_b, total_b);
         r.device_free_bytes  = free_b;
         r.device_total_bytes = total_b;
-        // A device whose memory getter returns total == 0 has no reliable
-        // telemetry (ggml-hexagon reports zero today; see
-        // ggml_backend_hexagon_device_get_memory). Returning Failure here
-        // would compare positive required bytes against zero and verdict
-        // "does-not-fit" even on a device where synthesis works. Treat
-        // this as a distinct Error so callers can tell "verdict unknown"
-        // apart from "verdict says no" and either fall back to a
-        // device-side probe or run the engine and watch for OOM.
+        // A discrete device that reports no memory cannot be compared
+        // against, so it is an error rather than a refusal.
         if (total_b == 0) {
             r.reason = "device-memory-unknown";
             return r;

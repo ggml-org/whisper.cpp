@@ -2956,6 +2956,15 @@ std::string model_active_backend_name(const ParakeetCtcModel & m) {
     return name ? std::string(name) : std::string("CPU");
 }
 
+std::string model_active_device_name(const ParakeetCtcModel & m) {
+    if (!m.impl) return "CPU";
+    ggml_backend_t b = m.impl->backend_active;
+    if (!b) return "CPU";
+    ggml_backend_dev_t dev = ggml_backend_get_device(b);
+    const char * name = dev ? ggml_backend_dev_name(dev) : nullptr;
+    return name ? std::string(name) : std::string("CPU");
+}
+
 #ifdef PARAKEET_USE_COREML
 CoremlDiarizers * model_coreml_diarizers(const ParakeetCtcModel & m) {
     return m.impl ? m.impl->coreml_diarizers.get() : nullptr;

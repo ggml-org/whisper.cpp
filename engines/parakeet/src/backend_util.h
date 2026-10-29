@@ -188,24 +188,29 @@ inline ggml_backend_buffer_type_t weight_buffer_type(ggml_backend_t b) {
     return extra && extra[0] ? extra[0] : fallback;
 }
 
-// Unified-memory devices (CPU, integrated GPUs, Apple Metal, Hexagon) draw
-// device buffers from the same RAM the host-side buffers live in, so a memory
-// verdict must charge both against it. Discrete GPUs keep the pools separate.
+// Unified-memory devices (CPU, integrated GPUs, Apple Metal, Hexagon, Android's
+// OpenCL GPUs) draw device buffers from the same RAM the host-side buffers live
+// in, so a memory verdict must charge both against it. Discrete GPUs keep the
+// pools separate.
 inline bool backend_shares_host_memory(ggml_backend_t b) {
     ggml_backend_dev_t dev = b ? ggml_backend_get_device(b) : nullptr;
+#if defined(__ANDROID__)
+    if (backend_is_opencl(b)) return true;
+#endif
     return backend_is_cpu(b) || backend_is_metal(b) || backend_is_hexagon(b) ||
         (dev && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_IGPU);
 }
 
-// Hexagon sessions allocate host RAM through rpcmem and may report no memory
-// of their own; their buffers then compete with the host for the CPU's pool.
+// A device that shares host memory and reports none of its own (Hexagon, which
+// allocates host RAM through rpcmem) competes with the host for the CPU's pool,
+// so it takes the CPU's figures.
 inline void backend_device_memory(ggml_backend_t b, size_t & free, size_t & total) {
     free = 0;
     total = 0;
     ggml_backend_dev_t dev = b ? ggml_backend_get_device(b) : nullptr;
     if (dev) ggml_backend_dev_memory(dev, &free, &total);
     ggml_backend_dev_t cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-    if (total == 0 && backend_is_hexagon(b) && cpu) ggml_backend_dev_memory(cpu, &free, &total);
+    if (total == 0 && backend_shares_host_memory(b) && cpu) ggml_backend_dev_memory(cpu, &free, &total);
 }
 
 // Hexagon's HMX matmul writes its result through F16, so an element beyond the

@@ -121,7 +121,7 @@ FitResult fit_params(const FitOptions & opts) {
         r.reason = "no-backend-device";
         return r;
     }
-    r.device_name   = ggml_backend_name(backend);
+    r.device_name   = ggml_backend_dev_name(dev);
     r.device_is_cpu = ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
     // Unified-memory devices (CPU, integrated GPUs, Apple Metal, Hexagon)
     // draw the "device" figure from the same physical RAM the host-side
