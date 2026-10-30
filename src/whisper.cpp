@@ -7602,6 +7602,24 @@ int whisper_full_with_state(
                         }
                     }
 
+                    {
+                        auto & tokens = decoder.sequence.tokens;
+                        if (tokens.size() >= 9) {
+                            bool trigram_repeat = true;
+                            for (int k = 0; k < 3 && trigram_repeat; k++) {
+                                if (tokens[tokens.size() - 1 - k].id != tokens[tokens.size() - 4 - k].id ||
+                                    tokens[tokens.size() - 1 - k].id != tokens[tokens.size() - 7 - k].id) {
+                                    trigram_repeat = false;
+                                }
+                            }
+                            if (trigram_repeat) {
+                                WHISPER_LOG_DEBUG("%s: decoder %d: trigram repetition detected, forcing EOT\n", __func__, j);
+                                completed = true;
+                                continue;
+                            }
+                        }
+                    }
+
                     // sometimes, the decoding can get stuck in a repetition loop
                     // this is an attempt to mitigate such cases - we flag the decoding as failed and use a fallback strategy
                     if (i == n_max - 1 && (result_len == 0 || seek_delta < 100*WHISPER_CHUNK_SIZE/2)) {
