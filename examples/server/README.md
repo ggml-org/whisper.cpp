@@ -44,7 +44,7 @@ options:
   -m FNAME,  --model FNAME       [models/ggml-base.en.bin] model path
   -oved D,   --ov-e-device DNAME [CPU    ] the OpenVINO device used for encode inference
   -dtw MODEL --dtw MODEL         [       ] compute token-level timestamps
-  --host HOST,                   [127.0.0.1] Hostname/ip-adress for the server
+  --host HOST,                   [127.0.0.1] Hostname/ip-adress for the server, or a unix socket path ending in .sock
   --port PORT,                   [8080   ] Port number for the server
   --public PATH,                 [examples/server/public] Path to the public folder
   --request-path PATH,           [       ] Request path for all requests
