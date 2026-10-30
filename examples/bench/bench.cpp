@@ -15,6 +15,7 @@ struct whisper_params {
 
     bool use_gpu    = true;
     bool flash_attn = true;
+    int32_t gpu_device = 0;
 };
 
 void whisper_print_usage(int argc, char ** argv, const whisper_params & params);
@@ -33,6 +34,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-ng"    || arg == "--no-gpu")        { params.use_gpu    = false; }
         else if (arg == "-fa"    || arg == "--flash-attn")    { params.flash_attn = true; }
         else if (arg == "-nfa"   || arg == "--no-flash-attn") { params.flash_attn = false; }
+        else if (arg == "-d"     || arg == "--device")        { params.gpu_device = std::stoi(argv[++i]); }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             whisper_print_usage(argc, argv, params);
@@ -55,6 +57,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "                             %-7s  0 - whisper\n",                                 "");
     fprintf(stderr, "                             %-7s  1 - memcpy\n",                                  "");
     fprintf(stderr, "                             %-7s  2 - ggml_mul_mat\n",                            "");
+    fprintf(stderr, "  -d N,     --device N      [%-7d] GPU device index\n",                            params.gpu_device);
     fprintf(stderr, "  -ng,      --no-gpu        [%-7s] disable GPU\n",                                 params.use_gpu ? "false" : "true");
     fprintf(stderr, "  -fa,      --flash-attn    [%-7s] enable flash attention\n",                      params.flash_attn ? "true" : "false");
     fprintf(stderr, "  -nfa,     --no-flash-attn [%-7s] disable flash attention\n",                     params.flash_attn ? "false" : "true");
@@ -68,6 +71,7 @@ static int whisper_bench_full(const whisper_params & params) {
 
     cparams.use_gpu    = params.use_gpu;
     cparams.flash_attn = params.flash_attn;
+    cparams.gpu_device = params.gpu_device;
 
     {
         fprintf(stderr, "\n");
