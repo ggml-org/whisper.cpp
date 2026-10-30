@@ -944,6 +944,8 @@ struct whisper_state {
     bool has_vad_segments = false;
 
     std::vector<vad_time_mapping> vad_mapping_table;
+
+    std::vector<float> short_pad_buf;
 };
 
 struct whisper_context {
@@ -6992,6 +6994,15 @@ int whisper_full_with_state(
 
     result_all.clear();
 
+    const int min_samples = (int) (WHISPER_SAMPLE_RATE * 1.5f);
+    if (n_samples > 0 && n_samples < min_samples) {
+        state->short_pad_buf.resize(min_samples, 0.0f);
+        std::copy(samples, samples + n_samples, state->short_pad_buf.begin());
+        std::fill(state->short_pad_buf.begin() + n_samples, state->short_pad_buf.end(), 0.0f);
+        samples = state->short_pad_buf.data();
+        n_samples = min_samples;
+    }
+
     if (n_samples > 0) {
         // compute log mel spectrogram
         if (whisper_pcm_to_mel_with_state(ctx, state, samples, n_samples, params.n_threads) != 0) {
@@ -7040,7 +7051,7 @@ int whisper_full_with_state(
     // if length of spectrogram is less than 100ms (10 frames), then return
     // basically don't process anything that is less than 100ms
     // ref: https://github.com/ggml-org/whisper.cpp/issues/2065
-    const int delta_min = 10;
+    const int delta_min = (seek_end > 0 && seek_end < seek_start + 20) ? 1 : 10;
 
     if (seek_end < seek_start + delta_min) {
         WHISPER_LOG_WARN("%s: input is too short - %d ms < 100 ms. consider padding the input audio with silence\n", __func__, (seek_end - seek_start)*10);
