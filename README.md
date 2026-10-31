@@ -27,7 +27,7 @@ High-performance inference of [OpenAI's Whisper](https://github.com/openai/whisp
 - [AMD ROCm GPU support](#amd-rocm-gpu-support)
 - [AMD Ryzen AI NPU Support](#amd-ryzen-ai-npu-support)
 - [OpenVINO Support](#openvino-support)
-- [Ascend NPU Support](#ascend-npu-support)
+- [Huawei Ascend NPU Support](#ascend-npu-support)
 - [Moore Threads GPU Support](#moore-threads-gpu-support)
 - [C-style API](https://github.com/ggml-org/whisper.cpp/blob/master/include/whisper.h)
 - [Voice Activity Detection (VAD)](#voice-activity-detection-vad)
@@ -484,14 +484,14 @@ cmake -B build -DGGML_BLAS=1
 cmake --build build -j --config Release
 ```
 
-## Ascend NPU support
+## Huawei Ascend NPU support {#ascend-npu-support}
 
-Ascend NPU provides inference acceleration via [`CANN`](https://www.hiascend.com/en/software/cann) and AI cores.
+Huawei Ascend NPU provides inference acceleration via [`CANN`](https://www.hiascend.com/en/software/cann) and AI cores.
 
-First, check if your Ascend NPU device is supported:
+First, check if your Huawei Ascend NPU device is supported:
 
 **Verified devices**
-| Ascend NPU                    | Status  |
+| Huawei Ascend NPU             | Status  |
 |:-----------------------------:|:-------:|
 | Atlas 300T A2                 | Support |
 | Atlas 300I Duo                | Support |
@@ -513,8 +513,8 @@ Run the inference examples as usual, for example:
 
 *Notes:*
 
-- If you have trouble with Ascend NPU device, please create a issue with **[CANN]** prefix/tag.
-- If you run successfully with your Ascend NPU device, please help update the table `Verified devices`.
+- If you have trouble with Huawei Ascend NPU device, please create a issue with **[CANN]** prefix/tag.
+- If you run successfully with your Huawei Ascend NPU device, please help update the table `Verified devices`.
 
 ## Moore Threads GPU support
 
