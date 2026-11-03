@@ -501,11 +501,63 @@ inline static uint8x16_t ggml_vqtbl1q_u8(uint8x16_t a, uint8x16_t b) {
 #define ggml_int8x16x2_t  int8x16x2_t
 #define ggml_int8x16x4_t  int8x16x4_t
 
+#if defined(__GNUC__) && (__GNUC__ < 8)
+
+static inline int16x8x2_t ggml_compat_vld1q_s16_x2(const int16_t *p) {
+    int16x8x2_t r;
+    r.val[0] = vld1q_s16(p);
+    r.val[1] = vld1q_s16(p + 8);
+    return r;
+}
+
+static inline uint8x16x2_t ggml_compat_vld1q_u8_x2(const uint8_t *p) {
+    uint8x16x2_t r;
+    r.val[0] = vld1q_u8(p);
+    r.val[1] = vld1q_u8(p + 16);
+    return r;
+}
+
+static inline uint8x16x4_t ggml_compat_vld1q_u8_x4(const uint8_t *p) {
+    uint8x16x4_t r;
+    r.val[0] = vld1q_u8(p);
+    r.val[1] = vld1q_u8(p + 16);
+    r.val[2] = vld1q_u8(p + 32);
+    r.val[3] = vld1q_u8(p + 48);
+    return r;
+}
+
+static inline int8x16x2_t ggml_compat_vld1q_s8_x2(const int8_t *p) {
+    int8x16x2_t r;
+    r.val[0] = vld1q_s8(p);
+    r.val[1] = vld1q_s8(p + 16);
+    return r;
+}
+
+static inline int8x16x4_t ggml_compat_vld1q_s8_x4(const int8_t *p) {
+    int8x16x4_t r;
+    r.val[0] = vld1q_s8(p);
+    r.val[1] = vld1q_s8(p + 16);
+    r.val[2] = vld1q_s8(p + 32);
+    r.val[3] = vld1q_s8(p + 48);
+    return r;
+}
+
+#define ggml_vld1q_s16_x2 ggml_compat_vld1q_s16_x2
+#define ggml_vld1q_u8_x2  ggml_compat_vld1q_u8_x2
+#define ggml_vld1q_u8_x4  ggml_compat_vld1q_u8_x4
+#define ggml_vld1q_s8_x2  ggml_compat_vld1q_s8_x2
+#define ggml_vld1q_s8_x4  ggml_compat_vld1q_s8_x4
+
+#else
+
 #define ggml_vld1q_s16_x2 vld1q_s16_x2
 #define ggml_vld1q_u8_x2  vld1q_u8_x2
 #define ggml_vld1q_u8_x4  vld1q_u8_x4
 #define ggml_vld1q_s8_x2  vld1q_s8_x2
 #define ggml_vld1q_s8_x4  vld1q_s8_x4
+
+#endif
+
 #define ggml_vqtbl1q_s8   vqtbl1q_s8
 #define ggml_vqtbl1q_u8   vqtbl1q_u8
 
