@@ -1338,7 +1338,7 @@ static ggml_backend_t whisper_backend_init_gpu(const whisper_context_params & pa
     return result;
 }
 
-static std::vector<ggml_backend_t> whisper_backend_init(const whisper_context_params & params) {
+static std::vector<ggml_backend_t> whisper_backend_init(const whisper_context_params & params, const std::vector<ggml_backend_buffer_t> & weights) {
     std::vector<ggml_backend_t> result;
 
     ggml_backend_t backend_gpu = whisper_backend_init_gpu(params);
@@ -1366,6 +1366,16 @@ static std::vector<ggml_backend_t> whisper_backend_init(const whisper_context_pa
         throw std::runtime_error("failed to initialize CPU backend");
     }
     result.push_back(backend_cpu);
+
+    for (ggml_backend_buffer_t buf : weights) {
+        ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(buf);
+        bool reachable = false;
+        for (ggml_backend_t backend : result) { if (ggml_backend_supports_buft(backend, buft)) { reachable = true; break; } }
+        if (!reachable) {
+            WHISPER_LOG_ERROR("%s: no backend can use the weights buffer (%s)\n", __func__, ggml_backend_buft_name(buft));
+            for (ggml_backend_t backend : result) { ggml_backend_free(backend); } return {};
+        }
+    }
 
     return result;
 }
@@ -3460,7 +3470,7 @@ static std::string whisper_openvino_get_path_cache(std::string path_bin) {
 struct whisper_state * whisper_init_state(whisper_context * ctx) {
     whisper_state * state = new whisper_state;
 
-    state->backends = whisper_backend_init(ctx->params);
+    state->batch = {}; state->backends = whisper_backend_init(ctx->params, ctx->model.buffers);
     if (state->backends.empty()) {
         WHISPER_LOG_ERROR("%s: whisper_backend_init() failed\n", __func__);
         whisper_free_state(state);
@@ -4825,7 +4835,7 @@ static bool whisper_vad_init_context(whisper_vad_context * vctx) {
     whisper_context_params.use_gpu    = false;
     whisper_context_params.gpu_device = vctx->params.gpu_device;
 
-    vctx->backends = whisper_backend_init(whisper_context_params);
+    vctx->backends = whisper_backend_init(whisper_context_params, vctx->model.buffers);
     if (vctx->backends.empty()) {
         WHISPER_LOG_ERROR("%s: whisper_backend_init() failed\n", __func__);
         return false;
