@@ -43,6 +43,7 @@ struct whisper_params {
     bool no_timestamps = true;
     bool use_gpu       = true;
     bool flash_attn    = true;
+    bool run_once      = false;
 
     std::string language  = "en";
     std::string model     = "models/ggml-base.en.bin";
@@ -80,6 +81,7 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-ng"    || arg == "--no-gpu")        { params.use_gpu       = false; }
         else if (arg == "-fa"    || arg == "--flash-attn")    { params.flash_attn    = true; }
         else if (arg == "-nfa"   || arg == "--no-flash-attn") { params.flash_attn    = false; }
+        else if (arg == "-ro"    || arg == "--run-once")      { params.run_once      = true; }
         else if (arg == "-l"     || arg == "--language")      { params.language      = argv[++i]; }
         else if (arg == "-m"     || arg == "--model")         { params.model         = argv[++i]; }
         else if (arg == "-f"     || arg == "--file")          { params.fname_out     = argv[++i]; }
@@ -119,6 +121,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -ng,        --no-gpu         [%-7s] disable GPU\n",                                 params.use_gpu ? "false" : "true");
     fprintf(stderr, "  -fa,        --flash-attn     [%-7s] enbale flash attention\n",                      params.flash_attn ? "true" : "false");
     fprintf(stderr, "  -nfa,       --no-flash-attn  [%-7s] disable flash attention\n",                     params.flash_attn ? "false" : "true");
+    fprintf(stderr, "  -ro,        --run-once       [%-7s] run once mode: exit after the first command\n", params.run_once ? "true" : "false");
     fprintf(stderr, "  -l LANG,    --language LANG  [%-7s] spoken language\n",                             params.language.c_str());
     fprintf(stderr, "  -m FNAME,   --model FNAME    [%-7s] model path\n",                                  params.model.c_str());
     fprintf(stderr, "  -f FNAME,   --file FNAME     [%-7s] text output file name\n",                       params.fname_out.c_str());
@@ -456,6 +459,9 @@ static int process_command_list(struct whisper_context * ctx, audio_async &audio
                     if (fout.is_open()) {
                         fout << best_command << std::endl;
                     }
+                    if (params.run_once) {
+                        return 0;
+                    }
                 }
             }
 
@@ -538,7 +544,10 @@ static int always_prompt_transcription(struct whisper_context * ctx, audio_async
                         fout << command << std::endl;
                     }
                 }
-
+                
+                if (params.run_once) {
+                    return 0;
+                }
                 fprintf(stdout, "\n");
 
                 audio.clear();
@@ -674,6 +683,9 @@ static int process_general_transcription(struct whisper_context * ctx, audio_asy
                         fprintf(stdout, "%s: Command '%s%s%s', (t = %d ms)\n", __func__, "\033[1m", command.c_str(), "\033[0m", (int) t_ms);
                         if (fout.is_open()) {
                             fout << command << std::endl;
+                        }
+                        if (params.run_once) {
+                            return 0;
                         }
                     }
 
