@@ -17,10 +17,18 @@ on:
 
   pull_request:
     types: [opened, synchronize, reopened]
-    paths-ignore:
-      - 'bindings/ruby/**'
-      - 'bindings/go/**'
-      - 'examples/addon.node/**'
+    paths: ['.github/workflows/build-sanitize.yml',
+            '**/CMakeLists.txt',
+            '**/Makefile',
+            '**/*.mk',
+            '**/*.cmake',
+            '**/*.h',
+            '**/*.hpp',
+            '**/*.c',
+            '**/*.cpp',
+            '!bindings/ruby/**',
+            '!bindings/go/**',
+            '!examples/addon.node/**']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
