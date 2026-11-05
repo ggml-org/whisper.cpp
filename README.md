@@ -27,7 +27,7 @@ High-performance inference of [OpenAI's Whisper](https://github.com/openai/whisp
 - [AMD ROCm GPU support](#amd-rocm-gpu-support)
 - [AMD Ryzen AI NPU Support](#amd-ryzen-ai-npu-support)
 - [OpenVINO Support](#openvino-support)
-- [Huawei Ascend NPU Support](#ascend-npu-support)
+- [Huawei Ascend NPU Support](#huawei-ascend-npu-support)
 - [Moore Threads GPU Support](#moore-threads-gpu-support)
 - [C-style API](https://github.com/ggml-org/whisper.cpp/blob/master/include/whisper.h)
 - [Voice Activity Detection (VAD)](#voice-activity-detection-vad)
