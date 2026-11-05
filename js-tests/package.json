@@ -1,0 +1,12 @@
+{
+  "name": "whispercpp-js-tests",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "mocha \"*.spec.js\""
+  },
+  "devDependencies": {
+    "mocha": "^10.6.0",
+    "chai": "^4.4.1"
+  }
+}
