@@ -1855,7 +1855,7 @@ static struct ggml_cgraph * parakeet_build_graph_encode(parakeet_context & pctx,
                     size_t offset = rel_pos_scores->nb[0] * (center+1);
 
                     rel_pos_scores = ggml_view_3d(ctx0, rel_pos_scores,
-                                                  n_frame, pos_window, n_head_cur,
+                                                  n_frame, n_frame, n_head_cur,
                                                   (pos_window) * 4,
                                                   rel_pos_scores->nb[2],
                                                   offset);
