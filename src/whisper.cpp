@@ -944,6 +944,8 @@ struct whisper_state {
     bool has_vad_segments = false;
 
     std::vector<vad_time_mapping> vad_mapping_table;
+
+    std::vector<float> mel_pad_buf;
 };
 
 struct whisper_context {
@@ -3258,9 +3260,11 @@ static bool log_mel_spectrogram(
     int64_t stage_1_pad = WHISPER_SAMPLE_RATE * 30;
     int64_t stage_2_pad = frame_size / 2;
 
-    // Initialize a vector and copy data from C array to it.
-    std::vector<float> samples_padded;
-    samples_padded.resize(n_samples + stage_1_pad + stage_2_pad * 2);
+    auto & samples_padded = wstate.mel_pad_buf;
+    const size_t needed = n_samples + stage_1_pad + stage_2_pad * 2;
+    if (samples_padded.size() < needed) {
+        samples_padded.resize(needed);
+    }
     std::copy(samples, samples + n_samples, samples_padded.begin() + stage_2_pad);
 
     // pad 30 seconds of zeros at the end of audio (480,000 samples) + reflective pad 200 samples at the end of audio
