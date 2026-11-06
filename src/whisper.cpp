@@ -478,11 +478,11 @@ struct whisper_segment {
 struct whisper_batch {
     int32_t n_tokens = 0;
 
-    whisper_token  *  token = nullptr;
-    whisper_pos    *  pos = nullptr;
+    whisper_token  *  token    = nullptr;
+    whisper_pos    *  pos      = nullptr;
     int32_t        *  n_seq_id = nullptr; // always 1, here for consistency with llama.cpp
-    whisper_seq_id ** seq_id = nullptr;   // null terminated
-    int8_t         *  logits = nullptr;
+    whisper_seq_id ** seq_id   = nullptr;   // null terminated
+    int8_t         *  logits   = nullptr;
 };
 
 static struct whisper_batch whisper_batch_init(int32_t n_tokens, int32_t n_seq_max) {
