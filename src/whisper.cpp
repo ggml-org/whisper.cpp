@@ -476,17 +476,17 @@ struct whisper_segment {
 };
 
 struct whisper_batch {
-    int32_t n_tokens;
+    int32_t n_tokens = 0;
 
-    whisper_token  *  token;
-    whisper_pos    *  pos;
-    int32_t        *  n_seq_id; // always 1, here for consistency with llama.cpp
-    whisper_seq_id ** seq_id;   // null terminated
-    int8_t         *  logits;
+    whisper_token  *  token    = nullptr;
+    whisper_pos    *  pos      = nullptr;
+    int32_t        *  n_seq_id = nullptr; // always 1, here for consistency with llama.cpp
+    whisper_seq_id ** seq_id   = nullptr;   // null terminated
+    int8_t         *  logits   = nullptr;
 };
 
 static struct whisper_batch whisper_batch_init(int32_t n_tokens, int32_t n_seq_max) {
-    whisper_batch batch = { 0, nullptr, nullptr, nullptr, nullptr, nullptr, };
+    whisper_batch batch;
 
     batch.token    = (whisper_token *  ) malloc(sizeof(whisper_token)    * (n_tokens));
     batch.pos      = (whisper_pos *)     malloc(sizeof(whisper_pos)      * (n_tokens));
@@ -1368,6 +1368,27 @@ static std::vector<ggml_backend_t> whisper_backend_init(const whisper_context_pa
     result.push_back(backend_cpu);
 
     return result;
+}
+
+static bool whisper_backend_supports_buffers(const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_t> & buffers) {
+    for (ggml_backend_buffer_t buffer : buffers) {
+        ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(buffer);
+
+        bool supported = false;
+        for (ggml_backend_t backend : backends) {
+            if (ggml_backend_supports_buft(backend, buft)) {
+                supported = true;
+                break;
+            }
+        }
+
+        if (!supported) {
+            WHISPER_LOG_ERROR("%s: no backend can use the weights in buffer type %s\n", __func__, ggml_backend_buft_name(buft));
+            return false;
+        }
+    }
+
+    return true;
 }
 
 using buft_list_t = std::vector<std::pair<ggml_backend_dev_t, ggml_backend_buffer_type_t>>;
@@ -3463,6 +3484,11 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
     state->backends = whisper_backend_init(ctx->params);
     if (state->backends.empty()) {
         WHISPER_LOG_ERROR("%s: whisper_backend_init() failed\n", __func__);
+        whisper_free_state(state);
+        return nullptr;
+    }
+
+    if (!whisper_backend_supports_buffers(state->backends, ctx->model.buffers)) {
         whisper_free_state(state);
         return nullptr;
     }
