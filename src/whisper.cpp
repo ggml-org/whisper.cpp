@@ -16,6 +16,10 @@
 #include "openvino/whisper-openvino-encoder.h"
 #endif
 
+#ifdef WHISPER_USE_RKNN
+#include "rknn/whisper-rknn-encoder.h"
+#endif
+
 #ifdef WHISPER_USE_VITISAI
 #include "vitisai/whisper-vitisai-encoder.h"
 #endif
@@ -909,6 +913,10 @@ struct whisper_state {
 
 #ifdef WHISPER_USE_OPENVINO
     whisper_openvino_context * ctx_openvino = nullptr;
+#endif
+
+#ifdef WHISPER_USE_RKNN
+    whisper_rknn_context * ctx_rknn = nullptr;
 #endif
 
 #ifdef WHISPER_USE_VITISAI
@@ -2004,9 +2012,15 @@ static bool whisper_encode_external(const whisper_state & wstate) {
     const bool use_vitisai = wstate.ctx_vitisai != nullptr;
 #endif
 
+#ifndef WHISPER_USE_RKNN
+    const bool use_rknn = false;
+#else
+    const bool use_rknn = wstate.ctx_rknn != nullptr;
+#endif
+
     const bool use_aneforge = wstate.ctx_aneforge != nullptr;
 
-    return use_coreml || use_openvino || use_vitisai || use_aneforge;
+    return use_coreml || use_openvino || use_vitisai || use_rknn || use_aneforge;
 }
 
 static bool whisper_cross_external(const whisper_state & wstate) {
@@ -2481,6 +2495,10 @@ static bool whisper_encode_internal(
                 }
 #elif defined(WHISPER_USE_OPENVINO)
                 whisper_openvino_encode(wstate.ctx_openvino, mel, wstate.embd_enc);
+#elif defined(WHISPER_USE_RKNN)
+                if (!whisper_rknn_encode(wstate.ctx_rknn, mel, wstate.embd_enc)) {
+                    return false;
+                }
 #endif
             }
         }
@@ -3457,6 +3475,18 @@ static std::string whisper_openvino_get_path_cache(std::string path_bin) {
 }
 #endif
 
+#ifdef WHISPER_USE_RKNN
+// Replace .bin with -encoder.rknn, beside the ggml model (as for Core ML).
+static std::string whisper_rknn_get_path_encoder(std::string path_bin) {
+    auto pos = path_bin.rfind('.');
+    if (pos != std::string::npos) {
+        path_bin = path_bin.substr(0, pos);
+    }
+
+    return path_bin + "-encoder.rknn";
+}
+#endif
+
 struct whisper_state * whisper_init_state(whisper_context * ctx) {
     whisper_state * state = new whisper_state;
 
@@ -3553,6 +3583,21 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
         WHISPER_LOG_INFO("%s: Vitis AI encoder + cross projection model loaded\n", __func__);
     } else {
         WHISPER_LOG_INFO("%s: Vitis AI encoder model loaded\n", __func__);
+    }
+#endif
+
+#ifdef WHISPER_USE_RKNN
+    if (ctx->model.type == MODEL_BASE && !ctx->vocab.is_multilingual()) {
+        const auto path_rknn = whisper_rknn_get_path_encoder(ctx->path_model);
+
+        WHISPER_LOG_INFO("%s: loading RKNN model from '%s'\n", __func__, path_rknn.c_str());
+        state->ctx_rknn = whisper_rknn_init(path_rknn.c_str());
+        if (!state->ctx_rknn) {
+            WHISPER_LOG_ERROR("%s: failed to load RKNN encoder\n", __func__);
+            whisper_free_state(state);
+            return nullptr;
+        }
+        WHISPER_LOG_INFO("%s: RKNN encoder loaded\n", __func__);
     }
 #endif
 
@@ -3952,6 +3997,13 @@ void whisper_free_state(struct whisper_state * state) {
         if (state->ctx_openvino != nullptr) {
             whisper_openvino_free(state->ctx_openvino);
             state->ctx_openvino = nullptr;
+        }
+#endif
+
+#ifdef WHISPER_USE_RKNN
+        if (state->ctx_rknn != nullptr) {
+            whisper_rknn_free(state->ctx_rknn);
+            state->ctx_rknn = nullptr;
         }
 #endif
 
