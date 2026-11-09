@@ -5,6 +5,7 @@
 #endif
 
 #include "vitisai/whisper-vitisai-helpers.h"
+#include "whisper-logging.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -23,21 +24,21 @@ bool map_rai_file(const char * path, uint8_t ** buffer, size_t * size) {
 #ifdef _WIN32
     HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
-        std::fprintf(stderr, "%s: %d: Failed to open rai file '%s'\n", __func__, __LINE__, path);
+        WHISPER_LOG_ERROR("%s: %d: Failed to open rai file '%s'\n", __func__, __LINE__, path);
         return false;
     }
 
     LARGE_INTEGER fileSize;
     if (!GetFileSizeEx(hFile, &fileSize)) {
         CloseHandle(hFile);
-        std::fprintf(stderr, "%s: %d: Failed to get file size for rai file '%s'\n", __func__, __LINE__, path);
+        WHISPER_LOG_ERROR("%s: %d: Failed to get file size for rai file '%s'\n", __func__, __LINE__, path);
         return false;
     }
 
     HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, fileSize.QuadPart, NULL);
     if (hMapping == NULL) {
         CloseHandle(hFile);
-        std::fprintf(stderr, "%s: %d: Failed to create file mapping for rai file '%s'\n", __func__, __LINE__, path);
+        WHISPER_LOG_ERROR("%s: %d: Failed to create file mapping for rai file '%s'\n", __func__, __LINE__, path);
         return false;
     }
 
@@ -45,7 +46,7 @@ bool map_rai_file(const char * path, uint8_t ** buffer, size_t * size) {
     if (*buffer == NULL) {
         CloseHandle(hMapping);
         CloseHandle(hFile);
-        std::fprintf(stderr, "%s: %d: Failed to map rai file '%s'\n", __func__, __LINE__, path);
+        WHISPER_LOG_ERROR("%s: %d: Failed to map rai file '%s'\n", __func__, __LINE__, path);
         return false;
     }
     CloseHandle(hMapping);
@@ -55,21 +56,21 @@ bool map_rai_file(const char * path, uint8_t ** buffer, size_t * size) {
 #else
     FILE * fd = fopen(path, "rb");
     if (!fd) {
-        std::fprintf(stderr, "%s: %d: Failed to open rai file '%s'\n", __func__, __LINE__, path);
+        WHISPER_LOG_ERROR("%s: %d: Failed to open rai file '%s'\n", __func__, __LINE__, path);
         return false;
     }
 
     struct stat st;
     if (fstat(fileno(fd), &st) == -1) {
         fclose(fd);
-        std::fprintf(stderr, "%s: %d: Failed to get file size for rai file '%s'\n", __func__, __LINE__, path);
+        WHISPER_LOG_ERROR("%s: %d: Failed to get file size for rai file '%s'\n", __func__, __LINE__, path);
         return false;
     }
 
     *buffer = (uint8_t *) mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fileno(fd), 0);
     if (*buffer == MAP_FAILED) {
         fclose(fd);
-        std::fprintf(stderr, "%s: %d: Failed to mmap rai file '%s'\n", __func__, __LINE__, path);
+        WHISPER_LOG_ERROR("%s: %d: Failed to mmap rai file '%s'\n", __func__, __LINE__, path);
         return false;
     }
     fclose(fd);
@@ -140,14 +141,14 @@ static bool whisper_vitisai_validate_tensor_dtype(
         ggml_type runtime_dtype) {
     ggml_type expected_runtime_dtype = GGML_TYPE_COUNT;
     if (!whisper_flexml_dtype_to_ggml_type(model_dtype, &expected_runtime_dtype)) {
-        std::fprintf(stderr,
+        WHISPER_LOG_ERROR(
                 "%s: unsupported model dtype for %s: %s (supported: Float32/Float16/BFloat16)\n",
                 __func__, tensor_name, whisper_flexml_dtype_name(model_dtype));
         return false;
     }
 
     if (runtime_dtype != expected_runtime_dtype) {
-        std::fprintf(stderr,
+        WHISPER_LOG_ERROR(
                 "%s: %s dtype mismatch (runtime=%s, model=%s)\n",
                 __func__, tensor_name, ggml_type_name(runtime_dtype), whisper_flexml_dtype_name(model_dtype));
         return false;
@@ -189,7 +190,7 @@ static bool whisper_validate_shape(
         const std::vector<size_t> & expected_shape) {
     const std::vector<size_t> shape = whisper_canonical_shape(model_shape);
     if (shape != expected_shape) {
-        std::fprintf(stderr,
+        WHISPER_LOG_ERROR(
                 "%s: %s shape mismatch (runtime expected=%s, model=%s)\n",
                 __func__,
                 tensor_name,
@@ -230,12 +231,12 @@ bool whisper_vitisai_bind_tensor_data(
     const size_t model_bytes = meta.size;
     const size_t runtime_bytes = ggml_nbytes(runtime_tensor);
     if (model_bytes == 0 || runtime_bytes == 0) {
-        std::fprintf(stderr, "%s: %s sizes must be non-zero (model=%zu, runtime=%zu)\n",
+        WHISPER_LOG_ERROR("%s: %s sizes must be non-zero (model=%zu, runtime=%zu)\n",
                 __func__, tensor_name, model_bytes, runtime_bytes);
         return false;
     }
     if (runtime_bytes != model_bytes) {
-        std::fprintf(stderr,
+        WHISPER_LOG_ERROR(
                 "%s: %s tensor size mismatch (runtime=%zu B, model=%zu B). "
                 "VitisAI .rai requires exact context match; use matching -ac/model artifact.\n",
                 __func__, tensor_name, runtime_bytes, model_bytes);
@@ -247,7 +248,7 @@ bool whisper_vitisai_bind_tensor_data(
 }
 
 bool whisper_vitisai_resolve_io_binding(
-        [[maybe_unused]] const char * caller,
+        const char * caller,
         const std::vector<flexmlrt::client::ErtTensorType> & input_tensors,
         const std::vector<flexmlrt::client::ErtTensorType> & output_tensors,
         whisper_vitisai_io_binding * binding,
@@ -274,9 +275,7 @@ bool whisper_vitisai_resolve_io_binding(
         }
     }
     if (!found_named_mel) {
-#if defined(WHISPER_DEBUG)
-        std::fprintf(stderr, "%s: WARNING: mel input not found by name; falling back to input[0]\n", caller);
-#endif
+        WHISPER_LOG_WARN("%s: mel input not found by name; falling back to input[0]\n", caller);
     }
 
     if (output_tensors.empty()) {
@@ -295,9 +294,7 @@ bool whisper_vitisai_resolve_io_binding(
     }
 
     if (binding->embd_enc_out_idx < 0) {
-#if defined(WHISPER_DEBUG)
-        std::fprintf(stderr, "%s: WARNING: embd_enc output not found by name; falling back to output[0]\n", caller);
-#endif
+        WHISPER_LOG_WARN("%s: embd_enc output not found by name; falling back to output[0]\n", caller);
         binding->embd_enc_out_idx = 0;
     }
 
@@ -356,7 +353,7 @@ bool whisper_vitisai_all_tensors_claimed(
         const std::vector<bool> & claimed) {
     for (size_t i = 0; i < tensors.size(); ++i) {
         if (!claimed[i]) {
-            std::fprintf(stderr,
+            WHISPER_LOG_ERROR(
                     "%s: unsupported extra %s tensor at index %zu (name='%s'); strict contract expects only mapped %ss\n",
                     caller, tensor_kind, i, tensors[i].getMetadata().name.c_str(), tensor_kind);
             return false;
