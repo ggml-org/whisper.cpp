@@ -2121,8 +2121,6 @@ static struct ggml_cgraph * whisper_build_graph_encoder(
 
     WHISPER_ASSERT(!!kv_pad.buffer);
 
-    const int n_ctx_pad = GGML_PAD(n_ctx, 256);
-
     struct ggml_init_params params = {
         /*.mem_size   =*/ wstate.sched_encode.meta.size(),
         /*.mem_buffer =*/ wstate.sched_encode.meta.data(),
