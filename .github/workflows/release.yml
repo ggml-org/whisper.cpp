@@ -691,7 +691,7 @@ jobs:
     strategy:
       matrix:
         build: [Release]
-        cuda-toolkit: ['13.4']
+        cuda-toolkit: ['13.5']
 
     steps:
       - name: Clone repository
@@ -710,18 +710,18 @@ jobs:
       # nvcc cross-compiles for ARM64 from this x64 runner using the ARM64-targeting
       # host cl.exe; the CUDA runtime/cublas libs still need their own ARM64 archives
       # since the standard x64 CUDA packages don't ship ARM64 binaries.
-      - name: Install Cuda Toolkit 13.4 (ARM64 target)
+      - name: Install Cuda Toolkit ${{ matrix.cuda-toolkit }} (ARM64 target)
         run: |
-          $CUDA_TOOLKIT_DIR = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.4"
+          $CUDA_TOOLKIT_DIR = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v${{ matrix.cuda-toolkit }}"
           $CUDA_DOWNLOAD = "https://developer.download.nvidia.com/compute/cuda/redist"
 
           # Components versions
-          $CCCL_VER   = "13.3.4.2.1"
-          $CRT_VER    = "13.4.59"
-          $NVCC_VER   = "13.4.59"
-          $NVVM_VER   = "13.4.59"
-          $CUDART_VER = "13.4.49"
-          $CUBLAS_VER = "13.7.0.27"
+          $CCCL_VER   = "13.3.5.0.6"
+          $CRT_VER    = "13.5.37"
+          $NVCC_VER   = "13.5.37"
+          $NVVM_VER   = "13.5.37"
+          $CUDART_VER = "13.5.37"
+          $CUBLAS_VER = "13.10.0.20"
 
           mkdir -p $CUDA_TOOLKIT_DIR
           choco install unzip -y
