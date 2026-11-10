@@ -5,7 +5,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -33,16 +32,19 @@ bool whisper_vitisai_bind_tensor_data(
         const std::vector<size_t> & expected_shape,
         flexmlrt::client::ErtTensorType & io_tensor);
 
-#if defined(WHISPER_DEBUG)
+// Formats a tensor shape for logging, e.g. "[1, 80, 3000]".
 template <typename T>
-void whisper_vitisai_print_shape(const std::vector<T> & shape) {
-    std::fprintf(stderr, "[");
+std::string whisper_vitisai_shape_string(const std::vector<T> & shape) {
+    std::string out = "[";
     for (size_t i = 0; i < shape.size(); ++i) {
-        std::fprintf(stderr, "%s%lld", i == 0 ? "" : ", ", (long long) shape[i]);
+        if (i > 0) {
+            out += ", ";
+        }
+        out += std::to_string((long long) shape[i]);
     }
-    std::fprintf(stderr, "]");
+    out += "]";
+    return out;
 }
-#endif
 
 // Model IO tensor indices and metadata sizes resolved once at init time.
 struct whisper_vitisai_io_binding {

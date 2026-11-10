@@ -8,8 +8,8 @@
 #include "vitisai/whisper-vitisai-helpers.h"
 #include "FlexMLClient.h"
 #include "ggml.h"
+#include "whisper-logging.h"
 
-#include <cstdio>
 #include <cstdlib>
 #include <cmath>
 #include <memory>
@@ -65,7 +65,7 @@ static bool whisper_vitisai_get_cached_io_tensors(
 
 struct whisper_vitisai_context * whisper_vitisai_init(const char * path_model) {
     if (!path_model) {
-        std::fprintf(stderr, "%s: path_model is null\n", __func__);
+        WHISPER_LOG_ERROR("%s: path_model is null\n", __func__);
         return nullptr;
     }
 
@@ -95,26 +95,22 @@ struct whisper_vitisai_context * whisper_vitisai_init(const char * path_model) {
             options.extOptions["fbs_buffer_size"] = ctx->fbs_buffer_size;
             options.extOptions["cache_dir"] = std::string(".");
         } else {
-            std::fprintf(stderr, "%s: Failed to mmap rai file '%s'\n", __func__, ctx->model_path.c_str());
+            WHISPER_LOG_ERROR("%s: Failed to mmap rai file '%s'\n", __func__, ctx->model_path.c_str());
             delete ctx;
             return nullptr;
         }
     } else {
         options.deviceName = "stx";
-#if defined(WHISPER_DEBUG)
-        std::fprintf(stderr, "%s: Using default device name 'stx'\n", __func__);
-#endif
+        WHISPER_LOG_DEBUG("%s: using default device name 'stx'\n", __func__);
     }
 
     if (model_is_rai) {
 #if WHISPER_FLEXMLRT_LEGACY_RAI_OVERRIDES
         options.deviceName = "stx";
         options.subgraphName = "vaiml_par_0";
-#if defined(WHISPER_DEBUG)
-        std::fprintf(stderr,
+        WHISPER_LOG_DEBUG(
                 "%s: legacy FlexMLRT compile configuration detected; applying RAI overrides (device='stx', subgraph='vaiml_par_0')\n",
                 __func__);
-#endif // defined(WHISPER_DEBUG)
 #endif
     }
 
@@ -148,31 +144,29 @@ struct whisper_vitisai_context * whisper_vitisai_init(const char * path_model) {
 
 #if defined(WHISPER_DEBUG)
         {
-            std::fprintf(stderr, "%s: model has %zu input tensor(s)\n", __func__, input_tensors.size());
+            WHISPER_LOG_DEBUG("%s: model has %zu input tensor(s)\n", __func__, input_tensors.size());
             for (int i = 0; i < (int) input_tensors.size(); ++i) {
                 const auto & meta = input_tensors[i].getMetadata();
-                std::fprintf(stderr, "%s:   input[%d] name='%s' size=%zu shape=",
-                        __func__, i, meta.name.c_str(), (size_t) meta.size);
-                whisper_vitisai_helpers::whisper_vitisai_print_shape(meta.shape);
-                std::fprintf(stderr, "\n");
+                WHISPER_LOG_DEBUG("%s:   input[%d] name='%s' size=%zu shape=%s\n",
+                        __func__, i, meta.name.c_str(), (size_t) meta.size,
+                        whisper_vitisai_helpers::whisper_vitisai_shape_string(meta.shape).c_str());
             }
 
-            std::fprintf(stderr, "%s: model has %zu output tensor(s)\n", __func__, output_tensors.size());
+            WHISPER_LOG_DEBUG("%s: model has %zu output tensor(s)\n", __func__, output_tensors.size());
             for (int i = 0; i < (int) output_tensors.size(); ++i) {
                 const auto & meta = output_tensors[i].getMetadata();
-                std::fprintf(stderr, "%s:   output[%d] name='%s' size=%zu shape=",
-                        __func__, i, meta.name.c_str(), (size_t) meta.size);
-                whisper_vitisai_helpers::whisper_vitisai_print_shape(meta.shape);
-                std::fprintf(stderr, "\n");
+                WHISPER_LOG_DEBUG("%s:   output[%d] name='%s' size=%zu shape=%s\n",
+                        __func__, i, meta.name.c_str(), (size_t) meta.size,
+                        whisper_vitisai_helpers::whisper_vitisai_shape_string(meta.shape).c_str());
             }
 
-            std::fprintf(stderr, "%s: input index: mel=%d\n", __func__, ctx->mel_in_idx);
-            std::fprintf(stderr, "%s: output indices: embd_enc=%d cross_k=%d cross_v=%d\n",
+            WHISPER_LOG_DEBUG("%s: input index: mel=%d\n", __func__, ctx->mel_in_idx);
+            WHISPER_LOG_DEBUG("%s: output indices: embd_enc=%d cross_k=%d cross_v=%d\n",
                     __func__, ctx->embd_enc_out_idx, ctx->cross_k_out_idx, ctx->cross_v_out_idx);
         }
 #endif
     } catch (const std::exception & e) {
-        std::fprintf(stderr, "%s: Exception during Vitis AI runner creation: %s\n", __func__, e.what());
+        WHISPER_LOG_ERROR("%s: Exception during Vitis AI runner creation: %s\n", __func__, e.what());
         whisper_vitisai_free(ctx);
         return nullptr;
     }
@@ -188,9 +182,7 @@ void whisper_vitisai_free(struct whisper_vitisai_context * ctx) {
         return;
     }
 
-#if defined(WHISPER_DEBUG)
-    std::fprintf(stderr, "%s: releasing Vitis AI context for model '%s'\n", __func__, ctx->model_path.c_str());
-#endif
+    WHISPER_LOG_DEBUG("%s: releasing Vitis AI context for model '%s'\n", __func__, ctx->model_path.c_str());
     if (ctx->fbs_buffer) {
         whisper_vitisai_helpers::unmap_rai_file(ctx->fbs_buffer, ctx->fbs_buffer_size);
     }
@@ -206,34 +198,34 @@ static int whisper_vitisai_forward_impl(
         void * cross_k_data,
         void * cross_v_data) {
     if (!ctx || !mel || !out) {
-        std::fprintf(stderr, "%s: ctx/mel/out must not be null\n", __func__);
+        WHISPER_LOG_ERROR("%s: ctx/mel/out must not be null\n", __func__);
         return 0;
     }
 
     const bool with_cross = (cross_k_data != nullptr || cross_v_data != nullptr);
     if (with_cross && (!cross_k_data || !cross_v_data)) {
-        std::fprintf(stderr, "%s: cross_k_data/cross_v_data must both be set\n", __func__);
+        WHISPER_LOG_ERROR("%s: cross_k_data/cross_v_data must both be set\n", __func__);
         return 0;
     }
 
     if (ggml_n_dims(mel) != 2) {
-        std::fprintf(stderr, "%s: mel tensor expected to have 2 dims, got %d\n", __func__, ggml_n_dims(mel));
+        WHISPER_LOG_ERROR("%s: mel tensor expected to have 2 dims, got %d\n", __func__, ggml_n_dims(mel));
         return 0;
     }
 
     if (ggml_n_dims(out) != 2) {
-        std::fprintf(stderr, "%s: out tensor expected to have 2 dims, got %d\n", __func__, ggml_n_dims(out));
+        WHISPER_LOG_ERROR("%s: out tensor expected to have 2 dims, got %d\n", __func__, ggml_n_dims(out));
         return 0;
     }
 
     if (ctx->embd_enc_out_idx < 0 || ctx->embd_enc_out_idx >= (int) output_tensors.size()) {
-        std::fprintf(stderr, "%s: invalid embd_enc output index %d for %zu output tensor(s)\n",
+        WHISPER_LOG_ERROR("%s: invalid embd_enc output index %d for %zu output tensor(s)\n",
                 __func__, ctx->embd_enc_out_idx, output_tensors.size());
         return 0;
     }
 
     if (ctx->mel_in_idx < 0 || ctx->mel_in_idx >= (int) input_tensors.size()) {
-        std::fprintf(stderr, "%s: invalid mel input index %d for %zu input tensor(s)\n",
+        WHISPER_LOG_ERROR("%s: invalid mel input index %d for %zu input tensor(s)\n",
                 __func__, ctx->mel_in_idx, input_tensors.size());
         return 0;
     }
@@ -266,7 +258,7 @@ static int whisper_vitisai_forward_impl(
     if (with_cross) {
         if (ctx->cross_k_out_idx < 0 || ctx->cross_k_out_idx >= (int) output_tensors.size() ||
                 ctx->cross_v_out_idx < 0 || ctx->cross_v_out_idx >= (int) output_tensors.size()) {
-            std::fprintf(stderr, "%s: invalid cross output indices cross_k=%d cross_v=%d for %zu output tensor(s)\n",
+            WHISPER_LOG_ERROR("%s: invalid cross output indices cross_k=%d cross_v=%d for %zu output tensor(s)\n",
                     __func__, ctx->cross_k_out_idx, ctx->cross_v_out_idx, output_tensors.size());
             return 0;
         }
@@ -292,13 +284,11 @@ static int whisper_vitisai_forward_impl(
     try {
         ctx->runner->forward(input_tensors, output_tensors);
         clear_bound_data();
-#if defined(WHISPER_DEBUG)
-        std::fprintf(stderr, "%s: Vitis AI model inference %scompleted.\n",
+        WHISPER_LOG_DEBUG("%s: Vitis AI model inference %scompleted.\n",
                 __func__, with_cross ? "(encoder + cross proj) " : "");
-#endif
     } catch (const std::exception & e) {
         clear_bound_data();
-        std::fprintf(stderr, "%s: Exception during model inference: %s\n", __func__, e.what());
+        WHISPER_LOG_ERROR("%s: Exception during model inference: %s\n", __func__, e.what());
         return 0;
     }
 
@@ -309,7 +299,7 @@ int whisper_vitisai_encode(struct whisper_vitisai_context * ctx, struct ggml_ten
     std::vector<flexmlrt::client::ErtTensorType> * input_tensors_cached = nullptr;
     std::vector<flexmlrt::client::ErtTensorType> * output_tensors_cached = nullptr;
     if (!whisper_vitisai_get_cached_io_tensors(ctx, input_tensors_cached, output_tensors_cached)) {
-        std::fprintf(stderr, "%s: failed to acquire Vitis AI I/O tensors\n", __func__);
+        WHISPER_LOG_ERROR("%s: failed to acquire Vitis AI I/O tensors\n", __func__);
         return 0;
     }
 
@@ -352,24 +342,24 @@ int whisper_vitisai_encode_with_cross(
         int n_text_head,
         bool flash_attn) {
     if (!ctx || !mel || !embd_enc || !kv_cross_k || !kv_cross_v) {
-        std::fprintf(stderr, "%s: ctx/mel/embd_enc/kv_cross_k/kv_cross_v must not be null\n", __func__);
+        WHISPER_LOG_ERROR("%s: ctx/mel/embd_enc/kv_cross_k/kv_cross_v must not be null\n", __func__);
         return 0;
     }
 
     if (n_text_layer <= 0 || n_ctx <= 0 || n_text_state <= 0 || n_text_head <= 0) {
-        std::fprintf(stderr, "%s: invalid shape parameters layer=%d ctx=%d state=%d head=%d\n",
+        WHISPER_LOG_ERROR("%s: invalid shape parameters layer=%d ctx=%d state=%d head=%d\n",
                 __func__, n_text_layer, n_ctx, n_text_state, n_text_head);
         return 0;
     }
 
     if ((n_text_state % n_text_head) != 0) {
-        std::fprintf(stderr, "%s: invalid head configuration state=%d head=%d\n",
+        WHISPER_LOG_ERROR("%s: invalid head configuration state=%d head=%d\n",
                 __func__, n_text_state, n_text_head);
         return 0;
     }
 
     if (kv_cross_k->type != kv_cross_v->type) {
-        std::fprintf(stderr, "%s: kv_cross type mismatch k=%s v=%s\n",
+        WHISPER_LOG_ERROR("%s: kv_cross type mismatch k=%s v=%s\n",
                 __func__,
                 whisper_vitisai_helpers::whisper_kv_type_name(kv_cross_k->type),
                 whisper_vitisai_helpers::whisper_kv_type_name(kv_cross_v->type));
@@ -385,7 +375,7 @@ int whisper_vitisai_encode_with_cross(
     const bool kv_is_f32 = kv_type == GGML_TYPE_F32;
     const bool kv_is_f16 = kv_type == GGML_TYPE_F16;
     if (!kv_is_f32 && !kv_is_f16) {
-        std::fprintf(stderr, "%s: unsupported kv_cross tensor type '%s'\n",
+        WHISPER_LOG_ERROR("%s: unsupported kv_cross tensor type '%s'\n",
                 __func__, whisper_vitisai_helpers::whisper_kv_type_name(kv_type));
         return 0;
     }
@@ -396,7 +386,7 @@ int whisper_vitisai_encode_with_cross(
     std::vector<flexmlrt::client::ErtTensorType> * input_tensors_cached = nullptr;
     std::vector<flexmlrt::client::ErtTensorType> * output_tensors_cached = nullptr;
     if (!whisper_vitisai_get_cached_io_tensors(ctx, input_tensors_cached, output_tensors_cached)) {
-        std::fprintf(stderr, "%s: failed to acquire Vitis AI I/O tensors\n", __func__);
+        WHISPER_LOG_ERROR("%s: failed to acquire Vitis AI I/O tensors\n", __func__);
         return 0;
     }
     std::vector<flexmlrt::client::ErtTensorType> input_tensors = *input_tensors_cached;
@@ -404,7 +394,7 @@ int whisper_vitisai_encode_with_cross(
 
     if (ctx->cross_k_out_idx < 0 || ctx->cross_k_out_idx >= (int) output_tensors.size() ||
             ctx->cross_v_out_idx < 0 || ctx->cross_v_out_idx >= (int) output_tensors.size()) {
-        std::fprintf(stderr, "%s: invalid cross output indices cross_k=%d cross_v=%d for %zu output tensor(s)\n",
+        WHISPER_LOG_ERROR("%s: invalid cross output indices cross_k=%d cross_v=%d for %zu output tensor(s)\n",
                 __func__, ctx->cross_k_out_idx, ctx->cross_v_out_idx, output_tensors.size());
         return 0;
     }
@@ -417,17 +407,17 @@ int whisper_vitisai_encode_with_cross(
     }
 
     if (ctx->cross_k_expected_bytes == 0 || ctx->cross_v_expected_bytes == 0) {
-        std::fprintf(stderr, "%s: missing cross output metadata sizes\n", __func__);
+        WHISPER_LOG_ERROR("%s: missing cross output metadata sizes\n", __func__);
         return 0;
     }
     if (ctx->cross_k_expected_bytes != ctx->cross_v_expected_bytes) {
-        std::fprintf(stderr, "%s: cross output metadata size mismatch k=%zu v=%zu\n",
+        WHISPER_LOG_ERROR("%s: cross output metadata size mismatch k=%zu v=%zu\n",
                 __func__, ctx->cross_k_expected_bytes, ctx->cross_v_expected_bytes);
         return 0;
     }
     const size_t expected_cross_bytes = (size_t) n_text_layer * req_layer_elems * sizeof(float);
     if (ctx->cross_k_expected_bytes != expected_cross_bytes) {
-        std::fprintf(stderr,
+        WHISPER_LOG_ERROR(
                 "%s: cross output size mismatch (model=%zu B, expected=%zu B for layer=%d ctx=%d state=%d)\n",
                 __func__, ctx->cross_k_expected_bytes, expected_cross_bytes, n_text_layer, n_ctx, n_state);
         return 0;
@@ -440,7 +430,7 @@ int whisper_vitisai_encode_with_cross(
             ? (size_t)n_text_layer * elem_size * (size_t)n_state * (size_t)n_ctx_pad
             : (size_t)n_text_layer * elem_size * req_layer_elems;
     if (ggml_nbytes(kv_cross_k) < required_kv_bytes || ggml_nbytes(kv_cross_v) < required_kv_bytes) {
-        std::fprintf(stderr,
+        WHISPER_LOG_ERROR(
                 "%s: kv_cross buffers are too small (required=%zu B, k=%zu B, v=%zu B)\n",
                 __func__, required_kv_bytes, ggml_nbytes(kv_cross_k), ggml_nbytes(kv_cross_v));
         return 0;
@@ -518,13 +508,10 @@ int whisper_vitisai_encode_with_cross(
 
         WHISPER_DBG_TIMER(t_post_end);
 
-#if defined(WHISPER_DEBUG)
-        const size_t model_ctx = (size_t) n_ctx;
-        std::fprintf(stderr, "%s: vitisai enc+cross forward time = %8.2f ms\n", __func__, (t_fwd_end - t_fwd_start) / 1000.0f);
-        std::fprintf(stderr, "%s: kv_cross post-process time     = %8.2f ms (flash, req_ctx=%d, model_ctx=%zu, req_ctx_pad=%d, kv_type=%s)\n",
-                __func__, (t_post_end - t_post_start) / 1000.0f, n_ctx, model_ctx, n_ctx_pad,
+        WHISPER_LOG_DEBUG("%s: vitisai enc+cross forward time = %8.2f ms\n", __func__, (t_fwd_end - t_fwd_start) / 1000.0f);
+        WHISPER_LOG_DEBUG("%s: kv_cross post-process time     = %8.2f ms (flash, req_ctx=%d, model_ctx=%zu, req_ctx_pad=%d, kv_type=%s)\n",
+                __func__, (t_post_end - t_post_start) / 1000.0f, n_ctx, (size_t) n_ctx, n_ctx_pad,
                 whisper_vitisai_helpers::whisper_kv_type_name(kv_type));
-#endif
     } else {
         // Non-flash: model outputs contiguous [ctx, state] per layer.
         WHISPER_DBG_TIMER(t_fwd_start);
@@ -558,13 +545,10 @@ int whisper_vitisai_encode_with_cross(
 
         WHISPER_DBG_TIMER(t_post_end);
 
-#if defined(WHISPER_DEBUG)
-        const size_t model_ctx = (size_t) n_ctx;
-        std::fprintf(stderr, "%s: vitisai enc+cross forward time = %8.2f ms\n", __func__, (t_fwd_end - t_fwd_start) / 1000.0f);
-        std::fprintf(stderr, "%s: kv_cross post-process time     = %8.2f ms (non-flash, req_ctx=%d, model_ctx=%zu, kv_type=%s)\n",
-                __func__, (t_post_end - t_post_start) / 1000.0f, n_ctx, model_ctx,
+        WHISPER_LOG_DEBUG("%s: vitisai enc+cross forward time = %8.2f ms\n", __func__, (t_fwd_end - t_fwd_start) / 1000.0f);
+        WHISPER_LOG_DEBUG("%s: kv_cross post-process time     = %8.2f ms (non-flash, req_ctx=%d, model_ctx=%zu, kv_type=%s)\n",
+                __func__, (t_post_end - t_post_start) / 1000.0f, n_ctx, (size_t) n_ctx,
                 whisper_vitisai_helpers::whisper_kv_type_name(kv_type));
-#endif
     }
 
     return 1;
