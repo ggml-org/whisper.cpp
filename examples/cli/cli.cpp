@@ -762,18 +762,24 @@ static void output_json(
                             std::string        text;
                             whisper_token_data data;
                             int64_t            t1;
+                            int64_t            dtw_t0;
+                            int64_t            dtw_t1;
                         };
                         std::vector<merged_token> merged;
                         merged.reserve(n);
                         for (int j = 0; j < n; ) {
                             auto tok = whisper_full_get_token_data(ctx, i, j);
-                            merged_token m{ whisper_token_to_str(ctx, tok.id), tok, tok.t1 };
+                            merged_token m{ whisper_token_to_str(ctx, tok.id), tok, tok.t1,
+                                whisper_full_get_token_dtw_t0(ctx, i, j), whisper_full_get_token_dtw_t1(ctx, i, j) };
                             ++j;
                             while (j < n && utf8_trailing_bytes_needed(m.text) > 0) {
                                 auto tok_next = whisper_full_get_token_data(ctx, i, j);
                                 m.text += whisper_token_to_str(ctx, tok_next.id);
                                 if (tok_next.t1 > -1) {
                                     m.t1 = tok_next.t1;
+                                }
+                                if (tok_next.t_dtw > -1) {
+                                    m.dtw_t1 = whisper_full_get_token_dtw_t1(ctx, i, j);
                                 }
                                 ++j;
                             }
@@ -791,7 +797,8 @@ static void output_json(
                                 }
                                 value_i("id", mt.data.id, false);
                                 value_f("p", mt.data.p, false);
-                                value_f("t_dtw", mt.data.t_dtw, true);
+                                value_f("t_dtw_start", mt.dtw_t0, false);
+                                value_f("t_dtw", mt.dtw_t1, true);
                             end_obj(j == (nm - 1));
                         }
                         end_arr(!params.diarize && !params.tinydiarize);
