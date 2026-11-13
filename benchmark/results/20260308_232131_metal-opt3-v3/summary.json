@@ -1,0 +1,82 @@
+[
+  {
+    "variant": "metal-opt3-v3",
+    "model": "ggml-small.en.bin",
+    "audio_key": "short",
+    "audio_length_s": 30.0,
+    "runs": 5,
+    "model_load_ms": {
+      "mean": 488.168,
+      "median": 517.6,
+      "min": 282.38,
+      "max": 600.86,
+      "std_dev": 121.29692296179653
+    },
+    "first_inference_latency_s": {
+      "mean": 3.666082158200152,
+      "median": 3.691523458001029,
+      "min": 3.4622640419984236,
+      "max": 3.803343624997069,
+      "std_dev": 0.13080994128862006
+    },
+    "wall_clock_runtime_s": {
+      "mean": 3.971941908201552,
+      "median": 4.110802250004781,
+      "min": 3.607728875002067,
+      "max": 4.140305208005884,
+      "std_dev": 0.2300176119437845
+    },
+    "full_runtime_ms": {
+      "mean": 3529.62,
+      "median": 3544.42,
+      "min": 3379.05,
+      "max": 3655.68,
+      "std_dev": 112.52573239041804
+    },
+    "throughput_audio_seconds_per_second": {
+      "mean": 7.574295143729688,
+      "median": 7.297845572592335,
+      "min": 7.245842635463353,
+      "max": 8.315480746868156,
+      "std_dev": 0.4603294446142173
+    },
+    "tokens_per_second": {
+      "mean": null,
+      "median": null,
+      "min": null,
+      "max": null,
+      "std_dev": null
+    },
+    "encode_ms": {
+      "mean": 2266.936,
+      "median": 2257.91,
+      "min": 2104.79,
+      "max": 2554.62,
+      "std_dev": 179.86329595000754
+    },
+    "decode_ms": {
+      "mean": 652.5459999999999,
+      "median": 650.56,
+      "min": 550.27,
+      "max": 723.38,
+      "std_dev": 72.30035739884003
+    },
+    "wer": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "std_dev": 0.0
+    },
+    "cer": {
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "std_dev": 0.0
+    },
+    "reference_present": true,
+    "correctness_pass": true,
+    "notes": "tokens/s unavailable; encode mean=2266.94 ms; decode mean=652.55 ms; wer median=0.0000; cer median=0.0000"
+  }
+]
