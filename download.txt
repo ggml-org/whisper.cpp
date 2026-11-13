@@ -1,0 +1,2 @@
+export HF_ENDPOINT=https://hf-mirror.com
+hf download ggerganov/whisper.cpp ggml-medium.bin --local-dir ./models
