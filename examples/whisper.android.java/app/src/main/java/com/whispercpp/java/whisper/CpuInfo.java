@@ -51,7 +51,7 @@ public class CpuInfo {
   private int getHighPerfCpuCountByVariant() {
     List<Integer> variants = getCpuValues("CPU variant", line -> Integer.parseInt(line.trim().substring(line.indexOf("0x") + 2), 16));
     Log.d(LOG_TAG, "Binned cpu variants (variant, count): " + binnedValues(variants));
-    return countKeepingMin(variants);
+    return countDroppingMin(variants);
   }
 
   @RequiresApi(api = Build.VERSION_CODES.N)
