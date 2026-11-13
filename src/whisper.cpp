@@ -3520,7 +3520,7 @@ struct whisper_state * whisper_init_state(whisper_context * ctx) {
             return nullptr;
         }
         const size_t memory_size = aheads_masks_nbytes(state->aheads_masks);
-        WHISPER_LOG_INFO("%s: alignment heads masks size = %ld B\n", __func__, memory_size);
+        WHISPER_LOG_INFO("%s: alignment heads masks size = %zu B\n", __func__, memory_size);
     }
 
 #ifdef WHISPER_USE_COREML
