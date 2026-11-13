@@ -117,6 +117,9 @@ set(BUFFER_LOADER_TEST test-whisper-buffer-loader)
 add_executable(${BUFFER_LOADER_TEST} ${BUFFER_LOADER_TEST}.cpp)
 target_include_directories(${BUFFER_LOADER_TEST} PRIVATE ../include ../ggml/include ../examples)
 target_link_libraries(${BUFFER_LOADER_TEST} PRIVATE common)
+target_compile_definitions(${BUFFER_LOADER_TEST} PRIVATE
+    WHISPER_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-ggml-tiny.en.bin"
+    WHISPER_TEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/test-whisper-buffer-loader.bin")
 add_test(NAME ${BUFFER_LOADER_TEST} COMMAND ${BUFFER_LOADER_TEST})
 set_tests_properties(${BUFFER_LOADER_TEST} PROPERTIES LABELS "unit;gh")
 
