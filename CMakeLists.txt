@@ -128,12 +128,13 @@ set(GGML_ALL_WARNINGS       ${WHISPER_ALL_WARNINGS})
 set(GGML_FATAL_WARNINGS     ${WHISPER_FATAL_WARNINGS})
 
 # transition helpers
-function (whisper_option_depr TYPE OLD NEW)
-    if (${OLD})
+macro (whisper_option_depr TYPE OLD NEW)
+    if (DEFINED ${OLD})
         message(${TYPE} "${OLD} is deprecated and will be removed in the future.\nUse ${NEW} instead\n")
-        set(${NEW} ON)
+        set(${NEW} ${${OLD}} CACHE BOOL "" FORCE)
+        unset(${OLD} CACHE)
     endif()
-endfunction()
+endmacro()
 
 whisper_option_depr(FATAL_ERROR WHISPER_CUBLAS              GGML_CUDA)
 whisper_option_depr(WARNING     WHISPER_CUDA                GGML_CUDA)
