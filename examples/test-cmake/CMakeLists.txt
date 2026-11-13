@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 
 # request a version that is satisfied by both dev (1.9.2-dev) and release (1.9.2) installs
 # (find_package does not accept a pre-release version as an argument)
-find_package(whisper 1.9.2 REQUIRED)
+find_package(whisper CONFIG REQUIRED PATHS ${CMAKE_PREFIX_PATH} NO_DEFAULT_PATH)
 
 add_executable(test-cmake test-cmake.cpp)
 
