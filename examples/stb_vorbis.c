@@ -947,16 +947,26 @@ static void *make_block_array(void *mem, int count, int size)
    return p;
 }
 
-static void *setup_malloc(vorb *f, int sz)
+static void *setup_malloc(vorb *f, size_t sz)
 {
-   sz = (sz+7) & ~7; // round up to nearest 8 for alignment of future allocs.
-   f->setup_memory_required += sz;
+   // Callers use sizeof() arithmetic; do not truncate the allocation size to int.
+   // Offsets and accounting in stb_vorbis remain int/unsigned int.
+   if (sz > INT_MAX - 7 || sz > UINT_MAX - f->setup_memory_required)
+      return NULL;
+   sz = (sz + 7) & ~(size_t) 7; // alignment for future allocations
+   if (sz > UINT_MAX - f->setup_memory_required)
+      return NULL;
    if (f->alloc.alloc_buffer) {
-      void *p = (char *) f->alloc.alloc_buffer + f->setup_offset;
-      if (f->setup_offset + sz > f->temp_offset) return NULL;
-      f->setup_offset += sz;
+      void *p;
+      if (f->setup_offset < 0 || f->temp_offset < f->setup_offset ||
+          sz > (size_t) (f->temp_offset - f->setup_offset))
+         return NULL;
+      p = (char *) f->alloc.alloc_buffer + f->setup_offset;
+      f->setup_offset += (int) sz;
+      f->setup_memory_required += (unsigned int) sz;
       return p;
    }
+   f->setup_memory_required += (unsigned int) sz;
    return sz ? malloc(sz) : NULL;
 }
 
@@ -966,12 +976,16 @@ static void setup_free(vorb *f, void *p)
    free(p);
 }
 
-static void *setup_temp_malloc(vorb *f, int sz)
+static void *setup_temp_malloc(vorb *f, size_t sz)
 {
-   sz = (sz+7) & ~7; // round up to nearest 8 for alignment of future allocs.
+   if (sz > INT_MAX - 7)
+      return NULL;
+   sz = (sz + 7) & ~(size_t) 7; // alignment for future allocations
    if (f->alloc.alloc_buffer) {
-      if (f->temp_offset - sz < f->setup_offset) return NULL;
-      f->temp_offset -= sz;
+      if (f->setup_offset < 0 || f->temp_offset < f->setup_offset ||
+          sz > (size_t) (f->temp_offset - f->setup_offset))
+         return NULL;
+      f->temp_offset -= (int) sz;
       return (char *) f->alloc.alloc_buffer + f->temp_offset;
    }
    return malloc(sz);
@@ -1241,11 +1255,11 @@ static int vorbis_validate(uint8 *data)
 static int lookup1_values(int entries, int dim)
 {
    int r = (int) floor(exp((float) log((float) entries) / dim));
-   if ((int) floor(pow((float) r+1, dim)) <= entries)   // (int) cast for MinGW warning;
+   if (floor(pow((float) r+1, dim)) <= entries)
       ++r;                                              // floor() to avoid _ftol() when non-CRT
    if (pow((float) r+1, dim) <= entries)
       return -1;
-   if ((int) floor(pow((float) r, dim)) > entries)
+   if (floor(pow((float) r, dim)) > entries)
       return -1;
    return r;
 }
