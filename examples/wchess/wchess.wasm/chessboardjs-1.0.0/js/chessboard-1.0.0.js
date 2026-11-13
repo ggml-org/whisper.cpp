@@ -227,7 +227,7 @@
 
     // cut off any move, castling, etc info from the end
     // we're only interested in position information
-    fen = fen.replace(/ .+$/, '')
+    fen = fen.replace(/ (?! ).+$/, '')
 
     // expand the empty square numbers to just 1s
     fen = expandFenEmptySquares(fen)
@@ -1815,3 +1815,4 @@
   window['Chessboard']['fenToObj'] = fenToObj
   window['Chessboard']['objToFen'] = objToFen
 })() // end anonymous wrapper
+
