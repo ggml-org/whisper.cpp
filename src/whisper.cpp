@@ -7011,7 +7011,11 @@ int whisper_full_with_state(
             }
         }
 
-        const auto lang_id = whisper_lang_auto_detect_internal(ctx, state, 0, params.n_threads, probs.data(), params.abort_callback, params.abort_callback_user_data);
+        // detect the language at the requested offset, so that it matches the audio that will be transcribed
+        // if the offset is outside of the audio fall back to 0 and let the "input is too short" check below handle it
+        const int lang_offset_ms = (params.offset_ms >= 0 && params.offset_ms/10 < state->mel.n_len_org) ? params.offset_ms : 0;
+
+        const auto lang_id = whisper_lang_auto_detect_internal(ctx, state, lang_offset_ms, params.n_threads, probs.data(), params.abort_callback, params.abort_callback_user_data);
         if (lang_id < 0) {
             WHISPER_LOG_ERROR("%s: failed to auto-detect language\n", __func__);
             return -3;
