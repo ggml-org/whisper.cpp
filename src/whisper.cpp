@@ -870,8 +870,9 @@ struct whisper_state {
     std::vector<whisper_segment> result_all;
 
     // prompt history split into static prefix (prompt_past0) and dynamic rolling context (prompt_past1)
-    std::vector<whisper_token>   prompt_past0; // static carried initial prompt (if enabled)
+    std::vector<whisper_token>   prompt_past0; // static initial prompt (if provided)
     std::vector<whisper_token>   prompt_past1; // dynamic context from decoded output
+    std::vector<whisper_token>   prompt;       // prompt tokens used in current decode window
 
     int lang_id = 0; // english by default
 
@@ -7110,9 +7111,6 @@ int whisper_full_with_state(
         prompt_past1.clear();
     }
 
-    // calculate the maximum context budget for prompt history
-    const int max_prompt_ctx = std::min(params.n_max_text_ctx, whisper_n_text_ctx(ctx)/2);
-
     // prepare prompt
     {
         std::vector<whisper_token> prompt_tokens;
@@ -7130,23 +7128,16 @@ int whisper_full_with_state(
             params.prompt_n_tokens = prompt_tokens.size();
         }
         if (params.prompt_tokens && params.prompt_n_tokens > 0) {
-            if (params.carry_initial_prompt) {
-                if (prompt_past0.empty()) {
-                    const int max_tokens = std::max(1, max_prompt_ctx - 1);
+            if (prompt_past0.empty()) {
+                const int max_tokens = std::max(1, (whisper_n_text_ctx(ctx)/2) - 1);
 
-                    if (params.prompt_n_tokens > max_tokens) {
-                        WHISPER_LOG_WARN("%s: initial prompt is too long (%d tokens), will use only the last %d tokens\n",
-                                        __func__, params.prompt_n_tokens, max_tokens);
-                    }
+                if (params.prompt_n_tokens > max_tokens) {
+                    WHISPER_LOG_WARN("%s: initial prompt is too long (%d tokens), will use only the last %d tokens\n",
+                                    __func__, params.prompt_n_tokens, max_tokens);
+                }
 
-                    const int n_tokens = std::min(params.prompt_n_tokens, max_tokens);
-                    prompt_past0.assign(params.prompt_tokens + (params.prompt_n_tokens - n_tokens), params.prompt_tokens + params.prompt_n_tokens);
-                }
-            } else {
-                for (int i = 0; i < params.prompt_n_tokens; ++i) {
-                    prompt_past1.push_back(params.prompt_tokens[i]);
-                }
-                std::rotate(prompt_past1.begin(), prompt_past1.end() - params.prompt_n_tokens, prompt_past1.end());
+                const int n_tokens = std::min(params.prompt_n_tokens, max_tokens);
+                prompt_past0.assign(params.prompt_tokens + (params.prompt_n_tokens - n_tokens), params.prompt_tokens + params.prompt_n_tokens);
             }
         }
     }
@@ -7295,29 +7286,33 @@ int whisper_full_with_state(
             {
                 prompt.clear();
 
-                if (params.n_max_text_ctx > 0 && t_cur < WHISPER_HISTORY_CONDITIONING_TEMP_CUTOFF) {
-                    const bool can_take0 = params.carry_initial_prompt && !prompt_past0.empty();
-                    const bool can_take1 = !prompt_past1.empty();
+                const bool can_take0 = !prompt_past0.empty() && (params.carry_initial_prompt || seek == seek_start);
+                const bool can_take1 = !prompt_past1.empty() && (params.n_max_text_ctx > 0) && (t_cur < WHISPER_HISTORY_CONDITIONING_TEMP_CUTOFF);
 
-                    if (max_prompt_ctx > 0 && (can_take0 || can_take1)) {
-                        // Always start with previous token marker to connect continuity
-                        prompt.push_back(whisper_token_prev(ctx));
+                if (can_take0 || can_take1) {
+                    // Always start with previous token marker to connect continuity
+                    prompt.push_back(whisper_token_prev(ctx));
 
-                        // Take static tokens (initial prompt) first
-                        int n_take0 = 0;
-                        if (can_take0) {
-                            n_take0 = prompt_past0.size();
-                            prompt.insert(prompt.end(), prompt_past0.end() - n_take0, prompt_past0.end());
-                        }
+                    const int max_ctx = whisper_n_text_ctx(ctx)/2;
 
-                        // Fill remaining budget with dynamic tokens (rolling context)
-                        const int n_take1 = std::min<int>(max_prompt_ctx - n_take0 - 1, prompt_past1.size());
+                    // Take static tokens (initial prompt) first
+                    int n_take0 = 0;
+                    if (can_take0) {
+                        n_take0 = std::min<int>(max_ctx - 1, prompt_past0.size());
+                        prompt.insert(prompt.end(), prompt_past0.end() - n_take0, prompt_past0.end());
+                    }
+
+                    // Fill remaining budget with dynamic tokens (rolling context)
+                    if (can_take1) {
+                        const int max_dyn_budget = std::min<int>(params.n_max_text_ctx, max_ctx - n_take0 - 1);
+                        const int n_take1 = std::max<int>(0, std::min<int>(max_dyn_budget, (int) prompt_past1.size()));
                         prompt.insert(prompt.end(), prompt_past1.end() - n_take1, prompt_past1.end());
                     }
                 }
 
                 // init new transcription with sot, language (opt) and task tokens
                 prompt.insert(prompt.end(), prompt_init.begin(), prompt_init.end());
+                state->prompt = prompt;
 
                 // print the prompt
                 WHISPER_LOG_DEBUG("\n\n");
@@ -7795,16 +7790,14 @@ int whisper_full_with_state(
 
             //WHISPER_LOG_DEBUG("prompt_init.size() = %d, prompt.size() = %d, result_len = %d, seek_delta = %d\n", prompt_init.size(), prompt.size(), result_len, seek_delta);
 
-            // update prompt_past1
-            prompt_past1.clear();
-            if (!params.carry_initial_prompt && !prompt.empty() && prompt.front() == whisper_token_prev(ctx)) {
-                prompt_past1.insert(prompt_past1.end(), prompt.begin() + 1, prompt.end() - prompt_init.size());
-            }
-
-            // Add newly decoded tokens to the rolling context
+            // update prompt_past1: add newly decoded tokens to rolling context
             if (!is_no_speech) {
                 for (int i = 0; i < result_len; ++i) {
                     prompt_past1.push_back(tokens_cur[i].id);
+                }
+                const int max_dyn_tokens = whisper_n_text_ctx(ctx)/2;
+                if ((int) prompt_past1.size() > max_dyn_tokens) {
+                    prompt_past1.erase(prompt_past1.begin(), prompt_past1.end() - max_dyn_tokens);
                 }
             }
 
@@ -8373,6 +8366,22 @@ float whisper_full_get_segment_no_speech_prob(struct whisper_context * ctx, int 
 
 float whisper_full_get_segment_no_speech_prob_from_state(struct whisper_state * state, int i_segment) {
     return state->result_all[i_segment].no_speech_prob;
+}
+
+int whisper_full_n_prompt_tokens_from_state(struct whisper_state * state) {
+    return state ? (int) state->prompt.size() : 0;
+}
+
+int whisper_full_n_prompt_tokens(struct whisper_context * ctx) {
+    return ctx ? whisper_full_n_prompt_tokens_from_state(ctx->state) : 0;
+}
+
+whisper_token whisper_full_get_prompt_token_from_state(struct whisper_state * state, int i) {
+    return (state && i >= 0 && i < (int) state->prompt.size()) ? state->prompt[i] : -1;
+}
+
+whisper_token whisper_full_get_prompt_token(struct whisper_context * ctx, int i) {
+    return ctx ? whisper_full_get_prompt_token_from_state(ctx->state, i) : -1;
 }
 
 // =================================================================================================

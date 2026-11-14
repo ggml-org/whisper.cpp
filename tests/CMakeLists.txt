@@ -140,6 +140,17 @@ target_compile_definitions(${LANG_DETECT_ABORT_TEST} PRIVATE
 add_test(NAME ${LANG_DETECT_ABORT_TEST} COMMAND ${LANG_DETECT_ABORT_TEST})
 set_tests_properties(${LANG_DETECT_ABORT_TEST} PROPERTIES LABELS "tiny;gh")
 
+# prompt and context window regression test (#4098)
+set(PROMPT_CTX_TEST test-whisper-prompt-ctx)
+add_executable(${PROMPT_CTX_TEST} ${PROMPT_CTX_TEST}.cpp)
+target_include_directories(${PROMPT_CTX_TEST} PRIVATE ../include ../ggml/include ../examples)
+target_link_libraries(${PROMPT_CTX_TEST} PRIVATE common)
+target_compile_definitions(${PROMPT_CTX_TEST} PRIVATE
+    WHISPER_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-ggml-tiny.bin"
+    SAMPLE_PATH="${PROJECT_SOURCE_DIR}/samples/jfk.wav")
+add_test(NAME ${PROMPT_CTX_TEST} COMMAND ${PROMPT_CTX_TEST})
+set_tests_properties(${PROMPT_CTX_TEST} PROPERTIES LABELS "tiny;gh")
+
 # VAD test tests VAD in isolation
 set(VAD_TEST test-vad)
 add_executable(${VAD_TEST} ${VAD_TEST}.cpp)
