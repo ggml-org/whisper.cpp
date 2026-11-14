@@ -342,6 +342,57 @@ This can result in significant speedup in encoder performance. Here are the inst
 
 For more information about the OpenVINO implementation please refer to PR [#1037](https://github.com/ggml-org/whisper.cpp/pull/1037).
 
+## RKNN Support
+
+On Rockchip RK3588, the Whisper encoder can run on the NPU using RKNN. Mel preprocessing and the decoder remain on the CPU.
+Currently, only the unquantized `base.en` encoder with a fixed 30-second window is supported.
+The conversion and runtime have been tested with rknn-toolkit2 2.3.2 and librknnrt 2.3.2, respectively.
+
+- Set up a Python virtual environment on the conversion host (tested on Linux with Python 3.12):
+
+  ```bash
+  python3 -m venv rknn_conv_env
+  source rknn_conv_env/bin/activate
+  python -m pip install "openai-whisper==20231117" "torch==2.4.0" "onnx==1.17.0" "rknn-toolkit2==2.3.2"
+  ```
+
+- Generate the RKNN encoder from the official OpenAI Whisper weights:
+
+  ```bash
+  python models/convert-whisper-to-rknn.py --model base.en --output-dir models
+  ```
+
+  The script downloads the `.pt` weights through `openai-whisper`, reusing its cache (normally `~/.cache/whisper`) when available.
+  It exports only the encoder to ONNX with input `[1,80,3000]` and output `[1,1500,512]`, then builds for `rk3588` without quantization.
+  No Model Zoo checkout or calibration dataset is needed. The output directory contains `ggml-base.en-encoder.onnx` and
+  `ggml-base.en-encoder.rknn`; the script checks ONNX shapes and prints the RKNN file size.
+
+- Build `whisper.cpp` on the RK3588 device with the RKNN runtime headers and library:
+
+  ```bash
+  cmake -S . -B build -DWHISPER_RKNN=ON \
+    -DRKNN_INCLUDE_DIR=/path/to/rknn/include \
+    -DRKNN_LIBRARY=/path/to/librknnrt.so
+  cmake --build build --target whisper-cli -j --config Release
+  ```
+
+  `RKNN_INCLUDE_DIR` must contain `rknn_api.h`, and `RKNN_LIBRARY` must point to the device's `librknnrt.so`.
+  Ensure the runtime library is also on the dynamic loader's search path when running the executable.
+
+- Copy `ggml-base.en-encoder.rknn` from the conversion host to the directory containing the matching ggml model on the device, then run:
+
+  ```bash
+  sh ./models/download-ggml-model.sh base.en
+  ./build/bin/whisper-cli -m models/ggml-base.en.bin -f samples/jfk.wav -l en -t 4 -ng
+  ```
+
+  The encoder path is derived by replacing `.bin` with `-encoder.rknn` in the ggml model path:
+  `models/ggml-base.en.bin` loads `models/ggml-base.en-encoder.rknn`. Keep both files together; the ONNX file is not needed at runtime.
+
+On a loaded RK3588 board (librknnrt 2.3.2, `base.en`, `samples/jfk.wav`, `-t 4`), the RKNN encoder took 703 ms versus 4729 ms
+for the CPU encoder, with identical transcription. These are loaded-board measurements, not idle-board performance figures.
+Other models, quantization, and long audio with multiple windows have not been verified.
+
 ## AMD Ryzen™ AI NPU support
 
 On AMD Ryzen™ AI 300 and 400 Series processors with a dedicated NPU, whisper.cpp can fully offload the Whisper encoder to the NPU via VitisAI, delivering significant speedup over CPU-only inference.
