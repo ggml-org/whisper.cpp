@@ -872,6 +872,7 @@ struct whisper_state {
     // prompt history split into static prefix (prompt_past0) and dynamic rolling context (prompt_past1)
     std::vector<whisper_token>   prompt_past0; // static initial prompt (if provided)
     std::vector<whisper_token>   prompt_past1; // dynamic context from decoded output
+    std::vector<whisper_token>   prompt;       // prompt tokens used in current decode window
 
     int lang_id = 0; // english by default
 
@@ -7311,6 +7312,7 @@ int whisper_full_with_state(
 
                 // init new transcription with sot, language (opt) and task tokens
                 prompt.insert(prompt.end(), prompt_init.begin(), prompt_init.end());
+                state->prompt = prompt;
 
                 // print the prompt
                 WHISPER_LOG_DEBUG("\n\n");
@@ -7788,16 +7790,14 @@ int whisper_full_with_state(
 
             //WHISPER_LOG_DEBUG("prompt_init.size() = %d, prompt.size() = %d, result_len = %d, seek_delta = %d\n", prompt_init.size(), prompt.size(), result_len, seek_delta);
 
-            // update prompt_past1
-            prompt_past1.clear();
-            if (!params.carry_initial_prompt && !prompt.empty() && prompt.front() == whisper_token_prev(ctx)) {
-                prompt_past1.insert(prompt_past1.end(), prompt.begin() + 1, prompt.end() - prompt_init.size());
-            }
-
-            // Add newly decoded tokens to the rolling context
+            // update prompt_past1: add newly decoded tokens to rolling context
             if (!is_no_speech) {
                 for (int i = 0; i < result_len; ++i) {
                     prompt_past1.push_back(tokens_cur[i].id);
+                }
+                const int max_dyn_tokens = whisper_n_text_ctx(ctx)/2;
+                if ((int) prompt_past1.size() > max_dyn_tokens) {
+                    prompt_past1.erase(prompt_past1.begin(), prompt_past1.end() - max_dyn_tokens);
                 }
             }
 
@@ -8366,6 +8366,22 @@ float whisper_full_get_segment_no_speech_prob(struct whisper_context * ctx, int 
 
 float whisper_full_get_segment_no_speech_prob_from_state(struct whisper_state * state, int i_segment) {
     return state->result_all[i_segment].no_speech_prob;
+}
+
+int whisper_full_n_prompt_tokens_from_state(struct whisper_state * state) {
+    return state ? (int) state->prompt.size() : 0;
+}
+
+int whisper_full_n_prompt_tokens(struct whisper_context * ctx) {
+    return ctx ? whisper_full_n_prompt_tokens_from_state(ctx->state) : 0;
+}
+
+whisper_token whisper_full_get_prompt_token_from_state(struct whisper_state * state, int i) {
+    return (state && i >= 0 && i < (int) state->prompt.size()) ? state->prompt[i] : -1;
+}
+
+whisper_token whisper_full_get_prompt_token(struct whisper_context * ctx, int i) {
+    return ctx ? whisper_full_get_prompt_token_from_state(ctx->state, i) : -1;
 }
 
 // =================================================================================================
