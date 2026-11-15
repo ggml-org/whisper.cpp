@@ -103,12 +103,42 @@ if (CUDAToolkit_FOUND)
     list(APPEND GGML_HEADERS_CUDA "../../include/ggml-cuda.h")
 
     file(GLOB   GGML_SOURCES_CUDA "*.cu")
-    file(GLOB   SRCS "template-instances/fattn-tile*.cu")
-    list(APPEND GGML_SOURCES_CUDA ${SRCS})
-    file(GLOB   SRCS "template-instances/fattn-mma*.cu")
-    list(APPEND GGML_SOURCES_CUDA ${SRCS})
-    file(GLOB   SRCS "template-instances/mmq*.cu")
-    list(APPEND GGML_SOURCES_CUDA ${SRCS})
+    if (GGML_CUDA_FA_D64_F16_ONLY)
+        # Only head dim 64 with F16 K/V: fattn.cu's ggml_cuda_get_best_fattn_kernel returns NONE for
+        # every other shape (supports_op false, the scheduler runs that op on another backend).
+        if (GGML_CUDA_FA_ALL_QUANTS)
+            message(FATAL_ERROR "GGML_CUDA_FA_D64_F16_ONLY and GGML_CUDA_FA_ALL_QUANTS contradict each other")
+        endif()
+        list(APPEND GGML_SOURCES_CUDA
+            template-instances/fattn-tile-instance-dkq64-dv64.cu
+            template-instances/d64-fattn-mma-f16.cu
+            template-instances/d64-fattn-vec-f16-f16.cu)
+        add_compile_definitions(GGML_CUDA_FA_D64_F16_ONLY)
+    else()
+        file(GLOB   SRCS "template-instances/fattn-tile*.cu")
+        list(APPEND GGML_SOURCES_CUDA ${SRCS})
+        file(GLOB   SRCS "template-instances/fattn-mma*.cu")
+        list(APPEND GGML_SOURCES_CUDA ${SRCS})
+    endif()
+    if (GGML_CUDA_MMQ_TYPES)
+        # Only the listed MMQ instances: mmq.cu's ggml_cuda_should_use_mmq returns false for every
+        # other type (mmvq or dequantize + cuBLAS instead).
+        set(GGML_CUDA_MMQ_TYPES_UNIQUE ${GGML_CUDA_MMQ_TYPES})
+        list(REMOVE_DUPLICATES GGML_CUDA_MMQ_TYPES_UNIQUE)
+        foreach (MMQ_TYPE IN LISTS GGML_CUDA_MMQ_TYPES_UNIQUE)
+            if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/template-instances/mmq-instance-${MMQ_TYPE}.cu")
+                message(FATAL_ERROR "GGML_CUDA_MMQ_TYPES: no MMQ instance for '${MMQ_TYPE}' "
+                    "(template-instances/mmq-instance-${MMQ_TYPE}.cu)")
+            endif()
+            list(APPEND GGML_SOURCES_CUDA template-instances/mmq-instance-${MMQ_TYPE}.cu)
+            string(TOUPPER "${MMQ_TYPE}" MMQ_TYPE_UPPER)
+            add_compile_definitions(GGML_CUDA_MMQ_HAS_${MMQ_TYPE_UPPER})
+        endforeach()
+        add_compile_definitions(GGML_CUDA_MMQ_ALLOWLIST)
+    else()
+        file(GLOB   SRCS "template-instances/mmq*.cu")
+        list(APPEND GGML_SOURCES_CUDA ${SRCS})
+    endif()
     file(GLOB   SRCS "template-instances/mmf*.cu")
     list(APPEND GGML_SOURCES_CUDA ${SRCS})
 
@@ -116,7 +146,7 @@ if (CUDAToolkit_FOUND)
         file(GLOB   SRCS "template-instances/fattn-vec*.cu")
         list(APPEND GGML_SOURCES_CUDA ${SRCS})
         add_compile_definitions(GGML_CUDA_FA_ALL_QUANTS)
-    else()
+    elseif (NOT GGML_CUDA_FA_D64_F16_ONLY)
         list(APPEND GGML_SOURCES_CUDA
             template-instances/fattn-vec-instance-f16-f16.cu
             template-instances/fattn-vec-instance-q4_0-q4_0.cu

@@ -204,6 +204,12 @@ static int ggml_cuda_parse_id(char devName[]) {
 static ggml_cuda_device_info ggml_cuda_init() {
     ggml_cuda_device_info info = {};
 
+    // Check CUDA_VISIBLE_DEVICES - if empty, no GPUs are visible
+    const char* cuda_devices = getenv("CUDA_VISIBLE_DEVICES");
+    if (cuda_devices != nullptr && std::string(cuda_devices).empty()) {
+        return info;
+    }
+
     cudaError_t err = cudaGetDeviceCount(&info.device_count);
     if (err != cudaSuccess) {
         GGML_LOG_ERROR("%s: failed to initialize " GGML_CUDA_NAME ": %s\n", __func__, cudaGetErrorString(err));
@@ -5692,6 +5698,13 @@ ggml_backend_reg_t ggml_backend_cuda_reg() {
         std::lock_guard<std::mutex> lock(mutex);
         if (!initialized) {
             ggml_backend_cuda_reg_context * ctx = new ggml_backend_cuda_reg_context;
+            if (ggml_cuda_info().device_count == 0) {
+                delete ctx;
+                // Returning nullptr causes register_backend() to reject early;
+                // returning &reg would expose an empty reg whose get_device_count
+                // dereferences the just-freed ctx (UAF).
+                return nullptr;
+            }
             const int min_batch_size = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
 
             for (int i = 0; i < ggml_cuda_info().device_count; i++) {

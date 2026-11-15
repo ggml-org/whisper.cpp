@@ -3,71 +3,117 @@
 #include "quantize.cuh"
 #include "mmid.cuh"
 
+// consigliere patch 0002: with GGML_CUDA_MMQ_ALLOWLIST (ggml-cuda/CMakeLists.txt, GGML_CUDA_MMQ_TYPES)
+// only the GGML_CUDA_MMQ_HAS_<TYPE> instances are compiled: ggml_cuda_should_use_mmq is false for
+// every other type (ggml_cuda_mul_mat takes mmvq or dequantize + cuBLAS), and the switch below
+// names no uncompiled instance.
 static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
     switch (args.type_x) {
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q1_0)
         case GGML_TYPE_Q1_0:
             mul_mat_q_case<GGML_TYPE_Q1_0>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q4_0)
         case GGML_TYPE_Q4_0:
             mul_mat_q_case<GGML_TYPE_Q4_0>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q4_1)
         case GGML_TYPE_Q4_1:
             mul_mat_q_case<GGML_TYPE_Q4_1>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q5_0)
         case GGML_TYPE_Q5_0:
             mul_mat_q_case<GGML_TYPE_Q5_0>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q5_1)
         case GGML_TYPE_Q5_1:
             mul_mat_q_case<GGML_TYPE_Q5_1>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q8_0)
         case GGML_TYPE_Q8_0:
             mul_mat_q_case<GGML_TYPE_Q8_0>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_MXFP4)
         case GGML_TYPE_MXFP4:
             mul_mat_q_case<GGML_TYPE_MXFP4>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_NVFP4)
         case GGML_TYPE_NVFP4:
             mul_mat_q_case<GGML_TYPE_NVFP4>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q2_K)
         case GGML_TYPE_Q2_K:
             mul_mat_q_case<GGML_TYPE_Q2_K>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q3_K)
         case GGML_TYPE_Q3_K:
             mul_mat_q_case<GGML_TYPE_Q3_K>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q4_K)
         case GGML_TYPE_Q4_K:
             mul_mat_q_case<GGML_TYPE_Q4_K>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q5_K)
         case GGML_TYPE_Q5_K:
             mul_mat_q_case<GGML_TYPE_Q5_K>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q6_K)
         case GGML_TYPE_Q6_K:
             mul_mat_q_case<GGML_TYPE_Q6_K>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_IQ2_XXS)
         case GGML_TYPE_IQ2_XXS:
             mul_mat_q_case<GGML_TYPE_IQ2_XXS>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_IQ2_XS)
         case GGML_TYPE_IQ2_XS:
             mul_mat_q_case<GGML_TYPE_IQ2_XS>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_IQ2_S)
         case GGML_TYPE_IQ2_S:
             mul_mat_q_case<GGML_TYPE_IQ2_S>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_IQ3_XXS)
         case GGML_TYPE_IQ3_XXS:
             mul_mat_q_case<GGML_TYPE_IQ3_XXS>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_IQ3_S)
         case GGML_TYPE_IQ3_S:
             mul_mat_q_case<GGML_TYPE_IQ3_S>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_IQ1_S)
         case GGML_TYPE_IQ1_S:
             mul_mat_q_case<GGML_TYPE_IQ1_S>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_IQ4_XS)
         case GGML_TYPE_IQ4_XS:
             mul_mat_q_case<GGML_TYPE_IQ4_XS>(ctx, args, stream);
             break;
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_IQ4_NL)
         case GGML_TYPE_IQ4_NL:
             mul_mat_q_case<GGML_TYPE_IQ4_NL>(ctx, args, stream);
             break;
+#endif
         default:
             GGML_ABORT("fatal error");
             break;
@@ -272,27 +318,69 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
     bool mmq_supported;
 
     switch (type) {
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q1_0)
         case GGML_TYPE_Q1_0:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q4_0)
         case GGML_TYPE_Q4_0:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q4_1)
         case GGML_TYPE_Q4_1:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q5_0)
         case GGML_TYPE_Q5_0:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q5_1)
         case GGML_TYPE_Q5_1:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q8_0)
         case GGML_TYPE_Q8_0:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_MXFP4)
         case GGML_TYPE_MXFP4:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_NVFP4)
         case GGML_TYPE_NVFP4:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q2_K)
         case GGML_TYPE_Q2_K:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q3_K)
         case GGML_TYPE_Q3_K:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q4_K)
         case GGML_TYPE_Q4_K:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q5_K)
         case GGML_TYPE_Q5_K:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_Q6_K)
         case GGML_TYPE_Q6_K:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_IQ2_XXS)
         case GGML_TYPE_IQ2_XXS:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_IQ2_XS)
         case GGML_TYPE_IQ2_XS:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_IQ2_S)
         case GGML_TYPE_IQ2_S:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_IQ3_XXS)
         case GGML_TYPE_IQ3_XXS:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_IQ3_S)
         case GGML_TYPE_IQ3_S:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_IQ1_S)
         case GGML_TYPE_IQ1_S:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_IQ4_XS)
         case GGML_TYPE_IQ4_XS:
+#endif
+#if !defined(GGML_CUDA_MMQ_ALLOWLIST) || defined(GGML_CUDA_MMQ_HAS_IQ4_NL)
         case GGML_TYPE_IQ4_NL:
+#endif
             mmq_supported = true;
             break;
         default:

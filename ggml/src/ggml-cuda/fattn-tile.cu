@@ -6,14 +6,17 @@ void ggml_cuda_flash_attn_ext_tile(ggml_backend_cuda_context & ctx, ggml_tensor 
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
     switch (K->ne[0]) {
+#ifndef GGML_CUDA_FA_D64_F16_ONLY
         case  40: {
             GGML_ASSERT(V->ne[0] == K->ne[0]);
             ggml_cuda_flash_attn_ext_tile_case< 40,  40>(ctx, dst);
         } break;
+#endif // GGML_CUDA_FA_D64_F16_ONLY
         case  64: {
             GGML_ASSERT(V->ne[0] == K->ne[0]);
             ggml_cuda_flash_attn_ext_tile_case< 64,  64>(ctx, dst);
         } break;
+#ifndef GGML_CUDA_FA_D64_F16_ONLY
         case  72: {
             GGML_ASSERT(V->ne[0] == K->ne[0]);
             ggml_cuda_flash_attn_ext_tile_case< 72,  72>(ctx, dst);
@@ -54,6 +57,7 @@ void ggml_cuda_flash_attn_ext_tile(ggml_backend_cuda_context & ctx, ggml_tensor 
             GGML_ASSERT(V->ne[0] == 512);
             ggml_cuda_flash_attn_ext_tile_case<576, 512>(ctx, dst);
         } break;
+#endif // GGML_CUDA_FA_D64_F16_ONLY
         default: {
             GGML_ABORT("Unsupported head size");
         } break;

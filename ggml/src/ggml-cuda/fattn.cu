@@ -124,6 +124,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
             GGML_ASSERT(V->ne[0] == 64);
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2< 64,  64>(ctx, dst);
             break;
+#ifndef GGML_CUDA_FA_D64_F16_ONLY
         case 80:
             GGML_ASSERT(V->ne[0] == 80);
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2< 80,  80>(ctx, dst);
@@ -236,6 +237,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
                 ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<576, 512,  4>(ctx, dst);
             }
         } break;
+#endif // GGML_CUDA_FA_D64_F16_ONLY
         default:
             GGML_ABORT("fatal error");
             break;
@@ -262,7 +264,9 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     ggml_tensor * K = dst->src[1];
     ggml_tensor * V = dst->src[2];
 
-#ifdef GGML_CUDA_FA_ALL_QUANTS
+#if defined(GGML_CUDA_FA_D64_F16_ONLY)
+    FATTN_VEC_CASE(64, GGML_TYPE_F16, GGML_TYPE_F16)
+#elif defined(GGML_CUDA_FA_ALL_QUANTS)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_F16)
@@ -444,6 +448,18 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         default:
             return BEST_FATTN_KERNEL_NONE;
     }
+
+#ifdef GGML_CUDA_FA_D64_F16_ONLY
+    // consigliere patch 0002: only head dim 64 with F16 K/V is compiled (F32 K/V is converted to F16).
+    // NONE makes ggml_cuda_flash_attn_ext_supported false, so supports_op declines the op and the
+    // scheduler runs it on another backend instead of reaching an uncompiled instance.
+    if (Q->ne[0] != 64 || K->ne[0] != 64 || V->ne[0] != 64) {
+        return BEST_FATTN_KERNEL_NONE;
+    }
+    if ((K->type != GGML_TYPE_F16 && K->type != GGML_TYPE_F32) || (V->type != GGML_TYPE_F16 && V->type != GGML_TYPE_F32)) {
+        return BEST_FATTN_KERNEL_NONE;
+    }
+#endif // GGML_CUDA_FA_D64_F16_ONLY
 
     if (mask && mask->ne[2] != 1) {
         return BEST_FATTN_KERNEL_NONE;

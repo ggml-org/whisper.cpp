@@ -187,10 +187,31 @@ static bool ggml_graph_compute_helper(
     return ggml_backend_graph_compute(backend.get(), graph) == GGML_STATUS_SUCCESS;
 }
 
+// the abort callback is handed to every backend that accepts one (the CPU backend polls it after
+// each graph node), so an abort takes effect inside the graph, not only after it; it is cleared
+// again after the compute, so no backend keeps the caller's abort_callback_data past this call
+static void whisper_sched_set_abort_callback(
+      ggml_backend_sched_t   sched,
+       ggml_abort_callback   abort_callback,
+                      void * abort_callback_data) {
+    for (int i = 0; i < ggml_backend_sched_get_n_backends(sched); ++i) {
+        ggml_backend_t backend = ggml_backend_sched_get_backend(sched, i);
+        ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+
+        auto * fn_set_abort_callback = (ggml_backend_set_abort_callback_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_abort_callback");
+        if (fn_set_abort_callback) {
+            fn_set_abort_callback(backend, abort_callback, abort_callback_data);
+        }
+    }
+}
+
 static bool ggml_graph_compute_helper(
       ggml_backend_sched_t   sched,
         struct ggml_cgraph * graph,
                        int   n_threads,
+       ggml_abort_callback   abort_callback,
+                      void * abort_callback_data,
                       bool   sched_reset = true) {
     for (int i = 0; i < ggml_backend_sched_get_n_backends(sched); ++i) {
         ggml_backend_t backend = ggml_backend_sched_get_backend(sched, i);
@@ -203,7 +224,11 @@ static bool ggml_graph_compute_helper(
         }
     }
 
+    whisper_sched_set_abort_callback(sched, abort_callback, abort_callback_data);
+
     const bool t = (ggml_backend_sched_graph_compute(sched, graph) == GGML_STATUS_SUCCESS);
+
+    whisper_sched_set_abort_callback(sched, nullptr, nullptr);
 
     if (!t || sched_reset) {
         ggml_backend_sched_reset(sched);
@@ -2403,7 +2428,7 @@ static bool whisper_encode_internal(
         }
 
         if (!whisper_encode_external(wstate)) {
-            if (!ggml_graph_compute_helper(sched, gf, n_threads)) {
+            if (!ggml_graph_compute_helper(sched, gf, n_threads, abort_callback, abort_callback_data)) {
                 return false;
             }
         } else {
@@ -2428,7 +2453,7 @@ static bool whisper_encode_internal(
             return false;
         }
 
-        if (!ggml_graph_compute_helper(sched, gf, n_threads)) {
+        if (!ggml_graph_compute_helper(sched, gf, n_threads, abort_callback, abort_callback_data)) {
             return false;
         }
     }
@@ -2444,7 +2469,7 @@ static bool whisper_encode_internal(
             return false;
         }
 
-        if (!ggml_graph_compute_helper(sched, gf, n_threads)) {
+        if (!ggml_graph_compute_helper(sched, gf, n_threads, abort_callback, abort_callback_data)) {
             return false;
         }
     }
@@ -2941,7 +2966,7 @@ static bool whisper_decode_internal(
 
         logits = ggml_graph_node(gf, -1);
 
-        if (!ggml_graph_compute_helper(sched, gf, n_threads)) {
+        if (!ggml_graph_compute_helper(sched, gf, n_threads, abort_callback, abort_callback_data)) {
             return false;
         }
     }
@@ -4032,12 +4057,14 @@ const char * whisper_lang_str_full(int id) {
     return nullptr;
 }
 
-int whisper_lang_auto_detect_with_state(
+static int whisper_lang_auto_detect_internal(
         struct whisper_context * ctx,
           struct whisper_state * state,
                            int   offset_ms,
                            int   n_threads,
-                         float * lang_probs) {
+                         float * lang_probs,
+           ggml_abort_callback   abort_callback,
+                          void * abort_callback_data) {
     const int seek = offset_ms/10;
 
     if (seek < 0) {
@@ -4051,14 +4078,18 @@ int whisper_lang_auto_detect_with_state(
     }
 
     // run the encoder
-    if (whisper_encode_with_state(ctx, state, seek, n_threads) != 0) {
+    if (!whisper_encode_internal(*ctx, *state, seek, n_threads, abort_callback, abort_callback_data)) {
         WHISPER_LOG_ERROR("%s: failed to encode\n", __func__);
         return -6;
     }
 
     const std::vector<whisper_token> prompt = { whisper_token_sot(ctx) };
 
-    if (whisper_decode_with_state(ctx, state, prompt.data(), prompt.size(), 0, n_threads) != 0) {
+    whisper_batch_prep_legacy(state->batch, prompt.data(), prompt.size(), 0, 0);
+
+    whisper_kv_cache_seq_rm(state->kv_self, 0, 0, -1);
+
+    if (!whisper_decode_internal(*ctx, *state, state->batch, n_threads, false, abort_callback, abort_callback_data)) {
         WHISPER_LOG_ERROR("%s: failed to decode\n", __func__);
         return -7;
     }
@@ -4105,6 +4136,15 @@ int whisper_lang_auto_detect_with_state(
     }
 
     return logits_id[0].second;
+}
+
+int whisper_lang_auto_detect_with_state(
+        struct whisper_context * ctx,
+          struct whisper_state * state,
+                           int   offset_ms,
+                           int   n_threads,
+                         float * lang_probs) {
+    return whisper_lang_auto_detect_internal(ctx, state, offset_ms, n_threads, lang_probs, nullptr, nullptr);
 }
 
 int whisper_lang_auto_detect(
@@ -5161,7 +5201,7 @@ bool whisper_vad_detect_speech_no_reset(
         ggml_backend_tensor_set(frame, window.data(), 0, ggml_nelements(frame) * sizeof(float));
 
         // do not reset the scheduler - we will reuse the graph in the next chunk
-        if (!ggml_graph_compute_helper(sched, gf, vctx->n_threads, false)) {
+        if (!ggml_graph_compute_helper(sched, gf, vctx->n_threads, nullptr, nullptr, false)) {
             WHISPER_LOG_ERROR("%s: failed to compute VAD graph\n", __func__);
             break;
         }
@@ -6833,7 +6873,7 @@ int whisper_full_with_state(
     if (params.language == nullptr || strlen(params.language) == 0 || strcmp(params.language, "auto") == 0 || params.detect_language) {
         std::vector<float> probs(whisper_lang_max_id() + 1, 0.0f);
 
-        const auto lang_id = whisper_lang_auto_detect_with_state(ctx, state, 0, params.n_threads, probs.data());
+        const auto lang_id = whisper_lang_auto_detect_internal(ctx, state, 0, params.n_threads, probs.data(), params.abort_callback, params.abort_callback_user_data);
         if (lang_id < 0) {
             WHISPER_LOG_ERROR("%s: failed to auto-detect language\n", __func__);
             return -3;
