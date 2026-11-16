@@ -1,5 +1,9 @@
 # whisper.cpp
 
+<p align="center">
+  <b>English</b> · <a href="https://github.com/ggml-org/whisper.cpp/blob/master/README.zh.md">简体中文</a>
+</p>
+
 <div align="center">
 
 ![whisper.cpp](https://user-images.githubusercontent.com/1991296/235238348-05d0f6a4-da44-4900-a1de-d0707e75b763.jpeg)
