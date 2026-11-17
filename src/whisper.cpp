@@ -6697,28 +6697,9 @@ static std::vector<whisper_token_data> whisper_sample_token_topk(
     const auto & vocab = ctx.vocab;
 
     const auto & probs    = decoder.probs;
-    const auto & logits   = decoder.logits;
     const auto & logprobs = decoder.logprobs;
 
     const int n_logits = vocab.n_vocab;
-
-    auto & logits_id = decoder.logits_id;
-
-    logits_id.resize(n_logits);
-    for (int i = 0; i < n_logits; ++i) {
-        logits_id[i].first = logits[i];
-        logits_id[i].second = i;
-    }
-
-    {
-        using pair_type = std::remove_reference<decltype(logits_id)>::type::value_type;
-        std::partial_sort(
-                logits_id.begin(),
-                logits_id.begin() + k, logits_id.end(),
-                [](const pair_type & a, const pair_type & b) {
-            return a.first > b.first;
-        });
-    }
 
     std::vector<whisper_token_data> result;
     result.reserve(k);
