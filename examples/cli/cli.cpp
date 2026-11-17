@@ -826,7 +826,14 @@ static bool output_wts(struct whisper_context * ctx, std::ostream & fout, const 
     fout << "#!/bin/bash" << "\n";
     fout << "\n";
 
-    fout << "ffmpeg -i " << fname_inp << " -f lavfi -i color=size=1200x120:duration=" << t_sec << ":rate=25:color=black -vf \"";
+    const std::string fname_filters = std::string(fname_inp) + ".filters";
+    std::ofstream ffilters(fname_filters);
+    if (!ffilters.is_open()) {
+        fprintf(stderr, "%s: failed to open '%s' for writing\n", __func__, fname_filters.c_str());
+        return false;
+    }
+
+    fout << "ffmpeg -i " << fname_inp << " -f lavfi -i color=size=1200x120:duration=" << t_sec << ":rate=25:color=black -filter_script:v " << fname_filters;
 
     for (int i = 0; i < whisper_full_n_segments(ctx); i++) {
         const int64_t t0 = whisper_full_get_segment_t0(ctx, i);
@@ -840,11 +847,11 @@ static bool output_wts(struct whisper_context * ctx, std::ostream & fout, const 
         }
 
         if (i > 0) {
-            fout << ",";
+            ffilters << ",";
         }
 
         // background text
-        fout << "drawtext=fontfile='" << font << "':fontsize=24:fontcolor=gray:x=(w-text_w)/2:y=h/2:text='':enable='between(t," << t0/100.0 << "," << t0/100.0 << ")'";
+        ffilters << "drawtext=fontfile='" << font << "':fontsize=24:fontcolor=gray:x=(w-text_w)/2:y=h/2:text='':enable='between(t," << t0/100.0 << "," << t0/100.0 << ")'";
 
         bool is_first = true;
         std::string speaker = "";
@@ -908,19 +915,19 @@ static bool output_wts(struct whisper_context * ctx, std::ostream & fout, const 
 
             if (is_first) {
                 // background text
-                fout << ",drawtext=fontfile='" << font << "':fontsize=24:fontcolor=gray:x=(w-text_w)/2:y=h/2:text='" << txt_bg << "':enable='between(t," << t0/100.0 << "," << t1/100.0 << ")'";
+                ffilters << ",drawtext=fontfile='" << font << "':fontsize=24:fontcolor=gray:x=(w-text_w)/2:y=h/2:text='" << txt_bg << "':enable='between(t," << t0/100.0 << "," << t1/100.0 << ")'";
                 is_first = false;
             }
 
             // foreground text
-            fout << ",drawtext=fontfile='" << font << "':fontsize=24:fontcolor=lightgreen:x=(w-text_w)/2+8:y=h/2:text='" << txt_fg << "':enable='between(t," << token.t0/100.0 << "," << token.t1/100.0 << ")'";
+            ffilters << ",drawtext=fontfile='" << font << "':fontsize=24:fontcolor=lightgreen:x=(w-text_w)/2+8:y=h/2:text='" << txt_fg << "':enable='between(t," << token.t0/100.0 << "," << token.t1/100.0 << ")'";
 
             // underline
-            fout << ",drawtext=fontfile='" << font << "':fontsize=24:fontcolor=lightgreen:x=(w-text_w)/2+8:y=h/2+16:text='" << txt_ul << "':enable='between(t," << token.t0/100.0 << "," << token.t1/100.0 << ")'";
+            ffilters << ",drawtext=fontfile='" << font << "':fontsize=24:fontcolor=lightgreen:x=(w-text_w)/2+8:y=h/2+16:text='" << txt_ul << "':enable='between(t," << token.t0/100.0 << "," << token.t1/100.0 << ")'";
         }
     }
 
-    fout << "\" -c:v libx264 -pix_fmt yuv420p -y " << fname_inp << ".mp4" << "\n";
+    fout << " -c:v libx264 -pix_fmt yuv420p -y " << fname_inp << ".mp4" << "\n";
 
     fout << "\n\n";
     fout << "echo \"Your video has been saved to " << fname_inp << ".mp4\"" << "\n";
