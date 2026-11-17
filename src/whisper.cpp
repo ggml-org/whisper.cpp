@@ -9362,6 +9362,9 @@ const char * whisper_version(void) {
 }
 
 GGML_ATTRIBUTE_FORMAT(2, 3)
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((visibility("hidden")))
+#endif
 void whisper_log_internal(ggml_log_level level, const char * format, ...) {
     va_list args;
     va_start(args, format);
