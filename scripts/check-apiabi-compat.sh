@@ -246,9 +246,12 @@ elif [ "$DO_CHECK" -eq 1 ]; then
 
     ACC_STRICT=
     [ "$STRICT" -eq 0 ] || ACC_STRICT="-strict"
+    # Included ggml headers contribute declarations to the API dumps. Check
+    # only our API entry points, retaining the dependency types they expose.
     abi-compliance-checker \
         $ACC_STRICT \
         -source \
+        -skip-internal-symbols '^(?!whisper_|parakeet_)' \
         -library "$PROJECT_NAME" \
         -old "$BUILD_DIR/apiabi/api.dump" \
         -new "$BUILD_DIR_NEW/apiabi/api.dump" \
