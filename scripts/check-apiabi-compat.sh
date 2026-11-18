@@ -248,15 +248,50 @@ elif [ "$DO_CHECK" -eq 1 ]; then
     [ "$STRICT" -eq 0 ] || ACC_STRICT="-strict"
     # Included ggml headers contribute declarations to the API dumps. Check
     # only our API entry points, retaining the dependency types they expose.
-    abi-compliance-checker \
-        $ACC_STRICT \
-        -source \
-        -skip-internal-symbols '^(?!whisper_|parakeet_)' \
-        -library "$PROJECT_NAME" \
-        -old "$BUILD_DIR/apiabi/api.dump" \
-        -new "$BUILD_DIR_NEW/apiabi/api.dump" \
-        -src-report-path "$BUILD_DIR_NEW/apiabi/api_compat_report.html"
+    compare_api() {
+        abi-compliance-checker \
+            $ACC_STRICT \
+            -source \
+            -skip-internal-symbols '^(?!whisper_|parakeet_)' \
+            -library "$PROJECT_NAME" \
+            -old "$BUILD_DIR/apiabi/api.dump" \
+            -new "$BUILD_DIR_NEW/apiabi/api.dump" \
+            "$@"
+    }
+    compare_api -src-report-path "$BUILD_DIR_NEW/apiabi/api_compat_report.html"
     API_RESULT=$?
+
+    # Keep the HTML report and use XML to print individual findings to the log.
+    if command -v python3 >/dev/null 2>&1; then
+        API_XML="$BUILD_DIR_NEW/apiabi/api_compat_report.xml"
+        compare_api -report-format xml -stdout >"$API_XML"
+        XML_RESULT=$?
+        if [ "$XML_RESULT" -le 1 ]; then
+            python3 - "$API_XML" <<'PY'
+import re
+import sys
+import xml.etree.ElementTree as ET
+
+root = ET.parse(sys.argv[1]).getroot()
+for section in root:
+    if section.tag in ("added_symbols", "removed_symbols"):
+        action = "Added" if section.tag == "added_symbols" else "Removed"
+        for symbol in section.findall("./header/library/name"):
+            print(f"[{action}] {symbol.text}\n")
+    elif section.tag.startswith("problems_with_") and section.get("severity") != "Safe":
+        for change in section.findall(".//problem/change"):
+            message = re.sub(r"@(\w+)", lambda m: change.get(m[1], m[0]), change.text or "")
+            print(f"[{section.get('severity')}] {message}\n")
+PY
+            if [ "$?" -ne 0 ]; then
+                echo "Warning: could not summarize API findings; see the HTML report." >&2
+            fi
+        else
+            echo "Warning: could not generate XML API report (exit $XML_RESULT)." >&2
+        fi
+    else
+        echo "Warning: python3 is not installed; API findings are in the HTML report." >&2
+    fi
 
     ABI_RESULT=0
     for xml_file in "$BUILD_DIR/apiabi/"lib*.abi.xml; do
