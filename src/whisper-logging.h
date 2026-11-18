@@ -15,6 +15,9 @@ extern "C" {
 #endif
 
 GGML_ATTRIBUTE_FORMAT(2, 3)
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((visibility("hidden")))
+#endif
 void whisper_log_internal(ggml_log_level level, const char * format, ...);
 
 #ifdef __cplusplus
