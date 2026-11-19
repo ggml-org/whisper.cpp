@@ -66,10 +66,16 @@ fi
 
 echo "Checking that tag ${VERSION} does not already exist..."
 if git ls-remote --tags origin "${VERSION}" | grep -q "${VERSION}"; then
-    echo "Error: tag ${VERSION} already exists on remote"
-    exit 1
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "Warning: tag ${VERSION} already exists on remote (dry run, continuing)."
+        CHECKS_PASSED=false
+    else
+        echo "Error: tag ${VERSION} already exists on remote"
+        exit 1
+    fi
+else
+    echo "Tag ${VERSION} does not exist on remote - OK"
 fi
-echo "Tag ${VERSION} does not exist on remote - OK"
 
 echo "Checking release.yml status for commit ${SHA}..."
 if [[ -z "${GITHUB_REPOSITORY:-}" ]]; then
@@ -118,6 +124,23 @@ else
     else
         echo "local ggml/ matches upstream ${GGML_VERSION}"
     fi
+fi
+
+echo "Checking API/ABI compatibility..."
+set +e
+bash "$SCRIPT_DIR/check-release-apiabi.sh"
+APIABI_RESULT=$?
+set -e
+if [[ $APIABI_RESULT -ne 0 ]]; then
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "Warning: API/ABI check found backwards-incompatible changes (dry run, continuing)."
+        CHECKS_PASSED=false
+    else
+        echo "Error: API/ABI check found backwards-incompatible changes."
+        exit 1
+    fi
+else
+    echo "API/ABI compatibility check passed - OK"
 fi
 
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
