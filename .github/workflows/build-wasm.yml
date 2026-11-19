@@ -50,6 +50,8 @@ jobs:
 
       - name: Setup emsdk
         uses: emscripten-core/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
+        with:
+          version: '7.0.0'
 
       - name: Verify
         run: emcc -v
