@@ -762,6 +762,12 @@ extern "C" {
 
     WHISPER_API void whisper_log_set(ggml_log_callback log_callback, void * user_data);
 
+    // Access the prompt tokens used for the current/most recent decode window
+    WHISPER_API int           whisper_full_n_prompt_tokens           (struct whisper_context * ctx);
+    WHISPER_API int           whisper_full_n_prompt_tokens_from_state(struct whisper_state * state);
+    WHISPER_API whisper_token whisper_full_get_prompt_token          (struct whisper_context * ctx, int i);
+    WHISPER_API whisper_token whisper_full_get_prompt_token_from_state(struct whisper_state * state, int i);
+
     // Get the no_speech probability for the specified segment
     WHISPER_API float whisper_full_get_segment_no_speech_prob           (struct whisper_context * ctx, int i_segment);
     WHISPER_API float whisper_full_get_segment_no_speech_prob_from_state(struct whisper_state * state, int i_segment);
