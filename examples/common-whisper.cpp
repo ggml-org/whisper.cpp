@@ -226,6 +226,62 @@ int utf8_trailing_bytes_needed(const std::string & s) {
     return have >= expected ? 0 : (expected - have);
 }
 
+std::string utf8_sanitize(const std::string & s) {
+    // Keep only well-formed UTF-8 sequences (Unicode Table 3-7). Any byte that
+    // starts an invalid/overlong/surrogate sequence, is an orphan continuation
+    // byte, or belongs to a truncated trailing sequence is dropped.
+    std::string out;
+    out.reserve(s.size());
+
+    const size_t n = s.size();
+    size_t i = 0;
+    while (i < n) {
+        const unsigned char c = (unsigned char) s[i];
+
+        size_t len;
+        unsigned char lo = 0x80; // valid range for the first continuation byte
+        unsigned char hi = 0xBF;
+        if (c <= 0x7F) {
+            out.push_back((char) c);
+            ++i;
+            continue;
+        } else if (c >= 0xC2 && c <= 0xDF) {
+            len = 2;
+        } else if (c >= 0xE0 && c <= 0xEF) {
+            len = 3;
+            if      (c == 0xE0) { lo = 0xA0; } // exclude overlong encodings
+            else if (c == 0xED) { hi = 0x9F; } // exclude UTF-16 surrogates
+        } else if (c >= 0xF0 && c <= 0xF4) {
+            len = 4;
+            if      (c == 0xF0) { lo = 0x90; } // exclude overlong encodings
+            else if (c == 0xF4) { hi = 0x8F; } // exclude code points > U+10FFFF
+        } else {
+            ++i; // invalid lead byte (incl. orphan continuation 0x80..0xBF)
+            continue;
+        }
+
+        if (i + len > n) {
+            ++i; // truncated sequence: drop the lead and rescan the rest
+            continue;
+        }
+
+        bool ok = ((unsigned char) s[i + 1] >= lo && (unsigned char) s[i + 1] <= hi);
+        for (size_t k = 2; ok && k < len; ++k) {
+            const unsigned char cc = (unsigned char) s[i + k];
+            ok = (cc >= 0x80 && cc <= 0xBF);
+        }
+        if (!ok) {
+            ++i; // malformed continuation byte: drop the lead and rescan
+            continue;
+        }
+
+        out.append(s, i, len);
+        i += len;
+    }
+
+    return out;
+}
+
 bool speak_with_file(const std::string & command, const std::string & text, const std::string & path, int voice_id) {
     std::ofstream speak_file(path.c_str());
     if (speak_file.fail()) {
