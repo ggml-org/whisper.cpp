@@ -361,7 +361,7 @@ jobs:
           $CUDART_VER = "11.8.89"
           $NVCC_VER   = "11.8.89"
           $NVRTC_VER  = "11.8.89"
-          $CUBLAS_VER = "11.8.1.74"
+          $CUBLAS_VER = "11.11.3.6"
           $NVTX_VER   = "11.8.86"
           $VS_VER     = "11.8.86"
           $NVPROF_VER = "11.8.87"
