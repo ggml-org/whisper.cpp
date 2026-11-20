@@ -156,6 +156,29 @@ if (WHISPER_OPENVINO)
     set_target_properties(${TARGET} PROPERTIES FOLDER "libs")
 endif()
 
+if (WHISPER_RKNN)
+    find_path(RKNN_INCLUDE_DIR NAMES rknn_api.h)
+    find_library(RKNN_LIBRARY NAMES rknnrt)
+    if (NOT RKNN_INCLUDE_DIR OR NOT RKNN_LIBRARY)
+        message(FATAL_ERROR "RKNN runtime not found: set RKNN_INCLUDE_DIR and RKNN_LIBRARY")
+    endif()
+
+    set(TARGET whisper.rknn)
+
+    add_library(${TARGET} OBJECT
+        rknn/whisper-rknn-encoder.h
+        rknn/whisper-rknn-encoder.cpp
+        )
+
+    target_include_directories(${TARGET} PUBLIC . PRIVATE ${RKNN_INCLUDE_DIR})
+
+    set_property(TARGET ${TARGET} PROPERTY POSITION_INDEPENDENT_CODE ON)
+    set(WHISPER_EXTRA_FLAGS ${WHISPER_EXTRA_FLAGS} -DWHISPER_USE_RKNN)
+
+    target_link_libraries(${TARGET} PRIVATE ggml ${RKNN_LIBRARY})
+    set_target_properties(${TARGET} PROPERTIES FOLDER "libs")
+endif()
+
 if (WHISPER_VITISAI)
     set(TARGET whisper.vitisai)
 
@@ -241,6 +264,10 @@ endif()
 
 if (WHISPER_OPENVINO)
     target_link_libraries(whisper PRIVATE whisper.openvino)
+endif()
+
+if (WHISPER_RKNN)
+    target_link_libraries(whisper PRIVATE whisper.rknn)
 endif()
 
 if (WHISPER_VITISAI)
