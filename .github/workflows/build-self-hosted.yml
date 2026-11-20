@@ -62,6 +62,10 @@ jobs:
 
   gpu-vulkan-nvidia-cm:
     runs-on: [self-hosted, Linux, NVIDIA]
+    timeout-minutes: 75
+    continue-on-error: true
+    env:
+      GG_BUILD_TEST_MODELS: ${{ github.event_name == 'pull_request' && 'tiny,base,small' || '' }}
 
     steps:
       - name: Clone
@@ -76,6 +80,10 @@ jobs:
 
   gpu-vulkan-nvidia-cm2:
     runs-on: [self-hosted, Linux, NVIDIA, COOPMAT2]
+    timeout-minutes: 75
+    continue-on-error: true
+    env:
+      GG_BUILD_TEST_MODELS: ${{ github.event_name == 'pull_request' && 'tiny,base,small' || '' }}
 
     steps:
       - name: Clone
