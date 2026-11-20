@@ -26,6 +26,7 @@
 #include <cassert>
 #include <cfloat>
 #include <cstdio>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <utility>
