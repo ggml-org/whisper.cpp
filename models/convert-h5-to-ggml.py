@@ -174,8 +174,11 @@ for name in list_vars.keys():
         name = conv_map[name] if name in conv_map else name
 
     print(src, ' -> ', name)
-    data = list_vars[src].squeeze().numpy()
-    data = data.astype(np.float16)
+    tensor = list_vars[src].squeeze()
+    # NumPy cannot represent BF16; FP32 preserves its finite values exactly.
+    if tensor.dtype == torch.bfloat16:
+        tensor = tensor.float()
+    data = tensor.numpy()
 
     # reshape conv bias from [n] to [n, 1]
     if name in ["encoder.conv1.bias", "encoder.conv2.bias"]:
@@ -198,6 +201,9 @@ for name in list_vars.keys():
             print("  Converting to float32")
             data = data.astype(np.float32)
             ftype = 0
+        else:
+            # Use use-f32 to preserve values outside the FP16 range.
+            data = data.astype(np.float16)
     else:
         data = data.astype(np.float32)
         ftype = 0
