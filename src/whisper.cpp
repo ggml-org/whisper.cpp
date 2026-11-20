@@ -6636,7 +6636,7 @@ static whisper_token_data whisper_sample_token(
       const whisper_decoder & decoder,
                        bool   best) {
     whisper_token_data result = {
-        0, 0, 0.0f, 0.0f, 0.0f, 0.0f, -1, -1, -1, 0.0f,
+        0, 0, 0.0f, 0.0f, 0.0f, 0.0f, -1, -1, -1, 0.0f, -1,
     };
 
     const auto & vocab = ctx.vocab;
@@ -6754,7 +6754,7 @@ static std::vector<whisper_token_data> whisper_sample_token_topk(
         const auto id = dist(decoder.rng);
         //printf("XXX %d %d %f %f %f %f\n", id, tid, probs[id], logprobs[id], pt, ptsum);
 
-        result.push_back({ id, tid, probs[id], logprobs[id], pt, ptsum, -1, -1, -1, 0.0f, });
+        result.push_back({ id, tid, probs[id], logprobs[id], pt, ptsum, -1, -1, -1, 0.0f, -1, });
 
         if (result[i].id >= vocab.token_beg) {
             result[i].tid = result[i].id;
@@ -8335,6 +8335,30 @@ int64_t whisper_full_get_token_t1(struct whisper_context * ctx, int i_segment, i
     return whisper_full_get_token_t1_from_state(ctx->state, i_segment, i_token);
 }
 
+int64_t whisper_full_get_token_dtw_t0_from_state(struct whisper_state * state, int i_segment, int i_token) {
+    const int64_t t0 = state->result_all[i_segment].tokens[i_token].t_dtw_start;
+    if (t0 < 0 || !state->has_vad_segments || state->vad_segments.empty()) {
+        return t0;
+    }
+    return whisper_map_token_time_segment_aware(t0, state->vad_segments);
+}
+
+int64_t whisper_full_get_token_dtw_t0(struct whisper_context * ctx, int i_segment, int i_token) {
+    return whisper_full_get_token_dtw_t0_from_state(ctx->state, i_segment, i_token);
+}
+
+int64_t whisper_full_get_token_dtw_t1_from_state(struct whisper_state * state, int i_segment, int i_token) {
+    const int64_t t1 = state->result_all[i_segment].tokens[i_token].t_dtw;
+    if (t1 < 0 || !state->has_vad_segments || state->vad_segments.empty()) {
+        return t1;
+    }
+    return whisper_map_token_time_segment_aware(t1, state->vad_segments);
+}
+
+int64_t whisper_full_get_token_dtw_t1(struct whisper_context * ctx, int i_segment, int i_token) {
+    return whisper_full_get_token_dtw_t1_from_state(ctx->state, i_segment, i_token);
+}
+
 int whisper_full_n_vad_segments_from_state(struct whisper_state * state) {
     return (int) state->vad_segments.size();
 }
@@ -9309,8 +9333,10 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
 
     ggml_tensor * alignment = dtw_and_backtrace(gctx, w);
 
-    // Place timestamps on segments
+    // Place timestamps on segments. Each step of the path to the next row ends the
+    // current text token and starts the next one; the first one starts at seek.
     int32_t last_v = 0;
+    int64_t last_t = seek;
     auto seg_i = state->result_all.begin() + i_segment;
     auto tok_i = seg_i->tokens.begin();
     for (int i = 0; i < alignment->ne[1]; ++i) {
@@ -9329,7 +9355,9 @@ static void whisper_exp_compute_token_level_timestamps_dtw(
                 }
             }
 
+            tok_i->t_dtw_start = last_t;
             tok_i->t_dtw = timestamp;
+            last_t = timestamp;
             ++tok_i;
             if (tok_i == seg_i->tokens.end()) {
                 ++seg_i;
