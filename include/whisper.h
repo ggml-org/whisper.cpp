@@ -488,7 +488,7 @@ extern "C" {
         enum whisper_sampling_strategy strategy;
 
         int n_threads;
-        int n_max_text_ctx;     // max tokens to use from past text as prompt for the decoder
+        int n_max_text_ctx;     // max tokens to use from past text as prompt for the decoder (0 disables conditioning on previous transcription output; the initial prompt is still used)
         int offset_ms;          // start offset in ms
         int duration_ms;        // audio duration to process in ms
 
