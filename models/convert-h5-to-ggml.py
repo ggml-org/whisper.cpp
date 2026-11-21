@@ -84,16 +84,10 @@ encoder = json.load((dir_model / "vocab.json").open("r", encoding="utf8"))
 encoder_added = json.load((dir_model / "added_tokens.json").open( "r", encoding="utf8"))
 hparams = json.load((dir_model / "config.json").open("r", encoding="utf8"))
 
-# Add this block to handle missing 'max_length'
-if "max_length" not in hparams or hparams["max_length"] is None:
-    hparams["max_length"] = hparams.get("max_target_positions", 448)  # Default to 448 if missing
-elif not isinstance(hparams["max_length"], int):
-    try:
-        hparams["max_length"] = int(hparams["max_length"])  # Convert if necessary
-    except ValueError:
-        print(f"Warning: Invalid max_length value '{hparams['max_length']}', using default 448.")
-        hparams["max_length"] = 448
-        
+# n_text_ctx sizes the decoder positional embedding, so it must come from the
+# architecture ('max_target_positions'), not the generation default ('max_length').
+n_text_ctx = hparams.get("max_target_positions") or 448
+
 model = WhisperForConditionalGeneration.from_pretrained(dir_model)
 
 #code.interact(local=locals())
@@ -122,7 +116,7 @@ fout.write(struct.pack("i", hparams["max_source_positions"]))
 fout.write(struct.pack("i", hparams["d_model"]))
 fout.write(struct.pack("i", hparams["encoder_attention_heads"]))
 fout.write(struct.pack("i", hparams["encoder_layers"]))
-fout.write(struct.pack("i", hparams["max_length"]))
+fout.write(struct.pack("i", n_text_ctx))
 fout.write(struct.pack("i", hparams["d_model"]))
 fout.write(struct.pack("i", hparams["decoder_attention_heads"]))
 fout.write(struct.pack("i", hparams["decoder_layers"]))
