@@ -353,8 +353,20 @@ The conversion and runtime have been tested with rknn-toolkit2 2.3.2 and librknn
   ```bash
   python3 -m venv rknn_conv_env
   source rknn_conv_env/bin/activate
-  python -m pip install "openai-whisper==20231117" "torch==2.4.0" "onnx==1.17.0" "rknn-toolkit2==2.3.2"
+  python -m pip install "setuptools==80.10.2" "wheel==0.48.0"
+  python -m pip install --no-build-isolation "torch==2.4.0" "onnx==1.17.0" "rknn-toolkit2==2.3.2"
+  python -m pip install --no-build-isolation --no-deps "openai-whisper==20231117"
+  python -m pip install "numpy==1.26.4" "tqdm==4.70.1" "more-itertools==11.2.1" "tiktoken==0.14.0" "numba==0.68.1"
   ```
+
+  The extra steps are needed because of two quirks of `openai-whisper` 20231117. Its `setup.py`
+  imports `pkg_resources`, which was removed from `setuptools` 81, so it must be built against a
+  pinned `setuptools` without build isolation (otherwise the build fails with
+  `ModuleNotFoundError: No module named 'pkg_resources'`). It also declares `triton<3` while
+  `torch` 2.4.0 requires `triton==3.0.0`, which pip cannot resolve together, so it is installed
+  with `--no-deps` and its remaining dependencies are installed explicitly. `triton` is only used
+  by Whisper's CUDA decoding kernels, not by the ONNX export path, so the `triton` 3.0.0 installed
+  with `torch` is not a problem here.
 
 - Generate the RKNN encoder from the official OpenAI Whisper weights:
 
