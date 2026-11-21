@@ -41,6 +41,8 @@ struct whisper_params {
     std::string language  = "en";
     std::string model     = "models/ggml-base.en.bin";
     std::string fname_out;
+    std::string prompt;
+    bool carry_prompt = true;
 };
 
 void whisper_print_usage(int argc, char ** argv, const whisper_params & params);
@@ -70,6 +72,14 @@ static bool whisper_params_parse(int argc, char ** argv, whisper_params & params
         else if (arg == "-l"    || arg == "--language")      { params.language      = argv[++i]; }
         else if (arg == "-m"    || arg == "--model")         { params.model         = argv[++i]; }
         else if (arg == "-f"    || arg == "--file")          { params.fname_out     = argv[++i]; }
+        else if (arg == "-p"    || arg == "--prompt")        {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "error: --prompt requires an argument\n");
+                return false;
+            }
+            params.prompt = argv[++i];
+        }
+        else if (arg == "-ncp"  || arg == "--no-carry-prompt") { params.carry_prompt  = false; }
         else if (arg == "-tdrz" || arg == "--tinydiarize")   { params.tinydiarize   = true; }
         else if (arg == "-sa"   || arg == "--save-audio")    { params.save_audio    = true; }
         else if (arg == "-ng"   || arg == "--no-gpu")        { params.use_gpu       = false; }
@@ -109,6 +119,8 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -l LANG,  --language LANG [%-7s] spoken language\n",                                params.language.c_str());
     fprintf(stderr, "  -m FNAME, --model FNAME   [%-7s] model path\n",                                     params.model.c_str());
     fprintf(stderr, "  -f FNAME, --file FNAME    [%-7s] text output file name\n",                          params.fname_out.c_str());
+    fprintf(stderr, "  -p TEXT,  --prompt TEXT     [%-7s] initial prompt to bias decoding\n",             params.prompt.empty() ? "" : "set");
+    fprintf(stderr, "  -ncp,     --no-carry-prompt [%-7s] apply the prompt only to the first chunk\n",    params.carry_prompt ? "false" : "true");
     fprintf(stderr, "  -tdrz,    --tinydiarize   [%-7s] enable tinydiarize (requires a tdrz model)\n",     params.tinydiarize ? "true" : "false");
     fprintf(stderr, "  -sa,      --save-audio    [%-7s] save the recorded audio to a file\n",              params.save_audio ? "true" : "false");
     fprintf(stderr, "  -ng,      --no-gpu        [%-7s] disable GPU inference\n",                          params.use_gpu ? "false" : "true");
@@ -337,6 +349,10 @@ int main(int argc, char ** argv) {
 
             wparams.prompt_tokens    = params.no_context ? nullptr : prompt_tokens.data();
             wparams.prompt_n_tokens  = params.no_context ? 0       : prompt_tokens.size();
+            if (!params.prompt.empty()) {
+                wparams.initial_prompt = params.prompt.c_str();
+                wparams.carry_initial_prompt = params.carry_prompt;
+            }
 
             if (whisper_full(ctx, wparams, pcmf32.data(), pcmf32.size()) != 0) {
                 fprintf(stderr, "%s: failed to process audio\n", argv[0]);
