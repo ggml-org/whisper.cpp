@@ -61,7 +61,7 @@ static bool read_audio_from_decoder(ma_decoder & decoder, std::vector<float> & p
         std::vector<float> stereo_data = pcmf32;
         pcmf32.resize(frame_count);
         for (uint64_t i = 0; i < frame_count; i++) {
-            pcmf32[i] = (stereo_data[2*i] + stereo_data[2*i + 1]);
+            pcmf32[i] = (stereo_data[2*i] + stereo_data[2*i + 1]) / 2.0f;
         }
         pcmf32s.resize(2);
         pcmf32s[0].resize(frame_count);
