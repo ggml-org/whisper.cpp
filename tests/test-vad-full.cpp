@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <cfloat>
+#include <cstdint>
 #include <string>
 #include <cstring>
 
@@ -11,6 +12,35 @@
 #endif
 
 #include <cassert>
+
+static void assert_vad_segments_in_window(
+        whisper_context * ctx,
+        int offset_ms,
+        int duration_ms) {
+
+    const int n_vad = whisper_full_n_vad_segments(ctx);
+    assert(n_vad > 0);
+
+    const int64_t window_start_cs = offset_ms / 10;
+    const int64_t window_end_cs =
+        duration_ms > 0
+            ? (offset_ms + duration_ms) / 10
+            : INT64_MAX;
+
+    int64_t prev_end = -1;
+
+    for (int i = 0; i < n_vad; ++i) {
+        const int64_t t0 = whisper_full_get_vad_segment_t0(ctx, i);
+        const int64_t t1 = whisper_full_get_vad_segment_t1(ctx, i);
+
+        assert(t1 > t0);
+        assert(t0 >= window_start_cs);
+        assert(t1 <= window_end_cs);
+        assert(t0 >= prev_end);
+
+        prev_end = t1;
+    }
+}
 
 int main() {
     ggml_backend_load_all();
@@ -107,6 +137,51 @@ int main() {
             assert(whisper_full_get_segment_t0(wctx, i) == whisper_full_get_segment_t0(wctx_ref, i));
             assert(whisper_full_get_segment_t1(wctx, i) == whisper_full_get_segment_t1(wctx_ref, i));
         }
+    }
+
+
+    // Build a 38 s recording from the 11 s jfk sample, so that offset_ms and duration_ms
+    // have to be applied on the original timeline and not on the speech-only audio:
+    //
+    //    0 -  8 s   silence
+    //    8 - 19 s   speech A (jfk.wav)
+    //   19 - 27 s   silence
+    //   27 - 38 s   speech B (jfk.wav)
+    std::vector<float> pcmf32_long;
+    {
+        const std::vector<float> silence(8 * WHISPER_SAMPLE_RATE, 0.0f);
+        pcmf32_long.insert(pcmf32_long.end(), silence.begin(), silence.end());
+        pcmf32_long.insert(pcmf32_long.end(), pcmf32.begin(), pcmf32.end());
+        pcmf32_long.insert(pcmf32_long.end(), silence.begin(), silence.end());
+        pcmf32_long.insert(pcmf32_long.end(), pcmf32.begin(), pcmf32.end());
+    }
+
+    for (int processors = 1; processors <= 2; ++processors) {
+        struct whisper_full_params params = wparams;
+
+        params.offset_ms = 10000;
+        params.duration_ms = 0;
+
+        assert(whisper_full_parallel(
+            wctx, params, pcmf32_long.data(), pcmf32_long.size(), processors) == 0);
+
+        assert_vad_segments_in_window(wctx, 10000, 0);
+
+        params.offset_ms = 20000;
+        params.duration_ms = 0;
+
+        assert(whisper_full_parallel(
+            wctx, params, pcmf32_long.data(), pcmf32_long.size(), processors) == 0);
+
+        assert_vad_segments_in_window(wctx, 20000, 0);
+
+        params.offset_ms = 10000;
+        params.duration_ms = 10000;
+
+        assert(whisper_full_parallel(
+            wctx, params, pcmf32_long.data(), pcmf32_long.size(), processors) == 0);
+
+        assert_vad_segments_in_window(wctx, 10000, 10000);
     }
 
     whisper_free(wctx_ref);
