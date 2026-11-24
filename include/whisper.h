@@ -548,11 +548,11 @@ extern "C" {
         float logprob_thold;
         float no_speech_thold;
 
-        struct {
+        struct whisper_greedy_params {
             int best_of;    // ref: https://github.com/openai/whisper/blob/f82bc59f5ea234d4b97fb2860842ed38519f7e65/whisper/transcribe.py#L264
         } greedy;
 
-        struct {
+        struct whisper_beam_search_params {
             int beam_size;  // ref: https://github.com/openai/whisper/blob/f82bc59f5ea234d4b97fb2860842ed38519f7e65/whisper/transcribe.py#L265
 
             float patience; // TODO: not implemented, ref: https://arxiv.org/pdf/2204.05424.pdf
