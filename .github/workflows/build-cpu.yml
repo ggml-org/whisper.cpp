@@ -141,7 +141,7 @@ jobs:
         id: depends
         run: |
           apt-get update
-          apt-get install -y build-essential cmake libcurl4-openssl-dev
+          apt-get install -y build-essential cmake libcurl4-openssl-dev wget
 
       - name: Test
         id: ggml-ci
@@ -163,7 +163,7 @@ jobs:
         id: depends
         run: |
           apt-get update
-          apt-get install -y build-essential cmake libcurl4-openssl-dev
+          apt-get install -y build-essential cmake libcurl4-openssl-dev wget
 
       - name: Test
         id: ggml-ci
