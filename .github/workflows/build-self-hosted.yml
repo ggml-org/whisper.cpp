@@ -47,26 +47,40 @@ concurrency:
 
 jobs:
   gpu-cuda:
-    runs-on: [self-hosted, Linux, NVIDIA]
+    runs-on: [self-hosted, Linux, gb10, perf]
+    container: "nvidia/cuda:13.4.3-devel-ubuntu26.04"
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Dependencies
+        id: depends
+        run: |
+          apt-get update
+          apt-get install -y build-essential cmake wget
 
       - name: Test
         id: ggml-ci
         run: |
           nvidia-smi
-          GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/whisper.cpp ~/mnt/whisper.cpp
+          GG_BUILD_CUDA=1 CUDACXX=/usr/local/cuda/bin/nvcc bash ./ci/run.sh ~/results/whisper.cpp ~/mnt/whisper.cpp
 
   gpu-vulkan-nvidia-cm:
-    runs-on: [self-hosted, Linux, NVIDIA]
+    runs-on: [self-hosted, Linux, gb10, perf]
+    container: "nvidia/cuda:13.4.3-devel-ubuntu26.04"
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Dependencies
+        id: depends
+        run: |
+          apt-get update
+          apt-get install -y build-essential cmake wget vulkan-tools libvulkan-dev glslc spirv-headers
 
       - name: Test
         id: ggml-ci
@@ -75,12 +89,19 @@ jobs:
           GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/whisper.cpp ~/mnt/whisper.cpp
 
   gpu-vulkan-nvidia-cm2:
-    runs-on: [self-hosted, Linux, NVIDIA, COOPMAT2]
+    runs-on: [self-hosted, Linux, gb10, perf]
+    container: "nvidia/cuda:13.4.3-devel-ubuntu26.04"
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Dependencies
+        id: depends
+        run: |
+          apt-get update
+          apt-get install -y build-essential cmake wget vulkan-tools libvulkan-dev glslc spirv-headers
 
       - name: Test
         id: ggml-ci
