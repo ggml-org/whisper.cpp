@@ -144,10 +144,14 @@ extern "C" {
 
         // [EXPERIMENTAL] Token-level timestamps with DTW
         // do not use if you haven't computed token-level timestamps with dtw
-        // Roughly corresponds to the moment in audio in which the token was output
+        // The moment in audio at which the token ends (the token was output)
         int64_t t_dtw;
 
         float vlen;        // voice length of the token
+
+        // [EXPERIMENTAL] The moment in audio at which the token starts, from DTW:
+        // the end of the previous text token, or the start of the decoding window
+        int64_t t_dtw_start;
     } whisper_token_data;
 
     typedef struct whisper_model_loader {
@@ -676,6 +680,13 @@ extern "C" {
     WHISPER_API int64_t whisper_full_get_token_t0_from_state(struct whisper_state * state, int i_segment, int i_token);
     WHISPER_API int64_t whisper_full_get_token_t1           (struct whisper_context * ctx, int i_segment, int i_token);
     WHISPER_API int64_t whisper_full_get_token_t1_from_state(struct whisper_state * state, int i_segment, int i_token);
+
+    // Same as above for the DTW token times (t_dtw_start/t_dtw), in centiseconds,
+    // mapped back to the original audio when VAD is enabled. -1 if not computed.
+    WHISPER_API int64_t whisper_full_get_token_dtw_t0           (struct whisper_context * ctx, int i_segment, int i_token);
+    WHISPER_API int64_t whisper_full_get_token_dtw_t0_from_state(struct whisper_state * state, int i_segment, int i_token);
+    WHISPER_API int64_t whisper_full_get_token_dtw_t1           (struct whisper_context * ctx, int i_segment, int i_token);
+    WHISPER_API int64_t whisper_full_get_token_dtw_t1_from_state(struct whisper_state * state, int i_segment, int i_token);
 
     // Get the probability of the specified token in the specified segment
     WHISPER_API float whisper_full_get_token_p           (struct whisper_context * ctx, int i_segment, int i_token);
