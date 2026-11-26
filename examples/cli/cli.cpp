@@ -797,8 +797,8 @@ static void output_json(
                                 }
                                 value_i("id", mt.data.id, false);
                                 value_f("p", mt.data.p, false);
-                                value_f("t_dtw_start", mt.dtw_t0, false);
-                                value_f("t_dtw", mt.dtw_t1, true);
+                                value_i("t_dtw_start", mt.dtw_t0, false);
+                                value_i("t_dtw", mt.dtw_t1, true);
                             end_obj(j == (nm - 1));
                         }
                         end_arr(!params.diarize && !params.tinydiarize);
