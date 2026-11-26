@@ -1,0 +1,31 @@
+{
+    "name": "Whisper.cpp Development DevContainer",
+    "description": "A development container for building and testing whisper.cpp using CMake and Docker.",
+    "build": {
+        "dockerfile": "../.devops/main.Dockerfile",
+        "context": ".."
+    },
+    "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "cmake.buildDirectory": "${workspaceFolder}/build",
+        "cmake.configureOnOpen": false
+    },
+    "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "twxs.cmake"
+    ],
+    "initializeCommand": "cmake -B build && cmake --build build -j --config Release",
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "cmake.configureOnOpen": false,
+                "cmake.buildDirectory": "${workspaceFolder}/build",
+                "cmake.preferredGenerators": ["Unix Makefiles"]
+            }
+        }
+    },
+    "mounts": [
+        "source=${localWorkspaceFolder},target=/workspace/whisper.cpp,type=bind,consistency=cached"
+    ]
+}
