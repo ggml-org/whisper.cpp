@@ -7941,6 +7941,89 @@ int whisper_full_with_state(
     return 0;
 }
 
+static bool whisper_vad_prepare_audio(
+        struct whisper_context * ctx,
+          struct whisper_state * state,
+    struct whisper_full_params & params,
+                   const float *& samples,
+                           int & n_samples,
+            std::vector<float> & vad_samples) {
+
+    if (!params.vad) {
+        return true;
+    }
+
+    // Apply offset and duration against the original audio timeline.
+    const int64_t offset_samples = std::max(
+        (int64_t) 0,
+        std::min(
+            (int64_t) WHISPER_SAMPLE_RATE * params.offset_ms / 1000,
+            (int64_t) n_samples
+        )
+    );
+
+    int64_t end_samples = n_samples;
+
+    if (params.duration_ms > 0) {
+        end_samples = std::min(
+            end_samples,
+            offset_samples +
+                (int64_t) WHISPER_SAMPLE_RATE * params.duration_ms / 1000
+        );
+    }
+
+    // Nothing remains after applying the requested range.
+    if (offset_samples >= end_samples) {
+        whisper_state_clear_vad(state);
+        state->result_all.clear();
+        n_samples = 0;
+        params.offset_ms = 0;
+        params.duration_ms = 0;
+        return true;
+    }
+
+    const int original_offset_samples = (int) offset_samples;
+
+    samples += original_offset_samples;
+    n_samples = (int) (end_samples - offset_samples);
+
+    // The audio is now cropped, so the original offset and duration
+    // must no longer be applied during transcription.
+    params.offset_ms = 0;
+    params.duration_ms = 0;
+
+    if (!whisper_vad(ctx, state, params, samples, n_samples, vad_samples)) {
+        WHISPER_LOG_ERROR(
+            "%s: failed to compute VAD\n", __func__
+        );
+        return false;
+    }
+
+    if (vad_samples.empty()) {
+        state->result_all.clear();
+        return true;
+    }
+
+    // Restore the original recording timeline in the VAD mapping.
+    const int64_t original_offset_cs =
+        (100LL * original_offset_samples) / WHISPER_SAMPLE_RATE;
+
+    for (auto & entry : state->vad_mapping_table) {
+        entry.original_time += original_offset_cs;
+    }
+
+    for (auto & segment : state->vad_segments) {
+        segment.orig_start += original_offset_cs;
+        segment.orig_end += original_offset_cs;
+    }
+
+    // Transcription now operates on the VAD-filtered audio.
+    samples = vad_samples.data();
+    n_samples = (int) vad_samples.size();
+
+    return true;
+}
+
 int whisper_full(
         struct whisper_context * ctx,
     struct whisper_full_params   params,
@@ -7948,18 +8031,23 @@ int whisper_full(
                            int   n_samples) {
 
     std::vector<float> vad_samples;
+
     if (params.vad) {
-        WHISPER_LOG_INFO("%s: VAD is enabled, processing speech segments only\n", __func__);
-        if (!whisper_vad(ctx, ctx->state, params, samples, n_samples, vad_samples)) {
-            WHISPER_LOG_ERROR("%s: failed to compute VAD\n", __func__);
+        WHISPER_LOG_INFO(
+            "%s: VAD is enabled, processing speech segments only\n",
+            __func__
+        );
+
+        if (!whisper_vad_prepare_audio(
+                ctx, ctx->state, params,
+                samples, n_samples, vad_samples)) {
             return -1;
         }
+
         if (vad_samples.empty()) {
             ctx->state->result_all.clear();
             return 0;
         }
-        samples = vad_samples.data();
-        n_samples = vad_samples.size();
     } else {
         whisper_state_clear_vad(ctx->state);
     }
@@ -7978,18 +8066,23 @@ int whisper_full_parallel(
     }
 
     std::vector<float> vad_samples;
+
     if (params.vad) {
-        WHISPER_LOG_INFO("%s: VAD is enabled, processing speech segments only\n", __func__);
-        if (!whisper_vad(ctx, ctx->state, params, samples, n_samples, vad_samples)) {
-            WHISPER_LOG_ERROR("%s: failed to compute VAD\n", __func__);
+        WHISPER_LOG_INFO(
+            "%s: VAD is enabled, processing speech segments only\n",
+            __func__
+        );
+
+        if (!whisper_vad_prepare_audio(
+                ctx, ctx->state, params,
+                samples, n_samples, vad_samples)) {
             return -1;
         }
+
         if (vad_samples.empty()) {
             ctx->state->result_all.clear();
             return 0;
         }
-        samples = vad_samples.data();
-        n_samples = vad_samples.size();
     } else {
         whisper_state_clear_vad(ctx->state);
     }
