@@ -6209,12 +6209,6 @@ static void whisper_exp_compute_token_level_timestamps(
                          float   thold_pt,
                          float   thold_ptsum);
 
-static inline bool should_split_on_word(const char * txt, bool split_on_word) {
-    if (!split_on_word) return true;
-
-    return txt[0] == ' ';
-}
-
 // Count UTF-8 characters (not bytes) in a string
 static int utf8_len(const char * str) {
     int count = 0;
@@ -6247,6 +6241,10 @@ static int whisper_wrap_segment(struct whisper_context & ctx, struct whisper_sta
     int res = 1;
     int acc = 0;
 
+    // first token of the word that the current token belongs to, and the size of the text before that word
+    int i_word = 0;
+    size_t n_text_word = 0;
+
     std::string text;
 
     for (int i = 0; i < (int) segment.tokens.size(); i++) {
@@ -6258,26 +6256,43 @@ static int whisper_wrap_segment(struct whisper_context & ctx, struct whisper_sta
         const auto txt = whisper_token_to_str(&ctx, token.id);
         const int cur = utf8_len(txt);  // Use UTF-8 character count instead of byte count
 
-        if (acc + cur > max_len && i > 0 && should_split_on_word(txt, split_on_word)) {
+        if (txt[0] == ' ') {
+            i_word = i;
+            n_text_word = text.size();
+        }
+
+        // when splitting on word, a token that exceeds max_len in the middle of a word takes the whole word to the new segment
+        const int i_split = split_on_word ? i_word : i;
+
+        if (acc + cur > max_len && i_split > 0) {
+            const int64_t t_split = segment.tokens[i_split].t0;
+
+            if (split_on_word) {
+                text.resize(n_text_word);
+            }
+
             state.result_all.back().text = std::move(text);
-            state.result_all.back().t1 = token.t0;
-            state.result_all.back().tokens.resize(i);
+            state.result_all.back().t1 = t_split;
+            state.result_all.back().tokens.resize(i_split);
             state.result_all.back().speaker_turn_next = false;
 
             state.result_all.push_back({});
-            state.result_all.back().t0 = token.t0;
+            state.result_all.back().t0 = t_split;
             state.result_all.back().t1 = segment.t1;
 
-            // add tokens [i, end] to the new segment
+            // add tokens [i_split, end] to the new segment
             state.result_all.back().tokens.insert(
                 state.result_all.back().tokens.end(),
-                    segment.tokens.begin() + i,
+                    segment.tokens.begin() + i_split,
                     segment.tokens.end());
 
             state.result_all.back().speaker_turn_next = segment.speaker_turn_next;
 
             acc = 0;
             text = "";
+
+            i_word = 0;
+            n_text_word = 0;
 
             segment = state.result_all.back();
             i = -1;
