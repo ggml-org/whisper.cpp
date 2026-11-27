@@ -1480,6 +1480,39 @@ static ggml_backend_buffer_type_t select_weight_buft(const whisper_hparams & hpa
     return nullptr;
 }
 
+// Unlike ggml_ftype_to_ggml_type(), reject untrusted file values without asserting.
+static ggml_type whisper_model_weight_type(int32_t ftype) {
+    switch (ftype) {
+        case GGML_FTYPE_ALL_F32:        return GGML_TYPE_F32;
+        case GGML_FTYPE_MOSTLY_F16:     return GGML_TYPE_F16;
+        case GGML_FTYPE_MOSTLY_BF16:    return GGML_TYPE_BF16;
+        case GGML_FTYPE_MOSTLY_Q4_0:    return GGML_TYPE_Q4_0;
+        case GGML_FTYPE_MOSTLY_Q4_1:    return GGML_TYPE_Q4_1;
+        case GGML_FTYPE_MOSTLY_Q1_0:    return GGML_TYPE_Q1_0;
+        case GGML_FTYPE_MOSTLY_Q2_0:    return GGML_TYPE_Q2_0;
+        case GGML_FTYPE_MOSTLY_Q5_0:    return GGML_TYPE_Q5_0;
+        case GGML_FTYPE_MOSTLY_Q5_1:    return GGML_TYPE_Q5_1;
+        case GGML_FTYPE_MOSTLY_Q8_0:    return GGML_TYPE_Q8_0;
+        case GGML_FTYPE_MOSTLY_MXFP4:   return GGML_TYPE_MXFP4;
+        case GGML_FTYPE_MOSTLY_NVFP4:   return GGML_TYPE_NVFP4;
+        case GGML_FTYPE_MOSTLY_Q2_K:    return GGML_TYPE_Q2_K;
+        case GGML_FTYPE_MOSTLY_Q3_K:    return GGML_TYPE_Q3_K;
+        case GGML_FTYPE_MOSTLY_Q4_K:    return GGML_TYPE_Q4_K;
+        case GGML_FTYPE_MOSTLY_Q5_K:    return GGML_TYPE_Q5_K;
+        case GGML_FTYPE_MOSTLY_Q6_K:    return GGML_TYPE_Q6_K;
+        case GGML_FTYPE_MOSTLY_IQ2_XXS: return GGML_TYPE_IQ2_XXS;
+        case GGML_FTYPE_MOSTLY_IQ2_XS:  return GGML_TYPE_IQ2_XS;
+        case GGML_FTYPE_MOSTLY_IQ3_XXS: return GGML_TYPE_IQ3_XXS;
+        case GGML_FTYPE_MOSTLY_IQ1_S:   return GGML_TYPE_IQ1_S;
+        case GGML_FTYPE_MOSTLY_IQ1_M:   return GGML_TYPE_IQ1_M;
+        case GGML_FTYPE_MOSTLY_IQ4_NL:  return GGML_TYPE_IQ4_NL;
+        case GGML_FTYPE_MOSTLY_IQ4_XS:  return GGML_TYPE_IQ4_XS;
+        case GGML_FTYPE_MOSTLY_IQ3_S:   return GGML_TYPE_IQ3_S;
+        case GGML_FTYPE_MOSTLY_IQ2_S:   return GGML_TYPE_IQ2_S;
+        default:                      return GGML_TYPE_COUNT;
+    }
+}
+
 // load the model from a ggml file
 //
 // file format:
@@ -1527,7 +1560,47 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         read_safe(loader, hparams.n_mels);
         read_safe(loader, hparams.ftype);
 
-        assert(hparams.n_text_state == hparams.n_audio_state);
+        // Round the largest supported Whisper dimensions up to powers of two:
+        // vocab 51866, audio ctx 1500, state 1280, heads 20, layers 32,
+        // text ctx 448, mels 128. Keep encoder/decoder layer counts independent
+        // for turbo and distilled models. These bounds also keep derived int
+        // products (tensor counts, MLP dimensions and logits) from overflowing.
+        const struct {
+            const char * name;
+            int32_t value;
+            int32_t max;
+        } dimensions[] = {
+            { "n_vocab",       hparams.n_vocab,       65536 },
+            { "n_audio_ctx",   hparams.n_audio_ctx,    2048 },
+            { "n_audio_state", hparams.n_audio_state,  2048 },
+            { "n_audio_head",  hparams.n_audio_head,     32 },
+            { "n_audio_layer", hparams.n_audio_layer,    32 },
+            { "n_text_ctx",    hparams.n_text_ctx,      512 },
+            { "n_text_state",  hparams.n_text_state,   2048 },
+            { "n_text_head",   hparams.n_text_head,      32 },
+            { "n_text_layer",  hparams.n_text_layer,     32 },
+            { "n_mels",        hparams.n_mels,          128 },
+        };
+        for (const auto & dim : dimensions) {
+            if (dim.value <= 0 || dim.value > dim.max) {
+                WHISPER_LOG_ERROR("%s: invalid model (%s = %d, expected 1..%d)\n", __func__, dim.name, dim.value, dim.max);
+                return false;
+            }
+        }
+
+        if (hparams.n_audio_state != hparams.n_text_state ||
+            hparams.n_audio_state % hparams.n_audio_head != 0 ||
+            hparams.n_text_state  % hparams.n_text_head  != 0) {
+            WHISPER_LOG_ERROR("%s: invalid model (incompatible state and head dimensions)\n", __func__);
+            return false;
+        }
+
+        // Preserve legacy quantization versions, including the version-1 q5_1
+        // models, but reject negative encodings and unknown future versions.
+        if (hparams.ftype < 0 || hparams.ftype / GGML_QNT_VERSION_FACTOR > GGML_QNT_VERSION) {
+            WHISPER_LOG_ERROR("%s: invalid model (bad ftype value %d)\n", __func__, hparams.ftype);
+            return false;
+        }
 
         std::string mver = "";
 
@@ -1561,9 +1634,14 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
 
         // for the big tensors, we have the option to store the data in 16-bit floats or quantized
         // in order to save memory and also to speed up the computation
-        wctx.wtype = ggml_ftype_to_ggml_type((ggml_ftype) (model.hparams.ftype));
+        wctx.wtype = whisper_model_weight_type(hparams.ftype);
         if (wctx.wtype == GGML_TYPE_COUNT) {
             WHISPER_LOG_ERROR("%s: invalid model (bad ftype value %d)\n", __func__, model.hparams.ftype);
+            return false;
+        }
+
+        if (hparams.n_audio_state % ggml_blck_size(wctx.wtype) != 0) {
+            WHISPER_LOG_ERROR("%s: invalid model (state dimension is not aligned to the weight block size)\n", __func__);
             return false;
         }
 
@@ -1589,7 +1667,14 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         read_safe(loader, filters.n_mel);
         read_safe(loader, filters.n_fft);
 
-        filters.data.resize(filters.n_mel * filters.n_fft);
+        // Equality to the bounded hparam and the fixed FFT size bounds both
+        // filter dimensions before computing their product or allocating.
+        if (filters.n_mel != model.hparams.n_mels || filters.n_fft != 1 + WHISPER_N_FFT / 2) {
+            WHISPER_LOG_ERROR("%s: invalid model (bad mel filter dimensions %d x %d)\n", __func__, filters.n_mel, filters.n_fft);
+            return false;
+        }
+
+        filters.data.resize(size_t(filters.n_mel) * filters.n_fft);
         loader->read(loader->context, filters.data.data(), filters.data.size() * sizeof(float));
         BYTESWAP_FILTERS(filters);
     }
@@ -1599,11 +1684,11 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         int32_t n_vocab = 0;
         read_safe(loader, n_vocab);
 
-        //if (n_vocab != model.hparams.n_vocab) {
-        //    WHISPER_LOG_ERROR("%s: invalid model file '%s' (bad vocab size %d != %d)\n",
-        //            __func__, fname.c_str(), n_vocab, model.hparams.n_vocab);
-        //    return false;
-        //}
+        // The file may omit special tokens, which are added below.
+        if (n_vocab < 0 || n_vocab > model.hparams.n_vocab) {
+            WHISPER_LOG_ERROR("%s: invalid model (bad vocab size %d)\n", __func__, n_vocab);
+            return false;
+        }
 
         std::string word;
         std::vector<char> tmp;
@@ -1611,8 +1696,15 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         tmp.reserve(128);
 
         for (int i = 0; i < n_vocab; i++) {
-            uint32_t len;
+            uint32_t len = 0;
             read_safe(loader, len);
+
+            // Standard Whisper BPE tokens are at most 128 bytes. Leave room
+            // for custom tokens while bounding the entire vocabulary allocation.
+            if (len > 1024) {
+                WHISPER_LOG_ERROR("%s: invalid model (token %d is too long: %u bytes)\n", __func__, i, len);
+                return false;
+            }
 
             if (len > 0) {
                 tmp.resize(len);
