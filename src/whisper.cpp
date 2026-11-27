@@ -990,6 +990,7 @@ static bool whisper_kv_cache_init(
     cache.buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
     if (!cache.buffer) {
         WHISPER_LOG_ERROR("%s: failed to allocate memory for the kv cache\n", __func__);
+        ggml_free(ctx);
         return false;
     }
 
@@ -1002,6 +1003,7 @@ static bool whisper_kv_cache_init(
 
 static void whisper_kv_cache_free(struct whisper_kv_cache & cache) {
     ggml_backend_buffer_free(cache.buffer);
+    cache.buffer = nullptr;
 }
 
 static bool whisper_kv_cache_find_slot(
@@ -7319,13 +7321,20 @@ int whisper_full_with_state(
 
                     // overallocate to workaround KV cache fragmentation issues
                     const int factor = n_decoders_cur > 1 ? n_decoders_cur + 2 : 1;
+                    const int n_ctx  = GGML_PAD(ctx->model.hparams.n_text_ctx, 256);
 
                     if (!whisper_kv_cache_init(state->kv_self, state->backends[0], ctx->itype,
                                 ctx->model.hparams.n_text_state,
                                 ctx->model.hparams.n_text_layer,
-                                GGML_PAD(ctx->model.hparams.n_text_ctx, 256)*factor)) {
+                                n_ctx*factor)) {
                         WHISPER_LOG_ERROR("%s: whisper_kv_cache_init() failed for self-attention cache\n", __func__);
-                        whisper_free_state(state);
+                        // Re-init the kv cache to its initial state as we freed it above.
+                        if (!whisper_kv_cache_init(state->kv_self, state->backends[0], ctx->itype,
+                                    ctx->model.hparams.n_text_state,
+                                    ctx->model.hparams.n_text_layer,
+                                    n_ctx)) {
+                            WHISPER_LOG_ERROR("%s: failed to restore the default KV cache\n", __func__);
+                        }
                         return -7;
                     }
 
