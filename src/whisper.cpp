@@ -7328,10 +7328,7 @@ int whisper_full_with_state(
                                 ctx->model.hparams.n_text_layer,
                                 n_ctx*factor)) {
                         WHISPER_LOG_ERROR("%s: whisper_kv_cache_init() failed for self-attention cache\n", __func__);
-                        // The state is the caller's (ctx->state for whisper_full), so it is not this
-                        // call's to free: freeing it leaves the context pointing at freed memory, and
-                        // a caller that passed its own state would double free it. Put the cache back
-                        // at its default size so the context stays usable, and fail only this call.
+                        // Re-init the kv cache to its initial state as we freed it above.
                         if (!whisper_kv_cache_init(state->kv_self, state->backends[0], ctx->itype,
                                     ctx->model.hparams.n_text_state,
                                     ctx->model.hparams.n_text_layer,
