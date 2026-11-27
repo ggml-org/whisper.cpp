@@ -221,3 +221,12 @@ add_parakeet_transcription_test(
     samples/diffusion2023-07-03.flac
     tests/parakeet-expected-diffusion-output.txt
     0.95)
+
+# Check setup allocation bounds without requiring ASR model weights.
+set(TEST_TARGET test-stb-vorbis-allocation)
+add_executable(${TEST_TARGET} ${TEST_TARGET}.c)
+if (NOT WIN32)
+    target_link_libraries(${TEST_TARGET} PRIVATE m)
+endif()
+add_test(NAME ${TEST_TARGET} COMMAND ${TEST_TARGET})
+set_tests_properties(${TEST_TARGET} PROPERTIES LABELS "unit;security")
