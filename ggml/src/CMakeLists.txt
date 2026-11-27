@@ -75,11 +75,14 @@ if (GGML_CCACHE AND NOT CMAKE_C_COMPILER_LAUNCHER AND NOT CMAKE_CXX_COMPILER_LAU
         else()
             set(GGML_CCACHE_VARIANT sccache)
         endif()
-        # TODO: should not be set globally
+        # Use per-language launchers to avoid applying ccache/sccache to nvcc (CUDA),
+        # which doesn't support compiler launchers and breaks .cubin generation.
         if (GGML_SYCL AND GGML_CCACHE_FOUND AND WIN32)
-            set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "ccache compiler_type=icl")
+            set(CMAKE_C_COMPILER_LAUNCHER   "ccache compiler_type=icl")
+            set(CMAKE_CXX_COMPILER_LAUNCHER "ccache compiler_type=icl")
         else ()
-            set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${GGML_CCACHE_VARIANT}")
+            set(CMAKE_C_COMPILER_LAUNCHER   "${GGML_CCACHE_VARIANT}")
+            set(CMAKE_CXX_COMPILER_LAUNCHER "${GGML_CCACHE_VARIANT}")
         endif ()
         set(ENV{CCACHE_SLOPPINESS} time_macros)
         message(STATUS "${GGML_CCACHE_VARIANT} found, compilation results will be cached. Disable with GGML_CCACHE=OFF.")
