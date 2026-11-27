@@ -139,6 +139,13 @@ target_compile_definitions(${LANG_DETECT_ABORT_TEST} PRIVATE
     WHISPER_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/for-tests-ggml-tiny.bin")
 add_test(NAME ${LANG_DETECT_ABORT_TEST} COMMAND ${LANG_DETECT_ABORT_TEST})
 set_tests_properties(${LANG_DETECT_ABORT_TEST} PROPERTIES LABELS "tiny;gh")
+# out-of-memory during model load must fail gracefully, not crash (#3386)
+set(OOM_GRACEFUL_TEST test-whisper-oom-graceful)
+add_executable(${OOM_GRACEFUL_TEST} ${OOM_GRACEFUL_TEST}.cpp)
+target_include_directories(${OOM_GRACEFUL_TEST} PRIVATE ../include ../ggml/include ../examples)
+target_link_libraries(${OOM_GRACEFUL_TEST} PRIVATE common)
+add_test(NAME ${OOM_GRACEFUL_TEST} COMMAND ${OOM_GRACEFUL_TEST})
+set_tests_properties(${OOM_GRACEFUL_TEST} PROPERTIES LABELS "unit;gh")
 
 # VAD test tests VAD in isolation
 set(VAD_TEST test-vad)
